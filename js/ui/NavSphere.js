@@ -707,10 +707,10 @@ export class NavSphere {
         ctx.font = 'bold 10px "Courier New", monospace';
         ctx.fillStyle = '#ffcc00';
         ctx.textAlign = 'center';
-        // Calm-HUD: steady amber — a standing state, not an event; the ⚠ glyph
+        // Calm-HUD: steady amber — a standing state, not an event; the WARN word
         // and amber already carry the warning (was a 0.64 Hz infinite blink).
         ctx.globalAlpha = 1;
-        ctx.fillText('⚠ HIGH RECOIL', cx, warnY);
+        ctx.fillText('WARN HIGH RECOIL', cx, warnY);
       }
     }
 

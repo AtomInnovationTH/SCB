@@ -761,7 +761,7 @@ export class StrategicMap {
       border-radius: 4px; padding: 10px 14px; pointer-events: auto;
       font-size: 11px; min-width: 260px; max-width: 340px; line-height: 1.5;
     `;
-    this._guidanceEl.innerHTML = '<div style="color:#00ccff;font-weight:bold;margin-bottom:6px">🎯 RECOMMENDED NEXT</div><div id="guidance-body">Scanning clusters…</div>';
+    this._guidanceEl.innerHTML = '<div style="color:#00ccff;font-weight:bold;margin-bottom:6px">RECOMMENDED NEXT</div><div id="guidance-body">Scanning clusters…</div>';
     this._containerEl.appendChild(this._guidanceEl);
 
     // Threat list (bottom-left)
@@ -772,7 +772,7 @@ export class StrategicMap {
       border-radius: 4px; padding: 10px 14px; pointer-events: auto;
       font-size: 12px; min-width: 280px; max-width: 400px;
     `;
-    this._threatListEl.innerHTML = '<div style="color:#ff6644;font-weight:bold;margin-bottom:6px">⚠ TOP THREATS</div><div id="threat-lines">Loading…</div>';
+    this._threatListEl.innerHTML = '<div style="color:#ff6644;font-weight:bold;margin-bottom:6px">TOP THREATS</div><div id="threat-lines">Loading…</div>';
     this._containerEl.appendChild(this._threatListEl);
 
     // Legend / status bar (bottom-right)
@@ -793,7 +793,7 @@ export class StrategicMap {
       border-radius: 4px; padding: 8px 24px;
       font-size: 14px; color: #00ccff; font-weight: bold; letter-spacing: 2px;
     `;
-    titleEl.textContent = '🛰 STRATEGIC OVERVIEW. Shift+V to close';
+    titleEl.textContent = 'STRATEGIC OVERVIEW. Shift+V to close';
     this._containerEl.appendChild(titleEl);
 
     document.body.appendChild(this._containerEl);
@@ -927,14 +927,14 @@ export class StrategicMap {
     if (this._environment && this._environment.getActiveEffects) {
       const effects = this._environment.getActiveEffects();
       if (effects && effects.length > 0) {
-        effectsHtml = `<div style="margin-top:4px;color:#ffaa44">⚡ ${effects.join(', ')}</div>`;
+        effectsHtml = `<div style="margin-top:4px;color:#ffaa44">ENV: ${effects.join(', ')}</div>`;
       }
     }
 
     this._legendEl.innerHTML = `
-      <div style="color:#00ccff;font-weight:bold;margin-bottom:6px">📊 STATUS</div>
+      <div style="color:#00ccff;font-weight:bold;margin-bottom:6px">STATUS</div>
       <div>Alt: ${typeof alt === 'number' ? alt.toFixed(1) : alt} km</div>
-      <div style="margin-top:8px;color:#00ccff;font-weight:bold">🎨 LEGEND <span style="font-weight:normal;color:#667;">(hover)</span></div>
+      <div style="margin-top:8px;color:#00ccff;font-weight:bold">LEGEND <span style="font-weight:normal;color:#667;">(hover)</span></div>
       <div title="Tracked junk. Your salvage. Capture it with daughters, nets, or the lasso."><span style="color:${SM.DOT_COLOR_DEBRIS}">●</span> debris</div>
       <div title="Spent upper stages. Heavy, high-value salvage. The #1 source of new fragments when they explode."><span style="color:${SM.DOT_COLOR_ROCKET_BODY}">●</span> rocket body</div>
       <div title="Dead satellites. Fair game under your contract. Often tumbling: de-spin (hold L) before netting."><span style="color:${SM.DOT_COLOR_INACTIVE}">●</span> inactive sat</div>

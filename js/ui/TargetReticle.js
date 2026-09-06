@@ -945,7 +945,7 @@ export class TargetReticle {
 
     // Phase R6: Metal loot preview — removed 2026-06-14 (declutter). The
     // refined-metal breakdown lives in the target dossier / shop; the floating
-    // "⛏ Al:..kg" line next to every selected target was noise.
+    // "Al:..kg" metal line next to every selected target was noise.
 
     // --- Selected target: extra info ---
     if (isSelected) {
@@ -1166,11 +1166,11 @@ export class TargetReticle {
     // Warning if close
     if (distKm < 5) {
       // Calm-HUD: steady red — this is a standing hazard, not an event; the
-      // ⚠ glyph + red already encode severity. (Was a hard on/off square wave.)
+      // WARN word + red already encode severity. (Was a hard on/off square wave.)
       ctx.globalAlpha = 0.9;
       ctx.fillStyle = COLORS.red;
       ctx.font = 'bold 11px "Courier New", monospace';
-      ctx.fillText('⚠ DO NOT APPROACH', x, y + size + 24);
+      ctx.fillText('WARN DO NOT APPROACH', x, y + size + 24);
     }
 
     ctx.restore();
@@ -1207,7 +1207,7 @@ export class TargetReticle {
     const textOffsetY = -Math.sin(edge.angle + Math.PI) * 22;
 
     const distText = `${distKm.toFixed(1)}km`;
-    const label = urgent ? `⚠ ${sat.name} ${distText}` : `${sat.name} ${distText}`;
+    const label = urgent ? `WARN ${sat.name} ${distText}` : `${sat.name} ${distText}`;
     ctx.fillText(label, edge.x + textOffsetX, edge.y + textOffsetY);
 
     ctx.restore();

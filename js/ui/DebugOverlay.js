@@ -95,7 +95,7 @@ export class DebugOverlay {
             `State: ${data.gameState || '?'} | Camera: ${data.cameraView || '?'}`,
             `Debris: ${data.debrisCount || 0} interactive + ${data.bgDebrisCount || 0} bg`,
             `Active Sats: ${data.activeSatCount || 0}`,
-            `Arms: ${data.armsDocked || 0}⚓ ${data.armsDeployed || 0}🚀 ${data.armsExpended || 0}✕`,
+            `Arms: ${data.armsDocked || 0} docked · ${data.armsDeployed || 0} out · ${data.armsExpended || 0} spent`,
         ];
 
         // WebGL stats (if available)

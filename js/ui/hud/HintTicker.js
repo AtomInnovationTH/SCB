@@ -468,7 +468,9 @@ export class HintTicker {
 
   _chipBg(payload, T) {
     const glyph = (payload.glyph || '').toLowerCase();
-    if (glyph.includes('🖱') || glyph.includes('mouse')) return T.KEY_CHIP_BG_MOUSE;
+    // Matches a legacy mouse pictograph (U+1F5B1) still carried by some payloads;
+    // built from its code point so this file renders no pictograph itself.
+    if (glyph.includes(String.fromCodePoint(0x1F5B1)) || glyph.includes('mouse')) return T.KEY_CHIP_BG_MOUSE;
     if (glyph.includes('shift') || glyph.includes('ctrl') || glyph.includes('alt') || glyph.includes('meta')) {
       return T.KEY_CHIP_BG_MODIFIER;
     }

@@ -773,7 +773,7 @@ export class DockingReticle {
 
   /**
    * @private Capture Odds Strip — one widget, four context states
-   * (capture-feedback overhaul Phase 1b; replaces the vertical ★-score list).
+   * (capture-feedback overhaul Phase 1b; replaces the vertical star-score list).
    *
    *   AIM       (STATION_KEEP)        — live odds strip; % is the hero.
    *   IN FLIGHT (NETTING, net away)   — strip dims to labels; `NET AWAY — 34m`.
@@ -974,7 +974,8 @@ export class DockingReticle {
       ctx.fillText(adv.text, cx, advisoryY);
     }
 
-    // ── Footer: keys + ⚠FRAG chip (only when risk ≥ FRAG_CHIP_MIN) ──
+    // ── Footer: keys + FRAG chip (only when risk ≥ FRAG_CHIP_MIN; the amber/red
+    //    colour carries the warning, no glyph prefix) ──
     const footerY = advisoryY + advisoryH / 2 + footerH / 2;
     ctx.font = `9px ${FONT}`;
     ctx.textAlign = 'left';
@@ -985,11 +986,11 @@ export class DockingReticle {
       // Brittleness unknown until the close-range survey — say so honestly.
       ctx.textAlign = 'right';
       ctx.fillStyle = 'rgba(255, 170, 0, 0.55)';
-      ctx.fillText('\u26A0FRAG ?', left + boxW - 8, footerY);
+      ctx.fillText('FRAG ?', left + boxW - 8, footerY);
     } else if (fragRisk >= (TO.FRAG_CHIP_MIN ?? 0.10)) {
       ctx.textAlign = 'right';
       ctx.fillStyle = fragRisk >= 0.3 ? '#ff5555' : '#ffaa00';
-      ctx.fillText(`\u26A0FRAG ${Math.round(fragRisk * 100)}%`, left + boxW - 8, footerY);
+      ctx.fillText(`FRAG ${Math.round(fragRisk * 100)}%`, left + boxW - 8, footerY);
     }
     ctx.textAlign = 'left';
   }

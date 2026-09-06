@@ -2,12 +2,12 @@
  * PerfReportOverlay.js — Sprint 2 / Phase A
  *
  * Fixed-position top-right diagnostic panel activated by `?perfReport=1`.
- * Surfaces every "🟡" datum from [`PERF_SPRINT_REPORT.md`](PERF_SPRINT_REPORT.md:1)
+ * Surfaces every "needs-measurement" datum from [`PERF_SPRINT_REPORT.md`](PERF_SPRINT_REPORT.md:1)
  * (initial-tier reason, GPU median ms, live FPS + p99 frame time, draw-call
  * counters, JS heap, TimerManager active count, alive debris) so the user can
  * capture a single browser session and paste the result into a follow-up issue.
  *
- * The overlay updates at 1 Hz to stay out of the hot path. A "📋 COPY SNAPSHOT"
+ * The overlay updates at 1 Hz to stay out of the hot path. A "COPY SNAPSHOT"
  * button serializes the current state as JSON to the clipboard.
  *
  * Wired from [`main.js`](js/main.js:1) when the URL flag is set. Pure DOM —
@@ -264,7 +264,7 @@ export class PerfReportOverlay {
     root.id = ROOT_ID;
 
     const h = document.createElement('h4');
-    h.textContent = '🟢 perf report. 1 Hz';
+    h.textContent = 'perf report. 1 Hz';
     root.appendChild(h);
 
     const table = document.createElement('table');
@@ -272,7 +272,7 @@ export class PerfReportOverlay {
     this._table = table;
 
     const btn = document.createElement('button');
-    btn.textContent = '📋 COPY SNAPSHOT';
+    btn.textContent = 'COPY SNAPSHOT';
     btn.addEventListener('click', () => this._copy());
     root.appendChild(btn);
     this._copyBtn = btn;

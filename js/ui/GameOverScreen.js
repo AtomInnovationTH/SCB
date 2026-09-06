@@ -221,7 +221,7 @@ export class GameOverScreen {
     const continueBtn = this.element.querySelector('#gameover-continue-btn');
     if (continueBtn) continueBtn.style.display = '';
 
-    factEl.textContent = '💡 ' + ADR_FACTS[Math.floor(Math.random() * ADR_FACTS.length)];
+    factEl.textContent = ADR_FACTS[Math.floor(Math.random() * ADR_FACTS.length)];
 
     // Play game over sound
     audioSystem.playGameOver();
@@ -269,7 +269,7 @@ export class GameOverScreen {
     const target = (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.TARGET_MASS_KG) || 10000;
     const massKg = Math.round(this._winTotalMassKg || target);
     statsEl.innerHTML = `
-      <div style="color:#00ff88;font-size:1rem;margin-bottom:8px;">★ GEO Anchor Contract. Delivered ★</div>
+      <div style="color:#00ff88;font-size:1rem;margin-bottom:8px;">GEO Anchor Contract. Delivered</div>
       <div style="text-align:center;margin:10px 0;">
         <div style="font-size:2.2rem;color:#ffaa00;font-weight:bold;text-shadow:0 0 20px rgba(255,170,0,0.4);">${massKg.toLocaleString()} kg</div>
         <div style="font-size:0.8rem;opacity:0.75;">delivered to the GEO anchor</div>
@@ -281,11 +281,11 @@ export class GameOverScreen {
         <div>Time: <b>${stats.timePlayed}</b></div>
       </div>
       <div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,255,136,0.15);font-size:0.85rem;color:#00ff88;">
-        A million miles out at L2, JWST watches a sky you helped clear. That's the job, Cowboy. ★
+        A million miles out at L2, JWST watches a sky you helped clear. That's the job, Cowboy.
       </div>
     `;
 
-    factEl.textContent = '🌍 ' + ADR_FACTS[Math.floor(Math.random() * ADR_FACTS.length)];
+    factEl.textContent = ADR_FACTS[Math.floor(Math.random() * ADR_FACTS.length)];
   }
 
   /**
@@ -311,7 +311,7 @@ export class GameOverScreen {
     const { missionsCompleted: missionCount } = getMissionProgress(stats.debrisCleared);
     const upgradeCount = this._getUpgradeCount();
     statsEl.innerHTML = `
-      <div style="color:#00ff88;font-size:1rem;margin-bottom:8px;">★ Final Report ★</div>
+      <div style="color:#00ff88;font-size:1rem;margin-bottom:8px;">Final Report</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;">
         <div>Final Score: <b style="color:#ffaa00;font-size:1.1rem;">${stats.totalScore.toLocaleString()}</b></div>
         <div>Credits Earned: <b style="color:#f0c040;">${stats.credits.toLocaleString()} cr</b></div>
@@ -330,11 +330,11 @@ export class GameOverScreen {
         Rating: <b style="color:#ffaa00;">${this._getRating(stats)}</b>
       </div>
       <div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,255,136,0.15);font-size:0.85rem;color:#00ff88;">
-        Houston: That orbit's clear thanks to you. Take a breather, Cowboy. There's always another field of debris up there when you're ready. ★
+        Houston: That orbit's clear thanks to you. Take a breather, Cowboy. There's always another field of debris up there when you're ready.
       </div>
     `;
 
-    factEl.textContent = '🌍 ' + ADR_FACTS[Math.floor(Math.random() * ADR_FACTS.length)];
+    factEl.textContent = ADR_FACTS[Math.floor(Math.random() * ADR_FACTS.length)];
   }
 
   /** @private Get total upgrade count from shop screen */
@@ -353,11 +353,11 @@ export class GameOverScreen {
     // the old 8k/15k/30k/50k bands saturated at ACE for everyone. These bands
     // separate a died-early partial run (ROOKIE) from a skilled completion (ACE).
     const score = stats.totalScore;
-    if (score >= 95000) return '★★★★★ ACE COWBOY';
-    if (score >= 78000) return '★★★★☆ VETERAN';
-    if (score >= 60000) return '★★★☆☆ PROFESSIONAL';
-    if (score >= 45000) return '★★☆☆☆ APPRENTICE';
-    return '★☆☆☆☆ ROOKIE';
+    if (score >= 95000) return '●●●●● ACE COWBOY';
+    if (score >= 78000) return '●●●●○ VETERAN';
+    if (score >= 60000) return '●●●○○ PROFESSIONAL';
+    if (score >= 45000) return '●●○○○ APPRENTICE';
+    return '●○○○○ ROOKIE';
   }
 
   show() {

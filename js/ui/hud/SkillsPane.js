@@ -1108,7 +1108,7 @@ export class SkillsPane {
             for (const tech of visibleTech) {
                 const entry = document.createElement('div');
                 entry.className = 'sp-tech-entry';
-                entry.textContent = `🔧 ${tech.title}`;
+                entry.textContent = `▸ ${tech.title}`;
                 entry.title = tech.shortText || '';
                 this._paneBody.appendChild(entry);
             }
@@ -1381,7 +1381,8 @@ export class SkillsPane {
     /**
      * Create a single expanded skill entry DOM element.
      * Shows state symbol, label with tier color, and key binding.
-     * Safety-gated undiscovered skills show 🔒 with red tint.
+     * Safety-gated undiscovered skills show a filled square with red tint and a
+     * LOCKED tooltip (the 14px symbol slot cannot hold the word).
      * @param {Object} def — Skill definition from CATALOG
      * @returns {HTMLElement}
      * @private
@@ -1412,7 +1413,8 @@ export class SkillsPane {
         const sym = document.createElement('span');
         sym.className = 'sp-ex-sym';
         if (isLocked) {
-            sym.textContent = '🔒';
+            sym.textContent = '■';
+            entry.title = 'LOCKED';
         } else {
             sym.textContent = STATE_SYMBOLS[state] || '○';
             if (state === MASTERED) {

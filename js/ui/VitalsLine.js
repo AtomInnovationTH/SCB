@@ -133,7 +133,7 @@ export class VitalsLine {
       if (dv !== this._last.dv) { this._last.dv = dv; this._seg.dv.textContent = dv; }
     }
     if (typeof data.batteryPct === 'number' && Number.isFinite(data.batteryPct)) {
-      const pw = `⚡ ${Math.round(Math.max(0, Math.min(100, data.batteryPct)))}%`;
+      const pw = `PWR ${Math.round(Math.max(0, Math.min(100, data.batteryPct)))}%`;
       if (pw !== this._last.power) { this._last.power = pw; this._seg.power.textContent = pw; }
     }
     if (data.timeRate != null) {
@@ -231,7 +231,7 @@ export class VitalsLine {
     };
     mk('vitals-dv', 'ΔV —');
     mk(null, ' · ');
-    mk('vitals-power', '⚡ —');
+    mk('vitals-power', 'PWR —');
     mk(null, ' · ');
     mk('vitals-rate', '—');
     row.addEventListener('pointerdown', () => this._onTap());

@@ -362,7 +362,7 @@ export class StatusPanel {
             <span id="hud-cleared-fill" style="display:block;width:0%;height:100%;background:#00ff88;transition:width 0.4s ease;"></span>
           </span>
         </div>
-        <span style="color:#ffaa00;font-size:12px;font-weight:bold;opacity:0.85;">💰 <b id="hud-credits">0</b></span>
+        <span style="color:#ffaa00;font-size:12px;font-weight:bold;opacity:0.85;"><b id="hud-credits">0</b> cr</span>
       </div>
     `;
 
@@ -408,7 +408,7 @@ export class StatusPanel {
         </span>
         <span class="md-sep">·</span>
         <span id="mother-digest-pwr" style="display:inline-flex;align-items:center;gap:3px;color:#00ff88;">
-          <span>⚡</span>
+          <span class="md-label">PWR</span>
           <span id="mother-digest-pwr-text" style="display:none;font-weight:bold;letter-spacing:0.05em;"></span>
         </span>
       </div>
@@ -453,7 +453,7 @@ export class StatusPanel {
         </div>
         <div id="mpd-burst-row" style="display:none;font-size:10px;margin-top:2px;margin-bottom:2px;">
           <div style="display:flex;align-items:center;gap:4px;">
-            <span id="mpd-burst-label" style="color:#ff44ff;font-weight:bold;">⚡ MPD</span>
+            <span id="mpd-burst-label" style="color:#ff44ff;font-weight:bold;">MPD</span>
             <span id="mpd-burst-status" style="color:#ff44ff;">ARMED</span>
           </div>
           <div id="mpd-heat-row" style="display:flex;align-items:center;gap:4px;margin-top:2px;">
@@ -482,7 +482,7 @@ export class StatusPanel {
           <span style="opacity:0.7;">Rate: </span><span id="att-rate-val" style="font-weight:bold;color:#00ff88;">P 0.0°/s · Y 0.0°/s · R 0.0°/s</span>
         </div>
         <div id="plume-block-row" style="display:none;font-size:10px;margin-top:1px;margin-bottom:2px;color:#ff4444;font-weight:bold;">
-          ⚠ PLUME BLOCK
+          WARN PLUME BLOCK
         </div>
         <div id="cargo-summary" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;color:#666;display:none;"></div>
         <div id="forge-inline" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;display:none;">
@@ -508,7 +508,7 @@ export class StatusPanel {
             <span style="opacity:0.5">Computing…</span>
           </div>
           <div style="font-size:10px;margin-top:3px;opacity:0.6;">
-            ☀ <span id="hud-val-solar">0</span> W
+            SUN <span id="hud-val-solar">0</span> W
           </div>
         </div>
       </div>
@@ -516,7 +516,7 @@ export class StatusPanel {
         <div class="mother-block mother-block-energy" id="hud-power-panel" data-hud-group="power-group">
       <div class="panel-full-content">
         <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#00ff88;opacity:0.7;display:flex;justify-content:space-between;align-items:center;">
-          <span>⚡ ENERGY</span>
+          <span>ENERGY</span>
           <span id="power-collapse-indicator" style="font-size:10px;opacity:0.4;transition:transform 0.2s;">▸</span>
         </div>
         <div id="hud-power-bars" style="font-size:10px;line-height:1.6;transition:max-height 0.2s ease,opacity 0.2s ease;overflow:hidden;">
@@ -554,7 +554,7 @@ export class StatusPanel {
         </div>
         </div>
         <div class="mother-block mother-block-thermal" id="hud-thermal-panel" data-hud-group="thermal-group" style="display:none;">
-          <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#a3d9c9;opacity:0.7;">🌡 THERMAL</div>
+          <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#a3d9c9;opacity:0.7;">THERMAL</div>
           <div id="hud-thermal-flower" style="font-size:10px;line-height:1.5;"></div>
         </div>
       </div>
@@ -956,7 +956,7 @@ export class StatusPanel {
       ? captureNetSystem.getCollarDigestion() : null;
     if (docked && collarCook) {
       const pct = Math.round(Math.min(1, Math.max(0, collarCook.frac || 0)) * 100);
-      count.textContent = `${nets}/${maxNets} 🔥${pct}%`;
+      count.textContent = `${nets}/${maxNets} COOK ${pct}%`;
       count.style.color = '#ff9800';   // the forge panel's MELT — furnace language
       seg.title = (collarCook.sunScale ?? 1.0) < 1
         ? `Solar furnace cooking the catch — ${pct}% · eclipse: embers until dawn · [K] jettison`
@@ -1503,13 +1503,13 @@ export class StatusPanel {
       if (state[bus] === 0) anyStarved = true;
     }
 
-    // Digest ⚡ glyph — derived power health.
+    // Digest PWR label — derived power health.
     this._updatePowerDigestGlyph(anyStarved);
   }
 
   /**
-   * @private Update the MOTHER digest `⚡` power-health glyph.
-   * Dark-cockpit: the glyph is colour-coded and a word only appears on a fault.
+   * @private Update the MOTHER digest `PWR` power-health label.
+   * Dark-cockpit: the label is colour-coded and a word only appears on a fault.
    * Green (no word) when battery >20% and no bus starved; amber `LOW` at 5–20%
    * or a starved bus; red `CRIT` <5%. Battery comes from the last cached payload.
    * @param {boolean} anyStarved — true if any power bus is allocated 0%.
@@ -2097,7 +2097,7 @@ export class StatusPanel {
       const crit = Constants.REEL_TENSION_CRITICAL || 0.9;
       const tc = tens !== undefined && tens >= crit ? '#ff4444'
         : tens !== undefined && tens >= crit * 0.7 ? '#ffaa00' : '#e8e4d0';
-      parts.push(`<span style="color:${tc};opacity:0.7;">⛓ ${Math.round(a.tetherLength)} m</span>`);
+      parts.push(`<span style="color:${tc};opacity:0.7;">tether ${Math.round(a.tetherLength)} m</span>`);
     }
 
     // §11.3 reaction-wheel gauge — last, it's advisory. Quiet wheels (absent
@@ -2128,7 +2128,9 @@ export class StatusPanel {
     else if (total > 6 && idx === total - 1) label = 'B';
 
     const { label: status, color: statusColor, title: statusTitle } = this._daughterStatus(a, idx);
-    const catchFlag = a.hasCaptured ? ' <span title="Carrying a catch">🎣</span>' : '';
+    // The carrying-a-catch flag is a 1-char geometric dot: the status column is
+    // a tight 1fr slot (ellipsis-clipped), so a word would clip the status.
+    const catchFlag = a.hasCaptured ? ' <span title="Carrying a catch">●</span>' : '';
 
     // NET — each daughter's own magazine. Same ivory NET colour as the MOTHER
     // pane (shared NET_COLOR), warning amber at half / red at empty (at 0 it

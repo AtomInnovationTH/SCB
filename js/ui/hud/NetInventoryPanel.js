@@ -4,11 +4,11 @@
  * Delegation 4 (2026-05-31). A small flat-row widget mounted under the
  * right-column [`StatusPanel`](js/ui/hud/StatusPanel.js:1).  Renders two chips:
  *
- *   [🤠 12/20]   [🪢 3+2+1=6/12]
+ *   [LASSO 12/20]   [NETS 3+2+1=6/12]
  *
- *   • 🤠 chip — lasso shots remaining / max, driven by
+ *   • LASSO chip — lasso shots remaining / max, driven by
  *     [`Events.LASSO_AMMO_CHANGED`](js/core/Events.js:288).
- *   • 🪢 chip — per-arm net total summed, driven by
+ *   • NETS chip — per-arm net total summed, driven by
  *     [`Events.NET_INVENTORY_CHANGED`](js/core/Events.js:541).  Hover
  *     tooltip shows the per-arm breakdown (browser `title` attribute).
  *
@@ -411,7 +411,7 @@ export class NetInventoryPanel {
     // Delegation 4 (2026-05-31) — Browser-playtest Bug 3: inline label is
     // ALWAYS just `total/max` (e.g. "8/8").  The per-arm breakdown
     // ("2+2+2+2") is preserved only in the chip's hover tooltip — it was
-    // adding noise to first-run players staring at "🪢 2+2+2+2=8/8".
+    // adding noise to first-run players staring at "NETS 2+2+2+2=8/8".
     if (this._netChip) {
       const perArm = this._net_state.perArm;
       const total  = this._net_state.total;

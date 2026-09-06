@@ -1013,11 +1013,11 @@ function getRecommendation(zoneName, target) {
   const nameLower = zoneName.toLowerCase();
 
   // Tumble-rate warnings take priority
-  if (tumbleDeg > 60) return '\u26A0 HIGH TUMBLE \u2014 Manual pilot recommended';
+  if (tumbleDeg > 60) return 'WARN HIGH TUMBLE \u2014 Manual pilot recommended';
   if (tumbleDeg > 20) return '\u25D0 Moderate tumble \u2014 Time net deployment';
 
   // Zone-specific recommendations
-  if (nameLower.includes('engine'))      return '\u26A0 Avoid engine \u2014 approach from opposite end';
+  if (nameLower.includes('engine'))      return 'WARN Avoid engine \u2014 approach from opposite end';
   if (nameLower.includes('solar panel')) return '\u25B3 Fragile \u2014 net may cause fragmentation';
   if (target.type === 'fragment')        return '\u2713 Small target \u2014 Small daughter auto-capture viable';
 
@@ -1025,7 +1025,7 @@ function getRecommendation(zoneName, target) {
   const { risk } = assessZone(zoneName, target);
   if (risk === 'LOW')  return '\u2713 Safe for auto-capture';
   if (risk === 'MED')  return '\u25D0 Caution \u2014 moderate structural risk';
-  return '\u26A0 Hazardous zone \u2014 avoid if possible';
+  return 'WARN Hazardous zone \u2014 avoid if possible';
 }
 
 // ============================================================================
@@ -1265,7 +1265,7 @@ export class DebrisWireframe {
       // Minimized one-line summary (hotkey revamp 2026-06-14 — the 9 key).
       // When minimized we hide the canvas and show this single line of the key
       // capture-planning facts NOT in the target list: identity · size · mass ·
-      // tumble (with ⚠ when high) · material. Lives in the same flex container,
+      // tumble (with WARN when high) · material. Lives in the same flex container,
       // so the right column collapses up around it.
       this._minLine = document.createElement('div');
       this._minLine.id = 'hud-debris-min-summary';
@@ -1653,7 +1653,7 @@ export class DebrisWireframe {
       massStr = t.mass >= 1000 ? `${(t.mass / 1000).toFixed(1)}t` : `${t.mass.toFixed(0)}kg`;
     }
     const tumbleDeg = (t.tumbleRate || 0) * DEG;
-    const warn = tumbleDeg > 60 ? ' \u26A0' : '';
+    const warn = tumbleDeg > 60 ? ' WARN' : '';
     const tumbleStr = `\u27F3${tumbleDeg.toFixed(0)}\u00B0/s${warn}`;
     const matStr = MATERIAL_LABELS[t.material] || t.material || '?';
     this._minLine.textContent = `${ident} \u00B7 ${sizeStr} \u00B7 ${massStr} \u00B7 ${tumbleStr} \u00B7 ${matStr}`;
@@ -1760,7 +1760,7 @@ export class DebrisWireframe {
       ctx.font = "9px 'Courier New', monospace";
       ctx.fillStyle = 'rgba(255,200,60,0.90)';
       ctx.fillText(
-        `\uD83D\uDEF0 from Daughter ${this._fromArmIndex + 1}`,
+        `from Daughter ${this._fromArmIndex + 1}`,
         PANEL_WIDTH - 6,
         PANEL_HEIGHT - 6,
       );
@@ -1890,7 +1890,7 @@ export class DebrisWireframe {
             const prefix = a.type === 'weaver' ? 'L' : 'S';
             const idx = a.id.split('-')[1] || '?';
             const stateChar = a.state === 'DOCKED' ? '\u25CF' :
-                              a.state === 'EXPENDED' ? '\u2715' : '\u25D0';
+                              a.state === 'EXPENDED' ? '\u00D7' : '\u25D0';
             const stateColor = a.state === 'DOCKED' ? '#00ff88' :
                                a.state === 'EXPENDED' ? '#ff4444' : '#ffaa00';
             armStr += `<${stateColor}>${prefix}${idx}${stateChar} `;
@@ -1901,7 +1901,7 @@ export class DebrisWireframe {
             const prefix = a.type === 'weaver' ? 'L' : 'S';
             const idx = a.id.split('-')[1] || '?';
             const icon = a.state === 'DOCKED' ? '\u25CF' :
-                         a.state === 'EXPENDED' ? '\u2715' : '\u25D0';
+                         a.state === 'EXPENDED' ? '\u00D7' : '\u25D0';
             ctx.fillStyle = a.state === 'DOCKED' ? '#00ff88' :
                             a.state === 'EXPENDED' ? '#ff4444' : '#ffaa00';
             ctx.fillText(`${prefix}${idx}${icon}`, armX, infoY);
@@ -1988,7 +1988,7 @@ export class DebrisWireframe {
       if ((t.tumbleRate || 0) * DEG > 60) {
         ctx.fillStyle = ZONE_COLORS.RED;
         ctx.font = "bold 10px 'Courier New', monospace";
-        ctx.fillText('\u26A0 HIGH TUMBLE', WIRE_CX, rowY);
+        ctx.fillText('WARN HIGH TUMBLE', WIRE_CX, rowY);
         rowY += 12;
       }
 
@@ -2060,7 +2060,7 @@ export class DebrisWireframe {
       const n = Math.max(1, Math.min(3, rows.length || 1));
       ctx.fillStyle = '#ffcc00';
       ctx.font = "bold 10px 'Courier New', monospace";
-      ctx.fillText('\u26CF METALS \u2014 UNKNOWN', WIRE_CX, y);
+      ctx.fillText('METALS \u2014 UNKNOWN', WIRE_CX, y);
       y += 12;
       ctx.font = "10px 'Courier New', monospace";
       ctx.fillStyle = 'rgba(255, 204, 0, 0.4)';
@@ -2124,7 +2124,7 @@ export class DebrisWireframe {
     ctx.font = "bold 10px 'Courier New', monospace";
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffcc00';
-    ctx.fillText('\u26CF SALVAGE MANIFEST', WIRE_CX, y);
+    ctx.fillText('SALVAGE MANIFEST', WIRE_CX, y);
     y += 12;
     ctx.font = "10px 'Courier New', monospace";
     const maxRows = Math.min(3, rows.length);
@@ -2143,7 +2143,7 @@ export class DebrisWireframe {
 
   /**
    * Render salvage indicators below the zone/target info.
-   * Shows ⛏ SALVAGE DETECTED with resource types when applicable.
+   * Shows SALVAGE DETECTED with resource types when applicable.
    * @private
    * @param {CanvasRenderingContext2D} ctx
    * @param {number} y - starting Y position
@@ -2164,7 +2164,7 @@ export class DebrisWireframe {
     ctx.fillText('\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500', WIRE_CX, y);
 
     ctx.fillStyle = '#ffcc00';
-    ctx.fillText('\u26CF SALVAGE DETECTED', WIRE_CX, y + 12);
+    ctx.fillText('SALVAGE DETECTED', WIRE_CX, y + 12);
 
     ctx.font = "10px 'Courier New', monospace";
     let infoY = y + 24;
@@ -2188,12 +2188,12 @@ export class DebrisWireframe {
       }
       if (salvage.battery > 0) {
         ctx.fillStyle = '#88ff88';
-        ctx.fillText(`\u26A1 ${salvage.battery.toFixed(0)} Wh charge`, WIRE_CX, infoY);
+        ctx.fillText(`Bat: ${salvage.battery.toFixed(0)} Wh charge`, WIRE_CX, infoY);
         infoY += 11;
       }
       if (salvage.hydrazine > 0) {
         ctx.fillStyle = '#ff4444';
-        ctx.fillText(`\u26A0 N\u2082H\u2084: ${salvage.hydrazine.toFixed(1)} kg (HAZMAT)`, WIRE_CX, infoY);
+        ctx.fillText(`N\u2082H\u2084: ${salvage.hydrazine.toFixed(1)} kg (HAZMAT)`, WIRE_CX, infoY);
         infoY += 11;
       }
       if (salvage.lithium > 0) {
@@ -2205,9 +2205,9 @@ export class DebrisWireframe {
       const hints = [];
       if (salvage.xenon > 0) hints.push('Xe');
       if (salvage.indium > 0) hints.push('In');
-      if (salvage.gaAs > 0) hints.push('\u2600');
-      if (salvage.battery > 0) hints.push('\u26A1');
-      if (salvage.hydrazine > 0) hints.push('\u26A0N\u2082H\u2084');
+      if (salvage.gaAs > 0) hints.push('GaAs');
+      if (salvage.battery > 0) hints.push('Bat');
+      if (salvage.hydrazine > 0) hints.push('N\u2082H\u2084 HAZ');
       if (salvage.lithium > 0) hints.push('Li');
       ctx.fillStyle = DIM_COLOR;
       ctx.fillText(`Scan for details: ${hints.join(' ')}`, WIRE_CX, infoY);

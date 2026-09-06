@@ -159,7 +159,8 @@ export class TeachingOverlay {
     closeBtn.addEventListener('click', () => this.dismiss());
     el.appendChild(closeBtn);
 
-    // Title row (icon + title)
+    // Title row. The moment's `icon` field (a pictograph in the data) is NOT
+    // rendered (Session L D-J, no pictographs in the chrome): the title alone.
     const titleRow = document.createElement('div');
     titleRow.style.cssText = `
       display: flex;
@@ -167,11 +168,6 @@ export class TeachingOverlay {
       gap: 6px;
       margin-bottom: 6px;
     `;
-
-    const iconSpan = document.createElement('span');
-    iconSpan.textContent = moment.icon || '';
-    iconSpan.style.fontSize = '16px';
-    titleRow.appendChild(iconSpan);
 
     const titleSpan = document.createElement('span');
     titleSpan.textContent = moment.title.toUpperCase();

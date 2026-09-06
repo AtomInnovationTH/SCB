@@ -567,8 +567,9 @@ export class TargetPanel {
           const tierColor = selected ? '#00ccff' : this._getTargetColor(t);
           const iconClass = (t.sizeMeter && t.sizeMeter > 5) ? 'type-icon large' : 'type-icon';
 
-          // Salvage indicator
-          const salvageIcon = t.hasSalvage ? ' \u26CF' : '';
+          // Salvage indicator: a 1-char ASCII mark (the 72px name column ellipsizes;
+          // the row colour tier already reads salvage).
+          const salvageIcon = t.hasSalvage ? ' <span title="Salvage aboard">*</span>' : '';
 
           // Progressive data reveal
           const dataLevel = this._getDataLevel(t.distanceKm);
@@ -804,20 +805,20 @@ export class TargetPanel {
     return '#00ff88';
   }
 
-  /** @private Get compact salvage hint HTML (e.g. "Xe In ⛏3") with tooltips */
+  /** @private Get compact salvage hint HTML (e.g. "Xe In M3") with tooltips */
   _getSalvageHint(salvage) {
     if (!salvage) return '';
     const hints = [];
     if (salvage.xenon > 0) hints.push('<span title="Xenon fuel">Xe</span>');
     if (salvage.indium > 0) hints.push('<span title="Indium metal">In</span>');
-    if (salvage.gaAs > 0) hints.push('<span title="Solar panel (GaAs)">\u2600</span>');
-    if (salvage.battery > 0) hints.push('<span title="Battery">\u26A1</span>');
-    if (salvage.hydrazine > 0) hints.push('<span title="Hydrazine (hazardous)">\u26A0</span>');
+    if (salvage.gaAs > 0) hints.push('<span title="Solar panel (GaAs)">GaAs</span>');
+    if (salvage.battery > 0) hints.push('<span title="Battery">Bat</span>');
+    if (salvage.hydrazine > 0) hints.push('<span title="Hydrazine (hazardous)">HAZ</span>');
     if (salvage.lithium > 0) hints.push('<span title="Lithium">Li</span>');
     // Metal count indicator (Phase 2)
     const metalCount = salvage.metals ? salvage.metals.length : 0;
-    if (metalCount > 0) hints.push(`\u26CF${metalCount}`);
-    return hints.length > 0 ? hints.join('') : '';
+    if (metalCount > 0) hints.push(`M${metalCount}`);
+    return hints.length > 0 ? hints.join(' ') : '';
   }
 
   /** @private Get short type name */

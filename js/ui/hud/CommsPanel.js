@@ -212,8 +212,7 @@ export class CommsPanel {
       color: '#81c784',
     });
     this._contractEl.innerHTML = `
-      <span style="font-size:13px;">⚓</span>
-      <span style="font-size:9px;letter-spacing:1px;opacity:0.7;text-transform:uppercase;">Contract</span>
+      <span style="font-size:9px;letter-spacing:1px;opacity:0.7;text-transform:uppercase;">Anchor contract</span>
       <span><b id="hud-anchor-mass">0</b><span style="opacity:0.5;">/</span><b id="hud-anchor-target">10,000</b><span style="opacity:0.7;"> kg</span></span>
       <span style="flex:1;height:3px;background:rgba(129,199,132,0.2);border-radius:2px;overflow:hidden;margin-right:22px;">
         <span id="hud-contract-fill" style="display:block;width:0%;height:100%;background:#81c784;transition:width 0.4s ease;"></span>

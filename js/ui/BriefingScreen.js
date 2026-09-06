@@ -91,7 +91,7 @@ export class BriefingScreen {
           border-radius:4px;padding:6px 16px;margin-bottom:0.7rem;font-size:0.8rem;">
           <span id="briefing-objective" style="color:rgba(0,255,136,0.7);">Clear 5 debris to reach the depot</span>
           <span style="color:rgba(0,255,136,0.2);">│</span>
-          <span style="color:#f0c040;">💰 <b id="briefing-credits">0</b> cr</span>
+          <span style="color:#f0c040;"><b id="briefing-credits">0</b> cr</span>
           <span style="color:rgba(0,255,136,0.2);">│</span>
           <span style="color:rgba(0,255,136,0.6);">Cleared: <b id="briefing-cleared">0</b>/<b>${Constants.WIN_DEBRIS_COUNT}</b></span>
         </div>
@@ -116,7 +116,7 @@ export class BriefingScreen {
             background: rgba(255,204,0,0.08); border: 1px solid rgba(255,204,0,0.3);
             padding: 8px 24px; cursor: pointer; border-radius: 4px;
             margin-left: 12px; transition: all 0.3s;
-          ">⚡ QUICK START</button>
+          ">QUICK START</button>
 
           <button id="briefing-skip-btn" style="
             font-family:'Courier New',monospace; font-size:0.8rem; color:rgba(0,255,136,0.5);
@@ -294,7 +294,7 @@ export class BriefingScreen {
                        t.type === 'defunctSat' ? 'Defunct Satellite' :
                        t.type === 'missionDebris' ? 'Mission Related' : 'Fragment';
       const difficulty = t.deltaV < 0.1 ? 1 : t.deltaV < 0.3 ? 2 : t.deltaV < 0.6 ? 3 : t.deltaV < 1.0 ? 4 : 5;
-      const stars = '★'.repeat(difficulty) + '☆'.repeat(5 - difficulty);
+      const stars = '●'.repeat(difficulty) + '○'.repeat(5 - difficulty);   // difficulty pips, monochrome
       const estFuel = (t.deltaV * 20).toFixed(1); // Rough fuel estimate
 
       return `

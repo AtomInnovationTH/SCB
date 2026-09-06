@@ -214,7 +214,7 @@ export class SweepReportUI {
         margin: 0 3px;
         color: ${filled ? '#ffd700' : '#444'};
         text-shadow: ${filled ? '0 0 8px rgba(255,215,0,0.6)' : 'none'};
-      ">★</span>`;
+      ">${filled ? '●' : '○'}</span>`;
     }
 
     // Synergies list
@@ -328,7 +328,7 @@ export class SweepReportUI {
     html += `<tr style="color:#667788;"><td>Method</td><td style="text-align:center;">Catches</td><td style="text-align:right;">ΔV/catch</td></tr>`;
 
     for (const t of r.toolStats) {
-      const star = t.isBest ? ' ★' : '';
+      const star = t.isBest ? ' (best)' : '';
       const color = t.isBest ? '#44ff88' : '#aabbcc';
       html += `<tr style="color:${color};">`;
       html += `<td style="padding:2px 0;">${t.name.toUpperCase()}${star}</td>`;
