@@ -26,7 +26,8 @@ import { Constants } from '../core/Constants.js';
  *   title    — overlay heading (SHORT, caps)
  *   body     — overlay body text (1-2 sentences)
  *   duration — display time in ms
- *   icon     — Unicode symbol for visual flair
+ *   icon     — short text tag (<= 4 chars) shown beside the title; plain
+ *              letters only, no pictographs (plan D-J, no emoji anywhere)
  */
 export const TEACHING_MOMENTS = [
   {
@@ -34,112 +35,112 @@ export const TEACHING_MOMENTS = [
     title: 'Target Acquired',
     body: 'Press A to autopilot toward it, or deploy a daughter with D. Match your approach to the debris type.',
     duration: 8000,
-    icon: '🎯',
+    icon: 'TGT',
   },
   {
     id: 'first_arm',
     title: 'Daughter Deployed',
     body: 'Hold steady. The daughter needs time to reach the target. Watch the tether tension gauge.',
     duration: 7000,
-    icon: '🦾',
+    icon: 'DTR',
   },
   {
     id: 'first_capture',
     title: 'First Catch!',
     body: 'Nice work, Cowboy. Captured debris goes to your cargo bay. Open the Codex (I) to learn more.',
     duration: 8000,
-    icon: '✅',
+    icon: 'OK',
   },
   {
     id: 'first_net_park',
     title: 'Catch Parked at the Nose',
     body: 'A caught whale rides at the nose in its net — it is never deleted. It has mass (watch your drift), blocks the net launcher, and stays until you jettison it with K.',
     duration: 9000,
-    icon: '🎣',
+    icon: 'NET',
   },
   {
     id: 'first_conjunction',
     title: 'Conjunction Warning',
     body: 'A "conjunction" means two objects are about to pass dangerously close. Your Collision Avoidance system will suggest a dodge burn if you need one.',
     duration: 7000,
-    icon: '⚠️',
+    icon: 'WARN',
   },
   {
     id: 'first_weather',
     title: 'Space Weather',
     body: 'Solar activity detected. Watch your power levels. Panels may degrade during storms.',
     duration: 8000,
-    icon: '☀️',
+    icon: 'SUN',
   },
   {
     id: 'first_shop',
     title: 'The Workshop',
     body: 'Spend resources to upgrade your satellite. TRL badges (Technology Readiness Level) show how proven each upgrade is.',
     duration: 7000,
-    icon: '🏪',
+    icon: 'SHOP',
   },
   {
     id: 'first_codex',
     title: 'Mission Intel',
     body: 'The Codex catalogues everything you\'ve encountered. Knowledge is half the battle.',
     duration: 7000,
-    icon: '📖',
+    icon: 'INFO',
   },
   {
     id: 'first_burn',
     title: 'Manual Burn',
     body: 'Thrusting changes your orbit. Watch the MFD (Multi-Function Display). Your orbit\'s high point (apoapsis) and low point (periapsis) shift in real time.',
     duration: 7000,
-    icon: '🔥',
+    icon: 'BURN',
   },
   {
     id: 'first_kessler',
     title: 'Kessler Cascade',
     body: 'A collision just spawned new debris. That\'s the start of a Kessler cascade, where wreckage breeds more wreckage. Clear the field faster before it snowballs.',
     duration: 8000,
-    icon: '💥',
+    icon: 'FRAG',
   },
   {
     id: 'first_autopilot',
     title: 'Autopilot Active',
     body: 'The computer will handle orbital adjustments. Override anytime with manual thrust.',
     duration: 7000,
-    icon: '🤖',
+    icon: 'AUTO',
   },
   {
     id: 'first_lasso',
     title: 'Net Deployed',
     body: 'The capture net has a wide radius but needs momentum. Aim ahead of the target.',
     duration: 7000,
-    icon: '🪢',
+    icon: 'NET',
   },
   {
     id: 'first_active_sat_warning',
     title: 'Protected Asset',
     body: 'Active satellites are off-limits. Houston monitors all asset interactions.',
     duration: 8000,
-    icon: '🛡️',
+    icon: 'PROT',
   },
   {
     id: 'first_safe_mode',
     title: 'Safe Mode',
     body: 'Too many systems are critical, so the ship locked your daughters to protect itself. Repair until they\'re above 40% to get them back.',
     duration: 8000,
-    icon: '🔒',
+    icon: 'LOCK',
   },
   {
     id: 'first_radiation',
     title: 'Radiation Belt',
     body: 'You\'re crossing the Van Allen belt. A band of trapped radiation around Earth. Expect sensor static and laggy comms; don\'t linger.',
     duration: 8000,
-    icon: '☢️',
+    icon: 'RAD',
   },
   {
     id: 'first_strategic_map',
     title: 'Strategic Overview',
     body: 'The strategic map shows your full orbital environment. Drag to rotate, scroll to zoom. Plan your next approach.',
     duration: 8000,
-    icon: '🗺️',
+    icon: 'MAP',
   },
   // UX-3 N1: Scan & arm deploy teaching moments
   {
@@ -147,14 +148,14 @@ export const TEACHING_MOMENTS = [
     title: 'Quick Scan',
     body: 'Quick Scan reveals nearby debris. Press Shift+S for a Wide Scan to find targets at longer range.',
     duration: 7000,
-    icon: '📡',
+    icon: 'SCAN',
   },
   {
     id: 'first_arm_deploy',
     title: 'Daughter Launched',
     body: 'Daughters capture heavier targets at longer range. Press 1-4 to pilot a launched daughter. Manual captures earn 2× score.',
     duration: 8000,
-    icon: '🛰️',
+    icon: 'DTR',
   },
   // Per-class first-deploy: catch cap + reach so the mass-routing rule is legible
   // the first time each daughter class is launched (net ladder, Phase A).
@@ -163,14 +164,14 @@ export const TEACHING_MOMENTS = [
     title: 'Small Daughter',
     body: 'Small Daughter: nets targets up to 50 kg, ranges 500 m from the Mother. Fast reload, four nets aboard — your workhorse for fragments.',
     duration: 8000,
-    icon: '🛰️',
+    icon: 'DTR',
   },
   {
     id: 'first_large_daughter_deploy',
     title: 'Large Daughter',
     body: 'Large Daughter: nets targets up to 500 kg, ranges 2 km from the Mother. Two heavier nets aboard — send her for the big dead satellites.',
     duration: 8000,
-    icon: '🛰️',
+    icon: 'DTR',
   },
   // Register item 100: the speed dial — taught the moment a T3+ spring makes
   // the ceiling exceed the cradle default (the purchase that needs it).
@@ -179,7 +180,7 @@ export const TEACHING_MOMENTS = [
     title: 'Launch-Speed Dial',
     body: 'Your new spring outruns the 10 m/s cradle default. Set the fleet launch speed with [\'] up and [;] down — a hotter shot reaches farther but reloads ∝ v². Pair it with a long tether and sweep the far field.',
     duration: 9000,
-    icon: '🏹',
+    icon: 'DIAL',
   },
   // Net ladder Phase B: whale doctrine — only the Mother's Large Net holds >500 kg.
   {
@@ -187,14 +188,14 @@ export const TEACHING_MOMENTS = [
     title: 'Whale',
     body: 'Whale-class target — over 500 kg. Only the Mother\'s Large Net holds that. Fly the Mother in close and fire [N]; plan the burn, the pods are scarce.',
     duration: 9000,
-    icon: '🐋',
+    icon: 'MASS',
   },
   {
     id: 'first_deltav_waste',
     title: 'Save the Burn',
     body: 'You\'re burning the Mother toward a daughter-sized catch. A Daughter reaches it for near-zero Δv — deploy one [D] and park the Mother. Save the burn for whales.',
     duration: 9000,
-    icon: '⛽',
+    icon: 'FUEL',
   },
   // Capture-failure guidance (recoverable vs catastrophic)
   {
@@ -202,14 +203,14 @@ export const TEACHING_MOMENTS = [
     title: 'Net Slipped',
     body: 'The net lost its grip. Too heavy, or the debris was wider than the net mouth. The catch is fine: it\'s drifting free again. Your daughter keeps her tether and heads home to reload. Re-net it to try again (a bigger net helps for large debris).',
     duration: 9000,
-    icon: '🪢',
+    icon: 'NET',
   },
   {
     id: 'first_tether_snap',
     title: 'Tether Severed',
     body: 'The tether snapped under reel load. That daughter and her catch are cut loose and drifting, and that line can\'t be reloaded. Launch another daughter (D) to chase the catch down, and upgrade your tether in the Workshop to haul heavier loads safely.',
     duration: 10000,
-    icon: '⚠️',
+    icon: 'WARN',
   },
   // Phase 0.6 (capture-feedback overhaul): proactive de-spin teaching —
   // close the "see odds → pull lever → odds climb" loop before the first
@@ -219,14 +220,14 @@ export const TEACHING_MOMENTS = [
     title: 'Fast Spinner',
     body: 'That target is tumbling fast. Nets slip off fast spinners. Hold L to fire the de-spin laser; watch the capture odds climb as the tumble bleeds off, then net it.',
     duration: 9000,
-    icon: '🌀',
+    icon: 'SPIN',
   },
   {
     id: 'first_despin_in_spec',
     title: 'Tumble In Spec',
     body: 'Tumble in spec. Odds restored. This works on any spinner.',
     duration: 7000,
-    icon: '✅',
+    icon: 'OK',
   },
   // Phase 1.5 (capture-feedback overhaul): the dossier "chest opens".
   {
@@ -234,7 +235,7 @@ export const TEACHING_MOMENTS = [
     title: 'Full Profile',
     body: 'Close-range survey complete. Full structural profile and salvage appraisal. Survey before you commit: brittleness drives fragmentation risk, and appraisal tells you what it\'s worth.',
     duration: 9000,
-    icon: '📋',
+    icon: 'SCAN',
   },
   // Phase 2 (capture-feedback overhaul): orientation-based capture.
   {
@@ -242,7 +243,7 @@ export const TEACHING_MOMENTS = [
     title: 'Too Wide Broadside',
     body: 'Too wide broadside. But the net can swallow it lengthwise. De-spin it, then orbit around until the readout says END-ON.',
     duration: 9000,
-    icon: '↔️',
+    icon: 'WIDE',
   },
   // Phase 3b (capture-feedback overhaul): fragmentation consequences.
   {
@@ -250,7 +251,7 @@ export const TEACHING_MOMENTS = [
     title: 'Fragmentation',
     body: 'The impact broke the debris into new tracked fragments. Wreckage breeds wreckage. First one\'s on the house; avoid it with a slow approach, CINCH mode, or the pad for fragile pieces.',
     duration: 10000,
-    icon: '💥',
+    icon: 'FRAG',
   },
 ];
 
@@ -547,7 +548,7 @@ export class TeachingSystem {
       title: payload.title || 'HINT',
       body: payload.body || '',
       duration: payload.duration || (Constants?.TEACHING?.DEFAULT_DURATION_MS || 9000),
-      icon: payload.icon || '💡',
+      icon: payload.icon || 'HINT',
     };
     // Do NOT mark seen — re-fires legitimate (e.g. onboarding re-escalation).
     if (typeof this.onShow === 'function') {

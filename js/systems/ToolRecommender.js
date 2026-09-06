@@ -3,7 +3,7 @@
  *
  * Scores the verbs in a daughter's toolset (NET / MAGNET / GRIPPER / PAD)
  * against the active target so the STATION_KEEP tool-selection HUD can show a
- * ▶ recommendation and ★ scores, per DAUGHTER_MULTITOOL_SPEC §7.
+ * ▶ recommendation and star scores, per DAUGHTER_MULTITOOL_SPEC §7.
  *
  * Design notes:
  *   • PURE + Node-safe — no THREE, no DOM, no eventBus. Fully unit-testable.
@@ -24,7 +24,7 @@ import { computeToolOdds, computeBestTool } from './ToolOdds.js';
  * @typedef {Object} ToolRecommendation
  * @property {string}                 recommended   - top tool kind (defaults 'NET')
  * @property {string[]}               alternatives  - the arm's toolset in cycle order
- * @property {Object<string,number>}  scores        - kind → ★ score (0..3)
+ * @property {Object<string,number>}  scores        - kind → star score (0..3)
  * @property {Object<string,string>}  hints         - kind → short reason string
  */
 
@@ -130,8 +130,8 @@ export function recommendArmTool(opts = {}) {
 
   // ── Rank (capture-feedback overhaul Phase 1a): the ▶ is now a thin wrapper
   // over the unified ToolOdds model — argmax p with the preference-margin
-  // stabiliser — so the ★ HUD, the odds strip, and the resolve rolls can never
-  // disagree about which tool is the best bet. ★ scores above stay as the
+  // stabiliser — so the star HUD, the odds strip, and the resolve rolls can never
+  // disagree about which tool is the best bet. Star scores above stay as the
   // coarse display tier; the recommendation itself comes from honest numbers.
   const odds = computeToolOdds({
     armType,

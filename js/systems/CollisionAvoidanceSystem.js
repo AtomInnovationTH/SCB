@@ -508,7 +508,7 @@ export class CollisionAvoidanceSystem {
       });
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'CA',
-        text: `⚠ GLANCING IMPACT — debris ${id}. Solar panel + battery damage`,
+        text: `WARNING: GLANCING IMPACT — debris ${id}. Solar panel + battery damage`,
         priority: 'critical',
       });
       if (audioSystem && typeof audioSystem.playWarning === 'function') audioSystem.playWarning(0.7);
@@ -837,7 +837,7 @@ export class CollisionAvoidanceSystem {
     // --- Comms notification (gated — see _emitCaComms JSDoc) ---
     this._emitCaComms({
       sender: 'CA',
-      text: `⚠ COLLISION AVOIDANCE. RCS dodge fired (${dodgeDvMs.toFixed(2)} m/s ${dirLabel})`,
+      text: `CAUTION: COLLISION AVOIDANCE. RCS dodge fired (${dodgeDvMs.toFixed(2)} m/s ${dirLabel})`,
       priority: 'warning',
     });
   }

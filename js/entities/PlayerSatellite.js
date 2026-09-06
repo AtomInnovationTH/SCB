@@ -5730,7 +5730,7 @@ export class PlayerSatellite extends THREE.Group {
       if (now - this._lastThrustOfflineWarning > 3000) {
         this._lastThrustOfflineWarning = now;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: '⚠ ION DRIVE OFFLINE. Increase THRUST power allocation',
+            text: 'CAUTION: ION DRIVE OFFLINE. Increase THRUST power allocation',
           priority: 'warning',
         });
       }
@@ -5852,7 +5852,7 @@ export class PlayerSatellite extends THREE.Group {
       if (now - this._lastThrustOfflineWarning > 3000) {
         this._lastThrustOfflineWarning = now;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: '⚠ MPD DRIVE OFFLINE. Increase THRUST power allocation',
+          text: 'CAUTION: MPD DRIVE OFFLINE. Increase THRUST power allocation',
           priority: 'warning',
         });
       }
@@ -5908,7 +5908,7 @@ export class PlayerSatellite extends THREE.Group {
       this._mpdDegraded = true;
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: '⚠ MPD degraded. Critical power',
+        text: 'CAUTION: MPD degraded. Critical power',
         priority: 'warning',
       });
     } else if (batteryThrustMult >= 1.0) {
@@ -5936,7 +5936,7 @@ export class PlayerSatellite extends THREE.Group {
       });
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: `⚠ MPD cathode eroded. Thrust degraded to ${Math.round(degradedFactor * 100)}%`,
+        text: `CAUTION: MPD cathode eroded. Thrust degraded to ${Math.round(degradedFactor * 100)}%`,
         priority: 'warning',
       });
     }
@@ -5953,7 +5953,7 @@ export class PlayerSatellite extends THREE.Group {
       eventBus.emit(Events.MPD_BURST_END, { reason: 'overheat' });
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: '🔥 MPD THERMAL SHUTDOWN. Mandatory cooldown',
+        text: 'MPD THERMAL SHUTDOWN. Mandatory cooldown',
         priority: 'critical',
       });
     }
@@ -5989,7 +5989,7 @@ export class PlayerSatellite extends THREE.Group {
   // S3b: MPD BURST MODE
   // ========================================================================
   //
-  // ⚠️ FUTURE TEAMS — DORMANT FEATURE (note added 2026-06-16) ⚠️
+  // FUTURE TEAMS — DORMANT FEATURE (note added 2026-06-16)
   // This entire MPD "Ludicrous mode" burst subsystem (toggleMPDArmed + heat /
   // cooldown / lithium / MPD_BURST_START|END events + the StatusPanel HEAT row +
   // the CodexSystem trigger + the AudioSystem burst SFX) is currently
@@ -6033,7 +6033,7 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * Toggle MPD armed state.
    *
-   * ⚠️ NO CALLER as of 2026-06-16 — this is dead until a team re-homes the
+   * NO CALLER as of 2026-06-16 — this is dead until a team re-homes the
    * arming verb (its old `M` key is now the Debris Map). See the "DORMANT
    * FEATURE" banner above the `isMPDArmed` getter for the decision options.
    * If you re-bind it, also restore the MPD_BURST control-mode branch in
@@ -6072,7 +6072,7 @@ export class PlayerSatellite extends THREE.Group {
       eventBus.emit(Events.MPD_BURST_START, { armed: true });
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: '⚡ MPD ARMED. Ludicrous mode active',
+        text: 'MPD ARMED. Ludicrous mode active',
         priority: 'info',
       });
     } else {
@@ -6704,7 +6704,7 @@ export class PlayerSatellite extends THREE.Group {
         if (now - this._lastThrustOfflineWarning > 3000) {
           this._lastThrustOfflineWarning = now;
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: '⚠ ION DRIVE OFFLINE. Increase THRUST power allocation',
+          text: 'CAUTION: ION DRIVE OFFLINE. Increase THRUST power allocation',
             priority: 'warning',
           });
         }

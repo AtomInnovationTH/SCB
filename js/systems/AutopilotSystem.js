@@ -279,7 +279,7 @@ export class AutopilotSystem {
     const dv = this._getRemainingDeltaV();
     if (dv < ENGAGE_DV_MIN) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `⚠ AUTOPILOT DENIED. ΔV ${Math.round(dv)} m/s below ${ENGAGE_DV_MIN} m/s safety limit`,
+        text: `CAUTION: AUTOPILOT DENIED. ΔV ${Math.round(dv)} m/s below ${ENGAGE_DV_MIN} m/s safety limit`,
         priority: 'warning',
       });
       return;
@@ -301,7 +301,7 @@ export class AutopilotSystem {
         if (this._trawlActive) {
           // Abort failed to clear the sweep — bail out rather than fight it.
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: '⚠ AUTOPILOT DENIED. Trawl sweep still active',
+            text: 'CAUTION: AUTOPILOT DENIED. Trawl sweep still active',
             priority: 'warning',
           });
           return;
@@ -309,7 +309,7 @@ export class AutopilotSystem {
       } else {
         this._trawlAbortArmed = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: '⚠ AUTOPILOT DENIED. Trawl sweep in progress. Press A again to abort the sweep and engage.',
+          text: 'CAUTION: AUTOPILOT DENIED. Trawl sweep in progress. Press A again to abort the sweep and engage.',
           priority: 'warning',
         });
         return;
@@ -362,7 +362,7 @@ export class AutopilotSystem {
       // (Constants.js:1006 nav_autopilot_no_target).
       eventBus.emit(Events.AUTOPILOT_NO_TARGET);
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ AUTOPILOT DENIED. No live contacts in the field. Check the Debris Map (`) for the next cluster.',
+        text: 'CAUTION: AUTOPILOT DENIED. No live contacts in the field. Check the Debris Map (`) for the next cluster.',
         priority: 'warning',
       });
       return;

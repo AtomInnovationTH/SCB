@@ -378,8 +378,8 @@ export class SensorSystem {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'V5',
       text: type === 'quick'
-        ? '📡 Quick scan initiated...'
-        : '📡 Wide aperture scan. Stand by...',
+        ? 'Quick scan initiated...'
+        : 'Wide aperture scan. Stand by...',
       priority: 'info',
     });
   }

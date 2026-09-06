@@ -217,7 +217,7 @@ export class MissionCoach {
       id: `coach_${beat.id}`,
       title: beat.title || 'MISSION COACH',
       body: beat.body || beat.text || '',
-      icon: '🛰️',
+      icon: 'HINT',
     });
   }
 

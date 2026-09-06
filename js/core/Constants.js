@@ -1102,7 +1102,7 @@ export const Constants = {
     SWITCH_ADVISE_MARGIN: 0.20,  // advisory offers a switch when another tool beats selected by this
     TREND_RATE_PER_S:     0.02,  // |Δp|/s above which the ↑/↓ trend arrow shows
     DISPLAY_CAP:          0.99,  // sure-shots show 99%, never a lying 100%
-    FRAG_CHIP_MIN:        0.10,  // ⚠FRAG chip renders at/above this risk
+    FRAG_CHIP_MIN:        0.10,  // FRAG chip renders at/above this risk
   },
 
   // Debris Dossier — progressive reveal "treasure chest" data
@@ -1147,8 +1147,8 @@ export const Constants = {
     // prices per the charter). Same sanctioned path: the pacing test computes
     // Σ UPGRADES live and this pin re-derives with it.
     CATALOG_TOTAL_CR: 45000,
-    // Ordered recommendation preference for the ⭐ starter highlight. The shop
-    // ⭐-marks the first item here that is un-owned and currently affordable.
+    // Ordered recommendation preference for the starter highlight. The shop
+    // marks the first item here that is un-owned and currently affordable.
     RECOMMENDED_STARTERS: ['capture_net', 'fast_reel', 'enhanced_eo', 'efficient_ion'],
   },
 
@@ -3912,7 +3912,7 @@ export const Constants = {
 
     // --- Comms quieting (Delegation 1 follow-up, 2026-05-31) -----------------
     // Reviewer feedback after the rebind verification pass: CA dodge comms
-    // ("⚠ COLLISION AVOIDANCE — RCS dodge fired …") were spamming the new
+    // ("CAUTION: COLLISION AVOIDANCE. RCS dodge fired …") were spamming the new
     // player on mission 1, drowning out the welcoming onboarding tone we want.
     // Dodges still fire silently — only the COMMS_MESSAGE side-channel is
     // gated.  Two layers:
@@ -5200,6 +5200,8 @@ export const Constants = {
   // in `state` for ≥ `idleS` seconds AND the `when` predicate holds, it fires the
   // hint ONCE per deployment (reset on any state change), routed through
   // TEACHING_MOMENT_FORCE. Veterans (SkillsSystem.isVeteran) are skipped entirely.
+  // `icon` is the short text tag TeachingOverlay shows beside the title (plan D-J:
+  // no pictographs; <= 4 chars).
   // `when` keys: 'noNetInFlightHasNets' | 'outOfNets' | 'always'.
   ARM_IDLE_HINTS: [
     {
@@ -5210,26 +5212,26 @@ export const Constants = {
       state: 'TRANSIT', idleS: 3, when: 'always',
       hintId: 'transit_pilot_nudge', title: 'Daughter in transit',
       text: 'Press 1-4 to take manual control. A piloted capture scores 2×.',
-      icon: '🕹',
+      icon: 'FLY',
     },
     {
       state: 'STATION_KEEP', idleS: 20, when: 'noNetInFlightHasNets',
       hintId: 'sk_idle_fire_or_pilot', title: 'Daughter holding standoff',
       text: 'She is holding station on the target. Press N to launch the net (or 1-4 to pilot her).',
-      icon: '🎯',
+      icon: 'NET',
     },
     {
       state: 'STATION_KEEP', idleS: 6, when: 'outOfNets',
       hintId: 'sk_out_of_nets', title: 'Out of nets',
       text: 'No nets left in the magazine. Press R to reel her in, then restock at the shop (B).',
-      icon: '📦',
+      icon: 'NETS',
     },
   ],
   // ARM_PILOT idle hint is mode-based (not an FSM state), handled directly by the
   // advisor against InputManager's pilot mode.
   ARM_PILOT_IDLE: {
     idleS: 45, hintId: 'arm_pilot_return',
-    title: 'Piloting a daughter', icon: '🕹',
+    title: 'Piloting a daughter', icon: 'FLY',
     text: 'Press her number again (1-4) or Esc to back out to Command view.',
   },
 

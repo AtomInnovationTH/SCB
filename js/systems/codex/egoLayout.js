@@ -55,7 +55,7 @@ function toNode(entry, x, y, ring) {
     y,
     ring,
     locked: !entry.unlocked,
-    icon: entry.icon || '📄',
+    icon: entry.icon || '·',
     title: entry.title || entry.id,
     category: entry.category || '',
   };

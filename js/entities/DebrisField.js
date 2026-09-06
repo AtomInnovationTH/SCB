@@ -1970,7 +1970,7 @@ export class DebrisField {
           });
           eventBus.emit(Events.COMMS_MESSAGE, {
             sender: 'DEBRIS',
-            text: `🔥 Debris ${debris.id} burned up. Web-assisted de-orbit complete`,
+            text: `Debris ${debris.id} burned up. Web-assisted de-orbit complete`,
             priority: 'success',
           });
           continue; // skip further processing for this debris
@@ -3494,7 +3494,7 @@ export class DebrisField {
           risk = 'Med';
           riskStars = 2;
         }
-        // Register item 102 (2026-08-22): the Extreme/★5 row for a rocketBody
+        // Register item 102 (2026-08-22): the Extreme/5-star row for a rocketBody
         // over 4 000 kg is DELETED — dead since S11(b) (`df24e3b`'s two
         // populations), the same kill as DEBRIS_TIER_BASE_WEIGHT's tier-4 row
         // (register item 99): no production spawn path emits a rocketBody over

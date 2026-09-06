@@ -73,8 +73,10 @@ function sourceToChannel(source, payload) {
 
   // 3. Conservative text-based heuristics (well-commented, secondary to explicit channel)
   const text = (p.text || '').toUpperCase();
-  // ALERT: messages starting with warning-like prefixes
-  if (/^(ALERT:|WARNING:|⚠|CONJUNCTION)/.test(text)) return 'ALERT';
+  // ALERT: messages starting with warning-like prefixes. Plan D-J (no emoji):
+  // the former leading warning glyph became the words CAUTION: / WARNING:
+  // (CRITICAL: where the sentence already carried it), so those words classify.
+  if (/^(ALERT:|WARNING:|CAUTION:|CRITICAL:|CONJUNCTION)/.test(text)) return 'ALERT';
   // SCI: discovery/codex/identification
   if (/^(DISCOVERY|CODEX|IDENTIFIED)/.test(text)) return 'SCI';
   // CMD: arm deploy/reel/detach confirmations
@@ -143,7 +145,7 @@ const SPACE_WEATHER_TEMPLATES = [
   {
     priority: CommsPriority.CRITICAL,
     source: 'NOAA SWPC',
-    template: '⚠ Solar storm (Coronal Mass Ejection) inbound in {time} min. A blast of radiation from the Sun. Duck into Earth\'s shadow to shield your panels.',
+    template: 'WARNING: Solar storm (Coronal Mass Ejection) inbound in {time} min. A blast of radiation from the Sun. Duck into Earth\'s shadow to shield your panels.',
     effect: 'solarStorm',
   },
   {
@@ -171,7 +173,7 @@ const KESSLER_TEMPLATES = [
   {
     priority: CommsPriority.CRITICAL,
     source: 'Space Domain Awareness',
-    template: '⚠ CRITICAL: Collision at {alt}km just shattered into {count} new debris pieces. Adding them to the catalog now.',
+    template: 'CRITICAL: Collision at {alt}km just shattered into {count} new debris pieces. Adding them to the catalog now.',
   },
   {
     priority: CommsPriority.WARNING,
@@ -581,7 +583,7 @@ export class CommsSystem {
       this.addMessage(
         CommsPriority.CRITICAL,
         'SPACECRAFT',
-        `⚡ Emergency dodge! Debris ${data.debrisId} at ${Math.round(data.distanceM)}m. Burned some cold-gas thruster fuel to get clear.`
+        `Emergency dodge! Debris ${data.debrisId} at ${Math.round(data.distanceM)}m. Burned some cold-gas thruster fuel to get clear.`
       );
     });
 

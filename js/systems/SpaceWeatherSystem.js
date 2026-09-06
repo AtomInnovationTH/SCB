@@ -17,13 +17,15 @@ import { TimeAuthority } from './TimeAuthority.js';
 // ============================================================================
 // WEATHER TYPE DEFINITIONS
 // ============================================================================
+// `icon` is a short text tag (<= 4 chars) the HUD weather badge shows beside
+// `name` (plan D-J: no pictographs anywhere; the comms line carries the name alone).
 
 const SW = Constants.SPACE_WEATHER;
 
 const WEATHER_TYPES = {
   SOLAR_FLARE: {
     name: 'Solar Flare',
-    icon: '☀️',
+    icon: 'SUN',
     color: '#ff8800',
     effects: {
       sensorRange: 0.7,
@@ -40,7 +42,7 @@ const WEATHER_TYPES = {
 
   GEOMAGNETIC_STORM: {
     name: 'Geomagnetic Storm',
-    icon: '🟣',
+    icon: 'GEO',
     color: '#9933ff',
     effects: {
       edtEfficiency: 1.5,
@@ -57,7 +59,7 @@ const WEATHER_TYPES = {
 
   SAA_PASSAGE: {
     name: 'South Atlantic Anomaly',
-    icon: '⚠️',
+    icon: 'SAA',
     color: '#ccaa00',
     effects: {
       sensorNoise: true,
@@ -73,7 +75,7 @@ const WEATHER_TYPES = {
 
   ECLIPSE_ENTRY: {
     name: 'Eclipse',
-    icon: '🌑',
+    icon: 'ECL',
     color: '#334455',
     effects: {
       solarPower: 0,

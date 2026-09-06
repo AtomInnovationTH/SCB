@@ -159,14 +159,14 @@ export const ONBOARDING_BEATS = [
     id: 'free_clear',
     commsSource: 'HOUSTON', commsText: 'You\'ve got the loop: scan, lock, close, net. Clear the rest of the cluster.',
     commsAck: null,
-    glyph: '★', keys: [], skillId: null,
+    glyph: '◆', keys: [], skillId: null,
     autoAdvanceAfter: 4000,
   },
   {
     id: 'final',
     commsSource: 'HOUSTON', commsText: 'That\'s real cowboy work. Clear the field, then check the map for the next cluster. Good hunting.',
     commsAck: null,
-    glyph: '★', keys: [], skillId: null,
+    glyph: '◆', keys: [], skillId: null,
     autoAdvanceAfter: 4000,
     onEnter: 'mastered=true',
   },
@@ -656,7 +656,7 @@ export class OnboardingDirector {
     this._emit(Events.HINT_POSTED, {
       id: beat.id,
       text: `${beat.text || beat.commsText || ''} (${count}/${beat.counterTarget})`,
-      glyph: beat.glyph || '🎯',
+      glyph: beat.glyph || '#',
       keys: beat.keys || [],
       skillId: beat.skillId || undefined,
       duration: beat.hintDuration || (Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000),
@@ -1093,7 +1093,7 @@ export class OnboardingDirector {
       title: (beat.text || beat.commsText || '').slice(0, 40),
       body,
       duration: 9000,
-      icon: '💡',
+      icon: 'HINT',
     });
   }
 

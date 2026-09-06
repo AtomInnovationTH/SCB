@@ -156,7 +156,7 @@ export class MissionEventSystem {
 
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'HOUSTON',
-          text: `⚠ Hydrazine detected in target! Maintain 500 m approach distance. Hazard bonus +${bonusPts}.`,
+          text: `CAUTION: Hydrazine detected in target! Maintain 500 m approach distance. Hazard bonus +${bonusPts}.`,
           priority: 'warning',
         });
 
@@ -232,7 +232,7 @@ export class MissionEventSystem {
 
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
-      text: `⚠ CASCADE WARNING: ${fc || 'Unknown'} fragments generated. Recommend immediate repositioning.`,
+      text: `CASCADE WARNING: ${fc || 'Unknown'} fragments generated. Recommend immediate repositioning.`,
       priority: 'critical',
     });
   }
@@ -259,7 +259,7 @@ export class MissionEventSystem {
 
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
-      text: `${data.icon || '☀'} ${data.name || data.type}: Sensor range reduced ${reductionPct}% for ${Math.round((data.duration || 600) / 60)} min.`,
+      text: `${data.name || data.type}: Sensor range reduced ${reductionPct}% for ${Math.round((data.duration || 600) / 60)} min.`,
       priority: 'warning',
     });
   }
@@ -283,7 +283,7 @@ export class MissionEventSystem {
 
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
-        text: '⚠ Multiple conjunction alerts in your altitude band. Recommend immediate departure or altitude change.',
+        text: 'WARNING: Multiple conjunction alerts in your altitude band. Recommend immediate departure or altitude change.',
         priority: 'critical',
       });
     }

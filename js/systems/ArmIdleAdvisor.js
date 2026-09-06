@@ -99,7 +99,7 @@ export class ArmIdleAdvisor {
       id: hintId,
       title: title || 'HINT',
       body: text || '',
-      icon: icon || '💡',
+      icon: icon || 'HINT',
       _postOnboarding: true,
     });
   }

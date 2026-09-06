@@ -126,7 +126,7 @@ export class KesslerSystem {
     if (this.shieldHits > 0) {
       this.shieldHits--;
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `⚡ WHIPPLE SHIELD absorbed ${label}. ${this.shieldHits} hit${this.shieldHits !== 1 ? 's' : ''} remaining`,
+        text: `WHIPPLE SHIELD absorbed ${label}. ${this.shieldHits} hit${this.shieldHits !== 1 ? 's' : ''} remaining`,
         priority: 'warning',
       });
       if (audioSystem) audioSystem.playWarning(0.5);
@@ -285,7 +285,11 @@ export class KesslerSystem {
           this._warningsEnabled = true;
           eventBus.on(Events.KESSLER_WARNING, (warnData) => {
             eventBus.emit(Events.COMMS_MESSAGE, {
-              text: `⚠ Cascade ${warnData.level}: ${warnData.fragmentCount}/${warnData.threshold} fragments`,
+              // The level word (CAUTION / WARNING / CRITICAL) is already in the
+              // sentence; the explicit channel keeps the ALERT classification the
+              // former leading warning glyph used to earn via the text heuristic.
+              text: `Cascade ${warnData.level}: ${warnData.fragmentCount}/${warnData.threshold} fragments`,
+              channel: 'ALERT',
               priority: warnData.level === 'CRITICAL' ? 'danger' : 'warning',
             });
           });

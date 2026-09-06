@@ -251,7 +251,7 @@ function ensureOverlay() {
   root.id = 'auto-profile-overlay';
   const status = document.createElement('div');
   status.className = 'ap-status';
-  status.textContent = '🛰️ AutoProfileSweep starting…';
+  status.textContent = 'AutoProfileSweep starting…';
   root.appendChild(status);
   const pre = document.createElement('pre');
   pre.className = 'ap-pre';
@@ -261,15 +261,15 @@ function ensureOverlay() {
   row.className = 'ap-row';
   const copyBtn = document.createElement('button');
   copyBtn.className = 'ap-copy';
-  copyBtn.textContent = '📋 Copy JSON';
+  copyBtn.textContent = 'Copy JSON';
   copyBtn.style.display = 'none';
   const downloadBtn = document.createElement('a');
   downloadBtn.className = 'ap-download';
-  downloadBtn.textContent = '⬇ Download .json';
+  downloadBtn.textContent = 'Download .json';
   downloadBtn.style.display = 'none';
   const closeBtn = document.createElement('button');
   closeBtn.className = 'ap-close';
-  closeBtn.textContent = '✕ Close';
+  closeBtn.textContent = 'Close';
   closeBtn.style.display = 'none';
   row.appendChild(copyBtn);
   row.appendChild(downloadBtn);
@@ -364,7 +364,7 @@ export class AutoProfileSweep {
     const overlay = (typeof document !== 'undefined') ? ensureOverlay() : null;
     if (overlay) {
       overlay.status.textContent =
-        `🛰️ AutoProfileSweep settling… (state=${initialState}, tier=${sm.currentTier})`;
+        `AutoProfileSweep settling… (state=${initialState}, tier=${sm.currentTier})`;
     }
 
     // Settle the very first time so any post-load jank doesn't poison the
@@ -376,7 +376,7 @@ export class AutoProfileSweep {
       if (this._aborted) break;
       if (overlay) {
         overlay.status.textContent =
-          `🛰️ Profiling ${i + 1}/${SWEEP_CONFIGS.length}: ${cfg.id}`;
+          `Profiling ${i + 1}/${SWEEP_CONFIGS.length}: ${cfg.id}`;
       }
       try {
         await this._captureConfig(cfg);
