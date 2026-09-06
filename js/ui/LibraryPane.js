@@ -128,6 +128,7 @@
  */
 
 import { VisualLaw } from '../core/VisualLaw.js';
+import { RAIL_GEOMETRY } from './RailGeometry.js';
 import { trlToLabel, techLevelBadgeText } from '../core/Constants.js';
 
 /** Pane slide duration (ms) — inside the 240–300 ms house window
@@ -408,6 +409,38 @@ export class LibraryPane {
 
   /** @returns {boolean} */
   isOpen() { return this._open; }
+
+  /**
+   * THE TAB DODGE (owner 2026-09-06): the tab's design anchor is `top:38%`,
+   * but when the WHERE rail has dodged under the right HUD column, 38 % sits
+   * over that column's rows (the TRACKED TARGETS values) — so the tab rides
+   * UNDER the dodged rail instead: `top = railBottom + DODGE_GAP_PX`, if that
+   * keeps the tab above `floorPx` (the hub passes innerHeight minus the thumb
+   * rest on glass, innerHeight on desktop); otherwise, or with no dodge
+   * (null), the tab returns to 38 %. Per-frame safe: write-on-change on the
+   * inputs; the tab height is read only when they change.
+   * @param {number|null} railBottom  RailIndicator.dodgeBottom()
+   * @param {number} floorPx          the lowest bottom edge the tab may take
+   */
+  setTabDodge(railBottom, floorPx) {
+    if (!this._tab) return;
+    const rb = (typeof railBottom === 'number' && Number.isFinite(railBottom)) ? railBottom : null;
+    const fl = Number(floorPx) || 0;
+    if (rb === this._tabDodgeIn && fl === this._tabDodgeFloor) return;
+    this._tabDodgeIn = rb;
+    this._tabDodgeFloor = fl;
+    let top = null;
+    if (rb != null && typeof this._tab.getBoundingClientRect === 'function') {
+      const want = rb + RAIL_GEOMETRY.DODGE_GAP_PX;          // viewport px
+      const h = this._tab.getBoundingClientRect().height || 0;
+      // `top` is relative to the pane ROOT (the tab is its child) — convert.
+      const rootTop = (this._root && typeof this._root.getBoundingClientRect === 'function')
+        ? (this._root.getBoundingClientRect().top || 0) : 0;
+      if (h > 0 && want + h <= fl) top = Math.round(want - rootTop);
+    }
+    const css = top == null ? '38%' : `${top}px`;
+    if (this._tab.style.top !== css) this._tab.style.top = css;
+  }
   /** @returns {boolean} */
   isEnabled() { return this._enabled; }
   /** @returns {string|null} the entry the pane is showing (null = the prompt) */
@@ -815,6 +848,8 @@ export class LibraryPane {
     this._root = root;
     this._body = body;
     this._tab = tab;
+    this._tabDodgeIn = undefined;   // setTabDodge write-on-change inputs
+    this._tabDodgeFloor = undefined;
     this._tabCount = tabCount;
     this._applyOpenState();
 

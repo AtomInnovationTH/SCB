@@ -61,6 +61,10 @@ export class PaneDensity {
      * one-rung `-`/`+`): while true the bus `-` CLEARS every pane in one
      * press (clearAll) and the bus `+` from a cleared screen RESTORES the
      * room that was showing (restore) — one press each way. Default false.
+     * CLEAN VIEW IS A MODE, NOT A ROOM EDIT: while the stash is held the
+     * hub's flip listener skips the D5 room capture (hasStash() is the
+     * signal), FloorMask skips its departing-floor capture, so a reload or
+     * the next floor brings the room back exactly as it was before `-`.
      * @type {boolean}
      */
     this.clearOnDown = false;
@@ -212,8 +216,14 @@ export class PaneDensity {
       this._notify('HUD already clear · + restores');
       return 0;
     }
+    // The stash is set BEFORE the walk: the hub's flip listener reads
+    // hasStash() to know these flips are the clean-view MODE (not remembered
+    // — the room memory keeps the pre-clear room; owner 2026-09-06). A walk
+    // that moved nothing (every adapter refused) leaves no stash behind.
+    const prev = this._stash;
+    this._stash = shown;
     const steps = this.setLevel(0, { quiet: true });
-    if (steps > 0) this._stash = shown;
+    if (steps === 0) this._stash = prev;
     const text = 'HUD clear — pure scenery · + restores';
     this._notify(text);
     this._log(text);
@@ -230,9 +240,10 @@ export class PaneDensity {
    */
   restore() {
     const stash = this._stash;
-    this._stash = null;
-    if (!stash || !stash.length) return 0;
+    if (!stash || !stash.length) { this._stash = null; return 0; }
     let shown = 0;
+    // Flips run WHILE the stash is set (still the mode → not remembered: the
+    // room memory already holds this very room); the stash clears after.
     for (const id of stash) {
       const rung = this.rungs.find((r) => r && r.id === id);
       if (!rung || this._safeVisible(rung)) continue;
@@ -240,6 +251,7 @@ export class PaneDensity {
       if (this._onFlip) this._onFlip(rung.id, true);
       shown++;
     }
+    this._stash = null;
     if (shown > 0) this.announceLevel();
     return shown;
   }

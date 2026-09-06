@@ -91,6 +91,7 @@ export class RailIndicator {
     /** @private the dodge: last applied top (null = mid-height) + last layout read */
     this._dodgeTop = null;
     this._dodgeAtMs = -Infinity;
+    this._dodgeBottom = null;
     this._toast = null;
     this._notches = [];   // per-floor { el, fill, _cur, _pct, _deny, _denyTimer } (index 0 = F1)
     this._visible = false;
@@ -310,6 +311,15 @@ export class RailIndicator {
   }
 
   /**
+   * The rail's bottom edge in CSS px while it is DODGED under the right HUD
+   * column, else null (mid-height as designed). The hub hands it to
+   * LibraryPane.setTabDodge so the SPECS tab rides under the rail instead of
+   * over the column (owner 2026-09-06). Refreshed with the 1 Hz dodge read.
+   * @returns {number|null}
+   */
+  dodgeBottom() { return this._visible ? this._dodgeBottom : null; }
+
+  /**
    * Refresh from a ZoomLadder state snapshot (docs/ladder/06-core-api.md).
    * Named `refresh` (not `update`) because it is driven by LadderController from
    * ladder state, not ticked directly by the main loop. Writes are cached — this
@@ -359,7 +369,9 @@ export class RailIndicator {
     const cr = (col && typeof col.getBoundingClientRect === 'function') ? col.getBoundingClientRect() : null;
     const colBottom = (cr && cr.height > 0) ? cr.bottom : -Infinity;
     const innerH = (typeof window !== 'undefined') ? Number(window.innerHeight) : 0;
-    const top = dodgeTop({ railH: root.getBoundingClientRect().height, colBottom, innerH });
+    const railH = root.getBoundingClientRect().height;
+    const top = dodgeTop({ railH, colBottom, innerH });
+    this._dodgeBottom = (top == null) ? null : top + railH;   // what rides under the rail (the SPECS tab) reads this
     if (top === this._dodgeTop) return;
     this._dodgeTop = top;
     if (top == null) {

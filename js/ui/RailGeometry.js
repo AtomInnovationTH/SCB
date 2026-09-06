@@ -27,6 +27,12 @@
  *   THUMB_REST_PX  the bottom band both rails must clear (two-thumb grip)
  *   IDLE_FADE      resting opacity after IDLE_FADE_MS without interaction
  *   IDLE_FADE_MS   the idle window (any tap / hover / populate wakes the rail)
+ *   TOUCH_PITCH_PX the WHAT rail's notch HIT BOX height on GLASS (Apple HIG
+ *                  44 pt minimum): the compact 17 pt plate sits centred in a
+ *                  transparent 44 pt row, boxes tile with no gap, so every y
+ *                  on the rail is a reliable thumb target while the rail still
+ *                  LOOKS like the WHERE rail's rows. Desktop (fine pointer)
+ *                  keeps the tight 5 px-gap rows — a mouse hits 17 pt fine.
  *   MAX_NOTCHES    the WHAT rail's height cap: the listed rows before the rest
  *                  folds behind ONE `MORE` notch (8 keeps the rail a glance,
  *                  not a menu; the rows themselves are the WHERE rail's
@@ -46,6 +52,7 @@ export const RAIL_GEOMETRY = Object.freeze({
   IDLE_FADE_MS: 4000,
   MAX_NOTCHES: 8,
   DODGE_GAP_PX: 8,
+  TOUCH_PITCH_PX: 44,
 });
 
 /**

@@ -148,6 +148,13 @@ export class PaneRail {
     this._now = typeof deps.now === 'function' ? deps.now : _nowMs;
     this._timer = deps.timer || null;
     this._reducedMotionDep = deps.reducedMotion;
+    /**
+     * GLASS (owner 2026-09-06, the touchable law): true → every notch is a
+     * TOUCH_PITCH_PX (44 pt, HIG) hit box with the compact plate centred in it
+     * and the boxes tile gap-less; false (default, desktop) → the tight
+     * 5 px-gap rows. main.js passes TouchControls.detectGlass().
+     */
+    this._glass = !!deps.glass;
 
     this._built = false;
     this._disposed = false;
@@ -351,7 +358,7 @@ export class PaneRail {
     if (!rec || (rec.rest && !this._expanded)) return;
     rec.flashing = true;
     this._setAttr(rec.el, 'data-flash', '1');
-    this._paintColors(rec.el, PaneRail.notchPaint({ lit: !!rec.lit, flashing: true }));
+    this._paintColors(rec.plate || rec.el, PaneRail.notchPaint({ lit: !!rec.lit, flashing: true }));
     if (rec.flashTimer != null) this._clearTimeout(rec.flashTimer);
     rec.flashTimer = this._setTimeout(() => {
       rec.flashTimer = null;
@@ -498,7 +505,7 @@ export class PaneRail {
     if (rec.flashing || rec.lit === lit) return;
     rec.lit = lit;
     this._setAttr(rec.el, 'data-lit', lit ? '1' : '0');
-    this._paintColors(rec.el, PaneRail.notchPaint({ lit }));
+    this._paintColors(rec.plate || rec.el, PaneRail.notchPaint({ lit }));
   }
 
   /** @private */
@@ -551,7 +558,7 @@ export class PaneRail {
     // read as one instrument family.
     const stack = doc.createElement('div');
     stack.className = 'pane-rail-stack';
-    stack.style.cssText = 'display:flex;flex-direction:column-reverse;gap:5px';
+    stack.style.cssText = `display:flex;flex-direction:column-reverse;gap:${this._glass ? 0 : 5}px`;
     root.appendChild(stack);
 
     // HEAD cap: the rail's name and the long-press RESET ROOM target. Styled
@@ -565,6 +572,7 @@ export class PaneRail {
       `color:${VisualLaw.COLORS.INFO}`, 'font-size:0.62rem', 'letter-spacing:0.12em',
       'opacity:0.85', 'pointer-events:auto', 'cursor:default',
       'display:flex', 'align-items:flex-end',
+      this._glass ? `min-height:${RAIL_GEOMETRY.TOUCH_PITCH_PX}px` : '',
     ].join(';');
     this._bindHead(head);
     root.appendChild(head);
@@ -622,23 +630,31 @@ export class PaneRail {
     const byId = new Map();
     for (const r of rungs) if (r && r.id) byId.set(r.id, r);
     const doc = this._doc;
+    // A notch is TWO boxes: `el` = the HIT box (transparent; on glass a
+    // TOUCH_PITCH_PX row so a thumb lands on it — the touchable law), `plate`
+    // = the LOOK (the WHERE rail's compact row, centred in the hit box).
+    // Paint (border/colour/halo) goes on the plate; data-* state on el.
     const mk = (id, rest) => {
       const rung = byId.get(id);
       const el = doc.createElement('div');
       el.className = 'pane-rail-notch';
       this._setAttr(el, 'data-pane', id);
-      el.style.cssText = this._notchCss();
+      el.style.cssText = this._hitCss();
+      const plate = doc.createElement('span');
+      plate.className = 'pane-rail-plate';
+      plate.style.cssText = this._notchCss();
+      el.appendChild(plate);
       const lbl = PaneRail.notchLabel(rung ? rung.label : id, this._hotkeys[id]);
       const label = doc.createElement('span');
       label.className = 'pane-rail-label';
       label.textContent = lbl.text;
-      el.appendChild(label);
+      plate.appendChild(label);
       const key = doc.createElement('span');
       key.className = 'pane-rail-key';
       key.style.cssText = 'margin-left:6px;opacity:0.7;letter-spacing:0';
       key.textContent = lbl.key;
-      el.appendChild(key);
-      const rec = { id, rung, el, label, key, rest, lit: null, flashing: false, flashTimer: null };
+      plate.appendChild(key);
+      const rec = { id, rung, el, plate, label, key, rest, lit: null, flashing: false, flashTimer: null };
       this._bindNotch(rec);
       this._stack.appendChild(el);
       this._notches.push(rec);
@@ -651,16 +667,33 @@ export class PaneRail {
       el.className = 'pane-rail-notch pane-rail-more';
       this._setAttr(el, 'data-pane', MORE_ID);
       this._setAttr(el, 'data-lit', '1');
-      el.style.cssText = this._notchCss() + ';justify-content:center;font-style:italic';
+      el.style.cssText = this._hitCss();
+      const plate = doc.createElement('span');
+      plate.className = 'pane-rail-plate';
+      plate.style.cssText = this._notchCss() + ';justify-content:center;font-style:italic';
+      el.appendChild(plate);
       const label = doc.createElement('span');
       label.className = 'pane-rail-label';
-      el.appendChild(label);
-      this._more = { el, label };
+      plate.appendChild(label);
+      this._more = { el, plate, label };
       this._bindMore(el);
       this._stack.appendChild(el);
-      this._paintColors(el, PaneRail.notchPaint({ lit: true }));
+      this._paintColors(plate, PaneRail.notchPaint({ lit: true }));
     }
     this._applyExpanded();
+  }
+
+  /**
+   * @private The HIT box: transparent, opts back into pointer events (the root
+   * is pointer-events:none), holds the plate centred. Glass → TOUCH_PITCH_PX
+   * tall (HIG 44 pt); desktop → the plate's own height.
+   */
+  _hitCss() {
+    return [
+      'position:relative', 'display:flex', 'align-items:center',
+      'pointer-events:auto',
+      this._glass ? `min-height:${RAIL_GEOMETRY.TOUCH_PITCH_PX}px` : '',
+    ].join(';');
   }
 
   /**
@@ -674,12 +707,11 @@ export class PaneRail {
    */
   _notchCss() {
     return [
-      'position:relative', 'box-sizing:border-box',
+      'position:relative', 'box-sizing:border-box', 'flex:1 1 auto',
       'min-width:96px', 'padding:2px 8px', 'display:flex', 'align-items:center',
       `border:1px solid ${NOTCH_REST_BORDER}`, 'border-radius:3px',
       'background:rgba(0,14,28,0.55)', `color:${NOTCH_REST_COLOR}`,
       'text-align:left', 'white-space:nowrap', 'overflow:hidden',
-      'pointer-events:auto',
     ].join(';');
   }
 

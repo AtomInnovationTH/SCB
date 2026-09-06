@@ -272,17 +272,25 @@ export class FloorMask {
     if (!this._enabled) return;             // remembered; applied on re-enable
     if (!this._resolve()) return;           // absent deps: state-only no-op
     if (this._floor === this._appliedFloor) return;   // idempotent
-    this._captureMemory();
-    // A NEW room is about to apply: a pending clean-view stash (PaneDensity
-    // `-` = clear all, owner 2026-09-06) belonged to the departing floor's
-    // room — void it, so `+` on the arrival floor walks that floor's ladder
-    // and never restores floor 2's panes onto floor 4. Optional method.
+    // CLEAN VIEW is a MODE, not a room edit (owner 2026-09-06): while the
+    // density holds a `-` stash the departing floor's LIVE layout is the
+    // cleared screen — capturing it would remember "everything hidden".
+    // Skip the capture (the memory keeps the pre-clear room), then void the
+    // stash: it belonged to the departing room, and `+` on the arrival floor
+    // walks that floor's ladder — floor 2's panes never land on floor 4.
+    if (!this._inCleanView()) this._captureMemory();
     this._dropDensityStash();
     if (this._floor === null) {
       this._restoreAll();
       return;
     }
     this._applyRoom(this._floor);
+  }
+
+  /** @private true while PaneDensity holds a clean-view stash (duck-typed; absent → false). */
+  _inCleanView() {
+    const pd = this._hud && this._hud.paneDensity;
+    return !!(pd && typeof pd.hasStash === 'function' && pd.hasStash());
   }
 
   /** @private PaneDensity.dropStash() when the injected HUD has it (duck-typed). */
@@ -304,7 +312,8 @@ export class FloorMask {
     this._enabled = want;
     if (!this._resolve()) return;
     if (!want) {
-      this._captureMemory();                // keep the player's latest edits
+      if (!this._inCleanView()) this._captureMemory();   // keep the player's latest edits (never a clean-view screen)
+      this._dropDensityStash();
       this._restoreAll();
     } else if (this._floor != null) {
       this._applyRoom(this._floor);
@@ -315,7 +324,7 @@ export class FloorMask {
   dispose() {
     if (this._disposed) return;
     if (this._resolve()) {
-      this._captureMemory();
+      if (!this._inCleanView()) this._captureMemory();   // a cleared screen is never a room
       this._restoreAll();
     }
     if (this._vitals && this._ownVitals && this._vitals.dispose) {

@@ -128,6 +128,7 @@ import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
 import { PaneRail } from './ui/PaneRail.js';
+import { RAIL_GEOMETRY } from './ui/RailGeometry.js';
 import { TouchControls } from './ui/TouchControls.js';
 import { TouchTelemetry } from './ui/touchTelemetry.js';
 import { GestureHints } from './ui/hud/GestureHints.js';
@@ -662,6 +663,8 @@ let refitPane;
 // full-screen Library, I key, deep links) stays byte-identical (pinned in
 // test-LadderController).
 let libraryPane;
+/** The boot's ONE glass read (TouchControls' narrow detectGlass gate; module scope: init sets it, the gameLoop reads it). */
+let _glassBoot = false;
 // Session J (plan D-C) — "the library follows": retarget an OPEN SPECS pane to
 // the current floor's subject (assigned inside the LADDER.ENABLED gate; null
 // flag-off, so the controller's onSubjectChange dep is a no-op there).
@@ -812,7 +815,8 @@ async function init() {
   // laptop driven by a mouse keeps its hi-DPI picture; the broad detect() stays
   // the touch-affordance gate below. Desktop never takes the clamp —
   // byte-identical. The current tier's ratio re-applies inside the setter.
-  if (TouchControls.detectGlass()) sceneManager.setGlassPixelRatioCap(true);
+  _glassBoot = TouchControls.detectGlass();   // the ONE glass read this boot (pixel cap, the rail hit boxes, the tab floor)
+  if (_glassBoot) sceneManager.setGlassPixelRatioCap(true);
   const scene = sceneManager.getScene();
   const camera = sceneManager.getCamera();
   _bootMark('SceneManager constructed (renderer + composer + bloom)');
@@ -1867,9 +1871,21 @@ async function init() {
       roomTiers: (floor) => LADDER_DEFAULT_ROOMS[floor] || null,
       onFlip: (pane, shown) => eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane, shown }),
       onResetRoom: () => { if (ladderController) ladderController.resetRoom(); },
+      // The touchable law (owner 2026-09-06): on GLASS every notch is a 44 pt
+      // hit box (RAIL_GEOMETRY.TOUCH_PITCH_PX) around the compact plate; the
+      // same narrow gate as the pixel-ratio cap (a Surface with a mouse keeps
+      // the desktop rows).
+      glass: _glassBoot,
     });
     eventBus.on(Events.HUD_PANE_VISIBILITY, (d) => {
-      if (ladderController) ladderController.noteRoomChange();
+      // CLEAN VIEW is a MODE, not a room edit (owner 2026-09-06): while the
+      // density holds a `-` stash, no flip is remembered — the room memory
+      // keeps the pre-clear room, so a reload (or the next floor) brings the
+      // HUD back; `+` restores from the stash. Every other flip captures as
+      // before (the D5 law).
+      const pd = hud && hud.paneDensity;
+      const cleanView = !!(pd && typeof pd.hasStash === 'function' && pd.hasStash());
+      if (ladderController && !cleanView) ladderController.noteRoomChange();
       // Session J: the WHAT rail flashes the notch that just changed (the
       // `-`/`+` keys, 0/9/8, its own tap) and repaints now (forced — the
       // per-frame poll is throttled to 1 Hz — review fix).
@@ -5237,6 +5253,15 @@ function gameLoop(timestamp) {
   // layout read per HUD rung, so announced changes repaint at once through
   // the pane-visibility edge listener inside the ladder gate instead).
   if (_ladderActive && ladderPaneRail) ladderPaneRail.refresh();
+  // THE TAB DODGE (owner 2026-09-06): the SPECS tab rides UNDER the WHERE rail
+  // whenever the rail has dodged under the right HUD column (else 38 %). The
+  // floor is the thumb rest on glass, the screen bottom on desktop. Both
+  // sides are write-on-change (the rail's dodge read is 1 Hz; setTabDodge
+  // measures only when its inputs change), so the per-frame call is free.
+  if (_ladderActive && libraryPane && libraryPane.setTabDodge && railIndicator && railIndicator.dodgeBottom) {
+    libraryPane.setTabDodge(railIndicator.dodgeBottom(),
+      window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0));
+  }
 
   const currentState = gameState.currentState;
 
