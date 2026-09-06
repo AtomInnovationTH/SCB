@@ -174,6 +174,8 @@ export class PaneRail {
     this._dodgeTop = null;
     /** @private Session L: the root's RIGHT edge (CSS px) from the dodge's 1 Hz read; null unmeasured (rightPx) */
     this._railRight = null;
+    /** @private Session M: the root's BOTTOM edge (CSS px) from the SAME 1 Hz read; null unmeasured (bottomPx) */
+    this._railBottom = null;
     // Idle fade (RefitPane pattern): activity clock, flag, timer.
     this._lastActivityMs = this._now();
     this._idle = false;
@@ -302,6 +304,16 @@ export class PaneRail {
    * @returns {number|null}
    */
   rightPx() { return this._visible ? this._railRight : null; }
+
+  /**
+   * Session M: the rail's BOTTOM edge in CSS px — the mirror of
+   * RailIndicator.bottomPx() for the WHAT side, from the SAME 1 Hz dodge read
+   * that gives rightPx() (no layout read of its own); null while hidden / no
+   * DOM / unmeasured. The hub reads it beside rightPx() to place the ORBIT
+   * pane (bottom-left, right of this rail).
+   * @returns {number|null}
+   */
+  bottomPx() { return this._visible ? this._railBottom : null; }
 
   /**
    * Re-plan the rail for `floor` (the hub calls this at every ride start and
@@ -493,10 +505,12 @@ export class PaneRail {
     const col = doc.getElementById(SIDE_COLUMN_ID);
     const cr = (col && typeof col.getBoundingClientRect === 'function') ? col.getBoundingClientRect() : null;
     const colBottom = (cr && cr.height > 0) ? cr.bottom : -Infinity;
-    const rr = root.getBoundingClientRect();   // the ONE root read: .height (the dodge) + .right (rightPx)
+    const rr = root.getBoundingClientRect();   // the ONE root read: .height (the dodge) + .right (rightPx) + .bottom (bottomPx)
     // Session L: the rail's RIGHT edge from the SAME rect — the hull callouts'
     // second inset source (rightPx → the hub → MotherCallouts.setRailInsets).
     this._railRight = (rr.height > 0) ? rr.right : null;
+    // Session M: the BOTTOM edge from the same rect (bottomPx → the ORBIT pane's anchor).
+    this._railBottom = (rr.height > 0) ? rr.bottom : null;
     const top = dodgeTop({ railH: rr.height, colBottom, innerH });
     if (top === this._dodgeTop) return;
     this._dodgeTop = top;

@@ -18,8 +18,9 @@ import { skyBrightness } from './starCatalog.js';
 
 // Tilt of the stylized day/night cycle's sun circle vs the equator (~23.5°,
 // mirroring Earth's axial tilt). Module-level because both the per-frame sun
-// motion and the real-clock seeding solve against the same circle.
-const SUN_CYCLE_TILT = 0.41;
+// motion and the real-clock seeding solve against the same circle. Exported
+// (Session M) so the eclipse predictor's pins can evaluate the closed form.
+export const SUN_CYCLE_TILT = 0.41;
 
 // ============================================================================
 // CANVAS TEXTURE HELPERS
@@ -1165,6 +1166,45 @@ export class SunLight {
   // ==========================================================================
 
   /**
+   * The sun direction `aheadRealS` REAL seconds from now — the per-frame
+   * formula (below, in update()) evaluated at elapsedTime + aheadRealS. PURE:
+   * no state changes, no light/disc/flare touch; the ONE formula the frame
+   * and the ORBIT pane's eclipse predictor (OrbitalMechanics.
+   * nextShadowTransition, Session M) share. REAL seconds because update(dt)
+   * is fed the real frame dt — the sun never warps with the floor's time cap
+   * (the orbit does: dtWorld = realDt × BASE_SCALE × rate).
+   *
+   * @param {number} aheadRealS  real seconds ahead (0 = the current direction)
+   * @param {THREE.Vector3|{x:number,y:number,z:number}} [out]  written and
+   *   returned (a THREE.Vector3 takes the set().normalize() path; a plain
+   *   {x,y,z} is written directly); absent → a new THREE.Vector3
+   * @returns {THREE.Vector3|{x:number,y:number,z:number}} the unit direction
+   */
+  directionAt(aheadRealS, out) {
+    const ahead = Number.isFinite(aheadRealS) ? aheadRealS : 0;
+    // Stylized ~92-min day/night circle, seeded from the real clock: phase
+    // starts at _sunPhase0 (today's declination) and the whole circle is yawed
+    // by _sunYaw0 (today's sub-solar longitude). See _seedSkyFromClock().
+    const angularSpeed = (2 * Math.PI) / this.sunOrbitPeriod;
+    const angle = this._sunPhase0 +
+      (this.elapsedTime + ahead) * angularSpeed * TimeAuthority.BASE_SCALE;
+
+    const bx = Math.cos(angle);
+    const by = Math.sin(SUN_CYCLE_TILT) * Math.sin(angle);
+    const bz = Math.sin(angle) * Math.cos(SUN_CYCLE_TILT);
+    const cy = Math.cos(this._sunYaw0);
+    const sy = Math.sin(this._sunYaw0);
+    const x = bx * cy - bz * sy, y = by, z = bx * sy + bz * cy;
+    const o = out || new THREE.Vector3();
+    if (typeof o.set === 'function' && typeof o.normalize === 'function') {
+      return o.set(x, y, z).normalize();
+    }
+    const len = Math.sqrt(x * x + y * y + z * z) || 1;
+    o.x = x / len; o.y = y / len; o.z = z / len;
+    return o;
+  }
+
+  /**
    * Per-frame update: orbits the sun, updates visuals, auto-exposure.
    * @param {number} dt — delta time in seconds
    * @param {THREE.Vector3} [cameraPos] — player camera position for eclipse check
@@ -1173,20 +1213,8 @@ export class SunLight {
   update(dt, cameraPos) {
     this.elapsedTime += dt;
 
-    // --- Sun orbital motion ---
-    // Stylized ~92-min day/night circle, seeded from the real clock: phase
-    // starts at _sunPhase0 (today's declination) and the whole circle is yawed
-    // by _sunYaw0 (today's sub-solar longitude). See _seedSkyFromClock().
-    const angularSpeed = (2 * Math.PI) / this.sunOrbitPeriod;
-    const angle = this._sunPhase0 +
-      this.elapsedTime * angularSpeed * TimeAuthority.BASE_SCALE;
-
-    const bx = Math.cos(angle);
-    const by = Math.sin(SUN_CYCLE_TILT) * Math.sin(angle);
-    const bz = Math.sin(angle) * Math.cos(SUN_CYCLE_TILT);
-    const cy = Math.cos(this._sunYaw0);
-    const sy = Math.sin(this._sunYaw0);
-    this.sunDirection.set(bx * cy - bz * sy, by, bx * sy + bz * cy).normalize();
+    // --- Sun orbital motion --- (the formula lives in directionAt; 0 ahead = now)
+    this.directionAt(0, this.sunDirection);
 
     this._updateLightPosition();
 

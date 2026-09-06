@@ -2,7 +2,15 @@
  * OrbitMFD.js — Orbiter-heritage orbit visualization panel
  * Canvas2D overlay showing player/target orbits as 2D ellipses
  * in a polar top-down (north pole) view.
- * Toggle with M key.
+ *
+ * Session M: the panel also serves as the ORBIT pane's TRACK view. `mount(
+ * parentEl, sizePx)` reparents the canvas into a host block (static
+ * positioning, `sizePx` CSS px, DPR-aware backing store) and switches the
+ * render to the PLOT ONLY (Earth disc, rings, orbits, transfer arc, ship and
+ * target markers — no canvas text: the pane's slots carry the numbers);
+ * `unmount()` restores the shipped fixed styling and the body parent. Nothing
+ * changes for an un-mounted MFD (?ladder=0 keeps it exactly as shipped). No
+ * key toggles it (M opens the Debris Map; ORBIT_MFD_TOGGLE has no emitter).
  * @module ui/OrbitMFD
  */
 
@@ -20,11 +28,29 @@ import { audioSystem } from '../systems/AudioSystem.js';
 const TWO_PI = Math.PI * 2;
 const DEG = 180 / Math.PI;
 
+/** The shipped panel size (CSS px) and plot centre; restored by unmount(). */
+const SHIPPED_SIZE = 320;
+const SHIPPED_CENTER_X = 160;
+const SHIPPED_CENTER_Y = 145; // slightly above center for readout room
+
+/** The shipped canvas styling (Session M: ONE table, applied at construction and by unmount()). */
+const SHIPPED_STYLE = Object.freeze({
+  position: 'fixed',
+  bottom: '60px',
+  left: '10px',     // bottom-left to avoid target panel overlap
+  width: SHIPPED_SIZE + 'px',
+  height: SHIPPED_SIZE + 'px',
+  zIndex: '510',    // above comms panel
+  pointerEvents: 'none',
+  display: 'none',
+  imageRendering: 'auto',
+});
+
 export class OrbitMFD {
   constructor() {
-    this._size = 320;
-    this._centerX = 160;
-    this._centerY = 145; // slightly above center for readout room
+    this._size = SHIPPED_SIZE;
+    this._centerX = SHIPPED_CENTER_X;
+    this._centerY = SHIPPED_CENTER_Y;
 
     // --- Canvas setup ---
     const dpr = window.devicePixelRatio || 1;
@@ -33,17 +59,7 @@ export class OrbitMFD {
     this._canvas = document.createElement('canvas');
     this._canvas.width = this._size * dpr;
     this._canvas.height = this._size * dpr;
-    Object.assign(this._canvas.style, {
-      position: 'fixed',
-      bottom: '60px',
-      left: '10px',     // bottom-left to avoid target panel overlap
-      width: this._size + 'px',
-      height: this._size + 'px',
-      zIndex: '510',    // above comms panel
-      pointerEvents: 'none',
-      display: 'none',
-      imageRendering: 'auto',
-    });
+    Object.assign(this._canvas.style, SHIPPED_STYLE);
     document.body.appendChild(this._canvas);
     this._ctx = this._canvas.getContext('2d');
     this._ctx.scale(dpr, dpr);
@@ -57,6 +73,9 @@ export class OrbitMFD {
     this._targetOrbit = null;
     this._selectedTargetId = null;
     this._pxPerKm = 0;
+
+    // --- Embedded TRACK view (Session M) ---
+    this._embedded = false;      // mounted into a host block: plot only, no canvas text
 
     // --- Route Planner (Phase 6) ---
     this._routePlan = [];        // array of { target, orbit, dvToReach, cumulativeDV }
@@ -108,6 +127,82 @@ export class OrbitMFD {
   hide() {
     this._visible = false;
     this._canvas.style.display = 'none';
+  }
+
+  /** @returns {boolean} whether show() is in force (the ORBIT pane re-asserts show() when this reads false). */
+  isShown() {
+    return this._visible;
+  }
+
+  /** @returns {boolean} whether the canvas is mounted into a host block (the ORBIT pane's TRACK view). */
+  isEmbedded() {
+    return this._embedded;
+  }
+
+  /**
+   * Session M — become the ORBIT pane's TRACK view: reparent the canvas into
+   * `parentEl`, drop the fixed positioning (static, `sizePx` CSS px, no
+   * z-index, pointer-events none, the backing store `sizePx × dpr`), centre
+   * the plot, and render the PLOT ONLY from here on (no canvas text — the
+   * pane's slots carry the numbers). Visibility is untouched: the host calls
+   * show() / hide(). A second mount() re-hosts / re-sizes.
+   * @param {Element} parentEl  the host block (the pane's .orbit-track)
+   * @param {number} sizePx     the square's CSS px (the host block's side)
+   */
+  mount(parentEl, sizePx) {
+    const canvas = this._canvas;
+    if (!canvas || !parentEl || typeof parentEl.appendChild !== 'function') return;
+    const size = Math.max(16, Math.round(Number(sizePx))) || SHIPPED_SIZE;
+    this._embedded = true;
+    this._resize(size, size / 2, size / 2);
+    Object.assign(canvas.style, {
+      position: 'static',
+      bottom: '',
+      left: '',
+      width: size + 'px',
+      height: size + 'px',
+      zIndex: '',
+      pointerEvents: 'none',
+      display: this._visible ? 'block' : 'none',
+      imageRendering: 'auto',
+    });
+    if (canvas.parentNode !== parentEl) parentEl.appendChild(canvas);
+    this._updateTimer = 0.2;          // the next update() paints at once
+  }
+
+  /**
+   * Session M — leave the TRACK view: the shipped fixed styling and size
+   * (320 px, bottom 60 / left 10, z 510) come back, the canvas returns to
+   * document.body, and the render is the full panel again. Hidden on return
+   * (the shipped state); a fresh un-mounted MFD is never touched by this.
+   */
+  unmount() {
+    const canvas = this._canvas;
+    if (!canvas) return;
+    this._embedded = false;
+    this._visible = false;
+    this._resize(SHIPPED_SIZE, SHIPPED_CENTER_X, SHIPPED_CENTER_Y);
+    Object.assign(canvas.style, SHIPPED_STYLE);
+    const body = (typeof document !== 'undefined' && document.body) ? document.body : null;
+    if (body && canvas.parentNode !== body && typeof body.appendChild === 'function') body.appendChild(canvas);
+  }
+
+  /** @private Resize the backing store (DPR-aware) and re-arm the context transform; set the plot centre. */
+  _resize(sizePx, centerX, centerY) {
+    this._size = sizePx;
+    this._centerX = centerX;
+    this._centerY = centerY;
+    const canvas = this._canvas;
+    const dpr = this.dpr || 1;
+    canvas.width = sizePx * dpr;        // resets the 2D context state
+    canvas.height = sizePx * dpr;
+    const ctx = this._ctx;
+    if (ctx) {
+      if (typeof ctx.setTransform === 'function') ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.scale(dpr, dpr);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+    }
   }
 
   /**
@@ -171,6 +266,11 @@ export class OrbitMFD {
 
     ctx.clearRect(0, 0, this._size, this._size);
 
+    if (this._embedded) {
+      this._renderPlot(p, t);
+      return;
+    }
+
     this._drawBackground();
     this._drawGrid();
     this._drawEarth();
@@ -206,6 +306,34 @@ export class OrbitMFD {
 
     this._drawHeader();
     this._drawReadouts();
+  }
+
+  /**
+   * @private Session M — the embedded TRACK view: the plot only, scaled to the
+   * canvas (the pane's frame is the chrome; the pane's slots are the text).
+   * Rings without labels, Earth, the orbit ellipse(s), the Hohmann arc, the
+   * ship triangle + prograde arrow, the target diamond. No header, readouts,
+   * Ap/Pe / transfer / inclination labels, sweep chart or route overlay.
+   */
+  _renderPlot(p, t) {
+    const ctx = this._ctx;
+    const altitudes = [200, 400, 600, 800, 1000];
+    ctx.strokeStyle = 'rgba(0, 80, 40, 0.25)';
+    ctx.lineWidth = 0.5;
+    for (const alt of altitudes) {
+      ctx.beginPath();
+      ctx.arc(this._centerX, this._centerY, (Constants.EARTH_RADIUS_KM + alt) * this._pxPerKm, 0, TWO_PI);
+      ctx.stroke();
+    }
+    this._drawEarth();
+    this._drawOrbit(p, '#00ff88', 1.5);
+    if (t) {
+      this._drawOrbit(t, '#00ccff', 1.5);
+      this._drawTransferArc(p, t);
+    }
+    this._drawPosition(p, '#00ff88', 'triangle');
+    this._drawProgradeArrow(p);
+    if (t) this._drawPosition(t, '#00ccff', 'diamond');
   }
 
   // ===========================================================================

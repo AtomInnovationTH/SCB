@@ -321,6 +321,31 @@ export function subPointToOrbit(latDeg, lonEastDeg, inclinationRad, ascending = 
   };
 }
 
+/**
+ * The sub-satellite point (geographic latitude / east longitude) under a
+ * position — the inverse of `latLonToUnitVec` (js/scene/Ephemeris.js) and the
+ * other half of {@link subPointToOrbit}'s frame law: Y is the polar axis,
+ * (0°, 0°) is +X, and geographic EAST longitude runs toward −Z because the
+ * equirectangular Earth texture is longitude-mirrored (the visual Earth does
+ * not rotate). Direction only: the position may be in km or scene units, any
+ * length > 0. Session M (the ORBIT pane's LAT / LON slots).
+ *
+ *   lat     = asin(y / r)
+ *   lonEast = −atan2(z, x)            (in (−180, 180], degrees)
+ *
+ * @param {{x:number, y:number, z:number}} pos  any unit; the zero vector → (0, 0)
+ * @returns {{ latDeg: number, lonEastDeg: number }}
+ */
+export function subSatellitePoint(pos) {
+  const x = Number(pos && pos.x), y = Number(pos && pos.y), z = Number(pos && pos.z);
+  const r = Math.sqrt(x * x + y * y + z * z);
+  if (!(r > 0) || !Number.isFinite(r)) return { latDeg: 0, lonEastDeg: 0 };
+  const latDeg = Math.asin(Math.max(-1, Math.min(1, y / r))) * 180 / Math.PI;
+  let lonEastDeg = -Math.atan2(z, x) * 180 / Math.PI;
+  if (lonEastDeg <= -180) lonEastDeg += 360;      // atan2 = π exactly → keep the +180 branch
+  return { latDeg, lonEastDeg };
+}
+
 // ============================================================================
 // ORBIT PROPAGATION
 // ============================================================================
@@ -497,6 +522,99 @@ export function isInShadow(position, sunDirection, earthRadius) {
   const distFromLine = Math.sqrt(projX * projX + projY * projY + projZ * projZ);
 
   return distFromLine < earthRadius;
+}
+
+// ============================================================================
+// ECLIPSE PREDICTION (Session M — the ORBIT pane's SUN slot)
+// ============================================================================
+
+/** Module-private scratch for nextShadowTransition (single-threaded, never re-entered). */
+const _nstOrbit = { semiMajorAxis: 0, eccentricity: 0, inclination: 0, raan: 0, argPerigee: 0, trueAnomaly: 0 };
+const _nstPos = { x: 0, y: 0, z: 0 };
+const _nstVel = { x: 0, y: 0, z: 0 };
+const _nstSun = { x: 0, y: 0, z: 0 };
+
+/**
+ * When does the ship next cross the shadow terminator? Both bodies move: the
+ * orbit advances in WORLD time (dtWorld = t_real × rate × baseScale, the same
+ * law as the game loop) while the sun direction is a function of REAL time
+ * (SunLight.update(dt) is fed the real dt — the sun never warps with the
+ * floor's time cap). At ~400 km with rate 1 the two turn at the same angular
+ * rate, so the shadow geometry is nearly frozen there and the transitions come
+ * on the warped floors; a predictor that held the sun still would lie.
+ *
+ * Method: sample the coming orbital period (in real seconds) at `samples`
+ * steps; the first sample whose {@link isInShadow} differs from the t = 0
+ * state brackets the flip, refined by 6 bisection steps (precision = the
+ * sample spacing / 64). No sample differs → no flip within one orbit.
+ *
+ * @param {object} orbit  Keplerian elements with semiMajorAxis in KM (use
+ *   {@link orbitToKm} on a scene-unit orbit): eccentricity, inclination,
+ *   raan, argPerigee, trueAnomaly (rad).
+ * @param {(aheadRealS:number, out:{x:number,y:number,z:number}) => {x:number,y:number,z:number}} sunDirAt
+ *   The (unit) sun direction `aheadRealS` REAL seconds from now (SunLight.
+ *   directionAt); may write into `out` or return its own vector.
+ * @param {object} [opts]
+ * @param {number} [opts.rate=1]          TimeAuthority.rate (world seconds per BASE_SCALE real second)
+ * @param {number} [opts.baseScale=1]     TimeAuthority.BASE_SCALE
+ * @param {number} [opts.samples=96]      samples over one orbital period
+ * @param {number} [opts.earthRadius=Constants.EARTH_RADIUS_KM]  km (the orbit's unit)
+ * @param {number} [opts.mu=Constants.MU_EARTH]
+ * @returns {{ inShadow: boolean, secondsToFlipReal: number|null }}  inShadow =
+ *   the t = 0 state; secondsToFlipReal in REAL seconds (× rate × baseScale for
+ *   world seconds), null when no flip lies within one orbit, when the clock is
+ *   stopped (rate ≤ 0) or when the inputs are unusable.
+ */
+export function nextShadowTransition(orbit, sunDirAt, opts = {}) {
+  const rate = Number.isFinite(opts.rate) ? opts.rate : 1;
+  const baseScale = Number.isFinite(opts.baseScale) ? opts.baseScale : 1;
+  const samples = Math.max(2, (opts.samples | 0) || 96);
+  const earthRadius = Number.isFinite(opts.earthRadius) ? opts.earthRadius : Constants.EARTH_RADIUS_KM;
+  const mu = Number.isFinite(opts.mu) ? opts.mu : Constants.MU_EARTH;
+
+  const a = orbit ? Number(orbit.semiMajorAxis) : NaN;
+  if (typeof sunDirAt !== 'function' || !(a > 0) || !Number.isFinite(a)) {
+    return { inShadow: false, secondsToFlipReal: null };
+  }
+  const o = _nstOrbit;
+  o.semiMajorAxis = a;
+  o.eccentricity = Number(orbit.eccentricity) || 0;
+  o.inclination = Number(orbit.inclination) || 0;
+  o.raan = Number(orbit.raan) || 0;
+  o.argPerigee = Number(orbit.argPerigee) || 0;
+  const nu0 = Number(orbit.trueAnomaly) || 0;
+
+  /** The shadow state `tReal` real seconds ahead (orbit advanced in world seconds, sun in real). */
+  const stateAt = (tReal) => {
+    o.trueAnomaly = nu0;
+    if (tReal > 0) propagateOrbit(o, tReal * rate * baseScale, mu);
+    keplerianToCartesianInto(o, _nstPos, _nstVel, mu);
+    const s = sunDirAt(tReal, _nstSun) || _nstSun;
+    return isInShadow(_nstPos, s, earthRadius);
+  };
+
+  const now = stateAt(0);
+  const scale = rate * baseScale;
+  if (!(scale > 0) || !Number.isFinite(scale)) return { inShadow: now, secondsToFlipReal: null };
+
+  const periodWorld = 2 * Math.PI * Math.sqrt(a * a * a / mu);
+  const horizonReal = periodWorld / scale;
+  if (!(horizonReal > 0) || !Number.isFinite(horizonReal)) return { inShadow: now, secondsToFlipReal: null };
+
+  const step = horizonReal / samples;
+  let lo = 0;
+  for (let i = 1; i <= samples; i++) {
+    let hi = i * step;
+    if (stateAt(hi) !== now) {
+      for (let k = 0; k < 6; k++) {                 // 6 bisection steps: precision step / 64
+        const mid = (lo + hi) / 2;
+        if (stateAt(mid) === now) lo = mid; else hi = mid;
+      }
+      return { inShadow: now, secondsToFlipReal: hi };
+    }
+    lo = hi;
+  }
+  return { inShadow: now, secondsToFlipReal: null };
 }
 
 // ============================================================================
