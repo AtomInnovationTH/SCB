@@ -5,12 +5,20 @@
  * alarm caps, label budgets, rail + reduced-motion rules. No imports, no
  * behavior. Floors and mechanics live in js/core/FloorContract.js; prose in
  * docs/ladder/00-spec.md ("Visual law"). test-FloorContract.js pins the
- * invariants (5 distinct colors, sizes 12-24 px, one curve, 450-650 ms rides,
+ * invariants (6 distinct colors, sizes 12-24 px, one curve, 450-650 ms rides,
  * label budget 7, klaxon flash <= 3 Hz).
  *
  * Law summary:
- *   - heritage green = player/systems; gold = mass/value (steady); red-orange
- *     = threat (ALWAYS pulses); cyan = info; white = selection ONLY.
+ *   - heritage green = player/systems; pale champagne = mass/value (steady);
+ *     red-orange = threat (ALWAYS pulses); cyan = info; white = selection
+ *     ONLY; amber = CAUTION (steady).
+ *   - CAUTION (Session L, plan D-J aviation display grammar): the steady amber
+ *     of a denial, a "N catches away" hint, a near-limit readout — advisory,
+ *     never alarm. It NEVER pulses (pulse is THREAT's channel alone) and it is
+ *     the ONE amber: the HUD's shipped '#ffaa00' warning tier IS this colour,
+ *     so a warning never reads as precious and precious never reads as warning
+ *     — which is why VALUE moved from gold '#ffd166' to champagne '#ffe1a8'.
+ *   - Gold/champagne still never pulses.
  *   - Color is never the sole channel (shape/size/motion double-encode).
  *   - Fragments render as dust shimmer, never icons (mass-honesty rule).
  *   - ONE easing curve everywhere. Camera never rolls.
@@ -21,10 +29,11 @@
 export const VisualLaw = {
   COLORS: {
     PLAYER: '#00ff88',     // heritage green — player/systems (COMMS nominal, LEDs)
-    VALUE: '#ffd166',      // gold — mass/value, STEADY (never pulses)
+    VALUE: '#ffe1a8',      // pale champagne — mass/value, STEADY (never pulses; was gold #ffd166 until Session L)
     THREAT: '#ff4422',     // red-orange — threat, ALWAYS pulses
     INFO: '#00ccff',       // cyan — informational (matches TEACHING overlay family)
     SELECTION: '#ffffff',  // white — selection ONLY, no other use
+    CAUTION: '#ffaa00',    // steady amber — denials, "N catches away", near-limits; NEVER pulses
   },
   /** Color is never the sole channel: every color-coded meaning must also be
    *  encoded in shape, size, or motion. */

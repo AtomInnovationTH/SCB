@@ -63,8 +63,9 @@ export const DODGE_MIN_MS = 1000;
 const TOAST_HOLD_MS = 1800;
 /** Blocked-notch flash duration (ms). One-shot: 1 flash ≪ 3 Hz cap. */
 const DENY_FLASH_MS = 320;
-/** Shipped HUD warning amber (DockingReticle.warning) — not a law color. */
-const WARN_AMBER = '#ffaa00';
+/** The law's steady amber (VisualLaw.COLORS.CAUTION, Session L) — was the ad-hoc
+ *  '#ffaa00' shared with DockingReticle.warning; same value, now ONE definition. */
+const WARN_AMBER = VisualLaw.COLORS.CAUTION;
 /** Warp readout: minimum interval between DOM writes (ms) — 4 Hz cap (G1). */
 export const RATE_WRITE_MIN_MS = 250;
 
