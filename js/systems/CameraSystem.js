@@ -3887,21 +3887,24 @@ export class CameraSystem {
    * player already stands on the floor must arm the drag without a ride, and
    * closing it disarms mid-hold (any in-flight drag and its momentum are
    * cancelled — the pointer-up path can never race a disabled gate).
-   * FLOOR-2 CLOSE RULE (Session J.5): floor 2 is the shipped flying view, so
-   * "drawer closed → arrows steer the ship as today" must hold for the
-   * CAMERA too — closing the drawer on floor 2 FORGETS the turntable pose
-   * (the local dolly pose returns to the canonical chase-behind pose and the
-   * D5 memory for floor 2 is dropped); floor 1 keeps its D5 memory (the
-   * workbench pose is the player's). Flag-off: the panes are never
-   * constructed, this is never called → byte-identical.
+   * FLOOR-2 CLOSE RULE (Session J.5; review fix): floor 2 is the shipped
+   * flying view, so "drawer closed → arrows steer the ship as today" must
+   * hold for the CAMERA too. The SPECS drawer RIDES ALONG across floors, so
+   * the close edge can fire ANYWHERE — the floor-2 turntable MEMORY dies on
+   * every close (else an Earth→2 descent restores it with the drag disarmed —
+   * no way back to the shipped view), and the LIVE pose returns to the
+   * canonical chase-behind pose only when the camera is actually ON floor 2
+   * (off-floor, lc.local is the current floor's pose). Floor 1 keeps its D5
+   * memory (the workbench pose is the player's). Flag-off: the panes are
+   * never constructed, this is never called → byte-identical.
    * @param {boolean} open
    */
   setLadderPaneOpen(open) {
     const lc = this._ladderCam;
     lc.paneOpen = !!open;
-    if (!lc.paneOpen && lc.floor === 2) {
-      this._ladderChaseLocal(lc.local);
+    if (!lc.paneOpen) {
       delete lc.dragMemory[2];
+      if (lc.floor === 2) this._ladderChaseLocal(lc.local);
     }
     const want = this._ladderDragEnabledFor(lc.floor);
     if (want !== lc.drag.enabled) {

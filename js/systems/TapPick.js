@@ -18,6 +18,16 @@
 export const TAP_RADIUS_PX = 44;
 
 /**
+ * The click/tap SLOP law (Session J.5 review fix — ONE copy): a press that
+ * moved more than TAP_SLOP_PX or lasted longer than TAP_SLOP_MS is a drag /
+ * long-press, never a click. Shared by MotherCallouts' hull-part click
+ * (euclidean move) and main.js's desktop click-to-select (per-axis move) —
+ * the geometry differs by surface, the thresholds are the law.
+ */
+export const TAP_SLOP_PX = 5;
+export const TAP_SLOP_MS = 400;
+
+/**
  * Nearest visible point within `radiusPx` of (x, y).
  * @param {Iterable<{x:number,y:number,visible?:boolean}>|null|undefined} points
  * @param {number} x
@@ -39,5 +49,5 @@ export function nearestWithin(points, x, y, radiusPx = TAP_RADIUS_PX) {
   return best;
 }
 
-export const TapPick = Object.freeze({ TAP_RADIUS_PX, nearestWithin });
+export const TapPick = Object.freeze({ TAP_RADIUS_PX, TAP_SLOP_PX, TAP_SLOP_MS, nearestWithin });
 export default TapPick;

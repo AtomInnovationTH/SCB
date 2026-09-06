@@ -131,7 +131,7 @@ import { PaneRail } from './ui/PaneRail.js';
 import { TouchControls } from './ui/TouchControls.js';
 import { TouchTelemetry } from './ui/touchTelemetry.js';
 import { GestureHints } from './ui/hud/GestureHints.js';
-import { nearestWithin as tapNearestWithin } from './systems/TapPick.js';
+import { nearestWithin as tapNearestWithin, TAP_SLOP_PX, TAP_SLOP_MS } from './systems/TapPick.js';
 import { pressKey as dispatchKeyPress } from './core/KeyDispatch.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
@@ -2135,8 +2135,9 @@ async function init() {
   // shipped desktop has no canvas click verb; byte-identical, pinned); (2)
   // pointer-typed — a `touch` pointer belongs to TouchControls (its tap already
   // resolved; its preventDefault suppresses the trailing click anyway), so
-  // only mouse / pen presses count; (3) MotherCallouts' slop law (:1874 — 5 px
-  // + 400 ms) — a drag-release (the floors 3/4 camera drag, the floor-1
+  // only mouse / pen presses count; (3) MotherCallouts' slop law (TapPick's
+  // TAP_SLOP_PX/MS — the ONE copy, review fix) — a drag-release (the floors
+  // 3/4 camera drag, the floor-1
   // turntable) is never a click; (4) select-only (`scanOnMiss:false`) — a
   // click on empty sky does nothing, the desktop has S. HUD surfaces sit on
   // #hud-overlay children with their own pointer-events, so only canvas
@@ -2151,7 +2152,7 @@ async function init() {
       const d = _clickDown;
       _clickDown = null;
       if (!d || d.type === 'touch') return;
-      if (Math.abs(e.clientX - d.x) > 5 || Math.abs(e.clientY - d.y) > 5 || (performance.now() - d.t) > 400) return;
+      if (Math.abs(e.clientX - d.x) > TAP_SLOP_PX || Math.abs(e.clientY - d.y) > TAP_SLOP_PX || (performance.now() - d.t) > TAP_SLOP_MS) return;
       _touchTap({ x: e.clientX, y: e.clientY }, { scanOnMiss: false });
     });
   }

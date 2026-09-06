@@ -70,6 +70,22 @@ export function parseBullets(text) {
   }
 }
 
+/**
+ * Normalize a build hash for comparison (Session J.5 review fix). Dev builds
+ * stamp `hash` with a trailing '+' while the tree is dirty (scripts/
+ * build-tag.mjs), and the cable server re-stamps on every relaunch — the
+ * suffix toggles WITHOUT a deploy. The card's law is "new BUILD", so the
+ * suffix never counts. The deployed artifact never carries '+' (publish
+ * refuses a dirty tree).
+ * @param {*} hash
+ * @returns {string|null}
+ */
+export function cleanHash(hash) {
+  if (typeof hash !== 'string') return null;
+  const h = hash.replace(/\+$/, '');
+  return h || null;
+}
+
 export class UpdateWatch {
   /**
    * @param {object} [deps]
@@ -96,6 +112,12 @@ export class UpdateWatch {
     this._sw = deps.serviceWorker !== undefined ? deps.serviceWorker : (g.navigator?.serviceWorker || null);
     this._bus = deps.eventBus || null;
     this._events = deps.events || Events;
+    // Session J.5 review fix: index.html's corner-stamp fetch and this
+    // watcher used to be two independent boot reads of the SAME file — a
+    // deploy landing between them split the baselines (corner A, watcher B →
+    // the B update never announced). index.html now stashes its promise on
+    // `window.__bootBuildTag`; the watcher adopts that ONE read when present.
+    this._bootTag = deps.bootTag !== undefined ? deps.bootTag : (() => g.__bootBuildTag || null);
     this._tagUrl = deps.tagUrl || './data/build-tag.json';
     this._newsUrl = deps.newsUrl || './data/whats-new.json';
     this._pollMs = deps.pollMs > 0 ? deps.pollMs : UPDATE_WATCH.POLL_MS;
@@ -134,8 +156,14 @@ export class UpdateWatch {
     }
     if (this._doc && this._doc.addEventListener) {
       this._onVisibility = () => {
-        if (this._doc.visibilityState === 'hidden') return;
+        if (this._doc.visibilityState === 'hidden') {
+          // Review fix: a hidden tab must not keep fetching — the menu poll
+          // pauses with the page and re-arms on the visible edge below.
+          this._stopPoll();
+          return;
+        }
         this.check();
+        this._armPoll();   // no-op off the menu (_armPoll gates on _onMenu)
       };
       this._doc.addEventListener('visibilitychange', this._onVisibility);
     }
@@ -177,8 +205,13 @@ export class UpdateWatch {
 
   /** @private Law 2: the baseline — tag once (null on 404 / throw), whats-new once. */
   async _boot() {
-    const tag = await this._fetchJson(this._tagUrl);
-    const hash = tag && typeof tag.hash === 'string' && tag.hash ? tag.hash : null;
+    let tag = null;
+    try {
+      const shared = this._bootTag ? await this._bootTag() : null;
+      if (shared && typeof shared === 'object') tag = shared;
+    } catch (_) { /* the shared read failed — fall back to our own fetch */ }
+    if (!tag) tag = await this._fetchJson(this._tagUrl);
+    const hash = cleanHash(tag && tag.hash);
     this.booted = hash ? { hash, tag: typeof tag.tag === 'string' ? tag.tag : '' } : null;
     this.bootedNews = await this._fetchText(this._newsUrl);
   }
@@ -192,7 +225,7 @@ export class UpdateWatch {
       return null;
     }
     const tag = await this._fetchJson(this._tagUrl);
-    const hash = tag && typeof tag.hash === 'string' && tag.hash ? tag.hash : null;
+    const hash = cleanHash(tag && tag.hash);   // '+' dirty suffix never counts (review fix)
     if (!hash || hash === this.booted.hash || this._seen.has(hash)) return null;
     this._seen.add(hash);                                  // law 3: once per hash
     const news = await this._fetchText(this._newsUrl);     // fresh, 404 → null

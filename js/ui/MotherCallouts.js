@@ -67,6 +67,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { createCardTexture, CARD_W_OVER_TITLE_H, wrapHint } from '../scene/labelTexture.js';
 import { orderRail } from '../scene/railOrder.js';
+import { TAP_SLOP_PX, TAP_SLOP_MS } from '../systems/TapPick.js';
 
 // 1 metre in scene units (mirrors PlayerSatellite's M = 0.00001).
 const M = 0.00001;
@@ -1871,7 +1872,7 @@ export class MotherCallouts {
     this._pointerDown = null;
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
-    if (moved > 5 || (now - down.t) > 400) return;   // drag / long-press → ignore
+    if (moved > TAP_SLOP_PX || (now - down.t) > TAP_SLOP_MS) return;   // drag / long-press → ignore (TapPick's ONE slop law)
     const hit = this._pickLabel(e);
     // T7: the WHOLE card is clickable — hover and click agree (the old
     // title-strip UV gate made ~⅔ of a focused card a dead zone with a hand

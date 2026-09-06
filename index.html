@@ -479,13 +479,17 @@
        to the cached copy — which is exactly the build actually running. -->
   <div id="build-stamp"></div>
   <script>
-    fetch('./data/build-tag.json', { cache: 'no-cache' })
+    // Session J.5 review fix: ONE boot read of the tag. The corner stamp and
+    // the update watcher (js/core/UpdateWatch.js) share this promise, so a
+    // deploy landing between two separate fetches can no longer split their
+    // baselines (corner = A while the watcher booted on B).
+    window.__bootBuildTag = fetch('./data/build-tag.json', { cache: 'no-cache' })
       .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (t) {
-        var el = document.getElementById('build-stamp');
-        if (el && t && t.tag) el.textContent = t.tag;
-      })
-      .catch(function () { /* no tag file (dev) — stamp stays empty */ });
+      .catch(function () { return null; /* no tag file (dev) — stamp stays empty */ });
+    window.__bootBuildTag.then(function (t) {
+      var el = document.getElementById('build-stamp');
+      if (el && t && t.tag) el.textContent = t.tag;
+    });
   </script>
 
   <!-- Game bootstrap -->
