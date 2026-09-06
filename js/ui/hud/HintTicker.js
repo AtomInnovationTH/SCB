@@ -192,7 +192,7 @@ export class HintTicker {
       'gap:8px',
       'pointer-events:none',
       'z-index:8000',
-      "font-family:'Courier New', monospace",
+      "font-family: var(--font-mono)",
       'white-space:nowrap',
       'overflow:hidden',
     ].join(';') + ';';
@@ -410,7 +410,7 @@ export class HintTicker {
         `background:${chipBg}`,
         'color:#ffffff',
         'font-weight:bold',
-        "font-family:'Courier New', monospace",
+        "font-family: var(--font-mono)",
         'font-size:12px',
         'letter-spacing:0.04em',
       ].concat(GestureHints.isGlass() ? ['flex-shrink:0', 'white-space:nowrap'] : []).join(';') + ';';

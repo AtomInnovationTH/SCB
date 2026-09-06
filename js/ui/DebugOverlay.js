@@ -20,7 +20,7 @@ export class DebugOverlay {
         this._element.style.cssText = `
             position: fixed; top: 8px; left: 8px; z-index: 200;
             background: rgba(0,0,0,0.75); color: #0f0; padding: 8px 12px;
-            font-family: 'Courier New', monospace; font-size: 11px;
+            font-family: var(--font-mono); font-size: 11px;
             line-height: 1.5; border: 1px solid rgba(0,255,0,0.3);
             border-radius: 4px; pointer-events: none; display: none;
             min-width: 280px; white-space: pre;

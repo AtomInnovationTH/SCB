@@ -104,7 +104,7 @@ export class BriefingScreen {
 
         <div style="text-align:center;margin-top:0.6rem;">
           <button id="briefing-commence-btn" style="
-            font-family:'Courier New',monospace; font-size:1rem; color:#00ff88;
+            font-family: var(--font-mono); font-size:1rem; color:#00ff88;
             background: rgba(0,255,136,0.1); border: 2px solid rgba(0,255,136,0.4);
             padding: 9px 34px; cursor: pointer; border-radius: 4px;
             letter-spacing: 0.15em; transition: all 0.3s; opacity: 0.4;
@@ -112,14 +112,14 @@ export class BriefingScreen {
           ">COMMENCE APPROACH</button>
 
           <button id="briefing-quickstart-btn" style="
-            font-family:'Courier New',monospace; font-size:0.8rem; color:#ffcc00;
+            font-family: var(--font-mono); font-size:0.8rem; color:#ffcc00;
             background: rgba(255,204,0,0.08); border: 1px solid rgba(255,204,0,0.3);
             padding: 8px 24px; cursor: pointer; border-radius: 4px;
             margin-left: 12px; transition: all 0.3s;
           ">QUICK START</button>
 
           <button id="briefing-skip-btn" style="
-            font-family:'Courier New',monospace; font-size:0.8rem; color:rgba(0,255,136,0.5);
+            font-family: var(--font-mono); font-size:0.8rem; color:rgba(0,255,136,0.5);
             background: transparent; border: 1px solid rgba(0,255,136,0.2);
             padding: 8px 24px; cursor: pointer; border-radius: 4px;
             margin-left: 12px; transition: all 0.3s;

@@ -560,7 +560,7 @@ export class PaneRail {
     root.id = ROOT_ID;
     root.style.cssText = midHeightCss('left') + [
       'display:flex', 'flex-direction:column-reverse', 'gap:5px',
-      'font-family:"Courier New",monospace', 'font-size:0.6rem', 'letter-spacing:0.08em',
+      'font-family: var(--font-mono)', 'font-size:0.6rem', 'letter-spacing:0.08em',
       'text-transform:uppercase',
       'padding:6px 8px 6px 6px',
       `border-right:2px solid ${NOTCH_REST_BORDER}`,

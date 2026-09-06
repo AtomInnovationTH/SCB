@@ -206,7 +206,7 @@ export class ProxContextPanel {
       'position:absolute', 'left:16px', 'bottom:16px', 'min-width:240px',
       'padding:8px 12px', 'border:1px solid rgba(0,204,255,0.4)', 'border-radius:4px',
       'background:rgba(0,16,32,0.72)', 'color:' + VisualLaw.COLORS.INFO,
-      'font-family:"Courier New",monospace', 'font-size:0.7rem', 'letter-spacing:0.06em',
+      'font-family: var(--font-mono)', 'font-size:0.7rem', 'letter-spacing:0.06em',
       'z-index:34', 'pointer-events:none', 'opacity:0', 'transition:opacity 0.3s',
     ].join(';');
     document.body.appendChild(root);

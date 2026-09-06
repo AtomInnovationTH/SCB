@@ -140,7 +140,7 @@ export class ClusterIcons {
     root.style.cssText = [
       'position:absolute', 'left:0', 'top:0', 'width:100%', 'height:100%',
       'pointer-events:none', 'z-index:33', 'opacity:0', 'transition:opacity 0.3s',
-      'font-family:"Courier New",monospace', 'font-size:0.6rem',
+      'font-family: var(--font-mono)', 'font-size:0.6rem',
     ].join(';');
     document.body.appendChild(root);
     this._root = root;

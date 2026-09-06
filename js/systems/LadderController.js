@@ -659,10 +659,19 @@ export class LadderController {
    */
   notePaneChange() {
     if (!this._viewStore || this._paneRestoring) return;
-    if (!this._engaged || this._floorApplied !== 1) return;
+    if (!this._engaged) return;
     if (typeof this._viewStore.setPanes !== 'function') return;
     const isOpen = (p) => !!(p && typeof p.isOpen === 'function' && p.isOpen());
-    this._viewStore.setPanes({ refit: isOpen(this._refit), library: isOpen(this._library) });
+    // Session L (Session J FINDINGS (c) — "pane memory stays floor-1 keyed"):
+    // the SPECS drawer RIDES ALONG across floors, so its bit is one bit and
+    // it is recorded on EVERY floor (an open SPECS on floor 3 survives a
+    // continue); REFIT is the floor-1 place — its bit is recorded only while
+    // floor 1 is applied (the teardown close on a ride up is the controller's
+    // act, not the player's; the memory keeps the room as the player LEFT it)
+    // and carried over unchanged from every other floor.
+    const prev = (typeof this._viewStore.panes === 'function' && this._viewStore.panes()) || null;
+    const refit = (this._floorApplied === 1) ? isOpen(this._refit) : !!(prev && prev.refit);
+    this._viewStore.setPanes({ refit, library: isOpen(this._library) });
   }
 
   /**
@@ -971,9 +980,13 @@ export class LadderController {
     this._seedRest(s.z01);
     this._applyFidelity(s.floor);
     this._applyFloorContent(s.floor);
-    // D5: the F1 room as the player left it — the panes re-open at ENGAGE on
-    // the hull (the SHOP return; a continued run), never at a ride arrival.
-    if (s.floor === 1) this._restorePanes();
+    // D5: the panes as the player left them re-open at ENGAGE (the SHOP
+    // return; a continued run), never at a ride arrival. Session L (J
+    // FINDINGS (c)): on EVERY floor — the SPECS drawer rides along, so its
+    // memory is floor-free; REFIT's open() is a no-op off floor 1 (its tab is
+    // enabled by _applyFloorContent(1) only), so a refit:true memory simply
+    // waits for the next floor-1 engage.
+    this._restorePanes();
     if (this._rail && this._rail.show) this._rail.show();
     if (this._paneRail && this._paneRail.show) this._paneRail.show();
     this._refreshRail();

@@ -387,7 +387,7 @@ export class PaneHelp {
         background: 'rgba(2, 14, 26, 0.94)',
         border: '1px solid rgba(0, 212, 255, 0.45)',
         borderRadius: '4px',
-        fontFamily: "'Courier New', monospace",
+        fontFamily: "var(--font-mono)",
         fontSize: '11px',
         lineHeight: '1.45',
         color: '#bfe8f2',

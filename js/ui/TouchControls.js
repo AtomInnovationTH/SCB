@@ -779,7 +779,7 @@ export class TouchControls {
     s.textContent = `
       #touch-controls {
         position: fixed; inset: 0; z-index: 15; pointer-events: none;
-        font-family: 'Courier New', monospace; color: #00ff88;
+        font-family: var(--font-mono); color: #00ff88;
         opacity: ${this._tune.activeOpacity};
         transition: opacity 0.6s ease;
         -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
@@ -801,7 +801,7 @@ export class TouchControls {
         background: rgba(5, 10, 20, 0.78);
         border: 1px solid rgba(0, 255, 136, 0.3); border-radius: 8px;
         color: rgba(0, 255, 136, 0.85);
-        font-family: 'Courier New', monospace;
+        font-family: var(--font-mono);
         font-size: 12px; letter-spacing: 0.14em;
         padding: 10px 14px;
         -webkit-user-select: none; user-select: none; touch-action: manipulation;
@@ -825,7 +825,7 @@ export class TouchControls {
         background: rgba(5, 10, 20, 0.86);
         border: 1px solid rgba(0, 255, 136, 0.55);
         color: rgba(0, 255, 136, 0.92);
-        font-family: 'Courier New', monospace; font-size: 10px; letter-spacing: 0.08em;
+        font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
         -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
         box-shadow: 0 0 10px rgba(0, 255, 136, 0.25);
       }

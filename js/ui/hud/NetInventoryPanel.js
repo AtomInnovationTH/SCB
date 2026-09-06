@@ -188,7 +188,7 @@ export class NetInventoryPanel {
       'margin-top:6px',
       'padding:0',
       'pointer-events:auto',          // chip tooltip works on hover
-      "font-family:'Courier New', monospace",
+      "font-family: var(--font-mono)",
       'font-size:12px',
       'white-space:nowrap',
       // Delegation 4 (2026-05-31) — Browser-playtest Bug 3:

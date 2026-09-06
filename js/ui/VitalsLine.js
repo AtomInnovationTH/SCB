@@ -204,7 +204,7 @@ export class VitalsLine {
       style.textContent = `
         #vitals-line {
           position: fixed; left: 12px; bottom: 10px; z-index: 60;
-          font-family: 'Courier New', monospace; font-size: 11px;
+          font-family: var(--font-mono); font-size: 11px;
           letter-spacing: 0.06em; color: #aaffdd; white-space: nowrap;
           background: rgba(0, 10, 20, 0.45);
           border: 1px solid rgba(0, 255, 136, 0.18); border-radius: 3px;

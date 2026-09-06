@@ -237,7 +237,7 @@ export class BlueprintOverlay {
     root.style.cssText = [
       'position:absolute', 'left:0', 'top:0', 'width:100%', 'height:100%',
       'pointer-events:none', 'z-index:32', 'opacity:0', 'transition:opacity 0.3s',
-      'font-family:"Courier New",monospace', 'font-size:0.62rem',
+      'font-family: var(--font-mono)', 'font-size:0.62rem',
       'letter-spacing:0.5px',
     ].join(';');
     // The hover LIFT (08-workbench §2 Motion: 120 ms delay → 4 % lift): a

@@ -84,7 +84,7 @@ export class GameOverScreen {
 
     this.element.innerHTML = `
       <div style="text-align:center;max-width:550px;padding:20px;">
-        <h1 id="gameover-title" style="font-family:'Courier New',monospace; font-size:2.5rem;
+        <h1 id="gameover-title" style="font-family: var(--font-mono); font-size:2.5rem;
             letter-spacing:0.2em; margin-bottom:0.5rem;
             text-shadow: 0 0 30px rgba(255,68,68,0.6);"></h1>
         <div id="gameover-reason" style="font-size:0.9rem;margin-bottom:1.5rem;"></div>
@@ -102,19 +102,19 @@ export class GameOverScreen {
 
         <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:1.5rem;">
           <button id="gameover-retry-btn" style="
-            font-family:'Courier New',monospace; font-size:0.9rem; color:#00ff88;
+            font-family: var(--font-mono); font-size:0.9rem; color:#00ff88;
             background: rgba(0,255,136,0.1); border: 2px solid rgba(0,255,136,0.4);
             padding: 10px 30px; cursor: pointer; border-radius: 4px;
             letter-spacing: 0.1em; transition: all 0.3s;
           ">TRY AGAIN</button>
           <button id="gameover-continue-btn" style="
-            font-family:'Courier New',monospace; font-size:0.9rem; color:#ffaa00;
+            font-family: var(--font-mono); font-size:0.9rem; color:#ffaa00;
             background: rgba(255,170,0,0.1); border: 2px solid rgba(255,170,0,0.4);
             padding: 10px 30px; cursor: pointer; border-radius: 4px;
             letter-spacing: 0.1em; transition: all 0.3s;
           ">CONTINUE (KEEP UPGRADES)</button>
           <button id="gameover-menu-btn" style="
-            font-family:'Courier New',monospace; font-size:0.9rem; color:rgba(0,255,136,0.6);
+            font-family: var(--font-mono); font-size:0.9rem; color:rgba(0,255,136,0.6);
             background: transparent; border: 1px solid rgba(0,255,136,0.2);
             padding: 10px 30px; cursor: pointer; border-radius: 4px;
             letter-spacing: 0.1em; transition: all 0.3s;

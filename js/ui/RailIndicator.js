@@ -229,7 +229,7 @@ export class RailIndicator {
     // ';' so it prefixes the joined list cleanly.
     root.style.cssText = midHeightCss('right') + [
       'display:flex', 'flex-direction:column-reverse', 'gap:5px',
-      'font-family:"Courier New",monospace', 'font-size:0.6rem', 'letter-spacing:0.08em',
+      'font-family: var(--font-mono)', 'font-size:0.6rem', 'letter-spacing:0.08em',
       'text-transform:uppercase',
       'padding:6px 6px 6px 8px',
       `border-left:2px solid ${NOTCH_REST_BORDER}`,

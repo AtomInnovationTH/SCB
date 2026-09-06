@@ -9,7 +9,8 @@
  * renders outside `#menu-screen` (the menu hides → the card hides with it).
  *
  * THE LOOK: the translucent `#menu-left` card (rgba(4,12,30,0.52) plate,
- * blur(6px), 1px rgba(0,255,136,0.14) hairline, 8px radius), 'Courier New',
+ * blur(6px), 1px rgba(0,255,136,0.14) hairline, 8px radius), the house mono
+ * token (B612 Mono since Session L),
  * #00ff88 — a STEADY letter-spaced title (no pulse, no emoji anywhere), an
  * optional bullet list (omitted entirely when empty), a big primary
  * `TAP TO UPDATE` button and a quiet `LATER` text button; both ≥ 44 px tall
@@ -33,7 +34,8 @@ export const UPDATE_CARD = Object.freeze({
   BUTTON_MIN_H_PX: 44,
 });
 
-const FONT = "'Courier New', monospace";
+// Session L: the B612 Mono token (index.html :root --font-mono; Courier New is its fallback).
+const FONT = 'var(--font-mono)';
 
 const CARD_CSS = `
   display: block; box-sizing: border-box; width: 100%; max-width: ${UPDATE_CARD.MAX_WIDTH_PX}px;

@@ -145,7 +145,7 @@ export class HotkeyOverlay {
       background: 'rgba(0,0,0,0.92)', zIndex: '9999',
       display: 'none', opacity: '0', transition: 'opacity 0.2s ease',
       justifyContent: 'center', alignItems: 'center',
-      fontFamily: "'Courier New', monospace", color: '#ccc',
+      fontFamily: "var(--font-mono)", color: '#ccc',
     });
     overlay.addEventListener('click', (e) => { if (e.target === overlay) this.hide(); });
 
@@ -171,7 +171,7 @@ export class HotkeyOverlay {
       </div>
       <button id="hotkey-close-btn" style="background:none;border:1px solid rgba(255,255,255,0.2);
         color:#aaa;font-size:16px;cursor:pointer;padding:4px 12px;border-radius:3px;
-        font-family:'Courier New',monospace;">ESC ×</button>
+        font-family: var(--font-mono);">ESC ×</button>
     `;
 
     const body = document.createElement('div');

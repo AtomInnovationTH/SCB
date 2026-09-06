@@ -388,7 +388,7 @@ export class CargoPane {
       #${CARGO_PANE_ID} .cargo-foot .cargo-btn { flex: 1 1 0; }
       /* Buttons: the StatusPanel .fleet-btn shape in the pane's green. */
       #${CARGO_PANE_ID} .cargo-btn {
-        font: bold 10px/1.2 'Courier New', monospace;
+        font: bold 10px/1.2 var(--font-mono);
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: #00ff88;

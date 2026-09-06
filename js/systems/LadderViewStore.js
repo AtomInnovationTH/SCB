@@ -147,8 +147,11 @@ export class LadderViewStore {
   }
 
   /**
-   * The remembered F3 pane open-state (booleans; the shipped default is both
-   * closed). A fresh copy.
+   * The remembered drawer open-state (booleans; the shipped default is both
+   * closed): `refit` = the workbench REFIT drawer (floor 1 only — recorded
+   * while floor 1 is applied, carried otherwise), `library` = the SPECS
+   * drawer (rides along across floors — recorded on every floor since
+   * Session L, J FINDINGS (c)). A fresh copy.
    * @returns {{refit: boolean, library: boolean}}
    */
   panes() {
@@ -176,8 +179,9 @@ export class LadderViewStore {
   }
 
   /**
-   * Remember the F3 pane open-state. Non-boolean fields fall back to the
-   * default (closed). Writes only on change.
+   * Remember the drawer open-state (REFIT floor 1 / SPECS any floor — see
+   * panes()). Non-boolean fields fall back to the default (closed). Writes
+   * only on change.
    * @param {{refit?: boolean, library?: boolean}} panes
    * @returns {boolean} true when the state changed (and a write was attempted)
    */

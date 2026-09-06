@@ -117,7 +117,7 @@ export class PaneChrome {
       position: 'absolute',
       top: '5px',
       right: '7px',
-      fontFamily: "'Courier New', monospace",
+      fontFamily: "var(--font-mono)",
       fontSize: '10px',
       fontWeight: 'bold',
       color: this._color,

@@ -243,7 +243,7 @@ export class CodexViewerUI {
       background: 'rgba(0,0,0,0.92)', zIndex: '9999',
       display: 'none', opacity: '0', transition: 'opacity 0.2s ease',
       justifyContent: 'center', alignItems: 'center',
-      fontFamily: "'Courier New', monospace", color: '#ccc',
+      fontFamily: "var(--font-mono)", color: '#ccc',
     });
     overlay.addEventListener('click', (e) => { if (e.target === overlay) this._requestClose(); });
 
@@ -278,11 +278,11 @@ export class CodexViewerUI {
         <input id="codex-search" type="text" placeholder="search topics…" spellcheck="false"
           style="flex:1;max-width:320px;margin-left:8px;background:rgba(0,0,0,0.4);
                  border:1px solid rgba(0,212,255,0.25);border-radius:3px;color:#cfefff;
-                 font-family:'Courier New',monospace;font-size:14px;padding:6px 10px;outline:none;" />
+                 font-family: var(--font-mono);font-size:14px;padding:6px 10px;outline:none;" />
       </div>
       <button id="codex-close-btn" style="background:none;border:1px solid rgba(255,255,255,0.2);
         color:#888;font-size:16px;cursor:pointer;padding:4px 12px;border-radius:3px;
-        font-family:'Courier New',monospace;">ESC ×</button>
+        font-family: var(--font-mono);">ESC ×</button>
     `;
 
     // --- Body (sidebar + list + reading pane) ---
@@ -1151,7 +1151,7 @@ export class CodexViewerUI {
             <div style="padding:10px 14px;border-radius:4px;
               background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);
               font-size:15px;color:#e8f4ff;letter-spacing:0.02em;
-              font-family:'Courier New',monospace;overflow-x:auto;">${entry.formula}</div>
+              font-family: var(--font-mono);overflow-x:auto;">${entry.formula}</div>
           </div>`;
       }
     }

@@ -149,10 +149,11 @@ export const ACTUATOR_CHIPS = Object.freeze({
 });
 /** The present-but-unowned `get()` value: a DISABLED chip with that text. */
 export const ACTUATOR_NOT_FITTED = 'NOT FITTED';
-/** Chip minimum height (px). The pane has NO glass dep (main.js wires none),
- *  so this is the desktop row; a `glass` dep + the 44 px HIG box is a hub
- *  follow-up (PaneRail's `deps.glass` idiom). */
+/** Chip minimum height (px): the desktop row, and the 44 pt HIG box on glass
+ *  (`deps.glass` — PaneRail's idiom; main.js passes the boot's `_glassBoot`).
+ *  Owner law 2026-09-06: a new touch target ships at 44 pt on the iPad. */
 export const ACTUATOR_CHIP_MIN_H_PX = 28;
+export const ACTUATOR_CHIP_GLASS_MIN_H_PX = 44;
 
 /** Minimal HTML escape for a duck-typed dep string (a pass-through state). @private */
 const _esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -180,6 +181,8 @@ export class RefitPane {
    *   the pane (Session B commit 4; see _adapterDeps). Absent/throwing → {}
    *   (the static catalog base — the honest headless fallback).
    * @param {boolean|function} [deps.reducedMotion] - override for the matchMedia probe
+   * @param {boolean} [deps.glass] - the boot's glass answer (Session L): the
+   *   actuator toggle chips are 44 pt tall on glass (the HIG box), 28 on desktop
    * @param {function} [deps.getRecommended] - () => (string|null): the shop's
    *   recommended-starter id for a FIRST depot visit (ShopScreen's pure
    *   `recommendedStarter`) — Wave 5 Session K: the one-shop REFIT drawer hosts
@@ -212,6 +215,8 @@ export class RefitPane {
     this._adapterDepsFn = deps.adapterDeps || null;
     this._reducedMotionDep = deps.reducedMotion;
     this._getRecommended = deps.getRecommended || null;
+    /** Session L: glass boot → the actuator chips wear the 44 pt HIG box. */
+    this._glass = !!deps.glass;
     this._actuators = (deps.actuators && typeof deps.actuators === 'object') ? deps.actuators : null;
     /** Session K: the first-visit framing — true from open({firstVisit}) to close(). */
     this._firstVisit = false;
@@ -825,7 +830,7 @@ export class RefitPane {
       'padding:10px 12px', 'overflow-y:auto',
       'border:1px solid rgba(0,204,255,0.4)', 'border-left:none', 'border-radius:0 6px 6px 0',
       'background:rgba(0,16,32,0.82)', 'color:' + VisualLaw.COLORS.INFO,
-      'font-family:"Courier New",monospace', 'font-size:0.68rem', 'letter-spacing:0.05em',
+      'font-family: var(--font-mono)', 'font-size:0.68rem', 'letter-spacing:0.05em',
       'pointer-events:auto',
       reduced ? `transition:opacity ${PANE_SLIDE_MS}ms ease` : '',
     ].join(';');
@@ -849,7 +854,7 @@ export class RefitPane {
       'padding:8px 6px 8px 4px', 'border:1px solid rgba(0,204,255,0.4)', 'border-left:none',
       'border-radius:0 6px 6px 0', 'background:rgba(0,16,32,0.85)',
       'color:' + VisualLaw.COLORS.INFO, 'cursor:pointer',
-      'font-family:"Courier New",monospace', 'font-size:0.62rem', 'letter-spacing:0.08em',
+      'font-family: var(--font-mono)', 'font-size:0.62rem', 'letter-spacing:0.08em',
       'writing-mode:vertical-rl', 'text-orientation:mixed', 'user-select:none',
       'display:none', 'pointer-events:auto',
     ].join(';');
@@ -973,15 +978,16 @@ export class RefitPane {
     // reports present on THIS card's hardware. A tap routes through
     // [data-act] → _actuate → toggle() → refresh (truth re-read). NOT FITTED
     // = present-but-unowned: disabled + aria-disabled, the purchase row
-    // below is the way in. Desktop min-height (no glass dep — see the const).
+    // below is the way in. 28 px on desktop, the 44 pt HIG box on glass.
     if (m.acts && m.acts.length) {
+      const minH = this._glass ? ACTUATOR_CHIP_GLASS_MIN_H_PX : ACTUATOR_CHIP_MIN_H_PX;
       parts.push('<div class="refit-acts" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;padding-left:8px">');
       for (const a of m.acts) {
         const frame = a.disabled ? 'rgba(0,204,255,0.25)' : (a.pressed ? C.INFO : 'rgba(0,204,255,0.45)');
         parts.push(
           `<button class="refit-act" data-act="${a.key}" aria-pressed="${a.pressed ? 'true' : 'false'}"` +
           (a.disabled ? ' disabled aria-disabled="true"' : '') +
-          ` style="min-height:${ACTUATOR_CHIP_MIN_H_PX}px;box-sizing:border-box;padding:0 8px;border-radius:3px;font:inherit;letter-spacing:inherit;` +
+          ` style="min-height:${minH}px;min-width:${this._glass ? 44 : 0}px;box-sizing:border-box;padding:0 8px;border-radius:3px;font:inherit;letter-spacing:inherit;touch-action:manipulation;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;` +
           `border:1px solid ${frame};color:${C.INFO};background:${a.pressed && !a.disabled ? 'rgba(0,204,255,0.15)' : 'transparent'};` +
           `${a.disabled ? 'opacity:0.5;cursor:default' : 'cursor:pointer'}">${a.text}</button>`,
         );

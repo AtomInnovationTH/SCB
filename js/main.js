@@ -1725,6 +1725,69 @@ async function init() {
       // own pure starter pick (un-owned + affordable, fades once any starter
       // is owned), read once on open({ firstVisit }).
       getRecommended: () => recommendedStarter(UPGRADES, shopScreen.purchasedUpgrades, scoringSystem.credits),
+      // Session L: the boot's glass answer — the actuator chips wear the 44 pt box.
+      glass: _glassBoot,
+      // Session L (plan item 4 — "REFIT cards gain actuator toggles ... through
+      // the existing actions"): the SAME methods the hotkeys drive
+      // (InputManager Comma / Period / KeyO, untouched) and the same input
+      // events, emitted here as the hotkey handler emits them. The get()s read
+      // the COMMANDED target each toggle writes (the pane refreshes on
+      // interaction edges, so a progress read would leave the chip stale until
+      // the next tap); PlayerSatellite has no public readers for the three
+      // targets — read by the MotherCallouts.js `_rosaFurlProgress` precedent.
+      actuators: {
+        rosaFurl: {
+          get: () => (player && typeof player.toggleRosaFurl === 'function')
+            ? (player._rosaFurlTarget < 0.5 ? 'FURLED' : 'DEPLOYED') : null,
+          toggle: () => {
+            const target = player.toggleRosaFurl();
+            audioSystem?.playClick?.();
+            eventBus.emit(Events.ROSA_FURL_INPUT, { target });
+          },
+        },
+        rosaFeather: {
+          get: () => (player && typeof player.toggleRosaFeather === 'function')
+            ? (player._rosaFeatherTarget >= 0.5 ? 'FEATHERED' : 'FLAT') : null,
+          toggle: () => {
+            const feathered = player.toggleRosaFeather();
+            audioSystem?.playClick?.();
+            eventBus.emit(Events.ROSA_FEATHER_INPUT, { feathered });
+          },
+        },
+        struts: {
+          get: () => (armManager && armManager.arms && armManager.arms.length && typeof armManager.strutsDeployed === 'function')
+            ? (armManager.strutsDeployed() ? 'DEPLOYED' : 'STOWED') : null,
+          toggle: () => {
+            if (!armManager || typeof armManager.toggleStruts !== 'function' || armManager.toggleStruts() === null) return;
+            audioSystem?.playClick?.();
+            eventBus.emit(Events.STRUT_DEPLOY_INPUT);
+          },
+        },
+        flower: {
+          get: () => {
+            if (!player || typeof player.getFlowerPairCount !== 'function') return null;
+            if (player.getFlowerPairCount() === 0) return 'NOT FITTED';
+            const FL = Constants.THERMAL && Constants.THERMAL.FLOWER;
+            if (!FL) return null;
+            const mid = ((FL.POSE_STOW_DEG + FL.POSE_CARGO_DEG) / 2) * Math.PI / 180;
+            return ((player._flowerTargetTheta ?? player._flowerThetaRad) <= mid) ? 'OPEN' : 'CLOSED';
+          },
+          toggle: () => {
+            if (!player || player.getFlowerPairCount() === 0) return;
+            const deploying = player.toggleFlowerDeploy();
+            audioSystem?.playClick?.();
+            eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
+            // The KeyO comms line, verbatim (InputManager's handler is the source).
+            eventBus.emit(Events.COMMS_MESSAGE, {
+              sender: 'THERMAL',
+              text: deploying
+                ? 'Aft flower deploying — struts open LIKE A FLOWER to the 90° cargo bloom.'
+                : 'Aft flower stowing — folding to the 146° bud.',
+              priority: 'info',
+            });
+          },
+        },
+      },
     });
     // The TECH LIBRARY pane (08-workbench §2 right pane; §10's LibraryPane —
     // the adapter over the shipped viewer). Reads the SAME codexSystem the
@@ -5336,6 +5399,18 @@ function gameLoop(timestamp) {
   // layout read per HUD rung, so announced changes repaint at once through
   // the pane-visibility edge listener inside the ladder gate instead).
   if (_ladderActive && ladderPaneRail) ladderPaneRail.refresh();
+  // Session L (Session K FINDINGS (a)): the hull callout columns clear BOTH
+  // rails — the rails are MotherCallouts' SECOND inset source, merged with the
+  // drawers' by max (write-on-change inside setRailInsets). Both accessors are
+  // cached numbers from the rails' own 1 Hz dodge reads — no layout read here;
+  // a hidden rail reads null and that side falls back to the drawer's inset.
+  // Flag-off / disengaged: never called (the shipped drawer-only insets).
+  if (_ladderActive && motherCallouts && motherCallouts.setRailInsets) {
+    const wl = (railIndicator && railIndicator.leftPx) ? railIndicator.leftPx() : null;
+    motherCallouts.setRailInsets(
+      (ladderPaneRail && ladderPaneRail.rightPx) ? ladderPaneRail.rightPx() : null,
+      wl == null ? null : window.innerWidth - wl);
+  }
   // THE TAB DODGE (owner 2026-09-06): the SPECS tab rides UNDER the WHERE rail
   // whenever the rail has dodged under the right HUD column (else 38 %). The
   // floor is the thumb rest on glass, the screen bottom on desktop. Both

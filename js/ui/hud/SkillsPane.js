@@ -401,7 +401,7 @@ export class SkillsPane {
     border: 1px solid rgba(0, 255, 136, 0.25);
     border-radius: 4px;
     padding: 8px 12px;
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     color: #ccddcc;
     z-index: 200;
@@ -499,7 +499,7 @@ export class SkillsPane {
     background: rgba(0, 10, 20, 0.95);
     border: 1px solid rgba(0, 255, 136, 0.35);
     border-radius: 6px;
-    font-family: 'Courier New', monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     color: #ccddcc;
     z-index: 9999;
@@ -650,7 +650,7 @@ export class SkillsPane {
 }
 
 /* ── Checklist mode (ST-3.1: NOVICE next-step suggestions) ─────────────── */
-.sp-checklist { padding: 6px 8px; font-family: 'Courier New', monospace; font-size: 11px; }
+.sp-checklist { padding: 6px 8px; font-family: var(--font-mono); font-size: 11px; }
 .sp-checklist-header {
     color: #88aabb;
     font-size: 10px;

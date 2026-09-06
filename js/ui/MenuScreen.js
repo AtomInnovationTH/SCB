@@ -79,7 +79,7 @@ export class MenuScreen {
           height: 100%;
           position: relative;
           box-sizing: border-box;
-          font-family: 'Courier New', monospace;
+          font-family: var(--font-mono);
         }
         /* ── Full-bleed 3D hero (background layer) ── */
         #menu-scene-3d {
@@ -160,7 +160,7 @@ export class MenuScreen {
           border-radius: 6px;
           padding: 9px 12px;
           color: rgba(0,255,136,0.9);
-          font-family: 'Courier New', monospace;
+          font-family: var(--font-mono);
           font-size: 0.8rem;
           line-height: 1.5;
           letter-spacing: 0.01em;
@@ -330,7 +330,7 @@ export class MenuScreen {
 
         <!-- ══ HEADER (full-width, centered) ══ -->
         <div id="menu-header">
-          <h1 style="font-family:'Courier New',monospace; font-size:3.5rem; color:#00ff88;
+          <h1 style="font-family: var(--font-mono); font-size:3.5rem; color:#00ff88;
                       letter-spacing:0.3em; margin-bottom:0.5rem; white-space:nowrap;
                       text-shadow: 0 0 30px rgba(0,255,136,0.6), 0 0 60px rgba(0,255,136,0.3);">
             SPACE COWBOY<span style="font-size:0.5em; letter-spacing:0.1em; margin-left:0.4em; vertical-align:0.15em; color:rgba(0,255,136,0.6);">${Constants.VERSION_LABEL || ''}</span>
@@ -343,7 +343,7 @@ export class MenuScreen {
           <!-- START MISSION button. Label carries both click and Enter hint -->
           <div style="margin:0 0 0.8rem;">
             <button id="menu-start-btn" style="
-              font-family:'Courier New',monospace; color:#00ff88;
+              font-family: var(--font-mono); color:#00ff88;
               background: rgba(0,255,136,0.1); border: 2px solid rgba(0,255,136,0.5);
               padding: 12px 48px 10px; cursor: pointer; border-radius: 4px;
               letter-spacing: 0.2em; transition: all 0.3s;
@@ -360,7 +360,7 @@ export class MenuScreen {
           <!-- CONTINUE button (hidden until a save exists) -->
           <div id="menu-continue-wrapper" style="margin:0.5rem 0; display:none;">
             <button id="menu-continue-btn" style="
-              font-family:'Courier New',monospace; font-size:1.0rem; color:#ffaa00;
+              font-family: var(--font-mono); font-size:1.0rem; color:#ffaa00;
               background: rgba(255,170,0,0.08); border: 2px solid rgba(255,170,0,0.4);
               padding: 10px 40px; cursor: pointer; border-radius: 4px;
               letter-spacing: 0.15em; transition: all 0.3s;

@@ -25,7 +25,7 @@ const LABEL_STYLE = {
   position:        'fixed',
   zIndex:          '200',
   pointerEvents:   'none',
-  fontFamily:      "'Courier New', monospace",
+  fontFamily:      "var(--font-mono)",
   fontSize:        '10px',
   color:           '#00ffcc',
   background:      'rgba(0,10,25,0.78)',

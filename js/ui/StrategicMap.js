@@ -750,7 +750,7 @@ export class StrategicMap {
     this._containerEl.style.cssText = `
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
       pointer-events: none; z-index: 20; display: none;
-      font-family: 'Courier New', monospace; color: #00ff88;
+      font-family: var(--font-mono); color: #00ff88;
     `;
 
     // UX-11 #7: guidance panel (top-left) — "what do I do here?"

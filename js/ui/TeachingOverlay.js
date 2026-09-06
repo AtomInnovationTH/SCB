@@ -139,7 +139,7 @@ export class TeachingOverlay {
       pointer-events: auto;
       opacity: 0;
       transition: opacity ${(C.FADE_IN_MS || 300)}ms ease-in;
-      font-family: 'Courier New', monospace;
+      font-family: var(--font-mono);
       box-shadow: 0 0 12px rgba(0, 204, 255, 0.15);
     `;
 

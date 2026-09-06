@@ -1339,7 +1339,7 @@ export class StatusPanel {
     style.id = 'fleet-button-style';
     style.textContent = `
       #hud-arms-status .fleet-btn {
-        font: bold 10px/1.2 'Courier New', monospace;
+        font: bold 10px/1.2 var(--font-mono);
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: #00ffff;

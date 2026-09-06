@@ -817,7 +817,7 @@ export class CityLabels {
       // margin-left:6px added a second ~10px offset on top of slotTransform,
       // desyncing every slot and overlapping W-slot pills onto their own dot.)
       `margin-left:${-DOT_PX / 2}px`,
-      `font:500 ${fontPx}px/1 'Courier New',monospace`,
+      `font:500 ${fontPx}px/1 var(--font-mono)`,
       'letter-spacing:0.5px',
       `color:${style.text}`,
       // Subtle dark pill keeps the name legible over bright clouds, deserts,

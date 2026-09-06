@@ -824,7 +824,7 @@ export class LibraryPane {
       'padding:10px 12px', 'overflow-y:auto',
       'border:1px solid rgba(0,204,255,0.4)', 'border-right:none', 'border-radius:6px 0 0 6px',
       'background:rgba(0,16,32,0.82)', 'color:' + VisualLaw.COLORS.INFO,
-      'font-family:"Courier New",monospace', 'font-size:0.68rem', 'letter-spacing:0.05em',
+      'font-family: var(--font-mono)', 'font-size:0.68rem', 'letter-spacing:0.05em',
       'pointer-events:auto',
       reduced ? `transition:opacity ${PANE_SLIDE_MS}ms ease` : '',
     ].join(';');
@@ -848,7 +848,7 @@ export class LibraryPane {
       'padding:8px 4px 8px 6px', 'border:1px solid rgba(0,204,255,0.4)', 'border-right:none',
       'border-radius:6px 0 0 6px', 'background:rgba(0,16,32,0.85)',
       'color:' + VisualLaw.COLORS.INFO, 'cursor:pointer',
-      'font-family:"Courier New",monospace', 'font-size:0.62rem', 'letter-spacing:0.08em',
+      'font-family: var(--font-mono)', 'font-size:0.62rem', 'letter-spacing:0.08em',
       'writing-mode:vertical-rl', 'text-orientation:mixed', 'user-select:none',
       'display:none', 'pointer-events:auto',
       // The pulse animates through transition (reduced motion never sets it).

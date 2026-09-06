@@ -86,7 +86,7 @@ export class SweepReportUI {
       border: '1px solid #ffaa00',
       borderRadius: '4px',
       padding: '24px 28px',
-      fontFamily: "'Courier New', monospace",
+      fontFamily: "var(--font-mono)",
       color: '#e0e0e0',
       fontSize: '13px',
       lineHeight: '1.6',
@@ -295,7 +295,7 @@ export class SweepReportUI {
           background: rgba(255,170,0,0.15);
           border: 1px solid #ffaa00;
           color: #ffaa00;
-          font-family: 'Courier New', monospace;
+          font-family: var(--font-mono);
           font-size: 13px;
           letter-spacing: 2px;
           padding: 8px 28px;
@@ -324,7 +324,7 @@ export class SweepReportUI {
 
     let html = `<div style="border-top:1px solid #333; padding-top:10px; margin-top:8px;">`;
     html += `<div style="color:#ffaa00; font-size:11px; letter-spacing:1.5px; margin-bottom:8px;">CAPTURE EFFICIENCY</div>`;
-    html += `<table style="width:100%; font-family:'Courier New',monospace; font-size:11px; border-collapse:collapse;">`;
+    html += `<table style="width:100%; font-family: var(--font-mono); font-size:11px; border-collapse:collapse;">`;
     html += `<tr style="color:#667788;"><td>Method</td><td style="text-align:center;">Catches</td><td style="text-align:right;">ΔV/catch</td></tr>`;
 
     for (const t of r.toolStats) {
