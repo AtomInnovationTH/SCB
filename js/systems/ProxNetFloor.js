@@ -134,6 +134,7 @@ export class ProxNetFloor {
     this._shells = [];           // FieldRiskModel shell reads (ship-centered)
     this._plan = null;           // InsertionPlanner.plan() result
     this._selectedZone = null;   // selection survives re-plans by zone id
+    this._lastInsertionPoints = null; // Session J: the last drawn candidate screen points (tap hit-test)
     this._cluster = null;        // last refreshed focused cluster (panel/minimap)
     this._approachCommit = null; // {clusterId, zone} after the approach verb
     this._lastRefreshMs = -Infinity;
@@ -173,6 +174,7 @@ export class ProxNetFloor {
   deactivate() {
     if (!this._active) return;
     this._active = false;
+    this._lastInsertionPoints = null;   // Session J: no stale tap targets off the floor
     if (this._overlay.hide) this._overlay.hide();
     // Restore the shipped orb (its 8-key state resumes) + drop the panel.
     if (this._mini) this._mini.unmount();
@@ -281,6 +283,34 @@ export class ProxNetFloor {
    * @param {number} [dir=1] - +1 / −1
    * @returns {object|null} the newly selected candidate
    */
+  /**
+   * Session J (D-I, item 6 — "a tap on a candidate selects it"): select the
+   * insertion candidate by ZONE id ('edge' | 'mid' | 'core'). Returns the
+   * selected candidate, or null when there is no plan / no such zone (the
+   * selection is left as it was). Selection survives re-plans by zone, exactly
+   * like cycleInsertion's.
+   * @param {string} zone
+   * @returns {object|null}
+   */
+  selectInsertion(zone) {
+    if (!this._plan || !this._plan.candidates.length || typeof zone !== 'string') return null;
+    const c = this._plan.candidates.find((x) => x.zone === zone);
+    if (!c) return null;
+    this._selectedZone = c.zone;
+    return c;
+  }
+
+  /**
+   * Session J: the candidate screen points the overlay drew on the LAST
+   * update — `[{ zone, x, y, visible, selected, ... }]` in the projector's
+   * space (the ticker's `project` → CSS px), or null while inactive / no plan
+   * / never drawn. Read-only; the hub's tap path hit-tests them.
+   * @returns {Array<{zone:string,x:number,y:number,visible:boolean}>|null}
+   */
+  lastInsertionPoints() {
+    return this._active ? (this._lastInsertionPoints || null) : null;
+  }
+
   cycleInsertion(dir = 1) {
     if (!this._plan || !this._plan.candidates.length) return null;
     const n = this._plan.candidates.length;
@@ -346,6 +376,12 @@ export class ProxNetFloor {
         : null,
       labelBudget: FLOOR.labelBudget,
     }, ctx.project);
+    // Session J (D-I, item 6): remember THIS frame's candidate screen points so
+    // the hub's tap path can hit-test them (the overlay canvas is
+    // pointer-events:none). The overlay owns the projection; this is a
+    // reference to its returned descriptors, not a copy — no allocation.
+    this._lastInsertionPoints = (frame && frame.insertion && Array.isArray(frame.insertion.points))
+      ? frame.insertion.points : null;
 
     // Feed the corner minimap + the context panel from the floor's own state.
     // Both are cheap per frame: the adapter mutates ONE reused descriptor (the

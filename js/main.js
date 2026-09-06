@@ -130,6 +130,8 @@ import { PaneRail } from './ui/PaneRail.js';
 import { TouchControls } from './ui/TouchControls.js';
 import { TouchTelemetry } from './ui/touchTelemetry.js';
 import { GestureHints } from './ui/hud/GestureHints.js';
+import { nearestWithin as tapNearestWithin } from './systems/TapPick.js';
+import { pressKey as dispatchKeyPress } from './core/KeyDispatch.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
 import { captureNetSystem, isInsideCone, coneRadiusAtDepth } from './entities/CaptureNet.js';
@@ -704,6 +706,9 @@ const _hullTmp = new THREE.Vector3();
 // Session C: the LIBRARY pane's photo subject projection scratch (read on the
 // pane's open / entry edge only — never per frame; one reused vector).
 const _photoTmp = new THREE.Vector3();
+// Session J (D-I): the long-press hit-test's scratch (the selected target's
+// position — read per hold, never per frame; one reused vector).
+const _holdTmp = new THREE.Vector3();
 
 // Input
 let inputManager;
@@ -1977,9 +1982,16 @@ async function init() {
   // construction, so every existing suite stays byte-identical. Pinch
   // synthesizes wheel input through the SAME WheelRouter dispatch as the
   // physical wheel; a one-finger drag on the ladder rail drives
-  // ladderController.jump({toFloor}) (its own rail-notch API); the pane slider
-  // drives the PaneDensity ladder. An optional telemetry beacon logs zoom-feel
-  // gestures + the floor crossings they cause to the cable server (touch-only).
+  // ladderController.jump({toFloor}) (its own rail-notch API). Session J (plan
+  // D-I, the two-thumb grammar): a one-finger canvas drag turns the SHIP by
+  // writing the PUBLIC inputManager.keys arrows (or orbits the camera while a
+  // drawer is open — the turntable), a tap resolves through _touchTap below,
+  // a long-press on the selected target opens the radial (verbs press keys
+  // through KeyDispatch — the SAME key paths), an edge-band swipe opens the
+  // drawers. The density slider + LIBRARY chip retired (the WHAT rail and the
+  // SPECS-everywhere tab replaced them); the STORE chip stays until Session K.
+  // An optional telemetry beacon logs zoom-feel gestures + the floor crossings
+  // they cause to the cable server (touch-only).
   if (TouchControls.detect()) {
     // Session J item 5 (plan D-I): on glass every verb hint SPEAKS ITS GESTURE
     // — the ONE key→gesture table (GestureHints) is consulted at render time
@@ -1994,31 +2006,88 @@ async function init() {
         ? ladderController.currentFloor() : null),
     });
     touchTelemetry.start();
+    // Session J (D-I, item 2) — THE TAP: the ONE selection universe. On the
+    // flying floors (2–3) the nearest member of the TARGET PANE's list — the
+    // SAME TPI-sorted list Tab/T cycle (debrisField.getEnhancedTargetList +
+    // the untracked filter InputManager._cycleTarget applies) — projected
+    // through the live camera (navcomProject, CSS px), within
+    // TapPick.TAP_RADIUS_PX 44 → the ONE selection event HUD_TARGET_CLICK {id}
+    // (GameFlowManager / HUD / TargetReticle / NavSphere already listen; the
+    // Session J TARGET_SELECTED follow rides downstream); on floor 3 an
+    // insertion candidate's screen point wins first (ProxNetFloor.
+    // lastInsertionPoints → selectInsertion(zone) — the overlay canvas is
+    // pointer-events:none, so the hit-test lives here). Tap empty → SCAN_QUICK
+    // (the S key's event). Floor 1 is MotherCallouts' pointer path (a hull
+    // part — untouched), floor 4's cluster icons take their own taps, floor 5
+    // has no tap verb; the ladder disengaged → nothing (the flag-off glass
+    // boot keeps the shipped tap-nothing). Allocation at tap rate only.
+    const _touchTap = ({ x, y }) => {
+      if (!ladderController || !ladderController.isActive()) return null;
+      const floor = ladderController.currentFloor();
+      if (floor === 3 && proxNetFloor && proxNetFloor.lastInsertionPoints) {
+        const hit = tapNearestWithin(proxNetFloor.lastInsertionPoints(), x, y);
+        if (hit) { proxNetFloor.selectInsertion(hit.point.zone); return 'insertion'; }
+      }
+      if (floor !== 2 && floor !== 3) return null;
+      const list = debrisField.getEnhancedTargetList(player.getPosition(), player.getOrbitalElements());
+      const canDetect = !!(sensorSystem && sensorSystem.canDetectUntracked);
+      const pts = [];
+      for (const t of list) {
+        if (t.tracked === false && !canDetect) continue;
+        const d = debrisField.getDebrisById(t.id);
+        const pos = d && d._scenePosition;
+        if (!pos) continue;
+        const p = navcomProject(pos);
+        pts.push({ id: t.id, x: p.x, y: p.y, visible: p.visible });
+      }
+      const hit = tapNearestWithin(pts, x, y);
+      if (hit) { eventBus.emit(Events.HUD_TARGET_CLICK, { id: hit.point.id }); return 'target'; }
+      eventBus.emit(Events.SCAN_QUICK);
+      return 'scan';
+    };
+    // THE HOLD: a long-press on the SELECTED target (within the same 44 px of
+    // its projection, floors 2–3, ladder engaged) → the radial opens.
+    const _touchHold = ({ x, y }) => {
+      if (!ladderController || !ladderController.isActive()) return false;
+      const floor = ladderController.currentFloor();
+      if (floor !== 2 && floor !== 3) return false;
+      if (!targetSelector.getActiveTarget()) return false;
+      const pos = targetSelector.getActiveTargetPositionInto(_holdTmp);
+      if (!pos) return false;
+      const p = navcomProject(pos);
+      return !!tapNearestWithin([{ x: p.x, y: p.y, visible: p.visible }], x, y);
+    };
     touchControls = new TouchControls({
       canvas,
       wheelRouter,
       ladderController,
       gameState,
-      paneDensity: hud ? hud.paneDensity : null,
-      // STORE / LIBRARY tap chips (iPad port 2026-09-02): glass has no KeyB /
-      // KeyI, so the chips call the SAME paths the keys drive — the KeyB
-      // ORBITAL_VIEW guard and the KeyI toggle + CODEX_OPENED-on-open-only
-      // rule (InputManager) are mirrored here verbatim.
+      // The STORE tap chip (iPad port 2026-09-02): glass has no KeyB, so the
+      // chip calls the SAME path the key drives — the KeyB ORBITAL_VIEW guard
+      // (InputManager) mirrored here verbatim. Stays until Session K retires
+      // the full-screen shop. (The LIBRARY chip left with Session J: the SPECS
+      // tab lives on every floor and the right-edge swipe opens it.)
       openShop: () => {
         if (gameState.getState() === GameStates.ORBITAL_VIEW) {
           gameFlowManager.transitionToState(GameStates.SHOP);
           audioSystem?.playClick?.();
         }
       },
-      toggleLibrary: () => {
-        if (!codexViewerUI) return;
-        codexViewerUI.toggle();
-        audioSystem?.playClick?.();
-        if (typeof codexViewerUI.isVisible !== 'function' || codexViewerUI.isVisible()) {
-          eventBus.emit(Events.CODEX_OPENED);
-        }
-      },
       telemetry: touchTelemetry,
+      // Session J (D-I) — the two-thumb grammar's sinks:
+      inputKeys: inputManager.keys,      // the PUBLIC key map (InputManager untouched) — drag = ship turn
+      cameraSystem,                       // ladderDragNudge — drag = the turntable while a drawer is open
+      onTap: _touchTap,
+      onHold: _touchHold,
+      pressKey: (code) => dispatchKeyPress(code),   // the radial's verbs press the SAME keys (KeyDispatch → window)
+      // The edge-band swipe: the drawers' own open()/close() (their onOpenChange
+      // edge carries the held world + the camera inset). A disabled pane
+      // (REFIT off floor 1; either pane disengaged / flag-off) ignores open().
+      openPane: (which, open) => {
+        const pane = (which === 'refit') ? refitPane : ((which === 'library') ? libraryPane : null);
+        if (!pane) return;
+        if (open) pane.open(); else pane.close();
+      },
     });
     touchControls.start();
     _bootMark('TouchControls started');
