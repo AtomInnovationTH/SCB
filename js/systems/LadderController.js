@@ -64,6 +64,17 @@ export const INTRO_RIDE_MS = 2400;
 const WORKBENCH_FLOOR = 1;
 
 /**
+ * Session N.5 (owner 2026-09-07): where the FIRST-RUN intro ride LANDS — the
+ * flying floor, not the workbench. "First make me care": a new player starts
+ * where the game is played, with the TOUCH MAP checklist beside them; the
+ * workbench (its 28 callouts, the REFIT shop, the specs) waits until the
+ * first mission break rides them down (WORKBENCH_STOP opens REFIT itself,
+ * which ticks the checklist's REFIT row without a swipe). An id, never a
+ * name (FloorContract owns the player labels).
+ */
+const INTRO_LANDING_FLOOR = 2;
+
+/**
  * D5 (Wave 5 Session G): is `z01` a FREE-zone rest on a floor — strictly
  * between the two wall edges (`WALL_ZONE_FRAC` … 1 − `WALL_ZONE_FRAC`)? The
  * controller remembers the last such position per applied floor as the
@@ -866,25 +877,26 @@ export class LadderController {
    * first-time player's NEW game (the MAP store's first-run bit; never under
    * the ?shot harness unless asked): the core is PLACED (a cut while hidden —
    * the same invisible path as restoreView) on the TOP floor of the contract,
-   * and the ride to the workbench is ARMED — `_engage` starts it the moment
-   * the ladder owns the screen, at INTRO_RIDE_MS (or `rideMs`), through the
-   * same `_apply` → `_startRide` path as every ride (fidelity, the floor
-   * content — the REFIT tab enables on the floor-1 arrival — the mask, both
-   * rails), silently (no clunk: it is watched, not commanded). Under REDUCED
-   * MOTION (`reducedMotion: true`) the core is placed on the workbench itself
-   * and nothing is armed — the first frame IS the ship close-up. Refused (false,
-   * nothing armed) while engaged in gameplay, when the contract has no top /
-   * workbench floor, or when the placement fails.
+   * and the ride to the FLYING floor (INTRO_LANDING_FLOOR — owner 2026-09-07;
+   * it landed on the workbench through Session N) is ARMED — `_engage` starts
+   * it the moment the ladder owns the screen, at INTRO_RIDE_MS (or `rideMs`),
+   * through the same `_apply` → `_startRide` path as every ride (fidelity,
+   * the floor content, the mask, both rails), silently (no clunk: it is
+   * watched, not commanded). Under REDUCED MOTION (`reducedMotion: true`) the
+   * core is placed on the landing floor itself and nothing is armed — the
+   * first frame IS the flying floor. Refused (false, nothing armed) while
+   * engaged in gameplay, when the contract has no top / landing floor, or
+   * when the placement fails.
    * @param {{ rideMs?: number, reducedMotion?: boolean }} [arg]
    * @returns {boolean} whether the intro was armed (or, reduced, placed)
    */
   armIntroRide({ rideMs, reducedMotion = false } = {}) {
     this._introPending = null;
     const ids = FloorContract.FLOORS.map((f) => f.id).filter((id) => Number.isFinite(id));
-    if (!ids.length || !ids.includes(WORKBENCH_FLOOR)) return false;
-    if (reducedMotion) return this._placeWhileHidden(WORKBENCH_FLOOR, 0.5);
+    if (!ids.length || !ids.includes(INTRO_LANDING_FLOOR)) return false;
+    if (reducedMotion) return this._placeWhileHidden(INTRO_LANDING_FLOOR, 0.5);
     const top = Math.max(...ids);
-    if (top === WORKBENCH_FLOOR) return this._placeWhileHidden(WORKBENCH_FLOOR, 0.5);
+    if (top === INTRO_LANDING_FLOOR) return this._placeWhileHidden(INTRO_LANDING_FLOOR, 0.5);
     if (!this._placeWhileHidden(top, 0.5)) return false;
     const ms = Number(rideMs);
     this._introPending = (Number.isFinite(ms) && ms > 0) ? ms : INTRO_RIDE_MS;
@@ -1047,15 +1059,16 @@ export class LadderController {
     if (this._paneRail && this._paneRail.show) this._paneRail.show();
     this._refreshRail();
     // Session N: an ARMED intro ride flies now — the core was placed on the
-    // top floor while hidden; the ceremony decision rides to the workbench at
-    // the intro duration (never the 550 ms crossing), with no clunk.
+    // top floor while hidden; the ceremony decision rides to the flying floor
+    // (INTRO_LANDING_FLOOR — owner 2026-09-07) at the intro duration (never
+    // the 550 ms crossing), with no clunk.
     if (this._introPending !== null) {
       const ms = this._introPending;
       this._introPending = null;
       const t = (tMs === undefined) ? this._now() : tMs;
       const decisions = (typeof this._ladder.ceremonyRide === 'function')
-        ? this._ladder.ceremonyRide({ tMs: t, toFloor: WORKBENCH_FLOOR })
-        : this._ladder.jump({ tMs: t, toFloor: WORKBENCH_FLOOR });
+        ? this._ladder.ceremonyRide({ tMs: t, toFloor: INTRO_LANDING_FLOOR })
+        : this._ladder.jump({ tMs: t, toFloor: INTRO_LANDING_FLOOR });
       this._apply(decisions, t, { rideMs: ms, silent: true });
       this._refreshRail();
     }

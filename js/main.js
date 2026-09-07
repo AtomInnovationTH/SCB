@@ -2071,14 +2071,16 @@ async function init() {
     eventBus.on(Events.GAME_RESET, () => {
       if (!ladderController) return;
       ladderController.resetView();
-      // Session N (plan item 2; 08-workbench §8 Q6): a FIRST-TIME player's new
-      // game rides in from the top floor to the workbench — the ship close-up
-      // — at the first engage (INTRO_RIDE_MS, silent), where the MAP pane's
-      // workbench beat waits; the flying lessons (the OnboardingDirector's
-      // beats) stay deferred until the player rides up. Reduced motion places
-      // the core on the workbench instead (no ride). Veterans (the map done or
-      // skipped) and the ?shot harness (unless &intro=1) keep the shipped
-      // floor. A CONTINUE disarms this on PERSISTENCE_LOADED (above).
+      // Session N (plan item 2), re-aimed Session N.5 (owner 2026-09-07 —
+      // "first make me care"): a FIRST-TIME player's new game rides in from
+      // the top floor to the FLYING floor — the game itself — at the first
+      // engage (INTRO_RIDE_MS, silent), with the MAP pane's checklist beside
+      // it; the workbench (callouts, REFIT, specs) waits for the first
+      // WORKBENCH_STOP, whose refit open ticks the checklist's REFIT row.
+      // Reduced motion places the core on the landing floor instead (no
+      // ride). Veterans (the map done or skipped) and the ?shot harness
+      // (unless &intro=1) keep the shipped floor. A CONTINUE disarms this on
+      // PERSISTENCE_LOADED (above).
       if (_introFirstRun() && !_introFlown) {
         ladderController.armIntroRide({ rideMs: INTRO_RIDE_MS, reducedMotion: _prefersReducedMotion() });
         _introFlown = true;
@@ -2233,9 +2235,10 @@ async function init() {
     }
     // Session N — the first-run MAP pane: the LAST child of #hud-left-column
     // (on the workbench the column is otherwise empty, so the card sits
-    // top-left alone; on the flying floor it follows the fleet rows and the
-    // WHAT rail's existing column dodge covers it). Not a rung, not a room
-    // pane: it shows on every floor until done or skipped, once per player.
+    // top-left alone; on the flying floor — where the intro now LANDS (owner
+    // 2026-09-07) — it follows the fleet rows and the rail's existing column
+    // dodge covers it). Not a rung, not a room pane: it shows on every floor
+    // until done or skipped, once per player.
     // Witnesses: the bus (zoom / select / net — subscribed inside the pane)
     // and three 1 Hz getters — the floor reads null while a ride is in flight
     // so the intro's own descent never counts as the player's "ride up".
