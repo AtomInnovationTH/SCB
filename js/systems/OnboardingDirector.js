@@ -72,7 +72,10 @@ export const ONBOARDING_BEATS = [
     triggerEvent: 'LASSO_FIRED',
     skillId: 'collect_lasso',
     credit: 10,
-    escalationText: 'That bracket is your lock. Press N to launch the net.',
+    // No stall card (owner, 2026-09-07): the 9 s "That bracket is your lock.
+    // Press N…" TeachingOverlay sat over the top-of-screen readouts and only
+    // repeated what the comms line + the reticle bracket already say. A beat
+    // without escalationText never arms the idle clock and never posts a card.
   },
   {
     // Confirm the first catch landed + name the reward loop. The reticle
@@ -1086,7 +1089,10 @@ export class OnboardingDirector {
     if (this._isMinimal()) {
       return;
     }
-    const body = beat.escalationText || beat.commsText || '';
+    // The stall card is an opt-in per beat: escalationText or nothing. (No
+    // commsText fallback — it would post a raw '{distM}' template for
+    // tease_lock and re-say the comms line for the rest.)
+    const body = beat.escalationText || '';
     if (!body) return;
     this._emit(Events.TEACHING_MOMENT_FORCE, {
       id: 'onboarding_' + beat.id,
