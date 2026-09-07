@@ -804,9 +804,12 @@ export class HUD {
     // restores LAST on `+`). Interactive panes read LIVE visibility so they
     // compose with the 7/8/9/0 toggles + view config; suppression categories
     // (constellations / chrome / reticles / craft) are flag rungs so they engage
-    // even when momentarily inactive. Per design: constellations + discoveries
-    // are reprioritized among the panes, debris reticles are 2nd-to-last, and the
-    // craft (mother + daughters) are last.
+    // even when momentarily inactive. Per design (Session O, owner 2026-09-07):
+    // MOTHER is last — the HUD readout, the one pane the player reads every throw;
+    // TARGETS are what a new player aims at — so they shed late, right after the
+    // fleet rows (arms), with the score strip + comms shed before them both. Debris
+    // reticles are 2nd-to-last, and the craft (mother + daughters) are last. Other
+    // reprioritizations: constellations + discoveries among the panes.
     const rungs = [
       // 0 — Sky labels: constellation names + Sun/Moon/planet NAME labels (pure
       //     sky decoration → first to go; the discs & stars themselves stay).
@@ -817,18 +820,16 @@ export class HUD {
       //     times it was pressed (reported as the widget being stuck on screen).
       //     isVisible() uses getClientRects, so a hidden widget costs no rung.
       domRung('pin', 'Upgrade goal', byId('hud-pin-widget')),
-      // 1 — NavSphere orb (canvas; off by default → isVisible false → `-` skips).
+      // 2 — NavSphere orb (canvas; off by default → isVisible false → `-` skips).
       {
         id: 'navsphere', label: 'Nav orb',
         isVisible: () => !!(this._navSphere && this._navSphere.isOrbVisible && this._navSphere.isOrbVisible()),
         setVisible: (v) => { if (this._navSphere && this._navSphere.setOrbHidden) this._navSphere.setOrbHidden(!v); },
       },
-      // 2 — Discoveries pane (.skills-pane, non-critical info).
+      // 3 — Discoveries pane (.skills-pane, non-critical info).
       domRung('discoveries', 'Discoveries', bySelector('.skills-pane')),
-      // 3 — Debris analysis pane (9 key re-reveals it).
+      // 4 — Debris analysis pane (9 key re-reveals it).
       domRung('debris', 'Debris pane', byId('hud-wireframe-container')),
-      // 4 — Target pane (0 key re-reveals it).
-      domRung('targets', 'Target pane', byId('hud-targets-panel')),
       // 5 — Score strip + hint ticker (one rung).
       domRung('score', 'Score strip', () => [
         document.getElementById('hud-score-panel'),
@@ -838,9 +839,11 @@ export class HUD {
       domRung('comms', 'Comms', byId('hud-comms-panel')),
       // 7 — Fleet / arms pane.
       domRung('arms', 'Fleet pane', byId('hud-arms-panel')),
-      // 8 — Mother pane (HUD readout).
+      // 8 — Target pane (0 key re-reveals it).
+      domRung('targets', 'Target pane', byId('hud-targets-panel')),
+      // 9 — Mother pane (HUD readout).
       domRung('mother', 'Mother pane', byId('hud-mother-panel')),
-      // 9 — Debris reticles + remaining alert/indicator chrome + transient
+      // 10 — Debris reticles + remaining alert/indicator chrome + transient
       //     gameplay toasts — 2ND-TO-LAST. Merged (the old standalone "chrome"
       //     rung had no visible effect when no warning/target was active, so `-`
       //     read as a dead press). This one visibly clears the targeting brackets
@@ -863,7 +866,7 @@ export class HUD {
           document.body.toggleAttribute('data-density-quiet', hidden);
         }
       }),
-      // 10 — Craft: mother ship + daughters (empty-orbit view) — LAST.
+      // 11 — Craft: mother ship + daughters (empty-orbit view) — LAST.
       flagRung('craft', 'Ships', applyCraft),
     ];
 

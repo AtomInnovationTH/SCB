@@ -253,16 +253,17 @@ export const DEFAULT_ROOMS = Object.freeze({
     // WORKBENCH_STOP shows the till itself ((main.js)and D5 keeps it.
     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'gone', override: 'gone',
   }),
-  // Session N.5 (owner 2026-09-07, "think about what panes a NEW player
-  // actually needs"): the flying floor greets a first-timer with THREE panes —
-  // what am I aiming at (targets), what is around me (reticles & alerts), can
-  // I catch (mother) — plus the narrator (comms) and the hint ticker. The
-  // rest (debris map, upgrade pin, fleet, orbit numbers, autopilot strip)
-  // wait behind MORE / `+` until curiosity arrives; D5 remembers whatever a
-  // player pulls out.
+  // Session N.5 (owner 2026-09-07) + Session O (owner 2026-09-07,
+  // "LEFT: mother, daughters"): the flying floor greets a first-timer with
+  // FOUR panes — what am I aiming at (targets), what is around me (reticles &
+  // alerts), can I catch (mother) — plus her daughters rows, the fleet list
+  // (arms) — plus the narrator (comms)and the hint ticker. The rest
+  // (debris map, upgrade pin, orbit numbers, autopilot strip) wait behind
+  // MORE / `+` until curiosity arrives; D5 remembers whatever a player pulls
+  // out.
   2: Object.freeze({
     targets: 'shown', debris: 'gone', navsphere: 'gone', reticles: 'shown',
-    pin: 'gone', mother: 'shown', arms: 'gone', discoveries: 'gone', hints: 'shown',
+    pin: 'gone', mother: 'shown', arms: 'shown', discoveries: 'gone', hints: 'shown',
     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone',
   }),
 3: Object.freeze({
