@@ -134,7 +134,7 @@ import { OrbitPane, ORBIT_GEOMETRY } from './ui/hud/OrbitPane.js';
 import { FmaStrip } from './ui/hud/FmaStrip.js';
 import { NextPane } from './ui/hud/NextPane.js';
 import { CopilotVoice } from './systems/CopilotVoice.js';
-import { TouchMapPane } from './ui/hud/TouchMapPane.js';
+import { GestureSplash } from './ui/GestureSplash.js';
 import { TouchMapStore } from './systems/TouchMapStore.js';
 import { RAIL_GEOMETRY } from './ui/RailGeometry.js';
 import { TouchControls } from './ui/TouchControls.js';
@@ -702,16 +702,17 @@ let orbitPane = null;
 let fmaStrip = null;
 let nextPane = null;
 let copilotVoice = null;
-// Wave 5 Session N (plan "Session N — Onboarding for glass + intro") — the
-// first-run MAP pane (js/ui/hud/TouchMapPane.js: the touch map on glass, the
-// key map on desktop; six rows that advance ONLY on witnessed input) and its
-// player-owned store (js/systems/TouchMapStore.js, StorageKeys.TOUCH_MAP).
+// Session O (plan D4, owner 2026-09-07) — the first-run gesture splash
+// (js/ui/GestureSplash.js: a 3 s MEMO naming PINCH and HOLD on glass, WHEEL
+// and N on the desktop — the retired six-row TOUCH MAP / KEY MAP card's
+// exact wiring slot) and its player-owned record (js/systems/TouchMapStore.js,
+// StorageKeys.TOUCH_MAP, unchanged).
 // Built ONLY inside the LADDER.ENABLED gate, and only for a FIRST RUN.
 let touchMapStore = null;
-let touchMapPane = null;
+let gestureSplash = null;
 /**
  * Session N: the ?shot harness boots a fresh context every run, so a first-run
- * surface (the MAP pane, the intro ride) would land in EVERY gate picture;
+ * surface (the splash, the intro ride) would land in EVERY gate picture;
  * the harness suppresses both unless the run asks for them with `&intro=1`
  * (read once at boot beside the other URL flags — a dev-only override, never
  * a `shot` reader: DevShotGate stays the ONE of those).
@@ -2300,24 +2301,23 @@ async function init() {
     if (hud && hud.paneDensity && Array.isArray(hud.paneDensity.rungs)) {
       hud.paneDensity.rungs.unshift(overridePane.rung());
     }
-    // Session N — the first-run MAP pane: the LAST child of #hud-left-column
-    // (on the workbench the column is otherwise empty, so the card sits
-    // top-left alone; on the flying floor — where the intro now LANDS (owner
-    // 2026-09-07) — it follows the fleet rows and the rail's existing column
-    // dodge covers it). Not a rung, not a room pane: it shows on every floor
-    // until done or skipped, once per player.
-    // Witnesses: the bus (zoom / select / net — subscribed inside the pane)
-    // and three 1 Hz getters — the floor reads null while a ride is in flight
-    // so the intro's own descent never counts as the player's "ride up".
+    // Session O (plan D4) — the first-run gesture splash: the LAST child of
+    // #hud-left-column (the retired TOUCH MAP card's slot; on the workbench
+    // the column is otherwise empty, so the splash sits top-left alone; on
+    // the flying floor — where the intro now LANDS (owner 2026-09-07) — it
+    // follows the fleet rows and the rail's existing column dodge covers it).
+    // Not a rung, not a room pane: it shows for 3 s on the first F2 landing,
+    // once per player (the store's bit, sc_touch_map_v1 as-is).
+    // The floor getter reads null while the intro flyby is in flight / a ride
+    // is riding — so the splash lands only AFTER the intro settled on F2
+    // (its own descent never counts as the player's arrival).
     // Built only for a first run under the harness policy (a ?shot boot
     // without &intro=1 never sees it); a veteran's boot constructs nothing.
     if (_introFirstRun()) {
-      touchMapPane = new TouchMapPane({
+      gestureSplash = new GestureSplash({
         glass: _glassBoot,
         store: touchMapStore,
         floor: () => ((ladderController && !ladderController.isRiding() && !(ladderController.introInFlight && ladderController.introInFlight())) ? ladderController.currentFloor() : null),
-        refitOpen: () => !!(refitPane && typeof refitPane.isOpen === 'function' && refitPane.isOpen()),
-        libraryOpen: () => !!(libraryPane && typeof libraryPane.isOpen === 'function' && libraryPane.isOpen()),
       });
     }
   }
@@ -3396,8 +3396,9 @@ async function init() {
       window.__fmaStrip = fmaStrip;
       window.__nextPane = nextPane;
       window.__copilotVoice = copilotVoice;
-      // Session N: the first-run map + its store (the pane is null unless this boot is a first run under the harness policy).
-      window.__touchMapPane = touchMapPane;
+      // Session O (plan D4): the first-run gesture splash + its store (the
+      // splash is null unless this boot is a first run under the harness policy).
+      window.__gestureSplash = gestureSplash;
       window.__touchMapStore = touchMapStore;
       // Session J gate witnesses (getters, the __scbSceneManager pattern): the
       // debris field (to project a target for the tap), the input manager (its
@@ -6082,7 +6083,7 @@ function gameLoop(timestamp) {
       if (orbitPane) orbitPane.update(timestamp);
       if (fmaStrip) fmaStrip.update(timestamp);
       if (nextPane) nextPane.update(timestamp);
-      if (touchMapPane) touchMapPane.update(timestamp);   // Session N: the first-run map's polled witnesses
+      if (gestureSplash) gestureSplash.update(timestamp);   // Session O (plan D4): the first-run splash's per-frame tick
     }
 
     // Orbit MFD update (Phase 6: pass cachedTargets for route planner)
