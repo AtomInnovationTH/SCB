@@ -685,8 +685,10 @@ export class MotherCallouts {
    * Rail insets (Session L — Session K FINDINGS (a): on the 13-inch iPad the
    * floor-1 hull callout columns sat UNDER both rails on the PARTS band, the
    * rails painting on top). The rails are the SECOND inset source beside the
-   * drawers: `leftPx` is the DISPLAY rail's RIGHT edge (its reach from the left
-   * screen edge, `paneRail.rightPx()`), `rightPx` the WHERE rail's reach from
+   * drawers: `leftPx` was the DISPLAY rail's RIGHT edge (its reach from the
+   * left screen edge) — Session P retired that rail for the footer-band
+   * DETAIL slider, so the hub passes null there now and the left side falls
+   * back to the drawer's inset; `rightPx` is the WHERE rail's reach from
    * the RIGHT screen edge (`innerWidth − railIndicator.leftPx()`), CSS px, or
    * null while that rail is hidden / unmeasured. Each non-null value gains
    * RAIL_GEOMETRY.DODGE_GAP_PX (the rails' own clearance) so the column starts

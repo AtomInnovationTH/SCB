@@ -145,7 +145,7 @@ const NULL_REASON = Object.freeze({ daughters: 'NO DAUGHTER DOCKED', radiator: '
 
 // ── Private helpers ────────────────────────────────────────────────────────────
 
-/** @private The house matchMedia probe (RefitPane / FloorMask / PaneRail). */
+/** @private The house matchMedia probe (RefitPane / FloorMask / DetailSlider). */
 function _prefersReducedMotion() {
   try {
     return !!(typeof window !== 'undefined' &&

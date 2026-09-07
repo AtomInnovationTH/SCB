@@ -12,15 +12,17 @@
  * It is a pane-density RUNG like the other DOM panes: `rung()` returns the HUD
  * domRung shape ({id:'orbit', label, isVisible, setVisible}) whose ONE
  * visibility bit is the `data-density-hidden` attribute on the root, so the
- * DISPLAY rail lists it as a notch and FloorMask rooms it per floor.
+ * DETAIL slider counts it as a rung (Session P) and FloorMask rooms it per floor.
  *
  * HOME (owner 2026-09-07; before that: right of the DISPLAY rail): bottom-left,
- * FLUSH with the left HUD column (x = EDGE_PX 10), UNDER the DISPLAY rail and
- * ABOVE the hint ticker — so the bottom-centre stays free for the SAFETY
- * OVERRIDE button. The hub (main.js, inside the LADDER gate) constructs the
- * pane, pushes `rung()` into hud.paneDensity.rungs before the first
- * floorMask.setFloor, and calls `setAnchor(EDGE_PX − GAP_PX, floorPx,
- * paneRail.bottomPx())` once per frame with cached numbers and `update(nowMs)`
+ * FLUSH with the left HUD column (x = EDGE_PX 10), UNDER the left HUD column
+ * (Session P: the DISPLAY rail it rode under retired — the ceiling is the
+ * column's own bottom, a 1 Hz hub read) and ABOVE the hint ticker — so the
+ * bottom-centre stays free for the SAFETY OVERRIDE button. The hub (main.js,
+ * inside the LADDER gate) constructs the pane, pushes `rung()` into
+ * hud.paneDensity.rungs before the first floorMask.setFloor, and calls
+ * `setAnchor(EDGE_PX − GAP_PX, floorPx, leftColumnBottom)` once per frame
+ * with cached numbers and `update(nowMs)`
  * per frame. setAnchor is write-on-change on its three inputs; every edge of
  * the root comes from it (left = leftEdge + GAP; the bottom edge = floor − GAP,
  * placed via top = bottom − the mode's fixed height — pure arithmetic, no
@@ -770,8 +772,9 @@ export class OrbitPane {
     if (!root || !Number.isFinite(this._floorPx) || !Number.isFinite(this._leftPx)) return;
     const G = ORBIT_GEOMETRY;
     const bottom = this._floorPx - G.GAP_PX;      // the bottom edge
-    // The vertical budget: down from the ceiling (the rail's bottom + GAP) or,
-    // with no ceiling, from the screen top (owner 2026-09-07).
+    // The vertical budget: down from the ceiling (the left HUD column's bottom
+    // + GAP since Session P; the DISPLAY rail's bottom before) or, with no
+    // ceiling, from the screen top (owner 2026-09-07).
     const budget = bottom - (this._ceilingPx != null ? this._ceilingPx + G.GAP_PX : 0);
     let mode, h;
     if (budget >= G.FULL_PX) { mode = 'full'; h = G.FULL_PX; }

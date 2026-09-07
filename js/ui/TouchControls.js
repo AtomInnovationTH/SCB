@@ -33,6 +33,9 @@
  *           hold-to-fire;
  *        d. EDGE-BAND SWIPE (24 px) opens/closes the REFIT (left) / SPECS
  *           (right) drawers through `openPane(which, open)`.
+ *        e. EDGE TOUCH witness (Session P, plan D3): every canvas / grip
+ *           touchstart reports its landing (x, y) to `onEdgeTouch` — the hub's
+ *           edge-wake bands decide what chrome wakes (never TouchControls).
  *      Any moment with two fingers down POISONS the gesture (a pinch that
  *      starts on a part is never a tap). The STORE chip stays until Session K
  *      retires the full-screen shop; the PANES density slider and the LIBRARY
@@ -279,6 +282,12 @@ export class TouchControls {
    * @param {function|null} [deps.pressKey]          Session J: (code) → the hub presses the key (KeyDispatch)
    * @param {function|null} [deps.openPane]          Session J: ('refit'|'library', open) → the hub opens/closes
    *   the drawer (the edge-band swipe)
+   * @param {function|null} [deps.onEdgeTouch]       Session P (plan D3): (x, y) → the hub tests its edge-wake
+   *   bands (right / left / footer) and wakes the matching edge chrome; fired from the canvas
+   *   touchstart (the landing finger) and the rail grip's touchstart; coordinates only —
+   *   TouchControls never decides what wakes. (An asleep rail reads opacity 0, so _syncGrip
+   *   turns the grip pointer-events:none and its region falls through to the canvas path;
+   *   the grip re-arms on the next 700 ms sync — no code needed.)
    * @param {object|null} [deps.paneDensity]         RETIRED (Session J): accepted and ignored — the DISPLAY rail
    *   is the pane surface
    * @param {function|null} [deps.toggleLibrary]     RETIRED (Session J): accepted and ignored — the SPECS tab
@@ -288,7 +297,7 @@ export class TouchControls {
                 paneDensity = null, openShop = null, toggleLibrary = null,
                 telemetry = null, tune = null,
                 inputKeys = null, cameraSystem = null, onTap = null, onHold = null,
-                pressKey = null, openPane = null } = {}) {
+                pressKey = null, openPane = null, onEdgeTouch = null } = {}) {
     this._canvas = canvas || null;
     this._router = wheelRouter || null;
     this._ladder = ladderController;   // rail-drag → jump({toFloor}); turntableActive()
@@ -303,11 +312,14 @@ export class TouchControls {
     this._onHold = (typeof onHold === 'function') ? onHold : null;
     this._pressKey = (typeof pressKey === 'function') ? pressKey : null;
     this._openPane = (typeof openPane === 'function') ? openPane : null;
+    // Session P (plan D3): the edge-touch witness — where a touch landed.
+    this._onEdgeTouch = (typeof onEdgeTouch === 'function') ? onEdgeTouch : null;
     const userTune = (typeof window !== 'undefined' && window.__TOUCH_TUNE) || null;
     this._tune = Object.assign({}, TOUCH_TUNE, tune || {}, userTune || {});
 
     this._root = null;          // fixed overlay containing all touch chrome
     this._grip = null;          // invisible drag surface over #ladder-rail
+    this._gripResyncPending = false; // Session P: one coalesced grip re-sync after an edge touch
     this._railActive = false;   // a one-finger rail drag is live
     this._railLastFloor = null; // last floor jumped to this drag (dedupe)
     this._syncTimer = null;
@@ -340,7 +352,7 @@ export class TouchControls {
     // Machine-observable input state (Ipad.md §5.3): lets the headless probe
     // and on-device DevTools witness that gestures actually flow. Created only
     // here — desktop/headless-without-touch contexts never see the global.
-    const stats = { pinch: 0, rail: 0, nav: 0, tap: 0, hold: 0, drag: 0, turn: 0, edge: 0, radial: 0 };
+    const stats = { pinch: 0, rail: 0, nav: 0, tap: 0, hold: 0, drag: 0, turn: 0, edge: 0, radial: 0, edgeTouch: 0 };
     if (typeof window !== 'undefined') {
       window.__TOUCH = this._stats = stats;
     } else {
@@ -414,6 +426,11 @@ export class TouchControls {
     if (e.cancelable) e.preventDefault();
     this._touched();
     this._requestWakeLock();
+    // Session P (plan D3): report where the LANDING finger touched — the hub's
+    // edge-wake bands decide what (if anything) wakes. Before the radial
+    // consume below: a touch that closes the radial in an edge band still
+    // wakes the chrome there (harmless), and a pinch's first finger counts.
+    this._reportEdgeTouch(e.changedTouches && e.changedTouches[0] ? e.changedTouches[0] : e.touches[0]);
     // Session J: a canvas touch while the radial is open CLOSES it and is
     // consumed (never a tap / drag of its own — one intent per touch).
     if (this._radial) {
@@ -748,9 +765,45 @@ export class TouchControls {
     if (e.touches.length !== 1) return;  // two fingers here = accidental; ignore
     this._touched();
     this._requestWakeLock();
+    // Session P (plan D3): the grip IS the right edge — a touch on it wakes
+    // the rail through the same hub band test as a canvas touch.
+    this._reportEdgeTouch(e.touches[0]);
     this._railActive = true;
     this._railLastFloor = null;          // first move always jumps
     this._railJumpTo(e.touches[0]);
+  }
+
+  /**
+   * @private Session P (plan D3): the ONE edge-touch fire — `onEdgeTouch(x, y)`
+   * with the touch's client coordinates, guarded like `onTap` (a throwing dep
+   * never breaks the gesture). Counted in `__TOUCH.edgeTouch`. No dep / no
+   * touch → nothing. An edge touch may have just WOKEN an asleep WHERE rail
+   * (opacity 0 → the grip is `pointer-events:none`, see _syncGrip), so the grip
+   * is re-armed two frames later — once the rail's next refresh has written
+   * its opacity — instead of on the 700 ms sync (review 2026-09-07 W1: the
+   * very next touch must be able to rail-jump).
+   * @param {Touch|undefined} t
+   */
+  _reportEdgeTouch(t) {
+    if (!this._onEdgeTouch || !t) return;
+    try { this._onEdgeTouch(t.clientX, t.clientY); } catch (_err) { /* dep */ }
+    if (this._stats) this._stats.edgeTouch++;
+    this._scheduleGripResync();
+  }
+
+  /**
+   * @private One re-sync of the grip two animation frames from now (the rail's
+   * phase write lands on the next controller update; the CSS opacity ramp is
+   * already non-zero a frame later, which is all `_syncGrip` asks). Coalesced:
+   * one pending re-sync at a time. Headless (no rAF) → nothing.
+   */
+  _scheduleGripResync() {
+    if (!this._grip || this._gripResyncPending || typeof requestAnimationFrame !== 'function') return;
+    this._gripResyncPending = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      this._gripResyncPending = false;
+      this._syncGrip();
+    }));
   }
 
   /** @private */

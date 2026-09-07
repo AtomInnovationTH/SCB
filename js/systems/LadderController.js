@@ -164,9 +164,20 @@ export class LadderController {
    * @param {object} [deps.autopilot]    - AutopilotSystem: toggle(). Session J
    *   item 6 — floor 2's declared Space verb 'approach-autopilot' (a no-op
    *   since S4) is the `A` path: autopilot to the selected target. Optional.
-   * @param {object} [deps.paneRail]     - the DISPLAY rail (PaneRail, Session J
-   *   D-H): show/hide/populate(floor). Mirrors `rail`: shown at engage, hidden
-   *   at disengage, re-populated at every floor arrival. Optional.
+   * @param {object} [deps.detailSlider] - Session P (plan D5): the DETAIL slider
+   *   (js/ui/DetailSlider.js — the DISPLAY rail's successor in the left slot):
+   *   `setShown(on)`. Shown on every floor but the workbench (F1 has the
+   *   REFIT tab in that slot), hidden at disengage. Its edge-chrome phase is
+   *   the hub's per-frame write, not the controller's. Duck-typed, optional.
+   * @param {object} [deps.edgeChrome]   - Session P (plan D2/D3, owner 2026-09-07):
+   *   the EDGE-CHROME core (js/ui/EdgeChrome.js — pure timestamps: wake(member?)
+   *   / box(name) / sleep()). Duck-typed, optional. The controller is the wake
+   *   source for FLOOR events: every floor apply wakes all chrome and boxes the
+   *   arrival notch ('floor'); a ride start wakes the rail; PURE SCENERY
+   *   (`setRailsShy(true)`) puts the chrome to SLEEP instead of hiding the
+   *   WHERE rail (asleep is wakeable — an edge touch is the way back on
+   *   glass); un-shy wakes it. Absent → the Session N.5 hide()/show() path
+   *   exactly (flag-off / older rigs).
    * @param {object} [deps.audioBeds]    - per-floor audio beds (LadderAudioBeds):
    *   setFloor(floorId|null). Optional — absent it beds are a no-op.
    * @param {object} [deps.floorMask]    - per-floor HUD pane mask (FloorMask,
@@ -216,11 +227,15 @@ export class LadderController {
     this._hullcam = deps.hullcam || null;
     this._refit = deps.refit || null;
     this._library = deps.library || null;
-    // Session J (D-C / item 6 / D-H): the subject-change hook, the autopilot
-    // for floor 2's Space verb, the DISPLAY rail. All optional (parallel tracks).
+    // Session J (D-C / item 6): the subject-change hook, the autopilot for
+    // floor 2's Space verb. All optional (parallel tracks).
     this._onSubjectChange = (typeof deps.onSubjectChange === 'function') ? deps.onSubjectChange : null;
     this._autopilot = deps.autopilot || null;
-    this._paneRail = deps.paneRail || null;
+    // Session P (plan D5): the DETAIL slider (the DISPLAY rail's `paneRail` dep
+    // retired with the rail) — nullable, duck-typed: setShown(on).
+    this._detailSlider = deps.detailSlider || null;
+    // Session P (plan D2/D3): the edge-chrome core — nullable, duck-typed.
+    this._edgeChrome = deps.edgeChrome || null;
     /**
      * PURE SCENERY completion (plan D7, owner 2026-09-07): an optional
      * `{ hide(), show() }` hook the hub binds to `body[data-pure-scenery]`
@@ -766,7 +781,9 @@ export class LadderController {
    * RESET ROOM (Session J, plan D-H: "long-press rail head = RESET ROOM"):
    * forget the applied floor's remembered pane layout and re-apply its
    * default room, then export (the store learns the reset — write-on-change).
-   * The DISPLAY rail's long-press calls this through the hub. No-op disengaged,
+   * Session P: the DISPLAY rail whose head long-press called this retired; the
+   * verb stays (a hub / probe entry — the DETAIL slider's thumb follows the
+   * re-applied room through the pane-visibility edge). No-op disengaged,
    * without a mask, or before the mask learned resetRoom. Event-rate only.
    * @returns {boolean} true when a room was reset
    */
@@ -777,7 +794,6 @@ export class LadderController {
     if (floor == null) return false;
     this._floorMask.resetRoom(floor);
     this._persistRooms();
-    if (this._paneRail && this._paneRail.populate) this._paneRail.populate(floor);
     return true;
   }
 
@@ -990,6 +1006,15 @@ export class LadderController {
    * `pureScenery` hook rides the same two branches, after the rails — `hide()`
    * completes the pure-scenery frame (SPECS/REFIT tabs, vitals, build stamp,
    * STORE chip), `show()` restores it.
+   *
+   * Session P (plan D2): with an `edgeChrome` dep the WHERE rail is no longer
+   * `hide()`-hidden here — the chrome goes to SLEEP (`edgeChrome.sleep()`:
+   * the fade starts now, `visibility:hidden` lands after it) and stays
+   * WAKEABLE, so on glass an edge touch brings the rail back from level 0
+   * (the way back — there is no `+` key on glass). Un-shy → `wake()`. The
+   * DETAIL slider (plan D5) needs nothing here: level 0 IS this state, and
+   * the slider sleeps and wakes with the rest of the chrome. Without the
+   * dep the Session N.5 hide()/show() path is byte-identical.
    * @param {boolean} shy
    */
   setRailsShy(shy) {
@@ -998,14 +1023,14 @@ export class LadderController {
     this._railsShy = want;
     if (!this._engaged) return;
     if (want) {
-      if (this._rail && this._rail.hide) this._rail.hide();
-      if (this._paneRail && this._paneRail.hide) this._paneRail.hide();
+      if (this._edgeChrome && typeof this._edgeChrome.sleep === 'function') this._edgeChrome.sleep(this._now());
+      else if (this._rail && this._rail.hide) this._rail.hide();
       if (this._pureScenery && typeof this._pureScenery.hide === 'function') {
         try { this._pureScenery.hide(); } catch (_e) { /* hook */ }
       }
     } else {
-      if (this._rail && this._rail.show) this._rail.show();
-      if (this._paneRail && this._paneRail.show && this._paneRailAllowed(this._floorApplied)) this._paneRail.show();
+      if (this._edgeChrome && typeof this._edgeChrome.wake === 'function') this._edgeChrome.wake(undefined, this._now());
+      else if (this._rail && this._rail.show) this._rail.show();
       if (this._pureScenery && typeof this._pureScenery.show === 'function') {
         try { this._pureScenery.show(); } catch (_e) { /* hook */ }
       }
@@ -1013,12 +1038,13 @@ export class LadderController {
   }
 
   /**
-   * @private Session N.5 (owner 2026-09-07): the DISPLAY rail's floor rule —
-   * never on the workbench (F1 is the ship, its callouts, and the two drawer
-   * tabs; the WHERE rail stays — it is the way back up). Everywhere else the
-   * rail paints as before.
+   * @private Session P (plan D5): the DETAIL slider's floor rule — the
+   * DISPLAY rail's Session N.5 rule carried over: never on the workbench (F1
+   * is the ship, its callouts, and the two drawer tabs — the REFIT tab has the
+   * footer's left slot there; the WHERE rail stays — it is the way back up).
+   * Everywhere else the slider shows.
    */
-  _paneRailAllowed(floor) { return floor !== WORKBENCH_FLOOR; }
+  _detailSliderAllowed(floor) { return floor !== WORKBENCH_FLOOR; }
 
   /** Session N: true while an intro ride is armed and not yet flown. */
   introRidePending() { return this._introPending !== null; }
@@ -1166,6 +1192,9 @@ export class LadderController {
     this._seedRest(s.z01);
     this._applyFidelity(s.floor);
     this._applyFloorContent(s.floor);
+    // Session P (plan D3): an ENGAGE is an arrival even on the floor the last
+    // engagement left — the chrome wakes and the notch is boxed regardless.
+    this._wakeFloorChrome();
     // D5: the panes as the player left them re-open at ENGAGE (the SHOP
     // return; a continued run), never at a ride arrival. Session L (J
     // FINDINGS (c)): on EVERY floor — the SPECS drawer rides along, so its
@@ -1174,8 +1203,8 @@ export class LadderController {
     // waits for the next floor-1 engage.
     this._restorePanes();
     if (this._rail && this._rail.show) this._rail.show();
-    // (The DISPLAY rail's show/hide is owned by _applyFloorContent above —
-    // Session N.5 floor rule: never on the workbench.)
+    // (The DETAIL slider's shown/hidden is owned by _applyFloorContent above —
+    // the Session N.5 floor rule carried over: never on the workbench.)
     this._refreshRail();
     // Session N: an ARMED intro flies now — the core was placed on the top
     // floor while hidden; the DIVE rides to the HULL (the shot — owner
@@ -1246,7 +1275,8 @@ export class LadderController {
     // the 5-key preference decides whether the pills actually reappear).
     this._setCityLabelsHidden(false);
     if (this._rail && this._rail.hide) this._rail.hide();
-    if (this._paneRail && this._paneRail.hide) this._paneRail.hide();
+    // Session P (plan D5): the DETAIL slider leaves with the ladder (the menu).
+    if (this._detailSlider && typeof this._detailSlider.setShown === 'function') this._detailSlider.setShown(false);
     // Plan D7 (review 2026-09-07): leaving gameplay clears pure scenery too —
     // the body attribute is a view state of the ENGAGED ladder only, so the
     // build stamp / tabs / vitals are back on the menu (Ipad.md §2.5: hidden
@@ -1356,6 +1386,10 @@ export class LadderController {
     // Every ride lands the core at entryZ01 — the previous position for the
     // next free move's direction (a flickWall landing included).
     this._lastPosZ01 = entryZ01;
+    // Session P (plan D3): a RIDE wakes the WHERE rail (the floor content below
+    // wakes everything when the floor actually changes; a same-floor flickWall
+    // ride still lights the rail the player is pushing against).
+    if (this._edgeChrome && typeof this._edgeChrome.wake === 'function') this._edgeChrome.wake('rail', tMs !== undefined ? tMs : this._now());
     this._applyFidelity(toFloor);
     this._applyFloorContent(toFloor);
     const frame = this._frame(toFloor, entryZ01);
@@ -1406,6 +1440,9 @@ export class LadderController {
    * make each part a no-op. @private
    */
   _applyFloorContent(floor) {
+    // Session P (plan D3/A4): a FLOOR CHANGE is a wake source — the arrival is
+    // recorded before the origin-floor record below is overwritten.
+    const floorChanged = (this._floorApplied !== floor);
     // The origin-floor record for the next ride (the depot doorway reads it).
     this._floorApplied = floor;
     // Reticle gating (F4/F5 'ship-to-icon' floors): the target + docking
@@ -1478,18 +1515,20 @@ export class LadderController {
     // EVERY floor — an open pane RIDES ALONG (the world stays held under it, D-F;
     // the camera inset bias applies on every floor since the CameraSystem :4384 lift);
     // only _disengage disables and closes it. Session O (plan D6, owner
-    // 2026-09-07): the edge TAB itself is now F1-only — the classic drawer tab that
-    // "opens SPECS" is a WORKBENCH affordance (REFIT parity, and the FAST answers:
-    // deep links (hint chips, subject-follow, CODEX_OPEN_ENTRY, the glass right-edge
-    // swipe) that open the pane from any floor still work, because THE PANE IS NEVER
-    // DISABLED — an open pane shows its handle tab on every floor (setTabShown
-    // only gates the CLOSED tab; the pane's own open edge re-shows the tab, and its
-    // close edge hides it again off-F1). The rule for tab visibility therefore lives
-    // here, in the floor content, not in the pane: the pane just answers the floor's
-    // claim level (setEnabled(true) + setTabShown(floor === WORKBENCH_FLOOR)).
+    // 2026-09-07) → Session P (plan D2/D6): the edge TAB is PINNED awake on F1
+    // only — the classic drawer tab that "opens SPECS" is a WORKBENCH affordance
+    // (REFIT parity). Everywhere else it is EDGE CHROME in the footer band: it
+    // follows the hub's per-frame EdgeChrome phase while closed (an edge touch
+    // or hover wakes it), and the FAST answers — deep links (hint chips,
+    // subject-follow, CODEX_OPEN_ENTRY, the glass right-edge swipe) that open
+    // the pane from any floor — still work, because THE PANE IS NEVER DISABLED
+    // and an open pane's tab is awake on every floor (the pane's own truth
+    // table). The floor rule therefore lives here, in the floor content, not in
+    // the pane: the pane just answers the floor's claim (setEnabled(true) +
+    // setTabPinned(floor === WORKBENCH_FLOOR)).
     if (this._library) {
       if (this._library.setEnabled) this._library.setEnabled(true);
-      if (this._library.setTabShown) this._library.setTabShown(floor === WORKBENCH_FLOOR);
+      if (this._library.setTabPinned) this._library.setTabPinned(floor === WORKBENCH_FLOOR);
     }
     // Per-floor audio bed (FloorContract audioBed): crossfade to the arrival
     // floor's bed. Optional dep — absent it this is a no-op (parallel track).
@@ -1502,21 +1541,35 @@ export class LadderController {
     // D5: the mask just captured the departing floor's room — export to the
     // player store (write-on-change inside the store; a floor-change moment).
     this._persistRooms();
-    // Session J (D-H): the DISPLAY rail lists the arrival floor's room — after the
-    // mask applied it, so the lit/dim paint reads the settled panes.
-    if (this._paneRail && this._paneRail.populate) this._paneRail.populate(floor);
-    // Session N.5 (owner 2026-09-07): the DISPLAY rail's floor rule — hidden
-    // on the workbench, back everywhere else (unless the shy state below).
-    if (this._paneRail) {
-      if (!this._paneRailAllowed(floor)) { if (this._paneRail.hide) this._paneRail.hide(); }
-      else if (this._engaged && !this._railsShy && this._paneRail.show) this._paneRail.show();
+    // Session P (plan D5): the DETAIL slider's floor rule — hidden on the
+    // workbench, shown everywhere else (its thumb follows the applied room
+    // through the hub's pane-visibility edge; its opacity is EdgeChrome's).
+    if (this._detailSlider && typeof this._detailSlider.setShown === 'function') {
+      this._detailSlider.setShown(this._detailSliderAllowed(floor));
     }
     // Session N.5: riding the ladder ends PURE SCENERY — the rails come back
     // with the floor content (this method runs at engage and every ride start).
     if (this._railsShy) this.setRailsShy(false);
+    // Session P (plan D3, Airbus A4): the floor changed → every piece of edge
+    // chrome wakes and the arrival notch wears the BOX for BOX_MS (the WHERE
+    // rail paints it from `isBoxed('floor')`). `_engage` fires the same wake
+    // unconditionally (a re-engage on the same floor is still an arrival).
+    if (floorChanged) this._wakeFloorChrome();
     // Session J (D-C): the floor's SUBJECT changed — the hub retargets an open
     // SPECS pane (never opens one; SpecsSubject decides what).
     this._noteSubjectChange(floor);
+  }
+
+  /**
+   * @private Session P (plan D3): the FLOOR wake — all edge chrome awake for
+   * IDLE_FADE_MS, the arrival notch boxed. Absent dep → no-op (flag-off).
+   */
+  _wakeFloorChrome() {
+    const ec = this._edgeChrome;
+    if (!ec) return;
+    const t = this._now();
+    if (typeof ec.wake === 'function') ec.wake(undefined, t);
+    if (typeof ec.box === 'function') ec.box('floor', t);
   }
 
   /** @private Session J: fire the optional subject hook, never throw. */

@@ -107,15 +107,28 @@
  *
  * LAYOUT: RIGHT pane, width clamp(380px, 28vw, 440px) (01-numbers), root
  * `#ladder-library`, header `.library-header`, edge tab `#ladder-library-tab`
- * always visible while enabled carrying the UNREAD count (unlocked, not yet
- * seen), which PULSES ONCE when a new unlock lands (reduced motion: the
- * count changes, no animation). STRUCTURE (Session D, owner decision 3): the
- * root is the positioning + TRANSFORM shell (width, z, the slide; paints
- * nothing, takes no pointer events); inside it the BODY (`.library-body`:
- * border, background, padding, the scrolling innerHTML) and the TAB — a child
- * of the root at the pane's INNER edge, so it rides the slide: closed = the
- * screen edge, open = the pane's inner edge, never over the content (the
- * Session C z-36 overlay covered ~22 px of its own open pane; retired).
+ * carrying the UNREAD count (unlocked, not yet seen), which PULSES ONCE when
+ * a new unlock lands (reduced motion: the count changes, no animation).
+ * STRUCTURE (Session D, owner decision 3): the root is the positioning +
+ * TRANSFORM shell (width, z, the slide; paints nothing, takes no pointer
+ * events); inside it the BODY (`.library-body`: border, background, padding,
+ * the scrolling innerHTML) and the TAB — a child of the root at the pane's
+ * INNER edge, so it rides the slide: closed = the screen edge, open = the
+ * pane's inner edge, never over the content (the Session C z-36 overlay
+ * covered ~22 px of its own open pane; retired).
+ *
+ * THE FOOTER TAB (Session P, plan D6/D7, owner 2026-09-07): the tab is a
+ * HORIZONTAL plate in the FOOTER BAND's right slot — `bottom: footerBottomPx −
+ * 96` (the root's own bottom) so it sits at the band's 132–164 px, height
+ * FOOTER_BAND_PX — the one fixed place "directly above the right thumb area".
+ * The three dodge chains (tab-under-rail, cargo-under-tab, orbit-under-rail)
+ * retired with it: `setTabDodge` / `tabBottom` are gone. It is EDGE CHROME
+ * (plan D2): `setTabPinned(on)` (F1 → pinned = always visible; the controller
+ * calls it at every floor apply) and `setTabPhase(phase)` (the hub's per-frame
+ * write from EdgeChrome) drive one truth table — pinned OR open → awake; else
+ * the phase → opacity / visibility, write-on-change. `display:block` on every
+ * floor while enabled; the pane itself stays enabled everywhere (deep links).
+ * `body[data-pure-scenery]` (index.html) still hides it under level 0.
  * Reduced motion fades the BODY, the root never moves, and the tab flips
  * between the screen edge and the inner edge through `--library-open`
  * (visible + clickable while the pane is closed). ONE CSS variable
@@ -137,6 +150,8 @@ import { trlToLabel, techLevelBadgeText } from '../core/Constants.js';
 export const PANE_SLIDE_MS = 270;
 /** Idle panes fade to 70 %, never vanish (08-workbench §2 Motion). */
 export const IDLE_FADE_OPACITY = 0.7;
+/** The pane root's CSS `bottom` (px) — the footer tab's `bottom` is the band's bottom minus this (Session P). */
+export const ROOT_BOTTOM_PX = 96;
 /** Idle threshold before the fade applies (ms). */
 export const IDLE_FADE_MS = 6000;
 /** Tab pulse length (ms) — the ONE pulse a new unlock earns (§2 Grammar). */
@@ -258,15 +273,25 @@ export class LibraryPane {
     this._cancelRaf = deps.cancelRaf !== undefined ? deps.cancelRaf
       : (typeof cancelAnimationFrame === 'function' ? (h) => cancelAnimationFrame(h) : null);
     this._reducedMotionDep = deps.reducedMotion;
+    // Session P (plan D7): the FOOTER BAND's bottom offset from the viewport
+    // bottom (the hub passes RailGeometry.footerBand().bottom = 132); the tab's
+    // own `bottom` is that minus the root's 96. Default: the thumb rest + gap.
+    const fb = Number(deps.footerBottomPx);
+    this._footerBottomPx = Number.isFinite(fb) ? fb : (RAIL_GEOMETRY.THUMB_REST_PX + RAIL_GEOMETRY.FOOTER_GAP_PX);
 
     this._enabled = false;
-    // Session O (plan D6, owner 2026-09-07): whether the edge tab shows on
-    // THIS floor (the SPECS tab is F1-only while closed; an open pane shows it on
-    // every floor). Default true so every behaviour outside the controller (tests,
-    // an unwired boot) holds until LadderController setTabShown(false) on a
-    // non-workbench floor. The pane itself stays ENABLED everywhere — the tab is
-    // the only surface this policy gates (deep-links keep working).
-    this._tabFloorShown = true;
+    // Session O (plan D6) → Session P (plan D2/D6): whether the edge tab is
+    // PINNED awake on THIS floor (F1 — the workbench affordance; the controller
+    // calls setTabPinned(floor === WORKBENCH_FLOOR) at every floor apply). Off
+    // the workbench the tab is EDGE CHROME: it follows the hub's setTabPhase
+    // while closed, and an open pane is always awake (its handle). Default true
+    // so every behaviour outside the controller (tests, an unwired boot) holds.
+    // The pane itself stays ENABLED everywhere (deep links keep working).
+    this._tabPinned = true;
+    /** @private the last EdgeChrome phase the hub wrote ('awake'|'fading'|'hidden'); hidden until told */
+    this._chromePhase = 'hidden';
+    /** @private the effective phase last WRITTEN to the tab (write-on-change) */
+    this._tabPhaseWritten = null;
     this._open = false;
     this._entryId = null;         // the entry the pane is showing (null = prompt)
     this._via = null;             // the clicked part's callout name behind the entry (header lead), else null
@@ -430,58 +455,13 @@ export class LibraryPane {
   isOpen() { return this._open; }
 
   /**
-   * THE TAB DODGE (owner 2026-09-06): the tab's design anchor is `top:38%`,
-   * but when the WHERE rail has dodged under the right HUD column, 38 % sits
-   * over that column's rows (the TRACKED TARGETS values) — so the tab rides
-   * UNDER the dodged rail instead: `top = railBottom + DODGE_GAP_PX`, if that
-   * keeps the tab above `floorPx` (the hub passes innerHeight minus the thumb
-   * rest on glass, innerHeight on desktop); otherwise, or with no dodge
-   * (null), the tab returns to 38 %. Per-frame safe: write-on-change on the
-   * inputs; the tab height is read only when they change.
-   * @param {number|null} railBottom  RailIndicator.dodgeBottom()
-   * @param {number} floorPx          the lowest bottom edge the tab may take
+   * Session P (plan D6/D7): the tab's CSS `bottom` inside the pane root — the
+   * footer band's bottom (viewport offset) minus the root's own bottom (96),
+   * never negative. 132 → 36 on both surfaces. PURE (a test seam).
+   * @returns {number}
    */
-  setTabDodge(railBottom, floorPx) {
-    if (!this._tab) return;
-    const rb = (typeof railBottom === 'number' && Number.isFinite(railBottom)) ? railBottom : null;
-    const fl = Number(floorPx) || 0;
-    if (rb === this._tabDodgeIn && fl === this._tabDodgeFloor) return;
-    this._tabDodgeIn = rb;
-    this._tabDodgeFloor = fl;
-    let top = null;
-    if (rb != null && typeof this._tab.getBoundingClientRect === 'function') {
-      const want = rb + RAIL_GEOMETRY.DODGE_GAP_PX;          // viewport px
-      const h = this._tab.getBoundingClientRect().height || 0;
-      // `top` is relative to the pane ROOT (the tab is its child) — convert.
-      const rootTop = (this._root && typeof this._root.getBoundingClientRect === 'function')
-        ? (this._root.getBoundingClientRect().top || 0) : 0;
-      if (h > 0 && want + h <= fl) top = Math.round(want - rootTop);
-      // Session K: the tab's bottom in VIEWPORT px while it rides under the
-      // rail (what the CARGO pane rides under in turn); null at 38 %.
-      this._tabBottomPx = (top == null) ? null : want + h;
-    } else {
-      this._tabBottomPx = null;
-    }
-    const css = top == null ? '38%' : `${top}px`;
-    if (this._tab.style.top !== css) this._tab.style.top = css;
-  }
-
-  /**
-   * Wave 5 Session K: the SPECS tab's bottom edge in CSS px while it is
-   * riding UNDER the dodged WHERE rail (setTabDodge placed it), else null
-   * (the 38 % design anchor, which sits above the mid-height rail's bottom at
-   * every common viewport). The hub feeds `tabBottom() ?? rail.bottomPx()` to
-   * the CARGO pane — the right edge's LAST rider. Cached by setTabDodge; no
-   * layout read of its own.
-   * @returns {number|null}
-   */
-  tabBottom() {
-    // Session O (plan D6, owner 2026-09-07): a tab hidden by the floor
-    // policy (setTabShown(false) while closed off-F1) reserves NOTHING — the
-    // CARGO pane (main.js:the hub feeds `tabBottom() ?? rail.bottomPx()`) rides
-    // under the RAIL then, not under an invisible tab slot.
-    if (!this._tab || !this._enabled || !(this._tabFloorShown || this._open)) return null;
-    return this._tabBottomPx;
+  tabBottomCss() {
+    return Math.max(0, Math.round(this._footerBottomPx - ROOT_BOTTOM_PX));
   }
   /** @returns {boolean} */
   isEnabled() { return this._enabled; }
@@ -504,10 +484,10 @@ export class LibraryPane {
 
   /**
    * Enable on F3 arrival / disable on leave (LadderController `library` dep).
-   * Enabled: the edge tab shows unless the floor policy hides it (setTabShown
-   * — Session O, plan D6: F1-only while closed, shown while open) or the pane
-   * is open on any floor. Disabled: tab hides and the pane closes. Idempotent;
-   * headless no-op beyond state.
+   * Enabled: the edge tab is `display:block` on every floor (Session P — its
+   * visibility is then the pinned / open / edge-chrome truth table below).
+   * Disabled: tab hides and the pane closes. Idempotent; headless no-op
+   * beyond state.
    * @param {boolean} on
    */
   setEnabled(on) {
@@ -524,32 +504,64 @@ export class LibraryPane {
     }
   }
 
-  /** @private The tab's actual display: enabled AND (floor-allowed OR open). */
+  /** @private The tab's actual display: enabled → block (Session P: every floor); the phase decides the rest. */
   _applyTabShown() {
     if (this._tab) {
-      this._tab.style.display = (this._enabled && (this._tabFloorShown || this._open)) ? 'block' : 'none';
+      const css = this._enabled ? 'block' : 'none';
+      if (this._tab.style.display !== css) this._tab.style.display = css;
     }
+    this._applyTabPhase();
   }
 
   /**
-   * Session O (plan D6, owner 2026-09-07): the SPECS edge tab shows only on
-   * the WORKBENCH floor while closed (F1 = the hull, where the workbench panes live),
-   * or on ANY floor while the pane is open — an open pane's tab is its handle,
-   * never hidden. The pane stays ENABLED everywhere — every deep link (hint chips,
-   * subject-follow, CODEX_OPEN_ENTRY, the glass right-edge swipe) keeps working
-   * because `_openCore` only no-ops when DISABLED — so never disable it. The
-   * controller calls this from `_applyFloorContent(floor)` right after
-   * `setEnabled(true)` — an absent method (older stub / unwired boot) is a guard
-   * no-op there. Idempotent; headless no-op beyond state. Re-evaluates the tab's
-   * actual display immediately.
-
-   * @param {boolean} on - true = the tab shows on this floor (F1)
+   * Session P (plan D2/D6, owner 2026-09-07; was Session O's setTabShown): PIN
+   * the SPECS tab awake on this floor. The controller calls
+   * `setTabPinned(floor === WORKBENCH_FLOOR)` from `_applyFloorContent(floor)`
+   * right after `setEnabled(true)` — F1 is the hull, where the workbench panes
+   * live, so its drawer affordance never sleeps. Off the workbench the tab is
+   * EDGE CHROME: it follows `setTabPhase` while closed; an open pane's tab is
+   * its handle and stays awake on any floor. The pane stays ENABLED everywhere
+   * (every deep link keeps working). Idempotent; headless no-op beyond state.
+   * @param {boolean} on - true = pinned awake (F1)
    */
-  setTabShown(on) {
+  setTabPinned(on) {
     on = !!on;
-    if (on === this._tabFloorShown) return;
-    this._tabFloorShown = on;
-    this._applyTabShown();
+    if (on === this._tabPinned) return;
+    this._tabPinned = on;
+    this._applyTabPhase();
+  }
+
+  /**
+   * Session P (plan D2): the hub's per-frame EDGE-CHROME write —
+   * `edgeChrome.phase('tab', now)`. Effective phase = pinned OR open → 'awake',
+   * else this phase: 'awake' → opacity 1 + visible; 'fading' → opacity
+   * RAIL_GEOMETRY.IDLE_FADE (the CSS `transition: opacity EDGE_FADE_MS` ramps);
+   * 'hidden' (or unknown) → visibility hidden. Write-on-change (G1).
+   * @param {'awake'|'fading'|'hidden'} phase
+   */
+  setTabPhase(phase) {
+    const ph = (phase === 'awake' || phase === 'fading') ? phase : 'hidden';
+    if (ph === this._chromePhase) { this._applyTabPhase(); return; }
+    this._chromePhase = ph;
+    this._applyTabPhase();
+  }
+
+  /** @private the pinned / open / chrome truth table → opacity + visibility, on change */
+  _applyTabPhase() {
+    const want = (this._tabPinned || this._open) ? 'awake' : this._chromePhase;
+    if (want === this._tabPhaseWritten) return;
+    this._tabPhaseWritten = want;
+    const tab = this._tab;
+    if (!tab) return;
+    if (want === 'awake') {
+      tab.style.opacity = '1';
+      tab.style.visibility = 'visible';
+    } else if (want === 'fading') {
+      tab.style.opacity = String(RAIL_GEOMETRY.IDLE_FADE);
+    } else {
+      tab.style.visibility = 'hidden';
+      tab.style.opacity = String(RAIL_GEOMETRY.IDLE_FADE);
+    }
   }
 
   /** Open the pane (no-op while disabled). Fires onOpenChange(true) once.
@@ -569,7 +581,7 @@ export class LibraryPane {
     if (this._entryId == null) this._adoptSubject();
     this._open = true;
     this._applyOpenState();
-    this._applyTabShown();       // Session O (D6): an open pane shows its tab on ANY floor
+    this._applyTabShown();       // Session O (D6) → P: an open pane's tab is awake on ANY floor
     this._wake();
     this.refresh();
     this._armSeenTimer();
@@ -582,7 +594,7 @@ export class LibraryPane {
     if (!this._open) return;
     this._open = false;
     this._applyOpenState();
-    this._applyTabShown();       // Session O (D6): closed off-F1 → tab hides again
+    this._applyTabShown();       // Session O (D6) → P: closed off-F1 → the tab follows the edge chrome again
     this._clearIdleTimer();
     this._clearSeenTimer();
     this._cancelPhoto();
@@ -857,7 +869,7 @@ export class LibraryPane {
     root.id = 'ladder-library';
     root.className = reduced ? 'library-reduced' : '';
     root.style.cssText = [
-      'position:absolute', 'right:0', 'top:56px', 'bottom:96px', `z-index:${PANE_Z_INDEX}`,
+      'position:absolute', 'right:0', 'top:56px', `bottom:${ROOT_BOTTOM_PX}px`, `z-index:${PANE_Z_INDEX}`,
       'width:clamp(380px, 28vw, 440px)', 'box-sizing:border-box',
       'pointer-events:none', '--library-dir:1', '--library-open:1',
       // Slide (transform) in the normal path; the reduced-motion class swaps
@@ -882,29 +894,35 @@ export class LibraryPane {
     ].join(';');
     root.appendChild(body);
 
-    // The edge tab — always visible while enabled (08-workbench §2 Grammar:
-    // "LIBRARY: unread count, pulses once on a new unlock"). A CHILD of the
-    // root at the pane's INNER edge (Session D, owner decision 3): closed, the
-    // root's slide parks it exactly at the screen edge; open, it sits on the
-    // pane's inner edge — never over the content. The side follows the RTL
-    // variable: left = 50% − dir·50% (dir 1 → the root's left edge) and the
-    // −100 % self-translate puts the tab outside the box; under reduced motion
-    // --library-open flips it between the screen edge (closed) and the inner
-    // edge (open) because the root never moves.
+    // The edge tab (08-workbench §2 Grammar: "LIBRARY: unread count, pulses
+    // once on a new unlock"). A CHILD of the root at the pane's INNER edge
+    // (Session D, owner decision 3): closed, the root's slide parks it exactly
+    // at the screen edge; open, it sits on the pane's inner edge — never over
+    // the content. The side follows the RTL variable: left = 50% − dir·50%
+    // (dir 1 → the root's left edge) and the −100 % self-translate puts the tab
+    // outside the box; under reduced motion --library-open flips it between the
+    // screen edge (closed) and the inner edge (open) because the root never
+    // moves. Session P (plan D6/D7): a HORIZONTAL plate in the FOOTER BAND —
+    // `bottom` = the band's bottom minus the root's 96, height FOOTER_BAND_PX;
+    // its opacity / visibility are the edge-chrome truth table's (the hub's
+    // setTabPhase + setTabPinned), the ramp `opacity EDGE_FADE_MS` (none under
+    // reduced motion — instant, like every other reduced-motion step).
     const tab = doc.createElement('div');
     tab.id = 'ladder-library-tab';
     tab.style.cssText = [
-      'position:absolute', 'top:38%', 'z-index:1',
+      'position:absolute', `bottom:${this.tabBottomCss()}px`, 'z-index:1',
       'left:calc(50% - var(--library-dir, 1) * (2 * var(--library-open, 1) - 1) * 50%)',
       'transform:translateX(calc((-1 - var(--library-dir, 1)) * 50%))',
-      'padding:8px 4px 8px 6px', 'border:1px solid rgba(0,204,255,0.4)', 'border-right:none',
-      'border-radius:6px 0 0 6px', 'background:rgba(0,16,32,0.85)',
+      `height:${RAIL_GEOMETRY.FOOTER_BAND_PX}px`, `line-height:${RAIL_GEOMETRY.FOOTER_BAND_PX - 2}px`,
+      'box-sizing:border-box', 'padding:0 10px 0 12px', 'white-space:nowrap',
+      'border:1px solid rgba(0,204,255,0.4)', 'border-right:none',
+      'border-radius:3px 0 0 3px', 'background:rgba(0,16,32,0.85)',
       'color:' + VisualLaw.COLORS.INFO, 'cursor:pointer',
       'font-family: var(--font-mono)', 'font-size:0.62rem', 'letter-spacing:0.08em',
-      'writing-mode:vertical-rl', 'text-orientation:mixed', 'user-select:none',
-      'display:none', 'pointer-events:auto',
-      // The pulse animates through transition (reduced motion never sets it).
-      reduced ? '' : `transition:box-shadow ${TAB_PULSE_MS / 3}ms ease`,
+      'user-select:none', 'display:none', 'pointer-events:auto',
+      // The pulse animates through transition (reduced motion never sets it);
+      // the edge-chrome fade rides the same property list.
+      reduced ? '' : `transition:box-shadow ${TAB_PULSE_MS / 3}ms ease, opacity ${RAIL_GEOMETRY.EDGE_FADE_MS}ms ease`,
     ].join(';');
     // Built as real children (never innerHTML) so the count node survives
     // every repaint and fake-DOM test docs need no querySelector.
@@ -922,10 +940,9 @@ export class LibraryPane {
     this._root = root;
     this._body = body;
     this._tab = tab;
-    this._tabDodgeIn = undefined;   // setTabDodge write-on-change inputs
-    this._tabDodgeFloor = undefined;
-    this._tabBottomPx = null;       // Session K: tabBottom() — set by setTabDodge
+    this._tabPhaseWritten = null;   // Session P: the phase truth table writes the fresh tab
     this._tabCount = tabCount;
+    this._applyTabPhase();
     this._applyOpenState();
 
     // Delegated interactions (one listener set — G1, the PaneHelp pattern):

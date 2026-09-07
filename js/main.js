@@ -114,7 +114,7 @@ import { StrategicMap } from './ui/StrategicMap.js';
 import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController, INTRO_RIDE_MS } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
-import { FloorMask, DEFAULT_ROOMS as LADDER_DEFAULT_ROOMS } from './ui/hud/FloorMask.js';
+import { FloorMask } from './ui/hud/FloorMask.js';
 import { LadderViewStore } from './systems/LadderViewStore.js';
 import { LadderSfx } from './systems/LadderSfx.js';
 import { NavcomFloor } from './systems/NavcomFloor.js';
@@ -127,7 +127,7 @@ import { resolveSubject as resolveSpecsSubject } from './systems/SpecsSubject.js
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
-import { PaneRail } from './ui/PaneRail.js';
+import { DetailSlider } from './ui/DetailSlider.js';
 import { CargoPane, CARGO_GEOMETRY } from './ui/hud/CargoPane.js';
 import { OverridePane } from './ui/hud/OverridePane.js';
 import { OrbitPane, ORBIT_GEOMETRY } from './ui/hud/OrbitPane.js';
@@ -136,7 +136,8 @@ import { NextPane } from './ui/hud/NextPane.js';
 import { CopilotVoice } from './systems/CopilotVoice.js';
 import { GestureSplash } from './ui/GestureSplash.js';
 import { TouchMapStore } from './systems/TouchMapStore.js';
-import { RAIL_GEOMETRY } from './ui/RailGeometry.js';
+import { RAIL_GEOMETRY, footerBand } from './ui/RailGeometry.js';
+import { EdgeChrome } from './ui/EdgeChrome.js';
 import { TouchControls } from './ui/TouchControls.js';
 import { TouchTelemetry } from './ui/touchTelemetry.js';
 import { GestureHints } from './ui/hud/GestureHints.js';
@@ -615,14 +616,16 @@ let strategicMap;
 let wheelRouter;
 let ladderController;
 let railIndicator;
-// Session J (plan D-H, item 1) — the left DISPLAY rail (PaneRail): one notch per
-// HUD pane this floor allows, lit = shown, dim = hidden; tap toggles through
-// the rung and emits the ONE pane-visibility edge (room memory follows);
-// long-press the head = RESET ROOM. Constructed ONLY inside the LADDER.ENABLED
-// gate (a ?ladder=0 boot builds no rail — the density slider it replaces was
-// glass-only too); shown/hidden/populated by LadderController (the `rail`
-// mirror), refreshed per frame here while the ladder is active.
-let ladderPaneRail;
+// Session P (plan D5, owner 2026-09-07: "is the rail even needed… volume
+// control") — the DETAIL slider (js/ui/DetailSlider.js): ONE horizontal
+// track in the footer's left slot, one tick per pane-density rung, the thumb
+// at the visible count; drag / tap → PaneDensity.setLevel (the D5 room
+// capture rides the existing flip edge), level 0 = pure scenery. It replaced
+// the left DISPLAY rail (PaneRail — nine per-panel switches, retired here).
+// Constructed ONLY inside the LADDER.ENABLED gate; shown on F2–F5 by
+// LadderController (`detailSlider` dep); its edge-chrome phase is written
+// per frame in the anchor block below; refreshed per frame (≤ 4 Hz inside).
+let detailSlider = null;
 let touchControls;
 
 // Zoom Ladder S3 — the ONE world-time choke point (T2). Owns dtWorld/warp; pins
@@ -739,6 +742,68 @@ function _prefersReducedMotion() {
 }
 /** Session M: the hint ticker's band from the bottom (its BOTTOM_PX + ROW_HEIGHT_PX) — the ORBIT pane's floor never enters it. */
 const _HINT_BAND_PX = ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).BOTTOM_PX + ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).ROW_HEIGHT_PX;
+// Session P (plan D2/D3/D7, owner 2026-09-07) — the DARK COCKPIT's edge law.
+// `edgeChrome` is the ONE pure core (js/ui/EdgeChrome.js: timestamps, no
+// timers) every piece of EDGE CHROME reads per frame — the WHERE rail (inside
+// RailIndicator.refresh), the DETAIL slider and the SPECS tab (the anchor block
+// below, write-on-change). `_FOOTER` is the FOOTER BAND (RailGeometry.footerBand:
+// { bottom, top } offsets from the viewport bottom — 132 / 164 on both surfaces),
+// the one fixed strip directly above the transient band that the tabs and the
+// slider live in and every other rider's floor stops at. Both are built only
+// inside the LADDER gate (null flag-off → every consumer no-ops).
+let edgeChrome = null;
+let _FOOTER = null;
+/** Session P: the desktop edge-hover wake's last evaluation (≤ 10 Hz by timestamp). */
+let _edgeHoverAtMs = -Infinity;
+const _EDGE_HOVER_MIN_MS = 100;
+/**
+ * Session P (plan D3) — THE EDGE-WAKE BANDS, the one band test both input
+ * surfaces feed (the desktop document pointer listener; TouchControls'
+ * `onEdgeTouch` on glass). Edge-scoped, never any-touch: a centre tap wakes
+ * nothing — chrome that flickers on every tap is its own distraction.
+ *   right band  x ≥ innerWidth − EDGE_WAKE_PX            → rail + tab
+ *   left band   x ≤ EDGE_WAKE_PX                         → slider
+ *   footer band innerHeight − top ≤ y ≤ innerHeight − bottom → slider + tab
+ * Returns which band(s) matched (a probe / test witness) or null. Flag-off /
+ * before init: `edgeChrome` is null → nothing.
+ * @param {number} x @param {number} y @param {number} [nowMs]
+ * @returns {string|null}
+ */
+function _edgeBandWake(x, y, nowMs) {
+  if (!edgeChrome || !_FOOTER || typeof window === 'undefined') return null;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  const t = (nowMs != null) ? nowMs
+    : ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now());
+  const band = RAIL_GEOMETRY.EDGE_WAKE_PX;
+  const w = window.innerWidth, h = window.innerHeight;
+  let hit = null;
+  if (x >= w - band) { edgeChrome.wake('rail', t); edgeChrome.wake('tab', t); hit = 'right'; }
+  else if (x <= band) { edgeChrome.wake('slider', t); hit = 'left'; }
+  if (y >= h - _FOOTER.top && y <= h - _FOOTER.bottom) {
+    edgeChrome.wake('slider', t); edgeChrome.wake('tab', t);
+    hit = hit ? `${hit}+footer` : 'footer';
+  }
+  return hit;
+}
+/**
+ * Session P (plan D5/D7): the LEFT HUD column's bottom edge — the ORBIT pane's
+ * ceiling now that the DISPLAY rail (whose 1 Hz dodge read used to carry it)
+ * is retired. ONE layout read per second by the frame clock, cached; null
+ * while the column is empty / unlaid (= no ceiling) or headless.
+ * @param {number} nowMs
+ * @returns {number|null}
+ */
+let _leftColBottom = null;
+let _leftColAt = -Infinity;
+const _LEFT_COL_MS = 1000;
+function _leftColumnBottom(nowMs) {
+  if (nowMs - _leftColAt < _LEFT_COL_MS) return _leftColBottom;
+  _leftColAt = nowMs;
+  const col = (typeof document !== 'undefined') ? document.getElementById('hud-left-column') : null;
+  const r = (col && typeof col.getBoundingClientRect === 'function') ? col.getBoundingClientRect() : null;
+  _leftColBottom = (r && r.height > 0) ? r.bottom : null;
+  return _leftColBottom;
+}
 /** Session M: the debris clusters for the NEXT pane's TRANSFER row, re-bucketed at most every CLUSTERS_MS (getDebrisClusters walks every debris). */
 let _clustersCache = null;
 let _clustersAt = -Infinity;
@@ -915,6 +980,11 @@ async function init() {
   // byte-identical. The current tier's ratio re-applies inside the setter.
   _glassBoot = TouchControls.detectGlass();   // the ONE glass read this boot (pixel cap, the rail hit boxes, the tab floor)
   if (_glassBoot) sceneManager.setGlassPixelRatioCap(true);
+  // Session P (plan D7): the FOOTER BAND for this boot — pure data from the
+  // glass bit and the ticker band; the ladder's riders and the footer's
+  // occupants read it per frame. Gated (the openShop ternary): a ?ladder=0
+  // boot has no footer.
+  _FOOTER = (Constants.LADDER && Constants.LADDER.ENABLED) ? footerBand({ glass: _glassBoot, hintBandPx: _HINT_BAND_PX }) : null;
   const scene = sceneManager.getScene();
   const camera = sceneManager.getCamera();
   _bootMark('SceneManager constructed (renderer + composer + bloom)');
@@ -1553,7 +1623,13 @@ async function init() {
   // engine + the per-floor render block; the rail is the S2 stub. Everything is
   // inert while Constants.LADDER.ENABLED is false (?ladder=0) — shipped
   // behavior stays byte-identical.
-  railIndicator = new RailIndicator();
+  // Session P (plan D2): the edge-chrome core is built FIRST, gated (the
+  // openShop ternary), and handed to the rail (RailIndicator applies its phase
+  // per refresh) and to the controller (the floor / ride / pure-scenery wake
+  // sources). Flag-off: null → `new RailIndicator({ edgeChrome: null })` is the
+  // Session J rail exactly.
+  edgeChrome = (Constants.LADDER && Constants.LADDER.ENABLED) ? new EdgeChrome({ reducedMotion: _prefersReducedMotion() }) : null;
+  railIndicator = new RailIndicator({ edgeChrome });
   // Zoom Ladder F6 (NAVCOM) content orchestrator (S5, M3). Constructed INSIDE the
   // ladder block (T8: EventBus/costume order = construction order) and injected
   // into LadderController, which activates/ticks it on F6 arrival and dispatches
@@ -1912,6 +1988,9 @@ async function init() {
       // setRosaFeather / setFlowerPose — the same commanded-target writes, the
       // same events) and flip what the label shows; the keys keep their law.
       actuators: ladderActuators,
+      // Session P (plan D7): the REFIT tab lives in the FOOTER BAND's left slot
+      // (bottom = the band's bottom − the root's 96 = 36 px) — the ONE band table.
+      footerBottomPx: _FOOTER ? _FOOTER.bottom : undefined,
     });
     // The TECH LIBRARY pane (08-workbench §2 right pane; §10's LibraryPane —
     // the adapter over the shipped viewer). Reads the SAME codexSystem the
@@ -1979,6 +2058,10 @@ async function init() {
         if (isOpen) _onePaneRule(refitPane);
         _syncWorkbenchPanes();
       },
+      // Session P (plan D6/D7): the SPECS tab lives in the FOOTER BAND's right
+      // slot (bottom = the band's bottom − the root's 96 = 36 px) and is EDGE
+      // CHROME off the workbench — the anchor block writes its phase per frame.
+      footerBottomPx: _FOOTER ? _FOOTER.bottom : undefined,
     });
     // Tab truth on change, never per frame (G1): a landed unlock repaints the
     // unread count (and fires the pane's ONE pulse); a read entry drops it.
@@ -2141,27 +2224,31 @@ async function init() {
     // captures the applied floor's room and exports it to the player store
     // (write-on-change inside the store; an event-rate edge, never per frame).
     // ladderController is constructed below — read live, guarded.
-    // Session J (plan D-H, item 1): the DISPLAY rail. Deps are all getters /
-    // callbacks — the rail imports no bus and never sees the HUD: the live
-    // rungs (the ONE pane-visibility bit, T8 — the same adapters FloorMask
-    // reads), the floor's DEFAULT room row (the height rule lists the room's
-    // shown/faint panes + whatever is visible, ≤ 8 + MORE), the flip sink
-    // (the fifth HUD_PANE_VISIBILITY emitter — emitted AFTER the rung flipped,
-    // the Job A contract, so the listener below captures the room exactly as
-    // for the 0/9/8 keys), and the head long-press → the controller's
-    // resetRoom (FloorMask.resetRoom + export + re-populate).
-    ladderPaneRail = new PaneRail({
-      rungs: () => ((hud && hud.paneDensity && Array.isArray(hud.paneDensity.rungs)) ? hud.paneDensity.rungs : []),
-      roomTiers: (floor) => LADDER_DEFAULT_ROOMS[floor] || null,
-      onFlip: (pane, shown) => eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane, shown }),
-      onResetRoom: () => { if (ladderController) ladderController.resetRoom(); },
-      // The touchable law (owner 2026-09-06): on GLASS every notch is a 44 pt
-      // hit box (RAIL_GEOMETRY.TOUCH_PITCH_PX) around the compact plate; the
-      // same narrow gate as the pixel-ratio cap (a Surface with a mouse keeps
-      // the desktop rows).
+    // Session P (plan D5): the DETAIL slider replaces the DISPLAY rail here.
+    // Getter deps only — the slider imports no bus and never sees the HUD:
+    // the rung count and the live visible count (the ONE pane-visibility bit,
+    // T8), the level sink (PaneDensity.setLevel walks real down()/up() steps,
+    // quiet — the slider IS the readout; each step's `_onFlip` emits the
+    // HUD_PANE_VISIBILITY edge the listener below captures, exactly as for the
+    // `-`/`+` keys; a level of 0 bows the rails out — pure scenery — and any
+    // higher level brings them back), the interact sink (its own touch wakes
+    // it), and the footer's bottom from the ONE band table. The `onFlip` sink
+    // the rail carried is gone: main.js emits no HUD_PANE_VISIBILITY any more.
+    detailSlider = new DetailSlider({
+      total: () => ((hud && hud.paneDensity) ? hud.paneDensity.total : 0),
+      level: () => ((hud && hud.paneDensity && typeof hud.paneDensity.visibleCount === 'function') ? hud.paneDensity.visibleCount() : 0),
+      onLevel: (n) => {
+        const pd = hud && hud.paneDensity;
+        if (!pd || typeof pd.setLevel !== 'function') return;
+        pd.setLevel(n, { quiet: true });
+        if (ladderController) ladderController.setRailsShy(pd.visibleCount() === 0);
+      },
+      onInteract: () => { if (edgeChrome) edgeChrome.wake('slider'); },
+      footerBottomPx: _FOOTER ? _FOOTER.bottom : undefined,
       glass: _glassBoot,
+      reducedMotion: _prefersReducedMotion(),
     });
-    eventBus.on(Events.HUD_PANE_VISIBILITY, (d) => {
+    eventBus.on(Events.HUD_PANE_VISIBILITY, () => {
       // CLEAN VIEW is a MODE, not a room edit (owner 2026-09-06): while the
       // density holds a `-` stash, no flip is remembered — the room memory
       // keeps the pre-clear room, so a reload (or the next floor) brings the
@@ -2170,13 +2257,11 @@ async function init() {
       const pd = hud && hud.paneDensity;
       const cleanView = !!(pd && typeof pd.hasStash === 'function' && pd.hasStash());
       if (ladderController && !cleanView) ladderController.noteRoomChange();
-      // Session J: the DISPLAY rail flashes the notch that just changed (the
-      // `-`/`+` keys, 0/9/8, its own tap) and repaints now (forced — the
-      // per-frame poll is throttled to 1 Hz — review fix).
-      if (ladderPaneRail) {
-        if (d && typeof d.pane === 'string') ladderPaneRail.flash(d.pane);
-        ladderPaneRail.refresh({ force: true });
-      }
+      // Session P (plan D3/D5): any pane flip (the `-`/`+` keys, 0/9/8, the
+      // slider's own detents) is a slider WAKE source, and the thumb follows
+      // now (forced — the per-frame refresh is throttled to 4 Hz).
+      if (edgeChrome) edgeChrome.wake('slider');
+      if (detailSlider) detailSlider.refresh({ force: true });
     });
     // `-` / `+` (owner 2026-09-07, REVERSING the 2026-09-06 one-press CLEAN
     // VIEW): the bare keys walk ONE rung per press again — the shipped
@@ -2364,10 +2449,16 @@ async function init() {
     sceneManager,
     gameState,
     rail: railIndicator,
-    // Session J (plan D-H): the DISPLAY rail — the `rail` mirror (show at
-    // engage, hide at disengage, populate(floor) at every arrival). Flag-off:
-    // never constructed → null → byte-identical.
-    paneRail: ladderPaneRail,
+    // Session P (plan D5): the DETAIL slider — the `rail` mirror's successor
+    // for the left slot: shown on F2–F5 (setShown(floor !== 1) at every floor
+    // apply), hidden at disengage. Flag-off: never constructed → null →
+    // byte-identical. (The DISPLAY rail's `paneRail` dep retired with it.)
+    detailSlider,
+    // Session P (plan D2/D3): the edge-chrome core — the controller wakes it on
+    // every floor apply (+ boxes the arrival notch), on a ride, and puts it to
+    // SLEEP instead of hiding the WHERE rail under pure scenery (asleep is
+    // wakeable — the edge touch is the way back on glass). Flag-off: null.
+    edgeChrome,
     // PURE SCENERY completion (owner 2026-09-07, plan D7): when the `-` walk
     // has cleared every rung and bowed the rails out, ONE body attribute also
     // hides the SPECS/REFIT tabs and #build-stamp (index.html
@@ -2592,6 +2683,10 @@ async function init() {
         if (!pane) return;
         if (open) pane.open(); else pane.close();
       },
+      // Session P (plan D3): where a touch LANDED (canvas touchstart, the rail
+      // grip) → the hub's edge-wake bands. Coordinates only; TouchControls
+      // never decides what wakes. Gated like openShop: ?ladder=0 passes null.
+      onEdgeTouch: (Constants.LADDER && Constants.LADDER.ENABLED) ? (x, y) => { _edgeBandWake(x, y); } : null,
     });
     touchControls.start();
     _bootMark('TouchControls started');
@@ -2625,6 +2720,26 @@ async function init() {
       if (Math.abs(e.clientX - d.x) > TAP_SLOP_PX || Math.abs(e.clientY - d.y) > TAP_SLOP_PX || (performance.now() - d.t) > TAP_SLOP_MS) return;
       _touchTap({ x: e.clientX, y: e.clientY }, { scanOnMiss: false });
     });
+    // Session P (plan D3): the DESKTOP edge wake — ONE passive `document`
+    // handler for `pointermove` (≤ 10 Hz by timestamp: a hover sweep costs one
+    // band test per 100 ms) and `pointerdown` (never throttled: a click on
+    // faded chrome lands on the canvas and MUST wake it). Coordinates only, no
+    // preventDefault (02-traps T3: InputManager's window capture listeners and
+    // the frame scheduler's `_noteSchedInput` are untouched; no document-level
+    // pointermove existed before this one). Chosen over transparent edge
+    // strips, which would steal canvas drags. Glass fires the same band test
+    // through TouchControls' `onEdgeTouch` (its canvas handler preventDefaults
+    // the touch, and a `pointerdown` still arrives here first — idempotent).
+    const _onEdgePointer = (e) => {
+      const t = performance.now();
+      if (e.type === 'pointermove') {
+        if (t - _edgeHoverAtMs < _EDGE_HOVER_MIN_MS) return;
+        _edgeHoverAtMs = t;
+      }
+      _edgeBandWake(e.clientX, e.clientY, t);
+    };
+    document.addEventListener('pointermove', _onEdgePointer, { passive: true });
+    document.addEventListener('pointerdown', _onEdgePointer, { passive: true });
   }
 
   // --- Item 3: anti-stuck idle watchdog (data-driven, veteran-gated) ---
@@ -3394,10 +3509,14 @@ async function init() {
       // the MODE=update gate leg — always constructed (flag-independent).
       window.__updateWatch = updateWatch;
       // Session J: the controller (floor / turntable / isActive probes for the
-      // hasTouch gate) and the DISPLAY rail — undefined on a ?ladder=0 boot for
-      // the rail (never constructed there), the same contract as __refit.
+      // hasTouch gate); Session P: the DETAIL slider (null on a ?ladder=0 boot —
+      // never constructed there; the DISPLAY rail's handle retired with it).
       window.__ladder = ladderController;
-      window.__paneRail = ladderPaneRail;
+      window.__detailSlider = detailSlider;
+      // Session P (plan D2/D18): the edge-chrome core (null on a ?ladder=0
+      // boot) — the gate pictures wake the chrome with `EVAL=window.__edgeChrome.wake()`.
+      window.__edgeChrome = edgeChrome;
+      window.__edgeBandWake = _edgeBandWake;
       // Session K: the CARGO pane (null on a ?ladder=0 boot — never constructed).
       window.__cargoPane = cargoPane;
       // Session M: the instruments + the voice (null on a ?ladder=0 boot).
@@ -5716,49 +5835,59 @@ function gameLoop(timestamp) {
       else document.body.removeAttribute('data-ladder-floor');
     }
   }
-  // Session J: the DISPLAY rail's lit/dim paint follows the live pane bits
-  // (write-on-change per notch, a 1 Hz poll inside — G1; each scan is a
-  // layout read per HUD rung, so announced changes repaint at once through
-  // the pane-visibility edge listener inside the ladder gate instead).
-  if (_ladderActive && ladderPaneRail) ladderPaneRail.refresh();
-  // Session L (Session K FINDINGS (a)): the hull callout columns clear BOTH
-  // rails — the rails are MotherCallouts' SECOND inset source, merged with the
-  // drawers' by max (write-on-change inside setRailInsets). Both accessors are
-  // cached numbers from the rails' own 1 Hz dodge reads — no layout read here;
-  // a hidden rail reads null and that side falls back to the drawer's inset.
-  // Flag-off / disengaged: never called (the shipped drawer-only insets).
+  // Session P (plan D5): the DETAIL slider follows the live visible count
+  // (≤ 4 Hz inside; a pane-flip edge forces it at once through the listener in
+  // the ladder gate) and wears its EDGE-CHROME phase — EdgeChrome is read per
+  // frame, the slider writes on change (G1). Its bottom-left slot is the
+  // footer band; the hub never measures it.
+  if (_ladderActive && detailSlider) {
+    detailSlider.refresh();
+    if (edgeChrome) detailSlider.setPhase(edgeChrome.phase('slider', timestamp));
+  }
+  // Session L (Session K FINDINGS (a)): the hull callout columns clear the
+  // WHERE rail — the rail is MotherCallouts' SECOND inset source, merged with
+  // the drawers' by max (write-on-change inside setRailInsets). The accessor
+  // is a cached number from the rail's own 1 Hz dodge read — no layout read
+  // here; a hidden rail reads null and that side falls back to the drawer's
+  // inset. Session P: the LEFT side is always null now — the DISPLAY rail
+  // retired and the DETAIL slider lives in the footer band, below the callout
+  // columns' reach. Flag-off / disengaged: never called (the shipped
+  // drawer-only insets).
   if (_ladderActive && motherCallouts && motherCallouts.setRailInsets) {
     const wl = (railIndicator && railIndicator.leftPx) ? railIndicator.leftPx() : null;
-    motherCallouts.setRailInsets(
-      (ladderPaneRail && ladderPaneRail.rightPx) ? ladderPaneRail.rightPx() : null,
-      wl == null ? null : window.innerWidth - wl);
+    motherCallouts.setRailInsets(null, wl == null ? null : window.innerWidth - wl);
   }
-  // THE TAB DODGE (owner 2026-09-06): the SPECS tab rides UNDER the WHERE rail
-  // whenever the rail has dodged under the right HUD column (else 38 %). The
-  // floor is the thumb rest on glass, the screen bottom on desktop. Both
-  // sides are write-on-change (the rail's dodge read is 1 Hz; setTabDodge
-  // measures only when its inputs change), so the per-frame call is free.
-  if (_ladderActive && libraryPane && libraryPane.setTabDodge && railIndicator && railIndicator.dodgeBottom) {
-    libraryPane.setTabDodge(railIndicator.dodgeBottom(),
-      window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0));
+  // THE FOOTER BAND (Session P, plan D7; owner 2026-09-07: "consistent place
+  // directly above right thumb area"): ONE fixed strip — `_FOOTER` (132–164 px
+  // from the bottom on both surfaces) — replaced the three dodge chains
+  // (tab-under-rail, cargo-under-tab, orbit-under-rail). The SPECS tab (right)
+  // and the DETAIL slider / REFIT tab (left) LIVE in it (their own `bottom`);
+  // every other rider's FLOOR is the footer's top — CARGO, NEXT and ORBIT each
+  // subtract their own GAP_PX inside, so they sit 8 px above the band. The
+  // SPECS tab is EDGE CHROME off the workbench: its phase is written here per
+  // frame from the ONE core (pinned on F1 / open anywhere = awake inside the
+  // pane's truth table; write-on-change). Every input below is a cached
+  // number — no layout read here; the setters are write-on-change, so the
+  // per-frame calls are free.
+  const footerFloor = window.innerHeight - (_FOOTER ? _FOOTER.top : (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0));
+  if (_ladderActive && libraryPane && libraryPane.setTabPhase && edgeChrome) {
+    libraryPane.setTabPhase(edgeChrome.phase('tab', timestamp));
   }
-  // Session K: the CARGO pane rides LAST on the right edge — under the SPECS
-  // tab while the tab rides under the rail, else under the rail wherever it
-  // sits (dodged or mid-height) — down to the same floor; it compacts, then
-  // hides, never the other way round (the rail and the tab keep their law).
-  // Every input is a cached number (no layout read here); setDodge is
-  // write-on-change on the pair, so the per-frame call is free.
+  // Session K: the CARGO pane rides LAST on the right edge — under the WHERE
+  // rail wherever it sits (dodged or mid-height) — down to the footer's top;
+  // it compacts, then hides, never the other way round (the rail keeps its law).
   if (_ladderActive && cargoPane && railIndicator && railIndicator.bottomPx) {
-    const tabBottom = (libraryPane && libraryPane.tabBottom) ? libraryPane.tabBottom() : null;
-    cargoPane.setDodge(tabBottom != null ? tabBottom : railIndicator.bottomPx(),
-      window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0));
+    cargoPane.setDodge(railIndicator.bottomPx(), footerFloor);
   }
   if (_ladderActive && overridePane && overridePane.setDodge && Number.isFinite(_HINT_BAND_PX)) {
     // SAFETY OVERRIDE panel: bottom-centre above the hint ticker band, and on
-    // glass above the thumb rest (the CargoPane/NextPane dodge idiom). While
-    // ORBIT shows bottom-left the panel re-centres in the free band between
-    // ORBIT's right edge and the right column (the witness: screen-centre
-    // overlapped ORBIT by 85 px on the 13-inch, 133 px on desktop).
+    // glass above the thumb rest (the CargoPane/NextPane dodge idiom) — its
+    // bottom (124 + 8 = 132) IS the footer's baseline, so it shares the band's
+    // row between the two corner slots (plan D7: ≥ 200 px from either on
+    // 1024-wide glass). While ORBIT shows bottom-left the panel re-centres in
+    // the free band between ORBIT's right edge and the right column (the
+    // witness: screen-centre overlapped ORBIT by 85 px on the 13-inch, 133 px
+    // on desktop).
     const orbitRight = (orbitPane && orbitPane.rightPx) ? orbitPane.rightPx() : null;
     overridePane.setDodge(window.innerHeight - _HINT_BAND_PX,
       window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0),
@@ -5767,36 +5896,25 @@ function gameLoop(timestamp) {
   }
   // Session M — the instruments' edges (owner law: by the 13-inch numbers).
   // ORBIT rides bottom-LEFT, FLUSH with the left HUD column (owner 2026-09-07:
-  // x = EDGE_PX, lined up with the other panes — before that it sat right of
-  // the DISPLAY rail, which pushed the SAFETY OVERRIDE button off centre) and
-  // UNDER the DISPLAY rail: its ceiling is the rail's cached bottomPx(), its
-  // floor the lower of the thumb rest and the hint ticker's band (the ticker
-  // is bottom-anchored at BOTTOM_PX + ROW_HEIGHT_PX). The cascade: column →
-  // rail (dodges under the column) → ORBIT fills what is left (full / compact /
-  // hidden by the budget — the CARGO / NEXT law on the right edge).
-  // NEXT rides the right edge ABOVE the CARGO pane: same rider above (the SPECS
-  // tab / the WHERE rail), its floor is CARGO's placed top while CARGO shows,
-  // else the thumb floor — CARGO keeps its bottom slot and its law; NEXT
-  // compacts to its two soonest rows, then hides. Cached numbers only.
+  // x = EDGE_PX, lined up with the other panes) and UNDER the left HUD column:
+  // Session P (plan D5) — the DISPLAY rail it used to ride under is retired,
+  // so its ceiling is the column's own bottom (a 1 Hz layout read by
+  // timestamp, cached — the same read the rail's dodge made; null while the
+  // column is empty / unlaid = no ceiling); its floor is the footer's top
+  // (plan D7 — above the thumb rest and the hint ticker's band by
+  // construction). The cascade: column → ORBIT fills what is left (full /
+  // compact / hidden by the budget — the CARGO / NEXT law on the right edge).
+  // NEXT rides the right edge ABOVE the CARGO pane: same rider above (the WHERE
+  // rail), its floor is CARGO's placed top while CARGO shows, else the footer's
+  // top — CARGO keeps its bottom slot and its law; NEXT compacts to its two
+  // soonest rows, then hides. Cached numbers only.
   if (_ladderActive && (orbitPane || nextPane)) {
-    const thumbFloor = window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0);
     if (orbitPane && orbitPane.setAnchor) {
-      // Never a guess: while the rail is SHOWN but its first 1 Hz read has not
-      // landed (bottomPx() null for the first second of a floor) the pane keeps
-      // its last anchor rather than sitting in the rail's column; a HIDDEN rail
-      // (pure scenery, the workbench floor) places with no ceiling.
-      const railShown = !!(ladderPaneRail && ladderPaneRail.isVisible && ladderPaneRail.isVisible());
-      const railBottom = (railShown && ladderPaneRail.bottomPx) ? ladderPaneRail.bottomPx() : null;
-      if (!railShown || railBottom != null) {
-        orbitPane.setAnchor(RAIL_GEOMETRY.EDGE_PX - ORBIT_GEOMETRY.GAP_PX,
-          Math.min(thumbFloor, window.innerHeight - _HINT_BAND_PX), railBottom);
-      }
+      orbitPane.setAnchor(RAIL_GEOMETRY.EDGE_PX - ORBIT_GEOMETRY.GAP_PX, footerFloor, _leftColumnBottom(timestamp));
     }
     if (nextPane && nextPane.setDodge && railIndicator && railIndicator.bottomPx) {
-      const tabBottom = (libraryPane && libraryPane.tabBottom) ? libraryPane.tabBottom() : null;
       const cargoTop = (cargoPane && cargoPane.topPx) ? cargoPane.topPx() : null;
-      nextPane.setDodge(tabBottom != null ? tabBottom : railIndicator.bottomPx(),
-        cargoTop != null ? cargoTop : thumbFloor);
+      nextPane.setDodge(railIndicator.bottomPx(), cargoTop != null ? cargoTop : footerFloor);
     }
   }
 
@@ -6102,6 +6220,11 @@ function gameLoop(timestamp) {
       if (fmaStrip) fmaStrip.update(timestamp);
       if (nextPane) nextPane.update(timestamp);
       if (gestureSplash) gestureSplash.update(timestamp);   // Session O (plan D4): the first-run splash's per-frame tick
+      // Session P (plan D3/D4): the SPLASH HOLD — while the 3 s memo shows, every
+      // piece of edge chrome stays awake, so a first-time player sees where the
+      // rail, the slider and the tab live; the chrome then fades IDLE_FADE_MS
+      // after the splash ends (or after the first input).
+      if (edgeChrome && gestureSplash && gestureSplash.isActive()) edgeChrome.wake(undefined, timestamp);
     }
 
     // Orbit MFD update (Phase 6: pass cachedTargets for route planner)

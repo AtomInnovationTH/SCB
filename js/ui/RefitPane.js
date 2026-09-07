@@ -79,6 +79,7 @@ import { BLUEPRINT_SUBSYSTEMS } from '../data/blueprintSubsystems.js';
 import { subsystemForPart, partsForSubsystem } from '../data/refitIndex.js';
 import { upgradePrereqsMet } from './shopGating.js';
 import { INVITE_HALO } from './RailIndicator.js';
+import { RAIL_GEOMETRY } from './RailGeometry.js';
 
 /** Pane slide duration (ms) — inside the 240–300 ms house window
  *  (01-numbers "Workbench panes"; VisualLaw pane-timing entry pending). */
@@ -93,6 +94,8 @@ export const IDLE_FADE_MS = 6000;
  *  Session C TAB_Z_INDEX 36 overlay, which covered ~22 px of the open pane,
  *  is retired). */
 export const PANE_Z_INDEX = 35;
+/** The pane root's CSS `bottom` (px) — the footer tab's `bottom` is the band's bottom minus this (Session P, plan D7). */
+export const ROOT_BOTTOM_PX = 96;
 
 /** G1 write cap — the ProxContextPanel/TransferWindows house value. */
 const DOM_WRITE_MIN_INTERVAL_MS = 250;
@@ -151,7 +154,7 @@ export const ACTUATOR_CHIPS = Object.freeze({
 /** The present-but-unowned `get()` value: a DISABLED chip with that text. */
 export const ACTUATOR_NOT_FITTED = 'NOT FITTED';
 /** Chip minimum height (px): the desktop row, and the 44 pt HIG box on glass
- *  (`deps.glass` — PaneRail's idiom; main.js passes the boot's `_glassBoot`).
+ *  (`deps.glass` — the house idiom; main.js passes the boot's `_glassBoot`).
  *  Owner law 2026-09-06: a new touch target ships at 44 pt on the iPad. */
 export const ACTUATOR_CHIP_MIN_H_PX = 28;
 export const ACTUATOR_CHIP_GLASS_MIN_H_PX = 44;
@@ -184,6 +187,11 @@ export class RefitPane {
    * @param {boolean|function} [deps.reducedMotion] - override for the matchMedia probe
    * @param {boolean} [deps.glass] - the boot's glass answer (Session L): the
    *   actuator toggle chips are 44 pt tall on glass (the HIG box), 28 on desktop
+   * @param {number} [deps.footerBottomPx] - Session P (plan D7): the FOOTER
+   *   BAND's bottom offset from the viewport bottom (the hub passes
+   *   RailGeometry.footerBand().bottom = 132); the REFIT tab sits in the band's
+   *   left slot at `bottom: footerBottomPx − 96` (the root's own bottom).
+   *   Default: the thumb rest + gap. F1 only, never edge chrome.
    * @param {function} [deps.getRecommended] - () => (string|null): the shop's
    *   recommended-starter id for a FIRST depot visit (ShopScreen's pure
    *   `recommendedStarter`) — Wave 5 Session K: the one-shop REFIT drawer hosts
@@ -218,6 +226,9 @@ export class RefitPane {
     this._getRecommended = deps.getRecommended || null;
     /** Session L: glass boot → the actuator chips wear the 44 pt HIG box. */
     this._glass = !!deps.glass;
+    /** Session P (plan D7): the footer band's bottom — the tab's slot. */
+    const fb = Number(deps.footerBottomPx);
+    this._footerBottomPx = Number.isFinite(fb) ? fb : (RAIL_GEOMETRY.THUMB_REST_PX + RAIL_GEOMETRY.FOOTER_GAP_PX);
     this._actuators = (deps.actuators && typeof deps.actuators === 'object') ? deps.actuators : null;
     /** Session K: the first-visit framing — true from open({firstVisit}) to close(). */
     this._firstVisit = false;
@@ -423,6 +434,16 @@ export class RefitPane {
 
   /** @returns {boolean} */
   isOpen() { return this._open; }
+
+  /**
+   * Session P (plan D6/D7): the tab's CSS `bottom` inside the pane root — the
+   * footer band's bottom (viewport offset) minus the root's own bottom (96),
+   * never negative. 132 → 36 on both surfaces. PURE (a test seam).
+   * @returns {number}
+   */
+  tabBottomCss() {
+    return Math.max(0, Math.round(this._footerBottomPx - ROOT_BOTTOM_PX));
+  }
   /** @returns {boolean} */
   isEnabled() { return this._enabled; }
   /** @returns {string} the focused subsystem id (always one of the seven) */
@@ -812,7 +833,7 @@ export class RefitPane {
     root.id = 'ladder-refit';
     root.className = reduced ? 'refit-reduced' : '';
     root.style.cssText = [
-      'position:absolute', 'left:0', 'top:56px', 'bottom:96px', `z-index:${PANE_Z_INDEX}`,
+      'position:absolute', 'left:0', 'top:56px', `bottom:${ROOT_BOTTOM_PX}px`, `z-index:${PANE_Z_INDEX}`,
       'width:clamp(300px, 24vw, 340px)', 'box-sizing:border-box',
       'pointer-events:none', '--refit-dir:1', '--refit-open:1',
       // Slide (transform) in the normal path; the reduced-motion class swaps
@@ -845,19 +866,24 @@ export class RefitPane {
     // the content. The side follows the RTL variable: left = 50% + dir·50%
     // (dir 1 → the root's right edge, the tab's own left edge on it); under
     // reduced motion --refit-open flips it between the screen edge (closed)
-    // and the inner edge (open) because the root never moves.
+    // and the inner edge (open) because the root never moves. Session P (plan
+    // D6/D7): a HORIZONTAL plate in the FOOTER BAND's left slot — `bottom` = the
+    // band's bottom minus the root's 96, height FOOTER_BAND_PX. F1 only (the
+    // pane is enabled on the workbench alone), so never edge chrome: it shows
+    // whenever enabled; `body[data-pure-scenery]` (index.html) still hides it.
     const tab = doc.createElement('div');
     tab.id = 'ladder-refit-tab';
     tab.style.cssText = [
-      'position:absolute', 'top:38%', 'z-index:1',
+      'position:absolute', `bottom:${this.tabBottomCss()}px`, 'z-index:1',
       'left:calc(50% + var(--refit-dir, 1) * (2 * var(--refit-open, 1) - 1) * 50%)',
       'transform:translateX(calc((var(--refit-dir, 1) - 1) * 50%))',
-      'padding:8px 6px 8px 4px', 'border:1px solid rgba(0,204,255,0.4)', 'border-left:none',
-      'border-radius:0 6px 6px 0', 'background:rgba(0,16,32,0.85)',
+      `height:${RAIL_GEOMETRY.FOOTER_BAND_PX}px`, `line-height:${RAIL_GEOMETRY.FOOTER_BAND_PX - 2}px`,
+      'box-sizing:border-box', 'padding:0 12px 0 10px', 'white-space:nowrap',
+      'border:1px solid rgba(0,204,255,0.4)', 'border-left:none',
+      'border-radius:0 3px 3px 0', 'background:rgba(0,16,32,0.85)',
       'color:' + VisualLaw.COLORS.INFO, 'cursor:pointer',
       'font-family: var(--font-mono)', 'font-size:0.62rem', 'letter-spacing:0.08em',
-      'writing-mode:vertical-rl', 'text-orientation:mixed', 'user-select:none',
-      'display:none', 'pointer-events:auto',
+      'user-select:none', 'display:none', 'pointer-events:auto',
     ].join(';');
     // Built as real children (never innerHTML) so the count node survives
     // every repaint and fake-DOM test docs need no querySelector.

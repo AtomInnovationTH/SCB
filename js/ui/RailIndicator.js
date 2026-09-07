@@ -20,7 +20,8 @@
  *   centred original overlapped TARGET DOSSIER / TRACKED TARGETS in
  *   #hud-right-column at every common viewport); Session J (plan D-H) moved it
  *   back to MID-HEIGHT through the shared RailGeometry table (`midHeightCss`)
- *   so both rails — this WHERE rail and the left DISPLAY rail (PaneRail) — sit
+ *   so both rails — this WHERE rail and the left DISPLAY rail (PaneRail —
+ *   retired in Session P for the DETAIL slider) — sit
  *   clear of the bottom ~100 pt iPad thumb rest. The right HUD column is
  *   masked to the floor's room by FloorMask now, so the G3 overlap the bottom
  *   anchor solved no longer has its cause on the ladder floors.
@@ -34,6 +35,21 @@
  *   the rail. (No shipping floor carries one since the Session H renumber.)
  *   Warning amber #ffaa00 is the shipped HUD warning family (DockingReticle) —
  *   deliberately NOT a new VisualLaw law color (the 5-color pin stands).
+ *
+ * Session P (plan D2/D3, owner 2026-09-07) — EDGE CHROME: the rail (and its
+ * rate label) sleeps on an external PURE clock (`js/ui/EdgeChrome.js`, held
+ * duck-typed as `edgeChrome`, never imported) — rest = vanish (opacity → the
+ * shared RAIL_GEOMETRY.IDLE_FADE (= 0), then `visibility:hidden` only AFTER
+ * the fade; the fade is 0 under reduced motion), and wears an Airbus-style
+ * "box" — a 1 px PLAYER outline (BOX_OUTLINE, `outlineOffset` 2 px) on the
+ * arrival floor's notch and on the rate label while BOX_MS elapses. Wake
+ * sources handled HERE (charge, rate write, denial, show) vs by
+ * LadderController (floor apply → wake all + box 'floor'; ride → wake). The
+ * box channel is a NEW paint channel — the notch's `outline`, never
+ * `border`/`boxShadow`, which belong to notchPaint: deny/invite/current. No
+ * timers: EdgeChrome is pure; refresh reads it per frame and writes on change
+ * (G1). `new RailIndicator()` without the dep == the Session J
+ * fade-never-vanish rail exactly.
  *
  * Wave 5 Session E (08-workbench §5 D3 — the depot INVITATION; retargeted to
  * notch 1 in Session H): from chapter 4 on a mission boundary no longer forces
@@ -69,6 +85,11 @@ const WARN_AMBER = VisualLaw.COLORS.CAUTION;
 /** Warp readout: minimum interval between DOM writes (ms) — 4 Hz cap (G1). */
 export const RATE_WRITE_MIN_MS = 250;
 
+/** The EDGE-CHROME "box" (Session P, plan D2/D3): a 1 px PLAYER outline. */
+export const BOX_OUTLINE = `1px solid ${VisualLaw.COLORS.PLAYER}`;
+/** The box's offset — 2 px out (the notch's own 1 px border is NOT the box). */
+export const BOX_OUTLINE_OFFSET = '2px';
+
 /** Notch resting/active palette (INFO instrument frame, PLAYER current). */
 const NOTCH_REST_BORDER = 'rgba(0,204,255,0.35)';
 const NOTCH_REST_COLOR = 'rgba(0,204,255,0.62)';
@@ -94,7 +115,7 @@ export const INVITE_HALO = `0 0 10px ${_rgba(VisualLaw.COLORS.VALUE, 0.55)}`;
 const INVITE_FLOOR = 1;
 
 export class RailIndicator {
-  constructor() {
+  constructor({ edgeChrome = null, now = null } = {}) {
     this._root = null;
     /** @private the dodge: last applied top (null = mid-height) + last layout read */
     this._dodgeTop = null;
@@ -115,6 +136,27 @@ export class RailIndicator {
     this._rateWriteMs = -Infinity;
     /** The depot invitation (Wave 5 Session E): true while notch 1 glows. */
     this._invite = false;
+    /** Session P (plan D2/D3): the EDGE-CHROME dep (duck-typed EdgeChrome; null = the Session J rail). */
+    this._edgeChrome = edgeChrome || null;
+    /** Optional caller clock (Session P): the wake/phase reads ride it (tests). */
+    this._now = (typeof now === 'function') ? now : null;
+    /** Session P: last phase WRITTEN ('awake'|'fading'|'hidden', null = none yet). */
+    this._phase = null;
+    /** Session P: the notch index (0-based) currently wearing the box, or -1/null. */
+    this._boxFloor = null;
+    /** Session P: whether the rate label currently wears the box. */
+    this._boxRate = false;
+  }
+
+  /**
+   * @private Session P: the caller clock (injected `now` option, defaulting
+   *  to performance.now/Date.now — so the chrome reads ride the same clock
+   *  the caller runs on).
+   * @returns {number}
+   */
+  _clock() {
+    if (this._now) return this._now();
+    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   }
 
   /**
@@ -230,6 +272,9 @@ export class RailIndicator {
 
     const root = document.createElement('div');
     root.id = 'ladder-rail';
+    // Session P (plan D2/D3): the idle-fade opacity ramp rides the chrome's
+    // fadeMs (= 0 under reduced motion); no dep → the Session J 0.3s.
+    const fade = this._edgeChrome ? `opacity ${this._edgeChrome.fadeMs}ms` : 'opacity 0.3s';
     // Session J (plan D-H): MID-HEIGHT on the right edge via the shared rail
     // geometry (was G3's `bottom:14px; right:10px`) — clear of the bottom
     // ~100 pt thumb rest, level with the left DISPLAY rail. The fragment ends in
@@ -241,7 +286,7 @@ export class RailIndicator {
       'padding:6px 6px 6px 8px',
       `border-left:2px solid ${NOTCH_REST_BORDER}`,
       'background:rgba(0,10,22,0.42)', 'border-radius:4px',
-      'z-index:35', 'pointer-events:none', 'opacity:0', 'transition:opacity 0.3s',
+      'z-index:35', 'pointer-events:none', 'opacity:0', `transition:${fade}`,
     ].join(';');
 
     // column-reverse so F1 sits at the bottom, F5 at the top (elevator order).
@@ -305,25 +350,34 @@ export class RailIndicator {
     this._root = root;
   }
 
-  /** Show the rail (builds on first show). */
+  /** Show the rail (builds on first show). Session P: wakes the edge chrome
+   *  and applies the phase immediately (visibility returns on the same call). */
   show() {
     this._build();
     this._visible = true;
     if (this._root) this._root.style.opacity = '1';
+    if (this._edgeChrome) {
+      const now = this._clock();
+      this._edgeChrome.wake('rail', now);
+      if (this._root) this._applyPhase(now);
+    }
   }
 
-  /** Hide the rail (clears any pending denial feedback). */
+  /** Hide the rail (clears any pending denial feedback). Session P: resets the
+   *  cached phase so the next show re-applies (hide() is the MENU, not a sleep). */
   hide() {
     this._visible = false;
     if (this._root) this._root.style.opacity = '0';
     this._clearDenied();
+    this._phase = null;
   }
 
   /**
    * The rail's bottom edge in CSS px while it is DODGED under the right HUD
-   * column, else null (mid-height as designed). The hub hands it to
-   * LibraryPane.setTabDodge so the SPECS tab rides under the rail instead of
-   * over the column (owner 2026-09-06). Refreshed with the 1 Hz dodge read.
+   * column, else null (mid-height as designed). Session P: the SPECS tab no
+   * longer rides under it (it lives in the footer band — plan D7), so no hub
+   * consumer is left; kept as the dodge witness (probe / tests). Refreshed
+   * with the 1 Hz dodge read.
    * @returns {number|null}
    */
   dodgeBottom() { return this._visible ? this._dodgeBottom : null; }
@@ -384,6 +438,16 @@ export class RailIndicator {
       }
     }
     this._applyDodge();
+    // Session P (plan D2/D3): the EDGE CHROME reads — a live zoom charge wakes
+    // the rail; the phase applies ONLY while shown by the controller (a hide()-
+    // hidden rail on the menu is never re-shown by refresh); the box channel rides
+    // the arrival floor/rate state (additive outline, never border/boxShadow).
+    if (this._edgeChrome) {
+      const now = this._clock();
+      if (state.charge !== 0) this._edgeChrome.wake('rail', now);
+      if (this._visible) this._applyPhase(now);
+      this._applyBoxes(state, now);
+    }
   }
 
   /**
@@ -424,6 +488,66 @@ export class RailIndicator {
   }
 
   /**
+   * @private Session P (plan D2/D3): the EDGE-CHROME phase applied to the root.
+   * Write-on-change (G1: refresh runs per frame). 'awake' → op 1 +
+   * visible; 'fading' → op = restOpacity (visibility stays — the CSS transition
+   * ramps); 'hidden' → visibility hidden + op = restOpacity defensively (a
+   * reduced-motion instant hide lands at rest). No-op headless or without the dep.
+   * @param {number} now - caller clock (the chrome reads it)
+   */
+  _applyPhase(now) {
+    if (!this._edgeChrome || !this._root) return;
+    const ph = this._edgeChrome.phase('rail', now);
+    if (ph === this._phase) return;
+    this._phase = ph;
+    if (ph === 'awake') {
+      this._root.style.opacity = '1';
+      this._root.style.visibility = 'visible';
+    } else if (ph === 'fading') {
+      this._root.style.opacity = String(this._edgeChrome.restOpacity);
+    } else if (ph === 'hidden') {
+      this._root.style.visibility = 'hidden';
+      this._root.style.opacity = String(this._edgeChrome.restOpacity);
+    }
+  }
+
+  /**
+   * @private Session P (plan D2/D3): the EDGE-CHROME "box" — an additive
+   * 1 px PLAYER outline on the arrival floor's notch and the rate label while
+   * BOX_MS elapses (a changed mode wears the box; write-on-change). The
+   * notch's `outline` never collides with notchPaint's border/boxShadow channel.
+   * No-op without the dep (refresh() is byte-identical to the Session J rail).
+   * @param {{floor:number, charge:number, chargeSide:('up'|'down'|null)}} state
+   * @param {number} now - caller clock (the chrome reads it)
+   */
+  _applyBoxes(state, now) {
+    if (!this._edgeChrome) return;
+    const want = this._edgeChrome.isBoxed('floor', now) ? (state.floor - 1) : -1;
+    if (want !== this._boxFloor) {
+      if (this._boxFloor != null && this._boxFloor >= 0) {
+        const old = this._notches[this._boxFloor];
+        if (old) old.el.style.outline = 'none';
+      }
+      this._boxFloor = want;
+      if (want >= 0) {
+        const n = this._notches[want];
+        if (n) {
+          n.el.style.outline = BOX_OUTLINE;
+          n.el.style.outlineOffset = BOX_OUTLINE_OFFSET;
+        }
+      }
+    }
+    const wantRate = this._edgeChrome.isBoxed('rate', now);
+    if (wantRate !== this._boxRate) {
+      this._boxRate = wantRate;
+      if (this._rate) {
+        this._rate.style.outline = wantRate ? BOX_OUTLINE : 'none';
+        if (wantRate) this._rate.style.outlineOffset = BOX_OUTLINE_OFFSET;
+      }
+    }
+  }
+
+  /**
    * Time-rate readout at the rail's head (VisualLaw.RAIL.SHOWS 'warp-readout').
    * Fed per frame by main.js with `timeAuthority.rate` while the ladder is
    * engaged. Write-on-change, ≤ 4 Hz (RATE_WRITE_MIN_MS) — G1. Headless: no
@@ -438,6 +562,13 @@ export class RailIndicator {
     const t = (nowMs != null) ? nowMs
       : (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     if (!RailIndicator.shouldWriteRate(label, this._rateLabel, this._rateWriteMs, t)) return false;
+    // Session P (plan D2/D3): a rate WRITE wakes the rail and boxes the readout
+    // (a mode appeared; the box outlives the write the chrome owns). No write,
+    // no wake/box (the throttled path above returns first).
+    if (this._edgeChrome) {
+      this._edgeChrome.wake('rail', t);
+      this._edgeChrome.box('rate', t);
+    }
     this._rate.textContent = label;
     this._rateLabel = label;
     this._rateWriteMs = t;
@@ -459,6 +590,9 @@ export class RailIndicator {
    */
   flashDenied(hint, floor) {
     if (!this._root) return;
+    // Session P (plan D2/D3): a hard-wall denial wakes the rail (the blocked
+    // notch's flash is feedback — visible on a sleeping rail too).
+    if (this._edgeChrome) this._edgeChrome.wake('rail', this._clock());
     const t = RailIndicator.toastFor(hint);
     if (t.show && this._toast) {
       this._toast.textContent = t.text;

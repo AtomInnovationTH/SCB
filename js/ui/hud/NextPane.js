@@ -9,7 +9,7 @@
  *
  * It is a pane-density RUNG like CARGO: `rung()` returns the HUD domRung shape
  * ({id:'next', label, isVisible, setVisible}) whose ONE visibility bit is the
- * `data-density-hidden` attribute on the root, so the DISPLAY rail lists it as a
+ * `data-density-hidden` attribute on the root, so the DETAIL slider counts it as a
  * notch and FloorMask rooms it per floor (MASK_PANES.next). This pane is NOT
  * the focused-cluster transfer readout costume (that one is the FULL readout of
  * ONE cluster); this is the soonest of everything, in one glance.

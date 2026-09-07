@@ -45,8 +45,8 @@
  * duplicated elsewhere — the module + its test stay dormant in the tree,
  * unwired.
  *
- * PURE SCENERY (Session N.=5 D7, owner​ 2026-09-07):when the the `-` walk cleared every rung and
- * bowed the rails out,the hub also sets `body[data-pure-scenery]` (index.html
+ * PURE SCENERY (Session N.5 D7, owner 2026-09-07): when the `-` walk cleared every rung and
+ * bowed the rails out, the hub also sets `body[data-pure-scenery]` (index.html
  * CSS hides the SPECS/REFIT tabs and `#build-stamp`; the vitals line and the
  * glass STORE chip left the rule — and the cockpit — in Session O, D8/D10).
  * Transient view state, never a room edit; `+`, any ride, or
@@ -121,16 +121,18 @@ export const REDUCED_CROSSFADE_MS = 200;
  * ShopScreen's public wrappers. A RUNG pane like the others: the pane owns a
  * pane-density rung ('cargo', pushed into hud.paneDensity.rungs by main.js
  * BEFORE the first setFloor) whose ONE bit is `data-density-hidden` on the
- * root `#hud-cargo-pane` (a direct child of #hud-overlay), so the DISPLAY rail
- * lists it as a notch and D5 remembers it per floor.
+ * root `#hud-cargo-pane` (a direct child of #hud-overlay), so the pane density
+ * counts it as a rung (Session P: the DETAIL slider's tick — the DISPLAY rail
+ * that listed it as a notch retired) and D5 remembers it per floor.
  *
  * 'orbit' / 'copilot' / 'next' (2026-09-06, Session M — Instruments): three
  * more RUNG panes of the same shape. ORBIT (js/ui/hud/OrbitPane.js,
- * `#hud-orbit-pane`, bottom-left right of the DISPLAY rail: the fixed
+ * `#hud-orbit-pane`, bottom-left under the left column — Session P: no
+ * DISPLAY rail beside it any more: the fixed
  * instrument slots + the OrbitMFD plot as its track view), COPILOT
  * (js/ui/hud/FmaStrip.js, `#hud-fma-strip`, the flight-mode annunciator that
- * rides as the LAST child of #hud-left-column — the DISPLAY rail dodges the
- * column, so nothing else moves) and NEXT (js/ui/hud/NextPane.js,
+ * rides as the LAST child of #hud-left-column — the ORBIT pane's ceiling is
+ * the column's bottom, so nothing else moves) and NEXT (js/ui/hud/NextPane.js,
  * `#hud-next-pane`, the right edge above the CARGO slot: transfer window /
  * TCA / shadow / ground pass). Each pushes its rung into
  * hud.paneDensity.rungs from main.js BEFORE the first setFloor.
