@@ -128,8 +128,9 @@ import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
 import { PaneRail } from './ui/PaneRail.js';
-import { CargoPane } from './ui/hud/CargoPane.js';
-import { OrbitPane } from './ui/hud/OrbitPane.js';
+import { CargoPane, CARGO_GEOMETRY } from './ui/hud/CargoPane.js';
+import { OverridePane } from './ui/hud/OverridePane.js';
+import { OrbitPane, ORBIT_GEOMETRY } from './ui/hud/OrbitPane.js';
 import { FmaStrip } from './ui/hud/FmaStrip.js';
 import { NextPane } from './ui/hud/NextPane.js';
 import { CopilotVoice } from './systems/CopilotVoice.js';
@@ -682,6 +683,8 @@ let libraryPane;
 // wrappers, a pane-density rung. Same construction law: built ONLY inside the
 // LADDER.ENABLED gate (a ?ladder=0 boot builds no pane, pushes no rung).
 let cargoPane = null;
+// SAFETY OVERRIDE demo panel (owner 2026-09-07) — LADDER gate only.
+let overridePane = null;
 // Wave 5 Session M (plan "Session M — Instruments") — the three instruments +
 // the copilot's voice: ORBIT (js/ui/hud/OrbitPane.js, the fixed slots + the
 // revived OrbitMFD as its track view), COPILOT (js/ui/hud/FmaStrip.js, the
@@ -1753,6 +1756,72 @@ async function init() {
       const id = _specsSubject();
       if (id) libraryPane.openEntry(id);
     };
+    // SAFETY OVERRIDE panel (owner 2026-09-07, plan D1): ONE actuators object,
+    // two consumers — RefitPane's chips and OverridePane's buttons drive the
+    // SAME toggles (shipped control law: a tap reverses the COMMANDED state,
+    // the pane re-reads truth; the closures own the click + the input events).
+    const ladderActuators = {
+      rosaFurl: {
+        get: () => (player && typeof player.setRosaFurl === 'function')
+          ? (player._rosaFurlTarget < 0.5 ? 'FURLED' : 'DEPLOYED') : null,
+        toggle: () => {
+          const target = player.setRosaFurl(player._rosaFurlTarget < 0.5 ? 1.0 : 0.0);
+          audioSystem?.playClick?.();
+          eventBus.emit(Events.ROSA_FURL_INPUT, { target });
+        },
+      },
+      rosaFeather: {
+        get: () => (player && typeof player.setRosaFeather === 'function')
+          ? (player._rosaFeatherTarget >= 0.5 ? 'FEATHERED' : 'FLAT') : null,
+        toggle: () => {
+          const feathered = player.setRosaFeather(player._rosaFeatherTarget >= 0.5 ? 0.0 : 1.0) >= 0.5;
+          audioSystem?.playClick?.();
+          eventBus.emit(Events.ROSA_FEATHER_INPUT, { feathered });
+        },
+      },
+      struts: {
+        // No chip unless a DOCKED daughter can take the write (toggleStruts
+        // returns null otherwise — a STOWED chip whose tap did nothing was
+        // the Session L review's NIT); daughters away → the card shows no
+        // STRUTS chip until one berths.
+        get: () => (armManager && armManager.arms && typeof armManager.strutsDeployed === 'function'
+          && armManager.arms.some((a) => a && a.state === Constants.ARM_STATES.DOCKED))
+          ? (armManager.strutsDeployed() ? 'DEPLOYED' : 'STOWED') : null,
+        toggle: () => {
+          if (!armManager || typeof armManager.toggleStruts !== 'function' || armManager.toggleStruts() === null) return;
+          audioSystem?.playClick?.();
+          eventBus.emit(Events.STRUT_DEPLOY_INPUT);
+        },
+      },
+      flower: {
+        get: () => {
+          if (!player || typeof player.getFlowerPairCount !== 'function') return null;
+          if (player.getFlowerPairCount() === 0) return 'NOT FITTED';
+          const FL = Constants.THERMAL && Constants.THERMAL.FLOWER;
+          if (!FL) return null;
+          const mid = ((FL.POSE_STOW_DEG + FL.POSE_CARGO_DEG) / 2) * Math.PI / 180;
+          return ((player._flowerTargetTheta ?? player._flowerThetaRad) <= mid) ? 'OPEN' : 'CLOSED';
+        },
+        toggle: () => {
+          if (!player || player.getFlowerPairCount() === 0) return;
+          const FL = Constants.THERMAL.FLOWER;
+          const mid = ((FL.POSE_STOW_DEG + FL.POSE_CARGO_DEG) / 2) * Math.PI / 180;
+          // Reverse the COMMANDED pose (what the chip shows), not the live one.
+          const deploying = !((player._flowerTargetTheta ?? player._flowerThetaRad) <= mid);
+          if (player.setFlowerPose(deploying ? 'CARGO' : 'STOW') === null) return;
+          audioSystem?.playClick?.();
+          eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
+          // The KeyO comms line, verbatim (InputManager's handler is the source).
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            sender: 'THERMAL',
+            text: deploying
+              ? 'Aft flower deploying — struts open LIKE A FLOWER to the 90° cargo bloom.'
+              : 'Aft flower stowing — folding to the 146° bud.',
+            priority: 'info',
+          });
+        },
+      },
+    };
     refitPane = new RefitPane({
       providers: hullcamProviders,
       getCredits: () => scoringSystem.credits,
@@ -1823,68 +1892,7 @@ async function init() {
       // chips therefore go through the public SETTERS (setRosaFurl /
       // setRosaFeather / setFlowerPose — the same commanded-target writes, the
       // same events) and flip what the label shows; the keys keep their law.
-      actuators: {
-        rosaFurl: {
-          get: () => (player && typeof player.setRosaFurl === 'function')
-            ? (player._rosaFurlTarget < 0.5 ? 'FURLED' : 'DEPLOYED') : null,
-          toggle: () => {
-            const target = player.setRosaFurl(player._rosaFurlTarget < 0.5 ? 1.0 : 0.0);
-            audioSystem?.playClick?.();
-            eventBus.emit(Events.ROSA_FURL_INPUT, { target });
-          },
-        },
-        rosaFeather: {
-          get: () => (player && typeof player.setRosaFeather === 'function')
-            ? (player._rosaFeatherTarget >= 0.5 ? 'FEATHERED' : 'FLAT') : null,
-          toggle: () => {
-            const feathered = player.setRosaFeather(player._rosaFeatherTarget >= 0.5 ? 0.0 : 1.0) >= 0.5;
-            audioSystem?.playClick?.();
-            eventBus.emit(Events.ROSA_FEATHER_INPUT, { feathered });
-          },
-        },
-        struts: {
-          // No chip unless a DOCKED daughter can take the write (toggleStruts
-          // returns null otherwise — a STOWED chip whose tap did nothing was
-          // the Session L review's NIT); daughters away → the card shows no
-          // STRUTS chip until one berths.
-          get: () => (armManager && armManager.arms && typeof armManager.strutsDeployed === 'function'
-            && armManager.arms.some((a) => a && a.state === Constants.ARM_STATES.DOCKED))
-            ? (armManager.strutsDeployed() ? 'DEPLOYED' : 'STOWED') : null,
-          toggle: () => {
-            if (!armManager || typeof armManager.toggleStruts !== 'function' || armManager.toggleStruts() === null) return;
-            audioSystem?.playClick?.();
-            eventBus.emit(Events.STRUT_DEPLOY_INPUT);
-          },
-        },
-        flower: {
-          get: () => {
-            if (!player || typeof player.getFlowerPairCount !== 'function') return null;
-            if (player.getFlowerPairCount() === 0) return 'NOT FITTED';
-            const FL = Constants.THERMAL && Constants.THERMAL.FLOWER;
-            if (!FL) return null;
-            const mid = ((FL.POSE_STOW_DEG + FL.POSE_CARGO_DEG) / 2) * Math.PI / 180;
-            return ((player._flowerTargetTheta ?? player._flowerThetaRad) <= mid) ? 'OPEN' : 'CLOSED';
-          },
-          toggle: () => {
-            if (!player || player.getFlowerPairCount() === 0) return;
-            const FL = Constants.THERMAL.FLOWER;
-            const mid = ((FL.POSE_STOW_DEG + FL.POSE_CARGO_DEG) / 2) * Math.PI / 180;
-            // Reverse the COMMANDED pose (what the chip shows), not the live one.
-            const deploying = !((player._flowerTargetTheta ?? player._flowerThetaRad) <= mid);
-            if (player.setFlowerPose(deploying ? 'CARGO' : 'STOW') === null) return;
-            audioSystem?.playClick?.();
-            eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
-            // The KeyO comms line, verbatim (InputManager's handler is the source).
-            eventBus.emit(Events.COMMS_MESSAGE, {
-              sender: 'THERMAL',
-              text: deploying
-                ? 'Aft flower deploying — struts open LIKE A FLOWER to the 90° cargo bloom.'
-                : 'Aft flower stowing — folding to the 146° bud.',
-              priority: 'info',
-            });
-          },
-        },
-      },
+      actuators: ladderActuators,
     });
     // The TECH LIBRARY pane (08-workbench §2 right pane; §10's LibraryPane —
     // the adapter over the shipped viewer). Reads the SAME codexSystem the
@@ -2253,6 +2261,27 @@ async function init() {
       before('targets', orbitPane.rung());
       before('mother', fmaStrip.rung());
     }
+    // SAFETY OVERRIDE demo panel (owner 2026-09-07,
+    // .kilo/plans/1788703905516-safety-override-panel.md). Bottom-centre, a
+    // direct child of #hud-overlay; the SAME actuators object as RefitPane
+    // (D1); the gag never touches game state (D6). D3: a pane-density rung at
+    // INDEX 0 — the lowest priority: hidden by default on every floor, the
+    // LAST `+` reveals it, the FIRST `-` sheds it. Pushed BEFORE the first
+    // FloorMask setFloor (its _resolve caches the rung map once) — the mask's
+    // MASK_PANES.override row + every DEFAULT_ROOMS row say 'gone'.
+    overridePane = new OverridePane({
+      actuators: ladderActuators,
+      audio: audioSystem,
+      bus: eventBus,
+      events: Events,
+      gameplayStates: [GameStates.ORBITAL_VIEW, GameStates.APPROACH, GameStates.INTERACTION],
+      doc: document,
+      glass: _glassBoot,
+      webdriver: !!(typeof navigator !== 'undefined' && navigator.webdriver),
+    });
+    if (hud && hud.paneDensity && Array.isArray(hud.paneDensity.rungs)) {
+      hud.paneDensity.rungs.unshift(overridePane.rung());
+    }
     // Session N — the first-run MAP pane: the LAST child of #hud-left-column
     // (on the workbench the column is otherwise empty, so the card sits
     // top-left alone; on the flying floor — where the intro now LANDS (owner
@@ -2314,6 +2343,16 @@ async function init() {
     // engage, hide at disengage, populate(floor) at every arrival). Flag-off:
     // never constructed → null → byte-identical.
     paneRail: ladderPaneRail,
+    // PURE SCENERY completion (owner 2026-09-07, plan D7): when the `-` walk
+    // has cleared every rung and bowed the rails out, ONE body attribute also
+    // hides the SPECS/REFIT tabs, #vitals-line, #build-stamp and the glass
+    // STORE chip (index.html `body[data-pure-scenery]`, CSS !important beats
+    // inline writes — the data-density-hidden discipline). Transient: `+`,
+    // any ride or a fresh engage clears it. Gated: ?ladder=0 passes null.
+    pureScenery: (Constants.LADDER && Constants.LADDER.ENABLED) ? {
+      hide: () => document.body.toggleAttribute('data-pure-scenery', true),
+      show: () => document.body.toggleAttribute('data-pure-scenery', false),
+    } : null,
     navcom: navcomFloor,
     proxNet: proxNetFloor,
     sdaFloor,
@@ -3061,6 +3100,7 @@ async function init() {
         return next;
       };
       window.__netShot = _netCapture;
+      window.__overridePane = overridePane;   // SAFETY OVERRIDE panel (the gag's black veil #hud-override-veil is a DOM element, never the black-screen bug class — BLACK_SCREEN_TRIAGE.md)
 
       // ── Inspection camera hook (round-5 visual QA) ──
       //   window.__scbInspect(thetaDeg, phiDeg, distM)
@@ -5669,10 +5709,27 @@ function gameLoop(timestamp) {
     cargoPane.setDodge(tabBottom != null ? tabBottom : railIndicator.bottomPx(),
       window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0));
   }
+  if (_ladderActive && overridePane && overridePane.setDodge && Number.isFinite(_HINT_BAND_PX)) {
+    // SAFETY OVERRIDE panel: bottom-centre above the hint ticker band, and on
+    // glass above the thumb rest (the CargoPane/NextPane dodge idiom). While
+    // ORBIT shows bottom-left the panel re-centres in the free band between
+    // ORBIT's right edge and the right column (the witness: screen-centre
+    // overlapped ORBIT by 85 px on the 13-inch, 133 px on desktop).
+    const orbitRight = (orbitPane && orbitPane.rightPx) ? orbitPane.rightPx() : null;
+    overridePane.setDodge(window.innerHeight - _HINT_BAND_PX,
+      window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0),
+      orbitRight,
+      window.innerWidth - (CARGO_GEOMETRY.WIDTH_PX + CARGO_GEOMETRY.RIGHT_PX));
+  }
   // Session M — the instruments' edges (owner law: by the 13-inch numbers).
-  // ORBIT rides bottom-LEFT: right of the DISPLAY rail (its cached rightPx) and
-  // above BOTH the thumb rest and the hint ticker's band (min of the two
-  // floors — the ticker is bottom-anchored at BOTTOM_PX + ROW_HEIGHT_PX).
+  // ORBIT rides bottom-LEFT, FLUSH with the left HUD column (owner 2026-09-07:
+  // x = EDGE_PX, lined up with the other panes — before that it sat right of
+  // the DISPLAY rail, which pushed the SAFETY OVERRIDE button off centre) and
+  // UNDER the DISPLAY rail: its ceiling is the rail's cached bottomPx(), its
+  // floor the lower of the thumb rest and the hint ticker's band (the ticker
+  // is bottom-anchored at BOTTOM_PX + ROW_HEIGHT_PX). The cascade: column →
+  // rail (dodges under the column) → ORBIT fills what is left (full / compact /
+  // hidden by the budget — the CARGO / NEXT law on the right edge).
   // NEXT rides the right edge ABOVE the CARGO pane: same rider above (the SPECS
   // tab / the WHERE rail), its floor is CARGO's placed top while CARGO shows,
   // else the thumb floor — CARGO keeps its bottom slot and its law; NEXT
@@ -5680,13 +5737,15 @@ function gameLoop(timestamp) {
   if (_ladderActive && (orbitPane || nextPane)) {
     const thumbFloor = window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0);
     if (orbitPane && orbitPane.setAnchor) {
-      // Never a guess: until the rail's first 1 Hz read lands (rightPx() null
-      // for the first second of a floor, and while the rail is hidden) the
-      // pane keeps its last anchor — unplaced, it stays hidden rather than
-      // sitting in the rail's own column.
-      const railRight = (ladderPaneRail && ladderPaneRail.rightPx) ? ladderPaneRail.rightPx() : null;
-      if (railRight != null) {
-        orbitPane.setAnchor(railRight, Math.min(thumbFloor, window.innerHeight - _HINT_BAND_PX));
+      // Never a guess: while the rail is SHOWN but its first 1 Hz read has not
+      // landed (bottomPx() null for the first second of a floor) the pane keeps
+      // its last anchor rather than sitting in the rail's column; a HIDDEN rail
+      // (pure scenery, the workbench floor) places with no ceiling.
+      const railShown = !!(ladderPaneRail && ladderPaneRail.isVisible && ladderPaneRail.isVisible());
+      const railBottom = (railShown && ladderPaneRail.bottomPx) ? ladderPaneRail.bottomPx() : null;
+      if (!railShown || railBottom != null) {
+        orbitPane.setAnchor(RAIL_GEOMETRY.EDGE_PX - ORBIT_GEOMETRY.GAP_PX,
+          Math.min(thumbFloor, window.innerHeight - _HINT_BAND_PX), railBottom);
       }
     }
     if (nextPane && nextPane.setDodge && railIndicator && railIndicator.bottomPx) {

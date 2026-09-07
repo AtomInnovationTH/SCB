@@ -86,6 +86,7 @@ export const soundVocabulary = {
   playWeatherAlert:    { family: 'ALARM', meaning: 'space weather alert',          trigger: 'weather alert' },
   playConjunctionAlert:{ family: 'ALARM', meaning: 'conjunction proximity alert',  trigger: 'conjunction tier' },
   playMPDOverheat:     { family: 'ALARM', meaning: 'MPD overheat',                 trigger: 'MPD overheat' },
+  playKlaxon:         { family: 'ALARM', meaning: "FURNACE gag — two-tone sawtooth klaxon (SAFETY OVERRIDE panel's broken button; 440/620 Hz at 2 Hz, ~2 s)", trigger: "SAFETY OVERRIDE panel FURNACE press (broken self-destruct gag)" },
 
   // ---- REWARD — you gained something ----
   playCaptureSuccess:  { family: 'REWARD', meaning: 'debris captured',             trigger: 'ARM_RETURNED' },

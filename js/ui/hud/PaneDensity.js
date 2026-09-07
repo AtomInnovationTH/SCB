@@ -163,27 +163,41 @@ export class PaneDensity {
   /**
    * `+` — restore the highest-priority currently-hidden rung. No-op (with a
    * notice) when every pane is already visible.
-   * @returns {DensityRung|null} the rung shown, or null on a no-op.
+   *
+   * SAFETY OVERRIDE witness (owner 2026-09-07): a rung whose pane CANNOT show
+   * right now — NEXT with no room (`data-next-mode="hidden"`), an empty pin
+   * widget, an absent `.skills-pane` — reads not-visible after its bit is
+   * cleared, so the old scan re-picked it on every press ("HUD + · Next shown"
+   * with nothing appearing) and every rung below it was unreachable. The scan
+   * now clears such a rung's bit (it appears when its content arrives) and
+   * keeps walking down until a pane actually shows; the notice names THAT rung,
+   * or reads "All panes visible" when nothing more can show.
+   * @returns {DensityRung|null} the rung shown (or the last bit cleared), or null on a no-op.
    */
   up() {
     // Scan from the highest-priority (last) rung down so `+` reverses `-`.
-    let rung = null;
+    let shown = null;      // the rung that actually became visible
+    let flipped = null;    // the last rung whose bit was cleared
     for (let i = this.rungs.length - 1; i >= 0; i--) {
-      if (!this._safeVisible(this.rungs[i])) { rung = this.rungs[i]; break; }
+      const rung = this.rungs[i];
+      if (this._safeVisible(rung)) continue;
+      rung.setVisible(true);
+      if (this._onFlip) this._onFlip(rung.id, true);    // AFTER the bit flip (Job A)
+      flipped = rung;
+      if (this._safeVisible(rung)) { shown = rung; break; }
+      // Content/dodge-hidden: bit cleared, nothing to see yet — keep walking.
     }
-    if (!rung) {
+    if (!flipped) {
       if (!this._silent) this._notify('All panes visible');
       return null;
     }
-    rung.setVisible(true);
-    if (this._onFlip) this._onFlip(rung.id, true);    // AFTER the bit flip (Job A)
     const all = this.rungs.every(r => this._safeVisible(r));
-    const text = all ? 'All panes visible' : `HUD + · ${rung.label} shown`;
+    const text = (all || !shown) ? 'All panes visible' : `HUD + · ${shown.label} shown`;
     if (!this._silent) {
       this._notify(text);
       this._log(text);
     }
-    return rung;
+    return shown || flipped;
   }
 
   /**

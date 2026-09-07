@@ -150,6 +150,10 @@ class AudioSystem {
     // Phase 7: Docking alignment tone state
     this._alignmentToneOsc = null;
     this._alignmentToneGain = null;
+
+    // SAFETY OVERRIDE panel FURNACE gag (owner 2026-09-07): in-flight klaxon
+    // { osc, gain, endsAt } or null — single-instance re-entrancy guard.
+    this._klaxon = null;
   }
 
   /**
@@ -1194,6 +1198,69 @@ class AudioSystem {
     gain.connect(this.tickBus);
     osc.start(now);
     osc.stop(now + 0.05);
+  }
+
+  /**
+   * SAFETY OVERRIDE panel's FURNACE gag — a broken cockpit button that fakes a
+   * self-destruct. Two-tone sawtooth klaxon: 440/620 Hz alternating at 2 Hz
+   * (0.25 s per step), precomputed across the whole duration), routed to the
+   * ALARM family bus (danger outranks all — never ducked). Single-instance:
+   * a klaxon in flight is ignored until its endsAt passes (onended may never
+   * fire when the ctx is suspended, so expiry is checked by time, not by
+   * onended). Mute-aware: no ctx call at all when unavailable. Never throws.
+   * @param {number} [durationS=2] — klaxon length in seconds (non-finite or
+   *                                 ≤ 0 falls back to 2; capped at 10).
+   */
+  playKlaxon(durationS = 2) {
+    if (!this.available || !this.ctx) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    // Re-entrancy guard: one klaxon in flight at a time. If a stale _klaxon
+    // survived past its endsAt (onended never fired — ctx suspended), discard it.
+
+    if (this._klaxon) {
+      if (now < this._klaxon.endsAt) return;
+      this._klaxon = null;
+    }
+    let d = (Number.isFinite(durationS) && durationS > 0) ? durationS : 2;
+    if (d > 10) d = 10;
+    try {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      const steps = Math.ceil(d / 0.25);
+      for (let k = 0; k < steps; k++) {
+        const f = (k % 2 === 0) ? 440 : 620;
+        osc.frequency.setValueAtTime(f, now + k * 0.25);
+      }
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.linearRampToValueAtTime(0.12, now + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + d);
+      osc.connect(gain);
+      gain.connect(this.alarmBus || this.master);
+      osc.start(now);
+      osc.stop(now + d);
+      this._klaxon = { osc, gain, endsAt: now + d };
+      osc.onended = () => {
+        if (this._klaxon && this._klaxon.osc === osc) this._klaxon = null;
+        try { osc.disconnect(); gain.disconnect(); } catch (_e) {}
+      };
+    } catch (_e) {
+      this._klaxon = null;
+    }
+  }
+
+  /**
+   * Teardown seam for the SAFETY OVERRIDE panel's FURNACE gag — the gag's abort
+   * path calls this to kill a klaxon in flight early. Safe when unavailable or
+   * when no klaxon is playing (no-op, never throws).
+   */
+  stopKlaxon() {
+    if (!this._klaxon) return;
+    const { osc, gain } = this._klaxon;
+    try { osc.onended = null; osc.stop(); } catch (_e) {}
+    try { osc.disconnect(); gain.disconnect(); } catch (_e) {}
+    this._klaxon = null;
   }
 
   /**

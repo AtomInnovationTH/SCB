@@ -37,14 +37,21 @@
  * JSON booleans keyed floor → pane) rides the player store `sc_ladder_view_v1`
  * through LadderController + LadderViewStore.
  *
- * D7 + vitals (the always set): alerts (warnings strip, conjunction panel,
- * comms), the rail, the score strip, and the vitals line are NEVER masked on
- * any floor, regardless of tier tables or player memory — the engine never
+* D7 + vitals (the always set): alerts (warnings strip, conjunction panel,
+ * comms),the rail,the score strip,and the vitals line are NEVER masked on
+ * any floor, regardless of tier tables or player memory —the engine never
  * references their rungs or elements at all (ALWAYS_ON below is the pinned
  * list). The VitalsLine (fuel/ΔV · power · time rate) is constructed/owned
  * here as part of that always set: faint by default, hover/tap brightens,
  * shown on engage, hidden on disengage (the shipped cockpit has no vitals
  * line, so flag-off/unwired stays byte-identical).
+ *
+ * PURE SCENERY (Session N.=5 D7, owner​ 2026-09-07):when the the `-` walk cleared every rung and
+ * bowed the rails out,the hub also sets `body[data-pure-scenery]` (index.html
+ * CSS hides the SPECS/REFIT tabs, `#vitals-line`, `#build-stamp`,the glass
+ * STORE chip). Transient view state, never a room edit; `+`, any ride,or
+ * a fresh engage clears it. The mask itself is untouched by it.
+
  *
  * Transition at ride start: LadderController calls setFloor(floor) from
  * _applyFloorContent (which runs on engage AND at every ride START — the T1
@@ -157,6 +164,12 @@ export const MASK_PANES = Object.freeze({
   // gone on F1 by default, shown on floors 2-5, the rail toggles it, D5
   // remembers.
   comms:       Object.freeze({ rung: 'comms',       els: Object.freeze(['#hud-comms-panel']),         memory: true }),
+  // SAFETY OVERRIDE panel (owner 2026-09-07.home/.kilo/plans/1788703905516-safety-override-panel.md
+  // D3):the demo cockpit button at bottom-centre. A pane-density rung at
+  // index 0 — hidden by default on EVERY floor (every DEFAULT_ROOMS row says
+  // 'gone');the last `+` reveals it,the first `-` sheds it; D5 remembers it
+  // per floor once pulled out.
+  override:    Object.freeze({ rung: 'override',    els: Object.freeze(['#hud-override-pane']),     memory: true }),
 });
 
 /**
@@ -168,7 +181,7 @@ export const ALWAYS_ON = Object.freeze([
   'alerts',      // #hud-warnings-panel, #hud-conjunction-panel — never referenced
   'rail',        // #ladder-rail — the ladder's own instrument
   'score',       // score strip rung — "it is the score", every zoom
-  'vitals',      // the VitalsLine — faint by default, NEVER gone (D6)
+  'vitals',      // the VitalsLine — faint by default, NEVER gone by ROOM rules (D6); PURE SCENERY (body[data-pure-scenery], Session N.5 D7, owner 2026-09-07) hides it transiently — never persisted, the first + restores
   // 'comms' left for MASK_PANES in Session N.5 (owner 2026-09-07): gone on
   // the F1 workbench by default, shown on floors 2-5.
 ]);
@@ -229,14 +242,16 @@ export const ALWAYS_ON = Object.freeze([
  *   (D-L: a later-wave pane — one dim notch away behind MORE, D5 remembers);
  *   all three 'gone' on the hull F1 and the chart F5.
  */
+// `override` is 'gone' on every floor by design (D3) — `_applyRoom` defaults a MISSING
+// key to 'shown', so every row must carry it (the exhaustive-row test pins that).
 export const DEFAULT_ROOMS = Object.freeze({
   1: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
-    // Session N.5 (owner 2026-09-07): the workbench is the SHIP — cargo (the
+    // Session N.5 (owner 2026-09-07):the workbench is the SHIP — cargo (the
     // elevator/till) and comms leave the F1 defaults too. The first
-    // WORKBENCH_STOP shows the till itself (main.js) and D5 keeps it.
-    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'gone',
+    // WORKBENCH_STOP shows the till itself ((main.js)and D5 keeps it.
+    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'gone', override: 'gone',
   }),
   // Session N.5 (owner 2026-09-07, "think about what panes a NEW player
   // actually needs"): the flying floor greets a first-timer with THREE panes —
@@ -248,22 +263,22 @@ export const DEFAULT_ROOMS = Object.freeze({
   2: Object.freeze({
     targets: 'shown', debris: 'gone', navsphere: 'gone', reticles: 'shown',
     pin: 'gone', mother: 'shown', arms: 'gone', discoveries: 'gone', hints: 'shown',
-    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown',
+    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone',
   }),
-  3: Object.freeze({
+3: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'shown', reticles: 'shown',
     pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone', hints: 'gone',
-    cargo: 'gone', orbit: 'shown', copilot: 'shown', next: 'shown', comms: 'shown',
+    cargo: 'gone', orbit: 'shown', copilot: 'shown', next: 'shown', comms: 'shown', override: 'gone',
   }),
-  4: Object.freeze({
-    targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
-    pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone', hints: 'gone',
-    cargo: 'gone', orbit: 'gone', copilot: 'faint', next: 'shown', comms: 'shown',
+4: Object.freeze({
+targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
+     pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone', hints: 'gone',
+    cargo: 'gone', orbit: 'gone', copilot: 'faint', next: 'shown', comms: 'shown', override: 'gone',
   }),
-  5: Object.freeze({
-    targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
-    pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
-    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown',
+5: Object.freeze({
+targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
+     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
+    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone',
   }),
 });
 

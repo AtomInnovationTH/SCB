@@ -221,6 +221,13 @@ export class LadderController {
     this._onSubjectChange = (typeof deps.onSubjectChange === 'function') ? deps.onSubjectChange : null;
     this._autopilot = deps.autopilot || null;
     this._paneRail = deps.paneRail || null;
+    /**
+     * PURE SCENERY completion (plan D7, owner 2026-09-07): an optional
+     * `{ hide(), show() }` hook the hub binds to `body[data-pure-scenery]`
+     * (index.html hides the SPECS/REFIT tabs, #vitals-line, #build-stamp and
+     * the glass STORE chip under it). Duck-typed; absent = no-op.
+     */
+    this._pureScenery = deps.pureScenery || null;
     this._audioBeds = deps.audioBeds || null;
     this._floorMask = deps.floorMask || null;
     this._viewStore = deps.viewStore || null;
@@ -979,7 +986,10 @@ export class LadderController {
    * already cleared every density rung, the hub bows the RAILS out too;
    * `+` (the hub), any ride, or a fresh engage brings them back. A transient
    * view state: never persisted, never a room edit (the D5 capture reads
-   * pane flips, and rails are not panes).
+   * pane flips, and rails are not panes). Plan D7 (owner 2026-09-07): the
+   * `pureScenery` hook rides the same two branches, after the rails — `hide()`
+   * completes the pure-scenery frame (SPECS/REFIT tabs, vitals, build stamp,
+   * STORE chip), `show()` restores it.
    * @param {boolean} shy
    */
   setRailsShy(shy) {
@@ -990,9 +1000,15 @@ export class LadderController {
     if (want) {
       if (this._rail && this._rail.hide) this._rail.hide();
       if (this._paneRail && this._paneRail.hide) this._paneRail.hide();
+      if (this._pureScenery && typeof this._pureScenery.hide === 'function') {
+        try { this._pureScenery.hide(); } catch (_e) { /* hook */ }
+      }
     } else {
       if (this._rail && this._rail.show) this._rail.show();
       if (this._paneRail && this._paneRail.show && this._paneRailAllowed(this._floorApplied)) this._paneRail.show();
+      if (this._pureScenery && typeof this._pureScenery.show === 'function') {
+        try { this._pureScenery.show(); } catch (_e) { /* hook */ }
+      }
     }
   }
 
@@ -1137,6 +1153,9 @@ export class LadderController {
     this._settleStaleRide();
     this._engaged = true;
     this._railsShy = false;                    // a fresh engagement is never shy (Session N.5)
+    if (this._pureScenery && typeof this._pureScenery.show === 'function') {
+      try { this._pureScenery.show(); } catch (_e) { /* hook */ }   // plan D7: a fresh engage clears pure scenery too
+    }
     const s = this._ladder.getState();
     const frame = this._frame(s.floor, s.z01);
     if (this._cameraSystem && this._cameraSystem.ladderEngage) {
@@ -1228,6 +1247,13 @@ export class LadderController {
     this._setCityLabelsHidden(false);
     if (this._rail && this._rail.hide) this._rail.hide();
     if (this._paneRail && this._paneRail.hide) this._paneRail.hide();
+    // Plan D7 (review 2026-09-07): leaving gameplay clears pure scenery too —
+    // the body attribute is a view state of the ENGAGED ladder only, so the
+    // build stamp / tabs / vitals are back on the menu (Ipad.md §2.5: hidden
+    // ONLY inside the transient pure-scenery view).
+    if (this._pureScenery && typeof this._pureScenery.show === 'function') {
+      try { this._pureScenery.show(); } catch (_e) { /* hook */ }
+    }
   }
 
   // ── Decision translation ───────────────────────────────────────────────────

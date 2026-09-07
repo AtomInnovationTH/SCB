@@ -14,17 +14,22 @@
  * visibility bit is the `data-density-hidden` attribute on the root, so the
  * DISPLAY rail lists it as a notch and FloorMask rooms it per floor.
  *
- * HOME (decided by the 13-inch iPad numbers, 1376 × 1032): bottom-left, RIGHT
- * of the DISPLAY rail and ABOVE the hint ticker. The hub (main.js, inside the
- * LADDER gate) constructs the pane, pushes `rung()` into hud.paneDensity.rungs
- * before the first floorMask.setFloor, and calls `setAnchor(paneRail.rightPx(),
- * floorPx)` once per frame with cached numbers and `update(nowMs)` per frame.
- * setAnchor is write-on-change on its two inputs; every edge of the root comes
- * from it (left = rail right + GAP; the bottom edge = floor − GAP, placed via
- * top = bottom − the mode's fixed height — pure arithmetic, no layout read).
- * Modes: `full` (track + slots, 140 tall) when the budget floor − GAP ≥ 140,
- * `compact` (slots only, 104) when ≥ 104, else `hidden` (display none via the
- * `data-orbit-mode` attribute — never the rung bit).
+ * HOME (owner 2026-09-07; before that: right of the DISPLAY rail): bottom-left,
+ * FLUSH with the left HUD column (x = EDGE_PX 10), UNDER the DISPLAY rail and
+ * ABOVE the hint ticker — so the bottom-centre stays free for the SAFETY
+ * OVERRIDE button. The hub (main.js, inside the LADDER gate) constructs the
+ * pane, pushes `rung()` into hud.paneDensity.rungs before the first
+ * floorMask.setFloor, and calls `setAnchor(EDGE_PX − GAP_PX, floorPx,
+ * paneRail.bottomPx())` once per frame with cached numbers and `update(nowMs)`
+ * per frame. setAnchor is write-on-change on its three inputs; every edge of
+ * the root comes from it (left = leftEdge + GAP; the bottom edge = floor − GAP,
+ * placed via top = bottom − the mode's fixed height — pure arithmetic, no
+ * layout read). Modes by the vertical budget between the ceiling (the rail's
+ * bottom + GAP, or the screen top) and the bottom edge: `full` (track + slots,
+ * 140 tall) when ≥ 140, `compact` (slots only, 104) when ≥ 104, else `hidden`
+ * (display none via the `data-orbit-mode` attribute — never the rung bit). The
+ * left-edge cascade: the column (top-anchored) → the rail (dodges under it) →
+ * this pane fills what is left, compacting, then hiding — the CARGO / NEXT law.
  *
  * UPDATE: `update(nowMs)` self-throttles to one tick per second; every tick
  * recomputes the readouts from the injected deps and writes text / style /
@@ -114,6 +119,8 @@ export const PLACEHOLDER = '\u2014';
 /** The rung's ONE hide bit (HUD._initPaneDensity domRung grammar). */
 const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
 const MODE_ATTR = 'data-orbit-mode';
+/** The .hud-panel chrome a side, horizontally: 8 px padding + 1 px border (SAFETY OVERRIDE rightPx). */
+const H_CHROME_PX = 18;
 const CHANGED_ATTR = 'data-changed';
 const TREND_ATTR = 'data-trend';
 const ARROW_DOWN = '\u2193';
@@ -230,6 +237,7 @@ export class OrbitPane {
     this._rung = null;
     this._mode = 'hidden';           // until the first setAnchor places the pane
     this._leftPx = undefined;        // last setAnchor inputs (write-on-change)
+    this._ceilingPx = undefined;
     this._floorPx = undefined;
     this._lastTickMs = null;
     this._vals = { ...EMPTY_VALS };  // the strings computed by the last tick
@@ -281,25 +289,38 @@ export class OrbitPane {
 
   /**
    * THE ANCHOR (the hub calls it per frame with cached numbers). `leftEdgePx`
-   * = the DISPLAY rail's right edge (paneRail.rightPx()); `floorPx` = the lowest
-   * allowed bottom edge (min of the thumb rest and the ticker band). Write-on-
-   * change on the two inputs: repeated identical inputs return before any DOM
-   * access. Pure arithmetic, no layout read:
+   * = the right edge of what sits to the pane's left (owner 2026-09-07: the
+   * pane rides FLUSH-LEFT under the DISPLAY rail, lined up with the left HUD
+   * column — the hub passes EDGE_PX − GAP_PX so `left` lands on the column's
+   * x; before that it was the rail's rightPx()); `floorPx` = the lowest allowed
+   * bottom edge (min of the thumb rest and the ticker band); `ceilingPx`
+   * (optional, owner 2026-09-07) = the bottom edge of what sits ABOVE the pane
+   * (the DISPLAY rail's cached bottomPx()) — null / non-finite = the screen
+   * top. Write-on-change on the three inputs: repeated identical inputs return
+   * before any DOM access. Pure arithmetic, no layout read:
    *   left   = leftEdgePx + GAP_PX
-   *   bottom = floorPx − GAP_PX;  mode = full (bottom ≥ FULL_PX) | compact (≥ COMPACT_PX) | hidden
+   *   bottom = floorPx − GAP_PX
+   *   budget = bottom − (ceilingPx + GAP_PX | 0);  mode = full (budget ≥ FULL_PX) | compact (≥ COMPACT_PX) | hidden
    *   top    = bottom − the mode's height (FULL_PX | COMPACT_PX)
+   * The cascade on the left edge: the HUD column (top-anchored) → the rail
+   * (dodges under the column) → this pane fills what is left at the bottom,
+   * compacting, then hiding, when squeezed — the CARGO / NEXT law on the right.
    * Writes data-orbit-mode, left, top and height.
    * @param {number} leftEdgePx
    * @param {number} floorPx
+   * @param {number|null} [ceilingPx]
    */
-  setAnchor(leftEdgePx, floorPx) {
+  setAnchor(leftEdgePx, floorPx, ceilingPx = null) {
     if (this._disposed || !this._root) return;
     const left = Number(leftEdgePx);
     const floor = Number(floorPx);
     if (!Number.isFinite(left) || !Number.isFinite(floor)) return;
-    if (left === this._leftPx && floor === this._floorPx) return;   // write-on-change (inputs)
+    const c = Number(ceilingPx);
+    const ceiling = (ceilingPx == null || !Number.isFinite(c)) ? null : c;
+    if (left === this._leftPx && floor === this._floorPx && ceiling === this._ceilingPx) return;   // write-on-change (inputs)
     this._leftPx = left;
     this._floorPx = floor;
+    this._ceilingPx = ceiling;
     this._layout();
   }
 
@@ -335,6 +356,25 @@ export class OrbitPane {
 
   /** The current mode: 'full' | 'compact' | 'hidden' ('hidden' until the first setAnchor, and headless). */
   mode() { return this._mode; }
+
+  /**
+   * SAFETY OVERRIDE (owner 2026-09-07): the pane's placed RIGHT edge (CSS px)
+   * while it is on screen — placed by setAnchor, mode not 'hidden', density
+   * bit clear — else null. Pure arithmetic over the anchor + the mode's fixed
+   * width (TRACK + BLOCK_GAP + SLOTS in full, SLOTS in compact, plus the
+   * .hud-panel chrome: 8 px padding + 1 px border a side); one attribute read,
+   * never a layout read. The OVERRIDE panel centres itself in the band right
+   * of this edge (the hub's gameLoop wire), so the two never overlap.
+   * @returns {number|null}
+   */
+  rightPx() {
+    const el = this._root;
+    if (!el || this._disposed || this._mode === 'hidden' || !Number.isFinite(this._leftPx)) return null;
+    if (el.hasAttribute && el.hasAttribute(DENSITY_HIDDEN_ATTR)) return null;
+    const G = ORBIT_GEOMETRY;
+    const inner = this._mode === 'compact' ? G.SLOTS_W_PX : (G.TRACK_PX + G.BLOCK_GAP_PX + G.SLOTS_W_PX);
+    return Math.round(this._leftPx + G.GAP_PX) + inner + H_CHROME_PX;
+  }
 
   /** The strings the last tick computed (a copy): alt, trend, vel, inc, period, lat, lon, sunState, sunTimer, dv, dvFill, met. */
   readout() { return { ...this._vals }; }
@@ -729,10 +769,13 @@ export class OrbitPane {
     const root = this._root;
     if (!root || !Number.isFinite(this._floorPx) || !Number.isFinite(this._leftPx)) return;
     const G = ORBIT_GEOMETRY;
-    const bottom = this._floorPx - G.GAP_PX;      // the bottom edge; the top constraint is the screen top
+    const bottom = this._floorPx - G.GAP_PX;      // the bottom edge
+    // The vertical budget: down from the ceiling (the rail's bottom + GAP) or,
+    // with no ceiling, from the screen top (owner 2026-09-07).
+    const budget = bottom - (this._ceilingPx != null ? this._ceilingPx + G.GAP_PX : 0);
     let mode, h;
-    if (bottom >= G.FULL_PX) { mode = 'full'; h = G.FULL_PX; }
-    else if (bottom >= G.COMPACT_PX) { mode = 'compact'; h = G.COMPACT_PX; }
+    if (budget >= G.FULL_PX) { mode = 'full'; h = G.FULL_PX; }
+    else if (budget >= G.COMPACT_PX) { mode = 'compact'; h = G.COMPACT_PX; }
     else { mode = 'hidden'; h = 0; }
     if (mode !== this._mode) {
       this._mode = mode;
