@@ -512,10 +512,12 @@
   <!-- Session L (D-J): the body face, fetched in parallel with the parse so the
        font-display:swap flip lands before the loading screen settles. `crossorigin`
        is mandatory on font preloads (CSS fetches fonts in CORS mode; without it
-       the browser fetches twice). B612-Regular (--font-ui) is NOT preloaded until
-       a rule consumes the token — an unused preload is a wasted 150 KB per boot
-       plus a console warning. -->
+       the browser fetches twice). B612-Regular (--font-ui) gained its first
+       consumer with the menu lore prose (MenuScreen.js .adr-prose + #menu-tip,
+       Sept 2026), so it is preloaded too: ~150 KB, cache-first offline via the
+       precache, and no FOUT on the first menu paint. -->
   <link rel="preload" as="font" type="font/ttf" href="./fonts/B612Mono-Regular.ttf" crossorigin>
+  <link rel="preload" as="font" type="font/ttf" href="./fonts/B612-Regular.ttf" crossorigin>
 </head>
 <body>
   <!-- F7: JavaScript is required — this is the only content non-JS visitors see. -->

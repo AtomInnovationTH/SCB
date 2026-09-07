@@ -108,11 +108,20 @@ export class MenuScreen {
           position: absolute;
           top: 3%; left: 50%;
           transform: translate(-50%, 0);
-          width: 40%;
+          /* max-content, not 40%: the nowrap h1 is wider than a 40% box on
+             every viewport under ~1700px, and an overflowing centred line
+             start-aligns — the title sat right of centre. The version label
+             rides in a zero-width inline-block inside the h1 so the box (and
+             the centring) is the SPACE COWBOY glyph run alone. */
+          width: max-content;
+          max-width: 94vw;
           min-width: 320px;
           z-index: 3;
         }
         #menu-body { display: contents; }
+        /* Library / Refit pane grammar (INFO family): opaque plate, hairline
+           cyan border, NO backdrop-filter — the blur shader re-ran every
+           composite frame over the live WebGL hero (index.html GPU note). */
         #menu-left {
           position: absolute;
           top: 20px; left: 20px;
@@ -121,10 +130,8 @@ export class MenuScreen {
           max-height: calc(100% - 40px);
           overflow-y: auto;
           z-index: 3;
-          background: rgba(4,12,30,0.52);
-          backdrop-filter: blur(6px);
-          -webkit-backdrop-filter: blur(6px);
-          border: 1px solid rgba(0,255,136,0.14);
+          background: rgba(0,16,32,0.82);
+          border: 1px solid rgba(0,204,255,0.4);
           border-radius: 8px;
           padding: 14px 16px;
           box-sizing: border-box;
@@ -134,39 +141,41 @@ export class MenuScreen {
           #menu-body   { display: block; padding: 0 16px; }
           #menu-left   { position: relative; top: auto; left: auto; width: 100%; max-width: none; max-height: none; }
         }
-        /* ── ADR credits ── */
+        /* ── ADR credits — library INFO grammar: PLAYER-green group titles,
+           INFO-cyan names / tags / badges / sub-headers, #aaddff prose in
+           proportional B612 (--font-ui's first consumer). ── */
         .adr-name {
-          color: rgba(0,255,136,0.95);
+          color: rgba(0,204,255,0.95);
           cursor: help;
-          border-bottom: 1px dotted rgba(0,255,136,0.45);
+          border-bottom: 1px dotted rgba(0,204,255,0.45);
           display: inline-block;
           padding: 1px 2px;
+          -webkit-tap-highlight-color: transparent;
           transition: color 0.15s, text-shadow 0.15s;
         }
         .adr-name:hover {
-          color: #00ff88;
-          text-shadow: 0 0 6px rgba(0,255,136,0.5);
+          color: #aaddff;
+          text-shadow: 0 0 6px rgba(0,204,255,0.5);
         }
         /* Touch-friendly lore tooltip: the ADR factoids used native title=
            attributes, which never appear on touch devices. They now live in
            data-tip and surface via this styled popover — shown on hover for
-           pointer devices AND on tap/click (toggle) for touch. */
+           pointer devices AND on tap/click (toggle) for touch. Opaque plate,
+           no blur (see #menu-left). */
         #menu-tip {
           position: fixed;
           z-index: 60;
-          max-width: min(320px, 78vw);
-          background: rgba(3,10,26,0.96);
-          border: 1px solid rgba(0,255,136,0.35);
+          max-width: min(360px, 78vw);
+          background: rgba(0,16,32,0.96);
+          border: 1px solid rgba(0,204,255,0.4);
           border-radius: 6px;
           padding: 9px 12px;
-          color: rgba(0,255,136,0.9);
-          font-family: var(--font-mono);
-          font-size: 0.8rem;
+          color: #aaddff;
+          font-family: var(--font-ui);
+          font-size: 0.9rem;
           line-height: 1.5;
-          letter-spacing: 0.01em;
-          box-shadow: 0 8px 26px rgba(0,0,0,0.55), 0 0 14px rgba(0,255,136,0.12);
-          backdrop-filter: blur(8px);
-          -webkit-backdrop-filter: blur(8px);
+          letter-spacing: 0;
+          box-shadow: 0 8px 26px rgba(0,0,0,0.55), 0 0 14px rgba(0,204,255,0.12);
           pointer-events: none;
           opacity: 0;
           transform: translateY(4px);
@@ -174,25 +183,40 @@ export class MenuScreen {
         }
         #menu-tip.open { opacity: 1; transform: translateY(0); }
         .adr-name.tip-active {
-          color: #00ff88;
-          text-shadow: 0 0 6px rgba(0,255,136,0.5);
+          color: #aaddff;
+          text-shadow: 0 0 6px rgba(0,204,255,0.5);
         }
+        /* Prose (intro wrapper, group intros, the Rawhide quote). The
+           .adr-list li.adr-prose twin outranks .adr-list li (0,1,1) — a
+           bare .adr-prose (0,1,0) would lose colour and size to it. */
+        .adr-prose, .adr-list li.adr-prose {
+          font-family: var(--font-ui);
+          color: #aaddff;
+          font-size: 0.92rem;
+          line-height: 1.5;
+          letter-spacing: 0;
+          padding-left: 0;
+          margin-bottom: 0.35rem;
+        }
+        /* "Also…" / "Collision-avoidance software:" lead-ins. */
+        .adr-also, .adr-list li.adr-also { color: rgba(0,204,255,0.62); }
         .adr-section {
           font-size: 0.72rem;
-          color: rgba(0,255,136,0.55);
+          color: rgba(0,204,255,0.6);
           letter-spacing: 0.1em;
           text-transform: uppercase;
           margin: 0.6rem 0 0.2rem;
         }
+        .adr-group > .adr-section:first-of-type { margin-top: 0.15rem; }
         .adr-list  { margin: 0; padding: 0; list-style: none; line-height: 1.65; }
-        .adr-list li { font-size: 0.88rem; color: rgba(0,255,136,0.7); }
-        .adr-sub   { color: rgba(0,255,136,0.6); font-size: 0.76rem; margin-left: 4px; }
+        .adr-list li { font-size: 0.88rem; color: rgba(0,204,255,0.75); }
+        .adr-sub   { color: rgba(0,204,255,0.6); font-size: 0.76rem; margin-left: 4px; }
         /* Collapsible reference groups (declutter via expand-on-click) */
-        .adr-group { border-top: 1px solid rgba(0,255,136,0.12); }
+        .adr-group { border-top: 1px solid rgba(0,204,255,0.18); }
         .adr-group > summary {
           list-style: none; cursor: pointer; user-select: none;
           display: flex; align-items: center; gap: 7px;
-          font-size: 0.74rem; color: rgba(0,255,136,0.72);
+          font-size: 0.74rem; color: rgba(0,255,136,0.85);
           letter-spacing: 0.1em; text-transform: uppercase;
           padding: 0.5rem 0 0.45rem; transition: color 0.15s;
         }
@@ -204,11 +228,34 @@ export class MenuScreen {
         }
         .adr-group[open] > summary::before { transform: rotate(90deg); }
         .adr-count {
-          margin-left: auto; font-size: 0.64rem; color: rgba(0,255,136,0.7);
-          border: 1px solid rgba(0,255,136,0.3); border-radius: 999px;
+          margin-left: auto; font-size: 0.64rem; color: rgba(0,204,255,0.75);
+          border: 1px solid rgba(0,204,255,0.35); border-radius: 999px;
           padding: 0 6px; line-height: 1.4; letter-spacing: 0;
         }
         .adr-group .adr-list { padding-left: 15px; margin-bottom: 0.5rem; }
+        /* Handheld (13" iPad, two-handed at ~40 cm): Ipad.md §3 touch law —
+           44 px summary rows and a 44 px .adr-name hit box (negative margin
+           keeps the row compact; neighbours overlap ~3 px, harmless). Gated on
+           a coarse pointer above the stacked-layout breakpoint so the desktop
+           look is byte-identical and phones keep the max-width: 900px block.
+           Placed AFTER the base .adr-* rules: same specificity, so source
+           order is what lets these win. */
+        @media (pointer: coarse) and (min-width: 901px) {
+          /* 27% of the viewport, but never under the centred title: the SPACE
+             COWBOY glyph box is 638 px (3.5rem, 0.3em tracking), so its left
+             edge sits at 50vw - 319px; 20px panel left + 13px gap → 352. On a
+             1366 iPad that is 331 px (right edge 351, title at 364); 27% only
+             wins above ~1530 px, and max-width caps it before that. */
+          #menu-left { width: min(27%, calc(50vw - 352px)); max-width: 380px; padding: 16px 18px; }
+          .adr-prose, .adr-list li.adr-prose { font-size: 1rem; }
+          .adr-list li { font-size: 1rem; padding: 0.3rem 0; }
+          .adr-sub { font-size: 0.85rem; }
+          .adr-section { font-size: 0.8rem; }
+          .adr-group > summary { font-size: 0.84rem; min-height: 44px; padding: 0.35rem 0; box-sizing: border-box; }
+          .adr-count { font-size: 0.72rem; }
+          .adr-name { padding: 0.55rem 2px; margin: -0.4rem 0; }
+          #menu-tip { font-size: 0.95rem; max-width: min(400px, 78vw); padding: 11px 14px; }
+        }
         /* ── Language / region selector (top-right) ── */
         #menu-lang {
           position: absolute; top: 16px; right: 18px;
@@ -333,7 +380,7 @@ export class MenuScreen {
           <h1 style="font-family: var(--font-mono); font-size:3.5rem; color:#00ff88;
                       letter-spacing:0.3em; margin-bottom:0.5rem; white-space:nowrap;
                       text-shadow: 0 0 30px rgba(0,255,136,0.6), 0 0 60px rgba(0,255,136,0.3);">
-            SPACE COWBOY<span style="font-size:0.5em; letter-spacing:0.1em; margin-left:0.4em; vertical-align:0.15em; color:rgba(0,255,136,0.6);">${Constants.VERSION_LABEL || ''}</span>
+            SPACE COWBOY<span style="display:inline-block; width:0; white-space:nowrap; overflow:visible;"><span style="font-size:0.5em; letter-spacing:0.1em; margin-left:0.4em; vertical-align:0.15em; color:rgba(0,255,136,0.6);">${Constants.VERSION_LABEL || ''}</span></span>
           </h1>
           <div style="font-size:1.1rem; color:rgba(0,255,136,0.6); letter-spacing:0.15em;
                        margin-bottom:1.5rem;">
@@ -377,9 +424,9 @@ export class MenuScreen {
           <!-- ── LEFT PANEL (top-left 25%) ── -->
           <div id="menu-left">
 
-            <!-- Story / overview text -->
-            <div style="margin-bottom:1.9rem; font-size:0.92rem; color:rgba(0,255,136,0.72);
-                         line-height:1.7; padding:0 2px;">
+            <!-- Story / overview text — proportional B612 prose (.adr-prose); the
+                 recruiting line below keeps the one PLAYER-green accent on purpose. -->
+            <div class="adr-prose" style="margin-bottom:1.9rem; padding:0 2px;">
               <p style="margin:0 0 0.3rem;">
                 <strong>40,000</strong> pieces of <span class="adr-name" title="Dead satellites, spent rocket stages and collision fragments. Much of it moving at 7–8 km/s. See the Kessler syndrome section below.">space junk</span> threaten every orbit, moving ten times faster than a bullet.
               </p>
@@ -391,113 +438,127 @@ export class MenuScreen {
               </p>
             </div>
 
-            <!-- True stories from orbit (hook) -->
+            <!-- Kessler syndrome — absorbs the former true-stories hook group:
+                 10 entries, chronological, year in the .adr-sub tag. -->
             <details class="adr-group">
-              <summary>True stories from orbit<span class="adr-count">6</span></summary>
+              <summary>Kessler syndrome<span class="adr-count">10</span></summary>
               <ul class="adr-list">
+              <li class="adr-prose">Proposed by NASA's Donald Kessler in 1978: once orbital junk gets dense enough, each collision throws off fragments that cause more collisions. A runaway cascade that can make whole orbits unusable for generations. Every dead satellite left up there raises the odds. The record so far:</li>
+              <li><span class="adr-name" title="The nuclear-powered Kosmos 954 scattered radioactive debris across northern Canada in 1978. Canada billed the USSR under the 1972 Liability Convention, the only space-crash bill ever paid.">The only space-crash bill ever</span> <span class="adr-sub">Canada · 1978</span></li>
+              <li><span class="adr-name" title="China destroyed its own Fengyun-1C weather satellite with a missile at ~865 km. The worst single debris event in history, and most of those fragments will linger for decades.">Chinese anti-satellite test</span> <span class="adr-sub">2007 · 3,000+ pieces</span></li>
+              <li><span class="adr-name" title="The defunct Russian Cosmos 2251 slammed into the active Iridium 33 communications satellite. The first accidental crash between two whole satellites.">Iridium–Cosmos crash</span> <span class="adr-sub">2009 · 2,000+ pieces</span></li>
               <li><span class="adr-name" title="Launched in 1965 and long thought dead, the LES-1 satellite was detected transmitting again in 2013. Its tumbling likely switches its transmitter on and off. Nobody sent the command.">The zombie satellite</span> <span class="adr-sub">1967 → 2013</span></li>
+              <li><span class="adr-name" title="In 2021 the working Yunhai 1-02 satellite was struck by a fragment of a Zenit rocket launched back in 1996. A 25-year-old piece of junk found its target.">Hit by a rocket from 1996</span> <span class="adr-sub">2021</span></li>
+              <li><span class="adr-name" title="Russia destroyed the defunct Cosmos 1408 satellite in a weapons test, scattering fragments that forced the ISS crew to shelter in their capsules.">Russian anti-satellite test</span> <span class="adr-sub">2021 · 1,500+ pieces</span></li>
+              <li><span class="adr-name" title="A minor solar storm in 2022 warmed and puffed up the upper atmosphere, adding just enough drag to pull 38 freshly-launched Starlink satellites back down before they reached their orbits.">A solar storm sinks 38 Starlinks</span> <span class="adr-sub">2022</span></li>
               <li><span class="adr-name" title="A battery pallet jettisoned from the ISS survived reentry in 2024 and punched clean through the roof of a Florida home. It was supposed to burn up entirely.">A piece of the Station hits a house</span> <span class="adr-sub">Florida · 2024</span></li>
               <li><span class="adr-name" title="Kosmos 482 was a Soviet Venus lander stranded in Earth orbit by a 1972 launch failure. Built to survive Venus, it fell back to Earth intact 53 years later, in 2025.">The Venus lander that stayed</span> <span class="adr-sub">1972 → 2025</span></li>
-              <li><span class="adr-name" title="In 2021 the working Yunhai 1-02 satellite was struck by a fragment of a Zenit rocket launched back in 1996. A 25-year-old piece of junk found its target.">Hit by a rocket from 1996</span> <span class="adr-sub">2021</span></li>
-              <li><span class="adr-name" title="A minor solar storm in 2022 warmed and puffed up the upper atmosphere, adding just enough drag to pull 38 freshly-launched Starlink satellites back down before they reached their orbits.">A solar storm sinks 38 Starlinks</span> <span class="adr-sub">2022</span></li>
-              <li><span class="adr-name" title="The nuclear-powered Kosmos 954 scattered radioactive debris across northern Canada in 1978. Canada billed the USSR under the 1972 Liability Convention, the only space-crash bill ever paid.">The only space-crash bill ever</span> <span class="adr-sub">Canada · 1978</span></li>
-              </ul>
-            </details>
-
-            <!-- Kessler syndrome -->
-            <details class="adr-group">
-              <summary>Kessler syndrome<span class="adr-count">4</span></summary>
-              <ul class="adr-list">
-              <li style="color:rgba(0,255,136,0.72); padding-left:0; margin-bottom:0.35rem;">Proposed by NASA's Donald Kessler in 1978: once orbital junk gets dense enough, each collision throws off fragments that cause more collisions. A runaway cascade that can make whole orbits unusable for generations. Every dead satellite left up there raises the odds.</li>
-              <li><span class="adr-name" title="China destroyed its own Fengyun-1C weather satellite with a missile at ~865 km. The worst single debris event in history, and most of those fragments will linger for decades.">2007. Chinese anti-satellite test</span> <span class="adr-sub">3,000+ pieces</span></li>
-              <li><span class="adr-name" title="The defunct Russian Cosmos 2251 slammed into the active Iridium 33 communications satellite. The first accidental crash between two whole satellites.">2009. Iridium–Cosmos crash</span> <span class="adr-sub">2,000+ pieces</span></li>
-              <li><span class="adr-name" title="Russia destroyed the defunct Cosmos 1408 satellite in a weapons test, scattering fragments that forced the ISS crew to shelter in their capsules.">2021. Russian anti-satellite test</span> <span class="adr-sub">1,500+ pieces</span></li>
               <li><span class="adr-name" title="The US Space Surveillance Network watches for close passes; the ISS fires its thrusters to dodge when collision odds exceed 1 in 10,000. About once a year on average (NASA), and rising. Its hull is shielded against debris up to ~1 cm; for anything bigger spotted too late, the crew shelters in their return capsules.">ISS dodges debris</span> <span class="adr-sub">~1× / year</span></li>
               </ul>
             </details>
 
-            <!-- The new rules -->
+            <!-- The new rules — India first -->
             <details class="adr-group">
-              <summary>Cleanup is now mandatory<span class="adr-count">5</span></summary>
+              <summary>Clean up is the law<span class="adr-count">6</span></summary>
               <ul class="adr-list">
-              <li style="color:rgba(0,255,136,0.72); padding-left:0; margin-bottom:0.35rem;">Sixty years of leftovers plus mega-constellations adding satellites by the thousand turned &ldquo;someday&rdquo; into &ldquo;this decade.&rdquo; Regulators answered with hard deadlines.</li>
+              <li class="adr-prose">Sixty years of leftovers plus mega-constellations adding satellites by the thousand turned &ldquo;someday&rdquo; into &ldquo;this decade.&rdquo; Regulators answered with hard deadlines: some binding law, some pledges with a date.</li>
+              <li><span class="adr-name" title="ISRO's pledge, made in April 2024 while India hosted the world's debris agencies in Bengaluru: every Indian space mission, government or private, debris-free by 2030. The new private rocket companies signed up alongside ISRO.">Debris-Free Space Missions</span> <span class="adr-sub">India · by 2030</span></li>
+              <li><span class="adr-name" title="The 2023 policy that opened Indian space to private companies, and the 2024 rulebook that came with it: one regulator, one authorisation for every launch or satellite, and a hard number for anyone choosing an orbit. The odds of a collision over the mission's life must stay under 1 in 1,000.">Indian Space Policy 2023</span> <span class="adr-sub">India · IN-SPACe</span></li>
               <li><span class="adr-name" title="US Federal Communications Commission, 2022. Satellites in low orbit must now be removed within 5 years of mission end. Replacing the old 25-year guideline. First fine: Dish Network, $150,000 (2023).">FCC 5-year rule</span> <span class="adr-sub">USA · 2022</span></li>
               <li><span class="adr-name" title="European Space Agency's Zero Debris Charter (2023): no new debris generated by participating missions by 2030, with disposal success above 90% and orbital clearance in under 5 years.">ESA Zero Debris</span> <span class="adr-sub">Europe · by 2030</span></li>
-              <li><span class="adr-name" title="ISRO's Debris-Free Space Missions pledge (2024): all Indian space activity. Government and private. To be debris-free by 2030.">Debris-Free Space Missions</span> <span class="adr-sub">India · by 2030</span></li>
               <li><span class="adr-name" title="Proposed EU-wide Space Act (June 2025): would require debris-mitigation plans, collision avoidance and end-of-life deorbiting for any operator serving the EU market. Targeted to apply from 2030.">EU Space Act</span> <span class="adr-sub">EU · proposed 2025</span></li>
               <li><span class="adr-name" title="The UN Committee on the Peaceful Uses of Outer Space (2007 guidelines) and the Inter-Agency Space Debris Coordination Committee. The technical origin of the original 25-year disposal rule that national laws build on.">UN COPUOS / IADC</span> <span class="adr-sub">global</span></li>
               </ul>
             </details>
 
-            <!-- Companies list -->
-            <div style="font-size:0.88rem; color:rgba(0,255,136,0.6); line-height:1.5;">
-              <details class="adr-group">
-                <summary>Who removes debris<span class="adr-count">6</span></summary>
-                <ul class="adr-list">
-                <li><span class="adr-name" title="Tokyo-based pure-play debris remover, listed on the Tokyo Stock Exchange since 2024 (valued roughly $1 billion). In 2024 its ADRAS-J spacecraft flew within ~15 m of a discarded Japanese rocket stage. The closest a private craft has come to large debris. Its ADRAS-J2 follow-up will grab and de-orbit that stage (~2027).">Astroscale</span> <span class="adr-sub">Japan · public</span></li>
-                <li><span class="adr-name" title="Subsidiary of Northrop Grumman, and the only company doing this routinely today. Its Mission Extension Vehicles docked with live Intelsat satellites (2020–21) to add years of life. The first commercial servicing in orbit.">Northrop Grumman SpaceLogistics</span> <span class="adr-sub">USA</span></li>
-                <li><span class="adr-name" title="Swiss start-up building Europe's first debris-removal mission for the European Space Agency. Its original target. A leftover rocket adapter. Was itself hit by other debris, so the mission was redirected to capture and de-orbit the retired PROBA-1 satellite instead. Launch ~2028.">ClearSpace</span> <span class="adr-sub">Switzerland</span></li>
-                <li><span class="adr-name" title="Italian space-logistics firm. Its ION space tug has flown since 2020; it won a ~€120 million ESA contract (the RISE mission) to service a satellite in geostationary orbit, around 2028.">D-Orbit</span> <span class="adr-sub">Italy</span></li>
-                <li><span class="adr-name" title="Seattle start-up (raised $100 million+). Its Otter vehicle is designed to dock with satellites that were never built to be caught; it won a US Space Force contract to de-orbit a retired satellite.">Starfish Space</span> <span class="adr-sub">USA</span></li>
-                <li><span class="adr-name" title="Pioneer of in-orbit refuelling. 'gas stations in space'. Its RAFTI fuel port is becoming a de-facto industry standard for refuellable satellites.">Orbit Fab</span> <span class="adr-sub">USA</span></li>
-                <li style="color:rgba(0,255,136,0.62);">Also emerging:
-                  <span class="adr-name" title="Los Angeles. Uses an inflatable 'capture bag' to scoop up debris and spent objects.">TransAstra</span>,
-                  <span class="adr-name" title="Michigan. Gecko-adhesive and microspine gripper arms (REACCH) to grab tumbling, uncooperative debris.">Kall Morris</span>,
-                  <span class="adr-name" title="Canada (Ottawa). Tether-net capture and the 'Puck' docking system for in-orbit servicing.">Obruta</span>.</li>
-                </ul>
-              </details>
+            <!-- Countries — India first (was the flat "Space agencies" list).
+                 Country headers are .adr-section DIV siblings of each list
+                 (.adr-list li outranks .adr-section, so never <li>s). -->
+            <details class="adr-group">
+              <summary>Countries<span class="adr-count">4</span></summary>
+              <div class="adr-section">India</div>
+              <ul class="adr-list">
+              <li><span class="adr-name" title="The agency that landed at the Moon's south pole in 2023, a first. Its space-safety centre in Bengaluru keeps watch over India's satellites and steers them clear of junk, and in 2024 ISRO hosted the world's debris agencies and set the national goal: every Indian mission debris-free by 2030.">ISRO</span> <span class="adr-sub">Bengaluru · IS4OM</span></li>
+              <li><span class="adr-name" title="Two ISRO engineers left to build their own rocket. Vikram-S touched space in 2022; they named it Prarambh, the beginning. On 18 July 2026 Vikram-1 climbed out of Sriharikota into orbit: Mission Aagaman, the arrival. It was India's first private orbital launch, and riding in the payload bay was a robot arm built to catch space junk. The next Vikram-1 is already at Sriharikota, waiting for its date.">Skyroot Aerospace</span> <span class="adr-sub">Hyderabad · in orbit 2026</span></li>
+              <li><span class="adr-name" title="Born at IIT Madras. Agnikul prints its whole rocket engine as one piece of metal, and in May 2024 flew it from India's first private launchpad, the first single-piece 3D-printed engine ever to fly. Next: Agnibaan's first orbital flight, late 2026 or early 2027, with a try at landing the booster at sea.">Agnikul Cosmos</span> <span class="adr-sub">Chennai · orbit 2026-27</span></li>
+              <li><span class="adr-name" title="Razor Crest Mk-1 is designed to lift 24.8 tonnes to orbit, or 8 tonnes when both stages fly home to be used again, which would make it India's first fully reusable heavy launcher. The reusable engine was unveiled in September 2026; the first test flight is planned for late 2027.">EtherealX</span> <span class="adr-sub">Bengaluru · reusable · 2027</span></li>
+              <li><span class="adr-name" title="Started in 2018 by two engineering students, from their university dormitory: a map of everything in orbit. Today, from Bengaluru, Digantara's own satellite is up there drawing it. The tracking story is under Who tracks debris.">Digantara</span> <span class="adr-sub">Bengaluru · tracking</span></li>
+              <li><span class="adr-name" title="A small Hyderabad team led by an ISRO veteran, with a clear idea: catching space junk should be a routine service, not a one-off mission. Its EMBRACE arm has already been to orbit, on Vikram-1 in July 2026. The flight story is under Who removes debris.">Cosmoserve Space</span> <span class="adr-sub">Hyderabad · debris arm</span></li>
+              <li class="adr-also">Also:
+                <span class="adr-name" title="Bengaluru-and-California company flying the 'Fireflies' hyperspectral Earth-imaging satellites (first ones launched in 2025). It is building the satellite platform for Cosmoserve's debris-removal demo. Its first move into debris work.">Pixxel</span>,
+                <span class="adr-name" title="Bengaluru propulsion specialist (founded 2015). Its thrusters have flown on Indian (ISRO) missions, and its Pushpak 'space tug' is designed to move satellites between orbits. The kind of mobility a debris-hunting servicer needs.">Bellatrix Aerospace</span>,
+                <span class="adr-name" title="Bengaluru start-up (founded 2021 by Indian Institute of Science alumni) building an in-orbit docking-and-refuelling module to refuel, repair and reposition satellites. Extending their working life and cutting future debris.">OrbitAID Aerospace</span>,
+                <span class="adr-name" title="Indian start-up making clean, non-toxic satellite propulsion and collision-avoidance thrusters (its 'I-Booster' for 100–500 kg satellites). Focused on preventing debris rather than removing it.">Manastu Space</span>.</li>
+              </ul>
+              <div class="adr-section">USA</div>
+              <ul class="adr-list">
+              <li><span class="adr-name" title="America's space agency. Its Orbital Debris Program Office (founded 1979) was the first of its kind and writes the US debris-mitigation standards (ODMSP).">NASA</span> <span class="adr-sub">ODPO · since 1979</span></li>
+              </ul>
+              <div class="adr-section">Europe</div>
+              <ul class="adr-list">
+              <li><span class="adr-name" title="Runs the Clean Space initiative and funds ClearSpace-1. Its Space Debris Office in Darmstadt, Germany tracks debris using partner radars such as the giant TIRA dish, plus new Flyeye survey telescopes.">ESA</span> <span class="adr-sub">Clean Space · Darmstadt</span></li>
+              </ul>
+              <div class="adr-section">Japan</div>
+              <ul class="adr-list">
+              <li><span class="adr-name" title="Japan's space agency. Runs the Commercial Removal of Debris Demonstration (CRD2) with Astroscale: Phase 1 (ADRAS-J) inspected a spent rocket stage; Phase 2 will capture and de-orbit it, ~2027.">JAXA</span> <span class="adr-sub">CRD2 · with Astroscale</span></li>
+              </ul>
+            </details>
 
-              <details class="adr-group">
-                <summary>Who tracks debris<span class="adr-count">6</span></summary>
-                <ul class="adr-list">
-                <li><span class="adr-name" title="Run by the US Space Force; catalogues 30,000+ objects larger than 10 cm. Its Space Fence radar on Kwajalein Atoll (Marshall Islands) can follow ~200,000 objects and is the most sensitive debris radar in the world.">US Space Surveillance Network</span> <span class="adr-sub">USA · Space Fence</span></li>
-                <li><span class="adr-name" title="The European Union Space Surveillance and Tracking partnership. Radars and telescopes shared by 15 EU nations, with the catalogue hosted in Germany. Safeguards 600+ satellites.">EU SST</span> <span class="adr-sub">Europe</span></li>
-                <li><span class="adr-name" title="Menlo Park, California. A commercial network of phased-array radars. 11 radars across 7 sites worldwide. Tracking objects as small as 2 cm in low orbit.">LeoLabs</span> <span class="adr-sub">USA</span></li>
-                <li><span class="adr-name" title="El Segundo, California. A global optical-sensor network paired with AI analytics for tracking objects and issuing collision warnings.">Slingshot Aerospace</span> <span class="adr-sub">USA</span></li>
-                <li><span class="adr-name" title="Montreal. Operates the first commercial space-based tracking system. Its Skylark satellites watch other objects from orbit rather than from the ground.">NorthStar Earth &amp; Space</span> <span class="adr-sub">Canada</span></li>
-                <li><span class="adr-name" title="Foothill Ranch, California. Runs the world's largest commercial telescope network. 350+ scopes. Watching the higher orbits, including geostationary.">ExoAnalytic Solutions</span> <span class="adr-sub">USA</span></li>
-                <li style="color:rgba(0,255,136,0.62);">Collision-avoidance software:
-                  <span class="adr-name" title="Munich, Germany. Space-traffic management and a ground-sensor network, with in-orbit sensors planned.">Vyoma</span>,
-                  <span class="adr-name" title="Coimbra, Portugal. AI that assesses collision risk and suggests avoidance manoeuvres days in advance.">Neuraspace</span>,
-                  <span class="adr-name" title="Colorado, USA. 'Pathfinder' autonomy and collision-avoidance tools; supports the US Office of Space Commerce's traffic-coordination system.">Kayhan Space</span>.</li>
-                </ul>
-              </details>
+            <!-- Who removes debris — Cosmoserve first -->
+            <details class="adr-group">
+              <summary>Who removes debris<span class="adr-count">7</span></summary>
+              <ul class="adr-list">
+              <li><span class="adr-name" title="Hyderabad, founded by an ISRO veteran. EMBRACE is a soft robotic hand: petals that open wide, then close gently around a dead satellite. A hand, not a harpoon. In July 2026 it rode Vikram-1 into orbit, the first Indian debris-catching hardware in space, aboard India's first private orbital launch. Next: a full catch-and-remove demonstration.">Cosmoserve Space</span> <span class="adr-sub">India · flew 2026</span></li>
+              <li><span class="adr-name" title="Tokyo-based pure-play debris remover. In 2024 its ADRAS-J spacecraft flew within ~15 m of a discarded Japanese rocket stage. The closest a private craft has come to large debris. Its ADRAS-J2 follow-up will grab and de-orbit that stage (~2027).">Astroscale</span> <span class="adr-sub">Japan · ADRAS-J</span></li>
+              <li><span class="adr-name" title="Subsidiary of Northrop Grumman, and the only company doing this routinely today. Its Mission Extension Vehicles docked with live Intelsat satellites (2020–21) to add years of life. The first commercial servicing in orbit.">Northrop Grumman SpaceLogistics</span> <span class="adr-sub">USA</span></li>
+              <li><span class="adr-name" title="Swiss start-up building Europe's first debris-removal mission for the European Space Agency. Its original target. A leftover rocket adapter. Was itself hit by other debris, so the mission was redirected to capture and de-orbit the retired PROBA-1 satellite instead. Launch ~2028.">ClearSpace</span> <span class="adr-sub">Switzerland</span></li>
+              <li><span class="adr-name" title="Italian space-logistics firm. Its ION space tug has flown since 2020; next, its RISE mission for ESA will service a satellite in geostationary orbit, around 2028.">D-Orbit</span> <span class="adr-sub">Italy</span></li>
+              <li><span class="adr-name" title="Seattle start-up. Its Otter vehicle is designed to dock with satellites that were never built to be caught; it won a US Space Force contract to de-orbit a retired satellite.">Starfish Space</span> <span class="adr-sub">USA</span></li>
+              <li><span class="adr-name" title="Pioneer of in-orbit refuelling. 'gas stations in space'. Its RAFTI fuel port is becoming a de-facto industry standard for refuellable satellites.">Orbit Fab</span> <span class="adr-sub">USA</span></li>
+              <li class="adr-also">Also emerging:
+                <span class="adr-name" title="Los Angeles. Uses an inflatable 'capture bag' to scoop up debris and spent objects.">TransAstra</span>,
+                <span class="adr-name" title="Michigan. Gecko-adhesive and microspine gripper arms (REACCH) to grab tumbling, uncooperative debris.">Kall Morris</span>,
+                <span class="adr-name" title="Canada (Ottawa). Tether-net capture and the 'Puck' docking system for in-orbit servicing.">Obruta</span>.</li>
+              </ul>
+            </details>
 
-              <details class="adr-group">
-                <summary>Space agencies<span class="adr-count">11</span></summary>
-                <ul class="adr-list">
-                <li><span class="adr-name" title="America's space agency. Its Orbital Debris Program Office (founded 1979) was the first of its kind and writes the US debris-mitigation standards (ODMSP).">NASA</span> <span class="adr-sub">USA</span></li>
-                <li><span class="adr-name" title="Runs the Clean Space initiative and funds ClearSpace-1 (€86 million). Its Space Debris Office in Darmstadt, Germany tracks debris using partner radars such as the giant TIRA dish, plus new Flyeye survey telescopes.">European Space Agency</span> <span class="adr-sub">ESA</span></li>
-                <li><span class="adr-name" title="Japan's space agency. Runs the Commercial Removal of Debris Demonstration (CRD2) with Astroscale: Phase 1 (ADRAS-J) inspected a spent rocket stage; Phase 2 will capture and de-orbit it, ~2027.">Japan Aerospace Exploration Agency</span> <span class="adr-sub">JAXA · CRD2</span></li>
-                <li><span class="adr-name" title="India's space agency. Its IS4OM centre and Project NETRA track debris and run collision avoidance, backing the national Debris-Free Space Missions goal for 2030.">ISRO</span> <span class="adr-sub">India · IS4OM</span></li>
-                <li><span class="adr-name" title="Hyderabad company founded by two former ISRO scientists; its 2022 Vikram-S was India's first private rocket to reach space. On 18 July 2026 its Vikram-1 rocket ('Mission Aagaman') aced its debut from Sriharikota, deploying payloads at 450 km. India's first private orbital launch, making India the third nation with private orbital launch capability after the US and China. Among the payloads: Cosmoserve's 'Embrace' debris-capture robotic arm. A May 2026 raise made Skyroot India's first space-tech unicorn (~$1.1 billion valuation).">Skyroot Aerospace</span> <span class="adr-sub">Hyderabad · orbital 2026</span></li>
-                <li><span class="adr-name" title="Hyderabad start-up leading an in-orbit debris-removal demonstration, with Pixxel building the satellite for it (announced March 2026). Its 'Embrace' capture arm flew to orbit aboard Skyroot's Vikram-1 in July 2026.">Cosmoserve Space</span> <span class="adr-sub">Hyderabad</span></li>
-                <li><span class="adr-name" title="Bengaluru-and-California company flying the 'Fireflies' hyperspectral Earth-imaging satellites (first ones launched in 2025). It is building the satellite platform for Cosmoserve's debris-removal demo. Its first move into debris work.">Pixxel</span> <span class="adr-sub">Bengaluru</span></li>
-                <li><span class="adr-name" title="Bengaluru start-up that tracks and catalogues objects in orbit (space-traffic awareness) and is deploying its own space-tracking satellites. The data needed to spot debris and avoid collisions.">Digantara</span> <span class="adr-sub">Bengaluru</span></li>
-                <li><span class="adr-name" title="Bengaluru propulsion specialist (founded 2015). Its thrusters have flown on Indian (ISRO) missions, and its Pushpak 'space tug' is designed to move satellites between orbits. The kind of mobility a debris-hunting servicer needs.">Bellatrix Aerospace</span> <span class="adr-sub">Bengaluru</span></li>
-                <li><span class="adr-name" title="Bengaluru start-up (founded 2021 by Indian Institute of Science alumni) building an in-orbit docking-and-refuelling module to refuel, repair and reposition satellites. Extending their working life and cutting future debris.">OrbitAID Aerospace</span> <span class="adr-sub">Bengaluru</span></li>
-                <li><span class="adr-name" title="Indian start-up making clean, non-toxic satellite propulsion and collision-avoidance thrusters (its 'I-Booster' for 100–500 kg satellites). Focused on preventing debris rather than removing it.">Manastu Space</span> <span class="adr-sub">India</span></li>
-                </ul>
-              </details>
+            <!-- Who tracks debris — Digantara first -->
+            <details class="adr-group">
+              <summary>Who tracks debris<span class="adr-count">7</span></summary>
+              <ul class="adr-list">
+              <li><span class="adr-name" title="Bengaluru's eyes in orbit. In January 2025 Digantara launched SCOT, India's first satellite built purely to watch other objects in space; it scans space junk down to 5 cm. Next: a thousand ground stations around the world, and a live map of everything up there.">Digantara</span> <span class="adr-sub">India · 5 cm</span></li>
+              <li><span class="adr-name" title="Run by the US Space Force; catalogues 30,000+ objects larger than 10 cm. Its Space Fence radar on Kwajalein Atoll (Marshall Islands) can follow ~200,000 objects and is the most sensitive debris radar in the world.">US Space Surveillance Network</span> <span class="adr-sub">USA · Space Fence</span></li>
+              <li><span class="adr-name" title="The European Union Space Surveillance and Tracking partnership. Radars and telescopes shared by 15 EU nations, with the catalogue hosted in Germany. Safeguards 600+ satellites.">EU SST</span> <span class="adr-sub">Europe</span></li>
+              <li><span class="adr-name" title="Menlo Park, California. A commercial network of phased-array radars. 11 radars across 7 sites worldwide. Tracking objects as small as 2 cm in low orbit.">LeoLabs</span> <span class="adr-sub">USA</span></li>
+              <li><span class="adr-name" title="El Segundo, California. A global optical-sensor network paired with AI analytics for tracking objects and issuing collision warnings.">Slingshot Aerospace</span> <span class="adr-sub">USA</span></li>
+              <li><span class="adr-name" title="Montreal. Operates the first commercial space-based tracking system. Its Skylark satellites watch other objects from orbit rather than from the ground.">NorthStar Earth &amp; Space</span> <span class="adr-sub">Canada</span></li>
+              <li><span class="adr-name" title="Foothill Ranch, California. Runs the world's largest commercial telescope network. 350+ scopes. Watching the higher orbits, including geostationary.">ExoAnalytic Solutions</span> <span class="adr-sub">USA</span></li>
+              <li class="adr-also">Collision-avoidance software:
+                <span class="adr-name" title="Munich, Germany. Space-traffic management and a ground-sensor network, with in-orbit sensors planned.">Vyoma</span>,
+                <span class="adr-name" title="Coimbra, Portugal. AI that assesses collision risk and suggests avoidance manoeuvres days in advance.">Neuraspace</span>,
+                <span class="adr-name" title="Colorado, USA. 'Pathfinder' autonomy and collision-avoidance tools; supports the US Office of Space Commerce's traffic-coordination system.">Kayhan Space</span>.</li>
+              </ul>
+            </details>
 
-              <details class="adr-group">
-                <summary>2026 events<span class="adr-count">4</span></summary>
-                <ul class="adr-list">
-                <li><span class="adr-name" title="Inter-Agency Space Debris Coordination Committee. The 44th annual meeting of the world's space agencies, held at the ESA campus in Harwell, UK (April 2026).">IADC 44th meeting</span> <span class="adr-sub">Harwell, UK · Apr</span></li>
-                <li><span class="adr-name" title="Advanced Maui Optical and Space Surveillance Technologies conference. The premier technical event for space-tracking and space domain awareness.">AMOS Conference</span> <span class="adr-sub">Maui · Sep</span></li>
-                <li><span class="adr-name" title="The 77th International Astronautical Congress. The world's largest space gathering (6,000+ delegates), with major debris and sustainability tracks.">Int'l Astronautical Congress</span> <span class="adr-sub">Antalya · Oct</span></li>
-                <li><span class="adr-name" title="Secure World Foundation's flagship policy event on keeping orbit usable. The 8th edition, in Brasília, Brazil (November 2026).">Summit for Space Sustainability</span> <span class="adr-sub">Brasília · Nov</span></li>
-                </ul>
-              </details>
+            <!-- 2026 events — chronological (prune Bengaluru Space Expo after 9 Sep) -->
+            <details class="adr-group">
+              <summary>2026 events<span class="adr-count">5</span></summary>
+              <ul class="adr-list">
+              <li><span class="adr-name" title="India's biggest space show: 250 exhibitors from 20 countries, organised by Indian industry together with ISRO, and a whole conference track on keeping orbit clean.">Bengaluru Space Expo</span> <span class="adr-sub">BSX · 7-9 Sep</span></li>
+              <li><span class="adr-name" title="Advanced Maui Optical and Space Surveillance Technologies conference. The premier technical event for space-tracking and space domain awareness.">AMOS Conference</span> <span class="adr-sub">Maui · 15-18 Sep</span></li>
+              <li><span class="adr-name" title="The 77th International Astronautical Congress. The world's largest space gathering (6,000+ delegates), with major debris and sustainability tracks.">Int'l Astronautical Congress</span> <span class="adr-sub">Antalya · Oct</span></li>
+              <li><span class="adr-name" title="Thailand's space agency, GISTDA, fills ICONSIAM in Bangkok with satellites, rockets and the region's space start-ups for four days: the biggest space show in Southeast Asia.">Thailand Space Expo</span> <span class="adr-sub">TSX · 28-31 Oct</span></li>
+              <li><span class="adr-name" title="Secure World Foundation's flagship policy event on keeping orbit usable. The 8th edition, in Brasília, Brazil (November 2026).">Summit for Space Sustainability</span> <span class="adr-sub">Brasília · 4 Nov</span></li>
+              </ul>
+            </details>
 
-              <details class="adr-group">
-                <summary>Rawhide<span class="adr-count">2</span></summary>
-                <ul class="adr-list">
-                <li style="color:rgba(0,255,136,0.72); padding-left:0; margin-bottom:0.35rem;"><em>&ldquo;Rollin', rollin', rollin'&hellip; <strong>Rawhide!</strong>&rdquo;</em></li>
-                <li><a class="adr-name" href="https://www.youtube-nocookie.com/embed/RdR6MN2jKYs" target="_blank" rel="noopener noreferrer" style="color:#00ccff;" title="The Good Ole Boys / chicken-wire bar scene from The Blues Brothers (1980) — official Movieclips upload, clean player, no YouTube popups">▶ The Blues Brothers &mdash; &ldquo;Rawhide&rdquo;</a></li>
-                </ul>
-              </details>
-            </div>
+            <details class="adr-group">
+              <summary>Rawhide<span class="adr-count">2</span></summary>
+              <ul class="adr-list">
+              <li class="adr-prose"><em>&ldquo;Rollin', rollin', rollin'&hellip; <strong>Rawhide!</strong>&rdquo;</em></li>
+              <li><a class="adr-name" href="https://www.youtube.com/watch?v=RdR6MN2jKYs" target="_blank" rel="noopener noreferrer" title="The Good Ole Boys / chicken-wire bar scene from The Blues Brothers (1980), Movieclips upload on YouTube. Opens in a new tab.">▶ The Blues Brothers &mdash; &ldquo;Rawhide&rdquo;</a></li>
+              </ul>
+            </details>
 
           </div><!-- /#menu-left -->
 
@@ -557,7 +618,8 @@ export class MenuScreen {
    * @private Migrate the lore panel's native `title=` tooltips to a styled,
    * tap-toggleable popover. Native `title` never shows on touch devices; this
    * gives the same factoids a tap target on touch and a hover on pointer
-   * devices, in the menu's green/monospace aesthetic. Free-text only — these
+   * devices, in the library's INFO grammar (#aaddff prose, proportional B612,
+   * opaque plate). Free-text only — these
    * are one-off factoids, NOT codex entries, so the glossary deep-link system
    * (glossaryDom.js → CODEX_OPEN_ENTRY) deliberately isn't used here.
    */
