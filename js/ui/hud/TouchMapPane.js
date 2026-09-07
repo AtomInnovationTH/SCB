@@ -222,8 +222,14 @@ export class TouchMapPane {
     const floor = this._read('floor');
     if (floor !== null && typeof floor !== 'object' && typeof floor !== 'function') {
       // A primitive floor value (the hub passes ladderController.currentFloor(), a number).
+      // Session N.5 review (2026-09-07): STRICTLY ABOVE the baseline — the intro
+      // lands on the flying floor now, and the mission break's ceremony rides
+      // DOWN (and can park a player below the baseline); an automated descent
+      // or a post-break floor must never tick the RIDE UP lesson. The row's
+      // word is UP; the witness is now up too. (A player parked under the
+      // baseline earns the tick on any later ride past it.)
       if (this._floor0 === undefined) this._floor0 = floor;
-      else if (floor !== this._floor0) this._witness('ride', t);
+      else if (typeof floor === 'number' && typeof this._floor0 === 'number' && floor > this._floor0) this._witness('ride', t);
     }
     this._paint();
   }
