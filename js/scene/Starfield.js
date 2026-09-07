@@ -740,6 +740,13 @@ export class Starfield {
       const lineObj = new LineSegments2(lineGeom, this._constellationLineMaterial);
       lineObj.computeLineDistances();
       lineObj.frustumCulled = false;
+      // Session O (plan D11, owner 2026-09-07): constellations ship OFF — the
+      // effective default is false, so every figure is BORN hidden and the very
+      // first frame is already clean. That includes the MENU backdrop, which is
+      // this same live sky seen through the transparent menu canvas (main.js
+      // backdrop-reveal note ~:2756): with born-hidden objects no separate menu
+      // wiring is needed. main.js restores a stored `true` (veteran) at boot.
+      lineObj.visible = false;
       this.group.add(lineObj);
       this._constellationObjects.push(lineObj);
 
@@ -767,6 +774,10 @@ export class Starfield {
       label.position.copy(center).add(tangent);
       label.scale.set(50, 12, 1);
       label.frustumCulled = false;
+      // Born hidden — same Session O (plan D11) reasoning as the line objects
+      // above: OFF is the shipped default, so the sprites must not flash in
+      // either on the first gameplay frame or behind the menu backdrop.
+      label.visible = false;
       this.group.add(label);
       this._constellationObjects.push(label);
       // Also tracked separately so update() can apply the same limb fade the
@@ -933,14 +944,18 @@ export class Starfield {
   /** Toggle constellation outlines + labels (6 key).
    *  @returns {boolean} the NEW visibility state (for reactive comms feedback). */
   toggleConstellations() {
-    this.setConstellationsVisible(!(this._constellationsVisible ?? true));
+    this.setConstellationsVisible(!(this._constellationsVisible ?? false));
     return this._constellationsVisible;
   }
 
   /** @returns {boolean} whether constellation outlines + labels are visible.
-   *  The effective default is visible (true) until the player first toggles. */
+   *  Session O (plan D11, owner 2026-09-07): the effective default is
+   *  OFF (false) until the player first toggles — the figures are born
+   *  hidden so the first frame, incl. the menu backdrop (same live sky),
+   *  is clean. main.js boot-applies a stored `true` (veteran) after
+   *  construction. */
   isConstellationsVisible() {
-    return this._constellationsVisible ?? true;
+    return this._constellationsVisible ?? false;
   }
 
   /**

@@ -923,6 +923,17 @@ async function init() {
 
   // --- Starfield (background) ---
   starfield = new Starfield(scene);
+  // Session O (plan D11, owner 2026-09-07): constellations ship OFF by
+  // default and are REMEMBERED. The objects are born hidden inside Starfield,
+  // so the very first frame is already clean — including the MENU backdrop,
+  // which is this same live sky seen through the transparent menu canvas
+  // (backdrop-reveal note below, ~:2756): with born-hidden objects NO separate
+  // menu wiring is needed. A stored `true` restores the figures for a veteran
+  // who turned them on; a fresh profile stays off. Global by design — the one
+  // Session O change that applies to the menu and `?ladder=0` too (plan §9).
+  if (starfield && settingsManager.getConstellations()) {
+    starfield.setConstellationsVisible(true);
+  }
 
   // --- Sun Light (dynamic day/night) ---
   sunLight = new SunLight(scene, sceneManager);

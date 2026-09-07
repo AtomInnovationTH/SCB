@@ -24,8 +24,8 @@ const GUIDANCE_VALUES = ['auto', 'GUIDED', 'POINTERS', 'MINIMAL'];
 
 class SettingsManager {
   constructor() {
-    /** @type {{ language: string, guidance: string, autolock: boolean }} */
-    this._settings = { language: DEFAULT_LANGUAGE, guidance: 'auto', autolock: true };
+    /** @type {{ language: string, guidance: string, autolock: boolean, constellations: boolean }} */
+    this._settings = { language: DEFAULT_LANGUAGE, guidance: 'auto', autolock: true, constellations: false };
     this._load();
   }
 
@@ -45,6 +45,12 @@ class SettingsManager {
         }
         if (typeof parsed.autolock === 'boolean') {
           this._settings.autolock = parsed.autolock;
+        }
+        // Session O (plan D11, owner 2026-09-07): the 6-key constellation
+        // choice rides the same blob — only real booleans are accepted, anything
+        // else keeps the OFF default (a fresh profile starts clean).
+        if (typeof parsed.constellations === 'boolean') {
+          this._settings.constellations = parsed.constellations;
         }
       }
     } catch (_) { /* corrupt / blocked storage — keep defaults */ }
@@ -131,7 +137,33 @@ class SettingsManager {
     }
     return true;
   }
-}
 
+  /**
+   * @returns {boolean} whether the constellation outlines + labels are shown.
+   *  Session O (plan D11, owner 2026-09-07): the OFF default is the SAME
+   *  effective default the Starfield ships (objects born hidden), so the menu
+   *  backdrop — which is this same live sky — is clean too (global by design,
+   *  plan §9). The default is `false`, so unlike getAutolock there is no
+   *  legacy missing-value fallback to true.
+   */
+  getConstellations() {
+    return !!this._settings.constellations;
+  }
+
+  /**
+   * Enable/disable the constellation outlines + labels. Persists + returns
+   * whether the value actually changed. Emits NO event — a calmer default,
+   * nothing listens (Session O, plan D11, owner 2026-09-07).
+   * @param {boolean} on
+   * @returns {boolean} true if the value changed
+   */
+  setConstellations(on) {
+    const v = !!on;
+    if (v === this._settings.constellations) return false;
+    this._settings.constellations = v;
+    this._save();
+    return true;
+  }
+}
 export const settingsManager = new SettingsManager();
 export default settingsManager;

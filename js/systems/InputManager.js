@@ -11,6 +11,7 @@ import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { Constants } from '../core/Constants.js';
 import { powerDistribution, PowerBuses } from './PowerDistribution.js';
+import { settingsManager } from './SettingsManager.js';
 import timerManager from './TimerManager.js';
 import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
@@ -1377,6 +1378,12 @@ export class InputManager {
       case 'Digit6':
         if (isGameplay && !e.repeat && d.starfield && typeof d.starfield.toggleConstellations === 'function') {
           const on = d.starfield.toggleConstellations();
+          // Session O (plan D11, owner 2026-09-07): remember the player's
+          // 6-key choice in settings — rides the existing sc_settings_v1 blob
+          // (no new storage key); no event is emitted (nothing listens). The
+          // very first frame ships OFF by default; this only records an
+          // explicit preference.
+          settingsManager.setConstellations(on);
           // Reactive feedback (the player just pressed 6). Starfield is a
           // THREE object with no comms of its own, so InputManager narrates.
           eventBus.emit(Events.COMMS_MESSAGE, {
