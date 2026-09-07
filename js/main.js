@@ -5790,6 +5790,14 @@ function gameLoop(timestamp) {
     }
   }
 
+  // Session O (plan D12; owner 2026-09-07): the hub sets the toast policy on
+  // engage, clears on disengage — flag-off (?ladder=0) = null = today. HUD.js'
+  // setToastPolicy is itself write-on-change, so the per-frame call is free:
+  // engaged → the ONE drop table kills confirmations/notices/views/inspect/memo
+  // (density per-step toasts included — force does not save them); disengaged /
+  // menu / flag-off → null = shipped behavior (every kind shows).
+  if (hud && hud.setToastPolicy) hud.setToastPolicy(_ladderActive ? 'engaged' : null);
+
   const currentState = gameState.currentState;
 
   // Render policy: `_cover` / `_skipPaint` were computed at the TOP of the

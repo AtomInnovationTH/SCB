@@ -37,7 +37,10 @@ export class PaneDensity {
    * @param {Object} opts
    * @param {DensityRung[]} opts.rungs  Ordered lowest-priority → highest-priority
    *   (index 0 is hidden FIRST by `-`, restored LAST by `+`).
-   * @param {(text: string) => void} [opts.notify]  Transient on-screen notice.
+   * @param {(text: string, kind: string) => void} [opts.notify]  Transient on-screen notice.
+   *   Kind: 'confirm' = per-step/readout lines (the engaged policy drops them);
+   *   'prompt' = the pure-scenery reminder ("HUD already clear · + restores"),
+   *   the exit affordance (must always show — Session O, plan D12).
    * @param {(text: string) => void} [opts.log]     Reactive comms-history line.
    * @param {(paneId: string, shown: boolean) => void} [opts.onFlip]  Fired once
    *   per FLIPPED rung, AFTER its setVisible ran (Wave 5 Session H, Job A —
@@ -131,7 +134,7 @@ export class PaneDensity {
     const text = cur === 0
       ? 'HUD clear — pure scenery · slide right to restore'
       : `HUD panes · ${cur}/${this.rungs.length} visible`;
-    this._notify(text);
+    this._notify(text, 'confirm');
     this._log(text);
   }
 
@@ -144,7 +147,7 @@ export class PaneDensity {
     const rung = this.rungs.find(r => this._safeVisible(r));
     if (!rung) {
       // Everything is already hidden — remind the player how to get it back.
-      if (!this._silent) this._notify('HUD already clear · + restores');
+      if (!this._silent) this._notify('HUD already clear · + restores', 'prompt');
       return null;
     }
     rung.setVisible(false);
@@ -154,7 +157,7 @@ export class PaneDensity {
       ? 'HUD clear — pure scenery · + restores'
       : `HUD − · ${rung.label} hidden · + restores`;
     if (!this._silent) {
-      this._notify(text);
+      this._notify(text, 'confirm');
       this._log(text);
     }
     return rung;
@@ -188,13 +191,13 @@ export class PaneDensity {
       // Content/dodge-hidden: bit cleared, nothing to see yet — keep walking.
     }
     if (!flipped) {
-      if (!this._silent) this._notify('All panes visible');
+      if (!this._silent) this._notify('All panes visible', 'confirm');
       return null;
     }
     const all = this.rungs.every(r => this._safeVisible(r));
     const text = (all || !shown) ? 'All panes visible' : `HUD + · ${shown.label} shown`;
     if (!this._silent) {
-      this._notify(text);
+      this._notify(text, 'confirm');
       this._log(text);
     }
     return shown || flipped;
@@ -227,7 +230,7 @@ export class PaneDensity {
   clearAll() {
     const shown = this.rungs.filter((r) => this._safeVisible(r)).map((r) => r.id);
     if (!shown.length) {
-      this._notify('HUD already clear · + restores');
+      this._notify('HUD already clear · + restores', 'prompt');
       return 0;
     }
     // The stash is set BEFORE the walk: the hub's flip listener reads
@@ -239,7 +242,7 @@ export class PaneDensity {
     const steps = this.setLevel(0, { quiet: true });
     if (steps === 0) this._stash = prev;
     const text = 'HUD clear — pure scenery · + restores';
-    this._notify(text);
+    this._notify(text, 'confirm');
     this._log(text);
     return steps;
   }

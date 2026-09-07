@@ -2202,6 +2202,12 @@ export class LassoSystem {
         });
 
         // Also emit ARM_CAPTURED for catch juice (slo-mo, flash, sound)
+        // Session O (plan D13, owner 2026-09-07: "one catch, one confirmation"):
+        // both this ARM_CAPTURED and the INTERACTION_CAPTURE below feed HUD toasts
+        // tagged `confirm` — under the engaged toast policy both die, so a single
+        // lasso catch shows ONE surface (or none while engaged), never two. The
+        // EVENTS stay — arm pane, audio, skills, scoring listen to them (no
+        // behaviour change here).
         eventBus.emit(Events.ARM_CAPTURED, {
             armId: 'lasso',
             debrisId: target ? target.id : null,

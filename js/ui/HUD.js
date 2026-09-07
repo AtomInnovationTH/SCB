@@ -111,6 +111,32 @@ const ALL_REVEAL_GROUPS = [
   'power-group', 'thermal-group',
 ];
 
+/**
+ * Session O (plan D12, owner 2026-09-07): the ONE toast-policy drop table —
+ * the Airbus alert hierarchy's visual twin (the comms channel already has its
+ * tier law — commsSuppression.js; this is the toast side).
+ *
+ * Kinds below `prompt` die while `setToastPolicy('engaged')` is set — even
+ * under `force:true` (the density per-step toasts are `confirm` + `force` and
+ * must die so a `-` press shows no toast; the pure-scenery reminder
+ * "+ restores" is `prompt` + `force` and must show). Untagged toasts default
+ * to `prompt` — the safe default — so no policy set (flag-off / disengaged) is
+ * byte-identical to today for every kind.
+ *
+ * Shown while engaged (the survivors): `prompt` + untagged + `alert-red` +
+ * `alert-amber` (the alert kinds are named NOW for Session Q, but behave as
+ * `prompt` in O). Session Q adds levels / inhibit windows / one-at-a-time.
+ *
+ * @type {ReadonlySet<string>}
+ */
+export const TOAST_DROP_WHILE_ENGAGED = Object.freeze(new Set([
+  'confirm',   // confirmations die — the arm pane + score tick + Houston comms line ARE the confirmation (A3)
+  'notice',    // CommsSystem.js already narrates evasion; RewardSystem narrates synergy — a toast would duplicate (D12)
+  'view',      // the WHERE rail + camera indicator carry the view change
+  'inspect',   // the inspection overlay itself is the feedback
+  'memo',      // AP state moves to the MOTHER MEMO slot in Q; as a toast it is dropped while engaged
+]));
+
 export class HUD {
   constructor() {
     this.container = document.getElementById('hud-overlay');
@@ -187,6 +213,14 @@ export class HUD {
     // the ONE reused object (no per-frame allocation).
     /** @type {{left:number, top:number, right:number, bottom:number}|null} */
     this._scoreStripRect = null;
+
+    /**
+     * Session O (plan D12): the engaged toast-policy flag. The hub (main.js,
+     * the ladder per-frame block) sets 'engaged' on engage, null on disengage —
+     * write-on-change via setToastPolicy(), so the per-frame call is free.
+     * @type {'engaged'|null}
+     */
+    this._toastPolicy = null;
 
     this._build();
     this._setupEventListeners();
@@ -879,7 +913,7 @@ export class HUD {
 
     this._paneDensity = new PaneDensity({
       rungs,
-      notify: (text) => this.showNotification(text, 2500, { force: true }),
+      notify: (text, kind) => this.showNotification(text, 2500, { force: true, kind }),
       log: (text) => eventBus.emit(Events.COMMS_MESSAGE, {
         text, priority: 'info', source: 'HUD', _reactive: true,
       }),
@@ -1069,19 +1103,19 @@ export class HUD {
       // Phase 3 gate: suppressed in mission 1 (onboarding).
       if (!this._collisionWarningsEnabled()) return;
       const dir = data.direction ? ` (${data.direction})` : '';
-      this.showNotification(`⚡ Auto-evasion — Debris ${data.debrisId} at ${Math.round(data.distanceM)} m${dir}`);
+      this.showNotification(`⚡ Auto-evasion — Debris ${data.debrisId} at ${Math.round(data.distanceM)} m${dir}`, undefined, { kind: 'notice' });
     });
 
     eventBus.on(Events.INTERACTION_DATA_CAPTURE, (data) => {
-      this.showNotification(`✓ Data captured! +${data.points} pts`);
+      this.showNotification(`✓ Data captured! +${data.points} pts`, undefined, { kind: 'confirm' });
     });
 
     eventBus.on(Events.INTERACTION_DEORBIT, (data) => {
-      this.showNotification(`✓ Target deorbited! +${data.points} pts`);
+      this.showNotification(`✓ Target deorbited! +${data.points} pts`, undefined, { kind: 'confirm' });
     });
 
     eventBus.on(Events.INTERACTION_CAPTURE, (data) => {
-      this.showNotification(`✓ Target captured! +${data.points} pts`);
+      this.showNotification(`✓ Target captured! +${data.points} pts`, undefined, { kind: 'confirm' });
     });
 
     eventBus.on(Events.PLAYER_LOW_BATTERY, () => {
@@ -1106,7 +1140,7 @@ export class HUD {
       const debrisLabel = data.debrisType || 'debris';
       const massKg = data.mass || 0;
       const massText = massKg > 0 ? ` (+${massKg.toLocaleString()} kg)` : '';
-      this.showNotification(`${armLabel} — ${debrisLabel} secured${massText}`);
+      this.showNotification(`${armLabel} — ${debrisLabel} secured${massText}`, undefined, { kind: 'confirm' });
     });
 
     eventBus.on(Events.ARM_RETURNED, () => this.statusPanel.renderArmPanel());
@@ -1140,7 +1174,7 @@ export class HUD {
     // Phase 2 (capture feedback): downgraded from a center-screen cyan float to
     // the quiet bottom toast; RewardSystem already narrates the synergy in comms.
     eventBus.on(Events.SYNERGY_BONUS, (data) => {
-      this.showNotification(`⚡ +${data.points} ${data.name} — SYNERGY BONUS`);
+      this.showNotification(`⚡ +${data.points} ${data.name} — SYNERGY BONUS`, undefined, { kind: 'notice' });
     });
 
     // ST-3.4: Mastery celebration toast (first N masteries only)
@@ -1161,13 +1195,13 @@ export class HUD {
     });
 
     // --- Notification zone (UX-2 #12) ---
-    eventBus.on(Events.SHOW_NOTIFICATION, ({ text, duration }) => {
-      this.showNotification(text, duration);
+    eventBus.on(Events.SHOW_NOTIFICATION, ({ text, duration, kind }) => {
+      this.showNotification(text, duration, { kind });
     });
 
     // PR 6 / P3.13: Audio unlock failure — one-time toast
     eventBus.on(Events.AUDIO_UNLOCK_FAILED, () => {
-      this.showNotification('Audio blocked. Click anywhere to enable sound', 5000);
+      this.showNotification('Audio blocked. Click anywhere to enable sound', 5000, { kind: 'prompt' });
     });
 
     // Phase 8: Salvage reveal loot popup
@@ -2066,18 +2100,65 @@ export class HUD {
   }
 
   // ==========================================================================
+  // TOAST POLICY (Session O — plan D12:the alert-hierarchy drop table)
+  // ==========================================================================
+
+  /**
+   * Set the toast policy. 'engaged' arms the ONE drop table
+   * (TOAST_DROP_WHILE_ENGAGED): confirmations / notices / views / inspect /
+   * memo die — even under `force:true` — while `prompt` + untagged + the
+   * alert kinds survive (the pure-scenery reminder is `prompt` + `force` and
+   * must show). null = shipped behavior (every kind shows, byte-identical to
+   * today for every kind; flag-off never calls this).
+   *
+   * Called per frame from the hub's ladder block — write-on-change, so
+   * repeated calls with the same mode are free.
+   *
+   * @param {'engaged'|null} mode
+   */
+  setToastPolicy(mode) {
+    const next = (mode === 'engaged') ? 'engaged' : null;
+    if (next === this._toastPolicy) return;
+    this._toastPolicy = next;
+  }
+
+  /**
+   * The current toast policy (default null = today's behavior).
+   * @returns {'engaged'|null}
+   */
+  toastPolicy() { return this._toastPolicy; }
+
+  // ==========================================================================
   // NOTIFICATION ZONE (UX-2 #12)
   // ==========================================================================
 
   /**
    * Show a transient notification in the bottom-center zone.
+   *
+   * Session O (plan D12, owner 2026-09-07): toasts carry a `kind` —
+   * untagged = 'prompt' = shown (the safe default). ONE policy table
+   * (TOAST_DROP_WHILE_ENGAGED) drops everything below 'prompt' while the
+   * ladder's engaged policy is set — `force` does NOT override the kind drop
+   * (the density per-step toasts are `confirm` + `force` and must die so a
+   * `-` press shows no toast; the pure-scenery reminder "+ restores" is
+   * `prompt` + `force` and must show). No policy (flag-off/disengaged) →
+   * every kind shows, byte-identical to today. Session Q adds levels /
+   * inhibit windows / one-at-a-time (the alert kinds `alert-red`/`alert-amber`
+   * are named now but behave as `prompt` in O).
+   *
    * @param {string} text — Notification text
    * @param {number} [durationMs=2500] — Display duration in ms
-   * @param {{ force?: boolean }} [opts] — force:true bypasses pane-density quiet
-   *   mode (used by the density ladder's own toasts, which are the exit
-   *   affordance and must always show).
+   * @param {{ force?: boolean, kind?: string }} [opts] — force:true bypasses
+   *   pane-density quiet mode (used by the density ladder's own toasts, which
+   *   are the exit affordance and must always show). kind: 'prompt' | 'confirm'
+   *   | 'notice' | 'view' | 'inspect' | 'memo' | 'alert-red' | 'alert-amber'.
    */
   showNotification(text, durationMs = 2500, opts = {}) {
+    const kind = opts.kind || 'prompt';
+    // Session O (plan D12): the engaged policy's ONE drop table — BEFORE every
+    // other gate, so the pure-scenery reminder (prompt + force) always reaches
+    // the zone and the density per-step toasts (confirm + force) never do.
+    if (this._toastPolicy === 'engaged' && TOAST_DROP_WHILE_ENGAGED.has(kind)) return;
     if (!this._notificationZone) return;
     // Pane-density: once the "Reticles & alerts" rung is engaged, transient
     // GAMEPLAY toasts (SHOW_NOTIFICATION — autopilot/view/inspection, etc.) are

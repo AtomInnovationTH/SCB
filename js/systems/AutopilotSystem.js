@@ -443,8 +443,10 @@ export class AutopilotSystem {
       text: `AUTOPILOT ENGAGED. ${this._headingMode}`,
       priority: 'info',
     });
-    // UX-2 #12: Route autopilot engage through notification zone
-    eventBus.emit(Events.SHOW_NOTIFICATION, { text: 'AUTOPILOT ACTIVE' });
+    // UX-2 #12: Route autopilot engage through notification zone.
+    // Session O (plan D12): kind 'memo' — Session Q relocates these into the
+    // MOTHER header MEMO slot; in O they are simply dropped while engaged.
+    eventBus.emit(Events.SHOW_NOTIFICATION, { text: 'AUTOPILOT ACTIVE', kind: 'memo' });
   }
 
   /**
@@ -542,8 +544,9 @@ export class AutopilotSystem {
       text: `AUTOPILOT OFF. ${reason}`,
       priority: reason === 'DELTAV' || reason === 'COLLISION' ? 'warning' : 'info',
     });
-    // UX-2 #12: Route autopilot disengage through notification zone
-    eventBus.emit(Events.SHOW_NOTIFICATION, { text: 'AUTOPILOT DISENGAGED' });
+    // UX-2 #12: Route autopilot disengage through notification zone.
+    // Session O (plan D12): kind 'memo' (see the engage note above).
+    eventBus.emit(Events.SHOW_NOTIFICATION, { text: 'AUTOPILOT DISENGAGED', kind: 'memo' });
   }
 
   // ==========================================================================

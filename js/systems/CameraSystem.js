@@ -868,7 +868,7 @@ export class CameraSystem {
     // UX-2 #12: Route camera view change through notification zone
     // (skip for ARM_PILOT enter/exit — controls strip provides the indicator)
     if (!isArmPilotTransition) {
-      eventBus.emit(Events.SHOW_NOTIFICATION, { text: VIEW_LABELS[view] });
+      eventBus.emit(Events.SHOW_NOTIFICATION, { text: VIEW_LABELS[view], kind: 'view' });
     }
     console.log(`[CameraSystem] View: ${VIEW_LABELS[view]}`);
   }
@@ -1508,7 +1508,7 @@ export class CameraSystem {
       // the player understands the silent threshold did something deliberate.
       if (!o.inspectTaught) {
         o.inspectTaught = true;
-        eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION. Overlays active' });
+        eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION. Overlays active', kind: 'inspect' });
       }
     } else {
       // Restore lens (per-frame ease) + near-plane.
@@ -4217,7 +4217,7 @@ export class CameraSystem {
       eventBus.emit(Events.MOTHER_INSPECTION_ENGAGED, {});
       if (!this.orbit.inspectTaught) {
         this.orbit.inspectTaught = true;
-        eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION. Overlays active' });
+        eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION. Overlays active', kind: 'inspect' });
       }
     } else {
       this._applyInspectDim(false);
