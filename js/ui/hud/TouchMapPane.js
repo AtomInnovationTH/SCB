@@ -295,7 +295,7 @@ export class TouchMapPane {
     // 44 pt element on glass): the card has no foot, so with six rows it is
     // ~180 px tall on glass (8 padding + 44 + 2 header + 6 × ~20 rows + 5 × 1
     // gaps) — the left column with MOTHER + DAUGHTERS + the FMA strip + this
-    // card ends ≈ 450 and the WHAT rail (457 tall) still dodges under it above
+    // card ends ≈ 450 and the DISPLAY rail (457 tall) still dodges under it above
     // the thumb rest (`dodgeTop`'s limit is a column bottom of 467 at 1032
     // tall); once the ride row folds — on the flying floor it always has, the
     // player rode up — the card is ~160 and the budget has ~40 px to spare.
@@ -376,7 +376,7 @@ export class TouchMapPane {
       #${TOUCH_MAP_ID} .tm-rows { display: flex; flex-direction: column; gap: 1px; }
       /* A done row FOLDS after its linger (the tally keeps the count): the card
        * shows what is left to learn and shrinks as the player learns it, so the
-       * column under it never grows past the WHAT rail's dodge budget. */
+       * column under it never grows past the DISPLAY rail's dodge budget. */
       #${TOUCH_MAP_ID} .tm-row[${FOLDED_ATTR}] { display: none; }
       #${TOUCH_MAP_ID} .tm-row {
         display: grid;

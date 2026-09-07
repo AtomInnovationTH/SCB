@@ -614,7 +614,7 @@ let strategicMap;
 let wheelRouter;
 let ladderController;
 let railIndicator;
-// Session J (plan D-H, item 1) — the left WHAT rail (PaneRail): one notch per
+// Session J (plan D-H, item 1) — the left DISPLAY rail (PaneRail): one notch per
 // HUD pane this floor allows, lit = shown, dim = hidden; tap toggles through
 // the rung and emits the ONE pane-visibility edge (room memory follows);
 // long-press the head = RESET ROOM. Constructed ONLY inside the LADDER.ENABLED
@@ -2104,7 +2104,7 @@ async function init() {
     // captures the applied floor's room and exports it to the player store
     // (write-on-change inside the store; an event-rate edge, never per frame).
     // ladderController is constructed below — read live, guarded.
-    // Session J (plan D-H, item 1): the WHAT rail. Deps are all getters /
+    // Session J (plan D-H, item 1): the DISPLAY rail. Deps are all getters /
     // callbacks — the rail imports no bus and never sees the HUD: the live
     // rungs (the ONE pane-visibility bit, T8 — the same adapters FloorMask
     // reads), the floor's DEFAULT room row (the height rule lists the room's
@@ -2133,7 +2133,7 @@ async function init() {
       const pd = hud && hud.paneDensity;
       const cleanView = !!(pd && typeof pd.hasStash === 'function' && pd.hasStash());
       if (ladderController && !cleanView) ladderController.noteRoomChange();
-      // Session J: the WHAT rail flashes the notch that just changed (the
+      // Session J: the DISPLAY rail flashes the notch that just changed (the
       // `-`/`+` keys, 0/9/8, its own tap) and repaints now (forced — the
       // per-frame poll is throttled to 1 Hz — review fix).
       if (ladderPaneRail) {
@@ -2167,7 +2167,7 @@ async function init() {
     // IS the callout floor. Its rung is spliced into hud.paneDensity.rungs
     // right after FLEET, HERE — before ladderFloorMask is constructed and long
     // before the first setFloor (FloorMask._resolve caches the rung map ONCE
-    // at that first apply; the WHAT rail reads the same live array). Fed per
+    // at that first apply; the DISPLAY rail reads the same live array). Fed per
     // frame by setDodge in the gameLoop (it rides LAST on the right edge:
     // under the SPECS tab / the WHERE rail, compacting, then hiding). Inside
     // the gate: a ?ladder=0 boot builds no pane and pushes no rung — the
@@ -2308,7 +2308,7 @@ async function init() {
     sceneManager,
     gameState,
     rail: railIndicator,
-    // Session J (plan D-H): the WHAT rail — the `rail` mirror (show at
+    // Session J (plan D-H): the DISPLAY rail — the `rail` mirror (show at
     // engage, hide at disengage, populate(floor) at every arrival). Flag-off:
     // never constructed → null → byte-identical.
     paneRail: ladderPaneRail,
@@ -2411,7 +2411,7 @@ async function init() {
   // drawer is open — the turntable), a tap resolves through _touchTap below,
   // a long-press on the selected target opens the radial (verbs press keys
   // through KeyDispatch — the SAME key paths), an edge-band swipe opens the
-  // drawers. The density slider + LIBRARY chip retired (the WHAT rail and the
+  // drawers. The density slider + LIBRARY chip retired (the DISPLAY rail and the
   // SPECS-everywhere tab replaced them); the STORE chip stays until Session K.
   // An optional telemetry beacon logs zoom-feel gestures + the floor crossings
   // they cause to the cable server (touch-only).
@@ -3325,7 +3325,7 @@ async function init() {
       // the MODE=update gate leg — always constructed (flag-independent).
       window.__updateWatch = updateWatch;
       // Session J: the controller (floor / turntable / isActive probes for the
-      // hasTouch gate) and the WHAT rail — undefined on a ?ladder=0 boot for
+      // hasTouch gate) and the DISPLAY rail — undefined on a ?ladder=0 boot for
       // the rail (never constructed there), the same contract as __refit.
       window.__ladder = ladderController;
       window.__paneRail = ladderPaneRail;
@@ -5630,7 +5630,7 @@ function gameLoop(timestamp) {
   // and ≤ 4 Hz internally (G1), so the per-frame call is free. Flag-off:
   // _ladderActive is false → never called.
   if (_ladderActive && railIndicator && railIndicator.setRate) railIndicator.setRate(timeAuthority.rate);
-  // Session J: the WHAT rail's lit/dim paint follows the live pane bits
+  // Session J: the DISPLAY rail's lit/dim paint follows the live pane bits
   // (write-on-change per notch, a 1 Hz poll inside — G1; each scan is a
   // layout read per HUD rung, so announced changes repaint at once through
   // the pane-visibility edge listener inside the ladder gate instead).
@@ -5668,7 +5668,7 @@ function gameLoop(timestamp) {
       window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0));
   }
   // Session M — the instruments' edges (owner law: by the 13-inch numbers).
-  // ORBIT rides bottom-LEFT: right of the WHAT rail (its cached rightPx) and
+  // ORBIT rides bottom-LEFT: right of the DISPLAY rail (its cached rightPx) and
   // above BOTH the thumb rest and the hint ticker's band (min of the two
   // floors — the ticker is bottom-anchored at BOTTOM_PX + ROW_HEIGHT_PX).
   // NEXT rides the right edge ABOVE the CARGO pane: same rider above (the SPECS

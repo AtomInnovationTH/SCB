@@ -156,7 +156,7 @@ export class LadderController {
    * @param {object} [deps.autopilot]    - AutopilotSystem: toggle(). Session J
    *   item 6 — floor 2's declared Space verb 'approach-autopilot' (a no-op
    *   since S4) is the `A` path: autopilot to the selected target. Optional.
-   * @param {object} [deps.paneRail]     - the WHAT rail (PaneRail, Session J
+   * @param {object} [deps.paneRail]     - the DISPLAY rail (PaneRail, Session J
    *   D-H): show/hide/populate(floor). Mirrors `rail`: shown at engage, hidden
    *   at disengage, re-populated at every floor arrival. Optional.
    * @param {object} [deps.audioBeds]    - per-floor audio beds (LadderAudioBeds):
@@ -209,7 +209,7 @@ export class LadderController {
     this._refit = deps.refit || null;
     this._library = deps.library || null;
     // Session J (D-C / item 6 / D-H): the subject-change hook, the autopilot
-    // for floor 2's Space verb, the WHAT rail. All optional (parallel tracks).
+    // for floor 2's Space verb, the DISPLAY rail. All optional (parallel tracks).
     this._onSubjectChange = (typeof deps.onSubjectChange === 'function') ? deps.onSubjectChange : null;
     this._autopilot = deps.autopilot || null;
     this._paneRail = deps.paneRail || null;
@@ -736,7 +736,7 @@ export class LadderController {
    * RESET ROOM (Session J, plan D-H: "long-press rail head = RESET ROOM"):
    * forget the applied floor's remembered pane layout and re-apply its
    * default room, then export (the store learns the reset — write-on-change).
-   * The WHAT rail's long-press calls this through the hub. No-op disengaged,
+   * The DISPLAY rail's long-press calls this through the hub. No-op disengaged,
    * without a mask, or before the mask learned resetRoom. Event-rate only.
    * @returns {boolean} true when a room was reset
    */
@@ -1401,7 +1401,7 @@ export class LadderController {
     // D5: the mask just captured the departing floor's room — export to the
     // player store (write-on-change inside the store; a floor-change moment).
     this._persistRooms();
-    // Session J (D-H): the WHAT rail lists the arrival floor's room — after the
+    // Session J (D-H): the DISPLAY rail lists the arrival floor's room — after the
     // mask applied it, so the lit/dim paint reads the settled panes.
     if (this._paneRail && this._paneRail.populate) this._paneRail.populate(floor);
     // Session N.5 (owner 2026-09-07): the DISPLAY rail's floor rule — hidden

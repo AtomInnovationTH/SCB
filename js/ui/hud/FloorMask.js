@@ -116,15 +116,15 @@ export const REDUCED_CROSSFADE_MS = 200;
  * ShopScreen's public wrappers. A RUNG pane like the others: the pane owns a
  * pane-density rung ('cargo', pushed into hud.paneDensity.rungs by main.js
  * BEFORE the first setFloor) whose ONE bit is `data-density-hidden` on the
- * root `#hud-cargo-pane` (a direct child of #hud-overlay), so the WHAT rail
+ * root `#hud-cargo-pane` (a direct child of #hud-overlay), so the DISPLAY rail
  * lists it as a notch and D5 remembers it per floor.
  *
  * 'orbit' / 'copilot' / 'next' (2026-09-06, Session M — Instruments): three
  * more RUNG panes of the same shape. ORBIT (js/ui/hud/OrbitPane.js,
- * `#hud-orbit-pane`, bottom-left right of the WHAT rail: the fixed
+ * `#hud-orbit-pane`, bottom-left right of the DISPLAY rail: the fixed
  * instrument slots + the OrbitMFD plot as its track view), COPILOT
  * (js/ui/hud/FmaStrip.js, `#hud-fma-strip`, the flight-mode annunciator that
- * rides as the LAST child of #hud-left-column — the WHAT rail dodges the
+ * rides as the LAST child of #hud-left-column — the DISPLAY rail dodges the
  * column, so nothing else moves) and NEXT (js/ui/hud/NextPane.js,
  * `#hud-next-pane`, the right edge above the CARGO slot: transfer window /
  * TCA / shadow / ground pass). Each pushes its rung into
@@ -201,7 +201,7 @@ export const ALWAYS_ON = Object.freeze([
  *                                        screen look: both are tall, both sat
  *                                        where the mid-height rails land — the
  *                                        orb under the WHERE rail, discoveries
- *                                        under the WHAT rail. Gone by default
+ *                                        under the DISPLAY rail. Gone by default
  *                                        saves the vertical space; 8 / the WHAT
  *                                        rail's dim notch bring either back and
  *                                        D5 remembers). The orb was off in the
@@ -216,11 +216,11 @@ export const ALWAYS_ON = Object.freeze([
  *   numbers) is 'shown' on F1 only — the shop floor, where selling and
  *   contributing happen — and 'gone' on F2–F5: on F2 the bottom-right slot has
  *   8 px of slack under the SPECS tab at the default room, so the pane sits
- *   behind the WHAT rail's MORE there and D5 remembers it per room once
+ *   behind the DISPLAY rail's MORE there and D5 remembers it per room once
  *   flipped.
  *   The Session M instruments (2026-09-06, owner law: by the 13-inch iPad
  *   numbers): ORBIT and COPILOT are 'shown' on the two flying floors F2 + F3
- *   (the WHAT rail's eight room-default notches on F2 are then exactly pin,
+ *   (the DISPLAY rail's eight room-default notches on F2 are then exactly pin,
  *   debris, targets, mother, arms, reticles, orbit, copilot — the sky-label
  *   and score extras move behind MORE); COPILOT stays 'faint' on F4 with the
  *   daughters rows (the autopilot can be flying a cluster leg while the player

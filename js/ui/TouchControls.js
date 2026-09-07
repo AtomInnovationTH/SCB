@@ -36,7 +36,7 @@
  *      Any moment with two fingers down POISONS the gesture (a pinch that
  *      starts on a part is never a tap). The STORE chip stays until Session K
  *      retires the full-screen shop; the PANES density slider and the LIBRARY
- *      chip retired with the WHAT rail + the SPECS-everywhere tab (D-H / D-C).
+ *      chip retired with the DISPLAY rail + the SPECS-everywhere tab (D-H / D-C).
  *      Gameplay-gated chrome: hidden on the menu / briefing / end screens
  *      (gameState.isGameplay()).
  *
@@ -279,7 +279,7 @@ export class TouchControls {
    * @param {function|null} [deps.pressKey]          Session J: (code) → the hub presses the key (KeyDispatch)
    * @param {function|null} [deps.openPane]          Session J: ('refit'|'library', open) → the hub opens/closes
    *   the drawer (the edge-band swipe)
-   * @param {object|null} [deps.paneDensity]         RETIRED (Session J): accepted and ignored — the WHAT rail
+   * @param {object|null} [deps.paneDensity]         RETIRED (Session J): accepted and ignored — the DISPLAY rail
    *   is the pane surface
    * @param {function|null} [deps.toggleLibrary]     RETIRED (Session J): accepted and ignored — the SPECS tab
    *   lives on every floor
@@ -788,7 +788,7 @@ export class TouchControls {
       /* The STORE tap chip — bottom-left, ≥44pt target (Ipad.md §3), same fade
          family as the rest of the chrome. (The LIBRARY chip retired in Session
          J: the SPECS tab lives on every floor; the PANES slider retired with
-         the WHAT rail.) */
+         the DISPLAY rail.) */
       .touch-nav-dock {
         position: absolute;
         left: calc(12px + env(safe-area-inset-left, 0px));

@@ -534,7 +534,7 @@ export class MotherCallouts {
     this._paneInsetL = 0;
     this._paneInsetR = 0;
     // Rail insets (Session L, Session K FINDINGS (a)): the SECOND inset source
-    // — the WHAT rail's reach from the left screen edge and the WHERE rail's
+    // — the DISPLAY rail's reach from the left screen edge and the WHERE rail's
     // reach from the right, each + RAIL_GEOMETRY.DODGE_GAP_PX, fed by the hub
     // from the rails' own 1 Hz dodge reads (setRailInsets, write-on-change).
     // Merged with the pane insets by max per side in _updatePaneEdges — the
@@ -685,7 +685,7 @@ export class MotherCallouts {
    * Rail insets (Session L — Session K FINDINGS (a): on the 13-inch iPad the
    * floor-1 hull callout columns sat UNDER both rails on the PARTS band, the
    * rails painting on top). The rails are the SECOND inset source beside the
-   * drawers: `leftPx` is the WHAT rail's RIGHT edge (its reach from the left
+   * drawers: `leftPx` is the DISPLAY rail's RIGHT edge (its reach from the left
    * screen edge, `paneRail.rightPx()`), `rightPx` the WHERE rail's reach from
    * the RIGHT screen edge (`innerWidth − railIndicator.leftPx()`), CSS px, or
    * null while that rail is hidden / unmeasured. Each non-null value gains
@@ -697,7 +697,7 @@ export class MotherCallouts {
    * pane insets by max per side in _updatePaneEdges — the ONE merge point —
    * so neither source clobbers the other. Non-finite / negative / null → 0
    * (no rail on that side; never a guess).
-   * @param {number|null} leftPx  - the WHAT rail's right edge (px from the left screen edge), or null
+   * @param {number|null} leftPx  - the DISPLAY rail's right edge (px from the left screen edge), or null
    * @param {number|null} rightPx - the WHERE rail's reach from the right screen edge (px), or null
    * @returns {boolean} whether the stored rail insets changed
    */

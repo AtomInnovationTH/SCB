@@ -1,5 +1,5 @@
 /**
- * PaneRail.js — the left WHAT rail (plan D-H; Session J item 1).
+ * PaneRail.js — the left DISPLAY rail (plan D-H; Session J item 1).
  *
  * The right rail (RailIndicator) answers WHERE — which floor. This rail
  * answers WHAT — which panes this floor allows: one notch per pane-density
@@ -77,7 +77,7 @@ export const MORE_ID = '__more';
 export const STYLE_ID = 'pane-rail-style';
 /** Root element id. */
 export const ROOT_ID = 'ladder-pane-rail';
-/** The HUD column on the WHAT rail's side — what the dodge measures (HUD.js's left stack). */
+/** The HUD column on the DISPLAY rail's side — what the dodge measures (HUD.js's left stack). */
 export const SIDE_COLUMN_ID = 'hud-left-column';
 /** Fade transition for the root opacity (ms) — the WHERE rail's 0.3 s. */
 const ROOT_FADE_MS = 300;
@@ -227,7 +227,7 @@ export class PaneRail {
 
   /**
    * Notch text law: the rung label UPPERCASE with a trailing " PANE" dropped
-   * (owner, 2026-09-06: the WHAT rail wears the WHERE rail's compact rows —
+   * (owner, 2026-09-06: the DISPLAY rail wears the WHERE rail's compact rows —
    * `TARGET ·0` beside a floor row, not `TARGET PANE ·0`; every notch on this
    * rail IS a pane, the word carried nothing), plus the hotkey suffix glyph
    * (` ·0` — a middle dot then the digit) when the table maps this id.
@@ -603,7 +603,7 @@ export class PaneRail {
     // row, no fixed height (owner 2026-09-06 — the compact rows).
     const head = doc.createElement('div');
     head.className = 'pane-rail-head';
-    head.textContent = 'WHAT';
+    head.textContent = 'DISPLAY';
     head.style.cssText = [
       'padding:0 8px 2px', 'text-align:left', 'white-space:nowrap',
       `color:${VisualLaw.COLORS.INFO}`, 'font-size:0.62rem', 'letter-spacing:0.12em',
@@ -638,7 +638,7 @@ export class PaneRail {
     style.id = STYLE_ID;
     const peek = Math.min(1, NOTCH_DIM_OPACITY + HOVER_PEEK);
     style.textContent = `
-      /* WHAT rail (plan D-H): a hidden pane's notch is DIM — the "there's more"
+      /* DISPLAY rail (plan D-H): a hidden pane's notch is DIM — the "there's more"
        * hint; a shown pane's notch is lit. Opacity lives HERE (never inline)
        * so the desktop hover peek can lift it. */
       #${ROOT_ID} .pane-rail-notch { opacity: 1; transition: opacity 240ms ease; cursor: pointer;

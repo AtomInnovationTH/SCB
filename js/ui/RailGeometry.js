@@ -27,20 +27,20 @@
  *   THUMB_REST_PX  the bottom band both rails must clear (two-thumb grip)
  *   IDLE_FADE      resting opacity after IDLE_FADE_MS without interaction
  *   IDLE_FADE_MS   the idle window (any tap / hover / populate wakes the rail)
- *   TOUCH_PITCH_PX the WHAT rail's notch HIT BOX height on GLASS (Apple HIG
+ *   TOUCH_PITCH_PX the DISPLAY rail's notch HIT BOX height on GLASS (Apple HIG
  *                  44 pt minimum): the compact 17 pt plate sits centred in a
  *                  transparent 44 pt row, boxes tile with no gap, so every y
  *                  on the rail is a reliable thumb target while the rail still
  *                  LOOKS like the WHERE rail's rows. Desktop (fine pointer)
  *                  keeps the tight 5 px-gap rows — a mouse hits 17 pt fine.
- *   MAX_NOTCHES    the WHAT rail's height cap: the listed rows before the rest
+ *   MAX_NOTCHES    the DISPLAY rail's height cap: the listed rows before the rest
  *                  folds behind ONE `MORE` notch (8 keeps the rail a glance,
  *                  not a menu; the rows themselves are the WHERE rail's
  *                  compact text rows — owner 2026-09-06 — so height is no
  *                  longer the constraint it was at 40 pt per row)
  *
  * (NOTCH_PX 40 — the fixed 40 pt WHAT-rail row — was RETIRED 2026-09-06: the
- * WHAT rail now wears the WHERE rail's rows, which have no fixed height. The
+ * DISPLAY rail now wears the WHERE rail's rows, which have no fixed height. The
  * touch hit height of a notch is its text row, ~17 px + the 5 px gap — see
  * the 03-plan Job 1 follow-up FINDINGS for the glass hit-size question.)
  */
@@ -98,7 +98,7 @@ export function dodgeTop({ railH, colBottom, innerH } = {}) {
  *   midHeightCss('left')  → 'position:absolute;top:50%;transform:translateY(-50%);left:10px;'
  *   midHeightCss('right') → 'position:absolute;top:50%;transform:translateY(-50%);right:10px;'
  *
- * Anything that is not the string 'right' anchors LEFT (the WHAT rail's side).
+ * Anything that is not the string 'right' anchors LEFT (the DISPLAY rail's side).
  * @param {'left'|'right'} side
  * @returns {string}
  */

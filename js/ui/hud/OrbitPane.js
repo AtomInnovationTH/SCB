@@ -12,10 +12,10 @@
  * It is a pane-density RUNG like the other DOM panes: `rung()` returns the HUD
  * domRung shape ({id:'orbit', label, isVisible, setVisible}) whose ONE
  * visibility bit is the `data-density-hidden` attribute on the root, so the
- * WHAT rail lists it as a notch and FloorMask rooms it per floor.
+ * DISPLAY rail lists it as a notch and FloorMask rooms it per floor.
  *
  * HOME (decided by the 13-inch iPad numbers, 1376 × 1032): bottom-left, RIGHT
- * of the WHAT rail and ABOVE the hint ticker. The hub (main.js, inside the
+ * of the DISPLAY rail and ABOVE the hint ticker. The hub (main.js, inside the
  * LADDER gate) constructs the pane, pushes `rung()` into hud.paneDensity.rungs
  * before the first floorMask.setFloor, and calls `setAnchor(paneRail.rightPx(),
  * floorPx)` once per frame with cached numbers and `update(nowMs)` per frame.
@@ -281,7 +281,7 @@ export class OrbitPane {
 
   /**
    * THE ANCHOR (the hub calls it per frame with cached numbers). `leftEdgePx`
-   * = the WHAT rail's right edge (paneRail.rightPx()); `floorPx` = the lowest
+   * = the DISPLAY rail's right edge (paneRail.rightPx()); `floorPx` = the lowest
    * allowed bottom edge (min of the thumb rest and the ticker band). Write-on-
    * change on the two inputs: repeated identical inputs return before any DOM
    * access. Pure arithmetic, no layout read:

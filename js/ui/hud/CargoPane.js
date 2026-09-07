@@ -8,7 +8,7 @@
  * the shop). It is a pane-density RUNG like the other DOM panes: `rung()`
  * returns the HUD domRung shape ({id:'cargo', label, isVisible, setVisible})
  * whose ONE visibility bit is the `data-density-hidden` attribute on the root,
- * so the WHAT rail lists it as a notch and FloorMask rooms it per floor
+ * so the DISPLAY rail lists it as a notch and FloorMask rooms it per floor
  * (MASK_PANES.cargo / DEFAULT_ROOMS[floor].cargo).
  *
  * Wiring (the hub's, main.js inside the LADDER gate): construct with the live

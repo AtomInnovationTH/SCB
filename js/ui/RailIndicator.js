@@ -20,7 +20,7 @@
  *   centred original overlapped TARGET DOSSIER / TRACKED TARGETS in
  *   #hud-right-column at every common viewport); Session J (plan D-H) moved it
  *   back to MID-HEIGHT through the shared RailGeometry table (`midHeightCss`)
- *   so both rails — this WHERE rail and the left WHAT rail (PaneRail) — sit
+ *   so both rails — this WHERE rail and the left DISPLAY rail (PaneRail) — sit
  *   clear of the bottom ~100 pt iPad thumb rest. The right HUD column is
  *   masked to the floor's room by FloorMask now, so the G3 overlap the bottom
  *   anchor solved no longer has its cause on the ladder floors.
@@ -232,7 +232,7 @@ export class RailIndicator {
     root.id = 'ladder-rail';
     // Session J (plan D-H): MID-HEIGHT on the right edge via the shared rail
     // geometry (was G3's `bottom:14px; right:10px`) — clear of the bottom
-    // ~100 pt thumb rest, level with the left WHAT rail. The fragment ends in
+    // ~100 pt thumb rest, level with the left DISPLAY rail. The fragment ends in
     // ';' so it prefixes the joined list cleanly.
     root.style.cssText = midHeightCss('right') + [
       'display:flex', 'flex-direction:column-reverse', 'gap:5px',
