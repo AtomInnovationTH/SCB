@@ -181,6 +181,13 @@ export class HUD {
     /** @type {number|null} */
     this._commsRectBottom = null;
 
+    // Session O (plan D16 (b), owner 2026-09-07): the score strip's rect cache
+    // (the exclusion band TargetReticle keeps debris brackets out of). Lazily
+    // computed + invalidated on window resize (beside the comms-rect cache);
+    // the ONE reused object (no per-frame allocation).
+    /** @type {{left:number, top:number, right:number, bottom:number}|null} */
+    this._scoreStripRect = null;
+
     this._build();
     this._setupEventListeners();
   }
@@ -1216,9 +1223,11 @@ export class HUD {
     });
 
     // Sprint 2 / PR E — recompute the cached comms-panel rect on viewport resize.
+    // Session O (D16 (b)): the score-strip rect cache rides the same invalidate edge.
     if (typeof window !== 'undefined') {
       window.addEventListener('resize', () => {
         this._commsRectBottom = null;
+        this._scoreStripRect = null;
       });
     }
 
@@ -1226,6 +1235,19 @@ export class HUD {
     // moves, so the NavSphere slot + right-hand pane column must follow. The
     // panel height animates over ~0.3s, so keep recomputing the cached bottom
     // each frame until the transition settles (see update()).
+    // Session O (plan D16 (a), owner 2026-09-07): a comms VISIBILITY toggle (a
+    // pane-density rung flip / FloorMask floor apply) moves the pane's bottom edge
+    // — but arrives with NO COMMS_PANEL_RESIZED (the cache was measured against a
+    // hidden pane: bottom 0 → the right column's top ≈ 12 px → COMMS/TARGETS
+    // overlap on the iPad, the owner's screenshot). Null the cached rect on the comms
+    // visibility edge so the next frame recomputes (order-independent vs any other
+    // consumer — a nulled cache is recomputed lazily). No new Events (D14): the
+    // ONE existing visibility event is reused — HUD is its SECOND listener file
+    // beside main.js's DISPLAY-rail sink (test-events-graph pins both).
+    eventBus.on(Events.HUD_PANE_VISIBILITY, (data) => {
+      if (data && data.pane === 'comms') this.invalidateCommsLayout();
+    });
+
     eventBus.on(Events.COMMS_PANEL_RESIZED, () => {
       this._commsRectBottom = null;
       this._commsResizeSettleAt =
@@ -1566,6 +1588,50 @@ export class HUD {
    */
   showWarning(message, severity = 'warning') {
     this._warningQueue.push({ message, severity, timer: 3.0 });
+  }
+
+  /**
+   * Session O (plan D16 (a), owner 2026-09-07): null the cached comms-panel
+   * bottom so the next update() frame recomputes it. Harmless if called often:the
+   * cache is just a number; a nulled cache costs one getBoundingClientRect on the
+   * next frame. Public — FloorMask calls it at the end of every floor apply (the
+   * room apply drives each rung's setVisible directly, no event arrives) and this
+   * class calls it on the HUD_PANE_VISIBILITY comms edge (a rung flip — the
+   * pane-density layer's ONE visibility event).
+   */
+  invalidateCommsLayout() {
+    this._commsRectBottom = null;
+  }
+
+  /**
+   * Session O (plan D16 (b), owner 2026-09-07): the score strip's on-screen rect
+   * — the exclusion band TargetReticle keeps its debris brackets out of (the strip's
+   * opaque panel sat over a bracket's distance label at the top — chrome-over-chrome).
+   * Cached on window resize (invalidate beside the comms-rect cache) and lazily
+   * computed on the first read — the ONE reused object (zero per-frame allocation;
+   * main.js reads it once a frame). Null when the panel is missing or hidden
+   * (a hidden HUD/strip reads a zero-area rect at the page origin, which would
+   * otherwise look like a real band at the top-left corner — so zero-area → null).
+   * main.js passes this to targetReticle.update(dt,{ … exclusionRect }) only while
+   * the ladder is on (flag-off passes null → byte-identical shipped path).
+   * @returns {{left:number, top:number, right:number, bottom:number}|null}
+   */
+  scoreStripRect() {
+    // Cached: return the measured object untouched (zero per-frame work — the
+    // resize handler nulls the cache to force ONE re-measure).
+    if (this._scoreStripRect != null) return this._scoreStripRect;
+    const el = (typeof document !== 'undefined') ? document.getElementById('hud-score-panel') : null;
+    if (!el || typeof el.getBoundingClientRect !== 'function') return null;
+    const r = el.getBoundingClientRect();
+    if (!r) return null;
+    const left = r.left || 0, top = r.top || 0, right = r.right || 0, bottom = r.bottom || 0;
+    // Hidden: display:none → a zero-area rect (falling back to 0 for the
+    // undefined edges a fake/stub rect may omit). A strip with no area reserves
+    // nothing and is never a real band. (Cache stays null: a later reveal of the
+    // panel re-measures on that frame — hidden edges are rare, so no per-frame cost.
+    if (!(right > left) || !(bottom > top)) return null;
+    this._scoreStripRect = { left, top, right, bottom };
+    return this._scoreStripRect;
   }
 
   // ==========================================================================

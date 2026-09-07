@@ -1475,12 +1475,22 @@ export class LadderController {
       }
     }
     // The SPECS pane (Wave 5 Session B; plan D-C since Session J): enabled on
-    // EVERY floor — the tab paints everywhere and an open pane RIDES ALONG
-    // (the world stays held under it, D-F; the camera inset bias applies on
-    // every floor since the CameraSystem :4384 lift). Only _disengage disables
-    // and closes it. The subject hook below lets the hub retarget an open
-    // pane to the arrival floor's subject through the pane's ONE openEntry.
-    if (this._library && this._library.setEnabled) this._library.setEnabled(true);
+    // EVERY floor — an open pane RIDES ALONG (the world stays held under it, D-F;
+    // the camera inset bias applies on every floor since the CameraSystem :4384 lift);
+    // only _disengage disables and closes it. Session O (plan D6, owner
+    // 2026-09-07): the edge TAB itself is now F1-only — the classic drawer tab that
+    // "opens SPECS" is a WORKBENCH affordance (REFIT parity, and the FAST answers:
+    // deep links (hint chips, subject-follow, CODEX_OPEN_ENTRY, the glass right-edge
+    // swipe) that open the pane from any floor still work, because THE PANE IS NEVER
+    // DISABLED — an open pane shows its handle tab on every floor (setTabShown
+    // only gates the CLOSED tab; the pane's own open edge re-shows the tab, and its
+    // close edge hides it again off-F1). The rule for tab visibility therefore lives
+    // here, in the floor content, not in the pane: the pane just answers the floor's
+    // claim level (setEnabled(true) + setTabShown(floor === WORKBENCH_FLOOR)).
+    if (this._library) {
+      if (this._library.setEnabled) this._library.setEnabled(true);
+      if (this._library.setTabShown) this._library.setTabShown(floor === WORKBENCH_FLOOR);
+    }
     // Per-floor audio bed (FloorContract audioBed): crossfade to the arrival
     // floor's bed. Optional dep — absent it this is a no-op (parallel track).
     if (this._audioBeds && this._audioBeds.setFloor) this._audioBeds.setFloor(floor);

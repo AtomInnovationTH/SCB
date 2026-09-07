@@ -260,6 +260,13 @@ export class LibraryPane {
     this._reducedMotionDep = deps.reducedMotion;
 
     this._enabled = false;
+    // Session O (plan D6, owner 2026-09-07): whether the edge tab shows on
+    // THIS floor (the SPECS tab is F1-only while closed; an open pane shows it on
+    // every floor). Default true so every behaviour outside the controller (tests,
+    // an unwired boot) holds until LadderController setTabShown(false) on a
+    // non-workbench floor. The pane itself stays ENABLED everywhere — the tab is
+    // the only surface this policy gates (deep-links keep working).
+    this._tabFloorShown = true;
     this._open = false;
     this._entryId = null;         // the entry the pane is showing (null = prompt)
     this._via = null;             // the clicked part's callout name behind the entry (header lead), else null
@@ -398,15 +405,21 @@ export class LibraryPane {
   }
 
   /**
-   * The edge tab's UNREAD count: unlocked entries not yet seen — exactly the
-   * viewer's NEW-pip predicate (CodexViewerUI._makeRow `isNew`). Pure.
+   * The edge tab's UNREAD count: unlocked entries not yet seen, EXCLUDING the
+   * `startUnlocked` set (Session O, plan D16b, owner 2026-09-07): those 74
+   * are PLAYBOOK + WORLD_INDUSTRY + the 12 cornerstones (`codexTriggers.js:42`)
+   * and are readable from the first library open — counting them made the badge read
+   * "74" forever and teach nothing ("the 74 only distract"). The badge therefore
+   * counts REAL unlocks only — a small deviation from the viewer's NEW-pip
+   * predicate (which still includes startUnlocked entries); the viewer's pips
+   * are NOT changed by this rule. Pure.
    * @param {Array<object>|null|undefined} entries
    * @returns {number}
    */
   static unreadCount(entries) {
     let n = 0;
     for (const e of (entries || [])) {
-      if (e && e.unlocked && !e.seen) n++;
+      if (e && e.unlocked && !e.seen && !(e.startUnlocked === true)) n++;
     }
     return n;
   }
@@ -462,7 +475,14 @@ export class LibraryPane {
    * layout read of its own.
    * @returns {number|null}
    */
-  tabBottom() { return (this._tab && this._enabled) ? this._tabBottomPx : null; }
+  tabBottom() {
+    // Session O (plan D6, owner 2026-09-07): a tab hidden by the floor
+    // policy (setTabShown(false) while closed off-F1) reserves NOTHING — the
+    // CARGO pane (main.js:the hub feeds `tabBottom() ?? rail.bottomPx()`) rides
+    // under the RAIL then, not under an invisible tab slot.
+    if (!this._tab || !this._enabled || !(this._tabFloorShown || this._open)) return null;
+    return this._tabBottomPx;
+  }
   /** @returns {boolean} */
   isEnabled() { return this._enabled; }
   /** @returns {string|null} the entry the pane is showing (null = the prompt) */
@@ -484,8 +504,10 @@ export class LibraryPane {
 
   /**
    * Enable on F3 arrival / disable on leave (LadderController `library` dep).
-   * Enabled: the edge tab shows (always visible while enabled). Disabled:
-   * tab hides and the pane closes. Idempotent; headless no-op beyond state.
+   * Enabled: the edge tab shows unless the floor policy hides it (setTabShown
+   * — Session O, plan D6: F1-only while closed, shown while open) or the pane
+   * is open on any floor. Disabled: tab hides and the pane closes. Idempotent;
+   * headless no-op beyond state.
    * @param {boolean} on
    */
   setEnabled(on) {
@@ -494,12 +516,40 @@ export class LibraryPane {
     this._enabled = on;
     if (on) {
       this._build();
-      if (this._tab) this._tab.style.display = 'block';
+      this._applyTabShown();
       this.refresh();
     } else {
-      if (this._tab) this._tab.style.display = 'none';
+      this._applyTabShown();
       this.close();
     }
+  }
+
+  /** @private The tab's actual display: enabled AND (floor-allowed OR open). */
+  _applyTabShown() {
+    if (this._tab) {
+      this._tab.style.display = (this._enabled && (this._tabFloorShown || this._open)) ? 'block' : 'none';
+    }
+  }
+
+  /**
+   * Session O (plan D6, owner 2026-09-07): the SPECS edge tab shows only on
+   * the WORKBENCH floor while closed (F1 = the hull, where the workbench panes live),
+   * or on ANY floor while the pane is open — an open pane's tab is its handle,
+   * never hidden. The pane stays ENABLED everywhere — every deep link (hint chips,
+   * subject-follow, CODEX_OPEN_ENTRY, the glass right-edge swipe) keeps working
+   * because `_openCore` only no-ops when DISABLED — so never disable it. The
+   * controller calls this from `_applyFloorContent(floor)` right after
+   * `setEnabled(true)` — an absent method (older stub / unwired boot) is a guard
+   * no-op there. Idempotent; headless no-op beyond state. Re-evaluates the tab's
+   * actual display immediately.
+
+   * @param {boolean} on - true = the tab shows on this floor (F1)
+   */
+  setTabShown(on) {
+    on = !!on;
+    if (on === this._tabFloorShown) return;
+    this._tabFloorShown = on;
+    this._applyTabShown();
   }
 
   /** Open the pane (no-op while disabled). Fires onOpenChange(true) once.
@@ -519,6 +569,7 @@ export class LibraryPane {
     if (this._entryId == null) this._adoptSubject();
     this._open = true;
     this._applyOpenState();
+    this._applyTabShown();       // Session O (D6): an open pane shows its tab on ANY floor
     this._wake();
     this.refresh();
     this._armSeenTimer();
@@ -531,6 +582,7 @@ export class LibraryPane {
     if (!this._open) return;
     this._open = false;
     this._applyOpenState();
+    this._applyTabShown();       // Session O (D6): closed off-F1 → tab hides again
     this._clearIdleTimer();
     this._clearSeenTimer();
     this._cancelPhoto();

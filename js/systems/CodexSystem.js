@@ -192,6 +192,11 @@ export class CodexSystem {
       // quick-start + WORLD_INDUSTRY exposition (onboarding/reference material, not
       // a gameplay "discovery"), plus one per-category "cornerstone" briefing so
       // every tech category shows its value from the first library open.
+      // Session O (plan D16b, owner 2026-09-07): the START fact is carried onto
+      // the runtime entry as its own field — the SPECS badge (`LibraryPane.unreadCount`)
+      // must tell the 74 startUnlocked entries apart from unlocks earned IN PLAY (the
+      // runtime `unlocked` can be true for both; only the badge excludes the 74).
+      startUnlocked: e.startUnlocked === true,
       unlocked: e.startUnlocked === true,
       seen: false,
       // unlock predicates (multi-trigger). Inert for startUnlocked entries (they

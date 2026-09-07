@@ -531,6 +531,20 @@ export class FloorMask {
       }
       this._setFaint(pane, tier === 'faint' && wantVisible);
     }
+    // Session O (plan D16 (a), owner 2026-09-07): the room apply just drove every
+    // rung's setVisible (incl. comms — F1 hides it, F2+ shows it) — visibility
+    // toggles that arrive with NO event, so the HUD's cached comms-bottom rect went
+    // stale (the right column's top was computed against a hidden pane: bottom 0
+    // → top ≈ 12 px → COMMS/TARGETS overlap, the owner's screenshot). Null it so
+    // the next update() frame recomputes. The pane's hiding is the density attribute
+    // (`data-density-hidden` → `display:none !important`) — display flips immediately,
+    // no CSS transition on it, so the next-frame rect is already the final box (no
+    // settle window like COMMS_PANEL_RESIZED's stepped sizes need). One call, at the
+    // end of the floor apply only — `_restoreAll` (disengage) restores the shipped
+    // cockpit the same rung writes, but the HUD is hidden in the menu then (update()
+    // returns early), and the next engage re-runs this floor apply — cached values can
+    // never be read stale across an engage.
+    this._hud.invalidateCommsLayout?.();
   }
 
   /** @private Shipped fully-visible cockpit: every pane shown, treatments off. */

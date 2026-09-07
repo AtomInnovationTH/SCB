@@ -27,6 +27,10 @@ const EDGE_PADDING = 40;              // px from screen edge for arrows
 const RETICLE_MIN_SIZE = 12;          // px minimum bracket size
 const RETICLE_MAX_SIZE = 60;          // px maximum bracket size
 const SELECTED_RETICLE_SCALE = 1.6;   // Selected target is bigger
+/** Session O (plan D16 (b), owner 2026-09-07): the score strip's exclusion band
+ *  expansion (px on every side) — a bracket whose DIST LABEL point lands inside
+ *  the band + this pad is skipped whole (never a half-drawn reticle). */
+const SCORE_STRIP_PAD_PX = 8;
 const CALLOUT_DURATION = 8;          // seconds for first-encounter callout labels
 const AP_BADGE_TOP_PX = 92;          // fixed y of the autopilot-engaged chip
 
@@ -248,6 +252,12 @@ export class TargetReticle {
       showVelocityVectors: true,
     };
 
+    // Session O (plan D16 (b), owner 2026-09-07): the score-strip exclusion band,
+    // copied per frame from `data.exclusionRect` (the hub's cached hud.scoreStripRect())
+    // into ONE reused instance rect (zero per-frame allocation; a later frame with
+    // null data clears it — no lingering band).
+    this._exclusionRect = null;
+
     this._createCanvas();
     this._onResize();
     window.addEventListener('resize', () => this._onResize());
@@ -357,6 +367,19 @@ export class TargetReticle {
   update(dt, data) {
     this._time += dt;
     this._dt = dt;
+
+    // Session O (plan D16 (b)): copy the score-strip exclusion band from data into
+    // the ONE reused instance rect (zero per-frame allocation; `exclusionRect` is
+    // null off the ladder → cleared — byte-identical shipped path).
+    if (data && data.exclusionRect) {
+      if (!this._exclusionRect) this._exclusionRect = {};
+      this._exclusionRect.left = data.exclusionRect.left;
+      this._exclusionRect.top = data.exclusionRect.top;
+      this._exclusionRect.right = data.exclusionRect.right;
+      this._exclusionRect.bottom = data.exclusionRect.bottom;
+    } else {
+      this._exclusionRect = null;
+    }
 
     // Decrement first-encounter callout timers
     if (this._progradeCalloutTimer > 0) this._progradeCalloutTimer -= dt;
@@ -830,6 +853,27 @@ export class TargetReticle {
     // bracket and label sub-sections below to avoid drift within this method.
     const outOfRange = this._selectedInRange === false;
     const selColor = outOfRange ? COLORS.yellow : COLORS.cyan;
+
+    // Session O (plan D16 (b), owner 2026-09-07): the score-strip exclusion
+    // band — a debris bracket whose DIST LABEL anchor (the `x, y + half + 22` site
+    // below) would land inside the strip's rect + the 8 px pad is skipped WHOLE
+    // — never a half reticle under the strip, and never a bracket+label pair the
+    // strip's opaque panel sits over (chrome-over-chrome, the owner's D16 (b)
+    // screenshot). The label anchor is the one point that must clear the strip —
+    // the bracket arms travel within `half` of it, so a label that clears leaves
+    // at most a sliver of an arm under the band (accepted; the label is the
+    // content). Off-screen arrows are drawn by a different path and are
+    // unaffected. Zero per-frame allocation: reads only (the reused instance rect
+    // + this method's existing x/y/half numbers). Null (flag-off) → byte-identical
+    // shipped path.
+    const ex = this._exclusionRect;
+    if (ex != null) {
+      const labelY = y + half + 22;
+      if (x >= ex.left - SCORE_STRIP_PAD_PX && x <= ex.right + SCORE_STRIP_PAD_PX &&
+          labelY >= ex.top - SCORE_STRIP_PAD_PX && labelY <= ex.bottom + SCORE_STRIP_PAD_PX) {
+        return;
+      }
+    }
 
     ctx.save();
 

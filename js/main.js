@@ -6144,6 +6144,10 @@ function gameLoop(timestamp) {
         targetSelector,
         playerOrbit: player.orbit,
         skTargetId: _skTargetIdForReticle,
+        // Session O (plan D16 (b), owner 2026-09-07): the score strip's rect
+        // as the exclusion band for debris brackets (cached by HUD; null off the
+        // ladder → byte-identical shipped path — the ladder-on idiom above).
+        exclusionRect: _ladderActive ? hud.scoreStripRect() : null,
         telemetry: {
           deltaVSpent: player.getDeltaVSpent(),
           thrustDirection: player.getThrustDirection(),
