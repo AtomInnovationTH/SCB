@@ -61,8 +61,14 @@ export const LADDER_VIEW_VERSION = 1;
  *   2 — 2026-09-06 (owner): F2 nav orb + discoveries gone by default
  *   3 — 2026-09-06 (Session K): the CARGO pane joins MASK_PANES / DEFAULT_ROOMS (shown on the shop floor, gone elsewhere)
  *   4 — 2026-09-06 (Session M): the ORBIT / COPILOT / NEXT instruments join (ORBIT + COPILOT shown on F2 + F3, COPILOT faint on F4, NEXT shown on F3 + F4)
+ *   5 — 2026-09-07 (Session N.5, owner "first make me care"): the first-contact
+ *       rooms — F1 is the SHIP alone (cargo + comms leave its defaults; the
+ *       first WORKBENCH_STOP shows the till); F2 greets a new player with
+ *       THREE panes (targets, reticles & alerts, mother) + comms + the hint
+ *       ticker (debris, pin, arms, orbit, copilot behind MORE); comms leaves
+ *       ALWAYS_ON for the rooms (shown F2-F5)
  */
-export const ROOMS_GENERATION = 4;
+export const ROOMS_GENERATION = 5;
 
 /** The shipped pane state: both workbench panes closed. */
 export const DEFAULT_PANES = Object.freeze({ refit: false, library: false });

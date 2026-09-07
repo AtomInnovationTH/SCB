@@ -2022,6 +2022,14 @@ async function init() {
     eventBus.on(Events.WORKBENCH_STOP, (d) => {
       if (ladderController && ladderController.rideToWorkbench) ladderController.rideToWorkbench();
       if (refitPane) refitPane.open({ firstVisit: !!(d && d.firstDepotVisit) });
+      // Session N.5 (owner 2026-09-07): F1 hides CARGO by default ("first make
+      // me care") — the break is where selling is taught, so the ceremony
+      // shows the till itself; the flip captures through D5 and the player
+      // keeps it on F1 thereafter ("after players play, they MIGHT care").
+      if (cargoPane && cargoPane.rung) {
+        const r = cargoPane.rung();
+        if (r && typeof r.setVisible === 'function' && typeof r.isVisible === 'function' && !r.isVisible()) r.setVisible(true);
+      }
       _workbenchBreak = true;
       if (!_workbenchPaneOpen) _endWorkbenchBreak('refused');
     });

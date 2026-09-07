@@ -152,6 +152,11 @@ export const MASK_PANES = Object.freeze({
   orbit:       Object.freeze({ rung: 'orbit',       els: Object.freeze(['#hud-orbit-pane']),          memory: true }),
   copilot:     Object.freeze({ rung: 'copilot',     els: Object.freeze(['#hud-fma-strip']),           memory: true }),
   next:        Object.freeze({ rung: 'next',        els: Object.freeze(['#hud-next-pane']),           memory: true }),
+  // Session N.5 (owner 2026-09-07): comms leaves ALWAYS_ON — the workbench is
+  // the ship and its callouts, no radio chatter. A room pane like the rest:
+  // gone on F1 by default, shown on floors 2-5, the rail toggles it, D5
+  // remembers.
+  comms:       Object.freeze({ rung: 'comms',       els: Object.freeze(['#hud-comms-panel']),         memory: true }),
 });
 
 /**
@@ -161,10 +166,11 @@ export const MASK_PANES = Object.freeze({
  */
 export const ALWAYS_ON = Object.freeze([
   'alerts',      // #hud-warnings-panel, #hud-conjunction-panel — never referenced
-  'comms',       // comms pane/rung — alerts channel, sits on top of every floor
   'rail',        // #ladder-rail — the ladder's own instrument
   'score',       // score strip rung — "it is the score", every zoom
   'vitals',      // the VitalsLine — faint by default, NEVER gone (D6)
+  // 'comms' left for MASK_PANES in Session N.5 (owner 2026-09-07): gone on
+  // the F1 workbench by default, shown on floors 2-5.
 ]);
 
 /**
@@ -227,27 +233,37 @@ export const DEFAULT_ROOMS = Object.freeze({
   1: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
-    cargo: 'shown', orbit: 'gone', copilot: 'gone', next: 'gone',
+    // Session N.5 (owner 2026-09-07): the workbench is the SHIP — cargo (the
+    // elevator/till) and comms leave the F1 defaults too. The first
+    // WORKBENCH_STOP shows the till itself (main.js) and D5 keeps it.
+    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'gone',
   }),
+  // Session N.5 (owner 2026-09-07, "think about what panes a NEW player
+  // actually needs"): the flying floor greets a first-timer with THREE panes —
+  // what am I aiming at (targets), what is around me (reticles & alerts), can
+  // I catch (mother) — plus the narrator (comms) and the hint ticker. The
+  // rest (debris map, upgrade pin, fleet, orbit numbers, autopilot strip)
+  // wait behind MORE / `+` until curiosity arrives; D5 remembers whatever a
+  // player pulls out.
   2: Object.freeze({
-    targets: 'shown', debris: 'shown', navsphere: 'gone', reticles: 'shown',
-    pin: 'shown', mother: 'shown', arms: 'shown', discoveries: 'gone', hints: 'shown',
-    cargo: 'gone', orbit: 'shown', copilot: 'shown', next: 'gone',
+    targets: 'shown', debris: 'gone', navsphere: 'gone', reticles: 'shown',
+    pin: 'gone', mother: 'shown', arms: 'gone', discoveries: 'gone', hints: 'shown',
+    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown',
   }),
   3: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'shown', reticles: 'shown',
     pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone', hints: 'gone',
-    cargo: 'gone', orbit: 'shown', copilot: 'shown', next: 'shown',
+    cargo: 'gone', orbit: 'shown', copilot: 'shown', next: 'shown', comms: 'shown',
   }),
   4: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone', hints: 'gone',
-    cargo: 'gone', orbit: 'gone', copilot: 'faint', next: 'shown',
+    cargo: 'gone', orbit: 'gone', copilot: 'faint', next: 'shown', comms: 'shown',
   }),
   5: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
-    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone',
+    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown',
   }),
 });
 

@@ -931,9 +931,17 @@ export class LadderController {
       if (this._paneRail && this._paneRail.hide) this._paneRail.hide();
     } else {
       if (this._rail && this._rail.show) this._rail.show();
-      if (this._paneRail && this._paneRail.show) this._paneRail.show();
+      if (this._paneRail && this._paneRail.show && this._paneRailAllowed(this._floorApplied)) this._paneRail.show();
     }
   }
+
+  /**
+   * @private Session N.5 (owner 2026-09-07): the DISPLAY rail's floor rule —
+   * never on the workbench (F1 is the ship, its callouts, and the two drawer
+   * tabs; the WHERE rail stays — it is the way back up). Everywhere else the
+   * rail paints as before.
+   */
+  _paneRailAllowed(floor) { return floor !== WORKBENCH_FLOOR; }
 
   /** Session N: true while an intro ride is armed and not yet flown. */
   introRidePending() { return this._introPending !== null; }
@@ -1067,6 +1075,7 @@ export class LadderController {
     // the helper is a no-op while engaged, so it must run before the flag.
     this._settleStaleRide();
     this._engaged = true;
+    this._railsShy = false;                    // a fresh engagement is never shy (Session N.5)
     const s = this._ladder.getState();
     const frame = this._frame(s.floor, s.z01);
     if (this._cameraSystem && this._cameraSystem.ladderEngage) {
@@ -1084,9 +1093,9 @@ export class LadderController {
     // enabled by _applyFloorContent(1) only), so a refit:true memory simply
     // waits for the next floor-1 engage.
     this._restorePanes();
-    this._railsShy = false;                    // a fresh engagement is never shy (Session N.5)
     if (this._rail && this._rail.show) this._rail.show();
-    if (this._paneRail && this._paneRail.show) this._paneRail.show();
+    // (The DISPLAY rail's show/hide is owned by _applyFloorContent above —
+    // Session N.5 floor rule: never on the workbench.)
     this._refreshRail();
     // Session N: an ARMED intro ride flies now — the core was placed on the
     // top floor while hidden; the ceremony decision rides to the flying floor
@@ -1395,6 +1404,12 @@ export class LadderController {
     // Session J (D-H): the WHAT rail lists the arrival floor's room — after the
     // mask applied it, so the lit/dim paint reads the settled panes.
     if (this._paneRail && this._paneRail.populate) this._paneRail.populate(floor);
+    // Session N.5 (owner 2026-09-07): the DISPLAY rail's floor rule — hidden
+    // on the workbench, back everywhere else (unless the shy state below).
+    if (this._paneRail) {
+      if (!this._paneRailAllowed(floor)) { if (this._paneRail.hide) this._paneRail.hide(); }
+      else if (this._engaged && !this._railsShy && this._paneRail.show) this._paneRail.show();
+    }
     // Session N.5: riding the ladder ends PURE SCENERY — the rails come back
     // with the floor content (this method runs at engage and every ride start).
     if (this._railsShy) this.setRailsShy(false);
