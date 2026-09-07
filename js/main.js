@@ -1923,6 +1923,14 @@ async function init() {
     //                   CODEX_UNLOCKED on its own schedule — Subnautica §2);
     //   onViewed      → CODEX_VIEWED (the viewer's own seen contract —
     //                   CodexSystem.markSeen stays the one seen-writer).
+    // Session O follow-up (owner 2026-09-07, after the first calm-defaults
+    // look: "still 3 SPECS toasts along the bottom at start — that is
+    // clutter; suppress all SPECS popups for now"): the "+ SPECS: <title>"
+    // unlock chips are silenced while the ladder is on. The unlocks still
+    // land (queue, chime, CODEX_UNLOCKED) and the SPECS badge counts them —
+    // the badge is the doorway now. Session Q's merged transient slot decides
+    // the chips' final home. Inside the gate: ?ladder=0 keeps the chips.
+    if (codexSystem && codexSystem.setAckChips) codexSystem.setAckChips(false);
     libraryPane = new LibraryPane({
       codex: codexSystem,
       onMaximize: (id) => {

@@ -134,6 +134,18 @@ export class CodexSystem {
      * one-at-a-time (cooldown-spaced) once the player is actually flying.
      */
     this._startupGraceUntil = 0;
+    /**
+     * Session O follow-up (owner 2026-09-07, "still 3 SPECS toasts at the
+     * bottom at start — that is clutter; suppress all SPECS popups for now"):
+     * whether an accepted unlock request posts its "+ SPECS: <title>" ticker
+     * chip. Default true (the shipped behaviour; `?ladder=0` never touches it).
+     * The ladder hub sets false — the SPECS badge counts the same unlocks, so
+     * the doorway survives without the chip; Session Q's merged transient slot
+     * decides the chips' final home. The unlock itself (queue, chime,
+     * CODEX_UNLOCKED) is untouched.
+     * @type {boolean}
+     */
+    this._ackChips = true;
     /** @type {Set<string>} event names already subscribed */
     this._subscribedEvents = new Set();
 
@@ -331,6 +343,7 @@ export class CodexSystem {
    * Data only — this emitter knows nothing about panes.
    */
   _postAckChip(entry) {
+    if (!this._ackChips) return;   // Session O follow-up: the ladder hub silences the chips (the badge is the doorway)
     eventBus.emit(Events.HINT_POSTED, {
       id: CODEX_ACK_CHIP_ID + entry.id,
       text: `+ SPECS: ${entry.title}`,
@@ -415,6 +428,20 @@ export class CodexSystem {
   // ==========================================================================
   // UPDATE (called every frame from the game loop)
   // ==========================================================================
+
+  /**
+   * Session O follow-up (owner 2026-09-07): silence / restore the
+   * "+ SPECS: <title>" acknowledgment chips. `false` drops the chip only —
+   * the unlock request is still accepted, queued, chimed and announced
+   * (CODEX_UNLOCKED); the SPECS badge (LibraryPane.unreadCount) counts it.
+   * The ladder hub calls `setAckChips(false)` inside its LADDER.ENABLED gate;
+   * flag-off never calls it (default true = shipped).
+   * @param {boolean} on
+   */
+  setAckChips(on) { this._ackChips = on !== false; }
+
+  /** @returns {boolean} whether accepted unlock requests post a ticker chip */
+  ackChips() { return this._ackChips; }
 
   /** Tick the unlock cooldown and process queued unlocks. */
   update(dt) {
