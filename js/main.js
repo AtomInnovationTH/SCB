@@ -2133,14 +2133,24 @@ async function init() {
         ladderPaneRail.refresh({ force: true });
       }
     });
-    // CLEAN VIEW (owner, 2026-09-06): on the ladder, `-` clears EVERY pane in
-    // one press (pure scenery) and `+` from the cleared screen brings the room
-    // back in one press; the WHAT rail's notches still toggle singly. The
-    // flag lives on PaneDensity (HUD.js untouched — do-not-edit); it is read
-    // LIVE at press time, so this line lands after HUD.js's attach(). A
-    // `?ladder=0` boot never reaches here → the shipped one-rung `-`/`+`.
-    // FloorMask.setFloor voids the `+` stash when a new room applies.
-    if (hud && hud.paneDensity) hud.paneDensity.clearOnDown = true;
+    // `-` / `+` (owner 2026-09-07, REVERSING the 2026-09-06 one-press CLEAN
+    // VIEW): the bare keys walk ONE rung per press again — the shipped
+    // PaneDensity.down()/up(); clearOnDown stays false, so the stash
+    // machinery sleeps (kept for the API; hasStash() reads false and every
+    // flip captures through D5 exactly as the H-era keys did). The walk now
+    // runs ALL THE WAY OUT: when a `-` press finds the rungs already clear,
+    // the RAILS bow out too (pure scenery — nothing on screen but the world),
+    // and the first `+` brings the rails back before the rungs restore. Any
+    // ride or a fresh engage also ends the shy state (LadderController).
+    // Inside the gate: a ?ladder=0 boot never adds these listeners.
+    eventBus.on(Events.HUD_DENSITY_DOWN, () => {
+      const pd = hud && hud.paneDensity;
+      if (!ladderController || !pd || typeof pd.visibleCount !== 'function') return;
+      if (pd.visibleCount() === 0) ladderController.setRailsShy(true);
+    });
+    eventBus.on(Events.HUD_DENSITY_UP, () => {
+      if (ladderController) ladderController.setRailsShy(false);
+    });
     // Wave 5 Session K (plan D-B / D-L) — the CARGO pane: the cargo manifest
     // with SELL / SELL ALL / -> ELEVATOR through ShopScreen's PUBLIC wrappers
     // (the one sale pipeline), a pane-density RUNG like TARGET / FLEET. A

@@ -273,6 +273,13 @@ export class LadderController {
      */
     this._introPending = null;
     /**
+     * Session N.5 (owner 2026-09-07): PURE SCENERY — true after a `-` press
+     * found the density rungs already clear and bowed the RAILS out too.
+     * Transient view state: never persisted, never a room edit; any `+`,
+     * ride, or fresh engage drops it (setRailsShy).
+     */
+    this._railsShy = false;
+    /**
      * D5 (Wave 5 Session G): the last FREE-zone rest z01 on the applied floor —
      * the player's working position (see `isFreeRest`). Seeded at engage and
      * at every floor ARRIVAL from the entry z01, advanced by every free `move`
@@ -906,6 +913,28 @@ export class LadderController {
   /** Session N: a CONTINUE (PERSISTENCE_LOADED) is not a new game — drop an armed intro ride. */
   disarmIntroRide() { this._introPending = null; }
 
+  /**
+   * Session N.5 (owner 2026-09-07): PURE SCENERY — when the `-` walk has
+   * already cleared every density rung, the hub bows the RAILS out too;
+   * `+` (the hub), any ride, or a fresh engage brings them back. A transient
+   * view state: never persisted, never a room edit (the D5 capture reads
+   * pane flips, and rails are not panes).
+   * @param {boolean} shy
+   */
+  setRailsShy(shy) {
+    const want = !!shy;
+    if (want === this._railsShy) return;
+    this._railsShy = want;
+    if (!this._engaged) return;
+    if (want) {
+      if (this._rail && this._rail.hide) this._rail.hide();
+      if (this._paneRail && this._paneRail.hide) this._paneRail.hide();
+    } else {
+      if (this._rail && this._rail.show) this._rail.show();
+      if (this._paneRail && this._paneRail.show) this._paneRail.show();
+    }
+  }
+
   /** Session N: true while an intro ride is armed and not yet flown. */
   introRidePending() { return this._introPending !== null; }
 
@@ -1055,6 +1084,7 @@ export class LadderController {
     // enabled by _applyFloorContent(1) only), so a refit:true memory simply
     // waits for the next floor-1 engage.
     this._restorePanes();
+    this._railsShy = false;                    // a fresh engagement is never shy (Session N.5)
     if (this._rail && this._rail.show) this._rail.show();
     if (this._paneRail && this._paneRail.show) this._paneRail.show();
     this._refreshRail();
@@ -1365,6 +1395,9 @@ export class LadderController {
     // Session J (D-H): the WHAT rail lists the arrival floor's room — after the
     // mask applied it, so the lit/dim paint reads the settled panes.
     if (this._paneRail && this._paneRail.populate) this._paneRail.populate(floor);
+    // Session N.5: riding the ladder ends PURE SCENERY — the rails come back
+    // with the floor content (this method runs at engage and every ride start).
+    if (this._railsShy) this.setRailsShy(false);
     // Session J (D-C): the floor's SUBJECT changed — the hub retargets an open
     // SPECS pane (never opens one; SpecsSubject decides what).
     this._noteSubjectChange(floor);
