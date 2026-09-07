@@ -28,8 +28,8 @@ const RETICLE_MIN_SIZE = 12;          // px minimum bracket size
 const RETICLE_MAX_SIZE = 60;          // px maximum bracket size
 const SELECTED_RETICLE_SCALE = 1.6;   // Selected target is bigger
 /** Session O (plan D16 (b), owner 2026-09-07): the score strip's exclusion band
- *  expansion (px on every side) — a bracket whose DIST LABEL point lands inside
- *  the band + this pad is skipped whole (never a half-drawn reticle). */
+ *  expansion (px on every side) — an unselected bracket whose BOX (arms + dist
+ *  label) touches the band + this pad is skipped whole (never a half-drawn reticle). */
 const SCORE_STRIP_PAD_PX = 8;
 const CALLOUT_DURATION = 8;          // seconds for first-encounter callout labels
 const AP_BADGE_TOP_PX = 92;          // fixed y of the autopilot-engaged chip
@@ -855,22 +855,24 @@ export class TargetReticle {
     const selColor = outOfRange ? COLORS.yellow : COLORS.cyan;
 
     // Session O (plan D16 (b), owner 2026-09-07): the score-strip exclusion
-    // band — a debris bracket whose DIST LABEL anchor (the `x, y + half + 22` site
-    // below) would land inside the strip's rect + the 8 px pad is skipped WHOLE
-    // — never a half reticle under the strip, and never a bracket+label pair the
-    // strip's opaque panel sits over (chrome-over-chrome, the owner's D16 (b)
-    // screenshot). The label anchor is the one point that must clear the strip —
-    // the bracket arms travel within `half` of it, so a label that clears leaves
-    // at most a sliver of an arm under the band (accepted; the label is the
-    // content). Off-screen arrows are drawn by a different path and are
-    // unaffected. Zero per-frame allocation: reads only (the reused instance rect
-    // + this method's existing x/y/half numbers). Null (flag-off) → byte-identical
-    // shipped path.
+    // band — an UNSELECTED debris bracket whose BOX (the arms, `x ± half` /
+    // `y ± half`, down to its dist label at `y + half + 22`) would touch the
+    // strip's rect + the 8 px pad is skipped WHOLE — never a half reticle
+    // under the strip, never a bracket+label pair the strip's opaque panel
+    // sits over (chrome-over-chrome, the owner's D16 (b) screenshot). The
+    // review of the gate pictures tightened the rule from the label anchor
+    // to the box: a large near bracket's top arm still crossed the strip while
+    // its label cleared it. The SELECTED target is exempt — its bracket is the
+    // player's lock (the teaching overlay points at it); the strip is small
+    // and a lock under it is brief. Off-screen arrows are drawn by a
+    // different path and are unaffected. Zero per-frame allocation: reads
+    // only (the reused instance rect + this method's existing x/y/half
+    // numbers). Null (flag-off) → byte-identical shipped path.
     const ex = this._exclusionRect;
-    if (ex != null) {
-      const labelY = y + half + 22;
-      if (x >= ex.left - SCORE_STRIP_PAD_PX && x <= ex.right + SCORE_STRIP_PAD_PX &&
-          labelY >= ex.top - SCORE_STRIP_PAD_PX && labelY <= ex.bottom + SCORE_STRIP_PAD_PX) {
+    if (ex != null && !isSelected) {
+      const reach = half > 30 ? half : 30;        // the dist label is centred at x, ~60 px wide at most
+      if (x + reach >= ex.left - SCORE_STRIP_PAD_PX && x - reach <= ex.right + SCORE_STRIP_PAD_PX &&
+          y + half + 22 + 4 >= ex.top - SCORE_STRIP_PAD_PX && y - half <= ex.bottom + SCORE_STRIP_PAD_PX) {
         return;
       }
     }

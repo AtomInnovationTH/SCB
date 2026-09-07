@@ -2362,9 +2362,10 @@ async function init() {
     paneRail: ladderPaneRail,
     // PURE SCENERY completion (owner 2026-09-07, plan D7): when the `-` walk
     // has cleared every rung and bowed the rails out, ONE body attribute also
-    // hides the SPECS/REFIT tabs, #vitals-line, #build-stamp and the glass
-    // STORE chip (index.html `body[data-pure-scenery]`, CSS !important beats
-    // inline writes — the data-density-hidden discipline). Transient: `+`,
+    // hides the SPECS/REFIT tabs and #build-stamp (index.html
+    // `body[data-pure-scenery]`, CSS !important beats inline writes — the
+    // data-density-hidden discipline; Session O D8/D10: the vitals line and the
+    // glass STORE chip left the rule with the cockpit). Transient: `+`,
     // any ride or a fresh engage clears it. Gated: ?ladder=0 passes null.
     pureScenery: (Constants.LADDER && Constants.LADDER.ENABLED) ? {
       hide: () => document.body.toggleAttribute('data-pure-scenery', true),
@@ -5699,7 +5700,8 @@ function gameLoop(timestamp) {
   // intact). The pure-scenery rule still hides it on F1 transiently (index.html).
   // Gated on the flag: ?ladder=0 does ZERO DOM writes (byte-identical).
   if (Constants.LADDER && Constants.LADDER.ENABLED) {
-    const _floorAttr = _ladderActive ? String(ladderController.currentFloor()) : null;
+    const _floorNow = _ladderActive ? ladderController.currentFloor() : null;
+    const _floorAttr = (_floorNow != null) ? String(_floorNow) : null;   // never "null" — a null core read writes no attribute (review N5)
     if (_floorAttr !== _ladderFloorAttr) {
       _ladderFloorAttr = _floorAttr;
       if (_floorAttr) document.body.setAttribute('data-ladder-floor', _floorAttr);

@@ -66,8 +66,7 @@ export const LADDER_VIEW_VERSION = 1;
  *       first WORKBENCH_STOP shows the till); F2 greets a new player with
  *       THREE panes (targets, reticles & alerts, mother) + comms + the hint
  *       ticker (debris, pin, arms, orbit, copilot behind MORE); comms leaves
- *       ALWAYS_ON for the rooms (shown F2-F5
-
+ *       ALWAYS_ON for the rooms (shown F2-F5, gone on the F1 workbench).
  *   6 — 2026-09-07 (Session O, owner "LEFT: mother, daughters"): F2's
  *       arms (the daughters rows, the fleet list) join the home floor —
  *       FOUR panes now (with comms + the hint ticker). This drops remembered

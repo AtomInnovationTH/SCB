@@ -1280,6 +1280,12 @@ export class HUD {
     // beside main.js's DISPLAY-rail sink (test-events-graph pins both).
     eventBus.on(Events.HUD_PANE_VISIBILITY, (data) => {
       if (data && data.pane === 'comms') this.invalidateCommsLayout();
+      // Review (2026-09-07, W1): the score-strip rect cache (D16 (b)) rides the
+      // same edge — a `-` walk that hides the score rung would otherwise leave
+      // brackets skipping an EMPTY top band until the next resize (the strip's
+      // density attribute flips display at once; the next read re-measures and
+      // reads zero-area → null → no band).
+      if (data && data.pane === 'score') this._scoreStripRect = null;
     });
 
     eventBus.on(Events.COMMS_PANEL_RESIZED, () => {

@@ -256,7 +256,7 @@ export const DEFAULT_ROOMS = Object.freeze({
   // "LEFT: mother, daughters"): the flying floor greets a first-timer with
   // FOUR panes — what am I aiming at (targets), what is around me (reticles &
   // alerts), can I catch (mother) — plus her daughters rows, the fleet list
-  // (arms) — plus the narrator (comms)and the hint ticker. The rest
+  // (arms) — plus the narrator (comms) and the hint ticker. The rest
   // (debris map, upgrade pin, orbit numbers, autopilot strip) wait behind
   // MORE / `+` until curiosity arrives; D5 remembers whatever a player pulls
   // out.
