@@ -2079,16 +2079,18 @@ async function init() {
     eventBus.on(Events.GAME_RESET, () => {
       if (!ladderController) return;
       ladderController.resetView();
-      // Session N (plan item 2), re-aimed Session N.5 (owner 2026-09-07 —
-      // "first make me care"): a FIRST-TIME player's new game rides in from
-      // the top floor to the FLYING floor — the game itself — at the first
-      // engage (INTRO_RIDE_MS, silent), with the MAP pane's checklist beside
-      // it; the workbench (callouts, REFIT, specs) waits for the first
-      // WORKBENCH_STOP, whose refit open ticks the checklist's REFIT row.
-      // Reduced motion places the core on the landing floor instead (no
-      // ride). Veterans (the map done or skipped) and the ?shot harness
-      // (unless &intro=1) keep the shipped floor. A CONTINUE disarms this on
-      // PERSISTENCE_LOADED (above).
+      // Session N (plan item 2), re-aimed Session N.5 + N.5b (owner 2026-09-07
+      // — "first make me care" / "you had great visuals from menu to f1"): a
+      // FIRST-TIME player's new game flies the intro FLYBY at the first
+      // engage — the silent DIVE from the top floor to the HULL (the shot),
+      // one breath, then the silent pull-back to the FLYING floor where the
+      // game starts, with the MAP pane's checklist beside it; the workbench
+      // (callouts, REFIT, specs) waits for the first WORKBENCH_STOP, whose
+      // refit open ticks the checklist's REFIT row. Player input mid-flyby
+      // cancels the rest of it. Reduced motion places the core on the landing
+      // floor instead (no ride). Veterans (the map done or skipped) and the
+      // ?shot harness (unless &intro=1) keep the shipped floor. A CONTINUE
+      // disarms this on PERSISTENCE_LOADED (above).
       if (_introFirstRun() && !_introFlown) {
         ladderController.armIntroRide({ rideMs: INTRO_RIDE_MS, reducedMotion: _prefersReducedMotion() });
         _introFlown = true;
@@ -2266,7 +2268,7 @@ async function init() {
       touchMapPane = new TouchMapPane({
         glass: _glassBoot,
         store: touchMapStore,
-        floor: () => ((ladderController && !ladderController.isRiding()) ? ladderController.currentFloor() : null),
+        floor: () => ((ladderController && !ladderController.isRiding() && !(ladderController.introInFlight && ladderController.introInFlight())) ? ladderController.currentFloor() : null),
         refitOpen: () => !!(refitPane && typeof refitPane.isOpen === 'function' && refitPane.isOpen()),
         libraryOpen: () => !!(libraryPane && typeof libraryPane.isOpen === 'function' && libraryPane.isOpen()),
       });

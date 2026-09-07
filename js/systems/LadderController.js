@@ -57,6 +57,14 @@ const CROSS_RIDE_MS = 550;
 export const INTRO_RIDE_MS = 2400;
 
 /**
+ * Session N.5b (owner 2026-09-07): the intro FLYBY's two follow-up numbers —
+ * the breath at the hull after the dive lands, and the silent pull-back ride
+ * up to INTRO_LANDING_FLOOR. The dive keeps INTRO_RIDE_MS.
+ */
+export const INTRO_DWELL_MS = 800;
+export const INTRO_PULLBACK_MS = 800;
+
+/**
  * Wave 5 Session K: the WORKBENCH floor — where the REFIT drawer (the one
  * shop) lives; the same floor id `_applyFloorContent` keys the REFIT tab on.
  * An id, never a name (FloorContract owns the player labels).
@@ -280,6 +288,14 @@ export class LadderController {
      */
     this._railsShy = false;
     /**
+     * Session N.5b: the intro FLYBY phase — null | 'dive' | 'dwell' | 'pull'.
+     * Set by _engage when it flies an armed dive; advanced by _introTick;
+     * cleared by landing, player input after the dive started, or disengage.
+     */
+    this._introPhase = null;
+    this._introDwellUntil = null;
+    this._introDiveStartMs = null;
+    /**
      * D5 (Wave 5 Session G): the last FREE-zone rest z01 on the applied floor —
      * the player's working position (see `isFreeRest`). Seeded at engage and
      * at every floor ARRIVAL from the entry z01, advanced by every free `move`
@@ -435,6 +451,13 @@ export class LadderController {
 
     const decisions = this._ladder.update(t);
     this._apply(decisions, t);
+    // Session N.5b (owner 2026-09-07 — "you had great visuals from menu to
+    // f1"): the intro FLYBY state machine. The dive (5 → the hull) is the
+    // shot; the game starts on the flying floor — so the intro is dive →
+    // one breath at the hull (INTRO_DWELL_MS) → a silent pull-back up to
+    // INTRO_LANDING_FLOOR. Any player input after the dive started cancels
+    // the remaining phases (they took the wheel; land where they say).
+    this._introTick(t);
     // NOTE: the F6 (NAVCOM) floor content is NOT ticked here — main.js is the
     // SINGLE navcom ticker (it ticks navcom.update({project,shipPos,shipAngleRad})
     // with the live camera projector right after cameraSystem.update, so the icons
@@ -903,7 +926,9 @@ export class LadderController {
     if (!ids.length || !ids.includes(INTRO_LANDING_FLOOR)) return false;
     if (reducedMotion) return this._placeWhileHidden(INTRO_LANDING_FLOOR, 0.5);
     const top = Math.max(...ids);
-    if (top === INTRO_LANDING_FLOOR) return this._placeWhileHidden(INTRO_LANDING_FLOOR, 0.5);
+    // The flyby needs a hull to dive to and headroom to dive from; a contract
+    // without either just places on the landing floor (no ride).
+    if (top === INTRO_LANDING_FLOOR || !ids.includes(WORKBENCH_FLOOR)) return this._placeWhileHidden(INTRO_LANDING_FLOOR, 0.5);
     if (!this._placeWhileHidden(top, 0.5)) return false;
     const ms = Number(rideMs);
     this._introPending = (Number.isFinite(ms) && ms > 0) ? ms : INTRO_RIDE_MS;
@@ -911,7 +936,43 @@ export class LadderController {
   }
 
   /** Session N: a CONTINUE (PERSISTENCE_LOADED) is not a new game — drop an armed intro ride. */
-  disarmIntroRide() { this._introPending = null; }
+  disarmIntroRide() { this._introPending = null; this._introPhase = null; }
+
+  /**
+   * Session N.5b: true from an armed intro until the flyby fully lands (or is
+   * cancelled) — the hub's MAP floor getter reads null through the WHOLE
+   * flyby, so the dwell's settled hull floor never becomes the checklist's
+   * ride baseline.
+   */
+  introInFlight() { return this._introPending !== null || this._introPhase !== null; }
+
+  /**
+   * @private Session N.5b — advance the intro FLYBY: dive lands → one breath
+   * at the hull (INTRO_DWELL_MS) → the silent pull-back to
+   * INTRO_LANDING_FLOOR → done. Player input after the dive started (any
+   * verb that stamps _lastInputMs) cancels the remaining phases.
+   */
+  _introTick(t) {
+    if (this._introPhase === null || !this._engaged) return;
+    if (Number.isFinite(this._lastInputMs) && this._introDiveStartMs !== null && this._lastInputMs > this._introDiveStartMs) {
+      this._introPhase = null;                 // the player took the wheel
+      return;
+    }
+    if (this._introPhase === 'dive') {
+      if (!this.isRiding()) { this._introPhase = 'dwell'; this._introDwellUntil = t + INTRO_DWELL_MS; }
+    } else if (this._introPhase === 'dwell') {
+      if (t >= this._introDwellUntil) {
+        const decisions = (typeof this._ladder.ceremonyRide === 'function')
+          ? this._ladder.ceremonyRide({ tMs: t, toFloor: INTRO_LANDING_FLOOR })
+          : this._ladder.jump({ tMs: t, toFloor: INTRO_LANDING_FLOOR });
+        this._apply(decisions, t, { rideMs: INTRO_PULLBACK_MS, silent: true });
+        this._introPhase = 'pull';
+        this._refreshRail();
+      }
+    } else if (this._introPhase === 'pull') {
+      if (!this.isRiding()) this._introPhase = null;
+    }
+  }
 
   /**
    * Session N.5 (owner 2026-09-07): PURE SCENERY — when the `-` walk has
@@ -1097,18 +1158,21 @@ export class LadderController {
     // (The DISPLAY rail's show/hide is owned by _applyFloorContent above —
     // Session N.5 floor rule: never on the workbench.)
     this._refreshRail();
-    // Session N: an ARMED intro ride flies now — the core was placed on the
-    // top floor while hidden; the ceremony decision rides to the flying floor
-    // (INTRO_LANDING_FLOOR — owner 2026-09-07) at the intro duration (never
-    // the 550 ms crossing), with no clunk.
+    // Session N: an ARMED intro flies now — the core was placed on the top
+    // floor while hidden; the DIVE rides to the HULL (the shot — owner
+    // 2026-09-07b: "you had great visuals from menu to f1") at the intro
+    // duration, silent; _introTick then breathes at the hull and pulls back
+    // up to INTRO_LANDING_FLOOR where the game starts.
     if (this._introPending !== null) {
       const ms = this._introPending;
       this._introPending = null;
       const t = (tMs === undefined) ? this._now() : tMs;
       const decisions = (typeof this._ladder.ceremonyRide === 'function')
-        ? this._ladder.ceremonyRide({ tMs: t, toFloor: INTRO_LANDING_FLOOR })
-        : this._ladder.jump({ tMs: t, toFloor: INTRO_LANDING_FLOOR });
+        ? this._ladder.ceremonyRide({ tMs: t, toFloor: WORKBENCH_FLOOR })
+        : this._ladder.jump({ tMs: t, toFloor: WORKBENCH_FLOOR });
       this._apply(decisions, t, { rideMs: ms, silent: true });
+      this._introPhase = 'dive';
+      this._introDiveStartMs = t;
       this._refreshRail();
     }
   }
@@ -1116,6 +1180,7 @@ export class LadderController {
   _disengage() {
     this._engaged = false;
     this._introPending = null;   // Session N review: an arm that never engaged does not survive into a later run
+    this._introPhase = null;     // Session N.5b: nor does a mid-flyby phase (a cut mid-dwell never pulls back in a later run)
     if (this._cameraSystem && this._cameraSystem.ladderDisengage) {
       this._cameraSystem.ladderDisengage();
     }
