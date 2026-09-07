@@ -100,18 +100,26 @@
       user-select: none;
     }
 
+    /* Build stamp floor law (Session O plan D9, owner 2026-09-07): the hub writes
+       body[data-ladder-floor] (the data-pure-scenery attribute pattern; menu /
+       ?ladder=0 carry NO attribute → the stamp shows = delivery loop intact).
+       F1 keeps it (the workbench + its stamp;the rail is the index). Hidden on
+       floors 2–5 (the flying/chart floors — nobody needs a version hash in
+       their face). The pure-scenery rule below still hides it on F1 transiently. */
+    body[data-ladder-floor]:not([data-ladder-floor="1"]) #build-stamp { display: none; }
+
     /* PURE SCENERY (Session N.5 D7, owner 2026-09-07): once the `-` walk has
        cleared every pane rung and bowed the rails out, the hub sets ONE body
        attribute (LadderController.setRailsShy -> pureScenery hook) and the
-       bottom-left chrome goes too: SPECS/REFIT tabs, vitals, the build stamp
-       (Ipad.md update-honesty exception: transient only) and the glass STORE
-       chip. !important beats inline writes (the data-density-hidden
+       bottom-left chrome goes too: SPECS/REFIT tabs and the build stamp
+       (Ipad.md update-honesty exception: transient only). The vitals line and the glass STORE chip left the rule —
+       and the cockpit — in Session O, D8/D10 (with the ladder on you pinch to
+       F1 and tap REFIT; `?ladder=0` keeps the STORE chip). !important beats
+       inline writes (the data-density-hidden
        discipline); `+`, any ride or a fresh engage clears the attribute. */
     body[data-pure-scenery] #ladder-library-tab,
     body[data-pure-scenery] #ladder-refit-tab,
-    body[data-pure-scenery] #vitals-line,
-    body[data-pure-scenery] #build-stamp,
-    body[data-pure-scenery] .touch-nav-dock { display: none !important; }
+    body[data-pure-scenery] #build-stamp { display: none !important; }
 
     /* === HUD OVERLAY === */
     #hud-overlay {

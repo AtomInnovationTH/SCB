@@ -37,19 +37,19 @@
  * JSON booleans keyed floor → pane) rides the player store `sc_ladder_view_v1`
  * through LadderController + LadderViewStore.
  *
-* D7 + vitals (the always set): alerts (warnings strip, conjunction panel,
- * comms),the rail,the score strip,and the vitals line are NEVER masked on
- * any floor, regardless of tier tables or player memory —the engine never
- * references their rungs or elements at all (ALWAYS_ON below is the pinned
- * list). The VitalsLine (fuel/ΔV · power · time rate) is constructed/owned
- * here as part of that always set: faint by default, hover/tap brightens,
- * shown on engage, hidden on disengage (the shipped cockpit has no vitals
- * line, so flag-off/unwired stays byte-identical).
+ * D7 (the always set): alerts (warnings strip, conjunction panel, comms),
+ * the rail, and the score strip are NEVER masked on any floor, regardless of
+ * tier tables or player memory — the engine never references their rungs or
+ * elements at all (ALWAYS_ON below is the pinned list). The VitalsLine left
+ * this set in Session O (plan D8, owner 2026-09-07): cryptic, every number
+ * duplicated elsewhere — the module + its test stay dormant in the tree,
+ * unwired.
  *
  * PURE SCENERY (Session N.=5 D7, owner​ 2026-09-07):when the the `-` walk cleared every rung and
  * bowed the rails out,the hub also sets `body[data-pure-scenery]` (index.html
- * CSS hides the SPECS/REFIT tabs, `#vitals-line`, `#build-stamp`,the glass
- * STORE chip). Transient view state, never a room edit; `+`, any ride,or
+ * CSS hides the SPECS/REFIT tabs and `#build-stamp`; the vitals line and the
+ * glass STORE chip left the rule — and the cockpit — in Session O, D8/D10).
+ * Transient view state, never a room edit; `+`, any ride, or
  * a fresh engage clears it. The mask itself is untouched by it.
 
  *
@@ -68,14 +68,12 @@
  * state-only no-op (headless-safe, byte-identical when unwired).
  *
  * Wiring (serial track — see the FloorMask HANDOFF): main.js constructs it
- * with the live `hud` + a time-rate getter and injects it into
- * LadderController, which calls setFloor(floor) at the END of
- * _applyFloorContent and setFloor(null) in _disengage — the audioBeds rows.
+ * with the live `hud` and injects it into LadderController, which calls
+ * setFloor(floor) at the END of _applyFloorContent and setFloor(null) in
+ * _disengage — the audioBeds rows.
  *
  * @module ui/hud/FloorMask
  */
-
-import { VitalsLine } from '../VitalsLine.js';
 
 // ── Tunables (own-module exports; house rule: never FloorContract/Constants) ─
 
@@ -173,15 +171,16 @@ export const MASK_PANES = Object.freeze({
 });
 
 /**
- * ALWAYS_ON — the D7 + vitals always set, pinned for tests. The engine never
- * touches these: no rung call, no element query, no attribute — on any floor,
- * under any player memory. (Display counterpart of "alarms always land at 1×".)
+ * ALWAYS_ON — the D7 always set, pinned for tests. The engine never touches
+ * these: no rung call, no element query, no attribute — on any floor, under
+ * any player memory. (Display counterpart of "alarms always land at 1×".)
+ * The VitalsLine left this set in Session O (plan D8, owner 2026-09-07):
+ * cryptic, every number duplicated elsewhere; module + test stay dormant.
  */
 export const ALWAYS_ON = Object.freeze([
   'alerts',      // #hud-warnings-panel, #hud-conjunction-panel — never referenced
   'rail',        // #ladder-rail — the ladder's own instrument
   'score',       // score strip rung — "it is the score", every zoom
-  'vitals',      // the VitalsLine — faint by default, NEVER gone by ROOM rules (D6); PURE SCENERY (body[data-pure-scenery], Session N.5 D7, owner 2026-09-07) hides it transiently — never persisted, the first + restores
   // 'comms' left for MASK_PANES in Session N.5 (owner 2026-09-07): gone on
   // the F1 workbench by default, shown on floors 2-5.
 ]);
@@ -303,11 +302,6 @@ export class FloorMask {
    * @param {Document} [deps.doc]         - document for the faint/fade/attribute
    *   treatments (default: the global one). Absent ⇒ rung-driven visibility
    *   still applies; DOM treatments no-op (Node tests drive stub rungs).
-   * @param {object}   [deps.vitals]      - injectable VitalsLine-shaped dep
-   *   ({setVisible, dispose}). Omitted ⇒ the mask constructs its own
-   *   VitalsLine lazily on first engage (doc required).
-   * @param {function} [deps.getTimeRate] - forwarded to the owned VitalsLine
-   *   (main.js wires `() => timeAuthority.rate`).
    * @param {function} [deps.reducedMotion] - zero-arg bool probe (default:
    *   the house matchMedia pattern) — picks the arrival fade length.
    */
@@ -315,8 +309,6 @@ export class FloorMask {
     this._hud = deps.hud || null;
     this._doc = deps.doc !== undefined ? deps.doc
       : (typeof document !== 'undefined' ? document : null);
-    this._vitalsDep = deps.vitals || null;
-    this._getTimeRate = deps.getTimeRate || null;
     this._reducedMotion = deps.reducedMotion || _prefersReducedMotion;
 
     this._enabled = true;
@@ -328,8 +320,6 @@ export class FloorMask {
     this._memory = new Map();
     /** @type {Map<string, object>|null} rung id → rung, resolved lazily */
     this._rungs = null;
-    this._vitals = null;
-    this._ownVitals = false;
     this._styleInjected = false;
     this._disposed = false;
   }
@@ -339,9 +329,8 @@ export class FloorMask {
   /**
    * Apply floor `floorId`'s room (player memory over §4 defaults), capturing
    * the departing floor's live layout into D5 memory first. null = disengage
-   * → restore the shipped fully-visible cockpit and hide the vitals line.
-   * Idempotent for the already-applied floor. While disabled only the floor
-   * is remembered.
+   * → restore the shipped fully-visible cockpit. Idempotent for the already-
+   * applied floor. While disabled only the floor is remembered.
    * @param {number|null} floorId - FloorContract floor id (1..5) or null
    */
   setFloor(floorId) {
@@ -379,8 +368,8 @@ export class FloorMask {
 
   /**
    * Master gate. Disabling restores the shipped cockpit (mask off = no
-   * masking; the vitals line hides with it) and remembers the floor;
-   * re-enabling reapplies the remembered floor's room. Idempotent.
+   * masking) and remembers the floor; re-enabling reapplies the remembered
+   * floor's room. Idempotent.
    * @param {boolean} on
    */
   setEnabled(on) {
@@ -398,17 +387,13 @@ export class FloorMask {
     }
   }
 
-  /** Restore the cockpit, drop the owned vitals line; further calls no-op. */
+  /** Restore the cockpit; further calls no-op. */
   dispose() {
     if (this._disposed) return;
     if (this._resolve()) {
       if (!this._inCleanView()) this._captureMemory();   // a cleared screen is never a room
       this._restoreAll();
     }
-    if (this._vitals && this._ownVitals && this._vitals.dispose) {
-      try { this._vitals.dispose(); } catch (_e) { /* stub */ }
-    }
-    this._vitals = null;
     this._disposed = true;
   }
 
@@ -546,8 +531,6 @@ export class FloorMask {
       }
       this._setFaint(pane, tier === 'faint' && wantVisible);
     }
-    this._ensureVitals();
-    if (this._vitals && this._vitals.setVisible) this._vitals.setVisible(true);
   }
 
   /** @private Shipped fully-visible cockpit: every pane shown, treatments off. */
@@ -561,7 +544,6 @@ export class FloorMask {
         if (el.classList) el.classList.remove('floor-mask-arrive');
       }
     }
-    if (this._vitals && this._vitals.setVisible) this._vitals.setVisible(false);
   }
 
   /**
@@ -660,16 +642,7 @@ export class FloorMask {
     return out;
   }
 
-  /** @private Own the always-set VitalsLine (constructed lazily, once). */
-  _ensureVitals() {
-    if (this._vitals) return;
-    if (this._vitalsDep) { this._vitals = this._vitalsDep; return; }
-    if (!this._doc) return;
-    this._vitals = new VitalsLine({ doc: this._doc, getTimeRate: this._getTimeRate });
-    this._ownVitals = true;
-  }
-
-  /** @private Inject the mask stylesheet once (attribute laws + arrive fade). */
+  /** @private Inject the mask stylesheet once (attribute laws + arrive fade. */
   _ensureStyle() {
     if (this._styleInjected || !this._doc || !this._doc.head) return;
     this._styleInjected = true;
@@ -688,7 +661,7 @@ export class FloorMask {
         transition: opacity ${FAINT_TRANSITION_MS}ms ease;
         pointer-events: auto;
       }
-      [data-floor-faint]:hover, [data-floor-faint].vitals-bright {
+      [data-floor-faint]:hover {
         opacity: 1 !important;
       }
       /* Arrival: destination panes fade in during the flight. Duration is set

@@ -650,6 +650,13 @@ let _workbenchBreak = false;
 // Q10 level-phase sound edge state: last frame's camera leveling flag (rise
 // edge → one LadderSfx settle cue). False whenever the ladder is disengaged.
 let _ladderLevelingPrev = false;
+// Session O (plan D9, owner 2026-09-07): the build-stamp floor law. The hub
+// writes `body[data-ladder-floor]` = the engaged floor's id (the
+// data-pure-scenery attribute pattern; CSS hides #build-stamp for floors
+// ≠ 1 — menu + F1 only, delivery loop intact). Last-written value, so the
+// per-frame block writes the attribute ONLY on change (G1). null = no
+// attribute (menu / pause → menu / ?ladder=0 → the stamp shows).
+let _ladderFloorAttr = null;
 
 // Zoom Ladder F6 (NAVCOM) floor content orchestrator (S5). Constructed in the
 // ladder block, injected into LadderController (activates/ticks on F6), and
@@ -770,11 +777,11 @@ let ladderViewStore;
 // fades to silence on disengage. Inert while LADDER.ENABLED is false.
 let ladderAudioBeds;
 // Zoom Ladder Wave-4 FloorMask (08-workbench D8/§4 map rule): per-floor HUD
-// pane tiers (shown/faint/gone) over the pane-density rung layer + the
-// always-on vitals line. Constructed in the ladder block against the live
-// hud; injected into LadderController (applies rooms on floor arrivals,
-// restores the shipped cockpit on disengage). Inert while LADDER.ENABLED is
-// false (never driven).
+// pane tiers (shown/faint/gone) over the pane-density rung layer (Session O,
+// plan D8: the vitals line left — cryptic, every number duplicated elsewhere).
+// Constructed in the ladder block against the live hud; injected into
+// LadderController (applies rooms on floor arrivals, restores the shipped
+// cockpit on disengage). Inert while LADDER.ENABLED is false (never driven).
 let ladderFloorMask;
 // Zoom Ladder interaction sfx (S4 Wave 4, serial hub wire): constructed in the
 // ladder block against AudioSystem GETTERS (the unlock pattern) and injected
@@ -2328,12 +2335,11 @@ async function init() {
     destination: () => audioSystem.padBus || audioSystem.master,
   });
   // Zoom Ladder Wave-4 FloorMask: reads hud.paneDensity.rungs (the ONE pane
-  // visibility bit, T8) and owns the always-set VitalsLine. GETTER for the
-  // time rate, not a ref: timeAuthority is constructed AFTER this block (the
-  // ladder-block order), so the vitals line resolves it lazily per 10 Hz beat.
+  // visibility bit, T8). Session O (plan D8, owner 2026-09-07): the vitals
+  // line left — cryptic, every number duplicated elsewhere — so there is no
+  // rate getter any more; module + test stay dormant in the tree.
   ladderFloorMask = new FloorMask({
     hud,
-    getTimeRate: () => (timeAuthority ? timeAuthority.rate : 1),
   });
   // Zoom Ladder interaction sfx (00-spec §4 + 08-workbench §2 "Sound").
   // GETTERS, not refs (the unlock pattern above). tickBus, NOT padBus: these
@@ -2547,15 +2553,16 @@ async function init() {
       wheelRouter,
       ladderController,
       gameState,
-      // The STORE tap chip (iPad port 2026-09-02): glass has no KeyB, so the
-      // chip calls the SAME path the key drives — the KeyB ORBITAL_VIEW guard
-      // (InputManager) mirrored here verbatim. Session K KEPT it (owner law,
-      // by the numbers: the one-tap shop in the thumb rest): with the ladder
-      // on this very call is GameFlowManager's ONE redirect → the ceremony
-      // ride + the REFIT drawer; with ?ladder=0 the full-screen shop as
-      // shipped. (The LIBRARY chip left with Session J: the SPECS tab lives
-      // on every floor and the right-edge swipe opens it.)
-      openShop: () => {
+      // The STORE tap chip retired with the ladder on (Session O, plan D10,
+      // owner 2026-09-07 — reverses the Session K KEPT call): on glass the
+      // route is pinch to F1, tap REFIT — no one-tap shop in the thumb rest
+      // while the ladder is on. `?ladder=0` (flag off) keeps the shipped
+      // full-screen shop exactly as before. (The chip itself is built by
+      // TouchControls only when this dep is a function; null → no dock,
+      // no element — pinned in test-TouchControls.) The LIBRARY chip left with
+      // Session J: the SPECS tab (F1, Session O D6) and the right-edge swipe
+      // open the pane.
+      openShop: (Constants.LADDER && Constants.LADDER.ENABLED) ? null : () => {
         if (gameState.getState() === GameStates.ORBITAL_VIEW) {
           gameFlowManager.transitionToState(GameStates.SHOP);
           audioSystem?.playClick?.();
@@ -5683,6 +5690,21 @@ function gameLoop(timestamp) {
   // and ≤ 4 Hz internally (G1), so the per-frame call is free. Flag-off:
   // _ladderActive is false → never called.
   if (_ladderActive && railIndicator && railIndicator.setRate) railIndicator.setRate(timeAuthority.rate);
+  // Session O (plan D9, owner 2026-09-07): build-stamp floor law — write
+  // `body[data-ladder-floor]` = the engaged floor's id, write-on-change (G1): the
+  // attribute appears only when it changes; per-frame reads are cheap getState
+  // snapshots, so the per-frame call is free). Disengaged (menu, pause → menu,
+  // ?ladder=0) → null → removeAttribute → the stamp shows (delivery loop
+  // intact). The pure-scenery rule still hides it on F1 transiently (index.html).
+  // Gated on the flag: ?ladder=0 does ZERO DOM writes (byte-identical).
+  if (Constants.LADDER && Constants.LADDER.ENABLED) {
+    const _floorAttr = _ladderActive ? String(ladderController.currentFloor()) : null;
+    if (_floorAttr !== _ladderFloorAttr) {
+      _ladderFloorAttr = _floorAttr;
+      if (_floorAttr) document.body.setAttribute('data-ladder-floor', _floorAttr);
+      else document.body.removeAttribute('data-ladder-floor');
+    }
+  }
   // Session J: the DISPLAY rail's lit/dim paint follows the live pane bits
   // (write-on-change per notch, a 1 Hz poll inside — G1; each scan is a
   // layout read per HUD rung, so announced changes repaint at once through
