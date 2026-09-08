@@ -1174,7 +1174,7 @@ export class TargetReticle {
 
     // Distance text
     ctx.shadowBlur = 0;
-    ctx.font = isSelected ? mono(11, 'bold') : mono(9);
+    ctx.font = isSelected ? mono(11, 'bold') : mono(10);
     ctx.textAlign = 'center';
     const distText = distKm < 1 ? `${(distKm * 1000).toFixed(0)}m` : `${distKm.toFixed(1)}km`;
 
@@ -1240,7 +1240,7 @@ export class TargetReticle {
     ctx.stroke();
 
     // Name and distance
-    ctx.font = mono(9);
+    ctx.font = mono(10);
     ctx.fillStyle = COLORS.white;
     ctx.textAlign = 'center';
     ctx.fillText(sat.name, x, y - size - 6);
@@ -1284,7 +1284,7 @@ export class TargetReticle {
     this._drawArrowShape(edge.x, edge.y, edge.angle, urgent ? 12 : 8);
 
     ctx.shadowBlur = 0;
-    ctx.font = urgent ? mono(10, 'bold') : mono(9);
+    ctx.font = urgent ? mono(10, 'bold') : mono(10);
     ctx.textAlign = 'center';
 
     const textOffsetX = Math.cos(edge.angle + Math.PI) * 22;
@@ -1405,7 +1405,7 @@ export class TargetReticle {
       if (this._selectedTargetDistKm > 0) {
         const cr = this._selectedClosureRate; // km/s, positive = closing
         if (Math.abs(cr) > 0.001) {
-          ctx.font = mono(9);
+          ctx.font = mono(10);
           ctx.globalAlpha = 0.8;
           const label = cr > 0 ? 'Closing' : 'Opening';
           ctx.fillStyle = cr > 0 ? COLORS.green : COLORS.red;
@@ -1423,7 +1423,7 @@ export class TargetReticle {
             const etaStr = etaSec > 120
               ? `${(etaSec / 60).toFixed(1)}m`
               : `${etaSec.toFixed(0)}s`;
-            ctx.font = mono(9);
+            ctx.font = mono(10);
             ctx.fillStyle = COLORS.yellow;
             ctx.globalAlpha = 0.7;
             ctx.fillText(`ETA: ${etaStr}`, x + 22, lineY);
@@ -1434,7 +1434,7 @@ export class TargetReticle {
 
       // Phase R6: Periapsis hint — Oberth effect teaching moment
       if (this._nearPeriapsis) {
-        ctx.font = mono(9);
+        ctx.font = mono(10);
         ctx.fillStyle = COLORS.yellow;
         ctx.globalAlpha = 0.5;
         ctx.fillText('Periapsis. Efficient burn', x + 22, lineY);
@@ -1541,7 +1541,7 @@ export class TargetReticle {
           const postBurn = this._cachedPlayerDeltaV - costMs;
           const pbColor = postBurn > 200 ? COLORS.green
             : postBurn > 50 ? COLORS.yellow : COLORS.red;
-          ctx.font = mono(9);
+          ctx.font = mono(10);
           ctx.fillStyle = pbColor;
           ctx.globalAlpha = 0.8;
           ctx.fillText(`Post-burn ΔV: ${Math.round(postBurn)} m/s`, x + 22, y + 30);

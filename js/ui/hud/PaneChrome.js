@@ -56,11 +56,7 @@ export class PaneChrome {
     this._index = Math.max(0, this._steps.indexOf(startName));
 
     this._badge = this._buildBadge(opts.keyLabel, opts.title, opts.bracket !== false);
-    // Avoid overlapping the dormant-keycap ::after glyph (same top-right corner)
-    // on panes that opt into the data-activate-key onboarding affordance.
-    if (this._pane.dataset && this._pane.dataset.activateKey) {
-      this._badge.style.right = '34px';
-    }
+    // The 34 px offset for the dormant keycap glyph retired in Session S — the glyph never renders since _applySkillReveal stopped applying hud-dormant.
     this._pane.appendChild(this._badge);
 
     // Apply the initial step (no callback churn — pane is mid-build, but the

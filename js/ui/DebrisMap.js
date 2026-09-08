@@ -627,7 +627,7 @@ export class DebrisMap {
       ctx.fillText(`${win.dvTotal.toFixed(0)} m/s`, 44, y + 50);
 
       ctx.fillStyle = '#556677';
-      ctx.font = mono(9);
+      ctx.font = mono(10);
       ctx.fillText(coOrbital.periodText, 14, y + 64);
       return;
     }
@@ -659,7 +659,7 @@ export class DebrisMap {
     // windows are handled by the launch-anytime early return above, so here the
     // synodic is always a finite, meaningful sub-7-day period.)
     ctx.fillStyle = '#556677';
-    ctx.font = mono(9);
+    ctx.font = mono(10);
     const periodTxt = `next window every ${this._fmtClock(win.synodic)}. Space is periodic`;
     ctx.fillText(periodTxt, 14, y + 64);
   }
@@ -728,7 +728,7 @@ export class DebrisMap {
     ctx.stroke();
 
     ctx.fillStyle = '#4488aa';
-    ctx.font = mono(9);
+    ctx.font = mono(10);
     ctx.textAlign = 'center';
     ctx.fillText('EARTH', cx, cy + 3);
     ctx.textAlign = 'left';
@@ -738,7 +738,9 @@ export class DebrisMap {
     const maxAlt = 2000;
     const altToRadius = (alt) => earthR + (alt - minAlt) / (maxAlt - minAlt) * (maxR - earthR);
 
-    for (const band of ALT_BANDS) {
+    const labelled = [];
+    for (let i = 0; i < ALT_BANDS.length; i++) {
+      const band = ALT_BANDS[i];
       const r = altToRadius((band.min + band.max) / 2);
 
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
@@ -747,13 +749,38 @@ export class DebrisMap {
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.stroke();
 
-      // Band label
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-      ctx.font = mono(8);
-      ctx.textAlign = 'right';
-      ctx.fillText(band.label, cx - r - 3, cy - 2);
-      ctx.textAlign = 'left';
+      labelled.push({ label: band.label, r, side: i % 2 === 0 ? 'left' : 'right' });
     }
+
+    // Session S: band labels alternate sides (even bands right-aligned at cx − r − 3,
+    // odd bands left-aligned at cx + r + 3) and each side keeps the outer-wins guard —
+    // one measure per label; the rings sit 13-35 px apart for 45-58 px strings, so a
+    // same-side neighbour that would collide is skipped.
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.font = mono(10);
+    let leftEdgeTaken = -Infinity;
+    let rightEdgeTaken = Infinity;
+    for (let i = labelled.length - 1; i >= 0; i--) {
+      const { label, r, side } = labelled[i];
+      const w = ctx.measureText(label).width;
+      if (side === 'left') {
+        const right = cx - r - 3;
+        const left = right - w;
+        if (left >= leftEdgeTaken + 3) {
+          ctx.textAlign = 'right';
+          ctx.fillText(label, right, cy - 2);
+          leftEdgeTaken = right;
+        }
+      } else {
+        const x = cx + r + 3;
+        if (x + w <= rightEdgeTaken - 3) {
+          ctx.textAlign = 'left';
+          ctx.fillText(label, x, cy - 2);
+          rightEdgeTaken = x;
+        }
+      }
+    }
+    ctx.textAlign = 'left';
 
     // Draw cluster indicators as arcs on the schematic
     for (let i = 0; i < this._rankedClusters.length; i++) {
@@ -796,7 +823,7 @@ export class DebrisMap {
       const ly = cy + (r + 12) * Math.sin(labelAngle);
 
       ctx.fillStyle = selected ? '#ffcc44' : '#aabbcc';
-      ctx.font = selected ? mono(10, 'bold') : mono(9);
+      ctx.font = selected ? mono(10, 'bold') : mono(10);
       ctx.textAlign = 'center';
       ctx.fillText(`${i + 1}`, lx, ly + 3);
       ctx.textAlign = 'left';
@@ -831,7 +858,7 @@ export class DebrisMap {
         ctx.fill();
 
         ctx.fillStyle = '#00ff88';
-        ctx.font = mono(8);
+        ctx.font = mono(10);
         ctx.textAlign = 'center';
         ctx.fillText('YOU', px, py - 8);
         ctx.textAlign = 'left';
@@ -844,7 +871,7 @@ export class DebrisMap {
     // Legend
     const legendY = H - 55;
     ctx.fillStyle = '#556677';
-    ctx.font = mono(9);
+    ctx.font = mono(10);
     ctx.fillText('● low risk', x + 10, legendY);
     ctx.fillText('● med risk', x + 10, legendY + 12);
     ctx.fillText('● high risk', x + 10, legendY + 24);

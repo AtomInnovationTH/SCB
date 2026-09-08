@@ -777,7 +777,7 @@ export class NavSphere {
     };
 
     ctx.save();
-    ctx.font = mono(8);
+    ctx.font = mono(10);
 
     // Focused cluster bearing — gold ring + name (cluster icon grammar).
     if (ov.clusterPos) {
@@ -1005,9 +1005,10 @@ export class NavSphere {
     const rings = NS.RANGE_RINGS_KM;  // [0.2, 0.5, 2, 5, 10, 25, 50]
 
     ctx.save();
-    ctx.font = mono(8);
+    ctx.font = mono(10);
     ctx.textAlign = 'left';
 
+    const labelled = [];
     for (const km of rings) {
       const r = this._distToRadius(km, R);
       if (r < 2 || r > R) continue;
@@ -1030,11 +1031,24 @@ export class NavSphere {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Label (only for larger rings to avoid clutter)
       if (km >= 5 || km === 0.2 || km === 2) {
         const label = km >= 1 ? `${km}km` : `${km * 1000}m`;
-        ctx.fillStyle = 'rgba(0, 255, 136, 0.25)';
-        ctx.fillText(label, cx + r + 2, cy - 2);
+        labelled.push({ km, r, label });
+      }
+    }
+
+    // Session S: labels in a second pass, outermost first, one measure per label —
+    // a label that would run into the one outside it is skipped (the 200m / 2km / 5km
+    // run-together at the orb's right)
+    ctx.fillStyle = 'rgba(0, 255, 136, 0.25)';
+    let lastLeft = Infinity;
+    for (let i = labelled.length - 1; i >= 0; i--) {
+      const { r, label } = labelled[i];
+      const x = cx + r + 2;
+      const w = ctx.measureText(label).width;
+      if (x + w <= lastLeft - 3) {
+        ctx.fillText(label, x, cy - 2);
+        lastLeft = x;
       }
     }
     ctx.restore();
@@ -1118,7 +1132,7 @@ export class NavSphere {
     if (sel && distKm !== undefined) {
       ctx.save();
       ctx.globalAlpha = alpha;  // steady opacity, not pulsing
-      ctx.font = mono(9);
+      ctx.font = mono(10);
       ctx.fillStyle = C.selected;
       ctx.textAlign = 'left';
       const label = distKm < 1 ? `${(distKm * 1000).toFixed(0)}m` : `${distKm.toFixed(1)}km`;
@@ -1450,7 +1464,7 @@ export class NavSphere {
         ctx.stroke();
 
         // Label
-        ctx.font = mono(8);
+        ctx.font = mono(10);
         ctx.fillStyle = '#ff6666';
         ctx.globalAlpha = 0.7;
         const label = arm.id ? arm.id.replace(/^(.).*-/, '$1') : '';
@@ -1483,7 +1497,7 @@ export class NavSphere {
       ctx.fill();
 
       // Short label (e.g. "w1", "s2")
-      ctx.font = mono(8);
+      ctx.font = mono(10);
       ctx.fillStyle = color;
       ctx.globalAlpha = 0.6;
       const label = arm.id ? arm.id.replace(/^(.).*-/, '$1') : '';
@@ -1598,7 +1612,7 @@ export class NavSphere {
       ctx.restore();
 
       // Arm label
-      ctx.font = mono(8);
+      ctx.font = mono(10);
       ctx.fillStyle = '#ffaa00';
       ctx.globalAlpha = 0.7;
       const label = arm.id ? arm.id.replace(/^(.).*-/, '$1') : '';

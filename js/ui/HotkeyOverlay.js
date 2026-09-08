@@ -166,11 +166,11 @@ export class HotkeyOverlay {
     });
     header.innerHTML = `
       <div style="display:flex;align-items:center;gap:14px;">
-        <span style="font-size:21px;color:#00d4ff;font-weight:bold;letter-spacing:2px;">⌨ KEYBOARD SHORTCUTS</span>
-        <span style="font-size:13px;color:#888;">press ? or ESC to close</span>
+        <span style="font-size:16px;color:#00d4ff;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;">⌨ KEYBOARD SHORTCUTS</span>
+        <span style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#888;">press ? or ESC to close</span>
       </div>
       <button id="hotkey-close-btn" style="background:none;border:1px solid rgba(255,255,255,0.2);
-        color:#aaa;font-size:16px;cursor:pointer;padding:4px 12px;border-radius:3px;
+        color:#aaa;font-size:16px;letter-spacing:0.15em;text-transform:uppercase;cursor:pointer;padding:4px 12px;border-radius:3px;
         font-family: var(--font-mono);">ESC ×</button>
     `;
 
@@ -207,8 +207,8 @@ export class HotkeyOverlay {
 
     const title = document.createElement('div');
     Object.assign(title.style, {
-      fontSize: '15px', fontWeight: 'bold', color: '#00d4ff',
-      letterSpacing: '0.05em', marginBottom: '10px',
+      fontSize: '12px', fontWeight: '700', color: '#00d4ff',
+      letterSpacing: '0.14em', textTransform: 'uppercase', marginBottom: '10px',
       borderBottom: '1px solid rgba(0,212,255,0.12)', paddingBottom: '6px',
     });
     // Text only: a group's title is its name (no glyph — Session L, plan D-J).
@@ -277,7 +277,7 @@ export class HotkeyOverlay {
     const cap = document.createElement('span');
     Object.assign(cap.style, {
       display: 'inline-block', minWidth: '18px', textAlign: 'center',
-      padding: '3px 8px', fontSize: '12.5px', color: '#fff',
+      padding: '3px 8px', fontSize: '12px', fontVariantNumeric: 'tabular-nums', color: '#fff',
       background: 'rgba(255,255,255,0.06)',
       border: '1px solid rgba(0,212,255,0.3)', borderRadius: '3px',
       boxShadow: '0 1px 0 rgba(0,0,0,0.4)', whiteSpace: 'nowrap',

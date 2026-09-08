@@ -3612,6 +3612,11 @@ async function init() {
       window.__refit = refitPane;
       // Wave 5 (Session B): the TECH LIBRARY pane handle, same contract.
       window.__library = libraryPane;
+      // Session S: the help overlay, the tech library and the conjunction monitor
+      // for the gate pictures (help / specs / a seeded CONJUNCTION row).
+      window.__codex = codexViewerUI;
+      window.__hotkeyOverlay = hotkeyOverlay;
+      window.__conjunction = conjunctionSystem;
       // Session I: the world-clock handle for the thermal gate (rate 0 under
       // HOLD — the policy witness beside window.__frameSched, which is always
       // published). ?shot-gated like every harness handle here.

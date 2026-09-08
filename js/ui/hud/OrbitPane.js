@@ -54,6 +54,7 @@
 
 import { Constants } from '../../core/Constants.js';
 import { VisualLaw } from '../../core/VisualLaw.js';
+import { MONO_ADVANCE_EM } from '../../core/Typeface.js';
 import { orbitToKm, subSatellitePoint, nextShadowTransition } from '../../entities/OrbitalMechanics.js';
 import { RESERVE_FRAC, usableDeltaV } from '../../entities/ReachabilityModel.js';
 
@@ -77,16 +78,26 @@ export const ORBIT_RUNG_ID = 'orbit';
  * the slots block is 4 cells of CELL_W_PX with CELL_GAP_PX between (SLOTS_W_PX),
  * a HEADER_PX line and three rows of LABEL_PX + VALUE_PX with ROW_GAP_PX
  * between (slotsPx()); COMPACT_PX = FRAME + slotsPx() is the slots-only form.
+ * CELL_W_PX is derived: VALUE_CH advances of the VALUE_FONT_PX B612 Mono
+ * value (0.65 em) — the longest value plus one advance, or `1200.0 km` with
+ * its trend glyph (Session S).
  */
+const VALUE_FONT_PX = 13;
+const VALUE_CH = 10;
+const CELL_W_PX = Math.ceil(VALUE_CH * VALUE_FONT_PX * MONO_ADVANCE_EM);   // 85
+const CELL_GAP_PX = 6;
+const SLOTS_W_PX = 4 * CELL_W_PX + 3 * CELL_GAP_PX;                        // 358
 export const ORBIT_GEOMETRY = Object.freeze({
   GAP_PX: 8,
   FULL_PX: 140,
   FRAME_PX: 14,
   TRACK_PX: 126,
   BLOCK_GAP_PX: 8,
-  CELL_W_PX: 66,
-  CELL_GAP_PX: 6,
-  SLOTS_W_PX: 282,
+  VALUE_FONT_PX,
+  VALUE_CH,
+  CELL_W_PX,
+  CELL_GAP_PX,
+  SLOTS_W_PX,
   HEADER_PX: 12,
   LABEL_PX: 10,
   VALUE_PX: 14,
@@ -540,15 +551,16 @@ export class OrbitPane {
         flex: 0 0 ${2 * G.CELL_W_PX + G.CELL_GAP_PX}px; width: ${2 * G.CELL_W_PX + G.CELL_GAP_PX}px;
       }
       #${ORBIT_PANE_ID} .orbit-label {
-        font: 9px/${G.LABEL_PX}px var(--font-mono);
+        font: 10px/${G.LABEL_PX}px var(--font-mono);
         letter-spacing: 0.08em; opacity: 0.55; height: ${G.LABEL_PX}px;
       }
       #${ORBIT_PANE_ID} .orbit-value {
-        font: 13px/${G.VALUE_PX}px var(--font-mono);
+        font: ${G.VALUE_FONT_PX}px/${G.VALUE_PX}px var(--font-mono);
         font-variant-numeric: tabular-nums;
         height: ${G.VALUE_PX}px;
-        display: flex; align-items: center; gap: ${G.CELL_GAP_PX}px;
+        display: flex; align-items: center;
       }
+      #${ORBIT_PANE_ID} .orbit-cell-2 .orbit-value { gap: ${G.CELL_GAP_PX}px; }
       #${ORBIT_PANE_ID} .orbit-cell-2 .orbit-text { flex: 0 0 ${G.CELL_W_PX}px; width: ${G.CELL_W_PX}px; }
       #${ORBIT_PANE_ID} .orbit-trend { display: inline-block; width: 1ch; }
       #${ORBIT_PANE_ID} .orbit-trend[${TREND_ATTR}="down"] { color: ${COLORS.CAUTION}; }

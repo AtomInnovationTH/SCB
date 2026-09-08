@@ -102,7 +102,7 @@ const NARROW_BREAKPOINT = 1000;
 // The LOCKED marker that trails a locked entry's title inside a chip: a tiny
 // letter-spaced text tag (plan D-J: chrome glyphs became text). Leading space
 // keeps it off the title.
-const LOCKED_TAG_HTML = ' <span class="codex-locked-tag" style="font-size:9px;letter-spacing:0.08em;opacity:0.8;">LOCKED</span>';
+const LOCKED_TAG_HTML = ' <span class="codex-locked-tag" style="font-size:10px;letter-spacing:0.08em;opacity:0.8;">LOCKED</span>';
 
 // Dwell before an entry is marked seen. `CODEX_VIEWED` fires only once the
 // selection has *rested* on an unlocked/unseen entry this long — arrow-scrubbing
@@ -276,8 +276,8 @@ export class CodexViewerUI {
     });
     header.innerHTML = `
       <div style="display:flex;align-items:center;gap:14px;flex:1;min-width:0;">
-        <span style="font-size:20px;color:#00d4ff;font-weight:bold;letter-spacing:2px;white-space:nowrap;">SPECS</span>
-        <span id="codex-progress" style="font-size:13px;color:#888;white-space:nowrap;"></span>
+        <span style="font-size:16px;color:#00d4ff;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;white-space:nowrap;">SPECS</span>
+        <span id="codex-progress" style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;font-variant-numeric:tabular-nums;color:#888;white-space:nowrap;"></span>
         <div id="codex-progress-bar" title="overall briefings unlocked"
           style="width:120px;height:6px;border-radius:3px;background:rgba(255,255,255,0.08);
                  overflow:hidden;flex-shrink:0;">
@@ -290,7 +290,7 @@ export class CodexViewerUI {
                  font-family: var(--font-mono);font-size:14px;padding:6px 10px;outline:none;" />
       </div>
       <button id="codex-close-btn" style="background:none;border:1px solid rgba(255,255,255,0.2);
-        color:#888;font-size:16px;cursor:pointer;padding:4px 12px;border-radius:3px;
+        color:#888;font-size:16px;letter-spacing:0.15em;text-transform:uppercase;cursor:pointer;padding:4px 12px;border-radius:3px;
         font-family: var(--font-mono);">ESC ×</button>
     `;
 
@@ -438,7 +438,7 @@ export class CodexViewerUI {
       const divider = document.createElement('div');
       divider.textContent = 'LEARNING PATHS';
       Object.assign(divider.style, {
-        padding: '14px 14px 6px', fontSize: '10px', letterSpacing: '0.14em',
+        padding: '14px 14px 6px', fontSize: '11px', fontWeight: '700', letterSpacing: '0.14em',
         color: '#566', borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: '8px',
       });
       sidebar.appendChild(divider);
@@ -459,7 +459,7 @@ export class CodexViewerUI {
     const mapDivider = document.createElement('div');
     mapDivider.textContent = 'CONNECTIONS';
     Object.assign(mapDivider.style, {
-      padding: '14px 14px 6px', fontSize: '10px', letterSpacing: '0.14em',
+      padding: '14px 14px 6px', fontSize: '11px', fontWeight: '700', letterSpacing: '0.14em',
       color: '#566', borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: '8px',
     });
     sidebar.appendChild(mapDivider);
@@ -782,9 +782,9 @@ export class CodexViewerUI {
     });
 
     const pip = isNew
-      ? `<span title="new" style="flex-shrink:0;align-self:center;font-size:9px;font-weight:bold;color:${accent};letter-spacing:0.06em;text-shadow:0 0 6px ${accent};">NEW</span>`
+      ? `<span title="new" style="flex-shrink:0;align-self:center;font-size:10px;font-weight:bold;color:${accent};letter-spacing:0.08em;text-shadow:0 0 6px ${accent};">NEW</span>`
       : (isLocked
-        ? `<span title="locked" class="codex-locked-pip" style="flex-shrink:0;align-self:center;font-size:9px;font-weight:bold;color:#667;letter-spacing:0.08em;padding:0 4px;border:1px solid #445;border-radius:2px;">LOCKED</span>`
+        ? `<span title="locked" class="codex-locked-pip" style="flex-shrink:0;align-self:center;font-size:10px;font-weight:bold;color:#667;letter-spacing:0.08em;padding:0 4px;border:1px solid #445;border-radius:2px;">LOCKED</span>`
         : '');
 
     row.innerHTML = `
@@ -1077,7 +1077,7 @@ export class CodexViewerUI {
     const titleHtml = `
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px;">
         <div style="flex:1;min-width:0;">
-          <div style="font-size:22px;font-weight:bold;color:${isLocked ? '#9ab' : '#eee'};">${entry.title}</div>
+          <div style="font-family:var(--font-ui);font-size:22px;font-weight:700;color:${isLocked ? '#9ab' : '#eee'};">${entry.title}</div>
           <div class="codex-cat" style="display:flex;align-items:center;gap:6px;font-size:12px;color:${accent};opacity:0.85;">${categoryLabelHtml(catMeta.label, catMeta.swatch)}</div>
         </div>
         ${entry.unlocked ? this._mapToggleHtml('MAP', accent, accentBg) : ''}
@@ -1087,7 +1087,7 @@ export class CodexViewerUI {
     const quickLookHtml = `
       <div style="margin-bottom:22px;">
         ${sectionHeader('QUICK LOOK', accent)}
-        <div style="font-size:16px;color:#aaddff;line-height:1.6;
+        <div style="font-family:var(--font-ui);font-size:16px;color:#aaddff;line-height:1.6;
           padding:12px 16px;background:${accentBg(0.06)};border-left:3px solid ${accentBg(0.5)};
           border-radius:2px;">${decorateGlossary(entry.shortText, { once: true })}</div>
       </div>`;
@@ -1127,7 +1127,7 @@ export class CodexViewerUI {
             padding:10px 14px;border:1px dashed rgba(255,170,0,0.4);border-radius:3px;">
             <b>LOCKED · How to unlock:</b> ${hint}
           </div>
-          <div style="font-size:14px;color:#667;font-style:italic;line-height:1.6;margin-top:12px;">
+          <div style="font-family:var(--font-ui);font-size:14px;color:#667;font-style:italic;line-height:1.6;margin-top:12px;">
             Full briefing unlocks when you encounter this in flight.
           </div>
         </div>`;
@@ -1135,7 +1135,7 @@ export class CodexViewerUI {
       briefingHtml = `
         <div style="margin-bottom:22px;">
           ${sectionHeader('BRIEFING')}
-          <div style="font-size:15px;color:#ccc;line-height:1.8;white-space:pre-wrap;">${decorateGlossary(entry.fullText, { once: true })}</div>
+          <div style="font-family:var(--font-ui);font-size:15px;color:#ccc;line-height:1.8;white-space:pre-wrap;">${decorateGlossary(entry.fullText, { once: true })}</div>
           ${this._verifiedStampHtml(entry)}
         </div>`;
     }
@@ -1150,7 +1150,7 @@ export class CodexViewerUI {
             ${sectionHeader('IN THE REAL WORLD', accent)}
             <div style="padding:12px 16px;border-radius:4px;
               background:${accentBg(0.06)};border:1px solid ${accentBg(0.25)};
-              font-size:14px;color:#cde;line-height:1.6;">${decorateGlossary(entry.realWorld, { once: true })}</div>
+              font-family:var(--font-ui);font-size:14px;color:#cde;line-height:1.6;">${decorateGlossary(entry.realWorld, { once: true })}</div>
           </div>`;
       }
       if (entry.formula) {
@@ -1265,7 +1265,7 @@ export class CodexViewerUI {
   _verifiedStampHtml(entry) {
     const lv = entry.lastVerified;
     if (!lv || typeof lv !== 'string') return '';
-    return `<div style="margin-top:10px;font-size:10px;letter-spacing:0.1em;
+    return `<div style="margin-top:10px;font-size:10px;letter-spacing:0.08em;
       color:#566;">VERIFIED ${lv}</div>`;
   }
 
@@ -1283,7 +1283,7 @@ export class CodexViewerUI {
       ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
       : `${m}:${String(s).padStart(2, '0')}`;
     const alt = Number.isFinite(c.altKm) ? ` · ${c.altKm} km` : '';
-    return `<div style="margin-top:6px;font-size:10px;letter-spacing:0.1em;
+    return `<div style="margin-top:6px;font-size:10px;letter-spacing:0.08em;
       color:#566;">LOGGED  T+${clock}${alt}</div>`;
   }
 

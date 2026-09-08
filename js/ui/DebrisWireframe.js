@@ -1288,10 +1288,7 @@ export class DebrisWireframe {
       this._container = container;
 
       // [9] hotkey badge (top-right corner) — matches the [7]/[0] pane badges
-      // so the player can see the key that shows/hides the Debris pane. The
-      // container carries data-activate-key='Tab'; offset right to clear that
-      // (invisible while dimming is disabled) dormant keycap glyph, mirroring
-      // PaneChrome's badge offset.
+      // so the player can see the key that shows/hides the Debris pane.
       container.style.position = container.style.position || 'relative';
       const keyBadge = document.createElement('div');
       keyBadge.className = 'hud-pane-badge';
@@ -1299,7 +1296,7 @@ export class DebrisWireframe {
       Object.assign(keyBadge.style, {
         position: 'absolute',
         top: '5px',
-        right: container.dataset && container.dataset.activateKey ? '34px' : '7px',
+        right: '7px',
         font: 'bold 10px var(--font-mono)',
         color: 'rgba(0,255,136,0.35)',
         letterSpacing: '0.5px',
@@ -1758,7 +1755,7 @@ export class DebrisWireframe {
     // Daughter-origin badge (expanded mode from an arm pilot only)
     if (this._expandedMode && this._fromArmIndex != null) {
       ctx.textAlign = 'right';
-      ctx.font = mono(9);
+      ctx.font = mono(10);
       ctx.fillStyle = 'rgba(255,200,60,0.90)';
       ctx.fillText(
         `from Daughter ${this._fromArmIndex + 1}`,

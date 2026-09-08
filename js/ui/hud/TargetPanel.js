@@ -131,6 +131,10 @@ export class TargetPanel {
             text-align: center;
             font-size: 10px;
         }
+        .target-row .target-word {
+            grid-column: 2 / -1;
+            line-height: 12px;
+        }
         
         /* Expanded (selected) row */
         .target-row.selected .target-name {
@@ -149,7 +153,9 @@ export class TargetPanel {
             justify-content: space-between;
             gap: 8px;
             color: #aaaaaa;
+            flex-wrap: wrap;
         }
+        .target-expanded .econ-line > span { white-space: nowrap; }
         .target-expanded .hint-line {
             font-size: 10px;
             color: #666666;
@@ -618,8 +624,8 @@ export class TargetPanel {
           const rangeStyle = range.opacity != null
             ? `color:${range.color};opacity:${range.opacity}`
             : `color:${range.color}`;
-          const wordTag = (law && law.word)
-            ? `<span class="target-word" style="color:${law.wordColor};font-size:10px;font-weight:bold;letter-spacing:0.08em;margin-left:4px">${law.word}</span>`
+          const wordTag = (alpha) => (law && law.word)
+            ? `<span class="target-word" style="color:${law.wordColor};font-size:10px;font-weight:bold;letter-spacing:0.08em${alpha != null ? `;opacity:${alpha}` : ''}">${law.word}</span>`
             : '';
 
           if (selected) {
@@ -693,10 +699,11 @@ export class TargetPanel {
             const fullType = this._getFullTypeName(t.type);
             return `<div class="target-row selected" data-id="${t.id}">
     <span class="${iconClass}">${typeIcon}</span>
-    <span class="target-name"${law ? ` style="color:${law.color}"` : ''}>${fullType}${moidBadge}${wordTag}</span>
+    <span class="target-name"${law ? ` style="color:${law.color}"` : ''}>${fullType}${moidBadge}</span>
     <span class="target-dist">${dist}</span>
     <span class="${dvClass}">${deltaV}</span>
     <span class="range-dot" style="${rangeStyle}">${range.dot}</span>
+    ${wordTag(null)}
     <div class="target-expanded">
         <div class="econ-line">
             <span>\u0394V ${deltaV}</span>
@@ -704,7 +711,7 @@ export class TargetPanel {
             <span>${t.estimatedPoints}pt</span>
             ${fitBadge}${valueBadge ? `\n            ${valueBadge}` : ''}
         </div>${moidStat}
-        <div class="hint-line">[D] Deploy  [A] Autopilot  [Z] Analyze</div>
+        <div class="hint-line">[D] Deploy · [A] Auto · [Z] Analyze</div>
     </div>
 </div>`;
           } else {
@@ -714,10 +721,11 @@ export class TargetPanel {
             // ── COLLAPSED ROW (non-selected) ──
             return `<div class="target-row" data-id="${t.id}">
     <span class="${iconClass}">${typeIcon}</span>
-    <span class="target-name" style="color:${tierColor}${law ? `;opacity:${law.alpha}` : ''}">${typeName}${salvageIcon}${moidBadge}${wordTag}</span>
+    <span class="target-name" style="color:${tierColor}${law ? `;opacity:${law.alpha}` : ''}">${typeName}${salvageIcon}${moidBadge}</span>
     <span class="target-dist">${dist}</span>
     <span class="${dvClass}">${deltaV}</span>
     <span class="range-dot" style="${rangeStyle}">${range.dot}</span>
+    ${wordTag(law ? law.alpha : null)}
 </div>`;
           }
         }).join('');
