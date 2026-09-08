@@ -23,7 +23,7 @@
  * one SVG line layer; no THREE.
  *
  * VISUAL LAW (js/core/VisualLaw.js):
- *   - callouts read INFO cyan; the focused subsystem reads SELECTION white and
+ *   - callouts read INFO cyan; the focused subsystem reads SELECTION blue and
  *     is double-encoded (thicker leader + heavier card border — never
  *     color-alone);
  *   - at most `labelBudget` (F3 = 7) callouts render, priority-ranked via
@@ -208,7 +208,7 @@ export class BlueprintOverlay {
 
   /**
    * @private The brighten half of the hover affordance: the card outline
-   * brightens and the leader + anchor dot whiten to SELECTION; off restores
+   * brightens and the leader + anchor dot turn SELECTION blue; off restores
    * the callout's own content color. (The 4 % lift is the .bp-card:hover CSS
    * rule.) Never called on unbuilt recs.
    */

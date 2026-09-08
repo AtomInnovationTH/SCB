@@ -214,8 +214,8 @@ export class TransferWindows {
       return model;
     }
     // The window title never pulses (it is INFO/planning, not THREAT). "Imminent"
-    // is double-encoded: SELECTION-white depart line + the [IMMINENT] tag.
-    const departColor = model.imminent ? VisualLaw.COLORS.SELECTION : VisualLaw.COLORS.INFO;
+    // is double-encoded: LABEL-white depart line + the [IMMINENT] tag.
+    const departColor = model.imminent ? VisualLaw.COLORS.LABEL : VisualLaw.COLORS.INFO;
     const rows = [
       `<div style="color:${VisualLaw.COLORS.PLAYER}">${FLOOR_TITLE} \u00b7 ${model.targetName}</div>`,
       `<div style="color:${departColor}">${model.departText}${model.imminent ? '  [IMMINENT]' : ''}</div>`,

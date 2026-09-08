@@ -38,7 +38,7 @@
  * attributes only when a value changed. The eclipse prediction (`eclipse()`)
  * is recomputed EVEN WHILE density-hidden (another pane consumes it) — only
  * the DOM writes are skipped. The slow slots (INC, PERIOD, the SUN word, ΔV)
- * flash on change (`data-changed` for 1.2 s, a CSS keyframe from SELECTION
+ * flash on change (`data-changed` for 1.2 s, a CSS keyframe from LABEL
  * white back to inherit); the per-second slots never flash.
  *
  * Laws: root = a DIRECT child of #hud-overlay wearing .hud-panel, pointer-
@@ -57,7 +57,7 @@ import { VisualLaw } from '../../core/VisualLaw.js';
 import { orbitToKm, subSatellitePoint, nextShadowTransition } from '../../entities/OrbitalMechanics.js';
 import { RESERVE_FRAC, usableDeltaV } from '../../entities/ReachabilityModel.js';
 
-/** The six-colour law (read-only): CAUTION amber for the reserve tick / decay arrow, SELECTION white for the flash. */
+/** The colour law (read-only): CAUTION amber for the reserve tick / decay arrow, LABEL white for the flash. */
 const COLORS = VisualLaw.COLORS;
 
 /** The root element id (FloorMask MASK_PANES.orbit.els = ['#hud-orbit-pane']). */
@@ -561,7 +561,7 @@ export class OrbitPane {
       #${ORBIT_PANE_ID} .orbit-bar-mark { position: absolute; top: -2px; width: 1px; height: 6px; background: ${COLORS.CAUTION}; }
       /* The change flash (slow slots only): bright, then back to the inherited colour. */
       #${ORBIT_PANE_ID} [${CHANGED_ATTR}] { animation: orbit-pane-flash ${CHANGE_FLASH_MS}ms ease-out; }
-      @keyframes orbit-pane-flash { from { color: ${COLORS.SELECTION}; } to { color: inherit; } }
+      @keyframes orbit-pane-flash { from { color: ${COLORS.LABEL}; } to { color: inherit; } }
     `;
     doc.head.appendChild(style);
   }

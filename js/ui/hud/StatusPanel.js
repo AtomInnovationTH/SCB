@@ -1,18 +1,35 @@
 /**
  * StatusPanel.js — Score display, resource bars, mass budget, ΔV bar,
  * arm fleet status, and capture notifications.
+ *
+ * Session Q (plan D12b, owner 2026-09-07 — the dark cockpit): the MEMO slot.
+ * With the `{ memoSlot: true }` ctor option (HUD passes the ladder gate) the
+ * `#autopilot-indicator` chip — since F15 inside the collapsed PROPULSION
+ * block, state nobody could see — becomes a steady token list in the MOTHER
+ * header (`.mother-memo`, after the title, PLAYER green, no border): `AP
+ * <MODE>` · `HOLD`, at most MEMO_MAX 3, joined with ` · `. Empty = the AP is
+ * off (Airbus A1: nothing lit means normal). The slot text is written on change
+ * only; a change to a NON-EMPTY string stamps a BOX_MS window (Airbus A4: the
+ * one transient is a box around what changed) that `tickMemo(now)` paints as
+ * the edge-chrome BOX_OUTLINE, write-on-change, from HUD.update — a local
+ * timestamp, no timer. Without the option the markup and the chip are today's
+ * byte for byte (`?ladder=0`). `memoTokens(mode, phase)` is the pure core.
+ *
  * @module ui/hud/StatusPanel
  */
 
 import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
+import { VisualLaw } from '../../core/VisualLaw.js';
 import { powerDistribution } from '../../systems/PowerDistribution.js';
 import { tetherReel } from '../../systems/TetherReel.js';
 import { BridleRing } from '../../entities/BridleRing.js';
 import { captureNetSystem } from '../../entities/CaptureNet.js';
 import { PaneChrome } from './PaneChrome.js';
 import { pressKey } from '../../core/KeyDispatch.js';
+import { RAIL_GEOMETRY } from '../RailGeometry.js';
+import { BOX_OUTLINE, BOX_OUTLINE_OFFSET } from '../RailIndicator.js';
 
 // ST-6.6: Active-tool → NASA TRL metadata used to live here, feeding a
 // bottom-center "RCS / COLD GAS / MPD BURST / ARM PILOT" control-mode badge.
@@ -35,6 +52,27 @@ const _PHASE_LABELS = {
   TRAIL_ALIGN:     'ALIGN',
   HOLD:            'HOLD',
 };
+
+/** The MEMO slot holds at most this many tokens (Session Q, plan D12b). */
+export const MEMO_MAX = 3;
+
+/** The MEMO token separator (the house middle dot). */
+export const MEMO_SEP = ' \u00b7 ';
+
+/**
+ * The MEMO tokens for an autopilot state (pure). `OFF` → nothing lit. Else
+ * `AP` (+ the heading mode when it is a real one — `ENGAGED` is the bare
+ * engage) and `HOLD` while the phase is HOLD. Capped at MEMO_MAX.
+ * @param {string} mode   'OFF' | 'ENGAGED' | 'TARGET' | 'TRAWL' | 'DEBRIS' | 'PROGRADE' | 'CLUSTER' | ...
+ * @param {string} phase  'OFF' | 'RENDEZVOUS_FAR' | 'MATCH_ORBIT' | 'TRAIL_ALIGN' | 'HOLD'
+ * @returns {string[]}
+ */
+export function memoTokens(mode, phase) {
+  if (!mode || mode === 'OFF') return [];
+  const tokens = ['AP' + ((typeof mode === 'string' && mode !== 'ENGAGED') ? ' ' + mode : '')];
+  if (phase === 'HOLD') tokens.push('HOLD');
+  return tokens.slice(0, MEMO_MAX);
+}
 
 // Shared "net" identity colour. NET reads the same ivory in BOTH the MOTHER
 // digest (lasso ammo) and the DAUGHTERS list (per-unit magazine) so the player
@@ -75,10 +113,18 @@ export class StatusPanel {
    *   keyup on window, InputManager's listener target); tests inject a
    *   recorder. Also settable later via setKeyDispatch().
    */
-  constructor(container, { keyDispatch = pressKey } = {}) {
+  constructor(container, { keyDispatch = pressKey, memoSlot = false, now = null } = {}) {
     this._container = container;
     this._armManager = null;
     this._keyDispatch = keyDispatch;
+    // Session Q (plan D12b): the MEMO slot option + its local box clock.
+    this._memoSlot = !!memoSlot;
+    this._now = (typeof now === 'function') ? now
+      : (() => ((typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now()));
+    this._memoText = '';              // the slot's last written text (write-on-change)
+    this._memoBoxedUntil = -Infinity; // the A4 box window's end (a local timestamp, no timer)
+    this._memoBoxedPainted = false;   // the outline's last written state
+    this._memoEl = null;              // cached #autopilot-indicator once found
     this._fleetClickBound = false;   // the ONE #hud-arms-status click delegate, attached once
     this._initialDeltaV = null;
     this._forgeRevealed = false;
@@ -303,90 +349,19 @@ export class StatusPanel {
     return div;
   }
 
-  /** @private */
-  _build() {
-    // --- Left-column flex container for stacked panels ---
-    this._leftColumn = document.createElement('div');
-    this._leftColumn.id = 'hud-left-column';
-    Object.assign(this._leftColumn.style, {
-      position: 'absolute',
-      top: '10px',
-      left: '10px',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '10px',           // Pane-to-pane vertical gap — keep in sync with right column (HUD.js)
-      width: '260px',
-      maxHeight: 'calc(100vh - 60px)',
-      overflowY: 'auto',
-      zIndex: '10',
-    });
-    this._container.appendChild(this._leftColumn);
-
-    // --- Mission Objective bar (top center) ---
-    // Sim-reframe: the persistent top HUD shows only the mission objective
-    // (hero "CLEARED N/60") plus a quiet credit wallet. Live flight state (RCS),
-    // telemetry (orbit/altitude), and lore (TRL) live where they're contextual:
-    // the reticle, the NavSphere/Orbit MFD, and tooltips/Codex respectively.
-    // Mass recovered is taught through consequence (salvage card / run summary),
-    // not a sterile running counter. See FULL_HUD_STRATEGY.md §13.
-    //
-    // PRIORITY LAYER: the objective is the single most important readout, so it
-    // is mounted on document.body (NOT the HUD overlay) to escape the per-view
-    // `hudOpacity` dimming, kept OUT of the progressive-luminance group so it is
-    // never dormant/dimmed, and given a z-index above the reticle canvas (z=11)
-    // and 3D debris so nothing can occlude it.
-    this.panels.score = this._createTopPanel('hud-score-panel', {
-      top: '8px', left: '50%', transform: 'translateX(-50%)',
-      padding: '4px 14px',
-    });
-    // PRIORITY-LAYER CONTENT — restored to the documented "objective + quiet
-    // wallet" intent: this most-seen, never-dimmed strip now carries ONLY the
-    // hero CLEARED N/60 progress meter plus a quiet credit wallet.
-    //   • The elevator-contract tracker was REMOVED from here. It is a slow,
-    //     shop-driven, late-game objective that stays at 0 (and is mechanically
-    //     unreachable — the Forge isn't taught in onboarding) for a new pilot's
-    //     whole first session, so a static "0/10,000 kg" in this slot was clutter
-    //     in premium real estate. It now lives gated atop the comms pane
-    //     (CommsPanel._onContractUpdate), revealed on the first contribution,
-    //     grouped with the channel that already narrates its milestones.
-    //   • The daughter-tier badge (#hud-arm-tier, feature-flagged) moved to the
-    //     DAUGHTERS pane header where it is contextual.
-    this.panels.score.innerHTML = `
-      <div style="display:flex;align-items:center;gap:14px;white-space:nowrap;line-height:1;">
-        <div style="display:flex;align-items:baseline;gap:7px;">
-          <span style="font-size:10px;letter-spacing:2px;opacity:0.7;text-transform:uppercase;">Cleared</span>
-          <span style="font-size:18px;font-weight:bold;letter-spacing:1px;color:#00ff88;text-shadow:0 0 6px rgba(0,255,136,0.45);">
-            <b id="hud-cleared">0</b><span style="opacity:0.5;font-weight:normal;font-size:13px;">/${Constants.WIN_DEBRIS_COUNT}</span>
-          </span>
-          <span id="hud-cleared-track" style="width:42px;height:3px;background:rgba(0,255,136,0.2);border-radius:2px;overflow:hidden;align-self:center;">
-            <span id="hud-cleared-fill" style="display:block;width:0%;height:100%;background:#00ff88;transition:width 0.4s ease;"></span>
-          </span>
-        </div>
-        <span style="color:#ffaa00;font-size:12px;font-weight:bold;opacity:0.85;"><b id="hud-credits">0</b> cr</span>
-      </div>
-    `;
-
-    // --- Control-mode indicator removed (2026-06-05) ---
-    // A bottom-center "RCS" badge used to advertise what WASD does. The mother
-    // flies on autopilot and steers with the arrow keys (no player-facing WASD
-    // attitude modes), so the badge was jargon noise for new pilots. See the
-    // note by the former _MODE_DISPLAY constant near the top of this file.
-
-    // --- MOTHER Pane (left side, top) — unified Propulsion + Energy + Net digest ---
-    // Replaces the former separate #hud-resources-panel + #hud-power-panel panes.
-    // Leads with a one-line strategic-readiness digest (Net charges · ΔV budget %
-    // · power glyph); the full Propulsion + Energy detail is hidden by default and
-    // revealed on hover (or pinned open via the chrome badge). See
-    // .kilo/plans/…-mother-pane-readiness-digest.md.
-    //
-    // NOTE: the inner propulsion/energy blocks intentionally KEEP all of the
-    // element IDs, data-hud-group values, and the data-activate-key='A' that the
-    // updaters and tests key off — only their parent box is now the MOTHER pane.
-    this.panels.mother = this._createPanel('hud-mother-panel', {});
-    this.panels.mother.className = 'hud-panel hud-panel-expandable';
-    this.panels.mother.innerHTML = `
+  /**
+   * @private The MOTHER pane's markup (Session Q: a pure string builder so the
+   * two shapes can be pinned). Without the memo slot: today's string byte for
+   * byte. With it: the `#autopilot-indicator` chip is the header's second
+   * child (`.mother-memo`) and the PROPULSION block omits it.
+   * @returns {string}
+   */
+  _motherMarkup() {
+    const memo = this._memoSlot;
+    return `
       <div class="mother-header pane-title" style="font-size:11px;margin-bottom:3px;color:#00ff88;opacity:0.7;display:flex;align-items:baseline;gap:6px;">
-        <span>MOTHER</span>
+        <span>MOTHER</span>${memo ? `
+        <span id="autopilot-indicator" class="mother-memo" style="margin-left:auto;font-size:10px;letter-spacing:0.08em;color:${VisualLaw.COLORS.PLAYER};opacity:1;white-space:nowrap;"></span>` : ''}
       </div>
       <div id="mother-digest" style="font-size:11px;line-height:1.4;white-space:nowrap;display:flex;align-items:center;gap:6px;transition:opacity 0.3s ease;">
         <span id="mother-digest-net" style="display:inline-flex;align-items:center;gap:4px;color:${NET_COLOR};">
@@ -415,8 +390,8 @@ export class StatusPanel {
       <div class="mother-detail">
         <div class="mother-block mother-block-propulsion" data-hud-group="fuel-group" data-activate-key="A">
       <div class="panel-full-content">
-        <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#00ff88;opacity:0.7;">PROPULSION</div>
-        <div id="autopilot-indicator" style="font-size:10px;margin-bottom:4px;padding:2px 6px;border-radius:2px;display:inline-block;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);color:#555;">[Autopilot: OFF]</div>
+        <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#00ff88;opacity:0.7;">PROPULSION</div>${memo ? '' : `
+        <div id="autopilot-indicator" style="font-size:10px;margin-bottom:4px;padding:2px 6px;border-radius:2px;display:inline-block;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);color:#555;">[Autopilot: OFF]</div>`}
         <div id="deltav-bar-track" style="position:relative;width:100%;height:16px;background:rgba(0,0,0,0.5);
              border:1px solid rgba(0,255,136,0.3);border-radius:2px;overflow:hidden;">
           <div id="deltav-bar-fill" style="height:100%;width:100%;background:#00ff88;
@@ -559,6 +534,90 @@ export class StatusPanel {
         </div>
       </div>
       `;
+  }
+
+  /** @private */
+  _build() {
+    // --- Left-column flex container for stacked panels ---
+    this._leftColumn = document.createElement('div');
+    this._leftColumn.id = 'hud-left-column';
+    Object.assign(this._leftColumn.style, {
+      position: 'absolute',
+      top: '10px',
+      left: '10px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '10px',           // Pane-to-pane vertical gap — keep in sync with right column (HUD.js)
+      width: '260px',
+      maxHeight: 'calc(100vh - 60px)',
+      overflowY: 'auto',
+      zIndex: '10',
+    });
+    this._container.appendChild(this._leftColumn);
+
+    // --- Mission Objective bar (top center) ---
+    // Sim-reframe: the persistent top HUD shows only the mission objective
+    // (hero "CLEARED N/60") plus a quiet credit wallet. Live flight state (RCS),
+    // telemetry (orbit/altitude), and lore (TRL) live where they're contextual:
+    // the reticle, the NavSphere/Orbit MFD, and tooltips/Codex respectively.
+    // Mass recovered is taught through consequence (salvage card / run summary),
+    // not a sterile running counter. See FULL_HUD_STRATEGY.md §13.
+    //
+    // PRIORITY LAYER: the objective is the single most important readout, so it
+    // is mounted on document.body (NOT the HUD overlay) to escape the per-view
+    // `hudOpacity` dimming, kept OUT of the progressive-luminance group so it is
+    // never dormant/dimmed, and given a z-index above the reticle canvas (z=11)
+    // and 3D debris so nothing can occlude it.
+    this.panels.score = this._createTopPanel('hud-score-panel', {
+      top: '8px', left: '50%', transform: 'translateX(-50%)',
+      padding: '4px 14px',
+    });
+    // PRIORITY-LAYER CONTENT — restored to the documented "objective + quiet
+    // wallet" intent: this most-seen, never-dimmed strip now carries ONLY the
+    // hero CLEARED N/60 progress meter plus a quiet credit wallet.
+    //   • The elevator-contract tracker was REMOVED from here. It is a slow,
+    //     shop-driven, late-game objective that stays at 0 (and is mechanically
+    //     unreachable — the Forge isn't taught in onboarding) for a new pilot's
+    //     whole first session, so a static "0/10,000 kg" in this slot was clutter
+    //     in premium real estate. It now lives gated atop the comms pane
+    //     (CommsPanel._onContractUpdate), revealed on the first contribution,
+    //     grouped with the channel that already narrates its milestones.
+    //   • The daughter-tier badge (#hud-arm-tier, feature-flagged) moved to the
+    //     DAUGHTERS pane header where it is contextual.
+    this.panels.score.innerHTML = `
+      <div style="display:flex;align-items:center;gap:14px;white-space:nowrap;line-height:1;">
+        <div style="display:flex;align-items:baseline;gap:7px;">
+          <span style="font-size:10px;letter-spacing:2px;opacity:0.7;text-transform:uppercase;">Cleared</span>
+          <span style="font-size:18px;font-weight:bold;letter-spacing:1px;color:#00ff88;text-shadow:0 0 6px rgba(0,255,136,0.45);">
+            <b id="hud-cleared">0</b><span style="opacity:0.5;font-weight:normal;font-size:13px;">/${Constants.WIN_DEBRIS_COUNT}</span>
+          </span>
+          <span id="hud-cleared-track" style="width:42px;height:3px;background:rgba(0,255,136,0.2);border-radius:2px;overflow:hidden;align-self:center;">
+            <span id="hud-cleared-fill" style="display:block;width:0%;height:100%;background:#00ff88;transition:width 0.4s ease;"></span>
+          </span>
+        </div>
+        <span style="color:#ffaa00;font-size:12px;font-weight:bold;opacity:0.85;"><b id="hud-credits">0</b> cr</span>
+      </div>
+    `;
+
+    // --- Control-mode indicator removed (2026-06-05) ---
+    // A bottom-center "RCS" badge used to advertise what WASD does. The mother
+    // flies on autopilot and steers with the arrow keys (no player-facing WASD
+    // attitude modes), so the badge was jargon noise for new pilots. See the
+    // note by the former _MODE_DISPLAY constant near the top of this file.
+
+    // --- MOTHER Pane (left side, top) — unified Propulsion + Energy + Net digest ---
+    // Replaces the former separate #hud-resources-panel + #hud-power-panel panes.
+    // Leads with a one-line strategic-readiness digest (Net charges · ΔV budget %
+    // · power glyph); the full Propulsion + Energy detail is hidden by default and
+    // revealed on hover (or pinned open via the chrome badge). See
+    // .kilo/plans/…-mother-pane-readiness-digest.md.
+    //
+    // NOTE: the inner propulsion/energy blocks intentionally KEEP all of the
+    // element IDs, data-hud-group values, and the data-activate-key='A' that the
+    // updaters and tests key off — only their parent box is now the MOTHER pane.
+    this.panels.mother = this._createPanel('hud-mother-panel', {});
+    this.panels.mother.className = 'hud-panel hud-panel-expandable';
+    this.panels.mother.innerHTML = this._motherMarkup();
     this._leftColumn.appendChild(this.panels.mother);
     this.panels.mother.style.position = 'relative';
     this._injectPowerPulseStyle();
@@ -1232,6 +1291,9 @@ export class StatusPanel {
    * Phase segment is hidden when the AP is OFF.
    */
   _updateAutopilotIndicator() {
+    // Session Q (plan D12b): with the memo slot the chip is the MOTHER header's
+    // steady token list — a different renderer, the same two state fields.
+    if (this._memoSlot) { this._renderMemo(); return; }
     const el = document.getElementById('autopilot-indicator');
     const phaseLabel = _PHASE_LABELS[this._autopilotPhase] || '';
 
@@ -1253,6 +1315,61 @@ export class StatusPanel {
         el.style.background = 'rgba(0,255,136,0.08)';
       }
     }
+  }
+
+  // ==========================================================================
+  // THE MEMO SLOT (Session Q, plan D12b)
+  // ==========================================================================
+
+  /** @private The slot element, resolved once (null headless / before build). */
+  _memoElement() {
+    if (this._memoEl) return this._memoEl;
+    if (typeof document === 'undefined' || !document || typeof document.getElementById !== 'function') return null;
+    const el = document.getElementById('autopilot-indicator');
+    if (el) this._memoEl = el;
+    return el;
+  }
+
+  /**
+   * @private Write the MEMO tokens for the cached AP mode / phase — text on
+   * change only; a change to a NON-EMPTY string stamps the A4 box window.
+   */
+  _renderMemo() {
+    const text = memoTokens(this._autopilotMode, this._autopilotPhase).join(MEMO_SEP);
+    if (text === this._memoText) return;
+    this._memoText = text;
+    if (text !== '') this._memoBoxedUntil = this._now() + RAIL_GEOMETRY.BOX_MS;
+    const el = this._memoElement();
+    if (el) el.textContent = text;
+  }
+
+  /**
+   * Per frame (HUD.update): paint the box while the window is open —
+   * write-on-change, a local timestamp, no timer. No-op without the slot.
+   * @param {number} [nowMs]
+   */
+  tickMemo(nowMs) {
+    if (!this._memoSlot) return;
+    const now = (typeof nowMs === 'number' && Number.isFinite(nowMs)) ? nowMs : this._now();
+    const boxed = now < this._memoBoxedUntil;
+    if (boxed === this._memoBoxedPainted) return;
+    const el = this._memoElement();
+    if (!el) return;                      // keep the painted state until an element exists
+    el.style.outline = boxed ? BOX_OUTLINE : 'none';
+    el.style.outlineOffset = boxed ? BOX_OUTLINE_OFFSET : '0px';
+    this._memoBoxedPainted = boxed;
+  }
+
+  /** @returns {string} the slot's current text ('' = the AP is off / no slot) */
+  memoText() { return this._memoText; }
+
+  /**
+   * @param {number} [nowMs]
+   * @returns {boolean} whether the A4 box window is open at `nowMs`
+   */
+  memoBoxed(nowMs) {
+    const now = (typeof nowMs === 'number' && Number.isFinite(nowMs)) ? nowMs : this._now();
+    return this._memoSlot && now < this._memoBoxedUntil;
   }
 
   /** @private Set bar fill width and value text */

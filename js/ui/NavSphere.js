@@ -747,8 +747,8 @@ export class NavSphere {
    *     shape) + name label, distance-encoded via _toSphereWithDistance and
    *     clamped to the rim (the PROX NET corridor target usually sits beyond the
    *     sensor's outer zone);
-   *   - selected insertion point: SELECTION-white ring + cross-hair ticks +
-   *     zone label (the ProxOverlay insertion grammar; white = selection ONLY).
+   *   - selected insertion point: SELECTION-blue ring + cross-hair ticks +
+   *     zone label (the ProxOverlay insertion grammar; blue = selection, Session Q).
    * Behind-camera points dim to the house 0.4 alpha like every other contact.
    * @param {CanvasRenderingContext2D} ctx
    * @param {number} cx - sphere center X
@@ -804,7 +804,7 @@ export class NavSphere {
       const p = projectClamped(ov.insertionPos);
       if (p) {
         ctx.globalAlpha = p.z > 0 ? 0.95 : 0.4;
-        ctx.strokeStyle = VisualLaw.COLORS.SELECTION; // white = selection ONLY
+        ctx.strokeStyle = VisualLaw.COLORS.SELECTION; // blue = selection (Session Q)
         ctx.lineWidth = 1.5;
         const r = 5;
         ctx.beginPath();

@@ -808,6 +808,27 @@ function _leftColumnBottom(nowMs) {
 let _clustersCache = null;
 let _clustersAt = -Infinity;
 const _CLUSTERS_MS = 10000;
+// Session Q (plan D15 / D15c, owner 2026-09-07) — THE TARGET COLOUR LAW's hub
+// inputs: ONE reused object (zero per-frame allocation), rebuilt per frame while
+// the ladder is active and handed to TargetReticle (`colorLaw`) and, through
+// HUD.update, to TargetPanel (`targetLaw`) — the same debris wears the same
+// colour on its bracket, its arrow and its row (js/ui/hud/TargetColorLaw.js).
+//   reachKm    the ready TETHER reach TargetPanel computes (hud.reachKm(); 0 = no arm ready)
+//   threatId / threatTier   the conjunction threat record (getStatus().currentThreat: RED = danger, YELLOW = CLOSE PASS)
+//   apTargetId the autopilot's locked debris (AUTOPILOT_TARGET_LOCK / UNLOCK — one gated listener pair below)
+// Flag-off / disengaged: the consumers receive null → their shipped palettes,
+// byte-identical (the Session O `exclusionRect` idiom).
+let _apTargetId = null;
+const _targetLaw = { reachKm: 0, threatId: null, threatTier: null, apTargetId: null };
+function _refreshTargetLaw() {
+  const st = (conjunctionSystem && typeof conjunctionSystem.getStatus === 'function') ? conjunctionSystem.getStatus() : null;
+  const t = st && st.currentThreat;
+  _targetLaw.threatId = t ? t.debrisId : null;
+  _targetLaw.threatTier = t ? t.tier : null;
+  _targetLaw.apTargetId = _apTargetId;
+  _targetLaw.reachKm = (hud && typeof hud.reachKm === 'function') ? hud.reachKm() : 0;
+  return _targetLaw;
+}
 function _instrumentClusters() {
   if (!debrisField || typeof debrisField.getDebrisClusters !== 'function') return null;
   const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -2263,6 +2284,16 @@ async function init() {
       if (edgeChrome) edgeChrome.wake('slider');
       if (detailSlider) detailSlider.refresh({ force: true });
     });
+    // Session Q (plan D15c, owner 2026-09-07): the autopilot's locked target —
+    // ONE gated listener pair (graph-safe: both events have their emitters in
+    // AutopilotSystem._refreshTargetLock / _releaseTargetLock). While the AP
+    // flies to a debris the reticle and the TARGETS row paint it magenta
+    // (computer-managed, Airbus A2); the cluster variant carries `targetId`
+    // and no `debrisId` → null, harmless. `?ladder=0` never adds these.
+    eventBus.on(Events.AUTOPILOT_TARGET_LOCK, (d) => {
+      _apTargetId = (d && d.debrisId != null) ? d.debrisId : null;
+    });
+    eventBus.on(Events.AUTOPILOT_TARGET_UNLOCK, () => { _apTargetId = null; });
     // `-` / `+` (owner 2026-09-07, REVERSING the 2026-09-06 one-press CLEAN
     // VIEW): the bare keys walk ONE rung per press again — the shipped
     // PaneDensity.down()/up(); clearOnDown stays false, so the stash
@@ -3517,6 +3548,15 @@ async function init() {
       // boot) — the gate pictures wake the chrome with `EVAL=window.__edgeChrome.wake()`.
       window.__edgeChrome = edgeChrome;
       window.__edgeBandWake = _edgeBandWake;
+      // Session Q (plan D15): the target colour law's live inputs (a getter —
+      // the reused object; its fields are null / 0 on a ?ladder=0 boot).
+      window.__targetLaw = () => _targetLaw;
+      // Session Q (plan D12): the alert hierarchy's state (policy, inhibit,
+      // visible, held) — the inhibit gate picture reads `held`.
+      window.__alerts = () => (hud && hud.alertState ? hud.alertState() : null);
+      // Session Q: the HUD itself (the inhibit gate picture seeds the arbiter
+      // through showNotification / showWarning; the house `__cargoPane` idiom).
+      window.__hud = () => hud;
       // Session K: the CARGO pane (null on a ?ladder=0 boot — never constructed).
       window.__cargoPane = cargoPane;
       // Session M: the instruments + the voice (null on a ?ladder=0 boot).
@@ -5925,6 +5965,13 @@ function gameLoop(timestamp) {
   // (density per-step toasts included — force does not save them); disengaged /
   // menu / flag-off → null = shipped behavior (every kind shows).
   if (hud && hud.setToastPolicy) hud.setToastPolicy(_ladderActive ? 'engaged' : null);
+  // Session Q (plan D12c): the INTRO INHIBIT — while the engaged intro flyby is
+  // in flight (LadderController.introInFlight: the dive, the dwell, the pull)
+  // every alert below red is held and replays when the window closes (Qantas
+  // 32; the first catch is the player's landing). Write-on-change inside;
+  // false off the ladder / disengaged; the live-approach window is HUD's own
+  // (the 2 Hz targets tick).
+  if (hud && hud.setToastInhibit) hud.setToastInhibit(_ladderActive && !!(ladderController && ladderController.introInFlight && ladderController.introInFlight()));
 
   const currentState = gameState.currentState;
 
@@ -6196,6 +6243,11 @@ function gameLoop(timestamp) {
     // --- Camera update via CameraSystem ---
     updateCamera(dt, timestamp);
 
+    // Session Q (plan D15): the target colour law's inputs, rebuilt ONCE per
+    // frame here (the reused object) and handed to the HUD (→ TargetPanel rows)
+    // and, below, to the reticle — null off the ladder (both consumers paint
+    // their shipped palettes).
+    const _lawFrame = _ladderActive ? _refreshTargetLaw() : null;
     // HUD update — skipped under a 'full' viewCover (the HUD is invisible
     // behind the plate; it re-syncs on the first uncovered frame — its own
     // 10 Hz / 2 Hz timers keep polling, nothing is event-driven inside).
@@ -6210,6 +6262,7 @@ function gameLoop(timestamp) {
       armManager,                          // Delegation 3: daughter wireframe + arm count
       forgeState: forgeSystem.getState(),
       cargoStatus: cargoSystem.getStatus(),
+      targetLaw: _lawFrame,                // Session Q (plan D15): → TargetPanel rows / dot / odds
     });
     // Session M: the instruments' 1 Hz ticks (each self-throttles on the frame
     // clock and writes on change; under a full cover the DOM is invisible, so
@@ -6289,6 +6342,9 @@ function gameLoop(timestamp) {
         // as the exclusion band for debris brackets (cached by HUD; null off the
         // ladder → byte-identical shipped path — the ladder-on idiom above).
         exclusionRect: _ladderActive ? hud.scoreStripRect() : null,
+        // Session Q (plan D15 / D15c): the target colour law's inputs — the
+        // same idiom; null off the ladder → the reticle's shipped palette.
+        colorLaw: _lawFrame,
         telemetry: {
           deltaVSpent: player.getDeltaVSpent(),
           thrustDirection: player.getThrustDirection(),

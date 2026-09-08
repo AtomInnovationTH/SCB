@@ -10,7 +10,7 @@
  * VISUAL LAW (js/core/VisualLaw.js) — pinned by test-FloorContract.js:
  *   - icon sizes are exactly the 3 bands [12, 18, 24] px (count-weighted);
  *   - color is never the SOLE channel: count → size, focus → color AND scale;
- *   - clusters read INFO cyan; the focused cluster reads SELECTION white;
+ *   - clusters read INFO cyan; the focused cluster reads SELECTION blue;
  *   - FUEL-REACHABILITY (optional opts.assessments): unreachable clusters are
  *     dimmed + dash-ringed, marginal read VALUE gold + dashed (never
  *     color-alone), and the FOCUSED cluster's label gains an estimate line
@@ -161,7 +161,7 @@ export class ClusterIcons {
    * @param {(pos:{x,y,z}) => {x:number, y:number, visible:boolean}} project - world→screen
    * @param {object} [opts]
    * @param {number} [opts.budget] - max labelled icons (default F6 labelBudget = 7)
-   * @param {*} [opts.focusId] - the currently-focused cluster id (SELECTION white)
+   * @param {*} [opts.focusId] - the currently-focused cluster id (SELECTION blue)
    * @param {Map|object} [opts.assessments] - FUEL-REACHABILITY: clusterId →
    *                 ReachabilityModel.assess() result. Absent → the pre-reach
    *                 rendering, byte-identical.
@@ -251,7 +251,7 @@ export class ClusterIcons {
     }
     // FUEL-REACHABILITY verdict encoding (never color-alone): marginal = VALUE
     // gold + dashed; unreachable = dimmed + dashed; reachable/unknown = INFO
-    // solid. Focus stays SELECTION white (double-encoded: thicker ring + scale).
+    // solid. Focus stays SELECTION blue (double-encoded: thicker ring + scale).
     const color = focused ? VisualLaw.COLORS.SELECTION
       : (verdict === 'marginal' ? VisualLaw.COLORS.VALUE : VisualLaw.COLORS.INFO);
     const scale = focused ? 1.25 : 1;

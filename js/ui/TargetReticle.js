@@ -5,6 +5,10 @@
  *  - On-screen reticles (brackets/diamonds) with distance labels
  *  - Off-screen directional arrows along screen edges
  *  - Velocity vectors for selected target
+ *
+ * Session Q (plan D15/D15c): `colorLaw` is a dep
+ * (`{ reachKm, threatId, threatTier, apTargetId }` or null). Null =
+ * shipped colours (`?ladder=0` byte-identity).
  * @module ui/TargetReticle
  */
 
@@ -15,6 +19,7 @@ import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto, keplerianToCartesian, orbitToKm } from '../entities/OrbitalMechanics.js';
 import { calmBreathe, finitePulse, prefersReducedMotion } from './hudPulse.js';
+import { classify } from './hud/TargetColorLaw.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -257,6 +262,7 @@ export class TargetReticle {
     // into ONE reused instance rect (zero per-frame allocation; a later frame with
     // null data clears it — no lingering band).
     this._exclusionRect = null;
+    this._colorLaw = null;
 
     this._createCanvas();
     this._onResize();
@@ -380,6 +386,7 @@ export class TargetReticle {
     } else {
       this._exclusionRect = null;
     }
+    this._colorLaw = (data && data.colorLaw) ? data.colorLaw : null;
 
     // Decrement first-encounter callout timers
     if (this._progradeCalloutTimer > 0) this._progradeCalloutTimer -= dt;
@@ -779,8 +786,18 @@ export class TargetReticle {
       this._selectedScreenPos = { x: proj.x, y: proj.y };
     }
 
-    // Determine color based on tumble rate and type
-    const color = this._getDebrisColor(target);
+    const cl = this._colorLaw;
+    const law = cl ? classify({
+      selected: isSelected,
+      managed: cl.apTargetId != null && target.id === cl.apTargetId,
+      threatTier: (cl.threatId != null && target.id === cl.threatId) ? cl.threatTier : null,
+      hydrazine: !!(target.salvage && target.salvage.hydrazine),
+      tumbleDegS: target.tumbleRate * 180 / Math.PI,
+      massKg: target.mass,
+      distanceKm: distKm,
+      reachKm: cl.reachKm,
+    }) : null;
+    const color = law ? law.color : this._getDebrisColor(target);
 
     if (proj.visible) {
       // === ON-SCREEN RETICLE ===
@@ -793,14 +810,12 @@ export class TargetReticle {
       // in ORBITAL_VIEW. `_tmpCartVel` is the velocity object written by
       // `orbitToSceneCartesianInto` above; it carries `.x/.y/.z` km/s directly
       // (no nested `.velocity`).
-      this._drawOnScreenReticle(proj, target, color, isSelected, distKm, worldPos, playerPos, this._tmpCartVel);
+      this._drawOnScreenReticle(proj, target, color, isSelected, distKm, worldPos, playerPos, this._tmpCartVel, law);
     } else {
       // === OFF-SCREEN ARROW ===
-      const showArrow = isSelected ||
-        distKm < 50 ||
-        (target.type === 'rocketBody' && distKm < 30);
+      const showArrow = law ? law.arrow : (isSelected || distKm < 50 || (target.type === 'rocketBody' && distKm < 30));
       if (showArrow) {
-        this._drawOffScreenArrow(proj, target, color, isSelected, distKm);
+        this._drawOffScreenArrow(proj, target, color, isSelected, distKm, law);
       }
     }
   }
@@ -813,7 +828,7 @@ export class TargetReticle {
    *   parameter shape changed in Sprint 2 / PR A: callers now pass the velocity
    *   scratch object directly instead of a `{position, velocity}` wrapper.
    */
-  _drawOnScreenReticle(proj, target, color, isSelected, distKm, worldPos, playerPos, vel) {
+  _drawOnScreenReticle(proj, target, color, isSelected, distKm, worldPos, playerPos, vel, law = null) {
     const ctx = this.ctx;
     const x = proj.x;
     const y = proj.y;
@@ -852,7 +867,7 @@ export class TargetReticle {
     // Autopilot. In range → cyan lock. Derived once here and reused by both the
     // bracket and label sub-sections below to avoid drift within this method.
     const outOfRange = this._selectedInRange === false;
-    const selColor = outOfRange ? COLORS.yellow : COLORS.cyan;
+    const selColor = law ? law.color : (outOfRange ? COLORS.yellow : COLORS.cyan);
 
     // Session O (plan D16 (b), owner 2026-09-07): the score-strip exclusion
     // band — an UNSELECTED debris bracket whose BOX (the arms, `x ± half` /
@@ -870,9 +885,13 @@ export class TargetReticle {
     // numbers). Null (flag-off) → byte-identical shipped path.
     const ex = this._exclusionRect;
     if (ex != null && !isSelected) {
-      const reach = half > 30 ? half : 30;        // the dist label is centred at x, ~60 px wide at most
+      // Session Q: the caution word rides ABOVE the box (baseline y - half - 6,
+      // ~11 px glyphs, up to ~80 px wide) — it is part of the box for this test,
+      // so an amber TUMBLING never lands on the strip. Null law → the O box.
+      const wordUp = (law && law.word) ? 17 : 0;
+      const reach = Math.max(half > 30 ? half : 30, wordUp ? 40 : 0);   // the dist label is centred at x, ~60 px wide at most
       if (x + reach >= ex.left - SCORE_STRIP_PAD_PX && x - reach <= ex.right + SCORE_STRIP_PAD_PX &&
-          y + half + 22 + 4 >= ex.top - SCORE_STRIP_PAD_PX && y - half <= ex.bottom + SCORE_STRIP_PAD_PX) {
+          y + half + 22 + 4 >= ex.top - SCORE_STRIP_PAD_PX && y - half - wordUp <= ex.bottom + SCORE_STRIP_PAD_PX) {
         return;
       }
     }
@@ -903,6 +922,10 @@ export class TargetReticle {
       ctx.lineWidth = Constants.RETICLE_BRACKET_WIDTH_SELECTED || 3.0;
       ctx.shadowColor = COLORS.cyan;
       ctx.shadowBlur = 8 * (1 - this._lockLostAnimT);
+    } else if (law) {
+      ctx.globalAlpha = law.alpha;
+      ctx.strokeStyle = law.color;
+      ctx.lineWidth = law.weight === 'thick' ? (Constants.RETICLE_BRACKET_WIDTH_SELECTED || 3.0) : (Constants.RETICLE_BRACKET_WIDTH || 2.0);
     } else {
       ctx.globalAlpha = 0.8;
       ctx.strokeStyle = color;
@@ -964,11 +987,11 @@ export class TargetReticle {
     // metal preview (18 px). Baselines need ~22 px spacing per row to avoid
     // overlap; previously they were at +14/+26/+38 (12 px spacing).
     ctx.font = '20px "Courier New", monospace';
-    ctx.fillStyle = color;
+    ctx.fillStyle = law ? law.color : color;
     ctx.textAlign = 'center';
 
     if (isSelected) {
-      ctx.fillStyle = COLORS.cyan;
+      if (!law) ctx.fillStyle = COLORS.cyan;
       ctx.font = 'bold 22px "Courier New", monospace';
     }
 
@@ -987,6 +1010,13 @@ export class TargetReticle {
         ctx.fillStyle = rate > 0 ? COLORS.green : COLORS.red;
         ctx.fillText(`${rate > 0 ? 'Closing' : 'Opening'} ${absRate.toFixed(0)} m/s`, x, y + half + 46);
       }
+    }
+
+    if (law && law.word && !(isSelected && target._despinning)) {
+      ctx.font = 'bold 11px "Courier New", monospace';
+      ctx.fillStyle = law.wordColor;
+      ctx.textAlign = 'center';
+      ctx.fillText(law.word, x, y - half - 6);
     }
 
     // Phase R6: Metal loot preview — removed 2026-06-14 (declutter). The
@@ -1107,13 +1137,20 @@ export class TargetReticle {
    * Draw off-screen directional arrow.
    * @private
    */
-  _drawOffScreenArrow(proj, target, color, isSelected, distKm) {
+  _drawOffScreenArrow(proj, target, color, isSelected, distKm, law = null) {
     const ctx = this.ctx;
     const edge = this._getEdgePosition(proj.ndcX, proj.ndcY, proj.behind);
 
     ctx.save();
 
-    if (isSelected) {
+    if (law) {
+      ctx.strokeStyle = law.color;
+      ctx.fillStyle = law.color;
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = law.color;
+      ctx.shadowBlur = 6;
+      ctx.globalAlpha = 1;
+    } else if (isSelected) {
       ctx.strokeStyle = COLORS.cyan;
       ctx.fillStyle = COLORS.cyan;
       ctx.lineWidth = 2.5;
@@ -1131,7 +1168,7 @@ export class TargetReticle {
     }
 
     // Draw arrow
-    const arrowSize = isSelected ? 12 : 8;
+    const arrowSize = (law || isSelected) ? 12 : 8;
     this._drawArrowShape(edge.x, edge.y, edge.angle, arrowSize);
 
     // Distance text

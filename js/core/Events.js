@@ -722,7 +722,11 @@ export const Events = {
 
   // === NOTIFICATION ZONE (UX-2 Sprint) ===
   /** Transient pilot notification (bottom-center).
-   *  Payload: { text: string, duration?: number } */
+   *  Payload: { text: string, duration?: number, kind?: string } — `kind`
+   *  (Session O / Q): 'prompt' (default) | 'confirm' | 'notice' | 'view' |
+   *  'inspect' | 'memo' | 'alert-red' | 'alert-amber'; the HUD's engaged
+   *  toast policy drops the kinds below prompt (TOAST_DROP_WHILE_ENGAGED) and
+   *  the alert hierarchy (ui/hud/AlertHierarchy.js) levels the rest. */
   SHOW_NOTIFICATION:      'ui:showNotification',
 
   // === HUD PANE DENSITY (pane-priority ladder) ===

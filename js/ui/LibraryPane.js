@@ -1068,7 +1068,7 @@ export class LibraryPane {
     parts.push(
       '<div class="library-entry-header" style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px">' +
       '<span style="flex:1;min-width:0">' +
-      `<span class="library-title" style="display:inline-block;color:${locked ? C.INFO : C.SELECTION};font-weight:bold">${head.lead}</span>` +
+      `<span class="library-title" style="display:inline-block;color:${locked ? C.INFO : C.LABEL};font-weight:bold">${head.lead}</span>` +
       (locked ? LOCK_CHIP_HTML : '') +
       `<span class="library-sub" style="display:block;opacity:${head.hardware ? 0.8 : 0.6}">${head.sub}</span>` +
       '</span>' +

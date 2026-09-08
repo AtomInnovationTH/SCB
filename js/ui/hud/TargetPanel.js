@@ -2,24 +2,40 @@
  * TargetPanel.js — Target list sidebar with tracked targets,
  * untracked sensor contacts, and active satellites.
  * S6-A: CSS grid layout, collapsed/expanded rows, reduced caps.
+ *
+ * Session Q (plan D15): `{ colorLaw }` ctor option (HUD passes the ladder
+ * gate), `data.targetLaw` per update (null → shipped rows), `reachKm()` (the
+ * tether reach TargetPanel always computed, now shared through
+ * TargetColorLaw.reachKmFrom).
  * @module ui/hud/TargetPanel
  */
 
 import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
+import { VisualLaw } from '../../core/VisualLaw.js';
 import { computeTotalSalvageDeltaV } from '../../entities/OrbitalMechanics.js';
 import { assessNetFit, presentedWidthForApproach, getNetClassForType, renderedSpanM, renderedSpanOverflows } from '../../entities/CaptureNet.js';
 import { classifyNetTarget } from '../../systems/netRouting.js';
 import { computeToolOdds, computeBestTool, toolShortLabel, makeNetOddsLockCache } from '../../systems/ToolOdds.js';
 import { dossierSystem, appraiseSalvage } from '../../systems/DossierSystem.js';
 import { PaneChrome } from './PaneChrome.js';
+import { classify, oddsColor, reachKmFrom, THIN_ALPHA } from './TargetColorLaw.js';
+
+/** @private hex (#rrggbb) → 'r, g, b' for rgba(). */
+function hexToRgb(hex) {
+  const n = parseInt(String(hex).replace('#', ''), 16);
+  return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+}
 
 export class TargetPanel {
-  constructor(container) {
+  constructor(container, { colorLaw = false } = {}) {
     this._container = container;
     this._sortMode = 'tpi';  // FIX_PLAN §4: Default to composite TPI sort
     this._armManager = null;
+    this._colorLaw = !!colorLaw;
+    this._targetLaw = null;
+    this._reachKm = 0;
 
     /** Currently-selected target ID (public for coordinator read-access) */
     this.selectedTargetId = null;
@@ -60,6 +76,8 @@ export class TargetPanel {
   /** @private Inject CSS classes for target panel layout (once only) */
   _injectStyles() {
     if (document.getElementById('target-panel-styles')) return;
+    const sel = this._colorLaw ? VisualLaw.COLORS.SELECTION : '#00ccff';
+    const selRgb = this._colorLaw ? hexToRgb(sel) : '0, 204, 255';
     const style = document.createElement('style');
     style.id = 'target-panel-styles';
     style.textContent = `
@@ -83,9 +101,9 @@ export class TargetPanel {
             background: rgba(0, 255, 136, 0.06);
         }
         .target-row.selected {
-            border-left: 3px solid #00ccff;
-            background: rgba(0, 204, 255, ${Constants.SELECTED_ROW_ALPHA});
-            box-shadow: 0 0 8px rgba(0, 204, 255, ${Constants.SELECTED_ROW_GLOW_ALPHA}) inset;
+            border-left: 3px solid ${sel};
+            background: rgba(${selRgb}, ${Constants.SELECTED_ROW_ALPHA});
+            box-shadow: 0 0 8px rgba(${selRgb}, ${Constants.SELECTED_ROW_GLOW_ALPHA}) inset;
         }
         .target-row .type-icon {
             font-size: 12px;
@@ -117,8 +135,8 @@ export class TargetPanel {
         .target-row.selected .target-name {
             font-size: 12px;
             font-weight: bold;
-            color: #00ccff;
-            text-shadow: 0 0 6px rgba(0, 204, 255, ${Constants.SELECTED_ROW_TEXT_GLOW});
+            color: ${sel};
+            text-shadow: 0 0 6px rgba(${selRgb}, ${Constants.SELECTED_ROW_TEXT_GLOW});
         }
         .target-expanded {
             grid-column: 1 / -1;
@@ -393,6 +411,9 @@ export class TargetPanel {
     this._armManager = armManager;
   }
 
+  /** Ready tether reach, km (0 = none). */
+  reachKm() { return this._reachKm || 0; }
+
   /**
    * @private Phase 0.1 (capture-feedback overhaul): the daughter whose net
    * class judges the capture-fit badge — the player-selected arm when one is
@@ -448,7 +469,7 @@ export class TargetPanel {
       // primary signal; the verdict is untouched, item 7b).
       const nc = best === 'NET' ? getNetClassForType(arm.type) : null;
       const overflow = nc && pct >= 80 && renderedSpanOverflows(t, nc);
-      const col = overflow ? '#ffd166' : pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
+      const col = this._targetLaw ? oddsColor(pct, overflow) : overflow ? '#ffd166' : pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
       const tip = overflow ? ` — drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${nc.DIAMETER} m bag: it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)` : '';
       return `<span style="color:${col};font-size:9px;font-weight:bold;" title="Best tool odds (${arm.type})${tip}">${label} ${pct}%</span>`;
     }
@@ -456,7 +477,7 @@ export class TargetPanel {
     const netBlocker = (odds.NET && odds.NET.blocker) || (o && o.blocker) || 'NO TOOL';
     const word = netBlocker === 'WIDE' ? 'TOO WIDE'
       : netBlocker === 'HEAVY' ? 'TOO HEAVY' : netBlocker;
-    return `<span style="color:#ff7755;font-size:9px;font-weight:bold;" title="No viable tool (${arm.type})">${word}</span>`;
+    return `<span style="color:${this._targetLaw ? VisualLaw.COLORS.CAUTION : '#ff7755'};font-size:9px;font-weight:bold;" title="No viable tool (${arm.type})">${word}</span>`;
   }
 
   /**
@@ -492,7 +513,7 @@ export class TargetPanel {
       // Register item 17: same overflow qualifier as the daughter badge —
       // only ever downgrades a GREEN (pct ≥ 80) to amber, never lifts a red.
       const overflow = pct >= 80 && renderedSpanOverflows(t, CN && CN.LARGE);
-      const col = overflow ? '#ffd166' : pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
+      const col = this._targetLaw ? oddsColor(pct, overflow) : overflow ? '#ffd166' : pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
       const tip = overflow ? ` — drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${CN.LARGE.DIAMETER} m bag: it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)` : '';
       return `<span style="color:${col};font-size:9px;font-weight:bold;" title="Mother Large Net odds${tip}">${pct}% [N]</span>`;
     }
@@ -500,7 +521,7 @@ export class TargetPanel {
     const word = blocker === 'WIDE' ? 'TOO WIDE'
       : blocker === 'HEAVY' ? 'TOO HEAVY'
       : blocker === 'EMPTY' ? 'NO NETS' : blocker;
-    return `<span style="color:#ff7755;font-size:9px;font-weight:bold;" title="Mother Large Net">${word}</span>`;
+    return `<span style="color:${this._targetLaw ? VisualLaw.COLORS.CAUTION : '#ff7755'};font-size:9px;font-weight:bold;" title="Mother Large Net">${word}</span>`;
   }
 
   /**
@@ -511,6 +532,7 @@ export class TargetPanel {
    * @param {Array}  data.cachedActiveSats
    */
   update(data) {
+    this._targetLaw = (this._colorLaw && data && data.targetLaw) ? data.targetLaw : null;
     this._playerOrbit = data.playerOrbit || null;
     this._updateTargetList(data.cachedTargets, data.cachedUntracked, data.cachedActiveSats);
   }
@@ -528,19 +550,7 @@ export class TargetPanel {
     // --- TRACKED TARGETS ---
     const listEl = document.getElementById('hud-target-list');
     if (listEl) {
-      // Get max arm range from arm manager
-      let maxArmRangeKm = 0;
-      if (this._armManager) {
-        const statuses = this._armManager.getAllStatus();
-        for (const arm of statuses) {
-          if (arm.state === 'DOCKED' && arm.fuel > 5) {
-            const rangeKm = arm.type === 'weaver'
-              ? Constants.WEAVER_TETHER_LENGTH / 1000
-              : Constants.SPINNER_TETHER_LENGTH / 1000;
-            maxArmRangeKm = Math.max(maxArmRangeKm, rangeKm);
-          }
-        }
-      }
+      const maxArmRangeKm = this._reachKm = reachKmFrom(this._armManager ? this._armManager.getAllStatus() : null, { weaver: Constants.WEAVER_TETHER_LENGTH / 1000, spinner: Constants.SPINNER_TETHER_LENGTH / 1000 });
 
       let targets = [...cachedTargets];
 
@@ -564,7 +574,18 @@ export class TargetPanel {
           const selected = t.id === this.selectedTargetId;
           const typeIcon = this._getTypeIcon(t.type);
           const typeName = this._getShortTypeName(t.type);
-          const tierColor = selected ? '#00ccff' : this._getTargetColor(t);
+          const L = this._targetLaw;
+          const law = L ? classify({
+            selected,
+            managed: L.apTargetId != null && t.id === L.apTargetId,
+            threatTier: (L.threatId != null && t.id === L.threatId) ? L.threatTier : null,
+            hydrazine: !!(t.salvage && t.salvage.hydrazine),
+            tumbleDegS: (t.tumbleRate || 0) * 180 / Math.PI,
+            massKg: t.mass,
+            distanceKm: t.distanceKm,
+            reachKm: maxArmRangeKm,
+          }) : null;
+          const tierColor = law ? law.color : (selected ? '#00ccff' : this._getTargetColor(t));
           const iconClass = (t.sizeMeter && t.sizeMeter > 5) ? 'type-icon large' : 'type-icon';
 
           // Salvage indicator: a 1-char ASCII mark (the 72px name column ellipsizes;
@@ -581,7 +602,23 @@ export class TargetPanel {
           const deltaV = this._formatDeltaV(t.deltaV, dataLevel);
 
           // Range indicator
-          const range = this._getRangeIndicator(t.distanceKm, maxArmRangeKm);
+          let range;
+          if (law) {
+            const inReach = maxArmRangeKm > 0 && t.distanceKm <= maxArmRangeKm;
+            range = {
+              dot: inReach ? '\u25CF' : '\u25CB',
+              color: VisualLaw.COLORS.PLAYER,
+              opacity: inReach ? null : THIN_ALPHA,
+            };
+          } else {
+            range = this._getRangeIndicator(t.distanceKm, maxArmRangeKm);
+          }
+          const rangeStyle = range.opacity != null
+            ? `color:${range.color};opacity:${range.opacity}`
+            : `color:${range.color}`;
+          const wordTag = (law && law.word)
+            ? `<span class="target-word" style="color:${law.wordColor};font-size:8px;font-weight:bold;letter-spacing:0.08em;margin-left:4px">${law.word}</span>`
+            : '';
 
           if (selected) {
             // --- Net ΔV computation ---
@@ -632,7 +669,7 @@ export class TargetPanel {
               const seg = (tag, f, nc) => {
                 const ok = f.fit === 'OK';
                 const overflow = ok && renderedSpanOverflows(t, nc);
-                const col = ok ? (overflow ? '#ffd166' : '#00ffaa') : f.fit === 'DESPIN_FIRST' ? '#ffd166' : '#ff7755';
+                const col = this._targetLaw ? (ok ? (overflow ? VisualLaw.COLORS.CAUTION : VisualLaw.COLORS.PLAYER) : VisualLaw.COLORS.CAUTION) : (ok ? (overflow ? '#ffd166' : '#00ffaa') : f.fit === 'DESPIN_FIRST' ? '#ffd166' : '#ff7755');
                 const tip = overflow ? ` title="drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${nc.DIAMETER} m bag — it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)"` : '';
                 return `<span style="color:${col}"${tip}>${tag}${ok ? '✓' : '✗'}</span>`;
               };
@@ -654,10 +691,10 @@ export class TargetPanel {
             const fullType = this._getFullTypeName(t.type);
             return `<div class="target-row selected" data-id="${t.id}">
     <span class="${iconClass}">${typeIcon}</span>
-    <span class="target-name">${fullType}${moidBadge}</span>
+    <span class="target-name"${law ? ` style="color:${law.color}"` : ''}>${fullType}${moidBadge}${wordTag}</span>
     <span class="target-dist">${dist}</span>
     <span class="${dvClass}">${deltaV}</span>
-    <span class="range-dot" style="color:${range.color}">${range.dot}</span>
+    <span class="range-dot" style="${rangeStyle}">${range.dot}</span>
     <div class="target-expanded">
         <div class="econ-line">
             <span>\u0394V ${deltaV}</span>
@@ -675,10 +712,10 @@ export class TargetPanel {
             // ── COLLAPSED ROW (non-selected) ──
             return `<div class="target-row" data-id="${t.id}">
     <span class="${iconClass}">${typeIcon}</span>
-    <span class="target-name" style="color:${tierColor}">${typeName}${salvageIcon}${moidBadge}</span>
+    <span class="target-name" style="color:${tierColor}${law ? `;opacity:${law.alpha}` : ''}">${typeName}${salvageIcon}${moidBadge}${wordTag}</span>
     <span class="target-dist">${dist}</span>
     <span class="${dvClass}">${deltaV}</span>
-    <span class="range-dot" style="color:${range.color}">${range.dot}</span>
+    <span class="range-dot" style="${rangeStyle}">${range.dot}</span>
 </div>`;
           }
         }).join('');

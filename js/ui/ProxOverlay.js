@@ -18,7 +18,7 @@
  *     edge/mid/core candidates with risk-colored trajectories — a VisualLaw
  *     THREAT gradient (INFO cyan at risk 0 → THREAT red-orange at risk 1),
  *     double-encoded in line width; the SELECTED candidate reads SELECTION
- *     white with a heavier ring (selection is the ONLY use of white).
+ *     blue with a heavier ring (Session Q: blue = pilot-selected; white is LABEL).
  *
  * Pattern-matches the ClusterIcons/ReachOrb overlay style: one full-screen
  * canvas, pointer-events:none (selection is CYCLED by the floor controller

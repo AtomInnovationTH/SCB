@@ -5,13 +5,24 @@
  * alarm caps, label budgets, rail + reduced-motion rules. No imports, no
  * behavior. Floors and mechanics live in js/core/FloorContract.js; prose in
  * docs/ladder/00-spec.md ("Visual law"). test-FloorContract.js pins the
- * invariants (6 distinct colors, sizes 12-24 px, one curve, 450-650 ms rides,
+ * invariants (7 distinct colors, sizes 12-24 px, one curve, 450-650 ms rides,
  * label budget 7, klaxon flash <= 3 Hz).
  *
- * Law summary:
- *   - heritage green = player/systems; pale champagne = mass/value (steady);
- *     red-orange = threat (ALWAYS pulses); cyan = info; white = selection
- *     ONLY; amber = CAUTION (steady).
+ * Law summary — the colour alphabet (Session Q, plan D15; Airbus A2 borrowed
+ * as a practice, not a stencil):
+ *   - THREAT red-orange = act now (ALWAYS pulses — the one pulsing colour;
+ *     the RED conjunction threat's bracket / row / arrow, the strip's critical).
+ *   - CAUTION amber = abnormal, steady — finish your task first (the caution
+ *     word, odds 50–79, the strip's warning).
+ *   - PLAYER heritage green = normal / yours / active (in-reach thick, tracked
+ *     thin, odds ≥ 80, MEMO tokens, LEDs, COMMS nominal).
+ *   - SELECTION blue = pilot-selected (the bracket, the arrow, the TARGETS row,
+ *     the F3 / F1 / F4 focus). Blue is yours — the shipped reticle blue.
+ *   - LABEL white = labels and titles; the lock flash. Never a state.
+ *   - magenta = computer-managed — the autopilot's locked target while it
+ *     flies (TargetColorLaw.MANAGED_MAGENTA: a module constant, never a key).
+ *   - INFO cyan = teaching / information (ours). VALUE pale champagne =
+ *     precious, steady (ours).
  *   - CAUTION (Session L, plan D-J aviation display grammar): the steady amber
  *     of a denial, a "N catches away" hint, a near-limit readout — advisory,
  *     never alarm. It NEVER pulses (pulse is THREAT's channel alone) and it is
@@ -32,8 +43,9 @@ export const VisualLaw = {
     VALUE: '#ffe1a8',      // pale champagne — mass/value, STEADY (never pulses; was gold #ffd166 until Session L)
     THREAT: '#ff4422',     // red-orange — threat, ALWAYS pulses
     INFO: '#00ccff',       // cyan — informational (matches TEACHING overlay family)
-    SELECTION: '#ffffff',  // white — selection ONLY, no other use
+    SELECTION: '#4488ff',  // blue — pilot-selected (Session Q: was white #ffffff; the reticle's shipped blue)
     CAUTION: '#ffaa00',    // steady amber — denials, "N catches away", near-limits; NEVER pulses
+    LABEL: '#ffffff',      // white — labels, titles, the lock flash; never a state (Session Q)
   },
   /** Color is never the sole channel: every color-coded meaning must also be
    *  encoded in shape, size, or motion. */

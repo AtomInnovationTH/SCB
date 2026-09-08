@@ -989,8 +989,8 @@ export class RefitPane {
       const on = id === m.focused;
       parts.push(
         `<span class="refit-sub" data-sub="${id}" style="cursor:pointer;padding:1px 5px;border:1px solid ` +
-        `${on ? C.SELECTION : 'rgba(0,204,255,0.35)'};border-radius:3px;` +
-        `${on ? `color:${C.SELECTION}` : 'opacity:0.75'}">${id}</span>`,
+        `${on ? C.LABEL : 'rgba(0,204,255,0.35)'};border-radius:3px;` +
+        `${on ? `color:${C.LABEL}` : 'opacity:0.75'}">${id}</span>`,
       );
     }
     parts.push('</div>');

@@ -18,6 +18,9 @@ import { HintTicker } from './hud/HintTicker.js';
 import { NetInventoryPanel } from './hud/NetInventoryPanel.js';
 import { PaneDensity } from './hud/PaneDensity.js';
 import { PaneHelp } from './hud/PaneHelp.js';
+import { AlertArbiter, STRIP_KIND } from './hud/AlertHierarchy.js';
+import { approachLive } from './hud/TargetColorLaw.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 import { pinProgress } from './shopPin.js'; // S1 retention: pinned-upgrade progress math (pure, DOM-free)
  import { DebrisWireframe }   from './DebrisWireframe.js';
  import { DaughterWireframe } from './DaughterWireframe.js';
@@ -222,6 +225,26 @@ export class HUD {
      */
     this._toastPolicy = null;
 
+    /**
+     * Session Q (plan D12 / D12c): the ALERT HIERARCHY — ONE pure arbiter
+     * (js/ui/hud/AlertHierarchy.js) over the two bottom-centre transient sinks
+     * while the engaged policy is set: the notification zone (level 1,
+     * `prompt`) and the warning strip (levels 2–3, `alert-amber` / `alert-red`
+     * = showWarning's `warning` / `critical`). Levels, the inhibit windows
+     * (the intro flyby from the hub; the live approach from the 2 Hz targets
+     * tick), one visible at a time, a lower kind never replacing a higher one,
+     * a pre-empted lower one replaying after. Both sinks are per-frame
+     * write-on-change mirrors of `visible(now)` — the zone's timer and the
+     * strip's `_warningQueue` are the null-policy mechanisms and never run
+     * while engaged. With the policy null every shipped path is byte for byte.
+     */
+    this._alerts = new AlertArbiter();
+    this._introInhibit = false;      // the hub's setToastInhibit (LadderController.introInFlight)
+    this._approachLive = false;      // the 2 Hz poll: the selected row inside reachKm × APPROACH_FACTOR
+    this._alertZoneText = null;      // the zone's last arbiter write (null = nothing arbiter-shown)
+    this._alertStrip = null;         // the strip's last arbiter write { kind, text } (null = hidden)
+    this._alertNow = null;           // optional clock seam (tests); null = performance.now()
+
     this._build();
     this._setupEventListeners();
   }
@@ -299,9 +322,15 @@ export class HUD {
     this.strutLabels = new StrutLabels();
 
     // --- Instantiate sub-panels ---
-    this.statusPanel = new StatusPanel(this.container);
-    // TargetPanel mounts inside the right column (below wireframe)
-    this.targetPanel = new TargetPanel(this._rightColumn);
+    // Session Q (plan D12b): with the ladder on the autopilot chip becomes the
+    // MOTHER header's MEMO slot (steady tokens, the A4 box on change); off, the
+    // shipped PROPULSION chip byte for byte.
+    this.statusPanel = new StatusPanel(this.container, { memoSlot: !!(Constants.LADDER && Constants.LADDER.ENABLED) });
+    // TargetPanel mounts inside the right column (below wireframe).
+    // Session Q (plan D15): with the ladder on the panel's selected-row CSS is
+    // the law's SELECTION blue and its rows follow `data.targetLaw` (the hub
+    // passes it per frame; null off the ladder → the shipped rows).
+    this.targetPanel = new TargetPanel(this._rightColumn, { colorLaw: !!(Constants.LADDER && Constants.LADDER.ENABLED) });
     // Delegation 4 (2026-05-31) — lasso + net inventory chips, just below
     // the target list inside the right column. Subscribes to
     // LASSO_AMMO_CHANGED and NET_INVENTORY_CHANGED; emits INVENTORY_LOW
@@ -1627,6 +1656,15 @@ export class HUD {
    * @param {string} [severity='warning'] — 'warning', 'critical', 'success'
    */
   showWarning(message, severity = 'warning') {
+    // Session Q (plan D12): while engaged the strip is the arbiter's level 2 / 3
+    // sink — `critical` = alert-red (L3), anything else = alert-amber (L2);
+    // the same 3 s the queue gave. Null policy: the shipped queue, byte for byte.
+    if (this._toastPolicy === 'engaged' && this._alerts) {
+      const now = this._alertClock();
+      const kind = STRIP_KIND[severity] || 'alert-amber';
+      if (this._alerts.offer({ kind, text: message, durationMs: 3000 }, now) === 'show') this._syncAlertSinks(now);
+      return;
+    }
     this._warningQueue.push({ message, severity, timer: 3.0 });
   }
 
@@ -1641,6 +1679,18 @@ export class HUD {
    */
   invalidateCommsLayout() {
     this._commsRectBottom = null;
+  }
+
+  /**
+   * Session Q (plan D15 / D12c): the ready TETHER reach, km, as the TARGETS
+   * panel computes it every 2 Hz tick (TargetColorLaw.reachKmFrom over
+   * ArmManager.getAllStatus(): DOCKED + fuel > 5, weaver 2 km over spinner
+   * 0.5 km; 0 = no arm ready). The hub feeds it to the reticle's law so the
+   * bracket and the row agree on "in reach".
+   * @returns {number}
+   */
+  reachKm() {
+    return (this.targetPanel && typeof this.targetPanel.reachKm === 'function') ? this.targetPanel.reachKm() : 0;
   }
 
   /**
@@ -1732,6 +1782,9 @@ export class HUD {
     if (autopilotSystem && typeof autopilotSystem.getCurrentPhase === 'function') {
       this.statusPanel.setAutopilotPhase(autopilotSystem.getCurrentPhase());
     }
+    // Session Q (plan D12b): the MEMO slot's box window — write-on-change on
+    // its local timestamp (no timer); a no-op without the slot.
+    if (typeof this.statusPanel.tickMemo === 'function') this.statusPanel.tickMemo();
 
     // Update at different rates for performance
     this._updateTimers.resources += dt;
@@ -1815,7 +1868,20 @@ export class HUD {
           cachedUntracked: this._cachedUntracked,
           cachedActiveSats: this._cachedActiveSats,
           playerOrbit: player ? player.getOrbitalElements() : null,
+          targetLaw: data.targetLaw || null,   // Session Q (plan D15): the hub's law inputs (null off the ladder)
         });
+
+        // Session Q (plan D12c): the LIVE-APPROACH inhibit window rides this
+        // tick — no new physics read: the selected row's distanceKm against the
+        // panel's tether reach × APPROACH_FACTOR (TargetColorLaw.approachLive).
+        // Engaged only (the null policy never inhibits anything).
+        if (this._toastPolicy === 'engaged' && this._alerts) {
+          const selId = this.targetPanel.selectedTargetId;
+          const sel = (selId != null && Array.isArray(this._cachedTargets)) ? this._cachedTargets.find((t) => t.id === selId) : null;
+          this._approachLive = !!sel && approachLive({ distanceKm: sel.distanceKm, reachKm: this.targetPanel.reachKm() });
+        } else {
+          this._approachLive = false;
+        }
       }
     }
 
@@ -1861,6 +1927,11 @@ export class HUD {
       this.strutLabels.update(cameraSystem.camera, dt);
     }
 
+    // Session Q (plan D12 / D12c): the alert hierarchy's frame — the inhibit
+    // state (intro OR live approach), ONE promotion, the two sinks mirrored
+    // write-on-change. Only while engaged; the shipped queue below is inert then.
+    this._tickAlerts();
+
     // Warning display
     this._updateWarnings(dt);
 
@@ -1880,6 +1951,8 @@ export class HUD {
 
   /** @private Update warning display */
   _updateWarnings(dt) {
+    // Session Q (plan D12): the arbiter drives the strip while engaged.
+    if (this._toastPolicy === 'engaged' && this._alerts) return;
     if (this._warningQueue.length === 0) {
       this.panels.warnings.style.display = 'none';
       return;
@@ -2126,6 +2199,28 @@ export class HUD {
     const next = (mode === 'engaged') ? 'engaged' : null;
     if (next === this._toastPolicy) return;
     this._toastPolicy = next;
+    // Session Q (plan D12): the arbiter owns both sinks while engaged. On the
+    // way IN a pending shipped toast timer and the shipped strip queue are
+    // dropped (the sinks start clean — the engage is the intro dive, which
+    // inhibits everything below red anyway); on the way OUT the arbiter is
+    // cleared and whatever it painted is hidden, so the shipped mechanisms
+    // resume on empty sinks. Duck-typed: a HUD without the arbiter is Session O.
+    if (!this._alerts) return;
+    if (next === 'engaged') {
+      if (this._notifTimer) { timerManager.clear(this._notifTimer); this._notifTimer = null; }
+      if (this._notificationZone) this._notificationZone.style.opacity = '0';
+      if (Array.isArray(this._warningQueue)) this._warningQueue.length = 0;
+      if (this.panels && this.panels.warnings) this.panels.warnings.style.display = 'none';
+      this._alertZoneText = null;
+      this._alertStrip = null;
+    } else {
+      this._alerts.clear();
+      this._approachLive = false;
+      if (this._alertZoneText !== null && this._notificationZone) this._notificationZone.style.opacity = '0';
+      if (this._alertStrip !== null && this.panels && this.panels.warnings) this.panels.warnings.style.display = 'none';
+      this._alertZoneText = null;
+      this._alertStrip = null;
+    }
   }
 
   /**
@@ -2133,6 +2228,95 @@ export class HUD {
    * @returns {'engaged'|null}
    */
   toastPolicy() { return this._toastPolicy; }
+
+  /**
+   * Session Q (plan D12c): the hub's inhibit input — the intro flyby
+   * (`LadderController.introInFlight()`), written per frame write-on-change.
+   * OR-ed with the live-approach poll into the arbiter every update.
+   * @param {boolean} on
+   */
+  setToastInhibit(on) {
+    const next = !!on;
+    if (next === this._introInhibit) return;
+    this._introInhibit = next;
+  }
+
+  /**
+   * Session Q: the alert hierarchy's state for tests and the `?shot` probe.
+   * @returns {{policy:('engaged'|null), inhibited:boolean, intro:boolean, approach:boolean, visible:(object|null), held:Array}}
+   */
+  alertState() {
+    const now = this._alertClock();
+    return {
+      policy: this._toastPolicy,
+      inhibited: !!(this._alerts && this._alerts.inhibited()),
+      intro: !!this._introInhibit,
+      approach: !!this._approachLive,
+      visible: this._alerts ? this._alerts.visible(now) : null,
+      held: this._alerts ? this._alerts.held() : [],
+    };
+  }
+
+  /**
+   * @private Session Q (plan D12 / D12c): the alert hierarchy's per-frame step —
+   * the inhibit state (intro OR live approach), ONE promotion, the two sinks
+   * mirrored write-on-change. Only while engaged (duck-typed on the arbiter).
+   * @param {number} [nowMs] the clock (tests); default the seam / performance.now()
+   */
+  _tickAlerts(nowMs) {
+    if (this._toastPolicy !== 'engaged' || !this._alerts) return;
+    const now = (typeof nowMs === 'number' && Number.isFinite(nowMs)) ? nowMs : this._alertClock();
+    this._alerts.setInhibited(!!(this._introInhibit || this._approachLive));
+    this._alerts.next(now);
+    this._syncAlertSinks(now);
+  }
+
+  /** @private The arbiter's clock: the optional seam, else performance.now(). */
+  _alertClock() {
+    if (typeof this._alertNow === 'function') return this._alertNow();
+    return (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
+  }
+
+  /**
+   * @private Session Q (plan D12): mirror the arbiter's visible item into the two
+   * sinks — the zone for level 1, the strip for levels 2–3 — write-on-change.
+   * The strip's colours on this path are the law's THREAT / CAUTION.
+   */
+  _syncAlertSinks(now) {
+    const v = this._alerts.visible(now);
+    const zoneText = (v && v.level === 1) ? v.text : null;
+    if (zoneText !== this._alertZoneText) {
+      this._alertZoneText = zoneText;
+      const z = this._notificationZone;
+      if (z) {
+        if (zoneText !== null) { z.textContent = zoneText; z.style.opacity = '1'; }
+        else z.style.opacity = '0';
+      }
+    }
+    const stripKind = (v && v.level >= 2) ? v.kind : null;
+    const cur = this._alertStrip;
+    const curKind = cur ? cur.kind : null;
+    const curText = cur ? cur.text : null;
+    if (stripKind !== curKind || (stripKind && v.text !== curText)) {
+      this._alertStrip = stripKind ? { kind: stripKind, text: v.text } : null;
+      const panel = this.panels && this.panels.warnings;
+      if (panel) {
+        if (stripKind) {
+          const red = stripKind === 'alert-red';
+          panel.style.display = 'block';
+          panel.style.borderColor = red ? 'rgba(255,68,34,0.5)' : 'rgba(255,170,0,0.3)';
+          const textEl = (typeof document !== 'undefined') ? document.getElementById('hud-warning-text') : null;
+          if (textEl) {
+            textEl.textContent = v.text;
+            textEl.style.color = red ? VisualLaw.COLORS.THREAT : VisualLaw.COLORS.CAUTION;
+            textEl.style.opacity = '1';
+          }
+        } else {
+          panel.style.display = 'none';
+        }
+      }
+    }
+  }
 
   // ==========================================================================
   // NOTIFICATION ZONE (UX-2 #12)
@@ -2171,6 +2355,16 @@ export class HUD {
     // muted so pure scenery stays quiet. The ladder's own notify() passes
     // force:true so its restore/pure-scenery toasts still appear.
     if (!opts.force && this._transientPopupsQuiet) return;
+    // Session Q (plan D12 / D12c): while engaged the ARBITER owns the zone —
+    // levels, the inhibit windows, one at a time (drop table → density quiet →
+    // arbiter, in that order). 'show' paints through the sink mirror; 'hold'
+    // parks it for `next()`; the shipped timer path never runs. Duck-typed on
+    // the arbiter so a fabricated Session O HUD keeps the O behaviour.
+    if (this._toastPolicy === 'engaged' && this._alerts) {
+      const now = this._alertClock();
+      if (this._alerts.offer({ kind, text, durationMs, force: !!opts.force }, now) === 'show') this._syncAlertSinks(now);
+      return;
+    }
     this._notificationZone.textContent = text;
     this._notificationZone.style.opacity = '1';
     // PR 5 / P2.8: TimerManager-tracked notification timer (debounced).

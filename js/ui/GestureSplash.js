@@ -29,7 +29,7 @@
  * Laws (the retired TouchMapPane header's, Session O amendment): DOM
  * fonts through var(--font-mono) only; tabular numerals; uppercase small
  * labels, 0.08 em letter-spacing; muted white/green from VisualLaw
- * (SELECTION muted by opacity for the labels, PLAYER for the hairline); NO
+ * (LABEL muted by opacity for the labels, PLAYER for the hairline); NO
  * pictographic glyph (the arrow is the allowed Arrows block, written as an
  * escape); no floor NAME anywhere; no layout reads; no innerHTML; no
  * timers / rAF (timing from the nowMs passed to update); no window /
@@ -231,7 +231,7 @@ export class GestureSplash {
         font-variant-numeric: tabular-nums;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: ${VisualLaw.COLORS.SELECTION};
+        color: ${VisualLaw.COLORS.LABEL};
         opacity: 1;
         user-select: none;
         -webkit-user-select: none;
@@ -255,7 +255,7 @@ export class GestureSplash {
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
-        opacity: 0.8;   /* "muted white": SELECTION muted by opacity — never the law's full white */
+        opacity: 0.8;   /* "muted white": LABEL muted by opacity — never the law's full white */
       }
       /* The hairline wears the law's PLAYER; the text stays the muted white (no
        * other colour: a MEMO has no state to colour). */

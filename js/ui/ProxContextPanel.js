@@ -31,8 +31,8 @@
  * Color law (VisualLaw + the TransferWindows precedent): this is a PLANNING
  * surface, not an alarm — THREAT red must pulse, so risk is carried by the
  * STEADY ProxOverlay INFO→THREAT gradient (the F5 trajectory colors) and the
- * WORD/number always double-encode it. SELECTION white marks only the
- * selected candidate. Never color-alone.
+ * WORD/number always double-encode it. SELECTION blue marks only the
+ * selected candidate (Session Q: blue = pilot-selected). Never color-alone.
  *
  * @module ui/ProxContextPanel
  */
