@@ -421,7 +421,7 @@ export class ShopScreen {
 
         <div style="text-align:center;margin-top:1.5rem;">
           <button id="shop-deploy-btn" style="
-            font-family:'Courier New',monospace; font-size:1rem; color:#00ff88;
+            font-family:var(--font-mono); font-size:1rem; color:#00ff88;
             background: rgba(0,255,136,0.1); border: 2px solid rgba(0,255,136,0.4);
             padding: 10px 40px; cursor: pointer; border-radius: 4px;
             letter-spacing: 0.15em; transition: all 0.3s;
@@ -953,7 +953,7 @@ export class ShopScreen {
             ? `<span style="color:rgba(0,255,136,0.5);font-size:0.75rem;">✓ OWNED</span>`
             : `<div style="font-size:0.8rem;color:${costColor};${costStrike}">${upgrade.cost.toLocaleString()} cr</div>
                <button class="shop-buy-btn" data-id="${upgrade.id}" style="
-                 font-family:'Courier New',monospace; font-size:0.7rem; color:${available ? '#00ff88' : 'rgba(0,255,136,0.3)'};
+                 font-family:var(--font-mono); font-size:0.7rem; color:${available ? '#00ff88' : 'rgba(0,255,136,0.3)'};
                  background: ${available ? 'rgba(0,255,136,0.15)' : 'transparent'};
                  border: 1px solid ${available ? 'rgba(0,255,136,0.4)' : 'rgba(0,255,136,0.15)'};
                  padding: 3px 12px; cursor: ${available ? 'pointer' : 'default'}; border-radius: 2px;
@@ -1063,7 +1063,7 @@ export class ShopScreen {
       statusHtml = `
         <div style="font-size:0.8rem;color:${costColor};${costStrike}">${tier.cost.toLocaleString()} cr</div>
         <button class="shop-tier-buy-btn" data-tier-type="${tierType}" data-tier-index="${tierIndex}" style="
-          font-family:'Courier New',monospace; font-size:0.7rem; color:${available ? '#00ff88' : 'rgba(0,255,136,0.3)'};
+          font-family:var(--font-mono); font-size:0.7rem; color:${available ? '#00ff88' : 'rgba(0,255,136,0.3)'};
           background: ${available ? 'rgba(0,255,136,0.15)' : 'transparent'};
           border: 1px solid ${available ? 'rgba(0,255,136,0.4)' : 'rgba(0,255,136,0.15)'};
           padding: 3px 12px; cursor: ${available ? 'pointer' : 'default'}; border-radius: 2px;
@@ -1169,7 +1169,7 @@ export class ShopScreen {
         statusHtml = `
           <div style="font-size:0.8rem;color:${costColor};">${tier.costCredits.toLocaleString()} cr</div>
           <button class="shop-arm-tier-btn" data-target-tier="${tier.tierKey}" style="
-            font-family:'Courier New',monospace; font-size:0.7rem; color:${canAfford ? '#00ff88' : 'rgba(0,255,136,0.3)'};
+            font-family:var(--font-mono); font-size:0.7rem; color:${canAfford ? '#00ff88' : 'rgba(0,255,136,0.3)'};
             background: ${canAfford ? 'rgba(0,255,136,0.15)' : 'transparent'};
             border: 1px solid ${canAfford ? 'rgba(0,255,136,0.4)' : 'rgba(0,255,136,0.15)'};
             padding: 3px 12px; cursor: ${canAfford ? 'pointer' : 'default'}; border-radius: 2px;

@@ -15,6 +15,7 @@ import { GameStates } from '../core/GameState.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { gmstDeg } from '../scene/Ephemeris.js';
 import { prefersReducedMotion } from './hudPulse.js';
+import { mono } from '../core/Typeface.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -688,7 +689,7 @@ export class NavSphere {
     // ---- Geolocation readout (LAT / LON / ALT) below sphere (ST-5.4) ----
     if (this._geoCache) {
       const geo = this._geoCache;
-      ctx.font = '10px "Courier New", monospace';
+      ctx.font = mono(10);
       ctx.fillStyle = C.geo;
       ctx.textAlign = 'center';
       const latStr = `${geo.lat >= 0 ? '+' : ''}${geo.lat.toFixed(1)}\u00B0`;
@@ -704,7 +705,7 @@ export class NavSphere {
       const selArm = armManager.arms[armManager.selectedArmIndex];
       if (selArm && typeof selArm.isHighRecoilZone === 'function' && selArm.isHighRecoilZone()) {
         const warnY = cy - R - 8;
-        ctx.font = 'bold 10px "Courier New", monospace';
+        ctx.font = mono(10, 'bold');
         ctx.fillStyle = '#ffcc00';
         ctx.textAlign = 'center';
         // Calm-HUD: steady amber — a standing state, not an event; the WARN word
@@ -731,7 +732,7 @@ export class NavSphere {
    */
   _drawKeyBadge(ctx, rightX, topY) {
     ctx.save();
-    ctx.font = 'bold 10px "Courier New", monospace';
+    ctx.font = mono(10, 'bold');
     ctx.fillStyle = 'rgba(0,255,136,0.35)';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
@@ -776,7 +777,7 @@ export class NavSphere {
     };
 
     ctx.save();
-    ctx.font = '8px monospace';
+    ctx.font = mono(8);
 
     // Focused cluster bearing — gold ring + name (cluster icon grammar).
     if (ov.clusterPos) {
@@ -849,7 +850,7 @@ export class NavSphere {
     const altStr = geo ? `${Math.round(geo.alt)} km` : '--';
 
     ctx.save();
-    ctx.font = '11px "Courier New", monospace';
+    ctx.font = mono(11);
     ctx.fillStyle = C.geo;
     ctx.textAlign = 'right';
     ctx.fillText(`NAV  LAT ${latStr}  LON ${lonStr}  ALT ${altStr}`, x, y);
@@ -986,7 +987,7 @@ export class NavSphere {
     ctx.fillStyle = z > 0 ? colFront : colBack;
     ctx.fill();
     if (label) {
-      ctx.font = '10px sans-serif';
+      ctx.font = mono(10);
       ctx.fillStyle = 'rgba(100,180,255,0.8)';
       ctx.textAlign = 'center';
       ctx.fillText(label, sx, sy + 3);
@@ -1004,7 +1005,7 @@ export class NavSphere {
     const rings = NS.RANGE_RINGS_KM;  // [0.2, 0.5, 2, 5, 10, 25, 50]
 
     ctx.save();
-    ctx.font = '8px monospace';
+    ctx.font = mono(8);
     ctx.textAlign = 'left';
 
     for (const km of rings) {
@@ -1117,7 +1118,7 @@ export class NavSphere {
     if (sel && distKm !== undefined) {
       ctx.save();
       ctx.globalAlpha = alpha;  // steady opacity, not pulsing
-      ctx.font = '9px monospace';
+      ctx.font = mono(9);
       ctx.fillStyle = C.selected;
       ctx.textAlign = 'left';
       const label = distKm < 1 ? `${(distKm * 1000).toFixed(0)}m` : `${distKm.toFixed(1)}km`;
@@ -1449,7 +1450,7 @@ export class NavSphere {
         ctx.stroke();
 
         // Label
-        ctx.font = '8px monospace';
+        ctx.font = mono(8);
         ctx.fillStyle = '#ff6666';
         ctx.globalAlpha = 0.7;
         const label = arm.id ? arm.id.replace(/^(.).*-/, '$1') : '';
@@ -1482,7 +1483,7 @@ export class NavSphere {
       ctx.fill();
 
       // Short label (e.g. "w1", "s2")
-      ctx.font = '8px monospace';
+      ctx.font = mono(8);
       ctx.fillStyle = color;
       ctx.globalAlpha = 0.6;
       const label = arm.id ? arm.id.replace(/^(.).*-/, '$1') : '';
@@ -1597,7 +1598,7 @@ export class NavSphere {
       ctx.restore();
 
       // Arm label
-      ctx.font = '8px monospace';
+      ctx.font = mono(8);
       ctx.fillStyle = '#ffaa00';
       ctx.globalAlpha = 0.7;
       const label = arm.id ? arm.id.replace(/^(.).*-/, '$1') : '';

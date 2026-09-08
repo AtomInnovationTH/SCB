@@ -5,7 +5,7 @@
  * Layout: full-screen overlay → centered panel → responsive grid of group
  * cards, each card a labelled list of (key chip → description) rows.
  * Mirrors the visual language of CodexViewerUI (dark panel, cyan accents,
- * Courier New) so it feels native to the HUD.
+ * the house mono token) so it feels native to the HUD.
  *
  * @module ui/HotkeyOverlay
  */

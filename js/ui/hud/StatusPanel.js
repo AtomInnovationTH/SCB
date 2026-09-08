@@ -1445,7 +1445,7 @@ export class StatusPanel {
 
   /**
    * @private Inject CSS for the FLEET pane's tap buttons (Session J, D-I).
-   * Styled like the pane's existing chrome: small monospace caps, cyan (the
+   * Styled like the pane's existing chrome: small mono caps, cyan (the)
    * selected-row colour) hairline border, quiet until hovered / pressed.
    * `.fleet-row` rows show a pointer only where a tap does something.
    */

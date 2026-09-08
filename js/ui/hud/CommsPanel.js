@@ -212,8 +212,8 @@ export class CommsPanel {
       color: '#81c784',
     });
     this._contractEl.innerHTML = `
-      <span style="font-size:9px;letter-spacing:1px;opacity:0.7;text-transform:uppercase;">Anchor contract</span>
-      <span><b id="hud-anchor-mass">0</b><span style="opacity:0.5;">/</span><b id="hud-anchor-target">10,000</b><span style="opacity:0.7;"> kg</span></span>
+      <span style="font-size:10px;letter-spacing:0.08em;opacity:0.7;text-transform:uppercase;">Anchor contract</span>
+      <span><b id="hud-anchor-mass" style="font-variant-numeric:tabular-nums;">0</b><span style="opacity:0.5;">/</span><b id="hud-anchor-target" style="font-variant-numeric:tabular-nums;">10,000</b><span style="opacity:0.7;"> kg</span></span>
       <span style="flex:1;height:3px;background:rgba(129,199,132,0.2);border-radius:2px;overflow:hidden;margin-right:22px;">
         <span id="hud-contract-fill" style="display:block;width:0%;height:100%;background:#81c784;transition:width 0.4s ease;"></span>
       </span>
@@ -489,7 +489,7 @@ export class CommsPanel {
       // Latest message: full-strength, subtle highlight band. Older: dimmed.
       const textOpacity = isLatest ? '1' : '0.6';
       const rowBg = isLatest ? 'rgba(255,255,255,0.06)' : 'transparent';
-      const weight = (isLatest || isCriticalPriority(msg.priority)) ? '600' : '400';
+      const weight = (isLatest || isCriticalPriority(msg.priority)) ? '700' : '400';
 
       const sourceText = msg.source ? `${escapeHtml(msg.source)}: ` : '';
 
@@ -507,7 +507,7 @@ export class CommsPanel {
       });
 
       return `<div style="margin:2px 0;padding:3px 6px;border-left:${COMMS.STRIPE_WIDTH_PX}px solid ${color};background:${rowBg};border-radius:2px;">
-        <span style="color:${color};font-weight:600;font-size:13px;">${sourceText}</span><span style="color:${color};opacity:${textOpacity};font-weight:${weight};font-size:13px;">${body}</span>
+        <span style="color:${color};font-weight:700;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;">${sourceText}</span><span style="color:${color};opacity:${textOpacity};font-weight:${weight};font-size:13px;">${body}</span>
       </div>`;
     }).join('');
 

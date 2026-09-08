@@ -64,6 +64,7 @@
 import { Constants } from '../core/Constants.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
+import { mono, fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
 
 /** The SDA DOWNLINK (id 5) contract row (chart framing + labelBudget + lenses) — by id (Session H). */
 const FLOOR = FloorContract.byId(5);
@@ -399,9 +400,14 @@ export class SdaChart {
   /**
    * @param {object} [deps]
    * @param {function} [deps.now] - monotonic ms clock (tests); default performance.now
+   * @param {import('../core/Typeface.js').FontEpoch} [deps.fontEpoch] - Session R
+   *   (plan §14.2): the typeface epoch; one term of the frame signature, so a
+   *   chart painted before the B612 faces settled repaints ONCE when they do
+   *   (the paint gate is the existing refresh point). Tests inject their own.
    */
   constructor(deps = {}) {
     this._now = deps.now || _nowMs;
+    this._fontEpoch = deps.fontEpoch || defaultFontEpoch;
     this._canvas = null;
     this._ctx2d = null;
     this._built = false;
@@ -459,7 +465,9 @@ export class SdaChart {
   /**
    * Frame signature: every input that changes the rasterized pixels except
    * the THREAT pulse phase (which is time-gated instead). Pure + static.
-   * @param {object} m - {lens, wPx, hPx, bands, outOfBand, timeline, riskFraction}
+   * Session R: `fontEpoch` (the typeface epoch, an integer) is one term — a
+   * chart painted on the fallback face repaints once when the faces settle.
+   * @param {object} m - {lens, wPx, hPx, bands, outOfBand, timeline, riskFraction, fontEpoch}
    * @returns {string}
    */
   static frameSig(m) {
@@ -471,7 +479,8 @@ export class SdaChart {
       ? m.timeline.projection.map((p) => p.tracked).join(',')
       : '';
     const risk = Math.round((m.riskFraction || 0) * 100);
-    return `${m.lens}|${m.wPx}x${m.hPx}|${bands}|${oob}|${proj}|r${risk}`;
+    const epoch = (typeof m.fontEpoch === 'number') ? m.fontEpoch : 0;
+    return `${m.lens}|${m.wPx}x${m.hPx}|${bands}|${oob}|${proj}|r${risk}|e${epoch}`;
   }
 
   // ── DOM lifecycle (all no-op headless; ReachOrb overlay pattern) ────────────
@@ -583,6 +592,7 @@ export class SdaChart {
     const sig = SdaChart.frameSig({
       lens, wPx, hPx, bands,
       outOfBand: m.outOfBand, timeline, riskFraction: m.riskFraction,
+      fontEpoch: this._fontEpoch.value(),
     });
     const now = this._now();
     const wouldPaint = SdaChart.shouldPaint(sig, this._lastSig, lens, now, this._lastPaintMs);
@@ -656,7 +666,7 @@ export class SdaChart {
     g.setLineDash([]);
 
     // Named labels (budget-ranked upstream, ≤ 7).
-    g.font = '10px "Courier New", monospace';
+    g.font = mono(10);
     g.textAlign = 'left';
     for (const l of labels) {
       if (l.id === 'kessler-strip') continue; // painted with the strip below
@@ -726,7 +736,7 @@ export class SdaChart {
 
     // Strip title (a budgeted world label) + endpoint numerals (chrome).
     const title = labels.find((l) => l.id === 'kessler-strip');
-    g.font = '10px "Courier New", monospace';
+    g.font = mono(10);
     if (title) {
       g.textAlign = 'left';
       g.fillStyle = this._rgba(lens === 'THREAT' ? VisualLaw.COLORS.THREAT : VisualLaw.COLORS.INFO, 0.95);

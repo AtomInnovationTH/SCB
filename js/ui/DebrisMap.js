@@ -35,6 +35,7 @@ import {
   detectWindowCrossing,
   coOrbitalReadout,
 } from '../entities/LaunchWindow.js';
+import { mono } from '../core/Typeface.js';
 
 const DM = Constants.DEBRIS_MAP;
 
@@ -476,18 +477,18 @@ export class DebrisMap {
   _drawLeftColumn(ctx, W, H) {
     // Title bar
     ctx.fillStyle = '#ffaa00';
-    ctx.font = 'bold 14px "Courier New", monospace';
+    ctx.font = mono(14, 'bold');
     ctx.fillText('▸ DEBRIS MAP', 16, 22);
 
     // Cluster count
     ctx.fillStyle = '#667788';
-    ctx.font = '11px "Courier New", monospace';
+    ctx.font = mono(11);
     ctx.fillText(`${this._rankedClusters.length} ranked clusters`, 170, 22);
 
     // Handle empty state
     if (this._rankedClusters.length === 0) {
       ctx.fillStyle = '#556677';
-      ctx.font = '13px "Courier New", monospace';
+      ctx.font = mono(13);
       ctx.fillText('No debris clusters detected', 40, H / 2 - 20);
       ctx.fillText('Waiting for sensor data…', 50, H / 2);
       return;
@@ -513,18 +514,18 @@ export class DebrisMap {
 
       // Rank number
       ctx.fillStyle = selected ? '#ffcc44' : '#667788';
-      ctx.font = 'bold 16px "Courier New", monospace';
+      ctx.font = mono(16, 'bold');
       ctx.fillText(`${i + 1}.`, 14, y + 20);
 
       // Cluster name
       ctx.fillStyle = selected ? '#ffffff' : '#aabbcc';
-      ctx.font = '12px "Courier New", monospace';
+      ctx.font = mono(12);
       const name = c.name.length > 30 ? c.name.slice(0, 28) + '…' : c.name;
       ctx.fillText(name, 40, y + 20);
 
       // Stats line 1: count / mass / variety
       ctx.fillStyle = '#88aacc';
-      ctx.font = '11px "Courier New", monospace';
+      ctx.font = mono(11);
       ctx.fillText(
         `${c.count} obj  ${(c.totalMassKg / 1000).toFixed(1)}t  ×${c.varietyBonus} types`,
         40, y + 37,
@@ -533,7 +534,7 @@ export class DebrisMap {
       // Stats line 2: ΔV / risk / score
       const dvColor = c.dvMs < 50 ? '#44ff88' : c.dvMs < 200 ? '#ffcc44' : '#ff6644';
       ctx.fillStyle = dvColor;
-      ctx.font = '11px "Courier New", monospace';
+      ctx.font = mono(11);
       ctx.fillText(`ΔV ${c.dvMs.toFixed(0)} m/s`, 40, y + 54);
 
       const riskColor = c.conjRisk < 2 ? '#44ff88' : c.conjRisk < 5 ? '#ffcc44' : '#ff4444';
@@ -541,12 +542,12 @@ export class DebrisMap {
       ctx.fillText(`risk ${c.conjRisk.toFixed(1)}`, 160, y + 54);
 
       ctx.fillStyle = '#ffaa00';
-      ctx.font = 'bold 11px "Courier New", monospace';
+      ctx.font = mono(11, 'bold');
       ctx.fillText(`SCORE ${c.score.toFixed(1)}`, 260, y + 54);
 
       // Stats line 3: altitude range
       ctx.fillStyle = '#556677';
-      ctx.font = '10px "Courier New", monospace';
+      ctx.font = mono(10);
       ctx.fillText(
         `ALT ${c.altRange.min}–${c.altRange.max} km  INC ${c.incCenter.toFixed(1)}°`,
         40, y + 68,
@@ -590,18 +591,18 @@ export class DebrisMap {
 
     const committed = this._committedCluster && this._committedCluster.id === cluster.id;
     ctx.fillStyle = '#ffaa00';
-    ctx.font = 'bold 11px "Courier New", monospace';
+    ctx.font = mono(11, 'bold');
     ctx.fillText('▸ TRANSFER WINDOW', 14, y + 16);
     if (committed) {
       ctx.fillStyle = '#44ff88';
-      ctx.font = '10px "Courier New", monospace';
+      ctx.font = mono(10);
       ctx.fillText('● COMMITTED', 150, y + 16);
     }
 
     const win = this._selectedWindow;
     if (!win) {
       ctx.fillStyle = '#667788';
-      ctx.font = '10px "Courier New", monospace';
+      ctx.font = mono(10);
       ctx.fillText('timing unavailable. No orbit fix', 14, y + 32);
       return;
     }
@@ -611,14 +612,14 @@ export class DebrisMap {
     // advisory and hide the T-minus / arrival clocks (keep ΔV for context).
     const coOrbital = coOrbitalReadout(win);
     if (coOrbital) {
-      ctx.font = '11px "Courier New", monospace';
+      ctx.font = mono(11);
       ctx.fillStyle = '#88aacc';
       ctx.fillText('Depart', 14, y + 34);
       ctx.fillStyle = '#44ff88';
-      ctx.font = 'bold 12px "Courier New", monospace';
+      ctx.font = mono(12, 'bold');
       ctx.fillText(coOrbital.departText, 78, y + 34);
 
-      ctx.font = '11px "Courier New", monospace';
+      ctx.font = mono(11);
       ctx.fillStyle = '#88aacc';
       ctx.fillText('\u0394V', 14, y + 50);
       const dvColorCo = win.dvTotal < 100 ? '#44ff88' : win.dvTotal < 400 ? '#ffcc44' : '#ff6644';
@@ -626,7 +627,7 @@ export class DebrisMap {
       ctx.fillText(`${win.dvTotal.toFixed(0)} m/s`, 44, y + 50);
 
       ctx.fillStyle = '#556677';
-      ctx.font = '9px "Courier New", monospace';
+      ctx.font = mono(9);
       ctx.fillText(coOrbital.periodText, 14, y + 64);
       return;
     }
@@ -635,14 +636,14 @@ export class DebrisMap {
     const open = win.departIn <= 0.5;
     const departColor = open ? '#44ff88' : imminent ? '#33ddff' : '#ffcc44';
 
-    ctx.font = '11px "Courier New", monospace';
+    ctx.font = mono(11);
     ctx.fillStyle = '#88aacc';
     ctx.fillText('Depart', 14, y + 34);
     ctx.fillStyle = departColor;
-    ctx.font = open ? 'bold 12px "Courier New", monospace' : '12px "Courier New", monospace';
+    ctx.font = open ? mono(12, 'bold') : mono(12);
     ctx.fillText(open ? 'WINDOW OPEN. BURN NOW' : `T-${this._fmtClock(win.departIn)}`, 78, y + 34);
 
-    ctx.font = '11px "Courier New", monospace';
+    ctx.font = mono(11);
     ctx.fillStyle = '#88aacc';
     ctx.fillText('Arrive', 14, y + 50);
     ctx.fillStyle = '#aabbcc';
@@ -658,7 +659,7 @@ export class DebrisMap {
     // windows are handled by the launch-anytime early return above, so here the
     // synodic is always a finite, meaningful sub-7-day period.)
     ctx.fillStyle = '#556677';
-    ctx.font = '9px "Courier New", monospace';
+    ctx.font = mono(9);
     const periodTxt = `next window every ${this._fmtClock(win.synodic)}. Space is periodic`;
     ctx.fillText(periodTxt, 14, y + 64);
   }
@@ -713,7 +714,7 @@ export class DebrisMap {
 
     // Title
     ctx.fillStyle = '#ffaa00';
-    ctx.font = 'bold 11px "Courier New", monospace';
+    ctx.font = mono(11, 'bold');
     ctx.fillText('ORBITAL SURVEY', x + 10, 22);
 
     // Draw Earth center
@@ -727,7 +728,7 @@ export class DebrisMap {
     ctx.stroke();
 
     ctx.fillStyle = '#4488aa';
-    ctx.font = '9px "Courier New", monospace';
+    ctx.font = mono(9);
     ctx.textAlign = 'center';
     ctx.fillText('EARTH', cx, cy + 3);
     ctx.textAlign = 'left';
@@ -748,7 +749,7 @@ export class DebrisMap {
 
       // Band label
       ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-      ctx.font = '8px "Courier New", monospace';
+      ctx.font = mono(8);
       ctx.textAlign = 'right';
       ctx.fillText(band.label, cx - r - 3, cy - 2);
       ctx.textAlign = 'left';
@@ -795,7 +796,7 @@ export class DebrisMap {
       const ly = cy + (r + 12) * Math.sin(labelAngle);
 
       ctx.fillStyle = selected ? '#ffcc44' : '#aabbcc';
-      ctx.font = selected ? 'bold 10px "Courier New", monospace' : '9px "Courier New", monospace';
+      ctx.font = selected ? mono(10, 'bold') : mono(9);
       ctx.textAlign = 'center';
       ctx.fillText(`${i + 1}`, lx, ly + 3);
       ctx.textAlign = 'left';
@@ -830,7 +831,7 @@ export class DebrisMap {
         ctx.fill();
 
         ctx.fillStyle = '#00ff88';
-        ctx.font = '8px "Courier New", monospace';
+        ctx.font = mono(8);
         ctx.textAlign = 'center';
         ctx.fillText('YOU', px, py - 8);
         ctx.textAlign = 'left';
@@ -843,7 +844,7 @@ export class DebrisMap {
     // Legend
     const legendY = H - 55;
     ctx.fillStyle = '#556677';
-    ctx.font = '9px "Courier New", monospace';
+    ctx.font = mono(9);
     ctx.fillText('● low risk', x + 10, legendY);
     ctx.fillText('● med risk', x + 10, legendY + 12);
     ctx.fillText('● high risk', x + 10, legendY + 24);
@@ -865,7 +866,7 @@ export class DebrisMap {
     ctx.fillRect(0, H - 28, W, 28);
 
     ctx.fillStyle = '#667788';
-    ctx.font = '10px "Courier New", monospace';
+    ctx.font = mono(10);
     ctx.fillText('[`] close   [,/.] select   [Shift+A] engage autopilot   [Esc] close', 16, footerY);
   }
 

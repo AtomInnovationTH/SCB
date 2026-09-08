@@ -36,6 +36,7 @@
 import { Constants } from '../core/Constants.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { envelope } from '../entities/ReachabilityModel.js';
+import { mono } from '../core/Typeface.js';
 
 /** Envelope recompute throttle (ms): ~2 Hz. Budget ΔV changes bypass it. */
 export const ENVELOPE_RECOMPUTE_MS = 500;
@@ -238,7 +239,7 @@ export class ReachOrb {
     this._strokeRing(g, max, 'rgba(0, 204, 255, 0.6)');
 
     if (caption) {
-      g.font = '10px "Courier New", monospace';
+      g.font = mono(10);
       g.textAlign = 'center';
       g.fillStyle = VisualLaw.COLORS.INFO;
       g.globalAlpha = 0.85;

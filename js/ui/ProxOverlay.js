@@ -37,6 +37,7 @@
 
 import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
+import { mono } from '../core/Typeface.js';
 
 /** Value-marker radius band (px): radius = MIN + (MAX−MIN)·√(min(1, pts/REF)).
  *  √ so mid-value targets stay distinguishable; REF saturates the band. */
@@ -350,7 +351,7 @@ export class ProxOverlay {
     const h = (typeof window !== 'undefined') ? window.innerHeight : canvas.height;
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     g.clearRect(0, 0, w, h);
-    g.font = '10px "Courier New", monospace';
+    g.font = mono(10);
 
     // Density shells first (context, never occludes the actionables).
     for (const s of f.shells) {

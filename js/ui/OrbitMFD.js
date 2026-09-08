@@ -24,6 +24,7 @@ import {
   totalDeltaV,
 } from '../entities/OrbitalMechanics.js';
 import { audioSystem } from '../systems/AudioSystem.js';
+import { mono } from '../core/Typeface.js';
 
 const TWO_PI = Math.PI * 2;
 const DEG = 180 / Math.PI;
@@ -455,7 +456,7 @@ export class OrbitMFD {
   _drawHeader() {
     const ctx = this._ctx;
 
-    ctx.font = '11px "Courier New", monospace';
+    ctx.font = mono(11);
     ctx.textBaseline = 'top';
 
     // Title
@@ -505,7 +506,7 @@ export class OrbitMFD {
       // Label every other ring (200, 600, 1000) at 12 o'clock
       if (i % 2 === 0) {
         ctx.fillStyle = 'rgba(0, 255, 136, 0.3)';
-        ctx.font = '8px "Courier New", monospace';
+        ctx.font = mono(8);
         ctx.textAlign = 'center';
         ctx.textBaseline = 'bottom';
         ctx.fillText(`${alt}`, this._centerX, this._centerY - rPx - 1);
@@ -662,7 +663,7 @@ export class OrbitMFD {
     ctx.lineTo(this._size - 8, y0 - 5);
     ctx.stroke();
 
-    ctx.font = '10px "Courier New", monospace';
+    ctx.font = mono(10);
     ctx.textBaseline = 'top';
 
     const pAltKm = sceneToKm(p.semiMajorAxis) - Constants.EARTH_RADIUS_KM;
@@ -864,7 +865,7 @@ export class OrbitMFD {
 
       // Waypoint number
       ctx.fillStyle = '#ff9800';
-      ctx.font = 'bold 9px monospace';
+      ctx.font = mono(9, 'bold');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(`${i + 1}`, pos.x, pos.y);
@@ -874,7 +875,7 @@ export class OrbitMFD {
       const dvText = wp.dvToReach >= dvThreshold
         ? `${(wp.dvToReach * 1000).toFixed(0)}m/s`
         : '<10m/s';
-      ctx.font = '8px monospace';
+      ctx.font = mono(8);
       ctx.fillStyle = '#ffcc80';
       ctx.textBaseline = 'bottom';
       ctx.fillText(dvText, pos.x, pos.y - 10);
@@ -909,7 +910,7 @@ export class OrbitMFD {
     // Total ΔV summary at bottom of MFD
     ctx.setLineDash([]);
     ctx.fillStyle = '#ff9800';
-    ctx.font = '10px monospace';
+    ctx.font = mono(10);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'bottom';
     const nWp = this._routePlan.length;
@@ -1058,7 +1059,7 @@ export class OrbitMFD {
     }
 
     // Altitude range labels
-    ctx.font = '7px "Courier New", monospace';
+    ctx.font = mono(7);
     ctx.fillStyle = 'rgba(0, 255, 136, 0.4)';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
@@ -1107,14 +1108,14 @@ export class OrbitMFD {
       const ly = this._centerY - mR * Math.sin(mA);
       const dvMs = Math.round(this._sweepTarget.dv * 1000);
 
-      ctx.font = '9px "Courier New", monospace';
+      ctx.font = mono(9);
       ctx.fillStyle = '#ffcc00';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       ctx.fillText(`\u0394V: ${dvMs} m/s`, lx, ly);
 
       // Target altitude label below ΔV
-      ctx.font = '8px "Courier New", monospace';
+      ctx.font = mono(8);
       ctx.fillStyle = 'rgba(255, 200, 0, 0.7)';
       ctx.fillText(`\u2192 ${Math.round(tAlt)}km`, lx, ly + 11);
     }
@@ -1136,7 +1137,7 @@ export class OrbitMFD {
     const e = orbit.eccentricity;
 
     ctx.save();
-    ctx.font = '9px "Courier New", monospace';
+    ctx.font = mono(9);
     ctx.textBaseline = 'middle';
 
     if (e > 0.01) {
@@ -1269,7 +1270,7 @@ export class OrbitMFD {
     const midPt = this._orbitToScreen(transferOrbit, midAngle);
 
     ctx.save();
-    ctx.font = '9px "Courier New", monospace';
+    ctx.font = mono(9);
     ctx.textBaseline = 'bottom';
 
     // ΔV₁ at departure
@@ -1285,7 +1286,7 @@ export class OrbitMFD {
 
     // "Hohmann transfer" arc label — dim white
     ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-    ctx.font = '8px "Courier New", monospace';
+    ctx.font = mono(8);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('Hohmann transfer', midPt.x, midPt.y);
@@ -1309,7 +1310,7 @@ export class OrbitMFD {
     const pt = this._orbitToScreen(targetOrbit, Math.PI / 4);
 
     ctx.save();
-    ctx.font = '9px "Courier New", monospace';
+    ctx.font = mono(9);
     ctx.textBaseline = 'top';
     ctx.textAlign = 'left';
 

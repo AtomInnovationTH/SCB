@@ -19,6 +19,7 @@ import {
 import { dossierSystem } from '../systems/DossierSystem.js';
 import { toolShortLabel } from '../systems/ToolOdds.js';
 import { calmBreathe, finitePulse } from './hudPulse.js';
+import { FONT_MONO } from '../core/Typeface.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -47,7 +48,7 @@ const C = {
   bg:         'rgba(0, 0, 0, 0.6)',
 };
 
-const FONT = "'Courier New', monospace";
+const FONT = FONT_MONO;
 
 // ============================================================================
 // DOCKING RETICLE

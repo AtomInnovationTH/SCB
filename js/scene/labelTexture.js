@@ -14,6 +14,7 @@
  */
 
 import * as THREE from 'three';
+import { mono, ui, MONO_ADVANCE_EM } from '../core/Typeface.js';
 
 /**
  * Build a billboard text-label texture.
@@ -84,13 +85,17 @@ export function createLabelTexture(text, { color = '#ffffff', fontPx = 112, pill
 // MULTI-LINE INSPECTION CARD
 // ---------------------------------------------------------------------------
 
-// Round 4: blueprint / engineering-HUD type. Single mono stack used for BOTH
-// drawing and measurement so the wrap budget can never drift from the draw.
-// Exported so the HUD breadcrumb shares the same stack (no drift).
-export const MONO = `'IBM Plex Mono', 'SF Mono', Menlo, Consolas, monospace`;
-const CARD_TITLE_FONT = `600 36px ${MONO}`;
-const CARD_ROW_FONT   = `400 28px ${MONO}`;
-const CARD_GLYPH_FONT = `600 40px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+// Round 4: blueprint / engineering-HUD type. ONE face for BOTH drawing and
+// measurement so the wrap budget can never drift from the draw. Session R
+// (plan D17 / §14.2): the cards ride the house mono token through
+// Typeface.mono() (B612 Mono 700 / 400 — the family ships those two weights;
+// the former IBM Plex Mono stack was never @font-face'd and rendered Menlo on
+// the iPad). The HUD breadcrumb reads the CSS token; nothing imports a family
+// from here any more. The codex glyph rides the UI token (the ▸ falls through
+// to the next family if B612 lacks it, as before).
+const CARD_TITLE_FONT = mono(36, 700);
+const CARD_ROW_FONT   = mono(28);
+const CARD_GLYPH_FONT = ui(40, 700);
 
 const CARD_W = 640;          // logical canvas width (px, pre-DPR) — widened from
                              // 512 (+25%) so plain-English titles (~22 chars) fit
@@ -130,8 +135,10 @@ export function wrapHint(text, maxLines = 2) {
   const maxW = _contentWidth();
 
   if (!probe) {
-    // Fallback: mono advance ≈ 0.6 em → ~17 px/char at 28 px.
-    const perLine = Math.max(1, Math.floor(maxW / 17));
+    // Fallback (no 2D context — headless): the face's advance, B612 Mono
+    // MONO_ADVANCE_EM at the 28 px row size (~18.2 px/char; Session R — the
+    // old 17 assumed a 0.6 em advance).
+    const perLine = Math.max(1, Math.floor(maxW / (28 * MONO_ADVANCE_EM)));
     const out = [];
     let cur = '';
     for (const word of words) {
@@ -175,11 +182,17 @@ export function wrapHint(text, maxLines = 2) {
 }
 
 // Shared 2d context for text measurement only (no canvas retained per call).
+// Session R: the font is (re)set on EVERY call, not once at creation — a 2D
+// context resolves its face when `.font` is assigned, so a probe created before
+// the B612 faces settled would keep measuring the fallback for the session and
+// the wrap budget would drift from the draw. wrapHint runs per card build, not
+// per frame, so the assignment costs nothing that matters.
 let _probe = null;
 function _measureCtx() {
-  if (_probe) return _probe;
-  const c = (typeof document !== 'undefined') ? document.createElement('canvas') : null;
-  _probe = c ? c.getContext('2d') : null;
+  if (!_probe) {
+    const c = (typeof document !== 'undefined') ? document.createElement('canvas') : null;
+    _probe = c ? c.getContext('2d') : null;
+  }
   if (_probe) _probe.font = CARD_ROW_FONT;
   return _probe;
 }

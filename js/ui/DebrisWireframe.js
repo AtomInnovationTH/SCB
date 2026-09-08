@@ -19,6 +19,7 @@ import { DebrisTextureAtlas, getUVOffsetForType, getBaseColorForType, getEmissiv
 import { FlagDecalSystem, getUVOffsetForCountry, hasFlag } from './FlagDecalSystem.js';
 import { dossierSystem, DOSSIER_TIERS, appraiseSalvage } from '../systems/DossierSystem.js';
 import { audioSystem } from '../systems/AudioSystem.js';
+import { mono } from '../core/Typeface.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -1726,13 +1727,13 @@ export class DebrisWireframe {
     ctx.fillRect(0, 0, W, H);
 
     // --- Header ---
-    ctx.font = "bold 13px 'Courier New', monospace";
+    ctx.font = mono(13, 'bold');
     ctx.textAlign = 'center';
     ctx.fillStyle = HEADER_COLOR;
 
     if (this._showingADR) {
       ctx.fillText('YOUR SATELLITE', WIRE_CX, 15);
-      ctx.font = "12px 'Courier New', monospace";
+      ctx.font = mono(12);
       ctx.fillStyle = TYPE_COLOR;
       ctx.fillText('V3 OCTOPUS ADR', WIRE_CX, 27);
     } else {
@@ -1741,7 +1742,7 @@ export class DebrisWireframe {
       if (tier === DOSSIER_TIERS.UNSCANNED) {
         ctx.fillText('TARGET DOSSIER', WIRE_CX, 15);
         this._renderStaticNoise(ctx);
-        ctx.font = "bold 11px 'Courier New', monospace";
+        ctx.font = mono(11, 'bold');
         ctx.fillStyle = DIM_COLOR;
         ctx.textAlign = 'center';
         ctx.fillText('UNRESOLVED \u2014 scan [S]', WIRE_CX, 150);
@@ -1749,7 +1750,7 @@ export class DebrisWireframe {
       }
       ctx.fillText('TARGET DOSSIER [Z]', WIRE_CX, 15);
       const typeLabel = TYPE_LABELS[this._target.type] || this._target.type;
-      ctx.font = "12px 'Courier New', monospace";
+      ctx.font = mono(12);
       ctx.fillStyle = TYPE_COLOR;
       ctx.fillText(typeLabel, WIRE_CX, 27);
     }
@@ -1757,7 +1758,7 @@ export class DebrisWireframe {
     // Daughter-origin badge (expanded mode from an arm pilot only)
     if (this._expandedMode && this._fromArmIndex != null) {
       ctx.textAlign = 'right';
-      ctx.font = "9px 'Courier New', monospace";
+      ctx.font = mono(9);
       ctx.fillStyle = 'rgba(255,200,60,0.90)';
       ctx.fillText(
         `from Daughter ${this._fromArmIndex + 1}`,
@@ -1873,15 +1874,15 @@ export class DebrisWireframe {
       if (this._zoneIndex >= 0 && this._shape) {
         const zone = this._shape.zones[this._zoneIndex];
         const { color } = this._zoneAssessments[this._zoneIndex];
-        ctx.font = "bold 11px 'Courier New', monospace";
+        ctx.font = mono(11, 'bold');
         ctx.fillStyle = color;
         ctx.fillText(`[${zone.name.toUpperCase()}]`, WIRE_CX, infoY);
-        ctx.font = "10px 'Courier New', monospace";
+        ctx.font = mono(10);
         ctx.fillStyle = DIM_COLOR;
         ctx.fillText(`${zone.massPercent}% of satellite`, WIRE_CX, infoY + 12);
       } else {
         // Show arm status summary
-        ctx.font = "10px 'Courier New', monospace";
+        ctx.font = mono(10);
         ctx.fillStyle = DIM_COLOR;
         const arms = this._armStatuses;
         if (arms.length > 0) {
@@ -1928,11 +1929,11 @@ export class DebrisWireframe {
       const { risk, color } = this._zoneAssessments[this._zoneIndex];
       const rec = getRecommendation(zone.name, this._target);
 
-      ctx.font = "bold 11px 'Courier New', monospace";
+      ctx.font = mono(11, 'bold');
       ctx.fillStyle = color;
       ctx.fillText(`[${zone.name.toUpperCase()}]`, WIRE_CX, infoY);
 
-      ctx.font = "10px 'Courier New', monospace";
+      ctx.font = mono(10);
       ctx.fillStyle = color;
       ctx.fillText(`Risk: ${risk}  Mass: ${zone.massPercent}%`, WIRE_CX, infoY + 12);
 
@@ -1945,7 +1946,7 @@ export class DebrisWireframe {
     } else {
       // General target info (compact)
       const t = this._target;
-      ctx.font = "10px 'Courier New', monospace";
+      ctx.font = mono(10);
       ctx.fillStyle = DIM_COLOR;
 
       const label = TYPE_LABELS[t.type] || t.type;
@@ -1987,7 +1988,7 @@ export class DebrisWireframe {
       // High-tumble warning
       if ((t.tumbleRate || 0) * DEG > 60) {
         ctx.fillStyle = ZONE_COLORS.RED;
-        ctx.font = "bold 10px 'Courier New', monospace";
+        ctx.font = mono(10, 'bold');
         ctx.fillText('WARN HIGH TUMBLE', WIRE_CX, rowY);
         rowY += 12;
       }
@@ -1998,7 +1999,7 @@ export class DebrisWireframe {
       // the displayed number can't drift from what's actually rolled.
       if (t.brittleness != null) {
         const b = Math.max(0, Math.min(1, t.brittleness));
-        ctx.font = "10px 'Courier New', monospace";
+        ctx.font = mono(10);
         ctx.fillStyle = b >= 0.7 ? ZONE_COLORS.RED : b >= 0.4 ? ZONE_COLORS.YELLOW : ZONE_COLORS.GREEN;
         ctx.fillText(`Brittleness: ${b.toFixed(2)}`, WIRE_CX, rowY);
         rowY += 12;
@@ -2042,7 +2043,7 @@ export class DebrisWireframe {
   _renderScannedInfo(ctx, infoY) {
     const t = this._target;
     const D = Constants.DOSSIER || {};
-    ctx.font = "10px 'Courier New', monospace";
+    ctx.font = mono(10);
     ctx.fillStyle = DIM_COLOR;
     ctx.textAlign = 'center';
 
@@ -2059,10 +2060,10 @@ export class DebrisWireframe {
       const { rows } = appraiseSalvage(t.salvage);
       const n = Math.max(1, Math.min(3, rows.length || 1));
       ctx.fillStyle = '#ffcc00';
-      ctx.font = "bold 10px 'Courier New', monospace";
+      ctx.font = mono(10, 'bold');
       ctx.fillText('METALS \u2014 UNKNOWN', WIRE_CX, y);
       y += 12;
-      ctx.font = "10px 'Courier New', monospace";
+      ctx.font = mono(10);
       ctx.fillStyle = 'rgba(255, 204, 0, 0.4)';
       for (let i = 0; i < n; i++) {
         ctx.fillText('\u2593\u2593\u2593\u2593\u2593  \u2593\u2593 kg   \u00B7\u20B9\u2593\u2593\u2593', WIRE_CX, y);
@@ -2084,11 +2085,11 @@ export class DebrisWireframe {
       ctx.beginPath();
       ctx.arc(rx, ry, 10, -Math.PI / 2, -Math.PI / 2 + TWO_PI * progress);
       ctx.stroke();
-      ctx.font = "bold 10px 'Courier New', monospace";
+      ctx.font = mono(10, 'bold');
       ctx.fillStyle = '#00ffaa';
       ctx.fillText(`SURVEYING ${Math.round(progress * 100)}%`, WIRE_CX, y + 2);
     } else {
-      ctx.font = "10px 'Courier New', monospace";
+      ctx.font = mono(10);
       ctx.fillStyle = DIM_COLOR;
       ctx.fillText(`close to ${D.DETAIL_SCAN_RANGE_M || 50}m to survey`, WIRE_CX, y + 2);
     }
@@ -2121,12 +2122,12 @@ export class DebrisWireframe {
     }
     this._lastRowsShown = rowsShown;
 
-    ctx.font = "bold 10px 'Courier New', monospace";
+    ctx.font = mono(10, 'bold');
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffcc00';
     ctx.fillText('SALVAGE MANIFEST', WIRE_CX, y);
     y += 12;
-    ctx.font = "10px 'Courier New', monospace";
+    ctx.font = mono(10);
     const maxRows = Math.min(3, rows.length);
     for (let i = 0; i < maxRows && i < rowsShown; i++) {
       ctx.fillStyle = '#00ccff';
@@ -2134,7 +2135,7 @@ export class DebrisWireframe {
       y += 11;
     }
     if (rowsShown > maxRows) {
-      ctx.font = "bold 10px 'Courier New', monospace";
+      ctx.font = mono(10, 'bold');
       ctx.fillStyle = '#00ffaa';
       const extra = rows.length > maxRows ? ` (+${rows.length - maxRows} more)` : '';
       ctx.fillText(`EST. VALUE \u20B9${total}${extra}`, WIRE_CX, y);
@@ -2156,7 +2157,7 @@ export class DebrisWireframe {
     // Determine what to show based on scanner upgrade
     const hasScanner = this._hasSalvageScanner;
 
-    ctx.font = "bold 10px 'Courier New', monospace";
+    ctx.font = mono(10, 'bold');
     ctx.textAlign = 'center';
 
     // Separator line
@@ -2166,7 +2167,7 @@ export class DebrisWireframe {
     ctx.fillStyle = '#ffcc00';
     ctx.fillText('SALVAGE DETECTED', WIRE_CX, y + 12);
 
-    ctx.font = "10px 'Courier New', monospace";
+    ctx.font = mono(10);
     let infoY = y + 24;
 
     if (hasScanner) {

@@ -70,7 +70,7 @@ export const PART_TO_SUBSYSTEM = Object.freeze({
 });
 
 /**
- * Literal copy of the MotherCallouts part ids per system (the 34-rec table),
+ * Literal copy of the MotherCallouts part ids per system (the 35-rec table),
  * so partsForSubsystem() stays pure without a js/ui import. PINNED against
  * the live MOTHER_CALLOUT_SYSTEMS table in test-refitIndex.js — edit the
  * callout table and this copy together or the suite fails loudly.
@@ -79,7 +79,7 @@ export const PART_TO_SUBSYSTEM = Object.freeze({
 export const PARTS_BY_SYSTEM = Object.freeze({
   POWER: Object.freeze(['rosa_wings', 'body_cells', 'array_roll']),
   PROPULSION: Object.freeze(['feep', 'rcs', 'mli', 'aft_deck']),
-  PAYLOAD: Object.freeze(['despin', 'net_launcher']),
+  PAYLOAD: Object.freeze(['despin', 'net_launcher', 'berth_collar']),
   SENSORS: Object.freeze([
     'gimbal', 'eo_cam', 'ir_cam', 'lidar', 'star_trackers',
     'fore_bulkhead', 'sensor_deck', 'sun_sensors', 'nav_lights',

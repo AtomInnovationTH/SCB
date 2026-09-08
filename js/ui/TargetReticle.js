@@ -20,6 +20,7 @@ import { GameStates } from '../core/GameState.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto, keplerianToCartesian, orbitToKm } from '../entities/OrbitalMechanics.js';
 import { calmBreathe, finitePulse, prefersReducedMotion } from './hudPulse.js';
 import { classify } from './hud/TargetColorLaw.js';
+import { mono } from '../core/Typeface.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -986,13 +987,13 @@ export class TargetReticle {
     // sequence below reticle is: distance (20 px) → closure rate (18 px) →
     // metal preview (18 px). Baselines need ~22 px spacing per row to avoid
     // overlap; previously they were at +14/+26/+38 (12 px spacing).
-    ctx.font = '20px "Courier New", monospace';
+    ctx.font = mono(20);
     ctx.fillStyle = law ? law.color : color;
     ctx.textAlign = 'center';
 
     if (isSelected) {
       if (!law) ctx.fillStyle = COLORS.cyan;
-      ctx.font = 'bold 22px "Courier New", monospace';
+      ctx.font = mono(22, 'bold');
     }
 
     const distText = distKm < 1 ? `${(distKm * 1000).toFixed(0)}m` : `${distKm.toFixed(1)}km`;
@@ -1005,7 +1006,7 @@ export class TargetReticle {
       const rate = target._closureRate;
       const absRate = Math.abs(rate);
       if (absRate >= 0.5) {
-        ctx.font = '18px "Courier New", monospace';
+        ctx.font = mono(18);
         ctx.textAlign = 'center';
         ctx.fillStyle = rate > 0 ? COLORS.green : COLORS.red;
         ctx.fillText(`${rate > 0 ? 'Closing' : 'Opening'} ${absRate.toFixed(0)} m/s`, x, y + half + 46);
@@ -1013,7 +1014,7 @@ export class TargetReticle {
     }
 
     if (law && law.word && !(isSelected && target._despinning)) {
-      ctx.font = 'bold 11px "Courier New", monospace';
+      ctx.font = mono(11, 'bold');
       ctx.fillStyle = law.wordColor;
       ctx.textAlign = 'center';
       ctx.fillText(law.word, x, y - half - 6);
@@ -1033,7 +1034,7 @@ export class TargetReticle {
         const a = Math.max(0, Math.min(1, this._outOfRangeFlashT / 0.5));
         ctx.save();
         ctx.globalAlpha *= a;
-        ctx.font = 'bold 16px "Courier New", monospace';
+        ctx.font = mono(16, 'bold');
         ctx.fillStyle = COLORS.yellow;
         ctx.fillText('OUT OF RANGE', x, y + half + 70);
         ctx.restore();
@@ -1045,7 +1046,7 @@ export class TargetReticle {
       // the raw figures live in the target dossier (TargetPanel) for those who
       // want them. A newcomer can't act on "34.2°/s 1.5m".
       if (target._despinning) {
-        ctx.font = 'bold 11px "Courier New", monospace';
+        ctx.font = mono(11, 'bold');
         ctx.fillStyle = selColor;
         ctx.fillText('\u25BC DE-SPIN', x, y - half - 6);
       }
@@ -1072,7 +1073,7 @@ export class TargetReticle {
           const shownFor = sinceLock - NUDGE_DELAY_S;
           ctx.save();
           ctx.globalAlpha = calmBreathe(this._time, shownFor, { base: 0.8 });
-          ctx.font = 'bold 18px "Courier New", monospace';
+          ctx.font = mono(18, 'bold');
           ctx.fillStyle = COLORS.cyan;
           ctx.fillText('\u25B8 N', x, y + half + 70);
           ctx.restore();
@@ -1104,11 +1105,11 @@ export class TargetReticle {
 
     const label = `\u25C9 AP \u2192 ${this._apTargetName}`;
     ctx.save();
-    ctx.font = 'bold 12px "Courier New", monospace';
+    ctx.font = mono(12, 'bold');
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     // measureText is absent from the headless canvas mock — fall back to a
-    // monospace advance estimate so draw code stays test-safe.
+    // fixed-pitch advance estimate so draw code stays test-safe.
     const textW = typeof ctx.measureText === 'function'
       ? ctx.measureText(label).width
       : label.length * 7.2;
@@ -1173,7 +1174,7 @@ export class TargetReticle {
 
     // Distance text
     ctx.shadowBlur = 0;
-    ctx.font = isSelected ? 'bold 11px "Courier New", monospace' : '9px "Courier New", monospace';
+    ctx.font = isSelected ? mono(11, 'bold') : mono(9);
     ctx.textAlign = 'center';
     const distText = distKm < 1 ? `${(distKm * 1000).toFixed(0)}m` : `${distKm.toFixed(1)}km`;
 
@@ -1239,7 +1240,7 @@ export class TargetReticle {
     ctx.stroke();
 
     // Name and distance
-    ctx.font = '9px "Courier New", monospace';
+    ctx.font = mono(9);
     ctx.fillStyle = COLORS.white;
     ctx.textAlign = 'center';
     ctx.fillText(sat.name, x, y - size - 6);
@@ -1252,7 +1253,7 @@ export class TargetReticle {
       // WARN word + red already encode severity. (Was a hard on/off square wave.)
       ctx.globalAlpha = 0.9;
       ctx.fillStyle = COLORS.red;
-      ctx.font = 'bold 11px "Courier New", monospace';
+      ctx.font = mono(11, 'bold');
       ctx.fillText('WARN DO NOT APPROACH', x, y + size + 24);
     }
 
@@ -1283,7 +1284,7 @@ export class TargetReticle {
     this._drawArrowShape(edge.x, edge.y, edge.angle, urgent ? 12 : 8);
 
     ctx.shadowBlur = 0;
-    ctx.font = urgent ? 'bold 10px "Courier New", monospace' : '9px "Courier New", monospace';
+    ctx.font = urgent ? mono(10, 'bold') : mono(9);
     ctx.textAlign = 'center';
 
     const textOffsetX = Math.cos(edge.angle + Math.PI) * 22;
@@ -1382,13 +1383,13 @@ export class TargetReticle {
         ? this._progradeCalloutTimer / 2
         : 1.0;
       const calloutText = 'Prograde. Direction of travel';
-      ctx.font = 'bold 13px monospace';
+      ctx.font = mono(13, 'bold');
       this._drawCalloutPill(x + 22, y - 6, calloutText, COLORS.green, calloutAlpha);
       ctx.globalAlpha = calloutAlpha;
       ctx.fillStyle = COLORS.green;
       ctx.fillText(calloutText, x + 22, y + 4);
     } else {
-      ctx.font = '10px "Courier New", monospace';
+      ctx.font = mono(10);
       ctx.fillStyle = COLORS.green;
 
       // Velocity readout (velMag already in km/s from OrbitalMechanics)
@@ -1404,7 +1405,7 @@ export class TargetReticle {
       if (this._selectedTargetDistKm > 0) {
         const cr = this._selectedClosureRate; // km/s, positive = closing
         if (Math.abs(cr) > 0.001) {
-          ctx.font = '9px "Courier New", monospace';
+          ctx.font = mono(9);
           ctx.globalAlpha = 0.8;
           const label = cr > 0 ? 'Closing' : 'Opening';
           ctx.fillStyle = cr > 0 ? COLORS.green : COLORS.red;
@@ -1422,7 +1423,7 @@ export class TargetReticle {
             const etaStr = etaSec > 120
               ? `${(etaSec / 60).toFixed(1)}m`
               : `${etaSec.toFixed(0)}s`;
-            ctx.font = '9px "Courier New", monospace';
+            ctx.font = mono(9);
             ctx.fillStyle = COLORS.yellow;
             ctx.globalAlpha = 0.7;
             ctx.fillText(`ETA: ${etaStr}`, x + 22, lineY);
@@ -1433,7 +1434,7 @@ export class TargetReticle {
 
       // Phase R6: Periapsis hint — Oberth effect teaching moment
       if (this._nearPeriapsis) {
-        ctx.font = '9px "Courier New", monospace';
+        ctx.font = mono(9);
         ctx.fillStyle = COLORS.yellow;
         ctx.globalAlpha = 0.5;
         ctx.fillText('Periapsis. Efficient burn', x + 22, lineY);
@@ -1514,19 +1515,19 @@ export class TargetReticle {
         ? this._retroCalloutTimer / 2
         : 1.0;
       const calloutText = 'Retrograde. Brake direction';
-      ctx.font = 'bold 13px monospace';
+      ctx.font = mono(13, 'bold');
       this._drawCalloutPill(x + 22, y - 6, calloutText, '#ff8844', calloutAlpha);
       ctx.globalAlpha = calloutAlpha;
       ctx.fillStyle = '#ff8844';
       ctx.fillText(calloutText, x + 22, y + 4);
     } else {
-      ctx.font = '10px "Courier New", monospace';
+      ctx.font = mono(10);
       ctx.fillStyle = '#ff8844';
       ctx.fillText('Retrograde', x + 22, y + 4);
 
       // Phase 1: ΔV-to-match readout when a target is selected
       if (relativeVelocity > 0) {
-        ctx.font = '10px "Courier New", monospace';
+        ctx.font = mono(10);
         ctx.fillStyle = '#ff8844';
         const relVelMs = relativeVelocity * 1000; // km/s → m/s
         const matchText = relVelMs < 1000
@@ -1540,7 +1541,7 @@ export class TargetReticle {
           const postBurn = this._cachedPlayerDeltaV - costMs;
           const pbColor = postBurn > 200 ? COLORS.green
             : postBurn > 50 ? COLORS.yellow : COLORS.red;
-          ctx.font = '9px "Courier New", monospace';
+          ctx.font = mono(9);
           ctx.fillStyle = pbColor;
           ctx.globalAlpha = 0.8;
           ctx.fillText(`Post-burn ΔV: ${Math.round(postBurn)} m/s`, x + 22, y + 30);

@@ -508,9 +508,9 @@ export class PlayerSatellite extends THREE.Group {
     // mliFoilTexture.js header for the bake pipeline and the v2.2→v5 height-field
     // architecture story (fixed per-UV gain, no normalization, no blur).
     const bodyFoil = getMLIFoilMaps({ repeat: [1, 1] });
-    this._matBody = new THREE.MeshStandardMaterial({
-      color: 0x5c5c64, metalness: 0.7, roughness: 0.55,
-    });
+    // (_matBody itself is assigned in _buildMainBus as a clone of _matGoldMLI —
+    // Mother audit T12 dropped the grey placeholder material that used to be
+    // created here and discarded there.)
     this._matGoldMLI = new THREE.MeshStandardMaterial({
       // MLI thermal blanket — LEMON-gold aluminized-Kapton foil. Real MLI is a
       // continuous DRAPED metallized sheet: large smooth mirror panels with
@@ -619,9 +619,12 @@ export class PlayerSatellite extends THREE.Group {
     //        In its place: real hardware for a real mechanic — the Large Net launcher.
 
     // --- 7b. LARGE NET LAUNCHER (2026-07-23): fore-end launcher hardware for
-    //         the Mother's whale-class capture net ([N] fire). A single central
-    //         block on the long axis (so a shot doesn't yaw the ship), with a
-    //         2×2 magazine window whose caps show loaded/spent nets.
+    //         the Mother's whale-class capture net ([N] fire). Since S13(e) a
+    //         PAIR of pods at (±0.45, 0, 1.30) flanking the berth collar (the
+    //         single central block on the long axis left with the centreline
+    //         redesign), each with a 2×2 magazine window whose caps show
+    //         loaded/spent nets; Mother audit T2 seats each pod on a
+    //         NetPodSaddle_* block on the cap face.
     this._buildNetPods();
 
     // --- 7c. NOSE BERTHING COLLAR (cargo-continuity S13(c), B is doctrine —
@@ -656,11 +659,15 @@ export class PlayerSatellite extends THREE.Group {
    * deck, docking ring) are NOT listed — only sub-pixel-at-distance detail.
    */
   _collectDetailMeshes() {
+    // Mother audit T9: FEEP_Boss_/FEEP_GridDisc_ are now uniquely named per
+    // bell (FEEP_Boss_0..3) so they match by PREFIX like the rest; CClip_ (the
+    // C-clips beside PClip_) never culled before — added.
     const CULL_PREFIXES = [
-      'PyroPin_', 'PClip_', 'CableHarness_', 'SpringHousing_', 'SpringCoil_',
-      'GuideRail_', 'RibRing_', 'FEEPInner_', 'MountBolt_', 'Bushing_',
+      'PyroPin_', 'PClip_', 'CClip_', 'CableHarness_', 'SpringHousing_', 'SpringCoil_',
+      'GuideRail_', 'RibRing_', 'FEEPInner_', 'FEEP_Boss_', 'FEEP_GridDisc_',
+      'MountBolt_', 'Bushing_',
     ];
-    const CULL_EXACT = new Set(['AccentRing', 'FEEP_Boss', 'FEEP_GridDisc']);
+    const CULL_EXACT = new Set(['AccentRing']);
     this._detailMeshes.length = 0;
     this.traverse((o) => {
       if (!(o.isMesh || o.isLine) || !o.name) return;   // isLine covers CableHarness lines
@@ -907,7 +914,10 @@ export class PlayerSatellite extends THREE.Group {
     //
     // REAL-BUS INTEGRATION: body-mounted cells on real spacecraft are FLAT rigid
     // sub-panels tiled onto the structure's facets — not a curved film. The
-    // barrel is a 16-gon, so we mount one flat PV sub-panel per facet (22.5°),
+    // barrel body is a 64-segment cylinder (Barrel_ConfigG above); the PV
+    // tiling keeps its own 16 facets (`barrelFacets`, one flat 10 mm-deep
+    // sub-panel per 22.5° facet, back face 1.004R, whose side walls cover the
+    // corner air over the curved hull — Task 1 F1),
     // tangent to the barrel ON TOP of the MLI blanket, but ONLY on facets that
     // fall in the clear sectors between the stowed struts ([60,120,240,300]°)
     // and clear of the ROSA wing roots at 0°/180°. Each panel carries the dark
@@ -928,7 +938,7 @@ export class PlayerSatellite extends THREE.Group {
     const endH     = barrelH * 0.12;          // forward/aft PV row height (shortened)
     const endZ     = barrelH * 0.30;          // |z| centre of the end rows (pulled in)
     const cellBandH = centralH;               // (kept for MLI seam placement below)
-    const barrelFacets = 16;                  // matches the barrel shell segment count
+    const barrelFacets = 16;                  // PV tiling facets (the barrel shell itself is 64-seg)
     const facetStep = (Math.PI * 2) / barrelFacets; // 22.5°
     const facetWidth = 2 * (barrelR * 1.006) * Math.tan(facetStep / 2); // chord of one facet
     // Task 1 (F1): PV panels are thin boxes 10 mm deep. The dark side walls (this
@@ -1243,10 +1253,13 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * @private — Epic 10 S3.1: Collar ring + Double-A clevis hinge assemblies.
+   * @private — Epic 10 S3.1: Double-A clevis hinge assemblies at the strut roots.
    *
    * Implements EPIC10_DEEP_ANALYSIS.md §13.1 — topology-optimized A-frame brackets,
-   * Vespel bushings, brake discs, Ti bolt details, collar flange ring, and bolt circle.
+   * Vespel bushings, brake discs, Ti bolt details on a HingePad per strut azimuth.
+   * The collar flange ring and its bolt circle were removed 2026-07-23 (the body
+   * skin carries the pads directly); Mother audit T8 moved the clevis onto the
+   * StrutPivot_* kinematic axis (pin radial +0.011, plates ±0.036).
    * All shared geometries are created once and reused via mesh cloning.
    *
    * PRESERVED: this.hingeMounts[], this.hingeLEDs[] (used by postArmUpdate).
@@ -1283,10 +1296,16 @@ export class PlayerSatellite extends THREE.Group {
     // (TierVisualManager guards on it and no-ops).
 
     // ── Hinge mounting pads — discrete feet replacing the old collar ring ──
-    // One low plate per strut hinge. Base buried 2 mm below the hull surface
+    // One low plate per strut hinge. Base buried 4 mm below the hull surface
     // (bury-don't-touch, same anti-z-fight pattern as the RCS doghouses); top
-    // face ~6 mm proud, sitting under the A-frame brackets.
+    // face 4 mm proud (r 0.396–0.404), sitting under the A-frame brackets.
+    // Mother audit T8 (B5): was 2 mm bury / 6 mm proud — a 0.10 m flat plate on
+    // the r 0.40 barrel has 3.1 mm of corner sag, so its tangential corners hung
+    // 0.9 mm ABOVE the skin; at 4 mm bury the corners sit 0.9 mm inside the hull.
+    // Every radial number in the hinge cluster below assumes the 0.404 pad top.
     const PAD_W = 0.10, PAD_L = 0.10, PAD_T = 0.008;   // m: tangential × axial × radial
+    const PAD_BURY = 0.004;                             // m: base below the skin
+    const PAD_TOP  = -PAD_BURY + PAD_T;                 // m: pad top above the skin (+0.004)
     const padGeo = new THREE.BoxGeometry(M * PAD_W, M * PAD_L, M * PAD_T);
     const padMat = new THREE.MeshStandardMaterial({
       color: 0x8888a0, metalness: 0.75, roughness: 0.28,   // 7075-T6 (matches hinge metal)
@@ -1295,7 +1314,7 @@ export class PlayerSatellite extends THREE.Group {
       const azRad  = azDeg * Math.PI / 180;
       const radial = new THREE.Vector3(Math.cos(azRad), Math.sin(azRad), 0);
       const tangent = new THREE.Vector3(-Math.sin(azRad), Math.cos(azRad), 0);
-      const padR = collarR - M * 0.002 + M * (PAD_T / 2);  // base 2 mm under hull
+      const padR = collarR - M * PAD_BURY + M * (PAD_T / 2);  // base 4 mm under hull
       const pad = new THREE.Mesh(padGeo, padMat);
       pad.position.set(radial.x * padR, radial.y * padR, collarY);
       pad.quaternion.setFromRotationMatrix(
@@ -1315,14 +1334,54 @@ export class PlayerSatellite extends THREE.Group {
       bevelSegments:  1,            // single chamfer (machined look)
       curveSegments:  8,            // bezier smoothness
     });
-    aframeGeo.center();             // origin at bracket centroid
+    aframeGeo.center();             // origin at bracket centroid (bbox CENTRE, see HINGE_PLATE_RADIAL)
 
-    const pinGeo     = new THREE.CylinderGeometry(M * 0.005, M * 0.005, M * 0.070, 8);
-    const clipGeo    = new THREE.TorusGeometry(M * 0.007, M * 0.0015, 4, 8);
+    // ── Mother audit T8 (B2/B3/B7/B8): the clevis lives ON the kinematic axis ──
+    // The strut hangs from StrutPivot_i at (cos·0.40, sin·0.40, 0.90) — the skin —
+    // and sweeps dir = sin α·radial − cos α·ẑ. The visual hinge line used to sit
+    // at radial +0.040 (r 0.44) with plates at tangent ±0.019: only at α = π/2 did
+    // the tube pass through the pin; at α = 0/π the pin floated 15 mm above the
+    // tube and the plates' 30 mm gap was narrower than the 50 mm tube. StrutPivot_i
+    // is FROZEN (stow channels, reel/spring stations, dock offsets, every strut
+    // test hang off it) — the visuals move to it:
+    //   pin/disc at radial +0.011 (r 0.406–0.416: 2 mm clear ABOVE the 0.404 pad
+    //   top, carried by its plates), so the pin's far surface is 16 mm from the
+    //   tube axis < 25 mm tube radius → the tube covers the pin at every α while
+    //   its ends still emerge through the plates; plates at tangent ±0.036 (inner
+    //   faces ±0.032 clear the 50 mm tube by 7 mm and the r 0.030 RootCollar by
+    //   2 mm); pin 96 mm long (8 mm proud of each plate's outer face at ±0.040).
+    //   aframeGeo.center() puts the mesh origin at the profile's bbox centre — the
+    //   profile is 0.0424 tall (H 0.040 + the apex arc), half-height 0.0212 — so a
+    //   bracket centre at radial +0.0002 lands the base at r 0.379 (inside the
+    //   hull shell, hidden) and the apex at r 0.4214: 17 mm of visible web above
+    //   the pad top. The pin passes through the web 8 mm below the apex bore.
+    const HINGE_PIN_RADIAL     = 0.011;   // m above the skin: pin + brake disc + bushings + clips
+    const HINGE_PIN_LEN        = 0.096;   // m: clears the ±0.040 plate outer faces by 8 mm each side
+    const HINGE_PLATE_TANGENT  = 0.036;   // m: plate centres (8 mm thick → faces ±0.032 / ±0.040)
+    const HINGE_PLATE_RADIAL   = 0.0002;  // m: bracket CENTRE (bbox origin) → base r 0.379, apex r 0.4214
+    const HINGE_CLIP_TANGENT   = 0.043;   // m: just outside the plates' outer faces
+    const HINGE_BOLT_TANGENT   = 0.046;   // m: flanking the plates, inside the pad's ±0.05
+    const HINGE_BOLT_RADIAL    = PAD_TOP + 0.001;  // m: 4 mm bolt centred 1 mm above the pad top → 3 mm proud
+    const HINGE_LED_R          = 0.006;   // m: was 0.010
+    const HINGE_LED_RADIAL     = PAD_TOP + 0.004;  // m: on the pad, 4 mm above its top
+    const HINGE_LED_Z          = 0.035;   // m fore of the hinge plane: clear of the plates' fore edge (z ≤ 0.926)
+    // The tube sweeps the whole outboard half-plane tangent = 0 (α = 0 aft, π/2 out,
+    // π FORE — at zenith it lies along +Z over the pad's fore half), so "fore of
+    // the hinge plane" alone is still inside the tube at α = π. Sit the LED beside
+    // the sweep plane instead: centre 40 mm along the tangent → its near edge is
+    // 34 mm off the tube axis at every α (tube r 25 mm + 9 mm), inside the pad's ±0.05.
+    const HINGE_LED_TANGENT    = 0.040;
+
+    const pinGeo     = new THREE.CylinderGeometry(M * 0.005, M * 0.005, M * HINGE_PIN_LEN, 8);
+    // C-clip: T8 tightened 0.007/0.0015 → 0.005/0.001 (outer r 0.006, inner r 0.004
+    // seated 1 mm into the r 0.005 pin like a snap ring in its groove). At the
+    // pin's radial +0.011 an outer r 0.0075 ring bottomed 0.5 mm INSIDE the 0.404
+    // pad top — a tangent contact; outer r 0.006 clears it by 1 mm.
+    const clipGeo    = new THREE.TorusGeometry(M * 0.005, M * 0.001, 4, 8);
     const bushingGeo = new THREE.TorusGeometry(M * 0.008, M * 0.003, 6, 8);
     const brakeGeo   = new THREE.CylinderGeometry(M * 0.015, M * 0.015, M * 0.003, 12);
     const mountBoltGeo = new THREE.CylinderGeometry(M * 0.003, M * 0.003, M * 0.004, 6);
-    const ledGeo     = new THREE.SphereGeometry(M * 0.01, 8, 6);  // was 4×4 (Phase 5)
+    const ledGeo     = new THREE.SphereGeometry(M * HINGE_LED_R, 8, 6);  // T8: r 6 mm on the pad (was 10 mm at the strut axis)
 
     // ── Per-hinge Double-A clevis assemblies ─────────────────────────────
     this.hingeMounts = [];
@@ -1335,10 +1394,16 @@ export class PlayerSatellite extends THREE.Group {
       const radial  = new THREE.Vector3(Math.cos(azRad), Math.sin(azRad), 0);
       const tangent = new THREE.Vector3(-Math.sin(azRad), Math.cos(azRad), 0);
       const pinQuat = new THREE.Quaternion().setFromUnitVectors(_yUpCollar, tangent);
+      // T8 (B7): TorusGeometry's ring axis is local Z (CylinderGeometry's is Y), so
+      // the bushings / C-clips need their own quaternion to sit AROUND the pin.
+      // With pinQuat they lay flat in the z = 0.90 plane with the pin as a diameter.
+      const ringQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent);
 
       // ── A-frame brackets (×2 per hinge, straddling strut root) ──
-      // Offset ±19 mm along tangent (gap = 38 mm, clears 25 mm strut + bushings)
-      // Orientation: shape +Y → radial, extrude +Z → tangent×side, shape +X → barrel Z
+      // Offset ±36 mm along tangent (inner faces ±32 mm: clears the 50 mm strut
+      // tube by 7 mm and the r 0.030 RootCollar, which sits between the plates at
+      // α = 0, by 2 mm). Orientation: shape +Y → radial, extrude +Z → tangent×side,
+      // shape +X → barrel Z.
       // FIX_PLAN §2-followup (round 3): hinge cluster (brackets, mount bolts,
       // bushings, pin, c-clips, brake disc) sits on the hinge pad at z=0.90
       // with overlapping radial extents → potential z-fights between bracket
@@ -1346,10 +1411,11 @@ export class PlayerSatellite extends THREE.Group {
       // the pad/hull and win the depth ties cleanly.
       for (const side of [-1, 1]) {
         const bracket = new THREE.Mesh(aframeGeo, aframeMat);
-        // Position: on collar surface, offset tangentially, centered at half bracket height
+        // Position: bbox centre at radial +0.0002 (base r 0.379 inside the hull,
+        // apex r 0.4214 — see HINGE_PLATE_RADIAL), offset tangentially.
         bracket.position.set(
-          cx + radial.x * M * 0.020 + tangent.x * M * 0.019 * side,
-          cy + radial.y * M * 0.020 + tangent.y * M * 0.019 * side,
+          cx + radial.x * M * HINGE_PLATE_RADIAL + tangent.x * M * HINGE_PLATE_TANGENT * side,
+          cy + radial.y * M * HINGE_PLATE_RADIAL + tangent.y * M * HINGE_PLATE_TANGENT * side,
           collarY,
         );
         // Build rotation: localX→barrelZ×side, localY→radial, localZ→tangent×side
@@ -1365,12 +1431,14 @@ export class PlayerSatellite extends THREE.Group {
         bracket.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;       // FIX_PLAN §2-followup (round 3)
         this.add(bracket);
 
-        // ── Mounting bolts (×2 per bracket, at flange base ±18 mm along barrel Z) ──
+        // ── Mounting bolts (×2 per bracket, flanking the plate's outer face, ±18 mm along barrel Z) ──
+        // T8 (B6): were at radial +0.002, i.e. INSIDE the pad (top 0.404 → invisible).
+        // Now centred 1 mm above the pad top: 3 mm of head proud, 1 mm seated.
         for (const boltSide of [-1, 1]) {
           const mb = new THREE.Mesh(mountBoltGeo, boltMat);
           mb.position.set(
-            cx + tangent.x * M * 0.019 * side + radial.x * M * 0.002,
-            cy + tangent.y * M * 0.019 * side + radial.y * M * 0.002,
+            cx + tangent.x * M * HINGE_BOLT_TANGENT * side + radial.x * M * HINGE_BOLT_RADIAL,
+            cy + tangent.y * M * HINGE_BOLT_TANGENT * side + radial.y * M * HINGE_BOLT_RADIAL,
             collarY + M * 0.018 * boltSide,
           );
           mb.quaternion.setFromUnitVectors(_yUpCollar, radial);  // bolt head outward
@@ -1379,24 +1447,26 @@ export class PlayerSatellite extends THREE.Group {
           this.add(mb);
         }
 
-        // ── Vespel bushing (×1 per bracket, pressed into pin bore at apex) ──
+        // ── Vespel bushing (×1 per bracket, pressed into the pin bore at the plate) ──
         const bushing = new THREE.Mesh(bushingGeo, bushingMat);
         bushing.position.set(
-          cx + radial.x * M * 0.040 + tangent.x * M * 0.019 * side,
-          cy + radial.y * M * 0.040 + tangent.y * M * 0.019 * side,
+          cx + radial.x * M * HINGE_PIN_RADIAL + tangent.x * M * HINGE_PLATE_TANGENT * side,
+          cy + radial.y * M * HINGE_PIN_RADIAL + tangent.y * M * HINGE_PLATE_TANGENT * side,
           collarY,
         );
-        bushing.quaternion.copy(pinQuat);   // ring axis along tangent (around pin)
+        bushing.quaternion.copy(ringQuat);  // ring axis along the pin (T8/B7)
         bushing.name = `Bushing_${azDeg}_${side > 0 ? 'L' : 'R'}`;
         bushing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;       // FIX_PLAN §2-followup (round 3)
         this.add(bushing);
       }
 
-      // ── Pivot pin (17-4PH, ∅10 mm × 70 mm, through both A-frame bores) ──
+      // ── Pivot pin (17-4PH, ∅10 mm × 96 mm, through both A-frame bores) ──
+      // T8 (B2): radial +0.011 — inside the 50 mm tube at every α (far surface
+      // 16 mm off the tube axis), 2 mm clear above the 0.404 pad top.
       const pin = new THREE.Mesh(pinGeo, pinMat);
       pin.position.set(
-        cx + radial.x * M * 0.040,
-        cy + radial.y * M * 0.040,
+        cx + radial.x * M * HINGE_PIN_RADIAL,
+        cy + radial.y * M * HINGE_PIN_RADIAL,
         collarY,
       );
       pin.quaternion.copy(pinQuat);
@@ -1405,15 +1475,15 @@ export class PlayerSatellite extends THREE.Group {
       this.add(pin);
       this.hingeMounts.push(pin);           // preserve hingeMounts[] reference
 
-      // ── C-clip retainers (×2, snap rings on pin ends, 5 mm exposed) ──
+      // ── C-clip retainers (×2, snap rings on the pin ends just outside the plates' outer faces) ──
       for (const side of [-1, 1]) {
         const clip = new THREE.Mesh(clipGeo, pinMat);
         clip.position.set(
-          cx + radial.x * M * 0.040 + tangent.x * M * 0.033 * side,
-          cy + radial.y * M * 0.040 + tangent.y * M * 0.033 * side,
+          cx + radial.x * M * HINGE_PIN_RADIAL + tangent.x * M * HINGE_CLIP_TANGENT * side,
+          cy + radial.y * M * HINGE_PIN_RADIAL + tangent.y * M * HINGE_CLIP_TANGENT * side,
           collarY,
         );
-        clip.quaternion.copy(pinQuat);
+        clip.quaternion.copy(ringQuat);     // ring axis along the pin (T8/B7)
         clip.name = `CClip_${azDeg}_${side > 0 ? 'L' : 'R'}`;
         clip.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;          // FIX_PLAN §2-followup (round 3)
         this.add(clip);
@@ -1422,8 +1492,8 @@ export class PlayerSatellite extends THREE.Group {
       // ── Brake disc (440C, centered on pin between A-frames) ──
       const disc = new THREE.Mesh(brakeGeo, brakeMat);
       disc.position.set(
-        cx + radial.x * M * 0.040,
-        cy + radial.y * M * 0.040,
+        cx + radial.x * M * HINGE_PIN_RADIAL,
+        cy + radial.y * M * HINGE_PIN_RADIAL,
         collarY,
       );
       disc.quaternion.copy(pinQuat);
@@ -1431,12 +1501,22 @@ export class PlayerSatellite extends THREE.Group {
       disc.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;            // FIX_PLAN §2-followup (round 3)
       this.add(disc);
 
-      // ── LED indicator (seated on the outboard A-frame's fore face, per §13.1.1) ──
-      // Round-3: was collarY + 0.03 — a 1 cm bead floating 26 mm proud of the
-      // bracket face (brackets are 8 mm deep centred at collarY → face at +0.004).
+      // ── LED indicator — on the hinge PAD, beside the tube's sweep plane ──
+      // Round-3 had it at collarY + 0.03 (a 1 cm bead floating 26 mm proud of the
+      // bracket face); the fix put it ON the strut axis at z 0.905, where the tube
+      // swallowed it at α = π and it sat on the tube's end face at α = 0 (B8).
+      // T8: r 6 mm, seated on the pad (centre 4 mm above the pad top, 2 mm of the
+      // sphere in the pad), 40 mm along the tangent and 35 mm fore of the hinge
+      // plane — 9 mm clear of the tube surface at EVERY α (the tube sweeps the
+      // tangent = 0 half-plane, fore included at zenith), 4 mm clear of the
+      // plates' fore edge, inside the pad's ±0.05. Never swallowed, follows nothing.
       const ledMat = new THREE.MeshBasicMaterial({ color: 0x00ff44 });
       const led = new THREE.Mesh(ledGeo, ledMat);
-      led.position.set(cx, cy, collarY + M * 0.005);
+      led.position.set(
+        cx + radial.x * M * HINGE_LED_RADIAL + tangent.x * M * HINGE_LED_TANGENT,
+        cy + radial.y * M * HINGE_LED_RADIAL + tangent.y * M * HINGE_LED_TANGENT,
+        collarY + M * HINGE_LED_Z,
+      );
       led.name = `HingeLED_${azDeg}`;
       led.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;           // FIX_PLAN §2-followup (round 3)
       this.add(led);
@@ -1490,17 +1570,22 @@ export class PlayerSatellite extends THREE.Group {
 
     // ── Root joint collar (clevis fork fitting at hinge end) ──
     // FIX_PLAN §2-followup: rootCollar cylinder at strutR*1.20 (radius 0.030)
-    // sits at the pivot point on the bus surface, where it crosses the body
-    // collar/seat rings. §2-followup (round 5) replaced the old polygonOffset
-    // depth bias with a real outboard standoff (see ROOT_COLLAR_STANDOFF below).
+    // sits at the pivot point on the bus surface. It used to cross the body
+    // collar/seat rings there (removed 2026-07-23 — see _buildCollar); today it
+    // sits over the hinge PAD and between the A-frame plates (T8: inner faces at
+    // tangent ±0.032, 2 mm clear of this r 0.030 collar at α = 0). §2-followup
+    // (round 5) replaced the old polygonOffset depth bias with a real outboard
+    // standoff (see ROOT_COLLAR_STANDOFF below).
     const ROOT_COLLAR_LEN = M * 0.025;          // cylinder length (half = inner-face offset)
     // Forward reach of the hinge PAD toward the strut, measured from the hinge
     // plane (collarY). Was COLLAR_RING_REACH = M*0.015 for the removed collar
-    // ring; now the pad's proud height + nothing else.
+    // ring; then the pad's proud height (6 mm). T8 lowered the pad top to 4 mm —
+    // 0.006 is kept as a conservative reach (2 mm extra margin), so the collar's
+    // inner face rides 10 mm off the pivot → 6 mm above the 0.404 pad top at α = π/2.
     const PAD_REACH = M * 0.006;
-    const STANDOFF_MARGIN   = M * 0.004;        // clearance so metal never grazes the ring
+    const STANDOFF_MARGIN   = M * 0.004;        // clearance so metal never grazes the pad
     // Distance the collar centre must sit outboard (-Y) of the pivot so its
-    // inner face clears the ring cluster: half-length + ring reach + margin.
+    // inner face clears the pad: half-length + pad reach + margin.
     const ROOT_COLLAR_STANDOFF = ROOT_COLLAR_LEN * 0.5 + PAD_REACH + STANDOFF_MARGIN;
     const rootCollarGeo = new THREE.CylinderGeometry(
       strutR * 1.20, strutR * 1.20, ROOT_COLLAR_LEN, 12
@@ -1508,11 +1593,11 @@ export class PlayerSatellite extends THREE.Group {
     const rootCollarMat = new THREE.MeshStandardMaterial({
       color: 0x8888a0, metalness: 0.75, roughness: 0.28,  // 7075-T6
       // §2-followup (round 5): polygonOffset(-2,-2) removed. The root collar is
-      // solid metal interpenetrating the body-frame collar/seat rings, and
-      // polygonOffset is the LEAST reliable here under logarithmicDepthBuffer
-      // (it biased two solids in different transform frames). Replaced with a
-      // real geometric standoff (see rootCollar.position.y below) so the collar
-      // metal physically clears the ring surfaces at every zoom.
+      // solid metal that used to interpenetrate the body-frame collar/seat rings
+      // (since removed), and polygonOffset is the LEAST reliable here under
+      // logarithmicDepthBuffer (it biased two solids in different transform
+      // frames). Replaced with a real geometric standoff (see rootCollar.position.y
+      // below) so the collar metal physically clears the hinge pad at every zoom.
     });
 
     // ── Tip joint collar (dock fitting at daughter-arm end) ──
@@ -1524,20 +1609,43 @@ export class PlayerSatellite extends THREE.Group {
     });
 
     // ── S3.3: Reel cartridge shared geometry + materials ──
-    // Z-fix (Phase 1): the housing was open-ended (…, 8, 1, true), so looking
-    // through either open end showed a culled/see-through interior and the drum
-    // end-caps (which are coaxial with, and pierced by, the strut) read as
-    // interpenetrating geometry. Closing the ends (openEnded=false) resolves both
-    // — the opaque shell now caps the cartridge and hides the enclosed drum/strut
-    // overlap. Done by swapping the geometry flag (NOT adding cap meshes) so the
-    // keyed child order (housing[0], drum[1], led[2]) is preserved.
-    const housingGeo = new THREE.CylinderGeometry(M * 0.055, M * 0.055, M * 0.065, 12, 1, false);  // was 8-seg (4× always in chase view)
+    // Z-fix (Phase 1) closed the can's ends (openEnded=false — an open FrontSide
+    // shell culled its far wall end-on and the drum end-caps, coaxial with and
+    // pierced by the strut, read as interpenetrating geometry). That fix HOLDS:
+    // the pie caps stay closed (test-MotherZFix pins openEnded === false).
+    // Mother audit T7 (B4): the closed can hid the drum entirely — a tether
+    // winch with no visible spool. The shell is now a WINDOWED C-SHELL: 240° of
+    // wall (thetaStart 4π/3 → wall θ ∈ [240°, 120°] through 0°) and a 120°
+    // window centred on housing-local −Z (θ = 180°). CylinderGeometry's θ = 0 is
+    // local +Z — where ReelLED_* stands off the wall — so the LED sits over solid
+    // wall, never over the window. The material is DoubleSide so the shell's
+    // interior renders through the window and nothing culls to see-through.
+    // Same three meshes, same names, same keyed child order (housing[0],
+    // drum[1], led[2]). Window direction at α = 0 (pivot frame from
+    // setFromUnitVectors(−Y, −Z)): local −Z → ship +Y, i.e. the two upper
+    // stowed cans (az 60/120) show their window to +Y; at α = π/2 every window
+    // faces aft (local −Z → ship −Z). Verified against hinge-az60-d4.5-stow.
+    const REEL_WALL_THETA_START = 4 * Math.PI / 3;  // wall start (240°)
+    const REEL_WALL_THETA_LEN   = 4 * Math.PI / 3;  // 240° of wall → 120° window at θ = 180° (local −Z)
+    const housingGeo = new THREE.CylinderGeometry(
+      M * 0.055, M * 0.055, M * 0.065, 12, 1, false,   // 12-seg (was 8: 4× always in chase view)
+      REEL_WALL_THETA_START, REEL_WALL_THETA_LEN,
+    );
+    // NB: housingMat is also the material of SpringHousing_* and GuideRail_*_L/R
+    // below (the plan's "used only by the four housings" was stale). DoubleSide is
+    // exactly what the open-ended spring housing needs too (its interior no longer
+    // culls away end-on — B9) and is a no-op on the closed rail boxes.
     const housingMat = new THREE.MeshStandardMaterial({
       color: 0x505868, metalness: 0.40, roughness: 0.50,  // hard-anodized 6061-T6
+      side: THREE.DoubleSide,                             // T7: interior visible through the window
     });
     const drumGeo = new THREE.CylinderGeometry(M * 0.045, M * 0.045, M * 0.055, 12);  // was 8-seg (match housing)
     const drumMat = new THREE.MeshStandardMaterial({
       color: 0xddddee, metalness: 0.20, roughness: 0.60,  // Dyneema SK78 T0
+      // T7: _animateTetherIndicators spins children[1] at 2 rad/s during reel-in;
+      // a smooth 12-seg cylinder reads static when it turns. Flat shading bands
+      // the 12 facets so the spin reads through the window. No geometry change.
+      flatShading: true,
     });
     // Status LED — Z-fix (Phase 1): was a flat PlaneGeometry sitting only 1 mm
     // off the housing wall (z 0.056 vs wall r 0.055) — below reliable log-depth
@@ -1575,8 +1683,13 @@ export class PlayerSatellite extends THREE.Group {
     const clipGeo = new THREE.BoxGeometry(M * 0.012, M * 0.008, M * 0.006);
 
     // ── S3.4: Crossbow spring mechanism shared geometry + materials ──
+    // Mother audit T8 (B9): the housing is open-ended so the coil shows, and it
+    // shares housingMat — DoubleSide since T7 — so its interior renders end-on
+    // instead of culling to see-through. No separate liner: a BackSide sleeve
+    // 3 mm inside a wall that already draws both faces would only add a
+    // sub-4 mm interior pair (the tie class the z-fix rounds removed).
     const springHousingGeo = new THREE.CylinderGeometry(
-      M * 0.030, M * 0.030, M * 0.060, 8, 1, true   // open-ended, reveals coil
+      M * 0.030, M * 0.030, M * 0.060, 8, 1, true   // open-ended, reveals coil (DoubleSide housingMat)
     );
     const springRingGeo = new THREE.TorusGeometry(M * 0.018, M * 0.003, 3, 6);
     const springMat = new THREE.MeshStandardMaterial({
@@ -1621,13 +1734,18 @@ export class PlayerSatellite extends THREE.Group {
       pivotGroup.add(tipNode);
 
       // ── S3.3: Reel cartridge (3-child group, replaces placeholder reel) ──
+      // T7 render order: shell + drum DETAIL (drawn after the strut/hull opaques
+      // they sit on), LED ADDITIVE (after every solid).
       const housing = new THREE.Mesh(housingGeo, housingMat);
       housing.name = `ReelHousing_${i}`;
+      housing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       const drum = new THREE.Mesh(drumGeo, drumMat);
       drum.name = `ReelDrum_${i}`;
+      drum.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       const led = new THREE.Mesh(ledGeo, ledMatBase.clone());
-      led.position.set(0, M * 0.02, ledZ);  // on the housing wall, standing proud
+      led.position.set(0, M * 0.02, ledZ);  // on the housing wall (local +Z, θ = 0 — solid wall), standing proud
       led.name = `ReelLED_${i}`;
+      led.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
 
       const reelCartridge = new THREE.Group();
       reelCartridge.add(housing);    // children[0] — housing shell
@@ -1697,11 +1815,12 @@ export class PlayerSatellite extends THREE.Group {
       // ── Root joint collar (hinge end) ──
       const rootCollar = new THREE.Mesh(rootCollarGeo, rootCollarMat);
       // §2-followup (round 5): seat the collar outboard along the strut (-Y) by
-      // a standoff DERIVED from the ring cluster's reach + the collar's own
+      // a standoff DERIVED from the hinge pad's reach + the collar's own
       // half-length (see ROOT_COLLAR_STANDOFF above), so its inner face clears
-      // the body collar/seat rings geometrically — log-depth-buffer-safe and
-      // self-adjusting if the ring/collar dimensions change. Replaces both the
-      // old polygonOffset bias and the earlier hand-picked 6mm guess.
+      // the pad geometrically (the body collar/seat rings it originally cleared
+      // were removed 2026-07-23) — log-depth-buffer-safe and self-adjusting if
+      // the pad/collar dimensions change. Replaces both the old polygonOffset
+      // bias and the earlier hand-picked 6mm guess.
       rootCollar.position.y = -ROOT_COLLAR_STANDOFF;
       rootCollar.name = `RootCollar_${i}`;
       rootCollar.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // FIX_PLAN §2-followup
@@ -1788,6 +1907,9 @@ export class PlayerSatellite extends THREE.Group {
       thruster.rotation.x = Math.PI / 2;
       thruster.name = `MainFEEP_${i}`;
       thruster._thrusterId = thrusterIds[i]; // for interlock visual lookup
+      // Mother audit T9 (A3): explicit DETAIL order — the bell passes through
+      // the OPAQUE deck/cap, so it must not sort at the default 0 beneath them.
+      thruster.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.add(thruster);
       this.mainThrusters.push(thruster);
 
@@ -1811,7 +1933,7 @@ export class PlayerSatellite extends THREE.Group {
       innerLiner.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       thruster.add(innerLiner);
 
-      // FIX_PLAN §2 — Mounting boss (ring around nozzle throat)
+      // FIX_PLAN §2 — Mounting boss (flange ring where the bell leaves the deck)
       // Parent thruster has rotation.x=π/2 mapping local +Y → world +Z, so
       // boss.position.y is the axis aligned with the nozzle, and boss cylinder
       // geometry (along local Y) auto-aligns with world Z (no extra rotation).
@@ -1820,9 +1942,14 @@ export class PlayerSatellite extends THREE.Group {
         color: 0x444455, metalness: 0.7, roughness: 0.3,
       });
       const boss = new THREE.Mesh(bossGeo, bossMat);
-      // Place at nozzle throat (world Δz = +0.075M from thruster centre at world -M*1.0)
-      boss.position.y = M * 0.075;
-      boss.name = 'FEEP_Boss';
+      // Mother audit T9 (A2): the boss used to sit at the throat (local +0.075
+      // → world z −0.91…−0.94), 60–90 mm FORE of the rear cap, i.e. buried
+      // inside the hull and never seen. Now at local −0.028 → world z −1.028
+      // (h 0.03 → −1.013…−1.043): it straddles the AftThrusterDeck's aft face
+      // (−1.028) — 15 mm buried, 15 mm proud — a visible flange collar around
+      // the bell where it emerges (bell r ≈ 0.051 there, boss r 0.07).
+      boss.position.y = -M * 0.028;
+      boss.name = `FEEP_Boss_${i}`;   // unique per bell (T9) — cull matches by prefix
       boss.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2
       thruster.add(boss);
 
@@ -1834,16 +1961,21 @@ export class PlayerSatellite extends THREE.Group {
         side: THREE.DoubleSide,
       });
       const gridDisc = new THREE.Mesh(gridDiscGeo, gridDiscMat);
-      // Place 5mm inside nozzle exit (world z = -M*1.005, exit at world z = -M*1.075)
-      gridDisc.position.y = -M * 0.005;
-      // Disc default normal is local +Z = world -Y; DoubleSide keeps it visible
-      // from outside the nozzle without further rotation.
-      gridDisc.name = 'FEEP_GridDisc';
+      // Mother audit T9 (A1): the disc used to sit at local −0.005 (world z
+      // −1.005 — INSIDE the deck slab −0.988…−1.028) with its normal along
+      // world −Y (edge-on down the bell): never visible. Now 5 mm inside the
+      // exit (local −0.070 → world z −1.070; exit at −1.075, deck aft face at
+      // −1.028) with rotation.x = π/2 so the circle normal runs along the bell
+      // axis (local −Y = aft). DoubleSide keeps it visible from either side.
+      gridDisc.position.y = -M * 0.070;
+      gridDisc.rotation.x = Math.PI / 2;
+      gridDisc.name = `FEEP_GridDisc_${i}`;   // unique per bell (T9) — cull matches by prefix
       gridDisc.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT; // FIX_PLAN §2
       thruster.add(gridDisc);
 
-      // FEEP nozzle glow ring (sized to nozzle aperture)
-      const glowGeo = new THREE.RingGeometry(M * 0.02, M * 0.055, 6);
+      // FEEP nozzle glow ring (sized to nozzle aperture). 16 segments (T9/A3):
+      // the old 6-segment ring drew a hexagon on a 110 mm circle.
+      const glowGeo = new THREE.RingGeometry(M * 0.02, M * 0.055, 16);
       const glowMat = new THREE.MeshBasicMaterial({
         color: 0x99bbdd, transparent: true, opacity: 0.0,
         side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
@@ -1909,7 +2041,8 @@ export class PlayerSatellite extends THREE.Group {
     // ±X/±Y/±Z axis → single-nozzle-failure redundancy.
     // Placement (all guarded from BUILT geometry by test-RcsPlacement.js — never
     // trust these comments):
-    //   • azimuth = 90°/274.65°... SNAPPED to 90°/270° so each pod is centred on
+    //   • azimuth = 90°/270° (the historical window-centred 274.65° column was
+    //     SNAPPED to 270°) so each pod is centred on
     //     the body PV "gap" cells at those azimuths (the nearest solar panels on
     //     the mother body). ~11° clear of the weaver pocket and ~21° of the
     //     spinner pocket. Kept ORTHOGONAL to the ROSA wings (0°/180°) so
@@ -2012,6 +2145,9 @@ export class PlayerSatellite extends THREE.Group {
       // the OLD build had this backwards (bells flared into the hull).
       bell.quaternion.setFromUnitVectors(yUpBeam, _v3TmpA.copy(exhaustDir).negate());
       bell.name = name;
+      // Mother audit T9: explicit DETAIL order — the bells cross the OPAQUE
+      // housing face/boot, so never leave them at the default 0.
+      bell.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.add(bell);
       this.attitudeThrusters.push(bell);
 
@@ -2080,9 +2216,13 @@ export class PlayerSatellite extends THREE.Group {
         this.add(pod);
 
         // §3 MLI close-out boot: a low lip framing the housing where it emerges
-        // from the blanket. Base buried like the housing (bottom at hull −4 mm),
-        // top ~8 mm proud. Its centre radius = hullR − 4 mm + 6 mm = hullR + 2 mm.
-        const bootR = M * (barrelR_m + 0.002);
+        // from the blanket. Mother audit T9 (B12): the boot is a FLAT box on a
+        // curved hull — at its ±0.063 tangential corners the skin sags to
+        // r 0.395, so the old centre radius hullR + 2 mm (inner face 0.396)
+        // left 1 mm of air under the corners. Centre now hullR − 2 mm: the
+        // 12 mm slab spans r 0.392–0.404 → 3 mm buried at the corners, 4 mm
+        // (centre) to 9 mm (corners) proud.
+        const bootR = M * (barrelR_m - 0.002);
         const boot = new THREE.Mesh(bootGeo, bootMat);
         boot.position.set(radial.x * bootR, radial.y * bootR, podZ);
         boot.quaternion.setFromRotationMatrix(podBasis);
@@ -2117,22 +2257,31 @@ export class PlayerSatellite extends THREE.Group {
         const faceR = podR + M * (RCS_POD_H / 2);  // housing outer face radius (~0.445 m)
 
         // RADIAL nozzle: on the outer face, exhaust radially outward (±Y column).
+        // Mother audit T9 (B11): the throat circle used to lie EXACTLY in the
+        // housing's outer-face plane (centre = faceR + L/2) — a coplanar tie.
+        // Pull the bell 5 mm into the housing so the throat is buried.
         const radialCentre = new THREE.Vector3(
-          radial.x * (faceR + M * RCS_BELL_LEN / 2),
-          radial.y * (faceR + M * RCS_BELL_LEN / 2),
+          radial.x * (faceR + M * (RCS_BELL_LEN / 2 - 0.005)),
+          radial.y * (faceR + M * (RCS_BELL_LEN / 2 - 0.005)),
           podZ,
         );
         buildNozzle(`RCSThruster_${podIdx}_R`, radialCentre, radial.clone());
 
-        // AXIAL nozzle: corner-mounted at the pod's outboard-z edge, buried 3 mm
-        // into the housing face, exhaust ±Z (fore pods +Z, aft −Z). Its whole
-        // radial span stays OUTSIDE the collar rings (max r ~0.415) as its mouth
-        // passes the collar z-band (test-RcsPlacement guards the meridian gap).
-        const axialR = faceR + M * (0.025 - 0.003);   // exit r 0.025 − 3 mm bury
+        // AXIAL nozzle: corner-mounted at the pod's outboard-z end, exhaust ±Z
+        // (fore pods +Z, aft −Z). Mother audit T9 (B10, ⟦R⟧): the old placement
+        // (axis faceR + 0.022, centre z = end − 0.02) left the throat's lower
+        // rim 7 mm ABOVE the housing face and the mouth only 10 mm past the end
+        // face. Now the throat axis sits 7 mm above the face so the throat's
+        // lower rim (r 0.015) is 8 mm INSIDE the housing corner, and the bell
+        // centre is 5 mm inside the end face: the 60 mm bell runs from 35 mm
+        // inside the pod's end face to 25 mm proud of it. Mouth min radial
+        // 0.427 > the hinge A-frame apex 0.4214 and the old 0.415 collar guard
+        // (test-RcsPlacement guards the PV/groove/hull clearances from geometry).
+        const axialR = faceR + M * (0.015 - 0.008);
         const axialCentre = new THREE.Vector3(
           radial.x * axialR,
           radial.y * axialR,
-          podZ + station * M * (RCS_POD_L / 2 - 0.02),
+          podZ + station * M * (RCS_POD_L / 2 - 0.005),
         );
         buildNozzle(`RCSThruster_${podIdx}_A`, axialCentre, new THREE.Vector3(0, 0, station));
 
@@ -2190,6 +2339,17 @@ export class PlayerSatellite extends THREE.Group {
    * detail. The slit-tube booms (built in `_buildRosaStructure`) provide the edge
    * structure. UVs are oriented so the cell strings run along the deploy/X axis.
    */
+  /**
+   * ROSA blanket inboard-edge standoff from the wrapper origin (= the drum
+   * axis), scene units: drumR + 1 mm, so the blanket, both edge booms and the
+   * tip spreader start at the drum SURFACE (Mother audit T11/W5). One source
+   * for `_buildSolarPanels` (blanket) and `_buildRosaStructure` (booms/spreader).
+   * @returns {number}
+   */
+  static rosaInboardGap() {
+    return (Constants.OCTOPUS_V5.ROSA_DRUM_R + 0.001) * M;
+  }
+
   _buildSolarPanels() {
     const V5      = Constants.OCTOPUS_V5;
     const rosaW   = V5.ROSA_WIDTH * M;       // 1.0 m → scene (radial deploy / X)
@@ -2277,11 +2437,15 @@ export class PlayerSatellite extends THREE.Group {
     // and their Front/BackSide semantics.) These offsets are M-SCALED mm: 1 scene
     // unit = 100 km, so M*0.002 = 2 mm. The old raw −0.001 was −100 m (see the
     // panel1Back note) — always multiply real mm by M here.
-    // Z2: the inboard edge is also pushed +M*0.005 (5 mm) outboard so it starts
-    // clear of the bus; the root drum/bracket masks the small gap. Furled
-    // (wrapper scale.x→0) collapses the panel toward the pivot — visually unchanged.
+    // Z2: the inboard edge is pushed ROSA_INBOARD_GAP outboard of the wrapper
+    // origin (the drum axis). Mother audit T11 (W5): the gap is now drumR +
+    // 1 mm (51 mm) so the blanket STARTS at the drum surface instead of 45 mm
+    // inside the closed r 0.05 drum; the booms and spreader in
+    // _buildRosaStructure use the same value (rosaInboardGap()) so they span
+    // exactly the blanket. Furled (wrapper scale.x→0.05) collapses the panel
+    // toward the drum axis — inside the stow coil, visually unchanged.
     const ROSA_HALF_THICK = M * 0.002;   // 2 mm — half the blanket thickness (Z1)
-    const ROSA_INBOARD_GAP = M * 0.005;  // 5 mm — inboard-edge standoff (Z2)
+    const ROSA_INBOARD_GAP = PlayerSatellite.rosaInboardGap();  // 51 mm — inboard-edge standoff (Z2 + W5)
     const panelGeo = new THREE.PlaneGeometry(rosaW, rosaL);
 
     // ── Shared solar array pivot — groups both wings as one rigid
@@ -2456,12 +2620,11 @@ export class PlayerSatellite extends THREE.Group {
     // (spin/scale as the blanket reels) and the slit-tube curls (uncoil + snap).
     const struct = { stowRoll: null, drum: null, curls: [], sign };
 
-    // Tiny anti-z-fight nudge that lifts the booms/spreader just off the blanket
-    // plane. MUST be M-scaled: 1 scene unit = 100 km, so a raw literal like
-    // 0.0008 is ~80 m — ~80× the panel width — which flung the structure far off
-    // the blanket (same unit-mismatch class as the fixed back-face −0.001 = −100 m
-    // bug). Half the boom radius sits the tube tangent to the blanket surface.
-    const zNudge = boomOD * 0.6; // ≈ 1.2 cm in metres, M-scaled (~1.2e-7 scene units)
+    // Blanket inboard-edge standoff (shared with _buildSolarPanels): the
+    // blanket spans wrapper-local x ∈ [gap, gap + rosaW]; booms and spreader
+    // must span the SAME interval (Mother audit T11/W5 — the booms used to run
+    // [0, rosaW], 51 mm short of the blanket tip and buried in the drum).
+    const gap = PlayerSatellite.rosaInboardGap();
 
     // ── One edge boom per long edge (±Y), centred on the blanket plane (z=0) ──
     // Cylinder default axis is Y; rotate Z by 90° so it lies along local X.
@@ -2477,18 +2640,23 @@ export class PlayerSatellite extends THREE.Group {
     for (const edgeY of [rosaL / 2, -rosaL / 2]) {
       const boom = new THREE.Mesh(boomGeo, boomMat);
       boom.rotation.z = Math.PI / 2;           // Y-axis → X-axis (blanket length)
-      // Center at half-width so it spans local x ∈ [0, rosaW]; for the -X wing
-      // the wrapper geometry runs x ∈ [-rosaW, 0], so mirror via sign.
-      boom.position.set(sign * rosaW / 2, edgeY, 0);
+      // Centre at gap + half-width so it spans local x ∈ [gap, gap + rosaW] —
+      // the blanket's exact extent; for the -X wing mirror via sign.
+      boom.position.set(sign * (rosaW / 2 + gap), edgeY, 0);
       boom.name = `ROSA_Boom_${wing === 1 ? '0' : '180'}deg_${edgeY > 0 ? 'A' : 'B'}`;
       boom.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       wrapper.add(boom);
     }
 
-    // ── Tip spreader bar — at the outboard edge (x = ±rosaW), spans width (Y) ──
+    // ── Tip spreader bar — at the blanket's outboard edge, spans width (Y) ──
+    // Mother audit T11 (W3): the spreader used to ride a zNudge (boomOD×0.6 =
+    // 12 mm) above the blanket plane — its r 5 mm tube hung 5 mm clear of the
+    // +2 mm front face (a slit). Embedded like the booms now: centred on the
+    // blanket plane, the tube stands 3 mm proud of each face (transversal, no
+    // tangent/coplanar contact with the ±2 mm sandwich).
     const sprGeo = new THREE.CylinderGeometry(sprOD / 2, sprOD / 2, rosaL, 6);
     const spreader = new THREE.Mesh(sprGeo, boomMat);
-    spreader.position.set(sign * rosaW, 0, zNudge); // rides to deployed tip via scale.x (M-scaled nudge)
+    spreader.position.set(sign * (rosaW + gap), 0, 0); // rides to the deployed tip via scale.x
     spreader.name = `ROSA_Spreader_${wing === 1 ? '0' : '180'}deg`;
     spreader.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     wrapper.add(spreader);
@@ -2500,14 +2668,28 @@ export class PlayerSatellite extends THREE.Group {
     //    with a small elastic overshoot as the strain-energy boom snaps straight.
     //    Root-fixed (parented to pivot) so they do NOT stretch with scale.x. ──
     // A TorusGeometry sweeps in its local XY plane about the local Z axis (the
-    // barrel axis), so the arc rises from the drum (zenith) and lays out radially.
+    // barrel axis): built about the DRUM axis it runs from the boom end (angle 0,
+    // at +drumR) up to the drum's zenith (angle π/2).
+    // Mother audit T11 (W4): the mesh used to be positioned AT the drum axis and
+    // rotated there by the tuck, so between p = 0 and p = 1 the boom end swung
+    // off the boom line (35 mm at p 0.5 — a torus hanging in air beside the
+    // coil). The geometry is now translated so its ORIGIN is the boom end and
+    // the mesh sits at (rootX + drumR, 0, ±rosaL/2): the tuck rotates the arc
+    // about the boom end, which stays on the boom axis at every p while the
+    // drum end swings up into the coil (r 0.105 at p 0.5, 0.157 at p 0).
+    // The −X wing gets a MIRRORED copy (x → −x: rotateZ(π/2) then translate
+    // +drumR) rather than the old π rotation of the same arc — a rotation is
+    // not a mirror, and with `sign·tuck` the port curl used to tuck the wrong
+    // way. Both wings now start at their outboard boom end and rise to the
+    // drum's zenith at p = 1, and tuck symmetrically (base rotation 0).
     const curlGeo = new THREE.TorusGeometry(drumR, boomOD / 2, 6, 12, Math.PI / 2);
+    if (sign > 0) curlGeo.translate(-drumR, 0, 0);
+    else          curlGeo.rotateZ(Math.PI / 2).translate(drumR, 0, 0);
     const curls = [];
     for (const edgeZ of [rosaL / 2, -rosaL / 2]) {
       const curl = new THREE.Mesh(curlGeo, boomMat);
-      curl.position.set(sign * rootX, 0, sign > 0 ? edgeZ : -edgeZ);
-      // Mirror the sweep direction for the -X wing so both curls open outboard.
-      curl.userData.baseRotZ = sign > 0 ? 0 : Math.PI;
+      curl.position.set(sign * (rootX + drumR), 0, sign > 0 ? edgeZ : -edgeZ);
+      curl.userData.baseRotZ = 0;
       curl.rotation.z = curl.userData.baseRotZ;
       curl.name = `ROSA_SpoolCurl_${wing === 1 ? '0' : '180'}deg_${edgeZ > 0 ? 'A' : 'B'}`;
       curl.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
@@ -2519,18 +2701,29 @@ export class PlayerSatellite extends THREE.Group {
 
     // ── Root mounting brackets — three short standoffs from the bus mast to the
     //    drum (one central + two flanking), giving the root a real truss read. ──
-    const brkGeo = new THREE.BoxGeometry(brkLen, drumR * 1.2, drumR * 0.6);
+    // Mother audit T11 (W2): the pivot sits ON the hull tangent (r 0.40), so a
+    // box spanning pivot-x 0…0.060 had its inboard face exactly tangent to the
+    // barrel (a coplanar/tangent tie, 1.1 mm of air at its ±0.03 edges). Now
+    // 0.070 long at x 0.025 → spans −0.010…0.060: 10 mm buried in the skin,
+    // outboard face unchanged.
+    const brkGeo = new THREE.BoxGeometry(0.070 * M, drumR * 1.2, drumR * 0.6);
     const bracket = new THREE.Mesh(brkGeo, drumMat);
-    bracket.position.set(sign * brkLen / 2, 0, 0);
+    bracket.position.set(sign * 0.025 * M, 0, 0);
     bracket.name = `ROSA_Bracket_${wing === 1 ? '0' : '180'}deg`;
+    bracket.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // W7
     pivot.add(bracket);
 
     // Two flanking brackets offset along the drum axis (barrel Z), narrower.
-    const brkSideGeo = new THREE.BoxGeometry(brkLen * 0.9, drumR * 0.9, drumR * 0.4);
+    // Mother audit T11 (W1): the 0.054 boxes at x 0.030 spanned 0.003…0.057 —
+    // 3 mm of air between their inboard face and the hull (3.6 mm at the
+    // edges). Now 0.067 long at x 0.0235 → spans −0.010…0.057: 10 mm buried,
+    // outboard face unchanged.
+    const brkSideGeo = new THREE.BoxGeometry(0.067 * M, drumR * 0.9, drumR * 0.4);
     for (const zOff of [rosaL * 0.32, -rosaL * 0.32]) {
       const brkSide = new THREE.Mesh(brkSideGeo, drumMat);
-      brkSide.position.set(sign * brkLen / 2, 0, zOff);
+      brkSide.position.set(sign * (0.067 / 2 - 0.010) * M, 0, zOff);
       brkSide.name = `ROSA_Bracket_${wing === 1 ? '0' : '180'}deg_${zOff > 0 ? 'A' : 'B'}`;
+      brkSide.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // W7
       pivot.add(brkSide);
     }
 
@@ -2544,9 +2737,14 @@ export class PlayerSatellite extends THREE.Group {
     pivot.add(spoolPivot);
 
     // Root roller drum / mandrel — the bare spool the blanket rolls onto.
+    // Length 1.02×rosaL (±1.02): the spool curls (tube z 0.99…1.01) need
+    // mandrel under them at every furl state, and the stow coil must stay
+    // fore of the rear-cap plane (±1.0), so the mandrel end showing beyond the
+    // coil cap when furled is the intended read (Mother audit W6: left).
     const drumGeo = new THREE.CylinderGeometry(drumR, drumR, rosaL * 1.02, 16);  // was 12-seg
     const drum = new THREE.Mesh(drumGeo, drumMat);
     drum.name = `ROSA_Drum_${wing === 1 ? '0' : '180'}deg`;
+    drum.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // W7
     spoolPivot.add(drum);
     struct.drum = drum;
 
@@ -2557,6 +2755,7 @@ export class PlayerSatellite extends THREE.Group {
     const coilGeo = new THREE.CylinderGeometry(drumR * 1.05, drumR * 1.05, rosaL * 0.98, 16);  // was 12-seg (match drum)
     const stowRoll = new THREE.Mesh(coilGeo, drumMat);
     stowRoll.name = `ROSA_StowRoll_${wing === 1 ? '0' : '180'}deg`;
+    stowRoll.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // W7
     spoolPivot.add(stowRoll);
     struct.stowRoll = stowRoll;
 
@@ -2827,7 +3026,12 @@ export class PlayerSatellite extends THREE.Group {
     const plateGeo = new THREE.BoxGeometry(plateLen, FL.PLATE_HALF_WIDTH_M * 2 * M, FL.PLATE_THICK_M * M);
     const bracketGeo = new THREE.BoxGeometry(0.10 * M, 0.14 * M, 0.10 * M);
     const pinGeo = new THREE.CylinderGeometry(0.018 * M, 0.018 * M, 0.16 * M, 8);
-    const padGeo = new THREE.CylinderGeometry(0.05 * M, 0.05 * M, 0.04 * M, 8);
+    // Mother audit T11 (X2): the tip boss grows over the plate/boom seam —
+    // h 0.04 → 0.065 at tip-local x −0.0275 spans boom-x 2.44…2.505: the
+    // plate's end face (PLATE_END_M 2.45, pinned) is buried 10 mm inside the
+    // boss and the boom tip (2.50) sits 5 mm inside the boss's outer face — no
+    // bare 10 mm of boom between plate and boss, no coplanar end discs.
+    const padGeo = new THREE.CylinderGeometry(0.05 * M, 0.05 * M, 0.065 * M, 8);
     const boltGeo = new THREE.CylinderGeometry(0.008 * M, 0.008 * M, 0.012 * M, 6);
 
     for (const azDeg of azList) {
@@ -2848,9 +3052,14 @@ export class PlayerSatellite extends THREE.Group {
 
       // Hinge bracket — clevis on the barrel FORE of the rim, inside the
       // allocated band (z −1.000..−0.886, r 0.34..0.46): box spans r
-      // 0.35..0.45, z −1.00..−0.90. Does not rotate with the pose.
+      // 0.35..0.45, z −0.99..−0.89. Does not rotate with the pose.
+      // Mother audit T11 (X1): the box used to span z −1.00..−0.90, its aft
+      // face EXACTLY in the rear-cap plane (a coplanar tie the aft-on frames
+      // showed as a flush-tied bracket). 10 mm FORE now: the aft face stands
+      // 10 mm clear of the cap plane; test-FlowerHardware's band check
+      // (z −1.000..−0.886) still holds (−0.99..−0.89).
       const bracket = new THREE.Mesh(bracketGeo, bracketMat);
-      bracket.position.set(0, 0, 0.05 * M);
+      bracket.position.set(0, 0, 0.06 * M);
       bracket.name = `FlowerStrutBracket_${i}`;
       bracket.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
       pivot.add(bracket);
@@ -2863,12 +3072,13 @@ export class PlayerSatellite extends THREE.Group {
 
       // Bracket mount bolts — DETAIL-LOD inert hardware (MountBolt_ prefix
       // joins the existing cull family; hidden when far, like all mm-scale
-      // fittings).
+      // fittings). Ride the bracket's fore face: centre 2 mm proud of it
+      // (face at z 0.11 after X1 → bolts at 0.112; 12 mm shank half-buried).
       const boltAt = [[0.035, 0.055], [0.035, -0.055], [-0.035, 0.055], [-0.035, -0.055]];
       boltAt.forEach(([bx, by], k) => {
         const bolt = new THREE.Mesh(boltGeo, padMat);
         bolt.rotation.x = Math.PI / 2;
-        bolt.position.set(bx * M, by * M, 0.102 * M);
+        bolt.position.set(bx * M, by * M, 0.112 * M);
         bolt.name = `MountBolt_Flower_${i}_${k}`;
         bolt.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
         pivot.add(bolt);
@@ -2888,7 +3098,10 @@ export class PlayerSatellite extends THREE.Group {
       hinge.add(boom);
 
       // Radiator plate ALONG the strut, width TANGENTIAL (local Y — the
-      // allocation table's plate clause), boom embedded flush.
+      // allocation table's plate clause). The Ø60 mm boom runs through the
+      // 30 mm plate's mid-plane, so it stands 15 mm proud of BOTH faces as a
+      // central spine (Mother audit T11/X3: intentional — a bare-plate look
+      // would need a boom ≤ Ø30 or a thicker plate; neither is wanted).
       const plate = new THREE.Mesh(plateGeo, plateMat);
       plate.position.x = ((FL.PLATE_START_M + FL.PLATE_END_M) / 2) * M;
       plate.name = `FlowerStrutPlate_${i}`;
@@ -2903,7 +3116,7 @@ export class PlayerSatellite extends THREE.Group {
       hinge.add(tip);
       const pad = new THREE.Mesh(padGeo, padMat);
       pad.rotation.z = Math.PI / 2;                  // pad axis along local X
-      pad.position.x = -0.02 * M;
+      pad.position.x = -0.0275 * M;                  // X2: boss spans boom-x 2.44…2.505 (see padGeo)
       pad.name = `FlowerStrutTipPad_${i}`;
       pad.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
       tip.add(pad);
@@ -2964,16 +3177,19 @@ export class PlayerSatellite extends THREE.Group {
   // --------------------------------------------------------------------------
   /** @private */
   _buildSensors() {
-    // CENTRELINE REDESIGN (2026-07-23): the whale-net launcher owns the fore-cap
-    // CoM axis (0,0) so its recoil is torque-free. The sensor instruments are
-    // therefore arranged in a SYMMETRIC RING around that central launcher (not
-    // shoved to one side, which overhung an arm's strut-deploy path) and are all
-    // kept SHORTER than the launcher so a reeled-in catch parks on the protruding
-    // muzzle without smashing the optics. RING_R is the instrument ring radius;
-    // the four instruments sit at 45/135/225/315° so no single arm strut is
-    // blocked. The turret is FIXED (no gimbal tracking — that was dead code that
-    // never had a target set; removed 2026-07-23), so the ring geometry only has
-    // to clear the launcher at rest, which it does with margin (0.26−0.10 > 0.12).
+    // CENTRELINE REDESIGN (2026-07-23): the fore-cap CoM axis (0,0) was given to
+    // the whale-net launcher (torque-free recoil), so the sensor instruments were
+    // arranged in a SYMMETRIC RING around that axis (not shoved to one side, which
+    // overhung an arm's strut-deploy path) and kept SHORTER than the launcher.
+    // S13(e) moved the launcher into the two NetPod_* flanking the nose and the
+    // axis now carries the BERTH COLLAR (_buildBerthCollar: BerthTunnel r 0.155
+    // through the deck bore, ring at z 1.30) — the ring geometry stays because a
+    // reeled-in catch still parks on the collar, fore of every instrument mouth,
+    // and no strut is blocked. RING_R is the instrument ring radius; the four
+    // instruments sit at 45/135/225/315°. The turret is FIXED (no gimbal
+    // tracking — that was dead code that never had a target set; removed
+    // 2026-07-23), so the ring only has to clear the tunnel at rest, which it does
+    // with 5 mm to the EO/tele barrels (0.26 − 0.10 − 0.155; test-MotherZFix).
     const RING_R = M * 0.26;
     this._sensorRingR = RING_R;
     // Gimbal platform group — pivot on the CoM axis, at the fore cap (z=1.0M).
@@ -2995,8 +3211,8 @@ export class PlayerSatellite extends THREE.Group {
     });
 
     // EO Camera: gunmetal barrel with a recessed dark lens + bright bezel.
-    // Ring slot (RING_AZ.eo); shortened to 0.22M so it stays aft of the launcher
-    // muzzle. Barrel axis +Z (fore).
+    // Ring slot (RING_AZ.eo); shortened to 0.22M so it stays aft of the berth
+    // collar ring (z 1.30). Barrel axis +Z (fore).
     const eoXY = ringXY(RING_AZ.eo);
     const camGeo = new THREE.CylinderGeometry(M * 0.10, M * 0.10, M * 0.22, 12);
     const camLensMat = new THREE.MeshStandardMaterial({
@@ -3006,6 +3222,7 @@ export class PlayerSatellite extends THREE.Group {
     eoCam.rotation.x = Math.PI / 2;
     eoCam.position.set(eoXY.x, eoXY.y, M * 0.11);
     eoCam.name = 'EO_Camera';
+    eoCam.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // Mother audit T5 (F12 hygiene)
     this.sensorGimbal.add(eoCam);
 
     // Lens: dark disc 1 mm proud of the front (+Z) face (bury-don't-touch).
@@ -3055,7 +3272,15 @@ export class PlayerSatellite extends THREE.Group {
     const irSensor = new THREE.Mesh(irGeo, irMat);
     const irXY = ringXY(RING_AZ.ir);
     irSensor.position.set(irXY.x, irXY.y, M * 0.08);
+    // Mother audit T5 (F10): rotate the box to its ring azimuth so the 0.20 side
+    // runs radially and the 0.15 side tangentially — it read skewed against the
+    // ring, and unrotated its inner corner reached radial 0.138 (−0.084, −0.109),
+    // straight through the r 0.155 berth tunnel (T1). Rotated: inner face at
+    // radial 0.16 (5 mm clear of the tunnel), outer face at 0.36, corners at
+    // 0.368 on the widened deck. IR_Aperture is a child → rides along.
+    irSensor.rotation.z = RING_AZ.ir * Math.PI / 180;
     irSensor.name = 'IR_Sensor';
+    irSensor.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.sensorGimbal.add(irSensor);
 
     // IR aperture window — one dark facet so the foil box reads as an instrument
@@ -3070,49 +3295,53 @@ export class PlayerSatellite extends THREE.Group {
     irWin.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     irSensor.add(irWin);
 
-    // LIDAR: small dome with pulsing green light
-    const lidarGeo = new THREE.SphereGeometry(M * 0.1, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2);  // was 8×6
+    // LIDAR: small dome with pulsing green light — on a drum (Mother audit T3, F4).
+    // The hemisphere used to sit with its pole along +Y (sideways) and its open
+    // equator facing outboard-down (−X−Y), so the ring read as a pit / cut face
+    // with a dark base disc, not a dome. Now: a gunmetal drum (r 0.10, h 0.09,
+    // z 1.02–1.11 — 2 cm clear of the cap, the deck plane 1.03 and the T4
+    // turntable cross it transversally) carries the dome pole-fore, its equator
+    // 1 cm INSIDE the drum's top face (no coplanar tie, and the open base is
+    // buried in a closed solid → no see-through, so the Z7 base disc is gone).
     const lidarMat = new THREE.MeshStandardMaterial({
       color: 0x55585f, metalness: 0.5, roughness: 0.55,   // gunmetal — was 0x888888/0.7/0.3,
       // which bloomed to a white blob (same fix class as the IR box above).
     });
-    this.lidarDome = new THREE.Mesh(lidarGeo, lidarMat);
     const lidarXY = ringXY(RING_AZ.lidar);
-    this.lidarDome.position.set(lidarXY.x, lidarXY.y, M * 0.10);
+    const lidarDrum = new THREE.Mesh(new THREE.CylinderGeometry(M * 0.10, M * 0.10, M * 0.09, 24), lidarMat);
+    lidarDrum.rotation.x = Math.PI / 2;                       // cylinder +Y → +Z fore
+    lidarDrum.position.set(lidarXY.x, lidarXY.y, M * 0.065);  // spans gimbal-local z 0.02 … 0.11
+    lidarDrum.name = 'LIDAR_Drum';
+    lidarDrum.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.sensorGimbal.add(lidarDrum);
+
+    const lidarGeo = new THREE.SphereGeometry(M * 0.1, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2);  // was 8×6
+    this.lidarDome = new THREE.Mesh(lidarGeo, lidarMat);
+    this.lidarDome.position.set(lidarXY.x, lidarXY.y, M * 0.10);   // equator at z 1.10, apex 1.20
+    this.lidarDome.rotation.x = Math.PI / 2;    // hemisphere pole (+Y) → +Z fore; dome-local +Z → world −Y
     this.lidarDome.name = 'LIDAR_Dome';
+    this.lidarDome.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.sensorGimbal.add(this.lidarDome);
 
-    // §2-followup (z-layer-and-lights-fix Batch 4, Z7): the dome is an OPEN
-    // FrontSide hemisphere — from below the equator the back faces cull and the
-    // interior shows through (a see-through hollow). Cap the equator with a dark
-    // base disc so the dome reads solid. A base disc (not DoubleSide on the dome)
-    // avoids the doubled dome overdraw. The disc overhangs the rim slightly
-    // (×1.02) so its edge — not a rim coincident with the dome equator — defines
-    // the silhouette; the dome wall meets the disc perpendicular (stable, not a
-    // parallel tie). DoubleSide so it caps from any view of the tiny lip.
-    const lidarBaseGeo = new THREE.CircleGeometry(M * 0.1 * 1.02, 16);
-    const lidarBaseMat = new THREE.MeshStandardMaterial({
-      color: 0x2a2a30, metalness: 0.6, roughness: 0.5, side: THREE.DoubleSide,
-    });
-    const lidarBase = new THREE.Mesh(lidarBaseGeo, lidarBaseMat);
-    lidarBase.rotation.x = -Math.PI / 2;  // lie flat in the equator (XZ) plane
-    lidarBase.name = 'LIDAR_DomeBase';
-    this.lidarDome.add(lidarBase);  // child of the dome → tracks it exactly (local origin = equator centre)
+    // (Z7 base disc LIDAR_DomeBase removed in Mother audit T3: the open equator
+    // is buried 1 cm inside the drum, so nothing can look into the shell.)
 
-    // LIDAR aperture — small dark lens facet on the dome's forward face so the
+    // LIDAR aperture — small dark lens facet on the dome's outboard face so the
     // labelled "LIDAR DOME" reads as an instrument, not a bead. Sits proud of
-    // the dome surface by 1 mm along +Z (bury-don't-touch: avoid a coincident
+    // the dome surface by 1 mm (bury-don't-touch: avoid a coincident
     // curved-on-flat tie under log-depth).
     const lidarLensGeo = new THREE.CircleGeometry(M * 0.045, 16);
     const lidarLensMat = new THREE.MeshStandardMaterial({
       color: 0x0a0a12, metalness: 0.4, roughness: 0.15,
     });
     const lidarLens = new THREE.Mesh(lidarLensGeo, lidarLensMat);
-    // Dome-local: dome is a hemisphere (equator at y=0, pole +Y). Place the lens
-    // on the +Z side at ~40° elevation so it faces forward-out, at radius+1 mm.
-    const lensEl = 40 * Math.PI / 180;
+    // Dome-local: hemisphere (equator at y=0, pole +Y = world +Z). Lens at 65°
+    // elevation toward dome-local +Z (= world −Y, the belly side the fore-q-bot
+    // pose sees), at radius+1 mm — the lens circle (r 0.045) stays clear of the
+    // apex and of the equator, i.e. above the drum's top face.
+    const lensEl = 65 * Math.PI / 180;
     lidarLens.position.set(0, Math.sin(lensEl) * M * 0.101, Math.cos(lensEl) * M * 0.101);
-    lidarLens.lookAt(lidarLens.position.clone().multiplyScalar(2)); // face outward along the radial
+    lidarLens.lookAt(lidarLens.position.clone().multiplyScalar(2)); // face outward along the radial (before add: dome-local frame)
     lidarLens.name = 'LIDAR_Lens';
     lidarLens.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.lidarDome.add(lidarLens);
@@ -3123,24 +3352,26 @@ export class PlayerSatellite extends THREE.Group {
       color: 0x00ff44, transparent: true, opacity: 0.0,
     });
     this.lidarLight = new THREE.Mesh(lidarLightGeo, this._lidarLightMat);
-    // Co-located with LIDAR_Lens (~40° elevation, +Z side), centre ON the dome
-    // surface (r 0.10) so half the r 0.04 pulse sphere protrudes — reads as the
-    // emitter firing through the aperture. Reparented onto the dome: previously
-    // a gimbal child fully enclosed by the opaque dome, so the pulse never showed.
+    // Co-located with LIDAR_Lens (65° elevation, dome-local +Z side), centre ON
+    // the dome surface (r 0.10) so half the r 0.04 pulse sphere protrudes —
+    // reads as the emitter firing through the aperture. Reparented onto the
+    // dome: previously a gimbal child fully enclosed by the opaque dome, so the
+    // pulse never showed.
     this.lidarLight.position.set(0, Math.sin(lensEl) * M * 0.10, Math.cos(lensEl) * M * 0.10);
     this.lidarLight.name = 'LIDAR_Light';
     this.lidarLight.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
     this.lidarDome.add(this.lidarLight);
 
-    // Sensor base plate — FIXED deck, an ANNULUS (ring) around the central net
-    // launcher (2026-07-23 centreline redesign): the launcher passes through the
-    // deck's centre bore on the CoM axis, and the four ring instruments mount to
-    // the deck's rim. Inner bore r 0.15M clears the launcher (r 0.12M); outer
-    // r 0.34M carries the RING_R=0.26M instrument circle and stays inside the
+    // Sensor base plate — FIXED deck, an ANNULUS (ring) around the berth tunnel
+    // (2026-07-23 centreline redesign; the central launcher left in S13(e), the
+    // T1 BerthTunnel r 0.155 owns the axis now and buries the bore edge): the
+    // four ring instruments mount to the deck's rim. Inner bore r 0.15M; outer
+    // r 0.38M (Mother audit T4 — was 0.34, which the ring instruments' outer
+    // envelope at 0.36 overhung by 2 cm; the rotated IR box's corners reach
+    // 0.368) carries the RING_R=0.26M instrument circle and stays 2 cm inside the
     // hull (0.40M). Fixed to the hull (only the instruments articulate).
     const deckInnerR = M * 0.15;
-    const deckOuterR = M * 0.34;
-    const basePlateT = M * 0.05;
+    const deckOuterR = M * 0.38;
     const basePlateGeo = new THREE.RingGeometry(deckInnerR, deckOuterR, 32);
     const basePlate = new THREE.Mesh(basePlateGeo, this._matDark);
     // RingGeometry lies in the XY plane (+Z normal) → already faces fore; place
@@ -3160,35 +3391,37 @@ export class PlayerSatellite extends THREE.Group {
     skirt.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(skirt);
 
-    // ── Gimbal hub ring — the articulating mount the four ring instruments sit
-    // on. An ANNULUS (inner r 0.14M clears the central launcher r 0.12M; outer
-    // r 0.22M) so the launcher passes through the gimbal's centre without ever
-    // touching it, at any articulation. Gimbal child → swivels with the optics.
-    const hubGeo = new THREE.RingGeometry(M * 0.14, M * 0.22, 32);
-    const hubRing = new THREE.Mesh(hubGeo, gunmetalMat);
-    hubRing.position.set(0, 0, M * 0.02);   // just fore of the pivot plane
-    hubRing.name = 'SensorHubRing';
+    // ── Turntable — the SENSOR TURRET body the four ring instruments stand on
+    // (Mother audit T4, F5). The old r 0.14–0.22 hub annulus + four 3 cm spokes
+    // were hidden inside the tunnel / instrument footprints, so the "turret" the
+    // callout named was not on screen and the instruments read as parked on a
+    // paper-thin deck. Solid gunmetal cylinder r 0.34, 3 cm thick, gimbal-local
+    // z 0.025–0.055 (world 1.025–1.055): its underside is 5 mm behind the deck
+    // plane so the deck ring lies INSIDE it (no slit, no tie) and a 4 cm dark
+    // deck lip shows around it; every instrument passes through it (the barrels
+    // r 0.09–0.10 at RING_R 0.26 cross the rim transversally — r 0.34, not the
+    // plan's 0.35: the telescope's outer surface is at radial exactly 0.35, so a
+    // 0.35 rim would be tangent to it along a line; not 0.36 either, where the
+    // rotated IR box's flat outer face would lie tangent). The T1 tunnel passes
+    // through its centre. 1 cm inboard of the T2 saddles' inboard faces (0.36).
+    const hubR = M * 0.34;
+    const hubRing = new THREE.Mesh(new THREE.CylinderGeometry(hubR, hubR, M * 0.03, 48), gunmetalMat);
+    hubRing.rotation.x = Math.PI / 2;       // cylinder +Y → +Z fore
+    hubRing.position.set(0, 0, M * 0.04);   // gimbal-local z 0.025 … 0.055
+    hubRing.name = 'SensorHubRing';         // name kept: callouts / tests pick it
     hubRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.sensorGimbal.add(hubRing);
 
-    // Thin radial spokes from the hub rim out to each ring instrument, so the
-    // optics read as mounted to the turret rather than floating.
-    const spokeMat = gunmetalMat;
-    for (const azDeg of Object.values(RING_AZ)) {
-      const p = ringXY(azDeg);
-      const spoke = new THREE.Mesh(new THREE.BoxGeometry(M * 0.10, M * 0.03, M * 0.03), spokeMat);
-      spoke.position.set(p.x * 0.85, p.y * 0.85, M * 0.04);
-      spoke.rotation.z = azDeg * Math.PI / 180;   // long axis (local X) points radially
-      spoke.name = 'SensorSpoke';
-      spoke.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-      this.sensorGimbal.add(spoke);
-    }
+    // (Mother audit T4: the four radial SensorSpoke boxes were removed — they
+    // were buried inside the hub / instrument footprints and never read as
+    // mounts. The turntable body carries the optics now.)
 
     // ── Despin laser telescope (2026-07-23) — mounted in the RING_AZ.tele slot
     // (co-boresighted with the EO camera: both are gimbal children pointing +Z,
     // so their lines of sight stay parallel). Shortened (0.20M, r 0.09M) so its
-    // mouth stays AFT of the central net-launcher muzzle — a reeled-in catch
-    // parks on the protruding launcher, never on the optics. Tube axis +Z.
+    // mouth stays AFT of the berth collar ring (z 1.30) and the NetPodMuzzle_*
+    // plane — a reeled-in catch parks on the collar, never on the optics (the
+    // central launcher this once referred to left in S13(e)). Tube axis +Z.
     const teleXY = ringXY(RING_AZ.tele);
     const teleR = M * 0.09;
     const teleLen = M * 0.20;
@@ -3334,6 +3567,30 @@ export class PlayerSatellite extends THREE.Group {
       housing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.add(housing);
 
+      // Saddle (Mother audit T2, F3) — the housing floated 6 cm off the cap with
+      // more than half of it outboard of the hull and no mount. It cannot grow
+      // aft (the ROSA drum sweeps x 0.43–0.53 to ρ_yz 1.02 as the wing
+      // sun-tracks), so the mount is a gunmetal block on the CAP FACE under the
+      // housing's inboard 6–9 cm: x 0.36–0.39, y ±0.06, z 0.995–1.07.
+      //   • 5 mm buried in the cap (z 0.995; the cap disc crosses it transversally)
+      //     and 10 mm into the housing's aft end (z 1.07 vs 1.06); its far top
+      //     corner is 0.108 from the housing axis (< r 0.12 → inside the aft disc).
+      //   • corners at radial hypot(0.39, 0.06) = 0.3946 — 4.9 mm inside the
+      //     barrel's 64-gon flats (0.39952; the plan's x 0.395 face put the corner
+      //     edge ON the flat, tmp/mother-audit/saddle-clearance.log) and 6.5 mm
+      //     inside the cap lip, so the buried 5 mm never shows and no face is
+      //     tangent to the skin.
+      //   • drum sweep x ≥ 0.43 → 4.0 cm clear; furled coil (r 0.1575 about the
+      //     spool axis at x 0.48, z ±0.98) swept 0–360° → ≥ 6.6 mm at any sun
+      //     angle (≥ 11 mm above the cap plane); hinge hardware 29 cm; the T4
+      //     turntable (r 0.34) 2 cm inboard; the deck lip / skirt run INTO the
+      //     block (transversal, hidden). Probe table: saddle-clearance.log.
+      const saddle = new THREE.Mesh(new THREE.BoxGeometry(M * 0.03, M * 0.12, M * 0.075), gunmetalMat);
+      saddle.position.set(Math.sign(sx) * M * 0.375, 0, M * 1.0325);
+      saddle.name = `NetPodSaddle_${pod}`;
+      saddle.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(saddle);
+
       const caps = [];
       for (let cell = 0; cell < 2; cell++) {
         const lz = cell === 0 ? CELL_DZ : -CELL_DZ;
@@ -3444,16 +3701,72 @@ export class PlayerSatellite extends THREE.Group {
     ring.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(ring);
 
+    // Berth tunnel (Mother audit T1, F1) — the boss the collar ring is a collar
+    // OF. The central launcher tube that used to carry the ring left in S13(e)
+    // and the torus hovered 20 cm in front of the sensor deck with nothing under
+    // it. Solid gunmetal cylinder on the centreline from behind the deck plane to
+    // just behind the ring's equator:
+    //   r 0.155 > deck bore 0.15 → the deck's inner edge is buried in the tunnel
+    //   wall (no slit), and 5 mm clear of the EO/tele barrels' innermost points
+    //   (RING_R 0.26 − r 0.10 = 0.16) and of the IR box's inner face (0.16, once
+    //   rotated to its ring azimuth — see _buildSensors);
+    //   aft end z 1.02 (1 cm behind the deck plane 1.03) → no coplanar tie;
+    //   fore end z 1.29 (1 cm behind the torus centre plane) — the torus inner
+    //   surface is at r 0.1607 there, so the mouth sits 5 mm inside the bore and
+    //   the tube wraps it: no tie, no contact at any z (min inner r is 0.16).
+    const tunnelR = 0.155 * M;
+    const tunnel = new THREE.Mesh(new THREE.CylinderGeometry(tunnelR, tunnelR, 0.27 * M, 24), gunmetalMat);
+    tunnel.rotation.x = Math.PI / 2;            // cylinder +Y → +Z fore
+    tunnel.position.set(0, 0, 1.155 * M);       // spans z 1.02 … 1.29
+    tunnel.name = 'BerthTunnel';
+    tunnel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.add(tunnel);
+    // Dark berth face seen through the ring bore — 5 mm proud of the tunnel's
+    // closed front disc (z 1.29): two parallel discs 1 mm apart would be a
+    // log-depth tie under the ≥ 4 mm rule; at 5 mm it reads as an inset plate
+    // with a 2.5 cm gunmetal rim (r 0.13 vs 0.155).
+    const face = new THREE.Mesh(new THREE.CircleGeometry(0.13 * M, 24),
+      new THREE.MeshStandardMaterial({ color: 0x0a0a12, metalness: 0.4, roughness: 0.15 }));
+    face.position.set(0, 0, 1.295 * M);         // CircleGeometry +Z normal faces fore
+    face.name = 'BerthFace';
+    face.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.add(face);
+    // Seat flange — the tunnel alone slides into the torus bore with a 5 mm
+    // clearance, which reads as a shaft in a bearing but not as a seated ring.
+    // A short r 0.20 disc at z 1.255–1.275 buries 3 cm into the torus tube (the
+    // tube's inner surface is at r 0.169 there), so the ring visibly sits on a
+    // lip. 1 cm above the LaserBaffle top (z 1.245) and above every other ring
+    // instrument (EO 1.22, LIDAR apex 1.20), so no contact. It lies INSIDE the
+    // torus silhouette from the side (r 0.20 < 0.30, z 1.255 > 1.23) and shows
+    // only from fore-quarter / below as the lip between tunnel and torus.
+    const flange = new THREE.Mesh(new THREE.CylinderGeometry(0.20 * M, 0.20 * M, 0.02 * M, 32), gunmetalMat);
+    flange.rotation.x = Math.PI / 2;
+    flange.position.set(0, 0, 1.265 * M);
+    flange.name = 'BerthFlange';
+    flange.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.add(flange);
+
     // The guide cone: an open funnel that turns a berth's last metre into an
     // on-axis capture — bore radius at the ring plane, flaring to the outer
-    // radius 0.14 m fore. Open-ended so the launcher bore reads through.
+    // radius 0.14 m fore. Open-ended so the berth face reads through.
     const coneH = 0.14 * M;
-    const coneGeo = new THREE.CylinderGeometry(rOut * M, rIn * M, coneH, 16, 1, true);
+    // 48 radial segments (was 16): the funnel INTERIOR is visible now (DoubleSide
+    // below) and a 16-gon read as a faceted nut around the 48-segment torus.
+    const coneGeo = new THREE.CylinderGeometry(rOut * M, rIn * M, coneH, 48, 1, true);
     // Funnel-facing: radiusTop (the flared end) points +Z fore after the X
     // rotation; conical shading reads like the launcher housing family's gunmetal.
-    const cone = new THREE.Mesh(coneGeo, gunmetalMat);
+    // Mother audit T1 (F2): DoubleSide on a CLONE (the shared gunmetal is the
+    // torus/lamps material) — a FrontSide open frustum showed only back-faces
+    // from the approach direction, so the funnel was invisible from exactly
+    // where it matters. Seated 1 cm aft (centre z 1.36, spans 1.29–1.43) so
+    // its r 0.16 aft rim sits inside the torus tube instead of on the inner
+    // equator (edge contact → "never coincident"); the visible funnel stays the
+    // outer ~6 cm (r 0.239→0.30) because the cone runs inside the tube between.
+    const coneMat = gunmetalMat.clone();
+    coneMat.side = THREE.DoubleSide;
+    const cone = new THREE.Mesh(coneGeo, coneMat);
     cone.rotation.x = Math.PI / 2;              // +Y (the flared radiusTop) → +Z fore
-    cone.position.set(0, 0, (zM * M) + coneH / 2);
+    cone.position.set(0, 0, (zM * M) + coneH / 2 - 0.01 * M);
     cone.name = 'BerthCollarGuideCone';
     cone.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(cone);
@@ -3569,11 +3882,27 @@ export class PlayerSatellite extends THREE.Group {
     const navGeo = new THREE.SphereGeometry(M * LFX.NAV_CORE_R, 8, 6);  // was 4×4 faceted lump
     const HALO = M * LFX.NAV_HALO;  // steady nav halo sprite size
 
+    // Site (Mother audit T6, B1): the old (±0.42, 0, 0.30) sat on the ±X
+    // equator — inside the ROSA drum's sun-track sweep (the drum axis is at
+    // x ±0.48, r 0.05, and swings through the YZ plane at every sun angle), on the equator slot the drum lies in, and the furled coil
+    // (r 0.1575) swallowed it outright. Moved to the fore shoulder band at
+    // az ∓15° (starboard 345°, port 195°), z 0.76: bare MLI between the PV end
+    // rows' top (z 0.72; core bottom 0.735) and the avionics (z ≥ 0.79; the GPS
+    // patches at az 340 start at z 0.835 — 5 cm above the core top 0.785; the
+    // 0.14 m halo sprite's top edge 0.83 stays below them). Radial 0.412: core
+    // r 0.025 buried 13 mm (inner 0.387), centre 12 mm proud. x_max 0.423 <
+    // 0.43 (the drum sweep's inboard face); 0.135 from the drum axis line
+    // (≥ 0.075 = drum r + core r). Never coincident with the skin; ADDITIVE
+    // renderOrder so the cores sort with the other light hardware.
+    const navR = 0.412 * M, navAz = 15 * Math.PI / 180, navZ = 0.76 * M;
+    const navX = navR * Math.cos(navAz), navY = -navR * Math.sin(navAz);   // (0.398, −0.107)
+
     // Port (left) — Red (repositioned for Config G barrel)
     this._portLightMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
     this.portLight = new THREE.Mesh(navGeo, this._portLightMat);
-    this.portLight.position.set(-M * 0.42, 0, M * 0.3);
+    this.portLight.position.set(-navX, navY, navZ);            // az 195°
     this.portLight.name = 'NavLight_Port';
+    this.portLight.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
     this.add(this.portLight);
     // Port/starboard are STEADY (running lights) — a constant modest halo.
     this.portLight.add(this._makeLightHalo(0xff0000, HALO, 1.6, LFX.NAV_HALO_OPACITY));
@@ -3581,8 +3910,9 @@ export class PlayerSatellite extends THREE.Group {
     // Starboard (right) — Green
     this._starboardLightMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
     this.starboardLight = new THREE.Mesh(navGeo, this._starboardLightMat);
-    this.starboardLight.position.set(M * 0.42, 0, M * 0.3);
+    this.starboardLight.position.set(navX, navY, navZ);        // az 345°
     this.starboardLight.name = 'NavLight_Starboard';
+    this.starboardLight.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
     this.add(this.starboardLight);
     this.starboardLight.add(this._makeLightHalo(0x00ff00, HALO, 1.6, LFX.NAV_HALO_OPACITY));
   }
@@ -3655,20 +3985,27 @@ export class PlayerSatellite extends THREE.Group {
       this.add(whip);
     });
 
-    // ── MGA patch — tangent-mounted flat box, 2 mm proud, pale thermal-white.
-    // az ~25° fore-shoulder wedge, z 0.87.
+    // ── MGA patch — tangent-mounted flat box, pale thermal-white. az ~25°
+    // fore-shoulder wedge, z 0.87. Centred ON the skin (Mother audit T5, F7):
+    // a 2 cm box centred at radial 0.400 spans 0.39–0.41 — 1 cm buried at the
+    // centre, still ~1.5 mm buried at its 8 cm edges where the hull curves away
+    // to 0.392 — so no air shows under the edges (the old +0.012 centre left the
+    // corners 10 mm in the air).
     {
       const azDeg = 25, radial = radialAt(azDeg);
       const patch = new THREE.Mesh(new THREE.BoxGeometry(M * 0.16, M * 0.16, M * 0.02), thermalWhite);
       patch.quaternion.setFromUnitVectors(zFwd, radial);   // box +Z (face) → radial
-      patch.position.copy(radial).multiplyScalar(barrelR + M * 0.012).setZ(barrelHZ * 0.87);
+      patch.position.copy(radial).multiplyScalar(barrelR).setZ(barrelHZ * 0.87);
       patch.name = 'MGA_Patch';
       patch.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.add(patch);
     }
 
     // ── Sun sensors ×4 — pucks with a tiny dark window disc. Two on the fore
-    // cap's −Y band flanking the net launcher; two on barrel fore-shoulder wedges.
+    // sensor turntable's top face flanking the berth tunnel (Mother audit T5,
+    // F6 — they used to stand on the cap plane at (±0.28, −0.20), which the
+    // r 0.34 deck skirt / deck buried: only a sliver showed past the rim); two
+    // on barrel fore-shoulder wedges.
     const ssR = M * 0.025, ssT = M * 0.015;
     const makeSunSensor = (idx, pos, axis) => {
       const puck = new THREE.Mesh(new THREE.CylinderGeometry(ssR, ssR, ssT, 12), gunmetal);
@@ -3684,23 +4021,32 @@ export class PlayerSatellite extends THREE.Group {
       win.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       puck.add(win);
     };
-    // Fore-cap pair: flank the −Y net launcher, facing +Z.
-    makeSunSensor(0, new THREE.Vector3(M * 0.28, -M * 0.20, barrelHZ + ssT * 0.5), zFwd);
-    makeSunSensor(1, new THREE.Vector3(-M * 0.28, -M * 0.20, barrelHZ + ssT * 0.5), zFwd);
-    // Barrel pair: az 150° and 205°, z 0.90, radial-out.
+    // Fore pair: on the turntable top face (T4: world z 1.055) at (0, ±0.24),
+    // facing +Z — 3 mm buried in the top face (puck spans z 1.052–1.067), at
+    // az 90/270 between the ring instruments (6.7 cm from the EO barrel, 6 cm
+    // from the berth tunnel, well inside the r 0.34 rim). Hull children, as
+    // before (the turret is fixed).
+    const turntableTopZ = M * 1.055;
+    makeSunSensor(0, new THREE.Vector3(0, M * 0.24, turntableTopZ + ssT * 0.5 - M * 0.003), zFwd);
+    makeSunSensor(1, new THREE.Vector3(0, -M * 0.24, turntableTopZ + ssT * 0.5 - M * 0.003), zFwd);
+    // Barrel pair: az 150° and 205°, z 0.90, radial-out. Centre at barrelR +
+    // ssT/2 − 5 mm so the puck is buried 5 mm in the skin (Mother audit T5, F9:
+    // the flat aft face used to hover 0.8 mm off the curved hull at its rim).
     [150, 205].forEach((azDeg, k) => {
       const radial = radialAt(azDeg);
-      const pos = radial.clone().multiplyScalar(barrelR + ssT * 0.5).setZ(barrelHZ * 0.90);
+      const pos = radial.clone().multiplyScalar(barrelR + ssT * 0.5 - M * 0.005).setZ(barrelHZ * 0.90);
       makeSunSensor(2 + k, pos, radial);
     });
 
     // ── GPS patches ×2 — flat squares 0.07M, az ~340° fore-shoulder wedge,
-    // z 0.87 and 0.95, 2 mm proud.
+    // z 0.87 and 0.95. Centred at radial 0.405 (Mother audit T5, F8): the 2 cm
+    // box spans 0.395–0.415 — 5 mm buried at the centre, ~3 mm at the 3.5 cm
+    // edges (the old +0.012 left the edges 3.5 mm in the air).
     [0.87, 0.95].forEach((zFrac, i) => {
       const azDeg = 340, radial = radialAt(azDeg);
       const patch = new THREE.Mesh(new THREE.BoxGeometry(M * 0.07, M * 0.07, M * 0.02), thermalWhite);
       patch.quaternion.setFromUnitVectors(zFwd, radial);
-      patch.position.copy(radial).multiplyScalar(barrelR + M * 0.012).setZ(barrelHZ * zFrac);
+      patch.position.copy(radial).multiplyScalar(barrelR + M * 0.005).setZ(barrelHZ * zFrac);
       patch.name = `GPS_Patch_${i}`;
       patch.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.add(patch);
@@ -4063,7 +4409,7 @@ export class PlayerSatellite extends THREE.Group {
     this._animateSolarTracking(dt, sunDirection);
     this._animateRosaGlow(dt);
     // (sensor gimbal tracking removed 2026-07-23 — see _buildSensors: the turret
-    // is a FIXED ring around the central launcher; _sensorTarget was never set.)
+    // is a FIXED ring around the berth tunnel; _sensorTarget was never set.)
     this._animateNavLights(dt);
     this._animateThrusterGlow(dt);
     this._animateLidarPulse(dt);
@@ -6479,7 +6825,9 @@ export class PlayerSatellite extends THREE.Group {
       const sg  = this.strutGroups[i];
       const arm = arms[i];
 
-      // Gradual strut slew: if a target alpha was set (by , / . keys), slew toward it
+      // Gradual strut slew: if a target alpha was set (the Period key's latch in
+      // InputManager, or ArmManager's salvage / recall drivers — Comma is the
+      // ROSA furl toggle now), slew toward it
       if (arm._strutTargetAlpha !== undefined && arm.setAimAlpha) {
         arm.setAimAlpha(arm._strutTargetAlpha, dt);
         // Clear target when reached (within 0.01 rad ≈ 0.6°)

@@ -88,7 +88,8 @@ export class TargetPanel {
             align-items: center;
             padding: 2px 4px;
             font-size: 11px;
-            font-family: monospace;
+            font-family: var(--font-mono);
+            font-variant-numeric: tabular-nums;
             border-left: 2px solid transparent;
             border-radius: 2px;
             margin: 1px 0;
@@ -158,7 +159,8 @@ export class TargetPanel {
         /* Section headers */
         .target-section-header {
             font-size: 11px;
-            font-weight: normal;
+            font-weight: 700;
+            letter-spacing: 0.08em;
             opacity: 0.7;
             padding: 4px 4px 2px;
             user-select: none;
@@ -173,7 +175,7 @@ export class TargetPanel {
             border-radius: 3px;
             padding: 1px 6px;
             cursor: pointer;
-            font-family: monospace;
+            font-family: var(--font-mono);
             opacity: 0.5;
             transition: opacity 0.2s;
         }
@@ -188,7 +190,7 @@ export class TargetPanel {
             align-items: center;
             padding: 1px 4px;
             font-size: 11px;
-            font-family: monospace;
+            font-family: var(--font-mono);
             color: #aaaaaa;
             min-height: 18px;
         }
@@ -200,7 +202,7 @@ export class TargetPanel {
             align-items: center;
             padding: 1px 4px;
             font-size: 11px;
-            font-family: monospace;
+            font-family: var(--font-mono);
             color: #aaaaaa;
             min-height: 18px;
         }
@@ -317,7 +319,7 @@ export class TargetPanel {
 
     this.panels.targets.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;padding-right:24px;">
-        <span class="target-section-header" style="color:#00ff88;padding:0;">TRACKED TARGETS <span style="opacity:0.4;font-size:10px;">[T]</span></span>
+        <span class="pane-title target-section-header" style="color:#00ff88;padding:0;">TRACKED TARGETS <span style="opacity:0.4;font-size:10px;">[T]</span></span>
         <button id="hud-sort-btn" class="target-sort-btn" title="Click to cycle sort">TPI ↑</button>
       </div>
       <div id="hud-targets-min-summary" data-pane-show="min" style="display:none;font-size:11px;color:#00ff88;opacity:0.7;">. </div>
@@ -471,13 +473,13 @@ export class TargetPanel {
       const overflow = nc && pct >= 80 && renderedSpanOverflows(t, nc);
       const col = this._targetLaw ? oddsColor(pct, overflow) : overflow ? '#ffd166' : pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
       const tip = overflow ? ` — drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${nc.DIAMETER} m bag: it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)` : '';
-      return `<span style="color:${col};font-size:9px;font-weight:bold;" title="Best tool odds (${arm.type})${tip}">${label} ${pct}%</span>`;
+      return `<span style="color:${col};font-size:10px;font-weight:bold;" title="Best tool odds (${arm.type})${tip}">${label} ${pct}%</span>`;
     }
     // Nothing rollable — name the blocker (e.g. TOO WIDE / EMPTY).
     const netBlocker = (odds.NET && odds.NET.blocker) || (o && o.blocker) || 'NO TOOL';
     const word = netBlocker === 'WIDE' ? 'TOO WIDE'
       : netBlocker === 'HEAVY' ? 'TOO HEAVY' : netBlocker;
-    return `<span style="color:${this._targetLaw ? VisualLaw.COLORS.CAUTION : '#ff7755'};font-size:9px;font-weight:bold;" title="No viable tool (${arm.type})">${word}</span>`;
+    return `<span style="color:${this._targetLaw ? VisualLaw.COLORS.CAUTION : '#ff7755'};font-size:10px;font-weight:bold;" title="No viable tool (${arm.type})">${word}</span>`;
   }
 
   /**
@@ -515,13 +517,13 @@ export class TargetPanel {
       const overflow = pct >= 80 && renderedSpanOverflows(t, CN && CN.LARGE);
       const col = this._targetLaw ? oddsColor(pct, overflow) : overflow ? '#ffd166' : pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
       const tip = overflow ? ` — drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${CN.LARGE.DIAMETER} m bag: it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)` : '';
-      return `<span style="color:${col};font-size:9px;font-weight:bold;" title="Mother Large Net odds${tip}">${pct}% [N]</span>`;
+      return `<span style="color:${col};font-size:10px;font-weight:bold;" title="Mother Large Net odds${tip}">${pct}% [N]</span>`;
     }
     const blocker = (o && o.blocker) || 'NO NET';
     const word = blocker === 'WIDE' ? 'TOO WIDE'
       : blocker === 'HEAVY' ? 'TOO HEAVY'
       : blocker === 'EMPTY' ? 'NO NETS' : blocker;
-    return `<span style="color:${this._targetLaw ? VisualLaw.COLORS.CAUTION : '#ff7755'};font-size:9px;font-weight:bold;" title="Mother Large Net">${word}</span>`;
+    return `<span style="color:${this._targetLaw ? VisualLaw.COLORS.CAUTION : '#ff7755'};font-size:10px;font-weight:bold;" title="Mother Large Net">${word}</span>`;
   }
 
   /**
@@ -617,7 +619,7 @@ export class TargetPanel {
             ? `color:${range.color};opacity:${range.opacity}`
             : `color:${range.color}`;
           const wordTag = (law && law.word)
-            ? `<span class="target-word" style="color:${law.wordColor};font-size:8px;font-weight:bold;letter-spacing:0.08em;margin-left:4px">${law.word}</span>`
+            ? `<span class="target-word" style="color:${law.wordColor};font-size:10px;font-weight:bold;letter-spacing:0.08em;margin-left:4px">${law.word}</span>`
             : '';
 
           if (selected) {
@@ -673,7 +675,7 @@ export class TargetPanel {
                 const tip = overflow ? ` title="drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${nc.DIAMETER} m bag — it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)"` : '';
                 return `<span style="color:${col}"${tip}>${tag}${ok ? '✓' : '✗'}</span>`;
               };
-              fitBadge = `<span style="font-size:9px;font-weight:bold;" title="Capture fit (daughter nets): L = weaver's MEDIUM / LD-NET 5 m class, S = spinner's SMALL / SD-NET 1.5 m class — not the mother net">${seg('L', wFit, Constants.CAPTURE_NET && Constants.CAPTURE_NET.MEDIUM)} ${seg('S', sFit, Constants.CAPTURE_NET && Constants.CAPTURE_NET.SMALL)}</span>`;
+              fitBadge = `<span style="font-size:10px;font-weight:bold;" title="Capture fit (daughter nets): L = weaver's MEDIUM / LD-NET 5 m class, S = spinner's SMALL / SD-NET 1.5 m class — not the mother net">${seg('L', wFit, Constants.CAPTURE_NET && Constants.CAPTURE_NET.MEDIUM)} ${seg('S', sFit, Constants.CAPTURE_NET && Constants.CAPTURE_NET.SMALL)}</span>`;
             }
             }
 
@@ -683,7 +685,7 @@ export class TargetPanel {
             if (dossierSystem.isProfiled(t.id)) {
               const { total } = appraiseSalvage(t.salvage);
               if (total > 0) {
-                valueBadge = `<span style="color:#ffcc00;font-size:9px;font-weight:bold;" title="Appraised salvage value">\u20B9${total}</span>`;
+                valueBadge = `<span style="color:#ffcc00;font-size:10px;font-weight:bold;" title="Appraised salvage value">\u20B9${total}</span>`;
               }
             }
 
@@ -931,7 +933,7 @@ export class TargetPanel {
     const C = Constants.CONJUNCTION;
     const color = badge === 'HI' ? C.BADGE_COLOR_HI
       : badge === 'MD' ? C.BADGE_COLOR_MD : C.BADGE_COLOR_LO;
-    return ` <span style="color:${color};font-size:9px;font-weight:bold;" title="Minimum Orbit Intersection Distance">[${badge}]</span>`;
+    return ` <span style="color:${color};font-size:10px;font-weight:bold;" title="Minimum Orbit Intersection Distance">[${badge}]</span>`;
   }
 
   /**

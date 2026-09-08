@@ -377,10 +377,10 @@ export class MenuScreen {
 
         <!-- ══ HEADER (full-width, centered) ══ -->
         <div id="menu-header">
-          <h1 style="font-family: var(--font-mono); font-size:3.5rem; color:#00ff88;
+          <h1 style="font-family: var(--font-mono); font-size:3.5rem; font-weight:700; color:#00ff88;
                       letter-spacing:0.3em; margin-bottom:0.5rem; white-space:nowrap;
                       text-shadow: 0 0 30px rgba(0,255,136,0.6), 0 0 60px rgba(0,255,136,0.3);">
-            SPACE COWBOY<span style="display:inline-block; width:0; white-space:nowrap; overflow:visible;"><span style="font-size:0.5em; letter-spacing:0.1em; margin-left:0.4em; vertical-align:0.15em; color:rgba(0,255,136,0.6);">${Constants.VERSION_LABEL || ''}</span></span>
+            SPACE COWBOY<span style="display:inline-block; width:0; white-space:nowrap; overflow:visible;"><span style="font-size:0.5em; letter-spacing:0.1em; font-variant-numeric:tabular-nums; margin-left:0.4em; vertical-align:0.15em; color:rgba(0,255,136,0.6);">${Constants.VERSION_LABEL || ''}</span></span>
           </h1>
           <div style="font-size:1.1rem; color:rgba(0,255,136,0.6); letter-spacing:0.15em;
                        margin-bottom:1.5rem;">
@@ -393,12 +393,12 @@ export class MenuScreen {
               font-family: var(--font-mono); color:#00ff88;
               background: rgba(0,255,136,0.1); border: 2px solid rgba(0,255,136,0.5);
               padding: 12px 48px 10px; cursor: pointer; border-radius: 4px;
-              letter-spacing: 0.2em; transition: all 0.3s;
+              letter-spacing: 0.15em; text-transform: uppercase; transition: all 0.3s;
               text-shadow: 0 0 10px rgba(0,255,136,0.5);
               line-height: 1;
             ">
               <div style="font-size:1.2rem;">▶ START MISSION</div>
-              <div id="menu-start-hint" style="font-size:0.72rem; opacity:0.55; letter-spacing:0.1em; margin-top:5px;">
+              <div id="menu-start-hint" style="font-size:0.72rem; opacity:0.55; letter-spacing:0.08em; margin-top:5px;">
                 Press Enter or Click
               </div>
             </button>
@@ -410,7 +410,7 @@ export class MenuScreen {
               font-family: var(--font-mono); font-size:1.0rem; color:#ffaa00;
               background: rgba(255,170,0,0.08); border: 2px solid rgba(255,170,0,0.4);
               padding: 10px 40px; cursor: pointer; border-radius: 4px;
-              letter-spacing: 0.15em; transition: all 0.3s;
+              letter-spacing: 0.15em; text-transform: uppercase; transition: all 0.3s;
               text-shadow: 0 0 10px rgba(255,170,0,0.3);
             ">
               CONTINUE

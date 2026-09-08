@@ -155,6 +155,10 @@ import { viewCover, coverSkipsPaint } from './ui/viewCover.js';
 import { FrameSched, SAMPLE_WINDOW, MAX_SAMPLE_MS } from './core/FrameSched.js';
 import { AutoProfileSweep } from './systems/AutoProfileSweep.js';
 import { gameState as _gameStateRefForProfile } from './core/GameState.js';
+// Session R (plan D17 / §14.2): the typeface law's JS mirror — the hub asks
+// for the four B612 faces once at boot and the epoch tells cached textures
+// when the face question is settled. House grammar: OUTSIDE every ladder gate.
+import { loadFaces, fontEpoch } from './core/Typeface.js';
 
 
 // ============================================================================
@@ -167,6 +171,10 @@ let sunLight;
 // Black-flicker triage: `?bfp=1|2` in-page probe (js/core/BlackFrameProbe.js).
 // Null in normal play — the per-frame hook below is a single falsy check.
 let blackFrameProbe = null;
+// Mother audit (integrate/harness): one-frame draw-call meter, armed only by
+// window.__scbDrawCalls() inside the ?shot block. Null in normal play — the
+// two per-frame hooks around sceneManager.render() are a single falsy check.
+let _shotDrawMeter = null;
 let lastTime = 0;
 
 // --- Diagnostic: ?logPause=1 — opt-in per-second pause/state log.
@@ -846,6 +854,11 @@ function _instrumentClusters() {
 }
 /** The boot's ONE glass read (TouchControls' narrow detectGlass gate; module scope: init sets it, the gameLoop reads it). */
 let _glassBoot = false;
+// Session R (plan §14.2): the answer to the boot's ONE `loadFaces()` — null
+// until the four faces settle, then true (every face usable) or false (a face
+// failed / a headless boot: the fallback is what is drawn). Read by the `?shot`
+// probe (`__fontsOk`); nothing in the game branches on it — the epoch does.
+let _fontsOk = null;
 // Session J (plan D-C) — "the library follows": retarget an OPEN SPECS pane to
 // the current floor's subject (assigned inside the LADDER.ENABLED gate; null
 // flag-off, so the controller's onSubjectChange dep is a no-op there).
@@ -911,6 +924,14 @@ let inputManager;
 
 async function init() {
   _bootMark('init() entry');
+  // Session R (plan D17 / §14.2): the ONE explicit request for the four B612
+  // faces — the first line of the boot, before anything rasterises text, so
+  // the canvas instruments no longer depend on a DOM element happening to use
+  // each weight. Headless (no document.fonts) → resolves false, no epoch bump.
+  // House grammar (the typeface applies to EVERY boot, ?ladder=0 included):
+  // deliberately OUTSIDE every Constants.LADDER.ENABLED gate.
+  const _fontsReady = loadFaces((typeof document !== 'undefined' && document.fonts) ? document.fonts : null);
+  _fontsReady.then((ok) => { _fontsOk = ok; });
   // PR 5 / P2.10 — URL flag parsing (must run before any module reads
   // Constants.DEBUG). SceneManager handles its own `?tier=` override; we
   // only handle `?debug=1` here so the diagnostics gate flips on for the
@@ -3428,6 +3449,30 @@ async function init() {
         const r = sceneManager.renderer.info.render;
         return { calls: r.calls, points: r.points, triangles: r.triangles, lines: r.lines };
       };
+      // Mother audit (integrate/harness) — whole-frame draw calls for the plan's
+      // "≤ +12 draw calls" gate. renderer.info auto-resets at EVERY
+      // renderer.render(), and the composer runs several passes per frame, so
+      // __scbRendererInfo() read between frames sees only the LAST pass
+      // ({calls: 1, triangles: 1} — Phase 0 VERDICT quirk 8). __scbDrawCalls()
+      // arms a one-frame meter in the game loop: autoReset off + info.reset()
+      // right before sceneManager.render(), a read right after it, autoReset
+      // restored — one Promise per call, resolving { calls, triangles, points,
+      // lines } for ONE complete composer frame (null when nothing renders).
+      window.__scbDrawCalls = () => new Promise((resolve) => {
+        if (!sceneManager || !sceneManager.renderer) { resolve(null); return; }
+        const r = sceneManager.renderer;
+        _shotDrawMeter = {
+          before() { r.info.autoReset = false; r.info.reset(); },
+          after() {
+            const i = r.info.render;
+            if (i.calls === 0) return;   // paint skipped this tick — stay armed for a real frame
+            const out = { calls: i.calls, triangles: i.triangles, points: i.points, lines: i.lines };
+            r.info.autoReset = true;
+            _shotDrawMeter = null;
+            resolve(out);
+          },
+        };
+      });
       // Raw handle for the perf harness, which needs to control info.autoReset
       // to get clean per-frame totals across the composer's multiple passes.
       window.__scbSceneManager = () => sceneManager;
@@ -3592,6 +3637,11 @@ async function init() {
       // Session Q: the HUD itself (the inhibit gate picture seeds the arbiter
       // through showNotification / showWarning; the house `__cargoPane` idiom).
       window.__hud = () => hud;
+      // Session R (plan §14.2): the typeface epoch (0 until the four faces
+      // settle, then 1) and the boot's loadFaces() answer (null / true / false)
+      // — the gate pictures' FONTS line reads both.
+      window.__fontEpoch = () => fontEpoch.value();
+      window.__fontsOk = () => _fontsOk;
       // Session K: the CARGO pane (null on a ?ladder=0 boot — never constructed).
       window.__cargoPane = cargoPane;
       // Session M: the instruments + the voice (null on a ?ladder=0 boot).
@@ -6500,6 +6550,7 @@ function gameLoop(timestamp) {
   if (_bootFirstRenderCall) {
     _bootMark('first sceneManager.render(). START');
   }
+  if (_shotDrawMeter) _shotDrawMeter.before();   // ?shot draw-call meter (null in play)
   if (strategicMap && strategicMap.isOpen()) {
     strategicMap.update(dt);
     if (!_skipPaint) strategicMap.render();
@@ -6509,6 +6560,7 @@ function gameLoop(timestamp) {
     // the ~opaque plate. Never skipped while ?bfp / ?shot are armed.
     sceneManager.render();
   }
+  if (_shotDrawMeter) _shotDrawMeter.after();
   if (_bootFirstRenderCall) {
     _bootMark('first sceneManager.render(). END');
   }

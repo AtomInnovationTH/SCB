@@ -357,7 +357,7 @@ export class CargoPane {
     const style = doc.createElement('style');
     style.id = CARGO_STYLE_ID;
     style.textContent = `
-      /* The house HUD grammar rides in from .hud-panel (Courier New 13px,
+      /* The house HUD grammar rides in from .hud-panel (B612 Mono 13px,
        * #00ff88 on rgba(5,10,20,0.95), 1px rgba(0,255,136,0.3) border). */
       #${CARGO_PANE_ID} {
         display: flex;

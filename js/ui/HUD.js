@@ -26,7 +26,6 @@ import { pinProgress } from './shopPin.js'; // S1 retention: pinned-upgrade prog
  import { DaughterWireframe } from './DaughterWireframe.js';
 import { StrutLabels }       from './hud/StrutLabels.js';
 import { updateDriftWarning, updateThrusterBlocks } from '../systems/CoMCalculator.js';
-import { MONO } from '../scene/labelTexture.js';
 
 /** Camera view → HUD info-level mapping */
 const VIEW_INFO_LEVELS = {
@@ -375,7 +374,7 @@ export class HUD {
       textAlign: 'center', display: 'none',
       background: 'rgba(0,0,0,0.88)', border: '1px solid',
       borderRadius: '4px', padding: '10px 18px', zIndex: '120',
-      fontFamily: "'Courier New', monospace",
+      fontFamily: 'var(--font-mono)',
     });
     this._conjunctionPanel.innerHTML = `
       <div id="hud-conjunction-header"
@@ -395,7 +394,7 @@ export class HUD {
       textAlign: 'center', display: 'none',
       background: 'rgba(0,0,0,0.92)', border: '1px solid rgba(0,200,255,0.5)',
       borderRadius: '4px', padding: '12px 24px', zIndex: '130',
-      fontFamily: "'Courier New', monospace", color: '#00ccff',
+      fontFamily: 'var(--font-mono)', color: '#00ccff',
       letterSpacing: '1.5px', fontSize: '13px',
     });
     this._launchBanner.innerHTML = `
@@ -414,7 +413,7 @@ export class HUD {
       background: 'rgba(0, 10, 20, 0.7)',
       zIndex: '150',
       pointerEvents: 'auto',
-      fontFamily: "'Courier New', monospace",
+      fontFamily: 'var(--font-mono)',
     });
     this._pauseOverlay.innerHTML = `
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;">
@@ -474,7 +473,7 @@ export class HUD {
       transform: 'translateX(-50%)',
       pointerEvents: 'none',
       display: 'none',
-      fontFamily: MONO,
+      fontFamily: 'var(--font-mono)',
       fontSize: '11px',
       letterSpacing: '2px',
       textAlign: 'center',
@@ -595,7 +594,7 @@ export class HUD {
             right: 6px;
             padding: 1px 6px;
             min-width: 14px;
-            font-family: 'Courier New', monospace;
+            font-family: var(--font-mono);
             font-size: 10px;
             font-weight: 700;
             letter-spacing: 0.5px;
@@ -668,7 +667,7 @@ export class HUD {
       textAlign: 'center',
       zIndex: '100',
       color: '#00ffcc',
-      fontFamily: "'Courier New', monospace",
+      fontFamily: 'var(--font-mono)',
       fontSize: '14px',
       letterSpacing: '2px',
       textTransform: 'uppercase',
@@ -716,7 +715,7 @@ export class HUD {
       background: 'rgba(0,20,40,0.55)',
       border: '1px solid rgba(240,192,64,0.35)',
       borderRadius: '3px',
-      fontFamily: "'Courier New', monospace",
+      fontFamily: 'var(--font-mono)',
       fontSize: '11px',
       color: '#f0c040',
       letterSpacing: '0.03em',
@@ -2167,7 +2166,7 @@ export class HUD {
     text.style.cssText = `
       position: fixed; top: 40%; left: 50%;
       transform: translate(-50%, -50%);
-      color: #ff4444; font-family: 'Courier New', monospace;
+      color: #ff4444; font-family: var(--font-mono);
       font-size: 28px; font-weight: bold; letter-spacing: 4px;
       text-shadow: 0 0 20px rgba(255,50,50,0.8), 0 0 40px rgba(255,0,0,0.4);
       pointer-events: none; z-index: 101;
@@ -2505,7 +2504,7 @@ export class HUD {
       background: rgba(0, 0, 0, 0.8);
       border: 1px solid ${data.color || '#888'};
       border-radius: 4px; padding: 4px 10px;
-      font-family: 'Courier New', monospace; font-size: 10px;
+      font-family: var(--font-mono); font-size: 10px;
       color: ${data.color || '#ccc'}; white-space: nowrap;
       pointer-events: none;
     `;
@@ -2548,7 +2547,7 @@ export class HUD {
       border: 2px solid #d4a017;
       border-radius: 8px;
       padding: 10px 20px;
-      font-family: 'Courier New', monospace;
+      font-family: var(--font-mono);
       font-size: 13px;
       color: #ffe088;
       text-align: center;
@@ -2607,7 +2606,7 @@ export class HUD {
     text.style.cssText = `
       position: fixed; top: 35%; left: 50%;
       transform: translate(-50%, -50%);
-      color: #ff3333; font-family: 'Courier New', monospace;
+      color: #ff3333; font-family: var(--font-mono);
       font-size: 32px; font-weight: bold; letter-spacing: 4px;
       text-shadow: 0 0 20px rgba(255,50,50,0.8), 0 0 40px rgba(255,0,0,0.4);
       pointer-events: none; z-index: 101;
@@ -2634,7 +2633,7 @@ export class HUD {
     text.style.cssText = `
       position: fixed; top: 35%; left: 50%;
       transform: translate(-50%, -50%);
-      color: #ffaa33; font-family: 'Courier New', monospace;
+      color: #ffaa33; font-family: var(--font-mono);
       font-size: 28px; font-weight: bold; letter-spacing: 4px;
       text-shadow: 0 0 18px rgba(255,170,50,0.8), 0 0 36px rgba(255,140,0,0.4);
       pointer-events: none; z-index: 101;
@@ -2660,7 +2659,7 @@ export class HUD {
     text.style.cssText = `
       position: fixed; top: 35%; left: 50%;
       transform: translate(-50%, -50%);
-      color: #ff6633; font-family: 'Courier New', monospace;
+      color: #ff6633; font-family: var(--font-mono);
       font-size: 28px; font-weight: bold; letter-spacing: 4px;
       text-shadow: 0 0 18px rgba(255,100,50,0.8), 0 0 36px rgba(255,60,0,0.4);
       pointer-events: none; z-index: 101;
@@ -2691,7 +2690,7 @@ export class HUD {
       this._stabilizeEl.style.cssText = `
         position: absolute; bottom: 210px; left: 50%;
         transform: translateX(-50%);
-        font-family: 'Courier New', monospace;
+        font-family: var(--font-mono);
         font-size: 14px; font-weight: bold; letter-spacing: 2px;
         color: #ffaa00; text-shadow: 0 0 8px rgba(255,170,0,0.5);
         pointer-events: none; z-index: 110;
@@ -2735,7 +2734,7 @@ export class HUD {
       border: 2px solid rgba(255, 200, 80, 0.85);
       box-shadow: 0 0 24px rgba(255, 200, 80, 0.55), 0 4px 18px rgba(0, 0, 0, 0.6);
       color: #fff;
-      font-family: 'Courier New', monospace;
+      font-family: var(--font-mono);
       font-size: 18px;
       letter-spacing: 2px;
       text-align: center;
@@ -2777,7 +2776,7 @@ export class HUD {
       borderRadius: '6px',
       padding: '6px 16px',
       color: '#88ccff',
-      fontFamily: '"Share Tech Mono", monospace',
+      fontFamily: 'var(--font-mono)',
       fontSize: '11px',
       letterSpacing: '0.5px',
       zIndex: '1000',

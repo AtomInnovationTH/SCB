@@ -18,6 +18,7 @@
 import { Constants } from '../core/Constants.js';
 import { eventBus }  from '../core/EventBus.js';
 import { Events }    from '../core/Events.js';
+import { mono } from '../core/Typeface.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -433,12 +434,12 @@ export class DaughterWireframe {
     ctx.fillRect(0, 0, W, H);
 
     // Header
-    ctx.font      = "bold 12px 'Courier New', monospace";
+    ctx.font      = mono(12, 'bold');
     ctx.textAlign = 'center';
     ctx.fillStyle = HEADER_COL;
     const armLabel = this._arm ? `DAUGHTER ${this._armIndex + 1}` : 'DAUGHTER PILOT';
     ctx.fillText(armLabel, WIRE_CX, 14);
-    ctx.font      = "11px 'Courier New', monospace";
+    ctx.font      = mono(11);
     ctx.fillStyle = TYPE_COL;
     const stateLabel = this._arm ? `${this._arm.state || '. '}` : 'NO DAUGHTER PILOTED';
     ctx.fillText(stateLabel, WIRE_CX, 26);
@@ -447,7 +448,7 @@ export class DaughterWireframe {
     ctx.fillRect(10, 30, W - 20, 1);
 
     if (!this._arm) {
-      ctx.font      = "10px 'Courier New', monospace";
+      ctx.font      = mono(10);
       ctx.fillStyle = DIM_COL;
       ctx.textAlign = 'center';
       ctx.fillText('. Press 1–4 to pilot a daughter. ', WIRE_CX, WIRE_CY + 20);
@@ -524,11 +525,11 @@ export class DaughterWireframe {
       if (zone.name === 'Status Light') color = this._statusColor;
       const riskTxt = zone.risk === 'RED' ? 'HIGH' : zone.risk === 'YELLOW' ? 'MED' : 'LOW';
 
-      ctx.font      = "bold 11px 'Courier New', monospace";
+      ctx.font      = mono(11, 'bold');
       ctx.fillStyle = color;
       ctx.fillText(`[${zone.name.toUpperCase()}]`, WIRE_CX, infoY);
 
-      ctx.font      = "10px 'Courier New', monospace";
+      ctx.font      = mono(10);
       ctx.fillStyle = color;
       let detail = `Mass: ${zone.massPercent}%   Risk: ${riskTxt}`;
       if (zone.name === 'Net Pack' && this._arm) {
@@ -544,7 +545,7 @@ export class DaughterWireframe {
       }
       ctx.fillText(detail, WIRE_CX, infoY + 13);
     } else {
-      ctx.font      = "11px 'Courier New', monospace";
+      ctx.font      = mono(11);
       ctx.fillStyle = DIM_COL;
       ctx.fillText('SCANNING DAUGHTER CRAFT…', WIRE_CX, infoY);
     }

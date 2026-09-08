@@ -31,6 +31,7 @@ import { Events } from '../core/Events.js';
 import { latLonToPosition } from '../ui/StrategicMap.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 import { fetchData } from '../core/dataUrl.js';
+import { MONO_ADVANCE_EM } from '../core/Typeface.js';
 
 /** Hard cap on rendered labels (performance + clutter). */
 export const MAX_CITIES = 420;
@@ -48,10 +49,11 @@ export const TIER_MAX = 3;
 const DOT_PX = 8;
 
 // --- Screen-space declutter geometry (estimated label box, for collision) ---
-/** Per-character advance for the 12px Courier label text (incl. letter-spacing). */
-const CHAR_PX = 7.7;
-/** Per-character advance for the 11px tier-2/3 label text. */
-const CHAR_PX_SMALL = 7.1;
+/** Per-character advance for the 12px B612 Mono label text (incl. letter-spacing). */
+// Session R: derived from the face's advance (Typeface.MONO_ADVANCE_EM 0.65) + 0.5 px letter-spacing; the old 7.7 / 7.1 assumed a 0.60 advance under a B612 Mono label.
+const CHAR_PX = 12 * MONO_ADVANCE_EM + 0.5;
+/** Per-character advance for the 11px tier-2/3 B612 Mono label text. */
+const CHAR_PX_SMALL = 11 * MONO_ADVANCE_EM + 0.5;
 /** Fixed label-box width overhead: dot + gap + pill padding (CSS px). */
 const LABEL_FIXED_PX = 24;
 /** Estimated label-box height in CSS px (one text line + pill padding). */
@@ -527,7 +529,7 @@ export class CityLabels {
         // Screen-space pill displacement; the dot stays on the true point.
         offX: Array.isArray(city.pillOffsetPx) ? city.pillOffsetPx[0] : 0,
         offY: Array.isArray(city.pillOffsetPx) ? city.pillOffsetPx[1] : 0,
-        // Estimated on-screen pill width (monospace ⇒ length-proportional),
+        // Estimated on-screen pill width (fixed-pitch ⇒ length-proportional),
         // used by the screen-space slot placement in update().
         w: LABEL_FIXED_PX + city.name.length * charPx,
         anchor: new THREE.Vector3(pos.x, pos.y, pos.z),
@@ -817,7 +819,7 @@ export class CityLabels {
       // margin-left:6px added a second ~10px offset on top of slotTransform,
       // desyncing every slot and overlapping W-slot pills onto their own dot.)
       `margin-left:${-DOT_PX / 2}px`,
-      `font:500 ${fontPx}px/1 var(--font-mono)`,
+      `font:400 ${fontPx}px/1 var(--font-mono)`,
       'letter-spacing:0.5px',
       `color:${style.text}`,
       // Subtle dark pill keeps the name legible over bright clouds, deserts,

@@ -34,7 +34,7 @@ export const UPDATE_CARD = Object.freeze({
   BUTTON_MIN_H_PX: 44,
 });
 
-// Session L: the B612 Mono token (index.html :root --font-mono; Courier New is its fallback).
+// Session L: the B612 Mono token (index.html :root --font-mono; the token carries its own local fallback).
 const FONT = 'var(--font-mono)';
 
 const CARD_CSS = `

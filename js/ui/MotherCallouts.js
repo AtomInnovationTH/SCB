@@ -66,6 +66,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { createCardTexture, CARD_W_OVER_TITLE_H, wrapHint } from '../scene/labelTexture.js';
+import { fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
 import { orderRail } from '../scene/railOrder.js';
 import { RAIL_GEOMETRY } from './RailGeometry.js';
 import { TAP_SLOP_PX, TAP_SLOP_MS } from '../systems/TapPick.js';
@@ -111,11 +112,20 @@ const RISK = CFG.RISK_COLORS;
 //            itself, not just its card). NEVER moves an anchor (anchors are
 //            `mesh`/`anchor` only), so every leader/dot/card stays byte-identical
 //            with or without `pick`. Names resolve via player.traverse collecting
-//            ALL matches (SensorSpoke ×4 etc. share a name), so the sets must be
+//            EVERY match (names were shared historically — SensorSpoke ×4 until
+//            Mother audit T4, FEEP_Boss/FEEP_GridDisc until T9 — and the
+//            traverse-all rule is kept so a future shared name still outlines
+//            whole), so the sets must be
 //            DISJOINT subtrees across parts. Absent → defaults to
 //            `mesh ? [mesh] : []`. Card-only parts (berths/mli/daughters/THERMAL
 //            + the anchorless structure plates) carry no `pick` on purpose — see
 //            the FINDINGS in the Wave-5 hull-hover report for each reason.
+//   flowerGated  the part's mesh exists only after the aft radiator flower is
+//            bought: while the flower is absent (_flowerGone) the mesh lookup is
+//            skipped with no warn and the static `anchor` is used; the one-shot
+//            `_meshTried` latch is RE-ARMED on the gone→present edge so a
+//            `dynamic` card binds the real frame after purchase (Phase 0 fix,
+//            dc0025e; see _resolveAnchor).
 const SYSTEMS = [
   {
     id: 'POWER', label: 'POWER',
@@ -126,6 +136,11 @@ const SYSTEMS = [
         massKg: 22, priority: 9, live: 'rosa',
         specs: ['2× 1×2 m roll-out arrays', '~2.2 kW peak (BOL)'],
         pick: ['ROSA_Panel_Front_0deg', 'ROSA_Panel_Back_0deg', 'ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg'],
+        // Mother audit T10 (W8): the leader follows the +X blanket's centre
+        // through sun-tracking tilt and the furl (the static x 1.1 tuple sat in
+        // empty sky beside a tilted or rolled-up wing). Static stands in until
+        // the mesh binds.
+        mesh: 'ROSA_Panel_Front_0deg', dynamic: true,
         anchor: [ 1.1 * M, 0, 0 ] },
       { id: 'body_cells', name: 'HULL SOLAR CELLS', risk: 'GREEN', tier: 'detail', codexId: 'gallium_arsenide',
         massKg: 3, priority: 2, specs: ['Body-mounted GaAs cells'],
@@ -180,7 +195,9 @@ const SYSTEMS = [
   },
   {
     id: 'PAYLOAD', label: 'PAYLOAD',
-    anchor: [ 0, 0.10 * M, 1.05 * M ],
+    // Mother audit T10: on the berth tunnel wall (T1) — the old (0, 0.10, 1.05)
+    // sat inside the collar bore.
+    anchor: [ 0, 0.155 * M, 1.15 * M ],
     role: 'net launcher + spin-brake',
     parts: [
       { id: 'despin', name: 'SPIN-BRAKE LASER', risk: 'RED', tier: 'major', codexId: 'detumble',
@@ -195,21 +212,44 @@ const SYSTEMS = [
         anchor: [ -0.184 * M, 0.184 * M, 1.20 * M ] },
       { id: 'net_launcher', name: 'LARGE NET LAUNCHER', risk: 'GREEN', tier: 'major', codexId: 'miura_ori_net',
         massKg: 5, priority: 7, specs: ['Miura-ori net, ~5 m span'],
+        // Mother audit T10 (F13): the old static (0, 0, 1.30) was the collar
+        // bore, 0.33 m from either pod. Bind the starboard housing (its origin
+        // is the housing centre at (0.45, 0, 1.18)); the static fallback is the
+        // housing's top surface.
+        mesh: 'NetLauncher_0',
         pick: ['NetLauncher_0', 'NetLauncher_1'],
-        anchor: [ 0, 0, 1.30 * M ] },
+        anchor: [ 0.45 * M, 0.12 * M, 1.18 * M ] },
+      { id: 'berth_collar', name: 'BERTH COLLAR', risk: 'GREEN', tier: 'detail', codexId: 'docking_berthing',
+        massKg: 6, priority: 3,
+        // Mother audit T1/T10: the nose berthing collar (ring + guide cone on
+        // the berth tunnel) had no card. Detail tier: `docking_berthing` is
+        // DAUGHTER BERTHS' briefing (same berthing concept — a reeled catch is
+        // hauled onto the collar, not flown in) and the major tier requires a
+        // unique codexId. Static = the torus outer equator at az 90.
+        specs: [
+          `Nose collar \u00b7 ${(2 * (Constants.OCTOPUS_V5?.BERTH_COLLAR_INNER_R_M ?? 0.16)).toFixed(2)} m bore`,
+          `Seat plane z ${(Constants.OCTOPUS_V5?.BERTH_COLLAR_Z_M ?? 1.30).toFixed(2)} m \u00b7 cargo mates on-axis`,
+        ],
+        mesh: 'BerthCollarRing',
+        pick: ['BerthCollarRing', 'BerthCollarGuideCone', 'BerthTunnel'],
+        anchor: [ 0, 0.30 * M, 1.30 * M ] },
     ],
   },
   {
     id: 'SENSORS', label: 'SENSORS',
-    anchor: [ 0, 0.26 * M, 1.12 * M ],
+    // Mother audit T10: the deck lip (r 0.34–0.38, z 1.03) — the old (0, 0.26,
+    // 1.12) sat in the air between the instruments.
+    anchor: [ 0, 0.37 * M, 1.03 * M ],
     role: 'tracking turret + cameras',
     parts: [
       { id: 'gimbal', name: 'SENSOR TURRET', risk: 'GREEN', tier: 'major', codexId: 'docking_precision',
         massKg: 5, priority: 6, specs: ['2-axis pointing platform'],
-        // SensorGimbal itself is a geometry-less Group; pick its hub ring + the
-        // four spokes (SensorSpoke ×4 share a name → traverse collects all).
-        pick: ['SensorHubRing', 'SensorSpoke'],
-        anchor: [ 0, 0, 1.00 * M ] },
+        // SensorGimbal itself is a geometry-less Group; pick the turntable body
+        // (Mother audit T4: the r 0.34 SensorHubRing cylinder — the four
+        // SensorSpoke boxes are gone). Anchor on its top face at az 90 (T10 —
+        // the old (0, 0, 1.00) was the cap centre inside the berth tunnel).
+        pick: ['SensorHubRing'],
+        anchor: [ 0, 0.31 * M, 1.055 * M ] },
       { id: 'eo_cam', name: 'DAYLIGHT CAMERA', risk: 'GREEN', tier: 'major', codexId: 'pose_estimation',
         massKg: 2, priority: 4, specs: ['Visible-band imager (EO)'],
         pick: ['EO_Camera'],
@@ -233,14 +273,26 @@ const SYSTEMS = [
       { id: 'sensor_deck', name: 'SENSOR DECK', risk: 'GREEN', tier: 'detail', codexId: 'sensor_deck',
         massKg: 2, priority: 2, specs: ['Instrument mounting annulus'],
         mesh: 'SensorDeck',
+        // Mother audit T10: SensorDeck's origin is the bore centre (0, 0, 1.03),
+        // inside the berth tunnel — point at the deck lip (r 0.34–0.38 after
+        // T4) at az 90, 1 mm proud of the plate. The static stays the shipped
+        // tuple (the ≥ 4 cm envelope is measured on it).
+        meshOffset: [ 0, 0.37 * M, 0.001 * M ],
         anchor: [ 0, 0.30 * M, 1.03 * M ] },
       { id: 'sun_sensors', name: 'SUN SENSORS', risk: 'GREEN', tier: 'detail', codexId: 'sun_sensor',
         massKg: 0.5, priority: 2, specs: ['Coarse sun sensing, 4×'],
+        // Mother audit T5/T10: the fore pair moved from the (buried) cap-plane
+        // sites to the turntable top at (0, ±0.24, 1.06); bind the +Y puck.
+        mesh: 'SunSensor_0',
         pick: ['SunSensor_0', 'SunSensor_1', 'SunSensor_2', 'SunSensor_3'],
-        anchor: [ 0.28 * M, -0.20 * M, 1.0 * M ] },
+        anchor: [ 0, 0.24 * M, 1.06 * M ] },
       { id: 'nav_lights', name: 'NAVIGATION LIGHTS', risk: 'GREEN', tier: 'detail', codexId: 'nav_lights',
         massKg: 1, priority: 1, specs: ['Port/starboard running lights'],
-        anchor: [ 0.42 * M, 0, 0.30 * M ] },
+        // Mother audit T6/T10: the lights left the ±X equator (inside the ROSA
+        // drum sweep) for the fore shoulder at az 345/195, z 0.76; bind the
+        // starboard core (no pick array — the default pick is the mesh).
+        mesh: 'NavLight_Starboard',
+        anchor: [ 0.398 * M, -0.107 * M, 0.76 * M ] },
     ],
   },
   {
@@ -283,10 +335,13 @@ const SYSTEMS = [
     parts: [
       { id: 'berths', name: 'DAUGHTER BERTHS', risk: 'GREEN', tier: 'major', codexId: 'docking_berthing',
         massKg: 6, priority: 6, specs: ['4× — 2 large, 2 small', 'Spring ejector + hinge strut'],
-        // az 60° pocket's aft lip (z=-0.85, hull rim of the carved groove) —
-        // real hull edge, ~15 cm clear of the docked daughter's own callout,
-        // whose anchor is the craft body mid-pocket (z=-0.70).
-        anchor: [ 0.20 * M, 0.346 * M, -0.85 * M ] },
+        // az 60° pocket's aft-lip CORNER: the pocket's angular edge (az 78.6°,
+        // where the carved groove meets the skin) on the hull radius (r 0.40)
+        // at z=-0.85 — a real hull edge. The old (0.20, 0.346) tuple was the
+        // pocket's az-60 centreline at r 0.40, i.e. mid-air over the carved
+        // floor (Mother audit T10). ~15 cm clear of the docked daughter's own
+        // callout, whose anchor is the craft body mid-pocket (z=-0.70).
+        anchor: [ 0.079 * M, 0.392 * M, -0.85 * M ] },
       { id: 'tether_reels', name: 'TETHER WINCHES', risk: 'GREEN', tier: 'major', codexId: 'reel_mechanics',
         massKg: 4, priority: 6, live: 'tether', specs: ['4× Dyneema SK78 reels'],
         // Reel cartridges ride the struts (stowed z≈−0.46, deployed ≈1.5 m out).
@@ -324,9 +379,13 @@ const SYSTEMS = [
     // row lives in Constants.CALLOUTS.SYSTEM_HUES.THERMAL — BOTH places, or
     // the family renders fallback-hued). Purchase-gated hardware: every rec
     // carries `flowerGated` and hides until a pair is bought (the daughter
-    // `_armGone` idiom), so no callout ever points at empty rim. Anchors are
-    // STATIC station coordinates (the meshes may not exist pre-purchase, so
-    // no `mesh:` refs here). The ship already carries the diegetic thermal
+    // `_armGone` idiom), so no callout ever points at empty rim. Every rec keeps
+    // a STATIC station tuple as the pre-purchase stand-in; since Mother audit T10
+    // the two pose-following rows (RADIATOR PLATES, TIP HARDPOINTS) also carry a
+    // `mesh` + `dynamic: true` binding that _resolveAnchor arms on the
+    // gone→present edge (the flowerGated one-shot, dc0025e), so the leader rides
+    // the plate / tip boss through the bloom instead of pointing at the STOW bud.
+    // The ship already carries the diegetic thermal
     // sensor — the HEAT (INFRARED) CAM callout under SENSORS.
     id: 'THERMAL', label: 'THERMAL',
     anchor: [ 0.283 * M, 0.283 * M, -1.02 * M ],
@@ -336,7 +395,13 @@ const SYSTEMS = [
       { id: 'flower_plates', name: 'RADIATOR PLATES', risk: 'GREEN', tier: 'major', codexId: 'space_radiator',
         massKg: 37, priority: 6, flowerGated: true,
         specs: ['4× 1.70×0.60 m panels along the struts', 'Reject heat as infrared — numbers come with the loop refit'],
-        anchor: [ -0.30 * M, 0.30 * M, -1.15 * M ] },
+        // Mother audit T10: the leader follows plate 0 (az 45, pair A) through
+        // the pose — the static tuple only ever matched the STOW bud. The
+        // flowerGated one-shot binds the frame after purchase (_resolveAnchor);
+        // the static stands in until then, moved to the pair-A azimuth 225 so
+        // it never coincides with the AFT FLOWER STRUTS card at az 45.
+        mesh: 'FlowerStrutPlate_0', dynamic: true,
+        anchor: [ -0.30 * M, -0.30 * M, -1.15 * M ] },
       { id: 'flower_struts', name: 'AFT FLOWER STRUTS', risk: 'GREEN', tier: 'major', codexId: 'vacuum_mechanisms',
         massKg: 10, priority: 6, flowerGated: true,
         specs: ['4× aft-pivot booms, 2.5 m', 'They open LIKE A FLOWER — O deploys / stows'],
@@ -344,6 +409,9 @@ const SYSTEMS = [
       { id: 'flower_tips', name: 'TIP HARDPOINTS', risk: 'GREEN', tier: 'detail', codexId: 'tip_hardpoints',
         massKg: 2, priority: 2, flowerGated: true,
         specs: ['Inert cargo bosses at the strut tips', 'Cold-cell refit will bolt on here'],
+        // Mother audit T10: the leader rides tip boss 0 (az 45) through the pose
+        // (static stands in pre-purchase, then the gated one-shot binds).
+        mesh: 'FlowerStrutTipPad_0', dynamic: true,
         anchor: [ -0.283 * M, -0.283 * M, -1.12 * M ] },
       { id: 'flower_hinges', name: 'FLOWER HINGE BRACKETS', risk: 'YELLOW', tier: 'detail', codexId: 'vacuum_mechanisms',
         massKg: 1, priority: 2, flowerGated: true,
@@ -390,6 +458,12 @@ const GUIDE_STEP_S = 1.1;   // seconds each system stays highlighted in the tour
 const GUIDE_HOLD_S = 0.6;   // initial hold before the tour starts
 
 const FADE_RATE = 6.0;      // opacity ease rate for band crossfades
+
+// Session R (plan §14.2): the typeface epoch's redraw budget per frame — the
+// compact cards a cold boot rasterised before the B612 faces settled are
+// re-rasterised at most this many per frame (≈ 37 cards → 7 frames), never all
+// at once. Each card is redrawn ONCE per epoch; this only spreads the once.
+export const CARD_EPOCH_REDRAWS_PER_FRAME = 6;
 
 // Scratch for _recBounds (a per-click edge, never per frame — module-level so
 // the record builder allocates only the record it returns).
@@ -476,11 +550,17 @@ export class MotherCallouts {
    *   default and every ?ladder=0 boot), the click emits exactly as shipped —
    *   briefing-less parts stay unpickable there. The ONE emitter in
    *   _handlePointerUp stays the one.
+   * @param {import('../core/Typeface.js').FontEpoch} [opts.fontEpoch]  Session R
+   *   (plan §14.2): the typeface epoch the card textures are stamped with —
+   *   the document's by default; tests inject their own so the shared one is
+   *   never bumped. A card rasterised before the four B612 faces settled is
+   *   redrawn ONCE (at its existing refresh point) when the epoch moves.
    */
-  constructor(playerGroup, camera, { canvas = null, onPartClick = null } = {}) {
+  constructor(playerGroup, camera, { canvas = null, onPartClick = null, fontEpoch = defaultFontEpoch } = {}) {
     this.player = playerGroup;
     this.camera = camera;
     this.canvas = canvas;
+    this._fontEpoch = fontEpoch;
     this._onPartClick = onPartClick;
 
     this._active = false;
@@ -1112,7 +1192,7 @@ export class MotherCallouts {
       const sRec = {
         def: sys, isSystem: true, hue, sprite: sLabel, line: sLine, dot: sDot,
         op: 0, side: null, sx: 0, sy: 0, primed: false,
-        cardKey: null, card: null,
+        cardKey: null, card: null, _cardEpoch: -1,
         anchor: new THREE.Vector3(...sys.anchor),
         _mesh: null, _meshTried: false,
         _pickObjs: null, _pickTried: false,
@@ -1139,7 +1219,7 @@ export class MotherCallouts {
           def: part, sysId: sys.id, hue, isDetail: part.tier === 'detail',
           riskColor: color, sprite: pLabel, line: pLine, dot: pDot,
           op: 0, side: null, sx: 0, sy: 0, primed: false,
-          cardKey: null, card: null,
+          cardKey: null, card: null, _cardEpoch: -1,
           anchor: new THREE.Vector3(...part.anchor),
           _mesh: null, _meshTried: false,
           _pickObjs: null, _pickTried: false,
@@ -1336,13 +1416,22 @@ export class MotherCallouts {
     }
     const title = rec.isSystem ? def.label : def.name;
     const variant = full ? 'focused' : 'compact';
+    // Session R (plan §14.2): the typeface epoch leads the content key — a
+    // card rasterised before the B612 faces settled misses here once the epoch
+    // moves, and the redraw below is the ONE redraw that texture is owed.
+    const epoch = this._fontEpoch.value();
     const key = [
+      epoch,
       title, rec.isSystem ? 'sys' : def.risk, codex || '-',
       full ? rows.map((r) => r.text).join('|') : 'compact',
     ].join('::');
 
-    // Early-out: content unchanged → keep the current texture (R3).
-    if (rec.cardKey === key && rec.card) return;
+    // Early-out: content unchanged → keep the current texture (R3). The key
+    // carries the epoch, so this exit is only reached under the stamped epoch;
+    // the stamp is re-asserted defensively (review pass 2) so every exit of
+    // _applyCard leaves `_cardEpoch === epoch` and the per-frame branch can
+    // never spin on a rec whose key was written without it.
+    if (rec.cardKey === key && rec.card) { rec._cardEpoch = epoch; return; }
 
     // Reuse the cached variant if its content key still matches.
     if (!rec._cardCache) rec._cardCache = new Map();
@@ -1350,6 +1439,7 @@ export class MotherCallouts {
     if (cached && cached.contentKey === key) {
       rec.card = cached;
       rec.cardKey = key;
+      rec._cardEpoch = epoch;
       rec.sprite.material.map = cached.texture;
       rec.sprite.material.needsUpdate = true;
       return;
@@ -1372,6 +1462,7 @@ export class MotherCallouts {
     rec._cardCache.set(variant, card);
     rec.card = card;
     rec.cardKey = key;
+    rec._cardEpoch = epoch;
     rec.sprite.material.map = card.texture;
     rec.sprite.material.needsUpdate = true;
   }
@@ -1471,10 +1562,18 @@ export class MotherCallouts {
       eventBus.emit(Events.CALLOUT_BAND_CHANGE, { band: 'SYSTEM' });
       // Refresh all compact cards so codex lock state is current (MED-9).
       // Content-key check makes unchanged cards a no-op (R3).
+      // Session R (review pass 2): a card stamped under an OLDER typeface epoch
+      // is left to _layout's capped branch (≤ CARD_EPOCH_REDRAWS_PER_FRAME per
+      // frame, from the next frame — the callouts are active now), where it
+      // redraws once with the current codex state anyway. On the usual
+      // settle-then-inspect path this loop would otherwise rasterise every
+      // card in one call — the burst the cap exists to prevent.
+      const fontEpochNow = this._fontEpoch.value();
       for (const rec of this._allRecs) {
         rec._revealAt = null; // T3: no stale reveal hold across re-entry
         rec._pendingSide = null; // T4: no stale flip across re-entry
         rec._sideT = 0;
+        if (rec._cardEpoch !== fontEpochNow) continue;
         this._applyCard(rec, { full: false });
       }
     } else {
@@ -1586,9 +1685,11 @@ export class MotherCallouts {
 
   /**
    * Resolve a rec's `pick` hull objects (lazy, once). Default when the table
-   * row carries no `pick`: `mesh ? [mesh] : []`. Resolution collects ALL
-   * objects with a matching name via player.traverse — getObjectByName returns
-   * only the FIRST match and several pick names are shared (SensorSpoke ×4).
+   * row carries no `pick`: `mesh ? [mesh] : []`. Resolution collects EVERY
+   * object with a matching name via player.traverse — getObjectByName returns
+   * only the FIRST match, and pick names were shared historically (SensorSpoke
+   * ×4 until Mother audit T4, FEEP_Boss / FEEP_GridDisc until T9); no shared
+   * name remains but the traverse-all behaviour is kept on purpose.
    * One-time console.warn per rec for names that resolve to nothing (mirrors
    * the anchor mesh-miss warn). Never throws when `player` is absent.
    * @private @returns {THREE.Object3D[]}
@@ -2195,6 +2296,13 @@ export class MotherCallouts {
     this._nowMs = now;
     const liveDue = (now - this._lastLiveT) >= (1000 / (CFG.LIVE_REFRESH_HZ || 2));
     if (liveDue) this._lastLiveT = now;
+    // Session R (plan §14.2): the typeface epoch this frame. A compact card
+    // whose texture was stamped under an older epoch (rasterised before the
+    // B612 faces settled — _build() draws every card at construction) is
+    // redrawn once below, at most CARD_EPOCH_REDRAWS_PER_FRAME per frame so
+    // the one-time settle never lands ~37 rasterisations in a single frame.
+    const fontEpochNow = this._fontEpoch.value();
+    let epochRedraws = 0;
 
     // Re-pick hover from the stored pointer position so it tracks cards sliding
     // under a stationary pointer (R13).
@@ -2251,6 +2359,11 @@ export class MotherCallouts {
       } else if (rec._wasFocus) {
         this._applyCard(rec, { full: false });
         rec._wasFocus = false;
+      } else if (rec._cardEpoch !== fontEpochNow && epochRedraws < CARD_EPOCH_REDRAWS_PER_FRAME) {
+        // Session R: the face question settled after this compact card was
+        // drawn — its ONE owed redraw (the key inside misses on the epoch).
+        this._applyCard(rec, { full: false });
+        epochRedraws++;
       }
 
       // T4: pending side-flip — commit when faded out, force fade otherwise.

@@ -133,7 +133,10 @@ export const BLUEPRINT_SUBSYSTEMS = [
     id: 'SENSORS',
     label: 'SENSORS',
     anchorM: [0, 0.30, 1.03],         // fixed sensor-deck annulus rim (fore)
-    mesh: 'SensorDeck',               // the deck plate (fixed; turret articulates)
+    mesh: 'SensorDeck',               // the deck plate (fixed — the turret is fixed too since 2026-07-23; the T4 turntable is a solid body on it)
+    meshOffsetM: [0, 0.37, 0],        // Mother audit T10: the mesh origin is the bore
+                                      // centre (inside the berth tunnel) — point at the
+                                      // deck lip (r 0.34–0.38 after T4) at az 90
     priority: 4,
     readout: 'sensors',
     codexId: 'lidar_ranging',         // MotherCallouts `lidar` (codex cat SENSORS)

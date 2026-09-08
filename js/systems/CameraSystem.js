@@ -4449,7 +4449,7 @@ export class CameraSystem {
     // (blocked info near comms panel header) down to top:140.
     this._viewIndicator.style.cssText = `
       position: absolute; top: 140px; left: 50%; transform: translateX(-50%);
-      font-family: 'Courier New', monospace; font-size: 0.85rem;
+      font-family: var(--font-mono); font-size: 0.85rem;
       color: #00ff88; letter-spacing: 0.1em;
       background: rgba(0, 20, 40, 0.7); border: 1px solid rgba(0,255,136,0.3);
       padding: 6px 16px; border-radius: 4px;
