@@ -39,8 +39,35 @@
  * attributes only when a value changed. The eclipse prediction (`eclipse()`)
  * is recomputed EVEN WHILE density-hidden (another pane consumes it) — only
  * the DOM writes are skipped. The slow slots (INC, PERIOD, the SUN word, ΔV)
- * flash on change (`data-changed` for 1.2 s, a CSS keyframe from LABEL
- * white back to inherit); the per-second slots never flash.
+ * flash on change (`data-changed` for 1.2 s — a white BLOOM, see below); the
+ * per-second slots never flash.
+ *
+ * WHITE TELEMETRY (owner 2026-09-08: "White color numbers in the Orbit pane.
+ * It is meant to be eye catching, to show off this is sim, not a cartoon … eye
+ * candy for Space enthusiasts"; plan
+ * .kilo/plans/1788863500000-orbit-pane-telemetry-showpiece.md): the pane is a
+ * showpiece of the simulation and reads like mission telemetry — the SpaceX
+ * webcast overlay / the ISS trackers: white tabular numerals, dim small-caps
+ * labels, the unit lighter than the number, colour reserved for STATE.
+ *   - Values wear `COLORS.LABEL` white (`.orbit-value`); labels and the header
+ *     keep the panel's dim green (index.html `.hud-panel`), 0.55 / 0.6.
+ *   - Units: the three slots whose formatter yields `<number> <unit>` (ALT `km`,
+ *     VEL `km/s`, ΔV `m/s`) hold two inner spans — `.orbit-num` + `.orbit-unit`
+ *     (the unit at 0.6 opacity, `white-space: pre` so its leading space
+ *     survives the flex line start). The split happens at paint from the
+ *     UNCHANGED formatter string (`UNIT_RE`), so the value element's
+ *     textContent stays byte-identical (`'350.0 km'`) and `readout()` is the
+ *     same string. Width-neutral: opacity has no metric, same glyphs, same
+ *     advance — CELL_W_PX / the `.orbit-cell-2 .orbit-text` width rule untouched.
+ *   - Colour for state only: the ALT `↓` and the ΔV reserve tick stay CAUTION
+ *     amber; the ΔV bar fill stays PLAYER; SUN stays a word; the ALT `↑` (a
+ *     burn, not a warning) inherits the value white like any other glyph.
+ *   - The change-flash on white values: `@keyframes orbit-pane-flash` is a
+ *     `text-shadow` bloom (LABEL glow → transparent, `ease-out forwards`, the
+ *     same CHANGE_FLASH_MS) — not a colour change (PLAYER green is a state).
+ *     Under `prefers-reduced-motion: reduce` the animation is off and the
+ *     glow declared on `[data-changed]` holds steady for the 1.2 s window
+ *     (information kept, motion removed — the NextPane / HUD.js precedent).
  *
  * Laws: root = a DIRECT child of #hud-overlay wearing .hud-panel, pointer-
  * events none (nothing is tappable); ONE injected <style> per document, no
@@ -59,7 +86,7 @@ import { MONO_ADVANCE_EM } from '../../core/Typeface.js';
 import { orbitToKm, subSatellitePoint, nextShadowTransition } from '../../entities/OrbitalMechanics.js';
 import { RESERVE_FRAC, usableDeltaV } from '../../entities/ReachabilityModel.js';
 
-/** The colour law (read-only): CAUTION amber for the reserve tick / decay arrow, LABEL white for the flash. */
+/** The colour law (read-only): LABEL white for the values and the flash bloom, CAUTION amber for the reserve tick / decay arrow. */
 const COLORS = VisualLaw.COLORS;
 
 /** The root element id (FloorMask MASK_PANES.orbit.els = ['#hud-orbit-pane']). */
@@ -204,6 +231,23 @@ export const ORBIT_FMT = Object.freeze({
     return `${pad2(h)}:${pad2(m)}:${pad2(sec)}`;
   },
 });
+
+/**
+ * The unit split (white telemetry): a formatted `<number> <unit>` string paints
+ * as `.orbit-num` + `.orbit-unit` (the unit dimmer). The three UNIT_SLOTS are
+ * the slots whose formatter yields that shape (ALT `km`, VEL `km/s`, ΔV `m/s`);
+ * a non-matching string (the `—` placeholder) paints whole into `.orbit-num`
+ * with an empty unit. The value element's textContent is the formatter string
+ * either way: num + unit, the unit carrying its own leading space (`' km'`).
+ */
+export const UNIT_RE = /^(\S+) (\S+)$/;
+export const UNIT_SLOTS = Object.freeze(['alt', 'vel', 'dv']);
+
+/** @private `'350.0 km'` → `{ num: '350.0', unit: ' km' }`; `'—'` → `{ num: '—', unit: '' }` */
+export function splitUnit(text) {
+  const m = UNIT_RE.exec(text);
+  return m ? { num: m[1], unit: ` ${m[2]}` } : { num: text, unit: '' };
+}
 
 const EMPTY_VALS = Object.freeze({
   alt: PLACEHOLDER, trend: '', vel: PLACEHOLDER, inc: PLACEHOLDER, period: PLACEHOLDER,
@@ -438,6 +482,17 @@ export class OrbitPane {
       cells[slot] = s;
       return s;
     };
+    /** The unit split (white telemetry): the slot's value element holds `.orbit-num` + `.orbit-unit`
+     *  (the unit dimmer); the element's own textContent is emptied first so the two spans ARE its text. */
+    const units = Object.create(null);
+    const unitSplit = (slot) => {
+      const el = cells[slot];
+      el.textContent = '';
+      const numEl = mk('span', 'orbit-num', PLACEHOLDER);
+      const unitEl = mk('span', 'orbit-unit', '');
+      el.appendChild(numEl); el.appendChild(unitEl);
+      units[slot] = { num: numEl, unit: unitEl };
+    };
 
     const root = mk('div', 'hud-panel' + (this._glass ? ' orbit-glass' : ''));
     root.id = ORBIT_PANE_ID;
@@ -454,10 +509,12 @@ export class OrbitPane {
     const r1 = mk('div', 'orbit-row');
     const alt = cell('ALT', null, false);
     alt.value.appendChild(span('orbit-text', 'alt', PLACEHOLDER));
+    unitSplit('alt');
     const trend = span('orbit-trend', 'alt-trend', '');
     alt.value.appendChild(trend);
     r1.appendChild(alt.cell);
     r1.appendChild(cell('VEL', 'vel', false).cell);
+    unitSplit('vel');
     r1.appendChild(cell('INC', 'inc', false).cell);
     r1.appendChild(cell('PERIOD', 'period', false).cell);
 
@@ -474,6 +531,7 @@ export class OrbitPane {
     const r3 = mk('div', 'orbit-row');
     const dv = cell('\u0394V', null, true);
     dv.value.appendChild(span('orbit-text', 'dv', PLACEHOLDER));
+    unitSplit('dv');
     const bar = mk('div', 'orbit-bar');
     if (bar.setAttribute) bar.setAttribute('data-slot', 'dv-bar');
     const fill = mk('div', 'orbit-bar-fill');
@@ -490,7 +548,7 @@ export class OrbitPane {
     parent.appendChild(root);
 
     this._root = root;
-    this._el = { slots, cells, trend, bar, fill, mark };
+    this._el = { slots, cells, units, trend, bar, fill, mark };
   }
 
   /** @private The one <style id="orbit-pane-style"> (per document). No backdrop-filter. */
@@ -536,14 +594,21 @@ export class OrbitPane {
         font: 10px/${G.LABEL_PX}px var(--font-mono);
         letter-spacing: 0.08em; opacity: 0.55; height: ${G.LABEL_PX}px;
       }
+      /* White telemetry (owner 2026-09-08): the numerals wear LABEL white — the
+       * SpaceX-overlay / ISS-tracker grammar; the labels above them keep the
+       * panel's dim green. Colour below this line is STATE only (CAUTION). */
       #${ORBIT_PANE_ID} .orbit-value {
         font: ${G.VALUE_FONT_PX}px/${G.VALUE_PX}px var(--font-mono);
         font-variant-numeric: tabular-nums;
         height: ${G.VALUE_PX}px;
         display: flex; align-items: center;
+        color: ${COLORS.LABEL};
       }
       #${ORBIT_PANE_ID} .orbit-cell-2 .orbit-value { gap: ${G.CELL_GAP_PX}px; }
       #${ORBIT_PANE_ID} .orbit-cell-2 .orbit-text { flex: 0 0 ${G.CELL_W_PX}px; width: ${G.CELL_W_PX}px; }
+      /* The unit after the number, lighter (opacity has no metric: the cell
+       * widths are untouched); white-space pre keeps its leading space at a flex line start. */
+      #${ORBIT_PANE_ID} .orbit-unit { opacity: 0.6; white-space: pre; }
       #${ORBIT_PANE_ID} .orbit-trend { display: inline-block; width: 1ch; }
       #${ORBIT_PANE_ID} .orbit-trend[${TREND_ATTR}="down"] { color: ${COLORS.CAUTION}; }
       /* The ΔV bar: usable / budget as the fill, the reserve boundary as a tick. */
@@ -553,9 +618,22 @@ export class OrbitPane {
       }
       #${ORBIT_PANE_ID} .orbit-bar-fill { position: absolute; left: 0; top: 0; height: 2px; width: 0%; background: ${COLORS.PLAYER}; }
       #${ORBIT_PANE_ID} .orbit-bar-mark { position: absolute; top: -2px; width: 1px; height: 6px; background: ${COLORS.CAUTION}; }
-      /* The change flash (slow slots only): bright, then back to the inherited colour. */
-      #${ORBIT_PANE_ID} [${CHANGED_ATTR}] { animation: orbit-pane-flash ${CHANGE_FLASH_MS}ms ease-out; }
-      @keyframes orbit-pane-flash { from { color: ${COLORS.LABEL}; } to { color: inherit; } }
+      /* The change flash (slow slots only): a white BLOOM — a text-shadow glow
+       * that fades over CHANGE_FLASH_MS and holds its end state (forwards) until
+       * the attribute clears at the next tick. Not a colour change: the values
+       * are already white and PLAYER green is a state. The static glow below is
+       * what remains under reduced motion (steady for the window, no animation). */
+      #${ORBIT_PANE_ID} [${CHANGED_ATTR}] {
+        animation: orbit-pane-flash ${CHANGE_FLASH_MS}ms ease-out forwards;
+        text-shadow: 0 0 8px ${COLORS.LABEL}, 0 0 4px ${COLORS.LABEL};
+      }
+      @keyframes orbit-pane-flash {
+        from { text-shadow: 0 0 8px ${COLORS.LABEL}, 0 0 4px ${COLORS.LABEL}; }
+        to   { text-shadow: 0 0 0 transparent; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #${ORBIT_PANE_ID} [${CHANGED_ATTR}] { animation: none !important; }
+      }
     `;
     doc.head.appendChild(style);
   }
@@ -717,8 +795,10 @@ export class OrbitPane {
 
     const el = this._el;
     const cells = el.cells;
+    const units = el.units;
     for (const key of ['alt', 'vel', 'inc', 'period', 'lat', 'lon', 'sunState', 'sunTimer', 'dv', 'met']) {
-      this._setText(cells[key], v[key]);
+      if (units && units[key]) this._setUnitText(units[key], v[key]);
+      else this._setText(cells[key], v[key]);
     }
     this._setText(el.trend, v.trend);
     this._setAttr(el.trend, TREND_ATTR, v.trend === ARROW_DOWN ? 'down' : (v.trend === ARROW_UP ? 'up' : null));
@@ -764,6 +844,15 @@ export class OrbitPane {
     if (!el || el.textContent === text) return false;
     el.textContent = text;
     return true;
+  }
+
+  /** @private The unit split: the formatter string lands as `.orbit-num` + `.orbit-unit` (write-on-change each;
+   *  the slot element's own textContent is never written — it IS the two spans, so it reads the whole string). */
+  _setUnitText(pair, text) {
+    const parts = splitUnit(text);
+    const a = this._setText(pair.num, parts.num);
+    const b = this._setText(pair.unit, parts.unit);
+    return a || b;
   }
 
   /** @private */
