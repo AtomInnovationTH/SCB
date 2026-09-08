@@ -661,11 +661,13 @@ export class PlayerSatellite extends THREE.Group {
   _collectDetailMeshes() {
     // Mother audit T9: FEEP_Boss_/FEEP_GridDisc_ are now uniquely named per
     // bell (FEEP_Boss_0..3) so they match by PREFIX like the rest; CClip_ (the
-    // C-clips beside PClip_) never culled before — added.
+    // C-clips beside PClip_) never culled before — added. Design 6: the four
+    // r 0.03 BerthCollarFoot_ pads are sub-pixel past 30 m (60 mm ≈ 1 px at
+    // 1280 px / FOV 35); the ring and its struts are nose silhouette and stay.
     const CULL_PREFIXES = [
       'PyroPin_', 'PClip_', 'CClip_', 'CableHarness_', 'SpringHousing_', 'SpringCoil_',
       'GuideRail_', 'RibRing_', 'FEEPInner_', 'FEEP_Boss_', 'FEEP_GridDisc_',
-      'MountBolt_', 'Bushing_',
+      'MountBolt_', 'Bushing_', 'BerthCollarFoot_',
     ];
     const CULL_EXACT = new Set(['AccentRing']);
     this._detailMeshes.length = 0;
@@ -3192,14 +3194,18 @@ export class PlayerSatellite extends THREE.Group {
     // arranged in a SYMMETRIC RING around that axis (not shoved to one side, which
     // overhung an arm's strut-deploy path) and kept SHORTER than the launcher.
     // S13(e) moved the launcher into the two NetPod_* flanking the nose and the
-    // axis now carries the DOCKING COLLAR (_buildBerthCollar: BerthTunnel r 0.155
-    // through the deck bore, ring at z 1.30) — the ring geometry stays because a
-    // reeled-in catch still parks on the collar, fore of every instrument mouth,
-    // and no strut is blocked. RING_R is the instrument ring radius; the four
-    // instruments sit at 45/135/225/315°. The turret is FIXED (no gimbal
-    // tracking — that was dead code that never had a target set; removed
-    // 2026-07-23), so the ring only has to clear the tunnel at rest, which it does
-    // with 5 mm to the EO/tele barrels (0.26 − 0.10 − 0.155; test-MotherZFix).
+    // axis now carries the DOCKING COLLAR (_buildBerthCollar — Design 6: an OPEN
+    // axis; a thin capture ring R 0.180 / tube 0.020 at z 1.30 on four inclined
+    // struts, the dark berth plate on the turntable top showing through the
+    // bore) — the ring geometry stays because a reeled-in catch still parks on
+    // the collar, fore of every instrument mouth, and no strut is blocked.
+    // RING_R is the instrument ring radius; the four instruments sit at
+    // 45/135/225/315°. The turret is FIXED (no gimbal tracking — that was dead
+    // code that never had a target set; removed 2026-07-23), so the ring only
+    // has to clear the collar at rest: the barrels' inner half-extent (0.26 −
+    // 0.10 = 0.16) meets the bore edge (0.16) radially and sits ≥ 35 mm below
+    // the ring tube in z (test-MotherZFix; test-SensorClearance measures the
+    // field cones themselves — 0 % blocked for EO / IR / telescope).
     const RING_R = M * 0.26;
     this._sensorRingR = RING_R;
     // Gimbal platform group — pivot on the CoM axis, at the fore cap (z=1.0M).
@@ -3285,9 +3291,10 @@ export class PlayerSatellite extends THREE.Group {
     // Mother audit T5 (F10): rotate the box to its ring azimuth so the 0.20 side
     // runs radially and the 0.15 side tangentially — it read skewed against the
     // ring, and unrotated its inner corner reached radial 0.138 (−0.084, −0.109),
-    // straight through the r 0.155 berth tunnel (T1). Rotated: inner face at
-    // radial 0.16 (5 mm clear of the tunnel), outer face at 0.36, corners at
-    // 0.368 on the widened deck. IR_Aperture is a child → rides along.
+    // inside the collar bore (0.16). Rotated: inner face at radial 0.16 (ON the
+    // bore edge — the Design 6 ring tube is 35+ mm above it in z, the tunnel
+    // that used to run there is gone), outer face at 0.36, corners at 0.368 on
+    // the widened deck. IR_Aperture is a child → rides along.
     irSensor.rotation.z = RING_AZ.ir * Math.PI / 180;
     irSensor.name = 'IR_Sensor';
     irSensor.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
@@ -3372,14 +3379,16 @@ export class PlayerSatellite extends THREE.Group {
     this.lidarLight.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
     this.lidarDome.add(this.lidarLight);
 
-    // Sensor base plate — FIXED deck, an ANNULUS (ring) around the berth tunnel
-    // (2026-07-23 centreline redesign; the central launcher left in S13(e), the
-    // T1 BerthTunnel r 0.155 owns the axis now and buries the bore edge): the
-    // four ring instruments mount to the deck's rim. Inner bore r 0.15M; outer
+    // Sensor base plate — FIXED deck, an ANNULUS (ring) around the collar bore
+    // (2026-07-23 centreline redesign; the central launcher left in S13(e); the
+    // T1 BerthTunnel that then owned the axis retired with Design 6 — the axis
+    // is open above the solid T4 turntable, whose top carries the BerthFace
+    // plate inside the ring's bore): the four ring instruments mount to the
+    // deck's rim. Inner bore r 0.15M (under the r 0.34 turntable); outer
     // r 0.38M (Mother audit T4 — was 0.34, which the ring instruments' outer
     // envelope at 0.36 overhung by 2 cm; the rotated IR box's corners reach
-    // 0.368) carries the RING_R=0.26M instrument circle and stays 2 cm inside the
-    // hull (0.40M). Fixed to the hull (only the instruments articulate).
+    // 0.368) carries the RING_R=0.26M instrument circle and stays 2 cm inside
+    // the hull (0.40M). Fixed to the hull (only the instruments articulate).
     const deckInnerR = M * 0.15;
     const deckOuterR = M * 0.38;
     const basePlateGeo = new THREE.RingGeometry(deckInnerR, deckOuterR, 32);
@@ -3412,8 +3421,10 @@ export class PlayerSatellite extends THREE.Group {
     // r 0.09–0.10 at RING_R 0.26 cross the rim transversally — r 0.34, not the
     // plan's 0.35: the telescope's outer surface is at radial exactly 0.35, so a
     // 0.35 rim would be tangent to it along a line; not 0.36 either, where the
-    // rotated IR box's flat outer face would lie tangent). The T1 tunnel passes
-    // through its centre. 1 cm inboard of the T2 saddles' inboard faces (0.36).
+    // rotated IR box's flat outer face would lie tangent). Design 6: the four
+    // BerthCollarStrut_* feet stand on its top face at radial 0.30 (5 mm buried,
+    // under r 0.03 pads) and the BerthFace plate sits 5 mm proud of it inside
+    // the bore. 1 cm inboard of the T2 saddles' inboard faces (0.36).
     const hubR = M * 0.34;
     const hubRing = new THREE.Mesh(new THREE.CylinderGeometry(hubR, hubR, M * 0.03, 48), gunmetalMat);
     hubRing.rotation.x = Math.PI / 2;       // cylinder +Y → +Z fore
@@ -3677,124 +3688,152 @@ export class PlayerSatellite extends THREE.Group {
 
   /**
    * @private — Build the nose berthing collar (cargo-continuity S13(c)).
-   * The fore docking port reborn as functional hardware: a ring + guide cone +
-   * stead lamps, dead on the long axis at the muzzle plane (z = 1.30 M).
+   * The fore docking port reborn as functional hardware, dead on the long axis
+   * at the muzzle plane (z = 1.30 M). Design 6 (2026-09-08, owner: "sensors
+   * need visual clearance to see, some appear blocked … research ultralight
+   * skeleton docking"): a SKELETON collar — a thin capture ring (bore 0.16
+   * kept, tube r 0.020 → R 0.180) carried on four inclined struts whose feet
+   * stand on the sensor turntable, a dark berth plate on the turntable top
+   * inside the bore, steady lamps on the ±X struts. The solid collar it
+   * replaces (torus tube r 0.07 spanning radial 0.16–0.30 at z 1.23–1.37, a
+   * BerthTunnel r 0.155 through the deck bore, a BerthFlange, a DoubleSide
+   * guide cone to r 0.30) stood 2–6 cm in front of the four ring optics at
+   * RING_R 0.26 and blocked 100 / 100 / 100 / 80 % of the EO / IR / telescope
+   * / LIDAR field cones and 58 % of the fore sun sensors' sky (register,
+   * js/test/test-SensorClearance.js — the acceptance test; plan
+   * .kilo/plans/1788863000000-mother-sensor-clearance-skeleton-docking.md).
+   * Real capture craft do what this does (IDSS soft-capture ring on struts,
+   * ClearSpace's open cage): thin members, sensors see through.
    * S13(e): the pods re-sited off the boresight (±NET_POD_X_M) — the collar
    * owns the fore centreline ALONE, and no shot passes through the ring any
    * more (the berth IS the corridor by design; the S12 M2 clearance table).
    * The collar's seat rule lives in the berth hold (CaptureNet.updateBerthHold):
    * cargo surface AT the ring plane + the 1.0 m clearance (collar anchor +
-   * fwd × (sizeMeter/2 + BERTH_CLEARANCE_M)). Also builds `_netBerthCollar`,
+   * fwd × (sizeMeter/2 + BERTH_CLEARANCE_M)) — the ring is a tether-hold
+   * SEAT, never a contact surface, so a berthed catch blinds the +Z optics
+   * whatever the collar looks like (ELSA-d precedent); this geometry is about
+   * the approach / shot, when the optics work. Also builds `_netBerthCollar`,
    * the invisible berth-anchor Object3D the reel/berth pin math re-homed to
-   * in S13(e) (getNetBerthCollarPositionInto).
+   * in S13(e) (getNetBerthCollarPositionInto) — frozen at (0, 0, 1.30).
+   *
+   * Contact rules (logarithmicDepthBuffer, no polygonOffset — bury ≥ 4–5 mm
+   * or stand ≥ 1 mm proud, never coplanar): strut heads buried WHOLE inside
+   * the ring tube (head centre 5 mm off the tube centreline, end-disc rim
+   * 0.019 < tube 0.020 → 1 mm inside, no tangency — review ⟦R⟧13); feet 5 mm
+   * into the turntable top; foot pads 5 mm into it, 7 mm proud; berth plate
+   * 5 mm proud of it; lamps 8 mm into the strut skin. Nothing else touches
+   * the ring: the nearest other part is the LaserBaffle rim, 35.6 mm off the
+   * tube (it pierced the old torus by 14 mm — X-D6-1).
    */
   _buildBerthCollar() {
     const V5 = Constants.OCTOPUS_V5;
     const zM = V5.BERTH_COLLAR_Z_M ?? 1.30;
     const rIn = V5.BERTH_COLLAR_INNER_R_M ?? 0.16;
-    const rOut = V5.BERTH_COLLAR_OUTER_R_M ?? 0.30;
+    const tube = V5.BERTH_COLLAR_TUBE_R_M ?? 0.020;
+    const footR = V5.BERTH_COLLAR_STRUT_FOOT_R_M ?? 0.30;
 
     // Same machined gunmetal as the launcher housing / LIDAR dome family.
     const gunmetalMat = new THREE.MeshStandardMaterial({
       color: 0x55585f, metalness: 0.5, roughness: 0.55,
     });
 
-    // The ring itself — a torus whose bore axis is the long axis (TorusGeometry
-    // already lies in the local XY plane about +Z). Its annulus spans
-    // [innerR, outerR] so it merges with the guide cone's root.
-    const ringR = (rIn + rOut) / 2 * M;
-    const tubeR = (rOut - rIn) / 2 * M;
+    // The capture ring — a thin torus whose bore axis is the long axis
+    // (TorusGeometry already lies in the local XY plane about +Z). Bore radius
+    // preserved (rIn 0.16 — the card / blueprint "0.32 m bore"), so the tube
+    // centreline sits at R = rIn + tube = 0.180 and the annulus is 0.160–0.200,
+    // z 1.280–1.320. Tube 40 mm (owner 2026-09-08): the LIDAR ±45° sweep loses
+    // 10 % to the ring's outer edge, all of it in its 30–45° band, 0 % inside
+    // ±30° — inherent to any ring at the bore with the dome at radial 0.26.
+    // Name kept: BerthCollarRing is API (callout mesh, blueprint CARGO mesh,
+    // harness truth, test pins); origin = bore centre at the seat plane.
+    const ringR = rIn + tube;
     const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(ringR, tubeR, 12, 24), gunmetalMat);
+      new THREE.TorusGeometry(ringR * M, tube * M, 10, 48), gunmetalMat);
     ring.position.set(0, 0, zM * M);
     ring.name = 'BerthCollarRing';
     ring.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(ring);
 
-    // Berth tunnel (Mother audit T1, F1) — the boss the collar ring is a collar
-    // OF. The central launcher tube that used to carry the ring left in S13(e)
-    // and the torus hovered 20 cm in front of the sensor deck with nothing under
-    // it. Solid gunmetal cylinder on the centreline from behind the deck plane to
-    // just behind the ring's equator:
-    //   r 0.155 > deck bore 0.15 → the deck's inner edge is buried in the tunnel
-    //   wall (no slit), and 5 mm clear of the EO/tele barrels' innermost points
-    //   (RING_R 0.26 − r 0.10 = 0.16) and of the IR box's inner face (0.16, once
-    //   rotated to its ring azimuth — see _buildSensors);
-    //   aft end z 1.02 (1 cm behind the deck plane 1.03) → no coplanar tie;
-    //   fore end z 1.29 (1 cm behind the torus centre plane) — the torus inner
-    //   surface is at r 0.1607 there, so the mouth sits 5 mm inside the bore and
-    //   the tube wraps it: no tie, no contact at any z (min inner r is 0.16).
-    const tunnelR = 0.155 * M;
-    const tunnel = new THREE.Mesh(new THREE.CylinderGeometry(tunnelR, tunnelR, 0.27 * M, 24), gunmetalMat);
-    tunnel.rotation.x = Math.PI / 2;            // cylinder +Y → +Z fore
-    tunnel.position.set(0, 0, 1.155 * M);       // spans z 1.02 … 1.29
-    tunnel.name = 'BerthTunnel';
-    tunnel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-    this.add(tunnel);
-    // Dark berth face seen through the ring bore — 5 mm proud of the tunnel's
-    // closed front disc (z 1.29): two parallel discs 1 mm apart would be a
-    // log-depth tie under the ≥ 4 mm rule; at 5 mm it reads as an inset plate
-    // with a 2.5 cm gunmetal rim (r 0.13 vs 0.155).
+    // Four inclined struts at az 0 / 90 / 180 / 270 carry the ring: foot on the
+    // sensor turntable top (SensorHubRing r 0.34, top z 1.055) at radial 0.30,
+    // z 1.050 (5 mm buried); head 5 mm off the tube centreline toward the
+    // lower-outboard quadrant — radial 0.180 + 0.005·cos45 = 0.18354, z 1.30 −
+    // 0.005·sin45 = 1.29646 — so the whole r 0.014 end disc lies ≥ 1 mm inside
+    // the r 0.020 tube (rim 0.019): no surface tie, no stub inside the bore.
+    // The 25.3° lean is load-bearing for the LOOK, not just the structure: a
+    // vertical post under the tube (radial 0.18, foot 25 cm behind the ring)
+    // projected INTO the bore from a close fore-on view and read as a spoke
+    // piercing the tube (look-test 2); with the feet at radial 0.30 the struts
+    // stay outside the ring's apparent radius down to 1.8 m. Do not straighten.
+    // Clearances (measured, test-SensorClearance "strut capsules"): ↔ pod
+    // housings 17.6 mm at the az 0/180 feet (NetLauncher inner face x 0.33),
+    // ↔ every ring instrument ≥ 60 mm, ↔ the fore sun pucks 5.9 mm.
+    const strutR = 0.014;
+    const footZ = 1.050;
+    const headOff = 0.005;
+    const headR = ringR + headOff * Math.SQRT1_2, headZ = zM - headOff * Math.SQRT1_2;
+    const yUpV = new THREE.Vector3(0, 1, 0);
+    // Strut direction in the (radial, z) plane and its outward normal — the
+    // lamps below sit on the ±X struts' outboard skins.
+    const strutDir = new THREE.Vector2(headR - footR, headZ - footZ).normalize();
+    const strutOutN = new THREE.Vector2(strutDir.y, -strutDir.x);
+    [0, 90, 180, 270].forEach((azDeg, i) => {
+      const a = azDeg * Math.PI / 180, cx = Math.cos(a), cy = Math.sin(a);
+      const A = new THREE.Vector3(footR * cx, footR * cy, footZ).multiplyScalar(M);
+      const B = new THREE.Vector3(headR * cx, headR * cy, headZ).multiplyScalar(M);
+      const strut = new THREE.Mesh(
+        new THREE.CylinderGeometry(strutR * M, strutR * M, A.distanceTo(B), 8, 1, false), gunmetalMat);
+      strut.position.copy(A).add(B).multiplyScalar(0.5);
+      strut.quaternion.setFromUnitVectors(yUpV, B.clone().sub(A).normalize());
+      strut.name = `BerthCollarStrut_${i}`;
+      strut.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(strut);
+      // Foot pad: r 0.03 × 12 mm disc centred at z 1.056 — spans 1.050–1.062,
+      // 5 mm into the turntable top, 7 mm proud; the bare feet "did not read"
+      // (look-test 3). All four on the turntable: the pad rim (radial 0.330) is
+      // 30 mm inboard of the NetPodSaddle_0/1 boxes (x 0.360–0.390, review ⟦R⟧4)
+      // and the struts lean further inboard from there.
+      const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.03 * M, 0.03 * M, 0.012 * M, 12), gunmetalMat);
+      pad.rotation.x = Math.PI / 2;               // cylinder +Y → +Z fore
+      pad.position.set(footR * cx * M, footR * cy * M, 1.056 * M);
+      pad.name = `BerthCollarFoot_${i}`;
+      pad.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(pad);
+    });
+
+    // Berth plate — the dark disc seen through the ring bore (a thin docking
+    // plate on the face, Nautilus / ELSA-d style), ON the turntable top:
+    // z 1.060 = 5 mm proud of 1.055 (no disc-on-disc tie), r 0.13 < bore 0.16.
+    // Name kept (BerthFace): the DOCKING COLLAR pick list names it.
     const face = new THREE.Mesh(new THREE.CircleGeometry(0.13 * M, 24),
       new THREE.MeshStandardMaterial({ color: 0x0a0a12, metalness: 0.4, roughness: 0.15 }));
-    face.position.set(0, 0, 1.295 * M);         // CircleGeometry +Z normal faces fore
+    face.position.set(0, 0, 1.060 * M);         // CircleGeometry +Z normal faces fore
     face.name = 'BerthFace';
     face.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(face);
-    // Seat flange — the tunnel alone slides into the torus bore with a 5 mm
-    // clearance, which reads as a shaft in a bearing but not as a seated ring.
-    // A short r 0.20 disc at z 1.255–1.275 buries 3 cm into the torus tube (the
-    // tube's inner surface is at r 0.169 there), so the ring visibly sits on a
-    // lip. 1 cm above the LaserBaffle top (z 1.245) and above every other ring
-    // instrument (EO 1.22, LIDAR apex 1.20), so no contact. It lies INSIDE the
-    // torus silhouette from the side (r 0.20 < 0.30, z 1.255 > 1.23) and shows
-    // only from fore-quarter / below as the lip between tunnel and torus.
-    const flange = new THREE.Mesh(new THREE.CylinderGeometry(0.20 * M, 0.20 * M, 0.02 * M, 32), gunmetalMat);
-    flange.rotation.x = Math.PI / 2;
-    flange.position.set(0, 0, 1.265 * M);
-    flange.name = 'BerthFlange';
-    flange.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-    this.add(flange);
-
-    // The guide cone: an open funnel that turns a berth's last metre into an
-    // on-axis capture — bore radius at the ring plane, flaring to the outer
-    // radius 0.14 m fore. Open-ended so the berth face reads through.
-    const coneH = 0.14 * M;
-    // 48 radial segments (was 16): the funnel INTERIOR is visible now (DoubleSide
-    // below) and a 16-gon read as a faceted nut around the 48-segment torus.
-    const coneGeo = new THREE.CylinderGeometry(rOut * M, rIn * M, coneH, 48, 1, true);
-    // Funnel-facing: radiusTop (the flared end) points +Z fore after the X
-    // rotation; conical shading reads like the launcher housing family's gunmetal.
-    // Mother audit T1 (F2): DoubleSide on a CLONE (the shared gunmetal is the
-    // torus/lamps material) — a FrontSide open frustum showed only back-faces
-    // from the approach direction, so the funnel was invisible from exactly
-    // where it matters. Seated 1 cm aft (centre z 1.36, spans 1.29–1.43) so
-    // its r 0.16 aft rim sits inside the torus tube instead of on the inner
-    // equator (edge contact → "never coincident"); the visible funnel stays the
-    // outer ~6 cm (r 0.239→0.30) because the cone runs inside the tube between.
-    const coneMat = gunmetalMat.clone();
-    coneMat.side = THREE.DoubleSide;
-    const cone = new THREE.Mesh(coneGeo, coneMat);
-    cone.rotation.x = Math.PI / 2;              // +Y (the flared radiusTop) → +Z fore
-    cone.position.set(0, 0, (zM * M) + coneH / 2 - 0.01 * M);
-    cone.name = 'BerthCollarGuideCone';
-    cone.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-    this.add(cone);
 
     // Panel lamps (steady — work lights, not the removed greeble's blink):
-    // green on +X (approach-clear), red on −X.
+    // green on +X (approach-clear), red on −X — on the ±X struts' outboard
+    // skins at z 1.26: 18 mm off the strut axis along the outward normal, so
+    // the r 0.012 sphere is buried 8 mm in the r 0.014 strut (0.014 + 0.012 −
+    // 0.018) and stands 16 mm proud → (±0.2170, 0, 1.2677).
     const lampGeo = new THREE.SphereGeometry(0.012 * M, 8, 6);
+    const lampAt = (sign) => {
+      const t = (1.26 - footZ) / (headZ - footZ);
+      const axisR = footR + t * (headR - footR);                 // strut axis radial at z 1.26 (0.2008)
+      return new THREE.Vector3(sign * (axisR + 0.018 * strutOutN.x) * M, 0, (1.26 + 0.018 * strutOutN.y) * M);
+    };
     const lampGreen = new THREE.Mesh(lampGeo, new THREE.MeshStandardMaterial({
       color: 0x0a3016, emissive: 0x2aff66, emissiveIntensity: 0.9,
     }));
-    lampGreen.position.set(rOut * M, 0, zM * M);
+    lampGreen.position.copy(lampAt(1));
     lampGreen.name = 'BerthCollarLamp_G';
     lampGreen.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(lampGreen);
     const lampRed = new THREE.Mesh(lampGeo, new THREE.MeshStandardMaterial({
       color: 0x300a0a, emissive: 0xff4433, emissiveIntensity: 0.9,
     }));
-    lampRed.position.set(-rOut * M, 0, zM * M);
+    lampRed.position.copy(lampAt(-1));
     lampRed.name = 'BerthCollarLamp_R';
     lampRed.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(lampRed);
@@ -4062,11 +4101,11 @@ export class PlayerSatellite extends THREE.Group {
       this.add(patch);
     }
 
-    // ── Sun sensors ×4 — pucks with a tiny dark window disc. Two on the fore
-    // sensor turntable's top face flanking the berth tunnel (Mother audit T5,
-    // F6 — they used to stand on the cap plane at (±0.28, −0.20), which the
-    // r 0.34 deck skirt / deck buried: only a sliver showed past the rim); two
-    // on barrel fore-shoulder wedges.
+    // ── Sun sensors ×4 — pucks with a dark window disc. Two on the docking
+    // collar's ring fore face (Design 6 — they stood on the sensor turntable's
+    // top face at (0, ±0.24) from Mother audit T5 F6 until 2026-09-08; before
+    // that on the cap plane at (±0.28, −0.20), which the r 0.34 deck skirt /
+    // deck buried); two on barrel fore-shoulder wedges.
     const ssR = M * 0.025, ssT = M * 0.015;
     const makeSunSensor = (idx, pos, axis) => {
       const puck = new THREE.Mesh(new THREE.CylinderGeometry(ssR, ssR, ssT, 12), gunmetal);
@@ -4075,21 +4114,34 @@ export class PlayerSatellite extends THREE.Group {
       puck.name = `SunSensor_${idx}`;
       puck.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.add(puck);
-      const win = new THREE.Mesh(new THREE.CircleGeometry(ssR * 0.5, 10), darkOptic);
+      // Window 0.7 R (was 0.5 R — Design 6 look-tests: a 12 mm window on a
+      // 50 mm puck read as a bolt head at 2.6 m). All four pucks share the
+      // recipe; the ray origin the clearance meter uses is the window CENTRE,
+      // so the register does not move with the radius.
+      const win = new THREE.Mesh(new THREE.CircleGeometry(ssR * 0.7, 10), darkOptic);
       win.position.set(0, ssT * 0.5 + M * 0.001, 0);
       win.rotation.x = Math.PI / 2;
       win.name = `SunSensor_${idx}_Window`;
       win.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       puck.add(win);
     };
-    // Fore pair: on the turntable top face (T4: world z 1.055) at (0, ±0.24),
-    // facing +Z — 3 mm buried in the top face (puck spans z 1.052–1.067), at
-    // az 90/270 between the ring instruments (6.7 cm from the EO barrel, 6 cm
-    // from the berth tunnel, well inside the r 0.34 rim). Hull children, as
-    // before (the turret is fixed).
-    const turntableTopZ = M * 1.055;
-    makeSunSensor(0, new THREE.Vector3(0, M * 0.24, turntableTopZ + ssT * 0.5 - M * 0.003), zFwd);
-    makeSunSensor(1, new THREE.Vector3(0, -M * 0.24, turntableTopZ + ssT * 0.5 - M * 0.003), zFwd);
+    // Fore pair (Design 6): on the capture ring's fore face at az 90/270 —
+    // (0, ±0.180) = the tube centreline radius, aft face 4 mm INTO the tube top
+    // (1.30 + 0.020 = 1.320 → puck spans z 1.316–1.331, centre 1.3235), facing
+    // +Z. The turntable site was 58 % blind (register S7/S8: the 20 cm ring
+    // instruments around it took the sky — EO 14 %, telescope 12 %, IR 14 %,
+    // LIDAR drum 7 % — plus the old tunnel / torus 19 + 10 %); the ring face is
+    // the highest clear platform on the nose (0 % blocked). The ring is a
+    // tether-hold SEAT, never a contact surface (the berth hold keeps the catch
+    // 1.0 m fore of it), so hardware on its face is legitimate — IDSS rings
+    // carry targets and reflectors. 5.9 mm clear of the ±Y strut heads (r 0.014,
+    // buried in the tube under the pucks). Hull children, as before.
+    const collarZ = Constants.OCTOPUS_V5?.BERTH_COLLAR_Z_M ?? 1.30;
+    const collarTube = Constants.OCTOPUS_V5?.BERTH_COLLAR_TUBE_R_M ?? 0.020;
+    const collarRingR = M * ((Constants.OCTOPUS_V5?.BERTH_COLLAR_INNER_R_M ?? 0.16) + collarTube);
+    const collarTubeTopZ = M * (collarZ + collarTube);
+    makeSunSensor(0, new THREE.Vector3(0, collarRingR, collarTubeTopZ + ssT * 0.5 - M * 0.004), zFwd);
+    makeSunSensor(1, new THREE.Vector3(0, -collarRingR, collarTubeTopZ + ssT * 0.5 - M * 0.004), zFwd);
     // Barrel pair: az 150° and 205°, z 0.90, radial-out. Centre at barrelR +
     // ssT/2 − 5 mm so the puck is buried 5 mm in the skin (Mother audit T5, F9:
     // the flat aft face used to hover 0.8 mm off the curved hull at its rim).
@@ -4470,7 +4522,7 @@ export class PlayerSatellite extends THREE.Group {
     this._animateSolarTracking(dt, sunDirection);
     this._animateRosaGlow(dt);
     // (sensor gimbal tracking removed 2026-07-23 — see _buildSensors: the turret
-    // is a FIXED ring around the berth tunnel; _sensorTarget was never set.)
+    // is a FIXED ring around the collar bore; _sensorTarget was never set.)
     this._animateNavLights(dt);
     this._animateThrusterGlow(dt);
     this._animateLidarPulse(dt);

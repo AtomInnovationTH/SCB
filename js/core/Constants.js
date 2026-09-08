@@ -1422,7 +1422,17 @@ export const Constants = {
     // launcher housing; the 0.16 m inner radius is earned and unchanged.
     BERTH_COLLAR_Z_M: 1.30,        // m — collar seat plane, ship-local z (== muzzle plane)
     BERTH_COLLAR_INNER_R_M: 0.16,  // m — bore radius
-    BERTH_COLLAR_OUTER_R_M: 0.30,  // m — ring outer radius (guide-cone root)
+    // Design 6 (2026-09-08, "sensors need visual clearance to see"): the collar
+    // is a SKELETON — a thin capture ring (tube r 0.020 → R = INNER + TUBE =
+    // 0.180, outer 0.200) on four inclined struts whose feet stand on the sensor
+    // turntable at radial 0.30. The old torus (tube 0.07, annulus 0.16–0.30)
+    // stood 2–6 cm in front of the four ring optics and blocked 80–100 % of
+    // their cones (plan §1a); BERTH_COLLAR_OUTER_R_M (0.30, the guide-cone
+    // root) retired with the cone — the same 0.30 lives on as the strut
+    // footprint. Bore and seat plane unchanged: the DOCKING COLLAR card and the
+    // CARGO blueprint print "0.32 m bore" from INNER_R.
+    BERTH_COLLAR_TUBE_R_M: 0.020,  // m — capture-ring tube radius (ring R = INNER_R + TUBE_R)
+    BERTH_COLLAR_STRUT_FOOT_R_M: 0.30, // m — strut foot radial on the turntable top (z 1.05)
     NET_POD_X_M: 0.45,             // m — S13(e): pod muzzle |x| off the boresight (probe-sited)
 
     // ── Strut (NEW — replaces short-strut spec) ──

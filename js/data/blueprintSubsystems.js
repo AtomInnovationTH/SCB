@@ -122,7 +122,7 @@ export const BLUEPRINT_SUBSYSTEMS = [
     id: 'CARGO',
     label: 'CARGO',
     anchorM: [0, 0, 1.30],            // nose berthing collar seat plane (fore)
-    mesh: 'BerthCollarRing',          // the collar torus (fixed hull hardware)
+    mesh: 'BerthCollarRing',          // the capture ring (Design 6: thin ring on 4 struts; fixed hull hardware)
     priority: 5,
     readout: 'cargoBay',              // no provider yet → static rows (the
                                       // winch readout moved home to BERTHS)
@@ -135,7 +135,7 @@ export const BLUEPRINT_SUBSYSTEMS = [
     anchorM: [0, 0.30, 1.03],         // fixed sensor-deck annulus rim (fore)
     mesh: 'SensorDeck',               // the deck plate (fixed — the turret is fixed too since 2026-07-23; the T4 turntable is a solid body on it)
     meshOffsetM: [0, 0.37, 0],        // Mother audit T10: the mesh origin is the bore
-                                      // centre (inside the berth tunnel) — point at the
+                                      // centre (inside the collar bore) — point at the
                                       // deck lip (r 0.34–0.38 after T4) at az 90
     priority: 4,
     readout: 'sensors',

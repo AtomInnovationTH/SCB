@@ -195,9 +195,12 @@ const SYSTEMS = [
   },
   {
     id: 'PAYLOAD', label: 'PAYLOAD',
-    // Mother audit T10: on the berth tunnel wall (T1) — the old (0, 0.10, 1.05)
-    // sat inside the collar bore.
-    anchor: [ 0, 0.155 * M, 1.15 * M ],
+    // Mother audit T10: on collar hardware, not in the bore — the old (0, 0.10,
+    // 1.05) sat inside it. Design 6: the berth tunnel wall (0, 0.155, 1.15) is
+    // gone; the point is now the az-90 BerthCollarStrut_1's outboard skin at
+    // z ≈ 1.15 (axis radial 0.2527 + 0.014 along the strut's outward normal
+    // (0.904, 0.427) → (0, 0.265, 1.156)).
+    anchor: [ 0, 0.265 * M, 1.156 * M ],
     role: 'net launcher + spin-brake',
     parts: [
       { id: 'despin', name: 'SPIN-BRAKE LASER', risk: 'RED', tier: 'major', codexId: 'detumble',
@@ -220,30 +223,40 @@ const SYSTEMS = [
         pick: ['NetLauncher_0', 'NetLauncher_1'],
         anchor: [ 0.45 * M, 0.12 * M, 1.18 * M ] },
       { id: 'berth_collar', name: 'DOCKING COLLAR', risk: 'GREEN', tier: 'detail', codexId: 'docking_berthing',
-        massKg: 6, priority: 3,
-        // Mother audit T1/T10: the nose berthing collar (ring + guide cone on
-        // the berth tunnel) had no card. Detail tier: `docking_berthing` is
-        // DAUGHTER BERTHS' briefing (same berthing concept — a reeled catch is
-        // hauled onto the collar, not flown in) and the major tier requires a
-        // unique codexId. Static = the torus outer equator at az 90.
+        // Design 6 (2026-09-08): massKg 6 → 3 — the skeleton collar (thin ring
+        // on four struts, ≈ 2.5 kg of thin-wall Al) replaced the ≈ 9 kg torus +
+        // tunnel + flange + cone.
+        massKg: 3, priority: 3,
+        // Mother audit T1/T10: the nose berthing collar had no card. Detail
+        // tier: `docking_berthing` is DAUGHTER BERTHS' briefing (same berthing
+        // concept — a reeled catch is hauled onto the collar, not flown in) and
+        // the major tier requires a unique codexId.
         // Mother fixes 3/4: display name berth-collar → DOCKING COLLAR (owner
         // 2026-09-08); the id `berth_collar` (refitIndex, tests) and the frozen
         // mesh name NetBerthCollar are untouched.
+        // Design 6: the collar is a SKELETON — BerthCollarRing is a thin capture
+        // ring (R 0.180, tube 0.020, bore 0.16 kept) on BerthCollarStrut_0..3
+        // with the BerthFace plate on the turntable top inside the bore; the
+        // BerthTunnel / BerthFlange / BerthCollarGuideCone it used to pick are
+        // retired (they blocked the ring optics — test-SensorClearance).
         specs: [
           `Nose collar \u00b7 ${(2 * (Constants.OCTOPUS_V5?.BERTH_COLLAR_INNER_R_M ?? 0.16)).toFixed(2)} m bore`,
           `Seat plane z ${(Constants.OCTOPUS_V5?.BERTH_COLLAR_Z_M ?? 1.30).toFixed(2)} m \u00b7 cargo mates on-axis`,
+          'Open capture ring on 4 struts',
         ],
         mesh: 'BerthCollarRing',
-        pick: ['BerthCollarRing', 'BerthCollarGuideCone', 'BerthTunnel'],
+        pick: ['BerthCollarRing', 'BerthCollarStrut_0', 'BerthCollarStrut_1', 'BerthCollarStrut_2', 'BerthCollarStrut_3', 'BerthFace'],
         // Mother fixes 4/4 (b): BerthCollarRing's origin is the bore centre, so
         // the live anchor sat in the hole and the camera→anchor ray went through
-        // the ring onto BerthFace. Offset to the torus outer equator at az 90 —
-        // the static tuple — so the leader tip sits on the tube top (headless
-        // replica of the harness raycast: BerthCollarRing at gap 0 from the
-        // fore-quarters, top, hinge-az60 and wing-root; the far ring wall,
-        // tunnel or guide cone — all collar parts — from the rest).
-        meshOffset: [ 0, 0.30 * M, 0 ],
-        anchor: [ 0, 0.30 * M, 1.30 * M ] },
+        // the ring onto BerthFace. Offset to the ring's OUTER equator (R + tube =
+        // 0.200) — Design 6 moved it from az 90 to az 60 (0.100, 0.1732): the
+        // ±Y ring face carries the fore sun sensors now (az 90/270), and az 60
+        // is above the telescope top (1.245) and off the ±Y struts, so the
+        // leader tip sits on the tube from fore-on / fore-q-stbd / fore-q-top
+        // (Mode B harness: BerthCollarRing, gap ∈ [−0.02, +0.005]). The static
+        // tuple is the same point (a fixed part: static = live).
+        meshOffset: [ 0.100 * M, 0.1732 * M, 0 ],
+        anchor: [ 0.100 * M, 0.1732 * M, 1.30 * M ] },
     ],
   },
   {
@@ -257,10 +270,17 @@ const SYSTEMS = [
         massKg: 5, priority: 6, specs: ['2-axis pointing platform'],
         // SensorGimbal itself is a geometry-less Group; pick the turntable body
         // (Mother audit T4: the r 0.34 SensorHubRing cylinder — the four
-        // SensorSpoke boxes are gone). Anchor on its top face at az 90 (T10 —
-        // the old (0, 0, 1.00) was the cap centre inside the berth tunnel).
+        // SensorSpoke boxes are gone). Anchor on its top face (T10 — the old
+        // (0, 0, 1.00) was the cap centre inside the collar bore). Design 6 moved
+        // it from az 90 to az 105 (r 0.31 → (−0.080, 0.299)): the az-90 collar
+        // strut now lands its foot pad (r 0.03, z 1.050–1.062) exactly over
+        // (0, 0.31, 1.055), so the Mode B harness read the SENSOR TURRET leader
+        // on BerthCollarFoot_1 / BerthCollarStrut_1 (gap −0.010 / −0.012). At
+        // az 105 the point is 50 mm clear of the pad rim, 55 mm outside the
+        // telescope barrel (az 135, r 0.10) and clear of the ring / puck from
+        // fore-on and fore-q-top (SensorHubRing, gap 0).
         pick: ['SensorHubRing'],
-        anchor: [ 0, 0.31 * M, 1.055 * M ] },
+        anchor: [ -0.080 * M, 0.299 * M, 1.055 * M ] },
       { id: 'eo_cam', name: 'DAYLIGHT CAMERA', risk: 'GREEN', tier: 'major', codexId: 'pose_estimation',
         massKg: 2, priority: 4, specs: ['Visible-band imager (EO)'],
         pick: ['EO_Camera'],
@@ -285,7 +305,7 @@ const SYSTEMS = [
         massKg: 2, priority: 2, specs: ['Instrument mounting annulus'],
         mesh: 'SensorDeck',
         // Mother audit T10: SensorDeck's origin is the bore centre (0, 0, 1.03),
-        // inside the berth tunnel — point at the deck lip (r 0.34–0.38 after
+        // inside the collar bore — point at the deck lip (r 0.34–0.38 after
         // T4), 1 mm proud of the plate. The static stays the shipped tuple (the
         // ≥ 4 cm envelope is measured on it).
         // Mother fixes 4/4 (a): the lip point was az 90 — exactly between the
@@ -301,10 +321,14 @@ const SYSTEMS = [
       { id: 'sun_sensors', name: 'SUN SENSORS', risk: 'GREEN', tier: 'detail', codexId: 'sun_sensor',
         massKg: 0.5, priority: 2, specs: ['Coarse sun sensing, 4×'],
         // Mother audit T5/T10: the fore pair moved from the (buried) cap-plane
-        // sites to the turntable top at (0, ±0.24, 1.06); bind the +Y puck.
+        // sites to the turntable top at (0, ±0.24, 1.06); Design 6 (2026-09-08)
+        // moved them again, onto the capture ring's fore face at (0, ±0.180,
+        // 1.3235) — the turntable site was 58 % blind behind the ring
+        // instruments (test-SensorClearance register S7/S8). Bind the +Y puck;
+        // the static is its centre (ring-face site).
         mesh: 'SunSensor_0',
         pick: ['SunSensor_0', 'SunSensor_1', 'SunSensor_2', 'SunSensor_3'],
-        anchor: [ 0, 0.24 * M, 1.06 * M ] },
+        anchor: [ 0, 0.180 * M, 1.3235 * M ] },
       { id: 'nav_lights', name: 'NAVIGATION LIGHTS', risk: 'GREEN', tier: 'detail', codexId: 'nav_lights',
         massKg: 1, priority: 1, specs: ['Port/starboard running lights'],
         // Mother audit T6/T10: the lights left the ±X equator (inside the ROSA
