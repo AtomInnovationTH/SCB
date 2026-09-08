@@ -53,7 +53,7 @@
  * @module scene/NearFieldRenderPass
  */
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { Vector3, Scene, OrthographicCamera, PlaneGeometry, Mesh, ShaderMaterial } from 'three';
+import { Vector3, Color, Scene, OrthographicCamera, PlaneGeometry, Mesh, ShaderMaterial } from 'three';
 
 /**
  * Layer index for near-field objects + the lights that illuminate them.
@@ -74,6 +74,7 @@ export const NEAR_FIELD_SCALE = 1e5;
 const _worldPos = new Vector3();
 const _localPos = new Vector3();
 const _lightWorld = new Vector3();
+const _clearSave = new Color();   // renderNearOnly: the renderer's clear colour, saved/restored (per click, not per frame)
 
 /**
  * A RenderPass that draws the scene twice into one buffer: the far scene with
@@ -85,6 +86,9 @@ const _lightWorld = new Vector3();
  * `SceneManager._updateNearCamera()`. This pass owns only the per-frame
  * TRANSFORM SWAP (scale roots + near lights into ×S space, restore in a
  * `finally` so an exception mid-render can never leave the ship scaled).
+ * Session T reuses the same swap with an arbitrary origin for the SPECS pane's
+ * one-shot part portrait ({@link NearFieldRenderPass#renderNearOnly}) — a
+ * per-click primitive that never runs inside `render()`.
  *
  * @augments RenderPass
  */
@@ -277,6 +281,70 @@ export class NearFieldRenderPass extends RenderPass {
   }
 
   /**
+   * Session T — the SPECS pane's one-shot PART PORTRAIT (plan §1.6 / T1): draw
+   * ONLY the near-field set (the ship — NEAR_FIELD_LAYER, no far pass, no
+   * vignette) into `target` with an arbitrary origin camera. The ×S transform
+   * swap is taken relative to `originWorld` (the portrait camera's WORLD
+   * position — see _applyNearFieldScale's `originPos`), so `camera`, sitting
+   * at the ORIGIN and looking along the portrait direction, sees the part
+   * exactly as a camera standing at `originWorld` would; the caller owns the
+   * camera's pose/fov/near/far/layers and re-tags the roots' layer first.
+   *
+   * The target is cleared to OPAQUE black (colour + depth + stencil, whatever
+   * the renderer's clear colour is — the composer's frame carries alpha 1
+   * from its black `scene.background`, and a transparent clear would
+   * double-darken translucent hull layers when the readback is later
+   * composited onto black) with `scene.background` nulled for the render so
+   * WebGLBackground cannot force-clear it again. Everything touched is put
+   * back in a `finally` — roots and lights (the same restore law as the
+   * per-frame path: a scaled ship leaking into the next frame would be
+   * catastrophic), `scene.background`, `renderer.autoClear`, the clear
+   * colour/alpha and the bound render target — even when `render` throws
+   * (the error propagates; the caller's own try/catch decides the fallback).
+   * Per-frame path untouched: `render()` never calls this.
+   *
+   * @param {import('three').WebGLRenderer} renderer
+   * @param {import('three').WebGLRenderTarget|null} target  the portrait colour+depth target
+   * @param {import('three').Vector3} originWorld  the swap origin — the portrait camera's world position
+   * @param {import('three').Camera} camera  the origin camera (NEAR_FIELD_LAYER only)
+   * @returns {boolean} true when the near set was drawn (false: no roots / degenerate origin)
+   */
+  renderNearOnly(renderer, target, originWorld, camera) {
+    const savedBackground = this.scene.background;
+    const oldAutoClear = renderer.autoClear;
+    const hasTargetApi = typeof renderer.getRenderTarget === 'function';
+    const prevTarget = hasTargetApi ? renderer.getRenderTarget() : null;
+    const hasClearApi = typeof renderer.getClearColor === 'function' && typeof renderer.getClearAlpha === 'function'
+      && typeof renderer.setClearColor === 'function';
+    let prevClearColor = null;
+    let prevClearAlpha = 1;
+    let drew = false;
+    this.scene.background = null;
+    renderer.autoClear = false;
+    try {
+      if (hasClearApi) {
+        prevClearColor = renderer.getClearColor(_clearSave);
+        prevClearAlpha = renderer.getClearAlpha();
+        renderer.setClearColor(0x000000, 1);
+      }
+      renderer.setRenderTarget(target);
+      renderer.clear(true, true, true);
+      if (this._applyNearFieldScale(originWorld)) {
+        renderer.render(this.scene, camera);
+        drew = true;
+      }
+    } finally {
+      // Transforms FIRST (the restore law), then the renderer state.
+      this._restoreNearFieldScale();
+      this.scene.background = savedBackground;
+      renderer.autoClear = oldAutoClear;
+      if (hasClearApi && prevClearColor) renderer.setClearColor(prevClearColor, prevClearAlpha);
+      renderer.setRenderTarget(prevTarget);
+    }
+    return drew;
+  }
+
+  /**
    * Transform every visible near-field root — and the point lights that light
    * them — into ×S camera-relative space, recording restore state. Ship-child
    * lights ride along on their root's scale (position handled for free); only
@@ -284,10 +352,20 @@ export class NearFieldRenderPass extends RenderPass {
    * are repositioned to the same `(world − cam)·S` world point their ship-child
    * peers land at, keeping the lighting geometry consistent.
    *
+   * `originPos` (Session T — the SPECS pane's one-shot PART PORTRAIT) is the
+   * world point the swap is taken relative to: the far camera's position by
+   * default (the per-frame path passes nothing — byte-identical), or the
+   * portrait camera's WORLD position for {@link renderNearOnly}, so an
+   * origin camera looking along the portrait direction sees the part exactly
+   * where a camera standing at `originPos` would. A pure translation of the
+   * whole ×S scene: roots AND scene-level lights move together, so the
+   * lighting geometry stays consistent whatever origin is passed.
+   *
+   * @param {import('three').Vector3} [originPos] swap origin (world); default this.camera.position
    * @returns {boolean} true if the near sub-render should proceed this frame
    * @private
    */
-  _applyNearFieldScale() {
+  _applyNearFieldScale(originPos) {
     this._savedRootCount = 0;
     this._savedLightCount = 0;
 
@@ -295,8 +373,8 @@ export class NearFieldRenderPass extends RenderPass {
     if (!roots || roots.length === 0) return false;
 
     const S = this.nearFieldScale;
-    const camPos = this.camera.position; // far-camera world position (no parent)
-    if (!Number.isFinite(camPos.x) || !Number.isFinite(camPos.y) || !Number.isFinite(camPos.z)) {
+    const camPos = originPos || this.camera.position; // swap origin: far-camera world position (no parent) unless given
+    if (!camPos || !Number.isFinite(camPos.x) || !Number.isFinite(camPos.y) || !Number.isFinite(camPos.z)) {
       return false;
     }
 

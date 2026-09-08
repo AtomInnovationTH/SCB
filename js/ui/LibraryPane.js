@@ -53,7 +53,19 @@
  *     flashes once on arrival (reduced motion: none). Entry-less opens (tab /
  *     toggle / pagePane) and un-anchored openEntry calls (REFIT title, chips)
  *     frame the ship exactly as Session C shipped — the anchor rides ONE edge
- *     and can never go stale under a later camera move.
+ *     and can never go stale under a later camera move. **Session T — the
+ *     framed PART PORTRAIT (plan tmp/plans/1788863200000-specs-pane-part-
+ *     imagery.md, option E):** the anchor also carries the clicked part's
+ *     `partId`, and the photo edge's FIRST read asks `photoSource(anchor)`
+ *     for a framed picture — the hub renders the part once, callout-free, from
+ *     a camera aimed at its pick-mesh box (SceneManager.renderPartPortrait)
+ *     and answers `{ canvas, framed: true }`, which the pane draws WHOLE (no
+ *     crop law — the render is the picture; the banner keeps its 16:10 through
+ *     `aspect-ratio`). Any framed miss — the hub answers a live source (a
+ *     card-only part, no callouts), or the framed read comes back blank /
+ *     sizeless / throws — falls to the live crop: the remaining tries of the
+ *     edge ask `photoSource(anchor, 'live')`, byte-identical to Session D.
+ *     One framed attempt per edge, never per frame.
  *   - `shortText` — the plain-English "why it matters" line every entry has.
  *   - a generated SPECS block for HARDWARE entries (entries carrying
  *     `hardwareNames`), from the entry's EXISTING fields only (no invented
@@ -246,10 +258,17 @@ export class LibraryPane {
    *   codexId, then the REFIT card's manifest deep link. Consulted ONLY when
    *   the pane opens with NO entry (tab click / toggle); a null / unknown /
    *   throwing answer keeps the prompt copy.
-   * @param {function} [deps.photoSource] - () => ({ canvas, x, y })|null
-   *   (Session C, decision 2): the live render canvas + the subject's point
-   *   in CANVAS (drawing-buffer) px to crop around — main.js projects the
-   *   ship. Read once per photo, on the open / entry edge only.
+   * @param {function} [deps.photoSource] - (anchor, hint) => ({ canvas, x, y }|{ canvas, framed: true })|null
+   *   (Session C, decision 2 → Session T): the picture source for the photo
+   *   edge. `anchor` is THIS edge's click anchor ({ x, y, bounds, partId } |
+   *   { partId } | null — null on an entry-less open); `hint` is `undefined`
+   *   (a framed part portrait is welcome) or `'live'` (the live crop only —
+   *   this edge's framed attempt already ran). A LIVE answer is the render
+   *   canvas + the subject's point in CANVAS (drawing-buffer) px to crop
+   *   around — main.js projects the ship; a FRAMED answer (`framed: true`) is
+   *   a canvas that IS the picture (the hub's one-shot part render, 16:10) and
+   *   is drawn whole, no crop. Read once per photo try, on the open / entry
+   *   edge only.
    * @param {function} [deps.raf] - (cb) => handle: the frame scheduler for
    *   the deferred photo read (default window.requestAnimationFrame; absent →
    *   no photo, the text header stands alone)
@@ -330,6 +349,10 @@ export class LibraryPane {
     // by every entry-less open (tab / toggle / pagePane) so it can never go
     // stale under a later camera move; read at frame time by _readPhoto.
     this._photoAnchor = null;
+    // Session T: true once THIS edge's framed portrait attempt has run (blank,
+    // sizeless or thrown) — the remaining tries ask the source for the live
+    // crop ('live'). Reset by every _takePhoto (one framed attempt per edge).
+    this._photoLiveOnly = false;
     this._photoFlashes = 0;       // banner flashes fired (tests/witness probe)
     this._disposed = false;
   }
@@ -635,14 +658,16 @@ export class LibraryPane {
    * open (never a throw, never a blank crash — the viewer's "safe no-op"
    * contract). While disabled the entry is stored for the next open.
    * @param {string} id - codex entry id
-   * @param {{ via?: string, anchor?: {x:number,y:number,bounds?:object}|null }} [opts]
+   * @param {{ via?: string, anchor?: {x?:number,y?:number,bounds?:object,partId?:string}|null }} [opts]
    *   `via`: the clicked part's callout name (main.js passes `part.name`);
    *   the header leads with it when it is one of the entry's own
    *   `hardwareNames`. `anchor` (Session D): the clicked part's screen point
    *   (+ its projected pick-mesh `bounds`) in DRAWING-BUFFER px — main.js
    *   passes `part.screen` / `part.bounds` from the hull-click record; the
    *   photo taken for THIS edge crops around it (PHOTO_CROP_H_FRAC_PART,
-   *   grown to the bounds, capped at the ship crop). Absent (REFIT title,
+   *   grown to the bounds, capped at the ship crop). Session T: `partId` (the
+   *   record's `id`) rides it too — with or without a screen point — and is
+   *   what the hub frames the part portrait from. Absent (REFIT title,
    *   related chip, MAXIMIZE) → the header leads with every name the entry
    *   documents and the photo frames the ship.
    * @returns {boolean} true when the entry resolved
@@ -661,10 +686,14 @@ export class LibraryPane {
     }
     // The click anchor rides THIS edge only (the newest edge owns the photo):
     // a finite point is kept with its bounds; anything else → the ship.
+    // Session T: the part id rides it too (`partId` — the hub's framed portrait
+    // needs no screen point), with or without a finite point; a malformed
+    // anchor carrying no id is still null.
     const a = opts && opts.anchor;
+    const partId = (a && typeof a.partId === 'string' && a.partId) ? a.partId : null;
     this._photoAnchor = (a && Number.isFinite(a.x) && Number.isFinite(a.y))
-      ? { x: a.x, y: a.y, bounds: LibraryPane._finiteBounds(a.bounds) }
-      : null;
+      ? { x: a.x, y: a.y, bounds: LibraryPane._finiteBounds(a.bounds), partId }
+      : (partId ? { partId } : null);
     const wasOpen = this._open;
     this._openCore();                  // a fresh open takes its own photo (anchored when the click supplied one)
     this.refresh();
@@ -1054,9 +1083,13 @@ export class LibraryPane {
     // The photo you just took (Session C): a banner above the entry header
     // when the deferred frame read succeeded; otherwise nothing here and the
     // text header below stands alone (the fallback = Session B's header).
+    // Session T (owner Q1): the banner keeps the photo's own 16:10
+    // (PHOTO_W × PHOTO_H) through `aspect-ratio` instead of a fixed 110 px
+    // height — a framed part portrait is composed for that frame and must not
+    // be cropped by the pane's width (01-numbers.md "Workbench panes").
     if (m.photo) {
       parts.push(
-        `<img class="library-photo" alt="" src="${m.photo}" style="display:block;width:100%;height:110px;object-fit:cover;border:1px solid rgba(0,204,255,0.35);border-radius:4px;margin-bottom:8px${locked ? ';opacity:0.7' : ''}">`,
+        `<img class="library-photo" alt="" src="${m.photo}" style="display:block;width:100%;aspect-ratio:16/10;object-fit:cover;border:1px solid rgba(0,204,255,0.35);border-radius:4px;margin-bottom:8px${locked ? ';opacity:0.7' : ''}">`,
       );
     }
     // Entry header: the lead line + the subtitle, text only — the entry's data
@@ -1208,6 +1241,7 @@ export class LibraryPane {
     this._cancelPhoto();
     if (!this._open || this._disposed || !this._entryId || !this._photoSource || !this._raf) return;
     this._photoTry = 0;
+    this._photoLiveOnly = false;       // Session T: every edge gets ONE framed attempt first
     this._armPhotoFrame();
   }
 
@@ -1230,6 +1264,9 @@ export class LibraryPane {
    * a coarse grid: a blank read (a frame the loop skipped) is retried next
    * frame up to PHOTO_TRIES, then dropped — the text header stands alone.
    * Any throw (a tainted canvas, a missing 2D context) drops it the same way.
+   * Session T: the first attempt asks the source for the FRAMED part portrait;
+   * once a framed read has been attempted (blank, sizeless, or a throw) every
+   * remaining try of this edge asks for the live crop instead (`'live'`).
    */
   _photoTick() {
     this._photoHandle = null;
@@ -1241,9 +1278,21 @@ export class LibraryPane {
     else this._photoTry = 0;
   }
 
-  /** @private One read attempt. @returns {boolean} true when a photo landed. */
+  /**
+   * @private One read attempt. The source is asked with THIS edge's anchor and
+   * a hint: `undefined` = the framed portrait is welcome, `'live'` = the live
+   * crop only (a framed attempt already ran for this edge). A FRAMED source
+   * (`{ canvas, framed: true }` — the hub's one-shot part render) is drawn
+   * WHOLE (no crop law: the render is already the picture); a live source is
+   * cropped by `photoCrop`. Either way the blank test decides.
+   * @returns {boolean} true when a photo landed.
+   */
   _readPhoto() {
-    const src = this._photoSource ? this._photoSource() : null;
+    const src = this._photoSource ? this._photoSource(this._photoAnchor, this._photoLiveOnly ? 'live' : undefined) : null;
+    const framed = !!(src && src.framed);
+    // One framed attempt per edge: whatever happens below (blank / sizeless /
+    // a throw in drawImage), the next try of this edge asks for the live crop.
+    if (framed) this._photoLiveOnly = true;
     const cv = src && src.canvas;
     const W = cv ? Number(cv.width) : 0, H = cv ? Number(cv.height) : 0;
     if (!cv || !(W > 0) || !(H > 0)) return false;
@@ -1258,15 +1307,18 @@ export class LibraryPane {
     if (!ctx) return false;
     // Source crop (the pure law, pinned): the ship crop centred on the
     // source point, or — when this edge came from a hull click — the tighter
-    // PART crop centred on the clicked part, grown to its bounds.
-    const c = LibraryPane.photoCrop(W, H, src, this._photoAnchor);
+    // PART crop centred on the clicked part, grown to its bounds. A framed
+    // portrait is the whole canvas.
+    const c = framed
+      ? { sx: 0, sy: 0, cw: W, ch: H, anchored: !!this._photoAnchor }
+      : LibraryPane.photoCrop(W, H, src, this._photoAnchor);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, PHOTO_W, PHOTO_H);
     ctx.drawImage(cv, c.sx, c.sy, c.cw, c.ch, 0, 0, PHOTO_W, PHOTO_H);
     if (!LibraryPane.photoLit(ctx.getImageData(0, 0, PHOTO_W, PHOTO_H))) return false;
     const url = this._photoCanvas.toDataURL('image/jpeg', 0.8);
     if (typeof url !== 'string' || url.length < 64) return false;
-    this._photo = { id: this._entryId, url, anchored: c.anchored };
+    this._photo = { id: this._entryId, url, anchored: c.anchored, framed };
     this._photoCount++;
     this.refresh();                    // structural (photo 0 → 1): writes at once
     this._flashBanner();               // the one-shot arrival flash (reduced motion: none)

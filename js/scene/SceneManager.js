@@ -22,6 +22,7 @@ import { Constants } from '../core/Constants.js';
 import { devShotGate } from '../core/DevShotGate.js';
 import { NearFieldRenderPass, NEAR_FIELD_LAYER, NEAR_FIELD_SCALE } from './NearFieldRenderPass.js';
 import { nearFieldBrackets } from './nearFieldMath.js';
+import { portraitCameraFor, portraitCameraFit, boxCornersWorld, PORTRAIT_DEFAULT_FILL, PORTRAIT_FIT_FILL } from './portraitFraming.js';
 
 // Near-field depth-pass tuning (z-layer fix — see NearFieldRenderPass.js).
 // NEAR_FIELD_RADIUS is a half-extent (scene units) bracketing the player ship
@@ -37,6 +38,19 @@ const NEAR_FIELD_NEAR_FLOOR = 0.05;
 const NEAR_FIELD_FAR_DEFAULT = 0.01;   // 1 km — construction default, replaced per frame
 const _nfWorldPos = new THREE.Vector3();   // scratch for _updateNearCamera (no per-frame alloc)
 const _nfSetNearLayer = (o) => { o.layers.set(NEAR_FIELD_LAYER); };  // traverse cb (no per-frame closure alloc)
+// Session T — the SPECS pane's one-shot PART PORTRAIT (renderPartPortrait; plan
+// tmp/plans/1788863200000-specs-pane-part-imagery.md §1.6 / T2). The portrait
+// camera's vertical FOV mirrors the inspect lens (CameraSystem.inspection.fov =
+// 35 — the F1 costume the player is looking through); the default target is
+// 640×400, 2× the pane's 320×200 thumbnail (PHOTO_W × PHOTO_H) so the JPEG
+// downsample keeps its edges. Rebuilt only when a caller asks for another size.
+export const PORTRAIT_FOV_DEG = 35;
+export const PORTRAIT_W = 640;
+export const PORTRAIT_H = 400;
+const _pfLook = new THREE.Vector3();       // scratch for renderPartPortrait's look direction (per click, never per frame)
+const _pfBox = new THREE.Box3();           // scratch: the world box of the sphere-law FALLBACK (a local box through its matrix)
+const _pfUp = new THREE.Vector3();         // scratch: the caller's image up, normalised
+const _pfNow = () => (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : Date.now();
 // Black-flicker triage (H1 discriminator): `?nf=1` forces the near-field pass
 // to stay ENABLED on ladder floors whose contract disables it (F4/F5 — NAVCOM/SDA). The
 // disabled path is the only per-floor render-sequence difference on the floors
@@ -163,6 +177,21 @@ export class SceneManager {
      * space during the near render (fill/rim + launch pyro). Directional/hemi/
      * ambient are direction- or position-independent and are NOT listed here. */
     this._nearFieldLights = [];
+
+    // Session T — the one-shot PART PORTRAIT rig (renderPartPortrait), built
+    // LAZILY on the first photo and kept: the origin camera, the HalfFloat
+    // colour+depth target the near set is drawn into, the RGBA8 target the
+    // OutputPass (ACES + sRGB) writes for readback, its own OutputPass instance
+    // (NEVER the composer's `this.outputPass` — that one is the renderToScreen
+    // last pass with the dither injection + patched render below), the reused
+    // readback buffer, and the harness stats (`__scbPortraitCalls`).
+    /** @type {THREE.PerspectiveCamera|null} */ this._portraitCam = null;
+    /** @type {THREE.WebGLRenderTarget|null} */ this._portraitRT = null;
+    /** @type {THREE.WebGLRenderTarget|null} */ this._portraitOut = null;
+    /** @type {OutputPass|null} */ this._portraitOutput = null;
+    /** @type {Uint8Array|null} */ this._portraitBuf = null;
+    /** @type {{count:number, nulls:number, calls:number, triangles:number, ms:number, ok:boolean, error:string|null, width:number, height:number, method:string|null, distanceM:number, rolled:boolean}} */
+    this._portraitStats = { count: 0, nulls: 0, calls: 0, triangles: 0, ms: 0, ok: false, error: null, width: 0, height: 0, method: null, distanceM: 0, rolled: false };
 
     /**
      * Zoom Ladder per-floor render block (S2, T1 — docs/ladder/02-traps.md).
@@ -1360,6 +1389,189 @@ export class SceneManager {
     nc.far = far;
     nc.updateProjectionMatrix();
     nc.updateMatrixWorld(true);
+  }
+
+  /**
+   * Session T — the SPECS pane's one-shot PART PORTRAIT (plan §1.6 / T2): draw
+   * the near-field set (the ship, in its CURRENT state — flower pose, furl,
+   * docked daughters) ONCE with a dedicated camera aimed at a part's world box,
+   * callout-free and backdrop-free (layer NEAR_FIELD_LAYER only → the clear's
+   * opaque black), tone-mapped like the main view, and hand back the pixels.
+   * Runs at the pane's photo edge (one click → one render), NEVER per frame;
+   * nothing here touches the per-frame composer chain or the main/near cameras.
+   *
+   * Steps: the framing — checkpoint-1 amendment (a)/(b), 2026-09-08: with a
+   * `matrix` (the part's box is SHIP-LOCAL, the hub's getPartFrame contract)
+   * the 8 local corners go through it to world and `portraitCameraFit`
+   * (the tight projected-corner fit with auto-roll, fill default
+   * PORTRAIT_FIT_FILL) stands
+   * the camera; without a matrix, or when the fit is degenerate, the
+   * documented FALLBACK `portraitCameraFor(worldBox, dir, 35°, w/h, fill,
+   * NEAR_FIELD_RADIUS)` — the bounding-sphere law (fill default 0.7) — does
+   * (null → null) → re-tag the roots' layer with the `_nfSetNearLayer` traverse
+   * (NOT `_updateNearCamera()`, which brackets near/far against the MAIN camera)
+   * → the portrait camera at the ORIGIN, oriented by lookAt from the framing
+   * position toward the target with `up` (the ship's up in world, from the
+   * hub), `near/far = the framing's · NEAR_FIELD_SCALE` (the ×S space is metres:
+   * M·S = 1) → `renderPass.renderNearOnly(renderer, _portraitRT, f.position,
+   * cam)` — the swap origin is the portrait camera's WORLD position, so the
+   * origin camera sees what a camera standing there would; the scene-level
+   * fill/rim/earthshine lights ride the same translation (their POSE is still
+   * the main camera's — plan T7) → the private `OutputPass` renders
+   * `_portraitRT` → `_portraitOut` (RGBA8; standalone use is legal:
+   * renderToScreen false → setRenderTarget(writeBuffer); ACES + sRGB in its own
+   * shader — parity with the composer, minus its dither) →
+   * `readRenderTargetPixels` into the reused Uint8Array (rows BOTTOM-UP — the
+   * caller flips) → `{ data, width, height }`. `setRenderTarget(null)` in a
+   * `finally` so the next game frame never inherits the portrait target.
+   * Never throws: every failure (no near pass / no roots, a degenerate box, an
+   * unsupported readback, a GL error) → null, and the pane keeps today's live
+   * crop (plan §1.6: the byte-identical fallback). Stats for the harness in
+   * `_portraitStats` (`__scbPortraitCalls` in main.js's ?shot block): the near
+   * render's draw calls / triangles (renderer.info right after it, before the
+   * output quad resets it), the CPU-blocking ms of render + output + readback.
+   *
+   * @param {object} opts
+   * @param {THREE.Box3} opts.box   the part's box (scene units) — SHIP-LOCAL when `matrix` is given, else world
+   * @param {THREE.Matrix4} [opts.matrix]  the box's local → world matrix (the ship's matrixWorld); absent → the sphere fallback on a world box
+   * @param {THREE.Vector3|number[]} opts.dir   part → camera unit direction (world)
+   * @param {number} [opts.fill]   frame fill (fit: the largest projected extent's share of the limiting axis, default PORTRAIT_FIT_FILL; sphere fallback: the diameter's, default PORTRAIT_DEFAULT_FILL 0.7; small parts 0.35–0.7)
+   * @param {THREE.Vector3|number[]} [opts.up]  the image up (world; default world +Y) — the fit may roll it 90° (auto-roll)
+   * @param {number} [opts.width]  target width (default 640)
+   * @param {number} [opts.height] target height (default 400)
+   * @returns {{ data: Uint8Array, width: number, height: number, distance: number, radius: number,
+   *   method: 'fit'|'sphere', rolled: boolean }|null}  `distance` in scene units
+   */
+  renderPartPortrait(opts) {
+    const stats = this._portraitStats || (this._portraitStats = { count: 0, nulls: 0, calls: 0, triangles: 0, ms: 0, ok: false, error: null, width: 0, height: 0, method: null, distanceM: 0, rolled: false });
+    const renderer = this.renderer;
+    try {
+      const pass = this.renderPass;
+      if (!opts || !renderer || !pass || typeof pass.renderNearOnly !== 'function') return this._portraitNull(stats, 'no near pass');
+      if (!this._nearFieldRoots || this._nearFieldRoots.length === 0) return this._portraitNull(stats, 'no near-field roots');
+      if (pass.nearFieldEnabled === false) return this._portraitNull(stats, 'near field disabled on this floor');
+      const w = (Number.isFinite(opts.width) && opts.width > 0) ? Math.floor(opts.width) : PORTRAIT_W;
+      const h = (Number.isFinite(opts.height) && opts.height > 0) ? Math.floor(opts.height) : PORTRAIT_H;
+      const fillIn = (Number.isFinite(opts.fill) && opts.fill > 0) ? opts.fill : null;
+      const up = opts.up;
+      let upOk = false;
+      if (up && Number.isFinite(up.x) && Number.isFinite(up.y) && Number.isFinite(up.z) && (up.x || up.y || up.z)) { _pfUp.set(up.x, up.y, up.z).normalize(); upOk = true; }
+      else if (Array.isArray(up) && up.length >= 3 && Number.isFinite(up[0]) && Number.isFinite(up[1]) && Number.isFinite(up[2]) && (up[0] || up[1] || up[2])) { _pfUp.set(up[0], up[1], up[2]).normalize(); upOk = true; }
+      if (!upOk) _pfUp.set(0, 1, 0);
+      // far slack = the near-field bracket radius (10 m): the hull BEHIND a
+      // small part stays in frame (a 5 cm puck's 3·radius would clip the deck).
+      let f = null;
+      const hasMatrix = !!(opts.matrix && opts.matrix.isMatrix4);
+      if (hasMatrix) {
+        const corners = boxCornersWorld(opts.box, opts.matrix);
+        if (corners) f = portraitCameraFit(corners, opts.dir, _pfUp, PORTRAIT_FOV_DEG, w / h, fillIn === null ? PORTRAIT_FIT_FILL : fillIn, NEAR_FIELD_RADIUS);
+      }
+      if (!f) {
+        // The documented FALLBACK: the bounding-sphere law on the WORLD box.
+        const worldBox = hasMatrix ? _pfBox.copy(opts.box).applyMatrix4(opts.matrix) : opts.box;
+        f = portraitCameraFor(worldBox, opts.dir, PORTRAIT_FOV_DEG, w / h, fillIn === null ? PORTRAIT_DEFAULT_FILL : fillIn, NEAR_FIELD_RADIUS);
+      }
+      if (!f) return this._portraitNull(stats, 'degenerate frame');
+      this._ensurePortraitRig(w, h);
+
+      // Late-parented meshes default to layer 0 — re-tag exactly as the
+      // per-frame _updateNearCamera does, and nothing else of it.
+      for (const r of this._nearFieldRoots) {
+        if (r) r.traverse(_nfSetNearLayer);
+      }
+
+      const cam = this._portraitCam;
+      cam.position.set(0, 0, 0);
+      // The fit may have rolled the image up (the long axis along the wide axis).
+      cam.up.copy(f.up || _pfUp);
+      // Orientation only: the look direction is scale-free, so the world
+      // (unscaled) target − position serves the origin camera directly.
+      _pfLook.copy(f.target).sub(f.position);
+      cam.lookAt(_pfLook);
+      cam.fov = PORTRAIT_FOV_DEG;
+      cam.aspect = w / h;
+      cam.near = f.near * NEAR_FIELD_SCALE;
+      cam.far = f.far * NEAR_FIELD_SCALE;
+      cam.updateProjectionMatrix();
+      cam.updateMatrixWorld(true);
+
+      const t0 = _pfNow();
+      const drew = pass.renderNearOnly(renderer, this._portraitRT, f.position, cam);
+      if (!drew) return this._portraitNull(stats, 'near set not drawn');
+      const info = renderer.info && renderer.info.render;
+      stats.calls = info ? (info.calls | 0) : 0;
+      stats.triangles = info ? (info.triangles | 0) : 0;
+      this._portraitOutput.render(renderer, this._portraitOut, this._portraitRT);
+      renderer.readRenderTargetPixels(this._portraitOut, 0, 0, w, h, this._portraitBuf);
+      stats.ms = _pfNow() - t0;
+      stats.count++;
+      stats.ok = true;
+      stats.error = null;
+      stats.width = w;
+      stats.height = h;
+      stats.method = f.method;
+      stats.distanceM = f.distance * NEAR_FIELD_SCALE;   // scene units → metres (M·S = 1)
+      stats.rolled = !!f.rolled;
+      // The fit's projected half-extents (metres) — the witness derives the part's share of the frame.
+      stats.exM = Number.isFinite(f.ex) ? f.ex * NEAR_FIELD_SCALE : null;
+      stats.eyM = Number.isFinite(f.ey) ? f.ey * NEAR_FIELD_SCALE : null;
+      return { data: this._portraitBuf, width: w, height: h, distance: f.distance, radius: f.radius, method: f.method, rolled: !!f.rolled, ex: f.ex, ey: f.ey };
+    } catch (e) {
+      return this._portraitNull(stats, (e && e.message) ? e.message : String(e));
+    } finally {
+      // The next game frame must never inherit the portrait target.
+      try { if (renderer && typeof renderer.setRenderTarget === 'function') renderer.setRenderTarget(null); } catch (_e) { /* best-effort */ }
+    }
+  }
+
+  /** @private Record a null portrait (the pane falls back to the live crop) and return null. */
+  _portraitNull(stats, why) {
+    stats.nulls++;
+    stats.ok = false;
+    stats.error = why || 'unknown';
+    return null;
+  }
+
+  /**
+   * @private Build the portrait rig on first use (or rebuild the targets when a
+   * caller asks for a new size): the origin camera on NEAR_FIELD_LAYER, the
+   * HalfFloat colour+depth target (no msaa — the readback source must stay
+   * single-sampled and the output quad resolves nothing), the RGBA8 readback
+   * target (readRenderTargetPixels accepts UnsignedByte RGBA only; no depth),
+   * a fresh OutputPass with renderToScreen false, and the pixel buffer.
+   */
+  _ensurePortraitRig(w, h) {
+    if (!this._portraitCam) {
+      this._portraitCam = new THREE.PerspectiveCamera(PORTRAIT_FOV_DEG, w / h, 0.05, 100);
+      this._portraitCam.layers.set(NEAR_FIELD_LAYER);
+    }
+    if (!this._portraitOutput) {
+      this._portraitOutput = new OutputPass();
+      this._portraitOutput.renderToScreen = false;
+    }
+    const sized = this._portraitRT && this._portraitRT.width === w && this._portraitRT.height === h;
+    if (!sized) {
+      if (this._portraitRT) { try { this._portraitRT.dispose(); } catch (_e) { /* best-effort */ } }
+      if (this._portraitOut) { try { this._portraitOut.dispose(); } catch (_e) { /* best-effort */ } }
+      this._portraitRT = new THREE.WebGLRenderTarget(w, h, {
+        type: THREE.HalfFloatType,
+        samples: 0,
+        depthBuffer: true,
+        stencilBuffer: false,
+      });
+      this._portraitOut = new THREE.WebGLRenderTarget(w, h, {
+        type: THREE.UnsignedByteType,
+        format: THREE.RGBAFormat,
+        depthBuffer: false,
+        stencilBuffer: false,
+      });
+      this._portraitBuf = new Uint8Array(w * h * 4);
+    }
+  }
+
+  /** Session T harness read: the last portrait's stats (see renderPartPortrait). */
+  getPortraitStats() {
+    return this._portraitStats;
   }
 
   /** @returns {THREE.PerspectiveCamera} */

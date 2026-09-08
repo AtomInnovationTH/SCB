@@ -43,6 +43,12 @@
  * pane's bookkeeping; the optional onPartClick hook (D-a) routes a resolved
  * part/card click to the REFIT card instead of the Library emit.
  *
+ * PART PORTRAIT (Session T): getPartFrame(partId) hands the hub the part's
+ * world pick-mesh box + its PORTRAIT_OVERRIDES pose row, and
+ * withHiddenForPortrait(fn) hides the callout layer AND every outline layer
+ * for the SPECS pane's one-shot portrait render — the table is the only
+ * per-card authoring; distance is solved from the box (scene/portraitFraming).
+ *
  * Gating mirrors the hull outline: active while either the discrete INSPECTION
  * view (CAMERA_VIEW_CHANGE) or the OVERVIEW zoom sub-state (INSPECT_HULL_OUTLINE)
  * reports inspection on.
@@ -492,6 +498,103 @@ const SYSTEMS = [
   },
 ];
 
+// ----------------------------------------------------------------------------
+// PORTRAIT POSE TABLE (Session T — the SPECS pane's one-shot PART PORTRAIT;
+// plan tmp/plans/1788863200000-specs-pane-part-imagery.md §2.2, owner Q3 "small
+// parts framed loose")
+// ----------------------------------------------------------------------------
+// Per-card overrides for getPartFrame(), keyed by the part `id` and kept in a
+// SEPARATE table from the card rows on purpose (orchestrator rule, 2026-09-08:
+// a parallel lane is rewriting the DOCKING COLLAR / PAYLOAD / SUN SENSORS rows
+// and the BerthCollarRing geometry — the berth_collar / sun_sensors / gimbal /
+// sensor_deck directions are re-checked at integration, so they must stay one
+// line each). Every card WITHOUT a row here is photographed from the player's
+// current side (portraitFraming.portraitDirFor: the part was just seen /
+// clicked from there, so it is un-occluded); a row here says that side is
+// known-bad from the ANCHORS truth table (tmp/mother-audit/after-modeB) or the
+// geometry, and gives the side that works. Ship frame: +X stbd / +Y up / +Z
+// fore. Distance is NEVER authored — T0 solves it from the pick-mesh box.
+//   dir      [x, y, z] part → camera direction (normalised downstream).
+//   stowDir  the flower family's alternative while the aft flower is STOWED
+//            (the plates trail aft: an aft-on look hits AftThrusterDeck) —
+//            picked by getFlowerStatus() in getPartFrame.
+//   fill     the fraction of the frame's limiting axis the part's LARGEST
+//            projected extent spans (portraitCameraFit, default 0.8; the sphere
+//            fallback reads it as its diameter fill). Q3: the puck-class parts
+//            (sun sensors, nav lights, the patch antennas) frame LOOSE at 0.35
+//            so the hull context stays; the MLI skin IS the hull, 0.5.
+//   single   (amendment (d), 2026-09-08) a SPREAD multi-instance part — pods /
+//            pucks / reels / A-frames around the barrel — frames ONE instance:
+//            the pick target nearest the player's camera (ties → the lowest
+//            index; no camera → the first). The union of the whole ring framed
+//            the whole ship in the first witness (rcs 1/1, sun_sensors 1/1).
+//   frame    (T3) portrait-ONLY geometry for a card-only row: mesh names under
+//            `player` (a nested list = one instance made of several meshes —
+//            a hinge's bracket + pin; `{ arm: i }` = berth i's DOCKED daughter
+//            group). Replaces the hover picks as the frame
+//            source, so the owner's card-only decision (no hull hover / outline
+//            for mli, berths, the flower struts and hinges) stays untouched.
+//   tangent  (T7) with `radial`: a component along the azimuthal tangent at the
+//            instance (+ = counter-clockwise from fore) — the side view for a
+//            part that a radially-outboard neighbour covers.
+//   radial   `dir` = the framed box centre's own outward radial in the ship's
+//            XY plane + this [x, y, z] bias — the camera sits outside the hull
+//            looking AT that instance (with `single`: at the chosen one); an
+//            on-axis centre keeps the row's `dir`. The docked DAUGHTERS use it
+//            on the docked arm.group (read at frame time — never a copied
+//            azimuth table): looking onto the body from a fore-biased radial.
+const PORTRAIT_OVERRIDES = {
+  // POWER — the blanket's FRONT face (+Y) is clear from top / hinge / aft-q; fore-on / aft-on hit the boom
+  rosa_wings:    { dir: [0.15, 1.0, 0.1], single: true, radial: [0, 1.2, 0.1] },   // T7: ONE blanket face-on from above its own radial (the pair + barrel read as a whole-ship shot)
+  body_cells:    { dir: [0.6, -0.8, 0.4] },             // T7: from below-stbd — the cell wrap with both wings edge-on and far
+  array_roll:    { dir: [1.0, 0.35, 0.2], single: true, radial: [0, 0.6, 0.8] },   // T7: ONE spool from its fore-up radial (the blanket hides it from abeam)
+  // PROPULSION — aft-end hardware; the aft-q-d3.2 pose is clear
+  feep:          { dir: [0.6, 0.4, -1.0] },
+  rcs:           { dir: [0.6, 0.4, -1.0], fill: 0.7, single: true, radial: [0, 0, 0.15] },   // ONE pod, bells face-on; T7 fill 0.7 so the doghouse reads as a unit
+  aft_deck:      { dir: [0.6, 0.4, -1.0] },
+  mli:           { dir: [1.0, 0.35, 0.2], fill: 0.85, frame: ['Barrel_ConfigG'] },   // the skin IS the hull: the barrel fills the frame (portrait-only; hover stays card-only)
+  // PAYLOAD — own mesh from fore-q-stbd / side / hinge; BerthFace gap 0.009 from the fore quarters
+  despin:        { dir: [-0.9, 0.3, 0.8], fill: 0.7 },  // Design 6 re-check: port-fore, tighter — the telescope tube through the open ring
+  net_launcher:  { dir: [0.3, 0.3, 1.0] },              // T7: nearer fore-on so BOTH cans flank the collar (the stbd quarter hid the far one)
+  berth_collar:  { dir: [0.4, 0.25, 1.0] },             // Design 6 re-check: kept — dead-ahead ([0.15, 0.15, 1]) let the whole sensor farm steal the frame (4/2 vs 4/3)
+  // SENSORS — the turret cluster; instrument sides (+X EO / −X IR / −Y LIDAR dome / +Y canted trackers / the FrontCap)
+  gimbal:        { dir: [0.5, 0.9, 0.5] },              // Design 6 re-check: kept the above-fore view — through the ring from dead-ahead the turret hid behind the ring (3/2 vs 4/3)
+  eo_cam:        { dir: [0.8, 0.4, 1.0], fill: 0.85 },  // T7: stbd-fore-up — the aperture faces fore (re-checked at integration)
+  ir_cam:        { dir: [-0.8, 0.4, 1.0], fill: 0.85 }, // Design 6 re-check: port-fore-up — the aperture side (the mirror of eo_cam, which reads 5/4)
+  lidar:         { dir: [0.2, -1.0, 0.3] },             // T7: from below — the dome without the collar in front
+  star_trackers: { dir: [0.3, 1.0, 1.0], fill: 0.7 },   // T7: fore-up 45° — the two canted tubes read as tubes with openings
+  fore_bulkhead: { dir: [1.0, 0.7, 0.3] },              // T7: abeam-up — the plate's rim (the collar sits in front of its face; re-checked at integration)
+  sensor_deck:   { dir: [0.6, 1.0, 0.4] },              // T7: from above-fore (re-checked at integration)
+  sun_sensors:   { dir: [0.3, 0.8, 1.0], fill: 0.35, single: true, radial: [0, 0, 0.3] },   // ONE 5 cm puck, loose (Q3). Design 6 moved the two onto the ring FACE at (0, ±0.18, 1.32); the side radial still reads the puck ON the rim (3/2) where a fore-heavy radial read the hub (1/1) — kept
+  nav_lights:    { dir: [0.8, -0.4, 0.6], fill: 0.5, radial: [0, 0, 0.3] },   // 3 cm core — loose (Q3; T7 0.35 → 0.5: 0.7 blew the core out), from its own radial
+  // COMMS — the HGA faces nadir-ish; the patches face-on from the stbd grazes (the plan's aft row for
+  // mga is corrected here: MGA_Patch sits on the FORE shoulder at z 0.87, az 25 — the stbd-graze-mga pose)
+  ttc:           { dir: [0.4, -0.9, 0.7], fill: 0.6, radial: [0, 0, 0.5] },   // T7: the omni from its own radial, fore-biased, with hull context
+  mga:           { dir: [1.0, 0.4, 0.3], fill: 0.6 },   // T7: a 20 cm patch, not a puck — 0.35 showed the whole forebody
+  gps:           { dir: [0.9, 0.35, 0.2], fill: 0.5, single: true, radial: [0, 0, 0.2] },   // T7 0.35 → 0.5
+  ttc_aft:       { dir: [0.6, 0.4, -1.0], fill: 0.6, radial: [0, 0, -0.5] },   // T7: the aft omni from its own radial, aft-biased, with hull context
+  // CAPTURE — the reel-close pose (upper reel cans from +Y); berths from the az-60 tunnel side
+  // T3: one berth = the az-60 daughter seated in its pocket ({ arm: 0 } — the docked arm.group, away → omitted) plus the
+  // strut-root hardware on the fore hinge line (hinge pad, A-frame clevises, spring ejector, reel); the pocket itself is
+  // carved into the barrel (no mesh). Hover stays card-only (owner decision); the frame is portrait-only.
+  berths:        { dir: [0.5, 0.87, 0.35], frame: [{ arm: 0 }, 'SpringHousing_0', 'ReelHousing_0'] },   // T7: the seated daughter + its ejector / reel (the fore hinge line made it a whole-ship shot)
+  tether_reels:  { dir: [0.2, 1.0, -0.3], single: true, radial: [0, 0, 0.2] },   // ONE reel can
+  hinges:        { dir: [0.2, 1.0, -0.3], single: true, radial: [0, 0, 0.4] },   // ONE A-frame clevis
+  cradle_spring: { dir: [0.2, 1.0, -0.3], fill: 0.5, single: true, radial: [0, 0, 0.3], tangent: 0.9 },   // T7: ONE housing from the SIDE (tangent) — radially outboard sits its docked daughter
+  // THERMAL — CARGO / PARK plates face-on from aft; STOW from aft-on hits AftThrusterDeck
+  flower_plates: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5] },   // T7 stowDir: abeam-aft-up — the folded plates in profile along the barrel (aft-on read as a whole-ship 3/4)
+  flower_struts: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], single: true, radial: [0, 0, -0.8], frame: ['FlowerStrut_0', 'FlowerStrut_1', 'FlowerStrut_2', 'FlowerStrut_3'] },   // T3: the booms (portrait-only); T7: ONE boom from its radial-aft
+  flower_tips:   { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5] },   // T7 stowDir abeam (the aft hub hid the stowed pad)
+  // T3: one hinge = its clevis bracket + pin (one group = one instance); `single` frames the one nearest the camera.
+  flower_hinges: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], single: true, radial: [0, 0, -0.4], tangent: 0.8,   // T7: from the side — the swung-out boom covered the clevis from its radial
+                   frame: [['FlowerStrutBracket_0', 'FlowerStrutPin_0'], ['FlowerStrutBracket_1', 'FlowerStrutPin_1'], ['FlowerStrutBracket_2', 'FlowerStrutPin_2'], ['FlowerStrutBracket_3', 'FlowerStrutPin_3']] },
+  // DAUGHTERS — the docked body from its own radial, fore-biased (frame = the docked arm.group)
+  daughter_0:    { radial: [0, 0, 0.3] },
+  daughter_1:    { radial: [0, 0, 0.3] },
+  daughter_2:    { radial: [0, 0, 0.3] },
+  daughter_3:    { radial: [0, 0, 0.3] },
+};
+
 // LOD band edges, in METRES of camera-to-ship distance. Hysteresis: descend
 // (zoom in) on the lower number, ascend (zoom out) on the higher.
 const BAND = {
@@ -513,6 +616,11 @@ export const CARD_EPOCH_REDRAWS_PER_FRAME = 6;
 // Scratch for _recBounds (a per-click edge, never per frame — module-level so
 // the record builder allocates only the record it returns).
 const _recBoundsScratch = new THREE.Vector3();
+// Session T — getPartFrame's scratch: the ship's world → local inverse (a
+// portrait frame is a SHIP-LOCAL box) and a centre / instance-distance vector.
+// Per click, never per frame.
+const _frameInv = new THREE.Matrix4();
+const _frameV = new THREE.Vector3();
 const LINE_OP_SCALE = 0.8;  // line opacity = labelOp × this (round 4: hairline)
 const LINE_HALF_WIDTH_FRAC = 0.0012; // leader ribbon half-width / camera-ship dist (round 4: hairline)
 
@@ -1099,6 +1207,230 @@ export class MotherCallouts {
       });
     }
     return out;
+  }
+
+  /**
+   * Session T — the SPECS pane's one-shot PART PORTRAIT (plan §1.6 / T3; the
+   * checkpoint-1 amendments (b) + (d), 2026-09-08): the box a portrait camera
+   * must frame for a part, plus its pose row. The box is SHIP-LOCAL (the
+   * player group's frame) and comes with the ship's live `matrix`
+   * (matrixWorld): a WORLD axis-aligned box of a rotated ship is FAT — the
+   * first witness measured the wings' 3.06 × 0.00 × 2.00 m local box as
+   * 3.23 × 2.26 × 2.62 m in world under the LVLH attitude — while every hull
+   * part is ship-aligned, so the local box is a tight oriented box whose 8
+   * corners the framing fits through `matrix` (portraitFraming.
+   * portraitCameraFit). Union rule: the rec's `pick` meshes' geometry boxes,
+   * 8 corners each through a refreshed `matrixWorld` (the STALE WORLD MATRICES
+   * note) and then the ship's inverse — the SAME traverse `_recBounds` uses
+   * (`o.isMesh`, real geometry, our own outline shells `userData.partId`
+   * skipped), never `Box3.expandByObject`, which recurses INTO those shells.
+   * Hidden meshes count like they do in `_recBounds` (a furled wing's blanket
+   * box still frames the drum region — plan §2.2).
+   *
+   * Table rules (PORTRAIT_OVERRIDES — the ONLY per-card authoring surface):
+   *   `single`  — a spread multi-instance part (pods / pucks / reels / A-frames
+   *               around the barrel) frames ONE instance: the pick target whose
+   *               world box centre is NEAREST `cameraPos` (the player's camera —
+   *               the instance they are looking at), ties → the LOWEST index;
+   *               with no camera the first target. Deterministic for a given
+   *               camera pose, so the witness reproduces the same instance.
+   *   `radial`  — `dir` = the framed box centre's own outward radial in the
+   *               ship's XY plane plus the row's [x, y, z] bias (the camera sits
+   *               outside the hull looking AT that instance); an on-axis centre
+   *               keeps the row's `dir`. The docked DAUGHTERS (`armIndex`) use
+   *               it on the docked `arm.group` (resolved live through
+   *               `_liveCtx.armManager`, DOCKED only).
+   *   `stowDir` — the THERMAL family (`flowerGated`) frames only while a flower
+   *               pair exists and picks this while stowed (getFlowerStatus: STOW,
+   *               or a SLEW under half open).
+   * Returns null for an unknown id, a card-only part without a `frame` row
+   * (no `pick` / `mesh` — the pane keeps the ship photo; T3 gave the four
+   * card-only rows `frame` geometry), a gone flower / an away daughter, or an
+   * empty box; never throws. Allocates (a Box3, a Matrix4, the record) — per
+   * click at the photo edge, never per frame. Without a `player` the box is
+   * WORLD and `matrix` null (`local: false`) — the render then falls to the
+   * sphere law, the documented fallback.
+   * @param {string} partId — a MotherCallouts part id (the click record's `id`)
+   * @param {THREE.Vector3|null} [cameraPos] — the player's camera world position (the `single` rule's tie-breaker)
+   * @returns {{ box: THREE.Box3, matrix: THREE.Matrix4|null, local: boolean, dir: number[]|null,
+   *   fill: number|null, instance: string|null, id: string, name: string }|null}
+   *   `box` ship-local (scene units) with `matrix` = the ship's matrixWorld;
+   *   `dir` a SHIP-frame [x, y, z] override or null (the hub turns it into a
+   *   world direction and falls back to the player's side); `fill` a frame
+   *   fill override or null (the framing's default); `instance` the framed
+   *   pick target's name under the `single` rule.
+   */
+  getPartFrame(partId, cameraPos = null) {
+    if (typeof partId !== 'string' || !partId) return null;
+    const rec = this._partLabels.find((p) => p.def && p.def.id === partId) || null;
+    if (!rec) return null;
+    const def = rec.def;
+    const ov = PORTRAIT_OVERRIDES[def.id] || null;
+    let dir = (ov && Array.isArray(ov.dir)) ? ov.dir.slice() : null;
+    const fill = (ov && Number.isFinite(ov.fill) && ov.fill > 0) ? ov.fill : null;
+    const player = this.player;
+    const hasFrame = !!(player && player.matrixWorld && typeof player.updateWorldMatrix === 'function');
+    if (hasFrame) player.updateWorldMatrix(true, false);
+    const toLocal = hasFrame ? _frameInv.copy(player.matrixWorld).invert() : null;
+    const matrix = hasFrame ? player.matrixWorld.clone() : null;
+    const radialDir = (box) => {
+      if (!ov || !Array.isArray(ov.radial) || !toLocal) return dir;
+      const c = box.getCenter(_frameV);
+      const r = Math.hypot(c.x, c.y);
+      if (r <= 1e-12) return dir;
+      // `tangent` (T7): a component along the ship's azimuthal tangent at the
+      // instance (+ = counter-clockwise seen from fore), so a part that a
+      // radially-outboard neighbour covers (a spring housing under its docked
+      // daughter, a hinge clevis behind its swung-out boom) is seen from the side.
+      const t = Number.isFinite(ov.tangent) ? ov.tangent : 0;
+      return [c.x / r + ov.radial[0] - t * (c.y / r), c.y / r + ov.radial[1] + t * (c.x / r), ov.radial[2]];
+    };
+    const box = new THREE.Box3();
+    if (def.armIndex !== undefined) {
+      const arm = this._liveCtx?.armManager?.arms?.[def.armIndex];
+      if (!arm || arm.state !== Constants.ARM_STATES.DOCKED || !arm.group) return null;
+      // T7: the docked BODY (`arm.mesh`, the hex-prism group) with only its
+      // VISIBLE meshes — the arm group also carries idle plume cones, bridle
+      // legs and the tether kit, which stretched the box to the whole strut
+      // line ("the whole satellite shows" in the second witness).
+      const body = arm.mesh || arm.group;
+      this._unionMeshBox(body, box, toLocal, true);
+      if (box.isEmpty()) this._unionMeshBox(arm.group, box, toLocal);      // a body with nothing visible: the whole arm
+      if (box.isEmpty()) return null;
+      return { box, matrix, local: hasFrame, dir: radialDir(box), fill, instance: arm.group.name || null, id: def.id, name: def.name };
+    }
+    if (def.flowerGated) {
+      if (!this._flowerOn()) return null;
+      if (ov && Array.isArray(ov.stowDir)) {
+        const st = (typeof player?.getFlowerStatus === 'function') ? player.getFlowerStatus() : null;
+        const stowed = !!st && (st.pose === 'STOW' || (st.pose === 'SLEW' && st.openFrac < 0.5));
+        if (stowed) dir = ov.stowDir.slice();
+      }
+    }
+    // The frame source: the hover picks (`pick` → `mesh`), or — T3 — the row's
+    // `frame` groups (portrait-only geometry for the card-only rows, so hover /
+    // outlines stay exactly as the owner decided). One group = one instance.
+    let groups;
+    if (ov && Array.isArray(ov.frame) && ov.frame.length) {
+      groups = ov.frame.map((entry) => this._frameTargets(entry)).filter((g) => g.length);
+    } else {
+      groups = this._pickTargets(rec).map((t) => [t]);
+    }
+    if (!groups.length) return null;
+    let instance = null;
+    if (ov && ov.single && groups.length > 1) {
+      let best = 0;
+      const cam = cameraPos && Number.isFinite(cameraPos.x) && Number.isFinite(cameraPos.y) && Number.isFinite(cameraPos.z) ? cameraPos : null;
+      if (cam) {
+        let bestD = Infinity;
+        for (let i = 0; i < groups.length; i++) {
+          const b = new THREE.Box3();
+          for (const t of groups[i]) this._unionMeshBox(t, b, null);   // world, for the camera distance
+          if (b.isEmpty()) continue;
+          const d = b.getCenter(_frameV).distanceToSquared(cam);
+          if (d < bestD) { bestD = d; best = i; }              // strict: an earlier index keeps a tie
+        }
+      }
+      groups = [groups[best]];
+      instance = groups[0].map((t) => t.name).filter(Boolean).join('+') || null;
+    }
+    for (const g of groups) for (const target of g) this._unionMeshBox(target, box, toLocal);
+    if (box.isEmpty()) return null;
+    return { box, matrix, local: hasFrame, dir: radialDir(box), fill, instance, id: def.id, name: def.name };
+  }
+
+  /**
+   * @private T3 — resolve one `frame` table entry (a mesh name, or a list of
+   * names that together make ONE instance — e.g. a hinge's bracket + pin) to
+   * the objects of those names under `player`, the `_pickTargets` rule
+   * (every object of that name, by traverse) without its per-rec cache: a
+   * flower pair bought after the first hover must still frame. Portrait-only:
+   * hover never reads it. Per click.
+   * @param {string|string[]} entry
+   * @returns {THREE.Object3D[]}
+   */
+  _frameTargets(entry) {
+    const items = Array.isArray(entry) ? entry : [entry];
+    const out = [];
+    const wanted = new Set();
+    for (const it of items) {
+      if (typeof it === 'string' && it) wanted.add(it);
+      else if (it && typeof it === 'object' && Number.isInteger(it.arm)) {
+        // `{ arm: i }` — the docked daughter of berth i (its arm.group, DOCKED
+        // only, resolved live like the daughter rows): a berth's picture is the
+        // daughter seated in it; away → the berth's own hardware alone.
+        const arm = this._liveCtx?.armManager?.arms?.[it.arm];
+        if (arm && arm.state === Constants.ARM_STATES.DOCKED && arm.group) out.push(arm.group);
+      }
+    }
+    if (wanted.size && this.player && typeof this.player.traverse === 'function') {
+      this.player.traverse((o) => { if (o.name && wanted.has(o.name)) out.push(o); });
+    }
+    return out;
+  }
+
+  /**
+   * @private The `_recBounds` traverse with a Box3 sink: every real Mesh under
+   * `target` (outline shells skipped), its geometry box's 8 corners through a
+   * refreshed matrixWorld — and then `toLocal` (the ship's inverse) when given
+   * — expanded into `box` (scene units; world without `toLocal`).
+   */
+  _unionMeshBox(target, box, toLocal = null, visibleOnly = false) {
+    if (!target || typeof target.traverse !== 'function') return;
+    if (typeof target.updateWorldMatrix === 'function') target.updateWorldMatrix(true, true);
+    const v = _recBoundsScratch;
+    target.traverse((o) => {
+      if (!o.isMesh || !o.geometry?.attributes?.position || o.userData.partId) return;   // never our own outline shells
+      if (visibleOnly && !this._chainVisible(o, target)) return;                          // T7: idle plumes / stowed kit under a daughter
+      const g = o.geometry;
+      if (!g.boundingBox) g.computeBoundingBox();
+      const bb = g.boundingBox;
+      if (!bb) return;
+      for (let k = 0; k < 8; k++) {
+        v.set(k & 1 ? bb.max.x : bb.min.x, k & 2 ? bb.max.y : bb.min.y, k & 4 ? bb.max.z : bb.min.z);
+        v.applyMatrix4(o.matrixWorld);
+        if (toLocal) v.applyMatrix4(toLocal);
+        if (!Number.isFinite(v.x) || !Number.isFinite(v.y) || !Number.isFinite(v.z)) continue;
+        box.expandByPoint(v);
+      }
+    });
+  }
+
+  /**
+   * Session T — run `fn` with everything of ours that rides the ship's render
+   * layer HIDDEN, so a portrait render of the near set shows the hardware and
+   * nothing else: the callout group (`_group` — leaders, dots, cards; a child
+   * of `player`, so it WOULD render in a ship-only pass) and every hover /
+   * REFIT-ghost outline layer (`rec._outline.lines` / `.shells` — children of
+   * the hull meshes, NOT of `_group`, so `_group.visible` cannot hide them —
+   * plus any leftover `userData.partId` mesh under `player`, defensively).
+   * Restores exactly what was visible in a `finally` (a throw propagates);
+   * layers that were already hidden stay hidden. `setSuppressed` is the WRONG
+   * handle for this (it resets band / pointer state); this touches only
+   * `.visible`. Returns `fn()`'s value. Per click, never per frame.
+   * @template T @param {() => T} fn @returns {T}
+   */
+  withHiddenForPortrait(fn) {
+    const group = this._group || null;
+    const wasVisible = group ? group.visible : undefined;
+    const shown = new Set();
+    for (const rec of (this._allRecs && this._allRecs.length) ? this._allRecs : (this._partLabels || [])) {
+      const out = rec && rec._outline;
+      if (!out) continue;
+      for (const line of out.lines || []) if (line && line.visible) shown.add(line);
+      for (const shell of out.shells || []) if (shell && shell.visible) shown.add(shell);
+    }
+    if (this.player && typeof this.player.traverse === 'function') {
+      this.player.traverse((o) => { if (o.userData && o.userData.partId && o.visible) shown.add(o); });
+    }
+    for (const o of shown) o.visible = false;
+    if (group) group.visible = false;
+    try {
+      return fn();
+    } finally {
+      if (group) group.visible = wasVisible;
+      for (const o of shown) o.visible = true;
+    }
   }
 
   /** @private Restore a ghost rec's outline materials to their build-time base
@@ -2823,4 +3155,4 @@ export class MotherCallouts {
 }
 
 // Exported for tests (drift guard on the label table / codexId mapping).
-export { SYSTEMS as MOTHER_CALLOUT_SYSTEMS };
+export { SYSTEMS as MOTHER_CALLOUT_SYSTEMS, PORTRAIT_OVERRIDES as MOTHER_PORTRAIT_OVERRIDES };

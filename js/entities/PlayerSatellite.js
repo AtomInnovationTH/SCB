@@ -5120,6 +5120,28 @@ export class PlayerSatellite extends THREE.Group {
     this._hullOutline.visible = want;
   }
 
+  /**
+   * Session T (SPECS pane part imagery): run `fn` with the diagnostic hull
+   * outline HIDDEN and put it back exactly as it was — the LIBRARY pane's
+   * one-shot PART PORTRAIT renders the near set while INSPECT may be showing
+   * the EdgesGeometry seam + rim lines ON the barrel skin (a child of this
+   * group, so a ship-only render would draw them over the part). Touches only
+   * `.visible` (never builds the outline, never re-gates through
+   * setHullOutlineVisible's Constants flag); restores in a `finally` so a
+   * throwing `fn` propagates with the outline back. Per click, never per frame.
+   * @template T @param {() => T} fn @returns {T}
+   */
+  withHullOutlineHidden(fn) {
+    const o = this._hullOutline;
+    const was = !!(o && o.visible);
+    if (was) o.visible = false;
+    try {
+      return fn();
+    } finally {
+      if (was) o.visible = true;
+    }
+  }
+
   // ==========================================================================
   // V5 CROSSBOW — ARM MANAGER & RECOIL (Phase 4 Mothership)
   // ==========================================================================

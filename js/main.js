@@ -16,6 +16,7 @@ import { gameState, GameStates } from './core/GameState.js';
 import { runtimeAdapt, TIER_ORDER } from './systems/QualityManager.js';
 
 import { SceneManager } from './scene/SceneManager.js';
+import { portraitDirFor, portraitUpFor } from './scene/portraitFraming.js';
 import { Earth } from './scene/Earth.js';
 import { Starfield, raDec2xyz } from './scene/Starfield.js';
 import { BRIGHT_STARS, CONSTELLATION_FIGURES, galacticBasis } from './scene/starCatalog.js';
@@ -911,6 +912,98 @@ const _hullTmp = new THREE.Vector3();
 // Session C: the LIBRARY pane's photo subject projection scratch (read on the
 // pane's open / entry edge only — never per frame; one reused vector).
 const _photoTmp = new THREE.Vector3();
+// Session T (SPECS pane part imagery): the part portrait's scratch — the
+// ship-frame → world direction conversions (_shipDirToWorld) and the ship's
+// up / fore for the image up. Read at the photo edge only, never per frame.
+const _portraitDir = new THREE.Vector3();
+const _portraitUp = new THREE.Vector3();
+const _portraitFore = new THREE.Vector3();
+const _portraitQuat = new THREE.Quaternion();
+// Session T: the ONE reused canvas the portrait's RGBA8 readback is blitted onto
+// (rows flipped — readRenderTargetPixels is bottom-up) for the pane's drawImage.
+// Built on the first framed photo, resized only when the render size changes.
+let _portraitCanvas = null;
+let _portraitImage = null;
+// Session T: the last framed portrait's frame facts (part id, the `single`
+// instance chosen, the ship-frame dir, fill, the fit method / distance / roll)
+// — a ?shot probe for the witness (window.__scbLastPortraitFrame); null until
+// a framed photo lands. Written per click, never per frame.
+let _lastPortraitFrame = null;
+
+/**
+ * Session T — turn a SHIP-frame direction (+X stbd / +Y up / +Z fore — the
+ * MotherCallouts PORTRAIT_OVERRIDES table's frame, `PlayerSatellite`'s local
+ * axes) into a WORLD unit direction through the player's world quaternion.
+ * Reads the live attitude, so the same table row follows the LVLH roll. Null
+ * when there is no player / a degenerate input.
+ * @param {number[]|{x:number,y:number,z:number}} dir
+ * @param {THREE.Vector3} [out] scratch (default _portraitDir)
+ * @returns {THREE.Vector3|null}
+ */
+function _shipDirToWorld(dir, out = _portraitDir) {
+  if (!player || !dir) return null;
+  if (Array.isArray(dir)) out.set(Number(dir[0]), Number(dir[1]), Number(dir[2]));
+  else out.set(Number(dir.x), Number(dir.y), Number(dir.z));
+  if (!Number.isFinite(out.x) || !Number.isFinite(out.y) || !Number.isFinite(out.z) || out.lengthSq() < 1e-24) return null;
+  player.getWorldQuaternion(_portraitQuat);
+  return out.applyQuaternion(_portraitQuat).normalize();
+}
+
+/**
+ * Session T — the framed PART PORTRAIT for the LIBRARY pane's photo edge: the
+ * clicked part's world pick-mesh box (MotherCallouts.getPartFrame) → the view
+ * direction (the pose table's ship-frame row through _shipDirToWorld, else the
+ * player's side, else the §2.2 default — portraitDirFor) → the image up
+ * (ship up, or ship fore for a top/bottom-down shot — portraitUpFor) → ONE
+ * SceneManager.renderPartPortrait with the callout layer, every outline
+ * (MotherCallouts.withHiddenForPortrait) and the inspect hull outline
+ * (PlayerSatellite.withHullOutlineHidden) hidden → the RGBA8 readback blitted
+ * (rows flipped) onto the reused _portraitCanvas. Returns { canvas, framed:
+ * true } or null on ANY miss (no callouts / no frame / a null render / no 2D
+ * context) — the pane then takes today's live crop, byte-identical. Never
+ * throws; per click, never per frame.
+ * @param {string} partId
+ * @returns {{ canvas: HTMLCanvasElement, framed: true }|null}
+ */
+function _portraitFor(partId) {
+  if (!motherCallouts || !sceneManager || typeof sceneManager.renderPartPortrait !== 'function') return null;
+  const camPos = sceneManager.camera ? sceneManager.camera.position : null;
+  // Amendment (b)/(d): the frame is a SHIP-LOCAL box + the ship matrix; the
+  // camera position decides the `single` instance (nearest, ties → lowest index).
+  const frame = motherCallouts.getPartFrame(partId, camPos);
+  if (!frame || !frame.box) return null;
+  const centre = frame.box.getCenter(_photoTmp);
+  if (frame.matrix) centre.applyMatrix4(frame.matrix);        // the world centre for the player's-side direction
+  const dir = portraitDirFor(camPos, centre, frame.dir ? _shipDirToWorld(frame.dir) : null);
+  const up = portraitUpFor(dir, _shipDirToWorld([0, 1, 0], _portraitUp), _shipDirToWorld([0, 0, 1], _portraitFore));
+  const req = { box: frame.box, matrix: frame.matrix || undefined, dir, fill: frame.fill || undefined, up };
+  const shot = motherCallouts.withHiddenForPortrait(() => (
+    (player && typeof player.withHullOutlineHidden === 'function')
+      ? player.withHullOutlineHidden(() => sceneManager.renderPartPortrait(req))
+      : sceneManager.renderPartPortrait(req)
+  ));
+  if (!shot || !shot.data || !(shot.width > 0) || !(shot.height > 0)) return null;
+  _lastPortraitFrame = {
+    id: frame.id, instance: frame.instance || null, local: !!frame.local, dir: frame.dir ? frame.dir.slice() : null,
+    fill: frame.fill || null, method: shot.method || null, distanceM: Number.isFinite(shot.distance) ? shot.distance * 1e5 : null, rolled: !!shot.rolled,
+    exM: Number.isFinite(shot.ex) ? shot.ex * 1e5 : null, eyM: Number.isFinite(shot.ey) ? shot.ey * 1e5 : null,
+  };
+  if (typeof document === 'undefined') return null;
+  const w = shot.width, h = shot.height;
+  if (!_portraitCanvas) _portraitCanvas = document.createElement('canvas');
+  if (_portraitCanvas.width !== w || _portraitCanvas.height !== h) {
+    _portraitCanvas.width = w; _portraitCanvas.height = h;
+    _portraitImage = null;
+  }
+  const ctx = _portraitCanvas.getContext('2d');
+  if (!ctx) return null;
+  if (!_portraitImage || _portraitImage.width !== w || _portraitImage.height !== h) _portraitImage = ctx.createImageData(w, h);
+  // readRenderTargetPixels hands rows BOTTOM-UP; the canvas wants top-down.
+  const src = shot.data, dst = _portraitImage.data, row = w * 4;
+  for (let y = 0; y < h; y++) dst.set(src.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+  ctx.putImageData(_portraitImage, 0, 0);
+  return { canvas: _portraitCanvas, framed: true };
+}
 // Session J (D-I): the long-press hit-test's scratch (the selected target's
 // position — read per hold, never per frame; one reused vector).
 const _holdTmp = new THREE.Vector3();
@@ -1312,7 +1405,12 @@ async function init() {
         // pick-mesh bounds in drawing-buffer px (the getHoveredPart record) —
         // the pane's photo crops around the PART for this edge; the anchor
         // rides the call, so it can never go stale (no stored click state).
-        if (libraryPane && libraryPane.isOpen() && part && part.codexId) libraryPane.openEntry(part.codexId, { via: part.name, anchor: part.screen ? { x: part.screen.x, y: part.screen.y, bounds: part.bounds } : null });
+        // Session T: the record's `id` rides the anchor too (`partId`), so the
+        // pane's photo edge can ask the hub for the FRAMED part portrait
+        // (photoSource(anchor) → _portraitFor); an off-screen part (screen
+        // null) still carries the id — the portrait needs no screen point,
+        // only the live pick-mesh box.
+        if (libraryPane && libraryPane.isOpen() && part && part.codexId) libraryPane.openEntry(part.codexId, { via: part.name, anchor: part.screen ? { x: part.screen.x, y: part.screen.y, bounds: part.bounds, partId: part.id } : { partId: part.id } });
         // Subnautica rule (08-workbench §2 "clicking a locked part's card
         // unlocks its entry — exploration is how the library fills"): a
         // LOCKED entry gets an unlock request over the ONE existing path
@@ -2087,8 +2185,32 @@ async function init() {
       // preserveDrawingBuffer is false; the next rAF runs after this loop's
       // render, before present: the BlackFrameProbe legality) and falls back
       // to the emoji header on any failure. A GETTER, read per photo on the
-      // open / entry edge only — never per frame. SceneManager untouched.
-      photoSource: () => {
+      // open / entry edge only — never per frame (Session C's live crop touched
+      // no SceneManager code; Session T's portrait below is the one render).
+      // Session T (plan §1.6, option E — owner 2026-09-08): the pane passes the
+      // edge's anchor and a hint. `hint === 'live'` (the pane's retry after a
+      // blank framed read) or a portrait miss → the live crop exactly as
+      // shipped. Otherwise the FRAMED PART PORTRAIT: the part id is the click
+      // anchor's `partId`, or — for an entry-less open (tab / toggle) — the
+      // focused hull part (MotherCallouts.getFocusedPart, COMPONENT band only);
+      // _portraitFor renders it once (callouts + outlines hidden, the inspect
+      // hull outline hidden) onto the reused portrait canvas → { canvas,
+      // framed: true } and the pane crops nothing (the whole canvas is the
+      // photo). Any miss (no callouts, a card-only part, a null render) → the
+      // live crop, byte-identical to Session D.
+      photoSource: (anchor, hint) => {
+        if (hint !== 'live') {
+          let id = (anchor && typeof anchor.partId === 'string') ? anchor.partId : null;
+          if (!id && motherCallouts && typeof motherCallouts.getFocusedPart === 'function') {
+            const focused = motherCallouts.getFocusedPart();
+            if (focused && typeof focused.id === 'string') id = focused.id;
+          }
+          if (id) {
+            let framed = null;
+            try { framed = _portraitFor(id); } catch (_e) { framed = null; }
+            if (framed) return framed;
+          }
+        }
         _photoTmp.copy(player.getPosition()).project(camera);
         return {
           canvas,
@@ -3475,6 +3597,17 @@ async function init() {
       // Raw handle for the perf harness, which needs to control info.autoReset
       // to get clean per-frame totals across the composer's multiple passes.
       window.__scbSceneManager = () => sceneManager;
+      // Session T (SPECS pane part imagery, plan T2/T8): the last PART PORTRAIT
+      // render's stats — the near render's draw calls / triangles (read from
+      // renderer.info right after it, before the output quad resets them), the
+      // CPU-blocking ms of render + output + readback, count / nulls / the last
+      // null's reason, ok, and the target size. One render per hull click, never
+      // per frame — the specs-portraits.mjs witness logs it beside `framed`.
+      window.__scbPortraitCalls = () => (sceneManager && sceneManager.getPortraitStats ? sceneManager.getPortraitStats() : null);
+      // …and the last framed portrait's frame facts (part id, the `single`
+      // instance, dir, fill, fit method / distance m / roll) — the witness pins
+      // the instance choice run to run.
+      window.__scbLastPortraitFrame = () => _lastPortraitFrame;
 
       // Project a sky direction (ra hours, dec degrees) to canvas pixels, so a
       // capture harness can aim a crop / measurement at an exact star without
