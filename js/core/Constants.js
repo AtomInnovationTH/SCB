@@ -35,7 +35,12 @@ export const Constants = {
   // the briefing-less callout parts (aft_thruster_deck, fore_bulkhead,
   // sensor_deck, nav_lights, tip_hardpoints; owner decision 1) + their
   // symmetric backlinks; 215 → 220 entries (08-workbench §2 / §7).
-  DATA_VERSION: '1011',
+  // '1010'→'1011': Wave-5 (Session L) cluster / band data pass — seven cluster_*
+  // + five band_* briefings for the floor-4 SPECS subject; 220 → 232 entries.
+  // '1011'→'1012': Mother audit — docking_berthing.hardwareNames gains the
+  // DOCKING COLLAR card (the T1 nose-collar card, renamed; owner 2026-09-08);
+  // no entries added or removed (232).
+  DATA_VERSION: '1012',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
@@ -227,6 +232,11 @@ export const Constants = {
     ELBOW_STUB_NDC:    0.05,  // horizontal leader stub length off the card edge
     DETAIL_REVEAL_NDC: 0.25,  // T6: detail parts within this NDC radius of the
                               // focused part reveal even across systems
+    FREE_STANDING_R_M: 0.6,   // Mother fixes 4/4 (c): a bound flowerGated row whose
+                              // live anchor is beyond this ship-frame radius (m) rides a
+                              // deployed strut clear of every hull-mounted part (hull
+                              // 0.40, tracker mouths / RCS bells ≤ 0.52) — the facing
+                              // gate's hull-normal proxy is skipped for it
 
     // --- On-screen label heights, as a fraction of viewport height (NDC-ish) ---
     // Each value is the on-screen height of the card's TITLE BLOCK (the 0-row

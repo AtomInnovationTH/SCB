@@ -2956,7 +2956,7 @@
       "id": "docking_berthing",
       "hardwareNames": [
         "DAUGHTER BERTHS",
-        "BERTH COLLAR"
+        "DOCKING COLLAR"
       ],
       "category": "ORBITAL_MECHANICS",
       "trl": 9,

@@ -2636,7 +2636,9 @@ export class PlayerSatellite extends THREE.Group {
     // Parented to `wrapper` so the roll-out scale.x extends them with the
     // blanket. Names A/B are bound in test-RosaFurl.js. (Booms are not in
     // `struct` handles, so _setRosaWingProgress leaves them untouched — safe.)
-    const boomGeo = new THREE.CylinderGeometry(boomOD / 2, boomOD / 2, rosaW, 8);
+    // 16 radial segments (was 8): the boom ends read as octagons in the furl
+    // frames (Mother fixes, round ends).
+    const boomGeo = new THREE.CylinderGeometry(boomOD / 2, boomOD / 2, rosaW, 16);
     for (const edgeY of [rosaL / 2, -rosaL / 2]) {
       const boom = new THREE.Mesh(boomGeo, boomMat);
       boom.rotation.z = Math.PI / 2;           // Y-axis → X-axis (blanket length)
@@ -2682,7 +2684,9 @@ export class PlayerSatellite extends THREE.Group {
     // not a mirror, and with `sign·tuck` the port curl used to tuck the wrong
     // way. Both wings now start at their outboard boom end and rise to the
     // drum's zenith at p = 1, and tuck symmetrically (base rotation 0).
-    const curlGeo = new THREE.TorusGeometry(drumR, boomOD / 2, 6, 12, Math.PI / 2);
+    // Tube 8 radial / 24 tubular (was 6 / 12): the quarter-arc read as a
+    // 3-facet elbow with a hexagonal tube end (Mother fixes, round ends).
+    const curlGeo = new THREE.TorusGeometry(drumR, boomOD / 2, 8, 24, Math.PI / 2);
     if (sign > 0) curlGeo.translate(-drumR, 0, 0);
     else          curlGeo.rotateZ(Math.PI / 2).translate(drumR, 0, 0);
     const curls = [];
@@ -2741,7 +2745,7 @@ export class PlayerSatellite extends THREE.Group {
     // mandrel under them at every furl state, and the stow coil must stay
     // fore of the rear-cap plane (±1.0), so the mandrel end showing beyond the
     // coil cap when furled is the intended read (Mother audit W6: left).
-    const drumGeo = new THREE.CylinderGeometry(drumR, drumR, rosaL * 1.02, 16);  // was 12-seg
+    const drumGeo = new THREE.CylinderGeometry(drumR, drumR, rosaL * 1.02, 32);  // was 12 → 16 → 32-seg (round ends)
     const drum = new THREE.Mesh(drumGeo, drumMat);
     drum.name = `ROSA_Drum_${wing === 1 ? '0' : '180'}deg`;
     drum.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // W7
@@ -2752,7 +2756,9 @@ export class PlayerSatellite extends THREE.Group {
     // bare mandrel as the wing rolls out (scaled radially by _setRosaWingProgress).
     // Length is 0.98×rosaL so its end caps (z=±0.98) never tie with the drum
     // (±1.02) or the spool curls (±1.00) — round-3 z-fight fix.
-    const coilGeo = new THREE.CylinderGeometry(drumR * 1.05, drumR * 1.05, rosaL * 0.98, 16);  // was 12-seg (match drum)
+    // 32 radial segments, matching the drum (was 16 — the furled coil's end
+    // caps read as 16-gons; test-MotherZFix pins the floor).
+    const coilGeo = new THREE.CylinderGeometry(drumR * 1.05, drumR * 1.05, rosaL * 0.98, 32);  // was 12 → 16 → 32-seg (match drum)
     const stowRoll = new THREE.Mesh(coilGeo, drumMat);
     stowRoll.name = `ROSA_StowRoll_${wing === 1 ? '0' : '180'}deg`;
     stowRoll.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // W7
@@ -3021,7 +3027,9 @@ export class PlayerSatellite extends THREE.Group {
     });
 
     const boomLen = FL.STRUT_LENGTH_M * M;
-    const boomGeo = new THREE.CylinderGeometry(FL.STRUT_RADIUS_M * M, FL.STRUT_RADIUS_M * M, boomLen, 10);
+    // 20 radial segments (was 10): the Ø60 mm strut is a foreground tube in
+    // the aft frames and its facets showed (Mother fixes, round ends).
+    const boomGeo = new THREE.CylinderGeometry(FL.STRUT_RADIUS_M * M, FL.STRUT_RADIUS_M * M, boomLen, 20);
     const plateLen = (FL.PLATE_END_M - FL.PLATE_START_M) * M;
     const plateGeo = new THREE.BoxGeometry(plateLen, FL.PLATE_HALF_WIDTH_M * 2 * M, FL.PLATE_THICK_M * M);
     const bracketGeo = new THREE.BoxGeometry(0.10 * M, 0.14 * M, 0.10 * M);
@@ -3031,7 +3039,9 @@ export class PlayerSatellite extends THREE.Group {
     // plate's end face (PLATE_END_M 2.45, pinned) is buried 10 mm inside the
     // boss and the boom tip (2.50) sits 5 mm inside the boss's outer face — no
     // bare 10 mm of boom between plate and boss, no coplanar end discs.
-    const padGeo = new THREE.CylinderGeometry(0.05 * M, 0.05 * M, 0.065 * M, 8);
+    // 24 radial segments (was 8): the boss's outer face is the strut tip's
+    // silhouette and read as an octagon (Mother fixes, round ends).
+    const padGeo = new THREE.CylinderGeometry(0.05 * M, 0.05 * M, 0.065 * M, 24);
     const boltGeo = new THREE.CylinderGeometry(0.008 * M, 0.008 * M, 0.012 * M, 6);
 
     for (const azDeg of azList) {
@@ -3182,7 +3192,7 @@ export class PlayerSatellite extends THREE.Group {
     // arranged in a SYMMETRIC RING around that axis (not shoved to one side, which
     // overhung an arm's strut-deploy path) and kept SHORTER than the launcher.
     // S13(e) moved the launcher into the two NetPod_* flanking the nose and the
-    // axis now carries the BERTH COLLAR (_buildBerthCollar: BerthTunnel r 0.155
+    // axis now carries the DOCKING COLLAR (_buildBerthCollar: BerthTunnel r 0.155
     // through the deck bore, ring at z 1.30) — the ring geometry stays because a
     // reeled-in catch still parks on the collar, fore of every instrument mouth,
     // and no strut is blocked. RING_R is the instrument ring radius; the four
@@ -3886,21 +3896,25 @@ export class PlayerSatellite extends THREE.Group {
     // equator — inside the ROSA drum's sun-track sweep (the drum axis is at
     // x ±0.48, r 0.05, and swings through the YZ plane at every sun angle), on the equator slot the drum lies in, and the furled coil
     // (r 0.1575) swallowed it outright. Moved to the fore shoulder band at
-    // az ∓15° (starboard 345°, port 195°), z 0.76: bare MLI between the PV end
-    // rows' top (z 0.72; core bottom 0.735) and the avionics (z ≥ 0.79; the GPS
-    // patches at az 340 start at z 0.835 — 5 cm above the core top 0.785; the
-    // 0.14 m halo sprite's top edge 0.83 stays below them). Radial 0.412: core
-    // r 0.025 buried 13 mm (inner 0.387), centre 12 mm proud. x_max 0.423 <
-    // 0.43 (the drum sweep's inboard face); 0.135 from the drum axis line
-    // (≥ 0.075 = drum r + core r). Never coincident with the skin; ADDITIVE
-    // renderOrder so the cores sort with the other light hardware.
-    const navR = 0.412 * M, navAz = 15 * Math.PI / 180, navZ = 0.76 * M;
-    const navX = navR * Math.cos(navAz), navY = -navR * Math.sin(navAz);   // (0.398, −0.107)
+    // z 0.76: bare MLI between the PV end rows' top (z 0.72; core bottom 0.735)
+    // and the avionics (z ≥ 0.79; the GPS patches at az 340 start at z 0.835 —
+    // 5 cm above the core top 0.785; the 0.14 m halo sprite's top edge 0.83
+    // stays below them). Radial 0.412: core r 0.025 buried 13 mm (inner 0.387),
+    // centre 12 mm proud. Never coincident with the skin; ADDITIVE renderOrder
+    // so the cores sort with the other light hardware.
+    // Azimuth (Mother fixes 1/4): az ∓15° (0.398, −0.107) sat 0.135 from the
+    // spool axis (x ±0.48, y 0) — clear of the bare drum (r 0.05) but INSIDE
+    // the fully furled stow roll (r 0.158), which swallowed the core by 23 mm.
+    // Now az ∓24° (starboard 336°, port 204°): (0.376, −0.168), 0.197 from the
+    // axis ≥ 0.189 = furled roll 0.158 + core 0.025 + 6 mm margin; x_max 0.401
+    // < 0.43 (the drum sweep's inboard face).
+    const navR = 0.412 * M, navAz = 24 * Math.PI / 180, navZ = 0.76 * M;
+    const navX = navR * Math.cos(navAz), navY = -navR * Math.sin(navAz);   // (0.376, −0.168)
 
     // Port (left) — Red (repositioned for Config G barrel)
     this._portLightMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
     this.portLight = new THREE.Mesh(navGeo, this._portLightMat);
-    this.portLight.position.set(-navX, navY, navZ);            // az 195°
+    this.portLight.position.set(-navX, navY, navZ);            // az 204°
     this.portLight.name = 'NavLight_Port';
     this.portLight.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
     this.add(this.portLight);
@@ -3910,7 +3924,7 @@ export class PlayerSatellite extends THREE.Group {
     // Starboard (right) — Green
     this._starboardLightMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
     this.starboardLight = new THREE.Mesh(navGeo, this._starboardLightMat);
-    this.starboardLight.position.set(navX, navY, navZ);        // az 345°
+    this.starboardLight.position.set(navX, navY, navZ);        // az 336°
     this.starboardLight.name = 'NavLight_Starboard';
     this.starboardLight.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
     this.add(this.starboardLight);
@@ -3963,6 +3977,53 @@ export class PlayerSatellite extends THREE.Group {
       optic.name = `StarTracker_${i}_Optic`;
       optic.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       tube.add(optic);
+
+      // Mount wedge (Mother fixes 2/4). The base disc sits ON the skin canted
+      // 30°, so its outer-aft lip (radial 0.4433, z 0.875) stood 43 mm over the
+      // hull with air under it — the tubes read as two cylinders stuck on a
+      // barrel. A gunmetal wedge fills that slot. NOT a boresight-aligned box:
+      // reaching the skin along the 30° cant needs ~8 cm of aft run, which
+      // plunges through RCSPod_0's fore face (z 0.845, boot 0.853) and the axial
+      // bell RCSThruster_0_A (mouth z 0.87, |x| ≤ 0.025 — right between the two
+      // bases). So the wedge is a hull-aligned extrusion (profile in the
+      // axial–radial plane, extruded ±0.029 tangentially):
+      //   · bottom at radial 0.390 — 10 mm inside the skin (8.4 mm at the ±0.029
+      //     edges; the 64-gon flats sit at 0.3995);
+      //   · aft face at z 0.876 — vertical, 6 mm fore of the bell-mouth plane,
+      //     23 mm fore of the boot; the lip (z 0.875) rests 1 mm behind it and
+      //     its rim stands 13 mm above the aft-top edge (a flange over its seat);
+      //   · top face parallel to the tube 12 mm inside its outer wall (tube
+      //     coordinate s = 0.038 vs the r 0.05 wall): radial 0.4300 at the aft
+      //     face rising to 0.4554 at the fore face (z 0.920). Being narrower than
+      //     the tube, the top is hidden inside it and the side faces emerge from
+      //     the wall 2.7 mm below the top edge at 53° — no ledge, no glancing cut;
+      //   · the fore face (z 0.920) is inside the tube's cross-section.
+      // Twin wedges (az 84/96) keep a ≥ 20 mm slit, and the neighbour tube's base
+      // rim (x ±0.008 at az 90) clears the inboard face by ≥ 4 mm; the wedge spans
+      // z 0.876–0.920, r 0.39–0.46 — bare MLI above the PV rows (top 0.72), under
+      // the fore cap. No face is coplanar with the skin, the tube or the pod
+      // (log-depth: no polygonOffset); DETAIL renderOrder like the tube; same
+      // hull parent.
+      const STM_Z_AFT = 0.876, STM_Z_FORE = 0.920, STM_R_BOT = 0.390, STM_HALF_W = 0.029;
+      const STM_S_TOP = 0.038;   // tube coordinate (along the outward-aft normal) of the top face
+      const stmTopAt = (z) => 0.40 + Math.cos(30 * deg) * STM_S_TOP
+        + 0.5 * ((z - (0.90 - 0.5 * STM_S_TOP)) / Math.cos(30 * deg));   // the s = STM_S_TOP line in (z, r)
+      const stmZc = (STM_Z_AFT + STM_Z_FORE) / 2, stmRc = (STM_R_BOT + stmTopAt(STM_Z_FORE)) / 2;
+      const prof = new THREE.Shape();   // shape x = axial (z), shape y = radial, about the centroid
+      prof.moveTo(M * (STM_Z_AFT - stmZc), M * (STM_R_BOT - stmRc));
+      prof.lineTo(M * (STM_Z_FORE - stmZc), M * (STM_R_BOT - stmRc));
+      prof.lineTo(M * (STM_Z_FORE - stmZc), M * (stmTopAt(STM_Z_FORE) - stmRc));
+      prof.lineTo(M * (STM_Z_AFT - stmZc), M * (stmTopAt(STM_Z_AFT) - stmRc));
+      prof.closePath();
+      const mountGeo = new THREE.ExtrudeGeometry(prof, { depth: M * 2 * STM_HALF_W, bevelEnabled: false });
+      mountGeo.translate(0, 0, -M * STM_HALF_W);   // centre the tangential extrusion
+      const tangential = new THREE.Vector3().crossVectors(zFwd, radial).normalize();
+      const mount = new THREE.Mesh(mountGeo, gunmetal);
+      mount.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(zFwd, radial, tangential));
+      mount.position.copy(radial).multiplyScalar(M * stmRc).setZ(M * stmZc);
+      mount.name = `StarTracker_${i}_Mount`;
+      mount.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(mount);
     });
 
     // ── TT&C omni antennas ×2 — whips on a small base puck, radially outward.

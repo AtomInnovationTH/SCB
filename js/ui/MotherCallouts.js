@@ -219,19 +219,30 @@ const SYSTEMS = [
         mesh: 'NetLauncher_0',
         pick: ['NetLauncher_0', 'NetLauncher_1'],
         anchor: [ 0.45 * M, 0.12 * M, 1.18 * M ] },
-      { id: 'berth_collar', name: 'BERTH COLLAR', risk: 'GREEN', tier: 'detail', codexId: 'docking_berthing',
+      { id: 'berth_collar', name: 'DOCKING COLLAR', risk: 'GREEN', tier: 'detail', codexId: 'docking_berthing',
         massKg: 6, priority: 3,
         // Mother audit T1/T10: the nose berthing collar (ring + guide cone on
         // the berth tunnel) had no card. Detail tier: `docking_berthing` is
         // DAUGHTER BERTHS' briefing (same berthing concept — a reeled catch is
         // hauled onto the collar, not flown in) and the major tier requires a
         // unique codexId. Static = the torus outer equator at az 90.
+        // Mother fixes 3/4: display name berth-collar → DOCKING COLLAR (owner
+        // 2026-09-08); the id `berth_collar` (refitIndex, tests) and the frozen
+        // mesh name NetBerthCollar are untouched.
         specs: [
           `Nose collar \u00b7 ${(2 * (Constants.OCTOPUS_V5?.BERTH_COLLAR_INNER_R_M ?? 0.16)).toFixed(2)} m bore`,
           `Seat plane z ${(Constants.OCTOPUS_V5?.BERTH_COLLAR_Z_M ?? 1.30).toFixed(2)} m \u00b7 cargo mates on-axis`,
         ],
         mesh: 'BerthCollarRing',
         pick: ['BerthCollarRing', 'BerthCollarGuideCone', 'BerthTunnel'],
+        // Mother fixes 4/4 (b): BerthCollarRing's origin is the bore centre, so
+        // the live anchor sat in the hole and the camera→anchor ray went through
+        // the ring onto BerthFace. Offset to the torus outer equator at az 90 —
+        // the static tuple — so the leader tip sits on the tube top (headless
+        // replica of the harness raycast: BerthCollarRing at gap 0 from the
+        // fore-quarters, top, hinge-az60 and wing-root; the far ring wall,
+        // tunnel or guide cone — all collar parts — from the rest).
+        meshOffset: [ 0, 0.30 * M, 0 ],
         anchor: [ 0, 0.30 * M, 1.30 * M ] },
     ],
   },
@@ -275,9 +286,17 @@ const SYSTEMS = [
         mesh: 'SensorDeck',
         // Mother audit T10: SensorDeck's origin is the bore centre (0, 0, 1.03),
         // inside the berth tunnel — point at the deck lip (r 0.34–0.38 after
-        // T4) at az 90, 1 mm proud of the plate. The static stays the shipped
-        // tuple (the ≥ 4 cm envelope is measured on it).
-        meshOffset: [ 0, 0.37 * M, 0.001 * M ],
+        // T4), 1 mm proud of the plate. The static stays the shipped tuple (the
+        // ≥ 4 cm envelope is measured on it).
+        // Mother fixes 4/4 (a): the lip point was az 90 — exactly between the
+        // star trackers (az 84/96), so from az 60 (and from +Y) the leader landed
+        // on StarTracker_0. A headless replica of the harness camera→anchor
+        // raycast over the 12 audit poses scored every 1° of the lip: az 65–69
+        // is the stable window (SensorDeck/Skirt from both fore-quarters, the
+        // top fore-quarter, the starboard side and hinge-az60; only the far-side
+        // and grazing poses miss, onto the turntable rim). az 65: 5 cm clear of
+        // the EO barrel (az 45, r ≤ 0.36), 13° clear of StarTracker_0's mouth.
+        meshOffset: [ 0.156 * M, 0.335 * M, 0.001 * M ],
         anchor: [ 0, 0.30 * M, 1.03 * M ] },
       { id: 'sun_sensors', name: 'SUN SENSORS', risk: 'GREEN', tier: 'detail', codexId: 'sun_sensor',
         massKg: 0.5, priority: 2, specs: ['Coarse sun sensing, 4×'],
@@ -289,10 +308,12 @@ const SYSTEMS = [
       { id: 'nav_lights', name: 'NAVIGATION LIGHTS', risk: 'GREEN', tier: 'detail', codexId: 'nav_lights',
         massKg: 1, priority: 1, specs: ['Port/starboard running lights'],
         // Mother audit T6/T10: the lights left the ±X equator (inside the ROSA
-        // drum sweep) for the fore shoulder at az 345/195, z 0.76; bind the
-        // starboard core (no pick array — the default pick is the mesh).
+        // drum sweep) for the fore shoulder at z 0.76; Mother fixes 1/4 swung
+        // them from az 345/195 to az 336/204 so the core clears the FURLED coil
+        // (r 0.158) too — (0.376, −0.168). Bind the starboard core (no pick
+        // array — the default pick is the mesh).
         mesh: 'NavLight_Starboard',
-        anchor: [ 0.398 * M, -0.107 * M, 0.76 * M ] },
+        anchor: [ 0.376 * M, -0.168 * M, 0.76 * M ] },
     ],
   },
   {
@@ -2227,7 +2248,7 @@ export class MotherCallouts {
       if (p.isDetail) continue;
       // Skip hull-hidden parts (far side of ship) so focus doesn't reveal
       // a system detail tier at ~0 opacity (LOW-13).
-      if (this._anchorVisible(p.anchor) < 0.2) continue;
+      if (this._anchorVisible(p.anchor, p) < 0.2) continue;
       this._vAnchor.copy(p.anchor);
       this.player.localToWorld(this._vAnchor);
       this._vTmp.copy(this._vAnchor).project(this.camera);
@@ -2250,13 +2271,23 @@ export class MotherCallouts {
    * T8: the anchor's RADIAL component is the surface normal; near-axial parts
    * (net launcher, turret, FEEP) are exempt — they read in silhouette at every
    * angle and must not fade to ~0.2 when viewed broadside.
+   * Mother fixes 4/4 (c): a flowerGated row whose LIVE anchor rides a deployed
+   * strut beyond the hull's hardware envelope (radial > FREE_STANDING_R_M) is a
+   * free-standing panel 1–2 m off the skin — it reads from either side and the
+   * hull never occludes it, so the radial "surface normal" proxy does not apply
+   * (RADIATOR PLATES vanished from the −Y poses with the plates on-screen).
+   * Stowed (bud along the hull, radial < 0.6) the gate applies as before.
+   * @param {THREE.Vector3} anchorLocal ship-frame anchor
+   * @param {object} [rec] the rec (for the free-standing exemption)
    * @private
    */
-  _anchorVisible(anchorLocal) {
+  _anchorVisible(anchorLocal, rec) {
     // Near-axial anchor: no meaningful radial normal → always face-visible.
     const r2 = anchorLocal.x * anchorLocal.x + anchorLocal.y * anchorLocal.y;
     const axialFloor = 0.15 * M;
     if (r2 < axialFloor * axialFloor) return 1;
+    const freeR = (CFG.FREE_STANDING_R_M ?? 0.6) * M;
+    if (rec && rec.def && rec.def.flowerGated && rec._mesh && r2 > freeR * freeR) return 1;
     this._vFace.set(anchorLocal.x, anchorLocal.y, 0); // radial component only
     this._vFace.applyQuaternion(this._qTmp); // hoisted in update()
     if (this._vFace.lengthSq() < 1e-20) return 1;
@@ -2336,7 +2367,7 @@ export class MotherCallouts {
 
       // Facing ramp (0..1) — applied to the dot + leader (which sit on the hull)
       // in _positionCard, NOT to the card. Stored once per frame.
-      rec._facing = this._anchorVisible(rec.anchor);
+      rec._facing = this._anchorVisible(rec.anchor, rec);
 
       let targetOp = this._targetOpacity(rec, band, guideId, focusSys, focusNX, focusNY, rec._facing);
       const off = CFG.OFFSCREEN_NDC;
@@ -2439,7 +2470,7 @@ export class MotherCallouts {
     if (rec._flowerGone) return 0; // THERMAL family pre-purchase (P2)
     // Hard facing gate: a card whose anchor faces away is hidden outright
     // (the dot/leader carry the on-hull fade; the card does not).
-    const face = (facing != null) ? facing : this._anchorVisible(rec.anchor);
+    const face = (facing != null) ? facing : this._anchorVisible(rec.anchor, rec);
     if (face < 0.15) return 0;
     const floor = CFG.MIN_CARD_OP ?? 0.5;
     if (rec.isSystem) {
