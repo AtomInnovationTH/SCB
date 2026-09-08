@@ -53,7 +53,7 @@
 
 import { FloorContract } from '../core/FloorContract.js';
 import { BlueprintOverlay, CARD_ROW_BUDGET } from '../ui/BlueprintOverlay.js';
-import { BLUEPRINT_SUBSYSTEMS, anchorLocalU } from '../data/blueprintSubsystems.js';
+import { BLUEPRINT_SUBSYSTEMS, anchorLocalU, M_TO_U } from '../data/blueprintSubsystems.js';
 
 /** The F1 (HULL CAM) contract row — by id, never by index (Session H). */
 const FLOOR = FloorContract.byId(1);
@@ -259,12 +259,21 @@ export class HullCamFloor {
    * mesh position via the optional shipMeshSource adapter when the manifest
    * names a mesh, else the static manifest offset (T1 fallback — silent by
    * design: the adapter is optional, headless is the fallback's home).
+   * An optional `meshOffsetM` [x, y, z] (METRES, ship frame) is added to the
+   * LIVE mesh position only (Mother audit T10) — the static `anchorM` is the
+   * whole fallback and is never offset.
    */
   _anchorU(sub) {
     if (sub.mesh && this._shipMeshSource
       && typeof this._shipMeshSource.getAnchorLocalU === 'function') {
       const p = this._shipMeshSource.getAnchorLocalU(sub.mesh);
-      if (p && Number.isFinite(p.x)) return p;
+      if (p && Number.isFinite(p.x)) {
+        const mo = sub.meshOffsetM;
+        // Fresh object: the main.js adapter caches and hands back ONE object per
+        // name, so an in-place += would accumulate the offset every frame.
+        if (mo) return { x: p.x + mo[0] * M_TO_U, y: p.y + mo[1] * M_TO_U, z: p.z + mo[2] * M_TO_U };
+        return p;
+      }
     }
     return anchorLocalU(sub);
   }

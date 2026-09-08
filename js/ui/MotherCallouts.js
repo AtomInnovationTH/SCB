@@ -101,6 +101,11 @@ const RISK = CFG.RISK_COLORS;
 //            `anchor` with a one-time console.warn if the name doesn't resolve.
 //   dynamic  re-resolve the mesh anchor EVERY frame (the mesh moves, e.g. the
 //            strut-mounted reel cartridges). Static meshes resolve once.
+//   meshOffset  optional [x, y, z] in ship frame (metres × M) ADDED to the
+//            resolved mesh position (T10) — point at a feature of the mesh (a
+//            bell rim, a plate tip) when its origin is not the feature. Applied
+//            after the world→local copy, so it rides a `dynamic` mesh too.
+//            Ignored without `mesh`; the static `anchor` tuple is never offset.
 //   pick     PlayerSatellite object names used ONLY for hull hover: the raycast
 //            targets and the cyan edge outline (D2's first verb — hover the part
 //            itself, not just its card). NEVER moves an anchor (anchors are
@@ -1158,6 +1163,14 @@ export class MotherCallouts {
    * cached); `dynamic` parts re-resolve every frame because the mesh moves
    * (strut-mounted reels/springs); daughter recs follow their docked ArmUnit.
    * Falls back to the static coordinate with a one-time warn on a mesh miss.
+   * Optional `meshOffset: [x, y, z]` (ship frame, scene units — already ×M) is
+   * added AFTER the mesh world→local copy, so a card can point at a feature of
+   * a mesh whose origin is not the feature (a bell's rim, a plate's tip) without
+   * a static tuple that drifts when the mesh moves (Mother audit T10).
+   * `flowerGated` recs: the flower meshes only exist after _installFlowerPair
+   * (a purchase), so the one-shot lookup is skipped while the family is gone and
+   * re-armed on the gone→present edge — a `dynamic: true` card binds on the
+   * first frame after purchase instead of caching a miss (and a warn) forever.
    * @private
    */
   _resolveAnchor(rec) {
@@ -1166,7 +1179,14 @@ export class MotherCallouts {
     // daughter `_armGone` idiom) — purchase-gated hardware never gets a
     // floating label pointing at empty rim.
     if (def.flowerGated) {
-      rec._flowerGone = !this._flowerOn();
+      const gone = !this._flowerOn();
+      if (rec._flowerGone && !gone) {
+        // T10: gone → present edge — re-arm the one-shot mesh lookup.
+        rec._meshTried = false;
+        rec._mesh = null;
+        rec._meshResolved = false;
+      }
+      rec._flowerGone = gone;
     }
     // Daughter recs follow their docked ArmUnit (T3).
     if (def.armIndex !== undefined) {
@@ -1185,7 +1205,9 @@ export class MotherCallouts {
       rec.anchor.set(def.anchor[0], def.anchor[1], def.anchor[2]);
       return;
     }
-    if (!rec._mesh && !rec._meshTried) {
+    // T10: while a flowerGated family is gone its meshes do not exist yet —
+    // no lookup, no warn (the static anchor stands in; the card is hidden anyway).
+    if (!rec._mesh && !rec._meshTried && !rec._flowerGone) {
       rec._meshTried = true;
       rec._mesh = this.player.getObjectByName(def.mesh) || null;
       if (!rec._mesh && typeof console !== 'undefined') {
@@ -1199,6 +1221,8 @@ export class MotherCallouts {
       rec._mesh.getWorldPosition(this._vTmp);
       this.player.worldToLocal(this._vTmp);
       rec.anchor.copy(this._vTmp);
+      const mo = def.meshOffset;
+      if (mo) { rec.anchor.x += mo[0]; rec.anchor.y += mo[1]; rec.anchor.z += mo[2]; }
       rec._meshResolved = true;
     } else {
       rec.anchor.set(def.anchor[0], def.anchor[1], def.anchor[2]);

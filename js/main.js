@@ -3304,6 +3304,41 @@ async function init() {
         return { view: cameraSystem.currentView, distM };
       };
 
+      // ── Axis-aim hook (Mother visual audit, Task 0a) ──
+      //   window.__scbInspectAxis(dir, distM)
+      //     dir: 'fore'|'aft'|'port'|'starboard'|'up'|'down' or a ship-frame
+      //     [x,y,z] direction the camera should sit on (e.g. [1, 0.6, 0.9] =
+      //     starboard-high-fore quarter). Model-truth regardless of the ship's
+      //     LVLH attitude (NOT deterministic across runs —
+      //     scripts/visual-ab/capture.mjs), which is why __scbInspect's raw
+      //     theta cannot be aimed at "the nose". Ladder off → writes the legacy
+      //     orbit (like __scbInspect). Ladder engaged → writes the ship-anchored
+      //     ladder pose (lc.local) and pins the distance, so it also works on F1.
+      //   window.__THREE — the module namespace, for the harness truth log
+      //     (project a mesh's world position to screen).
+      window.__THREE = THREE;
+      window.__scbInspectAxis = (dir = 'fore', distM = 3) => {
+        if (!cameraSystem || !player) return 'no cameraSystem/player';
+        const AX = { fore: [0, 0, 1], aft: [0, 0, -1], starboard: [1, 0, 0], port: [-1, 0, 0], up: [0, 1, 0], down: [0, -1, 0] };
+        const local = new THREE.Vector3(...(Array.isArray(dir) ? dir : (AX[dir] || AX.fore))).normalize();
+        const q = new THREE.Quaternion(); player.getWorldQuaternion(q);
+        const worldDir = local.applyQuaternion(q);          // anchor → camera unit direction (world)
+        const lc = cameraSystem._ladderCam;
+        if (lc && lc.active && lc.anchor === 'ship') {
+          cameraSystem._ladderWorldToLocal(worldDir, lc.local);   // (r,t,n) on the live orbital frame
+          lc.localSeeded = true;
+          lc.curDistU = lc.targetDistU = distM * 1e-5;
+          return { mode: 'ladder', floor: window.__ladder && window.__ladder.currentFloor(), distM };
+        }
+        const { theta, phi } = cameraSystem.solveOrbitAnglesForDirection(worldDir.clone().negate()); // offset̂ = −dir
+        cameraSystem.setView('ORBIT');
+        const o = cameraSystem.orbit;
+        o.theta = theta; o.phi = Math.min(Math.PI - 0.1, Math.max(0.1, phi)); o.distance = distM * 1e-5;
+        o.velocityTheta = 0; o.velocityPhi = 0;
+        cameraSystem._evaluateInspectZoom();
+        return { mode: 'orbit', theta, phi, distM };
+      };
+
       // ── P2 flower portrait hook (charter TASK J harness) ──
       //   window.__scbFlower(pairs)   → install aft-flower pair A (≥1) /
       //     pairs A+B (≥2) through the SAME applyUpgrade effect path a shop

@@ -39,6 +39,11 @@
  * injects a shipMeshSource adapter (HullCamFloor deps), the anchor re-resolves
  * from the live mesh position (TierVisualManager / MotherCallouts T1 pattern);
  * otherwise the static offset here is the anchor. Both paths are ship-local.
+ * `meshOffsetM` is an optional [x, y, z] in METRES (ship frame) that
+ * HullCamFloor._anchorU adds to the LIVE mesh position only (Mother audit T10:
+ * point at a feature of the mesh — a bell rim, a plate tip — when the mesh
+ * origin is not the feature). The static `anchorM` is the whole fallback and
+ * is never offset; the field is ignored without `mesh`.
  *
  * `readout` keys the HullCamFloor detail-lens provider (deps.providers[readout])
  * whose live rows expand the focused card; `spec` rows are the static fallback
