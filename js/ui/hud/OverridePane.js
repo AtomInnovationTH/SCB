@@ -318,8 +318,9 @@ export class OverridePane {
    * panel would touch a rider — `leftPx` = the ORBIT pane's right edge while it
    * shows, `rightPx` = the right column's left edge — does it centre itself in
    * the free band between them instead (the ORBIT/CARGO dodge idiom). With
-   * ORBIT flush-left (owner 2026-09-07) the centre is free in every measured
-   * room; the band is the crowded-room fallback. Write-on-change on all four
+   * ORBIT flush-left (owner 2026-09-07) and text only (owner 2026-09-08: its
+   * right edge 386 < 470, the centred panel's left edge on 1280) the centre is
+   * free in every measured room; the band is the crowded-room fallback. Write-on-change on all four
    * inputs: repeated identical inputs touch no DOM.
    * @param {number|null} underPx
    * @param {number} floorPx
@@ -349,8 +350,9 @@ export class OverridePane {
     if (this._root.style.bottom !== bottomStyle) this._root.style.bottom = bottomStyle;
     // Horizontal: the screen centre, unless the centred panel would touch a
     // rider on either side — then the centre of the free band between them
-    // (owner 2026-09-07: ORBIT now rides flush-left, so the centre is free in
-    // every measured room; the band is the fallback for a crowded one).
+    // (owner 2026-09-07: ORBIT rides flush-left; 2026-09-08: text only, right
+    // edge 386 — the centre is free in every measured room; the band is the
+    // fallback for a crowded one).
     let leftStyle = '50%';
     const vw = this._viewportWidth();
     if (Number.isFinite(vw) && (left != null || right != null)) {

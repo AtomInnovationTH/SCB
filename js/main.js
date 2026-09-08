@@ -704,8 +704,8 @@ let cargoPane = null;
 // SAFETY OVERRIDE demo panel (owner 2026-09-07) — LADDER gate only.
 let overridePane = null;
 // Wave 5 Session M (plan "Session M — Instruments") — the three instruments +
-// the copilot's voice: ORBIT (js/ui/hud/OrbitPane.js, the fixed slots + the
-// revived OrbitMFD as its track view), COPILOT (js/ui/hud/FmaStrip.js, the
+// the copilot's voice: ORBIT (js/ui/hud/OrbitPane.js, the fixed text slots —
+// text only since 2026-09-08; the OrbitMFD track view retired), COPILOT (js/ui/hud/FmaStrip.js, the
 // flight-mode annunciator inside the left column + js/systems/CopilotVoice.js,
 // the spoken phrases) and NEXT (js/ui/hud/NextPane.js, the upcoming events).
 // Same construction law as CARGO: built ONLY inside the LADDER.ENABLED gate.
@@ -2373,7 +2373,6 @@ async function init() {
       sunDir: () => (sunLight ? sunLight.sunDirection : null),
       sunDirAt: (aheadS, out) => ((sunLight && sunLight.directionAt) ? sunLight.directionAt(aheadS, out) : null),
       clock: () => ({ rate: timeAuthority ? timeAuthority.rate : 1, baseScale: TimeAuthority.BASE_SCALE }),
-      orbitMFD,
     });
     // The voice: SpeechSynthesis when the platform has it, armed by the first
     // pointer / key gesture (iPad Safari speaks only inside a gesture — the

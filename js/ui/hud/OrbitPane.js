@@ -1,9 +1,10 @@
 /**
  * OrbitPane.js — the ORBIT HUD pane (Session M, item 1, 2026-09-06).
  *
- * The ship's orbit as a flight instrument: a TRACK view (the OrbitMFD plot,
- * mounted into a 126 px square) beside a SLOTS block — a header line and a
- * 3 × 4 grid of fixed-width readouts:
+ * The ship's orbit as a flight instrument — text only (owner 2026-09-08:
+ * "remove the graphic on the left side, only text"; before that a TRACK view,
+ * the OrbitMFD plot in a 126 px square, rode beside the text): a SLOTS block —
+ * a header line and a 3 × 4 grid of fixed-width readouts:
  *
  *   ALT (+ trend arrow) · VEL · INC · PERIOD
  *   LAT · LON · SUN (state word + time to the next terminator crossing)
@@ -25,13 +26,13 @@
  * with cached numbers and `update(nowMs)`
  * per frame. setAnchor is write-on-change on its three inputs; every edge of
  * the root comes from it (left = leftEdge + GAP; the bottom edge = floor − GAP,
- * placed via top = bottom − the mode's fixed height — pure arithmetic, no
- * layout read). Modes by the vertical budget between the ceiling (the rail's
- * bottom + GAP, or the screen top) and the bottom edge: `full` (track + slots,
- * 140 tall) when ≥ 140, `compact` (slots only, 104) when ≥ 104, else `hidden`
- * (display none via the `data-orbit-mode` attribute — never the rung bit). The
- * left-edge cascade: the column (top-anchored) → the rail (dodges under it) →
- * this pane fills what is left, compacting, then hiding — the CARGO / NEXT law.
+ * placed via top = bottom − the pane's fixed height — pure arithmetic, no
+ * layout read). Modes by the vertical budget between the ceiling (the column's
+ * bottom + GAP, or the screen top) and the bottom edge: `full` (the one form,
+ * FULL_PX = 104 tall) when ≥ FULL_PX, else `hidden` (display none via the
+ * `data-orbit-mode` attribute — never the rung bit). The left-edge cascade:
+ * the column (top-anchored) → this pane fills what is left, hiding when
+ * squeezed — the CARGO / NEXT law without their compact step.
  *
  * UPDATE: `update(nowMs)` self-throttles to one tick per second; every tick
  * recomputes the readouts from the injected deps and writes text / style /
@@ -71,13 +72,12 @@ export const ORBIT_STYLE_ID = 'orbit-pane-style';
 export const ORBIT_RUNG_ID = 'orbit';
 
 /**
- * ORBIT_GEOMETRY — the pane's numbers (px). FULL_PX is the hard height budget
- * (on the 13-inch iPad the pane spans y 760–900 under the thumb rest / above
- * the ticker band); FRAME_PX is the .hud-panel chrome (6 px padding + 1 px
- * border, top and bottom); TRACK_PX = FULL − FRAME is the OrbitMFD square;
- * the slots block is 4 cells of CELL_W_PX with CELL_GAP_PX between (SLOTS_W_PX),
- * a HEADER_PX line and three rows of LABEL_PX + VALUE_PX with ROW_GAP_PX
- * between (slotsPx()); COMPACT_PX = FRAME + slotsPx() is the slots-only form.
+ * ORBIT_GEOMETRY — the pane's numbers (px). FRAME_PX is the .hud-panel chrome
+ * (6 px padding + 1 px border, top and bottom); the slots block is 4 cells of
+ * CELL_W_PX with CELL_GAP_PX between (SLOTS_W_PX), a HEADER_PX line and three
+ * rows of LABEL_PX + VALUE_PX with ROW_GAP_PX between (slotsPx()); FULL_PX =
+ * FRAME + slotsPx() is the pane's ONE height (owner 2026-09-08: text only —
+ * the 126 px TRACK square and the 140 px full form retired with it).
  * CELL_W_PX is derived: VALUE_CH advances of the VALUE_FONT_PX B612 Mono
  * value (0.65 em) — the longest value plus one advance, or `1200.0 km` with
  * its trend glyph (Session S).
@@ -87,22 +87,25 @@ const VALUE_CH = 10;
 const CELL_W_PX = Math.ceil(VALUE_CH * VALUE_FONT_PX * MONO_ADVANCE_EM);   // 85
 const CELL_GAP_PX = 6;
 const SLOTS_W_PX = 4 * CELL_W_PX + 3 * CELL_GAP_PX;                        // 358
+const FRAME_PX = 14;
+const HEADER_PX = 12;
+const LABEL_PX = 10;
+const VALUE_PX = 14;
+const ROW_GAP_PX = 2;
+const FULL_PX = FRAME_PX + HEADER_PX + ROW_GAP_PX + 3 * (LABEL_PX + VALUE_PX) + 2 * ROW_GAP_PX;   // 104
 export const ORBIT_GEOMETRY = Object.freeze({
   GAP_PX: 8,
-  FULL_PX: 140,
-  FRAME_PX: 14,
-  TRACK_PX: 126,
-  BLOCK_GAP_PX: 8,
+  FULL_PX,
+  FRAME_PX,
   VALUE_FONT_PX,
   VALUE_CH,
   CELL_W_PX,
   CELL_GAP_PX,
   SLOTS_W_PX,
-  HEADER_PX: 12,
-  LABEL_PX: 10,
-  VALUE_PX: 14,
-  ROW_GAP_PX: 2,
-  COMPACT_PX: 104,
+  HEADER_PX,
+  LABEL_PX,
+  VALUE_PX,
+  ROW_GAP_PX,
 });
 
 /** Minimum ms between two update() ticks (the 1 Hz law). */
@@ -148,8 +151,8 @@ export function slotsPx() {
   return G.HEADER_PX + G.ROW_GAP_PX + 3 * (G.LABEL_PX + G.VALUE_PX) + 2 * G.ROW_GAP_PX;
 }
 
-/** The compact form's outer height (frame + the slots block). */
-export function compactPx() {
+/** The pane's outer height (frame + the slots block) — its one form; equals ORBIT_GEOMETRY.FULL_PX. */
+export function fullPx() {
   return ORBIT_GEOMETRY.FRAME_PX + slotsPx();
 }
 
@@ -227,7 +230,6 @@ export class OrbitPane {
    * @param {function} [deps.sunDir]        () => {x,y,z}|null — the current sun direction
    * @param {function} [deps.sunDirAt]      (aheadRealS, out) => {x,y,z} — the FUTURE sun direction (SunLight.directionAt)
    * @param {function} [deps.clock]         () => ({ rate, baseScale }) (timeAuthority.rate, TimeAuthority.BASE_SCALE)
-   * @param {object}   [deps.orbitMFD]      an OrbitMFD (mount / unmount / show / hide / isShown) or null
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc
@@ -243,10 +245,9 @@ export class OrbitPane {
     this._sunDir = typeof deps.sunDir === 'function' ? deps.sunDir : null;
     this._sunDirAt = typeof deps.sunDirAt === 'function' ? deps.sunDirAt : null;
     this._clock = typeof deps.clock === 'function' ? deps.clock : null;
-    this._mfd = deps.orbitMFD || null;
 
     this._root = null;
-    this._el = null;                 // { track, slots, cells: {slot → value el}, trend, bar, fill, mark }
+    this._el = null;                 // { slots, cells: {slot → value el}, trend, bar, fill, mark }
     this._rung = null;
     this._mode = 'hidden';           // until the first setAnchor places the pane
     this._leftPx = undefined;        // last setAnchor inputs (write-on-change)
@@ -259,7 +260,6 @@ export class OrbitPane {
     this._trendState = { last: null, rate: 0 };
     this._eclipse = NO_ECLIPSE;
     this._sunScratch = { x: 0, y: 0, z: 0 };
-    this._mfdMounted = false;
     this._disposed = false;
 
     this._build(deps.parent);
@@ -293,7 +293,6 @@ export class OrbitPane {
           if (!el || !el.setAttribute) return;
           if (v) el.removeAttribute(DENSITY_HIDDEN_ATTR);
           else el.setAttribute(DENSITY_HIDDEN_ATTR, '');
-          this._syncMfd();
         },
       };
     }
@@ -313,11 +312,11 @@ export class OrbitPane {
    * before any DOM access. Pure arithmetic, no layout read:
    *   left   = leftEdgePx + GAP_PX
    *   bottom = floorPx − GAP_PX
-   *   budget = bottom − (ceilingPx + GAP_PX | 0);  mode = full (budget ≥ FULL_PX) | compact (≥ COMPACT_PX) | hidden
-   *   top    = bottom − the mode's height (FULL_PX | COMPACT_PX)
+   *   budget = bottom − (ceilingPx + GAP_PX | 0);  mode = full (budget ≥ FULL_PX) | hidden
+   *   top    = bottom − FULL_PX
    * The cascade on the left edge: the HUD column (top-anchored) → the rail
    * (dodges under the column) → this pane fills what is left at the bottom,
-   * compacting, then hiding, when squeezed — the CARGO / NEXT law on the right.
+   * hiding when squeezed — the CARGO / NEXT law on the right, without the compact step.
    * Writes data-orbit-mode, left, top and height.
    * @param {number} leftEdgePx
    * @param {number} floorPx
@@ -340,8 +339,7 @@ export class OrbitPane {
   /**
    * The 1 Hz tick: at most one tick per TICK_MS; recomputes every readout from
    * the deps (the eclipse prediction even while hidden), writes the DOM only
-   * when visible and only what changed, and keeps the OrbitMFD's show() in
-   * force while the TRACK view is wanted.
+   * when visible and only what changed.
    * @param {number} nowMs
    * @returns {boolean} true when a tick ran
    */
@@ -367,14 +365,14 @@ export class OrbitPane {
    */
   eclipse() { return this._eclipse; }
 
-  /** The current mode: 'full' | 'compact' | 'hidden' ('hidden' until the first setAnchor, and headless). */
+  /** The current mode: 'full' (the one form) | 'hidden' ('hidden' until the first setAnchor, and headless). */
   mode() { return this._mode; }
 
   /**
    * SAFETY OVERRIDE (owner 2026-09-07): the pane's placed RIGHT edge (CSS px)
    * while it is on screen — placed by setAnchor, mode not 'hidden', density
    * bit clear — else null. Pure arithmetic over the anchor + the mode's fixed
-   * width (TRACK + BLOCK_GAP + SLOTS in full, SLOTS in compact, plus the
+   * width (SLOTS_W_PX — the one form since 2026-09-08 — plus the
    * .hud-panel chrome: 8 px padding + 1 px border a side); one attribute read,
    * never a layout read. The OVERRIDE panel centres itself in the band right
    * of this edge (the hub's gameLoop wire), so the two never overlap.
@@ -385,23 +383,16 @@ export class OrbitPane {
     if (!el || this._disposed || this._mode === 'hidden' || !Number.isFinite(this._leftPx)) return null;
     if (el.hasAttribute && el.hasAttribute(DENSITY_HIDDEN_ATTR)) return null;
     const G = ORBIT_GEOMETRY;
-    const inner = this._mode === 'compact' ? G.SLOTS_W_PX : (G.TRACK_PX + G.BLOCK_GAP_PX + G.SLOTS_W_PX);
-    return Math.round(this._leftPx + G.GAP_PX) + inner + H_CHROME_PX;
+    return Math.round(this._leftPx + G.GAP_PX) + G.SLOTS_W_PX + H_CHROME_PX;
   }
 
   /** The strings the last tick computed (a copy): alt, trend, vel, inc, period, lat, lon, sunState, sunTimer, dv, dvFill, met. */
   readout() { return { ...this._vals }; }
 
-  /** Hide + unmount the OrbitMFD, remove the root; further calls no-op. */
+  /** Remove the root; further calls no-op. */
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
-    const m = this._mfd;
-    if (m && this._mfdMounted) {
-      try { if (typeof m.hide === 'function') m.hide(); } catch (_e) { /* stub */ }
-      try { if (typeof m.unmount === 'function') m.unmount(); } catch (_e) { /* stub */ }
-    }
-    this._mfdMounted = false;
     if (this._root && this._root.remove) {
       try { this._root.remove(); } catch (_e) { /* stub */ }
     }
@@ -456,7 +447,6 @@ export class OrbitPane {
     root.style.overflow = 'hidden';
     root.setAttribute(MODE_ATTR, 'hidden');       // placed by the first setAnchor
 
-    const track = mk('div', 'orbit-track');
     const slots = mk('div', 'orbit-slots');
     slots.appendChild(mk('div', 'orbit-head', 'ORBIT'));
 
@@ -496,11 +486,11 @@ export class OrbitPane {
     r3.appendChild(cell('MET', 'met', true).cell);
 
     slots.appendChild(r1); slots.appendChild(r2); slots.appendChild(r3);
-    root.appendChild(track); root.appendChild(slots);
+    root.appendChild(slots);
     parent.appendChild(root);
 
     this._root = root;
-    this._el = { track, slots, cells, trend, bar, fill, mark };
+    this._el = { slots, cells, trend, bar, fill, mark };
   }
 
   /** @private The one <style id="orbit-pane-style"> (per document). No backdrop-filter. */
@@ -517,7 +507,6 @@ export class OrbitPane {
         display: flex;
         flex-direction: row;
         align-items: stretch;
-        gap: ${G.BLOCK_GAP_PX}px;
         pointer-events: none;
         box-sizing: border-box;
         overflow: hidden;
@@ -528,13 +517,6 @@ export class OrbitPane {
       #${ORBIT_PANE_ID}[${DENSITY_HIDDEN_ATTR}] { display: none !important; }
       /* Mode 'hidden': no room above the floor (setAnchor). The density bit is untouched. */
       #${ORBIT_PANE_ID}[${MODE_ATTR}="hidden"] { display: none !important; }
-      /* Compact: the slots only; the TRACK square folds away. */
-      #${ORBIT_PANE_ID}[${MODE_ATTR}="compact"] .orbit-track { display: none; }
-      #${ORBIT_PANE_ID} .orbit-track {
-        flex: 0 0 ${G.TRACK_PX}px; width: ${G.TRACK_PX}px; height: ${G.TRACK_PX}px;
-        position: relative; overflow: hidden;
-      }
-      #${ORBIT_PANE_ID} .orbit-track > canvas { display: block; }
       #${ORBIT_PANE_ID} .orbit-slots {
         flex: 0 0 ${G.SLOTS_W_PX}px; width: ${G.SLOTS_W_PX}px;
         display: flex; flex-direction: column; justify-content: space-between;
@@ -731,7 +713,6 @@ export class OrbitPane {
       }
     }
     this._prev = v;
-    this._syncMfd();
     if (!visible) return;
 
     const el = this._el;
@@ -750,32 +731,6 @@ export class OrbitPane {
     }
   }
 
-  /**
-   * @private The OrbitMFD follows the pane: mounted into the TRACK square on
-   * first need, show() re-asserted whenever the TRACK view is wanted (mode
-   * full, not density-hidden) and the MFD reports hidden (it hides itself on
-   * GAME_STATE_CHANGE out of gameplay), hide() when it is not.
-   */
-  _syncMfd() {
-    const m = this._mfd;
-    if (!m || this._disposed || !this._root || !this._el) return;
-    const want = this._mode === 'full' && this._paintable();
-    try {
-      if (want) {
-        if (!this._mfdMounted) {
-          if (typeof m.mount !== 'function') return;
-          m.mount(this._el.track, ORBIT_GEOMETRY.TRACK_PX);
-          this._mfdMounted = true;
-        }
-        const shown = typeof m.isShown === 'function' ? m.isShown() : false;
-        if (!shown && typeof m.show === 'function') m.show();
-      } else if (this._mfdMounted) {
-        const shown = typeof m.isShown === 'function' ? m.isShown() : true;
-        if (shown && typeof m.hide === 'function') m.hide();
-      }
-    } catch (_e) { /* a stub MFD */ }
-  }
-
   // ── Layout (setAnchor; pure arithmetic, write-on-change outputs) ───────────
 
   /** @private Place the pane from the cached anchor inputs. No layout reads. */
@@ -790,7 +745,6 @@ export class OrbitPane {
     const budget = bottom - (this._ceilingPx != null ? this._ceilingPx + G.GAP_PX : 0);
     let mode, h;
     if (budget >= G.FULL_PX) { mode = 'full'; h = G.FULL_PX; }
-    else if (budget >= G.COMPACT_PX) { mode = 'compact'; h = G.COMPACT_PX; }
     else { mode = 'hidden'; h = 0; }
     if (mode !== this._mode) {
       this._mode = mode;
@@ -801,7 +755,6 @@ export class OrbitPane {
       this._setStyle(root, 'top', `${Math.round(bottom - h)}px`);
       this._setStyle(root, 'height', `${h}px`);
     }
-    this._syncMfd();
   }
 
   // ── Write-on-change helpers ────────────────────────────────────────────────

@@ -129,7 +129,7 @@ export const REDUCED_CROSSFADE_MS = 200;
  * more RUNG panes of the same shape. ORBIT (js/ui/hud/OrbitPane.js,
  * `#hud-orbit-pane`, bottom-left under the left column — Session P: no
  * DISPLAY rail beside it any more: the fixed
- * instrument slots + the OrbitMFD plot as its track view), COPILOT
+ * instrument slots, text only since 2026-09-08 — the OrbitMFD track view retired), COPILOT
  * (js/ui/hud/FmaStrip.js, `#hud-fma-strip`, the flight-mode annunciator that
  * rides as the LAST child of #hud-left-column — the ORBIT pane's ceiling is
  * the column's bottom, so nothing else moves) and NEXT (js/ui/hud/NextPane.js,
