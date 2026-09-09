@@ -152,11 +152,12 @@ export const PIN_NATURAL_PX = 27;
  * .kilo/plans/1788926404388-hud-followups-0909.md §1.4 — the SAFETY OVERRIDE
  * gag moved to the viewport bottom): offsets from the viewport bottom, ladder
  * on — 12–68 gag · 88–124 hint ticker · 120 salvage popup (legacy) · **132
- * toast** (was 48) · 132–164 footer band, free centre · 148 F1 breadcrumb ·
- * 170 warnings · **172 ARM PILOT strip** (was 12). `?ladder=0` is
- * byte-identical: toast 48 / strip 12. PURE: the caller passes `ladderOn` read
- * from `Constants.LADDER.ENABLED` in the constructor path (the URL flips it
- * inside `init()` before `new HUD` — never read at module level).
+ * toast** (was 48) · 132–164 footer band, free centre · 170 warnings · **172
+ * ARM PILOT strip** (was 12). (The 148 F1 breadcrumb was retired 2026-09-09,
+ * plan 1788954873769-one-workbench-pane §D8.) `?ladder=0` is byte-identical:
+ * toast 48 / strip 12. PURE: the caller passes `ladderOn` read from
+ * `Constants.LADDER.ENABLED` in the constructor path (the URL flips it inside
+ * `init()` before `new HUD` — never read at module level).
  *
  * The ticker band's top is TICKER.BOTTOM_PX 88 + ROW_HEIGHT_PX 36 = 124 (the
  * hub's `_HINT_BAND_PX`), so `footerBand({ hintBandPx: 124 })` → bottom 132 /
@@ -521,27 +522,13 @@ export class HUD {
     /** @type {Map<string, HTMLElement>} Active weather badge elements by type */
     this._weatherBadges = new Map();
 
-    // --- Inspection depth breadcrumb + one-time zoom hint (round 4, T5) ---
-    this._calloutBreadcrumb = document.createElement('div');
-    this._calloutBreadcrumb.id = 'hud-callout-breadcrumb';
-    Object.assign(this._calloutBreadcrumb.style, {
-      position: 'absolute',
-      bottom: '148px',
-      left: '50%',
-      transform: 'translateX(-50%)',
-      pointerEvents: 'none',
-      display: 'none',
-      fontFamily: 'var(--font-mono)',
-      fontSize: '11px',
-      letterSpacing: '2px',
-      textAlign: 'center',
-      // Round 5: dark halo — the breadcrumb washed out over bright Earth limb
-      // (screenshots: clouds at band edge). Matches the canvas card halos.
-      textShadow: '0 0 6px rgba(2,6,12,0.95), 0 1px 3px rgba(2,6,12,0.95)',
-      zIndex: '10',
-    });
-    this.container.appendChild(this._calloutBreadcrumb);
-    this._calloutHintShown = false; // session-scoped, matches _guidedDone
+    // The F1 inspection-depth breadcrumb (round 4 T5: the bottom-centre
+    // INSPECT strip at bottom 148 that lit the current band word — SYSTEMS /
+    // PARTS / DETAIL — plus a one-shot "zoom in" hint) was RETIRED 2026-09-09
+    // (owner: confusing; plan .kilo/plans/1788954873769-one-workbench-pane.md
+    // §D8). Nothing replaces it — the callout cards speak for themselves. The
+    // pane-dim below (the same CALLOUT_BAND_CHANGE edge) stays. test-Fonts
+    // pins the absence.
 
     // --- Inspection pane-dim (round 5) ---
     // While callouts are active (either inspection path), ghost the HUD pane
@@ -1782,57 +1769,24 @@ export class HUD {
       }
       this._missionNumber = 1;
       this._missionProfile = null;
-      // T2b: hide the callout breadcrumb and re-arm the one-time zoom hint so
-      // a new game re-teaches the depth axis.
-      if (this._calloutBreadcrumb) {
-        this._calloutBreadcrumb.style.display = 'none';
-        this._calloutHintShown = false;
-      }
       this.container.classList.remove('callouts-active'); // restore panes
       this._clearDensityPhases();
     });
 
-    // Round 4 (T5): inspection depth breadcrumb + one-time zoom hint.
-    this._calloutHintTimer = null; // T2c: tracked so we can clear it on rebuild
+    // Inspection pane-dim (round 5): while callouts are active on any band
+    // (either inspection path), the `callouts-active` rule injected in _build
+    // ghosts the HUD pane columns; a null band restores them. This is the whole
+    // handler since 2026-09-09 — the depth breadcrumb + one-shot zoom hint that
+    // used to fill it were retired (plan 1788954873769-one-workbench-pane §D8).
+    // The class matters only under `?ladder=0`, where F1's HUD panes are
+    // visible.
     eventBus.on(Events.CALLOUT_BAND_CHANGE, ({ band } = {}) => {
-      if (!this._calloutBreadcrumb) return;
-      // T2c: clear any pending hint timer before rebuilding or hiding.
-      if (this._calloutHintTimer) {
-        timerManager.clear(this._calloutHintTimer);
-        this._calloutHintTimer = null;
-      }
+      if (!this.container) return;
       if (band == null) {
-        this._calloutBreadcrumb.style.display = 'none';
         this.container.classList.remove('callouts-active'); // restore panes
         return;
       }
       this.container.classList.add('callouts-active'); // ghost panes (round 5)
-      const BAND_WORD = { SYSTEM: 'SYSTEMS', PART: 'PARTS', COMPONENT: 'DETAIL' };
-      const accent = Constants.CALLOUTS?.ACCENT || '#7fd4e8';
-      const dim = Constants.CALLOUTS?.ACCENT_DIM || '#3d6e7e';
-      let html = 'INSPECT ▸ ';
-      for (const b of ['SYSTEM', 'PART', 'COMPONENT']) {
-        const word = BAND_WORD[b];
-        const lit = b === band;
-        html += `<span style="color:${lit ? accent : dim}">${word}</span>`;
-        if (b !== 'COMPONENT') html += ' · ';
-      }
-      if (band === 'COMPONENT') html += ` <span style="color:${accent}">— MAX DETAIL</span>`;
-      this._calloutBreadcrumb.innerHTML = html;
-      this._calloutBreadcrumb.style.display = 'block';
-
-      // One-time hint: fires on the first non-null band.
-      if (!this._calloutHintShown) {
-        this._calloutHintShown = true;
-        const hint = document.createElement('div');
-        hint.style.cssText = 'margin-top:4px;font-size:10px;color:rgba(127,212,232,0.5);letter-spacing:1px;';
-        hint.textContent = 'scroll in for part detail';
-        this._calloutBreadcrumb.appendChild(hint);
-        this._calloutHintTimer = timerManager.setTimeout(() => {
-          hint.remove();
-          this._calloutHintTimer = null;
-        }, 6000, { owner: this });
-      }
     });
   }
 
