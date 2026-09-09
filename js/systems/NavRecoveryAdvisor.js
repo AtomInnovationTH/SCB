@@ -256,8 +256,9 @@ export class NavRecoveryAdvisor {
       text = 'Cluster cleared.';
     } else {
       text = `Scan complete. ${n} piece${n === 1 ? '' : 's'} in the cluster.`;
-      // A piece with no orbit yields no position (findNearestLiveDebris skips
-      // it) — then the count stands alone rather than a bearing to nothing.
+      // A piece with neither a finite _scenePosition nor an orbit yields no
+      // position (findNearestLiveDebris skips it) — then the count stands
+      // alone rather than a bearing to nothing.
       if (nearest) {
         const bearing = classifyBearing(playerPos, this._playerVel(), nearest.pos);
         text += ` Nearest ${formatDistanceKm(bearing.distKm)}, ${bearing.label}.`;

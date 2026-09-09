@@ -72,7 +72,7 @@ export function missionProfileFor(n) {
  * Is mission `n` a GUIDED chapter — one where the welcome cluster is kept
  * findable for the player (AutoLock's nearest-any fallback when the forward
  * arc is empty, GameFlowManager's per-catch progress line, and the re-seat
- * safety net that follows in T6)?
+ * safety net in DebrisField._reseatDriftedWelcome)?
  *
  * Read from the profile's `guidedCluster` flag, so the boundary lives in ONE
  * place (Constants.MISSIONS.PROFILES): true on the 'Orientation' and 'First

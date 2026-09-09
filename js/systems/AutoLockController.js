@@ -252,12 +252,15 @@ export class AutoLockController {
    * holds nothing, lock the nearest alive piece ANYWHERE within
    * AUTOLOCK.GUIDED_FALLBACK_RANGE_M — no arc test. Only in a GUIDED chapter
    * (missions 1–3, `DebrisField.isGuidedChapter()` → the profile's
-   * `guidedCluster` flag): there the welcome cluster is the whole mission, and
-   * two of its pieces are authored behind the mother where the forward arc
-   * never looks — a silent reticle reads as "the debris vanished". With a
-   * target selected, the off-screen arrow (TargetReticle, behind-camera via
-   * _getEdgePosition) points at it and the OUT OF RANGE state says "press A".
-   * From mission 4 on the arc rule stands (pieces drift; accepted there).
+   * `guidedCluster` flag): there the welcome cluster is the whole mission. All
+   * seven pieces are authored AHEAD of the mother since the T1 cone fan (the
+   * pre-T1 layout put #4/#6 behind), but a player who overshoots, turns, or is
+   * moved by an unforeseen impulse can still leave the whole cluster outside
+   * the forward arc — and a silent reticle reads as "the debris vanished".
+   * With a target selected, the off-screen arrow (TargetReticle, behind-camera
+   * via _getEdgePosition) points at it and the OUT OF RANGE state says
+   * "press A". From mission 4 on the arc rule stands (pieces drift; accepted
+   * there).
    *
    * Cost: one extra O(n) getDebrisNear pass, only on frames with no target
    * and an empty arc. Note DebrisField's same-frame query cache keys on

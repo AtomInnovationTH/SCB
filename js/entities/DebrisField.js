@@ -2805,7 +2805,10 @@ export class DebrisField {
    * @param {object} spec          the WELCOME_FIELD row
    * @param {object} playerOrbit   mother's elements (semiMajorAxis in scene units)
    * @param {number} [frameCompRad=0] along-track pre-compensation (rad): n×gameDt
-   *                               at spawn (see _spawnWelcomeField), 0 for a re-seat
+   *                               for the frame in which the propagation loop will
+   *                               step the piece once more — passed by BOTH the
+   *                               spawn (_spawnWelcomeField) and the re-seat
+   *                               (_reseatDriftedWelcome), so the two land alike
    * @returns {{ fwdM: number, latM: number, radM: number }} the realised
    *          local-frame offsets in metres (fwdM is the roll actually used)
    * @private
@@ -3733,11 +3736,14 @@ export class DebrisField {
 
       // Prefer the live rendered _scenePosition (the single source of truth all
       // consumers read, and the same basis getDebrisNear uses) measured against
-      // the rendered playerPos. Onboarding-PINNED pieces have their orbit
-      // propagation frozen (see _updateInstanceTransform pin branch), so the
-      // orbital comparison below misplaces them within ~0.3 s — under the
-      // former M1 2 km search clamp (removed by welcome-drift fix T3) that
-      // silently dropped #1/#2 from the HUD list / T-Tab / scan reveal.
+      // the rendered playerPos. Onboarding-PINNED pieces skip Kepler/drag
+      // propagation (their orbit is re-synced to the mother's each frame by
+      // _syncPinnedOrbitToMother since T4, but #2's 18 m lateral lives only in
+      // _scenePosition), so the orbital comparison below is the weaker basis
+      // for them — before T4 the orbit was frozen outright and misplaced them
+      // within ~0.3 s, which under the former M1 2 km search clamp (removed by
+      // welcome-drift fix T3) silently dropped #1/#2 from the HUD list / T-Tab
+      // / scan reveal.
       // Comparing scene-vs-rendered is self-consistent and cancels the RCS
       // offset too. Pieces without a scene position (e.g. catalog debris that
       // never entered the instance pool) fall back to the orbital comparison.

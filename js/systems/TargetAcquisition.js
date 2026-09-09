@@ -102,7 +102,9 @@ export class TargetAcquisition {
 
   /**
    * The pane's eligible contacts: `getEnhancedTargetList` (discovered-only,
-   * M1-clamped, TPI/near sorted upstream) filtered by the tracked/IR rule —
+   * welcomeSpawn-gated on M1 — the former M1 2 km radius clamp went with the
+   * 2026-09-09 welcome-drift fix T3 — TPI/near sorted upstream) filtered by the
+   * tracked/IR rule —
    * only tracked debris unless the IR Scanner is active. Exact logic mirrors
    * InputManager._cycleTarget (js/systems/InputManager.js:1358-1363).
    *

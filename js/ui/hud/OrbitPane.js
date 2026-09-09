@@ -148,7 +148,8 @@ export const CHANGE_FLASH_MS = 1200;
 /**
  * ALT trend threshold, km per REAL second of smoothed altitude rate. Derived
  * from the game's drag: PlayerSatellite integrates atmosphericDrag(alt, v,
- * 20 m², 130 kg) as sma *= 1 − 2·a·dt/v per world second; at 400 km (ρ =
+ * Constants.MOTHER_DRAG.AREA_M2 = 20 m², MASS_KG = 130 kg) as
+ * sma *= 1 − 2·a·dt/v per world second; at 400 km (ρ =
  * 2.8e-11 kg/m³, v = 7.67 km/s) that is 4.9e-4 km per WORLD second, i.e.
  * 4.9e-3 km per REAL second at BASE_SCALE 10 / rate 1. One fifth of it: the
  * EMA (TREND_EMA, seeded at 0.15 of the first rate = 7.4e-4) crosses the line
