@@ -1670,7 +1670,7 @@ export const Constants = {
       WING_GAP_M: 0.005,           // folded layer gap; knuckle standoff = (gap + thick) / 2 = 0.0175
       WING_SEAM_M: 0.02,           // dark hinge-seam strip on the centre panel's edge (reads at 3 m)
       SEAM_END_INSET_M: 0.01,      // both seam sets stop 1 cm short of each panel end (log-depth: end caps never coplanar)
-      KNUCKLE_M: [0.08, 0.03],     // knuckle block along-boom × across-seam (height = gap + thick)
+      // (KNUCKLE_M [0.08, 0.03] — the buried centre-panel knuckle blocks — removed 2026-09-09 with the set itself, owner's request; the wing knuckles are sized inline in _buildFlowerPair)
       WING_OPEN_DEG: 180,          // deployed dihedral — 180 = wings flat in the plate plane (owner Q4)
       WING_OPEN_START_DEG: 60,     // lanyard: the wings start opening at θ 60° …
       WING_OPEN_END_DEG: 90,       // … and latch flat by θ 90° (the orbit ladder floor)

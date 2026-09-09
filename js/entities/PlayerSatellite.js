@@ -3253,34 +3253,30 @@ export class PlayerSatellite extends THREE.Group {
     const seamLen = plateLen - 2 * FL.SEAM_END_INSET_M * M;
     const seamGeo = new THREE.BoxGeometry(seamLen, FL.WING_SEAM_M * M, (FL.PLATE_THICK_M + 0.002) * M);
     const seamY = (cHalf - 0.002 - FL.WING_SEAM_M / 2) * M;
-    // Knuckle blocks (8 × 3 × 3.5 cm): the offset piano-hinge barrels, three
-    // per hinge line. Their height IS the layer pitch and they sit centred
-    // half a standoff below the fold axis, so open they run from 6.25 mm
-    // under the +Z face to 11.25 mm proud of the −Z face (both ends buried in
-    // the centre panel's own thickness — this set is invisible from outside
-    // in EITHER pose; that is what the wing-mounted set below is for). Folded
-    // (measured on the built model): span hinge-z −0.04375..−0.00875, i.e.
-    // fully inside the 5 mm gap-and-wing-inner-face region — 6.25 mm short of
-    // the wing's own inner face (−0.02) and 6.25 mm short of the wing's OUTER
-    // (camera-visible) face (−0.05); this set stays hidden folded too.
-    const knuckleGeo = new THREE.BoxGeometry(FL.KNUCKLE_M[0] * M, FL.KNUCKLE_M[1] * M, layer * M);
+    // The centre-panel knuckle set (FlowerStrutKnuckle_*, 8 × 3 × 3.5 cm
+    // piano-hinge barrels buried in the centre panel's thickness — 6 mm under
+    // the +Z face, 11 mm proud of the −Z face, hidden folded too) was DELETED
+    // 2026-09-09 at the owner's request ("delete please: the 24 invisible
+    // radiator hinge blocks"); the wing-mounted set below is the hinge's
+    // visible detail. knuckleK stays: it is the wing-hinge standoff that
+    // places the wing hinges, the wing seams and the wing knuckles.
     // Mother visual-audit fix (2026-09-08, T7 frames pass): the hinge-mounted
-    // seam + knuckles above sit on the CENTRE PANEL's own faces, which become
-    // the INNERMOST, barrel-facing layer once folded — measured on the built
+    // seam above sits on the CENTRE PANEL's own faces, which become the
+    // INNERMOST, barrel-facing layer once folded — measured on the built
     // model, the true OUTERMOST (camera-visible) layer at LAUNCH is the
-    // WING's own +Z face (r 0.546; the plate/knuckle set is buried 6–24 mm
-    // beneath it, invisible from outside). Folded packs read as featureless
-    // slabs. Fix: mount a matching seam + three knuckle echoes on EACH WING
-    // itself (children of `wh`, not `hinge`) so they ride the wing's own
-    // transform — 1 mm proud of the wing's own faces BOTH when deployed (the
-    // radiating face, where a real fold-in-two panel's hinge line legitimately
-    // shows) and when folded (now the outermost layer, since the wing carries
-    // its own detail this time instead of relying on the buried centre-panel
-    // set). wingSeamGeo reuses seamGeo's cross-section (symmetric ±1 mm about
+    // WING's own +Z face (r 0.546; the plate face and its seam are buried
+    // 6–24 mm beneath it, invisible from outside). Folded packs read as
+    // featureless slabs. Fix: mount a matching seam + three knuckle blocks on
+    // EACH WING itself (children of `wh`, not `hinge`) so they ride the wing's
+    // own transform — 1 mm proud of the wing's own faces BOTH when deployed
+    // (the radiating face, where a real fold-in-two panel's hinge line
+    // legitimately shows) and when folded (now the outermost layer, since the
+    // wing carries its own detail instead of relying on the centre panel).
+    // wingSeamGeo reuses seamGeo's cross-section (symmetric ±1 mm about
     // the wing's own mid-plane, same dark groove; 1 cm wide, y 0.015..0.025).
-    // wingKnuckleGeo is a SHORTER echo (12 mm, not the full 35 mm layer
-    // pitch — this one does not need to bridge two panels, it only needs to
-    // read against ONE). Its outer face sits 2 mm past the wing's own +Z face
+    // wingKnuckleGeo is SHORT (12 mm, not the full 35 mm layer pitch — it
+    // does not bridge two panels, it only needs to read against ONE). Its
+    // outer face sits 2 mm past the wing's own +Z face
     // = 1 mm proud of the wing seam it straddles (the knuckle's y 0.01..0.03
     // footprint covers the seam's y 0.015..0.025; at +1 mm both faces were
     // coplanar and z-fought — the log-depth rule applies to the surface the
@@ -3417,16 +3413,11 @@ export class PlayerSatellite extends THREE.Group {
         wing.name = `FlowerStrutWing_${i}_${side}`;
         wing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
         wh.add(wing);
-        // Three knuckle blocks per hinge line, centred on the fold axis
-        // (wh-local y 0) at x −0.6 / 0 / +0.6 of the plate; height `layer`
-        // centred at z knuckleK/2 → spans hinge-frame z −0.026..+0.009 open.
-        [-0.6, 0, 0.6].forEach((sx, k) => {
-          const kn = new THREE.Mesh(knuckleGeo, bracketMat);
-          kn.position.set(sx * M, 0, (knuckleK / 2) * M);
-          kn.name = `FlowerStrutKnuckle_${i}_${side}_${k}`;
-          kn.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-          wh.add(kn);
-        });
+        // The three centre-panel knuckle blocks per hinge line that used to
+        // sit here (FlowerStrutKnuckle_${i}_${side}_${k}, buried in the
+        // centre panel — invisible in either pose) were deleted 2026-09-09 at
+        // the owner's request; the wing-mounted set below is the hinge's
+        // visible detail.
         // Mother visual-audit fix: the WING's own hinge-line detail (children
         // of `wh`, so they carry the wing's own fold transform exactly — no
         // separate folded-frame math needed). wingSeam straddles the wing's
@@ -3435,7 +3426,7 @@ export class PlayerSatellite extends THREE.Group {
         // each end (end caps never coplanar with the wing's) — the visible hinge
         // groove on whichever face is toward the camera in EITHER pose
         // (deployed: the radiating +Z face; folded: the same +Z face, now the
-        // pack's outermost layer). Three knuckle echoes ride the same y line
+        // pack's outermost layer). Three knuckle blocks ride the same y line
         // (y 0.01..0.03, straddling the seam), each 2 mm proud of the wing's
         // own +Z face = 1 mm proud of the seam, and buried 10 mm into the
         // wing's 30 mm thickness on the other end — short (12 mm, not the
