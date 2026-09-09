@@ -1656,6 +1656,12 @@ export class GameFlowManager {
     // Reset ROSA furl state so a retry never inherits a furled array (the retry
     // path skips the launch sequence, which would otherwise re-deploy them).
     if (player.resetRosaFurlState) player.resetRosaFurlState();
+    // Owner amendment 2026-09-09 (OVERRIDE radiator sweep): the fold is now
+    // reachable in play, so a run can end with the flower FOLDED (lock armed,
+    // FEEP inhibited, ROSA held centred). The retry hand-off mirrors
+    // LaunchSequence.skipToReady: snap to the STOW bud, lock + hold cleared
+    // (one THERMAL_FLOWER_RELEASED if the lock was armed). No-op unfitted.
+    if (player.snapFlowerToStow) player.snapFlowerToStow();
 
     // Reset target selection (imported singleton — emits TARGET_CLEARED → DebrisWireframe self-clears)
     // silent: reset clear, not a real target loss — suppresses the audio earcon.

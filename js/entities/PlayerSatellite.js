@@ -161,6 +161,7 @@ export class PlayerSatellite extends THREE.Group {
     // ========================================================================
     this.thrustInput = { x: 0, y: 0, z: 0 };
     this._lastThrustOfflineWarning = 0; // Throttle for power-offline comms warnings
+    this._lastFlowerInhibitWarning = 0; // Throttle for the folded-radiator FEEP-inhibit caution (Design 7b / amendment 2026-09-09)
 
     // Phase 1: RCS fine-positioning velocity (additive to orbital motion)
     this._rcsVelocity = new THREE.Vector3();
@@ -249,11 +250,24 @@ export class PlayerSatellite extends THREE.Group {
     /** Design 7b one-shot launch lock: while armed the driver floor is
      *  POSE_LAUNCH_DEG (0°) instead of POSE_FLOOR_DEG (90°) so the flower can
      *  lie fore along the barrel inside the fairing. Armed ONLY by
-     *  setFlowerPose('LAUNCH') under LaunchSequence.isActive() (or the dev
-     *  hook's { force: true }); cleared by the driver the frame a release swing
-     *  (any orbit target) carries θ up to the floor — never re-armable from
-     *  orbit (REFIT / OVERRIDE / O only ever pass STOW / PARK / CARGO). */
+     *  setFlowerPose('LAUNCH') under LaunchSequence.isActive(), by the dev
+     *  hook's { force: true }, or — owner amendment 2026-09-09 (plan
+     *  .kilo/plans/1788863400000-radiator-launch-fold-redesign.md, last
+     *  section) — by the SAFETY OVERRIDE actuator path's { override: true }
+     *  (toggleFlowerOverride, the full-range sweep the player watches);
+     *  cleared by the driver the frame a release swing (any orbit target)
+     *  carries θ up to the floor. Never re-armable from REFIT / plain O /
+     *  autopilot (they only ever pass STOW / PARK / CARGO). */
     this._flowerLaunchLock = false;
+    /** Owner decision 2026-09-09 (B): an OVERRIDE fold HOLDS the ROSA pivots
+     *  centred (tilt 0, sun-track + feather suspended) while the lock is armed,
+     *  and the driver floor stays at POSE_FLOOR_DEG until both pivots are
+     *  within OVERRIDE_ROSA_CENTER_TOL_DEG of 0 (Constants comment: the fold
+     *  corridor contacts the deployed ROSA drum at ±10° tilt, the blanket at
+     *  ±20°). Set by setFlowerPose's override branch, cleared with the lock.
+     *  Scoped to the OVERRIDE arming: the launch sequence and the ?shot=1 dev
+     *  force are byte-identical (their own procedures furl ROSA). */
+    this._flowerOverrideFold = false;
 
     // Tether reel states: 'ready', 'deployed', 'empty' — V5: expanded to 8 reels
     this._tetherStates = Array(V5_ARM_COUNT).fill('ready');
@@ -2968,6 +2982,8 @@ export class PlayerSatellite extends THREE.Group {
    * — the daughter latch contract). Design 7b: while the launch lock is armed
    * (θ 0, fore-folded) this is a RELEASE — θ 0 is below the midpoint, so the
    * target is STOW and the driver clears the lock as θ passes the 90° floor.
+   * Never arms the lock (the plain-O law; the OVERRIDE sweep is
+   * toggleFlowerOverride).
    * @returns {boolean} true when now deploying (opening toward CARGO)
    */
   toggleFlowerDeploy() {
@@ -2979,24 +2995,87 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
+   * SAFETY OVERRIDE sweep (owner amendment 2026-09-09: "when player presses
+   * override button, and press "O" or clicks radiator button, they need to
+   * see how radiator struts move, full range of motion"). Toggles the flower
+   * FOLDED ↔ DEPLOYED over the WHOLE travel: FOLDED = the LAUNCH geometry
+   * (θ 0, packs fore along the barrel, wings folded), DEPLOYED = the STOW bud
+   * (146°) — one press = 146° at SLEW_RATE_RAD_S (≈ 9.7 s) through the 90°
+   * floor with the wings folding / unfolding over WING_OPEN_START/END_DEG.
+   *
+   * Direction: from the COMMANDED target while a slew is in flight (so a press
+   * mid-swing REVERSES — the Session L chip law: what the label shows is what
+   * a tap reverses), else from the live θ; θ > (LAUNCH + STOW)/2 = 73° → fold,
+   * else deploy. A fold goes through setFlowerPose('LAUNCH', { override: true })
+   * — the ONE production arming of the launch lock outside the launch
+   * sequence — so the driver floor drops to 0°; a deploy is the ordinary STOW
+   * release (the lock clears at 90° with THERMAL_FLOWER_RELEASED, once per
+   * arming). FEEP thrust stays inhibited the whole time the lock is armed or
+   * θ < 90° (_flowerPoseBandGuard) — the physics law is untouched, the player
+   * simply sees the mechanism.
+   *
+   * REACHABILITY: only the OVERRIDE actuator path may call this — the hub's
+   * `ladderActuators.flowerSweep.toggle()` (the pane's RADIATOR chip) and the
+   * O key while `isOverrideEngaged()`, both guarded on
+   * OverridePane.isExpanded(). REFIT / plain O / autopilot never reach it.
+   *
+   * ROSA (owner decision 2026-09-09, B — "centered, not furled"): the fold
+   * corridor below the pose floor contacts the DEPLOYED ROSA unless the pivots
+   * sit in the barrel line (real-mesh probe: 133 mm at tilt 0, contact at ±10°,
+   * the blanket at ±20°; the live tracking clamp is ±30°, feather ±90°). So the
+   * fold SEQUENCES ITSELF: the override arming engages the ROSA centre hold
+   * (`_flowerOverrideFold` — _animateSolarTracking drives both pivots to 0,
+   * sun-track + feather suspended) and the driver keeps the floor at 90° until
+   * both pivots are within OVERRIDE_ROSA_CENTER_TOL_DEG — the struts swing
+   * 146→90 (3.7 s, safe at every tilt) while the arrays centre (≤ 2.5 s), then
+   * continue below 90 without a visible pause; the hold clears with the lock
+   * on the release and tracking resumes. One press is still the whole travel;
+   * nothing is refused; a furled ROSA (pivots parked at 0) passes at once.
+   * @returns {boolean|null} true when now deploying (toward STOW 146°),
+   *   false when folding (toward LAUNCH 0°), null when no flower is fitted
+   */
+  toggleFlowerOverride() {
+    if (this._flowerGroups.length === 0) return null;
+    const FL = Constants.THERMAL.FLOWER;
+    const midRad = ((FL.POSE_LAUNCH_DEG + FL.POSE_STOW_DEG) / 2) * Math.PI / 180;
+    const ref = this._flowerTargetTheta !== undefined ? this._flowerTargetTheta : this._flowerThetaRad;
+    const deploying = ref <= midRad;
+    if (deploying) { this.setFlowerPose('STOW'); return true; }
+    // Defensive: setFlowerPose refuses only without hardware (guarded above);
+    // propagate a null so the caller never reports a fold that did not arm.
+    if (this.setFlowerPose('LAUNCH', { override: true }) === null) return null;
+    return false;
+  }
+
+  /**
    * Drive the flower to a named ladder pose ('STOW' | 'PARK' | 'CARGO').
    * The P3 thermal-duty / P5 load-easing entry point (and the test hook).
    * Targets clamp to the shipped ladder [POSE_CARGO_DEG, POSE_STOW_DEG] —
    * the pose floor θ ≥ 90° is additionally enforced every frame in the driver.
    *
    * Design 7b: 'LAUNCH' (θ 0 — fore along the barrel, wings folded) is the
-   * one-shot fairing pose. It is accepted ONLY while the launch sequence owns
-   * the ship (`this._launchSequence?.isActive?.()`), or from the ?shot=1 dev
-   * hook with an explicit `{ force: true }`; every other caller gets null and
-   * nothing changes. Accepting it ARMS the launch lock (the driver floor drops
-   * to 0°) and latches the target at POSE_LAUNCH_DEG − 0.5° so the floor
-   * clamp holds θ at exactly 0 with no SETTLE_EPS residual. Any orbit pose
-   * (STOW / PARK / CARGO — the REFIT chip, OVERRIDE, the O key) is the
-   * RELEASE: the driver clears the lock the frame θ reaches POSE_FLOOR_DEG
-   * and emits Events.THERMAL_FLOWER_RELEASED once; from then on 'LAUNCH'
-   * without the sequence is refused again — never re-armable from orbit.
+   * fairing pose behind the launch lock. It is accepted ONLY (a) while the
+   * launch sequence owns the ship (`this._launchSequence?.isActive?.()`),
+   * (b) from the ?shot=1 dev hook with an explicit `{ force: true }`, or
+   * (c) — owner amendment 2026-09-09 — from the SAFETY OVERRIDE actuator path
+   * with an explicit `{ override: true }` (toggleFlowerOverride is its only
+   * caller); every other caller gets null and nothing changes. Accepting it
+   * ARMS the launch lock (the driver floor drops to 0°) and latches the target
+   * at POSE_LAUNCH_DEG − 0.5° so the floor clamp holds θ at exactly 0 with no
+   * SETTLE_EPS residual. Any orbit pose (STOW / PARK / CARGO — the REFIT chip,
+   * the O key, the OVERRIDE deploy) is the RELEASE: the driver clears the lock
+   * the frame θ reaches POSE_FLOOR_DEG and emits Events.THERMAL_FLOWER_RELEASED
+   * once; from then on a bare 'LAUNCH' is refused again — re-armable ONLY
+   * under OVERRIDE (or the sequence / the dev force), never from REFIT / plain
+   * O / autopilot. The (c) override branch ALSO engages the ROSA centre hold
+   * (owner decision 2026-09-09, B: `_flowerOverrideFold` — the pivots are
+   * driven to tilt 0 and held, and the driver floor stays at 90° until they
+   * are within OVERRIDE_ROSA_CENTER_TOL_DEG; one COMMS note when they are not
+   * yet centred). (a) and (b) do not engage it (their own procedures furl
+   * ROSA, which parks the pivots at 0).
    * @param {'STOW'|'PARK'|'CARGO'|'LAUNCH'} pose
-   * @param {{ force?: boolean }} [opts] dev-hook override, honoured for 'LAUNCH' only
+   * @param {{ force?: boolean, override?: boolean }} [opts] honoured for 'LAUNCH'
+   *   only — `force` the dev hook, `override` the SAFETY OVERRIDE sweep
    * @returns {number|null} the accepted target θ in degrees (0 for LAUNCH), or null
    */
   setFlowerPose(pose, opts = undefined) {
@@ -3005,7 +3084,25 @@ export class PlayerSatellite extends THREE.Group {
     if (pose === 'LAUNCH') {
       const ls = this._launchSequence;
       const launchActive = !!(ls && typeof ls.isActive === 'function' && ls.isActive());
-      if (!launchActive && !(opts && opts.force === true)) return null;
+      const forced = !!(opts && opts.force === true);
+      const override = !!(opts && opts.override === true);
+      if (!launchActive && !forced && !override) return null;
+      // Owner decision 2026-09-09 (B — "ROSA centered, not furled"; T5 finding
+      // + tmp/probe-rosa-tilt.mjs, see OVERRIDE_ROSA_CENTER_TOL_DEG): the fold
+      // corridor below the pose floor contacts the DEPLOYED ROSA unless the
+      // pivots sit at tilt 0 (133 mm at 0, contact at ±10°, the blanket at
+      // ±20°). The override arming therefore ENGAGES THE CENTRE HOLD
+      // (_animateSolarTracking drives both pivots to 0, sun-track + feather
+      // suspended) and the driver keeps the floor at POSE_FLOOR_DEG until both
+      // pivots are within tolerance — the flower swings 146→90 (safe at every
+      // tilt, T7(v)) while the arrays centre, then continues below 90. The lock
+      // and the hold clear together on the release. Scoped to the override
+      // arming: the launch sequence and the ?shot=1 dev force are unchanged
+      // (their own procedures furl ROSA, which parks the pivots at 0 anyway).
+      if (override) {
+        this._flowerOverrideFold = true;
+        if (!this._rosaCenteredForFold()) this._noteRosaCentering();
+      }
       this._flowerLaunchLock = true;
       this._flowerTargetTheta = ((FL.POSE_LAUNCH_DEG - 0.5) * Math.PI) / 180;
       return FL.POSE_LAUNCH_DEG;
@@ -3037,6 +3134,7 @@ export class PlayerSatellite extends THREE.Group {
     if (!(ls && typeof ls.isActive === 'function' && ls.isActive())) return false;
     const FL = Constants.THERMAL.FLOWER;
     this._flowerLaunchLock = true;
+    this._flowerOverrideFold = false;   // the sequence's arming is not an OVERRIDE fold — no ROSA hold, the floor drops at once
     this._flowerTargetTheta = undefined;
     this._flowerThetaRad = (FL.POSE_LAUNCH_DEG * Math.PI) / 180;
     this._updateFlower(0);
@@ -3056,6 +3154,7 @@ export class PlayerSatellite extends THREE.Group {
     const FL = Constants.THERMAL.FLOWER;
     const wasLocked = this._flowerLaunchLock;
     this._flowerLaunchLock = false;
+    this._flowerOverrideFold = false;
     this._flowerTargetTheta = undefined;
     this._flowerThetaRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
     this._updateFlower(0);
@@ -3413,9 +3512,12 @@ export class PlayerSatellite extends THREE.Group {
    * so the whole reachable range is thrust-legal and the driver needs NO
    * thrust-coupled writes.
    *
-   * Design 7b: while the one-shot launch lock is armed the floor is
-   * POSE_LAUNCH_DEG (0°) — the fore-folded fairing pose, measured against the
-   * DOCKED daughters (probe 7b.4c / 7b.6b). The lock clears — once, with
+   * Design 7b: while the launch lock is armed the floor is POSE_LAUNCH_DEG
+   * (0°) — the fore-folded fairing pose, measured against the DOCKED daughters
+   * (probe 7b.4c / 7b.6b). Owner decision 2026-09-09 (B): under an OVERRIDE
+   * fold (`_flowerOverrideFold`) the floor drops only once both ROSA pivots
+   * are centred (`_rosaCenteredForFold`) — until then θ stalls at the orbit
+   * floor with the latch alive. The lock (and the hold) clear — once, with
    * Events.THERMAL_FLOWER_RELEASED — the frame a release swing (any target at
    * or above the orbit floor) carries θ up to POSE_FLOOR_DEG; a release never
    * latches below the floor (so a CARGO release cannot settle at 89.9° with
@@ -3435,16 +3537,25 @@ export class PlayerSatellite extends THREE.Group {
     }
 
     // Pose floor + ladder ceiling — clamped in the driver, unconditionally.
+    // Owner decision 2026-09-09 (B): under an OVERRIDE fold the floor drops to
+    // POSE_LAUNCH_DEG only once both ROSA pivots are centred (tilt within
+    // OVERRIDE_ROSA_CENTER_TOL_DEG of 0) — until then θ stalls at the orbit
+    // floor (safe at every tilt, T7(v)) with the latch alive (the target is
+    // far below, so the settle test never fires), and resumes the frame the
+    // arrays are parked. The sequence / dev-force armings drop it at once.
     const orbitFloorRad = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
-    const floorRad = this._flowerLaunchLock ? (FL.POSE_LAUNCH_DEG * Math.PI) / 180 : orbitFloorRad;
+    const foldFloorOpen = this._flowerLaunchLock && (!this._flowerOverrideFold || this._rosaCenteredForFold());
+    const floorRad = foldFloorOpen ? (FL.POSE_LAUNCH_DEG * Math.PI) / 180 : orbitFloorRad;
     const ceilRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
     this._flowerThetaRad = Math.max(floorRad, Math.min(ceilRad, this._flowerThetaRad));
 
     // Design 7b release: an orbit-bound swing under the lock clears it the
-    // frame θ reaches the orbit floor. Exactly once per arming.
+    // frame θ reaches the orbit floor. Exactly once per arming. The ROSA centre
+    // hold (override folds) clears with it — sun-track resumes.
     const releasing = this._flowerLaunchLock && target !== undefined && target >= orbitFloorRad - 1e-9;
     if (releasing && this._flowerThetaRad >= orbitFloorRad - 1e-9) {
       this._flowerLaunchLock = false;
+      this._flowerOverrideFold = false;
       eventBus.emit(Events.THERMAL_FLOWER_RELEASED, { thetaDeg: (this._flowerThetaRad * 180) / Math.PI });
     }
 
@@ -4939,7 +5050,13 @@ export class PlayerSatellite extends THREE.Group {
   _animateSolarTracking(dt, sunDirection) {
     if (!sunDirection) return;
 
-    const desired = this._rosaDesiredTilt(sunDirection);
+    // Owner decision 2026-09-09 (B): while an OVERRIDE radiator fold holds the
+    // lock, the pivots are driven to 0 (the barrel line) and HELD there —
+    // sun-track and feather suspended — because the fold corridor contacts the
+    // deployed drum at ±10° tilt and the blanket at ±20° (Constants
+    // OVERRIDE_ROSA_CENTER_TOL_DEG). The hold clears with the lock (release
+    // past the floor) and the filter below carries the pivots back to the sun.
+    const desired = this._flowerOverrideFold ? 0 : this._rosaDesiredTilt(sunDirection);
 
     // Round-3 (user report): a furled wing must NOT track the sun. The rolled
     // cylinder, drum, spool curls and brackets are all children of this pivot,
@@ -5796,13 +5913,15 @@ export class PlayerSatellite extends THREE.Group {
    */
   _updateThrusterInterlock() {
     // Design 7b pose-band guard (bookkeeping, not physics): thrust only inside
-    // the P1 band θ ∈ [90°, 146°] — i.e. never while the one-shot launch lock
-    // holds the flower fore of the rim or during its release swing. The
-    // fore-folded flower is plume-LEGAL at every θ (probe 7b.6b: the enforced
-    // cones stay clear throughout the swing), so this guard keeps the ledger's
-    // "under thrust" clause literally true rather than protecting the panels.
-    // Flag-independent (the pose fact is), and honoured with or without an
-    // ArmManager (headless tests build none).
+    // the P1 band θ ∈ [90°, 146°] — i.e. never while the launch lock holds
+    // the flower fore of the rim, during its release swing, or during the
+    // SAFETY OVERRIDE sweep (owner amendment 2026-09-09: the lock is armed the
+    // moment a fold is commanded, so the FEEP is inhibited from the press,
+    // not just from θ < 90°). The fore-folded flower is plume-LEGAL at every θ
+    // (probe 7b.6b: the enforced cones stay clear throughout the swing), so
+    // this guard keeps the ledger's "under thrust" clause literally true
+    // rather than protecting the panels. Flag-independent (the pose fact is),
+    // and honoured with or without an ArmManager (headless tests build none).
     const flowerGuard = this._flowerPoseBandGuard();
     if (!this.armManager) {
       this._thrusterInterlock = flowerGuard;
@@ -5863,6 +5982,68 @@ export class PlayerSatellite extends THREE.Group {
     const FL = Constants.THERMAL.FLOWER;
     const deg = (this._flowerThetaRad * 180) / Math.PI;
     return deg < FL.POSE_FLOOR_DEG - 1e-6 || deg > FL.POSE_THRUST_MAX_DEG + 1e-6;
+  }
+
+  /**
+   * @private Design 7b / owner amendment 2026-09-09 — say WHY the drive does
+   * not answer when the reason is the aft radiator (the pose-band guard: the
+   * launch lock armed — folded, folding under OVERRIDE, or releasing below the
+   * 90° floor — or θ outside [POSE_FLOOR_DEG, POSE_THRUST_MAX_DEG]). Called by
+   * every refused thrust path (thrustIon / thrustMPD / applyCartesianImpulse)
+   * AFTER the interlock has refused, so it never changes the refusal — it only
+   * narrates it: one COMMS caution per 3 s (_lastFlowerInhibitWarning, the
+   * _lastThrustOfflineWarning cadence) naming the type, the live θ and the way out, plus a
+   * PLAYER_THRUST_FAILED { reason: 'flower_folded' } for listeners. The legacy
+   * back-arm / plume interlocks stay silent here as before (their own rows).
+   * @param {'FEEP'|'MPD'} type
+   */
+  _warnFlowerThrustInhibit(type) {
+    if (!this._flowerPoseBandGuard()) return;
+    const now = performance.now();
+    if (now - this._lastFlowerInhibitWarning < 3000) return;
+    this._lastFlowerInhibitWarning = now;
+    const FL = Constants.THERMAL.FLOWER;
+    const thetaDeg = Math.round((this._flowerThetaRad * 180) / Math.PI);
+    const why = this._flowerLaunchLock
+      ? `aft radiator folded for launch (θ ${thetaDeg}°, lock armed)`
+      : `aft radiator outside the ${FL.POSE_FLOOR_DEG}–${FL.POSE_THRUST_MAX_DEG}° thrust band (θ ${thetaDeg}°)`;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'THERMAL',
+      text: `CAUTION: ${type} INHIBITED — ${why}. Deploy the radiator (O / RADIATOR) to thrust.`,
+      priority: 'warning',
+    });
+    eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'flower_folded', type: type === 'MPD' ? 'mpd' : 'ion', thetaDeg });
+  }
+
+  /**
+   * Owner decision 2026-09-09 (B): are both ROSA pivots parked in the barrel
+   * line — |rotation.x| within OVERRIDE_ROSA_CENTER_TOL_DEG of 0? The driver
+   * reads this every frame to open the fold floor below POSE_FLOOR_DEG; the hub
+   * may read it for a label. No pivots built → true (nothing to collide with).
+   * A furled ROSA parks its pivots at 0 (the tracking law's furl blend), so
+   * "furled" satisfies this too once the blend has settled — one criterion.
+   * @returns {boolean}
+   */
+  _rosaCenteredForFold() {
+    const tol = ((Constants.THERMAL.FLOWER.OVERRIDE_ROSA_CENTER_TOL_DEG ?? 2) * Math.PI) / 180;
+    const r = this.panelRightPivot, l = this.panelLeftPivot;
+    if (r && Math.abs(r.rotation.x) > tol) return false;
+    if (l && Math.abs(l.rotation.x) > tol) return false;
+    return true;
+  }
+
+  /**
+   * @private Owner decision 2026-09-09 (B): one COMMS line per OVERRIDE fold
+   * arming when the arrays are NOT yet centred — the struts will pause at the
+   * 90° floor until they are (≤ 2.5 s from a ±90° feather), so the player is
+   * told what the mechanism is waiting for. Deploys never wait.
+   */
+  _noteRosaCentering() {
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'THERMAL',
+      text: 'OVERRIDE — ROSA arrays centering to the barrel line (sun-track held); the radiator continues below 90° once they are parked.',
+      priority: 'info',
+    });
   }
 
   /**
@@ -6531,8 +6712,12 @@ export class PlayerSatellite extends THREE.Group {
       return;
     }
 
-    // V5: Thruster interlock — back arm in danger zone near FEEP thruster exhaust
+    // V5: Thruster interlock — back arm in danger zone near FEEP thruster exhaust;
+    // Design 7b / amendment 2026-09-09: the folded radiator (the pose-band
+    // guard) is the one reason the player is TOLD about — refused before any
+    // billing / thrustInput write, so the FEEP glow ramp never starts.
     if (this._thrusterInterlock) {
+      this._warnFlowerThrustInhibit('FEEP');
       return;
     }
 
@@ -6638,7 +6823,8 @@ export class PlayerSatellite extends THREE.Group {
     if (!this._hasMPD) return;
 
     // V5: Thruster interlock — back arm in danger zone near FEEP thruster exhaust
-    if (this._thrusterInterlock) return;
+    // (+ the folded-radiator guard, told to the player — see thrustIon)
+    if (this._thrusterInterlock) { this._warnFlowerThrustInhibit('MPD'); return; }
 
     // Guard: power distribution — block if THRUST bus is at 0%
     if (powerDistribution.thrustMultiplier <= 0) {
@@ -7506,7 +7692,10 @@ export class PlayerSatellite extends THREE.Group {
         }
         return false;
       }
-      if (this._thrusterInterlock) return false;
+      // The interlock refuses BEFORE billing, the Δv write, the puff and the
+      // THRUST_VISUAL emit — nothing downstream sees a burn. The folded
+      // radiator (Design 7b guard / amendment 2026-09-09) is told to the player.
+      if (this._thrusterInterlock) { this._warnFlowerThrustInhibit('FEEP'); return false; }
       if (this.resources.battery <= 0) {
         eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_fuel', type: 'ion' });
         return false;

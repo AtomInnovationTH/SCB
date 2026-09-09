@@ -745,21 +745,46 @@ export class InputManager {
       // player intent wins), click + event + comms line. Silent no-op until a
       // flower pair is purchased (pre-purchase behavior byte-identical to the
       // freed key).
+      // SAFETY OVERRIDE sweep (owner 2026-09-09: "when player presses override
+      // button, and press "O" or clicks radiator button, they need to see how
+      // radiator struts move, full range of motion"): while
+      // deps.isOverrideEngaged() (the OVERRIDE panel's grid is up) the key runs
+      // player.toggleFlowerOverride — FOLDED (LAUNCH θ 0) ↔ DEPLOYED (STOW 146),
+      // the whole travel — the same path the pane's RADIATOR chip takes
+      // (main.js `flowerSweep`). Dep absent / pane collapsed → the shipped
+      // STOW ↔ CARGO handler, byte-identical.
       case 'KeyO':
         if (isGameplay && !e.repeat && d.player
             && typeof d.player.toggleFlowerDeploy === 'function'
             && typeof d.player.getFlowerPairCount === 'function'
             && d.player.getFlowerPairCount() > 0) {
-          const deploying = d.player.toggleFlowerDeploy();
-          d.audioSystem?.playClick();
-          eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
-          eventBus.emit(Events.COMMS_MESSAGE, {
-            sender: 'THERMAL',
-            text: deploying
-              ? 'Aft flower deploying — struts open LIKE A FLOWER to the 90° cargo bloom.'
-              : 'Aft flower stowing — folding to the 146° bud.',
-            priority: 'info',
-          });
+          const overrideEngaged = typeof d.isOverrideEngaged === 'function' && d.isOverrideEngaged() === true;
+          if (overrideEngaged && typeof d.player.toggleFlowerOverride === 'function') {
+            // The OVERRIDE sweep: null = no hardware (silent, still consumed).
+            const sweeping = d.player.toggleFlowerOverride();
+            if (sweeping !== null) {
+              d.audioSystem?.playClick();
+              eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying: sweeping, override: true });
+              eventBus.emit(Events.COMMS_MESSAGE, {
+                sender: 'THERMAL',
+                text: sweeping
+                  ? 'OVERRIDE — aft radiator deploying: struts swing to the 146° bud, wings open between 60° and 90°. FEEP clear once past 90°.'
+                  : 'OVERRIDE — aft radiator folding: struts swing fore to the launch pack (θ 0°), wings fold between 90° and 60°. FEEP INHIBITED until deployed.',
+                priority: 'info',
+              });
+            }
+          } else {
+            const deploying = d.player.toggleFlowerDeploy();
+            d.audioSystem?.playClick();
+            eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
+            eventBus.emit(Events.COMMS_MESSAGE, {
+              sender: 'THERMAL',
+              text: deploying
+                ? 'Aft flower deploying — struts open LIKE A FLOWER to the 90° cargo bloom.'
+                : 'Aft flower stowing — folding to the 146° bud.',
+              priority: 'info',
+            });
+          }
           e.preventDefault();
         }
         break;

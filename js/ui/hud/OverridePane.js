@@ -10,15 +10,27 @@
  * black-screen gag.
  *
  * Control law (D1) = SHIPPED. The panel receives the SAME `actuators` object
- * the hub builds for RefitPane (`{ rosaFurl, rosaFeather, struts, flower }`,
- * each `{ get(), toggle() }`): a tap calls `toggle()` — which reverses the
- * COMMANDED state, plays the click and emits the input event — and then
- * `refresh()` re-reads truth through `get()`. Never an optimistic label flip,
- * never a second click blip (the closure owns the sound).
+ * the hub builds for RefitPane (`{ rosaFurl, rosaFeather, struts, flower,
+ * flowerSweep }`, each `{ get(), toggle() }`): a tap calls `toggle()` — which
+ * reverses the COMMANDED state, plays the click and emits the input event —
+ * and then `refresh()` re-reads truth through `get()`. Never an optimistic
+ * label flip, never a second click blip (the closure owns the sound).
  *
- * Mapping (D2): DAUGHTERS → `struts` · RADIATOR → `flower` (the THERMAL
+ * Mapping (D2): DAUGHTERS → `struts` · RADIATOR → `flowerSweep` (the THERMAL
  * family's part is literally "RADIATOR PLATES") · ROSA → `rosaFurl` · FURNACE →
  * the gag. `rosaFeather` is NOT on the panel.
+ *
+ * RADIATOR (owner amendment 2026-09-09, plan
+ * .kilo/plans/1788863400000-radiator-launch-fold-redesign.md last section):
+ * "when player presses override button, and press "O" or clicks radiator
+ * button, they need to see how radiator struts move, full range of motion".
+ * The chip therefore reads the hub's `flowerSweep` actuator — FOLDED (the
+ * LAUNCH geometry, θ 0, packs along the barrel, wings folded) ↔ DEPLOYED (the
+ * STOW bud 146°), 'SLEWING' while moving; a tap runs
+ * PlayerSatellite.toggleFlowerOverride (the whole 146° travel, a press
+ * mid-swing reverses), which the hub only honours while this pane is engaged
+ * (`isExpanded()`). The REFIT chip keeps the shipped `flower` STOW ↔ CARGO law.
+ * `aria-pressed` = DEPLOYED (the hardware is OUT).
  *
  * Home (D3; ladder reorder rev 3): a pane-density rung the hub adds as the
  * last MEMBER of the `experimental` composite (the ladder's index 0 — the
@@ -139,11 +151,11 @@ const COLOR_CAUTION = VisualLaw.COLORS.CAUTION;   // steady amber — FAULT, dis
 /** Inverted-U inner edge (HUD_EDGE_PX + HUD_COLUMN_WIDTH_PX) — Override recentre band. */
 const COL_INNER_PX = HUD_EDGE_PX + HUD_COLUMN_WIDTH_PX;
 
-/** Panel key → actuators key. */
-const ACTUATOR_OF = Object.freeze({ daughters: 'struts', radiator: 'flower', rosa: 'rosaFurl' });
+/** Panel key → actuators key (RADIATOR → the OVERRIDE full-range sweep, amendment 2026-09-09). */
+const ACTUATOR_OF = Object.freeze({ daughters: 'struts', radiator: 'flowerSweep', rosa: 'rosaFurl' });
 const NAME_OF = Object.freeze({ daughters: 'DAUGHTERS', radiator: 'RADIATOR', rosa: 'ROSA', furnace: 'FURNACE' });
-/** "The hardware is OUT" — the aria-pressed pose. */
-const OUT_STATE = Object.freeze({ daughters: 'DEPLOYED', radiator: 'OPEN', rosa: 'DEPLOYED' });
+/** "The hardware is OUT" — the aria-pressed pose (RADIATOR: DEPLOYED = the STOW bud; FOLDED / SLEWING read unpressed). */
+const OUT_STATE = Object.freeze({ daughters: 'DEPLOYED', radiator: 'DEPLOYED', rosa: 'DEPLOYED' });
 /** The honest reason when `get()` reads null. */
 const NULL_REASON = Object.freeze({ daughters: 'NO DAUGHTER DOCKED', radiator: 'OFFLINE', rosa: 'OFFLINE' });
 
@@ -207,7 +219,7 @@ function _closestKey(el) {
 export class OverridePane {
   /**
    * @param {object} [deps] every dep optional, duck-typed, never trusted not to throw
-   * @param {object}   [deps.actuators] the RefitPane actuators object — only `struts`, `flower`, `rosaFurl` are read
+   * @param {object}   [deps.actuators] the RefitPane actuators object — only `struts`, `flowerSweep`, `rosaFurl` are read
    * @param {object}   [deps.audio] `{ playClick?(), playKlaxon?(durationS), stopKlaxon?() }` (the AudioSystem singleton)
    * @param {object}   [deps.bus] `{ on(event, cb) -> unsubscribe, emit(event, data) }`
    * @param {object}   [deps.events] the Events name table

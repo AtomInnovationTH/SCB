@@ -1754,6 +1754,13 @@ async function init() {
     // keys only while ladderController.isActive() (flag on + gameplay + engaged),
     // so with LADDER.ENABLED false the key handling is byte-identical.
     getLadderController: () => ladderController,
+    // SAFETY OVERRIDE radiator sweep (owner 2026-09-09): while the OVERRIDE
+    // panel is engaged (grid up) the O key runs PlayerSatellite.toggleFlowerOverride
+    // — the full FOLDED ↔ DEPLOYED travel — instead of the STOW ↔ CARGO toggle.
+    // Same late-binding closure style as getLadderController (overridePane is
+    // constructed in the ladder block below); absent / collapsed → false, and
+    // the key is byte-identical to the shipped handler.
+    isOverrideEngaged: () => !!(overridePane && typeof overridePane.isExpanded === 'function' && overridePane.isExpanded()),
   });
   inputManager.start();
   // 2026-08-26: the lasso catch cut never STARTS over active piloting — a key
@@ -2003,6 +2010,10 @@ async function init() {
     // two consumers — RefitPane's chips and OverridePane's buttons drive the
     // SAME toggles (shipped control law: a tap reverses the COMMANDED state,
     // the pane re-reads truth; the closures own the click + the input events).
+    // "OVERRIDE engaged" = the SAFETY OVERRIDE panel's grid is up (the main
+    // button pressed). A late-binding read: overridePane is constructed below
+    // (inside the ladder block); absent / collapsed / disposed → false.
+    const _isOverrideEngaged = () => !!(overridePane && typeof overridePane.isExpanded === 'function' && overridePane.isExpanded());
     const ladderActuators = {
       rosaFurl: {
         get: () => (player && typeof player.setRosaFurl === 'function')
@@ -2042,8 +2053,15 @@ async function init() {
           if (player.getFlowerPairCount() === 0) return 'NOT FITTED';
           const FL = Constants.THERMAL && Constants.THERMAL.FLOWER;
           if (!FL) return null;
+          // Owner amendment 2026-09-09 (plan 1788863400000 last section, spec 4):
+          // a flower left FOLDED by the SAFETY OVERRIDE sweep (launch lock armed,
+          // commanded / live θ below the 90° floor) says so on the REFIT chip too
+          // — 'FLOWER · FOLDED', unpressed; a tap from there is the ordinary STOW
+          // release. Otherwise the shipped OPEN / CLOSED law, byte-identical.
+          const cmd = player._flowerTargetTheta ?? player._flowerThetaRad;
+          if (player.flowerLaunchLocked === true && cmd < (FL.POSE_FLOOR_DEG * Math.PI) / 180) return 'FOLDED';
           const mid = ((FL.POSE_STOW_DEG + FL.POSE_CARGO_DEG) / 2) * Math.PI / 180;
-          return ((player._flowerTargetTheta ?? player._flowerThetaRad) <= mid) ? 'OPEN' : 'CLOSED';
+          return (cmd <= mid) ? 'OPEN' : 'CLOSED';
         },
         toggle: () => {
           if (!player || player.getFlowerPairCount() === 0) return;
@@ -2060,6 +2078,50 @@ async function init() {
             text: deploying
               ? 'Aft flower deploying — struts open LIKE A FLOWER to the 90° cargo bloom.'
               : 'Aft flower stowing — folding to the 146° bud.',
+            priority: 'info',
+          });
+        },
+      },
+      // SAFETY OVERRIDE radiator sweep (owner 2026-09-09: "when player presses
+      // override button, and press "O" or clicks radiator button, they need to
+      // see how radiator struts move, full range of motion"; plan
+      // .kilo/plans/1788863400000-radiator-launch-fold-redesign.md, last
+      // section). The OverridePane's RADIATOR chip reads THIS actuator (not
+      // `flower`): FOLDED (LAUNCH θ 0, packs along the barrel, wings folded) ↔
+      // DEPLOYED (STOW 146) over the whole travel, 'SLEWING' while moving. The
+      // toggle is PlayerSatellite.toggleFlowerOverride — the ONE production path
+      // that arms the launch lock outside the launch sequence — and it is
+      // reachable ONLY while the pane is engaged (isExpanded): a collapsed pane
+      // makes this a no-op, so REFIT / plain O / autopilot never fold the
+      // flower. The O key takes the same path through isOverrideEngaged
+      // (InputManager deps). FEEP thrust stays inhibited the whole time the
+      // lock is armed or θ < 90° (the 7b guard) — the HUD thermal line says so.
+      // Owner decision 2026-09-09 (B): the fold centres the ROSA arrays itself
+      // (PlayerSatellite._flowerOverrideFold — pivots held at tilt 0, floor at
+      // 90° until they are) and says so on COMMS; nothing here to sequence.
+      flowerSweep: {
+        get: () => {
+          if (!player || typeof player.getFlowerPairCount !== 'function') return null;
+          if (player.getFlowerPairCount() === 0) return 'NOT FITTED';
+          const FL = Constants.THERMAL && Constants.THERMAL.FLOWER;
+          if (!FL) return null;
+          if (player._flowerTargetTheta !== undefined) return 'SLEWING';
+          const mid = ((FL.POSE_LAUNCH_DEG + FL.POSE_STOW_DEG) / 2) * Math.PI / 180;
+          return (player._flowerThetaRad <= mid) ? 'FOLDED' : 'DEPLOYED';
+        },
+        toggle: () => {
+          if (!_isOverrideEngaged()) return;
+          if (!player || typeof player.toggleFlowerOverride !== 'function' || player.getFlowerPairCount() === 0) return;
+          const deploying = player.toggleFlowerOverride();
+          if (deploying === null) return;
+          audioSystem?.playClick?.();
+          eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying, override: true });
+          // The KeyO OVERRIDE comms lines, verbatim (InputManager's handler is the source).
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            sender: 'THERMAL',
+            text: deploying
+              ? 'OVERRIDE — aft radiator deploying: struts swing to the 146° bud, wings open between 60° and 90°. FEEP clear once past 90°.'
+              : 'OVERRIDE — aft radiator folding: struts swing fore to the launch pack (θ 0°), wings fold between 90° and 60°. FEEP INHIBITED until deployed.',
             priority: 'info',
           });
         },

@@ -1684,13 +1684,30 @@ export const Constants = {
       // Design 7b LAUNCH pose: θ 0 — the strut lies FORE along the barrel with
       // its wings folded (four 0.30 × 0.101 × 1.70 m packs at r ≤ 0.546, tips
       // z 1.505; probe 7b.4c B′: MGA 0.023 / PV 0.031 / weaver 0.025 / coil
-      // 0.032 m). Reachable ONLY under the one-shot launch lock
-      // (setFlowerPose('LAUNCH') while LaunchSequence.isActive(), or the
-      // ?shot=1 dev hook with { force: true }); the lock clears the frame the
-      // release swing reaches POSE_FLOOR_DEG and cannot be re-armed from orbit.
-      // The driver targets POSE_LAUNCH_DEG − 0.5° and lets the floor clamp hold
-      // θ at exactly 0 (no SETTLE_EPS residual — the mock stopped 0.5° short).
+      // 0.032 m). Reachable ONLY under the launch lock: setFlowerPose('LAUNCH')
+      // while LaunchSequence.isActive(), the ?shot=1 dev hook with
+      // { force: true }, or — owner amendment 2026-09-09 — the SAFETY OVERRIDE
+      // sweep with { override: true } (PlayerSatellite.toggleFlowerOverride);
+      // the lock clears the frame the release swing reaches POSE_FLOOR_DEG and
+      // re-arms from orbit ONLY under OVERRIDE. The driver targets
+      // POSE_LAUNCH_DEG − 0.5° and lets the floor clamp hold θ at exactly 0
+      // (no SETTLE_EPS residual — the mock stopped 0.5° short).
       POSE_LAUNCH_DEG: 0,
+      // Owner decision 2026-09-09 (B — "ROSA centered, not furled"): the fold
+      // corridor below POSE_FLOOR_DEG clears the DEPLOYED ROSA only with the
+      // blankets parked in the barrel line (pivot tilt 0 — the X-Z plane).
+      // Measured on the real meshes (tmp/probe-rosa-tilt.mjs, the T7 helpers):
+      // tightest gap to any ROSA_* mesh over the whole 0..146° swing is 133 mm
+      // at tilt 0 (spool curl, θ 0), falling ~16 mm per degree — 55 mm at ±5°,
+      // 24 mm at ±7° (the T7 20 mm gate), CONTACT at ±10° (drum), the blanket
+      // itself at ±20°, bracket + blanket at ±30° (the live tracking clamp's
+      // extreme), drum + blanket at ±90° (feather). So an OVERRIDE fold HOLDS
+      // the ROSA pivots at 0 (sun-track + feather suspended) for as long as the
+      // lock is armed, and the driver floor stays at POSE_FLOOR_DEG until BOTH
+      // pivots are within this tolerance of 0 — the flower swings 146→90 (3.7 s,
+      // safe at every tilt: T7(v)) while the arrays centre (τ 0.57 s, ≤ 2.5 s
+      // from ±90°), then continues below 90 without a pause. 2° keeps ≈ 100 mm.
+      OVERRIDE_ROSA_CENTER_TOL_DEG: 2,
 
       // ── Slew (daughter-stack mirror; drift-guarded ===
       //    OCTOPUS_V5.STRUT_SLEW_RATE by test-FlowerPose.js) ──
