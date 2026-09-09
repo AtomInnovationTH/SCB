@@ -93,8 +93,12 @@ export const PANE_HELP = [
   { pane: 'ladder rail',        selector: '#ladder-rail',                            codexId: 'pane_ladder_rail',        key: null, rung: 'always shown' },
   { pane: 'transfer windows',   selector: '#ladder-transfer-windows',                codexId: 'pane_transfer_windows',   key: null, rung: 'route-planning instrument' },
   { pane: 'tactical approach',  selector: '#ladder-prox-context',                    codexId: 'pane_tactical_approach',  key: null, rung: 'approach instrument' },
-  { pane: 'refit',              selector: '#ladder-refit .refit-header',             codexId: 'pane_refit',              key: null, rung: 'refit instrument' },
-  { pane: 'library',            selector: '#ladder-library .library-header',         codexId: 'pane_library',            key: null, rung: 'SPECS instrument' },
+  // Session U (plan 1788954873769, ONE workbench pane): both headers live inside
+  // the one drawer root `#ladder-workbench` — the REFIT block (F1 only) and the
+  // SPECS head. codexIds, keys and rungs unchanged; rescan() re-tags after the
+  // engines' innerHTML repaints as before.
+  { pane: 'refit',              selector: '#ladder-workbench .refit-header',         codexId: 'pane_refit',              key: null, rung: 'refit instrument' },
+  { pane: 'library',            selector: '#ladder-workbench .library-header',       codexId: 'pane_library',            key: null, rung: 'SPECS instrument' },
   // Rev-3 DETAIL slider (plan 1788867799156 Task 15). Reuses pane_ladder_rail —
   // the closest existing SPECS page. No rungId: the slider is not a ladder pane.
   { pane: 'detail slider',      selector: '#ladder-detail-slider',                   codexId: 'pane_ladder_rail',        key: null, rung: 'slider 0 = empty view / scene only, right end = every pane; drag or − / +' },

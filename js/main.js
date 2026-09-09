@@ -123,7 +123,8 @@ import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
 import { RefitPane } from './ui/RefitPane.js';
-import { LibraryPane, ONE_PANE_BREAKPOINT_PX } from './ui/LibraryPane.js';
+import { LibraryPane } from './ui/LibraryPane.js';
+import { WorkbenchPane } from './ui/WorkbenchPane.js';
 import { resolveSubject as resolveSpecsSubject } from './systems/SpecsSubject.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
@@ -647,16 +648,16 @@ let timeAuthority;
 // frame; TimeAuthority.update destructures synchronously and retains nothing).
 const _taFrameArgs = { dtReal: 0, active: false, targetCap: 1, dangerActive: false };
 // Drawer-open signal (Session I, plan D-F — was the D10 calm cap): true while
-// a workbench drawer (REFIT / TECH LIBRARY) is open — feeds
-// TimeAuthority.calmCap so the world clock STOPS while reading (rail: HOLD),
-// the viewCover 'partial' value (the frame scheduler's heartbeat) and the
-// camera's turntable gate. Written by _syncWorkbenchPanes (the ONE pane edge,
-// Session B) from both panes' onOpenChange; false whenever the ladder is off
-// (the sync helper only exists inside the LADDER.ENABLED gate).
+// the workbench drawer (Session U: the ONE pane — SPECS + the F1 REFIT block)
+// is open — feeds TimeAuthority.calmCap so the world clock STOPS while reading
+// (rail: HOLD), the viewCover 'partial' value (the frame scheduler's heartbeat)
+// and the camera's turntable gate. Written by _syncWorkbenchPanes (the ONE
+// pane edge, Session B) from the shell's onOpenChange; false whenever the
+// ladder is off (the sync helper only exists inside the LADDER.ENABLED gate).
 let _workbenchPaneOpen = false;
 // Wave 5 Session K (plan D-B — one shop): the WORKBENCH BREAK is open — set on
-// GameFlowManager's WORKBENCH_STOP (after the ride + the REFIT open took),
-// cleared when the hub emits WORKBENCH_RESUME (both drawers closed, from the
+// GameFlowManager's WORKBENCH_STOP (after the ride + the pane open took),
+// cleared when the hub emits WORKBENCH_RESUME (the drawer closed, from the
 // SAME _syncWorkbenchPanes edge) or when gameplay ends. Lives here (not in
 // GameFlowManager's flag) because the END of a break is a drawer edge only the
 // hub sees. False whenever the ladder is off (never set outside the gate).
@@ -685,20 +686,32 @@ let navcomFloor;
 let proxNetFloor;
 let sdaFloor;
 let hullcamFloor;
-// Zoom Ladder Wave 5 (2) — the F3 REFIT pane (08-workbench §2, left pane on
-// the seven-subsystem index). UNLIKE the floor orchestrators above it is only
-// CONSTRUCTED while Constants.LADDER.ENABLED is true (the same live flag every
-// ladder gate reads): a ?ladder=0 boot builds no pane, wires no onPartClick,
-// and the shipped part-click → Library path stays byte-identical (pinned in
+// Zoom Ladder Wave 5 (2) — the F1 REFIT section engine (RefitPane: the
+// seven-subsystem index, the ranked fits, BUY, the wallet). Since Session U
+// (plan 1788954873769 D5) it is a HOSTED section engine — it renders into the
+// slot the WorkbenchPane shell mounts it in and owns no root / tab / slide.
+// UNLIKE the floor orchestrators above it is only CONSTRUCTED while
+// Constants.LADDER.ENABLED is true (the same live flag every ladder gate
+// reads): a ?ladder=0 boot builds no pane, wires no onPartClick, and the
+// shipped part-click → Library path stays byte-identical (pinned in
 // test-LadderController).
 let refitPane;
-// Zoom Ladder Wave 5 (Session B) — the F3 TECH LIBRARY pane (08-workbench §2,
-// right pane: the shipped viewer's entry as a side pane). Same construction
-// law as refitPane: built ONLY while Constants.LADDER.ENABLED is true, so a
-// ?ladder=0 boot builds no pane and every shipped codex path (part click →
-// full-screen Library, I key, deep links) stays byte-identical (pinned in
-// test-LadderController).
+// Zoom Ladder Wave 5 (Session B) — the SPECS section engine (LibraryPane: the
+// shipped viewer's entry as a dossier — portrait, summary, specs, RELATED).
+// Session U: hosted by the WorkbenchPane shell like refitPane (head + tail
+// containers). Same construction law as refitPane: built ONLY while
+// Constants.LADDER.ENABLED is true, so a ?ladder=0 boot builds no pane and
+// every shipped codex path (part click → full-screen Library, I key, deep
+// links) stays byte-identical (pinned in test-LadderController).
 let libraryPane;
+// Session U (plan 1788954873769, D5) — the ONE workbench pane
+// (js/ui/WorkbenchPane.js): the right-side drawer that hosts BOTH engines
+// above (Identity → Upgrade → Learn, D1) and owns the root, the footer-band
+// SPECS tab, the slide, the idle fade, the edge-chrome tab phase, the
+// invitation glow, ONE open state and ONE onOpenChange edge. Everything the
+// hub says to the workbench goes through it — the engines are touched only at
+// construction. Same construction law: built ONLY inside the LADDER gate.
+let workbenchPane;
 // Wave 5 Session K (plan D-B / D-L) — the CARGO pane (js/ui/hud/CargoPane.js):
 // the manifest + SELL / SELL ALL / -> ELEVATOR over ShopScreen's public
 // wrappers, a pane-density rung. Same construction law: built ONLY inside the
@@ -1444,47 +1457,25 @@ async function init() {
   // wireframe pane). Gated internally on the inspection events. ---
   motherCallouts = new MotherCallouts(player, camera, {
     canvas,
-    // Wave 5 (2) D-a (owner, 2026-09-03): with the ladder ON, clicking a hull
-    // part or its card opens its REFIT card — focusPart routes through the
-    // 8→7 refitIndex, then the pane opens. refitPane is constructed in the
-    // ladder block BELOW (late-binding closure, the getLadderController
-    // style); the guard makes a pre-construction click a no-op. Flag-off
-    // (?ladder=0): NO onPartClick key is passed at all, so MotherCallouts'
-    // one CODEX_OPEN_ENTRY emitter runs exactly as shipped (byte-identical,
-    // pinned in test-LadderController).
+    // Session U (plan 1788954873769, D6 — the F1 click verb is the part's
+    // DOSSIER): with the ladder ON, clicking a hull part or its card shows the
+    // part in the ONE workbench pane — `WorkbenchPane.showPart(part)` focuses
+    // the REFIT block on the part's subsystem (8→7 refitIndex; D12 detached
+    // parts, D13 THERMAL), opens the SPECS entry with `via` = the clicked
+    // callout name + the click anchor (the framed portrait — the record's
+    // `screen` / `bounds` / `id` ride the call, so nothing goes stale), OPENS
+    // the pane if it was closed, and files the Subnautica unlock request
+    // (scanPart: a LOCKED entry → CODEX_UNLOCK_REQUEST over the one path).
+    // This replaces Wave 5 (2) D-a ("click = the REFIT card") + Session C
+    // ("the library follows only while open"): the matching label is now
+    // guaranteed on every click. workbenchPane is constructed in the ladder
+    // block BELOW (late-binding closure, the getLadderController style); the
+    // guard makes a pre-construction click a no-op. Flag-off (?ladder=0): NO
+    // onPartClick key is passed at all, so MotherCallouts' one CODEX_OPEN_ENTRY
+    // emitter runs exactly as shipped (byte-identical, pinned in
+    // test-LadderController).
     ...((Constants.LADDER && Constants.LADDER.ENABLED) ? {
-      onPartClick: (part) => {
-        if (!refitPane) return;
-        refitPane.focusPart(part);
-        refitPane.open();
-        // Wave 5 Session C (the 2026-09-03 "Library is blank" playtest bug):
-        // while the TECH LIBRARY is OPEN, every part/card click retargets it
-        // over the ONE openEntry path the REFIT title rides — the library
-        // follows the hull. A CLOSED library is never opened here (D-a: the
-        // click's visible verb stays the REFIT card). Runs AFTER refit.open()
-        // so the <1100 px one-pane rule has settled first: below the
-        // breakpoint that open just collapsed the library, isOpen() is false,
-        // and the retarget is skipped — one pane, as documented. `via` is the
-        // clicked callout name: the library header leads with it (owner
-        // review 2026-09-03 — the page confirms the click before it teaches).
-        // `anchor` (Session D): the clicked part's screen point + projected
-        // pick-mesh bounds in drawing-buffer px (the getHoveredPart record) —
-        // the pane's photo crops around the PART for this edge; the anchor
-        // rides the call, so it can never go stale (no stored click state).
-        // Session T: the record's `id` rides the anchor too (`partId`), so the
-        // pane's photo edge can ask the hub for the FRAMED part portrait
-        // (photoSource(anchor) → _portraitFor); an off-screen part (screen
-        // null) still carries the id — the portrait needs no screen point,
-        // only the live pick-mesh box.
-        if (libraryPane && libraryPane.isOpen() && part && part.codexId) libraryPane.openEntry(part.codexId, { via: part.name, anchor: part.screen ? { x: part.screen.x, y: part.screen.y, bounds: part.bounds, partId: part.id } : { partId: part.id } });
-        // Subnautica rule (08-workbench §2 "clicking a locked part's card
-        // unlocks its entry — exploration is how the library fills"): a
-        // LOCKED entry gets an unlock request over the ONE existing path
-        // (LibraryPane.scanPart → CODEX_UNLOCK_REQUEST → CodexSystem's
-        // queue + ticker ack chip). Unlocked/unknown parts are no-ops; the
-        // LIBRARY tab pulses once when the unlock lands.
-        if (libraryPane) libraryPane.scanPart(part);
-      },
+      onPartClick: (part) => { if (workbenchPane) workbenchPane.showPart(part); },
     } : {}),
   });
 
@@ -1946,34 +1937,38 @@ async function init() {
     },
     providers: hullcamProviders,
   });
-  // Zoom Ladder Wave 5 (2) — the REFIT pane (08-workbench §2: LEFT, the
-  // seven-subsystem index, exactly three ranked alternatives, one-click BUY;
-  // D-b: it claims Space on F3 via the controller's `refit` dep below).
-  // Constructed ONLY while the ladder flag is on — the same live
-  // Constants.LADDER.ENABLED every ladder consumer reads (?ladder=0 boots
-  // build no pane; test-LadderController pins it). Beside hullcamFloor by
-  // design: it shares hullcamProviders (the SAME live-row objects).
-  // Wave 5 (Session B): the TECH LIBRARY pane joins it in the same gate.
+  // Zoom Ladder Wave 5 (2) — the REFIT section engine (the seven-subsystem
+  // index, exactly three ranked alternatives, one-click BUY). Since Session U
+  // it is a block INSIDE the one workbench pane (floor 1 only — the shell
+  // shows it there); D-b: Space toggles that pane via the controller's
+  // `workbench` dep below. Constructed ONLY while the ladder flag is on — the
+  // same live Constants.LADDER.ENABLED every ladder consumer reads (?ladder=0
+  // boots build no pane; test-LadderController pins it). Beside hullcamFloor
+  // by design: it shares hullcamProviders (the SAME live-row objects).
+  // Wave 5 (Session B): the SPECS engine joins it in the same gate; Session U:
+  // the WorkbenchPane shell that hosts both is constructed right after them.
   if (Constants.LADDER && Constants.LADDER.ENABLED) {
-    // ONE workbench-pane edge, three consumers (Session B — never a second
-    // signal path). Both panes' onOpenChange call this; it writes:
+    // ONE workbench-pane edge, four consumers (Session B — never a second
+    // signal path). The shell's ONE onOpenChange calls this (Session U: one
+    // pane, one open state — the two engines have no open edge of their own);
+    // it writes:
     //   1. `_workbenchPaneOpen` — the held-world signal (Session I, D-F) the
     //      loop applies through TimeAuthority.calmCap (drawer open → clock 0),
     //      the scheduler's 'partial' cover and the turntable gate;
-    //   2. the ONE `CameraSystem.setLadderPaneInset` value (Wave 5 (3)),
-    //      NETTED per 08-workbench §2: REFIT open → +refit width (LEFT),
-    //      LIBRARY open → −library width (RIGHT), BOTH open → 0 ("both panes
-    //      open → centered"), none → 0. The camera does the rest (F3-only,
-    //      270 ms ease, reduced-motion snap, released on ride/close/disengage);
+    //   2. the ONE `CameraSystem.setLadderPaneInset` value (Wave 5 (3)): the
+    //      pane is on the RIGHT, so open → −width (as SPECS alone was netted
+    //      per 08-workbench §2 before Session U), closed → 0. The camera does
+    //      the rest (270 ms ease, reduced-motion snap, released on
+    //      ride/close/disengage);
     //   3. the MotherCallouts pane-edge inset pair (Session B commit 3) so
-    //      the callout columns stay out from under the panes.
+    //      the callout columns stay out from under the pane — left edge 0
+    //      (the left drawer retired), right edge = the pane's width.
     // widthPx() is a layout read — edges only, never per frame (G1).
-    // Session K: the END of a workbench break is this same edge — both drawers
+    // Session K: the END of a workbench break is this same edge — the drawer
     // closed while a break is open → ONE WORKBENCH_RESUME (GameFlowManager
-    // releases its onset hold + saves; MissionMilestones recaps). A ride up
-    // gets here too (LadderController closes REFIT off the workbench floor).
-    // Leaving gameplay never emits (GameFlowManager's exit rule releases the
-    // flag itself; the GAME_STATE_CHANGE listener below drops ours).
+    // releases its onset hold + saves; MissionMilestones recaps). Leaving
+    // gameplay never emits (GameFlowManager's exit rule releases the flag
+    // itself; the GAME_STATE_CHANGE listener below drops ours).
     const _endWorkbenchBreak = (reason) => {
       if (!_workbenchBreak) return;
       _workbenchBreak = false;
@@ -1981,47 +1976,30 @@ async function init() {
       eventBus.emit(Events.WORKBENCH_RESUME, { reason });
     };
     const _syncWorkbenchPanes = () => {
-      const refitOpen = !!(refitPane && refitPane.isOpen());
-      const libraryOpen = !!(libraryPane && libraryPane.isOpen());
-      _workbenchPaneOpen = refitOpen || libraryOpen;
+      const open = !!(workbenchPane && workbenchPane.isOpen());
+      _workbenchPaneOpen = open;
       // Session I: a pane slide is a boost-worthy edge (FrameSched — the
       // drawer animates at native rate), and the camera learns the drawer
       // state for the floor-1 TURNTABLE drag gate (D-F; live re-gate — no
       // ride needed to arm/disarm).
       _noteSchedInput();
-      if (cameraSystem.setLadderPaneOpen) cameraSystem.setLadderPaneOpen(_workbenchPaneOpen);
-      const inset = (refitOpen && libraryOpen) ? 0
-        : (refitOpen ? refitPane.widthPx()
-          : (libraryOpen ? -libraryPane.widthPx() : 0));
-      cameraSystem.setLadderPaneInset(inset);
-      // Consumer 3 (commit 3): the callout columns' pane-edge PAIR — unlike
-      // the camera's netted single value, the cards need BOTH edges so
-      // neither column ever sits under a pane (left edge = refit width,
-      // right edge = W − library width; 06-core-api "Known non-consumer"
-      // FINDINGS, now consumed).
-      motherCallouts.setPaneInsets(
-        refitOpen ? refitPane.widthPx() : 0,
-        libraryOpen ? libraryPane.widthPx() : 0,
-      );
+      if (cameraSystem.setLadderPaneOpen) cameraSystem.setLadderPaneOpen(open);
+      const w = open ? workbenchPane.widthPx() : 0;
+      cameraSystem.setLadderPaneInset(-w);                                 // RIGHT pane → negative, as SPECS today
+      motherCallouts.setPaneInsets(0, w);
       // Consumer 4 (Wave 5 Session G — D5 pane memory): the controller records
-      // the F3 pane open-state into the player store as the player's intent —
-      // only while engaged on F3 and never for its own teardown closes / the
-      // engage re-open (it tells them apart itself). Same ONE edge, no second
-      // signal path; write-on-change inside the store (G1). ladderController is
+      // the pane open-state into the player store as the player's intent —
+      // only while engaged and never for its own teardown close / the engage
+      // re-open (it tells them apart itself). Same ONE edge, no second signal
+      // path; write-on-change inside the store (G1). ladderController is
       // constructed below — read live, guarded (this closure runs on edges only).
       if (ladderController) ladderController.notePaneChange();
-      // Session K: both drawers closed during a break → the break ends.
-      if (!_workbenchPaneOpen) _endWorkbenchBreak('closed');
+      // Session K: the drawer closed during a break → the break ends.
+      if (!open) _endWorkbenchBreak('closed');
     };
-    // The below-~1100-px one-pane rule (01-numbers "One-pane breakpoint",
-    // exported by LibraryPane): opening one pane collapses the other to its
-    // tab. The close() re-enters _syncWorkbenchPanes through its own
-    // onOpenChange edge first; the opener's edge then settles the final
-    // state — both writes idempotent, an interaction edge, never per frame.
-    const _onePaneRule = (other) => {
-      if (other && other.isOpen && other.isOpen() &&
-        window.innerWidth < ONE_PANE_BREAKPOINT_PX) other.close();
-    };
+    // (Session U: the below-~1100-px one-pane rule and LibraryPane's breakpoint
+    // export retired with the second drawer, plan D9. There is one pane;
+    // nothing collapses.)
     // Session J (plan D-C, item 3) — the SPECS SUBJECT: what the player is
     // looking at on the CURRENT floor, gathered from live reads on an edge
     // (pane open / target selected / floor arrival / lens flip — never per
@@ -2047,24 +2025,23 @@ async function init() {
       });
     };
     // "The library follows" (Session C for hull clicks; Session J generalises
-    // it to every floor): retarget an OPEN SPECS pane to the current subject
-    // through the pane's ONE openEntry path; a CLOSED pane forgets its page so
-    // the next open lands on the new subject. Never opens a closed pane — the
-    // click's visible verb stays what it was (D-a); a null subject leaves an
-    // open pane's entry alone (the reader keeps its page). Module-level so the
-    // controller's onSubjectChange dep (constructed after the gate) can reach it.
+    // it to every floor): retarget an OPEN workbench pane to the current
+    // subject through the shell's ONE openEntry path (it keeps the anchor and
+    // never runs the entry-less open); a CLOSED pane forgets its page so the
+    // next open lands on the new subject. Never opens a closed pane — a floor
+    // arrival / selection is not the player's open verb; a null subject leaves
+    // an open pane's entry alone (the reader keeps its page). Module-level so
+    // the controller's onSubjectChange dep (constructed after the gate) can
+    // reach it. (Session U: the hull CLICK no longer rides this — D6's
+    // showPart opens the pane itself; this is the arrival / selection follow.)
     _specsFollow = () => {
-      if (!libraryPane) return;
-      if (!libraryPane.isOpen()) {
-        // Closed: forget the page from before the subject changed, so the NEXT
-        // entry-less open adopts THIS floor's subject (D-C: "opens on the
-        // floor's subject"); Session C's same-floor re-open rule is untouched
-        // because nothing calls this without a subject change.
-        libraryPane.forgetEntry();
+      if (!workbenchPane) return;
+      if (!workbenchPane.isOpen()) {
+        workbenchPane.forgetEntry();
         return;
       }
       const id = _specsSubject();
-      if (id) libraryPane.openEntry(id);
+      if (id) workbenchPane.openEntry(id);
     };
     // SAFETY OVERRIDE panel (owner 2026-09-07, plan D1): ONE actuators object,
     // two consumers — RefitPane's chips and OverridePane's buttons drive the
@@ -2217,29 +2194,29 @@ async function init() {
         armManager, captureNetSystem,
         hasUpgrade: (id) => (shopScreen.purchasedUpgrades.get(id) || 0) > 0,
       }),
-      // Card title / spec term → the TECH LIBRARY PANE on that entry while
-      // the pane exists (08-workbench §3 "tap → TECH LIBRARY slides in"; the
-      // full-screen viewer stays one click away via MAXIMIZE). Without the
-      // pane the emit below is the shipped deep-link path, byte-identical —
-      // and it IS the flag-off path by construction (no pane is ever built
-      // there, so onOpenEntry itself never exists).
+      // Card title / spec term → the SPECS dossier on that entry while the
+      // workbench exists (08-workbench §3 "tap → TECH LIBRARY slides in"; the
+      // full-screen viewer stays one click away via MAXIMIZE). Session U: the
+      // shell's openEntry — it keeps the anchor, opens the pane if closed and
+      // never runs the entry-less open. Without the shell the emit below is
+      // the shipped deep-link path, byte-identical — and it IS the flag-off
+      // path by construction (no pane is ever built there, so onOpenEntry
+      // itself never exists).
       onOpenEntry: (codexId) => {
         if (!codexId) return;
-        if (libraryPane) { libraryPane.openEntry(codexId); return; }
+        if (workbenchPane) { workbenchPane.openEntry(codexId); return; }
         eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: codexId });
       },
-      // D10 + the camera inset + (commit 3) the callout insets: ONE edge,
-      // fanned by _syncWorkbenchPanes above. The <1100 px one-pane rule runs
-      // first so the sync sees the settled pair.
-      onOpenChange: (isOpen) => {
-        if (isOpen) _onePaneRule(libraryPane);
-        _syncWorkbenchPanes();
-      },
+      // (Session U: no `onOpenChange` / `footerBottomPx` here — the engine has
+      // no open state and no tab of its own; both live on the WorkbenchPane
+      // shell constructed below.)
       // Session K (one shop): the first-visit RECOMMENDED chip — the shop's
       // own pure starter pick (un-owned + affordable, fades once any starter
       // is owned), read once on open({ firstVisit }).
       getRecommended: () => recommendedStarter(UPGRADES, shopScreen.purchasedUpgrades, scoringSystem.credits),
-      // Session L: the boot's glass answer — the actuator chips wear the 44 pt box.
+      // Session L: the boot's glass answer — the actuator chips wear the 44 pt
+      // box; Session U (D10): BUY buttons, alternative rows and the subsystem
+      // chips too.
       glass: _glassBoot,
       // Session L (plan item 4 — "REFIT cards gain actuator toggles ... through
       // the existing actions"): the SAME PlayerSatellite / ArmManager surface
@@ -2258,12 +2235,11 @@ async function init() {
       // setRosaFeather / setFlowerPose — the same commanded-target writes, the
       // same events) and flip what the label shows; the keys keep their law.
       actuators: ladderActuators,
-      // Session P (plan D7): the REFIT tab lives in the FOOTER BAND's left slot
-      // (bottom = the band's bottom − the root's 96 = 36 px) — the ONE band table.
-      footerBottomPx: _FOOTER ? _FOOTER.bottom : undefined,
     });
-    // The TECH LIBRARY pane (08-workbench §2 right pane; §10's LibraryPane —
-    // the adapter over the shipped viewer). Reads the SAME codexSystem the
+    // The TECH LIBRARY pane engine (08-workbench §10's LibraryPane — the
+    // adapter over the shipped viewer; SPECS to the player since plan D-C.
+    // Session U: hosted in the workbench pane's HEAD + TAIL containers, D1
+    // Identity → … → Learn). Reads the SAME codexSystem the
     // viewer reads; every routed action rides an EXISTING path:
     //   onMaximize    → the CODEX_OPEN_ENTRY deep link (the full-screen
     //                   viewer — the exact route every deep link uses today);
@@ -2348,47 +2324,64 @@ async function init() {
           y: (-_photoTmp.y * 0.5 + 0.5) * canvas.height,
         };
       },
-      onOpenChange: (isOpen) => {
-        if (isOpen) _onePaneRule(refitPane);
-        _syncWorkbenchPanes();
-      },
-      // Session P (plan D6/D7): the SPECS tab lives in the FOOTER BAND's right
-      // slot (bottom = the band's bottom − the root's 96 = 36 px) and is EDGE
-      // CHROME off the workbench — the anchor block writes its phase per frame.
+      // (Session U: no `onOpenChange` / `footerBottomPx` — the engine has no
+      // open state and no tab; the WorkbenchPane shell below owns both.)
+    });
+    // Session U (plan 1788954873769, §3) — the ONE workbench pane: the shell
+    // that hosts the two engines above (library → HEAD + TAIL, refit → the
+    // floor-1 slot between them) and owns the root (#ladder-workbench, RIGHT,
+    // width clamp(380px, 28vw, 440px), body shrink-wrapped to content — D2/D4),
+    // the footer-band SPECS tab (RIGHT slot: bottom = the band's bottom − the
+    // root's 96 = 36 px — the ONE band table; the count is the F1 GOLD
+    // affordable-refit count when > 0, else the unread count — D3), the slide,
+    // the idle fade, the edge-chrome tab phase (written per frame below), the
+    // reduced-motion + RTL laws, the DEPOT_INVITATION glow, ONE open state and
+    // ONE onOpenChange edge → _syncWorkbenchPanes (D10 calm cap, the camera
+    // inset, the callout insets, D5 memory, the break end). Everything the hub
+    // says to the workbench from here on goes through this object; the engines
+    // are touched only at their construction above. `glass`: the boot's answer
+    // (44 pt targets — D10). Inside the gate: a ?ladder=0 boot builds no shell.
+    workbenchPane = new WorkbenchPane({
+      library: libraryPane,
+      refit: refitPane,
+      glass: _glassBoot,
       footerBottomPx: _FOOTER ? _FOOTER.bottom : undefined,
+      onOpenChange: () => _syncWorkbenchPanes(),
     });
     // Tab truth on change, never per frame (G1): a landed unlock repaints the
-    // unread count (and fires the pane's ONE pulse); a read entry drops it.
+    // unread count (and fires the shell's ONE pulse); a read entry drops it.
+    // Session U: the shell's refresh — both engines + the tab paint.
     // Registered inside the gate — a ?ladder=0 boot adds no listeners.
-    eventBus.on(Events.CODEX_UNLOCKED, () => { if (libraryPane) libraryPane.refresh(); });
-    eventBus.on(Events.CODEX_VIEWED, () => { if (libraryPane) libraryPane.refresh(); });
+    eventBus.on(Events.CODEX_UNLOCKED, () => { if (workbenchPane) workbenchPane.refresh(); });
+    eventBus.on(Events.CODEX_VIEWED, () => { if (workbenchPane) workbenchPane.refresh(); });
     // Session J item 3 (plan D-C): "the unlock chip's tap opens SPECS on the
     // new entry" — the ticker's "+ Library" ack row (CodexSystem posts it with
     // `codexId`) is tappable ONLY while this sink is wired, and it lands on the
-    // SPECS pane through the ONE openEntry path (the fourth and last caller —
-    // the pane opens if closed: a tap on a doorway is the player's verb).
-    // Inside the gate: a ?ladder=0 boot wires no sink → the row renders the
-    // shipped click-through chip byte-for-byte.
+    // workbench pane through the shell's ONE openEntry path (the pane opens if
+    // closed: a tap on a doorway is the player's verb). Inside the gate: a
+    // ?ladder=0 boot wires no sink → the row renders the shipped click-through
+    // chip byte-for-byte.
     if (hud && hud.hintTicker && hud.hintTicker.setChipTap) {
-      hud.hintTicker.setChipTap(({ id }) => { if (id && libraryPane) libraryPane.openEntry(id); });
+      hud.hintTicker.setChipTap(({ id }) => { if (id && workbenchPane) workbenchPane.openEntry(id); });
     }
     // Session J (plan D-C) — a TARGET SELECTION is a subject change on the
     // flying floors: (1) the Subnautica rule generalises from hull parts to
     // targets — a selected target whose entry is LOCKED requests its unlock
-    // through the pane's ONE scanPart path (CodexSystem's queue: ack chip now,
-    // chime + CODEX_UNLOCKED on its own schedule; startUnlocked entries are
-    // safe no-ops) — "exploration is how the library fills"; (2) an OPEN pane
-    // follows the selection. TARGET_SELECTED is the ONE downstream of every
-    // selection path (the HUD row click's HUD_TARGET_CLICK → GameFlowManager →
-    // targetSelector.setTarget, Tab/T, the Session J canvas tap, autopilot's
-    // re-acquire), so one listener covers them all. Floors 2–3 only — the
-    // target is the subject there; elsewhere the floor's own subject stands.
+    // through the workbench's ONE scanPart path (CodexSystem's queue: ack chip
+    // now, chime + CODEX_UNLOCKED on its own schedule; startUnlocked entries
+    // are safe no-ops) — "exploration is how the library fills"; (2) an OPEN
+    // pane follows the selection. TARGET_SELECTED is the ONE downstream of
+    // every selection path (the HUD row click's HUD_TARGET_CLICK →
+    // GameFlowManager → targetSelector.setTarget, Tab/T, the Session J canvas
+    // tap, autopilot's re-acquire), so one listener covers them all. Floors
+    // 2–3 only — the target is the subject there; elsewhere the floor's own
+    // subject stands.
     eventBus.on(Events.TARGET_SELECTED, () => {
-      if (!libraryPane || !ladderController) return;
+      if (!workbenchPane || !ladderController) return;
       const floor = ladderController.currentFloor();
       if (floor !== 2 && floor !== 3) return;
       const id = _specsSubject();
-      if (id) libraryPane.scanPart({ codexId: id });
+      if (id) workbenchPane.scanPart({ codexId: id });
       _specsFollow();
     });
     // Session J — the CAPTURE-phase key router (LadderController.routeKeyDown):
@@ -2408,32 +2401,36 @@ async function init() {
     // chapter 4 on GameFlowManager (the ONE depot decision per catch) emits
     // DEPOT_INVITATION instead of forcing the stop. Since the Session H 7→5
     // renumber the glow points at the WORKBENCH: the rail's notch-1 gold
-    // (WHERE — come down) AND the REFIT tab's gold edge (WHAT — the drawer is
-    // the shop; plan D-H), both until { open: false } — entered / lapsed /
+    // (WHERE — come down) AND the workbench tab's gold edge (WHAT — the drawer
+    // holds the shop; plan D-H; Session U: the shell's setInvitation, moved
+    // there from RefitPane), both until { open: false } — entered / lapsed /
     // reset. ONE listener, two write-on-change setters; the rail stays
     // EventBus-free and the controller is not involved (no chapter knowledge
     // in the hub). Inside the gate: a ?ladder=0 boot adds no listener, and
     // never emits it either.
     eventBus.on(Events.DEPOT_INVITATION, (d) => {
       if (railIndicator) railIndicator.setDepotInvitation(!!(d && d.open));
-      if (refitPane && refitPane.setInvitation) refitPane.setInvitation(!!(d && d.open));
+      if (workbenchPane && workbenchPane.setInvitation) workbenchPane.setInvitation(!!(d && d.open));
     });
     // Wave 5 Session K (plan D-B / D-E — ONE SHOP): the WORKBENCH BREAK.
     // GameFlowManager's ONE ladder-on depot entry (the chapter 1–3 dwell, the
     // B key, the glass STORE chip — every transitionToState(SHOP) from
     // gameplay is redirected there) emits WORKBENCH_STOP; the hub answers with
     // the CEREMONY RIDE (LadderController.rideToWorkbench: floor 1 at the
-    // crossing duration, the same _apply path as every ride — the REFIT tab
-    // enables on arrival) and opens the REFIT drawer (the shop) with the
-    // first-visit RECOMMENDED chip when GameFlowManager says so. The world is
-    // held under the drawer (D-F). The break ends on the drawer edge above
-    // (_endWorkbenchBreak → WORKBENCH_RESUME). If the ride/open could not take
-    // (the ladder not engaged — no screen to hold), the break ends at once so
-    // nothing stays pending. Inside the gate: never emitted with the ladder
-    // off, so the ?ladder=0 boot keeps the full-screen shop as shipped.
+    // crossing duration, the same _apply path as every ride — the workbench
+    // learns floor 1 on arrival, so its REFIT block shows) and opens the
+    // workbench pane (the shop is its REFIT block) with the first-visit
+    // RECOMMENDED chip when GameFlowManager says so (Session U: the shell's
+    // open({ firstVisit }) focuses the RECOMMENDED card FIRST, then adopts the
+    // subject — §3 order). The world is held under the drawer (D-F). The break
+    // ends on the drawer edge above (_endWorkbenchBreak → WORKBENCH_RESUME).
+    // If the ride/open could not take (the ladder not engaged — no screen to
+    // hold), the break ends at once so nothing stays pending. Inside the gate:
+    // never emitted with the ladder off, so the ?ladder=0 boot keeps the
+    // full-screen shop as shipped.
     eventBus.on(Events.WORKBENCH_STOP, (d) => {
       if (ladderController && ladderController.rideToWorkbench) ladderController.rideToWorkbench();
-      if (refitPane) refitPane.open({ firstVisit: !!(d && d.firstDepotVisit) });
+      if (workbenchPane) workbenchPane.open({ firstVisit: !!(d && d.firstDepotVisit) });
       // Session N.5 (owner 2026-09-07): F1 hides CARGO by default ("first make
       // me care") — the break is where selling is taught, so the ceremony
       // shows the till itself; the flip captures through D5 and the player
@@ -2446,7 +2443,7 @@ async function init() {
       if (!_workbenchPaneOpen) _endWorkbenchBreak('refused');
     });
     // Leaving gameplay ends the break without a RESUME (GameFlowManager's own
-    // exit rule released its flag; the ladder disengages and closes the drawers).
+    // exit rule released its flag; the ladder disengages and closes the drawer).
     eventBus.on(Events.GAME_STATE_CHANGE, () => {
       if (_workbenchBreak && !gameState.isGameplay()) _workbenchBreak = false;
     });
@@ -2568,7 +2565,7 @@ async function init() {
       const pd = hud && hud.paneDensity;
       const cleanView = !!(pd && typeof pd.hasStash === 'function' && pd.hasStash());
       if (ladderController && !cleanView) ladderController.noteRoomChange();
-      // Ladder reorder rev 3: SPECS/REFIT tabs + build stamp follow
+      // Ladder reorder rev 3: the SPECS tab + build stamp follow
       // hudClear() (density flips only — FloorMask applies never emit this
       // event, so F1 keeps SPECS pinned). Rails still sleep only at level 0
       // via setRailsShy in onLevel / HUD_DENSITY_DOWN/UP.
@@ -2831,7 +2828,7 @@ async function init() {
     edgeChrome,
     // PURE SCENERY completion (owner 2026-09-07, plan D7): when the `-` walk
     // has cleared every rung and bowed the rails out, ONE body attribute also
-    // hides the SPECS/REFIT tabs and #build-stamp (index.html
+    // hides the SPECS tab and #build-stamp (index.html
     // `body[data-pure-scenery]`, CSS !important beats inline writes — the
     // data-density-hidden discipline; Session O D8/D10: the vitals line and the
     // glass STORE chip left the rule with the cockpit). Transient: `+`,
@@ -2859,19 +2856,17 @@ async function init() {
     // manifest) for the Wave-5 REFIT pane, which decides whether to re-inject;
     // its per-frame tick below is guarded on isActive() and so stays inert.
     // The controller's `hullcam` seam itself is unchanged (pinned).
-    // Wave 5 (2): the REFIT pane is the F3 floor-keyed dep instead — enabled
-    // on floor 3, disabled+closed elsewhere/on disengage, and Space's
-    // 'lens-toggle' now toggles it (D-b, owner 2026-09-03). Flag-off:
-    // refitPane is undefined (never constructed) → the dep is null → every
-    // controller path is byte-identical, and Space on F3 stays the shipped
-    // silent no-op.
-    refit: refitPane,
-    // Wave 5 (Session B): the TECH LIBRARY pane — floor-3 keyed EXACTLY like
-    // `refit` (enable on 3, disable + close elsewhere and on disengage) and
-    // the TOPMOST pane in closeTopPane() (it opens FROM the REFIT card, so
-    // Esc unwinds reading → fitting → ride up). Flag-off: libraryPane is
-    // undefined (never constructed) → the dep is null → byte-identical.
-    library: libraryPane,
+    // Session U (plan 1788954873769, D5): the ONE workbench pane is the
+    // controller's pane dep — it replaced the Wave 5 (2) `refit` (F1-keyed) and
+    // the Session B `library` (every floor) deps. Enabled on every floor and
+    // told the floor at every apply (setEnabled(true) + setFloor(floor): the
+    // REFIT block shows on floor 1 only, the tab is pinned awake there),
+    // disabled + closed at disengage; Space's 'lens-toggle' toggles it (D-b,
+    // owner 2026-09-03); Esc closes it through closeTopPane(); the horizontal
+    // swipe pages it two-position on every floor. Flag-off: workbenchPane is
+    // undefined (never constructed) → the dep is null → every controller path
+    // is byte-identical, and Space on F1 stays the shipped silent no-op.
+    workbench: workbenchPane,
     // Session J (plan D-C): the floor's SUBJECT changed (arrival, lens flip,
     // plan) → an OPEN SPECS pane follows through its ONE openEntry path.
     // Flag-off: _specsFollow stays null → the dep is a no-op.
@@ -3045,13 +3040,15 @@ async function init() {
       onTap: _touchTap,
       onHold: _touchHold,
       pressKey: (code) => dispatchKeyPress(code),   // the radial's verbs press the SAME keys (KeyDispatch → window)
-      // The edge-band swipe: the drawers' own open()/close() (their onOpenChange
-      // edge carries the held world + the camera inset). A disabled pane
-      // (REFIT off floor 1; either pane disengaged / flag-off) ignores open().
+      // The edge-band swipe: the workbench pane's own open()/close() (its
+      // onOpenChange edge carries the held world + the camera inset). Session
+      // U: ONE right-side pane — the RIGHT edge band pages it ('library' is
+      // TouchControls' name for that side); the left band no longer opens a
+      // drawer (it still wakes the DETAIL slider through onEdgeTouch). A
+      // disabled shell (disengaged / flag-off) ignores open().
       openPane: (which, open) => {
-        const pane = (which === 'refit') ? refitPane : ((which === 'library') ? libraryPane : null);
-        if (!pane) return;
-        if (open) pane.open(); else pane.close();
+        if (which !== 'library' || !workbenchPane) return;
+        if (open) workbenchPane.open(); else workbenchPane.close();
       },
       // Session P (plan D3): where a touch LANDED (canvas touchstart, the rail
       // grip) → the hub's edge-wake bands. Coordinates only; TouchControls
@@ -3975,11 +3972,17 @@ async function init() {
       };
       // Debug handle for click-path / layout introspection (codex click debug).
       window.__callouts = motherCallouts;
-      // Wave 5 (2): the REFIT pane handle for the witness harness (undefined
-      // on a ?ladder=0 boot — the pane is never constructed there).
+      // Wave 5 (2): the REFIT engine handle for the witness harness (undefined
+      // on a ?ladder=0 boot — never constructed there). Session U: a hosted
+      // section engine — open/close/tab live on __workbench below.
       window.__refit = refitPane;
-      // Wave 5 (Session B): the TECH LIBRARY pane handle, same contract.
+      // Wave 5 (Session B): the SPECS engine handle, same contract (its photo
+      // counters / current entry are what scripts/visual-ab/specs-portraits.mjs reads).
       window.__library = libraryPane;
+      // Session U (plan 1788954873769): the ONE workbench pane — the shell's
+      // open / close / toggle / openEntry / showPart / isOpen / widthPx for the
+      // gate pictures and specs-portraits.mjs (undefined on a ?ladder=0 boot).
+      window.__workbench = workbenchPane;
       // Session S: the help overlay, the tech library and the conjunction monitor
       // for the gate pictures (help / specs / a seeded CONJUNCTION row).
       window.__codex = codexViewerUI;
@@ -6358,18 +6361,19 @@ function gameLoop(timestamp) {
   // THE FOOTER BAND (Session P, plan D7; owner 2026-09-07: "consistent place
   // directly above right thumb area"): ONE fixed strip — `_FOOTER` (132–164 px
   // from the bottom on both surfaces) — replaced the three dodge chains
-  // (tab-under-rail, cargo-under-tab, orbit-under-rail). The SPECS tab (right)
-  // and the DETAIL slider / REFIT tab (left) LIVE in it (their own `bottom`);
-  // every other rider's FLOOR is the footer's top — CARGO, NEXT and ORBIT each
-  // subtract their own GAP_PX inside, so they sit 8 px above the band. The
-  // SPECS tab is EDGE CHROME off the workbench: its phase is written here per
-  // frame from the ONE core (pinned on F1 / open anywhere = awake inside the
-  // pane's truth table; write-on-change). Every input below is a cached
-  // number — no layout read here; the setters are write-on-change, so the
-  // per-frame calls are free.
+  // (tab-under-rail, cargo-under-tab, orbit-under-rail). The SPECS tab (right;
+  // Session U: the ONE workbench pane's tab — the left REFIT tab retired with
+  // the left drawer) and the DETAIL slider (left) LIVE in it (their own
+  // `bottom`); every other rider's FLOOR is the footer's top — CARGO, NEXT and
+  // ORBIT each subtract their own GAP_PX inside, so they sit 8 px above the
+  // band. The SPECS tab is EDGE CHROME off the workbench: its phase is written
+  // here per frame from the ONE core (pinned on F1 / open anywhere = awake
+  // inside the shell's truth table; write-on-change). Every input below is a
+  // cached number — no layout read here; the setters are write-on-change, so
+  // the per-frame calls are free.
   const footerFloor = window.innerHeight - (_FOOTER ? _FOOTER.top : (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0));
-  if (_ladderActive && libraryPane && libraryPane.setTabPhase && edgeChrome) {
-    libraryPane.setTabPhase(edgeChrome.phase('tab', timestamp));
+  if (_ladderActive && workbenchPane && workbenchPane.setTabPhase && edgeChrome) {
+    workbenchPane.setTabPhase(edgeChrome.phase('tab', timestamp));
   }
   // SAFETY OVERRIDE panel: STATIC since 2026-09-09 (plan
   // 1788926404388-hud-followups-0909.md §1.1 — "almost at bottom"): its root

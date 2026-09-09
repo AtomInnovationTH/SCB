@@ -20,13 +20,20 @@
  * controller is unit-testable with plain stubs.
  *
  * Wave 5 Session H (the 7→5 renumber, plan D-A/D-B): the ladder is FIVE floors,
- * ids 1..5 — 1 HULL CAM (the workbench: REFIT/LIBRARY panes, callouts), 2
- * COMMAND (the shipped flying view), 3 PROX NET, 4 NAVCOM, 5 SDA DOWNLINK. The
- * old F1 ARCHIVE and F2 DEPOT interior rows are deleted: the Tech Library is
- * the pane + the full-screen reader, the shop is the REFIT drawer's job, and
- * the Session E doorway (`_enterDepot`) retired with its floor — the SHOP
- * GameState still arrives through GameFlowManager's own transitions (mission
- * boundaries, the B key), never through a ladder ride.
+ * ids 1..5 — 1 HULL CAM (the workbench: the ONE SPECS pane with its F1 REFIT
+ * block, callouts), 2 COMMAND (the shipped flying view), 3 PROX NET, 4 NAVCOM,
+ * 5 SDA DOWNLINK. The old F1 ARCHIVE and F2 DEPOT interior rows are deleted:
+ * the Tech Library is the pane + the full-screen reader, the shop is the REFIT
+ * block's job, and the Session E doorway (`_enterDepot`) retired with its
+ * floor — the SHOP GameState still arrives through GameFlowManager's own
+ * transitions (mission boundaries, the B key), never through a ladder ride.
+ *
+ * Session U (plan .kilo/plans/1788954873769-one-workbench-pane.md, D5): the
+ * two workbench drawers (REFIT left, SPECS right) merged into ONE right-side
+ * pane — js/ui/WorkbenchPane.js, the shell that hosts both section engines.
+ * The controller sees ONE `workbench` dep (setEnabled / setFloor / open /
+ * close / toggle / isOpen), duck-typed like every other dep: it never imports
+ * the shell.
  *
  * Activation: the ladder lives entirely INSIDE gameplay states (T4). It engages
  * when `Constants.LADDER.ENABLED` and `gameState.isGameplay()`, and disengages
@@ -67,9 +74,10 @@ export const INTRO_DWELL_MS = 800;
 export const INTRO_PULLBACK_MS = 800;
 
 /**
- * Wave 5 Session K: the WORKBENCH floor — where the REFIT drawer (the one
- * shop) lives; the same floor id `_applyFloorContent` keys the REFIT tab on.
- * An id, never a name (FloorContract owns the player labels).
+ * Wave 5 Session K: the WORKBENCH floor — where the REFIT block (the one
+ * shop) lives inside the workbench pane; the same floor id the shell's
+ * `setFloor` keys the REFIT block on (Session U). An id, never a name
+ * (FloorContract owns the player labels).
  */
 const WORKBENCH_FLOOR = 1;
 
@@ -81,7 +89,7 @@ const WORKBENCH_FLOOR = 1;
  * TOUCH MAP checklist beside them (the checklist card left in Session O for
  * the 3 s GestureSplash); the workbench (its 28 callouts, the REFIT shop, the
  * specs) waits until the first mission break rides them down (WORKBENCH_STOP
- * opens REFIT itself). An id, never a name (FloorContract owns the player
+ * opens the workbench pane itself). An id, never a name (FloorContract owns the player
  * labels).
  */
 const INTRO_LANDING_FLOOR = 2;
@@ -139,27 +147,23 @@ export class LadderController {
    *   activate/deactivate/isActive/update/flipLens. Optional — no-op without it.
    * @param {object} [deps.hullcam]      - F1 (HULL CAM) content controller (HullCamFloor):
    *   activate/deactivate/isActive/update/lensToggle. Optional — no-op without it.
-   * @param {object} [deps.refit]        - F1 REFIT pane (RefitPane, Wave 5 (2)):
-   *   setEnabled/open/close/toggle/isOpen. Optional — no-op without it. Floor-keyed
-   *   like hullcam (F1's debrisMode 'full' is shared with F2): arriving on floor 1
-   *   enables the edge tab, any other floor disables AND closes the pane, disengage
-   *   closes it too. When present it claims the F1 'lens-toggle' Space verb
-   *   (toggle()) — D-b, owner 2026-09-03; absent, the verb falls through to the
-   *   hullcam branch exactly as shipped.
-   * @param {object} [deps.library]      - the SPECS pane (LibraryPane, Wave 5
-   *   Session B; player name SPECS since plan D-C): setEnabled/open/close/
-   *   toggle/isOpen/openEntry. Optional — no-op without it. **Session J (D-C):
-   *   enabled on EVERY floor** — arrival on any floor enables the edge tab and
-   *   an open pane stays open across a ride (the world stays held, D-F); only
-   *   disengage disables + closes it. It claims NO Space verb (D-b keeps
-   *   Space = REFIT on floor 1); Esc reaches it first through closeTopPane() —
-   *   the LIBRARY is the TOPMOST workbench pane (it opens FROM the REFIT card,
-   *   08-workbench §3, so it is the most recently opened in the one flow that
-   *   opens both; with both open Library-closes-first is the documented
-   *   order). Session C: both panes also page from the horizontal two-finger
-   *   swipe — WheelRouter asks `wantsPaneSwipe()` and emits ONE
-   *   `pagePane({toward})` per flick; the carousel law lives there (floor 1:
-   *   [REFIT] — [ship] — [SPECS]; every other floor: [view] — [SPECS]).
+   * @param {object} [deps.workbench]    - the ONE workbench pane (WorkbenchPane,
+   *   Session U — plan 1788954873769 D5: SPECS + the F1 REFIT block in one
+   *   right-side drawer; it replaced the Wave 5 (2) `refit` and Session B
+   *   `library` deps): setEnabled/setFloor/open/close/toggle/isOpen. Optional —
+   *   no-op without it; every call is duck-typed. Enabled on EVERY floor while
+   *   engaged — each floor apply (`_applyFloorContent`) calls setEnabled(true)
+   *   THEN setFloor(floor), before any open, so the shell shows the REFIT block
+   *   on floor 1 only and pins the tab awake there (elsewhere the tab is edge
+   *   chrome); an open pane stays open across a ride (the world stays held,
+   *   D-F); only disengage disables it (setEnabled(false) closes it). It claims
+   *   the F1 'lens-toggle' Space verb (toggle()) — D-b's REFIT verb carried
+   *   over; absent, the verb falls through to the hullcam branch exactly as
+   *   shipped. Esc reaches it through closeTopPane(). Session C: it also pages
+   *   from the horizontal two-finger swipe — WheelRouter asks `wantsPaneSwipe()`
+   *   and emits ONE `pagePane({toward})` per flick; the carousel law lives
+   *   there and is TWO-POSITION on every floor since Session U: [view] — [SPECS]
+   *   ('right' opens, 'left' closes).
    * @param {function} [deps.onSubjectChange] - Session J (D-C, "the library
    *   follows"): called with the floor id after every floor ARRIVAL
    *   (_applyFloorContent) and after a subject-changing Space verb (the SDA
@@ -170,8 +174,8 @@ export class LadderController {
    *   since S4) is the `A` path: autopilot to the selected target. Optional.
    * @param {object} [deps.detailSlider] - Session P (plan D5): the DETAIL slider
    *   (js/ui/DetailSlider.js — the DISPLAY rail's successor in the left slot):
-   *   `setShown(on)`. Shown on every floor but the workbench (F1 has the
-   *   REFIT tab in that slot), hidden at disengage. Its edge-chrome phase is
+   *   `setShown(on)`. Shown on every floor but the workbench (F1's footer band
+   *   left slot is empty since Session U), hidden at disengage. Its edge-chrome phase is
    *   the hub's per-frame write, not the controller's. Duck-typed, optional.
    * @param {object} [deps.edgeChrome]   - Session P (plan D2/D3, owner 2026-09-07):
    *   the EDGE-CHROME core (js/ui/EdgeChrome.js — pure timestamps: wake(member?)
@@ -180,7 +184,7 @@ export class LadderController {
    *   arrival notch ('floor'); a ride start wakes the rail; rails-shy
    *   (`setRailsShy(true)`) puts the chrome to SLEEP instead of hiding the
    *   WHERE rail (asleep is wakeable — an edge touch is the way back on
-   *   glass); un-shy wakes it. SPECS/REFIT tabs + stamp are `setHudClear`,
+   *   glass); un-shy wakes it. The SPECS tab + stamp are `setHudClear`,
    *   not this. Absent → the Session N.5 hide()/show() path exactly
    *   (flag-off / older rigs).
    * @param {object} [deps.audioBeds]    - per-floor audio beds (LadderAudioBeds):
@@ -192,11 +196,11 @@ export class LadderController {
    * @param {object} [deps.viewStore]    - the PLAYER-owned view store
    *   (LadderViewStore, Wave 5 Session G — D5 persistence): rooms()/setRooms()
    *   round-trip FloorMask's exportMemory/importMemory; panes()/setPanes() hold
-   *   the F1 workbench pane open-state, written on the panes' open/close edge
+   *   the workbench pane open-state, written on the pane's open/close edge
    *   (main.js's ONE `_syncWorkbenchPanes` edge calls `notePaneChange()`) while
-   *   engaged on F1, and re-applied at ENGAGE on F1 (the SHOP return, a
+   *   engaged, and re-applied at ENGAGE (the SHOP return, a
    *   continued run) — "the room as you left it". Optional — absent it rooms
-   *   stay in-memory (FloorMask) and the panes close as shipped. main.js
+   *   stay in-memory (FloorMask) and the pane closes as shipped. main.js
    *   constructs it only inside the LADDER.ENABLED gate (flag-off: never read
    *   or written).
    * @param {object} [deps.sfx]          - interaction sfx (LadderSfx): onCharge/
@@ -230,8 +234,9 @@ export class LadderController {
     this._proxNet = deps.proxNet || null;
     this._sdaFloor = deps.sdaFloor || null;
     this._hullcam = deps.hullcam || null;
-    this._refit = deps.refit || null;
-    this._library = deps.library || null;
+    // Session U: the ONE workbench pane (SPECS + the F1 REFIT block) — the
+    // `refit` / `library` deps it replaced are gone; nullable, duck-typed.
+    this._workbench = deps.workbench || null;
     // Session J (D-C / item 6): the subject-change hook, the autopilot for
     // floor 2's Space verb. All optional (parallel tracks).
     this._onSubjectChange = (typeof deps.onSubjectChange === 'function') ? deps.onSubjectChange : null;
@@ -244,7 +249,7 @@ export class LadderController {
     /**
      * HUD-clear / pure scenery (rev-3 ladder, plan 1788867799156 #4; was
      * plan D7): an optional `{ hide(), show() }` hook the hub binds to
-     * `body[data-pure-scenery]` (index.html hides the SPECS/REFIT tabs and
+     * `body[data-pure-scenery]` (index.html hides the SPECS tab and
      * #build-stamp under it). Owned exclusively by `setHudClear` — density
      * flips, never rails. Duck-typed; absent = no-op.
      */
@@ -314,13 +319,13 @@ export class LadderController {
      * Session N.5 (owner 2026-09-07): RAILS SHY — true after a `-` press
      * found the density rungs already clear and bowed the RAILS out too.
      * Transient view state: never persisted, never a room edit; any `+`,
-     * ride, or fresh engage drops it (setRailsShy). SPECS/REFIT tabs +
+     * ride, or fresh engage drops it (setRailsShy). The SPECS tab +
      * stamp are `_hudClear` / `setHudClear`, not this.
      */
     this._railsShy = false;
     /**
      * Rev-3 ladder (plan 1788867799156 #4): true while `setHudClear(true)`
-     * has hidden the SPECS/REFIT tabs + build stamp. Engaged-only; a
+     * has hidden the SPECS tab + build stamp. Engaged-only; a
      * fresh engage, disengage, ride, or floor apply resets it.
      */
     this._hudClear = false;
@@ -363,7 +368,7 @@ export class LadderController {
      * finding, 2026-09-04 — the doorway return parked at a ramp position).
      */
     this._lastPosZ01 = null;
-    /** True while `_restorePanes` drives the panes itself (its edges are not player intent). */
+    /** True while `_restorePanes` drives the pane itself (its edge is not player intent). */
     this._paneRestoring = false;
     /**
      * D5: the shipped initial view, captured from the core at construction —
@@ -524,7 +529,8 @@ export class LadderController {
    * Session I (plan D-F) — is the TURNTABLE live? Engaged, standing on a
    * SHIP-anchored floor (the workbench, id 1 — Session I; the flying view,
    * id 2 — Session J.5, the owner's lift of D-F's "any ship-anchored floor"),
-   * with a drawer (REFIT / SPECS) open. Allocation-free (the core's floorId
+   * with the drawer (the workbench pane — SPECS + the F1 REFIT block) open.
+   * Allocation-free (the core's floorId
    * probe — the G4 law); main.js consults it per frame to blank the arrows
    * around processInput so they never steer the SHIP, _turntableArrows maps
    * them to the camera drag instead, routeKeyDown consumes them ahead of
@@ -537,8 +543,8 @@ export class LadderController {
     if (!this._engaged) return false;
     const f = this._ladder.floorId ? this._ladder.floorId() : this._ladder.getState().floor;
     if (f !== 1 && f !== 2) return false;
-    const open = (p) => !!(p && p.isOpen && p.isOpen());
-    return open(this._refit) || open(this._library);
+    const w = this._workbench;
+    return !!(w && w.isOpen && w.isOpen());
   }
 
   /**
@@ -604,13 +610,15 @@ export class LadderController {
    * Wave 5 Session K (plan D-B / D-E — one shop): the CEREMONY ride to the
    * workbench. The hub calls this on WORKBENCH_STOP (GameFlowManager's ONE
    * ladder-on depot entry: the chapter dwell, the B key, the STORE chip) and
-   * then opens the REFIT drawer. The ride is the core's `ceremonyRide` —
+   * then opens the workbench pane (Session U: `open({ firstVisit })` on the
+   * shell — the REFIT block inside it is the shop). The ride is the core's `ceremonyRide` —
    * floor 1 at the CROSSING duration (the decision carries no miniMs, so
    * `_apply` flies it at CROSS_RIDE_MS 550, not the 200 ms hotkey mini-ride:
    * the break is seen), superseding a ride in flight — through the SAME
    * `_apply` → `_startRide` path as every ride (fidelity, floor content — the
-   * REFIT tab enables on the floor-1 arrival — the mask, both rails). Already
-   * on floor 1 → [] (the drawer simply opens). Disengaged → [] (the ladder
+   * workbench pane learns floor 1 on arrival, so its REFIT block shows — the
+   * mask, both rails). Already on floor 1 → [] (the drawer simply opens).
+   * Disengaged → [] (the ladder
    * does not own the screen; the hub's stop handler releases the break).
    * @param {{ tMs?: number }} [arg]
    * @returns {Array} the decisions applied (jump()'s shape)
@@ -629,30 +637,23 @@ export class LadderController {
 
   /**
    * Esc grammar (08-workbench §2, the hosted-codex rule: "Esc closes the
-   * topmost pane first, then rides up"). Close the topmost OPEN workbench pane
-   * and report whether one was — InputManager calls this ONCE before it would
-   * command 'esc', and returns on true, so the ride-up is the NEXT Esc. The
-   * pane order lives here, never in InputManager: the TECH LIBRARY closes
-   * FIRST (Wave 5 Session B — it is the topmost: it opens FROM the REFIT card
-   * in the one flow that opens both, 08-workbench §3, so Esc unwinds
-   * reading → fitting → ride up; with both open Library-first is the
-   * DOCUMENTED order, 06-core-api "Camera + Esc"), then REFIT (`_refit`,
-   * Wave 5 (2)). Absent deps / closed panes / disengaged → false (the shipped
-   * ride-up runs). The pane's own close() fires its onOpenChange edge (D10
-   * calm cap + the camera inset release) — no second signal here. Not a
-   * ladder input for adaptHoldoff (no camera flight).
-   * @returns {boolean} true when a pane was open and is now closed
+   * topmost pane first, then rides up"). Close the workbench pane when it is
+   * OPEN and report whether it was — InputManager calls this ONCE before it
+   * would command 'esc', and returns on true, so the ride-up is the NEXT Esc.
+   * Session U: there is ONE pane (SPECS + the F1 REFIT block, one open state),
+   * so the Wave 5 (2) / Session B two-pane order (LIBRARY first, then REFIT —
+   * Esc unwound reading → fitting → ride up) collapsed into one close; Esc
+   * now unwinds reading → ride up. Absent dep / closed pane / disengaged →
+   * false (the shipped ride-up runs). The pane's own close() fires its
+   * onOpenChange edge (D10 calm cap + the camera inset release) — no second
+   * signal here. Not a ladder input for adaptHoldoff (no camera flight).
+   * @returns {boolean} true when the pane was open and is now closed
    */
   closeTopPane() {
     if (!this._engaged) return false;
-    const lib = this._library;
-    if (lib && lib.isOpen && lib.isOpen()) {
-      if (lib.close) lib.close();
-      return true;
-    }
-    const r = this._refit;
-    if (r && r.isOpen && r.isOpen()) {
-      if (r.close) r.close();
+    const w = this._workbench;
+    if (w && w.isOpen && w.isOpen()) {
+      if (w.close) w.close();
       return true;
     }
     return false;
@@ -660,82 +661,78 @@ export class LadderController {
 
   /**
    * Horizontal-swipe eligibility (Wave 5 Session C — 08-workbench §2
-   * "Horizontal = what (panes)"): true while the ladder is engaged with at
-   * least one pane dep to page ON THIS FLOOR — floor 1 pages REFIT and SPECS,
-   * every other floor pages SPECS alone (Session J, D-C: the SPECS tab lives
-   * on every floor; REFIT stays the floor-1 place you ride down to).
+   * "Horizontal = what (panes)"): true while the ladder is engaged with the
+   * workbench pane dep to page — on EVERY floor since Session J (D-C: the
+   * SPECS tab lives on every floor) and, since Session U, the one pane IS the
+   * SPECS pane (REFIT is a block inside it, shown on floor 1 by the shell).
    * WheelRouter consults this per HORIZONTAL-dominant wheel event (|deltaX| >
    * |deltaY|) before it claims the event away from the zoom feed — never per
    * frame, never for a vertical event. Everywhere else (disengaged, no pane
-   * for the floor) the router leaves the axis exactly as shipped. Reads the
-   * core floor through `currentFloor()` (a getState snapshot — event-rate only).
+   * dep) the router leaves the axis exactly as shipped.
    * @returns {boolean}
    */
   wantsPaneSwipe() {
     if (!this._engaged) return false;
-    if (this.currentFloor() === 1) return !!(this._refit || this._library);
-    return !!this._library;
+    return !!this._workbench;
   }
 
   /**
    * Read-only pane probe for the `?trace=1` FlickTraceRecorder (Wave 5
-   * Session D — the swipe monitor, 07-flick-tuning §5 closed): the two
-   * workbench panes' open state and the live swipe-claim verdict, so a
-   * recorded trace can replay `_claimPaneSwipe` exactly as it ran live and a
-   * 10 Hz sample shows which pane the player was in. `refit` / `library` are
-   * null when the dep is absent (a boot without that pane); `wantsPaneSwipe`
-   * is the same answer WheelRouter gets. A getState snapshot at event rate —
-   * never per frame, never a write, never a throw.
-   * @returns {{ refit: boolean|null, library: boolean|null, wantsPaneSwipe: boolean }}
+   * Session D — the swipe monitor, 07-flick-tuning §5 closed): the workbench
+   * pane's open state and the live swipe-claim verdict, so a recorded trace
+   * can replay `_claimPaneSwipe` exactly as it ran live and a 10 Hz sample
+   * shows whether the player was in the pane. The SHAPE is Session D's
+   * (`{ refit, library, wantsPaneSwipe }` — recorded traces keep replaying):
+   * `library` is the ONE pane's isOpen() (null when the dep is absent or has
+   * no isOpen — a boot without the pane), `refit` is always null since Session
+   * U (no second pane exists), `wantsPaneSwipe` is the same answer WheelRouter
+   * gets. A getState snapshot at event rate — never per frame, never a write,
+   * never a throw.
+   * @returns {{ refit: null, library: boolean|null, wantsPaneSwipe: boolean }}
    */
   paneState() {
     const isOpen = (p) => (p && typeof p.isOpen === 'function') ? !!p.isOpen() : null;
     let wants = false;
     try { wants = this.wantsPaneSwipe(); } catch (_e) { wants = false; }
-    return { refit: isOpen(this._refit), library: isOpen(this._library), wantsPaneSwipe: wants };
+    return { refit: null, library: isOpen(this._workbench), wantsPaneSwipe: wants };
   }
 
   /**
    * The ONE horizontal page verb (Wave 5 Session C): step the workbench
-   * carousel **[REFIT] — [ship] — [LIBRARY]** one position toward a screen
-   * side. WheelRouter's accumulator decides WHEN (one call per flick, never
-   * per event); this method decides WHAT — the house pattern (the router
-   * emits, the hub executes through the panes' own open()/close(), whose
-   * onOpenChange edges carry the D10 calm cap + the camera inset exactly as
-   * a tab click would; no signal is added here).
+   * carousel one position toward a screen side. WheelRouter's accumulator
+   * decides WHEN (one call per flick, never per event); this method decides
+   * WHAT — the house pattern (the router emits, the hub executes through the
+   * pane's own open()/close(), whose onOpenChange edge carries the D10 calm
+   * cap + the camera inset exactly as a tab click would; no signal is added
+   * here).
    *
-   *   toward 'left'  (the REFIT side):  an open LIBRARY closes (paging away
-   *                  from it), else a closed REFIT opens, else nothing (wall).
-   *   toward 'right' (the LIBRARY side): an open REFIT closes, else a closed
-   *                  LIBRARY opens, else nothing.
+   * Session U (plan 1788954873769, D2/D5): ONE right-side pane, so the
+   * carousel is TWO-POSITION on EVERY floor — **[view] — [SPECS]** (the
+   * Session J off-floor-1 law, now everywhere; the floor-1 three-position
+   * [REFIT] — [ship] — [SPECS] retired with the left drawer):
    *
-   * The "away" pane is checked FIRST, so the both-open state (reachable only
-   * by clicks — the swipe grammar stays 3-position) resolves to one pane on
-   * the first swipe. 'left'/'right' are SCREEN sides: the panes' RTL mirror
-   * is their own CSS variable, not this grammar. **Off floor 1 (Session J,
-   * D-C) the carousel is two-position — [view] — [SPECS]: REFIT is never
-   * touched there** ('left' closes an open SPECS, 'right' opens it). Guards:
-   * disengaged or an unknown `toward` → null and no pane is touched; an
-   * absent pane dep is skipped, never thrown on. Like closeTopPane(), NOT a
-   * ladder input for adaptHoldoff (a 270 ms pane yaw, no floor flight).
+   *   toward 'right' (the pane's side): a closed pane opens, else nothing (wall).
+   *   toward 'left'  (away from it):    an open pane closes, else nothing.
+   *
+   * 'left'/'right' are SCREEN sides: the pane's RTL mirror is its own CSS
+   * variable, not this grammar. Guards: disengaged or an unknown `toward` →
+   * null and the pane is not touched; an absent dep is skipped, never thrown
+   * on. Like closeTopPane(), NOT a ladder input for adaptHoldoff (a 270 ms
+   * pane yaw, no floor flight).
    * @param {{ tMs?: number, toward: 'left'|'right' }} arg
-   * @returns {'open-refit'|'close-refit'|'open-library'|'close-library'|null}
+   * @returns {'open-workbench'|'close-workbench'|null}
    *   the action taken (null = nothing to do)
    */
   pagePane({ toward } = {}) {
     if (!this._engaged) return null;
-    const lib = this._library;
-    const r = (this.currentFloor() === 1) ? this._refit : null;   // REFIT pages on floor 1 only
-    const libOpen = !!(lib && lib.isOpen && lib.isOpen());
-    const refitOpen = !!(r && r.isOpen && r.isOpen());
+    const w = this._workbench;
+    const open = !!(w && w.isOpen && w.isOpen());
     if (toward === 'left') {
-      if (libOpen) { if (lib.close) lib.close(); return 'close-library'; }
-      if (r && !refitOpen) { if (r.open) r.open(); return 'open-refit'; }
+      if (open) { if (w.close) w.close(); return 'close-workbench'; }
       return null;
     }
     if (toward === 'right') {
-      if (refitOpen) { if (r.close) r.close(); return 'close-refit'; }
-      if (lib && !libOpen) { if (lib.open) lib.open(); return 'open-library'; }
+      if (w && !open) { if (w.open) w.open(); return 'open-workbench'; }
       return null;
     }
     return null;
@@ -744,31 +741,30 @@ export class LadderController {
   // ── D5 persistence (Wave 5 Session G — 08-workbench §11 "persistence of view prefs + floor") ──
 
   /**
-   * The panes' open/close EDGE, from main.js's ONE `_syncWorkbenchPanes`
+   * The pane's open/close EDGE, from main.js's ONE `_syncWorkbenchPanes`
    * (the same edge that feeds the D10 calm cap + the camera inset — never a
-   * second signal path). Records the F1 pane open-state into the player store
-   * as the player's intent — ONLY while engaged on F1 and not driven by the
-   * controller itself: `_disengage` clears `_engaged` and `_applyFloorContent`
-   * writes `_floorApplied` BEFORE their teardown closes fire, and
-   * `_restorePanes` sets `_paneRestoring`, so the controller's own closes and
-   * re-opens are never mistaken for the player closing a pane. Write-on-change
-   * (the store compares). No store → nothing. Never throws.
+   * second signal path). Records the workbench pane's open-state into the
+   * player store as the player's intent — ONLY while engaged and not driven by
+   * the controller itself: `_disengage` clears `_engaged` BEFORE its teardown
+   * close fires, and `_restorePanes` sets `_paneRestoring`, so the
+   * controller's own close and re-open are never mistaken for the player
+   * closing the pane. Write-on-change (the store compares). No store →
+   * nothing. Never throws.
+   *
+   * Session U (plan 1788954873769, D11): the store SHAPE `{ refit, library }`
+   * is kept — `library` is the ONE pane's open bit (recorded on every floor:
+   * the pane rides along, as Session L already recorded SPECS), `refit` is a
+   * DEAD BIT written `false` (no second pane exists; old stores that still
+   * carry `refit: true` are honoured by `_restorePanes`, which opens the one
+   * pane when EITHER bit is set, and converge to this shape on their next
+   * write).
    */
   notePaneChange() {
     if (!this._viewStore || this._paneRestoring) return;
     if (!this._engaged) return;
     if (typeof this._viewStore.setPanes !== 'function') return;
     const isOpen = (p) => !!(p && typeof p.isOpen === 'function' && p.isOpen());
-    // Session L (Session J FINDINGS (c) — "pane memory stays floor-1 keyed"):
-    // the SPECS drawer RIDES ALONG across floors, so its bit is one bit and
-    // it is recorded on EVERY floor (an open SPECS on floor 3 survives a
-    // continue); REFIT is the floor-1 place — its bit is recorded only while
-    // floor 1 is applied (the teardown close on a ride up is the controller's
-    // act, not the player's; the memory keeps the room as the player LEFT it)
-    // and carried over unchanged from every other floor.
-    const prev = (typeof this._viewStore.panes === 'function' && this._viewStore.panes()) || null;
-    const refit = (this._floorApplied === 1) ? isOpen(this._refit) : !!(prev && prev.refit);
-    this._viewStore.setPanes({ refit, library: isOpen(this._library) });
+    this._viewStore.setPanes({ refit: false, library: isOpen(this._workbench) });
   }
 
   /**
@@ -1020,8 +1016,8 @@ export class LadderController {
    * already cleared every density rung, the hub bows the RAILS out too;
    * `+` (the hub), any ride, or a fresh engage brings them back. A transient
    * view state: never persisted, never a room edit (the D5 capture reads
-   * pane flips, and rails are not panes). Edge chrome only — SPECS/REFIT
-   * tabs + stamp are `setHudClear` (rev-3, plan 1788867799156 #4).
+   * pane flips, and rails are not panes). Edge chrome only — the SPECS
+   * tab + stamp are `setHudClear` (rev-3, plan 1788867799156 #4).
    *
    * Session P (plan D2): with an `edgeChrome` dep the WHERE rail is no longer
    * `hide()`-hidden here — the chrome goes to SLEEP (`edgeChrome.sleep()`:
@@ -1049,7 +1045,7 @@ export class LadderController {
 
   /**
    * Rev-3 ladder (plan 1788867799156 #4): owns the `pureScenery` hook
-   * exclusively — `true` hides SPECS/REFIT tabs + build stamp
+   * exclusively — `true` hides the SPECS tab + build stamp
    * (`body[data-pure-scenery]`), `false` restores them. Density flips only
    * (main.js calls this on every HUD_PANE_VISIBILITY); rails sleep at
    * level 0 via `setRailsShy`. Idempotent. Engaged-only: while not engaged
@@ -1066,7 +1062,7 @@ export class LadderController {
     this._callPureScenery(want);
   }
 
-  /** @returns {boolean} true while the SPECS/REFIT tabs + stamp are hidden. */
+  /** @returns {boolean} true while the SPECS tab + stamp are hidden. */
   isHudClear() { return this._hudClear; }
 
   /**
@@ -1100,8 +1096,9 @@ export class LadderController {
   /**
    * @private Session P (plan D5): the DETAIL slider's floor rule — the
    * DISPLAY rail's Session N.5 rule carried over: never on the workbench (F1
-   * is the ship, its callouts, and the two drawer tabs — the REFIT tab has the
-   * footer's left slot there; the WHERE rail stays — it is the way back up).
+   * is the ship, its callouts and the SPECS drawer; the footer's left slot
+   * stays empty there since Session U; the WHERE rail stays — it is the way
+   * back up).
    * Everywhere else the slider shows.
    */
   _detailSliderAllowed(floor) { return floor !== WORKBENCH_FLOOR; }
@@ -1198,13 +1195,16 @@ export class LadderController {
   }
 
   /**
-   * @private D5 (owner decision 3): re-open the F1 workbench panes as the
-   * player left them — at ENGAGE on F1 (the SHOP return, a continued run),
-   * after `_applyFloorContent(1)` has enabled the tabs (open() is a no-op while
-   * disabled). REFIT first, then the LIBRARY (the one flow that opens both;
-   * Esc unwinds library → refit). The panes' own open() fires their
-   * onOpenChange edge (the D10 calm cap + the camera inset, exactly as a tab
-   * click would); `_paneRestoring` keeps notePaneChange from re-recording it.
+   * @private D5 (owner decision 3): re-open the workbench pane as the player
+   * left it — at ENGAGE (the SHOP return, a continued run), after
+   * `_applyFloorContent` has enabled the shell and told it the floor (the
+   * shell's open() is a no-op while disabled; setFloor before any open is the
+   * Session U order). Session U (D11): the ONE pane opens when EITHER stored
+   * bit is true — `library` is the live bit, `refit` a legacy one (a store
+   * written before the merge that remembered an open REFIT drawer still
+   * re-opens the workbench). The pane's own open() fires its onOpenChange
+   * edge (the D10 calm cap + the camera inset, exactly as a tab click would);
+   * `_paneRestoring` keeps notePaneChange from re-recording it.
    */
   _restorePanes() {
     if (!this._viewStore || typeof this._viewStore.panes !== 'function') return;
@@ -1212,16 +1212,15 @@ export class LadderController {
     if (!want) return;
     this._paneRestoring = true;
     try {
-      if (want.refit && this._refit && this._refit.open) this._refit.open();
-      if (want.library && this._library && this._library.open) this._library.open();
+      if ((want.refit || want.library) && this._workbench && this._workbench.open) this._workbench.open();
     } finally {
       this._paneRestoring = false;
     }
-    // Converge the store to what actually stands: below the one-pane
-    // breakpoint main.js's `_onePaneRule` closes the other pane on the second
-    // open edge (its edge was suppressed above), and a both-open memory would
-    // otherwise replay an open→close REFIT flash on every F3 engage while the
-    // store never learned. Write-on-change: a wide viewport records nothing new.
+    // Converge the store to what actually stands: a legacy `{ refit: true,
+    // library: false }` memory just re-opened the one pane and is rewritten in
+    // the D11 shape (`refit` false, `library` the live bit); a shell that
+    // refused the open (disabled) records closed. Write-on-change: a store
+    // already in shape records nothing new.
     this.notePaneChange();
   }
 
@@ -1253,12 +1252,11 @@ export class LadderController {
     // Session P (plan D3): an ENGAGE is an arrival even on the floor the last
     // engagement left — the chrome wakes and the notch is boxed regardless.
     this._wakeFloorChrome();
-    // D5: the panes as the player left them re-open at ENGAGE (the SHOP
+    // D5: the pane as the player left it re-opens at ENGAGE (the SHOP
     // return; a continued run), never at a ride arrival. Session L (J
     // FINDINGS (c)): on EVERY floor — the SPECS drawer rides along, so its
-    // memory is floor-free; REFIT's open() is a no-op off floor 1 (its tab is
-    // enabled by _applyFloorContent(1) only), so a refit:true memory simply
-    // waits for the next floor-1 engage.
+    // memory is floor-free; Session U: the ONE workbench pane is that drawer
+    // (its REFIT block is the shell's floor-1 business — setFloor above).
     this._restorePanes();
     if (this._rail && this._rail.show) this._rail.show();
     // (The DETAIL slider's shown/hidden is owned by _applyFloorContent above —
@@ -1299,18 +1297,12 @@ export class LadderController {
     if (this._proxNet && this._proxNet.deactivate) this._proxNet.deactivate();
     if (this._sdaFloor && this._sdaFloor.deactivate) this._sdaFloor.deactivate();
     if (this._hullcam && this._hullcam.deactivate) this._hullcam.deactivate();
-    // Wave 5 (2): the REFIT pane closes with the ladder — tab hidden, pane
-    // shut (its own close() fires the D10 open-signal false edge).
-    if (this._refit) {
-      if (this._refit.setEnabled) this._refit.setEnabled(false);
-      if (this._refit.close) this._refit.close();
-    }
-    // Wave 5 (Session B): the SPECS pane closes with the ladder too (the ONE
-    // place it is disabled since Session J — every floor carries the tab).
-    if (this._library) {
-      if (this._library.setEnabled) this._library.setEnabled(false);
-      if (this._library.close) this._library.close();
-    }
+    // Session U: the ONE workbench pane (SPECS + the F1 REFIT block) closes
+    // with the ladder — the shell's setEnabled(false) shuts it (its own
+    // close() fires the D10 open-signal false edge), disables both hosted
+    // engines and hides the tab. The ONE place it is disabled (every floor
+    // carries the tab — Session J).
+    if (this._workbench && this._workbench.setEnabled) this._workbench.setEnabled(false);
     // Per-floor audio bed: fade to silence on disengage (optional dep).
     if (this._audioBeds && this._audioBeds.setFloor) this._audioBeds.setFloor(null);
     // Per-floor HUD pane mask: restore the shipped fully-visible cockpit and
@@ -1555,36 +1547,25 @@ export class LadderController {
       if (floor === 1) { if (this._hullcam.activate) this._hullcam.activate(); }
       else if (this._hullcam.deactivate) this._hullcam.deactivate();
     }
-    // F1 REFIT pane (Wave 5 (2)): the same FLOOR-ID key as hullcam. Arrival
-    // on 1 enables the edge tab (always visible while enabled — 08-workbench
-    // §2); any other floor disables it AND closes the pane, so a ride away
-    // never strands an open pane (the D10 calm cap releases with the close).
-    if (this._refit) {
-      if (floor === 1) {
-        if (this._refit.setEnabled) this._refit.setEnabled(true);
-      } else {
-        if (this._refit.setEnabled) this._refit.setEnabled(false);
-        if (this._refit.close) this._refit.close();
-      }
-    }
-    // The SPECS pane (Wave 5 Session B; plan D-C since Session J): enabled on
-    // EVERY floor — an open pane RIDES ALONG (the world stays held under it, D-F;
-    // the camera inset bias applies on every floor since the CameraSystem :4384 lift);
-    // only _disengage disables and closes it. Session O (plan D6, owner
-    // 2026-09-07) → Session P (plan D2/D6): the edge TAB is PINNED awake on F1
-    // only — the classic drawer tab that "opens SPECS" is a WORKBENCH affordance
-    // (REFIT parity). Everywhere else it is EDGE CHROME in the footer band: it
-    // follows the hub's per-frame EdgeChrome phase while closed (an edge touch
-    // or hover wakes it), and the FAST answers — deep links (hint chips,
-    // subject-follow, CODEX_OPEN_ENTRY, the glass right-edge swipe) that open
-    // the pane from any floor — still work, because THE PANE IS NEVER DISABLED
-    // and an open pane's tab is awake on every floor (the pane's own truth
-    // table). The floor rule therefore lives here, in the floor content, not in
-    // the pane: the pane just answers the floor's claim (setEnabled(true) +
-    // setTabPinned(floor === WORKBENCH_FLOOR)).
-    if (this._library) {
-      if (this._library.setEnabled) this._library.setEnabled(true);
-      if (this._library.setTabPinned) this._library.setTabPinned(floor === WORKBENCH_FLOOR);
+    // The workbench pane (Session U, plan 1788954873769 D5/D7 — the ONE
+    // right-side drawer: SPECS + the F1 REFIT block; it replaced the Wave 5 (2)
+    // REFIT pane and the Session B SPECS pane here). Enabled on EVERY floor
+    // (plan D-C since Session J): an open pane RIDES ALONG (the world stays
+    // held under it, D-F; the camera inset bias applies on every floor since
+    // the CameraSystem :4384 lift); only _disengage disables it. Then the
+    // floor, at EVERY apply and BEFORE any open (the restore at engage, the
+    // WORKBENCH_STOP open): the shell shows the REFIT block on floor 1 only
+    // (off F1 it hides the block and clears the alternative-hover ghosting)
+    // and pins the tab awake on F1 only (Session O D6 → Session P D2/D6: the
+    // classic drawer tab is a WORKBENCH affordance; everywhere else it is EDGE
+    // CHROME in the footer band, following the hub's per-frame EdgeChrome
+    // phase while closed — an open pane's tab is awake on every floor, the
+    // shell's own truth table). The floor rule therefore lives here, in the
+    // floor content, not in the shell: the shell just answers the floor's
+    // claim. Duck-typed: both calls optional.
+    if (this._workbench) {
+      if (this._workbench.setEnabled) this._workbench.setEnabled(true);
+      if (this._workbench.setFloor) this._workbench.setFloor(floor);
     }
     // Per-floor audio bed (FloorContract audioBed): crossfade to the arrival
     // floor's bed. Optional dep — absent it this is a no-op (parallel track).
@@ -1752,13 +1733,15 @@ export class LadderController {
       this._sdaFloor.flipLens();
       this._noteSubjectChange(5);
     }
-    // F1 Space verb: the REFIT pane claims it when injected (D-b, owner
-    // 2026-09-03 — "Space toggles the REFIT pane"); FloorContract's verb
-    // string stays 'lens-toggle'. Absent the pane, the shipped hullcam branch
-    // runs (un-injected in production today → the silent no-op stands).
+    // F1 Space verb: the workbench pane claims it when injected (D-b, owner
+    // 2026-09-03 — "Space toggles the REFIT pane"; Session U: the REFIT block
+    // lives inside the ONE workbench pane, so Space toggles that pane);
+    // FloorContract's verb string stays 'lens-toggle'. Absent the pane, the
+    // shipped hullcam branch runs (un-injected in production today → the
+    // silent no-op stands).
     if (verb === 'lens-toggle') {
-      if (this._refit && this._refit.toggle) {
-        this._refit.toggle();
+      if (this._workbench && this._workbench.toggle) {
+        this._workbench.toggle();
       } else if (this._hullcam && this._hullcam.lensToggle) {
         // F1 Space verb: cycle the HULL CAM lens (overview → per-subsystem detail).
         this._hullcam.lensToggle();

@@ -79,7 +79,7 @@ export const REBOOT_CHROME_IDS = Object.freeze([
   'notification-zone',
   'ladder-rail',
   'ladder-detail-slider',
-  'ladder-library-tab',
+  'ladder-workbench-tab',   // Session U (plan 1788954873769): the ONE workbench pane's SPECS tab (was ladder-library-tab)
   'build-stamp',
   'hud-discoveries',
   'hud-chip-orb',

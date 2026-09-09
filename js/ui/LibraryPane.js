@@ -1,16 +1,49 @@
 /**
- * LibraryPane.js — Wave 5 (Session B): the TECH LIBRARY pane, the right
- * workbench pane on F3 (docs/ladder/08-workbench.md §2 "TECH LIBRARY pane" +
- * §3; 01-numbers.md "Workbench panes"; 03-plan.md "Wave 5 — GO").
+ * LibraryPane.js — Wave 5 (Session B): the SPECS dossier — since Session U a
+ * HOSTED SECTION ENGINE inside the ONE workbench pane (docs/ladder/08-workbench.md
+ * §2 "TECH LIBRARY pane" + §3; 01-numbers.md "Workbench panes"; 03-plan.md
+ * "Wave 5 — GO"; plan 1788954873769-one-workbench-pane §3 "LibraryPane (A2)").
  *
- * Built on the RefitPane/ProxContextPanel house pattern: a SELF-CONTAINED DOM
- * pane (build lazily, never at import), pure static formatters that are
- * headless-testable, the G1 innerHTML cache + the static `shouldWrite` 250 ms
- * DOM-write cap, and an injectable `now` clock. NO eventBus/Events import and
- * NO live singletons — every live read (the codex entries) and every routed
- * action (maximize, unlock request, seen mark, D10 open-signal) arrives
- * through injected deps, all optional, so the module is headless-safe and the
- * flag-off boot never constructs it.
+ * Built on the RefitPane/ProxContextPanel house pattern: pure static
+ * formatters that are headless-testable, the G1 innerHTML cache + the static
+ * `shouldWrite` 250 ms DOM-write cap, and an injectable `now` clock. NO
+ * eventBus/Events import and NO live singletons — every live read (the codex
+ * entries) and every routed action (maximize, unlock request, seen mark)
+ * arrives through injected deps, all optional, so the module is headless-safe
+ * and the flag-off boot never constructs it.
+ *
+ * HOSTED BY WorkbenchPane (Session U — plan 1788954873769-one-workbench-pane
+ * §3, decisions D1 / D5 / D6 / D7): this module owns NO root, tab, slide, idle
+ * fade, edge-chrome phase, reduced-motion swap, RTL variable or open-signal any
+ * more — that chrome moved verbatim into js/ui/WorkbenchPane.js (the ONE
+ * right-side drawer, with the constants PANE_SLIDE_MS, IDLE_FADE_OPACITY,
+ * IDLE_FADE_MS, PANE_Z_INDEX, ROOT_BOTTOM_PX, TAB_PULSE_MS; the below-1100-px
+ * ONE_PANE_BREAKPOINT_PX rule retired, D9). The engine is DOM-LESS UNTIL
+ * MOUNTED: the shell calls `mount({ head, tail, onRefresh })` with the two
+ * elements it renders into —
+ *   - HEAD (`.workbench-head`, above the shell's REFIT slot): the header row
+ *     `.library-header` (SPECS … MAXIMIZE — the PaneHelp [?] anchor), the
+ *     `.library-empty` prompt (no-entry state only), the `.library-photo`
+ *     16:10 banner, `.library-title` / `.library-sub`, `.library-note` +
+ *     `.library-short`, and the `.library-locked` stub (locked entries);
+ *   - TAIL (`.workbench-tail`, below the REFIT slot): the `.library-specs`
+ *     table (HARDWARE · TECH LEVEL · FORMULA), the `.library-related` chips
+ *     and the manual's `.library-warning` — the D1 order Identity → Upgrade →
+ *     Learn, the REFIT block sitting between the two halves on F1.
+ * Two G1 write-on-change caches (one per container) behind ONE `shouldWrite`
+ * gate (the model's struct key + the 250 ms cap): a landed photo rewrites the
+ * head alone, a chip never repaints the header. Delegated clicks on BOTH
+ * containers (`[data-max]` → onMaximize, `[data-rel]` → the related entry).
+ * `onRefresh` fires once after every `refresh()` whose gate opened (= every
+ * repaint) so the shell's tab count follows on the same edge (a related
+ * click, the seen dwell, a landed photo — never a per-frame call; the shell's
+ * paint is write-on-change). `unreadCount()` is the number the shell's tab
+ * shows off F1 (D3). Every public method is a no-op-safe read/write before
+ * mount (state only) and touches NO root / tab / slide: `open()` (entry-less —
+ * drops the click anchor, adopts the subject), `openEntry()` (keeps the
+ * anchor), `close()`, `isOpen()`, `forgetEntry()`, `scanPart()`, `refresh()`,
+ * `setEnabled()`, `dispose()` keep their semantics and are called ONLY by the
+ * shell, which slides, signals `onOpenChange` once and paints the ONE tab.
  *
  * CONTENT: the shipped viewer's ENTRY rendered as a side pane (the adapter
  * over the shipped viewer 08-workbench §10 names) —
@@ -50,34 +83,38 @@
  *     (drawing-buffer px, from MotherCallouts.getHoveredPart); the photo
  *     taken for that edge crops PHOTO_CROP_H_FRAC_PART of the height around
  *     the part (grown to its bounds, capped at the ship crop) and the banner
- *     flashes once on arrival (reduced motion: none). Entry-less opens (tab /
- *     toggle / pagePane) and un-anchored openEntry calls (REFIT title, chips)
- *     frame the ship exactly as Session C shipped — the anchor rides ONE edge
- *     and can never go stale under a later camera move. **Session T — the
- *     framed PART PORTRAIT (plan tmp/plans/1788863200000-specs-pane-part-
- *     imagery.md, option E):** the anchor also carries the clicked part's
- *     `partId`, and the photo edge's FIRST read asks `photoSource(anchor)`
- *     for a framed picture — the hub renders the part once, callout-free, from
- *     a camera aimed at its pick-mesh box (SceneManager.renderPartPortrait)
- *     and answers `{ canvas, framed: true }`, which the pane draws WHOLE (no
- *     crop law — the render is the picture; the banner keeps its 16:10 through
- *     `aspect-ratio`). Any framed miss — the hub answers a live source (a
- *     card-only part, no callouts), or the framed read comes back blank /
- *     sizeless / throws — falls to the live crop: the remaining tries of the
- *     edge ask `photoSource(anchor, 'live')`, byte-identical to Session D.
- *     One framed attempt per edge, never per frame.
+ *     flashes once on arrival (reduced motion: none). Entry-less opens (the
+ *     shell's tab / Space / swipe / restore) and un-anchored openEntry calls
+ *     (REFIT title, chips) frame the ship exactly as Session C shipped — the
+ *     anchor rides ONE edge and can never go stale under a later camera move.
+ *     **Session T — the framed PART PORTRAIT (plan tmp/plans/1788863200000-
+ *     specs-pane-part-imagery.md, option E):** the anchor also carries the
+ *     clicked part's `partId`, and the photo edge's FIRST read asks
+ *     `photoSource(anchor)` for a framed picture — the hub renders the part
+ *     once, callout-free, from a camera aimed at its pick-mesh box
+ *     (SceneManager.renderPartPortrait) and answers `{ canvas, framed: true }`,
+ *     which the pane draws WHOLE (no crop law — the render is the picture; the
+ *     banner keeps its 16:10 through `aspect-ratio`). Any framed miss — the
+ *     hub answers a live source (a card-only part, no callouts), or the framed
+ *     read comes back blank / sizeless / throws — falls to the live crop: the
+ *     remaining tries of the edge ask `photoSource(anchor, 'live')`,
+ *     byte-identical to Session D. One framed attempt per edge, never per frame.
  *   - `shortText` — the plain-English "why it matters" line every entry has.
  *   - a generated SPECS block for HARDWARE entries (entries carrying
  *     `hardwareNames`), from the entry's EXISTING fields only (no invented
  *     data): HARDWARE (the in-game hardware names), TECH LEVEL (trl + the
  *     Constants tier label), FORMULA. Unlocked depth only, like the viewer.
+ *     Rendered in the TAIL (Session U).
  *   - `related` chips — click navigates the PANE to that entry (locked
- *     relateds show a LOCKED tag and navigate to the locked stub, viewer parity).
+ *     relateds show a LOCKED tag and navigate to the locked stub, viewer
+ *     parity). In the TAIL; on glass (`deps.glass`, D10) each chip is a
+ *     44 pt-tall touch target (RELATED_CHIP_GLASS_MIN_H_PX — the
+ *     actuator-chip law), desktop keeps the shipped size.
  *   - the manual's WARNING (the FURNACE gag, plan 1788957399035 §1.24): an
  *     entry carrying an authored `warning` prints it LAST, after RELATED, as
  *     a steady THREAT-red box with a caps WARNING label — print, not a live
  *     alarm (never pulses). Unlocked depth only; absent → nothing; the
- *     `.library-empty` landing is untouched.
+ *     `.library-empty` landing is untouched. The TAIL's last block.
  *   - MAXIMIZE — the full-screen viewer on this entry through the injected
  *     `onMaximize` (main.js routes it over the EXACT CODEX_OPEN_ENTRY path
  *     every deep link rides today; never a fork).
@@ -89,103 +126,47 @@
  *     already-unlocked / unknown / briefing-less parts are safe no-ops.
  *   - locked entries render the viewer's honest locked stub: LOCKED + the
  *     entry's own `unlockHint` (full briefing stays MAXIMIZE-away once
- *     unlocked).
+ *     unlocked). The stub stays in the HEAD (Session U).
  *
- * THE LIBRARY FOLLOWS CLICKS (Wave 5 Session C — the 2026-09-03 playtest
- * "Library is blank" bug, a one-element deep-link surface, fixed at the hub):
- *   - while the pane is OPEN, every hull part / callout-card click retargets
- *     it through the SAME `openEntry(codexId)` path the REFIT title rides
- *     (main.js's flag-gated onPartClick hook — one line, no second path); a
- *     CLOSED library is never opened by a part click (D-a: the click's
- *     visible verb stays the REFIT card, 08-workbench §3 unchanged).
- *   - opening with NO entry (tab click / toggle) lands on something real
- *     instead of the prompt: the injected `subject` getter answers "what is
- *     the player looking at" — main.js chains the focused hull part's
- *     codexId (MotherCallouts.getFocusedPart, COMPONENT band) then the REFIT
- *     card's manifest deep link (RefitPane.focusedCodexId) — consulted ONLY
- *     when the pane has no entry (a shown entry survives close → re-open);
- *     unknown / null / throwing → the prompt copy stays. The pane stays
- *     eventless: it never reads MotherCallouts or the REFIT itself.
+ * THE DOSSIER FOLLOWS CLICKS (Wave 5 Session C — the 2026-09-03 playtest
+ * "Library is blank" bug — and Session U's D6 click verb):
+ *   - every hull part / callout-card click reaches this engine through the
+ *     SAME `openEntry(codexId, { via, anchor })` path the REFIT title rides —
+ *     since Session U the shell's `showPart(part)` (D6) calls it and OPENS the
+ *     pane when it was closed (Session C's "a closed library is never opened
+ *     by a part click" retired with the one pane; the engine itself still
+ *     only stores the entry while disabled).
+ *   - opening with NO entry (the shell's tab / Space / swipe / restore) lands
+ *     on something real instead of the prompt: the injected `subject` getter
+ *     answers "what is the player looking at" — main.js chains the focused
+ *     hull part's codexId (MotherCallouts.getFocusedPart, COMPONENT band)
+ *     then the REFIT card's manifest deep link (RefitPane.focusedCodexId) —
+ *     consulted ONLY when the pane has no entry (a shown entry survives close
+ *     → re-open); unknown / null / throwing → the prompt copy stays. The
+ *     engine stays eventless: it never reads MotherCallouts or the REFIT.
  *
  * READ = SEEN: an entry resting open ≥ SEEN_DWELL_MS (1500 — the shipped
  * CodexViewerUI dwell) fires the injected `onViewed(id)` once for unlocked,
  * unseen entries — main.js routes it over the SAME CODEX_VIEWED event the
- * viewer emits, so CodexSystem.markSeen is the one seen-writer and the tab's
- * unread count drops when the player actually reads. Scrubbing to another
- * entry before the dwell cancels it (the viewer's contract).
- *
- * TIMINGS (module constants — VisualLaw has no pane-timing entry yet; the
- * 01-numbers "Workbench panes" table is the canonical source until the
- * VisualLaw entries land with a later consumer per 08-workbench §9; do NOT
- * add one here): PANE_SLIDE_MS = 270 (inside the 240–300 ms law),
- * IDLE_FADE_OPACITY = 0.7 / IDLE_FADE_MS = 6000 ("idle panes fade to 70 %,
- * never vanish" — pointer wakes it), and the reduced-motion probe swaps the
- * slide for a fade (the FloorMask.js house matchMedia shape).
- *
- * LAYOUT: RIGHT pane, width clamp(380px, 28vw, 440px) (01-numbers), root
- * `#ladder-library`, header `.library-header`, edge tab `#ladder-library-tab`
- * carrying the UNREAD count (unlocked, not yet seen), which PULSES ONCE when
- * a new unlock lands (reduced motion: the count changes, no animation).
- * STRUCTURE (Session D, owner decision 3): the root is the positioning +
- * TRANSFORM shell (width, z, the slide; paints nothing, takes no pointer
- * events); inside it the BODY (`.library-body`: border, background, padding,
- * the scrolling innerHTML) and the TAB — a child of the root at the pane's
- * INNER edge, so it rides the slide: closed = the screen edge, open = the
- * pane's inner edge, never over the content (the Session C z-36 overlay
- * covered ~22 px of its own open pane; retired).
- *
- * THE FOOTER TAB (Session P, plan D6/D7, owner 2026-09-07): the tab is a
- * HORIZONTAL plate in the FOOTER BAND's right slot — `bottom: footerBottomPx −
- * 96` (the root's own bottom) so it sits at the band's 132–164 px, height
- * FOOTER_BAND_PX — the one fixed place "directly above the right thumb area".
- * The three dodge chains (tab-under-rail, cargo-under-tab, orbit-under-rail)
- * retired with it: `setTabDodge` / `tabBottom` are gone. It is EDGE CHROME
- * (plan D2): `setTabPinned(on)` (F1 → pinned = always visible; the controller
- * calls it at every floor apply) and `setTabPhase(phase)` (the hub's per-frame
- * write from EdgeChrome) drive one truth table — pinned OR open → awake; else
- * the phase → opacity / visibility, write-on-change. `display:block` on every
- * floor while enabled; the pane itself stays enabled everywhere (deep links).
- * `body[data-pure-scenery]` (index.html) still hides it under level 0.
- * Reduced motion fades the BODY, the root never moves, and the tab flips
- * between the screen edge and the inner edge through `--library-open`
- * (visible + clickable while the pane is closed). ONE CSS variable
- * (`--library-dir`, default 1) mirrors the slide direction AND the tab's
- * side for RTL (the `--refit-dir` law): an RTL boot sets `--library-dir:-1`
- * (and left-anchors the pane) and every transform follows.
- * ONE_PANE_BREAKPOINT_PX = 1100 is exported for the hub's below-~1100-px
- * one-pane rule (01-numbers "One-pane breakpoint").
+ * viewer emits, so CodexSystem.markSeen is the one seen-writer and the
+ * shell's tab count (`unreadCount()`) drops when the player actually reads.
+ * Scrubbing to another entry before the dwell cancels it (the viewer's
+ * contract).
  *
  * @module ui/LibraryPane
  */
 
 import { VisualLaw } from '../core/VisualLaw.js';
-import { RAIL_GEOMETRY } from './RailGeometry.js';
 import { trlToLabel, techLevelBadgeText } from '../core/Constants.js';
 
-/** Pane slide duration (ms) — inside the 240–300 ms house window
- *  (01-numbers "Workbench panes"; VisualLaw pane-timing entry pending). */
-export const PANE_SLIDE_MS = 270;
-/** Idle panes fade to 70 %, never vanish (08-workbench §2 Motion). */
-export const IDLE_FADE_OPACITY = 0.7;
-/** The pane root's CSS `bottom` (px) — the footer tab's `bottom` is the band's bottom minus this (Session P). */
-export const ROOT_BOTTOM_PX = 96;
-/** Idle threshold before the fade applies (ms). */
-export const IDLE_FADE_MS = 6000;
-/** Tab pulse length (ms) — the ONE pulse a new unlock earns (§2 Grammar). */
-export const TAB_PULSE_MS = 900;
-/** Below this viewport width only one workbench pane opens at a time
- *  (01-numbers "One-pane breakpoint" ~1100 px); the hub enforces it. */
-export const ONE_PANE_BREAKPOINT_PX = 1100;
 /** Dwell before an open entry is marked seen — the shipped CodexViewerUI
  *  SEEN_DWELL_MS (CodexViewerUI.js:58), mirrored so the pane and the viewer
  *  share one reading contract. */
 export const SEEN_DWELL_MS = 1500;
-/** Pane root stacking (the shipped workbench-pane layer). The edge tab is a
- *  CHILD of the root at the pane's inner edge since Session D (owner decision
- *  3) — it rides the pane's transform and needs no z step of its own (the
- *  Session C TAB_Z_INDEX 36 overlay, which covered ~22 px of the open pane,
- *  is retired). */
-export const PANE_Z_INDEX = 35;
+/** RELATED chip minimum height on glass (px): the 44 pt HIG box — the
+ *  actuator-chip law (RefitPane ACTUATOR_CHIP_GLASS_MIN_H_PX; plan D10).
+ *  Desktop chips keep the shipped padding-only size. */
+export const RELATED_CHIP_GLASS_MIN_H_PX = 44;
 /** The photo crop: source region height as a fraction of the canvas height
  *  (16:10 — PHOTO_W × PHOTO_H output px), centred on the subject point — the
  *  SHIP's projection (the tab / REFIT-title / chip opens). */
@@ -214,6 +195,8 @@ const PHOTO_SAMPLE_STRIDE = 8;
 const LOCK_CHIP_HTML = ' <span class="library-lock" style="display:inline-block;vertical-align:middle;font-size:0.7em;letter-spacing:0.1em;padding:0 4px;border:1px solid currentColor;border-radius:2px;opacity:0.85">LOCKED</span>';
 /** The same marker inside a RELATED chip (already a bordered pill): text only. */
 const LOCK_TAG_HTML = ' <span class="library-lock" style="font-size:0.75em;letter-spacing:0.1em;opacity:0.85">LOCKED</span>';
+/** The no-entry prompt (Session U, D6: the click verb is the part's dossier). */
+const EMPTY_COPY = 'Click a hull part or its card to read about it.';
 
 /** G1 write cap — the ProxContextPanel/TransferWindows house value. */
 const DOM_WRITE_MIN_INTERVAL_MS = 250;
@@ -221,16 +204,9 @@ const DOM_WRITE_MIN_INTERVAL_MS = 250;
 /** Monotonic ms clock (DOM-guarded module — Date.now fallback headless). */
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
-/** Write a CSS custom property (the real DOM needs setProperty; a fake-DOM
- *  style object takes the key directly — tests read it back). */
-function _setVar(el, name, value) {
-  const st = el && el.style;
-  if (!st) return;
-  if (typeof st.setProperty === 'function') st.setProperty(name, value);
-  else st[name] = value;
-}
-
-/** House reduced-motion probe (the FloorMask.js:188-196 shape). */
+/** House reduced-motion probe (the FloorMask.js:188-196 shape) — the banner
+ *  flash is the engine's ONLY motion; every other reduced-motion swap (slide
+ *  → fade, tab flip, no pulse) is the shell's. */
 function _prefersReducedMotion() {
   try {
     return !!(typeof window !== 'undefined' &&
@@ -243,10 +219,13 @@ function _prefersReducedMotion() {
 
 export class LibraryPane {
   /**
-   * Every dep optional; the pane is inert headless (no DOM at import, no DOM
-   * without a usable doc) and never throws on a missing dep.
+   * Every dep optional; the engine is inert headless (no DOM at import, no
+   * DOM until `mount`) and never throws on a missing dep.
+   * Session U (plan 1788954873769 §3): `footerBottomPx`, `reducedMotion` and
+   * `onOpenChange` are the SHELL's (WorkbenchPane) and are IGNORED here when
+   * an older hub still passes them.
    * @param {object} [deps]
-   * @param {Document} [deps.doc] - document to build into (default: global)
+   * @param {Document} [deps.doc] - document for the photo thumbnail canvas (default: global)
    * @param {function} [deps.now] - monotonic ms clock (tests)
    * @param {object} [deps.codex] - the CodexSystem instance (getEntry /
    *   getRelated / getCategoryMeta / entries) — read-only truth
@@ -256,13 +235,11 @@ export class LibraryPane {
    *   unlock path, CODEX_UNLOCK_REQUEST → CodexSystem's queue + ack chip)
    * @param {function} [deps.onViewed] - (id) => void (main.js: the shipped
    *   CODEX_VIEWED emit → CodexSystem.markSeen, the one seen-writer)
-   * @param {function} [deps.onOpenChange] - (isOpen) => void (the D10
-   *   calm-cap edge; main.js fans it into _syncWorkbenchPanes)
    * @param {function} [deps.subject] - () => codexId|null (Session C): what
    *   the player is looking at — main.js chains the focused hull part's
    *   codexId, then the REFIT card's manifest deep link. Consulted ONLY when
-   *   the pane opens with NO entry (tab click / toggle); a null / unknown /
-   *   throwing answer keeps the prompt copy.
+   *   the pane opens with NO entry (the shell's entry-less open); a null /
+   *   unknown / throwing answer keeps the prompt copy.
    * @param {function} [deps.photoSource] - (anchor, hint) => ({ canvas, x, y }|{ canvas, framed: true })|null
    *   (Session C, decision 2 → Session T): the picture source for the photo
    *   edge. `anchor` is THIS edge's click anchor ({ x, y, bounds, partId } |
@@ -279,7 +256,9 @@ export class LibraryPane {
    *   no photo, the text header stands alone)
    * @param {function} [deps.cancelRaf] - (handle) => void (default
    *   window.cancelAnimationFrame)
-   * @param {boolean|function} [deps.reducedMotion] - override for the matchMedia probe
+   * @param {boolean} [deps.glass] - the boot's glass answer (plan D10): the
+   *   RELATED chips are 44 pt tall on glass (RELATED_CHIP_GLASS_MIN_H_PX),
+   *   the shipped padding-only size on desktop
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc
@@ -289,54 +268,34 @@ export class LibraryPane {
     this._onMaximize = deps.onMaximize || null;
     this._requestUnlock = deps.requestUnlock || null;
     this._onViewed = deps.onViewed || null;
-    this._onOpenChange = deps.onOpenChange || null;
     this._subject = deps.subject || null;
     this._photoSource = deps.photoSource || null;
     this._raf = deps.raf !== undefined ? deps.raf
       : (typeof requestAnimationFrame === 'function' ? (cb) => requestAnimationFrame(cb) : null);
     this._cancelRaf = deps.cancelRaf !== undefined ? deps.cancelRaf
       : (typeof cancelAnimationFrame === 'function' ? (h) => cancelAnimationFrame(h) : null);
-    this._reducedMotionDep = deps.reducedMotion;
-    // Session P (plan D7): the FOOTER BAND's bottom offset from the viewport
-    // bottom (the hub passes RailGeometry.footerBand().bottom = 132); the tab's
-    // own `bottom` is that minus the root's 96. Default: the thumb rest + gap.
-    const fb = Number(deps.footerBottomPx);
-    this._footerBottomPx = Number.isFinite(fb) ? fb : (RAIL_GEOMETRY.THUMB_REST_PX + RAIL_GEOMETRY.FOOTER_GAP_PX);
+    /** Session U (D10): glass boot → the RELATED chips wear the 44 pt HIG box. */
+    this._glass = !!deps.glass;
+    // deps.footerBottomPx / deps.reducedMotion / deps.onOpenChange: the
+    // shell's (Session U) — deliberately not read.
 
     this._enabled = false;
-    // Session O (plan D6) → Session P (plan D2/D6): whether the edge tab is
-    // PINNED awake on THIS floor (F1 — the workbench affordance; the controller
-    // calls setTabPinned(floor === WORKBENCH_FLOOR) at every floor apply). Off
-    // the workbench the tab is EDGE CHROME: it follows the hub's setTabPhase
-    // while closed, and an open pane is always awake (its handle). Default true
-    // so every behaviour outside the controller (tests, an unwired boot) holds.
-    // The pane itself stays ENABLED everywhere (deep links keep working).
-    this._tabPinned = true;
-    /** @private the last EdgeChrome phase the hub wrote ('awake'|'fading'|'hidden'); hidden until told */
-    this._chromePhase = 'hidden';
-    /** @private the effective phase last WRITTEN to the tab (write-on-change) */
-    this._tabPhaseWritten = null;
     this._open = false;
     this._entryId = null;         // the entry the pane is showing (null = prompt)
     this._via = null;             // the clicked part's callout name behind the entry (header lead), else null
-    this._built = false;
-    this._root = null;            // the transform shell (#ladder-library)
-    this._body = null;            // the panel inside it (.library-body — the innerHTML target)
-    this._tab = null;             // the edge tab, a child of the root at its inner edge
-    this._tabCount = null;
-    this._lastHtml = null;
+    // Mount state (Session U): the two containers the shell hands over, the
+    // shell's repaint hook, and the ONE bound delegated-click handler shared
+    // by both containers (kept so dispose can remove it).
+    this._head = null;
+    this._tail = null;
+    this._onRefresh = null;
+    this._mounted = false;
+    this._onClickBound = (e) => this._onClick(e);
+    // G1: one struct-key gate, two write-on-change caches (head / tail).
+    this._lastHeadHtml = null;
+    this._lastTailHtml = null;
     this._lastStructKey = null;
     this._lastWriteMs = -Infinity;
-    this._lastTabText = null;
-    // Unread/pulse state: baseline null so the FIRST refresh (boot state)
-    // never pulses; only an INCREASE afterwards (= a new unlock) does.
-    this._lastUnread = null;
-    this._pulseTimer = null;
-    this._pulseCount = 0;         // total pulses fired (tests/witness probe)
-    // Idle fade state (open panes fade to 70 % after IDLE_FADE_MS, pointer wakes).
-    this._lastActivityMs = this._now();
-    this._idle = false;
-    this._idleTimer = null;
     // Seen-dwell state (READ = SEEN, the viewer's contract).
     this._seenTimer = null;
     // The photo you just took (Session C): { id, url } for the entry it was
@@ -349,10 +308,10 @@ export class LibraryPane {
     this._photoCanvas = null;
     this._photoCount = 0;         // photos taken (tests/witness probe)
     // The click anchor behind the CURRENT openEntry edge (Session D): { x, y,
-    // bounds } in drawing-buffer px from main.js's hook — the photo crops
-    // around the clicked PART instead of the ship. Set by openEntry, cleared
-    // by every entry-less open (tab / toggle / pagePane) so it can never go
-    // stale under a later camera move; read at frame time by _readPhoto.
+    // bounds } in drawing-buffer px from the shell's showPart — the photo
+    // crops around the clicked PART instead of the ship. Set by openEntry,
+    // cleared by every entry-less open() so it can never go stale under a
+    // later camera move; read at frame time by _readPhoto.
     this._photoAnchor = null;
     // Session T: true once THIS edge's framed portrait attempt has run (blank,
     // sizeless or thrown) — the remaining tries ask the source for the live
@@ -458,14 +417,15 @@ export class LibraryPane {
   }
 
   /**
-   * The edge tab's UNREAD count: unlocked entries not yet seen, EXCLUDING the
+   * The tab's UNREAD count: unlocked entries not yet seen, EXCLUDING the
    * `startUnlocked` set (Session O, plan D16b, owner 2026-09-07): those 74
    * are PLAYBOOK + WORLD_INDUSTRY + the 12 cornerstones (`codexTriggers.js:42`)
    * and are readable from the first library open — counting them made the badge read
    * "74" forever and teach nothing ("the 74 only distract"). The badge therefore
    * counts REAL unlocks only — a small deviation from the viewer's NEW-pip
    * predicate (which still includes startUnlocked entries); the viewer's pips
-   * are NOT changed by this rule. Pure.
+   * are NOT changed by this rule. Pure. The instance read `unreadCount()`
+   * (no argument) applies it to the injected codex — the shell's tab number.
    * @param {Array<object>|null|undefined} entries
    * @returns {number}
    */
@@ -477,127 +437,82 @@ export class LibraryPane {
     return n;
   }
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
+  // ── Lifecycle (state-only until mounted; the shell drives every edge) ──────
 
   /** @returns {boolean} */
   isOpen() { return this._open; }
-
-  /**
-   * Session P (plan D6/D7): the tab's CSS `bottom` inside the pane root — the
-   * footer band's bottom (viewport offset) minus the root's own bottom (96),
-   * never negative. 132 → 36 on both surfaces. PURE (a test seam).
-   * @returns {number}
-   */
-  tabBottomCss() {
-    return Math.max(0, Math.round(this._footerBottomPx - ROOT_BOTTOM_PX));
-  }
   /** @returns {boolean} */
   isEnabled() { return this._enabled; }
+  /** @returns {boolean} true between mount() and dispose() */
+  isMounted() { return this._mounted; }
   /** @returns {string|null} the entry the pane is showing (null = the prompt) */
   currentEntryId() { return this._entryId; }
 
   /**
-   * The pane's laid-out width in CSS px (its box, border-box: the
-   * clamp(380px, 28vw, 440px) of 01-numbers) — 0 headless or before the root
-   * is built. The number main.js NETS into the ONE
-   * `CameraSystem.setLadderPaneInset` value on the onOpenChange edge (RIGHT
-   * pane → negative; both panes open → 0, §2 "both panes open → centered").
-   * A layout read: call it on edges only, never per frame.
+   * Session U (plan D3): the number the shell's ONE tab shows off F1 (and on
+   * F1 when no refit is affordable) — the static `unreadCount` law over the
+   * injected codex, read live (232 entries; edges only, never per frame).
+   * Absent / throwing codex → 0.
    * @returns {number}
    */
-  widthPx() {
-    const w = this._root ? this._root.offsetWidth : 0;
-    return (Number.isFinite(w) && w > 0) ? w : 0;
+  unreadCount() { return this._unread(); }
+
+  /**
+   * Session U (plan 1788954873769 §3): the shell hands over the two elements
+   * this engine renders into — HEAD (`.workbench-head`) and TAIL
+   * (`.workbench-tail`) — and its repaint hook. Attaches ONE delegated click
+   * listener to each container (`[data-max]` → onMaximize, `[data-rel]` → the
+   * related entry), cold-starts both write-on-change caches and paints the
+   * current model at once (silently — the shell paints its own tab when its
+   * build finishes; `onRefresh` fires from `refresh()` edges). Re-mounting
+   * detaches from the previous containers first. Disposed engines refuse.
+   * @param {{ head: Element, tail: Element, onRefresh?: function }} opts
+   * @returns {boolean} true when mounted
+   */
+  mount(opts = {}) {
+    if (this._disposed) return false;
+    const head = (opts && opts.head) || null;
+    const tail = (opts && opts.tail) || null;
+    if (!head && !tail) return false;
+    this._detach();
+    this._head = head;
+    this._tail = tail;
+    this._onRefresh = (opts && typeof opts.onRefresh === 'function') ? opts.onRefresh : null;
+    this._mounted = true;
+    for (const el of [head, tail]) {
+      if (el && typeof el.addEventListener === 'function') el.addEventListener('click', this._onClickBound);
+    }
+    this._lastHeadHtml = null;
+    this._lastTailHtml = null;
+    this._lastStructKey = null;
+    this._lastWriteMs = -Infinity;
+    this._paint(this._model(), this._now());
+    return true;
   }
 
   /**
-   * Enable on F3 arrival / disable on leave (LadderController `library` dep).
-   * Enabled: the edge tab is `display:block` on every floor (Session P — its
-   * visibility is then the pinned / open / edge-chrome truth table below).
-   * Disabled: tab hides and the pane closes. Idempotent; headless no-op
-   * beyond state.
+   * Enable on controller engage / disable on disengage — the SHELL calls it
+   * (`WorkbenchPane.setEnabled`; the engine stays enabled on every floor —
+   * deep links work everywhere, D7 hides only the REFIT slot). Enabled →
+   * repaint; disabled → close. Idempotent; no chrome, no container display
+   * writes (the shell hides the whole pane).
    * @param {boolean} on
    */
   setEnabled(on) {
     on = !!on;
     if (on === this._enabled) return;
     this._enabled = on;
-    if (on) {
-      this._build();
-      this._applyTabShown();
-      this.refresh();
-    } else {
-      this._applyTabShown();
-      this.close();
-    }
+    if (on) this.refresh();
+    else this.close();
   }
 
-  /** @private The tab's actual display: enabled → block (Session P: every floor); the phase decides the rest. */
-  _applyTabShown() {
-    if (this._tab) {
-      const css = this._enabled ? 'block' : 'none';
-      if (this._tab.style.display !== css) this._tab.style.display = css;
-    }
-    this._applyTabPhase();
-  }
-
-  /**
-   * Session P (plan D2/D6, owner 2026-09-07; was Session O's setTabShown): PIN
-   * the SPECS tab awake on this floor. The controller calls
-   * `setTabPinned(floor === WORKBENCH_FLOOR)` from `_applyFloorContent(floor)`
-   * right after `setEnabled(true)` — F1 is the hull, where the workbench panes
-   * live, so its drawer affordance never sleeps. Off the workbench the tab is
-   * EDGE CHROME: it follows `setTabPhase` while closed; an open pane's tab is
-   * its handle and stays awake on any floor. The pane stays ENABLED everywhere
-   * (every deep link keeps working). Idempotent; headless no-op beyond state.
-   * @param {boolean} on - true = pinned awake (F1)
-   */
-  setTabPinned(on) {
-    on = !!on;
-    if (on === this._tabPinned) return;
-    this._tabPinned = on;
-    this._applyTabPhase();
-  }
-
-  /**
-   * Session P (plan D2): the hub's per-frame EDGE-CHROME write —
-   * `edgeChrome.phase('tab', now)`. Effective phase = pinned OR open → 'awake',
-   * else this phase: 'awake' → opacity 1 + visible; 'fading' → opacity
-   * RAIL_GEOMETRY.IDLE_FADE (the CSS `transition: opacity EDGE_FADE_MS` ramps);
-   * 'hidden' (or unknown) → visibility hidden. Write-on-change (G1).
-   * @param {'awake'|'fading'|'hidden'} phase
-   */
-  setTabPhase(phase) {
-    const ph = (phase === 'awake' || phase === 'fading') ? phase : 'hidden';
-    if (ph === this._chromePhase) { this._applyTabPhase(); return; }
-    this._chromePhase = ph;
-    this._applyTabPhase();
-  }
-
-  /** @private the pinned / open / chrome truth table → opacity + visibility, on change */
-  _applyTabPhase() {
-    const want = (this._tabPinned || this._open) ? 'awake' : this._chromePhase;
-    if (want === this._tabPhaseWritten) return;
-    this._tabPhaseWritten = want;
-    const tab = this._tab;
-    if (!tab) return;
-    if (want === 'awake') {
-      tab.style.opacity = '1';
-      tab.style.visibility = 'visible';
-    } else if (want === 'fading') {
-      tab.style.opacity = String(RAIL_GEOMETRY.IDLE_FADE);
-    } else {
-      tab.style.visibility = 'hidden';
-      tab.style.opacity = String(RAIL_GEOMETRY.IDLE_FADE);
-    }
-  }
-
-  /** Open the pane (no-op while disabled). Fires onOpenChange(true) once.
-   *  An ENTRY-LESS open (tab click / toggle / the swipe's pagePane — never
-   *  openEntry, which has its entry) first adopts the injected `subject` so
-   *  the pane lands on the part the player is looking at instead of the
+  /** Open the dossier (no-op while disabled; the shell slides + signals).
+   *  An ENTRY-LESS open (the shell's tab / Space / swipe / flick / restore —
+   *  never openEntry, which has its entry) first adopts the injected `subject`
+   *  so the pane lands on the part the player is looking at instead of the
    *  prompt (Session C). No click is behind it, so any click anchor from an
-   *  earlier openEntry is dropped: the photo frames the ship (Session D). */
+   *  earlier openEntry is dropped: the photo frames the ship (Session D). The
+   *  shell must never call this on the showPart / openEntry paths (plan §7). */
   open() {
     this._photoAnchor = null;
     this._openCore();
@@ -608,39 +523,31 @@ export class LibraryPane {
     if (!this._enabled || this._open) return;
     if (this._entryId == null) this._adoptSubject();
     this._open = true;
-    this._applyOpenState();
-    this._applyTabShown();       // Session O (D6) → P: an open pane's tab is awake on ANY floor
-    this._wake();
     this.refresh();
     this._armSeenTimer();
     this._takePhoto();
-    if (this._onOpenChange) { try { this._onOpenChange(true); } catch (_e) { /* dep */ } }
   }
 
-  /** Close the pane. Fires onOpenChange(false) once. */
+  /** Close the dossier: the seen dwell and any pending photo read are
+   *  dropped; the shown entry is remembered (close → re-open returns to it).
+   *  Idempotent. The shell slides out and signals. */
   close() {
     if (!this._open) return;
     this._open = false;
-    this._applyOpenState();
-    this._applyTabShown();       // Session O (D6) → P: closed off-F1 → the tab follows the edge chrome again
-    this._clearIdleTimer();
     this._clearSeenTimer();
     this._cancelPhoto();
-    if (this._onOpenChange) { try { this._onOpenChange(false); } catch (_e) { /* dep */ } }
   }
-
-  /** Edge-tab click: toggle. */
-  toggle() { if (this._open) this.close(); else this.open(); }
 
   /**
    * Session J (plan D-C, "SPECS opens on the floor's subject"): forget the
    * remembered entry while CLOSED, so the NEXT entry-less open adopts the
    * injected `subject` instead of re-showing a page from another floor. The
-   * hub calls it on a floor arrival / a selection change while the pane is
-   * shut (an OPEN pane is retargeted through openEntry instead — the follow).
-   * Session C's rule stands on the same floor: nothing here runs without a
-   * subject change, so close → re-open still returns to the shown entry.
-   * No-op while open (never a cut under the reader) or disabled-with-nothing.
+   * hub calls it (through the shell) on a floor arrival / a selection change
+   * while the pane is shut (an OPEN pane is retargeted through openEntry
+   * instead — the follow). Session C's rule stands on the same floor: nothing
+   * here runs without a subject change, so close → re-open still returns to
+   * the shown entry. No-op while open (never a cut under the reader) or
+   * disabled-with-nothing.
    * @returns {boolean} true when an entry was forgotten
    */
   forgetEntry() {
@@ -653,21 +560,22 @@ export class LibraryPane {
   }
 
   /**
-   * Deep-link into the pane: show one entry and open (the REFIT card title /
-   * spec term route — 03-plan §3 "tap → TECH LIBRARY slides in"; also the
-   * related-chip navigation, and — Session C — the hull part / callout-card
-   * click while the pane is already open: main.js's onPartClick hook calls
-   * this ONE path with the part's codexId, so an open library FOLLOWS every
-   * click in place, entry + seen dwell retargeted, no second open edge).
-   * Unknown ids keep the current view and still
-   * open (never a throw, never a blank crash — the viewer's "safe no-op"
-   * contract). While disabled the entry is stored for the next open.
+   * Deep-link into the dossier: show one entry and open (the REFIT card title
+   * / RELATED chip / ticker chip route — 03-plan §3 "tap → TECH LIBRARY
+   * slides in" — and, since Session U, the shell's `showPart(part)` for every
+   * hull part / callout-card click (D6), which passes the part's name + click
+   * anchor). An open pane FOLLOWS every call in place: entry + seen dwell
+   * retargeted, no second open edge. Unknown ids keep the current view and
+   * still open (never a throw, never a blank crash — the viewer's "safe no-op"
+   * contract). While disabled the entry is stored for the next open. The
+   * click anchor is KEPT (it rides this edge's photo) — only the entry-less
+   * open() drops it.
    * @param {string} id - codex entry id
    * @param {{ via?: string, anchor?: {x?:number,y?:number,bounds?:object,partId?:string}|null }} [opts]
-   *   `via`: the clicked part's callout name (main.js passes `part.name`);
+   *   `via`: the clicked part's callout name (the shell passes `part.name`);
    *   the header leads with it when it is one of the entry's own
    *   `hardwareNames`. `anchor` (Session D): the clicked part's screen point
-   *   (+ its projected pick-mesh `bounds`) in DRAWING-BUFFER px — main.js
+   *   (+ its projected pick-mesh `bounds`) in DRAWING-BUFFER px — the shell
    *   passes `part.screen` / `part.bounds` from the hull-click record; the
    *   photo taken for THIS edge crops around it (PHOTO_CROP_H_FRAC_PART,
    *   grown to the bounds, capped at the ship crop). Session T: `partId` (the
@@ -714,12 +622,12 @@ export class LibraryPane {
   /**
    * The Subnautica rule (08-workbench §2: "Clicking a locked part's card
    * unlocks its entry — exploration is how the library fills"): called by the
-   * hub on a HULL part/card click. A resolved, LOCKED entry fires the
-   * injected requestUnlock — the ONE existing unlock path (CodexSystem's
+   * shell's showPart on a HULL part/card click. A resolved, LOCKED entry fires
+   * the injected requestUnlock — the ONE existing unlock path (CodexSystem's
    * queue: ticker ack chip now, chime + CODEX_UNLOCKED on the queue's own
-   * schedule; the tab pulses when the unlock lands). Unlocked / unknown /
-   * briefing-less parts are safe no-ops. Never opens the pane — the click's
-   * visible verb stays the REFIT card (D-a).
+   * schedule; the shell's tab pulses when the unlock lands). Unlocked /
+   * unknown / briefing-less parts are safe no-ops. Never opens the pane (the
+   * shell decides that).
    * @param {{ codexId?: string|null }|null} part - MotherCallouts record shape
    * @returns {boolean} true when an unlock was requested
    */
@@ -734,59 +642,73 @@ export class LibraryPane {
   }
 
   /**
-   * Recompute + repaint (G1: innerHTML cache + the 250 ms cap; structural
-   * changes write immediately). Headless: computes and returns the model.
-   * Called on interaction edges + the hub's CODEX_UNLOCKED refresh — never
-   * per frame.
+   * Recompute + repaint (G1: the struct-key gate + the 250 ms cap; structural
+   * changes write immediately; each container is written only when its own
+   * HTML changed). Unmounted: computes and returns the model. After every
+   * repaint (= every refresh whose gate opened) the shell's `onRefresh` fires
+   * once, so the tab count follows on the same edge. Called on interaction
+   * edges + the shell's refresh (CODEX_UNLOCKED / CODEX_VIEWED) — never per
+   * frame.
    * @returns {object} the display model
    */
   refresh() {
     const model = this._model();
-    this._paintTab(model);
-    if (!this._root) return model;
-    const structKey = model.structKey;
+    if (!this._mounted) return model;
     const now = this._now();
-    if (!LibraryPane.shouldWrite(structKey, this._lastStructKey, now, this._lastWriteMs)) {
+    if (!LibraryPane.shouldWrite(model.structKey, this._lastStructKey, now, this._lastWriteMs)) {
       return model;
     }
-    const html = this._html(model);
-    if (html !== this._lastHtml) {
-      this._body.innerHTML = html;          // the panel (Session D: the root is the transform shell)
-      this._lastHtml = html;
-      this._lastStructKey = structKey;
-      this._lastWriteMs = now;
-    }
+    this._paint(model, now);
+    if (this._onRefresh) { try { this._onRefresh(); } catch (_e) { /* dep */ } }
     return model;
   }
 
-  /** Remove every node + timer; the instance stays inert afterwards. */
+  /** @private The raw writer behind mount() / refresh(): both halves through
+   *  their own write-on-change cache; the gate state records this paint. */
+  _paint(model, now) {
+    const headHtml = this._htmlHead(model);
+    const tailHtml = this._htmlTail(model);
+    if (this._head && headHtml !== this._lastHeadHtml) {
+      this._head.innerHTML = headHtml;
+      this._lastHeadHtml = headHtml;
+    }
+    if (this._tail && tailHtml !== this._lastTailHtml) {
+      this._tail.innerHTML = tailHtml;
+      this._lastTailHtml = tailHtml;
+    }
+    this._lastStructKey = model.structKey;
+    this._lastWriteMs = now;
+  }
+
+  /** Drop every timer + pending read, blank the two containers this engine
+   *  painted, remove its listeners; the instance stays inert afterwards. The
+   *  containers themselves are the shell's (it removes its root); no
+   *  open-signal — the shell emits that once, after its own `_open` flip. */
   dispose() {
     this._disposed = true;
-    this._clearIdleTimer();
     this._clearSeenTimer();
-    this._clearPulseTimer();
     this._cancelPhoto();
     this._photo = null;
     this._photoCanvas = null;
-    // Session I follow-up (review, (h)): the close edge must observe
-    // isOpen() === false — main.js's _syncWorkbenchPanes re-reads BOTH panes'
-    // isOpen() inside the callback, so firing it while _open was still true
-    // re-armed the held-world signal as the pane died. Same order as close().
-    const wasOpen = this._open;
     this._open = false;
-    if (wasOpen && this._onOpenChange) {
-      try { this._onOpenChange(false); } catch (_e) { /* dep */ }
+    for (const el of [this._head, this._tail]) {
+      if (el && 'innerHTML' in el) el.innerHTML = '';
     }
-    if (this._root && this._root.remove) this._root.remove();   // takes the body + tab with it
-    if (this._tab && this._tab.remove) this._tab.remove();
-    this._root = null;
-    this._body = null;
-    this._tab = null;
-    this._tabCount = null;
-    this._built = false;
-    this._lastHtml = null;
+    this._detach();
+    this._mounted = false;
+    this._onRefresh = null;
+    this._lastHeadHtml = null;
+    this._lastTailHtml = null;
     this._lastStructKey = null;
-    this._lastTabText = null;
+  }
+
+  /** @private Remove the delegated listeners + forget the containers. */
+  _detach() {
+    for (const el of [this._head, this._tail]) {
+      if (el && typeof el.removeEventListener === 'function') el.removeEventListener('click', this._onClickBound);
+    }
+    this._head = null;
+    this._tail = null;
   }
 
   // ── Model (pure per-call reads of the injected truth) ─────────────────────
@@ -795,6 +717,13 @@ export class LibraryPane {
   _entry(id) {
     if (!id || !this._codex || typeof this._codex.getEntry !== 'function') return null;
     try { return this._codex.getEntry(id) || null; } catch (_e) { return null; }
+  }
+
+  /** @private The unread law over the injected codex (absent / throwing → 0). */
+  _unread() {
+    try {
+      return LibraryPane.unreadCount(this._codex ? this._codex.entries : null);
+    } catch (_e) { return 0; }
   }
 
   /**
@@ -842,16 +771,15 @@ export class LibraryPane {
     // The bridge line (Session D): hardware entries only, authored data.
     const note = LibraryPane.hardwareNote(entry);
     // The manual's warning (plan 1788957399035 §1.24): authored data, read
-    // straight off the entry by _html; rides the struct key beside the note
-    // so a re-authored line repaints at once (symmetry with hardwareNote).
+    // straight off the entry by _htmlTail; rides the struct key beside the
+    // note so a re-authored line repaints at once (symmetry with hardwareNote).
     const warning = (entry && typeof entry.warning === 'string') ? entry.warning : '';
     // The photo shows only for the entry it was taken for (never a stale
     // frame under a newer entry); absent → the text header stands alone.
     const photo = (entry && this._photo && this._photo.id === entry.id) ? this._photo.url : null;
-    let unread = 0;
-    try {
-      unread = LibraryPane.unreadCount(this._codex ? this._codex.entries : null);
-    } catch (_e) { unread = 0; }
+    // The unread count rides the struct key so a count change opens the gate
+    // (→ onRefresh → the shell's tab) even when no rendered byte moved.
+    const unread = this._unread();
     const structKey = [
       this._open ? 1 : 0,
       entry ? entry.id : '',
@@ -876,204 +804,26 @@ export class LibraryPane {
     };
   }
 
-  // ── DOM (guarded; nothing at import) ───────────────────────────────────────
+  // ── Markup (VisualLaw colors; inline styles; nothing at import) ────────────
 
-  /** @private Effective reduced-motion read (dep overrides the house probe). */
+  /** @private Reduced-motion read for the ONE motion this engine owns (the
+   *  banner flash): the house matchMedia probe. Tests override the method. */
   _reducedMotion() {
-    const dep = this._reducedMotionDep;
-    if (typeof dep === 'function') { try { return !!dep(); } catch (_e) { return false; } }
-    if (typeof dep === 'boolean') return dep;
     return _prefersReducedMotion();
   }
 
-  /** @private */
-  _build() {
-    if (this._built || this._disposed) return;
-    const doc = this._doc;
-    if (!doc || typeof doc.createElement !== 'function' || !doc.body) return;
-    this._built = true;
-    const reduced = this._reducedMotion();
-
-    // The pane ROOT — RIGHT, 380–440 px (01-numbers) — is the positioning +
-    // TRANSFORM shell (Session D): it carries the slide, the width clamp and
-    // the z layer, paints nothing itself and takes no pointer events; the
-    // BODY (the panel: border, background, padding, the scrolling content)
-    // and the edge TAB are its children, so the tab RIDES the pane's
-    // transform. --library-dir is the ONE RTL mirror variable (the --refit-dir
-    // law: an RTL boot flips it to -1 and left-anchors the pane) — every
-    // transform AND the tab's side follow it. --library-open (0|1) is the
-    // reduced-motion tab position (the root never moves there; see
-    // _applyOpenState).
-    const root = doc.createElement('div');
-    root.id = 'ladder-library';
-    root.className = reduced ? 'library-reduced' : '';
-    root.style.cssText = [
-      'position:absolute', 'right:0', 'top:56px', `bottom:${ROOT_BOTTOM_PX}px`, `z-index:${PANE_Z_INDEX}`,
-      'width:clamp(380px, 28vw, 440px)', 'box-sizing:border-box',
-      'pointer-events:none', '--library-dir:1', '--library-open:1',
-      // Slide (transform) in the normal path; the reduced-motion class swaps
-      // the slide for a fade of the BODY at the same duration (08-workbench §2
-      // Motion) — the root then never moves, so the tab stays visible.
-      reduced
-        ? ''
-        : `transition:transform ${PANE_SLIDE_MS}ms cubic-bezier(0.65,0,0.35,1), opacity 400ms ease`,
-    ].join(';');
-
-    // The body — the panel the player reads. Fills the root; scrolls.
-    const body = doc.createElement('div');
-    body.className = 'library-body';
-    body.style.cssText = [
-      'position:absolute', 'top:0', 'right:0', 'bottom:0', 'left:0', 'box-sizing:border-box',
-      'padding:10px 12px', 'overflow-y:auto',
-      'border:1px solid rgba(0,204,255,0.4)', 'border-right:none', 'border-radius:6px 0 0 6px',
-      'background:rgba(0,16,32,0.82)', 'color:' + VisualLaw.COLORS.INFO,
-      'font-family: var(--font-mono)', 'font-size:0.68rem', 'letter-spacing:0.05em',
-      'pointer-events:auto',
-      reduced ? `transition:opacity ${PANE_SLIDE_MS}ms ease` : '',
-    ].join(';');
-    root.appendChild(body);
-
-    // The edge tab (08-workbench §2 Grammar: "LIBRARY: unread count, pulses
-    // once on a new unlock"). A CHILD of the root at the pane's INNER edge
-    // (Session D, owner decision 3): closed, the root's slide parks it exactly
-    // at the screen edge; open, it sits on the pane's inner edge — never over
-    // the content. The side follows the RTL variable: left = 50% − dir·50%
-    // (dir 1 → the root's left edge) and the −100 % self-translate puts the tab
-    // outside the box; under reduced motion --library-open flips it between the
-    // screen edge (closed) and the inner edge (open) because the root never
-    // moves. Session P (plan D6/D7): a HORIZONTAL plate in the FOOTER BAND —
-    // `bottom` = the band's bottom minus the root's 96, height FOOTER_BAND_PX;
-    // its opacity / visibility are the edge-chrome truth table's (the hub's
-    // setTabPhase + setTabPinned), the ramp `opacity EDGE_FADE_MS` (none under
-    // reduced motion — instant, like every other reduced-motion step).
-    const tab = doc.createElement('div');
-    tab.id = 'ladder-library-tab';
-    tab.style.cssText = [
-      'position:absolute', `bottom:${this.tabBottomCss()}px`, 'z-index:1',
-      'left:calc(50% - var(--library-dir, 1) * (2 * var(--library-open, 1) - 1) * 50%)',
-      'transform:translateX(calc((-1 - var(--library-dir, 1)) * 50%))',
-      `height:${RAIL_GEOMETRY.FOOTER_BAND_PX}px`, `line-height:${RAIL_GEOMETRY.FOOTER_BAND_PX - 2}px`,
-      'box-sizing:border-box', 'padding:0 10px 0 12px', 'white-space:nowrap',
-      'border:1px solid rgba(0,204,255,0.4)', 'border-right:none',
-      'border-radius:3px 0 0 3px', 'background:rgba(0,16,32,0.85)',
-      'color:' + VisualLaw.COLORS.INFO, 'cursor:pointer',
-      'font-family: var(--font-mono)', 'font-size:0.62rem', 'letter-spacing:0.08em',
-      'user-select:none', 'display:none', 'pointer-events:auto',
-      // The pulse animates through transition (reduced motion never sets it);
-      // the edge-chrome fade rides the same property list.
-      reduced ? '' : `transition:box-shadow ${TAB_PULSE_MS / 3}ms ease, opacity ${RAIL_GEOMETRY.EDGE_FADE_MS}ms ease`,
-    ].join(';');
-    // Built as real children (never innerHTML) so the count node survives
-    // every repaint and fake-DOM test docs need no querySelector.
-    const tabLabel = doc.createElement('span');
-    tabLabel.textContent = 'SPECS ';
-    const tabCount = doc.createElement('span');
-    tabCount.className = 'library-tab-count';
-    tabCount.style.cssText = `color:${VisualLaw.COLORS.VALUE};font-weight:bold`;
-    tab.appendChild(tabLabel);
-    tab.appendChild(tabCount);
-    tab.addEventListener('click', () => { this._wake(); this.toggle(); });
-    root.appendChild(tab);
-
-    doc.body.appendChild(root);
-    this._root = root;
-    this._body = body;
-    this._tab = tab;
-    this._tabPhaseWritten = null;   // Session P: the phase truth table writes the fresh tab
-    this._tabCount = tabCount;
-    this._applyTabPhase();
-    this._applyOpenState();
-
-    // Delegated interactions (one listener set — G1, the PaneHelp pattern):
-    // on the root, so the body's content and the tab share it (the tab's own
-    // click above toggles; here it only wakes).
-    root.addEventListener('click', (e) => this._onClick(e));
-    root.addEventListener('pointermove', () => this._wake());
-    root.addEventListener('pointerdown', () => this._wake());
-  }
-
-  /** @private Slide (root) / fade (body) to the current open state; the tab
-   *  rides the root in the slide path and flips edges in the fade path. */
-  _applyOpenState() {
-    const root = this._root;
-    if (!root) return;
-    const body = this._body;
-    const reduced = this._reducedMotion();
-    if (reduced) {
-      root.className = 'library-reduced';
-      root.style.transform = 'none';              // the root never moves: the fade is the body's
-      root.style.visibility = 'visible';
-      if (body) {
-        body.style.opacity = this._open ? '1' : '0';
-        body.style.visibility = this._open ? 'visible' : 'hidden';
-      }
-      // The tab stays visible + clickable while the body is hidden: closed it
-      // sits at the screen edge, open at the pane's inner edge (a snap —
-      // reduced motion permits it).
-      _setVar(root, '--library-open', this._open ? '1' : '0');
-    } else {
-      root.className = '';
-      // One CSS variable mirrors the slide for RTL (--library-dir: -1 flips
-      // it); the RIGHT pane slides out toward +X by exactly its width, so the
-      // tab riding at its inner edge parks at the screen edge when closed.
-      root.style.transform = this._open
-        ? 'translateX(0)'
-        : 'translateX(calc(var(--library-dir, 1) * 100%))';
-      root.style.opacity = this._open ? '1' : '0.999'; // keep painted for the slide
-      root.style.visibility = 'visible';
-      if (body) { body.style.opacity = '1'; body.style.visibility = 'visible'; }
-      _setVar(root, '--library-open', '1');
-    }
-  }
-
-  /** @private Tab count paint (write-on-change) + the ONE new-unlock pulse. */
-  _paintTab(model) {
-    if (this._tabCount) {
-      const text = model.unread > 0 ? String(model.unread) : '';
-      if (text !== this._lastTabText) {
-        this._tabCount.textContent = text;
-        this._lastTabText = text;
-      }
-    }
-    // Pulse ONCE when the unread count RISES (= a new unlock landed). The
-    // boot baseline (null) never pulses; a drop (entry read) never pulses.
-    if (this._lastUnread != null && model.unread > this._lastUnread) this._pulse();
-    this._lastUnread = model.unread;
-  }
-
-  /** @private One tab pulse (§2: "pulses once on a new unlock"). Reduced
-   *  motion: no animation — the count change is the whole signal. */
-  _pulse() {
-    this._pulseCount++;
-    if (!this._tab || this._reducedMotion()) return;
-    this._tab.style.boxShadow = `0 0 12px 2px ${VisualLaw.COLORS.VALUE}`;
-    if (this._tab.classList && this._tab.classList.add) this._tab.classList.add('library-tab-pulse');
-    this._clearPulseTimer();
-    this._pulseTimer = setTimeout(() => this._pulseTick(), TAB_PULSE_MS);
-  }
-
-  /** @private Pulse end (timer-fired; tests drive it directly). */
-  _pulseTick() {
-    this._pulseTimer = null;
-    if (!this._tab) return;
-    this._tab.style.boxShadow = 'none';
-    if (this._tab.classList && this._tab.classList.remove) this._tab.classList.remove('library-tab-pulse');
-  }
-
-  /** @private */
-  _clearPulseTimer() {
-    if (this._pulseTimer != null) {
-      clearTimeout(this._pulseTimer);
-      this._pulseTimer = null;
-    }
-  }
-
-  /** @private Markup for the model (VisualLaw colors; inline styles). */
-  _html(m) {
+  /**
+   * @private The HEAD half (Session U, plan §2 `.workbench-head`): the header
+   * row, the no-entry prompt, the photo banner, the entry header, the bridge
+   * line, the shortText and the LOCKED stub — everything that identifies the
+   * part, above the shell's REFIT slot.
+   */
+  _htmlHead(m) {
     const C = VisualLaw.COLORS;
     const parts = [];
     // Header (.library-header): the pane name + MAXIMIZE (the full-screen
-    // viewer — the old F1 — one click away, never hidden).
+    // viewer — the old F1 — one click away, never hidden). PaneHelp's [?]
+    // anchor (`#ladder-workbench .library-header`).
     parts.push(
       `<div class="library-header" style="display:flex;justify-content:space-between;align-items:baseline;color:${C.PLAYER};border-bottom:1px solid rgba(0,204,255,0.25);padding-bottom:6px;margin-bottom:8px">` +
       '<span>SPECS</span>' +
@@ -1083,9 +833,8 @@ export class LibraryPane {
       '</div>',
     );
     if (!m.entry) {
-      parts.push(
-        '<div class="library-empty" style="opacity:0.7">Click a hull part or a REFIT card title to read about it.</div>',
-      );
+      // The no-entry landing (D6: the click verb is the part's dossier).
+      parts.push(`<div class="library-empty" style="opacity:0.7">${EMPTY_COPY}</div>`);
       return parts.join('');
     }
     const e = m.entry;
@@ -1133,13 +882,30 @@ export class LibraryPane {
       `<div class="library-short" style="color:#aaddff;line-height:1.5;padding:6px 8px;background:rgba(0,204,255,0.06);border-left:2px solid rgba(0,204,255,0.5);margin-bottom:8px">${e.shortText || ''}</div>`,
     );
     if (locked) {
-      // The viewer's honest locked stub: how to unlock, nothing invented.
+      // The viewer's honest locked stub: how to unlock, nothing invented. It
+      // stays in the HEAD — the identity half says why there is no depth yet.
       parts.push(
         `<div class="library-locked" style="color:${C.VALUE};border:1px dashed rgba(255,209,102,0.5);border-radius:3px;padding:6px 8px;margin-bottom:8px">` +
         `LOCKED \u00b7 How to unlock: ${e.unlockHint || 'Discover through gameplay.'}` +
         '</div>',
       );
-    } else if (m.specs.length) {
+    }
+    return parts.join('');
+  }
+
+  /**
+   * @private The TAIL half (Session U, plan §2 `.workbench-tail`): the deeper
+   * reading below the shell's REFIT slot — the generated SPECS table, the
+   * RELATED chips and the manual's WARNING. Empty for the prompt and for a
+   * locked entry without relateds.
+   */
+  _htmlTail(m) {
+    const e = m.entry;
+    if (!e) return '';
+    const C = VisualLaw.COLORS;
+    const parts = [];
+    const locked = !e.unlocked;
+    if (!locked && m.specs.length) {
       // The generated SPECS block (hardware entries, unlocked depth only).
       parts.push('<div class="library-specs" style="margin-bottom:8px">');
       parts.push(`<div style="color:${C.PLAYER}">SPECS</div>`);
@@ -1155,13 +921,18 @@ export class LibraryPane {
     }
     // Related chips — click navigates the PANE (locked relateds carry the
     // viewer's LOCKED text tag and navigate to the locked stub; no entry icon).
+    // Glass (D10): a 44 pt-tall flex pill (the actuator-chip law) so a thumb
+    // lands it; desktop keeps the shipped padding-only size, byte-identical.
     if (m.related.length) {
+      const glassCss = this._glass
+        ? `display:inline-flex;align-items:center;min-height:${RELATED_CHIP_GLASS_MIN_H_PX}px;box-sizing:border-box;touch-action:manipulation;`
+        : '';
       parts.push('<div class="library-related" style="margin-top:8px">');
       parts.push(`<div style="color:${C.PLAYER};margin-bottom:4px">RELATED</div>`);
       parts.push('<div style="display:flex;flex-wrap:wrap;gap:4px">');
       for (const r of m.related) {
         parts.push(
-          `<span class="library-rel" data-rel="${r.id}" style="cursor:pointer;padding:1px 6px;border:1px solid rgba(0,204,255,0.35);border-radius:3px;${r.unlocked ? '' : 'opacity:0.6'}">` +
+          `<span class="library-rel" data-rel="${r.id}" style="cursor:pointer;padding:1px 6px;border:1px solid rgba(0,204,255,0.35);border-radius:3px;${glassCss}${r.unlocked ? '' : 'opacity:0.6'}">` +
           `${r.title}${r.unlocked ? '' : LOCK_TAG_HTML}` +
           '</span>',
         );
@@ -1186,7 +957,7 @@ export class LibraryPane {
     return parts.join('');
   }
 
-  // ── Interaction (delegated) ────────────────────────────────────────────────
+  // ── Interaction (delegated — one handler, both containers) ─────────────────
 
   /** @private */
   _closest(el, sel) {
@@ -1195,8 +966,7 @@ export class LibraryPane {
 
   /** @private */
   _onClick(e) {
-    this._wake();
-    const max = this._closest(e.target, '[data-max]');
+    const max = this._closest(e && e.target, '[data-max]');
     if (max) {
       const id = max.getAttribute('data-max');
       // MAXIMIZE = the full-screen viewer on this entry — main.js routes it
@@ -1204,7 +974,7 @@ export class LibraryPane {
       if (id && this._onMaximize) { try { this._onMaximize(id); } catch (_e) { /* dep */ } }
       return;
     }
-    const rel = this._closest(e.target, '[data-rel]');
+    const rel = this._closest(e && e.target, '[data-rel]');
     if (rel) {
       const id = rel.getAttribute('data-rel');
       if (id) this.openEntry(id);
@@ -1234,7 +1004,7 @@ export class LibraryPane {
   /** @private Dwell elapsed (timer-fired; tests drive it directly): mark the
    *  rested entry seen through the injected onViewed (CODEX_VIEWED →
    *  CodexSystem.markSeen, the one seen-writer), then repaint — the unread
-   *  count drop is visible at once. */
+   *  count drop reaches the shell's tab at once (onRefresh). */
   _seenTick() {
     this._seenTimer = null;
     if (!this._open || this._disposed) return;
@@ -1345,7 +1115,7 @@ export class LibraryPane {
     if (typeof url !== 'string' || url.length < 64) return false;
     this._photo = { id: this._entryId, url, anchored: c.anchored, framed };
     this._photoCount++;
-    this.refresh();                    // structural (photo 0 → 1): writes at once
+    this.refresh();                    // structural (photo 0 → 1): writes the HEAD at once
     this._flashBanner();               // the one-shot arrival flash (reduced motion: none)
     return true;
   }
@@ -1396,17 +1166,17 @@ export class LibraryPane {
 
   /**
    * @private The one-shot arrival flash on the banner (Session D): right after
-   * the structural repaint that inserted `.library-photo`, run a PHOTO_FLASH_MS
-   * brightness/ring animation on it through the Web Animations API — no
-   * stylesheet, no second style write, no timer, the element returns to its
-   * inline style by itself. Reduced motion → none (the banner's arrival is
-   * the signal). Headless (no querySelector / no animate) → counted, not
-   * drawn. Never per frame: once per photo landed.
+   * the structural repaint that inserted `.library-photo` into the HEAD, run
+   * a PHOTO_FLASH_MS brightness/ring animation on it through the Web
+   * Animations API — no stylesheet, no second style write, no timer, the
+   * element returns to its inline style by itself. Reduced motion → none (the
+   * banner's arrival is the signal). Headless / unmounted (no querySelector /
+   * no animate) → counted, not drawn. Never per frame: once per photo landed.
    */
   _flashBanner() {
     this._photoFlashes++;
     if (this._reducedMotion()) return;
-    const host = this._body || this._root;
+    const host = this._head;
     const img = (host && typeof host.querySelector === 'function') ? host.querySelector('.library-photo') : null;
     if (!img || typeof img.animate !== 'function') return;
     try {
@@ -1439,55 +1209,6 @@ export class LibraryPane {
       }
     }
     return false;
-  }
-
-  // ── Idle fade (open panes dim to 70 %, pointer wakes — §2 Motion) ─────────
-
-  /** @private */
-  _clearIdleTimer() {
-    if (this._idleTimer != null) {
-      clearTimeout(this._idleTimer);
-      this._idleTimer = null;
-    }
-  }
-
-  /** @private Activity: restore full opacity + re-arm the idle window. */
-  _wake() {
-    this._lastActivityMs = this._now();
-    if (this._idle) {
-      this._idle = false;
-      if (this._root) {
-        this._root.style.opacity = this._open ? '1' : this._root.style.opacity;
-        if (this._root.classList && this._root.classList.remove) this._root.classList.remove('library-idle');
-      }
-    }
-    this._armIdleTimer();
-  }
-
-  /** @private */
-  _armIdleTimer() {
-    this._clearIdleTimer();
-    if (!this._open || !this._root || this._disposed) return;
-    this._idleTimer = setTimeout(() => this._idleTick(), IDLE_FADE_MS + 20);
-  }
-
-  /**
-   * @private The idle beat (timer-fired; tests drive it directly with an
-   * injected clock): past IDLE_FADE_MS of no activity while open → fade to
-   * IDLE_FADE_OPACITY — never display:none, never visibility loss (the pane
-   * "never vanishes"); otherwise re-arm for the remainder.
-   */
-  _idleTick() {
-    this._idleTimer = null;
-    if (!this._open || !this._root || this._disposed) return;
-    const since = this._now() - this._lastActivityMs;
-    if (since >= IDLE_FADE_MS) {
-      this._idle = true;
-      this._root.style.opacity = String(IDLE_FADE_OPACITY);
-      if (this._root.classList && this._root.classList.add) this._root.classList.add('library-idle');
-    } else {
-      this._idleTimer = setTimeout(() => this._idleTick(), (IDLE_FADE_MS - since) + 20);
-    }
   }
 }
 

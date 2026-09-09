@@ -1,20 +1,41 @@
 /**
- * RefitPane.js — Wave 5 (2): the REFIT pane, the left workbench pane on F3
+ * RefitPane.js — Wave 5 (2): the REFIT section of the ONE workbench pane — a
+ * HOSTED SECTION ENGINE, rendered into the slot WorkbenchPane mounts it in
  * (docs/ladder/08-workbench.md §2 "REFIT card" + §3; 00-spec.md §3 F3
- * amendment; 01-numbers.md "Workbench panes"; 03-plan.md "Wave 5 — GO" (2)).
+ * amendment; 01-numbers.md "Workbench panes"; 03-plan.md "Wave 5 — GO" (2);
+ * Session U, plan .kilo/plans/1788954873769-one-workbench-pane.md §3 "Hosted
+ * engine contracts — RefitPane (A3)", D10 / D12 / D13).
  *
- * Built on the ProxContextPanel house pattern: a SELF-CONTAINED DOM pane
- * (build lazily, never at import), pure static rankers/formatters that are
- * headless-testable, the G1 innerHTML cache + the static `shouldWrite` 250 ms
- * DOM-write cap, and an injectable `now` clock. NO eventBus/Events import and
- * NO live singletons — every live read (credits, avg credits/catch, upgrade
+ * HOSTED BY WorkbenchPane (Session U 2026-09-09, plan D5): this module owns
+ * CONTENT only — the model, the markup, the delegated interactions and the
+ * hull-ghost routing. The root, the footer tab (SPECS + the gold count of
+ * affordable refits), the slide, the idle fade, reduced motion, the RTL
+ * variable, the depot-invitation glow and the ONE open state / onOpenChange
+ * edge all live in js/ui/WorkbenchPane.js (with the moved constants
+ * PANE_SLIDE_MS / IDLE_FADE_* / PANE_Z_INDEX / ROOT_BOTTOM_PX / INVITE_HALO).
+ * The shell calls `mount(el, { onRefresh })` ONCE with its `.workbench-refit`
+ * slot and then drives `setEnabled` (F1 only — off F1 the slot hides),
+ * `open({ firstVisit })` / `close()`, `focusPart` (the D6 click verb),
+ * `refresh` and `dispose`. `affordableCount()` is the number the shell's tab
+ * shows; `onRefresh` fires after every repaint so the tab follows a BUY / a
+ * chip tap on the same edge. DOM-less until mounted: every public method is a
+ * no-op-safe read/write before `mount` and after `dispose` (the model still
+ * computes headless — the ProxContextPanel house pattern: pure static
+ * rankers/formatters, the G1 innerHTML cache + the static `shouldWrite` 250 ms
+ * DOM-write cap, an injectable `now` clock). NO eventBus/Events import and NO
+ * live singletons — every live read (credits, avg credits/catch, upgrade
  * levels, provider rows) and every routed action (purchase, ghost outline,
- * Library open, D10 open-signal) arrives through injected deps, all optional,
- * so the module is headless-safe and the flag-off boot never constructs it.
+ * Library deep link) arrives through injected deps, all optional, so the
+ * module is headless-safe and the flag-off boot never constructs it.
  * (fittingCatalog's pure-data import chain is the one sanctioned data source.)
  *
- * CONTENT: the seven-subsystem INDEX (blueprintSubsystems, priority order) →
- * one focused per-subsystem CARD:
+ * CONTENT: the header `REFIT · <SUBSYSTEM>` (`.refit-header`, the PaneHelp
+ * anchor; the title is the section's ONE Tech Library deep link —
+ * `.refit-title[data-codex]` = the manifest codexId, also read by
+ * `focusedCodexId()`; alternative rows carry no data-codex — shop rows have
+ * no entries and none are invented, Session C decision d), the
+ * seven-subsystem INDEX (blueprintSubsystems, priority order) → one focused
+ * per-subsystem CARD:
  *   - the INSTALLED model pinned at top with live rows from
  *     `providers[readout]()` — the SAME providers object main.js builds for
  *     HullCamFloor (`() => string[]`, or an object rendered as 'KEY: value'
@@ -33,41 +54,28 @@
  *     `upgradePrereqsMet` predicate ShopScreen's purchase guard uses.
  *   - BUY is ONE click (no confirm(), no undo; LIVE allowed —
  *     08-workbench.md:102-104) through the injected `purchase`
- *     (ShopScreen.purchaseUpgrade); the pane then re-renders from the
+ *     (ShopScreen.purchaseUpgrade); the section then re-renders from the
  *     injected getUpgradeLevel/getCredits TRUTH, never from optimism.
  *   - Session L (plan item 4): the INSTALLED block of the OWNING card carries
  *     the actuator TOGGLE chips (POWER: arrays furl + feather; BERTHS: struts;
  *     THERMAL: flower) through the injected `actuators` dep — the SAME actions
  *     the `,` / Shift+`,` / `.` / `O` hotkeys drive; a tap toggles, then the
- *     pane re-reads truth (see ACTUATOR_CHIPS and the ctor doc).
- *
- * TIMINGS (module constants — VisualLaw has no pane-timing entry yet; the
- * 01-numbers "Workbench panes" table is the canonical source until the
- * VisualLaw entries land with a later consumer per 08-workbench §9; do NOT
- * add one here): PANE_SLIDE_MS = 270 (inside the 240–300 ms law),
- * IDLE_FADE_OPACITY = 0.7 / IDLE_FADE_MS = 6000 ("idle panes fade to 70 %,
- * never vanish" — pointer wakes it), and the reduced-motion probe swaps the
- * slide for a fade (the FloorMask.js house matchMedia shape).
- *
- * LAYOUT: LEFT pane, width clamp(300px, 24vw, 340px) (01-numbers), root
- * `#ladder-refit`, header `.refit-header`, edge tab `#ladder-refit-tab`
- * always visible while enabled carrying the GOLD count of affordable refits.
- * STRUCTURE (Session D, owner decision 3): the root is the positioning +
- * TRANSFORM shell (width, z, the slide; paints nothing, takes no pointer
- * events); inside it the BODY (`.refit-body`: border, background, padding,
- * the scrolling innerHTML) and the TAB — a child of the root at the pane's
- * INNER edge, so it rides the slide: closed = the screen edge, open = the
- * pane's inner edge, never over the content (the Session C z-36 overlay
- * covered ~22 px of its own open pane; retired). Reduced motion fades the
- * BODY, the root never moves, and the tab flips between the screen edge and
- * the inner edge through `--refit-open` (visible + clickable while the pane
- * is closed). The header title is the pane's ONE Tech Library
- * deep link (`.refit-title[data-codex]` = the manifest codexId, also read by
- * `focusedCodexId()`); alternative rows carry no data-codex — shop rows have
- * no entries and none are invented (Session C decision d).
- * ONE CSS variable (`--refit-dir`, default 1) mirrors the slide direction AND
- * the tab's side for RTL: an RTL boot sets `--refit-dir:-1` (and right-anchors
- * the pane) and every transform follows.
+ *     section re-reads truth (see ACTUATOR_CHIPS and the ctor doc).
+ *   - D12 (Session U) — a DETACHED part: a hull part with no refit group
+ *     (`subsystemForPart` → null: PAYLOAD / DAUGHTERS) renders `REFIT` + the
+ *     seven chips + ONE `.refit-detached` line `no refit fits <PART NAME> —
+ *     pick a subsystem` and HIDES INSTALLED / the alternatives / the wallet —
+ *     never a stale card under another part's head. A chip tap or a mapped
+ *     part clears it. (D13: the THERMAL callout group is a MAPPED group now —
+ *     refitIndex.js — so the flower parts land on the THERMAL card.)
+ *   - D10 (Session U) — glass touch targets: with `deps.glass` the BUY buttons
+ *     and the alternative rows wear `align-items:center; min-height:44px` and
+ *     the subsystem / RECOMMENDED chips ride the actuator-chip law
+ *     (ACTUATOR_CHIP_GLASS_MIN_H_PX, the 44 pt HIG box); desktop keeps the
+ *     shipped sizes byte-for-byte.
+ * Fonts: the section inherits the shell body's `var(--font-mono)`; its own
+ * buttons say `font:inherit` (test-Fonts). Colours: VisualLaw only (the chips
+ * read C.LABEL — test-SessionQ-wiring pins the reader list).
  *
  * @module ui/RefitPane
  */
@@ -78,50 +86,12 @@ import { FITTING_CATALOG, groupBySubsystem } from '../data/fittingCatalog.js';
 import { BLUEPRINT_SUBSYSTEMS } from '../data/blueprintSubsystems.js';
 import { subsystemForPart, partsForSubsystem } from '../data/refitIndex.js';
 import { upgradePrereqsMet } from './shopGating.js';
-import { INVITE_HALO } from './RailIndicator.js';
-import { RAIL_GEOMETRY } from './RailGeometry.js';
-
-/** Pane slide duration (ms) — inside the 240–300 ms house window
- *  (01-numbers "Workbench panes"; VisualLaw pane-timing entry pending). */
-export const PANE_SLIDE_MS = 270;
-/** Idle panes fade to 70 %, never vanish (08-workbench §2 Motion). */
-export const IDLE_FADE_OPACITY = 0.7;
-/** Idle threshold before the fade applies (ms). */
-export const IDLE_FADE_MS = 6000;
-/** Pane root stacking (the shipped workbench-pane layer). The edge tab is a
- *  CHILD of the root at the pane's inner edge since Session D (owner decision
- *  3) — it rides the pane's transform and needs no z step of its own (the
- *  Session C TAB_Z_INDEX 36 overlay, which covered ~22 px of the open pane,
- *  is retired). */
-export const PANE_Z_INDEX = 35;
-/** The pane root's CSS `bottom` (px) — the footer tab's `bottom` is the band's bottom minus this (Session P, plan D7). */
-export const ROOT_BOTTOM_PX = 96;
 
 /** G1 write cap — the ProxContextPanel/TransferWindows house value. */
 const DOM_WRITE_MIN_INTERVAL_MS = 250;
 
 /** Monotonic ms clock (DOM-guarded module — Date.now fallback headless). */
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-
-/** Write a CSS custom property (the real DOM needs setProperty; a fake-DOM
- *  style object takes the key directly — tests read it back). */
-function _setVar(el, name, value) {
-  const st = el && el.style;
-  if (!st) return;
-  if (typeof st.setProperty === 'function') st.setProperty(name, value);
-  else st[name] = value;
-}
-
-/** House reduced-motion probe (the FloorMask.js:188-196 shape). */
-function _prefersReducedMotion() {
-  try {
-    return !!(typeof window !== 'undefined' &&
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-  } catch (_e) {
-    return false;
-  }
-}
 
 /** The seven subsystems in blueprintSubsystems PRIORITY order (higher first —
  *  the manifest's own carousel law), resolved once at import (pure data). */
@@ -155,19 +125,27 @@ export const ACTUATOR_CHIPS = Object.freeze({
 export const ACTUATOR_NOT_FITTED = 'NOT FITTED';
 /** Chip minimum height (px): the desktop row, and the 44 pt HIG box on glass
  *  (`deps.glass` — the house idiom; main.js passes the boot's `_glassBoot`).
- *  Owner law 2026-09-06: a new touch target ships at 44 pt on the iPad. */
+ *  Owner law 2026-09-06: a new touch target ships at 44 pt on the iPad.
+ *  Session U (plan D10): the SAME 44 also sizes the BUY buttons, the
+ *  alternative rows and the subsystem / RECOMMENDED chips on glass. */
 export const ACTUATOR_CHIP_MIN_H_PX = 28;
 export const ACTUATOR_CHIP_GLASS_MIN_H_PX = 44;
+
+/** The glass touch rules every tap target carries (the actuator-chip set). @private */
+const GLASS_TOUCH_CSS = 'touch-action:manipulation;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;';
 
 /** Minimal HTML escape for a duck-typed dep string (a pass-through state). @private */
 const _esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 export class RefitPane {
   /**
-   * Every dep optional; the pane is inert headless (no DOM at import, no DOM
-   * without a usable doc) and never throws on a missing dep.
+   * Every dep optional; the engine is inert headless (no DOM at import, no
+   * DOM of its own EVER — it renders into the slot the shell mounts) and never
+   * throws on a missing dep.
+   * Session U: `doc`, `footerBottomPx`, `reducedMotion` and `onOpenChange` are
+   * the shell's concerns now and are IGNORED here (a hub still passing them
+   * is harmless — no DOM is built from them and no callback is kept).
    * @param {object} [deps]
-   * @param {Document} [deps.doc] - document to build into (default: global)
    * @param {function} [deps.now] - monotonic ms clock (tests)
    * @param {object} [deps.providers] - HullCamFloor's SAME live-row providers,
    *   keyed by the manifest `readout` (main.js:1340)
@@ -177,21 +155,15 @@ export class RefitPane {
    * @param {function} [deps.purchase] - (id) => void (ShopScreen.purchaseUpgrade)
    * @param {function} [deps.onGhost] - (partIds|null) => void (MotherCallouts.setGhostOutline)
    * @param {function} [deps.onOpenEntry] - (codexId) => void (the Library deep link)
-   * @param {function} [deps.onOpenChange] - (isOpen) => void (the D10 calm-cap signal)
    * @param {function} [deps.adapterDeps] - () => object: the fittingCatalog
    *   `current`-adapter deps ({ player, resourceSystem, kesslerSystem,
    *   sensorSystem, cargoSystem, armManager, captureNetSystem, hasUpgrade })
    *   — a GETTER, resolved per refresh, because some systems construct after
    *   the pane (Session B commit 4; see _adapterDeps). Absent/throwing → {}
    *   (the static catalog base — the honest headless fallback).
-   * @param {boolean|function} [deps.reducedMotion] - override for the matchMedia probe
-   * @param {boolean} [deps.glass] - the boot's glass answer (Session L): the
-   *   actuator toggle chips are 44 pt tall on glass (the HIG box), 28 on desktop
-   * @param {number} [deps.footerBottomPx] - Session P (plan D7): the FOOTER
-   *   BAND's bottom offset from the viewport bottom (the hub passes
-   *   RailGeometry.footerBand().bottom = 132); the REFIT tab sits in the band's
-   *   left slot at `bottom: footerBottomPx − 96` (the root's own bottom).
-   *   Default: the thumb rest + gap. F1 only, never edge chrome.
+   * @param {boolean} [deps.glass] - the boot's glass answer (Session L / D10):
+   *   the actuator chips, the subsystem chips, the BUY buttons and the
+   *   alternative rows wear the 44 pt HIG box on glass; desktop sizes otherwise
    * @param {function} [deps.getRecommended] - () => (string|null): the shop's
    *   recommended-starter id for a FIRST depot visit (ShopScreen's pure
    *   `recommendedStarter`) — Wave 5 Session K: the one-shop REFIT drawer hosts
@@ -210,8 +182,6 @@ export class RefitPane {
    *   onto the SAME methods the hotkeys call and emits the input events itself.
    */
   constructor(deps = {}) {
-    this._doc = deps.doc !== undefined ? deps.doc
-      : (typeof document !== 'undefined' ? document : null);
     this._now = deps.now || _nowMs;
     this._providers = deps.providers || null;
     this._getCredits = deps.getCredits || null;
@@ -220,38 +190,32 @@ export class RefitPane {
     this._purchase = deps.purchase || null;
     this._onGhost = deps.onGhost || null;
     this._onOpenEntry = deps.onOpenEntry || null;
-    this._onOpenChange = deps.onOpenChange || null;
     this._adapterDepsFn = deps.adapterDeps || null;
-    this._reducedMotionDep = deps.reducedMotion;
     this._getRecommended = deps.getRecommended || null;
-    /** Session L: glass boot → the actuator chips wear the 44 pt HIG box. */
+    /** Session L / D10: glass boot → every tap target wears the 44 pt HIG box. */
     this._glass = !!deps.glass;
-    /** Session P (plan D7): the footer band's bottom — the tab's slot. */
-    const fb = Number(deps.footerBottomPx);
-    this._footerBottomPx = Number.isFinite(fb) ? fb : (RAIL_GEOMETRY.THUMB_REST_PX + RAIL_GEOMETRY.FOOTER_GAP_PX);
     this._actuators = (deps.actuators && typeof deps.actuators === 'object') ? deps.actuators : null;
+    // (deps.doc / deps.footerBottomPx / deps.reducedMotion / deps.onOpenChange:
+    // the shell's — ignored, see the ctor doc.)
+
     /** Session K: the first-visit framing — true from open({firstVisit}) to close(). */
     this._firstVisit = false;
-
-    this._enabled = false;
-    this._open = false;
+    this._enabled = false;        // the shell's floor gate (F1 only): hides the slot when off
+    this._open = false;           // the shell's told-state (open({...}) … close())
     this._focused = SUBSYSTEM_ORDER[0];   // POWER — the highest-priority card
-    this._built = false;
-    this._root = null;            // the transform shell (#ladder-refit)
-    this._body = null;            // the panel inside it (.refit-body — the innerHTML target)
-    this._tab = null;             // the edge tab, a child of the root at its inner edge
-    this._tabCount = null;
+    /** D12: `{ id, name }` of a clicked hull part with NO refit group, else null. */
+    this._detached = null;
+    // Hosting: the slot the shell mounted us in + its refresh hook.
+    this._el = null;
+    this._onRefresh = null;
+    this._handlers = null;        // the delegated listeners on the slot (removed on dispose)
+    this._mounting = false;       // true during mount()'s first paint (no onRefresh for it)
+    /** The last model's affordable count — what the shell's tab shows. */
+    this._affordable = 0;
+    // G1 cache.
     this._lastHtml = null;
     this._lastStructKey = null;
     this._lastWriteMs = -Infinity;
-    this._lastTabText = null;
-    /** Wave 5 Session H (plan D-H): true while the depot INVITATION window is
-     *  open — the tab wears the VALUE-gold edge (steady; gold never pulses). */
-    this._invited = false;
-    // Idle fade state (open panes fade to 70 % after IDLE_FADE_MS, pointer wakes).
-    this._lastActivityMs = this._now();
-    this._idle = false;
-    this._idleTimer = null;
     // Ghost bookkeeping: true while an alternative hover holds hull ghosts on.
     this._ghosting = false;
     this._disposed = false;
@@ -381,8 +345,8 @@ export class RefitPane {
   }
 
   /**
-   * The edge tab's GOLD count: candidates purchasable RIGHT NOW (not maxed,
-   * prereqs met, cost ≤ credits) across the whole catalog. Pure.
+   * The tab's GOLD count (the shell paints it): candidates purchasable RIGHT
+   * NOW (not maxed, prereqs met, cost ≤ credits) across the whole catalog. Pure.
    * @param {Array<object>} catalog @param {object} ctx (rankAlternatives ctx)
    * @returns {number}
    */
@@ -430,23 +394,97 @@ export class RefitPane {
     return { key, text: `${def.name} \u00b7 ${word}`, pressed: s === def.on, disabled: false };
   }
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
-
-  /** @returns {boolean} */
-  isOpen() { return this._open; }
+  // ── Hosting (the shell's calls) ────────────────────────────────────────────
 
   /**
-   * Session P (plan D6/D7): the tab's CSS `bottom` inside the pane root — the
-   * footer band's bottom (viewport offset) minus the root's own bottom (96),
-   * never negative. 132 → 36 on both surfaces. PURE (a test seam).
+   * Session U: render into the shell's slot. Called ONCE by WorkbenchPane's
+   * build with its `.workbench-refit` element; the engine paints its markup
+   * into `el.innerHTML`, listens for click / pointerover / pointerout on `el`
+   * (one delegated set — BUY, actuator chips, subsystem chips, RECOMMENDED,
+   * the REFIT title deep link, the alternative-row hover ghost) and applies
+   * the current enabled state to `el.style.display`. `onRefresh` is stored
+   * and called after EVERY later repaint (a BUY, a chip tap, a card switch,
+   * a refresh that changed the markup) so the shell's tab count follows on
+   * the same edge — the FIRST paint inside mount() itself does NOT fire it
+   * (the shell is mid-build; it paints its tab when its build finishes).
+   * A second mount moves the engine to the new slot (the old listeners go).
+   * No-op after dispose() or without an element.
+   * @param {HTMLElement} el - the slot
+   * @param {{ onRefresh?: function }} [opts]
+   */
+  mount(el, opts) {
+    if (this._disposed || !el) return;
+    if (this._el) this._unmount();
+    this._el = el;
+    this._onRefresh = (opts && typeof opts.onRefresh === 'function') ? opts.onRefresh : null;
+    const h = {
+      click: (e) => this._onClick(e),
+      pointerover: (e) => this._onPointerOver(e),
+      pointerout: (e) => this._onPointerOut(e),
+    };
+    if (typeof el.addEventListener === 'function') {
+      for (const type of Object.keys(h)) el.addEventListener(type, h[type]);
+    }
+    this._handlers = h;
+    this._lastHtml = null;            // a fresh slot: the first refresh must write
+    this._lastStructKey = null;
+    this._lastWriteMs = -Infinity;
+    this._applyDisplay();
+    this._mounting = true;
+    try { this.refresh(); } finally { this._mounting = false; }
+  }
+
+  /** @returns {boolean} true while mounted in a slot. */
+  isMounted() { return !!this._el; }
+
+  /**
+   * The number the shell's tab shows on F1: the affordable-refit count of
+   * the LAST computed model (cached on every refresh — a pure read, never a
+   * recompute; 0 before the first refresh).
    * @returns {number}
    */
-  tabBottomCss() {
-    return Math.max(0, Math.round(this._footerBottomPx - ROOT_BOTTOM_PX));
+  affordableCount() { return this._affordable; }
+
+  /**
+   * The shell's floor gate (Session U): the REFIT section is a floor-1 place.
+   * On: the slot shows (`display:''`) and the content refreshes. Off: the slot
+   * hides (`display:none`) and any live alternative-hover ghost clears — a
+   * pane that rides along to F2 with a THERMAL alternative hovered must not
+   * keep the hull pulsing. Never touches the open state (the shell's close()
+   * does). Headless: the flag + the ghost edge only.
+   * @param {boolean} on
+   */
+  setEnabled(on) {
+    on = !!on;
+    this._enabled = on;
+    this._applyDisplay();
+    if (on) this.refresh();
+    else this._setGhosting(false);
   }
+
+  /** @private The slot follows the enabled flag. */
+  _applyDisplay() {
+    const el = this._el;
+    if (el && el.style) el.style.display = this._enabled ? '' : 'none';
+  }
+
+  /** @private Drop the delegated listeners and forget the slot. */
+  _unmount() {
+    const el = this._el;
+    if (el && this._handlers && typeof el.removeEventListener === 'function') {
+      for (const type of Object.keys(this._handlers)) el.removeEventListener(type, this._handlers[type]);
+    }
+    this._handlers = null;
+    this._el = null;
+  }
+
+  // ── Lifecycle (shell-called) ───────────────────────────────────────────────
+
+  /** @returns {boolean} the shell's told-state: open({…}) … close(). */
+  isOpen() { return this._open; }
   /** @returns {boolean} */
   isEnabled() { return this._enabled; }
-  /** @returns {string} the focused subsystem id (always one of the seven) */
+  /** @returns {string} the focused subsystem id (always one of the seven — the last card, even while detached) */
   focusedSubsystem() { return this._focused; }
   /**
    * The focused card's Tech Library deep link — the blueprint manifest's own
@@ -454,90 +492,27 @@ export class RefitPane {
    * `.refit-title[data-codex]` carries (one mapping, never a second table).
    * Session C: main.js chains it behind the focused hull part as the
    * LibraryPane `subject` so an entry-less library open lands on the card
-   * the player is fitting instead of the prompt. Pure read.
+   * the player is fitting instead of the prompt. Pure read. D12: null while a
+   * DETACHED part is showing — the header carries no title then (no card is
+   * in view; the SpecsSubject table falls through to its own fallback).
    * @returns {string|null}
    */
   focusedCodexId() {
+    if (this._detached) return null;
     const m = MANIFEST_BY_ID.get(this._focused);
     return (m && typeof m.codexId === 'string') ? m.codexId : null;
   }
-  /**
-   * The pane's laid-out width in CSS px (its box, border-box: the
-   * clamp(300px, 24vw, 340px) of 01-numbers) — 0 headless or before the root
-   * is built. The ONE number main.js feeds `CameraSystem.setLadderPaneInset`
-   * on the onOpenChange edge so the subject reframes toward the pane-free
-   * centre (08-workbench §2, Wave 5 (3)). A layout read: call it on edges
-   * only, never per frame.
-   * @returns {number}
-   */
-  widthPx() {
-    const w = this._root ? this._root.offsetWidth : 0;
-    return (Number.isFinite(w) && w > 0) ? w : 0;
-  }
 
   /**
-   * The depot INVITATION on the tab (Wave 5 Session H, plan D-H): from chapter
-   * 4 on, a mission-boundary catch opens the buying window instead of forcing
-   * the shop stop — main.js's ONE DEPOT_INVITATION listener feeds the rail's
-   * notch-1 glow (WHERE: come down to the workbench) AND this tab glow (WHAT:
-   * the REFIT drawer is the shop). `open` true → the tab edge wears VALUE gold
-   * with the steady halo (VisualLaw: gold never pulses); false (entered /
-   * lapsed / reset) → the resting INFO frame. Write-on-change; state survives
-   * enable/disable cycles (the tab keeps its dress while hidden); headless =
-   * pure flag. The tab itself stays governed by setEnabled — off the workbench
-   * floor the rail glow is the visible cue.
-   * @param {boolean} open
-   */
-  setInvitation(open) {
-    const want = !!open;
-    if (want === this._invited) return;
-    this._invited = want;
-    this._applyInvitation();
-  }
-
-  /** @returns {boolean} true while the invitation window is open (the tab glows). */
-  isInvited() { return this._invited; }
-
-  /** @private Dress/undress the tab edge for the invitation (steady, G1: edges only). */
-  _applyInvitation() {
-    if (!this._tab) return;
-    if (this._invited) {
-      this._tab.style.borderColor = VisualLaw.COLORS.VALUE;
-      this._tab.style.boxShadow = INVITE_HALO;                          // the rail's INVITE_HALO law — ONE definition (Session L review)
-    } else {
-      this._tab.style.borderColor = 'rgba(0,204,255,0.4)';             // the resting INFO frame
-      this._tab.style.boxShadow = 'none';
-    }
-  }
-
-  /**
-   * Enable on F1 arrival / disable on leave (LadderController `refit` dep).
-   * Enabled: the edge tab shows (always visible while enabled). Disabled:
-   * tab hides and the pane closes. Idempotent; headless no-op beyond state.
-   * @param {boolean} on
-   */
-  setEnabled(on) {
-    on = !!on;
-    if (on === this._enabled) return;
-    this._enabled = on;
-    if (on) {
-      this._build();
-      if (this._tab) this._tab.style.display = 'block';
-      this.refresh();
-    } else {
-      if (this._tab) this._tab.style.display = 'none';
-      this.close();
-    }
-  }
-
-  /**
-   * Open the pane (no-op while disabled). Fires onOpenChange(true) once.
-   * Wave 5 Session K: `{ firstVisit: true }` (the hub, from WORKBENCH_STOP's
-   * `firstDepotVisit` — the ONE first-depot grant rule in GameFlowManager)
-   * dresses the header with the RECOMMENDED chip for the shop's starter pick
-   * and focuses that starter's card, so the first fit is one tap away — the
-   * full-screen shop's first-visit framing, hosted here. One-time: close()
-   * clears it. Already open → nothing changes (the player is already here).
+   * The shell opened (no-op while disabled or already open). Wave 5 Session
+   * K: `{ firstVisit: true }` (the hub, from WORKBENCH_STOP's `firstDepotVisit`
+   * — the ONE first-depot grant rule in GameFlowManager) dresses the header
+   * with the RECOMMENDED chip for the shop's starter pick and focuses that
+   * starter's card, so the first fit is one tap away — the full-screen shop's
+   * first-visit framing, hosted here. The shell calls this BEFORE
+   * library.open() so the subject read (focusedCodexId) sees the starter's
+   * card. One-time: close() clears it. Already open → nothing changes (the
+   * player is already here).
    * @param {{ firstVisit?: boolean }} [opts]
    */
   open(opts) {
@@ -546,68 +521,77 @@ export class RefitPane {
     this._firstVisit = !!(opts && opts.firstVisit);
     if (this._firstVisit) {
       const reco = this._recommended();
-      if (reco && reco.sub && MANIFEST_BY_ID.has(reco.sub)) this._focused = reco.sub;
+      if (reco && reco.sub && MANIFEST_BY_ID.has(reco.sub)) this._setFocus(reco.sub);
     }
-    this._applyOpenState();
-    this._wake();
     this.refresh();
-    if (this._onOpenChange) { try { this._onOpenChange(true); } catch (_e) { /* dep */ } }
   }
 
-  /** Close the pane. Clears any live ghost; fires onOpenChange(false) once. */
+  /** The shell closed: clears any live ghost + the first-visit framing. Idempotent. */
   close() {
-    if (!this._open) return;
     this._open = false;
     this._firstVisit = false;
     this._setGhosting(false);
-    this._applyOpenState();
-    this._clearIdleTimer();
-    if (this._onOpenChange) { try { this._onOpenChange(false); } catch (_e) { /* dep */ } }
   }
 
   /** @returns {boolean} Session K: true while the first-visit framing is showing. */
   isFirstVisit() { return this._open && this._firstVisit; }
 
-  /** Space on F3 (D-b): toggle. */
-  toggle() { if (this._open) this.close(); else this.open(); }
-
   /**
-   * Focus one subsystem card (index click / focusPart). Unknown ids keep the
-   * current focus. Refreshes; never opens by itself.
+   * Focus one subsystem card (index chip / RECOMMENDED chip / focusPart).
+   * Unknown ids keep the current focus. Clears a D12 detached part ("a chip
+   * tap … clears it"). Refreshes; never opens by itself.
    * @param {string} id - one of the seven subsystem ids
    */
   focusSubsystem(id) {
     if (!MANIFEST_BY_ID.has(id)) return;
+    this._setFocus(id);
+    this.refresh();
+  }
+
+  /** @private Card focus: drops the detached part; a NEW card clears a stale alt-hover ghost. */
+  _setFocus(id) {
+    this._detached = null;
     if (id !== this._focused) {
       this._focused = id;
       this._setGhosting(false);   // a new card: any old alt-hover ghost is stale
     }
+  }
+
+  /**
+   * D-a / D6: focus the card for a clicked hull part (MotherCallouts record
+   * shape) through the 8→7 refitIndex (D13: the flower parts → THERMAL).
+   * D12: a part with NO refit group (PAYLOAD / DAUGHTERS: subsystemForPart →
+   * null) becomes the DETACHED part — the section renders REFIT + the chips
+   * + `no refit fits <PART NAME> — pick a subsystem` and hides the card rows
+   * until a chip tap or a mapped part clears it. A null part (or a record
+   * with neither name nor id) is a no-op; never throws.
+   * @param {{ id?:string, name?:string, systemId?:string }|null} part
+   */
+  focusPart(part) {
+    if (!part || typeof part !== 'object') return;
+    const sub = subsystemForPart(part);
+    if (sub) { this.focusSubsystem(sub); return; }
+    const name = part.name != null ? String(part.name) : (part.id != null ? String(part.id) : '');
+    if (!name) return;
+    this._detached = { id: part.id != null ? String(part.id) : null, name };
+    this._setGhosting(false);     // no card in view → no ghost target
     this.refresh();
   }
 
   /**
-   * D-a: focus the card for a clicked hull part (MotherCallouts record shape)
-   * through the 8→7 refitIndex. Parts with no refit group (PAYLOAD /
-   * DAUGHTERS / flower) keep the current focus — the pane still opens on
-   * whatever card was last shown, never throws.
-   * @param {{ id?:string, systemId?:string }|null} part
-   */
-  focusPart(part) {
-    const sub = subsystemForPart(part);
-    if (sub) this.focusSubsystem(sub);
-  }
-
-  /**
    * Recompute + repaint (G1: innerHTML cache + the 250 ms cap; structural
-   * changes write immediately). Headless: computes and returns the model.
-   * Safe to call at any cadence — the pane itself only calls it on
-   * interaction edges (open/focus/buy/enable), never per frame.
+   * changes write immediately). Caches the affordable count; a write fires
+   * `onRefresh` (except mount()'s own first paint). Headless / unmounted:
+   * computes and returns the model. Safe to call at any cadence — the engine
+   * itself only calls it on interaction edges (open/focus/buy/enable), never
+   * per frame.
    * @returns {object} the display model
    */
   refresh() {
     const model = this._model();
-    this._paintTab(model);
-    if (!this._root) return model;
+    this._affordable = model.affordable;
+    const el = this._el;
+    if (!el) return model;
     const structKey = model.structKey;
     const now = this._now();
     if (!RefitPane.shouldWrite(structKey, this._lastStructKey, now, this._lastWriteMs)) {
@@ -615,39 +599,28 @@ export class RefitPane {
     }
     const html = this._html(model);
     if (html !== this._lastHtml) {
-      this._body.innerHTML = html;          // the panel (Session D: the root is the transform shell)
+      el.innerHTML = html;
       this._lastHtml = html;
       this._lastStructKey = structKey;
       this._lastWriteMs = now;
+      if (!this._mounting && this._onRefresh) { try { this._onRefresh(); } catch (_e) { /* dep */ } }
     }
     return model;
   }
 
-  /** Remove every node + timer; the instance stays inert afterwards. */
+  /** Drop the listeners, empty the slot, clear any ghost; the instance stays inert afterwards. */
   dispose() {
     this._disposed = true;
-    this._clearIdleTimer();
-    // Session I follow-up (review, (h)): the close edge must observe
-    // isOpen() === false — main.js's _syncWorkbenchPanes re-reads BOTH panes'
-    // isOpen() inside the callback, so firing it while _open was still true
-    // re-armed the held-world signal as the pane died (clock stuck at 0, rail
-    // HOLD, the 10 fps heartbeat — forever). Same order close() already uses.
-    const wasOpen = this._open;
     this._open = false;
-    if (wasOpen && this._onOpenChange) {
-      try { this._onOpenChange(false); } catch (_e) { /* dep */ }
-    }
+    this._firstVisit = false;
     this._setGhosting(false);
-    if (this._root && this._root.remove) this._root.remove();   // takes the body + tab with it
-    if (this._tab && this._tab.remove) this._tab.remove();
-    this._root = null;
-    this._body = null;
-    this._tab = null;
-    this._tabCount = null;
-    this._built = false;
+    const el = this._el;
+    this._unmount();
+    if (el && typeof el === 'object' && 'innerHTML' in el) el.innerHTML = '';
+    this._onRefresh = null;
     this._lastHtml = null;
     this._lastStructKey = null;
-    this._lastTabText = null;
+    this._lastWriteMs = -Infinity;
   }
 
   // ── Model (pure per-call reads of the injected truth) ─────────────────────
@@ -756,6 +729,7 @@ export class RefitPane {
     const ctx = this._ctx();
     const groups = groupBySubsystem();
     const focused = MANIFEST_BY_ID.get(this._focused);
+    const detached = this._detached;
     const installed = this._rowsFor(focused);
     const ranked = RefitPane.rankAlternatives(groups[this._focused] || [], ctx).slice(0, 3);
     const alts = ranked.map(({ entry }) => {
@@ -780,7 +754,10 @@ export class RefitPane {
     const recommended = this._recommended();
     const acts = this._actuatorChipsFor(this._focused);
     const structKey = [
-      this._focused, this._open ? 1 : 0, ctx.credits, affordable,
+      this._focused,
+      // D12: the detached part rides the key — a detached click / a clearing tap re-renders at once.
+      detached ? `det:${detached.id ?? ''}:${detached.name}` : '',
+      ctx.credits, affordable,
       installed.rows.join('|'), installed.live ? 1 : 0,
       alts.map((a) => `${a.id}:${a.chip.kind}:${a.chip.text}:${a.num}${a.arrow}`).join('|'),
       recommended ? `reco:${recommended.id}` : '',
@@ -790,7 +767,10 @@ export class RefitPane {
     return {
       focused: this._focused,
       label: focused.label,
-      codexId: focused.codexId,
+      codexId: detached ? null : focused.codexId,
+      detached: !!detached,
+      partName: detached ? detached.name : null,
+      partId: detached ? detached.id : null,
       installed,
       acts,
       alts,
@@ -803,197 +783,66 @@ export class RefitPane {
     };
   }
 
-  // ── DOM (guarded; nothing at import) ───────────────────────────────────────
-
-  /** @private Effective reduced-motion read (dep overrides the house probe). */
-  _reducedMotion() {
-    const dep = this._reducedMotionDep;
-    if (typeof dep === 'function') { try { return !!dep(); } catch (_e) { return false; } }
-    if (typeof dep === 'boolean') return dep;
-    return _prefersReducedMotion();
-  }
-
-  /** @private */
-  _build() {
-    if (this._built || this._disposed) return;
-    const doc = this._doc;
-    if (!doc || typeof doc.createElement !== 'function' || !doc.body) return;
-    this._built = true;
-    const reduced = this._reducedMotion();
-
-    // The pane ROOT — LEFT, 300–340 px (01-numbers) — is the positioning +
-    // TRANSFORM shell (Session D): it carries the slide, the width clamp and
-    // the z layer, paints nothing itself and takes no pointer events; the
-    // BODY (the panel: border, background, padding, the scrolling content)
-    // and the edge TAB are its children, so the tab RIDES the pane's
-    // transform. --refit-dir is the ONE RTL mirror variable — every transform
-    // AND the tab's side follow it; --refit-open (0|1) is the reduced-motion
-    // tab position (the root never moves there; see _applyOpenState).
-    const root = doc.createElement('div');
-    root.id = 'ladder-refit';
-    root.className = reduced ? 'refit-reduced' : '';
-    root.style.cssText = [
-      'position:absolute', 'left:0', 'top:56px', `bottom:${ROOT_BOTTOM_PX}px`, `z-index:${PANE_Z_INDEX}`,
-      'width:clamp(300px, 24vw, 340px)', 'box-sizing:border-box',
-      'pointer-events:none', '--refit-dir:1', '--refit-open:1',
-      // Slide (transform) in the normal path; the reduced-motion class swaps
-      // the slide for a fade of the BODY at the same duration (08-workbench §2
-      // Motion) — the root then never moves, so the tab stays visible.
-      reduced
-        ? ''
-        : `transition:transform ${PANE_SLIDE_MS}ms cubic-bezier(0.65,0,0.35,1), opacity 400ms ease`,
-    ].join(';');
-
-    // The body — the panel the player reads. Fills the root; scrolls.
-    const body = doc.createElement('div');
-    body.className = 'refit-body';
-    body.style.cssText = [
-      'position:absolute', 'top:0', 'right:0', 'bottom:0', 'left:0', 'box-sizing:border-box',
-      'padding:10px 12px', 'overflow-y:auto',
-      'border:1px solid rgba(0,204,255,0.4)', 'border-left:none', 'border-radius:0 6px 6px 0',
-      'background:rgba(0,16,32,0.82)', 'color:' + VisualLaw.COLORS.INFO,
-      'font-family: var(--font-mono)', 'font-size:0.68rem', 'letter-spacing:0.05em',
-      'pointer-events:auto',
-      reduced ? `transition:opacity ${PANE_SLIDE_MS}ms ease` : '',
-    ].join(';');
-    root.appendChild(body);
-
-    // The edge tab — always visible while enabled (08-workbench §2 Grammar:
-    // "Edge tabs are always visible in the workbench (REFIT: gold count of
-    // affordable refits)"). A CHILD of the root at the pane's INNER edge
-    // (Session D, owner decision 3): closed, the root's slide parks it exactly
-    // at the screen edge; open, it sits on the pane's inner edge — never over
-    // the content. The side follows the RTL variable: left = 50% + dir·50%
-    // (dir 1 → the root's right edge, the tab's own left edge on it); under
-    // reduced motion --refit-open flips it between the screen edge (closed)
-    // and the inner edge (open) because the root never moves. Session P (plan
-    // D6/D7): a HORIZONTAL plate in the FOOTER BAND's left slot — `bottom` = the
-    // band's bottom minus the root's 96, height FOOTER_BAND_PX. F1 only (the
-    // pane is enabled on the workbench alone), so never edge chrome: it shows
-    // whenever enabled; `body[data-pure-scenery]` (index.html) still hides it.
-    const tab = doc.createElement('div');
-    tab.id = 'ladder-refit-tab';
-    tab.style.cssText = [
-      'position:absolute', `bottom:${this.tabBottomCss()}px`, 'z-index:1',
-      'left:calc(50% + var(--refit-dir, 1) * (2 * var(--refit-open, 1) - 1) * 50%)',
-      'transform:translateX(calc((var(--refit-dir, 1) - 1) * 50%))',
-      `height:${RAIL_GEOMETRY.FOOTER_BAND_PX}px`, `line-height:${RAIL_GEOMETRY.FOOTER_BAND_PX - 2}px`,
-      'box-sizing:border-box', 'padding:0 12px 0 10px', 'white-space:nowrap',
-      'border:1px solid rgba(0,204,255,0.4)', 'border-left:none',
-      'border-radius:0 3px 3px 0', 'background:rgba(0,16,32,0.85)',
-      'color:' + VisualLaw.COLORS.INFO, 'cursor:pointer',
-      'font-family: var(--font-mono)', 'font-size:0.62rem', 'letter-spacing:0.08em',
-      'user-select:none', 'display:none', 'pointer-events:auto',
-    ].join(';');
-    // Built as real children (never innerHTML) so the count node survives
-    // every repaint and fake-DOM test docs need no querySelector.
-    const tabLabel = doc.createElement('span');
-    tabLabel.textContent = 'REFIT ';
-    const tabCount = doc.createElement('span');
-    tabCount.className = 'refit-tab-count';
-    tabCount.style.cssText = `color:${VisualLaw.COLORS.VALUE};font-weight:bold`;
-    tab.appendChild(tabLabel);
-    tab.appendChild(tabCount);
-    tab.addEventListener('click', () => { this._wake(); this.toggle(); });
-    root.appendChild(tab);
-
-    doc.body.appendChild(root);
-    this._root = root;
-    this._body = body;
-    this._tab = tab;
-    this._tabCount = tabCount;
-    this._applyInvitation();      // a pre-build setInvitation lands once built (Session H)
-    this._applyOpenState();
-
-    // Delegated interactions (one listener set — G1, the PaneHelp pattern):
-    // on the root, so the body's content and the tab share it (the tab's own
-    // click above toggles; here it only wakes).
-    root.addEventListener('click', (e) => this._onClick(e));
-    root.addEventListener('pointerover', (e) => this._onPointerOver(e));
-    root.addEventListener('pointerout', (e) => this._onPointerOut(e));
-    root.addEventListener('pointermove', () => this._wake());
-    root.addEventListener('pointerdown', () => this._wake());
-  }
-
-  /** @private Slide (root) / fade (body) to the current open state; the tab
-   *  rides the root in the slide path and flips edges in the fade path. */
-  _applyOpenState() {
-    const root = this._root;
-    if (!root) return;
-    const body = this._body;
-    const reduced = this._reducedMotion();
-    if (reduced) {
-      root.className = 'refit-reduced';
-      root.style.transform = 'none';              // the root never moves: the fade is the body's
-      root.style.visibility = 'visible';
-      if (body) {
-        body.style.opacity = this._open ? '1' : '0';
-        body.style.visibility = this._open ? 'visible' : 'hidden';
-      }
-      // The tab stays visible + clickable while the body is hidden: closed it
-      // sits at the screen edge, open at the pane's inner edge (a snap —
-      // reduced motion permits it).
-      _setVar(root, '--refit-open', this._open ? '1' : '0');
-    } else {
-      root.className = '';
-      // One CSS variable mirrors the slide for RTL (--refit-dir: -1 flips it);
-      // the LEFT pane slides out toward −X by exactly its width, so the tab
-      // riding at its inner edge parks at the screen edge when closed.
-      root.style.transform = this._open
-        ? 'translateX(0)'
-        : 'translateX(calc(var(--refit-dir, 1) * -100%))';
-      root.style.opacity = this._open ? '1' : '0.999'; // keep painted for the slide
-      root.style.visibility = 'visible';
-      if (body) { body.style.opacity = '1'; body.style.visibility = 'visible'; }
-      _setVar(root, '--refit-open', '1');
-    }
-  }
-
-  /** @private Tab count paint (write-on-change). */
-  _paintTab(model) {
-    if (!this._tabCount) return;
-    const text = model.affordable > 0 ? String(model.affordable) : '';
-    if (text !== this._lastTabText) {
-      this._tabCount.textContent = text;
-      this._lastTabText = text;
-    }
-  }
+  // ── Markup (into the shell's slot; nothing at import) ──────────────────────
 
   /** @private Markup for the model (VisualLaw colors; inline styles). */
   _html(m) {
     const C = VisualLaw.COLORS;
+    const glass = this._glass;
+    const H = ACTUATOR_CHIP_GLASS_MIN_H_PX;
     const parts = [];
-    // Header (.refit-header): the pane name + the focused card title. The
-    // title deep-links (D-a: "the REFIT card's title … open the Library").
+    // Header (.refit-header — the PaneHelp anchor): the section name + the
+    // focused card title. The title deep-links (D-a: "the REFIT card's title …
+    // open the Library"). D12: a detached part shows `REFIT` alone — no card,
+    // no deep link.
     parts.push(
       `<div class="refit-header" style="color:${C.PLAYER};border-bottom:1px solid rgba(0,204,255,0.25);padding-bottom:6px;margin-bottom:6px">` +
-      `REFIT \u00b7 <span class="refit-title" data-codex="${m.codexId}" style="cursor:pointer;text-decoration:underline">${m.label}</span>` +
+      (m.detached
+        ? 'REFIT'
+        : `REFIT \u00b7 <span class="refit-title" data-codex="${m.codexId}" style="cursor:pointer;text-decoration:underline">${m.label}</span>`) +
       '</div>',
     );
     // Session K (one shop): the FIRST-VISIT framing the full-screen shop used
     // to carry — the RECOMMENDED chip (VALUE gold, the header chip; a tap
     // focuses the starter's card through the [data-sub] grammar) and the
     // one-line budget note. Only while open({ firstVisit }) — see open().
+    // D10: the chip is a tap target — the 44 pt box on glass.
     if (m.recommended) {
       const r = m.recommended;
+      const box = glass
+        ? `display:inline-flex;align-items:center;min-height:${H}px;box-sizing:border-box;padding:0 8px;${GLASS_TOUCH_CSS}`
+        : 'padding:1px 6px;';
       parts.push(
         `<div class="refit-firstvisit" style="margin:-2px 0 8px;color:${C.VALUE}">` +
-        `<span class="refit-reco" data-sub="${r.sub || ''}" style="cursor:pointer;padding:1px 6px;border:1px solid ${C.VALUE};border-radius:3px">RECOMMENDED \u00b7 ${r.name}</span>` +
+        `<span class="refit-reco" data-sub="${r.sub || ''}" style="cursor:pointer;${box}border:1px solid ${C.VALUE};border-radius:3px">RECOMMENDED \u00b7 ${r.name}</span>` +
         '<div style="margin-top:4px;opacity:0.85">credits are your refit budget \u2014 pick one fit that pays for itself</div>' +
         '</div>',
       );
     }
-    // The seven-subsystem index, manifest priority order.
+    // The seven-subsystem index, manifest priority order. D12: no chip is lit
+    // while a detached part shows ("pick a subsystem"). D10: the chips ride
+    // the actuator-chip law on glass (44 pt tall); desktop keeps the row.
+    const chipBox = glass
+      ? `display:inline-flex;align-items:center;min-height:${H}px;box-sizing:border-box;padding:0 8px;${GLASS_TOUCH_CSS}`
+      : 'padding:1px 5px;';
     parts.push('<div class="refit-index" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">');
     for (const id of m.order) {
-      const on = id === m.focused;
+      const on = !m.detached && id === m.focused;
       parts.push(
-        `<span class="refit-sub" data-sub="${id}" style="cursor:pointer;padding:1px 5px;border:1px solid ` +
+        `<span class="refit-sub" data-sub="${id}" style="cursor:pointer;${chipBox}border:1px solid ` +
         `${on ? C.LABEL : 'rgba(0,204,255,0.35)'};border-radius:3px;` +
         `${on ? `color:${C.LABEL}` : 'opacity:0.75'}">${id}</span>`,
       );
     }
     parts.push('</div>');
+    // D12: the detached line — and NOTHING below it (no INSTALLED, no
+    // alternatives, no wallet: never a stale card under another part's head).
+    if (m.detached) {
+      parts.push(
+        `<div class="refit-detached" style="opacity:0.85;padding:2px 0">no refit fits ${_esc(m.partName)} \u2014 pick a subsystem</div>`,
+      );
+      return parts.join('');
+    }
     // Installed model, pinned at top: live rows (providers) or manifest spec.
     parts.push('<div class="refit-installed" style="margin-bottom:8px">');
     parts.push(`<div style="color:${C.PLAYER}">INSTALLED${m.installed.live ? '' : ' \u00b7 spec'}</div>`);
@@ -1007,14 +856,14 @@ export class RefitPane {
     // = present-but-unowned: disabled + aria-disabled, the purchase row
     // below is the way in. 28 px on desktop, the 44 pt HIG box on glass.
     if (m.acts && m.acts.length) {
-      const minH = this._glass ? ACTUATOR_CHIP_GLASS_MIN_H_PX : ACTUATOR_CHIP_MIN_H_PX;
+      const minH = glass ? H : ACTUATOR_CHIP_MIN_H_PX;
       parts.push('<div class="refit-acts" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;padding-left:8px">');
       for (const a of m.acts) {
         const frame = a.disabled ? 'rgba(0,204,255,0.25)' : (a.pressed ? C.INFO : 'rgba(0,204,255,0.45)');
         parts.push(
           `<button class="refit-act" data-act="${a.key}" aria-pressed="${a.pressed ? 'true' : 'false'}"` +
           (a.disabled ? ' disabled aria-disabled="true"' : '') +
-          ` style="min-height:${minH}px;min-width:${this._glass ? 44 : 0}px;box-sizing:border-box;padding:0 8px;border-radius:3px;font:inherit;letter-spacing:inherit;touch-action:manipulation;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;` +
+          ` style="min-height:${minH}px;min-width:${glass ? H : 0}px;box-sizing:border-box;padding:0 8px;border-radius:3px;font:inherit;letter-spacing:inherit;${GLASS_TOUCH_CSS}` +
           `border:1px solid ${frame};color:${C.INFO};background:${a.pressed && !a.disabled ? 'rgba(0,204,255,0.15)' : 'transparent'};` +
           `${a.disabled ? 'opacity:0.5;cursor:default' : 'cursor:pointer'}">${a.text}</button>`,
         );
@@ -1023,22 +872,28 @@ export class RefitPane {
     }
     parts.push('</div>');
     // Exactly three ranked alternatives (fewer when fewer candidates exist).
+    // D10: on glass every row is a 44 pt band (align-items:center) and the BUY
+    // button a 44 × ≥44 box; desktop keeps the baseline row.
     if (m.empty) {
       parts.push('<div class="refit-empty" style="opacity:0.7">nothing to refit yet</div>');
     } else if (!m.alts.length) {
       parts.push('<div class="refit-empty" style="opacity:0.7">every fit owned \u2014 nothing to refit yet</div>');
     } else {
+      const rowAlign = glass ? `align-items:center;min-height:${H}px` : 'align-items:baseline';
+      const buyBox = glass
+        ? `display:inline-flex;align-items:center;justify-content:center;min-height:${H}px;min-width:${H}px;box-sizing:border-box;${GLASS_TOUCH_CSS}`
+        : '';
       parts.push('<div class="refit-alts">');
       for (const a of m.alts) {
         const buy = a.chip.kind === 'buy';
         const chipColor = buy ? C.PLAYER : (a.chip.kind === 'needs' ? C.THREAT : C.VALUE);
         parts.push(
-          `<div class="refit-alt" data-alt="${a.id}" style="display:flex;gap:6px;align-items:baseline;padding:3px 0;border-top:1px solid rgba(0,204,255,0.12)">` +
+          `<div class="refit-alt" data-alt="${a.id}" style="display:flex;gap:6px;${rowAlign};padding:3px 0;border-top:1px solid rgba(0,204,255,0.12)">` +
           `<span style="flex:1">${a.name}${a.level > 0 ? ` <span style="opacity:0.6">lvl ${a.level}/${a.maxLevel}</span>` : ''}</span>` +
           `<span style="opacity:0.85">${a.num}${a.arrow ? ` <span style="color:${C.VALUE}">${a.arrow}</span>` : ''}</span>` +
           `<span style="color:${C.VALUE}">${a.cost} cr</span>` +
           (buy
-            ? `<button class="refit-chip" data-buy="${a.id}" style="cursor:pointer;background:rgba(0,255,136,0.15);border:1px solid ${C.PLAYER};color:${C.PLAYER};font:inherit;padding:0 6px;border-radius:3px">${a.chip.text}</button>`
+            ? `<button class="refit-chip" data-buy="${a.id}" style="cursor:pointer;background:rgba(0,255,136,0.15);border:1px solid ${C.PLAYER};color:${C.PLAYER};font:inherit;padding:0 6px;border-radius:3px;${buyBox}">${a.chip.text}</button>`
             : `<span class="refit-chip" style="color:${chipColor};opacity:0.9">${a.chip.text}</span>`) +
           '</div>',
         );
@@ -1050,7 +905,7 @@ export class RefitPane {
     return parts.join('');
   }
 
-  // ── Interaction (delegated) ────────────────────────────────────────────────
+  // ── Interaction (delegated on the slot) ────────────────────────────────────
 
   /** @private */
   _closest(el, sel) {
@@ -1059,44 +914,43 @@ export class RefitPane {
 
   /** @private */
   _onClick(e) {
-    this._wake();
-    // Session L: an actuator chip — the tap is activity like a BUY (the wake
-    // above), toggles through the dep, and re-renders from truth.
-    const act = this._closest(e.target, '[data-act]');
+    const target = e && e.target;
+    // Session L: an actuator chip toggles through the dep and re-renders from truth.
+    const act = this._closest(target, '[data-act]');
     if (act) {
       this._actuate(act.getAttribute('data-act'));
       return;
     }
-    const buy = this._closest(e.target, '[data-buy]');
+    const buy = this._closest(target, '[data-buy]');
     if (buy) {
       const id = buy.getAttribute('data-buy');
       // ONE click, no confirm(), no undo (08-workbench §2); the injected
       // purchase is ShopScreen.purchaseUpgrade — its own guards (maxLevel /
-      // prereqs / wallet) run there. The pane re-renders from TRUTH.
+      // prereqs / wallet) run there. The section re-renders from TRUTH (and
+      // the repaint fires onRefresh, so the shell's gold count follows).
       if (this._purchase) { try { this._purchase(id); } catch (_e) { /* dep */ } }
       this.refresh();
       return;
     }
-    const codex = this._closest(e.target, '[data-codex]');
+    const codex = this._closest(target, '[data-codex]');
     if (codex) {
       const id = codex.getAttribute('data-codex');
       if (id && this._onOpenEntry) { try { this._onOpenEntry(id); } catch (_e) { /* dep */ } }
       return;
     }
-    const sub = this._closest(e.target, '[data-sub]');
+    const sub = this._closest(target, '[data-sub]');
     if (sub) this.focusSubsystem(sub.getAttribute('data-sub'));
   }
 
   /** @private Alternative hover → ghost the focused subsystem's hull parts. */
   _onPointerOver(e) {
-    this._wake();
-    if (this._closest(e.target, '[data-alt]')) this._setGhosting(true);
+    if (this._closest(e && e.target, '[data-alt]')) this._setGhosting(true);
   }
 
   /** @private Leaving the alternatives clears the ghost. */
   _onPointerOut(e) {
     if (!this._ghosting) return;
-    const to = e.relatedTarget;
+    const to = e && e.relatedTarget;
     if (!this._closest(to, '[data-alt]')) this._setGhosting(false);
   }
 
@@ -1109,55 +963,6 @@ export class RefitPane {
     try {
       this._onGhost(on ? partsForSubsystem(this._focused) : null);
     } catch (_e) { /* dep */ }
-  }
-
-  // ── Idle fade (open panes dim to 70 %, pointer wakes — §2 Motion) ─────────
-
-  /** @private */
-  _clearIdleTimer() {
-    if (this._idleTimer != null) {
-      clearTimeout(this._idleTimer);
-      this._idleTimer = null;
-    }
-  }
-
-  /** @private Activity: restore full opacity + re-arm the idle window. */
-  _wake() {
-    this._lastActivityMs = this._now();
-    if (this._idle) {
-      this._idle = false;
-      if (this._root) {
-        this._root.style.opacity = this._open ? '1' : this._root.style.opacity;
-        if (this._root.classList && this._root.classList.remove) this._root.classList.remove('refit-idle');
-      }
-    }
-    this._armIdleTimer();
-  }
-
-  /** @private */
-  _armIdleTimer() {
-    this._clearIdleTimer();
-    if (!this._open || !this._root || this._disposed) return;
-    this._idleTimer = setTimeout(() => this._idleTick(), IDLE_FADE_MS + 20);
-  }
-
-  /**
-   * @private The idle beat (timer-fired; tests drive it directly with an
-   * injected clock): past IDLE_FADE_MS of no activity while open → fade to
-   * IDLE_FADE_OPACITY — never display:none, never visibility loss (the pane
-   * "never vanishes"); otherwise re-arm for the remainder.
-   */
-  _idleTick() {
-    this._idleTimer = null;
-    if (!this._open || !this._root || this._disposed) return;
-    const since = this._now() - this._lastActivityMs;
-    if (since >= IDLE_FADE_MS) {
-      this._idle = true;
-      this._root.style.opacity = String(IDLE_FADE_OPACITY);
-      if (this._root.classList && this._root.classList.add) this._root.classList.add('refit-idle');
-    } else {
-      this._idleTimer = setTimeout(() => this._idleTick(), (IDLE_FADE_MS - since) + 20);
-    }
   }
 }
 

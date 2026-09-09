@@ -18,23 +18,39 @@
  * (MotherCallouts.js:2130) and fittingCatalog.SUBSYSTEMS — drift trips the
  * suite, never the game.
  *
- * The mapping (owner defaults, 2026-09-03):
+ * The mapping (owner defaults, 2026-09-03; THERMAL amended 2026-09-09):
  *   PROPULSION → ENGINEERING   (thruster block / bus structure)
  *   POWER      → POWER
  *   CAPTURE    → BERTHS        (berths, reels, springs — D9 "arms, nets …")
  *   COMMS      → COMMS
  *   SENSORS    → SENSORS
- *   PAYLOAD    → null          (net launcher / despin laser — no refit group)
- *   DAUGHTERS  → null          (docked craft, not Mother hardware)
- *   THERMAL    → null          (the aft FLOWER group — the manifest's THERMAL
- *                               is the MLI blanket, NOT the flower; the flower
- *                               pairs are bought under the pane's own THERMAL
- *                               card but their hull callouts are purchase-gated
- *                               hardware, not the blanket)
+ *   PAYLOAD    → null          (net launcher / despin laser — no refit group;
+ *                               the REFIT section renders the D12 "detached"
+ *                               line for these parts)
+ *   DAUGHTERS  → null          (docked craft, not Mother hardware — D12 too)
+ *   THERMAL    → THERMAL       (owner change 2026-09-09, plan
+ *                               .kilo/plans/1788954873769-one-workbench-pane.md
+ *                               D13 — was null, the 2026-09-03 default: the
+ *                               callout THERMAL is the aft FLOWER group and the
+ *                               manifest's THERMAL is the MLI blanket, so the
+ *                               two were kept apart. The THERMAL card, though,
+ *                               already hosts the FLOWER actuator chip and the
+ *                               flower-pair purchases, so RADIATOR PLATES / AFT
+ *                               FLOWER STRUTS / TIP HARDPOINTS / FLOWER HINGE
+ *                               BRACKETS now land on it — a click on any flower
+ *                               part opens the card that buys and drives the
+ *                               flower — and hovering a THERMAL alternative
+ *                               ghosts the flower parts on the hull
+ *                               (partsForSubsystem('THERMAL') = mli + the four
+ *                               flower parts; MotherCallouts skips the ones the
+ *                               purchase has not built yet). One-line revert:
+ *                               THERMAL back to null + the test pins, and the
+ *                               flower parts take D12.)
  * PART RULE (checked FIRST, before the system rule):
  *   mli        → THERMAL       (the MLI blanket part sits under PROPULSION in
  *                               the callout table, but it IS the manifest's
- *                               THERMAL subsystem — blueprintSubsystems.js:138)
+ *                               THERMAL subsystem — blueprintSubsystems.js:138;
+ *                               unchanged by D13)
  * And one subsystem no hull part reaches:
  *   CARGO      ← nothing       (the nose berthing collar has no MotherCallouts
  *                               part; the CARGO card is reachable only from
@@ -56,7 +72,7 @@ export const SYSTEM_TO_SUBSYSTEM = Object.freeze({
   SENSORS: 'SENSORS',
   COMMS: 'COMMS',
   CAPTURE: 'BERTHS',
-  THERMAL: null,          // the flower group — see the header
+  THERMAL: 'THERMAL',     // D13 (2026-09-09): the flower group → the THERMAL card — see the header
   DAUGHTERS: null,
 });
 
@@ -93,8 +109,9 @@ export const PARTS_BY_SYSTEM = Object.freeze({
 /**
  * The refit subsystem a hull part belongs to — the D-a click grammar's first
  * hop (clicking a part opens ITS refit card). Part rule first (`mli`), then
- * the system rule; anything unknown maps to null (the pane then opens on its
- * index instead of a card — never throws).
+ * the system rule; anything unknown maps to null (the REFIT section then
+ * shows the D12 "detached" line — REFIT + the chips + `no refit fits <PART>`
+ * — instead of a card; never throws).
  * @param {{ id?: string|null, systemId?: string|null }|null} part — the
  *   MotherCallouts.getHoveredPart()/getFocusedPart() record shape
  * @returns {string|null} one of fittingCatalog.SUBSYSTEMS, or null
@@ -115,7 +132,8 @@ export function subsystemForPart(part) {
 /**
  * Inverse lookup: every MotherCallouts part id whose subsystemForPart() lands
  * on `subsystemId` — the REFIT pane's ghost-outline target set (hovering a
- * POWER alternative pulses rosa_wings + body_cells + array_roll on the hull).
+ * POWER alternative pulses rosa_wings + body_cells + array_roll on the hull;
+ * a THERMAL alternative pulses the blanket + the four flower parts — D13).
  * CARGO returns [] (no hull part reaches it); unknown ids return [].
  * Allocates a fresh array per call — call on hover edges, never per frame.
  * @param {string} subsystemId — one of fittingCatalog.SUBSYSTEMS

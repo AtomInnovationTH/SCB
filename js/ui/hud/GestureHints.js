@@ -66,9 +66,11 @@ const TABLE = Object.freeze({
   PageUp:         Object.freeze({ chip: 'PINCH → FLOOR', phrase: 'pinch to change floor' }),
   PageDown:       Object.freeze({ chip: 'PINCH → FLOOR', phrase: 'pinch to change floor' }),
   KeyM:           Object.freeze({ chip: 'PINCH OUT → MAP', phrase: 'pinch out to the map' }),
-  // Drawers — edge-band swipes (SPECS right, REFIT left).
+  // The drawer — the right edge-band swipe (Session U: ONE workbench pane,
+  // SPECS + the F1 REFIT block, on the RIGHT; the left band no longer opens
+  // anything, so B (the shop) and I (the library) teach the same swipe).
   KeyI:   Object.freeze({ chip: 'SWIPE ← SPECS',  phrase: 'swipe in from the right edge for SPECS' }),
-  KeyB:   Object.freeze({ chip: 'SWIPE → REFIT',  phrase: 'swipe in from the left edge for REFIT' }),
+  KeyB:   Object.freeze({ chip: 'SWIPE ← SPECS',  phrase: 'swipe in from the right edge for SPECS' }),
   Space:  Object.freeze({ chip: 'HOLD → ACT',     phrase: 'hold to act' }),
   Escape: Object.freeze({ chip: 'SWIPE → CLOSE',  phrase: 'swipe the drawer closed' }),
 });

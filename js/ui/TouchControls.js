@@ -31,8 +31,11 @@
  *           RADIAL: AUTOPILOT / NET / DAUGHTER / REEL, every button pressing the
  *           SAME key the keyboard would (`pressKey(code)`), NET and DAUGHTER
  *           hold-to-fire;
- *        d. EDGE-BAND SWIPE (24 px) opens/closes the REFIT (left) / SPECS
- *           (right) drawers through `openPane(which, open)`.
+ *        d. EDGE-BAND SWIPE (24 px) from the RIGHT edge opens / toward it
+ *           closes the SPECS workbench drawer through `openPane('library',
+ *           open)` (Session U: the ONE right-side pane — the left band's REFIT
+ *           drawer retired; a left-band swipe still classifies but dispatches
+ *           nothing).
  *        e. EDGE TOUCH witness (Session P, plan D3): every canvas / grip
  *           touchstart reports its landing (x, y) to `onEdgeTouch` — the hub's
  *           edge-wake bands decide what chrome wakes (never TouchControls).
@@ -280,8 +283,9 @@ export class TouchControls {
    * @param {function|null} [deps.onHold]            Session J: ({x, y}) → truthy = a selected target is under
    *   the finger → the radial opens
    * @param {function|null} [deps.pressKey]          Session J: (code) → the hub presses the key (KeyDispatch)
-   * @param {function|null} [deps.openPane]          Session J: ('refit'|'library', open) → the hub opens/closes
-   *   the drawer (the edge-band swipe)
+   * @param {function|null} [deps.openPane]          Session J: ('library', open) → the hub opens/closes
+   *   the workbench drawer (the RIGHT edge-band swipe; Session U: 'refit' is never sent — the left
+   *   drawer retired)
    * @param {function|null} [deps.onEdgeTouch]       Session P (plan D3): (x, y) → the hub tests its edge-wake
    *   bands (right / left / footer) and wakes the matching edge chrome; fired from the canvas
    *   touchstart (the landing finger) and the rail grip's touchstart; coordinates only —
@@ -556,11 +560,15 @@ export class TouchControls {
         if (this._telemetry) this._telemetry.log('tap', { x: g.x, y: g.y });
         if (this._onTap) { try { this._onTap({ x: g.x, y: g.y }); } catch (_err) { /* dep */ } }
         break;
-      case 'edge-open-left': this._swipePane('refit', true); break;
+      // Session U (plan 1788954873769, D2): ONE right-side workbench pane —
+      // only the RIGHT edge band pages a drawer ('library' is the hub's name
+      // for that side). The left-band verbs still classify (pure
+      // classifyGesture is unchanged) but dispatch nothing: the left drawer
+      // retired; the left band keeps waking the DETAIL slider through
+      // onEdgeTouch at touchstart.
       case 'edge-open-right': this._swipePane('library', true); break;
-      case 'edge-close-left': this._swipePane('refit', false); break;
       case 'edge-close-right': this._swipePane('library', false); break;
-      default: break;                                         // drag / slow tap / hold release: nothing more
+      default: break;                                         // drag / slow tap / hold release / left-band swipe: nothing more
     }
   }
 

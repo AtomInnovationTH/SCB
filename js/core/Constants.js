@@ -44,7 +44,13 @@ export const Constants = {
   // and vacuum_mechanisms.fullText gain the fold-in-two / launch-lock
   // sentences (GEO-comsat pattern; owner 2026-09-08); no entries added or
   // removed (232).
-  DATA_VERSION: '1013',
+  // '1013'→'1014': Session U ONE workbench pane — pane_library retitled "The
+  // SPECS Pane" (the click verb: portrait + the clicked name + summary, the F1
+  // REFIT block inside it, the gold count, MAXIMIZE, Esc) and pane_refit
+  // rewritten as the REFIT block inside SPECS at the ship close-up (Space, BUY
+  // one click, hover-ghost, chips); no left/right-pane language; no entries
+  // added or removed (232). Plan 1788954873769 A1.5.
+  DATA_VERSION: '1014',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
