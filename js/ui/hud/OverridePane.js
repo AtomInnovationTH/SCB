@@ -105,11 +105,14 @@
  * RECOVER asks the injected systems reboot (`deps.reboot`, Lane B's HudReboot)
  * to darken every visible HUD element FIRST, then flickers the veil three
  * times and lifts it onto the bare world — "view 0" — and waits for the
- * reboot's `onDone` (the panels return top → bottom) before the RECOVER line;
+ * reboot's `onDone` (the panels return top → bottom) before the run closes;
  * without the dep (or webdriver / reduced motion / a `false` return) it is
- * the flickers → RECOVER at once, as before. Then HOUSTON_DELAY_MS later
+ * the flickers → IDLE at once, as before. No FURNACE line closes the run (the
+ * RECOVER line was retired 2026-09-09, §7.28). Then HOUSTON_DELAY_MS later
  * Houston: "Cowboy, did you read the manual." — escalating over the session's
- * runs (`gagRuns()`, never persisted). `navigator.webdriver` builds no veil at
+ * runs (`gagRuns()`, never persisted), "manual" a SPECS deep link
+ * (`HOUSTON_LINK`: page one of the manual, landing on its WARNING box — plan
+ * §7.26–28). `navigator.webdriver` builds no veil at
  * all (harness determinism — it must never be mistaken for the real
  * black-screen bug class, BLACK_SCREEN_TRIAGE.md), so no POST and no reboot
  * either. A GAME_STATE_CHANGE away from gameplay, GAME_RESET, the rung hiding
@@ -164,7 +167,7 @@ export const FURNACE_GAG = Object.freeze({
   CRT_TAIL_MS: 1500,
   RECOVER_FLICKERS: 3,
   RECOVER_FLICKER_MS: 80,
-  HOUSTON_DELAY_MS: 1500,  // the Houston line lands this long after the RECOVER line
+  HOUSTON_DELAY_MS: 1500,  // the Houston line lands this long after the run closes (veil off / reboot done)
   ATTRACT_MS: 900,         // the one-shot reveal blink on the main button (three blinks; never under reduced motion)
   CANCEL_RATE_MS: 400,
 });
@@ -178,19 +181,30 @@ export const FURNACE_LINES = Object.freeze({
   OVERHEAT: Object.freeze({ text: 'WARNING: Furnace overheating. Containment failing.', priority: 'warning' }),
   ARMED:    Object.freeze({ text: 'CRITICAL: Self-destruct sequence initiated.', priority: 'critical' }),
   CANCEL:   Object.freeze({ text: 'CAUTION: Cancel circuit not responding.', priority: 'caution' }),
-  RECOVER:  Object.freeze({ text: 'Furnace: still offline. Nothing happened. Nothing at all.', priority: 'info' }),
+  // RECOVER ("Furnace: still offline. Nothing happened. Nothing at all.") was
+  // retired 2026-09-09 (plan 1788957399035 §7.28): Houston is the only voice
+  // after the reboot.
 });
 
 /**
  * Houston's escalating lines, one per gag run in the session (index
- * `min(gagRuns - 1, 2)`; session memory only, never persisted). Dry, no `!`
- * — a `WARNING:` prefix would re-route the line to the ALERT channel.
+ * `min(gagRuns - 1, 1)`; session memory only, never persisted). Dry, no `!`
+ * — a `WARNING:` prefix would re-route the line to the ALERT channel. Both
+ * contain "manual": both carry HOUSTON_LINK. (The third line, 'We are logging
+ * this, Cowboy.', was retired 2026-09-09 — plan 1788957399035 §7.28.)
  */
 export const HOUSTON_LINES = Object.freeze([
   'Cowboy, did you read the manual.',
   'Cowboy. The manual. Page one.',
-  'We are logging this, Cowboy.',
 ]);
+
+/**
+ * Houston's "manual" is a link (plan 1788957399035 §7.26–28): the COMMS_MESSAGE
+ * `link` — CommsPanel wraps the first whole-word "manual" as a `.glossary-link`
+ * that opens the SPECS viewer on page one of the manual (`welcome_cowboy`) and
+ * lands on its WARNING box (`anchor: 'warning'`).
+ */
+export const HOUSTON_LINK = Object.freeze({ term: 'manual', entryId: 'welcome_cowboy', anchor: 'warning' });
 
 /**
  * The POST screen (the second half of the blackout): ten ASCII lines, one per
@@ -323,8 +337,8 @@ export class OverridePane {
    *   the "took a hit" thud at blackout
    * @param {object}   [deps.reboot] the systems reboot (HudReboot), `{ play({ onDone }) -> boolean, cancel() }`:
    *   RECOVER calls `play` FIRST (it darkens every visible HUD element under the veil) and waits for `onDone`
-   *   before the RECOVER line; a `false` return, a missing dep, webdriver, no veil or reduced motion ⇒ the
-   *   legacy path (flickers → RECOVER at once). Every abort calls `cancel()`
+   *   before the run closes (IDLE, Houston scheduled); a `false` return, a missing dep, webdriver, no veil or
+   *   reduced motion ⇒ the legacy path (flickers → IDLE at once). Every abort calls `cancel()`
    * @param {object}   [deps.bus] `{ on(event, cb) -> unsubscribe, emit(event, data) }`
    * @param {object}   [deps.events] the Events name table
    * @param {string[]} [deps.gameplayStates] state ids that count as gameplay; a GAME_STATE_CHANGE to any
@@ -1277,17 +1291,17 @@ export class OverridePane {
   }
 
   /**
-   * @private The end of a run: veil off (idempotent), the RECOVER line, the
-   * run counted, Houston scheduled HOUSTON_DELAY_MS later (a tracked gag
-   * timer — it outlives the IDLE state on purpose; an abort clears it), press
-   * count 0, IDLE at once. Only from RECOVER: a late `onDone` after an abort
-   * is dropped.
+   * @private The end of a run: veil off (idempotent), the run counted, Houston
+   * scheduled HOUSTON_DELAY_MS later (a tracked gag timer — it outlives the
+   * IDLE state on purpose; an abort clears it), press count 0, IDLE at once.
+   * No FURNACE line here (the RECOVER line was retired, §7.28): after the
+   * reboot Houston is the only voice. Only from RECOVER: a late `onDone`
+   * after an abort is dropped.
    */
   _finishRecover() {
     if (this._gagState !== 'RECOVER') return;
     this._rebootHandle = null;
     this._removeVeil();
-    this._comm(FURNACE_LINES.RECOVER);
     this._gagRuns += 1;
     const text = HOUSTON_LINES[Math.min(this._gagRuns - 1, HOUSTON_LINES.length - 1)];
     this._schedule(() => this._commHouston(text), FURNACE_GAG.HOUSTON_DELAY_MS);
@@ -1545,14 +1559,16 @@ export class OverridePane {
    * @private Houston's line (gag v2): `source` + `channel` HOUSTON, priority
    * `info` (green — the dry house voice; a `WARNING:` prefix would re-route it
    * to ALERT), `_reactive: true` for the same suppression bypass as the FURNACE
-   * lines. Exactly `{ source, channel, text, priority, _reactive }`.
+   * lines, `link: HOUSTON_LINK` so CommsPanel renders "manual" as the SPECS
+   * deep link (§7.26). Exactly `{ source, channel, text, priority, _reactive,
+   * link }`.
    */
   _commHouston(text) {
     const bus = this._bus;
     const E = this._events;
     if (!bus || typeof bus.emit !== 'function' || !E || !E.COMMS_MESSAGE || !text) return;
     try {
-      bus.emit(E.COMMS_MESSAGE, { source: HOUSTON_SOURCE, channel: HOUSTON_SOURCE, text, priority: 'info', _reactive: true });
+      bus.emit(E.COMMS_MESSAGE, { source: HOUSTON_SOURCE, channel: HOUSTON_SOURCE, text, priority: 'info', _reactive: true, link: HOUSTON_LINK });
     } catch (_e) { /* bus */ }
   }
 

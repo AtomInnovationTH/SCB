@@ -606,13 +606,18 @@ export class CommsPanel {
       // the source label). The first-use cue is driven by the seen-state, and a
       // term is marked seen only when it's the freshest line the player is
       // actually reading (the latest, un-scrolled row) so history re-renders
-      // don't silently burn every cue.
+      // don't silently burn every cue. A message carrying a `link`
+      // (`{ term, entryId, anchor? }`, copied by CommsSystem's listener — the
+      // FURNACE gag's "manual", plan 1788957399035 §7.26) gets its first
+      // whole-word `term` wrapped as a SPECS deep link over the SAME span class
+      // and the SAME click delegation as every glossary term.
       const gs = this._glossaryState;
       const markSeen = isLatest && this._scrollOffset === 0;
       const body = decorateGlossary(msg.text, {
         once: true,
         isNew: gs ? (term) => gs.isNew(term) : undefined,
         onSeen: (gs && markSeen) ? (term) => gs.markSeen(term) : undefined,
+        links: msg.link ? [msg.link] : undefined,
       });
 
       return `<div style="margin:2px 0;padding:3px 6px;border-left:${COMMS.STRIPE_WIDTH_PX}px solid ${color};background:${rowBg};border-radius:2px;">

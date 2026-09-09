@@ -328,19 +328,29 @@ function resolveMatch(matched, byForm) {
  *   `glossary-term--new` first-use cue class when it returns true.
  * @param {(term:string)=>void} [opts.onSeen]  optional callback fired once per
  *   distinct decorated term (to persist seen-state).
+ * @param {Array<{term:string, entryId:string, anchor?:string}>} [opts.links]
+ *   per-call deep links (FURNACE gag v2 amendment, plan 1788957399035 §7.26):
+ *   after the glossary pass, the FIRST case-insensitive whole-word occurrence of
+ *   each `term` that is not already inside a span is wrapped as
+ *   `<span class="glossary-term glossary-link" data-term data-entry
+ *   [data-anchor] title="Open in SPECS">` — same class, same CSS, same click
+ *   delegation. No match ⇒ text unchanged. A malformed item is skipped.
  * @returns {string} HTML-safe string
  */
 export function decorateGlossary(plainText, opts = {}) {
   if (typeof plainText !== 'string' || plainText.length === 0) {
     return plainText == null ? '' : escapeHtml(plainText);
   }
+  if (!opts || typeof opts !== 'object') opts = {};
   const once = opts.once !== false;
   const { regex, byForm } = buildMatcher();
   regex.lastIndex = 0;
 
   const usedTerms = new Set();  // canonical term keys already wrapped (for `once`)
   const seenFired = new Set();  // canonical term keys onSeen already fired for
-  let out = '';
+  // Output pieces: `{ text }` = escaped-on-emit raw text (still linkable);
+  // `{ html }` = an emitted span (opaque — never linked inside).
+  const pieces = [];
   let lastIndex = 0;
   let m;
 
@@ -367,8 +377,8 @@ export function decorateGlossary(plainText, opts = {}) {
     const termKey = resolved.rec.term;
     if (once && usedTerms.has(termKey)) continue;
 
-    // Flush the escaped gap before this match.
-    out += escapeHtml(plainText.slice(lastIndex, start));
+    // Flush the gap before this match (raw; escaped on emit).
+    pieces.push({ text: plainText.slice(lastIndex, start) });
 
     usedTerms.add(termKey);
 
@@ -378,8 +388,8 @@ export function decorateGlossary(plainText, opts = {}) {
       classes.push('glossary-term--new');
     }
     const dataEntry = rec.entryId ? ` data-entry="${escapeHtml(rec.entryId)}"` : '';
-    out += `<span class="${classes.join(' ')}" data-term="${escapeHtml(termKey)}"`
-      + `${dataEntry} title="${escapeHtml(rec.def)}">${escapeHtml(matched)}</span>`;
+    pieces.push({ html: `<span class="${classes.join(' ')}" data-term="${escapeHtml(termKey)}"`
+      + `${dataEntry} title="${escapeHtml(rec.def)}">${escapeHtml(matched)}</span>` });
 
     lastIndex = end;
     // advance regex past this match (it already did via exec, but a `continue`
@@ -391,9 +401,60 @@ export function decorateGlossary(plainText, opts = {}) {
     }
   }
 
-  // Flush the trailing escaped remainder.
-  out += escapeHtml(plainText.slice(lastIndex));
-  return out;
+  // The trailing remainder.
+  pieces.push({ text: plainText.slice(lastIndex) });
+
+  applyLinks(pieces, opts.links);
+
+  return pieces.map((p) => (p.html != null ? p.html : escapeHtml(p.text))).join('');
+}
+
+/**
+ * Wrap the FIRST case-insensitive whole-word occurrence of each link's `term`
+ * inside the raw-text pieces (never inside an emitted span) as a
+ * `.glossary-term.glossary-link` deep link. Mutates `pieces` in place by
+ * splitting the hit piece into text / span / text. Malformed links (not an
+ * object, missing strings) are skipped; a term with no hit leaves the text
+ * unchanged. Never throws.
+ * @param {Array<{text?:string, html?:string}>} pieces
+ * @param {*} links
+ */
+function applyLinks(pieces, links) {
+  if (!Array.isArray(links) || links.length === 0) return;
+  for (const link of links) {
+    if (!link || typeof link !== 'object') continue;
+    if (typeof link.term !== 'string' || link.term.length === 0) continue;
+    if (typeof link.entryId !== 'string' || link.entryId.length === 0) continue;
+    const re = new RegExp(escapeRegExp(link.term), 'gi');
+    for (let i = 0; i < pieces.length; i++) {
+      const piece = pieces[i];
+      if (piece.html != null || !piece.text) continue;
+      const text = piece.text;
+      re.lastIndex = 0;
+      let hit = null;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const start = m.index;
+        const end = start + m[0].length;
+        const before = start > 0 ? text[start - 1] : '';
+        const after = end < text.length ? text[end] : '';
+        const boundaryBefore = !(WORD.test(before) && WORD.test(m[0][0]));
+        const boundaryAfter = !(WORD.test(after) && WORD.test(m[0][m[0].length - 1]));
+        if (boundaryBefore && boundaryAfter) { hit = { start, end, matched: m[0] }; break; }
+        if (m[0].length === 0) re.lastIndex++; // defensive: never spin on an empty match
+      }
+      if (!hit) continue;
+      const anchor = (typeof link.anchor === 'string' && link.anchor.length > 0)
+        ? ` data-anchor="${escapeHtml(link.anchor)}"` : '';
+      const span = `<span class="glossary-term glossary-link" data-term="${escapeHtml(link.term)}"`
+        + ` data-entry="${escapeHtml(link.entryId)}"${anchor} title="Open in SPECS">${escapeHtml(hit.matched)}</span>`;
+      pieces.splice(i, 1,
+        { text: text.slice(0, hit.start) },
+        { html: span },
+        { text: text.slice(hit.end) });
+      break; // first occurrence only
+    }
+  }
 }
 
 export default decorateGlossary;

@@ -186,9 +186,17 @@ export const Events = {
   // === COMMS ===
   /**
    * COMMS_MESSAGE payload:
-   *   { text, priority, source, channel? }
+   *   { text, priority, source, channel?, link? }
    * ST-5.1: Optional `channel` key — one of Constants.COMMS.CHANNELS.
    * If omitted, receiver classifies via source heuristic (default FLAVOR).
+   * Optional `link: { term: string, entryId: string, anchor?: string }` (FURNACE
+   * gag v2 amendment, plan 1788957399035 §7.26): a per-message deep link —
+   * CommsPanel wraps the FIRST whole-word `term` in the body as a
+   * `.glossary-term.glossary-link[data-entry=entryId]` that opens the SPECS
+   * viewer on that entry (the same CODEX_OPEN_ENTRY route every glossary term
+   * rides); `anchor` rides along as `data-anchor` → the event's `anchor`.
+   * CommsSystem's listener copies it only when it is an object with BOTH
+   * strings (else `null`). Not markup: the text stays plain.
    */
   /**
    * STRUT_LABELS_SHOW (Delegation 3, 2026-05-31)
@@ -459,7 +467,7 @@ export const Events = {
   CODEX_UNLOCKED:         'codex:unlocked',            // { id, title, shortText, icon, category }
   CODEX_VIEWED:           'codex:viewed',              // { id } — player viewed full entry
   CODEX_UNLOCK_REQUEST:   'codex:unlockRequest',       // { id } — force-unlock a specific entry (e.g. from tutorial)
-  CODEX_OPEN_ENTRY:       'codex:open-entry',          // { id } — deep-link: open the viewer on a specific entry (glossary §11.8)
+  CODEX_OPEN_ENTRY:       'codex:open-entry',          // { id, anchor? } — deep-link: open the viewer on a specific entry (glossary §11.8); optional `anchor: 'warning'` lands on the page's .codex-warning (gag v2 §7.27)
 
   // === LASSO SYSTEM ===
   LASSO_FIRED:            'lasso:fired',               // { targetId, projectileMass, launchDirection, speed }

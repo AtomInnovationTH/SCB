@@ -62,6 +62,11 @@ export function ensureGlossaryCss(doc = (typeof document !== 'undefined' ? docum
  * `{ capture: true }` so this handler runs in the capture phase and can suppress
  * them.
  *
+ * The payload is `{ id }` — plus `anchor` ONLY when the span carries
+ * `data-anchor` (a per-message deep link, `decorateGlossary` `opts.links`; the
+ * FURNACE gag's "manual" lands on the page's warning — plan 1788957399035
+ * §7.27). A plain glossary term emits exactly `{ id }`, as it always has.
+ *
  * @param {HTMLElement} el  the container that will hold decorated spans
  * @param {{ capture?: boolean }} [opts]
  */
@@ -77,6 +82,7 @@ export function delegateGlossaryClicks(el, opts = {}) {
     // A term click is a distinct intent — don't let it also trigger an
     // underlying selectable card/row.
     if (typeof e.stopPropagation === 'function') e.stopPropagation();
-    eventBus.emit(Events.CODEX_OPEN_ENTRY, { id });
+    const anchor = span.dataset.anchor;
+    eventBus.emit(Events.CODEX_OPEN_ENTRY, anchor ? { id, anchor } : { id });
   }, capture);
 }

@@ -319,6 +319,23 @@ const NEWS_BOUNTY_TEMPLATES = [
   { source: 'NEWS', text: 'Bounty posted: ₹{bounty}. Target {debrisName}', priority: 'INFO' },
 ];
 
+/**
+ * Validate a COMMS_MESSAGE `link` (FURNACE gag v2 amendment, plan
+ * 1788957399035 §7.26): the per-message deep link CommsPanel wraps around the
+ * first whole-word `term`. Accepted only as an object carrying BOTH `term` and
+ * `entryId` as non-empty strings; the whole object is passed through (it may
+ * carry `anchor`). Anything else — absent, null, a string, a partial — is
+ * `null`, so a malformed emit can never reach the renderer. Pure.
+ * @param {*} link
+ * @returns {{ term: string, entryId: string, anchor?: string }|null}
+ */
+export function sanitizeCommsLink(link) {
+  if (!link || typeof link !== 'object') return null;
+  if (typeof link.term !== 'string' || link.term.length === 0) return null;
+  if (typeof link.entryId !== 'string' || link.entryId.length === 0) return null;
+  return link;
+}
+
 // ============================================================================
 // COMMS SYSTEM
 // ============================================================================
@@ -503,6 +520,9 @@ export class CommsSystem {
         // Carry the onboarding beat id (if any) so the comms panel can drop the
         // "demanding attention" highlight the moment the player follows it.
         onboardingBeatId: data._onboardingBeatId,
+        // Per-message deep link (gag v2 §7.26): `{ term, entryId, anchor? }` or
+        // null. CommsPanel wraps the term as a SPECS link; nothing else reads it.
+        link: sanitizeCommsLink(data.link),
       };
 
       this.messages.push(msg);

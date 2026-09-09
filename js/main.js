@@ -1637,8 +1637,9 @@ async function init() {
   }
   eventBus.on('codex:toggleUI', () => { if (codexViewerUI) codexViewerUI.toggle(); });
   // Glossary deep-link (§11.8): a clicked inline term opens the viewer on its entry.
+  // `anchor` (gag v2 §7.27) rides through: Houston's "manual" lands on page one's WARNING box.
   eventBus.on(Events.CODEX_OPEN_ENTRY, (data) => {
-    if (codexViewerUI && data && data.id) codexViewerUI.openEntry(data.id);
+    if (codexViewerUI && data && data.id) codexViewerUI.openEntry(data.id, { anchor: data.anchor });
   });
 
   // --- Connect shop screen to game over screen (for upgrade count display) ---

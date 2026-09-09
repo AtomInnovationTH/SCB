@@ -14,6 +14,11 @@
  * pane is never empty. Below ~1000px the interior collapses to a 2-pane swap
  * (list ⇄ reading), preserving the old Back behavior.
  *
+ * Deep links: `openEntry(id, { anchor })` (the CODEX_OPEN_ENTRY route every
+ * glossary term rides). `anchor: 'warning'` lands on the page's WARNING box —
+ * scrolled into view, a steady brighter frame for WARNING_LANDED_MS (plan
+ * 1788957399035 §7.27: Houston's "manual" in the FURNACE gag).
+ *
  * @module ui/CodexViewerUI
  */
 
@@ -110,6 +115,17 @@ const LOCKED_TAG_HTML = ' <span class="codex-locked-tag" style="font-size:10px;l
 // and transient renders (deep-link routing, filter churn) never mark seen.
 const SEEN_DWELL_MS = 1500;
 
+// A deep link that lands on the page's WARNING box (FURNACE gag v2 amendment,
+// plan 1788957399035 §7.27 — Houston's "manual"): after the entry renders the
+// `.codex-warning` is scrolled into view and wears `codex-warning--landed` for
+// this long — a STEADY brighter border (the one rule in CODEX_VIEWER_STYLE_ID;
+// no pulse: THREAT pulses only for live alarms). Cleared by a tracked timer or
+// on hide().
+export const WARNING_LANDED_MS = 2000;
+export const WARNING_LANDED_CLASS = 'codex-warning--landed';
+/** The viewer's ONE stylesheet (everything else is inline style attributes). */
+export const CODEX_VIEWER_STYLE_ID = 'codex-viewer-style';
+
 export class CodexViewerUI {
   /**
    * @param {import('../systems/CodexSystem.js').CodexSystem} codexSystem
@@ -145,6 +161,12 @@ export class CodexViewerUI {
 
     /** @type {string|null} deep-link target id for the next show()'s auto-select */
     this._pendingOpenId = null;
+    /** @type {string|null} deep-link anchor (`'warning'`) for the pending open — consumed once that entry renders */
+    this._pendingAnchor = null;
+    /** @type {*} the one-shot WARNING_LANDED_CLASS timer (null when disarmed) */
+    this._landedTimer = null;
+    /** @type {?Element} the element wearing WARNING_LANDED_CLASS right now */
+    this._landedEl = null;
 
     /** @type {*} debounce handle for the window resize listener */
     this._resizeDebounce = null;
@@ -201,6 +223,8 @@ export class CodexViewerUI {
     // Cancel any pending seen-dwell emit — a fire after close would mark an
     // entry the player never actually read.
     this._clearSeenTimer();
+    // A landed warning's highlight does not outlive the viewer.
+    this._clearLanded();
     this._overlay.style.opacity = '0';
     setTimeout(() => { if (!this._visible) this._overlay.style.display = 'none'; }, 200);
   }
@@ -213,10 +237,16 @@ export class CodexViewerUI {
    * robustness, opens the overlay, selects the entry's real category, then
    * routes to its reading pane. Unknown ids are a safe no-op. Locked entries are
    * fine — the viewer renders them with a how-to-unlock hint.
+   *
+   * `opts.anchor === 'warning'` (gag v2 §7.27, Houston's "manual"): once the
+   * entry has rendered, its `.codex-warning` (the LAST block of the page) is
+   * scrolled into view and wears WARNING_LANDED_CLASS for WARNING_LANDED_MS.
+   * No warning on the page ⇒ a plain open. Any other anchor is ignored.
    * @param {string} id  codex entry id (possibly a retired alias)
+   * @param {{ anchor?: string }} [opts]
    * @returns {boolean} true if an entry was opened
    */
-  openEntry(id) {
+  openEntry(id, opts = {}) {
     if (!id || !this._codex || typeof this._codex.getEntry !== 'function') return false;
     const resolvedId = (ALIASES && ALIASES[id]) || id;
     const entry = this._codex.getEntry(resolvedId);
@@ -231,11 +261,14 @@ export class CodexViewerUI {
     // Land on the entry's real category (not a `track:` pseudo-key) BEFORE
     // show() so show()'s auto-select resolves the right list — no transient
     // render/mark-seen of the stale category's first entry. _pendingOpenId tells
-    // _selectFirstEntry to route to this entry instead of position 0.
+    // _selectFirstEntry to route to this entry instead of position 0; the
+    // anchor is consumed by _selectEntry when THAT entry renders.
     this._selectedCategory = entry.category;
     this._pendingOpenId = resolvedId;
+    this._pendingAnchor = (opts && typeof opts.anchor === 'string') ? opts.anchor : null;
     this.show();
     this._pendingOpenId = null;
+    this._pendingAnchor = null;
     return true;
   }
 
@@ -245,6 +278,7 @@ export class CodexViewerUI {
 
   /** @private */
   _buildDOM() {
+    this._ensureStyle();
     // --- Overlay ---
     const overlay = document.createElement('div');
     overlay.id = 'codex-overlay';
@@ -399,6 +433,30 @@ export class CodexViewerUI {
       if (e.code === 'Escape') { searchInput.blur(); return; }
       e.stopPropagation();
     });
+  }
+
+  /**
+   * @private The viewer's ONE stylesheet, mounted once (id CODEX_VIEWER_STYLE_ID).
+   * Every other look in this module is an inline style attribute; this rule
+   * exists because a class toggle has to beat the WARNING box's inline border
+   * (hence `!important`). `codex-warning--landed` = the deep-link landing cue
+   * (gag v2 §7.27): a STEADY brighter red frame with a faint halo for
+   * WARNING_LANDED_MS — no transition, no animation (print, not a live alarm).
+   */
+  _ensureStyle() {
+    if (typeof document === 'undefined' || typeof document.createElement !== 'function') return;
+    if (typeof document.getElementById === 'function' && document.getElementById(CODEX_VIEWER_STYLE_ID)) return;
+    const mount = document.head || document.documentElement || document.body;
+    if (!mount || typeof mount.appendChild !== 'function') return;
+    const style = document.createElement('style');
+    style.id = CODEX_VIEWER_STYLE_ID;
+    style.textContent = `
+      .codex-warning.${WARNING_LANDED_CLASS} {
+        border-color: #ff4422 !important;
+        box-shadow: 0 0 0 1px rgba(255,68,34,0.55), 0 0 18px rgba(255,68,34,0.35);
+      }
+    `;
+    mount.appendChild(style);
   }
 
   /** @private Resolve category meta {label, color, swatch} from the system, with
@@ -876,6 +934,12 @@ export class CodexViewerUI {
     this._focusIdx = idx >= 0 ? idx : -1;
     this._applyRowFocus();
     this._renderReading(entry);
+    // A deep link with an anchor lands here, once, on ITS entry only.
+    if (this._pendingAnchor && this._pendingOpenId === entry.id) {
+      const anchor = this._pendingAnchor;
+      this._pendingAnchor = null;
+      this._landAnchor(anchor);
+    }
     // Seen dwell: (re)arm the timer for the newly-rested selection. Scrubbing
     // to another entry before it fires cancels the pending emit.
     this._armSeenTimer(entry);
@@ -886,6 +950,44 @@ export class CodexViewerUI {
       const reading = document.getElementById('codex-reading');
       if (reading && typeof reading.focus === 'function') { try { reading.focus(); } catch (_) {} }
     }
+  }
+
+  /**
+   * @private Land a deep link's anchor on the just-rendered page (gag v2 §7.27).
+   * Only `'warning'` is known: scroll the page's `.codex-warning` into view
+   * (`block: 'end'` — it is the LAST block of the page; the method may be absent
+   * in a minimal DOM, so it is guarded) and give it WARNING_LANDED_CLASS for
+   * WARNING_LANDED_MS through a tracked timer (a second landing re-arms; hide()
+   * clears). No box on the page ⇒ nothing happens.
+   * @param {string} anchor
+   */
+  _landAnchor(anchor) {
+    if (anchor !== 'warning') return;
+    const reading = document.getElementById('codex-reading');
+    const box = (reading && typeof reading.querySelector === 'function')
+      ? reading.querySelector('.codex-warning') : null;
+    if (!box) return;
+    if (typeof box.scrollIntoView === 'function') {
+      try { box.scrollIntoView({ block: 'end' }); } catch (_) { /* layout */ }
+    }
+    this._clearLanded();
+    if (box.classList && typeof box.classList.add === 'function') box.classList.add(WARNING_LANDED_CLASS);
+    this._landedEl = box;
+    this._landedTimer = setTimeout(() => {
+      this._landedTimer = null;
+      this._clearLanded();
+    }, WARNING_LANDED_MS);
+  }
+
+  /** @private Drop the landed highlight and its timer (timer fire, a re-landing, hide). */
+  _clearLanded() {
+    if (this._landedTimer != null) {
+      clearTimeout(this._landedTimer);
+      this._landedTimer = null;
+    }
+    const el = this._landedEl;
+    this._landedEl = null;
+    if (el && el.classList && typeof el.classList.remove === 'function') el.classList.remove(WARNING_LANDED_CLASS);
   }
 
   /** @private Test seam: swap the timer scheduler/canceller for spies.
