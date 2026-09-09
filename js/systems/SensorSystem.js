@@ -417,6 +417,30 @@ export class SensorSystem {
       ? this._lastDebrisField.getFieldIdNear(this._lastPlayerPos, revealRange)
       : null;
 
+    // M1 guidance (T5): the mission the field is in, and what the scan can
+    // actually reach. `getFieldIdNear` above is a 500 km FIELD test — on M1 it
+    // still finds the welcome cluster after it drifted out of the forward arc,
+    // so the reward reads 'stale' ("already current") and the recovery advisor
+    // (which keys on 'empty') stays silent: the player scans and hears nothing
+    // useful. So the SCAN_COMPLETE payload now also carries `contactsInRange`
+    // (non-hazard pieces inside the reveal range — the same query the reveal
+    // below consumes, run ONCE and handed down) and `missionNumber`, letting
+    // NavRecoveryAdvisor post a bearing when nothing is in reach and, on M1,
+    // the cluster count + bearing line. `(x || 1)` mirrors DebrisField's own
+    // "M1 until told otherwise" reading of `_currentMissionNumber`.
+    const nearby = (this._lastDebrisField && this._lastPlayerPos)
+      ? this._lastDebrisField.getDebrisNear(this._lastPlayerPos, revealRange)
+      : null;
+    let contactsInRange = 0;
+    if (nearby) {
+      for (const copy of nearby) {
+        if (copy && !copy.hazard) contactsInRange++;
+      }
+    }
+    const missionNumber = this._lastDebrisField
+      ? (this._lastDebrisField._currentMissionNumber || 1)
+      : null;
+
     let reward = 0;
     let rewardKind = 'none'; // 'fresh' | 'stale' | 'empty' | 'capped'
 
@@ -458,6 +482,9 @@ export class SensorSystem {
     }
 
     // Player feedback — explain WHY the yield is what it is.
+    // (These lines use `sender:` and carry no bypass tag, so at suppression
+    // tier 0 — the onboarding Director — they are muted anyway; the M1 skip
+    // below matters once onboarding has ended.)
     if (rewardKind === 'fresh') {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
@@ -465,11 +492,19 @@ export class SensorSystem {
         priority: 'info',
       });
     } else if (rewardKind === 'stale') {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'HOUSTON',
-        text: 'Survey data for this field is already current. No new value. Move to a new field for fresh data.',
-        priority: 'info',
-      });
+      // M1 guidance (T5): on mission 1 the ONLY field is the welcome cluster
+      // — "Move to a new field for fresh data" would send a new player away
+      // from the one thing they must clear, and the re-scan is almost always
+      // a "where did it go?" request, which NavRecoveryAdvisor now answers
+      // with the count + bearing line. Credit logic above is unchanged (a
+      // stale field still pays nothing); only the line is skipped.
+      if (missionNumber !== 1) {
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          sender: 'HOUSTON',
+          text: 'Survey data for this field is already current. No new value. Move to a new field for fresh data.',
+          priority: 'info',
+        });
+      }
     } else if (rewardKind === 'empty') {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
@@ -518,12 +553,16 @@ export class SensorSystem {
     }
 
     // Emit scan complete results (rewardKind lets NavRecoveryAdvisor route
-    // 'empty' scans into actionable bearing guidance — UX-11 #11)
+    // 'empty' scans into actionable bearing guidance — UX-11 #11;
+    // contactsInRange / missionNumber extend that to "field found but nothing
+    // in reach" and the M1 count + bearing line — M1 guidance T5)
     const results = {
       type,
       discoveries: discoveries.length,
       reward,
       rewardKind,
+      contactsInRange,
+      missionNumber,
     };
     eventBus.emit(Events.SCAN_COMPLETE, results);
 
@@ -553,8 +592,11 @@ export class SensorSystem {
       });
     }
 
-    // UX-3 #9: Staggered reveal — discover undiscovered debris near the player
-    this._revealNearbyDebris(type);
+    // UX-3 #9: Staggered reveal — discover undiscovered debris near the player.
+    // Hands down the query already run for `contactsInRange` (same range) so
+    // the field is walked once per scan; the call itself stays HERE so the
+    // synchronous SCAN_REVEALS_SETTLED ordering after SCAN_COMPLETE is kept.
+    this._revealNearbyDebris(type, nearby);
   }
 
   /**
@@ -562,9 +604,12 @@ export class SensorSystem {
    * Quick scan reveals fewer targets at shorter range; wide scan reveals more.
    * Uses getDebrisNear() which returns all debris (including undiscovered) with positions.
    * @param {string} scanType - 'quick' or 'wide'
+   * @param {Array<object>} [nearbyArg] - the getDebrisNear result for this scan's
+   *   reveal range, when the caller already has it (_completeScan). Omitted →
+   *   this runs its own query, so direct callers (tests) keep working.
    * @private
    */
-  _revealNearbyDebris(scanType) {
+  _revealNearbyDebris(scanType, nearbyArg) {
     const debrisField = this._lastDebrisField;
     const playerPos = this._lastPlayerPos;
     if (!debrisField || !playerPos) return;
@@ -578,7 +623,9 @@ export class SensorSystem {
     // getDebrisNear returns spread-copies; we need original refs via getDebrisById.
     // Truly empty space → no reveal-settled event: NavRecoveryAdvisor's empty-scan
     // bearing guidance owns that case (rewardKind:'empty'). No double messaging.
-    const nearby = debrisField.getDebrisNear(playerPos, revealRange);
+    const nearby = Array.isArray(nearbyArg)
+      ? nearbyArg
+      : debrisField.getDebrisNear(playerPos, revealRange);
     if (!nearby || nearby.length === 0) return;
 
     // Filter to undiscovered only, resolve original debris objects, already sorted by distance.

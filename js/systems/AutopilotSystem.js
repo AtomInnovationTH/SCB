@@ -304,7 +304,11 @@ export class AutopilotSystem {
     }
   }
 
-  /** Attempt to engage autopilot. Validates ΔV safety and trawl state first. */
+  /**
+   * Attempt to engage autopilot. Validates ΔV safety and trawl state first,
+   * resolves (or one-tap acquires) a target, and refuses a pinned in-net-range
+   * target with a reactive hint instead of engaging (T4).
+   */
   engage() {
     // ΔV safety FIRST — before any destructive side effect. A second-press
     // trawl abort (below) must never fire when the engage would be denied
@@ -398,6 +402,35 @@ export class AutopilotSystem {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'CAUTION: AUTOPILOT DENIED. No live contacts in the field. Check the Debris Map (`) for the next cluster.',
         priority: 'warning',
+      });
+      return;
+    }
+
+    // T4: refuse a pinned target. An onboarding tease pin (M1 #1/#2) rides the
+    // mother 22–45 m off the nose — it is ALREADY inside net range, so there is
+    // nothing to rendezvous with. Before T4, A on a pinned target (the default
+    // AutoLock pick, and what the no-target path above acquires because it is
+    // the top of the Tracked Targets pane) chased the piece's frozen spawn-era
+    // orbit — hundreds of km behind the ship — with a retrograde burn. The
+    // orbit is now synced (DebrisField) and the goal pose reads _scenePosition
+    // (_targetSceneState), so an engage would merely park the mother against a
+    // ~2 m goal error; the honest answer is to say what the player should do
+    // instead. `hasSelectedTarget` is the selector's target object, or `true`
+    // on the no-selector-API DEBRIS fallback (then the acquired piece is
+    // `_cachedDebrisResult.debris`). The hint is `_reactive` so it passes
+    // comms suppression tier 0 (onboarding mutes the plain DENIED lines) — it
+    // answers a key the player just pressed. No AUTOPILOT_ENGAGE is emitted:
+    // OnboardingDirector pre-satisfies its `range_wall` beat on that event, and
+    // nothing was engaged.
+    const activeTarget = (hasSelectedTarget && typeof hasSelectedTarget === 'object')
+      ? hasSelectedTarget
+      : ((this._cachedDebrisResult && this._cachedDebrisResult.debris) || null);
+    if (activeTarget && activeTarget._onboardingPinned) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'HOUSTON',
+        text: 'Target is already in net range — launch the net (N).',
+        priority: 'info',
+        _reactive: true,
       });
       return;
     }
@@ -715,7 +748,16 @@ export class AutopilotSystem {
           // trueAnomaly so the derived Cartesian position matches the pre-snap
           // location.  This preserves the physical trailing offset while syncing
           // the orbit shape for drift prevention.
-          if (this._lockedTargetRef && this._lockedTargetRef.orbit && this._player) {
+          //
+          // T4: skipped for an onboarding tease pin (`_onboardingPinned`). A
+          // pinned piece's orbit IS the mother's own elements (DebrisField
+          // re-syncs it every frame), so the copy would be a no-op at best —
+          // and before that per-frame sync existed it copied a spawn-era,
+          // drag-stale semi-major axis INTO the mother and jumped her altitude.
+          // Skipping explicitly keeps the intent readable: the mother never
+          // takes her elements from a piece that takes its elements from her.
+          if (this._lockedTargetRef && this._lockedTargetRef.orbit && this._player &&
+              !this._lockedTargetRef._onboardingPinned) {
             const tOrb = this._lockedTargetRef.orbit;
             const pOrb = this._player.orbit;
 
@@ -790,9 +832,21 @@ export class AutopilotSystem {
         // if the orbital plane changed since last frame (e.g. perturbation,
         // collision-avoidance impulse), recompute trueAnomaly to preserve
         // the mother's physical position.
+        //
+        // T4: the element copy is skipped for an onboarding tease pin
+        // (`_onboardingPinned`). The pin takes ITS elements from the mother
+        // every frame (DebrisField._syncPinnedOrbitToMother), so the two bodies
+        // already share elements and propagate in lock-step — the copy would
+        // write the mother's own values back onto her (and, before that
+        // per-frame sync existed, wrote a drag-stale spawn-era semi-major axis
+        // into her). `syncedThisFrame` stays TRUE for a pinned lock because the
+        // lock-step it guards (no dead-band damping pulse) is in effect by
+        // construction.
         let syncedThisFrame = false;
         if (this._lockedTargetRef && this._lockedTargetRef.orbit && this._player) {
           syncedThisFrame = true;
+        }
+        if (syncedThisFrame && !this._lockedTargetRef._onboardingPinned) {
           const tOrb = this._lockedTargetRef.orbit;
           const pOrb = this._player.orbit;
 
@@ -987,6 +1041,42 @@ export class AutopilotSystem {
   // ==========================================================================
 
   /**
+   * Resolve a debris target's scene-Cartesian position + velocity into the two
+   * scratch outputs — the ONE place the autopilot turns a debris record into a
+   * rendezvous state (T4).
+   *
+   * An onboarding tease pin (`_onboardingPinned`, M1 #1/#2) rides the mother at
+   * a fixed offset in her LOCAL frame; DebrisField writes that to
+   * `_scenePosition` every frame and (since T4) re-syncs the piece's orbit to
+   * the mother's elements. The orbit still cannot express the pin's LATERAL
+   * offset (#2 sits 18 m to one side of the boresight), so for a pinned piece
+   * the authoritative pose is `_scenePosition` and the authoritative velocity
+   * is the mother's own — the pin is nose-relative, not prograde-relative, and
+   * co-moves with the ship by construction. Every other debris derives both
+   * from its live orbit exactly as before (byte-identical path).
+   *
+   * @param {object} debris   debris record ({ orbit, _onboardingPinned, _scenePosition })
+   * @param {{x:number,y:number,z:number}} outPos   scratch — written in place
+   * @param {{x:number,y:number,z:number}} outVel   scratch — written in place
+   * @returns {boolean} true when the outputs were written; false when the
+   *   record has neither a usable pin nor an orbit (outputs untouched)
+   * @private
+   */
+  _targetSceneState(debris, outPos, outVel) {
+    if (!debris) return false;
+    const sp = debris._scenePosition;
+    if (debris._onboardingPinned && sp && this._player) {
+      outPos.x = sp.x; outPos.y = sp.y; outPos.z = sp.z;
+      const pv = this._player.getVelocity();
+      outVel.x = pv.x; outVel.y = pv.y; outVel.z = pv.z;
+      return true;
+    }
+    if (!debris.orbit) return false;
+    orbitToSceneCartesianInto(debris.orbit, outPos, outVel);
+    return true;
+  }
+
+  /**
    * Resolve the current target's scene-Cartesian state and heading mode.
    * Priority: locked TARGET ref > live TARGET ref > TRAWL cluster > large DEBRIS scan.
    *
@@ -998,9 +1088,9 @@ export class AutopilotSystem {
     // Locked TARGET ref (persists through target cycling) ---------------------
     if (this._lockedTargetRef && this._lockedTargetRef.alive && this._lockedTargetRef.orbit) {
       // Sprint 2 / PR A — scratch-output variant; no per-tick literal alloc.
-      orbitToSceneCartesianInto(
-        this._lockedTargetRef.orbit, this._tmpAPCartPos, this._tmpAPCartVel
-      );
+      // T4: a pinned piece resolves to its _scenePosition + the mother's
+      // velocity (see _targetSceneState); a free piece to its live orbit.
+      this._targetSceneState(this._lockedTargetRef, this._tmpAPCartPos, this._tmpAPCartVel);
       const p = this._tmpAPCartPos, v = this._tmpAPCartVel;
       return {
         Pd: this._PdV.set(p.x, p.y, p.z),
@@ -1019,8 +1109,8 @@ export class AutopilotSystem {
     if (heading.mode === 'TARGET' && this._targetSelector) {
       const t = this._targetSelector.getActiveTarget();
       if (t && t.orbit) {
-        // Sprint 2 / PR A — scratch-output variant.
-        orbitToSceneCartesianInto(t.orbit, this._tmpAPCartPos, this._tmpAPCartVel);
+        // Sprint 2 / PR A — scratch-output variant. T4: pinned ⇒ mother velocity.
+        this._targetSceneState(t, this._tmpAPCartPos, this._tmpAPCartVel);
         const v = this._tmpAPCartVel;
         Vd = this._VdV.set(v.x, v.y, v.z);
       }
@@ -1093,10 +1183,14 @@ export class AutopilotSystem {
     if (this._targetSelector) {
       const target = this._targetSelector.getActiveTarget();
       if (target && target.alive && target.orbit) {
-        const cart = orbitToSceneCartesian(target.orbit);
-        if (cart && cart.position) {
+        // T4: one resolver for the heading position too — a pinned piece reads
+        // its _scenePosition (the mesh), a free piece its live orbit. Before T4
+        // this read the orbit directly, and a pinned piece's frozen orbit put
+        // the heading hundreds of km behind the ship.
+        if (this._targetSceneState(target, this._tmpAPCartPos, this._tmpAPCartVel)) {
+          const p = this._tmpAPCartPos;
           return {
-            position: new THREE.Vector3(cart.position.x, cart.position.y, cart.position.z),
+            position: new THREE.Vector3(p.x, p.y, p.z),
             mode: 'TARGET',
           };
         }

@@ -97,6 +97,23 @@ export const Constants = {
   START_ALTITUDE: 3.5,            // 350 km × 0.01
   START_ALTITUDE_KM: 350,
 
+  // === MOTHER DRAG COEFFICIENT (M1 welcome-drift fix, 2026-09-09) ===
+  // The mother's atmospheric-drag cross-section and mass — the ballistic
+  // coefficient every co-orbital welcome piece must SHARE. Two consumers, both
+  // feeding OrbitalMechanics.atmosphericDrag(alt, v, AREA_M2, MASS_KG):
+  //   • PlayerSatellite: `this.mass` (recoil + drag) and the drag-area argument
+  //     in update()'s "Atmospheric drag" block;
+  //   • DebrisField.dragDecelFor: `welcomeSpawn` pieces use THESE instead of
+  //     their own sizeMeter²/mass.
+  // Why it must be one constant: the welcome cluster is spawned co-orbital with
+  // the mother at 350 km, where drag lowers the SMA ≈ 0.5 m per game-second.
+  // The pieces' own A/m (0.009–0.15) is 1–17× smaller than the mother's
+  // (20/130 = 0.154), so they decayed slower, stayed HIGHER, and — lower orbit
+  // = faster — the mother pulled ahead quadratically (≈ 0.03·t² m; > 2 km in
+  // ~4 real minutes with no key pressed — the "cluster drifts away" report).
+  // Same coefficient ⇒ same per-frame SMA step ⇒ lock-step decay.
+  MOTHER_DRAG: { AREA_M2: 20, MASS_KG: 130 },
+
   // === RENDERING ===
   FLOATING_ORIGIN_ENABLED: true,    // UX-4: Camera-relative instanced mesh positions to avoid float32 jitter
 
@@ -2828,6 +2845,17 @@ export const Constants = {
     RANGE_M: 5000,                     // candidate search radius (m); the in-range test uses NET_LOCK_RANGE_M
     REACQUIRE: true,                   // auto-advance to next candidate after a capture
     REACQUIRE_DELAY_MS: 800,           // pause after a catch before the next lock (lets the reward register)
+    // Guided-chapter fallback (M1 guidance, 2026-09-09): when the forward arc
+    // holds nothing, a GUIDED chapter (MISSIONS.PROFILES[].guidedCluster —
+    // missions 1–3) locks the nearest alive piece ANYWHERE within
+    // GUIDED_FALLBACK_RANGE_M instead of leaving the reticle empty. The
+    // selected-target off-screen arrow then points at it (behind-camera is
+    // handled by TargetReticle._getEdgePosition) and the yellow OUT OF RANGE
+    // state says "press A" — so a player whose cluster drifted behind the
+    // mother is never left with nothing to steer toward. Cost: one extra O(n)
+    // getDebrisNear pass, only on frames with no target and an empty arc.
+    GUIDED_FALLBACK_ANY_ARC: true,     // fall back to nearest-any in guided chapters (DebrisField.isGuidedChapter())
+    GUIDED_FALLBACK_RANGE_M: 100000,   // metres — the fallback search radius (100 km: the whole drifted cluster, not the whole field)
   },
 
   // --- Capture Net Visual (ST-2.4 → FIX-2.4a → v2 polish) ---
@@ -4405,10 +4433,39 @@ export const Constants = {
     // catch → comms → 2500 ms → SHOP path byte-identical.
     FORCED_DEPOT_CHAPTERS: 3, // the end of chapters 1..N forces the depot stop (the card → SHOP); from chapter N+1 on the depot is an INVITATION
     COMPLETE_CARD_MS: 2500,   // "MISSION N COMPLETE" card → SHOP dwell (owner decision 1: a fixed dwell, the old silent timer's length); the card holds for this minus TEACHING.FADE_OUT_MS so it has faded when the depot opens
+    // RESEAT (M1 guidance T6, owner decision 2026-09-09): the welcome-cluster
+    // re-seat safety net in DebrisField._reseatDriftedWelcome — GUIDED chapters
+    // only (the guidedCluster profiles below). A welcomeSpawn piece that has
+    // been farther than DIST_M from the mother for DWELL_S of REAL time (seen
+    // far at every ~2 s scan across the dwell; back in range once resets it)
+    // AND is not being approached (no AUTOPILOT_TARGET_LOCK on it, no daughter
+    // flying to it) is put back on its cone-fan slot ahead of the ship. "Far AND
+    // not being approached" is the whole gate: a piece the autopilot or a
+    // daughter is closing on is never moved, however far. It is a teleport, so
+    // it exists only because a player who cannot finish an early mission may
+    // quit for good (root causes fixed by T1/T2/T4 — this catches the
+    // unforeseen, e.g. a manual impulse). DIST_M sits well outside the 1.4 km
+    // fan + its breathing and inside the 5 km AutoLock search; DWELL_S is
+    // wall-clock (player-experience timer), not game time.
+    RESEAT: { DIST_M: 3000, DWELL_S: 10 },
+    // guidedCluster (M1 guidance, 2026-09-09): the GUIDED chapters are missions
+    // 1–3 — the same FORCED_DEPOT_CHAPTERS boundary (profiles 'Orientation' +
+    // 'First Operations'). In a guided chapter the welcome cluster is kept
+    // findable: AutoLock falls back to the nearest piece ANYWHERE when the
+    // forward arc is empty (AUTOLOCK.GUIDED_FALLBACK_ANY_ARC) and HOUSTON
+    // posts a per-catch progress line (GameFlowManager); the re-seat safety
+    // net (T6, DebrisField._reseatDriftedWelcome, RESEAT above) reads the same
+    // flag via DebrisField.isGuidedChapter().
+    // Owner rationale: a player who cannot finish an early mission may quit
+    // for good; later missions have many small pieces and some will always
+    // drift — accepted there, so it is false from mission 4 on. Explicit on
+    // EVERY entry; readers treat a missing flag as false
+    // (core/missionProgress.isGuidedChapterNumber, DebrisField.isGuidedChapter).
     PROFILES: [
       {
         minMission: 1,
         label: 'Orientation',
+        guidedCluster: true,  // guided chapter (see the note above PROFILES)
         clusters: 1,          // nearby cluster count to guarantee
         hydrazine: false,     // exclude hydrazine from salvage
         conjunction: false,   // suppress conjunction events
@@ -4423,6 +4480,7 @@ export const Constants = {
       {
         minMission: 2,
         label: 'First Operations',
+        guidedCluster: true,  // guided chapter — covers missions 2 AND 3 (highest matching minMission wins)
         clusters: 2,
         hydrazine: true,      // tracked hydrazine tank allowed
         conjunction: false,
@@ -4436,6 +4494,7 @@ export const Constants = {
       {
         minMission: 4,
         label: 'Expanding Field',
+        guidedCluster: false, // past FORCED_DEPOT_CHAPTERS — pieces may drift; no guidance fallback
         clusters: 4,
         hydrazine: true,
         conjunction: false,
@@ -4449,6 +4508,7 @@ export const Constants = {
       {
         minMission: 7,
         label: 'Full Operations',
+        guidedCluster: false,
         clusters: 6,
         hydrazine: true,
         conjunction: true,
@@ -4462,6 +4522,7 @@ export const Constants = {
       {
         minMission: 10,
         label: 'Unrestricted',
+        guidedCluster: false,
         clusters: null,       // null = no limit, full random
         hydrazine: true,
         conjunction: true,

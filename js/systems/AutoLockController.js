@@ -9,7 +9,11 @@
  *      gets the satisfying lock + first catch in the first ~10 s. Permanent
  *      assist for all players; a Settings toggle can disable it, and any manual
  *      T/click selection (or a deliberate direction input) suppresses it for
- *      that target.
+ *      that target. In a GUIDED chapter (missions 1–3, the profile's
+ *      `guidedCluster` flag via DebrisField.isGuidedChapter()) an empty forward
+ *      arc falls back to the nearest alive piece anywhere within
+ *      AUTOLOCK.GUIDED_FALLBACK_RANGE_M, so a cluster that drifted behind the
+ *      mother is still pointed at (M1 guidance, T5).
  *   2. Track whether the *selected* target is inside NET_LOCK_RANGE_M and emit
  *      Events.TARGET_IN_RANGE / Events.TARGET_OUT_OF_RANGE on the crossing.
  *      These drive the cyan↔yellow reticle flip, the in-range-only lock earcon,
@@ -180,7 +184,9 @@ export class AutoLockController {
     this._trackRange(active);
   }
 
-  /** @private Attempt to autolock the nearest forward, alive candidate. */
+  /** @private Attempt to autolock the nearest forward, alive candidate — or,
+   *  in a guided chapter with an empty forward arc, the nearest alive piece
+   *  anywhere (see _guidedFallbackPick). */
   _tryAcquire() {
     if (!this._enabled) return;
     if (this._manualOverride) return;
@@ -192,7 +198,6 @@ export class AutoLockController {
     const cfg = Constants.AUTOLOCK || {};
     const radiusScene = ((cfg.RANGE_M || 5000) / 1000) * Constants.SCENE_SCALE; // m→km→scene
     const nearby = this._debrisField.getDebrisNear(playerPos, radiusScene);
-    if (!nearby || nearby.length === 0) return;
 
     // Forward = prograde (velocity) direction.
     const vel = this._player.getVelocity && this._player.getVelocity();
@@ -201,20 +206,25 @@ export class AutoLockController {
 
     // nearby is sorted nearest-first. Pick nearest within the forward arc.
     let pick = null;
-    for (const d of nearby) {
-      if (!d || !d.alive || d._captured) continue;
-      const sp = d._scenePosition;
-      if (fwd && sp) {
-        const tx = sp.x - playerPos.x;
-        const ty = sp.y - playerPos.y;
-        const tz = sp.z - playerPos.z;
-        const tlen = Math.sqrt(tx * tx + ty * ty + tz * tz) || 1;
-        const dot = (tx * fwd.x + ty * fwd.y + tz * fwd.z) / tlen;
-        if (dot < arcDot) continue; // outside forward arc
+    if (nearby && nearby.length > 0) {
+      for (const d of nearby) {
+        if (!d || !d.alive || d._captured) continue;
+        const sp = d._scenePosition;
+        if (fwd && sp) {
+          const tx = sp.x - playerPos.x;
+          const ty = sp.y - playerPos.y;
+          const tz = sp.z - playerPos.z;
+          const tlen = Math.sqrt(tx * tx + ty * ty + tz * tz) || 1;
+          const dot = (tx * fwd.x + ty * fwd.y + tz * fwd.z) / tlen;
+          if (dot < arcDot) continue; // outside forward arc
+        }
+        pick = d;
+        break;
       }
-      pick = d;
-      break;
     }
+    // Empty forward arc (nothing within RANGE_M, or everything behind /
+    // abeam): in a guided chapter, fall back to the nearest piece anywhere.
+    if (!pick) pick = this._guidedFallbackPick(playerPos, cfg);
     if (!pick) return;
 
     const debris = this._debrisField.getDebrisById
@@ -235,6 +245,44 @@ export class AutoLockController {
     // Seed range tracking so the first emit fires correctly next frame.
     this._rangeTargetId = debris.id;
     this._lastRangeState = null;
+  }
+
+  /**
+   * @private Guided-chapter fallback (M1 guidance, T5): when the forward arc
+   * holds nothing, lock the nearest alive piece ANYWHERE within
+   * AUTOLOCK.GUIDED_FALLBACK_RANGE_M — no arc test. Only in a GUIDED chapter
+   * (missions 1–3, `DebrisField.isGuidedChapter()` → the profile's
+   * `guidedCluster` flag): there the welcome cluster is the whole mission, and
+   * two of its pieces are authored behind the mother where the forward arc
+   * never looks — a silent reticle reads as "the debris vanished". With a
+   * target selected, the off-screen arrow (TargetReticle, behind-camera via
+   * _getEdgePosition) points at it and the OUT OF RANGE state says "press A".
+   * From mission 4 on the arc rule stands (pieces drift; accepted there).
+   *
+   * Cost: one extra O(n) getDebrisNear pass, only on frames with no target
+   * and an empty arc. Note DebrisField's same-frame query cache keys on
+   * "same/smaller radius" — a later, smaller same-frame query reuses this
+   * wider result set (pre-existing cache semantics; callers filter by
+   * distance where it matters).
+   *
+   * @param {{x:number,y:number,z:number}} playerPos — scene units
+   * @param {object} cfg — Constants.AUTOLOCK
+   * @returns {object|null} the nearest alive snapshot, or null
+   */
+  _guidedFallbackPick(playerPos, cfg) {
+    if (cfg.GUIDED_FALLBACK_ANY_ARC === false) return null;
+    // Older / minimal DebrisField mocks may lack the predicate → not guided.
+    const field = this._debrisField;
+    if (!field || typeof field.isGuidedChapter !== 'function' || !field.isGuidedChapter()) return null;
+    const rangeM = Number.isFinite(cfg.GUIDED_FALLBACK_RANGE_M) ? cfg.GUIDED_FALLBACK_RANGE_M : 100000;
+    const radiusScene = (rangeM / 1000) * Constants.SCENE_SCALE; // m→km→scene
+    const anywhere = field.getDebrisNear(playerPos, radiusScene);
+    if (!anywhere || anywhere.length === 0) return null;
+    // Sorted nearest-first; the first alive, uncaptured entry is the pick.
+    for (const d of anywhere) {
+      if (d && d.alive && !d._captured) return d;
+    }
+    return null;
   }
 
   /** @private Emit IN/OUT range crossings for the selected target. */

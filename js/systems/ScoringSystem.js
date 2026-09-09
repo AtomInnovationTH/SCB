@@ -7,6 +7,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { gameState } from '../core/GameState.js';
+import { missionProfileFor } from '../core/missionProgress.js';
 
 /** Scoring tiers */
 export const CAPTURE_TIERS = {
@@ -591,17 +592,17 @@ export class ScoringSystem {
 
   /**
    * Get the mission profile for a given mission number.
-   * Highest-matching minMission wins.
+   * Highest-matching minMission wins. The loop itself lives in
+   * core/missionProgress.js (`missionProfileFor`) so profile readers that own
+   * no ScoringSystem — GameFlowManager's progress line, the guided-chapter
+   * predicate — resolve the SAME entry this broadcasts on MISSION_START; this
+   * method is kept as the ScoringSystem-side entry point (test-MissionProfiles
+   * pins it) and simply delegates.
    * @param {number} missionNumber
    * @returns {object} Mission profile from Constants.MISSIONS.PROFILES
    */
   _getMissionProfile(missionNumber) {
-    const profiles = Constants.MISSIONS.PROFILES;
-    let best = profiles[0];
-    for (const p of profiles) {
-      if (missionNumber >= p.minMission) best = p;
-    }
-    return best;
+    return missionProfileFor(missionNumber);
   }
 
   /**

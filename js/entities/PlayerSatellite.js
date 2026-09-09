@@ -311,7 +311,12 @@ export class PlayerSatellite extends THREE.Group {
     // ========================================================================
     // V5 CROSSBOW STATE
     // ========================================================================
-    this.mass = 130;                // kg — mothership mass for recoil calculations
+    // kg — mothership mass for recoil calculations AND the drag denominator
+    // below (update() "Atmospheric drag"). Read from Constants.MOTHER_DRAG so
+    // the welcome cluster (DebrisField.dragDecelFor) shares the SAME ballistic
+    // coefficient — a literal here and a literal there was how the two drifted
+    // apart (M1 welcome-drift fix, 2026-09-09). Value unchanged (130).
+    this.mass = Constants.MOTHER_DRAG.MASS_KG;
     this.armManager = null;         // Set via setArmManager() for interlock checks
     this._thrusterInterlock = false; // True when back arm blocks FEEP thruster exhaust
     this._plumeBlocked = {};        // C-9: Map<thrusterId, reason> — plume geometry interlock
@@ -4807,7 +4812,13 @@ export class PlayerSatellite extends THREE.Group {
         this.orbit.semiMajorAxis / Constants.SCENE_SCALE,
         Constants.MU_EARTH
       );
-      const dragDecel = atmosphericDrag(altKm, vel, 20, this.mass);
+      // Drag area from Constants.MOTHER_DRAG (was a bare `20` literal): the
+      // welcome pieces (DebrisField.dragDecelFor) read the same AREA_M2 and
+      // MASS_KG so their SMA decays in lock-step with the mother's — the
+      // ballistic coefficient is the ONLY input to the per-step decay factor
+      // that differed between the two, and it was the M1 "cluster drifts away"
+      // cause. Value unchanged (20 m² / 130 kg).
+      const dragDecel = atmosphericDrag(altKm, vel, Constants.MOTHER_DRAG.AREA_M2, this.mass);
       if (vel > 0) {
         // T2 drag chunking: the decay factor (1 − 2·dvDrag/vel) can go negative
         // at high warp when gameDt is large, flipping the orbit. Integrate in

@@ -10,7 +10,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { gameState, GameStates } from '../core/GameState.js';
-import { getMissionProgress } from '../core/missionProgress.js';
+import { getMissionProgress, isGuidedChapterNumber } from '../core/missionProgress.js';
 import timerManager from './TimerManager.js';
 import { CameraViews } from './CameraSystem.js';
 import { scoringSystem } from './ScoringSystem.js';
@@ -1161,6 +1161,9 @@ export class GameFlowManager {
           // The invitation window is "until the next credited catch" (owner
           // decision 2, 2026-09-04): a catch that is not a boundary lapses it.
           this._closeDepotInvitation('lapsed');
+          // M1 guidance T7: the per-catch progress line (guided chapters only;
+          // the boundary catch above is the ceremony's, not this line's).
+          this._postMissionProgressLine();
         }
       }
     });
@@ -1237,6 +1240,10 @@ export class GameFlowManager {
       // starts mission 2 on time. (This path has never carried the depot
       // decision — pre-existing, FINDINGS.)
       scoringSystem.checkMissionTransition();
+      // M1 guidance T7: the per-catch progress line rides this credited clear
+      // too; its own boundary guard keeps a sacrifice that lands the 5th
+      // clear quiet (there is no ceremony here to speak for it — FINDINGS).
+      this._postMissionProgressLine();
       this.saveGame();
 
       // Wireframe self-clears via DEBRIS_REMOVED listener (Batch 3)
@@ -2027,6 +2034,46 @@ export class GameFlowManager {
     const was = this._depotInvitation;
     this._depotInvitation = null;
     eventBus.emit(Events.DEPOT_INVITATION, { open: false, reason, chapter: was.chapter });
+  }
+
+  /**
+   * Per-catch progress line (M1 guidance T7, missions 1–3 only): after each
+   * credited clear that is NOT a mission boundary, one short HOUSTON line —
+   * "Mission N: k/5 cleared. Clear m more for depot resupply." — so a new
+   * player always knows where they stand in the chapter (the owner report was
+   * a cluster that "drifts away / vanishes" with nothing telling the player
+   * how much is left). Same vocabulary as the continue-flow objective line
+   * above ("Clear N more debris for depot resupply."); no new terms.
+   *
+   *   • Guided chapters only: `isGuidedChapterNumber(missionNum)` — the
+   *     profile's `guidedCluster` flag, missions 1–3 (FORCED_DEPOT_CHAPTERS).
+   *     From mission 4 on the depot is an invitation and the chapter count is
+   *     ambient — no line. The mission number comes from the pure
+   *     `getMissionProgress(gameState.debrisCleared)`, which IS correct on a
+   *     bare Continue (no MISSION_START fires on restore — DebrisField's
+   *     profile-based isGuidedChapter() would read M1 there).
+   *   • The boundary catch is skipped (debrisUntilShop === perMission ⇔ the
+   *     count just landed on a multiple): `_onMissionBoundary` already shows
+   *     "MISSION N COMPLETE" there. Callers: the CATCH_PROCESSED non-boundary
+   *     branch (which never lands on a boundary, so the guard is belt-and-
+   *     braces) and the ARM_DEORBIT sacrifice path (which has no boundary
+   *     handling of its own — the guard is what keeps the 5th clear quiet).
+   *   • Suppression: `_postOnboarding` — passes from tier 1 on (HOUSTON
+   *     channel passes at ramp tier 1 anyway); at tier 0, while the Director's
+   *     first beats run, it is muted BY DESIGN: `first_catch` / `second_catch`
+   *     narrate those catches.
+   * @private
+   */
+  _postMissionProgressLine() {
+    const { perMission, missionNum, debrisUntilShop } = getMissionProgress(gameState.debrisCleared);
+    if (debrisUntilShop >= perMission) return;           // a boundary — the ceremony owns it
+    if (!isGuidedChapterNumber(missionNum)) return;      // missions 4+ — no line
+    const cleared = perMission - debrisUntilShop;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: 'HOUSTON', channel: 'HOUSTON', priority: 'info',
+      text: `Mission ${missionNum}: ${cleared}/${perMission} cleared. Clear ${debrisUntilShop} more for depot resupply.`,
+      _postOnboarding: true,
+    });
   }
 
   /**

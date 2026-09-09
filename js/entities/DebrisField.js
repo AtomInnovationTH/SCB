@@ -224,11 +224,33 @@ const TRACKING_PROB = {
 };
 
 /** Welcome field debris — spawned near player on first ORBITAL_VIEW for immediate gameplay.
- *  Empirically verified offset→distance scale (via OrbitalMechanics fixture):
- *     trueAnomaly Δν of 0.0000045 ≈ 30 m, 0.000028 ≈ 188 m, 0.00013 ≈ 870 m,
- *     0.00025 ≈ 1680 m.  These specs target a tight ≤1.5 km cluster so the
- *     pilot can see all 7 contacts in a single mother-ship vantage on
- *     mission 1, while still requiring autopilot to reach the deepest one. */
+ *
+ *  LAYOUT — the M1 CONE FAN (owner decision 2026-09-09): all 7 pieces sit
+ *  AHEAD of the mother, fanned out over an ≈8–10° cone about the prograde
+ *  boresight (alternating left/right and up/down), so the forward view reads
+ *  as a fan around the range-wall piece #3 at centre. Rows author their
+ *  offsets in METRES in the mother's local orbital frame at spawn:
+ *    fwd   = along-track / prograde (the ship's rest attitude — PlayerSatellite
+ *            composes quaternion = prograde · _manualRotation),
+ *    right = cross-track = fwd × radial (the SAME axis the #2 pin's latM uses,
+ *            see the _motherRight basis in update()),
+ *    up    = radial, away from Earth.
+ *  _placeWelcomePiece converts metres → radians with METRE_SCENE / a (the
+ *  pin-branch idiom). The whole cluster stays ≤ ~1.5 km so the pilot sees all
+ *  7 contacts from one vantage, while #4–#7 still need the autopilot or a
+ *  daughter (all inside TETHER_LENGTH_DEFAULT 2000 m and the 5 km AutoLock
+ *  search; only #1/#2 sit inside NET_LOCK_RANGE_M).
+ *
+ *  WHY THE FAN BREATHES BUT NEVER DRIFTS: every free piece keeps the mother's
+ *  SEMI-MAJOR AXIS (same period). The cross-track offset is a plane tilt
+ *  (Δi, ΔΩ) and the radial offset an eccentricity-VECTOR delta at the same a,
+ *  both period-preserving, so there is NO secular separation. Over one orbit
+ *  (≈ 9.2 real minutes at 10× time) right/up reverse sign every ≈ 4.6 real
+ *  minutes and the radial offset sloshes along-track by ≤ 2·radM (≤ 130 m for
+ *  #7); the fan is exact at spawn and stays a bounded cone-shaped cloud with
+ *  its along-track order preserved. Do NOT "fix" that float by touching
+ *  semiMajorAxis: an SMA step is a period change and separates for good
+ *  (test-WelcomeField pins the bounded motion and the SMA-drift control case). */
 const WELCOME_FIELD = [
   // Reward-first onboarding spine (.kilo/plans/new-player-onboarding-flow.md
   // Phase 2). Mission 1 is NET-ONLY (every guided beat captures with the Mother
@@ -241,13 +263,17 @@ const WELCOME_FIELD = [
   // debris' existing instanced-mesh slot (the rendered shape is the candidate's,
   // not the spec's). `sizeM` scales them up so junk chunks are still visible.
   //
-  // PLACEMENT (mother-local frame): #1 dead-centre ahead, #2 off to one side,
-  // both PINNED (local-frame, single source of truth = _scenePosition) and in
-  // net range so the two guided net catches are guaranteed. #3 is the RANGE WALL
-  // — ahead but beyond NET_LOCK_RANGE_M (90 m) so the reticle flips OUT OF RANGE
-  // and teaches Autopilot (A); it is a FREE co-orbital orbit (the approach
-  // target), not pinned. `pin:true` pieces use fwdM/latM (metres, local frame);
-  // the rest use trueAnomaly offsetMin/Max (≈ metres along-track).
+  // PLACEMENT (mother-local frame, metres): #1 dead-centre ahead, #2 off to
+  // the right, both PINNED (local-frame, single source of truth =
+  // _scenePosition) and in net range so the two guided net catches are
+  // guaranteed. #3 is the RANGE WALL — dead ahead but beyond NET_LOCK_RANGE_M
+  // (90 m) at 1.15–1.40× that SSOT (tracks the constant, never a literal) so
+  // the reticle flips OUT OF RANGE and teaches Autopilot (A); it is a FREE
+  // co-orbital orbit (the approach target), not pinned. #4–#7 are FREE orbits
+  // fanned left/right and up/down at 220–1400 m for the autopilot / a daughter.
+  // Row fields: `pin:true` rows use fwdM/latM (fixed); free rows use
+  // fwdMinM/fwdMaxM (fwd is randomised inside the band per spawn) plus a fixed
+  // latM (right, +) and radM (up, +). Only _placeWelcomePiece reads them.
   // M1 cluster (.kilo/plans/onboarding-tease-2-lateral-tune.md). Physical
   // hierarchy: every fragment renders sub-metre (sizeM ≈ radius, render ≈ 1.9×)
   // so NONE renders larger than the ~2 m mother; the cubesat #7 is the small,
@@ -280,17 +306,30 @@ const WELCOME_FIELD = [
     massMin: 4, massMax: 4,  pin: true, fwdM: 45, latM: 18,
     tumbleDegS: 15 },                                           // #2 MLI-foil scrap (gold flat) — right, in range (≈48 m), render ~1.33 m; a touch livelier
   { types: ['fragment'], sizeM: 0.45, appearMaterial: 'solar_cell', appearPlate: true,
-    massMin: 5, massMax: 5,  offsetMin: 0.0000195, offsetMax: 0.0000270 }, // #3 RANGE WALL — solar-cell shard ~130–180 m
-  // Medium/far tier — still net-only on M1, so ≤10 kg; orbital placement.
+    massMin: 5, massMax: 5,
+    fwdMinM: Constants.NET_LOCK_RANGE_M * 1.15, fwdMaxM: Constants.NET_LOCK_RANGE_M * 1.40,
+    latM: 0, radM: 0 },                                         // #3 RANGE WALL — solar-cell shard, dead ahead ~104–126 m (just outside the 90 m net lock)
+  // Medium/far tier — still net-only on M1, so ≤10 kg; free orbits fanned
+  // left/right and up/down (≈8–10° half-angle) for the autopilot / a daughter.
   { types: ['fragment'], sizeM: 0.55, appearMaterial: 'aluminum', appearPlate: false,
-    massMin: 6, massMax: 6,  offsetMin: 0.0000300, offsetMax: 0.0000600 }, // #4 aluminium fragment ~200–400m
+    massMin: 6, massMax: 6,  fwdMinM: 220,  fwdMaxM: 320,  latM: -40,  radM: 20 },  // #4 aluminium fragment ~220–320 m, left + up
   { types: ['fragment'], sizeM: 0.95, appearMaterial: 'solar_cell', appearPlate: true,
-    massMin: 6, massMax: 6,  offsetMin: 0.0000600, offsetMax: 0.0001000 }, // #5 large thin solar-array section ~400–670m
+    massMin: 6, massMax: 6,  fwdMinM: 420,  fwdMaxM: 560,  latM: 75,   radM: -30 }, // #5 large thin solar-array section ~420–560 m, right + down
   { types: ['fragment'], sizeM: 0.70, appearMaterial: 'mli_mylar', appearPlate: true,
-    massMin: 8, massMax: 8,  offsetMin: 0.0001000, offsetMax: 0.0001600 }, // #6 foil + strut bundle ~670–1075m
+    massMin: 8, massMax: 8,  fwdMinM: 700,  fwdMaxM: 900,  latM: -120, radM: 50 },  // #6 foil + strut bundle ~700–900 m, left + up
   { types: ['cubesat'], sizeM: 0.30,
-    massMin: 10, massMax: 10, offsetMin: 0.0001600, offsetMax: 0.0002200 }, // #7 cubesat (small whole microsat) ~1075–1475m
+    massMin: 10, massMax: 10, fwdMinM: 1100, fwdMaxM: 1400, latM: 170,  radM: -65 }, // #7 cubesat (small whole microsat) ~1100–1400 m, right + down
 ];
+
+/** Re-seat safety net (M1 guidance T6): how often the per-piece distance sweep
+ *  in _reseatDriftedWelcome runs, in REAL seconds. Player-experience timer, not
+ *  game time; with a 10 s dwell (Constants.MISSIONS.RESEAT.DWELL_S) a 2 s
+ *  cadence resolves the dwell in 5 steps at a fraction of the per-frame cost. */
+const RESEAT_SCAN_PERIOD_S = 2;
+
+/** The HOUSTON line posted once per re-seat (plain ASCII; muted at suppression
+ *  tier 0 by design — there the reticle re-lock is the cue). */
+const RESEAT_COMMS_TEXT = 'Re-acquired a drifted piece ahead of you. Check the reticle.';
 
 /** Altitude bands (km above surface) with percentage weights.
  *  ST-6.1: 7-band layout (added VLEO + MEO) lives in Constants.DEBRIS.ALT_BANDS.
@@ -540,6 +579,19 @@ export class DebrisField {
      *  Latched/cleared by the ceremony scenario only. */
     this._onboardingPinBasisOverrides = new Map();
 
+    // M1 guidance T6 — the welcome-cluster re-seat safety net's state
+    // (_reseatDriftedWelcome). The "busy" set: ids something is flying to
+    // (AUTOPILOT_TARGET_LOCK from the mother AP and from every daughter closing
+    // on a target — a Set, not one id, because they overlap), the optional
+    // "daughter en route" guard main.js wires (setReseatGuard), and the scan
+    // cadence accumulator (real seconds).
+    /** @type {Set<number|string>} debris ids under an AUTOPILOT_TARGET_LOCK */
+    this._lockedDebrisIds = new Set();
+    /** @type {((id:number|string) => boolean)|null} "is a daughter flying to this id?" */
+    this._reseatGuard = null;
+    /** @type {number} real seconds since the last re-seat scan */
+    this._reseatScanS = 0;
+
     // ST-4.C: Mission profile state
     /** @type {object|null} Current mission profile from Constants.MISSIONS.PROFILES */
     this._currentMissionProfile = null;
@@ -636,6 +688,12 @@ export class DebrisField {
       for (const d of this.debrisList) d.welcomeSpawn = false;
       this._clearOnboardingPin();
     });
+
+    // M1 guidance T6: the re-seat safety net's "busy" set follows the
+    // AUTOPILOT_TARGET_LOCK / UNLOCK pair (mother AP + every daughter) and is
+    // cleared on GAME_RESET. Factored so the subscription can be exercised
+    // without building a field (test-WelcomeField).
+    this._wireReseatLockEvents();
 
     // Onboarding tease pin release: hand a curated piece back to normal
     // co-orbital propagation once it leaves play. Each pinned piece (#1, #2) is
@@ -1753,6 +1811,43 @@ export class DebrisField {
   }
 
   /**
+   * Atmospheric-drag deceleration (km/s²) for one debris piece — the ONE place
+   * the drag ballistic coefficient (area / mass) is chosen, factored out of
+   * update()'s propagation loop so it is unit-testable (test-WelcomeDrag.js).
+   * Same return as the `atmosphericDrag(...)` call it wraps.
+   *
+   * `welcomeSpawn` pieces use the MOTHER's coefficient (Constants.MOTHER_DRAG —
+   * the same AREA_M2 / MASS_KG PlayerSatellite.update feeds atmosphericDrag)
+   * instead of their own sizeMeter² / mass. Why (M1 welcome-drift fix,
+   * 2026-09-09): the cluster is spawned co-orbital with the mother at 350 km,
+   * where drag lowers the SMA ≈ 0.5 m per game-second. The authored rows' own
+   * A/m (0.009–0.15) is 1–17× smaller than the mother's 20/130 = 0.154, so
+   * they decayed slower, stayed HIGHER, and — lower orbit = faster — the mother
+   * pulled ahead quadratically (along-track ≈ 0.026–0.040·t² m; #3/#4/#6/#7
+   * were all > 2 km away within ~3.5–5 real minutes with no key pressed — the
+   * "welcome cluster drifts away / vanishes" report). Same coefficient ⇒ same
+   * per-frame decay factor ⇒ lock-step decay. The pieces stay REAL orbits (not
+   * mother-pinned), so RCS / thrust still separate the player from them as
+   * before. Scope: welcomeSpawn only — the M2+ authored cast keeps physical
+   * drag. Every other piece keeps cross-section ≈ sizeMeter², mass from its
+   * spec (floor 1 kg — a 0 / missing mass must not divide to Infinity).
+   *
+   * @param {object} debris - reads welcomeSpawn, sizeMeter, mass
+   * @param {number} altKm - altitude above the surface (km)
+   * @param {number} velKms - orbital speed (km/s)
+   * @returns {number} deceleration (km/s²)
+   */
+  static dragDecelFor(debris, altKm, velKms) {
+    if (debris.welcomeSpawn) {
+      return atmosphericDrag(altKm, velKms,
+        Constants.MOTHER_DRAG.AREA_M2, Constants.MOTHER_DRAG.MASS_KG);
+    }
+    const area = debris.sizeMeter * debris.sizeMeter;
+    const mass = Math.max(debris.mass || 1, 1);
+    return atmosphericDrag(altKm, velKms, area, mass);
+  }
+
+  /**
    * Per-frame update: propagate orbits, update instance transforms, update background.
    * @param {number} dt - Real-time (dtReal) delta seconds — LOD, visual tumble, cosmetics.
    * @param {THREE.Vector3} [playerPos] - Player position for LOD
@@ -1910,6 +2005,15 @@ export class DebrisField {
       }
     }
 
+    // M1 guidance T6: the welcome-cluster re-seat safety net (guided chapters
+    // only; only welcomeSpawn pieces are ever touched — the very pieces the M1
+    // cull above exempts, so it sits after that block and measures the same
+    // _scenePosition the cull left alone). It runs BEFORE the propagation loop
+    // below, so a re-seated piece is stepped once more this frame exactly like
+    // a fresh spawn; that is why it receives this frame's gameDt for the same
+    // one-step pre-compensation _spawnWelcomeField applies.
+    this._reseatDriftedWelcome(playerPos, playerOrbit, dt, gameDt);
+
     // --- Update interactive debris ---
     const maxVisualRad = Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S * Math.PI / 180;
 
@@ -1981,20 +2085,38 @@ export class DebrisField {
       const o = debris.orbit;
       if (debris._onboardingPinned || debris._motherParked) {
         // ── Onboarding tease pin ────────────────────────────────────────────
-        // Skip propagation: this piece is held at a fixed offset in the mother's
-        // LOCAL frame (forward + lateral), written to _scenePosition in
-        // _updateInstanceTransform below using the per-frame mother basis. That
-        // (not the orbit) is the single source of truth all consumers read, so
-        // the piece is stable, selectable, dead-ahead/off-to-the-side, and never
-        // drifts. The orbit is left as a co-orbital fallback only.
+        // No Kepler step, no drag: this piece rides the mother at a fixed
+        // offset in her LOCAL frame (forward + lateral), written to
+        // _scenePosition in _updateInstanceTransform below from the per-frame
+        // mother basis. _scenePosition is what selection, range, net, reticle
+        // and rendering read — but it is NOT the only thing read. The orbit is
+        // read too: AutopilotSystem (goal pose + HOLD element copy),
+        // NavRecoveryAdvisor, getDebrisClusters (the Shift+A field centre),
+        // NavSphere, InsertionPlanner, FieldRiskModel, ConjunctionSystem and
+        // CollisionAvoidance all derive a position from `debris.orbit`. The
+        // pre-T4 code left the orbit FROZEN at its spawn-era phase while pinned
+        // ("a co-orbital fallback only"), so every one of those readers saw the
+        // piece where the mother WAS: ~77 km per REAL second along-track
+        // (7.7 km/s orbital × the 10× game clock), i.e. ~770 km behind after
+        // 10 s. Pressing A on a pinned #1/#2 (the default AutoLock target)
+        // burned retrograde toward that ghost. Fix: re-sync the orbit to the
+        // mother's elements EVERY frame (same math as the release re-sync,
+        // factored into _syncPinnedOrbitToMother), so the orbit-derived
+        // position lands within the pin's lateral offset (≤ 18 m, #2) of the
+        // mesh. No playerOrbit (headless/menu update) ⇒ the orbit simply keeps
+        // its last synced value.
+        if (debris._onboardingPinned && playerOrbit) {
+          DebrisField._syncPinnedOrbitToMother(debris, playerOrbit);
+        }
         // ── Mother berth/park hold (cargo-continuity S3) ───────────────────
-        // _motherParked: same skip. A berthed/parked catch is pinned at the
-        // nose every frame (updateBerthHold → pinCapturedDebris); if its own
-        // orbit kept propagating through an indefinite park, a later jettison
-        // would snap it to wherever the orbit drifted (the released catch was
-        // measured 15.4 km away — tmp/rv-disappear.log). _reseatOrbitOnRelease
-        // rebuilds the orbit from the pin at [K], so the frozen orbit is never
-        // read by anyone while held.
+        // _motherParked: a plain skip — the orbit stays frozen. A berthed/parked
+        // catch is pinned at the nose every frame (updateBerthHold →
+        // pinCapturedDebris); if its own orbit kept propagating through an
+        // indefinite park, a later jettison would snap it to wherever the orbit
+        // drifted (the released catch was measured 15.4 km away —
+        // tmp/rv-disappear.log). _reseatOrbitOnRelease rebuilds the orbit from
+        // the pin at [K], so a parked catch's frozen orbit is never the release
+        // authority.
       } else {
         _tmpKmOrbit.semiMajorAxis = o.semiMajorAxis / Constants.SCENE_SCALE;
         _tmpKmOrbit.eccentricity = o.eccentricity;
@@ -2007,18 +2129,28 @@ export class DebrisField {
         o.trueAnomaly = _tmpKmOrbit.trueAnomaly;
         o.meanMotion = _tmpKmOrbit.meanMotion;
 
-        // Atmospheric drag — matches PlayerSatellite so co-orbiting objects
-        // stay on the same trajectory (prevents mother/debris drift that hid
-        // debris from the ARM_PILOT camera via LOD culling).
+        // Atmospheric drag — the same formula, sub-stepping and gameDt as
+        // PlayerSatellite.update (dtWorld is threaded to both from main.js),
+        // and for welcomeSpawn pieces the same BALLISTIC COEFFICIENT too
+        // (dragDecelFor → Constants.MOTHER_DRAG). Matching the formula alone
+        // was not enough: with their own sizeMeter²/mass the welcome pieces
+        // decayed 3–17× slower than the mother and drifted km away — the
+        // pre-2026-09-09 comment here claimed "co-orbiting objects stay on the
+        // same trajectory", which held only for the pinned #1/#2 (they skip
+        // this branch and ride the mother).
+        // Residual: the spawn frame applies one drag step to the new pieces
+        // AFTER the mother already took hers (player.update runs first, and
+        // _spawnWelcomeField copies her already-decayed SMA), so the welcome
+        // SMA sits ONE step (~0.1 m at 60 fps) below the mother's forever.
+        // Along-track drift from that ≈ 1.4 mm/s real → < 1 m over 10 min.
+        // Accepted; deliberately NOT compensated — a one-off SMA nudge would be
+        // more machinery than the effect it hides.
         const debrisAltKm = _tmpKmOrbit.semiMajorAxis - Constants.EARTH_RADIUS_KM;
         if (debrisAltKm < 600) {
           const debrisVel = orbitalVelocity(
             _tmpKmOrbit.semiMajorAxis, _tmpKmOrbit.semiMajorAxis, Constants.MU_EARTH
           );
-          // Cross-section ≈ sizeMeter², mass from debris spec (floor 1 kg)
-          const debrisArea = debris.sizeMeter * debris.sizeMeter;
-          const debrisMass = Math.max(debris.mass || 1, 1);
-          const dragDecel = atmosphericDrag(debrisAltKm, debrisVel, debrisArea, debrisMass);
+          const dragDecel = DebrisField.dragDecelFor(debris, debrisAltKm, debrisVel);
           if (debrisVel > 0) {
             // T2 drag chunking (see PlayerSatellite): ≤ DRAG_CHUNK_GAME_S
             // game-second Euler sub-steps so the decay factor can't flip
@@ -2532,28 +2664,74 @@ export class DebrisField {
 
 
   /**
-   * Release onboarding tease pins, handing the curated piece(s) back to normal
-   * co-orbital propagation. Idempotent. The fallback orbit is re-synced to the
-   * current player orbit + the pin's along-track offset before clearing, so
-   * release is seamless (no snap).
+   * Write a pinned piece's orbit as "the mother's orbit, phased forward by the
+   * pin's along-track offset" — the ONE co-orbital expression of the tease pin.
    *
-   * The re-sync is LOAD-BEARING, not cosmetic: orbit propagation is SKIPPED
-   * while `_onboardingPinned` (update loop, :1569), so the fallback orbit's
-   * trueAnomaly is stale by the whole pin duration. Releasing without a
-   * re-sync teleports the piece to the stale phase — measured ~1.07e6 m off
-   * the ship after a ~95 s pin (2026-08-02, mother-net scenario probe). A
-   * mother-net catch releases the pin at LASSO_CONTACT; the very next
-   * `_enterMotherReel` then seeds `_remainingM`/`_lateral` from the teleported
-   * `_scenePosition`, `pinCapturedDebris` re-pins the catch to that garbage
-   * every reel frame, and the ceremony camera anchors (netPos/debrisPos)
-   * fling the camera across hundreds of km — the black captured/reel/secured
-   * frames. Only the along-track offset is expressible in co-orbital elements,
-   * so a lateral pin component (#2, `latM: 18`) is DROPPED rather than
-   * converted — for a catch that is invisible (the reel pin takes over the same
-   * frame), but an `ONBOARDING_COMPLETE` release of a still-live tease piece
-   * snaps it onto the boresight in one frame. That trade is deliberate: an 18 m
-   * lateral snap is the residue of fixing a ~1e6 m teleport, and faking a
-   * cross-track term by nudging inclination/RAAN would be guesswork.
+   * Two callers, one computation: the propagation loop (update(), every frame
+   * while `_onboardingPinned`, so the orbit never goes stale — T4) and the
+   * release path (_clearOnboardingPin, once, so hand-back to free propagation
+   * is seamless). Copies a/e/i/RAAN/argP/meanMotion verbatim and sets
+   * trueAnomaly = mother ν + fwd / a: `_onboardingPinFwd` is already scene
+   * units (spec.fwdM × METRE_SCENE at spawn), so arc / radius is radians — the
+   * same math _updateInstanceTransform applies along the mother's prograde
+   * basis (chord vs arc differs by nanometres at 22–45 m on a ~6700 km radius).
+   * Only the along-track offset is expressible in co-orbital elements; the
+   * lateral pin component (#2, `latM: 18`) lives in `_scenePosition` only, so an
+   * orbit-derived position sits ≤ 18 m from the mesh, never hundreds of km.
+   *
+   * Static (like _advanceTumble) so the many test receivers that borrow
+   * `_clearOnboardingPin` off the prototype onto a plain-object mock keep
+   * working without also wiring this helper.
+   *
+   * @param {object} debris        canonical debris record (orbit mutated in place)
+   * @param {object} playerOrbit   mother's elements (scene-unit semiMajorAxis)
+   * @returns {boolean} true when the orbit was written; false on a missing
+   *   orbit / player orbit / non-positive semi-major axis (orbit left untouched)
+   */
+  static _syncPinnedOrbitToMother(debris, playerOrbit) {
+    const o = debris && debris.orbit;
+    if (!o || !playerOrbit || !(playerOrbit.semiMajorAxis > 0)) return false;
+    o.semiMajorAxis = playerOrbit.semiMajorAxis;
+    o.eccentricity  = playerOrbit.eccentricity;
+    o.inclination   = playerOrbit.inclination;
+    o.raan          = playerOrbit.raan;
+    o.argPerigee    = playerOrbit.argPerigee;
+    o.meanMotion    = playerOrbit.meanMotion;
+    o.trueAnomaly   = playerOrbit.trueAnomaly
+      + (debris._onboardingPinFwd || 0) / playerOrbit.semiMajorAxis;
+    return true;
+  }
+
+  /**
+   * Release onboarding tease pins, handing the curated piece(s) back to normal
+   * co-orbital propagation. Idempotent. The orbit is re-synced to the current
+   * player orbit + the pin's along-track offset before clearing, so release is
+   * seamless (no snap).
+   *
+   * History (why the release re-sync exists): before T4 the orbit was FROZEN
+   * at its spawn-era phase while `_onboardingPinned` (propagation skipped in
+   * the update loop), so releasing without a re-sync teleported the piece to
+   * the stale phase — measured ~1.07e6 m off the ship after a ~95 s pin
+   * (2026-08-02, mother-net scenario probe). A mother-net catch releases the
+   * pin at LASSO_CONTACT; the very next `_enterMotherReel` then seeded
+   * `_remainingM`/`_lateral` from the teleported `_scenePosition`,
+   * `pinCapturedDebris` re-pinned the catch to that garbage every reel frame,
+   * and the ceremony camera anchors (netPos/debrisPos) flung the camera across
+   * hundreds of km — the black captured/reel/secured frames.
+   *
+   * Since T4 the update loop performs this SAME re-sync every frame
+   * (_syncPinnedOrbitToMother), so by release time the orbit is already the
+   * mother's as of the last update(). The release call stays: it is the same
+   * idempotent helper, it covers a release fired before update() has ever seen
+   * a player orbit (headless/test receivers, save-restore paths), and it is
+   * the only site that must read the offset BEFORE the pin fields are zeroed.
+   * Only the along-track offset is expressible in co-orbital elements, so a
+   * lateral pin component (#2, `latM: 18`) is DROPPED rather than converted —
+   * for a catch that is invisible (the reel pin takes over the same frame), but
+   * an `ONBOARDING_COMPLETE` release of a still-live tease piece snaps it onto
+   * the boresight in one frame. That trade is deliberate: an 18 m lateral snap
+   * is the residue of fixing a ~1e6 m teleport, and faking a cross-track term
+   * by nudging inclination/RAAN would be guesswork.
    * @param {number|string} [id] - release just this piece; omit to release all.
    * @private
    */
@@ -2564,20 +2742,14 @@ export class DebrisField {
       // _onboardingPinFwd already zeroed — that seeds trueAnomaly = the ship's
       // exact phase and TELEPORTS the piece onto the ship (measured 2026-08-05:
       // a double NET_CATCH_SUCCESS release put the whale at spRelShip = 0,
-      // collapsing the mother reel's seed distance to the standoff).
+      // collapsing the mother reel's seed distance to the standoff). This guard
+      // is what keeps the per-frame sync + the release sync from ever running
+      // against a zeroed offset.
       if (!d || !d._onboardingPinned) return;
-      const po = this._lastPlayerOrbit;
-      if (po && d.orbit && po.semiMajorAxis > 0) {
-        d.orbit.semiMajorAxis = po.semiMajorAxis;
-        d.orbit.eccentricity  = po.eccentricity;
-        d.orbit.inclination   = po.inclination;
-        d.orbit.raan          = po.raan;
-        d.orbit.argPerigee    = po.argPerigee;
-        d.orbit.meanMotion    = po.meanMotion;
-        // _onboardingPinFwd is already scene units (spec.fwdM × METRE_SCENE at
-        // spawn) — along-track angle = arc / radius, same math as :2249.
-        d.orbit.trueAnomaly   = po.trueAnomaly + (d._onboardingPinFwd || 0) / po.semiMajorAxis;
-      }
+      // _lastPlayerOrbit: cached by update() so event-driven releases (no
+      // update() scope) still see the CURRENT phase. The helper no-ops on a
+      // missing/degenerate orbit and leaves the elements as they were.
+      DebrisField._syncPinnedOrbitToMother(d, this._lastPlayerOrbit);
       d._onboardingPinned = false; d._onboardingPinFwd = 0; d._onboardingPinLat = 0;
     };
     if (id != null) {
@@ -2587,6 +2759,127 @@ export class DebrisField {
     }
     for (const pid of this._onboardingPinIds) unpin(pid);
     this._onboardingPinIds.clear();
+  }
+
+  /**
+   * Seat ONE welcome piece on its cone-fan slot relative to the mother: the
+   * WELCOME_FIELD row's metres (mother-local frame) become orbital elements.
+   * Shared by the spawn (_spawnWelcomeField) and the re-seat safety net
+   * (_reseatDriftedWelcome, T6). It reads nothing from the piece's current
+   * orbit (only its own sticky fwd roll, below), so it is safe to call again
+   * on an already-placed piece with the CURRENT player orbit — that re-seats
+   * the piece onto its slot.
+   *
+   * Frame (the same basis the pin uses in update()): fwd = along-track /
+   * prograde, right = fwd × radial, up = radial (away from Earth). Metres →
+   * radians of arc via METRE_SCENE / a (scene units), the pin-branch idiom.
+   * Sign conventions are pinned by the projection test in test-WelcomeField
+   * (right = +latM, up = +radM in the mother's frame at spawn), not assumed.
+   *
+   * PINNED rows (spec.pin): the orbit is only the co-orbital FALLBACK — the
+   * authoritative position is the local-frame _scenePosition pin — so the
+   * mother's elements are copied and fwdM laid along-track, no frame comp.
+   *
+   * FREE rows keep the mother's SEMI-MAJOR AXIS (same period) and build all
+   * three offsets period-preserving, so the fan breathes but never drifts:
+   *   fwd   — Δν = fwd·METRE_SCENE/a, fwd rolled once inside [fwdMinM, fwdMaxM]
+   *           and remembered on the piece (_welcomeFwdM) so a re-seat snaps it
+   *           back to ITS slot rather than a new one (a stale roll outside the
+   *           row band re-rolls); minus frameCompRad (the spawn's one-frame
+   *           pre-compensation); minus ΔΩ·cos i — a node rotation moves the
+   *           piece along-track as well as cross-track, and without this term
+   *           the 5° (Brazil) start put #7 ≈ 1.9 km off its band.
+   *   right — plane tilt about the mother's current argument of latitude
+   *           u0 = ω + ν: Δi = L·sin u0, ΔΩ = −L·cos u0 / sin i, with
+   *           L = latM·METRE_SCENE/a, giving cross-track w(u) = L·cos(u − u0):
+   *           exact at spawn, reversing sign every half orbit, never growing.
+   *           |sin i| < 0.01 → ΔΩ = 0 (a guard only — starts run 5°–97.5°).
+   *   up    — eccentricity-VECTOR delta at the same a: with û = (cos u, sin u)
+   *           in the in-plane node frame and ê_m = e_m·(cos ω_m, sin ω_m),
+   *           ê_p = ê_m − (Δr/a)·û, so r_p − r_m = Δr·cos(u − u_p). Adding to
+   *           the mother's vector (not replacing it) keeps her own ±672 m
+   *           radial oscillation (e = 0.0001) common-mode; the offset sloshes
+   *           along-track by ≤ 2·Δr over the orbit (≤ 130 m for #7).
+   *
+   * @param {object} debris        the piece — its `orbit` is overwritten
+   * @param {object} spec          the WELCOME_FIELD row
+   * @param {object} playerOrbit   mother's elements (semiMajorAxis in scene units)
+   * @param {number} [frameCompRad=0] along-track pre-compensation (rad): n×gameDt
+   *                               at spawn (see _spawnWelcomeField), 0 for a re-seat
+   * @returns {{ fwdM: number, latM: number, radM: number }} the realised
+   *          local-frame offsets in metres (fwdM is the roll actually used)
+   * @private
+   */
+  _placeWelcomePiece(debris, spec, playerOrbit, frameCompRad = 0) {
+    const o = debris.orbit;
+    const aScene = playerOrbit.semiMajorAxis || 1;
+    const radPerM = METRE_SCENE / aScene; // radians of arc per metre at radius a
+
+    // Co-orbital baseline: same semi-major axis (same period — never touched
+    // below), and the mother's plane and shape unless a free row tilts /
+    // reshapes them.
+    o.semiMajorAxis = playerOrbit.semiMajorAxis;
+    o.eccentricity = playerOrbit.eccentricity;
+    o.inclination = playerOrbit.inclination;
+    o.raan = playerOrbit.raan;
+    o.argPerigee = playerOrbit.argPerigee;
+    o.meanMotion = playerOrbit.meanMotion;
+
+    if (spec.pin) {
+      const fwdM = spec.fwdM || 0;
+      o.trueAnomaly = playerOrbit.trueAnomaly + fwdM * radPerM;
+      return { fwdM, latM: spec.latM || 0, radM: 0 };
+    }
+
+    // fwd: one roll inside the row band, sticky per piece (see the header).
+    const fMin = Number.isFinite(spec.fwdMinM) ? spec.fwdMinM : 0;
+    const fMax = Number.isFinite(spec.fwdMaxM) ? spec.fwdMaxM : fMin;
+    let fwdM = debris._welcomeFwdM;
+    if (!(Number.isFinite(fwdM) && fwdM >= fMin && fwdM <= fMax)) {
+      fwdM = fMin + Math.random() * (fMax - fMin);
+      debris._welcomeFwdM = fwdM;
+    }
+    const latM = spec.latM || 0;
+    const radM = spec.radM || 0;
+
+    // right: plane tilt (Δi, ΔΩ) about the mother's argument of latitude.
+    const incM = playerOrbit.inclination;
+    const u0 = playerOrbit.argPerigee + playerOrbit.trueAnomaly;
+    const L = latM * radPerM;
+    const sinI = Math.sin(incM);
+    const dInc = L * Math.sin(u0);
+    const dRaan = (Math.abs(sinI) < 0.01) ? 0 : -L * Math.cos(u0) / sinI;
+    o.inclination = incM + dInc;
+    o.raan = playerOrbit.raan + dRaan;
+
+    // Along-track: the fwd arc, the spawn's one-frame pre-compensation, and
+    // the node rotation's along-track side effect (ΔΩ·cos i) taken back out.
+    const uP = u0 + fwdM * radPerM - frameCompRad - dRaan * Math.cos(incM);
+
+    // up: eccentricity-vector delta at the same a (ν is measured from the
+    // piece's OWN perigee, so ν_p = u_p − ω_p).
+    const eM = playerOrbit.eccentricity || 0;
+    const wM = playerOrbit.argPerigee;
+    if (radM === 0) {
+      o.trueAnomaly = uP - wM; // e-vector untouched (#3 shares the mother's exactly)
+    } else {
+      const dr = radM * radPerM;
+      const ex = eM * Math.cos(wM) - dr * Math.cos(uP);
+      const ey = eM * Math.sin(wM) - dr * Math.sin(uP);
+      const eP = Math.hypot(ex, ey);
+      // ω_p stays on the mother's branch of the circle (ω_m + the signed,
+      // wrapped delta) so a vanishing delta returns exactly ω_m; a circular
+      // result keeps ω_m as its (arbitrary) reference direction.
+      let wP = wM;
+      if (eP > 1e-12) {
+        const dW = Math.atan2(ey, ex) - wM;
+        wP = wM + Math.atan2(Math.sin(dW), Math.cos(dW));
+      }
+      o.eccentricity = eP;
+      o.argPerigee = wP;
+      o.trueAnomaly = uP - wP;
+    }
+    return { fwdM, latM, radM };
   }
 
   /**
@@ -2717,40 +3010,28 @@ export class DebrisField {
       const debris = assigned[i];
       if (!debris) break;
 
-      // Co-orbital elements (shared with the mother). Forward placement differs
-      // by piece: PINNED pieces (#1, #2) are positioned in the mother's LOCAL
-      // frame each frame (see the pin branch in update()/_updateInstanceTransform)
-      // — their orbit is only a sane fallback. The rest use a trueAnomaly offset.
+      // Seat the piece on its cone-fan slot — ALL 7 sit AHEAD of the mother
+      // (the WELCOME_FIELD header has the layout and the no-drift argument).
+      // PINNED pieces (#1, #2) are positioned in the mother's LOCAL frame each
+      // frame (see the pin branch in update()/_updateInstanceTransform) — their
+      // orbit is only a sane fallback. Free pieces (#3–#7) get real co-orbital
+      // orbits: same semi-major axis, period-preserving right/up offsets, so
+      // the range_wall "press A" beat still flies to #3 and AutoLock's forward
+      // arc (ARC_DOT 0.5) sees every one of them.
       const isPin = !!spec.pin;
-      // Guided pieces sit AHEAD (prograde, in AutoLock's forward arc). Spread
-      // pieces (#4+) alternate ahead/behind for variety.
-      const sign = (i < 3) ? 1 : ((i % 2 === 0) ? 1 : -1);
-
-      debris.orbit.semiMajorAxis = playerOrbit.semiMajorAxis;
-      debris.orbit.eccentricity = playerOrbit.eccentricity;
-      debris.orbit.inclination = playerOrbit.inclination;
-      debris.orbit.raan = playerOrbit.raan;
-      debris.orbit.argPerigee = playerOrbit.argPerigee;
-      debris.orbit.meanMotion = playerOrbit.meanMotion;
-
-      if (isPin) {
-        // Fallback orbit ≈ fwdM ahead (used only if the local-frame pin is ever
-        // unavailable / after an uncaught release). No frame-comp needed — the
-        // authoritative position is the local-frame _scenePosition pin.
-        const aScene = playerOrbit.semiMajorAxis || 1;
-        const fwdNu = ((spec.fwdM || 0) * METRE_SCENE) / aScene; // arc → Δtrue-anomaly
-        debris.orbit.trueAnomaly = playerOrbit.trueAnomaly + fwdNu;
-      } else {
-        const offset = sign * (spec.offsetMin + Math.random() * (spec.offsetMax - spec.offsetMin));
-        // 2026-05-17 off-by-one-frame fix: the debris is spawned mid-frame after
-        // player.update propagated the player by n×gameDt, and the loop below will
-        // advance this debris once more this frame. Pre-subtract one step so the
-        // post-propagation trueAnomaly lands at playerOrbit + offset.
-        const _nApprox = playerOrbit.meanMotion ||
-          Math.sqrt(Constants.MU_EARTH / Math.pow(playerOrbit.semiMajorAxis / Constants.SCENE_SCALE, 3));
-        const _frameComp = _nApprox * (this._lastSpawnGameDt || 0);
-        debris.orbit.trueAnomaly = playerOrbit.trueAnomaly + offset - _frameComp;
-      }
+      // 2026-05-17 off-by-one-frame fix: the debris is spawned mid-frame after
+      // player.update propagated the player by n×gameDt, and the loop below will
+      // advance this debris once more this frame. Pre-subtract one step so the
+      // post-propagation along-track offset lands at playerOrbit + fwd (the
+      // helper ignores it for pinned rows — their authoritative position is the
+      // local-frame pin).
+      const _nApprox = playerOrbit.meanMotion ||
+        Math.sqrt(Constants.MU_EARTH / Math.pow(playerOrbit.semiMajorAxis / Constants.SCENE_SCALE, 3));
+      const _frameComp = _nApprox * (this._lastSpawnGameDt || 0);
+      // Tolerant of mock receivers (tests bind only _spawnWelcomeField onto a
+      // plain object): fall back to the prototype's helper.
+      const _place = this._placeWelcomePiece || DebrisField.prototype._placeWelcomePiece;
+      _place.call(this, debris, spec, playerOrbit, _frameComp);
 
       // Adjust mass to spec
       debris.mass = spec.massMin + Math.random() * (spec.massMax - spec.massMin);
@@ -2896,7 +3177,9 @@ export class DebrisField {
       // reticle bracket yet absent from the list was confusing. The other 5
       // (#3–#7) stay `discovered=false` until the user presses S to scan —
       // which reveals them via SensorSystem._revealNearbyDebris() →
-      // getDebrisNear() (M1-clamped to 2 km, welcomeSpawn-gated). With two
+      // getDebrisNear() (welcomeSpawn-gated on M1; the caller's radius is
+      // honoured — the old M1 2 km clamp went with welcome-drift fix T3, so a
+      // piece that has separated still scans in). With two
       // pre-discovered, a single quick scan (MAX_REVEALS=5) reveals exactly
       // #3–#7. This matches the intended new-user UX: start with two obvious
       // targets visible, learn to scan to find more.
@@ -3013,7 +3296,9 @@ export class DebrisField {
     const minMassKg = options.minMassKg ?? 5;
     const maxMassKg = options.maxMassKg ?? 50;
 
-    // Distribute fragments evenly across the offset range; alternate ahead/behind.
+    // Distribute fragments evenly across the offset range. Every fragment is
+    // AHEAD of the mother — the plan mirrors the cone-fan placement (all 7
+    // WELCOME_FIELD rows sit in AutoLock's forward arc; nothing spawns behind).
     const fragments = [];
     for (let i = 0; i < count; i++) {
       const frac = count === 1 ? 0.5 : (i / (count - 1));
@@ -3022,7 +3307,7 @@ export class DebrisField {
       fragments.push({
         massKg,
         offsetM,
-        ahead: (i % 2 === 0),
+        ahead: true,
         welcomeField: true,
         type: 'fragment',
       });
@@ -3172,32 +3457,39 @@ export class DebrisField {
    * @returns {Array<object>}
    */
   getDebrisNear(position, radius) {
-    // 2026-05-15 polish (urgent, 2nd pass): on Mission 1, hard-clamp the
-    // effective radius to 2 km and require welcomeSpawn — same rationale as
-    // getEnhancedTargetList.  Without this, TargetReticle and NavSphere
-    // render brackets / dots for drifted welcome debris at multi-km range,
-    // contradicting the "tight ≤ 2 km cluster" M1 UX contract.
-    // Gameplay systems (lasso, arm capture, sensor scan) use tiny radii
-    // (50–200 m) that are always inside the welcome cluster, so the clamp
-    // has zero impact on them.
+    // The caller's radius is honoured on EVERY mission (M1 welcome-drift fix
+    // T3, 2026-09-09). Mission 1 used to hard-clamp it to 2 km (2026-05-15
+    // polish — the "tight ≤ 2 km cluster" UX contract, so TargetReticle /
+    // NavSphere would not bracket drifted welcome debris at multi-km range).
+    // That clamp turned the T2 drag drift into a "sudden disappearance": the
+    // moment a welcome piece crossed 2 km, TargetReticle brackets/arrows
+    // (100 km), NavSphere, AutoLock's 5 km search, the scan reveal
+    // (SensorSystem._revealNearbyDebris, 500 km) and the post-catch
+    // auto-select (GameFlowManager, 500 m) ALL went blind to it at once —
+    // "scan finds nothing" with the piece alive a few km ahead. The clamp
+    // protected nothing else: every NON-welcome piece is already alive=false
+    // on M1 (the spawn-time hide + the per-frame 2 km cull in update()), so
+    // the radius clamp only ever hid WELCOME pieces. With the drift itself
+    // fixed (dragDecelFor), any residual or RCS-induced separation now reads
+    // as a growing distance, not a vanishing target. What stays is the
+    // `welcomeSpawn` gate in the loop — the M1 "only the cluster exists"
+    // contract (same guard as getEnhancedTargetList).
     const isMission1 = (this._currentMissionNumber || 1) === 1;
-    const effectiveRadius = isMission1
-      ? Math.min(radius, 2.0 * Constants.SCENE_SCALE) // 2 km
-      : radius;
 
     // --- Frame-level cache: if same frame + same/smaller radius, reuse ---
     if (this._frameId === this._cacheFrame &&
-        effectiveRadius <= this._cacheRadius &&
+        radius <= this._cacheRadius &&
         position.distanceToSquared(this._cachePos) < 1e-12) {
       return this._cachedNearby;
     }
 
-    const rSq = effectiveRadius * effectiveRadius;
+    const rSq = radius * radius;
     const results = [];
 
     for (const debris of this.debrisList) {
       if (!debris.alive || debris._captured) continue;
-      // M1: only welcome cluster debris can appear (same guard as getEnhancedTargetList)
+      // M1: only welcome cluster debris can appear (same guard as getEnhancedTargetList).
+      // This gate — not a radius — is the M1 contract; see the head comment.
       if (isMission1 && !debris.welcomeSpawn) continue;
       // Perf: reuse _scenePosition (populated this frame by _updateInstanceTransform);
       // fall back to orbitToSceneCartesian only if _scenePosition is missing (first frame).
@@ -3237,7 +3529,7 @@ export class DebrisField {
     this._cachedNearby = results;
     this._cacheFrame = this._frameId;
     this._cachePos.copy(position);
-    this._cacheRadius = effectiveRadius;
+    this._cacheRadius = radius;
 
     return results;
   }
@@ -3396,18 +3688,21 @@ export class DebrisField {
    */
   getEnhancedTargetList(playerPos, playerOrbit) {
     const results = [];
-    // 2026-05-15 polish (urgent, 2nd pass): on Mission 1, hard-clamp the
-    // search radius to 2 km AND require `welcomeSpawn` flag.  Without this,
-    // catalog-loaded debris that escaped the instance-lookup pool (and thus
-    // never had `_scenePosition` set, so the per-frame 2 km cull at
-    // line ~995 never marked them dead) leak into the HUD's TRACKED TARGETS
-    // panel at multi-km range — exactly the symptom the user reported
-    // ("debris at 7 km on M1").  This filter is the single source of truth
-    // for the HUD list, so it's the right defence-in-depth layer.
+    // Search radius: 1000 km (10 scene units) on EVERY mission. Mission 1 used
+    // to clamp this to 2 km (2026-05-15 polish: catalog debris that never
+    // entered the instance pool — so the per-frame 2 km cull in update() never
+    // marked them dead — leaked into TRACKED TARGETS at 7 km). That leak is
+    // closed by the `welcomeSpawn` gate below, which is what actually enforces
+    // the M1 "only the cluster exists" contract; the radius clamp stacked on
+    // top only ever hid WELCOME pieces — and with the T2 drag mismatch it did
+    // so within minutes: a drifted piece dropped out of the HUD list and the
+    // Tab cycle at 2 km while alive a few km ahead ("cluster vanishes"). The
+    // drift is fixed (dragDecelFor) and the clamp is gone (M1 welcome-drift fix
+    // T3, 2026-09-09), so any residual or RCS-induced separation reads as a
+    // growing distance in the list, not a disappearance. This filter is still
+    // the single source of truth for the HUD list, so the gate stays here.
     const isMission1 = (this._currentMissionNumber || 1) === 1;
-    const searchRadius = isMission1
-      ? 2.0 * Constants.SCENE_SCALE      // M1: 2 km
-      : 10.0;                             // 1000 km in scene units (default)
+    const searchRadius = 10.0;            // 1000 km in scene units, all missions
     const rSq = searchRadius * searchRadius;
 
     // 2026-05-17 fix (TRACKED TARGETS empty bug, RCS-offset edition):
@@ -3440,8 +3735,9 @@ export class DebrisField {
       // consumers read, and the same basis getDebrisNear uses) measured against
       // the rendered playerPos. Onboarding-PINNED pieces have their orbit
       // propagation frozen (see _updateInstanceTransform pin branch), so the
-      // orbital comparison below drifts them out of the M1 2 km window within
-      // ~0.3 s and silently drops #1/#2 from the HUD list / T-Tab / scan reveal.
+      // orbital comparison below misplaces them within ~0.3 s — under the
+      // former M1 2 km search clamp (removed by welcome-drift fix T3) that
+      // silently dropped #1/#2 from the HUD list / T-Tab / scan reveal.
       // Comparing scene-vs-rendered is self-consistent and cancels the RCS
       // offset too. Pieces without a scene position (e.g. catalog debris that
       // never entered the instance pool) fall back to the orbital comparison.
@@ -3803,6 +4099,200 @@ export class DebrisField {
   setLadderDebrisMode(mode) {
     const hide = (mode === 'clusters' || mode === 'massBands');
     if (this.group) this.group.visible = !hide;
+  }
+
+  /**
+   * Is the field currently in a GUIDED chapter (missions 1–3, the
+   * FORCED_DEPOT_CHAPTERS boundary)? Reads the live mission profile's
+   * `guidedCluster` flag (Constants.MISSIONS.PROFILES — the ONE place the
+   * boundary is authored), with the same null fallback `_spawnWelcomeField`
+   * uses: before any MISSION_START has arrived the field is in M1 mode and
+   * PROFILES[0] ('Orientation', guided) answers. Strict `=== true`, so a
+   * profile without the flag reads as NOT guided.
+   *
+   * Consumers: AutoLockController's nearest-any fallback when the forward arc
+   * is empty (T5); the re-seat safety net in update() (T6,
+   * _reseatDriftedWelcome below) reads the same predicate — both keep the
+   * welcome cluster findable in the chapters where losing it costs a player.
+   *
+   * Known limit (inherited from `_currentMissionProfile`): on a bare Continue
+   * no MISSION_START fires (ScoringSystem.checkMissionTransition is not called
+   * by the restore path), so a mission-5 save resumes with this reading M1
+   * until the first credited catch re-asserts the mission. GameFlowManager's
+   * per-catch line avoids that by using the pure
+   * `isGuidedChapterNumber(getMissionProgress(debrisCleared).missionNum)`
+   * instead, which IS correct on Continue.
+   *
+   * @returns {boolean}
+   */
+  isGuidedChapter() {
+    const profile = this._currentMissionProfile || Constants.MISSIONS.PROFILES[0];
+    return !!profile && profile.guidedCluster === true;
+  }
+
+  // ==========================================================================
+  // M1 GUIDANCE T6 — the welcome-cluster re-seat safety net (guided chapters)
+  // ==========================================================================
+
+  /**
+   * Subscribe the re-seat "busy" set to the AUTOPILOT_TARGET_LOCK / UNLOCK
+   * pair and clear it on GAME_RESET. The mother autopilot (AutopilotSystem)
+   * and EVERY daughter (ArmUnit, when its tool closes on a target) emit the
+   * pair with `{ debrisId }` — hence a Set, not one id. The cluster-approach
+   * variant carries `targetId` only and is ignored: a cluster is not a piece.
+   * Called once by the constructor; returns the unsubscribe closure so the
+   * subscription can be exercised on a bare receiver (test-WelcomeField).
+   * @returns {() => void}
+   * @private
+   */
+  _wireReseatLockEvents() {
+    const offs = [
+      eventBus.on(Events.AUTOPILOT_TARGET_LOCK, (data) => {
+        if (data && data.debrisId != null) this._lockedDebrisIds.add(data.debrisId);
+      }),
+      eventBus.on(Events.AUTOPILOT_TARGET_UNLOCK, (data) => {
+        if (data && data.debrisId != null) this._lockedDebrisIds.delete(data.debrisId);
+      }),
+      eventBus.on(Events.GAME_RESET, () => { this._lockedDebrisIds.clear(); }),
+    ];
+    return () => { for (const off of offs) off(); };
+  }
+
+  /**
+   * Install the "is a daughter flying to this id?" guard for the re-seat
+   * safety net. main.js wires it ONCE where debrisField and armManager both
+   * exist, as the same test CollisionAvoidanceSystem._isArmTarget makes (a
+   * daughter whose `arm.target.id === id`) — mirrored there, not imported, so
+   * DebrisField never holds an ArmManager reference. It closes the window the
+   * lock set leaves open: a daughter EN ROUTE has not yet emitted
+   * AUTOPILOT_TARGET_LOCK (that fires when its tool closes). An absent guard
+   * reads as "not busy" (headless / tests).
+   * @param {((id: number|string) => boolean)|null} fn
+   */
+  setReseatGuard(fn) {
+    this._reseatGuard = (typeof fn === 'function') ? fn : null;
+  }
+
+  /**
+   * Re-seat a LOST welcome piece onto its cone-fan slot ahead of the mother.
+   *
+   * This is a TELEPORT, and it is gated hard — every clause must hold:
+   *   • a GUIDED chapter (isGuidedChapter(): missions 1–3, the profiles'
+   *     guidedCluster flag) — later missions accept drifting pieces;
+   *   • the piece is `welcomeSpawn` with a numeric `_welcomeSpecIndex` (its
+   *     WELCOME_FIELD row) — catalog debris are NEVER re-seated, whatever
+   *     their distance;
+   *   • alive and free: not `_captured`, `_onboardingPinned` (#1/#2 ride the
+   *     mother), `_armPinned`, `_capturedByArm` or `_motherParked`;
+   *   • FAR: `_scenePosition` more than Constants.MISSIONS.RESEAT.DIST_M from
+   *     the mother at every scan spanning RESEAT.DWELL_S of REAL time
+   *     (`_reseatFarS`, reset the moment it is seen back within range);
+   *   • NOT BEING APPROACHED: not under an AUTOPILOT_TARGET_LOCK
+   *     (_lockedDebrisIds — mother AP or a daughter closing on it) and not a
+   *     daughter's en-route target (the setReseatGuard callback).
+   * Why it exists (owner, 2026-09-09): a player who cannot finish an early
+   * mission may quit and never return. The root causes of a vanishing cluster
+   * are fixed (T1 fan, T2 drag match, T4 pinned-orbit sync); this guarantees
+   * the guided cluster stays reachable if something unforeseen moves the ship
+   * (e.g. a manual applyCartesianImpulse). "Far AND not being approached" is
+   * the whole point: a piece the autopilot or a daughter is flying to is never
+   * moved, however far.
+   *
+   * The seat is _placeWelcomePiece — the spawn's own helper, so a re-seated
+   * piece lands on the same SMA, inside its row's fwd band (its remembered
+   * roll), with its cone right/up offsets. `discovered` is kept as it was; a
+   * SELECTED piece keeps its selection (the reticle arrow swings to the front,
+   * AutoLock's _trackRange re-evaluates next frame) and no target-change event
+   * is emitted. `_scenePosition` is refreshed from the new orbit at once so
+   * every reader between here and the propagation loop sees the new place.
+   * Each re-seat logs the id and the old distance and posts ONE HOUSTON line
+   * (RESEAT_COMMS_TEXT, `_postOnboarding` — muted at tier 0 by design).
+   *
+   * Timers are wall-clock: the scan cadence (RESEAT_SCAN_PERIOD_S) and the
+   * dwell are player-experience timers — "lost for ten seconds" is what the
+   * player feels regardless of the game clock's warp.
+   *
+   * @param {THREE.Vector3|{x,y,z}} playerPos  mother position (scene units)
+   * @param {object} playerOrbit               mother elements (scene-unit SMA)
+   * @param {number} dt                        REAL seconds since the last frame
+   * @param {number} [gameDt]                  this frame's world step — the
+   *        propagation loop advances the re-seated piece by it right after, so
+   *        the spawn's one-step pre-compensation (n × gameDt) is applied here
+   *        too: spawn and re-seat are identical by construction
+   * @returns {number} how many pieces were re-seated this call
+   * @private
+   */
+  _reseatDriftedWelcome(playerPos, playerOrbit, dt, gameDt = TimeAuthority.baseGameDt(dt)) {
+    if (!playerPos || !playerOrbit) return 0;
+    if (!this.isGuidedChapter()) return 0;
+    const cfg = Constants.MISSIONS.RESEAT;
+    if (!cfg) return 0;
+
+    // Scan cadence (real time). The dwell below accumulates the same elapsed
+    // real seconds, so it resolves in RESEAT_SCAN_PERIOD_S steps.
+    this._reseatScanS = (this._reseatScanS || 0) + (dt > 0 ? dt : 0);
+    if (this._reseatScanS < RESEAT_SCAN_PERIOD_S) return 0;
+    const elapsedS = this._reseatScanS;
+    this._reseatScanS = 0;
+
+    const farScene = cfg.DIST_M * METRE_SCENE;
+    const farSq = farScene * farScene;
+    let reseated = 0;
+    let frameCompRad = null; // computed lazily — most scans move nothing
+
+    for (const debris of this.debrisList) {
+      if (!debris.alive || !debris.welcomeSpawn) continue;
+      if (!Number.isInteger(debris._welcomeSpecIndex)) continue;
+      const spec = WELCOME_FIELD[debris._welcomeSpecIndex];
+      if (!spec) continue;
+      if (debris._captured || debris._onboardingPinned || debris._armPinned ||
+          debris._capturedByArm || debris._motherParked) {
+        debris._reseatFarS = 0;
+        continue;
+      }
+      const sp = debris._scenePosition;
+      if (!sp) continue; // never positioned yet — nothing to measure
+      const dx = sp.x - playerPos.x, dy = sp.y - playerPos.y, dz = sp.z - playerPos.z;
+      const distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq <= farSq) {
+        debris._reseatFarS = 0;
+        continue;
+      }
+      debris._reseatFarS = (debris._reseatFarS || 0) + elapsedS;
+      // The dwell resolves at scan cadence: the piece has been seen far at
+      // every scan spanning DWELL_S of real time (10–12 s at a 2 s cadence).
+      if (debris._reseatFarS < cfg.DWELL_S) continue;
+      // Far for long enough — but never move a piece something is flying to.
+      if (this._lockedDebrisIds && this._lockedDebrisIds.has(debris.id)) continue;
+      if (this._reseatGuard && this._reseatGuard(debris.id)) continue;
+
+      if (frameCompRad === null) {
+        const nApprox = playerOrbit.meanMotion ||
+          Math.sqrt(Constants.MU_EARTH / Math.pow(playerOrbit.semiMajorAxis / Constants.SCENE_SCALE, 3));
+        frameCompRad = nApprox * (gameDt || 0);
+      }
+      const oldDistM = Math.sqrt(distSq) / METRE_SCENE;
+      const wasDiscovered = debris.discovered;
+      this._placeWelcomePiece(debris, spec, playerOrbit, frameCompRad);
+      debris.discovered = wasDiscovered;
+      debris._reseatFarS = 0;
+      // Refresh the read position now (the loop re-derives it after the step).
+      const np = orbitToSceneCartesian(debris.orbit).position;
+      if (sp.set) sp.set(np.x, np.y, np.z);
+      else { sp.x = np.x; sp.y = np.y; sp.z = np.z; }
+      reseated++;
+
+      console.log(`[DebrisField] Re-seat: welcome piece ${debris.id} (#${debris._welcomeSpecIndex + 1}) ` +
+        `was ${Math.round(oldDistM)} m from the mother for ${cfg.DWELL_S}+ s with nothing flying to it ` +
+        `- put back on its slot ahead`);
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'HOUSTON',
+        text: RESEAT_COMMS_TEXT,
+        priority: 'info',
+        _postOnboarding: true,
+      });
+    }
+    return reseated;
   }
 
   /**

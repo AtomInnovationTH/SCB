@@ -1276,6 +1276,16 @@ async function init() {
   if (typeof armManager.setSceneManager === 'function') {
     armManager.setSceneManager(sceneManager);
   }
+  // M1 guidance T6: the welcome-cluster re-seat safety net asks "is a daughter
+  // flying to this id?" before it moves a lost piece back in front of the
+  // mother — the same test CollisionAvoidanceSystem._isArmTarget makes
+  // (mirrored here, not imported, so DebrisField never holds an ArmManager
+  // reference). Wired once, here, where both exist; optional-method guard in
+  // the setMenuBackdropBoost style.
+  if (typeof debrisField.setReseatGuard === 'function') {
+    debrisField.setReseatGuard((id) => !!(armManager && Array.isArray(armManager.arms) &&
+      armManager.arms.some((a) => a && a.target && a.target.id === id)));
+  }
 
   // --- Target Selector: imported singleton from TargetSelector.js ---
 

@@ -54,8 +54,19 @@ const _scanVel = { x: 0, y: 0, z: 0 };
 
 /**
  * Find the nearest alive debris to a position.
+ *
+ * Position source (T4): a debris record's `_scenePosition` — the per-frame
+ * pose DebrisField renders and that selection/range/net/reticle read — wins
+ * when present; the orbit is the fallback for records that have never been
+ * positioned (headless callers, a piece culled before its first transform).
+ * The orbit alone was wrong for an onboarding tease pin (M1 #1/#2): the pin
+ * rides the mother in her local frame and its orbit used to stay frozen at the
+ * spawn-era phase, so this scan ranked a piece 22 m off the nose as hundreds of
+ * km away and the "press A to approach" advice pointed at a ghost. Reads
+ * `.x/.y/.z` so a THREE.Vector3 and a plain {x,y,z} both work.
+ *
  * @param {{x:number,y:number,z:number}} playerPos — scene units
- * @param {Array<object>} debrisList — DebrisField.debrisList entries ({ alive, mass, orbit, id })
+ * @param {Array<object>} debrisList — DebrisField.debrisList entries ({ alive, mass, orbit, id, _scenePosition? })
  * @param {number} [minMassKg=0] — minimum mass filter (use 50 for "large")
  * @returns {{ debris: object, pos: {x:number,y:number,z:number}, distScene: number }|null}
  */
@@ -66,8 +77,13 @@ export function findNearestLiveDebris(playerPos, debrisList, minMassKg = 0) {
   for (const d of debrisList) {
     if (!d || !d.alive) continue;
     if ((d.mass || 0) < minMassKg) continue;
-    if (!d.orbit) continue;
-    orbitToSceneCartesianInto(d.orbit, _scanPos, _scanVel);
+    const sp = d._scenePosition;
+    if (sp && Number.isFinite(sp.x) && Number.isFinite(sp.y) && Number.isFinite(sp.z)) {
+      _scanPos.x = sp.x; _scanPos.y = sp.y; _scanPos.z = sp.z;
+    } else {
+      if (!d.orbit) continue;
+      orbitToSceneCartesianInto(d.orbit, _scanPos, _scanVel);
+    }
     const dx = _scanPos.x - playerPos.x;
     const dy = _scanPos.y - playerPos.y;
     const dz = _scanPos.z - playerPos.z;
@@ -187,17 +203,72 @@ export class NavRecoveryAdvisor {
   }
 
   /**
-   * Empty-scan → actionable bearing guidance. Fires for everyone (it's a
-   * direct response to a player action), throttled so scan-spamming doesn't
-   * repeat it.
+   * Scan → actionable guidance. Fires for everyone (it's a direct response to
+   * a player action).
+   *
+   * Two routes (M1 guidance, T5):
+   *   • Mission 1 (`missionNumber === 1`): the cluster report — count of live
+   *     welcome pieces + distance/bearing to the nearest — posted on EVERY
+   *     scan, `_reactive` (the S key just asked), no cooldown (the 5 s scan
+   *     cooldown already rate-limits it). On M1 the only field is the welcome
+   *     cluster, so this line is the whole answer and the generic hint below
+   *     is NOT posted alongside it (two HOUSTON lines saying the same thing).
+   *   • Otherwise: the bearing hint when the scan found no field
+   *     (`rewardKind:'empty'`) OR found one but nothing inside the reveal
+   *     range (`contactsInRange === 0` — the field test is a 500 km cluster
+   *     lookup, so a drifted field reads 'stale' while the player sees
+   *     nothing), throttled so scan-spamming doesn't repeat it.
    * @private
    */
   _onScanComplete(data) {
     if (!this._enabled) return;
-    if (!data || data.rewardKind !== 'empty') return;
+    if (!data) return;
+    if (data.missionNumber === 1) {
+      this._postClusterReport();
+      return;
+    }
+    if (data.rewardKind !== 'empty' && data.contactsInRange !== 0) return;
     if (this._sinceScanHint < SCAN_HINT_COOLDOWN_S) return;
     this._sinceScanHint = 0;
     this._postGuidance();
+  }
+
+  /**
+   * Mission-1 scan report: "Scan complete. {n} pieces in the cluster. Nearest
+   * {dist}, {bearing}." over the live welcome pieces only (welcomeSpawn &&
+   * alive && !_captured — the catalog debris are hidden on M1 and hazard
+   * shards are furniture, so neither may count or be pointed at). n = 0 →
+   * "Cluster cleared." and nothing else (no generic hint: on M1 the only
+   * other live pieces are hazard shards, which must never be pointed at).
+   * Scans are rare, so the filtered copy of debrisList is an acceptable
+   * allocation.
+   * @private
+   */
+  _postClusterReport() {
+    const playerPos = this._playerPos();
+    if (!playerPos || !this._debrisField) return;
+    const cluster = (this._debrisField.debrisList || [])
+      .filter((d) => d && d.welcomeSpawn && d.alive && !d._captured);
+    const n = cluster.length;
+    const nearest = n > 0 ? findNearestLiveDebris(playerPos, cluster) : null;
+    let text;
+    if (n === 0) {
+      text = 'Cluster cleared.';
+    } else {
+      text = `Scan complete. ${n} piece${n === 1 ? '' : 's'} in the cluster.`;
+      // A piece with no orbit yields no position (findNearestLiveDebris skips
+      // it) — then the count stands alone rather than a bearing to nothing.
+      if (nearest) {
+        const bearing = classifyBearing(playerPos, this._playerVel(), nearest.pos);
+        text += ` Nearest ${formatDistanceKm(bearing.distKm)}, ${bearing.label}.`;
+      }
+    }
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'HOUSTON',
+      text,
+      priority: 'info',
+      _reactive: true,   // answers the S key the player just pressed — never muted (tier 0 included)
+    });
   }
 
   /**
