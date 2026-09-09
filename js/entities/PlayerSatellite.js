@@ -3241,7 +3241,12 @@ export class PlayerSatellite extends THREE.Group {
     // mm proud, never coplanar). A true cut groove would need the panel split;
     // the dark band is what reads at 3 m (the design-7b readers' first
     // complaint was "featureless slabs").
-    const seamGeo = new THREE.BoxGeometry(plateLen, FL.WING_SEAM_M * M, (FL.PLATE_THICK_M + 0.002) * M);
+    // End-cap rule (owner report 2026-09-09, "z-layer fighting at both ends of
+    // the radiators"): the strip is SEAM_END_INSET_M shorter at EACH end than
+    // the panel it sits on, so its ±X end faces never share the panel's end
+    // planes (they were exactly coplanar — 8 fighting face pairs per strut).
+    const seamLen = plateLen - 2 * FL.SEAM_END_INSET_M * M;
+    const seamGeo = new THREE.BoxGeometry(seamLen, FL.WING_SEAM_M * M, (FL.PLATE_THICK_M + 0.002) * M);
     const seamY = (cHalf - 0.002 - FL.WING_SEAM_M / 2) * M;
     // Knuckle blocks (8 × 3 × 3.5 cm): the offset piano-hinge barrels, three
     // per hinge line. Their height IS the layer pitch and they sit centred
@@ -3276,7 +3281,9 @@ export class PlayerSatellite extends THREE.Group {
     // coplanar and z-fought — the log-depth rule applies to the surface the
     // part actually sits on, so the knuckle stands 1 mm proud of the SEAM).
     // The other end (12 mm back) is buried 10 mm inside the wing's own 30 mm.
-    const wingSeamGeo = new THREE.BoxGeometry(plateLen, 0.01 * M, (FL.PLATE_THICK_M + 0.002) * M);
+    // Same end-cap rule as seamGeo: seamLen (1 cm inset each end), so the wing
+    // seam's ±X end faces never share the wing's own end planes.
+    const wingSeamGeo = new THREE.BoxGeometry(seamLen, 0.01 * M, (FL.PLATE_THICK_M + 0.002) * M);
     const WING_KNUCKLE_H_M = 0.012;
     const wingKnuckleGeo = new THREE.BoxGeometry(0.05 * M, 0.02 * M, WING_KNUCKLE_H_M * M);
     const wingKnuckleOuterZ = knuckleK + FL.PLATE_THICK_M / 2 + 0.002;   // wing's +Z face + 2 mm = seam face + 1 mm
@@ -3419,7 +3426,8 @@ export class PlayerSatellite extends THREE.Group {
         // of `wh`, so they carry the wing's own fold transform exactly — no
         // separate folded-frame math needed). wingSeam straddles the wing's
         // OWN mid-plane by 1 mm each face, 2 cm in from the fold axis (wh y
-        // 0.015..0.025), spanning the wing's full length — the visible hinge
+        // 0.015..0.025), spanning the wing's length less SEAM_END_INSET_M at
+        // each end (end caps never coplanar with the wing's) — the visible hinge
         // groove on whichever face is toward the camera in EITHER pose
         // (deployed: the radiating +Z face; folded: the same +Z face, now the
         // pack's outermost layer). Three knuckle echoes ride the same y line
