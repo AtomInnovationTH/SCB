@@ -62,10 +62,11 @@
  * frame.
  *
  * API mirrors LadderAudioBeds exactly: setFloor(floorId|null) — null =
- * disengage → restore the shipped fully-visible cockpit; setEnabled(bool)
- * master gate (disabled remembers the floor, restores the cockpit);
- * dispose(). All deps injected/optional ⇒ absent deps = every method is a
- * state-only no-op (headless-safe, byte-identical when unwired).
+ * disengage → restore the SHIPPED cockpit (hidden-by-default rungs stay
+ * hidden — see `shipped` below); setEnabled(bool) master gate (disabled
+ * remembers the floor, restores the cockpit); dispose(). All deps
+ * injected/optional ⇒ absent deps = every method is a state-only no-op
+ * (headless-safe, byte-identical when unwired).
  *
  * Wiring (serial track — see the FloorMask HANDOFF): main.js constructs it
  * with the live `hud` and injects it into LadderController, which calls
@@ -98,6 +99,15 @@ export const REDUCED_CROSSFADE_MS = 200;
  *         panes, the visibility itself). '#id' or a class selector.
  * memory: participates in D5 per-floor player memory. The reticle canvas has
  *         no player toggle, so its state is table-driven only.
+ * shipped: the pane's state in the SHIPPED cockpit — what `_restoreAll`
+ *         (disengage → menu / shop, setEnabled(false), dispose) restores.
+ *         Absent = 'shown' (the default). 'gone' marks the three
+ *         `experimental` members (`navsphere`, `discoveries`, `override`):
+ *         hidden by default on EVERY floor (D3 — every DEFAULT_ROOMS row
+ *         says 'gone', each root is BUILT with `data-density-hidden`), so a
+ *         disengage must not reveal them (owner report 2026-09-09: the
+ *         DISCOVERIES chip on the MENU). D5 memory is captured BEFORE the
+ *         restore, so a player's `+` state still returns on re-engage.
  *
  * Deliberately NOT here (the always set + world rungs): the 'score' and
  * 'comms' rungs (D7 — alerts/score never masked), the 'reticles' DENSITY
@@ -148,10 +158,10 @@ const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
 export const MASK_PANES = Object.freeze({
   targets:     Object.freeze({ rung: 'targets',     els: Object.freeze(['#hud-targets-panel']),      memory: true }),
   debris:      Object.freeze({ rung: 'debris',      els: Object.freeze(['#hud-wireframe-container']), memory: true }),
-  navsphere:   Object.freeze({ rung: 'navsphere',   els: Object.freeze([]),                           memory: true }),
+  navsphere:   Object.freeze({ rung: 'navsphere',   els: Object.freeze([]),                           memory: true, shipped: 'gone' }),
   pin:         Object.freeze({ rung: 'pin',         els: Object.freeze(['#hud-pin-widget']),          memory: true }),
   // Task 10: Discoveries is the #hud-discoveries wrapper (chip + popover).
-  discoveries: Object.freeze({ rung: 'discoveries', els: Object.freeze(['#hud-discoveries']),         memory: true }),
+  discoveries: Object.freeze({ rung: 'discoveries', els: Object.freeze(['#hud-discoveries']),         memory: true, shipped: 'gone' }),
   mother:      Object.freeze({ rung: 'mother',      els: Object.freeze(['#hud-mother-panel']),        memory: true }),
   arms:        Object.freeze({ rung: 'arms',        els: Object.freeze(['#hud-arms-panel']),          memory: true }),
   reticles:    Object.freeze({ rung: null,          els: Object.freeze(['#reticle-canvas']),          memory: false }),
@@ -169,8 +179,9 @@ export const MASK_PANES = Object.freeze({
   // D3):the demo cockpit button at bottom-centre. A pane-density rung at
   // index 0 — hidden by default on EVERY floor (every DEFAULT_ROOMS row says
   // 'gone');the last `+` reveals it,the first `-` sheds it; D5 remembers it
-  // per floor once pulled out.
-  override:    Object.freeze({ rung: 'override',    els: Object.freeze(['#hud-override-pane']),     memory: true }),
+  // per floor once pulled out. `shipped: 'gone'` — a disengage restores it
+  // HIDDEN (the shipped cockpit has no gag).
+  override:    Object.freeze({ rung: 'override',    els: Object.freeze(['#hud-override-pane']),     memory: true, shipped: 'gone' }),
 });
 
 /**
@@ -332,8 +343,9 @@ export class FloorMask {
   /**
    * Apply floor `floorId`'s room (player memory over §4 defaults), capturing
    * the departing floor's live layout into D5 memory first. null = disengage
-   * → restore the shipped fully-visible cockpit. Idempotent for the already-
-   * applied floor. While disabled only the floor is remembered.
+   * → restore the SHIPPED cockpit (`_restoreAll`: hidden-by-default rungs stay
+   * hidden). Idempotent for the already-applied floor. While disabled only the
+   * floor is remembered.
    * @param {number|null} floorId - FloorContract floor id (1..5) or null
    */
   setFloor(floorId) {
@@ -562,12 +574,21 @@ export class FloorMask {
     this._hud.invalidateCommsLayout?.();
   }
 
-  /** @private Shipped fully-visible cockpit: every pane shown, treatments off. */
+  /**
+   * @private Restore the SHIPPED cockpit — every pane back to its `shipped`
+   * state (absent = shown; the three `experimental` members are `'gone'`, so
+   * hidden-by-default rungs STAY hidden), treatments off. Before 2026-09-09
+   * this re-showed EVERY mask pane, so a disengage (→ menu / shop) revealed the
+   * DISCOVERIES chip, the ORB chip and the Override gag the player never pulled
+   * out. Callers capture D5 memory FIRST, so a `+` state still returns on
+   * re-engage. Write-on-change through the rung adapters (G1).
+   */
   _restoreAll() {
     this._appliedFloor = null;
     for (const [id, pane] of Object.entries(MASK_PANES)) {
+      const want = pane.shipped !== 'gone';
       const live = this._isVisible(id, pane);
-      if (live === false) this._setVisible(id, pane, true);
+      if (live != null && live !== want) this._setVisible(id, pane, want);
       this._setFaint(pane, false);
       for (const el of this._els(pane)) {
         if (el.classList) el.classList.remove('floor-mask-arrive');

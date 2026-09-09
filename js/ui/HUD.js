@@ -22,7 +22,7 @@ import { AlertArbiter, STRIP_KIND } from './hud/AlertHierarchy.js';
 import { approachLive } from './hud/TargetColorLaw.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { pinProgress } from './shopPin.js'; // S1 retention: pinned-upgrade progress math (pure, DOM-free)
-import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX } from './RailGeometry.js';
+import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX, RIGHT_COLUMN_WIDTH_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
  import { DebrisWireframe }   from './DebrisWireframe.js';
  import { DaughterWireframe } from './DaughterWireframe.js';
 import { StrutLabels }       from './hud/StrutLabels.js';
@@ -146,6 +146,48 @@ export const DENSITY_MOTION_MS = 200;
 export const DENSITY_MOTION_EASING = 'cubic-bezier(0.65, 0, 0.35, 1)';
 /** Pin widget natural height when unmeasured (plan layout target). */
 export const PIN_NATURAL_PX = 27;
+
+/**
+ * The bottom-centre stacking law (follow-up 2026-09-09, plan
+ * .kilo/plans/1788926404388-hud-followups-0909.md §1.4 — the SAFETY OVERRIDE
+ * gag moved to the viewport bottom): offsets from the viewport bottom, ladder
+ * on — 12–68 gag · 88–124 hint ticker · 120 salvage popup (legacy) · **132
+ * toast** (was 48) · 132–164 footer band, free centre · 148 F1 breadcrumb ·
+ * 170 warnings · **172 ARM PILOT strip** (was 12). `?ladder=0` is
+ * byte-identical: toast 48 / strip 12. PURE: the caller passes `ladderOn` read
+ * from `Constants.LADDER.ENABLED` in the constructor path (the URL flips it
+ * inside `init()` before `new HUD` — never read at module level).
+ *
+ * The ticker band's top is TICKER.BOTTOM_PX 88 + ROW_HEIGHT_PX 36 = 124 (the
+ * hub's `_HINT_BAND_PX`), so `footerBand({ hintBandPx: 124 })` → bottom 132 /
+ * top 164 on both surfaces (124 ≥ the 100 thumb rest).
+ * @private
+ */
+function _hintBandPx() {
+  const t = (Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {};
+  return (Number(t.BOTTOM_PX) || 0) + (Number(t.ROW_HEIGHT_PX) || 0);
+}
+
+/**
+ * CSS `bottom` (px) of the `#notification-zone` toast: the footer band's
+ * bottom edge (132) with the ladder on — the band's centre is free now that
+ * the gag sits at the bottom — else the shipped 48.
+ * @param {boolean} ladderOn
+ * @returns {number}
+ */
+export function toastBottomPx(ladderOn) {
+  return ladderOn ? footerBand({ hintBandPx: _hintBandPx() }).bottom : 48;
+}
+
+/**
+ * CSS `bottom` (px) of the `#arm-pilot-controls` strip: one FOOTER_GAP_PX above
+ * the footer band's top (164 + 8 = 172) with the ladder on, else the shipped 12.
+ * @param {boolean} ladderOn
+ * @returns {number}
+ */
+export function armPilotStripBottomPx(ladderOn) {
+  return ladderOn ? footerBand({ hintBandPx: _hintBandPx() }).top + RAIL_GEOMETRY.FOOTER_GAP_PX : 12;
+}
 
 export class HUD {
   constructor() {
@@ -282,13 +324,18 @@ export class HUD {
     // shipped value is 30 px; ladder-on it is 189 px so the column bottom
     // stays 14 px above the bottom-anchored rail (see maxHeight note below).
     this._rightColBottomClearPx = (Constants.LADDER && Constants.LADDER.ENABLED) ? 189 : 30;
+    // Follow-up 2026-09-09 (plan 1788926404388-hud-followups-0909.md §1.15 —
+    // the inverted U): the column is as wide as its widest child (Targets 350);
+    // `align-items: flex-end` hugs the 280 Debris / Next to the RIGHT edge, so
+    // the U's outer edge stays straight at HUD_EDGE_PX.
     Object.assign(this._rightColumn.style, {
       position: 'absolute',
       top: '90px',          // placeholder; update() rewrites from commsBottom + 10
       right: `${HUD_EDGE_PX}px`,
-      width: `${HUD_COLUMN_WIDTH_PX}px`,
+      width: `${RIGHT_COLUMN_WIDTH_PX}px`,
       display: 'flex',
       flexDirection: 'column',
+      alignItems: 'flex-end',
       gap: '10px',          // Pane-to-pane vertical gap — keep in sync with left column (StatusPanel.js)
       // Zoom Ladder G4/G5 (post-M3 review follow-ups): with the ladder on, the
       // rail is bottom-anchored on the right edge and occupies the bottom
@@ -667,21 +714,22 @@ export class HUD {
     }
 
     // --- Notification Zone (bottom-center, UX-2 #12) ---
-    // Delegation 4 (2026-05-31) — Browser-playtest Bug 2 fix:
-    // The earlier P0-3 fix lifted this toast from bottom:80 → bottom:132 to
-    // clear the HintTicker (88–124 px), but 132 sat inside the band already
-    // occupied by the salvage-reveal popup ([`HUD.showSalvageReveal()`](js/ui/HUD.js:1569)
-    // at bottom:120) and the warnings panel ([`HUD.panels.warnings`](js/ui/HUD.js:236)
-    // at bottom:170). Players reported the toast crowding those overlays.
-    //
-    // We now drop it to bottom:48 — well below the HintTicker (88) and
-    // clear of every other bottom-center overlay. SkillsPane (bottom:10 left)
-    // is horizontally isolated, so 48 is the simplest clean slot.
+    // Delegation 4 (2026-05-31) — Browser-playtest Bug 2 fix — dropped the toast
+    // from bottom:132 to bottom:48 because 132 then sat inside the band shared
+    // by the salvage-reveal popup (bottom:120) and the SAFETY OVERRIDE gag's
+    // baseline. Follow-up 2026-09-09 (plan 1788926404388-hud-followups-0909.md
+    // §1.4): with the ladder on the gag lives at the viewport bottom (12–68)
+    // and the footer band's centre (132–164) is free, so the toast goes back
+    // to 132 = `toastBottomPx(true)` — clear of the ticker (88–124), of the
+    // gag, and below the warnings panel (170). `?ladder=0` keeps 48 byte for
+    // byte. The flag is read HERE (the constructor path): the URL flips it
+    // inside init() before `new HUD`, so a module-level read would be stale.
+    const ladderOn = !!(Constants.LADDER && Constants.LADDER.ENABLED);
     this._notificationZone = document.createElement('div');
     this._notificationZone.id = 'notification-zone';
     Object.assign(this._notificationZone.style, {
       position: 'fixed',
-      bottom: '48px',
+      bottom: `${toastBottomPx(ladderOn)}px`,
       left: '50%',
       transform: 'translateX(-50%)',
       textAlign: 'center',
@@ -1161,23 +1209,35 @@ export class HUD {
   }
 
   /**
-   * Strip stray leaving/entering attributes (GAME_RESET / view switch).
-   * Resting `data-density-hidden` is untouched.
+   * Land every in-flight density phase (GAME_RESET / view switch). A pending
+   * HIDE is FINISHED — `data-density-leaving` stripped, `data-density-hidden`
+   * set — never dropped: dropping it left the pane on screen while `setFloor`
+   * (idempotent) never retried the room, which is how the DISCOVERIES chip
+   * stayed up on F2 after a mid-glide view switch (owner report 2026-09-09;
+   * plan 1788926404388-hud-followups-0909.md §1.9). An ENTERING pane is just
+   * stripped (it is already un-hidden). Resting `data-density-hidden` is
+   * untouched. Every `_densityPhases` entry is a pending hide (`_densityShow`
+   * registers none); the document sweep catches phases from an earlier HUD.
    */
   _clearDensityPhases() {
-    const strip = (el) => {
-      if (!el || !el.removeAttribute) return;
+    const finishHide = (el) => {
+      if (!el || !el.removeAttribute || !el.setAttribute) return;
       el.removeAttribute('data-density-leaving');
-      el.removeAttribute('data-density-entering');
+      el.setAttribute('data-density-hidden', '');
+    };
+    const strip = (el) => {
+      if (el && el.removeAttribute) el.removeAttribute('data-density-entering');
     };
     if (this._densityPhases) {
       for (const el of [...this._densityPhases.keys()]) {
+        finishHide(el);
         strip(el);
         this._densityCancel(el);
       }
     }
     if (typeof document !== 'undefined' && document.querySelectorAll) {
-      document.querySelectorAll('[data-density-leaving], [data-density-entering]').forEach(strip);
+      document.querySelectorAll('[data-density-leaving]').forEach(finishHide);
+      document.querySelectorAll('[data-density-entering]').forEach(strip);
     }
   }
 
@@ -3000,10 +3060,17 @@ export class HUD {
     if (this._armPilotStrip) return;
     this._armPilotStrip = document.createElement('div');
     this._armPilotStrip.id = 'arm-pilot-controls';
+    // Follow-up 2026-09-09 (plan 1788926404388-hud-followups-0909.md §1.4): with
+    // the ladder on the strip rides one gap above the footer band (172 =
+    // `armPilotStripBottomPx(true)`) — the gag owns the viewport bottom now;
+    // `?ladder=0` keeps the shipped 12. Lazy (first show), so the flag is long
+    // since set by init(); the same `Constants.LADDER.ENABLED` read as the
+    // constructor's toast, never a module-level read.
+    const ladderOn = !!(Constants.LADDER && Constants.LADDER.ENABLED);
     // Content set dynamically by _updateArmPilotStripContent() — no static HTML here
     Object.assign(this._armPilotStrip.style, {
       position: 'fixed',
-      bottom: '12px',
+      bottom: `${armPilotStripBottomPx(ladderOn)}px`,
       left: '50%',
       transform: 'translateX(-50%)',
       background: 'rgba(0, 30, 60, 0.85)',

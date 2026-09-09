@@ -40,12 +40,36 @@
  * set; that attribute is THE one visibility bit (the module never writes
  * display:none itself).
  *
- * Placement (D4): bottom-centre, a DIRECT child of `#hud-overlay` wearing
- * `.hud-panel` with `pointer-events:auto` — never a side column (the columns
- * dim under the F1 callouts). `setDodge(underPx, floorPx)` keeps it above the
- * hint ticker and, on glass, above the thumb rest, and re-centres it in the
- * free band right of the ORBIT pane while ORBIT shows (write-on-change, fed
- * per frame by the hub like CARGO / NEXT).
+ * Placement (D4; follow-up 2026-09-09, owner: "almost at bottom" — plan
+ * .kilo/plans/1788926404388-hud-followups-0909.md §1.1–6): STATIC. A DIRECT
+ * child of `#hud-overlay` wearing `.hud-panel` but WITHOUT the plate
+ * (transparent, no border, padding 0 — the sheet's id rule beats the class);
+ * `bottom: max(12px, env(safe-area-inset-bottom, 0px))`, `left: 50%` /
+ * `translateX(-50%)`, written ONCE in `_build`. Inside the glass thumb-rest
+ * band by design: bottom-centre is the most reachable spot (the STORE-chip
+ * precedent at bottom 12), and a press there is outside the edge-wake footer
+ * band (132–164), so it wakes nothing. The root is `pointer-events: none`;
+ * only `.ovr-main` (the 220 × 56 button, `margin: 0 auto` inside the 324
+ * grid plate) and the OPEN grid take pointer events, so a drag beside the
+ * button reaches the canvas. `setDodge` is RETIRED — nothing is fed per
+ * frame. Never a side column (the columns dim under the F1 callouts).
+ *
+ * The bottom-centre stacking law (offsets from the viewport bottom): 12–68
+ * gag (20–76 on an iPad with a 20 px inset) · 88–124 hint ticker · 120 salvage
+ * popup (legacy) · 132 toast (`HUD.toastBottomPx`) · 132–164 footer band, free
+ * centre · 148 F1 breadcrumb · 170 warnings · 172 ARM PILOT strip
+ * (`HUD.armPilotStripBottomPx`). `?ladder=0` keeps toast 48 / strip 12 and
+ * builds no gag.
+ *
+ * CTA: two lines — `.ovr-main-title` "SAFETY OVERRIDE" over `.ovr-main-cta`
+ * "PRESS TO TEST ACTUATORS" / "PRESS TO CLOSE" (pure `mainLabel(expanded)`;
+ * house uppercase; the cta inherits CAUTION / PLAYER from the button).
+ *
+ * Grid open hides what it would cover: `expand()` sets `body[data-ovr-open]`;
+ * `collapse()`, `dispose()` and a GAME_STATE_CHANGE away from gameplay clear
+ * it; the sheet hides `#hud-hint-ticker`, `#notification-zone` and
+ * `#arm-pilot-controls` under it (the ticker is z 8000 on body, above the
+ * overlay's grid).
  *
  * Reveal (D5) = slide-up: the grid translates up out of the main button in
  * SLIDE_MS (one curve, the RefitPane 270 ms); `prefers-reduced-motion` → no
@@ -70,7 +94,6 @@
  */
 
 import { VisualLaw } from '../../core/VisualLaw.js';
-import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 
 export const OVERRIDE_PANE_ID = 'hud-override-pane';
 export const OVERRIDE_RUNG_ID = 'override';
@@ -83,13 +106,14 @@ export const OVERRIDE_VIGNETTE_ID = 'hud-override-vignette';
 export const OVERRIDE_KEYS = Object.freeze(['daughters', 'radiator', 'rosa', 'furnace']);
 
 export const OVERRIDE_GEOMETRY = Object.freeze({
-  MAIN_W_PX: 220,          // the big button
-  MAIN_H_PX: 72,
-  MAIN_GLASS_MIN_H_PX: 72,
+  MAIN_W_PX: 220,          // the big button's FIXED width (`margin: 0 auto` inside the 324 grid plate)
+  MAIN_H_PX: 56,           // was 72 — the two-line CTA (16 px title over 11 px cta) fits 56 (follow-up 2026-09-09)
+  MAIN_GLASS_MIN_H_PX: 56, // was 72 — still ≥ 44 pt (Apple HIG)
+  BOTTOM_PX: 12,           // the root's CSS bottom floor: max(12px, env(safe-area-inset-bottom, 0px))
   BTN_W_PX: 150,           // grid buttons: desktop >= 44 px tall, glass >= 44x44 (Apple HIG 44 pt)
   BTN_H_PX: 44,
   BTN_GLASS_MIN_PX: 44,
-  GAP_PX: 8,               // grid gap AND the gap above the dodge floor
+  GAP_PX: 8,               // grid gap AND the gap between the grid plate and the main button
   SLIDE_MS: 270,           // motion law: one curve, 240-300 ms (RefitPane uses 270)
 });
 
@@ -148,8 +172,11 @@ const NOT_FITTED = 'NOT FITTED';     // RefitPane.ACTUATOR_NOT_FITTED, the flowe
 const COLOR_PLAYER = VisualLaw.COLORS.PLAYER;     // heritage green — the HUD
 const COLOR_THREAT = VisualLaw.COLORS.THREAT;     // red-orange — the ONE pulsing channel (vignette only; gag countdown is CAUTION steady, rev 3)
 const COLOR_CAUTION = VisualLaw.COLORS.CAUTION;   // steady amber — FAULT, disabled reasons, gag main + countdown
-/** Inverted-U inner edge (HUD_EDGE_PX + HUD_COLUMN_WIDTH_PX) — Override recentre band. */
-const COL_INNER_PX = HUD_EDGE_PX + HUD_COLUMN_WIDTH_PX;
+
+/** The two-line CTA's words (house uppercase). */
+const MAIN_TITLE = 'SAFETY OVERRIDE';
+const CTA_CLOSED = 'PRESS TO TEST ACTUATORS';
+const CTA_OPEN = 'PRESS TO CLOSE';
 
 /** Panel key → actuators key (RADIATOR → the OVERRIDE full-range sweep, amendment 2026-09-09). */
 const ACTUATOR_OF = Object.freeze({ daughters: 'struts', radiator: 'flowerSweep', rosa: 'rosaFurl' });
@@ -258,16 +285,14 @@ export class OverridePane {
     this._root = null;
     this._grid = null;
     this._mainBtn = null;
+    this._titleEl = null;            // .ovr-main-title (static text)
+    this._ctaEl = null;              // .ovr-main-cta (write-on-change on expand / collapse)
     this._btns = {};                 // key → button element
     this._models = {};               // key → last applied { text, disabled, pressed }
     this._rung = null;
     this._unsubs = [];
     this._disposed = false;
     this._expanded = false;
-    this._underPx = undefined;       // last setDodge inputs (write-on-change)
-    this._floorPx = undefined;
-    this._leftPx = undefined;
-    this._rightPx = undefined;
     this._tickId = null;             // the 1 Hz refresh while expanded (NOT a gag timer)
 
     // The FURNACE gag
@@ -326,66 +351,6 @@ export class OverridePane {
     return this._rung;
   }
 
-  /**
-   * THE DODGE (the hub calls it per frame). Bottom-anchored: the panel's bottom
-   * edge sits GAP_PX above the LOWER of `underPx` (the hint-ticker band's top)
-   * and `floorPx` (the thumb-rest floor on glass, else the viewport bottom).
-   * Horizontal home = the screen centre (`left: 50%`). Only when the centred
-   * panel would touch a rider — `leftPx` = the ORBIT pane's right edge while it
-   * shows, `rightPx` = the right column's left edge — does it centre itself in
-   * the free band between them instead (the ORBIT/CARGO dodge idiom). With
-   * ORBIT flush-left (owner 2026-09-07) and text only (owner 2026-09-08: its
-   * right edge 386 < 470, the centred panel's left edge on 1280) the centre is
-   * free in every measured room; the band is the crowded-room fallback. Write-on-change on all four
-   * inputs: repeated identical inputs touch no DOM.
-   * @param {number|null} underPx
-   * @param {number} floorPx
-   * @param {number|null} [leftPx] the right edge of what rides bottom-left (null = nothing)
-   * @param {number|null} [rightPx] the left edge of what rides bottom-right (null = the viewport)
-   */
-  setDodge(underPx, floorPx, leftPx = null, rightPx = null) {
-    if (this._disposed || !this._root) return;
-    const u = Number(underPx);
-    const under = (underPx == null || !Number.isFinite(u)) ? null : u;
-    let floor = Number(floorPx);
-    if (!Number.isFinite(floor)) floor = this._viewportHeight();
-    if (!Number.isFinite(floor)) return;
-    const l = Number(leftPx);
-    const left = (leftPx == null || !Number.isFinite(l)) ? null : l;
-    const r = Number(rightPx);
-    const right = (rightPx == null || !Number.isFinite(r)) ? null : r;
-    if (under === this._underPx && floor === this._floorPx && left === this._leftPx && right === this._rightPx) return;   // write-on-change (inputs)
-    this._underPx = under;
-    this._floorPx = floor;
-    this._leftPx = left;
-    this._rightPx = right;
-    const eff = under == null ? floor : Math.min(floor, under);
-    const vh = this._viewportHeight();
-    const bottom = Number.isFinite(vh) ? (vh - eff + OVERRIDE_GEOMETRY.GAP_PX) : OVERRIDE_GEOMETRY.GAP_PX;
-    const bottomStyle = `${Math.round(bottom)}px`;
-    if (this._root.style.bottom !== bottomStyle) this._root.style.bottom = bottomStyle;
-    // Horizontal: the screen centre, unless the centred panel would touch a
-    // rider on either side — then the centre of the free band between them
-    // (owner 2026-09-07: ORBIT rides flush-left; 2026-09-08: text only, right
-    // edge 386 — the centre is free in every measured room; the band is the
-    // fallback for a crowded one).
-    let leftStyle = '50%';
-    const vw = this._viewportWidth();
-    if (Number.isFinite(vw) && (left != null || right != null)) {
-      const G = OVERRIDE_GEOMETRY;
-      const half = (2 * G.BTN_W_PX + G.GAP_PX + 2 * PAD_PX) / 2;
-      const cx = vw / 2;
-      const hitsLeft = left != null && (cx - half - G.GAP_PX) < left;
-      const hitsRight = right != null && (cx + half + G.GAP_PX) > right;
-      if (hitsLeft || hitsRight) {
-        const bandLeft = left != null ? left : COL_INNER_PX;
-        const bandRight = right != null ? right : vw - COL_INNER_PX;
-        leftStyle = `${Math.round((bandLeft + bandRight) / 2)}px`;
-      }
-    }
-    if (this._root.style.left !== leftStyle) this._root.style.left = leftStyle;
-  }
-
   /** Re-read the three actuators and repaint the labels (write-on-change; never throws). */
   refresh() {
     if (this._disposed || !this._root) return;
@@ -395,7 +360,11 @@ export class OverridePane {
     }
   }
 
-  /** Slide the grid up: resets the gag press count, refreshes, starts the 1 Hz tick. */
+  /**
+   * Slide the grid up: resets the gag press count, refreshes, starts the 1 Hz
+   * tick, flips the CTA to PRESS TO CLOSE and sets `body[data-ovr-open]` (the
+   * sheet hides the ticker / toast zone / ARM PILOT strip the grid would cover).
+   */
   expand() {
     if (this._disposed || this._expanded) return;
     this._expanded = true;
@@ -404,11 +373,13 @@ export class OverridePane {
       this._root.setAttribute(OPEN_ATTR, '');
       if (this._mainBtn) this._mainBtn.setAttribute('aria-expanded', 'true');
     }
+    this._applyCta(true);
+    this._setBodyOpen(true);
     this.refresh();
     this._startTick();
   }
 
-  /** Collapse the grid: stops the tick and aborts any in-flight gag. */
+  /** Collapse the grid: stops the tick, aborts any in-flight gag, restores the CTA, clears `body[data-ovr-open]`. */
   collapse() {
     if (this._disposed) return;
     this._stopTick();
@@ -418,6 +389,8 @@ export class OverridePane {
       this._root.removeAttribute(OPEN_ATTR);
       if (this._mainBtn) this._mainBtn.setAttribute('aria-expanded', 'false');
     }
+    this._applyCta(false);
+    this._setBodyOpen(false);
   }
 
   /** The main button's verb. */
@@ -438,11 +411,12 @@ export class OverridePane {
   /** @returns {object|null} the root element */
   el() { return this._root; }
 
-  /** Abort the gag, clear every timer, unsubscribe, remove the root; further calls no-op. */
+  /** Abort the gag, clear every timer, unsubscribe, remove the root, clear `body[data-ovr-open]`; further calls no-op. */
   dispose() {
     if (this._disposed) return;
     this._stopTick();
     this._abortGag();
+    this._setBodyOpen(false);
     this._disposed = true;
     for (const off of this._unsubs) {
       try { off(); } catch (_e) { /* stub bus */ }
@@ -455,9 +429,21 @@ export class OverridePane {
     this._root = null;
     this._grid = null;
     this._mainBtn = null;
+    this._titleEl = null;
+    this._ctaEl = null;
     this._btns = {};
     this._models = {};
     this._timers.clear();
+  }
+
+  /**
+   * The pure two-line CTA law (follow-up 2026-09-09 §1.3): the title never
+   * changes; the cta names the press's effect. House uppercase.
+   * @param {boolean} expanded
+   * @returns {{title:string, cta:string}}
+   */
+  static mainLabel(expanded) {
+    return { title: MAIN_TITLE, cta: expanded ? CTA_OPEN : CTA_CLOSED };
   }
 
   /**
@@ -496,16 +482,21 @@ export class OverridePane {
     const root = doc.createElement('div');
     root.id = OVERRIDE_PANE_ID;
     root.className = 'hud-panel';
-    // Geometry literals live inline (the style sheet carries the look); `bottom`
-    // is written ONLY by setDodge. Never a column child: the hub's F1 callouts
-    // dim both side columns to 0.35 + pointer-events:none.
+    // Geometry literals live inline (the style sheet carries the look). STATIC
+    // placement, written once (follow-up 2026-09-09): bottom-centre, 12 px
+    // (or the safe-area inset) off the viewport bottom — nothing dodges it,
+    // nothing feeds it per frame. The root is the 324-wide grid plate's box
+    // and takes NO pointer events; the button and the open grid opt in. Never
+    // a column child: the hub's F1 callouts dim both side columns to 0.35 +
+    // pointer-events:none.
     root.style.position = 'absolute';
     root.style.left = '50%';
+    root.style.bottom = `max(${G.BOTTOM_PX}px, env(safe-area-inset-bottom, 0px))`;
     root.style.transform = 'translateX(-50%)';
     root.style.width = `${2 * G.BTN_W_PX + G.GAP_PX + 2 * PAD_PX}px`;
     root.style.boxSizing = 'border-box';
-    root.style.padding = `${PAD_PX}px`;
-    root.style.pointerEvents = 'auto';
+    root.style.padding = '0';
+    root.style.pointerEvents = 'none';
     root.setAttribute(DENSITY_HIDDEN_ATTR, '');       // hidden by default on EVERY floor (D3)
     if (this._glass) root.setAttribute(GLASS_ATTR, '');
     if (this._reducedMotion()) root.setAttribute(REDUCED_ATTR, '');
@@ -545,7 +536,18 @@ export class OverridePane {
     main.className = 'ovr-main';
     main.setAttribute(KEY_ATTR, 'main');
     main.setAttribute('aria-expanded', 'false');
-    main.textContent = 'SAFETY OVERRIDE';
+    main.style.pointerEvents = 'auto';               // the ONE hit surface while collapsed (root is none)
+    // Two lines (follow-up 2026-09-09 §1.3): the title over the cta, both from
+    // the pure law; the cta is rewritten on expand / collapse (write-on-change).
+    const label = OverridePane.mainLabel(false);
+    const title = doc.createElement('span');
+    title.className = 'ovr-main-title';
+    title.textContent = label.title;
+    const cta = doc.createElement('span');
+    cta.className = 'ovr-main-cta';
+    cta.textContent = label.cta;
+    main.appendChild(title);
+    main.appendChild(cta);
 
     root.appendChild(grid);
     root.appendChild(main);
@@ -555,6 +557,34 @@ export class OverridePane {
     this._root = root;
     this._grid = grid;
     this._mainBtn = main;
+    this._titleEl = title;
+    this._ctaEl = cta;
+  }
+
+  /** @private The cta span follows the grid (write-on-change; title is static). */
+  _applyCta(expanded) {
+    const el = this._ctaEl;
+    if (!el) return;
+    const next = OverridePane.mainLabel(!!expanded).cta;
+    if (el.textContent !== next) el.textContent = next;
+  }
+
+  /**
+   * @private `body[data-ovr-open]` — the sheet hides the hint ticker, the toast
+   * zone and the ARM PILOT strip while the grid is up (they share the
+   * bottom-centre column the grid slides into). Write-on-change; headless /
+   * no body ⇒ nothing.
+   */
+  _setBodyOpen(open) {
+    const d = this._doc;
+    const body = d && d.body;
+    if (!body || typeof body.setAttribute !== 'function') return;
+    const has = typeof body.hasAttribute === 'function' ? body.hasAttribute(OPEN_ATTR) : null;
+    if (open) {
+      if (has !== true) body.setAttribute(OPEN_ATTR, '');
+    } else if (has !== false && typeof body.removeAttribute === 'function') {
+      body.removeAttribute(OPEN_ATTR);
+    }
   }
 
   /** @private One <style> per document, idempotent by id. */
@@ -571,28 +601,37 @@ export class OverridePane {
     style.textContent = `
       /* The rung bit, local copy (keeps the pane honest when it stands alone). */
       ${P}[${DENSITY_HIDDEN_ATTR}] { display: none !important; }
+      /* No plate (follow-up 2026-09-09): the root is the grid plate's box only —
+         the .hud-panel background / border / padding are undone here (the id
+         rule beats the class); the button and the open grid carry their own. */
       ${P} {
         display: block;
         overflow: visible;
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        padding: 0;
         color: ${COLOR_PLAYER};
-        transition: left ${G.SLIDE_MS}ms ${curve};   /* the band re-centre when ORBIT shows / hides */
       }
       ${P} button {
         font-family: var(--font-mono);
         cursor: pointer;
         -webkit-tap-highlight-color: transparent;
       }
-      /* The big cockpit button */
+      /* The big cockpit button: a FIXED 220 x 56 (two lines), centred in the plate's box. */
       ${P} .ovr-main {
-        display: block;
-        width: 100%;
-        min-width: ${G.MAIN_W_PX - 2 * PAD_PX}px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        width: ${G.MAIN_W_PX}px;
         min-height: ${G.MAIN_H_PX}px;
+        margin: 0 auto;
         box-sizing: border-box;
-        padding: 6px 12px;
-        font-size: 16px;
-        font-weight: 700;
-        letter-spacing: 0.16em;
+        padding: 4px 12px;
+        line-height: 1.15;
+        text-align: center;
         color: ${COLOR_CAUTION};
         text-shadow: 0 0 8px rgba(255, 170, 0, 0.45);
         background:
@@ -602,10 +641,31 @@ export class OverridePane {
         border-radius: 4px;
         box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.6), inset 0 0 18px rgba(255, 170, 0, 0.12);
         transition: background-color 0.15s ease, box-shadow 0.15s ease;
+        pointer-events: auto;
+      }
+      ${P} .ovr-main-title {
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        white-space: nowrap;
+      }
+      /* The cta inherits the button's colour (CAUTION closed / PLAYER open). */
+      ${P} .ovr-main-cta {
+        font-size: 11px;
+        font-weight: 400;
+        letter-spacing: 0.12em;
+        opacity: 0.8;
+        color: inherit;
+        white-space: nowrap;
       }
       ${P} .ovr-main:hover { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.6), inset 0 0 26px rgba(255, 170, 0, 0.28); }
       ${P} .ovr-main:active { box-shadow: inset 0 3px 10px rgba(0, 0, 0, 0.7); }
       ${P}[${OPEN_ATTR}] .ovr-main { border-color: ${COLOR_PLAYER}; color: ${COLOR_PLAYER}; text-shadow: 0 0 8px rgba(0, 255, 136, 0.45); }
+      /* Grid open hides what it would cover (the bottom-centre column): the hint
+         ticker (z 8000 on body, above the overlay's grid), the toast zone and
+         the ARM PILOT strip. expand() sets the body attribute; collapse() /
+         dispose() / a GAME_STATE_CHANGE away from gameplay clear it. */
+      body[${OPEN_ATTR}] #hud-hint-ticker, body[${OPEN_ATTR}] #notification-zone, body[${OPEN_ATTR}] #arm-pilot-controls { visibility: hidden !important; }
       /* The 2x2 grid slides UP out of the main button (its own plate above it). */
       ${P} .ovr-grid {
         position: absolute;
@@ -680,9 +740,9 @@ export class OverridePane {
         91%  { opacity: 1; }
         100% { opacity: 1; text-shadow: none; }
       }
-      /* Glass: 44 pt hit boxes (Apple HIG) */
+      /* Glass: 44 pt hit boxes (Apple HIG); the main button's fixed 220 x 56 already clears it */
       ${P}[${GLASS_ATTR}] .ovr-btn { min-height: ${G.BTN_GLASS_MIN_PX}px; min-width: ${G.BTN_GLASS_MIN_PX}px; font-size: 13px; }
-      ${P}[${GLASS_ATTR}] .ovr-main { min-height: ${G.MAIN_GLASS_MIN_H_PX}px; min-width: ${G.MAIN_W_PX - 2 * PAD_PX}px; }
+      ${P}[${GLASS_ATTR}] .ovr-main { min-height: ${G.MAIN_GLASS_MIN_H_PX}px; }
       /* The gag's body-level chrome */
       #${OVERRIDE_VIGNETTE_ID} { opacity: 0.85; }
       .${PULSE_CLASS} { animation: ovr-pulse ${Math.round(1000 / F.VIGNETTE_HZ)}ms ease-in-out infinite; }
@@ -991,11 +1051,20 @@ export class OverridePane {
     this._recoverSteps = 0;
   }
 
-  /** @private */
+  /**
+   * @private A GAME_STATE_CHANGE away from gameplay (shop / pause / menu / end
+   * screens) aborts the gag AND collapses the grid (follow-up 2026-09-09 §1.5:
+   * the collapse also clears `body[data-ovr-open]`, so the ticker / toast zone
+   * / ARM PILOT strip are never left hidden off the flying view). A change TO a
+   * gameplay state keeps the grid as it was.
+   */
   _onStateChange(payload) {
     const to = payload && payload.to;
     const list = this._gameplayStates;
-    if (!list || list.length === 0 || !list.includes(to)) this._abortGag();
+    if (!list || list.length === 0 || !list.includes(to)) {
+      this._abortGag();
+      this.collapse();
+    }
   }
 
   // ── Gag DOM ────────────────────────────────────────────────────────────────
@@ -1201,24 +1270,6 @@ export class OverridePane {
     }
     if (typeof d === 'boolean') return d;
     return _prefersReducedMotion();
-  }
-
-  /** @private */
-  _viewportHeight() {
-    const d = this._doc;
-    const w = d && d.defaultView;
-    let h = w ? Number(w.innerHeight) : NaN;
-    if (!Number.isFinite(h) && typeof window !== 'undefined') h = Number(window.innerHeight);
-    return Number.isFinite(h) ? h : NaN;
-  }
-
-  /** @private */
-  _viewportWidth() {
-    const d = this._doc;
-    const w = d && d.defaultView;
-    let x = w ? Number(w.innerWidth) : NaN;
-    if (!Number.isFinite(x) && typeof window !== 'undefined') x = Number(window.innerWidth);
-    return Number.isFinite(x) ? x : NaN;
   }
 }
 

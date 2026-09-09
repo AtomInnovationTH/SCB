@@ -49,12 +49,17 @@
  *                  in which wakes that side's chrome (plan D3 — edge-scoped, not
  *                  any-touch: a centre tap wakes nothing)
  *   FOOTER_BAND_PX the FOOTER BAND's height (plan D7): one fixed strip directly
- *                  above the bottom TRANSIENT band (toasts 48 px, hint ticker
- *                  88–124 px) — REFIT tab / DETAIL slider on the left, SPECS tab
- *                  on the right; every other rider's floor is the footer's top
+ *                  above the bottom TRANSIENT band (hint ticker 88–124 px) —
+ *                  REFIT tab / DETAIL slider on the left, SPECS tab on the
+ *                  right; every other rider's floor is the footer's top. Its
+ *                  centre is free: the toast lands on its bottom edge (132)
+ *                  and the ARM PILOT strip one gap above its top (172) —
+ *                  `HUD.toastBottomPx` / `HUD.armPilotStripBottomPx` (follow-up
+ *                  2026-09-09); the SAFETY OVERRIDE gag sits at the viewport
+ *                  bottom (12–68), below the transient band
  *   FOOTER_GAP_PX  the gap between the transient band and the footer's bottom
- *                  (the house GAP_PX 8 of CARGO/NEXT/ORBIT/OVERRIDE, so the
- *                  footer's bottom edge IS the OVERRIDE button's 132 baseline)
+ *                  (the house GAP_PX 8 of CARGO/NEXT/ORBIT — the same gap the
+ *                  ARM PILOT strip keeps above the footer's top)
  *   TOUCH_PITCH_PX the GLASS hit-box height (Apple HIG 44 pt minimum): the
  *                  DETAIL slider's 32 px band sits centred in a transparent
  *                  44 pt row on glass (was the DISPLAY rail's notch pitch —
@@ -63,9 +68,27 @@
  *   HUD_EDGE_PX    alias of EDGE_PX (the HUD ARMS' inset). CSS insets read
  *                  `max(16px, env(safe-area-inset-*))`. Do not give this its
  *                  own literal — it reads EDGE_PX so the table stays ONE number.
- *   HUD_COLUMN_WIDTH_PX  both arms' column width (rev 3: the symmetric
- *                  "inverted U" — left column, `.hud-panel`, Cargo / Orbit /
- *                  Autopilot / Pin riders, right column, Next; Comms stays 480).
+ *   HUD_COLUMN_WIDTH_PX  the BASE pane width (rev 3: the `.hud-panel` CSS
+ *                  width, the Cargo / Orbit / Autopilot / Pin riders, the
+ *                  DISCOVERIES popover, the FMA strip, Next). Follow-up
+ *                  2026-09-09 (plan 1788926404388-hud-followups-0909.md §1.15):
+ *                  the two ARMS are wider than the base — the five names below
+ *                  carry the inverted U's real widths; this number stays 280
+ *                  and keeps its name (no rename — every base-width pin stands).
+ *   MOTHER_PANE_WIDTH_PX   Mother (the left arm's top pane): 400 — the callout
+ *                  digest and the MEMO slot stop wrapping
+ *   ARMS_PANE_WIDTH_PX     Daughters (the left arm's second pane): 350
+ *   TARGETS_PANE_WIDTH_PX  Targets (the right arm's first pane): 350
+ *   LEFT_COLUMN_WIDTH_PX   `#hud-left-column`: 400 (= the widest child, Mother);
+ *                  the column is `align-items: flex-start`, so the 350 Daughters
+ *                  and the 280 riders hug the left edge — the outer edges of
+ *                  the U stay straight at HUD_EDGE_PX
+ *   RIGHT_COLUMN_WIDTH_PX  `#hud-right-column`: 350 (= Targets); `align-items:
+ *                  flex-end` hugs the 280 Debris / Next to the right edge. Comms
+ *                  stays 480 at `right: HUD_EDGE_PX` (flush with the arm's outer
+ *                  edge, 6 px inboard of the old 10). `OrbitPane.rightPx()` and
+ *                  the target-law recentre inputs (296 / W − 296) stay on the
+ *                  base width on purpose (dead API / a later pass).
  *
  * (NOTCH_PX 40, SLOP_PX 44 and MAX_NOTCHES 8 — the DISPLAY rail's row height,
  * tap slop and height cap — RETIRED with the rail: 2026-09-06 and Session P.)
@@ -84,13 +107,24 @@ export const RAIL_GEOMETRY = Object.freeze({
   DODGE_GAP_PX: 8,
   TOUCH_PITCH_PX: 44,
   HUD_EDGE_PX: EDGE_PX,     // === EDGE_PX (one number, two names)
-  HUD_COLUMN_WIDTH_PX: 280,
+  HUD_COLUMN_WIDTH_PX: 280, // the BASE pane width (.hud-panel, riders, popover, Next)
+  MOTHER_PANE_WIDTH_PX: 400,
+  ARMS_PANE_WIDTH_PX: 350,
+  TARGETS_PANE_WIDTH_PX: 350,
+  LEFT_COLUMN_WIDTH_PX: 400,   // = MOTHER_PANE_WIDTH_PX (the widest left child)
+  RIGHT_COLUMN_WIDTH_PX: 350,  // = TARGETS_PANE_WIDTH_PX (the widest right child)
 });
 
 /** The HUD arms' edge inset (rev 3) — reads EDGE_PX so the table stays ONE number. */
 export const HUD_EDGE_PX = RAIL_GEOMETRY.EDGE_PX;
-/** Both HUD columns' width (rev 3) — the ONE number, re-exported by name. */
+/** The BASE pane width (rev 3; `.hud-panel`, riders, popover, Next) — the ONE number, re-exported by name. */
 export const HUD_COLUMN_WIDTH_PX = RAIL_GEOMETRY.HUD_COLUMN_WIDTH_PX;
+/** The inverted U's real widths (follow-up 2026-09-09 §1.15) — re-exported by name like HUD_COLUMN_WIDTH_PX. */
+export const MOTHER_PANE_WIDTH_PX = RAIL_GEOMETRY.MOTHER_PANE_WIDTH_PX;
+export const ARMS_PANE_WIDTH_PX = RAIL_GEOMETRY.ARMS_PANE_WIDTH_PX;
+export const TARGETS_PANE_WIDTH_PX = RAIL_GEOMETRY.TARGETS_PANE_WIDTH_PX;
+export const LEFT_COLUMN_WIDTH_PX = RAIL_GEOMETRY.LEFT_COLUMN_WIDTH_PX;
+export const RIGHT_COLUMN_WIDTH_PX = RAIL_GEOMETRY.RIGHT_COLUMN_WIDTH_PX;
 
 /**
  * THE FOOTER BAND (Session P, plan D7; owner 2026-09-07: "consistent place
@@ -100,9 +134,11 @@ export const HUD_COLUMN_WIDTH_PX = RAIL_GEOMETRY.HUD_COLUMN_WIDTH_PX;
  * (CSS `bottom:` values), so a caller writes `bottom:${bottom}px` for a footer
  * occupant and `innerHeight - top` for a rider's floor. PURE.
  *
- * The vertical stacking law (plan §0): from the bottom up — the TRANSIENT band
- * (toasts at 48 px, the hint ticker 88–124 px; on glass the thumb rest 100 px
- * sits inside it) → FOOTER_GAP_PX → the FOOTER band → panes and the world.
+ * The vertical stacking law (plan §0; follow-up 2026-09-09): from the bottom up
+ * — the SAFETY OVERRIDE gag (12–68, `OVERRIDE_GEOMETRY.BOTTOM_PX`) → the
+ * TRANSIENT band (the hint ticker 88–124 px; on glass the thumb rest 100 px
+ * sits inside it) → FOOTER_GAP_PX → the FOOTER band (the toast on its bottom
+ * edge, 132) → FOOTER_GAP_PX → the ARM PILOT strip (172) → panes and the world.
  *
  *   bottom = max(glass ? THUMB_REST_PX : 0, hintBandPx) + FOOTER_GAP_PX
  *   top    = bottom + FOOTER_BAND_PX

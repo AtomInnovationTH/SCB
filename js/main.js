@@ -6348,24 +6348,11 @@ function gameLoop(timestamp) {
   if (_ladderActive && libraryPane && libraryPane.setTabPhase && edgeChrome) {
     libraryPane.setTabPhase(edgeChrome.phase('tab', timestamp));
   }
-  if (_ladderActive && overridePane && overridePane.setDodge && Number.isFinite(_HINT_BAND_PX)) {
-    // SAFETY OVERRIDE panel: bottom-centre above the hint ticker band, and on
-    // glass above the thumb rest (the CargoPane/NextPane dodge idiom) — its
-    // bottom (124 + 8 = 132) IS the footer's baseline, so it shares the band's
-    // row between the two corner slots (plan D7: ≥ 200 px from either on
-    // 1024-wide glass). While ORBIT shows bottom-left the panel re-centres in
-    // the free band between ORBIT's right edge and the right column (the
-    // witness: screen-centre overlapped ORBIT by 85 px on the 13-inch, 133 px
-    // on desktop).
-    const orbitRight = (orbitPane && orbitPane.rightPx) ? orbitPane.rightPx() : null;
-    overridePane.setDodge(window.innerHeight - _HINT_BAND_PX,
-      window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0),
-      orbitRight,
-      // Rev 3 (locked #5 / #8): the right input is the RIGHT ARM's left edge
-      // (W − (16 + 280)); pre-rev-3 it was the CARGO pane's right-edge slot —
-      // Cargo rides the LEFT arm now, so the symmetric arm edge is the truth.
-      window.innerWidth - (RAIL_GEOMETRY.HUD_EDGE_PX + RAIL_GEOMETRY.HUD_COLUMN_WIDTH_PX));
-  }
+  // SAFETY OVERRIDE panel: STATIC since 2026-09-09 (plan
+  // 1788926404388-hud-followups-0909.md §1.1 — "almost at bottom"): its root
+  // writes `bottom: max(12px, env(safe-area-inset-bottom))` once in _build;
+  // the per-frame setDodge (hint-band / thumb-rest floor + the ORBIT band
+  // re-centre) is retired with it. Nothing here feeds the gag.
   // Plan Task 8: left-arm overlay stack (Cargo → Orbit → Autopilot → Pin).
   // Guard matches the old dodge chain: `_ladderActive`. Ceiling is the left
   // HUD column's cached bottom + GAP; floor is the footer band − GAP. Skip

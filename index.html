@@ -242,15 +242,17 @@
       display: flex;           /* safety net: JS sets this inline, but preserve it if cleared */
       flex-direction: column;
       left: max(16px, env(safe-area-inset-left)); /* = HUD_EDGE_PX (js/ui/RailGeometry.js) */
-      width: 280px; /* = HUD_COLUMN_WIDTH_PX */
+      width: 400px; /* = LEFT_COLUMN_WIDTH_PX (js/ui/RailGeometry.js) — the widest child, Mother; children hug the left edge (align-items: flex-start inline) */
       scrollbar-width: thin;
       scrollbar-color: rgba(0,255,136,0.2) transparent;
     }
 
-    /* Panels inside left column: flex children, not absolute */
+    /* Panels inside left column: flex children, not absolute. Each pane carries
+       its own inline width (Mother 400 / Daughters 350 = MOTHER_PANE_WIDTH_PX /
+       ARMS_PANE_WIDTH_PX); the LeftStack riders below the column are overlay
+       children on the .hud-panel 280 base. */
     #hud-left-column > .hud-panel {
       position: relative !important;
-      width: 280px; /* = HUD_COLUMN_WIDTH_PX */
     }
 
     /* Always show full content */

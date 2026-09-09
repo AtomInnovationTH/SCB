@@ -23,6 +23,7 @@ import { PaneChrome } from './PaneChrome.js';
 import { GestureHints } from './GestureHints.js';
 import { classify, oddsColor, reachKmFrom, THIN_ALPHA } from './TargetColorLaw.js';
 import { TouchControls } from '../TouchControls.js';
+import { TARGETS_PANE_WIDTH_PX } from '../RailGeometry.js';
 
 /** Desktop target-row min-height (shipped). */
 export const TARGET_ROW_PX = 20;
@@ -30,20 +31,39 @@ export const TARGET_ROW_PX = 20;
 export const TARGET_ROW_GLASS_PX = 44;
 /** Header line + margin that sits above the rows. */
 export const TARGET_HEADER_PX = 24;
-/** Rows that fit each PaneChrome step (maxHeight = header + k rows). */
-export const TARGET_STEP_ROWS = Object.freeze({ min: 1, normal: 4, max: 7 });
+/**
+ * The pane's own vertical chrome: `.hud-panel` 2 × 6 px padding + 2 × 1 px
+ * border (index.html), which `* { box-sizing: border-box }` counts INSIDE a
+ * written `height`. Folded into the height law 2026-09-09 (owner amendment to
+ * plan §1.18b — "fixed 5-row list" must actually show 5 rows): without it a
+ * 124 px `height` left 110 px of content for a 24 + 5 × 20 = 124 px list — four
+ * rows and a 6 px sliver (glass: 230 for 244 — four rows and 30 px).
+ */
+export const TARGET_PANE_CHROME_PX = 14;
+/**
+ * Rows that fit each PaneChrome step (height = chrome + header + k rows).
+ * Follow-up 2026-09-09 (plan 1788926404388-hud-followups-0909.md §1.18b):
+ * `normal` 4 → 5 and the pane writes a FIXED `height` (not `maxHeight`), so the
+ * box no longer breathes with the list — "nothing should move" (owner). Desktop
+ * 138 / glass 258 at 'normal' (14 + 24 + 5 rows); a longer list scrolls
+ * (overflowY auto); the 0 key's 'min' (58 / 82) is the player's remedy for an
+ * empty sector.
+ */
+export const TARGET_STEP_ROWS = Object.freeze({ min: 1, normal: 5, max: 7 });
 
 /**
- * Target pane maxHeight for a chrome step. Glass recomputes from the 44 px
- * row so N rows still fit. Plan Task 13 / 14.
+ * Target pane height for a chrome step: the pane's own chrome + the header +
+ * k rows, so exactly k rows of CONTENT show under border-box. Glass recomputes
+ * from the 44 px row so N rows still fit. Plan Task 13 / 14; a fixed `height`
+ * since 2026-09-09. Desktop / glass: min 58 / 82, normal 138 / 258, max 178 / 346.
  * @param {string} step  'min' | 'normal' | 'max'
  * @param {boolean} [glass]
  * @returns {number}
  */
-export function targetMaxHeightPx(step, glass) {
+export function targetHeightPx(step, glass) {
   const k = TARGET_STEP_ROWS[step] || TARGET_STEP_ROWS.normal;
   const row = glass ? TARGET_ROW_GLASS_PX : TARGET_ROW_PX;
-  return TARGET_HEADER_PX + k * row;
+  return TARGET_PANE_CHROME_PX + TARGET_HEADER_PX + k * row;
 }
 
 /**
@@ -352,9 +372,13 @@ export class TargetPanel {
   _build() {
     this._injectStyles();
 
+    // Follow-up 2026-09-09 (§1.15 / §1.18b): the right arm's first pane is
+    // 350 wide (TARGETS_PANE_WIDTH_PX — the arm's width; Debris / Next keep
+    // the 280 base and hug the right edge) and a FIXED height per step.
     this.panels.targets = this._createPanel('hud-targets-panel', {
       position: 'relative',
-      maxHeight: `${targetMaxHeightPx('normal', this._glass)}px`,
+      width: `${TARGETS_PANE_WIDTH_PX}px`,
+      height: `${targetHeightPx('normal', this._glass)}px`,
       overflowY: 'auto',
       outline: 'none',
     });
@@ -433,16 +457,20 @@ export class TargetPanel {
   }
 
   /**
-   * @private maxHeight = header + k rows (min when the list is empty).
+   * @private height = header + k rows — a FIXED box (follow-up 2026-09-09
+   * §1.18b): the chrome step alone sizes it; an empty list no longer collapses
+   * to 'min' (a box that breathed with the list moved everything under it —
+   * owner: "nothing should move"). overflowY:auto scrolls a longer list.
    * Plan Task 13 / 14 — glass rows are 44 px so the same k still fits.
+   * Write-on-change.
    * @param {string} [step]
    */
   _applyTargetHeight(step) {
     const pane = this.panels && this.panels.targets;
     if (!pane || !pane.style) return;
-    const empty = this._lastTrackedCount === 0;
-    const name = empty ? 'min' : (step || (this._chrome && this._chrome.step) || 'normal');
-    pane.style.maxHeight = `${targetMaxHeightPx(name, this._glass)}px`;
+    const name = step || (this._chrome && this._chrome.step) || 'normal';
+    const h = `${targetHeightPx(name, this._glass)}px`;
+    if (pane.style.height !== h) pane.style.height = h;
   }
 
   /** @private Populate the minimized one-line target summary. */

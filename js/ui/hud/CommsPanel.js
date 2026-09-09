@@ -117,8 +117,18 @@ function isFollowedInstruction(msg, satisfiedBeatIds) {
     && satisfiedBeatIds && satisfiedBeatIds.has(msg.onboardingBeatId));
 }
 
-/** localStorage key for the player's last Comms size step (persisted player step wins the default). */
-const COMMS_STEP_STORE_KEY = 'spacecowboy_comms_pane_step';
+/**
+ * localStorage key for the player's last Comms size step (a persisted player
+ * step wins the default). `_v2` (follow-up 2026-09-09, plan
+ * .kilo/plans/1788926404388-hud-followups-0909.md §1.13 — a ONE-TIME RESET):
+ * ladder reorder rev 3 introduced this persistence together with the `'line'`
+ * ladder default, but until 2026-09-09 `_applyCommsStep` read `this._chrome`
+ * from INSIDE PaneChrome's constructor callback (still null → 'normal'), so
+ * every boot sized the pane at 144 whatever the step said — "two lines in a
+ * four-line box". Any step a player cycled to while fighting that box must not
+ * outlive the fix; the old key is simply never read again.
+ */
+const COMMS_STEP_STORE_KEY = 'spacecowboy_comms_pane_step_v2';
 
 /**
  * Glass: ctor `glass` wins; else GestureHints.isGlass(); else detectGlass().
@@ -189,6 +199,8 @@ export class CommsPanel {
 
     /** @type {import('./PaneChrome.js').PaneChrome|null} 3-step size chrome */
     this._chrome = null;
+    /** @type {string|null} the last size step APPLIED (valid before `_chrome` exists — see `_currentStep`) */
+    this._commsStep = null;
 
     /** @type {number} Scroll offset for PageUp/PageDown review */
     this._scrollOffset = 0;
@@ -238,9 +250,11 @@ export class CommsPanel {
   /** @private */
   _build() {
     // --- Comms Panel (top-right — fixed size, UX-2 #11) ---
+    // Follow-up 2026-09-09 (§1.14): flush with the right arm — `right` is the
+    // ONE inset every other edge uses (HUD_EDGE_PX 16; was 10, 6 px outboard).
     this.panels.comms = this._createPanel('hud-comms-panel', {
       top: '10px',
-      right: '10px',
+      right: `${RAIL_GEOMETRY.HUD_EDGE_PX}px`,
       width: `${COMMS.PANE_WIDTH_PX}px`,
       height: `${COMMS.PANE_HEIGHT_PX}px`,
       overflowY: 'hidden',
@@ -312,7 +326,12 @@ export class CommsPanel {
       color: COMMS_COLOR_NORMAL,
       title: 'Comms size (7). Click to cycle line / normal / large',
       onStep: (step) => {
-        this._applyCommsStep();
+        // PaneChrome applies the initial step from INSIDE its constructor, so
+        // on that first call `this._chrome` is still null — the step MUST come
+        // from the callback (follow-up 2026-09-09 §1.13: reading `this._chrome`
+        // here fell back to 'normal' and sized every boot at 144 px while the
+        // badge said 'line' — "two lines in a four-line box").
+        this._applyCommsStep(step);
         if (this._commsStepReady) {
           try { localStorage.setItem(COMMS_STEP_STORE_KEY, step); } catch (_e) { /* private mode */ }
         }
@@ -400,7 +419,7 @@ export class CommsPanel {
       // live JS twin of the .comms-flash class removed in the Phase 1 pass.
       this.panels.comms.style.borderColor = 'rgba(255,68,68,0.7)';
       if (this._commsFlashTimer <= 0) {
-        const step = this._chrome ? this._chrome.step : 'normal';
+        const step = this._currentStep();
         this.panels.comms.style.borderColor = (step === 'large')
           ? 'rgba(0, 255, 255, 1.0)' : 'rgba(0,255,136,0.3)';
       }
@@ -446,9 +465,27 @@ export class CommsPanel {
     if (this._chrome) this._chrome.cycle();
   }
 
-  /** @private Resolve the pane/log height for the current step. */
-  _applyCommsStep() {
-    const step = this._chrome ? this._chrome.step : 'normal';
+  /**
+   * @private The current size step: PaneChrome's once it exists (the state
+   * owner), else the last step APPLIED (`_applyCommsStep` records it — right
+   * while PaneChrome is still constructing and `this._chrome` is null), else
+   * 'normal'.
+   */
+  _currentStep() {
+    if (this._chrome && COMMS_STEPS.includes(this._chrome.step)) return this._chrome.step;
+    if (this._commsStep && COMMS_STEPS.includes(this._commsStep)) return this._commsStep;
+    return 'normal';
+  }
+
+  /**
+   * @private Resolve the pane/log height for the current step.
+   * @param {string} [stepArg] the step PaneChrome just applied (its `onStep`
+   *   argument) — passed explicitly because the initial call arrives from
+   *   inside PaneChrome's constructor, before `this._chrome` exists.
+   */
+  _applyCommsStep(stepArg) {
+    const step = COMMS_STEPS.includes(stepArg) ? stepArg : this._currentStep();
+    this._commsStep = step;
     let h;
     if (step === 'line') h = COMMS.PANE_HEIGHT_MIN_PX;
     else if (step === 'large') h = COMMS.PANE_EXPAND_HEIGHT_PX;
@@ -519,7 +556,7 @@ export class CommsPanel {
 
   /** @private Visible line count for the current size step. */
   _visibleLineCount() {
-    const step = this._chrome ? this._chrome.step : 'normal';
+    const step = this._currentStep();
     if (step === 'line') return COMMS.PANE_LINES_MIN;
     if (step === 'large') return COMMS.PANE_LINES_EXPANDED;
     return COMMS.PANE_LINES_DEFAULT;
@@ -589,7 +626,7 @@ export class CommsPanel {
     }
 
     // Flash border for critical messages (respect enlarged-state cyan border)
-    const step = this._chrome ? this._chrome.step : 'normal';
+    const step = this._currentStep();
     if (this._commsFlashTimer > 0) {
       this.panels.comms.style.borderColor = 'rgba(255,68,68,0.7)';
     } else if (step !== 'large') {

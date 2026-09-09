@@ -8,6 +8,11 @@
  * Expanded state is session-only (never persisted). J key still opens the
  * full skill-tree overlay. Header hit is 44 px on glass.
  *
+ * Follow-up 2026-09-09 (plan 1788926404388-hud-followups-0909.md §1.7): the
+ * wrapper is BUILT with `data-density-hidden` (D3 — hidden by default on every
+ * floor, like the Override gag); only the `experimental` rung's adapter (the
+ * last `+`, FloorMask D5 memory) clears it.
+ *
  * Delegation 1 (2026-05-31) onboarding rebind: open-key migrated from K → J
  * because bare K was freed by the broader hotkey overhaul (Forge moved to F4).
  *
@@ -801,6 +806,16 @@ export class SkillsPane {
         const wrapper = doc.createElement('div');
         wrapper.id = DISCOVERIES_WRAPPER_ID;
         if (wrapper.setAttribute) {
+            // Hidden by default on EVERY floor (D3, as OverridePane.js does at
+            // build): `experimental` is the ladder's index 0 — every
+            // DEFAULT_ROOMS row says 'gone' and the shipped cockpit has no
+            // chip. Without this bit the wrapper showed through the translucent
+            // MENU on a fresh boot (HUD.hide() hides only `this.panels`) and
+            // stayed up on F2 whenever the two-phase hide was dropped mid-glide
+            // (owner report 2026-09-09). The bit is written ONLY here and by the
+            // rung adapter — setVisible(true) / _applyInitialDisplay / the chip
+            // tap never touch it.
+            wrapper.setAttribute('data-density-hidden', '');
             if (this._glass) wrapper.setAttribute('data-glass', '');
         }
 

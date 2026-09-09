@@ -29,7 +29,7 @@ import { captureNetSystem } from '../../entities/CaptureNet.js';
 import { PaneChrome } from './PaneChrome.js';
 import { GestureHints } from './GestureHints.js';
 import { pressKey } from '../../core/KeyDispatch.js';
-import { RAIL_GEOMETRY, HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
+import { RAIL_GEOMETRY, HUD_EDGE_PX, MOTHER_PANE_WIDTH_PX, ARMS_PANE_WIDTH_PX, LEFT_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 import { BOX_OUTLINE, BOX_OUTLINE_OFFSET } from '../RailIndicator.js';
 import { TouchControls } from '../TouchControls.js';
 
@@ -564,6 +564,10 @@ export class StatusPanel {
   /** @private */
   _build() {
     // --- Left-column flex container for stacked panels ---
+    // Follow-up 2026-09-09 (plan 1788926404388-hud-followups-0909.md §1.15 —
+    // the inverted U): the column is as wide as its widest child (Mother 400);
+    // `align-items: flex-start` hugs the 350 Daughters and the 280 riders to
+    // the LEFT edge, so the U's outer edge stays straight at HUD_EDGE_PX.
     this._leftColumn = document.createElement('div');
     this._leftColumn.id = 'hud-left-column';
     Object.assign(this._leftColumn.style, {
@@ -572,8 +576,9 @@ export class StatusPanel {
       left: `max(${HUD_EDGE_PX}px, env(safe-area-inset-left))`,
       display: 'flex',
       flexDirection: 'column',
+      alignItems: 'flex-start',
       gap: '10px',           // Pane-to-pane vertical gap — keep in sync with right column (HUD.js)
-      width: `${HUD_COLUMN_WIDTH_PX}px`,
+      width: `${LEFT_COLUMN_WIDTH_PX}px`,
       maxHeight: 'calc(100vh - 60px)',
       overflowY: 'auto',
       zIndex: '10',
@@ -640,7 +645,10 @@ export class StatusPanel {
     // NOTE: the inner propulsion/energy blocks intentionally KEEP all of the
     // element IDs, data-hud-group values, and the data-activate-key='A' that the
     // updaters and tests key off — only their parent box is now the MOTHER pane.
-    this.panels.mother = this._createPanel('hud-mother-panel', {});
+    // Follow-up 2026-09-09 (§1.15): Mother is the left arm's widest pane (400 —
+    // the callout digest and the MEMO slot stop wrapping); inline width beats
+    // the .hud-panel 280 base.
+    this.panels.mother = this._createPanel('hud-mother-panel', { width: `${MOTHER_PANE_WIDTH_PX}px` });
     this.panels.mother.className = 'hud-panel hud-panel-expandable';
     this.panels.mother.innerHTML = this._motherMarkup();
     this._leftColumn.appendChild(this.panels.mother);
@@ -665,7 +673,9 @@ export class StatusPanel {
     if (this.panels.power) this.panels.power.classList.add('power-collapsed');
 
     // --- V5 Crossbow Arm Status Panel (left side, bottom) — DAUGHTERS pane ---
-    this.panels.arms = this._createPanel('hud-arms-panel', {});
+    // Follow-up 2026-09-09 (§1.15): 350 wide (ARMS_PANE_WIDTH_PX), hugging the
+    // left edge under the 400 Mother (the column is align-items: flex-start).
+    this.panels.arms = this._createPanel('hud-arms-panel', { width: `${ARMS_PANE_WIDTH_PX}px` });
     this.panels.arms.className = 'hud-panel hud-panel-expandable';
     this.panels.arms.dataset.hudGroup = 'arms-group';
     this.panels.arms.dataset.activateKey = 'D';
