@@ -31,8 +31,17 @@
  *
  * The fake-DOM probe: SHOWN = `el.getClientRects().length > 0` — the same
  * probe the OverridePane rung uses, which a stub document can answer without
- * layout. Order = `getBoundingClientRect().top` (NaN / a throw reads as 0;
- * ties keep DOM order), then the LAST ids move to the end.
+ * layout — AND something painted: the element's own box is non-empty, or a
+ * shown descendant within three levels has a non-empty box (a zero-size
+ * STATIC wrapper whose content is `position: fixed` children — the
+ * DISCOVERIES chip's `#hud-discoveries`, the city-labels layer — paints
+ * through its children; one with nothing painted below it is not a target:
+ * no slot, no clack for nothing). Order = the VISUAL top: the element's own
+ * `getBoundingClientRect().top` when its box is non-empty, else the topmost
+ * edge its descendants paint (follow-up 2026-09-09: the wrapper's own 0 × 0
+ * rect at the top of the overlay sorted the bottom-left chip FIRST). NaN / a
+ * throw / an unmeasurable box reads as 0 and keeps the element; ties keep DOM
+ * order; then the LAST ids move to the end.
  *
  * The detached-timer law (OverridePane, the 2026-09-07 browser witness): the
  * injected `setTimeout` / `clearTimeout` are always CALLED DETACHED (`const f
@@ -136,16 +145,71 @@ function _isShown(el) {
   }
 }
 
-/** @private The sort key: the element's top edge; NaN / a throw / no method ⇒ 0. */
-function _topOf(el) {
-  if (!el || typeof el.getBoundingClientRect !== 'function') return 0;
+/**
+ * @private The element's own box, read once and never throwing:
+ * `{ ok, top, nonEmpty }` — `ok` false when there is no method / a throw / no
+ * rect; `top` finite or null; `nonEmpty` when width and height are both > 0
+ * (a non-finite dimension reads as "cannot tell", i.e. nonEmpty null).
+ */
+function _ownBox(el) {
+  if (!el || typeof el.getBoundingClientRect !== 'function') return { ok: false, top: null, nonEmpty: null };
   try {
     const r = el.getBoundingClientRect();
-    const t = r ? Number(r.top) : NaN;
-    return Number.isFinite(t) ? t : 0;
+    if (!r) return { ok: false, top: null, nonEmpty: null };
+    const t = Number(r.top);
+    const w = Number(r.width);
+    const h = Number(r.height);
+    const measurable = Number.isFinite(w) && Number.isFinite(h);
+    return { ok: true, top: Number.isFinite(t) ? t : null, nonEmpty: measurable ? (w > 0 && h > 0) : null };
   } catch (_e) {
-    return 0;
+    return { ok: false, top: null, nonEmpty: null };
   }
+}
+
+/** @private How deep below a zero-size wrapper the painting descendant may sit (wrapper > chip = 1). */
+const PAINT_WALK_DEPTH = 3;
+
+/**
+ * @private The topmost edge painted BELOW `el`: the minimum `top` over its
+ * SHOWN descendants with a non-empty box, walking `children` to
+ * PAINT_WALK_DEPTH (a display-none subtree paints nothing and is not
+ * entered; a child whose rect throws is not a candidate but its children
+ * still are). Null when nothing below paints. Never throws.
+ */
+function _paintTopBelow(el, depth) {
+  if (depth > PAINT_WALK_DEPTH) return null;
+  const kids = el && el.children;
+  if (!kids || typeof kids.length !== 'number') return null;
+  let best = null;
+  for (let i = 0; i < kids.length; i++) {
+    const kid = kids[i];
+    if (!_isShown(kid)) continue;
+    const box = _ownBox(kid);
+    let t = null;
+    if (box.ok && box.nonEmpty === true) t = box.top != null ? box.top : 0;
+    else t = _paintTopBelow(kid, depth + 1);
+    if (t != null && (best == null || t < best)) best = t;
+  }
+  return best;
+}
+
+/**
+ * @private The sort key = the VISUAL top. An element with a non-empty box of
+ * its own sorts by that box's top (NaN ⇒ 0). A zero-size STATIC wrapper
+ * (the DISCOVERIES chip's `#hud-discoveries`, the city-labels layer — their
+ * content is `position: fixed` / `absolute` children, so the wrapper's own
+ * rect sits at 0 × 0 at the top of the overlay) sorts by the topmost edge
+ * its descendants paint; when NOTHING below it paints either, it is not a
+ * target at all (null): there is nothing to darken, so no slot and no clack
+ * for it. A box that cannot be measured (no method / throw / non-finite
+ * size) keeps the element with key `top` or 0 — never drop what cannot be
+ * seen to be empty.
+ * @returns {number|null}
+ */
+function _sortKey(el) {
+  const box = _ownBox(el);
+  if (!box.ok || box.nonEmpty !== false) return box.top != null ? box.top : 0;
+  return _paintTopBelow(el, 1);
 }
 
 /** @private The element's id as a string ('' when absent). */
@@ -270,8 +334,9 @@ export class HudReboot {
 
   /**
    * @private The targets: the overlay's children + the chrome ids, de-duplicated
-   * (first-seen order), minus the skip ids, SHOWN only, sorted by top (stable),
-   * then the LAST ids moved to the end in `REBOOT_LAST_IDS` order.
+   * (first-seen order), minus the skip ids, SHOWN only (client rects, and
+   * something painted — see `_sortKey`), sorted by VISUAL top (stable), then
+   * the LAST ids moved to the end in `REBOOT_LAST_IDS` order.
    * @returns {object[]}
    */
   _collect() {
@@ -297,8 +362,14 @@ export class HudReboot {
     }
     const skip = new Set(REBOOT_SKIP_IDS);
     const shown = raw.filter((el) => !skip.has(_idOf(el)) && _isShown(el));
-    // Stable sort by top: decorate with the DOM index so ties keep their order.
-    const keyed = shown.map((el, i) => ({ el, i, top: _topOf(el) }));
+    // Stable sort by the visual top: decorate with the DOM index so ties keep
+    // their order; a null key (a shown wrapper with nothing painted below it)
+    // is not a target.
+    const keyed = [];
+    shown.forEach((el, i) => {
+      const top = _sortKey(el);
+      if (top != null) keyed.push({ el, i, top });
+    });
     keyed.sort((a, b) => (a.top - b.top) || (a.i - b.i));
     const ordered = keyed.map((k) => k.el);
     const lastIds = REBOOT_LAST_IDS;
