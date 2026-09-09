@@ -48,11 +48,13 @@ const CROSS_RIDE_MS = 550;
  * Wave 5 Session N (plan "Session N — Onboarding for glass + intro", item 2;
  * 08-workbench §8 Q6 "the intro ride ends on the ship close-up for mission
  * 1"): the INTRO RIDE's duration — one continuous descent from the TOP floor
- * to the workbench at the first engage of a first-time player's new game.
- * Longer than a crossing (550) because it spans the whole ladder and is the
- * one ride that is watched, not commanded; short enough that the workbench's
- * first beat (the MAP pane) is on screen within three seconds of START. A
- * controller ride number like CROSS_RIDE_MS (01-numbers "Session N").
+ * to the workbench at the first engage of a New Game entered from the menu
+ * (every one since 2026-09-09; a first-time player's only through Session
+ * N.5). Longer than a crossing (550) because it spans the whole ladder and is
+ * the one ride that is watched, not commanded; short enough that the
+ * workbench's first beat (the MAP pane, then) was on screen within three
+ * seconds of START. A controller ride number like CROSS_RIDE_MS (01-numbers
+ * "Session N").
  */
 export const INTRO_RIDE_MS = 2400;
 
@@ -72,13 +74,15 @@ export const INTRO_PULLBACK_MS = 800;
 const WORKBENCH_FLOOR = 1;
 
 /**
- * Session N.5 (owner 2026-09-07): where the FIRST-RUN intro ride LANDS — the
- * flying floor, not the workbench. "First make me care": a new player starts
- * where the game is played, with the TOUCH MAP checklist beside them; the
- * workbench (its 28 callouts, the REFIT shop, the specs) waits until the
- * first mission break rides them down (WORKBENCH_STOP opens REFIT itself,
- * which ticks the checklist's REFIT row without a swipe). An id, never a
- * name (FloorContract owns the player labels).
+ * Session N.5 (owner 2026-09-07): where the intro ride LANDS — the flying
+ * floor, not the workbench (the ride was first-run only through Session N.5;
+ * since 2026-09-09 every New Game entered from the menu rides it). "First
+ * make me care": a new player starts where the game is played, with the
+ * TOUCH MAP checklist beside them (the checklist card left in Session O for
+ * the 3 s GestureSplash); the workbench (its 28 callouts, the REFIT shop, the
+ * specs) waits until the first mission break rides them down (WORKBENCH_STOP
+ * opens REFIT itself). An id, never a name (FloorContract owns the player
+ * labels).
  */
 const INTRO_LANDING_FLOOR = 2;
 
@@ -299,9 +303,11 @@ export class LadderController {
     this._floorApplied = null;
     /**
      * Session N: the armed intro ride's duration (ms) — set by armIntroRide()
-     * before the first engage of a first-time player's new game, consumed by
-     * _engage() (the ride starts the moment the ladder owns the screen),
-     * cleared by disarmIntroRide() (a CONTINUE restores a saved view instead).
+     * before the first engage of a New Game entered from the menu (every one
+     * since 2026-09-09, owner "fly-by every time"; first-run only through
+     * Session N.5), consumed by _engage() (the ride starts the moment the
+     * ladder owns the screen), cleared by disarmIntroRide() (a CONTINUE
+     * restores a saved view instead).
      */
     this._introPending = null;
     /**
@@ -935,20 +941,23 @@ export class LadderController {
 
   /**
    * Wave 5 Session N — the INTRO RIDE (plan item 2; 08-workbench §8 Q6). The
-   * hub calls this right after resetView() on GAME_RESET when the run is a
-   * first-time player's NEW game (the MAP store's first-run bit; never under
-   * the ?shot harness unless asked): the core is PLACED (a cut while hidden —
-   * the same invisible path as restoreView) on the TOP floor of the contract,
-   * and the ride to the FLYING floor (INTRO_LANDING_FLOOR — owner 2026-09-07;
-   * it landed on the workbench through Session N) is ARMED — `_engage` starts
-   * it the moment the ladder owns the screen, at INTRO_RIDE_MS (or `rideMs`),
-   * through the same `_apply` → `_startRide` path as every ride (fidelity,
-   * the floor content, the mask, both rails), silently (no clunk: it is
-   * watched, not commanded). Under REDUCED MOTION (`reducedMotion: true`) the
-   * core is placed on the landing floor itself and nothing is armed — the
-   * first frame IS the flying floor. Refused (false, nothing armed) while
-   * engaged in gameplay, when the contract has no top / landing floor, or
-   * when the placement fails.
+   * hub calls this right after resetView() on GAME_RESET for EVERY New Game
+   * entered from the MENU (owner 2026-09-09, "fly-by every time" — through
+   * Session N.5 only a first-time player's new game rode it; the harness law
+   * is unchanged: never under the ?shot harness unless asked with &intro=1;
+   * the hub's once-per-menu-departure latch keeps a GAMEOVER retry from
+   * replaying it, and a CONTINUE disarms it): the core is PLACED (a cut while
+   * hidden — the same invisible path as restoreView) on the TOP floor of the
+   * contract, and the ride to the FLYING floor (INTRO_LANDING_FLOOR — owner
+   * 2026-09-07; it landed on the workbench through Session N) is ARMED —
+   * `_engage` starts it the moment the ladder owns the screen, at
+   * INTRO_RIDE_MS (or `rideMs`), through the same `_apply` → `_startRide`
+   * path as every ride (fidelity, the floor content, the mask, both rails),
+   * silently (no clunk: it is watched, not commanded). Under REDUCED MOTION
+   * (`reducedMotion: true`) the core is placed on the landing floor itself and
+   * nothing is armed — the first frame IS the flying floor. Refused (false,
+   * nothing armed) while engaged in gameplay, when the contract has no top /
+   * landing floor, or when the placement fails.
    * @param {{ rideMs?: number, reducedMotion?: boolean }} [arg]
    * @returns {boolean} whether the intro was armed (or, reduced, placed)
    */

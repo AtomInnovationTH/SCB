@@ -1851,9 +1851,10 @@ export const Constants = {
     // 2026-08-26 — the SHORT lasso-catch cut (owner: "the capture deserves a
     // tasteful, SHORT presentation — never a beat reel"). A single continuous
     // ~3 s catch-framed shot from wrap contact through the reel escort,
-    // S4 grammar (catch framed, ship as context), letterboxed only while it
-    // runs, released before digestion, aborted instantly by ANY player input,
-    // skipped under prefers-reduced-motion and while any key is already held.
+    // S4 grammar (catch framed, ship as context), the HUD dimmed only while it
+    // runs (the black letterbox bars left 2026-09-09), released before
+    // digestion, aborted instantly by ANY player input, skipped under
+    // prefers-reduced-motion and while any key is already held.
     // Rides NET_CEREMONY (the cinema-mode HUD contract); OFF = post-4988797
     // player-cam-only behaviour, byte-identical.
     LASSO_CATCH_CUT:           true,

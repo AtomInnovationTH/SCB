@@ -108,6 +108,19 @@ export class Starfield {
     // the shipped shell is world-fixed at the origin and update() never touches
     // the group transform. See setFollowCamera().
     this._followCamera = false;
+    // Constellation figures — TWO bits, one effective flag (2026-09-09, plan
+    // 1788926404388 §1.19): `_constellationsVisible` is the player's INTENT
+    // (the 6 key / the Sky-labels rung / the F5 SDA prior all read and write
+    // it through setConstellationsVisible / isConstellationsVisible — three
+    // prior-based writers already share it); `_menuSuppressed` is the hub's
+    // MENU MASK (setMenuSuppressed — the figures distract from the hero
+    // mother). Effective `obj.visible` = intent && !mask, applied by
+    // _applyConstellationVisibility() from both setters. A mask, not a fourth
+    // prior: a prior-based writer would race the disengage restore across the
+    // MENU frame; a mask composes. Both default false = born-hidden objects
+    // (Session O D11) until main.js boot-applies a stored intent.
+    this._constellationsVisible = false;
+    this._menuSuppressed = false;
     // Reusable temporaries for the shooting-star update (no per-frame alloc).
     this._tmpMeteorA = new THREE.Vector3();
     this._tmpMeteorB = new THREE.Vector3();
@@ -744,8 +757,10 @@ export class Starfield {
       // effective default is false, so every figure is BORN hidden and the very
       // first frame is already clean. That includes the MENU backdrop, which is
       // this same live sky seen through the transparent menu canvas (main.js
-      // backdrop-reveal note ~:2756): with born-hidden objects no separate menu
-      // wiring is needed. main.js restores a stored `true` (veteran) at boot.
+      // backdrop-reveal note). main.js restores a stored `true` (veteran) at
+      // boot — and since 2026-09-09 ALSO masks the figures while the game
+      // state is MENU (setMenuSuppressed), so a veteran's ON setting no longer
+      // paints figures over the hero mother.
       lineObj.visible = false;
       this.group.add(lineObj);
       this._constellationObjects.push(lineObj);
@@ -931,24 +946,28 @@ export class Starfield {
 
   /**
    * Show/hide the constellation outlines + name labels (hotkey revamp
-   * 2026-06-14 — the 6 key). Leaves the star field untouched.
+   * 2026-06-14 — the 6 key). Leaves the star field untouched. This is the
+   * player's INTENT bit; the objects' `visible` also honours the MENU mask
+   * (setMenuSuppressed) — under the mask a `true` here is remembered, not
+   * shown, and appears the moment the mask lifts.
    * @param {boolean} visible
    */
   setConstellationsVisible(visible) {
     this._constellationsVisible = !!visible;
-    for (const obj of (this._constellationObjects || [])) {
-      obj.visible = this._constellationsVisible;
-    }
+    this._applyConstellationVisibility();
   }
 
   /** Toggle constellation outlines + labels (6 key).
-   *  @returns {boolean} the NEW visibility state (for reactive comms feedback). */
+   *  @returns {boolean} the NEW visibility state — the INTENT (for reactive
+   *  comms feedback), whether or not the MENU mask is currently hiding it. */
   toggleConstellations() {
     this.setConstellationsVisible(!(this._constellationsVisible ?? false));
     return this._constellationsVisible;
   }
 
-  /** @returns {boolean} whether constellation outlines + labels are visible.
+  /** @returns {boolean} whether constellation outlines + labels are visible —
+   *  the player's INTENT (never the menu mask's effect), so the 6 key, the
+   *  Sky-labels rung prior and the F5 SDA prior read the same bit they write.
    *  Session O (plan D11, owner 2026-09-07): the effective default is
    *  OFF (false) until the player first toggles — the figures are born
    *  hidden so the first frame, incl. the menu backdrop (same live sky),
@@ -956,6 +975,40 @@ export class Starfield {
    *  construction. */
   isConstellationsVisible() {
     return this._constellationsVisible ?? false;
+  }
+
+  /**
+   * The MENU mask (2026-09-09, owner: "constellation figures must not show on
+   * the MENU — they distract from the hero mother"): while `true` every
+   * figure object is hidden regardless of intent; `false` restores whatever
+   * the intent says. Written by the hub (main.js) from the game state — MENU
+   * only — once at wiring and on every GAME_STATE_CHANGE; never by a key, a
+   * rung or the F5 chart, so it cannot race their capture/restore priors.
+   * Idempotent; a no-op re-apply is cheap (8 figures + 8 sprites).
+   * @param {boolean} suppressed
+   */
+  setMenuSuppressed(suppressed) {
+    this._menuSuppressed = !!suppressed;
+    this._applyConstellationVisibility();
+  }
+
+  /** @returns {boolean} whether the MENU mask is currently hiding the figures. */
+  isMenuSuppressed() {
+    return !!this._menuSuppressed;
+  }
+
+  /**
+   * The ONE writer of the figure objects' `visible`: intent AND NOT mask.
+   * Both setters route here so the two bits can never disagree with the scene
+   * objects. The label opacity fade in update() is opacity only and reads
+   * nothing here.
+   * @private
+   */
+  _applyConstellationVisibility() {
+    const on = !!this._constellationsVisible && !this._menuSuppressed;
+    for (const obj of (this._constellationObjects || [])) {
+      obj.visible = on;
+    }
   }
 
   /**
@@ -1082,7 +1135,8 @@ export class Starfield {
 
     // Match the in-shader limb fade on the name sprites so a label does not
     // hang crisply over the airglow band after its lines have dissolved.
-    // Opacity only — `visible` stays owned by setConstellationsVisible().
+    // Opacity only — `visible` stays owned by _applyConstellationVisibility()
+    // (intent && !menu mask; see setConstellationsVisible / setMenuSuppressed).
     if (camera && this._constellationLabels && this._constellationLabels.length) {
       const base = Constants.CONSTELLATION_LABEL_OPACITY;
       for (const label of this._constellationLabels) {

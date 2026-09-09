@@ -526,9 +526,12 @@ export class HUD {
     // panels + comms + distance markers overlapped the envelop/cinch action
     // (the dossier pane sat ON the bag through BRAKE_ENVELOP). While the
     // camera owns the screen (NET_CINEMATIC_ENTERED → EXITED), ghost the HUD
-    // children and slide in letterbox bars. The pause overlay is excluded
-    // (pausing mid-ceremony must keep a readable menu); teaching toasts live
-    // on document.body and are untouched by construction.
+    // children. The pause overlay is excluded (pausing mid-ceremony must keep
+    // a readable menu); teaching toasts live on document.body and are
+    // untouched by construction. The black letterbox bars that used to slide
+    // in with the ghost (two `.net-cinema-bar` divs on body) were REMOVED
+    // 2026-09-09 (owner: "remove the black bars") — the cinema is the camera
+    // cut + this dim + the CeremonyTimeScale slow-mo; nothing else changed.
     if (!document.getElementById('net-cinema-style')) {
       const cinemaStyle = document.createElement('style');
       cinemaStyle.id = 'net-cinema-style';
@@ -537,27 +540,8 @@ export class HUD {
         body.net-cinema #hud-overlay > *:not(#hud-pause-overlay) {
           opacity: 0.10;
         }
-        .net-cinema-bar {
-          position: fixed; left: 0; width: 100%; height: 0;
-          background: #000; z-index: 9; pointer-events: none;
-          transition: height 700ms cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        #net-cinema-bar-top { top: 0; }
-        #net-cinema-bar-bottom { bottom: 0; }
-        body.net-cinema #net-cinema-bar-top,
-        body.net-cinema #net-cinema-bar-bottom { height: 7vh; }
       `;
       document.head.appendChild(cinemaStyle);
-    }
-    if (!document.getElementById('net-cinema-bar-top')) {
-      const barTop = document.createElement('div');
-      barTop.id = 'net-cinema-bar-top';
-      barTop.className = 'net-cinema-bar';
-      const barBottom = document.createElement('div');
-      barBottom.id = 'net-cinema-bar-bottom';
-      barBottom.className = 'net-cinema-bar';
-      document.body.appendChild(barTop);
-      document.body.appendChild(barBottom);
     }
 
     // --- Inject catch-effect CSS animations (Phase 1C) + detach flash (Phase 6) + codex/weather (Phase 7) ---
@@ -1290,7 +1274,8 @@ export class HUD {
 
   /** @private */
   _setupEventListeners() {
-    // Net-ceremony cinema mode: dim the HUD + letterbox while the ceremony
+    // Net-ceremony cinema mode: dim the HUD (the `body.net-cinema` ghost rule
+    // in _build; no letterbox bars since 2026-09-09) while the ceremony
     // camera owns the screen. ENTERED/EXITED are strictly paired by
     // CameraSystem (every exit route — beats done, miss truncation, skip,
     // abort-on-view-change — emits EXITED), and GAME_RESET clears the class

@@ -727,25 +727,48 @@ let copilotVoice = null;
 let touchMapStore = null;
 let gestureSplash = null;
 /**
- * Session N: the ?shot harness boots a fresh context every run, so a first-run
- * surface (the splash, the intro ride) would land in EVERY gate picture;
- * the harness suppresses both unless the run asks for them with `&intro=1`
- * (read once at boot beside the other URL flags — a dev-only override, never
- * a `shot` reader: DevShotGate stays the ONE of those).
+ * Session N: the ?shot harness boots a fresh context every run, so the splash
+ * (a first-run surface) and the intro ride (every New Game since 2026-09-09)
+ * would land in EVERY gate picture; the harness suppresses both unless the
+ * run asks for them with `&intro=1` (read once at boot beside the other URL
+ * flags — a dev-only override, never a `shot` reader: DevShotGate stays the
+ * ONE of those).
  */
 let _introForced = false;
 /**
- * Session N review: the intro flies ONCE per boot — a GAMEOVER retry's GAME_RESET
- * in the same session must not replay the descent (its first engage may be an
- * APPROACH frame); set when armed, cleared by a CONTINUE's disarm (that player
- * never saw the ride).
+ * Session N review, re-aimed 2026-09-09 (owner: "fly-by every time"): the
+ * intro ride flies ONCE PER MENU DEPARTURE — set when armed on GAME_RESET,
+ * re-opened by the GAME_STATE_CHANGE → MENU listener inside the ladder gate
+ * (every New Game entered from the menu flies), and otherwise left CLOSED: a
+ * GAMEOVER retry's GAME_RESET in the same session (no MENU visit) must not
+ * replay the descent (its first engage may be an APPROACH frame), and a
+ * CONTINUE's disarm (PERSISTENCE_LOADED) leaves it closed too — that run's
+ * retry is a retry, not a new game; the next MENU visit re-opens it.
  */
 let _introFlown = false;
-/** Session N: is this boot a first-time player's run? (the MAP store's bit, under the harness policy above) */
+/**
+ * Session N: is this boot a FIRST-TIME player's run? The MAP store's first-run
+ * bit under the harness policy (the same policy _introRideAllowed applies —
+ * that helper reads no first-run bit). Since 2026-09-09 this gates ONLY the
+ * GestureSplash (the retired MAP checklist's slot) — the intro ride no longer
+ * reads it (see _introRideAllowed below).
+ */
 function _introFirstRun() {
   if (!touchMapStore || typeof touchMapStore.isFirstRun !== 'function') return false;
   if (devShotGate.requested && !_introForced) return false;
   try { return !!touchMapStore.isFirstRun(); } catch (_e) { return false; }
+}
+/**
+ * 2026-09-09 (owner: "fly-by every time" — the menu→game fly-by had become a
+ * first-run-only surface once the splash was dismissed): may this boot fly the
+ * intro ride at all? The ONE harness policy, shared with _introFirstRun: the
+ * ?shot harness boots a fresh context every run, so the ride would land in
+ * EVERY gate picture — suppressed unless the run asks with `&intro=1`
+ * (_introForced; DevShotGate stays the ONE `shot` reader). No first-run
+ * read here: every New Game entered from the menu flies.
+ */
+function _introRideAllowed() {
+  return !(devShotGate.requested && !_introForced);
 }
 /** Session N: the a11y preference — the intro is PLACED, not ridden, when the player asked for reduced motion. */
 function _prefersReducedMotion() {
@@ -1067,8 +1090,10 @@ async function init() {
         Constants.LADDER.ENABLED = false;
       }
     }
-    // Session N: `&intro=1` lets a ?shot harness run see the first-run intro
-    // ride + MAP pane (suppressed under the harness otherwise — see _introFirstRun).
+    // Session N: `&intro=1` lets a ?shot harness run see the intro ride (every
+    // New Game from the menu since 2026-09-09) and the first-run GestureSplash
+    // (both suppressed under the harness otherwise — see _introRideAllowed /
+    // _introFirstRun).
     _introForced = urlParams.get('intro') === '1';
     // Guidance cleanup (Phase 4): ?guidanceLog=1 enables dev-only guidance
     // telemetry (prompt→action latency, contradiction + overlap counts).
@@ -1144,12 +1169,32 @@ async function init() {
   // default and are REMEMBERED. The objects are born hidden inside Starfield,
   // so the very first frame is already clean — including the MENU backdrop,
   // which is this same live sky seen through the transparent menu canvas
-  // (backdrop-reveal note below, ~:2756): with born-hidden objects NO separate
-  // menu wiring is needed. A stored `true` restores the figures for a veteran
-  // who turned them on; a fresh profile stays off. Global by design — the one
-  // Session O change that applies to the menu and `?ladder=0` too (plan §9).
+  // (backdrop-reveal note below). A stored `true` restores the figures for a
+  // veteran who turned them on; a fresh profile stays off. Global by design —
+  // the one Session O change that applies to the menu and `?ladder=0` too
+  // (plan §9). The setting owns the RESTING state (intent).
   if (starfield && settingsManager.getConstellations()) {
     starfield.setConstellationsVisible(true);
+  }
+  // 2026-09-09 (owner: "constellation figures must not show on the MENU —
+  // they distract from the hero mother"; plan 1788926404388 §1.19-20): the
+  // MENU MASK. A veteran's stored `true` above used to paint the figures over
+  // the hero mother through the transparent menu. Starfield's second bit
+  // (`setMenuSuppressed`) hides the objects while the game state is MENU and
+  // leaves the INTENT untouched — so the 6 key, the Sky-labels rung prior and
+  // the F5 SDA prior (three writers already sharing the one intent bit with
+  // capture/restore priors) cannot race it: a mask composes, a fourth prior
+  // would not. Applied once from the current state (the boot menu — no
+  // GAME_STATE_CHANGE fires for the initial MENU) and then on every
+  // GAME_STATE_CHANGE (payload `{ from, to }`, GameFlowManager.transitionToState).
+  // MENU only: SHOP / BRIEFING / PAUSED / the end screens are not the hero
+  // view. OUTSIDE the ladder gate on purpose — the menu is universal, so a
+  // `?ladder=0` boot gets the same clean menu.
+  if (starfield && typeof starfield.setMenuSuppressed === 'function') {
+    starfield.setMenuSuppressed(gameState.currentState === GameStates.MENU);
+    eventBus.on(Events.GAME_STATE_CHANGE, ({ to } = {}) => {
+      starfield.setMenuSuppressed(to === GameStates.MENU);
+    });
   }
 
   // --- Sun Light (dynamic day/night) ---
@@ -2411,7 +2456,8 @@ async function init() {
     ladderViewStore = new LadderViewStore();
     // Session N: the MAP store — player-owned like the view store (its own
     // key, load in ctor, save on change, private-mode-safe); its first-run bit
-    // is the ONE signal for the intro ride below and the MAP pane.
+    // is the ONE signal for the GestureSplash (since 2026-09-09 no longer the
+    // intro ride's — every New Game from the menu flies, see GAME_RESET below).
     touchMapStore = new TouchMapStore();
     eventBus.on(Events.PERSISTENCE_GATHER, (saveData) => {
       if (!saveData || !ladderController) return;
@@ -2422,9 +2468,11 @@ async function init() {
       if (!ladderController) return;
       // Session N: a CONTINUE is not a new game — an intro ride armed by the
       // GAME_RESET that resetGame() emitted a moment ago is dropped here, and
-      // the saved view is restored as before.
+      // the saved view is restored as before. The `_introFlown` latch stays
+      // CLOSED (2026-09-09 — it used to re-open here): a GAMEOVER retry after
+      // a continue must not dive onto an APPROACH frame either; the MENU
+      // listener below is the ONE re-open.
       ladderController.disarmIntroRide();
-      _introFlown = false;
       const save = persistenceManager.peek();
       ladderController.restoreView(save ? save.ladder : null);
     });
@@ -2432,21 +2480,35 @@ async function init() {
       if (!ladderController) return;
       ladderController.resetView();
       // Session N (plan item 2), re-aimed Session N.5 + N.5b (owner 2026-09-07
-      // — "first make me care" / "you had great visuals from menu to f1"): a
-      // FIRST-TIME player's new game flies the intro FLYBY at the first
-      // engage — the silent DIVE from the top floor to the HULL (the shot),
-      // one breath, then the silent pull-back to the FLYING floor where the
-      // game starts, with the MAP pane's checklist beside it; the workbench
-      // (callouts, REFIT, specs) waits for the first WORKBENCH_STOP, whose
-      // refit open ticks the checklist's REFIT row. Player input mid-flyby
-      // cancels the rest of it. Reduced motion places the core on the landing
-      // floor instead (no ride). Veterans (the map done or skipped) and the
-      // ?shot harness (unless &intro=1) keep the shipped floor. A CONTINUE
-      // disarms this on PERSISTENCE_LOADED (above).
-      if (_introFirstRun() && !_introFlown) {
+      // — "first make me care" / "you had great visuals from menu to f1") and
+      // again 2026-09-09 (owner: "the menu→game fly-by is gone — fly-by every
+      // time"): EVERY New Game entered from the menu flies the intro FLYBY at
+      // the first engage — the silent DIVE from the top floor to the HULL
+      // (the shot), one breath, then the silent pull-back to the FLYING floor
+      // where the game starts; the workbench (callouts, REFIT, specs) waits
+      // for the first WORKBENCH_STOP. Player input mid-flyby cancels the rest
+      // of it. Reduced motion places the core on the landing floor instead
+      // (no ride). The ?shot harness (unless &intro=1) keeps the shipped
+      // floor (_introRideAllowed). The `_introFlown` latch keeps the Session N
+      // review law: a GAMEOVER retry's GAME_RESET in the same session (no
+      // MENU visit) never replays the descent onto an APPROACH frame — the
+      // latch re-opens only on the GAME_STATE_CHANGE → MENU below. A CONTINUE
+      // disarms this on PERSISTENCE_LOADED (above). The first-run bit
+      // (_introFirstRun) now gates only the GestureSplash.
+      if (_introRideAllowed() && !_introFlown) {
         ladderController.armIntroRide({ rideMs: INTRO_RIDE_MS, reducedMotion: _prefersReducedMotion() });
         _introFlown = true;
       }
+    });
+    // 2026-09-09 (owner: "fly-by every time"): the ONE re-open of the
+    // `_introFlown` latch — back on the MENU (a game over's MENU button, a
+    // pause quit; the boot menu needs none — the latch starts open), the
+    // next New Game flies again.
+    // Payload `{ from, to }` (GameFlowManager.transitionToState). MENU only:
+    // BRIEFING (a retry's route), SHOP, PAUSED and the end screens are not a
+    // menu departure. Inside the gate: a ?ladder=0 boot registers nothing.
+    eventBus.on(Events.GAME_STATE_CHANGE, ({ to } = {}) => {
+      if (to === GameStates.MENU) _introFlown = false;
     });
     // Wave 5 (Session H) — JOB A, the D5 room-memory WRITE GAP (03-plan
     // Session G FINDINGS (c)): a pane shown/hidden by its key (0/9/8, the

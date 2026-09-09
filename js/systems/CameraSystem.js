@@ -2311,7 +2311,8 @@ export class CameraSystem {
     // Cinema-dim contract (2026-08-25): announce that the ceremony cut is
     // actually LIVE on screen. Emitted here (not at NET_CEREMONY_START) so a
     // refused ceremony — no launcher, launch ceremony active, flag off —
-    // never dims the HUD. HUD.js listens and letterboxes/dims the overlay.
+    // never dims the HUD. HUD.js listens and dims the overlay (the black
+    // letterbox bars it also slid in left 2026-09-09; the events are unchanged).
     eventBus.emit(Events.NET_CINEMATIC_ENTERED, {
       armIndex: c.armIndex, podIndex: c.podIndex, isFirstEver,
     });
@@ -3041,7 +3042,7 @@ export class CameraSystem {
    * any-input abort alone could not protect that player). Entry is a hard cut
    * (direct view assignment, the ceremony idiom at _onNetCeremonyStart);
    * exit eases over EXIT_CUT_SMALL_S. NET_CINEMATIC_ENTERED/EXITED stay
-   * paired on every route so the HUD dim/letterbox contract holds.
+   * paired on every route so the HUD dim contract holds.
    *
    * Round 3 (2026-08-26): the attempt is factored out so a TRANSIENT
    * subject-sanity refusal (a ghost/out-of-range `_scenePosition` read, a
