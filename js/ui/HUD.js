@@ -1246,19 +1246,41 @@ export class HUD {
    * NavSphere reserved slot is gone (the orb is a footer chip). Keeps the
    * comms-resize settle and the maxHeight rewrite (viewport − top − footer).
    * Sets `top` before any un-hide (Task 9).
+   *
+   * Hotfix 2026-09-09 (owner: "tracked target is overlapping comms vertically"):
+   * the density layer's SHOW path parks the comms pane at max-height 0 for one
+   * frame (`data-density-entering`, stripped on the next rAF) and its HIDE path
+   * collapses it over DENSITY_MOTION_MS (`data-density-leaving`). FloorMask
+   * nulls the cache at the end of the floor apply — the same frame — so the
+   * next update() measured the 0-height placeholder (bottom = the pane's TOP)
+   * and cached it: the column sat 10 px under the comms top, over the comms
+   * pane, until the next resize / 7-key step / rung flip. The intro ride now
+   * runs on every New Game and its F1 → F2 pull-back shows comms through this
+   * path, so that was every game. Rule: a mid-phase box is never cached —
+   * entering keeps last frame's top (skip), leaving is followed frame by frame
+   * and cached only once it lands (hidden → display:none → bottom 0 → the
+   * column takes the comms slot, as before).
    * @private
    */
   _syncRightColumnTop() {
     if (!this._rightColumn || !this.panels.comms) return;
+    const comms = this.panels.comms;
+    const inPhase = (a) => !!(comms.hasAttribute && comms.hasAttribute(a));
+    if (inPhase('data-density-entering')) {
+      this._commsRectBottom = null;   // a 0-height placeholder — measure next frame
+      return;
+    }
+    const leaving = inPhase('data-density-leaving');
     if (this._commsResizeSettleAt != null) {
       const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
       if (now < this._commsResizeSettleAt) this._commsRectBottom = null;
       else this._commsResizeSettleAt = null;
     }
-    if (this._commsRectBottom == null) {
-      this._commsRectBottom = this.panels.comms.getBoundingClientRect().bottom;
+    if (this._commsRectBottom == null || leaving) {
+      this._commsRectBottom = comms.getBoundingClientRect().bottom;
     }
     const newTop = Math.round(this._commsRectBottom + 10);
+    if (leaving) this._commsRectBottom = null;   // mid-glide — never cache it
     if (this._lastRightColTop !== newTop) {
       this._rightColumn.style.top = newTop + 'px';
       this._rightColumn.style.maxHeight = `calc(100vh - ${newTop + (this._rightColBottomClearPx ?? 30)}px)`;
