@@ -73,6 +73,11 @@
  *     Constants tier label), FORMULA. Unlocked depth only, like the viewer.
  *   - `related` chips — click navigates the PANE to that entry (locked
  *     relateds show a LOCKED tag and navigate to the locked stub, viewer parity).
+ *   - the manual's WARNING (the FURNACE gag, plan 1788957399035 §1.24): an
+ *     entry carrying an authored `warning` prints it LAST, after RELATED, as
+ *     a steady THREAT-red box with a caps WARNING label — print, not a live
+ *     alarm (never pulses). Unlocked depth only; absent → nothing; the
+ *     `.library-empty` landing is untouched.
  *   - MAXIMIZE — the full-screen viewer on this entry through the injected
  *     `onMaximize` (main.js routes it over the EXACT CODEX_OPEN_ENTRY path
  *     every deep link rides today; never a fork).
@@ -836,6 +841,10 @@ export class LibraryPane {
     const specs = (entry && entry.unlocked) ? LibraryPane.specsFor(entry) : [];
     // The bridge line (Session D): hardware entries only, authored data.
     const note = LibraryPane.hardwareNote(entry);
+    // The manual's warning (plan 1788957399035 §1.24): authored data, read
+    // straight off the entry by _html; rides the struct key beside the note
+    // so a re-authored line repaints at once (symmetry with hardwareNote).
+    const warning = (entry && typeof entry.warning === 'string') ? entry.warning : '';
     // The photo shows only for the entry it was taken for (never a stale
     // frame under a newer entry); absent → the text header stands alone.
     const photo = (entry && this._photo && this._photo.id === entry.id) ? this._photo.url : null;
@@ -851,6 +860,7 @@ export class LibraryPane {
       this._via || '',
       unread,
       note || '',
+      warning,
       specs.map((s) => `${s.k}:${s.v}`).join('|'),
       related.map((r) => `${r.id}:${r.unlocked ? 1 : 0}`).join('|'),
     ].join('\u0001');
@@ -1157,6 +1167,21 @@ export class LibraryPane {
         );
       }
       parts.push('</div></div>');
+    }
+    // WARNING — the manual's authored notice (the FURNACE gag, plan
+    // 1788957399035 §1.24): a STEADY red box after RELATED, the foot of the
+    // page — print, not a live alarm (THREAT is the ink here; it never
+    // pulses). Unlocked depth only, and only when the data carries one
+    // (`e.warning`, flattened by CodexSystem._buildEntry); absent → nothing.
+    // The `.library-empty` landing is untouched (page one of the manual is
+    // the I-key viewer's first entry, not this drawer).
+    if (e.warning && !locked) {
+      parts.push(
+        `<div class="library-warning" style="margin-top:8px;padding:6px 8px;border:1px solid rgba(255,68,34,0.6);border-left:3px solid ${C.THREAT};background:rgba(255,68,34,0.08);border-radius:3px;color:${C.THREAT}">` +
+        '<span style="font-weight:bold;letter-spacing:0.14em;margin-right:8px">WARNING</span>' +
+        `${e.warning}` +
+        '</div>',
+      );
     }
     return parts.join('');
   }

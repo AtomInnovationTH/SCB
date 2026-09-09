@@ -195,6 +195,14 @@ export class CodexSystem {
       // pane renders it under its header). Absent → null, never a stub.
       hardwareNote: (typeof i.hardwareNote === 'string' && i.hardwareNote)
         ? interpolate(i.hardwareNote, Constants) : null,
+      // The manual's warning line (the FURNACE gag, plan 1788957399035 §1.D):
+      // an authored red-box notice both readers print at the foot of an
+      // UNLOCKED entry (the I-key viewer's page column, the F1 SPECS drawer).
+      // Data-authored under i18n beside hardwareNote; exactly one entry
+      // carries it today (welcome_cowboy — "page one of the manual").
+      // Absent → null, never a stub.
+      warning: (typeof i.warning === 'string' && i.warning)
+        ? interpolate(i.warning, Constants) : null,
       fullText: interpolate(i.fullText || '', Constants),
       realWorld: i.realWorld ? interpolate(i.realWorld, Constants) : null,
       formula: i.formula || null,

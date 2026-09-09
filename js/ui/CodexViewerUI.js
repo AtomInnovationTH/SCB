@@ -7,7 +7,8 @@
  *   • sidebar (categories + learning paths)
  *   • compact entry list (dense rows — title · one-line hook · NEW/LOCKED pip)
  *   • persistent reading pane (QUICK LOOK → BRIEFING → TECH LEVEL → REAL WORLD →
- *     FORMULA → RELATED → prev/next)
+ *     FORMULA → RELATED → prev/next → WARNING — the manual's authored red box,
+ *     entries carrying `i18n.warning`, unlocked only; plan 1788957399035 §1.23)
  *
  * Reading follows selection: ↑/↓ move the list AND re-render the pane, so the
  * pane is never empty. Below ~1000px the interior collapses to a 2-pane swap
@@ -1039,8 +1040,9 @@ export class CodexViewerUI {
 
   /** @private Render the persistent reading pane for an entry.
    * Sections top→bottom: QUICK LOOK → BRIEFING → TECH LEVEL (trl<9) →
-   * IN THE REAL WORLD → FORMULA → RELATED → prev/next. Locked entries show only
-   * QUICK LOOK + the how-to-unlock panel.
+   * IN THE REAL WORLD → FORMULA → RELATED → prev/next → WARNING (the manual's
+   * authored red box, unlocked entries carrying `warning` only — always LAST).
+   * Locked entries show only QUICK LOOK + the how-to-unlock panel.
    */
   _renderReading(entry) {
     const reading = document.getElementById('codex-reading');
@@ -1201,6 +1203,20 @@ export class CodexViewerUI {
          </div>`
       : '';
 
+    // WARNING — the manual's authored notice (the FURNACE gag, plan
+    // 1788957399035 §1.23): a STEADY red box printed LAST in the page column,
+    // literally the bottom of the page — print, not a live alarm (no pulse, no
+    // animation; THREAT red is the ink, not a channel). Unlocked entries only,
+    // and only when the data carries one (`entry.warning`, flattened by
+    // CodexSystem._buildEntry). The renderer supplies the caps WARNING label.
+    const warningHtml = (!isLocked && entry.warning)
+      ? `<div class="codex-warning" style="margin-top:18px;padding:10px 14px;
+           border:1px solid rgba(255,68,34,0.6);border-left:4px solid #ff4422;
+           background:rgba(255,68,34,0.08);border-radius:3px;font-family:var(--font-mono);
+           font-size:13px;line-height:1.5;color:#ff4422;"><span style="font-weight:700;letter-spacing:0.14em;
+           margin-right:10px;">WARNING</span>${entry.warning}</div>`
+      : '';
+
     reading.innerHTML = `
       <div style="max-width:700px;margin:0 auto;">
         ${backHtml}
@@ -1215,6 +1231,7 @@ export class CodexViewerUI {
         ${entry.unlocked ? this._loggedLineHtml(entry) : ''}
         ${entry.unlocked ? this._curiousNextHtml(entry, { accent, accentBg }) : ''}
         ${prevNextHtml}
+        ${warningHtml}
       </div>
     `;
 

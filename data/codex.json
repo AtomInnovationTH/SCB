@@ -2999,6 +2999,7 @@
         "title": "Welcome, Cowboy",
         "shortText": "Low orbit is getting dangerous to use. You're here to clean it up, one piece of junk at a time.",
         "fullText": "Welcome to space, Cowboy. Decades of launches left low Earth orbit littered with dead satellites and shrapnel, and every collision makes more, the runaway feedback called Kessler syndrome. Your job is active debris removal: fly your mothership and its daughter drones out to derelict objects, capture them, and either drag them down to burn up or salvage them for parts.\n\nThe core loop is simple: scan for targets, let autopilot bring you alongside, capture, and bank the haul. Clear enough debris, sixty pieces to win the shift, and you have helped keep orbit usable. This library fills in as you go, every system you touch unlocking the science behind it. Press I anytime to come back here.",
+        "warning": "Furnace under construction. May overheat.",
         "unlockHint": "Reach orbit."
       },
       "track": "cowboy_basics",
