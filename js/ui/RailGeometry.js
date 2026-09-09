@@ -27,7 +27,11 @@
 /**
  * The shared rail geometry (px = CSS px; on glass 1 CSS px = 1 pt).
  *
- *   EDGE_PX        inset from the screen edge (left:10px / right:10px)
+ *   EDGE_PX        inset from the screen edge (left:16px / right:16px).
+ *                  ONE number, two names: HUD_EDGE_PX === EDGE_PX (ladder
+ *                  reorder rev 3, locked #8 — the rails, the footer occupants
+ *                  (REFIT / SPECS / DETAIL slider), and the HUD arms all read
+ *                  this inset so they cannot drift). Was 10.
  *   THUMB_REST_PX  the bottom band the rail must clear (two-thumb grip); on
  *                  glass the footer band sits above it too
  *   IDLE_FADE      resting opacity of EDGE CHROME after IDLE_FADE_MS without a
@@ -56,12 +60,19 @@
  *                  44 pt row on glass (was the DISPLAY rail's notch pitch —
  *                  owner 2026-09-06). Desktop (fine pointer) keeps the visual
  *                  32 px.
+ *   HUD_EDGE_PX    alias of EDGE_PX (the HUD ARMS' inset). CSS insets read
+ *                  `max(16px, env(safe-area-inset-*))`. Do not give this its
+ *                  own literal — it reads EDGE_PX so the table stays ONE number.
+ *   HUD_COLUMN_WIDTH_PX  both arms' column width (rev 3: the symmetric
+ *                  "inverted U" — left column, `.hud-panel`, Cargo / Orbit /
+ *                  Autopilot / Pin riders, right column, Next; Comms stays 480).
  *
  * (NOTCH_PX 40, SLOP_PX 44 and MAX_NOTCHES 8 — the DISPLAY rail's row height,
  * tap slop and height cap — RETIRED with the rail: 2026-09-06 and Session P.)
  */
+const EDGE_PX = 16;
 export const RAIL_GEOMETRY = Object.freeze({
-  EDGE_PX: 10,
+  EDGE_PX,
   THUMB_REST_PX: 100,
   IDLE_FADE: 0,
   IDLE_FADE_MS: 4000,
@@ -72,7 +83,14 @@ export const RAIL_GEOMETRY = Object.freeze({
   FOOTER_GAP_PX: 8,
   DODGE_GAP_PX: 8,
   TOUCH_PITCH_PX: 44,
+  HUD_EDGE_PX: EDGE_PX,     // === EDGE_PX (one number, two names)
+  HUD_COLUMN_WIDTH_PX: 280,
 });
+
+/** The HUD arms' edge inset (rev 3) — reads EDGE_PX so the table stays ONE number. */
+export const HUD_EDGE_PX = RAIL_GEOMETRY.EDGE_PX;
+/** Both HUD columns' width (rev 3) — the ONE number, re-exported by name. */
+export const HUD_COLUMN_WIDTH_PX = RAIL_GEOMETRY.HUD_COLUMN_WIDTH_PX;
 
 /**
  * THE FOOTER BAND (Session P, plan D7; owner 2026-09-07: "consistent place
@@ -146,8 +164,8 @@ export function dodgeTop({ railH, colBottom, innerH } = {}) {
  * rest), inset RAIL_GEOMETRY.EDGE_PX from the named edge. Ends with ';' so a
  * caller can prepend it to its own `a;b;c` cssText list.
  *
- *   midHeightCss('left')  → 'position:absolute;top:50%;transform:translateY(-50%);left:10px;'
- *   midHeightCss('right') → 'position:absolute;top:50%;transform:translateY(-50%);right:10px;'
+ *   midHeightCss('left')  → 'position:absolute;top:50%;transform:translateY(-50%);left:16px;'
+ *   midHeightCss('right') → 'position:absolute;top:50%;transform:translateY(-50%);right:16px;'
  *
  * Anything that is not the string 'right' anchors LEFT (the DISPLAY rail's side).
  * @param {'left'|'right'} side

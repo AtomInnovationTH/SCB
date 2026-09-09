@@ -73,7 +73,9 @@ const ARROW = '\u2192';
  * @type {ReadonlyArray<Readonly<{glass:string, desktop:string}>>}
  */
 export const ROWS = Object.freeze([
-  Object.freeze({ glass: GestureHints.TABLE.Equal.chip,  desktop: `WHEEL ${ARROW} ZOOM` }),
+  // Ladder reorder rev 3 (Task 15): Equal / Minus now name the HUD-pane ladder
+  // (`− / + → HUD PANES`); the pinch-zoom chip is the numpad zoom keys' row.
+  Object.freeze({ glass: GestureHints.TABLE.NumpadAdd.chip, desktop: `WHEEL ${ARROW} ZOOM` }),
   Object.freeze({ glass: GestureHints.TABLE.KeyN.chip,   desktop: `N ${ARROW} NET` }),
 ]);
 

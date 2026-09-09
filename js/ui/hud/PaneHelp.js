@@ -63,32 +63,41 @@ export const HELP_TUNE = {
  * root where the pane has none (or rewrites its innerHTML wholesale —
  * conjunction header, transfer windows, tactical approach).
  *
- * key:  the pane's toggle key from the 5/6/7/8/9/0 display-toggle family
- *       (null where the family has no key for this pane).
- * rung: the pane-density ladder position (HUD._initPaneDensity order,
- *       12 rungs, rung 1 hides first on `-`), or a plain-language placement
- *       note for panes outside the ladder (the rail never hides — D7; the two
- *       floor instruments belong to their zoom level — the map rule).
+ * key:    the pane's toggle key from the 5/6/7/8/9/0 display-toggle family
+ *         (null where the family has no key for this pane).
+ * rung:   static fallback copy used when the live ladder getter is absent
+ *         or the row's rungId is unknown (today's behaviour). Placement
+ *         notes for panes outside the ladder stay here (the rail never
+ *         hides — D7; floor instruments belong to their zoom level).
+ * rungId: the pane-density ladder id this row belongs to. Composite
+ *         MEMBERS use the member id (`discoveries`, `pin`, …), not the
+ *         composite id; the DETAIL slider and floor instruments omit it.
+ *         Live tooltip text is derived on each render (plan
+ *         1788867799156 Task 16) so `?ladder=0` (11 rungs) and the
+ *         15-rung gate both read right.
  *
  * test-PaneHelp.js walks this table against data/codex.json — a typo'd
  * codexId fails the suite.
  */
 export const PANE_HELP = [
-  { pane: 'comms log',          selector: '#hud-comms-panel',                        codexId: 'pane_comms_log',          key: '7',  rung: 'Comms (rung 8/12)' },
-  { pane: 'discoveries/skills', selector: '.skills-pane',                            codexId: 'pane_discoveries',        key: null, rung: 'Discoveries (rung 4/12)' },
-  { pane: 'upgrade pin',        selector: '#hud-pin-widget',                         codexId: 'pane_upgrade_pin',        key: null, rung: 'Upgrade goal (rung 2/12)' },
-  { pane: 'status/vitals',      selector: '#hud-mother-panel .mother-header',        codexId: 'reading_the_hud',         key: null, rung: 'Mother pane (rung 10/12)' },
-  { pane: 'daughters/fleet',    selector: '#fleet-header',                           codexId: 'tool_choice',             key: null, rung: 'Fleet pane (rung 9/12)' },
-  { pane: 'score strip',        selector: '#hud-score-panel',                        codexId: 'core_loop',               key: null, rung: 'Score strip (rung 7/12)' },
-  { pane: 'target list',        selector: '#hud-targets-panel .target-section-header', codexId: 'ssa_network',           key: '0',  rung: 'Target pane (rung 6/12)' },
-  { pane: 'conjunction alerts', selector: '#hud-conjunction-panel',                  codexId: 'pane_conjunction_alerts', key: null, rung: 'Reticles & alerts (rung 11/12)' },
-  { pane: 'space weather',      selector: '#hud-weather-indicator',                  codexId: 'pane_space_weather',      key: null, rung: 'Reticles & alerts (rung 11/12)' },
-  { pane: 'debris chart',       selector: '#hud-wireframe-container',                codexId: 'pane_debris_chart',       key: '9',  rung: 'Debris pane (rung 5/12)' },
+  { pane: 'comms log',          selector: '#hud-comms-panel',                        codexId: 'pane_comms_log',          key: '7',  rungId: 'comms',        rung: 'Comms (rung 7/15)' },
+  { pane: 'discoveries/skills', selector: '#hud-discoveries',                        codexId: 'pane_discoveries',        key: null, rungId: 'discoveries',  rung: 'Experimental · Discoveries (rung 15/15)' },
+  { pane: 'upgrade pin',        selector: '#hud-pin-widget',                         codexId: 'pane_upgrade_pin',        key: null, rungId: 'pin',          rung: 'Sky labels & goal pin · Upgrade goal (rung 14/15)' },
+  { pane: 'status/vitals',      selector: '#hud-mother-panel .mother-header',        codexId: 'reading_the_hud',         key: null, rungId: 'mother',       rung: 'Mother pane (rung 4/15)' },
+  { pane: 'daughters/fleet',    selector: '#fleet-header',                           codexId: 'tool_choice',             key: null, rungId: 'arms',         rung: 'Daughters pane (rung 5/15)' },
+  { pane: 'score strip',        selector: '#hud-score-panel',                        codexId: 'core_loop',               key: null, rungId: 'score',        rung: 'Score strip (rung 6/15)' },
+  { pane: 'target list',        selector: '#hud-targets-panel .target-section-header', codexId: 'ssa_network',           key: '0',  rungId: 'targets',      rung: 'Target pane (rung 8/15)' },
+  { pane: 'conjunction alerts', selector: '#hud-conjunction-panel',                  codexId: 'pane_conjunction_alerts', key: null, rungId: 'reticles',     rung: 'Reticles & alerts (rung 3/15)' },
+  { pane: 'space weather',      selector: '#hud-weather-indicator',                  codexId: 'pane_space_weather',      key: null, rungId: 'reticles',     rung: 'Reticles & alerts (rung 3/15)' },
+  { pane: 'debris chart',       selector: '#hud-wireframe-container',                codexId: 'pane_debris_chart',       key: '9',  rungId: 'debris',       rung: 'Debris pane (rung 9/15)' },
   { pane: 'ladder rail',        selector: '#ladder-rail',                            codexId: 'pane_ladder_rail',        key: null, rung: 'always shown' },
   { pane: 'transfer windows',   selector: '#ladder-transfer-windows',                codexId: 'pane_transfer_windows',   key: null, rung: 'route-planning instrument' },
   { pane: 'tactical approach',  selector: '#ladder-prox-context',                    codexId: 'pane_tactical_approach',  key: null, rung: 'approach instrument' },
   { pane: 'refit',              selector: '#ladder-refit .refit-header',             codexId: 'pane_refit',              key: null, rung: 'refit instrument' },
   { pane: 'library',            selector: '#ladder-library .library-header',         codexId: 'pane_library',            key: null, rung: 'SPECS instrument' },
+  // Rev-3 DETAIL slider (plan 1788867799156 Task 15). Reuses pane_ladder_rail —
+  // the closest existing SPECS page. No rungId: the slider is not a ladder pane.
+  { pane: 'detail slider',      selector: '#ladder-detail-slider',                   codexId: 'pane_ladder_rail',        key: null, rung: 'slider 0 = empty view / scene only, right end = every pane; drag or − / +' },
 ];
 
 /**
@@ -98,6 +107,52 @@ export const PANE_HELP = [
  */
 export const INTERACTIVE_GUARD =
   'button, a, input, select, textarea, .glossary-term, .hud-pane-badge, .sp-header, .target-row, .target-sort-btn';
+
+/**
+ * Live density-rung copy for a PANE_HELP row. Slider position is 1-based
+ * FROM THE TOP (i = total − index) so `citypills` reads `1/15` — the first
+ * thing the slider reveals — and `experimental` reads `15/15`. A composite
+ * MEMBER (`pd.find(id)` then walk `pd.rungs` for the parent) uses the
+ * composite's index and `Composite · Member` labels. Never caches — the
+ * caller reads the live ladder each render so `?ladder=0` (11 rungs) and
+ * the 15-rung gate both read right. Absent ladder / unknown id → the
+ * row's static `rung` with no live suffix (today's behaviour). Plan
+ * 1788867799156 Task 16.
+ *
+ * @param {{rung?:string, rungId?:string}|null} row
+ * @param {{rungs?: Array, find?: Function}|null} pd  live PaneDensity (or a test fake)
+ * @returns {string}
+ */
+export function liveRungText(row, pd) {
+  const fallback = (row && row.rung) ? String(row.rung) : '';
+  const id = row && row.rungId;
+  if (!id || !pd || typeof pd.find !== 'function' || !Array.isArray(pd.rungs)) return fallback;
+  const found = pd.find(id);
+  if (!found) return fallback;
+  const total = pd.rungs.length;
+  let index = -1;
+  let composite = null;
+  for (let i = 0; i < total; i++) {
+    const r = pd.rungs[i];
+    if (!r) continue;
+    if (r.id === id) { index = i; break; }
+    const members = r.members;
+    if (Array.isArray(members) && members.some((m) => m && m.id === id)) {
+      index = i;
+      composite = r;
+      break;
+    }
+  }
+  if (index < 0) return fallback;
+  const sliderPos = total - index;
+  const top = pd.rungs[index];
+  let label = (top && top.label) ? String(top.label) : '';
+  if (composite) {
+    const memberLabel = found.label ? String(found.label) : '';
+    label = memberLabel ? `${composite.label} · ${memberLabel}` : String(composite.label || '');
+  }
+  return `${label} (rung ${sliderPos}/${total})`;
+}
 
 /**
  * Pure tooltip content model (Node-tested): the entry's shortText plus the
@@ -156,19 +211,30 @@ export class PaneHelp {
    * @param {Function} [deps.setTimeoutFn] / @param {Function} [deps.clearTimeoutFn]
    *        timer injection for tests (defaults to globals).
    * @param {()=>number} [deps.now]  clock injection for tests.
+   * @param {() => object|null} [deps.ladder]  live PaneDensity getter. HUD
+   *        constructs PaneHelp before PaneDensity (and main.js may still
+   *        splice rungs), so this is consulted at tooltip time, never
+   *        cached. Absent → static row.rung (plan 1788867799156 Task 16).
    */
   constructor({ getEntry = null, hasTouch = undefined, doc = undefined,
-                setTimeoutFn = undefined, clearTimeoutFn = undefined, now = undefined } = {}) {
+                setTimeoutFn = undefined, clearTimeoutFn = undefined, now = undefined,
+                ladder = undefined } = {}) {
     this._getEntry = (typeof getEntry === 'function') ? getEntry : (() => null);
     this._hasTouch = (hasTouch !== undefined) ? !!hasTouch : TouchControls.detect();
     this._doc = (doc !== undefined) ? doc : (typeof document !== 'undefined' ? document : null);
     this._setTimeout = setTimeoutFn || ((fn, ms) => setTimeout(fn, ms));
     this._clearTimeout = clearTimeoutFn || ((h) => clearTimeout(h));
     this._now = now || (() => Date.now());
+    this._ladder = (typeof ladder === 'function') ? ladder : (() => null);
 
     /** @type {Map<string, object>} codexId → PANE_HELP row (tooltip meta) */
     this._rowsById = new Map();
-    for (const row of PANE_HELP) this._rowsById.set(row.codexId, row);
+    /** @type {Map<string, object>} selector → row (two panes may share a codexId) */
+    this._rowsBySelector = new Map();
+    for (const row of PANE_HELP) {
+      if (!this._rowsById.has(row.codexId)) this._rowsById.set(row.codexId, row);
+      this._rowsBySelector.set(row.selector, row);
+    }
 
     this._installed = false;
     this._hotEl = null;          // element currently hovered/pressed
@@ -235,6 +301,19 @@ export class PaneHelp {
       // affordance needs hover/click on the tagged element itself.
       if (el.style) el.style.pointerEvents = 'auto';
     }
+  }
+
+  /**
+   * @private Resolve the PANE_HELP row for a tagged element. Selector wins so
+   * two panes can share a codexId (the DETAIL slider reuses pane_ladder_rail)
+   * without stealing each other's rung text.
+   */
+  _rowForEl(el, id) {
+    if (el && el.id) {
+      const bySel = this._rowsBySelector.get('#' + el.id);
+      if (bySel) return bySel;
+    }
+    return this._rowsById.get(id) || null;
   }
 
   /** @private closest() with shim tolerance. */
@@ -418,8 +497,10 @@ export class PaneHelp {
     const id = el && el.dataset && el.dataset.help;
     if (!id) return;
     const entry = this._getEntry(id);
-    const row = this._rowsById.get(id) || { key: null, rung: '' };
-    const model = helpTooltipModel(entry, row);
+    const row = this._rowForEl(el, id) || { key: null, rung: '' };
+    let pd = null;
+    try { pd = this._ladder(); } catch (_e) { pd = null; }
+    const model = helpTooltipModel(entry, { key: row.key, rung: liveRungText(row, pd) });
     if (!model) return; // codex not wired yet — no tooltip, click still works
     const tip = this._ensureTip();
     if (!tip) return;

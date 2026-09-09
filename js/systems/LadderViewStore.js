@@ -71,8 +71,10 @@ export const LADDER_VIEW_VERSION = 1;
  *       arms (the daughters rows, the fleet list) join the home floor —
  *       FOUR panes now (with comms + the hint ticker). This drops remembered
  *       per-floor room edits once — the known cost of a defaults change.
+ *   7 — 2026-09-08 (ladder reorder rev 3): F3 nav orb gone; composites
+ *       experimental/decor. Stored gen-6 rooms drop once.
  */
-export const ROOMS_GENERATION = 6;
+export const ROOMS_GENERATION = 7;
 
 /** The shipped pane state: both workbench panes closed. */
 export const DEFAULT_PANES = Object.freeze({ refit: false, library: false });

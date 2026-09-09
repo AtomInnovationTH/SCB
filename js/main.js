@@ -129,7 +129,8 @@ import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
 import { DetailSlider } from './ui/DetailSlider.js';
-import { CargoPane, CARGO_GEOMETRY } from './ui/hud/CargoPane.js';
+import { CargoPane } from './ui/hud/CargoPane.js';
+import * as LeftStack from './ui/hud/LeftStack.js';
 import { OverridePane } from './ui/hud/OverridePane.js';
 import { OrbitPane, ORBIT_GEOMETRY } from './ui/hud/OrbitPane.js';
 import { FmaStrip } from './ui/hud/FmaStrip.js';
@@ -702,6 +703,9 @@ let libraryPane;
 // wrappers, a pane-density rung. Same construction law: built ONLY inside the
 // LADDER.ENABLED gate (a ?ladder=0 boot builds no pane, pushes no rung).
 let cargoPane = null;
+// Left-arm overlay riders (Cargo → Orbit → Autopilot → Pin). Built ONCE
+// inside the LADDER gate after the panes exist (plan Task 8).
+let _leftRiders = null;
 // SAFETY OVERRIDE demo panel (owner 2026-09-07) — LADDER gate only.
 let overridePane = null;
 // Wave 5 Session M (plan "Session M — Instruments") — the three instruments +
@@ -1362,6 +1366,9 @@ async function init() {
       } catch (_e) { /* best-effort */ }
       return { trackedContacts, nearestDebrisM, hasTarget, targetOutOfRange: _onboardingTargetOutOfRange, ladderAway };
     },
+    // Ladder reorder rev 3: live floor for the DETAIL onboarding beat.
+    // ladderController is constructed later; read live (GestureSplash idiom).
+    floorProvider: () => ((ladderController && !ladderController.isRiding() && !(ladderController.introInFlight && ladderController.introInFlight())) ? ladderController.currentFloor() : null),
   });
 
 
@@ -1451,6 +1458,7 @@ async function init() {
 
   // --- Build UI ---
   hud = new HUD();
+  hud.setCityLabels(cityLabels);
   // Delegation 4 (2026-05-31) — Browser-playtest: NetInventoryPanel is
   // SUSPENDED (never displayed) pending a UX redesign. See ROADMAP.md.
   // The panel still mounts so internal event tracking works, but setVisible
@@ -2421,6 +2429,11 @@ async function init() {
       const pd = hud && hud.paneDensity;
       const cleanView = !!(pd && typeof pd.hasStash === 'function' && pd.hasStash());
       if (ladderController && !cleanView) ladderController.noteRoomChange();
+      // Ladder reorder rev 3: SPECS/REFIT tabs + build stamp follow
+      // hudClear() (density flips only — FloorMask applies never emit this
+      // event, so F1 keeps SPECS pinned). Rails still sleep only at level 0
+      // via setRailsShy in onLevel / HUD_DENSITY_DOWN/UP.
+      if (ladderController && typeof ladderController.setHudClear === 'function' && pd && typeof pd.hudClear === 'function') ladderController.setHudClear(pd.hudClear());
       // Session P (plan D3/D5): any pane flip (the `-`/`+` keys, 0/9/8, the
       // slider's own detents) is a slider WAKE source, and the thumb follows
       // now (forced — the per-frame refresh is throttled to 4 Hz).
@@ -2457,27 +2470,20 @@ async function init() {
     });
     // Wave 5 Session K (plan D-B / D-L) — the CARGO pane: the cargo manifest
     // with SELL / SELL ALL / -> ELEVATOR through ShopScreen's PUBLIC wrappers
-    // (the one sale pipeline), a pane-density RUNG like TARGET / FLEET. A
+    // (the one sale pipeline), a pane-density RUNG like TARGET / DAUGHTERS. A
     // DIRECT child of #hud-overlay, not a column: HUD.js dims both columns to
     // 0.35 + pointer-events:none under the hull callouts, and the shop floor
-    // IS the callout floor. Its rung is spliced into hud.paneDensity.rungs
-    // right after FLEET, HERE — before ladderFloorMask is constructed and long
-    // before the first setFloor (FloorMask._resolve caches the rung map ONCE
-    // at that first apply; the DISPLAY rail reads the same live array). Fed per
-    // frame by setDodge in the gameLoop (it rides LAST on the right edge:
-    // under the SPECS tab / the WHERE rail, compacting, then hiding). Inside
-    // the gate: a ?ladder=0 boot builds no pane and pushes no rung — the
-    // shipped seven rungs and the shipped `-`/`+` order are byte-identical.
+    // IS the callout floor. Its rung is insertBefore('debris') below — before
+    // ladderFloorMask is constructed and long before the first setFloor
+    // (FloorMask._resolve caches the rung map ONCE at that first apply; the
+    // DETAIL slider reads the same live array). Fed per frame by setDodge in
+    // the gameLoop. Inside the gate: a ?ladder=0 boot builds no pane and
+    // pushes no rung — the HUD.js base 11 rungs are the `?ladder=0` order.
     cargoPane = new CargoPane({
       cargo: cargoSystem,
       shop: shopScreen,
       glass: _glassBoot,
     });
-    if (hud && hud.paneDensity && Array.isArray(hud.paneDensity.rungs)) {
-      const rungs = hud.paneDensity.rungs;
-      const at = rungs.findIndex((r) => r && r.id === 'arms');
-      rungs.splice(at >= 0 ? at + 1 : rungs.length, 0, cargoPane.rung());
-    }
     // Wave 5 Session M (plan "Session M — Instruments"): ORBIT, COPILOT, NEXT.
     // Three more RUNG panes of the CARGO shape, constructed HERE (before
     // ladderFloorMask, before the first setFloor — FloorMask._resolve caches
@@ -2505,7 +2511,7 @@ async function init() {
     copilotVoice = new CopilotVoice({
       synth: (typeof window !== 'undefined' && window.speechSynthesis) ? window.speechSynthesis : null,
       Utterance: (typeof window !== 'undefined' && window.SpeechSynthesisUtterance) ? window.SpeechSynthesisUtterance : null,
-      enabled: !devShotGate.requested,
+      enabled: !devShotGate.requested && !!(Constants.LADDER && Constants.LADDER.COPILOT_VOICE),
       isMuted: () => !(audioSystem && audioSystem.available) || !_shouldAudioRun(),
       duck: (on) => { if (audioSystem && typeof audioSystem.duckForVoice === 'function') audioSystem.duckForVoice(on); },
     });
@@ -2516,6 +2522,10 @@ async function init() {
     });
     nextPane = new NextPane({
       glass: _glassBoot,
+      // Rev 3 Task 6 (locked #5): NEXT is the right arm's LAST column child
+      // (Targets → Debris → Next), position:relative inside #hud-right-column;
+      // the per-frame setDodge is a no-op now (the column glides as one).
+      parent: hud.rightColumnEl,
       clusters: _instrumentClusters,
       playerAltKm: () => (player ? player.getAltitudeKm() : null),
       orbit: () => (player ? player.getOrbitalElements() : null),
@@ -2533,27 +2543,14 @@ async function init() {
         return list.map((g) => ({ name: g.name || g.id, lat: g.lat_deg, lon: g.lon_deg }));
       },
     });
-    if (hud && hud.paneDensity && Array.isArray(hud.paneDensity.rungs)) {
-      // Priorities (index 0 hides FIRST on `-`): NEXT ahead of the debris pane,
-      // ORBIT ahead of the target pane, COPILOT right after CARGO (before
-      // MOTHER) — instruments shed before the ship's own panes.
-      const rungs = hud.paneDensity.rungs;
-      const before = (id, rung) => {
-        const at = rungs.findIndex((r) => r && r.id === id);
-        rungs.splice(at >= 0 ? at : rungs.length, 0, rung);
-      };
-      before('debris', nextPane.rung());
-      before('targets', orbitPane.rung());
-      before('mother', fmaStrip.rung());
-    }
     // SAFETY OVERRIDE demo panel (owner 2026-09-07,
     // .kilo/plans/1788703905516-safety-override-panel.md). Bottom-centre, a
     // direct child of #hud-overlay; the SAME actuators object as RefitPane
-    // (D1); the gag never touches game state (D6). D3: a pane-density rung at
-    // INDEX 0 — the lowest priority: hidden by default on every floor, the
-    // LAST `+` reveals it, the FIRST `-` sheds it. Pushed BEFORE the first
-    // FloorMask setFloor (its _resolve caches the rung map once) — the mask's
-    // MASK_PANES.override row + every DEFAULT_ROOMS row say 'gone'.
+    // (D1); the gag never touches game state (D6). Ladder reorder rev 3: a
+    // member of `experimental` via addMember (still the last `+`); hidden by
+    // default on every floor. addMember BEFORE the first FloorMask setFloor
+    // (its _resolve caches the rung map once) — the mask's MASK_PANES.override
+    // row + every DEFAULT_ROOMS row say 'gone'.
     overridePane = new OverridePane({
       actuators: ladderActuators,
       audio: audioSystem,
@@ -2564,8 +2561,62 @@ async function init() {
       glass: _glassBoot,
       webdriver: !!(typeof navigator !== 'undefined' && navigator.webdriver),
     });
-    if (hud && hud.paneDensity && Array.isArray(hud.paneDensity.rungs)) {
-      hud.paneDensity.rungs.unshift(overridePane.rung());
+    if (hud && hud.paneDensity) {
+      // Ladder reorder rev 3 (plan tmp/plans/1788867799156-hud-pane-ladder-reorder.md):
+      // insertBefore splices instruments ahead of debris; the gag joins
+      // experimental. Final top-level ids: experimental, decor, copilot, next,
+      // orbit, cargo, debris, targets, comms, score, arms, mother, reticles,
+      // craft, citypills (15). All BEFORE new FloorMask ( _resolve caches once).
+      const pd = hud && hud.paneDensity;
+      if (pd && typeof pd.insertBefore === 'function') pd.insertBefore('debris', cargoPane.rung());
+      if (pd && typeof pd.insertBefore === 'function') pd.insertBefore('cargo', orbitPane.rung());
+      if (pd && typeof pd.insertBefore === 'function') pd.insertBefore('orbit', nextPane.rung());
+      if (pd && typeof pd.insertBefore === 'function') pd.insertBefore('next', fmaStrip.rung());
+      const exp = pd && typeof pd.find === 'function' ? pd.find('experimental') : null;
+      if (exp && typeof exp.addMember === 'function') exp.addMember(overridePane.rung());
+      if (detailSlider && typeof detailSlider.setMilestones === 'function' && pd && Array.isArray(pd.rungs)) {
+        const lvl = (id) => { const i = pd.rungs.findIndex(r => r && r.id === id); return i < 0 ? null : pd.rungs.length - i; };
+        // Scenery · Ships · Flight · Ops · Instruments · All
+        const milestones = [0, lvl('craft'), lvl('arms'), lvl('debris'), lvl('copilot'), pd.rungs.length].filter(n => Number.isFinite(n));
+        detailSlider.setMilestones(milestones);
+      }
+      // Plan Task 8: left-arm overlay riders, once, after the rungs exist.
+      // Order top→bottom: Cargo, Orbit, Autopilot, Pin. hidden() is the
+      // density bit (hud.isRungVisible); apply → setStack / setPinAnchor.
+      _leftRiders = [
+        {
+          id: 'cargo',
+          hidden: () => !(hud && typeof hud.isRungVisible === 'function' && hud.isRungVisible('cargo')),
+          naturalPx: () => cargoPane.naturalPx(),
+          compactPx: () => cargoPane.compactPx(),
+          minPx: () => cargoPane.minPx(),
+          apply: (top, height, mode) => { if (cargoPane && cargoPane.setStack) cargoPane.setStack(top, height, mode); },
+        },
+        {
+          id: 'orbit',
+          hidden: () => !(hud && typeof hud.isRungVisible === 'function' && hud.isRungVisible('orbit')),
+          naturalPx: () => orbitPane.naturalPx(),
+          compactPx: () => null,
+          minPx: () => null,
+          apply: (top, height, mode) => { if (orbitPane && orbitPane.setStack) orbitPane.setStack(top, height, mode); },
+        },
+        {
+          id: 'copilot',
+          hidden: () => !(hud && typeof hud.isRungVisible === 'function' && hud.isRungVisible('copilot')),
+          naturalPx: () => fmaStrip.naturalPx(),
+          compactPx: () => null,
+          minPx: () => null,
+          apply: (top, height, mode) => { if (fmaStrip && fmaStrip.setStack) fmaStrip.setStack(top, height, mode); },
+        },
+        {
+          id: 'pin',
+          hidden: () => !(hud && typeof hud.isRungVisible === 'function' && hud.isRungVisible('pin')),
+          naturalPx: () => (hud && typeof hud.pinNaturalPx === 'function') ? hud.pinNaturalPx() : 27,
+          compactPx: () => null,
+          minPx: () => null,
+          apply: (top, height, mode) => { if (hud && hud.setPinAnchor) hud.setPinAnchor(top, height, mode); },
+        },
+      ];
     }
     // Session O (plan D4) — the first-run gesture splash: the LAST child of
     // #hud-left-column (the retired TOUCH MAP card's slot; on the workbench
@@ -6135,12 +6186,6 @@ function gameLoop(timestamp) {
   if (_ladderActive && libraryPane && libraryPane.setTabPhase && edgeChrome) {
     libraryPane.setTabPhase(edgeChrome.phase('tab', timestamp));
   }
-  // Session K: the CARGO pane rides LAST on the right edge — under the WHERE
-  // rail wherever it sits (dodged or mid-height) — down to the footer's top;
-  // it compacts, then hides, never the other way round (the rail keeps its law).
-  if (_ladderActive && cargoPane && railIndicator && railIndicator.bottomPx) {
-    cargoPane.setDodge(railIndicator.bottomPx(), footerFloor);
-  }
   if (_ladderActive && overridePane && overridePane.setDodge && Number.isFinite(_HINT_BAND_PX)) {
     // SAFETY OVERRIDE panel: bottom-centre above the hint ticker band, and on
     // glass above the thumb rest (the CargoPane/NextPane dodge idiom) — its
@@ -6154,29 +6199,23 @@ function gameLoop(timestamp) {
     overridePane.setDodge(window.innerHeight - _HINT_BAND_PX,
       window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0),
       orbitRight,
-      window.innerWidth - (CARGO_GEOMETRY.WIDTH_PX + CARGO_GEOMETRY.RIGHT_PX));
+      // Rev 3 (locked #5 / #8): the right input is the RIGHT ARM's left edge
+      // (W − (16 + 280)); pre-rev-3 it was the CARGO pane's right-edge slot —
+      // Cargo rides the LEFT arm now, so the symmetric arm edge is the truth.
+      window.innerWidth - (RAIL_GEOMETRY.HUD_EDGE_PX + RAIL_GEOMETRY.HUD_COLUMN_WIDTH_PX));
   }
-  // Session M — the instruments' edges (owner law: by the 13-inch numbers).
-  // ORBIT rides bottom-LEFT, FLUSH with the left HUD column (owner 2026-09-07:
-  // x = EDGE_PX, lined up with the other panes) and UNDER the left HUD column:
-  // Session P (plan D5) — the DISPLAY rail it used to ride under is retired,
-  // so its ceiling is the column's own bottom (a 1 Hz layout read by
-  // timestamp, cached — the same read the rail's dodge made; null while the
-  // column is empty / unlaid = no ceiling); its floor is the footer's top
-  // (plan D7 — above the thumb rest and the hint ticker's band by
-  // construction). The cascade: column → ORBIT fills what is left (full /
-  // compact / hidden by the budget — the CARGO / NEXT law on the right edge).
-  // NEXT rides the right edge ABOVE the CARGO pane: same rider above (the WHERE
-  // rail), its floor is CARGO's placed top while CARGO shows, else the footer's
-  // top — CARGO keeps its bottom slot and its law; NEXT compacts to its two
-  // soonest rows, then hides. Cached numbers only.
-  if (_ladderActive && (orbitPane || nextPane)) {
-    if (orbitPane && orbitPane.setAnchor) {
-      orbitPane.setAnchor(RAIL_GEOMETRY.EDGE_PX - ORBIT_GEOMETRY.GAP_PX, footerFloor, _leftColumnBottom(timestamp));
-    }
-    if (nextPane && nextPane.setDodge && railIndicator && railIndicator.bottomPx) {
-      const cargoTop = (cargoPane && cargoPane.topPx) ? cargoPane.topPx() : null;
-      nextPane.setDodge(railIndicator.bottomPx(), cargoTop != null ? cargoTop : footerFloor);
+  // Plan Task 8: left-arm overlay stack (Cargo → Orbit → Autopilot → Pin).
+  // Guard matches the old dodge chain: `_ladderActive`. Ceiling is the left
+  // HUD column's cached bottom + GAP; floor is the footer band − GAP. Skip
+  // when the column is unlaid (null ceiling) so riders do not flash-hide.
+  if (_ladderActive && _leftRiders) {
+    const _leftCeil = _leftColumnBottom(timestamp);
+    if (_leftCeil != null) {
+      LeftStack.layout({
+        ceilingPx: _leftCeil + LeftStack.LEFT_STACK_GAP_PX,
+        floorPx: footerFloor - LeftStack.LEFT_STACK_GAP_PX,
+        riders: _leftRiders,
+      });
     }
   }
 

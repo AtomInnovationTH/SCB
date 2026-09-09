@@ -20,8 +20,9 @@
  * family's part is literally "RADIATOR PLATES") · ROSA → `rosaFurl` · FURNACE →
  * the gag. `rosaFeather` is NOT on the panel.
  *
- * Home (D3): a pane-density rung the hub pushes at INDEX 0 — the lowest
- * priority: hidden by default on every floor (FloorMask `MASK_PANES.override`,
+ * Home (D3; ladder reorder rev 3): a pane-density rung the hub adds as the
+ * last MEMBER of the `experimental` composite (the ladder's index 0 — the
+ * lowest priority: hidden by default on every floor (FloorMask `MASK_PANES.override`,
  * every `DEFAULT_ROOMS` row 'gone', `memory: true`), the LAST `+` reveals it
  * and the FIRST `-` sheds it. The root is constructed with `data-density-hidden`
  * set; that attribute is THE one visibility bit (the module never writes
@@ -57,6 +58,7 @@
  */
 
 import { VisualLaw } from '../../core/VisualLaw.js';
+import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 
 export const OVERRIDE_PANE_ID = 'hud-override-pane';
 export const OVERRIDE_RUNG_ID = 'override';
@@ -83,7 +85,7 @@ export const FURNACE_GAG = Object.freeze({
   KLAXON_S: 2,
   KLAXON_SHORT_S: 0.8,
   VIGNETTE_MS: 2000,
-  VIGNETTE_HZ: 2,          // THREAT is the one pulsing channel; <= the 3 Hz flash cap
+  VIGNETTE_HZ: 2,          // THREAT vignette pulse (real alarms); gag chrome is CAUTION steady
   FLASH_MS: 300,
   SHAKE_MS: 600,
   COUNTDOWN_FROM: 5,
@@ -132,8 +134,10 @@ const NOT_FITTED = 'NOT FITTED';     // RefitPane.ACTUATOR_NOT_FITTED, the flowe
 
 /** The house palette (VisualLaw is pure data — no live singleton). */
 const COLOR_PLAYER = VisualLaw.COLORS.PLAYER;     // heritage green — the HUD
-const COLOR_THREAT = VisualLaw.COLORS.THREAT;     // red-orange — the ONE pulsing channel (vignette, countdown)
-const COLOR_CAUTION = VisualLaw.COLORS.CAUTION;   // steady amber — FAULT, disabled reasons
+const COLOR_THREAT = VisualLaw.COLORS.THREAT;     // red-orange — the ONE pulsing channel (vignette only; gag countdown is CAUTION steady, rev 3)
+const COLOR_CAUTION = VisualLaw.COLORS.CAUTION;   // steady amber — FAULT, disabled reasons, gag main + countdown
+/** Inverted-U inner edge (HUD_EDGE_PX + HUD_COLUMN_WIDTH_PX) — Override recentre band. */
+const COL_INNER_PX = HUD_EDGE_PX + HUD_COLUMN_WIDTH_PX;
 
 /** Panel key → actuators key. */
 const ACTUATOR_OF = Object.freeze({ daughters: 'struts', radiator: 'flower', rosa: 'rosaFurl' });
@@ -362,8 +366,8 @@ export class OverridePane {
       const hitsLeft = left != null && (cx - half - G.GAP_PX) < left;
       const hitsRight = right != null && (cx + half + G.GAP_PX) > right;
       if (hitsLeft || hitsRight) {
-        const bandLeft = left != null ? left : 0;
-        const bandRight = right != null ? right : vw;
+        const bandLeft = left != null ? left : COL_INNER_PX;
+        const bandRight = right != null ? right : vw - COL_INNER_PX;
         leftStyle = `${Math.round((bandLeft + bandRight) / 2)}px`;
       }
     }
@@ -649,7 +653,7 @@ export class OverridePane {
          animation, and the panel is collapsed most of its life (review 2026-09-07). */
       ${P}[${OPEN_ATTR}] .ovr-furnace { animation: ovr-fritz 2.7s infinite; }
       ${P} .ovr-furnace .ovr-name { font-size: 12px; letter-spacing: 0.06em; }
-      ${P} .ovr-furnace .ovr-sub { font-size: 10px; letter-spacing: 0.22em; color: ${COLOR_CAUTION}; }
+      ${P} .ovr-furnace .ovr-sub { font-size: 11px; letter-spacing: 0.22em; color: ${COLOR_CAUTION}; }
       @keyframes ovr-fritz {
         0%   { opacity: 1; text-shadow: none; }
         7%   { opacity: 0.55; text-shadow: 0 0 5px ${COLOR_CAUTION}; }
@@ -689,13 +693,12 @@ export class OverridePane {
         letter-spacing: 0.18em;
         line-height: 1.1;
         text-align: center;
-        color: ${COLOR_THREAT};
-        text-shadow: 0 0 18px rgba(255, 68, 34, 0.85), 0 0 48px rgba(255, 68, 34, 0.4);
+        color: ${COLOR_CAUTION};
+        text-shadow: 0 0 18px rgba(255, 170, 0, 0.85), 0 0 48px rgba(255, 170, 0, 0.4);
         padding: 8px 22px;
-        border: 3px solid ${COLOR_THREAT};
+        border: 3px solid ${COLOR_CAUTION};
         border-radius: 6px;
-        background: rgba(20, 4, 0, 0.72);
-        animation: ovr-throb ${Math.round(1000 / F.VIGNETTE_HZ)}ms ease-in-out infinite;
+        background: rgba(20, 12, 0, 0.72);
       }
       #${OVERRIDE_COUNTDOWN_ID} .ovr-count {
         font-family: var(--font-mono);
@@ -703,12 +706,10 @@ export class OverridePane {
         font-weight: 700;
         line-height: 1;
         margin-top: 12px;
-        color: ${COLOR_THREAT};
-        text-shadow: 0 0 32px rgba(255, 68, 34, 0.9), 0 0 90px rgba(255, 68, 34, 0.45);
-        animation: ovr-throb ${Math.round(1000 / F.VIGNETTE_HZ)}ms ease-in-out infinite;
+        color: ${COLOR_CAUTION};
+        text-shadow: 0 0 32px rgba(255, 170, 0, 0.9), 0 0 90px rgba(255, 170, 0, 0.45);
       }
       /* The text throb never dips below 0.72: a warning must stay legible on every frame. */
-      @keyframes ovr-throb { 0%, 100% { opacity: 0.72; } 50% { opacity: 1; } }
       #${OVERRIDE_COUNTDOWN_ID} .ovr-cancel {
         margin-top: 16px;
         min-width: 160px;
@@ -716,9 +717,9 @@ export class OverridePane {
         font-family: var(--font-mono);
         font-size: 14px;
         letter-spacing: 0.2em;
-        color: ${COLOR_THREAT};
-        background: rgba(20, 4, 0, 0.9);
-        border: 2px solid ${COLOR_THREAT};
+        color: ${COLOR_CAUTION};
+        background: rgba(20, 12, 0, 0.9);
+        border: 2px solid ${COLOR_CAUTION};
         border-radius: 4px;
         cursor: pointer;
       }
@@ -1108,7 +1109,7 @@ export class OverridePane {
     veil.setAttribute('aria-hidden', 'true');
     veil.style.position = 'fixed';
     veil.style.inset = '0';
-    veil.style.background = '#000';
+    veil.style.background = 'rgb(0, 0, 0)';
     veil.style.zIndex = String(Z_VEIL);
     veil.style.pointerEvents = 'auto';
     doc.body.appendChild(veil);

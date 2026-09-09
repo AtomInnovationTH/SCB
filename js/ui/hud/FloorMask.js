@@ -150,7 +150,8 @@ export const MASK_PANES = Object.freeze({
   debris:      Object.freeze({ rung: 'debris',      els: Object.freeze(['#hud-wireframe-container']), memory: true }),
   navsphere:   Object.freeze({ rung: 'navsphere',   els: Object.freeze([]),                           memory: true }),
   pin:         Object.freeze({ rung: 'pin',         els: Object.freeze(['#hud-pin-widget']),          memory: true }),
-  discoveries: Object.freeze({ rung: 'discoveries', els: Object.freeze(['.skills-pane']),             memory: true }),
+  // Task 10: Discoveries is the #hud-discoveries wrapper (chip + popover).
+  discoveries: Object.freeze({ rung: 'discoveries', els: Object.freeze(['#hud-discoveries']),         memory: true }),
   mother:      Object.freeze({ rung: 'mother',      els: Object.freeze(['#hud-mother-panel']),        memory: true }),
   arms:        Object.freeze({ rung: 'arms',        els: Object.freeze(['#hud-arms-panel']),          memory: true }),
   reticles:    Object.freeze({ rung: null,          els: Object.freeze(['#reticle-canvas']),          memory: false }),
@@ -268,7 +269,7 @@ export const DEFAULT_ROOMS = Object.freeze({
     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone',
   }),
 3: Object.freeze({
-    targets: 'gone', debris: 'gone', navsphere: 'shown', reticles: 'shown',
+    targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'shown',
     pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone', hints: 'gone',
     cargo: 'gone', orbit: 'shown', copilot: 'shown', next: 'shown', comms: 'shown', override: 'gone',
   }),
@@ -499,7 +500,19 @@ export class FloorMask {
     const rungs = pd && Array.isArray(pd.rungs) ? pd.rungs : null;
     if (!rungs) return false;
     this._rungs = new Map();
-    for (const r of rungs) if (r && r.id) this._rungs.set(r.id, r);
+    // Ladder reorder rev 3: a rung living inside a composite's `members`
+    // (`override` / `navsphere` / `discoveries` in `experimental`; `skylabels`
+    // / `pin` in `decor`) is addressable by its own id. MASK_PANES keys are
+    // unchanged. Cached once — all splices / addMember happen before
+    // `new FloorMask` (tmp/plans/1788867799156-hud-pane-ladder-reorder.md).
+    const register = (r) => {
+      if (!r || !r.id) return;
+      this._rungs.set(r.id, r);
+      if (Array.isArray(r.members)) {
+        for (const m of r.members) register(m);
+      }
+    };
+    for (const r of rungs) register(r);
     return true;
   }
 
