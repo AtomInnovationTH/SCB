@@ -132,6 +132,7 @@ import { DetailSlider } from './ui/DetailSlider.js';
 import { CargoPane } from './ui/hud/CargoPane.js';
 import * as LeftStack from './ui/hud/LeftStack.js';
 import { OverridePane } from './ui/hud/OverridePane.js';
+import { HudReboot } from './ui/hud/HudReboot.js';
 import { OrbitPane, ORBIT_GEOMETRY } from './ui/hud/OrbitPane.js';
 import { FmaStrip } from './ui/hud/FmaStrip.js';
 import { NextPane } from './ui/hud/NextPane.js';
@@ -708,6 +709,9 @@ let cargoPane = null;
 let _leftRiders = null;
 // SAFETY OVERRIDE demo panel (owner 2026-09-07) — LADDER gate only.
 let overridePane = null;
+// The FURNACE gag's "systems reboot" (plan 1788957399035 §1.C) — every shown
+// HUD element dark, then back top → bottom; the pane's `reboot` dep. Gate only.
+let hudReboot = null;
 // Wave 5 Session M (plan "Session M — Instruments") — the three instruments +
 // the copilot's voice: ORBIT (js/ui/hud/OrbitPane.js, the fixed text slots —
 // text only since 2026-09-08; the OrbitMFD track view retired), COPILOT (js/ui/hud/FmaStrip.js, the
@@ -2685,6 +2689,12 @@ async function init() {
     // default on every floor. addMember BEFORE the first FloorMask setFloor
     // (its _resolve caches the rung map once) — the mask's MASK_PANES.override
     // row + every DEFAULT_ROOMS row say 'gone'.
+    // FURNACE gag v2 (plan 1788957399035 §1.20): the systems reboot rides in
+    // as the pane's `reboot` dep — RECOVER darkens every shown HUD element under
+    // the veil and returns them top → bottom with relay clacks (HudReboot.js).
+    // Constructed first so the dep is live at the pane's construction; the
+    // module owns no game state and no visibility bit (classes only).
+    hudReboot = new HudReboot({ doc: document, audio: audioSystem });
     overridePane = new OverridePane({
       actuators: ladderActuators,
       audio: audioSystem,
@@ -2694,6 +2704,7 @@ async function init() {
       doc: document,
       glass: _glassBoot,
       webdriver: !!(typeof navigator !== 'undefined' && navigator.webdriver),
+      reboot: hudReboot,
     });
     if (hud && hud.paneDensity) {
       // Ladder reorder rev 3 (plan tmp/plans/1788867799156-hud-pane-ladder-reorder.md):
@@ -3601,6 +3612,7 @@ async function init() {
       };
       window.__netShot = _netCapture;
       window.__overridePane = overridePane;   // SAFETY OVERRIDE panel (the gag's black veil #hud-override-veil is a DOM element, never the black-screen bug class — BLACK_SCREEN_TRIAGE.md)
+      window.__hudReboot = hudReboot;         // the systems reboot (HudReboot.js) — a ?shot boot builds no veil by law, so the witness drives play() directly (tmp/gag-reboot-shots.mjs)
 
       // ── Inspection camera hook (round-5 visual QA) ──
       //   window.__scbInspect(thetaDeg, phiDeg, distM)

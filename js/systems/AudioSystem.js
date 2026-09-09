@@ -1264,6 +1264,40 @@ class AudioSystem {
   }
 
   /**
+   * FURNACE gag v2 (plan 1788957399035 §1.19) — a breaker relay closing: ONE
+   * HUD panel returning after the blackout ("took a hit, systems offline").
+   * HudReboot fires one per returning panel, so the top → bottom return reads
+   * as relays clacking home down the console. PHYSICAL family (a mechanical
+   * event in the cockpit, not a UI tick): 40 ms sawtooth 160 → 90 Hz through
+   * a 600 Hz low-pass, gain 0.22 → 0 — low, short, dry. Mute-aware (the
+   * `available` guard, like playCollision). Never throws.
+   */
+  playRelayClack() {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(160, now);
+    osc.frequency.exponentialRampToValueAtTime(90, now + 0.04);
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 600;
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.22, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.physicalBus);
+    osc.start(now);
+    osc.stop(now + 0.04);
+  }
+
+  /**
    * Terminal blip — short FM sweep, ~50ms, low volume. Used for comms boot
    * messages and the salvage-manifest typewriter reveal.
    * P5 (#4): optional `step` pitches each row up (+60 Hz/row) so a run of blips

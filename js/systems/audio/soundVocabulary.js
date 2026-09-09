@@ -52,6 +52,8 @@ export const soundVocabulary = {
   startThrusterHum:    { family: 'PHYSICAL', meaning: 'thruster hum',              trigger: 'thrust active' },
   startRcsHiss:        { family: 'PHYSICAL', meaning: 'RCS attitude hiss',         trigger: 'manual RCS couple firing' },
   playRcsPuff:         { family: 'PHYSICAL', meaning: 'RCS ignition puff',         trigger: 'fresh RCS couple ignition' },
+  // FURNACE gag v2 (plan 1788957399035 §1.19): one clack per HUD panel returning after the blackout.
+  playRelayClack:      { family: 'PHYSICAL', meaning: 'a breaker relay closing as one HUD panel returns (systems reboot)', trigger: 'HudReboot: each panel returning after the FURNACE blackout' },
 
   // ---- RADIO — comms channel activity ----
   playCommsCrackle:    { family: 'RADIO', meaning: 'comms channel activity',       trigger: 'comms online at mission handoff (squelch only — no blips)' },
