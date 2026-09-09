@@ -3485,17 +3485,55 @@ async function init() {
       //   window.__scbFlower(pairs)   → install aft-flower pair A (≥1) /
       //     pairs A+B (≥2) through the SAME applyUpgrade effect path a shop
       //     purchase drives, then report getFlowerStatus().
-      //   window.__scbFlowerPose(p)   → drive the slew latch to a named
-      //     ladder pose ('STOW' | 'PARK' | 'CARGO').
+      //   window.__scbFlowerPose(p, opts) → drive the slew latch to a named
+      //     ladder pose ('STOW' | 'PARK' | 'CARGO'). Design 7b: 'LAUNCH' (the
+      //     fore-folded fairing pose) is refused from orbit unless the caller
+      //     passes { force: true } — the dev-only override the frames harness
+      //     uses; the production arming path is the LaunchSequence (T6).
+      //   window.__scbLaunchConfig(on) → Design 7b: the whole ship in its
+      //     launch configuration (ROSA furled, docked struts to α 0 in their
+      //     channels, flower LAUNCH) — the three writes of the 7b mock script
+      //     in one call; `false` restores what `true` recorded and releases
+      //     the flower to STOW through the ordinary release path (the lock
+      //     clears at 90°).
       window.__scbFlower = (pairs = 2) => {
         if (!player) return 'no player';
         if (pairs >= 1) player.applyUpgrade({ effect: 'flowerPairA', value: 1 });
         if (pairs >= 2) player.applyUpgrade({ effect: 'flowerPairB', value: 1 });
         return player.getFlowerStatus();
       };
-      window.__scbFlowerPose = (pose = 'CARGO') => {
+      window.__scbFlowerPose = (pose = 'CARGO', opts = undefined) => {
         if (!player) return 'no player';
-        return { target: player.setFlowerPose(pose), status: player.getFlowerStatus() };
+        const o = (pose === 'LAUNCH' && opts && opts.force === true) ? { force: true } : undefined;
+        return { target: player.setFlowerPose(pose, o), status: player.getFlowerStatus() };
+      };
+      window.__scbLaunchConfig = (on = true) => {
+        if (!player) return 'no player';
+        const am = player.armManager || armManager;
+        const docked = (am && am.arms ? am.arms : []).filter((a) => a && a.state === 'DOCKED');
+        if (on) {
+          window.__scbLaunchConfigPrev = {
+            rosaManual: player._rosaManualControl,
+            rosaTarget: player._rosaFurlTarget,
+            alphas: docked.map((a) => (a._strutTargetAlpha ?? (a.getAimAlpha ? a.getAimAlpha() : 0))),
+          };
+          player._rosaManualControl = true;      // furl the coils (the launch state)
+          player._rosaFurlTarget = 0;
+          for (const a of docked) a._strutTargetAlpha = 0;   // daughters into their channels
+          const target = player.setFlowerPose('LAUNCH', { force: true });
+          return { on: true, struts: docked.length, flower: target, status: player.getFlowerStatus() };
+        }
+        const prev = window.__scbLaunchConfigPrev;
+        if (prev) {
+          player._rosaManualControl = prev.rosaManual;
+          player._rosaFurlTarget = prev.rosaTarget;
+          docked.forEach((a, i) => { if (prev.alphas[i] !== undefined) a._strutTargetAlpha = prev.alphas[i]; });
+        } else {
+          player._rosaManualControl = false;
+          player._rosaFurlTarget = 1.0;
+        }
+        const target = player.setFlowerPose('STOW');   // the release: lock clears at 90°
+        return { on: false, struts: docked.length, flower: target, status: player.getFlowerStatus() };
       };
 
       // ── Sky-pose hook (Stage 1 sky realism) ──

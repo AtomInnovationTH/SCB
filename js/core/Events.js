@@ -543,8 +543,18 @@ export const Events = {
   THERMAL_FLOWER_INPUT:   'thermal:flowerInput',
   /** Flower slew driver settled on its target pose (latch cleared — the
    *  daughter `_strutTargetAlpha` contract mirrored).
-   *  Payload: { thetaDeg: number, pose: 'STOW'|'PARK'|'CARGO'|'CUSTOM' }. */
+   *  Payload: { thetaDeg: number, pose: 'STOW'|'PARK'|'CARGO'|'LAUNCH'|'CUSTOM' }
+   *  ('LAUNCH' = θ 0, fore-folded along the barrel — Design 7b, reachable only
+   *  under the one-shot launch lock). */
   THERMAL_FLOWER_POSE:    'thermal:flowerPose',
+  /** Design 7b (2026-09-08): the one-shot flower launch lock CLEARED — the
+   *  release swing carried θ up through the orbit ladder floor (90°); from
+   *  here the flower is an ordinary orbit actuator and the lock can never be
+   *  re-armed from orbit. Emitted exactly once per arming, by the driver, the
+   *  frame θ reaches the floor (before the pose latch settles). Distinct from
+   *  LAUNCH_LOCK_RELEASED (the per-daughter strut pyros — their counts in
+   *  test-LaunchSequence.js stay 4 / 6). Payload: { thetaDeg: number }. */
+  THERMAL_FLOWER_RELEASED: 'thermal:flowerReleased',
 
   // === ONBOARDING (Delegation 2 — bottom-screen hint ticker + director) ===
   /** OnboardingDirector posts a hint to the bottom-screen ticker.

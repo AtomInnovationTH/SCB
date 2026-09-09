@@ -40,7 +40,11 @@ export const Constants = {
   // '1011'→'1012': Mother audit — docking_berthing.hardwareNames gains the
   // DOCKING COLLAR card (the T1 nose-collar card, renamed; owner 2026-09-08);
   // no entries added or removed (232).
-  DATA_VERSION: '1012',
+  // '1012'→'1013': Design 7b radiator launch fold — space_radiator.fullText
+  // and vacuum_mechanisms.fullText gain the fold-in-two / launch-lock
+  // sentences (GEO-comsat pattern; owner 2026-09-08); no entries added or
+  // removed (232).
+  DATA_VERSION: '1013',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
@@ -1495,11 +1499,18 @@ export const Constants = {
     HINGE_BEARING: 'Si3N4_MoS2',
 
     // ── Launch Vehicle (NEW) ──
+    // Design 7b (2026-09-08) re-pinned the stale envelope from the built model
+    // in its launch state (daughters in their channels, ROSA furled, the aft
+    // flower fore-folded along the barrel — probe 7b.4c B′): the furled coils
+    // set the diameter (Ø 1.275) and the folded flower tips (z 1.505) with the
+    // FEEP exits (z −1.075) set the length (2.578). The old 1.2 × 2.3 was
+    // written before the coils / collar / flower existed (the bare ship was
+    // already 2.515 × Ø1.275). FAIRING_LENGTH 3.0 keeps 0.42 m over the stack.
     LAUNCH_VEHICLE: 'SSLV',
     FAIRING_DIAMETER: 2.1,         // m
-    FAIRING_LENGTH: 2.5,           // m
-    STOWED_ENVELOPE_DIA: 1.2,      // m
-    STOWED_ENVELOPE_LEN: 2.3,      // m
+    FAIRING_LENGTH: 3.0,           // m — was 2.5 (the bare ship was already 2.515)
+    STOWED_ENVELOPE_DIA: 1.28,     // m — furled ROSA coils Ø1.275 (flower packs r_max 0.546 sit inside)
+    STOWED_ENVELOPE_LEN: 2.58,     // m — FEEP exits −1.075 … folded flower tips +1.505
 
     // ── Mass Budget (UPDATED for Config G — §10.11 canonical) ──
     // Cargo-continuity S13(c): +15 kg for the nose berthing collar (B is
@@ -1594,16 +1605,57 @@ export const Constants = {
   // conservative ceiling 147.35° at R=4, straight-aft limit R=1.714 m, cargo
   // pose 1.9 m bag +0.780 m) and tmp/flower-mass-budget.mjs (probe 4).
   // The P1 allocation table is BINDING: stations at az 45/135/225/315
-  // ± 11.25°, hinge band z −1.000..−0.886 at r 0.34..0.46, deployed envelope
-  // z ≤ −1.0, pose band θ ∈ [90°,146°] under thrust, θ ≥ 90° ALWAYS.
+  // ± 11.25° (Design 7b clocks the hinges to 41/139/221/319 — INSIDE those
+  // grants), hinge band z −1.000..−0.886 at r 0.34..0.51 (Design 7b widened
+  // the bracket band from 0.46 — the owner-approved launch-only amendment),
+  // deployed envelope z ≤ −1.0, pose band θ ∈ [90°,146°] under thrust,
+  // θ ≥ 90° in orbit; θ ∈ [0°, 90°) exists ONLY under the one-shot launch
+  // lock (Design 7b, .kilo/plans/1788863400000-radiator-launch-fold-redesign.md).
   THERMAL: {
     FLOWER: {
       // ── Stations (allocation table rows FLOWER-NE/NW/SW/SE, binding) ──
-      AZIMUTHS_DEG: [45, 135, 225, 315],
-      PAIR_A_AZ_DEG: [45, 225],    // trim-neutral diagonal (S12 ⟂-CoM 0.0000)
-      PAIR_B_AZ_DEG: [135, 315],   // second diagonal — shop stages pairs
-      HINGE_R_M: 0.40,             // hinge ring = barrel/rim radius (V5.COLLAR_RADIUS)
+      // Design 7b (2026-09-08, "has to fold to fit in rocket for launch"): the
+      // flower folds FORE along the barrel for launch (θ 0), so the stations
+      // clock 4° toward the solar-coil axis — the fore-folded boom root must
+      // thread the lane between the docked weaver bodies (az 60 ± 12.5°, r to
+      // 0.528 in the pocket band) and the MGA patch (az 9.8..40.2, r 0.424),
+      // and the folded 0.30 m pack edge must clear the furled coil (r 0.638 at
+      // az 0/180). 41° is the balance point (probe 7b.4c: MGA 0.023 / weaver
+      // 0.025 / coil 0.032 m; 40° → coil 23 mm, 42° → weaver 17 mm). Pairs
+      // stay exact diagonals (trim-neutral); every station lies inside its
+      // P1 ±11.25° grant.
+      AZIMUTHS_DEG: [41, 139, 221, 319],
+      PAIR_A_AZ_DEG: [41, 221],    // trim-neutral diagonal (S12 ⟂-CoM 0.0000)
+      PAIR_B_AZ_DEG: [139, 319],   // second diagonal — shop stages pairs
+      // Hinge pin r 0.475 (was 0.40 = the rim). The clevis stands 7.5 cm above
+      // the rim so the fore-folded boom's inner surface (0.475 − 0.03 = 0.445)
+      // passes OVER the body-PV facet corners (r 0.412) and the MGA patch's
+      // near corner (az 39.5°, r 0.4236) — measured on the built model (T7,
+      // exact point-to-triangle): PV 0.036 / MGA 0.023 m. The plan's 0.47 came
+      // from the probe's 8-point boom sampling (MGA "0.023"); the real Ø60 mm
+      // tube at 0.47 clears the MGA corner by only 0.0178 — under the T7 (i)
+      // gate of 0.020 — so the pin rose 5 mm (WING_GAP_M shrank 5 mm to keep
+      // the pack r_max at 0.546). The P1 ring is still the rim r 0.40; the
+      // bracket box spans r 0.37..0.51 (the amended band's top).
+      HINGE_R_M: 0.475,
       HINGE_Z_M: -1.0,             // rim plane
+
+      // ── Design 7b two-layer folding plate (GEO-comsat pattern) ──
+      // Each 1.70 × 0.60 plate is a 0.30 m CENTRE panel on the boom plus two
+      // FULL 0.15 m wings hinged along the boom line on 1.75 cm offset knuckles
+      // (butt-jointed when open — width 0.60, area 4 × 1.02 = 4.08 m²
+      // preserved). For launch the wings fold onto the centre side by side
+      // (one layer, meeting edge-to-edge at the boom line) and the strut
+      // swings to θ 0: four 0.30 × 0.101 × 1.70 m packs lying along the
+      // barrel. Wing angle is a pure function of θ (lanyard law, T4) — no new
+      // persisted state; orbit always shows them open.
+      PLATE_CENTRE_HALF_WIDTH_M: 0.15,   // centre panel ±0.15 (wings 0.15..0.30)
+      WING_GAP_M: 0.005,           // folded layer gap; knuckle standoff = (gap + thick) / 2 = 0.0175
+      WING_SEAM_M: 0.02,           // dark hinge-seam strip on the centre panel's edge (reads at 3 m)
+      KNUCKLE_M: [0.08, 0.03],     // knuckle block along-boom × across-seam (height = gap + thick)
+      WING_OPEN_DEG: 180,          // deployed dihedral — 180 = wings flat in the plate plane (owner Q4)
+      WING_OPEN_START_DEG: 60,     // lanyard: the wings start opening at θ 60° …
+      WING_OPEN_END_DEG: 90,       // … and latch flat by θ 90° (the orbit ladder floor)
 
       // ── Geometry (probe 2 §1/§4: min enforced-cone clearance with THIS
       //    plate at stow/park/cargo = 0.571/0.746/1.062 m — all ≥ 0.15 floor;
@@ -1625,8 +1677,20 @@ export const Constants = {
                                    // setFlowerPose; brief §2.1 pose grammar)
       POSE_CARGO_DEG: 90,          // full bloom — tips at the rim plane, fore
                                    // of the cone apexes, plume-clear at any R
-      POSE_FLOOR_DEG: 90,          // θ ≥ 90° ALWAYS — enforced IN the driver
+      POSE_FLOOR_DEG: 90,          // θ ≥ 90° in ORBIT — enforced IN the driver
+                                   // (the floor drops to POSE_LAUNCH_DEG only
+                                   // while the one-shot launch lock is armed)
       POSE_THRUST_MAX_DEG: 146,    // P1 global keep-out 7 (reserved band edge)
+      // Design 7b LAUNCH pose: θ 0 — the strut lies FORE along the barrel with
+      // its wings folded (four 0.30 × 0.101 × 1.70 m packs at r ≤ 0.546, tips
+      // z 1.505; probe 7b.4c B′: MGA 0.023 / PV 0.031 / weaver 0.025 / coil
+      // 0.032 m). Reachable ONLY under the one-shot launch lock
+      // (setFlowerPose('LAUNCH') while LaunchSequence.isActive(), or the
+      // ?shot=1 dev hook with { force: true }); the lock clears the frame the
+      // release swing reaches POSE_FLOOR_DEG and cannot be re-armed from orbit.
+      // The driver targets POSE_LAUNCH_DEG − 0.5° and lets the floor clamp hold
+      // θ at exactly 0 (no SETTLE_EPS residual — the mock stopped 0.5° short).
+      POSE_LAUNCH_DEG: 0,
 
       // ── Slew (daughter-stack mirror; drift-guarded ===
       //    OCTOPUS_V5.STRUT_SLEW_RATE by test-FlowerPose.js) ──
@@ -1635,19 +1699,29 @@ export const Constants = {
 
       // ── Mass (probe 4: plate 1.02 m² × 9 kg/m² sandwich + 2.5 m boom
       //    ≈ 1.0 kg/m + bracket/bosses/tip 0.82 kg = 12.5 kg per strut).
-      //    Budget taxes at full tanks: pair A −280.7 m/s, pair B −231.0 m/s
+      //    Design 7b re-price: +0.4 kg/strut for the two wing hinge lines
+      //    (piano hinges, torsion springs, two latches, the taller clevis — an
+      //    engineering estimate, not a probe number) → 12.9 / 25.8. Budget
+      //    taxes at full tanks re-derived with tmp/flower-mass-budget.mjs:
+      //    pair A −288.7 m/s (2896 → 2607), pair B −236.3 m/s (2607 → 2371)
       //    (the shop rows SAY this out loud — §8.1 doctrine). ──
-      STRUT_DRY_MASS_KG: 12.5,
-      PAIR_DRY_MASS_KG: 25.0,
+      STRUT_DRY_MASS_KG: 12.9,
+      PAIR_DRY_MASS_KG: 25.8,
 
-      // ── Per-size tip-bag pose bands (probe 2 §1c, R=2.5, exact tip-sphere
-      //    vs enforced cones). PAPER PIN for P5 — tips are INERT at P2 (no
-      //    booking, no cargo logic). Whale-class NEVER goes aft (MAX_KG). ──
+      // ── Per-size tip-bag pose bands (probe 2 §1c′, R=2.5, exact tip-sphere
+      //    vs enforced cones at the LIVE pin — hinge r 0.475, stations
+      //    41/139/221/319; tmp/flower-pose-band.mjs reads both from this
+      //    block: exact 146.0000 / 137.6014 / 125.7107 / 115.5860). Design 7b
+      //    re-derived them (was 146.0 / 136.7 / 124.8 / 114.6 at 45 / 0.40 —
+      //    kept in the probe as its §0-class gate): every band widens slightly
+      //    because the taller clevis moves the tip outboard, farther from the
+      //    cones. PAPER PIN for P5 — tips are INERT at P2 (no booking, no
+      //    cargo logic). Whale-class NEVER goes aft. ──
       TIP_BAG_BANDS: [
         { bagRadiusM: 0.5, maxThetaDeg: 146.0 },
-        { bagRadiusM: 1.0, maxThetaDeg: 136.7 },
-        { bagRadiusM: 1.5, maxThetaDeg: 124.8 },
-        { bagRadiusM: 1.9, maxThetaDeg: 114.6 },
+        { bagRadiusM: 1.0, maxThetaDeg: 137.6 },
+        { bagRadiusM: 1.5, maxThetaDeg: 125.7 },
+        { bagRadiusM: 1.9, maxThetaDeg: 115.6 },
       ],
     },
   },

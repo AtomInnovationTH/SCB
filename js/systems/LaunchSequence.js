@@ -9,6 +9,20 @@
  *   LAUNCH_LOCK_RELEASE → ROSA_DEPLOY_PRIMARY → ROSA_DEPLOY_SECONDARY →
  *   POWER_NOMINAL → READY
  *
+ * Design 7b (2026-09-08, radiator launch fold — dormant with the flag): the
+ * sequence is the ONE production owner of the aft flower's one-shot launch
+ * lock. start() hands itself to the player (setLaunchSequence — the ownership
+ * handshake the ROSA roll-out code was written for) and SNAPS the flower to
+ * LAUNCH (θ 0, fore along the barrel, wings folded — the ship is launched
+ * already folded); entering ORBIT_INSERTION releases it to STOW (the lock
+ * clears as θ passes 90°, 6 s at 15°/s; wings open over θ 60..90°; full STOW
+ * at 9.7 s — all inside the 40 s ORBIT_INSERTION phase, so the flower is an
+ * ordinary orbit actuator long before LAUNCH_LOCK_RELEASE); skipToReady()
+ * snaps it to STOW. No extra
+ * LAUNCH_LOCK_RELEASED emit — those are the per-daughter strut pyros, and
+ * their counts are pinned (test-LaunchSequence.js). The flower's own event is
+ * Events.THERMAL_FLOWER_RELEASED, emitted by the player's driver.
+ *
  * @module systems/LaunchSequence
  */
 
@@ -81,6 +95,32 @@ class LaunchSequence {
 
     // Enter initial phase (emits LAUNCH_PHASE_CHANGED with fromPhase: null)
     this._setPhase(0); // STOWED_IN_FAIRING
+
+    // Design 7b: the aft flower is launched ALREADY folded — snap it to LAUNCH
+    // (the fold happened on the pad; a 9.7 s slew inside the fairing would not
+    // even finish before ORBIT_INSERTION at t ≈ 8 s). The player accepts the
+    // fairing pose only while it can see an ACTIVE sequence, so hand ourselves
+    // over first (isActive() is true from here: running, phase set, not READY).
+    const ps = this._flowerPlayer();
+    if (ps) {
+      if (typeof ps.setLaunchSequence === 'function') ps.setLaunchSequence(this);
+      if (typeof ps.snapFlowerToLaunch === 'function') ps.snapFlowerToLaunch();
+      else ps.setFlowerPose('LAUNCH');
+    }
+  }
+
+  /**
+   * Design 7b — the player whose flower this sequence owns, or null. Read
+   * through the ArmManager (`armManager.playerSatellite`, ArmManager.js) —
+   * LaunchSequence never stores a player of its own. Null when there is no
+   * flower hardware to fold (pre-purchase ships, the test mocks).
+   * @returns {object|null}
+   * @private
+   */
+  _flowerPlayer() {
+    const ps = this._armManager && this._armManager.playerSatellite;
+    if (!ps || typeof ps.setFlowerPose !== 'function' || typeof ps.getFlowerPairCount !== 'function') return null;
+    return ps.getFlowerPairCount() > 0 ? ps : null;
   }
 
   /**
@@ -173,6 +213,11 @@ class LaunchSequence {
     if (this._armManager && typeof this._armManager.setLaunchLock === 'function') {
       this._armManager.setLaunchLock(false);
     }
+
+    // Design 7b: the flower snaps to STOW (lock cleared) — the debug bypass
+    // mirrors "all arms STOWED, ROSA at 100 %" for the radiator too.
+    const ps = this._flowerPlayer();
+    if (ps && typeof ps.snapFlowerToStow === 'function') ps.snapFlowerToStow();
 
     const fromPhase = this._phase;
     this._phase = 'READY';
@@ -298,6 +343,15 @@ class LaunchSequence {
 
     // Phase-entry side effects
     switch (this._phase) {
+      case 'ORBIT_INSERTION': {
+        // Design 7b: release the aft flower — an orbit target under the lock;
+        // the player's driver clears the lock as θ passes 90° (6 s) and
+        // settles at STOW (9.7 s), well inside this 40 s phase. Not a
+        // LAUNCH_LOCK_RELEASED emit (those are the strut pyros, next phase).
+        const ps = this._flowerPlayer();
+        if (ps) ps.setFlowerPose('STOW');
+        break;
+      }
       case 'LAUNCH_LOCK_RELEASE':
         this._beginLaunchLockRelease();
         break;

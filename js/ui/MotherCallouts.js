@@ -438,36 +438,46 @@ const SYSTEMS = [
     // the plate / tip boss through the bloom instead of pointing at the STOW bud.
     // The ship already carries the diegetic thermal
     // sensor — the HEAT (INFRARED) CAM callout under SENSORS.
+    // Design 7b / radiator launch fold (2026-09-08): the stations clocked to
+    // az 41/139/221/319 and the clevis pin rose to r 0.475, so the family
+    // anchor and the two static rows (STRUTS az 41, HINGE BRACKETS az 319) sit
+    // on the new hinge: (0.475 cos 41°, 0.475 sin 41°) = (0.3585, 0.3116). The
+    // plates / tips rows keep their mesh bindings (FlowerStrutPlate_0 /
+    // FlowerStrutTipPad_0) and their pre-bind stand-ins. HINGE BRACKETS
+    // massKg 1 → 2.6 (the wing piano hinges + latches: +0.4 kg/strut) so the
+    // family total follows the 51.6 kg budget pin (37 + 10 + 2 + 2.6).
     id: 'THERMAL', label: 'THERMAL',
-    anchor: [ 0.283 * M, 0.283 * M, -1.02 * M ],
+    anchor: [ 0.3585 * M, 0.3116 * M, -1.02 * M ],
     role: 'aft flower — struts open LIKE A FLOWER',
     flowerGated: true,
     parts: [
       { id: 'flower_plates', name: 'RADIATOR PLATES', risk: 'GREEN', tier: 'major', codexId: 'space_radiator',
         massKg: 37, priority: 6, flowerGated: true,
-        specs: ['4× 1.70×0.60 m panels along the struts', 'Reject heat as infrared — numbers come with the loop refit'],
-        // Mother audit T10: the leader follows plate 0 (az 45, pair A) through
-        // the pose — the static tuple only ever matched the STOW bud. The
-        // flowerGated one-shot binds the frame after purchase (_resolveAnchor);
-        // the static stands in until then, moved to the pair-A azimuth 225 so
-        // it never coincides with the AFT FLOWER STRUTS card at az 45.
+        specs: ['4× 1.70×0.60 m tri-panel radiators, fold flat for launch', 'Reject heat as infrared — numbers come with the loop refit'],
+        // Mother audit T10: the leader follows plate 0 (pair A — az 41 since
+        // Design 7b, was 45) through the pose — the static tuple only ever
+        // matched the STOW bud. The flowerGated one-shot binds the frame after
+        // purchase (_resolveAnchor); the static stands in until then, parked
+        // on pair A's OTHER station side (tuple az 225, 4° off the 221
+        // station — a pre-purchase stand-in, not a hardware pin) so it never
+        // coincides with the AFT FLOWER STRUTS card at az 41.
         mesh: 'FlowerStrutPlate_0', dynamic: true,
         anchor: [ -0.30 * M, -0.30 * M, -1.15 * M ] },
       { id: 'flower_struts', name: 'AFT FLOWER STRUTS', risk: 'GREEN', tier: 'major', codexId: 'vacuum_mechanisms',
         massKg: 10, priority: 6, flowerGated: true,
-        specs: ['4× aft-pivot booms, 2.5 m', 'They open LIKE A FLOWER — O deploys / stows'],
-        anchor: [ 0.283 * M, 0.283 * M, -1.10 * M ] },
+        specs: ['4× aft-pivot booms, 2.5 m — fold fore along the bus for launch', 'They open LIKE A FLOWER — O deploys / stows'],
+        anchor: [ 0.3585 * M, 0.3116 * M, -1.10 * M ] },
       { id: 'flower_tips', name: 'TIP HARDPOINTS', risk: 'GREEN', tier: 'detail', codexId: 'tip_hardpoints',
         massKg: 2, priority: 2, flowerGated: true,
         specs: ['Inert cargo bosses at the strut tips', 'Cold-cell refit will bolt on here'],
-        // Mother audit T10: the leader rides tip boss 0 (az 45) through the pose
+        // Mother audit T10: the leader rides tip boss 0 (az 41 since Design 7b) through the pose
         // (static stands in pre-purchase, then the gated one-shot binds).
         mesh: 'FlowerStrutTipPad_0', dynamic: true,
         anchor: [ -0.283 * M, -0.283 * M, -1.12 * M ] },
       { id: 'flower_hinges', name: 'FLOWER HINGE BRACKETS', risk: 'YELLOW', tier: 'detail', codexId: 'vacuum_mechanisms',
-        massKg: 1, priority: 2, flowerGated: true,
-        specs: ['Rim-band clevises, MoS₂-filmed pins', 'Hinges are the honest jam risk'],
-        anchor: [ 0.283 * M, -0.283 * M, -0.94 * M ] },
+        massKg: 2.6, priority: 2, flowerGated: true,
+        specs: ['Rim-band clevises r 0.475, MoS₂-filmed pins; wing piano hinges + one-shot latches', 'Hinges are the honest jam risk'],
+        anchor: [ 0.3585 * M, -0.3116 * M, -0.94 * M ] },
     ],
   },
   {

@@ -239,13 +239,21 @@ export class PlayerSatellite extends THREE.Group {
     // ONE pose for all four struts at P2 (deploy/stow in unison — per-strut
     // easing is P5's load-aware seam). θ from +Z, α_aft = 180° − θ.
     this._flowerPairs = { A: false, B: false };
-    /** @type {Array<{hinge: THREE.Group, azDeg: number, pair: string}>} */
+    /** @type {Array<{hinge: THREE.Group, azDeg: number, pair: string, wings: THREE.Group[]}>} */
     this._flowerGroups = [];
     this._flowerThetaRad = (Constants.THERMAL.FLOWER.POSE_STOW_DEG * Math.PI) / 180;
     /** Slew latch — the daughter `_strutTargetAlpha` contract mirrored:
      *  player intent wins mid-swing (a new toggle overwrites an in-flight
      *  target), bounded rate, never a snap, cleared on arrival. */
     this._flowerTargetTheta = undefined;
+    /** Design 7b one-shot launch lock: while armed the driver floor is
+     *  POSE_LAUNCH_DEG (0°) instead of POSE_FLOOR_DEG (90°) so the flower can
+     *  lie fore along the barrel inside the fairing. Armed ONLY by
+     *  setFlowerPose('LAUNCH') under LaunchSequence.isActive() (or the dev
+     *  hook's { force: true }); cleared by the driver the frame a release swing
+     *  (any orbit target) carries θ up to the floor — never re-armable from
+     *  orbit (REFIT / OVERRIDE / O only ever pass STOW / PARK / CARGO). */
+    this._flowerLaunchLock = false;
 
     // Tether reel states: 'ready', 'deployed', 'empty' — V5: expanded to 8 reels
     this._tetherStates = Array(V5_ARM_COUNT).fill('ready');
@@ -2895,11 +2903,14 @@ export class PlayerSatellite extends THREE.Group {
   // 3.5 AFT FLOWER (P2 — thermal arc, observe-only)
   // --------------------------------------------------------------------------
   // 4 rigid aft-pivot struts with radiator plates and inert tip hardpoints at
-  // the P1 allocation table's FLOWER-NE/NW/SW/SE stations (az 45/135/225/315,
-  // hinge ring r=0.40 at the z=−1.0 rim, brackets in the z −1.000..−0.886 /
-  // r 0.34..0.46 band). The struts "open LIKE A FLOWER" — the owner's grammar,
-  // kept verbatim. They DRAW and SLEW but throttle nothing: thermal state is
-  // P3, the digest valve is P4, tip cargo booking is P5.
+  // the P1 allocation table's FLOWER-NE/NW/SW/SE stations (az 41/139/221/319
+  // since Design 7b — inside the 45k° ± 11.25° grants; clevis pin r 0.475 at
+  // the z=−1.0 rim, brackets in the z −1.000..−0.886 / r 0.34..0.51 band).
+  // The struts "open LIKE A FLOWER" — the owner's grammar, kept verbatim. They
+  // DRAW and SLEW but throttle nothing: thermal state is P3, the digest valve
+  // is P4, tip cargo booking is P5. Design 7b (2026-09-08): each plate folds
+  // in two along the boom line and the whole flower folds FORE along the
+  // barrel for launch (θ 0, GEO-comsat pattern) — see _buildFlowerPair.
   //
   // Frame per strut: pivotGroup at the hinge point, rotated so local +X =
   // radial out, +Y = tangential, +Z = ship +Z. The hinge child rotates about
@@ -2929,8 +2940,10 @@ export class PlayerSatellite extends THREE.Group {
    * contract: returns null until a pair is purchased — the HUD renders ''
    * (byte-identical to the pre-flower panel). Pose readout only, NO thermal
    * numbers (those are P3).
+   * Design 7b adds pose 'LAUNCH' (θ within 1° of POSE_LAUNCH_DEG — fore-folded)
+   * and `locked` (the one-shot launch lock is armed).
    * @returns {{pairCount:number, thetaDeg:number, openFrac:number,
-   *            slewing:boolean, pose:string}|null}
+   *            slewing:boolean, pose:string, locked:boolean}|null}
    */
   getFlowerStatus() {
     const pairCount = this.getFlowerPairCount();
@@ -2943,15 +2956,18 @@ export class PlayerSatellite extends THREE.Group {
     const near = (deg) => Math.abs(thetaDeg - deg) < 1.0;
     const pose = near(FL.POSE_STOW_DEG) ? 'STOW'
       : near(FL.POSE_PARK_DEG) ? 'PARK'
-        : near(FL.POSE_CARGO_DEG) ? 'CARGO' : 'SLEW';
-    return { pairCount, thetaDeg, openFrac, slewing, pose };
+        : near(FL.POSE_CARGO_DEG) ? 'CARGO'
+          : near(FL.POSE_LAUNCH_DEG) ? 'LAUNCH' : 'SLEW';
+    return { pairCount, thetaDeg, openFrac, slewing, pose, locked: this._flowerLaunchLock };
   }
 
   /**
    * O key — toggle the aft flower between the stow bud (146°) and the full
    * bloom (CARGO 90°). Mirrors toggleRosaFurl: the direction is decided from
    * the LIVE pose so a mid-swing press reverses (player intent wins mid-swing
-   * — the daughter latch contract).
+   * — the daughter latch contract). Design 7b: while the launch lock is armed
+   * (θ 0, fore-folded) this is a RELEASE — θ 0 is below the midpoint, so the
+   * target is STOW and the driver clears the lock as θ passes the 90° floor.
    * @returns {boolean} true when now deploying (opening toward CARGO)
    */
   toggleFlowerDeploy() {
@@ -2967,23 +2983,89 @@ export class PlayerSatellite extends THREE.Group {
    * The P3 thermal-duty / P5 load-easing entry point (and the test hook).
    * Targets clamp to the shipped ladder [POSE_CARGO_DEG, POSE_STOW_DEG] —
    * the pose floor θ ≥ 90° is additionally enforced every frame in the driver.
-   * @param {'STOW'|'PARK'|'CARGO'} pose
-   * @returns {number|null} the accepted target θ in degrees, or null
+   *
+   * Design 7b: 'LAUNCH' (θ 0 — fore along the barrel, wings folded) is the
+   * one-shot fairing pose. It is accepted ONLY while the launch sequence owns
+   * the ship (`this._launchSequence?.isActive?.()`), or from the ?shot=1 dev
+   * hook with an explicit `{ force: true }`; every other caller gets null and
+   * nothing changes. Accepting it ARMS the launch lock (the driver floor drops
+   * to 0°) and latches the target at POSE_LAUNCH_DEG − 0.5° so the floor
+   * clamp holds θ at exactly 0 with no SETTLE_EPS residual. Any orbit pose
+   * (STOW / PARK / CARGO — the REFIT chip, OVERRIDE, the O key) is the
+   * RELEASE: the driver clears the lock the frame θ reaches POSE_FLOOR_DEG
+   * and emits Events.THERMAL_FLOWER_RELEASED once; from then on 'LAUNCH'
+   * without the sequence is refused again — never re-armable from orbit.
+   * @param {'STOW'|'PARK'|'CARGO'|'LAUNCH'} pose
+   * @param {{ force?: boolean }} [opts] dev-hook override, honoured for 'LAUNCH' only
+   * @returns {number|null} the accepted target θ in degrees (0 for LAUNCH), or null
    */
-  setFlowerPose(pose) {
+  setFlowerPose(pose, opts = undefined) {
     const FL = Constants.THERMAL.FLOWER;
+    if (this._flowerGroups.length === 0) return null;
+    if (pose === 'LAUNCH') {
+      const ls = this._launchSequence;
+      const launchActive = !!(ls && typeof ls.isActive === 'function' && ls.isActive());
+      if (!launchActive && !(opts && opts.force === true)) return null;
+      this._flowerLaunchLock = true;
+      this._flowerTargetTheta = ((FL.POSE_LAUNCH_DEG - 0.5) * Math.PI) / 180;
+      return FL.POSE_LAUNCH_DEG;
+    }
     const map = { STOW: FL.POSE_STOW_DEG, PARK: FL.POSE_PARK_DEG, CARGO: FL.POSE_CARGO_DEG };
     const deg = map[pose];
-    if (deg === undefined || this._flowerGroups.length === 0) return null;
+    if (deg === undefined) return null;
     const clamped = Math.max(FL.POSE_CARGO_DEG, Math.min(FL.POSE_STOW_DEG, deg));
     this._flowerTargetTheta = (clamped * Math.PI) / 180;
     return clamped;
   }
 
+  /** @returns {boolean} Design 7b — whether the one-shot flower launch lock is armed. */
+  get flowerLaunchLocked() { return this._flowerLaunchLock; }
+
+  /**
+   * Design 7b — LaunchSequence.start()'s hand-off: the ship is launched ALREADY
+   * folded (the fold happens on the pad, not in the fairing — and the 9.7 s
+   * slew would not finish before ORBIT_INSERTION at t ≈ 8 s), so the sequence
+   * snaps the flower to LAUNCH: lock armed, θ = POSE_LAUNCH_DEG exactly, wings
+   * folded, latch idle, hinges written now. Same gate as setFlowerPose('LAUNCH')
+   * minus the dev force: ONLY while an active LaunchSequence is wired; refused
+   * (false) from orbit. No POSE event — nothing slewed. No hardware → false.
+   * @returns {boolean} true when snapped
+   */
+  snapFlowerToLaunch() {
+    if (this._flowerGroups.length === 0) return false;
+    const ls = this._launchSequence;
+    if (!(ls && typeof ls.isActive === 'function' && ls.isActive())) return false;
+    const FL = Constants.THERMAL.FLOWER;
+    this._flowerLaunchLock = true;
+    this._flowerTargetTheta = undefined;
+    this._flowerThetaRad = (FL.POSE_LAUNCH_DEG * Math.PI) / 180;
+    this._updateFlower(0);
+    return true;
+  }
+
+  /**
+   * Design 7b — LaunchSequence.skipToReady()'s hand-off: snap the flower to the
+   * STOW bud with the launch lock cleared and the latch idle, and write the
+   * hinges / wings now (no slew — the debug bypass mirrors "all arms STOWED,
+   * ROSA at 100 %"). Emits THERMAL_FLOWER_RELEASED once if the lock WAS armed
+   * (so listeners see the same release the real swing would have produced);
+   * no POSE event — nothing slewed. No hardware → no-op.
+   */
+  snapFlowerToStow() {
+    if (this._flowerGroups.length === 0) return;
+    const FL = Constants.THERMAL.FLOWER;
+    const wasLocked = this._flowerLaunchLock;
+    this._flowerLaunchLock = false;
+    this._flowerTargetTheta = undefined;
+    this._flowerThetaRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+    this._updateFlower(0);
+    if (wasLocked) eventBus.emit(Events.THERMAL_FLOWER_RELEASED, { thetaDeg: FL.POSE_STOW_DEG });
+  }
+
   /**
    * @private Install a purchased pair (idempotent — the save-restore path
-   * re-applies shop effects, so a second call is a no-op). Pair A = az 45/225,
-   * pair B = az 135/315 — trim-neutral diagonals (S12 ⟂-CoM 0.0000).
+   * re-applies shop effects, so a second call is a no-op). Pair A = az 41/221,
+   * pair B = az 139/319 — trim-neutral diagonals (S12 ⟂-CoM 0.0000).
    */
   _installFlowerPair(pairKey) {
     if (this._flowerPairs[pairKey]) return;
@@ -2995,8 +3077,8 @@ export class PlayerSatellite extends THREE.Group {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'THERMAL',
       text: pairKey === 'A'
-        ? 'Aft flower pair A installed — radiator struts at az 45/225. They open LIKE A FLOWER: press O.'
-        : 'Aft flower pair B installed — full four-strut flower at az 45/135/225/315. O deploys and stows.',
+        ? 'Aft flower pair A installed — radiator struts at az 41/221. They open LIKE A FLOWER: press O.'
+        : 'Aft flower pair B installed — full four-strut flower at az 41/139/221/319. O deploys and stows.',
       priority: 'info',
     });
   }
@@ -3004,7 +3086,7 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * @private Build the two struts of one pair. Names use the P1-reserved
    * `FlowerStrut_*` LOD prefix (PascalCase_${i} convention); station index i
-   * is fixed by azimuth order (0:45°, 1:135°, 2:225°, 3:315°) regardless of
+   * is fixed by azimuth order (0:41°, 1:139°, 2:221°, 3:319°) regardless of
    * purchase order. Bolts take the `MountBolt_` prefix so the DETAIL-LOD
    * inert-hardware family culls them by naming convention alone — no floating
    * boxes: every piece hangs off the bracket/boom/plate stack.
@@ -3027,14 +3109,90 @@ export class PlayerSatellite extends THREE.Group {
     const padMat = new THREE.MeshStandardMaterial({
       color: 0x444455, metalness: 0.7, roughness: 0.3,
     });
+    // Design 7b hinge-seam groove: near-black, matte — reads as the shadowed
+    // gap between the centre panel and each wing.
+    const seamMat = new THREE.MeshStandardMaterial({
+      color: 0x1c1e26, metalness: 0.3, roughness: 0.85,
+    });
 
     const boomLen = FL.STRUT_LENGTH_M * M;
     // 20 radial segments (was 10): the Ø60 mm strut is a foreground tube in
     // the aft frames and its facets showed (Mother fixes, round ends).
     const boomGeo = new THREE.CylinderGeometry(FL.STRUT_RADIUS_M * M, FL.STRUT_RADIUS_M * M, boomLen, 20);
     const plateLen = (FL.PLATE_END_M - FL.PLATE_START_M) * M;
-    const plateGeo = new THREE.BoxGeometry(plateLen, FL.PLATE_HALF_WIDTH_M * 2 * M, FL.PLATE_THICK_M * M);
-    const bracketGeo = new THREE.BoxGeometry(0.10 * M, 0.14 * M, 0.10 * M);
+    const plateX = ((FL.PLATE_START_M + FL.PLATE_END_M) / 2) * M;
+    // Design 7b (2026-09-08, "has to fold to fit in rocket for launch"): the
+    // 1.70 × 0.60 plate is a 0.30 m CENTRE panel on the boom plus two FULL
+    // 0.15 m WINGS hinged along the boom line (GEO-comsat intercostal-hinge
+    // pattern). Open: butt-jointed, width 0.60, area 4 × 1.02 = 4.08 m²
+    // preserved. Folded (launch, θ 0): both wings land side by side on ONE
+    // layer over the centre panel's −Z_hinge face (= radially OUTBOARD when
+    // the strut lies fore along the barrel) and meet at the boom line
+    // edge-to-edge — a 0.30 × 0.101 × 1.70 m pack (probe 7b.4c B′ shape, r_max
+    // 0.546 on the built model).
+    const cHalf = FL.PLATE_CENTRE_HALF_WIDTH_M;
+    const wingW = FL.PLATE_HALF_WIDTH_M - cHalf;                  // 0.15 — the FULL wing (⟦R⟧1: no air seam)
+    const layer = FL.WING_GAP_M + FL.PLATE_THICK_M;               // 0.035 folded layer pitch
+    const knuckleK = layer / 2;                                   // 0.0175 offset knuckle standoff
+    const plateGeo = new THREE.BoxGeometry(plateLen, 2 * cHalf * M, FL.PLATE_THICK_M * M);
+    const wingGeo = new THREE.BoxGeometry(plateLen, wingW * M, FL.PLATE_THICK_M * M);
+    // Hinge-seam strip: a dark 2 cm band on the centre panel's edge, set back
+    // 2 mm from the hinge-line plane (so no side face shares the wing's edge
+    // plane) and standing 1 mm proud of both plate faces (log-depth rule: ≥ 1
+    // mm proud, never coplanar). A true cut groove would need the panel split;
+    // the dark band is what reads at 3 m (the design-7b readers' first
+    // complaint was "featureless slabs").
+    const seamGeo = new THREE.BoxGeometry(plateLen, FL.WING_SEAM_M * M, (FL.PLATE_THICK_M + 0.002) * M);
+    const seamY = (cHalf - 0.002 - FL.WING_SEAM_M / 2) * M;
+    // Knuckle blocks (8 × 3 × 3.5 cm): the offset piano-hinge barrels, three
+    // per hinge line. Their height IS the layer pitch and they sit centred
+    // half a standoff below the fold axis, so open they run from 6.25 mm
+    // under the +Z face to 11.25 mm proud of the −Z face (both ends buried in
+    // the centre panel's own thickness — this set is invisible from outside
+    // in EITHER pose; that is what the wing-mounted set below is for). Folded
+    // (measured on the built model): span hinge-z −0.04375..−0.00875, i.e.
+    // fully inside the 5 mm gap-and-wing-inner-face region — 6.25 mm short of
+    // the wing's own inner face (−0.02) and 6.25 mm short of the wing's OUTER
+    // (camera-visible) face (−0.05); this set stays hidden folded too.
+    const knuckleGeo = new THREE.BoxGeometry(FL.KNUCKLE_M[0] * M, FL.KNUCKLE_M[1] * M, layer * M);
+    // Mother visual-audit fix (2026-09-08, T7 frames pass): the hinge-mounted
+    // seam + knuckles above sit on the CENTRE PANEL's own faces, which become
+    // the INNERMOST, barrel-facing layer once folded — measured on the built
+    // model, the true OUTERMOST (camera-visible) layer at LAUNCH is the
+    // WING's own +Z face (r 0.546; the plate/knuckle set is buried 6–24 mm
+    // beneath it, invisible from outside). Folded packs read as featureless
+    // slabs. Fix: mount a matching seam + three knuckle echoes on EACH WING
+    // itself (children of `wh`, not `hinge`) so they ride the wing's own
+    // transform — 1 mm proud of the wing's own faces BOTH when deployed (the
+    // radiating face, where a real fold-in-two panel's hinge line legitimately
+    // shows) and when folded (now the outermost layer, since the wing carries
+    // its own detail this time instead of relying on the buried centre-panel
+    // set). wingSeamGeo reuses seamGeo's cross-section (symmetric ±1 mm about
+    // the wing's own mid-plane, same dark groove; 1 cm wide, y 0.015..0.025).
+    // wingKnuckleGeo is a SHORTER echo (12 mm, not the full 35 mm layer
+    // pitch — this one does not need to bridge two panels, it only needs to
+    // read against ONE). Its outer face sits 2 mm past the wing's own +Z face
+    // = 1 mm proud of the wing seam it straddles (the knuckle's y 0.01..0.03
+    // footprint covers the seam's y 0.015..0.025; at +1 mm both faces were
+    // coplanar and z-fought — the log-depth rule applies to the surface the
+    // part actually sits on, so the knuckle stands 1 mm proud of the SEAM).
+    // The other end (12 mm back) is buried 10 mm inside the wing's own 30 mm.
+    const wingSeamGeo = new THREE.BoxGeometry(plateLen, 0.01 * M, (FL.PLATE_THICK_M + 0.002) * M);
+    const WING_KNUCKLE_H_M = 0.012;
+    const wingKnuckleGeo = new THREE.BoxGeometry(0.05 * M, 0.02 * M, WING_KNUCKLE_H_M * M);
+    const wingKnuckleOuterZ = knuckleK + FL.PLATE_THICK_M / 2 + 0.002;   // wing's +Z face + 2 mm = seam face + 1 mm
+    const wingKnuckleZ = wingKnuckleOuterZ - WING_KNUCKLE_H_M / 2;
+    // 2 cm inset from the fold axis (y 0) — matches the original plate-side
+    // seam's "set back from the edge" convention, and keeps r_max at the
+    // pinned 0.546 (a proud element sitting exactly ON the fold axis, y 0,
+    // measurably out-radials the wing's own far-edge corner through the
+    // θ-rotation; 2 cm in from it does not — re-measured at +2 mm proud:
+    // r_max 0.546, test-FlowerLaunchFold (ii) unchanged).
+    const WING_DETAIL_Y_M = 0.02;
+    // Bracket box 0.14 radial × 0.14 tangential × 0.10 deep — spans r
+    // 0.37..0.51 about the pin at 0.475 (P1 bracket band widened to 0.51 by
+    // the owner-approved Design 7b amendment), z −0.99..−0.89.
+    const bracketGeo = new THREE.BoxGeometry(0.14 * M, 0.14 * M, 0.10 * M);
     const pinGeo = new THREE.CylinderGeometry(0.018 * M, 0.018 * M, 0.16 * M, 8);
     // Mother audit T11 (X2): the tip boss grows over the plate/boom seam —
     // h 0.04 → 0.065 at tip-local x −0.0275 spans boom-x 2.44…2.505: the
@@ -3063,15 +3221,18 @@ export class PlayerSatellite extends THREE.Group {
       this.add(pivot);
 
       // Hinge bracket — clevis on the barrel FORE of the rim, inside the
-      // allocated band (z −1.000..−0.886, r 0.34..0.46): box spans r
-      // 0.35..0.45, z −0.99..−0.89. Does not rotate with the pose.
+      // allocated band (z −1.000..−0.886, r 0.34..0.51 — Design 7b widened the
+      // P1 band from 0.46, owner-approved): box spans r 0.37..0.51 about the
+      // pin at r 0.475, z −0.99..−0.89. Does not rotate with the pose. The
+      // clevis stands 7.5 cm above the rim so the fore-folded boom clears the
+      // PV / MGA corners (Constants.THERMAL.FLOWER.HINGE_R_M).
       // Mother audit T11 (X1): the box used to span z −1.00..−0.90, its aft
       // face EXACTLY in the rear-cap plane (a coplanar tie the aft-on frames
       // showed as a flush-tied bracket). 10 mm FORE now: the aft face stands
       // 10 mm clear of the cap plane; test-FlowerHardware's band check
       // (z −1.000..−0.886) still holds (−0.99..−0.89).
       const bracket = new THREE.Mesh(bracketGeo, bracketMat);
-      bracket.position.set(0, 0, 0.06 * M);
+      bracket.position.set(-0.035 * M, 0, 0.06 * M);  // centre r 0.44 → box r 0.37..0.51
       bracket.name = `FlowerStrutBracket_${i}`;
       bracket.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
       pivot.add(bracket);
@@ -3114,11 +3275,82 @@ export class PlayerSatellite extends THREE.Group {
       // 30 mm plate's mid-plane, so it stands 15 mm proud of BOTH faces as a
       // central spine (Mother audit T11/X3: intentional — a bare-plate look
       // would need a boom ≤ Ø30 or a thicker plate; neither is wanted).
+      // Design 7b: FlowerStrutPlate_${i} is the 0.30 m CENTRE panel (name,
+      // boom-spine mid-plane and tangential-width convention kept — the
+      // callout binding and test-FlowerHardware's spine pin read this mesh).
       const plate = new THREE.Mesh(plateGeo, plateMat);
-      plate.position.x = ((FL.PLATE_START_M + FL.PLATE_END_M) / 2) * M;
+      plate.position.x = plateX;
       plate.name = `FlowerStrutPlate_${i}`;
       plate.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
       hinge.add(plate);
+
+      // Design 7b wings: one hinge group per side at the hinge line
+      // (x_mid, ±0.15, −0.0175) — the 1.75 cm offset knuckle puts the fold axis
+      // below the −Z face so the folded wing lands one layer (0.035) outboard
+      // of the centre panel with a 5 mm air gap. The L group is turned π about
+      // Z so its local +Y points outward along ITS wing: both groups then
+      // share one fold-angle sign (rotation.x = −π folded … 0 open, driven by
+      // _updateFlower's lanyard law). Open: mid-plane flush with the centre
+      // panel, inner edge butt-jointed at y = ±0.15 (adjacent faces, not
+      // overlapping). Folded: wing R spans y 0..0.15 and wing L 0..−0.15 at
+      // mid-plane z −0.035 — they MEET at y = 0 edge-to-edge.
+      const wings = [];
+      for (const [side, sgn] of [['L', -1], ['R', +1]]) {
+        const wh = new THREE.Group();
+        wh.name = `FlowerStrutWingHinge_${i}_${side}`;
+        wh.position.set(plateX, sgn * cHalf * M, -knuckleK * M);
+        if (sgn < 0) wh.rotation.z = Math.PI;
+        hinge.add(wh);
+        const wing = new THREE.Mesh(wingGeo, plateMat);
+        wing.position.set(0, (wingW / 2) * M, knuckleK * M);
+        wing.name = `FlowerStrutWing_${i}_${side}`;
+        wing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+        wh.add(wing);
+        // Three knuckle blocks per hinge line, centred on the fold axis
+        // (wh-local y 0) at x −0.6 / 0 / +0.6 of the plate; height `layer`
+        // centred at z knuckleK/2 → spans hinge-frame z −0.026..+0.009 open.
+        [-0.6, 0, 0.6].forEach((sx, k) => {
+          const kn = new THREE.Mesh(knuckleGeo, bracketMat);
+          kn.position.set(sx * M, 0, (knuckleK / 2) * M);
+          kn.name = `FlowerStrutKnuckle_${i}_${side}_${k}`;
+          kn.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+          wh.add(kn);
+        });
+        // Mother visual-audit fix: the WING's own hinge-line detail (children
+        // of `wh`, so they carry the wing's own fold transform exactly — no
+        // separate folded-frame math needed). wingSeam straddles the wing's
+        // OWN mid-plane by 1 mm each face, 2 cm in from the fold axis (wh y
+        // 0.015..0.025), spanning the wing's full length — the visible hinge
+        // groove on whichever face is toward the camera in EITHER pose
+        // (deployed: the radiating +Z face; folded: the same +Z face, now the
+        // pack's outermost layer). Three knuckle echoes ride the same y line
+        // (y 0.01..0.03, straddling the seam), each 2 mm proud of the wing's
+        // own +Z face = 1 mm proud of the seam, and buried 10 mm into the
+        // wing's 30 mm thickness on the other end — short (12 mm, not the
+        // full 35 mm layer pitch) because this set only needs to clear ONE
+        // panel. Folded, the seam's inner-face millimetre sits 4 mm off the
+        // centre panel's face (the 5 mm WING_GAP_M minus 1) — no contact.
+        const wingSeam = new THREE.Mesh(wingSeamGeo, seamMat);
+        wingSeam.position.set(0, WING_DETAIL_Y_M * M, knuckleK * M);
+        wingSeam.name = `FlowerStrutWingSeam_${i}_${side}`;
+        wingSeam.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+        wh.add(wingSeam);
+        [-0.6, 0, 0.6].forEach((sx, k) => {
+          const wkn = new THREE.Mesh(wingKnuckleGeo, bracketMat);
+          wkn.position.set(sx * M, WING_DETAIL_Y_M * M, wingKnuckleZ * M);
+          wkn.name = `FlowerStrutWingKnuckle_${i}_${side}_${k}`;
+          wkn.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+          wh.add(wkn);
+        });
+        // Seam strip on the CENTRE panel's edge (a hinge child — it does not
+        // fold with the wing): y from ±0.128 to ±0.148, 1 mm proud each face.
+        const seam = new THREE.Mesh(seamGeo, seamMat);
+        seam.position.set(plateX, sgn * seamY, 0);
+        seam.name = `FlowerStrutSeam_${i}_${side}`;
+        seam.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+        hinge.add(seam);
+        wings.push(wh);
+      }
 
       // Inert tip hardpoint — a named node + boss pad. NO booking, NO cargo
       // logic (P5's seam lands on this node).
@@ -3133,13 +3365,38 @@ export class PlayerSatellite extends THREE.Group {
       pad.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
       tip.add(pad);
 
-      this._flowerGroups.push({ hinge, azDeg, pair: pairKey });
+      this._flowerGroups.push({ hinge, azDeg, pair: pairKey, wings });
     }
 
     // Initialize the new pair at the current shared pose immediately (a pair
-    // bought mid-slew joins the swing on the next driver tick).
+    // bought mid-slew joins the swing on the next driver tick). Wings follow
+    // the same θ through the lanyard law (_flowerWingFoldAngle).
     const rotY = this._flowerThetaRad - Math.PI / 2;
-    for (const fg of this._flowerGroups) fg.hinge.rotation.y = rotY;
+    const foldX = this._flowerWingFoldAngle(this._flowerThetaRad);
+    for (const fg of this._flowerGroups) {
+      fg.hinge.rotation.y = rotY;
+      for (const wh of fg.wings) wh.rotation.x = foldX;
+    }
+  }
+
+  /**
+   * @private Design 7b lanyard law — wing fold angle (rotation.x of both
+   * FlowerStrutWingHinge_* groups) as a PURE function of the strut angle θ:
+   * −π (folded flat onto the centre panel) below WING_OPEN_START_DEG, linear to
+   * the deployed dihedral by WING_OPEN_END_DEG (the orbit ladder floor), so the
+   * shipping orbit band θ ≥ 90° always shows them open. WING_OPEN_DEG 180 =
+   * flat (owner Q4); a shallower dihedral tilts each wing by (180 − D)/2
+   * toward the fold side. No persisted state.
+   * @param {number} thetaRad
+   * @returns {number} radians
+   */
+  _flowerWingFoldAngle(thetaRad) {
+    const FL = Constants.THERMAL.FLOWER;
+    const thetaDeg = (thetaRad * 180) / Math.PI;
+    const open = Math.max(0, Math.min(1,
+      (thetaDeg - FL.WING_OPEN_START_DEG) / (FL.WING_OPEN_END_DEG - FL.WING_OPEN_START_DEG)));
+    const openTilt = ((180 - FL.WING_OPEN_DEG) / 2) * Math.PI / 180;
+    return -(Math.PI * (1 - open) + openTilt * open);
   }
 
   /**
@@ -3155,33 +3412,62 @@ export class PlayerSatellite extends THREE.Group {
    * past 146° (Y3 axial reserve + plume band — tmp/flower-pose-band.mjs §2),
    * so the whole reachable range is thrust-legal and the driver needs NO
    * thrust-coupled writes.
+   *
+   * Design 7b: while the one-shot launch lock is armed the floor is
+   * POSE_LAUNCH_DEG (0°) — the fore-folded fairing pose, measured against the
+   * DOCKED daughters (probe 7b.4c / 7b.6b). The lock clears — once, with
+   * Events.THERMAL_FLOWER_RELEASED — the frame a release swing (any target at
+   * or above the orbit floor) carries θ up to POSE_FLOOR_DEG; a release never
+   * latches below the floor (so a CARGO release cannot settle at 89.9° with
+   * the lock still armed). Order: slew → clamp → release → settle, so every
+   * event carries the CLAMPED θ (the LAUNCH latch reads exactly 0).
    */
   _updateFlower(dt) {
     if (this._flowerGroups.length === 0) return;
     const FL = Constants.THERMAL.FLOWER;
+    const target = this._flowerTargetTheta;
+    const stepping = target !== undefined && dt > 0;
 
-    if (this._flowerTargetTheta !== undefined && dt > 0) {
+    if (stepping) {
       const maxDelta = FL.SLEW_RATE_RAD_S * dt;
-      const delta = this._flowerTargetTheta - this._flowerThetaRad;
+      const delta = target - this._flowerThetaRad;
       this._flowerThetaRad += Math.max(-maxDelta, Math.min(delta, maxDelta));
-      if (Math.abs(this._flowerThetaRad - this._flowerTargetTheta) < FL.SETTLE_EPS_RAD) {
-        const thetaDeg = (this._flowerThetaRad * 180) / Math.PI;
-        const near = (deg) => Math.abs(thetaDeg - deg) < 1.0;
-        const pose = near(FL.POSE_STOW_DEG) ? 'STOW'
-          : near(FL.POSE_PARK_DEG) ? 'PARK'
-            : near(FL.POSE_CARGO_DEG) ? 'CARGO' : 'CUSTOM';
-        this._flowerTargetTheta = undefined;
-        eventBus.emit(Events.THERMAL_FLOWER_POSE, { thetaDeg, pose });
-      }
     }
 
     // Pose floor + ladder ceiling — clamped in the driver, unconditionally.
-    const floorRad = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
+    const orbitFloorRad = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
+    const floorRad = this._flowerLaunchLock ? (FL.POSE_LAUNCH_DEG * Math.PI) / 180 : orbitFloorRad;
     const ceilRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
     this._flowerThetaRad = Math.max(floorRad, Math.min(ceilRad, this._flowerThetaRad));
 
+    // Design 7b release: an orbit-bound swing under the lock clears it the
+    // frame θ reaches the orbit floor. Exactly once per arming.
+    const releasing = this._flowerLaunchLock && target !== undefined && target >= orbitFloorRad - 1e-9;
+    if (releasing && this._flowerThetaRad >= orbitFloorRad - 1e-9) {
+      this._flowerLaunchLock = false;
+      eventBus.emit(Events.THERMAL_FLOWER_RELEASED, { thetaDeg: (this._flowerThetaRad * 180) / Math.PI });
+    }
+
+    if (stepping && Math.abs(this._flowerThetaRad - target) < FL.SETTLE_EPS_RAD
+        && !(this._flowerLaunchLock && releasing)) {
+      const thetaDeg = (this._flowerThetaRad * 180) / Math.PI;
+      const near = (deg) => Math.abs(thetaDeg - deg) < 1.0;
+      const pose = near(FL.POSE_STOW_DEG) ? 'STOW'
+        : near(FL.POSE_PARK_DEG) ? 'PARK'
+          : near(FL.POSE_CARGO_DEG) ? 'CARGO'
+            : near(FL.POSE_LAUNCH_DEG) ? 'LAUNCH' : 'CUSTOM';
+      this._flowerTargetTheta = undefined;
+      eventBus.emit(Events.THERMAL_FLOWER_POSE, { thetaDeg, pose });
+    }
+
     const rotY = this._flowerThetaRad - Math.PI / 2;
-    for (const fg of this._flowerGroups) fg.hinge.rotation.y = rotY;
+    // Design 7b wings ride the same θ (lanyard law — a pure function, so the
+    // orbit band θ ≥ 90° always shows them flat; no persisted wing state).
+    const foldX = this._flowerWingFoldAngle(this._flowerThetaRad);
+    for (const fg of this._flowerGroups) {
+      fg.hinge.rotation.y = rotY;
+      for (const wh of fg.wings) wh.rotation.x = foldX;
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -5509,8 +5795,17 @@ export class PlayerSatellite extends THREE.Group {
    * @private
    */
   _updateThrusterInterlock() {
+    // Design 7b pose-band guard (bookkeeping, not physics): thrust only inside
+    // the P1 band θ ∈ [90°, 146°] — i.e. never while the one-shot launch lock
+    // holds the flower fore of the rim or during its release swing. The
+    // fore-folded flower is plume-LEGAL at every θ (probe 7b.6b: the enforced
+    // cones stay clear throughout the swing), so this guard keeps the ledger's
+    // "under thrust" clause literally true rather than protecting the panels.
+    // Flag-independent (the pose fact is), and honoured with or without an
+    // ArmManager (headless tests build none).
+    const flowerGuard = this._flowerPoseBandGuard();
     if (!this.armManager) {
-      this._thrusterInterlock = false;
+      this._thrusterInterlock = flowerGuard;
       this._plumeBlocked = {};
       return;
     }
@@ -5540,6 +5835,9 @@ export class PlayerSatellite extends THREE.Group {
       this._plumeBlocked = {};
     }
 
+    // Design 7b: the flower pose-band guard (see the top of this method)
+    if (flowerGuard) this._thrusterInterlock = true;
+
     // C-9: Compute and cache CoM (once per frame, used by HUD + torque coupling)
     if (Constants.FEATURE_FLAGS.COM_TRACKING) {
       this._comCache = computeCoM(this.armManager, this);
@@ -5550,6 +5848,21 @@ export class PlayerSatellite extends THREE.Group {
       this._comDriftM = 0;
       this._comDriftVec = { x: 0, y: 0, z: 0 };
     }
+  }
+
+  /**
+   * @private Design 7b — true when the installed flower is outside the P1
+   * thrust band θ ∈ [POSE_FLOOR_DEG, POSE_THRUST_MAX_DEG] or the one-shot
+   * launch lock is armed. No hardware → false. Boot (θ = 146 = the ceiling,
+   * lock off) → false.
+   * @returns {boolean}
+   */
+  _flowerPoseBandGuard() {
+    if (this._flowerGroups.length === 0) return false;
+    if (this._flowerLaunchLock) return true;
+    const FL = Constants.THERMAL.FLOWER;
+    const deg = (this._flowerThetaRad * 180) / Math.PI;
+    return deg < FL.POSE_FLOOR_DEG - 1e-6 || deg > FL.POSE_THRUST_MAX_DEG + 1e-6;
   }
 
   /**
@@ -5726,7 +6039,7 @@ export class PlayerSatellite extends THREE.Group {
         });
         break;
       case 'flowerPairA':
-        // P2 aft flower — pair A (az 45/225). Observe-only hardware: draws,
+        // P2 aft flower — pair A (az 41/221). Observe-only hardware: draws,
         // slews, throttles nothing. Idempotent via _installFlowerPair guard
         // (the save-restore path re-applies shop effects).
         this._installFlowerPair('A');
