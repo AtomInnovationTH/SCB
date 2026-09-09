@@ -1,11 +1,12 @@
 /**
  * SkillsPane.js — "Discoveries" / Journal HUD overlay pane.
  *
- * Contextual reward overlay that appears when skills are discovered or
- * tech entries are unlocked. Compact view slides in from the left, shows
- * recently discovered skills, new tech unlocks, and next suggestions,
- * then auto-hides. Expanded view (J key — Journal) shows the full skill
- * tree organized by category with tier colors and key bindings.
+ * Plan 1788867799156-hud-pane-ladder-reorder.md Task 10 / locked #7: the
+ * compact pane is a footer-chip popover (`DISCOVERIES` chip inboard of the
+ * DETAIL slider; `#hud-discoveries` wrapper owns the density bit). Tap the
+ * chip to expand the 280×≤300 popover above the footer; tap again collapses.
+ * Expanded state is session-only (never persisted). J key still opens the
+ * full skill-tree overlay. Header hit is 44 px on glass.
  *
  * Delegation 1 (2026-05-31) onboarding rebind: open-key migrated from K → J
  * because bare K was freed by the broader hotkey overhaul (Forge moved to F4).
@@ -21,6 +22,24 @@ import { eventBus }  from '../../core/EventBus.js';
 import { Events }    from '../../core/Events.js';
 import { Constants } from '../../core/Constants.js';
 import timerManager  from '../../systems/TimerManager.js';
+import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX, RAIL_GEOMETRY, footerBand } from '../RailGeometry.js';
+import { TRACK_WIDTH_PX } from '../DetailSlider.js';
+import { TouchControls } from '../TouchControls.js';
+import { createFooterChip } from './FooterChip.js';
+
+export const DISCOVERIES_WRAPPER_ID = 'hud-discoveries';
+export const DISCOVERIES_CHIP_ID = 'hud-chip-discoveries';
+/** SIDE_PAD_PX is not exported from DetailSlider.js:79 — 8+160+8 = 176. */
+const DETAIL_SIDE_PAD_PX = 8;
+const DETAIL_SLIDER_FOOTPRINT_PX = TRACK_WIDTH_PX + 2 * DETAIL_SIDE_PAD_PX;
+export const DISCOVERIES_CHIP_OFFSET_PX = HUD_EDGE_PX + DETAIL_SLIDER_FOOTPRINT_PX + HUD_EDGE_PX;
+export const DISCOVERIES_POPOVER_MAX_PX = 300;
+
+function resolveGlass(explicit) {
+    if (explicit === true) return true;
+    if (explicit === false) return false;
+    try { return TouchControls.detectGlass(); } catch (_e) { return false; }
+}
 
 // ── Skill state constants (match SkillsSystem) ────────────────────────────
 const UNDISCOVERED = 'undiscovered';
@@ -77,10 +96,22 @@ export class SkillsPane {
     /**
      * Create the Skills Pane and attach it to the HUD overlay.
      * @param {HTMLElement} hudContainer — The #hud-overlay div
+     * @param {{glass?:boolean, hintBandPx?:number, doc?:Document}} [opts]
      */
-    constructor(hudContainer) {
+    constructor(hudContainer, { glass = null, hintBandPx, doc } = {}) {
         /** @type {HTMLElement} */
         this._hudContainer = hudContainer;
+        this._doc = doc || (typeof document !== 'undefined' ? document : null);
+        this._glass = resolveGlass(glass);
+        const ticker = (Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {};
+        this._hintBandPx = Number.isFinite(Number(hintBandPx))
+            ? Number(hintBandPx)
+            : ((Number(ticker.BOTTOM_PX) || 0) + (Number(ticker.ROW_HEIGHT_PX) || 0));
+        this._band = footerBand({ glass: this._glass, hintBandPx: this._hintBandPx });
+        /** @type {boolean} Chip popover open — session-only, never persisted. */
+        this._chipOpen = false;
+        this._wrapper = null;
+        this._chip = null;
 
         // ── Skill data ────────────────────────────────────────────────
         /** @type {Object[]} Full catalog from Constants.SKILLS.CATALOG */
@@ -169,7 +200,9 @@ export class SkillsPane {
         this._injectStyles();
         this._build();
         this._setupListeners();
-        document.addEventListener('keydown', this._boundOnKeyDown);
+        if (this._doc && typeof this._doc.addEventListener === 'function') {
+            this._doc.addEventListener('keydown', this._boundOnKeyDown);
+        }
 
         // 2026-05-15 polish task 7: hidden on startup. Used to call
         // _applyInitialDisplay() unconditionally 500 ms after construct,
@@ -351,14 +384,18 @@ export class SkillsPane {
         for (const unsub of this._unsubs) unsub();
         this._unsubs.length = 0;
 
-        document.removeEventListener('keydown', this._boundOnKeyDown);
-        document.removeEventListener('keydown', this._boundOnExpandedKeyDown, true);
+        if (this._doc && typeof this._doc.removeEventListener === 'function') {
+            this._doc.removeEventListener('keydown', this._boundOnKeyDown);
+            this._doc.removeEventListener('keydown', this._boundOnExpandedKeyDown, true);
+        }
 
-        if (this._pane?.parentNode) this._pane.parentNode.removeChild(this._pane);
+        if (this._chip) { this._chip.destroy(); this._chip = null; }
+        if (this._wrapper?.parentNode) this._wrapper.parentNode.removeChild(this._wrapper);
+        this._wrapper = null;
         if (this._expandedOverlay?.parentNode) this._expandedOverlay.parentNode.removeChild(this._expandedOverlay);
         if (this._backdrop?.parentNode) this._backdrop.parentNode.removeChild(this._backdrop);
 
-        const styleEl = document.getElementById('skills-pane-styles');
+        const styleEl = this._doc && this._doc.getElementById && this._doc.getElementById('skills-pane-styles');
         if (styleEl) styleEl.remove();
     }
 
@@ -386,16 +423,24 @@ export class SkillsPane {
      * @private
      */
     _injectStyles() {
-        if (document.getElementById('skills-pane-styles')) return;
-        const el = document.createElement('style');
+        const doc = this._doc;
+        if (!doc || !doc.getElementById || doc.getElementById('skills-pane-styles')) return;
+        const el = doc.createElement('style');
         el.id = 'skills-pane-styles';
         el.textContent = `
-/* ── Skills Pane. Compact pane docked in the left column under Daughters ─── */
-.skills-pane {
-    position: relative;
-    width: 100%;
+/* ── Discoveries footer-chip popover (Task 10 / locked #7) ─── */
+#hud-discoveries:not([data-expanded]) > .skills-pane { display: none !important; }
+#hud-discoveries[data-expanded] > .skills-pane { display: block; }
+#hud-discoveries[data-glass] .sp-header {
+    min-height: ${RAIL_GEOMETRY.TOUCH_PITCH_PX}px;
     box-sizing: border-box;
-    max-height: 300px;
+}
+.skills-pane {
+    position: fixed;
+    left: ${HUD_EDGE_PX}px;
+    width: ${HUD_COLUMN_WIDTH_PX}px;
+    box-sizing: border-box;
+    max-height: ${DISCOVERIES_POPOVER_MAX_PX}px;
     overflow-y: auto;
     background: rgba(0, 10, 20, 0.85);
     border: 1px solid rgba(0, 255, 136, 0.25);
@@ -405,8 +450,7 @@ export class SkillsPane {
     font-size: 12px;
     color: #ccddcc;
     z-index: 200;
-    pointer-events: none;
-    display: none;
+    pointer-events: auto;
 }
 
 /* ── Compact pane header ───────────────────────────────────────────────── */
@@ -731,7 +775,7 @@ export class SkillsPane {
     100% { background: transparent; box-shadow: none; }
 }
 `;
-        document.head.appendChild(el);
+        if (doc.head && typeof doc.head.appendChild === 'function') doc.head.appendChild(el);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -745,41 +789,87 @@ export class SkillsPane {
     }
 
     /**
-     * Build the compact pane: header + body. Docked into the left-column stack
-     * (`#hud-left-column`) directly under the Daughters pane so the readiness
-     * board reads top-to-bottom: MOTHER → DAUGHTERS → DISCOVERIES. Falls back to
-     * the HUD overlay if the column isn't present yet.
+     * Build the compact pane: DISCOVERIES footer chip + `.skills-pane` popover
+     * inside `#hud-discoveries`. Density bit on the wrapper hides both.
+     * Plan Task 10 / locked #7.
      * @private
      */
     _buildCompactPane() {
-        const pane = document.createElement('div');
-        pane.className = 'skills-pane';
+        const doc = this._doc;
+        if (!doc || typeof doc.createElement !== 'function') return;
 
-        // Header — clickable to open expanded view
-        const header = document.createElement('div');
+        const wrapper = doc.createElement('div');
+        wrapper.id = DISCOVERIES_WRAPPER_ID;
+        if (wrapper.setAttribute) {
+            if (this._glass) wrapper.setAttribute('data-glass', '');
+        }
+
+        const pane = doc.createElement('div');
+        pane.className = 'skills-pane';
+        const popBottom = this._band.top + RAIL_GEOMETRY.FOOTER_GAP_PX;
+        const ps = pane.style;
+        ps.position = 'fixed';
+        ps.left = `${HUD_EDGE_PX}px`;
+        ps.bottom = `${popBottom}px`;
+        ps.width = `${HUD_COLUMN_WIDTH_PX}px`;
+        ps.maxHeight = `${DISCOVERIES_POPOVER_MAX_PX}px`;
+        ps.overflowY = 'auto';
+        ps.boxSizing = 'border-box';
+
+        const header = doc.createElement('div');
         header.className = 'sp-header';
-        const title = document.createElement('span');
+        if (this._glass) header.style.minHeight = `${RAIL_GEOMETRY.TOUCH_PITCH_PX}px`;
+        const title = doc.createElement('span');
         title.textContent = '▸ DISCOVERIES';
-        const count = document.createElement('span');
+        const count = doc.createElement('span');
         count.className = 'sp-count';
         header.appendChild(title);
         header.appendChild(count);
-        header.addEventListener('click', () => this.toggleExpanded());
+        if (typeof header.addEventListener === 'function') {
+            header.addEventListener('click', () => this.toggleExpanded());
+        }
         pane.appendChild(header);
         this._paneHeader = header;
 
-        // Body — will hold skill entries
-        const body = document.createElement('div');
+        const body = doc.createElement('div');
         body.className = 'sp-body';
         pane.appendChild(body);
         this._paneBody = body;
 
-        // Dock in the left column under Daughters (StatusPanel appends MOTHER then
-        // DAUGHTERS, so appending here lands directly beneath them). Fall back to
-        // the HUD overlay if the column hasn't been built.
-        const leftColumn = document.getElementById('hud-left-column');
-        (leftColumn || this._hudContainer).appendChild(pane);
+        this._chip = createFooterChip({
+            id: DISCOVERIES_CHIP_ID,
+            label: 'Discoveries',
+            side: 'left',
+            offsetPx: DISCOVERIES_CHIP_OFFSET_PX,
+            onTap: () => this._toggleChip(),
+            doc,
+            bottomPx: this._band.bottom,
+            glass: this._glass,
+            hintBandPx: this._hintBandPx,
+            parent: wrapper,
+        });
+
+        wrapper.appendChild(pane);
+        const host = this._hudContainer || doc.body;
+        if (host && typeof host.appendChild === 'function') host.appendChild(wrapper);
+        this._wrapper = wrapper;
         this._pane = pane;
+        this._setChipExpanded(false);
+    }
+
+    /** @private Session-only chip popover — never written to storage. */
+    _toggleChip() {
+        this._setChipExpanded(!this._chipOpen);
+    }
+
+    /** @private */
+    _setChipExpanded(v) {
+        this._chipOpen = !!v;
+        if (this._wrapper && this._wrapper.setAttribute) {
+            if (this._chipOpen) this._wrapper.setAttribute('data-expanded', '');
+            else this._wrapper.removeAttribute('data-expanded');
+        }
+        if (this._chip) this._chip.setExpanded(this._chipOpen);
     }
 
     /**
@@ -789,50 +879,56 @@ export class SkillsPane {
      * @private
      */
     _buildExpandedView() {
+        const doc = this._doc;
+        if (!doc || typeof doc.createElement !== 'function') return;
         // ── Backdrop ──
-        const backdrop = document.createElement('div');
+        const backdrop = doc.createElement('div');
         backdrop.className = 'sp-backdrop';
-        backdrop.addEventListener('click', () => this._closeExpanded());
-        document.body.appendChild(backdrop);
+        if (typeof backdrop.addEventListener === 'function') {
+            backdrop.addEventListener('click', () => this._closeExpanded());
+        }
+        if (doc.body && typeof doc.body.appendChild === 'function') doc.body.appendChild(backdrop);
         this._backdrop = backdrop;
 
         // ── Panel ──
-        const overlay = document.createElement('div');
+        const overlay = doc.createElement('div');
         overlay.className = 'sp-expanded';
 
         // Header
-        const header = document.createElement('div');
+        const header = doc.createElement('div');
         header.className = 'sp-ex-header';
-        const backBtn = document.createElement('span');
+        const backBtn = doc.createElement('span');
         backBtn.className = 'sp-ex-back';
         backBtn.textContent = '◂ SKILL TREE';
         backBtn.title = 'Close (J or ESC)';
-        backBtn.addEventListener('click', () => this._closeExpanded());
-        const exCount = document.createElement('span');
+        if (typeof backBtn.addEventListener === 'function') {
+            backBtn.addEventListener('click', () => this._closeExpanded());
+        }
+        const exCount = doc.createElement('span');
         exCount.className = 'sp-ex-count';
         header.appendChild(backBtn);
         header.appendChild(exCount);
         overlay.appendChild(header);
 
         // Body (scrollable, 2-column via CSS columns)
-        const body = document.createElement('div');
+        const body = doc.createElement('div');
         body.className = 'sp-ex-body';
         overlay.appendChild(body);
         this._expandedBody = body;
 
         // Footer
-        const footer = document.createElement('div');
+        const footer = doc.createElement('div');
         footer.className = 'sp-ex-footer';
-        const progText = document.createElement('span');
+        const progText = doc.createElement('span');
         progText.className = 'sp-prog-text';
-        const closeHint = document.createElement('span');
+        const closeHint = doc.createElement('span');
         closeHint.className = 'sp-close-hint';
         closeHint.textContent = 'I. Info  ·  J to close';
         footer.appendChild(progText);
         footer.appendChild(closeHint);
         overlay.appendChild(footer);
 
-        document.body.appendChild(overlay);
+        if (doc.body && typeof doc.body.appendChild === 'function') doc.body.appendChild(overlay);
         this._expandedOverlay = overlay;
     }
 

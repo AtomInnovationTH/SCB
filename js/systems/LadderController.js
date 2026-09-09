@@ -173,11 +173,12 @@ export class LadderController {
    *   the EDGE-CHROME core (js/ui/EdgeChrome.js — pure timestamps: wake(member?)
    *   / box(name) / sleep()). Duck-typed, optional. The controller is the wake
    *   source for FLOOR events: every floor apply wakes all chrome and boxes the
-   *   arrival notch ('floor'); a ride start wakes the rail; PURE SCENERY
+   *   arrival notch ('floor'); a ride start wakes the rail; rails-shy
    *   (`setRailsShy(true)`) puts the chrome to SLEEP instead of hiding the
    *   WHERE rail (asleep is wakeable — an edge touch is the way back on
-   *   glass); un-shy wakes it. Absent → the Session N.5 hide()/show() path
-   *   exactly (flag-off / older rigs).
+   *   glass); un-shy wakes it. SPECS/REFIT tabs + stamp are `setHudClear`,
+   *   not this. Absent → the Session N.5 hide()/show() path exactly
+   *   (flag-off / older rigs).
    * @param {object} [deps.audioBeds]    - per-floor audio beds (LadderAudioBeds):
    *   setFloor(floorId|null). Optional — absent it beds are a no-op.
    * @param {object} [deps.floorMask]    - per-floor HUD pane mask (FloorMask,
@@ -237,10 +238,11 @@ export class LadderController {
     // Session P (plan D2/D3): the edge-chrome core — nullable, duck-typed.
     this._edgeChrome = deps.edgeChrome || null;
     /**
-     * PURE SCENERY completion (plan D7, owner 2026-09-07): an optional
-     * `{ hide(), show() }` hook the hub binds to `body[data-pure-scenery]`
-     * (index.html hides the SPECS/REFIT tabs, #vitals-line, #build-stamp and
-     * the glass STORE chip under it). Duck-typed; absent = no-op.
+     * HUD-clear / pure scenery (rev-3 ladder, plan 1788867799156 #4; was
+     * plan D7): an optional `{ hide(), show() }` hook the hub binds to
+     * `body[data-pure-scenery]` (index.html hides the SPECS/REFIT tabs and
+     * #build-stamp under it). Owned exclusively by `setHudClear` — density
+     * flips, never rails. Duck-typed; absent = no-op.
      */
     this._pureScenery = deps.pureScenery || null;
     this._audioBeds = deps.audioBeds || null;
@@ -303,12 +305,19 @@ export class LadderController {
      */
     this._introPending = null;
     /**
-     * Session N.5 (owner 2026-09-07): PURE SCENERY — true after a `-` press
+     * Session N.5 (owner 2026-09-07): RAILS SHY — true after a `-` press
      * found the density rungs already clear and bowed the RAILS out too.
      * Transient view state: never persisted, never a room edit; any `+`,
-     * ride, or fresh engage drops it (setRailsShy).
+     * ride, or fresh engage drops it (setRailsShy). SPECS/REFIT tabs +
+     * stamp are `_hudClear` / `setHudClear`, not this.
      */
     this._railsShy = false;
+    /**
+     * Rev-3 ladder (plan 1788867799156 #4): true while `setHudClear(true)`
+     * has hidden the SPECS/REFIT tabs + build stamp. Engaged-only; a
+     * fresh engage, disengage, ride, or floor apply resets it.
+     */
+    this._hudClear = false;
     /**
      * Session N.5b: the intro FLYBY phase — null | 'dive' | 'dwell' | 'pull'.
      * Set by _engage when it flies an armed dive; advanced by _introTick;
@@ -998,14 +1007,12 @@ export class LadderController {
   }
 
   /**
-   * Session N.5 (owner 2026-09-07): PURE SCENERY — when the `-` walk has
+   * Session N.5 (owner 2026-09-07): RAILS SHY — when the `-` walk has
    * already cleared every density rung, the hub bows the RAILS out too;
    * `+` (the hub), any ride, or a fresh engage brings them back. A transient
    * view state: never persisted, never a room edit (the D5 capture reads
-   * pane flips, and rails are not panes). Plan D7 (owner 2026-09-07): the
-   * `pureScenery` hook rides the same two branches, after the rails — `hide()`
-   * completes the pure-scenery frame (SPECS/REFIT tabs, vitals, build stamp,
-   * STORE chip), `show()` restores it.
+   * pane flips, and rails are not panes). Edge chrome only — SPECS/REFIT
+   * tabs + stamp are `setHudClear` (rev-3, plan 1788867799156 #4).
    *
    * Session P (plan D2): with an `edgeChrome` dep the WHERE rail is no longer
    * `hide()`-hidden here — the chrome goes to SLEEP (`edgeChrome.sleep()`:
@@ -1025,16 +1032,60 @@ export class LadderController {
     if (want) {
       if (this._edgeChrome && typeof this._edgeChrome.sleep === 'function') this._edgeChrome.sleep(this._now());
       else if (this._rail && this._rail.hide) this._rail.hide();
-      if (this._pureScenery && typeof this._pureScenery.hide === 'function') {
-        try { this._pureScenery.hide(); } catch (_e) { /* hook */ }
-      }
     } else {
       if (this._edgeChrome && typeof this._edgeChrome.wake === 'function') this._edgeChrome.wake(undefined, this._now());
       else if (this._rail && this._rail.show) this._rail.show();
-      if (this._pureScenery && typeof this._pureScenery.show === 'function') {
-        try { this._pureScenery.show(); } catch (_e) { /* hook */ }
-      }
     }
+  }
+
+  /**
+   * Rev-3 ladder (plan 1788867799156 #4): owns the `pureScenery` hook
+   * exclusively — `true` hides SPECS/REFIT tabs + build stamp
+   * (`body[data-pure-scenery]`), `false` restores them. Density flips only
+   * (main.js calls this on every HUD_PANE_VISIBILITY); rails sleep at
+   * level 0 via `setRailsShy`. Idempotent. Engaged-only: while not engaged
+   * stores nothing and does not call the hook. The controller never calls
+   * `setHudClear(true)` on its own (FloorMask applies keep SPECS pinned on
+   * F1 — that is main.js's concern).
+   * @param {boolean} clear
+   */
+  setHudClear(clear) {
+    if (!this._engaged) return;
+    const want = !!clear;
+    if (want === this._hudClear) return;
+    this._hudClear = want;
+    this._callPureScenery(want);
+  }
+
+  /** @returns {boolean} true while the SPECS/REFIT tabs + stamp are hidden. */
+  isHudClear() { return this._hudClear; }
+
+  /**
+   * Drive the optional `{ hide(), show() }` hook. Swallow throws so a
+   * broken binding cannot stall the ladder.
+   * @param {boolean} hide
+   * @private
+   */
+  _callPureScenery(hide) {
+    if (!this._pureScenery) return;
+    try {
+      if (hide) {
+        if (typeof this._pureScenery.hide === 'function') this._pureScenery.hide();
+      } else if (typeof this._pureScenery.show === 'function') {
+        this._pureScenery.show();
+      }
+    } catch (_e) { /* hook */ }
+  }
+
+  /**
+   * Engage / disengage / ride / floor-apply reset: tabs + stamp back, flag
+   * false. Always `show()`s (even if already clear) so a floor change never
+   * leaves the tabs hidden; the next density flip re-evaluates.
+   * @private
+   */
+  _resetHudClear() {
+    this._hudClear = false;
+    this._callPureScenery(false);
   }
 
   /**
@@ -1179,9 +1230,7 @@ export class LadderController {
     this._settleStaleRide();
     this._engaged = true;
     this._railsShy = false;                    // a fresh engagement is never shy (Session N.5)
-    if (this._pureScenery && typeof this._pureScenery.show === 'function') {
-      try { this._pureScenery.show(); } catch (_e) { /* hook */ }   // plan D7: a fresh engage clears pure scenery too
-    }
+    this._resetHudClear();                    // rev-3: a fresh engage never leaves the tabs hidden
     const s = this._ladder.getState();
     const frame = this._frame(s.floor, s.z01);
     if (this._cameraSystem && this._cameraSystem.ladderEngage) {
@@ -1277,13 +1326,11 @@ export class LadderController {
     if (this._rail && this._rail.hide) this._rail.hide();
     // Session P (plan D5): the DETAIL slider leaves with the ladder (the menu).
     if (this._detailSlider && typeof this._detailSlider.setShown === 'function') this._detailSlider.setShown(false);
-    // Plan D7 (review 2026-09-07): leaving gameplay clears pure scenery too —
+    // Rev-3 (plan 1788867799156 #4): leaving gameplay clears hud-clear too —
     // the body attribute is a view state of the ENGAGED ladder only, so the
-    // build stamp / tabs / vitals are back on the menu (Ipad.md §2.5: hidden
-    // ONLY inside the transient pure-scenery view).
-    if (this._pureScenery && typeof this._pureScenery.show === 'function') {
-      try { this._pureScenery.show(); } catch (_e) { /* hook */ }
-    }
+    // build stamp / tabs are back on the menu (Ipad.md §2.5: hidden ONLY
+    // inside the transient HUD-clear view).
+    this._resetHudClear();
   }
 
   // ── Decision translation ───────────────────────────────────────────────────
@@ -1547,9 +1594,12 @@ export class LadderController {
     if (this._detailSlider && typeof this._detailSlider.setShown === 'function') {
       this._detailSlider.setShown(this._detailSliderAllowed(floor));
     }
-    // Session N.5: riding the ladder ends PURE SCENERY — the rails come back
+    // Session N.5: riding the ladder ends rails-shy — the rails come back
     // with the floor content (this method runs at engage and every ride start).
     if (this._railsShy) this.setRailsShy(false);
+    // Rev-3 (plan 1788867799156 #4): a floor change / ride never leaves the
+    // tabs hidden; the next density flip re-evaluates via setHudClear.
+    this.setHudClear(false);
     // Session P (plan D3, Airbus A4): the floor changed → every piece of edge
     // chrome wakes and the arrival notch wears the BOX for BOX_MS (the WHERE
     // rail paints it from `isBoxed('floor')`). `_engage` fires the same wake

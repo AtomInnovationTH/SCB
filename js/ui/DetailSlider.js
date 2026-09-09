@@ -42,6 +42,13 @@
  * import time; constructible headless (no document: every method callable,
  * nothing thrown); every DOM write is write-on-change (G1); emoji-free.
  *
+ * Rev 3 (tmp/plans/1788867799156-hud-pane-ladder-reorder.md, locked #11):
+ * 16 detents (levels 0..15), a 3 px drag dead-zone past each detent
+ * boundary so a thumb held still never flickers, and optional bold
+ * milestone ticks. Tap / release, reduced-motion, and the total() /
+ * level() / onLevel contract are unchanged. Milestone names (never on
+ * screen): 0 Scenery · 2 Ships · 5 Flight · 9 Ops · 13 Instruments · 15 All.
+ *
  * @module ui/DetailSlider
  */
 
@@ -60,6 +67,14 @@ export const REFRESH_MIN_MS = 250;
 /** The track's width in CSS px (the thumb travels its full length). */
 export const TRACK_WIDTH_PX = 160;
 
+/**
+ * Drag hysteresis (plan 1788867799156 locked #11): a level change while
+ * dragging commits only once the pointer has moved ≥ this many CSS px
+ * PAST the detent boundary it would cross. Tap / first contact and
+ * release ignore it — detent geometry is unchanged.
+ */
+export const DEADZONE_PX = 3;
+
 /** Horizontal padding inside the root so the thumb has room at 0 % and 100 %. */
 const SIDE_PAD_PX = 8;
 
@@ -67,6 +82,21 @@ const SIDE_PAD_PX = 8;
 const _rgba = (hex, a) => {
   const n = parseInt(String(hex).replace('#', ''), 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+};
+
+/** @private finite unique sorted LEVEL indices; non-arrays → []. */
+const _normalizeMilestones = (arr) => {
+  if (!Array.isArray(arr)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const v of arr) {
+    const n = Math.round(Number(v));
+    if (!Number.isFinite(n) || seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  out.sort((a, b) => a - b);
+  return out;
 };
 
 export class DetailSlider {
@@ -78,16 +108,20 @@ export class DetailSlider {
    * @param {function} [deps.onInteract]     () — pointerdown and every pointermove that moved; never on release.
    * @param {number}   [deps.footerBottomPx] CSS bottom of the VISUAL band (the hub passes footerBand().bottom).
    *                                         Default THUMB_REST_PX + FOOTER_GAP_PX when absent / non-finite.
-   * @param {boolean}  [deps.glass]          true → the 44 pt hit box (6 px pads, bottom shifted down 6).
-   * @param {boolean}  [deps.reducedMotion]  true → inline `transition:none` on the root.
-   * @param {Document|null} [deps.doc]       document (default: the global one; null = headless, inert).
-   * @param {function} [deps.now]            ms clock for the refresh throttle (default performance.now).
-   */
+    * @param {boolean}  [deps.glass]          true → the 44 pt hit box (6 px pads, bottom shifted down 6).
+    * @param {boolean}  [deps.reducedMotion]  true → inline `transition:none` on the root.
+    * @param {number[]} [deps.milestones]     LEVEL indices whose ticks render bold (thicker /
+    *                                         longer). Default [] → tick DOM identical to rev 2.
+    *                                         main.js also calls setMilestones after splicing.
+    * @param {Document|null} [deps.doc]       document (default: the global one; null = headless, inert).
+    * @param {function} [deps.now]            ms clock for the refresh throttle (default performance.now).
+    */
   constructor(deps = {}) {
     this._total = typeof deps.total === 'function' ? deps.total : null;
     this._level = typeof deps.level === 'function' ? deps.level : null;
     this._onLevel = typeof deps.onLevel === 'function' ? deps.onLevel : null;
     this._onInteract = typeof deps.onInteract === 'function' ? deps.onInteract : null;
+    this._milestones = _normalizeMilestones(deps.milestones);
     const fb = Number(deps.footerBottomPx);
     this._footerBottomPx = Number.isFinite(fb) ? fb : (RAIL_GEOMETRY.THUMB_REST_PX + RAIL_GEOMETRY.FOOTER_GAP_PX);
     this._glass = deps.glass === true;
@@ -183,6 +217,19 @@ export class DetailSlider {
     }
   }
 
+  /**
+   * Bold-tick LEVEL indices. main.js computes these from the live ladder
+   * after the rungs are spliced (0 · 2 · 5 · 9 · 13 · 15). Write-on-change;
+   * rebuilds ticks when a refresh has already painted them.
+   * @param {number[]} arr
+   */
+  setMilestones(arr) {
+    const next = _normalizeMilestones(arr);
+    if (next.length === this._milestones.length && next.every((v, i) => v === this._milestones[i])) return;
+    this._milestones = next;
+    if (!this._disposed && this._track && this._wroteTotal != null) this._rebuildTicks(this._wroteTotal);
+  }
+
   /** @returns {Element|null} the root (null headless / disposed) */
   element() { return this._root; }
 
@@ -221,6 +268,32 @@ export class DetailSlider {
     if (!(w > 0) || n === 0) return 0;
     const raw = Math.round(((Number(x) - Number(left)) / w) * n);
     return Math.max(0, Math.min(n, Number.isFinite(raw) ? raw : 0));
+  }
+
+  /**
+   * Drag hysteresis around detentFor (plan 1788867799156 locked #11).
+   * Geometry is identical; a change from `current` commits only once x is
+   * ≥ deadzonePx past the boundary being crossed. `current` null / non-finite
+   * → detentFor (tap / first contact).
+   * @param {number} x @param {number} left @param {number} width @param {number} total
+   * @param {number|null} current @param {number} [deadzonePx]
+   * @returns {number}
+   */
+  static detentForDrag(x, left, width, total, current, deadzonePx = DEADZONE_PX) {
+    const raw = DetailSlider.detentFor(x, left, width, total);
+    if (current == null) return raw;
+    const cur = Math.round(Number(current));
+    if (!Number.isFinite(cur) || raw === cur) return raw;
+    const n = Math.max(0, Math.round(Number(total) || 0));
+    const w = Number(width);
+    const dz = Number(deadzonePx);
+    if (!(w > 0) || n === 0 || !(dz > 0)) return raw;
+    const dir = raw > cur ? 1 : -1;
+    const boundary = Number(left) + ((cur + dir * 0.5) / n) * w;
+    const commitAt = boundary + dir * dz;
+    if (dir > 0 && Number(x) < commitAt) return cur;
+    if (dir < 0 && Number(x) > commitAt) return cur;
+    return raw;
   }
 
   /** The thumb / tick position as a CSS percentage of the track. @param {number} i @param {number} total */
@@ -328,6 +401,11 @@ export class DetailSlider {
         transform: translate(-50%, -50%);
         background: ${_rgba(info, 0.55)};
       }
+      /* Bold ticks at 0 · 2 · 5 · 9 · 13 · 15 (Scenery · Ships · Flight · Ops · Instruments · All). Names never on screen. */
+      #${DETAIL_SLIDER_ID} .ds-tick-milestone {
+        width: 2px;
+        height: 10px;
+      }
       #${DETAIL_SLIDER_ID} .ds-thumb {
         position: absolute;
         top: 50%;
@@ -345,7 +423,7 @@ export class DetailSlider {
     doc.head.appendChild(style);
   }
 
-  /** @private one tick per rung at i / total (i = 1..total); rebuilt only when total changes */
+  /** @private one tick per rung at i / total (i = 1..total); a tick at 0 only when 0 is a milestone. Rebuilt when total or milestones change. */
   _rebuildTicks(total) {
     const doc = this._doc;
     const track = this._track;
@@ -354,10 +432,14 @@ export class DetailSlider {
       try { if (typeof t.remove === 'function') t.remove(); else if (typeof track.removeChild === 'function') track.removeChild(t); } catch (_e) { /* stub */ }
     }
     this._ticks = [];
-    for (let i = 1; i <= total; i++) {
+    const n = Math.max(0, Math.round(Number(total) || 0));
+    const marks = new Set();
+    for (const v of this._milestones) { if (v >= 0 && v <= n) marks.add(v); }
+    const start = marks.has(0) ? 0 : 1;
+    for (let i = start; i <= n; i++) {
       const tick = doc.createElement('div');
-      tick.className = 'ds-tick';
-      tick.style.left = DetailSlider.pct(i, total);
+      tick.className = marks.has(i) ? 'ds-tick ds-tick-milestone' : 'ds-tick';
+      tick.style.left = DetailSlider.pct(i, n);
       track.appendChild(tick);
       this._ticks.push(tick);
     }
@@ -401,11 +483,15 @@ export class DetailSlider {
     } catch (_err) { /* stub */ }
   }
 
-  /** @private the detent under x → onLevel once per change within the gesture */
+  /** @private the detent under x → onLevel once per change within the gesture. First contact uses detentFor (tap); later moves use the 3 px dead-zone. */
   _detent(x) {
     const r = this._rect;
     const total = this._readTotal();
-    const n = DetailSlider.detentFor(x, r ? r.left : 0, r ? r.width : 0, total);
+    const left = r ? r.left : 0;
+    const width = r ? r.width : 0;
+    const n = this._lastEmitted == null
+      ? DetailSlider.detentFor(x, left, width, total)
+      : DetailSlider.detentForDrag(x, left, width, total, this._lastEmitted);
     if (n === this._lastEmitted) return;
     this._lastEmitted = n;
     if (this._onLevel) { try { this._onLevel(n); } catch (_err) { /* dep */ } }

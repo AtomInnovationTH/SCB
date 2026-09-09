@@ -12,6 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="Space Cowboy">
   <meta name="theme-color" content="#000000">
   <link rel="apple-touch-icon" href="./icon-180.png">
+  <link rel="manifest" href="manifest.json">
   <title>Space Cowboy — VLEO Debris Remediation</title>
 
   <style>
@@ -139,8 +140,9 @@
       transition: opacity 0.3s ease;
     }
 
-    .hud-panel {
+     .hud-panel {
       position: absolute;
+      width: 280px; /* = HUD_COLUMN_WIDTH_PX (js/ui/RailGeometry.js) — CSS cannot import */
       background: rgba(5, 10, 20, 0.95);
       border: 1px solid rgba(0, 255, 136, 0.3);
       border-radius: 4px;
@@ -236,9 +238,11 @@
     }
 
     /* === LEFT-COLUMN FLEX LAYOUT (always-expanded panels) === */
-    #hud-left-column {
+     #hud-left-column {
       display: flex;           /* safety net: JS sets this inline, but preserve it if cleared */
       flex-direction: column;
+      left: max(16px, env(safe-area-inset-left)); /* = HUD_EDGE_PX (js/ui/RailGeometry.js) */
+      width: 280px; /* = HUD_COLUMN_WIDTH_PX */
       scrollbar-width: thin;
       scrollbar-color: rgba(0,255,136,0.2) transparent;
     }
@@ -246,7 +250,7 @@
     /* Panels inside left column: flex children, not absolute */
     #hud-left-column > .hud-panel {
       position: relative !important;
-      width: 260px;
+      width: 280px; /* = HUD_COLUMN_WIDTH_PX */
     }
 
     /* Always show full content */
@@ -285,6 +289,14 @@
     #hud-power-panel,
     #hud-arms-panel {
       pointer-events: auto;
+    }
+    /* Glass (pointer: coarse): 44 px hit boxes — Daughters rows + DEPLOY/REEL/RECALL,
+       Target rows. Desktop heights stay as authored. Plan Task 13 / locked #13. */
+    @media (pointer: coarse) {
+      #hud-arms-panel .fleet-row,
+      #hud-arms-status .fleet-row { min-height: 44px; box-sizing: border-box; }
+      #hud-arms-status .fleet-btn { min-height: 44px; min-width: 44px; box-sizing: border-box; }
+      #hud-targets-panel .target-row { min-height: 44px; box-sizing: border-box; }
     }
 
     /* === MOTHER pane: digest-led, hover-expand detail ===

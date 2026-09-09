@@ -13,11 +13,10 @@
  *
  * Wiring (the hub's, main.js inside the LADDER gate): construct with the live
  * CargoSystem + ShopScreen, push `pane.rung()` into hud.paneDensity.rungs
- * BEFORE the first floorMask.setFloor, and feed `setDodge(underPx, floorPx)`
- * per frame with the bottom edge of whatever rides above the pane on the
- * right edge (the WHERE rail or the SPECS tab) and the lowest allowed bottom
- * edge. setDodge is write-on-change on its two inputs: repeated identical
- * inputs perform no DOM write and no layout read.
+ * BEFORE the first floorMask.setFloor. LeftStack places this pane as the
+ * first left-arm overlay rider via `setStack(top, height, mode)` (write-on-
+ * change on those three inputs). Layout-hidden uses `data-stack-hidden`, never
+ * the density bit.
  *
  * Laws: the root is a DIRECT child of #hud-overlay (the side columns are
  * dimmed to 0.35 + pointer-events:none while the hull callouts are active);
@@ -38,6 +37,9 @@
 import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
+import { VisualLaw } from '../../core/VisualLaw.js';
+import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
+import { DENSITY_MOTION_MS, DENSITY_MOTION_EASING } from '../HUD.js';
 
 /** The root element id (FloorMask MASK_PANES.cargo.els = ['#hud-cargo-pane']). */
 export const CARGO_PANE_ID = 'hud-cargo-pane';
@@ -60,7 +62,7 @@ export const CARGO_RUNG_ID = 'cargo';
  * heights the full form's minimum is computed from (fullMinPx).
  */
 export const CARGO_GEOMETRY = Object.freeze({
-  WIDTH_PX: 280,
+  WIDTH_PX: HUD_COLUMN_WIDTH_PX,
   RIGHT_PX: 10,
   FULL_MAX_PX: 200,
   GAP_PX: 8,
@@ -79,8 +81,8 @@ export const CARGO_GEOMETRY = Object.freeze({
 
 /** The rung's ONE hide bit (HUD._initPaneDensity domRung grammar). */
 const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
-/** Mode 'hidden' (no room under the rider): display:none via the style. */
-const CLIPPED_ATTR = 'data-cargo-clipped';
+/** Layout-hidden (LeftStack): display:none via the pane's own style — never the density bit. */
+const STACK_HIDDEN_ATTR = 'data-stack-hidden';
 const MODE_ATTR = 'data-cargo-mode';
 
 /**
@@ -106,6 +108,8 @@ export function naturalPx(rows, glass) {
   const n = Math.max(1, rows | 0);
   return fullMinPx(glass) + (n - 1) * (glass ? CARGO_GEOMETRY.ROW_GLASS_PX : CARGO_GEOMETRY.ROW_PX);
 }
+/** Alias so the instance method `naturalPx()` does not recurse into itself. */
+const _naturalPx = naturalPx;
 
 /** @private 1-decimal kg. */
 function fmt1(x) {
@@ -160,10 +164,11 @@ export class CargoPane {
     this._order = [];                // metalIds in DOM order
     this._rowCount = 1;              // rows the natural height is computed from (>= 1)
     this._empty = true;
-    this._mode = 'hidden';           // until the first setDodge places the pane
-    this._topPx = null;              // the placed top (Session M: the NEXT pane rides above it)
-    this._underPx = undefined;       // last setDodge inputs (write-on-change)
-    this._floorPx = undefined;
+    this._mode = 'hidden';           // until the first setStack places the pane (cargo-mode)
+    this._stackMode = undefined;     // last setStack inputs (write-on-change)
+    this._stackTop = undefined;
+    this._stackH = undefined;
+    this._topPx = null;              // the placed top
     this._heightPx = 0;              // cached rendered height (offsetHeight, read once per change)
     this._expectedPx = 0;            // the arithmetic expectation (fallback when offsetHeight is unavailable)
     this._rung = null;
@@ -191,12 +196,10 @@ export class CargoPane {
         label: 'Cargo',
         isVisible: () => {
           const el = this._root;
-          if (!el || (el.hasAttribute && el.hasAttribute(DENSITY_HIDDEN_ATTR))) return false;
-          try {
-            return typeof el.getClientRects === 'function' && el.getClientRects().length > 0;
-          } catch (_e) {
-            return false;
-          }
+          if (!el || !el.hasAttribute) return false;
+          // Density bit / leaving only — layout-hidden (`data-stack-hidden`)
+          // must not read as a density hide (LeftStack would skip apply).
+          return !el.hasAttribute(DENSITY_HIDDEN_ATTR) && !el.hasAttribute('data-density-leaving');
         },
         setVisible: (v) => {
           const el = this._root;
@@ -210,47 +213,56 @@ export class CargoPane {
   }
 
   /**
-   * THE DODGE (the hub calls it per frame). `underPx` = bottom edge of whatever
-   * rides above the pane on the right edge (null = nothing: bottom-anchored);
-   * `floorPx` = the lowest allowed bottom edge. Write-on-change on the two
-   * inputs: repeated identical inputs return before any DOM access.
-   *   bottom = floorPx − GAP_PX;  want = bottom − min(FULL_MAX_PX, natural)
-   *   top    = want, pushed DOWN to underPx + GAP_PX only when that is lower
-   *            (bottom-anchored; it yields upward only as far as it must)
-   *   avail  = bottom − top
-   *   mode   = 'full' (avail ≥ fullMinPx) | 'compact' (avail ≥ COMPACT_*) | 'hidden'
-   * Writes data-cargo-mode, top and max-height (min(FULL_MAX_PX, avail) in full).
-   * @param {number|null} underPx
-   * @param {number} floorPx
+   * LeftStack apply (the hub calls it per frame). Write-on-change on the three
+   * inputs. Maps stack mode → data-cargo-mode: natural/trimmed → 'full',
+   * compact → 'compact', hidden → 'hidden' + data-stack-hidden. Sets `top`
+   * BEFORE un-hiding so the gap-closing reflow glides.
+   * @param {number} top
+   * @param {number} height
+   * @param {'natural'|'compact'|'trimmed'|'hidden'} mode
    */
-  setDodge(underPx, floorPx) {
+  setStack(top, height, mode) {
     if (this._disposed || !this._root) return;
-    const u = Number(underPx);
-    const under = (underPx == null || !Number.isFinite(u)) ? null : u;
-    let floor = Number(floorPx);
-    if (!Number.isFinite(floor)) floor = this._viewportHeight();
-    if (!Number.isFinite(floor)) return;
-    if (under === this._underPx && floor === this._floorPx) return;   // write-on-change (inputs)
-    this._underPx = under;
-    this._floorPx = floor;
+    const t = Number(top);
+    const h = Number(height);
+    if (!Number.isFinite(t)) return;
+    const m = (mode === 'compact' || mode === 'trimmed' || mode === 'hidden') ? mode : 'natural';
+    const hh = Number.isFinite(h) ? h : 0;
+    if (t === this._stackTop && hh === this._stackH && m === this._stackMode) return;
+    this._stackTop = t;
+    this._stackH = hh;
+    this._stackMode = m;
     if (this._layout()) this._measure();
   }
 
-  /** The current mode: 'full' | 'compact' | 'hidden' ('hidden' until the first setDodge, and headless). */
+  /** Rider natural height: min(FULL_MAX_PX, rows). */
+  naturalPx() {
+    return Math.min(CARGO_GEOMETRY.FULL_MAX_PX, _naturalPx(this._rowCount, this._glass));
+  }
+
+  /** Rider compact height (header + buttons), glass or desktop. */
+  compactPx() {
+    return this._glass ? CARGO_GEOMETRY.COMPACT_GLASS_PX : CARGO_GEOMETRY.COMPACT_PX;
+  }
+
+  /** Rider trim floor (full form with one row). */
+  minPx() {
+    return fullMinPx(this._glass);
+  }
+
+  /** The current cargo-mode: 'full' | 'compact' | 'hidden' ('hidden' until the first setStack, and headless). */
   mode() { return this._mode; }
 
   /**
-   * Session M — the right-edge chain: the pane's PLACED top edge (CSS px) while
-   * it is on screen (placed, not clipped, its density bit clear), else null.
-   * The NEXT pane rides ABOVE this pane and takes this as its floor (the hub's
-   * gameLoop wire), so CARGO keeps its bottom slot and its own law. A cached
-   * layout number + one attribute read — never a layout read.
+   * The pane's PLACED top edge (CSS px) while it is on screen (placed, not
+   * layout-hidden, density bit clear), else null. A cached layout number +
+   * one attribute read — never a layout read.
    * @returns {number|null}
    */
   topPx() {
     const el = this._root;
     if (!el || this._mode === 'hidden' || this._topPx == null) return null;
-    if (el.hasAttribute && el.hasAttribute(DENSITY_HIDDEN_ATTR)) return null;
+    if (el.hasAttribute && (el.hasAttribute(DENSITY_HIDDEN_ATTR) || el.hasAttribute(STACK_HIDDEN_ATTR))) return null;
     return this._topPx;
   }
 
@@ -293,15 +305,16 @@ export class CargoPane {
     const root = doc.createElement('div');
     root.id = CARGO_PANE_ID;
     root.className = 'hud-panel' + (this._glass ? ' cargo-glass' : '');
-    // Geometry literals live inline (the style sheet carries the look); `top`
-    // and `max-height` are written ONLY by setDodge.
-    root.style.right = `${G.RIGHT_PX}px`;
+    // Geometry: left / width at build (inverted U, locked #8); `top` and
+    // `max-height` are written ONLY by setStack. Plan Task 8.
+    root.style.position = 'absolute';
+    root.style.left = `${HUD_EDGE_PX}px`;
     root.style.width = `${G.WIDTH_PX}px`;
     root.style.boxSizing = 'border-box';
     root.style.pointerEvents = 'auto';
     root.style.overflow = 'hidden';
     root.setAttribute(MODE_ATTR, 'hidden');
-    root.setAttribute(CLIPPED_ATTR, '');           // placed by the first setDodge
+    root.setAttribute(STACK_HIDDEN_ATTR, '');           // placed by the first setStack
 
     const mk = (tag, cls, text) => {
       const el = doc.createElement(tag);
@@ -365,12 +378,16 @@ export class CargoPane {
         pointer-events: auto;
         box-sizing: border-box;
         overflow: hidden;
+        transition: top ${DENSITY_MOTION_MS}ms ${DENSITY_MOTION_EASING};
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #${CARGO_PANE_ID} { transition: none; }
       }
       /* The rung's ONE bit (HUD's catch-effects-style carries the global rule
        * too; this copy keeps the pane honest when it stands alone). */
       #${CARGO_PANE_ID}[${DENSITY_HIDDEN_ATTR}] { display: none !important; }
-      /* Mode 'hidden': no room under the rider (setDodge). The density bit is untouched. */
-      #${CARGO_PANE_ID}[${CLIPPED_ATTR}] { display: none !important; }
+      /* Mode 'hidden': no room in the left stack. The density bit is untouched. */
+      #${CARGO_PANE_ID}[${STACK_HIDDEN_ATTR}] { display: none !important; }
       #${CARGO_PANE_ID} .cargo-head {
         display: flex; align-items: baseline; gap: 8px;
         height: ${G.HEADER_PX}px; line-height: ${G.HEADER_PX}px; white-space: nowrap;
@@ -378,13 +395,13 @@ export class CargoPane {
       }
       #${CARGO_PANE_ID} .cargo-title { font-weight: bold; letter-spacing: 0.08em; }
       #${CARGO_PANE_ID} .cargo-fill { flex: 1 1 auto; text-align: right; }
-      #${CARGO_PANE_ID} .cargo-worth { color: #f0c040; }
+      #${CARGO_PANE_ID} .cargo-worth { color: ${VisualLaw.COLORS.VALUE}; }
       #${CARGO_PANE_ID} .cargo-elev {
         height: ${G.PROGRESS_PX}px; font-size: 11px; line-height: 14px; opacity: 0.85;
         white-space: nowrap; flex: 0 0 auto;
       }
       #${CARGO_PANE_ID} .cargo-elev-track { height: 2px; margin-top: 2px; background: rgba(0, 255, 136, 0.15); }
-      #${CARGO_PANE_ID} .cargo-elev-bar { height: 2px; width: 0%; background: #00ff88; }
+      #${CARGO_PANE_ID} .cargo-elev-bar { height: 2px; width: 0%; background: ${VisualLaw.COLORS.PLAYER}; }
       #${CARGO_PANE_ID} .cargo-list {
         flex: 1 1 auto; min-height: 0; margin: ${G.LIST_PAD_PX / 2}px 0;
         overflow-y: auto; overflow-x: hidden;
@@ -397,17 +414,17 @@ export class CargoPane {
       #${CARGO_PANE_ID}.cargo-glass .cargo-row { height: ${G.ROW_GLASS_PX}px; }
       #${CARGO_PANE_ID} .cargo-row-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
       #${CARGO_PANE_ID} .cargo-row-kg { flex: 0 0 64px; text-align: right; }
-      #${CARGO_PANE_ID} .cargo-row-val { flex: 0 0 52px; text-align: right; color: #f0c040; }
+      #${CARGO_PANE_ID} .cargo-row-val { flex: 0 0 52px; text-align: right; color: ${VisualLaw.COLORS.VALUE}; }
       #${CARGO_PANE_ID} .cargo-empty { height: ${G.ROW_PX}px; line-height: ${G.ROW_PX}px; opacity: 0.5; }
       #${CARGO_PANE_ID}.cargo-glass .cargo-empty { height: ${G.ROW_GLASS_PX}px; line-height: ${G.ROW_GLASS_PX}px; }
       #${CARGO_PANE_ID} .cargo-foot { display: flex; gap: 8px; margin-top: ${G.FOOT_GAP_PX}px; flex: 0 0 auto; }
       #${CARGO_PANE_ID} .cargo-foot .cargo-btn { flex: 1 1 0; }
       /* Buttons: the StatusPanel .fleet-btn shape in the pane's green. */
       #${CARGO_PANE_ID} .cargo-btn {
-        font: bold 10px/1.2 var(--font-mono);
+        font: bold 11px/1.2 var(--font-mono);
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: #00ff88;
+        color: ${VisualLaw.COLORS.PLAYER};
         background: rgba(0, 255, 136, 0.08);
         border: 1px solid rgba(0, 255, 136, 0.55);
         border-radius: 3px;
@@ -423,8 +440,8 @@ export class CargoPane {
         transition: background 0.15s ease, border-color 0.15s ease;
       }
       #${CARGO_PANE_ID}.cargo-glass .cargo-btn { min-height: ${G.BTN_GLASS_PX}px; min-width: 44px; }
-      #${CARGO_PANE_ID} .cargo-btn:hover { background: rgba(0, 255, 136, 0.18); border-color: #00ff88; }
-      #${CARGO_PANE_ID} .cargo-btn:active { background: rgba(0, 255, 136, 0.35); color: #ffffff; }
+      #${CARGO_PANE_ID} .cargo-btn:hover { background: rgba(0, 255, 136, 0.18); border-color: ${VisualLaw.COLORS.PLAYER}; }
+      #${CARGO_PANE_ID} .cargo-btn:active { background: rgba(0, 255, 136, 0.35); color: ${VisualLaw.COLORS.LABEL}; }
       #${CARGO_PANE_ID} .cargo-btn:focus { outline: none; }
       #${CARGO_PANE_ID} .cargo-btn[aria-disabled="true"] { opacity: 0.35; cursor: default; pointer-events: none; }
       /* Compact: the header line + the two buttons; the progress line and the list fold away. */
@@ -493,14 +510,6 @@ export class CargoPane {
     const ec = Constants && Constants.ELEVATOR_CONTRACT;
     const t = ec && Number(ec.TARGET_MASS_KG);
     return (Number.isFinite(t) && t > 0) ? t : 10000;
-  }
-
-  /** @private The window height when the hub passes no floor (never per frame: setDodge caches). */
-  _viewportHeight() {
-    const doc = this._doc;
-    const win = (doc && doc.defaultView) || (typeof window !== 'undefined' ? window : null);
-    const h = win && Number(win.innerHeight);
-    return Number.isFinite(h) && h > 0 ? h : NaN;
   }
 
   // ── Actions (through the SHOP wrappers only) ───────────────────────────────
@@ -572,7 +581,6 @@ export class CargoPane {
     this._empty = empty;
     this._rowCount = Math.max(1, items.length);
 
-    this._layout();
     this._measure();
   }
 
@@ -636,48 +644,36 @@ export class CargoPane {
     return { el, name, kg, val, btn };
   }
 
-  // ── Layout (setDodge + render; pure arithmetic, write-on-change outputs) ───
+  // ── Layout (setStack; write-on-change outputs) ─────────────────────────────
 
   /**
-   * @private Place the pane from the cached dodge inputs. Returns true when a
-   * DOM write happened. No layout reads.
+   * @private Place the pane from the cached stack inputs. Returns true when a
+   * DOM write happened. Sets `top` BEFORE un-hiding. No layout reads.
    */
   _layout() {
     const root = this._root;
-    if (!root || !Number.isFinite(this._floorPx)) return false;
-    const G = CARGO_GEOMETRY;
-    const glass = this._glass;
-    const natural = naturalPx(this._rowCount, glass);
-    const bottom = this._floorPx - G.GAP_PX;
-    // BOTTOM-ANCHORED: the pane hugs the floor (the thumb-rest line on glass)
-    // and gives ground UPWARD only as far as what rides above it forces —
-    // never higher than it must (the hub's gate on the 13-inch iPad: the
-    // hull callout columns end ~700 px on the shop floor; a pane parked at
-    // `under + GAP` sat over the PROPULSION card's last line).
-    const want = bottom - Math.min(G.FULL_MAX_PX, natural);
-    let top = (this._underPx == null) ? want : Math.max(want, this._underPx + G.GAP_PX);
-    if (top < 0) top = 0;
-    const avail = bottom - top;
-    const compactMin = glass ? G.COMPACT_GLASS_PX : G.COMPACT_PX;
-    let mode, maxH;
-    if (avail >= fullMinPx(glass)) { mode = 'full'; maxH = Math.min(G.FULL_MAX_PX, avail); }
-    else if (avail >= compactMin) { mode = 'compact'; maxH = compactMin; }
-    else { mode = 'hidden'; maxH = 0; }
-
+    if (!root || !Number.isFinite(this._stackTop)) return false;
+    const stack = this._stackMode;
+    const cargoMode = stack === 'compact' ? 'compact' : (stack === 'hidden' ? 'hidden' : 'full');
+    const hidden = stack === 'hidden';
+    const top = Math.round(this._stackTop);
+    const maxH = hidden ? 0 : Math.round(Math.max(0, this._stackH));
     let wrote = false;
-    if (mode !== this._mode) {
-      this._mode = mode;
-      root.setAttribute(MODE_ATTR, mode);
-      if (mode === 'hidden') root.setAttribute(CLIPPED_ATTR, '');
-      else root.removeAttribute(CLIPPED_ATTR);
+    // Top first so the reflow glides before display:none lifts.
+    wrote = this._setStyle(root, 'top', `${top}px`) || wrote;
+    if (cargoMode !== this._mode) {
+      this._mode = cargoMode;
+      root.setAttribute(MODE_ATTR, cargoMode);
       wrote = true;
     }
-    if (mode !== 'hidden') {
-      wrote = this._setStyle(root, 'top', `${Math.round(top)}px`) || wrote;
-      wrote = this._setStyle(root, 'maxHeight', `${Math.round(maxH)}px`) || wrote;
+    if (hidden) {
+      if (!root.hasAttribute(STACK_HIDDEN_ATTR)) { root.setAttribute(STACK_HIDDEN_ATTR, ''); wrote = true; }
+    } else {
+      if (root.hasAttribute(STACK_HIDDEN_ATTR)) { root.removeAttribute(STACK_HIDDEN_ATTR); wrote = true; }
+      wrote = this._setStyle(root, 'maxHeight', `${maxH}px`) || wrote;
     }
-    this._topPx = mode === 'hidden' ? null : Math.round(top);
-    this._expectedPx = mode === 'hidden' ? 0 : Math.min(maxH, mode === 'full' ? natural : compactMin);
+    this._topPx = hidden ? null : top;
+    this._expectedPx = hidden ? 0 : maxH;
     return wrote;
   }
 

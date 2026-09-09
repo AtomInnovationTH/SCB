@@ -18,7 +18,7 @@
  * hub connects that to the CopilotVoice. It emits NOTHING on the bus.
  *
  * It is a pane-density RUNG like CargoPane: `rung()` returns the HUD domRung
- * shape ({id:'copilot', label:'Copilot', isVisible, setVisible}) whose ONE
+ * shape ({id:'copilot', label:'Autopilot', isVisible, setVisible}) whose ONE
  * visibility bit is `data-density-hidden` on the root (HUD.js carries the
  * global `[data-density-hidden]{display:none !important}`; the injected style
  * carries the id-scoped belt). Never emits HUD_PANE_VISIBILITY.
@@ -40,6 +40,8 @@
  */
 
 import { VisualLaw } from '../../core/VisualLaw.js';
+import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
+import { DENSITY_MOTION_MS, DENSITY_MOTION_EASING } from '../HUD.js';
 
 /** The root element id (FloorMask MASK_PANES.copilot.els = ['#hud-fma-strip']). */
 export const FMA_STRIP_ID = 'hud-fma-strip';
@@ -51,7 +53,7 @@ export const FMA_STYLE_ID = 'fma-strip-style';
 export const FMA_RUNG_ID = 'copilot';
 
 /** The column the strip rides in (its LAST child). */
-export const FMA_PARENT_ID = 'hud-left-column';
+export const FMA_PARENT_ID = 'hud-overlay';
 
 /**
  * FMA_GEOMETRY — the strip's numbers. HEIGHT_PX is the outer height (display
@@ -85,6 +87,8 @@ export const NO_RATE = '\u2014';                 // —
 
 /** The rung's ONE hide bit (HUD._initPaneDensity domRung grammar). */
 const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
+/** Layout-hidden (LeftStack): display:none via the strip's own style — never the density bit. */
+const STACK_HIDDEN_ATTR = 'data-stack-hidden';
 /** off | aiming | engaged — drives the dim rule and which segments show. */
 const MODE_ATTR = 'data-fma-mode';
 /** The PHASE segment's 10 s box. */
@@ -134,7 +138,7 @@ export class FmaStrip {
   /**
    * @param {object} [deps]
    * @param {Document|null} [deps.doc]  document (default: the global one; null = headless).
-   * @param {Element}  [deps.parent]     root's parent (default: doc.getElementById('hud-left-column')); appended LAST.
+    * @param {Element}  [deps.parent]     root's parent (default: doc.getElementById('hud-overlay')).
    * @param {function} [deps.now]        ms clock — used only when update() is called without nowMs.
    * @param {function} [deps.fma]        () → AutopilotSystem.fmaState() shape. Absent ⇒ `AP OFF`.
    * @param {function} [deps.onPhaseChange] (prevPhase, nextPhase, state) on every AP phase change after the first sample.
@@ -162,6 +166,9 @@ export class FmaStrip {
     this._closing = null;            // EMA'd range rate (m/s), null until two samples
     this._series = null;             // headingMode|targetName key the samples belong to
     this._text = 'AP OFF';
+    this._stackMode = undefined;
+    this._stackTop = undefined;
+    this._stackH = undefined;
 
     this._build(deps.parent);
     this._paint('off', PHASE_LABELS.OFF, NO_RATE, NO_RATE);
@@ -180,15 +187,11 @@ export class FmaStrip {
     if (!this._rung) {
       this._rung = {
         id: FMA_RUNG_ID,
-        label: 'Copilot',
+        label: 'Autopilot',
         isVisible: () => {
           const el = this._root;
-          if (!el || (el.hasAttribute && el.hasAttribute(DENSITY_HIDDEN_ATTR))) return false;
-          try {
-            return typeof el.getClientRects === 'function' && el.getClientRects().length > 0;
-          } catch (_e) {
-            return false;
-          }
+          if (!el || !el.hasAttribute) return false;
+          return !el.hasAttribute(DENSITY_HIDDEN_ATTR) && !el.hasAttribute('data-density-leaving');
         },
         setVisible: (v) => {
           const el = this._root;
@@ -200,6 +203,42 @@ export class FmaStrip {
     }
     return this._rung;
   }
+
+  /**
+   * LeftStack apply (the hub calls it per frame). Write-on-change. Sets `top`
+   * BEFORE un-hiding. mode 'hidden' → data-stack-hidden (never the density bit).
+   * @param {number} top
+   * @param {number} height
+   * @param {'natural'|'compact'|'trimmed'|'hidden'} mode
+   */
+  setStack(top, height, mode) {
+    if (this._disposed || !this._root) return;
+    const t = Number(top);
+    const h = Number(height);
+    if (!Number.isFinite(t)) return;
+    const m = (mode === 'compact' || mode === 'trimmed' || mode === 'hidden') ? mode : 'natural';
+    const hh = Number.isFinite(h) ? h : 0;
+    if (t === this._stackTop && hh === this._stackH && m === this._stackMode) return;
+    this._stackTop = t;
+    this._stackH = hh;
+    this._stackMode = m;
+    const root = this._root;
+    const hidden = m === 'hidden';
+    const topStr = `${Math.round(t)}px`;
+    if (!root.style || root.style.top !== topStr) {
+      if (root.style) root.style.top = topStr;
+    }
+    const hStr = `${Math.round(Math.max(0, hh || FMA_GEOMETRY.HEIGHT_PX))}px`;
+    if (!hidden && root.style && root.style.height !== hStr) root.style.height = hStr;
+    if (hidden) {
+      if (root.setAttribute) root.setAttribute(STACK_HIDDEN_ATTR, '');
+    } else if (root.removeAttribute) {
+      root.removeAttribute(STACK_HIDDEN_ATTR);
+    }
+  }
+
+  /** Rider natural height (one line). */
+  naturalPx() { return FMA_GEOMETRY.HEIGHT_PX; }
 
   /**
    * The poll (the hub calls it per frame; it accepts one sample per POLL_MS).
@@ -296,12 +335,15 @@ export class FmaStrip {
     const root = doc.createElement('div');
     root.id = FMA_STRIP_ID;
     root.className = 'hud-panel';
-    // The column's other panes override .hud-panel's absolute the same way.
-    root.style.position = 'relative';
+    // Overlay rider (plan Task 8): left column width, stacked by LeftStack.
+    root.style.position = 'absolute';
+    root.style.left = `${HUD_EDGE_PX}px`;
+    root.style.width = `${HUD_COLUMN_WIDTH_PX}px`;
     root.style.boxSizing = 'border-box';
     root.style.height = `${FMA_GEOMETRY.HEIGHT_PX}px`;
     root.style.pointerEvents = 'none';
     root.setAttribute(MODE_ATTR, 'off');
+    root.setAttribute(STACK_HIDDEN_ATTR, '');
 
     const mk = (cls, text) => {
       const el = doc.createElement('span');
@@ -352,10 +394,17 @@ export class FmaStrip {
         pointer-events: none;
         user-select: none;
         -webkit-user-select: none;
+        width: ${HUD_COLUMN_WIDTH_PX}px;
+        transition: top ${DENSITY_MOTION_MS}ms ${DENSITY_MOTION_EASING};
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #${FMA_STRIP_ID} { transition: none; }
       }
       /* The rung's ONE bit (HUD's global rule carries it too; this copy keeps
        * the strip honest when it stands alone). */
       #${FMA_STRIP_ID}[${DENSITY_HIDDEN_ATTR}] { display: none !important; }
+      /* Layout-hidden (LeftStack). The density bit is untouched. */
+      #${FMA_STRIP_ID}[${STACK_HIDDEN_ATTR}] { display: none !important; }
       /* AP OFF reads dim. */
       #${FMA_STRIP_ID}[${MODE_ATTR}="off"] { opacity: 0.45; }
       #${FMA_STRIP_ID} .fma-seg { flex: 0 0 auto; }

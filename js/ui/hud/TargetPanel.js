@@ -20,7 +20,43 @@ import { classifyNetTarget } from '../../systems/netRouting.js';
 import { computeToolOdds, computeBestTool, toolShortLabel, makeNetOddsLockCache } from '../../systems/ToolOdds.js';
 import { dossierSystem, appraiseSalvage } from '../../systems/DossierSystem.js';
 import { PaneChrome } from './PaneChrome.js';
+import { GestureHints } from './GestureHints.js';
 import { classify, oddsColor, reachKmFrom, THIN_ALPHA } from './TargetColorLaw.js';
+import { TouchControls } from '../TouchControls.js';
+
+/** Desktop target-row min-height (shipped). */
+export const TARGET_ROW_PX = 20;
+/** Glass hit-box (Apple HIG; RAIL_GEOMETRY.TOUCH_PITCH_PX). Plan Task 13. */
+export const TARGET_ROW_GLASS_PX = 44;
+/** Header line + margin that sits above the rows. */
+export const TARGET_HEADER_PX = 24;
+/** Rows that fit each PaneChrome step (maxHeight = header + k rows). */
+export const TARGET_STEP_ROWS = Object.freeze({ min: 1, normal: 4, max: 7 });
+
+/**
+ * Target pane maxHeight for a chrome step. Glass recomputes from the 44 px
+ * row so N rows still fit. Plan Task 13 / 14.
+ * @param {string} step  'min' | 'normal' | 'max'
+ * @param {boolean} [glass]
+ * @returns {number}
+ */
+export function targetMaxHeightPx(step, glass) {
+  const k = TARGET_STEP_ROWS[step] || TARGET_STEP_ROWS.normal;
+  const row = glass ? TARGET_ROW_GLASS_PX : TARGET_ROW_PX;
+  return TARGET_HEADER_PX + k * row;
+}
+
+/**
+ * Glass: ctor `glass` wins; else GestureHints.isGlass(); else detectGlass().
+ * @param {boolean|null|undefined} explicit
+ * @returns {boolean}
+ */
+function resolveGlass(explicit) {
+  if (explicit === true) return true;
+  if (explicit === false) return false;
+  try { if (GestureHints.isGlass()) return true; } catch (_e) { /* headless */ }
+  try { return TouchControls.detectGlass(); } catch (_e) { return false; }
+}
 
 /** @private hex (#rrggbb) → 'r, g, b' for rgba(). */
 function hexToRgb(hex) {
@@ -29,11 +65,12 @@ function hexToRgb(hex) {
 }
 
 export class TargetPanel {
-  constructor(container, { colorLaw = false } = {}) {
+  constructor(container, { colorLaw = false, glass = null } = {}) {
     this._container = container;
     this._sortMode = 'tpi';  // FIX_PLAN §4: Default to composite TPI sort
     this._armManager = null;
     this._colorLaw = !!colorLaw;
+    this._glass = resolveGlass(glass);
     this._targetLaw = null;
     this._reachKm = 0;
 
@@ -93,10 +130,14 @@ export class TargetPanel {
             border-left: 2px solid transparent;
             border-radius: 2px;
             margin: 1px 0;
-            min-height: 20px;
+            min-height: ${TARGET_ROW_PX}px;
             cursor: pointer;
             transition: background 0.2s;
             color: #aaaaaa;
+        }
+        #hud-targets-panel[data-glass] .target-row {
+            min-height: ${TARGET_ROW_GLASS_PX}px;
+            box-sizing: border-box;
         }
         .target-row:hover {
             background: rgba(0, 255, 136, 0.06);
@@ -313,10 +354,11 @@ export class TargetPanel {
 
     this.panels.targets = this._createPanel('hud-targets-panel', {
       position: 'relative',
-      maxHeight: 'calc(100vh - 326px)',
+      maxHeight: `${targetMaxHeightPx('normal', this._glass)}px`,
       overflowY: 'auto',
       outline: 'none',
     });
+    if (this._glass && this.panels.targets.setAttribute) this.panels.targets.setAttribute('data-glass', '');
     this.panels.targets.dataset.hudGroup = 'target-list';
     this.panels.targets.dataset.activateKey = 'S';
     this.panels.targets.tabIndex = -1;
@@ -383,12 +425,24 @@ export class TargetPanel {
       color: '#00ff88',
       title: 'Target pane — 0 shows / hides · click to resize min / normal / max',
       onStep: (step) => {
-        // Grow the scroll cap when maximised; restore otherwise.
-        this.panels.targets.style.maxHeight = (step === 'max')
-          ? 'calc(100vh - 120px)' : 'calc(100vh - 326px)';
+        // Step table = header + k rows (recomputed from the live row height).
+        this._applyTargetHeight(step);
         this._updateMinSummary();
       },
     });
+  }
+
+  /**
+   * @private maxHeight = header + k rows (min when the list is empty).
+   * Plan Task 13 / 14 — glass rows are 44 px so the same k still fits.
+   * @param {string} [step]
+   */
+  _applyTargetHeight(step) {
+    const pane = this.panels && this.panels.targets;
+    if (!pane || !pane.style) return;
+    const empty = this._lastTrackedCount === 0;
+    const name = empty ? 'min' : (step || (this._chrome && this._chrome.step) || 'normal');
+    pane.style.maxHeight = `${targetMaxHeightPx(name, this._glass)}px`;
   }
 
   /** @private Populate the minimized one-line target summary. */
@@ -577,6 +631,7 @@ export class TargetPanel {
 
       if (targets.length === 0) {
         listEl.innerHTML = '<span style="opacity:0.4">No targets nearby</span>';
+        this._applyTargetHeight();
       } else {
         listEl.innerHTML = targets.map(t => {
           const selected = t.id === this.selectedTargetId;
@@ -740,6 +795,7 @@ export class TargetPanel {
             this._newlyDiscovered.clear();
           });
         }
+        this._applyTargetHeight();
       }
     }
 
@@ -830,26 +886,22 @@ export class TargetPanel {
   // PRIVATE — HELPERS
   // ==========================================================================
 
-  /** @private Get target color based on value tier (danger > jackpot > salvage > junk > standard) */
+  /** @private Get target color — VisualLaw tokens only (ladder reorder rev 3,
+   *  locked #12: legacy value-colours removed). */
   _getTargetColor(target) {
-    // Danger: extreme risk or hydrazine
     if (target.risk === 'Extreme' || (target.salvage && target.salvage.hydrazine)) {
-      return '#ff4444';
+      return VisualLaw.COLORS.THREAT;
     }
-    // Jackpot: high-point targets
     if (target.estimatedPoints && target.estimatedPoints >= 100) {
-      return '#00ccff';
+      return VisualLaw.COLORS.INFO;
     }
-    // Salvage: has recoverable materials
     if (target.hasSalvage) {
-      return '#ffcc00';
+      return VisualLaw.COLORS.VALUE;
     }
-    // Junk: tiny fragments with no salvage
     if (target.type === 'fragment' && target.sizeMeter && target.sizeMeter < 0.5) {
-      return '#557755';
+      return VisualLaw.COLORS.PLAYER;
     }
-    // Standard
-    return '#00ff88';
+    return VisualLaw.COLORS.PLAYER;
   }
 
   /** @private Get compact salvage hint HTML (e.g. "Xe In M3") with tooltips */

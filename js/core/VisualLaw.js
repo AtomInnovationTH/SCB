@@ -44,7 +44,7 @@ export const VisualLaw = {
     THREAT: '#ff4422',     // red-orange — threat, ALWAYS pulses
     INFO: '#00ccff',       // cyan — informational (matches TEACHING overlay family)
     SELECTION: '#4488ff',  // blue — pilot-selected (Session Q: was white #ffffff; the reticle's shipped blue)
-    CAUTION: '#ffaa00',    // steady amber — denials, "N catches away", near-limits; NEVER pulses
+    CAUTION: '#ffaa00',    // steady amber — denials, "N catches away", near-limits; NEVER pulses. The Override gag no longer pulses (rev 3) — THREAT pulse is reserved for real alarms.
     LABEL: '#ffffff',      // white — labels, titles, the lock flash; never a state (Session Q)
   },
   /** Color is never the sole channel: every color-coded meaning must also be

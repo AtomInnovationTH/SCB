@@ -1,12 +1,10 @@
 /**
- * PaneDensity.js — the HUD pane-priority "density ladder".
+ * PaneDensity.js — the HUD pane-priority "density ladder" (rev 3).
  *
- * The bare `-` / `+` keys walk an ordered ladder of HUD panes, hiding the
- * lowest-priority visible pane on `-` and restoring the highest-priority hidden
- * pane on `+`. Repeated `-` presses strip the HUD down to pure space scenery
- * (warnings and all other chrome included — a deliberate design decision:
- * critical events in pure scenery stay pure, audio-only, no visual breakthrough).
- * One `+` restores in reverse.
+ * ONE ordered array (`this.rungs`). Slider level k shows the last k rungs:
+ * index 0 sheds first on `-`, the right end is full clutter. 15 rungs →
+ * 16 detents (level 0 = empty view: no HUD, no sky labels, no city names, no
+ * ships). Plan: tmp/plans/1788867799156-hud-pane-ladder-reorder.md
  *
  * Design — NO COUNTER. The ladder holds no hidden-count state of its own; each
  * step reads the LIVE visibility of every rung via its injected `isVisible()`
@@ -17,6 +15,25 @@
  * player re-shows a pane with its own key, the next `-`/`+` simply re-reads the
  * new live state and targets the right rung. NavSphere "starts hidden" falls out
  * for free — its `isVisible()` is already false, so `-` skips it.
+ *
+ * Composite rungs (`compositeRung`, `members`): isVisible = ANY member;
+ * setVisible(v) fans out to every member; onFlip fires ONCE with the
+ * composite's id (never per member) on every path (down / up / setLevel /
+ * clearAll / restore). Members are ordinary rungs and may be missing from the
+ * top-level ladder — FloorMask addresses them by their own ids. A composite
+ * with zero members reads not-visible; setVisible is a no-op. `addMember`
+ * appends (main.js drops the Override gag into `experimental` at the ladder
+ * gate).
+ *
+ * World rungs (`world: true` — sky labels, ships, city pills) are scene
+ * objects, not HUD chrome. `hudClear()` is true iff every non-world rung is
+ * currently hidden (slider level 2 of the final ladder: only `citypills` +
+ * `craft`; level 3 with `reticles` visible is false; level 0 is true).
+ *
+ * The ladder is ONE array, edited in place by the hub before the FloorMask
+ * caches it: `insertBefore(anchorId, rung)` splices an instrument ahead of a
+ * named rung (throws on an unknown anchor — a silent append would renumber
+ * the slider), `find(id)` looks a rung up top-level AND inside composites.
  *
  * The rung adapters are INJECTED (not hard-wired) so this module is pure and
  * Node-testable: the DOM / canvas plumbing lives in HUD.js.
@@ -30,7 +47,52 @@
  * @property {string}  label              Human label used in the feedback line.
  * @property {() => boolean} isVisible     Live "is this pane on screen right now?"
  * @property {(v: boolean) => void} setVisible  Show (true) / hide (false) the pane.
+ * @property {boolean} [world]            Scene/world rung — does NOT count as
+ *   HUD chrome (`hudClear()` ignores it).
+ * @property {DensityRung[]} [members]    Composite members (absent on a leaf).
+ * @property {(rung: DensityRung) => void} [addMember]  Append a member
+ *   (composites only; used by main.js for the Override gag).
  */
+
+/**
+ * Composite rung — one ladder slot that fans out to several member rungs.
+ * isVisible = ANY member visible; setVisible(v) writes every member; addMember
+ * appends (main.js uses this at the ladder gate to drop the Override gag into
+ * `experimental`). Members are ordinary rungs and may themselves be missing
+ * from the top-level ladder. A composite with zero members reads not-visible
+ * and setVisible is a no-op. PaneDensity.onFlip fires the composite's id once,
+ * never per member (ladder reorder rev 3,
+ * tmp/plans/1788867799156-hud-pane-ladder-reorder.md).
+ *
+ * @param {string} id
+ * @param {string} label
+ * @param {DensityRung[]} [members]
+ * @returns {DensityRung}
+ */
+export function compositeRung(id, label, members) {
+  return {
+    id,
+    label,
+    members: Array.isArray(members) ? members.slice() : [],
+    isVisible() {
+      const list = this.members || [];
+      return list.some((m) => {
+        try { return !!(m && m.isVisible()); } catch (_e) { return false; }
+      });
+    },
+    setVisible(v) {
+      const list = this.members || [];
+      for (const m of list) {
+        try { if (m && m.setVisible) m.setVisible(!!v); } catch (_e) { /* member refused */ }
+      }
+    },
+    addMember(rung) {
+      if (!rung) return;
+      if (!Array.isArray(this.members)) this.members = [];
+      this.members.push(rung);
+    },
+  };
+}
 
 export class PaneDensity {
   /**
@@ -86,6 +148,55 @@ export class PaneDensity {
    */
   visibleCount() {
     return this.rungs.reduce((n, r) => n + (this._safeVisible(r) ? 1 : 0), 0);
+  }
+
+  /**
+   * True iff every non-world rung is currently hidden. World rungs (sky
+   * labels, ships, city pills) are scene objects — they do not count as HUD
+   * chrome. Slider level 2 of the final ladder (only `citypills` + `craft`,
+   * both world) is true; level 3 (`reticles` visible) is false; level 0 is
+   * true. Reads live via `_safeVisible`; does not recurse into members — a
+   * visible composite (no `world` flag) is HUD chrome even if its only
+   * showing member is a world leaf.
+   * @returns {boolean}
+   */
+  hudClear() {
+    return this.rungs.every((r) => !r || r.world === true || !this._safeVisible(r));
+  }
+
+  /**
+   * Splice `rung` into `this.rungs` immediately before the top-level rung
+   * whose id is `anchorId`. Returns the inserted index. Throws if the
+   * anchor is unknown (main.js calls `insertBefore('debris', cargo)` etc.
+   * before `new FloorMask(...)` — `_resolve` caches once).
+   * @param {string} anchorId
+   * @param {DensityRung} rung
+   * @returns {number}
+   */
+  insertBefore(anchorId, rung) {
+    const i = this.rungs.findIndex((r) => r && r.id === anchorId);
+    if (i < 0) throw new Error(`PaneDensity.insertBefore: unknown anchor '${anchorId}'`);
+    this.rungs.splice(i, 0, rung);
+    return i;
+  }
+
+  /**
+   * Rung by id, searching top-level AND composite members recursively.
+   * @param {string} id
+   * @returns {DensityRung|null}
+   */
+  find(id) {
+    const walk = (list) => {
+      if (!Array.isArray(list)) return null;
+      for (const r of list) {
+        if (!r) continue;
+        if (r.id === id) return r;
+        const nested = walk(r.members);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    return walk(this.rungs);
   }
 
   /**

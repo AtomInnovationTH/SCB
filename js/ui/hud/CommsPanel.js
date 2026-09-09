@@ -13,8 +13,11 @@ import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { PaneChrome } from './PaneChrome.js';
+import { GestureHints } from './GestureHints.js';
 import { decorateGlossary, escapeHtml } from '../../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from '../glossaryDom.js';
+import { TouchControls } from '../TouchControls.js';
+import { RAIL_GEOMETRY } from '../RailGeometry.js';
 
 const COMMS = Constants.COMMS;
 
@@ -114,13 +117,73 @@ function isFollowedInstruction(msg, satisfiedBeatIds) {
     && satisfiedBeatIds && satisfiedBeatIds.has(msg.onboardingBeatId));
 }
 
+/** localStorage key for the player's last Comms size step (persisted player step wins the default). */
+const COMMS_STEP_STORE_KEY = 'spacecowboy_comms_pane_step';
+
+/**
+ * Glass: ctor `glass` wins; else GestureHints.isGlass(); else detectGlass().
+ * Plan Task 6 / locked #13 — [7] badge 44 px hit on glass only.
+ * @param {boolean|null|undefined} explicit
+ * @returns {boolean}
+ */
+function resolveGlass(explicit) {
+  if (explicit === true) return true;
+  if (explicit === false) return false;
+  try { if (GestureHints.isGlass()) return true; } catch (_e) { /* headless */ }
+  try { return TouchControls.detectGlass(); } catch (_e) { return false; }
+}
+
+/**
+ * Initial Comms size step. A persisted player step wins; else `'line'` under
+ * the ladder gate (rev 3 — the right arm's top follows it) and `'normal'`
+ * with the gate off (`?ladder=0`).
+ * @param {{ladderEnabled?: boolean, stored?: string|null}} [opts]
+ * @returns {string}
+ */
+export function commsInitialStep({ ladderEnabled, stored } = {}) {
+  let persisted = stored;
+  if (persisted === undefined) {
+    try {
+      persisted = (typeof localStorage !== 'undefined')
+        ? localStorage.getItem(COMMS_STEP_STORE_KEY) : null;
+    } catch (_e) { persisted = null; }
+  }
+  if (persisted && COMMS_STEPS.includes(persisted)) return persisted;
+  const gated = ladderEnabled !== undefined
+    ? ladderEnabled : !!(Constants.LADDER && Constants.LADDER.ENABLED);
+  if (gated) return Constants.COMMS.PANE_STEP_DEFAULT || 'line';
+  return 'normal';
+}
+
+/**
+ * 44 px hit box on the [7] badge (Apple HIG / RAIL_GEOMETRY.TOUCH_PITCH_PX).
+ * No-op off glass.
+ * @param {HTMLElement|null} badge
+ * @param {boolean} glass
+ */
+export function applyCommsBadgeHit(badge, glass) {
+  if (!badge || !badge.style || !glass) return;
+  const px = `${RAIL_GEOMETRY.TOUCH_PITCH_PX}px`;
+  badge.style.minWidth = px;
+  badge.style.minHeight = px;
+  badge.style.display = 'flex';
+  badge.style.alignItems = 'center';
+  badge.style.justifyContent = 'center';
+  badge.style.boxSizing = 'border-box';
+}
+
 // ============================================================================
 // COMMS PANEL CLASS
 // ============================================================================
 
 export class CommsPanel {
-  constructor(container) {
+  /**
+   * @param {HTMLElement} container
+   * @param {{ glass?: boolean|null }} [opts]  `glass` — Task 6: 44 px [7] badge hit.
+   */
+  constructor(container, { glass = null } = {}) {
     this._container = container;
+    this._glass = resolveGlass(glass);
     this._commsSystem = null;
     this._commsFlashTimer = 0;
 
@@ -245,11 +308,20 @@ export class CommsPanel {
       pane: this.panels.comms,
       keyLabel: '7',
       steps: COMMS_STEPS,
-      initial: 'normal',
+      initial: commsInitialStep(),
       color: COMMS_COLOR_NORMAL,
       title: 'Comms size (7). Click to cycle line / normal / large',
-      onStep: () => this._applyCommsStep(),
+      onStep: (step) => {
+        this._applyCommsStep();
+        if (this._commsStepReady) {
+          try { localStorage.setItem(COMMS_STEP_STORE_KEY, step); } catch (_e) { /* private mode */ }
+        }
+      },
     });
+    this._commsStepReady = true;
+    if (this.panels.comms && this.panels.comms.querySelector) {
+      applyCommsBadgeHit(this.panels.comms.querySelector('.hud-pane-badge'), this._glass);
+    }
   }
 
   // ==========================================================================

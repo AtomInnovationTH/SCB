@@ -15,16 +15,17 @@
  * ONE cluster); this is the soonest of everything, in one glance.
  *
  * Wiring (the hub's, main.js inside the LADDER gate): construct with the deps
- * below, push `pane.rung()` into hud.paneDensity.rungs BEFORE the first
- * floorMask.setFloor, call `update(nowMs)` per frame (self-throttled to 1 Hz)
- * and feed `setDodge(underPx, floorPx)` per frame with the bottom edge of what
- * rides above on the right edge (the SPECS tab or the WHERE rail) and the
- * lowest allowed bottom edge (the thumb-rest floor, or CARGO's top - GAP when
- * CARGO is visible). `topPx()` is this pane's top for the next link of the
- * edge chain — arithmetic, never a layout read.
+ * below (`parent: hud.rightColumnEl`), push `pane.rung()` into hud.paneDensity.rungs
+ * BEFORE the first floorMask.setFloor, call `update(nowMs)` per frame
+ * (self-throttled to 1 Hz). `setDodge` is a documented no-op (rev 3 Task 6 —
+ * the pane is the last child of #hud-right-column; main.js still calls it per
+ * frame until Wave 4 drops the call).
  *
- * Laws: the root is a DIRECT child of #hud-overlay; NO backdrop-filter; NO
- * layout read anywhere (the heights are fixed numbers: FRAME + HEADER + rows);
+ * Laws: with `parent` the root is a relative child of that node (the right
+ * column); without `parent` it still defaults to #hud-overlay (`?ladder=0`).
+ * NO backdrop-filter; NO layout read anywhere (the heights are fixed numbers:
+ * FRAME + HEADER + rows, or FRAME + HEADER when every slot is the unknown
+ * mark — one row `NEXT —`);
  * the tick is self-throttled to >= TICK_MS from the `nowMs` it is handed (no
  * timer, no rAF of its own); every DOM write is write-on-change; textContent
  * only (no innerHTML); no window/document listeners; no fetch (the stations
@@ -94,6 +95,8 @@ const UNKNOWN = '\u2014';
 const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
 /** The dodge's mode: 'full' | 'compact' | 'hidden' (hidden = display:none via the style). */
 const MODE_ATTR = 'data-next-mode';
+/** Empty orbit: every slot is the unknown mark — one row `NEXT —` (Task 14). */
+const EMPTY_ATTR = 'data-next-empty';
 /** A row folded away by the compact form (the two latest events). */
 const FOLDED_ATTR = 'data-folded';
 /** A row whose subject just changed (the keyframe flash). */
@@ -116,6 +119,15 @@ export function fullPx() {
 export function compactPx() {
   const G = NEXT_GEOMETRY;
   return G.FRAME_PX + G.HEADER_PX + G.COMPACT_ROWS * G.ROW_PX;
+}
+
+/**
+ * The empty form's outer height: frame + header (one line `NEXT —`).
+ * Plan Task 14 / locked #16 — every slot the unknown mark (or TCA idle clear).
+ */
+export function emptyPx() {
+  const G = NEXT_GEOMETRY;
+  return G.FRAME_PX + G.HEADER_PX;
 }
 
 /**
@@ -178,6 +190,16 @@ function unknownRow(label, subject = '') {
   return { label, subject, value: UNKNOWN, seconds: Infinity, key: '', tier: null };
 }
 
+/**
+ * @private A slot has nothing to say: the unknown mark, or TCA's idle `clear`.
+ * Plan Task 14 — when EVERY slot is empty the pane collapses to `NEXT —`.
+ */
+function slotEmpty(m) {
+  if (!m) return true;
+  if (m.value === UNKNOWN) return true;
+  return m.label === 'TCA' && m.value === 'clear';
+}
+
 export class NextPane {
   /**
    * @param {object} [deps]  every dep optional and guarded
@@ -214,16 +236,18 @@ export class NextPane {
     this._keys = NEXT_ROWS.map(() => undefined);   // last subject key per slot (undefined = never rendered)
     this._flashUntil = NEXT_ROWS.map(() => 0);     // change-highlight deadline per slot (ms)
     this._order = [0, 1, 2, 3];      // slots by soonest first
-    this._mode = 'hidden';           // until the first setDodge places the pane
-    this._underPx = undefined;       // last setDodge inputs (write-on-change)
+    this._mode = 'full';             // column child (rev 3); 'hidden' only headless / disposed
+    this._empty = false;             // Task 14: every slot unknown → one row `NEXT —`
+    this._underPx = undefined;       // last setDodge inputs (write-on-change) — unused since dodge retired
     this._floorPx = undefined;
-    this._topPx = null;              // the written top (px) — null while hidden
-    this._heightPx = 0;              // the written height (px)
+    this._topPx = null;              // overlay top retired; topPx() is always null
+    this._heightPx = 0;              // the form's geometric height (emptyPx / fullPx)
     this._lastTickMs = null;
     this._rung = null;
     this._disposed = false;
 
     this._build(deps.parent);
+    if (!this._root) this._mode = 'hidden';
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -261,38 +285,27 @@ export class NextPane {
   }
 
   /**
-   * THE DODGE (the hub calls it per frame). `underPx` = bottom edge of whatever
-   * rides above the pane on the right edge (null = nothing: bottom-anchored);
-   * `floorPx` = the lowest allowed bottom edge (the thumb-rest floor, or the
-   * CARGO pane's top - GAP). Write-on-change on the two inputs.
-   *   bottom = floorPx - GAP_PX;  want = bottom - fullPx()
-   *   top    = want, pushed DOWN to underPx + GAP_PX only when that is lower
-   *   avail  = bottom - top
-   *   mode   = 'full' (avail >= fullPx) | 'compact' (avail >= compactPx) | 'hidden'
-   * Writes data-next-mode, top and height (the form's fixed height, bottom-anchored).
-   * @param {number|null} underPx
-   * @param {number} floorPx
+   * THE DODGE — retired (ladder reorder rev 3 Task 6). The pane is a relative
+   * child of #hud-right-column and the hub no longer calls this (the right arm
+   * glides as one column). Kept as a documented no-op for the API: never
+   * writes styles, never throws.
+   * @param {number|null} [_underPx]
+   * @param {number} [_floorPx]
    */
-  setDodge(underPx, floorPx) {
-    if (this._disposed || !this._root) return;
-    const u = Number(underPx);
-    const under = (underPx == null || !Number.isFinite(u)) ? null : u;
-    let floor = Number(floorPx);
-    if (!Number.isFinite(floor)) floor = this._viewportHeight();
-    if (!Number.isFinite(floor)) return;
-    if (under === this._underPx && floor === this._floorPx) return;   // write-on-change (inputs)
-    this._underPx = under;
-    this._floorPx = floor;
-    this._layout();
+  setDodge(_underPx, _floorPx) {
+    return;
   }
 
-  /** The root's current top (CSS px) from the pane's own layout numbers — null while hidden. Never a layout read. */
-  topPx() { return this._mode === 'hidden' ? null : this._topPx; }
+  /** Overlay top retired (column-relative). Always null. */
+  topPx() { return null; }
 
-  /** The written height (px): fullPx() | compactPx() | 0. */
-  heightPx() { return this._mode === 'hidden' ? 0 : this._heightPx; }
+  /** The form's geometric height (px): fullPx() | emptyPx() | 0 (headless / disposed). */
+  heightPx() {
+    if (this._mode === 'hidden' || !this._root) return 0;
+    return this._empty ? emptyPx() : fullPx();
+  }
 
-  /** The current mode: 'full' | 'compact' | 'hidden' ('hidden' until the first setDodge, and headless). */
+  /** The current mode: 'full' while mounted; 'hidden' headless / disposed. */
   mode() { return this._mode; }
 
   /**
@@ -344,14 +357,19 @@ export class NextPane {
     const root = doc.createElement('div');
     root.id = NEXT_PANE_ID;
     root.className = 'hud-panel' + (this._glass ? ' next-glass' : '');
-    // Geometry literals live inline (the style sheet carries the look); `top`
-    // and `height` are written ONLY by setDodge.
-    root.style.right = `${G.RIGHT_PX}px`;
-    root.style.width = `${G.WIDTH_PX}px`;
+    // Ladder reorder rev 3 Task 6: column child is position:relative / width 100%
+    // (no right/bottom/top). Overlay default (`?ladder=0`) keeps the old inset.
+    if (parentDep) {
+      root.style.position = 'relative';
+      root.style.width = '100%';
+    } else {
+      root.style.right = `${G.RIGHT_PX}px`;
+      root.style.width = `${G.WIDTH_PX}px`;
+    }
     root.style.boxSizing = 'border-box';
     root.style.pointerEvents = 'none';
     root.style.overflow = 'hidden';
-    root.setAttribute(MODE_ATTR, 'hidden');       // placed by the first setDodge
+    root.setAttribute(MODE_ATTR, 'full');
 
     const mk = (tag, cls, text) => {
       const el = doc.createElement(tag);
@@ -362,7 +380,9 @@ export class NextPane {
 
     const head = mk('div', 'next-head');
     const title = mk('span', 'next-title', 'NEXT');
+    const emptyMark = mk('span', 'next-empty-mark', UNKNOWN);
     head.appendChild(title);
+    head.appendChild(emptyMark);
     root.appendChild(head);
 
     const rows = [];
@@ -412,6 +432,10 @@ export class NextPane {
         flex: 0 0 auto;
       }
       #${NEXT_PANE_ID} .next-title { font-weight: bold; letter-spacing: 0.08em; }
+      #${NEXT_PANE_ID} .next-empty-mark { display: none; opacity: 0.5; }
+      /* Empty orbit: header + dash on one line; the four slots fold away. */
+      #${NEXT_PANE_ID}[${EMPTY_ATTR}] .next-empty-mark { display: inline; }
+      #${NEXT_PANE_ID}[${EMPTY_ATTR}] .next-row { display: none; }
       #${NEXT_PANE_ID} .next-row {
         display: flex; align-items: baseline; gap: 6px;
         height: ${G.ROW_PX}px; line-height: ${G.ROW_PX}px; white-space: nowrap;
@@ -636,6 +660,12 @@ export class NextPane {
     }
     this._order = [0, 1, 2, 3].sort((x, y) => (model[x].seconds - model[y].seconds) || (x - y));
     this._applyFold();
+    const empty = model.every(slotEmpty);
+    if (empty !== this._empty) {
+      this._empty = empty;
+      this._setAttr(this._root, EMPTY_ATTR, empty ? '' : null);
+      this._layout();
+    }
   }
 
   /** @private Compact folds the two latest slots (attribute only in compact; slot order never changes). */
@@ -659,8 +689,8 @@ export class NextPane {
     const root = this._root;
     if (!root || !Number.isFinite(this._floorPx)) return false;
     const G = NEXT_GEOMETRY;
-    const full = fullPx();
-    const compact = compactPx();
+    const full = this._empty ? emptyPx() : fullPx();
+    const compact = this._empty ? emptyPx() : compactPx();
     const bottom = this._floorPx - G.GAP_PX;
     const want = bottom - full;
     let top = (this._underPx == null) ? want : Math.max(want, this._underPx + G.GAP_PX);

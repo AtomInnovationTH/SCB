@@ -3,6 +3,12 @@
  * Projects all contacts onto a 2D circle for 360° situational awareness.
  * Distance-encoded: hybrid logarithmic dual-zone mapping (Sprint S5-A).
  * Inspired by the Nav Sphere from Independence War (1997).
+ *
+ * Plan 1788867799156-hud-pane-ladder-reorder.md Task 10 / locked #7: the
+ * minimized state IS the ORB footer chip (inboard of the SPECS tab). Rung
+ * show lands in the chip; chip tap / 8 expands the disc bottom-right above
+ * the footer. getReservedHeight() is deprecated (always 0 — HUD.js no longer
+ * reads a column slot).
  * @module ui/NavSphere
  */
 
@@ -16,6 +22,8 @@ import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { gmstDeg } from '../scene/Ephemeris.js';
 import { prefersReducedMotion } from './hudPulse.js';
 import { mono } from '../core/Typeface.js';
+import { HUD_EDGE_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
+import { createFooterChip } from './hud/FooterChip.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -26,6 +34,25 @@ const MARGIN_RIGHT = 0;            // px from right screen edge — flush with v
 const MARGIN_TOP_FALLBACK = 10;    // px from top edge — fallback when comms panel is absent
 const COMMS_GAP = 6;              // px gap between comms panel bottom and NavSphere top (UX-2 #11)
 const MIN_READOUT_HEIGHT = 20;     // px vertical footprint of the minimized LAT/LON/ALT one-liner
+
+/** SPECS tab visual width (LibraryPane tab padding 10+12 + "SPECS "). Not exported. */
+const SPECS_TAB_WIDTH_PX = 59;
+/** ORB chip `right` offset: HUD_EDGE_PX + SPECS tab + HUD_EDGE_PX (16+59+16=91). */
+export const ORB_CHIP_OFFSET_PX = HUD_EDGE_PX + SPECS_TAB_WIDTH_PX + HUD_EDGE_PX;
+export const ORB_CHIP_ID = 'hud-chip-orb';
+
+/**
+ * Expanded-disc centre (Task 10): bottom-right above the footer band.
+ * cy = H − footerTop − 8 − R; cx = W − HUD_EDGE_PX − R.
+ * @param {{width:number, height:number, radius?:number, footerTop:number, edgePx?:number}} p
+ * @returns {{cx:number, cy:number}}
+ */
+export function orbDiscCenter({ width, height, radius = SPHERE_RADIUS, footerTop, edgePx = HUD_EDGE_PX }) {
+  return {
+    cx: width - edgePx - radius,
+    cy: height - footerTop - RAIL_GEOMETRY.FOOTER_GAP_PX - radius,
+  };
+}
 
 /** @enum {string} Color palette */
 const C = {
@@ -120,9 +147,20 @@ function _eciToGeodetic(x, y, z) {
 export class NavSphere {
   /**
    * @param {THREE.PerspectiveCamera} camera
+   * @param {{glass?:boolean, hintBandPx?:number, doc?:Document, win?:Window}} [opts]
    */
-  constructor(camera) {
+  constructor(camera, { glass = false, hintBandPx, doc, win } = {}) {
     this.camera = camera;
+    this._doc = doc || (typeof document !== 'undefined' ? document : null);
+    this._win = win || (typeof window !== 'undefined' ? window : null);
+    const ticker = (Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {};
+    this._hintBandPx = Number.isFinite(Number(hintBandPx))
+      ? Number(hintBandPx)
+      : ((Number(ticker.BOTTOM_PX) || 0) + (Number(ticker.ROW_HEIGHT_PX) || 0));
+    this._glass = !!glass;
+    this._band = footerBand({ glass: this._glass, hintBandPx: this._hintBandPx });
+    this._footerTop = this._band.top;
+    this._chip = null;
 
     /** @type {HTMLCanvasElement} */
     this.canvas = null;
@@ -181,11 +219,14 @@ export class NavSphere {
     this._tacticalOverlay = null;
 
     this._createCanvas();
+    this._createOrbChip();
     this._onResize();
-    window.addEventListener('resize', () => {
-      this._onResize();
-      this._commsBottomCache = null; // resize may move the panel
-    });
+    if (this._win && typeof this._win.addEventListener === 'function') {
+      this._win.addEventListener('resize', () => {
+        this._onResize();
+        this._commsBottomCache = null; // resize may move the panel
+      });
+    }
 
     // Self-manage visibility via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.VIEW_CONFIG_CHANGE, (config) => {
@@ -207,9 +248,8 @@ export class NavSphere {
     // back on.
     eventBus.on(Events.MISSION_START, () => {
       this._frameSkip = -1;
-      if (this.canvas) {
-        this.canvas.style.display = (this._hidden || !this._visible) ? 'none' : 'block';
-      }
+      this._syncCanvasDisplay();
+      this._syncChip();
     });
     // Comms panel stepped to a new size — its bottom edge (which anchors the
     // sphere's vertical position) moved. The height animates over ~0.3s, so
@@ -230,31 +270,76 @@ export class NavSphere {
 
   /** @private */
   _createCanvas() {
-    this.canvas = document.createElement('canvas');
+    const doc = this._doc;
+    if (!doc || typeof doc.createElement !== 'function') return;
+    this.canvas = doc.createElement('canvas');
     this.canvas.id = 'navsphere-canvas';
-    this.canvas.style.cssText = `
-      position: fixed; top: 0; left: 0;
-      width: 100%; height: 100%;
-      pointer-events: none; z-index: 9;
-      display: none;
-    `;
-    document.body.appendChild(this.canvas);
-    this.ctx = this.canvas.getContext('2d');
+    const s = this.canvas.style;
+    s.position = 'fixed';
+    s.top = '0';
+    s.left = '0';
+    s.width = '100%';
+    s.height = '100%';
+    s.pointerEvents = 'none';
+    s.zIndex = '9';
+    s.display = 'none';
+    if (doc.body && typeof doc.body.appendChild === 'function') doc.body.appendChild(this.canvas);
+    this.ctx = this.canvas.getContext ? this.canvas.getContext('2d') : null;
+  }
+
+  /** @private ORB footer chip — minimized state (Task 10). */
+  _createOrbChip() {
+    const doc = this._doc;
+    if (!doc || typeof doc.createElement !== 'function') return;
+    this._chip = createFooterChip({
+      id: ORB_CHIP_ID,
+      label: 'Orb',
+      side: 'right',
+      offsetPx: ORB_CHIP_OFFSET_PX,
+      onTap: () => this.toggleMinimized(),
+      doc,
+      bottomPx: this._band.bottom,
+      glass: this._glass,
+      hintBandPx: this._hintBandPx,
+    });
+    this._syncChip();
+  }
+
+  /** @private */
+  _syncCanvasDisplay() {
+    if (!this.canvas || !this.canvas.style) return;
+    if (this._cornerMountRadiusPx != null) {
+      this.canvas.style.display = 'block';
+      return;
+    }
+    const showDisc = !this._hidden && this._visible && !this._minimized;
+    this.canvas.style.display = showDisc ? 'block' : 'none';
+  }
+
+  /** @private */
+  _syncChip() {
+    if (!this._chip) return;
+    this._chip.setVisible(!this._hidden && this._visible);
+    this._chip.setExpanded(!this._hidden && this._visible && !this._minimized);
   }
 
   /** @private */
   _onResize() {
-    const dpr = Math.min(window.devicePixelRatio, 2);
+    if (!this.canvas) return;
+    const win = this._win;
+    const dpr = Math.min((win && win.devicePixelRatio) || 1, 2);
     this.dpr = dpr;
-    this._width  = window.innerWidth;
-    this._height = window.innerHeight;
+    this._width  = (win && win.innerWidth) || 0;
+    this._height = (win && win.innerHeight) || 0;
     this.canvas.width  = this._width  * dpr;
     this.canvas.height = this._height * dpr;
     this.canvas.style.width  = this._width  + 'px';
     this.canvas.style.height = this._height + 'px';
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.ctx.imageSmoothingEnabled = true;
-    this.ctx.imageSmoothingQuality = 'high';
+    if (this.ctx && typeof this.ctx.setTransform === 'function') {
+      this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.ctx.imageSmoothingEnabled = true;
+      this.ctx.imageSmoothingQuality = 'high';
+    }
   }
 
   // ==========================================================================
@@ -266,7 +351,8 @@ export class NavSphere {
     this._visible = visible;
     this._frameSkip = -1; // Reset throttle so next update draws immediately
     if (this._hidden) return; // respect manual toggle
-    this.canvas.style.display = visible ? 'block' : 'none';
+    this._syncCanvasDisplay();
+    this._syncChip();
   }
 
   /**
@@ -278,31 +364,28 @@ export class NavSphere {
 
   /** Toggle NavSphere visibility */
   toggleVisibility() {
-    if (!this.canvas) return;
     this._hidden = !this._hidden;
-    this._frameSkip = -1; // Reset throttle so next visible frame draws immediately
-    this.canvas.style.display = this._hidden ? 'none' : 'block';
+    this._frameSkip = -1;
+    this._syncCanvasDisplay();
+    this._syncChip();
   }
 
   /**
-   * Minimize-to-one-line toggle (hotkey revamp 2026-06-14 — the 8 key).
-   * Instead of fully hiding, the minimized NavSphere collapses to a compact
-   * LAT / LON / ALT readout drawn at the sphere's corner (the sphere geometry,
-   * grid, blips and rings are skipped). The readout stays live because update()
-   * keeps refreshing _geoCache. Press again to restore the full sphere.
+   * Chip / disc toggle (the 8 key). Minimized = ORB chip (Task 10); expanded
+   * draws the disc bottom-right above the footer. First press while hidden
+   * re-reveals (HUD_PANE_VISIBILITY) and expands.
    */
   toggleMinimized() {
-    if (!this.canvas) return;
+    if (!this.canvas && !this._chip) return;
     let shown;
     // If the orb is being held off (off by default, a prior manual hide, or the
     // pane-density ladder hid it via setOrbHidden), the first 8 press brings it
     // up rather than collapsing an already-hidden orb. Subsequent presses
-    // minimize/expand as normal.
+    // expand/collapse the disc (chip is the minimized state — Task 10).
     if (this._hidden) {
       this._hidden = false;
       this._minimized = false;
       this._frameSkip = -1;
-      this.canvas.style.display = this._visible ? 'block' : 'none';
       shown = true;
       // Wave 5 Session H (Job A): the un-hide path flipped `_hidden` — the
       // intent flag isOrbVisible() reads (the rung's bit). The minimize fold
@@ -313,6 +396,8 @@ export class NavSphere {
       this._frameSkip = -1; // redraw immediately on the next frame
       shown = !this._minimized;
     }
+    this._syncCanvasDisplay();
+    this._syncChip();
     // Reactive feedback for the 8 key (never suppressed — see commsSuppression).
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: shown ? 'Nav orb shown (8 to hide)' : 'Nav orb hidden (8 to show)',
@@ -325,8 +410,8 @@ export class NavSphere {
   get isMinimized() { return this._minimized; }
 
   /**
-   * Pane-density ladder — is the orb currently ON (the player's show/hide
-   * intent)? Reads the same `_hidden` flag the 8 key drives, so the ladder and
+   * Pane-density ladder — is the orb currently ON (chip or disc showing)?
+   * Reads the same `_hidden` flag the 8 key drives, so the ladder and
    * the 8 key compose: an individual 8 press re-reveals a density-hidden orb.
    * @returns {boolean}
    */
@@ -335,34 +420,26 @@ export class NavSphere {
   /**
    * Pane-density ladder — show/hide the orb by driving the manual `_hidden`
    * flag (NOT the view-config `_visible` flag), so the density hide survives a
-   * camera-view switch and the 8 key can re-reveal it.
+   * camera-view switch and the 8 key can re-reveal it. SHOW lands in the CHIP
+   * (Task 10); HIDE collapses the disc and hides chip + canvas.
    * @param {boolean} hidden
    */
   setOrbHidden(hidden) {
-    if (!this.canvas) return;
     this._hidden = !!hidden;
+    this._minimized = true;
     this._frameSkip = -1;
-    this.canvas.style.display = (this._hidden || !this._visible) ? 'none' : 'block';
+    this._syncCanvasDisplay();
+    this._syncChip();
   }
 
   /**
-   * Effective vertical footprint (in px) the NavSphere occupies below the comms
-   * panel, used by HUD.js to position the right-hand pane column. This is the
-   * single source of truth for the NavSphere "slot" height so panes below can
-   * reclaim the space when the sphere is minimized or hidden:
-   *   • fully hidden / not visible → 0 (column climbs to just below comms)
-   *   • minimized (8 key)          → MIN_READOUT_HEIGHT (the one-line readout)
-   *   • expanded                   → full diameter (2 × SPHERE_RADIUS)
-   * The COMMS_GAP above the slot is added by the caller, not included here.
+   * @deprecated Task 10 — the orb no longer occupies a right-column slot
+   * (footer chip / disc above the footer). HUD.js stops reading this.
+   * Always 0.
    * @returns {number} px
    */
   getReservedHeight() {
-    // Corner-mounted (Zoom Ladder PROX NET): the minimap is force-shown at the mount
-    // radius regardless of the suspended hidden/minimized flags.
-    if (this._cornerMountRadiusPx != null) return 2 * this._cornerMountRadiusPx;
-    if (this._hidden || !this._visible) return 0;
-    if (this._minimized) return MIN_READOUT_HEIGHT;
-    return 2 * SPHERE_RADIUS;
+    return 0;
   }
 
   /** @param {number|null} id */
@@ -382,13 +459,8 @@ export class NavSphere {
   setCornerMount(radiusPx) {
     this._cornerMountRadiusPx = (radiusPx > 0) ? radiusPx : null;
     this._frameSkip = -1; // redraw at the new geometry on the next frame
-    if (!this.canvas) return;
-    if (this._cornerMountRadiusPx != null) {
-      this.canvas.style.display = 'block';
-    } else {
-      // Same resting expression the shipped toggles use.
-      this.canvas.style.display = (this._hidden || !this._visible) ? 'none' : 'block';
-    }
+    this._syncCanvasDisplay();
+    this._syncChip();
   }
 
   /**
@@ -455,11 +527,9 @@ export class NavSphere {
       );
     }
 
-    // Minimized (8 key): draw only the LAT/LON/ALT one-liner and skip the
-    // sphere. _geoCache above is still refreshed so the readout stays live.
-    // (Suspended while corner-mounted — the PROX NET minimap always draws the orb.)
+    // Minimized (8 key): the ORB chip is the minimized state (Task 10) — disc
+    // not drawn. (Suspended while corner-mounted — the PROX NET minimap always draws.)
     if (this._minimized && this._cornerMountRadiusPx == null) {
-      this._drawMinReadout();
       return;
     }
 
@@ -489,26 +559,32 @@ export class NavSphere {
     this._up.setFromMatrixColumn(m, 1);
     this._forward.setFromMatrixColumn(m, 2).negate();
 
-    // Sphere center — top-right corner, dynamically below comms panel (UX-2 #11).
-    // §13 Sprint 4 (Phase 3 audit): cache the comms-panel bottom across draws
-    // to avoid a per-draw sync layout flush. Invalidated on resize and
-    // VIEW_CONFIG_CHANGE. At 10 Hz this saves ~10 layout flushes/s.
-    // Zoom Ladder PROX NET: while corner-mounted the SAME corner anchor applies at
-    // the mount radius — the orb visually shrinks in place (the costume
-    // transform 'navsphere-to-minimap').
+    // Sphere center. Unmounted (Task 10): bottom-right above the footer band
+    // (cx = W − HUD_EDGE_PX − R, cy = H − footerTop − 8 − R). Corner-mounted
+    // PROX NET keeps the comms-anchored top-right slot.
     const R = this._cornerMountRadiusPx != null ? this._cornerMountRadiusPx : SPHERE_RADIUS;
-    const cx = this._width  - MARGIN_RIGHT - R;
-    if (this._commsBottomCache == null) {
-      if (!this._commsElCache) {
-        this._commsElCache = document.getElementById('hud-comms-panel');
+    let cx, cy;
+    if (this._cornerMountRadiusPx != null) {
+      cx = this._width - MARGIN_RIGHT - R;
+      if (this._commsBottomCache == null) {
+        if (!this._commsElCache) {
+          this._commsElCache = (this._doc && this._doc.getElementById)
+            ? this._doc.getElementById('hud-comms-panel')
+            : null;
+        }
+        this._commsBottomCache = this._commsElCache
+          ? this._commsElCache.getBoundingClientRect().bottom
+          : MARGIN_TOP_FALLBACK;
       }
-      this._commsBottomCache = this._commsElCache
-        ? this._commsElCache.getBoundingClientRect().bottom
-        : MARGIN_TOP_FALLBACK;
+      cy = this._commsBottomCache + COMMS_GAP + R;
+    } else {
+      const a = orbDiscCenter({
+        width: this._width, height: this._height, radius: R,
+        footerTop: this._footerTop, edgePx: HUD_EDGE_PX,
+      });
+      cx = a.cx;
+      cy = a.cy;
     }
-    const commsBottom = this._commsBottomCache;
-    const marginTop = commsBottom + COMMS_GAP;
-    const cy = marginTop + R;
     const ctx = this.ctx;
 
     ctx.save();
@@ -686,7 +762,7 @@ export class NavSphere {
     ctx.arc(cx, cy, R, 0, Math.PI * 2);
     ctx.stroke();
 
-    // ---- Geolocation readout (LAT / LON / ALT) below sphere (ST-5.4) ----
+    // ---- Geolocation readout (LAT / LON / ALT) above the disc (Task 10) ----
     if (this._geoCache) {
       const geo = this._geoCache;
       ctx.font = mono(10);
@@ -695,7 +771,7 @@ export class NavSphere {
       const latStr = `${geo.lat >= 0 ? '+' : ''}${geo.lat.toFixed(1)}\u00B0`;
       const lonStr = `${geo.lon >= 0 ? '+' : ''}${geo.lon.toFixed(1)}\u00B0`;
       const altStr = `${Math.round(geo.alt)}`;
-      ctx.fillText(`LAT ${latStr}  LON ${lonStr}  ALT ${altStr} km`, cx, cy + R + 14);
+      ctx.fillText(`LAT ${latStr}  LON ${lonStr}  ALT ${altStr} km`, cx, cy - R - 14);
     }
 
     // ---- ST-9.3 C-3: HIGH RECOIL warning indicator ----

@@ -16,12 +16,13 @@ import { TargetPanel } from './hud/TargetPanel.js';
 import { CommsPanel } from './hud/CommsPanel.js';
 import { HintTicker } from './hud/HintTicker.js';
 import { NetInventoryPanel } from './hud/NetInventoryPanel.js';
-import { PaneDensity } from './hud/PaneDensity.js';
+import { PaneDensity, compositeRung } from './hud/PaneDensity.js';
 import { PaneHelp } from './hud/PaneHelp.js';
 import { AlertArbiter, STRIP_KIND } from './hud/AlertHierarchy.js';
 import { approachLive } from './hud/TargetColorLaw.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { pinProgress } from './shopPin.js'; // S1 retention: pinned-upgrade progress math (pure, DOM-free)
+import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX } from './RailGeometry.js';
  import { DebrisWireframe }   from './DebrisWireframe.js';
  import { DaughterWireframe } from './DaughterWireframe.js';
 import { StrutLabels }       from './hud/StrutLabels.js';
@@ -139,6 +140,13 @@ export const TOAST_DROP_WHILE_ENGAGED = Object.freeze(new Set([
   'memo',      // AP state moves to the MOTHER MEMO slot in Q; as a toast it is dropped while engaged
 ]));
 
+/** Task 9 — hide/show reflow duration (ms). */
+export const DENSITY_MOTION_MS = 200;
+/** VisualLaw's cubic-in-out — CSS cubic-bezier (VisualLaw.EASING is the name, not a CSS function). */
+export const DENSITY_MOTION_EASING = 'cubic-bezier(0.65, 0, 0.35, 1)';
+/** Pin widget natural height when unmeasured (plan layout target). */
+export const PIN_NATURAL_PX = 27;
+
 export class HUD {
   constructor() {
     this.container = document.getElementById('hud-overlay');
@@ -197,6 +205,8 @@ export class HUD {
     this._lastArmIndex = 0;
     /** @type {HTMLElement|null} Right-column container for wireframe + target list */
     this._rightColumn = null;
+    /** @type {Map<Element, {timer:*, onEnd:Function, done:boolean}>} Task 9 density phase timers */
+    this._densityPhases = new Map();
     /** @type {number} Cached right-column top position (UX-2 #11 dynamic layout) */
     this._lastRightColTop = 0;
 
@@ -274,9 +284,9 @@ export class HUD {
     this._rightColBottomClearPx = (Constants.LADDER && Constants.LADDER.ENABLED) ? 189 : 30;
     Object.assign(this._rightColumn.style, {
       position: 'absolute',
-      top: '446px',         // Below NavSphere (UX-2 #11: 160 margin + 280 diameter + 6 gap)
-      right: '0px',
-      width: '280px',       // Match NavSphere diameter for aligned left edges
+      top: '90px',          // placeholder; update() rewrites from commsBottom + 10
+      right: `${HUD_EDGE_PX}px`,
+      width: `${HUD_COLUMN_WIDTH_PX}px`,
       display: 'flex',
       flexDirection: 'column',
       gap: '10px',          // Pane-to-pane vertical gap — keep in sync with left column (StatusPanel.js)
@@ -288,31 +298,28 @@ export class HUD {
       // targets column slides under the rail (the G3 play-test complaint).
       // This static value only covers the pre-first-update frames: the LIVE
       // bound is the dynamic relayout in update() (UX-2 #11), which rewrites
-      // maxHeight from the comms/NavSphere-derived top using the SAME
+      // maxHeight from the comms-derived top using the SAME
       // _rightColBottomClearPx clearance (G5 fix — G4 set only this static
       // value and was clobbered on frame one). Flag-off both sites keep the
       // shipped strings byte-identical (docs/ladder/01-numbers.md §"Post-M3
       // glue").
       maxHeight: (Constants.LADDER && Constants.LADDER.ENABLED)
-        ? 'calc(100vh - 635px)'   // 446 top + (100vh - 635) height → bottom at 100vh - 189
-        : 'calc(100vh - 480px)',  // shipped: adjusted for new top offset
+        ? 'calc(100vh - 279px)'   // 90 top + (100vh - 279) height → bottom at 100vh - 189
+        : 'calc(100vh - 120px)',
       overflowY: 'auto',
       zIndex: '10',
       outline: 'none', // No focus ring
+      // Task 9: the column's `top` glides when Comms resizes / hides (set top
+      // BEFORE un-hiding). The transition lives in the catch-style sheet, NOT
+      // inline, so the reduced-motion block can gate it (review 2026-09-08).
     });
     this.container.appendChild(this._rightColumn);
 
-    // --- Wireframe container (mounts inside right column) ---
+    // --- Wireframe container (mounts inside right column, AFTER TargetPanel) ---
     const wireframeContainer = document.createElement('div');
     wireframeContainer.id = 'hud-wireframe-container';
     wireframeContainer.dataset.hudGroup = 'target-detail';
     wireframeContainer.dataset.activateKey = 'Tab';
-    this._rightColumn.appendChild(wireframeContainer);
-    this.debrisWireframe = new DebrisWireframe(wireframeContainer);
-
-    // MotherWireframe (2D pane) removed 2026-06-03 — replaced by in-world 3D
-    // inspection callouts (ui/MotherCallouts.js, owned by main.js). The player
-    // no longer looks back and forth between the ship and a separate schematic.
 
     // --- DaughterWireframe (floating, bottom-left — Delegation 3) ---
     this.daughterWireframe = new DaughterWireframe();
@@ -324,12 +331,16 @@ export class HUD {
     // Session Q (plan D12b): with the ladder on the autopilot chip becomes the
     // MOTHER header's MEMO slot (steady tokens, the A4 box on change); off, the
     // shipped PROPULSION chip byte for byte.
-    this.statusPanel = new StatusPanel(this.container, { memoSlot: !!(Constants.LADDER && Constants.LADDER.ENABLED) });
-    // TargetPanel mounts inside the right column (below wireframe).
-    // Session Q (plan D15): with the ladder on the panel's selected-row CSS is
-    // the law's SELECTION blue and its rows follow `data.targetLaw` (the hub
-    // passes it per frame; null off the ladder → the shipped rows).
+    this.statusPanel = new StatusPanel(this.container, {
+      memoSlot: !!(Constants.LADDER && Constants.LADDER.ENABLED),
+      cargoPaneVisible: () => this.isRungVisible('cargo'),
+    });
+    // Ladder reorder rev 3 Task 6: DOM order inside the column is TargetPanel
+    // → #hud-wireframe-container → NextPane (Next is parented by main.js as
+    // the last child via hud.rightColumnEl).
     this.targetPanel = new TargetPanel(this._rightColumn, { colorLaw: !!(Constants.LADDER && Constants.LADDER.ENABLED) });
+    this._rightColumn.appendChild(wireframeContainer);
+    this.debrisWireframe = new DebrisWireframe(wireframeContainer);
     // Delegation 4 (2026-05-31) — lasso + net inventory chips, just below
     // the target list inside the right column. Subscribes to
     // LASSO_AMMO_CHANGED and NET_INVENTORY_CHANGED; emits INVENTORY_LOW
@@ -560,6 +571,30 @@ export class HUD {
          * update loop, so a density-hidden pane cannot be resurrected by those
          * paths — only the ladder (+) or the pane's own toggle (7/8/9/0) clears it. */
         [data-density-hidden] { display: none !important; }
+        /* Layout-hidden left-arm riders (LeftStack). Never the density bit. */
+        [data-stack-hidden] { display: none !important; }
+        #hud-pin-widget, #hud-right-column {
+          transition: top ${DENSITY_MOTION_MS}ms ${DENSITY_MOTION_EASING};
+        }
+        /* Task 9 — animated reflow (rev 3). Max-height (not grid 0fr): TargetPanel
+         * (overflow-y + inner flex header), NextPane (display:flex column), and
+         * #hud-wireframe-container own layouts that display:grid on the root
+         * would break. Leaving pane is treated as hidden by isVisible(). */
+        [data-density-leaving] {
+          overflow: hidden !important;
+          opacity: 0;
+          margin-top: 0;
+          margin-bottom: 0;
+          max-height: 0 !important;
+          transition: max-height ${DENSITY_MOTION_MS}ms ${DENSITY_MOTION_EASING},
+                      opacity ${DENSITY_MOTION_MS}ms ${DENSITY_MOTION_EASING},
+                      margin ${DENSITY_MOTION_MS}ms ${DENSITY_MOTION_EASING};
+        }
+        [data-density-entering] {
+          overflow: hidden;
+          opacity: 0;
+          max-height: 0;
+        }
         /* Pane-density "quiet" mode (Reticles & alerts rung engaged): mute
          * transient teaching/hint POPUPS that are re-created per show() and so
          * can't be tagged individually on the keypress. A body-level attribute +
@@ -641,6 +676,7 @@ export class HUD {
            * still show (steady) and self-remove on their timers. */
           #hud-conjunction-panel { animation: none !important; }
           .hud-alert-float { animation: none !important; }
+          #hud-pin-widget, #hud-right-column { transition: none !important; }
         }
       `;
       document.head.appendChild(catchStyle);
@@ -692,6 +728,10 @@ export class HUD {
     this.paneHelp = new PaneHelp({
       getEntry: (id) => (this._codexSystem && typeof this._codexSystem.getEntry === 'function')
         ? this._codexSystem.getEntry(id) : null,
+      // Rev 3 Task 16: rows derive `label (rung i/total)` from the LIVE ladder
+      // (a getter — PaneDensity is built after this panel, and main.js splices
+      // the instruments in later; `?ladder=0` reads its own 11-rung shape).
+      ladder: () => this._paneDensity || null,
     });
     this.paneHelp.install();
   }
@@ -707,21 +747,18 @@ export class HUD {
     el.id = 'hud-pin-widget';
     Object.assign(el.style, {
       position: 'absolute',
-      top: '150px',
-      left: '12px',
-      minWidth: '200px',
-      maxWidth: '260px',
+      left: `${HUD_EDGE_PX}px`,
+      width: `${HUD_COLUMN_WIDTH_PX}px`,
       padding: '4px 8px',
-      background: 'rgba(0,20,40,0.55)',
+      background: 'rgba(0,0,0,0.72)',
       border: '1px solid rgba(240,192,64,0.35)',
-      borderRadius: '3px',
+      color: VisualLaw.COLORS.VALUE,
       fontFamily: 'var(--font-mono)',
       fontSize: '11px',
-      color: '#f0c040',
-      letterSpacing: '0.03em',
+      letterSpacing: '0.04em',
       pointerEvents: 'none',
       display: 'none',
-      zIndex: '40',
+      zIndex: '12',
     });
     el.innerHTML = `
       <div id="hud-pin-label" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
@@ -753,9 +790,9 @@ export class HUD {
     const bar = this._pinWidget.querySelector('#hud-pin-bar');
     if (affordable) {
       this._pinWidget.style.borderColor = 'rgba(0,255,136,0.55)';
-      this._pinWidget.style.color = '#00ff88';
+      this._pinWidget.style.color = VisualLaw.COLORS.PLAYER;
       if (label) label.textContent = `▸ ${this._pinned.name} — READY AT DEPOT`;
-      if (bar) { bar.style.width = '100%'; bar.style.background = '#00ff88'; }
+      if (bar) { bar.style.width = '100%'; bar.style.background = VisualLaw.COLORS.PLAYER; }
       if (!this._pinReadyFired) {
         this._pinReadyFired = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
@@ -766,24 +803,28 @@ export class HUD {
       }
     } else {
       this._pinWidget.style.borderColor = 'rgba(240,192,64,0.35)';
-      this._pinWidget.style.color = '#f0c040';
+      this._pinWidget.style.color = VisualLaw.COLORS.VALUE;
       if (label) {
         label.textContent = `▸ ${this._pinned.name} ${Math.round(this._credits).toLocaleString()}/${this._pinned.cost.toLocaleString()} cr`;
       }
-      if (bar) { bar.style.width = `${Math.round(pct * 100)}%`; bar.style.background = '#f0c040'; }
+      if (bar) { bar.style.width = `${Math.round(pct * 100)}%`; bar.style.background = VisualLaw.COLORS.VALUE; }
       void remaining;
     }
     this._pinWidget.style.display = 'block';
   }
 
-  /**
-   * @private Build the pane-priority density ladder and wire it to the
-   * HUD_DENSITY_DOWN/UP events. Rungs are ordered lowest-priority → highest:
-   *   NavSphere → Debris → Target → Score+ticker → Comms → Fleet/arms → Mother
-   *   → everything-else (pure scenery). `-` hides the lowest visible rung, `+`
-   * restores the highest hidden rung. Adapters read/drive LIVE pane state so the
-   * ladder needs no counter and composes with the 7/8/9/0 toggles.
-   */
+   /**
+    * @private Build the pane-priority density ladder (rev 3) and wire it to
+    * HUD_DENSITY_DOWN/UP. Plan:
+    * tmp/plans/1788867799156-hud-pane-ladder-reorder.md
+    *
+    * 11 base rungs (also the `?ladder=0` order). Index 0 sheds first on `-`;
+    * slider level k = last k rungs. main.js (ladder gate) splices four
+    * instruments via insertBefore and adds the Override gag as a member of
+    * `experimental`. 15 rungs → 16 detents. Adapters read/drive LIVE pane
+    * state so the ladder needs no counter and composes with the 7/8/9/0
+    * toggles.
+    */
   _initPaneDensity() {
     // DOM rung: hidden via the data-density-hidden attribute (CSS !important),
     // which survives inline display writes from view-switch / update code.
@@ -792,14 +833,13 @@ export class HUD {
     // _applyViewConfig() collapses in minimal views (e.g. Overview). Without the
     // rects check the ladder would "hide" a pane that isn't on screen, waste a
     // rung, and leave it density-hidden after the view switches back.
+    const self = this;
     const domRung = (id, label, getEls) => ({
       id, label,
-      isVisible: () => getEls().some(el =>
-        el && !el.hasAttribute('data-density-hidden') && el.getClientRects().length > 0),
+      isVisible: () => getEls().some(el => self._densityIsVisible(el)),
       setVisible: (v) => getEls().forEach(el => {
         if (!el) return;
-        if (v) el.removeAttribute('data-density-hidden');
-        else el.setAttribute('data-density-hidden', '');
+        self._densitySetVisible(el, v);
       }),
     });
     const byId = (id) => () => [document.getElementById(id)];
@@ -811,12 +851,13 @@ export class HUD {
     // brackets & alerts suppressed in pure scenery, and the craft / constellation
     // categories drive scene objects that carry no data-density attribute.
     // `apply(hidden)` performs the concrete hide/show.
-    const flagRung = (id, label, apply) => {
+    const flagRung = (id, label, apply, world) => {
       const rung = {
         id, label, _hidden: false,
         isVisible: () => !rung._hidden,
         setVisible: (v) => { rung._hidden = !v; apply(rung._hidden); },
       };
+      if (world === true) rung.world = true;
       return rung;
     };
 
@@ -869,54 +910,52 @@ export class HUD {
       if (am && typeof am.setFleetVisible === 'function') am.setFleetVisible(!hidden);
     };
 
+    const skylabelsFlag = flagRung('skylabels', 'Sky labels', applySkyLabels, true);
+
     // Rungs ordered lowest-priority → highest (index 0 hides FIRST on `-`,
-    // restores LAST on `+`). Interactive panes read LIVE visibility so they
-    // compose with the 7/8/9/0 toggles + view config; suppression categories
-    // (constellations / chrome / reticles / craft) are flag rungs so they engage
-    // even when momentarily inactive. Per design (Session O, owner 2026-09-07):
-    // MOTHER is last — the HUD readout, the one pane the player reads every throw;
-    // TARGETS are what a new player aims at — so they shed late, right after the
-    // fleet rows (arms), with the score strip + comms shed before them both. Debris
-    // reticles are 2nd-to-last, and the craft (mother + daughters) are last. Other
-    // reprioritizations: constellations + discoveries among the panes.
+    // restores LAST on `+`). Ladder reorder rev 3 (plan
+    // tmp/plans/1788867799156-hud-pane-ladder-reorder.md): 11 base rungs
+    // (also `?ladder=0`); main.js splices four instruments + adds the Override
+    // gag; slider level k = last k rungs; 15 rungs → 16 detents.
     const rungs = [
-      // 0 — Sky labels: constellation names + Sun/Moon/planet NAME labels (pure
-      //     sky decoration → first to go; the discs & stars themselves stay).
-      flagRung('skylabels', 'Sky labels', applySkyLabels),
-      // 1 — Pinned next-upgrade goal. A retention nag, not gameplay state, so it
-      //     is the first *pane* the ladder sheds. It was previously absent from
-      //     the ladder entirely, so `-` could never dismiss it no matter how many
-      //     times it was pressed (reported as the widget being stuck on screen).
-      //     isVisible() uses getClientRects, so a hidden widget costs no rung.
-      domRung('pin', 'Upgrade goal', byId('hud-pin-widget')),
-      // 2 — NavSphere orb (canvas; off by default → isVisible false → `-` skips).
-      {
-        id: 'navsphere', label: 'Nav orb',
-        isVisible: () => !!(this._navSphere && this._navSphere.isOrbVisible && this._navSphere.isOrbVisible()),
-        setVisible: (v) => { if (this._navSphere && this._navSphere.setOrbHidden) this._navSphere.setOrbHidden(!v); },
-      },
-      // 3 — Discoveries pane (.skills-pane, non-critical info).
-      domRung('discoveries', 'Discoveries', bySelector('.skills-pane')),
-      // 4 — Debris analysis pane (9 key re-reveals it).
+      // 0 — Experimental: nav orb + discoveries. main.js addMember()s the
+      //     Override gag at the ladder gate (still the last `+`).
+      compositeRung('experimental', 'Experimental', [
+        {
+          id: 'navsphere', label: 'Nav orb',
+          isVisible: () => !!(this._navSphere && this._navSphere.isOrbVisible && this._navSphere.isOrbVisible()),
+          setVisible: (v) => { if (this._navSphere && this._navSphere.setOrbHidden) this._navSphere.setOrbHidden(!v); },
+        },
+        // Rev 3 Task 10: the Discoveries pane is a footer-chip popover inside
+        // the `#hud-discoveries` wrapper (chip + `.skills-pane`); the density
+        // bit lands on the WRAPPER so the rung hides chip and popover together.
+        domRung('discoveries', 'Discoveries', byId('hud-discoveries')),
+      ]),
+      // 1 — Sky labels (world) + pinned next-upgrade goal.
+      compositeRung('decor', 'Sky labels & goal pin', [
+        skylabelsFlag,
+        domRung('pin', 'Upgrade goal', byId('hud-pin-widget')),
+      ]),
+      // 2 — Debris analysis pane (9 key re-reveals it).
       domRung('debris', 'Debris pane', byId('hud-wireframe-container')),
+      // 3 — Target pane (0 key re-reveals it).
+      domRung('targets', 'Target pane', byId('hud-targets-panel')),
+      // 4 — Comms pane (7 key re-reveals it).
+      domRung('comms', 'Comms', byId('hud-comms-panel')),
       // 5 — Score strip + hint ticker (one rung).
       domRung('score', 'Score strip', () => [
         document.getElementById('hud-score-panel'),
         document.getElementById('hud-hint-ticker'),
       ]),
-      // 6 — Comms pane (7 key re-reveals it).
-      domRung('comms', 'Comms', byId('hud-comms-panel')),
-      // 7 — Fleet / arms pane.
-      domRung('arms', 'Fleet pane', byId('hud-arms-panel')),
-      // 8 — Target pane (0 key re-reveals it).
-      domRung('targets', 'Target pane', byId('hud-targets-panel')),
-      // 9 — Mother pane (HUD readout).
+      // 6 — Daughters / arms pane.
+      domRung('arms', 'Daughters pane', byId('hud-arms-panel')),
+      // 7 — Mother pane (HUD readout).
       domRung('mother', 'Mother pane', byId('hud-mother-panel')),
-      // 10 — Debris reticles + remaining alert/indicator chrome + transient
-      //     gameplay toasts — 2ND-TO-LAST. Merged (the old standalone "chrome"
-      //     rung had no visible effect when no warning/target was active, so `-`
-      //     read as a dead press). This one visibly clears the targeting brackets
-      //     & their "▸ N" action prompt (both drawn on #reticle-canvas), hides the
+      // 8 — Debris reticles + remaining alert/indicator chrome + transient
+      //     gameplay toasts. Merged (the old standalone "chrome" rung had no
+      //     visible effect when no warning/target was active, so `-` read as a
+      //     dead press). This one visibly clears the targeting brackets & their
+      //     "▸ N" action prompt (both drawn on #reticle-canvas), hides the
       //     warnings / progress / conjunction / weather / arm-pilot / view chrome,
       //     AND mutes transient SHOW_NOTIFICATION toasts so pure scenery is quiet.
       flagRung('reticles', 'Reticles & alerts', (hidden) => {
@@ -935,8 +974,15 @@ export class HUD {
           document.body.toggleAttribute('data-density-quiet', hidden);
         }
       }),
-      // 11 — Craft: mother ship + daughters (empty-orbit view) — LAST.
-      flagRung('craft', 'Ships', applyCraft),
+      // 9 — Craft: mother ship + daughters (world).
+      flagRung('craft', 'Ships', applyCraft, true),
+      // 10 — City/landmark pills (world). Adapter reads CityLabels' OWN
+      //      density flag — not the DOM — so it engages while F1/F5
+      //      suppression already hides the pills, and the 5 key can clear
+      //      the gate coherently. Parallel agent owns CityLabels.js.
+      { id: 'citypills', label: 'City labels', world: true,
+        isVisible: () => !!(this._cityLabels && typeof this._cityLabels.isDensityHidden === 'function' && !this._cityLabels.isDensityHidden()),
+        setVisible: (v) => { const cl = this._cityLabels; if (cl && typeof cl.setDensityHidden === 'function') cl.setDensityHidden(!v); } },
     ];
 
     this._paneDensity = new PaneDensity({
@@ -964,6 +1010,224 @@ export class HUD {
    * so keys, per-pane toggles and the slider all compose on live state.
    */
   get paneDensity() { return this._paneDensity; }
+
+  /**
+   * Density-rung visibility for LeftStack.hidden(). Layout-hidden
+   * (`data-stack-hidden`) is NOT a density hide — `_densityIsVisible` treats
+   * it as still visible so the stack can un-hide. Returns false when the
+   * rung is missing or throws.
+   * @param {string} id
+   * @returns {boolean}
+   */
+  isRungVisible(id) {
+    const pd = this._paneDensity;
+    if (!pd || typeof pd.find !== 'function') return false;
+    try {
+      const rung = pd.find(id);
+      if (!rung) return false;
+      return !!rung.isVisible();
+    } catch (_e) { return false; }
+  }
+
+  /**
+   * Pin widget natural height (measured when laid out, else PIN_NATURAL_PX).
+   * @returns {number}
+   */
+  pinNaturalPx() {
+    const el = this._pinWidget;
+    if (el && typeof el.offsetHeight === 'number' && el.offsetHeight > 0) return el.offsetHeight;
+    return PIN_NATURAL_PX;
+  }
+
+  /**
+   * LeftStack apply for the pin widget. Writes `top` BEFORE un-hiding.
+   * mode 'hidden' → data-stack-hidden (never the density bit).
+   * @param {number} top
+   * @param {number} _height
+   * @param {'natural'|'compact'|'trimmed'|'hidden'} mode
+   */
+  setPinAnchor(top, _height, mode) {
+    const el = this._pinWidget;
+    if (!el || !el.style) return;
+    const t = Number(top);
+    const topStr = `${Math.round(Number.isFinite(t) ? t : 0)}px`;
+    if (el.style.top !== topStr) el.style.top = topStr;
+    if (mode === 'hidden') {
+      if (el.setAttribute) el.setAttribute('data-stack-hidden', '');
+    } else if (el.removeAttribute) {
+      el.removeAttribute('data-stack-hidden');
+    }
+  }
+
+  /**
+   * The right-arm column (`#hud-right-column`). NextPane mounts as its last
+   * child (main.js: `new NextPane({ …, parent: hud.rightColumnEl })`).
+   * @returns {HTMLElement|null}
+   */
+  get rightColumnEl() { return this._rightColumn; }
+
+  /**
+   * Task 9 — injectable clock for density hide/show. Tests set
+   * `HUD._densityMotion = { raf, setTimeout, clearTimeout, reducedMotion }`.
+   * @returns {{raf:Function, setTimeout:Function, clearTimeout:Function, reducedMotion:Function}}
+   * @private
+   */
+  _densityMotionHooks() {
+    const h = HUD._densityMotion;
+    if (h) return h;
+    return {
+      raf: (fn) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(fn, 16)),
+      setTimeout: (fn, ms) => setTimeout(fn, ms),
+      clearTimeout: (id) => clearTimeout(id),
+      reducedMotion: () => {
+        try {
+          return typeof matchMedia === 'function'
+            && !!matchMedia('(prefers-reduced-motion: reduce)').matches;
+        } catch (_e) { return false; }
+      },
+    };
+  }
+
+  /**
+   * DOM-rung visibility: `data-density-hidden` OR `data-density-leaving` reads
+   * as hidden so a `-`/`+` during the glide sees the right state. Ancestor
+   * collapse (getClientRects) still applies.
+   * @param {Element|null} el
+   * @returns {boolean}
+   */
+  _densityIsVisible(el) {
+    if (!el) return false;
+    if (el.hasAttribute && (el.hasAttribute('data-density-hidden') || el.hasAttribute('data-density-leaving'))) {
+      return false;
+    }
+    // Layout-hidden is not a density hide — LeftStack must be able to un-hide.
+    if (el.hasAttribute && el.hasAttribute('data-stack-hidden')) return true;
+    try {
+      return typeof el.getClientRects === 'function' && el.getClientRects().length > 0;
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  /** @param {Element} el @param {boolean} v */
+  _densitySetVisible(el, v) {
+    if (!el || !el.setAttribute) return;
+    if (v) this._densityShow(el);
+    else this._densityHide(el);
+  }
+
+  /** @param {Element} el */
+  _densityCancel(el) {
+    if (!this._densityPhases) this._densityPhases = new Map();
+    const st = this._densityPhases.get(el);
+    if (!st) return;
+    const hooks = this._densityMotionHooks();
+    if (st.timer != null) hooks.clearTimeout(st.timer);
+    if (st.onEnd && el.removeEventListener) el.removeEventListener('transitionend', st.onEnd);
+    this._densityPhases.delete(el);
+  }
+
+  /** @param {Element} el */
+  _densityHide(el) {
+    if (el.hasAttribute && el.hasAttribute('data-density-hidden')) return;
+    if (el.hasAttribute && el.hasAttribute('data-density-leaving')) return;
+    const hooks = this._densityMotionHooks();
+    this._densityCancel(el);
+    if (el.removeAttribute) el.removeAttribute('data-density-entering');
+    if (hooks.reducedMotion && hooks.reducedMotion()) {
+      el.setAttribute('data-density-hidden', '');
+      return;
+    }
+    el.setAttribute('data-density-leaving', '');
+    const finish = () => {
+      const st = this._densityPhases.get(el);
+      if (!st || st.done) return;
+      st.done = true;
+      if (el.removeAttribute) el.removeAttribute('data-density-leaving');
+      el.setAttribute('data-density-hidden', '');
+      this._densityCancel(el);
+    };
+    const onEnd = (ev) => { if (ev && ev.target && ev.target !== el) return; finish(); };
+    if (!this._densityPhases) this._densityPhases = new Map();
+    const timer = hooks.setTimeout(finish, DENSITY_MOTION_MS + 20);
+    this._densityPhases.set(el, { timer, onEnd, done: false });
+    if (el.addEventListener) el.addEventListener('transitionend', onEnd);
+  }
+
+  /** @param {Element} el */
+  _densityShow(el) {
+    const leaving = el.hasAttribute && el.hasAttribute('data-density-leaving');
+    const hidden = el.hasAttribute && el.hasAttribute('data-density-hidden');
+    const entering = el.hasAttribute && el.hasAttribute('data-density-entering');
+    if (!leaving && !hidden && !entering) return;
+    this._densityCancel(el);
+    if (el.removeAttribute) {
+      el.removeAttribute('data-density-leaving');
+      el.removeAttribute('data-density-hidden');
+    }
+    const hooks = this._densityMotionHooks();
+    if (hooks.reducedMotion && hooks.reducedMotion()) {
+      if (el.removeAttribute) el.removeAttribute('data-density-entering');
+      return;
+    }
+    el.setAttribute('data-density-entering', '');
+    hooks.raf(() => {
+      if (el.removeAttribute) el.removeAttribute('data-density-entering');
+    });
+  }
+
+  /**
+   * Strip stray leaving/entering attributes (GAME_RESET / view switch).
+   * Resting `data-density-hidden` is untouched.
+   */
+  _clearDensityPhases() {
+    const strip = (el) => {
+      if (!el || !el.removeAttribute) return;
+      el.removeAttribute('data-density-leaving');
+      el.removeAttribute('data-density-entering');
+    };
+    if (this._densityPhases) {
+      for (const el of [...this._densityPhases.keys()]) {
+        strip(el);
+        this._densityCancel(el);
+      }
+    }
+    if (typeof document !== 'undefined' && document.querySelectorAll) {
+      document.querySelectorAll('[data-density-leaving], [data-density-entering]').forEach(strip);
+    }
+  }
+
+  /**
+   * Ladder reorder rev 3 Task 6: column top = round(commsBottom + 10). The
+   * NavSphere reserved slot is gone (the orb is a footer chip). Keeps the
+   * comms-resize settle and the maxHeight rewrite (viewport − top − footer).
+   * Sets `top` before any un-hide (Task 9).
+   * @private
+   */
+  _syncRightColumnTop() {
+    if (!this._rightColumn || !this.panels.comms) return;
+    if (this._commsResizeSettleAt != null) {
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      if (now < this._commsResizeSettleAt) this._commsRectBottom = null;
+      else this._commsResizeSettleAt = null;
+    }
+    if (this._commsRectBottom == null) {
+      this._commsRectBottom = this.panels.comms.getBoundingClientRect().bottom;
+    }
+    const newTop = Math.round(this._commsRectBottom + 10);
+    if (this._lastRightColTop !== newTop) {
+      this._rightColumn.style.top = newTop + 'px';
+      this._rightColumn.style.maxHeight = `calc(100vh - ${newTop + (this._rightColBottomClearPx ?? 30)}px)`;
+      this._lastRightColTop = newTop;
+    }
+  }
+
+  /** Set `top` then un-hide the right column (Task 9: top BEFORE un-hiding). */
+  _showRightColumn() {
+    if (!this._rightColumn) return;
+    this._syncRightColumnTop();
+    this._rightColumn.style.display = 'flex';
+  }
 
   // ==========================================================================
   // EVENT LISTENERS
@@ -1017,7 +1281,7 @@ export class HUD {
     if (this.panels.targets) this.panels.targets.style.display = '';
     if (this.panels.arms) this.panels.arms.style.display = '';
     if (this.panels.mother) this.panels.mother.style.display = '';
-    if (this._rightColumn) this._rightColumn.style.display = 'flex';
+    if (this._rightColumn) this._showRightColumn();
     if (this.statusPanel && this.statusPanel.leftColumn) {
       this.statusPanel.leftColumn.style.display = 'flex';
     }
@@ -1458,6 +1722,7 @@ export class HUD {
         this._calloutHintShown = false;
       }
       this.container.classList.remove('callouts-active'); // restore panes
+      this._clearDensityPhases();
     });
 
     // Round 4 (T5): inspection depth breadcrumb + one-time zoom hint.
@@ -1589,6 +1854,17 @@ export class HUD {
    */
   setStarfield(starfield) {
     this._starfield = starfield;
+  }
+
+  /**
+   * Set the CityLabels reference so the pane-density `citypills` world rung
+   * can drive CityLabels' own density flag (not the DOM — F1/F5 suppression
+   * already hides the pills). Wired from main.js right after HUD construction.
+   * Parallel agent owns setDensityHidden / isDensityHidden (guarded).
+   * @param {object} cityLabels
+   */
+  setCityLabels(cityLabels) {
+    this._cityLabels = cityLabels;
   }
 
   /**
@@ -1740,35 +2016,7 @@ export class HUD {
     // frame because StatusPanel mutates textContent on the same frame; we now
     // cache the comms-panel bottom and invalidate only on resize / view-config
     // change (see _setupEventListeners). Saves ~0.2–0.5 ms/frame on dense missions.
-    if (this._rightColumn && this.panels.comms) {
-      // While the comms panel's height animates after a size step, force a
-      // per-frame recompute so the column tracks the bottom edge smoothly
-      // instead of snapping once the transition ends.
-      if (this._commsResizeSettleAt != null) {
-        const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-        if (now < this._commsResizeSettleAt) this._commsRectBottom = null;
-        else this._commsResizeSettleAt = null;
-      }
-      if (this._commsRectBottom == null) {
-        this._commsRectBottom = this.panels.comms.getBoundingClientRect().bottom;
-      }
-      // NavSphere slot height is dynamic: it collapses to a one-line readout
-      // when minimized (8 key) and to 0 when hidden, letting the pane column
-      // climb up and reclaim the freed real estate. Falls back to the full
-      // 280px diameter if the NavSphere ref was never wired.
-      const navReserved = this._navSphere?.getReservedHeight?.() ?? 280;
-      const navSphereBottom = this._commsRectBottom + 6 + navReserved; // 6px gap above NavSphere slot
-      const newTop = Math.round(navSphereBottom + 6);          // 6px gap below NavSphere
-      if (this._lastRightColTop !== newTop) {
-        this._rightColumn.style.top = newTop + 'px';
-        // G5: clearance is ladder-aware (shipped 30 px byte-identical; 189 px
-        // with the ladder on so the column bottom clears the bottom-anchored
-        // rail band — this site is the LIVE bound, it overwrites _build()'s
-        // static maxHeight on the first update frame).
-        this._rightColumn.style.maxHeight = `calc(100vh - ${newTop + (this._rightColBottomClearPx ?? 30)}px)`;
-        this._lastRightColTop = newTop;
-      }
-    }
+    if (this._rightColumn && this.panels.comms) this._syncRightColumnTop();
 
     const { player, debrisField, activeSatellites, targetSelector, sensorSystem,
             autopilotSystem, cameraSystem, armManager } = data;
@@ -1998,8 +2246,8 @@ export class HUD {
         p.style.display = '';
       }
     });
-    // Show right column (wireframe + target list)
-    if (this._rightColumn) this._rightColumn.style.display = 'flex';
+    // Show right column (wireframe + target list) — top before un-hide.
+    this._showRightColumn();
     // Re-apply view config (may hide some panels or adjust opacity)
     this._applyViewConfig();
     // Re-apply progressive luminance (must come after view config)
@@ -2089,6 +2337,7 @@ export class HUD {
    *  (dormant/active CSS classes handle dimming). Comms always visible.
    *  Post-tutorial: full camera-view panel management. */
   _applyViewConfig() {
+    this._clearDensityPhases();
     const cfg = this._currentViewConfig;
     if (!cfg) return;
 
@@ -2122,7 +2371,8 @@ export class HUD {
     // Right column (analysis wireframe + target list)
     if (this._rightColumn) {
       const showRight = cfg.showAnalysis || cfg.showTargetList;
-      this._rightColumn.style.display = showRight ? 'flex' : 'none';
+      if (showRight) this._showRightColumn();
+      else this._rightColumn.style.display = 'none';
     }
 
     // Wireframe analysis panel

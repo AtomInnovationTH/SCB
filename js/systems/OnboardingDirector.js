@@ -32,6 +32,7 @@
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { StorageKeys } from '../core/StorageKeys.js';
+import { GestureHints } from '../ui/hud/GestureHints.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // BEAT TABLE — fixed by spec.  Do not edit individual values without bumping
@@ -224,6 +225,11 @@ export class OnboardingDirector {
    *   `ladderAway` (2026-09-02): true while the Zoom Ladder holds a floor other
    *   than the flying view (F4) — the stall escalation defers and ladder inputs
    *   don't count as unrelated. Optional; beats degrade gracefully without it.
+   * @param {Function} [deps.floorProvider]  — () → number|null, the settled
+   *   Zoom Ladder floor. Same contract as GestureSplash's `floor` getter:
+   *   null while the intro flyby / a ride is in flight, 2 on the flying floor.
+   *   Absent → the DETAIL ticker beat never fires (safe default; main.js wires
+   *   it inside the LADDER gate). Plan 1788867799156 Task 15 / locked #17.
    */
   constructor(deps = {}) {
     this._eventBus = deps.eventBus;
@@ -232,6 +238,7 @@ export class OnboardingDirector {
     this._teaching = deps.teachingSystem || null;
     this._persistence = deps.persistenceManager || null;
     this._context = typeof deps.contextProvider === 'function' ? deps.contextProvider : null;
+    this._floorProvider = typeof deps.floorProvider === 'function' ? deps.floorProvider : null;
     /** @type {object|null} GuidanceDirector — scales coaching depth per persona. */
     this._guidance = deps.guidanceDirector || null;
 
@@ -253,6 +260,17 @@ export class OnboardingDirector {
 
     /** @type {boolean} True while an aim-before-launch rotation slew is active. */
     this._aimActive = false;
+
+    /**
+     * One-shot DETAIL ticker beat (plan 1788867799156 Task 15). PLAYER-owned:
+     * survives GAME_RESET / New Game so it fires once per player, not per run.
+     * Additive field on the v4 blob — STORAGE_KEY is not bumped.
+     * @type {boolean}
+     */
+    this._detailHintShown = false;
+
+    /** @type {*|null} poll timer while waiting for the first settled F2. */
+    this._detailHintPoll = null;
 
     /** @type {Array<{ event: string, at: number }>} recent trigger event buffer. */
     this._recentInputs = [];
@@ -356,6 +374,10 @@ export class OnboardingDirector {
   start() {
     if (this._started) return;
     this._started = true;
+    // DETAIL beat is a sidecar (not in ONBOARDING_BEATS): try now, then poll
+    // until the intro ride settles on F2. Safe no-op without a floorProvider.
+    this._maybeDetailHint();
+    this._armDetailHintPoll();
     if (this._checkVeteranSkip()) {
       this._mastered = true;
       this._persist();
@@ -380,6 +402,8 @@ export class OnboardingDirector {
     this._smartDefaultMsgShown = false;
     this._started = false;
     this._stationKeepArrowsShown = false;
+    this._clearDetailHintPoll();
+    // `_detailHintShown` is per-player — not cleared (locked decision #17).
     this._persist();
   }
 
@@ -388,6 +412,7 @@ export class OnboardingDirector {
     if (this._disposed) return;
     this._disposed = true;
     this._clearActiveTimers();
+    this._clearDetailHintPoll();
     for (const u of this._unsubs) {
       if (typeof u === 'function') u();
     }
@@ -428,6 +453,12 @@ export class OnboardingDirector {
       on(Events.GAME_STATE_CHANGE, ({ to } = {}) => {
         if (to === 'ORBITAL_VIEW') this.start();
       });
+    }
+    // DETAIL beat nudge: a zoom/pinch that lands F2 (CAMERA_ZOOM_INPUT is the
+    // ladder ride's player-side witness). The intro landing has no zoom input
+    // — start() arms a poll for that. Absent floorProvider → both are no-ops.
+    if (Events.CAMERA_ZOOM_INPUT) {
+      on(Events.CAMERA_ZOOM_INPUT, () => this._maybeDetailHint());
     }
 
     // Recent-input buffer + unrelated-input counter for repeated-fail escalation.
@@ -575,6 +606,65 @@ export class OnboardingDirector {
       priority: 'normal',
       presentation,
     });
+  }
+
+  /**
+   * One-time DETAIL ticker beat on the first settled F2 landing per player
+   * (plan 1788867799156 Task 15 / locked #17). Glass vs desktop text follows
+   * GestureHints.isGlass() — the same surface switch the ticker already uses.
+   * @private
+   */
+  _maybeDetailHint() {
+    if (this._disposed || this._detailHintShown) return;
+    if (!this._floorProvider) return;
+    let floor = null;
+    try { floor = this._floorProvider(); } catch (_e) { return; }
+    if (floor !== 2) return;
+    this._detailHintShown = true;
+    this._clearDetailHintPoll();
+    this._persist();
+    const glass = GestureHints.isGlass();
+    this._emit(Events.HINT_POSTED, {
+      id: 'detail',
+      text: glass
+        ? 'DETAIL · slide ← fewer · more →'
+        : '− / + · fewer / more panes',
+      glyph: glass ? 'DETAIL' : '−/+',
+      keys: glass ? [] : ['Minus', 'Equal'],
+      duration: Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000,
+      priority: 'normal',
+    });
+  }
+
+  /**
+   * Poll until the intro ride settles on F2 (the intro has no CAMERA_ZOOM_INPUT).
+   * Mirrors the held-beat gate poll. No-op without a floorProvider.
+   * @private
+   */
+  _armDetailHintPoll() {
+    if (this._disposed || this._detailHintShown || !this._floorProvider) return;
+    if (this._detailHintPoll != null) return;
+    const poll = Constants.ONBOARDING?.GATE_POLL_MS || 1200;
+    const tick = () => {
+      this._detailHintPoll = null;
+      if (this._disposed || this._detailHintShown) return;
+      this._maybeDetailHint();
+      if (this._disposed || this._detailHintShown) return;
+      const id = this._setTimeout(tick, poll);
+      if (id == null) return;
+      this._detailHintPoll = id;
+    };
+    const id = this._setTimeout(tick, poll);
+    if (id == null) return;
+    this._detailHintPoll = id;
+  }
+
+  /** @private */
+  _clearDetailHintPoll() {
+    if (this._detailHintPoll != null && typeof clearTimeout === 'function') {
+      clearTimeout(this._detailHintPoll);
+    }
+    this._detailHintPoll = null;
   }
 
   /**
@@ -1208,6 +1298,7 @@ export class OnboardingDirector {
         for (const id of data.skippedBeats) this._skippedBeats.add(id);
       }
       this._mastered = !!data.mastered;
+      this._detailHintShown = !!data.detailHintShown;
     } catch (_e) { /* graceful */ }
   }
 
@@ -1219,6 +1310,7 @@ export class OnboardingDirector {
         completedBeats: Array.from(this._completedBeats),
         skippedBeats: Array.from(this._skippedBeats),
         mastered: this._mastered,
+        detailHintShown: this._detailHintShown,
       }));
     } catch (_e) { /* graceful */ }
   }

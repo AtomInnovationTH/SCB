@@ -19,6 +19,11 @@
  * default (first-timers get reference points immediately); an explicit
  * 5-press to hide persists in localStorage (offline-first).
  *
+ * Three gates (rev-3 ladder, plan 1788867799156 #3): 5-key preference ·
+ * F1/F5 suppression · density (`citypills` rung). A layer shows iff
+ * `_visible && !_suppressed && !_densityHidden`. The 5 key ON path clears
+ * the density gate (own-key re-reveal, CommsPanel.js:263 / NavSphere.js:310).
+ *
  * Pure helpers (`parseCityList`, `isCityVisible`, `distanceFade`) are
  * Node-testable; everything THREE/DOM lives behind init guards.
  *
@@ -395,14 +400,18 @@ export class CityLabels {
     /** @type {boolean} master visibility (persisted; default ON) */
     this._visible = true;
     /**
-     * @type {boolean} transient suppression (NOT persisted) — the Zoom Ladder
-     * hides the city/landmark pills under F7's full-screen SDA chart
-     * (LadderController._setCityLabelsHidden) and clears this on leave /
-     * disengage. Orthogonal to the player's 5-key `_visible` preference: a
-     * pill layer shows only when `_visible && !_suppressed`, and suppression
-     * never touches localStorage, so F7 can never clobber the saved choice.
+     * Three gates (rev-3 ladder, plan 1788867799156 #3): a pill layer shows
+     * only when `_visible && !_suppressed && !_densityHidden`.
+     *   - `_visible` — 5-key preference (persisted).
+     *   - `_suppressed` — F1/F5 transient hide (LadderController; never
+     *     persisted, so F7 can never clobber the saved choice).
+     *   - `_densityHidden` — the ladder's `citypills` rung (slider level 1 =
+     *     pills only). The 5 key ON path clears this gate.
+     * @type {boolean}
      */
     this._suppressed = false;
+    /** @type {boolean} ladder density gate (NOT persisted). */
+    this._densityHidden = false;
     this._loadPreference();
 
     eventBus.on(Events.CITY_LABELS_TOGGLE, () => this.toggle());
@@ -413,6 +422,18 @@ export class CityLabels {
 
   /** @returns {boolean} true while the ladder's F7 chart suppresses the pills. */
   isSuppressed() { return this._suppressed; }
+
+  /** @returns {boolean} true while the density ladder's `citypills` rung is hidden. */
+  isDensityHidden() { return this._densityHidden; }
+
+  /**
+   * Combined display gate: 5-key preference · F1/F5 suppression · density.
+   * @returns {boolean}
+   * @private
+   */
+  _shouldShow() {
+    return this._visible && !this._suppressed && !this._densityHidden;
+  }
 
   /**
    * Transient show/hide gate for the Zoom Ladder's F7 (SDA DOWNLINK) chart —
@@ -427,11 +448,29 @@ export class CityLabels {
     if (v === this._suppressed) return;
     this._suppressed = v;
     for (const layer of this._layers) {
-      layer.root.style.display = (this._visible && !this._suppressed) ? 'block' : 'none';
+      layer.root.style.display = this._shouldShow() ? 'block' : 'none';
     }
     // Re-place labels immediately on un-suppress (update() skipped while
     // suppressed, so positions are stale by however long F7 was up).
-    if (!this._suppressed && this._visible) this.update();
+    if (this._shouldShow()) this.update();
+  }
+
+  /**
+   * Density-ladder gate for the `citypills` rung (rev-3, plan 1788867799156 #3).
+   * Orthogonal to the 5-key preference and F1/F5 suppression. Idempotent
+   * (same value → no work). Clearing the gate re-runs update() when the
+   * other two gates already allow a show (positions went stale while the
+   * ladder hid the pills).
+   * @param {boolean} hidden
+   */
+  setDensityHidden(hidden) {
+    hidden = !!hidden;
+    if (hidden === this._densityHidden) return;
+    this._densityHidden = hidden;
+    for (const layer of this._layers) {
+      layer.root.style.display = this._shouldShow() ? 'block' : 'none';
+    }
+    if (this._shouldShow()) this.update();
   }
 
   /**
@@ -507,7 +546,7 @@ export class CityLabels {
     const root = document.createElement('div');
     root.className = 'sc-city-labels';
     root.style.cssText = 'position:absolute;top:0;left:0;width:0;height:0;';
-    root.style.display = (this._visible && !this._suppressed) ? 'block' : 'none';
+    root.style.display = this._shouldShow() ? 'block' : 'none';
     if (container) container.appendChild(root);
 
     const items = [];
@@ -578,7 +617,7 @@ export class CityLabels {
    * wholesale when its `isActive` gate is false.
    */
   update() {
-    if (!this._visible || this._suppressed || typeof window === 'undefined') return;
+    if (!this._shouldShow() || typeof window === 'undefined') return;
     const W = window.innerWidth, H = window.innerHeight;
     for (const layer of this._layers) {
       const active = (!layer.isActive || layer.isActive()) && layer.parent.visible !== false;
@@ -728,7 +767,15 @@ export class CityLabels {
 
   /** Toggle on/off (5 key) — persists and announces the new state. */
   toggle() {
+    const turningOn = !this._visible;
+    // Own-key re-reveal (plan 1788867799156 #3): 5 ON clears the density
+    // gate (CommsPanel.js:263 / NavSphere.js:310). 5 OFF never touches it.
+    const wasDensityHidden = turningOn && this._densityHidden;
+    if (wasDensityHidden) this._densityHidden = false;
     this.setVisible(!this._visible);
+    if (wasDensityHidden) {
+      eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane: 'citypills', shown: true });
+    }
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: this._visible ? 'City labels ON (5 to hide)' : 'City labels OFF (5 to show)',
       priority: 'info',
@@ -743,10 +790,10 @@ export class CityLabels {
   setVisible(v) {
     this._visible = !!v;
     for (const layer of this._layers) {
-      layer.root.style.display = (this._visible && !this._suppressed) ? 'block' : 'none';
+      layer.root.style.display = this._shouldShow() ? 'block' : 'none';
     }
     this._savePreference();
-    if (this._visible && !this._suppressed) this.update();
+    if (this._shouldShow()) this.update();
   }
 
   /** @private */

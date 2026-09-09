@@ -27,9 +27,11 @@ import { tetherReel } from '../../systems/TetherReel.js';
 import { BridleRing } from '../../entities/BridleRing.js';
 import { captureNetSystem } from '../../entities/CaptureNet.js';
 import { PaneChrome } from './PaneChrome.js';
+import { GestureHints } from './GestureHints.js';
 import { pressKey } from '../../core/KeyDispatch.js';
-import { RAIL_GEOMETRY } from '../RailGeometry.js';
+import { RAIL_GEOMETRY, HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 import { BOX_OUTLINE, BOX_OUTLINE_OFFSET } from '../RailIndicator.js';
+import { TouchControls } from '../TouchControls.js';
 
 // ST-6.6: Active-tool → NASA TRL metadata used to live here, feeding a
 // bottom-center "RCS / COLD GAS / MPD BURST / ARM PILOT" control-mode badge.
@@ -104,6 +106,20 @@ export function fleetTapEnabled() {
   return !!(Constants.LADDER && Constants.LADDER.ENABLED);
 }
 
+/**
+ * Glass (iPad): ctor `glass` wins; else the hub's GestureHints switch; else
+ * TouchControls.detectGlass() (coarse primary pointer + real touch points).
+ * Plan Task 13 / locked #13 — 44 px hits and Mother tap apply on glass only.
+ * @param {boolean|null|undefined} explicit
+ * @returns {boolean}
+ */
+function resolveGlass(explicit) {
+  if (explicit === true) return true;
+  if (explicit === false) return false;
+  try { if (GestureHints.isGlass()) return true; } catch (_e) { /* headless */ }
+  try { return TouchControls.detectGlass(); } catch (_e) { return false; }
+}
+
 export class StatusPanel {
   /**
    * @param {HTMLElement} container - the HUD overlay the panes mount into
@@ -112,11 +128,14 @@ export class StatusPanel {
    *   affordances act. Defaults to KeyDispatch.pressKey (synthetic keydown →
    *   keyup on window, InputManager's listener target); tests inject a
    *   recorder. Also settable later via setKeyDispatch().
+   *   `glass` — Task 13: 44 px Daughters hits + Mother tap. Omit to reuse
+   *   GestureHints.isGlass() / TouchControls.detectGlass(); tests pass true/false.
    */
-  constructor(container, { keyDispatch = pressKey, memoSlot = false, now = null } = {}) {
+  constructor(container, { keyDispatch = pressKey, memoSlot = false, now = null, glass = null, cargoPaneVisible = null } = {}) {
     this._container = container;
     this._armManager = null;
     this._keyDispatch = keyDispatch;
+    this._glass = resolveGlass(glass);
     // Session Q (plan D12b): the MEMO slot option + its local box clock.
     this._memoSlot = !!memoSlot;
     this._now = (typeof now === 'function') ? now
@@ -129,11 +148,17 @@ export class StatusPanel {
     this._initialDeltaV = null;
     this._forgeRevealed = false;
     this._cargoStatus = null;   // cached from CARGO_UPDATED events
+    // Locked #15: Mother's CARGO kg/cap line is hidden while the Cargo pane's
+    // rung is visible (injected getter; default false so tests without HUD
+    // still show the line).
+    this._cargoPaneVisible = typeof cargoPaneVisible === 'function' ? cargoPaneVisible : () => false;
     this._lastPowerState = null;
     this._motherExpanded = false;     // MOTHER detail hover-expand state
     this._motherPinned = false;       // badge-pinned open (chrome 'normal' step)
     this._motherHovering = false;     // pointer currently over the MOTHER pane
     this._motherCollapseTimer = null;
+    this._motherTapDown = null;       // glass tap: pointerdown position (drag ≠ tap)
+    this._motherTapHandled = false;   // glass tap: pointerup already toggled → swallow click
     this._throttleLevel = 1.0;  // F14: cached throttle for HUD display
     this._autopilotMode = 'OFF'; // F15: cached autopilot mode for HUD
     this._autopilotPhase = 'OFF'; // Trailing-rendezvous phase (F15.1)
@@ -451,7 +476,7 @@ export class StatusPanel {
         </div>
         <div id="com-drift-row" style="display:none;font-size:10px;margin-top:3px;margin-bottom:2px;">
           <span style="opacity:0.7;">CoM Δ: </span><span id="com-drift-val" style="font-weight:bold;color:#00ff88;">0.000 m</span>
-          <span id="com-stow-hint" style="display:none;color:#ffaa00;margin-left:4px;font-size:9px;"></span>
+          <span id="com-stow-hint" style="display:none;color:#ffaa00;margin-left:4px;font-size:11px;"></span>
         </div>
         <div id="att-rate-row" style="display:none;font-size:10px;margin-top:1px;margin-bottom:2px;">
           <span style="opacity:0.7;">Rate: </span><span id="att-rate-val" style="font-weight:bold;color:#00ff88;">P 0.0°/s · Y 0.0°/s · R 0.0°/s</span>
@@ -544,11 +569,11 @@ export class StatusPanel {
     Object.assign(this._leftColumn.style, {
       position: 'absolute',
       top: '10px',
-      left: '10px',
+      left: `max(${HUD_EDGE_PX}px, env(safe-area-inset-left))`,
       display: 'flex',
       flexDirection: 'column',
       gap: '10px',           // Pane-to-pane vertical gap — keep in sync with right column (HUD.js)
-      width: '260px',
+      width: `${HUD_COLUMN_WIDTH_PX}px`,
       maxHeight: 'calc(100vh - 60px)',
       overflowY: 'auto',
       zIndex: '10',
@@ -595,7 +620,7 @@ export class StatusPanel {
             <span id="hud-cleared-fill" style="display:block;width:0%;height:100%;background:#00ff88;transition:width 0.4s ease;"></span>
           </span>
         </div>
-        <span style="color:#ffaa00;font-size:12px;font-weight:bold;opacity:0.85;"><b id="hud-credits">0</b> cr</span>
+        <span style="color:${VisualLaw.COLORS.VALUE};font-size:12px;font-weight:bold;opacity:0.85;font-variant-numeric:tabular-nums;"><b id="hud-credits">0</b> cr</span>
       </div>
     `;
 
@@ -620,6 +645,7 @@ export class StatusPanel {
     this.panels.mother.innerHTML = this._motherMarkup();
     this._leftColumn.appendChild(this.panels.mother);
     this.panels.mother.style.position = 'relative';
+    if (this._glass && this.panels.mother.setAttribute) this.panels.mother.setAttribute('data-glass', '');
     this._injectPowerPulseStyle();
     this._injectMotherDigestStyle();
 
@@ -667,6 +693,7 @@ export class StatusPanel {
     // re-rendered via innerHTML, so per-row listeners would not survive).
     // Flag-gated (review fix): a ?ladder=0 boot keeps the shipped pane —
     // no pointer opt-in, no button style, no delegate.
+    if (this._glass && this.panels.arms.setAttribute) this.panels.arms.setAttribute('data-glass', '');
     if (fleetTapEnabled()) {
       this.panels.arms.style.pointerEvents = 'auto';
       this._injectFleetButtonStyle();
@@ -687,14 +714,20 @@ export class StatusPanel {
     // MOTHER disclosure: hover reveals detail; mouse-leave collapses (unless
     // pinned open via the chrome badge / 'normal' step). The energy block no
     // longer self-collapses independently — it follows the MOTHER expand state.
+    // Glass (Task 13): hover stays the desktop trigger; tap on the header
+    // toggles .mother-expanded. Skip hover on glass so iOS ghost-hover cannot
+    // expand-then-collapse under the tap.
     this.panels.mother.addEventListener('mouseenter', () => {
+      if (this._glass) return;
       this._motherHovering = true;
       this._expandMother();
     });
     this.panels.mother.addEventListener('mouseleave', () => {
+      if (this._glass) return;
       this._motherHovering = false;
       this._scheduleMotherCollapse();
     });
+    this._bindMotherGlassTap();
     // Reflect the initial compact step in the detail visibility + energy block.
     this._onMotherStep('min');
 
@@ -1445,8 +1478,8 @@ export class StatusPanel {
 
   /**
    * @private Inject CSS for the FLEET pane's tap buttons (Session J, D-I).
-   * Styled like the pane's existing chrome: small mono caps, cyan (the)
-   * selected-row colour) hairline border, quiet until hovered / pressed.
+   * Styled like the pane's existing chrome: small mono caps, SELECTION blue
+   * (the selected-row colour) hairline border, quiet until hovered / pressed.
    * `.fleet-row` rows show a pointer only where a tap does something.
    */
   _injectFleetButtonStyle() {
@@ -1456,12 +1489,12 @@ export class StatusPanel {
     style.id = 'fleet-button-style';
     style.textContent = `
       #hud-arms-status .fleet-btn {
-        font: bold 10px/1.2 var(--font-mono);
+        font: bold 11px/1.2 var(--font-mono);
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: #00ffff;
-        background: rgba(0, 255, 255, 0.08);
-        border: 1px solid rgba(0, 255, 255, 0.55);
+        color: ${VisualLaw.COLORS.SELECTION};
+        background: rgba(68, 136, 255, 0.08);
+        border: 1px solid rgba(68, 136, 255, 0.55);
         border-radius: 3px;
         padding: 3px 10px;
         margin: 0 6px 0 0;
@@ -1474,17 +1507,28 @@ export class StatusPanel {
         vertical-align: middle;
         transition: background 0.15s ease, border-color 0.15s ease;
       }
+      /* Glass: 44 px HIT boxes (Apple HIG / RAIL_GEOMETRY.TOUCH_PITCH_PX). Visual
+         padding stays the desktop values; the hit box is the min-height. */
+      #hud-arms-panel[data-glass] .fleet-row {
+        min-height: ${RAIL_GEOMETRY.TOUCH_PITCH_PX}px;
+        box-sizing: border-box;
+      }
+      #hud-arms-panel[data-glass] .fleet-btn {
+        min-height: ${RAIL_GEOMETRY.TOUCH_PITCH_PX}px;
+        min-width: ${RAIL_GEOMETRY.TOUCH_PITCH_PX}px;
+        box-sizing: border-box;
+      }
       #hud-arms-status .fleet-btn:hover {
-        background: rgba(0, 255, 255, 0.18);
-        border-color: #00ffff;
+        background: rgba(68, 136, 255, 0.18);
+        border-color: ${VisualLaw.COLORS.SELECTION};
       }
       #hud-arms-status .fleet-btn:active {
-        background: rgba(0, 255, 255, 0.35);
-        color: #ffffff;
+        background: rgba(68, 136, 255, 0.35);
+        color: ${VisualLaw.COLORS.LABEL};
       }
       #hud-arms-status .fleet-btn:focus { outline: none; }
       #hud-arms-status .fleet-row-tap:hover {
-        background: rgba(0, 255, 255, 0.05);
+        background: rgba(68, 136, 255, 0.05);
       }
     `;
     document.head.appendChild(style);
@@ -1549,6 +1593,62 @@ export class StatusPanel {
       if (this._motherHovering) return;
       this._collapseMother();
     }
+  }
+
+  /**
+   * @private Glass: TAP on the Mother header toggles .mother-expanded (plan
+   * Task 13). pointerup is the tap; the following synthetic click is swallowed
+   * so a tap cannot double-toggle. A drag/scroll (finger moved > 8 px) is not
+   * a tap. Hover remains the desktop path.
+   */
+  _bindMotherGlassTap() {
+    const pane = this.panels && this.panels.mother;
+    if (!pane || typeof pane.addEventListener !== 'function') return;
+    const SLOP = 8;
+    pane.addEventListener('pointerdown', (e) => {
+      if (!this._glass) return;
+      this._motherTapDown = { x: Number(e && e.clientX) || 0, y: Number(e && e.clientY) || 0 };
+      this._motherTapHandled = false;
+    });
+    pane.addEventListener('pointerup', (e) => {
+      if (!this._glass || !this._motherTapDown) { this._motherTapDown = null; return; }
+      const dx = (Number(e && e.clientX) || 0) - this._motherTapDown.x;
+      const dy = (Number(e && e.clientY) || 0) - this._motherTapDown.y;
+      this._motherTapDown = null;
+      if (Math.hypot(dx, dy) > SLOP) return;
+      if (!this._inMotherTapZone(e && e.target)) return;
+      this._toggleMotherTap();
+      this._motherTapHandled = true;
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    });
+    pane.addEventListener('click', (e) => {
+      if (!this._glass) return;
+      if (this._motherTapHandled) {
+        this._motherTapHandled = false;
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+        if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+        return;
+      }
+      if (!this._inMotherTapZone(e && e.target)) return;
+      this._toggleMotherTap();
+    });
+  }
+
+  /** @private Header / digest / pane chrome — not the expanded .mother-detail. */
+  _inMotherTapZone(t) {
+    const pane = this.panels && this.panels.mother;
+    if (!t) return false;
+    if (t === pane) return true;
+    if (typeof t.closest !== 'function') return t === pane;
+    if (t.closest('.mother-detail')) return false;
+    return !!(t.closest('.mother-header') || t.closest('#mother-digest') || t.closest('#hud-mother-panel'));
+  }
+
+  /** @private Glass tap: flip the expand class (pinned chrome still wins). */
+  _toggleMotherTap() {
+    if (this._motherPinned) return;
+    if (this._motherExpanded) this._collapseMother();
+    else this._expandMother();
   }
 
   /** @private Expand the MOTHER detail (Propulsion + Energy) to full view. */
@@ -2068,7 +2168,7 @@ export class StatusPanel {
    * launch (D) and recall (R).
    */
   _daughterHotkeys(a) {
-    const key = (k, verb) => `<span style="color:#00ffff;font-weight:bold;">${k}</span>`
+    const key = (k, verb) => `<span style="color:${VisualLaw.COLORS.SELECTION};font-weight:bold;">${k}</span>`
       + `<span style="opacity:0.8;"> ${verb}</span>`;
     // type=button (never submits), tabindex=-1 (Tab is a game key; the button
     // must not become the keyboard's focus target).
@@ -2273,7 +2373,7 @@ export class StatusPanel {
     const dvHtml = `<span style="color:${dvColor};white-space:nowrap;text-align:right;" title="Maneuver budget (ΔV)">ΔV ${dv}</span>`;
 
     const numHtml = isSel
-      ? `<span style="color:#00ffff;font-weight:bold;">▸${label}</span>`
+      ? `<span style="color:${VisualLaw.COLORS.SELECTION};font-weight:bold;">▸${label}</span>`
       : `<span style="opacity:0.6;">${label}</span>`;
 
     // Line 1 — details laid out as fixed columns so N · status · NET · ΔV line up
@@ -2313,7 +2413,7 @@ export class StatusPanel {
       + (keys || '<span style="opacity:0.4;">busy…</span>')
       + `</div>`;
 
-    return `<div ${rowAttrs}style="padding:2px 4px;background:rgba(0,255,255,0.08);border-left:2px solid #00ffff;${rowCursor}">`
+    return `<div ${rowAttrs}style="padding:2px 4px;background:rgba(68,136,255,0.08);border-left:2px solid ${VisualLaw.COLORS.SELECTION};${rowCursor}">`
       + detailLine
       + telemetryLine
       + keysLine
@@ -2453,6 +2553,12 @@ export class StatusPanel {
   _updateCargoLine() {
     const el = document.getElementById('cargo-summary');
     if (!el) return;
+    let hide = false;
+    try { hide = !!this._cargoPaneVisible(); } catch (_e) { hide = false; }
+    if (hide) {
+      el.style.display = 'none';
+      return;
+    }
 
     const status = this._cargoStatus;
     if (!status || status.totalMassKg <= 0) {
