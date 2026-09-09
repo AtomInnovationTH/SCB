@@ -17,12 +17,35 @@ echo ""
 echo "   🌐 Starting server on port $PORT..."
 echo ""
 
-# Start the Python HTTP server in the background
-python3 -m http.server $PORT >/dev/null 2>&1 &
-SERVER_PID=$!
+# Start the server in the background — the SAME server as `npm start`
+# (http-server with caching disabled, -c-1) so the browser always loads the
+# code that is on disk. Python's http.server sends no Cache-Control header, so
+# browsers kept stale JS for hours after `main` moved (owner, 2026-09-09: "not
+# seeing the changes" on :8081 right after a deploy). The build-tag step is
+# what `npm start` runs too: it stamps data/build-tag.json so the corner hash
+# is the checkout's real commit (Ipad.md §2.5 update-honesty law).
+# Fallback when node/npx is not installed: python with the same no-store rule.
+(node scripts/build-tag.mjs >/dev/null 2>&1 || true)
+if command -v npx >/dev/null 2>&1; then
+    npx --yes http-server -p $PORT -c-1 . >/dev/null 2>&1 &
+    SERVER_PID=$!
+else
+    python3 - "$PORT" >/dev/null 2>&1 <<'PY' &
+import http.server, sys
+class NoStore(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+        self.send_header('Cache-Control', 'no-store, must-revalidate')
+        super().end_headers()
+http.server.ThreadingHTTPServer(('', int(sys.argv[1])), NoStore).serve_forever()
+PY
+    SERVER_PID=$!
+fi
 
-# Wait for server to be ready
-sleep 1
+# Wait for server to be ready (npx may need a moment the first time)
+for _ in $(seq 1 40); do
+    if curl -s -o /dev/null "http://localhost:$PORT/" 2>/dev/null; then break; fi
+    sleep 0.25
+done
 
 # Verify server started
 if ! kill -0 $SERVER_PID 2>/dev/null; then

@@ -12,7 +12,7 @@ collision-avoidance AI keeps you alive while you focus on the catch.
 ```bash
 npm start        # http-server on :8080  →  http://localhost:8080
 # or
-./start.sh       # python http.server on :8081, opens your browser
+./start.sh       # same server (no caching) on :8081, opens your browser
 ```
 
 No build step. ES6 modules; Three.js is vendored same-origin under `./vendor/`
