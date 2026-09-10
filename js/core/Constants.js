@@ -5682,6 +5682,9 @@ export const Constants = {
     // Sprint 2 / Phase A: 1 Hz performance report overlay.
     // Enable via ?perfReport=1 URL flag (see main.js bootstrap).
     PERF_REPORT_OVERLAY: false,
+    // Ctrl+D debug-overlay hotkey. Off in production so Ctrl+D stays the
+    // browser's bookmark shortcut; flipped by ?debug=1 (see main.js bootstrap).
+    DEBUG_OVERLAY_HOTKEY: false,
   },
 
   // === PERFORMANCE TUNING (PR 3 + PR 4) ===

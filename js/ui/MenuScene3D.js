@@ -1242,9 +1242,10 @@ export class MenuScene3D {
     // Mother satellite — the REAL in-game PlayerSatellite, so the hero ship is
     // literally the same mesh the player flies (no hand replica to drift from).
     // The constructor parents the satellite into whatever "scene" we pass, so we
-    // hand it the orbit pivot. It also seeds an orbital position + 6 eventBus
-    // listeners; we zero the position and otherwise leave it static (never call
-    // update()), exactly as the old replica was static.
+    // hand it the orbit pivot. It also seeds an orbital position + 13 eventBus
+    // listeners (12 in the constructor body, plus one wired deeper in
+    // _buildModel → _buildNetPods); we zero the position and otherwise leave it
+    // static (never call update()), exactly as the old replica was static.
     const mother = new PlayerSatellite(this._pivot);
     mother.position.set(0, 0, 0);            // ignore the orbital position the ctor set
     mother.scale.setScalar(1 / SIM_M);       // 1e5 → sim-metre geometry reads at 1 m
@@ -1256,16 +1257,25 @@ export class MenuScene3D {
     mother.rotation.z = -Math.PI / 2;
 
     // This hero ship is a full gameplay PlayerSatellite, so its constructor wired
-    // the sim's eventBus handlers (crossbow recoil, EDT toggle, dual-fire). The
-    // menu instance lives for the whole app and would otherwise ALSO react to
-    // those gameplay events during a live session — emitting duplicate COMMS
-    // messages and consuming cold-gas on a phantom ship. We only want the MODEL,
-    // not the behaviour, so neutralise the handlers that emit events / mutate
-    // resources. (The remaining handlers — scan-flash timer, hull outline — are
-    // display-only and inert because we never run this satellite's update loop.)
+    // the sim's eventBus handlers (crossbow recoil, EDT toggle, dual-fire,
+    // mother-net recoil). The menu instance lives for the whole app and would
+    // otherwise ALSO react to those gameplay events during a live session —
+    // emitting duplicate COMMS messages and consuming cold-gas on a phantom
+    // ship. We only want the MODEL, not the behaviour, so neutralise the
+    // handlers that emit events / mutate resources.
+    //
+    // KEEP THIS LIST IN SYNC: any new PlayerSatellite listener wired at
+    // construction whose handler emits an event or bills a resource must be
+    // stubbed here too. js/test/test-MenuHeroNeutralization.js pins the list.
+    // (The remaining handlers — scan-flash timer, hull outline, inertia
+    // invalidation, net muzzle/brake FX, net-inventory cap visibility — are
+    // display-only or inert because we never run this satellite's update loop.)
     mother.toggleEDT = () => {};
     mother._applyCrossbowRecoil = () => {};
     mother._applyDualFireRecoil = () => {};
+    // Mother-net launch: emits RESOURCE_CONSUME coldGas (twice, via
+    // _autoRcsCompensation) on every NET_FIRED with source==='mother'.
+    mother._applyMotherNetRecoil = () => {};
     // The hero has no gameplay power subsystem driving solarRate, so give the
     // ROSA cell faces a constant energized power-flow glow (see _animateRosaGlow).
     mother._rosaGlowIdleFloor = 0.55;

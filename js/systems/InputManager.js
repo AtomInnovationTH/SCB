@@ -77,7 +77,6 @@ export class InputManager {
    * @param {object} deps.hud
    * @param {object} deps.targetReticle
    * @param {object} deps.navSphere
-   * @param {object} deps.orbitMFD
    * @param {object} deps.debrisMap
    * @param {object} deps.audioSystem
    * @param {object} deps.debugOverlay
@@ -982,15 +981,23 @@ export class InputManager {
       //   Hotkey revamp 2026-06-14: D / Shift+D work the same whether or not a
       //   daughter is being piloted (WASD daughter thrust was removed, so the
       //   key is no longer consumed for thrust).
-      //   Ctrl+D       → debug overlay (unchanged)
+      //   Ctrl+D       → debug overlay, DEV ONLY (Constants.DEBUG.DEBUG_OVERLAY_HOTKEY,
+      //     flipped by ?debug=1). Off in production so Ctrl+D stays the
+      //     browser's bookmark shortcut.
       //   Ctrl+Shift+D → deorbit sacrifice (unchanged)
       case 'KeyD':
         if (e.ctrlKey && e.shiftKey && isGameplay) {
           e.preventDefault();
           eventBus.emit(Events.ARM_DEORBIT_CMD);
         } else if (e.ctrlKey) {
-          e.preventDefault();
-          if (d.debugOverlay) d.debugOverlay.toggle();
+          // Dev-only: when the flag is off we do NOTHING — no preventDefault,
+          // so the browser's Ctrl+D (bookmark) works normally. The branch still
+          // CLAIMS the combo either way, so Ctrl+D can never fall through to
+          // the bare-D deploy path below.
+          if (Constants.DEBUG.DEBUG_OVERLAY_HOTKEY) {
+            e.preventDefault();
+            if (d.debugOverlay) d.debugOverlay.toggle();
+          }
         } else if (e.shiftKey && isGameplay && d.armManager && !e.repeat) {
           // Shift+D: deploy all docked arms to selected target
           const allTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
@@ -1498,6 +1505,9 @@ export class InputManager {
       case 'Equal':      // + key (=/+ on US keyboards)
       case 'NumpadAdd':   // Numpad +
         if (isGameplay) {
+          // Browser zoom (Cmd/Ctrl + =) belongs to the browser — bail BEFORE
+          // the STATION_KEEP carve-out so no modifier combo is swallowed.
+          if (e.metaKey || e.ctrlKey) break;
           // ST-8.2.1: +/- reused for orbital radius in STATION_KEEP (carve-out
           // FIRST so piloting a station-keeping daughter is unchanged).
           const _skPlus = this.armPilotMode && d.cameraSystem?.getPilotedArm();
@@ -1524,6 +1534,8 @@ export class InputManager {
       case 'Minus':       // - key
       case 'NumpadSubtract': // Numpad -
         if (isGameplay) {
+          // Browser zoom (Cmd/Ctrl + -) belongs to the browser — see Equal above.
+          if (e.metaKey || e.ctrlKey) break;
           // ST-8.2.1: +/- reused for orbital radius in STATION_KEEP
           const _skMinus = this.armPilotMode && d.cameraSystem?.getPilotedArm();
           if (_skMinus && _skMinus.state === Constants.ARM_STATES.STATION_KEEP) break;

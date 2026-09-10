@@ -1077,6 +1077,7 @@ async function init() {
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('debug') === '1') {
       Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS = true;
+      Constants.DEBUG.DEBUG_OVERLAY_HOTKEY = true;
       console.info('[Debug] verbose diagnostics enabled via ?debug=1');
     }
     // PR 6 / P3.15: ?profile=1 enables per-60-frame draw-call logging.
