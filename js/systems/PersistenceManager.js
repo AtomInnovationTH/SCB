@@ -96,6 +96,31 @@ class PersistenceManager {
         // it is OMITTED when absent (not `null`): with the ladder off nothing
         // gathers it, and the flag-off save blob must stay byte-identical.
         ...(data.ladder != null ? { ladder: data.ladder } : {}),
+        // Skill mastery/XP — contributed via PERSISTENCE_GATHER by SkillsSystem
+        // (saveData.skills = _serialize()). Additive (no SAVE_VERSION bump):
+        // SkillsSystem's restore guards `save.skills` absence on old saves.
+        skills: data.skills ?? null,
+        // Power-bus allocations — handed in directly by GameFlowManager.saveGame
+        // (powerDistribution.serialize()) and restored by powerDistribution
+        // .restore(save.power). Additive; restore takes `|| null`.
+        power: data.power ?? null,
+        // Fleet launch-speed dial (Item 100) — handed in by saveGame, restored
+        // AFTER the upgrade replay so the equipped spring tier clamps it.
+        // Additive; the restore is `typeof save.launchSpeed === 'number'`-guarded.
+        launchSpeed: data.launchSpeed ?? null,
+        // Elevator-contract mass accumulated toward the WIN condition (Phase 5)
+        // — handed in by saveGame (shopScreen.getContractMass()). Dropping this
+        // reset a win-condition track to 0 on every reload+CONTINUE. `?? 0`
+        // matches the restore's truthy guard and the getContractMass() default.
+        contractMassKg: data.contractMassKg ?? 0,
+        // Subsystem health + battery depth-of-discharge state (ST-6.7) —
+        // contributed via PERSISTENCE_GATHER by EnvironmentSystem. Additive:
+        // its restore returns early on `!save.environment`.
+        environment: data.environment ?? null,
+        // Seeded space-weather replay cursor + fired-event set (ST-6.1) —
+        // contributed via PERSISTENCE_GATHER by SpaceWeatherSystem. Additive:
+        // legacy saves without it simply start the replay from hour 0.
+        spaceWeatherReplay: data.spaceWeatherReplay ?? null,
         // ST-9.2: Active arm tier (Y0_QUAD / Y1_HEX / Y3_OCTO)
         armTier: data.armTier ?? 'Y0_QUAD',
         // Q2 Net-Launch Ceremony first-time flags (CEREMONY_REDESIGN.md §5.6)
@@ -113,6 +138,25 @@ class PersistenceManager {
           // true), and getCeremonyFlag() then reads false forever.
           FIRST_MOTHER_NET_DEPLOY: data.ceremonyFlags?.FIRST_MOTHER_NET_DEPLOY ?? false,
         },
+        // ── Keys written by this class's own read-modify-write setters ───────
+        // Each setter below does `const data = this.peek() || {}; data.X = …;
+        // return this.save(data)`. Because save() is a WHITELIST, a setter key
+        // missing from this list is silently dropped on write — the setter
+        // still returns true and its getter then reads the default forever.
+        // That is exactly how launchPhase/armDeployStates/captureNet/
+        // tetherReels/bridleRings were dead: every Epic-9 arm-state slice and
+        // the C-5 launch-phase resume persisted nothing. Additive (no
+        // SAVE_VERSION bump) — each getter already defaults on absence.
+        // setLaunchPhase / getLaunchPhase (ST-9.11 C-5)
+        launchPhase: data.launchPhase ?? 'READY',
+        // setArmDeployStates / getArmDeployStates (ST-9.10 C-4)
+        armDeployStates: data.armDeployStates ?? null,
+        // setNetInventory / getNetInventory (ST-9.4 C-6)
+        captureNet: data.captureNet ?? null,
+        // setReelStates / getReelStates (ST-9.5 C-7)
+        tetherReels: data.tetherReels ?? null,
+        // setBridleState / getBridleState (ST-9.7 C-8)
+        bridleRings: data.bridleRings ?? null,
       };
 
       localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));

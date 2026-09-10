@@ -17,6 +17,7 @@
 
 import { Constants } from '../core/Constants.js';
 import { Events }    from '../core/Events.js';
+import { persistenceManager } from './PersistenceManager.js';
 
 // ============================================================================
 // SEEDED RNG — same multiplicative congruential pattern as DebrisTextureAtlas
@@ -136,9 +137,12 @@ export class EnvironmentSystem {
     if (Events.PERSISTENCE_LOADED) {
       this._unsubs.push(eb.on(Events.PERSISTENCE_LOADED, () => {
         try {
-          const pm = (typeof window !== 'undefined' && window.persistenceManager)
-            ? window.persistenceManager : null;
-          const save = pm && typeof pm.peek === 'function' ? pm.peek() : null;
+          // Read through the exported singleton (PersistenceManager.load()
+          // emits PERSISTENCE_LOADED, so peek() is the non-recursive read).
+          // This used to go through `window.persistenceManager`, which NOTHING
+          // ever assigns — the restore was dead code and environment state was
+          // never reapplied on CONTINUE.
+          const save = persistenceManager.peek();
           if (!save || !save.environment) return;
           const s = save.environment;
           if (s.subsystemHealth) {

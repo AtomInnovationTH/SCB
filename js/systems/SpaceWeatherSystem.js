@@ -13,6 +13,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { TimeAuthority } from './TimeAuthority.js';
+import { persistenceManager } from './PersistenceManager.js';
 
 // ============================================================================
 // WEATHER TYPE DEFINITIONS
@@ -176,10 +177,11 @@ export class SpaceWeatherSystem {
     eventBus.on(Events.PERSISTENCE_LOADED, () => {
       // PersistenceManager.load() emits this; read via peek to avoid recursion.
       try {
-        // Lazy-require avoids boot-order coupling with PersistenceManager.
-        // Anything falsy or malformed is ignored — default-safe.
-        const pm = (typeof window !== 'undefined' && window.persistenceManager) ? window.persistenceManager : null;
-        const save = pm && typeof pm.peek === 'function' ? pm.peek() : null;
+        // Read through the exported singleton. Anything falsy or malformed is
+        // ignored — default-safe. This used to go through
+        // `window.persistenceManager`, which NOTHING ever assigns, so the
+        // replay cursor was never actually restored.
+        const save = persistenceManager.peek();
         if (!save || !save.spaceWeatherReplay) return;
         const s = save.spaceWeatherReplay;
         if (typeof s.totalTime === 'number') this.totalTime = s.totalTime;
