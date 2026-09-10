@@ -1647,7 +1647,7 @@ export class GameFlowManager {
     launchSequence.reset();
 
     // Notify self-resetting systems (CommsSystem, KesslerSystem,
-    // TutorialSystem, TrawlManager, OrbitMFD listen for this)
+    // TutorialSystem, TrawlManager listen for this)
     eventBus.emit(Events.GAME_RESET);
 
     gameState.reset();

@@ -16,6 +16,14 @@
  * optional `opts.assessment` (ReachabilityModel.assess result) and surface a
  * verdict + xenon + margin row; without it the model/markup are unchanged.
  *
+ * OrbitMFD retirement: `readout`/`refresh` also accept optional `opts.route`
+ * (systems/OrbitPlanners.computeRoutePlan result) and `opts.sweep`
+ * (computeSweepBands result), fed by NavcomFloor from the whole cluster field
+ * (not the focused cluster). Both rows are labelled FIELD-scoped ("FIELD
+ * ROUTE …" / "FIELD DENSEST BAND …") so the panel never implies these
+ * field-wide numbers belong to the focused cluster's window above them.
+ * Absent opts ⇒ markup byte-identical (the flag-off philosophy).
+ *
  * FLOOR CONTENT (parallel track): no game loop, no autopilot, no event emission —
  * NavcomFloor feeds it a window; the plan-transfer VERB (Space on F6) is what
  * commits/engages, wired by the serial track.
@@ -117,11 +125,17 @@ export class TransferWindows {
    *                 budgetAfter, ...}). Absent → fuelText '' (pre-reach model).
    * @param {object} [opts.budget] - getMassBudget() sample (reserved; the row
    *                 reads budgetAfter so remaining fuel is post-burn honest)
+   * @param {object} [opts.route] - OrbitMFD retirement: systems/OrbitPlanners
+   *                 .computeRoutePlan() result ({plan, totalDv}), whole-field
+   *                 (not the focused cluster). Absent → routeText '' (no row).
+   * @param {object} [opts.sweep] - OrbitMFD retirement: systems/OrbitPlanners
+   *                 .computeSweepBands() result ({bands, densest}), whole-field.
+   *                 Absent → sweepText '' (no row).
    * @returns {{
    *   empty:boolean, coOrbital:boolean, targetName:string,
    *   departText:string, transferText:string, arriveText:string,
    *   dvText:string, periodText:string, imminent:boolean, showArrive:boolean,
-   *   fuelText:string, verdict:?string
+   *   fuelText:string, verdict:?string, routeText:string, sweepText:string
    * }}
    */
   static readout(win, opts = {}) {
@@ -129,6 +143,11 @@ export class TransferWindows {
     const a = opts.assessment || null;
     const fuelText = (win && a) ? TransferWindows.fuelLine(a) : '';
     const verdict = (win && a) ? (a.verdict || null) : null;
+    // Field-scoped rows: whole-field planning, independent of whether a
+    // transfer window exists for the focused cluster (empty/NO TARGET still
+    // shows the field route/sweep if the caller supplied them).
+    const routeText = TransferWindows.routeLine(opts.route || null);
+    const sweepText = TransferWindows.sweepLine(opts.sweep || null);
     if (!win) {
       return {
         empty: true, coOrbital: false, targetName,
@@ -136,6 +155,7 @@ export class TransferWindows {
         dvText: '', periodText: 'aim a cluster to plan a transfer',
         imminent: false, showArrive: false,
         fuelText: '', verdict: null,
+        routeText, sweepText,
       };
     }
     const dvText = `\u0394V ${Math.round(win.dvTotal)} m/s`;
@@ -146,6 +166,7 @@ export class TransferWindows {
         departText: co.departText, transferText: '', arriveText: '',
         dvText, periodText: co.periodText, imminent: false, showArrive: co.showArrive,
         fuelText, verdict,
+        routeText, sweepText,
       };
     }
     return {
@@ -158,6 +179,7 @@ export class TransferWindows {
       imminent: win.departIn <= IMMINENT_S,
       showArrive: true,
       fuelText, verdict,
+      routeText, sweepText,
     };
   }
 
@@ -172,6 +194,34 @@ export class TransferWindows {
     const xe = Number.isFinite(a.fuelKg) ? (Math.round(a.fuelKg * 10) / 10) : '\u2014';
     const left = Number.isFinite(a.budgetAfter) ? Math.round(a.budgetAfter) : '\u2014';
     return `${String(a.verdict).toUpperCase()} \u00b7 Xe ${xe} kg \u00b7 ${left} m/s left`;
+  }
+
+  /**
+   * OrbitMFD retirement: FIELD ROUTE row text, e.g. "FIELD ROUTE 6 stops \u00b7
+   * \u0394V 0.41 km/s". FIELD-scoped label — this is the whole cluster field's
+   * route, not the focused cluster's window above it. Pure + static.
+   * @param {{plan:Array, totalDv:number}|null} route - OrbitPlanners.computeRoutePlan() result
+   * @returns {string} '' when there is no route (absent opts or an empty plan)
+   */
+  static routeLine(route) {
+    if (!route || !Array.isArray(route.plan) || route.plan.length === 0) return '';
+    const n = route.plan.length;
+    const dv = Number.isFinite(route.totalDv) ? route.totalDv.toFixed(2) : '\u2014';
+    return `FIELD ROUTE ${n} stop${n !== 1 ? 's' : ''} \u00b7 \u0394V ${dv} km/s`;
+  }
+
+  /**
+   * OrbitMFD retirement: FIELD DENSEST BAND row text, e.g. "FIELD DENSEST BAND
+   * 800\u2013900 km \u00b7 17 obj". FIELD-scoped label — the whole field's
+   * altitude-sweep pick, not the focused cluster. Pure + static.
+   * @param {{bands:Array, densest:{altMinKm:number,altMaxKm:number,count:number}|null}|null} sweep
+   *        - OrbitPlanners.computeSweepBands() result
+   * @returns {string} '' when there is no densest band (absent opts or an empty sweep)
+   */
+  static sweepLine(sweep) {
+    const d = sweep && sweep.densest;
+    if (!d) return '';
+    return `FIELD DENSEST BAND ${Math.round(d.altMinKm)}\u2013${Math.round(d.altMaxKm)} km \u00b7 ${d.count} obj`;
   }
 
   // ── DOM (guarded) ───────────────────────────────────────────────────────────
@@ -199,7 +249,7 @@ export class TransferWindows {
   /**
    * Paint the transfer-window readout for the focused cluster.
    * @param {object|null} win - computeTransferWindow() result (or null)
-   * @param {object} [opts] - { targetName, assessment, budget }
+   * @param {object} [opts] - { targetName, assessment, budget, route, sweep }
    * @returns {object} the display model that was rendered (readout())
    */
   refresh(win, opts = {}) {
@@ -208,7 +258,10 @@ export class TransferWindows {
     // G1 warp churn cap: structural changes paint immediately; countdown-only
     // ticks are bounded to ≤4 Hz real (see shouldWrite / DOM_WRITE_MIN_INTERVAL_MS).
     // The fuel row is structural: a verdict/margin change repaints immediately.
-    const structKey = `${model.targetName}|${model.empty}|${model.coOrbital}|${model.imminent}|${model.dvText}|${model.showArrive}|${model.fuelText}`;
+    // The FIELD route/sweep rows are likewise structural (NavcomFloor recomputes
+    // them on its own throttled cadence, never per frame, so any change here is
+    // a real change worth an immediate repaint).
+    const structKey = `${model.targetName}|${model.empty}|${model.coOrbital}|${model.imminent}|${model.dvText}|${model.showArrive}|${model.fuelText}|${model.routeText}|${model.sweepText}`;
     const now = this._now();
     if (!TransferWindows.shouldWrite(structKey, this._lastStructKey, now, this._lastWriteMs)) {
       return model;
@@ -232,6 +285,8 @@ export class TransferWindows {
       const fuelDim = model.verdict === 'unreachable' ? ';opacity:0.6' : '';
       rows.push(`<div style="color:${fuelColor}${fuelDim}">${model.fuelText}</div>`);
     }
+    if (model.routeText) rows.push(`<div style="opacity:0.85">${model.routeText}</div>`);
+    if (model.sweepText) rows.push(`<div style="opacity:0.85">${model.sweepText}</div>`);
     rows.push(`<div style="opacity:0.7">${model.periodText}</div>`);
     // M3 review fix: refresh() is ticked every frame while F6 is active, but the
     // readout only changes ~1/s at 1× (formatDuration rounds to seconds) — skip

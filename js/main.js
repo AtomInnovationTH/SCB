@@ -80,7 +80,6 @@ import { ShopScreen, recommendedStarter, UPGRADES } from './ui/ShopScreen.js';
 import { GameOverScreen } from './ui/GameOverScreen.js';
 import { TargetReticle } from './ui/TargetReticle.js';
 import { NavSphere } from './ui/NavSphere.js';
-import { OrbitMFD } from './ui/OrbitMFD.js';
 import { DebrisMap } from './ui/DebrisMap.js';
 // DebrisWireframe is now created by HUD.js (integrated right-column layout)
 // Whale-in-cone phase 3: main ALSO imports it directly for the scenario probe's
@@ -607,7 +606,6 @@ let shopScreen;
 let gameOverScreen;
 let targetReticle;
 let navSphere;
-let orbitMFD = null;
 let debrisMap = null;
 let debrisWireframe;
 let dockingReticle;
@@ -727,7 +725,7 @@ let overridePane = null;
 let hudReboot = null;
 // Wave 5 Session M (plan "Session M — Instruments") — the three instruments +
 // the copilot's voice: ORBIT (js/ui/hud/OrbitPane.js, the fixed text slots —
-// text only since 2026-09-08; the OrbitMFD track view retired), COPILOT (js/ui/hud/FmaStrip.js, the
+// text only since 2026-09-08), COPILOT (js/ui/hud/FmaStrip.js, the
 // flight-mode annunciator inside the left column + js/systems/CopilotVoice.js,
 // the spoken phrases) and NEXT (js/ui/hud/NextPane.js, the upcoming events).
 // Same construction law as CARGO: built ONLY inside the LADDER.ENABLED gate.
@@ -1555,15 +1553,12 @@ async function init() {
   // --- ST-5.2: Trail System (3-D world-space historical trajectory ribbons) ---
   trailSystem = new TrailSystem(scene, eventBus);
 
-  // --- Orbit MFD (Keplerian orbit display) ---
-  orbitMFD = new OrbitMFD();
-
   // --- Debris Map (ST-4.A — full-screen strategic sweep planning overlay) ---
   debrisMap = new DebrisMap();
 
   // --- Debug Overlay (Ctrl+D toggle) ---
   debugOverlay = new DebugOverlay();
-  _bootMark('UI constructed (HUD/Menu/Briefing/Shop/GameOver/Reticles/NavSphere/OrbitMFD/DebrisMap/DebugOverlay)');
+  _bootMark('UI constructed (HUD/Menu/Briefing/Shop/GameOver/Reticles/NavSphere/DebrisMap/DebugOverlay)');
 
   // --- Connect comms to HUD ---
   hud.setCommsSystem(commsSystem);
@@ -1659,7 +1654,7 @@ async function init() {
 
   // --- GameFlowManager: init with reduced refs (13 decoupled via EventBus) ---
   // Removed: menuScreen, gameOverScreen (GAME_STATE_CHANGE)
-  //          targetReticle, navSphere, dockingReticle, orbitMFD (VIEW_CONFIG_CHANGE / GAME_STATE_CHANGE)
+  //          targetReticle, navSphere, dockingReticle (VIEW_CONFIG_CHANGE / GAME_STATE_CHANGE)
   //          sensorSystem (SENSOR_UPGRADE)
   //          commsSystem (GAME_STATE_CHANGE + COMMS_SEND + GAME_RESET), inputManager (ARM_RETURNED + ARM_EXPENDED)
   //          hud (GAME_STATE_CHANGE + VIEW_CONFIG_CHANGE + HUD_TARGET_CLICK + PAUSE events)
@@ -1781,7 +1776,7 @@ async function init() {
   inputManager.init({
     gameState, player, armManager, cameraSystem, targetSelector,
     debrisField, debrisWireframe, dockingReticle, hud, targetReticle,
-    navSphere, orbitMFD, debrisMap, audioSystem, debugOverlay, sensorSystem,
+    navSphere, debrisMap, audioSystem, debugOverlay, sensorSystem,
     lassoSystem, autopilotSystem, codexViewerUI, strategicMap, hotkeyOverlay,
     // Scan auto-select: unified acquire helper (Shift+N / Shift+A route here).
     targetAcquisition,
@@ -6716,17 +6711,6 @@ function gameLoop(timestamp) {
       // rail, the slider and the tab live; the chrome then fades IDLE_FADE_MS
       // after the splash ends (or after the first input).
       if (edgeChrome && gestureSplash && gestureSplash.isActive()) edgeChrome.wake(undefined, timestamp);
-    }
-
-    // Orbit MFD update (Phase 6: pass cachedTargets for route planner)
-    if (orbitMFD) {
-      const target = targetSelector ? targetSelector.getActiveTarget() : null;
-      orbitMFD.update(dt, {
-        playerOrbit: player.getOrbitalElements(),
-        targetOrbit: target ? target.orbit : null,
-        selectedTargetId: target ? target.id : null,
-        cachedTargets: hud.getCachedTargets(),
-      });
     }
 
     // --- Debris Map update (ST-4.A) ---

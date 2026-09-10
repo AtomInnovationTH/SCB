@@ -17,6 +17,12 @@
  *     the player's orbital plane. Assessments recompute on refresh/focus and
  *     on a throttled budget poll (BUDGET_POLL_MS) — never per frame. Without
  *     the dep the whole layer is inert (no budget/clock reads, no orb DOM);
+ *   - OrbitMFD retirement: the two whole-FIELD planners ported to
+ *     systems/OrbitPlanners.js (computeRoutePlan / computeSweepBands),
+ *     recomputed from the flattened cluster-target list on refreshClusters()
+ *     (activate + re-poll) and on a throttled poll (FIELD_PLAN_REFRESH_MS) —
+ *     never per frame — and fed to the planner surface as `opts.route` /
+ *     `opts.sweep` (same plumbing as `assessment`);
  *   - the Space verb 'plan-transfer' (00-spec.md §5): commit/plan the focused
  *     cluster's transfer and hand it to `onPlanTransfer` for the serial track to
  *     engage (autopilot) + fan out to legacy consumers (LadderBridge, M7).
@@ -44,6 +50,8 @@ import { ReachOrb } from '../ui/ReachOrb.js';
 import { computeTransferWindow, clusterToOrbitKm } from '../entities/LaunchWindow.js';
 import { orbitToKm, sceneToKm } from '../entities/OrbitalMechanics.js';
 import { assess } from '../entities/ReachabilityModel.js';
+import { computeRoutePlan, computeSweepBands } from './OrbitPlanners.js';
+import { Constants } from '../core/Constants.js';
 
 /** The NAVCOM (id 4) contract row — by id, never by index (Session H). */
 const FLOOR = FloorContract.byId(4);
@@ -55,6 +63,15 @@ const FLOOR = FloorContract.byId(4);
  * Own-module tunable (house rule: not FloorContract/Constants).
  */
 export const BUDGET_POLL_MS = 1000;
+
+/**
+ * OrbitMFD retirement: minimum real-time interval between the whole-field
+ * route/sweep planner recomputes from the per-frame tick (the route walk +
+ * band binning touch every cluster's targets — not a per-frame cost). Also
+ * recomputed on refreshClusters() (activate + re-poll), so a fresh cluster
+ * sample never waits out the throttle. Own-module tunable.
+ */
+export const FIELD_PLAN_REFRESH_MS = 2000;
 
 /** Monotonic ms clock (headless-safe; injectable for tests). */
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -71,8 +88,9 @@ export class NavcomFloor {
    * @param {function} [deps.getMassBudget] - OPTIONAL fuel-reachability source:
    *                 () => ArmManager.getMassBudget(). When present, per-cluster
    *                 ΔV/fuel/time assessments + the reachability orb light up;
-   *                 when absent, behavior is byte-identical to the pre-reachability
-   *                 module (no budget reads, no orb DOM, no clock reads).
+   *                 when absent, the reach layer is fully inert (no budget
+   *                 reads, no orb DOM). The field planners' clock poll is
+   *                 dep-independent by design (OrbitMFD retirement).
    * @param {object} [deps.reachOrb]      - ReachOrb instance (default: fresh)
    * @param {function} [deps.now]         - monotonic ms clock (tests)
    */
@@ -95,6 +113,12 @@ export class NavcomFloor {
     this._budget = null;              // last getMassBudget() sample
     this._assessments = new Map();    // clusterId → ReachabilityModel.assess()
     this._lastBudgetPollMs = -Infinity;
+
+    // OrbitMFD retirement: whole-FIELD planner state (route + sweep), computed
+    // from the flattened cluster-target list — never per frame.
+    this._routePlan = null;           // computeRoutePlan() result, or null pre-first-refresh
+    this._sweepPlan = null;           // computeSweepBands() result, or null pre-first-refresh
+    this._lastFieldPlanMs = -Infinity;
 
     // Click-to-select: cluster icon hitboxes route back into focusById (which
     // re-drives TransferWindows + the plan-transfer verb target). Wiring the
@@ -146,6 +170,7 @@ export class NavcomFloor {
     if (list.length === 0) {
       this._focusId = null;
       this._recomputeAssessments();
+      this._recomputeFieldPlans();
       return;
     }
     // Keep the current focus if it still exists; otherwise focus the top-ranked.
@@ -154,6 +179,7 @@ export class NavcomFloor {
       this._focusId = ranked.length ? ranked[0].id : null;
     }
     this._recomputeAssessments();
+    this._recomputeFieldPlans();
   }
 
   /** @returns {object|null} the focused cluster. */
@@ -233,6 +259,56 @@ export class NavcomFloor {
     return (o && o.semiMajorAxis > 0) ? sceneToKm(o.semiMajorAxis) : 0;
   }
 
+  // ── OrbitMFD retirement: whole-FIELD planners (route + sweep) ──────────────
+
+  /** @returns {{plan:Array, totalDv:number}|null} the last computeRoutePlan() result. */
+  getRoutePlan() { return this._routePlan; }
+
+  /** @returns {{bands:Array, densest:object|null}|null} the last computeSweepBands() result. */
+  getSweepPlan() { return this._sweepPlan; }
+
+  /** @private Flatten every cluster's `.targets` (debris objects with `.orbit`) into one list. */
+  _flattenClusterTargets() {
+    const out = [];
+    for (const c of this._clusters) {
+      if (c && Array.isArray(c.targets)) out.push(...c.targets);
+    }
+    return out;
+  }
+
+  /**
+   * @private Recompute the whole-field route/sweep plans from the flattened
+   * cluster-target list against the player's current orbit. Called on
+   * refreshClusters() (activate + re-poll) and from the throttled per-frame
+   * poll — never per frame. No player orbit → both plans null (nothing to
+   * plan from).
+   */
+  _recomputeFieldPlans() {
+    const playerOrbit = this._player
+      && (this._player.orbit || (this._player.getOrbitalElements && this._player.getOrbitalElements()));
+    if (!playerOrbit || !(playerOrbit.semiMajorAxis > 0)) {
+      this._routePlan = null;
+      this._sweepPlan = null;
+      return;
+    }
+    const targets = this._flattenClusterTargets();
+    this._routePlan = computeRoutePlan(targets, playerOrbit);
+    const pAltKm = sceneToKm(playerOrbit.semiMajorAxis) - Constants.EARTH_RADIUS_KM;
+    this._sweepPlan = computeSweepBands(targets, pAltKm);
+  }
+
+  /**
+   * @private Throttled field-plan poll from the per-frame tick: at most one
+   * recompute per FIELD_PLAN_REFRESH_MS, so the route/sweep track the player's
+   * orbit as it drifts between cluster re-polls without per-frame cost.
+   */
+  _maybeRefreshFieldPlans() {
+    const now = this._now();
+    if (now - this._lastFieldPlanMs < FIELD_PLAN_REFRESH_MS) return;
+    this._lastFieldPlanMs = now;
+    this._recomputeFieldPlans();
+  }
+
   // ── Transfer window ──────────────────────────────────────────────────────────
 
   /**
@@ -265,6 +341,9 @@ export class NavcomFloor {
     // FUEL-REACHABILITY: throttled budget poll (no-op without the dep) so a
     // burn/cargo change refreshes assessments without per-frame recompute.
     this._maybePollBudget();
+    // OrbitMFD retirement: throttled whole-field route/sweep poll so the
+    // planners track the player's drifting orbit — never per frame.
+    this._maybeRefreshFieldPlans();
     const project = ctx.project || this._project;
     const icons = this._icons.render(this._clusters, project, {
       budget: FLOOR.labelBudget,
@@ -280,6 +359,8 @@ export class NavcomFloor {
       targetName: focused ? focused.name : undefined,
       assessment: focused ? (this._assessments.get(focused.id) || null) : null,
       budget: this._budget,
+      route: this._routePlan,
+      sweep: this._sweepPlan,
     });
     // Reachability orb: envelope rings in the player's orbital plane. Gated on
     // the dep (never mounts/paints without it) + a live budget/orbit/projector.
@@ -316,6 +397,8 @@ export class NavcomFloor {
         targetName: cluster.name,
         assessment: this._assessments.get(cluster.id) || null,
         budget: this._budget,
+        route: this._routePlan,
+        sweep: this._sweepPlan,
       });
     }
     if (typeof this._onPlanTransfer === 'function') this._onPlanTransfer(cluster, window);

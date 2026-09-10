@@ -195,7 +195,7 @@ export const FloorContract = {
       humps: { inFirmness: 1.6 },
       timeCap: 4, // danger-capped: conjunction inside horizon ramps to 1x before the knock
       fidelity: { nearField: true, physicsMode: 'realtime', debrisMode: 'tactical' },
-      costume: { leave: ['TargetReticle'], arrive: ['ThreatRings', 'ApproachPlanner', 'NavSphere:corner-minimap', 'OrbitMFD'], transform: 'navsphere-to-minimap' },
+      costume: { leave: ['TargetReticle'], arrive: ['ThreatRings', 'ApproachPlanner', 'NavSphere:corner-minimap'], transform: 'navsphere-to-minimap' },
       contextPanel: 'tactical-approach',
       spaceVerb: 'approach',
       labelBudget: 7,
