@@ -1049,6 +1049,42 @@ function emitSparkBurst(sparkSystem, weldPos, n) {
 
 
 // ═════════════════════════════════════════════════════════════════════════════
+// PUBLIC: neutralizePhantomSatellite — shared by the menu hero and its test.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Neutralize the gameplay handlers of a display-only PlayerSatellite.
+ *
+ * The PlayerSatellite constructor subscribes to the GLOBAL eventBus, so any
+ * instance kept alive outside a live session (the title-screen hero) would
+ * otherwise ALSO react to real gameplay events during a live session —
+ * emitting duplicate COMMS messages and consuming cold-gas on a phantom ship.
+ * We only want the MODEL, not the behaviour, so neutralise the handlers that
+ * emit events / mutate resources.
+ *
+ * KEEP THIS LIST IN SYNC: any new PlayerSatellite listener wired at
+ * construction whose handler emits an event or bills a resource must be
+ * stubbed here too. js/test/test-MenuHeroNeutralization.js pins the list and
+ * drives this helper behaviorally. (The remaining handlers — scan-flash
+ * timer, hull outline, inertia invalidation, net muzzle/brake FX,
+ * net-inventory cap visibility — are display-only or inert because a
+ * phantom's update loop never runs.)
+ *
+ * Exported so the neutralization test applies the REAL helper to a REAL
+ * PlayerSatellite headlessly, instead of pinning a duplicated stub list.
+ *
+ * @param {PlayerSatellite} mother - phantom, display-only satellite instance
+ */
+export function neutralizePhantomSatellite(mother) {
+  mother.toggleEDT = () => {};
+  mother._applyCrossbowRecoil = () => {};
+  mother._applyDualFireRecoil = () => {};
+  // Mother-net launch: emits RESOURCE_CONSUME coldGas (twice, via
+  // _autoRcsCompensation) on every NET_FIRED with source==='mother'.
+  mother._applyMotherNetRecoil = () => {};
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // PUBLIC: MenuScene3D
 // ═════════════════════════════════════════════════════════════════════════════
 export class MenuScene3D {
@@ -1261,21 +1297,10 @@ export class MenuScene3D {
     // mother-net recoil). The menu instance lives for the whole app and would
     // otherwise ALSO react to those gameplay events during a live session —
     // emitting duplicate COMMS messages and consuming cold-gas on a phantom
-    // ship. We only want the MODEL, not the behaviour, so neutralise the
-    // handlers that emit events / mutate resources.
-    //
-    // KEEP THIS LIST IN SYNC: any new PlayerSatellite listener wired at
-    // construction whose handler emits an event or bills a resource must be
-    // stubbed here too. js/test/test-MenuHeroNeutralization.js pins the list.
-    // (The remaining handlers — scan-flash timer, hull outline, inertia
-    // invalidation, net muzzle/brake FX, net-inventory cap visibility — are
-    // display-only or inert because we never run this satellite's update loop.)
-    mother.toggleEDT = () => {};
-    mother._applyCrossbowRecoil = () => {};
-    mother._applyDualFireRecoil = () => {};
-    // Mother-net launch: emits RESOURCE_CONSUME coldGas (twice, via
-    // _autoRcsCompensation) on every NET_FIRED with source==='mother'.
-    mother._applyMotherNetRecoil = () => {};
+    // ship. We only want the MODEL, not the behaviour, so neutralise via the
+    // shared helper (which test-MenuHeroNeutralization.js also drives
+    // behaviorally — single source of truth, no duplicated stub list).
+    neutralizePhantomSatellite(mother);
     // The hero has no gameplay power subsystem driving solarRate, so give the
     // ROSA cell faces a constant energized power-flow glow (see _animateRosaGlow).
     mother._rosaGlowIdleFloor = 0.55;

@@ -1507,7 +1507,12 @@ export class InputManager {
         if (isGameplay) {
           // Browser zoom (Cmd/Ctrl + =) belongs to the browser — bail BEFORE
           // the STATION_KEEP carve-out so no modifier combo is swallowed.
-          if (e.metaKey || e.ctrlKey) break;
+          // Clear the just-set held-key flag too: _handleKeyDown sets
+          // keys[e.code] unconditionally at the top, and the continuous
+          // STATION_KEEP radius poll in processInput reads raw held-key
+          // state — without this clear it would emit ARM_ORBIT_ADJUST every
+          // frame while the modifier is held (review should-fix #1).
+          if (e.metaKey || e.ctrlKey) { this.keys[e.code] = false; break; }
           // ST-8.2.1: +/- reused for orbital radius in STATION_KEEP (carve-out
           // FIRST so piloting a station-keeping daughter is unchanged).
           const _skPlus = this.armPilotMode && d.cameraSystem?.getPilotedArm();
@@ -1534,8 +1539,9 @@ export class InputManager {
       case 'Minus':       // - key
       case 'NumpadSubtract': // Numpad -
         if (isGameplay) {
-          // Browser zoom (Cmd/Ctrl + -) belongs to the browser — see Equal above.
-          if (e.metaKey || e.ctrlKey) break;
+          // Browser zoom (Cmd/Ctrl + -) belongs to the browser — see the
+          // Equal case above for why the bail also clears the held-key flag.
+          if (e.metaKey || e.ctrlKey) { this.keys[e.code] = false; break; }
           // ST-8.2.1: +/- reused for orbital radius in STATION_KEEP
           const _skMinus = this.armPilotMode && d.cameraSystem?.getPilotedArm();
           if (_skMinus && _skMinus.state === Constants.ARM_STATES.STATION_KEEP) break;

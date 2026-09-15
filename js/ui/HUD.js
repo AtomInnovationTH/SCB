@@ -1933,11 +1933,6 @@ export class HUD {
     this.commsPanel.toggleComms();
   }
 
-  /** @returns {Array} Cached tracked/detected targets for route planner (Phase 6) */
-  getCachedTargets() {
-    return this._cachedTargets;
-  }
-
   /** @returns {boolean} Whether the comms command menu is currently open */
   isCommsOpen() {
     return this.commsPanel.isCommsOpen();
