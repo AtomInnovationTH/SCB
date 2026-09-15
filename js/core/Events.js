@@ -699,7 +699,13 @@ export const Events = {
 
   // === COLLISION AVOIDANCE ===
   CA_THREAT_DETECTED:       'ca:threatDetected',         // { debrisId, tca, missDistance, evasionVector }
-  CA_DODGE_EXECUTED:        'ca:dodgeExecuted',          // { debrisId, direction, magnitude }
+  // real-dodge lane (2026-09-15): magnitude is now a real, geometry-driven
+  // Δv (m/s) billed through applyCartesianImpulse; `insufficient: true` when
+  // DODGE_DV_CEILING_MS clamped it below what the geometry needed (also see
+  // CA_DODGE_INSUFFICIENT, which fires alongside for that case).
+  CA_DODGE_EXECUTED:        'ca:dodgeExecuted',          // { debrisId, direction, magnitude, insufficient }
+  CA_DODGE_INSUFFICIENT:    'ca:dodgeInsufficient',      // { debrisId, magnitude, requiredDvMs } — fired burn could not fully clear
+  CA_DODGE_REFUSED:         'ca:dodgeRefused',           // { debrisId, reason, requiredDvMs } — no burn, no orbit change
   CA_THREAT_CLEARED:        'ca:threatCleared',          // { debrisId }
   CA_TOGGLED:               'ca:toggled',                // { enabled }
   CA_SUPPRESSED:            'ca:suppressed',             // { debrisId, reason }

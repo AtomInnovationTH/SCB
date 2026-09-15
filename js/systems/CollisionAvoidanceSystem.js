@@ -14,6 +14,7 @@
  * @module systems/CollisionAvoidanceSystem
  */
 
+import * as THREE from 'three';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
@@ -742,13 +743,38 @@ export class CollisionAvoidanceSystem {
   /**
    * Evaluate whether to execute a dodge and fire if appropriate.
    *
+   * Real-dodge lane (2026-09-15, owner decision): the manoeuvre is a genuine
+   * Δv burn through `PlayerSatellite.applyCartesianImpulse` — it mutates the
+   * orbit and bills xenon + battery (the ion/FEEP path applyCartesianImpulse
+   * already gates and charges; see the module-level resource-model note in
+   * the class docstring header of this file's real-dodge commit). The old
+   * `_rcsVelocity` placebo channel is no longer touched by this method.
+   *
+   * Magnitude is geometry-driven: Δv_needed ≈ (desiredMiss − predictedMiss) /
+   * timeToTCA, clamped to [BASE_DODGE_DV, DODGE_DV_CEILING_MS]. `threat.tca`
+   * is already expressed in the same WORLD/orbital-mechanics time base that
+   * drives `PlayerSatellite.update()`'s orbit propagation (gameDt = dtReal ×
+   * TIME_SCALE_GAMEPLAY) — see `_predictClosestApproach()` and the
+   * `LOOK_AHEAD_S` comment in Constants.js. Using `threat.tca` directly here
+   * (never `dt`, never the real-time COOLDOWN clock) keeps this arithmetic
+   * unit-consistent with the burn's actual effect on the propagated orbit.
+   *
+   * Three honest outcomes (never a false "fired" claim):
+   *   - sufficient: burn clears the geometry → routine, gated comms.
+   *   - insufficient: DODGE_DV_CEILING_MS clamped the burn below what the
+   *     geometry needed → BRACE comms, bypasses the mission-floor/rate-limit
+   *     quieting (safety-critical).
+   *   - refused: PROPELLANT_RESERVE_FRAC pre-check or applyCartesianImpulse
+   *     itself declined (dry tank, flat battery, interlock, envelope guard)
+   *     → explicit named refusal comms, also bypasses quieting, no orbit
+   *     change, no billing.
+   *
    * @private
    * @param {object} threat — from _scanForThreats()
    * @param {THREE.Vector3} playerPos — current player position
    */
   _evaluateAndDodge(threat, playerPos) {
     const CA = Constants.COLLISION_AVOIDANCE;
-    const avoidRadius = this._getAvoidanceRadius();
 
     // --- Cooldown check ---
     if (this._elapsedTime - this._lastDodgeTime < CA.COOLDOWN) return;
@@ -785,44 +811,72 @@ export class CollisionAvoidanceSystem {
     // Clear suppression debounce — we're proceeding to dodge
     this._lastSuppressedReason = null;
 
-    // --- Compute dodge magnitude (proportional to severity) ---
-    // More severe (smaller miss) = stronger dodge
-    const severity = 1 - (threat.missDistScene / avoidRadius);
-    const dodgeDvMs = CA.BASE_DODGE_DV * Math.max(0.2, severity); // min 20% impulse
-    const dodgeDvScene = dodgeDvMs * M; // convert m/s → scene-units/s
+    // --- Geometry-driven dodge magnitude (see JSDoc above for the clock note) ---
+    const desiredMissM = this._trawlActive ? CA.TRAWL_AVOIDANCE_RADIUS_M : CA.AVOIDANCE_RADIUS_M;
+    const missShortfallM = Math.max(0, desiredMissM - threat.missDistM);
+    const tcaForDv = Math.max(CA.DV_MIN_TCA_S, threat.tca);
+    const requiredDvMs = missShortfallM / tcaForDv;
+    const clampBinding = requiredDvMs > CA.DODGE_DV_CEILING_MS;
+    const dodgeDvMs = clampBinding
+      ? CA.DODGE_DV_CEILING_MS
+      : Math.max(CA.BASE_DODGE_DV, requiredDvMs);
 
-    // --- Apply RCS impulse directly to _rcsVelocity (world-space) ---
-    // This is the same velocity channel used by applyRCS() but we bypass
-    // the per-frame scaling (designed for continuous input) and apply the
-    // full dodge impulse in one shot.
+    const dirLabel = this._getDirectionLabel(threat.evasionDir, playerPos);
+
+    // --- Propellant reserve pre-check — CA won't autonomously spend the
+    //     player's last margin; refuse and name it before even attempting. ---
+    const reserveReason = this._checkPropellantReserve();
+    if (reserveReason) {
+      this._lastDodgeTime = this._elapsedTime;
+      eventBus.emit(Events.CA_DODGE_REFUSED, {
+        debrisId: threat.debrisId,
+        reason: reserveReason,
+        requiredDvMs,
+      });
+      // Refusals bypass mission-floor/rate-limit quieting — safety-critical.
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'CA',
+        text: `COLLISION AVOIDANCE REFUSED — ${reserveReason}. Debris ${threat.debrisId}, miss ${Math.round(threat.missDistM)}m. MANUAL ACTION REQUIRED`,
+        priority: 'critical',
+      });
+      return;
+    }
+
+    // --- Issue the real impulse. Bills xenon + battery exactly once inside
+    //     applyCartesianImpulse (no separate RESOURCE_CONSUME emit here —
+    //     double-billing is the bug another lane fixed elsewhere). ---
     const ev = threat.evasionDir;
-    this._player._rcsVelocity.x += ev.x * dodgeDvScene;
-    this._player._rcsVelocity.y += ev.y * dodgeDvScene;
-    this._player._rcsVelocity.z += ev.z * dodgeDvScene;
-
-    // Clamp to RCS max speed
-    const maxV = Constants.RCS_MAX_SPEED;
-    if (this._player._rcsVelocity.length() > maxV) {
-      this._player._rcsVelocity.normalize().multiplyScalar(maxV);
-    }
-
-    // Trigger RCS visual puff — project world-space evasion into local frame
-    // for correct nozzle selection (z=prograde, x=cross-track, y=radial)
-    if (typeof this._player._fireRcsPuff === 'function') {
-      const localDir = this._worldToLocalFrame(ev, playerPos);
-      this._player._fireRcsPuff(localDir);
-    }
+    const dvWorld = new THREE.Vector3(ev.x, ev.y, ev.z).multiplyScalar(dodgeDvMs);
+    const fired = this._player.applyCartesianImpulse(dvWorld, CA.DODGE_BILLING_WINDOW_S);
 
     this._lastDodgeTime = this._elapsedTime;
 
-    // Determine dodge direction label for messages
-    const dirLabel = this._getDirectionLabel(ev, playerPos);
+    if (!fired) {
+      // Refused by applyCartesianImpulse itself — name the reason honestly.
+      const reason = this._diagnoseRefusalReason();
+      eventBus.emit(Events.CA_DODGE_REFUSED, {
+        debrisId: threat.debrisId,
+        reason,
+        requiredDvMs,
+      });
+      // Refusals bypass mission-floor/rate-limit quieting — safety-critical.
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'CA',
+        text: `COLLISION AVOIDANCE REFUSED — ${reason}. Debris ${threat.debrisId}, miss ${Math.round(threat.missDistM)}m. MANUAL ACTION REQUIRED`,
+        priority: 'critical',
+      });
+      return;
+    }
+
+    // Cosmetic puff already fired inside applyCartesianImpulse (real physics,
+    // same visual feel as the old placebo — see PlayerSatellite.applyCartesianImpulse).
 
     // --- Emit dodge event ---
     eventBus.emit(Events.CA_DODGE_EXECUTED, {
       debrisId: threat.debrisId,
       direction: dirLabel,
       magnitude: dodgeDvMs,
+      insufficient: clampBinding,
     });
 
     // --- D2: the CA autopilot performed an avoidance burn → COLLISION_EVASION
@@ -834,12 +888,80 @@ export class CollisionAvoidanceSystem {
       direction: dirLabel,
     });
 
-    // --- Comms notification (gated — see _emitCaComms JSDoc) ---
-    this._emitCaComms({
-      sender: 'CA',
-      text: `CAUTION: COLLISION AVOIDANCE. RCS dodge fired (${dodgeDvMs.toFixed(2)} m/s ${dirLabel})`,
-      priority: 'warning',
-    });
+    if (clampBinding) {
+      // Insufficient — the ceiling clamped the burn below what the geometry
+      // needed. Never imply safety; bypasses mission-floor/rate-limit quieting.
+      eventBus.emit(Events.CA_DODGE_INSUFFICIENT, {
+        debrisId: threat.debrisId,
+        magnitude: dodgeDvMs,
+        requiredDvMs,
+      });
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'CA',
+        text: `BRACE. COLLISION AVOIDANCE PARTIAL — ${dodgeDvMs.toFixed(2)} m/s ${dirLabel} fired, insufficient to fully clear debris ${threat.debrisId}`,
+        priority: 'critical',
+      });
+    } else {
+      // Routine success — keeps the existing mission-floor/rate-limit quieting.
+      this._emitCaComms({
+        sender: 'CA',
+        text: `CAUTION: COLLISION AVOIDANCE. Dodge burn fired (${dodgeDvMs.toFixed(2)} m/s ${dirLabel})`,
+        priority: 'warning',
+      });
+    }
+  }
+
+  /**
+   * Reserve-floor guard (real-dodge lane, 2026-09-15): the autonomous CA burn
+   * must never be what drains the player's LAST xenon/battery margin without
+   * their knowledge. Below PROPELLANT_RESERVE_FRAC of either tank, CA
+   * declines to fire and reports why — a named refusal, not a silent skip.
+   * (applyCartesianImpulse's own gates only trip at exactly empty/interlocked;
+   * this is a proactive floor above that.)
+   * @private
+   * @returns {string|null} refusal reason, or null when the reserve is fine
+   */
+  _checkPropellantReserve() {
+    const CA = Constants.COLLISION_AVOIDANCE;
+    const frac = CA.PROPELLANT_RESERVE_FRAC ?? 0;
+    if (frac <= 0 || !this._player) return null;
+    const res = this._player.resources || {};
+    const xenonReserve = (Constants.XENON_FUEL_MAX || 100) * frac;
+    const batteryReserve = (Constants.BATTERY_MAX || 100) * frac;
+    const fuel = this._getActiveFuel();
+    const batteryLow = (res.battery ?? Infinity) <= batteryReserve;
+    const xenonLow = (!fuel || !fuel.fromCargo) && (res.xenon ?? Infinity) <= xenonReserve;
+    if (batteryLow) return 'battery reserve — preserving power for essential systems';
+    if (xenonLow) return 'xenon reserve — preserving propellant for essential maneuvers';
+    return null;
+  }
+
+  /**
+   * Diagnose why applyCartesianImpulse refused a burn, mirroring its own
+   * internal gate order (power → interlock → battery → xenon → envelope),
+   * so the refusal comms name the real reason instead of a generic failure.
+   * @private
+   * @returns {string}
+   */
+  _diagnoseRefusalReason() {
+    const p = this._player;
+    if (p.thrusterInterlocked) return 'thruster interlocked';
+    const res = p.resources || {};
+    if ((res.battery ?? 1) <= 0) return 'battery depleted';
+    const fuel = this._getActiveFuel();
+    if ((!fuel || !fuel.fromCargo) && (res.xenon ?? 1) <= 0) return 'xenon tank dry';
+    return 'maneuver envelope limit';
+  }
+
+  /**
+   * @private
+   * @returns {object|null} the currently active fuel definition, if known
+   */
+  _getActiveFuel() {
+    if (this._resourceSystem && typeof this._resourceSystem.getCurrentFuel === 'function') {
+      return this._resourceSystem.getCurrentFuel();
+    }
+    return (Constants.FUELS && Constants.FUELS.xenon) || null;
   }
 
   // ==========================================================================
@@ -913,62 +1035,6 @@ export class CollisionAvoidanceSystem {
   _getAvoidanceRadius() {
     const CA = Constants.COLLISION_AVOIDANCE;
     return this._trawlActive ? CA.TRAWL_AVOIDANCE_RADIUS : CA.AVOIDANCE_RADIUS;
-  }
-
-  /**
-   * Project a world-space direction vector into the player's local frame
-   * for _fireRcsPuff nozzle selection. Same frame as applyRCS:
-   *   z = prograde, x = cross-track, y = radial-up
-   *
-   * @private
-   * @param {{x,y,z}} worldDir — normalised direction in world space
-   * @param {{x,y,z}} playerPos — player scene position
-   * @returns {{x:number, y:number, z:number}} Local-frame direction
-   */
-  _worldToLocalFrame(worldDir, playerPos) {
-    // Build local axes (same as applyRCS in PlayerSatellite)
-    const vel = this._player._cartesian?.velocity;
-    if (!vel) return { x: worldDir.x, y: worldDir.y, z: worldDir.z };
-
-    const vLen = Math.sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
-
-    // Prograde axis
-    let pgx, pgy, pgz;
-    if (vLen > 1e-10) {
-      pgx = vel.x / vLen; pgy = vel.y / vLen; pgz = vel.z / vLen;
-    } else {
-      pgx = 0; pgy = 0; pgz = 1;
-    }
-
-    // Radial-up axis (away from Earth)
-    const pLen = Math.sqrt(playerPos.x * playerPos.x + playerPos.y * playerPos.y + playerPos.z * playerPos.z);
-    let rux, ruy, ruz;
-    if (pLen > 1e-10) {
-      rux = playerPos.x / pLen; ruy = playerPos.y / pLen; ruz = playerPos.z / pLen;
-    } else {
-      rux = 0; ruy = 1; ruz = 0;
-    }
-
-    // Cross-track axis = prograde × radial
-    let ctx = pgy * ruz - pgz * ruy;
-    let cty = pgz * rux - pgx * ruz;
-    let ctz = pgx * ruy - pgy * rux;
-    const ctLen = Math.sqrt(ctx * ctx + cty * cty + ctz * ctz);
-    if (ctLen > 1e-10) {
-      ctx /= ctLen; cty /= ctLen; ctz /= ctLen;
-    }
-
-    // Re-orthogonalise radial: crossTrack × prograde
-    rux = cty * pgz - ctz * pgy;
-    ruy = ctz * pgx - ctx * pgz;
-    ruz = ctx * pgy - cty * pgx;
-
-    // Project world direction onto local axes (dot products)
-    return {
-      x: worldDir.x * ctx + worldDir.y * cty + worldDir.z * ctz,   // cross-track
-      y: worldDir.x * rux + worldDir.y * ruy + worldDir.z * ruz,   // radial
-      z: worldDir.x * pgx + worldDir.y * pgy + worldDir.z * pgz,   // prograde
-    };
   }
 
   /**

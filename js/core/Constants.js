@@ -4047,9 +4047,43 @@ export const Constants = {
     WARN_THRESHOLD: 0.003,          // scene units (300 m)
     TRAWL_AVOIDANCE_RADIUS_M: 50,   // meters — tighter threshold during trawl
     TRAWL_AVOIDANCE_RADIUS: 0.0005, // scene units (50 m)
-    LOOK_AHEAD_S: 10,               // seconds — prediction window
+    LOOK_AHEAD_S: 10,               // seconds — prediction window (WORLD/orbital-mechanics
+                                     // seconds — see real-dodge lane clock-consistency note
+                                     // on _evaluateAndDodge: `tca` is derived from the same
+                                     // physical orbital-velocity vectors that drive orbit
+                                     // propagation via gameDt = dtReal × TIME_SCALE_GAMEPLAY,
+                                     // so 10 "TCA seconds" here elapse in ~1 real wall-clock
+                                     // second at the shipped 10× rate. CA's own scan/cooldown/
+                                     // override timers below run on REAL dt — a pre-existing
+                                     // detector-timing question this lane does not change.)
     SCAN_INTERVAL: 0.25,            // seconds — scan every 250 ms (4 Hz)
-    BASE_DODGE_DV: 0.5,             // m/s — peak dodge impulse
+    // real-dodge lane (2026-09-15): BASE_DODGE_DV is now a FLOOR, not a peak.
+    // The dodge magnitude is geometry-driven (see DODGE_DV_CEILING_MS below);
+    // this is the minimum committed burn once a dodge fires, so a threat that
+    // technically needs less than this still gets a meaningful nudge.
+    BASE_DODGE_DV: 0.5,             // m/s — minimum dodge burn (floor)
+    // Per-dodge Δv ceiling — thruster authority + economic sanity. Sized so a
+    // dodge fired at the full LOOK_AHEAD_S TCA can just reach AVOIDANCE_RADIUS_M
+    // (100 m / 10 s = 10 m/s); demands above this are honestly reported
+    // insufficient (CA_DODGE_INSUFFICIENT / "BRACE") rather than silently
+    // under-delivered.
+    DODGE_DV_CEILING_MS: 10.0,      // m/s — per-dodge Δv ceiling
+    // Floor for the Δv-needed division (desiredMiss − predictedMiss) / tca —
+    // guards against a near-zero TCA blowing up the requested burn. Any threat
+    // this close is already ceiling-clamped to BRACE regardless of this floor.
+    DV_MIN_TCA_S: 0.5,              // seconds (world time, same clock as `tca`)
+    // Nominal billing window passed to applyCartesianImpulse for a one-shot
+    // dodge burn (the burn itself is instantaneous; this only scales the
+    // rate-based fuel/battery charge inside applyCartesianImpulse). Kept equal
+    // to SCAN_INTERVAL — the system's own decision cadence — rather than a
+    // second invented constant.
+    DODGE_BILLING_WINDOW_S: 0.25,   // seconds
+    // Reserve floor (fraction of XENON_FUEL_MAX / BATTERY_MAX): below this,
+    // CA declines to spend the player's last margin autonomously and reports
+    // an explicit refusal instead of firing (applyCartesianImpulse's own
+    // gates only trip at exactly empty/interlocked — this is a proactive
+    // floor above that).
+    PROPELLANT_RESERVE_FRAC: 0.05,  // 5% of tank/battery capacity
     COOLDOWN: 3.0,                  // seconds between dodges
     OVERRIDE_WINDOW: 1.5,           // seconds — player input cancels dodge
     ALERT_DISPLAY_TIME: 3.0,        // seconds — HUD threat indicator duration
@@ -4059,10 +4093,12 @@ export const Constants = {
 
     // --- Comms quieting (Delegation 1 follow-up, 2026-05-31) -----------------
     // Reviewer feedback after the rebind verification pass: CA dodge comms
-    // ("CAUTION: COLLISION AVOIDANCE. RCS dodge fired …") were spamming the new
-    // player on mission 1, drowning out the welcoming onboarding tone we want.
-    // Dodges still fire silently — only the COMMS_MESSAGE side-channel is
-    // gated.  Two layers:
+    // ("CAUTION: COLLISION AVOIDANCE. Dodge burn fired …") were spamming the
+    // new player on mission 1, drowning out the welcoming onboarding tone we
+    // want. Dodges still fire silently — only the COMMS_MESSAGE side-channel
+    // is gated, and only for the routine/sufficient case (real-dodge lane,
+    // 2026-09-15: insufficient-dodge and refusal comms bypass this gate —
+    // those are safety-critical and must always reach the player).  Two layers:
     //   1. Mission-number floor — no CA comms below missionNumber < N.
     //   2. Rate limit — at most one CA comms every COMMS_RATE_LIMIT_S seconds
     //      once the floor is reached (so even mid-game the channel stays
