@@ -139,7 +139,7 @@ export const FloorContract = {
       id: 1,
       name: 'UPGRADE',       // player label (owner 2026-09-05); instrument name HULL CAM
       anchor: 'subject',
-      camera: { distU: [2e-5, 1.2e-4], rangeLog10: logRange(2e-5, 1.2e-4), fov: 35, near: 4e-7, far: 500, upFrame: 'ship' },
+      camera: { distU: [2e-5, 7e-5], rangeLog10: logRange(2e-5, 7e-5), fov: 35, near: 4e-7, far: 500, upFrame: 'ship' },
       humps: { inFirmness: 1.6 },
       timeCap: 1,
       fidelity: { nearField: true, physicsMode: 'realtime', debrisMode: 'full' },
@@ -173,10 +173,18 @@ export const FloorContract = {
       // 100–120 m strip was dead range the capture camera never used. The
       // COMMAND/PROX boundary moved WITH it (floors stay contiguous;
       // docs/ladder/01-numbers.md).
-      camera: { distU: [1.2e-4, 1e-3], rangeLog10: logRange(1.2e-4, 1e-3), fov: 55, near: 3e-5, far: 500, upFrame: 'ship' },
-      // The 12 m lower bound inherits the shipped inspect Schmitt (12 m/18 m);
-      // the wall/entry rule replaces it (docs/ladder/00-spec.md §2). That
-      // anchor is why the shrink moved the COMMAND/PROX boundary, never this one.
+      camera: { distU: [7e-5, 1e-3], rangeLog10: logRange(7e-5, 1e-3), fov: 55, near: 3e-5, far: 500, upFrame: 'ship' },
+      // The 7 m lower bound (2026-09-16, opening-dance plan task 9) sits JUST
+      // UNDER F1's own resting distance — F1's arrival-from-above z01 0.75 now
+      // lands at ≈5.1 m — so the flying floor reaches down to where the close
+      // floor actually lives. The old 12 m bound inherited the shipped inspect
+      // Schmitt (12 m/18 m), but the wall/entry rule had already replaced that
+      // pair (docs/ladder/00-spec.md §2, and the note above), so nothing
+      // downstream depended on 12 m being the number. Closing it in pulls the
+      // whole chain in by about a third: F1 arrival 7.66 → 5.1 m, F2 entry
+      // from below 20.4 → 13.6 m, F2 floor 12 → 7 m. F1's 5 m lens split
+      // (`lens.splitAtM` above) still sits mid-floor in 2–7 m — detail 2–5,
+      // overview 5–7 — which is why 7 m and not 6 m.
       humps: { inFirmness: 1.6 },
       timeCap: 1,
       fidelity: { nearField: true, physicsMode: 'realtime', debrisMode: 'full' },

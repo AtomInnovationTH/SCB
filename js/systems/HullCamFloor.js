@@ -2,7 +2,8 @@
  * HullCamFloor.js — the Zoom Ladder HULL CAM floor (id 1) content orchestrator
  * (S4, FloorContract.FLOORS[2]).
  *
- * HULL CAM is the subject-anchored close-inspection floor (2–12 m). This module is
+ * HULL CAM is the subject-anchored close-inspection floor (2–7 m; the F1/F2
+ * boundary moved 12 m → 7 m on 2026-09-16, opening-dance task 9). This module is
  * the floor's "costume" controller: it owns the blueprint/inspect surface while the
  * ladder is on the floor (costume.transform 'lens-split-5m'):
  *   - the BlueprintOverlay callout layer — leader-lined labels on the seven
