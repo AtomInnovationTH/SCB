@@ -833,6 +833,18 @@ export const Events = {
   /** Launch sequence finished — control handed to player. Payload: {} */
   LAUNCH_SEQUENCE_COMPLETE:  'launch:sequenceComplete',
 
+  // ── Opening Dance (2026-09-16) — the ship unpacks itself ────────────────
+  // The deployment cinematic that replaces the launch sequence at boot: it
+  // starts in the MENU as the EVA astronaut jets off the hull and finishes at
+  // the ship with the player taking the wheel. TWO completion points, because
+  // the camera hands over BEFORE the ship finishes moving: the radiator and
+  // the solar wings are done at HANDOVER, while the daughters keep opening to
+  // 146° for another ~7.8 s with the player already flying.
+  /** Radiator + wings seated; camera pulls back to F2 and control is the player's. Payload: {} */
+  OPENING_DANCE_HANDOVER:    'openingDance:handover',
+  /** The last daughter seats at 146°; the dance owns nothing any more. Payload: {} */
+  OPENING_DANCE_COMPLETE:    'openingDance:complete',
+
   // ── ST-9.12 C-9: Center-of-Mass + Plume Interlock Events ───────────────
   /** CoM drift exceeds threshold. Payload: { offsetM, threshold, suggestedStowArm } */
   COM_DRIFT_WARNING:         'com:driftWarning',

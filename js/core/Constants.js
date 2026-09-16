@@ -1791,6 +1791,16 @@ export const Constants = {
     // NEW — Epic 9 Config G gaps
     STOW_DEPLOY_STATE_MACHINE: false,  // ST-9.10 — arm stow/deploy gating
     LAUNCH_SEQUENCE:           false,  // ST-9.11 — launch lock cinematic
+    // The OPENING DANCE (2026-09-16) — the ship unpacks itself. Starts in the
+    // menu as the EVA astronaut jets off the hull she is welding, cascades
+    // radiator → solar wings → daughters at the SHIPPED hardware rates, and
+    // hands the player the wheel ~7.8 s after the menu cuts away. Off = the
+    // ship simply boots deployed (OpeningDance.endState), exactly as before.
+    // This REPLACES the 60 s rocket launch above; LAUNCH_SEQUENCE stays false
+    // and untouched. A later "full launch" toggle, if it is ever wanted, hooks
+    // in by driving LaunchSequence instead of OpeningDance from the same menu
+    // departure wiring — no scaffolding for it exists, deliberately.
+    OPENING_DANCE:             true,
     // Scripted launch-plume cameo from the player's home spaceport during the
     // opening orbital pass (js/scene/LaunchCameo.js). AMBIENT extends it: any
     // pad fires a plume as it orbits into visual range (rate-limited, silent).
