@@ -4,7 +4,7 @@
  * teach real aerospace concepts and trigger codex entry unlocks.
  *
  * Subsystems: Comms, Navigation, Attitude, Power, Avionics, Degradation
- * (LEARNING_THROUGH_PLAY.md §12–17)
+ * (archive/LEARNING_THROUGH_PLAY.md §12–17)
  *
  * Design: Each subsystem fires events through the EventBus with randomized
  * timing, cooldown protection, and anti-spam logic. They are NOT major game

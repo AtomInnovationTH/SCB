@@ -19,8 +19,8 @@
  * Pure DOM component — no canvas, no THREE.js.
  *
  * @module ui/hud/SkillsPane
- * @see SKILLS_ARCHITECTURE.md §B — Pane UI Design
- * @see SKILLS_ARCHITECTURE.md §D — Feedback & Reward Architecture
+ * @see archive/SKILLS_ARCHITECTURE.md §B — Pane UI Design
+ * @see archive/SKILLS_ARCHITECTURE.md §D — Feedback & Reward Architecture
  */
 
 import { eventBus }  from '../../core/EventBus.js';

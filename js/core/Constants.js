@@ -4234,7 +4234,7 @@ export const Constants = {
 
   // =========================================================================
   // SKILLS DISCOVERY — Replaces linear 10-stage tutorial
-  // See SKILLS_ARCHITECTURE.md for full specification (34 discoverable skills)
+  // See archive/SKILLS_ARCHITECTURE.md for full specification (34 discoverable skills)
   // =========================================================================
   SKILLS: {
     // --- State Transition Thresholds ---

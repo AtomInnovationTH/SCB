@@ -11,7 +11,7 @@
  * they haven't used recently.
  *
  * @module systems/SkillsSystem
- * @see SKILLS_ARCHITECTURE.md — Full specification
+ * @see archive/SKILLS_ARCHITECTURE.md — Full specification
  * @see Constants.SKILLS — All tuning knobs and skill catalog
  */
 

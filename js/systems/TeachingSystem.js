@@ -4,7 +4,7 @@
  * Listens for game events, determines if a teaching moment should fire,
  * manages "seen" persistence, and delegates display to TeachingOverlay.
  *
- * Design philosophy (from LEARNING_THROUGH_PLAY.md):
+ * Design philosophy (from archive/LEARNING_THROUGH_PLAY.md):
  *   "No tutorials. The game teaches through contextual overlays that appear
  *    exactly once when the player first encounters each mechanic. Brief,
  *    non-blocking, and dismissible."
