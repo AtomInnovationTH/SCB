@@ -1042,7 +1042,7 @@ export const Constants = {
     MODE_GLYPHS: { gecko: 'g', hooks: 'h', electrostatic: 'e', magnet: 'm', uv_cure: 'u' },
   },
 
-  // Daughter→furnace transfer (park-the-catch delivery; HANDOFF §1.9). A parked
+  // Daughter→furnace transfer (park-the-catch delivery; ARCHITECTURE.md:277, Captured-debris lifecycle). A parked
   // HOLDING_CATCH catch is handed to the mother's furnace over this window, then
   // the daughter reloads. Salvage + scoring fire on transfer COMPLETION (the
   // CATCH_PROCESSED event), not on dock arrival (ARM_RETURNED) — this is the

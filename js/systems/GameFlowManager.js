@@ -866,7 +866,7 @@ export class GameFlowManager {
     // as the capture-secured signal (e.g. the first_capture teaching beat, in
     // TeachingSystem). Scoring/salvage still happens in the ARM_RETURNED handler.
 
-    // PARK-THE-CATCH delivery timing (HANDOFF §1.9): salvage + scoring + field
+    // PARK-THE-CATCH delivery timing (ARCHITECTURE.md:277, Captured-debris lifecycle): salvage + scoring + field
     // removal no longer fire on ARM_RETURNED (dock ARRIVAL). They fire on
     // CATCH_PROCESSED — emitted by ArmUnit._updateHoldingCatch once the parked
     // catch finishes its furnace-transfer window. This defers the reward to the

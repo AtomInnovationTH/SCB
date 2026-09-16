@@ -26,7 +26,7 @@
  *                      comment always said "thruster plume active" — now true)
  *   everything else    no FEEP → dark (ADRIFT/EXPENDED are dark BY DESIGN)
  *
- * Attitude convention (read-only here, HANDOFF §9/§10): nose (+Z) tracks the
+ * Attitude convention (read-only here, CONVENTIONS.md §9/§10): nose (+Z) tracks the
  * target in APPROACH/NETTING/STATION_KEEP and the strut dock during REELING —
  * so "thrust toward travel to brake" = the FORE nozzle fires.
  *

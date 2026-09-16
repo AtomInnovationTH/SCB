@@ -71,7 +71,7 @@ const _matAtt = new THREE.Matrix4();
 /** Clamp a scalar to ±limit. */
 const clampAbs = (v, limit) => (v > limit ? limit : (v < -limit ? -limit : v));
 /* Deterministic docked-arm roll basis now lives in ArmDockBasis.js (shared SSOT
- * with ArmUnit's DOCKING/HOLDING_CATCH self-alignment — see HANDOFF §10 Rule B).
+ * with ArmUnit's DOCKING/HOLDING_CATCH self-alignment — see CONVENTIONS.md §10 Rule B).
  * `_composeDockedArmQuat` is a thin local alias kept for call-site readability. */
 const _composeDockedArmQuat = composeDockedArmQuat;
 
@@ -7593,7 +7593,7 @@ export class PlayerSatellite extends THREE.Group {
       //
       // Exceptions handled here so a SINGLE owner composes the strut basis (the
       // live sg.strutDir/azRad + mother world quat), avoiding the override-fight
-      // bug class (HANDOFF §10 Rule B):
+      // bug class (CONVENTIONS.md §10 Rule B):
       //   • LAUNCHING (pre-spring): still clamped to the strut — track it, else the
       //     daughter counter-rotates as the ceremony slews the strut to target.
       //   • DOCKING: slerp onto the strut basis over the dock window so the arm
@@ -7621,7 +7621,7 @@ export class PlayerSatellite extends THREE.Group {
           // armManager.update() — BEFORE the quat change above. Re-sync here
           // so the rendered tether isn't counter-rotated by this frame's slerp
           // delta (worst at DOCKING entry, where pose error can approach 180°).
-          // Single-owner rule (HANDOFF §10 Rule B): this block owns the quat
+          // Single-owner rule (CONVENTIONS.md §10 Rule B): this block owns the quat
           // for these states, so it also owns the dependent tether counter-quat.
           if (arm.tetherLine && arm.tetherLine.visible) {
             arm.tetherLine.quaternion.copy(arm.group.quaternion).invert();

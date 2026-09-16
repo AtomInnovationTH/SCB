@@ -7,11 +7,11 @@
  * which now self-aligns during DOCKING and HOLDING_CATCH) compose the SAME basis.
  *
  * Keeping one implementation avoids the override-fight class of bug documented in
- * HANDOFF.md §10 Rule B — when two owners compose orientation for overlapping
+ * CONVENTIONS.md §10 Rule B — when two owners compose orientation for overlapping
  * states they slerp toward different bases and the visual flickers / points the
  * wrong way (the exact tether-direction bug fixed in this shift).
  *
- * THREE.js convention (HANDOFF.md §9 Rule 2/4): the resulting quaternion maps the
+ * THREE.js convention (CONVENTIONS.md §9 Rule 2/4): the resulting quaternion maps the
  * daughter's local +Z (forward) onto `strutDir`. All vectors are in the player-
  * LOCAL frame; compose with the mother's world quaternion at the call site:
  *

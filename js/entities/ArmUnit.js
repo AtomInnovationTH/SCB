@@ -2545,7 +2545,7 @@ export class ArmUnit {
    * net tether — so the net materialises from the canister, not the body
    * centre.
    *
-   * READ-ONLY on transforms (HANDOFF §10 Rule B): composes this.position with
+   * READ-ONLY on transforms (CONVENTIONS.md §10 Rule B): composes this.position with
    * the CURRENT group quaternion — whoever owns it (PlayerSatellite.
    * postArmUpdate for docked states, the ArmUnit attitude branch when
    * deployed) — and never writes either.
@@ -2851,7 +2851,7 @@ export class ArmUnit {
     //   strut basis (sg.strutDir/azRad) and composes the mother's world quat.
     //   DOCKED snaps; DOCKING slerps onto the strut (no pop at dock); HOLDING_CATCH
     //   snaps to the strut basis (no wrong-basis drift toward raw parentQuat).
-    //   Keeping a SINGLE owner avoids the override-fight class of bug (HANDOFF §10
+    //   Keeping a SINGLE owner avoids the override-fight class of bug (CONVENTIONS.md §10
     //   Rule B) that caused the parked daughter to rotate to the mother bus basis
     //   and render the tether in the wrong direction (Item 5).
     // LAUNCHING: maintain strut-aligned orientation set by postArmUpdate on the
@@ -5495,7 +5495,7 @@ export class ArmUnit {
    * REEL_ATTITUDE_SLERP smooths the remainder, so the offset blends in AND
    * back out (window bounce, dock handoff) with no orientation snap at the
    * 8 m line. Called ONLY from the REELING whole-haul attitude branch in
-   * update() — the single owner of the REELING quaternion (HANDOFF §9 Rule 8
+   * update() — the single owner of the REELING quaternion (CONVENTIONS.md §9 Rule 8
    * / §10 Rule B); the gate reads the quaternion, never writes it.
    *
    * @param {THREE.Vector3} headingDir unit aim (nose target), rotated in place
