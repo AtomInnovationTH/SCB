@@ -88,3 +88,45 @@ export function strutLocalDirection(alpha, azRad, out) {
   const sinA = Math.sin(alpha);
   return out.set(sinA * Math.cos(azRad), sinA * Math.sin(azRad), -Math.cos(alpha));
 }
+
+/* Preallocated temp for strutTipFoulsCorridor — module-private. */
+const _tipDir = new THREE.Vector3();
+
+/**
+ * Does one strut tip intrude into a berth-approach corridor?
+ *
+ * THE ONE COPY of this test. It had drifted to three near-identical
+ * implementations — `CaptureNet._corridorClear` (the authoritative berth gate),
+ * `CaptureNet._repPoseCorridorClear` (the representative-pose pre-check) and
+ * `ArmManager._strutFoulsInboundCorridor` (the lean-aside duck) — which is
+ * exactly the shape that fails silently: if the geometry changes in one, an arm
+ * that should duck simply doesn't, the authoritative gate then holds the catch
+ * at the corridor standoff until the timeout berths it extended, and nothing
+ * reports a fault. Callers supply their own policy (which arms to test, what
+ * radius, what to do about it); the geometry lives here.
+ *
+ * The corridor is a cylinder on the ship-local +Z axis through the berth
+ * anchor. A tip counts as fouling only when it is FORE of the muzzle plane
+ * (axial z > 0) — a strut swept aft cannot be clipped by an incoming catch —
+ * and its radial distance from the axis is inside `radiusM`.
+ *
+ * All inputs are in the player-LOCAL frame and in METRES, so the test is
+ * attitude- and position-free.
+ *
+ * @param {number} alpha - strut sweep angle (radians)
+ * @param {number} azRad - collar azimuth (radians)
+ * @param {number} collarR - collar radius (m), the strut pivot's radial offset
+ * @param {number} collarY - collar height (m) along ship-local +Z
+ * @param {number} strutLen - strut length (m)
+ * @param {{x:number,y:number,z:number}} anchor - berth anchor, ship-local metres
+ * @param {number} radiusM - corridor radius (m)
+ * @returns {boolean} true when this tip intrudes into the corridor
+ */
+export function strutTipFoulsCorridor(alpha, azRad, collarR, collarY, strutLen, anchor, radiusM) {
+  strutLocalDirection(alpha, azRad, _tipDir);
+  const tipZ = collarY + _tipDir.z * strutLen - anchor.z;
+  if (tipZ <= 0) return false;                     // aft of the muzzle plane
+  const tipX = Math.cos(azRad) * collarR + _tipDir.x * strutLen - anchor.x;
+  const tipY = Math.sin(azRad) * collarR + _tipDir.y * strutLen - anchor.y;
+  return (tipX * tipX + tipY * tipY) < radiusM * radiusM;
+}

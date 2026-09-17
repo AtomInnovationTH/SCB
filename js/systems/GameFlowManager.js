@@ -396,9 +396,15 @@ export class GameFlowManager {
 
     // Menu → Start (skip briefing, go straight to orbital gameplay)
     eventBus.on(Events.MENU_START, (data) => {
-      // keepOpeningDance: the sim ship is bound to the live dance a few lines
-      // below, in this same tick, so resetGame must not land it on endState.
-      this.resetGame({ keepOpeningDance: true });
+      // keepOpeningDance: inferred HERE, at the call site, where the inference
+      // is actually sound — at MENU_START "a dance is running" means exactly
+      // "the bind a few lines below takes it over", so resetGame must not land
+      // it on endState. Every other caller (CONTINUE, GAMEOVER retry/menu)
+      // leaves it false. It must NOT be a bare `true`: on a flag-off, reduced
+      // motion or ?shot boot no dance is running, and resetGame is the ONLY
+      // production endState call — passing true there booted the daughters
+      // stowed at α 0 instead of the one open pose.
+      this.resetGame({ keepOpeningDance: openingDance.isActive() });
       // deep-polish-4: if the player SKIPPED the menu departure, suppress the
       // sim intro zoom too (respect the skip). Set AFTER resetGame(), which
       // clears the flag. Read once by the ORBITAL_VIEW enter below.
@@ -703,6 +709,14 @@ export class GameFlowManager {
 
       // Reset arms (field-resets the existing ArmUnit instances — stored upgrades re-applied below)
       if (armManager) armManager.reset();
+
+      // Opening dance: this is the ONE game-over exit that does its own partial
+      // reset instead of calling resetGame(), so it needs the invariant call by
+      // hand. A collision inside the ~17.5 s unfold is perfectly possible, and
+      // without this the dance would keep running (and its wall clock keep
+      // advancing) through the SHOP, then fire its hand-over — pose snap and
+      // Houston line — on the first tick after the player redeploys.
+      if (player) openingDance.endState(player);
 
       this.approachTarget = null;
       this.approachComplete = false;

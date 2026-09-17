@@ -1173,8 +1173,11 @@ export function applyHeroDanceProgress(mother, p) {
   mother._setRosaWingProgress(1, wing1);
   mother._setRosaWingProgress(2, wing2);
   // Mirror _updateRosaPanels' driver branch so the tracking blend follows the
-  // roll-out exactly as it would on the flown ship.
-  mother._rosaFurlProgress = Math.min(wing1, wing2);
+  // roll-out exactly as it would on the flown ship. The AVERAGE, not the min —
+  // this must stay identical to PlayerSatellite._updateRosaPanels' dance branch
+  // or the tracking blend jumps at the menu→game cut, which is the exact pop
+  // this mirror exists to prevent (and half of departures are unmasked).
+  mother._rosaFurlProgress = (wing1 + wing2) / 2;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -91,8 +91,20 @@ const WING_ROLL_S = 1 / Constants.OCTOPUS_V5.ROSA_FURL_RATE;
 const STRUT_TRAVEL_S = OD.STRUT_OPEN_DEG / (Constants.OCTOPUS_V5.STRUT_SLEW_RATE * 180 / Math.PI);
 /** The open pose in radians — where the daughters bloom to and stay. */
 const STRUT_OPEN_RAD = (OD.STRUT_OPEN_DEG * Math.PI) / 180;
+/** @private 0..1 clamp — the one used by every derived progress scalar. */
+const _clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
 /** The hand-over beat: the radiator (the long pole) seated. Wings end 8.70 < 9.73. */
 const T_HANDOVER_S = FLOWER_TRAVEL_S;
+/**
+ * How long skip() stays deaf after a menu skip advanced the clock. One
+ * pointerdown reaches MenuScreen's capture-phase handler and InputManager's
+ * bubble-phase one; without this the dance would treat the second half of that
+ * single gesture as the player asking to fast-forward. Only has to outlive one
+ * event's propagation, so it is deliberately tiny — a real second press cannot
+ * land inside it.
+ */
+const SKIP_DEAF_MS = 120;
 
 class OpeningDance {
   constructor() {
@@ -109,6 +121,8 @@ class OpeningDance {
     this._skipStartMs = null;
     /** @private dance time at the skip instant (t, may be pre-cut) */
     this._skipFromT = 0;
+    /** @private skip() ignores input until this wall-clock ms (see SKIP_DEAF_MS) */
+    this._skipDeafUntilMs = null;
     /** @private the strut beat edges' stagger bookkeeping (last start, for T_COMPLETE) */
     this._lastStrutStartS = OD.STRUT_START_S;
     /** @private the dance's own strut writes, for player-takeover detection */
@@ -165,6 +179,7 @@ class OpeningDance {
     this._running = true;
     this._skipStartMs = null;
     this._skipFromT = 0;
+    this._skipDeafUntilMs = null;
     this._strutWrites.clear();
     this._lastStrutStartS = OD.STRUT_START_S;
     this._fired = { latch: false, wing1: false, wing2: false, struts: [], handover: false, complete: false };
@@ -175,11 +190,20 @@ class OpeningDance {
    * always start from the SAME state, so the clock is advanced to its cut-time
    * value. A menu skip skips the menu, not the dance (plan task 3). No-op once
    * t is at or past the cut, so normal (unskipped) MENU_STARTs are untouched.
+   *
+   * It also opens a short suppression window, because ONE GESTURE MUST NOT
+   * COUNT TWICE. MenuScreen arms its skip on window CAPTURE
+   * (MenuScreen._armSkipClick) and InputManager's dance hook is on BUBBLE, so
+   * the capture handler always runs first and lands the clock at exactly
+   * T_CUT_S — at which point skip()'s `t < T_CUT_S` refusal is false by one
+   * float, and the very same click opens the fast-forward fade. The pre-cut
+   * refusal alone cannot express "not from the click that caused this".
    */
   advanceClockToCutTime() {
     if (!this.enabled || this._t0Ms === null || this._skipStartMs !== null) return;
     const t = (this._now() - this._t0Ms) / 1000;
     if (t < OD.T_CUT_S) this._t0Ms -= (OD.T_CUT_S - t) * 1000;
+    this._skipDeafUntilMs = this._now() + SKIP_DEAF_MS;
   }
 
   /**
@@ -197,6 +221,7 @@ class OpeningDance {
     this._t0Ms = null;
     this._skipStartMs = null;
     this._skipFromT = 0;
+    this._skipDeafUntilMs = null;
     this._strutWrites.clear();
     this._fired = null;
   }
@@ -282,13 +307,14 @@ class OpeningDance {
    */
   tick(_dt) {
     if (!this.enabled || !this._running || this._fired === null) return;
-    const p = this.progress();
+    // `_dt` is deliberately unused: the pose is a pure function of the wall
+    // clock (see the header). tick's ONLY job is to fire each beat edge once.
+    const t = Math.max(0, this._t());
 
     // Skip fade: the ship's own drivers cannot keep up — apply the pose
-    // straight from the clock (pure; never integrated).
-    if (this._skipStartMs !== null && this._ship) this._applyShipPose(this._ship, p);
-
-    const t = Math.max(0, p.t);
+    // straight from the clock (pure; never integrated). This is the one path
+    // that needs the full snapshot, and it only runs during the 0.5 s fade.
+    if (this._skipStartMs !== null && this._ship) this._applyShipPose(this._ship, this.progress());
 
     if (!this._fired.latch) {
       this._fired.latch = true;
@@ -411,6 +437,10 @@ class OpeningDance {
   skip() {
     if (!this.enabled || !this._running || this._fired === null) return;
     if (this._fired.handover || this._skipStartMs !== null) return;
+    // The menu-skip gesture's own echo: the capture-phase MenuScreen handler
+    // has just advanced the clock to the cut, and this is the bubble phase of
+    // that same pointerdown. See advanceClockToCutTime.
+    if (this._skipDeafUntilMs !== null && this._now() < this._skipDeafUntilMs) return;
     const t = this._t();
     if (t < OD.T_CUT_S) return;
     this._skipFromT = Math.max(0, t);
@@ -433,17 +463,17 @@ class OpeningDance {
     const t = Math.max(0, raw);
     const handedOver = !!(this._fired && this._fired.handover);
     const complete = !!(this._fired && this._fired.complete);
-    const struts = [];
+    const struts = [0, 0, 0, 0];
     for (let i = 0; i < 4; i++) {
       const startS = OD.STRUT_START_S + i * OD.STRUT_STAGGER_S;
-      struts.push(Math.max(0, Math.min(1, (t - startS) / STRUT_TRAVEL_S)));
+      struts[i] = _clamp01((t - startS) / STRUT_TRAVEL_S);
     }
     return {
       t,
-      flower: Math.max(0, Math.min(1, t / FLOWER_TRAVEL_S)),
-      wing1: Math.max(0, Math.min(1, (t - OD.WING1_START_S) / WING_ROLL_S)),
-      wing2: Math.max(0, Math.min(1, (t - OD.WING2_START_S) / WING_ROLL_S)),
-      struts: Object.freeze(struts),
+      flower: _clamp01(t / FLOWER_TRAVEL_S),
+      wing1: this._wing(OD.WING1_START_S, t),
+      wing2: this._wing(OD.WING2_START_S, t),
+      struts,
       handedOver,
       complete,
     };
@@ -454,8 +484,16 @@ class OpeningDance {
    * @returns {{ wing1: number, wing2: number }}
    */
   getRosaProgress() {
-    const p = this.progress();
-    return { wing1: p.wing1, wing2: p.wing2 };
+    // Read EVERY frame by PlayerSatellite._updateRosaPanels while the dance
+    // runs, so it derives the two scalars straight from the clock rather than
+    // building (and discarding) a whole progress snapshot per frame.
+    const t = this._t0Ms === null ? 0 : Math.max(0, this._t());
+    return { wing1: this._wing(OD.WING1_START_S, t), wing2: this._wing(OD.WING2_START_S, t) };
+  }
+
+  /** @private one ROSA wing's 0..1 roll-out at dance time `t`. */
+  _wing(startS, t) {
+    return _clamp01((t - startS) / WING_ROLL_S);
   }
 
   /**
@@ -542,4 +580,4 @@ class OpeningDance {
  */
 export const openingDance = new OpeningDance();
 
-export { OpeningDance, ZERO_PROGRESS, FLOWER_TRAVEL_S, WING_ROLL_S, STRUT_TRAVEL_S, T_HANDOVER_S };
+export { FLOWER_TRAVEL_S, WING_ROLL_S, STRUT_TRAVEL_S, T_HANDOVER_S };

@@ -69,6 +69,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { PlayerSatellite } from '../entities/PlayerSatellite.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { createCardTexture, CARD_W_OVER_TITLE_H, wrapHint } from '../scene/labelTexture.js';
@@ -164,12 +165,15 @@ const SYSTEMS = [
         anchor: [ 0.337 * M, 0.2254 * M, 0 ] },
       { id: 'array_roll', name: 'SOLAR WING SPOOL', risk: 'GREEN', tier: 'detail', codexId: 'solar_power',
         massKg: 4, priority: 2, specs: ['Roll-out drum + drive'],
-        // The real spool/drum sits rootX = ROSA_BRACKET_LEN + 0.4·drumR = 0.090
-        // outboard of the pivot at barrelR → x = 0.49
-        // (PlayerSatellite.rosaSpoolAxisM). Was 0.48 before the bracket grew to
-        // hold the furled coil off the body PV.
+        // DERIVED, never typed: the spool axis is COLLAR_RADIUS +
+        // ROSA_BRACKET_LEN + 0.4·drumR ≈ 0.49 m, and ROSA_BRACKET_LEN is a live
+        // lever (it grew 0.060 → 0.070 to hold the furled coil off the body PV,
+        // which is what moved this anchor from 0.48). A literal here would
+        // silently strand the leader line off the real spool the next time that
+        // lever moves — exactly the drift the rosaSpoolAxisM accessor exists
+        // to prevent.
         pick: ['ROSA_Spool_0deg', 'ROSA_Spool_180deg'],
-        anchor: [ 0.49 * M, 0, 0 ] },
+        anchor: [ PlayerSatellite.rosaSpoolAxisM() * M, 0, 0 ] },
     ],
   },
   {

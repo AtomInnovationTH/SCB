@@ -23,7 +23,7 @@ import { DebrisField } from './DebrisField.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
 import { reseatOrbitFromScene, orbitToSceneCartesianInto } from './OrbitalMechanics.js';
-import { strutLocalDirection } from './ArmDockBasis.js';
+import { strutTipFoulsCorridor } from './ArmDockBasis.js';
 // Cargo-continuity S7: the carrier scorer lives with the rest of the CoM maths
 // (ONE quantity, ONE computation — it reuses computeCoM/strutTipMeters).
 import { suggestCargoArm, computeCoMDrift } from '../systems/CoMCalculator.js';
@@ -46,6 +46,8 @@ const _v3c = new THREE.Vector3();
 const _v3d = new THREE.Vector3();
 const _v3e = new THREE.Vector3();
 const _v3g = new THREE.Vector3();
+/** Berth anchor in ship-local metres, refilled per _corridorClear call. */
+const _anchorLocal = { x: 0, y: 0, z: 0 };
 const _q0  = new THREE.Quaternion();
 const _q1  = new THREE.Quaternion();
 // Cargo hand-off scratch (cargo-continuity S7 — the transfer beat runs every
@@ -2066,6 +2068,7 @@ export class NetProjectile {
     const mx = berthAnchor ? berthAnchor.position.x / M_NET : 0;
     const my = berthAnchor ? berthAnchor.position.y / M_NET : 0;
     const mz = berthAnchor ? berthAnchor.position.z / M_NET : (V5.BERTH_COLLAR_Z_M ?? 1.30);
+    _anchorLocal.x = mx; _anchorLocal.y = my; _anchorLocal.z = mz;
 
     // Cylinder axis = ship-local +Z. A point is INSIDE when its axial
     // coordinate z > 0 (fore of the muzzle plane) — intruders aft of the
@@ -2105,11 +2108,12 @@ export class NetProjectile {
         if (ds === 'LOCKED' || ds === 'STOWED') continue;
         const alpha = (typeof arm.getAimAlpha === 'function') ? arm.getAimAlpha() : Math.PI / 2;
         const azRad = (arm._azimuthDeg || 0) * Math.PI / 180;
-        strutLocalDirection(alpha, azRad, _v3g);
-        const tipX = Math.cos(azRad) * collarR + _v3g.x * strutLen - mx;
-        const tipY = Math.sin(azRad) * collarR + _v3g.y * strutLen - my;
-        const tipZ = collarY + _v3g.z * strutLen - mz;
-        if (testLocal(tipX, tipY, tipZ)) return false;
+        // ONE geometry (ArmDockBasis.strutTipFoulsCorridor) — shared with
+        // ArmManager's lean-aside duck and its re-pose pre-check, so the duck
+        // can never disagree with this, the authoritative gate.
+        if (strutTipFoulsCorridor(alpha, azRad, collarR, collarY, strutLen, _anchorLocal, radiusM)) {
+          return false;
+        }
       }
     }
 

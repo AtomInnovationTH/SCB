@@ -15,21 +15,12 @@ import { powerDistribution } from '../systems/PowerDistribution.js';
 import { checkActiveSatArming } from '../systems/ActiveSatGuard.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import { computeCoM, computeInducedTorque, strutTipMeters, heldCargoPlumeConflictAt } from '../systems/CoMCalculator.js';
-import { strutLocalDirection } from './ArmDockBasis.js';
+import { strutTipFoulsCorridor } from './ArmDockBasis.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit } from './ArmUnit.js';
 
 /** 1 meter in scene units */
 const M = 0.00001;
-
-// S9 re-pose scratch — the destination-tip direction (module temp idiom;
-// never retained across calls).
-const _poseDirTmp = new THREE.Vector3();
-
-// Task 7 lean-aside scratch — the live-tip direction (module temp idiom;
-// never retained across calls), mirroring _poseDirTmp's role for
-// _strutFoulsInboundCorridor.
-const _leanAsideDirTmp = new THREE.Vector3();
 
 // Task 7 (opening-dance plan) — bounded safety-net release. LASSO_CAPTURED's
 // own downstream adoption (CaptureNetSystem.adoptLassoCatch) deliberately
@@ -2109,20 +2100,18 @@ export class ArmManager {
     const collarR = V5C.COLLAR_RADIUS ?? 0.40;
     const collarY = V5C.COLLAR_Y ?? 0.90;
     const strutLen = V5C.STRUT_LENGTH ?? 1.60;
-    strutLocalDirection(alphaDest, azRad, _poseDirTmp);
-    // Ship-local tip relative to the anchor (the _corridorClear tip formula).
-    const tipX = Math.cos(azRad) * collarR + _poseDirTmp.x * strutLen - mx;
-    const tipY = Math.sin(azRad) * collarR + _poseDirTmp.y * strutLen - my;
-    const tipZ = collarY + _poseDirTmp.z * strutLen - mz;
-    if (tipZ <= 0) return true; // aft of the muzzle plane — cannot clip a corridor
+    const anchorLocal = { x: mx, y: my, z: mz };
 
+    // ONE geometry (ArmDockBasis.strutTipFoulsCorridor), per occupant radius.
     const S = CN.STATES;
     for (const net of nets) {
       if (!net || !net._isMother) continue;
       if (net.state !== S.BERTHED && net.state !== S.COLLARED && net.state !== S.TRANSFERRING) continue;
       const d = net.targetDebris;
       const radiusM = ((d && d.sizeMeter) || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
-      if (tipX * tipX + tipY * tipY < radiusM * radiusM) return false;
+      if (strutTipFoulsCorridor(alphaDest, azRad, collarR, collarY, strutLen, anchorLocal, radiusM)) {
+        return false;
+      }
     }
     return true;
   }
@@ -2141,14 +2130,12 @@ export class ArmManager {
   /**
    * Does arm `armIndex`'s CURRENT (live, `getAimAlpha()`) strut tip sit
    * inside a berth corridor cylinder sized for an inbound catch of
-   * `radiusM`? Byte-identical cylinder test to CaptureNet's `_corridorClear`
-   * section 1 (ship-local, fore of the berth-anchor plane at
-   * `tipZ > 0`, radial `< radiusM`) — CaptureNet.js is not owned by this
-   * lane, so the tip formula is mirrored here exactly rather than imported,
-   * the same duplication-by-necessity `_repPoseCorridorClear` above already
-   * established for the S9 re-pose read (same anchor derivation, same tip
-   * formula — this is the "run the SAME test" the plan asks for, applied to
-   * a file this lane owns). `_corridorClear` itself is untouched.
+   * `radiusM`? The geometry is `ArmDockBasis.strutTipFoulsCorridor` — the ONE
+   * copy, shared with `CaptureNet._corridorClear` (the authoritative berth
+   * gate) and `_repPoseCorridorClear` above, so this really is "the SAME
+   * test" the plan asks for rather than a mirror that can drift. This method
+   * supplies only the POLICY: which arm, which anchor, which radius.
+   * `_corridorClear`'s own behaviour is untouched.
    * Skips LOCKED/STOWED struts (clear by construction), matching
    * `_corridorClear`'s own skip.
    * @param {number} armIndex
@@ -2177,16 +2164,15 @@ export class ArmManager {
 
     const dp = this._dockPositions[armIndex];
     const azRad = dp ? (dp.azimuthDeg * Math.PI / 180) : 0;
-    const collarR = V5.COLLAR_RADIUS ?? 0.40;
-    const collarY = V5.COLLAR_Y ?? 0.90;
-    const strutLen = V5.STRUT_LENGTH ?? 1.60;
-    strutLocalDirection(arm.getAimAlpha(), azRad, _leanAsideDirTmp);
-    const tipX = Math.cos(azRad) * collarR + _leanAsideDirTmp.x * strutLen - mx;
-    const tipY = Math.sin(azRad) * collarR + _leanAsideDirTmp.y * strutLen - my;
-    const tipZ = collarY + _leanAsideDirTmp.z * strutLen - mz;
-    if (tipZ <= 0) return false; // aft of the muzzle plane — cannot clip the corridor
-
-    return (tipX * tipX + tipY * tipY) < radiusM * radiusM;
+    return strutTipFoulsCorridor(
+      arm.getAimAlpha(),
+      azRad,
+      V5.COLLAR_RADIUS ?? 0.40,
+      V5.COLLAR_Y ?? 0.90,
+      V5.STRUT_LENGTH ?? 1.60,
+      { x: mx, y: my, z: mz },
+      radiusM,
+    );
   }
 
   /**

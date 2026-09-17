@@ -281,9 +281,11 @@ export class InputManager {
    */
   _handlePointerDown(_e) {
     this._tryAudioUnlock();
-    // Opening dance: any input fast-forwards the remaining unfold (skip() is
-    // internally refused before the cut, so a menu-phase pointer that skips the
-    // MENU departure never also skips the dance).
+    // Opening dance: any input fast-forwards the remaining unfold. skip() is
+    // internally refused before the cut AND for a moment after a menu skip
+    // advanced the clock — MenuScreen's skip runs on window CAPTURE and this
+    // handler on BUBBLE, so without that second guard the one click that skips
+    // the MENU departure would also skip the dance.
     openingDance.skip();
   }
 
