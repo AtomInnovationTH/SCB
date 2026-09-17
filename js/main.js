@@ -51,6 +51,8 @@ import { gameFlowManager } from './systems/GameFlowManager.js';
 import { AutoLockController } from './systems/AutoLockController.js';
 import { powerDistribution } from './systems/PowerDistribution.js';
 import { launchSequence } from './systems/LaunchSequence.js';
+import { openingDance } from './systems/OpeningDance.js';
+import timerManager from './systems/TimerManager.js';
 import { trawlManager } from './systems/TrawlManager.js';
 import { AutopilotSystem } from './systems/AutopilotSystem.js';
 import { SkillsSystem } from './systems/SkillsSystem.js';
@@ -112,7 +114,7 @@ import { settingsManager } from './systems/SettingsManager.js';
 import { persistenceManager } from './systems/PersistenceManager.js';
 import { StrategicMap } from './ui/StrategicMap.js';
 import { WheelRouter } from './systems/WheelRouter.js';
-import { LadderController, INTRO_RIDE_MS } from './systems/LadderController.js';
+import { LadderController, INTRO_RIDE_MS, INTRO_DANCE_LANDING_Z01, INTRO_DANCE_DRIFT_Z01, INTRO_DANCE_DOLLY_MS, INTRO_DANCE_DWELL_CEILING_MS } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
 import { FloorMask } from './ui/hud/FloorMask.js';
 import { LadderViewStore } from './systems/LadderViewStore.js';
@@ -1440,6 +1442,11 @@ async function init() {
     // Ladder reorder rev 3: live floor for the DETAIL onboarding beat.
     // ladderController is constructed later; read live (GestureSplash idiom).
     floorProvider: () => ((ladderController && !ladderController.isRiding() && !(ladderController.introInFlight && ladderController.introInFlight())) ? ladderController.currentFloor() : null),
+    // Opening dance (plan 1789086956154 Task 5): the ORBITAL_VIEW start defers
+    // while the unfold is running — the dance is wordless; the boot beat waits
+    // for OPENING_DANCE_HANDOVER (the Director listens for it itself). Flag
+    // off / ?shot / reduced motion → isActive() is false → unchanged behavior.
+    deferWhile: () => openingDance.isActive(),
   });
 
 
@@ -2504,9 +2511,36 @@ async function init() {
       // disarms this on PERSISTENCE_LOADED (above). The first-run bit
       // (_introFirstRun) now gates only the GestureSplash.
       if (_introRideAllowed() && !_introFlown) {
-        ladderController.armIntroRide({ rideMs: INTRO_RIDE_MS, reducedMotion: _prefersReducedMotion() });
+        // Opening dance (2026-09-16, plan task 4 — "close, then drift out"):
+        // while the dance runs, the flyby is the dance's — the dive lands
+        // CLOSE on the hull (z01 0.23 ≈ 2.67 m) as the petals crack, the
+        // dwell's dolly drifts out to z01 0.82 ≈ 5.59 m through the wings'
+        // roll-out, and OPENING_DANCE_HANDOVER (the listener right below)
+        // ends the dwell the moment the ship is bloomed — dwellMs is only
+        // the CEILING (dance total + 2 s) for a dropped event, never the
+        // duration. Flag OFF (Constants.FEATURE_FLAGS.OPENING_DANCE): no
+        // dance runs and no hand-over ever fires — arm TODAY'S flyby (dive →
+        // the 800 ms breath → pull), never the ceiling, or the camera would
+        // squat at the hull for the full ceiling with nothing to wait for.
+        const _danceCamera = !!(Constants.FEATURE_FLAGS.OPENING_DANCE);
+        ladderController.armIntroRide({
+          rideMs: INTRO_RIDE_MS,
+          entryZ01: _danceCamera ? INTRO_DANCE_LANDING_Z01 : undefined,
+          dwellMs: _danceCamera ? INTRO_DANCE_DWELL_CEILING_MS : undefined,
+          dolly: _danceCamera ? { toZ01: INTRO_DANCE_DRIFT_Z01, rideMs: INTRO_DANCE_DOLLY_MS } : undefined,
+          reducedMotion: _prefersReducedMotion(),
+        });
         _introFlown = true;
       }
+    });
+    // Opening dance (plan task 4): the dance's HANDOVER is the ONE signal
+    // that ends the intro dwell — normal completion AND the skip both arrive
+    // here, so the camera never waits on its ceiling when the dance has
+    // already handed over, and never jumps ahead of it either (the ceiling
+    // is the fallback; the event is the truth). One listener, beside the
+    // arm above; inside the gate a ?ladder=0 boot registers nothing.
+    eventBus.on(Events.OPENING_DANCE_HANDOVER, () => {
+      if (ladderController) ladderController.endIntroDwellEarly();
     });
     // 2026-09-09 (owner: "fly-by every time"): the ONE re-open of the
     // `_introFlown` latch — back on the MENU (a game over's MENU button, a
@@ -3305,7 +3339,47 @@ async function init() {
   // with the GAME_STATE_CHANGE unhide that follows at MENU_START.
   eventBus.on(Events.MENU_DEPARTURE_REVEAL, () => {
     _setPlayerShipHidden(false);
+    // Opening dance (2026-09-16, plan task 3): the sim ship is revealed BEHIND
+    // the still-frame-filling hero — pack it now (belt and braces; the live
+    // dance pose is applied at MENU_START's bind). Only on a NEW-GAME
+    // departure: CONTINUE's short departure never arms the dance, and packing
+    // there would flash furled wings at the returning player.
+    if (_danceDeparture) openingDance.applyPacked(player);
   });
+
+  // Opening dance (plan task 3): arm the clock at MENU_DEPARTURE_START. t = 0
+  // is jet-off — 0.26 × the departure duration — NOT the departure start (no
+  // new jet-off event; MenuScene3D's own astronaut timeline shares the figure).
+  // Only the NEW-GAME departure arms it: CONTINUE fires MENU_DEPARTURE_START
+  // too (600 ms short pull-back) but lands on endState instead, and the
+  // ?shot / harness policy mirrors _introRideAllowed (suppressed unless
+  // &intro=1). Reduced motion never emits this event at all (straight cut).
+  // _danceDeparture latches for the reveal handler above.
+  let _danceDeparture = false;
+  eventBus.on(Events.MENU_DEPARTURE_START, ({ event, durationMs } = {}) => {
+    _danceDeparture = (event === Events.MENU_START) && _introRideAllowed();
+    if (!_danceDeparture) return;
+    const durMs = Number.isFinite(durationMs) ? durationMs : Constants.OPENING_DANCE.MENU_DEPARTURE_MS;
+    openingDance.start({
+      t0Ms: performance.now() + Constants.OPENING_DANCE.BEAT_JETOFF * durMs,
+    });
+    // ONE deferred tick at jet-off: the t = 0 beat edges (latch clunk + the
+    // ship's own STOW latch) fire while the state is still MENU, where the
+    // game loop's launchSequence.tick site (inside the isGameplay gate) has
+    // not been reached yet. Idempotent edges make a late fire harmless (a
+    // skipped menu fires it after the clock was advanced to cut-time).
+    const jetoffMs = Math.max(0, Math.round(Constants.OPENING_DANCE.BEAT_JETOFF * durMs));
+    timerManager.setTimeout(() => {
+      try { openingDance.tick(0); } catch (e) { console.error('[GameLoop] openingDance jet-off tick:', e); }
+    }, jetoffMs, { owner: 'openingDance' });
+  });
+  // Reset the latch when the menu returns (a later CONTINUE departure must
+  // not pack the ship on reveal).
+  if (Events.GAME_STATE_CHANGE) {
+    eventBus.on(Events.GAME_STATE_CHANGE, ({ to } = {}) => {
+      if (to === 'MENU') _danceDeparture = false;
+    });
+  }
 
   // #5 (deep-polish-4): power-up FLASH mask at the menu→sim cut — but ONLY for the
   // 'partial' orientation treatment. The randomly-chosen 'flyaround' treatment
@@ -6404,6 +6478,13 @@ function gameLoop(timestamp) {
   // 32; the first catch is the player's landing). Write-on-change inside;
   // false off the ladder / disengaged; the live-approach window is HUD's own
   // (the 2 Hz targets tick).
+  // Toast-inhibit audit (opening dance, plan task 8 / decision 12): the dance
+  // does NOT extend this inhibit. An inhibited HUD prompt is HELD and REPLAYED
+  // when the window closes — extending it across the unfold would parade every
+  // held alert at hand-over. Silence during the dance is enforced AT SOURCE
+  // (PlayerSatellite._danceDrivesMe gates, GameFlowManager's opening-comms and
+  // cameo gates, OnboardingDirector's deferWhile) — the intro-ride inhibit
+  // here keeps doing exactly what it did before the dance existed.
   if (hud && hud.setToastInhibit) hud.setToastInhibit(_ladderActive && !!(ladderController && ladderController.introInFlight && ladderController.introInFlight()));
 
   const currentState = gameState.currentState;
@@ -6505,6 +6586,13 @@ function gameLoop(timestamp) {
 
     // ST-9.11 C-5: Tick launch sequence (flag-gated internally)
     try { launchSequence.tick(dt); } catch (e) { console.error('[GameLoop] launchSequence:', e); }
+
+    // Opening dance (2026-09-16): beat-edge emission only — the pose itself is
+    // derived from the wall clock so the menu loop and this loop always agree.
+    // The game loop only reaches here post-cut (isGameplay); the ONE pre-cut
+    // beat edge (t = 0, jet-off) is fired by the deferred tick scheduled in the
+    // MENU_DEPARTURE_START handler while the state is still MENU.
+    try { openingDance.tick(dt); } catch (e) { console.error('[GameLoop] openingDance:', e); }
 
     // V-7: Drive launch cinematic visual effects (flag-gated internally)
     try { launchCinematic.update(dt); } catch (e) { console.error('[GameLoop] launchCinematic:', e); }

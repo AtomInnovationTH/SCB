@@ -74,6 +74,32 @@ export const INTRO_DWELL_MS = 800;
 export const INTRO_PULLBACK_MS = 800;
 
 /**
+ * Opening dance (2026-09-16, plan task 4 — "close, then drift out"): the
+ * dance flyby's camera figures, quoted from the plan's beat table against
+ * the 7 m F1/F2 boundary (task 9). The hub passes them to `armIntroRide`;
+ * they live here (beside INTRO_RIDE_MS) because they are CAMERA numbers, not
+ * dance-clock numbers — the dance owns WHEN, the ladder owns WHERE.
+ *
+ * Landing z01 0.23 → 2.67 m on F1 (the dive lands close as the petals crack);
+ * drift end 0.82 → 5.59 m (the dolly's target as the wings and arms open);
+ * both strictly inside the free zone (0.15–0.85) so the settle-back rule
+ * never yanks them to a wall edge. The dolly itself is 4.5 s (the drift
+ * spans the wings' roll-out, beat table 5.20 → 9.7).
+ */
+export const INTRO_DANCE_LANDING_Z01 = 0.23;
+export const INTRO_DANCE_DRIFT_Z01 = 0.82;
+export const INTRO_DANCE_DOLLY_MS = 4500;
+/**
+ * The dwell CEILING — never the exact duration (plan task 4): the dance's
+ * total (the radiator's 0→146° at the shipped 15°/s ≈ 9730 ms, the long
+ * pole) plus a 2 s drift margin. The dwell actually ends on
+ * OPENING_DANCE_HANDOVER (`endIntroDwellEarly`); this ceiling only fires the
+ * pull-back if that event is dropped, so the camera can never squat at the
+ * hull forever — and being a ceiling it is deliberately generous.
+ */
+export const INTRO_DANCE_DWELL_CEILING_MS = 11730;
+
+/**
  * Wave 5 Session K: the WORKBENCH floor — where the REFIT block (the one
  * shop) lives inside the workbench pane; the same floor id the shell's
  * `setFloor` keys the REFIT block on (Session U). An id, never a name
@@ -337,6 +363,19 @@ export class LadderController {
     this._introPhase = null;
     this._introDwellUntil = null;
     this._introDiveStartMs = null;
+    /**
+     * Opening dance (plan task 4): the armed flyby's dance options — the
+     * dive's entryZ01 override (null → the geometry default), the dwell
+     * CEILING (INTRO_DWELL_MS when not armed with one), the dolly
+     * `{ toZ01, rideMs }` fired once at the dwell's start, and the
+     * early-end latch set by endIntroDwellEarly() before the dwell begins
+     * (a skip's hand-over can arrive while the dive is still flying).
+     * Cleared on disarm/disengage; rewritten by every armIntroRide.
+     */
+    this._introEntryZ01 = null;
+    this._introDwellMs = INTRO_DWELL_MS;
+    this._introDolly = null;
+    this._introDwellEarly = false;
     /**
      * D5 (Wave 5 Session G): the last FREE-zone rest z01 on the applied floor —
      * the player's working position (see `isFreeRest`). Seeded at engage and
@@ -954,11 +993,34 @@ export class LadderController {
    * nothing is armed — the first frame IS the flying floor. Refused (false,
    * nothing armed) while engaged in gameplay, when the contract has no top /
    * landing floor, or when the placement fails.
-   * @param {{ rideMs?: number, reducedMotion?: boolean }} [arg]
+   *
+   * Opening dance (plan task 4) — the new options all default to today's
+   * values (absent → byte-identical flyby, pinned):
+   *   `entryZ01` — the DIVE's landing z01 (null → the floor rule); the dance
+   *     arms 0.23 (2.67 m on F1: the dive lands close as the petals crack).
+   *   `dwellMs` — the dwell CEILING, not its duration (INTRO_DWELL_MS
+   *     stands when absent): the dance's hand-over event ends the dwell via
+   *     endIntroDwellEarly(); this only fires the pull-back if the event is
+   *     dropped. The dance arms dance-total + 2 s.
+   *   `dolly` — `{ toZ01, rideMs }` or absent: a silent within-floor ride
+   *     (ZoomLadder.dollyTo) fired by _introTick ITSELF on the dive→dwell
+   *     transition — nobody else knows when the dive lands. One shot; never
+   *     fired when the dwell was already ended early (a skip's hand-over
+   *     arrived mid-dive: there is nothing left to watch).
+   * @param {{ rideMs?: number, entryZ01?: number, dwellMs?: number,
+   *           dolly?: { toZ01: number, rideMs?: number },
+   *           reducedMotion?: boolean }} [arg]
    * @returns {boolean} whether the intro was armed (or, reduced, placed)
    */
-  armIntroRide({ rideMs, reducedMotion = false } = {}) {
+  armIntroRide({ rideMs, entryZ01, dwellMs, dolly, reducedMotion = false } = {}) {
     this._introPending = null;
+    // Opening-dance options reset to today's defaults FIRST — every early
+    // return below (reduced motion, a contract without headroom, a refused
+    // placement) leaves nothing dance-shaped armed.
+    this._introEntryZ01 = null;
+    this._introDwellMs = INTRO_DWELL_MS;
+    this._introDolly = null;
+    this._introDwellEarly = false;
     const ids = FloorContract.FLOORS.map((f) => f.id).filter((id) => Number.isFinite(id));
     if (!ids.length || !ids.includes(INTRO_LANDING_FLOOR)) return false;
     if (reducedMotion) return this._placeWhileHidden(INTRO_LANDING_FLOOR, 0.5);
@@ -969,11 +1031,33 @@ export class LadderController {
     if (!this._placeWhileHidden(top, 0.5)) return false;
     const ms = Number(rideMs);
     this._introPending = (Number.isFinite(ms) && ms > 0) ? ms : INTRO_RIDE_MS;
+    if (typeof entryZ01 === 'number' && Number.isFinite(entryZ01)) {
+      this._introEntryZ01 = Math.min(1, Math.max(0, entryZ01));
+    }
+    const dm = Number(dwellMs);
+    if (Number.isFinite(dm) && dm >= 0) this._introDwellMs = dm;
+    if (dolly && typeof dolly === 'object' && typeof dolly.toZ01 === 'number' &&
+        Number.isFinite(dolly.toZ01)) {
+      const drm = Number(dolly.rideMs);
+      this._introDolly = {
+        toZ01: Math.min(1, Math.max(0, dolly.toZ01)),
+        rideMs: (Number.isFinite(drm) && drm > 0) ? drm : null,
+      };
+    }
     return true;
   }
 
   /** Session N: a CONTINUE (PERSISTENCE_LOADED) is not a new game — drop an armed intro ride. */
-  disarmIntroRide() { this._introPending = null; this._introPhase = null; }
+  disarmIntroRide() {
+    this._introPending = null;
+    this._introPhase = null;
+    // Opening dance (plan task 4): drop the dance options with the arm — a
+    // later run's flyby is whatever ITS armIntroRide says, never this one's.
+    this._introEntryZ01 = null;
+    this._introDwellMs = INTRO_DWELL_MS;
+    this._introDolly = null;
+    this._introDwellEarly = false;
+  }
 
   /**
    * Session N.5b: true from an armed intro until the flyby fully lands (or is
@@ -984,10 +1068,41 @@ export class LadderController {
   introInFlight() { return this._introPending !== null || this._introPhase !== null; }
 
   /**
+   * Opening dance (plan task 4): end the intro dwell at the dance's
+   * hand-over — ONE path for both normal completion and skip, which is what
+   * makes it immune to clock drift between the two systems (the hub wires
+   * this to Events.OPENING_DANCE_HANDOVER; the dwellMs ceiling is only the
+   * dropped-event fallback, never the duration). In the dwell the ceiling
+   * drops to now, so the pull-back fires on the next tick. Called earlier —
+   * a skip's hand-over can land while the dive is still flying, or before
+   * the engage consumes the arm — it latches, and the dive→dwell transition
+   * makes the dwell zero-length (and fires no dolly: the ship is already
+   * bloomed, there is nothing left to watch). A no-op when no flyby is in
+   * flight (flag off, a CONTINUE, a cancelled intro).
+   */
+  endIntroDwellEarly() {
+    if (this._introPhase === 'dwell') {
+      this._introDwellUntil = this._now();
+    } else if (this._introPhase === 'dive' || this._introPending !== null) {
+      this._introDwellEarly = true;   // consumed by the dive→dwell transition
+    }
+  }
+
+  /**
    * @private Session N.5b — advance the intro FLYBY: dive lands → one breath
    * at the hull (INTRO_DWELL_MS) → the silent pull-back to
    * INTRO_LANDING_FLOOR → done. Player input after the dive started (any
    * verb that stamps _lastInputMs) cancels the remaining phases.
+   *
+   * Opening dance (plan task 4): when armed with dance options the breath is
+   * the DANCE's dwell — `dwellMs` is its CEILING (the hand-over event ends it
+   * early via endIntroDwellEarly; the ceiling only fires the pull-back if
+   * that event is dropped) — and the transition fires the armed DOLLY
+   * itself: a silent within-floor ride (ZoomLadder.dollyTo, the flickWall
+   * precedent) to the drift z01. Nobody else knows when the dive lands, so
+   * nobody else fires it. One shot; suppressed when the dwell was already
+   * ended early (a skip's hand-over arrived mid-dive — the camera should go
+   * straight to the pull-back, not drift around a fully-bloomed ship).
    */
   _introTick(t) {
     if (this._introPhase === null || !this._engaged) return;
@@ -996,7 +1111,20 @@ export class LadderController {
       return;
     }
     if (this._introPhase === 'dive') {
-      if (!this.isRiding()) { this._introPhase = 'dwell'; this._introDwellUntil = t + INTRO_DWELL_MS; }
+      if (!this.isRiding()) {
+        this._introPhase = 'dwell';
+        const early = this._introDwellEarly;
+        this._introDwellEarly = false;
+        this._introDwellUntil = early ? t : t + this._introDwellMs;
+        if (!early && this._introDolly) {
+          const d = this._introDolly;
+          this._introDolly = null;             // one shot
+          if (typeof this._ladder.dollyTo === 'function') {
+            const decisions = this._ladder.dollyTo({ tMs: t, z01: d.toZ01, rideMs: d.rideMs });
+            this._apply(decisions, t, { silent: true });
+          }
+        }
+      }
     } else if (this._introPhase === 'dwell') {
       if (t >= this._introDwellUntil) {
         const decisions = (typeof this._ladder.ceremonyRide === 'function')
@@ -1271,8 +1399,13 @@ export class LadderController {
       const ms = this._introPending;
       this._introPending = null;
       const t = (tMs === undefined) ? this._now() : tMs;
+      // Opening dance (plan task 4): the dive's landing z01 override — null
+      // passes the core its geometry default (byte-identical), 0.23 lands it
+      // close on the hull (2.67 m) as the petals crack.
+      const entryZ01 = this._introEntryZ01;
+      this._introEntryZ01 = null;
       const decisions = (typeof this._ladder.ceremonyRide === 'function')
-        ? this._ladder.ceremonyRide({ tMs: t, toFloor: WORKBENCH_FLOOR })
+        ? this._ladder.ceremonyRide({ tMs: t, toFloor: WORKBENCH_FLOOR, entryZ01 })
         : this._ladder.jump({ tMs: t, toFloor: WORKBENCH_FLOOR });
       this._apply(decisions, t, { rideMs: ms, silent: true });
       this._introPhase = 'dive';
@@ -1285,6 +1418,12 @@ export class LadderController {
     this._engaged = false;
     this._introPending = null;   // Session N review: an arm that never engaged does not survive into a later run
     this._introPhase = null;     // Session N.5b: nor does a mid-flyby phase (a cut mid-dwell never pulls back in a later run)
+    // Opening dance (plan task 4): nor do the dance options — a later run's
+    // flyby is whatever its own armIntroRide arms.
+    this._introEntryZ01 = null;
+    this._introDwellMs = INTRO_DWELL_MS;
+    this._introDolly = null;
+    this._introDwellEarly = false;
     if (this._cameraSystem && this._cameraSystem.ladderDisengage) {
       this._cameraSystem.ladderDisengage();
     }
@@ -1535,7 +1674,7 @@ export class LadderController {
     this._setConstellationsHidden(massBands);
     // City/landmark pills hide on F5 (above) AND on F1 (owner, 2026-09-02
     // evening — the map rule, 08-workbench D8: "house numbers up close, city
-    // names far out, never both"). At the hull, Earth is a backdrop 2–12 m
+    // names far out, never both"). At the hull, Earth is a backdrop 2–7 m
     // behind the ship and the pills land among the hull callout cards in the
     // same pill grammar. F1 is keyed on FLOOR ID (debrisMode is 'full' on both
     // F1 and F2); F2 keeps the shipped pills — the player's 5-key choice. Same

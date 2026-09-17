@@ -230,6 +230,12 @@ export class OnboardingDirector {
    *   null while the intro flyby / a ride is in flight, 2 on the flying floor.
    *   Absent → the DETAIL ticker beat never fires (safe default; main.js wires
    *   it inside the LADDER gate). Plan 1788867799156 Task 15 / locked #17.
+   * @param {Function} [deps.deferWhile]  — () => boolean, true while the
+   *   opening dance is still unfolding (main.js wires it to the openingDance
+   *   singleton; plan 1789086956154 Task 5). While true the ORBITAL_VIEW start
+   *   defers — the dance is wordless, so the boot beat waits for
+   *   OPENING_DANCE_HANDOVER instead of firing at the cut. Absent → the
+   *   pipeline starts exactly as before.
    */
   constructor(deps = {}) {
     this._eventBus = deps.eventBus;
@@ -239,6 +245,8 @@ export class OnboardingDirector {
     this._persistence = deps.persistenceManager || null;
     this._context = typeof deps.contextProvider === 'function' ? deps.contextProvider : null;
     this._floorProvider = typeof deps.floorProvider === 'function' ? deps.floorProvider : null;
+    /** @type {Function|null} opening-dance defer gate (see deps doc). */
+    this._deferWhile = typeof deps.deferWhile === 'function' ? deps.deferWhile : null;
     /** @type {object|null} GuidanceDirector — scales coaching depth per persona. */
     this._guidance = deps.guidanceDirector || null;
 
@@ -451,8 +459,19 @@ export class OnboardingDirector {
     on(Events.MISSION_START, () => this.start());
     if (Events.GAME_STATE_CHANGE) {
       on(Events.GAME_STATE_CHANGE, ({ to } = {}) => {
-        if (to === 'ORBITAL_VIEW') this.start();
+        if (to !== 'ORBITAL_VIEW') return;
+        // Opening dance (plan 1789086956154 Task 5): the ORBITAL_VIEW entry at
+        // the cut is mid-unfold and the dance is wordless — hold the boot beat
+        // until the hand-over instead of firing both at the cut.
+        if (this._deferWhile && this._deferWhile()) return;
+        this.start();
       });
+    }
+    // The dance hands the wheel over → the pipeline starts (normally the
+    // ORBITAL_VIEW start above deferred it). Idempotent: if the defer gate was
+    // absent (flag off / ?shot / reduced motion), this start() is a no-op.
+    if (Events.OPENING_DANCE_HANDOVER) {
+      on(Events.OPENING_DANCE_HANDOVER, () => this.start());
     }
     // DETAIL beat nudge: a zoom/pinch that lands F2 (CAMERA_ZOOM_INPUT is the
     // ladder ride's player-side witness). The intro landing has no zoom input

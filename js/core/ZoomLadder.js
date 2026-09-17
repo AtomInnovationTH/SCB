@@ -49,6 +49,15 @@
  * (the depot park under the SHOP overlay; the saved-view restore before the
  * first engage). Every visible transition is still a ride (00-spec §4).
  *
+ * Opening dance (2026-09-16, plan task 4): `ceremonyRide` takes an optional
+ * `entryZ01` override (the intro dive lands CLOSE on the hull floor — the
+ * geometry default stands when it is absent, byte-identical), and
+ * `dollyTo({tMs, z01, rideMs})` is a WITHIN-FLOOR ride to an arbitrary z01 —
+ * the dwell-phase camera drift, modeled on the G3 flickWall ride (same floor,
+ * no crossing). Like `place`, the dolly is not an input: the settle clock is
+ * untouched, so a target inside a wall band settles to the edge on the next
+ * update (02-traps T6) — callers keep targets in the free zone.
+ *
  * @module core/ZoomLadder
  */
 
@@ -434,10 +443,15 @@ export class ZoomLadder {
    * superseded completion; `_rideTo` re-targets the core exactly as a flick
    * upgrade does). Same floor → [] (already there — the caller opens the
    * drawer); unknown floor → []. Counts as an input (settle clock).
-   * @param {{ tMs: number, toFloor: number }} arg
+   *
+   * Opening dance (plan task 4): an optional `entryZ01` overrides the floor
+   * rule (ENTRY_Z01_FROM_BELOW / _FROM_ABOVE) — the intro dive lands CLOSE on
+   * the hull floor instead of at the geometry default. Absent / non-finite →
+   * today's value, byte-identical (pinned).
+   * @param {{ tMs: number, toFloor: number, entryZ01?: number }} arg
    * @returns {Array} Decision[] — one `ride` (kind 'ceremony') or []
    */
-  ceremonyRide({ tMs, toFloor }) {
+  ceremonyRide({ tMs, toFloor, entryZ01 }) {
     this._tick(tMs);
     this._lastInputTMs = tMs;
     if (toFloor === this._floor || !this._byId.has(toFloor)) return [];
@@ -451,8 +465,42 @@ export class ZoomLadder {
       this._cancelAlarmAutoRide(decisions);
       if (toFloor === this._floor) return decisions;
     }
-    decisions.push(...this._rideTo(toFloor, 'ceremony', null));
+    decisions.push(...this._rideTo(toFloor, 'ceremony', null, entryZ01));
     return decisions;
+  }
+
+  /**
+   * Opening dance (2026-09-16, plan task 4): a WITHIN-FLOOR ride to an
+   * arbitrary z01 on the CURRENT floor — the intro dwell's silent camera
+   * drift (the dive lands close; the dolly eases out while the wings roll
+   * out). Modeled on the G3 flickWall ride (`_startFlickWall`): same floor,
+   * no crossing, state moves to the target immediately (the camera never
+   * rests between floors — same law), the spring releases, the undo window
+   * clears. The decision carries `miniMs: rideMs` (null → the controller's
+   * CROSS_RIDE_MS, the flickWall precedent).
+   *
+   * NOT an input (the `place` law): `_lastInputTMs` is untouched, so a target
+   * inside a wall band settles to the edge on the next update — a placement
+   * can never leave the camera resting in the wall (02-traps T6). Callers
+   * keep targets in the free zone (WALL_ZONE_FRAC … 1 − WALL_ZONE_FRAC).
+   * Refused — [] — while a ride is in flight (the scripted dolly must never
+   * replace a player ride; S2 fires it exactly when the dive has landed) or
+   * for a non-finite z01. Deterministic; `rideMs` absent/non-positive → null.
+   * @param {{ tMs: number, z01: number, rideMs?: number }} arg
+   * @returns {Array} Decision[] — one `ride` (kind 'dolly') or []
+   */
+  dollyTo({ tMs, z01, rideMs }) {
+    this._tick(tMs);
+    if (this._ride) return [];
+    if (typeof z01 !== 'number' || !Number.isFinite(z01)) return [];
+    const target = Math.min(1, Math.max(0, z01));
+    const miniMs = (Number.isFinite(rideMs) && rideMs > 0) ? rideMs : null;
+    this._z01 = target;
+    this._ride = { kind: 'dolly', toFloor: this._floor };
+    this._settled = false;
+    this._releaseSpring();
+    this._clearUndoWindow();
+    return [{ type: 'ride', toFloor: this._floor, entryZ01: target, kind: 'dolly', miniMs }];
   }
 
   /**
@@ -811,29 +859,34 @@ export class ZoomLadder {
   }
 
   /**
-   * Shared ride starter for jump/esc/page/aimDown/alarmAuto. Applies the
-   * dock gate, moves the state to (toFloor, entryZ01) immediately (the
-   * camera never rests between floors), and marks the core riding.
+   * Shared ride starter for jump/esc/page/aimDown/alarmAuto/ceremony. Applies
+   * the dock gate, moves the state to (toFloor, entryZ01) immediately (the
+   * camera never rests between floors), and marks the core riding. The
+   * optional `entryZ01` (opening dance, plan task 4) overrides the floor rule
+   * (ENTRY_Z01_FROM_BELOW upward / _FROM_ABOVE downward), clamped to [0, 1];
+   * absent / non-finite → the geometry default, byte-identical.
    */
-  _rideTo(toId, kind, miniMs) {
+  _rideTo(toId, kind, miniMs, entryZ01) {
     const dest = this._byId.get(toId);
     if (!dest) return [];
     if (this._dockDenies(dest)) {
       return [{ type: 'denied', floor: dest.id, reason: 'undocked', hint: dest.humps?.deniedHint ?? null }];
     }
-    const entryZ01 = toId > this._floor
-      ? this._geo.ENTRY_Z01_FROM_BELOW
-      : this._geo.ENTRY_Z01_FROM_ABOVE;
+    const entry = (entryZ01 !== undefined && Number.isFinite(entryZ01))
+      ? Math.min(1, Math.max(0, entryZ01))
+      : (toId > this._floor
+        ? this._geo.ENTRY_Z01_FROM_BELOW
+        : this._geo.ENTRY_Z01_FROM_ABOVE);
     if (kind === 'alarmAuto') {
       this._preRide = { floor: this._floor, z01: this._z01 };   // scroll/Esc revert point
     }
     this._floor = toId;
-    this._z01 = entryZ01;
+    this._z01 = entry;
     this._ride = { kind, toFloor: toId };
     this._settled = false;
     this._releaseSpring();
     this._clearUndoWindow();   // navigating on — a pending flick-undo is stale (G3)
-    return [{ type: 'ride', toFloor: toId, entryZ01, kind, miniMs }];
+    return [{ type: 'ride', toFloor: toId, entryZ01: entry, kind, miniMs }];
   }
 
   /** Cancel a knock/klaxon-stage escalation (wheel or Esc arrived). */

@@ -17,6 +17,7 @@ import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
 import { classifyNetTarget } from './netRouting.js';
 import { computeLeadAim, netMaxReachM } from '../entities/CaptureNet.js';
+import { openingDance } from './OpeningDance.js';
 
 export class InputManager {
   constructor() {
@@ -280,6 +281,10 @@ export class InputManager {
    */
   _handlePointerDown(_e) {
     this._tryAudioUnlock();
+    // Opening dance: any input fast-forwards the remaining unfold (skip() is
+    // internally refused before the cut, so a menu-phase pointer that skips the
+    // MENU departure never also skips the dance).
+    openingDance.skip();
   }
 
   /** Start listening for keyboard events */
@@ -414,6 +419,13 @@ export class InputManager {
         && e.code === 'KeyI' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       return;
     }
+
+    // Opening dance (2026-09-16, decision 10): any input fast-forwards the
+    // remaining unfold over ~0.5 s, then control. The key is never eaten —
+    // skip() is a side note, not a wall (the lasso-cut hook below follows the
+    // same rule). Internally refused before the cut (t < 2.70 s), where input
+    // belongs to MenuScreen's own departure skip instead.
+    openingDance.skip();
 
     this.keys[e.code] = true;
     const d = this._deps;
@@ -1236,7 +1248,11 @@ export class InputManager {
             a._strutTargetAlpha ?? (a.getAimAlpha ? a.getAimAlpha() : 0);
           const anyDeployed = arms.some(a =>
             a.state === Constants.ARM_STATES.DOCKED && armAlpha(a) >= Math.PI / 2);
-          const targetAlpha = anyDeployed ? 0 : Math.PI;
+          // Opening-dance plan decision 5: deploy TARGET is 146°
+          // (Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA), not the π sweep
+          // ceiling — named once, read identically by ArmManager's public
+          // mirror of this same latch/guard (do-not-edit-there).
+          const targetAlpha = anyDeployed ? 0 : Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA;
           for (const arm of arms) {
             if (arm.state === Constants.ARM_STATES.DOCKED) {
               arm._strutTargetAlpha = targetAlpha;

@@ -25,6 +25,13 @@ import { ArmUnit } from '../entities/ArmUnit.js';
 import { FlagDecalSystem } from './FlagDecalSystem.js';
 import { settingsManager } from '../systems/SettingsManager.js';
 import { getLanguage } from '../core/Languages.js';
+// The opening-dance clock is a module singleton imported DIRECTLY (the plan
+// locks this in: MenuScene3D is constructed inside MenuScreen with no
+// dependency channel — same pattern as Constants / PlayerSatellite above).
+// _tick reads progress() while the dance is active: the SAME wall-clock value
+// the sim ship reads after the cut, so the unmasked 'flyaround' departure
+// stays continuous across the menu→game hand-off.
+import { openingDance } from '../systems/OpeningDance.js';
 
 // Lazily-created singleton flag painter (Canvas2D). Reused for every patch
 // repaint — cheap, browser-only, and independent of the debris flag atlas.
@@ -1085,6 +1092,92 @@ export function neutralizePhantomSatellite(mother) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// PUBLIC: opening-dance hero helpers (plan task 2 — the packed hero).
+// Exported for the same reason neutralizePhantomSatellite is: the hero-pose
+// suite drives the REAL helpers against a REAL PlayerSatellite headlessly,
+// instead of pinning a duplicated copy of this logic.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Install both aft flower pairs on the menu hero, mirroring the sim ship's
+ * FLOWER_PREINSTALLED boot state (main.js applies both pairs through
+ * applyUpgrade at boot) — this closes the old "menu ship has no flower"
+ * mismatch with the flown ship. Deliberately NOT routed through
+ * PlayerSatellite._installFlowerPair: that method emits a COMMS_MESSAGE on
+ * the global bus, and neutralizePhantomSatellite stubs gameplay HANDLERS, not
+ * bus emits — a phantom must never talk on the comms channel. Same
+ * construction path minus the comms line: set the pair flag, build, then one
+ * detail-mesh re-collect for the new MountBolt_* hardware.
+ * @param {PlayerSatellite} mother - phantom, display-only satellite instance
+ */
+export function installHeroFlowerPairs(mother) {
+  // Mirror the sim ship's hardware: no preinstalled flower there → none here.
+  if (!Constants.FEATURE_FLAGS.FLOWER_PREINSTALLED) return;
+  for (const pairKey of ['A', 'B']) {
+    if (mother._flowerPairs[pairKey]) continue;
+    mother._flowerPairs[pairKey] = true;
+    mother._buildFlowerPair(pairKey);
+  }
+  // New meshes joined the tree: refresh the DETAIL-LOD cull set (the same
+  // refresh _installFlowerPair performs after each pair).
+  mother._collectDetailMeshes();
+}
+
+/**
+ * Snap the hero to the PACKED pose — radiator folded fore along the barrel
+ * (theta = POSE_LAUNCH_DEG, launch lock armed so the sub-floor sweep the
+ * dance drives stays legal), ROSA wings furled to their rolled stubs. This is
+ * OpeningDance.applyPacked(ship) minus the isActive() gate: at hero-build
+ * time the dance is not armed yet (it arms on MENU_DEPARTURE_START), so the
+ * menu applies the pose itself. Idempotent; emits nothing.
+ * @param {PlayerSatellite} mother - phantom, display-only satellite instance
+ */
+export function applyHeroPackedPose(mother) {
+  const FL = Constants.THERMAL.FLOWER;
+  mother._flowerLaunchLock = true;
+  mother._flowerOverrideFold = false;
+  mother._flowerTargetTheta = undefined;
+  mother._flowerThetaRad = (FL.POSE_LAUNCH_DEG * Math.PI) / 180;
+  mother._updateFlower(0);
+  mother._setRosaWingProgress(1, 0);
+  mother._setRosaWingProgress(2, 0);
+  // The hero never runs update()/_updateRosaPanels, so the furl state that
+  // _animateSolarTracking's blend reads must be written here too: a furled
+  // wing parks its pivot at 0° tilt instead of sun-tracking the rolled
+  // cylinder (round-3 fix, same law as the flown ship).
+  mother._rosaFurlProgress = 0;
+}
+
+/**
+ * Drive the hero from the opening-dance clock for one frame. `p` is the
+ * documented progress() shape ({ flower, wing1, wing2, ... }); the hero is a
+ * display-only phantom whose update() never runs, so MenuScene3D._tick calls
+ * this directly with openingDance.progress(). Pure mesh writes, emits
+ * nothing. The daughter strut beat (p.struts) is deliberately ignored: the
+ * hero has no armManager, and that beat begins after the cut anyway.
+ * @param {PlayerSatellite} mother - phantom, display-only satellite instance
+ * @param {{ flower?: number, wing1?: number, wing2?: number }} p - dance progress
+ */
+export function applyHeroDanceProgress(mother, p) {
+  const FL = Constants.THERMAL.FLOWER;
+  const fromRad = (FL.POSE_LAUNCH_DEG * Math.PI) / 180;
+  const toRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+  // Clamp defensively: a stub or driver bug must not push the pose past the
+  // hardware band (the flower clamp inside _updateFlower bounds theta anyway,
+  // but the wing roll-out scale has no internal bound).
+  const flower = _clamp01(p.flower ?? 0);
+  const wing1 = _clamp01(p.wing1 ?? 0);
+  const wing2 = _clamp01(p.wing2 ?? 0);
+  mother._flowerThetaRad = fromRad + (toRad - fromRad) * flower;
+  mother._updateFlower(0);
+  mother._setRosaWingProgress(1, wing1);
+  mother._setRosaWingProgress(2, wing2);
+  // Mirror _updateRosaPanels' driver branch so the tracking blend follows the
+  // roll-out exactly as it would on the flown ship.
+  mother._rosaFurlProgress = Math.min(wing1, wing2);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // PUBLIC: MenuScene3D
 // ═════════════════════════════════════════════════════════════════════════════
 export class MenuScene3D {
@@ -1142,6 +1235,13 @@ export class MenuScene3D {
     this._departureDur = 1.6;       // seconds (skippable)
     this._departureBaseOrbitR = 5.5;
     this._departureOrbitR = 8.0;
+
+    // ── Opening dance (plan task 2) ──
+    // True while the hero sits in the packed pose (set at build and by the
+    // menu-return reset). Gates the per-frame dance driving in _tick: a
+    // reduced-motion or flag-off hero is never packed, so it is never
+    // dance-driven either — nothing may snap a deployed hero back to theta 0.
+    this._heroPacked = false;
 
     // ── T5 astronaut exit beat (deep-polish-4) ──
     // Runtime refs + captured base poses populated in init(); the per-departure
@@ -1264,6 +1364,11 @@ export class MenuScene3D {
     this._weldLight.position.set(0, 0, 0); // updated each frame
     this.scene.add(this._weldLight);
 
+    // prefers-reduced-motion — read once and live-listen for changes. Runs
+    // BEFORE the hero ship is built so the packed-pose decision below sees
+    // the real preference (under reduced motion the hero is never packed).
+    this._initReducedMotion();
+
     // ── Build scene objects ──
     const mat = makeMaterials();
 
@@ -1305,6 +1410,20 @@ export class MenuScene3D {
     // ROSA cell faces a constant energized power-flow glow (see _animateRosaGlow).
     mother._rosaGlowIdleFloor = 0.55;
     this._mother = mother;
+
+    // Opening dance (plan task 2): the hero mirrors the sim ship's
+    // FLOWER_PREINSTALLED hardware (both aft pairs) and STARTS PACKED —
+    // radiator folded fore along the barrel, wings furled — so the unfold can
+    // begin the instant she jets off, with no pop at the menu→game cut.
+    // Applied BEFORE the weld-site snap below reads strutGroups, so the snap
+    // sees the final strut topology. Reduced motion and a flag-off build skip
+    // the pack: the hero stays deployed (a ship is never seen packed outside
+    // a running dance).
+    installHeroFlowerPairs(mother);
+    if (!this._reducedMotion && Constants.FEATURE_FLAGS.OPENING_DANCE) {
+      applyHeroPackedPose(mother);
+      this._heroPacked = true;
+    }
 
     // MLI foil v6: give ONLY the gold MLI materials a synthetic orbital env map
     // (sun + void + Earth) so the near-mirror foil reads as broken white/dark
@@ -1521,9 +1640,6 @@ export class MenuScene3D {
     };
     eventBus.on(Events.PERF_TIER_CHANGED, this._tierHandler);
 
-    // prefers-reduced-motion — read once and live-listen for changes.
-    this._initReducedMotion();
-
     // Apply the initial tier (sets pixelRatio + bloom enable) before the first
     // size pass so the composer target is created at the right resolution.
     this._applyTierSettings();
@@ -1627,6 +1743,18 @@ export class MenuScene3D {
         this._reducedMotion = !!e.matches;
         // Snap the camera to the sway centre immediately when motion is reduced.
         if (this._reducedMotion) this._applyReducedMotionPose();
+        // Opening-dance hero: reduced motion never shows the packed pose, and
+        // a mid-idle toggle back must re-pack so the next departure still
+        // starts packed (the dance drives from progress 0 = packed; a deployed
+        // hero there would snap to theta 0 in one frame). Skipped while a
+        // departure runs — freezing a live unfold mid-beat is worse.
+        if (!this._mother || this._departure) return;
+        if (this._reducedMotion) {
+          this._deployHero();
+        } else if (Constants.FEATURE_FLAGS.OPENING_DANCE) {
+          applyHeroPackedPose(this._mother);
+          this._heroPacked = true;
+        }
       };
       // addEventListener is the modern API; addListener is the deprecated fallback.
       if (typeof this._motionMedia.addEventListener === 'function') {
@@ -1676,6 +1804,10 @@ export class MenuScene3D {
     this._departure = null;
     this._exit = null;
     this._resetAstronautExit();
+    // Opening dance: restore the hero's menu pose — packed again for the next
+    // departure (a second visit must not show wherever the previous dance left
+    // the flower/wings), or deployed under reduced motion / flag off.
+    this._restoreHeroMenuPose();
     // Reset the frame gate so resume renders immediately rather than bursting.
     this._lastFrameT = 0;
     // The menu just became visible — force a correct size once layout is live
@@ -1786,6 +1918,45 @@ export class MenuScene3D {
     }
     // Rebuild the tether if a prior exit removed/retracted it.
     this._rebuildTether(0);
+  }
+
+  /**
+   * @private Restore the hero ship's menu pose (called from start()'s
+   * menu-return reset): packed for the next departure, or deployed under
+   * reduced motion / a flag-off build. Undoes whatever the previous
+   * departure's dance left on the flower + wings so a second menu visit shows
+   * the same hero as the first.
+   */
+  _restoreHeroMenuPose() {
+    if (!this._mother) return;
+    if (this._reducedMotion || !Constants.FEATURE_FLAGS.OPENING_DANCE) {
+      this._deployHero();
+    } else {
+      applyHeroPackedPose(this._mother);
+      this._heroPacked = true;
+    }
+  }
+
+  /**
+   * @private Land the hero on the DEPLOYED pose — radiator at the stow bud,
+   * wings fully rolled out. Written by hand rather than calling
+   * snapFlowerToStow(): that emits THERMAL_FLOWER_RELEASED on the global bus
+   * when the launch lock was armed, and a phantom must never talk on the bus
+   * (same law as installHeroFlowerPairs bypassing _installFlowerPair's
+   * comms line). Emits nothing; idempotent.
+   */
+  _deployHero() {
+    if (!this._mother) return;
+    const FL = Constants.THERMAL.FLOWER;
+    this._mother._flowerLaunchLock = false;
+    this._mother._flowerOverrideFold = false;
+    this._mother._flowerTargetTheta = undefined;
+    this._mother._flowerThetaRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+    this._mother._updateFlower(0);
+    this._mother._setRosaWingProgress(1, 1);
+    this._mother._setRosaWingProgress(2, 1);
+    this._mother._rosaFurlProgress = 1;
+    this._heroPacked = false;
   }
 
   /**
@@ -1957,6 +2128,17 @@ export class MenuScene3D {
       }
       if (this._mother) this._mother.rotation.z = MOTHER_BASE_ROLL_Z + EXIT_DEROLL * rollEase;
       this._setAstroOpacity(1);   // 'partial' never dissolves
+    }
+
+    // Opening dance — while the dance runs, drive the hero from the SAME
+    // wall-clock progress() the sim ship reads after the cut, so the menu→game
+    // cut is continuous in the UNMASKED 'flyaround' departure (half of them —
+    // no power-up flash hides a pop there). _heroPacked gates it: a
+    // reduced-motion or flag-off hero is never packed, so it is never
+    // dance-driven. The daughter strut beat is not applied — the hero has no
+    // armManager, and that beat begins after the cut anyway.
+    if (this._mother && this._heroPacked && openingDance.isActive()) {
+      applyHeroDanceProgress(this._mother, openingDance.progress());
     }
 
     // Living hero — drive the Mother's OWN animators (nav-light blink/strobe,

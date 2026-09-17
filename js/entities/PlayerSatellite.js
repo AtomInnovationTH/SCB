@@ -2900,7 +2900,11 @@ export class PlayerSatellite extends THREE.Group {
       const prog = ls.getRosaProgress();
       this._setRosaWingProgress(1, prog.wing1);
       this._setRosaWingProgress(2, prog.wing2);
-      this._rosaFurlProgress = Math.min(prog.wing1, prog.wing2);
+      // Opening-dance task 6: the AVERAGE, not the min — with the min the power
+      // readout stays body-only until the second wing starts, which read as a
+      // dead battery during the dance's staggered wing roll-out. Both wings end
+      // at 1.0, so the hand-over state is unchanged.
+      this._rosaFurlProgress = (prog.wing1 + prog.wing2) / 2;
       this._rosaFurlTarget = 1.0;
       return;
     }
@@ -2990,6 +2994,21 @@ export class PlayerSatellite extends THREE.Group {
    */
   setLaunchSequence(ls) {
     this._launchSequence = ls;
+  }
+
+  /**
+   * @private Opening-dance silence gate (plan task 8, decision 12): true while
+   * the injected launch driver is the opening dance AND it is actively running.
+   * The unfold is wordless — anything it would say is suppressed AT SOURCE, not
+   * held by the HUD toast inhibit (an inhibited prompt is held and REPLAYED
+   * when the window closes, which would parade at hand-over). Duck-typed on the
+   * driver's `isOpeningDance` marker: no import either way, and the
+   * LaunchSequence driver (a distinct class) never trips it.
+   * @returns {boolean}
+   */
+  _danceDrivesMe() {
+    const ls = this._launchSequence;
+    return !!(ls && ls.isOpeningDance === true && typeof ls.isActive === 'function' && ls.isActive());
   }
 
   // --------------------------------------------------------------------------
@@ -3237,7 +3256,11 @@ export class PlayerSatellite extends THREE.Group {
     this._flowerTargetTheta = undefined;
     this._flowerThetaRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
     this._updateFlower(0);
-    if (wasLocked) eventBus.emit(Events.THERMAL_FLOWER_RELEASED, { thetaDeg: FL.POSE_STOW_DEG });
+    // Opening dance: the release event is suppressed while the dance drives
+    // this ship (wordless unfold — task 8's known emitter #2).
+    if (wasLocked && !this._danceDrivesMe()) {
+      eventBus.emit(Events.THERMAL_FLOWER_RELEASED, { thetaDeg: FL.POSE_STOW_DEG });
+    }
   }
 
   /**
@@ -3252,13 +3275,17 @@ export class PlayerSatellite extends THREE.Group {
     // New meshes joined the tree: refresh the DETAIL-LOD cull set so the
     // flower's MountBolt_* hardware rides the existing inert-detail family.
     this._collectDetailMeshes();
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      sender: 'THERMAL',
-      text: pairKey === 'A'
-        ? 'Aft flower pair A installed — radiator struts at az 40/220. They open LIKE A FLOWER: press O.'
-        : 'Aft flower pair B installed — full four-strut flower at az 40/140/220/320. O deploys and stows.',
-      priority: 'info',
-    });
+    // Opening dance: the install line is suppressed while the dance drives
+    // this ship (wordless unfold — task 8's known emitter #1).
+    if (!this._danceDrivesMe()) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'THERMAL',
+        text: pairKey === 'A'
+          ? 'Aft flower pair A installed — radiator struts at az 40/220. They open LIKE A FLOWER: press O.'
+          : 'Aft flower pair B installed — full four-strut flower at az 40/140/220/320. O deploys and stows.',
+        priority: 'info',
+      });
+    }
   }
 
   /**
@@ -3634,7 +3661,11 @@ export class PlayerSatellite extends THREE.Group {
     if (releasing && this._flowerThetaRad >= orbitFloorRad - 1e-9) {
       this._flowerLaunchLock = false;
       this._flowerOverrideFold = false;
-      eventBus.emit(Events.THERMAL_FLOWER_RELEASED, { thetaDeg: (this._flowerThetaRad * 180) / Math.PI });
+      // Opening dance: the θ = 90° release stays quiet while the dance drives
+      // this ship (wordless unfold — task 8's known emitter #2).
+      if (!this._danceDrivesMe()) {
+        eventBus.emit(Events.THERMAL_FLOWER_RELEASED, { thetaDeg: (this._flowerThetaRad * 180) / Math.PI });
+      }
     }
 
     if (stepping && Math.abs(this._flowerThetaRad - target) < FL.SETTLE_EPS_RAD
@@ -6090,6 +6121,11 @@ export class PlayerSatellite extends THREE.Group {
    */
   _warnFlowerThrustInhibit(type) {
     if (!this._flowerPoseBandGuard()) return;
+    // Opening dance: the unfold is wordless (decision 12) — and any input
+    // fast-forwards it, so the engine answers with no caution line (plan
+    // validation: "press a thrust key at ~2 s — no caution line"). The
+    // interlock refusal itself is untouched; only the narration is silenced.
+    if (this._danceDrivesMe()) return;
     const now = performance.now();
     if (now - this._lastFlowerInhibitWarning < 3000) return;
     this._lastFlowerInhibitWarning = now;

@@ -22,6 +22,7 @@ import { kesslerSystem } from './KesslerSystem.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
 import { trawlManager } from './TrawlManager.js';
 import { launchSequence } from './LaunchSequence.js';
+import { openingDance } from './OpeningDance.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
@@ -395,7 +396,9 @@ export class GameFlowManager {
 
     // Menu → Start (skip briefing, go straight to orbital gameplay)
     eventBus.on(Events.MENU_START, (data) => {
-      this.resetGame();
+      // keepOpeningDance: the sim ship is bound to the live dance a few lines
+      // below, in this same tick, so resetGame must not land it on endState.
+      this.resetGame({ keepOpeningDance: true });
       // deep-polish-4: if the player SKIPPED the menu departure, suppress the
       // sim intro zoom too (respect the skip). Set AFTER resetGame(), which
       // clears the flag. Read once by the ORBITAL_VIEW enter below.
@@ -410,6 +413,16 @@ export class GameFlowManager {
         const { armManager } = this._refs;
         launchSequence.start(armManager, persistenceManager);
       }
+      // Opening dance (2026-09-16): the sim ship joins the unfold HERE — after
+      // resetGame() (whose snapFlowerToStow / furl reset just ran) and in the
+      // same tick, so no frame draws a deployed ship after the cut. A skipped
+      // menu still starts the game side from the cut-time state (2.70 s). When
+      // the dance is NOT running (?shot / harness, reduced motion, flag off),
+      // resetGame() already landed the ship on openingDance.endState().
+      if (openingDance.isActive()) {
+        openingDance.advanceClockToCutTime();
+        openingDance.bindShip(this._refs.player);
+      }
       this.transitionToState(GameStates.ORBITAL_VIEW);
     });
 
@@ -419,6 +432,8 @@ export class GameFlowManager {
     // (matching the codebase convention of retaining unused Events constants,
     // e.g. PERSISTENCE_SAVED) and is byte-identical to MENU_START above.
     eventBus.on(Events.MENU_FAST_START, () => {
+      // NOT keepOpeningDance: unlike MENU_START this reserved hook never binds
+      // the sim ship to the dance, so it must land on the finished pose.
       this.resetGame();
       this._applyStartLocation();   // place ground track over the player's home region
       this._stageOpeningLight();    // fresh M1 spawn opens sunlit (new-game paths only)
@@ -1362,6 +1377,16 @@ export class GameFlowManager {
           const { debrisField, player } = this._refs;
           if (!player || !debrisField) return;
 
+          // Opening dance: this fires at cut+3.6 s — mid-unfold. The dance is
+          // wordless (decision 12: suppress at source, do NOT hold — a held
+          // line would replay at hand-over); the onboarding pipeline that
+          // starts at hand-over owns the teaching instead. Consumed, not
+          // deferred, so it never lands later either.
+          if (openingDance.isActive()) {
+            this._firstTimeComms.add('orbital_view_opening');
+            return;
+          }
+
           // Target acquisition is owned by AutoLockController (reward-first
           // spine) from the first frame — no auto-target call needed here.
           if (!this._firstTimeComms.has('orbital_view_opening')) {
@@ -1408,6 +1433,12 @@ export class GameFlowManager {
             // the pad's pill at ignition ("launching NOW") — then the plume
             // itself holds the eye.
             cityLabels.pulse(pad.name, LAUNCH_FLASH_S);
+            // Opening dance: the cameo poll first lands at cut+7 s — exactly
+            // the hand-over instant. The plume still rises; only the comms
+            // line waits (the dance is wordless, and the Houston hand-over
+            // line + onboarding boot beat own that moment). A later poll
+            // announces normally if the pad is still unfired.
+            if (openingDance.isActive()) return;
             eventBus.emit(Events.COMMS_MESSAGE, {
               sender: 'SPACECRAFT',
               text: `${pad.vehicle} lifting off from ${pad.name} — 350 km below you.`,
@@ -1633,8 +1664,22 @@ export class GameFlowManager {
     if (cart && cart.position) sunLight.stageOpeningLight(cart.position);
   }
 
-  /** Reset game state for new attempt */
-  resetGame() {
+  /**
+   * Reset game state for new attempt.
+   *
+   * @param {object} [opts]
+   * @param {boolean} [opts.keepOpeningDance=false] — the caller is a NEW-GAME
+   *   start that binds the sim ship to a live opening dance immediately after
+   *   this returns (MENU_START / MENU_FAST_START), so the finished pose must
+   *   NOT be applied here. Every other caller — CONTINUE, GAMEOVER retry,
+   *   GAMEOVER menu — leaves this false and lands on `openingDance.endState()`,
+   *   which also stops any dance still in flight. Inferring this from
+   *   `openingDance.isActive()` is what it replaces: that could not tell a
+   *   new-game start from a retry that happened to land mid-unfold, and the
+   *   retry then kept a packed ship on screen.
+   */
+  resetGame(opts) {
+    const keepOpeningDance = !!(opts && opts.keepOpeningDance);
     const {
       player, armManager,
       cameraSystem, resourceSystem,
@@ -1676,6 +1721,17 @@ export class GameFlowManager {
 
     // Reset V3 arm manager
     if (armManager) armManager.reset();
+
+    // Opening dance (2026-09-16): every path that does NOT run the dance lands
+    // on the open pose — CONTINUE, GAMEOVER retry, reduced motion, flag off,
+    // the ?shot harness — so a ship is never seen packed outside a running
+    // dance. AFTER armManager.reset() (which parks the daughters at α 0) so the
+    // strut latch survives. The ONE exception is the new-game start, which
+    // says so explicitly (`keepOpeningDance`) and binds the sim ship to the
+    // live progress in the same tick.
+    if (player && !keepOpeningDance) {
+      openingDance.endState(player);
+    }
 
     this.approachTarget = null;
     this.approachComplete = false;

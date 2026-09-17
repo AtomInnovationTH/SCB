@@ -8,9 +8,11 @@
  * no fairing, no launch-phase persistence writes, no arm launch lock.
  *
  * Feature-flag gated: FEATURE_FLAGS.OPENING_DANCE (default true). Flag off is
- * a TOTAL no-op — every path then lands on endState(ship), which is also the
- * CONTINUE / GAMEOVER-retry / reduced-motion / ?shot path. The one invariant:
- * a ship is NEVER seen in the packed pose outside a running dance.
+ * a TOTAL no-op (start/tick/skip/applyPacked do nothing) — every path then
+ * lands on endState(ship), which is also the CONTINUE / GAMEOVER-retry /
+ * reduced-motion / ?shot path. The one invariant: a ship is NEVER seen in the
+ * packed pose outside a running dance. endState itself is deliberately NOT
+ * flag-gated: with the flag off the ship still boots to the open pose.
  *
  * ── THE CLOCK IS WALL-CLOCK, NOT ACCUMULATED dt ─────────────────────────────
  * The dance is read from TWO independent render loops: MenuScene3D runs its own
@@ -20,7 +22,9 @@
  * cut would pop. So the dance stores a START TIMESTAMP and derives progress from
  * performance.now(); both loops call progress() and get the same answer.
  * tick(dt) exists ONLY to emit the beat edges once each — it must never
- * integrate the pose.
+ * integrate the pose. (The one exception is the skip fade, where the ship's own
+ * drivers physically cannot keep up: there tick APPLIES the pose, but it is
+ * still a pure function of the wall clock — nothing is ever accumulated.)
  *
  * ── THE DRIVER DUCK-TYPE ────────────────────────────────────────────────────
  * PlayerSatellite consumes only isActive() and getRosaProgress() from its
@@ -28,15 +32,24 @@
  * plus the isActive() gate on setFlowerPose('LAUNCH') and snapFlowerToLaunch().
  * So this class needs no edits to the flower/ROSA code at all: it is bound with
  * ship.setLaunchSequence(dance) and UNBOUND (setLaunchSequence(null)) at
- * hand-over, which is what returns the player's own furl control.
+ * hand-over, which is what returns the player's own furl control. The
+ * `isOpeningDance` marker below is the duck-typed tag PlayerSatellite's
+ * message-silence gates read (never an instanceof — no import either way).
  *
- * ── STATUS ──────────────────────────────────────────────────────────────────
- * PLACEHOLDER API CONTRACT (dispatcher, 2026-09-16). This file currently
- * declares the shape that js/ui/MenuScene3D.js, js/main.js and
- * js/systems/GameFlowManager.js import, and is INERT: isActive() is false,
- * progress() is zero, no events, no mesh writes. The driver lane replaces every
- * body below with the real beat table (plan task 1); the signatures and the
- * module-singleton export are the part other lanes depend on.
+ * ── BEATS (t = 0 at jet-off; anchors in Constants.OPENING_DANCE) ────────────
+ *   t = 0.00  latches pop; radiator 0° → 146° (ends 9.73) — the SHIP's own
+ *             15°/s driver (setFlowerPose('STOW') latches the target; the hero
+ *             is driven from progress() by MenuScene3D, the sim ship slews
+ *             itself once bound)
+ *   t = 2.70  cut to game (MENU_START): the sim ship is bound and snapped to
+ *             the live progress so the cut has no pop
+ *   t = 5.20  ROSA wing 1 rolls out (2.5 s);  t = 6.20  wing 2
+ *   t = 7.00  daughters begin, 0.25 s stagger, 0° → 146° each
+ *   t = 9.73  radiator + wings seated → OPENING_DANCE_HANDOVER; the player is
+ *             flying; the daughter tail keeps opening (~17.5 → COMPLETE)
+ * skip(): any input fast-forwards the remaining unfold over SKIP_FADE_S (0.5 s)
+ * to the exact hand-over state; the daughter tail still plays out. A player
+ * strut command during the tail wins immediately (decision 11).
  *
  * @module systems/OpeningDance
  */
@@ -44,6 +57,11 @@
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { audioSystem } from './AudioSystem.js';
+
+/** Beat-table anchors — the ONE named constants block (Constants.js). */
+const OD = Constants.OPENING_DANCE;
+const FL = Constants.THERMAL.FLOWER;
 
 /**
  * Zero progress — the shape every consumer sees before t = 0 and after unbind.
@@ -65,16 +83,38 @@ const ZERO_PROGRESS = Object.freeze({
   complete: false,
 });
 
+/** Full 0° → 146° radiator sweep at the shipped 15°/s — 9.7333 s, the long pole. */
+const FLOWER_TRAVEL_S = FL.POSE_STOW_DEG / (FL.SLEW_RATE_RAD_S * 180 / Math.PI);
+/** One ROSA wing at the gameplay furl rate (the `,` key's rate) — 2.5 s. */
+const WING_ROLL_S = 1 / Constants.OCTOPUS_V5.ROSA_FURL_RATE;
+/** Daughter strut sweep 0° → the open pose at the shipped 15°/s. */
+const STRUT_TRAVEL_S = OD.STRUT_OPEN_DEG / (Constants.OCTOPUS_V5.STRUT_SLEW_RATE * 180 / Math.PI);
+/** The open pose in radians — where the daughters bloom to and stay. */
+const STRUT_OPEN_RAD = (OD.STRUT_OPEN_DEG * Math.PI) / 180;
+/** The hand-over beat: the radiator (the long pole) seated. Wings end 8.70 < 9.73. */
+const T_HANDOVER_S = FLOWER_TRAVEL_S;
+
 class OpeningDance {
   constructor() {
+    /** Duck-typed tag: PlayerSatellite's message-silence gates read this (no
+     * instanceof, no import — the launch-sequence driver stays distinct). */
+    this.isOpeningDance = true;
     /** @private wall-clock ms at t = 0 (jet-off), or null when not armed */
     this._t0Ms = null;
     /** @private the ship currently driven — hero first, then the sim ship */
     this._ship = null;
-    /** @private */
+    /** @private true from start() until OPENING_DANCE_COMPLETE */
     this._running = false;
     /** @private set by skip(); the remaining unfold fast-forwards over SKIP_FADE_S */
-    this._skipAtMs = null;
+    this._skipStartMs = null;
+    /** @private dance time at the skip instant (t, may be pre-cut) */
+    this._skipFromT = 0;
+    /** @private the strut beat edges' stagger bookkeeping (last start, for T_COMPLETE) */
+    this._lastStrutStartS = OD.STRUT_START_S;
+    /** @private the dance's own strut writes, for player-takeover detection */
+    this._strutWrites = new Map();
+    /** @private beat-edge latch — each edge fires exactly once per arming */
+    this._fired = null;
   }
 
   /** @returns {boolean} the flag, read live so a test can flip it */
@@ -82,49 +122,304 @@ class OpeningDance {
     return !!Constants.FEATURE_FLAGS.OPENING_DANCE;
   }
 
+  /** @private the wall clock (seam for tests) */
+  _now() {
+    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  }
+
+  /**
+   * @private Dance time in seconds since jet-off. NEGATIVE before t = 0 (the
+   * caller clamps for progress; skip() refuses to act pre-cut). Skip-aware:
+   * during the SKIP_FADE_S window t is accelerated linearly toward
+   * T_HANDOVER_S, then resumes at 1× from there.
+   */
+  _t() {
+    if (this._t0Ms === null) return 0;
+    const now = this._now();
+    if (this._skipStartMs !== null) {
+      const fadeMs = OD.SKIP_FADE_S * 1000;
+      const elapsed = now - this._skipStartMs;
+      if (elapsed >= fadeMs) {
+        return T_HANDOVER_S + (elapsed - fadeMs) / 1000;
+      }
+      const u = elapsed / fadeMs;
+      return this._skipFromT + (T_HANDOVER_S - this._skipFromT) * u;
+    }
+    return (now - this._t0Ms) / 1000;
+  }
+
   /**
    * Arm the dance and set t = 0. Called from MENU_DEPARTURE_START; t = 0 is
    * jet-off (start + BEAT_JETOFF × durationMs), NOT the departure start — there
-   * is deliberately no new jet-off event.
-   * @param {{ t0Ms?: number }} [_opts]
+   * is deliberately no new jet-off event. Re-arming (a second menu departure)
+   * resets every beat latch.
+   * @param {{ t0Ms?: number }} [opts] — the jet-off timestamp; defaults to the
+   *   caller-derived menu figure (jet-off is 0.26 × the shipped departure)
    */
-  start(_opts) {
+  start(opts) {
     if (!this.enabled) return;
-    // TODO(driver lane): set _t0Ms from the departure start + BEAT_JETOFF.
+    const t0Ms = (opts && Number.isFinite(opts.t0Ms))
+      ? opts.t0Ms
+      : this._now() + OD.BEAT_JETOFF * OD.MENU_DEPARTURE_MS;
+    this._t0Ms = t0Ms;
+    this._running = true;
+    this._skipStartMs = null;
+    this._skipFromT = 0;
+    this._strutWrites.clear();
+    this._lastStrutStartS = OD.STRUT_START_S;
+    this._fired = { latch: false, wing1: false, wing2: false, struts: [], handover: false, complete: false };
+  }
+
+  /**
+   * Menu skip (MenuScreen's fast-forward / skipDeparture): the game side must
+   * always start from the SAME state, so the clock is advanced to its cut-time
+   * value. A menu skip skips the menu, not the dance (plan task 3). No-op once
+   * t is at or past the cut, so normal (unskipped) MENU_STARTs are untouched.
+   */
+  advanceClockToCutTime() {
+    if (!this.enabled || this._t0Ms === null || this._skipStartMs !== null) return;
+    const t = (this._now() - this._t0Ms) / 1000;
+    if (t < OD.T_CUT_S) this._t0Ms -= (OD.T_CUT_S - t) * 1000;
+  }
+
+  /**
+   * @private Stop the dance dead without emitting anything — no hand-over, no
+   * completion. Unbinds whatever ship it was driving (which is what returns
+   * furl control) and drops every beat latch, so a later start() re-arms from
+   * scratch. Idempotent; safe when the dance was never armed.
+   */
+  _abort() {
+    if (this._ship && typeof this._ship.setLaunchSequence === 'function') {
+      this._ship.setLaunchSequence(null);
+    }
+    this._ship = null;
+    this._running = false;
+    this._t0Ms = null;
+    this._skipStartMs = null;
+    this._skipFromT = 0;
+    this._strutWrites.clear();
+    this._fired = null;
   }
 
   /**
    * Bind the ship this dance drives. Called TWICE — the menu hero, then the sim
    * ship — and with null at hand-over to return furl control to the player.
-   * @param {object|null} _ship - a PlayerSatellite, or null to unbind
+   * While the dance is running, binding ALSO snaps the ship to the live
+   * progress in the same call (the MENU_START contract: no frame draws a
+   * deployed ship after the cut, and no packed ship survives it).
+   * @param {object|null} ship - a PlayerSatellite, or null to unbind
    */
-  bindShip(_ship) {
+  bindShip(ship) {
     if (!this.enabled) return;
-    // TODO(driver lane): ship.setLaunchSequence(this) / (null) handshake.
+    if (this._ship && this._ship !== ship && typeof this._ship.setLaunchSequence === 'function') {
+      this._ship.setLaunchSequence(null);
+    }
+    this._ship = ship || null;
+    if (!this._ship) return;
+    if (typeof this._ship.setLaunchSequence === 'function') this._ship.setLaunchSequence(this);
+    if (this._running && this._t0Ms !== null) this._syncShipPose(this._ship);
+  }
+
+  /**
+   * @private Snap `ship` to the CURRENT dance pose (the bind-time contract).
+   * The flower lock is re-armed (a resetGame between reveal and MENU_START
+   * cleared it via snapFlowerToStow), θ is jumped to the wall-clock value, and
+   * the STOW target is latched so the ship's OWN 15°/s driver continues the
+   * sweep from there — the two never disagree by more than frame jitter.
+   * @param {object} ship
+   */
+  _syncShipPose(ship) {
+    const p = this.progress();
+    if (ship._flowerGroups && ship._flowerGroups.length) {
+      ship._flowerLaunchLock = true;
+      ship._flowerOverrideFold = false;
+      ship._flowerTargetTheta = (FL.POSE_STOW_DEG * Math.PI) / 180;
+      ship._flowerThetaRad = p.flower * (FL.POSE_STOW_DEG * Math.PI) / 180;
+      if (typeof ship._updateFlower === 'function') ship._updateFlower(0);
+    }
+    if (typeof ship._setRosaWingProgress === 'function') {
+      ship._setRosaWingProgress(1, p.wing1);
+      ship._setRosaWingProgress(2, p.wing2);
+    }
+    if (ship._rosaFurlProgress !== undefined) {
+      ship._rosaFurlProgress = (p.wing1 + p.wing2) / 2;
+      ship._rosaFurlTarget = 1.0;
+      ship._rosaManualControl = false;
+    }
+    // Packed daughters: drop any stale slew target a previous run left behind
+    // (ArmUnit.reset does not clear it) so nothing creeps open before t = 7.
+    const arms = (ship.armManager && ship.armManager.arms) || [];
+    for (const arm of arms) {
+      if (arm && arm._strutTargetAlpha !== undefined) arm._strutTargetAlpha = undefined;
+    }
+  }
+
+  /**
+   * @private Apply the pose directly from the wall clock — used ONLY during
+   * the skip fade, where the ship's own 15°/s drivers cannot keep up with the
+   * fast-forward. Pure function of the clock; nothing is integrated.
+   * @param {object} ship
+   * @param {object} p - this.progress()
+   */
+  _applyShipPose(ship, p) {
+    if (ship._flowerGroups && ship._flowerGroups.length) {
+      ship._flowerThetaRad = p.flower * (FL.POSE_STOW_DEG * Math.PI) / 180;
+      if (typeof ship._updateFlower === 'function') ship._updateFlower(0);
+    }
+    if (typeof ship._setRosaWingProgress === 'function') {
+      ship._setRosaWingProgress(1, p.wing1);
+      ship._setRosaWingProgress(2, p.wing2);
+    }
+    if (ship._rosaFurlProgress !== undefined) {
+      ship._rosaFurlProgress = (p.wing1 + p.wing2) / 2;
+    }
   }
 
   /**
    * Emit the beat edges once each. MUST NOT integrate the pose — progress() is
    * derived from the wall clock so that both render loops agree.
-   * @param {number} _dt - seconds
+   * @param {number} _dt - seconds (unused: the clock is wall-clock)
    */
   tick(_dt) {
-    if (!this.enabled || !this._running) return;
-    // TODO(driver lane): edge-detect the beats, fire audio + the two events.
+    if (!this.enabled || !this._running || this._fired === null) return;
+    const p = this.progress();
+
+    // Skip fade: the ship's own drivers cannot keep up — apply the pose
+    // straight from the clock (pure; never integrated).
+    if (this._skipStartMs !== null && this._ship) this._applyShipPose(this._ship, p);
+
+    const t = Math.max(0, p.t);
+
+    if (!this._fired.latch) {
+      this._fired.latch = true;
+      // The latch clunk (decision 12: sound only). playArmDeploy with a short
+      // dur — the vocabulary count pins forbid a new entry (task 8).
+      try { audioSystem.playArmDeploy(0.2); } catch (_e) { /* headless */ }
+      // The ship's own 15°/s driver: latch the STOW target (the hero is driven
+      // from progress() by MenuScene3D instead — this latch is for a bound,
+      // self-updating ship).
+      if (this._ship && typeof this._ship.setFlowerPose === 'function') {
+        this._ship.setFlowerPose('STOW');
+      }
+    }
+
+    if (!this._fired.wing1 && t >= OD.WING1_START_S) {
+      this._fired.wing1 = true;
+      try { audioSystem.playArmDeploy(0.9); } catch (_e) { /* headless */ }
+    }
+    if (!this._fired.wing2 && t >= OD.WING2_START_S) {
+      this._fired.wing2 = true;
+      try { audioSystem.playArmDeploy(0.9); } catch (_e) { /* headless */ }
+    }
+
+    // Daughter stagger beats — write `arm._strutTargetAlpha` (the same latch
+    // the "." toggle drives); PlayerSatellite._updateStruts slews it at the
+    // shipped 15°/s. The tail runs past hand-over by design (decision 11).
+    const arms = (this._ship && this._ship.armManager && this._ship.armManager.arms) || [];
+    for (let i = 0; i < arms.length; i++) {
+      if (this._fired.struts[i]) continue;
+      const startS = OD.STRUT_START_S + i * OD.STRUT_STAGGER_S;
+      if (t < startS) continue;
+      this._fired.struts[i] = true;
+      this._lastStrutStartS = startS;
+      try { audioSystem.playArmDeploy(0.35); } catch (_e) { /* headless */ }
+      const arm = arms[i];
+      if (arm && (arm.state === undefined || arm.state === Constants.ARM_STATES.DOCKED)) {
+        arm._strutTargetAlpha = STRUT_OPEN_RAD;
+        this._strutWrites.set(arm, STRUT_OPEN_RAD);
+      }
+    }
+
+    if (!this._fired.handover && t >= T_HANDOVER_S) {
+      this._fired.handover = true;
+      this._fireHandover();
+    }
+
+    if (this._fired.handover && !this._fired.complete) {
+      // A player strut command during the tail wins immediately (decision 11):
+      // any target the dance did not write means the player took the wheel.
+      if (this._playerTookStruts() || t >= this._lastStrutStartS + STRUT_TRAVEL_S) {
+        this._fireComplete();
+      }
+    }
+  }
+
+  /**
+   * @private The hand-over: exact end pose for the radiator and wings, the
+   * driver unbound (the player's furl control resumes), the camera event, then
+   * the ONE Houston line (force-free; the onboarding boot beat posts first —
+   * task 5 starts the director on this same event).
+   */
+  _fireHandover() {
+    const ship = this._ship;
+    if (ship) {
+      // The exact hand-over state (skip or natural: idempotent).
+      if (ship._flowerGroups && ship._flowerGroups.length) {
+        ship._flowerLaunchLock = false;
+        ship._flowerOverrideFold = false;
+        ship._flowerThetaRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+        if (typeof ship._updateFlower === 'function') ship._updateFlower(0);
+      }
+      if (typeof ship._setRosaWingProgress === 'function') {
+        ship._setRosaWingProgress(1, 1);
+        ship._setRosaWingProgress(2, 1);
+      }
+      if (ship._rosaFurlProgress !== undefined) {
+        ship._rosaFurlProgress = 1.0;
+        ship._rosaFurlTarget = 1.0;
+      }
+      if (typeof ship.setLaunchSequence === 'function') ship.setLaunchSequence(null);
+      this._ship = null;
+    }
+    this._skipStartMs = null;   // the fade is over (if any)
+    eventBus.emit(Events.OPENING_DANCE_HANDOVER, { t: T_HANDOVER_S });
+    // ONE short Houston line at hand-over (decision 12) — normal priority, no
+    // force, distinct from the onboarding boot beat that fires on the event.
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'HOUSTON',
+      text: 'Radiator seated and arrays out, Cowboy. The arms are still opening — she is yours.',
+      priority: 'info',
+    });
+  }
+
+  /** @private The daughters are seated (or the player took them over). */
+  _fireComplete() {
+    if (this._fired && this._fired.complete) return;
+    if (this._fired) this._fired.complete = true;
+    this._running = false;
+    this._strutWrites.clear();
+    eventBus.emit(Events.OPENING_DANCE_COMPLETE, {});
+  }
+
+  /** @private True when a strut target the dance did not write appeared. */
+  _playerTookStruts() {
+    for (const [arm, val] of this._strutWrites) {
+      if (arm._strutTargetAlpha !== undefined && Math.abs(arm._strutTargetAlpha - val) > 1e-9) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
    * Any input during the dance fast-forwards the remaining unfold over
-   * SKIP_FADE_S and then hands over. No refusal, no scolding.
+   * SKIP_FADE_S and then hands over. No refusal, no scolding. Refused before
+   * the cut (t < T_CUT_S): in the menu, input belongs to MenuScreen's own
+   * departure skip — a menu skip skips the menu, not the dance (the clock is
+   * advanced to cut-time at MENU_START instead).
    */
   skip() {
-    if (!this.enabled || !this._running) return;
-    // TODO(driver lane).
+    if (!this.enabled || !this._running || this._fired === null) return;
+    if (this._fired.handover || this._skipStartMs !== null) return;
+    const t = this._t();
+    if (t < OD.T_CUT_S) return;
+    this._skipFromT = Math.max(0, t);
+    this._skipStartMs = this._now();
   }
 
   /** @returns {boolean} the launch-driver duck-type's activity gate */
   isActive() {
-    return false;
+    return !!(this._running && this._t0Ms !== null && this._fired !== null && !this._fired.handover);
   }
 
   /**
@@ -133,7 +428,25 @@ class OpeningDance {
    * @returns {typeof ZERO_PROGRESS}
    */
   progress() {
-    return ZERO_PROGRESS;
+    if (this._t0Ms === null) return ZERO_PROGRESS;
+    const raw = this._t();
+    const t = Math.max(0, raw);
+    const handedOver = !!(this._fired && this._fired.handover);
+    const complete = !!(this._fired && this._fired.complete);
+    const struts = [];
+    for (let i = 0; i < 4; i++) {
+      const startS = OD.STRUT_START_S + i * OD.STRUT_STAGGER_S;
+      struts.push(Math.max(0, Math.min(1, (t - startS) / STRUT_TRAVEL_S)));
+    }
+    return {
+      t,
+      flower: Math.max(0, Math.min(1, t / FLOWER_TRAVEL_S)),
+      wing1: Math.max(0, Math.min(1, (t - OD.WING1_START_S) / WING_ROLL_S)),
+      wing2: Math.max(0, Math.min(1, (t - OD.WING2_START_S) / WING_ROLL_S)),
+      struts: Object.freeze(struts),
+      handedOver,
+      complete,
+    };
   }
 
   /**
@@ -149,21 +462,75 @@ class OpeningDance {
    * Land `ship` on the finished pose WITHOUT playing anything: radiator 146°,
    * wings 1.0, daughters 146°, dance unbound. EVERY path that does not run the
    * dance calls this — CONTINUE, GAMEOVER retry, reduced motion, flag off, the
-   * ?shot harness — so the ship is never seen packed outside the dance.
-   * @param {object} _ship - a PlayerSatellite
+   * ?shot harness — so the ship is never seen packed outside the dance. NOT
+   * flag-gated (with the flag off the ship still boots to this open pose).
+   * @param {object} ship - a PlayerSatellite
    */
-  endState(_ship) {
-    // TODO(driver lane): snapFlowerToStow() + wings 1.0 + struts 146° + unbind.
+  endState(ship) {
+    // endState MEANS "the dance is over". A dance left running here would keep
+    // driving a ship nobody is watching and fire its hand-over later, on a
+    // path that never wanted one — the shape of the bug this guards is a
+    // GAMEOVER retry landing mid-unfold (the unfold is ~7.8 s and a Kessler
+    // collision inside it is perfectly possible). Stopping is unconditional
+    // and idempotent; callers that mean to KEEP the dance must not call this
+    // (GameFlowManager.resetGame's `keepOpeningDance`).
+    this._abort();
+    if (!ship) return;
+    if (typeof ship.setLaunchSequence === 'function') ship.setLaunchSequence(null);
+    // Radiator: the STOW bud via the ship's own snap (clears any lock; the
+    // THERMAL_FLOWER_RELEASED it may emit is silence-gated while a dance is
+    // live — and no dance is live on these paths).
+    if (typeof ship.snapFlowerToStow === 'function') ship.snapFlowerToStow();
+    else if (ship._flowerGroups && ship._flowerGroups.length) {
+      ship._flowerLaunchLock = false;
+      ship._flowerOverrideFold = false;
+      ship._flowerTargetTheta = undefined;
+      ship._flowerThetaRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+      if (typeof ship._updateFlower === 'function') ship._updateFlower(0);
+    }
+    if (typeof ship._setRosaWingProgress === 'function') {
+      ship._setRosaWingProgress(1, 1.0);
+      ship._setRosaWingProgress(2, 1.0);
+    }
+    if (ship._rosaFurlProgress !== undefined) {
+      ship._rosaFurlProgress = 1.0;
+      ship._rosaFurlTarget = 1.0;
+      ship._rosaManualControl = false;
+    }
+    // Daughters: the one open pose (decision 4/5 — 146° and stay). Writing the
+    // latch lets PlayerSatellite._updateStruts slew them there at the shipped
+    // 15°/s; arms without the DOCKED state (stubs) are written regardless.
+    const arms = (ship.armManager && ship.armManager.arms) || [];
+    for (const arm of arms) {
+      if (!arm) continue;
+      if (arm.state !== undefined && arm.state !== Constants.ARM_STATES.DOCKED) continue;
+      arm._strutTargetAlpha = STRUT_OPEN_RAD;
+    }
   }
 
   /**
-   * Snap `ship` to the PACKED pose — wings furled, radiator folded. Idempotent.
-   * Needs isActive() true first (the flower's own launch-pose gate).
-   * @param {object} _ship - a PlayerSatellite
+   * Snap `ship` to the PACKED pose — wings furled, radiator folded (θ 0, launch
+   * lock armed). Idempotent. Used at hero build (lane C, before any departure
+   * arms the clock — so the flower's own isActive() gate cannot be used and the
+   * same fields snapFlowerToLaunch writes are written directly) and at
+   * MENU_DEPARTURE_REVEAL on the sim ship (belt and braces: the hero still
+   * frame-fills at the reveal, and the live pose is applied at MENU_START).
+   * @param {object} ship - a PlayerSatellite
    */
-  applyPacked(_ship) {
-    if (!this.enabled) return;
-    // TODO(driver lane): snapFlowerToLaunch() + _setRosaWingProgress(1|2, 0).
+  applyPacked(ship) {
+    if (!this.enabled || !ship) return;
+    if (typeof ship.setLaunchSequence === 'function') ship.setLaunchSequence(this);
+    if (ship._flowerGroups && ship._flowerGroups.length) {
+      ship._flowerLaunchLock = true;
+      ship._flowerOverrideFold = false;
+      ship._flowerTargetTheta = undefined;
+      ship._flowerThetaRad = (FL.POSE_LAUNCH_DEG * Math.PI) / 180;
+      if (typeof ship._updateFlower === 'function') ship._updateFlower(0);
+    }
+    if (typeof ship._setRosaWingProgress === 'function') {
+      ship._setRosaWingProgress(1, 0);
+      ship._setRosaWingProgress(2, 0);
+    }
   }
 }
 
@@ -175,10 +542,4 @@ class OpeningDance {
  */
 export const openingDance = new OpeningDance();
 
-export { OpeningDance, ZERO_PROGRESS };
-
-// Referenced so the event names travel with the module that owns them; the
-// driver lane emits both from tick().
-void eventBus;
-void Events.OPENING_DANCE_HANDOVER;
-void Events.OPENING_DANCE_COMPLETE;
+export { OpeningDance, ZERO_PROGRESS, FLOWER_TRAVEL_S, WING_ROLL_S, STRUT_TRAVEL_S, T_HANDOVER_S };

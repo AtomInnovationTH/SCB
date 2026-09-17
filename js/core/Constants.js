@@ -1468,8 +1468,22 @@ export const Constants = {
     STRUT_TUBE_WALL: 0.002,        // m
     STRUT_MASS: 4.5,               // kg (structure + reel + spring + hinge)
     STRUT_SWEEP_MIN: 0,            // rad
-    STRUT_SWEEP_MAX: Math.PI,      // rad (180°)
+    STRUT_SWEEP_MAX: Math.PI,      // rad (180°) — the RANGE; unchanged by the opening-dance plan
     STRUT_SLEW_RATE: 15 * Math.PI / 180, // rad/s (15°/s — slowed 50% so new players can see strut deploy)
+
+    // Opening-dance plan (2026-09-16), decision 5: the "." strut toggle's
+    // deploy TARGET moves from the sweep ceiling (π/180°) to 146° — a wide
+    // forward launch cone, and the pose the daughters bloom to and rest at
+    // (decision 4). Named once here; ArmManager.js:toggleStruts() and the
+    // duplicate in InputManager.js's Period case both read this constant.
+    // STRUT_SWEEP_MAX above is untouched — the RANGE stays [0, π].
+    STRUT_DEPLOY_ALPHA: 146 * Math.PI / 180, // rad (146°)
+    // Task 7 (own lane, decision 6/7): the duck target when a docked strut's
+    // live tip would foul an inbound catch's berth corridor (CaptureNet's
+    // _corridorClear test) at the new 146° rest. Never raise above 104° —
+    // 146° is only 6 mm inside the corridor on the first catch (plan risk
+    // note); 100° leaves comfortable margin on both sides.
+    STRUT_LEAN_ASIDE_ALPHA: 100 * Math.PI / 180, // rad (100°)
 
     // ── Recoil Safety (NEW — ST-9.3 C-3) ──
     HIGH_RECOIL_ALPHA_LOW:  Math.PI / 6,     // rad (30°) — below this = high axial recoil
@@ -2108,6 +2122,34 @@ export const Constants = {
   FAIRING_SEP_DELAY_S: 4.0,             // seconds from liftoff to fairing sep (ST-9.11 C-5)
   ORBIT_INSERTION_DELAY_S: 4.0,          // seconds from fairing sep to orbit insertion (ST-9.11 C-5)
   LAUNCH_LOCK_STAGGER_S: 0.1,           // seconds between per-arm pyro releases (ST-9.11 C-5)
+
+  // =========================================================================
+  // OPENING DANCE (2026-09-16) — the beat table for the ship unpacking itself.
+  // Every beat-table figure of the plan's table lives HERE, in ONE block. The
+  // DURATIONS are not repeated: they are derived in js/systems/OpeningDance.js
+  // from the shipped hardware rates (THERMAL.FLOWER.SLEW_RATE_RAD_S 15°/s →
+  // the 146° radiator sweep = 9.73 s, the long pole; OCTOPUS_V5.ROSA_FURL_RATE
+  // 0.40/s → 2.5 s per wing), so the dance always teaches the speeds the
+  // player will later command. t = 0 is jet-off, NOT the departure start.
+  // =========================================================================
+  OPENING_DANCE: {
+    BEAT_JETOFF: 0.26,            // fraction of the menu departure at which the EVA astronaut jets off (t = 0 = start + 0.26 × durationMs)
+    MENU_DEPARTURE_MS: 3650,      // the MenuScreen departure the beat table is measured against (fallback when the payload carries none)
+    T_CUT_S: 2.70,                // the menu→game cut (MENU_START) in dance time: 0.95 s jet-off + 2.70 s = the 3.65 s departure
+    WING1_START_S: 5.20,          // ROSA wing 1 roll-out start (2.5 s at ROSA_FURL_RATE → seated 7.70)
+    WING2_START_S: 6.20,          // ROSA wing 2 roll-out start (→ seated 8.70)
+    STRUT_START_S: 7.00,          // daughters begin their 0° → 146° sweep (after hand-over is visible; the tail runs ~17.5)
+    STRUT_STAGGER_S: 0.25,        // per-daughter stagger
+    SKIP_FADE_S: 0.5,             // any input fast-forwards the remaining unfold over this window (decision 10)
+    // The one "open" pose the daughters bloom to and keep (decisions 4 and 5).
+    // NAMED ONCE, in OCTOPUS_V5.STRUT_DEPLOY_ALPHA — the "." toggle's deploy
+    // target and the dance's daughter beat MUST be the same number, or the
+    // cinematic parks the arms somewhere the player's own key cannot return
+    // them to. Derived here rather than restated so the two can never drift.
+    // (It also happens to mirror THERMAL.FLOWER.POSE_STOW_DEG, the radiator's
+    // rest — that mirroring is what makes the bloomed ship read symmetrical.)
+    get STRUT_OPEN_DEG() { return Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA * 180 / Math.PI; },
+  },
 
   // =========================================================================
   // V5 CROSSBOW ARMS — Spring-launched tethered arms with reel-in capture

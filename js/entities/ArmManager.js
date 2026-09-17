@@ -26,6 +26,21 @@ const M = 0.00001;
 // never retained across calls).
 const _poseDirTmp = new THREE.Vector3();
 
+// Task 7 lean-aside scratch — the live-tip direction (module temp idiom;
+// never retained across calls), mirroring _poseDirTmp's role for
+// _strutFoulsInboundCorridor.
+const _leanAsideDirTmp = new THREE.Vector3();
+
+// Task 7 (opening-dance plan) — bounded safety-net release. LASSO_CAPTURED's
+// own downstream adoption (CaptureNetSystem.adoptLassoCatch) deliberately
+// does not emit NET_BERTHED (its doc comment: "none of the spectacle"), so a
+// ducked arm on that path never sees the plan's own release event. This
+// timeout (comfortably longer than the ~3.1 s duck sweep AND the lasso's own
+// ~3 s reel-in) guarantees a duck can never strand a strut at 100° forever,
+// regardless of which capture path resolved it. Not a plan requirement —
+// see the lane's final report.
+const LEAN_ASIDE_TIMEOUT_S = 8;
+
 /** The "." toggle's live sweep read (InputManager.js Period case, mirrored
  *  for toggleStruts / strutsDeployed): a pending `_strutTargetAlpha` latch
  *  wins, else the ACTUAL angle — never the latch alone, which clears to
@@ -258,6 +273,14 @@ export class ArmManager {
     this._pulseScanTimer = 0;
     this._pulseScanActive = false;
 
+    // Task 7 (opening-dance plan) — arms lean aside for an inbound catch.
+    // Arm indices this lane currently holds ducked at STRUT_LEAN_ASIDE_ALPHA;
+    // this manager is the sole writer of _strutTargetAlpha for exactly these
+    // arms while the set is non-empty.
+    this._leanAsideArmIndices = new Set();
+    this._leanAsideActive = false;
+    this._leanAsideTimer = 0;
+
     this._initArms();
     this._setupListeners();
   }
@@ -357,6 +380,21 @@ export class ArmManager {
         arm.applyManualThrust(data.direction, data.fine, data.dt);
       }
     });
+
+    // Task 7 (opening-dance plan, decision 6/7): arms lean aside for an
+    // inbound catch. Trigger on LASSO_CAPTURED (a catch is inbound); release
+    // on NET_BERTHED (the plan's own release event) or when the net clears
+    // or fails. See _releaseLeanAside for why NET_BERTHED alone is not
+    // sufficient on every path (a bounded timeout in _updateLeanAside covers
+    // the gap).
+    eventBus.on(Events.LASSO_CAPTURED, (payload) => this._onInboundCatchCaptured(payload));
+    const releaseLeanAside = () => this._releaseLeanAside();
+    eventBus.on(Events.NET_BERTHED, releaseLeanAside);
+    eventBus.on(Events.LASSO_MISSED, releaseLeanAside);
+    eventBus.on(Events.LASSO_SNAPPED, releaseLeanAside);
+    eventBus.on(Events.NET_FAILED, releaseLeanAside);
+    eventBus.on(Events.NET_RELEASED, releaseLeanAside);
+    eventBus.on(Events.NET_TORN, releaseLeanAside);
   }
 
   // ==========================================================================
@@ -1504,7 +1542,10 @@ export class ArmManager {
     const docked = (this.arms || []).filter((a) => a && a.state === ARM_STATES.DOCKED);
     if (!docked.length) return null;
     const anyDeployed = docked.some((a) => _strutLiveAlpha(a) >= Math.PI / 2);
-    const targetAlpha = anyDeployed ? 0 : Math.PI;
+    // Opening-dance plan decision 5: deploy TARGET is 146°
+    // (Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA), not the π sweep ceiling —
+    // named once, mirrored by InputManager's Period case (do-not-edit-there).
+    const targetAlpha = anyDeployed ? 0 : Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA;
     for (const arm of docked) arm._strutTargetAlpha = targetAlpha;
     return !anyDeployed;
   }
@@ -1805,6 +1846,9 @@ export class ArmManager {
     // so aim writes land on fresh positions.
     this._updateCargoPlumePoses(dt);
 
+    // Task 7 (opening-dance plan) — lean-aside safety-net timeout tick.
+    this._updateLeanAside(dt);
+
     // z-layer fix: toggle each daughter's hull in/out of the near-field depth
     // pass by distance to the mother (runs AFTER arm.update so positions are
     // current for this frame).
@@ -2081,6 +2125,149 @@ export class ArmManager {
       if (tipX * tipX + tipY * tipY < radiusM * radiusM) return false;
     }
     return true;
+  }
+
+  // ── Task 7 (opening-dance plan) — lean aside for an inbound catch ────────
+  // Decision 6 (LOCKED, governing law for this task): nothing crosses or
+  // tangles — tethers, struts, debris. Decision 4 moves the daughters'
+  // resting pose from α=0 (stowed, clear of everything) to α=146°
+  // (STRUT_DEPLOY_ALPHA — a permanent "open" rest, decision 5), which can
+  // sit inside an inbound catch's berth corridor (blocks pieces heavier than
+  // ~0.588 m per the plan's measured table) — a regression the old 0° rest
+  // never had. Note for the record (plan's own words): at today's 180°
+  // manual deploy pose EVERY catch is already blocked, so this section fixes
+  // an existing defect as well as covering the new 146° rest.
+
+  /**
+   * Does arm `armIndex`'s CURRENT (live, `getAimAlpha()`) strut tip sit
+   * inside a berth corridor cylinder sized for an inbound catch of
+   * `radiusM`? Byte-identical cylinder test to CaptureNet's `_corridorClear`
+   * section 1 (ship-local, fore of the berth-anchor plane at
+   * `tipZ > 0`, radial `< radiusM`) — CaptureNet.js is not owned by this
+   * lane, so the tip formula is mirrored here exactly rather than imported,
+   * the same duplication-by-necessity `_repPoseCorridorClear` above already
+   * established for the S9 re-pose read (same anchor derivation, same tip
+   * formula — this is the "run the SAME test" the plan asks for, applied to
+   * a file this lane owns). `_corridorClear` itself is untouched.
+   * Skips LOCKED/STOWED struts (clear by construction), matching
+   * `_corridorClear`'s own skip.
+   * @param {number} armIndex
+   * @param {number} radiusM — the inbound catch's corridor radius
+   *   (`debris.sizeMeter / 2 + CAPTURE_NET.BERTH_CLEARANCE_M`)
+   * @returns {boolean} true when this arm's live tip fouls the corridor
+   * @private
+   */
+  _strutFoulsInboundCorridor(armIndex, radiusM) {
+    const arm = this.arms[armIndex];
+    if (!arm || typeof arm.getAimAlpha !== 'function') return false;
+    const ds = (typeof arm.getDeployState === 'function') ? arm.getDeployState() : 'DEPLOYED';
+    if (ds === 'LOCKED' || ds === 'STOWED') return false;
+
+    const player = this.playerSatellite;
+    const V5 = Constants.OCTOPUS_V5;
+    if (!player || !V5) return false;
+
+    // The ONE berth anchor (S13(e)): the collar object, else pod 0's muzzle,
+    // else the documented collar constant — the same reads _corridorClear
+    // and _repPoseCorridorClear make.
+    const anchor = player._netBerthCollar ?? player._netPodMuzzles?.[0];
+    const mx = anchor ? anchor.position.x / M : 0;
+    const my = anchor ? anchor.position.y / M : 0;
+    const mz = anchor ? anchor.position.z / M : (V5.BERTH_COLLAR_Z_M ?? 1.30);
+
+    const dp = this._dockPositions[armIndex];
+    const azRad = dp ? (dp.azimuthDeg * Math.PI / 180) : 0;
+    const collarR = V5.COLLAR_RADIUS ?? 0.40;
+    const collarY = V5.COLLAR_Y ?? 0.90;
+    const strutLen = V5.STRUT_LENGTH ?? 1.60;
+    strutLocalDirection(arm.getAimAlpha(), azRad, _leanAsideDirTmp);
+    const tipX = Math.cos(azRad) * collarR + _leanAsideDirTmp.x * strutLen - mx;
+    const tipY = Math.sin(azRad) * collarR + _leanAsideDirTmp.y * strutLen - my;
+    const tipZ = collarY + _leanAsideDirTmp.z * strutLen - mz;
+    if (tipZ <= 0) return false; // aft of the muzzle plane — cannot clip the corridor
+
+    return (tipX * tipX + tipY * tipY) < radiusM * radiusM;
+  }
+
+  /**
+   * Trigger: `Events.LASSO_CAPTURED` — a catch is inbound. Tests every
+   * DOCKED arm's live strut alpha against the SAME corridor cylinder
+   * `_corridorClear` uses (mirrored above); only the arms that would
+   * actually foul duck to `STRUT_LEAN_ASIDE_ALPHA` (100°). Small (or
+   * unresolved-size) pieces never produce a foul at the 146° rest — see the
+   * plan's measured table — so they never trigger a duck. Sole writer of
+   * `_strutTargetAlpha` for the arms it ducks, for the duration of the duck
+   * only (`_releaseLeanAside` restores them to `STRUT_DEPLOY_ALPHA`).
+   * @param {{debrisId?: number|string}} payload — LASSO_CAPTURED's payload
+   * @private
+   */
+  _onInboundCatchCaptured(payload) {
+    const debrisId = payload && payload.debrisId;
+    if (debrisId == null) return;
+    if (!this._debrisField || typeof this._debrisField.getDebrisById !== 'function') return;
+    // Rule H (CONVENTIONS §10): resolve the canonical object by id, never a
+    // snapshot/wrapper.
+    const debris = this._debrisField.getDebrisById(debrisId);
+    // No resolvable size ⇒ never duck — "small pieces must never trigger it"
+    // extends to a piece this lane cannot measure.
+    if (!debris || !debris.sizeMeter) return;
+
+    const CN = Constants.CAPTURE_NET;
+    const radiusM = debris.sizeMeter / 2 + (CN?.BERTH_CLEARANCE_M ?? 1.0);
+
+    let ducked = false;
+    for (let i = 0; i < this.arms.length; i++) {
+      const arm = this.arms[i];
+      if (!arm || arm.state !== ARM_STATES.DOCKED) continue;
+      if (this._strutFoulsInboundCorridor(i, radiusM)) {
+        arm._strutTargetAlpha = Constants.OCTOPUS_V5.STRUT_LEAN_ASIDE_ALPHA;
+        this._leanAsideArmIndices.add(i);
+        ducked = true;
+      }
+    }
+    if (ducked) {
+      this._leanAsideActive = true;
+      this._leanAsideTimer = LEAN_ASIDE_TIMEOUT_S;
+    }
+  }
+
+  /**
+   * Release: restore every arm this lane ducked back to the 146° rest pose
+   * (`STRUT_DEPLOY_ALPHA`). Wired to `Events.NET_BERTHED` (the plan's own
+   * release event) and the "net clears/fails" events (LASSO_MISSED,
+   * LASSO_SNAPPED, NET_FAILED, NET_RELEASED, NET_TORN), plus a bounded
+   * timeout (`_updateLeanAside`) — see this lane's final report: the lasso
+   * adoption path (`CaptureNetSystem.adoptLassoCatch`) deliberately never
+   * emits NET_BERTHED, so NET_BERTHED alone would strand a ducked arm at
+   * 100° forever on that path.
+   * A duck is only ever restored while the arm is still DOCKED — if it left
+   * DOCKED mid-duck (deployed, recalled, expended…) some other system now
+   * owns its `_strutTargetAlpha` and this lane must not fight it.
+   * @private
+   */
+  _releaseLeanAside() {
+    if (this._leanAsideArmIndices.size === 0 && !this._leanAsideActive) return;
+    for (const i of this._leanAsideArmIndices) {
+      const arm = this.arms[i];
+      if (arm && arm.state === ARM_STATES.DOCKED) {
+        arm._strutTargetAlpha = Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA;
+      }
+    }
+    this._leanAsideArmIndices.clear();
+    this._leanAsideActive = false;
+    this._leanAsideTimer = 0;
+  }
+
+  /**
+   * Per-frame tick for the lean-aside safety-net timeout. See
+   * `_releaseLeanAside`'s doc for why a timeout exists at all.
+   * @param {number} dt
+   * @private
+   */
+  _updateLeanAside(dt) {
+    if (!this._leanAsideActive) return;
+    this._leanAsideTimer -= dt;
+    if (this._leanAsideTimer <= 0) this._releaseLeanAside();
   }
 
   /**
