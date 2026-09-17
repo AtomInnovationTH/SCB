@@ -2379,6 +2379,65 @@ export class PlayerSatellite extends THREE.Group {
     return (Constants.OCTOPUS_V5.ROSA_DRUM_R + 0.001) * M;
   }
 
+  /**
+   * Radius of the FURLED ROSA coil, in METRES, derived from the blanket it
+   * actually holds instead of asserted.
+   *
+   * A blanket of thickness `t` and rolled length `L` wound onto a mandrel of
+   * radius `r` is an Archimedean spiral; equating the wound cross-section area
+   * to the flat strip's gives the outer radius
+   *
+   *     R = sqrt(r² + L·t/π)
+   *
+   * with L = ROSA_WIDTH (the width is the dimension that rolls — the 2.0 m
+   * LENGTH runs along the barrel and is the coil's length, not its wrap) and t
+   * = ROSA_BLANKET_T (blanket + flattened edge-boom allowance).
+   *
+   * Why this exists: the coil used to be a hand-picked `1 + 2*(1−progress)`
+   * scale on a 0.0525 m base — 0.1575 m when fully furled, which is 2.9× the
+   * physical answer. At the 0.48 m spool axis that reached 0.3225 m from the
+   * ship axis, i.e. 77.5 mm INSIDE the 0.40 m hull, and swallowed the
+   * BarrelSolarPanel row at the 11.25° facet by 43 mm. It also (via the
+   * launch-envelope pin) claimed a Ø1.275 stowed diameter the ship does not
+   * need. Nothing measured it because nothing derived it.
+   *
+   * @returns {number} furled coil radius in metres (NOT scene units)
+   */
+  static rosaFurledCoilRadiusM() {
+    const V5 = Constants.OCTOPUS_V5;
+    return Math.sqrt(V5.ROSA_DRUM_R * V5.ROSA_DRUM_R + (V5.ROSA_WIDTH * V5.ROSA_BLANKET_T) / Math.PI);
+  }
+
+  /**
+   * Distance from the SHIP axis to a ROSA spool axis, in METRES. The spool sits
+   * on the root bracket, `rootX` outboard of the sun-tracking pivot, and the
+   * pivot sits on the bus collar:
+   *
+   *     spoolAxis = COLLAR_RADIUS + (ROSA_BRACKET_LEN + 0.4·ROSA_DRUM_R)
+   *
+   * One source for `_buildRosaStructure` (which builds at `rootX` in scene
+   * units) and for the clearance pins in `js/test/_flowerFold.js` and
+   * `test-RosaFurl.js`, which measure the furled coil about this line. It is a
+   * helper rather than three literals because ROSA_BRACKET_LEN is a live lever
+   * — it was lengthened to hold the coil off the body PV — and a hard-coded
+   * 0.48 left behind by that move is exactly the drift these pins exist to
+   * catch.
+   * @returns {number} spool-axis offset in metres (NOT scene units)
+   */
+  static rosaSpoolAxisM() {
+    const V5 = Constants.OCTOPUS_V5;
+    return V5.COLLAR_RADIUS + PlayerSatellite.rosaRootStandoffM();
+  }
+
+  /**
+   * Bracket standoff from the sun-tracking pivot to the spool axis, in METRES.
+   * @returns {number}
+   */
+  static rosaRootStandoffM() {
+    const V5 = Constants.OCTOPUS_V5;
+    return V5.ROSA_BRACKET_LEN + Constants.OCTOPUS_V5.ROSA_ROOT_DRUM_FRAC * V5.ROSA_DRUM_R;
+  }
+
   _buildSolarPanels() {
     const V5      = Constants.OCTOPUS_V5;
     const rosaW   = V5.ROSA_WIDTH * M;       // 1.0 m → scene (radial deploy / X)
@@ -2569,11 +2628,20 @@ export class PlayerSatellite extends THREE.Group {
       if (struct.drum)     struct.drum.rotation.y = spin;
       if (struct.stowRoll) struct.stowRoll.rotation.y = spin;
 
-      // Stowed-roll bulge: a fat coil of blanket+booms when stowed, shrinking to
-      // a bare mandrel as the wing rolls out (real ROSA stores like a tape measure).
+      // Stowed-roll bulge: the coil unwinds onto the mandrel as the blanket pays
+      // out. The radius follows the SPIRAL, not a linear ramp — the wound
+      // cross-section area is proportional to the length still on the drum, so
+      //     r(p) = sqrt(drumR² + (1−p)·(R_furled² − drumR²))
+      // which is fast at first and flattens as the last wraps come off, exactly
+      // like a tape measure. The mesh is built at R_furled, so scale 1 is fully
+      // furled and it shrinks toward drumR/R_furled.
       if (struct.stowRoll) {
-        const r = 1 + 2 * (1 - progress);       // DRUM_R (deployed) → ~3× (stowed)
-        struct.stowRoll.scale.set(r, 1, r);
+        const V5 = Constants.OCTOPUS_V5;
+        const rDrum = V5.ROSA_DRUM_R;
+        const rFurl = PlayerSatellite.rosaFurledCoilRadiusM();
+        const rNow = Math.sqrt(rDrum * rDrum + (1 - progress) * (rFurl * rFurl - rDrum * rDrum));
+        const s = rNow / rFurl;
+        struct.stowRoll.scale.set(s, 1, s);
         struct.stowRoll.visible = progress < 0.98; // hide the bulge when fully out
       }
 
@@ -2621,7 +2689,6 @@ export class PlayerSatellite extends THREE.Group {
     const boomOD  = V5.ROSA_BOOM_OD * M;
     const sprOD   = V5.ROSA_SPREADER_OD * M;
     const drumR   = V5.ROSA_DRUM_R * M;
-    const brkLen  = V5.ROSA_BRACKET_LEN * M;
 
     // Root of the rolled blanket. The spool/drum sits this far OUTBOARD of the
     // sun-tracking pivot (the pivot is at the bus collar, barrelR from centre).
@@ -2632,7 +2699,7 @@ export class PlayerSatellite extends THREE.Group {
     // strip poked INBOARD of the drum toward the bus (the "narrow strip extends
     // in" artifact). scale.x rolls the blanket out from this drum-anchored
     // origin, so the inboard edge stays pinned at the drum at every furl state.
-    const rootX = brkLen + drumR * 0.4;
+    const rootX = PlayerSatellite.rosaRootStandoffM() * M;
     wrapper.position.x = sign * rootX;
 
     // Near-black carbon-composite boom material (real ROSA slit-tube high-strain
@@ -2781,13 +2848,20 @@ export class PlayerSatellite extends THREE.Group {
     spoolPivot.add(drum);
     struct.drum = drum;
 
-    // Stowed-coil bulge — coaxial fat roll of blanket when stowed, shrinking to a
-    // bare mandrel as the wing rolls out (scaled radially by _setRosaWingProgress).
+    // Stowed-coil bulge — the wound blanket, shrinking onto the bare mandrel as
+    // the wing rolls out (scaled radially by _setRosaWingProgress).
+    // The FURLED radius is derived, not styled: PlayerSatellite
+    // .rosaFurledCoilRadiusM() winds ROSA_WIDTH of ROSA_BLANKET_T stock onto the
+    // mandrel and returns sqrt(drumR² + W·t/π) ≈ 0.0546 m. The geometry is built
+    // AT that radius and scales DOWN toward the drum, so scale 1 is the honest
+    // full coil (the old code built at drumR·1.05 and scaled UP ×3, inventing a
+    // 0.1575 m coil that sat 77.5 mm inside the hull — see the helper's note).
     // Length is 0.98×rosaL so its end caps (z=±0.98) never tie with the drum
     // (±1.02) or the spool curls (±1.00) — round-3 z-fight fix.
     // 32 radial segments, matching the drum (was 16 — the furled coil's end
     // caps read as 16-gons; test-MotherZFix pins the floor).
-    const coilGeo = new THREE.CylinderGeometry(drumR * 1.05, drumR * 1.05, rosaL * 0.98, 32);  // was 12 → 16 → 32-seg (match drum)
+    const coilR = PlayerSatellite.rosaFurledCoilRadiusM() * M;
+    const coilGeo = new THREE.CylinderGeometry(coilR, coilR, rosaL * 0.98, 32);  // was 12 → 16 → 32-seg (match drum)
     const stowRoll = new THREE.Mesh(coilGeo, drumMat);
     stowRoll.name = `ROSA_StowRoll_${wing === 1 ? '0' : '180'}deg`;
     stowRoll.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // W7
@@ -2922,7 +2996,7 @@ export class PlayerSatellite extends THREE.Group {
   // 3.5 AFT FLOWER (P2 — thermal arc, observe-only)
   // --------------------------------------------------------------------------
   // 4 rigid aft-pivot struts with radiator plates and inert tip hardpoints at
-  // the P1 allocation table's FLOWER-NE/NW/SW/SE stations (az 41/139/221/319
+  // the P1 allocation table's FLOWER-NE/NW/SW/SE stations (az 40/140/220/320
   // since Design 7b — inside the 45k° ± 11.25° grants; clevis pin r 0.475 at
   // the z=−1.0 rim, brackets in the z −1.000..−0.886 / r 0.34..0.51 band).
   // The struts "open LIKE A FLOWER" — the owner's grammar, kept verbatim. They
@@ -3168,8 +3242,8 @@ export class PlayerSatellite extends THREE.Group {
 
   /**
    * @private Install a purchased pair (idempotent — the save-restore path
-   * re-applies shop effects, so a second call is a no-op). Pair A = az 41/221,
-   * pair B = az 139/319 — trim-neutral diagonals (S12 ⟂-CoM 0.0000).
+   * re-applies shop effects, so a second call is a no-op). Pair A = az 40/220,
+   * pair B = az 140/320 — trim-neutral diagonals (S12 ⟂-CoM 0.0000).
    */
   _installFlowerPair(pairKey) {
     if (this._flowerPairs[pairKey]) return;
@@ -3181,8 +3255,8 @@ export class PlayerSatellite extends THREE.Group {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'THERMAL',
       text: pairKey === 'A'
-        ? 'Aft flower pair A installed — radiator struts at az 41/221. They open LIKE A FLOWER: press O.'
-        : 'Aft flower pair B installed — full four-strut flower at az 41/139/221/319. O deploys and stows.',
+        ? 'Aft flower pair A installed — radiator struts at az 40/220. They open LIKE A FLOWER: press O.'
+        : 'Aft flower pair B installed — full four-strut flower at az 40/140/220/320. O deploys and stows.',
       priority: 'info',
     });
   }
@@ -4002,11 +4076,12 @@ export class PlayerSatellite extends THREE.Group {
       //     edge ON the flat, tmp/mother-audit/saddle-clearance.log) and 6.5 mm
       //     inside the cap lip, so the buried 5 mm never shows and no face is
       //     tangent to the skin.
-      //   • drum sweep x ≥ 0.43 → 4.0 cm clear; furled coil (r 0.1575 about the
-      //     spool axis at x 0.48, z ±0.98) swept 0–360° → ≥ 6.6 mm at any sun
-      //     angle (≥ 11 mm above the cap plane); hinge hardware 29 cm; the T4
-      //     turntable (r 0.34) 2 cm inboard; the deck lip / skirt run INTO the
-      //     block (transversal, hidden). Probe table: saddle-clearance.log.
+      //   • drum sweep x ≥ 0.43 → 4.0 cm clear; furled coil swept 0–360° →
+      //     ≥ 6.6 mm at any sun angle (≥ 11 mm above the cap plane) when that
+      //     was measured against the styled r 0.1575 at x 0.48; the derived
+      //     coil (≈0.0546 at x 0.49) only opens that up. Hinge hardware 29 cm;
+      //     the T4 turntable (r 0.34) 2 cm inboard; the deck lip / skirt run
+      //     INTO the block (transversal, hidden). Probe: saddle-clearance.log.
       const saddle = new THREE.Mesh(new THREE.BoxGeometry(M * 0.03, M * 0.12, M * 0.075), gunmetalMat);
       saddle.position.set(Math.sign(sx) * M * 0.375, 0, M * 1.0325);
       saddle.name = `NetPodSaddle_${pod}`;
@@ -4333,9 +4408,11 @@ export class PlayerSatellite extends THREE.Group {
     const HALO = M * LFX.NAV_HALO;  // steady nav halo sprite size
 
     // Site (Mother audit T6, B1): the old (±0.42, 0, 0.30) sat on the ±X
-    // equator — inside the ROSA drum's sun-track sweep (the drum axis is at
-    // x ±0.48, r 0.05, and swings through the YZ plane at every sun angle), on the equator slot the drum lies in, and the furled coil
-    // (r 0.1575) swallowed it outright. Moved to the fore shoulder band at
+    // equator — inside the ROSA drum's sun-track sweep (the drum axis rides the
+    // spool line, rosaSpoolAxisM(), r 0.05, and swings through the YZ plane at
+    // every sun angle), on the equator slot the drum lies in, and the furled
+    // coil (then a styled r 0.1575) swallowed it outright. Moved to the fore
+    // shoulder band at
     // z 0.76: bare MLI between the PV end rows' top (z 0.72; core bottom 0.735)
     // and the avionics (z ≥ 0.79; the GPS patches at az 340 start at z 0.835 —
     // 5 cm above the core top 0.785; the 0.14 m halo sprite's top edge 0.83
@@ -4343,11 +4420,15 @@ export class PlayerSatellite extends THREE.Group {
     // centre 12 mm proud. Never coincident with the skin; ADDITIVE renderOrder
     // so the cores sort with the other light hardware.
     // Azimuth (Mother fixes 1/4): az ∓15° (0.398, −0.107) sat 0.135 from the
-    // spool axis (x ±0.48, y 0) — clear of the bare drum (r 0.05) but INSIDE
-    // the fully furled stow roll (r 0.158), which swallowed the core by 23 mm.
-    // Now az ∓24° (starboard 336°, port 204°): (0.376, −0.168), 0.197 from the
-    // axis ≥ 0.189 = furled roll 0.158 + core 0.025 + 6 mm margin; x_max 0.401
+    // spool axis — clear of the bare drum (r 0.05) but INSIDE the fully furled
+    // stow roll, which swallowed the core by 23 mm. Now az ∓24° (starboard
+    // 336°, port 204°): (0.376, −0.168), 0.197 from the axis; x_max 0.401
     // < 0.43 (the drum sweep's inboard face).
+    // The margin was sized against the STYLED coil (r 0.158 about x ±0.48,
+    // needing ≥ 0.189). Both numbers are now derived and much smaller —
+    // rosaFurledCoilRadiusM() ≈ 0.0546 about rosaSpoolAxisM() = 0.49 — so this
+    // site has far more room than it was built for; test-MotherZFix computes
+    // the gate from those accessors rather than the retired literals.
     const navR = 0.412 * M, navAz = 24 * Math.PI / 180, navZ = 0.76 * M;
     const navX = navR * Math.cos(navAz), navY = -navR * Math.sin(navAz);   // (0.376, −0.168)
 
@@ -6230,13 +6311,13 @@ export class PlayerSatellite extends THREE.Group {
         });
         break;
       case 'flowerPairA':
-        // P2 aft flower — pair A (az 41/221). Observe-only hardware: draws,
+        // P2 aft flower — pair A (az 40/220). Observe-only hardware: draws,
         // slews, throttles nothing. Idempotent via _installFlowerPair guard
         // (the save-restore path re-applies shop effects).
         this._installFlowerPair('A');
         break;
       case 'flowerPairB':
-        // P2 aft flower — pair B (az 135/315) completes the four-strut flower.
+        // P2 aft flower — pair B (az 140/320) completes the four-strut flower.
         this._installFlowerPair('B');
         break;
     }

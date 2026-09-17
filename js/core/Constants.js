@@ -1499,8 +1499,37 @@ export const Constants = {
     // (gameplay-liberty) motorised re-furlable variant — real ROSA is one-way.
     ROSA_BOOM_OD: 0.020,           // m — slit-tube edge boom diameter (both long edges)
     ROSA_DRUM_R: 0.050,            // m — root roller drum / mandrel radius
+    // Rolled stack thickness, the INPUT to the furled-coil radius (see
+    // PlayerSatellite.rosaFurledCoilRadiusM: R = sqrt(drumR² + width·t/π)).
+    // A real ROSA blanket — IMM/thin-film cells on a flexible substrate — is
+    // well under 1 mm; the balance here is the flattened slit-tube booms, which
+    // ride the long edges and thicken the wrap at z = ±1.0. 1.5 mm over the
+    // 1.0 m width puts the furled coil at r ≈ 0.0546 m. With the spool axis at
+    // 0.49 (see ROSA_BRACKET_LEN) its inboard face sits at 0.4354 m; measured
+    // on the built model by test-RosaFurl, that is 35 mm clear of the hull and
+    // 24 mm clear of the nearest body PV corner.
+    ROSA_BLANKET_T: 0.0015,        // m — blanket + flattened-boom stack thickness
     ROSA_SPREADER_OD: 0.010,      // m — slim tip spreader / leading-edge deploy bar
-    ROSA_BRACKET_LEN: 0.060,      // m — root mounting bracket standoff from bus
+    // Root mounting bracket standoff from the bus. This is what holds the
+    // furled roll off the hull, so it is sized BY the coil: with
+    // ROSA_ROOT_DRUM_FRAC the spool axis lands at COLLAR_RADIUS + 0.070 +
+    // 0.4·0.050 = 0.49 m (PlayerSatellite.rosaSpoolAxisM), and a furled coil of
+    // r 0.0546 then reaches in to 0.4354 m.
+    // Was 0.060 (spool at 0.48). The body PV is tiled on FLAT 22.5° facets, so
+    // a panel's azimuth corners lift to ~1.034·R ≈ 0.4136 — well proud of the
+    // 1.014·R face — and at 0.48 the nearest corner (BarrelSolarPanel_11, the
+    // 11.25° facet) cleared a furled coil by only 13.6 mm, under the 20 mm gate.
+    // Note the ±8° `rosaKeep` PV keep-out in _buildBodyPanels cannot help here:
+    // facet CENTRES land at 11.25°, so no facet is ever within 8° of a ROSA
+    // root and the keep-out never fires. 10 mm more standoff is the honest
+    // lever — it is the part whose job this is. Pinned by test-RosaFurl.
+    ROSA_BRACKET_LEN: 0.070,      // m — root mounting bracket standoff from bus
+    // The spool axis sits this fraction of a drum radius beyond the bracket:
+    //   spoolAxis = COLLAR_RADIUS + ROSA_BRACKET_LEN + FRAC·ROSA_DRUM_R.
+    // Named because PlayerSatellite.rosaSpoolAxisM() is the single source the
+    // runtime AND the coil-clearance pins all read; it was a bare 0.4 literal
+    // typed out in three places.
+    ROSA_ROOT_DRUM_FRAC: 0.4,     // — spool-axis standoff, in drum radii
     // Furl/unfurl runtime control (",") — snappy ~2.5 s full cycle (fraction/s).
     ROSA_FURL_RATE: 0.40,          // 1/s — progress change per second when furling/unfurling
     // Feather (Shift+",") — park the wings edge-on to a hazard. Snappier than a
@@ -1522,17 +1551,24 @@ export const Constants = {
     HINGE_BEARING: 'Si3N4_MoS2',
 
     // ── Launch Vehicle (NEW) ──
-    // Design 7b (2026-09-08) re-pinned the stale envelope from the built model
-    // in its launch state (daughters in their channels, ROSA furled, the aft
-    // flower fore-folded along the barrel — probe 7b.4c B′): the furled coils
-    // set the diameter (Ø 1.275) and the folded flower tips (z 1.505) with the
-    // FEEP exits (z −1.075) set the length (2.578). The old 1.2 × 2.3 was
-    // written before the coils / collar / flower existed (the bare ship was
-    // already 2.515 × Ø1.275). FAIRING_LENGTH 3.0 keeps 0.42 m over the stack.
+    // Design 7b (2026-09-08) re-pinned the envelope from the built model in its
+    // launch state (daughters in their channels, ROSA furled, the aft flower
+    // fore-folded along the barrel — probe 7b.4c B′). At that time the furled
+    // coils set the diameter at Ø1.275.
+    //
+    // ROSA coil-physics fix: the coil radius is now DERIVED (see
+    // PlayerSatellite.rosaFurledCoilRadiusM) instead of being a styled ×3 scale,
+    // and the standoff bracket grew to hold it off the body PV, so a furled coil
+    // reaches 0.49 + 0.0546 = 0.5446 → Ø1.089 and NO LONGER sets the diameter.
+    // The widest stowed item is now the folded flower pack (r_max 0.546 →
+    // Ø1.092), measured by test-FlowerLaunchFold T7(ii).
+    // The stack got 18 cm narrower purely by telling the truth about the coil.
+    // Length is unchanged: FEEP exits (z −1.075) to folded flower tips (z 1.505).
     LAUNCH_VEHICLE: 'SSLV',
     FAIRING_DIAMETER: 2.1,         // m
     FAIRING_LENGTH: 3.0,           // m — was 2.5 (the bare ship was already 2.515)
-    STOWED_ENVELOPE_DIA: 1.28,     // m — furled ROSA coils Ø1.275 (flower packs r_max 0.546 sit inside)
+    STOWED_ENVELOPE_DIA: 1.10,     // m — folded flower packs Ø1.092 (furled ROSA coils Ø1.089 sit inside)
+
     STOWED_ENVELOPE_LEN: 2.58,     // m — FEEP exits −1.075 … folded flower tips +1.505
 
     // ── Mass Budget (UPDATED for Config G — §10.11 canonical) ──
@@ -1628,7 +1664,7 @@ export const Constants = {
   // conservative ceiling 147.35° at R=4, straight-aft limit R=1.714 m, cargo
   // pose 1.9 m bag +0.780 m) and tmp/flower-mass-budget.mjs (probe 4).
   // The P1 allocation table is BINDING: stations at az 45/135/225/315
-  // ± 11.25° (Design 7b clocks the hinges to 41/139/221/319 — INSIDE those
+  // ± 11.25° (Design 7b clocks the hinges to 40/140/220/320 — INSIDE those
   // grants), hinge band z −1.000..−0.886 at r 0.34..0.51 (Design 7b widened
   // the bracket band from 0.46 — the owner-approved launch-only amendment),
   // deployed envelope z ≤ −1.0, pose band θ ∈ [90°,146°] under thrust,
@@ -1638,18 +1674,45 @@ export const Constants = {
     FLOWER: {
       // ── Stations (allocation table rows FLOWER-NE/NW/SW/SE, binding) ──
       // Design 7b (2026-09-08, "has to fold to fit in rocket for launch"): the
-      // flower folds FORE along the barrel for launch (θ 0), so the stations
-      // clock 4° toward the solar-coil axis — the fore-folded boom root must
-      // thread the lane between the docked weaver bodies (az 60 ± 12.5°, r to
-      // 0.528 in the pocket band) and the MGA patch (az 9.8..40.2, r 0.424),
-      // and the folded 0.30 m pack edge must clear the furled coil (r 0.638 at
-      // az 0/180). 41° is the balance point (probe 7b.4c: MGA 0.023 / weaver
-      // 0.025 / coil 0.032 m; 40° → coil 23 mm, 42° → weaver 17 mm). Pairs
-      // stay exact diagonals (trim-neutral); every station lies inside its
-      // P1 ±11.25° grant.
-      AZIMUTHS_DEG: [41, 139, 221, 319],
-      PAIR_A_AZ_DEG: [41, 221],    // trim-neutral diagonal (S12 ⟂-CoM 0.0000)
-      PAIR_B_AZ_DEG: [139, 319],   // second diagonal — shop stages pairs
+      // flower folds FORE along the barrel for launch (θ 0), so the fore-folded
+      // boom root must thread the lane between the docked weaver bodies (az
+      // 60 ± 12.5°, r to 0.528 in the pocket band) on the OUTBOARD side and the
+      // MGA patch (az 9.8..40.2, r 0.424), the net-launcher pods and the furled
+      // ROSA coil on the INBOARD side. That balance landed on 41°.
+      //
+      // ROSA coil-physics fix: the coil radius became derived rather than
+      // styled (PlayerSatellite.rosaFurledCoilRadiusM ≈ 0.0546 vs the old
+      // 0.1575), moving the coil wall 103 mm inboard and lifting the constraint
+      // that had held the stations OFF the ROSA plane — the old note's "40° →
+      // coil 23 mm" is now "40° → coil 129 mm".
+      //
+      // But the coil was never the only inboard wall, and the one that binds
+      // now is the PLUME CONE at the STOW pose. The main FEEP sit at az
+      // 0/90/180/270, so the stations are squeezed between a thruster at 0° and
+      // a daughter at 60°; STOW (146°) is the thrust-band ceiling, i.e. the one
+      // ladder pose held while the engines burn, and its cone clearance is
+      // gated at 0.70 m (vs the 0.15 m P1 floor for PARK/CARGO) precisely
+      // because that is where exhaust would play on a radiator. Re-measured on
+      // the built model (tmp/flower-reclock-probe.mjs):
+      //
+      //     az   hull(MGA)  weaver   coil    STOW cone
+      //     41     0.023    0.025    0.137     0.719     <- old station
+      //     40     0.022    0.032    0.129     0.712     <- new station
+      //     39     0.022    0.040    0.121     0.705
+      //     38     0.023    0.048    0.112     0.699     <- fails the 0.70 cone gate
+      //     36     0.026    0.063    0.096     0.686     <- fails
+      //
+      // So the coil fix buys 2° of honest room, not the ~11° an azimuth-only
+      // reading of it suggests. 40° takes it: +28 % docked-daughter clearance
+      // (25 → 32 mm) with 12 mm still in hand on the binding cone gate and 2°
+      // to its cliff. Going further trades a years-long plume-contamination
+      // margin for millimetres of visual gap — the wrong trade, and the lever
+      // for a larger gain is the MGA patch or the STOW angle, not this number.
+      // Pairs stay exact diagonals (trim-neutral); 40° is inside the P1
+      // ±11.25° station grant (33.75..56.25).
+      AZIMUTHS_DEG: [40, 140, 220, 320],
+      PAIR_A_AZ_DEG: [40, 220],    // trim-neutral diagonal (S12 ⟂-CoM 0.0000)
+      PAIR_B_AZ_DEG: [140, 320],   // second diagonal — shop stages pairs
       // Hinge pin r 0.475 (was 0.40 = the rim). The clevis stands 7.5 cm above
       // the rim so the fore-folded boom's inner surface (0.475 − 0.03 = 0.445)
       // passes OVER the body-PV facet corners (r 0.412) and the MGA patch's
@@ -1751,7 +1814,7 @@ export const Constants = {
 
       // ── Per-size tip-bag pose bands (probe 2 §1c′, R=2.5, exact tip-sphere
       //    vs enforced cones at the LIVE pin — hinge r 0.475, stations
-      //    41/139/221/319; tmp/flower-pose-band.mjs reads both from this
+      //    40/140/220/320; tmp/flower-pose-band.mjs reads both from this
       //    block: exact 146.0000 / 137.6014 / 125.7107 / 115.5860). Design 7b
       //    re-derived them (was 146.0 / 136.7 / 124.8 / 114.6 at 45 / 0.40 —
       //    kept in the probe as its §0-class gate): every band widens slightly
