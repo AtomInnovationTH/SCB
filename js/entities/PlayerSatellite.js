@@ -3224,7 +3224,7 @@ export class PlayerSatellite extends THREE.Group {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'THERMAL',
       text: `Radiator folded to ${FL.POSE_LAUNCH_DEG}° — the stowed launch pose. `
-        + 'Solar arrays centred to clear the fold corridor. '
+        + 'Solar arrays centred to clear the fold corridor; daughter struts must be stowed too. '
         + 'Folded panels radiate nothing: heat will build while stowed. Tap RADIATOR / O to deploy.',
       priority: 'warning',
     });
@@ -3339,6 +3339,7 @@ export class PlayerSatellite extends THREE.Group {
       if (override) {
         this._flowerOverrideFold = true;
         if (!this._rosaCenteredForFold()) this._noteRosaCentering();
+        if (!this._armsStowedForFold()) this._noteArmStowWait();
       }
       this._flowerLaunchLock = true;
       this._flowerTargetTheta = ((FL.POSE_LAUNCH_DEG - 0.5) * Math.PI) / 180;
@@ -3765,7 +3766,10 @@ export class PlayerSatellite extends THREE.Group {
    * (probe 7b.4c / 7b.6b). Owner decision 2026-09-09 (B): under an OVERRIDE
    * fold (`_flowerOverrideFold`) the floor drops only once both ROSA pivots
    * are centred (`_rosaCenteredForFold`) — until then θ stalls at the orbit
-   * floor with the latch alive. The lock (and the hold) clear — once, with
+   * floor with the latch alive. Owner-reported 2026-09-22: the ARMS are a
+   * second condition on the same gate (`_armsStowedForFold`) — the petals fold
+   * fore past the daughter struts, and the corridor is only clear at any α
+   * down to θ 10°. The lock (and the hold) clear — once, with
    * Events.THERMAL_FLOWER_RELEASED — the frame a release swing (any target at
    * or above the orbit floor) carries θ up to POSE_FLOOR_DEG; a release never
    * latches below the floor (so a CARGO release cannot settle at 89.9° with
@@ -3792,7 +3796,8 @@ export class PlayerSatellite extends THREE.Group {
     // far below, so the settle test never fires), and resumes the frame the
     // arrays are parked. The sequence / dev-force armings drop it at once.
     const orbitFloorRad = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
-    const foldFloorOpen = this._flowerLaunchLock && (!this._flowerOverrideFold || this._rosaCenteredForFold());
+    const foldFloorOpen = this._flowerLaunchLock
+      && (!this._flowerOverrideFold || (this._rosaCenteredForFold() && this._armsStowedForFold()));
     const floorRad = foldFloorOpen ? (FL.POSE_LAUNCH_DEG * Math.PI) / 180 : orbitFloorRad;
     // Vent push-through (owner ask): the ladder ceiling lifts from the bud to
     // POSE_VENT_DEG only while the player has explicitly double-commanded it.
@@ -6317,6 +6322,46 @@ export class PlayerSatellite extends THREE.Group {
     if (r && Math.abs(r.rotation.x) > tol) return false;
     if (l && Math.abs(l.rotation.x) > tol) return false;
     return true;
+  }
+
+  /**
+   * The second condition on the fold corridor (measured 2026-09-22, after the
+   * owner spotted the interference). The petals fold FORE along the barrel and
+   * pass the daughter arms, which root at z +0.90 and sweep out to meet them —
+   * only 20° away in azimuth. Worst case over every arm angle is 0.2 mm at
+   * θ 0, i.e. contact; the corridor is clear at ANY α down to θ 10°, so this
+   * gate only governs the last few degrees of the fold.
+   *
+   * An arm reported LOCKED or STOWED is driven to α 0 by _updateStruts
+   * regardless of its aim, so it counts as parked whatever it last aimed at.
+   * @returns {boolean} true when every arm is within tolerance of stowed
+   */
+  _armsStowedForFold() {
+    const arms = this.armManager && this.armManager.arms;
+    if (!arms || arms.length === 0) return true;
+    const tol = ((Constants.THERMAL.FLOWER.FOLD_ARM_STOW_TOL_DEG ?? 1.5) * Math.PI) / 180;
+    for (const arm of arms) {
+      if (!arm) continue;
+      const ds = arm.getDeployState ? arm.getDeployState() : undefined;
+      if (ds === 'LOCKED' || ds === 'STOWED') continue;   // driver forces α = 0
+      const a = arm.getAimAlpha ? arm.getAimAlpha() : Math.PI / 2;
+      if (Math.abs(a) > tol) return false;
+    }
+    return true;
+  }
+
+  /**
+   * @private One COMMS line per OVERRIDE fold arming when the ARMS are not yet
+   * stowed. Unlike the ROSA, the arms are not centred automatically: they may
+   * be tethered, holding cargo or mid-salvage, so the mechanism waits at the
+   * 90° floor and says what it is waiting for instead of retracting them.
+   */
+  _noteArmStowWait() {
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'THERMAL',
+      text: 'OVERRIDE — daughter arms are in the radiator fold corridor; the panels hold at 90° until the struts are stowed. Tap STRUTS / . to stow them.',
+      priority: 'info',
+    });
   }
 
   /**

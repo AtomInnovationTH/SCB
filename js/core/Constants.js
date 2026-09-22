@@ -1866,6 +1866,29 @@ export const Constants = {
       // from ±90°), then continues below 90 without a pause. 2° keeps ≈ 100 mm.
       OVERRIDE_ROSA_CENTER_TOL_DEG: 2,
 
+      // The ROSA is not the only thing in the fold corridor. The DAUGHTER ARMS
+      // root at z +0.90 r 0.40 (az 60/120/240/300) and the petals fold FORE
+      // past them — 20° away in azimuth — so the folded plate and a swung-out
+      // strut occupy the same space. Measured on the built model
+      // (tmp/fold-vs-strut-fine.mjs, tmp/interlock-numbers.mjs):
+      //
+      //   θ profile, worst over ALL α:  90..50° >250 mm,  40° 132,  30° 92,
+      //   20° 81,  15° 60,  10° 36,  5° 16 (contact),  0° 0.2 (contact).
+      //   α profile at θ=0:  0° 58.5,  1° 39.8,  1.5° 30.5,  2° 21.2,
+      //   2.5° 12.1 (fails),  3° 4.8,  22° 0.2 (worst).
+      //
+      // So the corridor is clear at ANY arm angle down to θ 10°, and the last
+      // 10° needs the arms stowed. Same shape as the ROSA hold above, so it is
+      // the same mechanism: the driver floor stays at POSE_FLOOR_DEG until the
+      // arms are within this tolerance of α 0. 1.5° keeps 30 mm against the
+      // 20 mm gate; 2° would keep only 21 mm, which is the gate itself.
+      //
+      // Re-clocking the stations away from the arms was measured and REJECTED
+      // — see docs/DECISIONS.md §5. The clock is boxed in on all sides: the
+      // strut needs φ ≤ 36.5° and the ROSA drum needs φ ≥ 41°, so no station
+      // angle satisfies both (tmp/obstacle-map.mjs).
+      FOLD_ARM_STOW_TOL_DEG: 1.5,
+
       // ── Slew (daughter-stack mirror; drift-guarded ===
       //    OCTOPUS_V5.STRUT_SLEW_RATE by test-FlowerPose.js) ──
       SLEW_RATE_RAD_S: 15 * Math.PI / 180,   // 15°/s — full O swing 146°→90° in 3.73 s
