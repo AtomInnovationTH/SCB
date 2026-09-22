@@ -3692,10 +3692,42 @@ async function init() {
       //       follow the real code path).
       //   window.__scbInspectView(distM)
       //     → discrete INSPECTION view at the given distance.
+      //
+      //   BOTH REFUSE WHILE THE ZOOM LADDER IS ENGAGED (2026-09-22). The ladder
+      //   is the highest-priority camera driver — CameraSystem's "Zoom Ladder
+      //   override (S2)" branch bypasses the normal view path entirely — so the
+      //   orbit/inspection fields these two hooks write are recomputed and
+      //   discarded on the very next frame. They used to write them anyway and
+      //   return a cheerful {view, distM} object describing what they would
+      //   have done. That silent no-op cost a whole strut-visibility
+      //   investigation: every frame was shot at ~100 m while labelled 9.68 m,
+      //   the ship was 110 px wide, and three separate "defects" were diagnosed
+      //   and nearly fixed before the instrument itself was suspected. A loud
+      //   refusal is worth more than a plausible wrong frame.
+      //   Use __scbInspectAxis(dir, distM) — it writes the ladder pose
+      //   (lc.local) and pins the distance, so it works on every floor.
       // Distances map to callout bands: SYSTEM ≥ 9 m, PART 5.5–8 m,
       // COMPONENT < 5.5 m (BAND in ui/MotherCallouts.js).
+      const _ladderRefusesCamHook = (hook) => {
+        const lc = cameraSystem && cameraSystem._ladderCam;
+        if (!lc || !lc.active) return null;
+        const message = `${hook} is a no-op while the zoom ladder is engaged: `
+          + 'the ladder overrides the orbit/inspection camera every frame, so this '
+          + 'call would be silently discarded and any screenshot would be taken at '
+          + 'whatever distance the ladder chose. Use __scbInspectAxis(dir, distM).';
+        console.warn(`[scb] ${message}`);
+        return {
+          error: 'ladder-engaged',
+          hook,
+          hint: '__scbInspectAxis(dir, distM)',
+          floor: (window.__ladder && window.__ladder.currentFloor) ? window.__ladder.currentFloor() : null,
+          message,
+        };
+      };
       window.__scbInspect = (thetaDeg = 0, phiDeg = 90, distM = 10) => {
         if (!cameraSystem) return 'no cameraSystem';
+        const refused = _ladderRefusesCamHook('__scbInspect');
+        if (refused) return refused;
         cameraSystem.setView('ORBIT');
         const o = cameraSystem.orbit;
         o.theta = thetaDeg * Math.PI / 180;
@@ -3708,6 +3740,8 @@ async function init() {
       };
       window.__scbInspectView = (distM = 7) => {
         if (!cameraSystem) return 'no cameraSystem';
+        const refused = _ladderRefusesCamHook('__scbInspectView');
+        if (refused) return refused;
         cameraSystem.setView('INSPECTION');
         cameraSystem.inspection.distance = distM * 1e-5;
         return { view: cameraSystem.currentView, distM };
