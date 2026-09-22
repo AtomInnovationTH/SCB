@@ -1511,6 +1511,12 @@ export const Constants = {
     // boom along EACH long edge, rolled onto a root spool/mandrel ("like a tape
     // measure"). Deploys passively via boom strain energy. The Mother is a
     // (gameplay-liberty) motorised re-furlable variant — real ROSA is one-way.
+    // Evidence for the one-way claim, re-verified 2026-09-22: the June 2017 ISS
+    // flight test is the only time anyone tried to take one back. After a
+    // 12-day test, controllers could not lock the array in its stowed
+    // configuration and it was jettisoned on 30 June rather than retrieved. The
+    // codex entry `rosa_solar_array` tells the player exactly this, so the
+    // fiction is disclosed rather than quietly assumed.
     ROSA_BOOM_OD: 0.020,           // m — slit-tube edge boom diameter (both long edges)
     ROSA_DRUM_R: 0.050,            // m — root roller drum / mandrel radius
     // Rolled stack thickness, the INPUT to the furled-coil radius (see
@@ -1782,6 +1788,36 @@ export const Constants = {
                                    // (the floor drops to POSE_LAUNCH_DEG only
                                    // while the one-shot launch lock is armed)
       POSE_THRUST_MAX_DEG: 146,    // P1 global keep-out 7 (reserved band edge)
+      // VENT — the deliberate over-open pose past the bud, reached only by a
+      // double-command (PlayerSatellite.toggleFlowerDeploy) and warned in COMMS.
+      //
+      // Owner ask was "almost 180". The ship does not allow it. Swept on the
+      // built model (tmp/flower-vent-sweep.mjs), plume-cone clearance and Y3
+      // axial camping vs θ:
+      //
+      //     θ     cone clear   Y3 camped
+      //    146      0.712        0.000     ← the bud; the 0.70 m cone gate
+      //    152      0.399        0.000
+      //    158      0.094        0.000     ← VENT: last θ clear of both
+      //    160     -0.005        0.000     ← inside the plume
+      //    174     -0.673        0.013     ← and now camping Y3 as well
+      //    180     -0.935        1.670
+      //
+      // Two things fall out. First, 146 is not an arbitrary wall: it is exactly
+      // where exhaust standoff reaches its 0.70 m floor, so the owner's
+      // intuition ("past here the thrusters will coat the panels") is the
+      // literal reason the number exists. Second, 180 is unreachable — the arm
+      // would sit 0.935 m INSIDE an exhaust cone and camp 1.67 m of the axial
+      // reserve. 158 takes the last clear step with 2° to the cone crossing.
+      //
+      // Thrust is already refused above POSE_THRUST_MAX_DEG by
+      // _flowerPoseBandGuard, so venting inhibits the drive through the
+      // EXISTING law — no safety rule is relaxed to allow this pose.
+      POSE_VENT_DEG: 158,
+      // Window for the second bud command that pushes through to the vent.
+      // Long enough to be a comfortable deliberate double-tap, short enough
+      // that two unrelated stow presses never read as one.
+      VENT_DOUBLE_TAP_MS: 600,
       // Design 7b LAUNCH pose: θ 0 — the strut lies FORE along the barrel with
       // its wings folded (four 0.30 × 0.101 × 1.70 m packs at r ≤ 0.546, tips
       // z 1.505; probe 7b.4c B′: MGA 0.023 / PV 0.031 / weaver 0.025 / coil

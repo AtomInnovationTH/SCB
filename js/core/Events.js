@@ -563,6 +563,13 @@ export const Events = {
    *  LAUNCH_LOCK_RELEASED (the per-daughter strut pyros — their counts in
    *  test-LaunchSequence.js stay 4 / 6). Payload: { thetaDeg: number }. */
   THERMAL_FLOWER_RELEASED: 'thermal:flowerReleased',
+  /** Owner ask 2026-09-16: the radiator was deliberately VENTED past the 146°
+   *  thrust band to POSE_VENT_DEG, by a double-command into the bud. The drive
+   *  is inhibited there under the existing pose-band law, and metal FEEP
+   *  exhaust would plate the panels — the COMMS warning says so. Emitted once
+   *  per push-through by PlayerSatellite._warnFlowerVent.
+   *  Payload: { thetaDeg: number }. */
+  THERMAL_FLOWER_VENTED:  'thermal:flowerVented',
 
   // === ONBOARDING (Delegation 2 — bottom-screen hint ticker + director) ===
   /** OnboardingDirector posts a hint to the bottom-screen ticker.

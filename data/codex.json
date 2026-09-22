@@ -4040,14 +4040,14 @@
       ],
       "i18n": {
         "title": "Roll-Out Solar Array (ROSA)",
-        "shortText": "A solar panel that unrolls like a tape measure. Composite booms store the spring energy, so there are no motors to deploy it.",
+        "shortText": "A solar panel that unrolls like a tape measure. Spring-loaded booms drive it out — and the real ones only unroll once.",
         "hardwareNote": "The two roll-out wings are the mothership’s main power source, about 2.2 kW in sunlight; their spring-boom deployment is the briefing.",
-        "fullText": "A roll-out solar array ships coiled up like a window shade. Its structure is a pair of flexible composite booms that hold strain energy while rolled. Released, they straighten under their own stored energy and pull the blanket of solar cells out flat. Nothing drives the deployment: no motors, no explosive bolts, so there is far less to fail.\n\nROSA was demonstrated on the International Space Station in June 2017. Larger iROSA arrays began upgrading the station's power in June 2021, and the DART asteroid mission flew ROSA wings the same year. Rolled up, the array is lighter and far more compact than rigid hinged panels of the same output. The deployable panels on your ship are roll-out arrays built on this design.",
-        "realWorld": "Demonstrated on the ISS June 2017; iROSA upgrade arrays installed from June 2021; DART flew ROSA wings (2021).",
-        "trlRationale": "Flown and operational on the ISS and DART.",
+        "fullText": "A roll-out solar array ships coiled up like a window shade. Its structure is a pair of flexible composite booms that hold strain energy while rolled. Released, they straighten under their own stored energy and pull the blanket of solar cells out flat. Nothing drives the deployment: no motors, no explosive bolts, so there is far less to fail.\n\nROSA was demonstrated on the International Space Station in June 2017. Larger iROSA arrays began upgrading the station's power in June 2021, the DART asteroid mission flew ROSA wings the same year, and Ovzon-3 took the design to a commercial geostationary satellite in January 2024. Rolled up, the array is lighter and far more compact than rigid hinged panels of the same output. The deployable panels on your ship are roll-out arrays built on this design.\n\nOne honest difference, and it is the only one. A real ROSA unrolls ONCE. The booms spend their stored energy going out, and nothing is built to wind them back. That 2017 station test is the proof: after twelve days of thermal cycling and deliberate shaking, controllers tried to re-stow the array, could not get it to lock down, and jettisoned it on 30 June rather than fight it. Your mothership's wings take the one liberty this ship allows itself — a motorised spool that can re-furl them on command, so you can roll the blanket away from a tether strike or a debris pass. The blanket, the slit-tube booms and the tape-measure roll are all flight-proven; only the ability to take it back is ours.",
+        "realWorld": "Demonstrated on the ISS June 2017 — the re-stow would not latch and the array was jettisoned 30 June after a 12-day test. iROSA upgrade arrays installed from June 2021; DART flew ROSA wings (2021); first commercial GEO use on Ovzon-3 (January 2024).",
+        "trlRationale": "Flown and operational on the ISS, DART and Ovzon-3. The re-furlable spool on this ship is the one extrapolation — no flown ROSA rolls back up.",
         "unlockHint": "Deploy the ship's solar arrays."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-09"
     },
     {
       "id": "thermal_cycling",

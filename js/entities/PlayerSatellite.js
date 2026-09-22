@@ -247,6 +247,14 @@ export class PlayerSatellite extends THREE.Group {
      *  player intent wins mid-swing (a new toggle overwrites an in-flight
      *  target), bounded rate, never a snap, cleared on arrival. */
     this._flowerTargetTheta = undefined;
+    /** VENT push-through state (owner ask 2026-09-16). `_flowerVentArmed`
+     *  lifts the driver's ladder ceiling from the bud (POSE_STOW_DEG) to
+     *  POSE_VENT_DEG; `_lastFlowerTap` timestamps the last O press, so a
+     *  second one inside VENT_DOUBLE_TAP_MS that lands on the bud is read as
+     *  "push through the wall". Both clear on any ordinary pose command and on
+     *  every reset path — the vent is never a resting default. */
+    this._flowerVentArmed = false;
+    this._lastFlowerTap = undefined;
     /** Design 7b one-shot launch lock: while armed the driver floor is
      *  POSE_LAUNCH_DEG (0°) instead of POSE_FLOOR_DEG (90°) so the flower can
      *  lie fore along the barrel inside the fairing. Armed ONLY by
@@ -2924,15 +2932,24 @@ export class PlayerSatellite extends THREE.Group {
 
   /**
    * Toggle the ROSA arrays between furled (rolled up) and unfurled (deployed).
-   * Mirrors the strut deploy/stow toggle on ".". Furling reduces solar power
-   * (ROSA share only — body-mount cells stay on) but lets the player retract
-   * the wings to avoid debris or tether strikes.
+   * Mirrors the strut deploy/stow toggle on "." — and now genuinely so.
+   * Furling reduces solar power (ROSA share only — body-mount cells stay on)
+   * but lets the player retract the wings to avoid debris or tether strikes.
+   *
+   * Direction comes from the COMMANDED target, not the live animation, so any
+   * press reverses immediately — the "." law (InputManager reads
+   * `_strutTargetAlpha ?? getAimAlpha()` for exactly this reason).
+   *
+   * It used to read `_rosaFurlProgress >= 0.5`, whose comment claimed a
+   * mid-animation press reverses. It did not: pressing at progress 0.9 while
+   * already furling re-commanded the SAME target, so the wings kept rolling up
+   * and the key looked dead until the animation crossed halfway. Reading the
+   * target makes the first press reverse, every time, at any progress.
    * @returns {number} the new furl target (0 = furling, 1 = unfurling)
    */
   toggleRosaFurl() {
     this._rosaManualControl = true;
-    // Decide from the live animated progress so a mid-animation press reverses.
-    this._rosaFurlTarget = this._rosaFurlProgress >= 0.5 ? 0.0 : 1.0;
+    this._rosaFurlTarget = this._rosaFurlTarget >= 0.5 ? 0.0 : 1.0;
     return this._rosaFurlTarget;
   }
 
@@ -3066,10 +3083,11 @@ export class PlayerSatellite extends THREE.Group {
     const openFrac = Math.max(0, Math.min(1, (FL.POSE_STOW_DEG - thetaDeg) / span));
     const slewing = this._flowerTargetTheta !== undefined;
     const near = (deg) => Math.abs(thetaDeg - deg) < 1.0;
-    const pose = near(FL.POSE_STOW_DEG) ? 'STOW'
-      : near(FL.POSE_PARK_DEG) ? 'PARK'
-        : near(FL.POSE_CARGO_DEG) ? 'CARGO'
-          : near(FL.POSE_LAUNCH_DEG) ? 'LAUNCH' : 'SLEW';
+    const pose = near(FL.POSE_VENT_DEG) ? 'VENT'
+      : near(FL.POSE_STOW_DEG) ? 'STOW'
+        : near(FL.POSE_PARK_DEG) ? 'PARK'
+          : near(FL.POSE_CARGO_DEG) ? 'CARGO'
+            : near(FL.POSE_LAUNCH_DEG) ? 'LAUNCH' : 'SLEW';
     return { pairCount, thetaDeg, openFrac, slewing, pose, locked: this._flowerLaunchLock };
   }
 
@@ -3080,16 +3098,83 @@ export class PlayerSatellite extends THREE.Group {
    * — the daughter latch contract). Design 7b: while the launch lock is armed
    * (θ 0, fore-folded) this is a RELEASE — θ 0 is below the midpoint, so the
    * target is STOW and the driver clears the lock as θ passes the 90° floor.
-   * Never arms the lock (the plain-O law; the OVERRIDE sweep is
-   * toggleFlowerOverride).
+  /**
+   * O key — toggle the aft flower between the stow bud (146°) and the full
+   * bloom (CARGO 90°).
+   *
+   * Direction comes from the COMMANDED target, falling back to the live pose
+   * when nothing is in flight — the "." strut law verbatim (InputManager reads
+   * `_strutTargetAlpha ?? getAimAlpha()`, with a comment about the bug from
+   * reading either one alone). So ANY press reverses an in-flight slew, at any
+   * angle. It used to read the live θ only, which meant a press while slewing
+   * re-commanded the same target and the key appeared dead until the swing
+   * crossed the 118° midpoint.
+   *
+   * Design 7b: while the launch lock is armed (θ 0, fore-folded) this is a
+   * RELEASE — θ 0 is below the midpoint, so the target is STOW and the driver
+   * clears the lock as θ passes the 90° floor. Never arms the lock (the plain-O
+   * law; the OVERRIDE sweep is toggleFlowerOverride).
+   *
+   * VENT push-through (owner ask 2026-09-16: "reverse 2 times into the 146
+   * degree wall pushes through, with a warning in comms"). Because presses now
+   * alternate cleanly, two taps inside VENT_DOUBLE_TAP_MS land back on the
+   * direction you started in — which makes a double-tap a free gesture. When
+   * that pair lands on the BUD, it is read as pushing through the wall and the
+   * target becomes POSE_VENT_DEG instead. A single tap never vents.
+   *
+   * Nothing is made less safe: thrust above POSE_THRUST_MAX_DEG is already
+   * refused by _flowerPoseBandGuard, so the vent inhibits the drive under the
+   * existing law. The warning explains the trade it is making.
    * @returns {boolean} true when now deploying (opening toward CARGO)
    */
   toggleFlowerDeploy() {
     const FL = Constants.THERMAL.FLOWER;
     const mid = ((FL.POSE_STOW_DEG + FL.POSE_CARGO_DEG) / 2) * Math.PI / 180;
-    const deploying = this._flowerThetaRad > mid;
+    // The "." law: the pending target wins, the live pose is the fallback.
+    const ref = this._flowerTargetTheta !== undefined ? this._flowerTargetTheta : this._flowerThetaRad;
+    const deploying = ref > mid;
+
+    // Two taps inside the window land back on the starting direction; when that
+    // direction is the bud, read it as the deliberate push past the wall.
+    const now = performance.now();
+    const doubleTap = this._lastFlowerTap !== undefined
+      && now - this._lastFlowerTap < FL.VENT_DOUBLE_TAP_MS;
+    this._lastFlowerTap = now;
+
+    if (!deploying && doubleTap && this._flowerGroups.length > 0) {
+      this._lastFlowerTap = undefined;             // one push per double-tap
+      this._flowerVentArmed = true;
+      this._flowerTargetTheta = (FL.POSE_VENT_DEG * Math.PI) / 180;
+      this._warnFlowerVent();
+      return false;
+    }
+
+    this._flowerVentArmed = false;                 // any ordinary command stows the vent
     this._flowerTargetTheta = ((deploying ? FL.POSE_CARGO_DEG : FL.POSE_STOW_DEG) * Math.PI) / 180;
     return deploying;
+  }
+
+  /**
+   * @private Say what the VENT pose costs, once per entry. The radiator is now
+   * past the thrust band, so the drive is inhibited (the existing pose-band
+   * law); the line names the physical reason rather than just the refusal.
+   *
+   * The physics is real and is the strongest case available: the Mother runs
+   * dual-metal FEEP, i.e. CONDENSABLE metal propellant. Metal ion exhaust
+   * plates out on whatever it reaches and stays there — it is why ThrustMe
+   * chose iodine over caesium for exactly this reason, and why electric-
+   * propulsion plume redeposition is a standing contamination concern.
+   */
+  _warnFlowerVent() {
+    const FL = Constants.THERMAL.FLOWER;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'THERMAL',
+      text: `WARNING: radiator vented to ${FL.POSE_VENT_DEG}° — past the ${FL.POSE_THRUST_MAX_DEG}° thrust band. `
+        + 'Ion thruster exhaust will degrade the radiator panels: metal propellant condenses on them and does not come off. '
+        + 'Drive inhibited until the radiator returns. Tap RADIATOR / O to stow.',
+      priority: 'warning',
+    });
+    eventBus.emit(Events.THERMAL_FLOWER_VENTED, { thetaDeg: FL.POSE_VENT_DEG });
   }
 
   /**
@@ -3234,6 +3319,8 @@ export class PlayerSatellite extends THREE.Group {
     this._flowerLaunchLock = true;
     this._flowerOverrideFold = false;   // the sequence's arming is not an OVERRIDE fold — no ROSA hold, the floor drops at once
     this._flowerTargetTheta = undefined;
+    this._flowerVentArmed = false;
+    this._lastFlowerTap = undefined;
     this._flowerThetaRad = (FL.POSE_LAUNCH_DEG * Math.PI) / 180;
     this._updateFlower(0);
     return true;
@@ -3254,6 +3341,8 @@ export class PlayerSatellite extends THREE.Group {
     this._flowerLaunchLock = false;
     this._flowerOverrideFold = false;
     this._flowerTargetTheta = undefined;
+    this._flowerVentArmed = false;
+    this._lastFlowerTap = undefined;
     this._flowerThetaRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
     this._updateFlower(0);
     // Opening dance: the release event is suppressed while the dance drives
@@ -3651,7 +3740,11 @@ export class PlayerSatellite extends THREE.Group {
     const orbitFloorRad = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
     const foldFloorOpen = this._flowerLaunchLock && (!this._flowerOverrideFold || this._rosaCenteredForFold());
     const floorRad = foldFloorOpen ? (FL.POSE_LAUNCH_DEG * Math.PI) / 180 : orbitFloorRad;
-    const ceilRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+    // Vent push-through (owner ask): the ladder ceiling lifts from the bud to
+    // POSE_VENT_DEG only while the player has explicitly double-commanded it.
+    // Any ordinary pose command clears it, so the ceiling is the bud by default.
+    const ceilRad = ((this._flowerVentArmed ? FL.POSE_VENT_DEG : FL.POSE_STOW_DEG) * Math.PI) / 180;
+
     this._flowerThetaRad = Math.max(floorRad, Math.min(ceilRad, this._flowerThetaRad));
 
     // Design 7b release: an orbit-bound swing under the lock clears it the
