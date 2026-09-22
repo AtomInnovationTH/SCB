@@ -1536,6 +1536,28 @@ export class ArmManager {
     // Opening-dance plan decision 5: deploy TARGET is 146°
     // (Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA), not the π sweep ceiling —
     // named once, mirrored by InputManager's Period case (do-not-edit-there).
+    //
+    // PUSH-THROUGH (owner 2026-09-22: "daughter struts ... can fully open to
+    // 180 degree and fully close to stowed position"). The rest pose is 146°,
+    // but STRUT_SWEEP_MAX is already π — 146 is a resting choice, not a limit.
+    // Two taps inside STRUT_PUSH_WINDOW_MS that both land on "deploy" push the
+    // whole ring to the full 180° zenith. Measured clear on the built model
+    // (tmp/strut180-probe.mjs / tmp/strut180-neighbour.mjs): 110 mm to the
+    // radiator petals across every (α, θ) pair, 178 mm between neighbouring
+    // daughters at the converged pose, and plume-clear because the swing goes
+    // FORE, away from the aft thrusters. Nothing blocks it.
+    const now = (typeof performance !== 'undefined' && performance.now)
+      ? performance.now() : Date.now();
+    const doubleTap = this._lastStrutTap !== undefined
+      && now - this._lastStrutTap < Constants.OCTOPUS_V5.STRUT_PUSH_WINDOW_MS;
+    this._lastStrutTap = now;
+
+    if (!anyDeployed && doubleTap) {
+      this._lastStrutTap = undefined;               // one push per double-tap
+      for (const a of docked) a._strutTargetAlpha = Constants.OCTOPUS_V5.STRUT_SWEEP_MAX;
+      return true;
+    }
+
     const targetAlpha = anyDeployed ? 0 : Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA;
     for (const arm of docked) arm._strutTargetAlpha = targetAlpha;
     return !anyDeployed;

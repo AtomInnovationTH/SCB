@@ -3164,18 +3164,33 @@ export class PlayerSatellite extends THREE.Group {
    * plates out on whatever it reaches and stays there — it is why ThrustMe
    * chose iodine over caesium for exactly this reason, and why electric-
    * propulsion plume redeposition is a standing contamination concern.
+   *
+   * Owner 2026-09-22: full 180° is allowed, into the cone, WITH warnings. So
+   * the line escalates — it names whichever hazards the commanded pose crosses
+   * (measured thresholds POSE_VENT_CONE_DEG / POSE_VENT_Y3_DEG) instead of
+   * pretending the pose is refused. Nothing physically blocks the swing: the
+   * tightest hull gap over the whole travel is 45.2 mm.
    */
   _warnFlowerVent() {
     const FL = Constants.THERMAL.FLOWER;
+    const th = FL.POSE_VENT_DEG;
+    const hazards = [];
+    if (th >= FL.POSE_VENT_CONE_DEG) {
+      hazards.push('inside the exhaust cone — metal propellant condenses on the panels and does not come off');
+    }
+    if (th >= FL.POSE_VENT_Y3_DEG) {
+      hazards.push('camping the aft axial reserve');
+    }
+    const why = hazards.length ? ` Panel is ${hazards.join(', and ')}.` : '';
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'THERMAL',
-      text: `WARNING: radiator vented to ${FL.POSE_VENT_DEG}° — past the ${FL.POSE_THRUST_MAX_DEG}° thrust band. `
-        + 'Ion thruster exhaust will degrade the radiator panels: metal propellant condenses on them and does not come off. '
+      text: `WARNING: radiator swept to ${th}° — past the ${FL.POSE_THRUST_MAX_DEG}° thrust band.${why} `
         + 'Drive inhibited until the radiator returns. Tap RADIATOR / O to stow.',
       priority: 'warning',
     });
-    eventBus.emit(Events.THERMAL_FLOWER_VENTED, { thetaDeg: FL.POSE_VENT_DEG });
+    eventBus.emit(Events.THERMAL_FLOWER_VENTED, { thetaDeg: th });
   }
+
 
   /**
    * SAFETY OVERRIDE sweep (owner amendment 2026-09-09: "when player presses

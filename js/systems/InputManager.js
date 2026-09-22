@@ -1239,27 +1239,13 @@ export class InputManager {
           d.debrisMap.selectNext();
           e.preventDefault();
         } else if (isGameplay && d.armManager) {
-          const arms = d.armManager.arms;
-          // Toggle: if any docked strut is past halfway-deployed, stow all;
-          // otherwise deploy all (α → π zenith). Read the ACTUAL sweep angle
-          // (getAimAlpha), falling back to a pending slew target — NOT
-          // _strutTargetAlpha alone, which is cleared to undefined once the slew
-          // finishes. Reading only the target made the toggle stop stowing after
-          // the struts finished opening (it read undefined → 0 → "not deployed").
-          const armAlpha = (a) =>
-            a._strutTargetAlpha ?? (a.getAimAlpha ? a.getAimAlpha() : 0);
-          const anyDeployed = arms.some(a =>
-            a.state === Constants.ARM_STATES.DOCKED && armAlpha(a) >= Math.PI / 2);
-          // Opening-dance plan decision 5: deploy TARGET is 146°
-          // (Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA), not the π sweep
-          // ceiling — named once, read identically by ArmManager's public
-          // mirror of this same latch/guard (do-not-edit-there).
-          const targetAlpha = anyDeployed ? 0 : Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA;
-          for (const arm of arms) {
-            if (arm.state === Constants.ARM_STATES.DOCKED) {
-              arm._strutTargetAlpha = targetAlpha;
-            }
-          }
+          // ONE copy of the strut law. This case used to duplicate
+          // ArmManager.toggleStruts()'s latch/guard inline, which is exactly
+          // the shape that rots: the 2026-09-22 push-through (double-tap to the
+          // full 180° zenith, STRUT_PUSH_WINDOW_MS) would have had to be
+          // written twice and would have drifted the first time one copy was
+          // edited. Delegate; the geometry and the double-tap timer live there.
+          d.armManager.toggleStruts();
           d.audioSystem?.playClick();
           // Delegation 2 onboarding (2026-05-31): notify the OnboardingDirector.
           eventBus.emit(Events.STRUT_DEPLOY_INPUT);

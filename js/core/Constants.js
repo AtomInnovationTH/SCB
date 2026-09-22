@@ -1478,6 +1478,16 @@ export const Constants = {
     // duplicate in InputManager.js's Period case both read this constant.
     // STRUT_SWEEP_MAX above is untouched — the RANGE stays [0, π].
     STRUT_DEPLOY_ALPHA: 146 * Math.PI / 180, // rad (146°)
+    // Push-through window (owner 2026-09-22: struts "can fully open to 180
+    // degree and fully close to stowed position"). 146° is the RESTING pose,
+    // not a limit — STRUT_SWEEP_MAX above has always been π. Two "." taps
+    // inside this window that both land on "deploy" drive the ring to the full
+    // 180° zenith; the same key still closes all the way to 0. Matches the
+    // radiator's VENT_DOUBLE_TAP_MS so one gesture means one thing everywhere.
+    // Measured clear: 110 mm to the radiator petals over every (α, θ) pair,
+    // 178 mm between neighbouring daughters at the converged pose, plume-clear
+    // (the swing goes fore, away from the aft thrusters).
+    STRUT_PUSH_WINDOW_MS: 600,
     // Task 7 (own lane, decision 6/7): the duck target when a docked strut's
     // live tip would foul an inbound catch's berth corridor (CaptureNet's
     // _corridorClear test) at the new 146° rest. Never raise above 104° —
@@ -1791,29 +1801,39 @@ export const Constants = {
       // VENT — the deliberate over-open pose past the bud, reached only by a
       // double-command (PlayerSatellite.toggleFlowerDeploy) and warned in COMMS.
       //
-      // Owner ask was "almost 180". The ship does not allow it. Swept on the
-      // built model (tmp/flower-vent-sweep.mjs), plume-cone clearance and Y3
-      // axial camping vs θ:
+      // Owner ask was "almost 180", then explicitly "full 180 for radiators,
+      // into exhaust cone, with warnings" (2026-09-22). An earlier pass set
+      // this to 158 — the last θ clear of BOTH hazards — which confused a
+      // HAZARD with a WALL. Re-measured on the built model
+      // (tmp/full180-collision-probe.mjs): nothing physically blocks the swing.
       //
-      //     θ     cone clear   Y3 camped
-      //    146      0.712        0.000     ← the bud; the 0.70 m cone gate
-      //    152      0.399        0.000
-      //    158      0.094        0.000     ← VENT: last θ clear of both
-      //    160     -0.005        0.000     ← inside the plume
-      //    174     -0.673        0.013     ← and now camping Y3 as well
-      //    180     -0.935        1.670
+      //     θ     cone clear   Y3 camped   nearest hull mesh
+      //    146      0.712        0.000       0.0531   ← the bud
+      //    158      0.094        0.000       0.0487
+      //    160     -0.005        0.000       0.0481   ← enters the plume cone
+      //    171.5    ~-0.6        0.000+      0.0458   ← starts camping Y3
+      //    180      -0.935       1.662       0.0452   ← full open
       //
-      // Two things fall out. First, 146 is not an arbitrary wall: it is exactly
-      // where exhaust standoff reaches its 0.70 m floor, so the owner's
-      // intuition ("past here the thrusters will coat the panels") is the
-      // literal reason the number exists. Second, 180 is unreachable — the arm
-      // would sit 0.935 m INSIDE an exhaust cone and camp 1.67 m of the axial
-      // reserve. 158 takes the last clear step with 2° to the cone crossing.
+      // The tightest PHYSICAL gap over the whole 146→180 sweep is 45.2 mm to
+      // Barrel_ConfigG at 180°, against the project's 20 mm gate; furled-coil
+      // penetration is 0.000 throughout and deck clearance never drops below
+      // 0.145 m. So 180 is reachable and the arm never touches the ship.
       //
+      // What 180 costs is real but is not a collision: the panel sits 0.935 m
+      // INSIDE an exhaust cone and camps 1.662 m of the Y3 axial reserve. Both
+      // are warned in COMMS (POSE_VENT_CONE_DEG / POSE_VENT_Y3_DEG below).
       // Thrust is already refused above POSE_THRUST_MAX_DEG by
-      // _flowerPoseBandGuard, so venting inhibits the drive through the
-      // EXISTING law — no safety rule is relaxed to allow this pose.
-      POSE_VENT_DEG: 158,
+      // _flowerPoseBandGuard, so the cone is only dangerous if the drive could
+      // fire — and it cannot. No safety rule is relaxed to allow this pose.
+      //
+      // 146 still is not arbitrary: it is exactly where exhaust standoff
+      // reaches its 0.70 m floor, which is why the bud sits there.
+      POSE_VENT_DEG: 180,
+      // Measured warning thresholds on the way out (0.5° sweep,
+      // tmp/vent-thresholds.mjs). Used for the escalating COMMS lines only —
+      // neither is a limit, and neither stops the swing.
+      POSE_VENT_CONE_DEG: 160,     // first θ inside an enforced plume cone
+      POSE_VENT_Y3_DEG: 171.5,     // first θ camping the Y3 axial reserve
       // Window for the second bud command that pushes through to the vent.
       // Long enough to be a comfortable deliberate double-tap, short enough
       // that two unrelated stow presses never read as one.
