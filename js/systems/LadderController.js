@@ -90,6 +90,33 @@ export const INTRO_DANCE_LANDING_Z01 = 0.23;
 export const INTRO_DANCE_DRIFT_Z01 = 0.82;
 export const INTRO_DANCE_DOLLY_MS = 4500;
 /**
+ * Where the pull-back leaves the camera when the player takes the wheel —
+ * z01 0.17 on F2, i.e. **11 m** (owner, 2026-09-21: "closer", asked for 10 m).
+ *
+ * It is not 10 m, and cannot be: F2 runs 7–100 m, so 10 m sits at z01 0.134 —
+ * INSIDE the lower wall zone (`WALL_ZONE_FRAC` 0.15). Settle-back
+ * (`ZoomLadder._tick`) snaps any idle wall-zone position to the wall edge
+ * after `SETTLE_IDLE_MS` (250 ms), and the player is by definition idle for
+ * the first moment after hand-over — so a 10 m hand-over would visibly creep
+ * out to 10.43 m the instant control landed. 10.431 m is the hard floor;
+ * 11 m clears it by z01 0.02 of real margin (10.5 m clears by 0.0025, which
+ * is float dust). Measured, not derived by hand: `distanceFromZ01(F2, 0.17)`.
+ *
+ * Default (non-dance) intro rides do NOT pass this — they keep the contract's
+ * own ENTRY_Z01_FROM_BELOW 0.25 → 13.61 m, byte-identical to before.
+ */
+export const INTRO_DANCE_HANDOVER_Z01 = 0.17;
+/**
+ * How long the dance's final PULL-BACK takes — the move that carries the
+ * camera off the hull and out to the hand-over distance as the player takes
+ * the wheel. 1200 ms: the shipped flyby's `INTRO_PULLBACK_MS` (800) slowed by
+ * 50% (owner, 2026-09-21 — "too fast"). It is a separate constant rather than
+ * a bump to INTRO_PULLBACK_MS because that one is shared with the ORDINARY
+ * intro fly-in, which is not part of this cinematic and must stay as shipped.
+ * Absent (every non-dance ride) the pull-back keeps its 800 ms.
+ */
+export const INTRO_DANCE_PULLBACK_MS = 1200;
+/**
  * The dwell CEILING — never the exact duration (plan task 4): the dance's
  * total (the radiator's 0→146° at the shipped 15°/s ≈ 9730 ms, the long
  * pole) plus a 2 s drift margin. The dwell actually ends on
@@ -373,6 +400,8 @@ export class LadderController {
      * Cleared on disarm/disengage; rewritten by every armIntroRide.
      */
     this._introEntryZ01 = null;
+    this._introHandoverZ01 = null;
+    this._introPullbackMs = INTRO_PULLBACK_MS;
     this._introDwellMs = INTRO_DWELL_MS;
     this._introDolly = null;
     this._introDwellEarly = false;
@@ -1007,17 +1036,25 @@ export class LadderController {
    *     transition — nobody else knows when the dive lands. One shot; never
    *     fired when the dwell was already ended early (a skip's hand-over
    *     arrived mid-dive: there is nothing left to watch).
+   *   `handoverZ01` — where the PULL-BACK leaves the camera, i.e. where the
+   *     player takes the wheel. Absent (every non-dance ride) the contract's
+   *     own ENTRY_Z01_FROM_BELOW applies and the shipped flyby is untouched.
+   *   `pullbackMs` — how long that pull-back takes. Absent ⇒ INTRO_PULLBACK_MS,
+   *     the shipped 800 ms.
    * @param {{ rideMs?: number, entryZ01?: number, dwellMs?: number,
    *           dolly?: { toZ01: number, rideMs?: number },
+   *           handoverZ01?: number, pullbackMs?: number,
    *           reducedMotion?: boolean }} [arg]
    * @returns {boolean} whether the intro was armed (or, reduced, placed)
    */
-  armIntroRide({ rideMs, entryZ01, dwellMs, dolly, reducedMotion = false } = {}) {
+  armIntroRide({ rideMs, entryZ01, dwellMs, dolly, handoverZ01, pullbackMs, reducedMotion = false } = {}) {
     this._introPending = null;
     // Opening-dance options reset to today's defaults FIRST — every early
     // return below (reduced motion, a contract without headroom, a refused
     // placement) leaves nothing dance-shaped armed.
     this._introEntryZ01 = null;
+    this._introHandoverZ01 = null;
+    this._introPullbackMs = INTRO_PULLBACK_MS;
     this._introDwellMs = INTRO_DWELL_MS;
     this._introDolly = null;
     this._introDwellEarly = false;
@@ -1034,6 +1071,11 @@ export class LadderController {
     if (typeof entryZ01 === 'number' && Number.isFinite(entryZ01)) {
       this._introEntryZ01 = Math.min(1, Math.max(0, entryZ01));
     }
+    if (typeof handoverZ01 === 'number' && Number.isFinite(handoverZ01)) {
+      this._introHandoverZ01 = Math.min(1, Math.max(0, handoverZ01));
+    }
+    const pbm = Number(pullbackMs);
+    if (Number.isFinite(pbm) && pbm > 0) this._introPullbackMs = pbm;
     const dm = Number(dwellMs);
     if (Number.isFinite(dm) && dm >= 0) this._introDwellMs = dm;
     if (dolly && typeof dolly === 'object' && typeof dolly.toZ01 === 'number' &&
@@ -1054,6 +1096,8 @@ export class LadderController {
     // Opening dance (plan task 4): drop the dance options with the arm — a
     // later run's flyby is whatever ITS armIntroRide says, never this one's.
     this._introEntryZ01 = null;
+    this._introHandoverZ01 = null;
+    this._introPullbackMs = INTRO_PULLBACK_MS;
     this._introDwellMs = INTRO_DWELL_MS;
     this._introDolly = null;
     this._introDwellEarly = false;
@@ -1127,10 +1171,14 @@ export class LadderController {
       }
     } else if (this._introPhase === 'dwell') {
       if (t >= this._introDwellUntil) {
+        // handoverZ01: where the player is LEFT. Absent (every non-dance
+        // intro ride) the contract's own ENTRY_Z01_FROM_BELOW applies, so the
+        // shipped flyby is untouched.
+        const hz = this._introHandoverZ01;
         const decisions = (typeof this._ladder.ceremonyRide === 'function')
-          ? this._ladder.ceremonyRide({ tMs: t, toFloor: INTRO_LANDING_FLOOR })
+          ? this._ladder.ceremonyRide({ tMs: t, toFloor: INTRO_LANDING_FLOOR, entryZ01: hz ?? undefined })
           : this._ladder.jump({ tMs: t, toFloor: INTRO_LANDING_FLOOR });
-        this._apply(decisions, t, { rideMs: INTRO_PULLBACK_MS, silent: true });
+        this._apply(decisions, t, { rideMs: this._introPullbackMs, silent: true });
         this._introPhase = 'pull';
         this._refreshRail();
       }

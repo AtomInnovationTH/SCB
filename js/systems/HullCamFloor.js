@@ -2,15 +2,16 @@
  * HullCamFloor.js — the Zoom Ladder HULL CAM floor (id 1) content orchestrator
  * (S4, FloorContract.FLOORS[2]).
  *
- * HULL CAM is the subject-anchored close-inspection floor (2–7 m; the F1/F2
- * boundary moved 12 m → 7 m on 2026-09-16, opening-dance task 9). This module is
+ * HULL CAM is the subject-anchored close-inspection floor (2–6 m; the F1/F2
+ * boundary moved 12 → 7 m on 2026-09-16 and 7 → 6 m on 2026-09-21, the latter
+ * taking the lens split 5 → 4 m with it). This module is
  * the floor's "costume" controller: it owns the blueprint/inspect surface while the
- * ladder is on the floor (costume.transform 'lens-split-5m'):
+ * ladder is on the floor (costume.transform 'lens-split-4m'):
  *   - the BlueprintOverlay callout layer — leader-lined labels on the seven
  *     manifest subsystems (ENGINEERING / POWER / BERTHS / COMMS / CARGO /
  *     SENSORS / THERMAL — D9, js/data/blueprintSubsystems.js), filling the
  *     floor's labelBudget (7) exactly;
- *   - the LENS SPLIT at 5 m (FLOOR.lens.splitAtM, 00-spec.md §3 F1): the camera
+ *   - the LENS SPLIT at 4 m (FLOOR.lens.splitAtM, 00-spec.md §3 F1): the camera
  *     distance picks the DEFAULT lens — *detail* below the split (ONE focused
  *     subsystem, expanded readout from real systems via injected providers)
  *     vs *overview* at/above it (all callouts, compact). Crossing the split

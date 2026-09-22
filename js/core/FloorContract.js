@@ -139,7 +139,7 @@ export const FloorContract = {
       id: 1,
       name: 'UPGRADE',       // player label (owner 2026-09-05); instrument name HULL CAM
       anchor: 'subject',
-      camera: { distU: [2e-5, 7e-5], rangeLog10: logRange(2e-5, 7e-5), fov: 35, near: 4e-7, far: 500, upFrame: 'ship' },
+      camera: { distU: [2e-5, 6e-5], rangeLog10: logRange(2e-5, 6e-5), fov: 35, near: 4e-7, far: 500, upFrame: 'ship' },
       humps: { inFirmness: 1.6 },
       timeCap: 1,
       fidelity: { nearField: true, physicsMode: 'realtime', debrisMode: 'full' },
@@ -151,15 +151,22 @@ export const FloorContract = {
       // owner's playtest the same day: the shipped in-world cards — 26 parts in
       // 8 colour-coded systems, live rows, Library links, clickable — are the
       // hull floor's costume, and their three zoom bands (SYSTEM / PART /
-      // COMPONENT) realize the 5 m lens split. BlueprintOverlay is shelved as
+      // COMPONENT) realize the 4 m lens split. BlueprintOverlay is shelved as
       // the refit-index renderer (Wave 5 decides). Pinned in test-FloorContract.js.
-      costume: { leave: ['HUD:capture'], arrive: ['MotherCallouts', 'HullOutline'], transform: 'lens-split-5m' },
+      costume: { leave: ['HUD:capture'], arrive: ['MotherCallouts', 'HullOutline'], transform: 'lens-split-4m' },
       contextPanel: 'inspect-detail',
       spaceVerb: 'lens-toggle',
       labelBudget: 7,
       audioBed: 'hull-detail',
-      /** Lens split: detail (<5 m default) vs overview; one key toggles, distance picks default. */
-      lens: { splitAtM: 5, modes: ['detail', 'overview'] },
+      /**
+       * Lens split: detail (<4 m default) vs overview; one key toggles,
+       * distance picks the default. 4 m, not 5 (owner 2026-09-21, with the
+       * floor moving 2–7 → 2–6 m): the split has to sit MID-floor or one lens
+       * becomes a sliver you pass through instead of a mode you sit in. At
+       * 2–6 m a 5 m split left overview just 1 m wide; 4 m restores the even
+       * 2 m / 2 m halves the 2–7 m floor had at 5 m.
+       */
+      lens: { splitAtM: 4, modes: ['detail', 'overview'] },
     },
     {
       id: 2,
@@ -173,18 +180,24 @@ export const FloorContract = {
       // 100–120 m strip was dead range the capture camera never used. The
       // COMMAND/PROX boundary moved WITH it (floors stay contiguous;
       // docs/ladder/01-numbers.md).
-      camera: { distU: [7e-5, 1e-3], rangeLog10: logRange(7e-5, 1e-3), fov: 55, near: 3e-5, far: 500, upFrame: 'ship' },
-      // The 7 m lower bound (2026-09-16, opening-dance plan task 9) sits JUST
-      // UNDER F1's own resting distance — F1's arrival-from-above z01 0.75 now
-      // lands at ≈5.1 m — so the flying floor reaches down to where the close
-      // floor actually lives. The old 12 m bound inherited the shipped inspect
-      // Schmitt (12 m/18 m), but the wall/entry rule had already replaced that
-      // pair (docs/ladder/00-spec.md §2, and the note above), so nothing
-      // downstream depended on 12 m being the number. Closing it in pulls the
-      // whole chain in by about a third: F1 arrival 7.66 → 5.1 m, F2 entry
-      // from below 20.4 → 13.6 m, F2 floor 12 → 7 m. F1's 5 m lens split
-      // (`lens.splitAtM` above) still sits mid-floor in 2–7 m — detail 2–5,
-      // overview 5–7 — which is why 7 m and not 6 m.
+      camera: { distU: [6e-5, 1e-3], rangeLog10: logRange(6e-5, 1e-3), fov: 55, near: 3e-5, far: 500, upFrame: 'ship' },
+      // The 6 m lower bound (owner, 2026-09-21: "considered closer views").
+      // It sits JUST UNDER F1's own resting distance — F1's arrival-from-above
+      // z01 0.75 lands at ≈4.56 m — so the flying floor reaches down to where
+      // the close floor actually lives.
+      //
+      // Two moves got here. 2026-09-16 (opening-dance task 9) took it 12 → 7 m:
+      // the 12 m bound had inherited the shipped inspect Schmitt (12 m/18 m),
+      // a pair the wall/entry rule had already replaced (docs/ladder/00-spec.md
+      // §2), so nothing downstream depended on it. 2026-09-21 took it 7 → 6 m
+      // with F1, pulling the whole chain in again: F1 rest 5.12 → 4.56 m, the
+      // dance's drift end 5.59 → 4.92 m, its hand-over 11.00 → 9.68 m.
+      //
+      // The 7 m step deliberately stopped short of 6 m to keep F1's 5 m lens
+      // split mid-floor. Going to 6 m therefore MOVED THE SPLIT to 4 m rather
+      // than squeezing overview to a 1 m sliver — see `lens.splitAtM` above.
+      // The two are a pair: changing this bound without re-checking the split
+      // is how the close floor ends up with a lens mode nobody can rest in.
       humps: { inFirmness: 1.6 },
       timeCap: 1,
       fidelity: { nearField: true, physicsMode: 'realtime', debrisMode: 'full' },

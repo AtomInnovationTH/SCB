@@ -114,7 +114,7 @@ import { settingsManager } from './systems/SettingsManager.js';
 import { persistenceManager } from './systems/PersistenceManager.js';
 import { StrategicMap } from './ui/StrategicMap.js';
 import { WheelRouter } from './systems/WheelRouter.js';
-import { LadderController, INTRO_RIDE_MS, INTRO_DANCE_LANDING_Z01, INTRO_DANCE_DRIFT_Z01, INTRO_DANCE_DOLLY_MS, INTRO_DANCE_DWELL_CEILING_MS } from './systems/LadderController.js';
+import { LadderController, INTRO_RIDE_MS, INTRO_DANCE_LANDING_Z01, INTRO_DANCE_DRIFT_Z01, INTRO_DANCE_DOLLY_MS, INTRO_DANCE_DWELL_CEILING_MS, INTRO_DANCE_HANDOVER_Z01, INTRO_DANCE_PULLBACK_MS } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
 import { FloorMask } from './ui/hud/FloorMask.js';
 import { LadderViewStore } from './systems/LadderViewStore.js';
@@ -2528,6 +2528,8 @@ async function init() {
           entryZ01: _danceCamera ? INTRO_DANCE_LANDING_Z01 : undefined,
           dwellMs: _danceCamera ? INTRO_DANCE_DWELL_CEILING_MS : undefined,
           dolly: _danceCamera ? { toZ01: INTRO_DANCE_DRIFT_Z01, rideMs: INTRO_DANCE_DOLLY_MS } : undefined,
+          handoverZ01: _danceCamera ? INTRO_DANCE_HANDOVER_Z01 : undefined,
+          pullbackMs: _danceCamera ? INTRO_DANCE_PULLBACK_MS : undefined,
           reducedMotion: _prefersReducedMotion(),
         });
         _introFlown = true;
