@@ -3134,22 +3134,41 @@ export class PlayerSatellite extends THREE.Group {
     const ref = this._flowerTargetTheta !== undefined ? this._flowerTargetTheta : this._flowerThetaRad;
     const deploying = ref > mid;
 
-    // Two taps inside the window land back on the starting direction; when that
-    // direction is the bud, read it as the deliberate push past the wall.
+    // Two taps inside the window land back on the starting direction. Which
+    // direction that is decides which wall gets pushed through — the gesture is
+    // symmetric (owner 2026-09-22): landing on the BUD pushes further OPEN to
+    // the vent, landing on the BLOOM pushes further CLOSED to the stowed fold.
     const now = performance.now();
     const doubleTap = this._lastFlowerTap !== undefined
       && now - this._lastFlowerTap < FL.VENT_DOUBLE_TAP_MS;
     this._lastFlowerTap = now;
 
-    if (!deploying && doubleTap && this._flowerGroups.length > 0) {
+    if (doubleTap && this._flowerGroups.length > 0) {
       this._lastFlowerTap = undefined;             // one push per double-tap
-      this._flowerVentArmed = true;
-      this._flowerTargetTheta = (FL.POSE_VENT_DEG * Math.PI) / 180;
-      this._warnFlowerVent();
-      return false;
+      if (!deploying) {
+        this._flowerVentArmed = true;
+        this._flowerTargetTheta = (FL.POSE_VENT_DEG * Math.PI) / 180;
+        this._warnFlowerVent();
+        return false;
+      }
+      // Past the bloom is the LAUNCH fold (θ 0). Go through the SAFETY OVERRIDE
+      // path, not a bare latch: it is what drops the driver floor from the 90°
+      // orbit floor to 0 AND engages the ROSA centre hold. Folding below 90°
+      // with the arrays tracking is a measured collision (contact at ±10° of
+      // tilt), so this must never become a plain target write. A refusal (no
+      // hardware) falls through to the ordinary command below.
+      if (this.setFlowerPose('LAUNCH', { override: true }) !== null) {
+        this._flowerVentArmed = false;
+        this._warnFlowerFold();
+        return true;
+      }
     }
 
-    this._flowerVentArmed = false;                 // any ordinary command stows the vent
+    // An ordinary command re-aims — but it must NOT drop the vent ceiling here.
+    // The driver's ceiling is a hard clamp, so clearing the flag while θ is
+    // still out at the vent snaps the panel back to the bud in one frame
+    // instead of slewing (owner-reported 2026-09-22: "seems to jump suddenly
+    // instead of opening smoothly"). The driver disarms on ARRIVAL instead.
     this._flowerTargetTheta = ((deploying ? FL.POSE_CARGO_DEG : FL.POSE_STOW_DEG) * Math.PI) / 180;
     return deploying;
   }
@@ -3189,6 +3208,26 @@ export class PlayerSatellite extends THREE.Group {
       priority: 'warning',
     });
     eventBus.emit(Events.THERMAL_FLOWER_VENTED, { thetaDeg: th });
+  }
+
+  /**
+   * @private The mirror of _warnFlowerVent at the closed end: a double-command
+   * past the bloom folds the radiator all the way to the LAUNCH pose (θ 0),
+   * through the SAFETY OVERRIDE path so the ROSA centre hold comes with it.
+   *
+   * Worth saying out loud because the cost is the opposite of the vent's: a
+   * folded radiator is not radiating. The panels are the ship's only way to
+   * dump heat, so this pose is for inspection and stowage, not for running in.
+   */
+  _warnFlowerFold() {
+    const FL = Constants.THERMAL.FLOWER;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'THERMAL',
+      text: `Radiator folded to ${FL.POSE_LAUNCH_DEG}° — the stowed launch pose. `
+        + 'Solar arrays centred to clear the fold corridor. '
+        + 'Folded panels radiate nothing: heat will build while stowed. Tap RADIATOR / O to deploy.',
+      priority: 'warning',
+    });
   }
 
 
@@ -3757,10 +3796,23 @@ export class PlayerSatellite extends THREE.Group {
     const floorRad = foldFloorOpen ? (FL.POSE_LAUNCH_DEG * Math.PI) / 180 : orbitFloorRad;
     // Vent push-through (owner ask): the ladder ceiling lifts from the bud to
     // POSE_VENT_DEG only while the player has explicitly double-commanded it.
-    // Any ordinary pose command clears it, so the ceiling is the bud by default.
     const ceilRad = ((this._flowerVentArmed ? FL.POSE_VENT_DEG : FL.POSE_STOW_DEG) * Math.PI) / 180;
 
     this._flowerThetaRad = Math.max(floorRad, Math.min(ceilRad, this._flowerThetaRad));
+
+    // Disarm on ARRIVAL, never on command. This clamp is a hard clamp: dropping
+    // the ceiling from the vent to the bud while θ is still out at 180° would
+    // teleport the panel 34° in a single frame rather than slew it home (the
+    // owner-reported jump, 2026-09-22). Holding the ceiling until θ is actually
+    // back inside the band lets the normal rate-limited swing do the work, and
+    // the ceiling then closes behind it.
+    if (this._flowerVentArmed) {
+      const stowRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+      const tgt = this._flowerTargetTheta;
+      if (this._flowerThetaRad <= stowRad + 1e-9 && (tgt === undefined || tgt <= stowRad + 1e-9)) {
+        this._flowerVentArmed = false;
+      }
+    }
 
     // Design 7b release: an orbit-bound swing under the lock clears it the
     // frame θ reaches the orbit floor. Exactly once per arming. The ROSA centre
