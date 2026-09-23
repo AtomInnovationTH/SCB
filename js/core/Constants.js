@@ -301,7 +301,19 @@ export const Constants = {
   COLD_GAS_MAX: 20,               // kg
   BATTERY_MAX: 100,               // Wh (simplified)
   SOLAR_PANEL_EFFICIENCY: 0.30,   // 30% efficient cells
-  SOLAR_PANEL_AREA: 20,           // m²
+  // Mother-wings step 4 (DECISIONS §10, "power follows the panels, realistic
+  // wins"): was a generic, unrelated 20 m² placeholder (the ship never had 20
+  // m² of cells). Now the REAL total: 2 ROSA wings (OCTOPUS_V5.ROSA_WIDTH ×
+  // ROSA_LENGTH = 1×2 m² each) + the measured built body-mount cell area
+  // (OCTOPUS_V5.BODY_MOUNT_AREA_M2 = 2.307 m², `tmp/measure-body-cells.mjs`).
+  // Literal here (not a cross-reference — OCTOPUS_V5 is defined later in this
+  // same object literal, so it can't be read yet); re-derive if either changes.
+  // This is a peak/ceiling figure for readers that want "the panel area" as a
+  // single number (the shop solarEfficiency upgrade, the launch-dance power
+  // ramp, the ROSA glow's brightness normalisation) — the real per-frame power
+  // path (_updateSolarPower) sums each wing's and each body cell's own area
+  // and never uses this constant.
+  SOLAR_PANEL_AREA: 2 * 1.0 * 2.0 + 2.307,   // m² — 6.307 (4 wing + 2.307 body)
 
   // === SCORING ===
   TIER1_BASE: 100,                // Data capture
@@ -1531,9 +1543,23 @@ export const Constants = {
     // plain rectangles, so the former ROSA_CHAMFER corner cut was dropped.
     ROSA_WIDTH: 1.0,               // m
     ROSA_LENGTH: 2.0,              // m
-    ROSA_POWER: 1630,              // W (ROSA alone)
-    BODY_MOUNT_POWER: 820,         // W (GaAs body cells — central + fwd/aft end rows, ~2.76 m²)
-    TOTAL_SOLAR_POWER: 2450,       // W (combined: ROSA 1630 + body 820)
+    // Mother-wings step 4 (DECISIONS §10, "power follows the panels, realistic
+    // wins"): ROSA_POWER/BODY_MOUNT_POWER/TOTAL_SOLAR_POWER and the furl/feather
+    // fractions derived from them are REMOVED. _updateSolarPower now sums each
+    // wing's and each body cell's own real area × incidence × furl instead of
+    // scaling a table peak by a generic sunAngle. BODY_MOUNT_AREA_M2 is the one
+    // number kept from the table era — the real, measured total body-cell face
+    // area (`tmp/measure-body-cells.mjs`: 32 built BarrelSolarPanel_* cells, Σ
+    // area) — used by the real power path AND to correct the top-level
+    // `Constants.SOLAR_PANEL_AREA` (was a generic, unrelated 20 m² placeholder;
+    // now the real total = 2 wings + this). Re-measure if the cells lane
+    // changes the layout.
+    BODY_MOUNT_AREA_M2: 2.307,      // m² — measured, sum of built body-cell faces
+    // Body-cell shading estimate (mother-wings step 4): a per-cell sun-ray vs
+    // wings/struts/radiator raycast, throttled to this rate — cos(sun,normal)
+    // stays live every frame, only the (pricier) occlusion test is cached.
+    BODY_SHADE_UPDATE_S: 0.5,      // s — throttle period (2 Hz), per plan §4 "≤1-2 Hz"
+    BODY_SHADE_MAX_DIST_M: 3.0,    // m — beyond this nothing on the ship can shade a cell
     ROSA_DEPLOY_DURATION_S: 6.0,   // seconds per wing (ST-9.11 C-5)
 
     // ── ROSA fidelity geometry (verified vs. real Redwire/NASA ROSA) ──
@@ -1590,10 +1616,51 @@ export const Constants = {
     // the loose ±30° clamp clears them; Y1+ tiers add 30°/330° struts only 30°
     // from the plane, so when a strut is within ~30° the clamp tightens to this.
     ROSA_TILT_CLAMP_TIGHT_DEG: 18, // deg — tighter sun-track tilt at higher tiers
-    // Power split: only the ROSA blanket can furl; body-mount GaAs cells stay on.
-    // Derived from ROSA_POWER / TOTAL_SOLAR_POWER (≈0.665) and its complement.
-    ROSA_POWER_FRACTION: 1630 / 2450,        // ROSA share of peak solar (furl-gated)
-    BODY_MOUNT_POWER_FRACTION: 820 / 2450,   // body-mount share (always on)
+    // Mother-wings step 4: ROSA_POWER_FRACTION / BODY_MOUNT_POWER_FRACTION
+    // REMOVED (see the note by BODY_MOUNT_AREA_M2 above) — each surface now
+    // earns its own power from its own real area × incidence × furl.
+
+    // ── Mid-ring + wing motor box (mother-wings step 1/2, DECISIONS §10) ──
+    // The inside ring frame at mid-body (z=0) that wing hardware bolts to,
+    // instead of the three brackets that used to hang off the tilting
+    // sun-tracking pivot and swing clear of the hull at high tilt (owner:
+    // "3 black pillars seem to float on top of solar cells").
+    MID_RING_INSET: 0.010,        // m — ring radius = COLLAR_RADIUS − this (just inside the skin)
+    MID_RING_TUBE_R: 0.006,       // m — ring frame tube radius
+    // Fixed motor box: bolted to the body (child of the ship, NOT the tilting
+    // pivot) at each wing root (az 0°/180°, z=0). The drum's own axis is ON
+    // the tilt rotation axis (rosaSpoolAxisM = 0.49 m from the ship axis,
+    // drum radius ROSA_DRUM_R = 0.05 m — tilt-invariant, only spins in place),
+    // so its closest approach to the hull is a HARD ceiling: 0.49 − 0.05 =
+    // 0.44 m. The box's outer face (COLLAR_RADIUS + pad + deep = 0.40 + 0.003
+    // + 0.015 = 0.418 m) clears that by 22 mm at every tilt, by construction —
+    // measured `tmp/probe-rosa-tilt.mjs`. The on-axis yoke
+    // (`ROSA_Bracket_{0,180}deg`, −0.010…+0.060 pivot-local x = 0.390…0.460 m
+    // ship-frame) necessarily passes THROUGH this box — that is the design:
+    // the box is the fixed motor housing, the yoke is the output coupling
+    // shaft poking out through it to the drum (measured 1.7–2.2 mm to the
+    // housing wall — a real close-fit shaft seal, not a floating gap).
+    WING_MOTOR_BOX_LEN: 0.080,    // m — axial (Z) extent
+    WING_MOTOR_BOX_WIDE: 0.070,   // m — tangential (Y) extent
+    WING_MOTOR_BOX_DEEP: 0.015,   // m — radial (X) extent
+    WING_MOTOR_PAD_H: 0.003,      // m — standoff pad between the hull and the motor box
+
+    // ── Wing-drum launch clamps (mother-wings step 3, DECISIONS §10) ──
+    // "The brackets are still needed for launch?" — yes: each drum end is held
+    // to the front/back end ring (z = ±CORE_LENGTH/2) through launch, released
+    // at LAUNCH_LOCK_RELEASE before the wing unrolls or tilts. The drum-half
+    // rides the drum (fixed relative to it, at the drum's own tip, z ±1.02·
+    // ROSA_LENGTH/2 = the end-ring plane); the body-half is a small bracket on
+    // the ship that RETRACTS inward when released, opening a visible gap
+    // (drum position/axis is unchanged — the body half moves, not the drum).
+    // Released clearance is real, not assumed: the drum's far tip swings with
+    // tilt (its axis passes through a fixed point at the pivot, but the tip is
+    // ~1 m out along that axis), measured `tmp/probe-wing-clamps.mjs`: 34 mm
+    // at 0° tilt, growing to 517 mm at ±30° — clear of the 20 mm gate at every
+    // allowed tilt, with the released body half retracted the whole time.
+    WING_CLAMP_R: 0.018,          // m — clamp collar radius (around the drum)
+    WING_CLAMP_LEN: 0.012,        // m — clamp collar axial length
+    WING_CLAMP_RETRACT: 0.020,    // m — how far the body half pulls back when released
 
     // ── Hinge (NEW) ──
     HINGE_LOCK_TORQUE: 1000,       // N·m
@@ -1648,7 +1715,11 @@ export const Constants = {
     // ── Power & Thrust (carried forward) ──
     CORE_BATTERY: 600,             // Wh
     CORE_SOLAR_AREA: 5.0,          // m²
-    CORE_SOLAR_POWER: 1900,        // W — DEPRECATED, use TOTAL_SOLAR_POWER
+    CORE_SOLAR_POWER: 1900,        // W — DEPRECATED legacy Epic-9 mass-table figure;
+                                    // the live power path is _updateSolarPower's
+                                    // per-cell/per-wing sum (top-level
+                                    // Constants.SOLAR_PANEL_AREA is the current
+                                    // real-total-area figure, mother-wings step 4)
     CORE_LASER_POWER: 200,         // W
     CORE_LASER_OPTICAL: 120,       // W
     CORE_HALL_THRUST: 0.01,        // N

@@ -57,6 +57,10 @@ const _qInvTmp = new THREE.Quaternion();
 const _v3TmpA  = new THREE.Vector3();
 const _v3TmpB  = new THREE.Vector3();
 const _v3TmpC  = new THREE.Vector3();
+const _v3TmpD  = new THREE.Vector3();
+// Mother-wings step 4: shared raycaster for the throttled body-cell shading
+// estimate (_computeBodyPowerW) — one instance, reused every call.
+const _solarRaycaster = new THREE.Raycaster();
 /* RCS direction-aware firing temps (per-frame, single instance — no alloc). */
 const _rcsL  = new THREE.Vector3();
 const _rcsLn = new THREE.Vector3();
@@ -114,6 +118,18 @@ export class PlayerSatellite extends THREE.Group {
       battery: Constants.BATTERY_MAX,
       solarRate: 0,
       solarPanelHealth: 1.0,
+      // Mother-wings step 4 (DECISIONS §10): body-mount cells are backup power
+      // and get their OWN health, separate from the wings — collision/impact
+      // damage (ResourceSystem.damageSolarPanel) and passive wear
+      // (EnvironmentSystem AO erosion) both hit `solarPanelHealth` (the
+      // wings/ROSA); nothing degrades `bodyPanelHealth` today, so it stays at
+      // 1.0 — the wings can be damaged, furled or edge-on and the body cells
+      // keep working. Synced from ResourceSystem (_syncToPlayer).
+      bodyPanelHealth: 1.0,
+      // Shop solarEfficiency upgrade multiplier (ResourceSystem.applyUpgrade),
+      // synced here so _updateSolarPower's real per-panel calc still responds
+      // to it (see js/systems/ResourceSystem.js).
+      solarEfficiencyMult: 1.0,
       lithium: 0,
       lithiumMax: Constants.MPD_LITHIUM_CAPACITY,
     };
@@ -639,6 +655,11 @@ export class PlayerSatellite extends THREE.Group {
 
     // --- 2. FEEP THRUSTERS (4 main dual-metal FEEP + 4 RCS doghouse quad pods) — Config G ---
     this._buildThrusters();
+
+    // --- 2.5. MID-RING (mother-wings step 1: the strong point wing hardware
+    //          mounts to; DECISIONS §10 "one motor box bolted to a strong
+    //          part of the body") ---
+    this._buildMidRing();
 
     // --- 3. ROSA SOLAR ARRAYS (Epic 10 V-5) ---
     this._buildSolarPanels();
@@ -2757,6 +2778,86 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
+   * @private Mother-wings step 1 (DECISIONS §10, owner 2026-09-23): "3 black
+   * pillars seem to float on top of solar cells... perhaps Mother needs a
+   * support hoop for strength." Real satellites mount each wing on ONE motor
+   * box bolted to a strong part of the body — this builds that strong part: a
+   * ring frame just INSIDE the hull skin at z=0 (mid-body), a fixed, named
+   * anchor (`MidRing`) that the wing motor boxes (`_buildRosaStructure`) mount
+   * to instead of hanging off the tilting sun-tracking pivot.
+   *
+   * Radius is set just inside the barrel wall (`COLLAR_RADIUS`) so the ring
+   * never pokes through the skin or the body-mount PV tiles riding on top of
+   * it (those sit OUTSIDE at ~1.014·R — see `_buildMainBus`); z=0 is mid-body,
+   * the same station the struts lane's folded-strut rests attach to
+   * (`tmp/plans/mother-struts.md` §1). No cell change: the ring is entirely
+   * inside the shell and not rendered-visible from outside in normal play.
+   * @private
+   */
+  _buildMidRing() {
+    const V5 = Constants.OCTOPUS_V5;
+    const barrelR = V5.COLLAR_RADIUS * M;
+    const ringR = barrelR - V5.MID_RING_INSET * M;   // just inside the skin
+    const tubeR = V5.MID_RING_TUBE_R * M;
+
+    this._midRing = new THREE.Group();
+    this._midRing.name = 'MidRing';
+    this._midRing.position.set(0, 0, 0);             // mid-body station (z=0)
+    this.add(this._midRing);
+
+    // TorusGeometry's default normal is +Z (Convention Rule 4) — exactly the
+    // barrel axis, so no rotation is needed to wrap it around the hull.
+    const ringGeo = new THREE.TorusGeometry(ringR, tubeR, 8, 48);
+    const ringMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a33, metalness: 0.6, roughness: 0.4,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.name = 'MidRing_Frame';
+    ring.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this._midRing.add(ring);
+
+    // ── Wing motor boxes — mother-wings step 2. ONE motor box per wing,
+    // bolted to the body via MidRing (child of the ship, NOT the tilting
+    // panelRightPivot/panelLeftPivot), at the wing root (az 0°/180°, z=0).
+    // This is the real mount the owner asked for; the turning yoke
+    // (`ROSA_Bracket_{0,180}deg`, built in _buildRosaStructure, on-axis so it
+    // never floats) is the part that actually turns with the wing — it passes
+    // THROUGH this box (1.2–2.2 mm to the housing wall at every tilt: a
+    // close-fit output-shaft seal, not a floating gap) to reach the drum. The
+    // box clears the drum itself by ≥ 20 mm at every tilt and feather state
+    // (measured `tmp/probe-rosa-tilt.mjs`: 22.0 mm worst case) — the drum's
+    // own axis sits ON the tilt rotation axis, so its closest approach to the
+    // hull is a fixed 0.44 m ceiling the box is sized well inside of.
+    const boxMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a33, metalness: 0.6, roughness: 0.4,
+    });
+    const padGeo = new THREE.BoxGeometry(
+      V5.WING_MOTOR_PAD_H * M, V5.WING_MOTOR_BOX_WIDE * 0.8 * M, V5.WING_MOTOR_BOX_LEN * 0.8 * M);
+    const boxGeo = new THREE.BoxGeometry(
+      V5.WING_MOTOR_BOX_DEEP * M, V5.WING_MOTOR_BOX_WIDE * M, V5.WING_MOTOR_BOX_LEN * M);
+    for (const sign of [1, -1]) {
+      const wingDeg = sign > 0 ? '0' : '180';
+      // Pad: standoff from the hull tangent (r = barrelR) to the box's inboard
+      // face, reading as a mounting flange bolted straight to the hull/MidRing.
+      const pad = new THREE.Mesh(padGeo, boxMat);
+      pad.position.set(sign * (barrelR + (V5.WING_MOTOR_PAD_H * M) / 2), 0, 0);
+      pad.name = `WingMotorPad_${wingDeg}deg`;
+      pad.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this._midRing.add(pad);
+
+      // Box: outboard of the pad, radial depth WING_MOTOR_BOX_DEEP. Its outer
+      // face sits at barrelR + padH + boxDeep — kept short of the drum's inner
+      // radius (rosaSpoolAxisM − ROSA_DRUM_R) so it never reaches the drum.
+      const box = new THREE.Mesh(boxGeo, boxMat);
+      box.position.set(
+        sign * (barrelR + V5.WING_MOTOR_PAD_H * M + (V5.WING_MOTOR_BOX_DEEP * M) / 2), 0, 0);
+      box.name = `WingMotorBox_${wingDeg}deg`;
+      box.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this._midRing.add(box);
+    }
+  }
+
+  /**
    * @private Build the structural detail for one ROSA wing — the two
    * high-strain composite edge booms (one per long edge), the tip spreader
    * bar, the root roller drum/mandrel (with a stowed-coil bulge), and the
@@ -2891,8 +2992,19 @@ export class PlayerSatellite extends THREE.Group {
     struct.curls = curls;
     struct.sign = sign;
 
-    // ── Root mounting brackets — three short standoffs from the bus mast to the
-    //    drum (one central + two flanking), giving the root a real truss read. ──
+    // ── Root yoke — the turning coupling from the fixed motor box (built in
+    //    _buildMidRing, a child of the SHIP) up to the drum. Mother-wings step 2
+    //    (DECISIONS §10, owner 2026-09-23): the two FLANKING brackets that used
+    //    to sit here (`ROSA_Bracket_*_A/_B`, offset ±0.32·rosaL along the drum
+    //    axis) are REMOVED — offset off the pivot's rotation axis (local X),
+    //    they swept a wide arc as the wing tilted (measured `tmp/rosa-pillars.mjs`:
+    //    −9 mm buried at 0°, +341 mm floating clear at 90°) which is exactly the
+    //    "pillars floating on the solar cells" the owner flagged; at low tilt they
+    //    were buried in the skin too, so keeping them never had a clean answer.
+    // Only the CENTRAL bracket survives, as the yoke: it sits ON the pivot's own
+    // rotation axis (y=0, z=0 in pivot-local space), so it is invariant to tilt —
+    // never floats, never buries deeper — the honest reading for a part that
+    // turns WITH the wing right where the motor's output shaft would be.
     // Mother audit T11 (W2): the pivot sits ON the hull tangent (r 0.40), so a
     // box spanning pivot-x 0…0.060 had its inboard face exactly tangent to the
     // barrel (a coplanar/tangent tie, 1.1 mm of air at its ±0.03 edges). Now
@@ -2904,20 +3016,6 @@ export class PlayerSatellite extends THREE.Group {
     bracket.name = `ROSA_Bracket_${wing === 1 ? '0' : '180'}deg`;
     bracket.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // W7
     pivot.add(bracket);
-
-    // Two flanking brackets offset along the drum axis (barrel Z), narrower.
-    // Mother audit T11 (W1): the 0.054 boxes at x 0.030 spanned 0.003…0.057 —
-    // 3 mm of air between their inboard face and the hull (3.6 mm at the
-    // edges). Now 0.067 long at x 0.0235 → spans −0.010…0.057: 10 mm buried,
-    // outboard face unchanged.
-    const brkSideGeo = new THREE.BoxGeometry(0.067 * M, drumR * 0.9, drumR * 0.4);
-    for (const zOff of [rosaL * 0.32, -rosaL * 0.32]) {
-      const brkSide = new THREE.Mesh(brkSideGeo, drumMat);
-      brkSide.position.set(sign * (0.067 / 2 - 0.010) * M, 0, zOff);
-      brkSide.name = `ROSA_Bracket_${wing === 1 ? '0' : '180'}deg_${zOff > 0 ? 'A' : 'B'}`;
-      brkSide.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // W7
-      pivot.add(brkSide);
-    }
 
     // ── Spool assembly — drum/mandrel + stowed-coil bulge share a pivot whose
     //    local Y is the barrel axis, so spinning each mesh about its own long
@@ -2939,6 +3037,50 @@ export class PlayerSatellite extends THREE.Group {
     drum.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // W7
     spoolPivot.add(drum);
     struct.drum = drum;
+
+    // ── Wing-drum launch clamps (mother-wings step 3, DECISIONS §10) ──
+    // "The brackets are still needed for launch?" — yes: each drum end is held
+    // to the front/back end-ring plane (z = ±CORE_LENGTH/2) through launch,
+    // released at LAUNCH_LOCK_RELEASE before the wing unrolls or tilts
+    // (_launchClampsLatched(), _updateWingClamps()). The DRUM half is a child
+    // of the drum itself — it moves and spins exactly with the drum, so it
+    // adds no new clash surface beyond the drum's own (already-measured)
+    // envelope. The BODY half is a small fixed collar that RETRACTS toward
+    // mid-body by WING_CLAMP_RETRACT when released, opening a visible gap —
+    // the drum's own position/axis is never touched (§2's requirement).
+    // Both collars share the drum's own axis (ship x = rosaSpoolAxisM, y=0),
+    // radius drumR×1.2 (a lip around the mandrel), so latched they read as one
+    // continuous band bridging body → drum.
+    const clampR = drumR * 1.2;
+    const clampLen = Constants.OCTOPUS_V5.WING_CLAMP_LEN * M;
+    const clampGeo = new THREE.CylinderGeometry(clampR, clampR, clampLen, 16);
+    const halfDrumLen = (rosaL * 1.02) / 2;
+    const ringZ = (Constants.OCTOPUS_V5.CORE_LENGTH / 2) * M;   // end-ring plane
+    const spoolAxisX = PlayerSatellite.rosaSpoolAxisM() * M;    // ship-frame x
+    struct.clampBody = [];
+    for (const endSign of [1, -1]) {
+      const endName = endSign > 0 ? 'Fore' : 'Aft';
+
+      const drumHalf = new THREE.Mesh(clampGeo, drumMat);
+      // halfDrumLen is already in scene units (built from rosaL = ROSA_LENGTH·M
+      // above) — do NOT multiply by M again here (that was a bug: it collapsed
+      // the drum-half to ~6 mm from the drum centre instead of its tip).
+      drumHalf.position.set(0, endSign * (halfDrumLen - clampLen / 2), 0);
+      drumHalf.name = `ROSA_WingClamp_${wing === 1 ? '0' : '180'}deg_${endName}_Drum`;
+      drumHalf.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      drum.add(drumHalf);
+
+      const bodyHalf = new THREE.Mesh(clampGeo, drumMat);
+      bodyHalf.position.set(sign * spoolAxisX, 0, endSign * ringZ);
+      bodyHalf.name = `WingClamp_${wing === 1 ? '0' : '180'}deg_${endName}_Body`;
+      bodyHalf.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      bodyHalf.userData.latchedZ = bodyHalf.position.z;
+      bodyHalf.userData.releasedZ =
+        bodyHalf.position.z - endSign * Constants.OCTOPUS_V5.WING_CLAMP_RETRACT * M;
+      this.add(bodyHalf);
+      struct.clampBody.push(bodyHalf);
+    }
+
 
     // Stowed-coil bulge — the wound blanket, shrinking onto the bare mandrel as
     // the wing rolls out (scaled radially by _setRosaWingProgress).
@@ -2983,6 +3125,12 @@ export class PlayerSatellite extends THREE.Group {
       this._rosaFeatherProgress = Math.max(fTarget, this._rosaFeatherProgress - fRate);
     }
 
+    // Mother-wings step 3: snap the wing-drum launch clamps to latched/released
+    // every frame (cheap, boolean-driven — no interpolation needed for a pyro
+    // release). Runs unconditionally, ahead of the launch/no-launch branches
+    // below (both of which can `return` early).
+    this._updateWingClamps();
+
     const ls = this._launchSequence;
     const launchActive = !!(ls && ls.isActive && ls.isActive());
 
@@ -3012,6 +3160,53 @@ export class PlayerSatellite extends THREE.Group {
     }
     this._setRosaWingProgress(1, this._rosaFurlProgress);
     this._setRosaWingProgress(2, this._rosaFurlProgress);
+  }
+
+  /**
+   * @private Mother-wings step 3 (DECISIONS §10, owner 2026-09-23): true while
+   * the wing-drum launch clamps are latched — the drum's fore/aft ends are
+   * still bolted to the front/back end-ring plane and the wing must not tilt
+   * or unroll. Latched through STOWED_IN_FAIRING / LIFTOFF /
+   * FAIRING_SEPARATION / ORBIT_INSERTION; released AT LAUNCH_LOCK_RELEASE
+   * (the same phase the per-strut pyros fire in), before ROSA_DEPLOY_PRIMARY
+   * can start rolling the blanket out.
+   *
+   * Duck-typed on `this._launchSequence` (no import — same pattern as
+   * `_danceDrivesMe`/`_updateRosaPanels`, avoids a circular import with
+   * LaunchSequence.js). With FEATURE_FLAGS.LAUNCH_SEQUENCE off (the default),
+   * `_launchSequence` is never set (LaunchSequence.start() early-returns
+   * before calling setLaunchSequence), so this is always false — the ship
+   * starts released, halves apart, exactly as normal (non-flagged) play
+   * always has.
+   * @returns {boolean}
+   */
+  _launchClampsLatched() {
+    const ls = this._launchSequence;
+    if (!ls || typeof ls.isActive !== 'function' || !ls.isActive()) return false;
+    const phase = typeof ls.getCurrentPhase === 'function' ? ls.getCurrentPhase() : null;
+    const EARLY_PHASES = [
+      'STOWED_IN_FAIRING', 'LIFTOFF', 'FAIRING_SEPARATION', 'ORBIT_INSERTION',
+    ];
+    return EARLY_PHASES.includes(phase);
+  }
+
+  /**
+   * @private Mother-wings step 3: snap each wing-drum clamp's BODY half to its
+   * latched (touching the drum tip) or released (retracted toward mid-body,
+   * `WING_CLAMP_RETRACT` clear) Z position. The DRUM half never moves apart
+   * from the drum itself — it is a child of `drum`, sharing its position and
+   * spin — only the fixed body half opens the gap. A snap, not an animation:
+   * launch-lock release is a one-shot pyro event, not a player-paced motion,
+   * and this only ever runs while `FEATURE_FLAGS.LAUNCH_SEQUENCE` is exercised.
+   */
+  _updateWingClamps() {
+    const latched = this._launchClampsLatched();
+    for (const struct of [this._rosaStruct1, this._rosaStruct2]) {
+      if (!struct || !struct.clampBody) continue;
+      for (const bodyHalf of struct.clampBody) {
+        bodyHalf.position.z = latched ? bodyHalf.userData.latchedZ : bodyHalf.userData.releasedZ;
+      }
+    }
   }
 
   /**
@@ -5228,7 +5423,7 @@ export class PlayerSatellite extends THREE.Group {
     }
 
     // --- Solar power ---
-    this._updateSolarPower(sunDirection);
+    this._updateSolarPower(sunDirection, dt);
 
     // --- Resources ---
     this._updateResources(dt);
@@ -5414,6 +5609,20 @@ export class PlayerSatellite extends THREE.Group {
    */
   _animateSolarTracking(dt, sunDirection) {
     if (!sunDirection) return;
+
+    // Mother-wings step 3 (DECISIONS §10): while the wing-drum launch clamps
+    // are latched, the tilt law holds 0 outright — an automatic launch
+    // sequence, not a player wait. This is normally already true because furl
+    // progress is 0 before LAUNCH_LOCK_RELEASE (the furl-coupled blend below
+    // already lands target at 0), but the clamp is the actual physical
+    // constraint (the drum ends are bolted to the end rings; see
+    // _buildRosaStructure) and gets an explicit, unconditional hold rather
+    // than relying on that coincidence.
+    if (this._launchClampsLatched()) {
+      if (this.panelRightPivot) this.panelRightPivot.rotation.x = 0;
+      if (this.panelLeftPivot) this.panelLeftPivot.rotation.x = 0;
+      return;
+    }
 
     // DECISIONS §10 (2026-09-23): no ROSA hold any more — the tilt law itself
     // dodges (`_rosaDesiredTilt` clamps through `_rosaDodgeLimitRad`, which
@@ -8415,16 +8624,29 @@ export class PlayerSatellite extends THREE.Group {
   // SOLAR POWER
   // ==========================================================================
 
-  /** @private */
-  _updateSolarPower(sunDirection) {
+  /**
+   * @private Mother-wings step 4 (DECISIONS §10, "power follows the panels,
+   * realistic wins"): each surface earns its own power from its own real area
+   * × incidence, instead of one generic area scaled by a table peak.
+   *
+   * Wings: real area × incidence (from the ACTUAL current pivot tilt, which
+   * already blends toward edge-on under feather — see _rosaDesiredTilt — so a
+   * separate feather multiplier would double-count it) × furl (the wrapper's
+   * own scale.x — a partially-unrolled blanket exposes proportionally less
+   * area) × the shop solarEfficiency upgrade × wing health.
+   *
+   * Body: _computeBodyPowerW sums the built cells, each its own area ×
+   * incidence × a throttled shading estimate, × the same upgrade × body
+   * health (kept separate from wing health — DECISIONS §10: "body cells must
+   * keep working when the wings are damaged, furled or edge-on").
+   * @param {number} [dt=0] — seconds since last frame (throttles body shading)
+   */
+  _updateSolarPower(sunDirection, dt = 0) {
     if (!sunDirection) {
       this.resources.solarRate = 0;
       this._inShadow = false;   // §4 keep the eclipse cache safe when sun dir is unavailable
       return;
     }
-
-    const panelNormal = _v3TmpA.set(0, 1, 0).applyQuaternion(this.quaternion);
-    const sunAngle = Math.max(0, panelNormal.dot(sunDirection));
 
     const pos = this._cartesian.position;
     const sunDir = { x: sunDirection.x, y: sunDirection.y, z: sunDirection.z };
@@ -8433,33 +8655,148 @@ export class PlayerSatellite extends THREE.Group {
 
     if (inShadow) {
       this.resources.solarRate = 0;
-    } else {
-      // Furl coupling: only the ROSA blanket share is gated by furl progress;
-      // the body-mount GaAs cells can't furl, so they stay on. A fully furled
-      // array keeps ~BODY_MOUNT_POWER_FRACTION of peak; unfurled is unchanged.
-      //
-      // Feather coupling: feathering parks the deployed blanket edge-on, so its
-      // sun-incidence drops by cos(feather·90°). Unlike furl (which scales the
-      // ROSA share by roll-out progress), feather attenuates the ROSA share via
-      // this geometric incidence factor — fully feathered → ROSA contributes ~0,
-      // leaving the body-mount share, but reached by turning rather than rolling.
-      const V5 = Constants.OCTOPUS_V5;
-      const bodyFrac = V5.BODY_MOUNT_POWER_FRACTION ?? 0;
-      const rosaFrac = V5.ROSA_POWER_FRACTION ?? 1;
-      const furl = (this._rosaFurlProgress ?? 1);
-      const feather = (this._rosaFeatherProgress ?? 0);
-      const featherInc = Math.cos(feather * Math.PI / 2); // 1 (flat) → 0 (edge-on)
-      const furlMult = bodyFrac + rosaFrac * furl * featherInc;
-
-      this.resources.solarRate =
-        Constants.SOLAR_FLUX *
-        Constants.SOLAR_PANEL_AREA *
-        Constants.SOLAR_PANEL_EFFICIENCY *
-        sunAngle *
-        this.resources.solarPanelHealth *
-        furlMult;
+      return;
     }
+
+    const effMult = this.resources.solarEfficiencyMult ?? 1;
+    const efficiency = Constants.SOLAR_PANEL_EFFICIENCY * effMult;
+    const wingHealth = this.resources.solarPanelHealth ?? 1;
+    const bodyHealth = this.resources.bodyPanelHealth ?? 1;
+
+    // ---- Wings ----
+    const wingAreaEachM2 = Constants.OCTOPUS_V5.ROSA_WIDTH * Constants.OCTOPUS_V5.ROSA_LENGTH;
+    let wingPowerW = 0;
+    const wingPairs = [
+      [this.panelRightPivot, this._rosaPanelWrapper1],
+      [this.panelLeftPivot, this._rosaPanelWrapper2],
+    ];
+    for (const [pivot, wrapper] of wingPairs) {
+      if (!pivot || !wrapper) continue;
+      // The panel's own outward normal, in ship-local frame, is (0, cos(tilt),
+      // sin(tilt)) — the same relation _rosaDesiredTilt's atan2 solves for
+      // (verified algebraically from the wrapper's -90° X rotation feeding into
+      // the pivot's own rotation.x; both wings track the same target so they
+      // share this formula). No separate feather term: tiltR IS the real
+      // current angle, already blended toward edge-on when feathered.
+      const tiltR = pivot.rotation.x;
+      _v3TmpA.set(0, Math.cos(tiltR), Math.sin(tiltR)).applyQuaternion(this.quaternion);
+      const incidence = Math.max(0, _v3TmpA.dot(sunDirection));
+      const furl = Math.max(0, Math.min(1, wrapper.scale.x));
+      wingPowerW += Constants.SOLAR_FLUX * efficiency * wingAreaEachM2 * incidence * furl;
+    }
+    wingPowerW *= wingHealth;
+
+    // ---- Body ----
+    const bodyPowerW = this._computeBodyPowerW(sunDirection, dt, efficiency) * bodyHealth;
+
+    this.resources.solarRate = wingPowerW + bodyPowerW;
   }
+
+  /**
+   * @private Mother-wings step 4: sum the built body-mount cells
+   * (`BarrelSolarPanel_*`, built by `_buildMainBus` — not mine, only read
+   * here). Each cell contributes area × efficiency × flux × max(0, cos(sun,
+   * cell normal)) × a shading estimate. The cos(sun,normal) term is cheap
+   * (one dot product per cell) and runs every call; the shading raycast
+   * (wings/struts+daughters/radiator) is the pricier part and is throttled to
+   * `BODY_SHADE_UPDATE_S` (≤ 2 Hz per the plan) and cached between updates.
+   * Cells facing away from the sun (incidence 0) skip the raycast entirely —
+   * they contribute 0 either way.
+   * @param {THREE.Vector3} sunDirection
+   * @param {number} dt
+   * @param {number} efficiency — SOLAR_PANEL_EFFICIENCY × the shop upgrade mult
+   * @returns {number} watts, before body health
+   */
+  _computeBodyPowerW(sunDirection, dt, efficiency) {
+    if (!this._bodyCells) this._discoverBodyCells();
+    const cells = this._bodyCells;
+    if (cells.length === 0) return 0;
+
+    this._bodyShadeTimer = (this._bodyShadeTimer ?? 0) + Math.max(0, dt);
+    const updateShade = this._bodyShadeTimer >= Constants.OCTOPUS_V5.BODY_SHADE_UPDATE_S
+      || this._solarOccluders === undefined;
+    if (updateShade) {
+      this._bodyShadeTimer = 0;
+      this._solarOccluders = this._gatherSolarOccluders();
+    }
+
+    const flux = Constants.SOLAR_FLUX;
+    let totalW = 0;
+    for (const cell of cells) {
+      cell.mesh.getWorldPosition(_v3TmpB);
+      _v3TmpC.setFromMatrixColumn(cell.mesh.matrixWorld, 2).normalize();   // outward face normal
+      const incidence = Math.max(0, _v3TmpC.dot(sunDirection));
+      if (incidence <= 0) { cell.unshaded = 0; continue; }
+      if (updateShade || cell.unshaded === undefined) {
+        cell.unshaded = this._isPointUnshaded(_v3TmpB, sunDirection) ? 1 : 0;
+      }
+      totalW += flux * efficiency * cell.areaM2 * incidence * cell.unshaded;
+    }
+    return totalW;
+  }
+
+  /**
+   * @private Discover the already-built body-mount cells once and cache
+   * {mesh, areaM2} per cell. `_buildMainBus`'s cell layout is NOT mine to
+   * change (the cells lane owns it next) — this only reads what it built.
+   */
+  _discoverBodyCells() {
+    this._bodyCells = [];
+    this.traverse((o) => {
+      if (o.isMesh && /^BarrelSolarPanel_/.test(o.name || '')) {
+        const p = o.geometry && o.geometry.parameters;
+        if (!p) return;
+        const areaM2 = (p.width / M) * (p.height / M);
+        this._bodyCells.push({ mesh: o, areaM2, unshaded: undefined });
+      }
+    });
+  }
+
+  /**
+   * @private The shading occluder list for the throttled body-cell raycast:
+   * both wing panel faces (Front=FrontSide + Back=BackSide, so a ray hitting
+   * either the outboard or inboard face of the blanket registers — see the
+   * mother-wings report for why one alone misses half the approach
+   * directions), every strut arm's group (struts + any docked daughter), and
+   * every radiator/flower hinge group. Rebuilt each time the shade throttle
+   * fires (cheap: a handful of lookups, not a traversal).
+   * @returns {THREE.Object3D[]}
+   */
+  _gatherSolarOccluders() {
+    const list = [];
+    for (const name of ['ROSA_Panel_Front_0deg', 'ROSA_Panel_Back_0deg',
+                         'ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg']) {
+      const o = this.getObjectByName(name);
+      if (o) list.push(o);
+    }
+    if (this.armManager && Array.isArray(this.armManager.arms)) {
+      for (const arm of this.armManager.arms) if (arm && arm.group) list.push(arm.group);
+    }
+    if (Array.isArray(this._flowerGroups)) {
+      for (const fg of this._flowerGroups) if (fg && fg.hinge) list.push(fg.hinge);
+    }
+    return list;
+  }
+
+  /**
+   * @private True if nothing in `_solarOccluders` sits between `worldPos` and
+   * the sun within `BODY_SHADE_MAX_DIST_M`. Origin is nudged a hair along the
+   * ray so the cast doesn't graze the cell's own (excluded) box.
+   * @param {THREE.Vector3} worldPos — scene units
+   * @param {THREE.Vector3} sunDirection — unit vector, world frame
+   * @returns {boolean}
+   */
+  _isPointUnshaded(worldPos, sunDirection) {
+    const occluders = this._solarOccluders;
+    if (!occluders || occluders.length === 0) return true;
+    _v3TmpD.copy(sunDirection).normalize();
+    _v3TmpA.copy(worldPos).addScaledVector(_v3TmpD, 0.01 * M);   // 10 mm nudge (M = scene units/metre)
+    _solarRaycaster.set(_v3TmpA, _v3TmpD);
+    _solarRaycaster.far = Constants.OCTOPUS_V5.BODY_SHADE_MAX_DIST_M * M;
+    const hits = _solarRaycaster.intersectObjects(occluders, true);
+    return hits.length === 0;
+  }
+
 
   // ==========================================================================
   // RESOURCES

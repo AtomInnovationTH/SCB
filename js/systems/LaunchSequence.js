@@ -203,7 +203,7 @@ class LaunchSequence {
     }
 
     // Snap ROSA to 100 %
-    const totalPower = Constants.OCTOPUS_V5.TOTAL_SOLAR_POWER || 2240;
+    const totalPower = Constants.SOLAR_FLUX * Constants.SOLAR_PANEL_AREA * Constants.SOLAR_PANEL_EFFICIENCY;
     this._rosaWing1 = 1;
     this._rosaWing2 = 1;
     this._rosaTotalPowerW = totalPower;
@@ -436,7 +436,7 @@ class LaunchSequence {
    */
   _tickRosaDeploy(wing) {
     const duration = Constants.OCTOPUS_V5.ROSA_DEPLOY_DURATION_S || 6.0;
-    const totalPower = Constants.OCTOPUS_V5.TOTAL_SOLAR_POWER || 2240;
+    const totalPower = Constants.SOLAR_FLUX * Constants.SOLAR_PANEL_AREA * Constants.SOLAR_PANEL_EFFICIENCY;
     const perWing = totalPower / 2;
 
     if (wing === 1) {

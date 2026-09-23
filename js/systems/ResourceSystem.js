@@ -21,16 +21,35 @@ export class ResourceSystem {
     this.coldGas = Constants.COLD_GAS_MAX;
     this.battery = Constants.BATTERY_MAX;
     this.solarPanelHealth = 1.0;
+    // Mother-wings step 4 (DECISIONS §10, "power follows the panels"): the
+    // body-mount cells are backup power and get their OWN health, independent
+    // of the wings — damageSolarPanel() (collision/impact) and the passive
+    // radiation/MMOD degrade below both stay wing-only (`solarPanelHealth`);
+    // nothing degrades this today, so the body keeps working when the wings
+    // are damaged, furled or edge-on.
+    this.bodyPanelHealth = 1.0;
 
     // ── Lithium (F16: MPD thruster propellant) ──────────────────────────
     this.lithium = 0;                                // starts empty — must salvage
     this.lithiumMax = Constants.MPD_LITHIUM_CAPACITY; // 100 units
 
     // ── Derived rates ───────────────────────────────────────────────────
+    // Fallback-only rate: used by update()'s rechargeRate when no live player
+    // is wired (menu hero, headless tests) — PlayerSatellite._updateSolarPower
+    // computes the REAL per-frame rate (real per-wing/per-cell area ×
+    // incidence × furl × shading × health) into player.resources.solarRate,
+    // and update() prefers that when it's available. Constants.SOLAR_PANEL_AREA
+    // is now the real total built area (mother-wings step 4), not a generic
+    // placeholder, so this fallback is a believable ceiling rather than a
+    // separate invented number.
     this.solarRate =
       Constants.SOLAR_PANEL_EFFICIENCY *
       Constants.SOLAR_FLUX *
       Constants.SOLAR_PANEL_AREA;
+    // Shop solarEfficiency upgrade multiplier — read by the REAL per-frame
+    // calc too (synced to player.resources.solarEfficiencyMult below), so the
+    // upgrade still works under the new area-based model.
+    this.solarEfficiencyMult = 1.0;
 
     // ── Max capacities (upgradeable) ────────────────────────────────────
     this.xenonMax = Constants.XENON_FUEL_MAX;
@@ -133,7 +152,9 @@ export class ResourceSystem {
 
   /**
    * Restore solar panel health by a fraction (from salvaged GaAs cells).
-   * Health is clamped to [0, 1.0].
+   * Health is clamped to [0, 1.0]. Mother-wings step 4: this is the WING
+   * (ROSA) health — `bodyPanelHealth` (backup power) has no damage/repair path
+   * today by design (DECISIONS §10: it must keep working when the wings don't).
    * @param {number} fraction - e.g. 0.02 for 2% restoration
    */
   replenishPanelHealth(fraction) {
@@ -150,6 +171,10 @@ export class ResourceSystem {
    * Apply impact damage to the solar panels (D2 glancing-collision consequence).
    * Floors at 0.1 so a hit degrades but never fully destroys the array (some
    * recharge always remains). Distinct from passive degradation (floors at 0.3).
+   * Mother-wings step 4 (DECISIONS §10 — "Rosa might get damaged by collision
+   * or player mistakes"): this is the exact mechanism the owner meant. It hits
+   * the WING (ROSA) health only — `bodyPanelHealth` (backup power) is
+   * untouched, so a collision can never zero out the body's own contribution.
    * @param {number} fraction - health lost, e.g. 0.12
    */
   damageSolarPanel(fraction) {
@@ -320,6 +345,7 @@ export class ResourceSystem {
       batteryMax: this.batteryMax,
       solarRate: this.solarRate,
       solarPanelHealth: this.solarPanelHealth,
+      bodyPanelHealth: this.bodyPanelHealth,   // mother-wings step 4
       currentFuelId: this._currentFuelId,
       currentFuelName: fuel.name,
       currentFuelIsp: fuel.isp,
@@ -377,6 +403,7 @@ export class ResourceSystem {
     this.coldGas = this.coldGasMax;
     this.battery = this.batteryMax;
     this.solarPanelHealth = 1.0;
+    this.bodyPanelHealth = 1.0;
     this._depletionEmitted = false;
     this._syncToPlayer();
   }
@@ -398,8 +425,21 @@ export class ResourceSystem {
       this._weatherSolarMult = 1.0;
     }
 
-    // Solar panel recharge (simplified Wh model scaled for gameplay)
-    const rechargeRate = this.solarRate * this.solarPanelHealth * this._weatherSolarMult * dt * 0.001;
+    // Solar panel recharge (simplified Wh model scaled for gameplay).
+    // Mother-wings step 4 (DECISIONS §10, "power follows the panels, realistic
+    // wins"): prefer the REAL per-frame rate PlayerSatellite._updateSolarPower
+    // computes (real per-wing/per-cell area × incidence × furl × shading, with
+    // wing/body health already applied separately — see its docstring). That
+    // rate already reflects eclipse, tilt, shading, furl and BOTH health
+    // splits, so it is used as-is here (no extra ×solarPanelHealth — that
+    // would double the wing-health penalty and wrongly apply it to the body's
+    // share too). Falls back to the generic static `this.solarRate` (still
+    // gated by wing health, the pre-existing behaviour) when no live player is
+    // wired — menu hero, or a bare ResourceSystem in a unit test.
+    const liveRate = this._player && this._player.resources && this._player.resources.solarRate;
+    const rechargeRate = (typeof liveRate === 'number')
+      ? liveRate * this._weatherSolarMult * dt * 0.001
+      : this.solarRate * this.solarPanelHealth * this._weatherSolarMult * dt * 0.001;
     if (this.battery < this.batteryMax) {
       this.battery = Math.min(this.batteryMax, this.battery + rechargeRate);
       this._syncToPlayer();
@@ -417,7 +457,11 @@ export class ResourceSystem {
       this._syncToPlayer();
     }
 
-    // Gradual solar panel degradation from radiation/micrometeorite damage
+    // Gradual solar panel degradation from radiation/micrometeorite damage.
+    // Mother-wings step 4: this is the WING (ROSA) health specifically — the
+    // large, thin, exposed blanket is what collision/MMOD/radiation realistically
+    // wears down first. `bodyPanelHealth` (compact, recessed body-mount cells,
+    // backup power) is deliberately NOT degraded here or anywhere else today.
     // Base rate: ~5% loss per 10 minutes of real gameplay (600 game-seconds at TIME_SCALE_GAMEPLAY=10)
     const baseDegradRate = 0.00008;
     const degradMultiplier = this.panelDegradationMultiplier || 1.0;
@@ -470,7 +514,11 @@ export class ResourceSystem {
         this.battery = Math.min(this.battery + data.value, this.batteryMax);
         break;
       case 'solarEfficiency':
-        // Multiply solar recharge rate by upgrade value (e.g., 1.3 = +30%, 2.0 = +100%)
+        // Multiply solar recharge rate by upgrade value (e.g., 1.3 = +30%, 2.0 = +100%).
+        // Mother-wings step 4: this now feeds the REAL per-frame calc via
+        // solarEfficiencyMult (synced to player.resources); solarRate is kept
+        // in step too, as the fallback rate for when no live player is wired.
+        this.solarEfficiencyMult = data.value;
         this.solarRate = Constants.SOLAR_PANEL_EFFICIENCY * data.value
           * Constants.SOLAR_FLUX * Constants.SOLAR_PANEL_AREA;
         break;
@@ -516,6 +564,8 @@ export class ResourceSystem {
     this.coldGas = Constants.COLD_GAS_MAX;
     this.battery = Constants.BATTERY_MAX;
     this.solarPanelHealth = 1.0;
+    this.bodyPanelHealth = 1.0;
+    this.solarEfficiencyMult = 1.0;
     this.xenonMax = Constants.XENON_FUEL_MAX;
     this.coldGasMax = Constants.COLD_GAS_MAX;
     this.batteryMax = Constants.BATTERY_MAX;
@@ -549,6 +599,8 @@ export class ResourceSystem {
     this._player.resources.coldGas = this.coldGas;
     this._player.resources.battery = this.battery;
     this._player.resources.solarPanelHealth = this.solarPanelHealth;
+    this._player.resources.bodyPanelHealth = this.bodyPanelHealth;      // mother-wings step 4
+    this._player.resources.solarEfficiencyMult = this.solarEfficiencyMult; // mother-wings step 4
     this._player.resources.xenonMax = this.xenonMax;
     this._player.resources.coldGasMax = this.coldGasMax;
     this._player.resources.batteryMax = this.batteryMax;

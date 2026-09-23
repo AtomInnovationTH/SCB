@@ -366,6 +366,11 @@ export class EnvironmentSystem {
       // Apply degradation
       this._subsystemHealth.arms = Math.max(0, this._subsystemHealth.arms - armDeg);
 
+      // Mother-wings step 4 (DECISIONS §10, "power follows the panels"): AO
+      // erosion hits the WING (ROSA) health only — the large, thin, exposed
+      // blanket is what atomic oxygen realistically erodes first. The body-
+      // mount cells' `bodyPanelHealth` (backup power) is deliberately left
+      // alone here, so it keeps working when the wings are worn down.
       if (this._resource && typeof this._resource.solarPanelHealth === 'number') {
         this._resource.solarPanelHealth = Math.max(0, this._resource.solarPanelHealth - panelDeg);
       }
