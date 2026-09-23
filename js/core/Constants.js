@@ -1854,21 +1854,41 @@ export const Constants = {
       // POSE_LAUNCH_DEG − 0.5° and lets the floor clamp hold θ at exactly 0
       // (no SETTLE_EPS residual — the mock stopped 0.5° short).
       POSE_LAUNCH_DEG: 0,
-      // Owner decision 2026-09-09 (B — "ROSA centered, not furled"): the fold
-      // corridor below POSE_FLOOR_DEG clears the DEPLOYED ROSA only with the
-      // blankets parked in the barrel line (pivot tilt 0 — the X-Z plane).
-      // Measured on the real meshes (tmp/probe-rosa-tilt.mjs, the T7 helpers):
-      // tightest gap to any ROSA_* mesh over the whole 0..146° swing is 133 mm
-      // at tilt 0 (spool curl, θ 0), falling ~16 mm per degree — 55 mm at ±5°,
-      // 24 mm at ±7° (the T7 20 mm gate), CONTACT at ±10° (drum), the blanket
-      // itself at ±20°, bracket + blanket at ±30° (the live tracking clamp's
-      // extreme), drum + blanket at ±90° (feather). So an OVERRIDE fold HOLDS
-      // the ROSA pivots at 0 (sun-track + feather suspended) for as long as the
-      // lock is armed, and the driver floor stays at POSE_FLOOR_DEG until BOTH
-      // pivots are within this tolerance of 0 — the flower swings 146→90 (3.7 s,
-      // safe at every tilt: T7(v)) while the arrays centre (τ 0.57 s, ≤ 2.5 s
-      // from ±90°), then continues below 90 without a pause. 2° keeps ≈ 100 mm.
-      OVERRIDE_ROSA_CENTER_TOL_DEG: 2,
+      // DECISIONS §10 (2026-09-23) — the automatic solar-wing dodge. The
+      // wings never make the radiator wait: the tilt law itself clamps to a
+      // clearance curve measured against the REAL meshes (the rebuilt
+      // tmp/probe-rosa-tilt.mjs and tmp/every-door-fine.mjs; validation: the
+      // bloom clash reproduces the DECISIONS §5 Debt number exactly — 16.7 mm
+      // at tilt 18°, θ 90). Two curves, one clamp (the minimum):
+      //
+      //   θ-curve (petals ↔ wings, tightest tilt keeping the 20 mm gate):
+      //     7° at θ 0, 20° at θ 10, 18° at θ 20, 15° plateau θ 30–90,
+      //     unconstrained (≥30°) above θ 100; non-monotone at θ 80–90 (the
+      //     gap recovers at 25–30°) — the law uses the conservative prefix.
+      //   α-curve (struts+daughters ↔ wings, at the orbit rest): no
+      //     constraint at α 0–5 and α 80–180; inside α 10–75 the ceiling
+      //     runs 30–60° with contacts at every feather-range tilt — i.e.
+      //     only FEATHERING (60–120°) clashes, never the ±30° tracking.
+      //
+      // With margin (the limits sit ≥3° under the measured safe prefix at
+      // every grid point):
+      WING_DODGE_LOW_THETA_DEG: 8,    // below this θ (folded flat): 5° limit
+      WING_DODGE_LOW_LIMIT_DEG: 5,    // (measured 7° at θ 0)
+      WING_DODGE_MID_THETA_DEG: 95,   // below this θ (fold corridor + bloom): 12°
+      WING_DODGE_MID_LIMIT_DEG: 12,   // (measured ≥15° across θ 20–90)
+      WING_DODGE_ALPHA_LO_DEG: 5,     // strut-α band inside which feathering
+      WING_DODGE_ALPHA_HI_DEG: 80,    // contacts the wing root hardware
+      WING_DODGE_ALPHA_LIMIT_DEG: 25, // (measured ceiling ≥30° across α 10–75)
+      // The clamp is applied AFTER the feather blend (the dodge wins over a
+      // feather request while the radiator is low or a strut is swung), and a
+      // fold in flight uses the LOW limit from the moment it arms — the wing
+      // motor (rate 1.75/s, τ ≈ 0.57 s) then beats the radiator to every θ
+      // by ≥1 s (feather 120° → 5° takes 2.05 s; the constraint first binds
+      // below θ 95, 3.4 s into the 15°/s swing). Power cost: the clamp only
+      // binds when the sun is off the wing plane by more than the limit —
+      // worst case ~5% of wing power at the bloom park (cos 18°), ~9% folded
+      // (cos 25°, while a folded radiator shadows the wings anyway), ~0.4%
+      // with struts aimed (cos 5°).
 
       // The ROSA is not the only thing in the fold corridor. The DAUGHTER ARMS
       // root at z +0.90 r 0.40 (az 60/120/240/300) and the petals fold FORE
@@ -1882,10 +1902,12 @@ export const Constants = {
       //   2.5° 12.1 (fails),  3° 4.8,  22° 0.2 (worst).
       //
       // So the corridor is clear at ANY arm angle down to θ 10°, and the last
-      // 10° needs the arms stowed. Same shape as the ROSA hold above, so it is
-      // the same mechanism: the driver floor stays at POSE_FLOOR_DEG until the
-      // arms are within this tolerance of α 0. 1.5° keeps 30 mm against the
-      // 20 mm gate; 2° would keep only 21 mm, which is the gate itself.
+      // 10° needs the arms stowed. Unlike the wings (which now DODGE clear by
+      // themselves — DECISIONS §10), the struts may be tethered, holding
+      // cargo or mid-salvage, so the mechanism still WAITS: the driver floor
+      // stays at POSE_FLOOR_DEG until the arms are within this tolerance of
+      // α 0. 1.5° keeps 30 mm against the 20 mm gate; 2° would keep only
+      // 21 mm, which is the gate itself.
       //
       // Re-clocking the stations away from the arms was measured and REJECTED
       // — see docs/DECISIONS.md §5. The clock is boxed in on all sides: the

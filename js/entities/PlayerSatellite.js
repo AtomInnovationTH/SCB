@@ -267,12 +267,15 @@ export class PlayerSatellite extends THREE.Group {
      *  carries θ up to the floor. Never re-armable from REFIT / plain O /
      *  autopilot (they only ever pass STOW / PARK / CARGO). */
     this._flowerLaunchLock = false;
-    /** Owner decision 2026-09-09 (B): an OVERRIDE fold HOLDS the ROSA pivots
-     *  centred (tilt 0, sun-track + feather suspended) while the lock is armed,
-     *  and the driver floor stays at POSE_FLOOR_DEG until both pivots are
-     *  within OVERRIDE_ROSA_CENTER_TOL_DEG of 0 (Constants comment: the fold
-     *  corridor contacts the deployed ROSA drum at ±10° tilt, the blanket at
-     *  ±20°). Set by setFlowerPose's override branch, cleared with the lock.
+    /** DECISIONS §10 (supersedes the 2026-09-09 (B) ROSA hold): an OVERRIDE
+     *  fold is in flight — the wing DODGE takes its tightest limit
+     *  (WING_DODGE_LOW_LIMIT_DEG) from the moment this is set, so the wings
+     *  clear the fold corridor before the radiator gets there and the driver
+     *  never waits for them (the tilt law clamps itself through
+     *  `_rosaDodgeLimitRad`; sun-track and feather both yield). The driver
+     *  floor still waits for the STRUTS (`_armsStowedForFold`) — they may be
+     *  tethered or holding cargo. Set by setFlowerPose's override branch,
+     *  cleared with the lock.
      *  Scoped to the OVERRIDE arming: the launch sequence and the ?shot=1 dev
      *  force are byte-identical (their own procedures furl ROSA). */
     this._flowerOverrideFold = false;
@@ -3224,7 +3227,7 @@ export class PlayerSatellite extends THREE.Group {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'THERMAL',
       text: `Radiator folded to ${FL.POSE_LAUNCH_DEG}° — the stowed launch pose. `
-        + 'Solar arrays centred to clear the fold corridor; daughter struts must be stowed too. '
+        + 'Solar arrays dodge clear of the fold automatically; daughter struts must be stowed too. '
         + 'Folded panels radiate nothing: heat will build while stowed. Tap RADIATOR / O to deploy.',
       priority: 'warning',
     });
@@ -3256,21 +3259,20 @@ export class PlayerSatellite extends THREE.Group {
    * O key while `isOverrideEngaged()`, both guarded on
    * OverridePane.isExpanded(). REFIT / plain O / autopilot never reach it.
    *
-   * ROSA (owner decision 2026-09-09, B — "centered, not furled"): the fold
-   * corridor below the pose floor contacts the DEPLOYED ROSA unless the pivots
-   * sit in the barrel line (real-mesh probe: 133 mm at tilt 0, contact at ±10°,
-   * the blanket at ±20°; the live tracking clamp is ±30°, feather ±90°). So the
-   * fold SEQUENCES ITSELF: the override arming engages the ROSA centre hold
-   * (`_flowerOverrideFold` — _animateSolarTracking drives both pivots to 0,
-   * sun-track + feather suspended) and the driver keeps the floor at 90° until
-   * both pivots are within OVERRIDE_ROSA_CENTER_TOL_DEG — the struts swing
-   * 146→90 (3.7 s, safe at every tilt) while the arrays centre (≤ 2.5 s), then
-   * continue below 90 without a visible pause; the hold clears with the lock
-   * on the release and tracking resumes. One press is still the whole travel;
-   * nothing is refused; a furled ROSA (pivots parked at 0) passes at once.
-   * @returns {boolean|null} true when now deploying (toward STOW 146°),
-   *   false when folding (toward LAUNCH 0°), null when no flower is fitted
-   */
+    * ROSA (DECISIONS §10, 2026-09-23 — supersedes the 2026-09-09 (B) hold):
+    * the wings DODGE clear by themselves. The tilt law clamps through the
+    * measured clearance curves (`_rosaDodgeLimitRad`): from the moment the
+    * override arming sets `_flowerOverrideFold`, the pivots take the
+    * fold-corridor limit (5°) and hold it while the lock is armed — sun-track
+    * and feather both yield — so the wings (τ 0.57 s) are clear before the
+    * 15°/s petals reach them and the driver NEVER waits for the pivots. The
+    * floor still waits for the STRUTS (`_armsStowedForFold`) — they may be
+    * tethered, holding cargo or mid-salvage. One press is still the whole
+    * travel; nothing is refused; a furled ROSA (pivots parked at 0 by the
+    * furl blend) is unaffected.
+    * @returns {boolean|null} true when now deploying (toward STOW 146°),
+    *   false when folding (toward LAUNCH 0°), null when no flower is fitted
+    */
   toggleFlowerOverride() {
     if (this._flowerGroups.length === 0) return null;
     const FL = Constants.THERMAL.FLOWER;
@@ -3304,12 +3306,12 @@ export class PlayerSatellite extends THREE.Group {
    * the frame θ reaches POSE_FLOOR_DEG and emits Events.THERMAL_FLOWER_RELEASED
    * once; from then on a bare 'LAUNCH' is refused again — re-armable ONLY
    * under OVERRIDE (or the sequence / the dev force), never from REFIT / plain
-   * O / autopilot. The (c) override branch ALSO engages the ROSA centre hold
-   * (owner decision 2026-09-09, B: `_flowerOverrideFold` — the pivots are
-   * driven to tilt 0 and held, and the driver floor stays at 90° until they
-   * are within OVERRIDE_ROSA_CENTER_TOL_DEG; one COMMS note when they are not
-   * yet centred). (a) and (b) do not engage it (their own procedures furl
-   * ROSA, which parks the pivots at 0).
+   * O / autopilot. The (c) override branch ALSO engages the wing DODGE
+   * (DECISIONS §10: `_flowerOverrideFold` — the tilt law clamps itself to the
+   * fold-corridor limit from the moment of arming, so the wings are clear
+   * before the petals arrive; nothing is held and nothing waits for them).
+   * (a) and (b) do not engage it (their own procedures furl ROSA, which parks
+   * the pivots at 0).
    * @param {'STOW'|'PARK'|'CARGO'|'LAUNCH'} pose
    * @param {{ force?: boolean, override?: boolean }} [opts] honoured for 'LAUNCH'
    *   only — `force` the dev hook, `override` the SAFETY OVERRIDE sweep
@@ -3324,21 +3326,20 @@ export class PlayerSatellite extends THREE.Group {
       const forced = !!(opts && opts.force === true);
       const override = !!(opts && opts.override === true);
       if (!launchActive && !forced && !override) return null;
-      // Owner decision 2026-09-09 (B — "ROSA centered, not furled"; T5 finding
-      // + tmp/probe-rosa-tilt.mjs, see OVERRIDE_ROSA_CENTER_TOL_DEG): the fold
-      // corridor below the pose floor contacts the DEPLOYED ROSA unless the
-      // pivots sit at tilt 0 (133 mm at 0, contact at ±10°, the blanket at
-      // ±20°). The override arming therefore ENGAGES THE CENTRE HOLD
-      // (_animateSolarTracking drives both pivots to 0, sun-track + feather
-      // suspended) and the driver keeps the floor at POSE_FLOOR_DEG until both
-      // pivots are within tolerance — the flower swings 146→90 (safe at every
-      // tilt, T7(v)) while the arrays centre, then continues below 90. The lock
-      // and the hold clear together on the release. Scoped to the override
-      // arming: the launch sequence and the ?shot=1 dev force are unchanged
-      // (their own procedures furl ROSA, which parks the pivots at 0 anyway).
+      // DECISIONS §10 (supersedes the 2026-09-09 (B) centre hold; the
+      // measured curve lives in the Constants WING_DODGE_* comment): the fold
+      // corridor below the pose floor contacts the DEPLOYED ROSA beyond ~7° of
+      // tilt (133 mm at tilt 0, ~16 mm per degree). The override arming
+      // therefore ENGAGES THE WING DODGE — the tilt law clamps itself to the
+      // fold-corridor limit from this frame (`_rosaDodgeLimitRad` reads
+      // `_flowerOverrideFold`), sun-track and feather both yield, and the
+      // pivots (τ 0.57 s) are clear before the 15°/s petals arrive — the
+      // driver never waits for them. The floor still waits for the STRUTS
+      // (`_armsStowedForFold`). Scoped to the override arming: the launch
+      // sequence and the ?shot=1 dev force are unchanged (their own
+      // procedures furl ROSA, which parks the pivots at 0 anyway).
       if (override) {
         this._flowerOverrideFold = true;
-        if (!this._rosaCenteredForFold()) this._noteRosaCentering();
         if (!this._armsStowedForFold()) this._noteArmStowWait();
       }
       this._flowerLaunchLock = true;
@@ -3761,21 +3762,21 @@ export class PlayerSatellite extends THREE.Group {
    * so the whole reachable range is thrust-legal and the driver needs NO
    * thrust-coupled writes.
    *
-   * Design 7b: while the launch lock is armed the floor is POSE_LAUNCH_DEG
-   * (0°) — the fore-folded fairing pose, measured against the DOCKED daughters
-   * (probe 7b.4c / 7b.6b). Owner decision 2026-09-09 (B): under an OVERRIDE
-   * fold (`_flowerOverrideFold`) the floor drops only once both ROSA pivots
-   * are centred (`_rosaCenteredForFold`) — until then θ stalls at the orbit
-   * floor with the latch alive. Owner-reported 2026-09-22: the ARMS are a
-   * second condition on the same gate (`_armsStowedForFold`) — the petals fold
-   * fore past the daughter struts, and the corridor is only clear at any α
-   * down to θ 10°. The lock (and the hold) clear — once, with
-   * Events.THERMAL_FLOWER_RELEASED — the frame a release swing (any target at
-   * or above the orbit floor) carries θ up to POSE_FLOOR_DEG; a release never
-   * latches below the floor (so a CARGO release cannot settle at 89.9° with
-   * the lock still armed). Order: slew → clamp → release → settle, so every
-   * event carries the CLAMPED θ (the LAUNCH latch reads exactly 0).
-   */
+    * Design 7b: while the launch lock is armed the floor is POSE_LAUNCH_DEG
+    * (0°) — the fore-folded fairing pose, measured against the DOCKED daughters
+    * (probe 7b.4c / 7b.6b). DECISIONS §10 (2026-09-23): under an OVERRIDE fold
+    * the wings no longer gate this floor — they dodge clear by themselves (the
+    * tilt law clamps through `_rosaDodgeLimitRad`). Owner-reported 2026-09-22:
+    * the STRUTS remain a condition on the gate (`_armsStowedForFold`) — the
+    * petals fold fore past the daughter struts, and the corridor is only clear
+    * at any α down to θ 10°; until they are stowed, θ stalls at the orbit floor
+    * with the latch alive. The lock clears — once, with
+    * Events.THERMAL_FLOWER_RELEASED — the frame a release swing (any target at
+    * or above the orbit floor) carries θ up to POSE_FLOOR_DEG; a release never
+    * latches below the floor (so a CARGO release cannot settle at 89.9° with
+    * the lock still armed). Order: slew → clamp → release → settle, so every
+    * event carries the CLAMPED θ (the LAUNCH latch reads exactly 0).
+    */
   _updateFlower(dt) {
     if (this._flowerGroups.length === 0) return;
     const FL = Constants.THERMAL.FLOWER;
@@ -3789,15 +3790,15 @@ export class PlayerSatellite extends THREE.Group {
     }
 
     // Pose floor + ladder ceiling — clamped in the driver, unconditionally.
-    // Owner decision 2026-09-09 (B): under an OVERRIDE fold the floor drops to
-    // POSE_LAUNCH_DEG only once both ROSA pivots are centred (tilt within
-    // OVERRIDE_ROSA_CENTER_TOL_DEG of 0) — until then θ stalls at the orbit
-    // floor (safe at every tilt, T7(v)) with the latch alive (the target is
-    // far below, so the settle test never fires), and resumes the frame the
-    // arrays are parked. The sequence / dev-force armings drop it at once.
+    // DECISIONS §10: the wings no longer gate this floor — they dodge clear
+    // on their own (the tilt law clamps itself), so an OVERRIDE fold drops
+    // below POSE_FLOOR_DEG as soon as the ARMS are stowed (the strut wait,
+    // `_armsStowedForFold` — the struts may be tethered or holding cargo, so
+    // the mechanism waits for THEM, never for the wings). The sequence /
+    // dev-force armings drop it at once.
     const orbitFloorRad = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
     const foldFloorOpen = this._flowerLaunchLock
-      && (!this._flowerOverrideFold || (this._rosaCenteredForFold() && this._armsStowedForFold()));
+      && (!this._flowerOverrideFold || this._armsStowedForFold());
     const floorRad = foldFloorOpen ? (FL.POSE_LAUNCH_DEG * Math.PI) / 180 : orbitFloorRad;
     // Vent push-through (owner ask): the ladder ceiling lifts from the bud to
     // POSE_VENT_DEG only while the player has explicitly double-commanded it.
@@ -5337,13 +5338,12 @@ export class PlayerSatellite extends THREE.Group {
   _animateSolarTracking(dt, sunDirection) {
     if (!sunDirection) return;
 
-    // Owner decision 2026-09-09 (B): while an OVERRIDE radiator fold holds the
-    // lock, the pivots are driven to 0 (the barrel line) and HELD there —
-    // sun-track and feather suspended — because the fold corridor contacts the
-    // deployed drum at ±10° tilt and the blanket at ±20° (Constants
-    // OVERRIDE_ROSA_CENTER_TOL_DEG). The hold clears with the lock (release
-    // past the floor) and the filter below carries the pivots back to the sun.
-    const desired = this._flowerOverrideFold ? 0 : this._rosaDesiredTilt(sunDirection);
+    // DECISIONS §10 (2026-09-23): no ROSA hold any more — the tilt law itself
+    // dodges (`_rosaDesiredTilt` clamps through `_rosaDodgeLimitRad`, which
+    // wins over sun-track AND feather). An OVERRIDE fold takes the tightest
+    // limit from the moment it arms, so the wing beats the radiator down and
+    // the driver never waits for the pivots.
+    const desired = this._rosaDesiredTilt(sunDirection);
 
     // Round-3 (user report): a furled wing must NOT track the sun. The rolled
     // cylinder, drum, spool curls and brackets are all children of this pivot,
@@ -5397,8 +5397,11 @@ export class PlayerSatellite extends THREE.Group {
    *
    * Converts the sun direction into body space, finds the optimal boom-axis
    * tilt (panel normal → sun projection in the YZ plane), applies the
-   * tier-aware clamp, and blends toward the edge-on park angle when feathered.
-   * Shared by live tracking and first-frame seeding so both use identical math.
+   * tier-aware clamp, blends toward the edge-on park angle when feathered —
+   * and finally applies the DECISIONS §10 DODGE clamp, which wins over both
+   * sun-track and feather whenever the radiator is low or a strut is swung
+   * into the wing root zone (`_rosaDodgeLimitRad`). Shared by live tracking
+   * and first-frame seeding so both use identical math.
    * @param {THREE.Vector3} sunDirection — world-space sun direction
    * @returns {number} desired pivot rotation.x in radians
    */
@@ -5418,12 +5421,84 @@ export class PlayerSatellite extends THREE.Group {
     // (sun-track target + 90°) instead of tracking. This minimises the blanket's
     // sun-facing cross-section to dodge a hazard while staying deployed.
     const feather = this._rosaFeatherProgress ?? 0;
+    let desired;
     if (feather > 0) {
       const edgeOn = targetTilt + Math.PI / 2;             // 90° off sun = edge-on
       const tracked = Math.max(-maxTilt, Math.min(maxTilt, targetTilt));
-      return tracked + (edgeOn - tracked) * feather;       // blend track → edge-on
+      desired = tracked + (edgeOn - tracked) * feather;    // blend track → edge-on
+    } else {
+      desired = Math.max(-maxTilt, Math.min(maxTilt, targetTilt));
     }
-    return Math.max(-maxTilt, Math.min(maxTilt, targetTilt));
+
+    // DECISIONS §10 — the dodge wins over sun-track AND feather.
+    const dodge = this._rosaDodgeLimitRad();
+    if (dodge !== Infinity) desired = Math.max(-dodge, Math.min(dodge, desired));
+    return desired;
+  }
+
+  /**
+   * @private DECISIONS §10 — the wing dodge tilt limit (radians, or Infinity
+   * when unconstrained): the MINIMUM of two measured clearance curves,
+   *
+   *   θ-curve  — the petals ↔ wings 20 mm curve (tmp/probe-rosa-tilt.mjs,
+   *     rebuilt 2026-09-23): 5° while the radiator is folded flat
+   *     (θ < WING_DODGE_LOW_THETA_DEG), 12° through the fold corridor and
+   *     the bloom (θ < WING_DODGE_MID_THETA_DEG), unconstrained above.
+   *     An OVERRIDE fold in flight (`_flowerOverrideFold`) takes the LOW
+   *     limit from the moment it ARMS — the wing motor (τ 0.57 s) then
+   *     beats the 15°/s radiator to every θ by ≥ 1 s, so the radiator
+   *     never waits for the wing.
+   *   α-curve  — the struts+daughters ↔ wings curve
+   *     (tmp/every-door-fine.mjs): while any strut is at — or slewing
+   *     through — α WING_DODGE_ALPHA_LO..HI, feathering (60–120°) contacts
+   *     the wing root hardware; the limit drops to WING_DODGE_ALPHA_LIMIT.
+   *
+   * A furled wing never sees this (the furl blend parks tilt 0 first); the
+   * launch sequence and the ?shot=1 dev force furl ROSA by their own
+   * procedures. No pivot hardware → Infinity (nothing to dodge with).
+   * @returns {number} max |tilt| in radians, or Infinity
+   */
+  _rosaDodgeLimitRad() {
+    if (!this.panelRightPivot && !this.panelLeftPivot) return Infinity;
+    const FL = Constants.THERMAL.FLOWER;
+    const rad180 = 180 / Math.PI;
+    let limitDeg = Infinity;
+    if (this._flowerOverrideFold) {
+      limitDeg = FL.WING_DODGE_LOW_LIMIT_DEG;              // fold in flight — dodge early
+    } else {
+      const thDeg = (this._flowerThetaRad ?? Math.PI / 2) * rad180;
+      if (thDeg < FL.WING_DODGE_LOW_THETA_DEG) limitDeg = FL.WING_DODGE_LOW_LIMIT_DEG;
+      else if (thDeg < FL.WING_DODGE_MID_THETA_DEG) limitDeg = FL.WING_DODGE_MID_LIMIT_DEG;
+    }
+    if (this._strutsInWingDodgeBand()) {
+      limitDeg = Math.min(limitDeg, FL.WING_DODGE_ALPHA_LIMIT_DEG);
+    }
+    return limitDeg === Infinity ? Infinity : (limitDeg * Math.PI) / 180;
+  }
+
+  /**
+   * @private Is any strut at — or slewing through — the wing-dodge α band
+   * (WING_DODGE_ALPHA_LO..HI)? The live aim AND a pending latch both count:
+   * a strut commanded across the band must engage the dodge for the whole
+   * crossing, not just while it is inside it.
+   * @returns {boolean}
+   */
+  _strutsInWingDodgeBand() {
+    const FL = Constants.THERMAL.FLOWER;
+    const lo = (FL.WING_DODGE_ALPHA_LO_DEG * Math.PI) / 180;
+    const hi = (FL.WING_DODGE_ALPHA_HI_DEG * Math.PI) / 180;
+    const arms = this.armManager && this.armManager.arms;
+    if (!arms || arms.length === 0) return false;
+    for (const arm of arms) {
+      if (!arm) continue;
+      const a = arm.getAimAlpha ? arm.getAimAlpha() : null;
+      if (a === null || a === undefined) continue;
+      const t = arm._strutTargetAlpha;
+      const loEnd = t !== undefined ? Math.min(a, t) : a;
+      const hiEnd = t !== undefined ? Math.max(a, t) : a;
+      if (loEnd < hi && hiEnd > lo) return true;
+    }
+    return false;
   }
 
   /**
@@ -6308,29 +6383,17 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * Owner decision 2026-09-09 (B): are both ROSA pivots parked in the barrel
-   * line — |rotation.x| within OVERRIDE_ROSA_CENTER_TOL_DEG of 0? The driver
-   * reads this every frame to open the fold floor below POSE_FLOOR_DEG; the hub
-   * may read it for a label. No pivots built → true (nothing to collide with).
-   * A furled ROSA parks its pivots at 0 (the tracking law's furl blend), so
-   * "furled" satisfies this too once the blend has settled — one criterion.
-   * @returns {boolean}
-   */
-  _rosaCenteredForFold() {
-    const tol = ((Constants.THERMAL.FLOWER.OVERRIDE_ROSA_CENTER_TOL_DEG ?? 2) * Math.PI) / 180;
-    const r = this.panelRightPivot, l = this.panelLeftPivot;
-    if (r && Math.abs(r.rotation.x) > tol) return false;
-    if (l && Math.abs(l.rotation.x) > tol) return false;
-    return true;
-  }
-
-  /**
    * The second condition on the fold corridor (measured 2026-09-22, after the
    * owner spotted the interference). The petals fold FORE along the barrel and
-   * pass the daughter arms, which root at z +0.90 and sweep out to meet them —
+   * pass the daughter struts, which root at z +0.90 and sweep out to meet them —
    * only 20° away in azimuth. Worst case over every arm angle is 0.2 mm at
    * θ 0, i.e. contact; the corridor is clear at ANY α down to θ 10°, so this
    * gate only governs the last few degrees of the fold.
+   *
+   * DECISIONS §10: this is the ONE remaining wait on the fold path — the
+   * wings dodge clear by themselves now, but the struts may be tethered,
+   * holding cargo or mid-salvage, so the mechanism waits at the 90° floor
+   * and says what it is waiting for instead of retracting them.
    *
    * An arm reported LOCKED or STOWED is driven to α 0 by _updateStruts
    * regardless of its aim, so it counts as parked whatever it last aimed at.
@@ -6351,29 +6414,16 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * @private One COMMS line per OVERRIDE fold arming when the ARMS are not yet
-   * stowed. Unlike the ROSA, the arms are not centred automatically: they may
-   * be tethered, holding cargo or mid-salvage, so the mechanism waits at the
-   * 90° floor and says what it is waiting for instead of retracting them.
+   * @private One COMMS line per OVERRIDE fold arming when the STRUTS are not
+   * yet stowed (DECISIONS §10: the only remaining fold wait — the wings dodge
+   * clear automatically, but the struts may be tethered, holding cargo or
+   * mid-salvage, so the mechanism waits at the 90° floor and says what it is
+   * waiting for instead of retracting them).
    */
   _noteArmStowWait() {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'THERMAL',
-      text: 'OVERRIDE — daughter arms are in the radiator fold corridor; the panels hold at 90° until the struts are stowed. Tap STRUTS / . to stow them.',
-      priority: 'info',
-    });
-  }
-
-  /**
-   * @private Owner decision 2026-09-09 (B): one COMMS line per OVERRIDE fold
-   * arming when the arrays are NOT yet centred — the struts will pause at the
-   * 90° floor until they are (≤ 2.5 s from a ±90° feather), so the player is
-   * told what the mechanism is waiting for. Deploys never wait.
-   */
-  _noteRosaCentering() {
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      sender: 'THERMAL',
-      text: 'OVERRIDE — ROSA arrays centering to the barrel line (sun-track held); the radiator continues below 90° once they are parked.',
+      text: 'OVERRIDE — daughter struts are in the radiator fold corridor; the panels hold at 90° until the struts are stowed. Tap STRUTS / . to stow them.',
       priority: 'info',
     });
   }
