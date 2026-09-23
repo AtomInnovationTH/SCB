@@ -10,10 +10,12 @@
  *
  *   Band 1  SYSTEM   (far, ~12–8 m)  : 6 system-group labels only.
  *   Band 2  PART     (mid, ~8–5.5 m) : every major part card; system labels fade.
- *   Band 3  COMPONENT(close, <5.5 m) : the part nearest screen-centre gets a
- *                                       full detail card (specs + TRL + live data)
- *                                       placed by its anchor; its system's detail
- *                                       sub-parts appear on the rails.
+ *   Band 3  COMPONENT(close, <5.5 m) : the focused part's system's detail
+ *                                       sub-parts appear on the rails. Every
+ *                                       card stays compact — the promoted
+ *                                       "full" card is retired (B1); the full
+ *                                       detail card lives on hover (the
+ *                                       dossier, B2 — see below).
  *
  * Identity: hue = system (6 hues), risk = a small badge dot on the card. Anchors
  * on the far side of the hull fade by camera-facing angle (dot-product proxy).
@@ -36,6 +38,19 @@
  * the PART/COMPONENT bands — regardless of the card's rail cull, facing gate
  * or detail tier (the mesh is literally under the pointer) — while the CARD
  * keeps the shipped visibility gate; see _recPickable's two tiers.
+ *
+ * HOVER DOSSIER (B2, 08-workbench §2 Motion): beat one is the shipped
+ * immediate treatment (outline, opacity lift, small scale bump, leader
+ * whitening — read from _hoverRec in _positionCard). Beat two: after 400 ms
+ * of dwell on ONE rec, a single reusable dossier sprite appears beside the
+ * pointer carrying the full detail card — the retired focus card's 6-slot
+ * budget (mass, specs, live rows, ▸ deep link, readiness), rendered through
+ * _applyCard's `full` variant onto a wrapper rec, never onto a rail rec. It
+ * never joins rail layout, draws above every rail card, clamps against the
+ * pane-aware edges so it cannot slide under a drawer, and re-rasterises its
+ * live rows at the shared LIVE_REFRESH_HZ cadence. Touch never sees it: a
+ * tap runs the click path only (pointerup is followed by pointerleave, which
+ * clears the hover and the pointer position long before any dwell elapses).
  *
  * REFIT ghosts (Wave 5 (2)): setGhostOutline(partIds) shows the SAME outline
  * steady-on for a set of parts (the pane's alternative hover), pulsed
@@ -141,7 +156,7 @@ const SYSTEMS = [
     parts: [
       { id: 'rosa_wings', name: 'ROLL-OUT SOLAR WINGS', risk: 'GREEN', tier: 'major', codexId: 'rosa_solar_array',
         massKg: 22, priority: 9, live: 'rosa',
-        specs: ['2× 1×2 m roll-out arrays', '~2.2 kW peak (BOL)'],
+        specs: ['2× 1×2 m roll-out arrays', '~2.2 kW peak when new'],
         pick: ['ROSA_Panel_Front_0deg', 'ROSA_Panel_Back_0deg', 'ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg'],
         // Mother audit T10 (W8): the leader follows the +X blanket's centre
         // through sun-tracking tilt and the furl (the static x 1.1 tuple sat in
@@ -150,7 +165,7 @@ const SYSTEMS = [
         mesh: 'ROSA_Panel_Front_0deg', dynamic: true,
         anchor: [ 1.1 * M, 0, 0 ] },
       { id: 'body_cells', name: 'HULL SOLAR CELLS', risk: 'GREEN', tier: 'detail', codexId: 'gallium_arsenide',
-        massKg: 3, priority: 2, specs: ['Body-mounted GaAs cells'],
+        massKg: 3, priority: 2, specs: ['Body-mounted gallium-arsenide cells'],
         // az 33.75° facet centre, central PV row (face radius barrelR×1.014).
         // The old az-0° anchor sat in the ROSA-root keep-out on bare hull and
         // collided with NAV LIGHTS (2 cm).
@@ -183,13 +198,13 @@ const SYSTEMS = [
     parts: [
       { id: 'feep', name: 'ION THRUSTERS (FEEP)', risk: 'YELLOW', tier: 'major', codexId: 'feep_thruster',
         massKg: 8, priority: 8, live: 'feep',
-        specs: ['4× emitter clusters', 'Isp ~4000 s'],
+        specs: ['4× emitter clusters', 'Specific impulse ~4000 s'],
         // The 4 emitter cluster bodies (NOT FEEP_Boss/FEEP_GridDisc — those share
         // duplicate names and are cull-hidden mm detail).
         pick: ['MainFEEP_0', 'MainFEEP_1', 'MainFEEP_2', 'MainFEEP_3'],
         anchor: [ 0, -0.20 * M, -1.05 * M ] },
       { id: 'rcs', name: 'COLD-GAS STEERING', risk: 'GREEN', tier: 'major', codexId: 'cold_gas_rcs',
-        massKg: 3, priority: 5, specs: ['GN2 thruster ring'],
+        massKg: 3, priority: 5, specs: ['Nitrogen thruster ring'],
         pick: ['RCSPod_0', 'RCSPod_1', 'RCSPod_2', 'RCSPod_3'],
         anchor: [ -0.03 * M, 0.42 * M, -0.795 * M ] },
       { id: 'mli', name: 'THERMAL BLANKET (MLI)', risk: 'GREEN', tier: 'detail', codexId: 'mli_insulation',
@@ -294,11 +309,11 @@ const SYSTEMS = [
         pick: ['SensorHubRing'],
         anchor: [ -0.080 * M, 0.299 * M, 1.055 * M ] },
       { id: 'eo_cam', name: 'DAYLIGHT CAMERA', risk: 'GREEN', tier: 'major', codexId: 'pose_estimation',
-        massKg: 2, priority: 4, specs: ['Visible-band imager (EO)'],
+        massKg: 2, priority: 4, specs: ['Visible-band imager'],
         pick: ['EO_Camera'],
         anchor: [ 0.184 * M, 0.184 * M, 1.11 * M ] },
       { id: 'ir_cam', name: 'HEAT (INFRARED) CAM', risk: 'GREEN', tier: 'major', codexId: 'trackable_vs_dark',
-        massKg: 2, priority: 4, specs: ['LWIR — spots dark debris'],
+        massKg: 2, priority: 4, specs: ['Long-wave infrared — spots dark debris'],
         pick: ['IR_Sensor'],
         anchor: [ -0.184 * M, -0.184 * M, 1.08 * M ] },
       { id: 'lidar', name: 'LASER RANGEFINDER', risk: 'GREEN', tier: 'major', codexId: 'lidar_ranging',
@@ -366,7 +381,7 @@ const SYSTEMS = [
         pick: ['MGA_Patch'],
         anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ] },
       { id: 'gps', name: 'GPS ANTENNAS', risk: 'GREEN', tier: 'detail', codexId: 'gps_denied',
-        massKg: 0.5, priority: 2, specs: ['GNSS patch pair'],
+        massKg: 0.5, priority: 2, specs: ['GPS patch pair'],
         pick: ['GPS_Patch_0', 'GPS_Patch_1'],
         anchor: [ 0.376 * M, -0.137 * M, 0.87 * M ] },
       // codexId remap (owner review, 2026-09-03): the aft whip is the second
@@ -400,7 +415,7 @@ const SYSTEMS = [
         // callout, whose anchor is the craft body mid-pocket (z=-0.70).
         anchor: [ 0.079 * M, 0.392 * M, -0.85 * M ] },
       { id: 'tether_reels', name: 'TETHER WINCHES', risk: 'GREEN', tier: 'major', codexId: 'reel_mechanics',
-        massKg: 4, priority: 6, live: 'tether', specs: ['4× Dyneema SK78 reels'],
+        massKg: 4, priority: 6, live: 'tether', specs: ['4× Dyneema fiber reels'],
         // Reel cartridges ride the struts (stowed z≈−0.46, deployed ≈1.5 m out).
         // ReelCartridge_0 stays the ANCHOR mesh (reel #0 only); pick the 4 reel
         // housings so hover covers all four winches.
@@ -484,7 +499,7 @@ const SYSTEMS = [
         anchor: [ -0.283 * M, -0.283 * M, -1.12 * M ] },
       { id: 'flower_hinges', name: 'FLOWER HINGE BRACKETS', risk: 'YELLOW', tier: 'detail', codexId: 'vacuum_mechanisms',
         massKg: 2.6, priority: 2, flowerGated: true,
-        specs: ['Rim-band clevises r 0.475, MoS₂-filmed pins; wing piano hinges + one-shot latches', 'Hinges are the honest jam risk'],
+        specs: ['Rim-band clevises r 0.475, molybdenum-disulfide-filmed pins; wing piano hinges + one-shot latches', 'Hinges are the honest jam risk'],
         anchor: [ 0.3639 * M, -0.3053 * M, -0.94 * M ] },
     ],
   },
@@ -671,6 +686,21 @@ const HOVER_OUTLINE_STAGGER_M = 0.0015;
 const GHOST_PULSE_HZ = 1.2;
 const GHOST_PULSE_MIN = 0.35;
 
+// HOVER DOSSIER (B2, 08-workbench §2 Motion): dwelling this long on ONE rec
+// (hover held, same rec) shows the full-content dossier card beside the
+// pointer. The dwell restarts on every hover CHANGE; the existing
+// HOVER_MISS_TICKS stickiness already damps hover flicker, so there is no
+// second timer — the check is a per-frame timestamp compare (and the module
+// carries no timer anywhere, pinned by the suite).
+const HOVER_DOSSIER_DELAY_MS = 400;
+// Gap between the pointer and the dossier card's near edge (NDC). The card
+// sits beside the pointer, never under it, and flips toward screen centre
+// when it would cross a pane-aware edge.
+const HOVER_DOSSIER_OFFSET_NDC = 0.12;
+// The dossier draws above every rail card (30…230) and dot (31…231) — a flat
+// order, not depth-staggered: one pointer-anchored object, always on top.
+const DOSSIER_RENDER_ORDER = 260;
+
 /**
  * One rec's outline-layer pull toward the camera already captured in
  * `self._vStagCam` (see _updateOutlineStagger — the only caller). A module
@@ -825,6 +855,19 @@ export class MotherCallouts {
     this._hoverT = 0;
     this._cursorSet = false;
     this._listening = false;
+    // HOVER DOSSIER (B2): one reusable sprite + a card-shape wrapper rec,
+    // built in _build() (they need the group). The dwell clock restarts on
+    // every hover CHANGE (written in _setHoverRec, the ONE hover writer);
+    // _dossierShownFor is the rec the shown dossier was built for; the
+    // pointer NDC is cached by _refreshHover at its 10 Hz cadence so the
+    // per-frame placement never reads the DOM.
+    this._dossierSprite = null;
+    this._dossierRec = null;
+    this._dossierShownFor = null;
+    this._dossierDwellStart = 0;
+    this._dossierNX = NaN; this._dossierNY = NaN;
+    this._dossierPrimed = false;
+    this._dossierSX = 0; this._dossierSY = 0;
     this._setHoverRec(null);   // one hover state, initialized through its ONE writer (source-pinned)
     // REFIT ghost outlines (Wave 5 (2)): the ONE ghost set — recs whose hover
     // outline is shown steady-on by the pane's alternative hover (reusing
@@ -1593,7 +1636,7 @@ export class MotherCallouts {
         _pickObjs: null, _pickTried: false,
         _outline: null, _outlineTried: false,
         _cardCache: null, _railOrder: null, _targetOp: 0,
-        _h: 0, _wasFocus: false, _isFocus: false,
+        _h: 0,
         _anchorX: 0, _anchorY: 0, _anchorZ: 0,
         _armGone: false, _revealAt: null,
         _pendingSide: null, _sideT: 0,
@@ -1620,7 +1663,7 @@ export class MotherCallouts {
           _pickObjs: null, _pickTried: false,
           _outline: null, _outlineTried: false,
           _cardCache: null, _railOrder: null, _targetOp: 0,
-          _h: 0, _wasFocus: false, _isFocus: false,
+          _h: 0,
           _anchorX: 0, _anchorY: 0, _anchorZ: 0,
           _armGone: false, _revealAt: null,
           _pendingSide: null, _sideT: 0,
@@ -1630,6 +1673,21 @@ export class MotherCallouts {
         this._allRecs.push(rec);
       }
     }
+
+    // B2: the ONE hover dossier sprite + its card-shape wrapper rec. The
+    // wrapper carries the dossier's own cardKey/card/_cardCache, so a hover
+    // never touches any rail rec's card identity — and exactly ONE full
+    // texture is resident at a time (the R14 budget's "1 focused card" slot,
+    // re-purposed for the dossier).
+    this._dossierSprite = this._makeCardSprite();
+    this._dossierSprite.renderOrder = DOSSIER_RENDER_ORDER;
+    this._dossierSprite.visible = false;
+    this._group.add(this._dossierSprite);
+    this._dossierRec = {
+      def: null, isSystem: false, hue: '#ffffff', riskColor: null,
+      sprite: this._dossierSprite,
+      cardKey: null, card: null, _cardEpoch: -1, _cardCache: null,
+    };
   }
 
   /**
@@ -1747,11 +1805,13 @@ export class MotherCallouts {
 
   /**
    * Build the spec for a rec's current state and (re)generate its card texture
-   * only when the content string changes. `full` → focused detail card with
-   * spec/TRL/live rows; otherwise a compact title-only card.
+   * only when the content string changes. `full` → the full detail card with
+   * spec/TRL/live rows (the hover dossier's content since B2); otherwise a
+   * compact title-only card — the only variant the rails carry since B1
+   * retired the promoted focus card.
    *
-   * Cards are cached per rec by VARIANT ('compact' | 'focused'), not by content,
-   * so a live-data refresh on the focused card regenerates only that variant and
+   * Cards are cached per rec by VARIANT ('compact' | 'hover'), not by content,
+   * so a live-data refresh on the full card regenerates only that variant and
    * never evicts the permanently-resident compact card (round-2 R3/R14).
    * @private
    */
@@ -1810,7 +1870,7 @@ export class MotherCallouts {
       }
     }
     const title = rec.isSystem ? def.label : def.name;
-    const variant = full ? 'focused' : 'compact';
+    const variant = full ? 'hover' : 'compact';
     // Session R (plan §14.2): the typeface epoch leads the content key — a
     // card rasterised before the B612 faces settled misses here once the epoch
     // moves, and the redraw below is the ONE redraw that texture is owed.
@@ -2195,6 +2255,19 @@ export class MotherCallouts {
     if (next === this._hoverRec) return;
     const old = this._hoverRec;
     this._hoverRec = next;
+    // B2: the dossier's 400 ms dwell restarts on every hover CHANGE (the
+    // same rec held keeps counting) and a cleared hover hides it at once.
+    // Guarded on the sprite — prototype-borrowing rigs without the dossier
+    // skip that write; the clock fields are plain primitives.
+    this._dossierDwellStart = next
+      ? (typeof performance !== 'undefined' ? performance.now() : Date.now())
+      : 0;
+    this._dossierShownFor = null;
+    this._dossierPrimed = false;
+    if (this._dossierSprite) {
+      this._dossierSprite.visible = false;
+      this._dossierSprite.material.opacity = 0;
+    }
     // A rec that is ALSO ghosted keeps its outline on hover-out (the REFIT
     // ghost pulse resumes in update()); plain hovers hide as shipped.
     if (old && !(this._ghostRecs && this._ghostRecs.has(old))) {
@@ -2434,6 +2507,11 @@ export class MotherCallouts {
       ((this._pointerPos.clientX - rect.left) / rect.width) * 2 - 1,
       -((this._pointerPos.clientY - rect.top) / rect.height) * 2 + 1,
     );
+    // B2: the dossier follows the pointer — cache the NDC here (its ONE
+    // writer, at this 10 Hz cadence) so the per-frame dossier placement
+    // never reads the DOM; the position ease smooths the cadence.
+    this._dossierNX = this._ndc.x;
+    this._dossierNY = this._ndc.y;
     // In-frame: bring the hull meshes + card sprites to THIS frame's pose
     // before casting (see STALE WORLD MATRICES above).
     this.player.updateWorldMatrix(true, true);
@@ -2730,8 +2808,6 @@ export class MotherCallouts {
     }
 
     for (const rec of this._allRecs) {
-      const isFocus = !rec.isSystem && band === 'COMPONENT' && rec === focus;
-
       // Anchor NDC (computed before target opacity: T6 proximity reveal reads it).
       this._vAnchor.copy(rec.anchor);
       this.player.localToWorld(this._vAnchor);
@@ -2757,14 +2833,10 @@ export class MotherCallouts {
       }
       if (rec.op > 0.05) rec._revealAt = null;
 
-      // Card content: focused → full detail card, else compact (R14: no hover variant).
-      if (isFocus) {
-        if (liveDue || !rec._wasFocus) this._applyCard(rec, { full: true });
-        rec._wasFocus = true;
-      } else if (rec._wasFocus) {
-        this._applyCard(rec, { full: false });
-        rec._wasFocus = false;
-      } else if (rec._cardEpoch !== fontEpochNow && epochRedraws < CARD_EPOCH_REDRAWS_PER_FRAME) {
+      // Card content: compact only — B1 retired the promoted focus card, and
+      // the full variant is the hover dossier's (B2). The epoch branch below
+      // is the rail cards' one remaining refresh point.
+      if (rec._cardEpoch !== fontEpochNow && epochRedraws < CARD_EPOCH_REDRAWS_PER_FRAME) {
         // Session R: the face question settled after this compact card was
         // drawn — its ONE owed redraw (the key inside misses on the epoch).
         this._applyCard(rec, { full: false });
@@ -2789,7 +2861,6 @@ export class MotherCallouts {
 
       if (targetOp <= 0.001 && rec.op <= 0.02) {
         // Fully hidden — still ease opacity down, keep off rails.
-        rec._isFocus = false;
         rec.op += (0 - rec.op) * fadeK;
         if (rec.op <= 0.02) {
           rec.primed = false; // reappear snaps to new slot, no sweep
@@ -2801,10 +2872,6 @@ export class MotherCallouts {
         this._hideRec(rec);
         continue;
       }
-
-      // Focused card is placed by its anchor, not on a rail.
-      rec._isFocus = isFocus;
-      if (isFocus) continue;
 
       // Side assignment with hysteresis + 1.5 s dwell (T4: fade-swap, never sweep).
       const desired = (ax < this._shipNDC.x) ? 'L' : 'R';
@@ -2827,7 +2894,8 @@ export class MotherCallouts {
 
     this._stackRail(leftList, this._railL, dt, ease, fadeK);
     this._stackRail(rightList, this._railR, dt, ease, fadeK);
-    this._placeFocus(dt, ease, fadeK);
+    // B2: the hover dossier — after the rails, so it never joins their layout.
+    this._updateDossier(now, liveDue, ease);
   }
 
   /** Target opacity for a rec given band/guide/focus, before anchor gating. @private
@@ -2958,50 +3026,121 @@ export class MotherCallouts {
     this._positionCard(rec, rec.sx, rec.sy, false, side, fadeK);
   }
 
-  /** Place the focused COMPONENT card near its anchor (not on a rail). @private */
-  _placeFocus(dt, ease, fadeK) {
-    const rec = this._focusPart;
-    if (!rec || !rec._isFocus) return;
-    const now = this._nowMs;
-    const desired = (rec._anchorX < this._shipNDC.x) ? 'L' : 'R';
-    // T4: same 1.5 s dwell as rail flips — keep the last committed side until
-    // dwell + hysteresis allow the change.
-    if (rec.side == null) {
-      rec.side = desired;
-      rec._sideT = now;
-    } else if (rec.side !== desired
-      && Math.abs(rec._anchorX - this._shipNDC.x) > CFG.SIDE_HYSTERESIS
-      && (now - rec._sideT) > 1500) {
-      rec.side = desired;
-      rec._sideT = now;
+  /**
+   * B2 beat two: the hover dossier. After HOVER_DOSSIER_DELAY_MS of dwell on
+   * ONE rec (hover held, same rec — the dwell restarts on every change, see
+   * _setHoverRec), a single reusable full-content card appears beside the
+   * pointer: _applyCard's `full` variant (the retired focus card's 6-slot
+   * budget, honesty rows and live rows) rendered onto the wrapper rec's OWN
+   * sprite, so no rail rec's card identity is ever touched. It never joins
+   * rail layout — no neighbour moves — and its live rows re-rasterise at
+   * the shared ≤ LIVE_REFRESH_HZ cadence (the old focus-card liveDue gate).
+   *
+   * GLASS HAS NO HOVER: a tap runs the click path only — pointerup on touch
+   * is followed by pointerleave, which clears the hover and the stored
+   * pointer position long before any dwell can elapse.
+   * @private
+   */
+  _updateDossier(now, liveDue, ease) {
+    const sprite = this._dossierSprite;
+    if (!sprite) return;
+    const rec = this._hoverRec;
+    if (!rec || !rec.def || (now - this._dossierDwellStart) < HOVER_DOSSIER_DELAY_MS) {
+      this._hideDossier();
+      return;
     }
-    const side = rec.side;
+    if (this._dossierShownFor !== rec) {
+      // First frame past the dwell: build the hovered rec's full card.
+      const d = this._dossierRec;
+      d.def = rec.def;
+      d.isSystem = !!rec.isSystem;
+      d.hue = rec.hue;
+      d.riskColor = rec.riskColor;
+      this._applyCard(d, { full: true });
+      this._dossierShownFor = rec;
+    } else if (liveDue) {
+      this._applyCard(this._dossierRec, { full: true });
+    }
+    this._positionDossier(ease);
+  }
 
-    // Clamp focus card to viewport, accounting for card width on the extending side.
+  /** Hide the dossier and reset its shown/prime state. @private */
+  _hideDossier() {
+    this._dossierShownFor = null;
+    this._dossierPrimed = false;
+    if (!this._dossierSprite) return;
+    this._dossierSprite.visible = false;
+    this._dossierSprite.material.opacity = 0;
+  }
+
+  /**
+   * Place the dossier beside the pointer, never under it. Unproject the
+   * cached pointer NDC (written by _refreshHover at its 10 Hz cadence; the
+   * position ease smooths the cadence) on the ship-centre depth plane — the
+   * same law _positionCard uses — then offset the card a fixed gap off the
+   * pointer, flipping toward screen centre when it would cross the
+   * pane-aware RIGHT edge, and clamp against the pane-aware edges (never
+   * ±1: the card must not slide under a drawer). The clamp is inherited
+   * verbatim from the retired _placeFocus (source-pinned by the suite).
+   * @private
+   */
+  _positionDossier(ease) {
+    const sprite = this._dossierSprite;
+    const px = this._dossierNX, py = this._dossierNY;
+    if (!sprite || !Number.isFinite(px) || !Number.isFinite(py)) { this._hideDossier(); return; }
+
+    // Card geometry at the dossier's size tier.
     // aspect × heightFactor = CARD_W_OVER_TITLE_H for every card (R15).
-    const frac = this._sizeFrac(rec, true);
-    const heightFactor = rec.card?.heightFactor || 1;
+    const frac = this._sizeFrac(this._dossierRec, true);
+    const heightFactor = this._dossierRec.card?.heightFactor || 1;
     const camAspect = this.camera.aspect || 1;
     const cardW = 2 * frac * CARD_W_OVER_TITLE_H / camAspect;
     const cardH = 2 * frac * heightFactor;
     const margin = CFG.RAIL_MARGIN_NDC;
 
-    // Small fixed offset toward the nearer rail side.
-    let tx = rec._anchorX + (side === 'L' ? -0.12 : 0.12);
-    let ty = rec._anchorY + 0.07;
-
-    // Clamp X: card extends outward from anchor, so reserve width on that
-    // side — against the PANE-AWARE edges (Wave 5 Session B: the focus card
-    // never sits under a workbench pane; no pane → -1/+1, shipped).
+    // Right of the pointer by default; flip toward screen centre when the
+    // card would cross the pane-aware right edge.
+    let side = 'R';
+    let tx = px + HOVER_DOSSIER_OFFSET_NDC;
+    if (tx + cardW > this._edgeR - margin) { side = 'L'; tx = px - HOVER_DOSSIER_OFFSET_NDC; }
+    // Clamp X: card extends outward from its anchor edge, so reserve width on
+    // that side — against the PANE-AWARE edges (inherited from _placeFocus:
+    // the dossier never sits under a workbench pane; no pane → -1/+1).
     if (side === 'L') tx = Math.max(tx, this._edgeL + margin + cardW);
-    else tx = Math.min(tx, this._edgeR - margin - cardW);
-    // Clamp Y: card is centred vertically on ty.
+    else {
+      // Right-extending card: its left edge only needs to clear a LEFT pane —
+      // this floor matters for a stale pointer frozen under a just-opened
+      // drawer (live pointers always sit inside the uncovered strip).
+      tx = Math.max(tx, this._edgeL + margin);
+      tx = Math.min(tx, this._edgeR - margin - cardW);
+    }
+    // Clamp Y: card is centred vertically on ty, a small nudge below the
+    // pointer so it reads "beside", never "under".
+    let ty = py - HOVER_DOSSIER_OFFSET_NDC * 0.5;
     ty = Math.max(-1 + margin + cardH / 2, Math.min(1 - margin - cardH / 2, ty));
 
-    if (!rec.primed) { rec.sx = tx; rec.sy = ty; rec.primed = true; }
-    else { rec.sx += (tx - rec.sx) * ease; rec.sy += (ty - rec.sy) * ease; }
-    rec.sprite.center.x = (side === 'L') ? 1 : 0;
-    this._positionCard(rec, rec.sx, rec.sy, true, side, fadeK);
+    if (!this._dossierPrimed) { this._dossierSX = tx; this._dossierSY = ty; this._dossierPrimed = true; }
+    else {
+      this._dossierSX += (tx - this._dossierSX) * ease;
+      this._dossierSY += (ty - this._dossierSY) * ease;
+    }
+
+    // Unproject at the ship-centre depth plane (the _positionCard law) —
+    // the dossier rides the same plane, so its sizing math matches.
+    this._vAttach.copy(this._vShip)
+      .addScaledVector(this._camRight, (this._dossierSX - this._shipNDC.x) * this._halfW)
+      .addScaledVector(this._camUp, (this._dossierSY - this._shipNDC.y) * this._halfH);
+    this._vTmp.copy(this._vAttach);
+    this.player.worldToLocal(this._vTmp);
+    sprite.position.copy(this._vTmp);
+
+    // Screen-constant sizing (manual dist scaling — see _positionCard).
+    const h = frac * 2 * this._halfH * heightFactor;
+    const aspect = CARD_W_OVER_TITLE_H / heightFactor;
+    sprite.scale.set(h * aspect, h, 1);
+    sprite.center.x = (side === 'L') ? 1 : 0;
+    sprite.material.opacity = 1;
+    sprite.visible = true;
   }
 
   /**
@@ -3168,6 +3307,16 @@ export class MotherCallouts {
         s._outline = null;
       }
     }
+    // B2: the dossier wrapper's cached card + its sprite material (the same
+    // pattern as the rail recs above — the wrapper is not in _allRecs).
+    if (this._dossierRec?._cardCache) {
+      for (const card of this._dossierRec._cardCache.values()) {
+        card?.texture?.dispose();
+      }
+      this._dossierRec._cardCache.clear();
+    }
+    this._dossierRec?.card?.texture?.dispose();
+    this._dossierSprite?.material?.dispose();
     this.player.remove(this._group);
   }
 }
