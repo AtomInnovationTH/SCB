@@ -104,10 +104,23 @@ export function decomposeAimTarget(targetDir, dockPositions) {
       motherRotationRad: motherRot,
       strutAlpha: alpha,
       outOfPlaneAbs: Math.abs(outOfPlane),
+      radialComp,
     });
   }
 
-  ranked.sort((a, b) => a.outOfPlaneAbs - b.outOfPlaneAbs);
+  // Rank by out-of-plane error; break (near-)ties by the in-plane radial
+  // component. Two antipodal pairs whose azimuths flank a cardinal axis tie
+  // EXACTLY in |out-of-plane| for a target on that axis (e.g. +X between the
+  // 64°/116° pair) — at the 60/120 clock the fp noise happened to favour the
+  // pair facing the target; at 64/116 it flipped to the averted pair, whose
+  // atan2 radial component is negative and clamps α to 0 (a stowed strut for
+  // an equatorial target). The tie-break makes the pick deterministic and
+  // geometric: prefer the pair whose meridian FACES the target.
+  ranked.sort((a, b) => {
+    const d = a.outOfPlaneAbs - b.outOfPlaneAbs;
+    if (Math.abs(d) > 1e-9) return d;
+    return b.radialComp - a.radialComp;
+  });
   const best = ranked[0];
   return {
     pairIndex: best.pairIndex,

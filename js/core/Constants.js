@@ -1433,7 +1433,15 @@ export const Constants = {
     CORE_ASPECT_RATIO: 2.5,        // NEW
 
     // ── Collar (NEW) ──
-    COLLAR_Y: 0.90,                // m from barrel center (+Y)
+    // DECISIONS §11 (2026-09-23, ratified): the strut hinge moves 10 cm
+    // forward onto the FRONT ring (was the back/middle collar at 0.90,
+    // matched to the original quad-ring frame). The front ring is the
+    // strongest part of the body ("the ends, right? Strongest part of mother
+    // is end hoops?" — owner). Everything hanging off the pivot (stow
+    // channels, reel/spring stations, dock offsets, callout/blueprint
+    // anchors) derives from this constant — see PlayerSatellite.js
+    // _buildStruts and _carveStowGrooves.
+    COLLAR_Y: 1.00,                // m from barrel center (+Y) — was 0.90
     COLLAR_RADIUS: 0.40,           // m
 
     // ── Nose berthing collar (S13(c) — B is doctrine) ──
@@ -1467,7 +1475,10 @@ export const Constants = {
     NET_POD_X_M: 0.45,             // m — S13(e): pod muzzle |x| off the boresight (probe-sited)
 
     // ── Strut (NEW — replaces short-strut spec) ──
-    STRUT_LENGTH: 1.60,            // m (hinge to daughter dock)
+    // DECISIONS §11: +10 cm to match the +10 cm hinge move, so the stowed
+    // daughter keeps the same pocket (pocket z = COLLAR_Y − STRUT_LENGTH is
+    // an invariant of the move: 0.90 − 1.60 == 1.00 − 1.70 == −0.70).
+    STRUT_LENGTH: 1.70,            // m (hinge to daughter dock) — was 1.60
     STRUT_TUBE_OD: 0.050,          // m
     STRUT_TUBE_WALL: 0.002,        // m
     STRUT_MASS: 4.5,               // kg (structure + reel + spring + hinge)
@@ -1494,9 +1505,12 @@ export const Constants = {
     STRUT_PUSH_WINDOW_MS: 600,
     // Task 7 (own lane, decision 6/7): the duck target when a docked strut's
     // live tip would foul an inbound catch's berth corridor (CaptureNet's
-    // _corridorClear test) at the new 146° rest. Never raise above 104° —
-    // 146° is only 6 mm inside the corridor on the first catch (plan risk
-    // note); 100° leaves comfortable margin on both sides.
+    // _corridorClear test) at the 146° rest. DECISIONS §11 (2026-09-23): the
+    // strut hinge/length move re-measured this (tmp/probe-corridor.mjs) —
+    // 146° now blocks only pieces > ~0.701 m (was ~0.588 m; the longer strut
+    // swings the tip further out at this angle, past smaller catches). 100°
+    // still clears every size (tipZ < 0, aft of the muzzle plane) with wide
+    // margin on both sides.
     STRUT_LEAN_ASIDE_ALPHA: 100 * Math.PI / 180, // rad (100°)
 
     // ── Recoil Safety (NEW — ST-9.3 C-3) ──
@@ -1507,8 +1521,10 @@ export const Constants = {
 
     // ── 3-Plane Layout (NEW) ──
     ROSA_PLANE_AZIMUTH: 0,         // rad (0° and 180° plane)
-    ARM_PLANE_OFFSET: Math.PI / 3, // rad (60° from ROSA)
-    // Derived: arm azimuths [60°, 120°, 240°, 300°] for Y0 Quad
+    ARM_PLANE_OFFSET: 64 * Math.PI / 180, // rad (64° from ROSA)
+    // Derived: arm azimuths [64°, 116°, 244°, 296°] for Y0 Quad (strut re-clock
+    // trial: each azimuth moved 4° away from its nearest ROSA root to clear the
+    // radiator fold; read by nothing at runtime — Y0_QUAD.azimuths is the SSOT)
 
     // ── ROSA Panels (NEW — replaces rigid wing spec) ──
     // Square-cornered rectangle (Option B accuracy pass): real ROSA wings are
@@ -1679,7 +1695,7 @@ export const Constants = {
   ARM_LADDER: {
     // S13(c): every tier's bus carries the +15 kg nose collar (the collar is
     // core hardware, not tier hardware) — Y0 211.4/257.4, deltas unchanged.
-    Y0_QUAD: { armCount: 4, weaverCount: 2, spinnerCount: 2, frontArmCount: 0, backArmCount: 0, dryMass: 211.4, wetMass: 257.4, unlocked: true,  tier: 0, azimuths: [60, 120, 240, 300] },
+    Y0_QUAD: { armCount: 4, weaverCount: 2, spinnerCount: 2, frontArmCount: 0, backArmCount: 0, dryMass: 211.4, wetMass: 257.4, unlocked: true,  tier: 0, azimuths: [64, 116, 244, 296] },
     Y1_HEX:  { armCount: 6, weaverCount: 3, spinnerCount: 3, frontArmCount: 0, backArmCount: 0, dryMass: 223.0, wetMass: 269.0, unlocked: false, tier: 1, azimuths: [30, 90, 150, 210, 270, 330] },
     Y3_OCTO: { armCount: 8, weaverCount: 3, spinnerCount: 3, frontArmCount: 1, backArmCount: 1, dryMass: 237.0, wetMass: 283.0, unlocked: false, tier: 3, azimuths: [30, 90, 150, 210, 270, 330], endFaceArms: ['+Z', '-Z'] },
   },
@@ -1879,6 +1895,12 @@ export const Constants = {
       WING_DODGE_ALPHA_LO_DEG: 5,     // strut-α band inside which feathering
       WING_DODGE_ALPHA_HI_DEG: 80,    // contacts the wing root hardware
       WING_DODGE_ALPHA_LIMIT_DEG: 25, // (measured ceiling ≥30° across α 10–75)
+      // DECISIONS §11 (2026-09-23, hinge +10cm / strut +10cm) re-measured
+      // (tmp/every-door-fine.mjs, tmp/every-door-dodge-limit.mjs): the raw
+      // (undodged) contact zone is α≈14–54 (worst 1.29 mm at α24, feather120)
+      // — still inside the [5,80] band with margin on both sides — and at the
+      // clamped 25° limit the worst gap across α 0–90 is 100.7 mm, nowhere
+      // near the 20 mm gate. All three constants stand unchanged.
       // The clamp is applied AFTER the feather blend (the dodge wins over a
       // feather request while the radiator is low or a strut is swung), and a
       // fold in flight uses the LOW limit from the moment it arms — the wing
@@ -1891,29 +1913,14 @@ export const Constants = {
       // with struts aimed (cos 5°).
 
       // The ROSA is not the only thing in the fold corridor. The DAUGHTER ARMS
-      // root at z +0.90 r 0.40 (az 60/120/240/300) and the petals fold FORE
-      // past them — 20° away in azimuth — so the folded plate and a swung-out
-      // strut occupy the same space. Measured on the built model
-      // (tmp/fold-vs-strut-fine.mjs, tmp/interlock-numbers.mjs):
-      //
-      //   θ profile, worst over ALL α:  90..50° >250 mm,  40° 132,  30° 92,
-      //   20° 81,  15° 60,  10° 36,  5° 16 (contact),  0° 0.2 (contact).
-      //   α profile at θ=0:  0° 58.5,  1° 39.8,  1.5° 30.5,  2° 21.2,
-      //   2.5° 12.1 (fails),  3° 4.8,  22° 0.2 (worst).
-      //
-      // So the corridor is clear at ANY arm angle down to θ 10°, and the last
-      // 10° needs the arms stowed. Unlike the wings (which now DODGE clear by
-      // themselves — DECISIONS §10), the struts may be tethered, holding
-      // cargo or mid-salvage, so the mechanism still WAITS: the driver floor
-      // stays at POSE_FLOOR_DEG until the arms are within this tolerance of
-      // α 0. 1.5° keeps 30 mm against the 20 mm gate; 2° would keep only
-      // 21 mm, which is the gate itself.
-      //
-      // Re-clocking the stations away from the arms was measured and REJECTED
-      // — see docs/DECISIONS.md §5. The clock is boxed in on all sides: the
-      // strut needs φ ≤ 36.5° and the ROSA drum needs φ ≥ 41°, so no station
-      // angle satisfies both (tmp/obstacle-map.mjs).
-      FOLD_ARM_STOW_TOL_DEG: 1.5,
+      // root at z +0.90 r 0.40 (az 64/116/244/296) and the petals fold FORE
+      // past them — the folded plate and a swung-out strut can occupy the
+      // same space (tmp/fold-vs-strut-fine.mjs, tmp/interlock-numbers.mjs).
+      // DECISIONS §11 (2026-09-23, ratified): a new player can't read a
+      // halfway-stop interlock, so the fold no longer waits for the struts —
+      // FOLD_ARM_STOW_TOL_DEG and the wait it drove (`_armsStowedForFold`,
+      // `_noteArmStowWait`) are REMOVED. Held cargo in the corridor stays out
+      // of scope (not measured here).
 
       // ── Slew (daughter-stack mirror; drift-guarded ===
       //    OCTOPUS_V5.STRUT_SLEW_RATE by test-FlowerPose.js) ──
@@ -2339,9 +2346,10 @@ export const Constants = {
   // launch recoil has a real ANGULAR channel (yaw impulse J·NET_POD_X_M), and
   // the RCS null's cold-gas cost is billed too — today only the linear part
   // was. Billed as the equivalent linear impulse at the cold-gas doghouse
-  // lever (the az-90/270 pods sit 0.44 m off-axis) through the SAME
+  // lever (the pods sit 0.44 m off the roll axis — azimuth-invariant, so the
+  // 90/270 → 94.65/274.65 column move leaves it unchanged) through the SAME
   // N₂-per-impulse proportionality as the linear pattern above.
-  MOTHER_NET_RECOIL_RCS_LEVER_M: 0.44,   // m — cold-gas doghouse lever (az 90/270)
+  MOTHER_NET_RECOIL_RCS_LEVER_M: 0.44,   // m — cold-gas doghouse lever (az 94.65/274.65)
 
   // --- Pulse Scan ---
   PULSE_SCAN_DURATION: 2.0,              // seconds — all arms fire simultaneously

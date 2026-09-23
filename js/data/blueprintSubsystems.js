@@ -15,7 +15,7 @@
  * blueprint points at the same real hardware the inspection callouts do:
  *   - ENGINEERING → the FEEP ion-thruster cluster under the aft deck;
  *   - POWER      → the ROSA wing root (+X is the ROSA azimuth);
- *   - BERTHS     → the az-60° daughter-berth pocket (where the daughters dock,
+   *   - BERTHS     → the az-64° daughter-berth pocket (where the daughters dock,
  *                  D9) — the carved groove has no mesh of its own, so the live
  *                  anchor is the strut-riding reel cartridge (ReelCartridge_0,
  *                  stowed AT the berth) and the static fallback is the pocket's
@@ -102,7 +102,9 @@ export const BLUEPRINT_SUBSYSTEMS = [
   {
     id: 'BERTHS',
     label: 'BERTHS',
-    anchorM: [0.20, 0.346, -0.85],    // az-60° berth pocket's aft hull rim
+    anchorM: [0.0512, 0.3967, -0.85],  // az-64° pocket's aft-lip corner (DECISIONS §11;
+                                        // matches MotherCallouts `berths` — was the
+                                        // stale az-60 (0.20, 0.346) tuple)
     mesh: 'ReelCartridge_0',          // strut-riding cartridge — stowed AT the
                                       // berth (deployed it walks out with the
                                       // strut; the static rim is the fallback)

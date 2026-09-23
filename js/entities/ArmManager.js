@@ -2120,8 +2120,8 @@ export class ArmManager {
     const dp = this._dockPositions[armIndex];
     const azRad = dp ? (dp.azimuthDeg * Math.PI / 180) : 0;
     const collarR = V5C.COLLAR_RADIUS ?? 0.40;
-    const collarY = V5C.COLLAR_Y ?? 0.90;
-    const strutLen = V5C.STRUT_LENGTH ?? 1.60;
+    const collarY = V5C.COLLAR_Y ?? 1.00;
+    const strutLen = V5C.STRUT_LENGTH ?? 1.70;
     const anchorLocal = { x: mx, y: my, z: mz };
 
     // ONE geometry (ArmDockBasis.strutTipFoulsCorridor), per occupant radius.
@@ -2190,8 +2190,8 @@ export class ArmManager {
       arm.getAimAlpha(),
       azRad,
       V5.COLLAR_RADIUS ?? 0.40,
-      V5.COLLAR_Y ?? 0.90,
-      V5.STRUT_LENGTH ?? 1.60,
+      V5.COLLAR_Y ?? 1.00,
+      V5.STRUT_LENGTH ?? 1.70,
       { x: mx, y: my, z: mz },
       radiusM,
     );

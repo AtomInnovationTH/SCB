@@ -2085,18 +2085,19 @@ export class NetProjectile {
     // strutLocalDirection(α, az) × STRUT_LENGTH. A forward-swept strut is the
     // blocker whether or not it holds a catch — no separate held-catch test:
     // whenever a tip is fore of the muzzle plane (tipZ > 0) its radial is
-    // ≤ 2.01 m, while the smallest whale-class corridor radius in the catalog
+    // ≤ 2.10 m (DECISIONS §11: collarR 0.40 + STRUT_LENGTH 1.70, was 2.01 m
+    // at 1.60), while the smallest whale-class corridor radius in the catalog
     // is 2.40 m (FENGYUN-1C, 2.8 m), so the tip test always fires first. (And
     // capturedDebris is set at CAPTURED/GRAPPLED — long before the daughter is
     // back at the tip — so a held-catch check keyed on it would test the wrong
     // position anyway.) Revisit if strut length, collar radius or the minimum
-    // whale size changes enough to close that 0.39 m margin.
+    // whale size changes enough to close that 0.30 m margin (was 0.39 m).
     const armManager = this._ctx?.armManager;
     const arms = armManager?.arms;
     if (arms && arms.length) {
-      const strutLen = V5.STRUT_LENGTH ?? 1.60;
+      const strutLen = V5.STRUT_LENGTH ?? 1.70;
       const collarR  = V5.COLLAR_RADIUS ?? 0.40;
-      const collarY  = V5.COLLAR_Y ?? 0.90;
+      const collarY  = V5.COLLAR_Y ?? 1.00;
       for (let i = 0; i < arms.length; i++) {
         const arm = arms[i];
         if (!arm) continue;

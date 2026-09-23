@@ -267,15 +267,16 @@ export class PlayerSatellite extends THREE.Group {
      *  carries θ up to the floor. Never re-armable from REFIT / plain O /
      *  autopilot (they only ever pass STOW / PARK / CARGO). */
     this._flowerLaunchLock = false;
-    /** DECISIONS §10 (supersedes the 2026-09-09 (B) ROSA hold): an OVERRIDE
-     *  fold is in flight — the wing DODGE takes its tightest limit
-     *  (WING_DODGE_LOW_LIMIT_DEG) from the moment this is set, so the wings
-     *  clear the fold corridor before the radiator gets there and the driver
-     *  never waits for them (the tilt law clamps itself through
-     *  `_rosaDodgeLimitRad`; sun-track and feather both yield). The driver
-     *  floor still waits for the STRUTS (`_armsStowedForFold`) — they may be
-     *  tethered or holding cargo. Set by setFlowerPose's override branch,
-     *  cleared with the lock.
+    /** DECISIONS §10/§11 (supersedes the 2026-09-09 (B) ROSA hold and the
+     *  2026-09-22 strut wait): an OVERRIDE fold is in flight — the wing DODGE
+     *  takes its tightest limit (WING_DODGE_LOW_LIMIT_DEG) from the moment
+     *  this is set, so the wings clear the fold corridor before the radiator
+     *  gets there and the driver never waits for them (the tilt law clamps
+     *  itself through `_rosaDodgeLimitRad`; sun-track and feather both
+     *  yield). The driver floor no longer waits for the STRUTS either
+     *  (§11, 2026-09-23: a new player can't read a halfway-stop interlock) —
+     *  a double-tap folds straight through at any strut angle. Set by
+     *  setFlowerPose's override branch, cleared with the lock.
      *  Scoped to the OVERRIDE arming: the launch sequence and the ?shot=1 dev
      *  force are byte-identical (their own procedures furl ROSA). */
     this._flowerOverrideFold = false;
@@ -800,7 +801,9 @@ export class PlayerSatellite extends THREE.Group {
     // Pocket axial CENTRE derived from the true stowed-daughter geometry rather
     // than a magic barrelH fraction: when an arm is STOWED (sweep α = 0) the strut
     // lies along −Z, so the daughter body parks at its tip — z = COLLAR_Y −
-    // STRUT_LENGTH (≈ 0.90 − 1.60 = −0.70 m). Centring the pocket exactly there
+    // STRUT_LENGTH (≈ 1.00 − 1.70 = −0.70 m — DECISIONS §11: the hinge moved
+    // +10 cm and the strut grew +10 cm, so the pocket z is unchanged).
+    // Centring the pocket exactly there
     // makes both the large (Weaver) and small (Spinner) daughters sit dead-centre
     // in their cradle instead of ~2 cm forward of it. Falls back to the previous
     // −0.34·barrelH constant if the tier constants are missing.
@@ -841,7 +844,7 @@ export class PlayerSatellite extends THREE.Group {
       if (persisted && Constants.ARM_LADDER?.[persisted]) key = persisted;
     } catch (_) { /* headless / no save → default quad */ }
     return Constants.ARM_LADDER?.[key] ?? Constants.ARM_LADDER?.Y0_QUAD
-      ?? { azimuths: [60, 120, 240, 300] };
+      ?? { azimuths: [64, 116, 244, 296] };
   }
 
   _carveStowGrooves(geo, barrelR, barrelH) {
@@ -849,7 +852,7 @@ export class PlayerSatellite extends THREE.Group {
     // Y0_QUAD, so the pockets land where daughters really dock in the current
     // configuration. (End-face Octo arms dock on the ±Z caps, not the barrel
     // side, so they need no side pocket — only the ring azimuths are carved.)
-    const azimuths = (this._activeArmTierConfig().azimuths ?? [60, 120, 240, 300])
+    const azimuths = (this._activeArmTierConfig().azimuths ?? [64, 116, 244, 296])
       .map(d => d * Math.PI / 180);
 
     // Daughter body specs [x, y, z] in metres. The pocket cradles the body
@@ -1082,17 +1085,19 @@ export class PlayerSatellite extends THREE.Group {
 
     // §2-followup (round 15): a few EXTRA cells in the clear gaps BETWEEN stowed
     // daughters near the barrel ends, without disturbing the rows above. The
-    // daughters stow at the strut azimuths [60,120,240,300]; the widest clear
-    // azimuth windows sit at 90° and 270° (between a Weaver, ±18.6°, and a
-    // Spinner, ±9.3°). At the fore/aft end Z-bands those windows are clear of
-    // daughters, struts and the collar; the RCS quad pods share the 90/270°
-    // columns but sit at |z| ≥ 0.745 (clear of these cells' z-band 0.48–0.72), so
-    // one cell fits in each — reclaiming otherwise-bare MLI. (The strobe lights
-    // at 90/270 sit at the equator Z=0, not at these end bands, so no conflict.)
+    // daughters stow at the strut azimuths [64,116,244,296] (re-clock trial);
+    // the widest clear azimuth windows sit at 94.65° and 274.65° — the centres
+    // of the pocket gaps (between a Weaver edge at 82.61° and a Spinner edge at
+    // 106.69°). At the fore/aft end Z-bands those windows are clear of
+    // daughters, struts and the collar; the RCS quad pods share the 94.65/
+    // 274.65° columns but sit at |z| ≥ 0.737 (clear of these cells' z-band
+    // 0.48–0.72), so one cell fits in each — reclaiming otherwise-bare MLI.
+    // (The strobe lights at 90/270 sit at the equator Z=0, not at these end
+    // bands, so no conflict.)
     const gapMat = makeRowMat(1);
     this._cellSkinMats.push(gapMat);
-    const gapCellW = facetWidth * 0.75;   // half-angle ≈ 8.5° → ~2.9° margin to the Weaver
-    for (const gapAzDeg of [90, 270]) {
+    const gapCellW = facetWidth * 0.75;   // half-angle ≈ 8.5° → ~3.5° margin to each pocket edge
+    for (const gapAzDeg of [94.65, 274.65]) {
       const gapAz = gapAzDeg * Math.PI / 180;
       const radial = new THREE.Vector3(Math.cos(gapAz), Math.sin(gapAz), 0);
       const up = new THREE.Vector3(0, 0, 1);
@@ -1308,7 +1313,7 @@ export class PlayerSatellite extends THREE.Group {
     const V5 = Constants.OCTOPUS_V5;
     const collarY = V5.COLLAR_Y * M;          // 0.90 m → ship-frame Z offset
     const collarR = V5.COLLAR_RADIUS * M;     // 0.40 m → torus major radius
-    const tier = Constants.ARM_LADDER.Y0_QUAD; // { azimuths: [60, 120, 240, 300] }
+    const tier = Constants.ARM_LADDER.Y0_QUAD; // { azimuths: [64, 116, 244, 296] }
     const _yUpCollar = new THREE.Vector3(0, 1, 0);  // reusable Y-up for quaternion ops
 
     // ── Materials (§13.1.1 Material Selection Table) ─────────────────────
@@ -1365,6 +1370,39 @@ export class PlayerSatellite extends THREE.Group {
       this.add(pad);
     });
 
+    // ── Folded-strut rests (DECISIONS §11, 2026-09-23 ratified) ──
+    // "notice that three black pillars seem to float magically on top of
+    // solar cells" — the strut grew to 1.70 m (front-ring hinge z 1.00 to the
+    // stow pocket z −0.70) and, stowed (α 0), its centreline runs at a
+    // CONSTANT r = collarR the whole way (sin 0° = 0), so it spans a much
+    // longer unsupported run over the hull than the old 1.60 m strut did. A
+    // small fixed saddle on the skin over the middle ring (z ≈ 0, the wings
+    // lane's own inside-the-skin ring — this only adds the pad, not the ring)
+    // gives it a real bolted support at roughly its midpoint; the stowed rod
+    // resting on it is by design, the same convention as the carved stow nest
+    // at the pocket. Sized to the rod (STRUT_TUBE_OD 50 mm) like the hinge
+    // pad above; buried/proud the same way (bury-don't-touch).
+    const REST_W = 0.06, REST_L = 0.05, REST_T = 0.008;  // m: tangential × axial × radial
+    const REST_BURY = 0.004;
+    const restGeo = new THREE.BoxGeometry(M * REST_W, M * REST_L, M * REST_T);
+    const restMat = new THREE.MeshStandardMaterial({
+      color: 0x8888a0, metalness: 0.75, roughness: 0.28,   // matches HingePad's 7075-T6
+    });
+    tier.azimuths.forEach((azDeg, i) => {
+      const azRad  = azDeg * Math.PI / 180;
+      const radial = new THREE.Vector3(Math.cos(azRad), Math.sin(azRad), 0);
+      const tangent = new THREE.Vector3(-Math.sin(azRad), Math.cos(azRad), 0);
+      const restR = collarR - M * REST_BURY + M * (REST_T / 2);
+      const rest = new THREE.Mesh(restGeo, restMat);
+      rest.position.set(radial.x * restR, radial.y * restR, 0);
+      rest.quaternion.setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(tangent, new THREE.Vector3(0, 0, 1), radial),
+      );
+      rest.name = `StrutRest_${i}`;
+      rest.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      this.add(rest);
+    });
+
     // ── Shared hinge geometries (§13.1.5, create once, clone per hinge) ──
     const aframeGeo = new THREE.ExtrudeGeometry(this._aframeShape(), {
       depth:          M * 0.008,    // 8 mm plate thickness
@@ -1412,6 +1450,22 @@ export class PlayerSatellite extends THREE.Group {
     // 34 mm off the tube axis at every α (tube r 25 mm + 9 mm), inside the pad's ±0.05.
     const HINGE_LED_TANGENT    = 0.040;
 
+    // ── Motor box (DECISIONS §11, 2026-09-23 ratified): "one motor box
+    // bolted to a strong part of the body" for the daughter pivots — the
+    // strut hinge moved onto the front ring for exactly this. A short fixed
+    // housing straddling the hinge; the pin (HingePin_ below) runs through
+    // it into the strut's rotation axis, so the moving strut starts at the
+    // pin (matches a real rotary-actuator joint: motor bolted to the base,
+    // arm bolted to the output side). Scaled to the hinge's own hardware —
+    // tangent half-width inside the pad edge (±0.05), radial half-height
+    // matched to the A-frame's own proud height (apex 0.4214 − pad 0.404 ≈
+    // 17 mm) — rather than an unmeasured guess. Part of the root-joint
+    // cluster (RE_ROOT_JOINT in test-EveryDoor.js): it sits where the tube
+    // starts by design, same as the A-frame plates.
+    const MOTOR_BOX_TANGENT_HALF = 0.042;  // m: inside the pad's ±0.05 tangent edge
+    const MOTOR_BOX_RADIAL_HALF  = 0.017;  // m: matches the A-frame's proud height
+    const MOTOR_BOX_AXIAL_HALF   = 0.030;  // m: short along the barrel axis
+
     const pinGeo     = new THREE.CylinderGeometry(M * 0.005, M * 0.005, M * HINGE_PIN_LEN, 8);
     // C-clip: T8 tightened 0.007/0.0015 → 0.005/0.001 (outer r 0.006, inner r 0.004
     // seated 1 mm into the r 0.005 pin like a snap ring in its groove). At the
@@ -1422,6 +1476,12 @@ export class PlayerSatellite extends THREE.Group {
     const brakeGeo   = new THREE.CylinderGeometry(M * 0.015, M * 0.015, M * 0.003, 12);
     const mountBoltGeo = new THREE.CylinderGeometry(M * 0.003, M * 0.003, M * 0.004, 6);
     const ledGeo     = new THREE.SphereGeometry(M * HINGE_LED_R, 8, 6);  // T8: r 6 mm on the pad (was 10 mm at the strut axis)
+    const motorBoxGeo = new THREE.BoxGeometry(
+      M * MOTOR_BOX_TANGENT_HALF * 2, M * MOTOR_BOX_AXIAL_HALF * 2, M * MOTOR_BOX_RADIAL_HALF * 2,
+    );
+    const motorBoxMat = new THREE.MeshStandardMaterial({
+      color: 0x6c7480, metalness: 0.55, roughness: 0.42,  // anodized actuator housing
+    });
 
     // ── Per-hinge Double-A clevis assemblies ─────────────────────────────
     this.hingeMounts = [];
@@ -1561,6 +1621,21 @@ export class PlayerSatellite extends THREE.Group {
       led.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;           // FIX_PLAN §2-followup (round 3)
       this.add(led);
       this.hingeLEDs.push(led);             // preserve hingeLEDs[] for postArmUpdate
+
+      // ── Motor box — the front-ring actuator housing (see const block above) ──
+      const motorBoxRadial = PAD_TOP + MOTOR_BOX_RADIAL_HALF;  // base on the pad top
+      const motorBox = new THREE.Mesh(motorBoxGeo, motorBoxMat);
+      motorBox.position.set(
+        cx + radial.x * M * motorBoxRadial,
+        cy + radial.y * M * motorBoxRadial,
+        collarY,
+      );
+      motorBox.quaternion.setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(tangent, new THREE.Vector3(0, 0, 1), radial),
+      );
+      motorBox.name = `StrutMotorBox_${azDeg}`;
+      motorBox.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      this.add(motorBox);
     }
   }
 
@@ -1663,7 +1738,7 @@ export class PlayerSatellite extends THREE.Group {
     // Same three meshes, same names, same keyed child order (housing[0],
     // drum[1], led[2]). Window direction at α = 0 (pivot frame from
     // setFromUnitVectors(−Y, −Z)): local −Z → ship +Y, i.e. the two upper
-    // stowed cans (az 60/120) show their window to +Y; at α = π/2 every window
+    // stowed cans (az 64/116, DECISIONS §11) show their window to +Y; at α = π/2 every window
     // faces aft (local −Z → ship −Z). Verified against hinge-az60-d4.5-stow.
     const REEL_WALL_THETA_START = 4 * Math.PI / 3;  // wall start (240°)
     const REEL_WALL_THETA_LEN   = 4 * Math.PI / 3;  // 240° of wall → 120° window at θ = 180° (local −Z)
@@ -2081,12 +2156,13 @@ export class PlayerSatellite extends THREE.Group {
     // ±X/±Y/±Z axis → single-nozzle-failure redundancy.
     // Placement (all guarded from BUILT geometry by test-RcsPlacement.js — never
     // trust these comments):
-    //   • azimuth = 90°/270° (the historical window-centred 274.65° column was
-    //     SNAPPED to 270°) so each pod is centred on
-    //     the body PV "gap" cells at those azimuths (the nearest solar panels on
-    //     the mother body). ~11° clear of the weaver pocket and ~21° of the
-    //     spinner pocket. Kept ORTHOGONAL to the ROSA wings (0°/180°) so
-    //     radial/axial exhaust never washes the blankets.
+    //   • azimuth = 94.65°/274.65° — centred in the stow-pocket gap (the
+    //     historical window-centred 274.65° column, un-snapped from 270° when
+    //     the strut clock moved 60/120/240/300 → 64/116/244/296; the pockets
+    //     narrowed the 90° window on both sides). ~2.9° clear of both pocket
+    //     edges (boot footprint, ≥2° gate). Near-orthogonal to the ROSA wings
+    //     (0°/180°, 4.65° off) so radial/axial exhaust still never washes the
+    //     blankets.
     //   • |z| = 0.795 m, housing 0.10 m long → pod z-span 0.745–0.845 m: 2.5 cm
     //     clear of the PV end rows (edge 0.72) and of the collar cluster.
     //   • TANGENTIAL bells are canted RCS_TANG_CANT (18°) radially outward: an
@@ -2107,15 +2183,20 @@ export class PlayerSatellite extends THREE.Group {
     // tie-pass at the bell mouth.
     const RCS_LINER_INSET = 0.82;
 
-    // Azimuth columns: SNAPPED to 90°/270° so each pod is centred on the body PV
-    // "gap" cells that sit at exactly 90°/270° (see the fore/aft gap-cell loop in
-    // _buildMainBus) — the nearest solar panels on the mother body. 90° stays
-    // ~11° clear of the weaver pocket (edge ~78.6°) and ~21° clear of the spinner
-    // pocket (edge ~110.7°), so the groove-clearance guard (≥2°) still holds. The
-    // SSOT half-widths are still read below only for the clearance context; the
-    // column azimuth itself is now panel-anchored, not window-centred.
+    // Azimuth columns: centred in the stow-pocket gap — weaver pocket edge
+    // 82.61° (az 64 + 18.62° half-width), spinner edge 106.69° (az 116 −
+    // 9.31°) — centre 94.65°/274.65°, the window-centred column this build
+    // originally had before it was snapped to 90/270 to sit on the body PV
+    // "gap" cells. Measured from the built footprints with the guard's own
+    // math (tmp/step1-pod-gap.mjs): worst clearance 2.91° (boot edge vs BOTH
+    // pockets), above the ≥2° gate at the moved strut clock (64/116/244/296)
+    // AND at the old one (60/120/240/300, 6.9°) — so the column move lands
+    // green before the struts move. The PV gap cells at 90/270 are z-clear of
+    // the pods (cell band 0.48–0.72 vs pod |z| ≥ 0.737) and are re-centred on
+    // the columns with the strut move. The SSOT half-widths are still read
+    // below only for the clearance context.
     const barrelR_m = Constants.OCTOPUS_V5?.COLLAR_RADIUS ?? 0.40;
-    const RCS_POD_AZ_DEG = [90, 270];
+    const RCS_POD_AZ_DEG = [94.65, 274.65];
 
     const podGeo = new THREE.BoxGeometry(M * RCS_POD_W, M * RCS_POD_L, M * RCS_POD_H);
     const podMat = new THREE.MeshStandardMaterial({
@@ -3260,16 +3341,17 @@ export class PlayerSatellite extends THREE.Group {
    * OverridePane.isExpanded(). REFIT / plain O / autopilot never reach it.
    *
     * ROSA (DECISIONS §10, 2026-09-23 — supersedes the 2026-09-09 (B) hold):
-    * the wings DODGE clear by themselves. The tilt law clamps through the
-    * measured clearance curves (`_rosaDodgeLimitRad`): from the moment the
-    * override arming sets `_flowerOverrideFold`, the pivots take the
-    * fold-corridor limit (5°) and hold it while the lock is armed — sun-track
-    * and feather both yield — so the wings (τ 0.57 s) are clear before the
-    * 15°/s petals reach them and the driver NEVER waits for the pivots. The
-    * floor still waits for the STRUTS (`_armsStowedForFold`) — they may be
-    * tethered, holding cargo or mid-salvage. One press is still the whole
-    * travel; nothing is refused; a furled ROSA (pivots parked at 0 by the
-    * furl blend) is unaffected.
+     * the wings DODGE clear by themselves. The tilt law clamps through the
+     * measured clearance curves (`_rosaDodgeLimitRad`): from the moment the
+     * override arming sets `_flowerOverrideFold`, the pivots take the
+     * fold-corridor limit (5°) and hold it while the lock is armed — sun-track
+     * and feather both yield — so the wings (τ 0.57 s) are clear before the
+     * 15°/s petals reach them and the driver NEVER waits for the pivots.
+     * DECISIONS §11 (2026-09-23): the STRUTS no longer gate it either — a
+     * double-tap folds straight through at any strut angle (held cargo in
+     * the corridor is out of scope). One press is still the whole travel;
+     * nothing is refused; a furled ROSA (pivots parked at 0 by the furl
+     * blend) is unaffected.
     * @returns {boolean|null} true when now deploying (toward STOW 146°),
     *   false when folding (toward LAUNCH 0°), null when no flower is fitted
     */
@@ -3334,13 +3416,12 @@ export class PlayerSatellite extends THREE.Group {
       // fold-corridor limit from this frame (`_rosaDodgeLimitRad` reads
       // `_flowerOverrideFold`), sun-track and feather both yield, and the
       // pivots (τ 0.57 s) are clear before the 15°/s petals arrive — the
-      // driver never waits for them. The floor still waits for the STRUTS
-      // (`_armsStowedForFold`). Scoped to the override arming: the launch
+      // driver never waits for them. DECISIONS §11 (2026-09-23): the STRUTS
+      // no longer gate it either. Scoped to the override arming: the launch
       // sequence and the ?shot=1 dev force are unchanged (their own
       // procedures furl ROSA, which parks the pivots at 0 anyway).
       if (override) {
         this._flowerOverrideFold = true;
-        if (!this._armsStowedForFold()) this._noteArmStowWait();
       }
       this._flowerLaunchLock = true;
       this._flowerTargetTheta = ((FL.POSE_LAUNCH_DEG - 0.5) * Math.PI) / 180;
@@ -3763,18 +3844,18 @@ export class PlayerSatellite extends THREE.Group {
    * thrust-coupled writes.
    *
     * Design 7b: while the launch lock is armed the floor is POSE_LAUNCH_DEG
-    * (0°) — the fore-folded fairing pose, measured against the DOCKED daughters
-    * (probe 7b.4c / 7b.6b). DECISIONS §10 (2026-09-23): under an OVERRIDE fold
-    * the wings no longer gate this floor — they dodge clear by themselves (the
-    * tilt law clamps through `_rosaDodgeLimitRad`). Owner-reported 2026-09-22:
-    * the STRUTS remain a condition on the gate (`_armsStowedForFold`) — the
-    * petals fold fore past the daughter struts, and the corridor is only clear
-    * at any α down to θ 10°; until they are stowed, θ stalls at the orbit floor
-    * with the latch alive. The lock clears — once, with
-    * Events.THERMAL_FLOWER_RELEASED — the frame a release swing (any target at
-    * or above the orbit floor) carries θ up to POSE_FLOOR_DEG; a release never
-    * latches below the floor (so a CARGO release cannot settle at 89.9° with
-    * the lock still armed). Order: slew → clamp → release → settle, so every
+     * (0°) — the fore-folded fairing pose, measured against the DOCKED daughters
+     * (probe 7b.4c / 7b.6b). DECISIONS §10 (2026-09-23): under an OVERRIDE fold
+     * the wings no longer gate this floor — they dodge clear by themselves (the
+     * tilt law clamps through `_rosaDodgeLimitRad`). DECISIONS §11 (2026-09-23,
+     * ratified): the STRUTS no longer gate it either — a new player can't
+     * read a halfway-stop interlock, so an OVERRIDE fold drops straight to
+     * POSE_LAUNCH_DEG at any strut angle (held cargo in the corridor is out
+     * of scope). The lock clears — once, with
+     * Events.THERMAL_FLOWER_RELEASED — the frame a release swing (any target at
+     * or above the orbit floor) carries θ up to POSE_FLOOR_DEG; a release never
+     * latches below the floor (so a CARGO release cannot settle at 89.9° with
+     * the lock still armed). Order: slew → clamp → release → settle, so every
     * event carries the CLAMPED θ (the LAUNCH latch reads exactly 0).
     */
   _updateFlower(dt) {
@@ -3790,15 +3871,11 @@ export class PlayerSatellite extends THREE.Group {
     }
 
     // Pose floor + ladder ceiling — clamped in the driver, unconditionally.
-    // DECISIONS §10: the wings no longer gate this floor — they dodge clear
-    // on their own (the tilt law clamps itself), so an OVERRIDE fold drops
-    // below POSE_FLOOR_DEG as soon as the ARMS are stowed (the strut wait,
-    // `_armsStowedForFold` — the struts may be tethered or holding cargo, so
-    // the mechanism waits for THEM, never for the wings). The sequence /
-    // dev-force armings drop it at once.
+    // DECISIONS §10/§11: neither the wings nor the struts gate this floor —
+    // both dodge/fold clear on their own — so an OVERRIDE fold drops below
+    // POSE_FLOOR_DEG at once, same as the sequence / dev-force armings.
     const orbitFloorRad = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
-    const foldFloorOpen = this._flowerLaunchLock
-      && (!this._flowerOverrideFold || this._armsStowedForFold());
+    const foldFloorOpen = this._flowerLaunchLock;
     const floorRad = foldFloorOpen ? (FL.POSE_LAUNCH_DEG * Math.PI) / 180 : orbitFloorRad;
     // Vent push-through (owner ask): the ladder ceiling lifts from the bud to
     // POSE_VENT_DEG only while the player has explicitly double-commanded it.
@@ -5520,7 +5597,7 @@ export class PlayerSatellite extends THREE.Group {
     const tightDeg = V5.ROSA_TILT_CLAMP_TIGHT_DEG ?? 18;
 
     // Resolve the active tier's strut azimuths (degrees).
-    let azimuths = Constants.ARM_LADDER?.Y0_QUAD?.azimuths ?? [60, 120, 240, 300];
+    let azimuths = Constants.ARM_LADDER?.Y0_QUAD?.azimuths ?? [64, 116, 244, 296];
     const tierKey = this.armManager?.getCurrentTier?.();
     if (tierKey && Constants.ARM_LADDER?.[tierKey]?.azimuths) {
       azimuths = Constants.ARM_LADDER[tierKey].azimuths;
@@ -6380,52 +6457,6 @@ export class PlayerSatellite extends THREE.Group {
       priority: 'warning',
     });
     eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'flower_folded', type: type === 'MPD' ? 'mpd' : 'ion', thetaDeg });
-  }
-
-  /**
-   * The second condition on the fold corridor (measured 2026-09-22, after the
-   * owner spotted the interference). The petals fold FORE along the barrel and
-   * pass the daughter struts, which root at z +0.90 and sweep out to meet them —
-   * only 20° away in azimuth. Worst case over every arm angle is 0.2 mm at
-   * θ 0, i.e. contact; the corridor is clear at ANY α down to θ 10°, so this
-   * gate only governs the last few degrees of the fold.
-   *
-   * DECISIONS §10: this is the ONE remaining wait on the fold path — the
-   * wings dodge clear by themselves now, but the struts may be tethered,
-   * holding cargo or mid-salvage, so the mechanism waits at the 90° floor
-   * and says what it is waiting for instead of retracting them.
-   *
-   * An arm reported LOCKED or STOWED is driven to α 0 by _updateStruts
-   * regardless of its aim, so it counts as parked whatever it last aimed at.
-   * @returns {boolean} true when every arm is within tolerance of stowed
-   */
-  _armsStowedForFold() {
-    const arms = this.armManager && this.armManager.arms;
-    if (!arms || arms.length === 0) return true;
-    const tol = ((Constants.THERMAL.FLOWER.FOLD_ARM_STOW_TOL_DEG ?? 1.5) * Math.PI) / 180;
-    for (const arm of arms) {
-      if (!arm) continue;
-      const ds = arm.getDeployState ? arm.getDeployState() : undefined;
-      if (ds === 'LOCKED' || ds === 'STOWED') continue;   // driver forces α = 0
-      const a = arm.getAimAlpha ? arm.getAimAlpha() : Math.PI / 2;
-      if (Math.abs(a) > tol) return false;
-    }
-    return true;
-  }
-
-  /**
-   * @private One COMMS line per OVERRIDE fold arming when the STRUTS are not
-   * yet stowed (DECISIONS §10: the only remaining fold wait — the wings dodge
-   * clear automatically, but the struts may be tethered, holding cargo or
-   * mid-salvage, so the mechanism waits at the 90° floor and says what it is
-   * waiting for instead of retracting them).
-   */
-  _noteArmStowWait() {
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      sender: 'THERMAL',
-      text: 'OVERRIDE — daughter struts are in the radiator fold corridor; the panels hold at 90° until the struts are stowed. Tap STRUTS / . to stow them.',
-      priority: 'info',
-    });
   }
 
   /**

@@ -169,13 +169,15 @@ const SYSTEMS = [
         // az 33.75° facet centre, central PV row (face radius barrelR×1.014).
         // The old az-0° anchor sat in the ROSA-root keep-out on bare hull and
         // collided with NAV LIGHTS (2 cm).
-        // pick: the 28 barrel PV boxes (0..27, verified 2026-09-02 — the model
-        // builds 28 not 30: aft rows near the strut azimuths are skipped) plus
-        // the 4 end-band gap cells.
+        // pick: the 24 barrel PV boxes (0..23, re-counted at the re-clock trial
+        // clock 64/116/244/296 — the four facets nearest the 90/270 windows fall
+        // inside the ±18° strut keep-out; four aft facets revive under the ±30°
+        // one) plus the 4 end-band gap cells (which follow the pod columns to
+        // 94.65/274.65).
         pick: [
-          ...Array.from({ length: 28 }, (_, i) => `BarrelSolarPanel_${i}`),
-          'BarrelSolarPanel_gap_90_F', 'BarrelSolarPanel_gap_90_A',
-          'BarrelSolarPanel_gap_270_F', 'BarrelSolarPanel_gap_270_A',
+          ...Array.from({ length: 24 }, (_, i) => `BarrelSolarPanel_${i}`),
+          'BarrelSolarPanel_gap_94.65_F', 'BarrelSolarPanel_gap_94.65_A',
+          'BarrelSolarPanel_gap_274.65_F', 'BarrelSolarPanel_gap_274.65_A',
         ],
         anchor: [ 0.337 * M, 0.2254 * M, 0 ] },
       { id: 'array_roll', name: 'SOLAR WING SPOOL', risk: 'GREEN', tier: 'detail', codexId: 'solar_power',
@@ -408,21 +410,22 @@ const SYSTEMS = [
     parts: [
       { id: 'berths', name: 'DAUGHTER BERTHS', risk: 'GREEN', tier: 'major', codexId: 'docking_berthing',
         massKg: 6, priority: 6, specs: ['4× — 2 large, 2 small', 'Spring ejector + hinge strut'],
-        // az 60° pocket's aft-lip CORNER: the pocket's angular edge (az 78.6°,
+        // az 64° pocket's aft-lip CORNER: the pocket's angular edge (az 82.6°,
         // where the carved groove meets the skin) on the hull radius (r 0.40)
         // at z=-0.85 — a real hull edge. The old (0.20, 0.346) tuple was the
         // pocket's az-60 centreline at r 0.40, i.e. mid-air over the carved
         // floor (Mother audit T10). ~15 cm clear of the docked daughter's own
         // callout, whose anchor is the craft body mid-pocket (z=-0.70).
-        anchor: [ 0.079 * M, 0.392 * M, -0.85 * M ] },
+        anchor: [ 0.0512 * M, 0.3967 * M, -0.85 * M ] },
       { id: 'tether_reels', name: 'TETHER WINCHES', risk: 'GREEN', tier: 'major', codexId: 'reel_mechanics',
         massKg: 4, priority: 6, live: 'tether', specs: ['4× Dyneema fiber reels'],
         // Reel cartridges ride the struts (stowed z≈−0.46, deployed ≈1.5 m out).
         // ReelCartridge_0 stays the ANCHOR mesh (reel #0 only); pick the 4 reel
-        // housings so hover covers all four winches.
+        // housings so hover covers all four winches. Stand-in at az 64 (r 0.40,
+        // the re-clock trial strut azimuth — was az 60).
         mesh: 'ReelCartridge_0', dynamic: true,
         pick: ['ReelHousing_0', 'ReelHousing_1', 'ReelHousing_2', 'ReelHousing_3'],
-        anchor: [ 0.20 * M, 0.346 * M, -0.46 * M ] },
+        anchor: [ 0.1754 * M, 0.3595 * M, -0.46 * M ] },
       // codexId remap (owner review, 2026-09-03): the Double-A clevises are
       // the cradle struts' HINGES — `vacuum_mechanisms` ("Mechanisms in
       // Vacuum": cold-welding hinges, dry films) is their briefing, beside the
@@ -430,17 +433,18 @@ const SYSTEMS = [
       // cards already deep-link weaver_gripper / spinner_pad.
       { id: 'hinges', name: 'STRUT HINGES', risk: 'YELLOW', tier: 'detail', codexId: 'vacuum_mechanisms',
         massKg: 2, priority: 2, specs: ['Double-A clevis, 4×'],
-        pick: ['AFrame_60_L', 'AFrame_60_R', 'AFrame_120_L', 'AFrame_120_R',
-          'AFrame_240_L', 'AFrame_240_R', 'AFrame_300_L', 'AFrame_300_R'],
+        pick: ['AFrame_64_L', 'AFrame_64_R', 'AFrame_116_L', 'AFrame_116_R',
+          'AFrame_244_L', 'AFrame_244_R', 'AFrame_296_L', 'AFrame_296_R'],
         anchor: [ 0.22 * M, 0.381 * M, 0.90 * M ] },
       { id: 'cradle_spring', name: 'CROSSBOW SPRING', risk: 'YELLOW', tier: 'detail', codexId: 'spring_energy',
         massKg: 1, priority: 2, specs: ['Spring ejector — launches daughters'],
         // Spring group rides the strut (stowed z≈−0.62, deployed ≈1.7 m out).
         // CrossbowSpring_0 stays the ANCHOR mesh (reel #0 only); pick the 4 spring
-        // housings so hover covers all four ejectors.
+        // housings so hover covers all four ejectors. Stand-in at az 64 (r 0.40,
+        // the re-clock trial strut azimuth — was az 60).
         mesh: 'CrossbowSpring_0', dynamic: true,
         pick: ['SpringHousing_0', 'SpringHousing_1', 'SpringHousing_2', 'SpringHousing_3'],
-        anchor: [ 0.20 * M, 0.346 * M, -0.62 * M ] },
+        anchor: [ 0.1754 * M, 0.3595 * M, -0.62 * M ] },
       // NET LAUNCHERS (DAUGHTERS) deleted: that hardware lives on the ArmUnit
       // (ArmUnit.js:660-667), never on the Mother. The fact moved into the
       // daughter cards' specs (T3).
@@ -607,8 +611,8 @@ const PORTRAIT_OVERRIDES = {
   mga:           { dir: [1.0, 0.4, 0.3], fill: 0.6 },   // T7: a 20 cm patch, not a puck — 0.35 showed the whole forebody
   gps:           { dir: [0.9, 0.35, 0.2], fill: 0.5, single: true, radial: [0, 0, 0.2] },   // T7 0.35 → 0.5
   ttc_aft:       { dir: [0.6, 0.4, -1.0], fill: 0.6, radial: [0, 0, -0.5] },   // T7: the aft omni from its own radial, aft-biased, with hull context
-  // CAPTURE — the reel-close pose (upper reel cans from +Y); berths from the az-60 tunnel side
-  // T3: one berth = the az-60 daughter seated in its pocket ({ arm: 0 } — the docked arm.group, away → omitted) plus the
+  // CAPTURE — the reel-close pose (upper reel cans from +Y); berths from the az-64 tunnel side
+  // T3: one berth = the az-64 daughter seated in its pocket ({ arm: 0 } — the docked arm.group, away → omitted) plus the
   // strut-root hardware on the fore hinge line (hinge pad, A-frame clevises, spring ejector, reel); the pocket itself is
   // carved into the barrel (no mesh). Hover stays card-only (owner decision); the frame is portrait-only.
   berths:        { dir: [0.5, 0.87, 0.35], frame: [{ arm: 0 }, 'SpringHousing_0', 'ReelHousing_0'] },   // T7: the seated daughter + its ejector / reel (the fore hinge line made it a whole-ship shot)
