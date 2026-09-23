@@ -500,7 +500,7 @@ let _schedTick = 0;                 // rAF-entry counter for the Nth-beat draw
 // native refresh) — and plan() reads ONE reused args object (G1, the
 // _taFrameArgs pattern). null until the sample window fills → N = 1.
 let _rafPeriodMs = null;
-const _planArgs = { cover: 'none', nowMs: 0, lastInputMs: 0, riding: false, dragLive: false, periodMs: null, perf: Constants.PERF };
+const _planArgs = { cover: 'none', nowMs: 0, lastInputMs: 0, riding: false, dragLive: false, mechLive: false, periodMs: null, perf: Constants.PERF };
 let _launchCeremonyLive = false;    // intro ride (LAUNCH_CEREMONY_* events)
 // THE published policy witness (one object, fields mutated per frame; the
 // headless gate asserts POLICY — mode + n — never fps: SwiftShader runs
@@ -514,6 +514,51 @@ const _turnSaved = { up: false, down: false, left: false, right: false };
  *  in gameplay the loop always has a pending rAF, so the next entry sees it). */
 function _noteSchedInput() {
   _schedLastInputMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
+
+// Lane A (F1 six-fixes plan, 2026-09-16, step 1/4) — mechLive: is any mother
+// actuator (flower / ROSA furl / ROSA feather / ROSA wing tilt / struts)
+// ACTUALLY MOVING right now? Detected from motion, never from intent/target
+// latches or armManager.strutsDeployed() — both can read true while nothing
+// moves (an OVERRIDE fold waiting on the daughter arms; a strut resting at
+// 146°). The scheduler runs on EVERY rAF entry, before the sim; the sim (and
+// these actuators) only advance on DRAWN ticks, after it. So the comparison
+// is latched once per DRAWN frame, after armManager.update, and consumed at
+// the NEXT frame's plan() site — comparing at the plan site itself would
+// throw away a skipped tick's unchanged read.
+let _mechLive = false;
+// Two reused arrays, swapped by re-filling `_mechCur` then copying into
+// `_mechPrev` — G1: never allocate a literal per frame.
+let _mechPrev = [];
+let _mechCur = [];
+// A live mechanism reads as "moving" above a SPEED, not a per-frame step, so
+// the answer agrees at both frame rates (10 fps hold vs native boost) — an
+// eased motion near its end can otherwise flip-flop between "moving" and
+// "stopped" as the rate changes. ~0.34°/s (1e-4 rad per 60 Hz frame); every
+// real actuator is far above it (the slowest slew is 15°/s = 0.26 rad/s).
+const MECH_EPS_RAD_PER_S = 0.006;
+
+/** Fill `out` (a reused array) with this drawn frame's live actuator values.
+ *  Guards every read — player/armManager may be absent before boot — and
+ *  never throws: a throw here must read as "not moving", never crash the
+ *  loop. @returns {number[]} `out`, for chaining. */
+function _fillMechValues(out) {
+  out.length = 0;
+  try {
+    if (player) {
+      out.push(player._flowerThetaRad || 0);
+      out.push(player._rosaFurlProgress || 0);
+      out.push(player._rosaFeatherProgress || 0);
+      out.push(player.panelRightPivot ? player.panelRightPivot.rotation.x : 0);
+      out.push(player.panelLeftPivot ? player.panelLeftPivot.rotation.x : 0);
+    }
+    if (armManager && Array.isArray(armManager.arms)) {
+      for (const arm of armManager.arms) {
+        out.push((arm && typeof arm.getAimAlpha === 'function') ? arm.getAimAlpha() : 0);
+      }
+    }
+  } catch (e) { /* a throw here reads as "not moving" — never crash the loop */ }
+  return out;
 }
 
 // PR 4 / P1.5 — Quality tier auto-adapt rolling FPS history + cooldown counter.
@@ -6301,6 +6346,7 @@ function gameLoop(timestamp) {
       || !!(ladderController && ladderController.isRiding && ladderController.isRiding());
     _planArgs.dragLive = !!(_dragS && (_dragS.isDragging
       || Math.abs(_dragS.velocityTheta) > 1e-4 || Math.abs(_dragS.velocityPhi) > 1e-4));
+    _planArgs.mechLive = _mechLive;
     _planArgs.periodMs = _rafPeriodMs;
     const _sched = FrameSched.plan(_planArgs);
     _frameSched.mode = _sched.mode;
@@ -6318,6 +6364,9 @@ function gameLoop(timestamp) {
   } else {
     _frameSched.mode = 'rest';
     _frameSched.n = 1;
+    // Lane A step 4: gameplay is not running — reset the mechLive latch so a
+    // stale "moving" read can never survive into the next gameplay tick.
+    _mechLive = false;
   }
 
   // Delta time in seconds (cap to prevent spiral of death)
@@ -6605,9 +6654,19 @@ function gameLoop(timestamp) {
   // skipped render would read as the black they triage.
 
   // --- Always update visuals (scene renders behind menus) ---
-  const sunDir = sunLight.update(dt, player.getPosition());
+  // Held world (Session I follow-up, Lane A step 5): freeze the sky — sun,
+  // Earth and starfield — by passing dt=0 rather than skipping the call.
+  // sunDir is still the return value and is consumed below by
+  // earth.setSunDirection / spaceWeatherSystem / player.update; a skipped
+  // call would leave it stale. Accepted side effect: the eclipse-intensity
+  // blend and _updateAutoExposure also key off dt, so exposure stops
+  // adapting while held (owner-facing report item, not fixed here — no lane
+  // owns SunLight.js). The sky stops dead rather than easing to a halt:
+  // _worldHeld only turns true once the ~0.6 s world-clock ramp to 0
+  // finishes, so the sun runs at full rate through the ramp and then stops.
+  const sunDir = sunLight.update(_worldHeld ? 0 : dt, player.getPosition());
   earth.setSunDirection(sunDir);
-  earth.update(dt);
+  earth.update(_worldHeld ? 0 : dt);
   // P2: bloom gate — skips the whole UnrealBloom mip chain on frames where
   // nothing can cross the threshold. NOT sun-only: Venus rides the brightness
   // ladder at 2.74 (> Constants.BLOOM_THRESHOLD) and its visibility is
@@ -6617,7 +6676,7 @@ function gameLoop(timestamp) {
   // B2: feed the renderer's CAPPED pixel ratio (HIGH tier caps at 1.5), not
   // window.devicePixelRatio (=2.0), so gl_PointSize maps to the true physical
   // render-target and stars aren't ~33% oversized.
-  starfield.update(dt, sceneManager.getRenderer().getPixelRatio(), sceneManager.getCamera());
+  starfield.update(_worldHeld ? 0 : dt, sceneManager.getRenderer().getPixelRatio(), sceneManager.getCamera());
   // UX-11 #5: city-label cull/fade (no-op while hidden)
   try { cityLabels.update(); } catch (e) { console.error('[GameLoop] cityLabels:', e); }
   try { launchCameo.update(dt); } catch (e) { console.error('[GameLoop] launchCameo:', e); }
@@ -6670,7 +6729,10 @@ function gameLoop(timestamp) {
     if (!_worldHeld) { try { collisionAvoidanceSystem.update(dt); } catch (e) { console.error('[GameLoop] collisionAvoidance:', e); } }
 
     // Update game state timer
-    gameState.update(dt);
+    // Held world (Session I follow-up): pass zero rather than skipping the
+    // call — the body is missionTime += dt followed by the GAME_WIN check,
+    // and the win check must stay live even while a drawer is open.
+    gameState.update(_worldHeld ? 0 : dt);
 
     // Update entities (with error boundaries — single system crash won't freeze game)
     try { player.update(dt, sunDir, dtWorld); } catch (e) { console.error('[GameLoop] player.update:', e); }
@@ -6684,7 +6746,21 @@ function gameLoop(timestamp) {
     try { activeSatellites.update(dt, player.getPosition(), dtWorld); } catch (e) { console.error('[GameLoop] activeSats:', e); }
 
     // Update V3 arm manager
-    if (armManager) { try { armManager.update(dt); } catch (e) { console.error('[GameLoop] armManager:', e); } }
+    // Held world (Session I follow-up, owner 2026-09-23): the pulse-scan
+    // cooldowns, auto-capture feed and furnace digestion are "fate" and must
+    // stop with everything else under _worldHeld. Zero time still runs
+    // arm.update for every arm, so a DOCKED daughter keeps re-clamping to the
+    // ship's live position/attitude (it must, so it stays attached if the
+    // ship turns) — passing zero rather than skipping the call does both.
+    if (armManager) { try { armManager.update(_worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] armManager:', e); } }
+
+    // Lane A (F1 six-fixes plan, step 4) — latch mechLive for the NEXT
+    // frame's scheduler decision. Must run AFTER armManager.update (the
+    // struts) and the flower/ROSA writes inside player.update above, and on
+    // DRAWN frames only — see the comment above _mechPrev.
+    _fillMechValues(_mechCur);
+    _mechLive = FrameSched.anyMoved(_mechPrev, _mechCur, MECH_EPS_RAD_PER_S * dt);
+    { const _tmp = _mechPrev; _mechPrev = _mechCur; _mechCur = _tmp; }
 
     // V-4: Sync arm mesh visibility with deploy state (must run AFTER arm._updateDocked)
     try { player.postArmUpdate(); } catch (e) { console.error('[GameLoop] postArmUpdate:', e); }
@@ -6711,7 +6787,11 @@ function gameLoop(timestamp) {
     try { despinLaser.update(dt); } catch (e) { console.error('[GameLoop] despinLaser:', e); }
 
     // CP-4 §4: drain deferred teaching overlays (≤1 per QUEUE_DRAIN_INTERVAL_S)
-    try { teachingSystem.update(dt); } catch (e) { console.error('[GameLoop] teachingSystem:', e); }
+    // Held world (owner 2026-09-23): zero time stalls the _drainTimer
+    // countdown, so a QUEUED tip normally waits for the drawer to close.
+    // Accepted exception: a tip already due when the drawer opened can still
+    // show once (see the plan's Lane A step 6 report note).
+    try { teachingSystem.update(_worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] teachingSystem:', e); }
 
     // Item 3: anti-stuck idle watchdog (1 Hz internally; veteran-gated)
     try { armIdleAdvisor.update(dt); } catch (e) { console.error('[GameLoop] armIdleAdvisor:', e); }
@@ -6741,7 +6821,9 @@ function gameLoop(timestamp) {
     try { if (autoLockController) autoLockController.update(dt); } catch (e) { console.error('[GameLoop] autoLockController:', e); }
 
     // Update extracted systems
-    try { resourceSystem.update(dt); } catch (e) { console.error('[GameLoop] resourceSystem:', e); }
+    // Held world (Session I follow-up, owner 2026-09-23): fate clocks stop
+    // while a drawer is open — closes the HANDOFF audit item.
+    if (!_worldHeld) { try { resourceSystem.update(dt); } catch (e) { console.error('[GameLoop] resourceSystem:', e); } }
     try { sensorSystem.update(dt, player.getPosition(), debrisField); } catch (e) { console.error('[GameLoop] sensorSystem:', e); }
     // Phase 1.5 (capture-feedback overhaul): close-range survey → Full Profile
     try {
@@ -6751,10 +6833,10 @@ function gameLoop(timestamp) {
         target: targetSelector.getActiveTarget ? targetSelector.getActiveTarget() : null,
       });
     } catch (e) { console.error('[GameLoop] dossierSystem:', e); }
-    try { kesslerSystem.update(dt); } catch (e) { console.error('[GameLoop] kesslerSystem:', e); }
+    if (!_worldHeld) { try { kesslerSystem.update(dt); } catch (e) { console.error('[GameLoop] kesslerSystem:', e); } }
 
     // Update forge system
-    try { forgeSystem.update(dt); } catch (e) { console.error('[GameLoop] forgeSystem:', e); }
+    if (!_worldHeld) { try { forgeSystem.update(dt); } catch (e) { console.error('[GameLoop] forgeSystem:', e); } }
 
     // Update trawl manager (Phase 2 — trawl system)
     try {
@@ -6794,16 +6876,18 @@ function gameLoop(timestamp) {
     try { rewardSystem.update(dt, armManager); } catch (e) { console.error('[GameLoop] rewardSystem:', e); }
 
     // Update mission event system (ST-4.D — mid-mission complications)
-    try { missionEventSystem.update(dt); } catch (e) { console.error('[GameLoop] missionEventSystem:', e); }
+    if (!_worldHeld) { try { missionEventSystem.update(dt); } catch (e) { console.error('[GameLoop] missionEventSystem:', e); } }
 
     // Update learning systems (Phase 7 — Codex + Space Weather)
     try { codexSystem.update(dt); } catch (e) { console.error('[GameLoop] codexSystem:', e); }
-    try {
-      spaceWeatherSystem.update(dt, {
-        playerOrbit: player.getOrbitalElements(),
-        sunDirection: sunDir,
-      });
-    } catch (e) { console.error('[GameLoop] spaceWeatherSystem:', e); }
+    if (!_worldHeld) {
+      try {
+        spaceWeatherSystem.update(dt, {
+          playerOrbit: player.getOrbitalElements(),
+          sunDirection: sunDir,
+        });
+      } catch (e) { console.error('[GameLoop] spaceWeatherSystem:', e); }
+    }
 
     // Update environment hazards (ST-6.7 — AO, MMOD, Safe-Mode, Radiation, Battery DOD)
     // Held world (Session I follow-up): no erosion, no MMOD roll, no DOD tick while the clock is 0.
@@ -6812,14 +6896,16 @@ function gameLoop(timestamp) {
     }
 
     // Update subsystem events (Phase 7B — spacecraft subsystem ambiance)
-    try {
-      subsystemEvents.update(dt, {
-        playerOrbit: player.getOrbitalElements(),
-        armManager,
-        deployedArms: armManager ? armManager.getDeployedCount() : 0,
-        codexProgress: codexSystem ? codexSystem.getProgress().unlocked : 0,
-      });
-    } catch (e) { console.error('[GameLoop] subsystemEvents:', e); }
+    if (!_worldHeld) {
+      try {
+        subsystemEvents.update(dt, {
+          playerOrbit: player.getOrbitalElements(),
+          armManager,
+          deployedArms: armManager ? armManager.getDeployedCount() : 0,
+          codexProgress: codexSystem ? codexSystem.getProgress().unlocked : 0,
+        });
+      } catch (e) { console.error('[GameLoop] subsystemEvents:', e); }
+    }
 
     // Update conjunction alert system (Sprint C1). S3: dtWorld drives the MOID
     // timer; above ~10× warp detection switches to MOID screening (T2).

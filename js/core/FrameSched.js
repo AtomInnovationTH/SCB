@@ -83,14 +83,16 @@ export class FrameSched {
    * @param {number} q.lastInputMs - last pointer/touch/wheel/key/pane/purchase
    * @param {boolean} q.riding - ladder ride in flight / intro launch ceremony
    * @param {boolean} q.dragLive - turntable drag pressed or velocity > ε
+   * @param {boolean} q.mechLive - a mother actuator (flower/ROSA/struts) is
+   *   actually moving right now — same tier as dragLive (live interaction)
    * @param {number|null} q.periodMs - medianPeriodMs() of the rAF samples
    * @param {{REST_FPS:number, BOOST_MS:number, HOLD_FPS:number, HOLD_BOOST_MS:number}} q.perf
    * @returns {{ mode: 'rest'|'boost'|'hold', n: number }}
    */
-  static plan({ cover, nowMs, lastInputMs, riding, dragLive, periodMs, perf }) {
+  static plan({ cover, nowMs, lastInputMs, riding, dragLive, mechLive, periodMs, perf }) {
     if (cover === 'partial') {
       // Held world (drawer open): heartbeat unless the player is touching it.
-      const boosted = (nowMs - lastInputMs) < perf.HOLD_BOOST_MS || dragLive || riding;
+      const boosted = (nowMs - lastInputMs) < perf.HOLD_BOOST_MS || dragLive || mechLive || riding;
       if (boosted) return { mode: 'boost', n: 1 };
       return { mode: 'hold', n: FrameSched.skipFactor(periodMs, perf.HOLD_FPS) };
     }
@@ -98,6 +100,26 @@ export class FrameSched {
     const boosted = (nowMs - lastInputMs) < perf.BOOST_MS || riding;
     if (boosted) return { mode: 'boost', n: 1 };
     return { mode: 'rest', n: FrameSched.skipFactor(periodMs, perf.REST_FPS) };
+  }
+
+  /**
+   * Pure comparison: did any tracked live value move by more than `eps` since
+   * the previous drawn frame? Used to detect `mechLive` (moving hardware)
+   * without reading intent/target latches, which can get stuck true. Returns
+   * true if the arrays differ in length (a tracked actuator appeared/vanished
+   * — treat as motion rather than throw).
+   * @param {number[]} prev - previous drawn frame's sampled values
+   * @param {number[]} cur - this drawn frame's sampled values
+   * @param {number} [eps] - minimum absolute delta counted as motion
+   * @returns {boolean}
+   */
+  static anyMoved(prev, cur, eps = 1e-4) {
+    if (!Array.isArray(prev) || !Array.isArray(cur)) return false;
+    if (prev.length !== cur.length) return true;
+    for (let i = 0; i < cur.length; i++) {
+      if (Math.abs(cur[i] - prev[i]) > eps) return true;
+    }
+    return false;
   }
 
   /**

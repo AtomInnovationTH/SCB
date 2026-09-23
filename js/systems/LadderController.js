@@ -1506,7 +1506,7 @@ export class LadderController {
     // disengage caused by LEAVING gameplay, the restore resolves to hidden —
     // matching TargetReticle's own GAME_STATE_CHANGE rule (see _setReticlesHidden).
     this._setReticlesHidden(false);
-    // Restore the constellation figures F7 hid (no-op if not suppressed).
+    // Restore the constellation figures F5/F1 hid (no-op if not suppressed).
     this._setConstellationsHidden(false);
     // Clear the F7/F3 city/landmark-pill suppression (no-op if not suppressed;
     // the 5-key preference decides whether the pills actually reappear).
@@ -1710,7 +1710,9 @@ export class LadderController {
     // figures hide under it (screen-space chart — the star figures would read
     // as chart strokes) and restore on any other floor / disengage. The Earth
     // city/landmark pills hide with them (dozens of DOM pills over a chart-
-    // scale Earth read as clutter over the altitude bands).
+    // scale Earth read as clutter over the altitude bands). Also hidden on F1
+    // (HULL CAM, owner 2026-09-16 — "the focus is on Mother"), mirroring the
+    // city-pill line directly below.
     const massBands = !!(f && f.fidelity && f.fidelity.debrisMode === 'massBands');
     if (this._sdaFloor) {
       if (massBands) {
@@ -1719,7 +1721,7 @@ export class LadderController {
         this._sdaFloor.deactivate();
       }
     }
-    this._setConstellationsHidden(massBands);
+    this._setConstellationsHidden(massBands || floor === 1);
     // City/landmark pills hide on F5 (above) AND on F1 (owner, 2026-09-02
     // evening — the map rule, 08-workbench D8: "house numbers up close, city
     // names far out, never both"). At the hull, Earth is a backdrop 2–7 m
@@ -1833,16 +1835,17 @@ export class LadderController {
   }
 
   /**
-   * Hide/restore the constellation figures for the F5 SDA chart — a mirror of
-   * _setReticlesHidden. Idempotent (guarded on the flag flip); the starfield dep
-   * is optional — absent it this is a pure flag write, byte-identical to the
-   * pre-SDA controller.
+   * Hide/restore the constellation figures for the F5 SDA chart and the F1
+   * hull floor — a mirror of _setReticlesHidden. Idempotent (guarded on the
+   * flag flip); the starfield dep is optional — absent it this is a pure flag
+   * write, byte-identical to the pre-SDA controller.
    *
    * Hide: capture the player's current 6-key visibility ONCE into
    * _constellationsPrior, then setConstellationsVisible(false).
    * Restore: put back the captured prior and null it — the player's 6-key
-   * toggle owns the resting state, so F5 never force-shows figures the player
-   * had off (and never strands them hidden after leaving F5 / disengaging).
+   * toggle owns the resting state, so F5/F1 never force-show figures the
+   * player had off (and never strands them hidden after leaving F5/F1 /
+   * disengaging).
    * @private
    */
   _setConstellationsHidden(hidden) {
