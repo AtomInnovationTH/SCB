@@ -2,10 +2,11 @@
  * LadderViewStore.js — the Zoom Ladder's PLAYER-owned view preferences
  * (08-workbench D5 "rooms you can rearrange"; Wave 5 Session G, 2026-09-04).
  *
- * ONE localStorage key, `sc_ladder_view_v2` (StorageKeys.LADDER_VIEW; v2 since
- * the Session H 7→5 renumber — floor keys mean new floors, v1 abandoned), holding
- * the two things the player arranges on the workbench and expects to find as
- * they left them after the SHOP and after a reload:
+ * ONE localStorage key, `sc_ladder_view_v3` (StorageKeys.LADDER_VIEW; v3 since
+ * 2026-09-23 — v2 blobs remembered cargo shown on F1, abandoned in place; v2
+ * was the Session H 7→5 renumber — floor keys mean new floors, v1 abandoned),
+ * holding the two things the player arranges on the workbench and expects to
+ * find as they left them after the SHOP and after a reload:
  *   - `rooms` — FloorMask's D5 per-floor pane memory, exactly its
  *     exportMemory() shape `{ floors: { "<floorId>": { "<paneId>": boolean } } }`,
  *     stamped with `roomsGen` (ROOMS_GENERATION — the DEFAULT_ROOMS generation

@@ -34,16 +34,18 @@
  * clears the attribute) is therefore remembered for THAT floor and reapplied
  * on return; global toggles apply within the mask. Persisted since Wave 5
  * Session G (2026-09-04): the state shape (exportMemory/importMemory: plain
- * JSON booleans keyed floor → pane) rides the player store `sc_ladder_view_v1`
+ * JSON booleans keyed floor → pane) rides the player store `sc_ladder_view_v3`
  * through LadderController + LadderViewStore.
  *
- * D7 (the always set): alerts (warnings strip, conjunction panel, comms),
- * the rail, and the score strip are NEVER masked on any floor, regardless of
- * tier tables or player memory — the engine never references their rungs or
- * elements at all (ALWAYS_ON below is the pinned list). The VitalsLine left
- * this set in Session O (plan D8, owner 2026-09-07): cryptic, every number
- * duplicated elsewhere — the module + its test stay dormant in the tree,
- * unwired.
+ * D7 (the always set): alerts (warnings strip, conjunction panel) and the
+ * rail are NEVER masked on any floor, regardless of tier tables or player
+ * memory — the engine never references their rungs or elements at all
+ * (ALWAYS_ON below is the pinned list). The VitalsLine left this set in
+ * Session O (plan D8, owner 2026-09-07): cryptic, every number duplicated
+ * elsewhere — the module + its test stay dormant in the tree, unwired. The
+ * score strip left on 2026-09-23 (plan 1789561832042 C2, owner: "every zoom
+ * except the hull") and comms left in Session N.5 — both are maskable room
+ * panes now.
  *
  * PURE SCENERY (Session N.5 D7, owner 2026-09-07): when the `-` walk cleared every rung and
  * bowed the rails out, the hub also sets `body[data-pure-scenery]` (index.html
@@ -109,12 +111,14 @@ export const REDUCED_CROSSFADE_MS = 200;
  *         DISCOVERIES chip on the MENU). D5 memory is captured BEFORE the
  *         restore, so a player's `+` state still returns on re-engage.
  *
- * Deliberately NOT here (the always set + world rungs): the 'score' and
- * 'comms' rungs (D7 — alerts/score never masked), the 'reticles' DENSITY
- * flag-rung (it bundles the warnings/conjunction chrome — hiding it would
- * violate D7; the mask's 'reticles' pane touches ONLY the targeting-bracket
- * canvas), and the 'skylabels'/'craft' world rungs (scene objects, owned by
- * their own floor systems — the map rule here governs PANES).
+ * Deliberately NOT here (the always set + world rungs): the 'alerts' and
+ * 'rail' members of the always set (D7 — never masked), the 'reticles'
+ * DENSITY flag-rung (it bundles the warnings/conjunction chrome — hiding it
+ * would violate D7; the mask's 'reticles' pane touches ONLY the
+ * targeting-bracket canvas), and the 'skylabels'/'craft' world rungs (scene
+ * objects, owned by their own floor systems — the map rule here governs
+ * PANES). The score strip and comms ARE here (maskable room panes since
+ * 2026-09-23 and Session N.5 respectively).
  *
  * 'hints' (2026-09-02 evening, owner): the bottom-screen HintTicker strip —
  * onboarding beats ("Launch net (N)"), scan/lasso verbs, the codex ack chip.
@@ -122,9 +126,10 @@ export const REDUCED_CROSSFADE_MS = 200;
  * restore witnesses the tease_lock beat sat over the hull. Same shape as the
  * reticles pane: an ATTRIBUTE pane on the strip element only (the density
  * 'score' rung bundles the strip with the score panel for the 0-key
- * convenience — that rung is never driven, and the score panel itself is never
- * touched, so D7 holds). The ticker keeps its items and timers while hidden;
- * whatever is still alive reappears on the next floor.
+ * convenience — that rung is never driven; the score PANEL has been the
+ * mask's own attribute pane since 2026-09-23, hidden on F1 through its
+ * element, never through the rung). The ticker keeps its items and timers
+ * while hidden; whatever is still alive reappears on the next floor.
  *
  * 'cargo' (2026-09-06, Session K): the CARGO pane (js/ui/hud/CargoPane.js) —
  * the manifest with SELL / SELL ALL / -> ELEVATOR over CargoSystem through
@@ -166,6 +171,14 @@ export const MASK_PANES = Object.freeze({
   arms:        Object.freeze({ rung: 'arms',        els: Object.freeze(['#hud-arms-panel']),          memory: true }),
   reticles:    Object.freeze({ rung: null,          els: Object.freeze(['#reticle-canvas']),          memory: false }),
   hints:       Object.freeze({ rung: null,          els: Object.freeze(['#hud-hint-ticker']),         memory: false }),
+  // The score strip (owner 2026-09-23, plan 1789561832042 C2): "it is the
+  // score" narrows to "every zoom EXCEPT the hull" — gone on the F1 room,
+  // shown on F2–F5. An ATTRIBUTE pane like 'hints', never a rung pane: the
+  // density rung named 'score' bundles the panel with the hint ticker (the
+  // 0-key convenience), and driving it here would also reveal the ticker,
+  // which has a pane of its own. Table-driven only (memory: false) — the
+  // owner's rule, not a per-player preference.
+  score:       Object.freeze({ rung: null,          els: Object.freeze(['#hud-score-panel']),         memory: false }),
   cargo:       Object.freeze({ rung: 'cargo',       els: Object.freeze(['#hud-cargo-pane']),          memory: true }),
   orbit:       Object.freeze({ rung: 'orbit',       els: Object.freeze(['#hud-orbit-pane']),          memory: true }),
   copilot:     Object.freeze({ rung: 'copilot',     els: Object.freeze(['#hud-fma-strip']),           memory: true }),
@@ -194,19 +207,22 @@ export const MASK_PANES = Object.freeze({
 export const ALWAYS_ON = Object.freeze([
   'alerts',      // #hud-warnings-panel, #hud-conjunction-panel — never referenced
   'rail',        // #ladder-rail — the ladder's own instrument
-  'score',       // score strip rung — "it is the score", every zoom
-  // 'comms' left for MASK_PANES in Session N.5 (owner 2026-09-07): gone on
-  // the F1 workbench by default, shown on floors 2-5.
+  // The score strip left for MASK_PANES (owner 2026-09-23, plan
+  // 1789561832042 C2): "every zoom except the hull" — gone on the F1 room,
+  // shown on F2–F5, table-driven only. Comms left earlier, in Session N.5
+  // (owner 2026-09-07): gone on the F1 workbench by default, shown on
+  // floors 2-5.
 ]);
 
 /**
  * DEFAULT_ROOMS — the §4 default-rooms table, floor → pane → tier.
  * Exhaustive over MASK_PANES for every FloorContract floor (ids 1–5 since the
  * Session H 7→5 renumber; same physical rooms, new keys) — since Session K
- * (2026-09-06) that set includes the 'cargo' pane, so every row carries a
- * `cargo` tier. An id without a row (out-of-table — nothing ships one) falls
- * back to all-'shown' (full cockpit). Edit per D5 as you play — player memory
- * wins.
+ * (2026-09-06) that set includes the 'cargo' pane, and since 2026-09-23 the
+ * 'score' strip, so every row carries both tiers. An id without a row
+ * (out-of-table — nothing ships one) falls back to all-'shown' (full
+ * cockpit). Edit per D5 as you play — player memory wins (the score is
+ * memory:false — the owner's rule, not a preference).
  *
  *   F1 ship close-up  (inspect/refit):  hull is the index; EVERY pane clears
  *                                        out — discoveries too (owner, 2026-09-02
@@ -262,9 +278,12 @@ export const DEFAULT_ROOMS = Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
     // Session N.5 (owner 2026-09-07):the workbench is the SHIP — cargo (the
-    // elevator/till) and comms leave the F1 defaults too. The first
-    // WORKBENCH_STOP shows the till itself ((main.js)and D5 keeps it.
+    // elevator/till) and comms leave the F1 defaults too. The score strip
+    // followed (owner 2026-09-23, plan 1789561832042 C2): "every zoom except
+    // the hull". The N.5 cargo force-show in main.js's WORKBENCH_STOP is gone
+    // with it — the room table is the one truth.
     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'gone', override: 'gone',
+    score: 'gone',
   }),
   // Session N.5 (owner 2026-09-07) + Session O (owner 2026-09-07,
   // "LEFT: mother, daughters"): the flying floor greets a first-timer with
@@ -278,21 +297,25 @@ export const DEFAULT_ROOMS = Object.freeze({
     targets: 'shown', debris: 'gone', navsphere: 'gone', reticles: 'shown',
     pin: 'gone', mother: 'shown', arms: 'shown', discoveries: 'gone', hints: 'shown',
     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone',
+    score: 'shown',
   }),
-3: Object.freeze({
+ 3: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'shown',
     pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone', hints: 'gone',
     cargo: 'gone', orbit: 'shown', copilot: 'shown', next: 'shown', comms: 'shown', override: 'gone',
+    score: 'shown',
   }),
-4: Object.freeze({
+  4: Object.freeze({
 targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
-     pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone', hints: 'gone',
-    cargo: 'gone', orbit: 'gone', copilot: 'faint', next: 'shown', comms: 'shown', override: 'gone',
+      pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone', hints: 'gone',
+     cargo: 'gone', orbit: 'gone', copilot: 'faint', next: 'shown', comms: 'shown', override: 'gone',
+    score: 'shown',
   }),
-5: Object.freeze({
+  5: Object.freeze({
 targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
-     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
-    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone',
+      pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
+     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone',
+    score: 'shown',
   }),
 });
 

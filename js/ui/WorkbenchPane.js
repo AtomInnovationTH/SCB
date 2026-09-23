@@ -31,13 +31,15 @@
  * ARCHITECTURE (plan D5): ONE shell, TWO hosted section engines. This module
  * owns the root `#ladder-workbench`, the tab `#ladder-workbench-tab`, the
  * slide, the idle fade, the edge-chrome tab phase, reduced motion, the RTL
- * variable (`--workbench-dir`), the invitation glow, ONE open state and ONE
- * `onOpenChange` edge. `LibraryPane` (the SPECS dossier: HEAD + TAIL) and
- * `RefitPane` (the REFIT block, F1 only) are hosted section engines: they
- * render into the three slots the shell mounts them in —
+ * variable (`--workbench-dir`), the anchor SIDE (C3, plan 1789561832042:
+ * LEFT on the workbench floor, RIGHT on F2–F5), the invitation glow, ONE open
+ * state and ONE `onOpenChange` edge. `LibraryPane` (the SPECS dossier: HEAD +
+ * TAIL) and `RefitPane` (the REFIT block, F1 only) are hosted section
+ * engines: they render into the three slots the shell mounts them in —
  *
- *   #ladder-workbench                    the transform shell (right:0, top 56, bottom 96,
- *    └ .workbench-body                   width clamp(380px, 28vw, 440px), z 35, pointer-events none)
+ *   #ladder-workbench                    the transform shell (side-anchored: left on F1,
+ *    └ .workbench-body                   right elsewhere; top 56, bottom 96, width
+ *                                       clamp(380px, 28vw, 440px), z 35, pointer-events none)
  *       ├ .workbench-head   ← library.mount({ head, tail, onRefresh })   identity (D1: Identity …)
  *       ├ .workbench-refit  ← refit.mount(slot, { onRefresh })            … Upgrade (display:none off F1) …
  *       └ .workbench-tail   ← (the library's second container)           … Learn
@@ -60,9 +62,17 @@
  * edge a BUY / chip tap / related click repaints the engine (plan §7: without
  * it a BUY would leave a stale gold count until the next shell edge).
  * `setFloor(floor)` pins the tab awake on F1 (the workbench affordance never
- * sleeps there) and hands it to the edge-chrome phase elsewhere; an OPEN pane's
- * tab is its handle and is awake on any floor. `display:block` while enabled on
- * every floor; `body[data-pure-scenery]` (index.html) hides it under level 0.
+ * sleeps there), hands it to the edge-chrome phase elsewhere, and writes the
+ * anchor SIDE — LEFT on F1 (C3, plan 1789561832042: the zoom rail sits
+ * mid-height on the right edge, so a left drawer stops it painting over the
+ * open pane) and RIGHT on F2–F5 (the left column carries Mother and Daughters
+ * on F2 — a left-anchored drawer would bury them). A side change on an OPEN
+ * pane re-fires the ONE open edge so the camera bias and the callout insets
+ * follow the anchor (still one edge — `_settle`/`close` own the open/close
+ * halves).
+ * An OPEN pane's tab is its handle and is awake on any floor. `display:block`
+ * while enabled on every floor; `body[data-pure-scenery]` (index.html) hides
+ * it under level 0.
  *
  * ORDERS THAT MATTER (plan §3 / §7):
  *   open(opts)        refit.open(opts) when the REFIT section is enabled (F1) →
@@ -96,9 +106,10 @@
  * Reduced motion: the root never moves; the BODY fades in place; the tab flips
  * between the screen edge (closed) and the inner edge (open) through
  * `--workbench-open` and stays visible + clickable while the pane is closed.
- * ONE CSS variable (`--workbench-dir`, default 1) mirrors the slide direction
- * AND the tab's side for RTL: an RTL boot sets `--workbench-dir:-1` (and
- * left-anchors the pane) and every transform follows.
+ * ONE CSS variable (`--workbench-dir`, 1 right-anchored / -1 left-anchored)
+ * mirrors the slide direction, the anchor and the tab's side: `setFloor(1)`
+ * flips it to -1 with the LEFT anchor (C3), and an RTL boot may set -1 the
+ * same way — every transform, the anchor and the tab follow it.
  *
  * NO eventBus/Events import and NO live singletons — the shell touches the
  * world through the two engines and the injected `onOpenChange` only, so the
@@ -128,6 +139,9 @@ export const PANE_Z_INDEX = 35;
 export const ROOT_BOTTOM_PX = 96;
 /** Tab pulse length (ms) — the ONE pulse a rising count earns (§2 Grammar). */
 export const TAB_PULSE_MS = 900;
+/** The drawer chrome's edge border (body + tab); `_applySide` re-writes the
+ *  mirrored longhand sides when the anchor flips. */
+const EDGE_BORDER = '1px solid rgba(0,204,255,0.4)';
 
 /** Monotonic ms clock (DOM-guarded module — Date.now fallback headless). */
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -178,7 +192,10 @@ export class WorkbenchPane {
    *   focusPart, refresh, affordableCount
    * @param {function} [deps.onOpenChange] - (isOpen) => void: the ONE open edge
    *   (main.js fans it into _syncWorkbenchPanes — the camera inset, the callout
-   *   insets, the calm cap, WORKBENCH_RESUME on close)
+   *   insets, the calm cap, WORKBENCH_RESUME on close). Fires on open and on
+   *   close, and — since C3 — once more when an OPEN pane changes anchor side
+   *   (setFloor F1↔F2+), so the side-signed feeds re-run. Still the one edge:
+   *   the argument is true on open and on the side change, false on close.
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc
@@ -198,6 +215,10 @@ export class WorkbenchPane {
     this._enabled = false;
     /** @private the floor the controller last applied (null until told); the REFIT section is enabled iff 1 */
     this._floor = null;
+    /** @private the anchor side (C3, plan 1789561832042): true = LEFT (the
+     * workbench floor), false = RIGHT (F2–F5 — the default; also the
+     * pre-floor state). setFloor writes it; `_applySide` mirrors the DOM. */
+    this._left = false;
     this._open = false;
     this._built = false;
     this._disposed = false;
@@ -262,12 +283,23 @@ export class WorkbenchPane {
   isOpen() { return this._open; }
 
   /**
+   * The drawer's anchor side (C3, plan 1789561832042): true = LEFT (the
+   * workbench floor — the zoom rail owns the right edge), false = RIGHT
+   * (F2–F5 — the left column carries Mother and Daughters on F2). The hub's
+   * `_syncWorkbenchPanes` reads it on the open edge to sign the camera bias
+   * and place the callout insets.
+   * @returns {boolean}
+   */
+  isLeft() { return this._left; }
+
+  /**
    * The pane's laid-out width in CSS px (its box, border-box: the
    * clamp(380px, 28vw, 440px) of 01-numbers) — 0 headless or before the root
    * is built, never NaN. The number main.js hands to
-   * `CameraSystem.setLadderPaneInset` (negated — RIGHT pane) and
-   * `motherCallouts.setPaneInsets(0, w)` on the onOpenChange edge. A layout
-   * read: call it on edges only, never per frame.
+   * `CameraSystem.setLadderPaneInset` (signed by `isLeft()`: +w left, -w
+   * right) and `motherCallouts.setPaneInsets` (the side's slot gets w, the
+   * other 0) on the onOpenChange edge. A layout read: call it on edges
+   * only, never per frame.
    * @returns {number}
    */
   widthPx() {
@@ -305,7 +337,13 @@ export class WorkbenchPane {
    * The REFIT section is enabled iff floor === 1 (hides its slot + clears
    * ghosting off F1 — the engine's setEnabled); the tab is PINNED awake iff
    * floor === 1 (else the edge-chrome phase rules); the count repaints (the
-   * F1 gold count vs the unread count).
+   * F1 gold count vs the unread count); and the anchor SIDE follows the floor
+   * (C3: left on the workbench, right on F2–F5). A side change on an OPEN
+   * pane re-fires the ONE onOpenChange edge — the hub's sync is edge-only
+   * (open/close), and without the re-fire the camera bias and callout insets
+   * would keep the old side's sign while the pane moves (the ride-2→1 defect).
+   * The flip itself is instant: `left`/`right` do not tween, and the floor
+   * apply runs at ride start, mid-flight, where the camera already masks it.
    * @param {number} floor
    */
   setFloor(floor) {
@@ -313,6 +351,13 @@ export class WorkbenchPane {
     this._floor = Number.isFinite(f) ? f : null;
     if (this._enabled) this._call(this._refit, 'setEnabled', this._floor === 1);
     this._setTabPinned(this._floor === 1);
+    const left = this._floor === 1;
+    if (left !== this._left) {
+      this._left = left;
+      this._applySide();
+      // Closed → nothing: the insets are 0 and the next open fires the edge.
+      if (this._open && this._onOpenChange) { try { this._onOpenChange(true); } catch (_e) { /* dep */ } }
+    }
     this._paintTab();
   }
 
@@ -548,22 +593,24 @@ export class WorkbenchPane {
     this._built = true;
     const reduced = this._reducedMotion();
 
-    // The pane ROOT — RIGHT, 380–440 px (01-numbers) — is the positioning +
+    // The pane ROOT — 380–440 px wide, anchored to the SIDE the floor picks
+    // (C3: LEFT on the workbench floor, RIGHT on F2–F5) — is the positioning +
     // TRANSFORM shell (Session D): it carries the slide, the width clamp and
     // the z layer, paints nothing itself and takes no pointer events; the
     // BODY (the panel: border, background, padding, the scrolling content)
     // and the edge TAB are its children, so the tab RIDES the pane's
-    // transform. --workbench-dir is the ONE RTL mirror variable (an RTL boot
-    // flips it to -1 and left-anchors the pane) — every transform AND the
-    // tab's side follow it. --workbench-open (0|1) is the reduced-motion tab
-    // position (the root never moves there; see _applyOpenState).
+    // transform. --workbench-dir is the ONE mirror variable (1 right-anchored,
+    // -1 left-anchored — setFloor(1) flips it; an RTL boot may too): every
+    // transform, the anchor and the tab's side follow it. --workbench-open
+    // (0|1) is the reduced-motion tab position (the root never moves there;
+    // see _applyOpenState).
     const root = doc.createElement('div');
     root.id = 'ladder-workbench';
     root.className = reduced ? 'workbench-reduced' : '';
     root.style.cssText = [
-      'position:absolute', 'right:0', 'top:56px', `bottom:${ROOT_BOTTOM_PX}px`, `z-index:${PANE_Z_INDEX}`,
+      'position:absolute', this._left ? 'left:0' : 'right:0', 'top:56px', `bottom:${ROOT_BOTTOM_PX}px`, `z-index:${PANE_Z_INDEX}`,
       'width:clamp(380px, 28vw, 440px)', 'box-sizing:border-box',
-      'pointer-events:none', '--workbench-dir:1', '--workbench-open:1',
+      'pointer-events:none', `--workbench-dir:${this._left ? -1 : 1}`, '--workbench-open:1',
       // Slide (transform) in the normal path; the reduced-motion class swaps
       // the slide for a fade of the BODY at the same duration (08-workbench §2
       // Motion) — the root then never moves, so the tab stays visible.
@@ -575,13 +622,16 @@ export class WorkbenchPane {
     // The body — the panel the player reads. Anchored to the root's top; it
     // SHRINK-WRAPS its content (plan D4 / Q3: `height:auto; max-height:100%`
     // — no empty column below the last block) and scrolls past the fold.
-    // Border / background / padding / font = the shipped .library-body.
+    // Border / background / padding / font = the shipped .library-body. The
+    // border's dead side mirrors the anchor (C3): the side against the
+    // screen edge carries no border, the corners round away from it.
     const body = doc.createElement('div');
     body.className = 'workbench-body';
     body.style.cssText = [
       'position:absolute', 'top:0', 'right:0', 'left:0', 'height:auto', 'max-height:100%', 'box-sizing:border-box',
       'padding:10px 12px', 'overflow-y:auto',
-      'border:1px solid rgba(0,204,255,0.4)', 'border-right:none', 'border-radius:6px 0 0 6px',
+      `border:${EDGE_BORDER}`, this._left ? 'border-left:none' : 'border-right:none',
+      this._left ? 'border-radius:0 6px 6px 0' : 'border-radius:6px 0 0 6px',
       'background:rgba(0,16,32,0.82)', 'color:' + VisualLaw.COLORS.INFO,
       'font-family: var(--font-mono)', 'font-size:0.68rem', 'letter-spacing:0.05em',
       'pointer-events:auto',
@@ -606,16 +656,18 @@ export class WorkbenchPane {
     // The edge tab (08-workbench §2 Grammar). A CHILD of the root at the
     // pane's INNER edge (Session D, owner decision 3): closed, the root's
     // slide parks it exactly at the screen edge; open, it sits on the pane's
-    // inner edge — never over the content. The side follows the RTL
+    // inner edge — never over the content. The side follows the ONE mirror
     // variable: left = 50% − dir·50% (dir 1 → the root's left edge) and the
     // −100 % self-translate puts the tab outside the box; under reduced motion
     // --workbench-open flips it between the screen edge (closed) and the inner
     // edge (open) because the root never moves. Session P (plan D6/D7): a
-    // HORIZONTAL plate in the FOOTER BAND's right slot — `bottom` = the band's
+    // HORIZONTAL plate in the FOOTER BAND — the right slot for a right-anchored
+    // pane, the LEFT slot on the workbench floor (C3) — `bottom` = the band's
     // bottom minus the root's 96, height FOOTER_BAND_PX; its opacity /
     // visibility are the edge-chrome truth table's (the hub's setTabPhase +
     // setFloor's pin), the ramp `opacity EDGE_FADE_MS` (none under reduced
-    // motion — instant, like every other reduced-motion step).
+    // motion — instant, like every other reduced-motion step). The border's
+    // dead side mirrors the anchor like the body's.
     const tab = doc.createElement('div');
     tab.id = 'ladder-workbench-tab';
     tab.style.cssText = [
@@ -624,8 +676,8 @@ export class WorkbenchPane {
       'transform:translateX(calc((-1 - var(--workbench-dir, 1)) * 50%))',
       `height:${RAIL_GEOMETRY.FOOTER_BAND_PX}px`, `line-height:${RAIL_GEOMETRY.FOOTER_BAND_PX - 2}px`,
       'box-sizing:border-box', 'padding:0 10px 0 12px', 'white-space:nowrap',
-      'border:1px solid rgba(0,204,255,0.4)', 'border-right:none',
-      'border-radius:3px 0 0 3px', 'background:rgba(0,16,32,0.85)',
+      `border:${EDGE_BORDER}`, this._left ? 'border-left:none' : 'border-right:none',
+      this._left ? 'border-radius:0 3px 3px 0' : 'border-radius:3px 0 0 3px', 'background:rgba(0,16,32,0.85)',
       'color:' + VisualLaw.COLORS.INFO, 'cursor:pointer',
       'font-family: var(--font-mono)', 'font-size:0.62rem', 'letter-spacing:0.08em',
       'user-select:none', 'display:none', 'pointer-events:auto',
@@ -656,6 +708,7 @@ export class WorkbenchPane {
     this._tabPhaseWritten = null;   // the phase truth table writes the fresh tab
     this._applyTabPhase();
     this._applyOpenState();
+    this._applySide();              // a side picked before the build lands now (C3)
     this._applyInvitation();        // a pre-build setInvitation lands once built (Session H)
 
     // Delegated wake (one listener set — G1, the PaneHelp pattern): on the
@@ -709,6 +762,37 @@ export class WorkbenchPane {
     }
   }
 
+  /**
+   * @private Mirror the anchor side onto the DOM (C3, plan 1789561832042):
+   * the root's `left`/`right` anchor, the ONE mirror variable
+   * `--workbench-dir` (1 right / -1 left — the slide transform, the anchor
+   * and the tab's side all read it), and the body's and tab's dead border
+   * side + corner rounding (the side against the screen edge carries no
+   * border; the corners round away from it). Called from `_build` (a side
+   * picked before the build) and from `setFloor` on a real side change —
+   * the flip is instant by design (the floor apply runs at ride start,
+   * mid-flight; `left`/`right` do not tween anyway).
+   */
+  _applySide() {
+    const root = this._root;
+    if (!root) return;
+    root.style.left = this._left ? '0' : '';
+    root.style.right = this._left ? '' : '0';
+    _setVar(root, '--workbench-dir', this._left ? '-1' : '1');
+    const body = this._body;
+    if (body) {
+      body.style.borderRight = this._left ? EDGE_BORDER : 'none';
+      body.style.borderLeft = this._left ? 'none' : EDGE_BORDER;
+      body.style.borderRadius = this._left ? '0 6px 6px 0' : '6px 0 0 6px';
+    }
+    const tab = this._tab;
+    if (tab) {
+      tab.style.borderRight = this._left ? EDGE_BORDER : 'none';
+      tab.style.borderLeft = this._left ? 'none' : EDGE_BORDER;
+      tab.style.borderRadius = this._left ? '0 3px 3px 0' : '3px 0 0 3px';
+    }
+  }
+
   /** @private Slide (root) / fade (body) to the current open state; the tab
    *  rides the root in the slide path and flips edges in the fade path. */
   _applyOpenState() {
@@ -730,8 +814,9 @@ export class WorkbenchPane {
       _setVar(root, '--workbench-open', this._open ? '1' : '0');
     } else {
       root.className = '';
-      // One CSS variable mirrors the slide for RTL (--workbench-dir: -1 flips
-      // it); the RIGHT pane slides out toward +X by exactly its width, so the
+      // One CSS variable mirrors the slide for the anchor side
+      // (--workbench-dir: -1 = the left anchor flips it); the pane slides out
+      // toward its anchored screen edge by exactly its width, so the
       // tab riding at its inner edge parks at the screen edge when closed.
       root.style.transform = this._open
         ? 'translateX(0)'

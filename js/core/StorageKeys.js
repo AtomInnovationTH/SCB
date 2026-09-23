@@ -33,9 +33,13 @@ export const StorageKeys = {
    * 7→5 renumber changed what every floor KEY means (old 3–7 → new 1–5), so
    * the key bumps and v1 blobs are abandoned in place rather than migrated —
    * rooms are cheap to re-arrange, wrong rooms silently applied are not
-   * (plan step 7).
+   * (plan step 7). v3 (2026-09-23, plan 1789561832042 C2): existing players
+   * carry rooms remembering cargo shown on F1 (the deleted WORKBENCH_STOP
+   * force-show captured through D5), so the F1 empty-room fix is invisible
+   * to every current player without the same bump — v2 blobs abandoned in
+   * place, same rule.
    */
-  LADDER_VIEW: 'sc_ladder_view_v2',
+  LADDER_VIEW: 'sc_ladder_view_v3',
   /**
    * The first-run TOUCH MAP / KEY MAP checklist (TouchMapStore — Session N
    * onboarding, Ipad.md §5.5 / §5.8 "advance only on the witnessed real

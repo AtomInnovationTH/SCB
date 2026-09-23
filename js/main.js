@@ -1998,19 +1998,24 @@ async function init() {
   if (Constants.LADDER && Constants.LADDER.ENABLED) {
     // ONE workbench-pane edge, four consumers (Session B — never a second
     // signal path). The shell's ONE onOpenChange calls this (Session U: one
-    // pane, one open state — the two engines have no open edge of their own);
-    // it writes:
+    // pane, one open state — the two engines have no open edge of their own;
+    // C3, plan 1789561832042: it also re-fires when an OPEN pane changes
+    // anchor side, so the side-signed feeds below flip with the drawer); it
+    // writes:
     //   1. `_workbenchPaneOpen` — the held-world signal (Session I, D-F) the
     //      loop applies through TimeAuthority.calmCap (drawer open → clock 0),
     //      the scheduler's 'partial' cover and the turntable gate;
-    //   2. the ONE `CameraSystem.setLadderPaneInset` value (Wave 5 (3)): the
-    //      pane is on the RIGHT, so open → −width (as SPECS alone was netted
-    //      per 08-workbench §2 before Session U), closed → 0. The camera does
-    //      the rest (270 ms ease, reduced-motion snap, released on
-    //      ride/close/disengage);
+    //   2. the ONE `CameraSystem.setLadderPaneInset` value (Wave 5 (3)),
+    //      SIGNED BY SIDE (C3): the drawer anchors LEFT on the workbench
+    //      floor → +width (the subject lands right of centre), RIGHT on
+    //      F2–F5 → −width (as SPECS alone was netted per 08-workbench §2
+    //      before Session U), closed → 0. The camera does the rest (270 ms
+    //      ease, reduced-motion snap, released on ride/close/disengage);
     //   3. the MotherCallouts pane-edge inset pair (Session B commit 3) so
-    //      the callout columns stay out from under the pane — left edge 0
-    //      (the left drawer retired), right edge = the pane's width.
+    //      the callout columns stay out from under the pane — the drawer's
+    //      own side gets the pane's width, the other edge 0 (C3: left on
+    //      F1, right on F2–F5 — the left column carries Mother and
+    //      Daughters there).
     // widthPx() is a layout read — edges only, never per frame (G1).
     // Session K: the END of a workbench break is this same edge — the drawer
     // closed while a break is open → ONE WORKBENCH_RESUME (GameFlowManager
@@ -2032,9 +2037,12 @@ async function init() {
       // ride needed to arm/disarm).
       _noteSchedInput();
       if (cameraSystem.setLadderPaneOpen) cameraSystem.setLadderPaneOpen(open);
+      // C3: the drawer's anchor side — left on the workbench floor, right on
+      // F2–F5 (WorkbenchPane.setFloor writes it; isLeft() is the read).
+      const left = !!(workbenchPane && workbenchPane.isLeft && workbenchPane.isLeft());
       const w = open ? workbenchPane.widthPx() : 0;
-      cameraSystem.setLadderPaneInset(-w);                                 // RIGHT pane → negative, as SPECS today
-      motherCallouts.setPaneInsets(0, w);
+      cameraSystem.setLadderPaneInset(left ? w : -w);                      // LEFT pane → +width, RIGHT → negative
+      motherCallouts.setPaneInsets(left ? w : 0, left ? 0 : w);
       // Consumer 4 (Wave 5 Session G — D5 pane memory): the controller records
       // the pane open-state into the player store as the player's intent —
       // only while engaged and never for its own teardown close / the engage
@@ -2479,14 +2487,11 @@ async function init() {
     eventBus.on(Events.WORKBENCH_STOP, (d) => {
       if (ladderController && ladderController.rideToWorkbench) ladderController.rideToWorkbench();
       if (workbenchPane) workbenchPane.open({ firstVisit: !!(d && d.firstDepotVisit) });
-      // Session N.5 (owner 2026-09-07): F1 hides CARGO by default ("first make
-      // me care") — the break is where selling is taught, so the ceremony
-      // shows the till itself; the flip captures through D5 and the player
-      // keeps it on F1 thereafter ("after players play, they MIGHT care").
-      if (cargoPane && cargoPane.rung) {
-        const r = cargoPane.rung();
-        if (r && typeof r.setVisible === 'function' && typeof r.isVisible === 'function' && !r.isVisible()) r.setVisible(true);
-      }
+      // The Session N.5 cargo force-show ("the ceremony shows the till itself")
+      // was removed 2026-09-23 (plan 1789561832042, C2): it overrode
+      // DEFAULT_ROOMS[1]'s cargo:'gone' and D5 persisted the flip, so the pane
+      // never left. Selling stays reachable through the REFIT block and the
+      // `+` walk.
       _workbenchBreak = true;
       if (!_workbenchPaneOpen) _endWorkbenchBreak('refused');
     });
