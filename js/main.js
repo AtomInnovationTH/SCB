@@ -2225,9 +2225,9 @@ async function init() {
       // flower. The O key takes the same path through isOverrideEngaged
       // (InputManager deps). FEEP thrust stays inhibited the whole time the
       // lock is armed or θ < 90° (the 7b guard) — the HUD thermal line says so.
-      // Owner decision 2026-09-09 (B): the fold centres the ROSA arrays itself
-      // (PlayerSatellite._flowerOverrideFold — pivots held at tilt 0, floor at
-      // 90° until they are) and says so on COMMS; nothing here to sequence.
+      // DECISIONS §10: the wings DODGE clear themselves (the tilt law clamps
+      // through PlayerSatellite._rosaDodgeLimitRad while a fold is in flight)
+      // — nothing here to sequence. Only the struts still gate the fold.
       flowerSweep: {
         get: () => {
           if (!player || typeof player.getFlowerPairCount !== 'function') return null;
