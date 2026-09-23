@@ -8,7 +8,10 @@
  *   • compact entry list (dense rows — title · one-line hook · NEW/LOCKED pip)
  *   • persistent reading pane (QUICK LOOK → BRIEFING → TECH LEVEL → REAL WORLD →
  *     FORMULA → RELATED → prev/next → WARNING — the manual's authored red box,
- *     entries carrying `i18n.warning`, unlocked only; plan 1788957399035 §1.23)
+ *     entries carrying `i18n.warning`, unlocked only; plan 1788957399035 §1.23;
+ *     since Lane E an unlocked HARDWARE entry also floats its rendered part
+ *     portrait right of the prose with a HARDWARE facts block — one render per
+ *     entry through the injected `portraitFor`, text-only on any miss)
  *
  * Reading follows selection: ↑/↓ move the list AND re-render the pane, so the
  * pane is never empty. Below ~1000px the interior collapses to a 2-pane swap
@@ -129,9 +132,24 @@ export const CODEX_VIEWER_STYLE_ID = 'codex-viewer-style';
 export class CodexViewerUI {
   /**
    * @param {import('../systems/CodexSystem.js').CodexSystem} codexSystem
+   * @param {{ portraitFor?: (entry:object) => ({canvas:*, massKg?:number, specs?:string[]}|null) }} [deps]
+   *   Lane E (F1 workbench plan, 2026-09-23): `portraitFor` is the full-screen
+   *   reader's ONE optional collaborator — a LAZY callback (never a captured
+   *   reference) that turns a codex entry into its rendered part portrait.
+   *   Injected so this module keeps importing NO MotherCallouts / main.js and
+   *   holds no live singleton (headless-testable, as shipped). Absent (or a
+   *   `?ladder=0` boot, which passes nothing) → the reader stays text-only,
+   *   byte-identical to before this lane.
    */
-  constructor(codexSystem) {
+  constructor(codexSystem, deps = {}) {
     this._codex = codexSystem;
+    /** @type {?((entry:object) => ({canvas:*, massKg?:number, specs?:string[]}|null))} */
+    this._portraitFor = (deps && typeof deps.portraitFor === 'function') ? deps.portraitFor : null;
+    /** @type {?{id:string, result:({dataUrl:string, massKg?:number, specs?:string[]}|null)}}
+     * One cached render per entry id (Lane E step 5: "one render per entry,
+     * never per frame") — a resize or any other re-render of the SAME entry
+     * reuses the cached data URL instead of re-invoking `portraitFor`. */
+    this._portraitCache = null;
     this._visible = false;
     this._selectedCategory = null; // set to the first category on first show()
     this._selectedEntry = null;
@@ -1196,6 +1214,46 @@ export class CodexViewerUI {
           border-radius:2px;">${decorateGlossary(entry.shortText, { once: true })}</div>
       </div>`;
 
+    // Lane E — the entry's rendered part portrait (the "two-column" reading
+    // page: prose flows beside the picture). ONE render per entry through the
+    // injected `portraitFor` (see _getPortrait); a miss (no dep, a locked
+    // entry, no matching hull part, a null render, a throw) renders nothing
+    // and the prose takes the full width — text-only, exactly as before this
+    // lane. In narrow mode the picture is not floated (one column, the image
+    // stacks above the prose); wide mode floats it right of the QUICK LOOK /
+    // HARDWARE / BRIEFING lead.
+    const portrait = this._getPortrait(entry);
+    const portraitHtml = (portrait && portrait.dataUrl)
+      ? `<img src="${portrait.dataUrl}" alt=""
+           style="display:block;width:${this._narrow ? '100%' : '260px'};height:auto;
+             ${this._narrow ? 'margin:0 0 18px;' : 'float:right;flex-shrink:0;margin:0 0 14px 22px;'}
+             border:1px solid ${accentBg(0.35)};border-radius:4px;">`
+      : '';
+
+    // Lane E — HARDWARE: the matched part's mass + spec lines (the hard
+    // physics, from the callout part's EXISTING fields only, never invented).
+    // Rows whose field is absent are omitted; no facts → no section. The
+    // portrait miss does not hide a section the entry still has facts for —
+    // but the facts only exist on a matched part, so in practice they travel
+    // together. Unlocked depth only (locked entries never reach here —
+    // _getPortrait returns null while locked, and this block is built from
+    // its result).
+    let hardwareHtml = '';
+    if (portrait) {
+      const rows = [];
+      if (typeof portrait.massKg === 'number') rows.push(`Mass: ${portrait.massKg} kg`);
+      for (const s of (portrait.specs || [])) rows.push(s);
+      if (rows.length) {
+        hardwareHtml = `
+          <div style="margin-bottom:22px;">
+            ${sectionHeader('HARDWARE', accent)}
+            <div style="padding:12px 16px;border-radius:4px;
+              background:rgba(0,0,0,0.35);border:1px solid ${accentBg(0.25)};
+              font-family:var(--font-mono);font-size:13px;color:#cde;line-height:1.7;">${rows.join('<br>')}</div>
+          </div>`;
+      }
+    }
+
     // TECH LEVEL — only when the tech is not yet flight-proven (trl<9).
     const dTrl = entry.trl;
     let trlHtml = '';
@@ -1324,7 +1382,9 @@ export class CodexViewerUI {
         ${backHtml}
         ${entry.unlocked ? this._completionBannerHtml(entry, accent) : ''}
         ${titleHtml}
+        ${portraitHtml}
         ${quickLookHtml}
+        ${hardwareHtml}
         ${briefingHtml}
         ${trlHtml}
         ${realWorldHtml}
@@ -1386,6 +1446,46 @@ export class CodexViewerUI {
     if (!lv || typeof lv !== 'string') return '';
     return `<div style="margin-top:10px;font-size:10px;letter-spacing:0.08em;
       color:#566;">VERIFIED ${lv}</div>`;
+  }
+
+  /**
+   * @private Lane E — the entry's rendered part portrait + hard-physics facts,
+   * ONE render per entry id (never per frame; a resize re-render of the same
+   * entry reuses the cached copy). Three null paths, all silent, all text-only
+   * (the left column then takes the full width):
+   *   1. no `portraitFor` dep (a `?ladder=0` boot passes nothing), a locked
+   *      entry (locked depth is QUICK LOOK + the unlock hint, as shipped), or
+   *      a concept entry the adapter cannot match to a hull part;
+   *   2. `portraitFor` returns null — e.g. `renderPartPortrait` missed because
+   *      there is no near pass, no near-field roots (the reader opened from
+   *      the menu, where no ship exists), or the near field is off on the
+   *      floor;
+   *   3. the callback throws (wrapped here AND at the call site — the reader
+   *      must never show a broken frame).
+   * The cached `result` carries the portrait as a JPEG data URL (rendered
+   * once from the adapter's canvas copy) beside the matched part's `massKg`
+   * and `specs`, shown only when present — from EXISTING fields only, never
+   * invented (the LibraryPane rule).
+   * @param {object} entry
+   * @returns {{dataUrl:string, massKg?:number, specs?:string[]}|null}
+   */
+  _getPortrait(entry) {
+    if (!this._portraitFor || !entry || !entry.unlocked) return null;
+    if (this._portraitCache && this._portraitCache.id === entry.id) return this._portraitCache.result;
+    let result = null;
+    try {
+      const r = this._portraitFor(entry);
+      if (r && r.canvas && typeof r.canvas.toDataURL === 'function'
+        && Number.isFinite(r.canvas.width) && r.canvas.width > 0
+        && Number.isFinite(r.canvas.height) && r.canvas.height > 0) {
+        const out = { dataUrl: r.canvas.toDataURL('image/jpeg', 0.85) };
+        if (typeof r.massKg === 'number') out.massKg = r.massKg;
+        if (Array.isArray(r.specs)) out.specs = r.specs.filter(s => typeof s === 'string' && s);
+        result = out;
+      }
+    } catch (_) { result = null; /* text-only, silent */ }
+    this._portraitCache = { id: entry.id, result };
+    return result;
   }
 
   /** @private LOGGED anchor stamp: when/where this entry was first unlocked,

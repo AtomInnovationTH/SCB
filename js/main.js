@@ -74,7 +74,7 @@ import { catalogLoader } from './systems/CatalogLoader.js';
 
 // UI
 import { HUD } from './ui/HUD.js';
-import { MotherCallouts } from './ui/MotherCallouts.js';
+import { MotherCallouts, MOTHER_CALLOUT_SYSTEMS } from './ui/MotherCallouts.js';
 import { MenuScreen } from './ui/MenuScreen.js';
 import { UpdateWatch } from './core/UpdateWatch.js';
 import { BriefingScreen } from './ui/BriefingScreen.js';
@@ -1400,7 +1400,43 @@ async function init() {
   _bootMark('Subsystems constructed (resource/sensor/cargo/forge/conjunction/autopilot/skills/lasso/rewards/codex/spaceWeather/missionEvents/environment)');
 
   // --- F17: Codex Viewer UI (browse unlocked entries) ---
-  codexViewerUI = new CodexViewerUI(codexSystem);
+  // Lane E (F1 workbench plan, 2026-09-23): the full-screen reader mirrors the
+  // SPECS pane's imagery — an unlocked HARDWARE entry floats its rendered part
+  // portrait beside the prose with a HARDWARE facts block. The adapter matches
+  // the entry's hardwareNames to its MOTHER_CALLOUT_SYSTEMS part (one scan,
+  // then that part's id), reuses the ONE _portraitFor renderer, and hands the
+  // viewer a PRIVATE canvas copy (the reused _portraitCanvas is redrawn by the
+  // next framed photo — copying it at once, whole, keeps this render stable).
+  // The copy is skipped (null) when the render or the 2D context misses —
+  // the reader is then text-only, never a broken frame. Ladder-gated like the
+  // SPECS pane's own wiring: a ?ladder=0 boot passes NO deps at all, and the
+  // reader's construction + behaviour stay byte-identical to before.
+  codexViewerUI = new CodexViewerUI(codexSystem, (Constants.LADDER && Constants.LADDER.ENABLED) ? {
+    portraitFor: (entry) => {
+      if (!entry || !Array.isArray(entry.hardwareNames) || !entry.hardwareNames.length) return null;
+      const names = new Set(entry.hardwareNames);
+      let part = null;
+      for (const sys of MOTHER_CALLOUT_SYSTEMS) {
+        for (const p of (sys && sys.parts) || []) {
+          if (p && p.name && names.has(p.name)) { part = p; break; }
+        }
+        if (part) break;
+      }
+      if (!part) return null;
+      let framed = null;
+      try { framed = _portraitFor(part.id); } catch (_e) { framed = null; }
+      if (!framed || !framed.canvas) return null;
+      try {
+        const copy = document.createElement('canvas');
+        copy.width = framed.canvas.width;
+        copy.height = framed.canvas.height;
+        const ctx = copy.getContext('2d');
+        if (!ctx) return null;
+        ctx.drawImage(framed.canvas, 0, 0);
+        return { canvas: copy, massKg: part.massKg, specs: part.specs };
+      } catch (_e) { return null; }
+    },
+  } : undefined);
 
   // --- Inline glossary first-use seen-state (§11.8) — persists which terms the
   // player has already seen so the first-use cue stops nagging veterans. ---
