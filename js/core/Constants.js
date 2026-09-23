@@ -50,7 +50,11 @@ export const Constants = {
   // rewritten as the REFIT block inside SPECS at the ship close-up (Space, BUY
   // one click, hover-ghost, chips); no left/right-pane language; no entries
   // added or removed (232). Plan 1788954873769 A1.5.
-  DATA_VERSION: '1014',
+  // '1014'→'1015': F1 workbench Lane D — the capture_collar hardware entry
+  // (the debris-capture nose collar briefing; DOCKING COLLAR retargeted off
+  // docking_berthing, which keeps DAUGHTER BERTHS; CARGO deep-links it too);
+  // 232 → 233 entries. Plan 1789561832042, 2026-09-23.
+  DATA_VERSION: '1015',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===

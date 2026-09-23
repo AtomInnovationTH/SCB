@@ -28,8 +28,9 @@
  *                  berth rim when D9 split BERTHS into its own callout — two
  *                  cards on one rim would say the same thing twice;
  *   - SENSORS    → the fixed sensor deck annulus behind the fore cap
- *                  (SensorDeck; the EO/IR/LIDAR turret + star trackers mount
- *                  there — the D9 home for every shop sensor);
+ *                  (SensorDeck; the daylight/heat/laser-ranging turret +
+ *                  star trackers mount there — the D9 home for every shop
+ *                  sensor);
  *   - THERMAL    → the bare-MLI shoulder band (the aft flower radiators are
  *                  PURCHASE-GATED hardware — anchoring THERMAL there would
  *                  point at empty rim pre-purchase, the exact trap
@@ -58,9 +59,12 @@
  * MotherCallouts part map wherever a part exists for the anchor (feep → 
  * 'feep_thruster', rosa_wings → 'rosa_solar_array', ttc → 'frequency_bands',
  * mli → 'mli_insulation', berths → 'docking_berthing', lidar →
- * 'lidar_ranging'); CARGO has no MotherCallouts hold part, so it links the
- * PLAYBOOK 'salvage_economy' entry (sell/contribute — what the cargo card is
- * FOR). Every id resolves in data/codex.json (pinned by test).
+ * 'lidar_ranging'); CARGO anchors on the nose collar (BerthCollarRing) and
+ * its spec lines describe it, so it deep-links the hardware briefing
+ * 'capture_collar' (F1 workbench plan, Lane D, 2026-09-23) — all seven
+ * subsystems deep-link hardware now. The PLAYBOOK 'salvage_economy' entry
+ * stays reachable from the PLAYBOOK itself and from capture_collar's
+ * related chips. Every id resolves in data/codex.json (pinned by test).
  *
  * @module data/blueprintSubsystems
  */
@@ -83,7 +87,7 @@ export const BLUEPRINT_SUBSYSTEMS = [
     priority: 8,
     readout: 'engineering',
     codexId: 'feep_thruster',         // MotherCallouts `feep`
-    spec: ['4\u00d7 FEEP ion clusters \u00b7 Isp ~4000 s', 'GN2 cold-gas steering ring'],
+    spec: ['4\u00d7 FEEP ion clusters \u00b7 specific impulse ~4000 s', 'cold-gas steering ring (nitrogen)'],
   },
   {
     id: 'POWER',
@@ -93,7 +97,7 @@ export const BLUEPRINT_SUBSYSTEMS = [
     priority: 9,
     readout: 'power',
     codexId: 'rosa_solar_array',      // MotherCallouts `rosa_wings`
-    spec: ['2\u00d7 1\u00d72 m roll-out arrays', '~2.2 kW peak (BOL)'],
+    spec: ['2\u00d7 1\u00d72 m roll-out arrays', '~2.2 kW peak (beginning of life)'],
   },
   {
     id: 'BERTHS',
@@ -126,7 +130,9 @@ export const BLUEPRINT_SUBSYSTEMS = [
     priority: 5,
     readout: 'cargoBay',              // no provider yet → static rows (the
                                       // winch readout moved home to BERTHS)
-    codexId: 'salvage_economy',       // PLAYBOOK: sell / contribute — the card's job
+    codexId: 'capture_collar',      // the nose collar's own briefing (Lane D,
+                                    // F1 workbench plan — salvage_economy is
+                                    // still one related-chip hop away)
     spec: ['Nose berthing collar \u00b7 0.32 m bore', 'Caught debris mates on-axis'],
   },
   {
@@ -140,7 +146,7 @@ export const BLUEPRINT_SUBSYSTEMS = [
     priority: 4,
     readout: 'sensors',
     codexId: 'lidar_ranging',         // MotherCallouts `lidar` (codex cat SENSORS)
-    spec: ['EO + IR + flash LIDAR turret', 'Star trackers \u00b7 sun sensors'],
+    spec: ['Daylight + heat cameras + flash laser-ranging turret', 'Star trackers \u00b7 sun sensors'],
   },
   {
     id: 'THERMAL',

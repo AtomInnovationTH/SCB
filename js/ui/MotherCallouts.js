@@ -249,15 +249,16 @@ const SYSTEMS = [
         mesh: 'NetLauncher_0',
         pick: ['NetLauncher_0', 'NetLauncher_1'],
         anchor: [ 0.45 * M, 0.12 * M, 1.18 * M ] },
-      { id: 'berth_collar', name: 'DOCKING COLLAR', risk: 'GREEN', tier: 'detail', codexId: 'docking_berthing',
+      { id: 'berth_collar', name: 'DOCKING COLLAR', risk: 'GREEN', tier: 'detail', codexId: 'capture_collar',
         // Design 6 (2026-09-08): massKg 6 → 3 — the skeleton collar (thin ring
         // on four struts, ≈ 2.5 kg of thin-wall Al) replaced the ≈ 9 kg torus +
         // tunnel + flange + cone.
         massKg: 3, priority: 3,
-        // Mother audit T1/T10: the nose berthing collar had no card. Detail
-        // tier: `docking_berthing` is DAUGHTER BERTHS' briefing (same berthing
-        // concept — a reeled catch is hauled onto the collar, not flown in) and
-        // the major tier requires a unique codexId.
+        // F1 workbench plan (Lane D, 2026-09-23): retargeted from
+        // `docking_berthing` — that entry is DAUGHTER BERTHS' briefing; the
+        // nose collar is where CAUGHT DEBRIS mates rigidly on-axis, so it links
+        // its own debris-capture briefing now (`capture_collar` lists this
+        // card's name in hardwareNames — the search bridge test pins it).
         // Mother fixes 3/4: display name berth-collar → DOCKING COLLAR (owner
         // 2026-09-08); the id `berth_collar` (refitIndex, tests) and the frozen
         // mesh name NetBerthCollar are untouched.

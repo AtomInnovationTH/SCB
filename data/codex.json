@@ -2955,8 +2955,7 @@
     {
       "id": "docking_berthing",
       "hardwareNames": [
-        "DAUGHTER BERTHS",
-        "DOCKING COLLAR"
+        "DAUGHTER BERTHS"
       ],
       "category": "ORBITAL_MECHANICS",
       "trl": 9,
@@ -2970,7 +2969,8 @@
         "heritage_solar_max",
         "robotic_arm",
         "mev_stinger",
-        "docking_lineage"
+        "docking_lineage",
+        "capture_collar"
       ],
       "i18n": {
         "title": "Docking vs Berthing",
@@ -2983,6 +2983,34 @@
       },
       "track": "how_we_catch",
       "trackOrder": 9
+    },
+    {
+      "id": "capture_collar",
+      "hardwareNames": [
+        "DOCKING COLLAR"
+      ],
+      "category": "ORBITAL_MECHANICS",
+      "trl": 8,
+      "icon": "⭕",
+      "startUnlocked": true,
+      "related": [
+        "docking_lineage",
+        "net_neck_winch",
+        "lee_snare",
+        "docking_berthing",
+        "salvage_economy"
+      ],
+      "i18n": {
+        "title": "The Nose Collar: Berthing the Catch",
+        "shortText": "The ship's one berthing seat: an open ring at the nose where a winched net catch latches rigid, dead on-axis.",
+        "hardwareNote": "The docking collar is the open nose ring where the winch line hauls a net catch in and latches it rigid on-axis, so the haul rides home as structure.",
+        "fullText": "Every catch ends at the same place: a thin ring at the nose, 0.32 metres across, held out ahead of the fore cap on four short struts. The launcher throws the net, the neck winches cinch it shut, and the collar does the committing. The winch line hauls the netted catch forward until its neck seat meets the ring and latches — and from that moment the catch is not cargo dangling on a rope but structure, rigid with the hull, aligned dead on the ship's axis. The berth IS the corridor: the mass turns when the ship turns, burns when it burns, and the arms can pick it apart at leisure.\n\nThe shape is a skeleton on purpose. A closed tunnel would blind the sensors that look through the bore, so the collar keeps nothing but the ring, the struts and the seat — a funnel with its walls removed, light enough that the whole affair is about three kilograms of thin-wall aluminium. The grammar it speaks is the oldest one in orbital capture: soft capture first, forgiving of misalignment, then the rigid latch that commits. Gemini's cone and Apollo's probe-and-drogue said it; Canadarm's snare says it; this ring says it to a bag of junk instead of a crew capsule.\n\nWhat is genuinely new is the customer. Nobody has ever berthed a netted object — RemoveDEBRIS fired its net in 2018, closed the neck, and let the whole package burn in. The step from caught to berthed has been designed and argued about for years and never flown. This nose machine is that step: the ring is small because debris is small, and the mating is rigid because a catch that stays floppy is a wrecking ball on a string.",
+        "realWorld": "Every crewed spacecraft connects through a funnel-and-latch ring, Gemini–Agena (1966) to the NASA Docking System today; RemoveDEBRIS (2018) performed the only orbital net capture and abandoned its catch — berthing a netted object has never been flown.",
+        "trlRationale": "Ring-and-latch berthing geometry is flight-proven across six decades; the netted-catch mating step has one orbital demo behind it and no flight.",
+        "unlockHint": "Click the DOCKING COLLAR callout at the hull-cam workbench."
+      },
+      "track": "how_we_catch",
+      "trackOrder": 10
     },
     {
       "id": "welcome_cowboy",
@@ -3189,7 +3217,8 @@
         "what_10000kg_buys",
         "core_loop",
         "solar_furnace",
-        "pane_refit"
+        "pane_refit",
+        "capture_collar"
       ],
       "i18n": {
         "title": "The Salvage Economy",
@@ -4684,7 +4713,8 @@
       "related": [
         "mev_stinger",
         "docking_lineage",
-        "net_neck_winch"
+        "net_neck_winch",
+        "capture_collar"
       ],
       "i18n": {
         "title": "The Canadarm Snare",
@@ -4703,7 +4733,8 @@
       "related": [
         "entanglement_hazard",
         "lee_snare",
-        "miura_ori_net"
+        "miura_ori_net",
+        "capture_collar"
       ],
       "i18n": {
         "title": "The Only Net Capture",
@@ -4743,7 +4774,8 @@
         "mev_stinger",
         "lee_snare",
         "soyuz6_vulkan",
-        "entanglement_hazard"
+        "entanglement_hazard",
+        "capture_collar"
       ],
       "i18n": {
         "title": "Docking's Family Tree",
