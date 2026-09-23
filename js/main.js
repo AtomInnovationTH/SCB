@@ -3705,32 +3705,35 @@ async function init() {
       //   was suspected.
       //
       //   They THROW rather than return an error, because returning one does not
-      //   reach anybody: all 23 callers in scripts/visual-ab/ invoke these hooks
-      //   as `await page.evaluate(() => window.__scbInspect(...))` and discard
-      //   the result, and only 12 of the 23 forward browser console output. A
-      //   throw crosses page.evaluate as a rejected promise and fails the
-      //   harness process, which is the only signal every existing caller
-      //   already respects. Refusing quietly would have reproduced the very bug
-      //   this guard exists to end.
-      //   Use __scbInspectAxis(dir, distM) — it writes the ladder pose
-      //   (lc.local) and pins the distance, so it works on every floor.
+      //   reach anybody: the 25 call sites in 12 scripts/visual-ab/ scripts
+      //   (counted 2026-09-22) all invoked these hooks as
+      //   `await page.evaluate(() => window.__scbInspect(...))` and discarded
+      //   the result, and only 2 of those 12 scripts forward browser console
+      //   output. A throw crosses page.evaluate as a rejected promise and fails
+      //   the harness process, which is the only signal every caller already
+      //   respects. Refusing quietly would have reproduced the very bug this
+      //   guard exists to end.
+      //   Harness scripts now aim through scripts/visual-ab/camera-aim.mjs,
+      //   which drives __scbInspectAxis and then CHECKS the result against
+      //   __scbCamPose() — a measured camera-to-ship distance, not an echo.
       // Distances map to callout bands: SYSTEM ≥ 9 m, PART 5.5–8 m,
       // COMPONENT < 5.5 m (BAND in ui/MotherCallouts.js).
+      const _camHookRefusal = (hook, code, why) => {
+        const floor = (window.__ladder && window.__ladder.currentFloor) ? window.__ladder.currentFloor() : null;
+        const err = new Error(`[scb] ${hook} refused (${code}, floor ${floor}): ${why}`);
+        err.code = code;
+        err.hook = hook;
+        err.hint = 'scripts/visual-ab/camera-aim.mjs aimCamera()';
+        err.floor = floor;
+        return err;
+      };
       const _ladderRefusesCamHook = (hook) => {
         const lc = cameraSystem && cameraSystem._ladderCam;
         if (!lc || !lc.active) return;
-        const floor = (window.__ladder && window.__ladder.currentFloor) ? window.__ladder.currentFloor() : null;
-        const err = new Error(
-          `[scb] ${hook} is a no-op while the zoom ladder is engaged (floor ${floor}): `
-          + 'the ladder overrides the orbit/inspection camera every frame, so this call would be '
+        throw _camHookRefusal(hook, 'ladder-engaged',
+          'the zoom ladder overrides the orbit/inspection camera every frame, so this call would be '
           + 'silently discarded and any screenshot would be taken at whatever distance the ladder '
-          + 'chose. Use __scbInspectAxis(dir, distM).',
-        );
-        err.code = 'ladder-engaged';
-        err.hook = hook;
-        err.hint = '__scbInspectAxis(dir, distM)';
-        err.floor = floor;
-        throw err;
+          + 'chose. Use __scbInspectAxis(dir, distM).');
       };
       window.__scbInspect = (thetaDeg = 0, phiDeg = 90, distM = 10) => {
         if (!cameraSystem) return 'no cameraSystem';
@@ -3763,17 +3766,52 @@ async function init() {
       //     theta cannot be aimed at "the nose". Ladder off → writes the legacy
       //     orbit (like __scbInspect). Ladder engaged → writes the ship-anchored
       //     ladder pose (lc.local) and pins the distance, so it also works on F1.
+      //     dir may also be { thetaDeg, phiDeg }: the legacy __scbInspect orbit
+      //     angles (LVLH frame — phi from the radial pole, theta round it from
+      //     ahead toward lateral, _computeOrbit's convention), so the scripts
+      //     written against __scbInspect keep their exact camera direction on
+      //     every floor.
+      //   REFUSES (throws) wherever its own write would be discarded — the
+      //   same silent-no-op class as __scbInspect (DECISIONS.md "must fail loudly"):
+      //     • ladder on an EARTH-anchored floor: the orbit fallback below would
+      //       write fields the ladder never reads;
+      //     • ladder mid-ride: the ride lerp overwrites curDistU every frame
+      //       until it lands (CameraSystem._updateLadderCamera).
+      //   window.__scbCamPose() — the read-back: the MEASURED camera-to-ship
+      //     distance plus which driver owns the camera. A hook reporting what
+      //     it wrote is how the strut investigation went wrong; check this.
       //   window.__THREE — the module namespace, for the harness truth log
       //     (project a mesh's world position to screen).
       window.__THREE = THREE;
       window.__scbInspectAxis = (dir = 'fore', distM = 3) => {
         if (!cameraSystem || !player) return 'no cameraSystem/player';
-        const AX = { fore: [0, 0, 1], aft: [0, 0, -1], starboard: [1, 0, 0], port: [-1, 0, 0], up: [0, 1, 0], down: [0, -1, 0] };
-        const local = new THREE.Vector3(...(Array.isArray(dir) ? dir : (AX[dir] || AX.fore))).normalize();
-        const q = new THREE.Quaternion(); player.getWorldQuaternion(q);
-        const worldDir = local.applyQuaternion(q);          // anchor → camera unit direction (world)
         const lc = cameraSystem._ladderCam;
-        if (lc && lc.active && lc.anchor === 'ship') {
+        if (lc && lc.active && lc.anchor !== 'ship') {
+          throw _camHookRefusal('__scbInspectAxis', 'ladder-earth-anchored',
+            `the ladder is on an Earth-anchored floor (anchor '${lc.anchor}'), which ignores the ship `
+            + 'pose this hook writes. Jump to a ship floor first (window.__ladder.jump({ toFloor })).');
+        }
+        if (lc && lc.active && lc.riding) {
+          throw _camHookRefusal('__scbInspectAxis', 'ladder-riding',
+            'a ladder ride is in flight and overwrites the camera distance every frame until it lands. '
+            + 'Wait for !window.__ladder.isRiding() first.');
+        }
+        let worldDir;                                        // anchor → camera unit direction (world)
+        if (dir && typeof dir === 'object' && !Array.isArray(dir)) {
+          const th = (dir.thetaDeg ?? 0) * Math.PI / 180;
+          const ph = Math.min(Math.PI - 0.1, Math.max(0.1, (dir.phiDeg ?? 90) * Math.PI / 180)); // _computeOrbit's gimbal clamp
+          worldDir = new THREE.Vector3()
+            .addScaledVector(cameraSystem._lvlhRadial, Math.cos(ph))
+            .addScaledVector(cameraSystem._lvlhForward, Math.sin(ph) * Math.cos(th))
+            .addScaledVector(cameraSystem._lvlhLateral, Math.sin(ph) * Math.sin(th))
+            .normalize();
+        } else {
+          const AX = { fore: [0, 0, 1], aft: [0, 0, -1], starboard: [1, 0, 0], port: [-1, 0, 0], up: [0, 1, 0], down: [0, -1, 0] };
+          const local = new THREE.Vector3(...(Array.isArray(dir) ? dir : (AX[dir] || AX.fore))).normalize();
+          const q = new THREE.Quaternion(); player.getWorldQuaternion(q);
+          worldDir = local.applyQuaternion(q);
+        }
+        if (lc && lc.active) {
           cameraSystem._ladderWorldToLocal(worldDir, lc.local);   // (r,t,n) on the live orbital frame
           lc.localSeeded = true;
           lc.curDistU = lc.targetDistU = distM * 1e-5;
@@ -3786,6 +3824,31 @@ async function init() {
         o.velocityTheta = 0; o.velocityPhi = 0;
         cameraSystem._evaluateInspectZoom();
         return { mode: 'orbit', theta, phi, distM };
+      };
+      window.__scbCamPose = () => {
+        if (!cameraSystem || !player) return null;
+        const cam = cameraSystem.camera;
+        const lc = cameraSystem._ladderCam;
+        const ladder = !!(lc && lc.active);
+        const shipPos = player.getWorldPosition(new THREE.Vector3());
+        const camPos = cam.getWorldPosition(new THREE.Vector3());
+        const off = camPos.clone().sub(shipPos).normalize();   // ship → camera, in __scbInspect's LVLH angles
+        return {
+          driver: ladder ? 'ladder' : 'view',
+          // Flag on but not yet engaged = the ladder is ABOUT to take the camera
+          // (it engages on its next update once gameplay starts). An aim written
+          // in that window is discarded a frame later — measured 2026-09-22: the
+          // first aim after menu start landed at 24.49 m instead of 4 m.
+          ladderEnabled: !!(Constants.LADDER && Constants.LADDER.ENABLED),
+          view: cameraSystem.currentView,
+          floor: (ladder && window.__ladder) ? window.__ladder.currentFloor() : null,
+          anchor: ladder ? lc.anchor : null,
+          riding: ladder ? !!lc.riding : false,
+          distM: camPos.distanceTo(shipPos) * 1e5,   // MEASURED, 1 u = 100 km
+          phiDeg: Math.acos(Math.max(-1, Math.min(1, off.dot(cameraSystem._lvlhRadial)))) * 180 / Math.PI,
+          thetaDeg: Math.atan2(off.dot(cameraSystem._lvlhLateral), off.dot(cameraSystem._lvlhForward)) * 180 / Math.PI,
+          fov: cam.fov,
+        };
       };
 
       // ── P2 flower portrait hook (charter TASK J harness) ──
