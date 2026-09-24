@@ -3068,45 +3068,71 @@ export class PlayerSatellite extends THREE.Group {
 
     // ── Wing-drum launch clamps (mother-wings step 3, DECISIONS §10) ──
     // "The brackets are still needed for launch?" — yes: each drum end is held
-    // to the front/back end-ring plane (z = ±CORE_LENGTH/2) through launch,
-    // released at LAUNCH_LOCK_RELEASE before the wing unrolls or tilts
-    // (_launchClampsLatched(), _updateWingClamps()). The DRUM half is a child
-    // of the drum itself — it moves and spins exactly with the drum, so it
-    // adds no new clash surface beyond the drum's own (already-measured)
-    // envelope. The BODY half is a small fixed collar that RETRACTS toward
-    // mid-body by WING_CLAMP_RETRACT when released, opening a visible gap —
-    // the drum's own position/axis is never touched (§2's requirement).
-    // Both collars share the drum's own axis (ship x = rosaSpoolAxisM, y=0),
-    // radius drumR×1.2 (a lip around the mandrel), so latched they read as one
-    // continuous band bridging body → drum.
+    // to the front/back end ring through launch, released at
+    // LAUNCH_LOCK_RELEASE before the wing unrolls or tilts
+    // (_launchClampsLatched(), _updateWingClamps()). The DRUM half is a collar
+    // on the drum's own tip — it moves and spins exactly with the drum. The
+    // BODY half is a hold-down BRACKET bolted to the end ring: it bears on the
+    // barrel's last WING_CLAMP_LAND of length (bottom sunk into the skin, so
+    // it is attached, not hovering) and overhangs the rim under the drum
+    // collar, its top WING_CLAMP_SEAT_GAP below the collar. A release PIN
+    // bridges that gap while latched and withdraws into the bracket at
+    // release; the bracket never moves. Owner 2026-09-24: the first build was
+    // a disc on the DRUM's axis, 30 mm off the skin with no mount, which hung
+    // in space once the wing tilted (tmp/clamp-float.mjs). The wing tilts
+    // about this side's x axis, so no wing point changes its x: the bracket,
+    // under the wing's lowest point (the collar), is clear at every tilt.
+    const V5c = Constants.OCTOPUS_V5;
     const clampR = drumR * 1.2;
-    const clampLen = Constants.OCTOPUS_V5.WING_CLAMP_LEN * M;
+    const clampLen = V5c.WING_CLAMP_LEN * M;
     const clampGeo = new THREE.CylinderGeometry(clampR, clampR, clampLen, 16);
     const halfDrumLen = (rosaL * 1.02) / 2;
-    const ringZ = (Constants.OCTOPUS_V5.CORE_LENGTH / 2) * M;   // end-ring plane
+    const ringZ = (V5c.CORE_LENGTH / 2) * M;                    // end-ring plane
     const spoolAxisX = PlayerSatellite.rosaSpoolAxisM() * M;    // ship-frame x
+    const bW = V5c.WING_CLAMP_W * M;
+    const bTop = spoolAxisX - clampR - V5c.WING_CLAMP_SEAT_GAP * M;
+    // bottom: 3 mm under the skin at the bracket's outer edges (the skin is
+    // lowest there — sqrt(R² − (W/2)²)), so the whole footprint is seated.
+    const skinR = V5c.COLLAR_RADIUS * M;
+    const bBot = Math.sqrt(skinR * skinR - (bW / 2) * (bW / 2)) - 0.003 * M;
+    const bOuterZ = halfDrumLen;                                // flush with the collar's outer face
+    const bInnerZ = ringZ - V5c.WING_CLAMP_LAND * M;
+    const bracketGeo = new THREE.BoxGeometry(bTop - bBot, bW, bOuterZ - bInnerZ);
+    const pinR = V5c.WING_CLAMP_PIN_R * M;
+    const pinH = V5c.WING_CLAMP_SEAT_GAP * M * 2;               // half in the bracket, half bridging the gap
+    const pinGeo = new THREE.CylinderGeometry(pinR, pinR, pinH, 12);
+    const pinMat = new THREE.MeshStandardMaterial({ color: 0xb8b8b8, metalness: 0.8, roughness: 0.35 });
     struct.clampBody = [];
+    struct.clampPins = [];
     for (const endSign of [1, -1]) {
       const endName = endSign > 0 ? 'Fore' : 'Aft';
+      const tag = `${wing === 1 ? '0' : '180'}deg_${endName}`;
 
       const drumHalf = new THREE.Mesh(clampGeo, drumMat);
       // halfDrumLen is already in scene units (built from rosaL = ROSA_LENGTH·M
       // above) — do NOT multiply by M again here (that was a bug: it collapsed
       // the drum-half to ~6 mm from the drum centre instead of its tip).
       drumHalf.position.set(0, endSign * (halfDrumLen - clampLen / 2), 0);
-      drumHalf.name = `ROSA_WingClamp_${wing === 1 ? '0' : '180'}deg_${endName}_Drum`;
+      drumHalf.name = `ROSA_WingClamp_${tag}_Drum`;
       drumHalf.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       drum.add(drumHalf);
 
-      const bodyHalf = new THREE.Mesh(clampGeo, drumMat);
-      bodyHalf.position.set(sign * spoolAxisX, 0, endSign * ringZ);
-      bodyHalf.name = `WingClamp_${wing === 1 ? '0' : '180'}deg_${endName}_Body`;
-      bodyHalf.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-      bodyHalf.userData.latchedZ = bodyHalf.position.z;
-      bodyHalf.userData.releasedZ =
-        bodyHalf.position.z - endSign * Constants.OCTOPUS_V5.WING_CLAMP_RETRACT * M;
-      this.add(bodyHalf);
-      struct.clampBody.push(bodyHalf);
+      const bracket = new THREE.Mesh(bracketGeo, drumMat);   // same finish as the wing motor boxes
+      bracket.position.set(sign * (bTop + bBot) / 2, 0, endSign * (bOuterZ + bInnerZ) / 2);
+      bracket.name = `WingClamp_${tag}_Body`;
+      bracket.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(bracket);
+      struct.clampBody.push(bracket);
+
+      // Release pin, under the collar's middle; axis radial (cylinder Y → ship X).
+      const pin = new THREE.Mesh(pinGeo, pinMat);
+      pin.rotation.z = Math.PI / 2;
+      pin.position.set(sign * bTop, 0, endSign * (halfDrumLen - clampLen / 2));
+      pin.name = `WingClamp_${tag}_Pin`;
+      pin.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      pin.visible = false;                                      // released unless latched
+      this.add(pin);
+      struct.clampPins.push(pin);
     }
 
 
@@ -3204,7 +3230,7 @@ export class PlayerSatellite extends THREE.Group {
    * LaunchSequence.js). With FEATURE_FLAGS.LAUNCH_SEQUENCE off (the default),
    * `_launchSequence` is never set (LaunchSequence.start() early-returns
    * before calling setLaunchSequence), so this is always false — the ship
-   * starts released, halves apart, exactly as normal (non-flagged) play
+   * starts released, pins withdrawn, exactly as normal (non-flagged) play
    * always has.
    * @returns {boolean}
    */
@@ -3219,21 +3245,19 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * @private Mother-wings step 3: snap each wing-drum clamp's BODY half to its
-   * latched (touching the drum tip) or released (retracted toward mid-body,
-   * `WING_CLAMP_RETRACT` clear) Z position. The DRUM half never moves apart
-   * from the drum itself — it is a child of `drum`, sharing its position and
-   * spin — only the fixed body half opens the gap. A snap, not an animation:
-   * launch-lock release is a one-shot pyro event, not a player-paced motion,
-   * and this only ever runs while `FEATURE_FLAGS.LAUNCH_SEQUENCE` is exercised.
+   * @private Mother-wings step 3: show each wing-drum clamp's release pin
+   * while latched (bridging bracket → drum collar), hide it once released
+   * (withdrawn into the bracket). The bracket itself is bolted to the end
+   * ring and never moves; the drum half rides the drum. A snap, not an
+   * animation: launch-lock release is a one-shot pyro event, not a
+   * player-paced motion, and this only ever runs while
+   * `FEATURE_FLAGS.LAUNCH_SEQUENCE` is exercised.
    */
   _updateWingClamps() {
     const latched = this._launchClampsLatched();
     for (const struct of [this._rosaStruct1, this._rosaStruct2]) {
-      if (!struct || !struct.clampBody) continue;
-      for (const bodyHalf of struct.clampBody) {
-        bodyHalf.position.z = latched ? bodyHalf.userData.latchedZ : bodyHalf.userData.releasedZ;
-      }
+      if (!struct || !struct.clampPins) continue;
+      for (const pin of struct.clampPins) pin.visible = latched;
     }
   }
 

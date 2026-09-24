@@ -1659,18 +1659,25 @@ export const Constants = {
     // "The brackets are still needed for launch?" — yes: each drum end is held
     // to the front/back end ring (z = ±CORE_LENGTH/2) through launch, released
     // at LAUNCH_LOCK_RELEASE before the wing unrolls or tilts. The drum-half
-    // rides the drum (fixed relative to it, at the drum's own tip, z ±1.02·
-    // ROSA_LENGTH/2 = the end-ring plane); the body-half is a small bracket on
-    // the ship that RETRACTS inward when released, opening a visible gap
-    // (drum position/axis is unchanged — the body half moves, not the drum).
-    // Released clearance is real, not assumed: the drum's far tip swings with
-    // tilt (its axis passes through a fixed point at the pivot, but the tip is
-    // ~1 m out along that axis), measured `tmp/probe-wing-clamps.mjs`: 34 mm
-    // at 0° tilt, growing to 517 mm at ±30° — clear of the 20 mm gate at every
-    // allowed tilt, with the released body half retracted the whole time.
-    WING_CLAMP_R: 0.018,          // m — clamp collar radius (around the drum)
-    WING_CLAMP_LEN: 0.012,        // m — clamp collar axial length
-    WING_CLAMP_RETRACT: 0.020,    // m — how far the body half pulls back when released
+    // rides the drum (a collar at the drum's own tip, z ±1.02·ROSA_LENGTH/2).
+    // The BODY half is a hold-down BRACKET BOLTED TO THE END RING: a block
+    // bearing on the barrel's last WING_CLAMP_LAND of length and overhanging
+    // the rim under the drum collar, its top WING_CLAMP_SEAT_GAP below the
+    // collar. A release PIN (the real part: a pin-puller) bridges that gap
+    // while latched and withdraws into the bracket at release; the bracket
+    // itself never moves. Owner 2026-09-24 ("4 new floating black discs"):
+    // the first build put the body half on the DRUM's axis, 30 mm off the
+    // skin with no mount — measured tmp/clamp-float.mjs — so once the wing
+    // tilted away it hung in space. Why the bracket can never be hit: the
+    // wing tilts about the radial (x) axis, so no wing point ever changes its
+    // height x above that side of the body; the wing's lowest point at the ends is the drum collar
+    // (spoolAxis − 1.2·ROSA_DRUM_R = 0.430 m), and the bracket top is
+    // SEAT_GAP under it at every tilt. Measured: tmp/clamp-site.mjs.
+    WING_CLAMP_LEN: 0.012,        // m — drum collar axial length
+    WING_CLAMP_SEAT_GAP: 0.005,   // m — bracket top below the drum collar (the pin bridges it)
+    WING_CLAMP_W: 0.030,          // m — bracket width (tangential)
+    WING_CLAMP_LAND: 0.025,       // m — bracket length bearing on the barrel inboard of the end ring
+    WING_CLAMP_PIN_R: 0.005,      // m — release-pin radius
 
     // ── Hinge (NEW) ──
     HINGE_LOCK_TORQUE: 1000,       // N·m
