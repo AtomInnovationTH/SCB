@@ -8786,22 +8786,37 @@ export class PlayerSatellite extends THREE.Group {
    * either the outboard or inboard face of the blanket registers — see the
    * mother-wings report for why one alone misses half the approach
    * directions), every strut arm's group (struts + any docked daughter), and
-   * every radiator/flower hinge group. Rebuilt each time the shade throttle
-   * fires (cheap: a handful of lookups, not a traversal).
+   * every radiator/flower hinge group, flattened to their visible solid
+   * meshes. Rebuilt each time the 2 Hz shade throttle fires (a traversal of a
+   * few hundred nodes at most).
    * @returns {THREE.Object3D[]}
    */
   _gatherSolarOccluders() {
-    const list = [];
+    const roots = [];
     for (const name of ['ROSA_Panel_Front_0deg', 'ROSA_Panel_Back_0deg',
                          'ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg']) {
       const o = this.getObjectByName(name);
-      if (o) list.push(o);
+      if (o) roots.push(o);
     }
     if (this.armManager && Array.isArray(this.armManager.arms)) {
-      for (const arm of this.armManager.arms) if (arm && arm.group) list.push(arm.group);
+      for (const arm of this.armManager.arms) if (arm && arm.group) roots.push(arm.group);
     }
     if (Array.isArray(this._flowerGroups)) {
-      for (const fg of this._flowerGroups) if (fg && fg.hinge) list.push(fg.hinge);
+      for (const fg of this._flowerGroups) if (fg && fg.hinge) roots.push(fg.hinge);
+    }
+    // Flatten to the visible SOLID meshes only, so the cast can run
+    // non-recursive. Only solid surfaces cast shade: Sprites (labels, LED
+    // halos) throw inside Raycaster without a camera — the menu-boot throw
+    // HANDOFF recorded 2026-09-24 — and Lines/Points would "shade" via the
+    // ray's pick threshold; additive glow shells are light, not matter.
+    const list = [];
+    for (const root of roots) {
+      root.traverseVisible((o) => {
+        if (!o.isMesh || o.isSprite) return;
+        const m = Array.isArray(o.material) ? o.material[0] : o.material;
+        if (m && m.blending === THREE.AdditiveBlending) return;
+        list.push(o);
+      });
     }
     return list;
   }
@@ -8821,7 +8836,7 @@ export class PlayerSatellite extends THREE.Group {
     _v3TmpA.copy(worldPos).addScaledVector(_v3TmpD, 0.01 * M);   // 10 mm nudge (M = scene units/metre)
     _solarRaycaster.set(_v3TmpA, _v3TmpD);
     _solarRaycaster.far = Constants.OCTOPUS_V5.BODY_SHADE_MAX_DIST_M * M;
-    const hits = _solarRaycaster.intersectObjects(occluders, true);
+    const hits = _solarRaycaster.intersectObjects(occluders, false);   // pre-flattened in _gatherSolarOccluders
     return hits.length === 0;
   }
 
