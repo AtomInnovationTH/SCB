@@ -2267,7 +2267,9 @@ export const Constants = {
   // =========================================================================
   // CONFIG G PLUME CLEARANCE (NEW — for ST-9.12 #8)
   // =========================================================================
-  PLUME_HALF_ANGLE: 35 * Math.PI / 180,  // rad (35°)
+  PLUME_HALF_ANGLE: 35 * Math.PI / 180,  // rad — sourced: 25.5°±2.5° measured In-FEEP
+                                         // beam divergence (LISA Pathfinder qualification) ×1.25
+                                         // charge-exchange margin; a real shielded design caps at 60°
   COM_DRIFT_WARN_THRESHOLD: 0.020,       // m (20mm)
   COM_BALANCED_THRESHOLD: 0.005,         // m (5mm)
 
