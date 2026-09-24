@@ -156,7 +156,10 @@ const SYSTEMS = [
     parts: [
       { id: 'rosa_wings', name: 'ROLL-OUT SOLAR WINGS', risk: 'GREEN', tier: 'major', codexId: 'rosa_solar_array',
         massKg: 22, priority: 9, live: 'rosa',
-        specs: ['2× 1×2 m roll-out arrays', '~2.2 kW peak when new'],
+        // mother-cells lane (2026-09-24): re-measured (tmp/power-before-after.mjs,
+        // real ship builder + settle loop, matches test-MotherPower.js's own
+        // methodology) — was a stale '~2.2 kW peak when new' guess.
+        specs: ['2× 1×2 m roll-out arrays', 'Wings-only peak ~1.63 kW, ~1.83 kW with body cells'],
         pick: ['ROSA_Panel_Front_0deg', 'ROSA_Panel_Back_0deg', 'ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg'],
         // Mother audit T10 (W8): the leader follows the +X blanket's centre
         // through sun-tracking tilt and the furl (the static x 1.1 tuple sat in
@@ -169,13 +172,13 @@ const SYSTEMS = [
         // az 33.75° facet centre, central PV row (face radius barrelR×1.014).
         // The old az-0° anchor sat in the ROSA-root keep-out on bare hull and
         // collided with NAV LIGHTS (2 cm).
-        // pick: the 24 barrel PV boxes (0..23, re-counted at the re-clock trial
-        // clock 64/116/244/296 — the four facets nearest the 90/270 windows fall
-        // inside the ±18° strut keep-out; four aft facets revive under the ±30°
-        // one) plus the 4 end-band gap cells (which follow the pod columns to
-        // 94.65/274.65).
+        // mother-cells lane (2026-09-24): the body cells were re-laid at half
+        // width (11.25°, `_buildMainBus` in PlayerSatellite.js) — 40 facet
+        // cells (0..39, was 24 at the 22.5° whole-facet layout) plus the same
+        // 4 end-band gap cells (94.65/274.65, unchanged — see that function's
+        // comments for the measured keep-out clearances).
         pick: [
-          ...Array.from({ length: 24 }, (_, i) => `BarrelSolarPanel_${i}`),
+          ...Array.from({ length: 40 }, (_, i) => `BarrelSolarPanel_${i}`),
           'BarrelSolarPanel_gap_94.65_F', 'BarrelSolarPanel_gap_94.65_A',
           'BarrelSolarPanel_gap_274.65_F', 'BarrelSolarPanel_gap_274.65_A',
         ],
@@ -191,6 +194,19 @@ const SYSTEMS = [
         // to prevent.
         pick: ['ROSA_Spool_0deg', 'ROSA_Spool_180deg'],
         anchor: [ PlayerSatellite.rosaSpoolAxisM() * M, 0, 0 ] },
+      // mother-cells lane (2026-09-24): the wings lane's suggested
+      // `wing_motor_box` detail callout (WingMotorBox_*/WingMotorPad_*, real
+      // geometry az 0/180 r 0.4105/0.4015 z 0, tmp/anchor-probe.mjs) and the
+      // optional `wing_launch_clamp` (WingClamp_*_Body, r 0.49 z ±1.0) are NOT
+      // added here — every codexId this table uses must already list the
+      // callout's exact display name in its codex entry's `hardwareNames`
+      // (the "search bridge", enforced by test-MotherCallouts.js's "codexId
+      // drift guard"; confirmed by trial: adding wing_motor_box and reusing
+      // `solar_power` failed that guard). Adding either correctly needs a
+      // `data/codex.json` edit, which is outside this lane's file list
+      // (`docs/DECISIONS.md`, `data/codex.json` and everything else not named
+      // in "Files you own" is explicitly not mine). Left for whoever owns
+      // that file — see the final report.
     ],
   },
   {

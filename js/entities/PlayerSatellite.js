@@ -1002,9 +1002,30 @@ export class PlayerSatellite extends THREE.Group {
     const endH     = barrelH * 0.12;          // forward/aft PV row height (shortened)
     const endZ     = barrelH * 0.30;          // |z| centre of the end rows (pulled in)
     const cellBandH = centralH;               // (kept for MLI seam placement below)
-    const barrelFacets = 16;                  // PV tiling facets (the barrel shell itself is 64-seg)
-    const facetStep = (Math.PI * 2) / barrelFacets; // 22.5°
-    const facetWidth = 2 * (barrelR * 1.006) * Math.tan(facetStep / 2); // chord of one facet
+    const barrelFacets = 16;                  // structural facet count (the barrel shell itself is 64-seg)
+    const facetStep = (Math.PI * 2) / barrelFacets; // 22.5° — kept for the gap-cell width below
+    const facetWidth = 2 * (barrelR * 1.006) * Math.tan(facetStep / 2); // chord of one 22.5° facet
+    // mother-cells lane (2026-09-23, DECISIONS §10/§11): body cells re-laid at
+    // HALF WIDTH — 32 slots of 11.25° instead of 16 facets of 22.5° — so a
+    // future strut re-clock loses at most a half-cell's worth of area instead
+    // of a whole facet's. cellStep/halfCellWidth mirror facetStep/facetWidth
+    // at twice the resolution; the keep-out rule below (strutKeep/strutKeepAft/
+    // rosaKeep) is UNCHANGED (still 18°/30°/8°, still tested against each
+    // cell's CENTRE) — MEASURED, not assumed, that this only helps:
+    // tmp/cell-clearance-exact.mjs found the SHIPPED whole-facet layout's real
+    // tightest gap was 0.635 mm (four facets vs WingMotorBox_0/180deg — the
+    // ±8° rosaKeep was ridden right to its physical limit). A half-width cell
+    // at the same rosaKeep never reaches that facet's near-ROSA half at all
+    // (its own centre would need rosaKeep < 5.625° to be kept, and that DOES
+    // reopen a 0.635 mm-class pinch — tmp/cell-clearance-rosa-only.mjs
+    // measured 0.401 mm there, tighter than shipped, so it stays out); every
+    // cell this loop keeps sits at the same rosaKeep/strutKeep line as before,
+    // just resolved at half the grain, so the real worst clearance in the
+    // rebuilt ship is 25.0 mm (RCS pod, unchanged from today's gap cells) —
+    // tmp/cell-clearance-new.mjs.
+    const cellStep = facetStep / 2;                                    // 11.25°
+    const barrelCells = barrelFacets * 2;                              // 32 half-width slots
+    const halfCellWidth = 2 * (barrelR * 1.006) * Math.tan(cellStep / 2); // chord of one half-width cell
     // Task 1 (F1): PV panels are thin boxes 10 mm deep. The dark side walls (this
     // thickness) cover the ~6.7 mm corner air gap of a flat 22.5° facet panel over
     // the curved hull and give the panel a real silhouette lip at the limb.
@@ -1061,9 +1082,14 @@ export class PlayerSatellite extends THREE.Group {
     const angDist = (a, b) => { let d = Math.abs(a - b) % (Math.PI * 2); return d > Math.PI ? Math.PI * 2 - d : d; };
 
     let _panelN = 0;
-    for (let f = 0; f < barrelFacets; f++) {
-      const az = f * facetStep + facetStep / 2;  // facet centre azimuth
-      // Skip facets near a strut or a ROSA root.
+    for (let f = 0; f < barrelCells; f++) {
+      const az = f * cellStep + cellStep / 2;  // half-width cell centre azimuth
+      // Skip cells near a strut or a ROSA root. Same center-based keep-out
+      // test as the old whole-facet layout (strutKeep/rosaKeep below are
+      // unchanged) — only the grid got finer, so every cell this keeps is at
+      // least as far (never closer) from real hardware as the facet it came
+      // from (see the half-width note above the constants for the measured
+      // proof).
       if (strutAz.some(s => angDist(az, s) < strutKeep)) continue;
       if (rosaAz.some(rz => angDist(az, rz) < rosaKeep)) continue;
 
@@ -1072,10 +1098,12 @@ export class PlayerSatellite extends THREE.Group {
       // the tube radii by 2.5×), so the accents poked OUTSIDE the panels near
       // facet centres. New code-true stack (units of hull radius R): hull 1.000
       // writes depth; seam tape 0.998–1.006R; accent rings 1.004–1.012R; PV
-      // panels flat-tangent at 1.014R centre. Flat 22.5° facet panels still lift
-      // ~2% (sec 11.25°) at their azimuth edges → ~1.034R; that residual gold gap
-      // is masked by the per-panel dark frame border below (reads as a mounting
-      // rail), NOT by pushing rr lower (which would let the accents poke through).
+      // panels flat-tangent at 1.014R centre. Flat facet panels still lift a
+      // little (proportional to the square of the half-angle) at their azimuth
+      // edges — less now at 11.25° than the old 22.5° chord; that residual gold
+      // gap is masked by the per-panel dark frame border below (reads as a
+      // mounting rail), NOT by pushing rr lower (which would let the accents
+      // poke through).
       const rr = barrelR * 1.014;
       const radial = new THREE.Vector3(Math.cos(az), Math.sin(az), 0);
       const up = new THREE.Vector3(0, 0, 1);
@@ -1090,10 +1118,10 @@ export class PlayerSatellite extends THREE.Group {
         // Task 1 (F1): thin BOX panel instead of a zero-thickness decal. The
         // outward +z cell face stays at the current visual radius (1.014R); the
         // box is PANEL_THICK deep (10 mm), so the back face buries well inside the
-        // hull and the 10 mm dark side walls cover the ~6.7 mm corner air gap of a
-        // flat facet over the curved hull (they read as a mounting rail). Centre
+        // hull and the 10 mm dark side walls cover the corner air gap of a flat
+        // cell over the curved hull (they read as a mounting rail). Centre
         // the box so its +z face lands at rr: centre = rr − halfThick.
-        const panel = this._makePanelBox(facetWidth * 0.92, row.h, PANEL_THICK, row.mat);
+        const panel = this._makePanelBox(halfCellWidth * 0.92, row.h, PANEL_THICK, row.mat);
         const cr = rr - PANEL_THICK / 2;   // box-centre radius so +z face sits at rr
         panel.position.set(Math.cos(az) * cr, Math.sin(az) * cr, row.z);
         panel.quaternion.setFromRotationMatrix(_m4);
