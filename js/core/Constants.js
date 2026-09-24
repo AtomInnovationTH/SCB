@@ -1370,15 +1370,22 @@ export const Constants = {
   // a plume at ANY attitude (the ring is the bound, i32 V9). The sphere's old
   // "clear at α >= 71°" bound is FALSIFIED by the box: a 12.4 m fat hull bites
   // to 106° (exact-box 80°, the chain's rounding is the margin's room).
+  // RE-MEASURED 2026-09-24 (DECISIONS §5a): re-run against the corrected
+  // Constants.THRUSTERS (apex 0.200 m / z −1.075 — was falsely 0.500 m /
+  // z −2.000). Every row but the largest needed its floor raised (the
+  // nearer, wider corrected cone bites farther for a small piece close to
+  // the axis); the largest class barely moved (106° here vs 107° before —
+  // the two errors partly offset at that extreme). Old → new (maxBiteADeg):
+  // 11→16, 30→33, 45→48, 65→67, 86→87, 107→106.
   // Read by ArmManager's re-pose driver and the S9 tests; the plume CHECK
   // itself is band-free (it tests geometry, not policy).
   PLUME_CARGO_ALPHA_LADDER: [
-    { maxSizM: 0.5,  maxBiteADeg: 11,  safeAlphaMinRad: 21 * Math.PI / 180 },
-    { maxSizM: 1.5,  maxBiteADeg: 30,  safeAlphaMinRad: 40 * Math.PI / 180 },
-    { maxSizM: 2.8,  maxBiteADeg: 45,  safeAlphaMinRad: 55 * Math.PI / 180 },
-    { maxSizM: 5.0,  maxBiteADeg: 65,  safeAlphaMinRad: 75 * Math.PI / 180 },
-    { maxSizM: 8.0,  maxBiteADeg: 86,  safeAlphaMinRad: 96 * Math.PI / 180 },
-    { maxSizM: Infinity, maxBiteADeg: 107, safeAlphaMinRad: 117 * Math.PI / 180 },
+    { maxSizM: 0.5,  maxBiteADeg: 16,  safeAlphaMinRad: 26 * Math.PI / 180 },
+    { maxSizM: 1.5,  maxBiteADeg: 33,  safeAlphaMinRad: 43 * Math.PI / 180 },
+    { maxSizM: 2.8,  maxBiteADeg: 48,  safeAlphaMinRad: 58 * Math.PI / 180 },
+    { maxSizM: 5.0,  maxBiteADeg: 67,  safeAlphaMinRad: 77 * Math.PI / 180 },
+    { maxSizM: 8.0,  maxBiteADeg: 87,  safeAlphaMinRad: 97 * Math.PI / 180 },
+    { maxSizM: Infinity, maxBiteADeg: 106, safeAlphaMinRad: 116 * Math.PI / 180 },
   ],
   // The ONE band read (the digestSpanS in-table-method precedent): the piece's
   // re-pose floor for its size class — ceil to the NEXT row (intermediate
@@ -1811,17 +1818,27 @@ export const Constants = {
       // now is the PLUME CONE at the STOW pose. The main FEEP sit at az
       // 0/90/180/270, so the stations are squeezed between a thruster at 0° and
       // a daughter at 60°; STOW (146°) is the thrust-band ceiling, i.e. the one
-      // ladder pose held while the engines burn, and its cone clearance is
-      // gated at 0.70 m (vs the 0.15 m P1 floor for PARK/CARGO) precisely
-      // because that is where exhaust would play on a radiator. Re-measured on
-      // the built model (tmp/flower-reclock-probe.mjs):
+      // ladder pose held while the engines burn — a higher STOW-specific gate
+      // WAS intended here (vs the 0.15 m P1 floor for PARK/CARGO) precisely
+      // because that is where exhaust would play on a radiator, but the 0.70 m
+      // number below was never actually derived from a stated margin (DECISIONS
+      // §5a, 2026-09-24: it was fitted to a Constants.THRUSTERS table that did
+      // not match the built ship). Re-measured on the CORRECTED table (real
+      // apexes r 0.200 m / z −1.075, tmp/flower-reclock-probe.mjs convention):
       //
-      //     az   hull(MGA)  weaver   coil    STOW cone
-      //     41     0.023    0.025    0.137     0.719     <- old station
-      //     40     0.022    0.032    0.129     0.712     <- new station
-      //     39     0.022    0.040    0.121     0.705
-      //     38     0.023    0.048    0.112     0.699     <- fails the 0.70 cone gate
-      //     36     0.026    0.063    0.096     0.686     <- fails
+      //     az   hull(MGA)  weaver   coil    STOW cone (corrected 2026-09-24)
+      //     41     0.023    0.025    0.137     0.267     <- old station
+      //     40     0.022    0.032    0.129     0.265     <- new station
+      //     39     0.022    0.040    0.121     0.262
+      //     38     0.023    0.048    0.112     0.260
+      //     36     0.026    0.063    0.096     0.255
+      //
+      // Every row now fails the 0.70 m gate (they always did — the gate was
+      // reading a defective 0.71-ish measurement, not the real ~0.26 m); the
+      // RELATIVE ordering across stations is unchanged (the correction scales
+      // every row by the same wider-cone factor), so 40° is still the least
+      // costly station on this axis. What the real STOW floor should be is an
+      // owner call (HANDOFF "Open / owed"); it does not reopen the 40° choice.
       //
       // So the coil fix buys 2° of honest room, not the ~11° an azimuth-only
       // reading of it suggests. 40° takes it: +28 % docked-daughter clearance
@@ -2255,21 +2272,33 @@ export const Constants = {
   // MAIN THRUSTER NOZZLE GEOMETRY (NEW — ST-9.12 C-9, Gap #8)
   // =========================================================================
   // 4 main dual-metal FEEP thrusters on the aft face (−Z), cross pattern.
-  // Positions match PlayerSatellite._buildThrusters() visual placement (in meters).
+  // Positions match PlayerSatellite._buildThrusters() visual placement (in
+  // meters): radius 0.200 m (mainPositions ±M*0.2), bell exit z −1.075
+  // (nozzle body z −1.0, half-length 0.075 — the same plane STOWED_ENVELOPE_LEN
+  // calls "FEEP exits −1.075"). CORRECTED 2026-09-24 (DECISIONS §5a): this
+  // table used to read 0.500 m / z −2.000 while its own comment claimed a
+  // match — apexes were 0.300 m too far outboard and 0.925 m too far aft, so
+  // every plume cone under-reached (the real cone is WIDER: at the STOW petal
+  // tip the modelled radius was 0.751 m vs the true 1.399 m). A drift-guard
+  // test (test-FlowerLaunchFold.js) now measures the built MainFEEP_* meshes
+  // against this table so the two cannot silently disagree again — it does
+  // not read this table INTO the builder (PlayerSatellite.js is out of this
+  // fix's scope), so a future change to either side still needs both edited.
   // Config G clearance analysis (ARM_PIVOT_GAPS_EXPLAINER §8):
   //   Nearest arm plane is 60° from thrust axis (ROSA at 0°/180°, arms at 60°/120°/240°/300°).
   //   Plume half-angle 35° → minimum angular clearance = 60° − 35° = 25°.
   //   At standard deploy angles (α ∈ [0, π]), ring-arm strut tips remain well outside
   //   the −Z plume cone. Edge case (register item 61's reconciled rows): the Y3 Octo
-  //   aft end-face arm (−Z) at α≈π/2 places its tip at z ≈ −2.6 m — past the nozzle
-  //   plane (−2.0) and just outside the bare-tip cones, but any HELD cargo books
-  //   further aft on the axis, where S9's box-chain check sees the foul. The
-  //   interlock answer stays THRUSTER_INTERLOCK's business (dormant).
+  //   (flag-gated, unlocked:false) aft end-face arm (−Z) at α≈π/2 places its tip at
+  //   z ≈ −2.6 m — past the corrected nozzle plane (−1.075). NOT RE-VERIFIED under
+  //   this fix (dormant tier, dormant interlock, out of scope — DECISIONS §5a); any
+  //   HELD cargo there still books further aft, where S9's box-chain check sees the
+  //   foul on the LIVE Y0_QUAD tier regardless.
   THRUSTERS: [
-    { id: 'HT_TOP',    nozzlePos: { x:  0,    y:  0.5,  z: -2.0 }, thrustDir: { x: 0, y: 0, z: -1 } },
-    { id: 'HT_BOTTOM', nozzlePos: { x:  0,    y: -0.5,  z: -2.0 }, thrustDir: { x: 0, y: 0, z: -1 } },
-    { id: 'HT_RIGHT',  nozzlePos: { x:  0.5,  y:  0,    z: -2.0 }, thrustDir: { x: 0, y: 0, z: -1 } },
-    { id: 'HT_LEFT',   nozzlePos: { x: -0.5,  y:  0,    z: -2.0 }, thrustDir: { x: 0, y: 0, z: -1 } },
+    { id: 'HT_TOP',    nozzlePos: { x:  0,    y:  0.2,  z: -1.075 }, thrustDir: { x: 0, y: 0, z: -1 } },
+    { id: 'HT_BOTTOM', nozzlePos: { x:  0,    y: -0.2,  z: -1.075 }, thrustDir: { x: 0, y: 0, z: -1 } },
+    { id: 'HT_RIGHT',  nozzlePos: { x:  0.2,  y:  0,    z: -1.075 }, thrustDir: { x: 0, y: 0, z: -1 } },
+    { id: 'HT_LEFT',   nozzlePos: { x: -0.2,  y:  0,    z: -1.075 }, thrustDir: { x: 0, y: 0, z: -1 } },
   ],
 
   // =========================================================================
