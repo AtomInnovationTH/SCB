@@ -3603,13 +3603,17 @@ export const Constants = {
     // confirmation dialog with one option. The ship acts, names the carrier in
     // comms, and refuses ONCE when it cannot.
     CARGO_TRANSFER: {
-      // Delay from park to hand-off. Sized to the S4 PARK_HOLD camera beat (5 s)
-      // so the arc plays inside the payoff shot, whose framing already tracks the
-      // LIVE catch — the camera follows the transfer for free.
+      // UNREAD since the T2 race fix (2026-09-23): the hand-off is decided on
+      // the first COLLARED tick, not after a dwell — the collar chop commits
+      // +1.33 s (3 kg) to +4.43 s (10 kg) after the mate in sunlight, so any
+      // dwell loses the race. Kept, value unchanged, only as a possible
+      // duration for the later camera slice (T6b); the PARK_HOLD beats it
+      // might ride are 4.0/6.0 s.
       DELAY_S:        5.0,
-      // Retry cadence once the delay has elapsed but no carrier qualifies. The
-      // scorer runs computeCoM, which allocates — the net path must not allocate
-      // per frame (plan §13), and a catch can sit unstowable for minutes.
+      // Retry cadence after a declined hand-off (no carrier qualifies, or the
+      // furnace guard owns the piece). The scorer runs computeCoM, which
+      // allocates — the net path must not allocate per frame (plan §13), and a
+      // catch can sit unstowable for minutes.
       RETRY_S:        0.5,
       // Flight time nose → strut tip. Short deliberately: the physically honest
       // version is a 20–40 s slow walk (a 3 s toss implies ~5 m/s and ~1.5 m/s of

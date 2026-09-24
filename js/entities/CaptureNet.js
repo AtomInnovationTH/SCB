@@ -3048,6 +3048,36 @@ export class CaptureNetSystem {
           }
         }
 
+        // ── Cargo hand-off decision (cargo-continuity S7 + the T2 race fix) ──
+        // AUTOMATIC by owner ruling: the player holds no information the ship
+        // lacks, so there is no keypress. The hand-off is decided on the FIRST
+        // COLLARED tick — BEFORE the digestion clock below, because the crane
+        // must win the race with the collar furnace: the chop commits at
+        // span/(45·sunScale) real seconds after the mate (+1.33 s at 3 kg,
+        // +4.43 s at 10 kg in sunlight), so the old DELAY_S 5.0 dwell cooked
+        // every 3–11 kg piece at the collar. While the ship cannot stow (every
+        // daughter out, every rack full, or the body over the mass gate) the
+        // catch stays collared and the refusal comms says so (once — S13(e):
+        // it no longer claims the launcher is blocked; firing is only ever
+        // refused per-shot by the foul read). Retry is silent.
+        // S13(c) routing (the ruling made concrete): the ≤ 2000 kg gate decides
+        // collar-vs-tip — a piece under the gate may leave for a strut tip;
+        // above it, collar-only until digested or dumped.
+        if (net.state === STATES.COLLARED && !net._cargoDeclined) {
+          // `continue` on a successful start, mirroring the BERTHED→COLLARED
+          // transition above: one state change per tick, so the flight always
+          // begins at t=0 on its own frame instead of consuming the trigger
+          // frame's (possibly huge) dt in one jump — and the digestion clock
+          // below never ticks on an accepted piece (it leaves whole, with
+          // _digestProgress 0).
+          if (this._tryCargoTransfer(net)) continue;
+          // Declined for ANY reason (no armManager, no qualifying carrier,
+          // refusal, the furnace guard): record it and fall through — the
+          // digest ticks in THIS frame, so a declined path's cook timeline is
+          // unchanged.
+          net._cargoDeclined = true;
+        }
+
         // ── S13(c): the collar's digestion clock (register item 47) ──────
         // The collared piece cooks on the SAME sun-scaled transit clock the
         // daughter rack runs (the concentrator doesn't care where the crucible
@@ -3060,33 +3090,17 @@ export class CaptureNetSystem {
           continue;
         }
 
-        // ── Cargo hand-off trigger (cargo-continuity S7) ──────────────────
-        // AUTOMATIC by owner ruling: the player holds no information the ship
-        // lacks, so there is no keypress. After the collar ceremony's tail the
-        // ship stows the catch on the best daughter itself; while it cannot
-        // (every daughter out, every rack full, or the body over the mass
-        // gate) the catch stays collared and the refusal comms says so (once —
-        // S13(e): it no longer claims the launcher is blocked; firing is only
-        // ever refused per-shot by the foul read). Retry is silent.
-        // S13(c) routing (the ruling made concrete): the ≤ 2000 kg gate decides
-        // collar-vs-tip — a piece under the gate may leave for a strut tip;
-        // above it, collar-only until digested or dumped.
-        if (net.state === STATES.COLLARED) {
-          net._parkedS = (net._parkedS || 0) + dt;
-          if (net._parkedS >= (CT.DELAY_S ?? 5.0)) {
-            // Throttle the retry: the scorer allocates (computeCoM), and an
-            // unstowable catch can sit collared for minutes — the net path must
-            // not allocate per frame (plan §13). The FIRST attempt is never
-            // throttled, so the hand-off lands on the beat.
-            net._cargoRetryS = (net._cargoRetryS || 0) + dt;
-            if (!net._cargoRefused || net._cargoRetryS >= (CT.RETRY_S ?? 0.5)) {
-              net._cargoRetryS = 0;
-              // `continue` on a successful start, mirroring the BERTHED→COLLARED
-              // transition above: one state change per tick, so the flight
-              // always begins at t=0 on its own frame instead of consuming the
-              // trigger frame's (possibly huge) dt in one jump.
-              if (this._tryCargoTransfer(net)) continue;
-            }
+        // ── Cargo hand-off retry (cargo-continuity S7) ────────────────────
+        // After a decline, silently re-offer on the RETRY_S cadence: the
+        // scorer allocates (computeCoM), and an unstowable catch can sit
+        // collared for minutes — the net path must not allocate per frame
+        // (plan §13). The transfer fires by itself the moment a daughter
+        // docks or a cell frees.
+        if (net.state === STATES.COLLARED && net._cargoDeclined) {
+          net._cargoRetryS = (net._cargoRetryS || 0) + dt;
+          if (net._cargoRetryS >= (CT.RETRY_S ?? 0.5)) {
+            net._cargoRetryS = 0;
+            if (this._tryCargoTransfer(net)) continue;
           }
         }
       }
@@ -3303,7 +3317,7 @@ export class CaptureNetSystem {
     if (!d || d.alive === false || !arm || !net._cargoFrom || !net._cargoTo) {
       if (d && d.alive !== false) {
         net._cargoRefused = false;
-        net._parkedS = 0;
+        net._cargoDeclined = false;   // re-arm the first-tick decision
         net._transitionTo(STATES.COLLARED);
         return false;
       }
@@ -3319,7 +3333,7 @@ export class CaptureNetSystem {
     const SA = Constants.ARM_STATES;
     if (arm.state !== SA.DOCKED && arm.state !== SA.HOLDING_CATCH) {
       net._cargoRefused = false;
-      net._parkedS = 0;
+      net._cargoDeclined = false;   // re-arm the first-tick decision
       net._transitionTo(STATES.COLLARED);
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD',
@@ -3371,7 +3385,7 @@ export class CaptureNetSystem {
       // a cell). Keep the cargo: put it back on the collar and let the retry pick
       // another carrier.
       net._cargoRefused = false;
-      net._parkedS = 0;
+      net._cargoDeclined = false;   // re-arm the first-tick decision
       net._transitionTo(STATES.COLLARED);
       return false;
     }
