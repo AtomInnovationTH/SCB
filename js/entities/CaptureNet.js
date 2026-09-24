@@ -2032,7 +2032,7 @@ export class NetProjectile {
    * matter, owned by the fire-time foul read getCollarShotFoul), radius =
    * debris.sizeMeter/2 + BERTH_CLEARANCE_M. It must contain:
    *   1. NO strut tip (strutLocalDirection(α, az) × STRUT_LENGTH from the
-   *      collar pivot — at α≈π a 1.60 m strut tip reaches ~2.5 m fore, past
+   *      collar pivot — at α≈π a 1.70 m strut tip reaches ~2.5 m fore, past
    *      the muzzle plane at z ≈ 1.30 m; a forward-swept strut blocks whether
    *      or not it holds a catch);
    *   2. NO mated cargo (S13(e): every OTHER mother net's docked catch —

@@ -1360,7 +1360,7 @@ export class PlayerSatellite extends THREE.Group {
    */
   _buildCollar() {
     const V5 = Constants.OCTOPUS_V5;
-    const collarY = V5.COLLAR_Y * M;          // 0.90 m → ship-frame Z offset
+    const collarY = V5.COLLAR_Y * M;          // 1.00 m → ship-frame Z offset
     const collarR = V5.COLLAR_RADIUS * M;     // 0.40 m → torus major radius
     const tier = Constants.ARM_LADDER.Y0_QUAD; // { azimuths: [64, 116, 244, 296] }
     const _yUpCollar = new THREE.Vector3(0, 1, 0);  // reusable Y-up for quaternion ops
@@ -1424,7 +1424,7 @@ export class PlayerSatellite extends THREE.Group {
     // solar cells" — the strut grew to 1.70 m (front-ring hinge z 1.00 to the
     // stow pocket z −0.70) and, stowed (α 0), its centreline runs at a
     // CONSTANT r = collarR the whole way (sin 0° = 0), so it spans a much
-    // longer unsupported run over the hull than the old 1.60 m strut did. A
+    // longer unsupported run over the hull than the old 1.70 m strut does. A
     // small fixed saddle on the skin over the middle ring (z ≈ 0, the wings
     // lane's own inside-the-skin ring — this only adds the pad, not the ring)
     // gives it a real bolted support at roughly its midpoint; the stowed rod
@@ -1545,7 +1545,7 @@ export class PlayerSatellite extends THREE.Group {
       const pinQuat = new THREE.Quaternion().setFromUnitVectors(_yUpCollar, tangent);
       // T8 (B7): TorusGeometry's ring axis is local Z (CylinderGeometry's is Y), so
       // the bushings / C-clips need their own quaternion to sit AROUND the pin.
-      // With pinQuat they lay flat in the z = 0.90 plane with the pin as a diameter.
+      // With pinQuat they lay flat in the z = 1.00 plane (the front ring) with the pin as a diameter.
       const ringQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent);
 
       // ── A-frame brackets (×2 per hinge, straddling strut root) ──
@@ -1554,7 +1554,7 @@ export class PlayerSatellite extends THREE.Group {
       // α = 0, by 2 mm). Orientation: shape +Y → radial, extrude +Z → tangent×side,
       // shape +X → barrel Z.
       // FIX_PLAN §2-followup (round 3): hinge cluster (brackets, mount bolts,
-      // bushings, pin, c-clips, brake disc) sits on the hinge pad at z=0.90
+      // bushings, pin, c-clips, brake disc) sits on the hinge pad at z=1.00 (the front ring)
       // with overlapping radial extents → potential z-fights between bracket
       // body and pad/hull surfaces. Tag every part DETAIL so they render after
       // the pad/hull and win the depth ties cleanly.
@@ -1709,7 +1709,7 @@ export class PlayerSatellite extends THREE.Group {
    */
   _buildStruts() {
     const V5 = Constants.OCTOPUS_V5;
-    const strutLen = V5.STRUT_LENGTH * M;         // 1.60 m → scene
+    const strutLen = V5.STRUT_LENGTH * M;         // 1.70 m → scene
     const strutR   = (V5.STRUT_TUBE_OD / 2) * M;  // 0.025 m → scene
     const collarY  = V5.COLLAR_Y * M;
     const collarR  = V5.COLLAR_RADIUS * M;

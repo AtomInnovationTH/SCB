@@ -2,7 +2,7 @@
  * ArmManager.js — Manages the V5 Crossbow arm fleet
  * Config G top-collar 3-plane layout (ST-9.2).
  * Tier-aware: Y0 Quad (4), Y1 Hex (6), Y3 Octo (6 ring + 2 end-face).
- * Arms hinge at top collar (Y = +0.90 m), sweep 0–180° in meridian planes.
+ * Arms hinge at top collar (Y = +1.00 m), sweep 0–180° in meridian planes.
  * Coordinates deployments, recalls, dual-fire, pulse scan, and provides status for HUD.
  * @module entities/ArmManager
  */
@@ -96,7 +96,7 @@ const _SOFT_ROT_STATES = new Set([
  * Strut tip formula (universal for ring AND end-face arms):
  *   tip = hinge + STRUT_LENGTH × ( sin(α)·dockOutward − cos(α)·ŷ )
  *
- * Ring arms hinge at the top collar (Y = COLLAR_Y = +0.90 m).
+ * Ring arms hinge at the top collar (Y = COLLAR_Y = +1.00 m).
  * End-face arms (Y3 Octo only) hinge at the barrel end caps (±Z faces).
  *
  * This is the STORED convention (CameraSystem's AimDecomposition bridge reads
@@ -123,7 +123,7 @@ export function generateDockPositions(tierKeyOrCount) {
 
   const tier = Constants.ARM_LADDER[tierKey] || Constants.ARM_LADDER.Y0_QUAD;
   const V5 = Constants.OCTOPUS_V5;
-  const COLLAR_Y = V5.COLLAR_Y;           // 0.90 m
+  const COLLAR_Y = V5.COLLAR_Y;           // 1.00 m
   const COLLAR_RADIUS = V5.COLLAR_RADIUS;  // 0.40 m
   const positions = [];
 

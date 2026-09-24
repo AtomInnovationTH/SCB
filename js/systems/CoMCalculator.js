@@ -85,7 +85,7 @@ function _dockToShipFrame(dockPos) {
  * @returns {{x:number, y:number, z:number}} position in meters, ship frame
  */
 export function strutTipMeters(dockPos, alpha) {
-  const L = V5.STRUT_LENGTH; // 1.60 m
+  const L = V5.STRUT_LENGTH; // 1.70 m
   const { hx, hy, hz, ox, oy, oz } = _dockToShipFrame(dockPos);
   const sinA = Math.sin(alpha);
   const cosA = Math.cos(alpha);

@@ -2227,7 +2227,8 @@ async function init() {
       // lock is armed or θ < 90° (the 7b guard) — the HUD thermal line says so.
       // DECISIONS §10: the wings DODGE clear themselves (the tilt law clamps
       // through PlayerSatellite._rosaDodgeLimitRad while a fold is in flight)
-      // — nothing here to sequence. Only the struts still gate the fold.
+      // — nothing here to sequence, and since DECISIONS §11 nothing gates
+      // the fold at all: it runs to 0° whatever the struts are doing.
       flowerSweep: {
         get: () => {
           if (!player || typeof player.getFlowerPairCount !== 'function') return null;

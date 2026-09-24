@@ -305,7 +305,7 @@ export const Constants = {
   // wins"): was a generic, unrelated 20 m² placeholder (the ship never had 20
   // m² of cells). Now the REAL total: 2 ROSA wings (OCTOPUS_V5.ROSA_WIDTH ×
   // ROSA_LENGTH = 1×2 m² each) + the measured built body-mount cell area
-  // (OCTOPUS_V5.BODY_MOUNT_AREA_M2 = 2.307 m², `tmp/measure-body-cells.mjs`).
+  // (OCTOPUS_V5.BODY_MOUNT_AREA_M2 = 1.609 m², the 44-cell half-width re-lay).
   // Literal here (not a cross-reference — OCTOPUS_V5 is defined later in this
   // same object literal, so it can't be read yet); re-derive if either changes.
   // This is a peak/ceiling figure for readers that want "the panel area" as a
@@ -313,7 +313,7 @@ export const Constants = {
   // ramp, the ROSA glow's brightness normalisation) — the real per-frame power
   // path (_updateSolarPower) sums each wing's and each body cell's own area
   // and never uses this constant.
-  SOLAR_PANEL_AREA: 2 * 1.0 * 2.0 + 2.307,   // m² — 6.307 (4 wing + 2.307 body)
+  SOLAR_PANEL_AREA: 2 * 1.0 * 2.0 + 1.609,   // m² — 5.609 (4 wing + 1.609 body); keep in sync with OCTOPUS_V5.BODY_MOUNT_AREA_M2 (drift-pinned in test-MotherPower)
 
   // === SCORING ===
   TIER1_BASE: 100,                // Data capture
@@ -1549,12 +1549,12 @@ export const Constants = {
     // wing's and each body cell's own real area × incidence × furl instead of
     // scaling a table peak by a generic sunAngle. BODY_MOUNT_AREA_M2 is the one
     // number kept from the table era — the real, measured total body-cell face
-    // area (`tmp/measure-body-cells.mjs`: 32 built BarrelSolarPanel_* cells, Σ
-    // area) — used by the real power path AND to correct the top-level
+    // area (44 built BarrelSolarPanel_* cells after the 2026-09-24 half-width
+    // re-lay; drift-pinned against the built ship in test-MotherPower) — used by the real power path AND to correct the top-level
     // `Constants.SOLAR_PANEL_AREA` (was a generic, unrelated 20 m² placeholder;
     // now the real total = 2 wings + this). Re-measure if the cells lane
     // changes the layout.
-    BODY_MOUNT_AREA_M2: 2.307,      // m² — measured, sum of built body-cell faces
+    BODY_MOUNT_AREA_M2: 1.609,      // m² — measured, sum of built body-cell faces
     // Body-cell shading estimate (mother-wings step 4): a per-cell sun-ray vs
     // wings/struts/radiator raycast, throttled to this rate — cos(sun,normal)
     // stays live every frame, only the (pricier) occlusion test is cached.

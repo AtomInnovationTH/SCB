@@ -446,7 +446,12 @@ const SYSTEMS = [
         massKg: 2, priority: 2, specs: ['Double-A clevis, 4×'],
         pick: ['AFrame_64_L', 'AFrame_64_R', 'AFrame_116_L', 'AFrame_116_R',
           'AFrame_244_L', 'AFrame_244_R', 'AFrame_296_L', 'AFrame_296_R'],
-        anchor: [ 0.22 * M, 0.381 * M, 0.90 * M ] },
+        // DERIVED: first strut azimuth, hinge radius 0.44 m, hinge plane z =
+        // COLLAR_Y (moved onto the front ring 2026-09-23). A literal here would
+        // point 10 cm aft of the real hinge, as 0.22/0.381/0.90 once did.
+        anchor: [ 0.44 * Math.cos(Constants.ARM_LADDER.Y0_QUAD.azimuths[0] * Math.PI / 180) * M,
+                  0.44 * Math.sin(Constants.ARM_LADDER.Y0_QUAD.azimuths[0] * Math.PI / 180) * M,
+                  Constants.OCTOPUS_V5.COLLAR_Y * M ] },
       { id: 'cradle_spring', name: 'CROSSBOW SPRING', risk: 'YELLOW', tier: 'detail', codexId: 'spring_energy',
         massKg: 1, priority: 2, specs: ['Spring ejector — launches daughters'],
         // Spring group rides the strut (stowed z≈−0.62, deployed ≈1.7 m out).

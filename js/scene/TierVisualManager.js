@@ -100,8 +100,8 @@ class TierVisualManager {
 
     const cfg       = v5();
     const collarR   = cfg.COLLAR_RADIUS   || 0.40;
-    const collarY   = cfg.COLLAR_Y        || 0.90;
-    const strutLen  = cfg.STRUT_LENGTH    || 1.60;
+    const collarY   = cfg.COLLAR_Y        || 1.00;
+    const strutLen  = cfg.STRUT_LENGTH    || 1.70;
     const strutOD   = cfg.STRUT_TUBE_OD   || 0.050;
     const coreLen   = cfg.CORE_LENGTH     || 2.0;
 
@@ -265,7 +265,7 @@ class TierVisualManager {
 
     const cfg    = v5();
     const collarR = cfg.COLLAR_RADIUS || 0.40;
-    const collarY = cfg.COLLAR_Y      || 0.90;
+    const collarY = cfg.COLLAR_Y      || 1.00;
 
     const geo = new THREE.SphereGeometry(collarR * 3 * M, 16, 8);
     const mat = new THREE.MeshBasicMaterial({

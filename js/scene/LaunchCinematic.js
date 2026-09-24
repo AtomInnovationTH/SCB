@@ -126,7 +126,7 @@ export class LaunchCinematic {
         const V5 = Constants.OCTOPUS_V5 || {};
         const fairingD = (V5.FAIRING_DIAMETER || 2.1);
         const fairingL = (V5.FAIRING_LENGTH || 2.5);
-        const collarY  = (V5.COLLAR_Y || 0.90);
+        const collarY  = (V5.COLLAR_Y || 1.00);
 
         const radius = (fairingD * 0.5) * M;
         const height = fairingL * M;
