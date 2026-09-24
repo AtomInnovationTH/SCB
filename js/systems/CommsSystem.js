@@ -570,7 +570,8 @@ export class CommsSystem {
     eventBus.on(Events.PLAYER_LOW_BATTERY, (data) => {
       if (!this._canSend('lowBattery')) return;
       const tmpl = PLAYER_STATUS_TEMPLATES.lowBattery;
-      const pct = data && data.level ? Math.round(data.level / Constants.BATTERY_MAX * 100) : 10;
+      const max = (data && data.batteryMax) || Constants.BATTERY_MAX;
+      const pct = data && data.level ? Math.round(data.level / max * 100) : 10;
       this.addMessage(tmpl.priority, tmpl.source, tmpl.template.replace('{pct}', pct), { _critical: true });
     });
 

@@ -8855,7 +8855,7 @@ export class PlayerSatellite extends THREE.Group {
 
     // Low-resource warnings (reads from player.resources, pushed by ResourceSystem)
     if (this.resources.battery < 10) {
-      eventBus.emit(Events.PLAYER_LOW_BATTERY, { level: this.resources.battery });
+      eventBus.emit(Events.PLAYER_LOW_BATTERY, { level: this.resources.battery, batteryMax: this.resources.batteryMax });
     }
     if (this.resources.xenon < 10) {
       eventBus.emit(Events.PLAYER_LOW_XENON, { level: this.resources.xenon });

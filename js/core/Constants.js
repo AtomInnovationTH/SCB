@@ -299,7 +299,10 @@ export const Constants = {
   // === RESOURCE DEFAULTS ===
   XENON_FUEL_MAX: 100,            // kg
   COLD_GAS_MAX: 20,               // kg
-  BATTERY_MAX: 100,               // Wh (simplified)
+  BATTERY_MAX: 600,               // Wh — the ship's own spec (OCTOPUS_CORE_BATTERY /
+                                   // OCTOPUS_V5.CORE_BATTERY, both 600; equality pinned in
+                                   // test-shop-effects). Was a 100 Wh 'simplified' placeholder
+                                   // while the battery recharged from a bugged 8,166 W rate.
   SOLAR_PANEL_EFFICIENCY: 0.30,   // 30% efficient cells
   // Mother-wings step 4 (DECISIONS §10, "power follows the panels, realistic
   // wins"): was a generic, unrelated 20 m² placeholder (the ship never had 20
@@ -2784,7 +2787,8 @@ export const Constants = {
 
   FORGE: {
     BATCH_SIZE_KG: 5.0,          // max kg per processing batch
-    POWER_DRAW: 0.15,            // battery fraction per second while melting
+    POWER_DRAW: 0.15,            // Wh per second while melting (an absolute draw, NOT a
+                                  // fraction of capacity — 0.15 Wh/s, tuned before the 600 Wh battery)
     REFINE_MULTIPLIER: 2.5,      // refined metal worth 2.5× raw value
     PROPELLANT_EFFICIENCY: 0.85, // 85% mass retained when converting to propellant slugs
 
@@ -2962,7 +2966,7 @@ export const Constants = {
 
   EDT: {
     DEPLOY_LENGTH_KM: 0.1,     // 100m tether
-    POWER_DRAW: 0.05,          // battery fraction per second
+    POWER_DRAW: 0.05,          // Wh per second (an absolute draw, NOT a fraction of capacity)
     ATTRACTION_RADIUS_KM: 0.2, // 200m — draws small debris closer
     ATTRACTION_FORCE: 0.0001,  // km/s² — gentle pull
     MAX_ATTRACT_MASS: 20,      // only affects debris < 20kg

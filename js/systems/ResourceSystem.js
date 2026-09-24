@@ -389,7 +389,17 @@ export class ResourceSystem {
     if (!data) return;
     if (data.xenonMax !== undefined) this.xenonMax = data.xenonMax;
     if (data.coldGasMax !== undefined) this.coldGasMax = data.coldGasMax;
-    if (data.batteryMax !== undefined) this.batteryMax = data.batteryMax;
+    if (data.batteryMax !== undefined) {
+      // 2026-09-24: the base battery grew 100 -> 600 Wh (the ship's own spec).
+      // Legacy saves carry 100 + bought upgrades; carry the upgrades across by
+      // rebasing them onto the new base. New saves (>= the new base) pass
+      // through unchanged. Upgrade effects do not re-apply on load
+      // (RESOURCE_RESTORED_EFFECTS), so this saved absolute is the only source.
+      const BASE_OLD = 100, BASE_NEW = Constants.BATTERY_MAX;
+      this.batteryMax = (data.batteryMax < BASE_NEW)
+        ? BASE_NEW + (data.batteryMax - BASE_OLD)
+        : data.batteryMax;
+    }
     if (data.currentFuelId) this._currentFuelId = data.currentFuelId;
     // F16: Restore lithium (persists between missions — hard to get)
     if (data.lithium !== undefined) this.lithium = data.lithium;
