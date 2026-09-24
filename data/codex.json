@@ -1012,7 +1012,8 @@
     {
       "id": "solar_power",
       "hardwareNames": [
-        "SOLAR WING SPOOL"
+        "SOLAR WING SPOOL",
+        "WING MOTOR BOX"
       ],
       "category": "POWER",
       "trl": 9,

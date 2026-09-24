@@ -93,7 +93,7 @@ export const PART_TO_SUBSYSTEM = Object.freeze({
  * @type {Readonly<Object<string, ReadonlyArray<string>>>}
  */
 export const PARTS_BY_SYSTEM = Object.freeze({
-  POWER: Object.freeze(['rosa_wings', 'body_cells', 'array_roll']),
+  POWER: Object.freeze(['rosa_wings', 'body_cells', 'array_roll', 'wing_motor_box']),
   PROPULSION: Object.freeze(['feep', 'rcs', 'mli', 'aft_deck']),
   PAYLOAD: Object.freeze(['despin', 'net_launcher', 'berth_collar']),
   SENSORS: Object.freeze([
@@ -132,7 +132,8 @@ export function subsystemForPart(part) {
 /**
  * Inverse lookup: every MotherCallouts part id whose subsystemForPart() lands
  * on `subsystemId` — the REFIT pane's ghost-outline target set (hovering a
- * POWER alternative pulses rosa_wings + body_cells + array_roll on the hull;
+ * POWER alternative pulses rosa_wings + body_cells + array_roll + the wing
+ * motor boxes on the hull;
  * a THERMAL alternative pulses the blanket + the four flower parts — D13).
  * CARGO returns [] (no hull part reaches it); unknown ids return [].
  * Allocates a fresh array per call — call on hover edges, never per frame.

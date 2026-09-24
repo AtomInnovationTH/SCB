@@ -194,19 +194,14 @@ const SYSTEMS = [
         // to prevent.
         pick: ['ROSA_Spool_0deg', 'ROSA_Spool_180deg'],
         anchor: [ PlayerSatellite.rosaSpoolAxisM() * M, 0, 0 ] },
-      // mother-cells lane (2026-09-24): the wings lane's suggested
-      // `wing_motor_box` detail callout (WingMotorBox_*/WingMotorPad_*, real
-      // geometry az 0/180 r 0.4105/0.4015 z 0, tmp/anchor-probe.mjs) and the
-      // optional `wing_launch_clamp` (WingClamp_*_Body, r 0.49 z ±1.0) are NOT
-      // added here — every codexId this table uses must already list the
-      // callout's exact display name in its codex entry's `hardwareNames`
-      // (the "search bridge", enforced by test-MotherCallouts.js's "codexId
-      // drift guard"; confirmed by trial: adding wing_motor_box and reusing
-      // `solar_power` failed that guard). Adding either correctly needs a
-      // `data/codex.json` edit, which is outside this lane's file list
-      // (`docs/DECISIONS.md`, `data/codex.json` and everything else not named
-      // in "Files you own" is explicitly not mine). Left for whoever owns
-      // that file — see the final report.
+      // One fixed motor box per wing, bolted to the inside MidRing at the wing
+      // root (DECISIONS §10). DERIVED anchor: the box centre sits at
+      // COLLAR_RADIUS + WING_MOTOR_PAD_H + WING_MOTOR_BOX_DEEP/2 (0.4105 m).
+      { id: 'wing_motor_box', name: 'WING MOTOR BOX', risk: 'GREEN', tier: 'detail', codexId: 'solar_power',
+        massKg: 3, priority: 2, specs: ['Turns the wing', 'Bolted to the mid-body ring'],
+        pick: ['WingMotorBox_0deg', 'WingMotorBox_180deg', 'WingMotorPad_0deg', 'WingMotorPad_180deg'],
+        anchor: [ (Constants.OCTOPUS_V5.COLLAR_RADIUS + Constants.OCTOPUS_V5.WING_MOTOR_PAD_H
+                   + Constants.OCTOPUS_V5.WING_MOTOR_BOX_DEEP / 2) * M, 0, 0 ] },
     ],
   },
   {
