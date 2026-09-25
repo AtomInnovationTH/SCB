@@ -2757,9 +2757,14 @@ export class CameraSystem {
     // the one COMPLETED payoff (the whole catch played on camera — the same
     // contract as the PARK_HOLD `_digestedOut` release below, which remains
     // for the spliced-net case where isActive never flips); everything else
-    // is a truncation.
+    // is a truncation. Camera-handoff-hold L2 (2026-09-25): a DELIVERED
+    // hand-off is the other completed payoff — the mother-path arrival sets
+    // `isActive = false` + `_cargoDelivered = true` (CaptureNet S7), which
+    // used to read as a subject death here, truncating the first catch's
+    // exit so FIRST_MOTHER_NET_DEPLOY never fired and the long first-catch
+    // ceremony replayed on every mother catch.
     if (beat && c._net && c._net.isActive === false) {
-      this._exitNetCeremony(c._net._digestedOut === true);
+      this._exitNetCeremony(c._net._digestedOut === true || c._net._cargoDelivered === true);
       return null;
     }
 
@@ -2780,15 +2785,50 @@ export class CameraSystem {
     // through digestion (sub-metre catches) would otherwise sit out its full
     // clock over a consumed body. completedNormally: the whole ceremony
     // played and the payoff finished on camera — this is the clean cut, not
-    // a truncation.
-    if (beat && beat.key === 'PARK_HOLD' && c._net && c._net._digestedOut === true) {
+    // a truncation. Camera-handoff-hold L2 (2026-09-25): `_cargoDelivered`
+    // releases the same way (belt-and-braces with the subject-death guard —
+    // the delivered net flips isActive, but a reader holding the reference
+    // before the splice sees the marker first).
+    if (beat && beat.key === 'PARK_HOLD' && c._net
+        && (c._net._digestedOut === true || c._net._cargoDelivered === true)) {
       this._exitNetCeremony(true);
       return null;
     }
+    // Camera-handoff-hold L1/L3 (2026-09-25): TRANSFERRING keeps serving the
+    // hold, exactly like COLLARED — the cargo hand-off IS the payoff
+    // continuing (the nose-collar crane to a daughter rack, CaptureNet S7),
+    // and the bag leaving the collar must not cut the shot the frame the
+    // catch departs. The PARK_HOLD pos/look formulas already track the live
+    // pin, which the transfer rewrites every frame. Any OTHER state out of
+    // the hold (RELEASED, jettison, teardown, STOWED) still truncates; an
+    // aborted transfer returns to COLLARED, which stays served.
     if (beat && beat.key === 'PARK_HOLD' && c._net
-        && c._net.state !== 'BERTHED' && c._net.state !== 'COLLARED') {
+        && c._net.state !== 'BERTHED' && c._net.state !== 'COLLARED'
+        && c._net.state !== 'TRANSFERRING') {
       this._exitNetCeremony(false);
       return null;
+    }
+
+    // Camera-handoff-hold L4 (2026-09-25): FIRST-EVER hold only — when the
+    // cargo hand-off starts under the hold, stretch the beat so it can end
+    // ON the landing (+ PARK_HOLD_DIGEST_PAD_S), capped at
+    // PARK_HOLD_DIGEST_CAP_S from hold start. Repeat holds are NEVER
+    // stretched (M1 constraint 7: no cutscene the player sees every time) —
+    // a repeat hold that runs out mid-flight ends on its own clock via the
+    // normal beat-advance exit above. L6: polled, not evented — the transfer
+    // clock (_cargoS/_cargoDur) is live net state, read the same way the
+    // guards above read `state`. Idempotent while the flight runs (beatTimer
+    // and the remaining flight advance 1:1 at the hold's 1.0× timeScale),
+    // and a re-crane after an abort simply stretches to the new landing.
+    if (beat && beat.key === 'PARK_HOLD' && c.isFirstEver && c._net
+        && c._net.state === 'TRANSFERRING'
+        && typeof c._net._cargoDur === 'number') {
+      const NC = Constants.CAPTURE_NET.NET_CEREMONY;
+      const remainingS = Math.max(0, c._net._cargoDur - (c._net._cargoS || 0));
+      const endS = Math.min(
+        c.beatTimer + remainingS + (NC.PARK_HOLD_DIGEST_PAD_S ?? 1.0),
+        NC.PARK_HOLD_DIGEST_CAP_S ?? 12.0);
+      if (endS > beat.duration) beat.duration = endS;
     }
 
     // Beat advance
