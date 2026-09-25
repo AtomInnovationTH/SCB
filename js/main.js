@@ -859,9 +859,11 @@ const _EDGE_HOVER_MIN_MS = 100;
  * surfaces feed (the desktop document pointer listener; TouchControls'
  * `onEdgeTouch` on glass). Edge-scoped, never any-touch: a centre tap wakes
  * nothing — chrome that flickers on every tap is its own distraction.
- *   right band  x ≥ innerWidth − EDGE_WAKE_PX            → rail + tab
- *   left band   x ≤ EDGE_WAKE_PX                         → slider
+ *   right band  x ≥ innerWidth − EDGE_WAKE_PX            → rail + slider
+ *   left band   x ≤ EDGE_WAKE_PX                         → tab
  *   footer band innerHeight − top ≤ y ≤ innerHeight − bottom → slider + tab
+ * (§13 ruling 5, 2026-09-24: the DETAIL slider moved to the right slot, the
+ * SPECS tab to the left — each band wakes the chrome that lives in it.)
  * Returns which band(s) matched (a probe / test witness) or null. Flag-off /
  * before init: `edgeChrome` is null → nothing.
  * @param {number} x @param {number} y @param {number} [nowMs]
@@ -875,8 +877,8 @@ function _edgeBandWake(x, y, nowMs) {
   const band = RAIL_GEOMETRY.EDGE_WAKE_PX;
   const w = window.innerWidth, h = window.innerHeight;
   let hit = null;
-  if (x >= w - band) { edgeChrome.wake('rail', t); edgeChrome.wake('tab', t); hit = 'right'; }
-  else if (x <= band) { edgeChrome.wake('slider', t); hit = 'left'; }
+  if (x >= w - band) { edgeChrome.wake('rail', t); edgeChrome.wake('slider', t); hit = 'right'; }
+  else if (x <= band) { edgeChrome.wake('tab', t); hit = 'left'; }
   if (y >= h - _FOOTER.top && y <= h - _FOOTER.bottom) {
     edgeChrome.wake('slider', t); edgeChrome.wake('tab', t);
     hit = hit ? `${hit}+footer` : 'footer';

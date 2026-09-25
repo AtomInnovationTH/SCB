@@ -1925,10 +1925,13 @@ export class LadderController {
     }
     // F1 Space verb: the workbench pane claims it when injected (D-b, owner
     // 2026-09-03 — "Space toggles the REFIT pane"; Session U: the REFIT block
-    // lives inside the ONE workbench pane, so Space toggles that pane);
-    // FloorContract's verb string stays 'lens-toggle'. Absent the pane, the
-    // shipped hullcam branch runs (un-injected in production today → the
-    // silent no-op stands).
+    // lives inside the ONE workbench pane, so Space toggles that pane).
+    // FloorContract's verb string stays 'lens-toggle'. main.js DOES inject
+    // the workbench (Space works on F1 today — verified end-to-end in
+    // test-LadderController, W7 §13 r5 2026-09-24); the hullcam branch below
+    // is the pane-less fallback, and it is HULLCAM that main.js deliberately
+    // does not inject (owner, 2026-09-02) — so with neither dep the verb is
+    // a silent no-op in production.
     if (verb === 'lens-toggle') {
       if (this._workbench && this._workbench.toggle) {
         this._workbench.toggle();

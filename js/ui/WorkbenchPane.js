@@ -1,6 +1,6 @@
 /**
  * WorkbenchPane.js — Session U: the ONE workbench drawer — SPECS + the F1
- * REFIT block in one right-side pane (plan
+ * REFIT block in one side-anchored pane (LEFT on every floor, §13 r5; plan
  * .kilo/plans/1788954873769-one-workbench-pane.md, owner 2026-09-09; docs/
  * ladder/08-workbench.md §2 "Session U — ONE workbench pane (layout)";
  * 01-numbers.md "Workbench panes").
@@ -19,9 +19,9 @@
  *     over the content). `openEntry(id, { via, anchor })` keeps the click
  *     anchor — the shell never turns a deep link into an entry-less open;
  *   - Session P (plan D2/D6/D7): the FOOTER TAB — a horizontal plate in the
- *     footer band's RIGHT slot (`bottom` = footerBottomPx − ROOT_BOTTOM_PX,
- *     height RAIL_GEOMETRY.FOOTER_BAND_PX), and the edge-chrome truth table
- *     (pinned OR open → awake, else the hub's per-frame `setTabPhase`);
+ *     footer band's LEFT slot (`bottom` = footerBottomPx − the root bottom in
+ *     force, height RAIL_GEOMETRY.FOOTER_BAND_PX), and the edge-chrome truth
+ *     table (pinned OR open → awake, else the hub's per-frame `setTabPhase`);
  *   - Session T: the framed part portrait rides the same openEntry anchor
  *     (`partId` with or without a screen point — `showPart` builds it);
  *   - RefitPane Session H (plan D-H): the depot INVITATION on the tab edge
@@ -31,14 +31,16 @@
  * ARCHITECTURE (plan D5): ONE shell, TWO hosted section engines. This module
  * owns the root `#ladder-workbench`, the tab `#ladder-workbench-tab`, the
  * slide, the idle fade, the edge-chrome tab phase, reduced motion, the RTL
- * variable (`--workbench-dir`), the anchor SIDE (C3, plan 1789561832042:
- * LEFT on the workbench floor, RIGHT on F2–F5), the invitation glow, ONE open
- * state and ONE `onOpenChange` edge. `LibraryPane` (the SPECS dossier: HEAD +
+ * variable (`--workbench-dir`), the anchor SIDE (§13 r5, 2026-09-24: LEFT on
+ * EVERY floor — the C3 floor-keyed side and its open-edge re-fire are
+ * retired), the invitation glow, ONE open state and ONE `onOpenChange` edge.
+ * `LibraryPane` (the SPECS dossier: HEAD +
  * TAIL) and `RefitPane` (the REFIT block, F1 only) are hosted section
  * engines: they render into the three slots the shell mounts them in —
  *
- *   #ladder-workbench                    the transform shell (side-anchored: left on F1,
- *    └ .workbench-body                   right elsewhere; top 56, bottom 96, width
+ *   #ladder-workbench                    the transform shell (left-anchored on every
+ *    └ .workbench-body                   floor; top 56, bottom 96 on F2–F5 / 16 on F1
+ *                                       (§13 r1 — full height), width
  *                                       clamp(380px, 28vw, 440px), z 35, pointer-events none)
  *       ├ .workbench-head   ← library.mount({ head, tail, onRefresh })   identity (D1: Identity …)
  *       ├ .workbench-refit  ← refit.mount(slot, { onRefresh })            … Upgrade (display:none off F1) …
@@ -47,9 +49,12 @@
  *
  * The BODY shrink-wraps its content (`height:auto; max-height:100%`, plan D4 /
  * Q3) so no drawer ever shows an empty bottom half; it scrolls when the
- * dossier + the REFIT block outgrow the column. Every engine call is
- * duck-typed and no-op-safe (`_call`): a missing method is a no-op and a
- * throwing engine never breaks the shell's own edge — the shell's state
+ * dossier + the REFIT block outgrow the column. **F1 exception (§13 r1,
+ * 2026-09-24): the drawer uses the height** — there the body FILLS the root
+ * (`height:100%`, still `overflow-y:auto`) and the root's bottom drops to
+ * `ROOT_BOTTOM_PX_F1` (16 px), so the whole column is drawer. Every engine
+ * call is duck-typed and no-op-safe (`_call`): a missing method is a no-op
+ * and a throwing engine never breaks the shell's own edge — the shell's state
  * machine (open bit, slide, tab, the onOpenChange edge) always completes.
  *
  * THE TAB (plan D3, owner: "SPECS on every floor"). The word is `SPECS`
@@ -62,14 +67,11 @@
  * edge a BUY / chip tap / related click repaints the engine (plan §7: without
  * it a BUY would leave a stale gold count until the next shell edge).
  * `setFloor(floor)` pins the tab awake on F1 (the workbench affordance never
- * sleeps there), hands it to the edge-chrome phase elsewhere, and writes the
- * anchor SIDE — LEFT on F1 (C3, plan 1789561832042: the zoom rail sits
- * mid-height on the right edge, so a left drawer stops it painting over the
- * open pane) and RIGHT on F2–F5 (the left column carries Mother and Daughters
- * on F2 — a left-anchored drawer would bury them). A side change on an OPEN
- * pane re-fires the ONE open edge so the camera bias and the callout insets
- * follow the anchor (still one edge — `_settle`/`close` own the open/close
- * halves).
+ * sleeps there), hands it to the edge-chrome phase elsewhere, and applies the
+ * FLOOR LAYOUT write-on-change (§13 r1: on F1 the root's bottom drops to
+ * ROOT_BOTTOM_PX_F1 and the body fills it; F2–F5 keep the shrink-wrap). The
+ * anchor side is LEFT on EVERY floor (§13 r5, 2026-09-24) — the C3
+ * floor-keyed side and its open-edge re-fire are retired.
  * An OPEN pane's tab is its handle and is awake on any floor. `display:block`
  * while enabled on every floor; `body[data-pure-scenery]` (index.html) hides
  * it under level 0.
@@ -107,9 +109,9 @@
  * between the screen edge (closed) and the inner edge (open) through
  * `--workbench-open` and stays visible + clickable while the pane is closed.
  * ONE CSS variable (`--workbench-dir`, 1 right-anchored / -1 left-anchored)
- * mirrors the slide direction, the anchor and the tab's side: `setFloor(1)`
- * flips it to -1 with the LEFT anchor (C3), and an RTL boot may set -1 the
- * same way — every transform, the anchor and the tab follow it.
+ * mirrors the slide direction, the anchor and the tab's side: the LEFT anchor
+ * (§13 r5) bakes -1, and an RTL boot may set 1 the same way — every
+ * transform, the anchor and the tab follow it.
  *
  * NO eventBus/Events import and NO live singletons — the shell touches the
  * world through the two engines and the injected `onOpenChange` only, so the
@@ -137,6 +139,10 @@ export const PANE_Z_INDEX = 35;
 /** The pane root's CSS `bottom` (px) — the footer tab's `bottom` is the band's
  *  bottom minus this (Session P, plan D7). */
 export const ROOT_BOTTOM_PX = 96;
+/** The F1 exception (§13 r1, 2026-09-24): on the workbench floor the drawer
+ *  USES the height — the root's bottom drops to 16 px and the body fills it
+ *  (F2–F5 keep ROOT_BOTTOM_PX + the shrink-wrap). */
+export const ROOT_BOTTOM_PX_F1 = 16;
 /** Tab pulse length (ms) — the ONE pulse a rising count earns (§2 Grammar). */
 export const TAB_PULSE_MS = 900;
 /** The drawer chrome's edge border (body + tab); `_applySide` re-writes the
@@ -193,9 +199,8 @@ export class WorkbenchPane {
    * @param {function} [deps.onOpenChange] - (isOpen) => void: the ONE open edge
    *   (main.js fans it into _syncWorkbenchPanes — the camera inset, the callout
    *   insets, the calm cap, WORKBENCH_RESUME on close). Fires on open and on
-   *   close, and — since C3 — once more when an OPEN pane changes anchor side
-   *   (setFloor F1↔F2+), so the side-signed feeds re-run. Still the one edge:
-   *   the argument is true on open and on the side change, false on close.
+   *   close only (§13 r5 retired the C3 side-change re-fire: the anchor is
+   *   LEFT on every floor, so a floor ride never moves it).
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc
@@ -215,10 +220,13 @@ export class WorkbenchPane {
     this._enabled = false;
     /** @private the floor the controller last applied (null until told); the REFIT section is enabled iff 1 */
     this._floor = null;
-    /** @private the anchor side (C3, plan 1789561832042): true = LEFT (the
-     * workbench floor), false = RIGHT (F2–F5 — the default; also the
-     * pre-floor state). setFloor writes it; `_applySide` mirrors the DOM. */
-    this._left = false;
+    /** @private the F1 layout last WRITTEN to the DOM (§13 r1; write-on-change
+     * like the tab phase — the build bakes the initial values). */
+    this._floorLayoutWritten = null;
+    /** @private the anchor side (§13 r5, 2026-09-24): true = LEFT — on EVERY
+     * floor (the C3 floor-keyed side is retired). `_applySide` mirrors the
+     * DOM (an RTL boot may flip it). */
+    this._left = true;
     this._open = false;
     this._built = false;
     this._disposed = false;
@@ -229,6 +237,7 @@ export class WorkbenchPane {
     this._tail = null;            // .workbench-tail  (LibraryPane TAIL)
     this._tab = null;             // the edge tab, a child of the root at its inner edge
     this._tabCount = null;
+    this._closeBtn = null;        // the ESC × button, a child of the body at its top-right (§13 r5)
     // Session P (plan D2/D6): whether the tab is PINNED awake on THIS floor
     // (F1 — the workbench affordance; setFloor writes it at every floor apply).
     // Off the workbench the tab is EDGE CHROME: it follows the hub's
@@ -283,9 +292,8 @@ export class WorkbenchPane {
   isOpen() { return this._open; }
 
   /**
-   * The drawer's anchor side (C3, plan 1789561832042): true = LEFT (the
-   * workbench floor — the zoom rail owns the right edge), false = RIGHT
-   * (F2–F5 — the left column carries Mother and Daughters on F2). The hub's
+   * The pane's anchor side (§13 r5, 2026-09-24): true = LEFT — on EVERY floor
+   * (the C3 floor-keyed side is retired; the drawer never moves). The hub's
    * `_syncWorkbenchPanes` reads it on the open edge to sign the camera bias
    * and place the callout insets.
    * @returns {boolean}
@@ -337,13 +345,12 @@ export class WorkbenchPane {
    * The REFIT section is enabled iff floor === 1 (hides its slot + clears
    * ghosting off F1 — the engine's setEnabled); the tab is PINNED awake iff
    * floor === 1 (else the edge-chrome phase rules); the count repaints (the
-   * F1 gold count vs the unread count); and the anchor SIDE follows the floor
-   * (C3: left on the workbench, right on F2–F5). A side change on an OPEN
-   * pane re-fires the ONE onOpenChange edge — the hub's sync is edge-only
-   * (open/close), and without the re-fire the camera bias and callout insets
-   * would keep the old side's sign while the pane moves (the ride-2→1 defect).
-   * The flip itself is instant: `left`/`right` do not tween, and the floor
-   * apply runs at ride start, mid-flight, where the camera already masks it.
+   * F1 gold count vs the unread count); and the FLOOR LAYOUT applies
+   * write-on-change (§13 r1: on F1 the root's bottom drops to
+   * ROOT_BOTTOM_PX_F1 and the body fills the root — F2–F5 keep the 96 bottom
+   * + the shrink-wrap). The anchor side is LEFT on every floor (§13 r5) —
+   * setFloor never moves it, and the C3 open-edge re-fire is retired: the
+   * one edge stays open/close-owned.
    * @param {number} floor
    */
   setFloor(floor) {
@@ -351,13 +358,7 @@ export class WorkbenchPane {
     this._floor = Number.isFinite(f) ? f : null;
     if (this._enabled) this._call(this._refit, 'setEnabled', this._floor === 1);
     this._setTabPinned(this._floor === 1);
-    const left = this._floor === 1;
-    if (left !== this._left) {
-      this._left = left;
-      this._applySide();
-      // Closed → nothing: the insets are 0 and the next open fires the edge.
-      if (this._open && this._onOpenChange) { try { this._onOpenChange(true); } catch (_e) { /* dep */ } }
-    }
+    this._applyFloorLayout();
     this._paintTab();
   }
 
@@ -577,12 +578,40 @@ export class WorkbenchPane {
 
   /**
    * @private Session P (plan D6/D7): the tab's CSS `bottom` inside the pane
-   * root — the footer band's bottom (viewport offset) minus the root's own
-   * bottom (96), never negative. 132 → 36 on both surfaces.
+   * root — the footer band's bottom (viewport offset) minus the root bottom
+   * IN FORCE (§13 r1: ROOT_BOTTOM_PX off F1, ROOT_BOTTOM_PX_F1 on F1), never
+   * negative — the plate stays inside the 132–164 band on every floor.
+   * 132 → 36 off F1, 116 on F1.
    * @returns {number}
    */
   _tabBottomCss() {
-    return Math.max(0, Math.round(this._footerBottomPx - ROOT_BOTTOM_PX));
+    return Math.max(0, Math.round(this._footerBottomPx - this._rootBottomInForce()));
+  }
+
+  /** @private The root bottom actually in force (§13 r1): F1 → 16, else 96. */
+  _rootBottomInForce() {
+    return this._floor === 1 ? ROOT_BOTTOM_PX_F1 : ROOT_BOTTOM_PX;
+  }
+
+  /** @private The F1 floor layout (§13 r1), write-on-change like the tab
+   *  phase: the root's `bottom`, the body's fill vs shrink-wrap, and the
+   *  tab's `bottom` (the footer band never moves). `_build` bakes the
+   *  initial values into the cssText and records the flag; a floor ride
+   *  re-writes only on a real F1↔F2+ change. */
+  _applyFloorLayout() {
+    const f1 = this._floor === 1;
+    if (f1 === this._floorLayoutWritten) return;
+    this._floorLayoutWritten = f1;
+    const root = this._root;
+    if (!root) return;
+    root.style.bottom = `${this._rootBottomInForce()}px`;
+    const body = this._body;
+    if (body) {
+      body.style.height = f1 ? '100%' : 'auto';
+      body.style.maxHeight = f1 ? 'none' : '100%';
+    }
+    const tab = this._tab;
+    if (tab) tab.style.bottom = `${this._tabBottomCss()}px`;
   }
 
   /** @private Build the shell once, then mount the two engines into its slots. */
@@ -593,22 +622,23 @@ export class WorkbenchPane {
     this._built = true;
     const reduced = this._reducedMotion();
 
-    // The pane ROOT — 380–440 px wide, anchored to the SIDE the floor picks
-    // (C3: LEFT on the workbench floor, RIGHT on F2–F5) — is the positioning +
-    // TRANSFORM shell (Session D): it carries the slide, the width clamp and
-    // the z layer, paints nothing itself and takes no pointer events; the
-    // BODY (the panel: border, background, padding, the scrolling content)
-    // and the edge TAB are its children, so the tab RIDES the pane's
-    // transform. --workbench-dir is the ONE mirror variable (1 right-anchored,
-    // -1 left-anchored — setFloor(1) flips it; an RTL boot may too): every
+    // The pane ROOT — 380–440 px wide, LEFT-anchored on every floor (§13 r5)
+    // — is the positioning + TRANSFORM shell (Session D): it carries the
+    // slide, the width clamp and the z layer, paints nothing itself and takes
+    // no pointer events; the BODY (the panel: border, background, padding,
+    // the scrolling content) and the edge TAB are its children, so the tab
+    // RIDES the pane's transform. --workbench-dir is the ONE mirror variable
+    // (-1 left-anchored — the §13 r5 default; an RTL boot may set 1): every
     // transform, the anchor and the tab's side follow it. --workbench-open
     // (0|1) is the reduced-motion tab position (the root never moves there;
-    // see _applyOpenState).
+    // see _applyOpenState). The root's `bottom` is the one in force (§13 r1:
+    // 16 on F1, 96 off).
+    const f1 = this._floor === 1;
     const root = doc.createElement('div');
     root.id = 'ladder-workbench';
     root.className = reduced ? 'workbench-reduced' : '';
     root.style.cssText = [
-      'position:absolute', this._left ? 'left:0' : 'right:0', 'top:56px', `bottom:${ROOT_BOTTOM_PX}px`, `z-index:${PANE_Z_INDEX}`,
+      'position:absolute', this._left ? 'left:0' : 'right:0', 'top:56px', `bottom:${this._rootBottomInForce()}px`, `z-index:${PANE_Z_INDEX}`,
       'width:clamp(380px, 28vw, 440px)', 'box-sizing:border-box',
       'pointer-events:none', `--workbench-dir:${this._left ? -1 : 1}`, '--workbench-open:1',
       // Slide (transform) in the normal path; the reduced-motion class swaps
@@ -620,15 +650,17 @@ export class WorkbenchPane {
     ].join(';');
 
     // The body — the panel the player reads. Anchored to the root's top; it
-    // SHRINK-WRAPS its content (plan D4 / Q3: `height:auto; max-height:100%`
-    // — no empty column below the last block) and scrolls past the fold.
+    // SHRINK-WRAPS its content off F1 (plan D4 / Q3: `height:auto;
+    // max-height:100%` — no empty column below the last block) and scrolls
+    // past the fold; on F1 it FILLS the root instead (§13 r1 — the drawer
+    // uses the height; `height:100%`, still `overflow-y:auto`).
     // Border / background / padding / font = the shipped .library-body. The
-    // border's dead side mirrors the anchor (C3): the side against the
-    // screen edge carries no border, the corners round away from it.
+    // border's dead side mirrors the anchor: the side against the screen
+    // edge carries no border, the corners round away from it.
     const body = doc.createElement('div');
     body.className = 'workbench-body';
     body.style.cssText = [
-      'position:absolute', 'top:0', 'right:0', 'left:0', 'height:auto', 'max-height:100%', 'box-sizing:border-box',
+      'position:absolute', 'top:0', 'right:0', 'left:0', f1 ? 'height:100%' : 'height:auto', f1 ? '' : 'max-height:100%', 'box-sizing:border-box',
       'padding:10px 12px', 'overflow-y:auto',
       `border:${EDGE_BORDER}`, this._left ? 'border-left:none' : 'border-right:none',
       this._left ? 'border-radius:0 6px 6px 0' : 'border-radius:6px 0 0 6px',
@@ -645,6 +677,13 @@ export class WorkbenchPane {
     // survive every repaint of their neighbours.
     const head = doc.createElement('div');
     head.className = 'workbench-head';
+    // §13 r5: the shell pads the head slot's RIGHT side past the ESC × button
+    // so the engine's own right-edge chrome (LibraryPane's MAXIMIZE ↗ — its
+    // .library-header is flex space-between) is never under the X. The pad is
+    // the SHELL's (engines own no chrome); 96 px ≥ the button's ~86 px
+    // content width (estimate: 16 px mono 'ESC ×' + 0.15 em spacing + 24 px
+    // padding + 2 px border).
+    head.style.paddingRight = '96px';
     const refitSlot = doc.createElement('div');
     refitSlot.className = 'workbench-refit';
     const tail = doc.createElement('div');
@@ -652,6 +691,31 @@ export class WorkbenchPane {
     body.appendChild(head);
     body.appendChild(refitSlot);
     body.appendChild(tail);
+
+    // The ESC × close button (§13 r5): the tech library's chrome — the
+    // #codex-close-btn inline style (CodexViewerUI) plus the 44 px touch
+    // target — a child of the BODY at its top-right corner (the inner edge,
+    // toward the ship). Click → close(); NO close on outside click (clicking
+    // the ship is how parts are chosen); Esc and the tab keep their halves.
+    const closeBtn = doc.createElement('button');
+    closeBtn.id = 'workbench-close-btn';
+    closeBtn.className = 'workbench-close';
+    closeBtn.textContent = 'ESC ×';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.setAttribute('title', 'Close (Esc)');
+    closeBtn.style.cssText = [
+      'position:absolute', 'top:0', 'right:0', 'z-index:2',
+      'background:none', 'border:1px solid rgba(255,255,255,0.2)', 'color:#888',
+      'font-size:16px', 'letter-spacing:0.15em', 'text-transform:uppercase',
+      'cursor:pointer', 'padding:4px 12px', 'border-radius:3px',
+      'font-family: var(--font-mono)', 'min-width:44px', 'min-height:44px',
+      'box-sizing:border-box', 'pointer-events:auto',
+    ].join(';');
+    closeBtn.addEventListener('click', (ev) => {
+      this.close();
+      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+    });
+    body.appendChild(closeBtn);
 
     // The edge tab (08-workbench §2 Grammar). A CHILD of the root at the
     // pane's INNER edge (Session D, owner decision 3): closed, the root's
@@ -662,7 +726,7 @@ export class WorkbenchPane {
     // --workbench-open flips it between the screen edge (closed) and the inner
     // edge (open) because the root never moves. Session P (plan D6/D7): a
     // HORIZONTAL plate in the FOOTER BAND — the right slot for a right-anchored
-    // pane, the LEFT slot on the workbench floor (C3) — `bottom` = the band's
+    // pane, the LEFT slot (§13 r5) — `bottom` = the band's
     // bottom minus the root's 96, height FOOTER_BAND_PX; its opacity /
     // visibility are the edge-chrome truth table's (the hub's setTabPhase +
     // setFloor's pin), the ramp `opacity EDGE_FADE_MS` (none under reduced
@@ -705,10 +769,12 @@ export class WorkbenchPane {
     this._tail = tail;
     this._tab = tab;
     this._tabCount = tabCount;
+    this._closeBtn = closeBtn;
+    this._floorLayoutWritten = f1;  // the cssText above baked the floor layout (§13 r1)
     this._tabPhaseWritten = null;   // the phase truth table writes the fresh tab
     this._applyTabPhase();
     this._applyOpenState();
-    this._applySide();              // a side picked before the build lands now (C3)
+    this._applySide();              // a side picked before the build lands now (the RTL mirror)
     this._applyInvitation();        // a pre-build setInvitation lands once built (Session H)
 
     // Delegated wake (one listener set — G1, the PaneHelp pattern): on the
@@ -768,10 +834,8 @@ export class WorkbenchPane {
    * `--workbench-dir` (1 right / -1 left — the slide transform, the anchor
    * and the tab's side all read it), and the body's and tab's dead border
    * side + corner rounding (the side against the screen edge carries no
-   * border; the corners round away from it). Called from `_build` (a side
-   * picked before the build) and from `setFloor` on a real side change —
-   * the flip is instant by design (the floor apply runs at ride start,
-   * mid-flight; `left`/`right` do not tween anyway).
+   * border; the corners round away from it). Called from `_build` (the LEFT
+   * anchor of §13 r5 is the default; an RTL boot may flip it before then).
    */
   _applySide() {
     const root = this._root;

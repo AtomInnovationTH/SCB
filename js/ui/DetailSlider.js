@@ -18,13 +18,16 @@
  * (its visibility is EdgeChrome's — it is NOT in the body[data-pure-scenery]
  * CSS rule, otherwise level 0 would be a trap on glass).
  *
- * WHERE IT LIVES. The FOOTER BAND's left slot (plan D7): `position:fixed;
- * left:EDGE_PX; bottom:footerBottomPx; height:FOOTER_BAND_PX` — the hub
+ * WHERE IT LIVES. The FOOTER BAND's RIGHT slot (§13 ruling 5, 2026-09-24 —
+ * was the left slot, plan D7, until the SPECS tab took it):
+ * `position:fixed; right:EDGE_PX; bottom:footerBottomPx;
+ * height:FOOTER_BAND_PX` — the hub
  * passes `footerBand().bottom` (132 on both surfaces). On GLASS the hit box
  * is TOUCH_PITCH_PX (44) tall: 6 px of transparent padding above and below
  * the 32 px band, the root shifted down by 6 so the VISUAL band still sits
  * at footerBottomPx (Apple HIG 44 pt). F2–F5 only: the hub calls
- * `setShown(floor !== 1)` (the workbench has the REFIT tab in that slot).
+ * `setShown(floor !== 1)` (the SPECS tab has the left slot on every floor;
+ * F1 owns the whole footer band).
  *
  * EDGE CHROME (plan D2/D3). The slider has no idle timer of its own: the
  * hub reads `edgeChrome.phase('slider', now)` per frame and calls
@@ -317,7 +320,7 @@ export class DetailSlider {
     const height = this._glass ? RAIL_GEOMETRY.TOUCH_PITCH_PX : RAIL_GEOMETRY.FOOTER_BAND_PX;
     const s = root.style;
     s.position = 'fixed';
-    s.left = `${RAIL_GEOMETRY.EDGE_PX}px`;
+    s.right = `${RAIL_GEOMETRY.EDGE_PX}px`;
     s.bottom = `${this._footerBottomPx - pad}px`;
     s.height = `${height}px`;
     s.width = `${TRACK_WIDTH_PX + 2 * SIDE_PAD_PX}px`;
@@ -370,7 +373,8 @@ export class DetailSlider {
     const info = VisualLaw.COLORS.INFO;
     style.textContent = `
       /* The DETAIL slider (Session P, plan D5): an INSTRUMENT in the WHERE
-       * rail's INFO frame, the thumb in the law's PLAYER. Footer-left slot;
+       * rail's INFO frame, the thumb in the law's PLAYER. Footer-right slot
+       * (§13 r5, 2026-09-24);
        * asleep at birth (EdgeChrome's phase writes opacity / visibility). */
       #${DETAIL_SLIDER_ID} {
         display: flex;
