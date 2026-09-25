@@ -5138,27 +5138,52 @@ export class PlayerSatellite extends THREE.Group {
     const zFwd = new THREE.Vector3(0, 0, 1);
     const radialAt = (azDeg) => new THREE.Vector3(Math.cos(azDeg * deg), Math.sin(azDeg * deg), 0);
 
-    // ── Star trackers ×2 — baffle tubes with a recessed dark optic in the mouth.
-    // Fore shoulder band az 84°/96°, z 0.90; boresights canted ~30° off +Z toward
-    // up-outward (the ±15° azimuth split comes from the 84°/96° mount pair).
+    // ── Star trackers ×2 — open baffle tubes; a dark optic is recessed ~1 cm
+    // behind the mouth, spanning the bore. Fore shoulder band az 82°/98°,
+    // z 0.90; boresights canted 30° off +Z toward up-outward (8.0° apart).
+    // Pair spacing (2026-09-25): the old 84°/96° pair put the tube axes
+    // 83.6 mm apart at the skin — inside the 100 mm sum of radii — so the two
+    // tubes fused along their whole length (tmp/star-tracker-probe.mjs: 1390
+    // of 16344 surface points inside the neighbour prism, reaching r 0.471,
+    // z 0.889–1.022; a base-end overlap survives any cant — only separation
+    // fixes it). 82°/98° measures 111.3 mm at the base / 130.8 mm at the
+    // mouth: 11.3 mm clear at the worst point, widening upward.
     const stR = M * 0.05;
     const stLen = M * 0.14;
-    [84, 96].forEach((azDeg, i) => {
+    // The mouth is OPEN (the optic must show), so the bore's inner wall and
+    // back cap render from inside: one DoubleSide gunmetal — the same recipe —
+    // serves the tube, the back cap and the mount wedge.
+    const stGunmetal = new THREE.MeshStandardMaterial({ ...AVIONICS_GUNMETAL, side: THREE.DoubleSide });
+    [82, 98].forEach((azDeg, i) => {
       const radial = radialAt(azDeg);
       const boresight = zFwd.clone().multiplyScalar(Math.cos(30 * deg))
         .addScaledVector(radial, Math.sin(30 * deg)).normalize();
       const base = radial.clone().multiplyScalar(barrelR).setZ(barrelHZ * 0.90);
-      const tubeGeo = new THREE.CylinderGeometry(stR, stR, stLen, 12);
-      const tube = new THREE.Mesh(tubeGeo, gunmetal);
+      const tubeGeo = new THREE.CylinderGeometry(stR, stR, stLen, 12, 1, true);   // open baffle
+      const tube = new THREE.Mesh(tubeGeo, stGunmetal);
       tube.quaternion.setFromUnitVectors(yUp, boresight);   // tube axis (+Y) → boresight
       tube.position.copy(base).addScaledVector(boresight, stLen * 0.5);
       tube.name = `StarTracker_${i}`;
       tube.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.add(tube);
-      // Recessed optic disc ~1 cm inside the mouth (tube-local +Y is the mouth).
-      const optic = new THREE.Mesh(new THREE.CircleGeometry(stR * 0.8, 12), darkOptic);
+      // Back cap closes the base end so the baffle interior reads dark from
+      // every angle (the mount wedge passes through it, as it always passed
+      // through the old closed cylinder's built-in cap). Rim = the tube's
+      // base rim; DoubleSide shows it from the mouth.
+      const backCap = new THREE.Mesh(new THREE.CircleGeometry(stR, 12), stGunmetal);
+      backCap.position.set(0, -stLen * 0.5, 0);
+      backCap.rotation.x = Math.PI / 2;   // circle plane → tube-local XZ (base end)
+      backCap.name = `StarTracker_${i}_BackCap`;
+      backCap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      tube.add(backCap);
+      // Recessed optic ~1 cm inside the mouth (tube-local +Y is the mouth),
+      // spanning the bore: r 0.049 vs the 0.0483–0.05 wall puts the rim ~1 mm
+      // from its OWN tube (measured 1.0 mm; every other mesh ≥ 20 mm). It
+      // FACES the mouth — the old rotation.x = +π/2 turned it to the base,
+      // and the closed mouth cap hid it besides.
+      const optic = new THREE.Mesh(new THREE.CircleGeometry(stR * 0.98, 12), darkOptic);
       optic.position.set(0, stLen * 0.5 - M * 0.01, 0);
-      optic.rotation.x = Math.PI / 2;   // circle +Z → tube-local +Y (mouth)
+      optic.rotation.x = -Math.PI / 2;   // circle +Z → tube-local +Y (mouth)
       optic.name = `StarTracker_${i}_Optic`;
       optic.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       tube.add(optic);
@@ -5203,7 +5228,7 @@ export class PlayerSatellite extends THREE.Group {
       const mountGeo = new THREE.ExtrudeGeometry(prof, { depth: M * 2 * STM_HALF_W, bevelEnabled: false });
       mountGeo.translate(0, 0, -M * STM_HALF_W);   // centre the tangential extrusion
       const tangential = new THREE.Vector3().crossVectors(zFwd, radial).normalize();
-      const mount = new THREE.Mesh(mountGeo, gunmetal);
+      const mount = new THREE.Mesh(mountGeo, stGunmetal);
       mount.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(zFwd, radial, tangential));
       mount.position.copy(radial).multiplyScalar(M * stmRc).setZ(M * stmZc);
       mount.name = `StarTracker_${i}_Mount`;
