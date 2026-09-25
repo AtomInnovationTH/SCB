@@ -458,6 +458,10 @@ export class CaptureNetVisual {
    * strut tip by the rack. Continuity law: the catch never stops being drawn.
    */
   _onCargoTransferred(payload) {
+    // CUT_AT_NOSE: a cut piece's completion carries `cut` — it rode NET-LESS
+    // (no bag was ever made for it), and podIndex names the collar it came
+    // FROM, whose boss bag must keep rendering. Nothing to fade here.
+    if (payload?.cut) return;
     const pi = payload?.podIndex;
     if (pi == null || pi < 0) return;
     const key = `pod_${pi}`;

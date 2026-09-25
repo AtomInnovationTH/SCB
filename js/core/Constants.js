@@ -2239,6 +2239,16 @@ export const Constants = {
     // Daughter net-FSM captures only; the mother lasso/berth spine (M1
     // onboarding) is untouched. OFF = byte-identical instant-arrest legacy.
     CAPTURE_TORQUE_SETTLE:     true,
+
+    // Debris cutting step 5 — call the cut planner when a collared catch is
+    // too heavy for one daughter's rack (over CARGO_TRANSFER.MAX_KG): the
+    // collar refuses once, plans pieces at the receiver's limit, and cuts one
+    // piece at a time at the nose; each piece flies the same crane arc as a
+    // whole catch, and the held remainder leaves last by the ordinary
+    // transfer. No cooking while cutting. Tuning: Constants.CAPTURE_NET.CUT_S.
+    // OFF = byte-identical legacy (the whole body rides the collar until the
+    // furnace takes it, or jettison [K]).
+    CUT_AT_NOSE:              true,
   },
 
   // ============================================================================
@@ -3711,6 +3721,14 @@ export const Constants = {
       W_CG:           1.0,
       W_DEPLOY:       0.5,
     },
+
+    // Debris cutting step 5 (CUT_AT_NOSE): one cut takes this many GAME
+    // seconds at the nose (dt × TimeAuthority.BASE_SCALE, deliberately NOT
+    // sun-scaled — the cutter is a machine, not a plant). 60 game-s = 6 real
+    // seconds per piece.
+    // PLACEHOLDER — unsourced; electron-beam cut rate research is owed
+    // (cutting plan §6 step 2). Tuning, not doctrine.
+    CUT_S: 60,
 
     // ── Line-taut tug (mother-net-reel plan §9 Phase B) ──
     // When the net cinches onto a whale with residual relative velocity, the

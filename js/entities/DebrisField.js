@@ -2352,6 +2352,181 @@ export class DebrisField {
   }
 
   /**
+   * Debris cutting step 5 (CUT_AT_NOSE, plan L7) — spawn ONE cut piece of a
+   * captured boss as a real, DRAWN debris object.
+   *
+   * `createFragments` (the Kessler spawner, `:4027`'s own admission) sets
+   * `_meshKey = null` — its pieces render nothing. A cut piece is cargo the
+   * player watches fly nose → strut tip, so it gets a TRUE InstancedMesh slot:
+   * the existing (type:material) mesh is grown by one instance (matrices and
+   * colours carried over; geometry and material are shared, never disposed
+   * here — the geometry belongs to the wireframe cache), or the mesh is
+   * created on first use with the same recipe as `_buildInstancedMeshes` (one
+   * convention, no second key scheme).
+   *
+   * The piece carries its planned mass and salvage, the parent's material /
+   * isReal / country / catalogType, and `_credited: true` — the mate already
+   * paid the whole body, so no later CATCH_PROCESSED may pay or recover
+   * salvage for a piece (register item 37's law). It is born held:
+   * `_captured`/`_armPinned`/`_motherParked` set, orbit frozen at the
+   * parent's (the collar pin owns it from the first frame).
+   *
+   * Deterministic by construction: no rng, ids sequence from `_nextId`.
+   *
+   * @param {object} parent — the boss debris (read-only)
+   * @param {object} pieceSpec — one `planCuts` piece ({ massKg, salvage, zones, index })
+   * @param {object} plan — the `planCuts` result (pieces in chop order)
+   * @param {number} originalMassKg — the boss's mass BEFORE any cuts (the
+   *   size-derivation reference)
+   * @param {THREE.Vector3|null} seatScenePos — where to seat the piece now
+   * @returns {object|null} the piece, or null when the inputs are unusable
+   */
+  spawnCutPiece(parent, pieceSpec, plan, originalMassKg, seatScenePos) {
+    if (!parent || !pieceSpec || typeof pieceSpec.massKg !== 'number'
+      || !(pieceSpec.massKg > 0)) return null;
+
+    const sv = pieceSpec.salvage || null;
+    const piece = {
+      id: this._nextId++,
+      // A piece of the parent: same type (same wireframe family) and the same
+      // provenance fields. Zone-accurate piece SHAPES are a later order; the
+      // drawn size below is the volume-honest scaling of the parent's.
+      type: parent.type,
+      material: parent.material,
+      mass: pieceSpec.massKg,
+      salvage: sv,
+      hasSalvage: !!sv && ((sv.xenon || 0) + (sv.indium || 0) + (sv.gaAs || 0)
+        + (sv.battery || 0) + (sv.hydrazine || 0) + (sv.lithium || 0) > 0
+        || (Array.isArray(sv.metals) && sv.metals.length > 0)),
+      metalMassKg: (sv && Array.isArray(sv.metals))
+        ? sv.metals.reduce((s, m) => s + (m.amount || 0), 0) : 0,
+      alive: true,
+      tracked: false,
+      tumbleRate: 0,
+      _initialTumbleRate: 0,
+      tumbleAxis: (parent.tumbleAxis instanceof THREE.Vector3)
+        ? parent.tumbleAxis.clone() : (parent.tumbleAxis || null),
+      tumbleAngle: 0,
+      isReal: parent.isReal,
+      country: parent.country,
+      catalogType: parent.catalogType,
+      // Cut provenance — what the CARGO_TRANSFER_START `cut` payload reports.
+      cutParentId: parent.id,
+      cutIndex: pieceSpec.index,
+      cutOf: plan && Array.isArray(plan.pieces) ? plan.pieces.length : 0,
+      cutZoneName: (pieceSpec.zones && pieceSpec.zones[0] && pieceSpec.zones[0].zoneName) || null,
+      // L8: born paid — the mate credited the whole body already.
+      _credited: true,
+      // Born held at the nose: cargo from the first frame.
+      _captured: true,
+      _armPinned: true,
+      _motherParked: true,
+    };
+    if (parent.orbit) piece.orbit = { ...parent.orbit };
+
+    // Volume-honest size: the piece keeps the parent's density, so its drawn
+    // extent scales with the cube root of its share of the ORIGINAL body.
+    // (The boss's own drawn shape does not shrink as pieces come off — a
+    // known limit, noted in the cutting plan.)
+    const refMass = (originalMassKg && originalMassKg > 0)
+      ? originalMassKg : (parent.mass || pieceSpec.massKg);
+    const frac = Math.min(1, pieceSpec.massKg / refMass);
+    DebrisField.setDebrisSize(piece,
+      Math.max(0.1, (parent.sizeMeter || 2) * Math.cbrt(frac)));
+
+    this.debrisMap.set(piece.id, piece);
+    this.debrisList.push(piece);
+
+    // ── The instance slot: this is what makes the piece DRAWN ──
+    const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
+    const key = piece.type === 'fragment'
+      ? `${piece.type}:${piece.material}:${piece.id % N}`
+      : `${piece.type}:${piece.material}`;
+    piece._meshKey = key;
+    let mesh = this.instancedMeshes[key];
+    let idx;
+    if (mesh) {
+      // Grow: allocate count+1, carry every existing instance over, swap.
+      const next = new THREE.InstancedMesh(mesh.geometry, mesh.material, mesh.count + 1);
+      next.name = mesh.name;
+      next.frustumCulled = false;
+      next.instanceMatrix.array.set(mesh.instanceMatrix.array);
+      if (mesh.instanceColor) {
+        next.setColorAt(mesh.count, this._defaultDebrisColor);  // allocates the buffer
+        next.instanceColor.array.set(mesh.instanceColor.array);
+      }
+      this.group.add(next);
+      this.group.remove(mesh);
+      mesh.dispose();   // frees the OLD instance buffers only
+      this.instancedMeshes[key] = next;
+      mesh = next;
+      idx = next.count - 1;
+    } else {
+      // First piece of this (type:material): build the mesh exactly the way
+      // `_buildInstancedMeshes` does — same geometry, same material recipe.
+      const geo = DebrisWireframe.getGeometry(piece.type, 0);
+      const matDef = Constants.DEBRIS_MATERIALS[piece.material]
+        || Constants.DEBRIS_MATERIALS.aluminum;
+      const isTextured = getVisualMode() === 'textured';
+      const catalogType = PROC_TYPE_TO_CATALOG[piece.type] || 'debris';
+      let mat;
+      if (isTextured) {
+        const emissiveColor = new THREE.Color(matDef.color);
+        const _emHSL = { h: 0, s: 0, l: 0 };
+        if (_SRGB) emissiveColor.getHSL(_emHSL, _SRGB); else emissiveColor.getHSL(_emHSL);
+        _emHSL.s *= 0.25;
+        _emHSL.l = Math.min(_emHSL.l, 0.30);
+        if (_SRGB) emissiveColor.setHSL(_emHSL.h, _emHSL.s, _emHSL.l, _SRGB);
+        else emissiveColor.setHSL(_emHSL.h, _emHSL.s, _emHSL.l);
+        mat = new THREE.MeshStandardMaterial({
+          color: matDef.color, metalness: matDef.metalness,
+          roughness: matDef.roughness, emissive: emissiveColor, emissiveIntensity: 0.06,
+        });
+        const typeAtlasTex = getTypeAtlasTexture();
+        if (typeAtlasTex) {
+          const uvs = getUVOffsetForType(catalogType);
+          const clonedTex = typeAtlasTex.clone();
+          clonedTex.offset.set(uvs.offsetU, uvs.offsetV);
+          clonedTex.repeat.set(uvs.scaleU, uvs.scaleV);
+          mat.map = clonedTex;
+          mat.needsUpdate = true;
+          const tint = new THREE.Color(matDef.color);
+          const _tHSL = { h: 0, s: 0, l: 0 };
+          if (_SRGB) tint.getHSL(_tHSL, _SRGB); else tint.getHSL(_tHSL);
+          _tHSL.s *= 0.35;
+          _tHSL.l = Math.max(0.72, Math.min(0.92, _tHSL.l));
+          if (_SRGB) tint.setHSL(_tHSL.h, _tHSL.s, _tHSL.l, _SRGB);
+          else tint.setHSL(_tHSL.h, _tHSL.s, _tHSL.l);
+          mat.color = tint;
+        }
+      } else {
+        mat = new THREE.MeshStandardMaterial({
+          color: matDef.color, metalness: matDef.metalness,
+          roughness: matDef.roughness, wireframe: true,
+        });
+      }
+      const fresh = new THREE.InstancedMesh(geo, mat, 1);
+      fresh.name = `Debris_${piece.type}_${piece.material}`;
+      fresh.frustumCulled = false;
+      fresh.setColorAt(0, this._defaultDebrisColor);
+      this.group.add(fresh);
+      this.instancedMeshes[key] = fresh;
+      mesh = fresh;
+      idx = 0;
+    }
+    // The same weathering tint pass every other instance gets.
+    const _cutTint = new THREE.Color(getInstanceTintBase(piece.catalogType || 'unknown'));
+    applyInstanceColorVariation(_cutTint, piece.id, piece.catalogType);
+    mesh.setColorAt(idx, _cutTint);
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    this._instanceLookup.set(piece.id, { meshKey: key, instanceIndex: idx });
+    mesh.instanceMatrix.needsUpdate = true;
+
+    if (seatScenePos) this.pinCapturedDebris(piece, seatScenePos);
+    return piece;
+  }
+
+  /**
    * Update the instance matrix for a single debris piece.
    * @private
    */

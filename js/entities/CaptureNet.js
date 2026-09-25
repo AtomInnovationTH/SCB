@@ -24,6 +24,9 @@ import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
 import { reseatOrbitFromScene, orbitToSceneCartesianInto } from './OrbitalMechanics.js';
 import { strutTipFoulsCorridor } from './ArmDockBasis.js';
+// Debris cutting step 5 (CUT_AT_NOSE): the pure planner — called ONCE when a
+// collared catch is over the hand-off gate.
+import { planCuts } from '../systems/cutPlanner.js';
 // Cargo-continuity S7: the carrier scorer lives with the rest of the CoM maths
 // (ONE quantity, ONE computation — it reuses computeCoM/strutTipMeters).
 import { suggestCargoArm, computeCoMDrift } from '../systems/CoMCalculator.js';
@@ -55,6 +58,9 @@ const _q1  = new THREE.Quaternion();
 const _v3f = new THREE.Vector3();
 const _qS7 = new THREE.Quaternion();
 const _WORLD_UP_S7 = new THREE.Vector3(0, 1, 0);
+// Cut-at-nose scratch (CUT_AT_NOSE): the waiting-piece pin runs every COLLARED
+// frame — same no-allocation rule.
+const _v3cut = new THREE.Vector3();
 // Tug scratch (Phase B §9) — catch/ship velocity sampling at CAPTURED.
 const _tugScratchPos = { x: 0, y: 0, z: 0 };
 const _tugScratchVel = { x: 0, y: 0, z: 0 };
@@ -3085,7 +3091,12 @@ export class CaptureNetSystem {
         // (digested — the mate already paid the credit, GameFlowManager skips
         // it) and the collar frees. A completed digest splices the net in-tick
         // (the same one-state-change-per-tick idiom as the mate above).
-        if (net.state === STATES.COLLARED && this._tickCollarDigestion(net, dt)) {
+        // CUT_AT_NOSE (plan L4): while pieces remain to cut (or one is
+        // waiting/flying) the clock is FROZEN — `_breakdownStarted` would
+        // close the transfer window and the boss would cook mid-cut. Flag OFF
+        // → `_cutActive` is always false → byte-identical.
+        if (net.state === STATES.COLLARED
+            && !this._cutActive(net) && this._tickCollarDigestion(net, dt)) {
           this.activeNets.splice(i, 1);
           continue;
         }
@@ -3102,6 +3113,17 @@ export class CaptureNetSystem {
             net._cargoRetryS = 0;
             if (this._tryCargoTransfer(net)) continue;
           }
+        }
+
+        // ── CUT_AT_NOSE: the cut driver (plan L1/L5/L7) ───────────────────
+        // One piece at a time: CUT_S game-seconds per cut (machine time, not
+        // sun-scaled), the piece departs only when the crane is free and a
+        // daughter qualifies, and the held part is never cut off — the
+        // ordinary retry above takes it once the plan is done. No state
+        // change here: the boss stays COLLARED; the detached piece rides its
+        // own synthetic net (L7).
+        if (net.state === STATES.COLLARED && net._cutPlan && FEATURE_FLAGS.CUT_AT_NOSE) {
+          this._driveCutAtNose(net, dt);
         }
       }
 
@@ -3123,7 +3145,13 @@ export class CaptureNetSystem {
       if (!net.isActive || net.state === STATES.STOWED || net.state === STATES.RELEASED) {
         // Mother exits (miss / release / forceResolve) — clear any pins the
         // reel/berth wrote. Idempotent; most exits fire before any pin exists.
-        if (net._isMother) this._clearCatchPins(net.targetDebris);
+        if (net._isMother) {
+          this._clearCatchPins(net.targetDebris);
+          // CUT_AT_NOSE: the [K] jettison path never calls _teardownBerth —
+          // release a still-waiting cut piece here (same law: cargo is never
+          // destroyed; the piece becomes free salvage at its last pin).
+          if (net._cutPiece && !net._cutPieceFlying) this._releaseCutPiece(net._cutPiece);
+        }
 
         // §3.5: Net is NOT consumed on miss — restore inventory when empty net reels back
         if (net.state === STATES.STOWED && net.catchResult === 'miss') {
@@ -3200,6 +3228,13 @@ export class CaptureNetSystem {
     const armManager = this._armManager;
     if (!d || !armManager || !Array.isArray(armManager.arms)) return false;
 
+    // CUT_AT_NOSE (plan L3/L5): while a cut plan is under way the boss is
+    // MID-CUT — the pieces leave one at a time below, and the boss itself may
+    // only take this ordinary path once the plan is done and only the held
+    // part remains (it is then ≤ the gate by construction). Silent decline:
+    // the plan's own comms already spoke; the cut driver owns the timeline.
+    if (this._cutActive(net)) return false;
+
     // S13(c) pre-commit review: once the collar's furnace has COMMITTED to the
     // piece (the chop START fired), the transfer window is closed — you cannot
     // crane a half-eaten body. Without this guard a late acceptance (racks were
@@ -3213,18 +3248,50 @@ export class CaptureNetSystem {
     if (net._breakdownStarted) return false;
 
     const massKg = net.capturedMass || d.mass || 0;
-    const armIndex = suggestCargoArm(armManager, player, massKg);
+    // CUT_AT_NOSE dust guard: the planner guarantees every piece ≤
+    // maxPieceKg×(1+1e-9); a float-dust overhang on the held part (≤1e-6 kg)
+    // must not strand it at the gate forever — clamp it to the gate. The
+    // ledger effect is below every conservation tolerance.
+    const _gate = CT.MAX_KG ?? 2000;
+    let gateMassKg = massKg;
+    if (net._cutPlan && net._cutNext >= net._cutPlan.pieces.length - 1
+        && massKg > _gate && massKg - _gate <= 1e-6) {
+      gateMassKg = _gate;
+    }
+    const armIndex = suggestCargoArm(armManager, player, gateMassKg);
     if (armIndex == null) {
       if (!net._cargoRefused) {
         net._cargoRefused = true;
-        const overGate = massKg > (CT.MAX_KG ?? 2000);
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          source: 'HOUSTON', channel: 'CMD',
-          text: overGate
-            ? `Catch is ${Math.round(massKg)} kg — too heavy for a daughter's cargo rack. It rides the collar until the furnace takes it, or jettison [K].`
-            : 'No daughter can take the catch (none docked with a free cargo cell). It rides the collar until the furnace takes it, or jettison [K].',
-          priority: 'warning',
-        });
+        const overGate = gateMassKg > _gate;
+        // CUT_AT_NOSE (plan L1/L2): the over-gate refusal is where the cut
+        // planner is called — exactly once, at the receiver's own limit (no
+        // new number). Requires a spawn-capable field (a DebrisField without
+        // spawnCutPiece — a mock, or a legacy build — keeps today's refusal
+        // and the collar ride; a cut plan whose pieces cannot be drawn is
+        // worse than no cut plan).
+        if (overGate && FEATURE_FLAGS.CUT_AT_NOSE
+            && this._debrisField
+            && typeof this._debrisField.spawnCutPiece === 'function'
+            && !net._cutPlan) {
+          const plan = planCuts(d, { maxPieceKg: _gate });
+          net._cutPlan = plan;
+          net._cutOriginalMassKg = massKg;
+          net._cutNext = 0;
+          net._cutProgressS = 0;
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            source: 'HOUSTON', channel: 'CMD',
+            text: `Catch is ${Math.round(massKg)} kg — too heavy for one daughter. Cutting it into ${plan.pieces.length} pieces at the nose.`,
+            priority: 'warning',
+          });
+        } else {
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            source: 'HOUSTON', channel: 'CMD',
+            text: overGate
+              ? `Catch is ${Math.round(gateMassKg)} kg — too heavy for a daughter's cargo rack. It rides the collar until the furnace takes it, or jettison [K].`
+              : 'No daughter can take the catch (none docked with a free cargo cell). It rides the collar until the furnace takes it, or jettison [K].',
+            priority: 'warning',
+          });
+        }
       }
       return false;
     }
@@ -3315,6 +3382,19 @@ export class CaptureNetSystem {
     // Target or carrier lost mid-beat (mission transition / detach): put the
     // catch back at the collar rather than dropping it — cargo is never destroyed.
     if (!d || d.alive === false || !arm || !net._cargoFrom || !net._cargoTo) {
+      // CUT_AT_NOSE: a cut piece never "goes back to the collar" — the boss
+      // owns the collar. The piece returns to the nose as a waiting piece
+      // (the driver re-pins it and retries), or is simply dropped from the
+      // cut bookkeeping if it died with the transition. The piece net is
+      // spliced either way; the boss net's COLLARED hold is untouched.
+      if (net._cutBossNet) {
+        const bossNet = net._cutBossNet;
+        net._cutBossNet = null;
+        bossNet._cutPieceFlying = false;
+        if (!d || d.alive === false) bossNet._cutPiece = null;
+        this._teardownBerth(net);
+        return true;
+      }
       if (d && d.alive !== false) {
         net._cargoRefused = false;
         net._cargoDeclined = false;   // re-arm the first-tick decision
@@ -3332,6 +3412,21 @@ export class CaptureNetSystem {
     // to the collar and the retry re-picks a carrier.
     const SA = Constants.ARM_STATES;
     if (arm.state !== SA.DOCKED && arm.state !== SA.HOLDING_CATCH) {
+      // CUT_AT_NOSE: same abort, cut-piece routing — back to the nose as a
+      // waiting piece; the piece net splices (never COLLARED: the collar's
+      // occupant is the boss). The comms line below is still true: the cargo
+      // stays at the collar station.
+      if (net._cutBossNet) {
+        const bossNet = net._cutBossNet;
+        net._cutBossNet = null;
+        bossNet._cutPieceFlying = false;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: 'HOUSTON', channel: 'CMD',
+          text: `${arm.displayName || arm.id} left the strut — the cut piece waits at the nose.`,
+          priority: 'info',
+        });
+        return true;
+      }
       net._cargoRefused = false;
       net._cargoDeclined = false;   // re-arm the first-tick decision
       net._transitionTo(STATES.COLLARED);
@@ -3384,6 +3479,14 @@ export class CaptureNetSystem {
       // Rack filled during the beat (should be unreachable — the scorer reserved
       // a cell). Keep the cargo: put it back on the collar and let the retry pick
       // another carrier.
+      // CUT_AT_NOSE: a refused cut piece returns to the waiting pool on its
+      // boss net (never COLLARED) and the piece net splices.
+      if (net._cutBossNet) {
+        const bossNet = net._cutBossNet;
+        net._cutBossNet = null;
+        bossNet._cutPieceFlying = false;
+        return true;
+      }
       net._cargoRefused = false;
       net._cargoDeclined = false;   // re-arm the first-tick decision
       net._transitionTo(STATES.COLLARED);
@@ -3421,6 +3524,14 @@ export class CaptureNetSystem {
     // and undo the rack's pin. This marker is for any reader holding a stale
     // reference: the flight is over and the cargo belongs to the arm now.
     net._cargoDelivered = true;
+    // CUT_AT_NOSE: the boss net learns the piece is off its books — the next
+    // cut may begin. (Harmless if the boss net was itself torn down meanwhile:
+    // this only writes a field on a dead object.)
+    if (net._cutBossNet) {
+      net._cutBossNet._cutPiece = null;
+      net._cutBossNet._cutPieceFlying = false;
+      net._cutBossNet = null;
+    }
     eventBus.emit(Events.CARGO_TRANSFER_COMPLETE, {
       debrisId:  d.id,
       massKg:    net.capturedMass || d.mass || 0,
@@ -3428,6 +3539,10 @@ export class CaptureNetSystem {
       armIndex:  net._cargoArmIndex,
       armId:     arm.id,
       cellIndex: Math.max(0, (arm.heldCatches?.length || 1) - 1),
+      // CUT_AT_NOSE (plan L6): the documented payload, plus ONE extra field
+      // on the cut-piece path only. Ordinary transfers carry no `cut` key —
+      // byte-identical to the pre-flag payload.
+      ...(net._cutMeta ? { cut: net._cutMeta } : {}),
     });
 
     // ONE player-facing line for the whole beat (the arc is its own feedback):
@@ -3464,6 +3579,315 @@ export class CaptureNetSystem {
       return arm.heldSlotWorldInto(slot, d.sizeMeter, parentPos, out);
     }
     return out.copy(arm.position || _v3a.set(0, 0, 0));
+  }
+
+  // ── CUT_AT_NOSE: the cut machinery (plan L1–L9) ────────────────────────
+  // Board on the BOSS net (the COLLARED mother net whose target is over the
+  // hand-off gate):
+  //   _cutPlan            the planCuts result (pieces in chop order; the LAST
+  //                       piece is the held part — never cut off, L3)
+  //   _cutOriginalMassKg  the boss's mass at plan time (size reference)
+  //   _cutNext            index of the next piece to DETACH
+  //   _cutProgressS       game-seconds accumulated toward that detach
+  //   _cutPiece           the detached piece (waiting at the nose or flying)
+  //   _cutPieceFlying     true while that piece's flight is under way
+  //   _cutRetryS          launch-retry accumulator (CT.RETRY_S cadence)
+  //   _cutWaitingSaid     the waiting comms line, once per plan (L9)
+
+  /**
+   * True while a cut plan exists and is not finished — i.e. the boss must
+   * not take the ordinary hand-off (`_tryCargoTransfer` guard) and the
+   * collar digestion must not tick (plan L4: `_breakdownStarted` would close
+   * the transfer window and cook the boss mid-cut). Flag OFF ⇒ no net ever
+   * carries `_cutPlan` ⇒ always false ⇒ both call sites byte-identical.
+   * @param {NetProjectile} net
+   * @returns {boolean}
+   * @private
+   */
+  _cutActive(net) {
+    return !!(net && net._cutPlan
+      && (net._cutPiece
+        || (net._cutNext ?? 0) < net._cutPlan.pieces.length - 1));
+  }
+
+  /**
+   * The cut driver — one COLLARED frame of the chop (plan L5). Serialised:
+   * exactly one piece is detached-and-not-delivered at a time. No state
+   * change on the boss net (it stays COLLARED, mated, pin held); the detached
+   * piece rides its own synthetic net (L7).
+   * @param {NetProjectile} net — a COLLARED mother net with `_cutPlan`
+   * @param {number} dt — real seconds
+   * @private
+   */
+  _driveCutAtNose(net, dt) {
+    const plan = net._cutPlan;
+    const d = net.targetDebris;
+    const debrisField = this._debrisField;
+    if (!d || d.alive === false || !debrisField) return;
+
+    if (net._cutPiece) {
+      if (net._cutPieceFlying) return;   // the piece net drives the flight
+      // The waiting piece: held at the nose, just fore of the boss (a clamp
+      // seat, DECISIONS §12 ruling 4 — the piece exists, drawn, until the
+      // crane can take it). Pinned EVERY frame: a gap reads as a release.
+      const piece = net._cutPiece;
+      piece._captured = true;
+      piece._motherParked = true;
+      if (d._scenePosition && d._scenePosition.lengthSq() > 0) {
+        const M_NET = Constants.SCENE_UNITS_PER_METER;
+        const offM = ((d.sizeMeter || 2) / 2) + ((piece.sizeMeter || 1) / 2) + 0.5;
+        _v3cut.copy(d._scenePosition);
+        _v3cut.x += (net.launchDirection?.x || 0) * offM * M_NET;
+        _v3cut.y += (net.launchDirection?.y || 0) * offM * M_NET;
+        _v3cut.z += (net.launchDirection?.z || 0) * offM * M_NET;
+        if (typeof debrisField.pinCapturedDebris === 'function') {
+          debrisField.pinCapturedDebris(piece, _v3cut);
+        }
+      }
+      net._cutRetryS = (net._cutRetryS || 0) + dt;
+      if (net._cutRetryS >= (CT.RETRY_S ?? 0.5)) {
+        net._cutRetryS = 0;
+        this._launchCutPiece(net, piece);
+      }
+      return;
+    }
+
+    // Nothing outstanding: is there another piece to cut off? The LAST piece
+    // of the plan is the held part — never detached (L3).
+    if (net._cutNext >= plan.pieces.length - 1) return;
+
+    // CUT_S GAME-seconds per cut: dt × BASE_SCALE, deliberately NOT
+    // sun-scaled — the cutter is a machine, not a plant.
+    net._cutProgressS = (net._cutProgressS || 0) + dt * TimeAuthority.BASE_SCALE;
+    if (net._cutProgressS >= (CN.CUT_S ?? 60)) {
+      net._cutProgressS = 0;
+      this._detachCutPiece(net);
+    }
+  }
+
+  /**
+   * Detach the next planned piece: spawn it (a real, drawn debris object —
+   * L7) and move its mass and salvage off the boss's books (L3: the ledger
+   * conserves at every step).
+   * @param {NetProjectile} net
+   * @private
+   */
+  _detachCutPiece(net) {
+    const plan = net._cutPlan;
+    const spec = plan.pieces[net._cutNext];
+    const d = net.targetDebris;
+    const debrisField = this._debrisField;
+    if (!d || d.alive === false || !spec || !(spec.massKg > 0)
+        || typeof debrisField.spawnCutPiece !== 'function') {
+      // Unreachable from a validated plan with a spawn-capable field (the
+      // plan is only created after that capability check). Abandon quietly:
+      // legacy behaviour resumes (the boss rides the collar; the cook wins).
+      console.warn('[CaptureNet] CUT_AT_NOSE: spawn unavailable — cutting abandoned');
+      net._cutPlan = null;
+      net._cutPiece = null;
+      net._cutPieceFlying = false;
+      return;
+    }
+
+    // Seat the piece just fore of the boss's live pin (the same spot the
+    // waiting-piece hold above keeps it at).
+    const M_NET = Constants.SCENE_UNITS_PER_METER;
+    const offM = ((d.sizeMeter || 2) / 2) + 1.0;
+    _v3cut.copy(d._scenePosition || _v3a.set(0, 0, 0));
+    _v3cut.x += (net.launchDirection?.x || 0) * offM * M_NET;
+    _v3cut.y += (net.launchDirection?.y || 0) * offM * M_NET;
+    _v3cut.z += (net.launchDirection?.z || 0) * offM * M_NET;
+
+    const piece = debrisField.spawnCutPiece(
+      d, spec, plan, net._cutOriginalMassKg, _v3cut);
+    if (!piece) {
+      console.warn('[CaptureNet] CUT_AT_NOSE: spawn refused — cutting abandoned');
+      net._cutPlan = null;
+      net._cutPiece = null;
+      net._cutPieceFlying = false;
+      return;
+    }
+
+    // The boss loses EXACTLY the piece's amounts (plan L3 — the planner
+    // conserves, so sequential subtraction leaves the held part at its
+    // planned value within float dust).
+    d.mass -= spec.massKg;
+    net.capturedMass = Math.max(0, (net.capturedMass || 0) - spec.massKg);
+    if (d.salvage && spec.salvage) {
+      // The six scalar names mirror cutPlanner's SALVAGE_SCALARS (kept in
+      // sync by test-CutAtNose's conservation pin, which fails on drift).
+      for (const f of ['xenon', 'indium', 'gaAs', 'battery', 'hydrazine', 'lithium']) {
+        if (typeof d.salvage[f] === 'number' && typeof spec.salvage[f] === 'number') {
+          d.salvage[f] -= spec.salvage[f];
+        }
+      }
+      const dm = d.salvage.metals;
+      const pm = spec.salvage.metals;
+      if (Array.isArray(dm) && Array.isArray(pm)) {
+        for (let k = 0; k < dm.length && k < pm.length; k++) {
+          if (typeof dm[k].amount === 'number' && typeof pm[k].amount === 'number') {
+            dm[k].amount -= pm[k].amount;
+          }
+          if (typeof dm[k].value === 'number' && typeof pm[k].value === 'number') {
+            dm[k].value -= pm[k].value;
+          }
+        }
+      }
+    }
+    if (typeof d.metalMassKg === 'number' && typeof piece.metalMassKg === 'number') {
+      d.metalMassKg = Math.max(0, d.metalMassKg - piece.metalMassKg);
+    }
+
+    net._cutNext++;
+    net._cutPiece = piece;
+    net._cutRetryS = 0;
+    // First launch attempt right away (a piece may leave the moment it is
+    // off); the RETRY_S cadence takes over if no daughter qualifies.
+    this._launchCutPiece(net, piece);
+  }
+
+  /**
+   * Launch one cut piece to a rack (plan L5/L6/L7): the piece rides a
+   * synthetic mother net born directly in TRANSFERRING — the same
+   * `_updateCargoTransfer` Bézier / pin-every-frame / stow beat a whole
+   * catch flies, with `_ceremonyStartEmitted` set (no launch ceremony) and
+   * NO bag: no net is spent on a cut piece, the piece is its own container
+   * (the `adoptLassoCatch` quiet-hand-off idiom). Departs only when the
+   * crane is free (no mother transfer in flight) and `suggestCargoArm`
+   * qualifies a carrier at the PIECE's mass.
+   * @param {NetProjectile} net — the boss net
+   * @param {object} piece — the waiting cut piece
+   * @private
+   */
+  _launchCutPiece(net, piece) {
+    const player = this._player;
+    const armManager = this._armManager;
+    const debrisField = this._debrisField;
+    if (!player || !armManager || !Array.isArray(armManager.arms)) return;
+
+    // The crane is free only when NOTHING is in transfer (any mother net).
+    if (this.activeNets.some(
+      (n) => n._isMother && n.state === STATES.TRANSFERRING)) return;
+
+    const armIndex = suggestCargoArm(armManager, player, piece.mass, piece.sizeMeter);
+    if (armIndex == null) {
+      // L9: plain words, once per plan.
+      if (!net._cutWaitingSaid) {
+        net._cutWaitingSaid = true;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: 'HOUSTON', channel: 'CMD',
+          text: 'Cut piece is waiting for a daughter with a free cargo cell.',
+          priority: 'info',
+        });
+      }
+      return;
+    }
+    const arm = armManager.arms[armIndex];
+    if (!arm || !piece._scenePosition) return;
+
+    const M_NET = Constants.SCENE_UNITS_PER_METER;
+    const start = _v3cut.copy(piece._scenePosition);
+    const end = _v3g.copy(this._cargoSlotWorld(arm, piece, _v3g));
+
+    const pieceNet = new NetProjectile({
+      netClass: CN.LARGE,
+      armIndex: -1,
+      podIndex: net.podIndex,
+      launchPosition: {
+        x: start.x / M_NET, y: start.y / M_NET, z: start.z / M_NET,
+      },
+      launchDirection: { ...(net.launchDirection || { x: 0, y: 0, z: 1 }) },
+      targetDebris: piece,
+      captureMode: CN.MODES.CINCH,
+      anchorProvider: net._anchorProvider || null,
+    });
+    pieceNet._ctx = {
+      player,
+      debrisField,
+      armManager: this._armManager,
+      lassoSystem: this._lassoSystem,
+      captureNetSystem: this,
+    };
+    pieceNet.catchResult = 'success';
+    pieceNet.capturedMass = piece.mass;
+    // Quiet by construction: no NET_FIRED (no bag ever attaches — the piece
+    // is its own container), no ceremony beats (adoptLassoCatch's suppression
+    // idiom — `update()` would otherwise fire NET_CEREMONY_START on the
+    // first tick of a fresh net).
+    pieceNet._ceremonyStartEmitted = true;
+    // Net-less seat: the pin IS the piece position; there is no bag apex to
+    // offset from.
+    pieceNet._catchSeatM = 0;
+    pieceNet._cargoFrom = start.clone();
+    pieceNet._cargoTo = end.clone();
+    // Same arc shape as the whole-catch beat (bulge away from the strut tip).
+    pieceNet._cargoCtrl = start.clone().lerp(end, 0.5);
+    _v3a.copy(start).sub(end);
+    if (_v3a.lengthSq() > 1e-12) {
+      _v3a.normalize().multiplyScalar((CT.ARC_BULGE_M ?? 2.0) * M_NET);
+      pieceNet._cargoCtrl.add(_v3a);
+    }
+    pieceNet._cargoArmIndex = armIndex;
+    pieceNet._cargoDriftBefore = (armManager && armManager._dockPositions)
+      ? computeCoMDrift(armManager, player) : null;
+    pieceNet._cargoS = 0;
+    pieceNet._cargoDur = Math.max(1e-3, CT.FLIGHT_S ?? 3.0);
+    // L6: the one extra field both transfer events carry on this path.
+    pieceNet._cutMeta = {
+      parentId: net.targetDebris?.id,
+      index: piece.cutIndex,
+      of: piece.cutOf,
+    };
+    pieceNet._cutBossNet = net;
+    pieceNet._transitionTo(STATES.TRANSFERRING);
+    net._cutPieceFlying = true;
+
+    this.activeNets.push(pieceNet);
+    eventBus.emit(Events.CARGO_TRANSFER_START, {
+      debrisId:  piece.id,
+      massKg:    piece.mass,
+      podIndex:  net.podIndex,
+      armIndex,
+      armId:     arm.id,
+      durationS: pieceNet._cargoDur,
+      from: { kind: 'collar', podIndex: net.podIndex },
+      to:   { kind: 'strutTip', armIndex },
+      cut:  { ...pieceNet._cutMeta },
+    });
+
+    // L9: when the LAST cut piece leaves the nose, the plan is done cutting
+    // — only the held part remains, and it fits a daughter's rack.
+    if (net._cutNext >= net._cutPlan.pieces.length - 1 && !net._cutLastSaid) {
+      net._cutLastSaid = true;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'HOUSTON', channel: 'CMD',
+        text: 'Cutting done — the last piece has left the nose.',
+        priority: 'info',
+      });
+    }
+  }
+
+  /**
+   * CUT_AT_NOSE — release an orphaned waiting piece to the field (boss
+   * jettisoned or died mid-cut). Cargo is never destroyed: the piece is its
+   * own body now — un-pinned, orbit re-seated from its last position, free
+   * (still `_credited`: the mate paid for the whole body, a re-capture must
+   * not pay again).
+   * @param {object} piece
+   * @private
+   */
+  _releaseCutPiece(piece) {
+    if (!piece) return;
+    const player = this._player;
+    piece._captured = false;
+    piece._armPinned = false;
+    piece._armPinPos = null;
+    piece._motherParked = false;
+    piece._catchRenderMin = 0;
+    if (piece._scenePosition && piece.orbit) {
+      reseatOrbitFromScene(piece.orbit, piece._scenePosition,
+        player?.getVelocity ? player.getVelocity() : null);
+    }
   }
 
   /**
@@ -3619,6 +4043,11 @@ export class CaptureNetSystem {
    */
   _teardownBerth(net) {
     this._clearCatchPins(net.targetDebris);
+    // CUT_AT_NOSE: a boss torn down mid-cut (mission transition, [K] jettison
+    // upstream of the prune block) must not leave a waiting piece orphaned at
+    // a stale nose pin. Cargo is never destroyed: the piece is its own body
+    // now — release it to the field as free, still-paid salvage.
+    if (net._cutPiece && !net._cutPieceFlying) this._releaseCutPiece(net._cutPiece);
     net.isActive = false;
     net._berthTimer = -1;
   }
