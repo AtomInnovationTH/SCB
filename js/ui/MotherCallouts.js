@@ -139,9 +139,21 @@ const RISK = CFG.RISK_COLORS;
 //            traverse-all rule is kept so a future shared name still outlines
 //            whole), so the sets must be
 //            DISJOINT subtrees across parts. Absent → defaults to
-//            `mesh ? [mesh] : []`. Card-only parts (berths/mli/daughters/THERMAL
-//            + the anchorless structure plates) carry no `pick` on purpose — see
+//            `mesh ? [mesh] : []`. Card-only parts (berths/mli and the
+//            anchorless structure plates) carry no `pick` on purpose — see
 //            the FINDINGS in the Wave-5 hull-hover report for each reason.
+//            (§13 r4, Lane H: the THERMAL family and the daughters left this
+//            list — they pick through `pickPrefixes` / their live arm groups.)
+//   pickPrefixes  optional name PREFIXES completing the parent-part roll-up
+//            (DECISIONS §13 ruling 4, Lane H 2026-09-25): every object under
+//            `player` whose name STARTS WITH one of these joins this part's
+//            pick targets — the small pieces (bolts, clips, mounts, booms,
+//            panels) highlight the part they belong to, and through the
+//            blocker raycast they block the pointer for the part behind.
+//            Matched by the same traverse-all rule as `pick` (a matched group
+//            brings its whole subtree), so prefixes must stay disjoint across
+//            parts exactly like `pick` names — the pick-table test pins both.
+//            Absent → exact `pick` only.
 //   flowerGated  the part's mesh exists only after the aft radiator flower is
 //            bought: while the flower is absent (_flowerGone) the mesh lookup is
 //            skipped with no warn and the static `anchor` is used; the one-shot
@@ -161,6 +173,9 @@ const SYSTEMS = [
         // methodology) — was a stale '~2.2 kW peak when new' guess.
         specs: ['2× 1×2 m roll-out arrays', 'Wings-only peak ~1.63 kW, ~1.83 kW with body cells'],
         pick: ['ROSA_Panel_Front_0deg', 'ROSA_Panel_Back_0deg', 'ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg'],
+        // §13 r4 roll-up: the wings' booms, spreaders, brackets and spool
+        // curls are wing hardware (measured, tmp/h-mapping.mjs: 16 meshes).
+        pickPrefixes: ['ROSA_Boom', 'ROSA_Bracket', 'ROSA_Spreader', 'ROSA_SpoolCurl'],
         // Mother audit T10 (W8): the leader follows the +X blanket's centre
         // through sun-tracking tilt and the furl (the static x 1.1 tuple sat in
         // empty sky beside a tilted or rolled-up wing). Static stands in until
@@ -193,6 +208,10 @@ const SYSTEMS = [
         // lever moves — exactly the drift the rosaSpoolAxisM accessor exists
         // to prevent.
         pick: ['ROSA_Spool_0deg', 'ROSA_Spool_180deg'],
+        // §13 r4 roll-up: the wing clamp bodies hold the furled blanket on
+        // the spool — spool hardware (the motor boxes/pads next door belong
+        // to WING MOTOR BOX, fb7174b).
+        pickPrefixes: ['WingClamp'],
         anchor: [ PlayerSatellite.rosaSpoolAxisM() * M, 0, 0 ] },
       // One fixed motor box per wing, bolted to the inside MidRing at the wing
       // root (DECISIONS §10). DERIVED anchor: the box centre sits at
@@ -219,6 +238,10 @@ const SYSTEMS = [
       { id: 'rcs', name: 'COLD-GAS STEERING', risk: 'GREEN', tier: 'major', codexId: 'cold_gas_rcs',
         massKg: 3, priority: 5, specs: ['Nitrogen thruster ring'],
         pick: ['RCSPod_0', 'RCSPod_1', 'RCSPod_2', 'RCSPod_3'],
+        // §13 r4 roll-up: pod boots, bolts, thruster bells, liners and
+        // throats are steering hardware ('RCSPod' also carries the boots and
+        // pod bolts; measured 60 meshes the set).
+        pickPrefixes: ['RCSPod', 'RCSThruster', 'RCSLiner', 'RCSThroat'],
         anchor: [ -0.03 * M, 0.42 * M, -0.795 * M ] },
       { id: 'mli', name: 'THERMAL BLANKET (MLI)', risk: 'GREEN', tier: 'detail', codexId: 'mli_insulation',
         massKg: 2, priority: 2, specs: ['Multi-layer insulation'],
@@ -261,6 +284,8 @@ const SYSTEMS = [
         // housing's top surface.
         mesh: 'NetLauncher_0',
         pick: ['NetLauncher_0', 'NetLauncher_1'],
+        // §13 r4 roll-up: the net-pod saddles carry the pods.
+        pickPrefixes: ['NetPodSaddle'],
         anchor: [ 0.45 * M, 0.12 * M, 1.18 * M ] },
       { id: 'berth_collar', name: 'DOCKING COLLAR', risk: 'GREEN', tier: 'detail', codexId: 'capture_collar',
         // Design 6 (2026-09-08): massKg 6 → 3 — the skeleton collar (thin ring
@@ -287,6 +312,8 @@ const SYSTEMS = [
         ],
         mesh: 'BerthCollarRing',
         pick: ['BerthCollarRing', 'BerthCollarStrut_0', 'BerthCollarStrut_1', 'BerthCollarStrut_2', 'BerthCollarStrut_3', 'BerthFace'],
+        // §13 r4 roll-up: the collar's foot pads and lamps.
+        pickPrefixes: ['BerthCollarFoot', 'BerthCollarLamp'],
         // Mother fixes 4/4 (b): BerthCollarRing's origin is the bore centre, so
         // the live anchor sat in the hole and the camera→anchor ray went through
         // the ring onto BerthFace. Offset to the ring's OUTER equator (R + tube =
@@ -333,10 +360,14 @@ const SYSTEMS = [
       { id: 'lidar', name: 'LASER RANGEFINDER', risk: 'GREEN', tier: 'major', codexId: 'lidar_ranging',
         massKg: 3, priority: 5, specs: ['Flash LIDAR — range + pose'],
         pick: ['LIDAR_Dome'],
+        // §13 r4 roll-up: the flash drum under the dome.
+        pickPrefixes: ['LIDAR_Drum'],
         anchor: [ 0.184 * M, -0.184 * M, 1.10 * M ] },
       { id: 'star_trackers', name: 'STAR TRACKERS', risk: 'GREEN', tier: 'major', codexId: 'star_tracker',
         massKg: 1, priority: 3, specs: ['2× — attitude from starfield'],
         pick: ['StarTracker_0', 'StarTracker_1'],
+        // §13 r4 roll-up: the two tracker mounts.
+        pickPrefixes: ['StarTracker_'],
         anchor: [ 0.042 * M, 0.398 * M, 0.90 * M ] },
       { id: 'fore_bulkhead', name: 'FORE BULKHEAD', risk: 'GREEN', tier: 'major', codexId: 'fore_bulkhead',
         massKg: 6, priority: 3, specs: ['Fore end cap — 0.8 m plate', 'Carries the sensor deck'],
@@ -391,6 +422,9 @@ const SYSTEMS = [
       { id: 'ttc', name: 'S-BAND RADIO OMNIS', risk: 'GREEN', tier: 'major', codexId: 'frequency_bands',
         massKg: 2, priority: 5, live: 'ttc', specs: ['Pair — command + telemetry'],
         pick: ['TTC_Omni_0'],
+        // §13 r4 roll-up: the fore omni's base. The _1 names stay with the
+        // AFT whip below — one prefix per end, never both.
+        pickPrefixes: ['TTC_Omni_0'],
         anchor: [ 0, -0.40 * M, 0.92 * M ] },
       { id: 'mga', name: 'MEDIUM-GAIN ANTENNA', risk: 'GREEN', tier: 'detail', codexId: 'bandwidth_limits',
         massKg: 1, priority: 2, specs: ['Tangent patch, higher rate'],
@@ -409,6 +443,8 @@ const SYSTEMS = [
       { id: 'ttc_aft', name: 'S-BAND OMNI (AFT)', risk: 'GREEN', tier: 'detail', codexId: 'frequency_bands',
         massKg: 1, priority: 1, specs: ['Aft whip of the omni pair'],
         pick: ['TTC_Omni_1'],
+        // §13 r4 roll-up: the aft whip's base.
+        pickPrefixes: ['TTC_Omni_1'],
         anchor: [ 0, 0.40 * M, -0.92 * M ] },
     ],
   },
@@ -438,6 +474,8 @@ const SYSTEMS = [
         // the re-clock trial strut azimuth — was az 60).
         mesh: 'ReelCartridge_0', dynamic: true,
         pick: ['ReelHousing_0', 'ReelHousing_1', 'ReelHousing_2', 'ReelHousing_3'],
+        // §13 r4 roll-up: the drums and status LEDs inside the housings.
+        pickPrefixes: ['ReelDrum', 'ReelLED'],
         anchor: [ 0.1754 * M, 0.3595 * M, -0.46 * M ] },
       // codexId remap (owner review, 2026-09-03): the Double-A clevises are
       // the cradle struts' HINGES — `vacuum_mechanisms` ("Mechanisms in
@@ -448,6 +486,8 @@ const SYSTEMS = [
         massKg: 2, priority: 2, specs: ['Double-A clevis, 4×'],
         pick: ['AFrame_64_L', 'AFrame_64_R', 'AFrame_116_L', 'AFrame_116_R',
           'AFrame_244_L', 'AFrame_244_R', 'AFrame_296_L', 'AFrame_296_R'],
+        // §13 r4 roll-up: the fore hinge line's pads, pins and LEDs.
+        pickPrefixes: ['HingePad', 'HingePin', 'HingeLED'],
         // DERIVED: first strut azimuth, hinge radius 0.44 m, hinge plane z =
         // COLLAR_Y (moved onto the front ring 2026-09-23). A literal here would
         // point 10 cm aft of the real hinge, as 0.22/0.381/0.90 once did.
@@ -462,7 +502,24 @@ const SYSTEMS = [
         // the re-clock trial strut azimuth — was az 60).
         mesh: 'CrossbowSpring_0', dynamic: true,
         pick: ['SpringHousing_0', 'SpringHousing_1', 'SpringHousing_2', 'SpringHousing_3'],
+        // §13 r4 roll-up: the guide rails and spring coils.
+        pickPrefixes: ['GuideRail', 'SpringCoil'],
         anchor: [ 0.1754 * M, 0.3595 * M, -0.62 * M ] },
+      // §13 r4 (Lane H, 2026-09-25): the four daughter cradle struts — the
+      // booms the daughters ride. No part owned them before: Strut_0..3 and
+      // their collars, clips and drives lit nothing (or a part behind them).
+      // Dimensions are the builder's (PlayerSatellite._buildStruts:
+      // STRUT_LENGTH 1.70 m, STRUT_TUBE_OD 0.050 m, CFRP T800/M21); no
+      // documented set mass exists, so the mass row is a labelled ESTIMATE.
+      { id: 'daughter_struts', name: 'DAUGHTER STRUTS', risk: 'GREEN', tier: 'detail', codexId: 'docking_berthing',
+        massKg: 7, priority: 2,
+        specs: ['4× 1.70 m CFRP tubes, 50 mm OD', 'Sweep drive + brake at each hinge', 'Set mass ≈ 7 kg (estimate)'],
+        // The anchor rides strut 0's mid-point (its mesh origin — the cylinder
+        // is centred) through every sweep pose; the static fallback is the
+        // measured stowed mid-strut (tmp/h-anchor.mjs: (0.548, 1.123, 1.00)).
+        mesh: 'Strut_0', dynamic: true,
+        pickPrefixes: ['Strut_', 'RootCollar', 'TipCollar', 'RibRing', 'PClip', 'StrutMotorBox', 'StrutRest', 'BrakeDisc', 'Bushing', 'CClip'],
+        anchor: [ 0.548 * M, 1.123 * M, 1.00 * M ] },
       // NET LAUNCHERS (DAUGHTERS) deleted: that hardware lives on the ArmUnit
       // (ArmUnit.js:660-667), never on the Mother. The fact moved into the
       // daughter cards' specs (T3).
@@ -508,10 +565,17 @@ const SYSTEMS = [
         // station — a pre-purchase stand-in, not a hardware pin) so it never
         // coincides with the AFT FLOWER STRUTS card at az 40.
         mesh: 'FlowerStrutPlate_0', dynamic: true,
+        // §13 r4 roll-up: ALL twelve radiator panels — the 4 plates, the 8
+        // wings, their seams and knuckles — answer as the plates (measured,
+        // tmp/h-mapping.mjs: 44 meshes).
+        pickPrefixes: ['FlowerStrutPlate_', 'FlowerStrutWing_', 'FlowerStrutWingSeam', 'FlowerStrutWingKnuckle'],
         anchor: [ -0.30 * M, -0.30 * M, -1.15 * M ] },
       { id: 'flower_struts', name: 'AFT FLOWER STRUTS', risk: 'GREEN', tier: 'major', codexId: 'vacuum_mechanisms',
         massKg: 10, priority: 6, flowerGated: true,
         specs: ['4× aft-pivot booms, 2.5 m — fold fore along the bus for launch', 'They open LIKE A FLOWER — O deploys / stows'],
+        // §13 r4 roll-up: the 4 booms and their seams (the wing hinge lugs
+        // stay with the hinge brackets below).
+        pickPrefixes: ['FlowerStrut_', 'FlowerStrutSeam'],
         anchor: [ 0.3639 * M, 0.3053 * M, -1.10 * M ] },
       { id: 'flower_tips', name: 'TIP HARDPOINTS', risk: 'GREEN', tier: 'detail', codexId: 'tip_hardpoints',
         massKg: 2, priority: 2, flowerGated: true,
@@ -519,10 +583,17 @@ const SYSTEMS = [
         // Mother audit T10: the leader rides tip boss 0 (az 40) through the pose
         // (static stands in pre-purchase, then the gated one-shot binds).
         mesh: 'FlowerStrutTipPad_0', dynamic: true,
+        // §13 r4 roll-up: all four tip pads (pad 0 already answered via the
+        // mesh default; 1–3 join it).
+        pickPrefixes: ['FlowerStrutTipPad'],
         anchor: [ -0.283 * M, -0.283 * M, -1.12 * M ] },
       { id: 'flower_hinges', name: 'FLOWER HINGE BRACKETS', risk: 'YELLOW', tier: 'detail', codexId: 'vacuum_mechanisms',
         massKg: 2.6, priority: 2, flowerGated: true,
         specs: ['Rim-band clevises r 0.475, molybdenum-disulfide-filmed pins; wing piano hinges + one-shot latches', 'Hinges are the honest jam risk'],
+        // §13 r4 roll-up: the brackets, pins, rim mount bolts — and the wing
+        // piano-hinge LUGS (FlowerStrutHingeLug_* — the hinge leaves between
+        // boom and panel, hinge hardware by name and job).
+        pickPrefixes: ['FlowerStrutBracket', 'FlowerStrutPin', 'MountBolt_Flower', 'FlowerStrutHingeLug'],
         anchor: [ 0.3639 * M, -0.3053 * M, -0.94 * M ] },
     ],
   },
@@ -601,12 +672,16 @@ const SYSTEMS = [
 //            azimuth table): looking onto the body from a fore-biased radial.
 const PORTRAIT_OVERRIDES = {
   // POWER — the blanket's FRONT face (+Y) is clear from top / hinge / aft-q; fore-on / aft-on hit the boom
-  rosa_wings:    { dir: [0.15, 1.0, 0.1], single: true, radial: [0, 1.2, 0.1] },   // T7: ONE blanket face-on from above its own radial (the pair + barrel read as a whole-ship shot)
+  // §13 r4 roll-up pins (Lane H): the `frame` rows freeze each portrait to
+  // the pre-roll-up pick list — the picks grew small pieces (booms, boots,
+  // drums…), and a `single` portrait must keep framing the INSTANCE the
+  // owner approved, not the nearest bolt.
+  rosa_wings:    { dir: [0.15, 1.0, 0.1], single: true, radial: [0, 1.2, 0.1], frame: ['ROSA_Panel_Front_0deg', 'ROSA_Panel_Back_0deg', 'ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg'] },   // T7: ONE blanket face-on from above its own radial (the pair + barrel read as a whole-ship shot)
   body_cells:    { dir: [0.6, -0.8, 0.4] },             // T7: from below-stbd — the cell wrap with both wings edge-on and far
-  array_roll:    { dir: [1.0, 0.35, 0.2], single: true, radial: [0, 0.6, 0.8] },   // T7: ONE spool from its fore-up radial (the blanket hides it from abeam)
+  array_roll:    { dir: [1.0, 0.35, 0.2], single: true, radial: [0, 0.6, 0.8], frame: ['ROSA_Spool_0deg', 'ROSA_Spool_180deg'] },   // T7: ONE spool from its fore-up radial (the blanket hides it from abeam)
   // PROPULSION — aft-end hardware; the aft-q-d3.2 pose is clear
   feep:          { dir: [0.6, 0.4, -1.0] },
-  rcs:           { dir: [0.6, 0.4, -1.0], fill: 0.7, single: true, radial: [0, 0, 0.15] },   // ONE pod, bells face-on; T7 fill 0.7 so the doghouse reads as a unit
+  rcs:           { dir: [0.6, 0.4, -1.0], fill: 0.7, single: true, radial: [0, 0, 0.15], frame: ['RCSPod_0', 'RCSPod_1', 'RCSPod_2', 'RCSPod_3'] },   // ONE pod, bells face-on; T7 fill 0.7 so the doghouse reads as a unit
   aft_deck:      { dir: [0.6, 0.4, -1.0] },
   mli:           { dir: [1.0, 0.35, 0.2], fill: 0.85, frame: ['Barrel_ConfigG'] },   // the skin IS the hull: the barrel fills the frame (portrait-only; hover stays card-only)
   // PAYLOAD — own mesh from fore-q-stbd / side / hinge; BerthFace gap 0.009 from the fore quarters
@@ -634,13 +709,15 @@ const PORTRAIT_OVERRIDES = {
   // strut-root hardware on the fore hinge line (hinge pad, A-frame clevises, spring ejector, reel); the pocket itself is
   // carved into the barrel (no mesh). Hover stays card-only (owner decision); the frame is portrait-only.
   berths:        { dir: [0.5, 0.87, 0.35], frame: [{ arm: 0 }, 'SpringHousing_0', 'ReelHousing_0'] },   // T7: the seated daughter + its ejector / reel (the fore hinge line made it a whole-ship shot)
-  tether_reels:  { dir: [0.2, 1.0, -0.3], single: true, radial: [0, 0, 0.2] },   // ONE reel can
-  hinges:        { dir: [0.2, 1.0, -0.3], single: true, radial: [0, 0, 0.4] },   // ONE A-frame clevis
-  cradle_spring: { dir: [0.2, 1.0, -0.3], fill: 0.5, single: true, radial: [0, 0, 0.3], tangent: 0.9 },   // T7: ONE housing from the SIDE (tangent) — radially outboard sits its docked daughter
+  tether_reels:  { dir: [0.2, 1.0, -0.3], single: true, radial: [0, 0, 0.2], frame: ['ReelHousing_0', 'ReelHousing_1', 'ReelHousing_2', 'ReelHousing_3'] },   // ONE reel can
+  hinges:        { dir: [0.2, 1.0, -0.3], single: true, radial: [0, 0, 0.4], frame: ['AFrame_64_L', 'AFrame_64_R', 'AFrame_116_L', 'AFrame_116_R', 'AFrame_244_L', 'AFrame_244_R', 'AFrame_296_L', 'AFrame_296_R'] },   // ONE A-frame clevis
+  cradle_spring: { dir: [0.2, 1.0, -0.3], fill: 0.5, single: true, radial: [0, 0, 0.3], tangent: 0.9, frame: ['SpringHousing_0', 'SpringHousing_1', 'SpringHousing_2', 'SpringHousing_3'] },   // T7: ONE housing from the SIDE (tangent) — radially outboard sits its docked daughter
+  // §13 r4 (Lane H): the new struts card frames ONE boom from its own radial.
+  daughter_struts: { dir: [0.5, 0.5, 0.4], single: true, radial: [0, 0, 0.2], frame: ['Strut_0', 'Strut_1', 'Strut_2', 'Strut_3'] },
   // THERMAL — CARGO / PARK plates face-on from aft; STOW from aft-on hits AftThrusterDeck
-  flower_plates: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5] },   // T7 stowDir: abeam-aft-up — the folded plates in profile along the barrel (aft-on read as a whole-ship 3/4)
+  flower_plates: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], frame: ['FlowerStrutPlate_0'] },   // T7 stowDir: abeam-aft-up — the folded plates in profile along the barrel (aft-on read as a whole-ship 3/4); §13 r4 pin: the pick grew 12 panels + wings, the portrait keeps the one plate
   flower_struts: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], single: true, radial: [0, 0, -0.8], frame: ['FlowerStrut_0', 'FlowerStrut_1', 'FlowerStrut_2', 'FlowerStrut_3'] },   // T3: the booms (portrait-only); T7: ONE boom from its radial-aft
-  flower_tips:   { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5] },   // T7 stowDir abeam (the aft hub hid the stowed pad)
+  flower_tips:   { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], frame: ['FlowerStrutTipPad_0'] },   // T7 stowDir abeam (the aft hub hid the stowed pad); §13 r4 pin: the pick grew 4 pads, the portrait keeps pad 0
   // T3: one hinge = its clevis bracket + pin (one group = one instance); `single` frames the one nearest the camera.
   flower_hinges: { dir: [0.6, 0.6, -0.8], stowDir: [1.0, 0.6, -0.5], single: true, radial: [0, 0, -0.4], tangent: 0.8,   // T7: from the side — the swung-out boom covered the clevis from its radial
                    frame: [['FlowerStrutBracket_0', 'FlowerStrutPin_0'], ['FlowerStrutBracket_1', 'FlowerStrutPin_1'], ['FlowerStrutBracket_2', 'FlowerStrutPin_2'], ['FlowerStrutBracket_3', 'FlowerStrutPin_3']] },
@@ -944,6 +1021,16 @@ export class MotherCallouts {
     };
     eventBus.on(Events.CAMERA_VIEW_CHANGE, this._onViewChange);
     eventBus.on(Events.INSPECT_HULL_OUTLINE, this._onHullOutline);
+
+    // §13 r4 (Lane H, 2026-09-25): the blocker-raycast state — one mesh→rec
+    // owner map and one blocker-mesh list over the whole ship (every Mesh
+    // under `player` plus the DOCKED daughters' arm groups), rebuilt lazily
+    // when the pick generation key changes (a flower pair install or an arm
+    // docking/undocking — the only events that move meshes in or out of pick
+    // subtrees). See _pickGenKey / _ensurePickIndex / _pickBestRec.
+    this._pickOwnerGen = null;
+    this._pickOwners = null;      // Map<THREE.Mesh, part rec>
+    this._blockerMeshes = null;   // THREE.Mesh[]
   }
 
   /** @returns {boolean} true while the transient gate hides the sprite cards (unused in production today). */
@@ -2168,24 +2255,50 @@ export class MotherCallouts {
    * only the FIRST match, and pick names were shared historically (SensorSpoke
    * ×4 until Mother audit T4, FEEP_Boss / FEEP_GridDisc until T9); no shared
    * name remains but the traverse-all behaviour is kept on purpose.
+   * §13 r4 (Lane H): `pickPrefixes` rows additionally collect every object
+   * whose name STARTS WITH one of the prefixes (the parent-part roll-up —
+   * bolts, clips, mounts, booms, panels highlight the part they belong to),
+   * matched by the same traverse-all rule and deduped against the exact
+   * names. Daughter recs (`armIndex`) resolve their pick subtree LIVE from
+   * the docked arm group each call — the craft are scene children, not
+   * `player` children, so a name lookup cannot reach them and a dock/undock
+   * must never serve a cached group. `flowerGated` rows never cache a miss
+   * while the family is gone: the meshes appear at purchase and resolution
+   * must run fresh then.
    * One-time console.warn per rec for names that resolve to nothing (mirrors
    * the anchor mesh-miss warn). Never throws when `player` is absent.
    * @private @returns {THREE.Object3D[]}
    */
   _pickTargets(rec) {
+    // H4: daughter recs — the live docked arm group, never cached.
+    if (rec.def.armIndex !== undefined) {
+      const arm = this._liveCtx?.armManager?.arms?.[rec.def.armIndex];
+      if (arm && arm.state === Constants.ARM_STATES.DOCKED && arm.group) return [arm.group];
+      return [];
+    }
+    // §13 r4: while a flowerGated family is gone its meshes do not exist —
+    // resolve nothing, cache nothing; the gone→present edge resolves fresh.
+    if (rec.def.flowerGated && !this._flowerOn()) {
+      rec._pickTried = false;
+      rec._pickObjs = null;
+      return [];
+    }
     if (rec._pickTried) return rec._pickObjs || [];
     rec._pickTried = true;
     rec._pickObjs = [];
     const def = rec.def;
     const names = Array.isArray(def.pick) ? def.pick : (def.mesh ? [def.mesh] : []);
-    if (!names.length || !this.player) return rec._pickObjs;
+    const prefixes = Array.isArray(def.pickPrefixes) ? def.pickPrefixes : [];
+    if ((!names.length && !prefixes.length) || !this.player) return rec._pickObjs;
     const wanted = new Set(names);
     const found = new Set();
+    const seen = new Set();
     this.player.traverse((o) => {
-      if (o.name && wanted.has(o.name)) {
-        rec._pickObjs.push(o);
-        found.add(o.name);
-      }
+      if (!o.name) return;
+      let match = wanted.has(o.name);
+      if (match) found.add(o.name);
+      else for (const p of prefixes) { if (o.name.startsWith(p)) { match = true; break; } }
+      if (match && !seen.has(o)) { seen.add(o); rec._pickObjs.push(o); }
     });
     if (found.size < wanted.size && typeof console !== 'undefined') {
       const missing = names.filter((n) => !found.has(n));
@@ -2211,10 +2324,89 @@ export class MotherCallouts {
   }
 
   /**
+   * §13 r4 (Lane H): the pick generation key — the only two events that move
+   * meshes in or out of pick subtrees are a flower-pair install (purchase)
+   * and an arm docking / undocking. A key change rebuilds the owner map and
+   * the blocker list on the next pick (see _ensurePickIndex). Cheap to
+   * compute; called per pick.
+   * @private @returns {string}
+   */
+  _pickGenKey() {
+    const arms = this._liveCtx?.armManager?.arms;
+    return (this._flowerOn() ? 'F' : '-') + '|' + (arms ? arms.map((a) => a && a.state).join(',') : '');
+  }
+
+  /**
+   * §13 r4: build, lazily and per generation, (a) the mesh→rec OWNER map —
+   * every Mesh inside some part's pick subtree (exact names, `pickPrefixes`
+   * matches, the docked daughters' live arm groups) — and (b) the BLOCKER
+   * list: every real Mesh under `player` plus every Mesh under a DOCKED
+   * daughter's arm group. Excluded from the blocker list: our own callout
+   * layer (cards, leaders, dots, the dossier — children of `_group`, which
+   * is itself a child of `player`) and every hover/REFIT outline layer
+   * (`userData.partId`; their raycast is a no-op anyway). First-wins on
+   * ownership; the pick-table disjoint-subtree test keeps the sets
+   * conflict-free. Never throws with no `player`.
+   * @private
+   */
+  _ensurePickIndex() {
+    const gen = this._pickGenKey();
+    if (this._pickOwnerGen === gen && this._pickOwners) return;
+    this._pickOwnerGen = gen;
+    const owners = new Map();
+    const blockers = [];
+    const group = this._group || null;
+    const inCalloutLayer = (o) => {
+      for (let p = o; p; p = p.parent) if (p === group) return true;
+      return false;
+    };
+    if (this.player && typeof this.player.traverse === 'function') {
+      this.player.traverse((o) => {
+        if (!o.isMesh || !o.geometry?.attributes?.position) return;   // no Lines/Points/Sprites (T2)
+        if (o.userData.partId) return;                                 // our own outline layers
+        if (group && inCalloutLayer(o)) return;                        // cards / leaders / dots / dossier
+        blockers.push(o);
+      });
+    }
+    const arms = this._liveCtx?.armManager?.arms;
+    if (Array.isArray(arms)) {
+      for (const arm of arms) {
+        if (!arm || arm.state !== Constants.ARM_STATES.DOCKED || !arm.group
+          || typeof arm.group.traverse !== 'function') continue;
+        arm.group.traverse((o) => {
+          if (!o.isMesh || !o.geometry?.attributes?.position) return;
+          if (o.userData.partId) return;
+          blockers.push(o);
+        });
+      }
+    }
+    for (const p of this._partLabels) {
+      for (const t of this._pickTargets(p)) {
+        if (!t || typeof t.traverse !== 'function') continue;
+        t.traverse((o) => {
+          if (!o.isMesh || !o.geometry?.attributes?.position) return;
+          if (o.userData.partId) return;
+          if (!owners.has(o)) owners.set(o, p);
+        });
+      }
+    }
+    this._pickOwners = owners;
+    this._blockerMeshes = blockers;
+  }
+
+  /**
    * Shared raycast pick with the camera ray already set: the card sprites
    * FIRST (a card hit ALWAYS beats a mesh hit — cards are depthTest:false and
-   * draw on top of the hull), then the eligible parts' `pick` hull meshes.
-   * Returns the nearest eligible rec or null. Single source for the pick so
+   * draw on top of the hull), then the ONE blocker raycast (§13 r4, Lane H):
+   * every chain-visible Mesh under the ray — ship or docked daughter — sorted
+   * by distance, and the FIRST hit decides. It either answers as the part it
+   * belongs to (owner map → `_recPickable` mesh tier) or it BLOCKS: a piece
+   * no part owns (the bare hull skin) or a part that is not pickable stops
+   * the pointer — nothing lights up THROUGH a piece in front of it. This
+   * replaces the per-rec pick loop, which only ever saw pick subtrees and
+   * lit parts behind non-pickable meshes (DECISIONS-evidence §13: the barrel
+   * block, the rear cap). Outline layers never enter the list (userData.partId)
+   * and Lines never enter it (Meshes only). Single source for the pick so
    * hover and click can never drift apart (review).
    * @private
    */
@@ -2229,27 +2421,28 @@ export class MotherCallouts {
       }
     }
     if (best) return best;
-    // Hull-part pick (D2's first verb): the same ray against each eligible
-    // part's `pick` meshes — the MESH tier of _recPickable (Session D: on
-    // screen in the PART/COMPONENT bands, whatever the card is doing).
-    // Nearest visible-Mesh hit across all recs wins.
-    for (const p of this._partLabels) {
-      if (!this._recPickable(p, true)) continue;
-      for (const target of this._pickTargets(p)) {
-        const hits = this._raycaster.intersectObject(target, true);
-        for (const hit of hits) {
-          // T2: raycaster.params.Line.threshold is 1 WORLD UNIT and the ship is
-          // 2e-5 units long — any Line child (CableHarness_*, our own outline)
-          // hits from anywhere. Meshes only.
-          if (!hit.object.isMesh) continue;
-          // T1: skip hits whose chain up to the pick target is hidden.
-          if (!this._chainVisible(hit.object, target)) continue;
-          if (hit.distance < bestDist) { bestDist = hit.distance; best = p; }
-          break; // hits are distance-sorted — the first eligible is this target's nearest
-        }
-      }
+    // §13 r4: the blocker raycast — first chain-visible hit decides.
+    if (typeof this._raycaster.intersectObject !== 'function' || !this._partLabels) return null;
+    this._ensurePickIndex();
+    const hits = [];
+    for (const mesh of this._blockerMeshes) {
+      const h = this._raycaster.intersectObject(mesh, false);
+      if (h.length) hits.push(h[0]);   // per-mesh calls are distance-sorted; h[0] is this mesh's nearest
     }
-    return best;
+    if (!hits.length) return null;
+    hits.sort((a, b) => a.distance - b.distance);
+    for (const hit of hits) {
+      // T2 parity: fake rigs can hand back non-Mesh objects; the list itself
+      // is Mesh-only by construction.
+      if (!hit.object || !hit.object.isMesh) continue;
+      // T1: skip hits whose ancestor chain is hidden (the list is built per
+      // generation, visibility is checked live, here).
+      if (!this._chainVisible(hit.object, null)) continue;
+      const rec = this._pickOwners.get(hit.object) || null;
+      if (rec && this._recPickable(rec, true)) return rec;
+      return null;   // the FIRST visible hit decides — unowned or ineligible = blocked
+    }
+    return null;
   }
 
   /**
@@ -2397,6 +2590,11 @@ export class MotherCallouts {
         // geometry (EdgesGeometry would throw).
         if (!o.isMesh || !o.geometry?.attributes?.position) return;
         if (o.userData.partId) return;
+        // §13 r4 (Lane H): pieces hidden at build time never carry layers —
+        // the layers show/hide as one, and a shell over an always-hidden
+        // piece (an idle plume cone inside a docked daughter's arm group)
+        // would draw fx geometry as hardware on hover.
+        if (!this._chainVisible(o, target)) return;
         const src = o.geometry.clone();
         src.scale(NORM, NORM, NORM);
         const edges = new THREE.EdgesGeometry(src, INS.HULL_OUTLINE_THRESHOLD_DEG ?? 20);

@@ -54,7 +54,10 @@ export const Constants = {
   // (the debris-capture nose collar briefing; DOCKING COLLAR retargeted off
   // docking_berthing, which keeps DAUGHTER BERTHS; CARGO deep-links it too);
   // 232 → 233 entries. Plan 1789561832042, 2026-09-23.
-  DATA_VERSION: '1015',
+  // '1015'→'1016': F1 follow-up Lane H — DAUGHTER STRUTS appended to
+  // docking_berthing.hardwareNames (the daughter cradle struts callout card);
+  // no entries added or removed (233). DECISIONS §13 r4, 2026-09-24.
+  DATA_VERSION: '1016',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===

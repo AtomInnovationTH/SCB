@@ -101,7 +101,7 @@ export const PARTS_BY_SYSTEM = Object.freeze({
     'fore_bulkhead', 'sensor_deck', 'sun_sensors', 'nav_lights',
   ]),
   COMMS: Object.freeze(['ttc', 'mga', 'gps', 'ttc_aft']),
-  CAPTURE: Object.freeze(['berths', 'tether_reels', 'hinges', 'cradle_spring']),
+  CAPTURE: Object.freeze(['berths', 'tether_reels', 'hinges', 'cradle_spring', 'daughter_struts']),
   THERMAL: Object.freeze(['flower_plates', 'flower_struts', 'flower_tips', 'flower_hinges']),
   DAUGHTERS: Object.freeze(['daughter_0', 'daughter_1', 'daughter_2', 'daughter_3']),
 });

@@ -2956,7 +2956,8 @@
     {
       "id": "docking_berthing",
       "hardwareNames": [
-        "DAUGHTER BERTHS"
+        "DAUGHTER BERTHS",
+        "DAUGHTER STRUTS"
       ],
       "category": "ORBITAL_MECHANICS",
       "trl": 9,
