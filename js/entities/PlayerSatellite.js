@@ -727,7 +727,7 @@ export class PlayerSatellite extends THREE.Group {
     const CULL_PREFIXES = [
       'PyroPin_', 'PClip_', 'CClip_', 'CableHarness_', 'SpringHousing_', 'SpringCoil_',
       'GuideRail_', 'RibRing_', 'FEEPInner_', 'FEEP_Boss_', 'FEEP_GridDisc_',
-      'MountBolt_', 'Bushing_', 'BerthCollarFoot_',
+      'MountBolt_', 'Bushing_', 'BerthCollarFoot_', 'LaserSpider',
       // radiator fold-line hinges (Ø20 mm barrels — sub-pixel past ~30 m)
       'FlowerStrutHingeLug_',
     ];
@@ -2121,7 +2121,15 @@ export class PlayerSatellite extends THREE.Group {
 
       // FIX_PLAN §2 — Grid disc (ion accelerator grid recessed inside nozzle exit)
       // Same parent-rotation accounting: use local Y axis for the nozzle direction.
-      const gridDiscGeo = new THREE.CircleGeometry(M * 0.025, 8);
+      // Floaters fix (2026-09-25): the disc used to be r 0.025 centred in the
+      // ~0.054 m bell mouth — 28.3 mm off the liner wall, touching nothing (a
+      // KNOWN_FLOATER). A real grid spans the aperture: r 0.054 puts the rim
+      // 0.27 mm off the liner's inner wall at the disc's depth (measured,
+      // tmp/floaters-probe.mjs — liner circumradius 0.05428 at local y −0.070,
+      // 16-gon flats 0.05324; the 8 rim vertices share azimuths with the liner's
+      // 16 vertices, where the wall stands at 0.05428, so the rim never pierces
+      // the liner). Name, depth, wireframe look and renderOrder unchanged.
+      const gridDiscGeo = new THREE.CircleGeometry(M * 0.054, 8);
       const gridDiscMat = new THREE.MeshBasicMaterial({
         color: 0x667788, wireframe: true, transparent: true, opacity: 0.5,
         side: THREE.DoubleSide,
@@ -4254,6 +4262,29 @@ export class PlayerSatellite extends THREE.Group {
   // --------------------------------------------------------------------------
   // 4. Sensor Suite
   // --------------------------------------------------------------------------
+  /**
+   * @private — Merge plain BufferGeometries (position + normal only) into one
+   * non-indexed geometry. For inert structural detail built from boxes and
+   * cylinders that must ship as ONE mesh (e.g. the LaserSpider vanes — a
+   * merged mesh touches/floats as a single part in test-NothingFloats).
+   */
+  _mergePlainGeometries(geos) {
+    const parts = geos.map((g) => (g.index ? g.toNonIndexed() : g));
+    let n = 0;
+    for (const g of parts) n += g.attributes.position.count;
+    const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3);
+    let o = 0;
+    for (const g of parts) {
+      pos.set(g.attributes.position.array, o * 3);
+      nor.set(g.attributes.normal.array, o * 3);
+      o += g.attributes.position.count;
+    }
+    const out = new THREE.BufferGeometry();
+    out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    return out;
+  }
+
   /** @private */
   _buildSensors() {
     // CENTRELINE REDESIGN (2026-07-23): the fore-cap CoM axis (0,0) was given to
@@ -4545,7 +4576,13 @@ export class PlayerSatellite extends THREE.Group {
 
     // Recessed primary mirror — dark optic disc, ~2 cm INSIDE the tube mouth,
     // with a faint blue emissive. Tube-local +Y is the fore axis.
-    const primaryGeo = new THREE.CircleGeometry(M * 0.075, 16);
+    // Floaters fix (2026-09-25): the r 0.075 disc cleared the tube wall by
+    // 14.7 mm — a mirror floating in the bore (a KNOWN_FLOATER). It now sits
+    // in the cell the tube makes: r 0.0895 leaves a uniform ~0.5 mm rim gap to
+    // the tube's inner wall (measured, tmp/floaters-probe.mjs — 16-gon tube
+    // circumradius 0.09, flats 0.08827; the disc's rim vertices share azimuths
+    // with the tube's, so the rim never pierces the wall).
+    const primaryGeo = new THREE.CircleGeometry(M * 0.0895, 16);
     const primaryMat = new THREE.MeshStandardMaterial({
       color: 0x0a0a12, metalness: 0.4, roughness: 0.15,
       emissive: 0x1133aa, emissiveIntensity: 0.25,
@@ -4568,6 +4605,32 @@ export class PlayerSatellite extends THREE.Group {
     secondary.name = 'LaserSecondary';
     secondary.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     telescope.add(secondary);
+
+    // Secondary spider — three vanes reaching the tube wall (floaters fix,
+    // 2026-09-25): the secondary cleared the tube by 19 mm and touched only
+    // the primary. ONE merged mesh (hub + 3 vanes, ≤ 3 mm thick) in the
+    // secondary's plane, tube-local Y — a child of the telescope, so it rides
+    // the gimbal with the optics. The hub stands 0.3 mm proud of the vane
+    // faces and the vanes start inside it, so no two faces are coplanar
+    // (log-depth: coincident faces z-fight regardless of depth flags). Vane
+    // tips at r 0.0885 sit 0.04–1.5 mm off the wall (measured,
+    // tmp/floaters-probe.mjs) without piercing the 16-gon flats.
+    const spiderHubGeo = new THREE.CylinderGeometry(M * 0.008, M * 0.008, M * 0.0036, 12);
+    spiderHubGeo.translate(0, teleLen * 0.5 - M * 0.019, 0);
+    const spiderParts = [spiderHubGeo];
+    const SPIDER_TIP_R = 0.0885, SPIDER_IN_R = 0.002;
+    for (let k = 0; k < 3; k++) {
+      const vaneGeo = new THREE.BoxGeometry((SPIDER_TIP_R - SPIDER_IN_R) * M, M * 0.003, M * 0.0025);
+      const az = k * 2 * Math.PI / 3 + Math.PI / 6;
+      vaneGeo.rotateY(az);
+      vaneGeo.translate(Math.cos(az) * (SPIDER_TIP_R + SPIDER_IN_R) / 2 * M, teleLen * 0.5 - M * 0.019, -Math.sin(az) * (SPIDER_TIP_R + SPIDER_IN_R) / 2 * M);
+      spiderParts.push(vaneGeo);
+    }
+    const spiderGeo = this._mergePlainGeometries(spiderParts);
+    const spider = new THREE.Mesh(spiderGeo, gunmetalMat);
+    spider.name = 'LaserSpider';
+    spider.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    telescope.add(spider);
 
     // Muzzle anchor — gimbal-local at the telescope mouth (articulation-tracked).
     // Used as the DespinLaser beam origin via getLaserAperturePosition().
@@ -4870,12 +4933,21 @@ export class PlayerSatellite extends THREE.Group {
     });
 
     // Berth plate — the dark disc seen through the ring bore (a thin docking
-    // plate on the face, Nautilus / ELSA-d style), ON the turntable top:
-    // z 1.060 = 5 mm proud of 1.055 (no disc-on-disc tie), r 0.13 < bore 0.16.
-    // Name kept (BerthFace): the DOCKING COLLAR pick list names it.
-    const face = new THREE.Mesh(new THREE.CircleGeometry(0.13 * M, 24),
+    // plate on the face, Nautilus / ELSA-d style), ON the turntable top.
+    // Floaters fix (2026-09-25): the plate used to be a zero-thickness disc
+    // hovering 5 mm above the turntable (a KNOWN_FLOATER — the 5 mm was a
+    // z-fight spacer with nothing bridging it). It is now a real 5 mm plate:
+    // bottom resting on the turntable top (z 1.055), top face at z 1.060 (the
+    // old visible plane — same look through the bore). The bottom cap faces
+    // aft and the turntable's top cap faces fore, so the coplanar rest is
+    // opposite-facing — backface culling means never both rasterised (no
+    // z-fight). r 0.13 < bore 0.16. Name kept (BerthFace): the DOCKING
+    // COLLAR pick list names it.
+    const face = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.13 * M, 0.13 * M, 0.005 * M, 24),
       new THREE.MeshStandardMaterial({ color: 0x0a0a12, metalness: 0.4, roughness: 0.15 }));
-    face.position.set(0, 0, 1.060 * M);         // CircleGeometry +Z normal faces fore
+    face.rotation.x = Math.PI / 2;             // cylinder +Y → +Z (top cap faces fore)
+    face.position.set(0, 0, 1.0575 * M);       // spans z 1.055–1.060
     face.name = 'BerthFace';
     face.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(face);
