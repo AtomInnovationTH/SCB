@@ -7535,8 +7535,65 @@ export class PlayerSatellite extends THREE.Group {
   // ==========================================================================
 
   /**
+   * @private — partial-draw a burn resource (engines on an empty battery,
+   * 2026-09-25): draw what the pool holds, up to `amount`, and return the
+   * fraction of `amount` actually drawn (0..1). The old path emitted
+   * RESOURCE_CONSUME and let consume()'s all-or-nothing gate silently
+   * refuse the draw AFTER thrust was already applied — the battery parked
+   * just above 0 and the ion drive fired for free, in sunlight and in
+   * shadow. This never refuses: it takes what is there so the caller can
+   * scale thrust by the fraction actually drawn. Routes through
+   * ResourceSystem.drawUpTo() when a system is wired; the fallback (no
+   * system — menu hero, headless tests) draws the local resource mirror
+   * directly, so thrust is never free there either.
+   * @param {'battery'|'xenon'|'lithium'} resource
+   * @param {number} amount - desired draw (> 0)
+   * @returns {number} fraction of `amount` actually drawn (0..1; 1 when
+   *   nothing was needed)
+   */
+  _drawBurnResource(resource, amount) {
+    if (!(amount > 0)) return 1;
+    const rs = this._resourceSystem;
+    if (rs && typeof rs.drawUpTo === 'function') {
+      return rs.drawUpTo(resource, amount) / amount;
+    }
+    const have = Math.max(0, this.resources[resource] || 0);
+    const drawn = Math.min(amount, have);
+    this.resources[resource] = have - drawn;
+    eventBus.emit(Events.RESOURCE_CONSUME, { resource, amount: drawn });
+    return drawn / amount;
+  }
+
+  /**
+   * @private — plain-language, rate-limited (3 s) caution when an electric
+   * drive is power-limited: no power at all, or running on whatever the
+   * solar panels put back per frame (engines on an empty battery,
+   * 2026-09-25). Same cadence as _lastThrustOfflineWarning.
+   * @param {'ion'|'mpd'} type
+   * @param {number} fraction - fraction of the frame's power need actually drawn
+   */
+  _warnPowerLimited(type, fraction) {
+    const now = performance.now();
+    if (now - (this._lastPowerLimitedWarning || 0) < 3000) return;
+    this._lastPowerLimitedWarning = now;
+    const name = type === 'mpd' ? 'MPD drive' : 'ion drive';
+    const text = fraction <= 0
+      ? `Battery empty — ${name} has no power`
+      : `Battery empty — ${name} running on solar power only (${Math.round(fraction * 100)} %)`;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'PROPULSION',
+      text,
+      priority: 'warning',
+    });
+  }
+
+  /**
    * Apply ion thrust (costs fuel + battery).
    * Phase 4: fuel type determines thrustScale and consumption source.
+   * Electric engine (2026-09-25): thrust is limited by the energy actually
+   * available — the battery pays what it holds, up to the frame's need, and
+   * thrust scales by that fraction. Empty battery in sunlight → the panels'
+   * per-frame contribution only; empty in shadow → nothing.
    * @param {{ x: number, y: number, z: number }} direction
    * @param {number} dt
    */
@@ -7569,11 +7626,19 @@ export class PlayerSatellite extends THREE.Group {
       : Constants.FUELS.xenon;
     const thrustScale = fuel.thrustScale || 1.0;
 
-    // Check battery (always required)
-    if (this.resources.battery <= 0) {
-      eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_fuel', type: 'ion' });
+    // Electric engine: draw what the battery holds, up to this frame's need
+    // (2026-09-25 — the old `battery <= 0` gate never tripped once the
+    // battery parked below one frame's draw, and the consume() refusal
+    // downstream was silent: full thrust for free). Thrust scales by the
+    // fraction actually drawn.
+    const powerNeed = this._ionThrustPowerRate * dt;
+    const powerFraction = this._drawBurnResource('battery', powerNeed);
+    if (powerFraction <= 0) {
+      this._warnPowerLimited('ion', 0);
+      eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_power', type: 'ion' });
       return;
     }
+    if (powerFraction < 1) this._warnPowerLimited('ion', powerFraction);
 
     // Check fuel availability — xenon tank for default, cargo existence for alt fuels
     if (!fuel.fromCargo && this.resources.xenon <= 0) {
@@ -7581,11 +7646,13 @@ export class PlayerSatellite extends THREE.Group {
       return;
     }
 
-    // Apply thrust scaled by fuel's thrustScale and throttle level (F14)
+    // Apply thrust scaled by fuel's thrustScale, throttle level (F14) and the
+    // power actually drawn
     const thr = this.throttleLevel;
-    this.thrustInput.x += direction.x * this._ionDeltaV * thrustScale * thr * dt;
-    this.thrustInput.y += direction.y * this._ionDeltaV * thrustScale * thr * dt;
-    this.thrustInput.z += direction.z * this._ionDeltaV * thrustScale * thr * dt;
+    const burnScale = thrustScale * thr * powerFraction;
+    this.thrustInput.x += direction.x * this._ionDeltaV * burnScale * dt;
+    this.thrustInput.y += direction.y * this._ionDeltaV * burnScale * dt;
+    this.thrustInput.z += direction.z * this._ionDeltaV * burnScale * dt;
 
     // Classify thrust direction (z = prograde/retrograde axis)
     if (direction.z > 0.5) this._thrustDirection = 'prograde';
@@ -7593,24 +7660,26 @@ export class PlayerSatellite extends THREE.Group {
     else if (!this._thrustDirection) this._thrustDirection = 'lateral';
     this._lastThrustType = 'ion';
 
-    // Power distribution modulates Isp/efficiency: higher mult = less fuel consumed
+    // Power distribution modulates Isp/efficiency: higher mult = less fuel consumed.
+    // Xenon is billed only for the thrust that actually happened (× the power
+    // fraction) and drawn partially, so the tank can truly empty — no silent
+    // all-or-nothing refusal parking it just above zero.
     const efficiencyScale = 1 / powerDistribution.thrustMultiplier;
-    const fuelAmount = this._ionThrustXenonRate * dt * efficiencyScale;
+    const fuelAmount = this._ionThrustXenonRate * dt * efficiencyScale * powerFraction;
 
-    // Phase 4: Route fuel consumption through dual-mode system
-    if (this._resourceSystem) {
+    // Phase 4: Route fuel consumption through dual-mode system. Cargo fuels
+    // keep consumeIonFuel() semantics (existence check + auto-switch to
+    // xenon on depletion); the tank path draws partially.
+    if (this._resourceSystem && fuel.fromCargo) {
       this._resourceSystem.consumeIonFuel(fuelAmount);
     } else {
-      // Fallback: direct xenon consumption via event
-      eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'xenon', amount: fuelAmount });
+      this._drawBurnResource('xenon', fuelAmount);
     }
 
-    // Battery always consumed regardless of fuel type
-    eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'battery', amount: this._ionThrustPowerRate * dt });
-
     // Phase 4: Emit thrust visual event for velocity streaks overlay
+    // (magnitude reflects the power actually drawn)
     eventBus.emit(Events.THRUST_VISUAL, {
-      magnitude: thr,
+      magnitude: thr * powerFraction,
       direction: this._thrustDirection || 'lateral',
       type: 'ion',
     });
@@ -7687,37 +7756,24 @@ export class PlayerSatellite extends THREE.Group {
       return;
     }
 
-    // Guard: need battery (MPD draws significant power)
-    if (this.resources.battery <= 0) {
+    // Electric engine (2026-09-25): same power law as the ion drive — the
+    // battery pays what it holds, up to the frame's need, and thrust scales
+    // by that fraction. (The old `battery <= 0` gate never tripped on a
+    // parked battery and the consume() refusal was silent: half-thrust MPD
+    // for free.) The S3b ≤5 % battery degrade rule still applies on top.
+    const powerNeed = (Constants.MPD_POWER_DRAW || 150) * 0.1 * dt; // 150 kW × 0.1 = 15 Wh/s draw
+    const powerFraction = this._drawBurnResource('battery', powerNeed);
+    if (powerFraction <= 0) {
+      this._warnPowerLimited('mpd', 0);
       eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_power', type: 'mpd' });
       return;
     }
+    if (powerFraction < 1) this._warnPowerLimited('mpd', powerFraction);
 
     // Cathode degradation factor
     const cathodeLife = this._mpdCathodeLife;
     const degradedFactor = Constants.MPD_DEGRADED_FACTOR || 0.5;
     const cathodeFactor = this._mpdCathodeTime >= cathodeLife ? degradedFactor : 1.0;
-
-    // Apply thrust scaled by throttle level and cathode health
-    const thr = this.throttleLevel;
-    const dv = this._mpdDeltaV * cathodeFactor * thr * dt;
-    this.thrustInput.x += direction.x * dv;
-    this.thrustInput.y += direction.y * dv;
-    this.thrustInput.z += direction.z * dv;
-
-    // Classify thrust direction
-    if (direction.z > 0.5) this._thrustDirection = 'prograde';
-    else if (direction.z < -0.5) this._thrustDirection = 'retrograde';
-    else if (!this._thrustDirection) this._thrustDirection = 'lateral';
-    this._lastThrustType = 'mpd';
-
-    // Consume lithium
-    const lithiumCost = (Constants.MPD_LITHIUM_PER_SECOND || 0.5) * dt;
-    if (this._resourceSystem) {
-      this._resourceSystem.consumeLithium(lithiumCost);
-    } else {
-      eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'lithium', amount: lithiumCost });
-    }
 
     // S3b: Battery degradation — reduce thrust at low battery
     const batteryFraction = this.resources.batteryMax > 0
@@ -7725,7 +7781,7 @@ export class PlayerSatellite extends THREE.Group {
     const degradeThreshold = Constants.MPD_BURST_POWER_DEGRADE || 0.05;
     const batteryThrustMult = batteryFraction <= degradeThreshold ? 0.5 : 1.0;
 
-    // Apply battery thrust degradation to thrust input
+    // Apply battery thrust degradation message
     if (batteryThrustMult < 1.0 && !this._mpdDegraded) {
       this._mpdDegraded = true;
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -7737,14 +7793,25 @@ export class PlayerSatellite extends THREE.Group {
       this._mpdDegraded = false;
     }
 
-    // Re-scale thrust by battery degradation (applied on top of cathode factor)
-    this.thrustInput.x *= batteryThrustMult;
-    this.thrustInput.y *= batteryThrustMult;
-    this.thrustInput.z *= batteryThrustMult;
+    // Apply thrust scaled by throttle level, cathode health, the ≤5 %
+    // battery degrade rule and the power actually drawn
+    const thr = this.throttleLevel;
+    const dv = this._mpdDeltaV * cathodeFactor * batteryThrustMult * thr * powerFraction * dt;
+    this.thrustInput.x += direction.x * dv;
+    this.thrustInput.y += direction.y * dv;
+    this.thrustInput.z += direction.z * dv;
 
-    // Consume battery (high power draw — scaled for gameplay)
-    const powerCost = (Constants.MPD_POWER_DRAW || 150) * 0.1 * dt; // 150 kW × 0.1 = 15 Wh/s battery drain (S3b)
-    eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'battery', amount: powerCost });
+    // Classify thrust direction
+    if (direction.z > 0.5) this._thrustDirection = 'prograde';
+    else if (direction.z < -0.5) this._thrustDirection = 'retrograde';
+    else if (!this._thrustDirection) this._thrustDirection = 'lateral';
+    this._lastThrustType = 'mpd';
+
+    // Consume lithium — billed only for the thrust that actually happened
+    // (× the power fraction) and drawn partially, so the tank can truly
+    // empty (no silent all-or-nothing refusal parking it above zero).
+    const lithiumCost = (Constants.MPD_LITHIUM_PER_SECOND || 0.5) * dt * powerFraction;
+    this._drawBurnResource('lithium', lithiumCost);
 
     // Track cathode time (increment when firing)
     this._mpdCathodeTime += dt;
@@ -8500,6 +8567,10 @@ export class PlayerSatellite extends THREE.Group {
    *
    * Side-effects: mutates `this.orbit`, refreshes `this._cartesian`, charges
    * fuel/battery, accumulates `_deltaVSpent`. Does NOT touch `_rcsVelocity`.
+   * The billed path obeys the electric-engine power law (see thrustIon,
+   * 2026-09-25): the impulse scales by the fraction of its power draw the
+   * battery actually holds; dt = 0 physics responses (recoil compensations)
+   * draw no power and bill nothing.
    *
    * @param {THREE.Vector3} dvWorld - World-frame ΔV in m/s
    * @param {number} dt - Frame delta (s) for resource bookkeeping
@@ -8519,9 +8590,23 @@ export class PlayerSatellite extends THREE.Group {
     if (dvMag < 1e-9 || !isFinite(dvMag)) return false;
     const noBill = opts.noBill === true;
 
-    // --- Resource / power gating (mirrors thrustIon) — skipped for a no-bill
-    // passive impulse (the tug is not a burn; it needs no ion drive and no
-    // propellant). ---
+    // Burn sizing (billed path only): this impulse's share of one ion-thrust
+    // tick. Needed up front because the electric-engine power law below
+    // scales the Δv itself (engines on an empty battery, 2026-09-25).
+    let usage = 1.0;
+    let powerNeed = 0;
+    if (!noBill) {
+      const baselineDv_mps =
+        (this._ionDeltaV || 0.0003) * (this.throttleLevel || 1) * 1000; // rough m/s per tick proxy
+      usage = baselineDv_mps > 1e-6
+        ? Math.min(5.0, dvMag / baselineDv_mps)
+        : 1.0;
+      powerNeed = this._ionThrustPowerRate * dt * usage;
+    }
+
+    // --- Resource / power gating — skipped for a no-bill passive impulse
+    // (the tug is not a burn; it needs no ion drive and no propellant). ---
+    let powerFraction = 1;   // no-bill paths and dt = 0 physics responses draw nothing
     if (!noBill) {
       if (powerDistribution.thrustMultiplier <= 0) {
         const now = performance.now();
@@ -8538,10 +8623,20 @@ export class PlayerSatellite extends THREE.Group {
       // THRUST_VISUAL emit — nothing downstream sees a burn. The folded
       // radiator (Design 7b guard / amendment 2026-09-09) is told to the player.
       if (this._thrusterInterlock) { this._warnFlowerThrustInhibit('FEEP'); return false; }
-      if (this.resources.battery <= 0) {
-        eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_fuel', type: 'ion' });
+      // Electric engine (2026-09-25): the same law as thrustIon — the battery
+      // pays what it holds, up to this burn's need, and the impulse scales by
+      // that fraction. (The old `battery <= 0` gate never tripped on a battery
+      // parked below one frame's draw, and the consume() refusal downstream
+      // was silent: full Δv for free.) PEEK only — the draw happens after the
+      // envelope accepts the burn, so a refused burn never pays.
+      const available = Math.max(0, this.resources.battery || 0);
+      powerFraction = powerNeed > 0 ? Math.min(1, available / powerNeed) : 1;
+      if (powerFraction <= 0) {
+        this._warnPowerLimited('ion', 0);
+        eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_power', type: 'ion' });
         return false;
       }
+      if (powerFraction < 1) this._warnPowerLimited('ion', powerFraction);
       const fuel = this._resourceSystem
         ? this._resourceSystem.getCurrentFuel()
         : (Constants.FUELS && Constants.FUELS.xenon) || null;
@@ -8560,11 +8655,14 @@ export class PlayerSatellite extends THREE.Group {
       y: pos.y / Constants.SCENE_SCALE,
       z: pos.z / Constants.SCENE_SCALE,
     };
-    // Add impulse (convert m/s → km/s by × 0.001)
+    // Add impulse (convert m/s → km/s by × 0.001), scaled by the power
+    // actually available (1 for a no-bill impulse or a dt = 0 physics
+    // response, which draw no power)
+    const dvScale = powerFraction;
     const vKms = {
-      x: vel.x + dvWorld.x * 0.001,
-      y: vel.y + dvWorld.y * 0.001,
-      z: vel.z + dvWorld.z * 0.001,
+      x: vel.x + dvWorld.x * 0.001 * dvScale,
+      y: vel.y + dvWorld.y * 0.001 * dvScale,
+      z: vel.z + dvWorld.z * 0.001 * dvScale,
     };
 
     const newOrbit = cartesianToKeplerian(rKm, vKms);
@@ -8591,26 +8689,26 @@ export class PlayerSatellite extends THREE.Group {
     // Refresh cached Cartesian so subsequent getVelocity/getPosition reads see the new state
     this._cartesian = orbitToSceneCartesian(this.orbit);
 
-    // --- Bookkeeping ---
-    this._deltaVSpent += dvMag;
+    // --- Bookkeeping: only the Δv actually applied ---
+    this._deltaVSpent += dvMag * dvScale;
 
-    // Resource consumption: scale with |dv| vs. one ion-thrust tick baseline.
-    // Skipped for a no-bill passive impulse (mother-net tug — §9.10).
-    if (!noBill) {
-      const baselineDv_mps =
-        (this._ionDeltaV || 0.0003) * (this.throttleLevel || 1) * 1000; // rough m/s per tick proxy
-      const usage = baselineDv_mps > 1e-6
-        ? Math.min(5.0, dvMag / baselineDv_mps)
-        : 1.0;
-      const fuelAmount = this._ionThrustXenonRate * dt * usage;
-      const batteryAmount = this._ionThrustPowerRate * dt * usage;
+    // Resource consumption: the battery pays what it holds (drawn only now —
+    // the envelope accepted the burn), xenon is billed for the thrust that
+    // actually happened. Skipped for a no-bill passive impulse (mother-net
+    // tug — §9.10); dt = 0 physics responses (recoil compensations) bill
+    // nothing and were never power-gated by the law above.
+    if (!noBill && powerNeed > 0) {
+      const drawnFraction = this._drawBurnResource('battery', powerNeed);
+      const fuel = this._resourceSystem
+        ? this._resourceSystem.getCurrentFuel()
+        : (Constants.FUELS && Constants.FUELS.xenon) || null;
+      const fuelAmount = this._ionThrustXenonRate * dt * usage * drawnFraction;
 
-      if (this._resourceSystem) {
+      if (this._resourceSystem && fuel && fuel.fromCargo) {
         this._resourceSystem.consumeIonFuel(fuelAmount);
       } else {
-        eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'xenon', amount: fuelAmount });
+        this._drawBurnResource('xenon', fuelAmount);
       }
-      eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'battery', amount: batteryAmount });
     }
 
     // --- Visual: fire RCS puff opposite to the impulse direction (in local frame) ---
@@ -8619,12 +8717,12 @@ export class PlayerSatellite extends THREE.Group {
     ).normalize();
     this._fireRcsPuff({ x: localDir.x, y: localDir.y, z: localDir.z });
 
-    // Velocity-streaks visual
+    // Velocity-streaks visual (magnitude reflects the power actually drawn)
     const dirTag = Math.abs(localDir.z) > Math.max(Math.abs(localDir.x), Math.abs(localDir.y))
       ? (localDir.z > 0 ? 'prograde' : 'retrograde')
       : 'lateral';
     eventBus.emit(Events.THRUST_VISUAL, {
-      magnitude: Math.min(1, dvMag * 0.5),
+      magnitude: Math.min(1, dvMag * dvScale * 0.5),
       direction: dirTag,
       type: 'ion',
     });

@@ -207,6 +207,31 @@ export class ResourceSystem {
   }
 
   /**
+   * Draw up to `amount` from a named resource, clamped at what the pool
+   * actually holds (engines on an empty battery, 2026-09-25: consume()'s
+   * all-or-nothing refusal silently rejected an electric burn's draw once
+   * the battery parked below one frame's need — thrust was applied for
+   * free). Like drainBattery(), this never fails: it takes what is there
+   * and reports how much that was, so the caller can scale honestly.
+   * @param {string} resource - 'xenon' | 'coldGas' | 'battery' | 'lithium'
+   * @param {number} amount - desired draw (> 0)
+   * @returns {number} the amount actually drawn (0 .. amount)
+   */
+  drawUpTo(resource, amount) {
+    if (!this._isValid(resource) || !(amount > 0)) return 0;
+    const drawn = Math.min(amount, Math.max(0, this[resource]));
+    if (drawn <= 0) return 0;
+    this[resource] -= drawn;
+    this._syncToPlayer();
+    eventBus.emit(Events.RESOURCE_CHANGED, {
+      resource,
+      value: this[resource],
+      delta: -drawn,
+    });
+    return drawn;
+  }
+
+  /**
    * Check whether the player can afford a cost.
    * @param {string} resource
    * @param {number} amount
