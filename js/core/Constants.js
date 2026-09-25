@@ -1701,7 +1701,7 @@ export const Constants = {
     LAUNCH_VEHICLE: 'SSLV',
     FAIRING_DIAMETER: 2.1,         // m
     FAIRING_LENGTH: 3.0,           // m — was 2.5 (the bare ship was already 2.515)
-    STOWED_ENVELOPE_DIA: 1.10,     // m — folded flower packs Ø1.092 (furled ROSA coils Ø1.089 sit inside)
+    STOWED_ENVELOPE_DIA: 1.13,     // m — folded flower packs Ø1.121 (was Ø1.092 before the 20 mm wing gap cleared the boom; furled ROSA coils Ø1.089 sit inside)
 
     STOWED_ENVELOPE_LEN: 2.58,     // m — FEEP exits −1.075 … folded flower tips +1.505
 
@@ -1869,22 +1869,44 @@ export const Constants = {
       // from the probe's 8-point boom sampling (MGA "0.023"); the real Ø60 mm
       // tube at 0.47 clears the MGA corner by only 0.0178 — under the T7 (i)
       // gate of 0.020 — so the pin rose 5 mm (WING_GAP_M shrank 5 mm to keep
-      // the pack r_max at 0.546). The P1 ring is still the rim r 0.40; the
+      // the pack r_max at 0.546; it later grew to 0.020 to clear the boom, r_max
+      // 0.560 — see WING_GAP_M). The P1 ring is still the rim r 0.40; the
       // bracket box spans r 0.37..0.51 (the amended band's top).
       HINGE_R_M: 0.475,
       HINGE_Z_M: -1.0,             // rim plane
 
       // ── Design 7b two-layer folding plate (GEO-comsat pattern) ──
       // Each 1.70 × 0.60 plate is a 0.30 m CENTRE panel on the boom plus two
-      // FULL 0.15 m wings hinged along the boom line on 1.75 cm offset knuckles
-      // (butt-jointed when open — width 0.60, area 4 × 1.02 = 4.08 m²
-      // preserved). For launch the wings fold onto the centre side by side
+      // FULL 0.15 m wings hinged along the boom line on 2.5 cm offset hinges
+      // (butt-jointed when open — width 0.60, area 4.062 m²: 4.08 less the
+      // wings' 15 mm tip inset). For launch the wings fold onto the centre side by side
       // (one layer, meeting edge-to-edge at the boom line) and the strut
-      // swings to θ 0: four 0.30 × 0.101 × 1.70 m packs lying along the
+      // swings to θ 0: four 0.32 × 0.117 × 1.70 m packs (hinges included) along the
       // barrel. Wing angle is a pure function of θ (lanyard law, T4) — no new
       // persisted state; orbit always shows them open.
       PLATE_CENTRE_HALF_WIDTH_M: 0.15,   // centre panel ±0.15 (wings 0.15..0.30)
-      WING_GAP_M: 0.005,           // folded layer gap; knuckle standoff = (gap + thick) / 2 = 0.0175
+      // Folded layer gap. Was 0.005 — measured 2026-09-24 (owner: "some magic
+      // handwaving", tmp/radiator-fold-audit.mjs): the Ø60 mm boom stands
+      // 15 mm proud of the centre panel's faces, so at 5 mm the folded wings
+      // sat 10 mm deep in the boom along their whole length. 0.015 exactly
+      // touches it; 0.020 clears it by 5 mm (tmp/radiator-fold-fix.mjs).
+      // Hinge-axis standoff = (gap + thick) / 2 = 0.025 below the mid-plane.
+      WING_GAP_M: 0.020,
+      // The wings stop this far short of the plate's tip end: folded, they
+      // move under the centre panel, where the Ø100 mm tip boss (boom x
+      // 2.44…2.505) would otherwise hold their last 10 mm (measured, same
+      // probes). 15 mm → 5 mm clear of the boss.
+      WING_TIP_INSET_M: 0.015,
+      // Real hinge hardware on each fold line (the design booked 0.4 kg per
+      // strut for "the two wing hinge lines" and never built them — nothing
+      // joined a wing to the centre panel). Two hinges per line, each a
+      // panel-side lug and a wing-side lug on one axis: a barrel of radius
+      // (standoff − thick/2) = 10 mm, which touches the centre panel's lower
+      // edge AND the wing's inner edge in every pose, with a 2 mm leaf bolted
+      // along the face it belongs to.
+      WING_HINGE_X_M: [-0.6, 0.6],  // hinge centres, along the strut from the plate centre
+      WING_HINGE_LUG_M: 0.04,       // each lug's length along the axis (lugs 10 mm apart)
+      WING_HINGE_LEAF_M: 0.03,      // leaf reach from the axis across the panel face
       WING_SEAM_M: 0.02,           // dark hinge-seam strip on the centre panel's edge (reads at 3 m)
       SEAM_END_INSET_M: 0.01,      // both seam sets stop 1 cm short of each panel end (log-depth: end caps never coplanar)
       // (KNUCKLE_M [0.08, 0.03] — the buried centre-panel knuckle blocks — removed 2026-09-09 with the set itself, owner's request; the wing knuckles are sized inline in _buildFlowerPair)

@@ -728,6 +728,8 @@ export class PlayerSatellite extends THREE.Group {
       'PyroPin_', 'PClip_', 'CClip_', 'CableHarness_', 'SpringHousing_', 'SpringCoil_',
       'GuideRail_', 'RibRing_', 'FEEPInner_', 'FEEP_Boss_', 'FEEP_GridDisc_',
       'MountBolt_', 'Bushing_', 'BerthCollarFoot_',
+      // radiator fold-line hinges (Ø20 mm barrels — sub-pixel past ~30 m)
+      'FlowerStrutHingeLug_',
     ];
     const CULL_EXACT = new Set(['AccentRing']);
     this._detailMeshes.length = 0;
@@ -3806,14 +3808,20 @@ export class PlayerSatellite extends THREE.Group {
     // preserved. Folded (launch, θ 0): both wings land side by side on ONE
     // layer over the centre panel's −Z_hinge face (= radially OUTBOARD when
     // the strut lies fore along the barrel) and meet at the boom line
-    // edge-to-edge — a 0.30 × 0.101 × 1.70 m pack (probe 7b.4c B′ shape, r_max
-    // 0.546 on the built model).
+    // edge-to-edge under the boom — a 0.32 × 0.117 × 1.70 m pack with its
+    // hinges (r_max 0.560 on the built model; 0.546 before the 20 mm gap).
+    // Measured: tmp/pack-size.mjs, test-FlowerLaunchFold (ii).
     const cHalf = FL.PLATE_CENTRE_HALF_WIDTH_M;
     const wingW = FL.PLATE_HALF_WIDTH_M - cHalf;                  // 0.15 — the FULL wing (⟦R⟧1: no air seam)
-    const layer = FL.WING_GAP_M + FL.PLATE_THICK_M;               // 0.035 folded layer pitch
-    const knuckleK = layer / 2;                                   // 0.0175 offset knuckle standoff
+    const layer = FL.WING_GAP_M + FL.PLATE_THICK_M;               // 0.050 folded layer pitch
+    const knuckleK = layer / 2;                                   // 0.025 fold-axis standoff below the mid-plane
     const plateGeo = new THREE.BoxGeometry(plateLen, 2 * cHalf * M, FL.PLATE_THICK_M * M);
-    const wingGeo = new THREE.BoxGeometry(plateLen, wingW * M, FL.PLATE_THICK_M * M);
+    // Wings stop WING_TIP_INSET_M short of the plate's tip end (folded, they
+    // lie under the centre panel, where the tip boss would otherwise hold
+    // them); the root ends stay flush with the centre panel's.
+    const wingInset = FL.WING_TIP_INSET_M * M;
+    const wingLen = plateLen - wingInset;
+    const wingGeo = new THREE.BoxGeometry(wingLen, wingW * M, FL.PLATE_THICK_M * M);
     // Hinge-seam strip: a dark 2 cm band on the centre panel's edge, set back
     // 2 mm from the hinge-line plane (so no side face shares the wing's edge
     // plane) and standing 1 mm proud of both plate faces (log-depth rule: ≥ 1
@@ -3838,7 +3846,7 @@ export class PlayerSatellite extends THREE.Group {
     // seam above sits on the CENTRE PANEL's own faces, which become the
     // INNERMOST, barrel-facing layer once folded — measured on the built
     // model, the true OUTERMOST (camera-visible) layer at LAUNCH is the
-    // WING's own +Z face (r 0.546; the plate face and its seam are buried
+    // WING's own +Z face (r 0.560 since the 20 mm gap; the plate face and its seam are buried
     // 6–24 mm beneath it, invisible from outside). Folded packs read as
     // featureless slabs. Fix: mount a matching seam + three knuckle blocks on
     // EACH WING itself (children of `wh`, not `hinge`) so they ride the wing's
@@ -3858,14 +3866,46 @@ export class PlayerSatellite extends THREE.Group {
     // The other end (12 mm back) is buried 10 mm inside the wing's own 30 mm.
     // Same end-cap rule as seamGeo: seamLen (1 cm inset each end), so the wing
     // seam's ±X end faces never share the wing's own end planes.
-    const wingSeamGeo = new THREE.BoxGeometry(seamLen, 0.01 * M, (FL.PLATE_THICK_M + 0.002) * M);
+    const wingSeamGeo = new THREE.BoxGeometry(wingLen - 2 * FL.SEAM_END_INSET_M * M, 0.01 * M, (FL.PLATE_THICK_M + 0.002) * M);
+    // Fold-line hinge lug (owner 2026-09-24, "magic handwaving": nothing
+    // joined a wing to the centre panel). Cross-section in the hinge-axis
+    // frame (u across the panel, v along the panel normal): a barrel of
+    // radius knuckleK − thick/2 (10 mm) on the axis — its top line is the
+    // panel's lower edge and the wing's inner edge in EVERY pose, since the
+    // wing turns about exactly this axis — joined to a 2 mm leaf lying flat on
+    // the face the lug belongs to (u −LEAF…−4 mm, v r−2 mm…r). The leaf stops
+    // 4 mm short of the axis so its end face never shares the seam strip's
+    // side plane. Built with the leaf toward −u; a lug on the other side is
+    // the same mesh turned π about the axis's own frame Z. Extruded along X
+    // (the fold axis) by WING_HINGE_LUG_M.
+    const lugR = knuckleK - FL.PLATE_THICK_M / 2;
+    const lugLeaf = FL.WING_HINGE_LEAF_M;
+    const lugShape = new THREE.Shape();
+    const vLow = lugR - 0.002, uIn = -0.004;
+    lugShape.moveTo(-lugLeaf * M, vLow * M);
+    lugShape.lineTo(-Math.sqrt(lugR * lugR - vLow * vLow) * M, vLow * M);
+    lugShape.absarc(0, 0, lugR * M,
+      Math.atan2(vLow, -Math.sqrt(lugR * lugR - vLow * vLow)),
+      Math.atan2(Math.sqrt(lugR * lugR - uIn * uIn), uIn), false);
+    lugShape.lineTo(uIn * M, lugR * M);
+    lugShape.lineTo(-lugLeaf * M, lugR * M);
+    lugShape.closePath();
+    const lugGeo = new THREE.ExtrudeGeometry(lugShape, {
+      // 12 arc segments: the facet sagitta (0.29 mm on the 10 mm barrel) stays
+      // under test-RadiatorFold's 0.5 mm contact gate at every fold angle.
+      depth: FL.WING_HINGE_LUG_M * M, bevelEnabled: false, curveSegments: 12,
+    });
+    // shape (x_s, y_s, z_s) → axis frame (u = y, v = z, along = x); centred on x.
+    lugGeo.applyMatrix4(new THREE.Matrix4().set(0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1));
+    lugGeo.translate(-(FL.WING_HINGE_LUG_M / 2) * M, 0, 0);
+    const lugGap = 0.01;    // m between a hinge's panel lug and wing lug
     const WING_KNUCKLE_H_M = 0.012;
     const wingKnuckleGeo = new THREE.BoxGeometry(0.05 * M, 0.02 * M, WING_KNUCKLE_H_M * M);
     const wingKnuckleOuterZ = knuckleK + FL.PLATE_THICK_M / 2 + 0.002;   // wing's +Z face + 2 mm = seam face + 1 mm
     const wingKnuckleZ = wingKnuckleOuterZ - WING_KNUCKLE_H_M / 2;
     // 2 cm inset from the fold axis (y 0) — matches the original plate-side
     // seam's "set back from the edge" convention, and keeps r_max at the
-    // pinned 0.546 (a proud element sitting exactly ON the fold axis, y 0,
+    // pinned value (0.546 then; 0.560 since the 20 mm gap) (a proud element sitting exactly ON the fold axis, y 0,
     // measurably out-radials the wing's own far-edge corner through the
     // θ-rotation; 2 cm in from it does not — re-measured at +2 mm proud:
     // r_max 0.546, test-FlowerLaunchFold (ii) unchanged).
@@ -3966,24 +4006,33 @@ export class PlayerSatellite extends THREE.Group {
       hinge.add(plate);
 
       // Design 7b wings: one hinge group per side at the hinge line
-      // (x_mid, ±0.15, −0.0175) — the 1.75 cm offset knuckle puts the fold axis
-      // below the −Z face so the folded wing lands one layer (0.035) outboard
-      // of the centre panel with a 5 mm air gap. The L group is turned π about
-      // Z so its local +Y points outward along ITS wing: both groups then
-      // share one fold-angle sign (rotation.x = −π folded … 0 open, driven by
-      // _updateFlower's lanyard law). Open: mid-plane flush with the centre
-      // panel, inner edge butt-jointed at y = ±0.15 (adjacent faces, not
-      // overlapping). Folded: wing R spans y 0..0.15 and wing L 0..−0.15 at
-      // mid-plane z −0.035 — they MEET at y = 0 edge-to-edge.
+      // (x_mid, ±0.15, −knuckleK) — the 2.5 cm offset puts the fold axis below
+      // the −Z face so the folded wing lands one layer (0.050) outboard of the
+      // centre panel with a 20 mm air gap (clear of the boom, which stands
+      // 15 mm proud). The L group is turned π about Z so its local +Y points
+      // outward along ITS wing, with Euler order ZXY so its fold turn is taken
+      // BEFORE that flip: both groups then fold to the same (−Z) side with one
+      // shared sign (rotation.x = −π folded … 0 open, _updateFlower's lanyard
+      // law). With the default XYZ order the X turn was applied in the parent
+      // frame, so the L wing folded UP over the +Z face and passed through the
+      // centre panel for 30°–170° of its swing to end below it (owner
+      // 2026-09-24, "3 panels folding in a Z but 2 layers";
+      // tmp/radiator-fold-audit.mjs). Open: mid-plane flush with the centre
+      // panel, inner edge butt-jointed at y = ±0.15. Folded: wing R spans
+      // y 0..0.15 and wing L 0..−0.15 at mid-plane z −0.050 — they MEET at
+      // y = 0 edge-to-edge, under the boom.
       const wings = [];
       for (const [side, sgn] of [['L', -1], ['R', +1]]) {
         const wh = new THREE.Group();
         wh.name = `FlowerStrutWingHinge_${i}_${side}`;
         wh.position.set(plateX, sgn * cHalf * M, -knuckleK * M);
-        if (sgn < 0) wh.rotation.z = Math.PI;
+        if (sgn < 0) { wh.rotation.order = 'ZXY'; wh.rotation.z = Math.PI; }
         hinge.add(wh);
+        // local +X is ship −X on the L side (the π turn), so the tip-end
+        // shortening shifts the wing by −sgn·inset/2 to keep its root flush.
+        const wingShiftX = -sgn * wingInset / 2;
         const wing = new THREE.Mesh(wingGeo, plateMat);
-        wing.position.set(0, (wingW / 2) * M, knuckleK * M);
+        wing.position.set(wingShiftX, (wingW / 2) * M, knuckleK * M);
         wing.name = `FlowerStrutWing_${i}_${side}`;
         wing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
         wh.add(wing);
@@ -4005,10 +4054,10 @@ export class PlayerSatellite extends THREE.Group {
         // own +Z face = 1 mm proud of the seam, and buried 10 mm into the
         // wing's 30 mm thickness on the other end — short (12 mm, not the
         // full 35 mm layer pitch) because this set only needs to clear ONE
-        // panel. Folded, the seam's inner-face millimetre sits 4 mm off the
-        // centre panel's face (the 5 mm WING_GAP_M minus 1) — no contact.
+        // panel. Folded, the seam's inner-face millimetre sits 19 mm off the
+        // centre panel's face (the 20 mm WING_GAP_M minus 1) — no contact.
         const wingSeam = new THREE.Mesh(wingSeamGeo, seamMat);
-        wingSeam.position.set(0, WING_DETAIL_Y_M * M, knuckleK * M);
+        wingSeam.position.set(wingShiftX, WING_DETAIL_Y_M * M, knuckleK * M);
         wingSeam.name = `FlowerStrutWingSeam_${i}_${side}`;
         wingSeam.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
         wh.add(wingSeam);
@@ -4018,6 +4067,28 @@ export class PlayerSatellite extends THREE.Group {
           wkn.name = `FlowerStrutWingKnuckle_${i}_${side}_${k}`;
           wkn.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
           wh.add(wkn);
+        });
+        // The fold line's two hinges: at each WING_HINGE_X_M station a
+        // panel-side lug (hinge child — never moves; leaf on the centre
+        // panel's −Z face) and, 10 mm further along, a wing-side lug (wh
+        // child — its barrel turns in place about its own axis; its leaf rides
+        // the wing's inner face). Lug x positions are in ship-frame terms, so
+        // the wh-local x is multiplied by sgn (the L group's π turn).
+        FL.WING_HINGE_X_M.forEach((hx, k) => {
+          const panelX = hx - (FL.WING_HINGE_LUG_M + lugGap) / 2;
+          const wingX = hx + (FL.WING_HINGE_LUG_M + lugGap) / 2;
+          const pl = new THREE.Mesh(lugGeo, bracketMat);
+          pl.position.set(plateX + panelX * M, sgn * cHalf * M, -knuckleK * M);
+          if (sgn < 0) pl.rotation.z = Math.PI;      // leaf toward the centre (+y on the L side)
+          pl.name = `FlowerStrutHingeLug_${i}_${side}_${k}_Panel`;
+          pl.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+          hinge.add(pl);
+          const wl = new THREE.Mesh(lugGeo, bracketMat);
+          wl.position.set(sgn * wingX * M, 0, 0);    // on the axis, in wh-local
+          wl.rotation.z = Math.PI;                    // leaf out along the wing (wh-local +y)
+          wl.name = `FlowerStrutHingeLug_${i}_${side}_${k}_Wing`;
+          wl.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+          wh.add(wl);
         });
         // Seam strip on the CENTRE panel's edge (a hinge child — it does not
         // fold with the wing): y from ±0.128 to ±0.148, 1 mm proud each face.
