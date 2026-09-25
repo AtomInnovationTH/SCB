@@ -350,13 +350,15 @@ const SYSTEMS = [
         // T4), 1 mm proud of the plate. The static stays the shipped tuple (the
         // ≥ 4 cm envelope is measured on it).
         // Mother fixes 4/4 (a): the lip point was az 90 — exactly between the
-        // star trackers (az 84/96), so from az 60 (and from +Y) the leader landed
-        // on StarTracker_0. A headless replica of the harness camera→anchor
+        // star trackers (az 82/98 since the 2026-09-25 baffle fix), so from az 60
+        // (and from +Y) the leader landed on StarTracker_0. A headless replica of
+        // the harness camera→anchor
         // raycast over the 12 audit poses scored every 1° of the lip: az 65–69
         // is the stable window (SensorDeck/Skirt from both fore-quarters, the
         // top fore-quarter, the starboard side and hinge-az60; only the far-side
         // and grazing poses miss, onto the turntable rim). az 65: 5 cm clear of
-        // the EO barrel (az 45, r ≤ 0.36), 13° clear of StarTracker_0's mouth.
+        // the EO barrel (az 45, r ≤ 0.36), 31° clear of StarTracker_0's mouth
+        // (measured after the az 82/98 move, tmp/star-tracker-probe.mjs).
         meshOffset: [ 0.156 * M, 0.335 * M, 0.001 * M ],
         anchor: [ 0, 0.30 * M, 1.03 * M ] },
       { id: 'sun_sensors', name: 'SUN SENSORS', risk: 'GREEN', tier: 'detail', codexId: 'sun_sensor',
