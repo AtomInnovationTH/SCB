@@ -6,16 +6,24 @@
  * flanks the ship with two stacked columns of cards joined to their anchors by
  * elbow leaders, so labels never crowd the fore cap or cross each other.
  *
- * Zoom-driven level-of-detail keeps clutter under control:
+ * Labels in steps (DECISIONS §13 r3, 2026-09-24): the system names show in
+ * EVERY band, and a system's part labels appear only while that system is
+ * OPEN — pinned by a click/tap, held by hovering any of its parts or its
+ * name, lingered ~1 s (CALLOUTS.OPEN_LINGER_MS) after the pointer leaves, or
+ * (inside the close lens) held by the part nearest screen centre. At rest F1
+ * shows only the six system names — seven once the radiators are bought.
  *
- *   Band 1  SYSTEM   (far, ~12–8 m)  : 6 system-group labels only.
- *   Band 2  PART     (mid, ~8–5.5 m) : every major part card; system labels fade.
- *   Band 3  COMPONENT(close, <5.5 m) : the focused part's system's detail
- *                                       sub-parts appear on the rails. Every
- *                                       card stays compact — the promoted
- *                                       "full" card is retired (B1); the full
- *                                       detail card lives on hover (the
- *                                       dossier, B2 — see below).
+ * Zoom bands (camera-to-ship distance, with hysteresis):
+ *
+ *   Band 1  SYSTEM   (far, > ~9 m)   : system names only (no hull hover).
+ *   Band 2  PART     (mid, ~9–4 m)   : system names + the OPEN system's
+ *                                       major part cards.
+ *   Band 3  COMPONENT(close, < ~4 m) : + the open system's detail cards and
+ *                                       today's proximity reveal around the
+ *                                       focused part. Every card stays
+ *                                       compact — the promoted "full" card is
+ *                                       retired (B1); the full detail card
+ *                                       lives on hover (the dossier, B2).
  *
  * Identity: hue = system (6 hues), risk = a small badge dot on the card. Anchors
  * on the far side of the hull fade by camera-facing angle (dot-product proxy).
@@ -730,13 +738,24 @@ const PORTRAIT_OVERRIDES = {
 
 // LOD band edges, in METRES of camera-to-ship distance. Hysteresis: descend
 // (zoom in) on the lower number, ascend (zoom out) on the higher.
+// §13 r3 (2026-09-24): compIn/compOut moved 5.5/6.5 → 4.0/4.5 — the spec's
+// 4 m lens split (00-spec "Lens split at 4 m"; FloorContract lens-split-4m).
+// F1's camera is 2–6 m, so the old edges left the PART band 0.5 m of the
+// floor. partIn/partOut (8/9 m) are unchanged — the ?ladder=0 inspect path
+// still uses them.
 const BAND = {
   partIn:  8.0,  partOut:  9.0,
-  compIn:  5.5,  compOut:  6.5,
+  compIn:  4.0,  compOut:  4.5,
 };
 
 const GUIDE_STEP_S = 1.1;   // seconds each system stays highlighted in the tour
 const GUIDE_HOLD_S = 0.6;   // initial hold before the tour starts
+
+// §13 r3 (L6): the one-line hint's copy, VERBATIM from the ruling (owner,
+// 2026-09-24). Owned by MotherCallouts — not FloorMask, not the toast queue.
+// Shown while active and not yet dismissed (once per page load), centred in
+// the pane-free strip inside the transient band; see _buildHint/_updateHint.
+const HINT_TEXT = 'Point at a part to see what it does. Click to upgrade it.';
 
 const FADE_RATE = 6.0;      // opacity ease rate for band crossfades
 
@@ -868,6 +887,19 @@ export class MotherCallouts {
     this._band = 'SYSTEM';
     this._guideT = -1;
     this._guidedDone = false;
+    // §13 r3 — labels in steps. The OPEN system (one id or null) is resolved
+    // every frame by _resolveOpenSys, in the locked order: pinned > hovered
+    // (any part of it, or its name) > lingered > (close lens) the focus
+    // part's system. Clicks/taps write the pin (_handlePointerUp); hover
+    // feeds the resolver through _hoverRec.
+    this._pinnedSys = null;   // a click/tap pin (a system-name tap toggles it)
+    this._lingerSys = null;   // the last hovered system, held OPEN_LINGER_MS
+    this._lingerAt = 0;       // frame clock (ms) of the last hovered frame
+    this._openSys = null;     // resolved in update(), read by _targetOpacity
+    // The one-line hint (§13 r3): shows while active and not yet dismissed,
+    // once per page load; the element is built in _build (DOM, no canvas 2D).
+    this._hintDone = false;
+    this._hintEl = null;
     this._focusPart = null;
     this._liveCtx = null;       // late-bound live-data context (task 7)
     this._lastLiveT = 0;        // live-refresh cadence guard
@@ -1798,6 +1830,9 @@ export class MotherCallouts {
       sprite: this._dossierSprite,
       cardKey: null, card: null, _cardEpoch: -1, _cardCache: null,
     };
+
+    // §13 r3 (L6): the one-line hint (DOM — no canvas 2D needed).
+    this._buildHint();
   }
 
   /**
@@ -2144,6 +2179,12 @@ export class MotherCallouts {
     } else {
       this._guideT = -1;
       this._focusPart = null;
+      // §13 r3: a re-arrival is the rest state (the system names only) —
+      // pins and lingers do not survive leaving inspection.
+      this._pinnedSys = null;
+      this._lingerSys = null;
+      this._openSys = null;
+      if (this._hintEl) this._hintEl.style.display = 'none';
       // Round 6: the guided tour is a one-shot. Mark it done on the first exit so
       // a quick dip in/out of inspection can't replay the dim tour indefinitely.
       this._guidedDone = true;
@@ -2467,6 +2508,9 @@ export class MotherCallouts {
    */
   _setHoverRec(rec) {
     const next = rec || null;
+    // §13 r3 (L5): the first non-null hover ends the one-time sweep (the
+    // player takes over) and dismisses the hint line — both once per load.
+    if (next) { this._guidedDone = true; this._hintDone = true; }
     this._hoverMisses = 0;
     if (next === this._hoverRec) return;
     const old = this._hoverRec;
@@ -2775,12 +2819,32 @@ export class MotherCallouts {
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
     if (moved > TAP_SLOP_PX || (now - down.t) > TAP_SLOP_MS) return;   // drag / long-press → ignore (TapPick's ONE slop law)
+    // §13 r3 (L5): the first tap ends the one-time sweep — the player takes
+    // over. (Drags and long-presses returned above; a tap is a real
+    // take-over, wherever it lands.)
+    this._guidedDone = true;
+    // A tap on a system NAME toggles its pin (§13 r3) — touch has no hover,
+    // so the pin is how a tap "opens" a system. Never the part-click path.
+    // (Guarded: the prototype-borrowing test rigs predate the method.)
+    const sysRec = (typeof this._pickSystemLabelAt === 'function') ? this._pickSystemLabelAt(e) : null;
+    if (sysRec) {
+      this._hintDone = true;
+      this._pinnedSys = (this._pinnedSys === sysRec.def.id) ? null : sysRec.def.id;
+      return;
+    }
     const hit = this._pickLabel(e);
+    if (!hit) {
+      // §13 r3: a tap or click on empty space clears the pin.
+      this._pinnedSys = null;
+      return;
+    }
+    // §13 r3: a part hit pins its system, then today's path runs.
+    this._hintDone = true;
+    this._pinnedSys = hit.sysId;
     // T7: the WHOLE card is clickable — hover and click agree (the old
     // title-strip UV gate made ~⅔ of a focused card a dead zone with a hand
     // cursor). Hull-part clicks arrive through the same _pickLabel (the mesh
     // loop in _pickBestRec), so clicking a part IS clicking its card.
-    if (!hit) return;
     // Wave 5 (2) D-a (owner, 2026-09-03): with the REFIT hook injected the
     // click opens the part's REFIT card INSTEAD of the Library — the hook
     // receives the getHoveredPart() record (the clicked rec is written
@@ -2861,7 +2925,13 @@ export class MotherCallouts {
     if (this._band === 'COMPONENT') this._focusPart = this._pickFocusPart();
     else this._focusPart = null;
 
+    // §13 r3 (L2): resolve the OPEN system before _layout reads it.
+    this._openSys = (typeof this._resolveOpenSys === 'function') ? this._resolveOpenSys() : null;
+
     this._layout(dt);
+    // §13 r3 (L6): the one-line hint's visibility + placement — after
+    // _layout so the pane-aware strip centre is this frame's.
+    this._updateHint?.();
     // After the re-pick inside _layout: pull every outlined rec (hover +
     // REFIT ghosts) toward the camera for THIS frame's pose (depth-honest
     // highlight, see _ensureOutline), then advance the ghost pulse.
@@ -2913,6 +2983,104 @@ export class MotherCallouts {
     const tourable = this._tourableSystems();
     const idx = Math.floor(this._guideT / GUIDE_STEP_S);
     return tourable[idx]?.id ?? null;
+  }
+
+  /**
+   * §13 r3 (L2) — resolve the OPEN system (one id or null), every frame, in
+   * the locked order:
+   *   1. the PINNED system (a click/tap on a system name toggles it; a part
+   *      click sets it — see _handlePointerUp);
+   *   2. the system of the hovered rec — any part of it (the `_hoverRec` the
+   *      parts' pick loop owns), or its NAME (the system-label sprite test
+   *      below — system labels never enter `_hoverRec`, which is the parts'
+   *      hover state; a part hover wins over the name when both are somehow
+   *      under the pointer, since the part carries the outline/brighten cue);
+   *   3. LINGER: the last hovered system, held CALLOUTS.OPEN_LINGER_MS after
+   *      the pointer leaves it (the fold-back reads deliberate, not flickery);
+   *   4. in the COMPONENT band, the system of the focus part
+   *      (_pickFocusPart — the close lens opens the system nearest centre);
+   *   5. otherwise null (rest: the system names only).
+   * A system-NAME hover also ends the sweep and dismisses the hint (§13 r3
+   * L5/L6) — the part path does the same in _setHoverRec.
+   * @private @param {number} [now] frame clock (ms) — tests inject; default performance.now()
+   * @returns {string|null}
+   */
+  _resolveOpenSys(now = (typeof performance !== 'undefined' ? performance.now() : Date.now())) {
+    if (this._pinnedSys) return this._pinnedSys;
+    const h = this._hoverRec;
+    const hoverSys = h ? (h.isSystem ? h.def.id : h.sysId) : null;
+    if (hoverSys) {
+      this._lingerSys = hoverSys;
+      this._lingerAt = now;
+      return hoverSys;
+    }
+    const label = this._sysLabelUnderPointer();
+    if (label) {
+      this._guidedDone = true;
+      this._hintDone = true;
+      this._lingerSys = label.def.id;
+      this._lingerAt = now;
+      return label.def.id;
+    }
+    if (this._lingerSys && (now - this._lingerAt) < (CFG.OPEN_LINGER_MS ?? 1000)) return this._lingerSys;
+    if (this._band === 'COMPONENT' && this._focusPart) return this._focusPart.sysId;
+    return null;
+  }
+
+  /**
+   * @private The system-label sprite under the pointer, or null — the
+   * pointer's cached NDC (written by _refreshHover at its 10 Hz cadence)
+   * against every VISIBLE, legible system-label sprite. Refreshes the player
+   * subtree's world matrices first (the STALE WORLD MATRICES law — the ship
+   * moves ~130 m per frame and a stale sprite pick would never hit). Null
+   * without a pointer on the canvas (touch has no hover — the pin is the
+   * tap's verb).
+   */
+  _sysLabelUnderPointer() {
+    if (!this._pointerPos || !this.canvas || !this.camera) return null;
+    if (!Number.isFinite(this._dossierNX) || !Number.isFinite(this._dossierNY)) return null;
+    if (this.player && typeof this.player.updateWorldMatrix === 'function') {
+      this.player.updateWorldMatrix(true, true);
+    }
+    this._ndc.set(this._dossierNX, this._dossierNY);
+    this._raycaster.setFromCamera(this._ndc, this.camera);
+    return this._pickSystemLabelRay();
+  }
+
+  /**
+   * @private Raycast the system-label sprites with the raycaster's CURRENT
+   * ray; the nearest hit wins. The gate mirrors _recPickable's card tier
+   * (visible + legible) without its briefing clause — system labels carry no
+   * codexId by design, and a dimmed name stays pointable (ruling 3: pointing
+   * at a system name opens it).
+   */
+  _pickSystemLabelRay() {
+    let best = null, bestDist = Infinity;
+    const gate = (CFG.MIN_CARD_OP ?? 0.5) * 0.8;
+    for (const rec of this._allRecs) {
+      if (!rec.isSystem || rec._neverShow) continue;
+      if (!rec.sprite || !rec.sprite.visible) continue;
+      if (Math.max(rec.op ?? 0, rec._targetOp ?? 0) <= gate) continue;
+      const hits = this._raycaster.intersectObject(rec.sprite, false);
+      if (hits.length && hits[0].distance < bestDist) { bestDist = hits[0].distance; best = rec; }
+    }
+    return best;
+  }
+
+  /**
+   * @private The system-label sprite under a POINTER EVENT (a click/tap):
+   * sets the ray from the event's NDC — matrices refreshed first, because a
+   * tap is the touch player's only verb and must not miss on a stale frame —
+   * then raycasts the system labels. Used by _handlePointerUp for the pin
+   * toggle.
+   */
+  _pickSystemLabelAt(e) {
+    if (!this.camera || !this.canvas) return null;
+    if (this.player && typeof this.player.updateWorldMatrix === 'function') {
+      this.player.updateWorldMatrix(true, true);
+    }
+    this._raycaster.setFromCamera(this._pointerNDC(e), this.camera);
+    return this._pickSystemLabelRay();
   }
 
   _pickFocusPart() {
@@ -2991,7 +3159,6 @@ export class MotherCallouts {
     const band = this._band;
     const guideId = this._guideSystemId();
     const focus = this._focusPart;
-    const focusSys = focus?.sysId ?? null;
     const ease = 1 - Math.exp(-CFG.EASE_RATE * Math.max(dt, 0));
     const fadeK = Math.min(1, FADE_RATE * Math.max(dt, 0));
 
@@ -3040,7 +3207,7 @@ export class MotherCallouts {
       // in _positionCard, NOT to the card. Stored once per frame.
       rec._facing = this._anchorVisible(rec.anchor, rec);
 
-      let targetOp = this._targetOpacity(rec, band, guideId, focusSys, focusNX, focusNY, rec._facing);
+      let targetOp = this._targetOpacity(rec, band, guideId, this._openSys, focusNX, focusNY, rec._facing);
       const off = CFG.OFFSCREEN_NDC;
       if (az > 1 || ax < -off || ax > off || ay < -off || ay > off) targetOp = 0;
 
@@ -3119,15 +3286,32 @@ export class MotherCallouts {
     this._updateDossier(now, liveDue, ease);
   }
 
-  /** Target opacity for a rec given band/guide/focus, before anchor gating. @private
-   * Round 6: binary legibility. The card's opacity is band/guide/focus only —
+  /** Target opacity for a rec given band/guide/open-system, before anchor gating. @private
+   * Round 6: binary legibility. The card's opacity is band/guide/open only —
    * the facing ramp (which belongs to hardware on the hull, not a card on a
    * screen-edge rail) is a hard GATE here (back-facing → 0) and is applied as a
    * soft fade only to the dot + leader in _positionCard. Non-hidden targets are
    * floored to MIN_CARD_OP so a shown card is always readable, never muddy.
+   * §13 r3 (2026-09-24) — labels in steps:
+   *   - system labels show in EVERY band. The SYSTEM band keeps today's rule
+   *     exactly (all full; the sweep's guided system full, the rest 0.5). In
+   *     PART/COMPONENT the open system's name is full, the others dimmed to
+   *     MIN_CARD_OP — all full at rest (no system open), and during the sweep
+   *     the guided system is full and the rest dim (the sweep now plays in
+   *     the PART band too; its first hover/tap ends it);
+   *   - major parts show ONLY when their system is open; in COMPONENT the
+   *     non-focus majors keep today's 0.8;
+   *   - detail parts show in COMPONENT for the open system, plus today's
+   *     proximity reveal around the focus part.
+   * @param {string|null} [openSys] the OPEN system id (from _resolveOpenSys).
+   *   This is the old focusSys parameter's slot — the COMPONENT focus reaches
+   *   the detail rule through the resolver's rule 4, so the parameter names
+   *   the OPEN system, not the focus part's system.
+   * @param {number} [focusNX] focused part's anchor NDC (proximity reveal)
+   * @param {number} [focusNY]
    * @param {number} [facing] pre-computed _anchorVisible(rec.anchor) for this
    *   frame (from _layout); recomputed only if not supplied (e.g. unit tests). */
-  _targetOpacity(rec, band, guideId, focusSys, focusNX, focusNY, facing) {
+  _targetOpacity(rec, band, guideId, openSys, focusNX, focusNY, facing) {
     if (rec._neverShow) return 0; // DAUGHTERS pseudo-group has no system label
     if (rec._armGone) return 0;   // daughter away from its berth (T3)
     if (rec._flowerGone) return 0; // THERMAL family pre-purchase (P2)
@@ -3137,28 +3321,36 @@ export class MotherCallouts {
     if (face < 0.15) return 0;
     const floor = CFG.MIN_CARD_OP ?? 0.5;
     if (rec.isSystem) {
-      if (band !== 'SYSTEM') return 0;
-      // Guided tour: highlighted system full, the rest dimmed (but still legible).
-      if (guideId) return (rec.def.id === guideId) ? 1 : 0.5;
-      return 1;
+      if (band === 'SYSTEM') {
+        // Today's SYSTEM-band rule, kept exactly.
+        if (guideId) return (rec.def.id === guideId) ? 1 : 0.5;
+        return 1;
+      }
+      // §13 r3: the names show in every band. During the sweep the guided
+      // system is full and the rest dim; otherwise the open system's name
+      // is full, the others dim, and every name is full at rest.
+      if (guideId) return (rec.def.id === guideId) ? 1 : floor;
+      return (openSys == null || rec.def.id === openSys) ? 1 : floor;
     }
     if (rec.isDetail) {
-      let reveal = band === 'COMPONENT' && rec.sysId === focusSys;
+      if (band !== 'COMPONENT') return 0;
+      let reveal = rec.sysId === openSys;
       // T6: proximity reveal — detail parts near the focused part on screen
       // appear even when they belong to another system.
-      if (!reveal && band === 'COMPONENT' && this._focusPart) {
+      if (!reveal && this._focusPart) {
         const dx = rec._anchorX - focusNX, dy = rec._anchorY - focusNY;
         const r = CFG.DETAIL_REVEAL_NDC || 0.25;
         if (dx * dx + dy * dy < r * r) reveal = true;
       }
       return reveal ? 1 : 0;
     }
-    // Major part.
+    // Major part: only the open system's majors show (§13 r3). During the
+    // sweep no system is open (the first hover/tap ends it), so the sweep
+    // shows names only — the old guideId dimming of majors is superseded.
     const showParts = band === 'PART' || band === 'COMPONENT';
     if (!showParts) return 0;
+    if (rec.sysId !== openSys) return 0;
     let op = 1;
-    // Guided tour: non-highlighted systems dimmed but legible.
-    if (guideId && rec.sysId !== guideId) op = 0.5;
     // COMPONENT band, not the focused part: recede a little (still readable).
     const isFocus = band === 'COMPONENT' && rec === this._focusPart;
     if (band === 'COMPONENT' && !isFocus) op = Math.min(op, 0.8);
@@ -3484,8 +3676,88 @@ export class MotherCallouts {
     pos.setXYZ(base + 3, this._rC3.x, this._rC3.y, this._rC3.z);
   }
 
+  // --------------------------------------------------------------------------
+  // §13 r3 (L6) — THE ONE-LINE HINT
+  // --------------------------------------------------------------------------
+
+  /**
+   * @private Build the one-line hint: a DOM chip (inline style, the
+   * HintTicker pattern) vertically centred in the transient band (88–124 px
+   * from the bottom — the hint ticker's own band, read from the same
+   * ONBOARDING.TICKER tuning so the two cannot drift), horizontally centred
+   * in the pane-free strip by _updateHint. `pointer-events:none` (it never
+   * blocks a pick) and disposed in dispose(). No-op without a DOM (the Node
+   * test rigs) — _updateHint is a no-op without the element.
+   */
+  _buildHint() {
+    if (typeof document === 'undefined' || !document.body) return;
+    const T = Constants.ONBOARDING?.TICKER || {};
+    const el = document.createElement('div');
+    el.id = 'mother-callout-hint';
+    el.textContent = HINT_TEXT;
+    // Individual assignments (not one cssText string) so the initial state is
+    // explicit and headless DOM shims read back every pinned property.
+    const s = el.style;
+    s.position = 'fixed';
+    s.bottom = `${T.BOTTOM_PX ?? 88}px`;
+    s.height = `${T.ROW_HEIGHT_PX ?? 36}px`;
+    s.display = 'none';
+    s.alignItems = 'center';
+    s.padding = '0 14px';
+    s.border = '1px solid rgba(0,204,255,0.35)';
+    s.borderRadius = '4px';
+    s.background = 'rgba(0,10,20,0.78)';
+    s.color = CFG.INK;
+    s.fontSize = `${T.FONT_OLDER_PX ?? 13}px`;
+    s.letterSpacing = '0.02em';
+    s.whiteSpace = 'nowrap';
+    s.pointerEvents = 'none';
+    s.transform = 'translateX(-50%)';
+    s.zIndex = '8000';
+    document.body.appendChild(el);
+    this._hintEl = el;
+  }
+
+  /**
+   * @private The hint's per-frame drive (from update()): show while ACTIVE
+   * and not yet dismissed (`_hintDone` is never reset — once per page load,
+   * like the sweep), else hide. Placement — the pane-free strip's centre X in
+   * CSS px — is re-derived at most once per VW_READ_MS and on every
+   * pane/rail-edge change (a drawer opening moves the strip); a canvas rect
+   * read is layout-affected, never per frame. No-op without the element.
+   */
+  _updateHint() {
+    const el = this._hintEl;
+    if (!el) return;
+    const show = this._active && !this._hintDone;
+    const want = show ? 'flex' : 'none';
+    if (el.style.display !== want) el.style.display = want;
+    if (!show) return;
+    const now = this._nowMs || 0;
+    if (this._hintEdgeL === this._edgeL && this._hintEdgeR === this._edgeR
+      && this._hintReadAt != null && (now - this._hintReadAt) < VW_READ_MS) return;
+    this._hintEdgeL = this._edgeL;
+    this._hintEdgeR = this._edgeR;
+    this._hintReadAt = now;
+    const rect = (this.canvas && typeof this.canvas.getBoundingClientRect === 'function')
+      ? this.canvas.getBoundingClientRect() : null;
+    if (!rect || !Number.isFinite(rect.left) || !Number.isFinite(rect.width)) return;
+    el.style.left = `${Math.round((this._stripCX * 0.5 + 0.5) * rect.width + rect.left)}px`;
+  }
+
+  /** @private Drop the hint element (the dispose path). */
+  _disposeHint() {
+    const el = this._hintEl;
+    if (!el) return;
+    this._hintEl = null;
+    if (el.parentNode && typeof el.parentNode.removeChild === 'function') el.parentNode.removeChild(el);
+    else if (typeof el.remove === 'function') el.remove();
+  }
+
   dispose() {
     this._detachPointer();
+    // §13 r3 (L6): the hint element leaves with the layer.
+    this._disposeHint?.();
     // Wave 5 (2): drop the REFIT ghost set before the outline teardown below
     // (bases restored is moot — the materials are about to dispose — but the
     // set must not hold freed recs). Guarded like _setActive for rig stubs.

@@ -297,6 +297,10 @@ export const Constants = {
     // The band crossfade still eases through lower values in-flight; this floors
     // only the TARGET. Kept in lockstep with the _pickBestRec pick gate.
     MIN_CARD_OP:    0.5,
+    // §13 r3 (2026-09-24): after the pointer leaves a system (hover gone and
+    // nothing new hovered/pinned), that system stays "open" this long before
+    // its part labels fold back — the fold reads deliberate, not flickery.
+    OPEN_LINGER_MS: 1000,
   },
 
   // === RESOURCE DEFAULTS ===
