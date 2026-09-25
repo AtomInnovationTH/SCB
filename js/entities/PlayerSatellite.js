@@ -3079,8 +3079,10 @@ export class PlayerSatellite extends THREE.Group {
     // ── Wing-drum launch clamps (mother-wings step 3, DECISIONS §10) ──
     // "The brackets are still needed for launch?" — yes: each drum end is held
     // to the front/back end ring through launch, released at
-    // LAUNCH_LOCK_RELEASE before the wing unrolls or tilts
-    // (_launchClampsLatched(), _updateWingClamps()). The DRUM half is a collar
+    // LAUNCH_LOCK_RELEASE before the wing unrolls or tilts — and re-latched
+    // by motor whenever the player rolls the wings fully up again (owner
+    // 2026-09-25: re-latchable hold-down latches, not one-shot pyros —
+    // _wingClampsLatched(), _updateWingClamps()). The DRUM half is a collar
     // on the drum's own tip — it moves and spins exactly with the drum. The
     // BODY half is a hold-down BRACKET bolted to the end ring: it bears on the
     // barrel's last WING_CLAMP_LAND of length (bottom sunk into the skin, so
@@ -3189,18 +3191,15 @@ export class PlayerSatellite extends THREE.Group {
       this._rosaFeatherProgress = Math.max(fTarget, this._rosaFeatherProgress - fRate);
     }
 
-    // Mother-wings step 3: snap the wing-drum launch clamps to latched/released
-    // every frame (cheap, boolean-driven — no interpolation needed for a pyro
-    // release). Runs unconditionally, ahead of the launch/no-launch branches
-    // below (both of which can `return` early).
-    this._updateWingClamps();
-
     const ls = this._launchSequence;
     const launchActive = !!(ls && ls.isActive && ls.isActive());
 
     if (launchActive && ls.getRosaProgress) {
-      // Scripted launch roll-out owns the panels. Keep the furl state synced to
-      // the current deploy so there is no jump when control hands to the player.
+      // Scripted launch roll-out owns the panels — and the clamps: the early
+      // phases hold them through _launchClampsLatched(). The re-stow latch is
+      // forced off here so a sequence started from a player-stowed ship can
+      // never inherit it; it re-engages only under player furl control below.
+      this._rosaStowLatched = false;
       const prog = ls.getRosaProgress();
       this._setRosaWingProgress(1, prog.wing1);
       this._setRosaWingProgress(2, prog.wing2);
@@ -3210,20 +3209,55 @@ export class PlayerSatellite extends THREE.Group {
       // at 1.0, so the hand-over state is unchanged.
       this._rosaFurlProgress = (prog.wing1 + prog.wing2) / 2;
       this._rosaFurlTarget = 1.0;
+      this._updateWingClamps();
       return;
     }
 
     // Post-launch (READY) / no-launch: player furl control. If the player has
     // never toggled, hold fully deployed (or whatever launch left us at).
     const target = this._rosaManualControl ? this._rosaFurlTarget : 1.0;
-    const rate = (Constants.OCTOPUS_V5.ROSA_FURL_RATE || 0.4) * dt;
-    if (this._rosaFurlProgress < target) {
-      this._rosaFurlProgress = Math.min(target, this._rosaFurlProgress + rate);
-    } else if (this._rosaFurlProgress > target) {
-      this._rosaFurlProgress = Math.max(target, this._rosaFurlProgress - rate);
+
+    // Owner 2026-09-25 ("once released, they never grab the wings again"): the
+    // wing-drum clamps are re-latchable motor-driven hold-down latches, not
+    // one-shot pyros. Once the wings are fully rolled up (target 0 AND
+    // progress 0) and both wing tilts have settled to within
+    // WING_CLAMP_RELATCH_TILT_DEG of 0, they snap closed (_rosaStowLatched)
+    // and hold the drums until the player unrolls. While closed, nothing
+    // unrolls or tilts: the latch opens FIRST (pins hide) and the roll-out
+    // only resumes on the FOLLOWING frame — the drum never turns inside a
+    // closed clamp. The tilt condition is read here, ahead of
+    // _animateSolarTracking (which runs after this in update() and snaps the
+    // pivots to exactly 0 while latched): while furled the tilt target is 0
+    // (the blend in _animateSolarTracking is 0 at progress 0), so tilt only
+    // ever decays toward 0 — a value inside tolerance cannot grow back out.
+    if (this._rosaStowLatched) {
+      if (target > 0) this._rosaStowLatched = false;   // open first; unroll resumes next frame
+      // Target 0: hold — progress stays 0 while the clamp is closed.
+    } else {
+      const rate = (Constants.OCTOPUS_V5.ROSA_FURL_RATE || 0.4) * dt;
+      if (this._rosaFurlProgress < target) {
+        this._rosaFurlProgress = Math.min(target, this._rosaFurlProgress + rate);
+      } else if (this._rosaFurlProgress > target) {
+        this._rosaFurlProgress = Math.max(target, this._rosaFurlProgress - rate);
+      }
+      this._setRosaWingProgress(1, this._rosaFurlProgress);
+      this._setRosaWingProgress(2, this._rosaFurlProgress);
+      // Settle condition: both wing tilts within WING_CLAMP_RELATCH_TILT_DEG
+      // of 0. Read inline (not via a helper method) so the lightweight furl
+      // stubs in test-RosaFurl.js keep working; a missing pivot reads as 0.
+      const tol = ((Constants.OCTOPUS_V5.WING_CLAMP_RELATCH_TILT_DEG ?? 0.5) * Math.PI) / 180;
+      const settled = [this.panelRightPivot, this.panelLeftPivot]
+        .every((pivot) => !pivot || Math.abs(pivot.rotation.x) <= tol);
+      if (target === 0 && this._rosaFurlProgress === 0 && settled) {
+        this._rosaStowLatched = true;
+      }
     }
-    this._setRosaWingProgress(1, this._rosaFurlProgress);
-    this._setRosaWingProgress(2, this._rosaFurlProgress);
+
+    // Mother-wings step 3: snap the wing-drum clamp pins to latched/released
+    // every frame (cheap, boolean-driven — a motor detent, no interpolation).
+    // Runs AFTER the latch state machine above (and after both branches) so a
+    // close/open shows its pins on the same frame it happens.
+    this._updateWingClamps();
   }
 
   /**
@@ -3241,7 +3275,8 @@ export class PlayerSatellite extends THREE.Group {
    * `_launchSequence` is never set (LaunchSequence.start() early-returns
    * before calling setLaunchSequence), so this is always false — the ship
    * starts released, pins withdrawn, exactly as normal (non-flagged) play
-   * always has.
+   * always has. Post-launch re-latching on a player furl is NOT this query —
+   * it is the re-stow latch, combined into `_wingClampsLatched()`.
    * @returns {boolean}
    */
   _launchClampsLatched() {
@@ -3255,16 +3290,31 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * @private Mother-wings step 3: show each wing-drum clamp's release pin
-   * while latched (bridging bracket → drum collar), hide it once released
-   * (withdrawn into the bracket). The bracket itself is bolted to the end
-   * ring and never moves; the drum half rides the drum. A snap, not an
-   * animation: launch-lock release is a one-shot pyro event, not a
-   * player-paced motion, and this only ever runs while
-   * `FEATURE_FLAGS.LAUNCH_SEQUENCE` is exercised.
+   * @private Owner 2026-09-25: true while the wing-drum clamps hold the
+   * wings — through the early launch phases (`_launchClampsLatched()`) OR
+   * after the re-stow latch has closed on fully-rolled-up wings
+   * (`_rosaStowLatched`, driven in `_updateRosaPanels`). This is the query
+   * every clamp-driven behaviour reads: the pin visibility in
+   * `_updateWingClamps()` and the tilt hold in `_animateSolarTracking`.
+   * @returns {boolean}
+   */
+  _wingClampsLatched() {
+    return this._launchClampsLatched() || (this._rosaStowLatched ?? false);
+  }
+
+  /**
+   * @private Mother-wings step 3 + owner 2026-09-25: show each wing-drum
+   * clamp's release pin while latched (bridging bracket → drum collar), hide
+   * it once released (withdrawn into the bracket). The bracket itself is
+   * bolted to the end ring and never moves; the drum half rides the drum.
+   * Latched is the combined query `_wingClampsLatched()` — the early launch
+   * phases OR the re-stow latch — because the clamps are re-latchable
+   * motor-driven hold-down latches, not one-shot pyros: they grab the wings
+   * again every time the player rolls them fully up. A snap, not an
+   * animation: the latch is a motor-driven detent, not a player-paced motion.
    */
   _updateWingClamps() {
-    const latched = this._launchClampsLatched();
+    const latched = this._wingClampsLatched();
     for (const struct of [this._rosaStruct1, this._rosaStruct2]) {
       if (!struct || !struct.clampPins) continue;
       for (const pin of struct.clampPins) pin.visible = latched;
@@ -3318,6 +3368,9 @@ export class PlayerSatellite extends THREE.Group {
     this._rosaFurlProgress = 1.0;
     this._rosaFeatherTarget = 0.0;
     this._rosaFeatherProgress = 0.0;
+    // Owner 2026-09-25: a retry must not inherit a closed re-stow latch from
+    // the dead run — the clamps would hold wings that are already deployed.
+    this._rosaStowLatched = false;
   }
 
   /**
@@ -5830,15 +5883,15 @@ export class PlayerSatellite extends THREE.Group {
   _animateSolarTracking(dt, sunDirection) {
     if (!sunDirection) return;
 
-    // Mother-wings step 3 (DECISIONS §10): while the wing-drum launch clamps
-    // are latched, the tilt law holds 0 outright — an automatic launch
-    // sequence, not a player wait. This is normally already true because furl
-    // progress is 0 before LAUNCH_LOCK_RELEASE (the furl-coupled blend below
-    // already lands target at 0), but the clamp is the actual physical
-    // constraint (the drum ends are bolted to the end rings; see
-    // _buildRosaStructure) and gets an explicit, unconditional hold rather
-    // than relying on that coincidence.
-    if (this._launchClampsLatched()) {
+    // Mother-wings step 3 (DECISIONS §10) + owner 2026-09-25: while the
+    // wing-drum clamps are latched — the early launch phases, or the re-stow
+    // latch once the player has rolled the wings fully up — the tilt law
+    // holds 0 outright. The clamp is the actual physical constraint (the drum
+    // ends are bolted to the end rings; see _buildRosaStructure), so it gets
+    // an explicit, unconditional hold rather than relying on the furl-coupled
+    // blend below landing at 0: sun-track, feather and the dodge law all live
+    // in `_rosaDesiredTilt`, which is never reached while latched.
+    if (this._wingClampsLatched()) {
       if (this.panelRightPivot) this.panelRightPivot.rotation.x = 0;
       if (this.panelLeftPivot) this.panelLeftPivot.rotation.x = 0;
       return;

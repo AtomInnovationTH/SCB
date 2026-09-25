@@ -1678,6 +1678,7 @@ export const Constants = {
     WING_CLAMP_W: 0.030,          // m — bracket width (tangential)
     WING_CLAMP_LAND: 0.025,       // m — bracket length bearing on the barrel inboard of the end ring
     WING_CLAMP_PIN_R: 0.005,      // m — release-pin radius
+    WING_CLAMP_RELATCH_TILT_DEG: 0.5,  // deg — both wing tilts within this of 0 lets the re-stow latch close (owner 2026-09-25; tilt then snaps to exactly 0)
 
     // ── Hinge (NEW) ──
     HINGE_LOCK_TORQUE: 1000,       // N·m
