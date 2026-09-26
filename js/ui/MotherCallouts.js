@@ -1013,6 +1013,16 @@ export class MotherCallouts {
     this._pointerPos = null;   // last pointer client coords, for hover re-pick (R13)
     this._hoverPickT = 0;      // hover re-pick cadence guard (R13)
     this._hoverMisses = 0;     // consecutive stationary re-pick misses with a hover held (stickiness)
+    // §13 r3 fix (review): the system-label sprite under the pointer, picked
+    // by _refreshHover/_handlePointerMove on their own refreshed ray (ONE
+    // pick order for hover and click — names are drawn on top) and only READ
+    // by the per-frame _resolveOpenSys, which must not refresh world matrices
+    // or raycast at 60 Hz for an NDC that changes at the 10 Hz hover cadence.
+    this._sysLabelHover = null;
+    // §13 r4 fix (review): the flower PAIR COUNT the pick state is armed
+    // against — each _installFlowerPair BUILDS new meshes, so a count change
+    // re-arms every flowerGated rec's pick cache and outline (_checkFlowerGen).
+    this._flowerPairsSeen = undefined;
     this._onPointerMove = (e) => this._handlePointerMove(e);
     this._onPointerDown = (e) => this._handlePointerDown(e);
     this._onPointerUp = (e) => this._handlePointerUp(e);
@@ -2184,6 +2194,7 @@ export class MotherCallouts {
       this._pinnedSys = null;
       this._lingerSys = null;
       this._openSys = null;
+      this._sysLabelHover = null;   // the hovered-name cache does not survive leaving inspection (§13 r3 fix)
       if (this._hintEl) this._hintEl.style.display = 'none';
       // Round 6: the guided tour is a one-shot. Mark it done on the first exit so
       // a quick dip in/out of inspection can't replay the dim tour indefinitely.
@@ -2366,15 +2377,53 @@ export class MotherCallouts {
 
   /**
    * §13 r4 (Lane H): the pick generation key — the only two events that move
-   * meshes in or out of pick subtrees are a flower-pair install (purchase)
-   * and an arm docking / undocking. A key change rebuilds the owner map and
-   * the blocker list on the next pick (see _ensurePickIndex). Cheap to
-   * compute; called per pick.
+   * meshes in or out of pick subtrees are a flower-pair install (a purchase)
+   * and an arm docking / undocking. The flower state is keyed on the PAIR
+   * COUNT, not a boolean (review fix): pairs are bought separately and
+   * `_installFlowerPair` BUILDS new meshes per pair, so buying pair B must
+   * rebuild the owner map and the blocker list too, not just pair A's "on".
+   * A key change rebuilds both on the next pick (see _ensurePickIndex).
+   * Cheap to compute; called per pick.
    * @private @returns {string}
    */
   _pickGenKey() {
     const arms = this._liveCtx?.armManager?.arms;
-    return (this._flowerOn() ? 'F' : '-') + '|' + (arms ? arms.map((a) => a && a.state).join(',') : '');
+    const pairs = this.player?.getFlowerPairCount?.() ?? 0;
+    return pairs + '|' + (arms ? arms.map((a) => a && a.state).join(',') : '');
+  }
+
+  /**
+   * §13 r4 fix (review): a flower-pair PURCHASE builds NEW meshes
+   * (`PlayerSatellite._installFlowerPair`, one set per pair), so a pair-count
+   * change invalidates every flowerGated rec's cached pick subtree
+   * (`_pickObjs`, resolved against the old pairs' meshes) AND its outline
+   * (built over those same meshes). On a count change: dispose/detach each
+   * flowerGated rec's outline via the ONE teardown (`_disposeOutline` — no
+   * leaks, no duplicate layers), re-arm `_pickTried/_pickObjs` and
+   * `_outlineTried/_outline`, and a rec that is currently hovered or ghosted
+   * gets its outline rebuilt and shown again at once. The first call only
+   * records the baseline count (nothing older can be cached). Called per
+   * frame from update() and from _ensurePickIndex ahead of its generation
+   * check; cheap when the count has not moved (one optional call + compare).
+   * @private
+   */
+  _checkFlowerGen() {
+    const pairs = this.player?.getFlowerPairCount?.() ?? 0;
+    if (this._flowerPairsSeen === pairs) return;
+    const first = this._flowerPairsSeen === undefined;
+    this._flowerPairsSeen = pairs;
+    if (first) return;
+    for (const rec of this._allRecs || []) {
+      if (!rec?.def?.flowerGated) continue;
+      this._disposeOutline(rec);
+      rec._pickTried = false;
+      rec._pickObjs = null;
+      rec._outlineTried = false;
+      if (rec === this._hoverRec || (this._ghostRecs && this._ghostRecs.has(rec))) {
+        this._ensureOutline(rec);
+        this._setOutlineVisible(rec, true);
+      }
+    }
   }
 
   /**
@@ -2391,6 +2440,9 @@ export class MotherCallouts {
    * @private
    */
   _ensurePickIndex() {
+    // §13 r4 fix (review): a pair-count change re-arms the flowerGated recs
+    // BEFORE the generation check below rebuilds the owner map / blockers.
+    this._checkFlowerGen();
     const gen = this._pickGenKey();
     if (this._pickOwnerGen === gen && this._pickOwners) return;
     this._pickOwnerGen = gen;
@@ -2550,6 +2602,7 @@ export class MotherCallouts {
   _handlePointerLeave() {
     this._setHoverRec(null);
     this._pointerPos = null;   // stop re-picking once the pointer exits (R13)
+    this._sysLabelHover = null;   // the hovered-name cache clears with the hover (§13 r3 fix)
   }
 
   /** Hull-outline master switch (a method so tests can stub it). @private */
@@ -2593,14 +2646,21 @@ export class MotherCallouts {
    *     radiator plate crossing a wing was tinted over — owner playtest:
    *     confusing. With the depth test on, the hull's own depth hides them.
    *
-   * One LineBasicMaterial + one MeshBasicMaterial per rec — their own, never
-   * a hull material, never shared across recs. Caches null when outlines are
-   * disabled or nothing picks.
-   * @private @returns {{lines: THREE.LineSegments[], shells: THREE.Mesh[],
-   *   material: THREE.LineBasicMaterial, shellMaterial: THREE.MeshBasicMaterial}|null}
-   */
+    * One LineBasicMaterial + one MeshBasicMaterial per rec — their own, never
+    * a hull material, never shared across recs. Caches null when outlines are
+    * disabled or nothing picks — EXCEPT a flowerGated rec whose family is not
+    * bought yet: that miss is never latched (review fix), so a pre-purchase
+    * REFIT ghost cannot cache null forever and the outline builds after the
+    * purchase (later purchases re-arm via _checkFlowerGen).
+    * @private @returns {{lines: THREE.LineSegments[], shells: THREE.Mesh[],
+    *   material: THREE.LineBasicMaterial, shellMaterial: THREE.MeshBasicMaterial}|null}
+    */
   _ensureOutline(rec) {
     if (rec._outlineTried) return rec._outline;
+    // §13 r4 fix (review): while a flowerGated family is gone its meshes do
+    // not exist — resolve nothing and LATCH nothing; the gone→present edge
+    // (purchase) resolves fresh.
+    if (rec.def.flowerGated && !this._flowerOn()) { rec._outline = null; return null; }
     rec._outlineTried = true;
     rec._outline = null;
     if (!this._outlineEnabled()) return null;
@@ -2674,6 +2734,29 @@ export class MotherCallouts {
     return rec._outline;
   }
 
+  /**
+   * @private Detach + dispose a rec's hover/ghost outline — the ONE teardown,
+   * shared by dispose() and the pair-count re-arm (_checkFlowerGen): each
+   * LineSegments is removed from its parent hull mesh and its OWN
+   * EdgesGeometry disposed, then the rec's two materials; the shells are only
+   * REMOVED from their parent mesh — their geometry is SHARED with the live
+   * hull mesh and is never disposed here.
+   */
+  _disposeOutline(rec) {
+    const o = rec._outline;
+    if (!o) return;
+    for (const line of o.lines) {
+      line.parent?.remove(line);
+      line.geometry.dispose();
+    }
+    for (const shell of o.shells || []) {
+      shell.parent?.remove(shell);
+    }
+    o.material.dispose();
+    o.shellMaterial?.dispose();
+    rec._outline = null;
+  }
+
   /** Toggle a rec's hover outline (no-op when it has none). @private */
   _setOutlineVisible(rec, on) {
     if (!rec._outline) return;
@@ -2722,15 +2805,24 @@ export class MotherCallouts {
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     if (now - this._hoverT < 100) return;   // ~10 Hz
     this._hoverT = now;
-    this._setHoverRec(this._pickLabel(e));
+    if (!this.camera) return;
+    // §13 r3 fix (review): the SAME pick order as click — the system-name
+    // sprites are drawn on top, so a name under the pointer suppresses the
+    // part hover and is recorded as the hovered name (the pin stays the tap's
+    // verb). Guarded like _refreshHover for prototype-borrowing rigs.
+    this._raycaster.setFromCamera(this._pointerNDC(e), this.camera);
+    this._sysLabelHover = (typeof this._pickSystemLabelRay === 'function') ? this._pickSystemLabelRay() : null;
+    if (this._sysLabelHover) { this._setHoverRec(null); return; }
+    this._setHoverRec(this._pickBestRec());
   }
 
   /**
    * Re-pick the hover from the stored pointer position (R13). Cards slide in
    * screen space as the ship rotates (and the hull meshes rotate under a
    * stationary pointer), so the hover would otherwise go stale. Runs at
-   * ~10 Hz from _layout; cheap (the card sprites, then the eligible parts'
-   * pick meshes via _pickBestRec).
+   * ~10 Hz from _layout; cheap (the system-name sprites FIRST — the ONE pick
+   * order shared with click, names are drawn on top — then the card sprites,
+   * then the eligible parts' pick meshes via _pickBestRec).
    *
    * STALE WORLD MATRICES (the witnessed cause of the stationary blink,
    * 2026-09-03): this runs inside the frame's update, BEFORE the render's
@@ -2781,6 +2873,18 @@ export class MotherCallouts {
     // before casting (see STALE WORLD MATRICES above).
     this.player.updateWorldMatrix(true, true);
     this._raycaster.setFromCamera(this._ndc, this.camera);
+    // §13 r3 fix (review): ONE pick order for hover and click, matching what
+    // is drawn on top — system-NAME sprites first, then the parts. The name
+    // pick runs HERE, on this same refreshed ray (the pointer NDC only
+    // changes at this 10 Hz cadence; the per-frame _resolveOpenSys just reads
+    // the _sysLabelHover cache — no 60 Hz matrix refresh). A name under the
+    // pointer means NO part hover: the part behind the name must not light up
+    // while a click pins the system (guarded: prototype-borrowing rigs).
+    this._sysLabelHover = (typeof this._pickSystemLabelRay === 'function') ? this._pickSystemLabelRay() : null;
+    if (this._sysLabelHover) {
+      this._setHoverRec(null);
+      return;
+    }
     const hit = this._pickBestRec();
     if (hit) { this._setHoverRec(hit); return; }          // rules 1 + 2 (same rec → no-op + reset)
     const held = this._hoverRec;
@@ -2868,6 +2972,10 @@ export class MotherCallouts {
 
   update(dt) {
     if (!this._active || !this.camera) return;
+
+    // §13 r4 fix (review): re-arm the flowerGated pick caches / outlines on a
+    // pair purchase (cheap when the count has not moved — see _checkFlowerGen).
+    this._checkFlowerGen();
 
     this.player.updateWorldMatrix(true, false);
     this.camera.updateMatrixWorld();
@@ -2991,10 +3099,14 @@ export class MotherCallouts {
    *   1. the PINNED system (a click/tap on a system name toggles it; a part
    *      click sets it — see _handlePointerUp);
    *   2. the system of the hovered rec — any part of it (the `_hoverRec` the
-   *      parts' pick loop owns), or its NAME (the system-label sprite test
-   *      below — system labels never enter `_hoverRec`, which is the parts'
-   *      hover state; a part hover wins over the name when both are somehow
-   *      under the pointer, since the part carries the outline/brighten cue);
+   *      parts' pick loop owns), or its NAME: the name pick runs in
+   *      _refreshHover / _handlePointerMove FIRST in the ONE pick order
+   *      shared with click (system-name sprites are drawn on top, then part
+   *      cards, then the blocker mesh raycast), so a name under the pointer
+   *      means NO part hover — hover and click can never disagree (review
+   *      fix). This resolver only READS the `_sysLabelHover` cache those two
+   *      write at the hover's ~10 Hz cadence: no per-frame
+   *      updateWorldMatrix / sprite raycast for an NDC that changes at 10 Hz;
    *   3. LINGER: the last hovered system, held CALLOUTS.OPEN_LINGER_MS after
    *      the pointer leaves it (the fold-back reads deliberate, not flickery);
    *   4. in the COMPONENT band, the system of the focus part
@@ -3014,7 +3126,7 @@ export class MotherCallouts {
       this._lingerAt = now;
       return hoverSys;
     }
-    const label = this._sysLabelUnderPointer();
+    const label = this._sysLabelHover || null;   // the cache _refreshHover writes (review fix — no raycast here)
     if (label) {
       this._guidedDone = true;
       this._hintDone = true;
@@ -3025,26 +3137,6 @@ export class MotherCallouts {
     if (this._lingerSys && (now - this._lingerAt) < (CFG.OPEN_LINGER_MS ?? 1000)) return this._lingerSys;
     if (this._band === 'COMPONENT' && this._focusPart) return this._focusPart.sysId;
     return null;
-  }
-
-  /**
-   * @private The system-label sprite under the pointer, or null — the
-   * pointer's cached NDC (written by _refreshHover at its 10 Hz cadence)
-   * against every VISIBLE, legible system-label sprite. Refreshes the player
-   * subtree's world matrices first (the STALE WORLD MATRICES law — the ship
-   * moves ~130 m per frame and a stale sprite pick would never hit). Null
-   * without a pointer on the canvas (touch has no hover — the pin is the
-   * tap's verb).
-   */
-  _sysLabelUnderPointer() {
-    if (!this._pointerPos || !this.canvas || !this.camera) return null;
-    if (!Number.isFinite(this._dossierNX) || !Number.isFinite(this._dossierNY)) return null;
-    if (this.player && typeof this.player.updateWorldMatrix === 'function') {
-      this.player.updateWorldMatrix(true, true);
-    }
-    this._ndc.set(this._dossierNX, this._dossierNY);
-    this._raycaster.setFromCamera(this._ndc, this.camera);
-    return this._pickSystemLabelRay();
   }
 
   /**
@@ -3756,6 +3848,7 @@ export class MotherCallouts {
 
   dispose() {
     this._detachPointer();
+    this._sysLabelHover = null;   // the hovered-name cache leaves with the layer (§13 r3 fix)
     // §13 r3 (L6): the hint element leaves with the layer.
     this._disposeHint?.();
     // Wave 5 (2): drop the REFIT ghost set before the outline teardown below
@@ -3783,22 +3876,10 @@ export class MotherCallouts {
       s.line?.geometry?.dispose();
       s.line?.material?.dispose();
       s.dot?.material?.dispose();
-      // Hover outlines live under the hull meshes (not _group) — detach and
-      // dispose each LineSegments' own EdgesGeometry, then the rec's materials.
-      // Shell meshes SHARE the hull meshes' geometry: remove them but NEVER
-      // dispose that geometry (it belongs to the live model).
-      if (s._outline) {
-        for (const line of s._outline.lines) {
-          line.parent?.remove(line);
-          line.geometry.dispose();
-        }
-        for (const shell of s._outline.shells || []) {
-          shell.parent?.remove(shell);
-        }
-        s._outline.material.dispose();
-        s._outline.shellMaterial?.dispose();
-        s._outline = null;
-      }
+      // Hover outlines live under the hull meshes (not _group) — the ONE
+      // teardown detaches + disposes them (shells SHARE the hull meshes'
+      // geometry: removed but never disposed — see _disposeOutline).
+      this._disposeOutline(s);
     }
     // B2: the dossier wrapper's cached card + its sprite material (the same
     // pattern as the rail recs above — the wrapper is not in _allRecs).
