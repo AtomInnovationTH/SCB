@@ -108,10 +108,10 @@
  * Reduced motion: the root never moves; the BODY fades in place; the tab flips
  * between the screen edge (closed) and the inner edge (open) through
  * `--workbench-open` and stays visible + clickable while the pane is closed.
- * ONE CSS variable (`--workbench-dir`, 1 right-anchored / -1 left-anchored)
- * mirrors the slide direction, the anchor and the tab's side: the LEFT anchor
- * (§13 r5) bakes -1, and an RTL boot may set 1 the same way — every
- * transform, the anchor and the tab follow it.
+ * ONE CSS variable (`--workbench-dir`, -1 left-anchored) carries the slide
+ * direction and the tab's side: the drawer is LEFT-only (§13 r5 — no RTL
+ * mirror is implemented), so -1 is baked at build and every transform and
+ * the tab follow it.
  *
  * NO eventBus/Events import and NO live singletons — the shell touches the
  * world through the two engines and the injected `onOpenChange` only, so the
@@ -145,8 +145,8 @@ export const ROOT_BOTTOM_PX = 96;
 export const ROOT_BOTTOM_PX_F1 = 16;
 /** Tab pulse length (ms) — the ONE pulse a rising count earns (§2 Grammar). */
 export const TAB_PULSE_MS = 900;
-/** The drawer chrome's edge border (body + tab); `_applySide` re-writes the
- *  mirrored longhand sides when the anchor flips. */
+/** The drawer chrome's edge border (body + tab); the left anchor's dead
+ *  border side and corner rounding are baked in `_build` (§13 r5). */
 const EDGE_BORDER = '1px solid rgba(0,204,255,0.4)';
 
 /** Monotonic ms clock (DOM-guarded module — Date.now fallback headless). */
@@ -224,8 +224,8 @@ export class WorkbenchPane {
      * like the tab phase — the build bakes the initial values). */
     this._floorLayoutWritten = null;
     /** @private the anchor side (§13 r5, 2026-09-24): true = LEFT — on EVERY
-     * floor (the C3 floor-keyed side is retired). `_applySide` mirrors the
-     * DOM (an RTL boot may flip it). */
+     * floor (the C3 floor-keyed side is retired). The drawer is left-only
+     * (no RTL mirror is implemented); `isLeft()` reads it (main.js). */
     this._left = true;
     this._open = false;
     this._built = false;
@@ -237,7 +237,7 @@ export class WorkbenchPane {
     this._tail = null;            // .workbench-tail  (LibraryPane TAIL)
     this._tab = null;             // the edge tab, a child of the root at its inner edge
     this._tabCount = null;
-    this._closeBtn = null;        // the ESC × button, a child of the body at its top-right (§13 r5)
+    this._closeBtn = null;        // the ESC × button, a child of the root at its top-right (§13 r5 — the body scrolls, the X must not)
     // Session P (plan D2/D6): whether the tab is PINNED awake on THIS floor
     // (F1 — the workbench affordance; setFloor writes it at every floor apply).
     // Off the workbench the tab is EDGE CHROME: it follows the hub's
@@ -628,8 +628,8 @@ export class WorkbenchPane {
     // no pointer events; the BODY (the panel: border, background, padding,
     // the scrolling content) and the edge TAB are its children, so the tab
     // RIDES the pane's transform. --workbench-dir is the ONE mirror variable
-    // (-1 left-anchored — the §13 r5 default; an RTL boot may set 1): every
-    // transform, the anchor and the tab's side follow it. --workbench-open
+    // (-1 — the drawer is left-only, §13 r5; no RTL mirror is implemented):
+    // every transform and the tab's side follow it. --workbench-open
     // (0|1) is the reduced-motion tab position (the root never moves there;
     // see _applyOpenState). The root's `bottom` is the one in force (§13 r1:
     // 16 on F1, 96 off).
@@ -638,9 +638,9 @@ export class WorkbenchPane {
     root.id = 'ladder-workbench';
     root.className = reduced ? 'workbench-reduced' : '';
     root.style.cssText = [
-      'position:absolute', this._left ? 'left:0' : 'right:0', 'top:56px', `bottom:${this._rootBottomInForce()}px`, `z-index:${PANE_Z_INDEX}`,
+      'position:absolute', 'left:0', 'top:56px', `bottom:${this._rootBottomInForce()}px`, `z-index:${PANE_Z_INDEX}`,
       'width:clamp(380px, 28vw, 440px)', 'box-sizing:border-box',
-      'pointer-events:none', `--workbench-dir:${this._left ? -1 : 1}`, '--workbench-open:1',
+      'pointer-events:none', '--workbench-dir:-1', '--workbench-open:1',
       // Slide (transform) in the normal path; the reduced-motion class swaps
       // the slide for a fade of the BODY at the same duration (08-workbench §2
       // Motion) — the root then never moves, so the tab stays visible.
@@ -662,8 +662,7 @@ export class WorkbenchPane {
     body.style.cssText = [
       'position:absolute', 'top:0', 'right:0', 'left:0', f1 ? 'height:100%' : 'height:auto', f1 ? '' : 'max-height:100%', 'box-sizing:border-box',
       'padding:10px 12px', 'overflow-y:auto',
-      `border:${EDGE_BORDER}`, this._left ? 'border-left:none' : 'border-right:none',
-      this._left ? 'border-radius:0 6px 6px 0' : 'border-radius:6px 0 0 6px',
+      `border:${EDGE_BORDER}`, 'border-left:none', 'border-radius:0 6px 6px 0',
       'background:rgba(0,16,32,0.82)', 'color:' + VisualLaw.COLORS.INFO,
       'font-family: var(--font-mono)', 'font-size:0.68rem', 'letter-spacing:0.05em',
       'pointer-events:auto',
@@ -694,9 +693,16 @@ export class WorkbenchPane {
 
     // The ESC × close button (§13 r5): the tech library's chrome — the
     // #codex-close-btn inline style (CodexViewerUI) plus the 44 px touch
-    // target — a child of the BODY at its top-right corner (the inner edge,
-    // toward the ship). Click → close(); NO close on outside click (clicking
-    // the ship is how parts are chosen); Esc and the tab keep their halves.
+    // target — a child of the ROOT at the drawer's top-right corner (the
+    // inner edge, toward the ship). The root's top-right IS the body's (the
+    // body is top/left/right:0 inside it), but the BODY is the scroll
+    // container — an absolutely positioned child of it scrolls away with
+    // long REFIT content, so the X lives on the non-scrolling transform
+    // shell, z-index above the body, pointer-events:auto (the root takes
+    // none). Under reduced motion it hides with the body (_applyOpenState);
+    // in the slide path it rides the root off-screen like the body does.
+    // Click → close(); NO close on outside click (clicking the ship is how
+    // parts are chosen); Esc and the tab keep their halves.
     const closeBtn = doc.createElement('button');
     closeBtn.id = 'workbench-close-btn';
     closeBtn.className = 'workbench-close';
@@ -715,7 +721,7 @@ export class WorkbenchPane {
       this.close();
       if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
     });
-    body.appendChild(closeBtn);
+    root.appendChild(closeBtn);
 
     // The edge tab (08-workbench §2 Grammar). A CHILD of the root at the
     // pane's INNER edge (Session D, owner decision 3): closed, the root's
@@ -740,8 +746,7 @@ export class WorkbenchPane {
       'transform:translateX(calc((-1 - var(--workbench-dir, 1)) * 50%))',
       `height:${RAIL_GEOMETRY.FOOTER_BAND_PX}px`, `line-height:${RAIL_GEOMETRY.FOOTER_BAND_PX - 2}px`,
       'box-sizing:border-box', 'padding:0 10px 0 12px', 'white-space:nowrap',
-      `border:${EDGE_BORDER}`, this._left ? 'border-left:none' : 'border-right:none',
-      this._left ? 'border-radius:0 3px 3px 0' : 'border-radius:3px 0 0 3px', 'background:rgba(0,16,32,0.85)',
+      `border:${EDGE_BORDER}`, 'border-left:none', 'border-radius:0 3px 3px 0', 'background:rgba(0,16,32,0.85)',
       'color:' + VisualLaw.COLORS.INFO, 'cursor:pointer',
       'font-family: var(--font-mono)', 'font-size:0.62rem', 'letter-spacing:0.08em',
       'user-select:none', 'display:none', 'pointer-events:auto',
@@ -774,7 +779,6 @@ export class WorkbenchPane {
     this._tabPhaseWritten = null;   // the phase truth table writes the fresh tab
     this._applyTabPhase();
     this._applyOpenState();
-    this._applySide();              // a side picked before the build lands now (the RTL mirror)
     this._applyInvitation();        // a pre-build setInvitation lands once built (Session H)
 
     // Delegated wake (one listener set — G1, the PaneHelp pattern): on the
@@ -828,41 +832,16 @@ export class WorkbenchPane {
     }
   }
 
-  /**
-   * @private Mirror the anchor side onto the DOM (C3, plan 1789561832042):
-   * the root's `left`/`right` anchor, the ONE mirror variable
-   * `--workbench-dir` (1 right / -1 left — the slide transform, the anchor
-   * and the tab's side all read it), and the body's and tab's dead border
-   * side + corner rounding (the side against the screen edge carries no
-   * border; the corners round away from it). Called from `_build` (the LEFT
-   * anchor of §13 r5 is the default; an RTL boot may flip it before then).
-   */
-  _applySide() {
-    const root = this._root;
-    if (!root) return;
-    root.style.left = this._left ? '0' : '';
-    root.style.right = this._left ? '' : '0';
-    _setVar(root, '--workbench-dir', this._left ? '-1' : '1');
-    const body = this._body;
-    if (body) {
-      body.style.borderRight = this._left ? EDGE_BORDER : 'none';
-      body.style.borderLeft = this._left ? 'none' : EDGE_BORDER;
-      body.style.borderRadius = this._left ? '0 6px 6px 0' : '6px 0 0 6px';
-    }
-    const tab = this._tab;
-    if (tab) {
-      tab.style.borderRight = this._left ? EDGE_BORDER : 'none';
-      tab.style.borderLeft = this._left ? 'none' : EDGE_BORDER;
-      tab.style.borderRadius = this._left ? '0 3px 3px 0' : '3px 0 0 3px';
-    }
-  }
-
   /** @private Slide (root) / fade (body) to the current open state; the tab
-   *  rides the root in the slide path and flips edges in the fade path. */
+   *  rides the root in the slide path and flips edges in the fade path. The
+   *  ESC × close button tracks the BODY's fade under reduced motion (the
+   *  root never moves there, so it must hide with the body when closed) and
+   *  rides the root's slide otherwise. */
   _applyOpenState() {
     const root = this._root;
     if (!root) return;
     const body = this._body;
+    const closeBtn = this._closeBtn;
     const reduced = this._reducedMotion();
     if (reduced) {
       root.className = 'workbench-reduced';
@@ -871,6 +850,10 @@ export class WorkbenchPane {
       if (body) {
         body.style.opacity = this._open ? '1' : '0';
         body.style.visibility = this._open ? 'visible' : 'hidden';
+      }
+      if (closeBtn) {
+        closeBtn.style.opacity = this._open ? '1' : '0';
+        closeBtn.style.visibility = this._open ? 'visible' : 'hidden';
       }
       // The tab stays visible + clickable while the body is hidden: closed it
       // sits at the screen edge, open at the pane's inner edge (a snap —
@@ -888,6 +871,7 @@ export class WorkbenchPane {
       root.style.opacity = this._open ? '1' : '0.999'; // keep painted for the slide
       root.style.visibility = 'visible';
       if (body) { body.style.opacity = '1'; body.style.visibility = 'visible'; }
+      if (closeBtn) { closeBtn.style.opacity = '1'; closeBtn.style.visibility = 'visible'; }
       _setVar(root, '--workbench-open', '1');
     }
   }
