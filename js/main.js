@@ -750,7 +750,8 @@ let refitPane;
 // links) stays byte-identical (pinned in test-LadderController).
 let libraryPane;
 // Session U (plan 1788954873769, D5) — the ONE workbench pane
-// (js/ui/WorkbenchPane.js): the right-side drawer that hosts BOTH engines
+// (js/ui/WorkbenchPane.js): the drawer, left on every floor (§13 r5;
+// gestures follow it, §13 r6 2026-09-26), hosts BOTH engines
 // above (Identity → Upgrade → Learn, D1) and owns the root, the footer-band
 // SPECS tab, the slide, the idle fade, the edge-chrome tab phase, the
 // invitation glow, ONE open state and ONE onOpenChange edge. Everything the
@@ -2044,16 +2045,16 @@ async function init() {
     //      loop applies through TimeAuthority.calmCap (drawer open → clock 0),
     //      the scheduler's 'partial' cover and the turntable gate;
     //   2. the ONE `CameraSystem.setLadderPaneInset` value (Wave 5 (3)),
-    //      SIGNED BY SIDE (C3): the drawer anchors LEFT on the workbench
-    //      floor → +width (the subject lands right of centre), RIGHT on
-    //      F2–F5 → −width (as SPECS alone was netted per 08-workbench §2
-    //      before Session U), closed → 0. The camera does the rest (270 ms
-    //      ease, reduced-motion snap, released on ride/close/disengage);
+    //      SIGNED BY SIDE: the drawer is left on every floor (§13 r5;
+    //      gestures follow it, §13 r6 2026-09-26) → +width (the subject
+    //      lands right of centre), closed → 0. The camera does the rest
+    //      (270 ms ease, reduced-motion snap, released on
+    //      ride/close/disengage);
     //   3. the MotherCallouts pane-edge inset pair (Session B commit 3) so
     //      the callout columns stay out from under the pane — the drawer's
-    //      own side gets the pane's width, the other edge 0 (C3: left on
-    //      F1, right on F2–F5 — the left column carries Mother and
-    //      Daughters there).
+    //      own side gets the pane's width, the other edge 0 (the left edge
+    //      on every floor — §13 r5; the left column carries Mother and
+    //      Daughters).
     // widthPx() is a layout read — edges only, never per frame (G1).
     // Session K: the END of a workbench break is this same edge — the drawer
     // closed while a break is open → ONE WORKBENCH_RESUME (GameFlowManager
@@ -2075,8 +2076,8 @@ async function init() {
       // ride needed to arm/disarm).
       _noteSchedInput();
       if (cameraSystem.setLadderPaneOpen) cameraSystem.setLadderPaneOpen(open);
-      // C3: the drawer's anchor side — left on the workbench floor, right on
-      // F2–F5 (WorkbenchPane.setFloor writes it; isLeft() is the read).
+      // The drawer's anchor side — left on every floor (§13 r5; gestures
+      // follow it, §13 r6 2026-09-26); `isLeft()` is the read.
       const left = !!(workbenchPane && workbenchPane.isLeft && workbenchPane.isLeft());
       const w = open ? workbenchPane.widthPx() : 0;
       cameraSystem.setLadderPaneInset(left ? w : -w);                      // LEFT pane → +width, RIGHT → negative
@@ -3162,10 +3163,11 @@ async function init() {
       onHold: _touchHold,
       pressKey: (code) => dispatchKeyPress(code),   // the radial's verbs press the SAME keys (KeyDispatch → window)
       // The edge-band swipe: the workbench pane's own open()/close() (its
-      // onOpenChange edge carries the held world + the camera inset). Session
-      // U: ONE right-side pane — the RIGHT edge band pages it ('library' is
-      // TouchControls' name for that side); the left band no longer opens a
-      // drawer (it still wakes the DETAIL slider through onEdgeTouch). A
+      // onOpenChange edge carries the held world + the camera inset). The
+      // drawer is left on every floor (§13 r5); gestures follow it (§13 r6,
+      // 2026-09-26) — the LEFT edge band pages it ('library' is
+      // TouchControls' name for the drawer); the right band's swipes still
+      // classify but dispatch nothing. A
       // disabled shell (disengaged / flag-off) ignores open().
       openPane: (which, open) => {
         if (which !== 'library' || !workbenchPane) return;

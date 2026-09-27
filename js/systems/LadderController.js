@@ -200,10 +200,11 @@ export class LadderController {
    *   activate/deactivate/isActive/update/flipLens. Optional — no-op without it.
    * @param {object} [deps.hullcam]      - F1 (HULL CAM) content controller (HullCamFloor):
    *   activate/deactivate/isActive/update/lensToggle. Optional — no-op without it.
-   * @param {object} [deps.workbench]    - the ONE workbench pane (WorkbenchPane,
-   *   Session U — plan 1788954873769 D5: SPECS + the F1 REFIT block in one
-   *   right-side drawer; it replaced the Wave 5 (2) `refit` and Session B
-   *   `library` deps): setEnabled/setFloor/open/close/toggle/isOpen. Optional —
+    * @param {object} [deps.workbench]    - the ONE workbench pane (WorkbenchPane,
+    *   Session U — plan 1788954873769 D5: SPECS + the F1 REFIT block in one
+    *   drawer, left on every floor (§13 r5); gestures follow it (§13 r6,
+    *   2026-09-26); it replaced the Wave 5 (2) `refit` and Session B
+    *   `library` deps): setEnabled/setFloor/open/close/toggle/isOpen. Optional —
    *   no-op without it; every call is duck-typed. Enabled on EVERY floor while
    *   engaged — each floor apply (`_applyFloorContent`) calls setEnabled(true)
    *   THEN setFloor(floor), before any open, so the shell shows the REFIT block
@@ -213,10 +214,11 @@ export class LadderController {
    *   the F1 'lens-toggle' Space verb (toggle()) — D-b's REFIT verb carried
    *   over; absent, the verb falls through to the hullcam branch exactly as
    *   shipped. Esc reaches it through closeTopPane(). Session C: it also pages
-   *   from the horizontal two-finger swipe — WheelRouter asks `wantsPaneSwipe()`
-   *   and emits ONE `pagePane({toward})` per flick; the carousel law lives
-   *   there and is TWO-POSITION on every floor since Session U: [view] — [SPECS]
-   *   ('right' opens, 'left' closes).
+    *   from the horizontal two-finger swipe — WheelRouter asks `wantsPaneSwipe()`
+    *   and emits ONE `pagePane({toward})` per flick; the carousel law lives
+    *   there and is TWO-POSITION on every floor since Session U: [view] — [SPECS]
+    *   ('left' opens, 'right' closes — the drawer is left on every floor, §13 r5;
+    *   gestures follow it, §13 r6 2026-09-26).
    * @param {function} [deps.onSubjectChange] - Session J (D-C, "the library
    *   follows"): called with the floor id after every floor ARRIVAL
    *   (_applyFloorContent) and after a subject-changing Space verb (the SDA
@@ -774,13 +776,15 @@ export class LadderController {
    * cap + the camera inset exactly as a tab click would; no signal is added
    * here).
    *
-   * Session U (plan 1788954873769, D2/D5): ONE right-side pane, so the
-   * carousel is TWO-POSITION on EVERY floor — **[view] — [SPECS]** (the
-   * Session J off-floor-1 law, now everywhere; the floor-1 three-position
-   * [REFIT] — [ship] — [SPECS] retired with the left drawer):
-   *
-   *   toward 'right' (the pane's side): a closed pane opens, else nothing (wall).
-   *   toward 'left'  (away from it):    an open pane closes, else nothing.
+    * Session U (plan 1788954873769, D2/D5): ONE pane, so the carousel is
+    * TWO-POSITION on EVERY floor — **[view] — [SPECS]** (the Session J
+    * off-floor-1 law, now everywhere; the floor-1 three-position
+    * [REFIT] — [ship] — [SPECS] retired with the left drawer). The drawer
+    * is left on every floor (§13 r5); gestures follow it (§13 r6,
+    * 2026-09-26):
+    *
+    *   toward 'left'  (the pane's side): a closed pane opens, else nothing (wall).
+    *   toward 'right' (away from it):    an open pane closes, else nothing.
    *
    * 'left'/'right' are SCREEN sides: the pane's RTL mirror is its own CSS
    * variable, not this grammar. Guards: disengaged or an unknown `toward` →
@@ -796,11 +800,11 @@ export class LadderController {
     const w = this._workbench;
     const open = !!(w && w.isOpen && w.isOpen());
     if (toward === 'left') {
-      if (open) { if (w.close) w.close(); return 'close-workbench'; }
+      if (w && !open) { if (w.open) w.open(); return 'open-workbench'; }
       return null;
     }
     if (toward === 'right') {
-      if (w && !open) { if (w.open) w.open(); return 'open-workbench'; }
+      if (open) { if (w.close) w.close(); return 'close-workbench'; }
       return null;
     }
     return null;
@@ -1737,7 +1741,8 @@ export class LadderController {
       else if (this._hullcam.deactivate) this._hullcam.deactivate();
     }
     // The workbench pane (Session U, plan 1788954873769 D5/D7 — the ONE
-    // right-side drawer: SPECS + the F1 REFIT block; it replaced the Wave 5 (2)
+    // drawer, left on every floor (§13 r5); gestures follow it (§13 r6,
+    // 2026-09-26): SPECS + the F1 REFIT block; it replaced the Wave 5 (2)
     // REFIT pane and the Session B SPECS pane here). Enabled on EVERY floor
     // (plan D-C since Session J): an open pane RIDES ALONG (the world stays
     // held under it, D-F; the camera inset bias applies on every floor since
