@@ -941,6 +941,12 @@ export class MotherCallouts {
     // Per-frame projection state (populated in update()).
     this._halfH = 1; this._halfW = 1;
     this._railL = -0.5; this._railR = 0.5;
+    // Rail-card fit scale (helper E 2026-09-27): 1 everywhere the uncovered
+    // strip can hold both columns at full size; < 1 only when it cannot
+    // (measured: 1024×768 + drawer — a 508 px strip vs a 544 px need), where
+    // the rail cards shrink uniformly until railL ≤ railR. Applied in
+    // _sizeFrac (rail tiers only; the hover dossier clamps itself).
+    this._railScale = 1;
     // Workbench pane insets (Wave 5 Session B, 08-workbench §2): CSS-px widths
     // of the LEFT (REFIT) and RIGHT (TECH LIBRARY) panes while open, fed on
     // the panes' onOpenChange edge from main.js _syncWorkbenchPanes (the ONE
@@ -1213,6 +1219,48 @@ export class MotherCallouts {
     this._edgeL = eL;
     this._edgeR = eR;
     this._stripCX = (eL + eR) / 2;
+  }
+
+  /**
+   * The rail X positions (_railL/_railR) from the pane-aware edges and the
+   * ship's screen silhouette radius (helper E 2026-09-27, extracted from
+   * update() for the layout-rig suite). Two laws, both measured against the
+   * 2026-09-27 probe (tmp/callout-width/measure.json — "callouts don't fit the
+   * screen width"):
+   *   1. The reserved card width is the WIDEST tier actually on the rails —
+   *      SIZE_SYSTEM (0.052), not SIZE_MAJOR (0.040). The old reservation
+   *      under-reserved every system name card by
+   *      2·(SIZE_SYSTEM−SIZE_MAJOR)·CARD_W_OVER_TITLE_H/aspect ≈ 78 px at
+   *      1920×1080, so the left column sat 21 px off-screen (drawer closed)
+   *      or 27 px under the drawer (open), and the right column sat under
+   *      the WHERE rail, at every viewport measured. widthNDC =
+   *      2·frac·CARD_W_OVER_TITLE_H/camAspect for every card (aspect ×
+   *      heightFactor is the R15 invariant), so the max frac alone picks the
+   *      widest — a constant, no per-rec loop, no frame lag.
+   *   2. FIT: both columns must fit the uncovered strip with a margin each
+   *      (railL ≤ railR). When they cannot (measured: 1024×768 + the 380 px
+   *      drawer — a 508 px strip vs a 544 px need), the rail cards shrink
+   *      uniformly (_railScale, applied in _sizeFrac) until they do, rather
+   *      than overlapping each other or sliding under a pane.
+   * The ship-bound operand can never cross the pair once the edge-derived
+   * positions fit (railL_ship < railR_ship always, and each edge-derived
+   * operand is ≤ its counterpart), so railL ≤ railR holds on exit.
+   * @param {number} screenR the ship silhouette's NDC half-width on screen
+   * @private
+   */
+  _updateRailX(screenR) {
+    const margin = CFG.RAIL_MARGIN_NDC;
+    const camAspect = this.camera.aspect || 1;
+    const railFrac = Math.max(CFG.SIZE_SYSTEM, CFG.SIZE_MAJOR, CFG.SIZE_DETAIL);
+    let railCardW = 2 * railFrac * CARD_W_OVER_TITLE_H / camAspect;
+    this._railScale = 1;
+    const maxCardW = (this._edgeR - this._edgeL) / 2 - margin;
+    if (maxCardW > 0 && railCardW > maxCardW) {
+      this._railScale = maxCardW / railCardW;
+      railCardW = maxCardW;
+    }
+    this._railL = Math.max(this._edgeL + margin + railCardW, this._shipNDC.x - screenR - CFG.RAIL_INSET_NDC);
+    this._railR = Math.min(this._edgeR - margin - railCardW, this._shipNDC.x + screenR + CFG.RAIL_INSET_NDC);
   }
 
 
@@ -3005,21 +3053,12 @@ export class MotherCallouts {
     const shipBoundR = CFG.SHIP_BOUND_M * M;
     this._vTmp.copy(this._vShip).addScaledVector(this._camRight, shipBoundR).project(this.camera);
     const screenR = Math.abs(this._vTmp.x - this._shipNDC.x);
-    const margin = CFG.RAIL_MARGIN_NDC;
-
-    // Reserve the widest rail-card width on both sides (R15). aspect × heightFactor
-    // is invariant (= CARD_W_OVER_TITLE_H ≈ 6.04) for every card, so the widest rail
-    // card is always the SIZE_MAJOR tier — a constant, no per-rec loop, no frame lag.
-    const camAspect = this.camera.aspect || 1;
-    const railCardW = 2 * CFG.SIZE_MAJOR * CARD_W_OVER_TITLE_H / camAspect;
 
     // Workbench panes (Wave 5 Session B): the usable screen edges. With no
     // pane open _edgeL/_edgeR are exactly -1/+1 and every line below is the
     // shipped arithmetic, byte-identical.
     this._updatePaneEdges();
-
-    this._railL = Math.max(this._edgeL + margin + railCardW, this._shipNDC.x - screenR - CFG.RAIL_INSET_NDC);
-    this._railR = Math.min(this._edgeR - margin - railCardW, this._shipNDC.x + screenR + CFG.RAIL_INSET_NDC);
+    this._updateRailX(screenR);
 
     this._updateBand(distM);
     this._updateGuide(dt);
@@ -3234,11 +3273,14 @@ export class MotherCallouts {
   // RAIL LAYOUT
   // --------------------------------------------------------------------------
 
-  /** On-screen height fraction (of viewport height) for a rec's tier. @private */
+  /** On-screen height fraction (of viewport height) for a rec's tier. @private
+   * Rail tiers carry _railScale (the strip-fit law, _updateRailX): 1 wherever
+   * both columns fit at full size, < 1 only on an over-constrained strip. */
   _sizeFrac(rec, isFocus) {
     if (isFocus) return CFG.SIZE_CARD;
-    if (rec.isSystem) return CFG.SIZE_SYSTEM;
-    return rec.isDetail ? CFG.SIZE_DETAIL : CFG.SIZE_MAJOR;
+    const k = (Number.isFinite(this._railScale) && this._railScale > 0 && this._railScale < 1) ? this._railScale : 1;
+    if (rec.isSystem) return CFG.SIZE_SYSTEM * k;
+    return (rec.isDetail ? CFG.SIZE_DETAIL : CFG.SIZE_MAJOR) * k;
   }
 
   /**
