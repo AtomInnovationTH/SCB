@@ -1220,7 +1220,7 @@ export class MotherCallouts {
    * The part the player is looking at — the Zoom Ladder's F1 deep-link source
    * (docs/ladder/08-workbench.md D1/D2: the Tech Library opens FROM the part
    * you were looking at). In the COMPONENT band (< BAND.compIn, the close lens
-   * of the 5 m split) `_focusPart` is the major part nearest screen-centre,
+   * of the 4 m split, §13 r3) `_focusPart` is the major part nearest screen-centre,
    * re-picked every update(); outside that band there is no focus and this
    * returns null. Pure read; the small allocation is fine — main.js calls it
    * only on an F1 arrival (ArchiveFloor.getSubject) and on the LIBRARY pane's

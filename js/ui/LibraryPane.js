@@ -16,7 +16,8 @@
  * §3, decisions D1 / D5 / D6 / D7): this module owns NO root, tab, slide, idle
  * fade, edge-chrome phase, reduced-motion swap, RTL variable or open-signal any
  * more — that chrome moved verbatim into js/ui/WorkbenchPane.js (the ONE
- * right-side drawer, with the constants PANE_SLIDE_MS, IDLE_FADE_OPACITY,
+ * drawer — LEFT on every floor (DECISIONS §13 r5) — with the constants
+ * PANE_SLIDE_MS, IDLE_FADE_OPACITY,
  * IDLE_FADE_MS, PANE_Z_INDEX, ROOT_BOTTOM_PX, TAB_PULSE_MS; the below-1100-px
  * ONE_PANE_BREAKPOINT_PX rule retired, D9). The engine is DOM-LESS UNTIL
  * MOUNTED: the shell calls `mount({ head, tail, onRefresh })` with the two
