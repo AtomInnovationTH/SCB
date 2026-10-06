@@ -1604,6 +1604,7 @@ async function init() {
   // The panel still mounts so internal event tracking works, but setVisible
   // is never called.
   menuScreen = new MenuScreen(sceneManager ? sceneManager.currentTier : null);
+  menuScreen.setHelpOpener(() => hotkeyOverlay && hotkeyOverlay.toggle());   // w1-first-minute D3: menu "?" = the ? key's list
   // Session J.5 (owner item 5) — the menu NEW VERSION READY card's watcher.
   // data/build-tag.json is the ONE update truth (sw.js serves data/ network-
   // first; the running page's own sha is baked nowhere else): the tag read

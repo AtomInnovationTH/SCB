@@ -82,6 +82,16 @@ export class GameFlowManager {
      */
     this._depotInvitation = null;
 
+    /**
+     * w1-hud-calm review fix (2026-10-05): the first INVITATION pays the
+     * first-depot floor and persists FIRST_DEPOT_VISITED, but the player has
+     * not come down yet — so the first-visit framing (the REFIT drawer's
+     * RECOMMENDED starter chip) is OWED to the next workbench stop.
+     * `_stopAtWorkbench` consumes it (read + clear). In-memory only: a reload
+     * between the invitation and the visit loses the chip, never the credits.
+     */
+    this._firstVisitOwed = false;
+
     /** @type {number|null} Timer for delayed score-group HUD activation in ORBITAL_VIEW */
     this._scoreGroupTimer = null;
 
@@ -1935,7 +1945,8 @@ export class GameFlowManager {
    * this is true, so a boss never starts under the depot overlay; they fire on
    * the first gameplay frame after the SHOP closes (the timer nulls itself when
    * it fires; DEPLOY or the Esc exit both resume gameplay). An invitation
-   * (chapter FORCED_DEPOT_CHAPTERS+1 on, ladder on) schedules nothing → false →
+   * (every chapter with the ladder on — owner 2026-10-05, DECISIONS §14 —
+   * unless MISSIONS.FORCED_DEPOT_STOP is turned back on) schedules nothing → false →
    * the onset fires at once, invitation open or not. Wired to the three
    * consumers as a predicate by main.js (`_bossLifecycle.MissionOnset` is the
    * shared rule). Read-only; nothing else keys on it.
@@ -1976,7 +1987,12 @@ export class GameFlowManager {
    */
   _stopAtWorkbench(boundary) {
     if (this._workbenchBreak) return;
-    const firstDepotVisit = this._applyFirstDepotFloor();
+    // First visit = the floor pays now, OR the first invitation already paid it
+    // and the framing is still owed (consumed here, once).
+    const floorPaid = this._applyFirstDepotFloor();
+    const owed = this._firstVisitOwed;
+    this._firstVisitOwed = false;
+    const firstDepotVisit = floorPaid || owed;
     this._closeDepotInvitation('entered');
     const { missionsCompleted } = getMissionProgress(gameState.debrisCleared);
     this._workbenchBreak = true;
@@ -2000,8 +2016,12 @@ export class GameFlowManager {
    *     → SHOP. Chapters and the doorway are workbench features built behind
    *     the ladder flag (08-workbench §10); without the rail and the F3
    *     doorway an invitation has nowhere to point.
-   *   • Chapters 1..FORCED_DEPOT_CHAPTERS (the completed chapter — every
-   *     boundary catch closes one): the forced stop made CEREMONIAL. The comms
+   *   • Chapters 1..FORCED_DEPOT_CHAPTERS with `MISSIONS.FORCED_DEPOT_STOP`
+   *     true (OFF since the owner ruling 2026-10-05 — docs/DECISIONS.md §14:
+   *     after every mission the depot is an invitation, from chapter 1; this
+   *     branch is kept behind the flag, not deleted; with the flag false the
+   *     ladder-on boundary is the invitation path below for EVERY chapter) —
+   *     the completed chapter, every boundary catch closes one): the forced stop made CEREMONIAL. The comms
    *     line stays; a "MISSION N COMPLETE" card lands on the shipped teaching
    *     toast (TEACHING_MOMENT_FORCE → TeachingSystem._forceShow →
    *     TeachingOverlay — owner decision 4: reuse, no new DOM surface) and
@@ -2010,7 +2030,8 @@ export class GameFlowManager {
    *     timer's length), flips into the SHOP as the card finishes fading (the
    *     card holds for dwell − TEACHING.FADE_OUT_MS). The card IS the cause:
    *     one timer, one number, no silent cut.
-   *   • Chapter FORCED_DEPOT_CHAPTERS+1 on: NO forced stop — the depot is an
+   *   • Every chapter (flag false, the default) or chapter
+   *     FORCED_DEPOT_CHAPTERS+1 on (flag true): NO forced stop — the depot is an
    *     INVITATION (`_openDepotInvitation`): comms "UPGRADES AVAILABLE" (owner
    *     wording 2026-09-05 — the doorway is retired, Session H), ONE
    *     `DEPOT_INVITATION { open: true }` (the WHERE rail's notch 1 AND the
@@ -2031,7 +2052,7 @@ export class GameFlowManager {
     const M = Constants.MISSIONS;
     const ladderOn = !!(Constants.LADDER && Constants.LADDER.ENABLED);
     const { missionsCompleted } = getMissionProgress(debrisCount);
-    if (ladderOn && missionsCompleted > M.FORCED_DEPOT_CHAPTERS) {
+    if (ladderOn && (!M.FORCED_DEPOT_STOP || missionsCompleted > M.FORCED_DEPOT_CHAPTERS)) {
       this._openDepotInvitation(debrisCount, missionsCompleted);
       return;
     }
@@ -2068,7 +2089,9 @@ export class GameFlowManager {
   }
 
   /**
-   * Open the depot invitation (chapter FORCED_DEPOT_CHAPTERS+1 on, ladder on).
+   * Open the depot invitation — after every mission with the ladder on (owner
+   * ruling 2026-10-05, docs/DECISIONS.md §14; chapter FORCED_DEPOT_CHAPTERS+1 on
+   * only when MISSIONS.FORCED_DEPOT_STOP is true).
    * A boundary landing while one is already open (only possible if the window
    * outlived a whole chapter — it cannot, the next catch lapses it) simply
    * re-opens it for the new chapter: the notch glow is idempotent.
@@ -2081,6 +2104,7 @@ export class GameFlowManager {
     // never entered — the same one-shot rule + flag as the SHOP entry (a
     // visited profile returns false and pays nothing).
     const firstInvitation = this._applyFirstDepotFloor();
+    if (firstInvitation) this._firstVisitOwed = true;   // the framing waits for the visit
     this._depotInvitation = { chapter: missionsCompleted + 1, debrisCleared: debrisCount };
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `UPGRADES AVAILABLE \u2014 ${debrisCount} debris cleared. Come down when ready, or fly on.`,
@@ -2117,14 +2141,16 @@ export class GameFlowManager {
    *
    *   • Guided chapters only: `isGuidedChapterNumber(missionNum)` — the
    *     profile's `guidedCluster` flag, missions 1–3 (FORCED_DEPOT_CHAPTERS).
-   *     From mission 4 on the depot is an invitation and the chapter count is
-   *     ambient — no line. The mission number comes from the pure
+   *     From mission 4 on the chapter count is ambient — no line. (The depot
+   *     is an invitation after every mission since owner 2026-10-05,
+   *     DECISIONS §14 — the line still says how far off the next one is.) The mission number comes from the pure
    *     `getMissionProgress(gameState.debrisCleared)`, which IS correct on a
    *     bare Continue (no MISSION_START fires on restore — DebrisField's
    *     profile-based isGuidedChapter() would read M1 there).
    *   • The boundary catch is skipped (debrisUntilShop === perMission ⇔ the
    *     count just landed on a multiple): `_onMissionBoundary` already shows
-   *     "MISSION N COMPLETE" there. Callers: the CATCH_PROCESSED non-boundary
+   *     the "UPGRADES AVAILABLE" invitation there (the "MISSION N COMPLETE"
+   *     card only with MISSIONS.FORCED_DEPOT_STOP on). Callers: the CATCH_PROCESSED non-boundary
    *     branch (which never lands on a boundary, so the guard is belt-and-
    *     braces) and the ARM_DEORBIT sacrifice path (which has no boundary
    *     handling of its own — the guard is what keeps the 5th clear quiet).
@@ -2155,9 +2181,10 @@ export class GameFlowManager {
    * gifting two upgrades or the 800 net. Runs once per profile and survives
    * GAMEOVER_CONTINUE (which resets debrisCleared but not the flag).
    * Called on SHOP entry (a depot arrival), never on SHOP_DEPLOY (exit) — and,
-   * since Wave 5 Session E, at the first depot INVITATION (chapter 4+, the
-   * boundary that no longer forces the stop): the floor moves to the invitation
-   * when the depot was never entered. ONE rule, ONE flag, two callers.
+   * since Wave 5 Session E, at the first depot INVITATION (after every mission
+   * since owner 2026-10-05, DECISIONS §14 — so from mission 1): the floor moves
+   * to the invitation when the depot was never entered, and the first-visit
+   * framing is owed to the next workbench stop (`_firstVisitOwed`). ONE rule, ONE flag, two callers.
    * @returns {boolean} true when this was the first depot visit (so the shop can
    *   render its one-time first-visit framing + recommended-starter ⭐). The
    *   FIRST_DEPOT_VISITED flag is persisted here, so callers must use this

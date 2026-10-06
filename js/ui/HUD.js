@@ -556,24 +556,16 @@ export class HUD {
     }
 
     // --- Net-ceremony cinema mode (2026-08-25, filmstrip analysis) ---
-    // Every ceremony frame used to play under the FULL gameplay HUD — five
-    // panels + comms + distance markers overlapped the envelop/cinch action
-    // (the dossier pane sat ON the bag through BRAKE_ENVELOP). While the
-    // camera owns the screen (NET_CINEMATIC_ENTERED → EXITED), ghost the HUD
-    // children. The pause overlay is excluded (pausing mid-ceremony must keep
-    // a readable menu); teaching toasts live on document.body and are
-    // untouched by construction. The black letterbox bars that used to slide
-    // in with the ghost (two `.net-cinema-bar` divs on body) were REMOVED
-    // 2026-09-09 (owner: "remove the black bars") — the cinema is the camera
-    // cut + this dim + the CeremonyTimeScale slow-mo; nothing else changed.
+    // The camera cut + CeremonyTimeScale slow-mo are the cinema. The HUD used to
+    // ghost to 10% opacity while the camera owned the screen; REMOVED 2026-10-05
+    // (owner 2026-09-30: "interferes with sim") — capture never dims the panes.
+    // The 500ms opacity transition stays: per-view hudOpacity dims and
+    // callouts-active use it. The `net-cinema` body class is still toggled.
     if (!document.getElementById('net-cinema-style')) {
       const cinemaStyle = document.createElement('style');
       cinemaStyle.id = 'net-cinema-style';
       cinemaStyle.textContent = `
         #hud-overlay > * { transition: opacity 500ms ease; }
-        body.net-cinema #hud-overlay > *:not(#hud-pause-overlay) {
-          opacity: 0.10;
-        }
       `;
       document.head.appendChild(cinemaStyle);
     }
@@ -1343,8 +1335,8 @@ export class HUD {
 
   /** @private */
   _setupEventListeners() {
-    // Net-ceremony cinema mode: dim the HUD (the `body.net-cinema` ghost rule
-    // in _build; no letterbox bars since 2026-09-09) while the ceremony
+    // Net-ceremony cinema mode: toggle `body.net-cinema` (no HUD ghosting since
+    // 2026-10-05, no letterbox bars since 2026-09-09) while the ceremony
     // camera owns the screen. ENTERED/EXITED are strictly paired by
     // CameraSystem (every exit route — beats done, miss truncation, skip,
     // abort-on-view-change — emits EXITED), and GAME_RESET clears the class
@@ -1545,10 +1537,9 @@ export class HUD {
       this.showNotification(text, duration, { kind });
     });
 
-    // PR 6 / P3.13: Audio unlock failure — one-time toast
-    eventBus.on(Events.AUDIO_UNLOCK_FAILED, () => {
-      this.showNotification('Audio blocked. Click anywhere to enable sound', 5000, { kind: 'prompt' });
-    });
+    // AUDIO_UNLOCK_FAILED has no HUD listener (owner ruling 2026-10-05: the
+    // game always has sound — no audio-blocked toast; InputManager retries
+    // the unlock on every gesture).
 
     // Phase 8: Salvage reveal loot popup
     eventBus.on(Events.SALVAGE_REVEAL, (data) => {

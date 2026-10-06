@@ -81,6 +81,10 @@ const _vBox = new THREE.Vector3();
 const _contentsBoxScratch = { ox: 0, oy: 0, oz: 0,
   r00: 1, r01: 0, r02: 0, r10: 0, r11: 1, r12: 0, r20: 0, r21: 0, r22: 1,
   hx: 0, hy: 0, hz: 0 };
+// W1 net-reach: the result record of _catchContentsSpec (allocation-free).
+const _contentsSpecOut = { radius: 0, z: 0, box: null, sizeM: 0 };
+// W1 net-reach D2: the ship's world attitude, read per frame for a carried bag.
+const _qCarry = new THREE.Quaternion();
 
 // ── Tether catenary (mother-net-reel plan §11.4 Phase D.4) ───────────────
 // The 2-point THREE.Line is replaced by a Line2/LineMaterial fat-line strand
@@ -262,6 +266,9 @@ export class CaptureNetVisual {
     this._boundNetTorn = null;
     this._boundNetFailed = null;
     this._boundTierChanged = null;
+    this._boundArmDocked = null;
+    this._boundCarryCancel = null;
+    this._boundCarryReset = null;
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -314,6 +321,15 @@ export class CaptureNetVisual {
     eventBus.on(Events.CARGO_TRANSFER_COMPLETE, this._boundCargoDone);
     eventBus.on(Events.NET_CONSUMED,       this._boundNetConsumed);
     eventBus.on(Events.PERF_TIER_CHANGED,  this._boundTierChanged);
+    // W1 net-reach D2: the daughter's carried bag (see _beginCarry) ends on the
+    // daughter's own signals — never on a timer it cannot honour.
+    this._boundArmDocked   = this._onArmDocked.bind(this);
+    this._boundCarryCancel = this._onBreakdownCancel.bind(this);
+    this._boundCarryReset  = this._onCarryReset.bind(this);
+    eventBus.on(Events.ARM_DOCKED,              this._boundArmDocked);
+    eventBus.on(Events.CATCH_BREAKDOWN_CANCEL,  this._boundCarryCancel);
+    eventBus.on(Events.GAME_RESET,              this._boundCarryReset);
+    eventBus.on(Events.GAMEOVER_CONTINUE,       this._boundCarryReset);
     this._tier = sceneManager?.currentTier ?? 'HIGH';
   }
 
@@ -409,16 +425,24 @@ export class CaptureNetVisual {
   }
 
   /** @private
-   * UX-11 #2: a successful daughter catch reaches NET_REEL_COMPLETED at the
-   * HOLDING_CATCH *chop* boundary (the held net stows once the arm clears
-   * `debris._capturedByArm` — see ArmUnit._updateHoldingCatch). Removing the
-   * bag instantly made it POP right as the furnace breakdown starts. Instead,
-   * hand off: freeze the bag at the strut tip and fade it out while
-   * FurnaceBreakdownVisual takes over the chop. Empty (miss) reels still
-   * remove immediately — the miss fade timer owns that path.
+   * UX-11 #2 + W1 net-reach D2. A successful daughter catch reaches
+   * NET_REEL_COMPLETED at the HOLDING_CATCH *chop* boundary (the held net
+   * stows once the arm clears `debris._capturedByArm` — see
+   * ArmUnit._updateHoldingCatch): the daughter is ALREADY home, parked at her
+   * strut tip, with the catch still full-size in the bag.
+   *
+   * Before D2 the bag froze here and faded over 0.8 s — the owner's "net
+   * vanishes at the daughter's re-dock" (owner notes 2026-09-30, #12), with the
+   * body still on the rack. Now a DELIVERED catch (capturedMass > 0) puts the
+   * bag into CARRY (_beginCarry): it keeps following the catch, deflating with
+   * the chop exactly like the collar's bag (W3), and only then fades — see
+   * _endCarry for the release rule. A LOST catch (releasedMass > 0: slip, rip,
+   * tether-snap drift-end, reset drop) keeps the freeze-fade: genuine let-go is
+   * unchanged. Empty (miss) reels still remove immediately — the miss fade
+   * timer owns that path.
    */
   _onReelCompleted(payload) {
-    const { key, podIndex } = resolveNetId(payload);
+    const { key, armIndex, podIndex } = resolveNetId(payload);
     // Mother-net-reel plan §8 A2: a MOTHER catch transitions to BERTHED on
     // reel completion — the cinched bag must PERSIST at the launcher (with a
     // short taut tether stub), not fade. The daughter hand-off fade below is
@@ -434,16 +458,188 @@ export class CaptureNetVisual {
     // zeroes capturedMass on a failure stow, so the guard can no longer
     // depend on entering the mass branch.
     if (vis && vis.failure) return;  // failure beat in flight — it owns the fade
+    // W1 net-reach D2: delivered → the bag stays with the catch.
+    if (vis && payload && payload.capturedMass > 0) {
+      if (vis.carry) return;                   // duplicate event — already carrying
+      this._beginCarry(key, vis, armIndex);
+      return;
+    }
     // Register item 28: a failure stow reports capturedMass 0 + releasedMass
     // kg. The one UNSTAGED loss (tether-snap drift-end — no failure beat) must
     // still hand the runaway's bag to the fade, not pop it on the spot.
-    const massHome = (payload && payload.capturedMass > 0) || (payload && payload.releasedMass > 0);
+    const massHome = payload && payload.releasedMass > 0;
     if (vis && massHome) {
       vis.detached = true;   // state-driven updates stop; fade timer owns removal
       this._fadeTimers.push({ key, timer: 0.8, duration: 0.8 });
       return;
     }
     this._removeNetVisual(key);
+  }
+
+  /**
+   * W1 net-reach D2 — enter CARRY: the daughter's net has stowed (its
+   * NetProjectile is gone) but the catch it holds is still on her rack, so the
+   * bag stays and follows the catch instead of fading under it.
+   *
+   * Release rule (the owner's "keep it until stowed"; plan D2 "until the catch
+   * leaves it or the daughter reports docked — whichever is later"): the bag
+   * fades once BOTH hold — the daughter is docked AND the catch has left the
+   * bag. `docked` starts TRUE: a delivered stow (capturedMass > 0) is only ever
+   * emitted from HOLDING_CATCH, i.e. after the daughter reached her strut tip.
+   * ARM_DOCKED (emitted only after her reload, when the rack is empty) is the
+   * backstop for both flags. The catch has left when its chop is over (the
+   * body is consumed — the collar's W3 rule), the feed-end NET_CONSUMED lands,
+   * a cancel/reset drops the rack, or the debris is gone.
+   * @param {string} key
+   * @param {object} vis
+   * @param {number} armIndex
+   * @private
+   */
+  _beginCarry(key, vis, armIndex) {
+    const net = this._getNet(armIndex, -1);
+    vis.detached = true;              // the NetProjectile is gone — state-driven updates stop
+    vis.carry = {
+      debris: vis._catchDebris || (net && net.targetDebris) || null,
+      docked: true,                   // see above: delivered ⇒ already home
+      left: false,                    // the catch is still in the bag
+      ended: false,
+    };
+    // Seat the bag ship-fixed where it is NOW: the catch is pinned ship-fixed at
+    // the strut tip, and re-seating at the tip node would jump the bag by the
+    // rack's lateral bias.
+    this._captureDetachSeat(vis);
+    // …and ship-fixed in ATTITUDE: the bag turns with the ship it rides, the
+    // same ship-local pattern as the seat (ship⁻¹ × bag now, ship × local later).
+    vis._carryQuatLocal = null;
+    if (vis.group && this._shipWorldQuat(_qCarry)) {
+      vis._carryQuatLocal = _qCarry.invert().multiply(vis.group.quaternion).clone();
+    }
+    // The stowed net's tether is spooled — nothing runs strut tip → bag any more.
+    if (vis.tetherLine) vis.tetherLine.visible = false;
+  }
+
+  /**
+   * @private W1 net-reach D2 — the ship's world attitude into `out`, or null when
+   * the player exposes none (bare test mocks). PlayerSatellite is a THREE.Group.
+   */
+  _shipWorldQuat(out) {
+    const p = this._player;
+    if (p && typeof p.getWorldQuaternion === 'function') return p.getWorldQuaternion(out);
+    if (p && p.quaternion) return out.copy(p.quaternion);
+    return null;
+  }
+
+  /**
+   * W1 net-reach D2 — one of the release conditions came true. Starts the
+   * normal 0.8 s fade once docked AND left; until then the bag stays.
+   * @param {string} key
+   * @param {object} vis
+   * @param {{docked?:boolean, left?:boolean}} flags
+   * @private
+   */
+  _endCarry(key, vis, flags) {
+    const c = vis && vis.carry;
+    if (!c || c.ended) return;
+    if (flags.docked) c.docked = true;
+    if (flags.left) c.left = true;
+    if (!(c.docked && c.left)) return;
+    c.ended = true;
+    this._fadeTimers.push({ key, timer: 0.8, duration: 0.8 });
+  }
+
+  /** @private Resolve the arm key for an ARM_DOCKED / CANCEL payload ({armId} or {armIndex}). */
+  _armKeyFor(payload) {
+    if (payload && payload.armIndex != null && payload.armIndex >= 0) return `arm_${payload.armIndex}`;
+    const id = payload && payload.armId;
+    const arms = this._player && this._player.armManager && this._player.armManager.arms;
+    if (id && arms) {
+      const idx = arms.findIndex((a) => a && a.id === id);
+      if (idx >= 0) return `arm_${idx}`;
+    }
+    return null;
+  }
+
+  /** @private W1 net-reach D2 — the daughter reports docked (reload done: her rack is empty). */
+  _onArmDocked(payload) {
+    const key = this._armKeyFor(payload);
+    const vis = key && this._activeVisuals.get(key);
+    if (vis && vis.carry) this._endCarry(key, vis, { docked: true, left: true });
+  }
+
+  /** @private W1 net-reach D2 — a mid-cook cancel dropped the rack: nothing left to carry.
+   * Today only the COLLAR emits CATCH_BREAKDOWN_CANCEL (armId 'mother', which
+   * resolves to no arm ⇒ no-op here); kept as a harmless guard for a rack cancel. */
+  _onBreakdownCancel(payload) {
+    const key = this._armKeyFor(payload);
+    const vis = key && this._activeVisuals.get(key);
+    if (vis && vis.carry) this._endCarry(key, vis, { docked: true, left: true });
+  }
+
+  /** @private W1 net-reach D2 — mission reset: every rack is dropped, no completion event will come. */
+  _onCarryReset() {
+    for (const [key, vis] of this._activeVisuals) {
+      if (vis.carry) this._endCarry(key, vis, { docked: true, left: true });
+    }
+  }
+
+  /**
+   * W1 net-reach D2 — per-frame drive of a carried bag (the NetProjectile is
+   * gone, so no FSM does this). Deflates the bag WITH the chop (the collar's W3
+   * rule — the SAME `_catchContentsSpec` + FT.chopScaleMul ramp, phase derived
+   * from the catch's own `_digestProgress`, the clock ArmUnit's HOLDING_CATCH
+   * writes), and hands the spent bag to the fade at chop end.
+   * @param {string} key
+   * @param {object} vis
+   * @param {number} dt
+   * @private
+   */
+  _driveCarriedBag(key, vis, dt) {
+    const c = vis.carry;
+    if (!c || c.ended) return;
+    const d = c.debris;
+    if (d) {
+      // The rack let go without an event this visual hears (reset drop, a
+      // salvage path): ArmUnit/ArmManager write `_armPinned = false` on every
+      // release, and `alive = false` when the piece is gone.
+      if (d.alive === false || d._armPinned === false) {
+        this._endCarry(key, vis, { docked: true, left: true });
+        return;
+      }
+    }
+    const FT = Constants.FURNACE_TRANSFER;
+    let phaseT = null;
+    if (d && d._breakdownActive && d._digestProgress != null && d.mass > 0) {
+      phaseT = Math.min(FT.FEED_S, (d._digestProgress / FT.digestSpanS(d.mass)) * FT.FEED_S);
+    }
+    if (phaseT != null && phaseT >= FT.CHOP_S) {
+      // Chop end: the body is consumed (the chunks are the read) and the bag has
+      // deflated with it — hand the spent bag to the fade (W3), do not hold an
+      // invisible spike through the whole feed phase.
+      this._endCarry(key, vis, { left: true });
+      return;
+    }
+    if (vis.kitHandle && d && d._scenePosition) {
+      // The seat/attitude were just written to vis.group; the kit's
+      // updateMatrixWorld inside _catchContentsSpec does not refresh its
+      // PARENT, so refresh from the bag group down first.
+      if (vis.group) vis.group.updateMatrixWorld(true);
+      const chopMul = (phaseT != null) ? FT.chopScaleMul(phaseT) : null;
+      const cs = this._catchContentsSpec(vis, d, chopMul);
+      vis.kitHandle._jigglePhase = vis.kitHandle._jigglePhase || 0;
+      NetMeshKit.updateWebDrape(vis.kitHandle, {
+        drape: 1,
+        cinchFrac: 1,                 // welded shrink-wrap, no jiggle (the held bag's rest)
+        jigglePhase: vis.kitHandle._jigglePhase,
+        jiggleAmp: 0,
+        contentsRadius: cs.radius,
+        contentsZ: cs.z,
+        contentsBox: cs.box,
+        catchSizeM: cs.sizeM,
+        localCamPos: this._sceneManager?.camera
+          ? vis.kitHandle.group.worldToLocal(_v3c.copy(this._sceneManager.camera.position))
+          : undefined,
+      });
+    }
   }
 
   /**
@@ -477,13 +673,25 @@ export class CaptureNetVisual {
    * body (NET_CONSUMED carries the pod on the mother path, mirroring the
    * daughter's feed-end consume). Send the bag off with the same freeze-fade
    * idiom, seated where the catch was mated. Arm-keyed payloads (the daughter
-   * rack's consume) are ignored — that bag was handed off at NET_REEL_COMPLETED.
+   * rack's consume) end a W1 net-reach D2 carry instead (the bag was carried past
+   * NET_REEL_COMPLETED); with no carry in flight they are a no-op.
    * @param {object} payload — { podIndex, ... } for the collar path
    * @private
    */
   _onNetConsumed(payload) {
     const pi = payload?.podIndex;
-    if (pi == null || pi < 0) return;
+    if (pi == null || pi < 0) {
+      // W1 net-reach D2: the daughter rack's feed-end consume — the catch has
+      // left the bag. (Normally the chop-end rule in _driveCarriedBag has
+      // already handed the bag to the fade; _endCarry is idempotent.)
+      const ai = payload?.armIndex;
+      if (ai != null && ai >= 0) {
+        const akey = `arm_${ai}`;
+        const avis = this._activeVisuals.get(akey);
+        if (avis && avis.carry) this._endCarry(akey, avis, { left: true });
+      }
+      return;
+    }
     const key = `pod_${pi}`;
     const vis = this._activeVisuals.get(key);
     if (!vis) return;
@@ -907,6 +1115,15 @@ export class CaptureNetVisual {
           // dock) — never teleported to the strut tip. The bag opens/fades in
           // place around the catch; the catch visibly drifts on (continuity).
           vis.group.position.copy(vis.failure.debris._scenePosition);
+        } else if (vis.carry && vis._detachSeatLocal
+                   && typeof this._player?.localToWorld === 'function') {
+          // W1 net-reach D2: the carried bag rides the catch's ship-fixed seat
+          // (captured at the hand-off) — through the chop AND its fade — so it
+          // never jumps to the bare strut tip — and turns with the ship.
+          this._player.localToWorld(vis.group.position.copy(vis._detachSeatLocal));
+          if (vis._carryQuatLocal && this._shipWorldQuat(_qCarry)) {
+            vis.group.quaternion.copy(_qCarry).multiply(vis._carryQuatLocal);
+          }
         } else if (vis.armIndex >= 0 && this._player?.strutTipNodes?.[vis.armIndex]) {
           this._player.strutTipNodes[vis.armIndex].getWorldPosition(vis.group.position);
         } else if (vis.podIndex >= 0 && vis._detachSeatLocal
@@ -923,6 +1140,12 @@ export class CaptureNetVisual {
           // detached mother bag streaked away at 70 km/s; plan §2 C2).
           this._player.getNetPodPositionInto(vis.podIndex, vis.group.position);
         }
+        // W1 net-reach D2: drive the carried bag AFTER this frame's seat +
+        // attitude are written, so the contents spec reads the catch against
+        // the bag's CURRENT frame (before the fix it lagged one frame of ship
+        // travel). _driveCarriedBag never removes — a carry that ends here is
+        // removed by its fade timer, so `vis` stays live below.
+        if (vis.carry) this._driveCarriedBag(key, vis, dt);
         // S5: tick a detached failure beat — the slip's un-cinch drives the
         // kit directly (no state machine remains to drive it); the rip's hole
         // is already cut (one write at the event). The fade starts at beat end.
@@ -1265,6 +1488,76 @@ export class CaptureNetVisual {
   // ── Ceremony state handler (flag-ON only) ──────────────────────────────
 
   /**
+   * The ONE home of the bag's contents spec (radius / Z / oriented box) — what
+   * the kit's drape/cinch floors on. Shared by the state-driven drape driver
+   * (_updateCeremonyState) and the W1 net-reach carried bag (_driveCarriedBag),
+   * so the two can never disagree about where the catch is or how big it is.
+   *
+   * Whale-in-cone phase 3 (D2): tell the kit what is INSIDE the bag so the
+   * drape/cinch floors on a spherical envelope around the catch instead of
+   * closing to 0.27 m regardless. Scene units throughout. effectiveRenderScale
+   * is the clamp-aware SSOT (W5), so the envelope tracks the size the renderer
+   * actually draws, including the CAPTURED readability floor. Balloon→fabric
+   * (F1): also the catch's oriented-BOX spec — the film then wraps the real
+   * extents, keyed to the tumble orientation, which is FROZEN while pinned (B3)
+   * so the wrap cannot spin or drift. W2a: the LOGICAL size (sizeM) drives the
+   * size-aware welded film rest — stable through the whole ceremony.
+   *
+   * Allocation-free: writes and returns a module-level scratch — read it
+   * before the next call.
+   * @param {object} vis      — entry from _activeVisuals (needs kitHandle)
+   * @param {object} d        — the catch (needs _scenePosition)
+   * @param {number|null} chopMul — FT.chopScaleMul deflation, or null for none
+   * @returns {{radius:number, z:number, box:object|null, sizeM:number}}
+   * @private
+   */
+  _catchContentsSpec(vis, d, chopMul) {
+    const out = _contentsSpecOut;
+    out.sizeM = d.sizeMeter || 0;
+    DebrisWireframe.getGeometry(d.type, d.id);           // br cache (uncached ⇒ 1)
+    const br = DebrisWireframe.getBoundingRadius(d.type, d.id) || 1;
+    let renderScale = DebrisField.effectiveRenderScale(d);
+    // Small-catch plan W3: deflate the whole contents spec (radius, box
+    // extents, box centre) by the one-home chop ramp so the film visibly
+    // collapses WITH the body it is wrapping — probe/mesh parity is by
+    // construction (the handle stores the deflated spec the mesh deformed to;
+    // _netDrawnRimPierce reads the handle).
+    if (chopMul != null) renderScale *= chopMul;
+    out.radius = renderScale * br;
+    vis.kitHandle.group.updateMatrixWorld(true);          // same guard the probe uses
+    const lp = vis.kitHandle.group.worldToLocal(_v3c.copy(d._scenePosition));
+    out.z = lp.z;
+    out.box = null;
+    const bb = DebrisWireframe.getBoundingBoxExtents(d.type, d.id);
+    if (bb) {
+      // Catch orientation in kit space: qB2K = qKit⁻¹ ⊗ tumble. The tumble is
+      // the whole instance rotation (DebrisField:1985) and is frozen while
+      // _armPinned (B3).
+      vis.kitHandle.group.getWorldQuaternion(_qA);
+      if (d.tumbleAxis) _qB.setFromAxisAngle(d.tumbleAxis, d.tumbleAngle || 0);
+      else _qB.identity();
+      _qA.invert().multiply(_qB);                          // box-local → kit-space
+      // Box centre in kit space: instance origin + qB2K·(local centre × scale).
+      _vBox.set(bb.cx * renderScale, bb.cy * renderScale, bb.cz * renderScale).applyQuaternion(_qA);
+      _contentsBoxScratch.ox = lp.x + _vBox.x;
+      _contentsBoxScratch.oy = lp.y + _vBox.y;
+      _contentsBoxScratch.oz = lp.z + _vBox.z;
+      // kit→box rotation rows (v_box = R·v_kit): the matrix of qB2K⁻¹.
+      // Matrix4.elements is column-major: e[0]=m11, e[1]=m21, e[4]=m12 …
+      _m4.makeRotationFromQuaternion(_qA.invert());
+      const e = _m4.elements;
+      _contentsBoxScratch.r00 = e[0]; _contentsBoxScratch.r01 = e[4]; _contentsBoxScratch.r02 = e[8];
+      _contentsBoxScratch.r10 = e[1]; _contentsBoxScratch.r11 = e[5]; _contentsBoxScratch.r12 = e[9];
+      _contentsBoxScratch.r20 = e[2]; _contentsBoxScratch.r21 = e[6]; _contentsBoxScratch.r22 = e[10];
+      _contentsBoxScratch.hx = bb.hx * renderScale;
+      _contentsBoxScratch.hy = bb.hy * renderScale;
+      _contentsBoxScratch.hz = bb.hz * renderScale;
+      out.box = _contentsBoxScratch;
+    }
+    return out;
+  }
+
+  /**
    * Update ceremony-path visual for one net.
    * @param {string} key — visual map key
    * @param {object} vis — entry from _activeVisuals
@@ -1389,57 +1682,22 @@ export class CaptureNetVisual {
         let catchSizeM = 0;
         const d = net.targetDebris;
         if (d && d._scenePosition && (drape > 0 || cinchFrac > 0)) {
-          // W2a: the LOGICAL size drives the size-aware welded film rest —
-          // stable through the whole ceremony (the floored rendered radius
-          // pops 0.6 → 2.0 m at reel entry and would re-fade the film).
-          catchSizeM = d.sizeMeter || 0;
-          DebrisWireframe.getGeometry(d.type, d.id);           // br cache (uncached ⇒ 1)
-          const br = DebrisWireframe.getBoundingRadius(d.type, d.id) || 1;
-          let renderScale = DebrisField.effectiveRenderScale(d);
+          // W2a / W3 / F1 (the spec's rationale lives on _catchContentsSpec —
+          // the ONE home, shared with the W1 net-reach carried bag): logical
+          // size, the chop deflation (COLLARED + _breakdownActive only), and
+          // the oriented box in kit space.
           // Small-catch plan W3 (2026-08-25): during the collar digestion's
           // chop the instance shrinks out of view (CaptureNet re-pins with
-          // FT.chopScaleMul every tick), but the SSOT base above never sees
-          // that multiplier — the bag stayed floored on the FULL-SIZE box
-          // while the bare catch scaled down INSIDE it in the open (the
-          // owner's "debris shrinks in a geodesic bubble" tail). Deflate the
-          // whole contents spec (radius, box extents, box centre) by the SAME
-          // one-home ramp off the SAME phase clock, so the film visibly
-          // collapses WITH the body it is wrapping — probe/mesh parity is by
-          // construction (the handle stores the deflated spec the mesh
-          // deformed to; _netDrawnRimPierce reads the handle).
-          if (state === STATES.COLLARED && d._breakdownActive && net._digestPhaseT != null) {
-            renderScale *= Constants.FURNACE_TRANSFER.chopScaleMul(net._digestPhaseT);
-          }
-          contentsRadius = renderScale * br;
-          vis.kitHandle.group.updateMatrixWorld(true);          // same guard the probe uses
-          const lp = vis.kitHandle.group.worldToLocal(_v3c.copy(d._scenePosition));
-          contentsZ = lp.z;
-          const bb = DebrisWireframe.getBoundingBoxExtents(d.type, d.id);
-          if (bb) {
-            // Catch orientation in kit space: qB2K = qKit⁻¹ ⊗ tumble. The
-            // tumble is the whole instance rotation (DebrisField:1985) and is
-            // frozen while _armPinned (B3).
-            vis.kitHandle.group.getWorldQuaternion(_qA);
-            if (d.tumbleAxis) _qB.setFromAxisAngle(d.tumbleAxis, d.tumbleAngle || 0);
-            else _qB.identity();
-            _qA.invert().multiply(_qB);                          // box-local → kit-space
-            // Box centre in kit space: instance origin + qB2K·(local centre × scale).
-            _vBox.set(bb.cx * renderScale, bb.cy * renderScale, bb.cz * renderScale).applyQuaternion(_qA);
-            _contentsBoxScratch.ox = lp.x + _vBox.x;
-            _contentsBoxScratch.oy = lp.y + _vBox.y;
-            _contentsBoxScratch.oz = lp.z + _vBox.z;
-            // kit→box rotation rows (v_box = R·v_kit): the matrix of qB2K⁻¹.
-            // Matrix4.elements is column-major: e[0]=m11, e[1]=m21, e[4]=m12 …
-            _m4.makeRotationFromQuaternion(_qA.invert());
-            const e = _m4.elements;
-            _contentsBoxScratch.r00 = e[0]; _contentsBoxScratch.r01 = e[4]; _contentsBoxScratch.r02 = e[8];
-            _contentsBoxScratch.r10 = e[1]; _contentsBoxScratch.r11 = e[5]; _contentsBoxScratch.r12 = e[9];
-            _contentsBoxScratch.r20 = e[2]; _contentsBoxScratch.r21 = e[6]; _contentsBoxScratch.r22 = e[10];
-            _contentsBoxScratch.hx = bb.hx * renderScale;
-            _contentsBoxScratch.hy = bb.hy * renderScale;
-            _contentsBoxScratch.hz = bb.hz * renderScale;
-            contentsBox = _contentsBoxScratch;
-          }
+          // FT.chopScaleMul every tick); deflate the whole contents spec by
+          // the SAME one-home ramp off the SAME phase clock.
+          const chopMul = (state === STATES.COLLARED && d._breakdownActive && net._digestPhaseT != null)
+            ? Constants.FURNACE_TRANSFER.chopScaleMul(net._digestPhaseT)
+            : null;
+          const cs = this._catchContentsSpec(vis, d, chopMul);
+          catchSizeM = cs.sizeM;
+          contentsRadius = cs.radius;
+          contentsZ = cs.z;
+          contentsBox = cs.box;
         }
         NetMeshKit.updateWebDrape(vis.kitHandle, {
           drape,
@@ -1726,6 +1984,9 @@ export class CaptureNetVisual {
 
       case STATES.REELING:
         canisterMesh.visible = false;
+        // W1 net-reach D2: remember the catch — the net is pruned the tick after
+        // NET_REEL_COMPLETED, and the carried bag still has to follow the piece.
+        if (net.targetDebris) vis._catchDebris = net.targetDebris;
         // S5: a failure beat (or its fade tail) keeps the cone drawn through
         // the miss reel-back — hiding it the frame REELING starts would cut
         // the staged bounce/slip (or pop the fading bag).
@@ -2003,6 +2264,12 @@ export class CaptureNetVisual {
     if (this._boundCargoDone)     eventBus.off(Events.CARGO_TRANSFER_COMPLETE, this._boundCargoDone);
     if (this._boundNetConsumed)   eventBus.off(Events.NET_CONSUMED,       this._boundNetConsumed);
     if (this._boundTierChanged)   eventBus.off(Events.PERF_TIER_CHANGED,  this._boundTierChanged);
+    if (this._boundArmDocked)     eventBus.off(Events.ARM_DOCKED,             this._boundArmDocked);
+    if (this._boundCarryCancel)   eventBus.off(Events.CATCH_BREAKDOWN_CANCEL, this._boundCarryCancel);
+    if (this._boundCarryReset) {
+      eventBus.off(Events.GAME_RESET,        this._boundCarryReset);
+      eventBus.off(Events.GAMEOVER_CONTINUE, this._boundCarryReset);
+    }
 
     this._boundNetFired = null;
     this._boundNetAdopted = null;
@@ -2015,6 +2282,9 @@ export class CaptureNetVisual {
     this._boundCargoDone = null;
     this._boundNetConsumed = null;
     this._boundTierChanged = null;
+    this._boundArmDocked = null;
+    this._boundCarryCancel = null;
+    this._boundCarryReset = null;
 
     this._fadeTimers = [];
     this._enabled = false;

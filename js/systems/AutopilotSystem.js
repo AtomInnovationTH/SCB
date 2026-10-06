@@ -813,7 +813,7 @@ export class AutopilotSystem {
 
           eventBus.emit(Events.AUTOPILOT_ARRIVED, { mode: this._headingMode });
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: '✓ ON STATION. [N] lasso (≤200m) · [D] deploy daughter for far/heavy debris',
+            text: `✓ ON STATION. [N] lasso (≤${Constants.LASSO_RANGE}m) · [D] deploy daughter for far/heavy debris`,
             priority: 'info',
           });
         } else if (posErrM > Dtrail_m * 3) {
@@ -915,7 +915,17 @@ export class AutopilotSystem {
         // ("hold/align/hold/align") flicker. Measured posErr/velErr is used so
         // a genuinely displaced mother (e.g. a large CA dodge that the sync
         // cannot heal) still demotes and re-aligns.
-        const excursion = posErrM > 4 * POS_TOL || velErrMps > 4 * VEL_TOL;
+        //
+        // W1 net-reach: the lasso fires only inside NET_LOCK_RANGE_M (90 m,
+        // LASSO_RANGE === NET_LOCK_RANGE_M) but the 4·POS_TOL band above lets a
+        // lasso HOLD (park point D_TRAIL_LASSO 70 m) sit up to ~130 m from the
+        // target — "on station" where [N] is refused (measured: HOLD held at
+        // 91–129 m). For the lasso, a target beyond the gate is an excursion
+        // too: same dwell, same demotion. Re-entry needs posErr < POS_TOL, i.e.
+        // ≤ 85 m, so this cannot oscillate. Other tools are unchanged.
+        const lassoOutOfReach = this._targetSelector?._recommendedTool === 'lasso'
+          && Pm.distanceTo(Pd) / M > Constants.NET_LOCK_RANGE_M;
+        const excursion = posErrM > 4 * POS_TOL || velErrMps > 4 * VEL_TOL || lassoOutOfReach;
         if (excursion) {
           this._holdExitDwell += dt;
         } else {

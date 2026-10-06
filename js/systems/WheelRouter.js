@@ -333,6 +333,16 @@ export class WheelRouter {
    * @param {WheelEvent} e
    */
   _handleWheel(e) {
+    // (0) A scrollable DOM overlay that opts out with `data-wheel-passthrough`
+    // (the ? help list's card body): the wheel is the page's — it scrolls that
+    // element. Never fed to the ladder / camera / daughter, no onboarding zoom
+    // signal. A pinch (ctrl+wheel) there is still swallowed so a trackpad pinch
+    // cannot browser-zoom the page (w1-first-minute, 2026-10-06).
+    if (this._inPassthrough(e)) {
+      if (e.ctrlKey && typeof e.preventDefault === 'function') e.preventDefault();
+      return;
+    }
+
     // (2) legacy onboarding signal — always, before anything consumes the event.
     eventBus.emit(Events.CAMERA_ZOOM_INPUT);
 
@@ -392,6 +402,12 @@ export class WheelRouter {
     const t = e && e.target;
     if (t === this._canvas) return true;
     return !!(t && typeof this._canvas.contains === 'function' && this._canvas.contains(t));
+  }
+
+  /** @private Whether the event's target sits inside a `[data-wheel-passthrough]` element. */
+  _inPassthrough(e) {
+    const t = e && e.target;
+    return !!(t && typeof t.closest === 'function' && t.closest('[data-wheel-passthrough]'));
   }
 
   // ── Horizontal pane swipe (Wave 5 Session C, 08-workbench §2 grammar) ─────

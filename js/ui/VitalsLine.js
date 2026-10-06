@@ -22,8 +22,9 @@
  * 10 Hz telemetry event.
  *
  * Placement: bottom-left, mounted on document.body (the _createTopPanel
- * idiom) so per-view hudOpacity dims, callout dims, and net-cinema ghosting
- * never touch it — "never leaves the screen".
+ * idiom) so per-view hudOpacity dims and callout dims never touch it — "never
+ * leaves the screen". (The net-cinema HUD ghosting was removed 2026-10-05,
+ * DECISIONS §14: catching never dims the panes.)
  *
  * Deps optional (LadderAudioBeds pattern): without a document every method
  * is a state-only no-op; unconstructed (flag-off / unwired) it does not

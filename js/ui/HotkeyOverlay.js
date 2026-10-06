@@ -24,37 +24,43 @@
 //   Originated as a pure regroup of the older topic cards; labels have since
 //   been hand-tuned. Full hotkey audit + Daughter-card rewrite 2026-07-23:
 //   the Daughter card now lists ONLY keys that genuinely act on the piloted
-//   daughter (mother verbs S/T/A/D/E were removed). Several rows are
-//   descriptive/cosmetic — the live bindings are owned by InputManager, not
-//   this list.
-// Keep in sync with InputManager._handleKeyDown and ARCHITECTURE §6.
-const HOTKEY_GROUPS = [
+//   daughter (mother verbs S/T/A/D/E were removed).
+//   Rebuilt from the real bindings 2026-10-06 (w1-first-minute D2, owner
+//   2026-09-30 "Help menu needs updating. Some commands are obsolete."): rows
+//   describe what the key does TODAY with the zoom ladder on (the default) —
+//   ␣ is the view's main action, Esc / PgUp / PgDn move between views, V (not
+//   Esc) takes you back to the ship — in plain words. Added the bound but
+//   unlisted keys: [ ] and Shift+1–3 (power lines), ; ' (launch speed),
+//   PgUp / PgDn, Ctrl+Shift+D (deorbit), + − while holding station.
+// The live bindings are owned by InputManager._handleKeyDown; test-HelpTruth.js
+// fails when a bound key is missing here or a chip names an unbound key.
+export const HOTKEY_GROUPS = [
   {
     // Mother command-chair verbs, in onboarding teach order (orient → look →
     // target → capture → scan → deploy), then the Shift fleet commands.
     title: 'Mother',
     rows: [
-      [['↑ ↓ ← →'], 'Rotate'],
+      [['↑ ↓ ← →'], 'Turn the ship'],
       [['V'], 'View — fly / look around'],
-      [['␣'], 'Auto-advance — do the next step'],
-      [['S'], 'Scan'],
-      [['T'], 'Target debris'],
-      [['Tab'], 'Cycle target'],
-      [['A'], 'Autopilot to target'],
-      [['Enter'], 'Begin approach'],
-      [['N'], 'Net launch'],
-      [['D'], 'Daughter launch'],
-      [['R'], 'Reel-in'],
-      [['K'], 'Jettison berthed catch'],
+      [['␣'], 'Main action for this view (e.g. autopilot)'],
+      [['S'], 'Scan nearby'],
+      [['T'], 'Next debris target'],
+      [['Tab'], 'Next target (net / map views: next choice)'],
+      [['A'], 'Autopilot on / off — flies to the target'],
+      [['Enter'], 'Start the approach (needs a target)'],
+      [['N'], 'Fire the net'],
+      [['D'], 'Launch a daughter (pick one with 1–4)'],
+      [['R'], 'Reel a daughter in'],
+      [['K'], 'Drop the catch held at the nose'],
       'spacer',
-      [['V', 'Shift'], 'View big picture'],
-      [['S', 'Shift'], 'Scan big area'],
-      [['A', 'Shift'], 'Autopilot to field center + net + fan out daughters'],
-      [['N', 'Shift'], 'Auto-target + launch at debris in range'],
-      [['D', 'Shift'], 'Daughters launch all'],
-      [['R', 'Shift'], 'Reel-in all'],
-      [['G', 'Shift'], 'Trawl sweep'],
-      [['Shift −', 'Shift +'], 'Mother throttle'],
+      [['Shift V'], 'Big-picture map'],
+      [['Shift S'], 'Scan a wide area'],
+      [['Shift A'], 'Fly to the thickest debris, fire the net, send every daughter'],
+      [['Shift N'], 'Pick the best debris in reach, send every daughter'],
+      [['Shift D'], 'Launch every daughter at the target'],
+      [['Shift R'], 'Reel every daughter in'],
+      [['Shift G'], 'Sweep the net through a cloud of small pieces'],
+      [['Shift −', 'Shift +'], 'Engine throttle down / up'],
     ],
   },
   {
@@ -62,16 +68,18 @@ const HOTKEY_GROUPS = [
     // her are listed (mother verbs live on the Mother card).
     title: 'Daughter',
     rows: [
-      [['1', '–', '4'], 'Select / pilot daughter (re-press = hop out)'],
-      [['↑ ↓ ← →'], 'Orbit around debris (station-keep)'],
-      [['`'], 'Cycle tool (net / magnet / gripper / pad)'],
-      [['N'], 'Fire selected tool / net'],
-      [['L'], 'Hold steady with laser (station-keep, mother-fired)'],
-      [['R'], 'Reel-in this daughter'],
-      [['X'], 'Cut tether (detach this daughter)'],
-      [['F2'], 'Cycle thruster metal'],
-      [['Shift'], 'Reel boost (hold)'],
-      [['V', '/', 'Esc'], 'Back to mother (Esc while station-keeping recalls her)'],
+      [['1', '–', '4'], 'Pick / fly a daughter (again: back to the ship)'],
+      [['↑ ↓ ← →'], 'Circle the debris, holding station'],
+      [['+', '−'], 'Closer / farther, holding station'],
+      [['`'], 'Next tool (net / magnet / gripper / pad)'],
+      [['N'], 'Use the tool / fire the net'],
+      [['L'], 'Hold: laser slows the target’s spin'],
+      [['R'], 'Reel this daughter in'],
+      [['X'], 'Cut the tether (let her go)'],
+      [['F2'], 'Switch thruster metal'],
+      [['Shift'], 'Hold: reel in faster'],
+      [['V'], 'Back to the ship (she keeps working)'],
+      [['Ctrl', 'Shift D'], 'Take the catch down to burn up (daughter lost)'],
     ],
   },
   {
@@ -79,27 +87,29 @@ const HOTKEY_GROUPS = [
     // tools. Behaves the same in both Mother and Daughter modes.
     title: 'Advanced',
     rows: [
-      [['B'], 'Buy'],
-      [['F'], 'Forge'],
-      [['J'], 'Journal'],
-      [['I'], 'Info'],
-      [['M'], 'Map'],
-      [['`'], 'Debris map (when not piloting)'],
-      [['?'], 'Help'],
-      [['Esc'], 'Pause / back'],
+      [['B'], 'Shop — buy upgrades'],
+      [['F'], 'Furnace: refine metal (again: make fuel; 3rd: cancel)'],
+      [['J'], 'Journal — discoveries'],
+      [['I'], 'Info library'],
+      [['M', '/', '`'], 'Debris map'],
+      [['?'], 'This help'],
+      [['Esc'], 'Back — close the panel, else zoom out'],
+      [['PgUp', 'PgDn'], 'Zoom out / in one level'],
       'spacer',
-      [['5'], 'toggle: City names'],
-      [['6'], 'toggle: Constellation names'],
-      [['7'], 'Expand comms'],
-      [['8'], 'Nav orb (show / minimize)'],
-      [['9'], 'toggle: Debris pane'],
-      [['0'], 'toggle: Target pane'],
-      [['−', '+'], 'Hide / show HUD panes'],
-      [['E'], 'Electrodynamic tether (mother)'],
-      [['Z'], 'Cycle debris wireframe zone'],
-      [['.', ','], 'Open / close struts (.) / panels (,)'],
-      [[',', 'Shift'], 'Feather panels (quick edge-on dodge)'],
-      [['O'], 'Aft flower — deploy / stow (once purchased)'],
+      [['5', '6'], 'City / constellation names on / off'],
+      [['7'], 'Open the radio log'],
+      [['8'], 'Nav ball: show / shrink'],
+      [['9', '0'], 'Debris / target panel on / off'],
+      [['−', '+'], 'Fewer / more panels on screen'],
+      [['Shift 1–3'], 'Power line: engine / sensors / daughters'],
+      [['[', ']'], 'Less / more power on that line'],
+      [[';', '\''], 'Daughter launch speed down / up'],
+      [['E'], 'Electric tether out / in'],
+      [['Z'], 'Debris close-up: next part (Shift: back)'],
+      [['.'], 'Swing the struts out / in'],
+      [[','], 'Roll the solar panels up / out'],
+      [['Shift ,'], 'Solar panels edge-on (quick dodge)'],
+      [['O'], 'Rear radiator open / fold (once bought)'],
     ],
   },
 ];
@@ -176,13 +186,19 @@ export class HotkeyOverlay {
 
     const body = document.createElement('div');
     Object.assign(body.style, {
-      // One page, no scrollbar. Three mode cards (Mother / Daughter /
-      // Advanced+Maps). Daughter is short (5 rows); Advanced+Maps is tallest,
-      // so it gets the widest track for single-line labels.
-      flex: '1', overflow: 'hidden', padding: '16px 18px',
+      // Three mode cards (Mother / Daughter / Advanced+Maps); Advanced+Maps
+      // gets the widest track for single-line labels. One page on a big
+      // screen; scrolls vertically when it does not fit (2026-10-06, measured
+      // in headless Chromium: the old overflow:hidden clipped 4–5 Mother rows
+      // at 1024×768 and the last Mother row even at 1920×1080).
+      flex: '1', overflowX: 'hidden', overflowY: 'auto', padding: '16px 18px',
       display: 'grid', gridTemplateColumns: '1.1fr 0.85fr 1.15fr',
       gap: '14px', alignContent: 'start',
     });
+    // The ladder's window-capture WheelRouter preventDefaults + zooms every
+    // wheel in gameplay; this marker hands wheels over the cards back to the
+    // page so the list scrolls (WheelRouter._inPassthrough).
+    body.setAttribute('data-wheel-passthrough', '');
 
     for (const group of HOTKEY_GROUPS) {
       body.appendChild(this._makeGroupCard(group));

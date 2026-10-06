@@ -1079,13 +1079,13 @@ export class LassoSystem {
         }
 
         // Find nearest debris within lasso range
-        const rangeScene = Constants.LASSO_RANGE * M; // 200m in scene units
+        const rangeScene = Constants.LASSO_RANGE * M; // LASSO_RANGE (=== NET_LOCK_RANGE_M, 90 m) in scene units
         const nearby = debrisField.getDebrisNear(playerPos, rangeScene);
 
         if (!nearby || nearby.length === 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'no_target' });
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'No targets in lasso range (200m)',
+                text: `No targets in lasso range (${Constants.LASSO_RANGE}m)`,
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'info',

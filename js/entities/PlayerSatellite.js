@@ -1721,7 +1721,10 @@ export class PlayerSatellite extends THREE.Group {
     this._strutLen = strutLen;
 
     // Shared geometry + material (one per satellite, 4 struts share)
-    const strutGeo = new THREE.CylinderGeometry(strutR, strutR, strutLen, 12);
+    // w1-ship-polish D1: open-ended — the bare tip showed the CFRP bottom cap
+    // coplanar (y = −strutLen) with the TipCollar's alu bottom cap (z-fight when
+    // no daughter is docked). The collar (r 1.10× strut) now closes the end alone.
+    const strutGeo = new THREE.CylinderGeometry(strutR, strutR, strutLen, 24, 1, true);   // was 12-seg (w1-ship-polish D2; collars stay 12 — their inscribed r 0.0266 > strut r 0.025)
     const strutMat = new THREE.MeshStandardMaterial({
       color: 0x2a2a30, metalness: 0.15, roughness: 0.65,  // CFRP T800/M21
     });
@@ -1729,7 +1732,7 @@ export class PlayerSatellite extends THREE.Group {
     // ── Rib ring collars (field-joint detail) ──
     // FIX_PLAN §2-followup: bumped 1.15→1.22 so torus inner edge clears strut
     // surface (was strutR*1.15 - 0.003 ≈ strutR*1.03, only ~0.7 mm gap → z-fight).
-    const ribGeo = new THREE.TorusGeometry(strutR * 1.22, M * 0.003, 4, 12);   // FIX_PLAN §2-followup
+    const ribGeo = new THREE.TorusGeometry(strutR * 1.22, M * 0.003, 4, 24);   // FIX_PLAN §2-followup; 12 → 24 radial (w1-ship-polish D2)
     const ribMat = new THREE.MeshStandardMaterial({
       color: 0x8899aa, metalness: 0.72, roughness: 0.28,  // machined 6061-T6
     });
@@ -1754,7 +1757,7 @@ export class PlayerSatellite extends THREE.Group {
     // inner face clears the pad: half-length + pad reach + margin.
     const ROOT_COLLAR_STANDOFF = ROOT_COLLAR_LEN * 0.5 + PAD_REACH + STANDOFF_MARGIN;
     const rootCollarGeo = new THREE.CylinderGeometry(
-      strutR * 1.20, strutR * 1.20, ROOT_COLLAR_LEN, 12
+      strutR * 1.20, strutR * 1.20, ROOT_COLLAR_LEN, 24   // was 12 (w1-ship-polish: beside the 24-gon strut)
     );
     const rootCollarMat = new THREE.MeshStandardMaterial({
       color: 0x8888a0, metalness: 0.75, roughness: 0.28,  // 7075-T6
@@ -1768,7 +1771,7 @@ export class PlayerSatellite extends THREE.Group {
 
     // ── Tip joint collar (dock fitting at daughter-arm end) ──
     const tipCollarGeo = new THREE.CylinderGeometry(
-      strutR * 1.10, strutR * 1.10, M * 0.020, 12
+      strutR * 1.10, strutR * 1.10, M * 0.020, 24   // was 12 (w1-ship-polish: the bare-tip part; inscribed 0.02726 > strut r 0.025)
     );
     const tipCollarMat = new THREE.MeshStandardMaterial({
       color: 0x8899aa, metalness: 0.72, roughness: 0.28,  // 6061-T6
@@ -1794,7 +1797,7 @@ export class PlayerSatellite extends THREE.Group {
     const REEL_WALL_THETA_START = 4 * Math.PI / 3;  // wall start (240°)
     const REEL_WALL_THETA_LEN   = 4 * Math.PI / 3;  // 240° of wall → 120° window at θ = 180° (local −Z)
     const housingGeo = new THREE.CylinderGeometry(
-      M * 0.055, M * 0.055, M * 0.065, 12, 1, false,   // 12-seg (was 8: 4× always in chase view)
+      M * 0.055, M * 0.055, M * 0.065, 24, 1, false,   // 24-seg (was 12, 8 before: always in chase view; housing = drum, w1-ship-polish D2/D3)
       REEL_WALL_THETA_START, REEL_WALL_THETA_LEN,
     );
     // NB: housingMat is also the material of SpringHousing_* and GuideRail_*_L/R
@@ -1805,12 +1808,12 @@ export class PlayerSatellite extends THREE.Group {
       color: 0x505868, metalness: 0.40, roughness: 0.50,  // hard-anodized 6061-T6
       side: THREE.DoubleSide,                             // T7: interior visible through the window
     });
-    const drumGeo = new THREE.CylinderGeometry(M * 0.045, M * 0.045, M * 0.055, 12);  // was 8-seg (match housing)
+    const drumGeo = new THREE.CylinderGeometry(M * 0.045, M * 0.045, M * 0.055, 24);  // was 8 → 12 → 24-seg (match housing, D3)
     const drumMat = new THREE.MeshStandardMaterial({
       color: 0xddddee, metalness: 0.20, roughness: 0.60,  // Dyneema SK78 T0
       // T7: _animateTetherIndicators spins children[1] at 2 rad/s during reel-in;
-      // a smooth 12-seg cylinder reads static when it turns. Flat shading bands
-      // the 12 facets so the spin reads through the window. No geometry change.
+      // a smooth cylinder reads static when it turns. Flat shading bands the
+      // 24 facets (12 before w1-ship-polish) so the spin reads through the window.
       flatShading: true,
     });
     // Status LED — Z-fix (Phase 1): was a flat PlaneGeometry sitting only 1 mm
@@ -1855,9 +1858,9 @@ export class PlayerSatellite extends THREE.Group {
     // 3 mm inside a wall that already draws both faces would only add a
     // sub-4 mm interior pair (the tie class the z-fix rounds removed).
     const springHousingGeo = new THREE.CylinderGeometry(
-      M * 0.030, M * 0.030, M * 0.060, 8, 1, true   // open-ended, reveals coil (DoubleSide housingMat)
+      M * 0.030, M * 0.030, M * 0.060, 16, 1, true   // 16-seg (was 8); open-ended, reveals coil (DoubleSide housingMat)
     );
-    const springRingGeo = new THREE.TorusGeometry(M * 0.018, M * 0.003, 3, 6);
+    const springRingGeo = new THREE.TorusGeometry(M * 0.018, M * 0.003, 3, 6);   // kept (3, 6): outer r 0.021 sits inside the 0.025 strut, never visible (measured)
     const springMat = new THREE.MeshStandardMaterial({
       color: 0x889999, metalness: 0.82, roughness: 0.28,  // maraging steel C-300
     });
@@ -2038,7 +2041,7 @@ export class PlayerSatellite extends THREE.Group {
     this.attitudeThrusterPlumes = [];
 
     // Config G main FEEP nozzle — smaller proportions for 0.4m barrel
-    const nozzleGeo = new THREE.CylinderGeometry(M * 0.03, M * 0.06, M * 0.15, 16, 1, true);  // was 12-seg (aft-view focal)
+    const nozzleGeo = new THREE.CylinderGeometry(M * 0.03, M * 0.06, M * 0.15, 32, 1, true);  // was 12 → 16 → 32-seg (aft-view focal; bell = liner = grid disc, w1-ship-polish D3)
 
     // Map thruster index → Constants.THRUSTERS id (for interlock visual)
     const thrusterIds = ['HT_TOP', 'HT_BOTTOM', 'HT_RIGHT', 'HT_LEFT'];
@@ -2093,7 +2096,7 @@ export class PlayerSatellite extends THREE.Group {
       // the exit gap is M*0.06*0.08 = 4.8 mm (≥ 4 mm), deterministic tie-pass at
       // the visible nozzle mouth. Single factor on both radii keeps the cone taper.
       const LINER_INSET = 0.92;
-      const linerGeo = new THREE.CylinderGeometry(M * 0.03 * LINER_INSET, M * 0.06 * LINER_INSET, M * 0.15, 16, 1, true);  // was 12-seg (match bell)
+      const linerGeo = new THREE.CylinderGeometry(M * 0.03 * LINER_INSET, M * 0.06 * LINER_INSET, M * 0.15, 32, 1, true);  // was 12 → 16 → 32-seg (match bell, D3)
       const innerLiner = new THREE.Mesh(linerGeo, this._matFEEPInner.clone());
       innerLiner.name = `FEEPInner_${i}`;
       innerLiner.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
@@ -2103,7 +2106,7 @@ export class PlayerSatellite extends THREE.Group {
       // Parent thruster has rotation.x=π/2 mapping local +Y → world +Z, so
       // boss.position.y is the axis aligned with the nozzle, and boss cylinder
       // geometry (along local Y) auto-aligns with world Z (no extra rotation).
-      const bossGeo = new THREE.CylinderGeometry(M * 0.07, M * 0.07, M * 0.03, 8);
+      const bossGeo = new THREE.CylinderGeometry(M * 0.07, M * 0.07, M * 0.03, 24);   // was 8-seg (w1-ship-polish D2)
       const bossMat = new THREE.MeshStandardMaterial({
         color: 0x444455, metalness: 0.7, roughness: 0.3,
       });
@@ -2129,7 +2132,10 @@ export class PlayerSatellite extends THREE.Group {
       // 16-gon flats 0.05324; the 8 rim vertices share azimuths with the liner's
       // 16 vertices, where the wall stands at 0.05428, so the rim never pierces
       // the liner). Name, depth, wireframe look and renderOrder unchanged.
-      const gridDiscGeo = new THREE.CircleGeometry(M * 0.054, 8);
+      // w1-ship-polish D3: 8 → 32 segments to match the 32-gon bell/liner. The
+      // rim vertices still share azimuths with the liner's (any n dividing 32), so
+      // the rim stays inside the liner wall (circumradius 0.054 vs 0.05428 there).
+      const gridDiscGeo = new THREE.CircleGeometry(M * 0.054, 32);
       const gridDiscMat = new THREE.MeshBasicMaterial({
         color: 0x667788, wireframe: true, transparent: true, opacity: 0.5,
         side: THREE.DoubleSide,
@@ -4381,7 +4387,7 @@ export class PlayerSatellite extends THREE.Group {
     // Ring slot (RING_AZ.eo); shortened to 0.22M so it stays aft of the berth
     // collar ring (z 1.30). Barrel axis +Z (fore).
     const eoXY = ringXY(RING_AZ.eo);
-    const camGeo = new THREE.CylinderGeometry(M * 0.10, M * 0.10, M * 0.22, 12);
+    const camGeo = new THREE.CylinderGeometry(M * 0.10, M * 0.10, M * 0.22, 24);   // was 12-seg (w1-ship-polish D2)
     const camLensMat = new THREE.MeshStandardMaterial({
       color: 0x111122, metalness: 0.7, roughness: 0.3,   // now the lens disc material
     });
@@ -4453,7 +4459,7 @@ export class PlayerSatellite extends THREE.Group {
 
     // IR aperture window — one dark facet so the foil box reads as an instrument
     // (same recipe as the LIDAR lens). 1 mm proud of the +Z face (local z=0.1M).
-    const irWinGeo = new THREE.CircleGeometry(M * 0.05, 12);
+    const irWinGeo = new THREE.CircleGeometry(M * 0.05, 24);   // was 12-seg (w1-ship-polish D2)
     const irWinMat = new THREE.MeshStandardMaterial({
       color: 0x0a0a12, metalness: 0.4, roughness: 0.15,   // matches LIDAR_Lens
     });
@@ -4753,7 +4759,7 @@ export class PlayerSatellite extends THREE.Group {
     const LAUNCH_HALF = LAUNCH_LEN * 0.5;              // 0.12M
     const muzzleZ = M * 1.30;                          // the collar/muzzle plane
     const launchCz = muzzleZ - LAUNCH_HALF;            // 1.18M
-    const housingGeo = new THREE.CylinderGeometry(M * 0.12, M * 0.12, LAUNCH_LEN, 12);
+    const housingGeo = new THREE.CylinderGeometry(M * 0.12, M * 0.12, LAUNCH_LEN, 32);   // was 12-seg (w1-ship-polish D2; hole = cap = 32, D3)
 
     // Per pod: one housing, and a 2-cell magazine window on its front face,
     // the cells stacked in ship Y. On the housing (rotation.x = π/2) the local
@@ -4800,7 +4806,7 @@ export class PlayerSatellite extends THREE.Group {
       for (let cell = 0; cell < 2; cell++) {
         const lz = cell === 0 ? CELL_DZ : -CELL_DZ;
 
-        const holeGeo = new THREE.CircleGeometry(M * 0.030, 12);
+        const holeGeo = new THREE.CircleGeometry(M * 0.030, 32);   // was 12-seg; matches the cap (D3)
         const hole = new THREE.Mesh(holeGeo, cellHoleMat);
         hole.position.set(0, faceLocalY + M * 0.001, lz);    // 1 mm proud of the front face
         hole.rotation.x = -Math.PI / 2;
@@ -4808,7 +4814,7 @@ export class PlayerSatellite extends THREE.Group {
         hole.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
         housing.add(hole);
 
-        const capGeo = new THREE.CircleGeometry(M * 0.028, 12);
+        const capGeo = new THREE.CircleGeometry(M * 0.028, 32);   // was 12-seg; matches the hole (D3)
         const cap = new THREE.Mesh(capGeo, cellCapMat);
         cap.position.set(0, faceLocalY + M * 0.0015, lz);    // distinct offset — no coplanar tie
         cap.rotation.x = -Math.PI / 2;
@@ -5010,7 +5016,7 @@ export class PlayerSatellite extends THREE.Group {
     // skins at z 1.26: 18 mm off the strut axis along the outward normal, so
     // the r 0.012 sphere is buried 8 mm in the r 0.014 strut (0.014 + 0.012 −
     // 0.018) and stands 16 mm proud → (±0.2170, 0, 1.2677).
-    const lampGeo = new THREE.SphereGeometry(0.012 * M, 8, 6);
+    const lampGeo = new THREE.SphereGeometry(0.012 * M, 16, 12);   // was 8×6 (w1-ship-polish D2)
     const lampAt = (sign) => {
       const t = (1.26 - footZ) / (headZ - footZ);
       const axisR = footR + t * (headR - footR);                 // strut axis radial at z 1.26 (0.2008)
@@ -5121,7 +5127,7 @@ export class PlayerSatellite extends THREE.Group {
   _buildNavLights() {
     // Sizes read from Constants.LIGHT_FX (Batch 1 light-shrink; the SSOT block).
     const LFX = Constants.LIGHT_FX;
-    const navGeo = new THREE.SphereGeometry(M * LFX.NAV_CORE_R, 8, 6);  // was 4×4 faceted lump
+    const navGeo = new THREE.SphereGeometry(M * LFX.NAV_CORE_R, 16, 12);  // was 4×4 → 8×6 → 16×12 (w1-ship-polish D2)
     const HALO = M * LFX.NAV_HALO;  // steady nav halo sprite size
 
     // Site (Mother audit T6, B1): the old (±0.42, 0, 0.30) sat on the ±X
@@ -5212,7 +5218,7 @@ export class PlayerSatellite extends THREE.Group {
       const boresight = zFwd.clone().multiplyScalar(Math.cos(30 * deg))
         .addScaledVector(radial, Math.sin(30 * deg)).normalize();
       const base = radial.clone().multiplyScalar(barrelR).setZ(barrelHZ * 0.90);
-      const tubeGeo = new THREE.CylinderGeometry(stR, stR, stLen, 12, 1, true);   // open baffle
+      const tubeGeo = new THREE.CylinderGeometry(stR, stR, stLen, 24, 1, true);   // open baffle; tube = back cap = optic = 24 (was 12, w1-ship-polish D2/D3)
       const tube = new THREE.Mesh(tubeGeo, stGunmetal);
       tube.quaternion.setFromUnitVectors(yUp, boresight);   // tube axis (+Y) → boresight
       tube.position.copy(base).addScaledVector(boresight, stLen * 0.5);
@@ -5223,7 +5229,7 @@ export class PlayerSatellite extends THREE.Group {
       // every angle (the mount wedge passes through it, as it always passed
       // through the old closed cylinder's built-in cap). Rim = the tube's
       // base rim; DoubleSide shows it from the mouth.
-      const backCap = new THREE.Mesh(new THREE.CircleGeometry(stR, 12), stGunmetal);
+      const backCap = new THREE.Mesh(new THREE.CircleGeometry(stR, 24), stGunmetal);
       backCap.position.set(0, -stLen * 0.5, 0);
       backCap.rotation.x = Math.PI / 2;   // circle plane → tube-local XZ (base end)
       backCap.name = `StarTracker_${i}_BackCap`;
@@ -5234,7 +5240,7 @@ export class PlayerSatellite extends THREE.Group {
       // from its OWN tube (measured 1.0 mm; every other mesh ≥ 20 mm). It
       // FACES the mouth — the old rotation.x = +π/2 turned it to the base,
       // and the closed mouth cap hid it besides.
-      const optic = new THREE.Mesh(new THREE.CircleGeometry(stR * 0.98, 12), darkOptic);
+      const optic = new THREE.Mesh(new THREE.CircleGeometry(stR * 0.98, 24), darkOptic);
       optic.position.set(0, stLen * 0.5 - M * 0.01, 0);
       optic.rotation.x = -Math.PI / 2;   // circle +Z → tube-local +Y (mouth)
       optic.name = `StarTracker_${i}_Optic`;
@@ -5332,7 +5338,7 @@ export class PlayerSatellite extends THREE.Group {
     // deck buried); two on barrel fore-shoulder wedges.
     const ssR = M * 0.025, ssT = M * 0.015;
     const makeSunSensor = (idx, pos, axis) => {
-      const puck = new THREE.Mesh(new THREE.CylinderGeometry(ssR, ssR, ssT, 12), gunmetal);
+      const puck = new THREE.Mesh(new THREE.CylinderGeometry(ssR, ssR, ssT, 24), gunmetal);
       puck.quaternion.setFromUnitVectors(yUp, axis);
       puck.position.copy(pos);
       puck.name = `SunSensor_${idx}`;
@@ -5342,7 +5348,7 @@ export class PlayerSatellite extends THREE.Group {
       // 50 mm puck read as a bolt head at 2.6 m). All four pucks share the
       // recipe; the ray origin the clearance meter uses is the window CENTRE,
       // so the register does not move with the radius.
-      const win = new THREE.Mesh(new THREE.CircleGeometry(ssR * 0.7, 10), darkOptic);
+      const win = new THREE.Mesh(new THREE.CircleGeometry(ssR * 0.7, 24), darkOptic);
       win.position.set(0, ssT * 0.5 + M * 0.001, 0);
       win.rotation.x = Math.PI / 2;
       win.name = `SunSensor_${idx}_Window`;

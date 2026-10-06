@@ -1345,7 +1345,7 @@ export class NavSphere {
    */
   _drawTetherRings(ctx, cx, cy, R, armManager) {
     // Tether ranges in km
-    const lassoKm = Constants.LASSO_RANGE / 1000;             // 0.2 km
+    const lassoKm = Constants.LASSO_RANGE / 1000;             // 0.09 km (= NET_LOCK_RANGE_M)
     const spinnerKm = Constants.SPINNER_TETHER_LENGTH / 1000;  // 0.5 km
     const weaverKm = Constants.WEAVER_TETHER_LENGTH / 1000;    // 2.0 km
 
@@ -1467,7 +1467,7 @@ export class NavSphere {
     }
 
     // Fallback to distance-based coloring (existing behavior)
-    const lassoKm = Constants.LASSO_RANGE / 1000;             // 0.2 km
+    const lassoKm = Constants.LASSO_RANGE / 1000;             // 0.09 km (= NET_LOCK_RANGE_M)
     const spinnerKm = Constants.SPINNER_TETHER_LENGTH / 1000;  // 0.5 km
     const weaverKm = Constants.WEAVER_TETHER_LENGTH / 1000;    // 2.0 km
 

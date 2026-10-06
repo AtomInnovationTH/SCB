@@ -241,41 +241,87 @@ export class InputManager {
   }
 
   // ========================================================================
-  // PR 6 / P3.13: Audio unlock self-test
+  // Audio unlock — retried on EVERY gesture until the context runs
+  // (owner 2026-09-30: "game should always have sound"; w1-first-minute D1)
   // ========================================================================
 
   /**
-   * On first user gesture (keydown or pointerdown), resume AudioContext and
-   * schedule a 200 ms self-test. If still suspended after 200 ms, emit
-   * AUDIO_UNLOCK_FAILED so the HUD can display a user-facing toast.
+   * Gestures that ONLY retry the audio unlock. On touch, pointerdown is not a
+   * user-activation event — activation comes from pointerup / touchend /
+   * click / keydown — so the first try on an iPad usually fails and the
+   * START click used to be the only thing that brought sound back. These
+   * listeners never skip the opening dance (that stays on pointerdown).
+   */
+  static AUDIO_GESTURE_EVENTS = Object.freeze(['pointerup', 'touchend', 'click']);
+
+  /**
+   * Resume the AudioContext on a user gesture (keydown, pointerdown, pointerup,
+   * touchend, click), retrying on every gesture until `ctx.state` is
+   * 'running'. Then `_firstGestureHandled` latches — it is the short-circuit
+   * several test files set to skip this path — and the audio-only listeners
+   * come off. No user-facing message: the old AUDIO_UNLOCK_FAILED toast
+   * reported a failure that the next tap fixes. One console.warn at most.
    * @private
    */
   _tryAudioUnlock() {
     if (this._firstGestureHandled) return;
-    this._firstGestureHandled = true;
+    if (!this._deps) return;          // not wired yet — the next gesture tries again
 
-    const audio = this._deps?.audioSystem;
-    if (!audio) return;
+    const audio = this._deps.audioSystem;
+    if (!audio) { this._finishAudioUnlock(); return; }   // nothing to unlock
 
-    // Ensure AudioContext is initialized + resumed
     if (typeof audio.init === 'function') audio.init();
-    if (typeof audio.resume === 'function') audio.resume();
-
-    // Schedule a 200 ms verification
     const ctx = audio.ctx;
-    if (ctx) {
-      this._audioUnlockTimerId = timerManager.setTimeout(() => {
-        this._audioUnlockTimerId = null;
-        if (ctx.state === 'suspended') {
-          console.warn('[Audio] AudioContext still suspended 200ms after user gesture');
-          eventBus.emit(Events.AUDIO_UNLOCK_FAILED);
-        }
-      }, 200, { owner: this });
+    // No context (?noAudio=1, no Web Audio) or a closed one: nothing to unlock.
+    if (!ctx || ctx.state === 'closed' || ctx.state === 'running') {
+      this._finishAudioUnlock();
+      return;
+    }
+
+    if (typeof audio.resume === 'function') audio.resume();
+    if (ctx.state === 'running') { this._finishAudioUnlock(); return; }
+
+    // A browser settles resume() asynchronously: look again shortly so the
+    // audio-only listeners come off even if no further gesture arrives.
+    if (this._audioUnlockTimerId !== null) timerManager.clear(this._audioUnlockTimerId);
+    this._audioUnlockTimerId = timerManager.setTimeout(() => {
+      this._audioUnlockTimerId = null;
+      if (this._firstGestureHandled) return;
+      if (ctx.state === 'running') { this._finishAudioUnlock(); return; }
+      if (!this._audioUnlockWarned) {
+        this._audioUnlockWarned = true;
+        console.warn('[Audio] AudioContext still suspended after a gesture. Retrying on the next one');
+      }
+    }, 200, { owner: this });
+  }
+
+  /**
+   * The context runs (or there is none to unlock): latch the short-circuit,
+   * drop the pending check and the audio-only listeners.
+   * @private
+   */
+  _finishAudioUnlock() {
+    this._firstGestureHandled = true;
+    if (this._audioUnlockTimerId !== null) {
+      timerManager.clear(this._audioUnlockTimerId);
+      this._audioUnlockTimerId = null;
+    }
+    this._removeAudioGestureListeners();
+  }
+
+  /** @private Detach the pointerup / touchend / click unlock listeners. */
+  _removeAudioGestureListeners() {
+    if (!this._audioGestureListening) return;
+    this._audioGestureListening = false;
+    if (typeof window === 'undefined') return;
+    for (const type of InputManager.AUDIO_GESTURE_EVENTS) {
+      window.removeEventListener(type, this._onAudioGesture, true);
     }
   }
 
   /**
-   * Pointerdown handler — triggers audio unlock on first click/tap.
+   * Pointerdown handler — retries the audio unlock (every gesture until the
+   * context runs) and fast-forwards the opening dance.
    * @param {PointerEvent} _e
    * @private
    */
@@ -298,6 +344,15 @@ export class InputManager {
     // handleArmPilotWheel(e), which the router calls first (highest priority) —
     // verbatim behavior, no separate listener here anymore.
     window.addEventListener('pointerdown', this._onPointerDown);
+    // Audio-only unlock retries (D1). Capture phase, so a stopPropagation()
+    // elsewhere cannot swallow the activating gesture.
+    if (!this._firstGestureHandled && !this._audioGestureListening) {
+      if (!this._onAudioGesture) this._onAudioGesture = () => this._tryAudioUnlock();
+      for (const type of InputManager.AUDIO_GESTURE_EVENTS) {
+        window.addEventListener(type, this._onAudioGesture, { capture: true, passive: true });
+      }
+      this._audioGestureListening = true;
+    }
   }
 
   /** Stop listening */
@@ -305,6 +360,7 @@ export class InputManager {
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('keyup', this._onKeyUp);
     window.removeEventListener('pointerdown', this._onPointerDown);
+    this._removeAudioGestureListeners();
     // PR 6 / P3.13: Clear pending audio unlock timer on teardown
     if (this._audioUnlockTimerId !== null) {
       timerManager.clear(this._audioUnlockTimerId);
@@ -399,7 +455,7 @@ export class InputManager {
    * @param {KeyboardEvent} e
    */
   _handleKeyDown(e) {
-    // PR 6 / P3.13: Audio unlock on first keydown gesture
+    // Audio unlock: retried on every gesture until the context runs (w1-first-minute D1)
     this._tryAudioUnlock();
 
     // UX-11 #10: never treat typing in a text field (e.g. the Codex search
@@ -811,7 +867,8 @@ export class InputManager {
 
       // M key — "Map" (hotkey revamp 2026-06-14): toggle the Debris Map. The
       // old MPD-armed / Orbit-MFD role on M lost its key in the revamp (not in
-      // the help menu). ` (backtick) remains an undocumented Debris-Map alias.
+      // the help menu). ` (backtick) is the other Debris-Map key (help: "M / `";
+      // in station-keep it cycles the daughter's tool instead).
       case 'KeyM':
         if (isGameplay && d.debrisMap && !e.repeat) {
           d.debrisMap.toggle();
@@ -2796,7 +2853,7 @@ export class InputManager {
     // In-range gate: live distance from the player to the active target.
     let inCaptureRange = false;
     if (hasTarget) {
-      const rangeM = Number.isFinite(Constants.LASSO_RANGE) ? Constants.LASSO_RANGE : 200;
+      const rangeM = Number.isFinite(Constants.LASSO_RANGE) ? Constants.LASSO_RANGE : Constants.NET_LOCK_RANGE_M;
       const distM = this._activeTargetDistanceM(activeTarget);
       inCaptureRange = Number.isFinite(distM) && distM <= rangeM;
     }

@@ -28,14 +28,16 @@ import { Constants } from '../core/Constants.js';
  *     `poll(hold)` once per gameplay update returns the armed mission exactly
  *     once when it may start, else null. `hold` is the caller's composed
  *     condition: GameFlowManager.isDepotStopPending() (the forced stop's dwell
- *     timer is live — chapters 1..FORCED_DEPOT_CHAPTERS with the ladder on,
- *     every chapter with ?ladder=0) plus any consumer-local reason (the coach's
+ *     timer or the workbench break is live — every chapter with ?ladder=0;
+ *     with the ladder on only when MISSIONS.FORCED_DEPOT_STOP is turned back
+ *     on, since after every mission the depot is an invitation — owner
+ *     2026-10-05, DECISIONS §14) plus any consumer-local reason (the coach's
  *     "never overlap chapters"). A boss therefore never starts under the depot
  *     overlay: with a stop pending it holds through the card dwell and the SHOP
  *     and fires on the first gameplay frame after the SHOP closes (DEPLOY or the
  *     Esc exit — both resume gameplay; the SHOP itself never ticks these
- *     systems). With no stop pending (a chapter-4+ invitation, or a clear that
- *     carried no depot decision) it fires at once.
+ *     systems). With no stop pending (an invitation — every ladder-on mission
+ *     boundary — or a clear that carried no depot decision) it fires at once.
  *   • It never fires in the update cycle that armed it. DebrisField's own
  *     MISSION_START handler re-seats the mission-N welcome cluster on ITS next
  *     update, and the threat spawner skips `welcomeSpawn` pieces — so the

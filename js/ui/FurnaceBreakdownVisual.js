@@ -20,21 +20,21 @@
  * Lifecycle (events emitted by ArmUnit._updateHoldingCatch or the collar tick):
  *   CATCH_BREAKDOWN_START { armId, debrisId, chunkCount, [anchor] }
  *     → spawn `chunkCount` small irregular chunk meshes at the strut-tip catch
- *       (or the collar seat) with a brief outward "chop" jitter + tumble, plus a
- *       short-lived "ghost bag" ON THE DAUGHTER RACK ONLY (the net stays
- *       visibly cinched after CaptureNetVisual has already stowed the real bag
- *       on the daughter path — see plan §risks ghost-bag note). At the collar
- *       the REAL bag stays welded, deflates with the chop (small-catch plan
- *       W3) and freeze-fades at chop end, so the collar spawns chunks only
- *       (2026-08-27 small-catch D2 completion — the ghost sphere was the
- *       owner's residual "geometric ball", see _onBreakdownStart).
+ *       (or the collar seat) with a brief outward "chop" jitter + tumble.
+ *       NO ghost bag at either station: the REAL bag (CaptureNetVisual) stays
+ *       on the catch through the chop, deflates with it (small-catch plan W3)
+ *       and fades at chop end — at the collar since 2026-08-27 (small-catch D2
+ *       completion), on the daughter rack since W1 net-reach D2 (2026-10-06,
+ *       the carried bag). The 1.4 m wireframe ghost sphere was the owner's
+ *       "geometric ball" at both; see _onBreakdownStart.
  *   CATCH_BREAKDOWN_CHUNK { armId, debrisId, index, total, [anchor] }
  *     → launch that chunk on a curve from the station toward the mother's
  *       furnace port (bus center), shrinking + warm glow, then dispose.
  *   NET_CONSUMED { armIndex } / { podIndex } (collar)
- *     → draw the ghost bag toward the mother (shrink + fade), then dispose.
+ *     → draw a station ghost bag toward the mother — a no-op since no station
+ *       spawns one any more (the `_bags` consumers are kept tolerant).
  *   CATCH_BREAKDOWN_CANCEL { armId | anchor } (S13(c), mid-cook [K])
- *     → dispose the station's ghost bag + unflown pool with no draw-in.
+ *     → dispose the station's unflown pool with no draw-in.
  *   GAME_RESET / GAMEOVER_CONTINUE (register item 79)
  *     → the cancel disposal swept per live station: every mission-reset path
  *       drops the rack mid-cook, so no completion event ever arrives for it.
@@ -55,7 +55,6 @@ const M = 1e-5;
 // Warm furnace palette.
 const COL_CHUNK_COLD = 0x8a7f72;   // freshly chopped (cool metal)
 const COL_CHUNK_HOT  = 0xff7a1a;   // heated as it nears the furnace
-const COL_BAG        = 0x9fb4c8;   // ghost net bag
 
 const _v3a = new THREE.Vector3();
 const _v3b = new THREE.Vector3();
@@ -84,7 +83,10 @@ export class FurnaceBreakdownVisual {
 
     /** Active chunk animations: { mesh, t, dur, start:Vector3, ctrl:Vector3, end:Vector3, spin:Vector3, baseScale } */
     this._chunks = [];
-    /** Active ghost bags keyed by station (arm index | 'collar'): Map<number|string, { group, t, dur, holding, startScale, worldOf }> */
+    /** Ghost bags keyed by station (arm index | 'collar'): Map<number|string, { group, t, dur, holding, startScale, worldOf }>.
+     *  EMPTY since W1 net-reach D2 — no station spawns one (the real bag owns the read at both).
+     *  The consume / cancel / reset / update consumers stay `if (bag)`-tolerant, so their
+     *  station-keyed paths are unchanged. */
     this._bags = new Map();
     /** Pending chunk-spawn pools keyed by station (arm index | 'collar'): prebuilt chunk meshes awaiting their CHUNK event. */
     this._pools = new Map();
@@ -236,19 +238,6 @@ export class FurnaceBreakdownVisual {
     return mesh;
   }
 
-  _makeGhostBag() {
-    const r = 1.4 * M;
-    const geo = new THREE.SphereGeometry(r, 8, 6);
-    const mat = new THREE.MeshBasicMaterial({
-      color: COL_BAG, wireframe: true, transparent: true, opacity: 0.5,
-    });
-    const group = new THREE.Group();
-    const mesh = new THREE.Mesh(geo, mat);
-    group.add(mesh);
-    group.renderOrder = Constants.RENDER_ORDER ? Constants.RENDER_ORDER.TRANSPARENT : 3;
-    return group;
-  }
-
   _disposeMesh(obj) {
     if (!obj) return;
     if (this._scene) this._scene.remove(obj);
@@ -287,31 +276,19 @@ export class FurnaceBreakdownVisual {
     }
     this._pools.set(anchor.key, pool);
 
-    // Ghost bag holds at the station until NET_CONSUMED draws it in —
-    // DAUGHTER RACK ONLY (small-catch D2 completion, 2026-08-27). The bag
-    // exists because the rack's REAL bag is already stowed when the chop
-    // starts (it faded at NET_REEL_COMPLETED — the module header's ghost-bag
-    // note), so without it the rack chop would run over a bare piece. At the
-    // COLLAR that premise is false: the real welded bag stays drawn through
-    // the chop (deflating with the body — plan W3) and hands off to the
-    // freeze-fade at chop end, so the ghost sphere under it (a) crossed the
-    // deflating fabric as a gray wireframe mid-chop and (b) stood alone at
-    // the nose from the real bag's fade to the NET_CONSUMED draw-in — the
-    // owner's residual "geometric ball" (D2). Measured before the fix
-    // (tmp/wave4-ballprobe-before.log): at digT 5.85 the caught instance is
-    // chopped to 0.002 m (the pin applies chopScaleMul AFTER the readability
-    // floor, DebrisField.js:2201-2207 — "with the body" holds) while this
-    // 1.4 m wireframe sphere pulsed at the seat (distToSeat 0) as the only
-    // thing standing. Chunks still arc from the seat (the feed payoff);
-    // _onNetConsumed / _cancelStation / _onMissionReset already tolerate a
-    // missing bag (`if (bag)`), so every downstream path is a clean no-op on
-    // this key. Daughter behaviour is byte-identical.
-    if (anchor.key !== 'collar') {
-      const bag = this._makeGhostBag();
-      bag.position.copy(tip);
-      this._scene.add(bag);
-      this._bags.set(anchor.key, { group: bag, t: 0, dur: 0.6, holding: true, startScale: 1, worldOf: anchor.worldOf });
-    }
+    // NO ghost bag at any station (W1 net-reach D2, 2026-10-06). The ghost
+    // existed because the daughter rack's REAL bag used to be stowed — faded at
+    // NET_REEL_COMPLETED — when the chop started, so without it the chop ran
+    // over a bare piece. That premise is now false at BOTH stations: the real
+    // bag (CaptureNetVisual) stays on the catch through the chop, deflates with
+    // the body off the same FT.chopScaleMul ramp, and fades at chop end — at
+    // the collar since 2026-08-27 (small-catch D2 completion, which measured
+    // the sphere as the owner's residual "geometric ball": a 1.4 m gray
+    // wireframe pulsing at the seat while the catch chopped to 0.002 m,
+    // tmp/wave4-ballprobe-before.log) and on the rack since the W1 carried bag.
+    // Kept, the ghost crossed the deflating fabric mid-chop and then stood alone
+    // at the station until NET_CONSUMED. Chunks still arc from the seat (the
+    // feed payoff); every `_bags` consumer already tolerates a missing bag.
   }
 
   /** @private */

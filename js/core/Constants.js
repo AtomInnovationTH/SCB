@@ -3,6 +3,13 @@
  * @module core/Constants
  */
 
+// W1 net-reach — ONE "close enough to net" number. NET_LOCK_RANGE_M (reticle
+// "in range", autolock, the OUT OF RANGE state) and LASSO_RANGE (the lasso's
+// fire gate) are both this value, so the reticle can never say "in range" for a
+// cast that is refused, nor the reverse. Hoisted above the literal because
+// LASSO_RANGE appears before NET_LOCK_RANGE_M in it.
+const NET_REACH_M = 90;
+
 export const Constants = {
   // === VERSION ===
   // Single source of truth for the displayed app version. VERSION is the raw
@@ -3143,10 +3150,12 @@ export const Constants = {
   ARM_LAUNCH_DURATION: 0.5,            // seconds of launch animation
 
   // --- Lasso System ---
-  LASSO_RANGE: 200,                    // meters
+  LASSO_RANGE: NET_REACH_M,            // meters — === NET_LOCK_RANGE_M (W1 net-reach D1: the gate is the in-range ring the player sees; was 200)
   LASSO_SPEED: 10,                     // m/s launch velocity — 10 m/s (50% slower) for deliberate space-sim cast feel
                                        // accounts for TIME_SCALE_GAMEPLAY×10 so apparent speed is 100 m/s game-time
-  LASSO_MAX_FLIGHT_TIME: 8,            // seconds real-time before auto-retract
+  LASSO_MAX_FLIGHT_TIME: 8,            // seconds real-time before auto-retract. MEASURED (c64c911, static target): the head flies
+                                       // LASSO_SPEED × TIME_SCALE_GAMEPLAY = 100 m/s per REAL second, so 8 s ≈ 808 m of physical reach —
+                                       // far past the 90 m LASSO_RANGE gate. test-NetReachTruth.js pins reach ≥ 1.1 × NET_LOCK_RANGE_M.
   LASSO_TRAIL_SAMPLE_INTERVAL: 0.03,   // seconds between trail position samples (halved from 0.06 for denser trail)
   LASSO_REEL_SPEED: 0.33,             // reel-in progress per real second (0→1; ~3 s total) — SLOWER than outbound to avoid tangles
   LASSO_MAX_CAPTURE_MASS: 10,          // kg
@@ -3217,9 +3226,10 @@ export const Constants = {
   // in-range test, (b) the in-range-only lock earcon, (c) the OUT OF RANGE
   // reticle state, and (d) TARGET_IN_RANGE/OUT_OF_RANGE events. Reconciles the
   // old split between CaptureNet.BASELINE_RANGE_MAX (75 m) and LASSO_RANGE
-  // (200 m projectile flight). ~90 m sits comfortably inside the lasso's
-  // effective reach while reading as "right on top of it" for a new player.
-  NET_LOCK_RANGE_M: 90,
+  // (was a 200 m fire gate; W1 net-reach D1 made LASSO_RANGE this same number).
+  // 90 m sits well inside the lasso's measured physical reach (~808 m, see
+  // LASSO_MAX_FLIGHT_TIME) while reading as "right on top of it" for a new player.
+  NET_LOCK_RANGE_M: NET_REACH_M,
 
   // --- Front-arc autolock (reward-first onboarding) ---
   // The reticle auto-selects the nearest forward, in-range debris so a new
@@ -4556,7 +4566,7 @@ export const Constants = {
 
   AUTOPILOT: {
     // --- Tool-aware trailing distance (metres behind debris along V_d) ---
-    D_TRAIL_LASSO:   120,  // m — lasso within 200 m projectile range
+    D_TRAIL_LASSO:   70,   // m — park INSIDE the 90 m lasso/net range (LASSO_RANGE === NET_LOCK_RANGE_M); 70 + POS_TOL 15 < 90. Was 120 (inside the old 200 m gate, outside the new one)
     D_TRAIL_ARMS:    35,   // m — spinner/weaver arm reach (~50 m)
     D_TRAIL_TRAWL:   150,  // m — trawl sweep trailing centroid
     D_TRAIL_DEFAULT: 80,   // m — fallback when no tool recommendation
@@ -4576,11 +4586,11 @@ export const Constants = {
     // tether length / projectile range automatically propagates:
     //   weaver  → WEAVER_TETHER_LENGTH  (2000 m tether)
     //   spinner → SPINNER_TETHER_LENGTH (500 m tether)
-    //   lasso   → LASSO_RANGE           (200 m projectile range)
+    //   lasso   → LASSO_RANGE           (90 m = NET_LOCK_RANGE_M, the lasso fire gate)
     //   trawl   → D_TRAIL_TRAWL          (150 m sweep stand-off; ≥ trail so the
     //             rotate-only optimization can engage rather than overflying it)
     // Only the AP-owned policy values live here:
-    REACH_DEFAULT:   200,  // m — conservative fallback when no tool recommendation
+    REACH_DEFAULT:   200,  // m — conservative fallback when no tool recommendation. NOTE: nothing reads this today (the AutopilotSystem._getToolReach() named above does not exist — grep c64c911); the per-tool reach is the tool's own constant (lasso = LASSO_RANGE = 90 m)
 
     // Hysteresis band around the reach boundary. Once inside REACH the
     // autopilot enters rotate-only mode and will only resume translating if
@@ -4866,7 +4876,12 @@ export const Constants = {
     // D3; numbers in docs/ladder/01-numbers.md "Depot and chapters"). Both
     // gate on Constants.LADDER.ENABLED — a ?ladder=0 boot keeps the shipped
     // catch → comms → 2500 ms → SHOP path byte-identical.
-    FORCED_DEPOT_CHAPTERS: 3, // the end of chapters 1..N forces the depot stop (the card → SHOP); from chapter N+1 on the depot is an INVITATION
+    // Owner ruling 2026-10-05 (docs/DECISIONS.md §14): after EVERY mission the depot
+    // is an invitation — non-blocking, from chapter 1. false = no forced stop (the
+    // boundary always takes GameFlowManager._openDepotInvitation); true restores the
+    // old chapters-1..FORCED_DEPOT_CHAPTERS card → workbench stop. Ladder off ignores it.
+    FORCED_DEPOT_STOP: false,
+    FORCED_DEPOT_CHAPTERS: 3, // the GUIDED chapters 1..N (guidedCluster, per-catch progress line, boss hold rule); the end of each forces the depot stop ONLY when FORCED_DEPOT_STOP is true — otherwise every chapter's depot is an INVITATION
     COMPLETE_CARD_MS: 2500,   // "MISSION N COMPLETE" card → SHOP dwell (owner decision 1: a fixed dwell, the old silent timer's length); the card holds for this minus TEACHING.FADE_OUT_MS so it has faded when the depot opens
     // RESEAT (M1 guidance T6, owner decision 2026-09-09): the welcome-cluster
     // re-seat safety net in DebrisField._reseatDriftedWelcome — GUIDED chapters

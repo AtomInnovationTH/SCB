@@ -1902,11 +1902,13 @@ export class ArmManager {
             // visual until the bag deflation), the rack chop is already
             // staged honest — FurnaceBreakdownVisual's chunk stream IS the
             // read, synchronized on the same _digestPhaseT clock, and this
-            // ramp is its crossfade by design. A rack-side wrap stub/shroud
-            // would be fictionally wrong (the daughter's net stowed at
-            // NET_REEL_COMPLETED; the strut holds cargo bare) and would
-            // reopen gate-adjacent choreography on a path no owner report
-            // names. Revisit only on an owner complaint that names the rack.
+            // ramp is its crossfade by design. (W1 net-reach D2, 2026-10-06:
+            // the owner DID name the rack — "net vanishes at the daughter's
+            // re-dock" — so the premise "the net stowed at NET_REEL_COMPLETED;
+            // the strut holds cargo bare" no longer holds: CaptureNetVisual now
+            // CARRIES the real bag on the catch through this chop, deflating on
+            // the same FT.chopScaleMul ramp, and fades it at chop end. This
+            // ramp itself is unchanged.)
             let scaleMul = 1;
             if (d._breakdownActive) {
               // Phase boundaries from the single authoritative constant (same keys

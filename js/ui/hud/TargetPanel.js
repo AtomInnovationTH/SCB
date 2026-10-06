@@ -44,26 +44,54 @@ export const TARGET_PANE_CHROME_PX = 14;
  * Rows that fit each PaneChrome step (height = chrome + header + k rows).
  * Follow-up 2026-09-09 (plan 1788926404388-hud-followups-0909.md §1.18b):
  * `normal` 4 → 5 and the pane writes a FIXED `height` (not `maxHeight`), so the
- * box no longer breathes with the list — "nothing should move" (owner). Desktop
- * 138 / glass 258 at 'normal' (14 + 24 + 5 rows); a longer list scrolls
- * (overflowY auto); the 0 key's 'min' (58 / 82) is the player's remedy for an
- * empty sector.
+ * box no longer breathes with the list — "nothing should move" (owner). w1-hud-calm
+ * 2026-10-05 (owner notes 2026-09-30: show more tracked targets): desktop
+ * `normal` 5 → 7 and `max` 7 → 9 — desktop 178 / 218 at 'normal' / 'max'
+ * (14 + 24 + 7 / 9 rows of 20). A longer list scrolls (overflowY auto); the 0
+ * key's 'min' (58 / 82) is the player's remedy for an empty sector.
  */
-export const TARGET_STEP_ROWS = Object.freeze({ min: 1, normal: 5, max: 7 });
+export const TARGET_STEP_ROWS = Object.freeze({ min: 1, normal: 7, max: 9 });
+/**
+ * Desktop `normal` falls back to 5 rows (138) on a viewport shorter than
+ * TARGET_TALL_VIEWPORT_PX: at 1024×768 / 1366×768 the 7-row stack (Targets 178
+ * + Debris 202 + Next 110 + gaps = 510) overflows the 479 px column and scrolls
+ * the Next pane out of view (w1-hud-calm review, 2026-10-05). The two extra rows
+ * show wherever they fit; `max` stays 9 everywhere. Headless (no window) = 7.
+ */
+export const TARGET_TALL_VIEWPORT_PX = 800;
+export const TARGET_NORMAL_ROWS_SHORT = 5;
+/**
+ * Glass rows per step. `normal` stays 5 (258): the right column (Targets +
+ * Debris 202 + Next 110 + two 10 px gaps) already overflows 1024×768 landscape
+ * at 5 glass rows, and 7 × 44 would push it a further 88 px (measured, see the
+ * w1-hud-calm plan Log); `max` takes the 9 rows (434) — the player's remedy.
+ */
+export const TARGET_STEP_ROWS_GLASS = Object.freeze({ min: 1, normal: 5, max: 9 });
 
 /**
  * Target pane height for a chrome step: the pane's own chrome + the header +
  * k rows, so exactly k rows of CONTENT show under border-box. Glass recomputes
  * from the 44 px row so N rows still fit. Plan Task 13 / 14; a fixed `height`
- * since 2026-09-09. Desktop / glass: min 58 / 82, normal 138 / 258, max 178 / 346.
+ * since 2026-09-09. Desktop / glass: min 58 / 82, normal 178 / 258 (desktop 138
+ * under an 800 px viewport), max 218 / 434.
  * @param {string} step  'min' | 'normal' | 'max'
  * @param {boolean} [glass]
+ * @param {number} [viewportH]  window.innerHeight, read once per layout pass by
+ *   the caller; absent / non-finite = a tall viewport (desktop normal 7)
  * @returns {number}
  */
-export function targetHeightPx(step, glass) {
-  const k = TARGET_STEP_ROWS[step] || TARGET_STEP_ROWS.normal;
+export function targetHeightPx(step, glass, viewportH) {
+  const rows = glass ? TARGET_STEP_ROWS_GLASS : TARGET_STEP_ROWS;
+  const name = rows[step] ? step : 'normal';
+  const short = !glass && name === 'normal' && Number.isFinite(viewportH) && viewportH < TARGET_TALL_VIEWPORT_PX;
+  const k = short ? TARGET_NORMAL_ROWS_SHORT : rows[name];
   const row = glass ? TARGET_ROW_GLASS_PX : TARGET_ROW_PX;
   return TARGET_PANE_CHROME_PX + TARGET_HEADER_PX + k * row;
+}
+
+/** The live viewport height, or undefined headless (→ the tall-viewport rows). */
+function viewportHeight() {
+  return (typeof window !== 'undefined' && window && Number.isFinite(window.innerHeight)) ? window.innerHeight : undefined;
 }
 
 /**
@@ -378,7 +406,7 @@ export class TargetPanel {
     this.panels.targets = this._createPanel('hud-targets-panel', {
       position: 'relative',
       width: `${TARGETS_PANE_WIDTH_PX}px`,
-      height: `${targetHeightPx('normal', this._glass)}px`,
+      height: `${targetHeightPx('normal', this._glass, viewportHeight())}px`,
       overflowY: 'auto',
       outline: 'none',
     });
@@ -469,7 +497,7 @@ export class TargetPanel {
     const pane = this.panels && this.panels.targets;
     if (!pane || !pane.style) return;
     const name = step || (this._chrome && this._chrome.step) || 'normal';
-    const h = `${targetHeightPx(name, this._glass)}px`;
+    const h = `${targetHeightPx(name, this._glass, viewportHeight())}px`;   // one viewport read per pass
     if (pane.style.height !== h) pane.style.height = h;
   }
 
@@ -655,7 +683,7 @@ export class TargetPanel {
       }
       // 'tpi' mode: already sorted upstream
 
-      targets = targets.slice(0, 7);
+      targets = targets.slice(0, TARGET_STEP_ROWS.max);   // as many rows as the tallest step shows (9)
 
       if (targets.length === 0) {
         listEl.innerHTML = '<span style="opacity:0.4">No targets nearby</span>';

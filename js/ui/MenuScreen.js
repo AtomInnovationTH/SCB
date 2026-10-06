@@ -48,6 +48,8 @@ export class MenuScreen {
     this._update = null;
     this._updateDismissed = null;
     this._updateCard = null;
+    // w1-first-minute D3: what the "?" button opens (set by setHelpOpener).
+    this._helpOpener = null;
     this._build();
 
     // Self-manage visibility via EventBus (decoupled from GameFlowManager)
@@ -263,6 +265,32 @@ export class MenuScreen {
           font-family: 'Helvetica Neue', Arial, 'Hiragino Sans', 'Noto Sans',
                        'Noto Sans Thai', 'Noto Sans Devanagari', 'Noto Sans Tamil', sans-serif;
         }
+        /* Help "?" beside the language picker (w1-first-minute D3; owner
+         * 2026-09-30 "help button on menu"): opens the same key list as the ?
+         * key. 44 px hit area for touch. Hidden until main.js wires the opener.
+         * Out of flow (anchored to #menu-lang), so the picker and its list
+         * keep their exact base positions. */
+        #menu-help-btn {
+          position: absolute; top: 50%; right: calc(100% + 8px); transform: translateY(-50%);
+          min-width: 44px; min-height: 44px; box-sizing: border-box;
+          display: flex; align-items: center; justify-content: center;
+          background: rgba(4,12,30,0.62); color: rgba(0,255,136,0.92);
+          border: 1px solid rgba(0,255,136,0.4); border-radius: 6px;
+          padding: 0 12px; cursor: pointer; font: inherit; font-size: 1.1rem; font-weight: 700;
+          transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+          backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+        }
+        #menu-help-btn:hover {
+          border-color: #00ff88; background: rgba(0,255,136,0.12);
+          box-shadow: 0 0 14px rgba(0,255,136,0.25);
+        }
+        /* Narrower than ~1340 px there is no room beside the picker: the "?"
+         * would sit on the version label (V. …) that trails the title —
+         * measured 2026-10-06, it overlapped up to ~1284 px wide (52 px at
+         * 1180, iPad Air). Hang it under the picker instead. */
+        @media (max-width: 1339px) {
+          #menu-help-btn { top: calc(100% + 8px); right: 0; transform: none; }
+        }
         #menu-lang-btn {
           display: flex; align-items: center; gap: 8px;
           background: rgba(4,12,30,0.62); color: rgba(0,255,136,0.92);
@@ -367,6 +395,7 @@ export class MenuScreen {
 
         <!-- ══ LANGUAGE / REGION SELECTOR (top-right) ══ -->
         <div id="menu-lang">
+          <button id="menu-help-btn" type="button" aria-label="Help — keys and controls" title="Help — keys and controls" style="display:none">?</button>
           <button id="menu-lang-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
             <img class="menu-lang-flag" id="menu-lang-current-flag" alt="" />
             <span class="menu-lang-name" id="menu-lang-current-name">English</span>
@@ -609,6 +638,9 @@ export class MenuScreen {
     // Language / region selector
     this._buildLangSelector();
 
+    // Help "?" beside it (D3) — inert and hidden until setHelpOpener().
+    this._wireHelpButton();
+
     // Touch-friendly lore tooltips (replaces native title= which is invisible
     // on touch). Converts .adr-name[title] → data-tip and wires tap/hover.
     this._initLoreTooltips();
@@ -819,6 +851,32 @@ export class MenuScreen {
     this._langRoot.querySelector('#menu-lang-btn')?.setAttribute('aria-expanded', 'false');
     document.removeEventListener('click', this._langOutsideHandler, true);
     document.removeEventListener('keydown', this._langEscHandler, true);
+  }
+
+  /**
+   * Inject what the menu "?" button opens (main.js passes the HotkeyOverlay
+   * toggle — the same list the ? key opens). Reveals the button; until this is
+   * called the button stays hidden, so it is never a dead control.
+   * @param {(() => void)|null} fn
+   */
+  setHelpOpener(fn) {
+    this._helpOpener = (typeof fn === 'function') ? fn : null;
+    const btn = this.element && this.element.querySelector('#menu-help-btn');
+    if (btn) btn.style.display = this._helpOpener ? '' : 'none';
+  }
+
+  /** @private Wire the "?" button's click to the injected opener (D3). */
+  _wireHelpButton() {
+    const btn = this.element && this.element.querySelector('#menu-help-btn');
+    if (!btn) return;
+    btn.addEventListener('click', (e) => {
+      if (!this._helpOpener) return;
+      this._closeLangMenu();
+      audioSystem.playClick?.();
+      // Drop focus so a later Enter starts the mission instead of re-pressing "?".
+      if (e && e.currentTarget && typeof e.currentTarget.blur === 'function') e.currentTarget.blur();
+      this._helpOpener();
+    });
   }
 
   /** @private Handle keyboard when menu is visible */

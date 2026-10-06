@@ -293,8 +293,9 @@ export const Events = {
   SHOP_DEPLOY:        'shop:deploy',
   /**
    * Wave 5 Session E (docs/ladder/08-workbench.md §5 D3): the depot INVITATION.
-   * From chapter MISSIONS.FORCED_DEPOT_CHAPTERS+1 on, a mission-boundary catch
-   * no longer forces the depot stop — GameFlowManager (the ONE depot decision
+   * After every mission (owner 2026-10-05, DECISIONS §14 — from chapter 1; from
+   * chapter MISSIONS.FORCED_DEPOT_CHAPTERS+1 only if MISSIONS.FORCED_DEPOT_STOP
+   * is turned back on), a mission-boundary catch never forces the depot stop — GameFlowManager (the ONE depot decision
    * per catch) emits `{ open: true, chapter, debrisCleared, firstInvitation }`
    * and the rail's DEPOT notch glows (VisualLaw VALUE, steady) until the player
    * pushes into the doorway (`{ open: false, reason: 'entered' }` on any SHOP

@@ -1012,7 +1012,7 @@ export class ArmUnit {
     // grounded to the facet and never coplanar with it). ---
     const mrrR = (isWeaver ? 0.015 : 0.010) * M;
     const mrrH = mrrR * 0.4;                       // puck thickness
-    const mrrGeo = new THREE.CylinderGeometry(mrrR, mrrR, mrrH, 6);
+    const mrrGeo = new THREE.CylinderGeometry(mrrR, mrrR, mrrH, 16);   // was 6-seg (w1-ship-polish D2)
     const mrrMat = new THREE.MeshStandardMaterial({
       color: 0xccccdd, metalness: 0.95, roughness: 0.15,
     });
@@ -1025,7 +1025,7 @@ export class ArmUnit {
     this.mesh.add(mrr);
 
     // --- Status light (blinks to show state) ---
-    const lightGeo = new THREE.SphereGeometry(0.010 * M, 8, 6);  // was 0.015 (Batch 1 shrink)
+    const lightGeo = new THREE.SphereGeometry(0.010 * M, 16, 12);  // was 0.015 (Batch 1 shrink); 8×6 → 16×12 (w1-ship-polish D2)
     this._statusLightMat = new THREE.MeshBasicMaterial({ color: 0x00ff44 });
     const statusLight = new THREE.Mesh(lightGeo, this._statusLightMat);
     statusLight.position.set(0, by * 0.55 * M, -bz * 0.3 * M);
@@ -1044,7 +1044,7 @@ export class ArmUnit {
     const epmR = (isWeaver ? 0.025 : 0.020) * M;
     const epmH = (isWeaver ? 0.015 : 0.012) * M;
     const epmHousing = new THREE.Mesh(
-      new THREE.CylinderGeometry(epmR, epmR, epmH, 8),
+      new THREE.CylinderGeometry(epmR, epmR, epmH, 16),   // was 8-seg; housing = pole ring (D3)
       new THREE.MeshStandardMaterial({ color: 0x606068, metalness: 0.85, roughness: 0.40 })
     );
     epmHousing.position.y = -by * 0.52 * M;
@@ -1059,7 +1059,7 @@ export class ArmUnit {
       emissive: 0x000000, emissiveIntensity: 0.0, side: THREE.DoubleSide,
     });
     const epmPole = new THREE.Mesh(
-      new THREE.RingGeometry(poleIR, poleOR, 8, 1),
+      new THREE.RingGeometry(poleIR, poleOR, 16, 1),   // was 8-seg; matches the EPM housing (D3)
       this._epmPoleMat
     );
     epmPole.position.y = -by * 0.52 * M - epmH * 0.51;
@@ -1071,7 +1071,7 @@ export class ArmUnit {
     const pushR = (isWeaver ? 0.025 : 0.018) * M;
     const pushH = M * 0.003;
     const pusher = new THREE.Mesh(
-      new THREE.CylinderGeometry(pushR, pushR, pushH, 6),
+      new THREE.CylinderGeometry(pushR, pushR, pushH, 16),   // was 6-seg (w1-ship-polish D2)
       new THREE.MeshStandardMaterial({ color: 0x777788, metalness: 0.78, roughness: 0.32 })
     );
     // FIX_PLAN §2-followup: nudged forward to z=-bz*0.505 so pusher disc no
