@@ -259,19 +259,23 @@ export class MenuScreen {
           #menu-tip { font-size: 0.95rem; max-width: min(400px, 78vw); padding: 11px 14px; }
         }
         /* ── Language / region selector (top-right) ── */
+        /* right: 18 px edge + 44 px "?" + 8 px gap = 70 px, so the help button
+         * sits to the RIGHT of the picker (owner 2026-10-06) at the old 18 px
+         * screen margin. Narrow viewports restore 18 px (media query below). */
         #menu-lang {
-          position: absolute; top: 16px; right: 18px;
+          position: absolute; top: 16px; right: 70px;
           z-index: 6;
           font-family: 'Helvetica Neue', Arial, 'Hiragino Sans', 'Noto Sans',
                        'Noto Sans Thai', 'Noto Sans Devanagari', 'Noto Sans Tamil', sans-serif;
         }
-        /* Help "?" beside the language picker (w1-first-minute D3; owner
-         * 2026-09-30 "help button on menu"): opens the same key list as the ?
-         * key. 44 px hit area for touch. Hidden until main.js wires the opener.
-         * Out of flow (anchored to #menu-lang), so the picker and its list
-         * keep their exact base positions. */
+        /* Help "?" to the right of the language picker (w1-first-minute D3;
+         * owner 2026-09-30 "help button on menu", 2026-10-06 "right side of
+         * the language dropdown"): opens the same key list as the ? key. 44 px
+         * hit area for touch. Hidden until main.js wires the opener. Out of
+         * flow (anchored to #menu-lang), so the picker and its list keep their
+         * layout. */
         #menu-help-btn {
-          position: absolute; top: 50%; right: calc(100% + 8px); transform: translateY(-50%);
+          position: absolute; top: 50%; left: calc(100% + 8px); transform: translateY(-50%);
           min-width: 44px; min-height: 44px; box-sizing: border-box;
           display: flex; align-items: center; justify-content: center;
           background: rgba(4,12,30,0.62); color: rgba(0,255,136,0.92);
@@ -284,12 +288,14 @@ export class MenuScreen {
           border-color: #00ff88; background: rgba(0,255,136,0.12);
           box-shadow: 0 0 14px rgba(0,255,136,0.25);
         }
-        /* Narrower than ~1340 px there is no room beside the picker: the "?"
-         * would sit on the version label (V. …) that trails the title —
-         * measured 2026-10-06, it overlapped up to ~1284 px wide (52 px at
-         * 1180, iPad Air). Hang it under the picker instead. */
+        /* Narrower than ~1340 px there is no room for picker + "?" in one row:
+         * shifting the picker left would put it on the version label (V. …)
+         * that trails the title — measured 2026-10-06, a "?" beside the picker
+         * overlapped it up to ~1284 px wide (52 px at 1180, iPad Air). Keep the
+         * picker at the 18 px margin and hang the "?" under it instead. */
         @media (max-width: 1339px) {
-          #menu-help-btn { top: calc(100% + 8px); right: 0; transform: none; }
+          #menu-lang { right: 18px; }
+          #menu-help-btn { top: calc(100% + 8px); left: auto; right: 0; transform: none; }
         }
         #menu-lang-btn {
           display: flex; align-items: center; gap: 8px;
