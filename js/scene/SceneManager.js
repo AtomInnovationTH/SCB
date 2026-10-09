@@ -1201,6 +1201,41 @@ export class SceneManager {
     }
   }
 
+  /**
+   * Reallocate every composer render target WITHOUT touching the canvas or
+   * rebuilding any pass (BlackPatchHeal step "targets", core/BlackPatchHeal.js).
+   * `WebGLRenderTarget.setSize` disposes only when the size CHANGES, so a
+   * same-size `composer.setSize` reallocates nothing; sizing to (pw + 2, ph)
+   * and straight back to (pw, ph) makes three dispose and rebuild each target.
+   * Same SMAA / bloom / FXAA resolution updates as `resize()`, so the passes
+   * end exactly where a normal resize would leave them. Triggers no render:
+   * the next game-loop frame draws into the fresh targets.
+   */
+  reallocateRenderTargets() {
+    const pixelRatio = this.renderer.getPixelRatio();
+    const pw = Math.floor(window.innerWidth * pixelRatio);
+    const ph = Math.floor(window.innerHeight * pixelRatio);
+    this.composer.setSize(pw + 2, ph);
+    this.composer.setSize(pw, ph);
+    if (this.smaaPass) {
+      this.smaaPass.setSize(pw, ph);
+    }
+    if (this.bloomPass) {
+      const bw = Math.floor(pw / 4);
+      const bh = Math.floor(ph / 4);
+      this._bloomRes.set(bw, bh);
+      if (this.bloomPass.resolution && typeof this.bloomPass.resolution.set === 'function') {
+        this.bloomPass.resolution.set(bw, bh);
+      }
+      if (typeof this.bloomPass.setSize === 'function') {
+        this.bloomPass.setSize(bw, bh);
+      }
+    }
+    if (this.fxaaPass && this.fxaaPass.material?.uniforms?.['resolution']) {
+      this.fxaaPass.material.uniforms['resolution'].value.set(1 / pw, 1 / ph);
+    }
+  }
+
   /** @returns {THREE.Scene} */
   getScene() {
     return this.scene;

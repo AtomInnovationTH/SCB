@@ -12,6 +12,7 @@ import { Constants } from '../core/Constants.js';
 import { GameStates } from '../core/GameState.js';
 import timerManager from '../systems/TimerManager.js';
 import { StatusPanel } from './hud/StatusPanel.js';
+import { VitalsPane } from './hud/VitalsPane.js';
 import { TargetPanel } from './hud/TargetPanel.js';
 import { CommsPanel } from './hud/CommsPanel.js';
 import { HintTicker } from './hud/HintTicker.js';
@@ -383,6 +384,13 @@ export class HUD {
       memoSlot: !!(Constants.LADDER && Constants.LADDER.ENABLED),
       cargoPaneVisible: () => this.isRungVisible('cargo'),
     });
+    // W2 meters (DECISIONS §15 rows 5 + 8): heat, battery, gas and ion — the
+    // VITALS pane is the FIRST child of the left column, above MOTHER. FloorMask
+    // rooms it by attribute (gone on F1 / F5, shown on F2-F4); never a density rung.
+    this.vitalsPane = new VitalsPane({ parent: this.statusPanel.leftColumn });
+    // A HUD pane like the rest: hide() / show() (menu, shop, game over) carry it —
+    // the FloorMask's null restore re-shows mask panes, so the panels map must own it.
+    if (this.vitalsPane.root) this.panels.vitals = this.vitalsPane.root;
     // Ladder reorder rev 3 Task 6: DOM order inside the column is TargetPanel
     // → #hud-wireframe-container → NextPane (Next is parented by main.js as
     // the last child via hud.rightColumnEl).
@@ -2081,6 +2089,8 @@ export class HUD {
         plumeBlocks,
         angularRate,
       });
+      // W2 meters: the four vitals rows (self-throttled to 10 Hz, write-on-change).
+      if (this.vitalsPane) this.vitalsPane.update(player);
 
       // V5: STABILIZE warning when angular velocity too high for crossbow fire
       if (player.isCrossbowFireSafe && !player.isCrossbowFireSafe()) {

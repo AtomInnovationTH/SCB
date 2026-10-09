@@ -21,6 +21,7 @@ import { orbitToSceneCartesian, orbitToSceneCartesianInto, keplerianToCartesian,
 import { calmBreathe, finitePulse, prefersReducedMotion } from './hudPulse.js';
 import { classify } from './hud/TargetColorLaw.js';
 import { mono } from '../core/Typeface.js';
+import { isMarked } from '../systems/AutoLockController.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -578,14 +579,20 @@ export class TargetReticle {
       for (const target of this._debrisTargets) {
         if (target.id !== skTargetId) continue;
         if (!target.alive || target._captured || this._capturedIds.has(target.id)) continue;
+        if (!isMarked(target)) continue;   // scan-first: no mark until a scan reveals it
         this._drawDebrisReticle(target, playerPos);
       }
       this.ctx.restore();
       // Skip neighbouring debris + active sats entirely while station-keeping.
     } else {
       // --- Draw reticles for debris ---
+      // Scan-first (DECISIONS §15 row 1): an undiscovered piece gets no bracket
+      // and no off-screen arrow until a scan (S) reveals it. The list stays
+      // unfiltered — getDebrisNear's result is a frame-shared cache the scan
+      // reveal also reads, so it must never be compacted in place.
       for (const target of this._debrisTargets) {
         if (!target.alive || target._captured || this._capturedIds.has(target.id)) continue;
+        if (!isMarked(target)) continue;
         this._drawDebrisReticle(target, playerPos);
       }
 

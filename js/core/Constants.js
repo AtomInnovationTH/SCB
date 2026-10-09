@@ -317,6 +317,68 @@ export const Constants = {
                                    // OCTOPUS_V5.CORE_BATTERY, both 600; equality pinned in
                                    // test-shop-effects). Was a 100 Wh 'simplified' placeholder
                                    // while the battery recharged from a bugged 8,166 W rate.
+
+  // === SHIP HEAT (w2-heat, 2026-10-08) =======================================
+  // DECISIONS §15 rows 2/4/5/6 + §2 rows 5–7: the ship heats up from what the
+  // player does, warns at 60 / 85 °C, and opens its radiator itself a little
+  // late. ONE lump (js/systems/ThermalSystem.js):
+  //   C dT/dt = P_in − P_out
+  //   P_in  = every watt drawn from the battery (the ResourceSystem ledger —
+  //           every drawn watt ends as heat) + SUN_HULL_W in daylight (0 in shadow)
+  //   P_out = σ ε A_eff (T⁴ − SINK_K⁴),
+  //   A_eff = HULL_AREA_M2 + RAD_AREA_M2 × (G_CLOSED + (1 − G_CLOSED) × openFrac)
+  // The lump is NOT the whole 130 kg ship (≈ 117 kJ/K): it is the electronics
+  // bay and the heat-pipe saddle that feeds the radiator — the mass that warms
+  // first. The load table is taken AS GIVEN (base 500 W, ion 5 kW, autopilot up
+  // to 25 kW — far above §2a's "a few kilowatts"); its scale is a logged
+  // follow-up, not tuned here. Tuning targets T1–T6 (DECISIONS §15 row 6) are
+  // pinned in js/test/test-ShipHeat.js — see docs/ladder/01-numbers.md "Ship
+  // heat and scan cost".
+  SHIP_HEAT: {
+    // ── The clock (the battery's own — do NOT retune) ──
+    // ResourceSystem.update adds solarRate(W) × dt × 0.001 per REAL second and
+    // a battery unit is 1 Wh = 3,600 J, so a watt moves 3.6 J per real second:
+    // the battery integrates at 3.6× real time. Heat runs on the SAME clock, so
+    // a watt means the same thing on the battery meter and the heat meter.
+    UNIT_J: 3600,               // J per battery unit (1 Wh)
+    W_PER_UNIT_S: 1000,         // HUD watts per battery unit drawn per real second (÷ 0.001)
+
+    // ── The lump (each a physical reading; tuned to §15 row 6 by the probe) ──
+    // Measured (test-ShipHeat.js "D6 targets", rest 146° and 0° alike): idle
+    // daylight closed eq 35.1 °C (shadow 24.2); scripted M1 closed first warns
+    // at 152 s (peak 62.4); auto-open at 70 → < 55 °C in ~21 s; M1 opened at
+    // start peaks 36 °C; 3 wide scans held closed peak 93 °C.
+    HEAT_CAPACITY_J_PER_K: 16000, // ≈ 18 kg of aluminium (900 J/kg·K): avionics boxes + bay + saddle
+    EMISSIVITY: 0.85,           // white paint / OSR radiator faces (typical 0.8–0.9)
+    SINK_K: 220,                // tuned (est): Earth IR alone on a plate seeing ~⅓ Earth (237 W/m²)
+                                // gives ≈ 193 K; daylight albedo and the warm hull in view raise it
+    HULL_AREA_M2: 0.3,          // tuned (est): MLI hull leak as ε 0.85-equivalent area (~6 m² × ε* 0.03 / 0.85 + body cells' share)
+    RAD_AREA_M2: 8.12,          // 4 plates × 1.70 × 0.60 m (4.062 m², THERMAL.FLOWER) × 2 faces at full bloom
+    G_CLOSED: 0.20,             // folded flat (§15 row 4) each pack shows one 0.32 m face outward (~¼ of
+                                // the two-sided area), partly hidden by the barrel and wings → ~0.2
+    SUN_HULL_W: 120,            // tuned (est): daylight sun reaching the bay — body cells' waste heat share + MLI leak (0 in shadow)
+    START_LOAD_W: 500,          // the base load (PlayerSatellite._basePowerDraw 0.5/s × W_PER_UNIT_S): a new
+                                // game starts at the closed daylight equilibrium for it — the needle
+                                // does not move until the player does something (§2 row 6)
+
+    // ── Bands and lines (§15 row 5, §2 row 5 — a ladder, never a cliff) ──
+    YELLOW_C: 60,               // "Ship warming up" — economic pain starts here (later rounds)
+    RED_C: 85,                  // "Ship hot" — tools refuse here (later rounds; no refusals yet)
+    REARM_C: 5,                 // a line re-arms this far below its threshold (once per crossing)
+    TREND_TAU_S: 2,             // real s — smoothing of dT/dt for the trend arrow
+    TREND_C_PER_S: 0.02,        // °C per real second (1.2 °C/min) — slower reads as steady
+
+    // ── Auto radiator (§15 row 4: opens itself "a little late") ──
+    AUTO_OPEN_C: 70,            // opens at 70 °C — 10 °C past the warning, on purpose
+    AUTO_CLOSE_C: 35,           // folds back once it held ≤ 35 °C …
+    AUTO_CLOSE_HOLD_S: 20,      // … for 20 real s (only a radiator it opened itself)
+    PLAYER_WINS_S: 30,          // a player radiator command in the last 30 s blocks the auto
+    AT_REST_FRAC: 0.05,         // openFrac at or below this counts as "at rest" (folded)
+
+    // ── Power ledger smoothing (ResourceSystem.getPowerSnapshot) ──
+    POWER_TAU_S: 0.5,           // real s — in/out watts are smoothed over ~0.5 s
+  },
+
   SOLAR_PANEL_EFFICIENCY: 0.30,   // 30% efficient cells
   // Mother-wings step 4 (DECISIONS §10, "power follows the panels, realistic
   // wins"): was a generic, unrelated 20 m² placeholder (the ship never had 20
@@ -1927,7 +1989,7 @@ export const Constants = {
       // (KNUCKLE_M [0.08, 0.03] — the buried centre-panel knuckle blocks — removed 2026-09-09 with the set itself, owner's request; the wing knuckles are sized inline in _buildFlowerPair)
       WING_OPEN_DEG: 180,          // deployed dihedral — 180 = wings flat in the plate plane (owner Q4)
       WING_OPEN_START_DEG: 60,     // lanyard: the wings start opening at θ 60° …
-      WING_OPEN_END_DEG: 90,       // … and latch flat by θ 90° (the orbit ladder floor)
+      WING_OPEN_END_DEG: 90,       // … and latch flat by θ 90° (the full bloom)
 
       // ── Geometry (probe 2 §1/§4: min enforced-cone clearance with THIS
       //    plate at stow/park/cargo = 0.571/0.746/1.062 m — all ≥ 0.15 floor;
@@ -1939,8 +2001,54 @@ export const Constants = {
       PLATE_END_M: 2.45,           // 0.05 m bare at the tip for the hardpoint
       PLATE_THICK_M: 0.03,
 
-      // ── Pose ladder (probe 2 §4, pinned INSIDE the P1 band [90°,146°];
-      //    θ from +Z, α_aft = 180° − θ — P1 ledger §10 row 7 convention) ──
+      // ── Pose ladder (probe 2 §4; θ from +Z, α_aft = 180° − θ — P1 ledger
+      //    §10 row 7 convention). The orbit band was [90°,146°] until
+      //    DECISIONS §15 row 4 (2026-10-08) added CLOSED below it. ──
+      //
+      // CLOSED — the orbit REST pose since DECISIONS §15 row 4 (owner,
+      // 2026-10-08: "the ship starts closed … radiator folded flat along the
+      // body"). Measured 2026-10-09 on the built model (lane w2-start-pose,
+      // tmp/probes/start-pose-fold.mjs: real meshes, real ArmUnit daughters,
+      // exact point-to-triangle refinement, 20 mm gate):
+      //
+      //   θ    strut sweep α 0–180   docked   fixed hull     wings @ law
+      //    0      9.6 mm (α 9)        55 mm   21.8 MGA patch   40.9 mm
+      //           (18.3 / 14.7 / 11.4 at α 6 / 7 / 8)
+      //    1     18.5     (α 6)        —      —                —
+      //    1.5   22.5     (α 6)        —      —                —
+      //    2     26.1     (α 7)       58.9    45.2 Barrel      78.3 (safe to 8°)
+      //    5     ≥ 40                  —      45.1             (safe to 15°)
+      //   (strut rows: `--only B --thetas 0,1,1.5,2 --alphas
+      //   0,3,4,5,6,7,8,9,10,12,13,15`, 1° α steps, reproducible)
+      //   At θ 2 the packs end at z 1.505, past the muzzle plane (1.30), and
+      //   still clear (§H): the held catch's near face (z 2.30) by 795 mm, the
+      //   net-launch path (pod r 0.12 along +Z) by 120 mm, a daughter leaving
+      //   or returning along its dock line at α 0 by 50.0 mm.
+      //
+      // The 0° launch fold fails the gate only against a strut SWINGING
+      // through α 3–13° (PClip_3_25 passes a folded pack); 2° is the smallest
+      // whole degree that clears every strut angle with or without daughters.
+      // Every θ 0–90 sits fore of every FEEP apex (3-D ≥ 0.325 m to the 35°
+      // cones), so thrust is allowed over the whole driver band [2°, 146°].
+      // The side-wings fold on the lanyard below 60°, so CLOSED is the narrow
+      // launch pack eased 2° off the body. Costs at θ 2 (measured, not
+      // collisions): solar sphere average 527 W vs 634 W at the bloom (−17 %)
+      // and 767 W at the bud (−31 %) — wings held at the 5° dodge, body cells
+      // shaded; the folded packs block 67 % of the MGA patch and 71–74 % of
+      // sun sensors 2/3 (14 % / 24–28 % at the bud; the _sensorClearance meter).
+      POSE_CLOSED_DEG: 2,
+      REST_POSE: 'CLOSED',         // the orbit rest (D4 contract: boot, the
+                                   // opening dance, every endState(), O's
+                                   // closed end); 'STOW' is the old bud
+      // θ of REST_POSE — the ONE rest-pose → angle mapping (PlayerSatellite.
+      // _flowerRestDeg and OpeningDance both read it). An unknown name falls
+      // back to the 146° bud, the owner's stated fallback.
+      get REST_DEG() {
+        const F = Constants.THERMAL.FLOWER;
+        const map = { CLOSED: F.POSE_CLOSED_DEG, STOW: F.POSE_STOW_DEG, PARK: F.POSE_PARK_DEG, CARGO: F.POSE_CARGO_DEG };
+        const deg = map[F.REST_POSE];
+        return Number.isFinite(deg) ? deg : F.POSE_STOW_DEG;
+      },
       POSE_STOW_DEG: 146,          // band-edge bud: θ→180° camps the Y3 axial
                                    // reserve (r ≤ 0.45, ANY R — probe §2
                                    // discovery) and is plume-illegal for
@@ -1949,9 +2057,12 @@ export const Constants = {
                                    // setFlowerPose; brief §2.1 pose grammar)
       POSE_CARGO_DEG: 90,          // full bloom — tips at the rim plane, fore
                                    // of the cone apexes, plume-clear at any R
-      POSE_FLOOR_DEG: 90,          // θ ≥ 90° in ORBIT — enforced IN the driver
+      POSE_FLOOR_DEG: 2,           // θ ≥ CLOSED in ORBIT — enforced IN the driver
                                    // (the floor drops to POSE_LAUNCH_DEG only
-                                   // while the one-shot launch lock is armed)
+                                   // while the one-shot launch lock is armed);
+                                   // = POSE_CLOSED_DEG — it was 90 (the bloom)
+                                   // before DECISIONS §15 row 4. Also the low
+                                   // edge of the thrust band.
       POSE_THRUST_MAX_DEG: 146,    // P1 global keep-out 7 (reserved band edge)
       // VENT — the deliberate over-open pose past the bud, reached only by a
       // double-command (PlayerSatellite.toggleFlowerDeploy) and warned in COMMS.
@@ -2023,10 +2134,22 @@ export const Constants = {
       //
       // With margin (the limits sit ≥3° under the measured safe prefix at
       // every grid point):
+      //
+      // 2026-10-09 re-measure (lane w2-start-pose, tmp/probes/start-pose-fold.mjs
+      // §A, 1° tilt steps, conservative prefix): safe tilt 6° at θ 0, 8° at
+      // θ 2 (CLOSED), 15° at θ 5, 15–16° across θ 10–90, 17° at θ 95–97 and
+      // unconstrained (30°) from θ 98. The MID threshold was 95, so the law
+      // let a wing track 18–30° at θ 95–97: raised to 100 (the "above θ 100"
+      // the curve above already said). And the clamp now takes the LOWEST θ
+      // of a commanded swing from the command on (`_rosaDodgeLimitRad`): with
+      // the θ thresholds alone (MID 100) a close 146° → 2° with the wings
+      // feathered touched a petal (0.0 mm at θ 80), 90° → 2° came to 18.1 mm
+      // and the 146° → 90° O-press 13.5 mm (14.8 with MID 95, as shipped);
+      // with the early clamp they are 78.5 / 66.9 / 59.1 mm (§G).
       WING_DODGE_LOW_THETA_DEG: 8,    // below this θ (folded flat): 5° limit
-      WING_DODGE_LOW_LIMIT_DEG: 5,    // (measured 7° at θ 0)
-      WING_DODGE_MID_THETA_DEG: 95,   // below this θ (fold corridor + bloom): 12°
-      WING_DODGE_MID_LIMIT_DEG: 12,   // (measured ≥15° across θ 20–90)
+      WING_DODGE_LOW_LIMIT_DEG: 5,    // (measured 7° at θ 0; 8° at θ 2)
+      WING_DODGE_MID_THETA_DEG: 100,  // below this θ (fold corridor + bloom): 12°
+      WING_DODGE_MID_LIMIT_DEG: 12,   // (measured ≥15° across θ 20–90, 17° at 95–97)
       WING_DODGE_ALPHA_LO_DEG: 5,     // strut-α band inside which feathering
       WING_DODGE_ALPHA_HI_DEG: 80,    // contacts the wing root hardware
       WING_DODGE_ALPHA_LIMIT_DEG: 25, // (measured ceiling ≥30° across α 10–75)
@@ -2398,28 +2521,28 @@ export const Constants = {
   // OPENING DANCE (2026-09-16) — the beat table for the ship unpacking itself.
   // Every beat-table figure of the plan's table lives HERE, in ONE block. The
   // DURATIONS are not repeated: they are derived in js/systems/OpeningDance.js
-  // from the shipped hardware rates (THERMAL.FLOWER.SLEW_RATE_RAD_S 15°/s →
-  // the 146° radiator sweep = 9.73 s, the long pole; OCTOPUS_V5.ROSA_FURL_RATE
-  // 0.40/s → 2.5 s per wing), so the dance always teaches the speeds the
-  // player will later command. t = 0 is jet-off, NOT the departure start.
+  // from the shipped hardware rates (OCTOPUS_V5.ROSA_FURL_RATE 0.40/s → 2.5 s
+  // per wing; THERMAL.FLOWER.SLEW_RATE_RAD_S 15°/s for the radiator), so the
+  // dance always teaches the speeds the player will later command. t = 0 is
+  // jet-off, NOT the departure start.
+  //
+  // DECISIONS §15 row 4 (2026-10-08, lane w2-start-pose): the ship starts
+  // CLOSED. The radiator stays folded (it only eases 0° → POSE_CLOSED_DEG 2°
+  // off its launch latch, 0.13 s) and the daughter struts stay shut, so the
+  // two solar wings ARE the unfold, and the hand-over is the moment wing 2 is
+  // out — 8.70 s (was 9.73). The wings keep 5.20 / 6.20: they start as the
+  // camera's dive lands, so the intro DOLLY (LadderController
+  // INTRO_DANCE_DOLLY_MS) finishes before the hand-over pulls the camera
+  // back (measured on :8092 2026-10-09: a 6.70 s hand-over arrived in the
+  // dive's landing frame, so every boot skipped the dolly).
   // =========================================================================
   OPENING_DANCE: {
     BEAT_JETOFF: 0.26,            // fraction of the menu departure at which the EVA astronaut jets off (t = 0 = start + 0.26 × durationMs)
     MENU_DEPARTURE_MS: 3650,      // the MenuScreen departure the beat table is measured against (fallback when the payload carries none)
     T_CUT_S: 2.70,                // the menu→game cut (MENU_START) in dance time: 0.95 s jet-off + 2.70 s = the 3.65 s departure
-    WING1_START_S: 5.20,          // ROSA wing 1 roll-out start (2.5 s at ROSA_FURL_RATE → seated 7.70)
-    WING2_START_S: 6.20,          // ROSA wing 2 roll-out start (→ seated 8.70)
-    STRUT_START_S: 7.00,          // daughters begin their 0° → 146° sweep (after hand-over is visible; the tail runs ~17.5)
-    STRUT_STAGGER_S: 0.25,        // per-daughter stagger
+    WING1_START_S: 5.20,          // ROSA wing 1 roll-out start, as the intro dive lands (2.5 s at ROSA_FURL_RATE → seated 7.70)
+    WING2_START_S: 6.20,          // ROSA wing 2 roll-out start (→ seated 8.70 = the hand-over)
     SKIP_FADE_S: 0.5,             // any input fast-forwards the remaining unfold over this window (decision 10)
-    // The one "open" pose the daughters bloom to and keep (decisions 4 and 5).
-    // NAMED ONCE, in OCTOPUS_V5.STRUT_DEPLOY_ALPHA — the "." toggle's deploy
-    // target and the dance's daughter beat MUST be the same number, or the
-    // cinematic parks the arms somewhere the player's own key cannot return
-    // them to. Derived here rather than restated so the two can never drift.
-    // (It also happens to mirror THERMAL.FLOWER.POSE_STOW_DEG, the radiator's
-    // rest — that mirroring is what makes the bloomed ship read symmetrical.)
-    get STRUT_OPEN_DEG() { return Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA * 180 / Math.PI; },
   },
 
   // =========================================================================
@@ -2523,10 +2646,20 @@ export const Constants = {
     REVEAL_BASE_RANGE: 5.0,   // 500 km in scene units — base radius for scan target reveal (UX-3 #9)
     REVEAL_STAGGER_MS: 120,   // ms between each target reveal (smooth, snappy cadence)
     SESSION_SCAN_CAP: 5000,   // S2.4: max total scan credits per session (anti-spam)
+    // w2-heat D2 (DECISIONS §15 row 2 — "scanning costs battery and heat, like
+    // mana … noticeable until upgraded"). A scan costs POWER_COST × the 600 Wh
+    // base battery (BATTERY_MAX) × COST_MULT, in Wh. SWEEP_SHARE of it is the
+    // sweep, paid the instant the scan starts (refused — "Battery too low to
+    // scan." — when the battery cannot pay it); the rest is the onboard
+    // computer's analysis, a steady load over ANALYSIS_S real seconds. Every
+    // drawn watt ends as heat (ThermalSystem). Read by SensorSystem.getScanCost.
+    COST_MULT: 1,             // the one upgrade lever (later rounds; no shop item yet)
+    SWEEP_SHARE: 1 / 3,       // the sweep's share; the computer's analysis is the rest
     QUICK: {
       DURATION: 0.3,          // seconds to complete quick scan (fast S→reward feedback)
       COOLDOWN: 5.0,          // seconds between quick scans (raised from 3.0 — anti-spam)
-      POWER_COST: 0.05,       // fraction of sensor bus power
+      POWER_COST: 0.06,       // × 600 Wh = 36 Wh: 12 Wh sweep + 24 Wh analysis
+      ANALYSIS_S: 3.5,        // real s → 24 Wh / 3.5 s = 6.9 kW on the battery clock
       DISCOVERY_CHANCE: 0.20, // 20% chance to find hidden debris
       REWARD: 50,             // base credits for survey data (modified by diminishing returns)
       RANGE_MULTIPLIER: 1.0,  // uses current sensor range
@@ -2535,7 +2668,8 @@ export const Constants = {
     WIDE: {
       DURATION: 4.0,          // seconds for wide aperture scan
       COOLDOWN: 8.0,          // seconds between wide scans
-      POWER_COST: 0.15,       // higher power draw
+      POWER_COST: 0.15,       // × 600 Wh = 90 Wh: 30 Wh sweep + 60 Wh analysis
+      ANALYSIS_S: 6.0,        // real s → 60 Wh / 6 s = 10 kW on the battery clock
       DISCOVERY_CHANCE: 0.40, // 40% chance to find hidden debris
       REWARD: 150,            // credits for deep survey data
       DISCOVERY_REWARD: 100,  // bonus per new contact found

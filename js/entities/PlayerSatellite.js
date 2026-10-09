@@ -258,7 +258,9 @@ export class PlayerSatellite extends THREE.Group {
     this._flowerPairs = { A: false, B: false };
     /** @type {Array<{hinge: THREE.Group, azDeg: number, pair: string, wings: THREE.Group[]}>} */
     this._flowerGroups = [];
-    this._flowerThetaRad = (Constants.THERMAL.FLOWER.POSE_STOW_DEG * Math.PI) / 180;
+    // Boot at the orbit REST pose — CLOSED (θ 2°, folded along the body) since
+    // DECISIONS §15 row 4; it was the 146° bud before.
+    this._flowerThetaRad = (this._flowerRestDeg() * Math.PI) / 180;
     /** Slew latch — the daughter `_strutTargetAlpha` contract mirrored:
      *  player intent wins mid-swing (a new toggle overwrites an in-flight
      *  target), bounded rate, never a snap, cleared on arrival. */
@@ -272,16 +274,18 @@ export class PlayerSatellite extends THREE.Group {
     this._flowerVentArmed = false;
     this._lastFlowerTap = undefined;
     /** Design 7b one-shot launch lock: while armed the driver floor is
-     *  POSE_LAUNCH_DEG (0°) instead of POSE_FLOOR_DEG (90°) so the flower can
-     *  lie fore along the barrel inside the fairing. Armed ONLY by
+     *  POSE_LAUNCH_DEG (0°) instead of POSE_FLOOR_DEG (CLOSED 2°; 90° before
+     *  DECISIONS §15 row 4) and thrust is refused. Armed ONLY by
      *  setFlowerPose('LAUNCH') under LaunchSequence.isActive(), by the dev
      *  hook's { force: true }, or — owner amendment 2026-09-09 (plan
      *  .kilo/plans/1788863400000-radiator-launch-fold-redesign.md, last
      *  section) — by the SAFETY OVERRIDE actuator path's { override: true }
      *  (toggleFlowerOverride, the full-range sweep the player watches);
      *  cleared by the driver the frame a release swing (any orbit target)
-     *  carries θ up to the floor. Never re-armable from REFIT / plain O /
-     *  autopilot (they only ever pass STOW / PARK / CARGO). */
+     *  carries θ up to the floor. Never re-armable from REFIT / autopilot
+     *  (they only ever pass CLOSED / STOW / PARK / CARGO); plain O reaches it
+     *  only through the double-tap fold past CLOSED, which IS the override
+     *  arming (toggleFlowerDeploy). */
     this._flowerLaunchLock = false;
     /** DECISIONS §10/§11 (supersedes the 2026-09-09 (B) ROSA hold and the
      *  2026-09-22 strut wait): an OVERRIDE fold is in flight — the wing DODGE
@@ -3471,6 +3475,14 @@ export class PlayerSatellite extends THREE.Group {
    * numbers (those are P3).
    * Design 7b adds pose 'LAUNCH' (θ within 1° of POSE_LAUNCH_DEG — fore-folded)
    * and `locked` (the one-shot launch lock is armed).
+   *
+   * DECISIONS §15 row 4 — the D4 contract (lane w2-start-pose, 2026-10-09;
+   * the heat and F1-bar lanes code against it): `openFrac` is 0 at the REST
+   * pose (CLOSED 2°) and 1 at CARGO (90°), linear in θ between, clamped to
+   * [0, 1] — so the bud (146°) and the vent read 1 too. It used to be
+   * (146 − θ)/56, i.e. 0 at the bud. `pose` reads 'CLOSED' within 1° of
+   * POSE_CLOSED_DEG while the launch lock is off. Every other field is
+   * unchanged.
    * @returns {{pairCount:number, thetaDeg:number, openFrac:number,
    *            slewing:boolean, pose:string, locked:boolean}|null}
    */
@@ -3479,48 +3491,57 @@ export class PlayerSatellite extends THREE.Group {
     if (pairCount === 0) return null;
     const FL = Constants.THERMAL.FLOWER;
     const thetaDeg = (this._flowerThetaRad * 180) / Math.PI;
-    const span = FL.POSE_STOW_DEG - FL.POSE_CARGO_DEG;
-    const openFrac = Math.max(0, Math.min(1, (FL.POSE_STOW_DEG - thetaDeg) / span));
+    const restDeg = this._flowerRestDeg();
+    const span = FL.POSE_CARGO_DEG - restDeg;
+    const openFrac = span === 0 ? 1 : Math.max(0, Math.min(1, (thetaDeg - restDeg) / span));
     const slewing = this._flowerTargetTheta !== undefined;
     const near = (deg) => Math.abs(thetaDeg - deg) < 1.0;
     const pose = near(FL.POSE_VENT_DEG) ? 'VENT'
       : near(FL.POSE_STOW_DEG) ? 'STOW'
         : near(FL.POSE_PARK_DEG) ? 'PARK'
           : near(FL.POSE_CARGO_DEG) ? 'CARGO'
-            : near(FL.POSE_LAUNCH_DEG) ? 'LAUNCH' : 'SLEW';
+            : (!this._flowerLaunchLock && Number.isFinite(FL.POSE_CLOSED_DEG) && near(FL.POSE_CLOSED_DEG)) ? 'CLOSED'
+              : near(FL.POSE_LAUNCH_DEG) ? 'LAUNCH' : 'SLEW';
     return { pairCount, thetaDeg, openFrac, slewing, pose, locked: this._flowerLaunchLock };
   }
 
   /**
-   * O key — toggle the aft flower between the stow bud (146°) and the full
-   * bloom (CARGO 90°). Mirrors toggleRosaFurl: the direction is decided from
-   * the LIVE pose so a mid-swing press reverses (player intent wins mid-swing
-   * — the daughter latch contract). Design 7b: while the launch lock is armed
-   * (θ 0, fore-folded) this is a RELEASE — θ 0 is below the midpoint, so the
-   * target is STOW and the driver clears the lock as θ passes the 90° floor.
+   * The orbit REST θ in degrees — the pose named by
+   * Constants.THERMAL.FLOWER.REST_POSE ('CLOSED' → POSE_CLOSED_DEG since
+   * DECISIONS §15 row 4; a missing/unknown name falls back to the 146° bud,
+   * the owner's stated fallback). Boot, the opening dance's end, every
+   * endState(), snapFlowerToStow() and O's closed end all land here.
+   * @returns {number}
+   */
+  _flowerRestDeg() {
+    return Constants.THERMAL.FLOWER.REST_DEG;
+  }
+
   /**
-   * O key — toggle the aft flower between the stow bud (146°) and the full
-   * bloom (CARGO 90°).
+   * O key — toggle the aft flower between the REST pose (CLOSED 2°, folded
+   * along the body — DECISIONS §15 row 4) and the full bloom (CARGO 90°).
+   * Before that ruling the closed end was the 146° bud; with REST_POSE 'STOW'
+   * this still toggles bud ↔ bloom exactly as it did.
    *
    * Direction comes from the COMMANDED target, falling back to the live pose
    * when nothing is in flight — the "." strut law verbatim (InputManager reads
    * `_strutTargetAlpha ?? getAimAlpha()`, with a comment about the bug from
    * reading either one alone). So ANY press reverses an in-flight slew, at any
-   * angle. It used to read the live θ only, which meant a press while slewing
-   * re-commanded the same target and the key appeared dead until the swing
-   * crossed the 118° midpoint.
+   * angle. A pose nearer the rest end than the bloom opens (→ CARGO); anything
+   * else closes (→ REST) — so from the bud (146°, a REFIT pose) or the vent a
+   * press closes, and from the LAUNCH fold (θ 0, lock armed) a press opens:
+   * the release, the driver clears the lock as θ passes the CLOSED floor.
    *
-   * Design 7b: while the launch lock is armed (θ 0, fore-folded) this is a
-   * RELEASE — θ 0 is below the midpoint, so the target is STOW and the driver
-   * clears the lock as θ passes the 90° floor. Never arms the lock (the plain-O
-   * law; the OVERRIDE sweep is toggleFlowerOverride).
-   *
-   * VENT push-through (owner ask 2026-09-16: "reverse 2 times into the 146
-   * degree wall pushes through, with a warning in comms"). Because presses now
-   * alternate cleanly, two taps inside VENT_DOUBLE_TAP_MS land back on the
-   * direction you started in — which makes a double-tap a free gesture. When
-   * that pair lands on the BUD, it is read as pushing through the wall and the
-   * target becomes POSE_VENT_DEG instead. A single tap never vents.
+   * Double-tap push-through (owner asks 2026-09-16 "reverse 2 times into the
+   * 146 degree wall pushes through, with a warning" and 2026-09-22 "double
+   * press at 90 should push thru to 0"). Presses alternate cleanly, so two
+   * taps inside VENT_DOUBLE_TAP_MS land back on the end you started from —
+   * a free gesture, read as pushing on past the end the second tap lands on,
+   * in the direction it was travelling: past the bloom (θ rising) that is
+   * the bud and the VENT, warned exactly as before (a double-tap at the bud
+   * still vents: tap 1 closes, tap 2 reopens past it); past CLOSED (θ
+   * falling) it is the LAUNCH fold, through the SAFETY OVERRIDE arming. A
+   * single tap never vents and never arms the lock.
    *
    * Nothing is made less safe: thrust above POSE_THRUST_MAX_DEG is already
    * refused by _flowerPoseBandGuard, so the vent inhibits the drive under the
@@ -3529,15 +3550,13 @@ export class PlayerSatellite extends THREE.Group {
    */
   toggleFlowerDeploy() {
     const FL = Constants.THERMAL.FLOWER;
-    const mid = ((FL.POSE_STOW_DEG + FL.POSE_CARGO_DEG) / 2) * Math.PI / 180;
+    const restDeg = this._flowerRestDeg();
+    const restRad = (restDeg * Math.PI) / 180;
+    const cargoRad = (FL.POSE_CARGO_DEG * Math.PI) / 180;
     // The "." law: the pending target wins, the live pose is the fallback.
     const ref = this._flowerTargetTheta !== undefined ? this._flowerTargetTheta : this._flowerThetaRad;
-    const deploying = ref > mid;
+    const deploying = Math.abs(ref - restRad) <= Math.abs(ref - cargoRad);
 
-    // Two taps inside the window land back on the starting direction. Which
-    // direction that is decides which wall gets pushed through — the gesture is
-    // symmetric (owner 2026-09-22): landing on the BUD pushes further OPEN to
-    // the vent, landing on the BLOOM pushes further CLOSED to the stowed fold.
     const now = performance.now();
     const doubleTap = this._lastFlowerTap !== undefined
       && now - this._lastFlowerTap < FL.VENT_DOUBLE_TAP_MS;
@@ -3545,22 +3564,25 @@ export class PlayerSatellite extends THREE.Group {
 
     if (doubleTap && this._flowerGroups.length > 0) {
       this._lastFlowerTap = undefined;             // one push per double-tap
-      if (!deploying) {
+      // The end this tap lands on, and which way past it the push goes.
+      const landDeg = deploying ? FL.POSE_CARGO_DEG : restDeg;
+      const fromDeg = deploying ? restDeg : FL.POSE_CARGO_DEG;
+      if (landDeg > fromDeg) {
+        // θ rising past the bloom (or the bud): the vent.
         this._flowerVentArmed = true;
         this._flowerTargetTheta = (FL.POSE_VENT_DEG * Math.PI) / 180;
         this._warnFlowerVent();
-        return false;
+        return deploying;
       }
-      // Past the bloom is the LAUNCH fold (θ 0). Go through the SAFETY OVERRIDE
-      // path, not a bare latch: it is what drops the driver floor from the 90°
-      // orbit floor to 0 AND engages the ROSA centre hold. Folding below 90°
-      // with the arrays tracking is a measured collision (contact at ±10° of
-      // tilt), so this must never become a plain target write. A refusal (no
+      // θ falling past the closed end: the LAUNCH fold (θ 0). Go through the
+      // SAFETY OVERRIDE path, not a bare latch: it is what drops the driver
+      // floor to 0 AND engages the early wing dodge (folding with the arrays
+      // tracking is a measured collision — DECISIONS §10). A refusal (no
       // hardware) falls through to the ordinary command below.
       if (this.setFlowerPose('LAUNCH', { override: true }) !== null) {
         this._flowerVentArmed = false;
         this._warnFlowerFold();
-        return true;
+        return deploying;
       }
     }
 
@@ -3569,7 +3591,7 @@ export class PlayerSatellite extends THREE.Group {
     // still out at the vent snaps the panel back to the bud in one frame
     // instead of slewing (owner-reported 2026-09-22: "seems to jump suddenly
     // instead of opening smoothly"). The driver disarms on ARRIVAL instead.
-    this._flowerTargetTheta = ((deploying ? FL.POSE_CARGO_DEG : FL.POSE_STOW_DEG) * Math.PI) / 180;
+    this._flowerTargetTheta = deploying ? cargoRad : restRad;
     return deploying;
   }
 
@@ -3612,20 +3634,20 @@ export class PlayerSatellite extends THREE.Group {
 
   /**
    * @private The mirror of _warnFlowerVent at the closed end: a double-command
-   * past the bloom folds the radiator all the way to the LAUNCH pose (θ 0),
-   * through the SAFETY OVERRIDE path so the ROSA centre hold comes with it.
+   * past CLOSED folds the radiator the last 2° into the LAUNCH pose (θ 0),
+   * through the SAFETY OVERRIDE path so the early wing dodge comes with it.
    *
-   * Worth saying out loud because the cost is the opposite of the vent's: a
-   * folded radiator is not radiating. The panels are the ship's only way to
-   * dump heat, so this pose is for inspection and stowage, not for running in.
+   * Worth saying out loud because, unlike CLOSED, the launch fold arms the
+   * launch lock: the engines are refused until the radiator opens again, and
+   * a folded radiator is barely radiating.
    */
   _warnFlowerFold() {
     const FL = Constants.THERMAL.FLOWER;
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'THERMAL',
-      text: `Radiator folded to ${FL.POSE_LAUNCH_DEG}° — the stowed launch pose. `
-        + 'Solar arrays dodge clear of the fold automatically; daughter struts must be stowed too. '
-        + 'Folded panels radiate nothing: heat will build while stowed. Tap RADIATOR / O to deploy.',
+      text: `Radiator folded to ${FL.POSE_LAUNCH_DEG}° — the launch fold, locked down. `
+        + 'Engines stay off until it opens again. '
+        + 'Folded panels radiate almost nothing: heat will build. Tap RADIATOR / O to open it.',
       priority: 'warning',
     });
   }
@@ -3637,8 +3659,8 @@ export class PlayerSatellite extends THREE.Group {
    * see how radiator struts move, full range of motion"). Toggles the flower
    * FOLDED ↔ DEPLOYED over the WHOLE travel: FOLDED = the LAUNCH geometry
    * (θ 0, packs fore along the barrel, wings folded), DEPLOYED = the STOW bud
-   * (146°) — one press = 146° at SLEW_RATE_RAD_S (≈ 9.7 s) through the 90°
-   * floor with the wings folding / unfolding over WING_OPEN_START/END_DEG.
+   * (146°) — one press = 146° at SLEW_RATE_RAD_S (≈ 9.7 s) through the bloom
+   * with the wings folding / unfolding over WING_OPEN_START/END_DEG.
    *
    * Direction: from the COMMANDED target while a slew is in flight (so a press
    * mid-swing REVERSES — the Session L chip law: what the label shows is what
@@ -3646,10 +3668,10 @@ export class PlayerSatellite extends THREE.Group {
    * else deploy. A fold goes through setFlowerPose('LAUNCH', { override: true })
    * — the ONE production arming of the launch lock outside the launch
    * sequence — so the driver floor drops to 0°; a deploy is the ordinary STOW
-   * release (the lock clears at 90° with THERMAL_FLOWER_RELEASED, once per
-   * arming). FEEP thrust stays inhibited the whole time the lock is armed or
-   * θ < 90° (_flowerPoseBandGuard) — the physics law is untouched, the player
-   * simply sees the mechanism.
+   * release (the lock clears at the CLOSED floor, 2°, with
+   * THERMAL_FLOWER_RELEASED, once per arming). FEEP thrust stays inhibited the
+   * whole time the lock is armed (_flowerPoseBandGuard) — the physics law is
+   * untouched, the player simply sees the mechanism.
    *
    * REACHABILITY: only the OVERRIDE actuator path may call this — the hub's
    * `ladderActuators.flowerSweep.toggle()` (the pane's RADIATOR chip) and the
@@ -3685,32 +3707,37 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * Drive the flower to a named ladder pose ('STOW' | 'PARK' | 'CARGO').
-   * The P3 thermal-duty / P5 load-easing entry point (and the test hook).
-   * Targets clamp to the shipped ladder [POSE_CARGO_DEG, POSE_STOW_DEG] —
-   * the pose floor θ ≥ 90° is additionally enforced every frame in the driver.
+   * Drive the flower to a named ladder pose ('CLOSED' | 'STOW' | 'PARK' |
+   * 'CARGO'). The P3 thermal-duty / P5 load-easing entry point (and the test
+   * hook). DECISIONS §15 row 4: 'CLOSED' (POSE_CLOSED_DEG, folded along the
+   * body) is the REST pose — `setFlowerPose(REST_POSE)` closes,
+   * `setFlowerPose('CARGO')` opens (the D4 contract). Targets clamp to
+   * [POSE_FLOOR_DEG, POSE_STOW_DEG]; the floor is additionally enforced every
+   * frame in the driver.
    *
    * Design 7b: 'LAUNCH' (θ 0 — fore along the barrel, wings folded) is the
    * fairing pose behind the launch lock. It is accepted ONLY (a) while the
    * launch sequence owns the ship (`this._launchSequence?.isActive?.()`),
    * (b) from the ?shot=1 dev hook with an explicit `{ force: true }`, or
    * (c) — owner amendment 2026-09-09 — from the SAFETY OVERRIDE actuator path
-   * with an explicit `{ override: true }` (toggleFlowerOverride is its only
-   * caller); every other caller gets null and nothing changes. Accepting it
+   * with an explicit `{ override: true }` (toggleFlowerOverride, and the O
+   * double-tap past CLOSED in toggleFlowerDeploy); every other caller gets
+   * null and nothing changes. Accepting it
    * ARMS the launch lock (the driver floor drops to 0°) and latches the target
    * at POSE_LAUNCH_DEG − 0.5° so the floor clamp holds θ at exactly 0 with no
-   * SETTLE_EPS residual. Any orbit pose (STOW / PARK / CARGO — the REFIT chip,
-   * the O key, the OVERRIDE deploy) is the RELEASE: the driver clears the lock
+   * SETTLE_EPS residual. Any orbit pose (CLOSED / STOW / PARK / CARGO — the
+   * REFIT chip, the O key, the OVERRIDE deploy) is the RELEASE: the driver
+   * clears the lock
    * the frame θ reaches POSE_FLOOR_DEG and emits Events.THERMAL_FLOWER_RELEASED
    * once; from then on a bare 'LAUNCH' is refused again — re-armable ONLY
-   * under OVERRIDE (or the sequence / the dev force), never from REFIT / plain
-   * O / autopilot. The (c) override branch ALSO engages the wing DODGE
+   * under OVERRIDE (or the sequence / the dev force), never from REFIT /
+   * autopilot. The (c) override branch ALSO engages the wing DODGE
    * (DECISIONS §10: `_flowerOverrideFold` — the tilt law clamps itself to the
    * fold-corridor limit from the moment of arming, so the wings are clear
    * before the petals arrive; nothing is held and nothing waits for them).
    * (a) and (b) do not engage it (their own procedures furl ROSA, which parks
    * the pivots at 0).
-   * @param {'STOW'|'PARK'|'CARGO'|'LAUNCH'} pose
+   * @param {'CLOSED'|'STOW'|'PARK'|'CARGO'|'LAUNCH'} pose
    * @param {{ force?: boolean, override?: boolean }} [opts] honoured for 'LAUNCH'
    *   only — `force` the dev hook, `override` the SAFETY OVERRIDE sweep
    * @returns {number|null} the accepted target θ in degrees (0 for LAUNCH), or null
@@ -3743,10 +3770,10 @@ export class PlayerSatellite extends THREE.Group {
       this._flowerTargetTheta = ((FL.POSE_LAUNCH_DEG - 0.5) * Math.PI) / 180;
       return FL.POSE_LAUNCH_DEG;
     }
-    const map = { STOW: FL.POSE_STOW_DEG, PARK: FL.POSE_PARK_DEG, CARGO: FL.POSE_CARGO_DEG };
+    const map = { CLOSED: FL.POSE_CLOSED_DEG, STOW: FL.POSE_STOW_DEG, PARK: FL.POSE_PARK_DEG, CARGO: FL.POSE_CARGO_DEG };
     const deg = map[pose];
-    if (deg === undefined) return null;
-    const clamped = Math.max(FL.POSE_CARGO_DEG, Math.min(FL.POSE_STOW_DEG, deg));
+    if (!Number.isFinite(deg)) return null;
+    const clamped = Math.max(FL.POSE_FLOOR_DEG, Math.min(FL.POSE_STOW_DEG, deg));
     this._flowerTargetTheta = (clamped * Math.PI) / 180;
     return clamped;
   }
@@ -3780,28 +3807,30 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * Design 7b — LaunchSequence.skipToReady()'s hand-off: snap the flower to the
-   * STOW bud with the launch lock cleared and the latch idle, and write the
-   * hinges / wings now (no slew — the debug bypass mirrors "all arms STOWED,
-   * ROSA at 100 %"). Emits THERMAL_FLOWER_RELEASED once if the lock WAS armed
-   * (so listeners see the same release the real swing would have produced);
-   * no POSE event — nothing slewed. No hardware → no-op.
+   * Snap the flower to its stowed REST pose — CLOSED (θ 2°, folded along the
+   * body) since DECISIONS §15 row 4; the name is historical (it snapped to the
+   * 146° bud before) and is kept because LaunchSequence.skipToReady(),
+   * GameFlowManager.resetGame() and OpeningDance.endState() all call it. The
+   * launch lock is cleared and the latch idle, and the hinges / wings are
+   * written now (no slew). Emits THERMAL_FLOWER_RELEASED once if the lock WAS
+   * armed (so listeners see the same release the real swing would have
+   * produced); no POSE event — nothing slewed. No hardware → no-op.
    */
   snapFlowerToStow() {
     if (this._flowerGroups.length === 0) return;
-    const FL = Constants.THERMAL.FLOWER;
+    const restDeg = this._flowerRestDeg();
     const wasLocked = this._flowerLaunchLock;
     this._flowerLaunchLock = false;
     this._flowerOverrideFold = false;
     this._flowerTargetTheta = undefined;
     this._flowerVentArmed = false;
     this._lastFlowerTap = undefined;
-    this._flowerThetaRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+    this._flowerThetaRad = (restDeg * Math.PI) / 180;
     this._updateFlower(0);
     // Opening dance: the release event is suppressed while the dance drives
     // this ship (wordless unfold — task 8's known emitter #2).
     if (wasLocked && !this._danceDrivesMe()) {
-      eventBus.emit(Events.THERMAL_FLOWER_RELEASED, { thetaDeg: FL.POSE_STOW_DEG });
+      eventBus.emit(Events.THERMAL_FLOWER_RELEASED, { thetaDeg: restDeg });
     }
   }
 
@@ -4219,14 +4248,17 @@ export class PlayerSatellite extends THREE.Group {
    * idiom mirrored (PlayerSatellite.js `_strutTargetAlpha` latch contract):
    * bounded rate, never a snap; player intent wins mid-swing (toggle/setPose
    * overwrite the latch); latch cleared on arrival. The struts open LIKE A
-   * FLOWER between the stow bud (146°) and the full bloom (90°).
+   * FLOWER between CLOSED (2°, folded along the body) and the full bloom
+   * (90°), and on to the bud (146°).
    *
-   * POSE FLOOR: θ ≥ POSE_FLOOR_DEG (90°) is enforced HERE every frame — a
-   * fore-of-rim excursion enters daughter-pocket real estate (P1 global
-   * keep-out). The P2 ceiling is the stow bud itself: no legal pose exists
-   * past 146° (Y3 axial reserve + plume band — tmp/flower-pose-band.mjs §2),
-   * so the whole reachable range is thrust-legal and the driver needs NO
-   * thrust-coupled writes.
+   * POSE FLOOR: θ ≥ POSE_FLOOR_DEG is enforced HERE every frame. It was the
+   * 90° bloom ("a fore-of-rim excursion enters daughter-pocket real estate")
+   * until DECISIONS §15 row 4 (2026-10-08) made the folded radiator the orbit
+   * rest: the floor is now CLOSED (2°), measured clear of the docked
+   * daughters, every strut swing, the hull and the deployed wings at their
+   * dodge limit (the Constants POSE_CLOSED_DEG table). The ceiling is the
+   * stow bud: no legal pose exists past 146° (Y3 axial reserve + plume band —
+   * tmp/flower-pose-band.mjs §2) except the deliberate VENT.
    *
     * Design 7b: while the launch lock is armed the floor is POSE_LAUNCH_DEG
      * (0°) — the fore-folded fairing pose, measured against the DOCKED daughters
@@ -4239,7 +4271,7 @@ export class PlayerSatellite extends THREE.Group {
      * of scope). The lock clears — once, with
      * Events.THERMAL_FLOWER_RELEASED — the frame a release swing (any target at
      * or above the orbit floor) carries θ up to POSE_FLOOR_DEG; a release never
-     * latches below the floor (so a CARGO release cannot settle at 89.9° with
+     * latches below the floor (so a CLOSED release cannot settle at 1.9° with
      * the lock still armed). Order: slew → clamp → release → settle, so every
     * event carries the CLAMPED θ (the LAUNCH latch reads exactly 0).
     */
@@ -4289,8 +4321,8 @@ export class PlayerSatellite extends THREE.Group {
     if (releasing && this._flowerThetaRad >= orbitFloorRad - 1e-9) {
       this._flowerLaunchLock = false;
       this._flowerOverrideFold = false;
-      // Opening dance: the θ = 90° release stays quiet while the dance drives
-      // this ship (wordless unfold — task 8's known emitter #2).
+      // Opening dance: the release at the floor stays quiet while the dance
+      // drives this ship (wordless unfold — task 8's known emitter #2).
       if (!this._danceDrivesMe()) {
         eventBus.emit(Events.THERMAL_FLOWER_RELEASED, { thetaDeg: (this._flowerThetaRad * 180) / Math.PI });
       }
@@ -4298,12 +4330,19 @@ export class PlayerSatellite extends THREE.Group {
 
     if (stepping && Math.abs(this._flowerThetaRad - target) < FL.SETTLE_EPS_RAD
         && !(this._flowerLaunchLock && releasing)) {
+      // CLOSED is the orbit floor and the rest pose: land on it EXACTLY (a
+      // final step of < SETTLE_EPS_RAD, about two frames of 15°/s slew), so a
+      // closed radiator reads θ 2° / openFrac 0 rather than up to 2.57° /
+      // 0.0065 — the D4 contract the heat lane reads. Other poses keep the
+      // daughter-contract residual.
+      if (!this._flowerLaunchLock && target <= orbitFloorRad + 1e-9) this._flowerThetaRad = orbitFloorRad;
       const thetaDeg = (this._flowerThetaRad * 180) / Math.PI;
       const near = (deg) => Math.abs(thetaDeg - deg) < 1.0;
       const pose = near(FL.POSE_STOW_DEG) ? 'STOW'
         : near(FL.POSE_PARK_DEG) ? 'PARK'
           : near(FL.POSE_CARGO_DEG) ? 'CARGO'
-            : near(FL.POSE_LAUNCH_DEG) ? 'LAUNCH' : 'CUSTOM';
+            : (!this._flowerLaunchLock && Number.isFinite(FL.POSE_CLOSED_DEG) && near(FL.POSE_CLOSED_DEG)) ? 'CLOSED'
+              : near(FL.POSE_LAUNCH_DEG) ? 'LAUNCH' : 'CUSTOM';
       this._flowerTargetTheta = undefined;
       eventBus.emit(Events.THERMAL_FLOWER_POSE, { thetaDeg, pose });
     }
@@ -6006,13 +6045,20 @@ export class PlayerSatellite extends THREE.Group {
    * when unconstrained): the MINIMUM of two measured clearance curves,
    *
    *   θ-curve  — the petals ↔ wings 20 mm curve (tmp/probe-rosa-tilt.mjs,
-   *     rebuilt 2026-09-23): 5° while the radiator is folded flat
-   *     (θ < WING_DODGE_LOW_THETA_DEG), 12° through the fold corridor and
-   *     the bloom (θ < WING_DODGE_MID_THETA_DEG), unconstrained above.
-   *     An OVERRIDE fold in flight (`_flowerOverrideFold`) takes the LOW
-   *     limit from the moment it ARMS — the wing motor (τ 0.57 s) then
-   *     beats the 15°/s radiator to every θ by ≥ 1 s, so the radiator
-   *     never waits for the wing.
+   *     rebuilt 2026-09-23; re-measured 2026-10-09 by
+   *     tmp/probes/start-pose-fold.mjs): 5° while the radiator is folded
+   *     flat (θ < WING_DODGE_LOW_THETA_DEG — CLOSED, the orbit rest, lives
+   *     here), 12° through the fold corridor and the bloom
+   *     (θ < WING_DODGE_MID_THETA_DEG), unconstrained above.
+   *     EARLY DODGE: a commanded swing takes the limit of the LOWEST θ it
+   *     will pass — min(θ, target) — from the moment it is commanded, and an
+   *     OVERRIDE fold (`_flowerOverrideFold`) takes the LOW limit from the
+   *     moment it ARMS and holds it while the lock is armed. The wing motor
+   *     (τ 0.57 s) then beats the 15°/s radiator to every θ, so the radiator
+   *     never waits for the wing. Measured (§G of the probe): with the θ
+   *     thresholds alone a close 146° → 2° with the wings feathered touched a
+   *     petal; with the early dodge every close keeps ≥ 59 mm.
+   *     Only with a radiator fitted (a ship without one has nothing to dodge).
    *   α-curve  — the struts+daughters ↔ wings curve
    *     (tmp/every-door-fine.mjs): while any strut is at — or slewing
    *     through — α WING_DODGE_ALPHA_LO..HI, feathering (60–120°) contacts
@@ -6030,8 +6076,10 @@ export class PlayerSatellite extends THREE.Group {
     let limitDeg = Infinity;
     if (this._flowerOverrideFold) {
       limitDeg = FL.WING_DODGE_LOW_LIMIT_DEG;              // fold in flight — dodge early
-    } else {
-      const thDeg = (this._flowerThetaRad ?? Math.PI / 2) * rad180;
+    } else if (this._flowerGroups && this._flowerGroups.length > 0) {
+      let thDeg = (this._flowerThetaRad ?? Math.PI / 2) * rad180;
+      const tgt = this._flowerTargetTheta;
+      if (tgt !== undefined) thDeg = Math.min(thDeg, tgt * rad180);   // early dodge
       if (thDeg < FL.WING_DODGE_LOW_THETA_DEG) limitDeg = FL.WING_DODGE_LOW_LIMIT_DEG;
       else if (thDeg < FL.WING_DODGE_MID_THETA_DEG) limitDeg = FL.WING_DODGE_MID_LIMIT_DEG;
     }
@@ -6840,7 +6888,8 @@ export class PlayerSatellite extends THREE.Group {
    */
   _updateThrusterInterlock() {
     // Design 7b pose-band guard (bookkeeping, not physics): thrust only inside
-    // the P1 band θ ∈ [90°, 146°] — i.e. never while the launch lock holds
+    // the band θ ∈ [POSE_FLOOR_DEG, POSE_THRUST_MAX_DEG] = [2°, 146°] since
+    // DECISIONS §15 row 4 (was [90°, 146°]) — i.e. never while the launch lock holds
     // the flower fore of the rim, during its release swing, or during the
     // SAFETY OVERRIDE sweep (owner amendment 2026-09-09: the lock is armed the
     // moment a fold is commanded, so the FEEP is inhibited from the press,
@@ -6897,10 +6946,14 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * @private Design 7b — true when the installed flower is outside the P1
-   * thrust band θ ∈ [POSE_FLOOR_DEG, POSE_THRUST_MAX_DEG] or the one-shot
-   * launch lock is armed. No hardware → false. Boot (θ = 146 = the ceiling,
-   * lock off) → false.
+   * @private Design 7b — true when the installed flower is outside the thrust
+   * band θ ∈ [POSE_FLOOR_DEG, POSE_THRUST_MAX_DEG] or the one-shot launch
+   * lock is armed. No hardware → false. Boot (θ = CLOSED 2° = the floor, lock
+   * off) → false: DECISIONS §15 row 4 — the engines work with the radiator
+   * folded, because every θ from CLOSED to the bud sits outside the FEEP
+   * plume cones (measured 2026-10-09, tmp/probes/start-pose-fold.mjs §E:
+   * θ 0–90 fore of every apex, ≥ 0.325 m to the 35° cones; 0.265 m radial
+   * at the bud). The band's low edge was the 90° bloom before.
    * @returns {boolean}
    */
   _flowerPoseBandGuard() {
@@ -6915,7 +6968,7 @@ export class PlayerSatellite extends THREE.Group {
    * @private Design 7b / owner amendment 2026-09-09 — say WHY the drive does
    * not answer when the reason is the aft radiator (the pose-band guard: the
    * launch lock armed — folded, folding under OVERRIDE, or releasing below the
-   * 90° floor — or θ outside [POSE_FLOOR_DEG, POSE_THRUST_MAX_DEG]). Called by
+   * CLOSED floor — or θ outside [POSE_FLOOR_DEG, POSE_THRUST_MAX_DEG]). Called by
    * every refused thrust path (thrustIon / thrustMPD / applyCartesianImpulse)
    * AFTER the interlock has refused, so it never changes the refusal — it only
    * narrates it: one COMMS caution per 3 s (_lastFlowerInhibitWarning, the

@@ -24,6 +24,7 @@ import { prefersReducedMotion } from './hudPulse.js';
 import { mono } from '../core/Typeface.js';
 import { HUD_EDGE_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
 import { createFooterChip } from './hud/FooterChip.js';
+import { isMarked } from '../systems/AutoLockController.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -699,6 +700,8 @@ export class NavSphere {
       const targets = debrisField.getDebrisNear(playerPos, sensorRange);
       for (const t of targets) {
         if (!t.alive) continue;
+        // Scan-first (DECISIONS §15 row 1): no radar dot until a scan reveals it.
+        if (!isMarked(t)) continue;
         // Skip untracked debris unless IR Scanner is active or it's the selected target
         if (t.tracked === false && !canDetect && t.id !== this._selectedTargetId) continue;
         if (t.id === this._selectedTargetId) {

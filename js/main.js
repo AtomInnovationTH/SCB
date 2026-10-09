@@ -97,6 +97,7 @@ import { CodexViewerUI } from './ui/CodexViewerUI.js';
 import { GlossaryState } from './systems/codex/GlossaryState.js';
 import { HotkeyOverlay } from './ui/HotkeyOverlay.js';
 import { SkillsPane } from './ui/hud/SkillsPane.js';
+import { SoundLogPane } from './ui/hud/SoundLogPane.js';
 import { TeachingSystem } from './systems/TeachingSystem.js';
 import { armIdleAdvisor } from './systems/ArmIdleAdvisor.js';
 import { guidanceTelemetry } from './systems/GuidanceTelemetry.js';
@@ -156,6 +157,7 @@ import { isAvifSupported } from './scene/Earth.js';
 import { profileFlags } from './core/ProfileFlags.js';
 import { devShotGate } from './core/DevShotGate.js';
 import { installBlackFrameProbe } from './core/BlackFrameProbe.js';
+import { installBlackPatchHeal } from './core/BlackPatchHeal.js';
 import { viewCover, coverSkipsPaint } from './ui/viewCover.js';
 import { FrameSched, SAMPLE_WINDOW, MAX_SAMPLE_MS } from './core/FrameSched.js';
 import { AutoProfileSweep } from './systems/AutoProfileSweep.js';
@@ -176,6 +178,7 @@ let sunLight;
 // Black-flicker triage: `?bfp=1|2` in-page probe (js/core/BlackFrameProbe.js).
 // Null in normal play — the per-frame hook below is a single falsy check.
 let blackFrameProbe = null;
+let blackPatchHeal = null; // F4/F5 black-box self-repair (core/BlackPatchHeal.js); ?heal=0 builds nothing
 // Mother audit (integrate/harness): one-frame draw-call meter, armed only by
 // window.__scbDrawCalls() inside the ?shot block. Null in normal play — the
 // two per-frame hooks around sceneManager.render() are a single falsy check.
@@ -633,6 +636,7 @@ let forgeSystem;
 let conjunctionSystem;
 let skillsSystem;
 let skillsPane;
+let soundLogPane = null;
 let lassoSystem;
 let rewardSystem;
 let codexSystem;
@@ -1227,6 +1231,10 @@ async function init() {
   // Black-flicker triage: `?bfp=1|2` installs the self-serve verdict probe
   // (badge + rate-limited console warns). Returns null when the flag is off.
   blackFrameProbe = installBlackFrameProbe({ sceneManager, earth });
+  // Black-box self-repair (owner 2026-10-08, BLACK_SCREEN_TRIAGE.md Producer 4):
+  // getLadder is a getter because ladderController is assigned later (and never
+  // on a ?ladder=0 boot); onResize is hoisted, so the 'canvas' step can use it.
+  blackPatchHeal = installBlackPatchHeal({ sceneManager, earth, getLadder: () => ladderController, steps: { canvas: () => onResize() } });
   _bootMark('Earth constructor returned (textures still decoding async)');
 
   // --- Starfield (background) ---
@@ -1361,6 +1369,11 @@ async function init() {
   scoringSystem.setPlayer(player);  // ST-4.E: Wire player ref for ΔV tracking
   armManager.setResourceSystem(resourceSystem);
   sensorSystem = new SensorSystem();
+  // w2-heat (DECISIONS §15 rows 2/4/5/6): scans pay battery (and so heat);
+  // the ship's heat lump registers on the resource system (getThermalSnapshot)
+  // and is ticked in the loop right after resourceSystem.update.
+  sensorSystem.setResourceSystem(resourceSystem);
+  resourceSystem.createThermalSystem(player);
   // kesslerSystem: imported singleton from KesslerSystem.js
   cargoSystem = new CargoSystem();
   forgeSystem = new ForgeSystem(cargoSystem, resourceSystem);
@@ -1506,7 +1519,7 @@ async function init() {
           const near = debrisField.getDebrisNear(playerPos, 5.0);
           let bestKm = Infinity;
           for (const d of (near || [])) {
-            if (d && d.discovered === false) continue;
+            if (!d) continue; const live = debrisField.getDebrisById ? debrisField.getDebrisById(d.id) : null; if ((live ? live.discovered : d.discovered) === false) continue; // canonical flag: the frame cache can hold pre-reveal snapshots
             if (typeof d.distanceKm === 'number' && d.distanceKm < bestKm) bestKm = d.distanceKm;
           }
           if (bestKm < Infinity) nearestDebrisM = bestKm * 1000;
@@ -1805,6 +1818,9 @@ async function init() {
       // global peak pads-in-one-view, so pads are never truncated here.
       maxVisible: 28,
       maxVisibleLaunch: 6,
+      // Pills never draw through the ship: hide a dot that lies inside the
+      // ship's screen circle (live position, no clone; radius covers every radiator pose).
+      occluders: cityLabels.shipOccluders(() => player && player.position),
     });
     if (strategicMap && strategicMap._earthMesh && strategicMap._camera) {
       cityLabels.attach({
@@ -1862,6 +1878,7 @@ async function init() {
   // --- Skills Pane (mounted on #hud-overlay, after HUD build) ---
   const hudOverlay = document.getElementById('hud-overlay');
   skillsPane = new SkillsPane(hudOverlay);
+  soundLogPane = new SoundLogPane(hudOverlay); // dev tool: inert unless ?sounds=1 (own 4 Hz timer)
   // Enable skill-based progressive HUD revelation
   hud.enableSkillReveal();
 
@@ -2147,6 +2164,26 @@ async function init() {
     // button pressed). A late-binding read: overridePane is constructed below
     // (inside the ladder block); absent / collapsed / disposed → false.
     const _isOverrideEngaged = () => !!(overridePane && typeof overridePane.isExpanded === 'function' && overridePane.isExpanded());
+    // RADIATOR rest angle from the REST_POSE name (w2-start-pose contract:
+    // REST_POSE 'CLOSED' → POSE_CLOSED_DEG); the 146° bud while either is absent.
+    const _flowerRestDeg = (FL) => {
+      const deg = FL.REST_POSE ? FL[`POSE_${FL.REST_POSE}_DEG`] : undefined;
+      return Number.isFinite(deg) ? deg : FL.POSE_STOW_DEG;
+    };
+    // The toggle direction (the "." law): a COMMANDED θ (rad) nearer the full
+    // bloom (POSE_CARGO_DEG) than the rest pose is "open", so a tap closes it.
+    const _flowerCommandedOpen = (thetaRad, FL) => {
+      const deg = (thetaRad * 180) / Math.PI;
+      return Math.abs(deg - FL.POSE_CARGO_DEG) < Math.abs(deg - _flowerRestDeg(FL));
+    };
+    // The ONE radiator readout (F1 bar + REFIT chip, D4): MOVING while a slew is
+    // pending, else getFlowerStatus().openFrac >= 0.5 → OPEN, below → CLOSED.
+    const _flowerReadout = () => {
+      const st = player.getFlowerStatus();
+      if (!st) return 'NOT FITTED';
+      if (player._flowerTargetTheta !== undefined) return 'MOVING';
+      return st.openFrac >= 0.5 ? 'OPEN' : 'CLOSED';
+    };
     const ladderActuators = {
       rosaFurl: {
         get: () => (player && typeof player.setRosaFurl === 'function')
@@ -2179,38 +2216,67 @@ async function init() {
           audioSystem?.playClick?.();
           eventBus.emit(Events.STRUT_DEPLOY_INPUT);
         },
+        // F1 bar (DECISIONS §15 row 9): a docked strut mid-swing reads MOVING.
+        moving: () => !!(armManager && armManager.arms
+          && armManager.arms.some((a) => a && a.state === Constants.ARM_STATES.DOCKED && a._strutTargetAlpha !== undefined)),
       },
+      // RADIATOR open / closed (F1 bar + REFIT chip). The REST pose is the closed
+      // one (w2-start-pose contract: THERMAL.FLOWER.REST_POSE 'CLOSED' /
+      // POSE_CLOSED_DEG, falling back to the STOW bud / POSE_STOW_DEG while
+      // absent). `getFlowerStatus().openFrac` is 0 at rest, 1 at the full bloom:
+      // >= 0.5 reads OPEN (the one rule for every radiator readout).
       flower: {
         get: () => {
           if (!player || typeof player.getFlowerPairCount !== 'function') return null;
           if (player.getFlowerPairCount() === 0) return 'NOT FITTED';
           const FL = Constants.THERMAL && Constants.THERMAL.FLOWER;
-          if (!FL) return null;
+          if (!FL || typeof player.getFlowerStatus !== 'function') return null;
           // Owner amendment 2026-09-09 (plan 1788863400000 last section, spec 4):
           // a flower left FOLDED by the SAFETY OVERRIDE sweep (launch lock armed,
           // commanded / live θ below the 90° floor) says so on the REFIT chip too
-          // — 'FLOWER · FOLDED', unpressed; a tap from there is the ordinary STOW
-          // release. Otherwise the shipped OPEN / CLOSED law, byte-identical.
+          // — 'FLOWER · FOLDED', unpressed. Otherwise the bar's readout (D4).
           const cmd = player._flowerTargetTheta ?? player._flowerThetaRad;
           if (player.flowerLaunchLocked === true && cmd < (FL.POSE_FLOOR_DEG * Math.PI) / 180) return 'FOLDED';
-          const mid = ((FL.POSE_STOW_DEG + FL.POSE_CARGO_DEG) / 2) * Math.PI / 180;
-          return (cmd <= mid) ? 'OPEN' : 'CLOSED';
+          return _flowerReadout();
         },
         toggle: () => {
           if (!player || player.getFlowerPairCount() === 0) return;
           const FL = Constants.THERMAL.FLOWER;
-          const mid = ((FL.POSE_STOW_DEG + FL.POSE_CARGO_DEG) / 2) * Math.PI / 180;
-          // Reverse the COMMANDED pose (what the chip shows), not the live one.
-          const deploying = !((player._flowerTargetTheta ?? player._flowerThetaRad) <= mid);
-          if (player.setFlowerPose(deploying ? 'CARGO' : 'STOW') === null) return;
+          // Reverse the COMMANDED pose (a mid-swing tap reverses the swing).
+          const deploying = !_flowerCommandedOpen(player._flowerTargetTheta ?? player._flowerThetaRad, FL);
+          if (player.setFlowerPose(deploying ? 'CARGO' : (FL.REST_POSE || 'STOW')) === null) return;
           audioSystem?.playClick?.();
           eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
-          // The KeyO comms line, verbatim (InputManager's handler is the source).
           eventBus.emit(Events.COMMS_MESSAGE, {
             sender: 'THERMAL',
-            text: deploying
-              ? 'Aft flower deploying — struts open LIKE A FLOWER to the 90° cargo bloom.'
-              : 'Aft flower stowing — folding to the 146° bud.',
+            text: deploying ? 'Radiator opening.' : 'Radiator folding.',
+            priority: 'info',
+          });
+        },
+      },
+      // The F1 bar's RADIATOR button (DECISIONS §15 row 9): the O key's plain
+      // toggle — KeyO's else-branch (InputManager) — never the override sweep.
+      // State is the LIVE `getFlowerStatus().openFrac` (>= 0.5 OPEN, else
+      // CLOSED), MOVING while a slew is pending. The pane drops taps inside
+      // VENT_DOUBLE_TAP_MS (deps.tapDebounceMs), so a touch double-tap never VENTs.
+      flowerDeploy: {
+        get: () => {
+          if (!player || typeof player.getFlowerStatus !== 'function') return null;
+          return _flowerReadout();
+        },
+        toggle: () => {
+          if (!player || typeof player.toggleFlowerDeploy !== 'function'
+            || typeof player.getFlowerPairCount !== 'function' || player.getFlowerPairCount() === 0) return;
+          // A tap inside VENT_DOUBLE_TAP_MS of the last O press / tap would be read
+          // as the push-through (vent / fold) — the bar never sends that gesture.
+          const lastTap = player._lastFlowerTap;
+          if (lastTap !== undefined && performance.now() - lastTap < Constants.THERMAL.FLOWER.VENT_DOUBLE_TAP_MS) return;
+          const deploying = player.toggleFlowerDeploy();
+          audioSystem?.playClick?.();
+          eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            sender: 'THERMAL',
+            text: deploying ? 'Radiator opening.' : 'Radiator folding.',
             priority: 'info',
           });
         },
@@ -2606,9 +2672,10 @@ async function init() {
         // while the dance runs, the flyby is the dance's — the dive lands
         // CLOSE on the hull (z01 0.23 ≈ 2.67 m) as the petals crack, the
         // dwell's dolly drifts out to z01 0.82 ≈ 5.59 m through the wings'
-        // roll-out, and OPENING_DANCE_HANDOVER (the listener right below)
-        // ends the dwell the moment the ship is bloomed — dwellMs is only
-        // the CEILING (dance total + 2 s) for a dropped event, never the
+        // roll-out (2.0 s, ending before the 8.70 s hand-over), and
+        // OPENING_DANCE_HANDOVER (the listener right below) ends the dwell the
+        // moment the wings are out — dwellMs is only
+        // the CEILING (hand-over + 2 s) for a dropped event, never the
         // duration. Flag OFF (Constants.FEATURE_FLAGS.OPENING_DANCE): no
         // dance runs and no hand-over ever fires — arm TODAY'S flyby (dive →
         // the 800 ms breath → pull), never the ceiling, or the camera would
@@ -2826,6 +2893,11 @@ async function init() {
       glass: _glassBoot,
       webdriver: !!(typeof navigator !== 'undefined' && navigator.webdriver),
       reboot: hudReboot,
+      // F1 bar (DECISIONS §15 row 9): live state refresh + the radiator tap debounce.
+      barTick: true,
+      tapDebounceMs: Constants.THERMAL.FLOWER.VENT_DOUBLE_TAP_MS,
+      // The workbench's ONE open state: the bar tick keeps the bar clear of the open drawer.
+      drawerOpen: () => !!(workbenchPane && workbenchPane.isOpen()),
     });
     if (hud && hud.paneDensity) {
       // Ladder reorder rev 3 (plan tmp/plans/1788867799156-hud-pane-ladder-reorder.md):
@@ -3994,7 +4066,8 @@ async function init() {
           player._rosaManualControl = false;
           player._rosaFurlTarget = 1.0;
         }
-        const target = player.setFlowerPose('STOW');   // the release: lock clears at 90°
+        // The release back to the orbit rest (CLOSED since DECISIONS §15 row 4): the lock clears at the 2° floor.
+        const target = player.setFlowerPose(Constants.THERMAL.FLOWER.REST_POSE || 'STOW');
         return { on: false, struts: docked.length, flower: target, status: player.getFlowerStatus() };
       };
 
@@ -6871,6 +6944,11 @@ function gameLoop(timestamp) {
     // Held world (Session I follow-up, owner 2026-09-23): fate clocks stop
     // while a drawer is open — closes the HANDOFF audit item.
     if (!_worldHeld) { try { resourceSystem.update(dt); } catch (e) { console.error('[GameLoop] resourceSystem:', e); } }
+    // w2-heat: scan analysis load + ship heat on the battery's clock, held with
+    // it. Held: what the battery bills meanwhile (base load) neither heats the
+    // ship nor spikes the power meter on release; a running analysis pauses.
+    if (!_worldHeld) { try { sensorSystem.drawAnalysis(dt); const _heat = resourceSystem.getThermalSource(); if (_heat) _heat.update(dt); } catch (e) { console.error('[GameLoop] thermal:', e); } }
+    else { try { resourceSystem.discardHeldFrame(); const _heat = resourceSystem.getThermalSource(); if (_heat) _heat.skipHeld(); } catch (e) { console.error('[GameLoop] thermal (held):', e); } }
     try { sensorSystem.update(dt, player.getPosition(), debrisField); } catch (e) { console.error('[GameLoop] sensorSystem:', e); }
     // Phase 1.5 (capture-feedback overhaul): close-range survey → Full Profile
     try {
@@ -7234,6 +7312,10 @@ function gameLoop(timestamp) {
   // Black-flicker triage (?bfp): must run INSIDE this rAF task, right after the
   // frame's final render, so its readbacks see this frame's buffer pre-present.
   if (blackFrameProbe) blackFrameProbe.tick(timestamp);
+  // Black-box self-repair: same rAF task, same pre-present buffer. Skipped when
+  // this frame's scene render was (viewCover plate, strategic map) — the buffer
+  // then holds no scene. Never part of diagnosticsArmed / _frameSched.n.
+  if (blackPatchHeal && !_skipPaint && !(strategicMap && strategicMap.isOpen())) blackPatchHeal.tick(timestamp);
 
   // §13 boot-timeline: mark the very first rendered frame. Continuous capture
   // mode — user calls window.__dumpBootTimeline() from DevTools when they want

@@ -13,6 +13,7 @@
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { ThermalSystem } from './ThermalSystem.js';
 
 export class ResourceSystem {
   constructor() {
@@ -83,6 +84,28 @@ export class ResourceSystem {
     /** @type {number} Seconds since last WEATHER_ACTIVE event */
     this._weatherLastUpdate = 0;
 
+    // ── Power ledger (w2-heat D1, DECISIONS §15 row 5: "battery … charging or
+    // draining, the cost of each action") ─────────────────────────────────
+    // Cumulative totals in battery units, monotonic for the life of the
+    // instance (never reset — ThermalSystem reads the drawn total as a running
+    // counter and takes the delta each tick, so no draw is lost or counted
+    // twice whatever the frame order). OUT = every battery draw: consume(),
+    // drainBattery(), drawUpTo(). IN = charging actually stored by update()
+    // (solar + RTG + beaming; a full battery stores 0). replenish() (salvage /
+    // refinery battery) and upgrade top-ups are NOT charging and are excluded.
+    this._ledgerOutUnits = 0;
+    this._ledgerInUnits = 0;
+    /** @private units since the last update() — turned into watts there */
+    this._frameOutUnits = 0;
+    /** @private */
+    this._frameInUnits = 0;
+    /** @private smoothed watts (HUD scale — same as the `SUN n W` readout) */
+    this._inW = 0;
+    /** @private */
+    this._outW = 0;
+    /** @type {object|null} ThermalSystem (or any { getSnapshot, reset }) — setThermalSource() */
+    this._thermalSource = null;
+
     // Listen for weather effects on solar power
     eventBus.on(Events.WEATHER_ACTIVE, (effects) => {
       this._weatherSolarMult = effects.solarPower ?? 1.0;
@@ -124,6 +147,7 @@ export class ResourceSystem {
     if (this[resource] < amount) return false;
 
     this[resource] -= amount;
+    if (resource === 'battery') this._recordDraw(amount);
     this._syncToPlayer();
     eventBus.emit(Events.RESOURCE_CHANGED, {
       resource,
@@ -198,6 +222,7 @@ export class ResourceSystem {
     if (!(amount > 0)) return;
     const drained = Math.min(amount, this.battery);
     this.battery -= drained;
+    this._recordDraw(drained);
     this._syncToPlayer();
     eventBus.emit(Events.RESOURCE_CHANGED, {
       resource: 'battery',
@@ -222,6 +247,7 @@ export class ResourceSystem {
     const drawn = Math.min(amount, Math.max(0, this[resource]));
     if (drawn <= 0) return 0;
     this[resource] -= drawn;
+    if (resource === 'battery') this._recordDraw(drawn);
     this._syncToPlayer();
     eventBus.emit(Events.RESOURCE_CHANGED, {
       resource,
@@ -385,6 +411,123 @@ export class ResourceSystem {
     };
   }
 
+  // ======================================================================
+  // POWER LEDGER + THERMAL SOURCE (w2-heat D1 / D3 — the meters' contract)
+  // ======================================================================
+
+  /**
+   * The battery meter's numbers (w2-meters codes against this shape).
+   * Watts are on the HUD's `SUN n W` scale (battery units per real second ×
+   * SHIP_HEAT.W_PER_UNIT_S) and smoothed over ~POWER_TAU_S (0.5 s).
+   * `inW` = charging actually stored (solar + RTG + beaming; 0 surplus when
+   * full — replenish()/salvage and upgrade top-ups are not charging);
+   * `outW` = every battery draw; `netW = inW − outW`. A fresh object per call.
+   * @returns {{battery:number, batteryMax:number, inW:number, outW:number, netW:number}}
+   */
+  getPowerSnapshot() {
+    return {
+      battery: this.battery,
+      batteryMax: this.batteryMax,
+      inW: this._inW,
+      outW: this._outW,
+      netW: this._inW - this._outW,
+    };
+  }
+
+  /**
+   * Cumulative battery units drawn since this instance was built (monotonic —
+   * every consume('battery') / drainBattery() / drawUpTo('battery')). The
+   * ThermalSystem's heat input: it takes the delta each tick.
+   * @returns {number}
+   */
+  getEnergyDrawnUnits() { return this._ledgerOutUnits; }
+
+  /**
+   * Cumulative battery units of charging actually stored (monotonic).
+   * @returns {number}
+   */
+  getEnergyChargedUnits() { return this._ledgerInUnits; }
+
+  /**
+   * Register the heat source the meters read through getThermalSnapshot()
+   * (ThermalSystem calls this on itself). reset()/restore() reset it too —
+   * heat restarts with the battery on new game / retry / a fresh mission.
+   * @param {{ getSnapshot: function(): object, reset?: function(): void }|null} source
+   */
+  setThermalSource(source) { this._thermalSource = source || null; }
+
+  /** @returns {object|null} the registered thermal source (the loop ticks it). */
+  getThermalSource() { return this._thermalSource; }
+
+  /**
+   * The heat meter's numbers, or null when no thermal source is registered.
+   * @returns {{tempC:number, band:'green'|'yellow'|'red', trend:-1|0|1, autoOpened:boolean}|null}
+   */
+  getThermalSnapshot() {
+    const src = this._thermalSource;
+    return (src && typeof src.getSnapshot === 'function') ? src.getSnapshot() : null;
+  }
+
+  /**
+   * Build the ship's ThermalSystem bound to this ledger and `player`, and
+   * register it. A factory here so main.js wires it in its two assigned lines
+   * without a new import (lane w2-heat file ownership). Idempotent: a second
+   * call disposes the first source.
+   * @param {object} player - PlayerSatellite (getFlowerStatus / setFlowerPose / _inShadow)
+   * @returns {ThermalSystem}
+   */
+  createThermalSystem(player) {
+    if (this._thermalSource && typeof this._thermalSource.dispose === 'function') {
+      this._thermalSource.dispose();
+    }
+    return new ThermalSystem({ resourceSystem: this, player });
+  }
+
+  /** @private one battery draw → the ledger */
+  _recordDraw(units) {
+    if (!(units > 0)) return;
+    this._ledgerOutUnits += units;
+    this._frameOutUnits += units;
+  }
+
+  /**
+   * A held-world frame (a drawer is open — main.js `_worldHeld`): update() is
+   * not called, but player.update still bills the base load. Drop this
+   * frame's units so they never land as one spike on release; the smoothed
+   * watts stay frozen at their pre-hold values. (The cumulative totals keep
+   * counting — ThermalSystem.skipHeld re-syncs its counter past them.)
+   */
+  discardHeldFrame() {
+    this._frameOutUnits = 0;
+    this._frameInUnits = 0;
+  }
+
+  /** @private this frame's units → smoothed watts (EMA, τ = POWER_TAU_S) */
+  _smoothLedger(dt) {
+    if (!(dt > 0)) return;
+    const SH = Constants.SHIP_HEAT;
+    const k = SH.W_PER_UNIT_S / dt;
+    const a = 1 - Math.exp(-dt / SH.POWER_TAU_S);
+    this._inW += (this._frameInUnits * k - this._inW) * a;
+    this._outW += (this._frameOutUnits * k - this._outW) * a;
+    this._frameInUnits = 0;
+    this._frameOutUnits = 0;
+  }
+
+  /** @private zero the smoothed watts (cumulative totals stay monotonic) */
+  _resetLedgerRates() {
+    this._frameInUnits = 0;
+    this._frameOutUnits = 0;
+    this._inW = 0;
+    this._outW = 0;
+  }
+
+  /** @private heat restarts with the battery */
+  _resetThermal() {
+    const src = this._thermalSource;
+    if (src && typeof src.reset === 'function') src.reset();
+  }
+
   /**
    * Serialize upgraded max capacities for persistence.
    * Current resource levels are NOT saved — they reset each mission.
@@ -440,6 +583,8 @@ export class ResourceSystem {
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;
     this._depletionEmitted = false;
+    this._resetLedgerRates();   // w2-heat: a fresh mission — meters and heat restart
+    this._resetThermal();
     this._syncToPlayer();
   }
 
@@ -475,6 +620,9 @@ export class ResourceSystem {
     const rechargeRate = (typeof liveRate === 'number')
       ? liveRate * this._weatherSolarMult * dt * 0.001
       : this.solarRate * this.solarPanelHealth * this._weatherSolarMult * dt * 0.001;
+    // w2-heat D1: charging actually stored this frame (solar + RTG + beaming
+    // below) — a full battery stores nothing, so its surplus is never "in".
+    const batteryBeforeCharge = this.battery;
     if (this.battery < this.batteryMax) {
       this.battery = Math.min(this.batteryMax, this.battery + rechargeRate);
       this._syncToPlayer();
@@ -491,6 +639,13 @@ export class ResourceSystem {
       this.battery = Math.min(this.batteryMax, this.battery + this._powerBeamRate * dt);
       this._syncToPlayer();
     }
+
+    const charged = this.battery - batteryBeforeCharge;
+    if (charged > 0) {
+      this._ledgerInUnits += charged;
+      this._frameInUnits += charged;
+    }
+    this._smoothLedger(dt);
 
     // Gradual solar panel degradation from radiation/micrometeorite damage.
     // Mother-wings step 4: this is the WING (ROSA) health specifically — the
@@ -615,6 +770,8 @@ export class ResourceSystem {
     this._powerBeamRate = 0;
     this._groundStationInView = false;
     clearTimeout(this._gsPassTimer);
+    this._resetLedgerRates();   // w2-heat: heat restarts with the battery (new game / retry)
+    this._resetThermal();
     this._syncToPlayer();
   }
 

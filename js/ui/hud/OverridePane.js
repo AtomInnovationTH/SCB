@@ -119,6 +119,18 @@
  * the panel, a collapse or a dispose aborts and disposes everything at once —
  * the reboot cancelled (no dark panel left behind), the Houston line dropped.
  *
+ * F1 BAR (owner 2026-10-08, DECISIONS §15 row 9; plan w2-f1-bar): the same four
+ * buttons, as a flat always-visible bar at the bottom centre of F1 —
+ * `#hud-f1-bar`, a SIBLING root built here and sharing the gag, the actuators and
+ * the label/click machinery. Plain labels with a live state word under each
+ * (STRUTS · RADIATOR · WINGS · FURNACE); no hazard-tape main button, no slide-up.
+ * Its ONE visibility bit is FloorMask's `data-floor-gone` (MASK_PANES.f1bar, an
+ * attribute pane, shown on F1 only); styling is injected CSS, never inline
+ * styles. RADIATOR reads / drives the hub's `flowerDeploy` actuator (the O key's
+ * plain toggle, never the override sweep) and a tap inside `tapDebounceMs` of the
+ * last one is dropped, so a touch double-tap can never VENT. FURNACE is the same
+ * joke until the furnace is built. `#hud-override-pane` is unchanged.
+ *
  * Everything lives inside the `Constants.LADDER.ENABLED` gate — the hub
  * constructs the pane only there. NO live singletons are imported here (the
  * one import is VisualLaw, pure data): bus / events / audio / reboot / timers /
@@ -150,6 +162,31 @@ export const OVERRIDE_GEOMETRY = Object.freeze({
   BTN_GLASS_MIN_PX: 44,
   GAP_PX: 8,               // grid gap AND the gap between the grid plate and the main button
   SLIDE_MS: 270,           // motion law: one curve, 240-300 ms (RefitPane uses 270)
+});
+
+/** The F1 bar (DECISIONS §15 row 9): a root of its own, beside the override pane. */
+export const F1_BAR_ID = 'hud-f1-bar';
+/** Bar order, left → right. */
+export const F1_BAR_KEYS = Object.freeze(['struts', 'radiator', 'wings', 'furnace']);
+export const F1_BAR_GEOMETRY = Object.freeze({
+  BTN_W_PX: 94,            // each button (owner's floor 88); 4 x 94 + 3 x 8 = 400 keeps the bar clear of a 380 px drawer at 1180 wide
+  BTN_H_PX: 48,            // touch-sized (>= 44 pt HIG) on desktop and glass alike
+  GAP_PX: 8,
+  BOTTOM_PX: 12,           // CSS bottom floor: max(12px, env(safe-area-inset-bottom, 0px)); the bar's top is 12 + 48 = 60 < the hint ticker's 88
+  TICK_MS: 500,            // the bar's live-state refresh (struts have no arrival event)
+  TAP_DEBOUNCE_MS: 600,    // = Constants.THERMAL.FLOWER.VENT_DOUBLE_TAP_MS (main.js passes the live value as deps.tapDebounceMs)
+  // The override pane pulled out on F1 (the panel-count +) sits at the same bottom-centre spot
+  // (12 + 64): the bar lifts above it AND above the transient hint band (Constants.ONBOARDING.TICKER
+  // BOTTOM_PX 88 + ROW_HEIGHT_PX 36 + 8 = 132). With its grid open the bar hides (the grid IS the
+  // four buttons; two RADIATOR buttons doing different things at once would confuse).
+  LIFT_OVER_HINT_PX: 132,
+  // Drawer open: the bar centre keeps at least clamp(380px, 28vw, 440px) (WorkbenchPane's width,
+  // pinned by test-F1Bar) + DRAWER_GAP_PX + half the bar from the left edge — clear of the drawer
+  // and of the SPECS tab riding its inner edge (measured 59-60 wide). Wide screens stay centred.
+  DRAWER_GAP_PX: 72,
+  // FURNACE on the bar has no expand/collapse to reset the two-press joke: a WARN left this long
+  // (or the bar hidden) goes back to IDLE, so press 2 is a deliberate second press. Design value.
+  FURNACE_RESET_MS: 30000,
 });
 
 export const FURNACE_GAG = Object.freeze({
@@ -263,6 +300,12 @@ const MAIN_TITLE = 'SAFETY OVERRIDE';
 const CTA_CLOSED = 'PRESS TO TEST ACTUATORS';
 const CTA_OPEN = 'PRESS TO CLOSE';
 
+/** F1 bar key → actuators key (RADIATOR → `flowerDeploy`, the O key's plain toggle — never the override sweep). */
+const BAR_ACTUATOR_OF = Object.freeze({ struts: 'struts', radiator: 'flowerDeploy', wings: 'rosaFurl' });
+const BAR_NAME_OF = Object.freeze({ struts: 'STRUTS', radiator: 'RADIATOR', wings: 'WINGS', furnace: 'FURNACE' });
+const BAR_NULL_STATE = Object.freeze({ struts: 'NO DAUGHTER', radiator: 'OFFLINE', wings: 'OFFLINE' });
+const FLOOR_GONE_ATTR = 'data-floor-gone';  // FloorMask's attribute-pane bit (the mask is its one writer)
+
 /** Panel key → actuators key (RADIATOR → the OVERRIDE full-range sweep, amendment 2026-09-09). */
 const ACTUATOR_OF = Object.freeze({ daughters: 'struts', radiator: 'flowerSweep', rosa: 'rosaFurl' });
 const NAME_OF = Object.freeze({ daughters: 'DAUGHTERS', radiator: 'RADIATOR', rosa: 'ROSA', furnace: 'FURNACE' });
@@ -346,6 +389,10 @@ export class OverridePane {
    * @param {Document|null} [deps.doc] document (default: the global one; null = headless inert)
    * @param {Element}  [deps.parent] root's parent (default: `#hud-overlay`, else `doc.body`)
    * @param {boolean}  [deps.glass] true ⇒ 44 pt buttons
+   * @param {boolean}  [deps.barTick] true ⇒ the F1 bar re-reads the actuators every F1_BAR_GEOMETRY.TICK_MS
+   *   (struts have no arrival event); default off so a bare pane owns no timer
+   * @param {number}   [deps.tapDebounceMs] RADIATOR / FURNACE taps closer than this are dropped (main.js: VENT_DOUBLE_TAP_MS)
+   * @param {function} [deps.drawerOpen] zero-arg bool: the workbench drawer is open (the bar tick shifts the bar clear of it)
    * @param {boolean}  [deps.webdriver] true ⇒ the gag never builds the black veil (so no POST, no reboot)
    * @param {boolean|function} [deps.reducedMotion] override for the matchMedia probe
    * @param {function} [deps.setTimeout] injected timer (default: the global)
@@ -373,6 +420,8 @@ export class OverridePane {
     this._clearTimeoutFn = typeof deps.clearTimeout === 'function' ? deps.clearTimeout
       : (typeof clearTimeout === 'function' ? (id) => clearTimeout(id) : null);
     this._now = typeof deps.now === 'function' ? deps.now : _nowMs;
+    this._barTickOn = deps.barTick === true;   // opt-in: the hub passes true (a default timer would show in every pane test's pending count)
+    this._tapDebounceMs = Number.isFinite(deps.tapDebounceMs) ? deps.tapDebounceMs : F1_BAR_GEOMETRY.TAP_DEBOUNCE_MS;
 
     this._root = null;
     this._grid = null;
@@ -381,6 +430,18 @@ export class OverridePane {
     this._ctaEl = null;              // .ovr-main-cta (write-on-change on expand / collapse)
     this._btns = {};                 // key → button element
     this._models = {};               // key → last applied { text, disabled, pressed }
+    this._bar = null;                // #hud-f1-bar root
+    this._barBtns = {};              // key → button element
+    this._barParts = {};             // key → { name, state } spans
+    this._barModels = {};            // key → last applied { name, state, disabled, pressed }
+    this._barTickId = null;          // the bar's self-rescheduling refresh (NOT a gag timer)
+    this._lastRadiatorTapMs = -Infinity;
+    this._lastFurnaceTapMs = -Infinity;
+    this._furnacePresses = 0;        // every FURNACE press, bar or grid (the bar's reset checks no press came since)
+    this._barFurnacePressNo = -1;    // _furnacePresses right after the bar's last FURNACE press
+    this._barFurnaceResetId = null;  // the bar's WARN reset timer
+    this._drawerOpen = typeof deps.drawerOpen === 'function' ? deps.drawerOpen : null;
+    this._barDrawer = false;         // last applied .f1b-drawer state
     this._rung = null;
     this._unsubs = [];
     this._disposed = false;
@@ -407,10 +468,12 @@ export class OverridePane {
     this._rebootHandle = null;       // truthy while the systems reboot runs (reboot.play returned true)
 
     this._onClick = (e) => this._handleClick(e);
+    this._onBarClick = (e) => this._handleBarClick(e);
 
     this._build(deps.parent);
     this._subscribe();
     if (this._root) this.refresh();
+    this._startBarTick();
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -463,6 +526,7 @@ export class OverridePane {
       if (key === 'furnace') continue;
       this._applyModel(key, OverridePane.buttonLabel(key, this._readActuator(key)));
     }
+    this._refreshBar();
   }
 
   /**
@@ -519,10 +583,14 @@ export class OverridePane {
   /** @returns {object|null} the root element */
   el() { return this._root; }
 
+  /** @returns {object|null} the F1 bar's root element (`#hud-f1-bar`) */
+  barEl() { return this._bar; }
+
   /** Abort the gag, clear every timer (incl. the reveal blink), unsubscribe, remove the root, clear `body[data-ovr-open]`; further calls no-op. */
   dispose() {
     if (this._disposed) return;
     this._stopTick();
+    this._stopBarTick();
     this._clearAttract();
     this._abortGag();
     this._setBodyOpen(false);
@@ -535,6 +603,14 @@ export class OverridePane {
       try { this._root.removeEventListener('click', this._onClick); } catch (_e) { /* stub */ }
     }
     _removeEl(this._root);
+    if (this._bar && typeof this._bar.removeEventListener === 'function') {
+      try { this._bar.removeEventListener('click', this._onBarClick); } catch (_e) { /* stub */ }
+    }
+    _removeEl(this._bar);
+    this._bar = null;
+    this._barBtns = {};
+    this._barParts = {};
+    this._barModels = {};
     this._root = null;
     this._grid = null;
     this._mainBtn = null;
@@ -574,6 +650,37 @@ export class OverridePane {
     const s = String(state).toUpperCase();
     if (s === NOT_FITTED) return { text: name + sep + NOT_FITTED, disabled: true, pressed: false };
     return { text: name + sep + s, disabled: false, pressed: s === OUT_STATE[key] };
+  }
+
+  /**
+   * The pure F1-bar label law: plain name + a live state word. `state` is the
+   * actuator's `get()` (struts DEPLOYED / STOWED / null; radiator the hub's
+   * `flowerDeploy` OPEN / CLOSED / MOVING / NOT FITTED / null; wings FURLED /
+   * DEPLOYED / null); `moving` (struts only) = a docked strut is mid-swing.
+   * `pressed` = "the hardware is OUT". FURNACE is the joke: FAULT, never disabled.
+   * @param {string} key one of F1_BAR_KEYS
+   * @param {string|null|undefined} state
+   * @param {{moving?:boolean}} [opts]
+   * @returns {{name:string, state:string, disabled:boolean, pressed:boolean}|null}
+   */
+  static barLabel(key, state, opts = {}) {
+    const name = BAR_NAME_OF[key];
+    if (!name) return null;
+    if (key === 'furnace') return { name, state: 'FAULT', disabled: false, pressed: false };
+    if (state == null) return { name, state: BAR_NULL_STATE[key], disabled: true, pressed: false };
+    const s = String(state).toUpperCase();
+    if (s === NOT_FITTED) return { name, state: NOT_FITTED, disabled: true, pressed: false };
+    if (key === 'struts') {
+      if (opts && opts.moving) return { name, state: 'MOVING', disabled: false, pressed: false };
+      if (s === 'DEPLOYED') return { name, state: 'OPEN', disabled: false, pressed: true };
+      if (s === 'STOWED') return { name, state: 'CLOSED', disabled: false, pressed: false };
+    } else if (key === 'wings') {
+      if (s === 'DEPLOYED') return { name, state: 'OUT', disabled: false, pressed: true };
+      if (s === 'FURLED') return { name, state: 'FURLED', disabled: false, pressed: false };
+    } else if (key === 'radiator') {
+      if (s === 'OPEN') return { name, state: 'OPEN', disabled: false, pressed: true };
+    }
+    return { name, state: s, disabled: false, pressed: false };
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
@@ -662,12 +769,49 @@ export class OverridePane {
     root.appendChild(main);
     if (typeof root.addEventListener === 'function') root.addEventListener('click', this._onClick);
     parent.appendChild(root);
+    this._buildBar(doc, parent);
 
     this._root = root;
     this._grid = grid;
     this._mainBtn = main;
     this._titleEl = title;
     this._ctaEl = cta;
+  }
+
+  /**
+   * @private The F1 bar (DECISIONS §15 row 9): `#hud-f1-bar`, four buttons in a
+   * flat row. Built HIDDEN (`data-floor-gone`, FloorMask's attribute-pane bit —
+   * the mask is its one writer: shown on F1, gone elsewhere and on disengage).
+   * Geometry and look are injected CSS (`_ensureStyle`) — no inline style.
+   */
+  _buildBar(doc, parent) {
+    const bar = doc.createElement('div');
+    bar.id = F1_BAR_ID;
+    bar.setAttribute('role', 'group');
+    bar.setAttribute('aria-label', 'Mother controls');
+    bar.setAttribute(FLOOR_GONE_ATTR, '');
+    if (this._glass) bar.setAttribute(GLASS_ATTR, '');
+    if (this._reducedMotion()) bar.setAttribute(REDUCED_ATTR, '');
+    for (const key of F1_BAR_KEYS) {
+      const btn = doc.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('type', 'button');
+      btn.setAttribute(KEY_ATTR, key);
+      btn.className = key === 'furnace' ? 'f1b-btn f1b-furnace' : 'f1b-btn';
+      btn.setAttribute('aria-pressed', 'false');
+      const name = doc.createElement('span');
+      name.className = 'f1b-name';
+      const state = doc.createElement('span');
+      state.className = 'f1b-state';
+      btn.appendChild(name);
+      btn.appendChild(state);
+      bar.appendChild(btn);
+      this._barBtns[key] = btn;
+      this._barParts[key] = { name, state };
+    }
+    if (typeof bar.addEventListener === 'function') bar.addEventListener('click', this._onBarClick);
+    parent.appendChild(bar);
+    this._bar = bar;
   }
 
   /** @private The cta span follows the grid (write-on-change; title is static). */
@@ -704,6 +848,8 @@ export class OverridePane {
     const G = OVERRIDE_GEOMETRY;
     const F = FURNACE_GAG;
     const P = `#${OVERRIDE_PANE_ID}`;
+    const B = F1_BAR_GEOMETRY;
+    const BAR = `#${F1_BAR_ID}`;
     const curve = 'cubic-bezier(0.65, 0, 0.35, 1)';
     const style = doc.createElement('style');
     style.id = OVERRIDE_STYLE_ID;
@@ -895,6 +1041,65 @@ export class OverridePane {
       /* Glass: 44 pt hit boxes (Apple HIG); the main button's fixed 260 x 64 already clears it */
       ${P}[${GLASS_ATTR}] .ovr-btn { min-height: ${G.BTN_GLASS_MIN_PX}px; min-width: ${G.BTN_GLASS_MIN_PX}px; font-size: 13px; }
       ${P}[${GLASS_ATTR}] .ovr-main { min-height: ${G.MAIN_GLASS_MIN_H_PX}px; }
+      /* ── The F1 bar (DECISIONS §15 row 9): one flat row at the bottom centre, shown by
+         FloorMask on F1 only (data-floor-gone is the one bit). Buttons are touch-sized
+         (>= 44 pt; ${B.BTN_H_PX} tall), the root takes no pointer events so a drag beside
+         them reaches the canvas. Geometry lives here, never inline. */
+      ${BAR}[${FLOOR_GONE_ATTR}] { display: none !important; }
+      /* The override pane pulled out on F1 sits at the same spot: the bar lifts above it and the
+         hint band (a sibling rule on the root's own bits — no inline style, no JS state); with its
+         grid open the bar hides (the grid is the same four buttons). */
+      ${P}:not([${DENSITY_HIDDEN_ATTR}]) ~ ${BAR} {
+        bottom: max(${B.LIFT_OVER_HINT_PX}px, calc(max(${G.BOTTOM_PX}px, env(safe-area-inset-bottom, 0px)) + ${G.MAIN_H_PX + G.GAP_PX}px));
+      }
+      ${P}[${OPEN_ATTR}]:not([${DENSITY_HIDDEN_ATTR}]) ~ ${BAR} { visibility: hidden; }
+      /* Drawer open: keep the bar right of the drawer + its SPECS tab (wide screens stay centred). */
+      ${BAR}.f1b-drawer { left: max(50%, calc(clamp(380px, 28vw, 440px) + ${B.DRAWER_GAP_PX + (4 * B.BTN_W_PX + 3 * B.GAP_PX) / 2}px)); }
+      ${BAR} {
+        position: absolute;
+        left: 50%;
+        bottom: max(${B.BOTTOM_PX}px, env(safe-area-inset-bottom, 0px));
+        transform: translateX(-50%);
+        display: flex;
+        flex-direction: row;
+        gap: ${B.GAP_PX}px;
+        pointer-events: none;
+        color: ${COLOR_PLAYER};
+      }
+      ${BAR} .f1b-btn {
+        pointer-events: auto;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        width: ${B.BTN_W_PX}px;
+        min-height: ${B.BTN_H_PX}px;
+        box-sizing: border-box;
+        padding: 4px 6px;
+        font-family: var(--font-mono);
+        color: ${COLOR_PLAYER};
+        background: rgba(5, 10, 20, 0.82);
+        border: 1px solid rgba(0, 255, 136, 0.4);
+        border-radius: 4px;
+        cursor: pointer;
+        touch-action: manipulation;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+        transition: background-color 0.15s ease, border-color 0.15s ease;
+      }
+      ${BAR} .f1b-name { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; line-height: 1.1; white-space: nowrap; }
+      ${BAR} .f1b-state { font-size: 10px; letter-spacing: 0.1em; line-height: 1.1; white-space: nowrap; opacity: 0.85; }
+      ${BAR} .f1b-btn:hover:not(:disabled) { background: rgba(0, 255, 136, 0.16); }
+      ${BAR} .f1b-btn:active:not(:disabled) { background: rgba(0, 255, 136, 0.28); }
+      ${BAR} .f1b-btn[aria-pressed="true"] { background: rgba(0, 255, 136, 0.2); border-color: ${COLOR_PLAYER}; }
+      ${BAR} .f1b-btn:disabled { color: ${COLOR_CAUTION}; opacity: 0.6; cursor: not-allowed; border-color: rgba(255, 170, 0, 0.35); }
+      ${BAR} .f1b-furnace { color: ${COLOR_CAUTION}; border-color: rgba(255, 170, 0, 0.5); }
+      ${BAR} .f1b-furnace .f1b-state { color: ${COLOR_CAUTION}; letter-spacing: 0.22em; }
+      ${BAR}[${GLASS_ATTR}] .f1b-btn { min-height: ${B.BTN_H_PX}px; min-width: ${B.BTN_W_PX}px; }
+      ${BAR}[${REDUCED_ATTR}] .f1b-btn { transition: none; }
       /* The gag's body-level chrome */
       #${OVERRIDE_VIGNETTE_ID} { opacity: 0.85; }
       .${PULSE_CLASS} { animation: ovr-pulse ${Math.round(1000 / F.VIGNETTE_HZ)}ms ease-in-out infinite; }
@@ -979,6 +1184,7 @@ export class OverridePane {
       ${P}[${REDUCED_ATTR}] .ovr-furnace { animation: none; opacity: 0.55; }
       ${P}[${REDUCED_ATTR}] .${ATTRACT_CLASS} { animation: none; }
       @media (prefers-reduced-motion: reduce) {
+        ${BAR} .f1b-btn { transition: none; }
         ${P}, ${P} .ovr-grid { transition: none; }
         ${P} .ovr-furnace { animation: none; opacity: 0.55; }
         ${P} .${ATTRACT_CLASS}, .${PULSE_CLASS}, .${SHAKE_CLASS}, .${JITTER_CLASS}, #${OVERRIDE_VEIL_ID}.${CRT_CLASS}, #${OVERRIDE_COUNTDOWN_ID} .ovr-count, #${OVERRIDE_COUNTDOWN_ID} .ovr-warn { animation: none !important; }
@@ -1068,6 +1274,153 @@ export class OverridePane {
     this.refresh();                                       // re-read truth, never an optimistic flip
   }
 
+  // ── The F1 bar: state, taps, tick ──────────────────────────────────────────
+
+  /** @private The struts' mid-swing flag (the actuator's optional `moving()`); false on absence / throw. */
+  _strutsMoving() {
+    const a = this._actuators && this._actuators.struts;
+    if (!a || typeof a.moving !== 'function') return false;
+    try { return !!a.moving(); } catch (_e) { return false; }
+  }
+
+  /** @private The bar's label model for `key`, from the live actuators. */
+  _barModel(key) {
+    if (key === 'furnace') return OverridePane.barLabel(key, null);
+    const a = this._actuators && this._actuators[BAR_ACTUATOR_OF[key]];
+    let state = null;
+    if (a && typeof a.get === 'function') {
+      try { state = a.get(); } catch (_e) { state = null; }
+    }
+    return OverridePane.barLabel(key, state, key === 'struts' ? { moving: this._strutsMoving() } : undefined);
+  }
+
+  /** @private Re-read the actuators and repaint the bar (write-on-change; never throws). */
+  _refreshBar() {
+    if (this._disposed || !this._bar) return;
+    for (const key of F1_BAR_KEYS) this._applyBarModel(key, this._barModel(key));
+  }
+
+  /** @private Write one bar button's model, write-on-change (two spans; the button is never re-textContent'd). */
+  _applyBarModel(key, model) {
+    const btn = this._barBtns[key];
+    const parts = this._barParts[key];
+    if (!btn || !parts || !model) return;
+    const prev = this._barModels[key];
+    if (prev && prev.name === model.name && prev.state === model.state
+      && prev.disabled === model.disabled && prev.pressed === model.pressed) return;
+    if (!prev || prev.name !== model.name) parts.name.textContent = model.name;
+    if (!prev || prev.state !== model.state) parts.state.textContent = model.state;
+    if (!prev || prev.state !== model.state || prev.name !== model.name) btn.setAttribute('aria-label', `${model.name} ${model.state}`);
+    if (!prev || prev.disabled !== model.disabled) {
+      btn.disabled = model.disabled;
+      if (model.disabled) {
+        btn.setAttribute('disabled', '');
+        btn.setAttribute('aria-disabled', 'true');
+      } else {
+        btn.removeAttribute('disabled');
+        btn.removeAttribute('aria-disabled');
+      }
+    }
+    if (!prev || prev.pressed !== model.pressed) btn.setAttribute('aria-pressed', model.pressed ? 'true' : 'false');
+    this._barModels[key] = model;
+  }
+
+  /**
+   * @private The bar's ONE delegated click. FURNACE is the joke; the others call
+   * the actuator's `toggle()` (the closure owns the click sound + input event)
+   * and re-read truth. RADIATOR drops a tap inside `tapDebounceMs` of the last
+   * one: `player.toggleFlowerDeploy` reads two taps inside VENT_DOUBLE_TAP_MS as
+   * the push-through VENT, and a touch double-tap must never do that. Every tap
+   * blurs the button first, so Enter never re-presses it.
+   */
+  _handleBarClick(e) {
+    if (this._disposed) return;
+    const btn = _closestKey(e && e.target);
+    if (!btn) return;
+    // Drop focus (the StatusPanel fleet-button idiom): a focused button would be
+    // re-pressed by the next Enter (InputManager's Enter does not preventDefault).
+    try { if (typeof btn.blur === 'function') btn.blur(); } catch (_e) { /* stub */ }
+    const key = btn.getAttribute(KEY_ATTR);
+    if (key === 'furnace') { this._barFurnacePress(); return; }
+    if (!BAR_ACTUATOR_OF[key]) return;
+    const model = this._barModels[key] || this._barModel(key);
+    if (!model || model.disabled) return;                 // a disabled button drops the tap
+    if (key === 'radiator') {
+      const now = this._now();
+      if (now - this._lastRadiatorTapMs < this._tapDebounceMs) return;
+      this._lastRadiatorTapMs = now;
+    }
+    const a = this._actuators && this._actuators[BAR_ACTUATOR_OF[key]];
+    if (a && typeof a.toggle === 'function') {
+      try { a.toggle(); } catch (_e) { /* dep */ }
+    }
+    this._refreshBar();                                   // re-read truth, never an optimistic flip
+  }
+
+  /**
+   * @private FURNACE from the bar: the same two-press joke, minus what the bar
+   * lacks (no expand/collapse resets the count). A tap inside `tapDebounceMs`
+   * of the last one counts once (a touch double tap is one press); a WARN
+   * left FURNACE_RESET_MS — or the bar hidden (the tick) — goes back to IDLE.
+   */
+  _barFurnacePress() {
+    const now = this._now();
+    if (now - this._lastFurnaceTapMs < this._tapDebounceMs) return;
+    this._lastFurnaceTapMs = now;
+    this._furnacePress();
+    this._barFurnacePressNo = this._furnacePresses;
+    if (this._barFurnaceResetId != null) this._clearTimer(this._barFurnaceResetId);
+    this._barFurnaceResetId = this._gagState === 'WARN'
+      ? this._schedule(() => { this._barFurnaceResetId = null; this._resetBarFurnaceWarn(); }, F1_BAR_GEOMETRY.FURNACE_RESET_MS)
+      : null;
+  }
+
+  /** @private Back to IDLE from a WARN the BAR started, when no FURNACE press came since (a grid WARN keeps its no-timeout law). */
+  _resetBarFurnaceWarn() {
+    if (this._gagState !== 'WARN' || this._furnacePresses !== this._barFurnacePressNo) return;
+    this._gagState = 'IDLE';
+    this._pressCount = 0;
+  }
+
+  /** @private `.f1b-drawer` on the bar while the workbench drawer is open (write-on-change; a cheap bool read). */
+  _syncBarDrawer() {
+    if (!this._bar || !this._drawerOpen) return;
+    let open = false;
+    try { open = !!this._drawerOpen(); } catch (_e) { open = false; }
+    if (open === this._barDrawer) return;
+    this._barDrawer = open;
+    if (open) _addClass(this._bar, 'f1b-drawer');
+    else _removeClass(this._bar, 'f1b-drawer');
+  }
+
+  /** @private The bar's live refresh: self-rescheduling; the actuator re-read is skipped while the mask hides the bar. */
+  _startBarTick() {
+    this._stopBarTick();
+    if (!this._barTickOn || !this._bar || !this._setTimeoutFn || this._disposed) return;
+    const setTimer = this._setTimeoutFn;                  // detached call (see the constructor)
+    try {
+      this._barTickId = setTimer(() => {
+        this._barTickId = null;
+        if (this._disposed || !this._bar) return;
+        const gone = typeof this._bar.hasAttribute === 'function' && this._bar.hasAttribute(FLOOR_GONE_ATTR);
+        this._syncBarDrawer();
+        if (!gone) this._refreshBar();
+        else this._resetBarFurnaceWarn();                 // the bar hidden: the joke starts over next time
+        this._startBarTick();
+      }, F1_BAR_GEOMETRY.TICK_MS);
+    } catch (_e) {
+      this._barTickId = null;
+    }
+  }
+
+  /** @private */
+  _stopBarTick() {
+    if (this._barTickId != null) {
+      this._clearTimer(this._barTickId);
+      this._barTickId = null;
+    }
+  }
+
   /** @private The 1 Hz label refresh while expanded (labels follow the hotkeys). */
   _startTick() {
     this._stopTick();
@@ -1137,6 +1490,7 @@ export class OverridePane {
     if (this._disposed) return;
     const s = this._gagState;
     if (s === 'OVERHEAT' || s === 'COUNTDOWN' || s === 'BLACKOUT' || s === 'RECOVER') return;
+    this._furnacePresses += 1;
     this._pressCount += 1;
     if (this._pressCount < FURNACE_GAG.PRESSES_TO_ARM) this._warn();
     else this._overheat();

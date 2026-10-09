@@ -837,8 +837,8 @@ export class InputManager {
               eventBus.emit(Events.COMMS_MESSAGE, {
                 sender: 'THERMAL',
                 text: sweeping
-                  ? 'OVERRIDE — aft radiator deploying: struts swing to the 146° bud, wings open between 60° and 90°. FEEP clear once past 90°.'
-                  : 'OVERRIDE — aft radiator folding: struts swing fore to the launch pack (θ 0°), wings fold between 90° and 60°. FEEP INHIBITED until deployed.',
+                  ? 'OVERRIDE — aft radiator deploying: swinging out the whole way to the 146° bud, side panels opening between 60° and 90°. Engines back as soon as it leaves the launch fold.'
+                  : 'OVERRIDE — aft radiator folding: swinging all the way into the launch fold (0°), side panels folding between 90° and 60°. Engines stay off until it opens again.',
                 priority: 'info',
               });
             }
@@ -846,13 +846,22 @@ export class InputManager {
             const deploying = d.player.toggleFlowerDeploy();
             d.audioSystem?.playClick();
             eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
-            eventBus.emit(Events.COMMS_MESSAGE, {
-              sender: 'THERMAL',
-              text: deploying
-                ? 'Aft flower deploying — struts open LIKE A FLOWER to the 90° cargo bloom.'
-                : 'Aft flower stowing — folding to the 146° bud.',
-              priority: 'info',
-            });
+            // A double tap that PUSHED THROUGH (to the vent, or past CLOSED into
+            // the launch fold) is narrated by the ship itself, and the plain
+            // line would then be false ("…full 90° bloom" while heading for the
+            // vent, "Engines still work" while folding into the lock). The ship
+            // clears its own `_lastFlowerTap` on exactly that branch.
+            const pushedThrough = Object.prototype.hasOwnProperty.call(d.player, '_lastFlowerTap')
+              && d.player._lastFlowerTap === undefined;
+            if (!pushedThrough) {
+              eventBus.emit(Events.COMMS_MESSAGE, {
+                sender: 'THERMAL',
+                text: deploying
+                  ? 'Radiator opening — the struts open LIKE A FLOWER to the full 90° bloom.'
+                  : 'Radiator closing — folding flat along the hull. Engines still work.',
+                priority: 'info',
+              });
+            }
           }
           e.preventDefault();
         }

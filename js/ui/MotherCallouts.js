@@ -1564,7 +1564,7 @@ export class MotherCallouts {
       if (!this._flowerOn()) return null;
       if (ov && Array.isArray(ov.stowDir)) {
         const st = (typeof player?.getFlowerStatus === 'function') ? player.getFlowerStatus() : null;
-        const stowed = !!st && (st.pose === 'STOW' || (st.pose === 'SLEW' && st.openFrac < 0.5));
+        const stowed = !!st && (st.pose === 'CLOSED' || st.pose === 'STOW' || (st.pose === 'SLEW' && st.openFrac < 0.5));
         if (stowed) dir = ov.stowDir.slice();
       }
     }

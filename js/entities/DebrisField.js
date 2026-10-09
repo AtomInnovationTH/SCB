@@ -3349,27 +3349,24 @@ export class DebrisField {
       }
       debris.country = null;
 
-      // 2026-06-21: pre-discover the TWO PINNED guided net-catch pieces
-      // (#1 dead-centre ~22 m, #2 off-side ~48 m — spec indices 0 and 1). Both
-      // are guaranteed, in-range, guided catches, so having #2 a visible mesh +
-      // reticle bracket yet absent from the list was confusing. The other 5
-      // (#3–#7) stay `discovered=false` until the user presses S to scan —
-      // which reveals them via SensorSystem._revealNearbyDebris() →
-      // getDebrisNear() (welcomeSpawn-gated on M1; the caller's radius is
-      // honoured — the old M1 2 km clamp went with welcome-drift fix T3, so a
-      // piece that has separated still scans in). With two
-      // pre-discovered, a single quick scan (MAX_REVEALS=5) reveals exactly
-      // #3–#7. This matches the intended new-user UX: start with two obvious
-      // targets visible, learn to scan to find more.
+      // Scan-first (owner 2026-10-08, DECISIONS §15 row 1): a new player sees no
+      // target bracket, arrow or radar dot until they press S, so ALL seven
+      // pieces start `discovered=false` — including the pinned #1 (~22 m ahead)
+      // and #2 (~48 m). Until 2026-10-08 these two were pre-discovered (2026-06-21,
+      // so the second guided catch was listable); that leaked two brackets from
+      // the first frame and made the scan lesson optional. A quick scan
+      // (SensorSystem._revealNearbyDebris() → getDebrisNear(), welcomeSpawn-gated
+      // on M1; the caller's radius is honoured — the old M1 2 km clamp went with
+      // welcome-drift fix T3, so a piece that has separated still scans in)
+      // reveals at most MAX_REVEALS=5 nearest, so #1–#5 on the first S and
+      // #6/#7 on a second. The onboarding `tease_lock` beat holds on "Press S to
+      // scan" until the first reveal (OnboardingDirector `requiresContacts`).
+      // The pin itself (`_onboardingPinned`, below) is unchanged: pinned pieces
+      // still ride the mother-local offset; they are just not marked yet.
       // Replaces the old buggy `_autoDiscoverNearest()` which used a static
       // startSma proxy and would sometimes pick a catalog debris that got
       // killed by the M1 enforcement, leaving zero discovered debris.
-      if (i <= 1) {
-        debris.discovered = true;
-        eventBus.emit(Events.TARGET_DISCOVERED, { target: debris });
-      } else {
-        debris.discovered = false;
-      }
+      debris.discovered = false;
 
       // Onboarding tease pin: hold the curated STATION-catch pieces (those with
       // spec.pin — #1 dead-centre, #2 off to one side) at a fixed offset in the

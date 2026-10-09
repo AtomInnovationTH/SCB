@@ -56,20 +56,32 @@ export const ONBOARDING_BEATS = [
   },
   {
     id: 'handshake',
-    commsSource: 'HOUSTON', commsText: 'We have you on telemetry. Reticle is live. It locks the nearest piece for you.',
+    commsSource: 'HOUSTON', commsText: 'We have you on telemetry. Nothing is marked until you scan.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
     autoAdvanceAfter: 3000,
   },
   {
-    // The tease. AutoLockController has locked the close glinting panel right
-    // in front of the mother. Teach the ONE key the opening forces: the net.
+    // The tease. Scan-first (owner 2026-10-08, DECISIONS §15 row 1): nothing is
+    // marked until the player presses S, so this beat HOLDS on the existing
+    // `requiresContacts` gate with a persistent "Press S" nudge, and
+    // posts the real net line once the first scan reveal lands (TARGET_DISCOVERED
+    // → _recheckHeldGate). AutoLockController then locks the close glinting panel
+    // right in front of the mother. Teach the ONE key the opening forces: the net.
     id: 'tease_lock',
     commsSource: 'HOUSTON', commsText: 'Debris {distM} meters in front. Launch net with N.',
     commsAck: 'Clean catch, Cowboy.',
     text: 'Launch net (N)',
     glyph: 'N',
     keys: ['KeyN'],
+    requiresContacts: true,
+    // Ends at "Press S.": on glass GestureHints.speak turns "Press S" into
+    // "Tap empty space to scan" — "Press S to scan." read "…to scan to scan."
+    noContactNudge: 'Nothing is marked yet. Press S.',
+    // The held nudge is about S, not the beat's own N key: its chip shows S
+    // (and, on glass, the "tap empty space to scan" gesture chip).
+    nudgeGlyph: 'S',
+    nudgeKeys: ['KeyS'],
     triggerEvent: 'LASSO_FIRED',
     skillId: 'collect_lasso',
     credit: 10,
@@ -137,7 +149,13 @@ export const ONBOARDING_BEATS = [
     // Hold until a target is actually out of range (the player has cleared the
     // two close pieces and the reticle has hopped to the far one).
     requiresOutOfRange: true,
-    outOfRangeNudge: 'Clear the close pieces first. The reticle will lock the far one and show OUT OF RANGE.',
+    // Scan-first (DECISIONS §15 row 1): AutoLock never locks an unscanned piece,
+    // and a player who skipped S can still net #1/#2 with N (the lasso's no-
+    // target auto-aim) — so the nudge asks for the scan that marks the far one.
+    // Its chip is S, like tease_lock's (glass: the scan gesture).
+    outOfRangeNudge: 'Clear the close pieces, then press S. The reticle will lock the far one and show OUT OF RANGE.',
+    nudgeGlyph: 'S',
+    nudgeKeys: ['KeyS'],
     escalationText: 'A engages autopilot to the locked target. It closes the gap; the bracket turns cyan when the net can reach.',
   },
   {
@@ -993,8 +1011,8 @@ export class OnboardingDirector {
       this._emit(Events.HINT_POSTED, {
         id: beat.id + '_wait',
         text: nudge,
-        glyph: beat.glyph || '…',
-        keys: [],
+        glyph: beat.nudgeGlyph || beat.glyph || '…',
+        keys: Array.isArray(beat.nudgeKeys) ? beat.nudgeKeys : [],
         duration: 0, // persistent until satisfied/cleared
         priority: 'normal',
       });

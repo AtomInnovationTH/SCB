@@ -83,12 +83,19 @@ export const INTRO_PULLBACK_MS = 800;
  * Landing z01 0.23 → 2.67 m on F1 (the dive lands close as the petals crack);
  * drift end 0.82 → 5.59 m (the dolly's target as the wings and arms open);
  * both strictly inside the free zone (0.15–0.85) so the settle-back rule
- * never yanks them to a wall edge. The dolly itself is 4.5 s (the drift
- * spans the wings' roll-out, beat table 5.20 → 9.7).
+ * never yanks them to a wall edge. The dolly is 2.0 s (DECISIONS §15 row 4,
+ * 2026-10-09): it must END before the dance's hand-over (8.70 s), which pulls
+ * the camera back. Measured on :8092 (GPU headless, tmp/w2-start-pose/
+ * intro-timing.mjs): the dive engages ~1.0 s after the cut, so it lands near
+ * dance t 6.1 and a 2.0 s drift ends ~8.1 — 0.6 s of margin. The old 4.5 s
+ * dolly against the 6.70 s hand-over never ran: the hand-over arrived in the
+ * dive's landing frame (test-StartPose pins the budget).
  */
 export const INTRO_DANCE_LANDING_Z01 = 0.23;
 export const INTRO_DANCE_DRIFT_Z01 = 0.82;
-export const INTRO_DANCE_DOLLY_MS = 4500;
+export const INTRO_DANCE_DOLLY_MS = 2000;
+/** Measured engage lag of the intro dive after the cut (ms, :8092 2026-10-09) — the dolly budget's input. */
+export const INTRO_DANCE_ENGAGE_LAG_MS = 1000;
 /**
  * Where the pull-back leaves the camera when the player takes the wheel —
  * z01 0.17 on F2, i.e. **11 m** (owner, 2026-09-21: "closer", asked for 10 m).
@@ -118,13 +125,13 @@ export const INTRO_DANCE_HANDOVER_Z01 = 0.17;
 export const INTRO_DANCE_PULLBACK_MS = 1200;
 /**
  * The dwell CEILING — never the exact duration (plan task 4): the dance's
- * total (the radiator's 0→146° at the shipped 15°/s ≈ 9730 ms, the long
- * pole) plus a 2 s drift margin. The dwell actually ends on
+ * hand-over (wing 2 seated, 8700 ms since DECISIONS §15 row 4; it was the
+ * radiator's 9730 ms sweep) plus a 2 s drift margin. The dwell actually ends on
  * OPENING_DANCE_HANDOVER (`endIntroDwellEarly`); this ceiling only fires the
  * pull-back if that event is dropped, so the camera can never squat at the
  * hull forever — and being a ceiling it is deliberately generous.
  */
-export const INTRO_DANCE_DWELL_CEILING_MS = 11730;
+export const INTRO_DANCE_DWELL_CEILING_MS = 10700;
 
 /**
  * Wave 5 Session K: the WORKBENCH floor — where the REFIT block (the one

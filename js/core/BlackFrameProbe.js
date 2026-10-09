@@ -54,6 +54,7 @@
  */
 
 import * as THREE from 'three';
+import { getHealLog } from './BlackPatchHeal.js';
 
 /** State-sample cadence in frames (~8 Hz at 120 Hz). */
 const CHECK_EVERY = 15;
@@ -329,6 +330,7 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
       counters: { visEvents, gapEvents, lastGapMs, starveEvents, blurEvents, ctxEvents },
       ring: ring.slice(),
       alertLog: alertLog.slice(),
+      heal: getHealLog(), // BlackPatchHeal records (what healed the black box, if anything)
     };
     try {
       d.ua = navigator.userAgent;

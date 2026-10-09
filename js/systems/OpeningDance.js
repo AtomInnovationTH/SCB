@@ -3,16 +3,24 @@
  *
  * The deployment cinematic that replaces the 60 s rocket launch at boot. It
  * STARTS IN THE MENU as the EVA astronaut jets off the hull she is welding,
- * cascades radiator → solar wings → daughters at the SHIPPED hardware rates,
- * and hands the player the wheel ~7.8 s after the menu cuts away. No rocket,
- * no fairing, no launch-phase persistence writes, no arm launch lock.
+ * rolls the solar wings out at the SHIPPED hardware rate, and hands the player
+ * the wheel 4.0 s after the menu cuts away. No rocket, no fairing, no
+ * launch-phase persistence writes, no arm launch lock.
+ *
+ * DECISIONS §15 row 4 (owner 2026-10-08, lane w2-start-pose): the ship STARTS
+ * CLOSED — the radiator stays folded flat along the body (it only eases off
+ * its launch latch, 0° → POSE_CLOSED_DEG 2°, measured as the smallest angle
+ * that clears every strut swing) and the daughter struts stay shut at α 0.
+ * Before that ruling the dance swept the radiator out to the 146° bud and
+ * opened the struts to 146° after the hand-over; both beats are gone.
  *
  * Feature-flag gated: FEATURE_FLAGS.OPENING_DANCE (default true). Flag off is
  * a TOTAL no-op (start/tick/skip/applyPacked do nothing) — every path then
  * lands on endState(ship), which is also the CONTINUE / GAMEOVER-retry /
  * reduced-motion / ?shot path. The one invariant: a ship is NEVER seen in the
- * packed pose outside a running dance. endState itself is deliberately NOT
- * flag-gated: with the flag off the ship still boots to the open pose.
+ * packed pose (wings furled, launch lock armed) outside a running dance.
+ * endState itself is deliberately NOT flag-gated: with the flag off the ship
+ * still boots to the finished pose.
  *
  * ── THE CLOCK IS WALL-CLOCK, NOT ACCUMULATED dt ─────────────────────────────
  * The dance is read from TWO independent render loops: MenuScene3D runs its own
@@ -37,19 +45,19 @@
  * message-silence gates read (never an instanceof — no import either way).
  *
  * ── BEATS (t = 0 at jet-off; anchors in Constants.OPENING_DANCE) ────────────
- *   t = 0.00  latches pop; radiator 0° → 146° (ends 9.73) — the SHIP's own
- *             15°/s driver (setFlowerPose('STOW') latches the target; the hero
- *             is driven from progress() by MenuScene3D, the sim ship slews
- *             itself once bound)
+ *   t = 0.00  latches pop; the radiator eases 0° → CLOSED 2° (ends 0.13) — the
+ *             SHIP's own 15°/s driver (setFlowerPose(REST_POSE) latches the
+ *             target and releases the launch lock; the hero is driven from
+ *             progress() by MenuScene3D, the sim ship slews itself once bound)
  *   t = 2.70  cut to game (MENU_START): the sim ship is bound and snapped to
  *             the live progress so the cut has no pop
- *   t = 5.20  ROSA wing 1 rolls out (2.5 s);  t = 6.20  wing 2
- *   t = 7.00  daughters begin, 0.25 s stagger, 0° → 146° each
- *   t = 9.73  radiator + wings seated → OPENING_DANCE_HANDOVER; the player is
- *             flying; the daughter tail keeps opening (~17.5 → COMPLETE)
+ *   t = 5.20  ROSA wing 1 rolls out as the camera's dive lands (2.5 s);
+ *             t = 6.20  wing 2 (the intro dolly drifts out through both)
+ *   t = 8.70  wing 2 seated → OPENING_DANCE_HANDOVER and, in the same tick,
+ *             OPENING_DANCE_COMPLETE (there is no daughter tail any more); the
+ *             player is flying, radiator folded, struts shut
  * skip(): any input fast-forwards the remaining unfold over SKIP_FADE_S (0.5 s)
- * to the exact hand-over state; the daughter tail still plays out. A player
- * strut command during the tail wins immediately (decision 11).
+ * to the exact hand-over state.
  *
  * @module systems/OpeningDance
  */
@@ -70,32 +78,43 @@ const FL = Constants.THERMAL.FLOWER;
 const ZERO_PROGRESS = Object.freeze({
   /** seconds since jet-off (t = 0), clamped at 0 before it */
   t: 0,
-  /** radiator/flower sweep 0..1 over 0° → 146° */
+  /** radiator θ as a fraction of the 0° → 146° sweep (θ = flower × 146°, the
+   *  mapping MenuScene3D's hero and the sim-ship sync both use). Since
+   *  DECISIONS §15 row 4 the dance only eases it 0 → CLOSED 2°, so it ends at
+   *  FLOWER_REST_FRAC (2/146), not 1. */
   flower: 0,
   /** ROSA wing roll-out 0..1 */
   wing1: 0,
   wing2: 0,
-  /** daughter strut sweep 0..1 over 0° → 146°, per arm index */
+  /** daughter strut sweep per arm index — always 0 since DECISIONS §15 row 4
+   *  (the struts stay shut; kept so the snapshot shape never changes) */
   struts: Object.freeze([0, 0, 0, 0]),
   /** true once the radiator and both wings are seated (the camera hand-over) */
   handedOver: false,
-  /** true once the last daughter seats at 146° */
+  /** true once the dance is over — the same tick as the hand-over now */
   complete: false,
 });
 
-/** Full 0° → 146° radiator sweep at the shipped 15°/s — 9.7333 s, the long pole. */
-const FLOWER_TRAVEL_S = FL.POSE_STOW_DEG / (FL.SLEW_RATE_RAD_S * 180 / Math.PI);
+/** The rest θ the dance lands on: REST_POSE (CLOSED, DECISIONS §15 row 4),
+ *  through the ONE mapping (Constants.THERMAL.FLOWER.REST_DEG — the same the
+ *  ship's own _flowerRestDeg reads). */
+const REST_DEG = FL.REST_DEG;
+const REST_RAD = (REST_DEG * Math.PI) / 180;
+/** The radiator's dance travel, LAUNCH 0° → REST at the shipped 15°/s — 0.133 s
+ *  for CLOSED 2°: it only eases off its launch latch (was 9.73 s to the bud). */
+const FLOWER_TRAVEL_S = (REST_DEG - FL.POSE_LAUNCH_DEG) / (FL.SLEW_RATE_RAD_S * 180 / Math.PI);
+/** progress().flower once the radiator is at rest: θ_rest / 146°. */
+const FLOWER_REST_FRAC = REST_DEG / FL.POSE_STOW_DEG;
 /** One ROSA wing at the gameplay furl rate (the `,` key's rate) — 2.5 s. */
 const WING_ROLL_S = 1 / Constants.OCTOPUS_V5.ROSA_FURL_RATE;
-/** Daughter strut sweep 0° → the open pose at the shipped 15°/s. */
-const STRUT_TRAVEL_S = OD.STRUT_OPEN_DEG / (Constants.OCTOPUS_V5.STRUT_SLEW_RATE * 180 / Math.PI);
-/** The open pose in radians — where the daughters bloom to and stay. */
-const STRUT_OPEN_RAD = (OD.STRUT_OPEN_DEG * Math.PI) / 180;
 /** @private 0..1 clamp — the one used by every derived progress scalar. */
 const _clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+/** The daughter struts' snapshot — always shut (DECISIONS §15 row 4). */
+const STRUTS_SHUT = Object.freeze([0, 0, 0, 0]);
 
-/** The hand-over beat: the radiator (the long pole) seated. Wings end 8.70 < 9.73. */
-const T_HANDOVER_S = FLOWER_TRAVEL_S;
+/** The hand-over beat: the last scripted motion ends — wing 2 seated, 8.70 s
+ *  (the radiator's 0.13 s ease is long done). */
+const T_HANDOVER_S = Math.max(FLOWER_TRAVEL_S, OD.WING2_START_S + WING_ROLL_S);
 /**
  * How long skip() stays deaf after a menu skip advanced the clock. One
  * pointerdown reaches MenuScreen's capture-phase handler and InputManager's
@@ -123,10 +142,6 @@ class OpeningDance {
     this._skipFromT = 0;
     /** @private skip() ignores input until this wall-clock ms (see SKIP_DEAF_MS) */
     this._skipDeafUntilMs = null;
-    /** @private the strut beat edges' stagger bookkeeping (last start, for T_COMPLETE) */
-    this._lastStrutStartS = OD.STRUT_START_S;
-    /** @private the dance's own strut writes, for player-takeover detection */
-    this._strutWrites = new Map();
     /** @private beat-edge latch — each edge fires exactly once per arming */
     this._fired = null;
   }
@@ -180,9 +195,7 @@ class OpeningDance {
     this._skipStartMs = null;
     this._skipFromT = 0;
     this._skipDeafUntilMs = null;
-    this._strutWrites.clear();
-    this._lastStrutStartS = OD.STRUT_START_S;
-    this._fired = { latch: false, wing1: false, wing2: false, struts: [], handover: false, complete: false };
+    this._fired = { latch: false, wing1: false, wing2: false, handover: false, complete: false };
   }
 
   /**
@@ -222,7 +235,6 @@ class OpeningDance {
     this._skipStartMs = null;
     this._skipFromT = 0;
     this._skipDeafUntilMs = null;
-    this._strutWrites.clear();
     this._fired = null;
   }
 
@@ -249,8 +261,11 @@ class OpeningDance {
    * @private Snap `ship` to the CURRENT dance pose (the bind-time contract).
    * The flower lock is re-armed (a resetGame between reveal and MENU_START
    * cleared it via snapFlowerToStow), θ is jumped to the wall-clock value, and
-   * the STOW target is latched so the ship's OWN 15°/s driver continues the
-   * sweep from there — the two never disagree by more than frame jitter.
+   * the REST target is latched so the ship's OWN 15°/s driver finishes the
+   * ease from there and releases the lock at the CLOSED floor — the two never
+   * disagree by more than frame jitter. (In practice the 0.13 s ease is long
+   * over by the 2.70 s cut, so this lands θ at rest and the lock clears in
+   * the same `_updateFlower(0)`.)
    * @param {object} ship
    */
   _syncShipPose(ship) {
@@ -258,7 +273,7 @@ class OpeningDance {
     if (ship._flowerGroups && ship._flowerGroups.length) {
       ship._flowerLaunchLock = true;
       ship._flowerOverrideFold = false;
-      ship._flowerTargetTheta = (FL.POSE_STOW_DEG * Math.PI) / 180;
+      ship._flowerTargetTheta = REST_RAD;
       ship._flowerThetaRad = p.flower * (FL.POSE_STOW_DEG * Math.PI) / 180;
       if (typeof ship._updateFlower === 'function') ship._updateFlower(0);
     }
@@ -271,8 +286,9 @@ class OpeningDance {
       ship._rosaFurlTarget = 1.0;
       ship._rosaManualControl = false;
     }
-    // Packed daughters: drop any stale slew target a previous run left behind
-    // (ArmUnit.reset does not clear it) so nothing creeps open before t = 7.
+    // Shut daughters: drop any stale slew target a previous run left behind
+    // (ArmUnit.reset does not clear it) so nothing creeps open — the struts
+    // stay at α 0 for the whole dance (DECISIONS §15 row 4).
     const arms = (ship.armManager && ship.armManager.arms) || [];
     for (const arm of arms) {
       if (arm && arm._strutTargetAlpha !== undefined) arm._strutTargetAlpha = undefined;
@@ -321,11 +337,11 @@ class OpeningDance {
       // The latch clunk (decision 12: sound only). playArmDeploy with a short
       // dur — the vocabulary count pins forbid a new entry (task 8).
       try { audioSystem.playArmDeploy(0.2); } catch (_e) { /* headless */ }
-      // The ship's own 15°/s driver: latch the STOW target (the hero is driven
-      // from progress() by MenuScene3D instead — this latch is for a bound,
-      // self-updating ship).
+      // The ship's own 15°/s driver: latch the REST target — the release out
+      // of the launch fold to CLOSED (the hero is driven from progress() by
+      // MenuScene3D instead — this latch is for a bound, self-updating ship).
       if (this._ship && typeof this._ship.setFlowerPose === 'function') {
-        this._ship.setFlowerPose('STOW');
+        this._ship.setFlowerPose(FL.REST_POSE || 'STOW');
       }
     }
 
@@ -338,43 +354,21 @@ class OpeningDance {
       try { audioSystem.playArmDeploy(0.9); } catch (_e) { /* headless */ }
     }
 
-    // Daughter stagger beats — write `arm._strutTargetAlpha` (the same latch
-    // the "." toggle drives); PlayerSatellite._updateStruts slews it at the
-    // shipped 15°/s. The tail runs past hand-over by design (decision 11).
-    const arms = (this._ship && this._ship.armManager && this._ship.armManager.arms) || [];
-    for (let i = 0; i < arms.length; i++) {
-      if (this._fired.struts[i]) continue;
-      const startS = OD.STRUT_START_S + i * OD.STRUT_STAGGER_S;
-      if (t < startS) continue;
-      this._fired.struts[i] = true;
-      this._lastStrutStartS = startS;
-      try { audioSystem.playArmDeploy(0.35); } catch (_e) { /* headless */ }
-      const arm = arms[i];
-      if (arm && (arm.state === undefined || arm.state === Constants.ARM_STATES.DOCKED)) {
-        arm._strutTargetAlpha = STRUT_OPEN_RAD;
-        this._strutWrites.set(arm, STRUT_OPEN_RAD);
-      }
-    }
-
+    // No daughter beat (DECISIONS §15 row 4): the struts stay shut at α 0, so
+    // the dance never writes `arm._strutTargetAlpha` and the hand-over is
+    // also the end — OPENING_DANCE_COMPLETE follows in the same tick.
     if (!this._fired.handover && t >= T_HANDOVER_S) {
       this._fired.handover = true;
       this._fireHandover();
-    }
-
-    if (this._fired.handover && !this._fired.complete) {
-      // A player strut command during the tail wins immediately (decision 11):
-      // any target the dance did not write means the player took the wheel.
-      if (this._playerTookStruts() || t >= this._lastStrutStartS + STRUT_TRAVEL_S) {
-        this._fireComplete();
-      }
+      this._fireComplete();
     }
   }
 
   /**
-   * @private The hand-over: exact end pose for the radiator and wings, the
-   * driver unbound (the player's furl control resumes), the camera event, then
-   * the ONE Houston line (force-free; the onboarding boot beat posts first —
-   * task 5 starts the director on this same event).
+   * @private The hand-over: exact end pose for the radiator (CLOSED, lock
+   * off) and wings, the driver unbound (the player's furl control resumes),
+   * the camera event, then the ONE Houston line (force-free; the onboarding
+   * boot beat posts first — task 5 starts the director on this same event).
    */
   _fireHandover() {
     const ship = this._ship;
@@ -383,7 +377,7 @@ class OpeningDance {
       if (ship._flowerGroups && ship._flowerGroups.length) {
         ship._flowerLaunchLock = false;
         ship._flowerOverrideFold = false;
-        ship._flowerThetaRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+        ship._flowerThetaRad = REST_RAD;
         if (typeof ship._updateFlower === 'function') ship._updateFlower(0);
       }
       if (typeof ship._setRosaWingProgress === 'function') {
@@ -401,30 +395,20 @@ class OpeningDance {
     eventBus.emit(Events.OPENING_DANCE_HANDOVER, { t: T_HANDOVER_S });
     // ONE short Houston line at hand-over (decision 12) — normal priority, no
     // force, distinct from the onboarding boot beat that fires on the event.
+    // True to the pose: wings out, radiator folded, struts shut.
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
-      text: 'Radiator seated and arrays out, Cowboy. The arms are still opening — she is yours.',
+      text: 'Arrays out, Cowboy. The radiator stays folded until she runs warm — she is yours.',
       priority: 'info',
     });
   }
 
-  /** @private The daughters are seated (or the player took them over). */
+  /** @private The dance is over (fires in the hand-over tick). */
   _fireComplete() {
     if (this._fired && this._fired.complete) return;
     if (this._fired) this._fired.complete = true;
     this._running = false;
-    this._strutWrites.clear();
     eventBus.emit(Events.OPENING_DANCE_COMPLETE, {});
-  }
-
-  /** @private True when a strut target the dance did not write appeared. */
-  _playerTookStruts() {
-    for (const [arm, val] of this._strutWrites) {
-      if (arm._strutTargetAlpha !== undefined && Math.abs(arm._strutTargetAlpha - val) > 1e-9) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /**
@@ -463,17 +447,12 @@ class OpeningDance {
     const t = Math.max(0, raw);
     const handedOver = !!(this._fired && this._fired.handover);
     const complete = !!(this._fired && this._fired.complete);
-    const struts = [0, 0, 0, 0];
-    for (let i = 0; i < 4; i++) {
-      const startS = OD.STRUT_START_S + i * OD.STRUT_STAGGER_S;
-      struts[i] = _clamp01((t - startS) / STRUT_TRAVEL_S);
-    }
     return {
       t,
-      flower: _clamp01(t / FLOWER_TRAVEL_S),
+      flower: FLOWER_REST_FRAC * (FLOWER_TRAVEL_S > 0 ? _clamp01(t / FLOWER_TRAVEL_S) : 1),
       wing1: this._wing(OD.WING1_START_S, t),
       wing2: this._wing(OD.WING2_START_S, t),
-      struts,
+      struts: STRUTS_SHUT,
       handedOver,
       complete,
     };
@@ -497,33 +476,34 @@ class OpeningDance {
   }
 
   /**
-   * Land `ship` on the finished pose WITHOUT playing anything: radiator 146°,
-   * wings 1.0, daughters 146°, dance unbound. EVERY path that does not run the
-   * dance calls this — CONTINUE, GAMEOVER retry, reduced motion, flag off, the
-   * ?shot harness — so the ship is never seen packed outside the dance. NOT
-   * flag-gated (with the flag off the ship still boots to this open pose).
+   * Land `ship` on the finished pose WITHOUT playing anything: radiator CLOSED
+   * (REST_POSE, lock off), wings 1.0, daughter struts shut at α 0, dance
+   * unbound. EVERY path that does not run the dance calls this — CONTINUE,
+   * GAMEOVER retry, reduced motion, flag off, the ?shot harness — so the ship
+   * is never seen packed (wings furled, lock armed) outside the dance. NOT
+   * flag-gated (with the flag off the ship still boots to this pose).
    * @param {object} ship - a PlayerSatellite
    */
   endState(ship) {
     // endState MEANS "the dance is over". A dance left running here would keep
     // driving a ship nobody is watching and fire its hand-over later, on a
     // path that never wanted one — the shape of the bug this guards is a
-    // GAMEOVER retry landing mid-unfold (the unfold is ~7.8 s and a Kessler
-    // collision inside it is perfectly possible). Stopping is unconditional
+    // GAMEOVER retry landing mid-unfold (a Kessler collision inside the
+    // unfold is perfectly possible). Stopping is unconditional
     // and idempotent; callers that mean to KEEP the dance must not call this
     // (GameFlowManager.resetGame's `keepOpeningDance`).
     this._abort();
     if (!ship) return;
     if (typeof ship.setLaunchSequence === 'function') ship.setLaunchSequence(null);
-    // Radiator: the STOW bud via the ship's own snap (clears any lock; the
-    // THERMAL_FLOWER_RELEASED it may emit is silence-gated while a dance is
-    // live — and no dance is live on these paths).
+    // Radiator: the REST pose (CLOSED) via the ship's own snap (clears any
+    // lock; the THERMAL_FLOWER_RELEASED it may emit is silence-gated while a
+    // dance is live — and no dance is live on these paths).
     if (typeof ship.snapFlowerToStow === 'function') ship.snapFlowerToStow();
     else if (ship._flowerGroups && ship._flowerGroups.length) {
       ship._flowerLaunchLock = false;
       ship._flowerOverrideFold = false;
       ship._flowerTargetTheta = undefined;
-      ship._flowerThetaRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+      ship._flowerThetaRad = REST_RAD;
       if (typeof ship._updateFlower === 'function') ship._updateFlower(0);
     }
     if (typeof ship._setRosaWingProgress === 'function') {
@@ -535,14 +515,21 @@ class OpeningDance {
       ship._rosaFurlTarget = 1.0;
       ship._rosaManualControl = false;
     }
-    // Daughters: the one open pose (decision 4/5 — 146° and stay). Writing the
-    // latch lets PlayerSatellite._updateStruts slew them there at the shipped
-    // 15°/s; arms without the DOCKED state (stubs) are written regardless.
+    // Daughters: shut at α 0 (DECISIONS §15 row 4 — the daughter docks at the
+    // full closed strut position, §4). Every production caller has just run
+    // armManager.reset(), which parks them at 0; this drops any stale slew
+    // latch (ArmUnit.reset does not clear it) and snaps a docked strut that is
+    // somehow still open back to 0. A stub without setAimAlpha gets a latch
+    // to 0 instead.
     const arms = (ship.armManager && ship.armManager.arms) || [];
     for (const arm of arms) {
       if (!arm) continue;
       if (arm.state !== undefined && arm.state !== Constants.ARM_STATES.DOCKED) continue;
-      arm._strutTargetAlpha = STRUT_OPEN_RAD;
+      arm._strutTargetAlpha = undefined;
+      const aim = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : 0;
+      if (!(Math.abs(aim) > 1e-9)) continue;
+      if (typeof arm.setAimAlpha === 'function') arm.setAimAlpha(0, 0);
+      else arm._strutTargetAlpha = 0;
     }
   }
 
@@ -580,4 +567,4 @@ class OpeningDance {
  */
 export const openingDance = new OpeningDance();
 
-export { FLOWER_TRAVEL_S, WING_ROLL_S, STRUT_TRAVEL_S, T_HANDOVER_S };
+export { FLOWER_TRAVEL_S, FLOWER_REST_FRAC, WING_ROLL_S, T_HANDOVER_S };

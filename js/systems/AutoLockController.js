@@ -21,6 +21,11 @@
  *   3. Re-acquire the next forward candidate a short beat after a capture, so
  *      the reward registers before the reticle hops to the next piece.
  *
+ * Scan-first (DECISIONS §15 row 1): only MARKED pieces — see {@link isMarked} —
+ * are ever picked. Nothing is locked until a scan (S) has revealed it. Hazard
+ * shards are marked (drawn) but never picked: they cannot be caught, and the
+ * HUD target list already excludes them.
+ *
  * "Forward" = the player's prograde (velocity) direction, the natural front of
  * the ship in this sim. Candidates are scored by distance within the arc.
  *
@@ -39,6 +44,23 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { targetSelector } from './TargetSelector.js';
+
+/**
+ * Scan-first law (DECISIONS §15 row 1): is this piece MARKED — allowed a HUD
+ * bracket, an off-screen arrow, a radar dot or an auto-lock? A piece is marked
+ * once a scan has revealed it (or the player selected it, which discovers it).
+ * Hazard shards stay marked without a scan: scans never reveal them
+ * (SensorSystem skips `hazard`), so gating them would hide a danger cue
+ * forever. Gate on `discovered === false`, never `!discovered`: snapshot
+ * fixtures and non-debris targets carry no `discovered` field and stay marked.
+ * The 3D meshes are not gated by this — you can see a piece with your eyes;
+ * only the HUD marks need a scan.
+ * @param {{hazard?: boolean, discovered?: boolean}|null|undefined} d
+ * @returns {boolean}
+ */
+export function isMarked(d) {
+  return !!d && (d.hazard === true || d.discovered !== false);
+}
 
 export class AutoLockController {
   /**
@@ -209,6 +231,8 @@ export class AutoLockController {
     if (nearby && nearby.length > 0) {
       for (const d of nearby) {
         if (!d || !d.alive || d._captured) continue;
+        if (!isMarked(d)) continue;   // scan-first: an unscanned piece is never auto-locked
+        if (d.hazard === true) continue;   // shards stay drawn but cannot be caught: never auto-locked
         const sp = d._scenePosition;
         if (fwd && sp) {
           const tx = sp.x - playerPos.x;
@@ -281,9 +305,11 @@ export class AutoLockController {
     const radiusScene = (rangeM / 1000) * Constants.SCENE_SCALE; // m→km→scene
     const anywhere = field.getDebrisNear(playerPos, radiusScene);
     if (!anywhere || anywhere.length === 0) return null;
-    // Sorted nearest-first; the first alive, uncaptured entry is the pick.
+    // Sorted nearest-first; the first alive, uncaptured, MARKED, non-hazard
+    // entry is the pick (scan-first: an unscanned piece is never auto-locked,
+    // even here; a hazard shard is drawn but uncatchable, so never locked).
     for (const d of anywhere) {
-      if (d && d.alive && !d._captured) return d;
+      if (d && d.alive && !d._captured && isMarked(d) && d.hazard !== true) return d;
     }
     return null;
   }
@@ -367,5 +393,5 @@ export default AutoLockController;
 
 // CJS guard for Node-safe tests.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { AutoLockController };
+  module.exports = { AutoLockController, isMarked };
 }

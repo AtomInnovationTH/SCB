@@ -168,6 +168,10 @@ export const MASK_PANES = Object.freeze({
   // Task 10: Discoveries is the #hud-discoveries wrapper (chip + popover).
   discoveries: Object.freeze({ rung: 'discoveries', els: Object.freeze(['#hud-discoveries']),         memory: true, shipped: 'gone' }),
   mother:      Object.freeze({ rung: 'mother',      els: Object.freeze(['#hud-mother-panel']),        memory: true }),
+  // W2 meters (owner 2026-10-08, DECISIONS §15 row 5): heat, battery, gas and ion,
+  // top left. An ATTRIBUTE pane like 'score' (never a density rung, so the MORE
+  // ladder cannot hide it), table-driven only: gone on F1 and F5, shown on F2-F4.
+  vitals:      Object.freeze({ rung: null,          els: Object.freeze(['#hud-vitals']),              memory: false }),
   arms:        Object.freeze({ rung: 'arms',        els: Object.freeze(['#hud-arms-panel']),          memory: true }),
   reticles:    Object.freeze({ rung: null,          els: Object.freeze(['#reticle-canvas']),          memory: false }),
   hints:       Object.freeze({ rung: null,          els: Object.freeze(['#hud-hint-ticker']),         memory: false }),
@@ -195,6 +199,12 @@ export const MASK_PANES = Object.freeze({
   // per floor once pulled out. `shipped: 'gone'` — a disengage restores it
   // HIDDEN (the shipped cockpit has no gag).
   override:    Object.freeze({ rung: 'override',    els: Object.freeze(['#hud-override-pane']),     memory: true, shipped: 'gone' }),
+  // F1 bar (owner 2026-10-08, DECISIONS §15 row 9): the 4-button bar at the bottom
+  // centre of F1 — shown there ALWAYS, gone on F2–F5 and in the shipped cockpit. An
+  // ATTRIBUTE pane (rung: null, `data-floor-gone`) with memory: false, so the table
+  // is the whole truth and no ROOMS_GENERATION bump is needed (the override pane's
+  // memory: true would have carried the old 'gone' into every returning player).
+  f1bar:       Object.freeze({ rung: null,          els: Object.freeze(['#hud-f1-bar']),             memory: false, shipped: 'gone' }),
 });
 
 /**
@@ -282,8 +292,9 @@ export const DEFAULT_ROOMS = Object.freeze({
     // followed (owner 2026-09-23, plan 1789561832042 C2): "every zoom except
     // the hull". The N.5 cargo force-show in main.js's WORKBENCH_STOP is gone
     // with it — the room table is the one truth.
-    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'gone', override: 'gone',
+    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'gone', override: 'gone', f1bar: 'shown',
     score: 'gone',
+    vitals: 'gone',
   }),
   // Session N.5 (owner 2026-09-07) + Session O (owner 2026-09-07,
   // "LEFT: mother, daughters"): the flying floor greets a first-timer with
@@ -296,26 +307,30 @@ export const DEFAULT_ROOMS = Object.freeze({
   2: Object.freeze({
     targets: 'shown', debris: 'gone', navsphere: 'gone', reticles: 'shown',
     pin: 'gone', mother: 'shown', arms: 'shown', discoveries: 'gone', hints: 'shown',
-    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone',
+    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone', f1bar: 'gone',
     score: 'shown',
+    vitals: 'shown',
   }),
  3: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'shown',
     pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone', hints: 'gone',
-    cargo: 'gone', orbit: 'shown', copilot: 'shown', next: 'shown', comms: 'shown', override: 'gone',
+    cargo: 'gone', orbit: 'shown', copilot: 'shown', next: 'shown', comms: 'shown', override: 'gone', f1bar: 'gone',
     score: 'shown',
+    vitals: 'shown',
   }),
   4: Object.freeze({
 targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
       pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone', hints: 'gone',
-     cargo: 'gone', orbit: 'gone', copilot: 'faint', next: 'shown', comms: 'shown', override: 'gone',
+     cargo: 'gone', orbit: 'gone', copilot: 'faint', next: 'shown', comms: 'shown', override: 'gone', f1bar: 'gone',
     score: 'shown',
+    vitals: 'shown',
   }),
   5: Object.freeze({
 targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
       pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
-     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone',
+     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone', f1bar: 'gone',
     score: 'shown',
+    vitals: 'gone',
   }),
 });
 

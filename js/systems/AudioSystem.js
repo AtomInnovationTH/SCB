@@ -8,6 +8,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import timerManager from './TimerManager.js';
+import { installSoundLog } from './audio/SoundLog.js';
 
 // Slice 8 — codex unlock chime. The base pair is D5→A5 [587, 880]; per category
 // we transpose by a small deterministic pentatonic offset so different tracks
@@ -154,6 +155,9 @@ class AudioSystem {
     // SAFETY OVERRIDE panel FURNACE gag (owner 2026-09-07): in-flight klaxon
     // { osc, gain, endsAt } or null — single-instance re-entrancy guard.
     this._klaxon = null;
+
+    // Dev tool (?sounds=1 pane): log every vocabulary sound call. No sound changes.
+    installSoundLog(this);
   }
 
   /**

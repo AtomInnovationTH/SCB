@@ -24,8 +24,18 @@
  * `_visible && !_suppressed && !_densityHidden`. The 5 key ON path clears
  * the density gate (own-key re-reveal, CommsPanel.js:263 / NavSphere.js:310).
  *
- * Pure helpers (`parseCityList`, `isCityVisible`, `distanceFade`) are
- * Node-testable; everything THREE/DOM lives behind init guards.
+ * Calm labels (w1-labels, 2026-10-08): (1) within a tier a label shown last
+ * frame outranks one that was hidden, and a shown label that loses its slot is
+ * held 0.5 s before it hides — the old float-distance sort re-decided the
+ * winner every frame, so same-tier neighbours swapped and blinked; (2) the
+ * layer root is the FIRST child of its container, so HUD panes paint over the
+ * pills; (3) attach({ occluders }) hides a dot behind the ship's screen circle;
+ * (4) a tier-1 label that loses every pill slot but has a free dot square keeps
+ * its dot (Hyderabad, tier 2 behind a full 28-label budget, lost label AND dot).
+ *
+ * Pure helpers (`parseCityList`, `isCityVisible`, `distanceFade`,
+ * `compareLabelPriority`, `holdAfterLoss`, `occluderCircle`) are Node-testable;
+ * everything THREE/DOM lives behind init guards.
  *
  * @module scene/CityLabels
  */
@@ -41,8 +51,11 @@ import { MONO_ADVANCE_EM } from '../core/Typeface.js';
 /** Hard cap on rendered labels (performance + clutter). */
 export const MAX_CITIES = 420;
 
-/** Recognised label categories; unknown/missing kinds fall back to 'city'. */
-export const CITY_KINDS = ['city', 'launch', 'strait', 'landmark'];
+/**
+ * Recognised label categories; unknown/missing kinds fall back to 'city'.
+ * 'site' = a human-made facility (Skyroot HQ) — a filled disc, not terrain.
+ */
+export const CITY_KINDS = ['city', 'launch', 'strait', 'landmark', 'site'];
 
 /**
  * Number of LOD tiers. tier 1 = always shown (major cities + isolated ocean /
@@ -116,6 +129,13 @@ const KIND_STYLE = {
     text: '#ffedb0',
     ring: true,
   },
+  // A human-made facility: the city's filled disc and colours (a ring says
+  // "terrain", and a facility is not terrain).
+  site: {
+    dot: '#fff3cc',
+    dotGlow: '0 0 6px 2px rgba(255,210,90,0.9),0 0 2px 1px rgba(255,235,160,1)',
+    text: '#ffedb0',
+  },
   launch: {
     dot: '#e6faff',
     dotGlow: '0 0 7px 2px rgba(80,210,255,0.95),0 0 2px 1px rgba(200,245,255,1)',
@@ -145,15 +165,98 @@ const _center = new THREE.Vector3();
 const _world = new THREE.Vector3();
 const _cam = new THREE.Vector3();
 const _proj = new THREE.Vector3();
+const _occV = new THREE.Vector3();
 
 /**
- * Declutter priority comparator: lower tier wins (major cities/landmarks kept
- * first), then the label nearer the camera. Used to decide which label "owns"
- * a screen region when several overlap.
+ * Declutter priority comparator (pure): lower tier wins (major cities/landmarks
+ * kept first), then a label that was SHOWN last frame beats one that was hidden
+ * (incumbent-first; a label in its slot-loss grace does not count), then the
+ * label nearer the camera. The middle key is what
+ * stops the blink: two same-tier labels at near-equal distance used to swap
+ * order on a float hair every frame, so whichever sorted second lost its slot
+ * and was hidden — then won it back next frame.
+ * @param {{tier:number, shown:boolean, _lostAt?:number, _dist:number}} a
+ * @param {{tier:number, shown:boolean, _lostAt?:number, _dist:number}} b
  */
-function _byPriority(a, b) {
-  return (a.tier - b.tier) || (a._dist - b._dist);
+export function compareLabelPriority(a, b) {
+  return (a.tier - b.tier) || (_incumbent(b) - _incumbent(a)) || (a._dist - b._dist);
 }
+/**
+ * An incumbent is shown AND holding its place. A label held in its slot-loss
+ * grace (`_lostAt >= 0`) is still drawn but is NOT an incumbent: otherwise two
+ * shown labels whose distance order swaps every frame trade the slot back and
+ * forth, each reset the other's grace, and neither is ever hidden.
+ */
+function _incumbent(it) { return it.shown && !(it._lostAt >= 0) ? 1 : 0; }
+const _byPriority = compareLabelPriority;
+
+/** How long a shown label may sit without a slot before it is hidden (ms). */
+export const SLOT_LOSS_GRACE_MS = 500;
+
+/**
+ * Hide/show hysteresis for a label that was shown last frame and found no free
+ * slot this frame (pure). A one-frame loss must not blink the label: it stays
+ * drawn where it was until it has been without a slot for SLOT_LOSS_GRACE_MS.
+ * Limb, off-screen, behind-camera and occluder hides never come through here —
+ * they stay immediate.
+ * @param {boolean} shown — was displayed last frame
+ * @param {number} lostAt — ms timestamp the loss began, or -1 if not losing yet
+ * @param {number} nowMs
+ * @param {number} [graceMs=SLOT_LOSS_GRACE_MS]
+ * @returns {boolean} true = keep it drawn this frame
+ */
+export function holdAfterLoss(shown, lostAt, nowMs, graceMs = SLOT_LOSS_GRACE_MS) {
+  if (!shown) return false;
+  if (lostAt < 0) return true;           // first frame of the loss
+  return (nowMs - lostAt) < graceMs;
+}
+
+/** Margin (CSS px) added around an occluder's screen circle before a dot counts as covered. */
+export const OCCLUDER_MARGIN_PX = 4;
+
+/**
+ * Screen circle of a world sphere (pure, plain numbers). `ndcX/ndcY` is the
+ * projected centre, `viewDepth` its distance along the camera axis,
+ * `focalPx` = projectionMatrix[5] * H / 2 (pixels per unit of tan(angle)).
+ * Writes {x, y, r} in CSS px (origin top-left) into `out`.
+ * @returns {{x:number, y:number, r:number}} out
+ */
+export function occluderCircle(out, ndcX, ndcY, viewDepth, radius, focalPx, W, H) {
+  out.x = (ndcX * 0.5 + 0.5) * W;
+  out.y = (ndcY * -0.5 + 0.5) * H;
+  out.r = radius * focalPx / viewDepth;
+  return out;
+}
+
+/**
+ * Is a dot at (sx, sy) inside any of the first `n` screen circles (+margin)?
+ * @param {number} sx @param {number} sy
+ * @param {Array<{x:number,y:number,r:number}>} circles
+ * @param {number} n
+ * @param {number} [marginPx=OCCLUDER_MARGIN_PX]
+ */
+export function dotInOccluder(sx, sy, circles, n, marginPx = OCCLUDER_MARGIN_PX) {
+  for (let i = 0; i < n; i++) {
+    const c = circles[i];
+    const dx = sx - c.x, dy = sy - c.y, rr = c.r + marginPx;
+    if (dx * dx + dy * dy <= rr * rr) return true;
+  }
+  return false;
+}
+
+const EMPTY = [];
+
+/**
+ * The player ship's occluder radius (metres): the farthest any non-FX vertex
+ * sits from the ship origin over every radiator pose the player can reach,
+ * MEASURED by tmp/probes/occluder-radius-probe.mjs on the built flower ship
+ * (`js/test/_flowerFold.js`: buildFlowerShip + setFlowerTheta, orbit hull):
+ * θ 0° folded 2.34 m · 90° CARGO 3.16 m · 120° 3.48 m · 146° STOW / 160°
+ * 3.61 m (tip pads) · 180° VENT 3.54 m. The ship boots folded, but REFIT,
+ * OVERRIDE, PARK 135° and VENT all reach poses past 90°, so the circle covers
+ * the 3.61 m peak, rounded up to 3.7 m.
+ */
+export const SHIP_OCCLUDER_RADIUS_M = 3.7;
 
 // ============================================================================
 // PURE HELPERS (Node-safe)
@@ -358,6 +461,8 @@ function _boxesOverlap(a, b) {
 
 // Module scratch box for the pickSlot scan loop (no per-frame allocation).
 const _scanBox = { x: 0, y: 0, w: 0, h: 0 };
+// Scratch dot square for the dot-only free test (w/h fixed; x/y set per use).
+const _dotBox = { x: 0, y: 0, w: DOT_PX, h: DOT_PX };
 
 /**
  * Pick the first free slot for a label, honouring hysteresis: if `prevSlot`
@@ -422,6 +527,23 @@ export class CityLabels {
 
   /** @returns {boolean} true while the ladder's F7 chart suppresses the pills. */
   isSuppressed() { return this._suppressed; }
+
+  /**
+   * Occluder provider for attach({ occluders }): the player ship as one reused
+   * sphere (SHIP_OCCLUDER_RADIUS_M, in scene units). `getPosition` returns the
+   * LIVE world position — pass `() => player.position`, not the cloning
+   * `player.getPosition()` — and is read each frame, so nothing is allocated.
+   * @param {() => THREE.Vector3} getPosition
+   * @param {number} [radiusM=SHIP_OCCLUDER_RADIUS_M] — metres
+   * @returns {() => Array<{position: THREE.Vector3, radius: number}>}
+   */
+  shipOccluders(getPosition, radiusM = SHIP_OCCLUDER_RADIUS_M) {
+    const list = [{ position: null, radius: radiusM * 1e-5 }];   // 1 m = 1e-5 scene units
+    return () => {
+      list[0].position = getPosition();
+      return list[0].position ? list : EMPTY;
+    };
+  }
 
   /** @returns {boolean} true while the density ladder's `citypills` rung is hidden. */
   isDensityHidden() { return this._densityHidden; }
@@ -534,11 +656,17 @@ export class CityLabels {
    *   per frame (priority-sorted, so the most recognisable survive).
    * @param {number} [opts.maxVisibleLaunch=Infinity] — separate cap for launch
    *   pads, which are placed in a first pass so they never lose a collision.
+   * @param {Function} [opts.occluders] — () => Array<{position: THREE.Vector3
+   *   (world), radius: number (scene units)}>; called every frame, must reuse its
+   *   objects (no per-frame allocation). Each is projected to a screen circle and
+   *   a label whose DOT lies inside one (+OCCLUDER_MARGIN_PX) is hidden at once,
+   *   so no pill is drawn "through" the ship. A camera inside the sphere skips it.
    */
   attach({ parent, radius, camera, container, isActive = null,
            lonOffsetDeg = 0, mirrorLon = false,
            fadeNear, fadeFar, lodNear, lodFar,
-           maxVisible = Infinity, maxVisibleLaunch = Infinity }) {
+           maxVisible = Infinity, maxVisibleLaunch = Infinity,
+           occluders = null }) {
     if (!parent || !camera || !this._cities.length) return null;
     if (typeof document === 'undefined') return null;
 
@@ -547,7 +675,10 @@ export class CityLabels {
     root.className = 'sc-city-labels';
     root.style.cssText = 'position:absolute;top:0;left:0;width:0;height:0;';
     root.style.display = this._shouldShow() ? 'block' : 'none';
-    if (container) container.appendChild(root);
+    // FIRST child of the container: every HUD pane/panel that is a later
+    // sibling paints over the pills (equal stacking → DOM order), so a pill can
+    // never sit on top of the mother view or a pane. No z-index involved.
+    if (container) container.insertBefore(root, container.firstChild);
 
     const items = [];
     // Anchor exactly on the surface. These are 2D DOM overlays (no depth test,
@@ -574,6 +705,9 @@ export class CityLabels {
         anchor: new THREE.Vector3(pos.x, pos.y, pos.z),
         shown: false, _sx: 0, _sy: 0, _op: 1, _dist: 0,
         _slot: null,
+        // ms timestamp this shown label began going without a pill slot (-1 =
+        // not losing); and whether it currently draws its dot with no pill.
+        _lostAt: -1, _dotOnly: false,
         // Tier-based type hierarchy: tier 1 full strength, 2/3 dimmer.
         _opScale: tier === 1 ? 1.0 : (tier === 2 ? 0.85 : 0.70),
         // Cameo pulse: ms timestamp when the highlight ends (0 = inactive).
@@ -589,6 +723,9 @@ export class CityLabels {
       // Preallocated collision-box pool: 2 boxes (pill + dot) per placeable
       // label. Sized to the caps (or the full item count when uncapped).
       _kept: [],
+      // Occluder provider + preallocated screen circles (grown, never shrunk).
+      occluders: typeof occluders === 'function' ? occluders : null,
+      _occ: [],
       fadeNear: fadeNear != null ? fadeNear : radius * 2,
       fadeFar: fadeFar != null ? fadeFar : radius * 18,
       lodNear: lodNear != null ? lodNear : radius * 3,
@@ -615,10 +752,14 @@ export class CityLabels {
    * behind-camera labels, and position the DOM elements. Allocation-free
    * (module scratch vectors). Skipped entirely while hidden; a layer is hidden
    * wholesale when its `isActive` gate is false.
+   * @param {number} [nowMs] — clock for the slot-loss grace (tests inject it;
+   *   defaults to performance.now()).
    */
-  update() {
+  update(nowMs) {
     if (!this._shouldShow() || typeof window === 'undefined') return;
     const W = window.innerWidth, H = window.innerHeight;
+    const now = nowMs != null ? nowMs
+      : (typeof performance !== 'undefined' ? performance.now() : Date.now());
     for (const layer of this._layers) {
       const active = (!layer.isActive || layer.isActive()) && layer.parent.visible !== false;
       if (layer.root.style.display !== (active ? 'block' : 'none')) {
@@ -636,6 +777,24 @@ export class CityLabels {
 
       // Zoom-based LOD: how detailed a tier to reveal at this camera distance.
       const maxTier = lodMaxTier(_cam.distanceTo(_center), layer.lodNear, layer.lodFar);
+
+      // Occluders (the ship): project each to a screen circle once per frame.
+      let occN = 0;
+      if (layer.occluders) {
+        const list = layer.occluders();
+        const focalPx = camera.projectionMatrix.elements[5] * H * 0.5;
+        for (let i = 0; list && i < list.length; i++) {
+          const o = list[i];
+          _occV.copy(o.position).applyMatrix4(camera.matrixWorldInverse);
+          const depth = -_occV.z;
+          // Behind the camera, or the camera is INSIDE the sphere: there is no
+          // meaningful silhouette, so do not blank the whole screen.
+          if (!(depth > 0) || _occV.length() <= o.radius) continue;
+          _proj.copy(o.position).project(camera);
+          while (layer._occ.length <= occN) layer._occ.push({ x: 0, y: 0, r: 0 });
+          occluderCircle(layer._occ[occN++], _proj.x, _proj.y, depth, o.radius, focalPx, W, H);
+        }
+      }
 
       // --- PASS 1: gather on-screen candidates (LOD + hemisphere + frustum) ---
       const cand = layer._cand;
@@ -673,6 +832,11 @@ export class CityLabels {
           this._hide(item);
           continue;
         }
+        // Behind the ship: a dot inside an occluder circle is hidden at once.
+        if (occN && dotInOccluder(item._sx, item._sy, layer._occ, occN)) {
+          this._hide(item);
+          continue;
+        }
         item._dist = _world.distanceTo(_cam);
         // Pinned labels also skip the distance dimming (floor 0.55 otherwise).
         item._op = item.pin
@@ -682,29 +846,31 @@ export class CityLabels {
       }
 
       // --- PASS 2: screen-space placement with slots + two-pass pads ---
-      // Priority: lower tier first (major cities win), then nearer the camera.
+      // Priority: lower tier first (major cities win), then a label that was
+      // shown last frame (incumbent-first — see compareLabelPriority), then
+      // nearer the camera.
       cand.sort(_byPriority);
       const kept = layer._kept;
       let keptCount = 0;
       let placedLaunch = 0, placedOther = 0;
 
-      // Place one candidate: find a free slot (with hysteresis), reserve its
-      // pill box AND its dot square, position the DOM. Returns true if placed.
-      // Allocation-free: writes into the preallocated `kept` pool.
-      const place = (item) => {
-        const slot = pickSlot(item._sx, item._sy, item.w, kept, item._slot, keptCount,
-                              item.offX, item.offY);
-        if (!slot) { this._hide(item); return false; }
-        // Pill box.
-        slotBox(item._sx, item._sy, item.w, slot, kept[keptCount++], item.offX, item.offY);
-        // Dot square (so no pill covers another entry's dot).
-        const d = kept[keptCount++];
-        d.x = item._sx - DOT_PX / 2; d.y = item._sy - DOT_PX / 2; d.w = DOT_PX; d.h = DOT_PX;
+      // Free dot square? (no reserved pill or dot box overlaps it)
+      const dotFree = (item) => {
+        _dotBox.x = item._sx - DOT_PX / 2; _dotBox.y = item._sy - DOT_PX / 2;
+        for (let j = 0; j < keptCount; j++) if (_boxesOverlap(_dotBox, kept[j])) return false;
+        return true;
+      };
 
-        // Anchor the marker dot on the surface point; the pill sits in its slot.
+      // Draw a label (dot anchored on its surface point; the pill in `slot`, or
+      // no pill at all when `dotOnly`). Writes only what changed.
+      const draw = (item, slot, dotOnly) => {
         item.el.style.transform =
           `translate(${item._sx.toFixed(1)}px, ${item._sy.toFixed(1)}px) translate(${-DOT_PX / 2}px, -50%)`;
-        if (slot !== item._slot) {
+        if (dotOnly !== item._dotOnly) {
+          item.textEl.style.display = dotOnly ? 'none' : '';
+          item._dotOnly = dotOnly;
+        }
+        if (!dotOnly && slot !== item._slot) {
           item.textEl.style.transform = slotTransform(slot, item.w, item.offX, item.offY);
           item._slot = slot;
         }
@@ -715,19 +881,61 @@ export class CityLabels {
         // glow) until _pulseEnd. At most one label pulses at a time, so the
         // per-frame style writes here cost nothing measurable.
         if (item._pulseEnd) {
-          const nowMs = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-          if (nowMs >= item._pulseEnd) {
+          if (now >= item._pulseEnd) {
             item._pulseEnd = 0;
             item.dotEl.style.transform = '';
             item.textEl.style.boxShadow = item._pillShadow;
           } else {
-            const k = 0.5 + 0.5 * Math.sin(nowMs / 150);   // ~1 Hz breathing
+            const k = 0.5 + 0.5 * Math.sin(now / 150);   // ~1 Hz breathing
             item.dotEl.style.transform = `scale(${(1 + 0.6 * k).toFixed(3)})`;
             item.textEl.style.boxShadow =
               `0 0 ${(5 + 7 * k).toFixed(1)}px ${(1 + 2 * k).toFixed(1)}px rgba(80,210,255,${(0.55 + 0.35 * k).toFixed(3)})`;
           }
         }
-        return true;
+      };
+
+      // A label that lost its slot (or its cap place). A SHOWN one is held where
+      // it was until it has been without a slot for SLOT_LOSS_GRACE_MS — it
+      // reserves no box and counts toward no cap while held, so it can only
+      // overlap for that grace; a hidden one just stays hidden.
+      const lose = (item) => {
+        if (item.shown && holdAfterLoss(true, item._lostAt, now)) {
+          if (item._lostAt < 0) item._lostAt = now;
+          draw(item, item._slot || 'E', item._dotOnly);
+        } else {
+          this._hide(item);
+        }
+      };
+
+      // Place one candidate: find a free slot (with hysteresis), reserve its
+      // pill box AND its dot square, position the DOM. Returns true if placed
+      // (counts toward the caps). Allocation-free: writes into the `kept` pool.
+      const place = (item) => {
+        const slot = pickSlot(item._sx, item._sy, item.w, kept, item._slot, keptCount,
+                              item.offX, item.offY);
+        if (slot) {
+          // Pill box, then dot square (so no pill covers another entry's dot).
+          slotBox(item._sx, item._sy, item.w, slot, kept[keptCount++], item.offX, item.offY);
+          const d = kept[keptCount++];
+          d.x = item._sx - DOT_PX / 2; d.y = item._sy - DOT_PX / 2; d.w = DOT_PX; d.h = DOT_PX;
+          item._lostAt = -1;
+          draw(item, slot, false);
+          return true;
+        }
+        // Every pill slot is blocked. A tier-1 label whose dot square is free
+        // keeps its DOT (no pill) rather than vanishing: Hyderabad lost every
+        // slot to the pinned Skyroot HQ beside it and its dot went with it.
+        // A pill label gets the grace first; a never-pilled label shows at once.
+        if (item.tier === 1 && dotFree(item)
+            && (item._dotOnly || !item.shown || !holdAfterLoss(true, item._lostAt, now))) {
+          const d = kept[keptCount++];
+          d.x = item._sx - DOT_PX / 2; d.y = item._sy - DOT_PX / 2; d.w = DOT_PX; d.h = DOT_PX;
+          item._lostAt = -1;
+          draw(item, null, true);
+          return true;
+        }
+        lose(item);
+        return false;
       };
 
       // PASS 2a-pre — pinned labels (data-level `pin: true`) are placed before
@@ -741,13 +949,13 @@ export class CityLabels {
       // collision to a city, which is what keeps Sriharikota beside Chennai.
       for (const item of cand) {
         if (item.kind !== 'launch' || item.pin) continue;
-        if (placedLaunch >= layer.maxVisibleLaunch) { this._hide(item); continue; }
+        if (placedLaunch >= layer.maxVisibleLaunch) { lose(item); continue; }
         if (place(item)) placedLaunch++;
       }
       // PASS 2b — everything else, colliding against the pads' reserved boxes.
       for (const item of cand) {
         if (item.kind === 'launch' || item.pin) continue;
-        if (placedOther >= layer.maxVisible) { this._hide(item); continue; }
+        if (placedOther >= layer.maxVisible) { lose(item); continue; }
         if (place(item)) placedOther++;
       }
     }
@@ -755,7 +963,10 @@ export class CityLabels {
 
   /** @private Hide a label if currently shown (single style write). */
   _hide(item) {
+    item._lostAt = -1;
     if (item.shown) { item.el.style.display = 'none'; item.shown = false; }
+    // The next time it shows it starts fresh (pill, not dot-only).
+    if (item._dotOnly) { item.textEl.style.display = ''; item._dotOnly = false; }
     // A pulse that outlives visibility must not leave stale glow/scale styles
     // on the element for when it next rotates into view.
     if (item._pulseEnd) {

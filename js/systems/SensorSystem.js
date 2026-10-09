@@ -115,6 +115,14 @@ export class SensorSystem {
         if (d?.skillId === 'scan_quick') this._scanDiscovered = true;
     });
 
+    // w2-heat D2 (DECISIONS §15 row 2 — "scanning costs battery and heat, like
+    // mana"): the ledger the scans pay into. null (menu hero, unit tests that
+    // never wire it) → scans stay free, exactly as before.
+    /** @type {object|null} ResourceSystem — setResourceSystem() */
+    this._resourceSystem = null;
+    /** @type {Array<{remaining:number, rate:number}>} the computer's analysis loads still running */
+    this._analysisJobs = [];
+
     // Listen for weather effects (suppressed until scan skill discovered)
     eventBus.on(Events.WEATHER_ACTIVE, (effects) => {
       if (!this._scanDiscovered) return;
@@ -127,6 +135,7 @@ export class SensorSystem {
       this._scanCount = 0;
       this._scanCreditsTotal = 0;
       this._rewardedFields.clear();
+      this._analysisJobs.length = 0;   // w2-heat: a retry does not inherit a running analysis
     });
 
     this._setupListeners();
@@ -259,6 +268,90 @@ export class SensorSystem {
       detectedCount: this.detectedTargets.length,
       description: tierDef.description,
     };
+  }
+
+  // ======================================================================
+  // SCAN COST (w2-heat D2)
+  // ======================================================================
+
+  /**
+   * Wire the battery the scans pay from (main.js, beside
+   * armManager.setResourceSystem). Unwired → scans are free.
+   * @param {object|null} rs - ResourceSystem (canAfford / consume / drawUpTo)
+   */
+  setResourceSystem(rs) {
+    this._resourceSystem = rs || null;
+  }
+
+  /**
+   * What one scan costs, in battery units (Wh). Total = POWER_COST × the
+   * 600 Wh base battery (Constants.BATTERY_MAX — an absolute energy, so a
+   * bigger bought battery makes a scan relatively cheaper) × SCAN.COST_MULT.
+   * SWEEP_SHARE of it is the sweep, paid the instant the scan starts; the rest
+   * is the onboard computer's analysis, a steady load over ANALYSIS_S real s.
+   * @param {'quick'|'wide'} type
+   * @returns {{ total:number, sweep:number, analysis:number, analysisS:number, analysisW:number }}
+   */
+  getScanCost(type) {
+    const S = Constants.SCAN;
+    const cfg = type === 'quick' ? S.QUICK : S.WIDE;
+    const mult = Number.isFinite(S.COST_MULT) ? Math.max(0, S.COST_MULT) : 1;
+    const total = (cfg.POWER_COST || 0) * Constants.BATTERY_MAX * mult;
+    const share = Number.isFinite(S.SWEEP_SHARE) ? Math.max(0, Math.min(1, S.SWEEP_SHARE)) : 1 / 3;
+    const sweep = total * share;
+    const analysis = total - sweep;
+    const analysisS = Math.max(0.1, cfg.ANALYSIS_S || 1);
+    const wPerUnitS = (Constants.SHIP_HEAT && Constants.SHIP_HEAT.W_PER_UNIT_S) || 1000;
+    return { total, sweep, analysis, analysisS, analysisW: (analysis / analysisS) * wPerUnitS };
+  }
+
+  /**
+   * Pay a scan's sweep now and queue its analysis load. Refuses (with the
+   * reactive comms line) when the battery cannot pay the sweep.
+   * @param {'quick'|'wide'} type
+   * @returns {boolean} true when the scan may start
+   * @private
+   */
+  _payScan(type) {
+    const rs = this._resourceSystem;
+    if (!rs) return true;   // unwired (menu hero, unit tests): free, as before
+    const cost = this.getScanCost(type);
+    if (cost.total <= 0) return true;
+    if (!rs.canAfford('battery', cost.sweep)) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'V5',
+        text: 'Battery too low to scan — it recharges in sunlight.',
+        priority: 'warning',
+        _reactive: true,   // answers the S press — never muted (commsSuppression)
+      });
+      return false;
+    }
+    rs.consume('battery', cost.sweep);
+    if (cost.analysis > 0) {
+      this._analysisJobs.push({ remaining: cost.analysis, rate: cost.analysis / cost.analysisS });
+    }
+    return true;
+  }
+
+  /**
+   * Draw the running analysis loads for `dt` real seconds. The battery pays
+   * what it holds (drawUpTo); an empty battery starves the computer, it does
+   * not refund the scan. Called by the game loop beside resourceSystem.update
+   * under the SAME held-world guard (main.js) — NOT from update(), which runs
+   * while a drawer holds the world: a held analysis pauses, it is not lost.
+   * @param {number} dt
+   */
+  drawAnalysis(dt) {
+    const jobs = this._analysisJobs;
+    if (jobs.length === 0 || !(dt > 0)) return;
+    const rs = this._resourceSystem;
+    for (let i = jobs.length - 1; i >= 0; i--) {
+      const job = jobs[i];
+      const want = Math.min(job.remaining, job.rate * dt);
+      if (rs && want > 0) rs.drawUpTo('battery', want);
+      job.remaining -= want;
+      if (job.remaining <= 1e-9) jobs.splice(i, 1);
+    }
   }
 
   /**
@@ -729,6 +822,7 @@ export class SensorSystem {
         });
         return;
       }
+      if (!this._payScan('quick')) return;   // w2-heat D2: the sweep is paid up front
       this._startScan('quick');
     });
 
@@ -741,6 +835,7 @@ export class SensorSystem {
         });
         return;
       }
+      if (!this._payScan('wide')) return;    // w2-heat D2
       this._startScan('wide');
     });
   }

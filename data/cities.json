@@ -1737,7 +1737,7 @@
       "name": "Hyderabad",
       "lat": 17.39,
       "lon": 78.49,
-      "tier": 2,
+      "tier": 1,
       "kind": "city"
     },
     {
@@ -1745,7 +1745,7 @@
       "lat": 17.24,
       "lon": 78.43,
       "tier": 1,
-      "kind": "landmark",
+      "kind": "site",
       "pin": true
     },
     {

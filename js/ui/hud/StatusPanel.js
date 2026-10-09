@@ -25,7 +25,7 @@ import { VisualLaw } from '../../core/VisualLaw.js';
 import { powerDistribution } from '../../systems/PowerDistribution.js';
 import { tetherReel } from '../../systems/TetherReel.js';
 import { BridleRing } from '../../entities/BridleRing.js';
-import { captureNetSystem } from '../../entities/CaptureNet.js';
+import { captureNetSystem, netMaxReachM } from '../../entities/CaptureNet.js';
 import { PaneChrome } from './PaneChrome.js';
 import { GestureHints } from './GestureHints.js';
 import { pressKey } from '../../core/KeyDispatch.js';
@@ -389,16 +389,22 @@ export class StatusPanel {
         <span id="autopilot-indicator" class="mother-memo" style="margin-left:auto;font-size:10px;letter-spacing:0.08em;color:${VisualLaw.COLORS.PLAYER};opacity:1;white-space:nowrap;"></span>` : ''}
       </div>
       <div id="mother-digest" style="font-size:11px;line-height:1.4;white-space:nowrap;display:flex;align-items:center;gap:6px;transition:opacity 0.3s ease;">
-        <span id="mother-digest-net" style="display:inline-flex;align-items:center;gap:4px;color:${NET_COLOR};">
+        <span id="mother-digest-net" class="md-seg" style="display:inline-flex;align-items:center;gap:4px;color:${NET_COLOR};">
+          <span class="md-core">
           <span class="md-label">NET</span>
           <span class="md-track"><span class="md-fill" id="mother-digest-net-fill"></span></span>
           <span class="md-count" id="mother-digest-net-count">${Constants.LASSO_AMMO_MAX}</span>
           <span id="mother-digest-net-reload" style="display:none;">↻</span>
+          </span>
+          <span class="md-reach-group" id="mother-digest-net-reach-group"><span class="md-sep">·</span><span class="md-reach" id="mother-digest-net-reach" title="Net reach">${StatusPanel.reachText(Constants.LASSO_RANGE)}</span></span>
         </span>
         <span class="md-sep" id="mother-digest-mnet-sep" style="display:none;">·</span>
-        <span id="mother-digest-mnet" style="display:none;align-items:center;gap:4px;color:${NET_COLOR};" title="Mother Large Net pods (whale hunts)">
+        <span id="mother-digest-mnet" class="md-seg" style="display:none;align-items:center;gap:4px;color:${NET_COLOR};" title="Mother Large Net pods (whale hunts)">
+          <span class="md-core">
           <span class="md-label">M-NET</span>
           <span class="md-count" id="mother-digest-mnet-count">0/0</span>
+          </span>
+          <span class="md-reach-group"><span class="md-sep">·</span><span class="md-reach" id="mother-digest-mnet-reach" title="Large net reach">${StatusPanel.reachText(netMaxReachM(Constants.CAPTURE_NET.LARGE))}</span></span>
         </span>
         <span class="md-sep">·</span>
         <span id="mother-digest-dv" style="display:inline-flex;align-items:center;gap:4px;color:#aaffdd;">
@@ -992,6 +998,20 @@ export class StatusPanel {
   }
 
   /**
+   * W2 meters: show / hide the small-net reach (`· 90 m`) in the MOTHER digest,
+   * write-on-change. Hidden while the large net shows, so the row never clips.
+   * @param {boolean} shown
+   * @private
+   */
+  _setNetReachShown(shown) {
+    if (this._netReachShown === shown) return;
+    const g = typeof document !== 'undefined' ? document.getElementById('mother-digest-net-reach-group') : null;
+    if (!g) return;
+    this._netReachShown = shown;
+    g.style.display = shown ? '' : 'none';
+  }
+
+  /**
    * Update the MOTHER digest's Large Net pod segment (`mother-digest-mnet`).
    * Net ladder Phase B: shows `M-NET n/max` where n = both pods combined and
    * max = 2 pods × LARGE.MAGAZINE_SIZE. Hidden until a `source:'mother'`
@@ -1008,6 +1028,7 @@ export class StatusPanel {
     if (!Array.isArray(this._motherPods)) {
       seg.style.display = 'none';
       if (sep) sep.style.display = 'none';
+      this._setNetReachShown(true);
       return;
     }
 
@@ -1023,6 +1044,7 @@ export class StatusPanel {
 
     seg.style.display = 'inline-flex';
     if (sep) sep.style.display = '';
+    this._setNetReachShown(false);   // W2 meters: one reach at a time — the large net's
     count.textContent = `${nets}/${maxNets}`;
     count.style.color = color;
     seg.style.color = color;
@@ -1482,6 +1504,20 @@ export class StatusPanel {
         text-align: right;
       }
       #mother-digest-net-reload { opacity: 0.8; }
+      /* W2 meters: the reach is the digest's lowest-priority text and is never
+       * clipped. The small-net reach hides while the large net shows (JS,
+       * _updateMotherPodDigest); under any further pressure (the measured
+       * worst case M-NET + ΔV % + PWR CRIT) a segment shrinks to its core and
+       * its reach group wraps onto a second line the fixed height hides — the
+       * whole reach goes, the counts, bars and PWR word stay. */
+      #mother-digest > * { flex-shrink: 0; }
+      #mother-digest .md-seg {
+        flex-shrink: 1 !important; flex-wrap: wrap; align-content: flex-start;
+        min-width: min-content; height: 1.4em; overflow: hidden;
+      }
+      #mother-digest .md-core { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+      #mother-digest .md-reach-group { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; }
+      #mother-digest .md-reach { opacity: 0.7; }
     `;
     document.head.appendChild(style);
   }
@@ -1962,10 +1998,11 @@ export class StatusPanel {
     const pct = Math.round(st.openFrac * 100);
     const theta = Math.round(st.thetaDeg);
     const base = st.slewing ? 'SLEWING'
-      : st.pose === 'STOW' ? 'STOWED (BUD)'
-        : st.pose === 'PARK' ? 'PARKED'
-          : st.pose === 'CARGO' ? 'DEPLOYED (BLOOM)'
-            : st.pose === 'LAUNCH' ? 'FOLDED' : 'HOLDING';
+      : st.pose === 'CLOSED' ? 'CLOSED'
+        : st.pose === 'STOW' ? 'BUD'
+          : st.pose === 'PARK' ? 'PARKED'
+            : st.pose === 'CARGO' ? 'DEPLOYED (BLOOM)'
+              : st.pose === 'LAUNCH' ? 'FOLDED' : 'HOLDING';
     const label = st.locked === true ? `${base} \u00b7 THRUST INHIBITED` : base;
     // Inhibited = steady CAUTION amber (the denial token; the same '#ffaa00' the slew line wears).
     const c = st.locked === true ? VisualLaw.COLORS.CAUTION : st.slewing ? '#ffaa00' : '#a3d9c9';
@@ -2349,6 +2386,20 @@ export class StatusPanel {
   }
 
   /**
+   * W2 meters (DECISIONS §15 row 8, "the mother and daughter panes show their
+   * reach and nets left"): a reach in plain words — `90 m`, `500 m`, `2 km`,
+   * `2.5 km`. Non-finite / non-positive -> ''.
+   * @param {number} m metres
+   * @returns {string}
+   */
+  static reachText(m) {
+    if (!Number.isFinite(m) || m <= 0) return '';
+    if (m < 1000) return `${Math.round(m)} m`;
+    const km = Math.round(m / 100) / 10;
+    return `${Number.isInteger(km) ? km : km.toFixed(1)} km`;
+  }
+
+  /**
    * @private One daughter row. Unselected = a single details line
    * (number · status · nets · fuel). Selected = two lines: the details line,
    * plus a 2nd line listing the hotkey(s) relevant to its current state.
@@ -2378,7 +2429,11 @@ export class StatusPanel {
       const nets = armObj.getNetInventory();
       const maxNets = typeof armObj.getNetInventoryMax === 'function' ? armObj.getNetInventoryMax() : 0;
       const netColor = nets <= 0 ? '#ff4444' : (maxNets > 0 && nets <= maxNets * 0.5) ? '#ffaa00' : NET_COLOR;
-      netHtml = `<span style="color:${netColor};white-space:nowrap;" title="Nets remaining">NET ${nets}/${maxNets}</span>`;
+      // W2 meters (DECISIONS §15 row 8): the daughter's live tether reach
+      // (config.tetherMax — purchases / old saves scale it) beside its nets.
+      const reach = StatusPanel.reachText(armObj.config && armObj.config.tetherMax);
+      const reachHtml = reach ? `<span class="fleet-reach" style="opacity:0.7;" title="Tether reach"> · ${reach}</span>` : '';
+      netHtml = `<span style="color:${netColor};white-space:nowrap;" title="Nets remaining">NET ${nets}/${maxNets}${reachHtml}</span>`;
     }
 
     // ΔV — same label/colour ladder as the MOTHER pane (no fuel-gauge icon).
@@ -2398,7 +2453,8 @@ export class StatusPanel {
     // Line 1 — details laid out as fixed columns so N · status · NET · ΔV line up
     // vertically down the list. The number column is right-aligned (the ▸ marker
     // hangs left of the digit); the ΔV column is right-aligned to the pane edge.
-    const detailLine = `<div style="display:grid;grid-template-columns:20px 1fr 50px 56px;column-gap:8px;align-items:baseline;">`
+    // W2 meters: the NET column carries the reach too (`NET 4/4 · 500 m`, 110 px measured), 50 -> 112 px.
+    const detailLine = `<div style="display:grid;grid-template-columns:20px 1fr 112px 56px;column-gap:8px;align-items:baseline;">`
       + `<span style="text-align:right;">${numHtml}</span>`
       + `<span style="color:${statusColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"${statusTitle ? ` title="${statusTitle}"` : ''}>${status}${catchFlag}</span>`
       + netHtml
