@@ -28,7 +28,7 @@
 //   Rebuilt from the real bindings 2026-10-06 (w1-first-minute D2, owner
 //   2026-09-30 "Help menu needs updating. Some commands are obsolete."): rows
 //   describe what the key does TODAY with the zoom ladder on (the default) —
-//   ␣ is the view's main action, Esc / PgUp / PgDn move between views — in
+//   Space is the view's main action, Esc / PgUp / PgDn move between views — in
 //   plain words.
 //   H1 2026-10-09 (owner rulings, DECISIONS "Owner answers 2026-10-09"): ONE
 //   list, opened by the menu's ? and a ? at the top right of floor 1 (and the
@@ -36,6 +36,11 @@
 //   in the closed Advanced section, unbuilt ones are greyed. Gone from the page
 //   because the key does nothing now: V on the mother, Enter, M, ` as a map,
 //   Shift V.
+//   H3 2026-10-10 (owner: "simplify help menu … one line is better than 2, make
+//   help page wide, make descriptions brief"): one line per row, short words,
+//   wide page; Space spelled out; the Shift , dodge row dropped (the key is
+//   still bound). `keyWidth` is the key column of that card, measured so its
+//   widest chip set fits (no runtime measuring: the tests build a fake DOM).
 // The live bindings are owned by InputManager._handleKeyDown; test-HelpTruth.js
 // fails when a bound key is missing here or a chip names an unbound key.
 export const HOTKEY_GROUPS = [
@@ -43,53 +48,55 @@ export const HOTKEY_GROUPS = [
     // What a new player needs: mouse / touch first, then the keys of the mother's
     // command chair in onboarding teach order (orient → scan → target → act).
     title: 'Basics',
+    keyWidth: '116px',
     rows: [
       // Mouse / touch rows (H1 D3). Kept only where the 2026-10-09 probe or the
       // TouchControls source backs them; the rail is NOT clickable (pointer-events
       // none) so "click the rail" is not listed.
       [['Wheel · pinch'], 'Zoom in / out', { pointer: true }],
-      [['Drag'], 'Turn the view (debris and orbit floors; floors 1–2 with a drawer open)', { pointer: true }],
-      [['Point · click'], 'Floor 1: see what a part does, click it to upgrade', { pointer: true }],
-      [['Tap · hold'], 'Touch: tap a piece to target it (empty space scans); hold it for the action ring', { pointer: true }],
-      [['↑ ↓ ← →'], 'Turn the ship'],
-      [['S'], 'Scan nearby (uses battery)'],
+      [['Drag'], 'Turn the view', { pointer: true }],
+      [['Point · click'], 'Inspect / upgrade a part', { pointer: true }],
+      [['Tap · hold'], 'Touch: target / actions', { pointer: true }],
+      [['↑ ↓ ← →'], 'Turn ship'],
+      [['S'], 'Scan'],
       [['T', '/', 'Tab'], 'Next target'],
-      [['␣'], 'Main action for this view (e.g. autopilot)'],
-      [['A'], 'Autopilot on / off — flies to the target'],
-      [['N'], 'Fire the net'],
-      [['Esc'], 'Back — close the panel, else zoom out'],
-      [['PgUp', 'PgDn'], 'Zoom out / in one floor'],
-      [['B'], 'Upgrades (floor 1)'],
-      [['I'], 'Tech library'],
-      [['J'], 'Journal — discoveries'],
-      [['?'], 'This help'],
+      [['Space'], 'Main action'],
+      [['A'], 'Autopilot on / off'],
+      [['N'], 'Fire net'],
+      [['Esc'], 'Back'],
+      [['PgUp', 'PgDn'], 'Zoom out / in'],
+      [['B'], 'Buy'],
+      [['I'], 'Info'],
+      [['J'], 'Journal'],
+      [['?'], 'Help'],
     ],
   },
   {
     // Fly and run the daughters. Mother verbs that act on them (D, R, Shift R)
     // sit here too, so the whole daughter story is one card.
     title: 'Daughters',
+    keyWidth: '90px',
     rows: [
-      [['1', '–', '4'], 'Fly a daughter — the camera rides with her (again: back to the mother)'],
-      [['V'], 'Back to the mother (she keeps working)'],
-      [['D'], 'Launch a daughter (pick one with 1–4)'],
-      [['R'], 'Reel a daughter in'],
-      [['Shift R'], 'Reel every daughter in'],
-      [['↑ ↓ ← →'], 'Circle the debris, holding station'],
-      [['`'], 'Next tool (net / magnet / gripper / pad)'],
-      [['N'], 'Use the tool / fire the net'],
-      [['X'], 'Cut the tether (let her go)'],
+      [['1', '–', '4'], 'Fly a daughter'],
+      [['V'], 'Back to mother'],
+      [['D'], 'Launch selected daughter'],
+      [['R'], 'Reel selected daughter'],
+      [['Shift R'], 'Reel all daughters'],
+      [['↑ ↓ ← →'], 'Circle target'],
+      [['`'], 'Next tool'],
+      [['N'], 'Use tool'],
+      [['X'], 'Cut tether'],
     ],
   },
   {
     // The mother's own hardware.
     title: 'Ship',
+    keyWidth: '90px',
     rows: [
-      [['.'], 'Swing the struts out / in'],
-      [['O'], 'Radiator open / fold (opens by itself when hot)'],
-      [[','], 'Roll the solar wings up / out'],
-      [['Shift ,'], 'Solar wings edge-on (quick dodge)'],
-      [['F'], 'Furnace — not built yet, try it'],
+      [[','], 'Solar wings out / in'],
+      [['.'], 'Daughter struts out / in'],
+      [['O'], 'Radiator struts out / in'],
+      [['F'], 'Furnace (not built)'],
     ],
   },
   {
@@ -97,29 +104,30 @@ export const HOTKEY_GROUPS = [
     // page stays short ("so devs can remember and clutter is reduced").
     title: 'Advanced',
     collapsed: true,
+    keyWidth: '150px',
     rows: [
-      [['Shift A'], 'Dev: fly to the thickest debris, net a piece, send every daughter'],
-      [['Shift N'], 'Pick the best debris in reach, send every daughter'],
-      [['Shift D'], 'Launch every daughter at the target'],
-      [['Shift S'], 'Scan a wide area (more battery)'],
-      [['Shift −', 'Shift +'], 'Engine throttle down / up'],
-      [['K'], 'Drop the catch held at the nose'],
-      [['L'], 'Hold: laser slows the target’s spin'],
-      [['+', '−'], 'Daughter: closer / farther, holding station'],
-      [['Shift'], 'Hold: reel in faster'],
-      [['Ctrl Shift D'], 'Take the catch down to burn up (daughter lost)'],
-      [['Z'], 'Debris close-up: next part (Shift: back)'],
+      [['Shift A'], 'Dev: auto-play'],
+      [['Shift N'], 'Send all to best debris'],
+      [['Shift D'], 'Launch all at target'],
+      [['Shift S'], 'Wide scan'],
+      [['Shift −', 'Shift +'], 'Throttle down / up'],
+      [['K'], 'Drop nose catch'],
+      [['L'], 'Hold: laser slows spin'],
+      [['+', '−'], 'Daughter closer / farther'],
+      [['Shift'], 'Hold: reel faster'],
+      [['Ctrl Shift D'], 'Burn up catch (daughter lost)'],
+      [['Z'], 'Next debris part (Shift: back)'],
       [['E'], 'Electric tether out / in'],
-      [['Shift 1–3'], 'Power line: engine / sensors / daughters'],
-      [['[', ']'], 'Less / more power on that line'],
-      [[';', '\''], 'Daughter launch speed down / up'],
-      [['5', '6'], 'City / constellation names on / off'],
-      [['7'], 'Open the radio log'],
-      [['8'], 'Nav ball: show / shrink'],
-      [['9', '0'], 'Debris / target panel on / off'],
-      [['−', '+'], 'Fewer / more panels on screen'],
-      [['F2'], 'Switch thruster metal', { grey: 'comes with the furnace' }],
-      [['Shift G'], 'Sweep the net through a cloud of small pieces', { grey: 'unlocks later' }],
+      [['Shift 1–3'], 'Pick power line'],
+      [['[', ']'], 'Power less / more'],
+      [[';', '\''], 'Launch speed down / up'],
+      [['5', '6'], 'City / constellation names'],
+      [['7'], 'Radio log'],
+      [['8'], 'Nav ball'],
+      [['9', '0'], 'Debris / target panel'],
+      [['−', '+'], 'Fewer / more panels'],
+      [['F2'], 'Thruster metal', { grey: 'with the furnace' }],
+      [['Shift G'], 'Net sweep', { grey: 'unlocks later' }],
     ],
   },
 ];
@@ -227,7 +235,7 @@ export class HotkeyOverlay {
     const panel = document.createElement('div');
     panel.id = 'hotkey-panel';
     Object.assign(panel.style, {
-      width: '92%', maxWidth: '1320px', height: '86%', maxHeight: '840px',
+      width: '96%', maxWidth: '1680px', height: 'auto', maxHeight: '92%',
       background: '#1a1a2e', border: '1px solid rgba(0,212,255,0.3)',
       borderRadius: '6px', display: 'flex', flexDirection: 'column',
       boxShadow: '0 0 40px rgba(0,212,255,0.12)', overflow: 'hidden',
@@ -255,8 +263,8 @@ export class HotkeyOverlay {
       // Advanced section full width below. Scrolls vertically when it does not
       // fit (2026-10-06, measured in headless Chromium: the old overflow:hidden
       // clipped rows at 1024×768 and even at 1920×1080).
-      flex: '1', overflowX: 'hidden', overflowY: 'auto', padding: '16px 18px',
-      display: 'grid', gridTemplateColumns: '1.15fr 1fr 0.85fr',
+      flex: '1', minHeight: '0', overflowX: 'hidden', overflowY: 'auto', padding: '16px 18px',
+      display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)',
       gap: '14px', alignContent: 'start',
     });
     // The ladder's window-capture WheelRouter preventDefaults + zooms every
@@ -305,7 +313,7 @@ export class HotkeyOverlay {
       card.style.gridColumn = '1 / -1';
       host = document.createElement('div');
       Object.assign(host.style, {
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))',
         columnGap: '28px', marginTop: '10px',
         borderTop: '1px solid rgba(0,212,255,0.12)', paddingTop: '6px',
       });
@@ -322,7 +330,7 @@ export class HotkeyOverlay {
         continue;
       }
       const [keys, desc, opts] = row;
-      host.appendChild(this._makeRow(keys, desc, opts));
+      host.appendChild(this._makeRow(keys, desc, opts, group.keyWidth));
     }
     return card;
   }
@@ -337,8 +345,12 @@ export class HotkeyOverlay {
     return hr;
   }
 
-  /** @private Build a single key→description row */
-  _makeRow(keys, desc, opts = null) {
+  /**
+   * @private Build a single key→description row: children[0] the keys,
+   * children[1] the label. One line, never wraps (H3); `keyWidth` is the card's
+   * measured key column (default 100px).
+   */
+  _makeRow(keys, desc, opts = null, keyWidth = '100px') {
     const pointer = !!(opts && opts.pointer);
     const grey = opts && typeof opts.grey === 'string' ? opts.grey : null;
     const row = document.createElement('div');
@@ -351,14 +363,14 @@ export class HotkeyOverlay {
     const keyWrap = document.createElement('div');
     Object.assign(keyWrap.style, {
       display: 'flex', alignItems: 'center', gap: '4px',
-      flex: '0 0 96px', flexWrap: 'wrap',
+      flex: `0 0 ${keyWidth}`, flexWrap: 'nowrap',
     });
     for (const k of keys) {
       if (pointer) {
-        // A mouse / touch gesture is words, not a key: plain text, may wrap.
+        // A mouse / touch gesture is words, not a key: plain text.
         const word = document.createElement('span');
         word.textContent = k;
-        Object.assign(word.style, { color: '#7fe3ff', fontSize: '12px', lineHeight: '1.3' });
+        Object.assign(word.style, { color: '#7fe3ff', fontSize: '12px', lineHeight: '1.3', whiteSpace: 'nowrap' });
         keyWrap.appendChild(word);
         continue;
       }
@@ -376,7 +388,7 @@ export class HotkeyOverlay {
     }
 
     const label = document.createElement('span');
-    Object.assign(label.style, { color: '#cfcfcf', flex: '1', lineHeight: '1.35' });
+    Object.assign(label.style, { color: '#cfcfcf', flex: '1', lineHeight: '1.35', whiteSpace: 'nowrap' });
     label.textContent = grey ? `${desc} — ${grey}` : desc;
 
     row.appendChild(keyWrap);
