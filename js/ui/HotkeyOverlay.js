@@ -28,7 +28,7 @@
 //   Rebuilt from the real bindings 2026-10-06 (w1-first-minute D2, owner
 //   2026-09-30 "Help menu needs updating. Some commands are obsolete."): rows
 //   describe what the key does TODAY with the zoom ladder on (the default) —
-//   Space is the view's main action, Esc / PgUp / PgDn move between views — in
+//   Space is the view's main action, Esc moves back between views — in
 //   plain words.
 //   H1 2026-10-09 (owner rulings, DECISIONS "Owner answers 2026-10-09"): ONE
 //   list, opened by the menu's ? and a ? at the top right of floor 1 (and the
@@ -41,6 +41,8 @@
 //   wide page; Space spelled out; the Shift , dodge row dropped (the key is
 //   still bound). `keyWidth` is the key column of that card, measured so its
 //   widest chip set fits (no runtime measuring: the tests build a fake DOM).
+//   2026-10-10 owner: "remove: PgUp PgDn Zoom out / in" — the row is gone (the
+//   wheel row covers zoom); the keys stay bound (test-HelpTruth allowlist).
 // The live bindings are owned by InputManager._handleKeyDown; test-HelpTruth.js
 // fails when a bound key is missing here or a chip names an unbound key.
 export const HOTKEY_GROUPS = [
@@ -64,7 +66,6 @@ export const HOTKEY_GROUPS = [
       [['A'], 'Autopilot on / off'],
       [['N'], 'Fire net'],
       [['Esc'], 'Back'],
-      [['PgUp', 'PgDn'], 'Zoom out / in'],
       [['B'], 'Buy'],
       [['I'], 'Info'],
       [['J'], 'Journal'],
