@@ -586,6 +586,14 @@ export class OverridePane {
   /** @returns {object|null} the F1 bar's root element (`#hud-f1-bar`) */
   barEl() { return this._bar; }
 
+  /**
+   * The F key (H1 2026-10-09): press FURNACE exactly as the bar's button does
+   * (WARN → OVERHEAT → blackout → reboot; touches no game state). On floors
+   * where the bar is hidden its tick resets a WARN, so a second press may just
+   * warn again — accepted.
+   */
+  pressFurnace() { this._barFurnacePress(); }
+
   /** Abort the gag, clear every timer (incl. the reveal blink), unsubscribe, remove the root, clear `body[data-ovr-open]`; further calls no-op. */
   dispose() {
     if (this._disposed) return;

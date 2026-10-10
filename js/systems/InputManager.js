@@ -552,21 +552,9 @@ export class InputManager {
       return; // block all other keys while codex is open
     }
 
-    // --- ST-6.4: Strategic Map intercept — suppress all gameplay input while map is open ---
-    if (d.strategicMap && d.strategicMap.isOpen()) {
-      if (e.code === 'Escape') {
-        d.strategicMap.close();
-        d.audioSystem?.playClick();
-        e.preventDefault();
-      } else if (e.code === 'KeyV' && e.shiftKey) {
-        // Shift+V closes the map
-        eventBus.emit(Events.STRATEGIC_MAP_TOGGLE);
-        d.audioSystem?.playClick();
-        e.preventDefault();
-      }
-      // Block all other keys while strategic map is open
-      return;
-    }
+    // Strategic Map (Shift+V) retired 2026-10-09 (H1, owner: players do not need
+    // more keys to memorize; F4 shows the same). The module and its Events key
+    // stay; nothing opens it, so the old open-map intercept is gone.
 
     // --- Debris Map intercept — suppress most input, allow cluster nav + close ---
     // ST-5.1: Pass through PageUp, PageDown for comms pane interaction
@@ -672,7 +660,10 @@ export class InputManager {
     switch (e.code) {
       // Confirm / Enter action (gameplay only — menu/briefing handle their own Enter)
       case 'Enter':
-        if (isGameplay) {
+        // H1 2026-10-09: with the zoom ladder engaged Enter does nothing — it
+        // moved ORBITAL_VIEW → INTERACTION with no visible change and left B
+        // dead until a net catch. Ladder off (?ladder=0) keeps the legacy approach.
+        if (isGameplay && !this._ladderIfEngaged()) {
           // If we have a target selected and we're in orbital view, begin approach
           const target = d.targetSelector.getActiveTarget();
           if (target && currentState === GameStates.ORBITAL_VIEW) {
@@ -778,7 +769,7 @@ export class InputManager {
         break;
       }
 
-      // Camera view toggle (V key) / Strategic Map (Shift+V).
+      // Camera view toggle (V key). Shift+V (strategic map) retired 2026-10-09.
       // 2026-07-23 audit: V in MOTHER mode cycles FLY ↔ LOOK AROUND (close
       // inspection engages by zooming in while in LOOK AROUND). V while PILOTING
       // a daughter = hop back to mother — camera AND input together, so we don't
@@ -786,20 +777,18 @@ export class InputManager {
       // invisible daughter still steers (deliberate reinstatement of the "V
       // exits pilot" behavior). Unlike Esc (which recalls from STATION_KEEP), V
       // exits cleanly from any state without recalling — the daughter keeps
-      // working ("spinning plates"). Shift+V (strategic map) unchanged.
+      // working ("spinning plates"). H1 2026-10-09: with the zoom ladder engaged
+      // V on the MOTHER does nothing (the ladder camera ignores currentView, so
+      // the flip changed only the indicator); V while piloting still hops back.
       case 'KeyV':
+        if (e.shiftKey) break;   // Shift+V retired 2026-10-09
         if (isGameplay) {
-          if (e.shiftKey) {
-            // ST-6.4: Shift+V → toggle strategic map
-            eventBus.emit(Events.STRATEGIC_MAP_TOGGLE);
-            d.audioSystem?.playClick();
-            e.preventDefault();
-          } else if (this.armPilotMode) {
+          if (this.armPilotMode) {
             // Hop back to mother: exit pilot camera + deselect, no recall.
             this._exitArmPilotCamera();
             d.armManager?.deselectArm();
             d.audioSystem?.playClick();
-          } else if (d.cameraSystem) {
+          } else if (d.cameraSystem && !this._ladderIfEngaged()) {
             const lockedId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
             d.cameraSystem.cycleView(lockedId);
             d.audioSystem.playClick();
@@ -874,17 +863,8 @@ export class InputManager {
         }
         break;
 
-      // M key — "Map" (hotkey revamp 2026-06-14): toggle the Debris Map. The
-      // old MPD-armed / Orbit-MFD role on M lost its key in the revamp (not in
-      // the help menu). ` (backtick) is the other Debris-Map key (help: "M / `";
-      // in station-keep it cycles the daughter's tool instead).
-      case 'KeyM':
-        if (isGameplay && d.debrisMap && !e.repeat) {
-          d.debrisMap.toggle();
-          d.audioSystem?.playClick();
-          e.preventDefault();
-        }
-        break;
+      // M key — retired 2026-10-09 (H1): it opened the Debris Map; LEO (floor 4)
+      // shows the same. Bare M is unbound.
 
       // R key — Reel-in, consistent across BOTH mother and daughter modes
       // (2026-06-14 reel-in fix). The help pane labels R "Reel-in" in both
@@ -1165,12 +1145,14 @@ export class InputManager {
       // W key — FREED (hotkey revamp 2026-06-14). Wide scan moved to Shift+S
       // and daughter WASD thrust was removed, so bare W is unbound.
 
-      // F key — "Forge" (hotkey revamp 2026-06-14): toggle the Forge/Kiln. The
-      // old Focus Action role lost its key (not in the help menu). Works in
-      // both mother and daughter modes.
+      // F key — the furnace joke (H1 2026-10-09, owner: the old forge "doesn't
+      // really work"). FORGE_TOGGLE is still emitted so the journal skill and
+      // chapter beat that trigger on it stay reachable (ForgeSystem no longer
+      // subscribes); then the F1-bar FURNACE gag runs. Both mother and daughter.
       case 'KeyF':
         if (isGameplay && !e.repeat) {
           eventBus.emit(Events.FORGE_TOGGLE);
+          d.pressFurnace?.();
           d.audioSystem?.playClick();
           e.preventDefault();
         }
@@ -1634,14 +1616,14 @@ export class InputManager {
         }
         break;
 
-      // --- Backtick: Toggle Debris Map (strategic overlay). In ARM_PILOT
-      //     STATION_KEEP it cycles the piloted arm's tool instead. The old
-      //     Shift+` mother-side tool cycle was removed (hotkey cleanup
-      //     2026-06-13b) — that verb now lives on T. ---
+      // --- Backtick: in ARM_PILOT STATION_KEEP it cycles the piloted arm's
+      //     tool. The Debris-Map toggle was retired 2026-10-09 (H1); otherwise
+      //     the key does nothing. The old Shift+` mother-side tool cycle was
+      //     removed (hotkey cleanup 2026-06-13b) — that verb now lives on T. ---
       case 'Backquote':
         if (isGameplay && !e.repeat) {
           // CP-1 / P2: plain backtick in STATION_KEEP cycles the piloted arm's
-          // tool (NET → … → MAGNET). Captured before the Debris-Map toggle.
+          // tool (NET → … → MAGNET).
           const tcArm = this.armPilotMode && d.cameraSystem?.getPilotedArm?.();
           if (tcArm && tcArm.state === Constants.ARM_STATES.STATION_KEEP
               && Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')
@@ -1650,11 +1632,6 @@ export class InputManager {
             e.preventDefault();
             break;
           }
-          if (d.debrisMap) {
-            d.debrisMap.toggle();
-          }
-          d.audioSystem?.playClick();
-          e.preventDefault();
         }
         break;
 

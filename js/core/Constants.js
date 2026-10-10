@@ -4877,9 +4877,9 @@ export const Constants = {
       { id: 'arm_pilot',         label: 'Daughter Piloting', key: '1-4', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'CONTROL_MODE_CHANGE', triggerFilter: (d) => d && d.mode === 'ARM_PILOT' },
       { id: 'arm_pilot_capture', label: 'Manual Capture',    key: 'N', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_CAPTURED',        triggerFilter: (d) => d && d.manual === true },
       // ── CP-4 ch4 (MissionCoach): Cluster/transfer agency on the Debris Map (CP-3) ──
-      // Backtick (`) opens the Debris Map; ,/. select a cluster → DEBRIS_MAP_CLUSTER_SELECTED
-      // (the 3D StrategicMap / Shift+V is view-only and does NOT drive transfers).
-      { id: 'strategic_map',     label: 'Transfer Map',      key: 'M', tier: 3, category: 'nav',     hudGroup: null,    prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED' },
+      // M retired 2026-10-09 (H1): the F4 plan-transfer / F3 approach emit
+      // DEBRIS_MAP_CLUSTER_SELECTED through LadderBridge, so no key opens this skill.
+      { id: 'strategic_map',     label: 'Transfer Map',      key: null, tier: 3, category: 'nav',     hudGroup: null,    prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED' },
       // ── CP-4 Phase D (MissionCoach chapters 8/9/11) ──────────────────────────
       // ch8 confirm-before-fire: discovered when the player trips the active-sat treaty
       //   guard (ActiveSatGuard emits CONJUNCTION_ALERT{reason:'ACTIVE_SAT_ARMING'}).

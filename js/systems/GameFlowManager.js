@@ -2269,7 +2269,10 @@ export class GameFlowManager {
         channel: 'CMD',
         priority: 'info',
       });
-    } else {
+    } else if (!deployed) {
+      // H1 2026-10-09: `else if (!deployed)` — a ceremony-in-flight deploy
+      // (deployed true, daughter not launched yet) used to fall in here and post
+      // a false "Launch refused" while the daughter launched anyway.
       // 2026-05-15 polish task 5: G-key fail-quiet was the user-reported
       // bug. ArmManager.deployArm() already emits specific COMMS_MESSAGE
       // events for the common rejection paths (no-arm, safe-mode, no

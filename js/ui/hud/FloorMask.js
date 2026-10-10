@@ -204,7 +204,8 @@ export const MASK_PANES = Object.freeze({
   // ATTRIBUTE pane (rung: null, `data-floor-gone`) with memory: false, so the table
   // is the whole truth and no ROOMS_GENERATION bump is needed (the override pane's
   // memory: true would have carried the old 'gone' into every returning player).
-  f1bar:       Object.freeze({ rung: null,          els: Object.freeze(['#hud-f1-bar']),             memory: false, shipped: 'gone' }),
+  // H1 2026-10-09: the floor-1 help "?" (#hud-f1-help, HotkeyOverlay.mountF1Button) rides this pane: shown on F1 only.
+  f1bar:       Object.freeze({ rung: null,          els: Object.freeze(['#hud-f1-bar', '#hud-f1-help']),             memory: false, shipped: 'gone' }),
 });
 
 /**

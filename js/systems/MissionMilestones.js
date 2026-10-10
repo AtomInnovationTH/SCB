@@ -82,7 +82,7 @@ export function formatMilestoneLine(track, threshold, current, target) {
 export function formatObjectiveRecap(cleared, clearTarget, contractKg, contractTargetKg) {
   return `Status: ${cleared}/${clearTarget} cleared · contract ` +
     `${Math.round(contractKg).toLocaleString()}/${Math.round(contractTargetKg).toLocaleString()} kg. ` +
-    'Pick a cluster on the Debris Map (M), then Shift+A to engage.';
+    'Scroll out to LEO and press Space to fly to the next cluster.';
 }
 
 // ============================================================================
@@ -177,8 +177,8 @@ export class MissionMilestones {
     eventBus.on(Events.CLUSTER_CLEARED, () => {
       eventBus.emit(Events.HINT_POSTED, {
         id: 'cluster-cleared-next',
-        text: 'Cluster clear. Press M for the map and pick your next cluster by ΔV cost.',
-        keys: ['M'],
+        text: 'Cluster clear. Scroll out to LEO and press Space to fly to the next cluster.',
+        keys: ['PageUp'],
         duration: 9000,
         priority: 'normal',
       });

@@ -51,7 +51,10 @@ export class ForgeSystem {
     _setupListeners() {
         eventBus.on(Events.FORGE_QUEUE_ADD, (data) => this.queueBatch(data));
         eventBus.on(Events.FORGE_CANCEL, () => this.cancel());
-        eventBus.on(Events.FORGE_TOGGLE, () => this.toggle());
+        // FORGE_TOGGLE no longer starts a refine (parked 2026-10-09 per DECISIONS
+        // §15 answers: the pre-heat guess, kept because it may suit small
+        // objects). The F key still emits it (journal skill / chapter beat
+        // triggers) and runs the furnace gag. toggle() and the module stay.
     }
 
     /**

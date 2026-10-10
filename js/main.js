@@ -120,6 +120,7 @@ import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
 import { FloorMask } from './ui/hud/FloorMask.js';
 import { LadderViewStore } from './systems/LadderViewStore.js';
 import { LadderSfx } from './systems/LadderSfx.js';
+import { clusterSelected } from './systems/LadderBridge.js';
 import { NavcomFloor } from './systems/NavcomFloor.js';
 import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
@@ -1917,6 +1918,8 @@ async function init() {
     // constructed in the ladder block below); absent / collapsed → false, and
     // the key is byte-identical to the shipped handler.
     isOverrideEngaged: () => !!(overridePane && typeof overridePane.isExpanded === 'function' && overridePane.isExpanded()),
+    // H1 2026-10-09: the F key runs the F1-bar FURNACE gag (same late binding).
+    pressFurnace: () => { if (overridePane && typeof overridePane.pressFurnace === 'function') overridePane.pressFurnace(); },
   });
   inputManager.start();
   // 2026-08-26: the lasso catch cut never STARTS over active piloting — a key
@@ -1952,7 +1955,9 @@ async function init() {
     clusterSource: debrisField,
     player,
     project: navcomProject,
-    onPlanTransfer: (cluster) => autopilotSystem.engageCluster(cluster),
+    // H1 2026-10-09: LadderBridge re-emits DEBRIS_MAP_CLUSTER_SELECTED (the
+    // retired debris map's wire) before the transfer engages.
+    onPlanTransfer: (cluster) => { clusterSelected(eventBus, Events, cluster); return autopilotSystem.engageCluster(cluster); },
     // F6 FUEL-REACHABILITY: Tsiolkovsky remaining-ΔV SSOT. Optional dep — without it
     // the floor renders as before. armManager is constructed earlier (~:715). Inert
     // while LADDER.ENABLED is false.
@@ -1971,8 +1976,10 @@ async function init() {
     // re-mounted small while PROX NET is active (ProxMiniSphere adapter).
     navSphere,
     getFocusedCluster: () => navcomFloor.getFocusedCluster(),
-    onApproach: (cluster, arrivalPoint) =>
-      autopilotSystem.engageCluster(cluster, { arrivalPoint }),
+    onApproach: (cluster, arrivalPoint) => {
+      clusterSelected(eventBus, Events, cluster);   // H1: LadderBridge, before engage
+      return autopilotSystem.engageCluster(cluster, { arrivalPoint });
+    },
   });
   // Zoom Ladder F7 (SDA) content orchestrator (S4): screen-space mass-band
   // chart over live cluster/active-sat/Kessler aggregates (both singletons
@@ -2899,6 +2906,7 @@ async function init() {
       // The workbench's ONE open state: the bar tick keeps the bar clear of the open drawer.
       drawerOpen: () => !!(workbenchPane && workbenchPane.isOpen()),
     });
+    hotkeyOverlay.mountF1Button(document.getElementById('hud-overlay'));   // H1: floor-1 "?" (FloorMask f1bar pane)
     if (hud && hud.paneDensity) {
       // Ladder reorder rev 3 (plan tmp/plans/1788867799156-hud-pane-ladder-reorder.md):
       // insertBefore splices instruments ahead of debris; the gag joins
@@ -3368,12 +3376,8 @@ async function init() {
     slowMoFactor = Constants.DETACH_SLOWMO_FACTOR;
   });
 
-  // --- ST-6.4: Strategic Map toggle ---
-  eventBus.on(Events.STRATEGIC_MAP_TOGGLE, () => {
-    if (strategicMap) {
-      strategicMap.isOpen() ? strategicMap.close() : strategicMap.open();
-    }
-  });
+  // ST-6.4 Strategic Map toggle listener removed 2026-10-09 (H1: Shift+V retired).
+  // Events.STRATEGIC_MAP_TOGGLE stays defined (count pin); nothing emits it.
 
   // --- Delegation 2 (2026-05-31): Welcome field on first mission ever ---
   // On the player's very first MISSION_START we seed the curated 7–8 fragment
