@@ -70,7 +70,7 @@ export const HOTKEY_GROUPS = [
     // sit here too, so the whole daughter story is one card.
     title: 'Daughters',
     rows: [
-      [['1', '–', '4'], 'Fly a daughter (again: back to the mother)'],
+      [['1', '–', '4'], 'Fly a daughter — the camera rides with her (again: back to the mother)'],
       [['V'], 'Back to the mother (she keeps working)'],
       [['D'], 'Launch a daughter (pick one with 1–4)'],
       [['R'], 'Reel a daughter in'],

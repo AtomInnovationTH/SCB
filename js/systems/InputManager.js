@@ -718,6 +718,15 @@ export class InputManager {
             e.preventDefault();
             return;
           }
+          // H2 (owner 2026-10-09): piloting → the first Esc goes back to the
+          // mother, the next one rides up. Like V, she keeps working (no recall).
+          if (this.armPilotMode) {
+            this._exitArmPilotCamera();
+            d.armManager?.deselectArm();
+            d.audioSystem?.playClick();
+            e.preventDefault();
+            return;
+          }
           escLadder.command({ type: 'esc' });
           e.preventDefault();
           return;
@@ -1944,7 +1953,7 @@ export class InputManager {
     // the daughter, so spell out the way home the moment they enter.
     if (!wasPiloting) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Piloting ${arm.displayName}. Arrow keys fly it · press Esc or her number again to back out to Command view.`,
+        text: `Piloting ${arm.displayName}. Arrow keys fly her · Esc, V or her number again: back to the mother.`,
         source: 'HOUSTON',
         channel: 'CMD',
         priority: 'info',

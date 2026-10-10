@@ -17,6 +17,7 @@ import { Events } from '../core/Events.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
 import { persistenceManager } from './PersistenceManager.js';
 import { CeremonyTimeScale } from './CeremonyTimeScale.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 
 // ============================================================================
 // VIEW MODES
@@ -731,6 +732,16 @@ export class CameraSystem {
       paneBiasFrom: 0,
       paneBiasTo: 0,
       paneBiasT: 1,         // ease progress (1 = settled)
+      // H2 (DECISIONS §15, owner 2026-10-09: "the camera should follow the
+      // daughter") — on floors 2–3 a piloted daughter becomes the ship
+      // anchor. The target is captured ONCE per frame at the top of
+      // _updateLadderCamera (the blend clock); the anchor readers below only
+      // read it. The blend is in OFFSETS from the live mother position, never
+      // between frozen world points: the ship moves ~2.3 km per 300 ms.
+      followArm: null,                    // the daughter the ship anchor rides with (null = the mother)
+      followT: 1,                         // blend progress since the last target change (1 = settled)
+      followFromOff: new THREE.Vector3(), // anchor − mother when the target last changed
+      followLastOff: new THREE.Vector3(), // anchor − mother as resolved on the previous frame
     };
 
     this._boundMouseDown = this._onMouseDown.bind(this);
@@ -970,6 +981,11 @@ export class CameraSystem {
     // Bypasses the normal view path entirely; the follow-light rig + shake below
     // still run so the ship stays lit on the ladder.
     if (this._ladderCam.active) {
+      // H2 (D4): a launch ceremony's camera never shows under the ladder, yet
+      // it would swallow every key until it ended. Stand it down here — a frame
+      // after START, so every START listener (TeachingSystem's blocker) has
+      // already run and ABORT clears them. Press her number to ride with her.
+      if (this._launchCeremony.active) this.skipLaunchCeremony(false);
       this._updateLadderCamera(dt, playerPos, velDir, radialDir);
     } else if (this._launchCeremony.active) {
       // V-7: Launch ceremony override — bypass normal view computation
@@ -3846,6 +3862,7 @@ export class CameraSystem {
     lc.targetDistU = frame.distU;
     lc.curDistU = frame.distU;
     lc.fov = frame.fov;
+    this._ladderResetFollow();   // H2: every engage starts on the mother
     // Seed the dolly direction from the live camera pose (fallback: keep prior).
     const anchorPos = this._ladderAnchorPos(frame.anchor);
     const d = lc._tmp.copy(this.camera.position).sub(anchorPos);
@@ -3886,6 +3903,7 @@ export class CameraSystem {
     lc.leveling = false;
     lc.levelT = 0;
     lc.levelHoldFloor = null;
+    this._ladderResetFollow();   // H2
     // Reset the whole drag block — nothing may leak into the next engage.
     lc.drag.enabled = false;
     lc.drag.isDragging = false;
@@ -4136,7 +4154,59 @@ export class CameraSystem {
   /** @private world position of the frame anchor (Earth centre = scene origin;
    *  ship = the live player position). Writes into `out` and returns it. */
   _anchorWorld(anchor, playerPos, out) {
-    return anchor === 'earth' ? out.set(0, 0, 0) : out.copy(playerPos);
+    return anchor === 'earth' ? out.set(0, 0, 0) : this._ladderShipAnchor(playerPos, out);
+  }
+
+  /** @private H2 — forget the follow target (engage / disengage): the next
+   *  frame starts on the mother and, if she is piloting, blends from there. */
+  _ladderResetFollow() {
+    const lc = this._ladderCam;
+    lc.followArm = null;
+    lc.followT = 1;
+    lc.followFromOff.set(0, 0, 0);
+    lc.followLastOff.set(0, 0, 0);
+  }
+
+  /**
+   * @private H2 (D1) — who the ship anchor rides with RIGHT NOW. The piloted
+   * daughter while the ladder stands on floor 2 or 3, the view is ARM_PILOT and
+   * she is out flying; null (= the mother) otherwise. Floor 1 stays on the
+   * mother: the workbench, hull outline and dimming there are hers
+   * (_ladderApplyInspectFx). 'earth' floors never ask. Read-only.
+   * @returns {object|null} the ArmUnit, or null
+   */
+  _ladderFollowTarget() {
+    const lc = this._ladderCam;
+    if (lc.floor !== 2 && lc.floor !== 3) return null;
+    if (this.currentView !== CameraViews.ARM_PILOT) return null;
+    const arm = this.armPilot.arm;
+    if (!arm || !arm.position) return null;
+    if (arm.state === 'DOCKED' || arm.state === 'EXPENDED') return null;   // lost → back to the mother
+    return arm;
+  }
+
+  /**
+   * @private H2 (D1/D2) — the ship-anchor OFFSET from the live mother position
+   * (scene units), the ONE resolver behind _anchorWorld and _ladderAnchorPos so
+   * the two readers cannot drift. Target offset = the followed daughter's live
+   * position minus the mother's (zero for the mother), eased from the offset
+   * captured when the target last changed over SUBJECT_REAIM_MS (cubic in-out,
+   * the one curve). The blend is in offsets, so the anchor rides with the
+   * ship — a lerp between frozen world points would fall behind it (see the
+   * "no position lerp" note in update()). Read-only apart from `out`; `out`
+   * must not be `playerPos`.
+   */
+  _ladderShipOffset(playerPos, out) {
+    const lc = this._ladderCam;
+    const arm = lc.followArm;
+    if (arm && arm.position) out.copy(arm.position).sub(playerPos); else out.set(0, 0, 0);
+    if (lc.followT < 1) out.sub(lc.followFromOff).multiplyScalar(cubicInOut(lc.followT)).add(lc.followFromOff);
+    return out;
+  }
+
+  /** @private H2 — the ship anchor in world space (mother, or the blended daughter). */
+  _ladderShipAnchor(playerPos, out) {
+    return this._ladderShipOffset(playerPos, out).add(playerPos);
   }
 
   /** @private THE ladder up-frame rule (single source — M3 review): Earth-north
@@ -4168,7 +4238,7 @@ export class CameraSystem {
     // Earth centre = scene origin (radialDir is playerPos.normalize()). The ship
     // anchor uses the live cached player position.
     if (anchor === 'earth') return this._tmpVecA.set(0, 0, 0);
-    return this._tmpVecA.copy(this._lastPlayerPos);
+    return this._ladderShipAnchor(this._lastPlayerPos, this._tmpVecA);
   }
 
   /**
@@ -4277,6 +4347,18 @@ export class CameraSystem {
    */
   _updateLadderCamera(dt, playerPos, velDir, radialDir) {
     const lc = this._ladderCam;
+
+    // H2 — the follow blend clock, ONCE per frame and before any anchor reader.
+    // A change of target (mother ↔ daughter, daughter A → B, loss) restarts the
+    // soft re-aim from the offset resolved last frame, so the anchor never jumps.
+    const want = this._ladderFollowTarget();
+    if (want !== lc.followArm) {
+      lc.followFromOff.copy(lc.followLastOff);
+      lc.followArm = want;
+      lc.followT = 0;
+    } else if (lc.followT < 1) {
+      lc.followT = Math.min(1, lc.followT + dt / (VisualLaw.TIMINGS.SUBJECT_REAIM_MS / 1000));
+    }
 
     // B1: on a ship anchor the dolly direction is heading-relative — build the
     // live orbital frame first (the drag and the direction rebuild below both
@@ -4389,6 +4471,7 @@ export class CameraSystem {
     } else {
       anchorPos = this._anchorWorld(lc.anchor, playerPos, this._tmpVecB);
     }
+    this._ladderShipOffset(playerPos, lc.followLastOff);   // H2: where the next target change starts from
     // camera = anchor + dir * distance
     this.camera.position.copy(anchorPos).addScaledVector(lc.dir, lc.curDistU);
     // Up-frame (Q10 — "one change at a time: the roll is its own phase"). On-
