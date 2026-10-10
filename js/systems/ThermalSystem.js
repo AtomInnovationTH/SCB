@@ -24,7 +24,7 @@
  * THERMAL_FLOWER_INPUT (that event means "the player commanded the radiator";
  * the codex unlocks on it). A player command always wins: one seen in the
  * last PLAYER_WINS_S blocks the auto-open, and the auto never folds a radiator
- * the player opened.
+ * at all: it opens to the OPEN pose (146°) and leaves it there.
  *
  * @module systems/ThermalSystem
  */
@@ -60,17 +60,14 @@ export class ThermalSystem {
     this._yellowArmed = true;
     /** @private */
     this._redArmed = true;
-    /** @private true from an auto-open until the auto-close or any player command */
+    /** @private true from an auto-open until any player command (it never auto-closes) */
     this._autoOpened = false;
     /** @private clock time of the last player radiator command */
     this._lastPlayerCmdS = -Infinity;
-    /** @private real seconds held at/below AUTO_CLOSE_C while auto-opened */
-    this._coolHoldS = 0;
 
     this._onPlayerCmd = () => {
       this._lastPlayerCmdS = this._clockS;
       this._autoOpened = false;   // the player took the radiator — the auto lets go
-      this._coolHoldS = 0;
     };
     eventBus.on(Events.THERMAL_FLOWER_INPUT, this._onPlayerCmd);
 
@@ -211,7 +208,6 @@ export class ThermalSystem {
     this._redArmed = true;
     this._autoOpened = false;
     this._lastPlayerCmdS = -Infinity;
-    this._coolHoldS = 0;
     this._clockS = 0;
     const rs = this._rs;
     this._lastDrawnUnits = (rs && typeof rs.getEnergyDrawnUnits === 'function')
@@ -265,7 +261,13 @@ export class ThermalSystem {
     if (!this._redArmed && t <= SH.RED_C - SH.REARM_C) this._redArmed = true;
   }
 
-  /** @private D5 — open late by itself, fold back only what it opened */
+  /**
+   * @private D5 — open late by itself, to the OPEN pose (146°, DECISIONS §15
+   * "Radiator angles"), and leave it there: once open it stays open — the
+   * auto NEVER folds it back (owner 2026-10-09; it used to at ≤ 35 °C). Only
+   * the player folds it, and the 30 s re-open at ≥ 70 °C after that is
+   * unchanged (PLAYER_WINS_S).
+   */
   _updateAutoRadiator(dt, openFrac) {
     const SH = Constants.SHIP_HEAT;
     const p = this._player;
@@ -273,28 +275,14 @@ export class ThermalSystem {
     const ls = p._launchSequence;
     if (ls && typeof ls.isActive === 'function' && ls.isActive()) return;   // the launch owns the ship
 
-    if (this._autoOpened) {
-      if (this.tempC <= SH.AUTO_CLOSE_C) {
-        this._coolHoldS += dt;
-        if (this._coolHoldS >= SH.AUTO_CLOSE_HOLD_S) {
-          const rest = (Constants.THERMAL && Constants.THERMAL.FLOWER
-            && Constants.THERMAL.FLOWER.REST_POSE) || 'STOW';
-          p.setFlowerPose(rest);
-          this._autoOpened = false;
-          this._coolHoldS = 0;
-          this._say('Cool again — folding the radiator.', 'info');
-        }
-      } else {
-        this._coolHoldS = 0;
-      }
-      return;
-    }
+    if (this._autoOpened) return;   // it opened once and stays open
 
     const playerRecent = (this._clockS - this._lastPlayerCmdS) < SH.PLAYER_WINS_S;
     if (this.tempC >= SH.AUTO_OPEN_C && openFrac <= SH.AT_REST_FRAC && !playerRecent) {
-      if (p.setFlowerPose('CARGO') === null) return;   // no radiator fitted — nothing to open
+      const open = (Constants.THERMAL && Constants.THERMAL.FLOWER
+        && Constants.THERMAL.FLOWER.OPEN_POSE) || 'STOW';
+      if (p.setFlowerPose(open) === null) return;   // no radiator fitted — nothing to open
       this._autoOpened = true;
-      this._coolHoldS = 0;
       this._say('Too hot — opening the radiator.', 'warning');
     }
   }
@@ -303,7 +291,7 @@ export class ThermalSystem {
    * @private One THERMAL comms line. Warnings carry `_critical` (the
    * low-battery/xenon pattern) so they pass the onboarding suppression tier —
    * mission 1 must hear them (§15 row 6), and a radiator that opens by itself
-   * must say why. The 'info' fold-back line obeys the mute like any other.
+   * must say why.
    */
   _say(text, priority) {
     const msg = { sender: 'THERMAL', text, priority };

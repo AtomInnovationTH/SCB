@@ -2177,14 +2177,16 @@ async function init() {
       const deg = FL.REST_POSE ? FL[`POSE_${FL.REST_POSE}_DEG`] : undefined;
       return Number.isFinite(deg) ? deg : FL.POSE_STOW_DEG;
     };
-    // The toggle direction (the "." law): a COMMANDED θ (rad) nearer the full
-    // bloom (POSE_CARGO_DEG) than the rest pose is "open", so a tap closes it.
+    // The toggle direction (the "." law): a COMMANDED θ (rad) nearer the open
+    // angle (FL.OPEN_DEG, 146° — DECISIONS §15 "Radiator angles") than the rest
+    // pose is "open", so a tap closes it.
     const _flowerCommandedOpen = (thetaRad, FL) => {
       const deg = (thetaRad * 180) / Math.PI;
-      return Math.abs(deg - FL.POSE_CARGO_DEG) < Math.abs(deg - _flowerRestDeg(FL));
+      return Math.abs(deg - FL.OPEN_DEG) < Math.abs(deg - _flowerRestDeg(FL));
     };
     // The ONE radiator readout (F1 bar + REFIT chip, D4): MOVING while a slew is
-    // pending, else getFlowerStatus().openFrac >= 0.5 → OPEN, below → CLOSED.
+    // pending (incl. the 180° → open-angle settle), else getFlowerStatus().openFrac
+    // >= 0.5 → OPEN (the open angle and 180° both read 1), below → CLOSED.
     const _flowerReadout = () => {
       const st = player.getFlowerStatus();
       if (!st) return 'NOT FITTED';
@@ -2229,9 +2231,10 @@ async function init() {
       },
       // RADIATOR open / closed (F1 bar + REFIT chip). The REST pose is the closed
       // one (w2-start-pose contract: THERMAL.FLOWER.REST_POSE 'CLOSED' /
-      // POSE_CLOSED_DEG, falling back to the STOW bud / POSE_STOW_DEG while
-      // absent). `getFlowerStatus().openFrac` is 0 at rest, 1 at the full bloom:
-      // >= 0.5 reads OPEN (the one rule for every radiator readout).
+      // POSE_CLOSED_DEG, falling back to the STOW pose / POSE_STOW_DEG while
+      // absent); a tap opens to THERMAL.FLOWER.OPEN_POSE (OPEN_DEG — DECISIONS
+      // §15 "Radiator angles"). `getFlowerStatus().openFrac` is 0 at rest, 1 from
+      // the 90° mark up: >= 0.5 reads OPEN (the one rule for every radiator readout).
       flower: {
         get: () => {
           if (!player || typeof player.getFlowerPairCount !== 'function') return null;
@@ -2240,7 +2243,7 @@ async function init() {
           if (!FL || typeof player.getFlowerStatus !== 'function') return null;
           // Owner amendment 2026-09-09 (plan 1788863400000 last section, spec 4):
           // a flower left FOLDED by the SAFETY OVERRIDE sweep (launch lock armed,
-          // commanded / live θ below the 90° floor) says so on the REFIT chip too
+          // commanded / live θ below the CLOSED floor) says so on the REFIT chip too
           // — 'FLOWER · FOLDED', unpressed. Otherwise the bar's readout (D4).
           const cmd = player._flowerTargetTheta ?? player._flowerThetaRad;
           if (player.flowerLaunchLocked === true && cmd < (FL.POSE_FLOOR_DEG * Math.PI) / 180) return 'FOLDED';
@@ -2251,7 +2254,7 @@ async function init() {
           const FL = Constants.THERMAL.FLOWER;
           // Reverse the COMMANDED pose (a mid-swing tap reverses the swing).
           const deploying = !_flowerCommandedOpen(player._flowerTargetTheta ?? player._flowerThetaRad, FL);
-          if (player.setFlowerPose(deploying ? 'CARGO' : (FL.REST_POSE || 'STOW')) === null) return;
+          if (player.setFlowerPose(deploying ? FL.OPEN_POSE : (FL.REST_POSE || 'STOW')) === null) return;
           audioSystem?.playClick?.();
           eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
           eventBus.emit(Events.COMMS_MESSAGE, {
@@ -2327,7 +2330,7 @@ async function init() {
           eventBus.emit(Events.COMMS_MESSAGE, {
             sender: 'THERMAL',
             text: deploying
-              ? 'OVERRIDE — aft radiator deploying: struts swing to the 146° bud, wings open between 60° and 90°. FEEP clear once past 90°.'
+              ? 'OVERRIDE — aft radiator deploying: struts swing out to 146°, wings open between 60° and 90°. Engines back as soon as it leaves the launch fold.'
               : 'OVERRIDE — aft radiator folding: struts swing fore to the launch pack (θ 0°), wings fold between 90° and 60°. FEEP INHIBITED until deployed.',
             priority: 'info',
           });

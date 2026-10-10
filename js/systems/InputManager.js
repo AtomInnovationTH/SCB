@@ -809,8 +809,8 @@ export class InputManager {
       // deps.isOverrideEngaged() (the OVERRIDE panel's grid is up) the key runs
       // player.toggleFlowerOverride — FOLDED (LAUNCH θ 0) ↔ DEPLOYED (STOW 146),
       // the whole travel — the same path the pane's RADIATOR chip takes
-      // (main.js `flowerSweep`). Dep absent / pane collapsed → the shipped
-      // STOW ↔ CARGO handler, byte-identical.
+      // (main.js `flowerSweep`). Dep absent / pane collapsed → the plain
+      // closed ↔ 146° handler (toggleFlowerDeploy).
       case 'KeyO':
         if (isGameplay && !e.repeat && d.player
             && typeof d.player.toggleFlowerDeploy === 'function'
@@ -826,7 +826,7 @@ export class InputManager {
               eventBus.emit(Events.COMMS_MESSAGE, {
                 sender: 'THERMAL',
                 text: sweeping
-                  ? 'OVERRIDE — aft radiator deploying: swinging out the whole way to the 146° bud, side panels opening between 60° and 90°. Engines back as soon as it leaves the launch fold.'
+                  ? 'OVERRIDE — aft radiator deploying: swinging out the whole way to 146°, side panels opening between 60° and 90°. Engines back as soon as it leaves the launch fold.'
                   : 'OVERRIDE — aft radiator folding: swinging all the way into the launch fold (0°), side panels folding between 90° and 60°. Engines stay off until it opens again.',
                 priority: 'info',
               });
@@ -835,10 +835,10 @@ export class InputManager {
             const deploying = d.player.toggleFlowerDeploy();
             d.audioSystem?.playClick();
             eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
-            // A double tap that PUSHED THROUGH (to the vent, or past CLOSED into
+            // A double tap that PUSHED THROUGH (to 180°, or past CLOSED into
             // the launch fold) is narrated by the ship itself, and the plain
-            // line would then be false ("…full 90° bloom" while heading for the
-            // vent, "Engines still work" while folding into the lock). The ship
+            // line would then be false ("…opening to 146°" while heading for
+            // 180°, "Engines still work" while folding into the lock). The ship
             // clears its own `_lastFlowerTap` on exactly that branch.
             const pushedThrough = Object.prototype.hasOwnProperty.call(d.player, '_lastFlowerTap')
               && d.player._lastFlowerTap === undefined;
@@ -846,7 +846,7 @@ export class InputManager {
               eventBus.emit(Events.COMMS_MESSAGE, {
                 sender: 'THERMAL',
                 text: deploying
-                  ? 'Radiator opening — the struts open LIKE A FLOWER to the full 90° bloom.'
+                  ? 'Radiator opening to 146° — the struts open LIKE A FLOWER.'
                   : 'Radiator closing — folding flat along the hull. Engines still work.',
                 priority: 'info',
               });

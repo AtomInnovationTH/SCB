@@ -1985,9 +1985,11 @@ export class StatusPanel {
    * Design 7b / owner amendment 2026-09-09: pose 'LAUNCH' (θ 0, the fore-folded
    * launch pack — reached in play only through the SAFETY OVERRIDE sweep) reads
    * FOLDED, and while the launch lock is armed (`locked` — folded, folding, or
-   * releasing below the 90° floor) the line carries the reason the drive will
+   * releasing below the CLOSED floor) the line carries the reason the drive will
    * not answer: ' · THRUST INHIBITED' (the 7b pose-band guard; deploying past
-   * 90° clears it). `locked` absent (older snapshots) → no suffix.
+   * the CLOSED floor clears it). `locked` absent (older snapshots) → no suffix.
+   * Labels: SLEWING while moving, CLOSED, FOLDED, else OPEN — the angle is the
+   * `· θ°` that follows (146° is the open angle; 180° is the push-through).
    * @param {{pairCount:number, thetaDeg:number, openFrac:number,
    *          slewing:boolean, pose:string, locked?:boolean}|null} st
    * @returns {string} span HTML, or '' when nothing should be shown
@@ -1997,12 +1999,11 @@ export class StatusPanel {
     const pairs = st.pairCount === 2 ? 'PAIRS A+B' : 'PAIR A';
     const pct = Math.round(st.openFrac * 100);
     const theta = Math.round(st.thetaDeg);
+    // Plain words only (owner 2026-10-09: say the angle, never a pose name): the
+    // angle follows in `· θ°`, so every non-closed rest reads OPEN.
     const base = st.slewing ? 'SLEWING'
       : st.pose === 'CLOSED' ? 'CLOSED'
-        : st.pose === 'STOW' ? 'BUD'
-          : st.pose === 'PARK' ? 'PARKED'
-            : st.pose === 'CARGO' ? 'DEPLOYED (BLOOM)'
-              : st.pose === 'LAUNCH' ? 'FOLDED' : 'HOLDING';
+        : st.pose === 'LAUNCH' ? 'FOLDED' : 'OPEN';
     const label = st.locked === true ? `${base} \u00b7 THRUST INHIBITED` : base;
     // Inhibited = steady CAUTION amber (the denial token; the same '#ffaa00' the slew line wears).
     const c = st.locked === true ? VisualLaw.COLORS.CAUTION : st.slewing ? '#ffaa00' : '#a3d9c9';

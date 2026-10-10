@@ -85,6 +85,101 @@ const {
   V5_ARM_COUNT, V5_WEAVER_MASS, V5_SPINNER_MASS, ARM_STATES,
 } = Constants;
 
+/**
+ * "…unless debris blocks the path" (owner 2026-10-09; the measurement is in
+ * Constants THERMAL.FLOWER.CARGO_CLEAR_ALPHA_ROWS): true while a docked daughter
+ * holds cargo on its rack with its strut angle α below the first angle that
+ * clears the petals' swept volume (θ 146–180°) for that cargo's size. Only the
+ * AUTOMATIC swings to OPEN_DEG consult it; the player's commands never do.
+ * A module function so `_updateFlower` / `_warnFlowerThrustInhibit` still run
+ * against the duck-typed stubs (`P.method.call(stub)`).
+ * @param {PlayerSatellite} ship
+ * @returns {boolean}
+ */
+function radiatorSweepBlocked(ship) {
+  const arms = ship.armManager && ship.armManager.arms;
+  if (!Array.isArray(arms)) return false;
+  const rows = Constants.THERMAL.FLOWER.CARGO_CLEAR_ALPHA_ROWS;
+  for (const arm of arms) {
+    if (!arm || arm.isDetached || arm.state !== ARM_STATES.HOLDING_CATCH) continue;
+    // The largest piece she holds: the rack, plus the in-hand scalar (no
+    // allocation — this runs on every refused autopilot frame above 146°).
+    const rack = Array.isArray(arm.heldCatches) ? arm.heldCatches : null;
+    const inHand = arm.capturedDebris || null;
+    if ((!rack || rack.length === 0) && !inHand) continue;
+    let size = 0;
+    let sized = false;
+    if (rack) {
+      for (let k = 0; k < rack.length; k++) {
+        const h = rack[k];
+        if (h && h.sizeMeter > 0) { size = Math.max(size, h.sizeMeter); sized = true; }
+      }
+    }
+    if (inHand && inHand.sizeMeter > 0) { size = Math.max(size, inHand.sizeMeter); sized = true; }
+    if (!sized) size = Infinity;                       // unknown size → the deepest row
+    let clearDeg = rows[rows.length - 1][1];
+    for (const [maxSize, alphaDeg] of rows) { if (size <= maxSize) { clearDeg = alphaDeg; break; } }
+    const alpha = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : 0;
+    if ((alpha * 180) / Math.PI < clearDeg - 1e-9) return true;   // (1e-9: a strut parked exactly on the row angle is clear)
+  }
+  return false;
+}
+
+/**
+ * Aim the radiator home at OPEN_DEG (146°) from 180° (DECISIONS §15, owner
+ * 2026-10-09). Writes ONLY `_flowerTargetTheta` — the driver keeps the vent
+ * ceiling until θ is back inside the band, so this slews at SLEW_RATE_RAD_S and
+ * never snaps. It never clears `_flowerVentArmed`, never touches
+ * `_lastFlowerTap` (the F1 bar's O-then-tap guard reads it), never stamps the
+ * player-command clock and never emits THERMAL_FLOWER_INPUT (ThermalSystem
+ * would read that as a player command and let go of an auto-opened radiator).
+ * A module function, not a method: `_updateFlower` and `_warnFlowerThrustInhibit`
+ * are also run against duck-typed stubs (`P.method.call(stub)`, test-OpeningDance).
+ * @param {PlayerSatellite} ship
+ * @returns {boolean} true when the swing was commanded now (false: it is
+ *   already heading into the band, nothing is above it, or the lock holds it)
+ */
+function commandFlowerHome(ship) {
+  if (ship._flowerGroups.length === 0 || ship._flowerLaunchLock) return false;
+  const FL = Constants.THERMAL.FLOWER;
+  const openRad = (FL.OPEN_DEG * Math.PI) / 180;
+  if (ship._flowerThetaRad <= openRad + 1e-9) return false;
+  const tgt = ship._flowerTargetTheta;
+  // Already heading into the band (the player folding it, or a swing in
+  // flight): leave that command alone — and skip the arm scan below.
+  if (tgt !== undefined && tgt <= openRad + 1e-9) return false;
+  if (radiatorSweepBlocked(ship)) return false;   // "unless debris blocks the path"
+  ship._flowerTargetTheta = openRad;
+  return true;
+}
+
+/**
+ * DECISIONS §15 (owner 2026-10-09): "It settles back to 146° from 180° after
+ * 30 s". Called every `_updateFlower`. Fires once θ is more than 1° past
+ * OPEN_DEG, RETURN_TO_OPEN_S real seconds have passed since the last player
+ * radiator command, and nothing else owns the radiator (launch lock, OVERRIDE
+ * fold, an active LaunchSequence or opening dance). One plain COMMS line.
+ * @param {PlayerSatellite} ship
+ */
+function settleFlowerToOpen(ship) {
+  if (ship._flowerLaunchLock || ship._flowerOverrideFold) return;
+  const FL = Constants.THERMAL.FLOWER;
+  if (!(FL.RETURN_TO_OPEN_S > 0)) return;
+  if (ship._flowerThetaRad <= ((FL.OPEN_DEG + 1) * Math.PI) / 180) return;
+  if ((ship._flowerClockS || 0) - (ship._flowerCmdClockS || 0) < FL.RETURN_TO_OPEN_S) return;
+  // An active LaunchSequence holds it — and that covers the opening dance: the
+  // dance drives through the same `_launchSequence` slot (`_danceDrivesMe()`
+  // is `isOpeningDance && isActive()`, a subset of this check).
+  const ls = ship._launchSequence;
+  if (ls && typeof ls.isActive === 'function' && ls.isActive()) return;
+  if (!commandFlowerHome(ship)) return;
+  eventBus.emit(Events.COMMS_MESSAGE, {
+    sender: 'THERMAL',
+    text: `Radiator back to ${FL.OPEN_DEG}°.`,
+    priority: 'info',
+  });
+}
+
 export class PlayerSatellite extends THREE.Group {
   /**
    * @param {THREE.Scene} scene - The Three.js scene to add the satellite to
@@ -273,6 +368,15 @@ export class PlayerSatellite extends THREE.Group {
      *  every reset path — the vent is never a resting default. */
     this._flowerVentArmed = false;
     this._lastFlowerTap = undefined;
+    /** Settle clock (DECISIONS §15, owner 2026-10-09): `_flowerClockS` is real
+     *  seconds advanced by `_updateFlower(dt)`; `_flowerCmdClockS` is its value
+     *  at the last PLAYER radiator command (toggleFlowerDeploy,
+     *  toggleFlowerOverride, setFlowerPose). A radiator pushed past OPEN_DEG
+     *  (the 180° vent) settles back to OPEN_DEG once RETURN_TO_OPEN_S have
+     *  passed since that stamp (`settleFlowerToOpen`). Non-player callers of
+     *  setFlowerPose stamp it too — harmless, they never run above 146°. */
+    this._flowerClockS = 0;
+    this._flowerCmdClockS = 0;
     /** Design 7b one-shot launch lock: while armed the driver floor is
      *  POSE_LAUNCH_DEG (0°) instead of POSE_FLOOR_DEG (CLOSED 2°; 90° before
      *  DECISIONS §15 row 4) and thrust is refused. Armed ONLY by
@@ -3518,57 +3622,61 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * O key — toggle the aft flower between the REST pose (CLOSED 2°, folded
-   * along the body — DECISIONS §15 row 4) and the full bloom (CARGO 90°).
-   * Before that ruling the closed end was the 146° bud; with REST_POSE 'STOW'
-   * this still toggles bud ↔ bloom exactly as it did.
+   * O key — toggle the aft radiator between the REST pose (CLOSED 2°, folded
+   * along the body — DECISIONS §15 row 4) and the OPEN pose (OPEN_POSE, 146° —
+   * owner 2026-10-09, DECISIONS §15 "Radiator angles"; it opened to the 90°
+   * bloom before).
    *
    * Direction comes from the COMMANDED target, falling back to the live pose
    * when nothing is in flight — the "." strut law verbatim (InputManager reads
    * `_strutTargetAlpha ?? getAimAlpha()`, with a comment about the bug from
    * reading either one alone). So ANY press reverses an in-flight slew, at any
-   * angle. A pose nearer the rest end than the bloom opens (→ CARGO); anything
-   * else closes (→ REST) — so from the bud (146°, a REFIT pose) or the vent a
-   * press closes, and from the LAUNCH fold (θ 0, lock armed) a press opens:
-   * the release, the driver clears the lock as θ passes the CLOSED floor.
+   * angle. A pose nearer the rest end than the open end opens (→ OPEN_DEG);
+   * anything else closes (→ REST) — so from 146° or 180° a press closes, and
+   * from the LAUNCH fold (θ 0, lock armed) a press opens: the release, the
+   * driver clears the lock as θ passes the CLOSED floor.
    *
    * Double-tap push-through (owner asks 2026-09-16 "reverse 2 times into the
    * 146 degree wall pushes through, with a warning" and 2026-09-22 "double
    * press at 90 should push thru to 0"). Presses alternate cleanly, so two
    * taps inside VENT_DOUBLE_TAP_MS land back on the end you started from —
    * a free gesture, read as pushing on past the end the second tap lands on,
-   * in the direction it was travelling: past the bloom (θ rising) that is
-   * the bud and the VENT, warned exactly as before (a double-tap at the bud
-   * still vents: tap 1 closes, tap 2 reopens past it); past CLOSED (θ
-   * falling) it is the LAUNCH fold, through the SAFETY OVERRIDE arming. A
-   * single tap never vents and never arms the lock.
+   * in the direction it was travelling: past the open end (θ rising) that is
+   * 180°, warned (a double-tap at 146° still goes to 180°: tap 1 closes, tap 2
+   * reopens past it); past CLOSED (θ falling) it is the LAUNCH fold (0°),
+   * through the SAFETY OVERRIDE arming. A single tap never goes to 180° and
+   * never arms the lock. 180° is not a resting pose: the radiator settles
+   * back to 146° by itself (see `settleFlowerToOpen`).
    *
    * Nothing is made less safe: thrust above POSE_THRUST_MAX_DEG is already
-   * refused by _flowerPoseBandGuard, so the vent inhibits the drive under the
+   * refused by _flowerPoseBandGuard (and swings the radiator back to 146° first
+   * — `_warnFlowerThrustInhibit`), so 180° inhibits the drive under the
    * existing law. The warning explains the trade it is making.
-   * @returns {boolean} true when now deploying (opening toward CARGO)
+   * @returns {boolean} true when now deploying (opening toward OPEN_DEG)
    */
   toggleFlowerDeploy() {
     const FL = Constants.THERMAL.FLOWER;
     const restDeg = this._flowerRestDeg();
     const restRad = (restDeg * Math.PI) / 180;
-    const cargoRad = (FL.POSE_CARGO_DEG * Math.PI) / 180;
+    const openDeg = FL.OPEN_DEG;
+    const openRad = (openDeg * Math.PI) / 180;
     // The "." law: the pending target wins, the live pose is the fallback.
     const ref = this._flowerTargetTheta !== undefined ? this._flowerTargetTheta : this._flowerThetaRad;
-    const deploying = Math.abs(ref - restRad) <= Math.abs(ref - cargoRad);
+    const deploying = Math.abs(ref - restRad) <= Math.abs(ref - openRad);
 
     const now = performance.now();
     const doubleTap = this._lastFlowerTap !== undefined
       && now - this._lastFlowerTap < FL.VENT_DOUBLE_TAP_MS;
     this._lastFlowerTap = now;
+    this._flowerCmdClockS = this._flowerClockS || 0;   // a player command — restarts the 180° → 146° settle clock
 
     if (doubleTap && this._flowerGroups.length > 0) {
       this._lastFlowerTap = undefined;             // one push per double-tap
       // The end this tap lands on, and which way past it the push goes.
-      const landDeg = deploying ? FL.POSE_CARGO_DEG : restDeg;
-      const fromDeg = deploying ? restDeg : FL.POSE_CARGO_DEG;
+      const landDeg = deploying ? openDeg : restDeg;
+      const fromDeg = deploying ? restDeg : openDeg;
       if (landDeg > fromDeg) {
-        // θ rising past the bloom (or the bud): the vent.
+        // θ rising past the open end: 180°.
         this._flowerVentArmed = true;
         this._flowerTargetTheta = (FL.POSE_VENT_DEG * Math.PI) / 180;
         this._warnFlowerVent();
@@ -3588,10 +3696,10 @@ export class PlayerSatellite extends THREE.Group {
 
     // An ordinary command re-aims — but it must NOT drop the vent ceiling here.
     // The driver's ceiling is a hard clamp, so clearing the flag while θ is
-    // still out at the vent snaps the panel back to the bud in one frame
+    // still out at 180° snaps the panel back to 146° in one frame
     // instead of slewing (owner-reported 2026-09-22: "seems to jump suddenly
     // instead of opening smoothly"). The driver disarms on ARRIVAL instead.
-    this._flowerTargetTheta = deploying ? cargoRad : restRad;
+    this._flowerTargetTheta = deploying ? openRad : restRad;
     return deploying;
   }
 
@@ -3626,7 +3734,7 @@ export class PlayerSatellite extends THREE.Group {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'THERMAL',
       text: `WARNING: radiator swept to ${th}° — past the ${FL.POSE_THRUST_MAX_DEG}° thrust band.${why} `
-        + 'Drive inhibited until the radiator returns. Tap RADIATOR / O to stow.',
+        + `Drive inhibited until the radiator returns. It swings back to ${FL.OPEN_DEG}° by itself after ${FL.RETURN_TO_OPEN_S} s, or at once when the ion engine fires — unless a held catch is in the way.`,
       priority: 'warning',
     });
     eventBus.emit(Events.THERMAL_FLOWER_VENTED, { thetaDeg: th });
@@ -3647,7 +3755,7 @@ export class PlayerSatellite extends THREE.Group {
       sender: 'THERMAL',
       text: `Radiator folded to ${FL.POSE_LAUNCH_DEG}° — the launch fold, locked down. `
         + 'Engines stay off until it opens again. '
-        + 'Folded panels radiate almost nothing: heat will build. Tap RADIATOR / O to open it.',
+        + `Folded panels radiate almost nothing: heat will build. Tap RADIATOR / O to open it to ${FL.OPEN_DEG}°.`,
       priority: 'warning',
     });
   }
@@ -3699,6 +3807,7 @@ export class PlayerSatellite extends THREE.Group {
     const midRad = ((FL.POSE_LAUNCH_DEG + FL.POSE_STOW_DEG) / 2) * Math.PI / 180;
     const ref = this._flowerTargetTheta !== undefined ? this._flowerTargetTheta : this._flowerThetaRad;
     const deploying = ref <= midRad;
+    this._flowerCmdClockS = this._flowerClockS || 0;   // a player command — restarts the 180° → 146° settle clock
     if (deploying) { this.setFlowerPose('STOW'); return true; }
     // Defensive: setFlowerPose refuses only without hardware (guarded above);
     // propagate a null so the caller never reports a fold that did not arm.
@@ -3745,6 +3854,7 @@ export class PlayerSatellite extends THREE.Group {
   setFlowerPose(pose, opts = undefined) {
     const FL = Constants.THERMAL.FLOWER;
     if (this._flowerGroups.length === 0) return null;
+    this._flowerCmdClockS = this._flowerClockS || 0;   // restarts the 180° → 146° settle clock (non-player callers never run above 146°)
     if (pose === 'LAUNCH') {
       const ls = this._launchSequence;
       const launchActive = !!(ls && typeof ls.isActive === 'function' && ls.isActive());
@@ -3853,7 +3963,7 @@ export class PlayerSatellite extends THREE.Group {
         sender: 'THERMAL',
         text: pairKey === 'A'
           ? 'Aft flower pair A installed — radiator struts at az 40/220. They open LIKE A FLOWER: press O.'
-          : 'Aft flower pair B installed — full four-strut flower at az 40/140/220/320. O deploys and stows.',
+          : `Aft flower pair B installed — full four-strut flower at az 40/140/220/320. O opens them to ${Constants.THERMAL.FLOWER.OPEN_DEG}° and folds them flat.`,
         priority: 'info',
       });
     }
@@ -4278,6 +4388,13 @@ export class PlayerSatellite extends THREE.Group {
   _updateFlower(dt) {
     if (this._flowerGroups.length === 0) return;
     const FL = Constants.THERMAL.FLOWER;
+    // 180° → 146° settle (DECISIONS §15, owner 2026-10-09): advance the clock,
+    // and once a vented radiator has sat RETURN_TO_OPEN_S past the player's
+    // last command, aim it home — BEFORE the slew below reads the target, so
+    // the swing starts this frame. It only writes the target; the ceiling and
+    // the rate limit below do the (never-snapping) swing.
+    this._flowerClockS = (this._flowerClockS || 0) + (dt > 0 ? dt : 0);
+    settleFlowerToOpen(this);
     const target = this._flowerTargetTheta;
     const stepping = target !== undefined && dt > 0;
 
@@ -4310,6 +4427,16 @@ export class PlayerSatellite extends THREE.Group {
       const stowRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
       const tgt = this._flowerTargetTheta;
       if (this._flowerThetaRad <= stowRad + 1e-9 && (tgt === undefined || tgt <= stowRad + 1e-9)) {
+        this._flowerVentArmed = false;
+      } else if (stepping && tgt !== undefined && tgt <= stowRad + 1e-9
+          && Math.abs(this._flowerThetaRad - tgt) < FL.SETTLE_EPS_RAD) {
+        // Coming DOWN from 180° onto 146°: the latch clears within
+        // SETTLE_EPS_RAD (0.57°) of the target, which can be ABOVE the band
+        // edge — and the ceiling is still up, so it would never come back.
+        // Land on the edge exactly (a final step under SETTLE_EPS_RAD, like
+        // CLOSED below) so the drive's band guard (θ ≤ 146°) clears and the
+        // ceiling drops.
+        this._flowerThetaRad = Math.min(this._flowerThetaRad, stowRad);
         this._flowerVentArmed = false;
       }
     }
@@ -6970,8 +7097,10 @@ export class PlayerSatellite extends THREE.Group {
    * launch lock armed — folded, folding under OVERRIDE, or releasing below the
    * CLOSED floor — or θ outside [POSE_FLOOR_DEG, POSE_THRUST_MAX_DEG]). Called by
    * every refused thrust path (thrustIon / thrustMPD / applyCartesianImpulse)
-   * AFTER the interlock has refused, so it never changes the refusal — it only
-   * narrates it: one COMMS caution per 3 s (_lastFlowerInhibitWarning, the
+   * AFTER the interlock has refused, so it never changes the refusal — it
+   * narrates it (and, ABOVE the band with the lock off, starts the swing back
+   * to OPEN_DEG 146° — DECISIONS §15, "swing to 146°, then fire"; the burn
+   * itself stays refused this time): one COMMS caution per 3 s (_lastFlowerInhibitWarning, the
    * _lastThrustOfflineWarning cadence) naming the type, the live θ and the way out, plus a
    * PLAYER_THRUST_FAILED { reason: 'flower_folded' } for listeners. The legacy
    * back-arm / plume interlocks stay silent here as before (their own rows).
@@ -6979,6 +7108,25 @@ export class PlayerSatellite extends THREE.Group {
    */
   _warnFlowerThrustInhibit(type) {
     if (!this._flowerPoseBandGuard()) return;
+    const FL = Constants.THERMAL.FLOWER;
+    // DECISIONS §15 (owner 2026-10-09): "180 is allowed but dumb when ion
+    // thrusters are on" — the engine commands the radiator home: swing to
+    // OPEN_DEG (146°), then fire. Every refused caller counts as thrust
+    // commanded (thrustIon / thrustMPD, autopilot and dodge burns, recoil),
+    // so this runs before the dance gate and the 3 s throttle; the burn that
+    // asked is still refused THIS time and goes through once θ is back in the
+    // band (the guard re-reads θ every frame). The lock owns the radiator
+    // otherwise (below). `swinging` is true only for the call that starts the swing.
+    const aboveBand = !this._flowerLaunchLock
+      && (this._flowerThetaRad * 180) / Math.PI > FL.POSE_THRUST_MAX_DEG + 1e-6;
+    const swinging = aboveBand && commandFlowerHome(this);
+    if (swinging && !this._danceDrivesMe()) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'THERMAL',
+        text: `Radiator swinging back to ${FL.OPEN_DEG}°.`,
+        priority: 'warning',
+      });
+    }
     // Opening dance: the unfold is wordless (decision 12) — and any input
     // fast-forwards it, so the engine answers with no caution line (plan
     // validation: "press a thrust key at ~2 s — no caution line"). The
@@ -6987,16 +7135,24 @@ export class PlayerSatellite extends THREE.Group {
     const now = performance.now();
     if (now - this._lastFlowerInhibitWarning < 3000) return;
     this._lastFlowerInhibitWarning = now;
-    const FL = Constants.THERMAL.FLOWER;
     const thetaDeg = Math.round((this._flowerThetaRad * 180) / Math.PI);
-    const why = this._flowerLaunchLock
-      ? `aft radiator folded for launch (θ ${thetaDeg}°, lock armed)`
-      : `aft radiator outside the ${FL.POSE_FLOOR_DEG}–${FL.POSE_THRUST_MAX_DEG}° thrust band (θ ${thetaDeg}°)`;
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      sender: 'THERMAL',
-      text: `CAUTION: ${type} INHIBITED — ${why}. Deploy the radiator (O / RADIATOR) to thrust.`,
-      priority: 'warning',
-    });
+    // The swing line above already said why and what happens next — only a
+    // refusal while the radiator is ALREADY on its way in needs its own line.
+    if (!swinging) {
+      const why = this._flowerLaunchLock
+        ? `aft radiator folded for launch (θ ${thetaDeg}°, lock armed)`
+        : aboveBand
+          ? (radiatorSweepBlocked(this)
+            ? `aft radiator at ${thetaDeg}° — a held catch is in its way, so it will not swing back to ${FL.OPEN_DEG}°. Tap O to fold it, or raise that daughter's strut`
+            : `aft radiator at ${thetaDeg}° is still swinging into the ${FL.POSE_FLOOR_DEG}–${FL.POSE_THRUST_MAX_DEG}° thrust band`)
+          : `aft radiator outside the ${FL.POSE_FLOOR_DEG}–${FL.POSE_THRUST_MAX_DEG}° thrust band (θ ${thetaDeg}°)`;
+      const fix = aboveBand ? '' : ' Deploy the radiator (O / RADIATOR) to thrust.';
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'THERMAL',
+        text: `CAUTION: ${type} INHIBITED — ${why}.${fix}`,
+        priority: 'warning',
+      });
+    }
     eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'flower_folded', type: type === 'MPD' ? 'mpd' : 'ion', thetaDeg });
   }
 

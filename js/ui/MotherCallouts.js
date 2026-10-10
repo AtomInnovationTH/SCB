@@ -580,7 +580,7 @@ const SYSTEMS = [
         anchor: [ -0.30 * M, -0.30 * M, -1.15 * M ] },
       { id: 'flower_struts', name: 'AFT FLOWER STRUTS', risk: 'GREEN', tier: 'major', codexId: 'vacuum_mechanisms',
         massKg: 10, priority: 6, flowerGated: true,
-        specs: ['4× aft-pivot booms, 2.5 m — fold fore along the bus for launch', 'They open LIKE A FLOWER — O deploys / stows'],
+        specs: ['4× aft-pivot booms, 2.5 m — fold fore along the bus for launch', 'They open LIKE A FLOWER — O opens to 146° / folds flat'],
         // §13 r4 roll-up: the 4 booms and their seams (the wing hinge lugs
         // stay with the hinge brackets below).
         pickPrefixes: ['FlowerStrut_', 'FlowerStrutSeam'],

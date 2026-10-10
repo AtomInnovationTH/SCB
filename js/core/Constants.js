@@ -368,10 +368,8 @@ export const Constants = {
     TREND_TAU_S: 2,             // real s — smoothing of dT/dt for the trend arrow
     TREND_C_PER_S: 0.02,        // °C per real second (1.2 °C/min) — slower reads as steady
 
-    // ── Auto radiator (§15 row 4: opens itself "a little late") ──
+    // ── Auto radiator (§15 row 4: opens itself "a little late", to OPEN_DEG 146°; it stays open — no auto-close, owner 2026-10-09) ──
     AUTO_OPEN_C: 70,            // opens at 70 °C — 10 °C past the warning, on purpose
-    AUTO_CLOSE_C: 35,           // folds back once it held ≤ 35 °C …
-    AUTO_CLOSE_HOLD_S: 20,      // … for 20 real s (only a radiator it opened itself)
     PLAYER_WINS_S: 30,          // a player radiator command in the last 30 s blocks the auto
     AT_REST_FRAC: 0.05,         // openFrac at or below this counts as "at rest" (folded)
 
@@ -2040,6 +2038,12 @@ export const Constants = {
       REST_POSE: 'CLOSED',         // the orbit rest (D4 contract: boot, the
                                    // opening dance, every endState(), O's
                                    // closed end); 'STOW' is the old bud
+      // The OPEN pose — 146° (owner 2026-10-09, DECISIONS §15 "Radiator
+      // angles"): what O, the F1 bar, the REFIT chip and the heat auto-open
+      // all open a closed radiator to, and where it settles back to from 180°
+      // (RETURN_TO_OPEN_S below, or at once when ion thrust is commanded).
+      // The player can still push on to POSE_VENT_DEG (180°) or fold to 0°.
+      OPEN_POSE: 'STOW',
       // θ of REST_POSE — the ONE rest-pose → angle mapping (PlayerSatellite.
       // _flowerRestDeg and OpeningDance both read it). An unknown name falls
       // back to the 146° bud, the owner's stated fallback.
@@ -2049,14 +2053,44 @@ export const Constants = {
         const deg = map[F.REST_POSE];
         return Number.isFinite(deg) ? deg : F.POSE_STOW_DEG;
       },
+      // θ of OPEN_POSE — same mapping as REST_DEG; an unknown name falls back
+      // to POSE_STOW_DEG (146°), the owner's stated open angle.
+      get OPEN_DEG() {
+        const F = Constants.THERMAL.FLOWER;
+        const map = { CLOSED: F.POSE_CLOSED_DEG, STOW: F.POSE_STOW_DEG, PARK: F.POSE_PARK_DEG, CARGO: F.POSE_CARGO_DEG };
+        const deg = map[F.OPEN_POSE];
+        return Number.isFinite(deg) ? deg : F.POSE_STOW_DEG;
+      },
+      // Real seconds a radiator pushed past OPEN_DEG (to POSE_VENT_DEG) may
+      // sit there after the player's last radiator command before it settles
+      // back to OPEN_DEG by itself (DECISIONS §15, owner 2026-10-09).
+      RETURN_TO_OPEN_S: 30,
+      // "…unless debris blocks the path" (owner 2026-10-09). Measured
+      // 2026-10-10 (lane w3-radiator-146, tmp/radiator-intrusion-probe2.mjs,
+      // real petal + ArmUnit meshes, spheres of the cargo's size at the game's
+      // own heldSlotAnchorInto slot, lateral axis swept 360°): the struts, the
+      // docked daughters and the nose-collar catch clear the petals over
+      // θ 146–180° (≥ 158 mm; the gate is 20 mm), but CARGO HELD ON A DOCKED
+      // DAUGHTER overlaps them while that daughter's strut angle α is low.
+      // Rows [sizeMeter ≤, first α in degrees (5° grid) that clears 20 mm for
+      // petals anywhere in 146–180°]; a size between rows takes the next
+      // (deeper) row, unknown size the last. Coarse: sphere model, ±~40 mm
+      // point-cloud thinning. While any such cargo sits below its row the
+      // automatic swings to OPEN_DEG (the 30 s settle, the ion-thrust swing)
+      // wait; the player's own commands are untouched (DECISIONS §11: held
+      // cargo is out of scope for the fold corridor).
+      CARGO_CLEAR_ALPHA_ROWS: [[0.5, 25], [1, 30], [1.5, 35], [Infinity, 40]],
       POSE_STOW_DEG: 146,          // band-edge bud: θ→180° camps the Y3 axial
                                    // reserve (r ≤ 0.45, ANY R — probe §2
                                    // discovery) and is plume-illegal for
                                    // R > 1.714 m under thrust
       POSE_PARK_DEG: 135,          // radiator-duty pose (P3/P5 consume via
                                    // setFlowerPose; brief §2.1 pose grammar)
-      POSE_CARGO_DEG: 90,          // full bloom — tips at the rim plane, fore
-                                   // of the cone apexes, plume-clear at any R
+      POSE_CARGO_DEG: 90,          // the 90° bloom — tips at the rim plane, fore
+                                   // of the cone apexes, plume-clear at any R.
+                                   // Still a valid angle (dev flag, openFrac's
+                                   // full scale); nothing in play commands it
+                                   // since OPEN_POSE became 146°
       POSE_FLOOR_DEG: 2,           // θ ≥ CLOSED in ORBIT — enforced IN the driver
                                    // (the floor drops to POSE_LAUNCH_DEG only
                                    // while the one-shot launch lock is armed);
