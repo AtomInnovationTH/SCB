@@ -138,40 +138,46 @@ export const HOTKEY_GROUPS = [
     // the card above it, rows in order of need; 'col' starts the next column,
     // 'gap' is a small blank space. Unbuilt keys and the dev key go last.
     rows: [
-      // More for Start here: catching extras, then the mother's engine / power.
+      // Each column follows the card above it (owner 2026-10-12): pick / look
+      // first, then act, out / in switches and leave-type keys last.
+      // More for Start here: look → scan → pick a part → net → fly / power.
       [['Drag'], 'Turn the view', { pointer: true }],
-      [['L'], 'Hold: laser slows spin'],
       [['Shift S'], 'Wide scan'],
-      [['K'], 'Drop nose catch'],
       [['Z'], 'Next debris part'],
+      [['L'], 'Hold: laser slows spin'],
+      [['K'], 'Drop nose catch'],
       'gap',
-      [['E'], 'Electric tether out / in'],
+      [['Shift − +'], 'Throttle down / up'],
       [['Shift 1–3'], 'Pick power line'],
       [['[', ']'], 'Power less / more'],
-      [['Shift − +'], 'Throttle down / up'],
+      [['E'], 'Electric tether out / in'],
       'col',
-      // More for Daughters: flying one first, then all of them, destructive last.
-      [['↑ ↓ ← →'], 'Circle target'],
-      [['+', '−'], 'Closer / farther'],
-      [['Shift R'], 'Reel all daughters'],
-      [['X'], 'Cut tether'],
-      [['Shift'], 'Hold: reel faster'],
+      // More for Daughters: launch → fly → reel → cut (destructive last).
       [['Shift D'], 'Launch all at target'],
       [['Shift N'], 'Send all to best debris'],
       [[';', '\''], 'Launch speed down / up'],
+      'gap',
+      [['↑ ↓ ← →'], 'Circle target'],
+      [['+', '−'], 'Closer / farther'],
+      [['Shift R'], 'Reel all daughters'],
+      [['Shift'], 'Hold: reel faster'],
+      'gap',
+      [['X'], 'Cut tether'],
       [['Ctrl Shift D'], 'Burn up catch'],
       'col',
-      // More for Ship & views: upgrades and panels, then unbuilt, then dev.
+      // More for Ship & views: inspect → panels (the two the game teaches
+      // first) → unbuilt → the dev key, set apart.
       [['Point · click'], 'Inspect / upgrade a part', { pointer: true }],
       [['−', '+'], 'Fewer / more panels'],
+      [['5', '6'], 'Cities / constellations'],
       [['9', '0'], 'Debris / target panel'],
       [['7'], 'Radio log'],
       [['8'], 'Nav ball'],
-      [['5', '6'], 'Cities / constellations'],
       'gap',
       [['F'], 'Furnace (not built)'],
       [['F2'], 'Thruster metal', { grey: 'not yet' }],
       [['Shift G'], 'Net sweep', { grey: 'not yet' }],
+      'gap',
       [['Shift A'], 'Dev: auto-play'],
     ],
   },
