@@ -59,6 +59,10 @@
 //   only as tall as their rows; "V Change view to mother" last in Daughters;
 //   T / Tab first in Ship & views. A small blank gap ('gap' row) under
 //   J Journal sets the hardware rows apart.
+//   Advanced 2026-10-12 (owner "go"): three columns lined up under the three
+//   cards, each continuing its card in order of need ('col' starts the next);
+//   small gaps between clusters; unbuilt keys and the dev key last. Shorter
+//   words so three columns fit 1180 wide; Shift Z still steps back a part.
 // The live bindings are owned by InputManager._handleKeyDown; test-HelpTruth.js
 // fails when a bound key is missing here or a chip names an unbound key.
 export const HOTKEY_GROUPS = [
@@ -67,7 +71,7 @@ export const HOTKEY_GROUPS = [
     // order the game first asks for them: turn (players try to move first),
     // scan, net, fly to it.
     title: 'Start here',
-    keyWidth: '116px',
+    keyWidth: '112px',
     rows: [
       [['Wheel · pinch'], 'Zoom in / out', { pointer: true }],
       [['Tap · hold'], 'Touch: scan / actions', { pointer: true }],
@@ -82,7 +86,7 @@ export const HOTKEY_GROUPS = [
     // (owner 2026-10-12): D and R act on the selected one. V (back to the
     // mother's view) at the bottom, owner's words.
     title: 'Daughters',
-    keyWidth: '90px',
+    keyWidth: '112px',
     rows: [
       [['1', '–', '4'], 'Select a daughter'],
       [['D'], 'Launch selected daughter'],
@@ -96,7 +100,7 @@ export const HOTKEY_GROUPS = [
     // Next target on top, then the views and look-up keys, then the mother's
     // hardware at the bottom (owner 2026-10-12).
     title: 'Ship & views',
-    keyWidth: '90px',
+    keyWidth: '112px',
     rows: [
       [['T', '/', 'Tab'], 'Next target'],
       [['Space'], 'Main action'],
@@ -129,36 +133,46 @@ export const HOTKEY_GROUPS = [
     // keys, then ship / view keys.
     title: 'Advanced',
     collapsed: true,
-    keyWidth: '150px',
+    keyWidth: '112px',
+    // Three columns under the three cards (owner 2026-10-12), each continuing
+    // the card above it, rows in order of need; 'col' starts the next column,
+    // 'gap' is a small blank space. Unbuilt keys and the dev key go last.
     rows: [
+      // More for Start here: catching extras, then the mother's engine / power.
       [['Drag'], 'Turn the view', { pointer: true }],
-      [['Point · click'], 'Inspect / upgrade a part', { pointer: true }],
+      [['L'], 'Hold: laser slows spin'],
       [['Shift S'], 'Wide scan'],
       [['K'], 'Drop nose catch'],
-      [['L'], 'Hold: laser slows spin'],
-      [['Z'], 'Next debris part (Shift: back)'],
-      [['Shift A'], 'Dev: auto-play'],
-      [['↑ ↓ ← →'], 'Circle target'],
-      [['X'], 'Cut tether'],
-      [['Shift R'], 'Reel all daughters'],
-      [['Shift D'], 'Launch all at target'],
-      [['Shift N'], 'Send all to best debris'],
-      [['+', '−'], 'Daughter closer / farther'],
-      [['Shift'], 'Hold: reel faster'],
-      [[';', '\''], 'Launch speed down / up'],
-      [['Ctrl Shift D'], 'Burn up catch (daughter lost)'],
-      [['F'], 'Furnace (not built)'],
+      [['Z'], 'Next debris part'],
+      'gap',
       [['E'], 'Electric tether out / in'],
       [['Shift 1–3'], 'Pick power line'],
       [['[', ']'], 'Power less / more'],
-      [['Shift −', 'Shift +'], 'Throttle down / up'],
-      [['5', '6'], 'City / constellation names'],
+      [['Shift − +'], 'Throttle down / up'],
+      'col',
+      // More for Daughters: flying one first, then all of them, destructive last.
+      [['↑ ↓ ← →'], 'Circle target'],
+      [['+', '−'], 'Closer / farther'],
+      [['Shift R'], 'Reel all daughters'],
+      [['X'], 'Cut tether'],
+      [['Shift'], 'Hold: reel faster'],
+      [['Shift D'], 'Launch all at target'],
+      [['Shift N'], 'Send all to best debris'],
+      [[';', '\''], 'Launch speed down / up'],
+      [['Ctrl Shift D'], 'Burn up catch'],
+      'col',
+      // More for Ship & views: upgrades and panels, then unbuilt, then dev.
+      [['Point · click'], 'Inspect / upgrade a part', { pointer: true }],
+      [['−', '+'], 'Fewer / more panels'],
+      [['9', '0'], 'Debris / target panel'],
       [['7'], 'Radio log'],
       [['8'], 'Nav ball'],
-      [['9', '0'], 'Debris / target panel'],
-      [['−', '+'], 'Fewer / more panels'],
-      [['F2'], 'Thruster metal', { grey: 'with the furnace' }],
-      [['Shift G'], 'Net sweep', { grey: 'unlocks later' }],
+      [['5', '6'], 'Cities / constellations'],
+      'gap',
+      [['F'], 'Furnace (not built)'],
+      [['F2'], 'Thruster metal', { grey: 'not yet' }],
+      [['Shift G'], 'Net sweep', { grey: 'not yet' }],
+      [['Shift A'], 'Dev: auto-play'],
     ],
   },
 ];
@@ -349,16 +363,22 @@ export class HotkeyOverlay {
     title.textContent = collapsed ? `${group.title} (${rowCount})` : group.title;
     card.appendChild(title);
 
-    // Rows go straight into a plain card; an Advanced <details> wraps them in a
-    // body that lays them out in as many columns as fit.
+    // Rows go straight into a plain card; a collapsed <details> wraps them in a
+    // body. With 'col' marks (Advanced) the body is three columns lined up
+    // under the three cards above; without (Stuck?) the rows flow into as many
+    // columns as fit.
+    const columns = group.rows.includes('col');
     let host = card;
     if (collapsed) {
       Object.assign(title.style, { cursor: 'pointer', minHeight: '24px' });
       card.style.gridColumn = '1 / -1';
       host = document.createElement('div');
       Object.assign(host.style, {
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))',
-        columnGap: '28px', marginTop: '10px',
+        // 44px = the cards' 14px gap + 2 × their 15px border-and-padding, so each
+        // column's left edge sits under the rows of the card above it.
+        display: 'grid',
+        gridTemplateColumns: columns ? 'repeat(3, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(420px, 1fr))',
+        columnGap: columns ? '44px' : '28px', marginTop: '10px',
         borderTop: '1px solid rgba(0,212,255,0.12)', paddingTop: '6px',
       });
       card.appendChild(host);
@@ -368,20 +388,27 @@ export class HotkeyOverlay {
       });
     }
 
+    let target = host;
+    if (columns) { target = document.createElement('div'); host.appendChild(target); }
     for (const row of group.rows) {
+      if (row === 'col') {
+        target = document.createElement('div');
+        host.appendChild(target);
+        continue;
+      }
       if (row === 'spacer') {
-        host.appendChild(this._makeSpacer());
+        target.appendChild(this._makeSpacer());
         continue;
       }
       if (row === 'gap') {
         // A small blank space, no line (owner 2026-10-12: under J Journal).
         const gap = document.createElement('div');
         gap.style.height = '8px';
-        host.appendChild(gap);
+        target.appendChild(gap);
         continue;
       }
       const [keys, desc, opts] = row;
-      host.appendChild(this._makeRow(keys, desc, opts, group.keyWidth));
+      target.appendChild(this._makeRow(keys, desc, opts, group.keyWidth));
     }
     return card;
   }
