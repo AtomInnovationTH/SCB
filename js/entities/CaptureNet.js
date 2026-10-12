@@ -2081,6 +2081,7 @@ export class NetProjectile {
     const reelSpeed = (this._remainingM >= (CN.REEL_LONG_TETHER_M ?? 40))
       ? this.netClass.REEL_SPEED * (CN.REEL_LONG_TETHER_MULT ?? 3.0)
       : this.netClass.REEL_SPEED;
+    const remBeforeM = this._remainingM;   // w4-power D5: the reel's travel this frame
     if (!this._corridorHold) {
       if (this._corridorGlide && this._remainingM < berthStandoffM) {
         // Item 73: a hold that timed out mid-glide completes the glide OUT to
@@ -2148,6 +2149,21 @@ export class NetProjectile {
 
     // Tension readout (HUD): base + mass factor, same shape as the daughter.
     this.tensionN = baseCaptureTensionN(this.capturedMass);
+
+    // w4-power D5 (owner 2026-10-12: "Reel on mother costs"): the mother's net
+    // reel bills her battery while it turns — line tension × line speed ÷
+    // REEL_EFFICIENCY, floored at its 15 W motor, capped at HAUL_MOTOR_POWER.
+    // A corridor hold (no travel) bills nothing; neither does a held-world
+    // frame (the ship's `_motorBillHeld`, set from dtWorld in its update()).
+    const reelTravelM = Math.abs(this._remainingM - remBeforeM);
+    if (dt > 0 && reelTravelM > 0 && player._motorBillHeld !== true) {
+      const rs = player._resourceSystem;
+      if (rs && typeof rs.billWatts === 'function') {
+        const MD = Constants.MOTOR_DRAW_W || {};
+        const mechW = Math.max(0, this.tensionN) * (reelTravelM / dt) / (MD.REEL_EFFICIENCY || 0.5);
+        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.MOTHER_REEL_MIN ?? 15, mechW)), dt);
+      }
+    }
 
     // Completion → BERTHED. Item 73: a queue-glide still travelling OUT to a
     // timeout-raised standoff has NOT completed — the check below reads

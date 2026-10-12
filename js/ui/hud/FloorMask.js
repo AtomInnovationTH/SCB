@@ -295,7 +295,9 @@ export const DEFAULT_ROOMS = Object.freeze({
     // with it — the room table is the one truth.
     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'gone', override: 'gone', f1bar: 'shown',
     score: 'gone',
-    vitals: 'gone',
+    // w4-power D4 (2026-10-12, §15 row 5 "always on screen"): measured clear of the F1 bar and the
+    // closed drawer at 1280×800 / 1366×768 / 1376×1032; main.js hides it while the drawer is open.
+    vitals: 'shown',
   }),
   // Session N.5 (owner 2026-09-07) + Session O (owner 2026-09-07,
   // "LEFT: mother, daughters"): the flying floor greets a first-timer with

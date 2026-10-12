@@ -123,7 +123,7 @@
  * buttons, as a flat always-visible bar at the bottom centre of F1 —
  * `#hud-f1-bar`, a SIBLING root built here and sharing the gag, the actuators and
  * the label/click machinery. Plain labels with a live state word under each
- * (STRUTS · RADIATOR · WINGS · FURNACE); no hazard-tape main button, no slide-up.
+ * (WINGS · DAUGHTERS · RADIATORS · FURNACE); no hazard-tape main button, no slide-up.
  * Its ONE visibility bit is FloorMask's `data-floor-gone` (MASK_PANES.f1bar, an
  * attribute pane, shown on F1 only); styling is injected CSS, never inline
  * styles. RADIATOR reads / drives the hub's `flowerDeploy` actuator (the O key's
@@ -167,7 +167,7 @@ export const OVERRIDE_GEOMETRY = Object.freeze({
 /** The F1 bar (DECISIONS §15 row 9): a root of its own, beside the override pane. */
 export const F1_BAR_ID = 'hud-f1-bar';
 /** Bar order, left → right. */
-export const F1_BAR_KEYS = Object.freeze(['struts', 'radiator', 'wings', 'furnace']);
+export const F1_BAR_KEYS = Object.freeze(['wings', 'struts', 'radiator', 'furnace']);
 export const F1_BAR_GEOMETRY = Object.freeze({
   BTN_W_PX: 94,            // each button (owner's floor 88); 4 x 94 + 3 x 8 = 400 keeps the bar clear of a 380 px drawer at 1180 wide
   BTN_H_PX: 48,            // touch-sized (>= 44 pt HIG) on desktop and glass alike
@@ -302,7 +302,7 @@ const CTA_OPEN = 'PRESS TO CLOSE';
 
 /** F1 bar key → actuators key (RADIATOR → `flowerDeploy`, the O key's plain toggle — never the override sweep). */
 const BAR_ACTUATOR_OF = Object.freeze({ struts: 'struts', radiator: 'flowerDeploy', wings: 'rosaFurl' });
-const BAR_NAME_OF = Object.freeze({ struts: 'STRUTS', radiator: 'RADIATOR', wings: 'WINGS', furnace: 'FURNACE' });
+const BAR_NAME_OF = Object.freeze({ struts: 'DAUGHTERS', radiator: 'RADIATORS', wings: 'WINGS', furnace: 'FURNACE' });
 const BAR_NULL_STATE = Object.freeze({ struts: 'NO DAUGHTER', radiator: 'OFFLINE', wings: 'OFFLINE' });
 const FLOOR_GONE_ATTR = 'data-floor-gone';  // FloorMask's attribute-pane bit (the mask is its one writer)
 

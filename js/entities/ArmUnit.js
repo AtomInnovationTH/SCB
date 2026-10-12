@@ -6235,6 +6235,21 @@ export class ArmUnit {
       this.tetherTension = tensionTarget;
     }
 
+    // w4-power D5 (owner 2026-10-12: "8 motors on strut cost energy and
+    // thermals"): the strut reel cartridge — this daughter's tether reel, on
+    // the mother's strut — bills the mother's battery the real mechanical
+    // power, line tension × line speed ÷ REEL_EFFICIENCY, floored at its own
+    // 15 W motor while turning and capped at HAUL_MOTOR_POWER. dt 0 (a held
+    // world: ArmManager ticks arms with 0) bills nothing.
+    if (dt > 0 && moveDistance > 0 && !this.isDetached) {
+      const MD = Constants.MOTOR_DRAW_W || {};
+      const rs = this._playerSatellite && this._playerSatellite._resourceSystem;
+      if (rs && typeof rs.billWatts === 'function') {
+        const mechW = Math.max(0, this.tetherTension) * reelSpeed / (MD.REEL_EFFICIENCY || 0.5);
+        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.STRUT_REEL_MIN ?? 15, mechW)), dt);
+      }
+    }
+
     // Phase 3a: boosting a catch deep in the strain band can RIP the net —
     // recoverable (debris drifts free, daughter returns), same consequence
     // path as the reel-start strain slip. Rolled per second while boosting.
@@ -6679,6 +6694,16 @@ export class ArmUnit {
     }
 
     this.reloadProgress += dt / this.reloadDuration;
+
+    // w4-power D5: the reload worm-gear motor runs off the mother's battery at
+    // CROSSBOW_RELOAD_POWER (MOTOR_DRAW_W.CROSSBOW_RELOAD) for the whole
+    // reload — the energy E/η the duration above is computed from.
+    if (dt > 0) {
+      const rs = this._playerSatellite && this._playerSatellite._resourceSystem;
+      if (rs && typeof rs.billWatts === 'function') {
+        rs.billWatts(Constants.MOTOR_DRAW_W?.CROSSBOW_RELOAD ?? CROSSBOW_RELOAD_POWER, dt);
+      }
+    }
 
     if (this.reloadProgress >= 1.0) {
       this.reloadProgress = 1.0;

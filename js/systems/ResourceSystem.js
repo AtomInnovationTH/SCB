@@ -20,7 +20,8 @@ export class ResourceSystem {
     // ── Resource pools (canonical — synced to player.resources) ──────────
     this.xenon = Constants.XENON_FUEL_MAX;
     this.coldGas = Constants.COLD_GAS_MAX;
-    this.battery = Constants.BATTERY_MAX;
+    // w4-power D1: every boot starts at BATTERY_START_FRACTION (half) of the max.
+    this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);
     this.solarPanelHealth = 1.0;
     // Mother-wings step 4 (DECISIONS §10, "power follows the panels"): the
     // body-mount cells are backup power and get their OWN health, independent
@@ -113,6 +114,18 @@ export class ResourceSystem {
     });
 
     this._setupListeners();
+  }
+
+  /**
+   * w4-power D1 (owner 2026-10-12: "battery is 50% and dropping until wings
+   * open"): the charge every boot starts with — BATTERY_START_FRACTION of `max`.
+   * @param {number} max - the (rebased) battery max, Wh
+   * @returns {number} Wh
+   */
+  static startCharge(max) {
+    const f = Constants.BATTERY_START_FRACTION;
+    const frac = Number.isFinite(f) ? Math.max(0, Math.min(1, f)) : 1;
+    return max * frac;
   }
 
   /**
@@ -421,8 +434,9 @@ export class ResourceSystem {
    * SHIP_HEAT.W_PER_UNIT_S) and smoothed over ~POWER_TAU_S (0.5 s).
    * `inW` = charging actually stored (solar + RTG + beaming; 0 surplus when
    * full — replenish()/salvage and upgrade top-ups are not charging);
-   * `outW` = every battery draw; `netW = inW − outW`. A fresh object per call.
-   * @returns {{battery:number, batteryMax:number, inW:number, outW:number, netW:number}}
+   * `outW` = every battery draw; `netW = inW − outW`; `genW` = this frame's
+   * generation, unsmoothed (getGenerationW — w4-power D4). A fresh object per call.
+   * @returns {{battery:number, batteryMax:number, inW:number, outW:number, netW:number, genW:number}}
    */
   getPowerSnapshot() {
     return {
@@ -431,7 +445,45 @@ export class ResourceSystem {
       inW: this._inW,
       outW: this._outW,
       netW: this._inW - this._outW,
+      genW: this.getGenerationW(),
     };
+  }
+
+  /**
+   * w4-power D4 (owner 2026-10-12: "rotating mother should show immediate
+   * drop in power-in"): what the ship generates THIS frame, unsmoothed, on the
+   * meter's watt scale — the live per-frame rate PlayerSatellite._updateSolarPower
+   * writes (× the weather multiplier, exactly what update() charges with), plus
+   * RTG and beaming when fitted. Unlike `inW` it does not drop to 0 when the
+   * battery is full: it is what the panels make, stored or not. Falls back to
+   * the static rate when no live player is wired (as update() does).
+   * @returns {number} watts
+   */
+  getGenerationW() {
+    const wPerUnitS = Constants.SHIP_HEAT.W_PER_UNIT_S;
+    const liveRate = this._player && this._player.resources && this._player.resources.solarRate;
+    const solarW = (typeof liveRate === 'number')
+      ? liveRate * this._weatherSolarMult
+      : this.solarRate * this.solarPanelHealth * this._weatherSolarMult;
+    let w = Number.isFinite(solarW) ? Math.max(0, solarW) : 0;
+    if (this._rtgRate > 0) w += this._rtgRate * wPerUnitS;
+    if (this._powerBeamRate > 0 && this._groundStationInView) w += this._powerBeamRate * wPerUnitS;
+    return w;
+  }
+
+  /**
+   * w4-power D5/D7: bill `watts` for `dt` real seconds — a motor or heater
+   * that is running this frame. The base load's own conversion (units = W ÷
+   * SHIP_HEAT.W_PER_UNIT_S × dt, PlayerSatellite._updateResources), so a 15 W
+   * motor shows as +15 W in `outW`; drawn through drawUpTo (never fails, clamps
+   * at empty), so it lands in the ledger and its heat follows (ThermalSystem).
+   * @param {number} watts
+   * @param {number} dt - real seconds
+   * @returns {number} the battery units actually drawn
+   */
+  billWatts(watts, dt) {
+    if (!(watts > 0) || !(dt > 0)) return 0;
+    return this.drawUpTo('battery', (watts / Constants.SHIP_HEAT.W_PER_UNIT_S) * dt);
   }
 
   /**
@@ -550,7 +602,9 @@ export class ResourceSystem {
 
   /**
    * Restore upgraded max capacities from saved data.
-   * Refills current levels to the restored max values for a fresh mission.
+   * Refills xenon / cold gas to the restored max for a fresh mission; the
+   * battery starts at BATTERY_START_FRACTION of its rebased max (w4-power D1 —
+   * saves carry no charge, and every boot starts packed at half).
    * @param {object} data - Previously serialized resource maxes
    */
   restore(data) {
@@ -576,10 +630,10 @@ export class ResourceSystem {
     if (data.hasSupercap) this._hasSupercap = true;
     if (data.rtgRate !== undefined) this._rtgRate = data.rtgRate;
     if (data.powerBeamRate !== undefined) this._powerBeamRate = data.powerBeamRate;
-    // Refill to max for the new mission
+    // Refill to max for the new mission (the battery: half — w4-power D1)
     this.xenon = this.xenonMax;
     this.coldGas = this.coldGasMax;
-    this.battery = this.batteryMax;
+    this.battery = ResourceSystem.startCharge(this.batteryMax);
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;
     this._depletionEmitted = false;
@@ -752,7 +806,7 @@ export class ResourceSystem {
   reset() {
     this.xenon = Constants.XENON_FUEL_MAX;
     this.coldGas = Constants.COLD_GAS_MAX;
-    this.battery = Constants.BATTERY_MAX;
+    this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);   // w4-power D1: half
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;
     this.solarEfficiencyMult = 1.0;

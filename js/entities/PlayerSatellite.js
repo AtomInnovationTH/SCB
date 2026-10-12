@@ -86,6 +86,32 @@ const {
 } = Constants;
 
 /**
+ * w4-power D5 (owner 2026-10-12: "adjusting wings and open/closing costs
+ * battery and thermals … 8 motors on strut cost energy and thermals"): bill
+ * one moving motor's watts for this frame through the wired ResourceSystem
+ * (`billWatts` — the base load's own W→units conversion, drawUpTo, so the
+ * heat follows through the ledger). Nothing on a held-world frame
+ * (`_motorBillHeld`, set from dtWorld at the top of update()) or with no
+ * battery wired (the menu hero, headless stubs). A module function so the
+ * duck-typed stubs that call `P.method.call(stub)` still run.
+ * @param {PlayerSatellite} ship
+ * @param {number} watts
+ * @param {number} dt - real seconds
+ * @returns {number} battery units drawn
+ */
+function billMotorW(ship, watts, dt) {
+  if (!ship || ship._motorBillHeld === true || !(watts > 0) || !(dt > 0)) return 0;
+  const rs = ship._resourceSystem;
+  if (!rs || typeof rs.billWatts !== 'function') return 0;
+  return rs.billWatts(watts, dt);
+}
+
+/** w4-power D5: a hinge / tilt drive turning at least this fast is moving (rad/s). */
+function motorMoveMinRadS() {
+  return ((Constants.MOTOR_DRAW_W?.MOVE_MIN_DEG_S ?? 0.1) * Math.PI) / 180;
+}
+
+/**
  * "…unless debris blocks the path" (owner 2026-10-09; the measurement is in
  * Constants THERMAL.FLOWER.CARGO_CLEAR_ALPHA_ROWS): true while a docked daughter
  * holds cargo on its rack with its strut angle α below the first angle that
@@ -210,7 +236,7 @@ export class PlayerSatellite extends THREE.Group {
     this.resources = {
       xenon: Constants.XENON_FUEL_MAX,
       coldGas: Constants.COLD_GAS_MAX,
-      battery: Constants.BATTERY_MAX,
+      battery: Constants.BATTERY_MAX * (Constants.BATTERY_START_FRACTION ?? 1),   // w4-power D1: half
       solarRate: 0,
       solarPanelHealth: 1.0,
       // Mother-wings step 4 (DECISIONS §10): body-mount cells are backup power
@@ -3317,18 +3343,24 @@ export class PlayerSatellite extends THREE.Group {
       const prog = ls.getRosaProgress();
       this._setRosaWingProgress(1, prog.wing1);
       this._setRosaWingProgress(2, prog.wing2);
-      // Opening-dance task 6: the AVERAGE, not the min — with the min the power
-      // readout stays body-only until the second wing starts, which read as a
-      // dead battery during the dance's staggered wing roll-out. Both wings end
-      // at 1.0, so the hand-over state is unchanged.
+      // Opening-dance task 6: the AVERAGE, not the min (the dance's staggered
+      // wing roll-out would otherwise read as body-only power until the second
+      // wing starts). w4-power D2: the opening dance now reports 0 for both
+      // wings, so both end at 0 and the hand-over state is rolled up; only the
+      // scripted rocket launch still ends at 1.0.
       this._rosaFurlProgress = (prog.wing1 + prog.wing2) / 2;
-      this._rosaFurlTarget = 1.0;
+      // w4-power D2: the opening dance holds the wings rolled up and leaves
+      // the target to the player (a `,` pressed during the dance is kept and
+      // rolls them out at hand-over); a scripted rocket launch still ends out.
+      if (!ls.isOpeningDance) this._rosaFurlTarget = 1.0;
       this._updateWingClamps();
       return;
     }
 
     // Post-launch (READY) / no-launch: player furl control. If the player has
     // never toggled, hold fully deployed (or whatever launch left us at).
+    // w4-power D2: every start path sets manual control with target 0 (the
+    // start furl held like a player hold), so this default never rolls them out.
     const target = this._rosaManualControl ? this._rosaFurlTarget : 1.0;
 
     // Owner 2026-09-25 ("once released, they never grab the wings again"): the
@@ -3349,10 +3381,15 @@ export class PlayerSatellite extends THREE.Group {
       // Target 0: hold — progress stays 0 while the clamp is closed.
     } else {
       const rate = (Constants.OCTOPUS_V5.ROSA_FURL_RATE || 0.4) * dt;
+      const p0 = this._rosaFurlProgress;
       if (this._rosaFurlProgress < target) {
         this._rosaFurlProgress = Math.min(target, this._rosaFurlProgress + rate);
       } else if (this._rosaFurlProgress > target) {
         this._rosaFurlProgress = Math.max(target, this._rosaFurlProgress - rate);
+      }
+      // w4-power D5: both roll-out drums turn together — bill them while they move.
+      if (this._rosaFurlProgress !== p0) {
+        billMotorW(this, 2 * (Constants.MOTOR_DRAW_W?.WING_DRUM ?? 0), dt);
       }
       this._setRosaWingProgress(1, this._rosaFurlProgress);
       this._setRosaWingProgress(2, this._rosaFurlProgress);
@@ -3469,17 +3506,21 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * Reset ROSA furl state to the default (fully deployed, no manual control).
-   * Called on game reset so a retry never inherits a furled array from the
-   * previous run — the retry path does NOT re-run the launch sequence, so
-   * without this the post-launch player-furl branch would hold the panels
-   * wherever the dead run left them. Also clears the feather state so a retry
-   * starts sun-tracking, not parked edge-on.
+   * Reset ROSA furl state to the start: both wings rolled up, held there like
+   * a player hold (w4-power D2, owner 2026-10-12: "Mother starts with wings and
+   * daughters retracted, battery is 50% and dropping until wings open") — the
+   * auto roll-out below the launch branch never undoes it; `,` / WINGS opens
+   * them. Called on game reset so a retry never inherits the dead run's wings.
+   * Also clears the feather state so the wings track the sun once opened.
    */
   resetRosaFurlState() {
-    this._rosaManualControl = false;
-    this._rosaFurlTarget = 1.0;
-    this._rosaFurlProgress = 1.0;
+    this._rosaManualControl = true;
+    this._rosaFurlTarget = 0.0;
+    this._rosaFurlProgress = 0.0;
+    if (typeof this._setRosaWingProgress === 'function') {
+      this._setRosaWingProgress(1, 0);
+      this._setRosaWingProgress(2, 0);
+    }
     this._rosaFeatherTarget = 0.0;
     this._rosaFeatherProgress = 0.0;
     // Owner 2026-09-25: a retry must not inherit a closed re-stow latch from
@@ -3755,7 +3796,7 @@ export class PlayerSatellite extends THREE.Group {
       sender: 'THERMAL',
       text: `Radiator folded to ${FL.POSE_LAUNCH_DEG}° — the launch fold, locked down. `
         + 'Engines stay off until it opens again. '
-        + `Folded panels radiate almost nothing: heat will build. Tap RADIATOR / O to open it to ${FL.OPEN_DEG}°.`,
+        + `Folded panels radiate almost nothing: heat will build. Tap RADIATORS / O to open it to ${FL.OPEN_DEG}°.`,
       priority: 'warning',
     });
   }
@@ -4397,6 +4438,7 @@ export class PlayerSatellite extends THREE.Group {
     settleFlowerToOpen(this);
     const target = this._flowerTargetTheta;
     const stepping = target !== undefined && dt > 0;
+    const theta0 = this._flowerThetaRad;
 
     if (stepping) {
       const maxDelta = FL.SLEW_RATE_RAD_S * dt;
@@ -4416,6 +4458,13 @@ export class PlayerSatellite extends THREE.Group {
     const ceilRad = ((this._flowerVentArmed ? FL.POSE_VENT_DEG : FL.POSE_STOW_DEG) * Math.PI) / 180;
 
     this._flowerThetaRad = Math.max(floorRad, Math.min(ceilRad, this._flowerThetaRad));
+
+    // w4-power D5: the radiator hinge drives (one per strut, swinging in
+    // unison) bill on the frames θ actually moves — a ceiling/floor clamp
+    // with no slew bills nothing (dt 0 calls never bill).
+    if (stepping && Math.abs(this._flowerThetaRad - theta0) >= motorMoveMinRadS() * dt) {
+      billMotorW(this, (Constants.MOTOR_DRAW_W?.RADIATOR_HINGE ?? 0) * this._flowerGroups.length, dt);
+    }
 
     // Disarm on ARRIVAL, never on command. This clamp is a hard clamp: dropping
     // the ceiling from the vent to the bud while θ is still out at 180° would
@@ -5751,9 +5800,15 @@ export class PlayerSatellite extends THREE.Group {
    * @param {number} [dtWorld] - World-simulation delta (game seconds) for orbit + drag.
    *   Threaded from the TimeAuthority choke point (main loop); defaults to the
    *   shipped base rate for headless/test callers (byte-identical to dt × 10).
+   * @param {boolean} [noMotorBilling=false] - the menu / briefing / shop
+   *   background tick (main.js): the battery clock is not running there, so
+   *   motors must not bill (the charge would land as heat on the first play frame).
    */
-  update(dt, sunDirection, dtWorld = TimeAuthority.baseGameDt(dt)) {
+  update(dt, sunDirection, dtWorld = TimeAuthority.baseGameDt(dt), noMotorBilling = false) {
     const gameDt = dtWorld;
+    // w4-power D5: a held-world frame (a drawer holds the world, dtWorld 0 —
+    // main.js `_worldHeld`) bills no motor; the meter and heat skip it too.
+    this._motorBillHeld = !(dtWorld > 0) || noMotorBilling === true;
 
     // §2 cache the sun direction for puff sun-scatter (null when unavailable, so
     // headless / null-sun frames stay scatter-free — no per-frame alloc).
@@ -6113,13 +6168,22 @@ export class PlayerSatellite extends THREE.Group {
     // freeze/nudge/freeze steps).
     const alpha = 1 - Math.exp(-1.75 * dt);
 
+    // w4-power D5: each wing's tilt / sun-tracking drive bills on the frames
+    // it turns at least MOTOR_DRAW_W.MOVE_MIN_DEG_S (0.1°/s) — slews, feather
+    // swings, and live tracking; the exponential tail after it has caught the
+    // sun (and a clamped, holding drive) bills nothing. The menu hero runs
+    // this too, but has no battery wired, so it never bills.
+    const moveMin = motorMoveMinRadS() * dt;
+    const driveW = Constants.MOTOR_DRAW_W?.WING_DRIVE ?? 0;
     if (this.panelRightPivot) {
       const cur = this.panelRightPivot.rotation.x;
       this.panelRightPivot.rotation.x = cur + (target - cur) * alpha;
+      if (Math.abs(this.panelRightPivot.rotation.x - cur) >= moveMin) billMotorW(this, driveW, dt);
     }
     if (this.panelLeftPivot) {
       const cur = this.panelLeftPivot.rotation.x;
       this.panelLeftPivot.rotation.x = cur + (target - cur) * alpha;
+      if (Math.abs(this.panelLeftPivot.rotation.x - cur) >= moveMin) billMotorW(this, driveW, dt);
     }
   }
 
@@ -7146,7 +7210,7 @@ export class PlayerSatellite extends THREE.Group {
             ? `aft radiator at ${thetaDeg}° — a held catch is in its way, so it will not swing back to ${FL.OPEN_DEG}°. Tap O to fold it, or raise that daughter's strut`
             : `aft radiator at ${thetaDeg}° is still swinging into the ${FL.POSE_FLOOR_DEG}–${FL.POSE_THRUST_MAX_DEG}° thrust band`)
           : `aft radiator outside the ${FL.POSE_FLOOR_DEG}–${FL.POSE_THRUST_MAX_DEG}° thrust band (θ ${thetaDeg}°)`;
-      const fix = aboveBand ? '' : ' Deploy the radiator (O / RADIATOR) to thrust.';
+      const fix = aboveBand ? '' : ' Deploy the radiator (O / RADIATORS) to thrust.';
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'THERMAL',
         text: `CAUTION: ${type} INHIBITED — ${why}.${fix}`,
@@ -8650,6 +8714,16 @@ export class PlayerSatellite extends THREE.Group {
       // Read current sweep angle from arm FSM (default π/2 = radially out)
       let alpha = (arm.getAimAlpha ? arm.getAimAlpha() : Math.PI / 2);
 
+      // w4-power D5: the strut hinge motor bills on every frame its angle
+      // moved since the last one — whoever drove it (the latch slew above,
+      // ArmManager's salvage / recall drivers, autopilot or camera aim; those
+      // run after this in the loop, so their move is billed one frame later).
+      if (dt > 0 && sg._billAlpha !== undefined
+          && Math.abs(alpha - sg._billAlpha) >= motorMoveMinRadS() * dt) {
+        billMotorW(this, Constants.MOTOR_DRAW_W?.STRUT_HINGE ?? 0, dt);
+      }
+      sg._billAlpha = alpha;
+
       // V-11: Stowage — force α = 0 (aft, against barrel) when LOCKED or STOWED
       if (arm.getDeployState) {
         const ds = arm.getDeployState();
@@ -9267,7 +9341,11 @@ export class PlayerSatellite extends THREE.Group {
       const tiltR = pivot.rotation.x;
       _v3TmpA.set(0, Math.cos(tiltR), Math.sin(tiltR)).applyQuaternion(this.quaternion);
       const incidence = Math.max(0, _v3TmpA.dot(sunDirection));
-      const furl = Math.max(0, Math.min(1, wrapper.scale.x));
+      // w4-power D2 (measured 2026-10-12): the deployed fraction of the
+      // blanket, not the wrapper's scale — scale.x keeps a 5 % visual stub
+      // when rolled up (_setRosaWingProgress), which used to make 82 W from
+      // cells that are wound on the drum. A rolled-up wing makes nothing.
+      const furl = Math.max(0, Math.min(1, (wrapper.scale.x - 0.05) / 0.95));
       wingPowerW += Constants.SOLAR_FLUX * efficiency * wingAreaEachM2 * incidence * furl;
     }
     wingPowerW *= wingHealth;

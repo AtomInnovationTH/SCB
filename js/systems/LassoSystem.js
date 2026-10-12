@@ -1435,6 +1435,7 @@ export class LassoSystem {
             // Reel-in phase: move debris toward player
             this._reelProgress += dt * Constants.LASSO_REEL_SPEED;
             this._reelProgress = Math.min(this._reelProgress, 1.0); // clamp — prevent overshoot
+            this._billReelMotor(dt);
             if (this._reelProgress >= 1.0) {
                 // Catch complete! Cargo-continuity S13(d): the catch adopts onto the
                 // ONE holding model (the nose-collar berth) — or, with no capture
@@ -2089,6 +2090,34 @@ export class LassoSystem {
             p.target._motherParked = false;
         }
         this._pendingAdoption = null;
+    }
+
+    /**
+     * w4-power D5 (owner 2026-10-12: "Reel on mother costs"): the lasso reel
+     * bills the mother's battery while it turns — line tension (the lasso's
+     * own base + per-kg model) × line speed ÷ REEL_EFFICIENCY, floored at the
+     * mother reel's 15 W motor (TETHER_REEL_POWER), capped at HAUL_MOTOR_POWER.
+     * Line speed: the haul from the contact range over the REEL window
+     * (1 − 0.2 of the progress at LASSO_REEL_SPEED); the WRAP cinch bills the
+     * floor. Nothing on a held-world frame or with no battery wired.
+     * @param {number} dt
+     * @private
+     */
+    _billReelMotor(dt) {
+        const p = this._player;
+        if (!(dt > 0) || !p || p._motorBillHeld === true) return;
+        const rs = p._resourceSystem;
+        if (!rs || typeof rs.billWatts !== 'function') return;
+        const MD = Constants.MOTOR_DRAW_W || {};
+        const WRAP_END = 0.2;
+        let lineSpeed = 0;
+        if (this._reelProgress > WRAP_END && this._reelStartOffset) {
+            lineSpeed = (this._reelStartOffset.length() / M) * Constants.LASSO_REEL_SPEED / (1 - WRAP_END);
+        }
+        const mass = this.target ? (this.target.mass || 0) : 0;
+        const tensionN = Constants.LASSO_TENSION_BASE_N + mass * Constants.LASSO_TENSION_PER_KG;
+        const mechW = tensionN * lineSpeed / (MD.REEL_EFFICIENCY || 0.5);
+        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.MOTHER_REEL_MIN ?? 15, mechW)), dt);
     }
 
     /**

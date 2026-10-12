@@ -3,7 +3,8 @@
  *
  * The deployment cinematic that replaces the 60 s rocket launch at boot. It
  * STARTS IN THE MENU as the EVA astronaut jets off the hull she is welding,
- * rolls the solar wings out at the SHIPPED hardware rate, and hands the player
+ * the menu hero's solar wings roll out at the SHIPPED hardware rate (the
+ * player's ship keeps its wings rolled up — w4-power D2), and the player gets
  * the wheel 4.0 s after the menu cuts away. No rocket, no fairing, no
  * launch-phase persistence writes, no arm launch lock.
  *
@@ -17,10 +18,16 @@
  * Feature-flag gated: FEATURE_FLAGS.OPENING_DANCE (default true). Flag off is
  * a TOTAL no-op (start/tick/skip/applyPacked do nothing) — every path then
  * lands on endState(ship), which is also the CONTINUE / GAMEOVER-retry /
- * reduced-motion / ?shot path. The one invariant: a ship is NEVER seen in the
- * packed pose (wings furled, launch lock armed) outside a running dance.
+ * reduced-motion / ?shot path. The one invariant: a ship is NEVER seen with
+ * the radiator's launch lock armed outside a running dance.
  * endState itself is deliberately NOT flag-gated: with the flag off the ship
  * still boots to the finished pose.
+ *
+ * w4-power D2 (owner 2026-10-12: "Mother starts with wings and daughters
+ * retracted, battery is 50% and dropping until wings open"): the SHIP's wings
+ * now stay rolled up through the dance and on every start path; the player
+ * opens them (`,` or WINGS on floor 1). The wing beats below still play on the
+ * menu hero (MenuScene3D reads progress()); getRosaProgress() reports 0.
  *
  * ── THE CLOCK IS WALL-CLOCK, NOT ACCUMULATED dt ─────────────────────────────
  * The dance is read from TWO independent render loops: MenuScene3D runs its own
@@ -51,9 +58,12 @@
  *             progress() by MenuScene3D, the sim ship slews itself once bound)
  *   t = 2.70  cut to game (MENU_START): the sim ship is bound and snapped to
  *             the live progress so the cut has no pop
- *   t = 5.20  ROSA wing 1 rolls out as the camera's dive lands (2.5 s);
- *             t = 6.20  wing 2 (the intro dolly drifts out through both)
- *   t = 8.70  wing 2 seated → OPENING_DANCE_HANDOVER and, in the same tick,
+ *   t = 5.20  hero wing 1 rolls out as the camera's dive lands (2.5 s);
+ *             t = 6.20  hero wing 2 (the intro dolly drifts out through both).
+ *             The player's ship does NOT roll them out (w4-power D2) and
+ *             the dance plays no sound for them; the beats are bookkeeping.
+ *   t = 8.70  time-based hand-over (the hero's wing 2 is seated by then) →
+ *             OPENING_DANCE_HANDOVER and, in the same tick,
  *             OPENING_DANCE_COMPLETE (there is no daughter tail any more); the
  *             player is flying, radiator folded, struts shut
  * skip(): any input fast-forwards the remaining unfold over SKIP_FADE_S (0.5 s)
@@ -66,10 +76,25 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { audioSystem } from './AudioSystem.js';
+import { GestureHints } from '../ui/hud/GestureHints.js';
+import { devShotGate } from '../core/DevShotGate.js';
 
 /** Beat-table anchors — the ONE named constants block (Constants.js). */
 const OD = Constants.OPENING_DANCE;
 const FL = Constants.THERMAL.FLOWER;
+
+/** w4-power D2: what getRosaProgress() reports to the bound ship — rolled up. */
+const SHIP_WINGS_ROLLED_UP = Object.freeze({ wing1: 0, wing2: 0 });
+
+/** w4-power D3: the start line — true to the start (wings rolled up, the
+ *  battery at half and draining). Desktop reads "Press , (the comma key) or
+ *  WINGS on floor 1 to roll them out"; on glass GestureHints.speak turns the
+ *  Press-comma part into "Tap WINGS on floor 1" (and drops the doubled button). */
+const HANDOVER_LINE = 'Battery at half and falling, Cowboy — the wings are rolled up. '
+  + 'Press , (the comma key) or WINGS on floor 1 to roll them out. She is yours.';
+/** …and the true version of the old line, for a player who already asked
+ *  for the wings during the dance. */
+const HANDOVER_LINE_OPENING = 'Arrays rolling out, Cowboy. The radiator stays folded until she runs warm — she is yours.';
 
 /**
  * Zero progress — the shape every consumer sees before t = 0 and after unbind.
@@ -277,14 +302,20 @@ class OpeningDance {
       ship._flowerThetaRad = p.flower * (FL.POSE_STOW_DEG * Math.PI) / 180;
       if (typeof ship._updateFlower === 'function') ship._updateFlower(0);
     }
+    // w4-power D2 (owner 2026-10-12: "Mother starts with wings and daughters
+    // retracted, battery is 50% and dropping until wings open"): the ship's
+    // wings stay rolled up through the dance and after it — the start furl is
+    // held like a player hold (manual control, target 0), so the auto roll-out
+    // in _updateRosaPanels never undoes it. The menu hero keeps the dance's
+    // wing values (MenuScene3D reads progress(), not this ship).
     if (typeof ship._setRosaWingProgress === 'function') {
-      ship._setRosaWingProgress(1, p.wing1);
-      ship._setRosaWingProgress(2, p.wing2);
+      ship._setRosaWingProgress(1, 0);
+      ship._setRosaWingProgress(2, 0);
     }
     if (ship._rosaFurlProgress !== undefined) {
-      ship._rosaFurlProgress = (p.wing1 + p.wing2) / 2;
-      ship._rosaFurlTarget = 1.0;
-      ship._rosaManualControl = false;
+      ship._rosaFurlProgress = 0;
+      ship._rosaFurlTarget = 0;
+      ship._rosaManualControl = true;
     }
     // Shut daughters: drop any stale slew target a previous run left behind
     // (ArmUnit.reset does not clear it) so nothing creeps open — the struts
@@ -307,13 +338,8 @@ class OpeningDance {
       ship._flowerThetaRad = p.flower * (FL.POSE_STOW_DEG * Math.PI) / 180;
       if (typeof ship._updateFlower === 'function') ship._updateFlower(0);
     }
-    if (typeof ship._setRosaWingProgress === 'function') {
-      ship._setRosaWingProgress(1, p.wing1);
-      ship._setRosaWingProgress(2, p.wing2);
-    }
-    if (ship._rosaFurlProgress !== undefined) {
-      ship._rosaFurlProgress = (p.wing1 + p.wing2) / 2;
-    }
+    // w4-power D2: the wings are not part of the ship's pose any more — they
+    // stay rolled up (the hero keeps p.wing1/p.wing2 through progress()).
   }
 
   /**
@@ -346,12 +372,10 @@ class OpeningDance {
     }
 
     if (!this._fired.wing1 && t >= OD.WING1_START_S) {
-      this._fired.wing1 = true;
-      try { audioSystem.playArmDeploy(0.9); } catch (_e) { /* headless */ }
+      this._fired.wing1 = true;   // beat bookkeeping only: no sound (w4-power: the ship's wings stay rolled up)
     }
     if (!this._fired.wing2 && t >= OD.WING2_START_S) {
-      this._fired.wing2 = true;
-      try { audioSystem.playArmDeploy(0.9); } catch (_e) { /* headless */ }
+      this._fired.wing2 = true;   // beat bookkeeping only: no sound (w4-power: the ship's wings stay rolled up)
     }
 
     // No daughter beat (DECISIONS §15 row 4): the struts stay shut at α 0, so
@@ -372,6 +396,9 @@ class OpeningDance {
    */
   _fireHandover() {
     const ship = this._ship;
+    // w4-power D3: the line is true to the wings. They start rolled up (D2);
+    // only a player who already pressed `,` during the dance has them opening.
+    let wingsOpening = false;
     if (ship) {
       // The exact hand-over state (skip or natural: idempotent).
       if (ship._flowerGroups && ship._flowerGroups.length) {
@@ -380,13 +407,20 @@ class OpeningDance {
         ship._flowerThetaRad = REST_RAD;
         if (typeof ship._updateFlower === 'function') ship._updateFlower(0);
       }
-      if (typeof ship._setRosaWingProgress === 'function') {
-        ship._setRosaWingProgress(1, 1);
-        ship._setRosaWingProgress(2, 1);
-      }
-      if (ship._rosaFurlProgress !== undefined) {
-        ship._rosaFurlProgress = 1.0;
-        ship._rosaFurlTarget = 1.0;
+      // w4-power D2: both wings stay rolled up (target 0, held like a player
+      // hold) — unless the player asked for them during the dance, which is
+      // kept: the roll-out then starts the frame the driver unbinds.
+      wingsOpening = ship._rosaManualControl === true && ship._rosaFurlTarget >= 0.5;
+      if (!wingsOpening) {
+        if (typeof ship._setRosaWingProgress === 'function') {
+          ship._setRosaWingProgress(1, 0);
+          ship._setRosaWingProgress(2, 0);
+        }
+        if (ship._rosaFurlProgress !== undefined) {
+          ship._rosaFurlProgress = 0;
+          ship._rosaFurlTarget = 0;
+          ship._rosaManualControl = true;
+        }
       }
       if (typeof ship.setLaunchSequence === 'function') ship.setLaunchSequence(null);
       this._ship = null;
@@ -395,10 +429,20 @@ class OpeningDance {
     eventBus.emit(Events.OPENING_DANCE_HANDOVER, { t: T_HANDOVER_S });
     // ONE short Houston line at hand-over (decision 12) — normal priority, no
     // force, distinct from the onboarding boot beat that fires on the event.
-    // True to the pose: wings out, radiator folded, struts shut.
+    this._postStartLine(wingsOpening);
+  }
+
+  /**
+   * @private The ONE start line (w4-power D3), shared by the dance hand-over
+   * and the non-dance starts (endState). True to the pose — wings rolled up
+   * and the battery at half and falling, and how to open them — through
+   * GestureHints.speak, so on glass it names the floor-1 WINGS button only.
+   * @param {boolean} wingsOpening - the player already asked for the wings
+   */
+  _postStartLine(wingsOpening) {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
-      text: 'Arrays out, Cowboy. The radiator stays folded until she runs warm — she is yours.',
+      text: GestureHints.speak(wingsOpening ? HANDOVER_LINE_OPENING : HANDOVER_LINE),
       priority: 'info',
     });
   }
@@ -460,14 +504,13 @@ class OpeningDance {
 
   /**
    * The launch-driver duck-type PlayerSatellite reads for the ROSA roll-out.
+   * w4-power D2: the dance no longer rolls the ship's wings out — it reports
+   * them rolled up for its whole run (PlayerSatellite holds them at 0). The
+   * dance's own wing beats live on in progress(), which drives the menu hero.
    * @returns {{ wing1: number, wing2: number }}
    */
   getRosaProgress() {
-    // Read EVERY frame by PlayerSatellite._updateRosaPanels while the dance
-    // runs, so it derives the two scalars straight from the clock rather than
-    // building (and discarding) a whole progress snapshot per frame.
-    const t = this._t0Ms === null ? 0 : Math.max(0, this._t());
-    return { wing1: this._wing(OD.WING1_START_S, t), wing2: this._wing(OD.WING2_START_S, t) };
+    return SHIP_WINGS_ROLLED_UP;
   }
 
   /** @private one ROSA wing's 0..1 roll-out at dance time `t`. */
@@ -477,10 +520,11 @@ class OpeningDance {
 
   /**
    * Land `ship` on the finished pose WITHOUT playing anything: radiator CLOSED
-   * (REST_POSE, lock off), wings 1.0, daughter struts shut at α 0, dance
+   * (REST_POSE, lock off), wings rolled up (w4-power D2 — held at 0 until the
+   * player opens them), daughter struts shut at α 0, dance
    * unbound. EVERY path that does not run the dance calls this — CONTINUE,
    * GAMEOVER retry, reduced motion, flag off, the ?shot harness — so the ship
-   * is never seen packed (wings furled, lock armed) outside the dance. NOT
+   * is never seen with the launch lock armed outside the dance. NOT
    * flag-gated (with the flag off the ship still boots to this pose).
    * @param {object} ship - a PlayerSatellite
    */
@@ -507,14 +551,22 @@ class OpeningDance {
       if (typeof ship._updateFlower === 'function') ship._updateFlower(0);
     }
     if (typeof ship._setRosaWingProgress === 'function') {
-      ship._setRosaWingProgress(1, 1.0);
-      ship._setRosaWingProgress(2, 1.0);
+      ship._setRosaWingProgress(1, 0);
+      ship._setRosaWingProgress(2, 0);
     }
+    // w4-power D2: every path that starts or restarts play leaves both wings
+    // rolled up, the start furl held like a player hold (target 0).
     if (ship._rosaFurlProgress !== undefined) {
-      ship._rosaFurlProgress = 1.0;
-      ship._rosaFurlTarget = 1.0;
-      ship._rosaManualControl = false;
+      ship._rosaFurlProgress = 0;
+      ship._rosaFurlTarget = 0;
+      ship._rosaManualControl = true;
     }
+    // w4-power: a start that skipped the dance (CONTINUE, retry, reduced
+    // motion, flag off) begins at half battery, draining, wings rolled up — say
+    // so once, the same line the hand-over posts. Not in ?shot screenshot runs.
+    // A bare test-harness endState(stub) cannot be told apart from a real
+    // start (no marker on the ship), so it posts too.
+    if (!devShotGate.requested && !(ship._rosaFurlTarget >= 0.5)) this._postStartLine(false);
     // Daughters: shut at α 0 (DECISIONS §15 row 4 — the daughter docks at the
     // full closed strut position, §4). Every production caller has just run
     // armManager.reset(), which parks them at 0; this drops any stale slew

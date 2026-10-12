@@ -16,8 +16,8 @@ export const Constants = {
   // value; VERSION_LABEL is the exact string the UI renders (menu title tag,
   // and any other ES-module UI). NON-module consumers (e.g. sw.js cache name)
   // must be updated by hand — keep them in sync here.
-  VERSION: '0.9991',
-  VERSION_LABEL: 'V.9991',
+  VERSION: '0.9992',
+  VERSION_LABEL: 'V.9992',
 
   // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as
   // ?v=<DATA_VERSION>). Deliberately SEPARATE from VERSION: a curated-content
@@ -317,6 +317,9 @@ export const Constants = {
                                    // OCTOPUS_V5.CORE_BATTERY, both 600; equality pinned in
                                    // test-shop-effects). Was a 100 Wh 'simplified' placeholder
                                    // while the battery recharged from a bugged 8,166 W rate.
+  BATTERY_START_FRACTION: 0.5,    // w4-power D1 (owner 2026-10-12: "battery is 50% and dropping
+                                   // until wings open"): every boot — new game, retry, loaded save —
+                                   // starts at this fraction of the (rebased) max; saves carry no charge.
 
   // === SHIP HEAT (w2-heat, 2026-10-08) =======================================
   // DECISIONS §15 rows 2/4/5/6 + §2 rows 5–7: the ship heats up from what the
@@ -375,6 +378,57 @@ export const Constants = {
 
     // ── Power ledger smoothing (ResourceSystem.getPowerSnapshot) ──
     POWER_TAU_S: 0.5,           // real s — in/out watts are smoothed over ~0.5 s
+  },
+
+  // === HEATERS (w4-power D7, 2026-10-12 — the "what else" in the owner's list) ===
+  // Lithium cells must not get cold. Below HOLD_C the battery heaters draw the
+  // power that holds HOLD_C: what the lump radiates now, minus every other heat
+  // input, plus a pull toward HOLD_C (C/PULL_S W per K) — continuous, so it
+  // fades out within ~1 K above HOLD_C instead of switching (ThermalSystem
+  // _updateHeater). Billed through the battery like a motor, so its heat is
+  // what warms the ship. No auto-close (owner ruling 2026-10-09): the comms
+  // line tells the player that folding the radiator saves the power.
+  HEATER: {
+    ENABLED: true,              // the one-line veto
+    HOLD_C: 0,                  // °C — lithium-ion charge floor (cells must stay above freezing)
+    // Measured from the model (SHIP_HEAT constants, w4-power probe): radiator
+    // at 180° (openFrac 1, A_eff 8.42 m²), eclipse (no SUN_HULL_W), base load
+    // 500 W: σ·ε·A_eff·(273.15⁴ − 220⁴) = 1308.5 W radiated at 0 °C, minus
+    // 500 W = 808.5 W → rounded up to 810 W. test-PowerCosts recomputes it.
+    MAX_W: 810,
+    PULL_S: 20,                 // battery-clock s — how hard the hold pulls back to HOLD_C
+    LINE_AFTER_S: 10,           // game s of heater running before the comms line
+    LINE_EVERY_S: 300,          // at most one heater line per 5 min of game time
+  },
+
+  // === MOTOR DRAW (w4-power D5, 2026-10-12 — owner: "adjusting wings and
+  // open/closing costs battery and thermals … 8 motors on strut cost energy
+  // and thermals. Reel on mother costs") ======================================
+  // The ONE table of what each motor draws while it moves. Billed in that
+  // motor's per-frame motion step, only on frames it actually moves, through
+  // ResourceSystem.billWatts (W ÷ SHIP_HEAT.W_PER_UNIT_S × dt battery units —
+  // the base load's own conversion), so a 15 W motor shows +15 W on the meter
+  // and its heat follows through the ledger. Held frames bill nothing. Sized
+  // physically (Ruling 0) — never inflated for feel. Sources: NASA Small
+  // Spacecraft State of the Art 2026, ch. 6 Table 6-5 "Commercial Actuator
+  // Mechanisms" (https://www.nasa.gov/smallsat-institute/sst-soa/structures-materials-and-mechanisms/).
+  MOTOR_DRAW_W: {
+    STRUT_HINGE: 15,            // ×4 strut hinge motor boxes (StrutMotorBox_) — a geared rotary drive
+                                // swinging a strut + daughter: Moog Type 2 SADM 15 W (Table 6-5)
+    WING_DRUM: 13,              // ×2 wing roll-out drums — geared motor: Comat SADM-1500 13 W (Table 6-5)
+    WING_DRIVE: 5,              // ×2 wing tilt / sun-tracking drives — DHV SADA-M 5 W nominal (Table 6-5)
+    RADIATOR_HINGE: 4,          // ×4 radiator hinge drives (one per strut, they swing in unison) —
+                                // Comat SADM-400 4 W geared motor (Table 6-5)
+    CROSSBOW_RELOAD: 15,        // daughter spring-reload worm gear — the game's own CROSSBOW_RELOAD_POWER
+    // Reels bill the real mechanical power, line tension × line speed ÷ REEL_EFFICIENCY,
+    // floored at their own 15 W motor constant while turning, capped at HAUL_MOTOR_POWER.
+    STRUT_REEL_MIN: 15,         // ×4 strut reel cartridges (ReelCartridge_) = the daughter tether
+                                // reel — the game's own OCTOPUS_V5.REEL.MOTOR_POWER_W
+    MOTHER_REEL_MIN: 15,        // the mother's net reel and lasso reel — the game's own TETHER_REEL_POWER
+    REEL_MAX: 2500,             // the game's own REEL_PROFILE.HAUL_MOTOR_POWER (it sets the cruise speed)
+    REEL_EFFICIENCY: 0.5,       // estimate: geared DC motor ~0.7 × gearbox + spool ~0.7
+    MOVE_MIN_DEG_S: 0.1,        // a hinge / tilt drive turning slower than this is holding, not moving
+                                // (a tracker's sub-0.1°/s creep after it has caught the sun bills nothing)
   },
 
   SOLAR_PANEL_EFFICIENCY: 0.30,   // 30% efficient cells
@@ -2614,8 +2668,9 @@ export const Constants = {
   REEL_IN_SPEED_EMPTY: 2.0,              // m/s — reel-in speed unloaded (game-scale)
   REEL_IN_SPEED_LOADED: 4.0,             // m/s — reel-in speed with captured debris (POLISH: bumped from 1.4 for snappier retrieval)
   // Register item 76(c) (2026-08-17): REEL_MOTOR_POWER (was 25 W) removed —
-  // import-only, zero reads; no reel-motor power draw is modelled (reload
-  // energy bills through CROSSBOW_RELOAD_POWER). The reel's live rows
+  // import-only, zero reads. Reel and reload power bill through MOTOR_DRAW_W
+  // since w4-power D5 (ArmUnit reload: CROSSBOW_RELOAD_POWER; the reels:
+  // tension × speed ÷ efficiency). The reel's live rows
   // surround this note: the speeds above, the brake/tension rows below.
   REEL_BRAKE_FORCE_MAX: 500,             // N — maximum magnetic clutch brake force
   REEL_TENSION_WARNING: 0.7,             // fraction of break strength → yellow HUD
@@ -2689,6 +2744,12 @@ export const Constants = {
     // drawn watt ends as heat (ThermalSystem). Read by SensorSystem.getScanCost.
     COST_MULT: 1,             // the one upgrade lever (later rounds; no shop item yet)
     SWEEP_SHARE: 1 / 3,       // the sweep's share; the computer's analysis is the rest
+    // w4-power D6 (owner 2026-10-12: "first scan should hit thermals and battery
+    // harder"): with no tracks yet the first scan of every boot searches the
+    // whole sky, so it costs at least the wide scan's energy whatever scan is
+    // pressed (× COST_MULT; the normal sweep / analysis split, the analysis over
+    // WIDE.ANALYSIS_S). Later scans pay their own cost. Not persisted.
+    COLD_SEARCH_WH: 90,
     QUICK: {
       DURATION: 0.3,          // seconds to complete quick scan (fast S→reward feedback)
       COOLDOWN: 5.0,          // seconds between quick scans (raised from 3.0 — anti-spam)

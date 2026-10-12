@@ -24,7 +24,7 @@ import { prefersReducedMotion } from './hudPulse.js';
 import { mono } from '../core/Typeface.js';
 import { HUD_EDGE_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
 import { createFooterChip } from './hud/FooterChip.js';
-import { isMarked } from '../systems/AutoLockController.js';
+import { isMarked } from '../systems/ScanMarks.js';
 
 // ============================================================================
 // CONFIGURATION

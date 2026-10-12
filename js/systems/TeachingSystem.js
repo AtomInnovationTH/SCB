@@ -146,7 +146,9 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_scan',
     title: 'Quick Scan',
-    body: 'Quick Scan reveals nearby debris. Press Shift+S for a Wide Scan to find targets at longer range.',
+    // w4-power D6: the first scan of a boot is a whole-sky search priced like a
+    // wide scan (SensorSystem cold search) — said here, in plain words.
+    body: 'The first scan searches the whole sky, so it costs as much power and heat as a Wide Scan. After that, Quick Scan reveals nearby debris; Shift+S runs a Wide Scan for longer range.',
     duration: 7000,
     icon: 'SCAN',
   },

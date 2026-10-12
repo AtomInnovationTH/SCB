@@ -21,7 +21,7 @@ import { orbitToSceneCartesian, orbitToSceneCartesianInto, keplerianToCartesian,
 import { calmBreathe, finitePulse, prefersReducedMotion } from './hudPulse.js';
 import { classify } from './hud/TargetColorLaw.js';
 import { mono } from '../core/Typeface.js';
-import { isMarked } from '../systems/AutoLockController.js';
+import { isMarked } from '../systems/ScanMarks.js';
 
 // ============================================================================
 // CONFIGURATION

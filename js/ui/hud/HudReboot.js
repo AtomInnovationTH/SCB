@@ -87,7 +87,7 @@ export const REBOOT_CHROME_IDS = Object.freeze([
 ]);
 
 /** These return LAST, in this order, `LAST_GAP_MS` after their slot. */
-export const REBOOT_LAST_IDS = Object.freeze(['hud-override-pane']);
+export const REBOOT_LAST_IDS = Object.freeze(['hud-override-pane', 'hud-f1-bar']);
 
 /** Never touched: the pause overlay and the gag's own DOM (the veil, the numerals, the vignette). */
 export const REBOOT_SKIP_IDS = Object.freeze([

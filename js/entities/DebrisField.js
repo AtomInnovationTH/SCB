@@ -1915,13 +1915,12 @@ export class DebrisField {
       // source of the "only 1 target visible" bug — it used a *static*
       // startSma proxy and would sometimes pick a catalog debris that the
       // M1 enforcement (just below) immediately killed, leaving zero
-      // discovered welcome debris. `_spawnWelcomeField` pre-discovers the
-      // two pinned pieces directly instead (see its own comment; #3–#7 wait
-      // for the S-scan). 2026-08-15 (register item 52): the dead definition
-      // deleted — grep- AND git-proven (zero reads repo-wide; no call in
-      // tracked history). The live discovery channels are the welcome
-      // pre-discovery, SensorSystem's scan reveal, and the authored cast's
-      // tracked/pre-discovered flags.
+      // discovered welcome debris. `_spawnWelcomeField` starts all seven pieces
+      // undiscovered (see its own comment); the S-scan reveals them.
+      // 2026-08-15 (register item 52): the dead definition deleted — grep- AND
+      // git-proven (zero reads repo-wide; no call in tracked history). The live
+      // discovery channels are SensorSystem's scan reveal and the authored
+      // cast's tracked/pre-discovered flags.
     }
 
     // ── Mission-1 cluster enforcement (runs AFTER welcome field is placed) ──

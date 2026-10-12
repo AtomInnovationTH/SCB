@@ -19,6 +19,10 @@
  * frames call skipHeld() so battery billed meanwhile never heats the ship.
  * Reset with the battery (ResourceSystem.reset()/restore() call reset()).
  *
+ * w4-power D7 (2026-10-12): below HEATER.HOLD_C (0 °C) the battery heaters
+ * draw what holds it (capped at HEATER.MAX_W), billed through the battery, so
+ * an open radiator in the cold costs power — `_updateHeater`.
+ *
  * Speaks only through Events.COMMS_MESSAGE (sender 'THERMAL'). The auto
  * radiator calls player.setFlowerPose() ONLY — it never emits
  * THERMAL_FLOWER_INPUT (that event means "the player commanded the radiator";
@@ -32,6 +36,7 @@
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { GestureHints } from '../ui/hud/GestureHints.js';
 
 /** Stefan–Boltzmann constant, W/(m²·K⁴). */
 export const SIGMA = 5.670374419e-8;
@@ -64,6 +69,14 @@ export class ThermalSystem {
     this._autoOpened = false;
     /** @private clock time of the last player radiator command */
     this._lastPlayerCmdS = -Infinity;
+    /** w4-power D7: the heater's draw this tick, W (0 when warm / disabled) */
+    this.heaterW = 0;
+    /** @private battery units the heater billed since the last tick (taken out of "other heat in") */
+    this._heaterUnits = 0;
+    /** @private play seconds (this._clockS — held and paused frames excluded) the heater has run since the last line */
+    this._heaterRunGameS = 0;
+    /** @private this._clockS at the last heater line */
+    this._heaterLineAtS = -Infinity;
 
     this._onPlayerCmd = () => {
       this._lastPlayerCmdS = this._clockS;
@@ -135,17 +148,27 @@ export class ThermalSystem {
     const before = this.tempC;
 
     // Heat in: every battery unit drawn since the last tick (drawn watts end
-    // as heat — D3), plus the sun on the hull in daylight.
+    // as heat — D3), plus the sun on the hull in daylight. The heater's own
+    // draw (billed at the end of the last tick) is in `d` too — its heat is
+    // what warms the ship — but it is NOT "other heat in" for its controller.
     let qInJ = 0;
+    let otherJ = 0;
     const rs = this._rs;
     if (rs && typeof rs.getEnergyDrawnUnits === 'function') {
       const total = rs.getEnergyDrawnUnits();
       const d = total - this._lastDrawnUnits;
       this._lastDrawnUnits = total;
-      if (d > 0) qInJ += d * SH.UNIT_J;
+      if (d > 0) {
+        qInJ += d * SH.UNIT_J;
+        otherJ += Math.max(0, d - this._heaterUnits) * SH.UNIT_J;
+      }
     }
+    this._heaterUnits = 0;
     const clockS = dt * (SH.UNIT_J / SH.W_PER_UNIT_S);   // battery-clock seconds
-    if (!this._inShadow()) qInJ += SH.SUN_HULL_W * clockS;
+    if (!this._inShadow()) {
+      qInJ += SH.SUN_HULL_W * clockS;
+      otherJ += SH.SUN_HULL_W * clockS;
+    }
 
     // Integrate (explicit, sub-stepped: τ ≥ ~200 battery-clock s, steps ≤ 2 s).
     const openFrac = this._openFrac();
@@ -163,6 +186,50 @@ export class ThermalSystem {
 
     this._updateLines(openFrac);
     this._updateAutoRadiator(dt, openFrac);
+    this._updateHeater(dt, openFrac, clockS > 0 ? otherJ / clockS : 0);
+  }
+
+  /**
+   * w4-power D7 — the battery heaters (Constants.HEATER). Below HOLD_C they
+   * draw what holds HOLD_C: the power the lump radiates now, minus every other
+   * heat input (`otherW` — electrical draw + sun), plus a pull C/PULL_S W per K
+   * toward HOLD_C. That is continuous through HOLD_C (it fades to 0 within
+   * ~1 K above it), so there is no on/off flicker, and when uncapped the lump
+   * settles at exactly HOLD_C. Capped at MAX_W; billed through the battery
+   * (ResourceSystem.billWatts) so its heat arrives through the ledger next
+   * tick. One comms line after LINE_AFTER_S of running, at most once per
+   * LINE_EVERY_S. No auto-close (owner ruling 2026-10-09).
+   * @param {number} dt - real seconds
+   * @param {number} openFrac
+   * @param {number} otherW - non-heater heat in this tick, W
+   * @returns {number} the heater's watts this tick
+   * @private
+   */
+  _updateHeater(dt, openFrac, otherW) {
+    const H = Constants.HEATER;
+    const SH = Constants.SHIP_HEAT;
+    let w = 0;
+    if (H && H.ENABLED && this.tempC < H.HOLD_C + 2) {
+      const pullWPerK = SH.HEAT_CAPACITY_J_PER_K / Math.max(1e-3, H.PULL_S);
+      w = this.radiatedW(this.tempC, openFrac) - otherW + pullWPerK * (H.HOLD_C - this.tempC);
+      w = Math.max(0, Math.min(H.MAX_W, w));
+    }
+    this.heaterW = w;
+    if (!(w > 0)) return 0;
+    const rs = this._rs;
+    if (rs && typeof rs.billWatts === 'function') this._heaterUnits += rs.billWatts(w, dt);
+    else if (rs && typeof rs.drawUpTo === 'function') {
+      this._heaterUnits += rs.drawUpTo('battery', (w / SH.W_PER_UNIT_S) * dt);
+    }
+    // The line: 10 s of running, at most once per 5 min of play.
+    this._heaterRunGameS += dt;
+    if (this._heaterRunGameS >= H.LINE_AFTER_S
+        && this._clockS - this._heaterLineAtS >= H.LINE_EVERY_S) {
+      this._heaterLineAtS = this._clockS;
+      this._heaterRunGameS = 0;
+      this._say(`Ship cold — battery heaters on, ${Math.round(w)} W. Folding the radiator saves the power.`, 'info');
+    }
+    return w;
   }
 
   /**
@@ -209,6 +276,10 @@ export class ThermalSystem {
     this._autoOpened = false;
     this._lastPlayerCmdS = -Infinity;
     this._clockS = 0;
+    this.heaterW = 0;
+    this._heaterUnits = 0;
+    this._heaterRunGameS = 0;
+    this._heaterLineAtS = -Infinity;
     const rs = this._rs;
     this._lastDrawnUnits = (rs && typeof rs.getEnergyDrawnUnits === 'function')
       ? rs.getEnergyDrawnUnits() : 0;
@@ -291,10 +362,12 @@ export class ThermalSystem {
    * @private One THERMAL comms line. Warnings carry `_critical` (the
    * low-battery/xenon pattern) so they pass the onboarding suppression tier —
    * mission 1 must hear them (§15 row 6), and a radiator that opens by itself
-   * must say why.
+   * must say why. w4-power D3: the text goes through GestureHints.speak, so
+   * on glass "Press O" reads "Tap RADIATORS on floor 1" (the comms panel does
+   * not rewrite key words itself); off glass speak returns the same string.
    */
   _say(text, priority) {
-    const msg = { sender: 'THERMAL', text, priority };
+    const msg = { sender: 'THERMAL', text: GestureHints.speak(text), priority };
     if (priority === 'warning') msg._critical = true;
     eventBus.emit(Events.COMMS_MESSAGE, msg);
   }

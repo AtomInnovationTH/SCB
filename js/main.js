@@ -722,6 +722,7 @@ let _ladderLevelingPrev = false;
 // per-frame block writes the attribute ONLY on change (G1). null = no
 // attribute (menu / pause → menu / ?ladder=0 → the stamp shows).
 let _ladderFloorAttr = null;
+let _vitalsUnderDrawer = false;   // w4-power D4: the meters hide under the open F1 drawer (last written)
 
 // Zoom Ladder F6 (NAVCOM) floor content orchestrator (S5). Constructed in the
 // ladder block, injected into LadderController (activates/ticks on F6), and
@@ -6687,6 +6688,10 @@ function gameLoop(timestamp) {
       if (_floorAttr) document.body.setAttribute('data-ladder-floor', _floorAttr);
       else document.body.removeAttribute('data-ladder-floor');
     }
+    const _hideVitals = _floorAttr === '1' && !!(workbenchPane && workbenchPane.isOpen && workbenchPane.isOpen());
+    if (_hideVitals !== _vitalsUnderDrawer) {   // write-on-change; the drawer covers the meters only on F1 (w4-power D4, measured)
+      _vitalsUnderDrawer = _hideVitals; const _vEl = document.getElementById('hud-vitals'); if (_vEl) _vEl.style.visibility = _hideVitals ? 'hidden' : '';
+    }
   }
   // Session P (plan D5): the DETAIL slider follows the live visible count
   // (≤ 4 Hz inside; a pane-flip edge forces it at once through the listener in
@@ -7251,7 +7256,7 @@ function gameLoop(timestamp) {
     // here has no behavioural effect.
 
     // Menu/briefing/shop states — still animate scene slowly
-    try { player.update(dt * 0.1, sunDir); } catch (e) { console.error('[GameLoop] player.update (bg):', e); }
+    try { player.update(dt * 0.1, sunDir, undefined, true); /* true: no motor billing off-play (w4-power) */ } catch (e) { console.error('[GameLoop] player.update (bg):', e); }
     try { debrisField.update(dt * 0.1); } catch (e) { console.error('[GameLoop] debrisField (bg):', e); }
     try { activeSatellites.update(dt * 0.1); } catch (e) { console.error('[GameLoop] activeSats (bg):', e); }
     if (armManager) { try { armManager.update(dt * 0.1); } catch (e) { console.error('[GameLoop] armManager (bg):', e); } }

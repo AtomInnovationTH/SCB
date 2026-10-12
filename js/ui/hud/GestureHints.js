@@ -73,16 +73,30 @@ const TABLE = Object.freeze({
   KeyB:   Object.freeze({ chip: 'SWIPE ← SPECS',  phrase: 'swipe in from the right edge for SPECS' }),
   Space:  Object.freeze({ chip: 'HOLD → ACT',     phrase: 'hold to act' }),
   Escape: Object.freeze({ chip: 'SWIPE → CLOSE',  phrase: 'swipe the drawer closed' }),
+  // w4-power D3 (2026-10-12): the two floor-1 workbench buttons the comms lines
+  // name — the wings (`,`) and the radiator (O). On glass they are the F1 bar's
+  // WINGS and RADIATORS buttons (pinch down to floor 1).
+  Comma:  Object.freeze({ chip: 'FLOOR 1 → WINGS',      phrase: 'tap WINGS on floor 1' }),
+  KeyO:   Object.freeze({ chip: 'FLOOR 1 → RADIATORS',  phrase: 'tap RADIATORS on floor 1' }),
 });
 
 /** The module switch. OFF by default — desktop never consults the table. */
 let _glass = false;
 
-// The three prose token shapes. Each captures the ONE capital letter; the
-// replacer keeps the original token when `Key<letter>` has no table row.
-const RE_BRACKET = /\[([A-Z])\]/g;
-const RE_PAREN   = /\(([A-Z])\)/g;
-const RE_PRESS   = /\b([Pp])ress ([A-Z])\b/g;
+// The three prose token shapes. Each captures the ONE key — a capital letter
+// or (w4-power D3) a comma; the replacer keeps the original token when the
+// key has no table row. A Press token also captures a trailing " to <verb>"
+// so a phrase that already ends with it does not say it twice (D3: "Press S
+// to scan" → "Tap empty space to scan", not "… to scan to scan").
+const RE_BRACKET = /\[([A-Z,])\]/g;
+const RE_PAREN   = /\(([A-Z,])\)/g;
+const RE_PRESS   = /\b([Pp])ress (?:([A-Z])\b|(,)(?: \(the comma key\))?(?=\s|$))( to [a-z]+\b)?/g;
+
+/** @private `S` → 'KeyS', `,` → 'Comma'. */
+function rowFor(ch) { return TABLE[ch === ',' ? 'Comma' : 'Key' + ch]; }
+
+/** @private escape a literal for a RegExp. */
+function reEscape(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 export class GestureHints {
   /** @returns {Readonly<Record<string, Readonly<GestureRow>>>} the frozen table */
@@ -100,7 +114,7 @@ export class GestureHints {
 
   /**
    * Bring a hint's `keys[]` entry to the table's key-code spelling.
-   *   'KeyN' → 'KeyN'   'N' / 'n' → 'KeyN'   '7' → 'Digit7'   anything else unchanged.
+   *   'KeyN' → 'KeyN'   'N' / 'n' → 'KeyN'   '7' → 'Digit7'   ',' → 'Comma'   anything else unchanged.
    * @param {*} k
    * @returns {string}
    */
@@ -109,6 +123,7 @@ export class GestureHints {
     if (s.length === 1) {
       if (/[A-Za-z]/.test(s)) return 'Key' + s.toUpperCase();
       if (/[0-9]/.test(s)) return 'Digit' + s;
+      if (s === ',') return 'Comma';
     }
     return s;
   }
@@ -136,26 +151,42 @@ export class GestureHints {
    * the SAME instance comes back — the presenter's `decorateGlossary` sees the
    * identical string. ON glass see the module header for the grammar.
    * Idempotent: `speak(speak(t)) === speak(t)`.
+   *
+   * w4-power D3 — two doubles are dropped, as general rules: a " to <verb>"
+   * right after a Press token that its phrase already ends with, and a
+   * " or [word] <object>" right after a phrase that names the same button
+   * (object = the phrase minus its verb: "Press , or WINGS on floor 1" →
+   * "Tap WINGS on floor 1").
    * @param {string} text
    * @returns {string}
    */
   static speak(text) {
     if (!_glass || typeof text !== 'string') return text;
-    return text
-      .replace(RE_BRACKET, (tok, letter) => {
-        const row = TABLE['Key' + letter];
+    const used = [];
+    let out = text
+      .replace(RE_BRACKET, (tok, key) => {
+        const row = rowFor(key);
         return row ? '[' + row.chip + ']' : tok;
       })
-      .replace(RE_PAREN, (tok, letter) => {
-        const row = TABLE['Key' + letter];
+      .replace(RE_PAREN, (tok, key) => {
+        const row = rowFor(key);
         return row ? '(' + row.chip + ')' : tok;
       })
-      .replace(RE_PRESS, (tok, p, letter) => {
-        const row = TABLE['Key' + letter];
+      .replace(RE_PRESS, (tok, p, letter, comma, toVerb) => {
+        const row = rowFor(letter || comma);
         if (!row) return tok;
+        used.push(row.phrase);
         // The phrase takes the verb's case: "Press N" opens a sentence.
-        return p === 'P' ? row.phrase.charAt(0).toUpperCase() + row.phrase.slice(1) : row.phrase;
+        let phrase = p === 'P' ? row.phrase.charAt(0).toUpperCase() + row.phrase.slice(1) : row.phrase;
+        if (toVerb && !(' ' + row.phrase).endsWith(toVerb)) phrase += toVerb;
+        return phrase;
       });
+    for (const ph of used) {
+      const obj = ph.slice(ph.indexOf(' ') + 1);
+      const re = new RegExp('(' + reEscape(ph) + ') or (?:[A-Za-z]+ )?' + reEscape(obj) + '(?!\\w)', 'gi');
+      out = out.replace(re, '$1');
+    }
+    return out;
   }
 }
 

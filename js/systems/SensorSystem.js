@@ -122,6 +122,8 @@ export class SensorSystem {
     this._resourceSystem = null;
     /** @type {Array<{remaining:number, rate:number}>} the computer's analysis loads still running */
     this._analysisJobs = [];
+    /** w4-power D6: true once this boot's first (cold, whole-sky) search has been paid. Not persisted. */
+    this._coldSearchDone = false;
 
     // Listen for weather effects (suppressed until scan skill discovered)
     eventBus.on(Events.WEATHER_ACTIVE, (effects) => {
@@ -136,6 +138,7 @@ export class SensorSystem {
       this._scanCreditsTotal = 0;
       this._rewardedFields.clear();
       this._analysisJobs.length = 0;   // w2-heat: a retry does not inherit a running analysis
+      this._coldSearchDone = false;    // w4-power D6: every start has no tracks yet
     });
 
     this._setupListeners();
@@ -289,25 +292,35 @@ export class SensorSystem {
    * bigger bought battery makes a scan relatively cheaper) × SCAN.COST_MULT.
    * SWEEP_SHARE of it is the sweep, paid the instant the scan starts; the rest
    * is the onboard computer's analysis, a steady load over ANALYSIS_S real s.
+   * w4-power D6: `opts.cold` prices the first scan of a boot — a whole-sky
+   * search with no tracks yet: at least SCAN.COLD_SEARCH_WH × COST_MULT (the
+   * wide scan's energy), the same sweep share, the analysis over the longer of
+   * the pressed scan's and the wide scan's ANALYSIS_S.
    * @param {'quick'|'wide'} type
+   * @param {{ cold?: boolean }} [opts]
    * @returns {{ total:number, sweep:number, analysis:number, analysisS:number, analysisW:number }}
    */
-  getScanCost(type) {
+  getScanCost(type, opts) {
     const S = Constants.SCAN;
     const cfg = type === 'quick' ? S.QUICK : S.WIDE;
     const mult = Number.isFinite(S.COST_MULT) ? Math.max(0, S.COST_MULT) : 1;
-    const total = (cfg.POWER_COST || 0) * Constants.BATTERY_MAX * mult;
+    let total = (cfg.POWER_COST || 0) * Constants.BATTERY_MAX * mult;
+    let analysisS = Math.max(0.1, cfg.ANALYSIS_S || 1);
+    if (opts && opts.cold) {
+      total = Math.max(total, (S.COLD_SEARCH_WH || 0) * mult);
+      analysisS = Math.max(analysisS, (S.WIDE && S.WIDE.ANALYSIS_S) || 0);
+    }
     const share = Number.isFinite(S.SWEEP_SHARE) ? Math.max(0, Math.min(1, S.SWEEP_SHARE)) : 1 / 3;
     const sweep = total * share;
     const analysis = total - sweep;
-    const analysisS = Math.max(0.1, cfg.ANALYSIS_S || 1);
     const wPerUnitS = (Constants.SHIP_HEAT && Constants.SHIP_HEAT.W_PER_UNIT_S) || 1000;
     return { total, sweep, analysis, analysisS, analysisW: (analysis / analysisS) * wPerUnitS };
   }
 
   /**
    * Pay a scan's sweep now and queue its analysis load. Refuses (with the
-   * reactive comms line) when the battery cannot pay the sweep.
+   * reactive comms line) when the battery cannot pay the sweep. The first
+   * paid scan of a boot is the cold search (w4-power D6 — getScanCost cold).
    * @param {'quick'|'wide'} type
    * @returns {boolean} true when the scan may start
    * @private
@@ -315,7 +328,8 @@ export class SensorSystem {
   _payScan(type) {
     const rs = this._resourceSystem;
     if (!rs) return true;   // unwired (menu hero, unit tests): free, as before
-    const cost = this.getScanCost(type);
+    const cold = !this._coldSearchDone;
+    const cost = this.getScanCost(type, { cold });
     if (cost.total <= 0) return true;
     if (!rs.canAfford('battery', cost.sweep)) {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -327,6 +341,7 @@ export class SensorSystem {
       return false;
     }
     rs.consume('battery', cost.sweep);
+    this._coldSearchDone = true;
     if (cost.analysis > 0) {
       this._analysisJobs.push({ remaining: cost.analysis, rate: cost.analysis / cost.analysisS });
     }

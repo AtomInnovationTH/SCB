@@ -589,6 +589,9 @@ export class HUD {
          * update loop, so a density-hidden pane cannot be resurrected by those
          * paths — only the ladder (+) or the pane's own toggle (7/8/9/0) clears it. */
         [data-density-hidden] { display: none !important; }
+        /* DAUGHTERS pane waits for the struts (owner 2026-10-12): hidden until the
+         * struts first open this boot (HUD._tickArmsGate), whatever the floor. */
+        [data-arms-wait] { display: none !important; }
         /* Layout-hidden left-arm riders (LeftStack). Never the density bit. */
         [data-stack-hidden] { display: none !important; }
         #hud-pin-widget, #hud-right-column {
@@ -1116,7 +1119,8 @@ export class HUD {
    */
   _densityIsVisible(el) {
     if (!el) return false;
-    if (el.hasAttribute && (el.hasAttribute('data-density-hidden') || el.hasAttribute('data-density-leaving'))) {
+    if (el.hasAttribute && (el.hasAttribute('data-density-hidden') || el.hasAttribute('data-density-leaving')
+      || el.hasAttribute('data-arms-wait'))) {
       return false;
     }
     // Layout-hidden is not a density hide — LeftStack must be able to un-hide.
@@ -1839,10 +1843,44 @@ export class HUD {
    */
   setArmManager(armManager) {
     this._armManager = armManager;
+    this._armsGateOpen = false;      // re-armed with each manager (every boot starts with the struts shut)
+    this._armsGateOn(!!armManager);
+    this._tickArmsGate();
     this.statusPanel.setArmManager(armManager);
     this.targetPanel.setArmManager(armManager);
     // (commsPanel.setArmManager removed — dead store after RadialMenu deletion)
     if (this.netInventoryPanel) this.netInventoryPanel.setArmManager(armManager);
+  }
+
+  /**
+   * The DAUGHTERS pane waits for the struts (owner 2026-10-12): `#hud-arms-panel`
+   * carries `data-arms-wait` (a `display:none !important` rule, so it beats the
+   * forced `display=''`, the floor mask and the density ladder alike) until the
+   * struts first open — or any daughter leaves the dock — then the gate latches
+   * open for the rest of the boot. It only ever hides: the floor mask still
+   * decides gone / shown / faint on top. Polled from the 10 Hz block of update();
+   * does nothing without an arm manager (menu, test rigs).
+   * @private
+   */
+  _tickArmsGate() {
+    const am = this._armManager;
+    if (!am || this._armsGateOpen) return;
+    let open = false;
+    try {
+      open = (typeof am.strutsDeployed === 'function' && am.strutsDeployed() === true)
+        || (Array.isArray(am.arms) && am.arms.some((a) => a && a.state !== Constants.ARM_STATES.DOCKED));
+    } catch (_e) { open = false; }
+    if (!open) return;
+    this._armsGateOpen = true;
+    this._armsGateOn(false);
+  }
+
+  /** @private Set / clear the wait attribute on the DAUGHTERS pane. */
+  _armsGateOn(on) {
+    const el = this.panels && this.panels.arms;
+    if (!el || !el.setAttribute) return;
+    if (on) el.setAttribute('data-arms-wait', '');
+    else if (el.removeAttribute) el.removeAttribute('data-arms-wait');
   }
 
   /**
@@ -2091,6 +2129,7 @@ export class HUD {
       });
       // W2 meters: the four vitals rows (self-throttled to 10 Hz, write-on-change).
       if (this.vitalsPane) this.vitalsPane.update(player);
+      this._tickArmsGate();      // DAUGHTERS pane waits for the struts
 
       // V5: STABILIZE warning when angular velocity too high for crossbow fire
       if (player.isCrossbowFireSafe && !player.isCrossbowFireSafe()) {

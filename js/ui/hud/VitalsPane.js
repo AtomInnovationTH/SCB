@@ -20,7 +20,9 @@
  *            capacity inside 0.5 s, the dropped chunk lights up bright at the
  *            end of the fill and fades over 0.8 s, so the player sees what an
  *            action cost. Source: `getPowerSnapshot()`, falling back to the
- *            plain `player.resources` copy.
+ *            plain `player.resources` copy. Under it, its power line
+ *            (w4-power D4): `in 1725 W · out 500 W` — `in` this frame's
+ *            generation unsmoothed (`genW`), `out` the ledger's draw.
  *   GAS      cold gas, kg left; amber < 25 %, red < 10 %; the same cost flash
  *            for any spend of >= 0.05 kg inside 0.5 s.
  *   ION      the ion propellant, kg left (the slow fuel); amber < 15 %. The bar
@@ -29,7 +31,7 @@
  *
  * Contract with the ResourceSystem (w2-heat; both are OPTIONAL — every method
  * is probed with `?.` and a missing one falls back, never throws):
- *   getPowerSnapshot()   -> { battery, batteryMax, inW, outW, netW }
+ *   getPowerSnapshot()   -> { battery, batteryMax, inW, outW, netW, genW }
  *   getThermalSnapshot() -> { tempC, band, trend: -1|0|1, autoOpened } | null
  * No thermal snapshot -> HEAT reads `—` in grey, bar empty. The band is
  * derived from `tempC` here (not read from the snapshot) so the fill colour,
@@ -67,8 +69,9 @@ export const VITALS_LABELS = Object.freeze({ heat: 'HEAT', battery: 'BATTERY', g
 
 /**
  * VITALS_GEOMETRY — the pane's numbers (CSS px). The pane is 240 wide with
- * 18 px rows: 2 border + 2 x 5 padding + 4 x 18 + 3 x 3 gap = 93 px, so it adds
- * 93 + the column's 10 px gap to the left column.
+ * 18 px rows: 2 border + 2 x 5 padding + 4 x 18 + 3 x 3 gap = 93 px, plus the
+ * BATTERY row's power line (w4-power D4: FLOW_PX + one more GAP_PX = 14 px),
+ * so 107 px; it adds that + the column's 10 px gap to the left column.
  */
 export const VITALS_GEOMETRY = Object.freeze({
   WIDTH_PX: 240,
@@ -79,6 +82,7 @@ export const VITALS_GEOMETRY = Object.freeze({
   LABEL_PX: 50,
   VALUE_PX: 48,
   TRACK_PX: 8,
+  FLOW_PX: 11,
 });
 
 /**
@@ -164,6 +168,18 @@ export function fmtRate(netW) {
   const up = netW > 0;
   const body = abs < 999.5 ? `${Math.round(abs)} W` : `${(abs / 1000).toFixed(1)} kW`;
   return { text: `${up ? DOT_UP : DOT_DOWN} ${up ? '+' : MINUS}${body}`, dir: up ? 'up' : 'down' };
+}
+
+/**
+ * w4-power D4: the BATTERY power line — `in 1725 W · out 500 W`, whole watts,
+ * both always shown (a negative or non-finite reading reads 0).
+ * @param {number} inW
+ * @param {number} outW
+ * @returns {string}
+ */
+export function fmtFlow(inW, outW) {
+  const w = (v) => `${Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0} W`;
+  return `in ${w(inW)} · out ${w(outW)}`;
 }
 /** `18.2 kg`; 100 kg and over read without a decimal so the value column never overflows. */
 export function fmtKg(kg) {
@@ -258,6 +274,9 @@ export class VitalsPane {
     this._now = typeof deps.now === 'function' ? deps.now : defaultNow;
     this._root = null;
     this._row = {};              // key -> { el, fill, flash, value, rate, tag, st }
+    /** w4-power D4: the BATTERY power line (`in … W · out … W`) and its element */
+    this._flowText = '';
+    this._flowEl = null;
     this._lastMs = null;
     this._detect = { battery: new CostFlash(), gas: new CostFlash() };
     this._prev = { battery: { t: NaN, v: NaN }, gas: { t: NaN, v: NaN } };
@@ -312,6 +331,9 @@ export class VitalsPane {
     return parts.join(' ');
   }
 
+  /** w4-power D4: the BATTERY power line, e.g. `in 1725 W · out 500 W` ('' with no power snapshot). */
+  flowText() { return this._flowText; }
+
   /** The row's current band ('green' | 'yellow' | 'red' | 'none'). */
   band(key) { const r = this._row[key]; return r ? r.st.band : 'none'; }
 
@@ -365,6 +387,7 @@ export class VitalsPane {
     }
     if (!(max > 0)) {
       this._write(r, { band: 'none', fill: '0%', value: DASH, rate: '', rateDir: '' });
+      this._writeFlow(power);
       return;
     }
     const frac = clamp01(level / max);
@@ -376,7 +399,33 @@ export class VitalsPane {
       rate: rate.text,
       rateDir: rate.dir,
     });
+    this._writeFlow(power);
     this._cost('battery', t, level, max, VITALS_LAW.FLASH_BATT_FRAC * max, VITALS_LAW.FLASH_EXTEND_BATT_FRAC_PER_S * max);
+  }
+
+  /**
+   * @private w4-power D4 (owner 2026-10-12: "rotating mother should show
+   * immediate drop in power-in"): the power line under BATTERY — `in` is this
+   * frame's generation, unsmoothed (getPowerSnapshot().genW, the rate
+   * PlayerSatellite._updateSolarPower writes), so a turn away from the sun
+   * shows at the next 10 Hz paint; `out` is the ledger's draw (smoothed over
+   * POWER_TAU_S 0.5 s). Both always shown, in whole watts.
+   */
+  _writeFlow(power) {
+    let text = '';
+    if (power) {
+      const gen = Number.isFinite(power.genW) ? power.genW : Number(power.inW);
+      const out = Number(power.outW);
+      if (Number.isFinite(gen) && Number.isFinite(out)) {
+        text = fmtFlow(gen, out);
+      }
+    }
+    if (text === this._flowText) return;
+    this._flowText = text;
+    if (this._flowEl) {
+      this._flowEl.textContent = text;
+      if (text) this._flowEl.removeAttribute('data-empty'); else this._flowEl.setAttribute('data-empty', '');
+    }
   }
 
   /** @private GAS: cold gas kg + the cost flash. */
@@ -548,6 +597,14 @@ export class VitalsPane {
       el.appendChild(rec.value);
       root.appendChild(el);
       this._row[key] = rec;
+      if (key === 'battery') {
+        // w4-power D4: the power line under BATTERY — its own 11 px line so the
+        // in / out watts never crowd the track's net-rate arrow.
+        this._flowEl = mk('div', 'vp-flow');
+        this._flowEl.setAttribute('data-flow', 'battery');
+        this._flowEl.setAttribute('data-empty', '');
+        root.appendChild(this._flowEl);
+      }
     }
 
     this._root = root;
@@ -662,6 +719,20 @@ export class VitalsPane {
       #${VITALS_ID} .vp-rate[data-dir="up"]   { color: ${P.PLAYER}; }
       #${VITALS_ID} .vp-rate[data-dir="down"] { color: ${P.CAUTION}; }
       #${VITALS_ID} .vp-tag { font-size: 8px; letter-spacing: 0.04em; }
+      /* w4-power D4: the BATTERY power line, under the track (indented past the label). */
+      #${VITALS_ID} .vp-flow {
+        height: ${G.FLOW_PX}px;
+        line-height: ${G.FLOW_PX}px;
+        padding-left: ${G.LABEL_PX + 5}px;
+        font-size: 9px;
+        font-weight: 700;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+        color: ${P.LABEL};
+        opacity: 0.85;
+        text-shadow: ${HALO};
+      }
+      #${VITALS_ID} .vp-flow[data-empty] { visibility: hidden; }
       #${VITALS_ID} .vp-rate[data-empty],
       #${VITALS_ID} .vp-tag[data-empty] { display: none; }
     `;
