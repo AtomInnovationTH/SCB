@@ -54,6 +54,8 @@
 //   2026-10-12 owner: zoom and touch rows on top of Start here; "N Launch net";
 //   B Buy upgrades moved to Ship & views; Stuck? closed and expandable like
 //   Advanced (both full width under the three cards, closed on every open).
+//   Later 2026-10-12 owner: "1 – 4 Select a daughter" tops Daughters; O . ,
+//   (radiator, struts, wings) moved to the bottom of Ship & views.
 // The live bindings are owned by InputManager._handleKeyDown; test-HelpTruth.js
 // fails when a bound key is missing here or a chip names an unbound key.
 export const HOTKEY_GROUPS = [
@@ -73,12 +75,13 @@ export const HOTKEY_GROUPS = [
     ],
   },
   {
-    // Chapter 2: launch, fly and reel the daughters.
+    // Chapter 2: select, launch and reel the daughters. 1–4 on top, "Select"
+    // (owner 2026-10-12): D and R act on the selected one.
     title: 'Daughters',
     keyWidth: '90px',
     rows: [
+      [['1', '–', '4'], 'Select a daughter'],
       [['D'], 'Launch selected daughter'],
-      [['1', '–', '4'], 'Fly a daughter'],
       [['V'], 'Back to mother'],
       [['R'], 'Reel selected daughter'],
       [['`'], 'Next tool'],
@@ -86,19 +89,20 @@ export const HOTKEY_GROUPS = [
     ],
   },
   {
-    // The views, the mother's hardware and the look-up keys.
+    // The views and look-up keys, then the mother's hardware at the bottom
+    // (owner 2026-10-12).
     title: 'Ship & views',
     keyWidth: '90px',
     rows: [
       [['Space'], 'Main action'],
       [['Esc'], 'Back'],
       [['B'], 'Buy upgrades'],
-      [['O'], 'Radiator struts out / in'],
-      [['.'], 'Daughter struts out / in'],
-      [[','], 'Solar wings out / in'],
       [['T', '/', 'Tab'], 'Next target'],
       [['I'], 'Info'],
       [['J'], 'Journal'],
+      [['O'], 'Radiator struts out / in'],
+      [['.'], 'Daughter struts out / in'],
+      [[','], 'Solar wings out / in'],
     ],
   },
   {
