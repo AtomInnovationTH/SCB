@@ -55,7 +55,9 @@
 //   B Buy upgrades moved to Ship & views; Stuck? closed and expandable like
 //   Advanced (both full width under the three cards, closed on every open).
 //   Later 2026-10-12 owner: "1 – 4 Select a daughter" tops Daughters; O . ,
-//   (radiator, struts, wings) moved to the bottom of Ship & views.
+//   (radiator, struts, wings) moved to the bottom of Ship & views. Then: cards
+//   only as tall as their rows; "V Change view to mother" last in Daughters;
+//   T / Tab first in Ship & views.
 // The live bindings are owned by InputManager._handleKeyDown; test-HelpTruth.js
 // fails when a bound key is missing here or a chip names an unbound key.
 export const HOTKEY_GROUPS = [
@@ -76,28 +78,29 @@ export const HOTKEY_GROUPS = [
   },
   {
     // Chapter 2: select, launch and reel the daughters. 1–4 on top, "Select"
-    // (owner 2026-10-12): D and R act on the selected one.
+    // (owner 2026-10-12): D and R act on the selected one. V (back to the
+    // mother's view) at the bottom, owner's words.
     title: 'Daughters',
     keyWidth: '90px',
     rows: [
       [['1', '–', '4'], 'Select a daughter'],
       [['D'], 'Launch selected daughter'],
-      [['V'], 'Back to mother'],
       [['R'], 'Reel selected daughter'],
       [['`'], 'Next tool'],
       [['N'], 'Use tool'],
+      [['V'], 'Change view to mother'],
     ],
   },
   {
-    // The views and look-up keys, then the mother's hardware at the bottom
-    // (owner 2026-10-12).
+    // Next target on top, then the views and look-up keys, then the mother's
+    // hardware at the bottom (owner 2026-10-12).
     title: 'Ship & views',
     keyWidth: '90px',
     rows: [
+      [['T', '/', 'Tab'], 'Next target'],
       [['Space'], 'Main action'],
       [['Esc'], 'Back'],
       [['B'], 'Buy upgrades'],
-      [['T', '/', 'Tab'], 'Next target'],
       [['I'], 'Info'],
       [['J'], 'Journal'],
       [['O'], 'Radiator struts out / in'],
@@ -292,7 +295,10 @@ export class HotkeyOverlay {
       // clipped rows at 1024×768 and even at 1920×1080).
       flex: '1', minHeight: '0', overflowX: 'hidden', overflowY: 'auto', padding: '16px 18px',
       display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)',
-      gap: '14px', alignContent: 'start',
+      // alignItems start: each card is only as tall as its own rows (owner
+      // 2026-10-12: shorter Start here / Daughters boxes), not stretched to
+      // the tallest card in the row.
+      gap: '14px', alignContent: 'start', alignItems: 'start',
     });
     // The ladder's window-capture WheelRouter preventDefaults + zooms every
     // wheel in gameplay; this marker hands wheels over the cards back to the
