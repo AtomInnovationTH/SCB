@@ -3,9 +3,10 @@
  * category. Toggle with the ? key (Slash), the menu's ? button or the ? button
  * at the top right of floor 1 (mountF1Button). Escape or ? closes.
  *
- * Layout: full-screen overlay → centered panel → a grid of group cards (each a
- * labelled list of key chip → description rows) plus a closed, expandable
- * Advanced section.
+ * Layout: full-screen overlay → centered panel → one goal line, then a grid of
+ * group cards (Start here / Daughters / Ship & views, with Stuck? under Start
+ * here; each a labelled list of key chip → description rows) plus a closed,
+ * expandable Advanced section.
  * Mirrors the visual language of CodexViewerUI (dark panel, cyan accents,
  * the house mono token) so it feels native to the HUD.
  *
@@ -43,85 +44,99 @@
 //   widest chip set fits (no runtime measuring: the tests build a fake DOM).
 //   2026-10-10 owner: "remove: PgUp PgDn Zoom out / in" — the row is gone (the
 //   wheel row covers zoom); the keys stay bound (test-HelpTruth allowlist).
+//   H5 2026-10-12 (owner: rank by when the key is needed; a new player wants a
+//   glance, a key, or a fix): columns run in the order the game first asks for
+//   the key — Start here (the mission-1 keys, ≤ 7 rows; turning first because
+//   players try to move first; the mother only turns by hand, autopilot moves
+//   her) → Daughters (chapter 2) → Ship & views. Stuck? lines are the symptom as
+//   a question, then the fix. Everything rare sits in Advanced, sorted the same
+//   way; opening it is the full list. The ? row is gone (you are in help).
 // The live bindings are owned by InputManager._handleKeyDown; test-HelpTruth.js
 // fails when a bound key is missing here or a chip names an unbound key.
 export const HOTKEY_GROUPS = [
   {
-    // What a new player needs: mouse / touch first, then the keys of the mother's
-    // command chair in onboarding teach order (orient → scan → target → act).
-    title: 'Basics',
+    // The mission-1 keys, in the order the game first asks for them: turn (players
+    // try to move first), scan, net, fly to it, then zoom, buy and touch.
+    title: 'Start here',
     keyWidth: '116px',
     rows: [
-      // Mouse / touch rows (H1 D3). Kept only where the 2026-10-09 probe or the
-      // TouchControls source backs them; the rail is NOT clickable (pointer-events
-      // none) so "click the rail" is not listed.
-      [['Wheel · pinch'], 'Zoom in / out', { pointer: true }],
-      [['Drag'], 'Turn the view', { pointer: true }],
-      [['Point · click'], 'Inspect / upgrade a part', { pointer: true }],
-      [['Tap · hold'], 'Touch: target / actions', { pointer: true }],
       [['↑ ↓ ← →'], 'Turn ship'],
       [['S'], 'Scan'],
-      [['T', '/', 'Tab'], 'Next target'],
-      [['Space'], 'Main action'],
-      [['A'], 'Autopilot on / off'],
       [['N'], 'Fire net'],
-      [['Esc'], 'Back'],
-      [['B'], 'Buy'],
-      [['I'], 'Info'],
-      [['J'], 'Journal'],
-      [['?'], 'Help'],
+      [['A'], 'Fly to target (on / off)'],
+      [['Wheel · pinch'], 'Zoom in / out', { pointer: true }],
+      [['B'], 'Buy upgrades'],
+      [['Tap · hold'], 'Touch: scan / actions', { pointer: true }],
     ],
   },
   {
-    // Fly and run the daughters. Mother verbs that act on them (D, R, Shift R)
-    // sit here too, so the whole daughter story is one card.
+    // Chapter 2: launch, fly and reel the daughters.
     title: 'Daughters',
     keyWidth: '90px',
     rows: [
+      [['D'], 'Launch selected daughter'],
       [['1', '–', '4'], 'Fly a daughter'],
       [['V'], 'Back to mother'],
-      [['D'], 'Launch selected daughter'],
       [['R'], 'Reel selected daughter'],
-      [['Shift R'], 'Reel all daughters'],
-      [['↑ ↓ ← →'], 'Circle target'],
       [['`'], 'Next tool'],
       [['N'], 'Use tool'],
-      [['X'], 'Cut tether'],
     ],
   },
   {
-    // The mother's own hardware.
-    title: 'Ship',
+    // The views, the mother's hardware and the look-up keys.
+    title: 'Ship & views',
     keyWidth: '90px',
     rows: [
-      [[','], 'Solar wings out / in'],
-      [['.'], 'Daughter struts out / in'],
+      [['Space'], 'Main action'],
+      [['Esc'], 'Back'],
       [['O'], 'Radiator struts out / in'],
-      [['F'], 'Furnace (not built)'],
+      [['.'], 'Daughter struts out / in'],
+      [[','], 'Solar wings out / in'],
+      [['T', '/', 'Tab'], 'Next target'],
+      [['I'], 'Info'],
+      [['J'], 'Journal'],
+    ],
+  },
+  {
+    // Symptom as a question, then the fix.
+    title: 'Stuck?',
+    keyWidth: '90px',
+    rows: [
+      [['S'], 'Nothing to catch? Scan'],
+      [['A'], "Net won't fire? Fly closer"],
+      [['O'], 'Too hot? Open the radiator'],
+      [['Space'], 'Field empty? At LEO, press Space'],
     ],
   },
   {
     // Rare keys, dev keys and unbuilt features: closed until opened, so the
-    // page stays short ("so devs can remember and clutter is reduced").
+    // page stays short. Sorted like the cards above: start keys, then daughter
+    // keys, then ship / view keys.
     title: 'Advanced',
     collapsed: true,
     keyWidth: '150px',
     rows: [
-      [['Shift A'], 'Dev: auto-play'],
-      [['Shift N'], 'Send all to best debris'],
-      [['Shift D'], 'Launch all at target'],
+      [['Drag'], 'Turn the view', { pointer: true }],
+      [['Point · click'], 'Inspect / upgrade a part', { pointer: true }],
       [['Shift S'], 'Wide scan'],
-      [['Shift −', 'Shift +'], 'Throttle down / up'],
       [['K'], 'Drop nose catch'],
       [['L'], 'Hold: laser slows spin'],
+      [['Z'], 'Next debris part (Shift: back)'],
+      [['Shift A'], 'Dev: auto-play'],
+      [['↑ ↓ ← →'], 'Circle target'],
+      [['X'], 'Cut tether'],
+      [['Shift R'], 'Reel all daughters'],
+      [['Shift D'], 'Launch all at target'],
+      [['Shift N'], 'Send all to best debris'],
       [['+', '−'], 'Daughter closer / farther'],
       [['Shift'], 'Hold: reel faster'],
+      [[';', '\''], 'Launch speed down / up'],
       [['Ctrl Shift D'], 'Burn up catch (daughter lost)'],
-      [['Z'], 'Next debris part (Shift: back)'],
+      [['F'], 'Furnace (not built)'],
       [['E'], 'Electric tether out / in'],
       [['Shift 1–3'], 'Pick power line'],
       [['[', ']'], 'Power less / more'],
-      [[';', '\''], 'Launch speed down / up'],
+      [['Shift −', 'Shift +'], 'Throttle down / up'],
       [['5', '6'], 'City / constellation names'],
       [['7'], 'Radio log'],
       [['8'], 'Nav ball'],
@@ -260,8 +275,9 @@ export class HotkeyOverlay {
 
     const body = document.createElement('div');
     Object.assign(body.style, {
-      // Three cards (Basics / Daughters / Ship) side by side, then the closed
-      // Advanced section full width below. Scrolls vertically when it does not
+      // Three cards (Start here / Daughters / Ship & views) side by side; the
+      // fourth, Stuck?, wraps to row 2 under Start here; the closed Advanced
+      // section is full width below. Scrolls vertically when it does not
       // fit (2026-10-06, measured in headless Chromium: the old overflow:hidden
       // clipped rows at 1024×768 and even at 1920×1080).
       flex: '1', minHeight: '0', overflowX: 'hidden', overflowY: 'auto', padding: '16px 18px',
@@ -272,6 +288,15 @@ export class HotkeyOverlay {
     // wheel in gameplay; this marker hands wheels over the cards back to the
     // page so the list scrolls (WheelRouter._inPassthrough).
     body.setAttribute('data-wheel-passthrough', '');
+
+    // One static goal line above the cards (H5 D3).
+    const goal = document.createElement('div');
+    goal.id = 'hotkey-goal';
+    goal.textContent = 'Clear debris: scan, then net. Too far? Fly to it.';
+    Object.assign(goal.style, {
+      gridColumn: '1 / -1', fontSize: '14px', color: '#cfe8ff', marginBottom: '2px',
+    });
+    body.appendChild(goal);
 
     for (const group of HOTKEY_GROUPS) {
       body.appendChild(this._makeGroupCard(group));
