@@ -64,6 +64,154 @@ const _v3cut = new THREE.Vector3();
 // Tug scratch (Phase B §9) — catch/ship velocity sampling at CAPTURED.
 const _tugScratchPos = { x: 0, y: 0, z: 0 };
 const _tugScratchVel = { x: 0, y: 0, z: 0 };
+// Held-catch attitude + ship pose scratch (c1-catch-pose) — the cargo flight and
+// the rack pin run every frame, so they allocate nothing.
+const _qCatchPose = new THREE.Quaternion();
+const _qShip = new THREE.Quaternion();
+const _qShipInv = new THREE.Quaternion();
+const _vShipPos = new THREE.Vector3();
+
+// ── Held-catch attitude in the SHIP's frame (c1-catch-pose, D3/D4) ────────
+// A catch held rigidly by the ship (collar, cargo flight, a docked daughter's
+// rack) turns WITH the ship — DECISIONS Ruling 0, physically real. The nose hold
+// does it through `NetProjectile._qLocal`; the cargo flight now does too, and on
+// arrival hands the ship-relative attitude to the daughter's rack as
+// `d._qLocalShip` (a THREE.Quaternion = shipQuat⁻¹ × catchQuat). The rack pin
+// (`ArmUnit._pinHeldCatches`) writes shipQuat × `_qLocalShip` back into the
+// catch's `tumbleAxis`/`tumbleAngle`, which `DebrisField.pinCapturedDebris`
+// reads for the drawn instance (a debris has no quaternion field). Research
+// 2026-10 capture-repros, Repro B. Every helper is a quiet no-op when the catch
+// has no `tumbleAxis` or the quaternion is absent (test stubs, early boot).
+
+/**
+ * The catch's attitude (tumbleAxis/tumbleAngle) as a quaternion.
+ * @param {object} d — debris
+ * @param {THREE.Quaternion} out
+ * @returns {boolean} false when the catch carries no tumbleAxis
+ */
+export function catchQuaternionInto(d, out) {
+  const ax = d && d.tumbleAxis;
+  if (!ax) return false;
+  out.setFromAxisAngle(ax, d.tumbleAngle || 0);
+  return true;
+}
+
+/**
+ * The field's canonical debris for `d` when it is a different object (a
+ * snapshot), else null. Defaults to the capture system's own field.
+ * @param {object} d
+ * @param {object|null} [debrisField]
+ * @returns {object|null}
+ */
+function canonicalOf(d, debrisField = null) {
+  const f = debrisField || (captureNetSystem && captureNetSystem._debrisField);
+  if (!f || !d || d.id == null || typeof f.getDebrisById !== 'function') return null;
+  const c = f.getDebrisById(d.id);
+  return (c && c !== d && c.tumbleAxis) ? c : null;
+}
+
+/**
+ * Copy the catch's attitude onto the object DebrisField actually DRAWS.
+ *
+ * A lasso / net catch is a shallow SNAPSHOT of the field's debris (measured in
+ * the browser, c1-catch-pose D7: `net.targetDebris !== debrisMap.get(id)`, it
+ * shares only the `tumbleAxis` Vector3 and owns its own `tumbleAngle` number).
+ * `pinCapturedDebris` reads `canonical.tumbleAxis` + `canonical.tumbleAngle`
+ * for the drawn instance, so an attitude written only onto the snapshot reaches
+ * the screen as (new axis, STALE angle) — the catch looks frozen in the world
+ * while the ship turns. Mirror the pair onto the canonical object by id; a no-op
+ * when the catch IS canonical or no field is reachable (tests, early boot).
+ * @param {object} d — the catch whose tumbleAxis/tumbleAngle were just written
+ * @param {object|null} [debrisField] — defaults to the capture system's field
+ */
+export function mirrorCatchAttitude(d, debrisField = null) {
+  const c = canonicalOf(d, debrisField);
+  if (!c) return;
+  const a = d.tumbleAxis;
+  if (c.tumbleAxis !== a) {
+    if (typeof c.tumbleAxis.set === 'function') c.tumbleAxis.set(a.x, a.y, a.z);
+    else { c.tumbleAxis.x = a.x; c.tumbleAxis.y = a.y; c.tumbleAxis.z = a.z; }
+  }
+  c.tumbleAngle = d.tumbleAngle;
+}
+
+/**
+ * Write a quaternion back into the catch's tumbleAxis/tumbleAngle (the same
+ * decomposition `NetProjectile._applyCatchOrientation` uses) and mirror it onto
+ * the drawn (canonical) object.
+ * @param {object} d — debris with a tumbleAxis
+ * @param {THREE.Quaternion} q
+ * @param {object|null} [debrisField]
+ */
+export function writeCatchAttitude(d, q, debrisField = null) {
+  const w = Math.max(-1, Math.min(1, q.w));
+  const angle = 2 * Math.acos(w);
+  const s = Math.sqrt(Math.max(0, 1 - w * w));
+  const ax = d.tumbleAxis;
+  let x = 0, y = 1, z = 0;
+  if (s > 1e-6) { x = q.x / s; y = q.y / s; z = q.z / s; }
+  if (typeof ax.set === 'function') ax.set(x, y, z);
+  else { ax.x = x; ax.y = y; ax.z = z; }
+  d.tumbleAngle = angle;
+  mirrorCatchAttitude(d, debrisField);
+}
+
+/**
+ * Record the catch's CURRENT attitude relative to the ship:
+ * `d._qLocalShip = shipQuat⁻¹ × catchQuat`. Always overwrites (the caller
+ * decides when a hand-off or a fresh stow is happening).
+ * @param {object} d — debris
+ * @param {{x:number,y:number,z:number,w:number}|null} shipQuat
+ * @param {object|null} [debrisField] — resolves the canonical (drawn) object
+ * @returns {boolean} true when seeded
+ */
+export function seedShipRelativeAttitude(d, shipQuat, debrisField = null) {
+  if (!d || !shipQuat || !d.tumbleAxis) return false;
+  // Seed from what is DRAWN (the canonical object when `d` is a snapshot).
+  catchQuaternionInto(canonicalOf(d, debrisField) || d, _qCatchPose);
+  const q = d._qLocalShip || (d._qLocalShip = new THREE.Quaternion());
+  q.copy(shipQuat).invert().multiply(_qCatchPose);
+  return true;
+}
+
+/**
+ * Turn the catch with the ship: write `shipQuat × d._qLocalShip` into
+ * tumbleAxis/tumbleAngle. Does nothing when the catch has no `_qLocalShip`,
+ * no tumbleAxis, or the quaternion is absent.
+ * @param {object} d — debris
+ * @param {{x:number,y:number,z:number,w:number}|null} shipQuat
+ * @param {object|null} [debrisField]
+ * @returns {boolean} true when written
+ */
+export function applyShipRelativeAttitude(d, shipQuat, debrisField = null) {
+  if (!d || !shipQuat || !d._qLocalShip || !d.tumbleAxis) return false;
+  _qCatchPose.copy(shipQuat).multiply(d._qLocalShip);
+  writeCatchAttitude(d, _qCatchPose, debrisField);
+  return true;
+}
+
+/** Forget the ship-relative attitude (release / jettison / digestion). */
+export function clearShipRelativeAttitude(d) {
+  if (d) d._qLocalShip = null;
+}
+
+/**
+ * The ship's live pose for the cargo arcs: position (scene units) into `outPos`,
+ * orientation into `outQuat`. False when the player cannot supply both — the
+ * caller then keeps today's frozen world-frame behaviour (never throws).
+ * @param {object|null} player
+ * @param {THREE.Vector3} outPos
+ * @param {THREE.Quaternion} outQuat
+ * @returns {boolean}
+ */
+function readShipPose(player, outPos, outQuat) {
+  if (!player || !player.quaternion) return false;
+  const p = typeof player.getPosition === 'function' ? player.getPosition() : player.position;
+  if (!p || !Number.isFinite(p.x)) return false;
+  outPos.set(p.x, p.y, p.z);
+  outQuat.copy(player.quaternion);
+  return true;
+}
 
 /** C1: base capture-tension readout (N) — one source for the three former
  *  identical `1.0 + capturedMass × 0.1` sites. HUD-facing garnish only. */
@@ -2392,6 +2540,11 @@ export class NetProjectile {
     if (s > 1e-6) d.tumbleAxis.set(_q0.x / s, _q0.y / s, _q0.z / s);
     else d.tumbleAxis.set(0, 1, 0);
     d.tumbleAngle = angle;
+    // c1-catch-pose (D7 finding): `d` is a snapshot in the real game; the drawn
+    // object is the field's canonical one. Put the pair there too, or the nose
+    // hold's attitude never reaches the screen (measured: 78° of an 86° ship
+    // turn went unfollowed in BERTHED on the shipped build).
+    mirrorCatchAttitude(d, this._ctx?.debrisField);
   }
 
   // ── Catch resolution ───────────────────────────────────────────────────
@@ -3319,17 +3472,15 @@ export class CaptureNetSystem {
     }
     const end = _v3g.copy(this._cargoSlotWorld(arm, d, _v3g));
 
-    net._cargoFrom = start.clone();
-    net._cargoTo = end.clone();
-    // Quadratic Bézier control point: bulge outward (away from the strut tip)
-    // so the catch arcs around the hull instead of shearing through it — the
-    // same shape as the furnace chunk arc, run backwards.
-    net._cargoCtrl = start.clone().lerp(end, 0.5);
-    _v3a.copy(start).sub(end);
-    if (_v3a.lengthSq() > 1e-12) {
-      _v3a.normalize().multiplyScalar((CT.ARC_BULGE_M ?? 2.0) * M_NET);
-      net._cargoCtrl.add(_v3a);
-    }
+    // The three control points are born in the world, then also stored in the
+    // SHIP's frame: the flight re-derives them from the live ship pose every
+    // frame, so the arc rides with the ship instead of staying where the ship
+    // WAS when the beat began (research 2026-10 capture-repros A2: drawn up to
+    // ~232 km away, then snapping back to the strut).
+    this._seedCargoArc(net, start, end);
+    // The catch turns with the ship for the whole flight (D3): make sure the
+    // net knows its ship-relative attitude before the first flight frame.
+    this._seedCatchLocal(net, d);
     net._cargoArmIndex = armIndex;
     // Trim before the hand-off, so the completion line can teach WHY this
     // daughter was chosen (same quantity the CoM drift warning shows).
@@ -3438,6 +3589,16 @@ export class CaptureNetSystem {
       return false;
     }
 
+    // The arc rides with the ship: rebuild its control points from the LIVE ship
+    // pose, and take the landing point live from the rack slot, so the beat
+    // lands on the strut that is actually there. The catch also turns with the
+    // ship (the nose hold's rigid attitude, run on through the flight).
+    this._refreshCargoArc(net, arm, d);
+    this._seedCatchLocal(net, d);
+    if (this._player && this._player.quaternion) {
+      net._applyCatchOrientation(d, this._player, dt);
+    }
+
     net._cargoS = Math.min(net._cargoDur, (net._cargoS || 0) + dt);
     const t = net._cargoDur > 0 ? net._cargoS / net._cargoDur : 1;
     // Ease in-out so the catch leaves and arrives gently (an instant start reads
@@ -3512,8 +3673,14 @@ export class CaptureNetSystem {
       if (typeof arm._transitionTo === 'function') arm._transitionTo(S.HOLDING_CATCH);
       else arm.state = S.HOLDING_CATCH;
     }
+    // The rack takes the catch's attitude in the SHIP's frame (this frame's
+    // value, written by _applyCatchOrientation above — no jump at the strut) and
+    // keeps turning it with the ship from here on (_pinHeldCatches, every frame).
+    seedShipRelativeAttitude(d, this._player?.quaternion, this._debrisField);
     if (typeof arm._pinHeldCatches === 'function') {
-      arm._pinHeldCatches(this._player?.getPosition ? this._player.getPosition() : null);
+      arm._pinHeldCatches(
+        this._player?.getPosition ? this._player.getPosition() : null,
+        this._player?.quaternion || null);
     }
 
     net.isActive = false;
@@ -3559,6 +3726,74 @@ export class CaptureNetSystem {
       priority: 'success',
     });
     return true;
+  }
+
+  /**
+   * Born-in-the-world control points for a cargo arc (whole catch or cut
+   * piece), plus the same three points in the SHIP's frame
+   * (`_cargoFromLocal/_cargoCtrlLocal/_cargoToLocal` = q⁻¹ × (world − shipPos)).
+   * `_cargoFrom/_cargoCtrl/_cargoTo` stay the live WORLD points (rewritten each
+   * frame by `_refreshCargoArc`). With no ship pose to read (a stub without a
+   * quaternion), no local points exist and the world points stay frozen — today's
+   * behaviour.
+   * @param {NetProjectile} net — the TRANSFERRING net (or about to be)
+   * @param {THREE.Vector3} start — catch position, scene units (scratch ok)
+   * @param {THREE.Vector3} end — rack slot, scene units (scratch ok)
+   * @private
+   */
+  _seedCargoArc(net, start, end) {
+    const M_NET = Constants.SCENE_UNITS_PER_METER;
+    net._cargoFrom = start.clone();
+    net._cargoTo = end.clone();
+    // Quadratic Bézier control point: bulge outward (away from the strut tip)
+    // so the catch arcs around the hull instead of shearing through it — the
+    // same shape as the furnace chunk arc, run backwards.
+    net._cargoCtrl = start.clone().lerp(end, 0.5);
+    _v3a.copy(start).sub(end);
+    if (_v3a.lengthSq() > 1e-12) {
+      _v3a.normalize().multiplyScalar((CT.ARC_BULGE_M ?? 2.0) * M_NET);
+      net._cargoCtrl.add(_v3a);
+    }
+    net._cargoShipFrame = false;
+    if (readShipPose(this._player, _vShipPos, _qShip)) {
+      _qShipInv.copy(_qShip).invert();
+      net._cargoFromLocal = net._cargoFrom.clone().sub(_vShipPos).applyQuaternion(_qShipInv);
+      net._cargoCtrlLocal = net._cargoCtrl.clone().sub(_vShipPos).applyQuaternion(_qShipInv);
+      net._cargoToLocal = net._cargoTo.clone().sub(_vShipPos).applyQuaternion(_qShipInv);
+      net._cargoShipFrame = true;
+    }
+  }
+
+  /**
+   * One frame of the ship-riding arc: rebuild `_cargoFrom/_cargoCtrl` from the
+   * ship-frame points and the live ship pose, and take `_cargoTo` live from the
+   * rack slot (the strut that is actually there — the same computation the rack
+   * pin will use on arrival, so the beat ends exactly on it). No-op when the
+   * arc was born without a ship pose or the player can no longer supply one.
+   * @private
+   */
+  _refreshCargoArc(net, arm, d) {
+    if (!net._cargoShipFrame) return;
+    if (!readShipPose(this._player, _vShipPos, _qShip)) return;
+    net._cargoFrom.copy(net._cargoFromLocal).applyQuaternion(_qShip).add(_vShipPos);
+    net._cargoCtrl.copy(net._cargoCtrlLocal).applyQuaternion(_qShip).add(_vShipPos);
+    this._cargoSlotWorld(arm, d, net._cargoTo);
+  }
+
+  /**
+   * Make sure a flying net knows the catch's attitude in the ship's frame
+   * (`net._qLocal`, shipQuat⁻¹ × catchQuat). The berth and `adoptLassoCatch`
+   * already set it; a path that never berthed (a cut piece) gets it here, once,
+   * from the catch's current attitude. No-op when it exists, or when the catch
+   * has no tumbleAxis / the player no quaternion.
+   * @private
+   */
+  _seedCatchLocal(net, d) {
+    if (net._qLocal || !d || !d.tumbleAxis) return;
+    const sq = this._player && this._player.quaternion;
+    if (!sq) return;
+    catchQuaternionInto(d, _qCatchPose);
+    net._qLocal = new THREE.Quaternion().copy(sq).invert().multiply(_qCatchPose);
   }
 
   /**
@@ -3818,15 +4053,10 @@ export class CaptureNetSystem {
     // Net-less seat: the pin IS the piece position; there is no bag apex to
     // offset from.
     pieceNet._catchSeatM = 0;
-    pieceNet._cargoFrom = start.clone();
-    pieceNet._cargoTo = end.clone();
-    // Same arc shape as the whole-catch beat (bulge away from the strut tip).
-    pieceNet._cargoCtrl = start.clone().lerp(end, 0.5);
-    _v3a.copy(start).sub(end);
-    if (_v3a.lengthSq() > 1e-12) {
-      _v3a.normalize().multiplyScalar((CT.ARC_BULGE_M ?? 2.0) * M_NET);
-      pieceNet._cargoCtrl.add(_v3a);
-    }
+    // Same arc shape as the whole-catch beat (bulge away from the strut tip),
+    // and the same ship-riding control points + ship-relative attitude.
+    this._seedCargoArc(pieceNet, start, end);
+    this._seedCatchLocal(pieceNet, piece);
     pieceNet._cargoArmIndex = armIndex;
     pieceNet._cargoDriftBefore = (armManager && armManager._dockPositions)
       ? computeCoMDrift(armManager, player) : null;
@@ -3884,6 +4114,7 @@ export class CaptureNetSystem {
     piece._armPinPos = null;
     piece._motherParked = false;
     piece._catchRenderMin = 0;
+    clearShipRelativeAttitude(piece);
     if (piece._scenePosition && piece.orbit) {
       reseatOrbitFromScene(piece.orbit, piece._scenePosition,
         player?.getVelocity ? player.getVelocity() : null);
@@ -4030,6 +4261,7 @@ export class CaptureNetSystem {
     debris._armPinPos = null;
     debris._motherParked = false;
     debris._catchRenderMin = 0;
+    clearShipRelativeAttitude(debris);   // a released catch tumbles on its own again
   }
 
   /**

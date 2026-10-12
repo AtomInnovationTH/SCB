@@ -92,6 +92,20 @@ export class GameFlowManager {
      */
     this._firstVisitOwed = false;
 
+    /**
+     * c2-fifth-catch D2: the next mission's start, held while the credited
+     * catch is still sitting at the nose. `{ debrisId, elapsedS, start }` or null,
+     * `start` being the continuation that fires the mission transition.
+     * Only set for a PARKED credit that crosses a mission boundary with the
+     * depot invitation branch live (ladder on). Released by the catch leaving
+     * the nose (see `_releaseMissionStart`) or by `update(dt)` once
+     * `Constants.MISSIONS.START_AFTER_CATCH_MAX_S` game seconds have passed.
+     * In-memory only: a save during the hold is as safe as any Continue (the
+     * mission number is derived from `debrisCleared`; loading emits no start).
+     * @type {{debrisId: number|string, elapsedS: number, start: () => void}|null}
+     */
+    this._pendingMissionStart = null;
+
     /** @type {number|null} Timer for delayed score-group HUD activation in ORBITAL_VIEW */
     this._scoreGroupTimer = null;
 
@@ -235,6 +249,7 @@ export class GameFlowManager {
     if (state === GameStates.GAME_OVER || state === GameStates.WIN) {
       if (this._shopTimeoutId) { timerManager.clear(this._shopTimeoutId); this._shopTimeoutId = null; }
       this._closeDepotInvitation('reset');
+      this._pendingMissionStart = null;   // c2-fifth-catch D2: a held start belongs to the run that just ended
     }
 
     // Force state for reset scenarios
@@ -1133,7 +1148,8 @@ export class GameFlowManager {
         // { missionNumber: 2 }; the ONE depot decision (_onMissionBoundary
         // below) follows it in the same tick. A digested / already-paid body
         // (payCredit false) moved no counter and starts nothing.
-        if (payCredit) scoringSystem.checkMissionTransition();
+        // c2-fifth-catch D2: a parked boundary credit holds this start.
+        if (payCredit) this._startMissionAfterCredit(data, () => { scoringSystem.checkMissionTransition(); });
 
         // Furnace consumed the catch — remove it from the field (emits
         // DEBRIS_REMOVED; wireframe/pins self-clear). Deferred here from the old
@@ -1205,6 +1221,21 @@ export class GameFlowManager {
           this._postMissionProgressLine();
         }
       }
+    });
+
+    // c2-fifth-catch D2: the credited catch leaving the nose releases a held
+    // mission start. Registered AFTER the credit handler above, so on a
+    // digestion the field removal has already run when the start fires. Ids
+    // are matched: a piece cut off a big catch emits its own transferComplete
+    // while the catch itself still sits at the nose — that must not start it.
+    eventBus.on(Events.CATCH_PROCESSED, (data) => {
+      if (data && data.digested) this._releaseMissionStartFor(data.debrisId);
+    });
+    eventBus.on(Events.CARGO_TRANSFER_COMPLETE, (data) => {
+      this._releaseMissionStartFor(data && data.debrisId);
+    });
+    eventBus.on(Events.NET_RELEASED, (data) => {
+      this._releaseMissionStartFor(data && data.debrisId);
     });
 
     // Arm pilot exit on ARM_EXPENDED now self-managed by InputManager
@@ -1793,6 +1824,7 @@ export class GameFlowManager {
     }
     // An open depot invitation belongs to the game that just ended.
     this._closeDepotInvitation('reset');
+    this._pendingMissionStart = null;     // c2-fifth-catch D2: so does a held mission start
     timerManager.clearByOwner(this);
   }
 
@@ -1968,6 +2000,79 @@ export class GameFlowManager {
   /** @private The ladder flag, read live (tests flip it per rig). */
   _ladderOn() {
     return !!(Constants.LADDER && Constants.LADDER.ENABLED);
+  }
+
+  /**
+   * c2-fifth-catch D2 — what a credited catch does with the mission start.
+   *
+   * The credit tick pays, narrates and (on a boundary) invites; it does not
+   * also start the next mission while the catch is still at the nose — that
+   * piled the mission's pieces, its lines and a collision-avoidance burn on
+   * top of the catch that was still being carried away
+   * (docs/research/2026-10-capture-repros.md, Repro C). So a PARKED credit
+   * (the catch sits at the nose) that lands on a mission boundary with the
+   * depot-invitation branch live (the same test `_onMissionBoundary` applies)
+   * keeps `start` — the continuation that fires the mission transition — until
+   * the catch is off the nose (`_releaseMissionStartFor`) or the cap runs out
+   * (`update`). Everything else — a daughter-fed catch, a non-boundary clear,
+   * the forced stop, the ladder off — runs `start` at once, as it always did.
+   * A credit arriving during a hold drops the old hold first and then goes
+   * through the same decision itself (ScoringSystem's dedupe means one start).
+   * @param {{debrisId?: number|string, parked?: boolean}} data - the CATCH_PROCESSED payload
+   * @param {() => void} start - fires the mission transition (scoringSystem.checkMissionTransition)
+   * @private
+   */
+  _startMissionAfterCredit(data, start) {
+    this._pendingMissionStart = null;
+    const M = Constants.MISSIONS;
+    const debrisCount = gameState.debrisCleared;
+    const { missionsCompleted, perMission, debrisUntilShop } = getMissionProgress(debrisCount);
+    const atBoundary = debrisCount > 0 && debrisUntilShop === perMission;
+    // Mirror of _onMissionBoundary's invitation test — keep the two in step
+    // (test-FifthCatchCalm pins that they agree).
+    const invites = this._ladderOn() &&
+      (!M.FORCED_DEPOT_STOP || missionsCompleted > M.FORCED_DEPOT_CHAPTERS);
+    if (data && data.parked && data.debrisId != null && atBoundary && invites && gameState.isGameplay()) {
+      this._pendingMissionStart = { debrisId: data.debrisId, elapsedS: 0, start };
+      return;
+    }
+    start();
+  }
+
+  /**
+   * Release the held mission start if `debrisId` is the catch it waits on.
+   * Any other id (a piece cut off the catch, another net) is ignored.
+   * @param {number|string|undefined} debrisId
+   * @private
+   */
+  _releaseMissionStartFor(debrisId) {
+    const p = this._pendingMissionStart;
+    if (!p || debrisId == null || debrisId !== p.debrisId) return;
+    this._releaseMissionStart();
+  }
+
+  /** @private Fire the held mission start now (clears the hold first). */
+  _releaseMissionStart() {
+    const p = this._pendingMissionStart;
+    if (!p) return;
+    this._pendingMissionStart = null;
+    p.start();
+  }
+
+  /**
+   * Per-frame tick (main.js, right after gameState.update): counts GAME time
+   * toward the held mission start's cap. Never a timer — the hold must follow
+   * a paused or held world (dt 0 counts nothing) and the depot flow pins that
+   * no timer is created at a boundary.
+   * @param {number} dt - seconds of game time this frame (0 while the world is held)
+   */
+  update(dt) {
+    const p = this._pendingMissionStart;
+    if (!p) return;
+    if (!(dt > 0) || !gameState.isGameplay()) return;
+    p.elapsedS += dt;
+    const cap = Constants.MISSIONS.START_AFTER_CATCH_MAX_S;
+    if (p.elapsedS >= cap) this._releaseMissionStart();
   }
 
   /**

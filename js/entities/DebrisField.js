@@ -327,8 +327,10 @@ const WELCOME_FIELD = [
  *  cadence resolves the dwell in 5 steps at a fraction of the per-frame cost. */
 const RESEAT_SCAN_PERIOD_S = 2;
 
-/** The HOUSTON line posted once per re-seat (plain ASCII; muted at suppression
- *  tier 0 by design — there the reticle re-lock is the cue). */
+/** The HOUSTON line posted once per re-seat scan that moved a single piece
+ *  (plain ASCII; muted at suppression tier 0 by design — there the reticle
+ *  re-lock is the cue). A scan that moved several posts ONE line naming the
+ *  count instead (c2-fifth-catch D3). */
 const RESEAT_COMMS_TEXT = 'Re-acquired a drifted piece ahead of you. Check the reticle.';
 
 /** Altitude bands (km above surface) with percentage weights.
@@ -3318,6 +3320,11 @@ export class DebrisField {
 
       // Mark as welcome spawn, ensure visible
       debris.welcomeSpawn = true;
+      // c2-fifth-catch D1: the chapter this piece was placed for. Collision
+      // avoidance exempts a welcome piece only in its own chapter (so a new
+      // chapter's piece 22 m ahead never costs a burn); a leftover from an
+      // older chapter that nothing re-seated stays a live candidate.
+      debris.welcomeChapter = this._currentMissionNumber || 1;
       debris.alive = true;
       // S11(b): a reused candidate may have been a hazard shard — promotion
       // into the curated cluster clears the uncapturable-furniture flag (the
@@ -4383,8 +4390,10 @@ export class DebrisField {
    * AutoLock's _trackRange re-evaluates next frame) and no target-change event
    * is emitted. `_scenePosition` is refreshed from the new orbit at once so
    * every reader between here and the propagation loop sees the new place.
-   * Each re-seat logs the id and the old distance and posts ONE HOUSTON line
-   * (RESEAT_COMMS_TEXT, `_postOnboarding` — muted at tier 0 by design).
+   * Each re-seat logs the id and the old distance; the scan posts ONE HOUSTON
+   * line in total (RESEAT_COMMS_TEXT for one piece, "Re-acquired N drifted
+   * pieces ahead of you." for several; `_postOnboarding` — muted at tier 0 by
+   * design) and re-tags each moved piece `welcomeChapter` to the current chapter.
    *
    * Timers are wall-clock: the scan cadence (RESEAT_SCAN_PERIOD_S) and the
    * dwell are player-experience timers — "lost for ten seconds" is what the
@@ -4454,6 +4463,9 @@ export class DebrisField {
       this._placeWelcomePiece(debris, spec, playerOrbit, frameCompRad);
       debris.discovered = wasDiscovered;
       debris._reseatFarS = 0;
+      // c2-fifth-catch D1: the game put this piece back in the player's path in
+      // THIS chapter — it counts as this chapter's welcome piece again.
+      debris.welcomeChapter = this._currentMissionNumber || 1;
       // Refresh the read position now (the loop re-derives it after the step).
       const np = orbitToSceneCartesian(debris.orbit).position;
       if (sp.set) sp.set(np.x, np.y, np.z);
@@ -4463,9 +4475,13 @@ export class DebrisField {
       console.log(`[DebrisField] Re-seat: welcome piece ${debris.id} (#${debris._welcomeSpecIndex + 1}) ` +
         `was ${Math.round(oldDistM)} m from the mother for ${cfg.DWELL_S}+ s with nothing flying to it ` +
         `- put back on its slot ahead`);
+    }
+    // c2-fifth-catch D3: ONE line per scan, however many pieces moved (was one
+    // per piece — the measured run posted six in one millisecond).
+    if (reseated > 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
-        text: RESEAT_COMMS_TEXT,
+        text: reseated === 1 ? RESEAT_COMMS_TEXT : `Re-acquired ${reseated} drifted pieces ahead of you.`,
         priority: 'info',
         _postOnboarding: true,
       });

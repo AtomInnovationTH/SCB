@@ -22,7 +22,7 @@ import { applyDetailLod } from '../scene/detailLodCull.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { tetherReel } from '../systems/TetherReel.js';
 import { strutLocalDirection } from './ArmDockBasis.js';
-import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT } from './CaptureNet.js';
+import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT, seedShipRelativeAttitude, applyShipRelativeAttitude, clearShipRelativeAttitude } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
 import { computeToolOdds, makeNetOddsLockCache } from '../systems/ToolOdds.js';
@@ -5555,6 +5555,7 @@ export class ArmUnit {
       // and restores LOD. The debris keeps its real orbital trajectory.
       debris._capturedByArm = null;
       debris._armPinned = false;       // release authoritative arm pin
+      clearShipRelativeAttitude(debris);
     }
     // This arm no longer owns the catch for docking/processing in either case.
     this.capturedDebris = null;
@@ -5704,16 +5705,26 @@ export class ArmUnit {
    *
    * S7: the per-slot geometry lives in `heldSlotWorldInto` — one computation,
    * shared with the cargo hand-off's arc terminus.
+   * c1-catch-pose (D4): a piece that carries a ship-relative attitude
+   * (`_qLocalShip`, handed over by the cargo flight or seeded at the stow below)
+   * ALSO has its tumbleAxis/tumbleAngle rewritten from `parentQuat ×
+   * _qLocalShip`, so a catch held rigidly by a docked daughter turns with the
+   * ship instead of keeping its world attitude (the engine reads those two
+   * fields for the drawn instance; nobody else writes them once it is pinned).
+   * No `parentQuat` (tests, early boot) or no `_qLocalShip` → position only,
+   * exactly as before.
    * @param {THREE.Vector3|null} [parentPos] freshest mother position
+   * @param {THREE.Quaternion|null} [parentQuat] mother world attitude
    * @private
    */
-  _pinHeldCatches(parentPos = null) {
+  _pinHeldCatches(parentPos = null, parentQuat = null) {
     for (let i = 0; i < this.heldCatches.length; i++) {
       const d = this.heldCatches[i];
       if (!d) continue;
       if (!d._armPinPos) d._armPinPos = new THREE.Vector3();
       this.heldSlotWorldInto(i, d.sizeMeter, parentPos, d._armPinPos);
       d._armPinned = true;
+      if (parentQuat) applyShipRelativeAttitude(d, parentQuat);
     }
   }
 
@@ -6430,7 +6441,11 @@ export class ArmUnit {
           // Pin with the same lateral bias HOLDING_CATCH will use, so there's no
           // one-frame jump of the bag when the park state begins. Rack slot 0
           // is byte-identical to the pre-S6 biased pin.
-          this._pinHeldCatches(parentPos);
+          // c1-catch-pose (D4): a catch the daughter made herself has no
+          // ship-relative attitude yet — seed it from its attitude NOW (no jump
+          // at the stow), so it turns with the ship on the rack from here on.
+          seedShipRelativeAttitude(debris, parentQuat);
+          this._pinHeldCatches(parentPos, parentQuat);
           this._breakdownStarted = false;     // reset staged-furnace bookkeeping (Item 1)
           this._breakdownChunksFired = 0;
           this._transitionTo(S.HOLDING_CATCH);
@@ -6557,7 +6572,7 @@ export class ArmUnit {
     if (t < HOLD_S) {
       // hold: catch welded full-size, net still cinched. Lateral bias keeps the
       // bag off the camera→daughter axis so the parked daughter stays visible.
-      this._pinHeldCatches(parentPos);
+      this._pinHeldCatches(parentPos, parentQuat);
       return;
     }
 
@@ -6576,7 +6591,7 @@ export class ArmUnit {
     // Keep the (now-breaking-down) catch pinned to the strut so it never drifts
     // while the furnace visual animates the chop. The visual owns the scale ramp.
     // Same lateral bias as the hold phase so the daughter stays clear of the bag.
-    this._pinHeldCatches(parentPos);
+    this._pinHeldCatches(parentPos, parentQuat);
 
     // feed: emit chunk events evenly across [CHOP_S, FEED_S).
     if (t >= CHOP_S && t < FEED_S) {
@@ -6610,6 +6625,7 @@ export class ArmUnit {
       debris._capturedByArm = null;
       debris._armPinPos = null;
       debris._breakdownActive = false;
+      clearShipRelativeAttitude(debris);
       // S6: pop the digested piece off the rack.
       this.heldCatches.shift();
       this.reeling = false;

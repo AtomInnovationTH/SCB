@@ -533,9 +533,13 @@ export class CollisionAvoidanceSystem {
    * Shared exemption test for BOTH the dodge scan (`_scanForThreats`) and the
    * collision-consequence scan (`_scanAndProcessContacts`), so the two candidate
    * filters over the same `debrisList` can't drift apart. A debris is exempt when:
-   *   • it's the onboarding welcome cluster AND we're still on mission 1 — surviving
-   *     welcome pieces re-enter both scans in later missions (welcomeSpawn is not
-   *     cleared on MISSION_START), matching the long-standing dodge doctrine;
+   *   • it's a welcome-cluster piece placed for THIS chapter (c2-fifth-catch D1:
+   *     DebrisField tags each piece `welcomeChapter` at spawn and re-tags it when the
+   *     re-seat puts it back ahead of the ship; untagged = chapter 1). The game put
+   *     it in the player's path, so it must not cost them a burn. A surviving piece
+   *     of an OLDER chapter that was not re-seated re-enters both scans (welcomeSpawn
+   *     is not cleared on MISSION_START) — never permanently invincible, matching the
+   *     long-standing dodge doctrine;
    *   • it carries the persistent `welcomeField` flag;
    *   • it's a held/captured catch (we're holding it — not a collision, not a dodge);
    *   • it's the active (Tab-selected) target, autopilot-locked, or arm-targeted
@@ -545,7 +549,7 @@ export class CollisionAvoidanceSystem {
    * @returns {boolean}
    */
   _isThreatExempt(debris) {
-    if (debris.welcomeSpawn && this._missionNumber <= 1) return true;
+    if (debris.welcomeSpawn && (debris.welcomeChapter ?? 1) === this._missionNumber) return true;
     if (debris.welcomeField) return true;
     if (debris._captured || debris._armPinned || debris._capturedByArm) return true;
     if (debris.id === this._activeTargetId) return true;

@@ -5051,6 +5051,7 @@ export const Constants = {
     FORCED_DEPOT_STOP: false,
     FORCED_DEPOT_CHAPTERS: 3, // the GUIDED chapters 1..N (guidedCluster, per-catch progress line, boss hold rule); the end of each forces the depot stop ONLY when FORCED_DEPOT_STOP is true — otherwise every chapter's depot is an INVITATION
     COMPLETE_CARD_MS: 2500,   // "MISSION N COMPLETE" card → SHOP dwell (owner decision 1: a fixed dwell, the old silent timer's length); the card holds for this minus TEACHING.FADE_OUT_MS so it has faded when the depot opens
+    START_AFTER_CATCH_MAX_S: 20, // game seconds: the longest the next mission waits, after a boundary catch that is parked at the nose, for that catch to leave it (c2-fifth-catch D2) — cap only; the catch leaving (hand-off done / digested / released) starts it sooner
     // RESEAT (M1 guidance T6, owner decision 2026-09-09): the welcome-cluster
     // re-seat safety net in DebrisField._reseatDriftedWelcome — GUIDED chapters
     // only (the guidedCluster profiles below). A welcomeSpawn piece that has

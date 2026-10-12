@@ -316,6 +316,19 @@ export class AutoLockController {
 
   /** @private Emit IN/OUT range crossings for the selected target. */
   _trackRange(active) {
+    // A piece on the line / in the net / on a rack has no "range": it is held,
+    // not approached. Its `_scenePosition` is also one frame stale here —
+    // AutoLock runs before LassoSystem's same-frame pin (main.js loop order), so
+    // the distance read for a reeled piece is a frame of ship travel too far
+    // (measured 7.7 km at the 0.1 s dt clamp → a false OUT OF RANGE under
+    // "22m" and a false "too far for the net" teaching beat; research
+    // 2026-10 capture-repros A1). Emit nothing and forget the in/out state so a
+    // later release starts fresh, with no stale crossing on the first free frame.
+    if (active._armPinned || active._captured || active._capturedByArm || active._motherParked) {
+      this._lastRangeState = null;
+      return;
+    }
+
     // Hot path (runs every frame while a target is locked): read the live
     // position vector directly to honor this module's allocation-free contract.
     // PlayerSatellite.getPosition() clones a THREE.Vector3 — only used as a

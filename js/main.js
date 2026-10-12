@@ -6860,6 +6860,7 @@ function gameLoop(timestamp) {
     // call — the body is missionTime += dt followed by the GAME_WIN check,
     // and the win check must stay live even while a drawer is open.
     gameState.update(_worldHeld ? 0 : dt);
+    gameFlowManager.update(_worldHeld ? 0 : dt);
 
     // Update entities (with error boundaries — single system crash won't freeze game)
     try { player.update(dt, sunDir, dtWorld); } catch (e) { console.error('[GameLoop] player.update:', e); }
