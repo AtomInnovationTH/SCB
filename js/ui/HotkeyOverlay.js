@@ -57,7 +57,8 @@
 //   Later 2026-10-12 owner: "1 – 4 Select a daughter" tops Daughters; O . ,
 //   (radiator, struts, wings) moved to the bottom of Ship & views. Then: cards
 //   only as tall as their rows; "V Change view to mother" last in Daughters;
-//   T / Tab first in Ship & views.
+//   T / Tab first in Ship & views. A small blank gap ('gap' row) under
+//   J Journal sets the hardware rows apart.
 // The live bindings are owned by InputManager._handleKeyDown; test-HelpTruth.js
 // fails when a bound key is missing here or a chip names an unbound key.
 export const HOTKEY_GROUPS = [
@@ -103,6 +104,7 @@ export const HOTKEY_GROUPS = [
       [['B'], 'Buy upgrades'],
       [['I'], 'Info'],
       [['J'], 'Journal'],
+      'gap',
       [['O'], 'Radiator struts out / in'],
       [['.'], 'Daughter struts out / in'],
       [[','], 'Solar wings out / in'],
@@ -369,6 +371,13 @@ export class HotkeyOverlay {
     for (const row of group.rows) {
       if (row === 'spacer') {
         host.appendChild(this._makeSpacer());
+        continue;
+      }
+      if (row === 'gap') {
+        // A small blank space, no line (owner 2026-10-12: under J Journal).
+        const gap = document.createElement('div');
+        gap.style.height = '8px';
+        host.appendChild(gap);
         continue;
       }
       const [keys, desc, opts] = row;
