@@ -564,9 +564,9 @@
 
   <!-- Build stamp (Ipad.md §2.5): a visible content hash is the only honest
        update witness on a sealed device — "I relaunched it" proves nothing.
-       ./data/build-tag.json is network-first in sw.js (data/ route), so over
-       the cable it is always the just-served build, and offline it falls back
-       to the cached copy — which is exactly the build actually running. -->
+       ./data/build-tag.json is served local-first by sw.js (from the running
+       build's own app cache), so it is always the copy of the build actually
+       running; a newer build waits until the next start or a tap on the card. -->
   <div id="build-stamp"></div>
   <script>
     // Session J.5 review fix: ONE boot read of the tag. The corner stamp and

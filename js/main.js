@@ -1620,9 +1620,10 @@ async function init() {
   menuScreen = new MenuScreen(sceneManager ? sceneManager.currentTier : null);
   menuScreen.setHelpOpener(() => hotkeyOverlay && hotkeyOverlay.toggle());   // w1-first-minute D3: menu "?" = the ? key's list
   // Session J.5 (owner item 5) — the menu NEW VERSION READY card's watcher.
-  // data/build-tag.json is the ONE update truth (sw.js serves data/ network-
-  // first; the running page's own sha is baked nowhere else): the tag read
-  // here at boot is the baseline, re-read on entering the MENU state (+ a
+  // With a service worker the truth is a build installed and waiting (js/core/
+  // UpdateWatch.js); data/build-tag.json (sw.js serves it local-first, from the
+  // running build's cache) is the baseline read here at boot and the truth when
+  // there is no worker. Re-checked on entering the MENU state (+ a
   // 60 s poll while the menu shows), on visibilitychange → visible (the iPad
   // resumed days later) and on a serviceWorker controllerchange (a reason to
   // re-read, never a second truth). A new hash → Events.UPDATE_AVAILABLE once

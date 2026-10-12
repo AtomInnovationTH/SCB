@@ -16,6 +16,7 @@ import { FlagDecalSystem } from './FlagDecalSystem.js';
 import { MenuScene3D } from './MenuScene3D.js';
 import { resolvePrimaryMenuAction, startRequiresConfirm, NEW_GAME_CONFIRM_MESSAGE } from './menuActions.js';
 import { buildUpdateCard } from './UpdateCard.js';
+import { applyUpdate } from '../core/UpdateWatch.js';
 export class MenuScreen {
   /**
    * @param {string|null} [initialTier] — current SceneManager quality tier so the
@@ -1155,7 +1156,7 @@ export class MenuScreen {
     const card = buildUpdateCard(document, {
       hash: p.hash,
       bullets: p.bullets,
-      onUpdate: () => this._reload(),
+      onUpdate: () => this._applyUpdate(),
       onLater: () => {
         this._updateDismissed = p.hash;   // remember for this page session only
         this._unmountUpdateCard();
@@ -1175,10 +1176,19 @@ export class MenuScreen {
   }
 
   /**
-   * @private TAP TO UPDATE. HTML / js / data are network-first in sw.js and the
-   * worker installs with skipWaiting() + clients.claim(), so a plain reload IS
-   * the update. Overridable for tests.
+   * @private TAP TO UPDATE. The new build is installed and WAITING in the
+   * service worker (it never takes over by itself): switch to it, and reload
+   * once it has taken over. With no worker waiting this is a plain reload.
+   * core/UpdateWatch.js applyUpdate() owns the order (listener first, then
+   * SKIP_WAITING) and reloads through _reload(). Overridable for tests.
    */
+  _applyUpdate() {
+    if (this._applyingUpdate) return;   // a second tap must not stack a second listener
+    this._applyingUpdate = true;
+    applyUpdate({ reload: () => this._reload() }).catch(() => this._reload());
+  }
+
+  /** @private The page's ONE reload site. Overridable for tests. */
   _reload() {
     window.location.reload();
   }
