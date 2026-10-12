@@ -4,9 +4,9 @@
  * at the top right of floor 1 (mountF1Button). Escape or ? closes.
  *
  * Layout: full-screen overlay → centered panel → one goal line, then a grid of
- * group cards (Start here / Daughters / Ship & views, with Stuck? under Start
- * here; each a labelled list of key chip → description rows) plus a closed,
- * expandable Advanced section.
+ * group cards (Start here / Daughters / Ship & views; each a labelled list of
+ * key chip → description rows) plus two closed, expandable sections: Stuck?
+ * and Advanced.
  * Mirrors the visual language of CodexViewerUI (dark panel, cyan accents,
  * the house mono token) so it feels native to the HUD.
  *
@@ -51,22 +51,25 @@
 //   her) → Daughters (chapter 2) → Ship & views. Stuck? lines are the symptom as
 //   a question, then the fix. Everything rare sits in Advanced, sorted the same
 //   way; opening it is the full list. The ? row is gone (you are in help).
+//   2026-10-12 owner: zoom and touch rows on top of Start here; "N Launch net";
+//   B Buy upgrades moved to Ship & views; Stuck? closed and expandable like
+//   Advanced (both full width under the three cards, closed on every open).
 // The live bindings are owned by InputManager._handleKeyDown; test-HelpTruth.js
 // fails when a bound key is missing here or a chip names an unbound key.
 export const HOTKEY_GROUPS = [
   {
-    // The mission-1 keys, in the order the game first asks for them: turn (players
-    // try to move first), scan, net, fly to it, then zoom, buy and touch.
+    // The mission-1 keys: zoom and touch on top (owner 2026-10-12), then in the
+    // order the game first asks for them: turn (players try to move first),
+    // scan, net, fly to it.
     title: 'Start here',
     keyWidth: '116px',
     rows: [
+      [['Wheel · pinch'], 'Zoom in / out', { pointer: true }],
+      [['Tap · hold'], 'Touch: scan / actions', { pointer: true }],
       [['↑ ↓ ← →'], 'Turn ship'],
       [['S'], 'Scan'],
-      [['N'], 'Fire net'],
+      [['N'], 'Launch net'],
       [['A'], 'Fly to target (on / off)'],
-      [['Wheel · pinch'], 'Zoom in / out', { pointer: true }],
-      [['B'], 'Buy upgrades'],
-      [['Tap · hold'], 'Touch: scan / actions', { pointer: true }],
     ],
   },
   {
@@ -89,6 +92,7 @@ export const HOTKEY_GROUPS = [
     rows: [
       [['Space'], 'Main action'],
       [['Esc'], 'Back'],
+      [['B'], 'Buy upgrades'],
       [['O'], 'Radiator struts out / in'],
       [['.'], 'Daughter struts out / in'],
       [[','], 'Solar wings out / in'],
@@ -98,12 +102,14 @@ export const HOTKEY_GROUPS = [
     ],
   },
   {
-    // Symptom as a question, then the fix.
+    // Symptom as a question, then the fix. Closed until opened, like Advanced
+    // (owner 2026-10-12).
     title: 'Stuck?',
+    collapsed: true,
     keyWidth: '90px',
     rows: [
       [['S'], 'Nothing to catch? Scan'],
-      [['A'], "Net won't fire? Fly closer"],
+      [['A'], "Net won't launch? Fly closer"],
       [['O'], 'Too hot? Open the radiator'],
       [['Space'], 'Field empty? At LEO, press Space'],
     ],
@@ -276,8 +282,8 @@ export class HotkeyOverlay {
     const body = document.createElement('div');
     Object.assign(body.style, {
       // Three cards (Start here / Daughters / Ship & views) side by side; the
-      // fourth, Stuck?, wraps to row 2 under Start here; the closed Advanced
-      // section is full width below. Scrolls vertically when it does not
+      // closed Stuck? and Advanced sections are full width below. Scrolls
+      // vertically when it does not
       // fit (2026-10-06, measured in headless Chromium: the old overflow:hidden
       // clipped rows at 1024×768 and even at 1920×1080).
       flex: '1', minHeight: '0', overflowX: 'hidden', overflowY: 'auto', padding: '16px 18px',
