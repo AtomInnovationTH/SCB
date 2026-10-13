@@ -170,7 +170,7 @@ export const MASK_PANES = Object.freeze({
   mother:      Object.freeze({ rung: 'mother',      els: Object.freeze(['#hud-mother-panel']),        memory: true }),
   // W2 meters (owner 2026-10-08, DECISIONS §15 row 5): heat, battery, gas and ion,
   // top left. An ATTRIBUTE pane like 'score' (never a density rung, so the MORE
-  // ladder cannot hide it), table-driven only: gone on F1 and F5, shown on F2-F4.
+  // ladder cannot hide it), table-driven only: shown on F1-F4, gone on F5.
   vitals:      Object.freeze({ rung: null,          els: Object.freeze(['#hud-vitals']),              memory: false }),
   arms:        Object.freeze({ rung: 'arms',        els: Object.freeze(['#hud-arms-panel']),          memory: true }),
   reticles:    Object.freeze({ rung: null,          els: Object.freeze(['#reticle-canvas']),          memory: false }),

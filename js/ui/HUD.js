@@ -388,7 +388,7 @@ export class HUD {
     });
     // W2 meters (DECISIONS §15 rows 5 + 8): heat, battery, gas and ion — the
     // VITALS pane is the FIRST child of the left column, above MOTHER. FloorMask
-    // rooms it by attribute (gone on F1 / F5, shown on F2-F4); never a density rung.
+    // rooms it by attribute (shown on F1-F4, gone on F5); never a density rung.
     this.vitalsPane = new VitalsPane({ parent: this.statusPanel.leftColumn });
     // A HUD pane like the rest: hide() / show() (menu, shop, game over) carry it —
     // the FloorMask's null restore re-shows mask panes, so the panels map must own it.

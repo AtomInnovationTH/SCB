@@ -524,8 +524,8 @@ function _noteSchedInput() {
 // actuator (flower / ROSA furl / ROSA feather / ROSA wing tilt / struts)
 // ACTUALLY MOVING right now? Detected from motion, never from intent/target
 // latches or armManager.strutsDeployed() — both can read true while nothing
-// moves (an OVERRIDE fold waiting on the daughter arms; a strut resting at
-// 146°). The scheduler runs on EVERY rAF entry, before the sim; the sim (and
+// moves (a daughter strut resting open at 90°). The scheduler runs on EVERY
+// rAF entry, before the sim; the sim (and
 // these actuators) only advance on DRAWN ticks, after it. So the comparison
 // is latched once per DRAWN frame, after armManager.update, and consumed at
 // the NEXT frame's plan() site — comparing at the plan site itself would

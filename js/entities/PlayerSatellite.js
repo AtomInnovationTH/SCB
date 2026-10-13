@@ -1119,7 +1119,7 @@ export class PlayerSatellite extends THREE.Group {
     // sub-panel per 22.5° facet, back face 1.004R, whose side walls cover the
     // corner air over the curved hull — Task 1 F1),
     // tangent to the barrel ON TOP of the MLI blanket, but ONLY on facets that
-    // fall in the clear sectors between the stowed struts ([60,120,240,300]°)
+    // fall in the clear sectors between the stowed struts ([64,116,244,296]°)
     // and clear of the ROSA wing roots at 0°/180°. Each panel carries the dark
     // GaAs cell texture (crisp rectangular cells when the player zooms to
     // inspect). Cells occupy only the central z-band; the MLI blanket (= the
@@ -5783,6 +5783,11 @@ export class PlayerSatellite extends THREE.Group {
     // w4-power D5: a held-world frame (a drawer holds the world, dtWorld 0 —
     // main.js `_worldHeld`) bills no motor; the meter and heat skip it too.
     this._motorBillHeld = !(dtWorld > 0) || noMotorBilling === true;
+    // w8-tidy D1: an OFF-PLAY frame (menu / briefing / shop background tick) bills
+    // nothing at all — no base load, no cold-gas hold. No game time passes there,
+    // and the ledger would otherwise land as one heat step when play resumes.
+    // Deliberately NOT keyed on _motorBillHeld: a held frame (drawer open) still bills.
+    this._offPlayFrame = noMotorBilling === true;
 
     // §2 cache the sun direction for puff sun-scatter (null when unavailable, so
     // headless / null-sun frames stay scatter-free — no per-frame alloc).
@@ -5900,7 +5905,7 @@ export class PlayerSatellite extends THREE.Group {
     this._updateSolarPower(sunDirection, dt);
 
     // --- Resources ---
-    this._updateResources(dt);
+    this._updateResources(dt, this._offPlayFrame === true);
 
     // --- S3b: MPD thermal dissipation (always runs, even when not firing) ---
     if (this._mpdHeat > 0) {
@@ -6182,7 +6187,7 @@ export class PlayerSatellite extends THREE.Group {
     // (perpendicular to the boom axis X).
     const targetTilt = Math.atan2(localSun.z, localSun.y);
 
-    // Tier-aware clamp: at Y0 the struts sit 60° off the ROSA plane so ±30°
+    // Tier-aware clamp: at Y0 the struts sit 64° off the ROSA plane so ±30°
     // clears them; Y1+ tiers add struts only 30° from the plane → tighter clamp.
     const maxTilt = this._rosaMaxTiltRad();
 
@@ -6283,7 +6288,7 @@ export class PlayerSatellite extends THREE.Group {
    * @private Tier-aware sun-track tilt clamp (radians).
    *
    * The sun-track tilt swings the ROSA trailing edge toward the arm-strut
-   * planes. At Y0 the struts sit at 60°/120° (60° off the 0°/180° ROSA plane),
+   * planes. At Y0 the struts sit at 64°/116° (64° off the 0°/180° ROSA plane),
    * so the loose ±30° default clears them. Y1+ tiers add struts at 30°/330° —
    * only 30° from the ROSA plane — so when the nearest strut is within ~30° of
    * the plane the clamp tightens to ROSA_TILT_CLAMP_TIGHT_DEG.
@@ -7585,7 +7590,8 @@ export class PlayerSatellite extends THREE.Group {
     // thrust), so the rate-null's long low-ω exponential tail bills ~nothing and a
     // committed turn costs two real burns (spin-up + arrest), per D9 (~5% tank).
     if (holdFired && coldGas > 0 && !cmd && this._frameHoldWork > 0) {
-      eventBus.emit(Events.RESOURCE_CONSUME, {
+      // w8-tidy D1: the hold may turn the ship for the menu picture but bills no gas off play.
+      if (this._offPlayFrame !== true) eventBus.emit(Events.RESOURCE_CONSUME, {
         resource: 'coldGas',
         amount: this._coldGasRate * (A.RCS_ATTITUDE_N2_FACTOR ?? 1.0) * this._frameHoldWork,
       });
@@ -9457,10 +9463,11 @@ export class PlayerSatellite extends THREE.Group {
   // ==========================================================================
 
   /** @private */
-  _updateResources(dt) {
-    // Base power draw routed through ResourceSystem (canonical owner)
+  _updateResources(dt, skipBilling = false) {
+    // Base power draw routed through ResourceSystem (canonical owner).
+    // w8-tidy D1: nothing on an off-play frame (skipBilling).
     const powerDraw = this._basePowerDraw * dt;
-    if (powerDraw > 0) {
+    if (powerDraw > 0 && skipBilling !== true) {
       eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'battery', amount: powerDraw });
     }
 

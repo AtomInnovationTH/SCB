@@ -47,7 +47,7 @@
  * with no forced layout). Nothing runs per frame.
  *
  * Home: the FIRST child of `#hud-left-column` (above MOTHER). FloorMask hides
- * it by attribute (`vitals` pane: gone on F1 / F5, shown on F2-F4); it is not
+ * it by attribute (`vitals` pane: shown on F1-F4, gone on F5); it is not
  * a density rung, so the MORE ladder never touches it. Display only
  * (`pointer-events: none`, no tap action).
  *

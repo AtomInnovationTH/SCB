@@ -1760,7 +1760,7 @@ export const Constants = {
     // full furl (it only swings the tilt pivot, no roll-out), so retract is fast
     // and most power is retained until the edge turns away from the sun.
     ROSA_FEATHER_RATE: 0.60,       // 1/s — feather progress change per second
-    // Tier-aware sun-track tilt clamp. Y0 struts sit 60° off the ROSA plane, so
+    // Tier-aware sun-track tilt clamp. Y0 struts sit 64° off the ROSA plane, so
     // the loose ±30° clamp clears them; Y1+ tiers add 30°/330° struts only 30°
     // from the plane, so when a strut is within ~30° the clamp tightens to this.
     ROSA_TILT_CLAMP_TIGHT_DEG: 18, // deg — tighter sun-track tilt at higher tiers
@@ -1967,7 +1967,7 @@ export const Constants = {
       // But the coil was never the only inboard wall, and the one that binds
       // now is the PLUME CONE at the STOW pose. The main FEEP sit at az
       // 0/90/180/270, so the stations are squeezed between a thruster at 0° and
-      // a daughter at 60°; STOW (146°) is the thrust-band ceiling, i.e. the one
+      // a daughter at 64°; STOW (146°) is the thrust-band ceiling, i.e. the one
       // ladder pose held while the engines burn — a higher STOW-specific gate
       // WAS intended here (vs the 0.15 m P1 floor for PARK/CARGO) precisely
       // because that is where exhaust would play on a radiator, but the 0.70 m
@@ -2567,10 +2567,10 @@ export const Constants = {
   // not read this table INTO the builder (PlayerSatellite.js is out of this
   // fix's scope), so a future change to either side still needs both edited.
   // Config G clearance analysis (ARM_PIVOT_GAPS_EXPLAINER §8):
-  //   Nearest arm plane is 60° from thrust axis (ROSA at 0°/180°, arms at 60°/120°/240°/300°).
-  //   Plume half-angle 35° → minimum angular clearance = 60° − 35° = 25°.
-  //   At standard deploy angles (α ∈ [0, π]), ring-arm strut tips remain well outside
-  //   the −Z plume cone. Edge case (register item 61's reconciled rows): the Y3 Octo
+  //   Arms sit at azimuths 64°/116°/244°/296° (ROSA at 0°/180°). The measured plume gate is the
+  //   radiator's (DECISIONS §5a; test-FlowerLaunchFold.js). The daughter struts have no clearance
+  //   floor: `CoMCalculator.checkPlumeInterference` tests each strut tip and any held cargo against
+  //   the −Z plume cone at runtime (every frame, via the thrust-block list). Edge case (register item 61's reconciled rows): the Y3 Octo
   //   (flag-gated, unlocked:false) aft end-face arm (−Z) at α≈π/2 places its tip at
   //   z ≈ −2.6 m — past the corrected nozzle plane (−1.075). NOT RE-VERIFIED under
   //   this fix (dormant tier, dormant interlock, out of scope — DECISIONS §5a); any
