@@ -59,6 +59,18 @@ const CN = Constants.CAPTURE_NET;
 // on the net itself. (Rim-weight edge-node emissive is left intact: it is a
 // glint on the tungsten weights, not a recolour of the fabric.)
 const COL_CANISTER  = 0x556677;
+// Mother launcher (owner 2026-10-13: ONE launcher, centred, INSIDE the collar
+// bore and firing through it): the folded canister is drawn AT the muzzle for
+// the first 0.15 s (LAUNCHING, CAST_WINDUP) while the net has not moved. At
+// the shared 0.08 m radius x 0.25 m length (axis ⟂ the flight line: the
+// ceremony group is lookAt-ed so local Y is up and −Z is the launch
+// direction) its worst corner reaches hypot(0.125, 0.08) = 0.1484 m from the
+// axis — over the 0.145 m the launch corridor allows by 3.4 mm (the corridor
+// is 0.155 m, set by the fore sun pucks; the ring's inner edge is 0.1597 m).
+// A mother canister is drawn at 0.65: worst corner 0.0965 m (≤ 0.10), so the
+// bundle that leaves the bore never overlaps the ring or the pucks. A picture
+// change only; the net's physics and the daughters' canister are untouched.
+export const MOTHER_CANISTER_SCALE = 0.65;
 const COL_DISC      = 0xcfeaff;   // ivory Dyneema — the net's ONLY fabric colour, every state
 // NOTE: the tether's colour is NOT defined here — it is Constants.NET_WEB
 // .WEB_COLOR, aliased below as TETHER_BASE_COLOR (C0/V5: cable and net share
@@ -242,7 +254,7 @@ export class CaptureNetVisual {
     /** @type {boolean} */
     this._enabled = false;
     /**
-     * Active visual entries keyed by composite string ('arm_0', 'pod_1', etc.)
+     * Active visual entries keyed by composite string ('arm_0', 'pod_0', etc.)
      * @type {Map<string, {group:THREE.Group, canisterMesh:THREE.Mesh, discMesh:THREE.Mesh, tetherLine:THREE.Line, tetherPositions:Float32Array, armIndex:number, podIndex:number}>}
      */
     this._activeVisuals = new Map();
@@ -785,7 +797,7 @@ export class CaptureNetVisual {
 
   /**
    * Create a visual group for one net projectile.
-   * @param {string} key            — composite map key ('arm_0', 'pod_1')
+   * @param {string} key            — composite map key ('arm_0', 'pod_0')
    * @param {number} armIndex       — daughter arm index (≥0) or -1
    * @param {number} podIndex       — mother pod index (≥0) or -1
    * @param {object} netProjectile  — NetProjectile instance
@@ -816,6 +828,7 @@ export class CaptureNetVisual {
     });
     const canisterMesh = new THREE.Mesh(canGeo, canMat);
     canisterMesh.name = 'canister';
+    if (podIndex >= 0) canisterMesh.scale.setScalar(MOTHER_CANISTER_SCALE);   // mother: folded bundle ≤ 0.10 m radial (see the const)
     group.add(canisterMesh);
 
     // ── Disc (SPINNING_UP → CAPTURED) ──
@@ -905,6 +918,7 @@ export class CaptureNetVisual {
     });
     const canisterMesh = new THREE.Mesh(canGeo, canMat);
     canisterMesh.name = 'canister';
+    if (podIndex >= 0) canisterMesh.scale.setScalar(MOTHER_CANISTER_SCALE);   // mother: folded bundle ≤ 0.10 m radial (see the const)
     group.add(canisterMesh);
 
     // ── Cone mesh + rim weights + drawstring + apex hub — shared NetMeshKit ──
@@ -2225,7 +2239,7 @@ export class CaptureNetVisual {
    * Get the apex hub world position for a given net visual key.
    * Returns the group position as fallback when flag is OFF or key not found.
    * Stage 3 camera can use this for tether-attach-point framing.
-   * @param {string} key — visual key ('arm_0', 'pod_1', etc.)
+   * @param {string} key — visual key ('arm_0', 'pod_0', etc.)
    * @returns {THREE.Vector3} scratch vector — caller must copy if persisting
    */
   getTetherAttachPoint(key) {

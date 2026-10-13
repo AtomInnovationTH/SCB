@@ -363,7 +363,7 @@ class PersistenceManager {
     if (!this._storageAvailable) return false;
     const data = this.peek() || {};
     data.captureNet = {
-      motherPodInventory: netState?.motherPodInventory || [0, 0],
+      motherPodInventory: netState?.motherPodInventory || [0],
       playerHasFragmented: netState?.playerHasFragmented || false,
       armNetCounts: armNetCounts || [],
     };

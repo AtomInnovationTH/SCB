@@ -64,7 +64,7 @@ export const KM_PER_SCENE_UNIT = Math.round(1 / M_TO_U) / 1000;
 export const SOLAR_BASE_W =
   Constants.SOLAR_PANEL_EFFICIENCY * Constants.SOLAR_FLUX * Constants.SOLAR_PANEL_AREA;
 
-/** Full Mother large-net magazine: pods × nets/pod (CaptureNet._motherPodMax). */
+/** Full Mother large-net magazine: launchers × nets/launcher = 1 × 4 (CaptureNet._motherPodMax; was 2 × 2 (pod A and pod B) until 2026-10-13). */
 export const MOTHER_NET_MAGAZINE_FULL =
   Constants.CAPTURE_NET.MOTHER_POD_COUNT * Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
 
@@ -291,7 +291,7 @@ const FITTING_SPECS = {
     current: (deps) => firstArm(deps)?.config?.captureSuccessRate,
   },
   mother_net_restock: {
-    // BORDERLINE: the Large-Net pods ride the Mother hull, but D9 groups nets
+    // BORDERLINE: the Large-Net launcher rides the Mother hull, but D9 groups nets
     // with the berth/reel cartridges ("arms, nets ... included") → BERTHS.
     subsystem: 'BERTHS', reads: 'captureNetSystem',
     display: (row) => ({ param: 'motherNets', base: MOTHER_NET_MAGAZINE_FULL, unit: 'nets', op: `+${row.value}` }),

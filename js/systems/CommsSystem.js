@@ -714,7 +714,7 @@ export class CommsSystem {
       const text = missReasonToText(data?.reason);
       if (!text) return;
       const source = (data?.armIndex != null && data.armIndex >= 0)
-        ? `ARM-${data.armIndex + 1}` : 'NET POD';
+        ? `ARM-${data.armIndex + 1}` : 'LARGE NET';
       this.addMessage('WARNING', source, text, { channel: 'ALERT' });
     });
 

@@ -188,7 +188,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_whale_target',
     title: 'Whale',
-    body: 'Whale-class target — over 500 kg. Only the Mother\'s Large Net holds that. Fly the Mother in close and fire [N]; plan the burn, the pods are scarce.',
+    body: 'Whale-class target — over 500 kg. Only the Mother\'s Large Net holds that. Fly the Mother in close and fire [N]; plan the burn, the nets are scarce.',
     duration: 9000,
     icon: 'MASS',
   },

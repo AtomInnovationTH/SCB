@@ -2479,8 +2479,9 @@ export class InputManager {
   }
 
   /**
-   * Fire a Mother Large Net pod at a whale-class target (net ladder Phase B).
-   * Picks the pod with inventory; fireMotherNet handles empty/cooldown comms.
+   * Fire the Mother's Large Net launcher at a whale-class target (net ladder
+   * Phase B). One launcher, on the axis (owner 2026-10-13), so podIndex is
+   * always 0; fireMotherNet handles empty/cooldown comms.
    * @param {object} target — the selected debris (mass > 500 kg)
    */
   fireMotherNet(target) {
@@ -2488,10 +2489,9 @@ export class InputManager {
     const cns = d.captureNetSystem;
     const ap = d.autopilotSystem;
 
-    // Pick the first pod with inventory; if both empty, fire pod 0 so the
-    // system's own "magazine empty — restock at shop" comms fires.
-    let podIndex = 0;
-    if (cns.getMotherPodInventory(0) <= 0 && cns.getMotherPodInventory(1) > 0) podIndex = 1;
+    // One launcher: podIndex is always 0. When it is empty fireMotherNet's own
+    // "magazine empty — restock at shop" comms fires (below).
+    const podIndex = 0;
 
     // Empty-magazine pre-check FIRST — never start a rotation when there is
     // nothing to fire. The system emits the "empty / reloading" comms.

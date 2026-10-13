@@ -1596,20 +1596,19 @@ export const Constants = {
 
     // ── Nose berthing collar (S13(c) — B is doctrine) ──
     // The fore docking port reborn as functional hardware: whale-class cargo
-    // mates rigidly, on-axis, at the nose. The ring sits AT the muzzle plane
-    // (z = 1.30). Seat rule: cargo surface at the ring plane — cargo centre
+    // mates rigidly, on-axis, at the nose. The ring sits at the seat plane
+    // (z = 1.30); the net leaves from just behind it. Seat rule: cargo surface at the ring plane — cargo centre
     // at BERTH_COLLAR_Z_M + sizeMeter/2 + CAPTURE_NET.BERTH_CLEARANCE_M 1.0
     // (mirrors ARM_HOLD_CLEARANCE_M).
-    // S13(e): the pods left the boresight (the collar owns the axis alone) —
-    // they re-site at ±NET_POD_X_M on the fore deck (probe tmp/s13e-podsite.log:
-    // smallest site with real collar-ring margin, +0.030 m; sensor ring +0.103,
-    // ROSA +0.060 with the housing shortened to z ∈ [1.06, 1.30], strut sweep
-    // +0.397, RCS doghouses +0.463), so the launch-recoil yaw lever returns
-    // (±J·0.45, alternating sign across the magazine — averages to zero, the
-    // same argument the ±0.06 pitch stagger made) and is billed (see
-    // MOTHER_NET_RECOIL_RCS_LEVER_M). The bore no longer needs to clear the
-    // launcher housing; the 0.16 m inner radius is earned and unchanged.
-    BERTH_COLLAR_Z_M: 1.30,        // m — collar seat plane, ship-local z (== muzzle plane)
+    // History: S13(e) (2026-08-14) moved the two Large Net pods to ±0.45 m off
+    // the boresight (until 2026-10-13) so the collar owned the axis alone,
+    // which brought back a launch-recoil yaw lever (billed in N₂). Owner 2026-10-13 ("now there are
+    // 2 large net launchers at nose of mother. Should be one, centered.") —
+    // ONE launcher, on the axis, INSIDE the collar, firing through its bore;
+    // the collar and the berth anchor are untouched. The muzzle sits at
+    // x = y = 0, so the shot has no lever about the centre of mass (the turning
+    // kick is gone). See NET_LAUNCHER_* below.
+    BERTH_COLLAR_Z_M: 1.30,        // m — collar seat plane, ship-local z (the net now leaves 30 mm behind it, from NET_LAUNCHER_MUZZLE_Z_M)
     BERTH_COLLAR_INNER_R_M: 0.16,  // m — bore radius
     // Design 6 (2026-09-08, "sensors need visual clearance to see"): the collar
     // is a SKELETON — a thin capture ring (tube r 0.020 → R = INNER + TUBE =
@@ -1622,7 +1621,18 @@ export const Constants = {
     // CARGO blueprint print "0.32 m bore" from INNER_R.
     BERTH_COLLAR_TUBE_R_M: 0.020,  // m — capture-ring tube radius (ring R = INNER_R + TUBE_R)
     BERTH_COLLAR_STRUT_FOOT_R_M: 0.30, // m — strut foot radial on the turntable top (z 1.05)
-    NET_POD_X_M: 0.45,             // m — S13(e): pod muzzle |x| off the boresight (probe-sited)
+    // ── The one Large Net launcher (owner 2026-10-13: "one, centered") ──
+    // A gunmetal cylinder on the long axis (x = y = 0), standing on the sensor
+    // turntable INSIDE the collar bore and firing through it. Probe-sited
+    // 2026-10-13 (tmp/netpod-centre-candidate.log, gaps good to ~1.5 mm): at
+    // r 0.12 with its front face at z 1.27 it keeps ring tube 47.1 mm, optics
+    // (IR / EO / LIDAR / LaserBaffle) 40.0 mm, collar struts 54.8 mm, fore sun
+    // pucks 57.8 mm; 15 mm to everything is reached only at r 0.145. The
+    // corridor along the nose from z 1.27 is clear to radius 0.155 (set by the
+    // sun pucks; the ring's inner edge is at 0.1597).
+    NET_LAUNCHER_R_M: 0.12,        // m — launcher housing radius
+    NET_LAUNCHER_MUZZLE_Z_M: 1.27, // m — front face = muzzle plane, 10 mm behind the ring (ring tube spans z 1.28-1.32)
+    NET_LAUNCHER_BASE_Z_M: 1.050,  // m — base buried 5 mm in the turntable (top 1.055), through the berth plate (z 1.055-1.060)
 
     // ── Strut (NEW — replaces short-strut spec) ──
     // DECISIONS §11: +10 cm to match the +10 cm hinge move, so the stowed
@@ -1944,7 +1954,8 @@ export const Constants = {
       // flower folds FORE along the barrel for launch (θ 0), so the fore-folded
       // boom root must thread the lane between the docked weaver bodies (az
       // 60 ± 12.5°, r to 0.528 in the pocket band) on the OUTBOARD side and the
-      // MGA patch (az 9.8..40.2, r 0.424), the net-launcher pods and the furled
+      // MGA patch (az 9.8..40.2, r 0.424), the net-launcher pods (two at
+      // ±0.45 m until 2026-10-13; one centred launcher now) and the furled
       // ROSA coil on the INBOARD side. That balance landed on 41°.
       //
       // ROSA coil-physics fix: the coil radius became derived rather than
@@ -2074,7 +2085,8 @@ export const Constants = {
       //   0,3,4,5,6,7,8,9,10,12,13,15`, 1° α steps, reproducible)
       //   At θ 2 the packs end at z 1.505, past the muzzle plane (1.30), and
       //   still clear (§H): the held catch's near face (z 2.30) by 795 mm, the
-      //   net-launch path (pod r 0.12 along +Z) by 120 mm, a daughter leaving
+      //   net-launch path (launcher r 0.12 along +Z from the centred muzzle,
+      //   2026-10-13) by 390 mm [it was 120 mm for the two ±0.45 m pods], a daughter leaving
       //   or returning along its dock line at α 0 by 50.0 mm.
       //
       // The 0° launch fold fails the gate only against a strut SWINGING
@@ -2713,13 +2725,15 @@ export const Constants = {
   DUALFIRE_RECOIL_WEAVER: 0.509,         // m/s — single Weaver recoil on 130kg mothership
   DUALFIRE_RECOIL_SPINNER: 0.171,        // m/s — single Spinner recoil
   DUALFIRE_RCS_COMPENSATION_N2: 3.7,     // grams N₂ — RCS cost per single Weaver shot
-  // Cargo-continuity S13(e): with the pods off the boresight the mother-net
-  // launch recoil has a real ANGULAR channel (yaw impulse J·NET_POD_X_M), and
-  // the RCS null's cold-gas cost is billed too — today only the linear part
-  // was. Billed as the equivalent linear impulse at the cold-gas doghouse
-  // lever (the pods sit 0.44 m off the roll axis — azimuth-invariant, so the
-  // 90/270 → 94.65/274.65 column move leaves it unchanged) through the SAME
-  // N₂-per-impulse proportionality as the linear pattern above.
+  // Cargo-continuity S13(e): when the Large Net muzzle sat off the boresight
+  // (±0.45 m) the launch recoil had a real ANGULAR channel (yaw impulse
+  // J·x), and the RCS null's cold-gas cost was billed too, as the equivalent
+  // linear impulse at the cold-gas doghouse lever, through the SAME
+  // N₂-per-impulse proportionality as the linear pattern above. Owner
+  // 2026-10-13: ONE launcher, centred. The muzzle is at x = y = 0 on the
+  // centre of mass, so the lever arm is zero and the angular bill is zero. The
+  // code keeps the general lever-arm form (any off-axis muzzle would be billed
+  // again), so this constant is still read — it just multiplies zero.
   MOTHER_NET_RECOIL_RCS_LEVER_M: 0.44,   // m — cold-gas doghouse lever (az 94.65/274.65)
 
   // --- Pulse Scan ---
@@ -3914,8 +3928,8 @@ export const Constants = {
     // ── Cargo hand-off: parked catch → daughter rack (cargo-continuity S7) ──
     // The mother's nose is the only place a tethered mass can be towed (it must
     // ride the thrust axis or every burn torques a non-rigid line), and it is
-    // also where both pods fire from — 12 cm apart, sharing one corridor. So a
-    // parked catch blocks the launcher by PHYSICS, and the only rigid attachment
+    // also where the one launcher fires from (on the axis, through the collar
+    // bore). So a parked catch blocks the launcher by PHYSICS, and the only rigid attachment
     // point this ship models is a daughter's strut tip. Hence the hand-off.
     //
     // Owner ruling (2026-08-12 design review): AUTOMATIC, no hotkey — the player
@@ -4099,9 +4113,13 @@ export const Constants = {
     FRAG_CREDIT_PENALTY:    50,     // credits lost per fragment (§5.5)
     FRAG_MERCY_FIRST_FREE:  true,   // first-fragmentation waives penalties (§5.7)
 
-    // ── Mother Pod Config — per §2.9 ──
-    MOTHER_POD_COUNT:       2,      // 2 symmetric pods (A and B)
-    MOTHER_POD_SPRING_E:    100,    // J per pod (§2.8)
+    // ── Mother launcher config — per §2.9 ──
+    // Owner 2026-10-13: ONE launcher, centred on the nose (was 2 symmetric pods
+    // A and B at +-0.45 m). The magazine total is unchanged at 4 nets
+    // (LARGE.MAGAZINE_SIZE 4 x 1 launcher; was 2 x 2). Name kept: it counts
+    // launchers, and the `podIndex` API stays (always 0).
+    MOTHER_POD_COUNT:       1,      // 1 launcher (was 2 symmetric pods A and B, until 2026-10-13)
+    MOTHER_POD_SPRING_E:    100,    // J per launcher (§2.8)
     GUIDE_RING_MASS:        0.080,  // kg (§2.9.3)
 
     // ═══════════════════════════════════════════════════════════
@@ -4157,10 +4175,11 @@ export const Constants = {
       CONE_HALF_ANGLE:  15,        // degrees (§2.1)
       SPIN_HZ:          2,         // (§6.1)
       MAX_CAPTURE_MASS: 5000,      // kg (§6.1)
-      // Net ladder: 2 nets per pod × 2 body-mounted pods (§2.9) = 4 whale
-      // captures per load. Whale hunts are the Mother's premium, delta-v-costly
-      // job — the scarce magazine enforces "burn only for whales" doctrine.
-      MAGAZINE_SIZE:    2,         // nets/pod Dyneema Y0 (§6.4)
+      // Net ladder: 4 nets in the Mother's one centred launcher (§2.9; was
+      // 2 nets/pod x 2 pods until 2026-10-13, the same 4 whale captures per
+      // load). Whale hunts are the Mother's premium, delta-v-costly job — the
+      // scarce magazine enforces "burn only for whales" doctrine.
+      MAGAZINE_SIZE:    4,         // nets in the one launcher, Dyneema Y0 (§6.4)
       // No RELOAD_TIME in any net class (register items 42 + 68, swept
       // 2026-08-15): the documented 30/15/5 s reloads were never in the sim —
       // nothing read them. The mother's live re-fire gate is the per-pod

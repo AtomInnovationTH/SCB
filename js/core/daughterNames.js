@@ -7,7 +7,7 @@
  * (which only has an armId string from event payloads) route through this one
  * function so the same daughter can never be labelled two different ways.
  *
- * Non-daughter sources (HOUSTON, SYSTEM, ARM-1, NET POD, …) and any unrecognised
+ * Non-daughter sources (HOUSTON, SYSTEM, ARM-1, LARGE NET, …) and any unrecognised
  * string pass through unchanged.
  *
  * @param {string} armId - e.g. 'weaver-1', 'spinner-2', 'menu-weaver-3'

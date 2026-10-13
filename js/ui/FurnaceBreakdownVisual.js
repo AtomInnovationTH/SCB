@@ -172,10 +172,11 @@ export class FurnaceBreakdownVisual {
    * own `_scenePosition` (what pinCapturedDebris wrote this frame).
    * After the completion splice the docked catch is gone, so fall back to the
    * LAST live seat (the ghost bag's draw-in reads from where the mated body
-   * actually was), then the berth collar anchor (the on-axis station — S13(e)
-   * moved the pods to ±NET_POD_X_M, so the pod muzzle is 0.45 m off the collar;
-   * the pod-0 read survives only for headless mocks without the anchor — the
-   * CaptureNet/LassoSystem idiom), then the bus centre.
+   * actually was), then the berth collar anchor (the on-axis station; the
+   * launcher muzzle is 30 mm behind it since 2026-10-13, and was 0.45 m off
+   * the collar for the S13(e) pods; the muzzle read survives only for headless
+   * mocks without the anchor — the CaptureNet/LassoSystem idiom), then the bus
+   * centre.
    * @param {THREE.Vector3} out
    */
   _collarWorld(out) {

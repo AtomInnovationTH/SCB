@@ -321,11 +321,12 @@ export class StatusPanel {
       this._updateNetDigest();
     });
 
-    // Net ladder Phase B: Mother Large Net pod inventory segment. The digest
+    // Net ladder Phase B: Mother Large Net inventory segment. The digest
     // NET bar counts LASSO ammo; this separate M-NET segment tracks the whale-
-    // hunt pods, fed by NET_INVENTORY_CHANGED { source:'mother', podInventory }.
-    this._motherPods = null;      // [n0, n1] once a mother event arrives
-    this._motherPodsMax = null;   // [max0, max1]
+    // hunt launcher, fed by NET_INVENTORY_CHANGED { source:'mother', podInventory }.
+    // Owner 2026-10-13: ONE launcher, so the payload is a one-element array.
+    this._motherPods = null;      // [n0] once a mother event arrives
+    this._motherPodsMax = null;   // [max0]
     eventBus.on(Events.NET_INVENTORY_CHANGED, (data) => {
       if (!data || data.source !== 'mother') return;
       if (Array.isArray(data.podInventory)) this._motherPods = data.podInventory.slice();
@@ -399,7 +400,7 @@ export class StatusPanel {
           <span class="md-reach-group" id="mother-digest-net-reach-group"><span class="md-sep">·</span><span class="md-reach" id="mother-digest-net-reach" title="Net reach">${StatusPanel.reachText(Constants.LASSO_RANGE)}</span></span>
         </span>
         <span class="md-sep" id="mother-digest-mnet-sep" style="display:none;">·</span>
-        <span id="mother-digest-mnet" class="md-seg" style="display:none;align-items:center;gap:4px;color:${NET_COLOR};" title="Mother Large Net pods (whale hunts)">
+        <span id="mother-digest-mnet" class="md-seg" style="display:none;align-items:center;gap:4px;color:${NET_COLOR};" title="Mother Large Net (whale hunts)">
           <span class="md-core">
           <span class="md-label">M-NET</span>
           <span class="md-count" id="mother-digest-mnet-count">0/0</span>
@@ -1012,9 +1013,10 @@ export class StatusPanel {
   }
 
   /**
-   * Update the MOTHER digest's Large Net pod segment (`mother-digest-mnet`).
-   * Net ladder Phase B: shows `M-NET n/max` where n = both pods combined and
-   * max = 2 pods × LARGE.MAGAZINE_SIZE. Hidden until a `source:'mother'`
+   * Update the MOTHER digest's Large Net segment (`mother-digest-mnet`).
+   * Net ladder Phase B: shows `M-NET n/max` where n = the launcher's nets (the
+   * payload array summed) and max = LARGE.MAGAZINE_SIZE (4, one launcher;
+   * it was 2 pods x 2 until 2026-10-13). Hidden until a `source:'mother'`
    * NET_INVENTORY_CHANGED arrives (CAPTURE_NET off ⇒ never shown). Amber ≤50%,
    * red at 0 — the whale-hunt magazine is scarce by design.
    * @private
@@ -1033,11 +1035,11 @@ export class StatusPanel {
     }
 
     const nets = this._motherPods.reduce((a, b) => a + (b || 0), 0);
-    const perPod = (Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE
-      && Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE) || 2;
+    const perLauncher = (Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE
+      && Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE) || 4;
     const maxNets = Array.isArray(this._motherPodsMax)
       ? this._motherPodsMax.reduce((a, b) => a + (b || 0), 0)
-      : perPod * this._motherPods.length;
+      : perLauncher * this._motherPods.length;
 
     const color = nets <= 0 ? '#ff4444'
       : (maxNets > 0 && nets <= maxNets * 0.5) ? '#ffaa00' : NET_COLOR;
@@ -1049,14 +1051,14 @@ export class StatusPanel {
     count.style.color = color;
     seg.style.color = color;
 
-    // Mother-net-reel plan §4.14/§12: surface the pod reload cooldown, which
-    // previously had NO HUD reader — a cooling pod looked identical to a
-    // ready one until the player pressed N and ate the refusal. Polled from
-    // the system (10 Hz update cadence) and appended as ` · Ns` while any
-    // pod is cooling. Deliberately separate from the count so "no ammo"
-    // (red 0/max) and "reloading" (amber ·Ns) never conflate.
+    // Mother-net-reel plan §4.14/§12: surface the launcher reload cooldown,
+    // which previously had NO HUD reader — a cooling launcher looked
+    // identical to a ready one until the player pressed N and ate the
+    // refusal. Polled from the system (10 Hz update cadence) and appended as
+    // ` · Ns` while it is cooling. Deliberately separate from the count so
+    // "no ammo" (red 0/max) and "reloading" (amber ·Ns) never conflate.
     const cd = (typeof captureNetSystem?.getCooldown === 'function')
-      ? Math.max(captureNetSystem.getCooldown('pod', 0), captureNetSystem.getCooldown('pod', 1))
+      ? captureNetSystem.getCooldown('pod', 0)
       : 0;
     if (cd > 0) {
       count.textContent = `${nets}/${maxNets} ·${Math.ceil(cd)}s`;
@@ -1064,8 +1066,8 @@ export class StatusPanel {
     }
 
     // §8 A2 launcher-state indicator: a mated catch holds the collar station
-    // (S13(e): it no longer BLOCKS the launcher — the pods are off the
-    // boresight; a shot refuses only per-shot when it fouls the cargo).
+    // (S13(e): it no longer BLOCKS the launcher as such; a shot refuses only
+    // per-shot when it fouls the cargo, which on the axis is every shot).
     // Explicit BERTHED tag — never faked by zeroing the count (which would
     // conflate "no ammo" with "docked").
     const docked = (typeof captureNetSystem?.getDockedCatch === 'function')
@@ -1090,7 +1092,7 @@ export class StatusPanel {
       count.style.color = '#66ddff';
       seg.title = 'Catch mated at the collar — [K] jettison';
     } else {
-      seg.title = 'Mother Large Net pods (whale hunts)';
+      seg.title = 'Mother Large Net (whale hunts)';
     }
   }
 

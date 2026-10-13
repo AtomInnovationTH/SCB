@@ -286,15 +286,17 @@ const SYSTEMS = [
         anchor: [ -0.184 * M, 0.184 * M, 1.20 * M ] },
       { id: 'net_launcher', name: 'LARGE NET LAUNCHER', risk: 'GREEN', tier: 'major', codexId: 'miura_ori_net',
         massKg: 5, priority: 7, specs: ['Miura-ori net, ~5 m span'],
-        // Mother audit T10 (F13): the old static (0, 0, 1.30) was the collar
-        // bore, 0.33 m from either pod. Bind the starboard housing (its origin
-        // is the housing centre at (0.45, 0, 1.18)); the static fallback is the
-        // housing's top surface.
-        mesh: 'NetLauncher_0',
-        pick: ['NetLauncher_0', 'NetLauncher_1'],
-        // §13 r4 roll-up: the net-pod saddles carry the pods.
-        pickPrefixes: ['NetPodSaddle'],
-        anchor: [ 0.45 * M, 0.12 * M, 1.18 * M ] },
+        // ONE launcher, centred inside the collar bore (owner 2026-10-13: "one,
+        // centered"; there were two housings at x ±0.45 until then). Mother
+        // audit T10 (F13) lesson kept: the old static (0, 0, 1.30) was the
+        // collar bore, so bind the HOUSING — its origin is the housing centre
+        // at (0, 0, 1.16); the static fallback is the housing's top surface
+        // (r 0.12), same x/z as the mesh origin. The cells are children of the
+        // housing, so the exact-name pick below outlines the whole assembly;
+        // there are no saddles any more.
+        mesh: 'NetLauncher',
+        pick: ['NetLauncher'],
+        anchor: [ 0, 0.12 * M, 1.16 * M ] },
       { id: 'berth_collar', name: 'DOCKING COLLAR', risk: 'GREEN', tier: 'detail', codexId: 'capture_collar',
         // Design 6 (2026-09-08): massKg 6 → 3 — the skeleton collar (thin ring
         // on four struts, ≈ 2.5 kg of thin-wall Al) replaced the ≈ 9 kg torus +
@@ -694,7 +696,7 @@ const PORTRAIT_OVERRIDES = {
   mli:           { dir: [1.0, 0.35, 0.2], fill: 0.85, frame: ['Barrel_ConfigG'] },   // the skin IS the hull: the barrel fills the frame (portrait-only; hover stays card-only)
   // PAYLOAD — own mesh from fore-q-stbd / side / hinge; BerthFace gap 0.009 from the fore quarters
   despin:        { dir: [-0.9, 0.3, 0.8], fill: 0.7 },  // Design 6 re-check: port-fore, tighter — the telescope tube through the open ring
-  net_launcher:  { dir: [0.3, 0.3, 1.0] },              // T7: nearer fore-on so BOTH cans flank the collar (the stbd quarter hid the far one)
+  net_launcher:  { dir: [0.3, 0.3, 1.0] },              // ONE centred housing inside the collar (2026-10-13; re-checked by picture, see the w7 plan Log)
   berth_collar:  { dir: [0.4, 0.25, 1.0] },             // Design 6 re-check: kept — dead-ahead ([0.15, 0.15, 1]) let the whole sensor farm steal the frame (4/2 vs 4/3)
   // SENSORS — the turret cluster; instrument sides (+X EO / −X IR / −Y LIDAR dome / +Y canted trackers / the FrontCap)
   gimbal:        { dir: [0.5, 0.9, 0.5] },              // Design 6 re-check: kept the above-fore view — through the ring from dead-ahead the turret hid behind the ring (3/2 vs 4/3)

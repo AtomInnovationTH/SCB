@@ -127,11 +127,11 @@ export const UPGRADES = [
     trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
   // Net ladder Phase B: consumable Mother Large Net restock. Repeatable (no
   // maxLevel gate — see _purchaseUpgrade consumable branch). Each buy loads one
-  // net (250 cr) into the emptiest pod, up to 2 pods × 2. Whale-hunt magazine
+  // net (250 cr) into the Mother's one launcher, up to 4. Whale-hunt magazine
   // only; no in-mission resupply. Gated by CAPTURE_NET (filtered at render).
   { id: 'mother_net_restock', cat: 'Daughters', name: 'Mother Large Net (restock)',
     cost: Constants.CAPTURE_NET.LARGE.REPLACEMENT_COST,
-    desc: 'Load one Large Net into a Mother pod (whale hunts). Buy up to 2 pods × 2.',
+    desc: 'Load one Large Net into the Mother\'s launcher (whale hunts). Holds 4.',
     effect: 'motherNetRestock', value: 1, maxLevel: Infinity, consumable: true,
     requiresFeature: 'CAPTURE_NET',
     trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },

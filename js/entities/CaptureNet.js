@@ -1007,8 +1007,8 @@ export class NetProjectile {
   /**
    * @param {object} config
    * @param {object} config.netClass       — one of CN.LARGE / CN.MEDIUM / CN.SMALL
-   * @param {number} config.armIndex       — daughter arm index (-1 for mother pod)
-   * @param {number} [config.podIndex=-1]  — mother pod index (0 or 1, -1 for daughter)
+   * @param {number} config.armIndex       — daughter arm index (-1 for the mother launcher)
+   * @param {number} [config.podIndex=-1]  — mother launcher index (always 0 — one launcher; -1 for daughter)
    * @param {object} config.launchPosition — {x, y, z} in metres
    * @param {object} config.launchDirection — normalised {x, y, z}
    * @param {object} [config.targetDebris] — target with .position, .mass, .id
@@ -1836,11 +1836,12 @@ export class NetProjectile {
     // Seed ship-relative reel state.
     const M_NET = Constants.SCENE_UNITS_PER_METER;
     // S13(e): the reel/berth homes on the COLLAR anchor (the berth-approach
-    // corridor is the collar's — the pods left the boresight), while the seat
-    // below keeps the pod muzzle (_anchorScene): the brake apex is on the
-    // launch line. The pod→collar offset rides in the lateral seed and decays
-    // across the reel (the catch swings onto the collar axis as it reels in —
-    // the existing _settleFwdLagged mechanism), so the hand-off never snaps.
+    // corridor is the collar's), while the seat below keeps the launcher
+    // muzzle (_anchorScene): the brake apex is on the launch line. The
+    // muzzle→collar offset rides in the lateral seed and decays across the reel
+    // (the existing _settleFwdLagged mechanism), so the hand-off never snaps.
+    // Since 2026-10-13 the muzzle is ON the axis, 30 mm behind the collar, so
+    // that offset is purely axial (it was 0.45 m sideways for the pod pair).
     const anchorWorld = (typeof player.getNetBerthCollarPositionInto === 'function')
       ? player.getNetBerthCollarPositionInto(new THREE.Vector3())
       : (typeof player.getNetPodPositionInto === 'function')
@@ -2187,7 +2188,7 @@ export class NetProjectile {
         podIndex: this.podIndex,
       });
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Catch secured — berthed at pod ${this.podIndex + 1}. Securing ${Math.round(this.capturedMass)} kg…`,
+        text: `Catch secured at the collar. Securing ${Math.round(this.capturedMass)} kg…`,
         source: 'HOUSTON', priority: 'info',
       });
     }
@@ -2198,8 +2199,8 @@ export class NetProjectile {
    * Analytic — no mesh collision exists anywhere in this codebase. The
    * corridor is a cylinder along ship-local +Z from the berth anchor (S13(e):
    * the COLLAR — the berth-approach corridor is the collar's, S12 M2 reading
-   * 8; the pods left the boresight and their launch corridors are a separate
-   * matter, owned by the fire-time foul read getCollarShotFoul), radius =
+   * 8; the launch corridor is a separate matter, owned by the fire-time foul
+   * read getCollarShotFoul), radius =
    * debris.sizeMeter/2 + BERTH_CLEARANCE_M. It must contain:
    *   1. NO strut tip (strutLocalDirection(α, az) × STRUT_LENGTH from the
    *      collar pivot — at α≈π a 1.70 m strut tip reaches ~2.5 m fore, past
@@ -2231,7 +2232,7 @@ export class NetProjectile {
     // Everything is evaluated SHIP-LOCAL with the origin at the berth anchor
     // (S13(e): the collar, ON the axis at (0, 0, BERTH_COLLAR_Z_M) — read from
     // the anchor Object3D when the real ship is present, falling back to the
-    // pod muzzle locals (headless mocks without the collar anchor) and then to
+    // launcher muzzle local (headless mocks without the collar anchor) and then to
     // the documented constant), so the test is attitude- and position-free.
     const berthAnchor = player._netBerthCollar
       ?? player._netPodMuzzles?.[this.podIndex] ?? player._netPodMuzzles?.[0];
@@ -2392,12 +2393,11 @@ export class NetProjectile {
     // forced out to CORRIDOR_EXTENDED_STANDOFF_M must HOLD there — recomputing
     // the base standoff here would slide the catch inward at the berth.
     // S13(c): this IS the collar seat. S13(e): the seat is referenced to the
-    // COLLAR anchor (the ring plane IS the muzzle plane at z = 1.30, and the
-    // collar is ON the axis) — cargo centre at collar + fwd × (sizeMeter/2 +
-    // BERTH_CLEARANCE_M 1.0) is exactly "cargo surface at the ring, centre at
-    // ring-z + size/2 + clearance" — the seat the rigid complete-berth mate
-    // holds (no pendulum from COLLARED on, see below). The pods left the
-    // boresight; the berth did not.
+    // COLLAR anchor (the ring plane z = 1.30, ON the axis; the launcher muzzle
+    // is 30 mm behind it since 2026-10-13) — cargo centre at collar + fwd ×
+    // (sizeMeter/2 + BERTH_CLEARANCE_M 1.0) is exactly "cargo surface at the
+    // ring, centre at ring-z + size/2 + clearance" — the seat the rigid
+    // complete-berth mate holds (no pendulum from COLLARED on, see below).
     const baseStandoffM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
     const berthStandoffM = Math.max(baseStandoffM, this._effectiveStandoffM ?? baseStandoffM);
     this._remainingM = berthStandoffM;
@@ -3004,9 +3004,11 @@ export class CaptureNetSystem {
     /** @type {NetProjectile[]} Active nets in flight / capture / reel */
     this.activeNets = [];
 
-    // Mother Large Net pod inventory: [podA_count, podB_count]
-    this._motherPodInventory = [0, 0];
-    this._motherPodMax       = [0, 0];
+    // Mother Large Net launcher inventory: one entry per launcher
+    // (MOTHER_POD_COUNT = 1 since 2026-10-13, so a one-element array [count];
+    // it was [podA_count, podB_count] for the two ±0.45 m pods).
+    this._motherPodInventory = new Array(this._motherPodCount()).fill(0);
+    this._motherPodMax       = new Array(this._motherPodCount()).fill(0);
 
     /** @type {Map<string, number>} Cooldown timers keyed by 'pod_0', 'arm_3', etc. */
     this._cooldownTimers = new Map();
@@ -3052,8 +3054,8 @@ export class CaptureNetSystem {
     this._lassoSystem = deps.lassoSystem || this._lassoSystem || null;
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return;
 
-    this._motherPodInventory = [CN.LARGE.MAGAZINE_SIZE, CN.LARGE.MAGAZINE_SIZE];
-    this._motherPodMax       = [CN.LARGE.MAGAZINE_SIZE, CN.LARGE.MAGAZINE_SIZE];
+    this._motherPodInventory = new Array(this._motherPodCount()).fill(CN.LARGE.MAGAZINE_SIZE);
+    this._motherPodMax       = new Array(this._motherPodCount()).fill(CN.LARGE.MAGAZINE_SIZE);
     this._initialized = true;
 
     eventBus.emit(Events.NET_INVENTORY_CHANGED, {
@@ -4348,8 +4350,8 @@ export class CaptureNetSystem {
 
   /**
    * §8 A2 — the docked catch accessor. S13(e): the occupancy FIRE gate is
-   * retired (the pods left the boresight; a shot refuses only when its own
-   * corridor fouls the mated cargo — getCollarShotFoul). This survives as the
+   * retired (a shot refuses only when its own corridor fouls the mated
+   * cargo — getCollarShotFoul). This survives as the
    * read for HUD/status (StatusPanel), the lasso's single-station soft-block
    * (the collar holds ONE body), the adoption guard, releaseDockedCatch, and
    * the foul read.
@@ -4393,13 +4395,17 @@ export class CaptureNetSystem {
 
   /**
    * Cargo-continuity S13(e) — the per-shot foul read that REPLACED the
-   * occupancy block. The pods are off the boresight and the collar owns the
-   * axis, so firing is never refused because cargo exists; but a collared body
-   * sits on-axis fore of the nose, and a shot at a dead-ahead target sweeps a
-   * cone no in-board pod site clears (probe tmp/s13e-podsite.log: the cone
-   * reaches cargo radius only fore of the cargo — with whale cargo mated,
-   * EVERY forward shot fouls, foul cone ≥ 90° at every class). So a specific
-   * shot whose corridor intersects the mated cargo refuses per-shot.
+   * occupancy block. Firing is never refused because cargo exists as such; but
+   * a collared body sits on-axis fore of the nose, and a shot at a dead-ahead
+   * target sweeps a cone no launcher site clears (probe tmp/s13e-podsite.log:
+   * the cone reaches cargo radius only fore of the cargo — with whale cargo
+   * mated, EVERY forward shot fouls, foul cone ≥ 90° at every class). So a
+   * specific shot whose corridor intersects the mated cargo refuses per-shot.
+   * Owner 2026-10-13 (one launcher, centred): the muzzle is now ON the
+   * cargo's axis, but the answer for a nose-direction shot is the same as it
+   * was from ±0.45 m — it fouled then and fouls now, at every catch size the
+   * Large Net takes (measured, see the w7 plan Log): a held catch at the
+   * collar blocks the shot; fire again once it has left.
    *
    * Geometry: closest approach of the shot ray (launchPos + t·launchDir, t>0)
    * to the docked catch's live pin (the drawn truth — _scenePosition is what
@@ -4408,8 +4414,8 @@ export class CaptureNetSystem {
    * approach is closer than the cargo radius + BERTH_CLEARANCE_M (the berth's
    * own keep-out — ONE clearance constant).
    *
-   * @param {number} podIndex — the firing pod (unused today; the cargo read is
-   *   pod-independent, but the signature keeps the call sites honest)
+   * @param {number} podIndex — the firing launcher (always 0; unused today, the
+   *   cargo read is launcher-independent, but the signature keeps the call sites honest)
    * @param {{x:number,y:number,z:number}} launchPos — shot origin, METRES
    *   (the NetProjectile/fireMotherNet convention)
    * @param {{x:number,y:number,z:number}} launchDir — unit shot direction
@@ -4508,8 +4514,8 @@ export class CaptureNetSystem {
     const M_NET = Constants.SCENE_UNITS_PER_METER;
     const sizeM = target.sizeMeter || 2;
     const standoffM = sizeM / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
-    // S13(e): the adoption seats on the COLLAR anchor (on-axis), not the pod —
-    // the pods left the boresight; the berth did not.
+    // S13(e): the adoption seats on the COLLAR anchor (on-axis), not the
+    // launcher muzzle (30 mm behind it since 2026-10-13).
     const berthAnchor = (typeof player.getNetBerthCollarPositionInto === 'function')
       ? player.getNetBerthCollarPositionInto(new THREE.Vector3())
       : (typeof player.getNetPodPositionInto === 'function')
@@ -4611,7 +4617,7 @@ export class CaptureNetSystem {
 
   /**
    * Cargo-continuity S13(d) — fore extent (metres from the collar plane —
-   * the berth anchor; the pods left the boresight in S13(e)) of the
+   * the berth anchor, S13(e)) of the
    * busiest active mother-net berth, 0 when the collar station is clear. A lassoed
    * piece waiting for the collar holds this far ahead of the seat so it never
    * overlaps the occupant (docked or inbound). Conservative: an inbound net
@@ -4642,7 +4648,7 @@ export class CaptureNetSystem {
    */
   _restoreNetInventory(net) {
     if (net.podIndex >= 0) {
-      // Mother pod — increment pod inventory
+      // Mother launcher — increment its magazine
       if (this._motherPodInventory[net.podIndex] < this._motherPodMax[net.podIndex]) {
         this._motherPodInventory[net.podIndex]++;
         eventBus.emit(Events.NET_INVENTORY_CHANGED, {
@@ -4669,8 +4675,8 @@ export class CaptureNetSystem {
   reset() {
     this.activeNets = [];
     this._cooldownTimers.clear();
-    this._motherPodInventory = [0, 0];
-    this._motherPodMax       = [0, 0];
+    this._motherPodInventory = new Array(this._motherPodCount()).fill(0);
+    this._motherPodMax       = new Array(this._motherPodCount()).fill(0);
     this._initialized = false;
     this._playerHasFragmented = false;
     // Phase B §9.5: kill any running net loops — a reset drops every net with
@@ -4682,9 +4688,21 @@ export class CaptureNetSystem {
   // ── Fire Commands ──────────────────────────────────────────────────────
 
   /**
-   * Fire a Large Net from a mother pod.
+   * Number of Mother Large Net launchers (CAPTURE_NET.MOTHER_POD_COUNT: 1 since
+   * 2026-10-13 — owner: one launcher, centred). Never below 1.
+   * @private
+   * @returns {number}
+   */
+  _motherPodCount() {
+    const n = Constants.CAPTURE_NET && Constants.CAPTURE_NET.MOTHER_POD_COUNT;
+    return Math.max(1, Math.floor(n) || 1);
+  }
+
+  /**
+   * Fire a Large Net from the Mother's launcher.
    *
-   * @param {number} podIndex   — 0 (Pod A) or 1 (Pod B)
+   * @param {number} podIndex   — the launcher index; always 0 (one launcher
+   *   since 2026-10-13, the podIndex API is kept)
    * @param {object} launchPos  — world position {x, y, z} in metres
    * @param {object} launchDir  — normalised direction {x, y, z}
    * @param {object} target     — debris object (with .position, .mass, .id)
@@ -4693,7 +4711,7 @@ export class CaptureNetSystem {
    */
   fireMotherNet(podIndex, launchPos, launchDir, target, mode) {
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return null;
-    if (podIndex < 0 || podIndex > 1) return null;
+    if (!(podIndex >= 0) || podIndex >= this._motherPodCount()) return null;
     // Phase 0.3 (capture-feedback overhaul): refusals speak — mirror the
     // LassoSystem denial-comms style so the player knows WHY nothing fired
     // and what fixes it (wait N s / restock at shop [B]).
@@ -4716,10 +4734,12 @@ export class CaptureNetSystem {
       });
       return null;
     }
-    // S13(e): the §8 A2 occupancy refusal is RETIRED — the pods left the
-    // boresight, so cargo occupancy is no longer a fire refusal. What remains
-    // is per-shot and geometric: a shot whose corridor intersects the mated
-    // cargo refuses with aim information (not a blocked launcher).
+    // S13(e): the §8 A2 occupancy refusal is RETIRED — cargo occupancy is not
+    // a fire refusal as such. What remains is per-shot and geometric: a shot
+    // whose corridor intersects the mated cargo refuses with aim information
+    // (not a blocked launcher). Since 2026-10-13 the launcher is back on the
+    // axis, where the catch seat is, so a catch held at the collar fouls every
+    // shot (owner-approved physics: the catch is in the way).
     const foulNet = this.getCollarShotFoul(podIndex, launchPos, launchDir);
     if (foulNet) {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -4901,32 +4921,50 @@ export class CaptureNetSystem {
 
   // ── Queries (ST-9.4e — HUD) ───────────────────────────────────────────
 
-  /** Total mother pod net count (both pods combined). */
+  /** Total Mother Large Net count (the launcher magazine; sums the array). */
   getMotherNetCount() {
-    return this._motherPodInventory[0] + this._motherPodInventory[1];
+    let n = 0;
+    for (let i = 0; i < this._motherPodInventory.length; i++) n += (this._motherPodInventory[i] || 0);
+    return n;
   }
 
-  /** Inventory for a specific mother pod. */
+  /** Inventory of the Mother launcher (podIndex is always 0 — one launcher). */
   getMotherPodInventory(podIndex) {
     return this._motherPodInventory[podIndex] || 0;
   }
 
-  /** Max capacity for a specific mother pod. */
+  /** Magazine capacity of the Mother launcher (podIndex is always 0). */
   getMotherPodMax(podIndex) {
     return this._motherPodMax[podIndex] || 0;
   }
 
-  /** Set mother pod inventory (persistence restore). Clamped to per-pod max. */
+  /**
+   * Set the Mother launcher inventory (persistence restore). Accepts a number
+   * or any array (a legacy two-pod save [a, b] is summed), and is capped at
+   * the magazine size.
+   */
   setMotherPodInventory(counts) {
-    if (Array.isArray(counts)) {
-      this._motherPodInventory = [
-        Math.max(0, Math.min(counts[0] || 0, this._motherPodMax[0] || 0)),
-        Math.max(0, Math.min(counts[1] || 0, this._motherPodMax[1] || 0)),
-      ];
-    }
+    const total = this._sumLegacyPodCounts(counts);
+    if (total === null) return;
+    this._motherPodInventory = [Math.max(0, Math.min(total, this._motherPodMax[0] || 0))];
   }
 
-  /** True when at least one Mother pod has space for another net. */
+  /**
+   * Sum a saved launcher count: a number, or an array of per-launcher counts
+   * (the pre-2026-10-13 save carried [podA, podB]). Non-finite / negative
+   * entries count as 0. Returns null when `counts` is neither.
+   * @private
+   * @param {number|number[]} counts
+   * @returns {number|null}
+   */
+  _sumLegacyPodCounts(counts) {
+    const one = (v) => (Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+    if (Array.isArray(counts)) return counts.reduce((a, v) => a + one(v), 0);
+    if (typeof counts === 'number') return one(counts);
+    return null;
+  }
+
+  /** True when the Mother launcher has space for another net. */
   hasMotherPodSpace() {
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return false;
     for (let i = 0; i < this._motherPodInventory.length; i++) {
@@ -4936,15 +4974,14 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Load exactly one Large Net into the emptiest pod that has space (shop
+   * Load exactly one Large Net into the Mother launcher if it has space (shop
    * restock — one net per 250 cr purchase, matching REPLACEMENT_COST; net
    * ladder Phase B, mirrors the daughters' per-net reload economy).
    * @returns {boolean} true if a net was loaded
    */
   loadOneMotherNet() {
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return false;
-    // Pick the pod with the most free space (largest max−current), so repeated
-    // buys top the pods off evenly.
+    // One launcher: the entry with the most free space (largest max−current).
     let bestPod = -1;
     let bestFree = 0;
     for (let i = 0; i < this._motherPodInventory.length; i++) {
@@ -4966,13 +5003,13 @@ export class CaptureNetSystem {
     return this.activeNets.find(n => n.armIndex === armIndex) || null;
   }
 
-  /** Get the active net projectile for a given mother pod (if any). */
+  /** Get the active net projectile for the Mother launcher (podIndex 0) (if any). */
   getActiveNetForPod(podIndex) {
     return this.activeNets.find(n => n.podIndex === podIndex) || null;
   }
 
   /**
-   * Whether a mother pod is in its post-fire cooldown. InputManager's
+   * Whether the Mother launcher is in its post-fire cooldown. InputManager's
    * pre-slew gate calls this (it was wired behind a `typeof` guard against a
    * method that never existed — mother-net-reel plan §2 C4 — so a cooldown
    * fire used to run the entire aim slew before being refused).
@@ -4987,7 +5024,7 @@ export class CaptureNetSystem {
    * Net class fired by a mother pod. The lead-aim provider in InputManager
    * calls this for the launch speed (previously hardcoded `10.0 * M` behind
    * another typeof guard — §2 C4 — which silently desynced from any retune).
-   * @param {number} podIndex — currently both pods fire LARGE
+   * @param {number} podIndex — the one launcher fires LARGE
    * @returns {object} CN.LARGE
    */
   getMotherNetClass(podIndex) { // eslint-disable-line no-unused-vars
@@ -5074,7 +5111,9 @@ export class CaptureNetSystem {
   // ── Persistence (ST-9.4d — inventory round-trip) ──────────────────────
 
   /**
-   * Get serialisable state for PersistenceManager.
+   * Get serialisable state for PersistenceManager. `motherPodInventory` is a
+   * one-element array [n] since 2026-10-13 (it was [podA, podB]; restoreState
+   * still reads the old shape).
    * @returns {object}
    */
   getState() {
@@ -5090,26 +5129,27 @@ export class CaptureNetSystem {
    */
   restoreState(state) {
     if (!state) return;
-    if (Array.isArray(state.motherPodInventory)) {
-      // Ensure the per-pod max is seeded (init() normally does this before
+    const saved = this._sumLegacyPodCounts(state.motherPodInventory);
+    if (saved !== null) {
+      // Ensure the magazine max is seeded (init() normally does this before
       // restore, but guard for out-of-order load paths) so the clamp below has
-      // a real ceiling. Then clamp restored counts to the current max — a save
-      // written before the net-ladder MAGAZINE_SIZE downsize can carry counts
-      // above the new cap and must not load an over-max magazine.
-      if (!this._motherPodMax[0] && !this._motherPodMax[1]) {
-        this._motherPodMax = [CN.LARGE.MAGAZINE_SIZE, CN.LARGE.MAGAZINE_SIZE];
+      // a real ceiling. Then clamp the restored total to it — a save written
+      // before the net-ladder MAGAZINE_SIZE downsize can carry counts above
+      // the cap and must not load an over-max magazine.
+      // Owner 2026-10-13: ONE launcher. A legacy two-pod save ([a, b], one
+      // count per ±0.45 m pod) is summed and capped: [2, 1] -> [3], [3, 4] -> [4].
+      // No save-version bump; the writer (getState) emits [n].
+      if (!this._motherPodMax.some((m) => m > 0)) {
+        this._motherPodMax = new Array(this._motherPodCount()).fill(CN.LARGE.MAGAZINE_SIZE);
       }
-      this._motherPodInventory = [
-        Math.max(0, Math.min(state.motherPodInventory[0] ?? 0, this._motherPodMax[0] || 0)),
-        Math.max(0, Math.min(state.motherPodInventory[1] ?? 0, this._motherPodMax[1] || 0)),
-      ];
+      this._motherPodInventory = [Math.min(saved, this._motherPodMax[0] || 0)];
     }
     if (typeof state.playerHasFragmented === 'boolean') {
       this._playerHasFragmented = state.playerHasFragmented;
     }
     this._initialized = true;
 
-    // Emit so listeners (pod caps, HUD NetInventoryPanel) sync to the restored
+    // Emit so listeners (launcher caps, HUD NetInventoryPanel) sync to the restored
     // magazine — restore previously mutated inventory silently, leaving any
     // listener showing stale state after a load. Mirrors init()'s emit.
     eventBus.emit(Events.NET_INVENTORY_CHANGED, {
