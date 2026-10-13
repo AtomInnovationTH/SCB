@@ -308,7 +308,9 @@ export const DEFAULT_ROOMS = Object.freeze({
   // MORE / `+` until curiosity arrives; D5 remembers whatever a player pulls
   // out.
   2: Object.freeze({
-    targets: 'shown', debris: 'gone', navsphere: 'gone', reticles: 'shown',
+    // w7-panes D4 (owner 2026-10-13): TARGETS and TARGET INFO ('debris') are shown
+    // on F2 — HUD._scanGateOn holds both back until the first scan completes.
+    targets: 'shown', debris: 'shown', navsphere: 'gone', reticles: 'shown',
     pin: 'gone', mother: 'shown', arms: 'shown', discoveries: 'gone', hints: 'shown',
     cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone', comms: 'shown', override: 'gone', f1bar: 'gone',
     score: 'shown',

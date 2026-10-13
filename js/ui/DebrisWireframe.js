@@ -1590,6 +1590,14 @@ export class DebrisWireframe {
    * Falls back to a plain canvas hide when floating (no container / no min line).
    */
   toggleMinimized() {
+    // w7-panes review (2026-10-13): held back until the first scan (HUD's scan
+    // gate) — say when it comes, fold nothing.
+    if (this._container && this._container.hasAttribute('data-scan-wait')) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'Target info appears after your first scan (S)', priority: 'info', _reactive: true,
+      });
+      return;
+    }
     if (!this._hasContainer || !this._minLine) {
       this.setVisible(!this._visible);
       this._emitPaneToggle(this._visible);
@@ -1630,7 +1638,7 @@ export class DebrisWireframe {
   /** @private Reactive comms line for the 9 key (never suppressed). */
   _emitPaneToggle(shown) {
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: shown ? 'Debris pane shown (9 to hide)' : 'Debris pane hidden (9 to show)',
+      text: shown ? 'Target info pane shown (9 to hide)' : 'Target info pane hidden (9 to show)',
       priority: 'info',
       _reactive: true,
     });
@@ -1737,7 +1745,7 @@ export class DebrisWireframe {
       // Dossier tier (Phase 1.5): UNSCANNED → static noise, no data.
       const tier = dossierSystem.getTier(this._target);
       if (tier === DOSSIER_TIERS.UNSCANNED) {
-        ctx.fillText('TARGET DOSSIER', WIRE_CX, 15);
+        ctx.fillText('TARGET INFO', WIRE_CX, 15);
         this._renderStaticNoise(ctx);
         ctx.font = mono(11, 'bold');
         ctx.fillStyle = DIM_COLOR;
@@ -1745,7 +1753,7 @@ export class DebrisWireframe {
         ctx.fillText('UNRESOLVED \u2014 scan [S]', WIRE_CX, 150);
         return;
       }
-      ctx.fillText('TARGET DOSSIER [Z]', WIRE_CX, 15);
+      ctx.fillText('TARGET INFO [Z]', WIRE_CX, 15);
       const typeLabel = TYPE_LABELS[this._target.type] || this._target.type;
       ctx.font = mono(12);
       ctx.fillStyle = TYPE_COLOR;

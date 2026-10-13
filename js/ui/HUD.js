@@ -298,8 +298,10 @@ export class HUD {
     this._alertStrip = null;         // the strip's last arbiter write { kind, text } (null = hidden)
     this._alertNow = null;           // optional clock seam (tests); null = performance.now()
 
+    this._scanGateOpen = false;      // the TARGETS + TARGET INFO panes wait for the first scan (once per boot)
     this._build();
     this._setupEventListeners();
+    this._scanGateOn(true);
   }
 
   // ==========================================================================
@@ -396,6 +398,7 @@ export class HUD {
     // the last child via hud.rightColumnEl).
     this.targetPanel = new TargetPanel(this._rightColumn, { colorLaw: !!(Constants.LADDER && Constants.LADDER.ENABLED) });
     this._rightColumn.appendChild(wireframeContainer);
+    this._wireframeContainerEl = wireframeContainer;
     this.debrisWireframe = new DebrisWireframe(wireframeContainer);
     // Delegation 4 (2026-05-31) — lasso + net inventory chips, just below
     // the target list inside the right column. Subscribes to
@@ -592,6 +595,10 @@ export class HUD {
         /* DAUGHTERS pane waits for the struts (owner 2026-10-12): hidden until the
          * struts first open this boot (HUD._tickArmsGate), whatever the floor. */
         [data-arms-wait] { display: none !important; }
+        /* TARGETS + TARGET INFO wait for the first scan (owner 2026-10-13): hidden
+         * until the first SCAN_COMPLETE of this boot (HUD._openScanGate), whatever
+         * the floor; nothing is marked before then, so the lists would be empty. */
+        [data-scan-wait] { display: none !important; }
         /* Layout-hidden left-arm riders (LeftStack). Never the density bit. */
         [data-stack-hidden] { display: none !important; }
         #hud-pin-widget, #hud-right-column {
@@ -959,9 +966,9 @@ export class HUD {
         domRung('pin', 'Upgrade goal', byId('hud-pin-widget')),
       ]),
       // 2 — Debris analysis pane (9 key re-reveals it).
-      domRung('debris', 'Debris pane', byId('hud-wireframe-container')),
-      // 3 — Target pane (0 key re-reveals it).
-      domRung('targets', 'Target pane', byId('hud-targets-panel')),
+      domRung('debris', 'Target info pane', byId('hud-wireframe-container')),
+      // 3 — Targets pane (0 key re-reveals it).
+      domRung('targets', 'Targets pane', byId('hud-targets-panel')),
       // 4 — Comms pane (7 key re-reveals it).
       domRung('comms', 'Comms', byId('hud-comms-panel')),
       // 5 — Score strip + hint ticker (one rung).
@@ -1120,7 +1127,7 @@ export class HUD {
   _densityIsVisible(el) {
     if (!el) return false;
     if (el.hasAttribute && (el.hasAttribute('data-density-hidden') || el.hasAttribute('data-density-leaving')
-      || el.hasAttribute('data-arms-wait'))) {
+      || el.hasAttribute('data-arms-wait') || el.hasAttribute('data-scan-wait'))) {
       return false;
     }
     // Layout-hidden is not a density hide — LeftStack must be able to un-hide.
@@ -1362,6 +1369,9 @@ export class HUD {
     eventBus.on(Events.GAME_RESET, () => {
       document.body.classList.remove('net-cinema');
     });
+    // TARGETS + TARGET INFO appear after the first scan and then stay for the
+    // rest of the boot: GAME_RESET and floor changes never re-arm the gate.
+    eventBus.on(Events.SCAN_COMPLETE, () => this._openScanGate());
 
     eventBus.on(Events.SCORE_UPDATE, (data) => {
       this._score = data.total;
@@ -1873,6 +1883,32 @@ export class HUD {
     if (!open) return;
     this._armsGateOpen = true;
     this._armsGateOn(false);
+  }
+
+  /**
+   * The TARGETS and TARGET INFO panes wait for the first scan (owner
+   * 2026-10-13: "Tracked targets pane and target dossier pane should be visible
+   * after scan"): both carry `data-scan-wait` (a `display:none !important`
+   * rule, like the DAUGHTERS gate) from the HUD's construction until the first
+   * `SCAN_COMPLETE` of the boot (SensorSystem._completeScan — every scan type
+   * ends there), then the gate latches open. Nothing is saved: a new boot
+   * starts shut. It only ever hides — the floor mask still decides which floor
+   * shows them (F2 only).
+   * @private
+   */
+  _openScanGate() {
+    if (this._scanGateOpen) return;
+    this._scanGateOpen = true;
+    this._scanGateOn(false);
+  }
+
+  /** @private Set / clear the wait attribute on the two scan-gated panes. */
+  _scanGateOn(on) {
+    for (const el of [this.panels && this.panels.targets, this._wireframeContainerEl]) {
+      if (!el || !el.setAttribute) continue;
+      if (on) el.setAttribute('data-scan-wait', '');
+      else if (el.removeAttribute) el.removeAttribute('data-scan-wait');
+    }
   }
 
   /** @private Set / clear the wait attribute on the DAUGHTERS pane. */

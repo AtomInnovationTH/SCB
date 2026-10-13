@@ -170,7 +170,7 @@ export const HOTKEY_GROUPS = [
       [['Point · click'], 'Inspect / upgrade a part', { pointer: true }],
       [['−', '+'], 'Fewer / more panels'],
       [['5', '6'], 'Cities / constellations'],
-      [['9', '0'], 'Debris / target panel'],
+      [['9', '0'], 'Target info / Targets panes'],
       [['7'], 'Radio log'],
       [['8'], 'Nav ball'],
       'gap',

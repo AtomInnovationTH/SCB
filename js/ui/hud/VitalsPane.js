@@ -15,7 +15,9 @@
  *            radiator itself. Source: `ResourceSystem.getThermalSnapshot()`.
  *   BATTERY  fill = level; the capacity (`600 Wh`, so upgrades show); the net
  *            rate with an arrow (`▲ +1.2 kW` charging green, `▼ −3.4 kW`
- *            draining amber, hidden under 20 W); amber < 25 %, red < 10 %;
+ *            draining amber, hidden under 20 W — w7-panes D6: drawn in the
+ *            label gutter of the power line UNDER the bar, never over its
+ *            cells); amber < 25 %, red < 10 %;
  *            and the COST FLASH: when the level drops by >= 1 % of the
  *            capacity inside 0.5 s, the dropped chunk lights up bright at the
  *            end of the fill and fades over 0.8 s, so the player sees what an
@@ -277,6 +279,7 @@ export class VitalsPane {
     /** w4-power D4: the BATTERY power line (`in … W · out … W`) and its element */
     this._flowText = '';
     this._flowEl = null;
+    this._flowTextEl = null;
     this._lastMs = null;
     this._detect = { battery: new CostFlash(), gas: new CostFlash() };
     this._prev = { battery: { t: NaN, v: NaN }, gas: { t: NaN, v: NaN } };
@@ -423,7 +426,7 @@ export class VitalsPane {
     if (text === this._flowText) return;
     this._flowText = text;
     if (this._flowEl) {
-      this._flowEl.textContent = text;
+      if (this._flowTextEl) this._flowTextEl.textContent = text;
       if (text) this._flowEl.removeAttribute('data-empty'); else this._flowEl.setAttribute('data-empty', '');
     }
   }
@@ -587,9 +590,11 @@ export class VitalsPane {
         track.appendChild(rec.tag);
       }
       if (key === 'battery') {
+        // w7-panes D6: the net rate no longer rides ON the bar (it covered the
+        // cells and was hard to read) — it sits in the label gutter of the
+        // power line under the track (built below, after the row).
         rec.rate = mk('span', 'vp-rate');
         rec.rate.setAttribute('data-empty', '');
-        track.appendChild(rec.rate);
       }
       rec.value = mk('span', 'vp-value', DASH);
       el.appendChild(label);
@@ -603,6 +608,9 @@ export class VitalsPane {
         this._flowEl = mk('div', 'vp-flow');
         this._flowEl.setAttribute('data-flow', 'battery');
         this._flowEl.setAttribute('data-empty', '');
+        this._flowEl.appendChild(this._row.battery.rate);
+        this._flowTextEl = mk('span', 'vp-flow-text');
+        this._flowEl.appendChild(this._flowTextEl);
         root.appendChild(this._flowEl);
       }
     }
@@ -707,7 +715,6 @@ export class VitalsPane {
       #${VITALS_ID} .vp-flash[data-phase="b"] { animation: vp-flash-b ${L.FLASH_FADE_MS}ms linear forwards; }
       @keyframes vp-flash-a { from { opacity: 1; } to { opacity: 0; } }
       @keyframes vp-flash-b { from { opacity: 1; } to { opacity: 0; } }
-      #${VITALS_ID} .vp-rate,
       #${VITALS_ID} .vp-tag {
         position: absolute; left: 3px; top: 0; bottom: 0;
         font-size: 9px;
@@ -719,11 +726,22 @@ export class VitalsPane {
       #${VITALS_ID} .vp-rate[data-dir="up"]   { color: ${P.PLAYER}; }
       #${VITALS_ID} .vp-rate[data-dir="down"] { color: ${P.CAUTION}; }
       #${VITALS_ID} .vp-tag { font-size: 8px; letter-spacing: 0.04em; }
+      /* w7-panes D6: the net rate (\u25b2 +1.2 kW) sits in the label gutter of the
+       * power line, under the word BATTERY - never over the cells. */
+      #${VITALS_ID} .vp-rate {
+        flex: 0 0 ${G.LABEL_PX}px;
+        font-size: 9px;
+        font-weight: 700;
+        white-space: nowrap;
+        color: ${P.LABEL};
+        text-shadow: ${HALO};
+      }
       /* w4-power D4: the BATTERY power line, under the track (indented past the label). */
       #${VITALS_ID} .vp-flow {
         height: ${G.FLOW_PX}px;
         line-height: ${G.FLOW_PX}px;
-        padding-left: ${G.LABEL_PX + 5}px;
+        display: flex;
+        gap: 5px;
         font-size: 9px;
         font-weight: 700;
         white-space: nowrap;
@@ -733,7 +751,7 @@ export class VitalsPane {
         text-shadow: ${HALO};
       }
       #${VITALS_ID} .vp-flow[data-empty] { visibility: hidden; }
-      #${VITALS_ID} .vp-rate[data-empty],
+      #${VITALS_ID} .vp-rate[data-empty] { visibility: hidden; }   /* keeps the gutter: the watts stay under the track */
       #${VITALS_ID} .vp-tag[data-empty] { display: none; }
     `;
     doc.head.appendChild(style);

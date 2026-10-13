@@ -462,7 +462,14 @@
       .hud-panel { font-size: 11px; padding: 6px 8px; }
       #hud-targets-panel { display: none !important; }
       #hud-controls-panel { display: none !important; }
-      #hud-comms-panel { display: none !important; }
+    }
+    /* Comms stays on screen on floor 2 down to 744 px wide (owner 2026-10-13:
+     * "comms should be visible on f2 at start of game"). It cannot keep its 480 px
+     * width where the 400 px MOTHER column (x 16-416) is beside it: below 920 px
+     * (416 + 8 + 480 + 16) it narrows to 300 px so the two never overlap, and drops
+     * 34 px so it sits under the centred 280 px score strip (y 8-36) it would meet. */
+    @media (max-width: 920px) {
+      #hud-comms-panel { width: 300px !important; top: 44px !important; }
     }
 
     /* Loading screen */

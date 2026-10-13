@@ -87,10 +87,11 @@ let _glass = false;
 // or (w4-power D3) a comma; the replacer keeps the original token when the
 // key has no table row. A Press token also captures a trailing " to <verb>"
 // so a phrase that already ends with it does not say it twice (D3: "Press S
-// to scan" → "Tap empty space to scan", not "… to scan to scan").
+// to scan" → "Tap empty space to scan", not "… to scan to scan"; the verb may
+// be capitalised: "Press S to Scan." → "Tap empty space to Scan.").
 const RE_BRACKET = /\[([A-Z,])\]/g;
 const RE_PAREN   = /\(([A-Z,])\)/g;
-const RE_PRESS   = /\b([Pp])ress (?:([A-Z])\b|(,)(?: \(the comma key\))?(?=\s|$))( to [a-z]+\b)?/g;
+const RE_PRESS   = /\b([Pp])ress (?:([A-Z])\b|(,)(?: \(the comma key\))?(?=\s|$))( to [A-Za-z]+\b)?/g;
 
 /** @private `S` → 'KeyS', `,` → 'Comma'. */
 function rowFor(ch) { return TABLE[ch === ',' ? 'Comma' : 'Key' + ch]; }
@@ -178,7 +179,13 @@ export class GestureHints {
         used.push(row.phrase);
         // The phrase takes the verb's case: "Press N" opens a sentence.
         let phrase = p === 'P' ? row.phrase.charAt(0).toUpperCase() + row.phrase.slice(1) : row.phrase;
-        if (toVerb && !(' ' + row.phrase).endsWith(toVerb)) phrase += toVerb;
+        // The phrase already ends with that verb (any case): keep the OLD
+        // text's spelling of it — "Press S to Scan." → "Tap empty space to
+        // Scan." (w7-panes D1), "Press S to scan." → "… to scan.".
+        if (toVerb) {
+          if (row.phrase.toLowerCase().endsWith(toVerb.toLowerCase())) phrase = phrase.slice(0, phrase.length - toVerb.length) + toVerb;
+          else phrase += toVerb;
+        }
         return phrase;
       });
     for (const ph of used) {

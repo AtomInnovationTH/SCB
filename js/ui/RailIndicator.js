@@ -17,7 +17,7 @@
  *
  * G3 (post-M3 play-test):
  * - Anchored on the right edge. G3 moved it to the BOTTOM (the vertically
- *   centred original overlapped TARGET DOSSIER / TRACKED TARGETS in
+ *   centred original overlapped TARGET INFO / TARGETS in
  *   #hud-right-column at every common viewport); Session J (plan D-H) moved it
  *   back to MID-HEIGHT through the shared RailGeometry table (`midHeightCss`)
  *   so both rails — this WHERE rail and the left DISPLAY rail (PaneRail —

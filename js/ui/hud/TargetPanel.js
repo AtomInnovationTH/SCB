@@ -369,6 +369,15 @@ export class TargetPanel {
   toggleVisible() {
     const panel = this.panels && this.panels.targets;
     if (!panel) return;
+    // w7-panes review (2026-10-13): before the first scan the pane is held back
+    // by HUD's scan gate, not the density bit — a press here must not save a
+    // hide the player never saw. Say when it comes, write nothing.
+    if (panel.hasAttribute('data-scan-wait')) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'Targets appear after your first scan (S)', priority: 'info', _reactive: true,
+      });
+      return;
+    }
     let nowVisible;
     if (panel.hasAttribute('data-density-hidden')) {
       // Hidden by the ONE bit (the density ladder, this key, a floor's room) —
@@ -386,7 +395,7 @@ export class TargetPanel {
       nowVisible = false;
     }
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: nowVisible ? 'Target pane shown (0 to hide)' : 'Target pane hidden (0 to show)',
+      text: nowVisible ? 'Targets pane shown (0 to hide)' : 'Targets pane hidden (0 to show)',
       priority: 'info',
       _reactive: true,
     });
@@ -419,7 +428,7 @@ export class TargetPanel {
 
     this.panels.targets.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;padding-right:24px;">
-        <span class="pane-title target-section-header" style="color:#00ff88;padding:0;">TRACKED TARGETS <span style="opacity:0.4;font-size:10px;">[T]</span></span>
+        <span class="pane-title target-section-header" style="color:#00ff88;padding:0;">TARGETS <span style="opacity:0.4;font-size:10px;">[T]</span></span>
         <button id="hud-sort-btn" class="target-sort-btn" title="Click to cycle sort">TPI ↑</button>
       </div>
       <div id="hud-targets-min-summary" data-pane-show="min" style="display:none;font-size:11px;color:#00ff88;opacity:0.7;">. </div>
@@ -475,7 +484,7 @@ export class TargetPanel {
       steps: ['min', 'normal', 'max'],
       initial: 'normal',
       color: '#00ff88',
-      title: 'Target pane — 0 shows / hides · click to resize min / normal / max',
+      title: 'Targets pane — 0 shows / hides · click to resize min / normal / max',
       onStep: (step) => {
         // Step table = header + k rows (recomputed from the live row height).
         this._applyTargetHeight(step);
@@ -506,7 +515,7 @@ export class TargetPanel {
     const el = this.panels.targets && this.panels.targets.querySelector('#hud-targets-min-summary');
     if (!el) return;
     const n = this._lastTrackedCount || 0;
-    el.textContent = n > 0 ? `${n} tracked target${n === 1 ? '' : 's'}` : 'No tracked targets';
+    el.textContent = n > 0 ? `${n} target${n === 1 ? '' : 's'}` : 'No targets';
   }
 
   // ==========================================================================
@@ -665,7 +674,7 @@ export class TargetPanel {
     this._lastTrackedCount = Array.isArray(cachedTargets) ? cachedTargets.length : 0;
     if (this._chrome && this._chrome.isMinimized) this._updateMinSummary();
 
-    // --- TRACKED TARGETS ---
+    // --- TARGETS (the tracked list) ---
     const listEl = document.getElementById('hud-target-list');
     if (listEl) {
       const maxArmRangeKm = this._reachKm = reachKmFrom(this._armManager ? this._armManager.getAllStatus() : null, { weaver: Constants.WEAVER_TETHER_LENGTH / 1000, spinner: Constants.SPINNER_TETHER_LENGTH / 1000 });

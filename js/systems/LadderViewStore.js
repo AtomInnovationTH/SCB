@@ -74,8 +74,13 @@ export const LADDER_VIEW_VERSION = 1;
  *       per-floor room edits once — the known cost of a defaults change.
  *   7 — 2026-09-08 (ladder reorder rev 3): F3 nav orb gone; composites
  *       experimental/decor. Stored gen-6 rooms drop once.
+ *   8 — 2026-10-13 (w7-panes, owner "comms should be visible on F2 at start of
+ *       game"; "Targets and Target info visible after scan"): F2 now shows
+ *       TARGET INFO (`debris`) too — the scan gate in HUD holds both back until
+ *       the first scan. Stored gen-7 rooms drop once, so a saved hide of COMMS
+ *       on F2 (the − key) no longer outranks the defaults.
  */
-export const ROOMS_GENERATION = 7;
+export const ROOMS_GENERATION = 8;
 
 /** The shipped pane state: both workbench panes closed. */
 export const DEFAULT_PANES = Object.freeze({ refit: false, library: false });

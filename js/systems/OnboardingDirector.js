@@ -75,9 +75,9 @@ export const ONBOARDING_BEATS = [
     glyph: 'N',
     keys: ['KeyN'],
     requiresContacts: true,
-    // Ends at "Press S.": on glass GestureHints.speak turns "Press S" into
-    // "Tap empty space to scan" — "Press S to scan." read "…to scan to scan."
-    noContactNudge: 'Nothing is marked yet. Press S.',
+    // Owner 2026-10-13: "Press S to Scan." — on glass GestureHints.speak turns
+    // it into "Tap empty space to Scan." (its own "to <verb>" is not doubled).
+    noContactNudge: 'Press S to Scan.',
     // The held nudge is about S, not the beat's own N key: its chip shows S
     // (and, on glass, the "tap empty space to scan" gesture chip).
     nudgeGlyph: 'S',
