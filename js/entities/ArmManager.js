@@ -26,8 +26,8 @@ const M = 0.00001;
 // own downstream adoption (CaptureNetSystem.adoptLassoCatch) deliberately
 // does not emit NET_BERTHED (its doc comment: "none of the spectacle"), so a
 // ducked arm on that path never sees the plan's own release event. This
-// timeout (comfortably longer than the ~3.1 s duck sweep AND the lasso's own
-// ~3 s reel-in) guarantees a duck can never strand a strut at 100° forever,
+// timeout (comfortably longer than the duck sweep AND the lasso's own
+// ~3 s reel-in) guarantees a duck can never strand a strut ducked forever,
 // regardless of which capture path resolved it. Not a plan requirement —
 // see the lane's final report.
 const LEAN_ASIDE_TIMEOUT_S = 8;
@@ -265,7 +265,7 @@ export class ArmManager {
     this._pulseScanActive = false;
 
     // Task 7 (opening-dance plan) — arms lean aside for an inbound catch.
-    // Arm indices this lane currently holds ducked at STRUT_LEAN_ASIDE_ALPHA;
+    // Arm indices this lane currently holds ducked at the 90° open angle (STRUT_DEPLOY_ALPHA);
     // this manager is the sole writer of _strutTargetAlpha for exactly these
     // arms while the set is non-empty.
     this._leanAsideArmIndices = new Set();
@@ -1520,8 +1520,9 @@ export class ArmManager {
    * test-ArmManager-Salvage pins the same latch field + the same guard against
    * that source and drives both on one stub arm set): the same
    * `_strutTargetAlpha` write on the same arm set (DOCKED only), the same
-   * decision (any docked strut at/past π/2 → stow ALL to 0, else deploy ALL
-   * to π zenith), the same live read (getAimAlpha, a pending latch winning —
+   * decision (any docked strut past STRUT_OPEN_THRESHOLD, half the open angle
+   * → stow ALL to 0, else deploy ALL to STRUT_DEPLOY_ALPHA, 90°; a quick second
+   * tap pushes through to 180°), the same live read (getAimAlpha, a pending latch winning —
    * never the latch alone, it clears to undefined on arrival). Emitting
    * Events.STRUT_DEPLOY_INPUT stays the CALLER's job (InputManager emits its
    * own; the hub emits for the pane), as does the click.
@@ -1532,14 +1533,15 @@ export class ArmManager {
   toggleStruts() {
     const docked = (this.arms || []).filter((a) => a && a.state === ARM_STATES.DOCKED);
     if (!docked.length) return null;
-    const anyDeployed = docked.some((a) => _strutLiveAlpha(a) >= Math.PI / 2);
-    // Opening-dance plan decision 5: deploy TARGET is 146°
-    // (Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA), not the π sweep ceiling —
-    // named once, mirrored by InputManager's Period case (do-not-edit-there).
+    const anyDeployed = docked.some((a) => _strutLiveAlpha(a) >= Constants.OCTOPUS_V5.STRUT_OPEN_THRESHOLD);
+    // Deploy TARGET is 90° (owner 2026-10-12; Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA),
+    // not the π sweep ceiling — named once; InputManager's Period case delegates here.
+    // "Open" is past half of it (STRUT_OPEN_THRESHOLD): a strut that stops at
+    // 89.99° still reads open, so the next press closes it.
     //
     // PUSH-THROUGH (owner 2026-09-22: "daughter struts ... can fully open to
-    // 180 degree and fully close to stowed position"). The rest pose is 146°,
-    // but STRUT_SWEEP_MAX is already π — 146 is a resting choice, not a limit.
+    // 180 degree and fully close to stowed position"). The rest pose is 90°,
+    // but STRUT_SWEEP_MAX is already π — 90 is a resting choice, not a limit.
     // Two taps inside STRUT_PUSH_WINDOW_MS that both land on "deploy" push the
     // whole ring to the full 180° zenith. Measured clear on the built model
     // (tmp/strut180-probe.mjs / tmp/strut180-neighbour.mjs): 110 mm to the
@@ -1565,14 +1567,15 @@ export class ArmManager {
 
   /**
    * Read-only: the SAME predicate toggleStruts() decides from — true while any
-   * DOCKED strut is at/past π/2 (a pending latch counts, so the read flips the
-   * instant the toggle writes; the REFIT chip re-reads truth, no optimism).
-   * No docked arm → false.
+   * DOCKED strut is past STRUT_OPEN_THRESHOLD, half the 90° open angle (45°; a
+   * pending latch counts, so the read flips the instant the toggle writes; the
+   * REFIT chip re-reads truth, no optimism). No docked arm → false.
    * @returns {boolean}
    */
   strutsDeployed() {
     return (this.arms || []).some((a) =>
-      a && a.state === ARM_STATES.DOCKED && _strutLiveAlpha(a) >= Math.PI / 2);
+      a && a.state === ARM_STATES.DOCKED
+      && _strutLiveAlpha(a) >= Constants.OCTOPUS_V5.STRUT_OPEN_THRESHOLD);
   }
 
   /**
@@ -2142,14 +2145,13 @@ export class ArmManager {
 
   // ── Task 7 (opening-dance plan) — lean aside for an inbound catch ────────
   // Decision 6 (LOCKED, governing law for this task): nothing crosses or
-  // tangles — tethers, struts, debris. Decision 4 moves the daughters'
-  // resting pose from α=0 (stowed, clear of everything) to α=146°
-  // (STRUT_DEPLOY_ALPHA — a permanent "open" rest, decision 5), which can
-  // sit inside an inbound catch's berth corridor (blocks pieces heavier than
-  // ~0.588 m per the plan's measured table) — a regression the old 0° rest
-  // never had. Note for the record (plan's own words): at today's 180°
-  // manual deploy pose EVERY catch is already blocked, so this section fixes
-  // an existing defect as well as covering the new 146° rest.
+  // tangles — tethers, struts, debris. The daughters' open pose used to be
+  // 146°, which sat inside an inbound catch's berth corridor for pieces over
+  // ~0.7 m. It is now 90° (STRUT_DEPLOY_ALPHA, owner 2026-10-12): the tip is
+  // aft of the muzzle plane (tipZ ≈ −0.30 m), so no catch of any size fouls it
+  // and the open pose is never ducked. The duck still runs for a strut the
+  // player has pushed through to 180° (double tap), to 90° — the open angle,
+  // never past it.
 
   /**
    * Does arm `armIndex`'s CURRENT (live, `getAimAlpha()`) strut tip sit
@@ -2203,11 +2205,12 @@ export class ArmManager {
    * Trigger: `Events.LASSO_CAPTURED` — a catch is inbound. Tests every
    * DOCKED arm's live strut alpha against the SAME corridor cylinder
    * `_corridorClear` uses (mirrored above); only the arms that would
-   * actually foul duck to `STRUT_LEAN_ASIDE_ALPHA` (100°). Small (or
-   * unresolved-size) pieces never produce a foul at the 146° rest — see the
-   * plan's measured table — so they never trigger a duck. Sole writer of
-   * `_strutTargetAlpha` for the arms it ducks, for the duration of the duck
-   * only (`_releaseLeanAside` restores them to `STRUT_DEPLOY_ALPHA`).
+   * actually foul duck to `STRUT_DEPLOY_ALPHA` (90°, the open angle). A strut
+   * at the 90° rest never fouls any catch (tip aft of the muzzle plane), so
+   * only a strut pushed past it (180°) ducks; unresolved-size pieces never
+   * trigger a duck. Sole writer of `_strutTargetAlpha` for the arms it ducks,
+   * for the duration of the duck only (`_releaseLeanAside` restores them to
+   * `STRUT_DEPLOY_ALPHA`, the same angle).
    * @param {{debrisId?: number|string}} payload — LASSO_CAPTURED's payload
    * @private
    */
@@ -2230,7 +2233,7 @@ export class ArmManager {
       const arm = this.arms[i];
       if (!arm || arm.state !== ARM_STATES.DOCKED) continue;
       if (this._strutFoulsInboundCorridor(i, radiusM)) {
-        arm._strutTargetAlpha = Constants.OCTOPUS_V5.STRUT_LEAN_ASIDE_ALPHA;
+        arm._strutTargetAlpha = Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA;
         this._leanAsideArmIndices.add(i);
         ducked = true;
       }
@@ -2242,14 +2245,14 @@ export class ArmManager {
   }
 
   /**
-   * Release: restore every arm this lane ducked back to the 146° rest pose
+   * Release: restore every arm this lane ducked back to the 90° rest pose
    * (`STRUT_DEPLOY_ALPHA`). Wired to `Events.NET_BERTHED` (the plan's own
    * release event) and the "net clears/fails" events (LASSO_MISSED,
    * LASSO_SNAPPED, NET_FAILED, NET_RELEASED, NET_TORN), plus a bounded
    * timeout (`_updateLeanAside`) — see this lane's final report: the lasso
    * adoption path (`CaptureNetSystem.adoptLassoCatch`) deliberately never
-   * emits NET_BERTHED, so NET_BERTHED alone would strand a ducked arm at
-   * 100° forever on that path.
+   * emits NET_BERTHED, so NET_BERTHED alone would strand a ducked arm
+   * ducked forever on that path.
    * A duck is only ever restored while the arm is still DOCKED — if it left
    * DOCKED mid-duck (deployed, recalled, expended…) some other system now
    * owns its `_strutTargetAlpha` and this lane must not fight it.

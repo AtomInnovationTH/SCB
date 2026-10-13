@@ -1636,15 +1636,24 @@ export const Constants = {
     STRUT_SWEEP_MAX: Math.PI,      // rad (180°) — the RANGE; unchanged by the opening-dance plan
     STRUT_SLEW_RATE: 15 * Math.PI / 180, // rad/s (15°/s — slowed 50% so new players can see strut deploy)
 
-    // Opening-dance plan (2026-09-16), decision 5: the "." strut toggle's
-    // deploy TARGET moves from the sweep ceiling (π/180°) to 146° — a wide
-    // forward launch cone, and the pose the daughters bloom to and rest at
-    // (decision 4). Named once here; ArmManager.js:toggleStruts() and the
-    // duplicate in InputManager.js's Period case both read this constant.
+    // The "." strut toggle's deploy TARGET and the pose the daughters rest at:
+    // 90° from the tail — straight out sideways (owner 2026-10-12: "146 for
+    // daughter cause interference with captured debris from other net, bad.
+    // try so... try 90"; it was 146° from the opening-dance plan, decision 5,
+    // 2026-09-16). Named once here; ArmManager.toggleStruts() reads it.
     // STRUT_SWEEP_MAX above is untouched — the RANGE stays [0, π].
-    STRUT_DEPLOY_ALPHA: 146 * Math.PI / 180, // rad (146°)
+    // Measured (tmp/probes/strut-angle/pa2.mjs, 2026-10-12): at 90° the tip is
+    // aft of the muzzle plane (z 1.0 vs 1.30), so no catch of any size can touch
+    // it; clearances 175 mm to the wing clamp drum, 53.5 mm to the radiator
+    // closed (2°), 280 mm hull, 306 mm neighbour; swing 0→90° 5.97 s, 358 J.
+    STRUT_DEPLOY_ALPHA: 90 * Math.PI / 180, // rad (90°)
+    // "Open" means past HALF the open angle (45°): a strut that arrives at
+    // 89.99° — or is stopped short — still reads open, so the toggle closes it
+    // and the DAUGHTERS pane gate opens. Read by ArmManager.strutsDeployed() and
+    // toggleStruts(); derived so it cannot drift from the open angle.
+    get STRUT_OPEN_THRESHOLD() { return this.STRUT_DEPLOY_ALPHA / 2; },
     // Push-through window (owner 2026-09-22: struts "can fully open to 180
-    // degree and fully close to stowed position"). 146° is the RESTING pose,
+    // degree and fully close to stowed position"). 90° is the RESTING pose,
     // not a limit — STRUT_SWEEP_MAX above has always been π. Two "." taps
     // inside this window that both land on "deploy" drive the ring to the full
     // 180° zenith; the same key still closes all the way to 0. Matches the
@@ -1653,15 +1662,6 @@ export const Constants = {
     // 178 mm between neighbouring daughters at the converged pose, plume-clear
     // (the swing goes fore, away from the aft thrusters).
     STRUT_PUSH_WINDOW_MS: 600,
-    // Task 7 (own lane, decision 6/7): the duck target when a docked strut's
-    // live tip would foul an inbound catch's berth corridor (CaptureNet's
-    // _corridorClear test) at the 146° rest. DECISIONS §11 (2026-09-23): the
-    // strut hinge/length move re-measured this (tmp/probe-corridor.mjs) —
-    // 146° now blocks only pieces > ~0.701 m (was ~0.588 m; the longer strut
-    // swings the tip further out at this angle, past smaller catches). 100°
-    // still clears every size (tipZ < 0, aft of the muzzle plane) with wide
-    // margin on both sides.
-    STRUT_LEAN_ASIDE_ALPHA: 100 * Math.PI / 180, // rad (100°)
 
     // ── Recoil Safety (NEW — ST-9.3 C-3) ──
     HIGH_RECOIL_ALPHA_LOW:  Math.PI / 6,     // rad (30°) — below this = high axial recoil

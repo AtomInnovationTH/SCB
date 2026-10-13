@@ -848,9 +848,9 @@ export const Events = {
   // the camera hands over BEFORE the ship finishes moving: the radiator and
   // the solar wings are done at HANDOVER, while the daughters keep opening to
   // 146° for another ~7.8 s with the player already flying.
-  /** Radiator + wings seated; camera pulls back to F2 and control is the player's. Payload: {} */
+  /** The opening's camera hand-over: the camera pulls back to F2 and control is the player's. Payload: {} */
   OPENING_DANCE_HANDOVER:    'openingDance:handover',
-  /** The last daughter seats at 146°; the dance owns nothing any more. Payload: {} */
+  /** The dance's last beat is done; the dance owns nothing any more. Payload: {} */
   OPENING_DANCE_COMPLETE:    'openingDance:complete',
 
   // ── ST-9.12 C-9: Center-of-Mass + Plume Interlock Events ───────────────
