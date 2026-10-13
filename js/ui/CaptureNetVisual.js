@@ -1228,11 +1228,12 @@ export class CaptureNetVisual {
           canisterMesh.visible = false;
           discMesh.visible = true;
           tetherLine.visible = true;
-          // Scale from 0→1 as spin ramps up
-          const spinFrac = net.netClass.SPIN_HZ > 0
-            ? Math.min(1, net.spinRate / net.netClass.SPIN_HZ)
-            : 1;
-          discMesh.scale.setScalar(Math.max(0.05, spinFrac));
+          // Open over the spin-up TIME (0→1 across CN.SPIN_UP_TIME). The spin
+          // RATE is no use here: since the yo-yo despin it starts at 3×
+          // SPIN_HZ and falls to 1×, so rate/SPIN_HZ clamped at 1 all along
+          // and the net appeared fully open in one frame.
+          const openFrac = Math.min(1, Math.max(0, (net.stateTimer ?? 0) / CN.SPIN_UP_TIME));
+          discMesh.scale.setScalar(Math.max(0.05, openFrac));
           discMesh.material.color.setHex(COL_DISC);
           discMesh.material.opacity = 0.6;
           break;
@@ -1757,19 +1758,24 @@ export class CaptureNetVisual {
         apexHub.visible = true;
         drawstringLine.visible = true;
 
-        const spinFrac = net.netClass.SPIN_HZ > 0
-          ? Math.min(1, net.spinRate / net.netClass.SPIN_HZ)
-          : 1;
-
-        // Scale cone with spin fraction
-        coneMesh.scale.setScalar(Math.max(0.05, spinFrac));
+        // The net opens over the spin-up TIME (blossom). The spin rate is not
+        // the open fraction: it unwinds from 3× to 1× SPIN_HZ, so a rate-based
+        // fraction was already 1 on the first frame. The film is a separate
+        // mesh, scaled the same way (uniformly, like the cone) so it keeps the
+        // cone's depth. Physics and the net's position are untouched.
+        const openFrac = Math.min(1, Math.max(0, (net.stateTimer ?? 0) / CN.SPIN_UP_TIME));
+        const openScale = Math.max(0.05, openFrac);
+        coneMesh.scale.setScalar(openScale);
+        if (vis.kitHandle && vis.kitHandle.membraneMesh) {
+          vis.kitHandle.membraneMesh.scale.setScalar(openScale);
+        }
         coneMesh.material.color.setHex(COL_DISC);
         coneMesh.material.opacity = 0.55;
 
         // Place weights at expanding radius
         vis.spinAngle += net.spinRate * Math.PI * 2 * dt;
-        const curR = mouthRadius * spinFrac;
-        const curZ = -coneHeight * spinFrac;
+        const curR = mouthRadius * openFrac;
+        const curZ = -coneHeight * openFrac;
         for (let i = 0; i < weightCount; i++) {
           const w = rimWeights[i];
           w.visible = true;
@@ -1789,6 +1795,9 @@ export class CaptureNetVisual {
         drawstringLine.visible = true;
 
         coneMesh.scale.setScalar(1);
+        if (vis.kitHandle && vis.kitHandle.membraneMesh) {
+          vis.kitHandle.membraneMesh.scale.setScalar(1);
+        }
         vis.spinAngle += net.spinRate * Math.PI * 2 * dt;
         coneMesh.material.color.setHex(COL_DISC);
         coneMesh.material.opacity = 0.55;
