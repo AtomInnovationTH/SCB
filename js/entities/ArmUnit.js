@@ -133,9 +133,9 @@ let _sharedBridleGeo = null;
 function _ensureSharedBridleGeo() {
   if (_sharedBridleGeo) return _sharedBridleGeo;
   _sharedBridleGeo = {
-    gimbalW: new THREE.TorusGeometry(0.015 * M, 0.003 * M, 6, 4),  // Weaver gimbal ring — 48 tris
-    gimbalS: new THREE.TorusGeometry(0.010 * M, 0.002 * M, 6, 4),  // Spinner gimbal ring — 48 tris
-    hpSphere: new THREE.SphereGeometry(0.005 * M, 4, 4),           // Hardpoint bracket — 16 tris each
+    gimbalW: new THREE.TorusGeometry(0.015 * M, 0.003 * M, 6, 16),  // Weaver gimbal ring (r 15 mm, 16 around, 3 mm tube, 6 sides) — 192 tris
+    gimbalS: new THREE.TorusGeometry(0.010 * M, 0.002 * M, 6, 16),  // Spinner gimbal ring (r 10 mm, 16 around, 2 mm tube, 6 sides) — 192 tris
+    hpSphere: new THREE.SphereGeometry(0.005 * M, 12, 6),          // Hardpoint bracket
   };
   return _sharedBridleGeo;
 }
@@ -767,7 +767,7 @@ export class ArmUnit {
     // --- S3.5: Aft FEEP nozzle (stub, centered on −Z face) ---
     const aftNozR = (isWeaver ? 0.015 : 0.010) * M;
     const aftNozL = (isWeaver ? 0.025 : 0.015) * M;
-    const aftNozGeo = new THREE.CylinderGeometry(aftNozR, aftNozR * 1.1, aftNozL, 10, 1, true);  // was 6-seg
+    const aftNozGeo = new THREE.CylinderGeometry(aftNozR, aftNozR * 1.1, aftNozL, 24, 1, true);  // was 6-seg
     const feepMat = new THREE.MeshStandardMaterial({
       color: 0x444455, metalness: 0.85, roughness: 0.25,
     });
@@ -782,7 +782,7 @@ export class ArmUnit {
     // (z=-bz*0.515) — between the aft cap (−0.5) and the pusher disc (−0.505,
     // L707) and the nozzle base (−0.52) — plus DETAIL order so it does not
     // re-introduce the L696/round-8 aft-nozzle-base z-fight.
-    const bossGeo = new THREE.CylinderGeometry(aftNozR * 2.0, aftNozR * 2.2, aftNozL * 0.4, 6, 1, false);
+    const bossGeo = new THREE.CylinderGeometry(aftNozR * 2.0, aftNozR * 2.2, aftNozL * 0.4, 48, 1, false);
     const bossMat = new THREE.MeshStandardMaterial({
       color: 0x3a3a44, metalness: 0.7, roughness: 0.4,
     });
@@ -836,7 +836,7 @@ export class ArmUnit {
     // --- S3.5: Fore FEEP nozzle (braking/attitude, offset on +Z face) ---
     const foreNozR = (isWeaver ? 0.010 : 0.007) * M;
     const foreNozL = (isWeaver ? 0.015 : 0.010) * M;
-    const foreNozGeo = new THREE.CylinderGeometry(foreNozR, foreNozR * 1.1, foreNozL, 10, 1, true);  // was 6-seg
+    const foreNozGeo = new THREE.CylinderGeometry(foreNozR, foreNozR * 1.1, foreNozL, 24, 1, true);  // was 6-seg
     const foreNozzle = new THREE.Mesh(foreNozGeo, feepMat);
     // Protrude past the fore face (halfLen = bz·0.5·M) with the base embedded so
     // it reads as a real nozzle, not a stub buried inside the hull. The brake
@@ -900,7 +900,7 @@ export class ArmUnit {
       ?? Constants.ARM_NET_CAPACITY?.[isWeaverLaunch ? 'weaver' : 'spinner'] ?? 0;
     const canR = isWeaverLaunch ? 0.055 : 0.035;
     const canH = isWeaverLaunch ? 0.07 : 0.05;
-    const canGeo = new THREE.CylinderGeometry(canR * M, canR * M, canH * M, 12, 1, false);
+    const canGeo = new THREE.CylinderGeometry(canR * M, canR * M, canH * M, 48, 1, false);
     const canMat = new THREE.MeshStandardMaterial({ ...AVIONICS_GUNMETAL });   // matches mother (SSOT recipe)
     const canister = new THREE.Mesh(canGeo, canMat);
     const canCz = bz * 0.55 * M;                 // housing centre z (fore centreline)
@@ -943,13 +943,13 @@ export class ArmUnit {
     for (let i = 0; i < cellCount; i++) {
       const [cx, cy] = cellOffsets[i];
       // Dark bore disc — always visible (an empty cell shows the bore).
-      const bore = new THREE.Mesh(new THREE.CircleGeometry(cellBoreR, 12), boreMat);
+      const bore = new THREE.Mesh(new THREE.CircleGeometry(cellBoreR, 24), boreMat);
       bore.position.set(cx, cy, cellFaceZ + 0.001 * M);   // 1 mm proud (EO-lens pattern)
       bore.name = `${this.id}-DNetCellHole_${i}`;
       bore.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.mesh.add(bore);
       // Pale cap — visible only when the cell is LOADED (inventory-driven).
-      const cap = new THREE.Mesh(new THREE.CircleGeometry(cellBoreR * 0.9, 12), capMat.clone());
+      const cap = new THREE.Mesh(new THREE.CircleGeometry(cellBoreR * 0.9, 24), capMat.clone());
       cap.position.set(cx, cy, cellFaceZ + 0.0015 * M);   // 1.5 mm proud (over the bore)
       cap.name = `${this.id}-DNetCellCap_${i}`;
       cap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
@@ -983,7 +983,7 @@ export class ArmUnit {
     const houseH  = rxR * 0.6;                    // housing wall height (proud of facet)
 
     // Bezel housing: open cylinder wall, base on the facet, rising +Y.
-    const rxBezelGeo = new THREE.CylinderGeometry(houseOR, houseOR, houseH, 24, 1, true);
+    const rxBezelGeo = new THREE.CylinderGeometry(houseOR, houseOR, houseH, 48, 1, true);
     const rxBezelMat = new THREE.MeshStandardMaterial({
       color: 0x777788, metalness: 0.9, roughness: 0.25, side: THREE.DoubleSide,
     });
@@ -996,7 +996,7 @@ export class ArmUnit {
     this.mesh.add(rxBezel);
 
     // Dark optical receiver face (the diode) recessed at the base of the well.
-    const rxGeo = new THREE.CircleGeometry(rxR, 24);
+    const rxGeo = new THREE.CircleGeometry(rxR, 48);
     const rxMat = new THREE.MeshStandardMaterial({
       color: 0x1a0e02, metalness: 0.35, roughness: 0.2,
       emissive: 0x140a00, emissiveIntensity: 0.18,  // warm 808nm-receiver tint
@@ -1012,7 +1012,7 @@ export class ArmUnit {
     // grounded to the facet and never coplanar with it). ---
     const mrrR = (isWeaver ? 0.015 : 0.010) * M;
     const mrrH = mrrR * 0.4;                       // puck thickness
-    const mrrGeo = new THREE.CylinderGeometry(mrrR, mrrR, mrrH, 16);   // was 6-seg (w1-ship-polish D2)
+    const mrrGeo = new THREE.CylinderGeometry(mrrR, mrrR, mrrH, 24);   // was 6-seg (w1-ship-polish D2)
     const mrrMat = new THREE.MeshStandardMaterial({
       color: 0xccccdd, metalness: 0.95, roughness: 0.15,
     });
@@ -1025,7 +1025,7 @@ export class ArmUnit {
     this.mesh.add(mrr);
 
     // --- Status light (blinks to show state) ---
-    const lightGeo = new THREE.SphereGeometry(0.010 * M, 16, 12);  // was 0.015 (Batch 1 shrink); 8×6 → 16×12 (w1-ship-polish D2)
+    const lightGeo = new THREE.SphereGeometry(0.010 * M, 24, 12);  // was 0.015 (Batch 1 shrink); 8×6 → 16×12 (w1-ship-polish D2)
     this._statusLightMat = new THREE.MeshBasicMaterial({ color: 0x00ff44 });
     const statusLight = new THREE.Mesh(lightGeo, this._statusLightMat);
     statusLight.position.set(0, by * 0.55 * M, -bz * 0.3 * M);
@@ -1044,7 +1044,7 @@ export class ArmUnit {
     const epmR = (isWeaver ? 0.025 : 0.020) * M;
     const epmH = (isWeaver ? 0.015 : 0.012) * M;
     const epmHousing = new THREE.Mesh(
-      new THREE.CylinderGeometry(epmR, epmR, epmH, 16),   // was 8-seg; housing = pole ring (D3)
+      new THREE.CylinderGeometry(epmR, epmR, epmH, 48),   // was 8-seg; housing = pole ring (D3)
       new THREE.MeshStandardMaterial({ color: 0x606068, metalness: 0.85, roughness: 0.40 })
     );
     epmHousing.position.y = -by * 0.52 * M;
@@ -1059,7 +1059,7 @@ export class ArmUnit {
       emissive: 0x000000, emissiveIntensity: 0.0, side: THREE.DoubleSide,
     });
     const epmPole = new THREE.Mesh(
-      new THREE.RingGeometry(poleIR, poleOR, 16, 1),   // was 8-seg; matches the EPM housing (D3)
+      new THREE.RingGeometry(poleIR, poleOR, 48, 1),   // was 8-seg; matches the EPM housing (D3)
       this._epmPoleMat
     );
     epmPole.position.y = -by * 0.52 * M - epmH * 0.51;
@@ -1071,7 +1071,7 @@ export class ArmUnit {
     const pushR = (isWeaver ? 0.025 : 0.018) * M;
     const pushH = M * 0.003;
     const pusher = new THREE.Mesh(
-      new THREE.CylinderGeometry(pushR, pushR, pushH, 16),   // was 6-seg (w1-ship-polish D2)
+      new THREE.CylinderGeometry(pushR, pushR, pushH, 48),   // was 6-seg (w1-ship-polish D2)
       new THREE.MeshStandardMaterial({ color: 0x777788, metalness: 0.78, roughness: 0.32 })
     );
     // FIX_PLAN §2-followup: nudged forward to z=-bz*0.505 so pusher disc no
