@@ -497,7 +497,7 @@ const SYSTEMS = [
         pick: ['AFrame_64_L', 'AFrame_64_R', 'AFrame_116_L', 'AFrame_116_R',
           'AFrame_244_L', 'AFrame_244_R', 'AFrame_296_L', 'AFrame_296_R'],
         // §13 r4 roll-up: the fore hinge line's pads, pins and LEDs.
-        pickPrefixes: ['HingePad', 'HingePin', 'HingeLED'],
+        pickPrefixes: ['HingePad', 'HingePin', 'HingeLED', 'AFrame_'],   // v5-hinges: + encoder, stops, latch, harness (AFrame_<az>_<part>)
         // DERIVED: first strut azimuth, hinge radius 0.44 m, hinge plane z =
         // COLLAR_Y (moved onto the front ring 2026-09-23). A literal here would
         // point 10 cm aft of the real hinge, as 0.22/0.381/0.90 once did.
@@ -528,7 +528,7 @@ const SYSTEMS = [
         // is centred) through every sweep pose; the static fallback is the
         // measured stowed mid-strut (tmp/h-anchor.mjs: (0.548, 1.123, 1.00)).
         mesh: 'Strut_0', dynamic: true,
-        pickPrefixes: ['Strut_', 'RootCollar', 'TipCollar', 'RibRing', 'PClip', 'StrutMotorBox', 'StrutRest', 'BrakeDisc', 'Bushing', 'CClip'],
+        pickPrefixes: ['Strut_', 'RootCollar', 'TipCollar', 'RibRing', 'PClip', 'StrutMotorBox', 'StrutRest', 'Bushing', 'CClip'],
         anchor: [ 0.548 * M, 1.123 * M, 1.00 * M ] },
       // NET LAUNCHERS (DAUGHTERS) deleted: that hardware lives on the ArmUnit
       // (ArmUnit.js:660-667), never on the Mother. The fact moved into the
