@@ -167,18 +167,22 @@ export function getRosaBackHarnessTexture() {
 }
 
 /**
- * Wrap bands for the furled coil: about ten yellow-gold Kapton bands on a grey base, running ACROSS the coil length
- * (CylinderGeometry: u round, v along). Cached.
+ * Wrap marks for the furled coil: ten faint, slightly lighter bands on the old dark coil colour, running ACROSS the
+ * coil length (CylinderGeometry: u round, v along). Cached. v8-rosa-fix D3 (owner 2026-10-14: the gold stripes were
+ * jarring, "looked better before"): base #2a2a33 is the pre-wave-2a coil colour, the bands only hint at a wrap.
  */
+export const ROSA_STOW_BAND_COLORS = Object.freeze({ base: '#2a2a33', band: '#3a3a46', bandFraction: 0.12 });
+
 export function getRosaStowBandTexture() {
   if (_cache.has('bands')) return _cache.get('bands');
   const W = 32, H = 1024;
   const c = makeCanvas(W, H);
   if (!c) return null;
   const { ctx } = c;
-  ctx.fillStyle = '#4a4a52'; ctx.fillRect(0, 0, W, H);
-  const bands = 10, pitch = H / bands, bw = pitch * 0.42;
-  ctx.fillStyle = '#C9A227';
+  const K = ROSA_STOW_BAND_COLORS;
+  ctx.fillStyle = K.base; ctx.fillRect(0, 0, W, H);
+  const bands = 10, pitch = H / bands, bw = pitch * K.bandFraction;
+  ctx.fillStyle = K.band;
   for (let b = 0; b < bands; b++) ctx.fillRect(0, b * pitch + (pitch - bw) / 2, W, bw);
   const tex = finish(c.canvas, 'bands', { repeat: true });
   _cache.set('bands', tex);

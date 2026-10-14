@@ -34,6 +34,8 @@ import { daughterDisplayName } from '../core/daughterNames.js';
  * derivation there). Value unchanged (1e-5); positions byte-identical, pinned in
  * test-CaptureNet-Bookkeeping.js. */
 const M = Constants.SCENE_UNITS_PER_METER;
+/** Dock-socket ring outer radius, metres (bore Ø51.5 mm + 3 mm wall; v7-daughters D4). */
+const SOCKET_RO = 0.02875;
 
 /** World up axis (reused for the HOLDING_CATCH lateral-bias cross product). */
 const _WORLD_UP = new THREE.Vector3(0, 1, 0);
@@ -671,8 +673,11 @@ export class ArmUnit {
     const LASER_FACET = 1;
 
     const baseColor = isWeaver ? 0x4488aa : 0x88aa44;
+    // v7-daughters D2: bare facet + end caps are dark anodised grey (a real small
+    // craft is not cartoon teal); the Weaver blue / Spinner green type colour moves
+    // to the fore band ring below so each type still reads at a glance.
     const bareMetalMat = new THREE.MeshStandardMaterial({
-      color: baseColor, metalness: 0.80, roughness: 0.30,
+      color: 0x3a3d44, metalness: 0.70, roughness: 0.45,
     });
 
     // Solar-cell facet material (GaAs map when available, else dark PV tint).
@@ -748,6 +753,64 @@ export class ArmUnit {
       this.mesh.add(cap);
     }
 
+    // --- v7-daughters D2: corner rails + type-colour band ring --------------
+    // Six thin gunmetal strips along the hull corners (ONE merged mesh, 72 tris)
+    // give the prism an edge thickness; the 4 cm band near the fore cap carries
+    // the type colour. Both ride DETAIL order above the facets (no coplanar tie:
+    // rails are inset 2 mm from each cap, the band stands 2 % proud of the hull).
+    {
+      const railT = 0.006 * M;                       // radial thickness
+      const railW = 0.006 * M;                       // tangential width
+      const railL = (bz - 0.004) * M;                // 2 mm inset at each cap
+      const parts = [];
+      for (let k = 0; k < 6; k++) {
+        const phi = k * (Math.PI / 3);
+        const g = new THREE.BoxGeometry(railT, railW, railL);
+        g.rotateZ(phi);
+        g.translate(Math.cos(phi) * hexR, Math.sin(phi) * hexR, 0);
+        parts.push(g);
+      }
+      const pos = []; const nrm = []; const idx = [];
+      for (const g of parts) {
+        const base = pos.length / 3;
+        pos.push(...g.attributes.position.array);
+        nrm.push(...g.attributes.normal.array);
+        for (const i of g.index.array) idx.push(base + i);
+        g.dispose();
+      }
+      const railGeo = new THREE.BufferGeometry();
+      railGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      railGeo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+      railGeo.setIndex(idx);
+      const rails = new THREE.Mesh(railGeo, new THREE.MeshStandardMaterial({ ...AVIONICS_GUNMETAL }));
+      rails.name = `${this.id}-rails`;
+      rails.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.mesh.add(rails);
+
+      const bandH = 0.04 * M;
+      // Hex ring built as 6 flat quads (a merged buffer, not a round primitive: hexagonal by design, like the caps).
+      const bandR = hexR * 1.02;
+      const bp = [];
+      for (let k = 0; k < 6; k++) {
+        const a0 = k * (Math.PI / 3), a1 = (k + 1) * (Math.PI / 3);
+        const x0 = Math.cos(a0) * bandR, y0 = Math.sin(a0) * bandR;
+        const x1 = Math.cos(a1) * bandR, y1 = Math.sin(a1) * bandR;
+        const zl = -bandH / 2, zh = bandH / 2;
+        bp.push(x0, y0, zl, x1, y1, zl, x1, y1, zh,  x0, y0, zl, x1, y1, zh, x0, y0, zh);
+      }
+      const bandGeo = new THREE.BufferGeometry();
+      bandGeo.setAttribute('position', new THREE.Float32BufferAttribute(bp, 3));
+      bandGeo.computeVertexNormals();
+      const bandMat = new THREE.MeshStandardMaterial({
+        color: baseColor, metalness: 0.35, roughness: 0.5, side: THREE.DoubleSide,
+      });
+      const band = new THREE.Mesh(bandGeo, bandMat);
+      band.position.set(0, 0, halfLen - 0.032 * M);  // just behind the fore cap, 12 mm clear of it
+      band.name = `${this.id}-band`;
+      band.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.mesh.add(band);
+    }
+
     // --- S3.5: Panel line edges (zero triangle cost) ---
     // §2-followup (round 8): the edges are built from a slightly LARGER hex
     // (1.5% proud) so the lines sit physically off the facets with a real,
@@ -764,15 +827,56 @@ export class ArmUnit {
     this.mesh.add(edges);
 
 
-    // --- S3.5: Aft FEEP nozzle (stub, centered on −Z face) ---
-    const aftNozR = (isWeaver ? 0.015 : 0.010) * M;
+    // --- v7-daughters D4: dock socket ring on the aft face. The Ø50 mm strut tube enters the hull through
+    // this ring (bore Ø51.5 mm = 0.75 mm clear per side, wall 3 mm, 8 mm proud), so the tube no longer
+    // vanishes into bare cap. A dark notch on the +Y side marks the D-flat of the print socket.
+    const socketRi = 0.02575 * M;
+    const socketRo = SOCKET_RO * M;
+    const socketL = 0.008 * M;
+    const socketGeo = new THREE.LatheGeometry([
+      new THREE.Vector2(socketRi, 0), new THREE.Vector2(socketRi, socketL),
+      new THREE.Vector2(socketRo, socketL), new THREE.Vector2(socketRo, 0),
+    ], 48);
+    const socket = new THREE.Mesh(socketGeo, new THREE.MeshStandardMaterial({
+      ...AVIONICS_GUNMETAL, side: THREE.DoubleSide,
+    }));
+    socket.rotation.x = -Math.PI / 2;          // lathe +Y -> body -Z (outward from the aft cap)
+    socket.position.set(0, 0, -halfLen);
+    socket.name = `${this.id}-dock-socket`;
+    socket.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.mesh.add(socket);
+    // D10(c): the D-key mark sits on the +Y side (the print's flat is on the daughter's +Y facet), and reads
+    // as a dark notch cut into the ring's rim: a small dark block set INTO the wall at the outer end (it is
+    // only 0.2 mm proud of each wall face, so it is not a lug).
+    const keyMat = new THREE.MeshStandardMaterial({ color: 0x08080c, metalness: 0.3, roughness: 0.6 });
+    const keyW = socketRo - socketRi + 0.0004 * M;     // radial extent: the whole wall + 0.2 mm each side
+    const keyL = 0.003 * M;                            // axial depth of the notch
+    const key = new THREE.Mesh(new THREE.BoxGeometry(0.005 * M, keyW, keyL), keyMat);
+    key.position.set(0, (socketRi + socketRo) / 2, -halfLen - socketL + keyL / 2);
+    key.name = `${this.id}-dock-socket-key`;
+    key.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.mesh.add(key);
+
+    // --- S3.5 / v7 D7-D8: Aft FEEP nozzle. A real thruster on the dock axis would fire into the strut, so
+    // the whole aft thruster (boss, nozzle box, plume pair) sits OFF-centre beside the socket, on the +X axis
+    // toward the +X hull corner. Boss radius r_b = min(today's r, the room left between the socket ring and
+    // the slanted hex edge, both with 2 mm of margin); centre x_c = R_O + 2 mm + r_b. The nozzle is a BOX
+    // stub (real FEEP = box + aperture, no bell), side 0.6 x today's exit Ø, centred on the boss.
+    const aftNozR = (isWeaver ? 0.015 : 0.010) * M;     // today's nozzle radius: sizes the plume + boss
     const aftNozL = (isWeaver ? 0.025 : 0.015) * M;
-    const aftNozGeo = new THREE.CylinderGeometry(aftNozR, aftNozR * 1.1, aftNozL, 24, 1, true);  // was 6-seg
+    const bossR0 = aftNozR * 2.0;
+    const bossR = Math.min(bossR0,
+      (apothem - Math.cos(Math.PI / 6) * (socketRo + 0.002 * M) - 0.002 * M) / (1 + Math.cos(Math.PI / 6)));
+    const aftX = socketRo + 0.002 * M + bossR;          // thruster centre x (body frame)
+    this._aftThrusterX = aftX;
+    const aftSide = aftNozR * 2 * 0.6;
+    const feepApMat = new THREE.MeshStandardMaterial({ color: 0x08080c, metalness: 0.3, roughness: 0.6, side: THREE.DoubleSide });   // dark aperture, per arm
+    const aftNozGeo = new THREE.BoxGeometry(aftSide, aftNozL, aftSide);
     const feepMat = new THREE.MeshStandardMaterial({
       color: 0x444455, metalness: 0.85, roughness: 0.25,
     });
     const aftNozzle = new THREE.Mesh(aftNozGeo, feepMat);
-    aftNozzle.position.set(0, 0, -bz * 0.52 * M);
+    aftNozzle.position.set(aftX, 0, -bz * 0.52 * M);
     aftNozzle.rotation.x = Math.PI / 2;
     aftNozzle.name = `${this.id}-feep-aft`;
     this.mesh.add(aftNozzle);
@@ -782,16 +886,23 @@ export class ArmUnit {
     // (z=-bz*0.515) — between the aft cap (−0.5) and the pusher disc (−0.505,
     // L707) and the nozzle base (−0.52) — plus DETAIL order so it does not
     // re-introduce the L696/round-8 aft-nozzle-base z-fight.
-    const bossGeo = new THREE.CylinderGeometry(aftNozR * 2.0, aftNozR * 2.2, aftNozL * 0.4, 48, 1, false);
+    const bossGeo = new THREE.CylinderGeometry(bossR * (2.0 / 2.2), bossR, aftNozL * 0.4, 48, 1, false);
     const bossMat = new THREE.MeshStandardMaterial({
       color: 0x3a3a44, metalness: 0.7, roughness: 0.4,
     });
     const boss = new THREE.Mesh(bossGeo, bossMat);
-    boss.position.set(0, 0, -bz * 0.515 * M);
+    boss.position.set(aftX, 0, -bz * 0.515 * M);
     boss.rotation.x = Math.PI / 2;
     boss.name = `${this.id}-feep-aft-boss`;
     boss.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.mesh.add(boss);
+    // Aperture: a dark disc on the nozzle's exit face (0.5 mm proud, faces -Z).
+    const aftAp = new THREE.Mesh(new THREE.CircleGeometry(aftSide * 0.3, aftSide * 0.3 >= 0.005 * M ? 24 : 12), feepApMat);
+    aftAp.position.set(aftX, 0, -bz * 0.52 * M - aftNozL / 2 - 0.0005 * M);
+    aftAp.rotation.y = Math.PI;
+    aftAp.name = `${this.id}-feep-aft-aperture`;
+    aftAp.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.mesh.add(aftAp);
 
     // Aft thruster plume (additive, hidden by default) — HYBRID (Phase 3):
     // a physically-consistent silver-blue FEEP core (0x99bbdd, same propellant as
@@ -811,7 +922,7 @@ export class ArmUnit {
     // the mother's plumes — without this the untagged plume sorted by raw depth
     // against the (separate) mother object and punched through inconsistently.
     plume.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
-    plume.position.set(0, 0, -bz * 0.5 * M);   // near end welded to aft nozzle exit
+    plume.position.set(aftX, 0, -bz * 0.5 * M);   // near end welded to aft nozzle exit (off-centre, D7)
     plume.rotation.x = -Math.PI / 2;           // beam local +Y → world -Z (aft)
     plume.visible = false;
     plume.name = `${this.id}-feep-plume-core`;
@@ -825,7 +936,7 @@ export class ArmUnit {
     });
     const plumeHalo = new THREE.Mesh(haloGeo, haloMat);
     plumeHalo.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
-    plumeHalo.position.set(0, 0, -bz * 0.5 * M);
+    plumeHalo.position.set(aftX, 0, -bz * 0.5 * M);
     plumeHalo.rotation.x = -Math.PI / 2;
     plumeHalo.visible = false;
     plumeHalo.name = `${this.id}-feep-plume-halo`;
@@ -836,16 +947,26 @@ export class ArmUnit {
     // --- S3.5: Fore FEEP nozzle (braking/attitude, offset on +Z face) ---
     const foreNozR = (isWeaver ? 0.010 : 0.007) * M;
     const foreNozL = (isWeaver ? 0.015 : 0.010) * M;
-    const foreNozGeo = new THREE.CylinderGeometry(foreNozR, foreNozR * 1.1, foreNozL, 24, 1, true);  // was 6-seg
+    const foreSide = foreNozR * 2 * 0.6;
+    // D10(a): the fore box sits OUTSIDE the net-launcher canister (r = canister radius, 55 / 35 mm), 2 mm
+    // clear of it measured at the box's half-diagonal, on the +X axis. One shared x for nozzle, aperture, plumes.
+    const foreCanR = (isWeaver ? 0.055 : 0.035) * M;
+    const foreX = foreCanR + 0.002 * M + foreSide * Math.SQRT1_2;
+    const foreNozGeo = new THREE.BoxGeometry(foreSide, foreNozL, foreSide);   // box stub (D8): height = axial length
     const foreNozzle = new THREE.Mesh(foreNozGeo, feepMat);
     // Protrude past the fore face (halfLen = bz·0.5·M) with the base embedded so
     // it reads as a real nozzle, not a stub buried inside the hull. The brake
     // plume axis test uses the daughter's world +Z direction (L4394), not this
     // mesh position, so moving it forward is safe.
-    foreNozzle.position.set(bx * 0.25 * M, 0, bz * 0.5 * M + foreNozL * 0.35);
+    foreNozzle.position.set(foreX, 0, bz * 0.5 * M + foreNozL * 0.35);
     foreNozzle.rotation.x = -Math.PI / 2;
     foreNozzle.name = `${this.id}-feep-fore`;
     this.mesh.add(foreNozzle);
+    const foreAp = new THREE.Mesh(new THREE.CircleGeometry(foreSide * 0.3, foreSide * 0.3 >= 0.005 * M ? 24 : 12), feepApMat);
+    foreAp.position.set(foreX, 0, bz * 0.5 * M + foreNozL * 0.35 + foreNozL / 2 + 0.0005 * M);
+    foreAp.name = `${this.id}-feep-fore-aperture`;
+    foreAp.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.mesh.add(foreAp);
 
     // Fore thruster plume (Wave1 daughter-plumes) — same HYBRID idiom as the
     // aft pair above (silver-blue FEEP core + type-tinted halo, additive,
@@ -864,7 +985,7 @@ export class ArmUnit {
     });
     const forePlume = new THREE.Mesh(foreCoreGeo, foreCoreMat);
     forePlume.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
-    forePlume.position.set(bx * 0.25 * M, 0, foreExitZ);  // welded to fore nozzle exit
+    forePlume.position.set(foreX, 0, foreExitZ);  // welded to fore nozzle exit
     forePlume.rotation.x = Math.PI / 2;                   // beam local +Y → world +Z (fore)
     forePlume.visible = false;
     forePlume.name = `${this.id}-feep-plume-fore-core`;
@@ -878,7 +999,7 @@ export class ArmUnit {
     });
     const forePlumeHalo = new THREE.Mesh(foreHaloGeo, foreHaloMat);
     forePlumeHalo.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
-    forePlumeHalo.position.set(bx * 0.25 * M, 0, foreExitZ);
+    forePlumeHalo.position.set(foreX, 0, foreExitZ);
     forePlumeHalo.rotation.x = Math.PI / 2;
     forePlumeHalo.visible = false;
     forePlumeHalo.name = `${this.id}-feep-plume-fore-halo`;
@@ -968,6 +1089,31 @@ export class ArmUnit {
     eventBus.on(Events.NET_INVENTORY_CHANGED, this._onNetInventoryChanged);
 
 
+    // --- v7-daughters D3: one whip antenna on a base puck at the fore cap's -X corner,
+    // beside the net launcher (puck edge >= 4 mm clear of the launcher housing wall).
+    // Both are CULL-listed inert detail (suffixes '-antenna', '-antenna-puck').
+    {
+      const puckR = (isWeaver ? 0.012 : 0.007) * M;
+      const puckH = 0.006 * M;
+      const puckX = -(isWeaver ? 0.075 : 0.047) * M;     // centre: edge is 5-6 mm off the launcher wall (canR)
+      const whipR = 0.003 * M;                           // Ø6 mm
+      const whipL = (isWeaver ? 0.08 : 0.05) * M;
+      const puckMat = new THREE.MeshStandardMaterial({ color: 0xccccdd, metalness: 0.9, roughness: 0.2 });
+      const puck = new THREE.Mesh(new THREE.CylinderGeometry(puckR, puckR, puckH, 24), puckMat);
+      puck.position.set(puckX, 0, halfLen + puckH / 2 - puckH * 0.2);   // base sunk 20 % into the cap
+      puck.rotation.x = Math.PI / 2;
+      puck.name = `${this.id}-antenna-puck`;
+      puck.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.mesh.add(puck);
+      const whip = new THREE.Mesh(new THREE.CylinderGeometry(whipR, whipR, whipL, 12),
+        new THREE.MeshStandardMaterial({ color: 0xb4b8c2, metalness: 0.8, roughness: 0.3 }));
+      whip.position.set(puckX, 0, halfLen + puckH * 0.8 + whipL / 2);
+      whip.rotation.x = Math.PI / 2;
+      whip.name = `${this.id}-antenna`;
+      whip.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.mesh.add(whip);
+    }
+
     // --- Laser power receiver (top face) — a small optical rectenna, NOT a
     // solar array. A round photodiode recessed inside a short metallic housing.
     const rxR = (isWeaver ? 0.045 : 0.030) * M;   // receiver disc radius (small)
@@ -1039,6 +1185,34 @@ export class ArmUnit {
     this._statusLightHalo = makeLightHalo(
       0x00ff44, Constants.LIGHT_FX.STATUS_HALO * M, 1.8, Constants.LIGHT_FX.STATUS_HALO_OPACITY);
     statusLight.add(this._statusLightHalo);
+
+    // v7-daughters D5: gunmetal housing (a short bezel wall) round the lens sphere so the lamp sits in a
+    // fitting instead of floating on the hull. The lens, its material and the halo above are untouched.
+    {
+      const hr = 0.014 * M;
+      const yBot = (bx / 2) * M - 0.002 * M;                 // sunk 2 mm into the +Y facet
+      const yTop = statusLight.position.y + 0.002 * M;       // lens stands proud of the rim
+      // Spinner: the lamp sits only 45 mm from the receiver axis, so a full Ø28 mm ring would cut ~9.5 mm into
+      // the receiver bezel (outer r houseOR). There the housing is a hood: only the arc >= 1.2 mm outside the
+      // bezel is kept (the side facing the receiver is open). Weaver clears it, so it keeps the full ring.
+      const dC = Math.hypot(statusLight.position.x, statusLight.position.z);   // lamp -> receiver axis (plan)
+      const need = houseOR + 0.0012 * M;
+      let arcStart = 0, arcLen = Math.PI * 2;
+      if (dC - hr < need) {
+        // keep points where |c + hr u|^2 >= need^2 ; u makes angle phi with the direction away from the receiver
+        const cosPhi = (need * need - dC * dC - hr * hr) / (2 * dC * hr);
+        const phi = Math.acos(Math.min(1, Math.max(-1, cosPhi)));
+        arcLen = 2 * phi;
+        arcStart = (statusLight.position.z < 0 ? Math.PI : 0) - phi;   // arc centred on the -Z (aft) side
+      }
+      const housing = new THREE.Mesh(
+        new THREE.CylinderGeometry(hr, hr, yTop - yBot, 24, 1, true, arcStart, arcLen),
+        new THREE.MeshStandardMaterial({ ...AVIONICS_GUNMETAL, side: THREE.DoubleSide }));
+      housing.position.set(statusLight.position.x, (yTop + yBot) / 2, statusLight.position.z);
+      housing.name = `${this.id}-status-housing`;
+      housing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.mesh.add(housing);
+    }
 
     // --- S3.4: EPM docking collar (replaces flat dock plate) ---
     const epmR = (isWeaver ? 0.025 : 0.020) * M;
@@ -1152,7 +1326,7 @@ export class ArmUnit {
   _collectDetailMeshes() {
     const CULL_SUFFIXES = [
       '-panel-lines', '-mrr-patch', '-epm-housing', '-epm-pole', '-gimbal-ring',
-      '-bridle-hp-A', '-bridle-hp-B', '-feep-aft-boss',
+      '-bridle-hp-A', '-bridle-hp-B', '-feep-aft-boss', '-antenna', '-antenna-puck',
     ];
     this._detailMeshes.length = 0;
     if (!this.mesh) return;

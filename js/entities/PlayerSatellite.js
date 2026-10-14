@@ -2182,6 +2182,30 @@ export class PlayerSatellite extends THREE.Group {
     return makePlumeFrustum(rNear, rFar, len, radial, rings);
   }
 
+  /**
+   * @private — Merge indexed geometries (position/normal/uv, already positioned) into one BufferGeometry.
+   * v6-nose-tail: a flange + its bolt heads draw as ONE mesh.
+   */
+  static _mergeParts(geos) {
+    const pos = [], nor = [], uv = [], idx = [];
+    let base = 0;
+    for (const g of geos) {
+      pos.push(...g.attributes.position.array);
+      nor.push(...g.attributes.normal.array);
+      uv.push(...g.attributes.uv.array);
+      const ix = g.index.array;
+      for (let i = 0; i < ix.length; i++) idx.push(ix[i] + base);
+      base += g.attributes.position.count;
+      g.dispose();
+    }
+    const out = new THREE.BufferGeometry();
+    out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    out.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    out.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    out.setIndex(idx);
+    return out;
+  }
+
   /** @private — Config G FEEP thruster array + RCS attitude thrusters */
   _buildThrusters() {
     this.mainThrusters = [];
@@ -2189,8 +2213,16 @@ export class PlayerSatellite extends THREE.Group {
     this.attitudeThrusters = [];
     this.attitudeThrusterPlumes = [];
 
-    // Config G main FEEP nozzle — smaller proportions for 0.4m barrel
-    const nozzleGeo = new THREE.CylinderGeometry(M * 0.03, M * 0.06, M * 0.15, 48, 1, true);  // was 12 → 16 → 32 → 48-seg (aft-view focal; bell = liner = grid disc, w1-ship-polish D3)
+    // v6-nose-tail (owner 2026-10-13: "FEEP bells REPLACED by real small boxes"): a field-emission thruster is a ~100 mm
+    // box (ENPULSION IFM Nano R3: 98-101 x 99 x 97 mm, look-reference E) with a small emitter aperture and a neutraliser
+    // on its face and NO bell. Aft face stays at z -1.075 (Constants.THRUSTERS), so the box centre is 50 mm fore of it.
+    const FEEP_BOX = 0.10, FEEP_FACE_Z = -1.075, FEEP_BOX_Z = FEEP_FACE_Z + FEEP_BOX / 2;   // -1.025
+    const FEEP_APERTURE_R = 0.015, FEEP_PLATE_R = 0.028;
+    const nozzleGeo = new THREE.BoxGeometry(M * FEEP_BOX, M * FEEP_BOX, M * FEEP_BOX);
+    const feepNeutraliserGeo = new THREE.CylinderGeometry(M * 0.005, M * 0.005, M * 0.012, 24);
+    const feepPlateGeo = new THREE.CircleGeometry(M * FEEP_PLATE_R, 48);
+    const feepApertureGeo = new THREE.CircleGeometry(M * FEEP_APERTURE_R, 48);
+    const feepPlateMat = new THREE.MeshStandardMaterial({ color: 0x23252b, metalness: 0.6, roughness: 0.45, side: THREE.DoubleSide });
 
     // Map thruster index → Constants.THRUSTERS id (for interlock visual)
     const thrusterIds = ['HT_TOP', 'HT_BOTTOM', 'HT_RIGHT', 'HT_LEFT'];
@@ -2221,7 +2253,7 @@ export class PlayerSatellite extends THREE.Group {
 
     mainPositions.forEach((pos, i) => {
       const thruster = new THREE.Mesh(nozzleGeo, this._matFEEP);
-      thruster.position.set(pos.x, pos.y, -M * 1.0);
+      thruster.position.set(pos.x, pos.y, M * FEEP_BOX_Z);   // box centre; aft face z -1.075
       thruster.rotation.x = Math.PI / 2;
       thruster.name = `MainFEEP_${i}`;
       thruster._thrusterId = thrusterIds[i]; // for interlock visual lookup
@@ -2231,23 +2263,17 @@ export class PlayerSatellite extends THREE.Group {
       this.add(thruster);
       this.mainThrusters.push(thruster);
 
-      // Inner liner — BackSide-rendered interior surface, distinct from copper
-      // exterior.
-      // §2-followup (round 8): the liner used the SAME nozzleGeo as the thruster
-      // with zero offset — a coincident shell (exactly the daughter cell-skin
-      // bug). Under logarithmicDepthBuffer two coincident surfaces z-fight
-      // regardless of depth flags. Give the liner its own geometry inset from the
-      // nozzle radius so it is a genuine interior wall with a real gap, never
-      // coincident with the outer nozzle.
-      // §2-followup (z-layer-and-lights-fix Batch 4, Z6): the inset was 0.97×,
-      // leaving only a ~1.8 mm exit gap — below the ~4 mm log-depth reliable
-      // separation, so the mouth still shimmered. Tighten the inset to 0.92× so
-      // the exit gap is M*0.06*0.08 = 4.8 mm (≥ 4 mm), deterministic tie-pass at
-      // the visible nozzle mouth. Single factor on both radii keeps the cone taper.
-      const LINER_INSET = 0.92;
-      const linerGeo = new THREE.CylinderGeometry(M * 0.03 * LINER_INSET, M * 0.06 * LINER_INSET, M * 0.15, 48, 1, true);  // was 12 → 16 → 32 → 48-seg (match bell, D3)
-      const innerLiner = new THREE.Mesh(linerGeo, this._matFEEPInner.clone());
+      // Emitter aperture (v6-nose-tail): a small dark-blue disc on the box face, the surface the ion beam leaves.
+      // Keeps the old liner's name + emissive material (_animateThrusterGlow lights it). Local frame: the parent is
+      // rotated pi/2 about X, so local +Y = world +Z and a child circle turned another pi/2 faces aft (-Z).
+      // Plate 1.2 mm aft of the box face, aperture 1.2 mm aft of the plate: never coplanar, and each within the 1.5 mm
+      // 'touching' distance of test-NothingFloats of what it sits on (a larger standoff makes them floaters).
+      const apertureMat = this._matFEEPInner.clone();
+      apertureMat.side = THREE.DoubleSide;
+      const innerLiner = new THREE.Mesh(feepApertureGeo, apertureMat);
       innerLiner.name = `FEEPInner_${i}`;
+      innerLiner.position.y = M * (FEEP_FACE_Z - 0.0024 - FEEP_BOX_Z);    // world z -1.0774
+      innerLiner.rotation.x = Math.PI / 2;
       innerLiner.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       thruster.add(innerLiner);
 
@@ -2266,51 +2292,40 @@ export class PlayerSatellite extends THREE.Group {
       // (h 0.03 → −1.013…−1.043): it straddles the AftThrusterDeck's aft face
       // (−1.028) — 15 mm buried, 15 mm proud — a visible flange collar around
       // the bell where it emerges (bell r ≈ 0.051 there, boss r 0.07).
-      boss.position.y = -M * 0.028;
+      boss.position.y = M * (-1.028 - FEEP_BOX_Z);   // world z -1.028, as before the box (thruster origin moved 25 mm aft)
       boss.name = `FEEP_Boss_${i}`;   // unique per bell (T9) — cull matches by prefix
       boss.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2
       thruster.add(boss);
 
-      // FIX_PLAN §2 — Grid disc (ion accelerator grid recessed inside nozzle exit)
-      // Same parent-rotation accounting: use local Y axis for the nozzle direction.
-      // Floaters fix (2026-09-25): the disc used to be r 0.025 centred in the
-      // ~0.054 m bell mouth — 28.3 mm off the liner wall, touching nothing (a
-      // KNOWN_FLOATER). A real grid spans the aperture: r 0.054 puts the rim
-      // 0.27 mm off the liner's inner wall at the disc's depth (measured,
-      // tmp/floaters-probe.mjs — liner circumradius 0.05428 at local y −0.070,
-      // 16-gon flats 0.05324; the 8 rim vertices share azimuths with the liner's
-      // 16 vertices, where the wall stands at 0.05428, so the rim never pierces
-      // the liner). Name, depth, wireframe look and renderOrder unchanged.
-      // w1-ship-polish D3: 8 → 32 → 48 segments to match the 48-gon bell/liner. The
-      // rim vertices still share azimuths with the liner's (any n dividing 48), so
-      // the rim stays inside the liner wall (circumradius 0.054 vs 0.05428 there).
-      const gridDiscGeo = new THREE.CircleGeometry(M * 0.054, 48);
-      const gridDiscMat = new THREE.MeshBasicMaterial({
-        color: 0x667788, wireframe: true, transparent: true, opacity: 0.5,
-        side: THREE.DoubleSide,
-      });
-      const gridDisc = new THREE.Mesh(gridDiscGeo, gridDiscMat);
-      // Mother audit T9 (A1): the disc used to sit at local −0.005 (world z
-      // −1.005 — INSIDE the deck slab −0.988…−1.028) with its normal along
-      // world −Y (edge-on down the bell): never visible. Now 5 mm inside the
-      // exit (local −0.070 → world z −1.070; exit at −1.075, deck aft face at
-      // −1.028) with rotation.x = π/2 so the circle normal runs along the bell
-      // axis (local −Y = aft). DoubleSide keeps it visible from either side.
-      gridDisc.position.y = -M * 0.070;
+      // Emitter plate (v6-nose-tail): the dark plate round the aperture, in the old grid disc's slot (name, CircleGeometry,
+      // DoubleSide kept). 1.2 mm aft of the box face (world z -1.0762), opaque; was a wireframe grid in the bell mouth.
+      const gridDisc = new THREE.Mesh(feepPlateGeo, feepPlateMat);
+      gridDisc.position.y = M * (FEEP_FACE_Z - 0.0012 - FEEP_BOX_Z);
       gridDisc.rotation.x = Math.PI / 2;
       gridDisc.name = `FEEP_GridDisc_${i}`;   // unique per bell (T9) — cull matches by prefix
-      gridDisc.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT; // FIX_PLAN §2
+      gridDisc.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       thruster.add(gridDisc);
+
+      // Two neutraliser tubes (thermionic cathodes) either side of the plate, tangential to the cross pattern: r 5 mm,
+      // 12 mm long, 2 mm buried in the face, 10 mm proud.
+      for (let k = 0; k < 2; k++) {
+        const nt = new THREE.Mesh(feepNeutraliserGeo, this._matFEEP);
+        const off = (k === 0 ? -1 : 1) * M * 0.036;
+        nt.position.set(pos.x === 0 ? off : 0, M * (FEEP_FACE_Z - 0.004 - FEEP_BOX_Z), pos.x === 0 ? 0 : off);
+        nt.name = `FEEP_Neutraliser_${i}_${k}`;
+        nt.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+        thruster.add(nt);
+      }
 
       // FEEP nozzle glow ring (sized to nozzle aperture). 16 segments (T9/A3):
       // the old 6-segment ring drew a hexagon on a 110 mm circle.
-      const glowGeo = new THREE.RingGeometry(M * 0.02, M * 0.055, 16);
+      const glowGeo = new THREE.RingGeometry(M * FEEP_APERTURE_R, M * 0.055, 48);
       const glowMat = new THREE.MeshBasicMaterial({
         color: 0x99bbdd, transparent: true, opacity: 0.0,
         side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
       });
       const glow = new THREE.Mesh(glowGeo, glowMat);
-      glow.position.set(pos.x, pos.y, -M * 1.075);
+      glow.position.set(pos.x, pos.y, -M * 1.082);   // 7 mm aft of the box face and 4.6 mm aft of the aperture: never coplanar
       glow.name = `MainFEEPGlow_${i}`;
       glow.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // FIX_PLAN §2
       this.add(glow);
@@ -2321,7 +2336,7 @@ export class PlayerSatellite extends THREE.Group {
       // 0.06M) widening to ~2.2× downstream, vertex-alpha fading to 0 at the tip.
       // Kept in mainThrusterPlumes as a Mesh with .material.opacity/.color/.visible
       // — the exact hooks LaunchCinematic + _animateThrusterGlow drive.
-      const plumeGeo = this._makePlumeFrustum(M * 0.06, M * 0.13, M * 0.35);
+      const plumeGeo = this._makePlumeFrustum(M * FEEP_APERTURE_R, M * 0.13, M * 0.35);
       const feepPlumeMat = new THREE.MeshBasicMaterial({
         color: 0x99bbdd, transparent: true, opacity: 0.0, vertexColors: true,
         blending: THREE.AdditiveBlending, depthWrite: false,
@@ -2336,7 +2351,7 @@ export class PlayerSatellite extends THREE.Group {
       this.mainThrusterPlumes.push(plume);
 
       // Outer glow halo — longer, wider, fainter diverging frustum around the core.
-      const outerGlowGeo = this._makePlumeFrustum(M * 0.06, M * 0.17, M * 0.75);
+      const outerGlowGeo = this._makePlumeFrustum(M * FEEP_APERTURE_R, M * 0.17, M * 0.75);
       const outerGlowMat = new THREE.MeshBasicMaterial({
         color: 0xaaccee, transparent: true, opacity: 0.0, vertexColors: true,
         blending: THREE.AdditiveBlending, depthWrite: false,
@@ -2377,16 +2392,19 @@ export class PlayerSatellite extends THREE.Group {
     //     edges (boot footprint, ≥2° gate). Near-orthogonal to the ROSA wings
     //     (0°/180°, 4.65° off) so radial/axial exhaust still never washes the
     //     blankets.
-    //   • |z| = 0.795 m, housing 0.10 m long → pod z-span 0.745–0.845 m: 2.5 cm
-    //     clear of the PV end rows (edge 0.72) and of the collar cluster.
+    //   • |z| = 0.775 m, housing 0.06 m long → pod z-span 0.745–0.805 m: 2.5 cm
+    //     clear of the PV end rows (edge 0.72) and of the collar cluster. (Was 0.795 / 0.10 / 0.745–0.845: owner
+    //     2026-10-14 the axial bell's throat must sit ON the housing end face, which pulled its mouth out to z 0.905
+    //     into the star trackers; the outboard 40 mm of housing is gone instead, so the mouth stays at z 0.8655,
+    //     4.5 mm inboard of where it was.)
     //   • TANGENTIAL bells are canted RCS_TANG_CANT (18°) radially outward: an
     //     uncanted ±X plume runs parallel just ~0.44 m above the wing plane and a
     //     ~25° cold-gas boundary would clip the outer wing beyond ~0.8 m; the
     //     cant lifts the boundary clear (≥0.24 m above the plane at the wing tip)
     //     while still firing at cos18°=0.95 intensity for ±X demand.
-    const RCS_POD_Z    = 0.795;   // m — pod centre |z| station (fore/aft)
+    const RCS_POD_Z    = 0.775;   // m — pod centre |z| station (fore/aft)
     const RCS_POD_W    = 0.12;    // m — tangential width
-    const RCS_POD_L    = 0.10;    // m — axial length
+    const RCS_POD_L    = 0.06;    // m — axial length
     const RCS_POD_H    = 0.055;   // m — radial height
     const RCS_BURY     = 0.010;   // m — housing base buried below hull (no under-gap, no plinth)
     const RCS_BELL_LEN = 0.06;    // m — nozzle bell length (throat 0.015 → exit 0.025), ~25% smaller
@@ -2412,7 +2430,16 @@ export class PlayerSatellite extends THREE.Group {
     const barrelR_m = Constants.OCTOPUS_V5?.COLLAR_RADIUS ?? 0.40;
     const RCS_POD_AZ_DEG = [94.65, 274.65];
 
-    const podGeo = new THREE.BoxGeometry(M * RCS_POD_W, M * RCS_POD_L, M * RCS_POD_H);
+    // Owner 2026-10-14 ("white box visible inside bell"): the housing is shaped AROUND the three bells instead of a
+    // plain 0.12 m block that the bells were buried in. In the pod's own tangent axis, measured towards the side the
+    // tangential bell fires (u): the back wall stays at -RCS_POD_W/2 (-60 mm, as the old block and its boot), the
+    // exhaust-side wall is pulled in to RCS_POD_U1 (-3 mm). The radial and axial bells sit on the centre of the
+    // shortened block; the tangential bell's throat sits on its exhaust-side wall, so the three cavities no longer
+    // meet each other or the housing. (The housing is thereby narrower: 57 mm wide, was 120.)
+    const RCS_POD_U1 = -0.003;                          // m — exhaust-side wall (u)
+    const RCS_POD_WIDTH = RCS_POD_U1 + RCS_POD_W / 2;   // m — 57 mm
+    const RCS_POD_CU = (RCS_POD_U1 - RCS_POD_W / 2) / 2;   // m — block centre in u (-31.5 mm)
+    const podGeo = new THREE.BoxGeometry(M * RCS_POD_WIDTH, M * RCS_POD_L, M * RCS_POD_H);
     const podMat = new THREE.MeshStandardMaterial({
       color: 0x9090a8, metalness: 0.72, roughness: 0.30,   // 6061-T6 CNC (matches A-frame gray)
     });
@@ -2422,7 +2449,7 @@ export class PlayerSatellite extends THREE.Group {
       color: 0x6e5a30, metalness: 0.55, roughness: 0.55,   // darker gold/bronze close-out
     });
     const bootGeo = new THREE.BoxGeometry(
-      M * (RCS_POD_W + 0.006), M * (RCS_POD_L + 0.016), M * 0.012,
+      M * (RCS_POD_WIDTH + 0.006), M * (RCS_POD_L + 0.016), M * 0.012,
     );
     // §3 Corner bolts — Ti fasteners on the housing outer face (Ti recipe; the
     // collar's boltMat is function-local to _buildCollar, so a fresh one here).
@@ -2440,15 +2467,64 @@ export class PlayerSatellite extends THREE.Group {
       color: 0x22242c, metalness: 0.6, roughness: 0.5,     // dark cold-gas throat
       side: THREE.BackSide,
     });
-    // Throat cap (injector/poppet plate) — closes the small throat aperture so
-    // that LOOKING DOWN THE BELL shows a dark injector face, not an open hole
-    // through the throat into the housing/hull. Mirrors the FEEP grid-disc idea.
-    // Reused across all 12 bells; oriented per-bell as a child of the bell.
-    const throatCapGeo = new THREE.CircleGeometry(M * 0.015 * RCS_LINER_INSET, 48);
-    const throatCapMat = new THREE.MeshStandardMaterial({
-      color: 0x15161c, metalness: 0.55, roughness: 0.6,    // darker than the liner (recessed injector)
+    // Throat funnel (v6-nose-tail D2): the converging section of a real bell. A 3-step lathe from the liner
+    // wall (a flat disc here before) down to a throat of exit Ø / 12 (ArianeGroup 10 N: Ø2.85 / Ø35 = 12.3:1,
+    // look-reference §E), closed by a dark plate. 24 segments (r <= 12 mm, v1 rule), inside the 48-gon liner.
+    const RCS_EXIT_R = 0.025, RCS_THROAT_AREA_RATIO_D = 12;
+    const rcsThroatR = RCS_EXIT_R / RCS_THROAT_AREA_RATIO_D;   // 2.08 mm -> throat Ø 4.2 mm
+    const linerRAt = (y) => 0.015 * RCS_LINER_INSET + (0.025 - 0.015) * RCS_LINER_INSET * ((RCS_BELL_LEN / 2 - y) / RCS_BELL_LEN);
+    const fY = [0.0255, 0.0272, 0.0285, 0.0297];     // bell-local y of the four funnel rings (+y = throat end)
+    const throatFunnelGeo = new THREE.LatheGeometry([
+      new THREE.Vector2(linerRAt(fY[0]) * 0.96 * M, fY[0] * M),
+      new THREE.Vector2(0.0085 * M, fY[1] * M),
+      new THREE.Vector2(0.0045 * M, fY[2] * M),
+      new THREE.Vector2(rcsThroatR * M, fY[3] * M),
+    ], 24);   // r <= 12 mm, deep in the bell: the 24-gon of the v1 rule for r 5..20 mm
+    const throatFunnelMat = new THREE.MeshStandardMaterial({
+      color: 0x15161c, metalness: 0.55, roughness: 0.6,    // dark, darker than the liner (recessed injector)
       side: THREE.DoubleSide, emissive: 0x000000,
     });
+    const throatPlateGeo = new THREE.CircleGeometry(M * rcsThroatR, 24);
+    // Exit lip (v6-nose-tail D2): the mouth rolls out into a thin flared rim, 1.2 mm wider than the bell exit (one cone
+    // segment; starts 0.3 mm outside the wall, so it never ties with it).
+    const rcsLipGeo = new THREE.LatheGeometry([
+      new THREE.Vector2(0.0249 * M, -0.0275 * M),
+      new THREE.Vector2(0.0262 * M, -0.0302 * M),
+    ], 48);
+    // Radial-bell mounting flange + 4 bolt heads (one merged mesh): a RING (not a disc, so it never crosses the bell
+    // cavity) of outer r 26 mm, inner r 16.5 mm (1.1 mm clear of the bell wall), standing 3 mm proud of the housing
+    // face and 1 mm buried in it. Bell-local y: the bell throat plane is y 0.0300, 0.5 mm off the face (y 0.0305);
+    // ring y 0.0275 (top) .. 0.0315 (buried); heads on a 21.5 mm circle at 45 deg steps, 1 mm sunk into the ring top.
+    const rcsFlangeGeo = (() => {
+      const parts = [];
+      const fl = new THREE.LatheGeometry([
+        new THREE.Vector2(M * 0.0165, M * 0.0275),   // inner edge of the top annulus (the 1.1 mm slot to the bell wall)
+        new THREE.Vector2(M * 0.026, M * 0.0275),
+        new THREE.Vector2(M * 0.026, M * 0.0315),    // outer wall down into the housing
+      ], 48);
+      parts.push(fl);
+      for (let k = 0; k < 4; k++) {
+        const a = Math.PI / 4 + k * Math.PI / 2;
+        const h = new THREE.CylinderGeometry(M * 0.0025, M * 0.0025, M * 0.0035, 12);
+        h.translate(Math.cos(a) * M * 0.0215, M * 0.0267, Math.sin(a) * M * 0.0215);
+        parts.push(h);
+      }
+      return PlayerSatellite._mergeParts(parts);
+    })();
+    const rcsFlangeMat = new THREE.MeshStandardMaterial({ color: 0x8a8a9a, metalness: 0.75, roughness: 0.3, side: THREE.DoubleSide });
+    // Mount collar (owner 2026-10-14, bells must not sit inside the pod box): the axial and tangential bells now start
+    // ON or just outside a pod face, so each gets a short cylindrical collar behind its throat plane (bell-local +y, away
+    // from the mouth) that ties it into the housing. Side wall + rear cap on the axial bell (the cap shows above the housing roof); side wall + a full front disc on the
+    // tangential bell (closing the throat from behind, 0 mm behind the throat plane; its rear end is buried in the housing);
+    // one cap each keeps the triangle count inside the D4 cap;
+    // 24-gon (r 5..20 mm, v1 rule). Length is per bell (built in buildNozzle); nothing of it lies on the mouth side of
+    // the throat plane, so it never enters a cavity.
+    const RCS_MOUNT_R = 0.0165;
+    const RCS_THROAT_GAP = 0.0005;   // m — every bell's throat plane stands this far OUTSIDE the housing face it sits on
+    const rcsMountGeo = (len, rearCap) => new THREE.LatheGeometry(rearCap
+      ? [new THREE.Vector2(M * RCS_MOUNT_R, 0), new THREE.Vector2(M * RCS_MOUNT_R, M * len), new THREE.Vector2(0, M * len)]
+      : [new THREE.Vector2(0, 0), new THREE.Vector2(M * RCS_MOUNT_R, 0), new THREE.Vector2(M * RCS_MOUNT_R, M * len)], 24);
+
     // RCS plume — diverging cold-gas puff (Phase 4): short/puffy, white-gray cold
     // gas (NOT ion blue). Near end welds to the nozzle exit; +Y beam axis aimed
     // along each nozzle's exhaust dir. Scaled ~0.75× to match the smaller bell.
@@ -2472,7 +2548,7 @@ export class PlayerSatellite extends THREE.Group {
 
     /** Build one bell+liner+plume cluster. exhaustDir = unit vector the plume
      *  exits along (bell throat faces −exhaustDir, wide mouth faces exhaust). */
-    const buildNozzle = (name, centre, exhaustDir) => {
+    const buildNozzle = (name, centre, exhaustDir, withFlange = false, mountLen = 0, rearCap = false) => {
       const bell = new THREE.Mesh(bellGeo, this._matRCS);
       bell.position.copy(centre);
       // CylinderGeometry: +Y = radiusTop (throat 0.015), −Y = radiusBottom (exit
@@ -2492,15 +2568,34 @@ export class PlayerSatellite extends THREE.Group {
       bell.add(liner);   // inherits bell orientation; concentric inset cone
       this._rcsLiners.push(liner);   // index-aligned with attitudeThrusterPlumes
 
-      // Throat cap at the +Y (throat) end, inset 2 mm toward the exit so it sits
-      // just inside the throat. Normal faces −Y (out the mouth) so it's visible
-      // looking down the bell. Child of bell → inherits orientation.
-      const throatCap = new THREE.Mesh(throatCapGeo, throatCapMat);
-      throatCap.position.set(0, M * (RCS_BELL_LEN / 2 - 0.002), 0);
-      throatCap.rotation.x = Math.PI / 2;   // circle normal +Z → −Y (out the mouth)
-      throatCap.name = name.replace('RCSThruster', 'RCSThroat');
-      throatCap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-      bell.add(throatCap);
+      // Throat funnel (3-step lathe) + the dark plate that closes the throat, children of the bell.
+      const funnel = new THREE.Mesh(throatFunnelGeo, throatFunnelMat);
+      funnel.name = name.replace('RCSThruster', 'RCSThroat');
+      funnel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      bell.add(funnel);
+      const plate = new THREE.Mesh(throatPlateGeo, throatFunnelMat);
+      plate.position.set(0, M * fY[3], 0);
+      plate.rotation.x = Math.PI / 2;   // circle normal +Z -> -Y (out the mouth)
+      plate.name = name.replace('RCSThruster', 'RCSThroatPlate');
+      plate.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      bell.add(plate);
+      const lip = new THREE.Mesh(rcsLipGeo, this._matRCS);
+      lip.name = name.replace('RCSThruster', 'RCSLip');
+      lip.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      bell.add(lip);
+      if (mountLen > 0) {
+        const mount = new THREE.Mesh(rcsMountGeo(mountLen, rearCap), rcsFlangeMat);
+        mount.name = name.replace('RCSThruster', 'RCSMount');
+        mount.position.y = M * (RCS_BELL_LEN / 2);   // starts at the throat plane, runs back (+y) into the housing
+        mount.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+        bell.add(mount);
+      }
+      if (withFlange) {
+        const flange = new THREE.Mesh(rcsFlangeGeo, rcsFlangeMat);
+        flange.name = name.replace('RCSThruster', 'RCSFlange');
+        flange.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+        bell.add(flange);
+      }
 
       const exit = _v3TmpB.copy(centre).addScaledVector(exhaustDir, M * (RCS_BELL_LEN / 2));
       const plume = new THREE.Mesh(rcsPlumeGeo, rcsPlumeMat.clone());
@@ -2536,6 +2631,22 @@ export class PlayerSatellite extends THREE.Group {
       for (const station of [1, -1]) {   // fore (+z) / aft (−z)
         const podZ = station * M * RCS_POD_Z;
 
+        // The tangential bell's direction decides which way the housing is trimmed (see RCS_POD_U1).
+        // Canted RCS_TANG_CANT (18°) radially OUTWARD from the pure ±X axis so its cold-gas plume boundary clears the
+        // ROSA wing plane (an uncanted ±X plume runs parallel just ~0.44 m above the wing plane and would clip the
+        // outer wing). Still fires at cos18°=0.95 for ±X demand. The ±X sign is distributed across the 4 pods
+        // (fore/aft × col) so BOTH +X and −X exhaust exist somewhere:
+        //   +Y col: fore→+X, aft→−X ;  −Y col: fore→−X, aft→+X.
+        const tangSignX = station * azSign;
+        const tangDir = new THREE.Vector3(tangSignX, 0, 0)
+          .multiplyScalar(Math.cos(RCS_TANG_CANT))
+          .addScaledVector(radial, Math.sin(RCS_TANG_CANT))
+          .normalize();
+        const tvec = new THREE.Vector3(-Math.sin(az), Math.cos(az), 0);   // the pod's tangent axis (podBasis x)
+        const et = tangDir.dot(tvec), er = tangDir.dot(radial);
+        const tSide = Math.sign(et);                                      // +1: exhaust runs towards +tvec
+        const podCentreT = tSide * RCS_POD_CU;                            // block centre along tvec (m)
+
         // Doghouse housing — SEMI-RECESSED, NO plinth. Its base is buried
         // RCS_BURY (10 mm) below the hull surface so the flat bottom edges land
         // inside the hull and no under-gap shows (box sides cross the MLI at a
@@ -2544,7 +2655,11 @@ export class PlayerSatellite extends THREE.Group {
         const housingBaseR = M * (barrelR_m - RCS_BURY);   // base buried below hull
         const podR = housingBaseR + M * (RCS_POD_H / 2);
         const pod = new THREE.Mesh(podGeo, podMat);
-        pod.position.set(radial.x * podR, radial.y * podR, podZ);
+        pod.position.set(
+          radial.x * podR + tvec.x * M * podCentreT,
+          radial.y * podR + tvec.y * M * podCentreT,
+          podZ,
+        );
         pod.quaternion.setFromRotationMatrix(podBasis);
         pod.name = `RCSPod_${podIdx}`;
         pod.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
@@ -2559,7 +2674,11 @@ export class PlayerSatellite extends THREE.Group {
         // (centre) to 9 mm (corners) proud.
         const bootR = M * (barrelR_m - 0.002);
         const boot = new THREE.Mesh(bootGeo, bootMat);
-        boot.position.set(radial.x * bootR, radial.y * bootR, podZ);
+        boot.position.set(
+          radial.x * bootR + tvec.x * M * podCentreT,
+          radial.y * bootR + tvec.y * M * podCentreT,
+          podZ,
+        );
         boot.quaternion.setFromRotationMatrix(podBasis);
         boot.name = `RCSPodBoot_${podIdx}`;
         boot.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
@@ -2571,8 +2690,8 @@ export class PlayerSatellite extends THREE.Group {
         // pod.matrix and parented to `this` — attaching them as pod children makes
         // Box3.setFromObject miss the pod transform for the placement guards.
         pod.updateMatrix();
-        const boltInsetX = M * (RCS_POD_W / 2 - 0.012);
-        const boltInsetY = M * (RCS_POD_L / 2 - 0.012);
+        const boltInsetX = M * (RCS_POD_WIDTH / 2 - 0.005);
+        const boltInsetY = M * (RCS_POD_L / 2 - 0.005);
         const boltZ = M * (RCS_POD_H / 2);   // on the outer face
         let boltN = 0;
         for (const sx of [-1, 1]) {
@@ -2592,52 +2711,43 @@ export class PlayerSatellite extends THREE.Group {
         const faceR = podR + M * (RCS_POD_H / 2);  // housing outer face radius (~0.445 m)
 
         // RADIAL nozzle: on the outer face, exhaust radially outward (±Y column).
-        // Mother audit T9 (B11): the throat circle used to lie EXACTLY in the
-        // housing's outer-face plane (centre = faceR + L/2) — a coplanar tie.
-        // Pull the bell 5 mm into the housing so the throat is buried.
+        // Owner 2026-10-14 ("white box visible inside bell"): the bell used to sink 5 mm into the housing, so the
+        // grey housing top cut across its cavity. The throat plane now sits 0.5 mm OUTSIDE the face (bell centre
+        // faceR + 30.5 mm; the mouth, plume and puff origin move 5.5 mm out with it). The mounting flange is a ring.
         const radialCentre = new THREE.Vector3(
-          radial.x * (faceR + M * (RCS_BELL_LEN / 2 - 0.005)),
-          radial.y * (faceR + M * (RCS_BELL_LEN / 2 - 0.005)),
+          radial.x * (faceR + M * (RCS_BELL_LEN / 2 + RCS_THROAT_GAP)) + tvec.x * M * podCentreT,
+          radial.y * (faceR + M * (RCS_BELL_LEN / 2 + RCS_THROAT_GAP)) + tvec.y * M * podCentreT,
           podZ,
         );
-        buildNozzle(`RCSThruster_${podIdx}_R`, radialCentre, radial.clone());
+        buildNozzle(`RCSThruster_${podIdx}_R`, radialCentre, radial.clone(), true);
 
-        // AXIAL nozzle: corner-mounted at the pod's outboard-z end, exhaust ±Z
-        // (fore pods +Z, aft −Z). Mother audit T9 (B10, ⟦R⟧): the old placement
-        // (axis faceR + 0.022, centre z = end − 0.02) left the throat's lower
-        // rim 7 mm ABOVE the housing face and the mouth only 10 mm past the end
-        // face. Now the throat axis sits 7 mm above the face so the throat's
-        // lower rim (r 0.015) is 8 mm INSIDE the housing corner, and the bell
-        // centre is 5 mm inside the end face: the 60 mm bell runs from 35 mm
-        // inside the pod's end face to 25 mm proud of it. Mouth min radial
-        // 0.427 > the hinge A-frame apex 0.4214 and the old 0.415 collar guard
-        // (test-RcsPlacement guards the PV/groove/hull clearances from geometry).
+        // AXIAL nozzle: corner-mounted at the pod's outboard-z end, exhaust ±Z (fore pods +Z, aft −Z). Axis radius
+        // (faceR + 7 mm) is unchanged: the mouth min radial 0.427 > the hinge A-frame apex 0.4214 and the old 0.415
+        // collar guard (test-RcsPlacement guards the PV/groove/hull clearances from geometry). Owner 2026-10-14: the
+        // old centre sat 5 mm inside the end face, so the throat was 35 mm inside the housing and the grey housing
+        // crossed the cavity (and the radial bell's). The throat plane now sits 0.5 mm outside the END face (bell
+        // centre 60.5 mm from the pod centre, mouth 90.5 mm: 60 mm clear of the housing, at z 0.8655 as before the pod was
+        // shortened to 0.06 m); a 10 mm collar ties it in.
         const axialR = faceR + M * (0.015 - 0.008);
         const axialCentre = new THREE.Vector3(
-          radial.x * axialR,
-          radial.y * axialR,
-          podZ + station * M * (RCS_POD_L / 2 - 0.005),
+          radial.x * axialR + tvec.x * M * podCentreT,
+          radial.y * axialR + tvec.y * M * podCentreT,
+          podZ + station * M * (RCS_POD_L / 2 + RCS_THROAT_GAP + RCS_BELL_LEN / 2),
         );
-        buildNozzle(`RCSThruster_${podIdx}_A`, axialCentre, new THREE.Vector3(0, 0, station));
+        buildNozzle(`RCSThruster_${podIdx}_A`, axialCentre, new THREE.Vector3(0, 0, station), false, 0.010, true);
 
-        // TANGENTIAL nozzle: canted RCS_TANG_CANT (18°) radially OUTWARD from the
-        // pure ±X axis so its cold-gas plume boundary clears the ROSA wing plane
-        // (an uncanted ±X plume runs parallel just above the blanket and would
-        // clip the outer wing). Still fires at cos18°=0.95 for ±X demand. The ±X
-        // sign is distributed across the 4 pods (fore/aft × col) so BOTH +X and
-        // −X exhaust exist somewhere:
-        //   +Y col: fore→+X, aft→−X ;  −Y col: fore→−X, aft→+X.
-        const tangSignX = station * azSign;
-        const tangDir = new THREE.Vector3(tangSignX, 0, 0)
-          .multiplyScalar(Math.cos(RCS_TANG_CANT))
-          .addScaledVector(radial, Math.sin(RCS_TANG_CANT))
-          .normalize();
-        const tangCentre = new THREE.Vector3(
-          radial.x * faceR,
-          radial.y * faceR,
-          podZ,
-        ).addScaledVector(tangDir, M * (RCS_BELL_LEN / 2));
-        buildNozzle(`RCSThruster_${podIdx}_T`, tangCentre, tangDir);
+        // TANGENTIAL nozzle (direction: see tangDir above, unchanged). Owner 2026-10-14: its throat used to sit on
+        // the housing roof centre, so half the disc and the whole lower side of the bell lay inside the box and
+        // crossed the radial bell's cavity. The bell line is unchanged; the throat is slid 2 mm along it so that its
+        // disc touches the housing's exhaust-side wall 0.5 mm clear (the disc leans 13..23 deg off the wall, so its
+        // nearest point is 15 mm x |radial part of the axis| from the disc centre), and a short collar ties it in.
+        const uT = RCS_POD_U1 + RCS_THROAT_GAP + 0.015 * Math.abs(er);   // throat centre, exhaust-oriented tangent (m)
+        const slideT = uT / Math.abs(et);                                 // slide along the axis, from the old centre
+        const tangThroat = new THREE.Vector3(radial.x * faceR, radial.y * faceR, podZ).addScaledVector(tangDir, M * slideT);
+        // Collar: back along the axis to the wall, plus 4 mm so its rear cap lies inside the housing.
+        const tangMount = (uT - RCS_POD_U1) / Math.abs(et) + 0.004;
+        const tangCentre = tangThroat.clone().addScaledVector(tangDir, M * (RCS_BELL_LEN / 2));
+        buildNozzle(`RCSThruster_${podIdx}_T`, tangCentre, tangDir, false, tangMount);
 
         podIdx++;
       }
@@ -3254,7 +3364,10 @@ export class PlayerSatellite extends THREE.Group {
     // mandrel under them at every furl state, and the stow coil must stay
     // fore of the rear-cap plane (±1.0), so the mandrel end showing beyond the
     // coil cap when furled is the intended read (Mother audit W6: left).
-    const drumGeo = new THREE.CylinderGeometry(drumR, drumR, rosaL * 1.02, 48);  // was 12 → 16 → 32 → 48-seg (round ends)
+    // v8-rosa-fix D1: openEnded. The drum's end discs (r 50 mm, at ±1.02) lay in the same plane as the clamp collars' end
+    // discs (r 60 mm, children of the drum, so they spin and tilt with it). Both are now satin silver, so the tie showed
+    // as a grey/black pinwheel. The collar disc covers the whole drum end in every pose, so the drum needs no end cap.
+    const drumGeo = new THREE.CylinderGeometry(drumR, drumR, rosaL * 1.02, 48, 1, true);  // was 12 → 16 → 32 → 48-seg (round ends)
     // v3-wings-look D7 (index problem 4): the drum is its own satin-metal part (not the bracket's dark finish),
     // with three anodised bands and a bearing flange near each end. Bands and flanges are children of the drum, so
     // they spin with it; they stand 0.6 mm proud (r 50.6 mm), clear of the blanket's inboard edge at 51 mm.
@@ -3373,12 +3486,13 @@ export class PlayerSatellite extends THREE.Group {
     // 48 radial segments, matching the drum (was 32, 16 — the furled coil's end
     // caps read as 16-gons; test-MotherZFix pins the floor).
     const coilR = PlayerSatellite.rosaFurledCoilRadiusM() * M;
-    const coilGeo = new THREE.CylinderGeometry(coilR, coilR, rosaL * 0.98, 48);  // was 12 → 16 → 32 → 48-seg (match drum)
-    // v3-wings-look D4: the wound blanket reads as wrapped Kapton - about ten yellow-gold bands on grey (own
+    // v8-rosa-fix D2: openEnded; the end plates below close the coil, and their inner faces sat 1 mm inside the old caps.
+    const coilGeo = new THREE.CylinderGeometry(coilR, coilR, rosaL * 0.98, 48, 1, true);  // was 12 → 16 → 32 → 48-seg (match drum)
+    // v3-wings-look D4 / v8-rosa-fix D3: the wound blanket reads as dark wrapped Kapton with ten faint lighter bands (own
     // material, band map when a DOM exists) - and two grey end plates close the coil's flat ends.
     const bandMap = getRosaStowBandTexture();
     const coilMat = new THREE.MeshStandardMaterial({
-      color: bandMap ? 0xffffff : 0x8a7430, map: bandMap || null, metalness: 0.3, roughness: 0.55,
+      color: bandMap ? 0xffffff : 0x2a2a33, map: bandMap || null, metalness: 0.3, roughness: 0.55,
     });
     coilMat.userData.rosaStowBands = true;
     const stowRoll = new THREE.Mesh(coilGeo, coilMat);
@@ -3386,14 +3500,14 @@ export class PlayerSatellite extends THREE.Group {
     stowRoll.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // W7
     spoolPivot.add(stowRoll);
     struct.stowRoll = stowRoll;
-    // Plates are children of the coil, so they shrink with it and vanish with it at progress >= 0.98. z 0.979-0.988
-    // (coil caps at 0.98, collars from 1.008): 9 mm thick, 0.09 mm proud of the coil wall so the 1 mm of overlap
-    // with the wall cannot tie.
-    const plateGeo = new THREE.CylinderGeometry(coilR + 0.00009 * M, coilR + 0.00009 * M, 0.009 * M, 48);
+    // Plates are children of the coil, so they shrink with it and vanish with it at progress >= 0.98. z 0.980-0.988
+    // (the coil wall ends at 0.980, collars from 1.008): 8 mm thick, the same radius as the coil, and no overlap band
+    // with the wall (v8-rosa-fix D2: the old 9 mm plates at 0.979-0.988 shared 1 mm with the wall and the cap).
+    const plateGeo = new THREE.CylinderGeometry(coilR, coilR, 0.008 * M, 48);
     const plateMat = new THREE.MeshStandardMaterial({ color: 0x6c6c74, metalness: 0.65, roughness: 0.4 });
     for (const endSign of [1, -1]) {
       const plate = new THREE.Mesh(plateGeo, plateMat);
-      plate.position.set(0, endSign * 0.9835 * M, 0);
+      plate.position.set(0, endSign * 0.984 * M, 0);
       plate.name = `ROSA_StowRoll_${wing === 1 ? '0' : '180'}deg_Plate_${endSign > 0 ? 'Fore' : 'Aft'}`;
       plate.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       stowRoll.add(plate);
@@ -5049,7 +5163,7 @@ export class PlayerSatellite extends THREE.Group {
     this.lidarDome.add(lidarLens);
 
     // LIDAR pulse light
-    const lidarLightGeo = new THREE.SphereGeometry(M * 0.04, 8, 6);  // was 4×4
+    const lidarLightGeo = new THREE.SphereGeometry(M * 0.04, 32, 16);  // was 4×4, then 8×6 (read as an 8-sided blob when it flashes, review 2026-10-14)
     this._lidarLightMat = new THREE.MeshBasicMaterial({
       color: 0x00ff44, transparent: true, opacity: 0.0,
     });
@@ -5308,6 +5422,10 @@ export class PlayerSatellite extends THREE.Group {
     const faceLocalY = LAUNCH_LEN * 0.5;
     const CELL_D = M * 0.05;      // cell centre offset on each axis (cells at (±0.05, ±0.05))
     const caps = [];
+    const cellRimGeo = new THREE.LatheGeometry([
+      new THREE.Vector2(M * 0.0335, -M * 0.002), new THREE.Vector2(M * 0.0335, M * 0.004),
+      new THREE.Vector2(M * 0.0300, M * 0.004),
+    ], 48);
     for (let c = 0; c < 4; c++) {
       const lx = (c % 2 === 0) ? CELL_D : -CELL_D;                 // ship ±X
       const lz = (c < 2) ? -CELL_D : CELL_D;                       // local Z = ship −Y: c 0-1 → upper row (+Y)
@@ -5317,6 +5435,13 @@ export class PlayerSatellite extends THREE.Group {
       hole.name = `NetLauncherCellHole_${c}`;
       hole.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       housing.add(hole);
+
+      // v6-nose-tail D3: a low gunmetal rim round each cell (outer r 33.5 mm, 4 mm proud, 2 mm buried). Geometry shared.
+      const rim = new THREE.Mesh(cellRimGeo, gunmetalMat);
+      rim.position.set(lx, faceLocalY, lz);
+      rim.name = `NetLauncherCellRim_${c}`;
+      rim.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      housing.add(rim);
 
       const cap = new THREE.Mesh(new THREE.CircleGeometry(M * 0.028, 48), cellCapMat);
       cap.position.set(lx, faceLocalY + M * 0.0015, lz);          // distinct offset — no coplanar tie
@@ -5447,6 +5572,36 @@ export class PlayerSatellite extends THREE.Group {
     ring.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(ring);
 
+    // v6-nose-tail D7 (owner 2026-10-13): this ring is the DEBRIS CAPTURE ring — net-tether tension holds the junk against
+    // it. It is not a docking port, so no petals, hooks, latch blocks or guide pins: only a flat flange face on its fore
+    // side and a 24-bolt circle on that face. The flange is a 64-gon washer R 0.1685..0.1915 (inside the tube's own
+    // silhouette, so the ring's sensor shadow does not grow), its face 0.5 mm over the tube top (z 1.3205 vs 1.320), its
+    // wall sunk to z 1.312 inside the tube (the torus is at z 1.3164 at those radii). Bolt heads: 24 twelve-gons r 3.5 mm
+    // on the tube-centreline circle (R 0.180), every 15 deg from az 0, 4.5 mm tall, 1.5 mm sunk into the flange, one merged
+    // mesh. The two at az 90 / 270 are hidden inside the fore sun-sensor pucks. Nothing rises above z 1.3235 (pucks: 1.331).
+    const flangeGeo = new THREE.LatheGeometry([
+      new THREE.Vector2((ringR - 0.0115) * M, 1.312 * M), new THREE.Vector2((ringR - 0.0115) * M, 1.3205 * M),
+      new THREE.Vector2((ringR + 0.0115) * M, 1.3205 * M), new THREE.Vector2((ringR + 0.0115) * M, 1.312 * M),
+    ], 64);
+    flangeGeo.rotateX(Math.PI / 2);   // lathe axis +Y -> +Z (the ring's axis); positions already carry z
+    const flange = new THREE.Mesh(flangeGeo, gunmetalMat);
+    flange.name = 'BerthCollarFlange';
+    flange.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.add(flange);
+    const boltParts = [];
+    for (let k = 0; k < 24; k++) {
+      const a = k * Math.PI / 12;
+      const h = new THREE.CylinderGeometry(0.0035 * M, 0.0035 * M, 0.0045 * M, 12);
+      h.setIndex(Array.from(h.index.array.slice(0, h.groups[2].start)));   // the sunk end is never seen: drop its cap
+      h.rotateX(Math.PI / 2);
+      h.translate(ringR * Math.cos(a) * M, ringR * Math.sin(a) * M, 1.32125 * M);
+      boltParts.push(h);
+    }
+    const bolts = new THREE.Mesh(PlayerSatellite._mergeParts(boltParts), gunmetalMat);
+    bolts.name = 'BerthCollarFlangeBolts';
+    bolts.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.add(bolts);
+
     // Four inclined struts at az 0 / 90 / 180 / 270 carry the ring: foot on the
     // sensor turntable top (SensorHubRing r 0.34, top z 1.055) at radial 0.30,
     // z 1.050 (5 mm buried); head 5 mm off the tube centreline toward the
@@ -5539,6 +5694,20 @@ export class PlayerSatellite extends THREE.Group {
     lampRed.name = 'BerthCollarLamp_R';
     lampRed.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(lampRed);
+    // v6-nose-tail D3: a short gunmetal housing round each lens: a cup on the strut's outboard normal, 14.5 mm
+    // radius, from 5 mm off the strut axis (inside the strut) to 26 mm (lens centre at 18 mm: lens 4 mm proud of the rim).
+    const lampHousingGeo = new THREE.LatheGeometry([
+      new THREE.Vector2(0.0145 * M, -0.013 * M), new THREE.Vector2(0.0145 * M, 0.008 * M), new THREE.Vector2(0.0125 * M, 0.008 * M),
+    ], 32);
+    [[lampGreen, 'G'], [lampRed, 'R']].forEach(([lamp, tag]) => {
+      const hsg = new THREE.Mesh(lampHousingGeo, gunmetalMat);
+      hsg.position.copy(lamp.position);
+      const sign = Math.sign(lamp.position.x);
+      hsg.quaternion.setFromUnitVectors(yUpV, new THREE.Vector3(sign * strutOutN.x, 0, strutOutN.y));
+      hsg.name = `BerthCollarLampHousing_${tag}`;
+      hsg.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(hsg);
+    });
 
     // S13(e) — the berth anchor: invisible Object3D at the collar seat plane
     // centre, ON the axis. The reel/berth pin math re-homed from the pod
@@ -5675,6 +5844,22 @@ export class PlayerSatellite extends THREE.Group {
     this.starboardLight.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
     this.add(this.starboardLight);
     this.starboardLight.add(this._makeLightHalo(0x00ff00, HALO, 1.6, LFX.NAV_HALO_OPACITY));
+
+    // v6-nose-tail D3b: a gunmetal cup round each light core (same centre, axis = the hull normal there): wall r 32.5 mm,
+    // 10 mm above the core centre, floor 12 mm below it; the core (r 25 mm) stands 15 mm above the rim. The core and its
+    // halo keep their position and size; ordinary DETAIL order (the cores stay ADDITIVE).
+    const navHousingGeo = new THREE.LatheGeometry([
+      new THREE.Vector2(0.0325 * M, -0.020 * M), new THREE.Vector2(0.0325 * M, 0.010 * M),
+      new THREE.Vector2(0.0275 * M, 0.010 * M), new THREE.Vector2(0.0275 * M, -0.014 * M),
+    ], 48);   // no floor: the MLI skin (12 mm below the core centre) closes the cup
+    const navHousingMat = new THREE.MeshStandardMaterial({ color: 0x55585f, metalness: 0.5, roughness: 0.55, side: THREE.DoubleSide });
+    [[this.portLight, 'Port'], [this.starboardLight, 'Starboard']].forEach(([core, tag]) => {
+      const hsg = new THREE.Mesh(navHousingGeo, navHousingMat);
+      hsg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(core.position.x, core.position.y, 0).normalize());
+      hsg.name = `NavHousing_${tag}`;   // a CHILD of the core (the core has no rotation): the callout pick owns it with the light
+      hsg.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      core.add(hsg);
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -5817,6 +6002,33 @@ export class PlayerSatellite extends THREE.Group {
       this.add(whip);
     });
 
+    // v6-nose-tail D3: a gunmetal bezel frame round each patch face + 4 screws (ONE merged mesh per patch). The frame
+    // is built in the patch's own frame (local +Z = radial): 6 mm wide, its outer edge 1 mm outside the patch edge (not
+    // coplanar; and it keeps the MGA >= 20 mm from the folded radiator, test-EveryDoor), from the patch's inner face
+    // (-10 mm, inside the skin like the patch) to 1.5 mm proud of its face. Screw heads (r 1.8 mm, 12-gons) stand 0.7 mm above the bar.
+    const makeBezel = (name, patch, half, proud = 0.0015) => {
+      const zLo = -0.010, zHi = 0.010 + proud, zc = (zLo + zHi) / 2, hh = zHi - zLo;
+      const hi = half - 0.005, ho = half + 0.001;
+      const parts = [];
+      const bar = (cx, cy, sx, sy) => { const g = new THREE.BoxGeometry(M * sx, M * sy, M * hh); g.translate(M * cx, M * cy, M * zc); parts.push(g); };
+      bar(0, (hi + ho) / 2, 2 * ho, ho - hi); bar(0, -(hi + ho) / 2, 2 * ho, ho - hi);
+      bar((hi + ho) / 2, 0, ho - hi, 2 * hi); bar(-(hi + ho) / 2, 0, ho - hi, 2 * hi);
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+        const g = new THREE.CylinderGeometry(M * 0.0018, M * 0.0018, M * 0.0016, 12);
+        g.rotateX(Math.PI / 2);   // cylinder +Y -> +Z (radial)
+        g.translate(M * sx * (hi + ho) / 2, M * sy * (hi + ho) / 2, M * (zHi - 0.0001));
+        parts.push(g);
+      }
+      const bz = new THREE.Mesh(PlayerSatellite._mergeParts(parts), gunmetal);
+      bz.position.copy(patch.position);   // a sibling, not a child: print/dims.mjs measures the patch's own subtree
+      bz.quaternion.copy(patch.quaternion);
+      bz.name = name;
+      bz.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(bz);
+    };
+    // GPS patches are dark ceramic (v6-nose-tail D3); the MGA keeps its pale thermal-white face.
+    const darkCeramic = new THREE.MeshStandardMaterial({ color: 0x1b2230, metalness: 0.35, roughness: 0.3 });
+
     // ── MGA patch — tangent-mounted flat box, pale thermal-white. az ~25°
     // fore-shoulder wedge, z 0.87. Centred ON the skin (Mother audit T5, F7):
     // a 2 cm box centred at radial 0.400 spans 0.39–0.41 — 1 cm buried at the
@@ -5831,6 +6043,7 @@ export class PlayerSatellite extends THREE.Group {
       patch.name = 'MGA_Patch';
       patch.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.add(patch);
+      makeBezel('MGA_Bezel', patch, 0.08, 0.0008);   // 0.8 mm: the folded radiator passes 22 mm off the MGA face (gate 20)
     }
 
     // ── Sun sensors ×4 — pucks with a dark window disc. Two on the docking
@@ -5889,12 +6102,13 @@ export class PlayerSatellite extends THREE.Group {
     // edges (the old +0.012 left the edges 3.5 mm in the air).
     [0.87, 0.95].forEach((zFrac, i) => {
       const azDeg = 340, radial = radialAt(azDeg);
-      const patch = new THREE.Mesh(new THREE.BoxGeometry(M * 0.07, M * 0.07, M * 0.02), thermalWhite);
+      const patch = new THREE.Mesh(new THREE.BoxGeometry(M * 0.07, M * 0.07, M * 0.02), darkCeramic);
       patch.quaternion.setFromUnitVectors(zFwd, radial);
       patch.position.copy(radial).multiplyScalar(barrelR + M * 0.005).setZ(barrelHZ * zFrac);
       patch.name = `GPS_Patch_${i}`;
       patch.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.add(patch);
+      makeBezel(`GPS_Bezel_${i}`, patch, 0.035);
     });
   }
 

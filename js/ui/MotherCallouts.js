@@ -323,7 +323,7 @@ const SYSTEMS = [
         mesh: 'BerthCollarRing',
         pick: ['BerthCollarRing', 'BerthCollarStrut_0', 'BerthCollarStrut_1', 'BerthCollarStrut_2', 'BerthCollarStrut_3', 'BerthFace'],
         // §13 r4 roll-up: the collar's foot pads and lamps.
-        pickPrefixes: ['BerthCollarFoot', 'BerthCollarLamp'],
+        pickPrefixes: ['BerthCollarFoot', 'BerthCollarLamp', 'BerthCollarFlange'],   // v6-nose-tail: + the flange face and its 24 bolts
         // Mother fixes 4/4 (b): BerthCollarRing's origin is the bore centre, so
         // the live anchor sat in the hole and the camera→anchor ray went through
         // the ring onto BerthFace. Offset to the ring's OUTER equator (R + tube =
@@ -421,6 +421,8 @@ const SYSTEMS = [
         // (r 0.158) too — (0.376, −0.168). Bind the starboard core (no pick
         // array — the default pick is the mesh).
         mesh: 'NavLight_Starboard',
+        // v6-nose-tail: the port light's housing (the starboard one is a child of the bound core).
+        pickPrefixes: ['NavHousing_Port'],
         anchor: [ 0.376 * M, -0.168 * M, 0.76 * M ] },
     ],
   },
@@ -439,10 +441,12 @@ const SYSTEMS = [
       { id: 'mga', name: 'MEDIUM-GAIN ANTENNA', risk: 'GREEN', tier: 'detail', codexId: 'bandwidth_limits',
         massKg: 1, priority: 2, specs: ['Tangent patch, higher rate'],
         pick: ['MGA_Patch'],
+        pickPrefixes: ['MGA_Bezel'],   // v6-nose-tail: the bezel frame round the patch
         anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ] },
       { id: 'gps', name: 'GPS ANTENNAS', risk: 'GREEN', tier: 'detail', codexId: 'gps_denied',
         massKg: 0.5, priority: 2, specs: ['GPS patch pair'],
         pick: ['GPS_Patch_0', 'GPS_Patch_1'],
+        pickPrefixes: ['GPS_Bezel_'],   // v6-nose-tail: the bezel frames round the patches
         anchor: [ 0.376 * M, -0.137 * M, 0.87 * M ] },
       // codexId remap (owner review, 2026-09-03): the aft whip is the second
       // half of the omni PAIR — one S-band radio system, one briefing
