@@ -1058,6 +1058,30 @@ export class ArmUnit {
         cellOffsets.push([cx, cy]);
       }
     }
+    // v10-look-r5 D3: the mother launcher's white disc + gunmetal lip, scaled to the can. Disc = can R - 6 mm (weaver)
+    // / - 3 mm (spinner), top 1 mm proud of the front face; the lip ring stands 2 mm / 1.5 mm above the disc top, so the
+    // white reads inset. Bores and caps are lifted by the disc's 1 mm. The muzzle (_netMuzzleLocal) is unchanged.
+    const discR = (canR - (isWeaverLaunch ? 0.006 : 0.003)) * M;
+    const lipH = (isWeaverLaunch ? 0.002 : 0.0015) * M;
+    const DISC_TOP = 0.001 * M;
+    const discMat = new THREE.MeshStandardMaterial({ ...AVIONICS_THERMAL_WHITE, metalness: 0.0, roughness: 0.8 });   // cap white, matte, not emissive
+    const disc = new THREE.Mesh(new THREE.LatheGeometry([                 // top + side only (underside buried, never seen)
+      new THREE.Vector2(discR, -0.001 * M), new THREE.Vector2(discR, DISC_TOP), new THREE.Vector2(0, DISC_TOP),
+    ], 48), discMat);   // r 35-55 mm -> 48 around (test-RoundParts radius rule)
+    disc.position.set(0, 0, cellFaceZ);
+    disc.rotation.x = Math.PI / 2;                                        // lathe axis +Y -> +Z (fore)
+    disc.name = `${this.id}-DNetDisc`;
+    disc.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.mesh.add(disc);
+    const lip = new THREE.Mesh(new THREE.LatheGeometry([
+      new THREE.Vector2(canR * M, -0.001 * M), new THREE.Vector2(canR * M, DISC_TOP + lipH),
+      new THREE.Vector2(discR + 0.001 * M, DISC_TOP + lipH), new THREE.Vector2(discR + 0.001 * M, -0.001 * M),
+    ], 48), canMat);
+    lip.position.set(0, 0, cellFaceZ);
+    lip.rotation.x = Math.PI / 2;
+    lip.name = `${this.id}-DNetLip`;
+    lip.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.mesh.add(lip);
     const boreMat = new THREE.MeshStandardMaterial({ ...AVIONICS_DARK_OPTIC });    // dark bore (matches mother)
     const capMat = new THREE.MeshStandardMaterial({ ...AVIONICS_THERMAL_WHITE });  // pale Dyneema cap (matches mother)
     this._netCellCaps = [];
@@ -1065,13 +1089,13 @@ export class ArmUnit {
       const [cx, cy] = cellOffsets[i];
       // Dark bore disc — always visible (an empty cell shows the bore).
       const bore = new THREE.Mesh(new THREE.CircleGeometry(cellBoreR, 24), boreMat);
-      bore.position.set(cx, cy, cellFaceZ + 0.001 * M);   // 1 mm proud (EO-lens pattern)
+      bore.position.set(cx, cy, cellFaceZ + DISC_TOP + 0.001 * M);   // 1 mm proud of the white disc (EO-lens pattern)
       bore.name = `${this.id}-DNetCellHole_${i}`;
       bore.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.mesh.add(bore);
       // Pale cap — visible only when the cell is LOADED (inventory-driven).
       const cap = new THREE.Mesh(new THREE.CircleGeometry(cellBoreR * 0.9, 24), capMat.clone());
-      cap.position.set(cx, cy, cellFaceZ + 0.0015 * M);   // 1.5 mm proud (over the bore)
+      cap.position.set(cx, cy, cellFaceZ + DISC_TOP + 0.0015 * M);   // 1.5 mm proud of the disc (over the bore)
       cap.name = `${this.id}-DNetCellCap_${i}`;
       cap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.mesh.add(cap);

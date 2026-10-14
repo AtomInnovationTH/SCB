@@ -366,7 +366,7 @@ const SYSTEMS = [
       { id: 'ir_cam', name: 'HEAT (INFRARED) CAM', risk: 'GREEN', tier: 'major', codexId: 'trackable_vs_dark',
         massKg: 2, priority: 4, specs: ['Long-wave infrared — spots dark debris'],
         pick: ['IR_Sensor'],
-        anchor: [ -0.184 * M, -0.184 * M, 1.08 * M ] },
+        anchor: [ -0.1715 * M, -0.1715 * M, 1.145 * M ] },   // v10-look-r5: IR box stands on the turret (centre r 0.2425, mid-height 1.145)
       { id: 'lidar', name: 'LASER RANGEFINDER', risk: 'GREEN', tier: 'major', codexId: 'lidar_ranging',
         massKg: 3, priority: 5, specs: ['Flash LIDAR — range + pose'],
         pick: ['LIDAR_Dome'],
@@ -459,7 +459,7 @@ const SYSTEMS = [
         pick: ['TTC_Omni_1'],
         // §13 r4 roll-up: the aft whip's base.
         pickPrefixes: ['TTC_Omni_1'],
-        anchor: [ 0, 0.40 * M, -0.92 * M ] },
+        anchor: [ 0.40 * Math.cos(78 * Math.PI / 180) * M, 0.40 * Math.sin(78 * Math.PI / 180) * M, -0.92 * M ] },   // v10-look-r5: aft omni at az 78
     ],
   },
   {
@@ -606,8 +606,9 @@ const SYSTEMS = [
         specs: ['Rim-band clevises r 0.475, molybdenum-disulfide-filmed pins; wing piano hinges + one-shot latches', 'Hinges are the honest jam risk'],
         // §13 r4 roll-up: the brackets, pins, rim mount bolts — and the wing
         // piano-hinge LUGS (FlowerStrutHingeLug_* — the hinge leaves between
-        // boom and panel, hinge hardware by name and job).
-        pickPrefixes: ['FlowerStrutBracket', 'FlowerStrutPin', 'MountBolt_Flower', 'FlowerStrutHingeLug'],
+        // boom and panel, hinge hardware by name and job) — and v10-look-r5 D4's
+        // launch hold-down: the hull cradles (+ pin) and the boom's latch lugs.
+        pickPrefixes: ['FlowerStrutBracket', 'FlowerStrutPin', 'MountBolt_Flower', 'FlowerStrutHingeLug', 'FlowerStrutCradle', 'FlowerStrutLatch'],
         anchor: [ 0.3639 * M, -0.3053 * M, -0.94 * M ] },
     ],
   },

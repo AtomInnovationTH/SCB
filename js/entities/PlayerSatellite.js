@@ -4213,6 +4213,84 @@ export class PlayerSatellite extends THREE.Group {
     }
   }
 
+
+  /**
+   * v10-look-r5 D4 (owner 2026-10-14: "Radiator struts need a cradle or latch in closed position"): the launch
+   * hold-down. One cradle per boom on the hull skin under it, plus a latch lug on the boom:
+   *   • FlowerStrutCradle_<i>      — a saddle pad on the skin (50 x 16 x 8 mm, 4 mm buried: the StrutRest style, 16 mm long so it fits the bare seam between the PV cell rows) and two
+   *                                  cheeks whose top faces form a V round the boom. Both faces are tangent to a circle
+   *                                  CRADLE_GAP (2 mm) bigger than the boom, so with the boom at POSE_LAUNCH_DEG the
+   *                                  faces stand 2 mm off it; a 16 mm slot between the cheeks takes the lug.
+   *   • FlowerStrutCradle_<i>_Pin  — the hold-down pin, across the slot, ends buried in the cheeks (visual only).
+   *   • FlowerStrutLatch_<i>       — the lug: a tongue hanging from the boom (child of the hinge, so it turns with it)
+   *                                  into the slot, the pin passing through it at launch. Once the boom lifts to the
+   *                                  orbit rest (POSE_FLOOR_DEG) the tongue is clear of the pin by the boom's lift.
+   * Every height is derived from the boom pose (hinge position, boom axis at the cradle station for POSE_LAUNCH_DEG,
+   * boom radius), never typed. The station is zc, the seam between the PV cell rows (no solar cell under it; clear of the MGA at z > 0.76, the sun sensor, nav lights, pyro
+   * pins at z -0.43 and the StrutRest saddles). The names carry the FlowerStrut prefix: the cradle is flower hardware,
+   * measured by test-LookR5 (its designed 2 mm contact with the boom at launch is not an EveryDoor clash).
+   */
+  _buildFlowerCradle(i, azDeg, hinge, FL, mergeGeos) {
+    const V5 = Constants.OCTOPUS_V5;
+    const skinR = V5.COLLAR_RADIUS;                      // m — the same skin radius the StrutRest saddles use
+    const thL = (FL.POSE_LAUNCH_DEG * Math.PI) / 180;
+    const zc = 0.47;                                     // m — cradle station (ship z): the middle of the 20 mm seam between the two PV cell rows (z 0.46 / 0.48)
+    const CRADLE_LEN = 0.016;                            // m — axial length of pad and cheeks: 2 mm of bare skin each side of it in the seam, so no part of the cradle is over a solar cell
+    const sB = (zc - FL.HINGE_Z_M) / Math.cos(thL);      // m — distance along the boom from the hinge to the station
+    const axisR = FL.HINGE_R_M + sB * Math.sin(thL);     // m — boom axis radius at the station, launch pose
+    const Ha = axisR - skinR;                            // m — boom axis height above the skin
+    const rho = FL.STRUT_RADIUS_M + 0.002;               // m — V faces tangent to this circle: 2 mm off the boom
+    const S45 = Math.SQRT1_2;
+    const tTan = rho * S45, hTan = Ha - rho * S45;       // tangent point of the right face (tangential, height)
+    const faceH = (t) => hTan + (t - tTan);              // right face: rises outward at 45 degrees
+    const SLOT = 0.008, T_OUT = tTan + 0.001;            // m — slot half-width; cheek outer wall 1 mm past the tangent
+    const BASE = -0.004, LEN = CRADLE_LEN;               // m — cheek base (buried) and axial length
+    const cheek = (sg) => {
+      const pts = [[SLOT, BASE], [T_OUT, BASE], [T_OUT, faceH(T_OUT)], [SLOT, faceH(SLOT)]];
+      const sh = new THREE.Shape((sg > 0 ? pts : pts.slice().reverse()).map(([t, h]) => new THREE.Vector2(sg * t * M, h * M)));
+      const g = new THREE.ExtrudeGeometry(sh, { depth: LEN * M, bevelEnabled: false });
+      // shape (t, h, depth) -> cradle frame (tangent, axial, radial): the pad's makeBasis(tangent, z, radial)
+      g.applyMatrix4(new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1));
+      g.translate(0, (LEN / 2) * M, 0);
+      return g;
+    };
+    const pad = new THREE.BoxGeometry(0.050 * M, CRADLE_LEN * M, 0.008 * M);   // 50 mm across, CRADLE_LEN along the hull; spans h -4 .. +4 mm
+    const azRad = (azDeg * Math.PI) / 180;
+    const radial = new THREE.Vector3(Math.cos(azRad), Math.sin(azRad), 0);
+    const tangent = new THREE.Vector3(-Math.sin(azRad), Math.cos(azRad), 0);
+    const basis = new THREE.Matrix4().makeBasis(tangent, new THREE.Vector3(0, 0, 1), radial);
+    const placed = (mesh, name) => {
+      mesh.quaternion.setFromRotationMatrix(basis);
+      mesh.position.set(radial.x * skinR * M, radial.y * skinR * M, zc * M);
+      mesh.name = name;
+      mesh.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      this.add(mesh);
+      return mesh;
+    };
+    const cradleMat = new THREE.MeshStandardMaterial({ color: 0x8888a0, metalness: 0.75, roughness: 0.28 });   // StrutRest recipe
+    placed(new THREE.Mesh(mergeGeos([pad, cheek(+1), cheek(-1)]), cradleMat), `FlowerStrutCradle_${i}`);
+    // the hold-down pin: Ø6 along the tangent, centred 3 mm below the V apex's inner wall so it stays inside the cheeks
+    const PIN_R = 0.003, PIN_H = faceH(SLOT) - 0.0035 - PIN_R + PIN_R * 0;   // m — pin axis height above the skin
+    const pinLen = 2 * (T_OUT - 0.002);
+    const pinGeo = new THREE.CylinderGeometry(PIN_R * M, PIN_R * M, pinLen * M, 16);
+    pinGeo.rotateZ(Math.PI / 2);                         // cylinder Y -> cradle X (tangent)
+    pinGeo.translate(0, 0, PIN_H * M);
+    const pinMat = new THREE.MeshStandardMaterial({ color: 0x444455, metalness: 0.7, roughness: 0.3 });
+    placed(new THREE.Mesh(pinGeo, pinMat), `FlowerStrutCradle_${i}_Pin`);
+    // the latch lug: a tongue from inside the boom down past the pin (hinge frame: +X along the boom, +Z toward the hull
+    // at launch). Its bottom hangs 3.5 mm below the pin axis' lower edge.
+    const dPin = Ha - PIN_H;                             // m — pin axis below the boom axis
+    const dBottom = dPin + PIN_R + 0.0035;
+    const tongue = new THREE.BoxGeometry(0.010 * M, 0.010 * M, (dBottom - 0.020) * M);   // root 20 mm under the boom axis: inside the tube, 3 mm clear of the panel's pipes (their top is 17 mm)
+    tongue.translate(0, 0, ((dBottom + 0.020) / 2) * M);
+    const lug = new THREE.Mesh(tongue, new THREE.MeshStandardMaterial({ color: 0x8a8f96, metalness: 0.6, roughness: 0.45 }));
+    lug.position.x = sB * M;
+    lug.name = `FlowerStrutLatch_${i}`;
+    lug.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+    lug.userData.noSolarShade = true;                    // mm-scale detail: never a solar occluder (the boom already shades)
+    hinge.add(lug);
+  }
+
   /**
    * @private Build the two struts of one pair. Names use the P1-reserved
    * `FlowerStrut_*` LOD prefix (PascalCase_${i} convention); station index i
@@ -4601,6 +4679,7 @@ export class PlayerSatellite extends THREE.Group {
       const hinge = new THREE.Group();
       hinge.name = `FlowerStrutHinge_${i}`;
       pivot.add(hinge);
+      this._buildFlowerCradle(i, azDeg, hinge, FL, mergeGeos);   // v10-look-r5 D4: launch hold-down cradle + latch lug
 
       // Boom along local +X, hanging from the hinge.
       const boom = new THREE.Mesh(boomGeo, boomMat);
@@ -5061,7 +5140,12 @@ export class PlayerSatellite extends THREE.Group {
     eoCam.add(eoBezel);
 
     // IR Sensor: gold-foil box
-    const irGeo = new THREE.BoxGeometry(M * 0.2, M * 0.15, M * 0.2);
+    // v10-look-r5 D2 (owner: "IR sensor seems embedded into the sensor turret?"): the box used to pass THROUGH the
+    // turret slab (z 0.98-1.18, turret 1.025-1.055) and overhang its rim by 28 mm. Now it STANDS ON the turret top
+    // (z 1.055), footprint inside the rim (R 0.34) with >= 5 mm: 0.165 radial (inner face still on the bore edge,
+    // 0.16) x 0.133 tangential x 0.18 high (top 1.235, >= 35 mm under the ring tube 1.28), centre radial 0.2425.
+    const IR_W = 0.165, IR_T = 0.133, IR_H = 0.18, IR_RC = 0.2425, IR_BOTTOM = 0.055;   // gimbal-local z of the turret top
+    const irGeo = new THREE.BoxGeometry(M * IR_W, M * IR_T, M * IR_H);
     // Clone the gold MLI material (same colour/metal/rough family as the barrel)
     // so the small box can carry the `flat` variant: a taut, calmer crinkled
     // sheet. The barrel's full-amplitude tile mapped onto each tiny BoxGeometry
@@ -5083,7 +5167,7 @@ export class PlayerSatellite extends THREE.Group {
     this._foilMats.push(irMat);                 // v6 orbital envMap target
     const irSensor = new THREE.Mesh(irGeo, irMat);
     const irXY = ringXY(RING_AZ.ir);
-    irSensor.position.set(irXY.x, irXY.y, M * 0.08);
+    irSensor.position.set(irXY.x * (IR_RC * M / RING_R), irXY.y * (IR_RC * M / RING_R), M * (IR_BOTTOM + IR_H / 2));
     // Mother audit T5 (F10): rotate the box to its ring azimuth so the 0.20 side
     // runs radially and the 0.15 side tangentially — it read skewed against the
     // ring, and unrotated its inner corner reached radial 0.138 (−0.084, −0.109),
@@ -5103,7 +5187,7 @@ export class PlayerSatellite extends THREE.Group {
       color: 0x0a0a12, metalness: 0.4, roughness: 0.15,   // matches LIDAR_Lens
     });
     const irWin = new THREE.Mesh(irWinGeo, irWinMat);
-    irWin.position.set(0, 0, M * 0.101);   // CircleGeometry +Z normal already faces outward
+    irWin.position.set(0, 0, M * (IR_H / 2 + 0.001));   // CircleGeometry +Z normal already faces outward
     irWin.name = 'IR_Aperture';
     irWin.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     irSensor.add(irWin);
@@ -5419,6 +5503,31 @@ export class PlayerSatellite extends THREE.Group {
     const faceLocalY = LAUNCH_LEN * 0.5;
     const CELL_D = M * 0.05;      // cell centre offset on each axis (cells at (±0.05, ±0.05))
     const caps = [];
+
+    // v10-look-r5 D3 (owner: "net launcher, especially mother's, should have raised or inset white disc ... 3d to sim
+    // and scale model"): a white disc lies on the front face (3 mm proud, 2 mm buried; r 0.105) framed by a gunmetal
+    // lip ring (r 0.107-0.120, standing 4 mm above the disc = 7 mm above the face, 3 mm behind the ring tube plane
+    // 1.28), so the white reads inset. The housing cylinder is unchanged; the cell holes, rims and loaded-state caps
+    // are lifted by the disc thickness and sit ON the disc. NetLauncherMuzzle (0, 0, 1.27) is unchanged.
+    const DISC_TOP = M * 0.003;
+    const discMat = new THREE.MeshStandardMaterial({ color: 0xd8d8d0, metalness: 0.0, roughness: 0.8 });   // cap white, matte
+    const disc = new THREE.Mesh(new THREE.LatheGeometry([                // top + side only (the buried underside is never seen)
+      new THREE.Vector2(M * 0.105, -M * 0.002), new THREE.Vector2(M * 0.105, M * 0.003), new THREE.Vector2(0, M * 0.003),
+    ], 64), discMat);
+    disc.position.set(0, faceLocalY, 0);                              // spans -2 mm .. +3 mm about the face
+    disc.name = 'NetLauncherDisc';
+    disc.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    housing.add(disc);
+    const lipGeo = new THREE.LatheGeometry([
+      new THREE.Vector2(M * 0.120, -M * 0.002), new THREE.Vector2(M * 0.120, M * 0.007),
+      new THREE.Vector2(M * 0.107, M * 0.007), new THREE.Vector2(M * 0.107, -M * 0.002),
+    ], 64);   // r 0.12 >= 0.10 -> 64 around (test-RoundParts radius rule)
+    const lip = new THREE.Mesh(lipGeo, gunmetalMat);
+    lip.position.set(0, faceLocalY, 0);
+    lip.name = 'NetLauncherLip';
+    lip.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    housing.add(lip);
+    const cellBaseY = faceLocalY + DISC_TOP;                          // the cells sit on the disc top
     const cellRimGeo = new THREE.LatheGeometry([
       new THREE.Vector2(M * 0.0335, -M * 0.002), new THREE.Vector2(M * 0.0335, M * 0.004),
       new THREE.Vector2(M * 0.0300, M * 0.004),
@@ -5427,7 +5536,7 @@ export class PlayerSatellite extends THREE.Group {
       const lx = (c % 2 === 0) ? CELL_D : -CELL_D;                 // ship ±X
       const lz = (c < 2) ? -CELL_D : CELL_D;                       // local Z = ship −Y: c 0-1 → upper row (+Y)
       const hole = new THREE.Mesh(new THREE.CircleGeometry(M * 0.030, 48), cellHoleMat);
-      hole.position.set(lx, faceLocalY + M * 0.001, lz);          // 1 mm proud of the front face
+      hole.position.set(lx, cellBaseY + M * 0.001, lz);           // 1 mm proud of the white disc
       hole.rotation.x = -Math.PI / 2;
       hole.name = `NetLauncherCellHole_${c}`;
       hole.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
@@ -5435,13 +5544,13 @@ export class PlayerSatellite extends THREE.Group {
 
       // v6-nose-tail D3: a low gunmetal rim round each cell (outer r 33.5 mm, 4 mm proud, 2 mm buried). Geometry shared.
       const rim = new THREE.Mesh(cellRimGeo, gunmetalMat);
-      rim.position.set(lx, faceLocalY, lz);
+      rim.position.set(lx, cellBaseY, lz);
       rim.name = `NetLauncherCellRim_${c}`;
       rim.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       housing.add(rim);
 
       const cap = new THREE.Mesh(new THREE.CircleGeometry(M * 0.028, 48), cellCapMat);
-      cap.position.set(lx, faceLocalY + M * 0.0015, lz);          // distinct offset — no coplanar tie
+      cap.position.set(lx, cellBaseY + M * 0.0015, lz);           // distinct offset — no coplanar tie
       cap.rotation.x = -Math.PI / 2;
       cap.name = `NetLauncherCellCap_${c}`;
       cap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
@@ -5980,8 +6089,10 @@ export class PlayerSatellite extends THREE.Group {
     });
 
     // ── TT&C omni antennas ×2 — whips on a small base puck, radially outward.
-    // Opposite hemispheres: az 270° z +0.92 (fore) and az 90° z −0.92 (aft).
-    [[270, 0.92], [90, -0.92]].forEach(([azDeg, zFrac], i) => {
+    // Opposite hemispheres: az 270° z +0.92 (fore) and az 78° z −0.92 (aft). v10-look-r5 D1: the aft whip was at
+    // az 90°, 1 mm off the axis of the aft pod's axial bell (az 94.65°) and 55 mm downstream — in its cold gas;
+    // az 78° puts it outside the drawn plume and puff cone of every bell (test-LookR5).
+    [[270, 0.92], [78, -0.92]].forEach(([azDeg, zFrac], i) => {
       const radial = radialAt(azDeg);
       const base = radial.clone().multiplyScalar(barrelR).setZ(barrelHZ * zFrac);
       const puck = new THREE.Mesh(new THREE.CylinderGeometry(M * 0.02, M * 0.02, M * 0.02, 48), gunmetal);
