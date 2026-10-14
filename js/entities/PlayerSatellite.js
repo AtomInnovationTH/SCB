@@ -740,38 +740,36 @@ export class PlayerSatellite extends THREE.Group {
     // scene.environment) is what makes it read as broken foil rather than a
     // smooth brass pipe under the uniform RoomEnvironment. See orbitalFoilEnv.js.
     this._foilMats = [];
-    // MLI blanket maps, v7 (lane v2-foil-mli): albedo + normal + one rough/metal
-    // PNG (G = roughness, B = metalness; the same texture feeds roughnessMap and
-    // metalnessMap). Null in headless/no-DOM. They are BAKED static PNGs
-    // (textures/mli_foil_v7_*.png) from the generator in mliFoilTexture.js (re-run
+    // MLI foil maps, v8 (lane v9-foil-crinkle): albedo (neutral grey) + normal + one
+    // rough/metal PNG (G = roughness, B = 255 = all metal; the same texture feeds
+    // roughnessMap and metalnessMap). Null in headless/no-DOM. They are BAKED static
+    // PNGs (textures/mli_foil_v8_*.png) from the generator in mliFoilTexture.js (re-run
     // `node scripts/bake-foil-maps.mjs` after knob tweaks, and take a NEW file
-    // name — textures/ is cache-first in the service worker). The tile is the
-    // barrel's real size (2.513 m x 2.0 m): 4 bands x 5 sewn panels, dark-orange
-    // edge-binding tape (stitched) on every seam, a tie-down button on a tape
-    // patch at each panel centre, soft billows + a fine continuous crinkle. The
-    // barrel gets a SINGLE un-tiled wrap [1,1] (u=1 is an integer wrap, so the
-    // cylinder UV is seamless; a fractional u would put a hard seam down the
-    // barrel). The IR box uses `variant:'flat'` — one taut panel with tape on the
-    // box edges and a single button. See mliFoilTexture.js for the pipeline.
+    // name — textures/ is cache-first in the service worker). ONE crinkled gold-mylar
+    // sheet draped over the barrel (owner 2026-10-14: it matches the gold mylar
+    // foil on the scale model): long sharp fold ridges, fans, gated micro-crumple;
+    // no panels, tape or buttons. The barrel gets a SINGLE un-tiled wrap [1,1]
+    // (u=1 is an integer wrap, so the cylinder UV is seamless; a fractional u
+    // would put a hard seam down the barrel). The IR box uses `variant:'flat'` — a
+    // taut, calmer sheet. See mliFoilTexture.js for the pipeline.
     const bodyFoil = getMLIFoilMaps({ repeat: [1, 1] });
     // (_matBody itself is assigned in _buildMainBus as a clone of _matGoldMLI —
     // Mother audit T12 dropped the grey placeholder material that used to be
     // created here and discarded there.)
-    // MLI thermal blanket: aluminised-Kapton AMBER-gold (NASA JPL: amber Kapton
-    // over an aluminised layer, not gold metal). The look constants live in
-    // MLI_FOIL_LOOK so the scan-flash restore reads the SAME values (v6 had the
-    // restore at 0x4a3008 vs the build default 0x4a3d12 — a hue shift after the
-    // first scan). metalness 1.0 x the map's B channel (foil 1.0, binding tape
-    // ~0.45, buttons ~0); roughness 0.88 x the map's G channel (foil 0.55-0.85
-    // => effective ~0.48-0.75: broad soft highlights, no mirror blotches).
+    // MLI foil: LEMON-gold crinkled mylar. The look constants live in MLI_FOIL_LOOK
+    // so the scan-flash restore reads the SAME values (v6 had the restore at
+    // 0x4a3008 vs the build default 0x4a3d12 — a hue shift after the first
+    // scan). The colour is the MATERIAL colour (the albedo map is neutral grey);
+    // metalness 1.0 x the map's B channel (255); roughness 0.50 x the map's G
+    // channel (crumpled 0.30-0.70 => effective 0.15-0.35: sharp crinkle glints).
     this._matGoldMLI = new THREE.MeshStandardMaterial({
-      color: MLI_FOIL_LOOK.materialColor,   // white: the amber tint is baked into the albedo map
+      color: MLI_FOIL_LOOK.materialColor,   // lemon gold; the albedo map is neutral grey
       metalness: MLI_FOIL_LOOK.metalness, roughness: MLI_FOIL_LOOK.roughness,
       emissive: MLI_FOIL_LOOK.emissive, emissiveIntensity: MLI_FOIL_LOOK.emissiveIntensity,
     });
     // Apply the maps. The body skin (_matBody) and the IR box are clones of this
     // material, so they inherit them; scan-flash mutates emissive/emissiveIntensity
-    // only (the emissiveMap carries the tape/crease pattern into the shadow side).
+    // only (the emissiveMap carries the crease pattern into the shadow side).
     if (bodyFoil) {
       this._matGoldMLI.map = bodyFoil.albedoMap;
       this._matGoldMLI.normalMap = bodyFoil.normalMap;
@@ -5064,14 +5062,13 @@ export class PlayerSatellite extends THREE.Group {
 
     // IR Sensor: gold-foil box
     const irGeo = new THREE.BoxGeometry(M * 0.2, M * 0.15, M * 0.2);
-    // Clone the gold MLI material (D3: same colour/metal/rough family as the barrel)
-    // so the small box can carry the v7 `flat` variant: ONE taut panel — edge-
-    // binding tape on the tile border (= the box edges), a single tie-down button,
-    // almost no crinkle. The barrel's blanket tile mapped onto each tiny BoxGeometry
-    // face would put a 5x4 panel grid on a 0.2 m face. Scalar roughness 0.6 x the
-    // flat map's G (0.60-0.78) => effective ~0.36-0.47 satin keeps the box from
-    // blowing out white over the collar under bloom (F2 exposure fix). Override ALL
-    // the maps so the repeat stays consistent across them.
+    // Clone the gold MLI material (same colour/metal/rough family as the barrel)
+    // so the small box can carry the `flat` variant: a taut, calmer crinkled
+    // sheet. The barrel's full-amplitude tile mapped onto each tiny BoxGeometry
+    // face would read as glitter. Scalar roughness 0.6 x the flat map's G
+    // (0.50-0.80) => effective ~0.30-0.48 satin keeps the box from blowing out
+    // white over the collar under bloom (F2 exposure fix). Override ALL the maps
+    // so the repeat stays consistent across them.
     const irMat = this._matGoldMLI.clone();
     const irFoil = getMLIFoilMaps({ repeat: [1, 1], variant: 'flat' });
     irMat.roughness = 0.6;
