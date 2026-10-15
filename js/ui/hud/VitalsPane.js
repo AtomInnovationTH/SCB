@@ -6,7 +6,8 @@
  * be obvious top left"). h1-mother-pane (owner 2026-10-14: "integrate mother
  * pane and pane for heat/battery/gas/ion. Label the gas"): this box now ALSO
  * carries the MOTHER section (nets row + hover detail, built by StatusPanel
- * and mounted here through `mountSection`), 350 px wide like DAUGHTERS.
+ * and mounted here through `mountSection`), as wide as comms (480 px,
+ * `--hud-side-w`; both narrow together on smaller screens — §23 row 1).
  *
  * Rows, top to bottom (an Airbus-style readout: green normal, amber caution,
  * red warning, white labels, flat strokes, a dark halo and no glow; the DOM
@@ -84,15 +85,15 @@ export const VITALS_ROWS = Object.freeze(['heat', 'battery', 'gas', 'ion']);
 export const VITALS_LABELS = Object.freeze({ heat: 'HEAT', battery: 'BATTERY', gas: 'NITROGEN', ion: 'XENON' });
 
 /**
- * VITALS_GEOMETRY — the pane's numbers (CSS px). The pane is 350 wide (=
- * DAUGHTERS, so the left column has straight edges) with 18 px rows and a
+ * VITALS_GEOMETRY — the pane's numbers (CSS px). The pane is 480 wide (=
+ * the comms pane, h1b; index.html's `--hud-side-w` narrows both together) with 18 px rows and a
  * 16 px title row: 2 border + 2 x 5 padding + 16 title + 4 x 18 rows + 4 x 3
  * gaps (title + 4 rows) = 112 px, plus the BATTERY power line (FLOW_PX + one
  * more GAP_PX = 14 px). The label column holds "NITROGEN"; the value column
  * holds "312/600 Wh".
  */
 export const VITALS_GEOMETRY = Object.freeze({
-  WIDTH_PX: 350,
+  WIDTH_PX: 480,
   ROW_PX: 18,
   GAP_PX: 3,
   PAD_Y_PX: 5,
@@ -816,11 +817,12 @@ export class VitalsPane {
     style.textContent = `
       /* The house HUD grammar (the mono token, the dark plate, the green
        * hairline) rides in from .hud-panel; the left column's own rule makes
-       * the pane position:relative. Width budget: ${G.WIDTH_PX} - 2 border -
+       * the pane position:relative. Width budget at the full width: ${G.WIDTH_PX} - 2 border -
        * ${2 * G.PAD_X_PX} padding = ${G.WIDTH_PX - 2 - 2 * G.PAD_X_PX} px per row: label ${G.LABEL_PX} + value
-       * ${G.VALUE_PX} + 2 x 5 gap leaves the track ${G.WIDTH_PX - 2 - 2 * G.PAD_X_PX - G.LABEL_PX - G.VALUE_PX - 10} px. */
+       * ${G.VALUE_PX} + 2 x 5 gap leaves the track ${G.WIDTH_PX - 2 - 2 * G.PAD_X_PX - G.LABEL_PX - G.VALUE_PX - 10} px
+       * (the track is the flexible column: it takes any extra or lost room). */
       #${VITALS_ID} {
-        width: ${G.WIDTH_PX}px;
+        width: var(--hud-side-w, ${G.WIDTH_PX}px);
         box-sizing: border-box;
         padding: ${G.PAD_Y_PX}px ${G.PAD_X_PX}px;
         display: flex;

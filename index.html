@@ -72,6 +72,12 @@
     :root {
       --font-ui: 'B612', 'Helvetica Neue', Arial, sans-serif;
       --font-mono: 'B612 Mono', 'Courier New', monospace;
+      /* HUD side width (h1b-mother-width, owner 2026-10-15): the MOTHER pane, the left column and the
+         comms pane are all this wide. 480 = Constants.COMMS.PANE_WIDTH_PX = RailGeometry MOTHER_PANE_WIDTH_PX
+         (CSS cannot import; a test pins the three). 344 = the 280 score strip + 2 x 16 screen edges + 2 x 16
+         gaps, so the two panes narrow together and never reach the centred strip. Floor 300. Layout, so it
+         lives here and applies to both looks. */
+      --hud-side-w: clamp(300px, calc((100vw - 344px) / 2), 480px);
     }
 
     /* === HUD LOOK (h2-hud-look, owner 2026-10-14: default on, a menu switch back to today's style) ===
@@ -305,13 +311,13 @@
       display: flex;           /* safety net: JS sets this inline, but preserve it if cleared */
       flex-direction: column;
       left: max(16px, env(safe-area-inset-left)); /* = HUD_EDGE_PX (js/ui/RailGeometry.js) */
-      width: 350px; /* = LEFT_COLUMN_WIDTH_PX (js/ui/RailGeometry.js) — the widest child, Mother (the merged pane, level with Daughters); children hug the left edge (align-items: flex-start inline) */
+      width: var(--hud-side-w, 480px); /* = LEFT_COLUMN_WIDTH_PX (js/ui/RailGeometry.js) — the widest child, Mother (the merged pane, as wide as comms); children hug the left edge (align-items: flex-start inline) */
       scrollbar-width: thin;
       scrollbar-color: rgb(var(--hud-normal-rgb, 0 255 136) / 0.2) transparent;
     }
 
     /* Panels inside left column: flex children, not absolute. Each pane carries
-       its own inline width (Mother 350 / Daughters 350 = MOTHER_PANE_WIDTH_PX /
+       its own inline width (Mother 480 / Daughters 350 = MOTHER_PANE_WIDTH_PX /
        ARMS_PANE_WIDTH_PX); the LeftStack riders below the column are overlay
        children on the .hud-panel 280 base. */
     #hud-left-column > .hud-panel {
@@ -553,12 +559,12 @@
       #hud-controls-panel { display: none !important; }
     }
     /* Comms stays on screen on floor 2 down to 744 px wide (owner 2026-10-13:
-     * "comms should be visible on f2 at start of game"). It cannot keep its 480 px
-     * width where the 400 px MOTHER column (x 16-416) is beside it: below 920 px
-     * (416 + 8 + 480 + 16) it narrows to 300 px so the two never overlap, and drops
-     * 34 px so it sits under the centred 280 px score strip (y 8-36) it would meet. */
+     * "comms should be visible on f2 at start of game"). MOTHER and comms are the same
+     * width (--hud-side-w, defined at :root: 480 px, narrowing together so the centred
+     * 280 px score strip, x centre +-140, y 8-36, stays clear of both; the floor is 300).
+     * Below 920 px comms also drops 34 px so it sits under the strip (y 8-36). */
     @media (max-width: 920px) {
-      #hud-comms-panel { width: 300px !important; top: 44px !important; }
+      #hud-comms-panel { top: 44px !important; }
     }
 
     /* Loading screen */

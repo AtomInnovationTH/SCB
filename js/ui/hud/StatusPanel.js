@@ -529,7 +529,7 @@ export class StatusPanel {
   _build() {
     // --- Left-column flex container for stacked panels ---
     // Follow-up 2026-09-09 (plan 1788926404388-hud-followups-0909.md §1.15 —
-    // the inverted U): the column is as wide as its widest child (Mother 400);
+    // the inverted U): the column is as wide as its widest child (Mother 480, as wide as comms);
     // `align-items: flex-start` hugs the 350 Daughters and the 280 riders to
     // the LEFT edge, so the U's outer edge stays straight at HUD_EDGE_PX.
     this._leftColumn = document.createElement('div');
@@ -542,7 +542,7 @@ export class StatusPanel {
       flexDirection: 'column',
       alignItems: 'flex-start',
       gap: '10px',           // Pane-to-pane vertical gap — keep in sync with right column (HUD.js)
-      width: `${LEFT_COLUMN_WIDTH_PX}px`,
+      width: `var(--hud-side-w, ${LEFT_COLUMN_WIDTH_PX}px)`,
       maxHeight: 'calc(100vh - 60px)',
       overflowY: 'auto',
       zIndex: '10',
@@ -609,10 +609,10 @@ export class StatusPanel {
     // NOTE: the inner propulsion/energy blocks intentionally KEEP all of the
     // element IDs, data-hud-group values, and the data-activate-key='A' that the
     // updaters and tests key off — only their parent box is now the MOTHER pane.
-    // Follow-up 2026-09-09 (§1.15): Mother is the left arm's widest pane (400 —
-    // the callout digest and the MEMO slot stop wrapping); inline width beats
+    // Mother is as wide as comms (480 via --hud-side-w; both narrow together on
+    // smaller screens — DECISIONS §23 row 1, 2026-10-15); inline width beats
     // the .hud-panel 280 base.
-    this.panels.mother = this._createPanel('hud-mother-panel', { width: `${MOTHER_PANE_WIDTH_PX}px` });
+    this.panels.mother = this._createPanel('hud-mother-panel', { width: `var(--hud-side-w, ${MOTHER_PANE_WIDTH_PX}px)` });
     this.panels.mother.className = 'hud-panel hud-panel-expandable';
     this.panels.mother.innerHTML = this._motherMarkup();
     this._leftColumn.appendChild(this.panels.mother);
@@ -638,8 +638,8 @@ export class StatusPanel {
 
     // --- V5 Crossbow Arm Status Panel (left side, bottom) — DAUGHTERS pane ---
     // Follow-up 2026-09-09 (§1.15): 350 wide (ARMS_PANE_WIDTH_PX), hugging the
-    // left edge under the 400 Mother (the column is align-items: flex-start).
-    this.panels.arms = this._createPanel('hud-arms-panel', { width: `${ARMS_PANE_WIDTH_PX}px` });
+    // left edge under the 480 Mother (the column is align-items: flex-start).
+    this.panels.arms = this._createPanel('hud-arms-panel', { width: `min(${ARMS_PANE_WIDTH_PX}px, var(--hud-side-w, ${MOTHER_PANE_WIDTH_PX}px))` });
     this.panels.arms.className = 'hud-panel hud-panel-expandable';
     this.panels.arms.dataset.hudGroup = 'arms-group';
     this.panels.arms.dataset.activateKey = 'D';

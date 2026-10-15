@@ -255,7 +255,7 @@ export class CommsPanel {
     this.panels.comms = this._createPanel('hud-comms-panel', {
       top: '10px',
       right: `${RAIL_GEOMETRY.HUD_EDGE_PX}px`,
-      width: `${COMMS.PANE_WIDTH_PX}px`,
+      width: `var(--hud-side-w, ${COMMS.PANE_WIDTH_PX}px)`,
       height: `${COMMS.PANE_HEIGHT_PX}px`,
       overflowY: 'hidden',
       transition: 'height 0.3s ease, border-color 0.3s ease',
@@ -421,7 +421,7 @@ export class CommsPanel {
       if (this._commsFlashTimer <= 0) {
         const step = this._currentStep();
         this.panels.comms.style.borderColor = (step === 'large')
-          ? 'rgb(var(--hud-info-rgb, 0 255 255) / 1.0)' : 'rgb(var(--hud-normal-rgb, 0 255 136) / 0.3)';
+          ? 'rgb(var(--hud-info-rgb, 0 255 255) / 1.0)' : 'var(--hud-hairline, rgb(var(--hud-normal-rgb, 0 255 136) / 0.3))';
       }
     }
   }
@@ -502,7 +502,7 @@ export class CommsPanel {
     if (this._commsFlashTimer <= 0) {
       this.panels.comms.style.borderColor = (step === 'large')
         ? 'rgb(var(--hud-info-rgb, 0 255 255) / 1.0)'
-        : 'rgb(var(--hud-normal-rgb, 0 255 136) / 0.3)';
+        : 'var(--hud-hairline, rgb(var(--hud-normal-rgb, 0 255 136) / 0.3))';
     }
 
     // Re-render so the visible line count matches the new height.
@@ -635,7 +635,7 @@ export class CommsPanel {
     if (this._commsFlashTimer > 0) {
       this.panels.comms.style.borderColor = 'rgb(var(--hud-warning-rgb, 255 68 68) / 0.7)';
     } else if (step !== 'large') {
-      this.panels.comms.style.borderColor = 'rgb(var(--hud-normal-rgb, 0 255 136) / 0.3)';
+      this.panels.comms.style.borderColor = 'var(--hud-hairline, rgb(var(--hud-normal-rgb, 0 255 136) / 0.3))';
     }
   }
 }

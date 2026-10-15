@@ -75,14 +75,17 @@
  *                  the two ARMS are wider than the base — the five names below
  *                  carry the inverted U's real widths; this number stays 280
  *                  and keeps its name (no rename — every base-width pin stands).
- *   MOTHER_PANE_WIDTH_PX   Mother (the left arm's top pane): 350 — one pane with
+ *   MOTHER_PANE_WIDTH_PX   Mother (the left arm's top pane): 480 — one pane with
  *                  heat / battery / nitrogen / engine fuel (h1-mother-pane D1,
- *                  owner 2026-10-14), the same width as Daughters so the left
- *                  column has straight edges (it was 400 until then)
+ *                  owner 2026-10-14), as wide as the comms pane (h1b, owner
+ *                  2026-10-15: "same width as comms pane for balance"). It is
+ *                  `Constants.COMMS.PANE_WIDTH_PX` (a test pins them equal);
+ *                  index.html's `--hud-side-w` narrows both together on small
+ *                  screens so the centred score strip stays clear.
  *   ARMS_PANE_WIDTH_PX     Daughters (the left arm's second pane): 350
  *   TARGETS_PANE_WIDTH_PX  Targets (the right arm's first pane): 350
- *   LEFT_COLUMN_WIDTH_PX   `#hud-left-column`: 350 (= the widest child, Mother,
- *                  now level with the 350 Daughters); the column is `align-items:
+ *   LEFT_COLUMN_WIDTH_PX   `#hud-left-column`: 480 (= the widest child, Mother,
+ *                  over the 350 Daughters, as comms is over the 350 Targets); the column is `align-items:
  *                  flex-start`, so the 280 riders hug the left edge — the outer
  *                  edges of the U stay straight at HUD_EDGE_PX
  *   RIGHT_COLUMN_WIDTH_PX  `#hud-right-column`: 350 (= Targets); `align-items:
@@ -110,10 +113,10 @@ export const RAIL_GEOMETRY = Object.freeze({
   TOUCH_PITCH_PX: 44,
   HUD_EDGE_PX: EDGE_PX,     // === EDGE_PX (one number, two names)
   HUD_COLUMN_WIDTH_PX: 280, // the BASE pane width (.hud-panel, riders, popover, Next)
-  MOTHER_PANE_WIDTH_PX: 350,
+  MOTHER_PANE_WIDTH_PX: 480,   // === Constants.COMMS.PANE_WIDTH_PX (h1b: one width for MOTHER and comms; a test pins it)
   ARMS_PANE_WIDTH_PX: 350,
   TARGETS_PANE_WIDTH_PX: 350,
-  LEFT_COLUMN_WIDTH_PX: 350,   // = MOTHER_PANE_WIDTH_PX (the widest left child)
+  LEFT_COLUMN_WIDTH_PX: 480,   // = MOTHER_PANE_WIDTH_PX (the widest left child)
   RIGHT_COLUMN_WIDTH_PX: 350,  // = TARGETS_PANE_WIDTH_PX (the widest right child)
 });
 
