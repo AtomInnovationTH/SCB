@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-look="new">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
@@ -52,9 +52,70 @@
       font-display: swap;
       src: url('fonts/B612Mono-Bold.ttf') format('truetype');
     }
+    /* h2-hud-look D3: D-DIN (Datto Inc., SIL OFL 1.1, ./fonts/D-DIN-OFL.txt) — the DIN-style label face.
+       Used only by the new look (--font-label below); the faces download lazily, so the classic
+       look never fetches them. Numbers stay B612 Mono in both looks. */
+    @font-face {
+      font-family: 'D-DIN';
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url('fonts/D-DIN-Regular.ttf') format('truetype');
+    }
+    @font-face {
+      font-family: 'D-DIN';
+      font-style: normal;
+      font-weight: 700;
+      font-display: swap;
+      src: url('fonts/D-DIN-Bold.ttf') format('truetype');
+    }
     :root {
       --font-ui: 'B612', 'Helvetica Neue', Arial, sans-serif;
       --font-mono: 'B612 Mono', 'Courier New', monospace;
+    }
+
+    /* === HUD LOOK (h2-hud-look, owner 2026-10-14: default on, a menu switch back to today's style) ===
+       The variables are defined ONLY here, under html[data-look="new"]. Every converted HUD
+       colour reads var(--hud-<role>, <today's literal>), so when js/ui/HudLook.js removes the
+       attribute (classic) every var() falls back to the literal it was written with: classic is
+       today's look by construction. Nothing below is defined at :root. `<html>` ships with the
+       attribute (no first-paint flash). Roles follow FAA AC 25-11B: green normal, amber caution,
+       red warning, cyan selected/info, magenta target, white data. */
+    html[data-look="new"] {
+      --hud-plate: rgba(11, 16, 22, 0.92);
+      --hud-hairline: #2A3441;
+      --hud-text: #E6EDF3;
+      --hud-label: #9FB0C0;
+      --hud-dim: #6B7C8C;
+      --hud-normal: #3DDC97;
+      --hud-caution: #FFB020;
+      --hud-warning: #FF5C57;
+      --hud-info: #4DD0FF;
+      --hud-target: #E86BFF;
+      --hud-mpd: #B48CFF;
+      --hud-ink: #0B1016;
+      /* channel triples, for translucent tints: rgb(var(--hud-normal-rgb, 0 255 136) / 0.3) */
+      --hud-text-rgb: 230 237 243;
+      --hud-label-rgb: 159 176 192;
+      --hud-dim-rgb: 107 124 140;
+      --hud-normal-rgb: 61 220 151;
+      --hud-caution-rgb: 255 176 32;
+      --hud-warning-rgb: 255 92 87;
+      --hud-info-rgb: 77 208 255;
+      --hud-target-rgb: 232 107 255;
+      --hud-mpd-rgb: 180 140 255;
+      --hud-ink-rgb: 11 16 22;
+      /* a dark halo, no glow */
+      --hud-title-shadow: 0 0 2px rgba(0, 0, 0, 0.9);
+      --font-label: 'D-DIN', 'B612', 'Helvetica Neue', Arial, sans-serif;
+    }
+    /* Labels and pane titles: D-DIN, capitals, +0.06em. Sizes and weights are left as they are.
+       !important because several of these classes set their own spacing behind an id selector. */
+    html[data-look="new"] :is(.pane-title, .vp-title, .vp-label, .power-label, .md-label, .orbit-label,
+        .next-title, .next-label, .cargo-title, .fma-label, .ovr-main-title, .mpd-burst-label, .hud-pin-label) {
+      font-family: var(--font-label) !important;
+      text-transform: uppercase !important;
+      letter-spacing: 0.06em !important;
     }
 
     /* === RESET & BASE === */
@@ -145,8 +206,8 @@
      .hud-panel {
       position: absolute;
       width: 280px; /* = HUD_COLUMN_WIDTH_PX (js/ui/RailGeometry.js) — CSS cannot import */
-      background: rgba(5, 10, 20, 0.95);
-      border: 1px solid rgba(0, 255, 136, 0.3);
+      background: var(--hud-plate, rgba(5, 10, 20, 0.95));
+      border: 1px solid var(--hud-hairline, rgba(0, 255, 136, 0.3));
       border-radius: 4px;
       padding: 6px 8px;
       pointer-events: none;
@@ -158,13 +219,13 @@
          compositor cost. The opaque 0.95-alpha background is sufficient
          contrast; the blur was cosmetic, not informational. */
       font-size: 13px;
-      color: #00ff88;
+      color: var(--hud-normal, #00ff88);
       font-family: var(--font-mono);
     }
 
     /* ST-2.2: High-opacity fallback when panels overlap bright Earth */
     .hud-panel--earth-overlap {
-      background: rgba(5, 10, 20, 0.98) !important;
+      background: rgb(var(--hud-ink-rgb, 5 10 20) / 0.98) !important;
     }
 
     /* Hover-to-expand for left-column panels */
@@ -192,7 +253,7 @@
       padding-top: 4px;
       padding-bottom: 2px;
       margin-top: 4px;
-      border-top-color: rgba(0,255,136,0.15);
+      border-top-color: var(--hud-hairline, rgba(0,255,136,0.15));
     }
 
     /* Arm hover details — revealed when fleet panel hovered */
@@ -246,7 +307,7 @@
       left: max(16px, env(safe-area-inset-left)); /* = HUD_EDGE_PX (js/ui/RailGeometry.js) */
       width: 350px; /* = LEFT_COLUMN_WIDTH_PX (js/ui/RailGeometry.js) — the widest child, Mother (the merged pane, level with Daughters); children hug the left edge (align-items: flex-start inline) */
       scrollbar-width: thin;
-      scrollbar-color: rgba(0,255,136,0.2) transparent;
+      scrollbar-color: rgb(var(--hud-normal-rgb, 0 255 136) / 0.2) transparent;
     }
 
     /* Panels inside left column: flex children, not absolute. Each pane carries
@@ -327,7 +388,7 @@
       padding-top: 4px;
       padding-bottom: 2px;
       margin-top: 4px;
-      border-top-color: rgba(0,255,136,0.15);
+      border-top-color: var(--hud-hairline, rgba(0,255,136,0.15));
     }
     #hud-vitals:hover #hud-mother-panel .energy-hint { opacity: 0.7 !important; }
     /* h1-mother-pane D1: ONE box. The MOTHER section carries no border / plate / title of its
@@ -384,7 +445,7 @@
     .hud-bar-track {
       flex: 1;
       height: 8px;
-      background: rgba(0, 255, 136, 0.1);
+      background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.1);
       border-radius: 2px;
       overflow: hidden;
       min-width: 80px;
@@ -392,7 +453,7 @@
 
     .hud-bar-fill {
       height: 100%;
-      background: #00ff88;
+      background: var(--hud-normal, #00ff88);
       border-radius: 2px;
       transition: width 0.3s ease, background-color 0.5s ease;
     }
@@ -423,7 +484,7 @@
       font-weight: 700;
       letter-spacing: 0.14em;
       opacity: 0.95 !important;
-      text-shadow: 0 0 8px rgba(0, 255, 136, 0.35);
+      text-shadow: var(--hud-title-shadow, 0 0 8px rgba(0, 255, 136, 0.35));
     }
 
     /* Resource / power / fleet rows — larger, bolder labels and readouts */

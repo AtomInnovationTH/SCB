@@ -31,15 +31,15 @@ import { Constants } from '../../core/Constants.js';
 // CONFIG
 // ───────────────────────────────────────────────────────────────────────────
 
-const COLOR_OK       = '#88ffcc';
-const COLOR_LOW      = '#ffcc44';
-const COLOR_CRIT     = '#ff5555';
-const BG_OK          = 'rgba(0, 30, 22, 0.85)';
-const BG_LOW         = 'rgba(60, 50, 0, 0.85)';
-const BG_CRIT        = 'rgba(60, 0, 0, 0.85)';
-const BORDER_OK      = 'rgba(0, 255, 136, 0.35)';
-const BORDER_LOW     = 'rgba(255, 204, 68, 0.55)';
-const BORDER_CRIT    = 'rgba(255, 85, 85, 0.65)';
+const COLOR_OK       = 'var(--hud-normal, #88ffcc)';
+const COLOR_LOW      = 'var(--hud-caution, #ffcc44)';
+const COLOR_CRIT     = 'var(--hud-warning, #ff5555)';
+const BG_OK          = 'rgb(var(--hud-ink-rgb, 0 30 22) / 0.85)';
+const BG_LOW         = 'rgb(var(--hud-ink-rgb, 60 50 0) / 0.85)';
+const BG_CRIT        = 'rgb(var(--hud-ink-rgb, 60 0 0) / 0.85)';
+const BORDER_OK      = 'rgb(var(--hud-normal-rgb, 0 255 136) / 0.35)';
+const BORDER_LOW     = 'rgb(var(--hud-caution-rgb, 255 204 68) / 0.55)';
+const BORDER_CRIT    = 'rgb(var(--hud-warning-rgb, 255 85 85) / 0.65)';
 
 function _tuning() {
   return (Constants && Constants.INVENTORY) || {

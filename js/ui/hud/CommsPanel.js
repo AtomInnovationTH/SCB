@@ -34,9 +34,9 @@ const CONTRACT_HEADER_PX = 26;
 // SIMPLIFIED 3-COLOUR PALETTE (priority-based, not per-channel)
 // Keeps the pane easy to scan: green = normal, amber = warning, red = critical.
 // ----------------------------------------------------------------------------
-const COMMS_COLOR_NORMAL = '#00ff88';   // green  — info / nominal
-const COMMS_COLOR_WARNING = '#ffaa00';  // amber  — warnings
-const COMMS_COLOR_CRITICAL = '#ff4444'; // red    — critical / alerts
+const COMMS_COLOR_NORMAL = 'var(--hud-normal, #00ff88)';   // green  — info / nominal
+const COMMS_COLOR_WARNING = 'var(--hud-caution, #ffaa00)';  // amber  — warnings
+const COMMS_COLOR_CRITICAL = 'var(--hud-warning, #ff4444)'; // red    — critical / alerts
 
 /**
  * Map a message priority to one of the 3 palette colours.
@@ -281,18 +281,18 @@ export class CommsPanel {
       boxSizing: 'border-box',
       height: `${CONTRACT_HEADER_PX}px`,
       paddingBottom: '5px',
-      borderBottom: '1px solid rgba(129,199,132,0.18)',
+      borderBottom: '1px solid rgb(var(--hud-normal-rgb, 129 199 132) / 0.18)',
       alignItems: 'center',
       gap: '7px',
       whiteSpace: 'nowrap',
       fontSize: '11px',
-      color: '#81c784',
+      color: 'var(--hud-normal, #81c784)',
     });
     this._contractEl.innerHTML = `
       <span style="font-size:10px;letter-spacing:0.08em;opacity:0.7;text-transform:uppercase;">Anchor contract</span>
       <span><b id="hud-anchor-mass" style="font-variant-numeric:tabular-nums;">0</b><span style="opacity:0.5;">/</span><b id="hud-anchor-target" style="font-variant-numeric:tabular-nums;">10,000</b><span style="opacity:0.7;"> kg</span></span>
-      <span style="flex:1;height:3px;background:rgba(129,199,132,0.2);border-radius:2px;overflow:hidden;margin-right:22px;">
-        <span id="hud-contract-fill" style="display:block;width:0%;height:100%;background:#81c784;transition:width 0.4s ease;"></span>
+      <span style="flex:1;height:3px;background:rgb(var(--hud-normal-rgb, 129 199 132) / 0.2);border-radius:2px;overflow:hidden;margin-right:22px;">
+        <span id="hud-contract-fill" style="display:block;width:0%;height:100%;background:var(--hud-normal, #81c784);transition:width 0.4s ease;"></span>
       </span>
     `;
     this.panels.comms.appendChild(this._contractEl);
@@ -417,11 +417,11 @@ export class CommsPanel {
       // Calm-HUD: hold a steady red border for the critical window — the red
       // already carries severity; the old 1.59 Hz square-wave strobe was the
       // live JS twin of the .comms-flash class removed in the Phase 1 pass.
-      this.panels.comms.style.borderColor = 'rgba(255,68,68,0.7)';
+      this.panels.comms.style.borderColor = 'rgb(var(--hud-warning-rgb, 255 68 68) / 0.7)';
       if (this._commsFlashTimer <= 0) {
         const step = this._currentStep();
         this.panels.comms.style.borderColor = (step === 'large')
-          ? 'rgba(0, 255, 255, 1.0)' : 'rgba(0,255,136,0.3)';
+          ? 'rgb(var(--hud-info-rgb, 0 255 255) / 1.0)' : 'rgb(var(--hud-normal-rgb, 0 255 136) / 0.3)';
       }
     }
   }
@@ -501,8 +501,8 @@ export class CommsPanel {
     // Brighter border when enlarged beyond normal; default otherwise.
     if (this._commsFlashTimer <= 0) {
       this.panels.comms.style.borderColor = (step === 'large')
-        ? 'rgba(0, 255, 255, 1.0)'
-        : 'rgba(0,255,136,0.3)';
+        ? 'rgb(var(--hud-info-rgb, 0 255 255) / 1.0)'
+        : 'rgb(var(--hud-normal-rgb, 0 255 136) / 0.3)';
     }
 
     // Re-render so the visible line count matches the new height.
@@ -539,7 +539,7 @@ export class CommsPanel {
     }
     // Color intensity: muted below 50 %, brighter above (mirrors the old strip).
     if (this._contractEl && target > 0) {
-      const c = (mass / target) > 0.5 ? '#a5d6a7' : '#81c784';
+      const c = (mass / target) > 0.5 ? 'var(--hud-normal, #a5d6a7)' : 'var(--hud-normal, #81c784)';
       this._contractEl.style.color = c;
       if (fillEl) fillEl.style.background = c;
     }
@@ -597,7 +597,7 @@ export class CommsPanel {
 
       // Latest message: full-strength, subtle highlight band. Older: dimmed.
       const textOpacity = isLatest ? '1' : '0.6';
-      const rowBg = isLatest ? 'rgba(255,255,255,0.06)' : 'transparent';
+      const rowBg = isLatest ? 'rgb(var(--hud-text-rgb, 255 255 255) / 0.06)' : 'transparent';
       const weight = (isLatest || isCriticalPriority(msg.priority)) ? '700' : '400';
 
       const sourceText = msg.source ? `${escapeHtml(msg.source)}: ` : '';
@@ -633,9 +633,9 @@ export class CommsPanel {
     // Flash border for critical messages (respect enlarged-state cyan border)
     const step = this._currentStep();
     if (this._commsFlashTimer > 0) {
-      this.panels.comms.style.borderColor = 'rgba(255,68,68,0.7)';
+      this.panels.comms.style.borderColor = 'rgb(var(--hud-warning-rgb, 255 68 68) / 0.7)';
     } else if (step !== 'large') {
-      this.panels.comms.style.borderColor = 'rgba(0,255,136,0.3)';
+      this.panels.comms.style.borderColor = 'rgb(var(--hud-normal-rgb, 0 255 136) / 0.3)';
     }
   }
 }

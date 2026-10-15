@@ -456,13 +456,13 @@ export class NextPane {
       #${NEXT_PANE_ID}[${MODE_ATTR}="compact"] .next-row[${FOLDED_ATTR}] { display: none; }
       /* TCA: an active conjunction is advisory amber; tier RED is the critical red and pulses
        * (the red is never the sole channel: the row's text names the threat). */
-      #${NEXT_PANE_ID} .next-row[${TIER_ATTR}="caution"] { color: ${COLORS.CAUTION}; }
-      #${NEXT_PANE_ID} .next-row[${TIER_ATTR}="red"] { color: ${COLORS.THREAT}; animation: next-pulse 1s ease-in-out infinite; }
+      #${NEXT_PANE_ID} .next-row[${TIER_ATTR}="caution"] { color: var(--hud-caution, ${COLORS.CAUTION}); }
+      #${NEXT_PANE_ID} .next-row[${TIER_ATTR}="red"] { color: var(--hud-warning, ${COLORS.THREAT}); animation: next-pulse 1s ease-in-out infinite; }
       /* The change-highlight: a subject change flashes the row once (FLASH_MS). */
       #${NEXT_PANE_ID} .next-row[${CHANGED_ATTR}] { animation: next-flash ${FLASH_MS}ms ease-out 1; }
       #${NEXT_PANE_ID} .next-row[${TIER_ATTR}="red"][${CHANGED_ATTR}] { animation: next-flash ${FLASH_MS}ms ease-out 1, next-pulse 1s ease-in-out infinite; }
       @keyframes next-flash {
-        from { background: rgba(255, 255, 255, 0.22); }
+        from { background: rgb(var(--hud-text-rgb, 255 255 255) / 0.22); }
         to   { background: transparent; }
       }
       @keyframes next-pulse {

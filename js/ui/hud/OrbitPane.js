@@ -585,7 +585,7 @@ export class OrbitPane {
         font-variant-numeric: tabular-nums;
         height: ${G.VALUE_PX}px;
         display: flex; align-items: center;
-        color: ${COLORS.LABEL};
+        color: var(--hud-label, ${COLORS.LABEL});
       }
       #${ORBIT_PANE_ID} .orbit-cell-2 .orbit-value { gap: ${G.CELL_GAP_PX}px; }
       #${ORBIT_PANE_ID} .orbit-cell-2 .orbit-text { flex: 0 0 ${G.CELL_W_PX}px; width: ${G.CELL_W_PX}px; }
@@ -593,7 +593,7 @@ export class OrbitPane {
        * widths are untouched); white-space pre keeps its leading space at a flex line start. */
       #${ORBIT_PANE_ID} .orbit-unit { opacity: 0.6; white-space: pre; }
       #${ORBIT_PANE_ID} .orbit-trend { display: inline-block; width: 1ch; }
-      #${ORBIT_PANE_ID} .orbit-trend[${TREND_ATTR}="down"] { color: ${COLORS.CAUTION}; }
+      #${ORBIT_PANE_ID} .orbit-trend[${TREND_ATTR}="down"] { color: var(--hud-caution, ${COLORS.CAUTION}); }
       /* The change flash (slow slots only): a white BLOOM — a text-shadow glow
        * that fades over CHANGE_FLASH_MS and holds its end state (forwards) until
        * the attribute clears at the next tick. Not a colour change: the values
@@ -601,10 +601,10 @@ export class OrbitPane {
        * what remains under reduced motion (steady for the window, no animation). */
       #${ORBIT_PANE_ID} [${CHANGED_ATTR}] {
         animation: orbit-pane-flash ${CHANGE_FLASH_MS}ms ease-out forwards;
-        text-shadow: 0 0 8px ${COLORS.LABEL}, 0 0 4px ${COLORS.LABEL};
+        text-shadow: 0 0 8px var(--hud-label, ${COLORS.LABEL}), 0 0 4px var(--hud-label, ${COLORS.LABEL});
       }
       @keyframes orbit-pane-flash {
-        from { text-shadow: 0 0 8px ${COLORS.LABEL}, 0 0 4px ${COLORS.LABEL}; }
+        from { text-shadow: 0 0 8px var(--hud-label, ${COLORS.LABEL}), 0 0 4px var(--hud-label, ${COLORS.LABEL}); }
         to   { text-shadow: 0 0 0 transparent; }
       }
       @media (prefers-reduced-motion: reduce) {

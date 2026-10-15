@@ -395,13 +395,13 @@ export class CargoPane {
       }
       #${CARGO_PANE_ID} .cargo-title { font-weight: bold; letter-spacing: 0.08em; }
       #${CARGO_PANE_ID} .cargo-fill { flex: 1 1 auto; text-align: right; }
-      #${CARGO_PANE_ID} .cargo-worth { color: ${VisualLaw.COLORS.VALUE}; }
+      #${CARGO_PANE_ID} .cargo-worth { color: var(--hud-text, ${VisualLaw.COLORS.VALUE}); }
       #${CARGO_PANE_ID} .cargo-elev {
         height: ${G.PROGRESS_PX}px; font-size: 11px; line-height: 14px; opacity: 0.85;
         white-space: nowrap; flex: 0 0 auto;
       }
-      #${CARGO_PANE_ID} .cargo-elev-track { height: 2px; margin-top: 2px; background: rgba(0, 255, 136, 0.15); }
-      #${CARGO_PANE_ID} .cargo-elev-bar { height: 2px; width: 0%; background: ${VisualLaw.COLORS.PLAYER}; }
+      #${CARGO_PANE_ID} .cargo-elev-track { height: 2px; margin-top: 2px; background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.15); }
+      #${CARGO_PANE_ID} .cargo-elev-bar { height: 2px; width: 0%; background: var(--hud-normal, ${VisualLaw.COLORS.PLAYER}); }
       #${CARGO_PANE_ID} .cargo-list {
         flex: 1 1 auto; min-height: 0; margin: ${G.LIST_PAD_PX / 2}px 0;
         overflow-y: auto; overflow-x: hidden;
@@ -414,7 +414,7 @@ export class CargoPane {
       #${CARGO_PANE_ID}.cargo-glass .cargo-row { height: ${G.ROW_GLASS_PX}px; }
       #${CARGO_PANE_ID} .cargo-row-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
       #${CARGO_PANE_ID} .cargo-row-kg { flex: 0 0 64px; text-align: right; }
-      #${CARGO_PANE_ID} .cargo-row-val { flex: 0 0 52px; text-align: right; color: ${VisualLaw.COLORS.VALUE}; }
+      #${CARGO_PANE_ID} .cargo-row-val { flex: 0 0 52px; text-align: right; color: var(--hud-text, ${VisualLaw.COLORS.VALUE}); }
       #${CARGO_PANE_ID} .cargo-empty { height: ${G.ROW_PX}px; line-height: ${G.ROW_PX}px; opacity: 0.5; }
       #${CARGO_PANE_ID}.cargo-glass .cargo-empty { height: ${G.ROW_GLASS_PX}px; line-height: ${G.ROW_GLASS_PX}px; }
       #${CARGO_PANE_ID} .cargo-foot { display: flex; gap: 8px; margin-top: ${G.FOOT_GAP_PX}px; flex: 0 0 auto; }
@@ -424,9 +424,9 @@ export class CargoPane {
         font: bold 11px/1.2 var(--font-mono);
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: ${VisualLaw.COLORS.PLAYER};
-        background: rgba(0, 255, 136, 0.08);
-        border: 1px solid rgba(0, 255, 136, 0.55);
+        color: var(--hud-normal, ${VisualLaw.COLORS.PLAYER});
+        background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.08);
+        border: 1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.55);
         border-radius: 3px;
         padding: 0 10px;
         min-height: ${G.BTN_PX}px;
@@ -440,8 +440,8 @@ export class CargoPane {
         transition: background 0.15s ease, border-color 0.15s ease;
       }
       #${CARGO_PANE_ID}.cargo-glass .cargo-btn { min-height: ${G.BTN_GLASS_PX}px; min-width: 44px; }
-      #${CARGO_PANE_ID} .cargo-btn:hover { background: rgba(0, 255, 136, 0.18); border-color: ${VisualLaw.COLORS.PLAYER}; }
-      #${CARGO_PANE_ID} .cargo-btn:active { background: rgba(0, 255, 136, 0.35); color: ${VisualLaw.COLORS.LABEL}; }
+      #${CARGO_PANE_ID} .cargo-btn:hover { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.18); border-color: var(--hud-normal, ${VisualLaw.COLORS.PLAYER}); }
+      #${CARGO_PANE_ID} .cargo-btn:active { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.35); color: var(--hud-label, ${VisualLaw.COLORS.LABEL}); }
       #${CARGO_PANE_ID} .cargo-btn:focus { outline: none; }
       #${CARGO_PANE_ID} .cargo-btn[aria-disabled="true"] { opacity: 0.35; cursor: default; pointer-events: none; }
       /* Compact: the header line + the two buttons; the progress line and the list fold away. */

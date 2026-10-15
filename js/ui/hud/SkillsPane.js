@@ -447,13 +447,13 @@ export class SkillsPane {
     box-sizing: border-box;
     max-height: ${DISCOVERIES_POPOVER_MAX_PX}px;
     overflow-y: auto;
-    background: rgba(0, 10, 20, 0.85);
-    border: 1px solid rgba(0, 255, 136, 0.25);
+    background: rgb(var(--hud-ink-rgb, 0 10 20) / 0.85);
+    border: 1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.25);
     border-radius: 4px;
     padding: 8px 12px;
     font-family: var(--font-mono);
     font-size: 12px;
-    color: #ccddcc;
+    color: var(--hud-text, #ccddcc);
     z-index: 200;
     pointer-events: auto;
 }
@@ -461,11 +461,11 @@ export class SkillsPane {
 /* ── Compact pane header ───────────────────────────────────────────────── */
 .sp-header {
     padding: 2px 0 6px;
-    border-bottom: 1px solid rgba(0, 255, 136, 0.15);
+    border-bottom: 1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.15);
     margin-bottom: 6px;
     font-size: 11px;
     letter-spacing: 1px;
-    color: #00ff88;
+    color: var(--hud-normal, #00ff88);
     opacity: 0.8;
     user-select: none;
     pointer-events: auto;
@@ -503,10 +503,10 @@ export class SkillsPane {
     flex-shrink: 0;
     opacity: 0.4;
     font-size: 10px;
-    color: #aaa;
+    color: var(--hud-label, #aaa);
 }
 .sp-entry.sp-suggest { opacity: 0.35; }
-.sp-entry.sp-mastered { color: #00ff88; }
+.sp-entry.sp-mastered { color: var(--hud-normal, #00ff88); }
 .sp-entry.sp-mastered-fade {
     transition: opacity 2s ease-out;
     opacity: 0 !important;
@@ -515,7 +515,7 @@ export class SkillsPane {
 /* ── Discovery animation ───────────────────────────────────────────────── */
 @keyframes spPulse {
     0%, 100% { text-shadow: 0 0 0 transparent; }
-    50%      { text-shadow: 0 0 12px var(--tier-color, #00ff88); }
+    50%      { text-shadow: 0 0 12px var(--tier-color, var(--hud-normal, #00ff88)); }
 }
 .sp-entry.sp-pulse {
     animation: spPulse 600ms ease-in-out 2;
@@ -532,7 +532,7 @@ export class SkillsPane {
 .sp-backdrop {
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0, 5, 10, 0.75);
+    background: rgb(var(--hud-ink-rgb, 0 5 10) / 0.75);
     z-index: 9998;
     display: none;
 }
@@ -545,18 +545,18 @@ export class SkillsPane {
     width: 480px;
     max-width: 92vw;
     max-height: 82vh;
-    background: rgba(0, 10, 20, 0.95);
-    border: 1px solid rgba(0, 255, 136, 0.35);
+    background: rgb(var(--hud-ink-rgb, 0 10 20) / 0.95);
+    border: 1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.35);
     border-radius: 6px;
     font-family: var(--font-mono);
     font-size: 12px;
-    color: #ccddcc;
+    color: var(--hud-text, #ccddcc);
     z-index: 9999;
     display: none;
     pointer-events: auto;
     cursor: default;
     overflow: hidden;
-    box-shadow: 0 0 40px rgba(0, 255, 136, 0.08);
+    box-shadow: 0 0 40px rgb(var(--hud-normal-rgb, 0 255 136) / 0.08);
 }
 
 /* ── Expanded header ───────────────────────────────────────────────────── */
@@ -565,19 +565,19 @@ export class SkillsPane {
     justify-content: space-between;
     align-items: center;
     padding: 10px 16px;
-    border-bottom: 1px solid rgba(0, 255, 136, 0.2);
+    border-bottom: 1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.2);
     flex-shrink: 0;
 }
 .sp-ex-back {
     cursor: pointer;
-    color: #00ff88;
+    color: var(--hud-normal, #00ff88);
     font-size: 13px;
     font-weight: bold;
     letter-spacing: 2px;
     user-select: none;
 }
 .sp-ex-back:hover { opacity: 0.7; }
-.sp-ex-count { color: #888; font-size: 11px; }
+.sp-ex-count { color: var(--hud-dim, #888); font-size: 11px; }
 
 /* ── Expanded body (scrollable) ────────────────────────────────────────── */
 .sp-ex-body {
@@ -587,7 +587,7 @@ export class SkillsPane {
     columns: 2;
     column-gap: 20px;
     scrollbar-width: thin;
-    scrollbar-color: rgba(0,255,136,0.2) transparent;
+    scrollbar-color: rgb(var(--hud-normal-rgb, 0 255 136) / 0.2) transparent;
 }
 
 /* ── Category section (break-inside: avoid keeps group in one column) ─── */
@@ -600,7 +600,7 @@ export class SkillsPane {
     letter-spacing: 2px;
     margin-bottom: 4px;
     padding-bottom: 3px;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
+    border-bottom: 1px solid rgb(var(--hud-text-rgb, 255 255 255) / 0.08);
     opacity: 0.85;
     display: flex;
     justify-content: space-between;
@@ -637,14 +637,14 @@ export class SkillsPane {
     flex-shrink: 0;
     opacity: 0.35;
     font-size: 10px;
-    color: #888;
+    color: var(--hud-dim, #888);
 }
 .sp-ex-entry.spe-undiscovered { opacity: 0.30; }
 .sp-ex-entry.spe-discovered   { opacity: 1.0; }
 .sp-ex-entry.spe-practiced    { opacity: 0.75; }
 .sp-ex-entry.spe-mastered     { opacity: 0.5; }
-.sp-ex-entry.spe-mastered .sp-ex-sym { color: #00ff88; }
-.sp-ex-entry.spe-locked       { color: #ff4444; opacity: 0.5; }
+.sp-ex-entry.spe-mastered .sp-ex-sym { color: var(--hud-normal, #00ff88); }
+.sp-ex-entry.spe-locked       { color: var(--hud-warning, #ff4444); opacity: 0.5; }
 
 /* ── Expanded footer ───────────────────────────────────────────────────── */
 .sp-ex-footer {
@@ -652,17 +652,17 @@ export class SkillsPane {
     justify-content: space-between;
     align-items: center;
     padding: 8px 16px;
-    border-top: 1px solid rgba(0, 255, 136, 0.2);
+    border-top: 1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.2);
     font-size: 10px;
     flex-shrink: 0;
 }
-.sp-prog-text { color: #888; }
-.sp-close-hint { color: #555; }
+.sp-prog-text { color: var(--hud-dim, #888); }
+.sp-close-hint { color: var(--hud-dim, #555); }
 
 /* ── New Tech section (Discovery Pane) ─────────────────────────────────── */
 .sp-tech-entry {
     font-size: 11px;
-    color: #00e5ff;
+    color: var(--hud-info, #00e5ff);
     padding: 2px 8px;
     white-space: nowrap;
     overflow: hidden;
@@ -671,14 +671,14 @@ export class SkillsPane {
 }
 .sp-tech-header {
     font-size: 10px;
-    color: #00e5ff;
+    color: var(--hud-info, #00e5ff);
     padding: 4px 8px 2px;
     letter-spacing: 1px;
     text-transform: uppercase;
 }
 .sp-tech-badge {
-    background: #00e5ff;
-    color: #000;
+    background: var(--hud-info, #00e5ff);
+    color: var(--hud-ink, #000);
     border-radius: 8px;
     padding: 0 5px;
     font-size: 9px;
@@ -688,20 +688,20 @@ export class SkillsPane {
 }
 .sp-tech-hint {
     font-size: 9px;
-    color: rgba(136,255,204,0.4);
+    color: rgb(var(--hud-normal-rgb, 136 255 204) / 0.4);
     padding: 2px 8px 4px;
     text-align: right;
 }
 .sp-tech-sep {
     border: none;
-    border-top: 1px solid rgba(0,229,255,0.2);
+    border-top: 1px solid rgb(var(--hud-info-rgb, 0 229 255) / 0.2);
     margin: 4px 0 2px;
 }
 
 /* ── Checklist mode (ST-3.1: NOVICE next-step suggestions) ─────────────── */
 .sp-checklist { padding: 6px 8px; font-family: var(--font-mono); font-size: 11px; }
 .sp-checklist-header {
-    color: #88aabb;
+    color: var(--hud-dim, #88aabb);
     font-size: 10px;
     letter-spacing: 1px;
     margin-bottom: 4px;
@@ -719,38 +719,38 @@ export class SkillsPane {
 }
 .sp-cl-item .sp-cl-mark { text-align: center; font-weight: bold; }
 .sp-cl-item .sp-cl-key {
-    color: #ffaa00;
+    color: var(--hud-caution, #ffaa00);
     font-size: 10px;
     opacity: 0.8;
 }
 .sp-cl-done {
-    color: rgba(140, 220, 160, 0.85);
+    color: rgb(var(--hud-normal-rgb, 140 220 160) / 0.85);
     opacity: 1;
     animation: sp-cl-fade-done 3s ease forwards; /* matches CHECKLIST_DONE_LINGER_MS */
 }
-.sp-cl-done .sp-cl-mark { color: #44ff88; }
+.sp-cl-done .sp-cl-mark { color: var(--hud-normal, #44ff88); }
 @keyframes sp-cl-fade-done {
-    0%   { opacity: 1;   background: rgba(68, 255, 136, 0.15); }
-    80%  { opacity: 1;   background: rgba(68, 255, 136, 0.05); }
+    0%   { opacity: 1;   background: rgb(var(--hud-normal-rgb, 68 255 136) / 0.15); }
+    80%  { opacity: 1;   background: rgb(var(--hud-normal-rgb, 68 255 136) / 0.05); }
     100% { opacity: 0.35; background: transparent; }
 }
 .sp-cl-current {
-    color: var(--tier-color, #44ddff);
+    color: var(--tier-color, var(--hud-info, #44ddff));
     font-weight: 600;
     /* Static current-step affordance: steady accent border + faint tint.
      * The attention pulse plays only on step CHANGE (2 iterations, then
      * settles) — the row is rebuilt each _renderChecklist(), so re-adding
      * the class re-triggers the finite animation naturally. No infinite
      * loop → no perpetual flashing rectangle. */
-    border-left: 2px solid var(--tier-color, #44ddff);
+    border-left: 2px solid var(--tier-color, var(--hud-info, #44ddff));
     padding-left: 4px;
     /* Tint derives from --tier-color so it matches the border on non-cyan
      * tiers (was hardcoded cyan rgba(68,221,255,0.06)). color-mix is safe —
      * Chromium-only app. */
-    background: color-mix(in srgb, var(--tier-color, #44ddff) 8%, transparent);
+    background: color-mix(in srgb, var(--tier-color, var(--hud-info, #44ddff)) 8%, transparent);
     animation: sp-cl-pulse 1.4s ease-in-out 2; /* matches CHECKLIST_PULSE_PERIOD_MS, finite */
 }
-.sp-cl-current .sp-cl-mark { color: var(--tier-color, #44ddff); }
+.sp-cl-current .sp-cl-mark { color: var(--tier-color, var(--hud-info, #44ddff)); }
 @keyframes sp-cl-pulse {
     0%, 100% { opacity: 0.78; }
     50%      { opacity: 1;   }
@@ -759,15 +759,15 @@ export class SkillsPane {
     .sp-cl-current { animation: none; opacity: 1; }
 }
 .sp-cl-upcoming {
-    color: rgba(160, 160, 160, 0.55);
+    color: rgb(var(--hud-label-rgb, 160 160 160) / 0.55);
 }
-.sp-cl-upcoming .sp-cl-mark { color: rgba(120, 120, 120, 0.6); }
+.sp-cl-upcoming .sp-cl-mark { color: rgb(var(--hud-dim-rgb, 120 120 120) / 0.6); }
 .sp-checklist-progress {
     margin-top: 6px;
     padding-top: 4px;
-    border-top: 1px solid rgba(120, 140, 160, 0.2);
+    border-top: 1px solid rgb(var(--hud-dim-rgb, 120 140 160) / 0.2);
     font-size: 10px;
-    color: #789;
+    color: var(--hud-dim, #789);
     text-align: right;
 }
 /* ── ST-3.4: Celebration flash animations ──────────────────────────────── */
@@ -776,7 +776,7 @@ export class SkillsPane {
     animation: sp-flash-mastery 1200ms ease-out;
 }
 @keyframes sp-flash-mastery {
-    0%   { background: rgba(255, 200, 80, 0.55); box-shadow: 0 0 12px rgba(255, 200, 80, 0.6); }
+    0%   { background: rgb(var(--hud-caution-rgb, 255 200 80) / 0.55); box-shadow: 0 0 12px rgb(var(--hud-caution-rgb, 255 200 80) / 0.6); }
     100% { background: transparent; box-shadow: none; }
 }
 `;
@@ -1071,11 +1071,11 @@ export class SkillsPane {
             if (el) {
                 const symEl = el.querySelector('.sp-sym');
                 if (to === MASTERED) {
-                    if (symEl) { symEl.textContent = '✓'; symEl.style.color = '#00ff88'; }
+                    if (symEl) { symEl.textContent = '✓'; symEl.style.color = 'var(--hud-normal, #00ff88)'; }
                     el.classList.add('sp-mastered');
                     // Update label color to green for mastered
                     const lblEl = el.querySelector('.sp-lbl');
-                    if (lblEl) lblEl.style.color = '#00ff88';
+                    if (lblEl) lblEl.style.color = 'var(--hud-normal, #00ff88)';
 
                     // Start mastered-fade timer
                     if (!this._masteredTimers.has(skillId)) {
@@ -1166,7 +1166,7 @@ export class SkillsPane {
         // Sub-header for skills (only if we also have tech to show)
         if (this._recentTech.length > 0) {
             const skillsHdr = document.createElement('div');
-            skillsHdr.style.cssText = 'font-size:10px;color:#00ff88;padding:2px 0 1px;letter-spacing:1px;opacity:0.7;';
+            skillsHdr.style.cssText = 'font-size:10px;color:var(--hud-normal, #00ff88);padding:2px 0 1px;letter-spacing:1px;opacity:0.7;';
             skillsHdr.textContent = 'SKILLS';
             this._paneBody.appendChild(skillsHdr);
         }
@@ -1383,7 +1383,7 @@ export class SkillsPane {
         sym.className = 'sp-sym';
         sym.textContent = isSuggestion ? '○' : (STATE_SYMBOLS[state] || '●');
         if (state === MASTERED) {
-            sym.style.color = '#00ff88';
+            sym.style.color = 'var(--hud-normal, #00ff88)';
         } else if (!isSuggestion) {
             sym.style.color = color;
         }
@@ -1394,7 +1394,7 @@ export class SkillsPane {
         lbl.className = 'sp-lbl';
         lbl.textContent = def ? def.label : skillId;
         if (!isSuggestion) {
-            lbl.style.color = state === MASTERED ? '#00ff88' : color;
+            lbl.style.color = state === MASTERED ? 'var(--hud-normal, #00ff88)' : color;
         }
         entry.appendChild(lbl);
 
@@ -1529,7 +1529,7 @@ export class SkillsPane {
         } else {
             sym.textContent = STATE_SYMBOLS[state] || '○';
             if (state === MASTERED) {
-                sym.style.color = '#00ff88';
+                sym.style.color = 'var(--hud-normal, #00ff88)';
             } else if (state !== UNDISCOVERED) {
                 sym.style.color = tierColor;
             } else {
@@ -1544,7 +1544,7 @@ export class SkillsPane {
         lbl.className = 'sp-ex-lbl';
         lbl.textContent = def.label;
         if (state !== UNDISCOVERED && !isLocked) {
-            lbl.style.color = state === MASTERED ? '#00ff88' : tierColor;
+            lbl.style.color = state === MASTERED ? 'var(--hud-normal, #00ff88)' : tierColor;
         }
         entry.appendChild(lbl);
 
@@ -1588,9 +1588,9 @@ export class SkillsPane {
             } else {
                 // Tier-color flash via inline style + CSS transition
                 const def = this._defMap?.get(skillId);
-                const tierColor = def ? this._getTierColor(def.tier) : '#44ddff';
+                const tierColor = def ? this._getTierColor(def.tier) : 'var(--hud-info, #44ddff)';
                 el.style.transition = 'none';
-                el.style.background = `${tierColor}59`; // hex alpha ≈ 35%
+                el.style.background = `color-mix(in srgb, ${tierColor} 35%, transparent)`; // 35% of the tier colour (tierColor may be a var())
                 void el.offsetWidth;
                 el.style.transition = `background ${dur}ms ease-out`;
                 el.style.background = 'transparent';
@@ -1917,7 +1917,9 @@ export class SkillsPane {
      */
     _getTierColor(tierNum) {
         const tier = this._tiers.find(t => t.tier === tierNum);
-        return tier ? tier.color : '#ccddcc';
+        // Tier colours are identity colours (each tier its own hue), so they stay raw in both looks —
+        // mapping them to roles made tiers 2-4 one cyan (h2 review, 2026-10-15).
+        return tier ? tier.color : 'var(--hud-text, #ccddcc)';
     }
 
     /**

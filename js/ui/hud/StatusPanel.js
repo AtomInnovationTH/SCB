@@ -79,7 +79,7 @@ export function memoTokens(mode, phase) {
 // Shared "net" identity colour. NET reads the same ivory in BOTH the MOTHER
 // digest (lasso ammo) and the DAUGHTERS list (per-unit magazine) so the player
 // learns one colour for "nets". Low/empty still warns amber/red in both.
-const NET_COLOR = '#f0ecd8'; // ivory white
+const NET_COLOR = 'var(--hud-text, #f0ecd8)'; // ivory white
 
 // §11.3 reaction-wheel gauge (DAUGHTER_NET_RECOIL). Fixed 4-entry pip lookup —
 // fill is threshold-relative, so the gauge stays honest if the tuning moves.
@@ -388,7 +388,7 @@ export class StatusPanel {
     // moves `#autopilot-indicator` into the title row's right-hand slot.
     return `${memo ? `
       <span id="autopilot-indicator" class="mother-memo" style="font-size:10px;letter-spacing:0.08em;color:var(--hud-normal, ${VisualLaw.COLORS.PLAYER});opacity:1;white-space:nowrap;"></span>` : `
-      <div id="autopilot-indicator" style="font-size:10px;padding:2px 6px;border-radius:2px;display:inline-block;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);color:var(--hud-dim, #555);">[Autopilot: OFF]</div>`}
+      <div id="autopilot-indicator" style="font-size:10px;padding:2px 6px;border-radius:2px;display:inline-block;background:rgb(var(--hud-ink-rgb, 0 0 0) / 0.4);border:1px solid rgb(var(--hud-text-rgb, 255 255 255) / 0.1);color:var(--hud-dim, #555);">[Autopilot: OFF]</div>`}
       <div id="mother-digest" style="font-size:11px;line-height:1.4;white-space:nowrap;display:flex;align-items:center;gap:6px;transition:opacity 0.3s ease;">
         <span id="mother-digest-net" class="md-seg" style="display:inline-flex;align-items:center;gap:4px;color:${NET_COLOR};">
           <span class="md-core">
@@ -411,66 +411,66 @@ export class StatusPanel {
       <div class="mother-detail">
         <div class="mother-block mother-block-propulsion" data-hud-group="fuel-group" data-activate-key="A">
       <div class="panel-full-content">
-        <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#00ff88;opacity:0.7;">PROPULSION</div>
+        <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:var(--hud-normal, #00ff88);opacity:0.7;">PROPULSION</div>
         <div id="mpd-lithium-row" class="hud-resource-row" style="display:none;">
-          <span style="color:#88ccff;">Li</span>
-          <div class="hud-bar-track"><div class="hud-bar-fill" id="hud-bar-lithium" style="width:0%;background-color:#88ccff;"></div></div>
-          <span id="hud-val-lithium" style="width:36px;text-align:right;color:#88ccff;">0</span>
+          <span style="color:var(--hud-info, #88ccff);">Li</span>
+          <div class="hud-bar-track"><div class="hud-bar-fill" id="hud-bar-lithium" style="width:0%;background-color:var(--hud-info, #88ccff);"></div></div>
+          <span id="hud-val-lithium" style="width:36px;text-align:right;color:var(--hud-info, #88ccff);">0</span>
         </div>
-        <div id="mpd-cathode-row" style="display:none;font-size:10px;color:#aaa;margin-top:1px;margin-bottom:2px;">
-          <span title="MPD engine wear indicator">CATHODE:</span> <span id="hud-cathode-health" style="color:#88ccff;">100%</span>
+        <div id="mpd-cathode-row" style="display:none;font-size:10px;color:var(--hud-label, #aaa);margin-top:1px;margin-bottom:2px;">
+          <span title="MPD engine wear indicator">CATHODE:</span> <span id="hud-cathode-health" style="color:var(--hud-info, #88ccff);">100%</span>
           <span id="hud-cathode-time" style="opacity:0.5;margin-left:4px;">(0s/600s)</span>
         </div>
         <div id="mpd-burst-row" style="display:none;font-size:10px;margin-top:2px;margin-bottom:2px;">
           <div style="display:flex;align-items:center;gap:4px;">
-            <span id="mpd-burst-label" style="color:#ff44ff;font-weight:bold;">MPD</span>
-            <span id="mpd-burst-status" style="color:#ff44ff;">ARMED</span>
+            <span id="mpd-burst-label" style="color:var(--hud-target, #ff44ff);font-weight:bold;">MPD</span>
+            <span id="mpd-burst-status" style="color:var(--hud-target, #ff44ff);">ARMED</span>
           </div>
           <div id="mpd-heat-row" style="display:flex;align-items:center;gap:4px;margin-top:2px;">
-            <span style="color:#666;font-size:9px;">HEAT</span>
-            <div style="flex:1;height:6px;background:rgba(0,0,0,0.5);border:1px solid rgba(255,68,255,0.3);border-radius:2px;overflow:hidden;">
-              <div id="mpd-heat-bar" style="height:100%;width:0%;background:#44ff44;transition:width 0.2s ease;"></div>
+            <span style="color:var(--hud-dim, #666);font-size:9px;">HEAT</span>
+            <div style="flex:1;height:6px;background:rgb(var(--hud-ink-rgb, 0 0 0) / 0.5);border:1px solid rgb(var(--hud-target-rgb, 255 68 255) / 0.3);border-radius:2px;overflow:hidden;">
+              <div id="mpd-heat-bar" style="height:100%;width:0%;background:var(--hud-normal, #44ff44);transition:width 0.2s ease;"></div>
             </div>
-            <span id="mpd-heat-val" style="width:30px;text-align:right;color:#888;font-size:9px;">0%</span>
+            <span id="mpd-heat-val" style="width:30px;text-align:right;color:var(--hud-dim, #888);font-size:9px;">0%</span>
           </div>
         </div>
-        <div id="fuel-type-indicator" style="font-size:10px;color:#4fc3f7;margin-top:2px;margin-bottom:2px">
+        <div id="fuel-type-indicator" style="font-size:10px;color:var(--hud-info, #4fc3f7);margin-top:2px;margin-bottom:2px">
           Xenon · ${Constants.OCTOPUS_CORE_HALL_ISP}s
         </div>
         <div id="throttle-gauge" style="display:none;align-items:center;gap:4px;font-size:10px;margin-bottom:4px;">
-          <span style="color:#00ff88;opacity:0.7;">Throttle</span>
-          <div style="flex:1;height:8px;background:rgba(0,0,0,0.5);border:1px solid rgba(0,255,136,0.3);border-radius:2px;overflow:hidden;position:relative;">
-            <div id="throttle-bar-fill" style="height:100%;width:100%;background:#00ff88;transition:width 0.15s ease;"></div>
+          <span style="color:var(--hud-normal, #00ff88);opacity:0.7;">Throttle</span>
+          <div style="flex:1;height:8px;background:rgb(var(--hud-ink-rgb, 0 0 0) / 0.5);border:1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.3);border-radius:2px;overflow:hidden;position:relative;">
+            <div id="throttle-bar-fill" style="height:100%;width:100%;background:var(--hud-normal, #00ff88);transition:width 0.15s ease;"></div>
           </div>
-          <span id="throttle-val" style="width:30px;text-align:right;color:#00ff88;font-weight:bold;">100%</span>
+          <span id="throttle-val" style="width:30px;text-align:right;color:var(--hud-normal, #00ff88);font-weight:bold;">100%</span>
         </div>
         <div id="com-drift-row" style="display:none;font-size:10px;margin-top:3px;margin-bottom:2px;">
-          <span style="opacity:0.7;">CoM Δ: </span><span id="com-drift-val" style="font-weight:bold;color:#00ff88;">0.000 m</span>
-          <span id="com-stow-hint" style="display:none;color:#ffaa00;margin-left:4px;font-size:11px;"></span>
+          <span style="opacity:0.7;">CoM Δ: </span><span id="com-drift-val" style="font-weight:bold;color:var(--hud-normal, #00ff88);">0.000 m</span>
+          <span id="com-stow-hint" style="display:none;color:var(--hud-caution, #ffaa00);margin-left:4px;font-size:11px;"></span>
         </div>
         <div id="att-rate-row" style="display:none;font-size:10px;margin-top:1px;margin-bottom:2px;">
-          <span style="opacity:0.7;">Rate: </span><span id="att-rate-val" style="font-weight:bold;color:#00ff88;">P 0.0°/s · Y 0.0°/s · R 0.0°/s</span>
+          <span style="opacity:0.7;">Rate: </span><span id="att-rate-val" style="font-weight:bold;color:var(--hud-normal, #00ff88);">P 0.0°/s · Y 0.0°/s · R 0.0°/s</span>
         </div>
-        <div id="cargo-summary" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;color:#666;display:none;"></div>
+        <div id="cargo-summary" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;color:var(--hud-dim, #666);display:none;"></div>
         <div id="forge-inline" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;display:none;">
           <div style="display:flex;align-items:center;gap:4px;">
-            <span style="color:#666;">[F] Forge:</span>
-            <span id="forge-inline-status" style="color:#666;">Idle</span>
+            <span style="color:var(--hud-dim, #666);">[F] Forge:</span>
+            <span id="forge-inline-status" style="color:var(--hud-dim, #666);">Idle</span>
           </div>
           <div id="forge-progress-inline" style="display:none;margin-top:2px;">
-            <div style="position:relative;width:100%;height:10px;background:rgba(0,0,0,0.5);
-                 border:1px solid rgba(0,255,136,0.3);border-radius:2px;overflow:hidden;">
+            <div style="position:relative;width:100%;height:10px;background:rgb(var(--hud-ink-rgb, 0 0 0) / 0.5);
+                 border:1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.3);border-radius:2px;overflow:hidden;">
               <div id="forge-inline-bar" style="height:100%;width:0%;transition:width 0.3s ease;"></div>
             </div>
             <div style="display:flex;justify-content:space-between;margin-top:1px;">
-              <span id="forge-inline-batch" style="font-size:10px;color:#888;"></span>
-              <span id="forge-inline-pct" style="font-size:10px;color:#888;"></span>
+              <span id="forge-inline-batch" style="font-size:10px;color:var(--hud-dim, #888);"></span>
+              <span id="forge-inline-pct" style="font-size:10px;color:var(--hud-dim, #888);"></span>
             </div>
           </div>
-          <div id="forge-hint" style="display:none;font-size:10px;color:#ffaa00;margin-top:1px;"></div>
+          <div id="forge-hint" style="display:none;font-size:10px;color:var(--hud-caution, #ffaa00);margin-top:1px;"></div>
         </div>
         <div class="panel-expand-section propulsion-expand">
-          <div style="font-size:10px;margin-top:6px;padding-top:4px;color:#4488ff;opacity:0.7;" title="Fuel mass breakdown (Tsiolkovsky)">MASS BUDGET</div>
+          <div style="font-size:10px;margin-top:6px;padding-top:4px;color:var(--hud-info, #4488ff);opacity:0.7;" title="Fuel mass breakdown (Tsiolkovsky)">MASS BUDGET</div>
           <div id="hud-mass-budget" style="font-size:10px;line-height:1.5;">
             <span style="opacity:0.5">Computing…</span>
           </div>
@@ -479,46 +479,46 @@ export class StatusPanel {
         </div>
         <div class="mother-block mother-block-energy" id="hud-power-panel" data-hud-group="power-group">
       <div class="panel-full-content">
-        <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#00ff88;opacity:0.7;display:flex;justify-content:space-between;align-items:center;">
+        <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:var(--hud-normal, #00ff88);opacity:0.7;display:flex;justify-content:space-between;align-items:center;">
           <span>POWER SPLIT</span>
           <span id="power-collapse-indicator" style="font-size:10px;opacity:0.4;transition:transform 0.2s;">▸</span>
         </div>
         <div id="hud-power-bars" style="font-size:10px;line-height:1.6;transition:max-height 0.2s ease,opacity 0.2s ease;overflow:hidden;">
           <div class="hud-power-row" data-bus="thrust" style="margin:2px 0;">
             <div style="display:flex;align-items:center;gap:4px;">
-              <span class="power-label" style="width:52px;color:#00ff88;">Thrust</span>
-              <div style="flex:1;height:10px;background:rgba(0,0,0,0.5);border:1px solid rgba(0,255,136,0.3);border-radius:2px;overflow:hidden;">
-                <div id="hud-power-bar-thrust" style="height:100%;width:40%;background:#00ff88;transition:width 0.2s ease;"></div>
+              <span class="power-label" style="width:52px;color:var(--hud-normal, #00ff88);">Thrust</span>
+              <div style="flex:1;height:10px;background:rgb(var(--hud-ink-rgb, 0 0 0) / 0.5);border:1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.3);border-radius:2px;overflow:hidden;">
+                <div id="hud-power-bar-thrust" style="height:100%;width:40%;background:var(--hud-normal, #00ff88);transition:width 0.2s ease;"></div>
               </div>
               <span class="power-value" id="hud-power-val-thrust" style="width:28px;text-align:right;font-size:10px;">40%</span>
             </div>
           </div>
           <div class="hud-power-row" data-bus="sensors" style="margin:2px 0;">
             <div style="display:flex;align-items:center;gap:4px;">
-              <span class="power-label" style="width:52px;color:#4488ff;">Sensors</span>
-              <div style="flex:1;height:10px;background:rgba(0,0,0,0.5);border:1px solid rgba(0,255,136,0.3);border-radius:2px;overflow:hidden;">
-                <div id="hud-power-bar-sensors" style="height:100%;width:30%;background:#4488ff;transition:width 0.2s ease;"></div>
+              <span class="power-label" style="width:52px;color:var(--hud-info, #4488ff);">Sensors</span>
+              <div style="flex:1;height:10px;background:rgb(var(--hud-ink-rgb, 0 0 0) / 0.5);border:1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.3);border-radius:2px;overflow:hidden;">
+                <div id="hud-power-bar-sensors" style="height:100%;width:30%;background:var(--hud-info, #4488ff);transition:width 0.2s ease;"></div>
               </div>
               <span class="power-value" id="hud-power-val-sensors" style="width:28px;text-align:right;font-size:10px;">30%</span>
             </div>
           </div>
           <div class="hud-power-row" data-bus="arms" style="margin:2px 0;">
             <div style="display:flex;align-items:center;gap:4px;">
-              <span class="power-label" style="width:52px;color:#00ff88;">Daughters</span>
-              <div style="flex:1;height:10px;background:rgba(0,0,0,0.5);border:1px solid rgba(0,255,136,0.3);border-radius:2px;overflow:hidden;">
-                <div id="hud-power-bar-arms" style="height:100%;width:30%;background:#00ff88;transition:width 0.2s ease;"></div>
+              <span class="power-label" style="width:52px;color:var(--hud-normal, #00ff88);">Daughters</span>
+              <div style="flex:1;height:10px;background:rgb(var(--hud-ink-rgb, 0 0 0) / 0.5);border:1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.3);border-radius:2px;overflow:hidden;">
+                <div id="hud-power-bar-arms" style="height:100%;width:30%;background:var(--hud-normal, #00ff88);transition:width 0.2s ease;"></div>
               </div>
               <span class="power-value" id="hud-power-val-arms" style="width:28px;text-align:right;font-size:10px;">30%</span>
             </div>
           </div>
         </div>
-        <div class="energy-hint" style="font-size:10px;opacity:0;margin-top:3px;border-top:1px solid rgba(0,255,136,0.1);padding-top:3px;">
+        <div class="energy-hint" style="font-size:10px;opacity:0;margin-top:3px;border-top:1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.1);padding-top:3px;">
           ⇧1-3: select · [ ] ±10%
           </div>
         </div>
         </div>
         <div class="mother-block mother-block-thermal" id="hud-thermal-panel" data-hud-group="thermal-group" style="display:none;">
-          <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#a3d9c9;opacity:0.7;">THERMAL</div>
+          <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:var(--hud-normal, #a3d9c9);opacity:0.7;">THERMAL</div>
           <div id="hud-thermal-flower" style="font-size:10px;line-height:1.5;"></div>
         </div>
       </div>
@@ -582,14 +582,14 @@ export class StatusPanel {
       <div style="display:flex;align-items:center;gap:14px;white-space:nowrap;line-height:1;">
         <div style="display:flex;align-items:baseline;gap:7px;">
           <span style="font-size:10px;letter-spacing:2px;opacity:0.7;text-transform:uppercase;">Cleared</span>
-          <span style="font-size:18px;font-weight:bold;letter-spacing:1px;color:#00ff88;text-shadow:0 0 6px rgba(0,255,136,0.45);">
+          <span style="font-size:18px;font-weight:bold;letter-spacing:1px;color:var(--hud-normal, #00ff88);text-shadow:0 0 6px rgb(var(--hud-normal-rgb, 0 255 136) / 0.45);">
             <b id="hud-cleared">0</b><span style="opacity:0.5;font-weight:normal;font-size:13px;">/${Constants.WIN_DEBRIS_COUNT}</span>
           </span>
-          <span id="hud-cleared-track" style="width:42px;height:3px;background:rgba(0,255,136,0.2);border-radius:2px;overflow:hidden;align-self:center;">
-            <span id="hud-cleared-fill" style="display:block;width:0%;height:100%;background:#00ff88;transition:width 0.4s ease;"></span>
+          <span id="hud-cleared-track" style="width:42px;height:3px;background:rgb(var(--hud-normal-rgb, 0 255 136) / 0.2);border-radius:2px;overflow:hidden;align-self:center;">
+            <span id="hud-cleared-fill" style="display:block;width:0%;height:100%;background:var(--hud-normal, #00ff88);transition:width 0.4s ease;"></span>
           </span>
         </div>
-        <span style="color:${VisualLaw.COLORS.VALUE};font-size:12px;font-weight:bold;opacity:0.85;font-variant-numeric:tabular-nums;"><b id="hud-credits">0</b> cr</span>
+        <span style="color:var(--hud-text, ${VisualLaw.COLORS.VALUE});font-size:12px;font-weight:bold;opacity:0.85;font-variant-numeric:tabular-nums;"><b id="hud-credits">0</b> cr</span>
       </div>
     `;
 
@@ -647,11 +647,11 @@ export class StatusPanel {
     // status + fuel). No hover layer / no resize badge — the selected daughter
     // highlights and shows the single action it can take right now.
     this.panels.arms.innerHTML = `
-      <div class="pane-title" id="fleet-header" style="font-size:11px;margin-bottom:3px;color:#00ff88;opacity:0.7;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;">
+      <div class="pane-title" id="fleet-header" style="font-size:11px;margin-bottom:3px;color:var(--hud-normal, #00ff88);opacity:0.7;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;">
         <span>DAUGHTERS</span>
         <span id="fleet-select-hint" style="font-weight:normal;letter-spacing:normal;font-size:10px;opacity:0.4;white-space:nowrap;">select 1–4</span>
         <span id="hud-arm-tier" title="Current daughter configuration tier"
-              style="display:none;color:#ff8800;font-weight:normal;letter-spacing:0.05em;font-size:10px;">Y0 Quad. 4 daughters</span>
+              style="display:none;color:var(--hud-caution, #ff8800);font-weight:normal;letter-spacing:0.05em;font-size:10px;">Y0 Quad. 4 daughters</span>
       </div>
       <div id="hud-arms-status" style="font-size:11px;line-height:1.6;">
         <span style="opacity:0.5">Initializing daughter fleet…</span>
@@ -889,11 +889,11 @@ export class StatusPanel {
 
       // Color coding: green (balanced) → amber (drift) → red (warning)
       if (drift >= threshold) {
-        comVal.style.color = '#ff4444'; // red
+        comVal.style.color = 'var(--hud-warning, #ff4444)'; // red
       } else if (drift >= balanced) {
-        comVal.style.color = '#ffaa00'; // amber
+        comVal.style.color = 'var(--hud-caution, #ffaa00)'; // amber
       } else {
-        comVal.style.color = '#00ff88'; // green
+        comVal.style.color = 'var(--hud-normal, #00ff88)'; // green
       }
 
       // Stow suggestion hint
@@ -943,7 +943,7 @@ export class StatusPanel {
     if (!show) return;
 
     val.textContent = `P ${r.pitch.toFixed(1)}°/s · Y ${r.yaw.toFixed(1)}°/s · R ${r.roll.toFixed(1)}°/s`;
-    val.style.color = maxAbs >= capDeg * 0.9 ? '#ffaa00' : '#00ff88';
+    val.style.color = maxAbs >= capDeg * 0.9 ? 'var(--hud-caution, #ffaa00)' : 'var(--hud-normal, #00ff88)';
   }
 
   /**
@@ -967,7 +967,7 @@ export class StatusPanel {
     const ammo = this._lassoAmmo ?? Constants.LASSO_AMMO_MAX;
     const ammoMax = this._lassoAmmoMax ?? Constants.LASSO_AMMO_MAX;
     const pct = ammoMax > 0 ? Math.max(0, Math.min(100, (ammo / ammoMax) * 100)) : 0;
-    let color = ammo <= 5 ? '#ff4444' : ammo <= 10 ? '#ffaa00' : NET_COLOR;
+    let color = ammo <= 5 ? 'var(--hud-warning, #ff4444)' : ammo <= 10 ? 'var(--hud-caution, #ffaa00)' : NET_COLOR;
 
     // Reload state — resolve the ~2s cooldown window (auto-clear when elapsed).
     let remaining = 0;
@@ -980,7 +980,7 @@ export class StatusPanel {
     // Denied flash (300ms) overrides the tier color with a red pulse.
     const deniedAge = this._lassoDeniedFlash ? (Date.now() - this._lassoDeniedFlash) / 1000 : 999;
     const denied = deniedAge < 0.3;
-    if (denied) color = '#ff4444';
+    if (denied) color = 'var(--hud-warning, #ff4444)';
 
     fill.style.width = `${pct}%`;
     fill.style.backgroundColor = color;
@@ -1038,8 +1038,8 @@ export class StatusPanel {
       ? this._motherPodsMax.reduce((a, b) => a + (b || 0), 0)
       : perLauncher * this._motherPods.length;
 
-    const color = nets <= 0 ? '#ff4444'
-      : (maxNets > 0 && nets <= maxNets * 0.5) ? '#ffaa00' : NET_COLOR;
+    const color = nets <= 0 ? 'var(--hud-warning, #ff4444)'
+      : (maxNets > 0 && nets <= maxNets * 0.5) ? 'var(--hud-caution, #ffaa00)' : NET_COLOR;
 
     seg.style.display = 'inline-flex';
     if (sep) sep.style.display = '';
@@ -1059,7 +1059,7 @@ export class StatusPanel {
       : 0;
     if (cd > 0) {
       count.textContent = `${nets}/${maxNets} ·${Math.ceil(cd)}s`;
-      count.style.color = '#ffaa00';
+      count.style.color = 'var(--hud-caution, #ffaa00)';
     }
 
     // §8 A2 launcher-state indicator: a mated catch holds the collar station
@@ -1080,13 +1080,13 @@ export class StatusPanel {
     if (docked && collarCook) {
       const pct = Math.round(Math.min(1, Math.max(0, collarCook.frac || 0)) * 100);
       count.textContent = `${nets}/${maxNets} COOK ${pct}%`;
-      count.style.color = '#ff9800';   // the forge panel's MELT — furnace language
+      count.style.color = 'var(--hud-caution, #ff9800)';   // the forge panel's MELT — furnace language
       seg.title = (collarCook.sunScale ?? 1.0) < 1
         ? `Solar furnace cooking the catch — ${pct}% · eclipse: embers until dawn · [K] jettison`
         : `Solar furnace cooking the catch — ${pct}% · [K] jettison`;
     } else if (docked) {
       count.textContent = `${nets}/${maxNets} BERTHED`;
-      count.style.color = '#66ddff';
+      count.style.color = 'var(--hud-info, #66ddff)';
       seg.title = 'Catch mated at the collar — [K] jettison';
     } else {
       seg.title = 'Mother Large Net (whale hunts)';
@@ -1124,8 +1124,8 @@ export class StatusPanel {
       // Credit flash — bright yellow pulse when credits increase
       if (this._lastCredits !== undefined && data.credits > this._lastCredits) {
         creditsEl.style.transition = 'none';
-        creditsEl.style.color = '#ffff00';
-        creditsEl.style.textShadow = '0 0 10px #ffaa00';
+        creditsEl.style.color = 'var(--hud-caution, #ffff00)';
+        creditsEl.style.textShadow = '0 0 10px var(--hud-caution, #ffaa00)';
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             creditsEl.style.transition = 'color 0.8s ease-out, text-shadow 0.8s ease-out';
@@ -1180,7 +1180,7 @@ export class StatusPanel {
       // ship's Hall thruster, OCTOPUS_CORE_HALL_ISP); cargo fuels keep their FUELS isp.
       const isp = fuelData.fuelId === 'xenon' ? Constants.OCTOPUS_CORE_HALL_ISP : fuelData.isp;
       el.textContent = `${fuelData.name} · ${isp}s`;
-      el.style.color = fuelData.color || '#4fc3f7';
+      el.style.color = fuelData.color || 'var(--hud-info, #4fc3f7)';
     }
   }
 
@@ -1197,9 +1197,9 @@ export class StatusPanel {
     if (bar) {
       bar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
       // Color: silver-blue at normal, amber at low, red at critical
-      if (pct > 30) bar.style.backgroundColor = '#88ccff';
-      else if (pct > 15) bar.style.backgroundColor = '#ffaa00';
-      else bar.style.backgroundColor = '#ff4444';
+      if (pct > 30) bar.style.backgroundColor = 'var(--hud-info, #88ccff)';
+      else if (pct > 15) bar.style.backgroundColor = 'var(--hud-caution, #ffaa00)';
+      else bar.style.backgroundColor = 'var(--hud-warning, #ff4444)';
     }
     if (val) val.textContent = `${Math.round(current)}/${max}`;
   }
@@ -1218,9 +1218,9 @@ export class StatusPanel {
       const healthPct = Math.round((cathodeHealth ?? 1) * 100);
       healthEl.textContent = `${healthPct}%`;
       // Color by health
-      if (healthPct > 50) healthEl.style.color = '#88ccff';
-      else if (healthPct > 0) healthEl.style.color = '#ffaa00';
-      else healthEl.style.color = '#ff4444';
+      if (healthPct > 50) healthEl.style.color = 'var(--hud-info, #88ccff)';
+      else if (healthPct > 0) healthEl.style.color = 'var(--hud-caution, #ffaa00)';
+      else healthEl.style.color = 'var(--hud-warning, #ff4444)';
     }
     if (timeEl) {
       timeEl.textContent = `(${Math.round(cathodeTime)}s/${cathodeLife}s)`;
@@ -1256,25 +1256,25 @@ export class StatusPanel {
     if (statusEl) {
       if (cooldown > 0) {
         statusEl.textContent = `COOLING ${Math.ceil(cooldown)}s`;
-        statusEl.style.color = '#ff6600';
+        statusEl.style.color = 'var(--hud-warning, #ff6600)';
       } else if (armed && degraded) {
         statusEl.textContent = 'DEGRADED';
-        statusEl.style.color = '#ffaa00';
+        statusEl.style.color = 'var(--hud-caution, #ffaa00)';
       } else if (armed) {
         statusEl.textContent = 'ARMED';
-        statusEl.style.color = '#ff44ff';
+        statusEl.style.color = 'var(--hud-target, #ff44ff)';
         // Calm-HUD: steady — the magenta ARMED label already carries the state
         // (the old per-frame opacity strobe was the same class of infinite DOM
         // blink the Phase 1 pass removed from the CSS layer).
         statusEl.style.opacity = 1;
       } else {
         statusEl.textContent = 'STANDBY';
-        statusEl.style.color = '#888';
+        statusEl.style.color = 'var(--hud-dim, #888)';
         statusEl.style.opacity = 1;
       }
     }
     if (labelEl) {
-      labelEl.style.color = armed ? '#ff44ff' : (cooldown > 0 ? '#ff6600' : '#888');
+      labelEl.style.color = armed ? 'var(--hud-target, #ff44ff)' : (cooldown > 0 ? 'var(--hud-warning, #ff6600)' : 'var(--hud-dim, #888)');
     }
 
     // Update heat bar
@@ -1284,9 +1284,9 @@ export class StatusPanel {
       const pct = Math.min(100, heatFraction * 100);
       heatBar.style.width = `${pct}%`;
       // Color by heat level: green → amber → red
-      if (pct < 50) heatBar.style.background = '#44ff44';
-      else if (pct < 80) heatBar.style.background = '#ffaa00';
-      else heatBar.style.background = '#ff4444';
+      if (pct < 50) heatBar.style.background = 'var(--hud-normal, #44ff44)';
+      else if (pct < 80) heatBar.style.background = 'var(--hud-caution, #ffaa00)';
+      else heatBar.style.background = 'var(--hud-warning, #ff4444)';
     }
     if (heatVal) {
       heatVal.textContent = `${Math.round(heatFraction * 100)}%`;
@@ -1317,14 +1317,14 @@ export class StatusPanel {
 
     // Color: green at high, amber at mid, red at zero
     if (pct > 50) {
-      fill.style.backgroundColor = '#00ff88';
-      val.style.color = '#00ff88';
+      fill.style.backgroundColor = 'var(--hud-normal, #00ff88)';
+      val.style.color = 'var(--hud-normal, #00ff88)';
     } else if (pct > 0) {
-      fill.style.backgroundColor = '#ffaa00';
-      val.style.color = '#ffaa00';
+      fill.style.backgroundColor = 'var(--hud-caution, #ffaa00)';
+      val.style.color = 'var(--hud-caution, #ffaa00)';
     } else {
-      fill.style.backgroundColor = '#ff4444';
-      val.style.color = '#ff4444';
+      fill.style.backgroundColor = 'var(--hud-warning, #ff4444)';
+      val.style.color = 'var(--hud-warning, #ff4444)';
     }
   }
 
@@ -1355,9 +1355,9 @@ export class StatusPanel {
     if (this._autopilotMode === 'OFF') {
       if (el) {
         el.textContent = '[Autopilot: OFF]';
-        el.style.color = '#555';
-        el.style.borderColor = 'rgba(255,255,255,0.1)';
-        el.style.background = 'rgba(0,0,0,0.4)';
+        el.style.color = 'var(--hud-dim, #555)';
+        el.style.borderColor = 'rgb(var(--hud-text-rgb, 255 255 255) / 0.1)';
+        el.style.background = 'rgb(var(--hud-ink-rgb, 0 0 0) / 0.4)';
       }
     } else {
       const fullLabel = phaseLabel
@@ -1365,9 +1365,9 @@ export class StatusPanel {
         : `[Autopilot: ${this._autopilotMode}]`;
       if (el) {
         el.textContent = fullLabel;
-        el.style.color = '#00ff88';
-        el.style.borderColor = 'rgba(0,255,136,0.5)';
-        el.style.background = 'rgba(0,255,136,0.08)';
+        el.style.color = 'var(--hud-normal, #00ff88)';
+        el.style.borderColor = 'rgb(var(--hud-normal-rgb, 0 255 136) / 0.5)';
+        el.style.background = 'rgb(var(--hud-normal-rgb, 0 255 136) / 0.08)';
       }
     }
   }
@@ -1434,9 +1434,9 @@ export class StatusPanel {
     if (bar) {
       bar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
       // Color: green → amber → red
-      if (pct > 30) bar.style.backgroundColor = '#00ff88';
-      else if (pct > 15) bar.style.backgroundColor = '#ffaa00';
-      else bar.style.backgroundColor = '#ff4444';
+      if (pct > 30) bar.style.backgroundColor = 'var(--hud-normal, #00ff88)';
+      else if (pct > 15) bar.style.backgroundColor = 'var(--hud-caution, #ffaa00)';
+      else bar.style.backgroundColor = 'var(--hud-warning, #ff4444)';
     }
     if (val) val.textContent = text;
   }
@@ -1448,8 +1448,8 @@ export class StatusPanel {
       style.id = 'power-pulse-style';
       style.textContent = `
         .hud-power-row[data-selected="true"] {
-          background: rgba(0,255,136,0.08);
-          border-left: 2px solid #00ff88;
+          background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.08);
+          border-left: 2px solid var(--hud-normal, #00ff88);
           padding-left: 2px;
         }
         .hud-power-row[data-selected="false"] {
@@ -1479,7 +1479,7 @@ export class StatusPanel {
         border-radius: 2px;
         overflow: hidden;
         display: inline-block;
-        background: rgba(255, 255, 255, 0.12);
+        background: rgb(var(--hud-text-rgb, 255 255 255) / 0.12);
       }
       #mother-digest .md-fill {
         display: block;
@@ -1528,9 +1528,9 @@ export class StatusPanel {
         font: bold 11px/1.2 var(--font-mono);
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: ${VisualLaw.COLORS.SELECTION};
-        background: rgba(68, 136, 255, 0.08);
-        border: 1px solid rgba(68, 136, 255, 0.55);
+        color: var(--hud-info, ${VisualLaw.COLORS.SELECTION});
+        background: rgb(var(--hud-info-rgb, 68 136 255) / 0.08);
+        border: 1px solid rgb(var(--hud-info-rgb, 68 136 255) / 0.55);
         border-radius: 3px;
         padding: 3px 10px;
         margin: 0 6px 0 0;
@@ -1555,16 +1555,16 @@ export class StatusPanel {
         box-sizing: border-box;
       }
       #hud-arms-status .fleet-btn:hover {
-        background: rgba(68, 136, 255, 0.18);
-        border-color: ${VisualLaw.COLORS.SELECTION};
+        background: rgb(var(--hud-info-rgb, 68 136 255) / 0.18);
+        border-color: var(--hud-info, ${VisualLaw.COLORS.SELECTION});
       }
       #hud-arms-status .fleet-btn:active {
-        background: rgba(68, 136, 255, 0.35);
-        color: ${VisualLaw.COLORS.LABEL};
+        background: rgb(var(--hud-info-rgb, 68 136 255) / 0.35);
+        color: var(--hud-label, ${VisualLaw.COLORS.LABEL});
       }
       #hud-arms-status .fleet-btn:focus { outline: none; }
       #hud-arms-status .fleet-row-tap:hover {
-        background: rgba(68, 136, 255, 0.05);
+        background: rgb(var(--hud-info-rgb, 68 136 255) / 0.05);
       }
     `;
     document.head.appendChild(style);
@@ -1749,7 +1749,7 @@ export class StatusPanel {
     this._lastPowerState = stateKey;
 
     const buses = ['thrust', 'sensors', 'arms'];
-    const colors = { thrust: '#00ff88', sensors: '#4488ff', arms: '#00ff88' };
+    const colors = { thrust: 'var(--hud-normal, #00ff88)', sensors: 'var(--hud-info, #4488ff)', arms: 'var(--hud-normal, #00ff88)' };
 
     for (const bus of buses) {
       const bar = document.getElementById(`hud-power-bar-${bus}`);
@@ -1789,8 +1789,8 @@ export class StatusPanel {
     if (!el || !this._armManager) return;
 
     const mb = this._armManager.getMassBudget();
-    const xeColor = mb.xenonCurrent > mb.xenonMax * 0.5 ? '#00ff88' :
-                     mb.xenonCurrent > mb.xenonMax * 0.2 ? '#ffaa00' : '#ff4444';
+    const xeColor = mb.xenonCurrent > mb.xenonMax * 0.5 ? 'var(--hud-normal, #00ff88)' :
+                     mb.xenonCurrent > mb.xenonMax * 0.2 ? 'var(--hud-caution, #ffaa00)' : 'var(--hud-warning, #ff4444)';
 
     el.innerHTML = `
       <div style="display:flex;justify-content:space-between;opacity:0.7;">
@@ -1806,7 +1806,7 @@ export class StatusPanel {
         <span>${mb.wetMass} kg</span>
       </div>
       ${mb.cargoMass > 0 ? `
-      <div style="display:flex;justify-content:space-between;color:#ffaa00;">
+      <div style="display:flex;justify-content:space-between;color:var(--hud-caution, #ffaa00);">
         <span>Cargo:</span>
         <span>+${mb.cargoMass} kg</span>
       </div>` : ''}
@@ -1870,11 +1870,11 @@ export class StatusPanel {
    */
   _dvColorTier(pct, nominalColor) {
     if (pct > 30) return { color: nominalColor, anim: 'none' };
-    if (pct > 15) return { color: '#ffaa00', anim: 'none' };
+    if (pct > 15) return { color: 'var(--hud-caution, #ffaa00)', anim: 'none' };
     // Phase 1 #5: low-fuel urgency reads as steady red colour + the existing
     // audio warble. The old sub-second opacity strobe (deltav-pulse) blinked
     // continuously while the tank stayed low — removed for all tiers.
-    return { color: '#ff4444', anim: 'none' };
+    return { color: 'var(--hud-warning, #ff4444)', anim: 'none' };
   }
 
   /**
@@ -2027,7 +2027,7 @@ export class StatusPanel {
     // Re-rendered on LAUNCH_SPEED_CHANGED (wired in HUD.js).
     const _spd = Math.max(...statuses.map((a) => a.launchSpeed ?? Constants.CROSSBOW_LAUNCH_SPEED_DEFAULT));
     const _ceil = Math.max(...statuses.map((a) => (Constants.SPRING_TIERS[a.springTier ?? 0] || {}).maxSpeed ?? 0)) || _spd;
-    const _dialHeader = `<div style="font-size:0.7rem;color:rgba(0,255,136,0.65);padding-bottom:2px;" title="Fleet launch speed — the item-100 dial. A hotter shot trades reload (∝ v²) for range.">LAUNCH ${_spd.toFixed(1)} m/s · max ${_ceil.toFixed(1)} · <span style="opacity:0.75">[;] down · ['] up</span></div>`;
+    const _dialHeader = `<div style="font-size:0.7rem;color:rgb(var(--hud-normal-rgb, 0 255 136) / 0.65);padding-bottom:2px;" title="Fleet launch speed — the item-100 dial. A hotter shot trades reload (∝ v²) for range.">LAUNCH ${_spd.toFixed(1)} m/s · max ${_ceil.toFixed(1)} · <span style="opacity:0.75">[;] down · ['] up</span></div>`;
 
     // List by size: Large daughters (weavers) first, then Small (spinners). A
     // small gap separates the two size groups — no headers, no resized rows.
@@ -2066,25 +2066,25 @@ export class StatusPanel {
     const tens = this._tetherTensions[idx];
     if (tens !== undefined && tens >= (Constants.REEL_TENSION_CRITICAL || 0.9)
         && a.state !== 'DOCKED' && a.state !== 'RELOADING') {
-      return { label: 'Tether stress', color: '#ff4444' };
+      return { label: 'Tether stress', color: 'var(--hud-warning, #ff4444)' };
     }
 
     switch (a.state) {
       case 'DOCKED':
         return a.springCharged
-          ? { label: 'Ready', color: '#00ff88' }
-          : { label: 'Charging', color: '#ffaa00' };
+          ? { label: 'Ready', color: 'var(--hud-normal, #00ff88)' }
+          : { label: 'Charging', color: 'var(--hud-caution, #ffaa00)' };
       case 'RELOADING':
-        return { label: `Reloading ${Math.round((a.reloadProgress || 0) * 100)}%`, color: '#00ffff' };
+        return { label: `Reloading ${Math.round((a.reloadProgress || 0) * 100)}%`, color: 'var(--hud-info, #00ffff)' };
       case 'LAUNCHING': case 'UNDOCKING': case 'TRANSIT':
-        return { label: 'Heading out', color: '#00ffff' };
+        return { label: 'Heading out', color: 'var(--hud-info, #00ffff)' };
       case 'APPROACH': case 'STATION_KEEP':
-        return { label: 'Approaching', color: '#00ffff' };
+        return { label: 'Approaching', color: 'var(--hud-info, #00ffff)' };
       case 'NETTING': case 'GRAPPLED': case 'MAGNETIC_GRAPPLE':
       case 'GRIPPER_GRAPPLE': case 'PAD_CONTACT': case 'WEB_SHOT':
-        return { label: 'Capturing', color: '#00ffff' };
+        return { label: 'Capturing', color: 'var(--hud-info, #00ffff)' };
       case 'REELING': case 'HAULING': case 'RETURNING': case 'DOCKING':
-        return { label: 'Returning', color: '#00ffff' };
+        return { label: 'Returning', color: 'var(--hud-info, #00ffff)' };
       case 'HOLDING_CATCH': {
         // Register item 48: the rack cook is visible — the daughter line reads
         // the head piece's _digestProgress / span (ArmUnit.getStatus().digest).
@@ -2096,28 +2096,28 @@ export class StatusPanel {
           const eclipsed = (a.digest.sunScale ?? 1.0) < 1;
           return {
             label: `Cooking ${pct}%${q}`,
-            color: eclipsed ? '#cc8800' : '#ffaa00',
+            color: eclipsed ? 'var(--hud-caution, #cc8800)' : 'var(--hud-caution, #ffaa00)',
             title: eclipsed
               ? 'Eclipse — the furnace smoulders on panel embers until dawn'
               : `Solar furnace cooking the catch — ${pct}%`,
           };
         }
-        return { label: 'Catch aboard', color: '#ffaa00' };
+        return { label: 'Catch aboard', color: 'var(--hud-caution, #ffaa00)' };
       }
       case 'TRAWLING':
-        return { label: 'Trawling', color: '#00ff88' };
+        return { label: 'Trawling', color: 'var(--hud-normal, #00ff88)' };
       case 'SCANNING':
-        return { label: 'Scanning', color: '#4488ff' };
+        return { label: 'Scanning', color: 'var(--hud-info, #4488ff)' };
       case 'ABLATING':
-        return { label: 'De-spinning', color: '#00ffff' };
+        return { label: 'De-spinning', color: 'var(--hud-info, #00ffff)' };
       case 'DEORBITING':
-        return { label: 'Deorbiting', color: '#ff4444' };
+        return { label: 'Deorbiting', color: 'var(--hud-warning, #ff4444)' };
       case 'ADRIFT':
-        return { label: 'Adrift', color: '#ffaa00' };
+        return { label: 'Adrift', color: 'var(--hud-caution, #ffaa00)' };
       case 'EXPENDED':
-        return { label: 'Lost', color: '#ff4444' };
+        return { label: 'Lost', color: 'var(--hud-warning, #ff4444)' };
       default:
-        return { label: a.state, color: '#888' };
+        return { label: a.state, color: 'var(--hud-dim, #888)' };
     }
   }
 
@@ -2130,7 +2130,7 @@ export class StatusPanel {
    * launch (D) and recall (R).
    */
   _daughterHotkeys(a) {
-    const key = (k, verb) => `<span style="color:${VisualLaw.COLORS.SELECTION};font-weight:bold;">${k}</span>`
+    const key = (k, verb) => `<span style="color:var(--hud-info, ${VisualLaw.COLORS.SELECTION});font-weight:bold;">${k}</span>`
       + `<span style="opacity:0.8;"> ${verb}</span>`;
     // type=button (never submits), tabindex=-1 (Tab is a game key; the button
     // must not become the keyboard's focus target).
@@ -2204,7 +2204,7 @@ export class StatusPanel {
    */
   _wheelReadout(a) {
     if (a.wheelSaturated) {
-      return '<span style="color:#ff4444;white-space:nowrap;" '
+      return '<span style="color:var(--hud-warning, #ff4444);white-space:nowrap;" '
         + 'title="Reaction wheels saturated — every net fire pays the RCS desat surcharge until momentum bleeds off">'
         + '↻ WHEEL SAT — desat surcharge</span>';
     }
@@ -2212,7 +2212,7 @@ export class StatusPanel {
     if (m < WHEEL_SHOW_FLOOR) return '';
     const th = (Constants.DAUGHTER_NET_RECOIL || {}).WHEEL_SATURATION_THRESHOLD || 3;
     const filled = Math.max(0, Math.min(3, Math.round((m / th) * 3)));
-    const c = m >= th * 0.7 ? '#ffaa00' : '#e8e4d0';
+    const c = m >= th * 0.7 ? 'var(--hud-caution, #ffaa00)' : 'var(--hud-text, #e8e4d0)';
     return `<span style="color:${c};opacity:0.7;" title="Reaction-wheel momentum ${m.toFixed(1)} of ${th} — desat surcharge when saturated">↻ ${WHEEL_PIPS[filled]}</span>`;
   }
 
@@ -2234,7 +2234,7 @@ export class StatusPanel {
         ? `<div style="padding-left:28px;font-size:10px;margin-top:1px;white-space:nowrap;">${wheel}</div>`
         : '';
     }
-    const dim = 'color:#e8e4d0;opacity:0.7;';
+    const dim = 'color:var(--hud-text, #e8e4d0);opacity:0.7;';
     const parts = [];
 
     const target = armObj && armObj.target;
@@ -2248,7 +2248,7 @@ export class StatusPanel {
       if (rate !== null) {
         // Red when closing fast at short range — imminent contact needs a glance.
         const hot = rate > 5 && rng < 100;
-        const c = hot ? '#ff4444' : '#e8e4d0';
+        const c = hot ? 'var(--hud-warning, #ff4444)' : 'var(--hud-text, #e8e4d0)';
         const verb = rate >= 0 ? 'clsg' : 'opng';
         parts.push(`<span style="color:${c};opacity:0.85;">${verb} ${Math.abs(rate).toFixed(1)} m/s</span>`);
       }
@@ -2274,8 +2274,8 @@ export class StatusPanel {
     if (!a.isDetached && a.tetherLength > 0) {
       const tens = idx >= 0 ? this._tetherTensions[idx] : undefined;
       const crit = Constants.REEL_TENSION_CRITICAL || 0.9;
-      const tc = tens !== undefined && tens >= crit ? '#ff4444'
-        : tens !== undefined && tens >= crit * 0.7 ? '#ffaa00' : '#e8e4d0';
+      const tc = tens !== undefined && tens >= crit ? 'var(--hud-warning, #ff4444)'
+        : tens !== undefined && tens >= crit * 0.7 ? 'var(--hud-caution, #ffaa00)' : 'var(--hud-text, #e8e4d0)';
       parts.push(`<span style="color:${tc};opacity:0.7;">tether ${Math.round(a.tetherLength)} m</span>`);
     }
 
@@ -2334,7 +2334,7 @@ export class StatusPanel {
     if (armObj && typeof armObj.getNetInventory === 'function') {
       const nets = armObj.getNetInventory();
       const maxNets = typeof armObj.getNetInventoryMax === 'function' ? armObj.getNetInventoryMax() : 0;
-      const netColor = nets <= 0 ? '#ff4444' : (maxNets > 0 && nets <= maxNets * 0.5) ? '#ffaa00' : NET_COLOR;
+      const netColor = nets <= 0 ? 'var(--hud-warning, #ff4444)' : (maxNets > 0 && nets <= maxNets * 0.5) ? 'var(--hud-caution, #ffaa00)' : NET_COLOR;
       // W2 meters (DECISIONS §15 row 8): the daughter's live tether reach
       // (config.tetherMax — purchases / old saves scale it) beside its nets.
       const reach = StatusPanel.reachText(armObj.config && armObj.config.tetherMax);
@@ -2349,11 +2349,11 @@ export class StatusPanel {
     const dvMax = a.type === 'weaver' ? (Constants.WEAVER_DELTA_V || 500)
       : (Constants.SPINNER_DELTA_V || 297);
     const dv = Math.round((fuelPct / 100) * dvMax);
-    const dvColor = this._dvColorTier(fuelPct, '#aaffdd').color;
+    const dvColor = this._dvColorTier(fuelPct, 'var(--hud-text, #aaffdd)').color;
     const dvHtml = `<span style="color:${dvColor};white-space:nowrap;text-align:right;" title="Maneuver budget (ΔV)">ΔV ${dv}</span>`;
 
     const numHtml = isSel
-      ? `<span style="color:${VisualLaw.COLORS.SELECTION};font-weight:bold;">▸${label}</span>`
+      ? `<span style="color:var(--hud-info, ${VisualLaw.COLORS.SELECTION});font-weight:bold;">▸${label}</span>`
       : `<span style="opacity:0.6;">${label}</span>`;
 
     // Line 1 — details laid out as fixed columns so N · status · NET · ΔV line up
@@ -2394,7 +2394,7 @@ export class StatusPanel {
       + (keys || '<span style="opacity:0.4;">busy…</span>')
       + `</div>`;
 
-    return `<div ${rowAttrs}style="padding:2px 4px;background:rgba(68,136,255,0.08);border-left:2px solid ${VisualLaw.COLORS.SELECTION};${rowCursor}">`
+    return `<div ${rowAttrs}style="padding:2px 4px;background:rgb(var(--hud-info-rgb, 68 136 255) / 0.08);border-left:2px solid var(--hud-info, ${VisualLaw.COLORS.SELECTION});${rowCursor}">`
       + detailLine
       + telemetryLine
       + keysLine
@@ -2420,10 +2420,10 @@ export class StatusPanel {
     const hintEl = document.getElementById('forge-hint');
 
     const phaseColors = {
-      INTAKE: '#4fc3f7',
-      SEPARATE: '#ce93d8',
-      MELT: '#ff9800',
-      COOL: '#81c784',
+      INTAKE: 'var(--hud-info, #4fc3f7)',
+      SEPARATE: 'var(--hud-target, #ce93d8)',
+      MELT: 'var(--hud-caution, #ff9800)',
+      COOL: 'var(--hud-normal, #81c784)',
     };
 
     if (!forgeState.isActive) {
@@ -2434,7 +2434,7 @@ export class StatusPanel {
         } else {
           inlineEl.textContent = 'Idle';
         }
-        inlineEl.style.color = '#666';
+        inlineEl.style.color = 'var(--hud-dim, #666)';
       }
       if (progressContainer) progressContainer.style.display = 'none';
 
@@ -2446,7 +2446,7 @@ export class StatusPanel {
         if (hasCargo) {
           hintEl.style.display = '';
           hintEl.textContent = '▸ Press [F] to process cargo';
-          hintEl.style.color = '#ffaa00';
+          hintEl.style.color = 'var(--hud-caution, #ffaa00)';
         } else {
           hintEl.style.display = 'none';
         }
@@ -2457,7 +2457,7 @@ export class StatusPanel {
     // --- Active state: show progress bar ---
     const phase = forgeState.phase;
     const progressPct = (forgeState.phaseProgress * 100).toFixed(0);
-    const color = phaseColors[phase] || '#ff9800';
+    const color = phaseColors[phase] || 'var(--hud-caution, #ff9800)';
 
     if (inlineEl) {
       inlineEl.textContent = phase;
@@ -2545,7 +2545,7 @@ export class StatusPanel {
     if (!status || status.totalMassKg <= 0) {
       // Sprint S2: Show empty cargo state for economy discovery
       el.style.display = '';
-      el.innerHTML = `<span style="color:#555;">CARGO: 0/${status ? status.capacityKg : 500}kg</span>`;
+      el.innerHTML = `<span style="color:var(--hud-dim, #555);">CARGO: 0/${status ? status.capacityKg : 500}kg</span>`;
       return;
     }
 
@@ -2558,12 +2558,12 @@ export class StatusPanel {
       .map(m => {
         // Use short 2-char name prefix for compactness
         const shortName = m.name.substring(0, 2);
-        return `<span style="color:${m.color || '#aaa'}">${shortName}:${Math.round(m.massKg)}</span>`;
+        return `<span style="color:${m.color || 'var(--hud-label, #aaa)'}">${shortName}:${Math.round(m.massKg)}</span>`;
       })
       .join(' ');
 
     const pctUsed = status.utilizationPct || 0;
-    const pctColor = pctUsed > 0.8 ? '#ffaa00' : '#00ff88';
+    const pctColor = pctUsed > 0.8 ? 'var(--hud-caution, #ffaa00)' : 'var(--hud-normal, #00ff88)';
     const massText = `${Math.round(status.totalMassKg)}/${status.capacityKg}kg`;
 
     el.innerHTML = `<span style="color:${pctColor};">CARGO:</span> ${massText} ${items ? '· ' + items : ''}`;

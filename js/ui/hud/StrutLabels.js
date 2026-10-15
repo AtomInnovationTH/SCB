@@ -27,16 +27,16 @@ const LABEL_STYLE = {
   pointerEvents:   'none',
   fontFamily:      "var(--font-mono)",
   fontSize:        '10px',
-  color:           '#00ffcc',
-  background:      'rgba(0,10,25,0.78)',
-  border:          '1px solid rgba(0,255,204,0.4)',
+  color:           'var(--hud-normal, #00ffcc)',
+  background:      'rgb(var(--hud-ink-rgb, 0 10 25) / 0.78)',
+  border:          '1px solid rgb(var(--hud-normal-rgb, 0 255 204) / 0.4)',
   borderRadius:    '3px',
   padding:         '2px 6px',
   whiteSpace:      'nowrap',
   lineHeight:      '1.4',
   transition:      'opacity 0.2s',
   opacity:         '0',
-  textShadow:      '0 0 6px rgba(0,255,204,0.6)',
+  textShadow:      '0 0 6px rgb(var(--hud-normal-rgb, 0 255 204) / 0.6)',
 };
 
 const _v3 = { x: 0, y: 0, z: 0 };   // scratch vector (avoids new THREE.Vector3 per frame)

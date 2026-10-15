@@ -43,12 +43,12 @@ const FONT_PX = 11;
 const HIT_PAD_PX = (FOOTER_CHIP_HIT_PX - FOOTER_CHIP_PX) / 2;
 
 /** SPECS-tab plate (LibraryPane.js:948). */
-const GLASS_BG = 'rgba(0, 16, 32, 0.85)';
+const GLASS_BG = 'rgb(var(--hud-ink-rgb, 0 16 32) / 0.85)';
 
-/** '#rrggbb' → 'rgba(r,g,b,a)' (DetailSlider idiom) — keeps hex out of this file. */
+/** '#rrggbb' → an info-role tint at alpha a: `rgb(var(--hud-info-rgb, r g b) / a)` (the fallback IS today's colour). */
 const _rgba = (hex, a) => {
   const n = parseInt(String(hex).replace('#', ''), 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  return `rgb(var(--hud-info-rgb, ${(n >> 16) & 255} ${(n >> 8) & 255} ${n & 255}) / ${a})`;
 };
 
 function _ensureStyle(doc) {
@@ -68,7 +68,7 @@ function _ensureStyle(doc) {
       border: 1px solid ${_rgba(info, 0.4)};
       border-radius: 3px;
       background: ${GLASS_BG};
-      color: ${info};
+      color: var(--hud-info, ${info});
       font-family: var(--font-mono);
       font-size: ${FONT_PX}px;
       letter-spacing: 0.08em;
@@ -137,7 +137,7 @@ export function createFooterChip({
   s.boxSizing = 'border-box';
   if (side === 'right') s.right = `${Number(offsetPx)}px`;
   else s.left = `${Number(offsetPx)}px`;
-  s.color = VisualLaw.COLORS.INFO;
+  s.color = `var(--hud-info, ${VisualLaw.COLORS.INFO})`;
   s.background = GLASS_BG;
   s.fontSize = `${FONT_PX}px`;
   s.fontFamily = 'var(--font-mono)';

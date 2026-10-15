@@ -46,7 +46,7 @@ export class PaneChrome {
     this._pane = opts.pane;
     this._steps = opts.steps && opts.steps.length >= 2 ? opts.steps.slice() : ['normal', 'max'];
     this._onStep = opts.onStep || null;
-    this._color = opts.color || '#00ff88';
+    this._color = opts.color || 'var(--hud-normal, #00ff88)';
     this._bracket = opts.bracket !== false;
     this._keyLabel = opts.keyLabel;
 

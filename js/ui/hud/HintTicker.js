@@ -55,10 +55,10 @@ const DEFAULTS = {
   FONT_LATEST_PX: 16,
   FONT_OLDER_PX: 13,
   SCALE_OLDER: 0.95,
-  KEY_CHIP_BG_GAMEPLAY: '#0a2a3a',
-  KEY_CHIP_BG_MODIFIER: '#3a2a0a',
-  KEY_CHIP_BG_MOUSE: '#2a0a3a',
-  ACCENT_BORDER: '#00ccff',
+  KEY_CHIP_BG_GAMEPLAY: 'var(--hud-ink, #0a2a3a)',
+  KEY_CHIP_BG_MODIFIER: 'var(--hud-ink, #3a2a0a)',
+  KEY_CHIP_BG_MOUSE: 'var(--hud-ink, #2a0a3a)',
+  ACCENT_BORDER: 'var(--hud-info, #00ccff)',
 };
 
 function _tuning() {
@@ -255,7 +255,7 @@ export class HintTicker {
 
     // Brief flash for `priority:'high'`.
     if (payload.priority === 'high' && _hasDOM()) {
-      el.style.boxShadow = '0 0 12px rgba(0,204,255,0.55)';
+      el.style.boxShadow = '0 0 12px rgb(var(--hud-info-rgb, 0 204 255) / 0.55)';
       setTimeout(() => { if (el) el.style.boxShadow = ''; }, 500);
     }
 
@@ -340,7 +340,7 @@ export class HintTicker {
       const opacity = Math.max(0.35, 1.0 - dimSteps * 0.18);
       const scale = isLatest ? 1.0 : T.SCALE_OLDER;
       const fontPx = isLatest ? T.FONT_LATEST_PX : T.FONT_OLDER_PX;
-      const borderColor = isLatest ? T.ACCENT_BORDER : 'rgba(0,204,255,0.35)';
+      const borderColor = isLatest ? T.ACCENT_BORDER : 'rgb(var(--hud-info-rgb, 0 204 255) / 0.35)';
       const el = it.el;
       el.style.transition = `opacity ${T.SHIFT_MS}ms ease-out, transform ${T.SHIFT_MS}ms ease-out`;
       el.style.opacity = String(opacity);
@@ -376,14 +376,14 @@ export class HintTicker {
       'align-items:center',
       'gap:6px',
       'padding:4px 10px',
-      'border:1px solid ' + (highlight ? T.ACCENT_BORDER : 'rgba(0,204,255,0.35)'),
+      'border:1px solid ' + (highlight ? T.ACCENT_BORDER : 'rgb(var(--hud-info-rgb, 0 204 255) / 0.35)'),
       'border-radius:4px',
-      'background:rgba(0,10,20,0.78)',
-      'color:#ccddee',
+      'background:rgb(var(--hud-ink-rgb, 0 10 20) / 0.78)',
+      'color:var(--hud-text, #ccddee)',
       `font-size:${highlight ? T.FONT_LATEST_PX : T.FONT_OLDER_PX}px`,
       'letter-spacing:0.02em',
       tappable ? 'pointer-events:auto' : 'pointer-events:none',
-      'box-shadow:0 0 4px rgba(0,204,255,0.18)',
+      'box-shadow:0 0 4px rgb(var(--hud-info-rgb, 0 204 255) / 0.18)',
       'opacity:1',
       'transform:scale(1)',
       'will-change:opacity,transform',
@@ -408,7 +408,7 @@ export class HintTicker {
         'padding:0 6px',
         'border-radius:3px',
         `background:${chipBg}`,
-        'color:#ffffff',
+        'color:var(--hud-label, #ffffff)',
         'font-weight:bold',
         "font-family: var(--font-mono)",
         'font-size:12px',
@@ -424,7 +424,7 @@ export class HintTicker {
     // glass and hands back the SAME string off glass.
     const body = document.createElement('span');
     body.innerHTML = decorateGlossary(GestureHints.speak(payload.text || ''), { once: true });
-    body.style.cssText = 'color:#ccddee;pointer-events:auto;';
+    body.style.cssText = 'color:var(--hud-text, #ccddee);pointer-events:auto;';
     row.appendChild(body);
 
     if (tappable) {

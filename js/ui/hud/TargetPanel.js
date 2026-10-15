@@ -22,6 +22,7 @@ import { dossierSystem, appraiseSalvage } from '../../systems/DossierSystem.js';
 import { PaneChrome } from './PaneChrome.js';
 import { GestureHints } from './GestureHints.js';
 import { classify, oddsColor, reachKmFrom, THIN_ALPHA } from './TargetColorLaw.js';
+import { lookColor } from '../HudLook.js';
 import { TouchControls } from '../TouchControls.js';
 import { TARGETS_PANE_WIDTH_PX } from '../RailGeometry.js';
 
@@ -162,7 +163,7 @@ export class TargetPanel {
   _injectStyles() {
     if (document.getElementById('target-panel-styles')) return;
     const sel = this._colorLaw ? VisualLaw.COLORS.SELECTION : '#00ccff';
-    const selRgb = this._colorLaw ? hexToRgb(sel) : '0, 204, 255';
+    const selRgb = (this._colorLaw ? hexToRgb(sel) : '0, 204, 255').replace(/,\s*/g, ' '); // 'r g b' — the --hud-info-rgb fallback
     const style = document.createElement('style');
     style.id = 'target-panel-styles';
     style.textContent = `
@@ -181,19 +182,19 @@ export class TargetPanel {
             min-height: ${TARGET_ROW_PX}px;
             cursor: pointer;
             transition: background 0.2s;
-            color: #aaaaaa;
+            color: var(--hud-label, #aaaaaa);
         }
         #hud-targets-panel[data-glass] .target-row {
             min-height: ${TARGET_ROW_GLASS_PX}px;
             box-sizing: border-box;
         }
         .target-row:hover {
-            background: rgba(0, 255, 136, 0.06);
+            background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.06);
         }
         .target-row.selected {
-            border-left: 3px solid ${sel};
-            background: rgba(${selRgb}, ${Constants.SELECTED_ROW_ALPHA});
-            box-shadow: 0 0 8px rgba(${selRgb}, ${Constants.SELECTED_ROW_GLOW_ALPHA}) inset;
+            border-left: 3px solid var(--hud-info, ${sel});
+            background: rgb(var(--hud-info-rgb, ${selRgb}) / ${Constants.SELECTED_ROW_ALPHA});
+            box-shadow: 0 0 8px rgb(var(--hud-info-rgb, ${selRgb}) / ${Constants.SELECTED_ROW_GLOW_ALPHA}) inset;
         }
         .target-row .type-icon {
             font-size: 12px;
@@ -229,8 +230,8 @@ export class TargetPanel {
         .target-row.selected .target-name {
             font-size: 12px;
             font-weight: bold;
-            color: ${sel};
-            text-shadow: 0 0 6px rgba(${selRgb}, ${Constants.SELECTED_ROW_TEXT_GLOW});
+            color: var(--hud-info, ${sel});
+            text-shadow: 0 0 6px rgb(var(--hud-info-rgb, ${selRgb}) / ${Constants.SELECTED_ROW_TEXT_GLOW});
         }
         .target-expanded {
             grid-column: 1 / -1;
@@ -241,13 +242,13 @@ export class TargetPanel {
             display: flex;
             justify-content: space-between;
             gap: 8px;
-            color: #aaaaaa;
+            color: var(--hud-label, #aaaaaa);
             flex-wrap: wrap;
         }
         .target-expanded .econ-line > span { white-space: nowrap; }
         .target-expanded .hint-line {
             font-size: 10px;
-            color: #666666;
+            color: var(--hud-dim, #666666);
             margin-top: 1px;
         }
         
@@ -264,9 +265,9 @@ export class TargetPanel {
         /* Sort button */
         .target-sort-btn {
             font-size: 10px;
-            color: #888888;
+            color: var(--hud-dim, #888888);
             background: none;
-            border: 1px solid rgba(136,136,136,0.3);
+            border: 1px solid rgb(var(--hud-dim-rgb, 136 136 136) / 0.3);
             border-radius: 3px;
             padding: 1px 6px;
             cursor: pointer;
@@ -286,7 +287,7 @@ export class TargetPanel {
             padding: 1px 4px;
             font-size: 11px;
             font-family: var(--font-mono);
-            color: #aaaaaa;
+            color: var(--hud-label, #aaaaaa);
             min-height: 18px;
         }
         
@@ -298,13 +299,13 @@ export class TargetPanel {
             padding: 1px 4px;
             font-size: 11px;
             font-family: var(--font-mono);
-            color: #aaaaaa;
+            color: var(--hud-label, #aaaaaa);
             min-height: 18px;
         }
         
         /* Section separators */
         .target-section {
-            border-top: 1px solid rgba(0, 255, 136, 0.15);
+            border-top: 1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.15);
             margin-top: 4px;
             padding-top: 4px;
         }
@@ -315,7 +316,7 @@ export class TargetPanel {
         
         /* Progressive data reveal */
         .data-unknown {
-            color: #444444;
+            color: var(--hud-dim, #444444);
             font-style: italic;
         }
         .data-estimated::before {
@@ -428,18 +429,18 @@ export class TargetPanel {
 
     this.panels.targets.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;padding-right:24px;">
-        <span class="pane-title target-section-header" style="color:#00ff88;padding:0;">TARGETS <span style="opacity:0.4;font-size:10px;">[T]</span></span>
+        <span class="pane-title target-section-header" style="color:var(--hud-normal, #00ff88);padding:0;">TARGETS <span style="opacity:0.4;font-size:10px;">[T]</span></span>
         <button id="hud-sort-btn" class="target-sort-btn" title="Click to cycle sort">TPI ↑</button>
       </div>
-      <div id="hud-targets-min-summary" data-pane-show="min" style="display:none;font-size:11px;color:#00ff88;opacity:0.7;">. </div>
+      <div id="hud-targets-min-summary" data-pane-show="min" style="display:none;font-size:11px;color:var(--hud-normal, #00ff88);opacity:0.7;">. </div>
       <div data-pane-hide="min">
         <div id="hud-target-list"></div>
         <div id="hud-untracked-section" class="target-section">
-          <div class="target-section-header" style="color:#ffaa00;">UNTRACKED (SENSOR)</div>
+          <div class="target-section-header" style="color:var(--hud-caution, #ffaa00);">UNTRACKED (SENSOR)</div>
           <div id="hud-untracked-list"></div>
         </div>
         <div id="hud-activesat-section" class="target-section">
-          <div class="target-section-header" style="color:#ffffff;">ACTIVE SATS</div>
+          <div class="target-section-header" style="color:var(--hud-label, #ffffff);">ACTIVE SATS</div>
           <div id="hud-activesat-list"></div>
         </div>
       </div>
@@ -483,7 +484,7 @@ export class TargetPanel {
       keyLabel: '0',
       steps: ['min', 'normal', 'max'],
       initial: 'normal',
-      color: '#00ff88',
+      color: 'var(--hud-normal, #00ff88)',
       title: 'Targets pane — 0 shows / hides · click to resize min / normal / max',
       onStep: (step) => {
         // Step table = header + k rows (recomputed from the live row height).
@@ -596,7 +597,7 @@ export class TargetPanel {
       // primary signal; the verdict is untouched, item 7b).
       const nc = best === 'NET' ? getNetClassForType(arm.type) : null;
       const overflow = nc && pct >= 80 && renderedSpanOverflows(t, nc);
-      const col = this._targetLaw ? oddsColor(pct, overflow) : overflow ? '#ffd166' : pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
+      const col = this._targetLaw ? lookColor(oddsColor(pct, overflow)) : overflow ? 'var(--hud-caution, #ffd166)' : pct >= 80 ? 'var(--hud-normal, #00ffaa)' : pct >= 50 ? 'var(--hud-caution, #ffd166)' : 'var(--hud-warning, #ff7755)';
       const tip = overflow ? ` — drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${nc.DIAMETER} m bag: it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)` : '';
       return `<span style="color:${col};font-size:10px;font-weight:bold;" title="Best tool odds (${arm.type})${tip}">${label} ${pct}%</span>`;
     }
@@ -604,7 +605,7 @@ export class TargetPanel {
     const netBlocker = (odds.NET && odds.NET.blocker) || (o && o.blocker) || 'NO TOOL';
     const word = netBlocker === 'WIDE' ? 'TOO WIDE'
       : netBlocker === 'HEAVY' ? 'TOO HEAVY' : netBlocker;
-    return `<span style="color:${this._targetLaw ? VisualLaw.COLORS.CAUTION : '#ff7755'};font-size:10px;font-weight:bold;" title="No viable tool (${arm.type})">${word}</span>`;
+    return `<span style="color:${this._targetLaw ? `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})` : 'var(--hud-warning, #ff7755)'};font-size:10px;font-weight:bold;" title="No viable tool (${arm.type})">${word}</span>`;
   }
 
   /**
@@ -640,7 +641,7 @@ export class TargetPanel {
       // Register item 17: same overflow qualifier as the daughter badge —
       // only ever downgrades a GREEN (pct ≥ 80) to amber, never lifts a red.
       const overflow = pct >= 80 && renderedSpanOverflows(t, CN && CN.LARGE);
-      const col = this._targetLaw ? oddsColor(pct, overflow) : overflow ? '#ffd166' : pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
+      const col = this._targetLaw ? lookColor(oddsColor(pct, overflow)) : overflow ? 'var(--hud-caution, #ffd166)' : pct >= 80 ? 'var(--hud-normal, #00ffaa)' : pct >= 50 ? 'var(--hud-caution, #ffd166)' : 'var(--hud-warning, #ff7755)';
       const tip = overflow ? ` — drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${CN.LARGE.DIAMETER} m bag: it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)` : '';
       return `<span style="color:${col};font-size:10px;font-weight:bold;" title="Mother Large Net odds${tip}">${pct}% [N]</span>`;
     }
@@ -648,7 +649,7 @@ export class TargetPanel {
     const word = blocker === 'WIDE' ? 'TOO WIDE'
       : blocker === 'HEAVY' ? 'TOO HEAVY'
       : blocker === 'EMPTY' ? 'NO NETS' : blocker;
-    return `<span style="color:${this._targetLaw ? VisualLaw.COLORS.CAUTION : '#ff7755'};font-size:10px;font-weight:bold;" title="Mother Large Net">${word}</span>`;
+    return `<span style="color:${this._targetLaw ? `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})` : 'var(--hud-warning, #ff7755)'};font-size:10px;font-weight:bold;" title="Mother Large Net">${word}</span>`;
   }
 
   /**
@@ -713,7 +714,7 @@ export class TargetPanel {
             distanceKm: t.distanceKm,
             reachKm: maxArmRangeKm,
           }) : null;
-          const tierColor = law ? law.color : (selected ? '#00ccff' : this._getTargetColor(t));
+          const tierColor = law ? lookColor(law.color) : (selected ? 'var(--hud-info, #00ccff)' : this._getTargetColor(t));
           const iconClass = (t.sizeMeter && t.sizeMeter > 5) ? 'type-icon large' : 'type-icon';
 
           // Salvage indicator: a 1-char ASCII mark (the 72px name column ellipsizes;
@@ -735,7 +736,7 @@ export class TargetPanel {
             const inReach = maxArmRangeKm > 0 && t.distanceKm <= maxArmRangeKm;
             range = {
               dot: inReach ? '\u25CF' : '\u25CB',
-              color: VisualLaw.COLORS.PLAYER,
+              color: `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`,
               opacity: inReach ? null : THIN_ALPHA,
             };
           } else {
@@ -745,7 +746,7 @@ export class TargetPanel {
             ? `color:${range.color};opacity:${range.opacity}`
             : `color:${range.color}`;
           const wordTag = (alpha) => (law && law.word)
-            ? `<span class="target-word" style="color:${law.wordColor};font-size:10px;font-weight:bold;letter-spacing:0.08em${alpha != null ? `;opacity:${alpha}` : ''}">${law.word}</span>`
+            ? `<span class="target-word" style="color:${lookColor(law.wordColor)};font-size:10px;font-weight:bold;letter-spacing:0.08em${alpha != null ? `;opacity:${alpha}` : ''}">${law.word}</span>`
             : '';
 
           if (selected) {
@@ -797,7 +798,7 @@ export class TargetPanel {
               const seg = (tag, f, nc) => {
                 const ok = f.fit === 'OK';
                 const overflow = ok && renderedSpanOverflows(t, nc);
-                const col = this._targetLaw ? (ok ? (overflow ? VisualLaw.COLORS.CAUTION : VisualLaw.COLORS.PLAYER) : VisualLaw.COLORS.CAUTION) : (ok ? (overflow ? '#ffd166' : '#00ffaa') : f.fit === 'DESPIN_FIRST' ? '#ffd166' : '#ff7755');
+                const col = this._targetLaw ? (ok ? (overflow ? `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})` : `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`) : `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})`) : (ok ? (overflow ? 'var(--hud-caution, #ffd166)' : 'var(--hud-normal, #00ffaa)') : f.fit === 'DESPIN_FIRST' ? 'var(--hud-caution, #ffd166)' : 'var(--hud-warning, #ff7755)');
                 const tip = overflow ? ` title="drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${nc.DIAMETER} m bag — it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)"` : '';
                 return `<span style="color:${col}"${tip}>${tag}${ok ? '✓' : '✗'}</span>`;
               };
@@ -811,7 +812,7 @@ export class TargetPanel {
             if (dossierSystem.isProfiled(t.id)) {
               const { total } = appraiseSalvage(t.salvage);
               if (total > 0) {
-                valueBadge = `<span style="color:#ffcc00;font-size:10px;font-weight:bold;" title="Appraised salvage value">\u20B9${total}</span>`;
+                valueBadge = `<span style="color:var(--hud-caution, #ffcc00);font-size:10px;font-weight:bold;" title="Appraised salvage value">\u20B9${total}</span>`;
               }
             }
 
@@ -819,7 +820,7 @@ export class TargetPanel {
             const fullType = this._getFullTypeName(t.type);
             return `<div class="target-row selected" data-id="${t.id}">
     <span class="${iconClass}">${typeIcon}</span>
-    <span class="target-name"${law ? ` style="color:${law.color}"` : ''}>${fullType}${moidBadge}</span>
+    <span class="target-name"${law ? ` style="color:${lookColor(law.color)}"` : ''}>${fullType}${moidBadge}</span>
     <span class="target-dist">${dist}</span>
     <span class="${dvClass}">${deltaV}</span>
     <span class="range-dot" style="${rangeStyle}">${range.dot}</span>
@@ -874,7 +875,7 @@ export class TargetPanel {
       } else {
         untrackedSection.classList.remove('hidden');
         untrackedEl.innerHTML = untracked.map(u => {
-          const riskColor = u.riskLevel === 'HIGH' ? '#ff4444' : u.riskLevel === 'MED' ? '#ffaa00' : '#00ff88';
+          const riskColor = u.riskLevel === 'HIGH' ? 'var(--hud-warning, #ff4444)' : u.riskLevel === 'MED' ? 'var(--hud-caution, #ffaa00)' : 'var(--hud-normal, #00ff88)';
           const dist = this._formatDist(u.distanceKm);
           return `<div class="untracked-row">
     <span>${u.sizeCm}cm</span>
@@ -900,7 +901,7 @@ export class TargetPanel {
           const distKm = s.distance / Constants.SCENE_SCALE;
           const dist = this._formatDist(distKm);
           return `<div class="activesat-row">
-    <span style="color:#00ccff">${s.name}</span>
+    <span style="color:var(--hud-info, #00ccff)">${s.name}</span>
     <span style="text-align:right">${dist}</span>
 </div>`;
         }).join('');
@@ -941,10 +942,10 @@ export class TargetPanel {
 
   /** @private Get range indicator dot and color */
   _getRangeIndicator(distKm, maxArmRangeKm) {
-    if (!maxArmRangeKm || maxArmRangeKm <= 0) return { dot: '○', color: '#ff4444' };
-    if (distKm <= maxArmRangeKm) return { dot: '●', color: '#00ff88' };
-    if (distKm <= maxArmRangeKm * 3) return { dot: '◐', color: '#ffcc00' };
-    return { dot: '○', color: '#ff4444' };
+    if (!maxArmRangeKm || maxArmRangeKm <= 0) return { dot: '○', color: 'var(--hud-warning, #ff4444)' };
+    if (distKm <= maxArmRangeKm) return { dot: '●', color: 'var(--hud-normal, #00ff88)' };
+    if (distKm <= maxArmRangeKm * 3) return { dot: '◐', color: 'var(--hud-caution, #ffcc00)' };
+    return { dot: '○', color: 'var(--hud-warning, #ff4444)' };
   }
 
   // ==========================================================================
@@ -955,18 +956,18 @@ export class TargetPanel {
    *  locked #12: legacy value-colours removed). */
   _getTargetColor(target) {
     if (target.risk === 'Extreme' || (target.salvage && target.salvage.hydrazine)) {
-      return VisualLaw.COLORS.THREAT;
+      return `var(--hud-warning, ${VisualLaw.COLORS.THREAT})`;
     }
     if (target.estimatedPoints && target.estimatedPoints >= 100) {
-      return VisualLaw.COLORS.INFO;
+      return `var(--hud-info, ${VisualLaw.COLORS.INFO})`;
     }
     if (target.hasSalvage) {
-      return VisualLaw.COLORS.VALUE;
+      return `var(--hud-text, ${VisualLaw.COLORS.VALUE})`;
     }
     if (target.type === 'fragment' && target.sizeMeter && target.sizeMeter < 0.5) {
-      return VisualLaw.COLORS.PLAYER;
+      return `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`;
     }
-    return VisualLaw.COLORS.PLAYER;
+    return `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`;
   }
 
   /** @private Get compact salvage hint HTML (e.g. "Xe In M3") with tooltips */
@@ -1036,9 +1037,9 @@ export class TargetPanel {
 
   /** @private Get color for net ΔV display */
   _getNetDvColor(netDv) {
-    if (netDv > 0.001) return '#00ff88';   // Net positive — green
-    if (netDv < -0.001) return '#ff4444';  // Net negative — red
-    return '#aaaaaa';                       // Neutral — grey
+    if (netDv > 0.001) return 'var(--hud-normal, #00ff88)';   // Net positive — green
+    if (netDv < -0.001) return 'var(--hud-warning, #ff4444)';  // Net negative — red
+    return 'var(--hud-label, #aaaaaa)';                       // Neutral — grey
   }
 
   // ==========================================================================
@@ -1074,7 +1075,7 @@ export class TargetPanel {
     const badge = target.moidBadge;
     const color = badge === 'HI' ? C.BADGE_COLOR_HI
       : badge === 'MD' ? C.BADGE_COLOR_MD
-      : badge === 'LO' ? C.BADGE_COLOR_LO : '#888888';
+      : badge === 'LO' ? C.BADGE_COLOR_LO : 'var(--hud-dim, #888888)';
     // Format: km with 1 decimal when ≥1 km; metres when <1 km
     const str = moid >= 1000 ? `${(moid / 1000).toFixed(1)} km` : `${moid.toFixed(0)} m`;
     return `\n        <div class="econ-line"><span style="color:${color}">MOID: ${str}</span></div>`;

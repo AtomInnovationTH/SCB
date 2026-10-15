@@ -291,9 +291,9 @@ const Z_VEIL = 100000;               // above everything incl. the pause overlay
 const NOT_FITTED = 'NOT FITTED';     // RefitPane.ACTUATOR_NOT_FITTED, the flower's present-but-unowned word
 
 /** The house palette (VisualLaw is pure data — no live singleton). */
-const COLOR_PLAYER = VisualLaw.COLORS.PLAYER;     // heritage green — the HUD
-const COLOR_THREAT = VisualLaw.COLORS.THREAT;     // red-orange — the ONE pulsing channel (vignette only; gag countdown is CAUTION steady, rev 3)
-const COLOR_CAUTION = VisualLaw.COLORS.CAUTION;   // steady amber — FAULT, disabled reasons, gag main + countdown
+const COLOR_PLAYER = `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`;     // heritage green — the HUD
+const COLOR_THREAT = `var(--hud-warning, ${VisualLaw.COLORS.THREAT})`;     // red-orange — the ONE pulsing channel (vignette only; gag countdown is CAUTION steady, rev 3)
+const COLOR_CAUTION = `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})`;   // steady amber — FAULT, disabled reasons, gag main + countdown
 
 /** The two-line CTA's words (house uppercase). */
 const MAIN_TITLE = 'SAFETY OVERRIDE';
@@ -902,13 +902,13 @@ export class OverridePane {
         line-height: 1.15;
         text-align: center;
         color: ${COLOR_CAUTION};
-        text-shadow: 0 0 8px rgba(255, 170, 0, 0.45);
+        text-shadow: 0 0 8px rgb(var(--hud-caution-rgb, 255 170 0) / 0.45);
         background:
-          repeating-linear-gradient(135deg, rgba(255, 170, 0, 0.18) 0 10px, rgba(0, 0, 0, 0) 10px 20px),
-          rgba(20, 12, 0, 0.85);
+          repeating-linear-gradient(135deg, rgb(var(--hud-caution-rgb, 255 170 0) / 0.18) 0 10px, rgb(var(--hud-ink-rgb, 0 0 0) / 0) 10px 20px),
+          rgb(var(--hud-ink-rgb, 20 12 0) / 0.85);
         border: 2px solid ${COLOR_CAUTION};
         border-radius: 4px;
-        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.6), inset 0 0 18px rgba(255, 170, 0, 0.16);
+        box-shadow: inset 0 0 0 1px rgb(var(--hud-ink-rgb, 0 0 0) / 0.6), inset 0 0 18px rgb(var(--hud-caution-rgb, 255 170 0) / 0.16);
         transition: background-color 0.15s ease, box-shadow 0.15s ease;
         pointer-events: auto;
       }
@@ -919,7 +919,7 @@ export class OverridePane {
         left: 0;
         right: 0;
         height: 6px;
-        background: repeating-linear-gradient(135deg, ${COLOR_CAUTION} 0 8px, rgba(0, 0, 0, 0.85) 8px 16px);
+        background: repeating-linear-gradient(135deg, ${COLOR_CAUTION} 0 8px, rgb(var(--hud-ink-rgb, 0 0 0) / 0.85) 8px 16px);
         opacity: 0.7;
         pointer-events: none;
       }
@@ -952,12 +952,12 @@ export class OverridePane {
         color: inherit;
         white-space: nowrap;
       }
-      ${P} .ovr-main:hover { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.6), inset 0 0 26px rgba(255, 170, 0, 0.32); }
+      ${P} .ovr-main:hover { box-shadow: inset 0 0 0 1px rgb(var(--hud-ink-rgb, 0 0 0) / 0.6), inset 0 0 26px rgb(var(--hud-caution-rgb, 255 170 0) / 0.32); }
       ${P} .ovr-main:hover::before, ${P} .ovr-main:hover::after { opacity: 1; }
-      ${P} .ovr-main:active { box-shadow: inset 0 3px 10px rgba(0, 0, 0, 0.7); }
-      ${P}[${OPEN_ATTR}] .ovr-main { border-color: ${COLOR_PLAYER}; color: ${COLOR_PLAYER}; text-shadow: 0 0 8px rgba(0, 255, 136, 0.45); }
+      ${P} .ovr-main:active { box-shadow: inset 0 3px 10px rgb(var(--hud-ink-rgb, 0 0 0) / 0.7); }
+      ${P}[${OPEN_ATTR}] .ovr-main { border-color: ${COLOR_PLAYER}; color: ${COLOR_PLAYER}; text-shadow: 0 0 8px rgb(var(--hud-normal-rgb, 0 255 136) / 0.45); }
       /* Open: the tape and the lamp turn PLAYER with the button. */
-      ${P}[${OPEN_ATTR}] .ovr-main::before, ${P}[${OPEN_ATTR}] .ovr-main::after { background: repeating-linear-gradient(135deg, ${COLOR_PLAYER} 0 8px, rgba(0, 0, 0, 0.85) 8px 16px); }
+      ${P}[${OPEN_ATTR}] .ovr-main::before, ${P}[${OPEN_ATTR}] .ovr-main::after { background: repeating-linear-gradient(135deg, ${COLOR_PLAYER} 0 8px, rgb(var(--hud-ink-rgb, 0 0 0) / 0.85) 8px 16px); }
       ${P}[${OPEN_ATTR}] .ovr-main-title::before { background: ${COLOR_PLAYER}; box-shadow: 0 0 6px ${COLOR_PLAYER}; }
       /* The one-shot reveal blink (ATTRACT_MS): three blinks, a glow bloom on each return.
          The class lands only on the rung's hidden -> visible edge (see _attract). */
@@ -965,7 +965,7 @@ export class OverridePane {
       @keyframes ovr-attract {
         0%, 100% { opacity: 1; }
         17%, 50%, 83% { opacity: 0.35; }
-        33%, 67% { opacity: 1; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.6), inset 0 0 26px rgba(255, 170, 0, 0.32), 0 0 18px rgba(255, 170, 0, 0.55); }
+        33%, 67% { opacity: 1; box-shadow: inset 0 0 0 1px rgb(var(--hud-ink-rgb, 0 0 0) / 0.6), inset 0 0 26px rgb(var(--hud-caution-rgb, 255 170 0) / 0.32), 0 0 18px rgb(var(--hud-caution-rgb, 255 170 0) / 0.55); }
       }
       /* Grid open hides what it would cover (the bottom-centre column): the hint
          ticker (z 8000 on body, above the overlay's grid), the toast zone and
@@ -984,8 +984,8 @@ export class OverridePane {
         gap: ${G.GAP_PX}px;
         padding: ${PAD_PX}px;
         box-sizing: border-box;
-        background: rgba(5, 10, 20, 0.95);
-        border: 1px solid rgba(0, 255, 136, 0.3);
+        background: rgb(var(--hud-ink-rgb, 5 10 20) / 0.95);
+        border: 1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.3);
         border-radius: 4px;
         transform: translateY(24px);
         opacity: 0;
@@ -1008,14 +1008,14 @@ export class OverridePane {
         letter-spacing: 0.06em;
         text-align: center;
         color: ${COLOR_PLAYER};
-        background: rgba(0, 255, 136, 0.06);
-        border: 1px solid rgba(0, 255, 136, 0.35);
+        background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.06);
+        border: 1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.35);
         border-radius: 3px;
         transition: background-color 0.15s ease, border-color 0.15s ease;
       }
-      ${P} .ovr-btn:hover:not(:disabled) { background: rgba(0, 255, 136, 0.14); }
-      ${P} .ovr-btn[aria-pressed="true"] { background: rgba(0, 255, 136, 0.2); border-color: ${COLOR_PLAYER}; }
-      ${P} .ovr-btn:disabled { color: ${COLOR_CAUTION}; opacity: 0.55; cursor: not-allowed; border-color: rgba(255, 170, 0, 0.35); background: rgba(255, 170, 0, 0.04); }
+      ${P} .ovr-btn:hover:not(:disabled) { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.14); }
+      ${P} .ovr-btn[aria-pressed="true"] { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.2); border-color: ${COLOR_PLAYER}; }
+      ${P} .ovr-btn:disabled { color: ${COLOR_CAUTION}; opacity: 0.55; cursor: not-allowed; border-color: rgb(var(--hud-caution-rgb, 255 170 0) / 0.35); background: rgb(var(--hud-caution-rgb, 255 170 0) / 0.04); }
       /* FURNACE: obviously broken — irregular fritz + amber FAULT */
       ${P} .ovr-furnace {
         display: flex;
@@ -1024,8 +1024,8 @@ export class OverridePane {
         justify-content: center;
         gap: 2px;
         color: ${COLOR_CAUTION};
-        border-color: rgba(255, 170, 0, 0.5);
-        background: rgba(255, 170, 0, 0.05);
+        border-color: rgb(var(--hud-caution-rgb, 255 170 0) / 0.5);
+        background: rgb(var(--hud-caution-rgb, 255 170 0) / 0.05);
       }
       /* The fritz runs ONLY while the grid is open: visibility:hidden does not pause a CSS
          animation, and the panel is collapsed most of its life (review 2026-09-07). */
@@ -1087,8 +1087,8 @@ export class OverridePane {
         padding: 4px 6px;
         font-family: var(--font-mono);
         color: ${COLOR_PLAYER};
-        background: rgba(5, 10, 20, 0.82);
-        border: 1px solid rgba(0, 255, 136, 0.4);
+        background: rgb(var(--hud-ink-rgb, 5 10 20) / 0.82);
+        border: 1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.4);
         border-radius: 4px;
         cursor: pointer;
         touch-action: manipulation;
@@ -1100,11 +1100,11 @@ export class OverridePane {
       }
       ${BAR} .f1b-name { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; line-height: 1.1; white-space: nowrap; }
       ${BAR} .f1b-state { font-size: 10px; letter-spacing: 0.1em; line-height: 1.1; white-space: nowrap; opacity: 0.85; }
-      ${BAR} .f1b-btn:hover:not(:disabled) { background: rgba(0, 255, 136, 0.16); }
-      ${BAR} .f1b-btn:active:not(:disabled) { background: rgba(0, 255, 136, 0.28); }
-      ${BAR} .f1b-btn[aria-pressed="true"] { background: rgba(0, 255, 136, 0.2); border-color: ${COLOR_PLAYER}; }
-      ${BAR} .f1b-btn:disabled { color: ${COLOR_CAUTION}; opacity: 0.6; cursor: not-allowed; border-color: rgba(255, 170, 0, 0.35); }
-      ${BAR} .f1b-furnace { color: ${COLOR_CAUTION}; border-color: rgba(255, 170, 0, 0.5); }
+      ${BAR} .f1b-btn:hover:not(:disabled) { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.16); }
+      ${BAR} .f1b-btn:active:not(:disabled) { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.28); }
+      ${BAR} .f1b-btn[aria-pressed="true"] { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.2); border-color: ${COLOR_PLAYER}; }
+      ${BAR} .f1b-btn:disabled { color: ${COLOR_CAUTION}; opacity: 0.6; cursor: not-allowed; border-color: rgb(var(--hud-caution-rgb, 255 170 0) / 0.35); }
+      ${BAR} .f1b-furnace { color: ${COLOR_CAUTION}; border-color: rgb(var(--hud-caution-rgb, 255 170 0) / 0.5); }
       ${BAR} .f1b-furnace .f1b-state { color: ${COLOR_CAUTION}; letter-spacing: 0.22em; }
       ${BAR}[${GLASS_ATTR}] .f1b-btn { min-height: ${B.BTN_H_PX}px; min-width: ${B.BTN_W_PX}px; }
       ${BAR}[${REDUCED_ATTR}] .f1b-btn { transition: none; }
@@ -1131,11 +1131,11 @@ export class OverridePane {
         line-height: 1.1;
         text-align: center;
         color: ${COLOR_CAUTION};
-        text-shadow: 0 0 18px rgba(255, 170, 0, 0.85), 0 0 48px rgba(255, 170, 0, 0.4);
+        text-shadow: 0 0 18px rgb(var(--hud-caution-rgb, 255 170 0) / 0.85), 0 0 48px rgb(var(--hud-caution-rgb, 255 170 0) / 0.4);
         padding: 8px 22px;
         border: 3px solid ${COLOR_CAUTION};
         border-radius: 6px;
-        background: rgba(20, 12, 0, 0.72);
+        background: rgb(var(--hud-ink-rgb, 20 12 0) / 0.72);
       }
       #${OVERRIDE_COUNTDOWN_ID} .ovr-count {
         font-family: var(--font-mono);
@@ -1144,7 +1144,7 @@ export class OverridePane {
         line-height: 1;
         margin-top: 12px;
         color: ${COLOR_CAUTION};
-        text-shadow: 0 0 32px rgba(255, 170, 0, 0.9), 0 0 90px rgba(255, 170, 0, 0.45);
+        text-shadow: 0 0 32px rgb(var(--hud-caution-rgb, 255 170 0) / 0.9), 0 0 90px rgb(var(--hud-caution-rgb, 255 170 0) / 0.45);
       }
       /* The text throb never dips below 0.72: a warning must stay legible on every frame. */
       #${OVERRIDE_COUNTDOWN_ID} .ovr-cancel {
@@ -1155,7 +1155,7 @@ export class OverridePane {
         font-size: 14px;
         letter-spacing: 0.2em;
         color: ${COLOR_CAUTION};
-        background: rgba(20, 12, 0, 0.9);
+        background: rgb(var(--hud-ink-rgb, 20 12 0) / 0.9);
         border: 2px solid ${COLOR_CAUTION};
         border-radius: 4px;
         cursor: pointer;
@@ -1858,7 +1858,7 @@ export class OverridePane {
     veil.setAttribute('aria-hidden', 'true');
     veil.style.position = 'fixed';
     veil.style.inset = '0';
-    veil.style.background = 'rgb(0, 0, 0)';
+    veil.style.background = '#000'; // the blackout is pure black in BOTH looks (not an ink tint)
     veil.style.zIndex = String(Z_VEIL);
     veil.style.pointerEvents = 'auto';
     doc.body.appendChild(veil);

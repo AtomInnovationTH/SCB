@@ -38,7 +38,7 @@ export class SoundLogPane {
     el.setAttribute('aria-hidden', 'true');
     Object.assign(el.style, {
       position: 'absolute', left: '16px', bottom: '176px', maxWidth: '520px',
-      padding: '6px 8px', background: 'rgba(0,0,0,0.55)', color: '#9fd',
+      padding: '6px 8px', background: 'rgb(var(--hud-ink-rgb, 0 0 0) / 0.55)', color: 'var(--hud-normal, #9fd)',
       fontFamily: 'var(--font-mono)', fontSize: '11px', lineHeight: '1.35', whiteSpace: 'pre',
       pointerEvents: 'none', zIndex: '60',
     });

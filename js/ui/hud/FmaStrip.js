@@ -388,7 +388,7 @@ export class FmaStrip {
         padding: 0 6px;
         font: ${G.FONT_PX}px/1 var(--font-mono);
         font-variant-numeric: tabular-nums;
-        color: ${VisualLaw.COLORS.PLAYER};
+        color: var(--hud-normal, ${VisualLaw.COLORS.PLAYER});
         white-space: nowrap;
         overflow: hidden;
         pointer-events: none;

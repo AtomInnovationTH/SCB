@@ -195,7 +195,7 @@ export function ensurePaneHelpCss(doc = (typeof document !== 'undefined' ? docum
   style.textContent = `
     [data-help] { cursor: help; }
     [data-help].pane-help-hot {
-      outline: 1px solid rgba(0, 212, 255, 0.45);
+      outline: 1px solid rgb(var(--hud-info-rgb, 0 212 255) / 0.45);
       outline-offset: -1px;
       transition: outline-color 0.15s ease;
     }
@@ -467,20 +467,20 @@ export class PaneHelp {
         display: 'none',
         maxWidth: '300px',
         padding: '6px 9px',
-        background: 'rgba(2, 14, 26, 0.94)',
-        border: '1px solid rgba(0, 212, 255, 0.45)',
+        background: 'rgb(var(--hud-ink-rgb, 2 14 26) / 0.94)',
+        border: '1px solid rgb(var(--hud-info-rgb, 0 212 255) / 0.45)',
         borderRadius: '4px',
         fontFamily: "var(--font-mono)",
         fontSize: '11px',
         lineHeight: '1.45',
-        color: '#bfe8f2',
+        color: 'var(--hud-text, #bfe8f2)',
         letterSpacing: '0.02em',
         pointerEvents: 'none',
         zIndex: '2000',
       });
     }
     const title = doc.createElement('div');
-    if (title.style) Object.assign(title.style, { color: '#7fd4e8', fontWeight: 'bold', letterSpacing: '1px' });
+    if (title.style) Object.assign(title.style, { color: 'var(--hud-info, #7fd4e8)', fontWeight: 'bold', letterSpacing: '1px' });
     const short = doc.createElement('div');
     if (short.style) Object.assign(short.style, { marginTop: '3px' });
     const meta = doc.createElement('div');

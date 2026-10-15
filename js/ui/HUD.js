@@ -431,7 +431,7 @@ export class HUD {
     });
     this.panels.warnings.style.display = 'none';
     this.panels.warnings.innerHTML = `
-      <div id="hud-warning-text" style="color:#ff4444;font-size:12px;font-weight:bold;"></div>
+      <div id="hud-warning-text" style="color:var(--hud-warning, #ff4444);font-size:12px;font-weight:bold;"></div>
     `;
 
     // --- Interaction Progress (center, shown during interaction) ---
@@ -451,7 +451,7 @@ export class HUD {
       position: 'absolute', top: '60px', left: '50%',
       transform: 'translateX(-50%)', minWidth: '280px', maxWidth: '340px',
       textAlign: 'center', display: 'none',
-      background: 'rgba(0,0,0,0.88)', border: '1px solid',
+      background: 'rgb(var(--hud-ink-rgb, 0 0 0) / 0.88)', border: '1px solid',
       borderRadius: '4px', padding: '10px 18px', zIndex: '120',
       fontFamily: 'var(--font-mono)',
     });
@@ -471,9 +471,9 @@ export class HUD {
       position: 'absolute', top: '100px', left: '50%',
       transform: 'translateX(-50%)', minWidth: '320px', maxWidth: '400px',
       textAlign: 'center', display: 'none',
-      background: 'rgba(0,0,0,0.92)', border: '1px solid rgba(0,200,255,0.5)',
+      background: 'rgb(var(--hud-ink-rgb, 0 0 0) / 0.92)', border: '1px solid rgb(var(--hud-info-rgb, 0 200 255) / 0.5)',
       borderRadius: '4px', padding: '12px 24px', zIndex: '130',
-      fontFamily: 'var(--font-mono)', color: '#00ccff',
+      fontFamily: 'var(--font-mono)', color: 'var(--hud-info, #00ccff)',
       letterSpacing: '1.5px', fontSize: '13px',
     });
     this._launchBanner.innerHTML = `
@@ -489,23 +489,23 @@ export class HUD {
       position: 'absolute',
       top: '0', left: '0', width: '100%', height: '100%',
       display: 'none',
-      background: 'rgba(0, 10, 20, 0.7)',
+      background: 'rgb(var(--hud-ink-rgb, 0 10 20) / 0.7)',
       zIndex: '150',
       pointerEvents: 'auto',
       fontFamily: 'var(--font-mono)',
     });
     this._pauseOverlay.innerHTML = `
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;">
-        <div style="font-size:2rem;color:#00ff88;letter-spacing:0.3em;margin-bottom:2rem;
-                    text-shadow:0 0 20px rgba(0,255,136,0.5);">PAUSED</div>
-        <div id="pause-resume-btn" style="font-size:1rem;color:#00ff88;cursor:pointer;padding:10px 30px;
-            border:1px solid rgba(0,255,136,0.5);border-radius:4px;margin:8px;
-            background:rgba(0,255,136,0.1);letter-spacing:0.15em;">
+        <div style="font-size:2rem;color:var(--hud-normal, #00ff88);letter-spacing:0.3em;margin-bottom:2rem;
+                    text-shadow:0 0 20px rgb(var(--hud-normal-rgb, 0 255 136) / 0.5);">PAUSED</div>
+        <div id="pause-resume-btn" style="font-size:1rem;color:var(--hud-normal, #00ff88);cursor:pointer;padding:10px 30px;
+            border:1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.5);border-radius:4px;margin:8px;
+            background:rgb(var(--hud-normal-rgb, 0 255 136) / 0.1);letter-spacing:0.15em;">
             RESUME [ESC]
         </div>
-        <div id="pause-menu-btn" style="font-size:1rem;color:#ffaa00;cursor:pointer;padding:10px 30px;
-            border:1px solid rgba(255,170,0,0.4);border-radius:4px;margin:8px;
-            background:rgba(255,170,0,0.08);letter-spacing:0.15em;">
+        <div id="pause-menu-btn" style="font-size:1rem;color:var(--hud-caution, #ffaa00);cursor:pointer;padding:10px 30px;
+            border:1px solid rgb(var(--hud-caution-rgb, 255 170 0) / 0.4);border-radius:4px;margin:8px;
+            background:rgb(var(--hud-caution-rgb, 255 170 0) / 0.08);letter-spacing:0.15em;">
             MAIN MENU
         </div>
       </div>
@@ -670,11 +670,11 @@ export class HUD {
             font-size: 10px;
             font-weight: 700;
             letter-spacing: 0.5px;
-            color: rgba(255, 200, 80, 0.95);
-            background: rgba(20, 14, 6, 0.55);
-            border: 1px solid rgba(255, 200, 80, 0.65);
+            color: rgb(var(--hud-caution-rgb, 255 200 80) / 0.95);
+            background: rgb(var(--hud-ink-rgb, 20 14 6) / 0.55);
+            border: 1px solid rgb(var(--hud-caution-rgb, 255 200 80) / 0.65);
             border-radius: 3px;
-            box-shadow: 0 0 6px rgba(255, 200, 80, 0.35);
+            box-shadow: 0 0 6px rgb(var(--hud-caution-rgb, 255 200 80) / 0.35);
             pointer-events: none;
             opacity: 1;
             transition: opacity 0.45s ease;
@@ -740,7 +740,7 @@ export class HUD {
       transform: 'translateX(-50%)',
       textAlign: 'center',
       zIndex: '100',
-      color: '#00ffcc',
+      color: 'var(--hud-normal, #00ffcc)',
       fontFamily: 'var(--font-mono)',
       fontSize: '14px',
       letterSpacing: '2px',
@@ -788,9 +788,9 @@ export class HUD {
       left: `${HUD_EDGE_PX}px`,
       width: `${HUD_COLUMN_WIDTH_PX}px`,
       padding: '4px 8px',
-      background: 'rgba(0,0,0,0.72)',
-      border: '1px solid rgba(240,192,64,0.35)',
-      color: VisualLaw.COLORS.VALUE,
+      background: 'rgb(var(--hud-ink-rgb, 0 0 0) / 0.72)',
+      border: '1px solid rgb(var(--hud-caution-rgb, 240 192 64) / 0.35)',
+      color: `var(--hud-text, ${VisualLaw.COLORS.VALUE})`,
       fontFamily: 'var(--font-mono)',
       fontSize: '11px',
       letterSpacing: '0.04em',
@@ -800,8 +800,8 @@ export class HUD {
     });
     el.innerHTML = `
       <div id="hud-pin-label" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
-      <div style="height:3px;margin-top:3px;background:rgba(240,192,64,0.15);border-radius:2px;overflow:hidden;">
-        <div id="hud-pin-bar" style="height:100%;width:0%;background:#f0c040;transition:width 0.3s ease;"></div>
+      <div style="height:3px;margin-top:3px;background:rgb(var(--hud-caution-rgb, 240 192 64) / 0.15);border-radius:2px;overflow:hidden;">
+        <div id="hud-pin-bar" style="height:100%;width:0%;background:var(--hud-caution, #f0c040);transition:width 0.3s ease;"></div>
       </div>`;
     this.container.appendChild(el);
     this._pinWidget = el;
@@ -827,10 +827,10 @@ export class HUD {
     const label = this._pinWidget.querySelector('#hud-pin-label');
     const bar = this._pinWidget.querySelector('#hud-pin-bar');
     if (affordable) {
-      this._pinWidget.style.borderColor = 'rgba(0,255,136,0.55)';
-      this._pinWidget.style.color = VisualLaw.COLORS.PLAYER;
+      this._pinWidget.style.borderColor = 'rgb(var(--hud-normal-rgb, 0 255 136) / 0.55)';
+      this._pinWidget.style.color = `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`;
       if (label) label.textContent = `▸ ${this._pinned.name} — READY AT DEPOT`;
-      if (bar) { bar.style.width = '100%'; bar.style.background = VisualLaw.COLORS.PLAYER; }
+      if (bar) { bar.style.width = '100%'; bar.style.background = `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`; }
       if (!this._pinReadyFired) {
         this._pinReadyFired = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
@@ -840,12 +840,12 @@ export class HUD {
         });
       }
     } else {
-      this._pinWidget.style.borderColor = 'rgba(240,192,64,0.35)';
-      this._pinWidget.style.color = VisualLaw.COLORS.VALUE;
+      this._pinWidget.style.borderColor = 'rgb(var(--hud-caution-rgb, 240 192 64) / 0.35)';
+      this._pinWidget.style.color = `var(--hud-text, ${VisualLaw.COLORS.VALUE})`;
       if (label) {
         label.textContent = `▸ ${this._pinned.name} ${Math.round(this._credits).toLocaleString()}/${this._pinned.cost.toLocaleString()} cr`;
       }
-      if (bar) { bar.style.width = `${Math.round(pct * 100)}%`; bar.style.background = VisualLaw.COLORS.VALUE; }
+      if (bar) { bar.style.width = `${Math.round(pct * 100)}%`; bar.style.background = `var(--hud-text, ${VisualLaw.COLORS.VALUE})`; }
       void remaining;
     }
     this._pinWidget.style.display = 'block';
@@ -2320,8 +2320,8 @@ export class HUD {
     if (textEl) {
       textEl.textContent = warning.message;
       if (warning.severity === 'critical') {
-        textEl.style.color = '#ff4444';
-        this.panels.warnings.style.borderColor = 'rgba(255,68,68,0.5)';
+        textEl.style.color = 'var(--hud-warning, #ff4444)';
+        this.panels.warnings.style.borderColor = 'rgb(var(--hud-warning-rgb, 255 68 68) / 0.5)';
         // Phase 1 #1: severity reads as steady colour (red text/border), not a
         // sub-second opacity strobe. The old Math.sin(Date.now()) toggle blinked
         // for the entire time a long-lived critical warning was queued.
@@ -2329,9 +2329,9 @@ export class HUD {
       } else {
         // 'warning' (default) — steady amber. The former 'success' severity was
         // retired (success feedback now routes to the quiet bottom toast).
-        textEl.style.color = '#ffaa00';
+        textEl.style.color = 'var(--hud-caution, #ffaa00)';
         textEl.style.opacity = '1';
-        this.panels.warnings.style.borderColor = 'rgba(255,170,0,0.3)';
+        this.panels.warnings.style.borderColor = 'rgb(var(--hud-caution-rgb, 255 170 0) / 0.3)';
       }
     }
   }
@@ -2517,9 +2517,9 @@ export class HUD {
     text.style.cssText = `
       position: fixed; top: 40%; left: 50%;
       transform: translate(-50%, -50%);
-      color: #ff4444; font-family: var(--font-mono);
+      color: var(--hud-warning, #ff4444); font-family: var(--font-mono);
       font-size: 28px; font-weight: bold; letter-spacing: 4px;
-      text-shadow: 0 0 20px rgba(255,50,50,0.8), 0 0 40px rgba(255,0,0,0.4);
+      text-shadow: 0 0 20px rgb(var(--hud-warning-rgb, 255 50 50) / 0.8), 0 0 40px rgb(var(--hud-warning-rgb, 255 0 0) / 0.4);
       pointer-events: none; z-index: 101;
       animation: detachTextFloat 1.2s ease-out forwards;
     `;
@@ -2654,11 +2654,11 @@ export class HUD {
         if (stripKind) {
           const red = stripKind === 'alert-red';
           panel.style.display = 'block';
-          panel.style.borderColor = red ? 'rgba(255,68,34,0.5)' : 'rgba(255,170,0,0.3)';
+          panel.style.borderColor = red ? 'rgb(var(--hud-warning-rgb, 255 68 34) / 0.5)' : 'rgb(var(--hud-caution-rgb, 255 170 0) / 0.3)';
           const textEl = (typeof document !== 'undefined') ? document.getElementById('hud-warning-text') : null;
           if (textEl) {
             textEl.textContent = v.text;
-            textEl.style.color = red ? VisualLaw.COLORS.THREAT : VisualLaw.COLORS.CAUTION;
+            textEl.style.color = red ? `var(--hud-warning, ${VisualLaw.COLORS.THREAT})` : `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})`;
             textEl.style.opacity = '1';
           }
         } else {
@@ -2739,9 +2739,9 @@ export class HUD {
     if (!panel) return;
 
     const tierColors = {
-      GREEN:  { border: '#00cc66', text: '#00ff88', label: 'GREEN. INFORMATIONAL' },
-      YELLOW: { border: '#ccaa00', text: '#ffdd44', label: 'YELLOW. CAUTION' },
-      RED:    { border: '#ff3333', text: '#ff5555', label: 'RED. CRITICAL' },
+      GREEN:  { border: 'var(--hud-normal, #00cc66)', text: 'var(--hud-normal, #00ff88)', label: 'GREEN. INFORMATIONAL' },
+      YELLOW: { border: 'var(--hud-caution, #ccaa00)', text: 'var(--hud-caution, #ffdd44)', label: 'YELLOW. CAUTION' },
+      RED:    { border: 'var(--hud-warning, #ff3333)', text: 'var(--hud-warning, #ff5555)', label: 'RED. CRITICAL' },
     };
     const tc = tierColors[data.tier] || tierColors.GREEN;
 
@@ -2796,8 +2796,8 @@ export class HUD {
         style.id = 'conjunction-pulse-style';
         style.textContent = `
           @keyframes conjunction-pulse {
-            from { box-shadow: 0 0 8px rgba(255,50,50,0.4); opacity: 1; }
-            to   { box-shadow: 0 0 20px rgba(255,50,50,0.8); opacity: 0.85; }
+            from { box-shadow: 0 0 8px rgb(var(--hud-warning-rgb, 255 50 50) / 0.4); opacity: 1; }
+            to   { box-shadow: 0 0 20px rgb(var(--hud-warning-rgb, 255 50 50) / 0.8); opacity: 0.85; }
           }
         `;
         document.head.appendChild(style);
@@ -2852,11 +2852,11 @@ export class HUD {
     const badge = document.createElement('div');
     badge.style.cssText = `
       display: inline-flex; align-items: center; gap: 6px;
-      background: rgba(0, 0, 0, 0.8);
-      border: 1px solid ${data.color || '#888'};
+      background: rgb(var(--hud-ink-rgb, 0 0 0) / 0.8);
+      border: 1px solid ${data.color || 'var(--hud-dim, #888)'};
       border-radius: 4px; padding: 4px 10px;
       font-family: var(--font-mono); font-size: 10px;
-      color: ${data.color || '#ccc'}; white-space: nowrap;
+      color: ${data.color || 'var(--hud-text, #ccc)'}; white-space: nowrap;
       pointer-events: none;
     `;
     badge.innerHTML = `<span style="font-size:12px;">${data.icon || '🌐'}</span><span>${data.name}</span>`;
@@ -2894,17 +2894,17 @@ export class HUD {
       bottom: 120px;
       left: 50%;
       transform: translateX(-50%);
-      background: rgba(10, 8, 4, 0.92);
-      border: 2px solid #d4a017;
+      background: rgb(var(--hud-ink-rgb, 10 8 4) / 0.92);
+      border: 2px solid var(--hud-caution, #d4a017);
       border-radius: 8px;
       padding: 10px 20px;
       font-family: var(--font-mono);
       font-size: 13px;
-      color: #ffe088;
+      color: var(--hud-caution, #ffe088);
       text-align: center;
       z-index: 150;
       pointer-events: none;
-      box-shadow: 0 0 20px rgba(212, 160, 23, 0.4), inset 0 0 12px rgba(212, 160, 23, 0.1);
+      box-shadow: 0 0 20px rgb(var(--hud-caution-rgb, 212 160 23) / 0.4), inset 0 0 12px rgb(var(--hud-caution-rgb, 212 160 23) / 0.1);
       animation: salvageRevealIn 0.3s ease-out forwards;
       min-width: 200px;
     `;
@@ -2919,16 +2919,16 @@ export class HUD {
         const name = (m.name || m.subtype || 'Unknown').charAt(0).toUpperCase() + (m.name || m.subtype || 'Unknown').slice(1);
         const amount = (m.amount || m.massKg || 0).toFixed(1);
         return `${icon} ${name} ${amount}kg`;
-      }).join(' <span style="color:#665522">|</span> ');
+      }).join(' <span style="color:var(--hud-caution, #665522)">|</span> ');
     } else {
       metalHtml = '🔧 Salvage Collected';
     }
 
     const typeLabel = (data.debrisType || 'debris').toUpperCase();
     popup.innerHTML = `
-      <div style="font-size:11px;color:#aa8844;letter-spacing:2px;margin-bottom:4px;">▸ SALVAGE. ${typeLabel} ◂</div>
+      <div style="font-size:11px;color:var(--hud-caution, #aa8844);letter-spacing:2px;margin-bottom:4px;">▸ SALVAGE. ${typeLabel} ◂</div>
       <div>${metalHtml}</div>
-      ${data.totalMass ? `<div style="font-size:10px;color:#887744;margin-top:4px;">Total: ${data.totalMass.toFixed(1)}kg recovered</div>` : ''}
+      ${data.totalMass ? `<div style="font-size:10px;color:var(--hud-caution, #887744);margin-top:4px;">Total: ${data.totalMass.toFixed(1)}kg recovered</div>` : ''}
     `;
 
     document.body.appendChild(popup);
@@ -2957,9 +2957,9 @@ export class HUD {
     text.style.cssText = `
       position: fixed; top: 35%; left: 50%;
       transform: translate(-50%, -50%);
-      color: #ff3333; font-family: var(--font-mono);
+      color: var(--hud-warning, #ff3333); font-family: var(--font-mono);
       font-size: 32px; font-weight: bold; letter-spacing: 4px;
-      text-shadow: 0 0 20px rgba(255,50,50,0.8), 0 0 40px rgba(255,0,0,0.4);
+      text-shadow: 0 0 20px rgb(var(--hud-warning-rgb, 255 50 50) / 0.8), 0 0 40px rgb(var(--hud-warning-rgb, 255 0 0) / 0.4);
       pointer-events: none; z-index: 101;
       animation: detachTextFloat 2.0s ease-out forwards;
     `;
@@ -2984,9 +2984,9 @@ export class HUD {
     text.style.cssText = `
       position: fixed; top: 35%; left: 50%;
       transform: translate(-50%, -50%);
-      color: #ffaa33; font-family: var(--font-mono);
+      color: var(--hud-caution, #ffaa33); font-family: var(--font-mono);
       font-size: 28px; font-weight: bold; letter-spacing: 4px;
-      text-shadow: 0 0 18px rgba(255,170,50,0.8), 0 0 36px rgba(255,140,0,0.4);
+      text-shadow: 0 0 18px rgb(var(--hud-caution-rgb, 255 170 50) / 0.8), 0 0 36px rgb(var(--hud-caution-rgb, 255 140 0) / 0.4);
       pointer-events: none; z-index: 101;
       animation: detachTextFloat 2.0s ease-out forwards;
     `;
@@ -3010,9 +3010,9 @@ export class HUD {
     text.style.cssText = `
       position: fixed; top: 35%; left: 50%;
       transform: translate(-50%, -50%);
-      color: #ff6633; font-family: var(--font-mono);
+      color: var(--hud-warning, #ff6633); font-family: var(--font-mono);
       font-size: 28px; font-weight: bold; letter-spacing: 4px;
-      text-shadow: 0 0 18px rgba(255,100,50,0.8), 0 0 36px rgba(255,60,0,0.4);
+      text-shadow: 0 0 18px rgb(var(--hud-warning-rgb, 255 100 50) / 0.8), 0 0 36px rgb(var(--hud-warning-rgb, 255 60 0) / 0.4);
       pointer-events: none; z-index: 101;
       animation: detachTextFloat 2.0s ease-out forwards;
     `;
@@ -3043,7 +3043,7 @@ export class HUD {
         transform: translateX(-50%);
         font-family: var(--font-mono);
         font-size: 14px; font-weight: bold; letter-spacing: 2px;
-        color: #ffaa00; text-shadow: 0 0 8px rgba(255,170,0,0.5);
+        color: var(--hud-caution, #ffaa00); text-shadow: 0 0 8px rgb(var(--hud-caution-rgb, 255 170 0) / 0.5);
         pointer-events: none; z-index: 110;
       `;
       this._stabilizeEl.textContent = '⚠ STABILIZE';
@@ -3081,10 +3081,10 @@ export class HUD {
       top: 28%;
       transform: translate(-50%, -50%);
       padding: 12px 28px;
-      background: linear-gradient(135deg, rgba(20, 12, 40, 0.92), rgba(60, 30, 80, 0.92));
-      border: 2px solid rgba(255, 200, 80, 0.85);
-      box-shadow: 0 0 24px rgba(255, 200, 80, 0.55), 0 4px 18px rgba(0, 0, 0, 0.6);
-      color: #fff;
+      background: linear-gradient(135deg, rgb(var(--hud-ink-rgb, 20 12 40) / 0.92), rgb(var(--hud-target-rgb, 60 30 80) / 0.92));
+      border: 2px solid rgb(var(--hud-caution-rgb, 255 200 80) / 0.85);
+      box-shadow: 0 0 24px rgb(var(--hud-caution-rgb, 255 200 80) / 0.55), 0 4px 18px rgb(var(--hud-ink-rgb, 0 0 0) / 0.6);
+      color: var(--hud-label, #fff);
       font-family: var(--font-mono);
       font-size: 18px;
       letter-spacing: 2px;
@@ -3095,8 +3095,8 @@ export class HUD {
       pointer-events: none;
     `;
     toast.innerHTML = `
-      <div style="font-size:11px; color:#ffcc66; letter-spacing:3px; margin-bottom:4px;">◆ MASTERY UNLOCKED ◆</div>
-      <div style="font-size:18px; color:#fff;">${label.replace(/</g, '&lt;')}</div>
+      <div style="font-size:11px; color:var(--hud-caution, #ffcc66); letter-spacing:3px; margin-bottom:4px;">◆ MASTERY UNLOCKED ◆</div>
+      <div style="font-size:18px; color:var(--hud-label, #fff);">${label.replace(/</g, '&lt;')}</div>
     `;
     document.body.appendChild(toast);
     // Next frame: fade in
@@ -3129,11 +3129,11 @@ export class HUD {
       bottom: `${armPilotStripBottomPx(ladderOn)}px`,
       left: '50%',
       transform: 'translateX(-50%)',
-      background: 'rgba(0, 30, 60, 0.85)',
-      border: '1px solid rgba(0, 200, 255, 0.4)',
+      background: 'rgb(var(--hud-ink-rgb, 0 30 60) / 0.85)',
+      border: '1px solid rgb(var(--hud-info-rgb, 0 200 255) / 0.4)',
       borderRadius: '6px',
       padding: '6px 16px',
-      color: '#88ccff',
+      color: 'var(--hud-info, #88ccff)',
       fontFamily: 'var(--font-mono)',
       fontSize: '11px',
       letterSpacing: '0.5px',
@@ -3152,10 +3152,10 @@ export class HUD {
       const style = document.createElement('style');
       style.id = 'apc-styles';
       style.textContent = `
-        .apc-badge { color: #00ccff; font-weight: bold; font-size: 12px; }
-        .apc-key { background: rgba(0,200,255,0.15); border: 1px solid rgba(0,200,255,0.3);
-                   border-radius: 3px; padding: 1px 5px; color: #00ccff; font-weight: bold; }
-        .apc-sep { color: rgba(0,200,255,0.25); }
+        .apc-badge { color: var(--hud-info, #00ccff); font-weight: bold; font-size: 12px; }
+        .apc-key { background: rgb(var(--hud-info-rgb, 0 200 255) / 0.15); border: 1px solid rgb(var(--hud-info-rgb, 0 200 255) / 0.3);
+                   border-radius: 3px; padding: 1px 5px; color: var(--hud-info, #00ccff); font-weight: bold; }
+        .apc-sep { color: rgb(var(--hud-info-rgb, 0 200 255) / 0.25); }
       `;
       document.head.appendChild(style);
     }

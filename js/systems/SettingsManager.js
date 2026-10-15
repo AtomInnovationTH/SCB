@@ -24,8 +24,8 @@ const GUIDANCE_VALUES = ['auto', 'GUIDED', 'POINTERS', 'MINIMAL'];
 
 class SettingsManager {
   constructor() {
-    /** @type {{ language: string, guidance: string, autolock: boolean, constellations: boolean }} */
-    this._settings = { language: DEFAULT_LANGUAGE, guidance: 'auto', autolock: true, constellations: false };
+    /** @type {{ language: string, guidance: string, autolock: boolean, constellations: boolean, classicLook: boolean }} */
+    this._settings = { language: DEFAULT_LANGUAGE, guidance: 'auto', autolock: true, constellations: false, classicLook: false };
     this._load();
   }
 
@@ -51,6 +51,11 @@ class SettingsManager {
         // else keeps the OFF default (a fresh profile starts clean).
         if (typeof parsed.constellations === 'boolean') {
           this._settings.constellations = parsed.constellations;
+        }
+        // h2-hud-look (D6): true = today's HUD style; anything but a real boolean keeps the
+        // new look (default false).
+        if (typeof parsed.classicLook === 'boolean') {
+          this._settings.classicLook = parsed.classicLook;
         }
       }
     } catch (_) { /* corrupt / blocked storage — keep defaults */ }
@@ -161,6 +166,30 @@ class SettingsManager {
     const v = !!on;
     if (v === this._settings.constellations) return false;
     this._settings.constellations = v;
+    this._save();
+    return true;
+  }
+
+  /**
+   * @returns {boolean} true when the player chose today's ("classic") HUD style.
+   *  h2-hud-look (D6, owner 2026-10-14: default on, a menu switch back to the
+   *  current style). Default false = the new look. Applying it to the page is
+   *  js/ui/HudLook.js's job; this only stores the choice.
+   */
+  getClassicLook() {
+    return this._settings.classicLook === true;
+  }
+
+  /**
+   * Persist the look choice. Emits NO event (nothing listens: the caller calls
+   * HudLook.applyLook right after). Returns whether the value changed.
+   * @param {boolean} classic
+   * @returns {boolean}
+   */
+  setClassicLook(classic) {
+    const v = !!classic;
+    if (v === this._settings.classicLook) return false;
+    this._settings.classicLook = v;
     this._save();
     return true;
   }

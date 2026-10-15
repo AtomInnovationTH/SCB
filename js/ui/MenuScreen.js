@@ -11,6 +11,7 @@ import { Constants } from '../core/Constants.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import { settingsManager } from '../systems/SettingsManager.js';
+import { applyLook, isClassic } from './HudLook.js';
 import { LANGUAGES } from '../core/Languages.js';
 import { FlagDecalSystem } from './FlagDecalSystem.js';
 import { MenuScene3D } from './MenuScene3D.js';
@@ -310,6 +311,24 @@ export class MenuScreen {
           border-color: #00ff88; background: rgba(0,255,136,0.12);
           box-shadow: 0 0 14px rgba(0,255,136,0.25);
         }
+        /* h2-hud-look (D6): the HUD look switch, hung under the picker (the "?" sits beside it at
+         * >= 1340 px, under it below that, so the look button steps left of the "?" there). */
+        #menu-look-btn {
+          position: absolute; top: calc(100% + 8px); right: 0;
+          min-height: 44px; box-sizing: border-box; padding: 0 12px;
+          background: rgba(4,12,30,0.62); color: rgba(0,255,136,0.92);
+          border: 1px solid rgba(0,255,136,0.4); border-radius: 6px;
+          cursor: pointer; font: inherit; font-size: 0.8rem; letter-spacing: 0.06em;
+          transition: all 0.2s;
+          backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+        }
+        #menu-look-btn:hover {
+          border-color: #00ff88; background: rgba(0,255,136,0.12);
+          box-shadow: 0 0 14px rgba(0,255,136,0.25);
+        }
+        @media (max-width: 1339px) {
+          #menu-look-btn { right: 52px; }
+        }
         #menu-lang-btn .menu-lang-caret { font-size: 0.7rem; opacity: 0.7; transition: transform 0.2s; }
         #menu-lang.open #menu-lang-btn .menu-lang-caret { transform: rotate(180deg); }
         .menu-lang-flag {
@@ -323,7 +342,7 @@ export class MenuScreen {
           border-radius: 6px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
           box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: none;
         }
-        #menu-lang.open #menu-lang-menu { display: block; }
+        #menu-lang.open #menu-lang-menu { display: block; z-index: 2; }
         #menu-lang-menu li {
           display: flex; align-items: center; gap: 10px;
           padding: 8px 10px; border-radius: 4px; cursor: pointer;
@@ -409,6 +428,7 @@ export class MenuScreen {
             <span class="menu-lang-caret">▾</span>
           </button>
           <ul id="menu-lang-menu" role="listbox" aria-label="Language"></ul>
+          <button id="menu-look-btn" type="button" aria-label="HUD look: new or classic" title="HUD look: new or classic">LOOK: NEW</button>
         </div>
 
         <!-- ══ HEADER (full-width, centered) ══ -->
@@ -644,6 +664,7 @@ export class MenuScreen {
 
     // Language / region selector
     this._buildLangSelector();
+    this._buildLookToggle();
 
     // Help "?" beside it (D3) — inert and hidden until setHelpOpener().
     this._wireHelpButton();
@@ -849,6 +870,27 @@ export class MenuScreen {
     this._langRoot.querySelector('#menu-lang-btn')?.setAttribute('aria-expanded', 'true');
     document.addEventListener('click', this._langOutsideHandler, true);
     document.addEventListener('keydown', this._langEscHandler, true);
+  }
+
+  /**
+   * @private h2-hud-look (D6): the LOOK: NEW / LOOK: CLASSIC button under the language picker.
+   * One tap stores the choice (sc_settings_v1) and applies it live; HudLook.applyLook is the
+   * only code that touches the page attribute. The label reads the page, so it tells the
+   * truth under a `?look=` boot override too.
+   */
+  _buildLookToggle() {
+    const btn = this.element.querySelector('#menu-look-btn');
+    if (!btn) return;
+    const refresh = () => { btn.textContent = isClassic() ? 'LOOK: CLASSIC' : 'LOOK: NEW'; };
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      audioSystem.playClick?.();
+      const classic = !isClassic();
+      settingsManager.setClassicLook(classic);
+      applyLook(classic);
+      refresh();
+    });
+    refresh();
   }
 
   /** @private */

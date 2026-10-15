@@ -800,7 +800,7 @@ export class VitalsPane {
     const G = VITALS_GEOMETRY;
     const L = VITALS_LAW;
     const P = VisualLaw.COLORS;
-    const HALO = '0 0 2px #000, 0 0 2px #000, 0 1px 1px #000';
+    const HALO = '0 0 2px var(--hud-ink, #000), 0 0 2px var(--hud-ink, #000), 0 1px 1px var(--hud-ink, #000)';
     // D6: every colour is a role variable with today's hex as its fallback.
     const LABEL = `var(--hud-label, ${P.LABEL})`;
     const TITLE = 'var(--hud-label, #00ff88)';
@@ -885,14 +885,14 @@ export class VitalsPane {
         height: ${G.TRACK_PX}px;
         overflow: hidden;
         border-radius: 1px;
-        background: rgba(255, 255, 255, 0.12);
+        background: rgb(var(--hud-text-rgb, 255 255 255) / 0.12);
       }
       /* HEAT: the zones are painted behind the bar - pale to 60, amber 60-85, red 85-100. */
       #${VITALS_ID} .vp-track-heat {
         background: linear-gradient(to right,
-          rgba(255, 255, 255, 0.12) 0 ${L.HEAT_YELLOW_C}%,
-          rgba(255, 170, 0, 0.30) ${L.HEAT_YELLOW_C}% ${L.HEAT_RED_C}%,
-          rgba(255, 68, 68, 0.38) ${L.HEAT_RED_C}% 100%);
+          rgb(var(--hud-text-rgb, 255 255 255) / 0.12) 0 ${L.HEAT_YELLOW_C}%,
+          rgb(var(--hud-caution-rgb, 255 170 0) / 0.30) ${L.HEAT_YELLOW_C}% ${L.HEAT_RED_C}%,
+          rgb(var(--hud-warning-rgb, 255 68 68) / 0.38) ${L.HEAT_RED_C}% 100%);
       }
       #${VITALS_ID} .vp-fill {
         position: absolute; left: 0; top: 0; bottom: 0;
@@ -904,7 +904,7 @@ export class VitalsPane {
       /* The 10 % segments: a 1 px dark line at the right edge of each tenth. */
       #${VITALS_ID} .vp-ticks {
         position: absolute; left: 0; top: 0; right: 0; bottom: 0;
-        background-image: linear-gradient(to left, rgba(5, 10, 20, 0.95) 1px, transparent 1px);
+        background-image: linear-gradient(to left, rgb(var(--hud-ink-rgb, 5 10 20) / 0.95) 1px, transparent 1px);
         background-size: 10% 100%;
       }
       #${VITALS_ID} .vp-mark {
