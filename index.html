@@ -244,13 +244,13 @@
       display: flex;           /* safety net: JS sets this inline, but preserve it if cleared */
       flex-direction: column;
       left: max(16px, env(safe-area-inset-left)); /* = HUD_EDGE_PX (js/ui/RailGeometry.js) */
-      width: 400px; /* = LEFT_COLUMN_WIDTH_PX (js/ui/RailGeometry.js) — the widest child, Mother; children hug the left edge (align-items: flex-start inline) */
+      width: 350px; /* = LEFT_COLUMN_WIDTH_PX (js/ui/RailGeometry.js) — the widest child, Mother (the merged pane, level with Daughters); children hug the left edge (align-items: flex-start inline) */
       scrollbar-width: thin;
       scrollbar-color: rgba(0,255,136,0.2) transparent;
     }
 
     /* Panels inside left column: flex children, not absolute. Each pane carries
-       its own inline width (Mother 400 / Daughters 350 = MOTHER_PANE_WIDTH_PX /
+       its own inline width (Mother 350 / Daughters 350 = MOTHER_PANE_WIDTH_PX /
        ARMS_PANE_WIDTH_PX); the LeftStack riders below the column are overlay
        children on the .hud-panel 280 base. */
     #hud-left-column > .hud-panel {
@@ -314,9 +314,37 @@
       transition: max-height 0.3s ease, opacity 0.2s ease 0.05s;
     }
     #hud-mother-panel:hover .mother-detail,
+    #hud-vitals:hover #hud-mother-panel .mother-detail,
     #hud-mother-panel.mother-expanded .mother-detail {
       max-height: 720px;
       opacity: 1;
+    }
+    /* h1-mother-pane D4: the MOTHER section is a child of the merged #hud-vitals box, so a hover
+       anywhere on the box opens the detail (the root's own :hover, not just the section's). */
+    #hud-vitals:hover #hud-mother-panel .panel-expand-section {
+      max-height: 200px;
+      opacity: 1;
+      padding-top: 4px;
+      padding-bottom: 2px;
+      margin-top: 4px;
+      border-top-color: rgba(0,255,136,0.15);
+    }
+    #hud-vitals:hover #hud-mother-panel .energy-hint { opacity: 0.7 !important; }
+    /* h1-mother-pane D1: ONE box. The MOTHER section carries no border / plate / title of its
+       own (the .hud-panel base would draw a second box inside the first). */
+    #hud-vitals > #hud-mother-panel {
+      position: relative !important;
+      width: auto;
+      margin: 0;
+      padding: 0;
+      border: none;
+      border-radius: 0;
+      background: none;
+    }
+    /* D4: while the MOTHER section is visible (F2, or any floor the MORE ladder pulls it onto) the
+       merged box takes pointer events; with the section hidden it stays display-only. */
+    #hud-vitals:has(> #hud-mother-panel:not([data-density-hidden]):not([data-floor-gone]):not([style*="display: none"])) {
+      pointer-events: auto;
     }
     /* Nested Propulsion / Energy blocks must NOT render their own boxed
        border/background — only the MOTHER container is a visible box. */

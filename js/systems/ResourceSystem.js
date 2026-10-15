@@ -18,8 +18,8 @@ import { ThermalSystem } from './ThermalSystem.js';
 export class ResourceSystem {
   constructor() {
     // ── Resource pools (canonical — synced to player.resources) ──────────
-    this.xenon = Constants.XENON_FUEL_MAX;
-    this.coldGas = Constants.COLD_GAS_MAX;
+    this.xenon = ResourceSystem.startPropellant(Constants.XENON_FUEL_MAX);     // h1-mother-pane D5: 60 %
+    this.coldGas = ResourceSystem.startPropellant(Constants.COLD_GAS_MAX);
     // w4-power D1: every boot starts at BATTERY_START_FRACTION (half) of the max.
     this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);
     this.solarPanelHealth = 1.0;
@@ -124,6 +124,18 @@ export class ResourceSystem {
    */
   static startCharge(max) {
     const f = Constants.BATTERY_START_FRACTION;
+    const frac = Number.isFinite(f) ? Math.max(0, Math.min(1, f)) : 1;
+    return max * frac;
+  }
+
+  /**
+   * h1-mother-pane D5 (owner 2026-10-14: "only 60% full"): the level a tank
+   * (engine propellant or cold gas) starts a boot at — new game, retry, CONTINUE.
+   * @param {number} max - the tank's max, kg
+   * @returns {number} kg
+   */
+  static startPropellant(max) {
+    const f = Constants.PROPELLANT_START_FRACTION;
     const frac = Number.isFinite(f) ? Math.max(0, Math.min(1, f)) : 1;
     return max * frac;
   }
@@ -631,8 +643,8 @@ export class ResourceSystem {
     if (data.rtgRate !== undefined) this._rtgRate = data.rtgRate;
     if (data.powerBeamRate !== undefined) this._powerBeamRate = data.powerBeamRate;
     // Refill to max for the new mission (the battery: half — w4-power D1)
-    this.xenon = this.xenonMax;
-    this.coldGas = this.coldGasMax;
+    this.xenon = ResourceSystem.startPropellant(this.xenonMax);
+    this.coldGas = ResourceSystem.startPropellant(this.coldGasMax);
     this.battery = ResourceSystem.startCharge(this.batteryMax);
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;
@@ -804,8 +816,8 @@ export class ResourceSystem {
    * Reset all resources to starting values (new game / retry).
    */
   reset() {
-    this.xenon = Constants.XENON_FUEL_MAX;
-    this.coldGas = Constants.COLD_GAS_MAX;
+    this.xenon = ResourceSystem.startPropellant(Constants.XENON_FUEL_MAX);
+    this.coldGas = ResourceSystem.startPropellant(Constants.COLD_GAS_MAX);
     this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);   // w4-power D1: half
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;

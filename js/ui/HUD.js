@@ -389,10 +389,19 @@ export class HUD {
     // W2 meters (DECISIONS §15 rows 5 + 8): heat, battery, gas and ion — the
     // VITALS pane is the FIRST child of the left column, above MOTHER. FloorMask
     // rooms it by attribute (shown on F1-F4, gone on F5); never a density rung.
-    this.vitalsPane = new VitalsPane({ parent: this.statusPanel.leftColumn });
+    // h1-mother-pane: ONE pane — the MOTHER section (nets + hover detail) is mounted inside this
+    // box, the memo chip rides its title row. The engine row's ΔV comes from a LAZY provider:
+    // the arm manager arrives after the HUD is built (setArmManager) and is read on every update.
+    this.vitalsPane = new VitalsPane({
+      parent: this.statusPanel.leftColumn,
+      getMassBudget: () => this._armManager?.getMassBudget?.() ?? null,
+    });
     // A HUD pane like the rest: hide() / show() (menu, shop, game over) carry it —
     // the FloorMask's null restore re-shows mask panes, so the panels map must own it.
-    if (this.vitalsPane.root) this.panels.vitals = this.vitalsPane.root;
+    if (this.vitalsPane.root) {
+      this.panels.vitals = this.vitalsPane.root;
+      this.statusPanel.attachToVitals(this.vitalsPane);
+    }
     // Ladder reorder rev 3 Task 6: DOM order inside the column is TargetPanel
     // → #hud-wireframe-container → NextPane (Next is parented by main.js as
     // the last child via hud.rightColumnEl).

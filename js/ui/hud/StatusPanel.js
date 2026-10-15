@@ -145,7 +145,6 @@ export class StatusPanel {
     this._memoBoxedPainted = false;   // the outline's last written state
     this._memoEl = null;              // cached #autopilot-indicator once found
     this._fleetClickBound = false;   // the ONE #hud-arms-status click delegate, attached once
-    this._initialDeltaV = null;
     this._forgeRevealed = false;
     this._cargoStatus = null;   // cached from CARGO_UPDATED events
     // Locked #15: Mother's CARGO kg/cap line is hidden while the Cargo pane's
@@ -384,11 +383,12 @@ export class StatusPanel {
    */
   _motherMarkup() {
     const memo = this._memoSlot;
-    return `
-      <div class="mother-header pane-title" style="font-size:11px;margin-bottom:3px;color:#00ff88;opacity:0.7;display:flex;align-items:baseline;gap:6px;">
-        <span>MOTHER</span>${memo ? `
-        <span id="autopilot-indicator" class="mother-memo" style="margin-left:auto;font-size:10px;letter-spacing:0.08em;color:${VisualLaw.COLORS.PLAYER};opacity:1;white-space:nowrap;"></span>` : ''}
-      </div>
+    // h1-mother-pane D2: the MOTHER title row lives in VitalsPane (it is the pane's
+    // title on every floor); this panel only OWNS the memo chip, and attachToVitals()
+    // moves `#autopilot-indicator` into the title row's right-hand slot.
+    return `${memo ? `
+      <span id="autopilot-indicator" class="mother-memo" style="font-size:10px;letter-spacing:0.08em;color:var(--hud-normal, ${VisualLaw.COLORS.PLAYER});opacity:1;white-space:nowrap;"></span>` : `
+      <div id="autopilot-indicator" style="font-size:10px;padding:2px 6px;border-radius:2px;display:inline-block;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);color:var(--hud-dim, #555);">[Autopilot: OFF]</div>`}
       <div id="mother-digest" style="font-size:11px;line-height:1.4;white-space:nowrap;display:flex;align-items:center;gap:6px;transition:opacity 0.3s ease;">
         <span id="mother-digest-net" class="md-seg" style="display:inline-flex;align-items:center;gap:4px;color:${NET_COLOR};">
           <span class="md-core">
@@ -402,53 +402,16 @@ export class StatusPanel {
         <span class="md-sep" id="mother-digest-mnet-sep" style="display:none;">·</span>
         <span id="mother-digest-mnet" class="md-seg" style="display:none;align-items:center;gap:4px;color:${NET_COLOR};" title="Mother Large Net (whale hunts)">
           <span class="md-core">
-          <span class="md-label">M-NET</span>
+          <span class="md-label">LARGE NET</span>
           <span class="md-count" id="mother-digest-mnet-count">0/0</span>
           </span>
           <span class="md-reach-group"><span class="md-sep">·</span><span class="md-reach" id="mother-digest-mnet-reach" title="Large net reach">${StatusPanel.reachText(netMaxReachM(Constants.CAPTURE_NET.LARGE))}</span></span>
-        </span>
-        <span class="md-sep">·</span>
-        <span id="mother-digest-dv" style="display:inline-flex;align-items:center;gap:4px;color:#aaffdd;">
-          <span class="md-label">ΔV</span>
-          <span class="md-track"><span class="md-fill" id="mother-digest-dv-fill"></span></span>
-          <span class="md-count" id="mother-digest-dv-pct" style="display:none;"></span>
-        </span>
-        <span class="md-sep">·</span>
-        <span id="mother-digest-pwr" style="display:inline-flex;align-items:center;gap:3px;color:#00ff88;">
-          <span class="md-label">PWR</span>
-          <span id="mother-digest-pwr-text" style="display:none;font-weight:bold;letter-spacing:0.05em;"></span>
         </span>
       </div>
       <div class="mother-detail">
         <div class="mother-block mother-block-propulsion" data-hud-group="fuel-group" data-activate-key="A">
       <div class="panel-full-content">
-        <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#00ff88;opacity:0.7;">PROPULSION</div>${memo ? '' : `
-        <div id="autopilot-indicator" style="font-size:10px;margin-bottom:4px;padding:2px 6px;border-radius:2px;display:inline-block;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);color:#555;">[Autopilot: OFF]</div>`}
-        <div id="deltav-bar-track" style="position:relative;width:100%;height:16px;background:rgba(0,0,0,0.5);
-             border:1px solid rgba(0,255,136,0.3);border-radius:2px;overflow:hidden;">
-          <div id="deltav-bar-fill" style="height:100%;width:100%;background:#00ff88;
-               transition:width 0.5s ease, background-color 0.5s ease;"></div>
-          <span id="deltav-bar-text" style="position:absolute;right:4px;top:0;line-height:16px;font-size:10px;color:#fff;text-shadow:0 0 3px rgba(0,0,0,0.8);background:rgba(0,0,0,0.4);padding:0 4px;border-radius:2px;">. M/s ~. </span>
-        </div>
-        <div id="deltav-text" style="font-size:11px;margin-top:4px;margin-bottom:6px;color:#aaffdd;">
-          ΔV: m/s • ~. Transfers
-        </div>
-        <div class="hud-resource-row">
-          <span>Xenon</span>
-          <div class="hud-bar-track"><div class="hud-bar-fill" id="hud-bar-xenon" style="width:100%"></div></div>
-          <span id="hud-val-xenon" style="width:36px;text-align:right">100%</span>
-        </div>
-        <div class="hud-resource-row">
-          <span>Gas</span>
-          <div class="hud-bar-track"><div class="hud-bar-fill" id="hud-bar-coldgas" style="width:100%"></div></div>
-          <span id="hud-val-coldgas" style="width:36px;text-align:right">20</span>
-        </div>
-        <div class="hud-resource-row">
-          <span>Bat</span>
-          <div class="hud-bar-track"><div class="hud-bar-fill" id="hud-bar-battery" style="width:100%"></div></div>
-          <span id="hud-val-battery" style="width:36px;text-align:right">100%</span>
-          <span id="edt-indicator" style="display:none;color:#4488ff;font-size:10px;margin-left:4px;font-weight:bold;" title="Electrodynamic Tether">E-Tether</span>
-        </div>
+        <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#00ff88;opacity:0.7;">PROPULSION</div>
         <div id="mpd-lithium-row" class="hud-resource-row" style="display:none;">
           <span style="color:#88ccff;">Li</span>
           <div class="hud-bar-track"><div class="hud-bar-fill" id="hud-bar-lithium" style="width:0%;background-color:#88ccff;"></div></div>
@@ -472,7 +435,7 @@ export class StatusPanel {
           </div>
         </div>
         <div id="fuel-type-indicator" style="font-size:10px;color:#4fc3f7;margin-top:2px;margin-bottom:2px">
-          Xenon · 1600s
+          Xenon · ${Constants.OCTOPUS_CORE_HALL_ISP}s
         </div>
         <div id="throttle-gauge" style="display:none;align-items:center;gap:4px;font-size:10px;margin-bottom:4px;">
           <span style="color:#00ff88;opacity:0.7;">Throttle</span>
@@ -487,9 +450,6 @@ export class StatusPanel {
         </div>
         <div id="att-rate-row" style="display:none;font-size:10px;margin-top:1px;margin-bottom:2px;">
           <span style="opacity:0.7;">Rate: </span><span id="att-rate-val" style="font-weight:bold;color:#00ff88;">P 0.0°/s · Y 0.0°/s · R 0.0°/s</span>
-        </div>
-        <div id="plume-block-row" style="display:none;font-size:10px;margin-top:1px;margin-bottom:2px;color:#ff4444;font-weight:bold;">
-          WARN PLUME BLOCK
         </div>
         <div id="cargo-summary" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;color:#666;display:none;"></div>
         <div id="forge-inline" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;display:none;">
@@ -514,16 +474,13 @@ export class StatusPanel {
           <div id="hud-mass-budget" style="font-size:10px;line-height:1.5;">
             <span style="opacity:0.5">Computing…</span>
           </div>
-          <div style="font-size:10px;margin-top:3px;opacity:0.6;">
-            SUN <span id="hud-val-solar">0</span> W
-          </div>
         </div>
       </div>
         </div>
         <div class="mother-block mother-block-energy" id="hud-power-panel" data-hud-group="power-group">
       <div class="panel-full-content">
         <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#00ff88;opacity:0.7;display:flex;justify-content:space-between;align-items:center;">
-          <span>ENERGY</span>
+          <span>POWER SPLIT</span>
           <span id="power-collapse-indicator" style="font-size:10px;opacity:0.4;transition:transform 0.2s;">▸</span>
         </div>
         <div id="hud-power-bars" style="font-size:10px;line-height:1.6;transition:max-height 0.2s ease,opacity 0.2s ease;overflow:hidden;">
@@ -734,16 +691,22 @@ export class StatusPanel {
     // Glass (Task 13): hover stays the desktop trigger; tap on the header
     // toggles .mother-expanded. Skip hover on glass so iOS ghost-hover cannot
     // expand-then-collapse under the tap.
-    this.panels.mother.addEventListener('mouseenter', () => {
+    // h1-mother-pane D4: the handlers are bound to ONE hover target — the MOTHER panel until
+    // attachToVitals() moves them to the merged pane's root, so hovering any meter row opens
+    // the detail too (and moving from a meter onto the nets row is not a "leave").
+    this._onMotherEnter = () => {
       if (this._glass) return;
       this._motherHovering = true;
       this._expandMother();
-    });
-    this.panels.mother.addEventListener('mouseleave', () => {
+    };
+    this._onMotherLeave = () => {
       if (this._glass) return;
       this._motherHovering = false;
       this._scheduleMotherCollapse();
-    });
+    };
+    this._hoverTarget = this.panels.mother;
+    this.panels.mother.addEventListener('mouseenter', this._onMotherEnter);
+    this.panels.mother.addEventListener('mouseleave', this._onMotherLeave);
     this._bindMotherGlassTap();
     // Reflect the initial compact step in the detail visibility + energy block.
     this._onMotherStep('min');
@@ -765,6 +728,40 @@ export class StatusPanel {
   // ==========================================================================
   // PUBLIC
   // ==========================================================================
+
+  /**
+   * h1-mother-pane D1/D2/D4: merge into the VitalsPane box. The MOTHER panel becomes a
+   * child section of `#hud-vitals` (no border / background / title of its own — index.html),
+   * the memo chip moves into the title row's right-hand slot, and the hover + glass-tap
+   * handlers move from the panel to the merged root. The FloorMask table is untouched: the
+   * mother section still follows the 'mother' rung (F2 by default); the root stays display-only
+   * (index.html turns its pointer events on only while the section is visible).
+   * @param {import('./VitalsPane.js').VitalsPane} vitals
+   * @returns {boolean} true when merged
+   */
+  attachToVitals(vitals) {
+    const root = vitals && vitals.root;
+    const mother = this.panels && this.panels.mother;
+    if (!root || !mother || !vitals.mountSection) return false;
+    if (!vitals.mountSection(mother)) return false;
+    this._vitals = vitals;
+    if (mother.style) mother.style.width = 'auto';
+    // The memo chip: out of the section, into the title row.
+    const chip = typeof mother.querySelector === 'function' ? mother.querySelector('#autopilot-indicator') : null;
+    const slot = vitals.titleSlot;
+    if (chip && slot && typeof slot.appendChild === 'function') slot.appendChild(chip);
+    // Hover / glass tap: off the panel, onto the merged root.
+    if (typeof mother.removeEventListener === 'function') {
+      mother.removeEventListener('mouseenter', this._onMotherEnter);
+      mother.removeEventListener('mouseleave', this._onMotherLeave);
+    }
+    this._unbindMotherGlassTap();
+    this._hoverTarget = root;
+    root.addEventListener('mouseenter', this._onMotherEnter);
+    root.addEventListener('mouseleave', this._onMotherLeave);
+    this._bindMotherGlassTap();
+    return true;
+  }
 
   /**
    * Set the ArmManager reference for real-time status polling.
@@ -1143,27 +1140,18 @@ export class StatusPanel {
 
   /** @private */
   _updateResourceBars(resources) {
-    const xenonMax = resources.xenonMax || Constants.XENON_FUEL_MAX;
-    const coldGasMax = resources.coldGasMax || Constants.COLD_GAS_MAX;
+    // h1-mother-pane D3: the Xenon / Gas / Bat bars and the SUN line left this detail — the merged
+    // pane's meters (VitalsPane) are the one place those readings live. What stays: the MPD-armed
+    // purple tint (now on the BATTERY row's bar fill), the lithium row and the `_lastResources` cache.
     const batteryMax = resources.batteryMax || Constants.BATTERY_MAX;
-    const xenonPct = (resources.xenon / xenonMax) * 100;
-    const coldGasPct = (resources.coldGas / coldGasMax) * 100;
-    const batteryPct = (resources.battery / batteryMax) * 100;
 
-    this._setBar('hud-bar-xenon', xenonPct, 'hud-val-xenon', `${Math.round(xenonPct)}%`);
-    this._setBar('hud-bar-coldgas', coldGasPct, 'hud-val-coldgas', resources.coldGas.toFixed(1));
-    this._setBar('hud-bar-battery', batteryPct, 'hud-val-battery', `${Math.round(batteryPct)}%`);
-
-    // S3b: Override battery bar color when MPD is armed (purple tint)
-    if (this._mpdArmed) {
-      const batBar = document.getElementById('hud-bar-battery');
-      if (batBar) {
+    // S3b: MPD armed -> the battery bar fill goes purple (amber blink under 15 %)
+    if (this._vitals && typeof this._vitals.setMpdTint === 'function') {
+      if (this._mpdArmed) {
         const batteryFrac = batteryMax > 0 ? resources.battery / batteryMax : 1;
-        if (batteryFrac < 0.15) {
-          batBar.style.backgroundColor = (Date.now() % 500 < 250) ? '#ffaa00' : '#aa44ff';
-        } else {
-          batBar.style.backgroundColor = '#aa44ff';
-        }
+        this._vitals.setMpdTint(batteryFrac < 0.15 && (Date.now() % 500 < 250) ? 'amber' : 'armed');
+      } else {
+        this._vitals.setMpdTint('');
       }
     }
 
@@ -1175,9 +1163,6 @@ export class StatusPanel {
       if (lithiumRow) lithiumRow.style.display = '';
       this._setLithiumBar(lithiumPct, resources.lithium, lithiumMax);
     }
-
-    const solarEl = document.getElementById('hud-val-solar');
-    if (solarEl) solarEl.textContent = resources.solarRate.toFixed(0);
 
     // Cache for cross-method access (used by _updateDeltaVBar for DELTAV_UPDATE payload)
     this._lastResources = resources;
@@ -1191,7 +1176,10 @@ export class StatusPanel {
     const el = document.getElementById('fuel-type-indicator');
     if (!el) return;
     if (fuelData) {
-      el.textContent = `${fuelData.name} · ${fuelData.isp}s`;
+      // h1-mother-pane D3: for xenon the number is the Isp the ΔV maths uses (the
+      // ship's Hall thruster, OCTOPUS_CORE_HALL_ISP); cargo fuels keep their FUELS isp.
+      const isp = fuelData.fuelId === 'xenon' ? Constants.OCTOPUS_CORE_HALL_ISP : fuelData.isp;
+      el.textContent = `${fuelData.name} · ${isp}s`;
       el.style.color = fuelData.color || '#4fc3f7';
     }
   }
@@ -1650,15 +1638,15 @@ export class StatusPanel {
    * a tap. Hover remains the desktop path.
    */
   _bindMotherGlassTap() {
-    const pane = this.panels && this.panels.mother;
+    const pane = this._hoverTarget || (this.panels && this.panels.mother);
     if (!pane || typeof pane.addEventListener !== 'function') return;
     const SLOP = 8;
-    pane.addEventListener('pointerdown', (e) => {
+    const down = (e) => {
       if (!this._glass) return;
       this._motherTapDown = { x: Number(e && e.clientX) || 0, y: Number(e && e.clientY) || 0 };
       this._motherTapHandled = false;
-    });
-    pane.addEventListener('pointerup', (e) => {
+    };
+    const up = (e) => {
       if (!this._glass || !this._motherTapDown) { this._motherTapDown = null; return; }
       const dx = (Number(e && e.clientX) || 0) - this._motherTapDown.x;
       const dy = (Number(e && e.clientY) || 0) - this._motherTapDown.y;
@@ -1668,8 +1656,8 @@ export class StatusPanel {
       this._toggleMotherTap();
       this._motherTapHandled = true;
       if (e && typeof e.preventDefault === 'function') e.preventDefault();
-    });
-    pane.addEventListener('click', (e) => {
+    };
+    const click = (e) => {
       if (!this._glass) return;
       if (this._motherTapHandled) {
         this._motherTapHandled = false;
@@ -1679,17 +1667,31 @@ export class StatusPanel {
       }
       if (!this._inMotherTapZone(e && e.target)) return;
       this._toggleMotherTap();
-    });
+    };
+    pane.addEventListener('pointerdown', down);
+    pane.addEventListener('pointerup', up);
+    pane.addEventListener('click', click);
+    this._glassTapBound = { pane, down, up, click };
   }
 
-  /** @private Header / digest / pane chrome — not the expanded .mother-detail. */
+  /** @private Take the glass-tap listeners off their current target (attachToVitals re-binds them on the root). */
+  _unbindMotherGlassTap() {
+    const b = this._glassTapBound;
+    this._glassTapBound = null;
+    if (!b || typeof b.pane.removeEventListener !== 'function') return;
+    b.pane.removeEventListener('pointerdown', b.down);
+    b.pane.removeEventListener('pointerup', b.up);
+    b.pane.removeEventListener('click', b.click);
+  }
+
+  /** @private The whole merged pane (title, meters, nets) is the tap zone — not the expanded .mother-detail. */
   _inMotherTapZone(t) {
-    const pane = this.panels && this.panels.mother;
+    const pane = this._hoverTarget || (this.panels && this.panels.mother);
     if (!t) return false;
     if (t === pane) return true;
     if (typeof t.closest !== 'function') return t === pane;
     if (t.closest('.mother-detail')) return false;
-    return !!(t.closest('.mother-header') || t.closest('#mother-digest') || t.closest('#hud-mother-panel'));
+    return !!(t.closest('.vp-title') || t.closest('#mother-digest') || t.closest('#hud-mother-panel') || t.closest('#hud-vitals'));
   }
 
   /** @private Glass tap: flip the expand class (pinned chrome still wins). */
@@ -1749,9 +1751,6 @@ export class StatusPanel {
     const buses = ['thrust', 'sensors', 'arms'];
     const colors = { thrust: '#00ff88', sensors: '#4488ff', arms: '#00ff88' };
 
-    // Track starvation for the digest power glyph.
-    let anyStarved = false;
-
     for (const bus of buses) {
       const bar = document.getElementById(`hud-power-bar-${bus}`);
       const val = document.getElementById(`hud-power-val-${bus}`);
@@ -1765,50 +1764,7 @@ export class StatusPanel {
       if (val) val.textContent = `${state[bus]}%`;
       if (row) row.setAttribute('data-selected', state.selectedBus === bus ? 'true' : 'false');
 
-      if (state[bus] === 0) anyStarved = true;
     }
-
-    // Digest PWR label — derived power health.
-    this._updatePowerDigestGlyph(anyStarved);
-  }
-
-  /**
-   * @private Update the MOTHER digest `PWR` power-health label.
-   * Dark-cockpit: the label is colour-coded and a word only appears on a fault.
-   * Green (no word) when battery >20% and no bus starved; amber `LOW` at 5–20%
-   * or a starved bus; red `CRIT` <5%. Battery comes from the last cached payload.
-   * @param {boolean} anyStarved — true if any power bus is allocated 0%.
-   */
-  _updatePowerDigestGlyph(anyStarved) {
-    const seg = document.getElementById('mother-digest-pwr');
-    const txt = document.getElementById('mother-digest-pwr-text');
-    if (!seg) return;
-
-    const res = this._lastResources || {};
-    const batteryMax = res.batteryMax || Constants.BATTERY_MAX || 100;
-    const batteryPct = batteryMax > 0 && res.battery != null
-      ? (res.battery / batteryMax) * 100
-      : 100;
-
-    let color, label;
-    if (batteryPct < 5) {
-      color = '#ff4444';
-      label = 'CRIT';
-    } else if (batteryPct < 20 || anyStarved) {
-      color = '#ffaa00';
-      label = 'LOW';
-    } else {
-      color = '#00ff88';
-      label = '';
-    }
-    seg.style.color = color;
-    if (txt) {
-      txt.textContent = label;
-      txt.style.display = label ? '' : 'none';
-    }
-
-    this._pwrNominal = !label;
-    this._refreshDigestDim();
   }
 
   /**
@@ -1833,18 +1789,17 @@ export class StatusPanel {
     if (!el || !this._armManager) return;
 
     const mb = this._armManager.getMassBudget();
-    const dvColor = mb.deltaV > 500 ? '#00ff88' : mb.deltaV > 200 ? '#ffaa00' : '#ff4444';
     const xeColor = mb.xenonCurrent > mb.xenonMax * 0.5 ? '#00ff88' :
                      mb.xenonCurrent > mb.xenonMax * 0.2 ? '#ffaa00' : '#ff4444';
 
     el.innerHTML = `
-      <div style="display:flex;justify-content:space-between;">
-        <span>ΔV:</span>
-        <span style="color:${dvColor};font-weight:bold;">${mb.deltaV} m/s</span>
+      <div style="display:flex;justify-content:space-between;opacity:0.7;">
+        <span>Xenon:</span>
+        <span style="color:${xeColor};">${mb.xenonCurrent}/${mb.xenonMax} kg</span>
       </div>
       <div style="display:flex;justify-content:space-between;opacity:0.7;">
-        <span>Xe:</span>
-        <span style="color:${xeColor};">${mb.xenonCurrent}/${mb.xenonMax} kg</span>
+        <span>Nitrogen:</span>
+        <span>${mb.coldGasCurrent}/${mb.coldGasMax} kg</span>
       </div>
       <div style="display:flex;justify-content:space-between;opacity:0.7;">
         <span>Mass:</span>
@@ -1862,99 +1817,46 @@ export class StatusPanel {
     `;
   }
 
-  /** @private Update the ΔV budget bar */
+  /**
+   * @private The ΔV alarm driver. h1-mother-pane D3: the old detail bar + text and the
+   * digest's ΔV segment are gone (the engine row of the merged pane shows the ΔV), but
+   * this emit is the ONE driver of the ΔV alarm (AudioSystem's DELTAV_UPDATE listener),
+   * so it stays — with no DOM dependency. `pct` (0-1) is the engine TANK fraction, the same
+   * number the engine row's bar shows, so a 60 % start reads 60 % (the first-reading
+   * `maxDV` baseline would have read 100 % there).
+   */
   _updateDeltaVBar(cachedTargets) {
-    const fill = document.getElementById('deltav-bar-fill');
-    const text = document.getElementById('deltav-text');
-    const barText = document.getElementById('deltav-bar-text');
-    if (!fill || !text || !this._armManager) return;
+    if (!this._armManager) return;
 
     const mb = this._armManager.getMassBudget();
     const dv = mb.deltaV;
 
-    // Capture initial ΔV on first non-zero reading
-    if (this._initialDeltaV === null && dv > 0) {
-      this._initialDeltaV = dv;
-    }
+    const res = this._lastResources || {};
+    const tankMax = res.xenonMax || Constants.XENON_FUEL_MAX;
+    const frac = tankMax > 0 && Number.isFinite(res.xenon)
+      ? Math.max(0, Math.min(1, res.xenon / tankMax)) : 1;
 
-    const maxDV = this._initialDeltaV || 500; // fallback estimate
-    const pct = Math.max(0, Math.min(100, (dv / maxDV) * 100));
-
-    // Phase R9: Predictive ΔV — warn if matching selected target would drop below threshold
+    // Phase R9: Predictive ΔV — warn if matching selected target would drop below threshold.
+    // Same scale as `pct`: the tank fraction left after paying the transfer.
     let predictedPct = null;
     if (cachedTargets && cachedTargets.length > 0) {
       const selectedTarget = cachedTargets.find(t => t.selected || t.isSelected);
-      if (selectedTarget && selectedTarget.deltaV) {
+      if (selectedTarget && selectedTarget.deltaV && dv > 0) {
         const costMs = selectedTarget.deltaV * 1000;  // km/s to m/s
         const predictedDv = dv - costMs;
-        predictedPct = Math.max(0, (predictedDv / maxDV));
+        predictedPct = Math.max(0, frac * (predictedDv / dv));
       }
     }
     this._predictedDvPct = predictedPct;
 
     // Phase R9: Emit ΔV telemetry for AudioSystem 4-tier alarm + ambient state
-    const res = this._lastResources || {};
     eventBus.emit(Events.DELTAV_UPDATE, {
-      pct: pct / 100,            // normalize to 0-1
+      pct: frac,                 // 0-1, the engine tank fraction
       deltaV: dv,
       predictedPct: predictedPct,
       solarRate: res.solarRate || 0,
       batteryPct: res.battery ? (res.battery / (res.batteryMax || 100)) * 100 : 100,
     });
-
-    // Update bar width
-    fill.style.width = `${pct}%`;
-
-    // Color transitions based on percentage (synchronized with audio tiers: 30/15/5/1%).
-    // Shared ladder (_dvColorTier) so the detail bar and the MOTHER digest segment
-    // below cannot drift. The detail bar uses solid green as its nominal colour.
-    {
-      const tier = this._dvColorTier(pct, '#00ff88');
-      fill.style.backgroundColor = tier.color;
-      fill.style.animation = tier.anim;
-    }
-
-    text.textContent = `ΔV: ${Math.round(dv)} m/s • ${Math.round(pct)}%`;
-    if (barText) barText.textContent = `${Math.round(dv)} m/s`;
-
-    // Color the text label too
-    if (pct <= 5) {
-      text.style.color = '#ff4444';
-    } else if (pct <= 15) {
-      text.style.color = '#ffaa00';
-    } else {
-      text.style.color = '#aaffdd';
-    }
-
-    // MOTHER digest ΔV segment — a thin remaining-budget gauge; the `%` text
-    // appears only when low (≤30%), dark-cockpit style. The bar fraction is the
-    // honest "what can I still do before I refuel?" read and uses the SAME
-    // _dvColorTier ladder as the detail bar above (only the nominal colour
-    // differs: the digest uses the dimmer teal), so the two never diverge.
-    //
-    // (This replaced `~N transfers` — shipΔV ÷ avg cost of the 5 nearest targets.
-    // That metric was degenerate: the nearest targets are the ones you're already
-    // co-orbital with, so their cost rounds to a few m/s and hit the 10 m/s floor,
-    // collapsing the readout to shipΔV/10 (~300) regardless of tactical state.)
-    const dvFill = document.getElementById('mother-digest-dv-fill');
-    const dvPct = document.getElementById('mother-digest-dv-pct');
-    if (dvFill) {
-      dvFill.style.width = `${pct}%`;
-      const tier = this._dvColorTier(pct, '#aaffdd');
-      dvFill.style.backgroundColor = tier.color;
-      dvFill.style.animation = tier.anim;
-      if (dvPct) {
-        if (pct <= 30) {
-          dvPct.style.display = '';
-          dvPct.textContent = `${Math.round(pct)}%`;
-          dvPct.style.color = tier.color;
-        } else {
-          dvPct.style.display = 'none';
-        }
-      }
-      this._dvNominal = pct > 30;
-      this._refreshDigestDim();
-    }
   }
 
   /**
@@ -1990,28 +1892,29 @@ export class StatusPanel {
    * releasing below the CLOSED floor) the line carries the reason the drive will
    * not answer: ' · THRUST INHIBITED' (the 7b pose-band guard; deploying past
    * the CLOSED floor clears it). `locked` absent (older snapshots) → no suffix.
-   * Labels: SLEWING while moving, CLOSED, FOLDED, else OPEN — the angle is the
-   * `· θ°` that follows (146° is the open angle; 180° is the push-through).
+   * Labels (h1-mother-pane D3): the angle then a plain word — `Radiator 2° · closed`,
+   * `Radiator 146° · open`, `Radiator 90° · moving`, folded (146° is the open angle;
+   * 180° is the push-through).
    * @param {{pairCount:number, thetaDeg:number, openFrac:number,
    *          slewing:boolean, pose:string, locked?:boolean}|null} st
    * @returns {string} span HTML, or '' when nothing should be shown
    */
   _flowerReadout(st) {
     if (!st || !st.pairCount) return '';
-    const pairs = st.pairCount === 2 ? 'PAIRS A+B' : 'PAIR A';
-    const pct = Math.round(st.openFrac * 100);
     const theta = Math.round(st.thetaDeg);
-    // Plain words only (owner 2026-10-09: say the angle, never a pose name): the
-    // angle follows in `· θ°`, so every non-closed rest reads OPEN.
-    const base = st.slewing ? 'SLEWING'
-      : st.pose === 'CLOSED' ? 'CLOSED'
-        : st.pose === 'LAUNCH' ? 'FOLDED' : 'OPEN';
-    const label = st.locked === true ? `${base} \u00b7 THRUST INHIBITED` : base;
+    // Plain words only (owner 2026-10-09: say the angle, never a pose name; h1-mother-pane
+    // D3: no "Flower", "PAIRS", "A+B" or "% open" either): `Radiator 2\u00b0 \u00b7 closed`,
+    // `Radiator 146\u00b0 \u00b7 open`, `Radiator 90\u00b0 \u00b7 moving`. Every non-closed rest reads open.
+    const word = st.slewing ? 'moving'
+      : st.pose === 'CLOSED' ? 'closed'
+        : st.pose === 'LAUNCH' ? 'folded' : 'open';
+    const label = st.locked === true ? `${theta}\u00b0 \u00b7 ${word} \u00b7 THRUST INHIBITED` : `${theta}\u00b0 \u00b7 ${word}`;
     // Inhibited = steady CAUTION amber (the denial token; the same '#ffaa00' the slew line wears).
-    const c = st.locked === true ? VisualLaw.COLORS.CAUTION : st.slewing ? '#ffaa00' : '#a3d9c9';
-    return `<div style="display:flex;justify-content:space-between;">`
-      + `<span style="opacity:0.7;">Flower ${pairs}</span>`
-      + `<span style="color:${c};">${label} · ${pct}% open · ${theta}°</span>`
+    const c = st.locked === true ? `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})`
+      : st.slewing ? 'var(--hud-caution, #ffaa00)' : 'var(--hud-text, #a3d9c9)';
+    return `<div style="display:flex;gap:6px;">`
+      + `<span style="opacity:0.7;">Radiator</span>`
+      + `<span style="color:${c};">${label}</span>`
       + '</div>';
   }
 

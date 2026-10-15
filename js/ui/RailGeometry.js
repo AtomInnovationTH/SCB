@@ -75,14 +75,16 @@
  *                  the two ARMS are wider than the base — the five names below
  *                  carry the inverted U's real widths; this number stays 280
  *                  and keeps its name (no rename — every base-width pin stands).
- *   MOTHER_PANE_WIDTH_PX   Mother (the left arm's top pane): 400 — the callout
- *                  digest and the MEMO slot stop wrapping
+ *   MOTHER_PANE_WIDTH_PX   Mother (the left arm's top pane): 350 — one pane with
+ *                  heat / battery / nitrogen / engine fuel (h1-mother-pane D1,
+ *                  owner 2026-10-14), the same width as Daughters so the left
+ *                  column has straight edges (it was 400 until then)
  *   ARMS_PANE_WIDTH_PX     Daughters (the left arm's second pane): 350
  *   TARGETS_PANE_WIDTH_PX  Targets (the right arm's first pane): 350
- *   LEFT_COLUMN_WIDTH_PX   `#hud-left-column`: 400 (= the widest child, Mother);
- *                  the column is `align-items: flex-start`, so the 350 Daughters
- *                  and the 280 riders hug the left edge — the outer edges of
- *                  the U stay straight at HUD_EDGE_PX
+ *   LEFT_COLUMN_WIDTH_PX   `#hud-left-column`: 350 (= the widest child, Mother,
+ *                  now level with the 350 Daughters); the column is `align-items:
+ *                  flex-start`, so the 280 riders hug the left edge — the outer
+ *                  edges of the U stay straight at HUD_EDGE_PX
  *   RIGHT_COLUMN_WIDTH_PX  `#hud-right-column`: 350 (= Targets); `align-items:
  *                  flex-end` hugs the 280 Debris / Next to the right edge. Comms
  *                  stays 480 at `right: HUD_EDGE_PX` (flush with the arm's outer
@@ -108,10 +110,10 @@ export const RAIL_GEOMETRY = Object.freeze({
   TOUCH_PITCH_PX: 44,
   HUD_EDGE_PX: EDGE_PX,     // === EDGE_PX (one number, two names)
   HUD_COLUMN_WIDTH_PX: 280, // the BASE pane width (.hud-panel, riders, popover, Next)
-  MOTHER_PANE_WIDTH_PX: 400,
+  MOTHER_PANE_WIDTH_PX: 350,
   ARMS_PANE_WIDTH_PX: 350,
   TARGETS_PANE_WIDTH_PX: 350,
-  LEFT_COLUMN_WIDTH_PX: 400,   // = MOTHER_PANE_WIDTH_PX (the widest left child)
+  LEFT_COLUMN_WIDTH_PX: 350,   // = MOTHER_PANE_WIDTH_PX (the widest left child)
   RIGHT_COLUMN_WIDTH_PX: 350,  // = TARGETS_PANE_WIDTH_PX (the widest right child)
 });
 

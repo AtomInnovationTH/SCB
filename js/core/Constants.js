@@ -320,6 +320,10 @@ export const Constants = {
   BATTERY_START_FRACTION: 0.5,    // w4-power D1 (owner 2026-10-12: "battery is 50% and dropping
                                    // until wings open"): every boot — new game, retry, loaded save —
                                    // starts at this fraction of the (rebased) max; saves carry no charge.
+  PROPELLANT_START_FRACTION: 0.6, // h1-mother-pane D5 (owner 2026-10-14: "they start with the cheapest for
+                                   // modern satellites.. and only 60% full"): the engine tank AND the cold-gas
+                                   // tank start at this fraction of their max on every boot (new game, retry,
+                                   // loaded save), the same paths as BATTERY_START_FRACTION.
 
   // === SHIP HEAT (w2-heat, 2026-10-08) =======================================
   // DECISIONS §15 rows 2/4/5/6 + §2 rows 5–7: the ship heats up from what the

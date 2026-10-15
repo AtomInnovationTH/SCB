@@ -237,8 +237,8 @@ export class PlayerSatellite extends THREE.Group {
     // RESOURCES
     // ========================================================================
     this.resources = {
-      xenon: Constants.XENON_FUEL_MAX,
-      coldGas: Constants.COLD_GAS_MAX,
+      xenon: Constants.XENON_FUEL_MAX * (Constants.PROPELLANT_START_FRACTION ?? 1),     // h1-mother-pane D5: 60 %
+      coldGas: Constants.COLD_GAS_MAX * (Constants.PROPELLANT_START_FRACTION ?? 1),
       battery: Constants.BATTERY_MAX * (Constants.BATTERY_START_FRACTION ?? 1),   // w4-power D1: half
       solarRate: 0,
       solarPanelHealth: 1.0,
