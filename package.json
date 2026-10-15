@@ -5,7 +5,9 @@
   "scripts": {
     "start": "(node scripts/build-tag.mjs || true) && npx --yes http-server -p 8080 -c-1 .",
     "serve": "(node scripts/build-tag.mjs || true) && npx --yes http-server -p 8080 -c-1 .",
-    "test": "node js/test/run-tests.js",
+    "test": "node js/test/run-parallel.mjs",
+    "test:serial": "node js/test/run-tests.js",
+    "test:cold": "SC_TEST_CACHE=0 node js/test/run-parallel.mjs",
     "doc-stats": "node scripts/build-doc-stats.mjs",
     "test:parallel": "node js/test/run-parallel.mjs",
     "install-hooks": "H=\"$(git rev-parse --git-common-dir)/hooks\"; cp .githooks/lib-runtime.sh .githooks/pre-push .githooks/post-commit .githooks/post-merge .githooks/pre-commit .githooks/secret-scan.mjs \"$H\"/ && chmod +x \"$H\"/pre-push \"$H\"/post-commit \"$H\"/post-merge \"$H\"/pre-commit && git config remote.origin.push refs/heads/publish:refs/heads/main && echo 'hooks installed; git push now deploys the runtime artifact'",
