@@ -100,6 +100,7 @@ import { fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
 import { orderRail } from '../scene/railOrder.js';
 import { RAIL_GEOMETRY } from './RailGeometry.js';
 import { TAP_SLOP_PX, TAP_SLOP_MS } from '../systems/TapPick.js';
+import { engineGasKg } from '../systems/ResourceSystem.js';
 
 // 1 metre in scene units (mirrors PlayerSatellite's M = 0.00001).
 const M = 0.00001;
@@ -2162,11 +2163,11 @@ export class MotherCallouts {
             // drawn from the xenon tank — don't report xenon kg under its name (R4).
             const fuel = rs.getCurrentFuel?.();
             if (fuel && !fuel.fromCargo) {
-              out.push(`Fuel: ${st.currentFuelName} ${Math.round(st.xenon)}/${st.xenonMax} kg`);
+              out.push(`Fuel: ${st.currentFuelName} ${engineGasKg(st).toFixed(1)}/${engineGasKg({ xenon: st.xenonMax, tankGasId: st.tankGasId }).toFixed(1)} kg`);   // h3b D4: real kg, not tank percent
             } else if (fuel) {
               out.push(`Fuel: ${st.currentFuelName} (cargo)`);
             } else {
-              out.push(`Fuel: ${Math.round(st.xenon)}/${st.xenonMax} kg`);
+              out.push(`Fuel: ${engineGasKg(st).toFixed(1)}/${engineGasKg({ xenon: st.xenonMax, tankGasId: st.tankGasId }).toFixed(1)} kg`);
             }
           }
           // No "Thrust" row: its data source (player.thrustInput) is dead —

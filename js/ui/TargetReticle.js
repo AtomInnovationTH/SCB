@@ -22,6 +22,7 @@ import { calmBreathe, finitePulse, prefersReducedMotion } from './hudPulse.js';
 import { classify } from './hud/TargetColorLaw.js';
 import { mono } from '../core/Typeface.js';
 import { isMarked } from '../systems/ScanMarks.js';
+import { engineGasKg, engineDeltaV } from '../systems/ResourceSystem.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -284,24 +285,32 @@ export class TargetReticle {
 
     // Phase R6: Listen for telemetry to cache player ΔV for post-burn readout
     eventBus.on(Events.PLAYER_TELEMETRY, (t) => {
-      if (t.resources) {
-        // Compute current ΔV via Tsiolkovsky (mirrors ArmManager.getMassBudget)
-        const coreDry = Constants.OCTOPUS_CORE_DRY_MASS || 214;
-        const xenonMax = Constants.OCTOPUS_CORE_XENON || 12;
-        const coldGasMax = Constants.OCTOPUS_CORE_COLD_GAS || 2;
-        const xenonPoolMax = Constants.XENON_FUEL_MAX || 50;
-        const coldGasPoolMax = Constants.COLD_GAS_MAX || 20;
-        const xenonPct = (t.resources.xenon || 0) / xenonPoolMax;
-        const xenonCurrent = xenonMax * xenonPct;
-        const coldGasCurrent = coldGasMax * ((t.resources.coldGas || 0) / coldGasPoolMax);
-        const wetMass = coreDry + xenonCurrent + coldGasCurrent;
-        const dryMass = coreDry;
-        const isp = Constants.OCTOPUS_CORE_HALL_ISP || 1600;
-        const g0 = Constants.G0 || 9.80665;
-        this._cachedPlayerDeltaV = (dryMass > 0 && wetMass > dryMass)
-          ? isp * g0 * Math.log(wetMass / dryMass)
-          : 0;
-      }
+      this._cacheDeltaV(t);
+    });
+  }
+
+  /**
+   * Cache the player's remaining ΔV for the post-burn readout. h3-argon-engine D4: the payload carries
+   * `deltaV` straight from ArmManager.getMassBudget() (struts, cargo, tank, honest engine gas) — the
+   * one source. Only a payload without it (bare tests, menu hero) falls back to the SAME shared
+   * formula (ResourceSystem.engineDeltaV) over the resources mirror and the core + tank mass, with
+   * getMassBudget()'s own Isp and c (h3b-argon-push D4): the ACTIVE fuel's Isp (the payload's
+   * `currentFuelId`; the tank gas's when the payload names none — a cargo fuel only while it burns),
+   * and the consumption multiplier the player puts in the payload (`consumptionMultiplier`).
+   * @param {object} t - PLAYER_TELEMETRY payload
+   * @private
+   */
+  _cacheDeltaV(t) {
+    if (Number.isFinite(t.deltaV)) { this._cachedPlayerDeltaV = t.deltaV; return; }
+    if (!t.resources) return;
+    const res = t.resources;
+    const fuel = Constants.FUELS[t.currentFuelId] || Constants.FUELS[res.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
+    this._cachedPlayerDeltaV = engineDeltaV({
+      dryKg: Constants.OCTOPUS_V5.CORE_DRY_MASS + Constants.ENGINE_TANK_DRY_MASS_KG,
+      coldGasKg: Constants.OCTOPUS_CORE_COLD_GAS * ((res.coldGas || 0) / (res.coldGasMax || Constants.COLD_GAS_MAX)),
+      gasKg: engineGasKg(res),
+      isp: fuel.isp,
+      c: t.consumptionMultiplier > 0 ? t.consumptionMultiplier : 1,
     });
   }
 

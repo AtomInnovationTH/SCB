@@ -1593,8 +1593,11 @@ export class DebrisWireframe {
     // w7-panes review (2026-10-13): held back until the first scan (HUD's scan
     // gate) — say when it comes, fold nothing.
     if (this._container && this._container.hasAttribute('data-scan-wait')) {
+      // h4-simple-first D7: after the scan in mission 1 (F1/F2) it waits for the player's analyse (Z).
+      const analyse = typeof this._container.getAttribute === 'function' && this._container.getAttribute('data-scan-wait') === 'analyse';
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Target info appears after your first scan (S)', priority: 'info', _reactive: true,
+        text: analyse ? 'Target info opens when you analyse a target (Z)' : 'Target info appears after your first scan (S)',
+        priority: 'info', _reactive: true,
       });
       return;
     }
@@ -2071,7 +2074,7 @@ export class DebrisWireframe {
       ctx.font = mono(10);
       ctx.fillStyle = 'rgba(255, 204, 0, 0.4)';
       for (let i = 0; i < n; i++) {
-        ctx.fillText('\u2593\u2593\u2593\u2593\u2593  \u2593\u2593 kg   \u00B7\u20B9\u2593\u2593\u2593', WIRE_CX, y);
+        ctx.fillText('\u2593\u2593\u2593\u2593\u2593  \u2593\u2593 kg   \u00B7\u2593\u2593\u2593 cr', WIRE_CX, y);
         y += 11;
       }
     }
@@ -2136,14 +2139,14 @@ export class DebrisWireframe {
     const maxRows = Math.min(3, rows.length);
     for (let i = 0; i < maxRows && i < rowsShown; i++) {
       ctx.fillStyle = '#00ccff';
-      ctx.fillText(`${rows[i].label}  \u00B7\u20B9${rows[i].value}`, WIRE_CX, y);
+      ctx.fillText(`${rows[i].label}  \u00B7${rows[i].value} cr`, WIRE_CX, y);
       y += 11;
     }
     if (rowsShown > maxRows) {
       ctx.font = mono(10, 'bold');
       ctx.fillStyle = '#00ffaa';
       const extra = rows.length > maxRows ? ` (+${rows.length - maxRows} more)` : '';
-      ctx.fillText(`EST. VALUE \u20B9${total}${extra}`, WIRE_CX, y);
+      ctx.fillText(`EST. VALUE ${total} cr${extra}`, WIRE_CX, y);
     }
   }
 

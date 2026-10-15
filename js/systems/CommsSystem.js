@@ -250,7 +250,7 @@ const PLAYER_STATUS_TEMPLATES = {
   lowXenon: {
     priority: CommsPriority.WARNING,
     source: 'SPACECRAFT',
-    template: 'Heads up: your xenon thruster fuel is below {pct}%. Refuel at an orbital depot when you can.',
+    template: 'Heads up: your {fuel} thruster fuel is below {pct}%. Refuel at an orbital depot when you can.',
   },
   lowColdGas: {
     priority: CommsPriority.WARNING,
@@ -316,7 +316,7 @@ const HANDOFF_DIALOGUE = [
 
 const NEWS_BOUNTY_TEMPLATES = [
   { source: 'NEWS', text: '[{date} NEWS] {headline}', priority: 'WARNING' },
-  { source: 'NEWS', text: 'Bounty posted: ₹{bounty}. Target {debrisName}', priority: 'INFO' },
+  { source: 'NEWS', text: 'Bounty posted: {bounty} cr. Target {debrisName}', priority: 'INFO' },
 ];
 
 /**
@@ -347,6 +347,9 @@ export class CommsSystem {
 
     /** @type {number} Next message ID */
     this._nextId = 0;
+
+    /** @type {string|null} the loaded fuel's name, from the last FUEL_CHANGED (null = the default fuel) */
+    this._fuel = null;
 
     /** @type {Array<{channel: string, timestamp: number}>} ST-5.1: sliding window for coalescing */
     this._coalesceWindow = [];
@@ -559,12 +562,17 @@ export class CommsSystem {
     });
 
     // Player low fuel
+    eventBus.on(Events.FUEL_CHANGED, (data) => {
+      if (data && typeof data.name === 'string' && data.name) this._fuel = data.name;
+    });
+
     eventBus.on(Events.PLAYER_LOW_XENON, (data) => {
       if (!this._canSend('lowXenon')) return;
       const tmpl = PLAYER_STATUS_TEMPLATES.lowXenon;
       const pct = data && data.level ? Math.round(data.level / Constants.XENON_FUEL_MAX * 100) : 10;
       // CP-4: survival warning — must reach the player even during the wake ramp.
-      this.addMessage(tmpl.priority, tmpl.source, tmpl.template.replace('{pct}', pct), { _critical: true });
+      // h4-simple-first D10: the text names the fuel actually loaded (last FUEL_CHANGED, else the default fuel's).
+      this.addMessage(tmpl.priority, tmpl.source, tmpl.template.replace('{fuel}', this._fuelName().toLowerCase()).replace('{pct}', pct), { _critical: true });
     });
 
     eventBus.on(Events.PLAYER_LOW_BATTERY, (data) => {
@@ -668,7 +676,7 @@ export class CommsSystem {
       const bountyStr = (data.bounty || 0).toLocaleString();
       const debrisName = data.debrisName || 'unknown';
       timerManager.setTimeout(() => {
-        this.addMessage('INFO', 'NEWS', `Bounty posted: ₹${bountyStr}. Target ${debrisName}`);
+        this.addMessage('INFO', 'NEWS', `Bounty posted: ${bountyStr} cr. Target ${debrisName}`);
       }, 2000, { owner: this });
     });
 
@@ -1112,6 +1120,13 @@ export class CommsSystem {
   // ==========================================================================
   // HELPERS
   // ==========================================================================
+
+  /** @private The loaded fuel's display name: the last FUEL_CHANGED, else the default fuel's own name. */
+  _fuelName() {
+    if (this._fuel) return this._fuel;
+    const f = Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL];
+    return (f && f.name) || 'engine';
+  }
 
   /** @private Check cooldown before sending an event-based message */
   _canSend(eventKey) {

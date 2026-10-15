@@ -15,9 +15,45 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { ThermalSystem } from './ThermalSystem.js';
 
+/**
+ * h3-argon-engine D2: kilograms of ENGINE gas aboard — the ONE conversion from the
+ * pool (a fill percentage: 100 = one full 60 L base tank) to mass. Reads the gas that
+ * is IN THE TANK (`tankGasId`), never the active fuel (a cargo fuel has no `kgFull`).
+ * @param {{xenon?: number, tankGasId?: string}} res - ResourceSystem or player.resources
+ * @returns {number} kg
+ */
+export function engineGasKg(res) {
+  const fuels = Constants.FUELS || {};
+  const id = (res && res.tankGasId) || Constants.DEFAULT_FUEL;
+  const fuel = fuels[id] || fuels[Constants.DEFAULT_FUEL];
+  const kgFull = fuel && Number.isFinite(fuel.kgFull) ? fuel.kgFull : 0;
+  const pool = res && Number.isFinite(res.xenon) ? res.xenon : 0;
+  return Math.max(0, pool) / 100 * kgFull;
+}
+
+/**
+ * h3-argon-engine D4: the ONE Tsiolkovsky formula for the Hall engine. Cold gas is CARRIED, not
+ * burned by this engine, so it sits in both the loaded and the empty mass.
+ *   ΔV = (Isp / c) · g0 · ln((dry + coldGas + gas) / (dry + coldGas))
+ * @param {object} a
+ * @param {number} a.dryKg      - everything that is not a gas (core, tank, struts, arms, cargo), kg
+ * @param {number} a.coldGasKg  - cold gas aboard (carried), kg
+ * @param {number} a.gasKg      - engine gas aboard (burned), kg
+ * @param {number} a.isp        - the ACTIVE fuel's Isp, s
+ * @param {number} [a.c=1]      - consumption multiplier (shop upgrade x power split; an Isp gain)
+ * @returns {number} m/s (0 when there is nothing to burn)
+ */
+export function engineDeltaV({ dryKg, coldGasKg = 0, gasKg, isp, c = 1 }) {
+  const carried = (dryKg || 0) + (coldGasKg || 0);
+  if (!(carried > 0) || !(gasKg > 0) || !(isp > 0)) return 0;
+  return (isp / (c > 0 ? c : 1)) * Constants.G0 * Math.log((carried + gasKg) / carried);
+}
+
 export class ResourceSystem {
   constructor() {
     // ── Resource pools (canonical — synced to player.resources) ──────────
+    // h3-argon-engine D2: `xenon` / `xenonMax` are POOL names kept for compatibility — the pool holds
+    // whichever gas is in the tank (`tankGasId`), as a fill percentage (100 = one full 60 L base tank).
     this.xenon = ResourceSystem.startPropellant(Constants.XENON_FUEL_MAX);     // h1-mother-pane D5: 60 %
     this.coldGas = ResourceSystem.startPropellant(Constants.COLD_GAS_MAX);
     // w4-power D1: every boot starts at BATTERY_START_FRACTION (half) of the max.
@@ -68,9 +104,14 @@ export class ResourceSystem {
     this._groundStationInView = false; // True during ground station pass windows
 
     // ── Dual-mode fuel tracking (Phase 4) ───────────────────────────────
-    this._currentFuelId = Constants.DEFAULT_FUEL || 'xenon';
-    this._availableFuels = ['xenon']; // always have xenon; others added dynamically
+    // `tankGasId` = the gas IN the engine tank (saved); `_currentFuelId` = the ACTIVE fuel, which may be a
+    // cargo fuel (aluminum…) while the tank gas stays put. Cargo depletion falls back to the tank gas.
+    this.tankGasId = Constants.DEFAULT_FUEL || 'argon';
+    this._currentFuelId = this.tankGasId;
+    this._availableFuels = [this.tankGasId]; // always have the tank gas; others added dynamically
     this._cargoSystem = null;
+    /** h3b-argon-push D5: true once FUEL_CHANGED { initial: true } has named the loaded fuel to the readers. */
+    this._fuelAnnounced = false;
 
     // ── Player entity reference (set via setPlayer) ─────────────────────
     /** @type {object|null} */
@@ -339,7 +380,27 @@ export class ResourceSystem {
    * @returns {object}
    */
   getCurrentFuel() {
-    return Constants.FUELS[this._currentFuelId] || Constants.FUELS.xenon;
+    return Constants.FUELS[this._currentFuelId] || Constants.FUELS[this.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
+  }
+
+  /**
+   * h3b-argon-push D5: name the loaded fuel to every reader. FUEL_CHANGED was only ever sent on a change,
+   * so CommsSystem / StatusPanel named the DEFAULT fuel until the first change — wrong after a load that
+   * brings krypton or xenon. This sends it with `initial: true` at the first frame of play, after a load
+   * (restore) and after a new game / retry (reset). Listeners that treat FUEL_CHANGED as a player action
+   * (the cycle tone, the codex entry) skip `initial`.
+   */
+  announceFuel() {
+    const fuel = this.getCurrentFuel();
+    this._fuelAnnounced = true;
+    eventBus.emit(Events.FUEL_CHANGED, {
+      fuelId: fuel.id,
+      name: fuel.name,
+      isp: fuel.isp,
+      color: fuel.color,
+      thrustScale: fuel.thrustScale,
+      initial: true,
+    });
   }
 
   /**
@@ -375,20 +436,21 @@ export class ResourceSystem {
     const inCargo = manifest.find(m => m.metalId === fuel.cargoMetalId);
 
     if (!inCargo || inCargo.massKg < amount) {
-      // Fuel depleted — auto-switch to xenon
+      // Fuel depleted — auto-switch back to the gas in the tank (h3-argon-engine D6: was a hard-coded xenon)
+      const tank = Constants.FUELS[this.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
       eventBus.emit(Events.FUEL_DEPLETED, { fuelId: this._currentFuelId, name: fuel.name });
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: `${fuel.name} depleted. Switching to Xenon`,
+        text: `${fuel.name} depleted. Switching to ${tank.name}`,
         priority: 'warning',
       });
-      this._currentFuelId = 'xenon';
+      this._currentFuelId = tank.id;
       eventBus.emit(Events.FUEL_CHANGED, {
-        fuelId: 'xenon',
-        name: 'Xenon',
-        isp: Constants.FUELS.xenon.isp,
-        color: Constants.FUELS.xenon.color,
-        thrustScale: Constants.FUELS.xenon.thrustScale,
+        fuelId: tank.id,
+        name: tank.name,
+        isp: tank.isp,
+        color: tank.color,
+        thrustScale: tank.thrustScale,
       });
       return false;
     }
@@ -423,6 +485,7 @@ export class ResourceSystem {
       solarPanelHealth: this.solarPanelHealth,
       bodyPanelHealth: this.bodyPanelHealth,   // mother-wings step 4
       currentFuelId: this._currentFuelId,
+      tankGasId: this.tankGasId,
       currentFuelName: fuel.name,
       currentFuelIsp: fuel.isp,
       currentFuelColor: fuel.color,
@@ -603,6 +666,7 @@ export class ResourceSystem {
       coldGasMax: this.coldGasMax,
       batteryMax: this.batteryMax,
       currentFuelId: this._currentFuelId,
+      tankGasId: this.tankGasId,   // h3-argon-engine D6: the gas in the tank survives reloads
       lithium: this.lithium,
       lithiumMax: this.lithiumMax,
       // S3b: power infrastructure state
@@ -634,7 +698,19 @@ export class ResourceSystem {
         ? BASE_NEW + (data.batteryMax - BASE_OLD)
         : data.batteryMax;
     }
-    if (data.currentFuelId) this._currentFuelId = data.currentFuelId;
+    // h3-argon-engine D6: an old save has no tankGasId (its tank held xenon-named gas at the same fill
+    // fraction) -> the tank becomes the default (argon) and so does the active fuel. A new save keeps both
+    // (the active fuel may be a cargo fuel). A saved gas this build does not know falls back to the default.
+    const savedTank = Constants.FUELS[data.tankGasId];
+    if (data.tankGasId !== undefined && savedTank && !savedTank.fromCargo) {
+      this.tankGasId = data.tankGasId;
+      if (data.currentFuelId && Constants.FUELS[data.currentFuelId]) this._currentFuelId = data.currentFuelId;
+      else this._currentFuelId = this.tankGasId;
+    } else {
+      this.tankGasId = Constants.DEFAULT_FUEL;
+      this._currentFuelId = this.tankGasId;
+    }
+    this._availableFuels = [this.tankGasId];
     // F16: Restore lithium (persists between missions — hard to get)
     if (data.lithium !== undefined) this.lithium = data.lithium;
     if (data.lithiumMax !== undefined) this.lithiumMax = data.lithiumMax;
@@ -652,6 +728,7 @@ export class ResourceSystem {
     this._resetLedgerRates();   // w2-heat: a fresh mission — meters and heat restart
     this._resetThermal();
     this._syncToPlayer();
+    this.announceFuel();   // h3b-argon-push D5: the loaded fuel, named from the first frame
   }
 
   // ======================================================================
@@ -665,6 +742,8 @@ export class ResourceSystem {
    * @param {number} dt - seconds
    */
   update(dt) {
+    // h3b-argon-push D5: boot — no restore()/reset() has named the fuel yet; the HUD listeners exist by now
+    if (!this._fuelAnnounced) this.announceFuel();
     // Staleness timer: reset weather multiplier if no WEATHER_ACTIVE for 2s
     this._weatherLastUpdate += dt;
     if (this._weatherLastUpdate > 2.0) {
@@ -828,8 +907,9 @@ export class ResourceSystem {
     this.lithium = 0;
     this.lithiumMax = Constants.MPD_LITHIUM_CAPACITY;
     this._depletionEmitted = false;
-    this._currentFuelId = Constants.DEFAULT_FUEL || 'xenon';
-    this._availableFuels = ['xenon'];
+    this.tankGasId = Constants.DEFAULT_FUEL || 'argon';
+    this._currentFuelId = this.tankGasId;
+    this._availableFuels = [this.tankGasId];
     // S3b: Reset power infrastructure
     this._hasSupercap = false;
     this._rtgRate = 0;
@@ -839,6 +919,7 @@ export class ResourceSystem {
     this._resetLedgerRates();   // w2-heat: heat restarts with the battery (new game / retry)
     this._resetThermal();
     this._syncToPlayer();
+    this.announceFuel();   // h3b-argon-push D5: the default fuel, named from the first frame
   }
 
   // ======================================================================
@@ -860,6 +941,7 @@ export class ResourceSystem {
     this._player.resources.bodyPanelHealth = this.bodyPanelHealth;      // mother-wings step 4
     this._player.resources.solarEfficiencyMult = this.solarEfficiencyMult; // mother-wings step 4
     this._player.resources.xenonMax = this.xenonMax;
+    this._player.resources.tankGasId = this.tankGasId;   // h3-argon-engine D2: which gas the pool holds
     this._player.resources.coldGasMax = this.coldGasMax;
     this._player.resources.batteryMax = this.batteryMax;
     this._player.resources.lithium = this.lithium;

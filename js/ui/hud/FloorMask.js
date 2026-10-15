@@ -379,6 +379,9 @@ export class FloorMask {
     this._rungs = null;
     this._styleInjected = false;
     this._disposed = false;
+    // h4-simple-first D5/D7: the HUD reads the pane level through this mask (`getCurrentFloor`) to
+    // decide the simple-first lists; a real HUD offers `attachFloorMask`, test stubs do not.
+    if (this._hud && typeof this._hud.attachFloorMask === 'function') this._hud.attachFloorMask(this);
   }
 
   // ── Public API (the LadderAudioBeds shape) ─────────────────────────────────
@@ -480,6 +483,25 @@ export class FloorMask {
 
   /** The last requested floor id, or null (tests/debug — beds parity). */
   getCurrentFloor() { return this._floor; }
+
+  /**
+   * h4b D1: true when a pane the APPLIED floor's DEFAULT_ROOMS row marks 'gone' is visible now
+   * (the player's intent bit, `_isVisible` — the same read D5 memory uses): one `+` past the room.
+   * Not the D5 memory (rewritten on every change) and not a rung count (target info waiting for Z
+   * counts as hidden there). No mask applied (disabled, unresolved, shipped cockpit) = false.
+   * Read-only; a handful of getElementById per call, polled at 2-10 Hz.
+   * @returns {boolean}
+   */
+  extraPaneShown() {
+    if (this._disposed || !this._enabled || this._appliedFloor == null || !this._rungs) return false;
+    const room = DEFAULT_ROOMS[this._appliedFloor];
+    if (!room) return false;
+    for (const [id, pane] of Object.entries(MASK_PANES)) {
+      if (room[id] !== 'gone') continue;
+      if (this._isVisible(id, pane) === true) return true;
+    }
+    return false;
+  }
 
   /**
    * RESET ROOM (Wave 5 Session J, plan D-H "long-press rail head = RESET

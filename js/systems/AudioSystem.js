@@ -604,6 +604,7 @@ class AudioSystem {
 
     // T key → ascending fuel cycle step tone
     eventBus.on(Events.FUEL_CHANGED, (data) => {
+      if (data && data.initial) return;   // h3b-argon-push D5: the boot/load announcement is not a player action
       this.playFuelCycle(data.index || 0);
     });
 

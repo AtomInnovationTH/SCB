@@ -183,8 +183,6 @@ export class StatusPanel {
     // MOTHER readiness-digest dark-cockpit state — each segment reports whether
     // it is nominal; the line dims when all three are. Start nominal (quiet).
     this._netNominal = true;
-    this._dvNominal = true;
-    this._pwrNominal = true;
 
     /** @type {Object<string, HTMLElement>} DOM panels for show/hide */
     this.panels = {};
@@ -409,6 +407,7 @@ export class StatusPanel {
         </span>
       </div>
       <div class="mother-detail">
+        <div id="mother-power-flow" class="mother-flow" style="font-size:10px;margin-top:6px;opacity:0.85;white-space:nowrap;font-variant-numeric:tabular-nums;" title="Power in and out"></div>
         <div class="mother-block mother-block-propulsion" data-hud-group="fuel-group" data-activate-key="A">
       <div class="panel-full-content">
         <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:var(--hud-normal, #00ff88);opacity:0.7;">PROPULSION</div>
@@ -435,7 +434,7 @@ export class StatusPanel {
           </div>
         </div>
         <div id="fuel-type-indicator" style="font-size:10px;color:var(--hud-info, #4fc3f7);margin-top:2px;margin-bottom:2px">
-          Xenon · ${Constants.OCTOPUS_CORE_HALL_ISP}s
+          —
         </div>
         <div id="throttle-gauge" style="display:none;align-items:center;gap:4px;font-size:10px;margin-bottom:4px;">
           <span style="color:var(--hud-normal, #00ff88);opacity:0.7;">Throttle</span>
@@ -827,6 +826,7 @@ export class StatusPanel {
     this._updateScorePanel(data);
     this._updateResourceBars(data.resources);
     this._renderMassBudget();
+    this._paintPowerFlow();
     this._updateDeltaVBar(data.cachedTargets);
     this._updatePowerBars();
     this._renderThermalGroup();
@@ -1169,19 +1169,48 @@ export class StatusPanel {
   }
 
   /**
-   * @private Update fuel type indicator from FUEL_CHANGED event data.
+   * @private Update fuel type indicator from FUEL_CHANGED event data. The name and colour come
+   * from the event; the number is the mass budget's `isp` (the one the ΔV maths uses), read in
+   * `_paintFuelLine` — the event's own `isp` is only the fallback before the budget is ready.
    * @param {object} fuelData - { name, isp, color }
    */
   _updateFuelIndicator(fuelData) {
+    if (fuelData) {
+      if (typeof fuelData.name === 'string' && fuelData.name) this._fuelName = fuelData.name;
+      if (Number.isFinite(fuelData.isp)) this._fuelIsp = fuelData.isp;
+      this._fuelColor = fuelData.color || null;
+    }
+    this._paintFuelLine(null);
+    const el = document.getElementById('fuel-type-indicator');
+    if (el && fuelData) el.style.color = fuelData.color || 'var(--hud-info, #4fc3f7)';
+  }
+
+  /** @private The loaded fuel's display name (the last FUEL_CHANGED, else the default fuel's). */
+  _currentFuelName() {
+    if (this._fuelName) return this._fuelName;
+    const f = Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL];
+    return (f && f.name) || '—';
+  }
+
+  /**
+   * @private The hover detail's fuel line: `Xenon · 1500 s` — the fuel's name and the mass
+   * budget's `isp`, in whole seconds (h4b D6; write-on-change). No constants here: with no budget the event's isp is used.
+   * @param {object|null} mb the mass budget, if the caller has it
+   */
+  _paintFuelLine(mb) {
     const el = document.getElementById('fuel-type-indicator');
     if (!el) return;
-    if (fuelData) {
-      // h1-mother-pane D3: for xenon the number is the Isp the ΔV maths uses (the
-      // ship's Hall thruster, OCTOPUS_CORE_HALL_ISP); cargo fuels keep their FUELS isp.
-      const isp = fuelData.fuelId === 'xenon' ? Constants.OCTOPUS_CORE_HALL_ISP : fuelData.isp;
-      el.textContent = `${fuelData.name} · ${isp}s`;
-      el.style.color = fuelData.color || 'var(--hud-info, #4fc3f7)';
-    }
+    const isp = mb && Number.isFinite(mb.isp) ? mb.isp : this._fuelIsp;
+    const text = Number.isFinite(isp) ? `${this._currentFuelName()} · ${Math.round(isp)} s` : this._currentFuelName();
+    if (el.textContent !== text) el.textContent = text;
+  }
+
+  /** @private The power in / out line of the hover detail (VitalsPane owns the text; write-on-change). */
+  _paintPowerFlow() {
+    const el = document.getElementById('mother-power-flow');
+    if (!el) return;
+    const t = this._vitals && typeof this._vitals.flowText === 'function' ? this._vitals.flowText() : '';
+    if (el.textContent !== t) el.textContent = t;
   }
 
   /**
@@ -1425,20 +1454,6 @@ export class StatusPanel {
   memoBoxed(nowMs) {
     const now = (typeof nowMs === 'number' && Number.isFinite(nowMs)) ? nowMs : this._now();
     return this._memoSlot && now < this._memoBoxedUntil;
-  }
-
-  /** @private Set bar fill width and value text */
-  _setBar(barId, pct, valId, text) {
-    const bar = document.getElementById(barId);
-    const val = document.getElementById(valId);
-    if (bar) {
-      bar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
-      // Color: green → amber → red
-      if (pct > 30) bar.style.backgroundColor = 'var(--hud-normal, #00ff88)';
-      else if (pct > 15) bar.style.backgroundColor = 'var(--hud-caution, #ffaa00)';
-      else bar.style.backgroundColor = 'var(--hud-warning, #ff4444)';
-    }
-    if (val) val.textContent = text;
   }
 
   /** @private Inject CSS for power bus selection pulse */
@@ -1776,10 +1791,7 @@ export class StatusPanel {
   _refreshDigestDim() {
     const digest = document.getElementById('mother-digest');
     if (!digest) return;
-    const allNominal =
-      this._netNominal !== false &&
-      this._dvNominal !== false &&
-      this._pwrNominal !== false;
+    const allNominal = this._netNominal !== false;
     digest.style.opacity = allNominal ? '0.5' : '1';
   }
 
@@ -1789,12 +1801,13 @@ export class StatusPanel {
     if (!el || !this._armManager) return;
 
     const mb = this._armManager.getMassBudget();
+    this._paintFuelLine(mb);
     const xeColor = mb.xenonCurrent > mb.xenonMax * 0.5 ? 'var(--hud-normal, #00ff88)' :
                      mb.xenonCurrent > mb.xenonMax * 0.2 ? 'var(--hud-caution, #ffaa00)' : 'var(--hud-warning, #ff4444)';
 
     el.innerHTML = `
       <div style="display:flex;justify-content:space-between;opacity:0.7;">
-        <span>Xenon:</span>
+        <span>${this._currentFuelName()}:</span>
         <span style="color:${xeColor};">${mb.xenonCurrent}/${mb.xenonMax} kg</span>
       </div>
       <div style="display:flex;justify-content:space-between;opacity:0.7;">
@@ -1832,9 +1845,14 @@ export class StatusPanel {
     const dv = mb.deltaV;
 
     const res = this._lastResources || {};
-    const tankMax = res.xenonMax || Constants.XENON_FUEL_MAX;
-    const frac = tankMax > 0 && Number.isFinite(res.xenon)
-      ? Math.max(0, Math.min(1, res.xenon / tankMax)) : 1;
+    // h4-simple-first D10: the tank fraction is the mass budget's (the engine half's bar), else
+    // the resource pool's own — no propellant constant here.
+    let frac = 1;
+    if (mb && mb.xenonMax > 0 && Number.isFinite(mb.xenonCurrent)) {
+      frac = Math.max(0, Math.min(1, mb.xenonCurrent / mb.xenonMax));
+    } else if (res.xenonMax > 0 && Number.isFinite(res.xenon)) {
+      frac = Math.max(0, Math.min(1, res.xenon / res.xenonMax));
+    }
 
     // Phase R9: Predictive ΔV — warn if matching selected target would drop below threshold.
     // Same scale as `pct`: the tank fraction left after paying the transfer.

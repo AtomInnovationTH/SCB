@@ -1409,6 +1409,9 @@ export class InputManager {
 
       // Cycle wireframe analysis zones (Z / Shift+Z)
       case 'KeyZ':
+        // h4b D2: Z is the game's analyse action — it opens target info in simple mode. Cmd/Ctrl+Z
+        // (undo) is not analyse; text fields and menus never get here (the guards above).
+        if (isGameplay && !e.metaKey && !e.ctrlKey && d.hud && typeof d.hud.noteAnalyse === 'function') d.hud.noteAnalyse();
         if (isGameplay && d.debrisWireframe) {
           if (e.shiftKey) {
             d.debrisWireframe.cycleZone(-1);

@@ -11,8 +11,9 @@
  *
  * Rows, top to bottom (an Airbus-style readout: green normal, amber caution,
  * red warning, white labels, flat strokes, a dark halo and no glow; the DOM
- * font rides `.hud-panel`'s `var(--font-mono)`, B612 Mono). Same three
- * columns everywhere: label · bar · number.
+ * font rides `.hud-panel`'s `var(--font-mono)`, B612 Mono). h4-simple-first
+ * (owner 2026-10-15, DECISIONS §23 row 1, "4 rows"): MOTHER is four rows —
+ * HEAT, BATTERY, PROPULSION and the nets row StatusPanel mounts under them.
  *
  *   TITLE    `MOTHER` and, on the right, the memo chip slot (`.vp-title-slot`;
  *            StatusPanel moves `#autopilot-indicator` in).
@@ -20,25 +21,29 @@
  *            red >= 85 (DECISIONS §2 row 5). Text `47C ▲` (the arrow is the
  *            trend); a small RADIATOR AUTO tag while the ship opened the
  *            radiator itself. Source: `ResourceSystem.getThermalSnapshot()`.
- *   BATTERY  fill = level; number = `312/600 Wh` (level / capacity, whole Wh);
- *            amber < 25 %, red < 10 %; the COST FLASH: when the level drops by
- *            >= 1 % of the capacity inside 0.5 s, the dropped chunk lights up
- *            at the end of the fill and fades over 0.8 s. Source:
- *            `getPowerSnapshot()`, falling back to the plain `player.resources`
- *            copy. Under it the power line: net-rate arrow, `in 1725 W · out
- *            500 W`, the E-Tether tag and, right-aligned, the time left
- *            (`empty in 19 min` / `full in 8 min`).
- *   NITROGEN the cold-gas tank in PHYSICAL kg (`coldGas / coldGasMax x
- *            OCTOPUS_CORE_COLD_GAS`, 6 kg full); amber < 25 %, red < 10 %; the
- *            same cost flash for any spend of >= 0.25 % of the tank.
- *   <FUEL>   the engine fuel row, labelled with the loaded fuel's own name in
- *            capitals (`XENON` today; `ResourceSystem.getCurrentFuel().name`).
- *            Bar = tank fraction; number = the ship's ΔV in m/s from the
- *            optional `getMassBudget` provider (a lazy closure — the arm
- *            manager arrives after the HUD), falling back to physical kg of
- *            the tank; amber < 15 %, red only when empty.
+ *   BATTERY  ONE row: fill = level; number = `312/600 Wh`; the trend arrow ▲/▼
+ *            and the time left (`empty in 19 min` / `full in 8 min`) on the
+ *            same row. Both come from the MEDIAN of the last 30 one-second
+ *            means of the net power (`NetPowerMedian`), so a scan burst (measured
+ *            2026-10-15: ~10.5-12 kW for ~7 s, ~86 Wh) never reads "empty in
+ *            1 min"; both stay blank until 30 such means exist (the first 30 s). amber < 25 %, red < 10 %; the
+ *            COST FLASH: when the level drops by >= 1 % of the capacity inside
+ *            0.5 s, the dropped chunk lights up at the end of the fill and
+ *            fades over 0.8 s. The in / out watts line is not drawn here: it
+ *            lives in the MOTHER hover detail (`flowText()` feeds it).
+ *            Source: `getPowerSnapshot()`, falling back to the plain
+ *            `player.resources` copy.
+ *   PROPULSION one row, two halves: `N₂ ▮▮▮▯ 3.6 kg │ XENON ▮▮▮▯ 1468 m/s`.
+ *            The nitrogen half = the cold-gas tank (kg from the mass budget's
+ *            `coldGasCurrent`); amber < 25 %, red < 10 %; the same cost flash
+ *            for any spend of >= 0.25 % of the tank. The engine half = the
+ *            loaded fuel's own name in capitals (`getCurrentFuel().name`),
+ *            the tank bar (mass budget `xenonCurrent / xenonMax`) and the
+ *            ship's ΔV in m/s (`getMassBudget().deltaV`; `—` before the
+ *            budget is ready); amber < 15 %, red only when empty. No physics
+ *            constant is read here: every kg and m/s comes from the budget.
  *   PLUME    `#plume-block-row` — the red WARN PLUME BLOCK line under the
- *            engine row (hidden unless StatusPanel lights it): never hover-only.
+ *            propulsion row (hidden unless StatusPanel lights it): never hover-only.
  *
  * Contract with the ResourceSystem (both OPTIONAL — every method is probed
  * with `?.` and a missing one falls back, never throws):
@@ -78,19 +83,24 @@ export const VITALS_ID = 'hud-vitals';
 /** The injected stylesheet's id (one <style> per document). */
 export const VITALS_STYLE_ID = 'vitals-pane-style';
 
-/** The four rows, top to bottom. */
-export const VITALS_ROWS = Object.freeze(['heat', 'battery', 'gas', 'ion']);
+/** The rows of this box, top to bottom (the nets row is the fourth MOTHER row; StatusPanel mounts it). */
+export const VITALS_ROWS = Object.freeze(['heat', 'battery', 'propulsion']);
 
-/** Row labels. The gases are named (h1-mother-pane); the `ion` row's label follows the loaded fuel's name. */
-export const VITALS_LABELS = Object.freeze({ heat: 'HEAT', battery: 'BATTERY', gas: 'NITROGEN', ion: 'XENON' });
+/** The two halves of the PROPULSION row: nitrogen, then the engine gas. */
+export const VITALS_HALVES = Object.freeze(['gas', 'ion']);
+
+/** Row / half labels. The engine half's label follows the loaded fuel's name. */
+export const VITALS_LABELS = Object.freeze({
+  heat: 'HEAT', battery: 'BATTERY', propulsion: 'PROPULSION', gas: 'N\u2082', ion: 'XENON',
+});
 
 /**
  * VITALS_GEOMETRY — the pane's numbers (CSS px). The pane is 480 wide (=
- * the comms pane, h1b; index.html's `--hud-side-w` narrows both together) with 18 px rows and a
- * 16 px title row: 2 border + 2 x 5 padding + 16 title + 4 x 18 rows + 4 x 3
- * gaps (title + 4 rows) = 112 px, plus the BATTERY power line (FLOW_PX + one
- * more GAP_PX = 14 px). The label column holds "NITROGEN"; the value column
- * holds "312/600 Wh".
+ * the comms pane, h1b; index.html's `--hud-side-w` narrows both together, down
+ * to 300) with 18 px rows and a 16 px title row: 2 border + 2 x 5 padding + 16
+ * title + 3 x 18 rows + 3 x 3 gaps = 91 px. The label column holds
+ * "PROPULSION"; the BATTERY value column holds "312/600 Wh". `FLOW_PX` is the
+ * retired power line's height (kept for the pins that import it).
  */
 export const VITALS_GEOMETRY = Object.freeze({
   WIDTH_PX: 480,
@@ -120,7 +130,9 @@ export const VITALS_LAW = Object.freeze({
   GAS_AMBER: 0.25,
   GAS_RED: 0.10,
   ION_AMBER: 0.15,
-  RATE_HIDE_W: 20,          // |net| under this -> no rate text
+  RATE_HIDE_W: 20,          // |net| under this -> no trend arrow, no time left
+  MEDIAN_SAMPLES: 30,       // the trend / time-left use the median of this many one-second means
+  MEDIAN_BUCKET_MS: 1000,   // each sample = the mean net power over one second
   MIN_INTERVAL_MS: 100,     // at most 10 updates per second
   FLASH_WINDOW_MS: 500,     // a drop inside this window is one action
   FLASH_FADE_MS: 800,
@@ -189,6 +201,86 @@ export function fmtRate(netW) {
   const up = netW > 0;
   const body = abs < 999.5 ? `${Math.round(abs)} W` : `${(abs / 1000).toFixed(1)} kW`;
   return { text: `${up ? DOT_UP : DOT_DOWN} ${up ? '+' : MINUS}${body}`, dir: up ? 'up' : 'down' };
+}
+
+const TREND_UP = Object.freeze({ text: DOT_UP, dir: 'up' });
+const TREND_DOWN = Object.freeze({ text: DOT_DOWN, dir: 'down' });
+/**
+ * The BATTERY trend arrow: `▲` charging / `▼` draining, '' under RATE_HIDE_W or when missing.
+ * @param {number|null|undefined} netW
+ * @returns {{text:string, dir:''|'up'|'down'}}
+ */
+export function fmtTrend(netW) {
+  if (netW == null || !Number.isFinite(netW) || Math.abs(netW) < VITALS_LAW.RATE_HIDE_W) return NO_RATE;
+  return netW > 0 ? TREND_UP : TREND_DOWN;
+}
+
+/**
+ * NetPowerMedian — the median of the last `size` one-second means of the net
+ * battery power (h4-simple-first D4). `push(t, w)` folds a sample into the
+ * current one-second bucket; when a bucket closes its mean joins the ring.
+ * `value()` is the median of the closed buckets (fewer than `size` -> the
+ * median of what exists); before the first bucket closes it is the open
+ * bucket's mean, and NaN with no sample at all. A one-second burst is one
+ * sample of 30, so it can never move the median of a steady history.
+ * Two preallocated typed arrays: no allocation per sample.
+ */
+export class NetPowerMedian {
+  /**
+   * @param {number} [size]      ring size (default VITALS_LAW.MEDIAN_SAMPLES)
+   * @param {number} [bucketMs]  bucket length (default VITALS_LAW.MEDIAN_BUCKET_MS)
+   */
+  constructor(size = VITALS_LAW.MEDIAN_SAMPLES, bucketMs = VITALS_LAW.MEDIAN_BUCKET_MS) {
+    this._ring = new Float64Array(size);
+    this._scratch = new Float64Array(size);
+    this._bucketMs = bucketMs;
+    this._n = 0;
+    this._head = 0;
+    this._start = NaN;
+    this._sum = 0;
+    this._count = 0;
+  }
+
+  /** Forget everything. */
+  reset() {
+    this._n = 0; this._head = 0; this._start = NaN; this._sum = 0; this._count = 0;
+  }
+
+  /**
+   * @param {number} t  ms clock
+   * @param {number} w  net power now (W, + charging)
+   */
+  push(t, w) {
+    if (!Number.isFinite(t) || !Number.isFinite(w)) return;
+    if (!Number.isFinite(this._start)) this._start = t;
+    if (t - this._start >= this._bucketMs && this._count > 0) {
+      this._ring[this._head] = this._sum / this._count;
+      this._head = (this._head + 1) % this._ring.length;
+      if (this._n < this._ring.length) this._n++;
+      this._start = t;
+      this._sum = 0;
+      this._count = 0;
+    }
+    this._sum += w;
+    this._count++;
+  }
+
+  /** @returns {number} how many one-second means are closed (0..size). */
+  count() { return this._n; }
+
+  /** @returns {number} the median net power in W, NaN with no sample. */
+  value() {
+    const n = this._n;
+    if (n === 0) return this._count > 0 ? this._sum / this._count : NaN;
+    const a = this._scratch;
+    for (let i = 0; i < n; i++) {   // insertion sort of the n closed means
+      const v = this._ring[i];
+      let j = i - 1;
+      while (j >= 0 && a[j] > v) { a[j + 1] = a[j]; j--; }
+      a[j + 1] = v;
+    }
+    return (n & 1) ? a[(n - 1) >> 1] : (a[n / 2 - 1] + a[n / 2]) / 2;
+  }
 }
 
 /**
@@ -333,14 +425,16 @@ export class VitalsPane {
    * @param {Document|null} [deps.doc]    default: the global document (null = headless: nothing is built).
    * @param {Element|null}  [deps.parent] the left column — the pane becomes its FIRST child. Absent = built detached.
    * @param {function}      [deps.now]    ms clock (default performance.now); tests inject.
-   * @param {function}      [deps.getMassBudget] lazy provider -> `{ deltaV }` | null (ArmManager.getMassBudget);
+   * @param {function}      [deps.getMassBudget] lazy provider -> the mass budget (`deltaV`, `xenonCurrent`, `xenonMax`, `coldGasCurrent`) | null (ArmManager.getMassBudget);
    *                        read on every update — the arm manager arrives after the HUD is built.
+   * @param {number}        [deps.medianWarmup] one-second means needed before the arrow / time left show
+   *                        (default VITALS_LAW.MEDIAN_SAMPLES = 30; format tests pass 0).
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc
       : (typeof document !== 'undefined' ? document : null);
     this._now = typeof deps.now === 'function' ? deps.now : defaultNow;
-    /** @type {null|(() => ({deltaV:number}|null))} */
+    /** @type {null|(() => (object|null))} */
     this._getMassBudget = typeof deps.getMassBudget === 'function' ? deps.getMassBudget : null;
     this._root = null;
     this._titleSlot = null;      // the memo chip's home (right of MOTHER)
@@ -348,11 +442,13 @@ export class VitalsPane {
     this._timeEl = null;         // the battery time-left text
     this._timeText = '';
     this._fuelLabel = VITALS_LABELS.ion;
-    this._row = {};              // key -> { el, fill, flash, value, rate, tag, st }
-    /** w4-power D4: the BATTERY power line (`in … W · out … W`) and its element */
+    this._median = new NetPowerMedian();   // D4: the trend / time-left use the median net power
+    // D4: the arrow and the time left wait until this many one-second means exist (a full window by
+    // default) — a first scan 12 s into the game must not be the median of a 12-sample history.
+    this._warmup = Number.isFinite(deps.medianWarmup) ? Math.max(0, deps.medianWarmup) : VITALS_LAW.MEDIAN_SAMPLES;
+    this._row = {};              // key -> { el, fill, flash, value, rate, tag, st }; 'gas' / 'ion' are the PROPULSION halves
+    /** the in / out watts text (`in … W · out … W`): not drawn here, StatusPanel's hover detail shows it */
     this._flowText = '';
-    this._flowEl = null;
-    this._flowTextEl = null;
     this._lastMs = null;
     this._detect = { battery: new CostFlash(), gas: new CostFlash() };
     this._prev = { battery: { t: NaN, v: NaN }, gas: { t: NaN, v: NaN } };
@@ -363,6 +459,12 @@ export class VitalsPane {
     };
     this._build(deps.parent || null);
   }
+
+  /**
+   * h4b D5: a new game forgets the last game's power samples; the warm-up (30 one-second means)
+   * starts again, so the arrow and the time left stay blank until a full window exists.
+   */
+  resetMedian() { this._median.reset(); this._writeTime(''); }
 
   /** The root element, or null headless. */
   get root() { return this._root; }
@@ -405,10 +507,16 @@ export class VitalsPane {
     const thermal = VitalsPane._snap(rs, 'getThermalSnapshot');
     const power = VitalsPane._snap(rs, 'getPowerSnapshot');
 
+    let mb = null;
+    if (this._getMassBudget) {
+      try { mb = this._getMassBudget(); } catch (_e) { mb = null; }
+      if (!mb || typeof mb !== 'object') mb = null;
+    }
+
     this._paintHeat(thermal);
     this._paintBattery(res, power, t);
-    this._paintGas(res, t);
-    this._paintIon(res, rs);
+    this._paintGas(res, mb, t);
+    this._paintIon(res, rs, mb);
     return true;
   }
 
@@ -416,19 +524,20 @@ export class VitalsPane {
   rowText(key) {
     const r = this._row[key];
     if (!r) return '';
+    if (key === 'propulsion') return `${VITALS_LABELS.propulsion} ${this.rowText('gas')} ${this.rowText('ion')}`;
     const parts = [key === 'ion' ? this._fuelLabel : VITALS_LABELS[key], r.st.value];
     if (r.st.rate) parts.push(r.st.rate);
     if (r.st.tag) parts.push(r.st.tag);
     return parts.join(' ');
   }
 
-  /** w4-power D4: the BATTERY power line, e.g. `in 1725 W · out 500 W` ('' with no power snapshot). */
+  /** The in / out watts text, e.g. `in 1725 W · out 500 W` ('' with no power snapshot); the MOTHER hover detail shows it. */
   flowText() { return this._flowText; }
 
   /** The BATTERY time-left text, e.g. `empty in 19 min` ('' when quiet). */
   timeText() { return this._timeText || ''; }
 
-  /** The engine row's label (the loaded fuel's name in capitals). */
+  /** The engine half's label (the loaded fuel's name in capitals). */
   fuelLabel() { return this._fuelLabel; }
 
   /**
@@ -489,7 +598,7 @@ export class VitalsPane {
     });
   }
 
-  /** @private BATTERY: level + capacity + net rate + the cost flash. */
+  /** @private BATTERY: level + capacity + trend arrow + time left (median net power) + the cost flash. */
   _paintBattery(res, power, t) {
     const r = this._row.battery;
     let level = NaN;
@@ -499,33 +608,37 @@ export class VitalsPane {
     } else if (res && Number.isFinite(res.battery) && Number.isFinite(res.batteryMax) && res.batteryMax > 0) {
       level = res.battery; max = res.batteryMax;
     }
+    this._writeFlow(power);
+    // D4: the net power goes through the median-of-30-seconds filter; the arrow and the time left read the median.
+    if (power && Number.isFinite(Number(power.netW))) this._median.push(t, Number(power.netW));
+    else this._median.reset();
     if (!(max > 0)) {
       this._write(r, { band: 'none', fill: '0%', value: DASH, rate: '', rateDir: '' });
-      this._writeFlow(power);
       this._writeTime('');
       return;
     }
     const frac = clamp01(level / max);
-    const rate = power ? fmtRate(Number(power.netW)) : NO_RATE;
+    const net = power && this._median.count() >= this._warmup ? this._median.value() : NaN;
+    const trend = fmtTrend(net);
     this._write(r, {
       band: levelBand(frac, VITALS_LAW.BATT_AMBER, VITALS_LAW.BATT_RED),
       fill: pctStr(frac),
       value: fmtBattery(level, max),
-      rate: rate.text,
-      rateDir: rate.dir,
+      rate: trend.text,
+      rateDir: trend.dir,
     });
-    this._writeFlow(power);
-    this._writeTime(power ? fmtTimeLeft(level, max, Number(power.netW)) : '');
+    this._writeTime(fmtTimeLeft(level, max, net));
     this._cost('battery', t, level, max, VITALS_LAW.FLASH_BATT_FRAC * max, VITALS_LAW.FLASH_EXTEND_BATT_FRAC_PER_S * max);
   }
 
   /**
    * @private w4-power D4 (owner 2026-10-12: "rotating mother should show
-   * immediate drop in power-in"): the power line under BATTERY — `in` is this
+   * immediate drop in power-in"): the in / out watts text — `in` is this
    * frame's generation, unsmoothed (getPowerSnapshot().genW, the rate
-   * PlayerSatellite._updateSolarPower writes), so a turn away from the sun
-   * shows at the next 10 Hz paint; `out` is the ledger's draw (smoothed over
-   * POWER_TAU_S 0.5 s). Both always shown, in whole watts.
+   * PlayerSatellite._updateSolarPower writes), `out` is the ledger's draw
+   * (smoothed over POWER_TAU_S 0.5 s). Whole watts, both always shown. Since
+   * h4-simple-first D3 the text is not drawn in this pane: StatusPanel's MOTHER
+   * hover detail reads `flowText()`.
    */
   _writeFlow(power) {
     let text = '';
@@ -536,15 +649,10 @@ export class VitalsPane {
         text = fmtFlow(gen, out);
       }
     }
-    if (text === this._flowText) return;
     this._flowText = text;
-    if (this._flowEl) {
-      if (this._flowTextEl) this._flowTextEl.textContent = text;
-      if (text) this._flowEl.removeAttribute('data-empty'); else this._flowEl.setAttribute('data-empty', '');
-    }
   }
 
-  /** @private The battery time-left text (write-on-change; empty hides it, keeping the line's height). */
+  /** @private The battery time-left text (write-on-change; empty = nothing drawn). */
   _writeTime(text) {
     if (text === this._timeText) return;
     this._timeText = text;
@@ -552,14 +660,18 @@ export class VitalsPane {
   }
 
   /**
-   * @private NITROGEN: the cold-gas tank in PHYSICAL kg (the pool is 20 kg,
-   * the ship's tank 6 kg — `coldGas / coldGasMax x OCTOPUS_CORE_COLD_GAS`,
-   * the same rescale MASS BUDGET uses) + the cost flash in tank terms.
+   * @private The nitrogen half: the cold-gas tank. The bar is the pool fraction
+   * (resources.coldGas / coldGasMax; the mass budget's fraction when there is
+   * no player resource copy); the number is the budget's `coldGasCurrent` in
+   * physical kg (`—` before the budget is ready). Plus the cost flash in tank terms.
    */
-  _paintGas(res, t) {
+  _paintGas(res, mb, t) {
     const r = this._row.gas;
-    const v = res ? Number(res.coldGas) : NaN;
-    const max = res ? Number(res.coldGasMax) : NaN;
+    let v = res ? Number(res.coldGas) : NaN;
+    let max = res ? Number(res.coldGasMax) : NaN;
+    if ((!Number.isFinite(v) || !(max > 0)) && mb && mb.coldGasMax > 0 && Number.isFinite(mb.coldGasCurrent)) {
+      v = mb.coldGasCurrent; max = mb.coldGasMax;
+    }
     if (!Number.isFinite(v) || !(max > 0)) {
       this._write(r, { band: 'none', fill: '0%', value: DASH });
       return;
@@ -568,7 +680,7 @@ export class VitalsPane {
     this._write(r, {
       band: levelBand(frac, VITALS_LAW.GAS_AMBER, VITALS_LAW.GAS_RED),
       fill: pctStr(frac),
-      value: fmtKg(frac * Constants.OCTOPUS_CORE_COLD_GAS),
+      value: mb && Number.isFinite(mb.coldGasCurrent) ? fmtKg(mb.coldGasCurrent) : DASH,
     });
     this._cost('gas', t, v, max, VITALS_LAW.FLASH_GAS_FRAC * max, VITALS_LAW.FLASH_EXTEND_GAS_FRAC_PER_S * max);
   }
@@ -596,36 +708,33 @@ export class VitalsPane {
   }
 
   /**
-   * @private The engine fuel row: the label is the loaded fuel's name in
-   * capitals; the bar is the tank fraction; the number is the ship's ΔV in
-   * m/s (the lazy mass-budget provider), else physical kg of the tank
-   * (`xenon / xenonMax x OCTOPUS_CORE_XENON`). Amber < 15 %, red only when empty.
+   * @private The engine half: the label is the loaded fuel's name in capitals;
+   * the bar is the engine tank (the mass budget's `xenonCurrent / xenonMax`,
+   * else the pool fraction); the number is the ship's ΔV in m/s from the mass
+   * budget (`—` before the budget is ready). Amber < 15 %, red only when empty.
    */
-  _paintIon(res, rs) {
+  _paintIon(res, rs, mb) {
     const r = this._row.ion;
     this._paintFuelLabel(rs);
-    const v = res ? Number(res.xenon) : NaN;
-    const max = res ? Number(res.xenonMax) : NaN;
+    let v = mb ? Number(mb.xenonCurrent) : NaN;
+    let max = mb ? Number(mb.xenonMax) : NaN;
+    if (!Number.isFinite(v) || !(max > 0)) {
+      v = res ? Number(res.xenon) : NaN;
+      max = res ? Number(res.xenonMax) : NaN;
+    }
     if (!Number.isFinite(v) || !(max > 0)) {
       this._write(r, { band: 'none', fill: '0%', value: DASH });
       return;
     }
     const frac = clamp01(v / max);
-    let value = null;
-    if (this._getMassBudget) {
-      let mb = null;
-      try { mb = this._getMassBudget(); } catch (_e) { mb = null; }
-      if (mb && Number.isFinite(mb.deltaV)) value = fmtDeltaV(mb.deltaV);
-    }
-    if (value === null) value = fmtKg(frac * Constants.OCTOPUS_CORE_XENON);
     this._write(r, {
       band: frac <= 0 ? 'red' : levelBand(frac, VITALS_LAW.ION_AMBER, null),
       fill: pctStr(frac),
-      value,
+      value: mb && Number.isFinite(mb.deltaV) ? fmtDeltaV(mb.deltaV) : DASH,
     });
   }
 
-  /** @private The engine row's label: the loaded fuel's name in capitals (write-on-change). */
+  /** @private The engine half's label: the loaded fuel's name in capitals (write-on-change). */
   _paintFuelLabel(rs) {
     let name = '';
     if (rs && typeof rs.getCurrentFuel === 'function') {
@@ -723,65 +832,81 @@ export class VitalsPane {
     title.appendChild(this._titleSlot);
     root.appendChild(title);
 
+    // A bar track with its fill (+ the cost-flash chunk where the pool has one).
+    const mkTrack = (key, flash) => {
+      const track = mk('span', `vp-track vp-track-${key}`);
+      const fill = mk('span', 'vp-fill');
+      fill.style.width = '0%';
+      track.appendChild(fill);
+      const flashEl = flash ? mk('span', 'vp-flash') : null;
+      if (flashEl) track.appendChild(flashEl);
+      track.appendChild(mk('span', 'vp-ticks'));
+      return { track, fill, flash: flashEl };
+    };
+    const rec0 = (el, label, t) => ({ el, label, fill: t.fill, flash: t.flash, value: null, rate: null, tag: null,
+      st: { band: 'none', fill: '0%', value: DASH, rate: '', tag: '' } });
+
     for (const key of VITALS_ROWS) {
       const el = mk('div', 'vp-row');
       el.setAttribute('data-row', key);
       el.setAttribute('data-band', 'none');
       const label = mk('span', 'vp-label', VITALS_LABELS[key]);
-      const track = mk('span', `vp-track vp-track-${key}`);
-      const fill = mk('span', 'vp-fill');
-      fill.style.width = '0%';
-      track.appendChild(fill);
-      const rec = { el, label, fill, flash: null, value: null, rate: null, tag: null,
-        st: { band: 'none', fill: '0%', value: DASH, rate: '', tag: '' } };
-      if (key === 'battery' || key === 'gas') {
-        rec.flash = mk('span', 'vp-flash');
-        track.appendChild(rec.flash);
+      el.appendChild(label);
+
+      if (key === 'propulsion') {
+        // One row, two halves: `N₂ ▮▮▮▯ 3.6 kg │ XENON ▮▮▮▯ 1468 m/s`. Each half has its own band.
+        this._row.propulsion = { el, label, st: { band: 'none', fill: '', value: '', rate: '', tag: '' } };
+        VITALS_HALVES.forEach((hk, i) => {
+          if (i > 0) el.appendChild(mk('span', 'vp-sep', '\u2502'));
+          const half = mk('span', 'vp-half');
+          half.setAttribute('data-half', hk);
+          half.setAttribute('data-band', 'none');
+          const sub = mk('span', 'vp-sublabel', VITALS_LABELS[hk]);
+          const t = mkTrack(hk, hk === 'gas');
+          const rec = rec0(half, sub, t);
+          rec.value = mk('span', 'vp-value', DASH);
+          half.appendChild(sub);
+          half.appendChild(t.track);
+          half.appendChild(rec.value);
+          el.appendChild(half);
+          this._row[hk] = rec;
+        });
+        root.appendChild(el);
+        continue;
       }
-      track.appendChild(mk('span', 'vp-ticks'));
+
+      const t = mkTrack(key, key === 'battery');
+      const rec = rec0(el, label, t);
       if (key === 'heat') {
         // The two thresholds, drawn where they are: 60 and 85 of a 0-100 scale.
         for (const c of [VITALS_LAW.HEAT_YELLOW_C, VITALS_LAW.HEAT_RED_C]) {
           const m = mk('span', 'vp-mark');
           m.style.left = `${(c / VITALS_LAW.HEAT_SCALE_C) * 100}%`;
-          track.appendChild(m);
+          t.track.appendChild(m);
         }
         rec.tag = mk('span', 'vp-tag');
         rec.tag.setAttribute('data-empty', '');
-        track.appendChild(rec.tag);
-      }
-      if (key === 'battery') {
-        // w7-panes D6: the net rate no longer rides ON the bar (it covered the
-        // cells and was hard to read) — it sits in the label gutter of the
-        // power line under the track (built below, after the row).
-        rec.rate = mk('span', 'vp-rate');
-        rec.rate.setAttribute('data-empty', '');
+        t.track.appendChild(rec.tag);
       }
       rec.value = mk('span', 'vp-value', DASH);
-      el.appendChild(label);
-      el.appendChild(track);
+      el.appendChild(t.track);
       el.appendChild(rec.value);
-      root.appendChild(el);
-      this._row[key] = rec;
       if (key === 'battery') {
-        // w4-power D4: the power line under BATTERY — its own 11 px line so the
-        // in / out watts never crowd the track's net-rate arrow. h1-mother-pane
-        // D2: the E-Tether tag (same id as before) and the time left ride it too.
-        this._flowEl = mk('div', 'vp-flow');
-        this._flowEl.setAttribute('data-flow', 'battery');
-        this._flowEl.setAttribute('data-empty', '');
-        this._flowEl.appendChild(this._row.battery.rate);
-        this._flowTextEl = mk('span', 'vp-flow-text');
-        this._flowEl.appendChild(this._flowTextEl);
+        // h4-simple-first D3: the trend arrow and the time left ride the BATTERY row itself
+        // (the in / out watts line moved into the MOTHER hover detail). The E-Tether tag keeps its id.
         const edt = mk('span', 'vp-edt', 'E-Tether');
         edt.id = 'edt-indicator';
         edt.setAttribute('title', 'Electrodynamic Tether');
         edt.style.display = 'none';
-        this._flowEl.appendChild(edt);
+        el.appendChild(edt);
+        rec.rate = mk('span', 'vp-rate');
+        rec.rate.setAttribute('data-empty', '');
+        el.appendChild(rec.rate);
         this._timeEl = mk('span', 'vp-time');
-        this._flowEl.appendChild(this._timeEl);
-        root.appendChild(this._flowEl);
+        el.appendChild(this._timeEl);
       }
+      root.appendChild(el);
+      this._row[key] = rec;
     }
 
     // The plume warning lives with the meters, never in the hover detail: a warning is never hover-only.
@@ -863,9 +988,30 @@ export class VitalsPane {
         font-variant-numeric: tabular-nums;
         --vp-c: ${DIM};
       }
-      #${VITALS_ID} .vp-row[data-band="green"]  { --vp-c: ${NORMAL}; }
-      #${VITALS_ID} .vp-row[data-band="yellow"] { --vp-c: ${CAUTION}; }
-      #${VITALS_ID} .vp-row[data-band="red"]    { --vp-c: ${WARNING}; }
+      #${VITALS_ID} :is(.vp-row, .vp-half)[data-band="green"]  { --vp-c: ${NORMAL}; }
+      #${VITALS_ID} :is(.vp-row, .vp-half)[data-band="yellow"] { --vp-c: ${CAUTION}; }
+      #${VITALS_ID} :is(.vp-row, .vp-half)[data-band="red"]    { --vp-c: ${WARNING}; }
+      /* h4-simple-first D2: PROPULSION is one row of two halves (N\u2082 | engine gas), each with its own
+       * band; the halves share what the label column leaves, the engine half takes the longer text. */
+      #${VITALS_ID} .vp-half {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex: 1 1 0;
+        min-width: 0;
+        --vp-c: ${DIM};
+      }
+      #${VITALS_ID} .vp-half .vp-sublabel {
+        flex: 0 0 auto;
+        font-weight: 700;
+        color: ${LABEL};
+        opacity: 0.72;
+        text-shadow: ${HALO};
+      }
+      #${VITALS_ID} .vp-half .vp-track { min-width: 12px; }
+      #${VITALS_ID} .vp-half .vp-value { flex: 0 0 auto; }
+      #${VITALS_ID} .vp-half[data-half="ion"] { flex-grow: 1.15; }
+      #${VITALS_ID} .vp-sep { flex: 0 0 auto; opacity: 0.35; color: ${LABEL}; }
       #${VITALS_ID} .vp-label {
         flex: 0 0 ${G.LABEL_PX}px;
         font-weight: 700;
@@ -937,36 +1083,27 @@ export class VitalsPane {
       }
       #${VITALS_ID} .vp-rate[data-dir="up"]   { color: ${NORMAL}; }
       #${VITALS_ID} .vp-rate[data-dir="down"] { color: ${CAUTION}; }
-      /* w7-panes D6: the net rate (\u25b2 +1.2 kW) sits in the label gutter of the
-       * power line, under the word BATTERY - never over the cells. */
+      /* h4-simple-first D3: the trend arrow and the time left sit on the BATTERY row, after the number. */
       #${VITALS_ID} .vp-rate {
-        flex: 0 0 ${G.LABEL_PX}px;
+        flex: 0 0 auto;
         font-size: 9px;
         font-weight: 700;
         white-space: nowrap;
         color: ${LABEL};
         text-shadow: ${HALO};
       }
-      /* w4-power D4: the BATTERY power line, under the track (indented past the label).
-       * h1-mother-pane D2: the E-Tether tag and the time left share it. */
-      #${VITALS_ID} .vp-flow {
-        height: ${G.FLOW_PX}px;
-        line-height: ${G.FLOW_PX}px;
-        display: flex;
-        gap: 5px;
+      #${VITALS_ID} .vp-time {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
         font-size: 9px;
         font-weight: 700;
-        white-space: nowrap;
-        overflow: hidden;
-        font-variant-numeric: tabular-nums;
         color: ${TEXT};
         opacity: 0.85;
         text-shadow: ${HALO};
       }
-      #${VITALS_ID} .vp-edt { color: ${INFO}; }
-      #${VITALS_ID} .vp-time { margin-left: auto; }
-      #${VITALS_ID} .vp-flow[data-empty] { visibility: hidden; }
-      #${VITALS_ID} .vp-rate[data-empty] { visibility: hidden; }   /* keeps the gutter: the watts stay under the track */
+      #${VITALS_ID} .vp-edt { color: ${INFO}; font-size: 9px; font-weight: 700; flex: 0 0 auto; }
+      #${VITALS_ID} .vp-rate[data-empty] { display: none; }
       #${VITALS_ID} .vp-tag[data-empty] { display: none; }
       /* The plume warning: hidden until StatusPanel lights it (inline display), never part of the hover detail. */
       #${VITALS_ID} .vp-plume {

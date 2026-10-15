@@ -298,6 +298,13 @@ export class OnboardingDirector {
     /** @type {*|null} poll timer while waiting for the first settled F2. */
     this._detailHintPoll = null;
 
+    /**
+     * h4-simple-first D9: true once a scan has completed this boot. In mission 1 the DETAIL beat
+     * ("− / + fewer / more panes") waits for it — the first frames stay calm.
+     * @type {boolean}
+     */
+    this._scanSeen = false;
+
     /** @type {Array<{ event: string, at: number }>} recent trigger event buffer. */
     this._recentInputs = [];
 
@@ -497,6 +504,10 @@ export class OnboardingDirector {
     if (Events.CAMERA_ZOOM_INPUT) {
       on(Events.CAMERA_ZOOM_INPUT, () => this._maybeDetailHint());
     }
+    // h4-simple-first D9: the first completed scan releases the DETAIL beat in mission 1.
+    if (Events.SCAN_COMPLETE) {
+      on(Events.SCAN_COMPLETE, () => { this._scanSeen = true; this._maybeDetailHint(); });
+    }
 
     // Recent-input buffer + unrelated-input counter for repeated-fail escalation.
     // We accumulate from every TUTORIAL_*_INPUT and a small set of action events
@@ -657,6 +668,9 @@ export class OnboardingDirector {
     let floor = null;
     try { floor = this._floorProvider(); } catch (_e) { return; }
     if (floor !== 2) return;
+    // h4-simple-first D9 (owner 2026-10-15, DECISIONS §23 row 5): in mission 1 the hint waits for the
+    // first scan; from mission 2 on (or without a scoring system to ask) it is today's behaviour.
+    if (!this._scanSeen && this._inMissionOne()) return;
     this._detailHintShown = true;
     this._clearDetailHintPoll();
     this._persist();
@@ -671,6 +685,16 @@ export class OnboardingDirector {
       duration: Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000,
       priority: 'normal',
     });
+  }
+
+  /** @private true while the scoring ledger says mission 1 (false when it cannot say). */
+  _inMissionOne() {
+    try {
+      return !!this._scoring && typeof this._scoring.getMissionNumber === 'function'
+        && this._scoring.getMissionNumber() === 1;
+    } catch (_e) {
+      return false;
+    }
   }
 
   /**

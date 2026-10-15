@@ -66,7 +66,7 @@ export const CODEX_TRIGGERS = {
   feep_thruster:          [{ event: E.ARM_MANUAL_THRUST, match: always }],
   // survivor of ← specific_impulse_explained (union: SCORING_AWARD + FUEL_CHANGED)
   specific_impulse:       [{ event: E.SCORING_AWARD, match: (p) => !!p.reason && p.reason.includes('fuel') },
-                           { event: E.FUEL_CHANGED, match: always }],
+                           { event: E.FUEL_CHANGED, match: (p) => !(p && p.initial) }],   // h3b D5: the boot/load announcement is not a player action
   xenon_propellant:       [{ event: E.PLAYER_TELEMETRY, match: (p) => p.xenonPct < 0.7 }],
   // F6: krypton/argon are reference propellants with NO in-game upgrade to buy
   // (the propulsion tree is xenon/cold-gas/lithium/FEEP), so their old

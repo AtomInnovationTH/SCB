@@ -21,6 +21,7 @@ import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
 import { findNearestLiveDebris } from './NavRecoveryAdvisor.js';
 import { strutLocalDirection } from '../entities/ArmDockBasis.js';
+import { engineGasKg, engineDeltaV } from './ResourceSystem.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
@@ -694,8 +695,17 @@ export class AutopilotSystem {
     // pure velocity damping and the ship arrives at rest. A_BRAKE reserves
     // headroom below MAX_ACCEL for transverse corrections and tracking error.
     // See AUTOPILOT_ANALYSIS.md §D Retrospective #2.
+    //
+    // h3b-argon-push D2: the engine pushes `thrustScale` (argon 0.46, xenon 1.0) of the
+    // commanded Δv (PlayerSatellite.applyCartesianImpulse), so the braking rate the
+    // profile may ask for scales by it too — otherwise an argon ship would plan to brake
+    // at 1.0 m/s² with a real authority of 0.92 and fly through the goal. Scaled ONCE:
+    // the request limit below (MAX_ACCEL · dt) stays as it is, the impulse scales what is
+    // applied, so the real limit is thrustScale·MAX_ACCEL and the real/brake headroom
+    // (1/BRAKE_FRACTION = 2x) is the same on every fuel. The MATCH→TRAIL gate below reads
+    // the same A_BRAKE.
     // -----------------------------------------------------------------------
-    const A_BRAKE = AP.MAX_ACCEL * AP.BRAKE_FRACTION;      // m/s²
+    const A_BRAKE = AP.MAX_ACCEL * AP.BRAKE_FRACTION * this._engineThrustScale();   // m/s²
     const vStarBrake = Math.sqrt(2 * A_BRAKE * posErrM);   // m/s
     const vStar = Math.min(AP.V_CAP, vStarBrake);          // m/s
 
@@ -1029,6 +1039,18 @@ export class AutopilotSystem {
     if (!this._aimCoroutine && !this._attitudeHold) {
       this._rotateTowardWorld(vHat, dt);
     }
+  }
+
+  /**
+   * The engine's push per watt, relative to xenon: the active fuel's thrustScale as the player reports
+   * it (PlayerSatellite.getThrustScale). 1 for a player without the accessor (menu hero, test stubs).
+   * @returns {number} > 0
+   * @private
+   */
+  _engineThrustScale() {
+    const p = this._player;
+    const s = (p && typeof p.getThrustScale === 'function') ? p.getThrustScale() : 1;
+    return s > 0 ? s : 1;
   }
 
   /**
@@ -1377,7 +1399,7 @@ export class AutopilotSystem {
 
   /**
    * Get remaining ΔV in m/s from ArmManager mass budget,
-   * with a rough fallback based on xenon remaining.
+   * with a fallback from the player's resources through the same formula (engineDeltaV).
    * @returns {number}
    * @private
    */
@@ -1387,7 +1409,20 @@ export class AutopilotSystem {
         return this._armManager.getMassBudget().deltaV;
       } catch (_) { /* fall through */ }
     }
-    return this._player ? this._player.resources.xenon * 10 : 0;
+    if (!this._player) return 0;
+    // h3-argon-engine D4: no mass budget wired (headless/mock) -> the SAME shared formula over the
+    // player's resources: the gas in the tank (its Isp), core + tank dry mass, cold gas carried.
+    const r = this._player.resources || {};
+    const fuel = Constants.FUELS[r.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
+    const c = typeof this._player.getConsumptionMultiplier === 'function'
+      ? this._player.getConsumptionMultiplier() : 1;
+    return engineDeltaV({
+      dryKg: Constants.OCTOPUS_V5.CORE_DRY_MASS + Constants.ENGINE_TANK_DRY_MASS_KG,
+      coldGasKg: Constants.OCTOPUS_CORE_COLD_GAS * ((r.coldGas || 0) / (r.coldGasMax || Constants.COLD_GAS_MAX)),
+      gasKg: engineGasKg(r),
+      isp: fuel.isp,
+      c,
+    });
   }
 
   // ==========================================================================
@@ -1554,11 +1589,13 @@ export class AutopilotSystem {
       .negate()
       .multiplyScalar(dvMagnitude * AP.STATION_KEEP_EFFICIENCY);
 
-    // dt = 0: instantaneous compensation, not continuous thrust
+    // dt = 0: instantaneous compensation, not continuous thrust. Draws no power but pays for its gas
+    // (h3b-argon-push D3), and the engine applies thrustScale of it (D1).
     this._player.applyCartesianImpulse(reactionDv, 0);
 
-    // Track cumulative compensation ΔV for MFD reporting
-    this._stationKeepDeltaV = (this._stationKeepDeltaV || 0) + dvMagnitude * AP.STATION_KEEP_EFFICIENCY;
+    // Track cumulative compensation ΔV for MFD reporting (what the engine actually applied)
+    this._stationKeepDeltaV = (this._stationKeepDeltaV || 0)
+      + dvMagnitude * AP.STATION_KEEP_EFFICIENCY * this._engineThrustScale();
   }
 
   /**
@@ -1589,8 +1626,9 @@ export class AutopilotSystem {
     }
     dir.negate().multiplyScalar(dvMag * AP.STATION_KEEP_EFFICIENCY);
 
-    this._player.applyCartesianImpulse(dir, 0);
-    this._stationKeepDeltaV = (this._stationKeepDeltaV || 0) + dvMag * AP.STATION_KEEP_EFFICIENCY;
+    this._player.applyCartesianImpulse(dir, 0);   // dt = 0: billed for gas, not power (h3b-argon-push D3)
+    this._stationKeepDeltaV = (this._stationKeepDeltaV || 0)
+      + dvMag * AP.STATION_KEEP_EFFICIENCY * this._engineThrustScale();
   }
 
   // ==========================================================================

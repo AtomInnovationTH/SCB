@@ -113,6 +113,9 @@ function hexToRgb(hex) {
   return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
 }
 
+/** h4b D4: the simple list shows the colour-law hazard word as one glyph (title = the word). Unknown word → '!'. */
+const SIMPLE_WORD_GLYPH = Object.freeze({ TUMBLING: '\u21BB', HYDRAZINE: '!', HEAVY: '\u25A0', CONJUNCTION: '!', 'CLOSE PASS': '!' });
+
 export class TargetPanel {
   constructor(container, { colorLaw = false, glass = null } = {}) {
     this._container = container;
@@ -122,6 +125,15 @@ export class TargetPanel {
     this._glass = resolveGlass(glass);
     this._targetLaw = null;
     this._reachKm = 0;
+    /** h4-simple-first D6: mission 1 on F1/F2 — rows show name, distance and the in-reach dot only (HUD passes it on every update). */
+    this._simple = false;
+    this._simpleBtn = null;          // last written display of the TPI sort button (write-on-change)
+    /** h4b D3: the selected simple row carries the one "analyse" chip until target info was opened once (HUD passes it). */
+    this._analyseChip = false;
+    /** h4b D2: called when the player taps the already-selected row (= analyse; HUD wires noteAnalyse). */
+    this.onAnalyse = null;
+    this._downId = null;             // row id at pointerdown (the list is rebuilt at 2 Hz: ids survive, nodes do not)
+    this._skipClick = false;         // pointerup handled the tap; the click that follows must not count again
 
     /** Currently-selected target ID (public for coordinator read-access) */
     this.selectedTargetId = null;
@@ -187,6 +199,16 @@ export class TargetPanel {
         #hud-targets-panel[data-glass] .target-row {
             min-height: ${TARGET_ROW_GLASS_PX}px;
             box-sizing: border-box;
+        }
+        /* h4-simple-first D6: mission 1 on F1/F2 — name, distance, in-reach dot (no ΔV column). */
+        .target-row.simple {
+            grid-template-columns: 16px minmax(0, 1fr) 72px 16px;
+        }
+        /* h4b D4: a simple row is ONE line - the hazard word is a glyph (word in its title), the analyse chip sits inside the name cell. */
+        .target-row.simple .target-word-glyph { margin-left: 4px; font-weight: bold; }
+        .target-row.simple .analyse-chip {
+            margin-left: 6px; font-size: 0.85em; font-weight: normal; letter-spacing: 0.04em;
+            color: var(--hud-info, ${sel}); opacity: 0.8; text-shadow: none;
         }
         .target-row:hover {
             background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.06);
@@ -467,13 +489,27 @@ export class TargetPanel {
     // Event delegation for target row clicks
     const listEl = this.panels.targets.querySelector('#hud-target-list');
     if (listEl) {
+      // h4b D2: the list is rebuilt with innerHTML every 2 Hz tick, so a tap can lose its row between
+      // pointerdown and click (no click is fired then). The tap is decided on pointerup by row id;
+      // a plain click (mouse without pointer events, keyboard, tests) is the fallback.
+      const rowId = (e) => {
+        const row = e && e.target && e.target.closest ? e.target.closest('.target-row') : null;
+        const id = row ? parseInt(row.dataset.id) : NaN;
+        return isNaN(id) ? null : id;
+      };
+      listEl.addEventListener('pointerdown', (e) => { this._downId = rowId(e); this._skipClick = false; });
+      listEl.addEventListener('pointerup', (e) => {
+        const id = rowId(e);
+        const down = this._downId;
+        this._downId = null;
+        if (id == null || down !== id) return;     // dragged off the row / scroll: not a tap
+        this._skipClick = true;
+        this._rowTap(id);
+      });
       listEl.addEventListener('click', (e) => {
-        const row = e.target.closest('.target-row');
-        if (!row) return;
-        const id = parseInt(row.dataset.id);
-        if (isNaN(id)) return;
-        this.selectedTargetId = id;
-        eventBus.emit(Events.HUD_TARGET_CLICK, { id });
+        if (this._skipClick) { this._skipClick = false; return; }
+        const id = rowId(e);
+        if (id != null) this._rowTap(id);
       });
     }
 
@@ -662,7 +698,34 @@ export class TargetPanel {
   update(data) {
     this._targetLaw = (this._colorLaw && data && data.targetLaw) ? data.targetLaw : null;
     this._playerOrbit = data.playerOrbit || null;
+    this._simple = !!data.simple;
+    this._analyseChip = !!data.analyseChip;
+    this._applySimpleChrome();
     this._updateTargetList(data.cachedTargets, data.cachedUntracked, data.cachedActiveSats);
+  }
+
+  /**
+   * @private A tap / click on target row `id`: select it; tapping the row that was ALREADY selected is
+   * the analyse action (h4b D2 — touch has no Z key).
+   */
+  _rowTap(id) {
+    const was = this.selectedTargetId;
+    this.selectedTargetId = id;
+    eventBus.emit(Events.HUD_TARGET_CLICK, { id });
+    if (was === id && typeof this.onAnalyse === 'function') this.onAnalyse(id);
+  }
+
+  /** True while the list is in simple-first form (mission 1, F1/F2; HUD decides). */
+  isSimple() { return this._simple; }
+
+  /** @private The TPI sort toggle hides in simple mode (write-on-change). */
+  _applySimpleChrome() {
+    const btn = this.panels.targets && this.panels.targets.querySelector('#hud-sort-btn');
+    if (!btn || !btn.style) return;
+    const want = this._simple ? 'none' : '';
+    if (this._simpleBtn === want) return;
+    this._simpleBtn = want;
+    btn.style.display = want;
   }
 
   // ==========================================================================
@@ -749,6 +812,29 @@ export class TargetPanel {
             ? `<span class="target-word" style="color:${lookColor(law.wordColor)};font-size:10px;font-weight:bold;letter-spacing:0.08em${alpha != null ? `;opacity:${alpha}` : ''}">${law.word}</span>`
             : '';
 
+          if (this._simple) {
+            // h4-simple-first D6: name, distance and the in-reach dot — no ΔV column, no MOID badge,
+            // no detail line, no key prompts (those come one pane level up and from mission 2).
+            const name = selected ? this._getFullTypeName(t.type) : typeName;
+            const nameStyle = selected
+              ? (law ? ` style="color:${lookColor(law.color)}"` : '')
+              : ` style="color:${tierColor}${law ? `;opacity:${law.alpha}` : ''}"`;
+            // h4b D4: the hazard word is ONE glyph in the name cell (the word stays in its title), never a second line.
+            const glyph = (law && law.word)
+              ? `<span class="target-word-glyph" title="${law.word}" style="color:${lookColor(law.wordColor)}">${SIMPLE_WORD_GLYPH[law.word] || '!'}</span>`
+              : '';
+            // h4b D3: ONE prompt for the selected row until target info was opened once (touch has no Z).
+            const chip = (selected && this._analyseChip)
+              ? `<span class="analyse-chip">${this._glass ? 'tap again: analyse' : 'Z analyse'}</span>`
+              : '';
+            return `<div class="target-row simple${selected ? ' selected' : ''}" data-id="${t.id}">
+    <span class="${iconClass}">${typeIcon}</span>
+    <span class="target-name"${nameStyle}>${name}${selected ? '' : salvageIcon}${glyph}${chip}</span>
+    <span class="target-dist">${dist}</span>
+    <span class="range-dot" style="${rangeStyle}">${range.dot}</span>
+</div>`;
+          }
+
           if (selected) {
             // --- Net ΔV computation ---
             // UX-3 #1: Use frozen ΔV from selection time if available, else live
@@ -812,7 +898,7 @@ export class TargetPanel {
             if (dossierSystem.isProfiled(t.id)) {
               const { total } = appraiseSalvage(t.salvage);
               if (total > 0) {
-                valueBadge = `<span style="color:var(--hud-caution, #ffcc00);font-size:10px;font-weight:bold;" title="Appraised salvage value">\u20B9${total}</span>`;
+                valueBadge = `<span style="color:var(--hud-caution, #ffcc00);font-size:10px;font-weight:bold;" title="Appraised salvage value">${total} cr</span>`;
               }
             }
 

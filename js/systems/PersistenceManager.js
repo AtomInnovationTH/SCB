@@ -46,7 +46,7 @@ class PersistenceManager {
    * @param {number}  data.missionNumber
    * @param {number}  data.debrisCleared
    * @param {string[]} data.upgrades        - Array of purchased upgrade IDs
-   * @param {object}  data.resourceMaxes    - { xenonMax, coldGasMax, batteryMax }
+   * @param {object}  data.resourceMaxes    - { xenonMax, coldGasMax, batteryMax, currentFuelId, tankGasId, … } (ResourceSystem.serialize())
    * @param {object}  data.stats            - Aggregate statistics
    * @returns {boolean} Whether save succeeded
    */

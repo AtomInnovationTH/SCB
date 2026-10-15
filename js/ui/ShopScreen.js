@@ -34,7 +34,7 @@ import {
 export const UPGRADES = [
   // Propulsion (6)
   { id: 'efficient_ion', cat: 'Propulsion', name: 'Efficient Ion Drive', cost: 500,
-    desc: '-20% xenon consumption', effect: 'xenonEfficiency', value: 0.8, maxLevel: 1,
+    desc: '-20% engine gas consumption', effect: 'xenonEfficiency', value: 0.8, maxLevel: 1,
     trl: 9, trlRationale: 'Xenon ion drives flown since Deep Space 1 (1998)' },
   { id: 'high_thrust_ion', cat: 'Propulsion', name: 'High-Thrust Ion', cost: 800,
     desc: '+50% thrust power', effect: 'thrustMultiplier', value: 1.5, maxLevel: 1,

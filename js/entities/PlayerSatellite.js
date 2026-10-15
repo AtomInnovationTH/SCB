@@ -23,6 +23,7 @@ import { applyDetailLod } from '../scene/detailLodCull.js';
 import { getOrbitalFoilEnv } from '../scene/orbitalFoilEnv.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
+import { engineGasKg } from '../systems/ResourceSystem.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import {
   computeCoM, computeCoMDrift, computeCoMDriftVector,
@@ -40,6 +41,107 @@ import {
   orbitalVelocity,
   atmosphericDrag,
 } from './OrbitalMechanics.js';
+
+// ============================================================================
+// h3-argon-engine D4/D5 — engine-gas flow follows thrust and Isp.
+// Module-level (not methods) so the borrowed-prototype / mock ships the tests use
+// (`PlayerSatellite.prototype.applyCartesianImpulse.call(mock, ...)`) bill the same way.
+// ============================================================================
+
+/**
+ * The consumption multiplier c: every gain that makes a kilogram of gas push longer acts as an Isp
+ * gain — the paid "Efficient Ion Drive" (`_ionThrustXenonRate / _baseIonXenonRate` = 0.8 after the
+ * upgrade) times the THRUST-bus power split (1 / thrustMultiplier). Used by the flow AND by the ΔV
+ * readout (ArmManager.getMassBudget), so the two cannot disagree.
+ * @param {object} ship
+ * @returns {number} c (1 = no gain; 0.8 = 20 % less gas per m/s)
+ */
+function consumptionMultiplier(ship) {
+  const base = ship._baseIonXenonRate;
+  const upgrade = (base > 0 && Number.isFinite(ship._ionThrustXenonRate))
+    ? ship._ionThrustXenonRate / base : 1;
+  const tm = powerDistribution.thrustMultiplier;
+  const split = tm > 0 ? 1 / tm : 1;   // 0 = engine offline: refused before billing, so 1 is only a readout default
+  return upgrade * split;
+}
+
+/**
+ * The cargo mass factor the main-thrust translation uses (see _applyThrust): 1 with no cargo, else
+ * 1 / (1 + min(cargo·mult / mass, max)). One definition for the Δv applied and the gas it costs.
+ * @param {object} ship
+ * @returns {number}
+ */
+function cargoThrustFactor(ship) {
+  const cargo = (ship.armManager && typeof ship.armManager.getCargoMassKg === 'function')
+    ? ship.armManager.getCargoMassKg()
+    : (ship._captureNetSystem && typeof ship._captureNetSystem.getBerthedMassKg === 'function')
+      ? ship._captureNetSystem.getBerthedMassKg() : 0;
+  if (!(cargo > 0)) return 1;
+  const CN = Constants.CAPTURE_NET || {};
+  const mult = CN.MASS_EFFECT_MULT ?? 1.0;
+  const maxFactor = CN.MASS_EFFECT_MAX ?? 2.0;
+  return 1 / (1 + Math.min(cargo * mult / ship.mass, maxFactor));
+}
+
+/**
+ * The active fuel's thrustScale: how hard the engine pushes per watt, relative to xenon (argon 0.46,
+ * krypton 0.67, xenon 1.0; a cargo fuel its own). h3b-argon-push D1: the SAME scale acts in the
+ * manual-thrust path (thrustIon) and the live burn path (applyCartesianImpulse), and the autopilot reads
+ * it (getThrustScale) to plan a braking rate its engine can really deliver.
+ * @param {object} ship
+ * @returns {number} > 0
+ */
+function activeThrustScale(ship) {
+  const fuel = ship._resourceSystem
+    ? ship._resourceSystem.getCurrentFuel()
+    : (Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL]) || null;
+  const s = fuel && fuel.thrustScale;
+  return s > 0 ? s : 1;
+}
+
+/**
+ * The ship's total mass NOW (dry + tank + cold gas + engine gas + cargo + docked arms), kg. Exact
+ * (unrounded) when the ArmManager budget is wired; otherwise core + tank + both gases from the
+ * resource mirror (headless/mock ships).
+ * @param {object} ship
+ * @returns {number}
+ */
+function shipMassKg(ship) {
+  const am = ship.armManager;
+  if (am && typeof am.getMassBudget === 'function') {
+    try {
+      const b = am.getMassBudget();
+      if (b && b.shipMassKg > 0) return b.shipMassKg;
+    } catch (_) { /* fall through to the mirror */ }
+  }
+  const r = ship.resources || {};
+  const cold = Constants.OCTOPUS_CORE_COLD_GAS
+    * ((r.coldGas || 0) / (r.coldGasMax || Constants.COLD_GAS_MAX));
+  return Constants.OCTOPUS_V5.CORE_DRY_MASS + Constants.ENGINE_TANK_DRY_MASS_KG + engineGasKg(r) + cold;
+}
+
+/**
+ * Propellant a burn of `dvMps` costs, in the units the active fuel is held in: pool units (percent of
+ * one full base tank, `res.xenon`) for an engine-tank gas, kg of cargo metal for a cargo fuel.
+ *   ṁ = c · m_ship · Δv / (Isp · g0)
+ * — Tsiolkovsky's differential, so a burn that empties a tenth of the tank costs exactly the ΔV the
+ * HUD's formula (engineDeltaV) says it should.
+ * @param {object} ship
+ * @param {number} dvMps - Δv the engine actually delivered this tick, m/s
+ * @param {object} [fuel] - the active fuel definition (FUELS entry)
+ * @returns {number}
+ */
+function ionGasUnits(ship, dvMps, fuel) {
+  if (!(dvMps > 0)) return 0;
+  const f = fuel || (ship._resourceSystem ? ship._resourceSystem.getCurrentFuel() : Constants.FUELS[Constants.DEFAULT_FUEL]);
+  const isp = f && f.isp > 0 ? f.isp : Constants.OCTOPUS_CORE_HALL_ISP;
+  const kg = consumptionMultiplier(ship) * shipMassKg(ship) * dvMps / (isp * Constants.G0);
+  if (f && f.fromCargo) return kg;
+  const tank = Constants.FUELS[(ship.resources && ship.resources.tankGasId) || Constants.DEFAULT_FUEL]
+    || Constants.FUELS[Constants.DEFAULT_FUEL];
+  return kg / tank.kgFull * 100;
+}
+
 
 /** 1 meter in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
@@ -238,6 +340,7 @@ export class PlayerSatellite extends THREE.Group {
     // ========================================================================
     this.resources = {
       xenon: Constants.XENON_FUEL_MAX * (Constants.PROPELLANT_START_FRACTION ?? 1),     // h1-mother-pane D5: 60 %
+      tankGasId: Constants.DEFAULT_FUEL,   // h3-argon-engine D2: the gas the `xenon` pool holds (kept name = pool)
       coldGas: Constants.COLD_GAS_MAX * (Constants.PROPELLANT_START_FRACTION ?? 1),
       battery: Constants.BATTERY_MAX * (Constants.BATTERY_START_FRACTION ?? 1),   // w4-power D1: half
       solarRate: 0,
@@ -276,6 +379,10 @@ export class PlayerSatellite extends THREE.Group {
     this._hasSupercap = false;        // set by Graphene Supercap upgrade
 
     // Consumption rates
+    // h3-argon-engine D5: the engine-gas flow is no longer a fixed 0.02/s. It follows thrust and Isp
+    // (ṁ = c·m·Δv/(Isp·g0), see ionGasUnits). `_ionThrustXenonRate` / `_baseIonXenonRate` survive only as
+    // the CARRIER of the paid "Efficient Ion Drive" multiplier (rate/base = 0.8 after the upgrade; read by
+    // fittingCatalog `efficient_ion`) — their 0.02 absolute value is no longer a flow.
     this._ionThrustXenonRate = 0.02;
     this._ionThrustPowerRate = 5.0;
     this._coldGasRate = 0.5;
@@ -6668,7 +6775,7 @@ export class PlayerSatellite extends THREE.Group {
       // Phase 4: Include current fuel info in telemetry
       const currentFuel = this._resourceSystem
         ? this._resourceSystem.getCurrentFuel()
-        : Constants.FUELS.xenon;
+        : Constants.FUELS[Constants.DEFAULT_FUEL];
 
       eventBus.emit(Events.PLAYER_TELEMETRY, {
         altitude: altKm,
@@ -6678,8 +6785,10 @@ export class PlayerSatellite extends THREE.Group {
         deltaVSpent: this._deltaVSpent,
         thrustDirection: this._thrustDirection,
         lastThrustType: this._lastThrustType,
-        currentFuelId: currentFuel.id || 'xenon',
-        currentIsp: currentFuel.isp || 1600,
+        deltaV: this._telemetryDeltaV(),   // h3-argon-engine D4: the HUD figure (getMassBudget), for TargetReticle
+        consumptionMultiplier: consumptionMultiplier(this),   // h3b D4: c, so the reticle's no-budget fallback uses the budget's Isp_eff
+        currentFuelId: currentFuel.id || Constants.DEFAULT_FUEL,
+        currentIsp: currentFuel.isp || Constants.OCTOPUS_CORE_HALL_ISP,
         throttleLevel: this.throttleLevel,
         edtActive: this._edtActive,
         edtDeployed: this._edtDeployed,
@@ -8536,6 +8645,26 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
+   * h3-argon-engine D5: the consumption multiplier c (see consumptionMultiplier()).
+   * @returns {number}
+   */
+  getConsumptionMultiplier() { return consumptionMultiplier(this); }
+
+  /**
+   * h3b-argon-push D1/D2: the active fuel's thrustScale (argon 0.46, xenon 1.0). `applyCartesianImpulse`
+   * multiplies the Δv it applies by this; the autopilot scales its braking rate by it.
+   * @returns {number}
+   */
+  getThrustScale() { return activeThrustScale(this); }
+
+  /** @private remaining ΔV (m/s) from the ArmManager budget, or undefined when it is not wired */
+  _telemetryDeltaV() {
+    const am = this.armManager;
+    if (!am || typeof am.getMassBudget !== 'function') return undefined;
+    try { return am.getMassBudget().deltaV; } catch (_) { return undefined; }
+  }
+
+  /**
    * Apply ion thrust (costs fuel + battery).
    * Phase 4: fuel type determines thrustScale and consumption source.
    * Electric engine (2026-09-25): thrust is limited by the energy actually
@@ -8571,7 +8700,7 @@ export class PlayerSatellite extends THREE.Group {
     // Phase 4: Get current fuel definition for thrust scaling
     const fuel = this._resourceSystem
       ? this._resourceSystem.getCurrentFuel()
-      : Constants.FUELS.xenon;
+      : Constants.FUELS[Constants.DEFAULT_FUEL];
     const thrustScale = fuel.thrustScale || 1.0;
 
     // Electric engine: draw what the battery holds, up to this frame's need
@@ -8608,12 +8737,16 @@ export class PlayerSatellite extends THREE.Group {
     else if (!this._thrustDirection) this._thrustDirection = 'lateral';
     this._lastThrustType = 'ion';
 
-    // Power distribution modulates Isp/efficiency: higher mult = less fuel consumed.
-    // Xenon is billed only for the thrust that actually happened (× the power
-    // fraction) and drawn partially, so the tank can truly empty — no silent
-    // all-or-nothing refusal parking it just above zero.
-    const efficiencyScale = 1 / powerDistribution.thrustMultiplier;
-    const fuelAmount = this._ionThrustXenonRate * dt * efficiencyScale * powerFraction;
+    // h3-argon-engine D5: gas is billed from the Δv this tick actually produced
+    // (ṁ = c·m·Δv/(Isp·g0)): the Hall engine's flow follows thrust and Isp, so the ΔV the HUD
+    // promises (Tsiolkovsky, D4) and the gas the burn costs are the same law. c = the shop upgrade
+    // × the power-split efficiency (both act as Isp gains). It is billed only for thrust that
+    // happened (burnScale already carries the power fraction) and drawn partially, so the tank
+    // can truly empty — no silent all-or-nothing refusal parking it just above zero.
+    // Δv: thrustInput is km/s (see _applyThrust: da = 2a·ti/v with v in km/s), × 1000 -> m/s.
+    const dvMps = Math.hypot(direction.x, direction.y, direction.z)
+      * this._ionDeltaV * burnScale * dt * 1000 * cargoThrustFactor(this);
+    const fuelAmount = ionGasUnits(this, dvMps, fuel);
 
     // Phase 4: Route fuel consumption through dual-mode system. Cargo fuels
     // keep consumeIonFuel() semantics (existence check + auto-switch to
@@ -9528,7 +9661,14 @@ export class PlayerSatellite extends THREE.Group {
    * The billed path obeys the electric-engine power law (see thrustIon,
    * 2026-09-25): the impulse scales by the fraction of its power draw the
    * battery actually holds; dt = 0 physics responses (recoil compensations)
-   * draw no power and bill nothing.
+   * draw no power but still pay for their gas (h3b-argon-push D3).
+   *
+   * h3b-argon-push D1 — same watts, less push: a billed burn applies the
+   * ACTIVE fuel's thrustScale (argon 0.46, krypton 0.67, xenon 1.0) to the Δv
+   * as well as the power fraction, exactly as thrustIon does; the power draw
+   * per tick is unchanged and the gas is billed for the Δv actually applied
+   * (once — see ionGasUnits). A `noBill` call is NOT the engine (the net tug
+   * is passive momentum transfer), so it is exempt.
    *
    * @param {THREE.Vector3} dvWorld - World-frame ΔV in m/s
    * @param {number} dt - Frame delta (s) for resource bookkeeping
@@ -9547,6 +9687,8 @@ export class PlayerSatellite extends THREE.Group {
     const dvMag = dvWorld.length();
     if (dvMag < 1e-9 || !isFinite(dvMag)) return false;
     const noBill = opts.noBill === true;
+    // h3b-argon-push D1: the engine's push per watt. The tug (noBill) is momentum, not the engine -> 1.
+    const thrustScale = noBill ? 1 : activeThrustScale(this);
 
     // Burn sizing (billed path only): this impulse's share of one ion-thrust
     // tick. Needed up front because the electric-engine power law below
@@ -9597,7 +9739,7 @@ export class PlayerSatellite extends THREE.Group {
       if (powerFraction < 1) this._warnPowerLimited('ion', powerFraction);
       const fuel = this._resourceSystem
         ? this._resourceSystem.getCurrentFuel()
-        : (Constants.FUELS && Constants.FUELS.xenon) || null;
+        : (Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL]) || null;
       if (fuel && !fuel.fromCargo && this.resources.xenon <= 0) {
         eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_fuel', type: 'ion' });
         return false;
@@ -9615,8 +9757,9 @@ export class PlayerSatellite extends THREE.Group {
     };
     // Add impulse (convert m/s → km/s by × 0.001), scaled by the power
     // actually available (1 for a no-bill impulse or a dt = 0 physics
-    // response, which draw no power)
-    const dvScale = powerFraction;
+    // response, which draw no power) and by the fuel's push per watt
+    // (h3b-argon-push D1; 1 for a no-bill impulse)
+    const dvScale = powerFraction * thrustScale;
     const vKms = {
       x: vel.x + dvWorld.x * 0.001 * dvScale,
       y: vel.y + dvWorld.y * 0.001 * dvScale,
@@ -9651,16 +9794,19 @@ export class PlayerSatellite extends THREE.Group {
     this._deltaVSpent += dvMag * dvScale;
 
     // Resource consumption: the battery pays what it holds (drawn only now —
-    // the envelope accepted the burn), xenon is billed for the thrust that
-    // actually happened. Skipped for a no-bill passive impulse (mother-net
-    // tug — §9.10); dt = 0 physics responses (recoil compensations) bill
-    // nothing and were never power-gated by the law above.
-    if (!noBill && powerNeed > 0) {
-      const drawnFraction = this._drawBurnResource('battery', powerNeed);
+    // the envelope accepted the burn), the engine gas is billed for the thrust
+    // that actually happened. Skipped for a no-bill passive impulse (mother-net
+    // tug — §9.10). dt = 0 physics responses (recoil compensations) draw no
+    // power (powerNeed 0) but DO pay for their gas (h3b-argon-push D3: every
+    // burn is billed).
+    if (!noBill) {
+      if (powerNeed > 0) this._drawBurnResource('battery', powerNeed);
       const fuel = this._resourceSystem
         ? this._resourceSystem.getCurrentFuel()
-        : (Constants.FUELS && Constants.FUELS.xenon) || null;
-      const fuelAmount = this._ionThrustXenonRate * dt * usage * drawnFraction;
+        : (Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL]) || null;
+      // h3-argon-engine D5: billed from the Δv actually applied (dvMag·dvScale m/s — power fraction AND
+      // thrustScale already in dvScale), same law as thrustIon; billed once
+      const fuelAmount = ionGasUnits(this, dvMag * dvScale, fuel);
 
       if (this._resourceSystem && fuel && fuel.fromCargo) {
         this._resourceSystem.consumeIonFuel(fuelAmount);
@@ -9706,22 +9852,16 @@ export class PlayerSatellite extends THREE.Group {
     // attitude-dynamics plan): it reads the inertia SSOT, which already
     // carries cargo — so this massFactor is translation-only and must NEVER
     // scale rotation (live S10 DO-NOT). applyCartesianImpulse is deliberately
-    // unscaled (the AP models RCS/station-keeping, not the main engine) —
-    // RCS translation stays brisk while main thrust is heavy. this.mass is
+    // not cargo-scaled (the AP models RCS/station-keeping, not the main
+    // engine) — RCS translation stays brisk while main thrust is heavy; it IS
+    // scaled by the fuel's thrustScale (h3b-argon-push D1). this.mass is
     // NEVER mutated (recoil, I_mother and drag all read it).
     // S10: read TOTAL cargo aboard (berthed + daughter racks) via the
     // ArmManager.getCargoMassKg SSOT — the same quantity getMassBudget folds
     // into ΔV, so handling and range agree. Falls back to the berthed-only
     // read for legacy mocks without the accessor (byte-identical to pre-S10).
-    const cargo = (this.armManager && typeof this.armManager.getCargoMassKg === 'function')
-      ? this.armManager.getCargoMassKg()
-      : (this._captureNetSystem && typeof this._captureNetSystem.getBerthedMassKg === 'function')
-        ? this._captureNetSystem.getBerthedMassKg() : 0;
-    if (cargo > 0) {
-      const CN = Constants.CAPTURE_NET || {};
-      const mult = CN.MASS_EFFECT_MULT ?? 1.0;
-      const maxFactor = CN.MASS_EFFECT_MAX ?? 2.0;
-      const massFactor = 1 / (1 + Math.min(cargo * mult / this.mass, maxFactor));
+    const massFactor = cargoThrustFactor(this);   // h3-argon-engine: one definition, shared with the gas billing
+    if (massFactor !== 1) {
       ti.x *= massFactor; ti.y *= massFactor; ti.z *= massFactor;
       mag *= massFactor;
     }

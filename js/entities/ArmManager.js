@@ -18,6 +18,7 @@ import { computeCoM, computeInducedTorque, strutTipMeters, heldCargoPlumeConflic
 import { strutTipFoulsCorridor } from './ArmDockBasis.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit } from './ArmUnit.js';
+import { engineGasKg, engineDeltaV } from '../systems/ResourceSystem.js';
 
 /** 1 meter in scene units */
 const M = 0.00001;
@@ -2304,8 +2305,10 @@ export class ArmManager {
     const flowerMass = (this.playerSatellite
         && typeof this.playerSatellite.getFlowerDryMassKg === 'function')
       ? this.playerSatellite.getFlowerDryMassKg() : 0;
-    const coreDry = V5.CORE_DRY_MASS + strutMassTotal + flowerMass;
-    const xenonMax = Constants.OCTOPUS_CORE_XENON;
+    // h3-argon-engine D3: the 60 L engine tank is structure too (9.5 kg, research §2.2). CORE_DRY_MASS
+    // (176 = bus + ROSA + body-mount + collar) carries no tank, so this is ADDED, not a replacement.
+    const tankDry = Constants.ENGINE_TANK_DRY_MASS_KG || 0;
+    const coreDry = V5.CORE_DRY_MASS + tankDry + strutMassTotal + flowerMass;
     const coldGasMax = Constants.OCTOPUS_CORE_COLD_GAS;
 
     // Get current propellant from player resources
@@ -2313,8 +2316,16 @@ export class ArmManager {
     const rsStatus = this._resourceSystem ? this._resourceSystem.getStatus() : null;
     const xenonPoolMax = rsStatus ? rsStatus.xenonMax : Constants.XENON_FUEL_MAX;
     const coldGasPoolMax = rsStatus ? rsStatus.coldGasMax : Constants.COLD_GAS_MAX;
-    const xenonPct = (resources.xenon || 0) / xenonPoolMax;
-    const xenonCurrent = xenonMax * xenonPct;
+    // h3-argon-engine D2: engine gas in kg = pool/100 x kgFull of the gas IN THE TANK (tankGasId), via the
+    // ONE exported converter. `xenonCurrent` / `xenonMax` keep their names (HUD readers) but are now the
+    // engine gas kg now / when the (possibly upgraded) tank is full.
+    const gasRes = {
+      xenon: resources.xenon || 0,
+      tankGasId: resources.tankGasId || (rsStatus && rsStatus.tankGasId) || Constants.DEFAULT_FUEL,
+    };
+    const tankGas = Constants.FUELS[gasRes.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
+    const xenonCurrent = engineGasKg(gasRes);
+    const xenonMax = (xenonPoolMax / 100) * tankGas.kgFull;
     const coldGasCurrent = coldGasMax * ((resources.coldGas || 0) / coldGasPoolMax);
 
     // Sum arm masses using V5 weights (reel on mothership = 40% lighter arms)
@@ -2354,15 +2365,22 @@ export class ArmManager {
       ? this.playerSatellite._captureNetSystem.getBerthedMassKg() : 0;
     const cargoMass = this.getCargoMassKg();
 
-    const wetMass = coreDry + xenonCurrent + coldGasCurrent + dockedArmMass + cargoMass;
-    const dryMass = coreDry + dockedArmMass + cargoMass;
+    // Cold gas is CARRIED, not burned by the Hall engine (h3-argon-engine D4: it used to be counted as
+    // burnable at Hall Isp, ~30 % too high): it sits in BOTH the loaded and the empty mass.
+    const carriedDry = coreDry + coldGasCurrent + dockedArmMass + cargoMass;
+    const wetMass = carriedDry + xenonCurrent;
+    const dryMass = coreDry + dockedArmMass + cargoMass;   // reported, as before: without either gas
 
-    // Tsiolkovsky: ΔV = Isp × g0 × ln(m_wet / m_dry)
-    const isp = Constants.OCTOPUS_CORE_HALL_ISP;
-    const g0 = Constants.G0;
-    const deltaV = (dryMass > 0 && wetMass > dryMass)
-      ? isp * g0 * Math.log(wetMass / dryMass)
-      : 0;
+    // Tsiolkovsky for the engine: ΔV = Isp_eff x g0 x ln((dry + cold + gas) / (dry + cold)).
+    // Isp_eff = the ACTIVE fuel's Isp / c (D5: shop upgrade x power split act as Isp gains).
+    const fuel = this._resourceSystem ? this._resourceSystem.getCurrentFuel() : Constants.FUELS[gasRes.tankGasId];
+    const c = (this.playerSatellite && typeof this.playerSatellite.getConsumptionMultiplier === 'function')
+      ? this.playerSatellite.getConsumptionMultiplier() : 1;
+    const ispActive = fuel && fuel.isp > 0 ? fuel.isp : Constants.OCTOPUS_CORE_HALL_ISP;
+    const isp = ispActive / (c > 0 ? c : 1);   // effective Isp: the figure the ΔV and the flow share
+    const deltaV = engineDeltaV({
+      dryKg: coreDry + dockedArmMass + cargoMass, coldGasKg: coldGasCurrent, gasKg: xenonCurrent, isp: ispActive, c,
+    });
 
     return {
       coreDry,
@@ -2381,6 +2399,8 @@ export class ArmManager {
       cargoMass: Math.round(cargoMass * 10) / 10,
       deltaV: Math.round(deltaV),
       isp,
+      shipMassKg: wetMass,   // exact (unrounded) total mass now — the gas-flow law's m_ship (PlayerSatellite)
+      tankGasId: gasRes.tankGasId,
     };
   }
 

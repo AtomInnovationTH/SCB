@@ -13,6 +13,7 @@ import { GameStates } from '../core/GameState.js';
 import timerManager from '../systems/TimerManager.js';
 import { StatusPanel } from './hud/StatusPanel.js';
 import { VitalsPane } from './hud/VitalsPane.js';
+import { isSimpleTargets, currentMissionNumber } from './hud/SimpleFirst.js';
 import { TargetPanel } from './hud/TargetPanel.js';
 import { CommsPanel } from './hud/CommsPanel.js';
 import { HintTicker } from './hud/HintTicker.js';
@@ -299,6 +300,12 @@ export class HUD {
     this._alertNow = null;           // optional clock seam (tests); null = performance.now()
 
     this._scanGateOpen = false;      // the TARGETS + TARGET INFO panes wait for the first scan (once per boot)
+    this._floorMask = null;          // h4-simple-first D5: FloorMask hands itself over (attachFloorMask)
+    this._infoAnalysed = false;      // h4-simple-first D7: the player pressed Z since the scan (simple mode only needs it)
+    this._infoGateWait = null;       // last written wait state of the TARGET INFO pane (write-on-change)
+    this._railFree = false;          // h4-simple-first D9: the player changed pane level themselves (lifts the first-frame quiet)
+    this._railQuiet = true;          // the floor rail is held back (mission 1, before the first scan); the first 10 Hz tick re-decides
+    this._railEl = null;             // #ladder-rail, found lazily (the rail builds itself on its first show)
     this._build();
     this._setupEventListeners();
     this._scanGateOn(true);
@@ -406,6 +413,7 @@ export class HUD {
     // → #hud-wireframe-container → NextPane (Next is parented by main.js as
     // the last child via hud.rightColumnEl).
     this.targetPanel = new TargetPanel(this._rightColumn, { colorLaw: !!(Constants.LADDER && Constants.LADDER.ENABLED) });
+    this.targetPanel.onAnalyse = () => this.noteAnalyse();   // h4b D2: a tap on the selected row is analyse
     this._rightColumn.appendChild(wireframeContainer);
     this._wireframeContainerEl = wireframeContainer;
     this.debrisWireframe = new DebrisWireframe(wireframeContainer);
@@ -1381,6 +1389,17 @@ export class HUD {
     // TARGETS + TARGET INFO appear after the first scan and then stay for the
     // rest of the boot: GAME_RESET and floor changes never re-arm the gate.
     eventBus.on(Events.SCAN_COMPLETE, () => this._openScanGate());
+    // h4-simple-first D7: in simple mode (mission 1, F1/F2) TARGET INFO waits for the player's
+    // own Z (analyse) after the scan; a new game starts that wait again.
+    eventBus.on(Events.GAME_RESET, () => { this._infoAnalysed = false; this._syncInfoGate(); });
+    // h4b D5: the battery median forgets the last game; its 30-sample warm-up starts again.
+    eventBus.on(Events.GAME_RESET, () => { if (this.vitalsPane && typeof this.vitalsPane.resetMedian === 'function') this.vitalsPane.resetMedian(); });
+    // h4-simple-first D9: the floor rail ("1 UPGRADE … 5 GEO", "1×") stays out of mission 1's first
+    // frames, until the first scan — or until the player changes level themselves (the intro ride
+    // has no CAMERA_ZOOM_INPUT: this event is the player's own).
+    if (Events.CAMERA_ZOOM_INPUT) eventBus.on(Events.CAMERA_ZOOM_INPUT, () => { this._railFree = true; this._syncRailQuiet(true); });
+    // h4b D2: analyse is the game's own Z path (InputManager KeyZ → noteAnalyse) and a tap on the
+    // selected target row (TargetPanel → onAnalyse); no raw document keydown listener.
 
     eventBus.on(Events.SCORE_UPDATE, (data) => {
       this._score = data.total;
@@ -1909,15 +1928,89 @@ export class HUD {
     if (this._scanGateOpen) return;
     this._scanGateOpen = true;
     this._scanGateOn(false);
+    this._syncRailQuiet(true);
   }
 
   /** @private Set / clear the wait attribute on the two scan-gated panes. */
   _scanGateOn(on) {
-    for (const el of [this.panels && this.panels.targets, this._wireframeContainerEl]) {
-      if (!el || !el.setAttribute) continue;
-      if (on) el.setAttribute('data-scan-wait', '');
-      else if (el.removeAttribute) el.removeAttribute('data-scan-wait');
+    const targets = this.panels && this.panels.targets;
+    if (targets && targets.setAttribute) {
+      if (on) targets.setAttribute('data-scan-wait', '');
+      else if (targets.removeAttribute) targets.removeAttribute('data-scan-wait');
     }
+    if (on) {
+      const el = this._wireframeContainerEl;
+      if (el && el.setAttribute) el.setAttribute('data-scan-wait', '');
+      this._infoGateWait = '';
+    } else {
+      this._infoGateWait = null;      // re-decide below, whatever was written before
+      this._syncInfoGate();
+    }
+  }
+
+  /**
+   * h4-simple-first D5: the pane level the FloorMask last applied is the HUD's to read — the
+   * mask hands itself over in its constructor (a test stub HUD simply has no such method).
+   * @param {{getCurrentFloor: function}} mask
+   */
+  attachFloorMask(mask) { this._floorMask = mask || null; }
+
+  /**
+   * h4b D1: true in mission 1 while no pane the room hides by default has been pulled in (one `+`
+   * past the room, FloorMask.extraPaneShown): the targets list and the target info stay simple.
+   * One answer for TargetPanel and the target-info gate.
+   * @returns {boolean}
+   */
+  isSimpleTargets() {
+    let extra = false;
+    try { extra = this._floorMask && typeof this._floorMask.extraPaneShown === 'function' ? !!this._floorMask.extraPaneShown() : false; } catch (_e) { extra = false; }
+    return isSimpleTargets(undefined, extra);
+  }
+
+  /**
+   * @private h4-simple-first D9: hold the floor rail back in mission 1 until the first scan (or the
+   * player's own level change). It rides the shared `data-scan-wait` hide rule. The rail builds
+   * itself on its first show, so the element is looked up until it exists; the want-state is
+   * recomputed at 10 Hz (`recompute`) and re-applied to the element in between.
+   * @param {boolean} [recompute]
+   */
+  _syncRailQuiet(recompute = false) {
+    if (recompute) {
+      this._railQuiet = !this._railFree && !this._scanGateOpen && currentMissionNumber() === 1;
+    }
+    if (typeof document === 'undefined' || !document || typeof document.getElementById !== 'function') return;
+    if (!this._railEl || this._railEl.isConnected === false) this._railEl = document.getElementById('ladder-rail');
+    const el = this._railEl;
+    if (!el || typeof el.setAttribute !== 'function') return;
+    const has = typeof el.hasAttribute === 'function' && el.hasAttribute('data-scan-wait');
+    if (this._railQuiet && !has) el.setAttribute('data-scan-wait', '');
+    else if (!this._railQuiet && has && typeof el.removeAttribute === 'function') el.removeAttribute('data-scan-wait');
+  }
+
+  /**
+   * h4-simple-first D7: the player pressed Z (analyse). After the first scan this opens TARGET INFO
+   * for good (until a new game) — before the scan nothing can be analysed, so it is ignored.
+   */
+  noteAnalyse() {
+    if (!this._scanGateOpen || this._infoAnalysed) return;
+    this._infoAnalysed = true;
+    this._syncInfoGate();
+  }
+
+  /**
+   * @private The TARGET INFO pane waits for the first scan and — in simple mode — for the player's
+   * Z; not simple (mission 2+, F3 and up) = today's behaviour (open right after the scan).
+   * Write-on-change; polled from the 10 Hz block too, so a floor or mission change lands.
+   */
+  _syncInfoGate() {
+    const el = this._wireframeContainerEl;
+    if (!el || !el.setAttribute) return;
+    // The value says why it waits: '' = the first scan, 'analyse' = the player's Z (DebrisWireframe's 9-key line reads it).
+    const wait = !this._scanGateOpen ? '' : (!this._infoAnalysed && this.isSimpleTargets()) ? 'analyse' : false;
+    if (wait === this._infoGateWait) return;
+    this._infoGateWait = wait;
+    if (wait !== false) el.setAttribute('data-scan-wait', wait);
+    else if (el.removeAttribute) el.removeAttribute('data-scan-wait');
   }
 
   /** @private Set / clear the wait attribute on the DAUGHTERS pane. */
@@ -2108,6 +2201,7 @@ export class HUD {
    */
   update(dt, data) {
     if (!this.visible) return;
+    if (this._railQuiet) this._syncRailQuiet();   // h4-simple-first D9: the rail builds itself on its first show
 
     // UX-2 #11: Dynamically position right column below comms + NavSphere.
     // Sprint 2 / PR E — `getBoundingClientRect()` forces a sync layout each
@@ -2175,6 +2269,8 @@ export class HUD {
       // W2 meters: the four vitals rows (self-throttled to 10 Hz, write-on-change).
       if (this.vitalsPane) this.vitalsPane.update(player);
       this._tickArmsGate();      // DAUGHTERS pane waits for the struts
+      this._syncInfoGate();      // TARGET INFO: simple-first follows the floor and the mission
+      this._syncRailQuiet(true); // floor rail: not on mission 1's first frames
 
       // V5: STABILIZE warning when angular velocity too high for crossbow fire
       if (player.isCrossbowFireSafe && !player.isCrossbowFireSafe()) {
@@ -2217,6 +2313,8 @@ export class HUD {
           cachedActiveSats: this._cachedActiveSats,
           playerOrbit: player ? player.getOrbitalElements() : null,
           targetLaw: data.targetLaw || null,   // Session Q (plan D15): the hub's law inputs (null off the ladder)
+          simple: this.isSimpleTargets(),      // h4-simple-first D6: name, distance, in reach only
+          analyseChip: this.isSimpleTargets() && !this._infoAnalysed,   // h4b D3: the one "analyse" prompt
         });
 
         // Session Q (plan D12c): the LIVE-APPROACH inhibit window rides this

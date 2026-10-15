@@ -311,7 +311,11 @@ export const Constants = {
   },
 
   // === RESOURCE DEFAULTS ===
-  XENON_FUEL_MAX: 100,            // kg
+  XENON_FUEL_MAX: 100,            // POOL UNITS, not kg (h3-argon-engine): 100 = one full 60 L base engine tank of
+                                   // whichever gas is loaded (FUELS[gas].kgFull kg). Name kept; rename is later cleanup.
+  ENGINE_TANK_DRY_MASS_KG: 9.5,   // h3-argon-engine D3: the 60 L, 200 bar Ti/COPV tank itself (research §2.2 fit; the
+                                   // 263 kg F2 dry figure did not count it). Carried as dry mass in getMassBudget().
+  ENGINE_TANK_VOLUME_L: 60,       // h3-argon-engine: base engine tank volume (documentation; kgFull is derived from it)
   COLD_GAS_MAX: 20,               // kg
   BATTERY_MAX: 600,               // Wh — the ship's own spec (OCTOPUS_CORE_BATTERY /
                                    // OCTOPUS_V5.CORE_BATTERY, both 600; equality pinned in
@@ -958,7 +962,9 @@ export const Constants = {
 
   // --- Core ("The Brain") ---
   OCTOPUS_CORE_DRY_MASS: 170,           // kg
-  OCTOPUS_CORE_XENON: 40,               // kg propellant
+  OCTOPUS_CORE_XENON: 40,               // kg propellant — LEGACY fallback only (h3-argon-engine: the ship's real
+                                         // engine gas is FUELS[tankGasId].kgFull × pool/100; HUD files and
+                                         // ReachabilityModel still read this constant as a no-ship fallback)
   OCTOPUS_CORE_COLD_GAS: 6,             // kg N₂ RCS
   OCTOPUS_CORE_WET_MASS: 216,           // kg (170 + 40 + 6)
   OCTOPUS_CORE_BATTERY: 600,            // Wh
@@ -969,7 +975,7 @@ export const Constants = {
   OCTOPUS_CORE_ACROSS_FLATS: 1.0,       // m (octagonal prism)
   OCTOPUS_CORE_LENGTH: 1.2,             // m
   OCTOPUS_CORE_HALL_THRUST: 0.01,       // N (2× HT-100, 10 mN each)
-  OCTOPUS_CORE_HALL_ISP: 1500,          // s
+  OCTOPUS_CORE_HALL_ISP: 1500,          // s — fallback (h3-argon-engine: the active fuel's FUELS[..].isp is the ship's Isp; xenon = 1500 too)
 
   // ── Rigid-body attitude dynamics (supersedes kinematic rotation) ──
   // Lives OUTSIDE FEATURE_FLAGS deliberately (D7): REALITY_MODE forces every
@@ -3119,11 +3125,38 @@ export const Constants = {
   // =========================================================================
 
   FUELS: {
+    // h3-argon-engine (owner 2026-10-15, DECISIONS §23 row 2: "Argon, 60 L tank"): the ship's own tank
+    // holds ONE engine gas — argon by default, krypton / xenon are later upgrades. All three burn
+    // from the same pool (`res.xenon`, kept name: 100 = one full 60 L, 200 bar base tank), so each has
+    // resourceKey 'xenon'. isp / thrustScale / kgFull are sourced in
+    // docs/research/2026-10-propellant-and-tanks.md §2.2-2.3 / §5.2.
+    // kgFull = gas mass that fills the 60 L, 200 bar tank at 20 C (NIST density, research §2.2 table).
+    argon: {
+      id: 'argon',
+      name: 'Argon',
+      isp: 1700,          // seconds — ESTIMATE (research §2.3: small Hall thrusters get ~Kr's Isp on Ar)
+      thrustScale: 0.46,  // 18 / 39 mN at 600 W (CAMILA anode-efficiency ratio vs xenon, research §2.3)
+      kgFull: 20.8,       // kg in 60 L @ 200 bar (research §2.2)
+      color: '#9fb8c8',   // cool grey-blue
+      resourceKey: 'xenon', // burns from the ship tank pool (pool key kept; it holds whichever gas is loaded)
+      fromCargo: false,
+    },
+    krypton: {
+      id: 'krypton',
+      name: 'Krypton',
+      isp: 1650,          // seconds — Busek 1.5 kW lab data: Kr +140..190 s over Xe (IEPC-2017-26), research §2.3
+      thrustScale: 0.67,  // 26 / 39 mN at 600 W (research §2.3)
+      kgFull: 58.0,       // kg in 60 L @ 200 bar (research §2.2)
+      color: '#b39ddb',
+      resourceKey: 'xenon',
+      fromCargo: false,
+    },
     xenon: {
       id: 'xenon',
       name: 'Xenon',
-      isp: 1600,          // seconds — standard Hall thruster
-      thrustScale: 1.0,   // baseline thrust
+      isp: 1500,          // seconds — Busek BHT-600 "up to 1500 s"; equals OCTOPUS_CORE_HALL_ISP (was 1600 here)
+      thrustScale: 1.0,   // baseline thrust (39 mN at 600 W, Busek BHT-600)
+      kgFull: 129.2,      // kg in 60 L @ 200 bar (research §2.2)
       color: '#4fc3f7',   // light blue
       resourceKey: 'xenon', // consumes from ResourceSystem xenon tank
       fromCargo: false,    // uses ship's built-in tank
@@ -3170,7 +3203,7 @@ export const Constants = {
     },
   },
 
-  DEFAULT_FUEL: 'xenon',
+  DEFAULT_FUEL: 'argon',   // h3-argon-engine: the cheapest gas for modern satellites (DECISIONS §23)
 
   // =========================================================================
   // MPD THRUSTER — Magnetoplasmadynamic Tier 3 Propulsion (F16)
