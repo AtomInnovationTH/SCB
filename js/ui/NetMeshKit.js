@@ -1253,6 +1253,43 @@ export const NetMeshKit = {
   },
 
   /**
+   * l8c: re-size the LIVE bag. Every per-frame consumer (the web and film builders in
+   * updateWebDrape, mouthFloorRadius, setRimCinch, the contents-floor clamps) reads the handle's
+   * `coneHeight`, `mouthRadius`, `closedRadius` and `_mouthZ`, so writing them is the whole change:
+   * a held mother bag shrinks onto its catch instead of keeping the 6.8 m flight cone whose rim
+   * stayed metres past a piece the reel had already drawn home. Nothing is rebuilt (the vertex
+   * counts do not depend on the size). The build-time values are remembered for resetBagShape.
+   * `closedRadius` keeps the build-time ratio to the mouth (DRAWSTRING_RADIUS_FRAC_CLOSED).
+   * @param {object} h handle
+   * @param {number} coneHeight apex -> mouth plane, scene units (> 0)
+   * @param {number} mouthRadius open-mouth radius, scene units (> 0)
+   */
+  setBagShape(h, coneHeight, mouthRadius) {
+    if (!h || !(coneHeight > 0) || !(mouthRadius > 0)) return;
+    if (!h._bagBase) {
+      h._bagBase = { coneHeight: h.coneHeight, mouthRadius: h.mouthRadius, closedRadius: h.closedRadius, mouthZ: h._mouthZ };
+    }
+    const frac = h._bagBase.closedRadius / h._bagBase.mouthRadius;
+    h.coneHeight = coneHeight;
+    h.mouthRadius = mouthRadius;
+    h.closedRadius = mouthRadius * frac;
+    h._mouthZ = -coneHeight;
+    h._mouthZEff = -coneHeight;     // updateWebDrape re-derives it every frame; this keeps a pre-draw read consistent
+  },
+
+  /** l8c: put the build-time bag size back (no-op when setBagShape never ran). @param {object} h handle */
+  resetBagShape(h) {
+    const b = h && h._bagBase;
+    if (!b) return;
+    h.coneHeight = b.coneHeight;
+    h.mouthRadius = b.mouthRadius;
+    h.closedRadius = b.closedRadius;
+    h._mouthZ = b.mouthZ;
+    h._mouthZEff = b.mouthZ;
+    h._bagBase = null;
+  },
+
+  /**
    * Tint the web (+ optional node emissive stays untouched). Sets the cone
    * colour; leaves drawstring/hub at their fixed hues.
    * @param {object} h handle

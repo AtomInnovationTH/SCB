@@ -600,7 +600,7 @@ const SYSTEMS = [
         mesh: 'FlowerStrutTipPad_0', dynamic: true,
         // §13 r4 roll-up: all four tip pads (pad 0 already answered via the
         // mesh default; 1–3 join it).
-        pickPrefixes: ['FlowerStrutTipPad'],
+        pickPrefixes: ['FlowerStrutTipPad', 'FlowerStrutTipStalk', 'FlowerStrutTipCone'],   // l6-look: + the leash stalk tubes and cone (the tip hardware rolls up with its pad)
         anchor: [ -0.283 * M, -0.283 * M, -1.12 * M ] },
       { id: 'flower_hinges', name: 'FLOWER HINGE BRACKETS', risk: 'YELLOW', tier: 'detail', codexId: 'vacuum_mechanisms',
         massKg: 2.6, priority: 2, flowerGated: true,

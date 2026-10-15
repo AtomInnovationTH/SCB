@@ -273,7 +273,9 @@ const _foreExtent74 = { fore: 0, atStation: false };
 function motherNetForeExtentM(net) {
   const d = net.targetDebris;
   const half = (d.sizeMeter || 2) / 2;
-  const base = half + (CN.BERTH_CLEARANCE_M ?? 1.0);
+  // l8-reel-collar: the berth footprint is HOME (bag mouth at the ring, catch seated on it), not the old
+  // size/2 + 1.0 m standoff. `_homeApexM`/`_homeSeatM` are seeded at reel entry (null before: the old base).
+  const base = net._homeApexM ?? (half + (CN.BERTH_CLEARANCE_M ?? 1.0));
   const held = net.state === STATES.REELING
     && net._corridorHold && net._corridorHoldLevelM != null;
   const berthed = net.state === STATES.BERTHED || net.state === STATES.COLLARED
@@ -281,9 +283,95 @@ function motherNetForeExtentM(net) {
   const apex = held
     ? net._corridorHoldLevelM
     : berthed ? Math.max(base, net._effectiveStandoffM ?? base) : base;
-  _foreExtent74.fore = apex + (net._catchSeatM || 0) + half;
+  // held/berthed read the live seat; an inbound net reserves its eventual footprint (the home seat)
+  const seat = (held || berthed) ? (net._catchSeatM || 0) : (net._homeSeatM ?? net._catchSeatM ?? 0);
+  _foreExtent74.fore = apex + seat + half;
   _foreExtent74.atStation = held || berthed;
   return _foreExtent74;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// §0b  l8-reel-collar — the catch's HOME on the collar axis
+// ═══════════════════════════════════════════════════════════════════════════
+
+const _homeScratchC = [0, 0, 0];
+const _homeIgnore = ['BerthCollar', 'BerthFace', 'nose catch'];
+const _homeOpts = { ignore: _homeIgnore };
+
+/**
+ * The catch's home z (ship-local metres, on the collar axis) for a bag of radius `r`:
+ * `max(RING_TOUCH_Z_M + r, clearZ(r))`, clearZ = the smallest bag-centre z that clears every ship part by
+ * CLEARANCE_M, walking DOWN the axis from SEARCH_TOP_Z_M (so a part higher up the axis is seen), bisected to
+ * BISECT_M. BerthCollar*, BerthFace* and the held-catch obstacle 'nose catch' are ignored (the ring is what the
+ * catch seats on; the catch must not block itself). With no keep-out (mock ships) the answer is ring-touch.
+ * @param {object|null} keepOut — ShipKeepOut (`sphere(c, r, opts)`), or null
+ * @param {number} r — bag radius, metres
+ * @returns {{z:number, touchZ:number, clearZ:number|null, queryMs:number, queries:number}}
+ */
+export function catchHomeZ(keepOut, r) {
+  const H = CN.REEL_HOME;
+  const touchZ = H.RING_TOUCH_Z_M + r;
+  const out = { z: touchZ, touchZ, clearZ: null, queryMs: 0, queries: 0 };
+  if (!keepOut || typeof keepOut.sphere !== 'function') return out;
+  const clearAt = (z) => {
+    _homeScratchC[2] = z;
+    out.queries++;
+    const g = keepOut.sphere(_homeScratchC, r, _homeOpts);
+    return g.gap >= H.CLEARANCE_M - 1e-9;
+  };
+  const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  try {
+    let lastClear = null, firstBlocked = null;
+    if (clearAt(H.SEARCH_TOP_Z_M)) {
+      lastClear = H.SEARCH_TOP_Z_M;
+      for (let z = H.SEARCH_TOP_Z_M - H.SEARCH_STEP_M; z >= touchZ - 1e-9; z -= H.SEARCH_STEP_M) {
+        if (clearAt(z)) lastClear = z; else { firstBlocked = z; break; }
+      }
+      if (firstBlocked === null) {
+        // clear all the way to ring-touch: nothing above it limits the home
+        if (!clearAt(touchZ)) firstBlocked = touchZ; else lastClear = touchZ;
+      }
+      if (firstBlocked !== null) {
+        let lo = firstBlocked, hi = lastClear;       // lo blocked, hi clear
+        while (hi - lo > H.BISECT_M) {
+          const mid = 0.5 * (hi + lo);
+          if (clearAt(mid)) hi = mid; else lo = mid;
+        }
+        out.clearZ = hi;
+      } else {
+        out.clearZ = lastClear;
+      }
+    }
+  } catch (_e) { out.clearZ = null; }
+  out.queryMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+  if (out.clearZ !== null && out.clearZ - touchZ <= H.MAX_ABOVE_TOUCH_M) out.z = Math.max(touchZ, out.clearZ);
+  return out;
+}
+
+/**
+ * Home distance (metres) of a catch's CENTRE from the berth anchor (the collar plane) along the collar axis.
+ * Cached on the debris per radius (`_homeCache`): the ship does not change shape between the reel entry and the
+ * lasso's delivery, and the answer is the same at every radiator angle (probe collar/RESULTS.md).
+ * @param {object} player — PlayerSatellite (collar anchor z)
+ * @param {object|null} armManager — for `getKeepOut()`
+ * @param {object} d — the catch (sizeMeter)
+ * @returns {number} metres from the berth anchor
+ */
+export function catchHomeDistM(player, armManager, d) {
+  const r = (d && d.sizeMeter ? d.sizeMeter : 2) / 2;
+  const M = Constants.SCENE_UNITS_PER_METER;
+  const V5 = Constants.OCTOPUS_V5;
+  const anchorZ = (player && player._netBerthCollar && player._netBerthCollar.position)
+    ? player._netBerthCollar.position.z / M
+    : (V5 && V5.BERTH_COLLAR_Z_M != null ? V5.BERTH_COLLAR_Z_M : 1.30);
+  const hc = d && d._homeCache;
+  if (hc && hc.r === r && hc.anchorZ === anchorZ) return hc.distM;
+  let ko = null;
+  try { ko = armManager && typeof armManager.getKeepOut === 'function' ? armManager.getKeepOut() : null; } catch (_e) { ko = null; }
+  const home = catchHomeZ(ko, r);
+  const distM = Math.max(CN.REEL_HOME.APEX_AT_RING_M + r, home.z - anchorZ);
+  if (d) d._homeCache = { r, anchorZ, distM, z: home.z, clearZ: home.clearZ, queryMs: home.queryMs, queries: home.queries, source: ko ? 'keepout' : 'ring-touch' };
+  return distM;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1871,21 +1959,25 @@ export class NetProjectile {
         + ((sp.z - anchor.z) / M_NET) * L.z
         - this.distanceTraveled) : 0;
       this._catchSeatM = seatM;
-      // _remainingM is the APEX (tether) distance — pod→catch minus the seat —
-      // so the winch hauls the bag's apex anchor to the standoff while the
-      // catch rides seatM metres inside it. At entry the apex lands on the
-      // brake point and the pin reproduces the live catch position exactly
-      // (no teleport at the CAPTURED→REELING hand-off).
-      this._remainingM = Math.max(1e-3, Math.sqrt(dx * dx + dy * dy + dz * dz) / M_NET - seatM);
-      // Lateral = component of (debris − pod) perpendicular to ship forward.
+      // _remainingM is the APEX (tether end) distance along the ship axis, and
+      // `_lateral` the apex's offset off it: apex = catch − launchDirection ×
+      // seat, split into its axial and perpendicular parts (l8-reel-collar: this
+      // is exact, so the pin reproduces the live catch position to the last
+      // bit at entry — the old |d| − seat form was off by lateral²/2R for an
+      // off-axis catch, a snap at the CAPTURED→REELING hand-off).
       const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(player.quaternion).normalize();
-      const along = dx * fwd.x + dy * fwd.y + dz * fwd.z;
-      this._lateral = new THREE.Vector3(dx - fwd.x * along, dy - fwd.y * along, dz - fwd.z * along);
+      const ax = dx - (L ? L.x * seatM * M_NET : 0);
+      const ay = dy - (L ? L.y * seatM * M_NET : 0);
+      const az = dz - (L ? L.z * seatM * M_NET : 0);
+      const apexAlong = ax * fwd.x + ay * fwd.y + az * fwd.z;
+      this._remainingM = Math.max(1e-3, apexAlong / M_NET);
+      this._lateral = new THREE.Vector3(ax - fwd.x * apexAlong, ay - fwd.y * apexAlong, az - fwd.z * apexAlong);
     } else {
       this._remainingM = this.tetherPaidOut;
       this._catchSeatM = 0;
       this._lateral = new THREE.Vector3();
     }
+    this._seedReelHome(d, player);
     // Review fix: the reelProgress denominator must be the ACTUAL seeded
     // remaining distance, not tetherPaidOut — the two disagree whenever the
     // catch drifted between contact and reel entry (or a close target made
@@ -1947,7 +2039,147 @@ export class NetProjectile {
     const frac = Math.min(1, this._floorRampT / rampS);
     const ease = frac * frac * (3 - 2 * frac);           // smoothstep
     const base = DebrisField.baseRenderScale(d);   // item 19: ONE static — was a byte-copy of the SSOT base
-    return base + (fullFloor - base) * ease;
+    // l8-reel-collar (D3): the floor also eases with the catch's distance from the collar — full at >= FLOOR_FAR_M,
+    // gone (true size) at <= FLOOR_NEAR_M — so the piece shrinks smoothly on its way in and is true size at home.
+    // `_reelDistM` is written by the reel/berth pin; unset (mocks, adoption before its first tick) = no distance term.
+    const H = CN.REEL_HOME;
+    let dist = 1;
+    if (H && this._reelDistM != null) {
+      const t = Math.min(1, Math.max(0, (this._reelDistM - H.FLOOR_NEAR_M) / (H.FLOOR_FAR_M - H.FLOOR_NEAR_M)));
+      dist = t * t * (3 - 2 * t);
+    }
+    return base + (fullFloor - base) * ease * dist;
+  }
+
+  /**
+   * @private l8-reel-collar — seed the HOME state at reel entry (or lazily, for a net a test put into REELING /
+   * BERTHED by hand): where the catch's centre ends on the collar axis, and the apex / seat that put it there.
+   * Home seat = the catch centre's distance from the ring's fore face; the bag's mouth (apex) sits at the ring.
+   * @param {object} d — the caught debris
+   * @param {object} player — mother ship (collar z, keep-out)
+   */
+  _seedReelHome(d, player) {
+    const H = CN.REEL_HOME;
+    const homeDistM = catchHomeDistM(player, this._ctx?.armManager, d);
+    this._homeCatchM = homeDistM;
+    this._homeApexM = H.APEX_AT_RING_M;
+    this._homeSeatM = Math.max(0, homeDistM - H.APEX_AT_RING_M);
+    this._apex0M = this._remainingM ?? this._homeApexM;
+    this._seat0M = this._catchSeatM || 0;
+    const L = this.launchDirection || { x: 0, y: 0, z: 1 };
+    this._ldir0 = { x: L.x, y: L.y, z: L.z };
+    this._reelDistM = null;
+  }
+
+  /**
+   * @private l8-reel-collar — the reel's progress p (0 at the seed, 1 with the apex at home) for apex distance `A`.
+   * @param {number} A — apex distance along the ship axis from the collar, metres
+   * @returns {number} 0..1
+   */
+  _seatProgress(A) {
+    const Ah = this._homeApexM;
+    const A0 = Math.max(this._apex0M ?? A, Ah + 1e-3);
+    const p = 1 - (A - Ah) / (A0 - Ah);
+    return p < 0 ? 0 : p > 1 ? 1 : p;
+  }
+
+  /**
+   * @private l8-reel-collar — the seat law. As the apex comes in the catch slides toward the bag's mouth (seat
+   * S0 → home seat, linear in p) and the bag axis turns from the captured launch direction onto the ship axis
+   * (normalised lerp, weight p). Writes `_catchSeatM` and `launchDirection` in place (the visual orients the bag to
+   * it, the pins read it), so pin, mesh and every reader stay one geometry. At p = 1 the axis IS the ship axis, the
+   * seat IS the home seat: the catch is on the collar axis at home.
+   * @param {number} A — apex distance, metres
+   * @returns {number} p
+   */
+  _applySeatLaw(A) {
+    const p = this._seatProgress(A);
+    const S0 = this._seat0M ?? this._catchSeatM ?? 0;
+    this._catchSeatM = S0 + (this._homeSeatM - S0) * p;
+    const L0 = this._ldir0, f = this._fwdLagged, L = this.launchDirection;
+    if (L0 && f && L) {
+      const x = (1 - p) * L0.x + p * f.x, y = (1 - p) * L0.y + p * f.y, z = (1 - p) * L0.z + p * f.z;
+      const n = Math.hypot(x, y, z);
+      if (n > 1e-6) { L.x = x / n; L.y = y / n; L.z = z / n; } else { L.x = f.x; L.y = f.y; L.z = f.z; }
+    }
+    return p;
+  }
+
+  /**
+   * @private l8-reel-collar — the catch centre's distance from the collar plane along the ship axis for apex
+   * distance `A` (closed form of the seat law; monotone in A for any sane launch angle). Used to step the apex so the
+   * CATCH moves at the commanded speed.
+   * @param {number} A
+   * @returns {number} metres
+   */
+  _catchAxialAt(A) {
+    const p = this._seatProgress(A);
+    const S0 = this._seat0M ?? 0;
+    const S = S0 + (this._homeSeatM - S0) * p;
+    const L0 = this._ldir0, f = this._fwdLagged;
+    let dot = 1;
+    if (L0 && f) {
+      const c0 = L0.x * f.x + L0.y * f.y + L0.z * f.z;
+      const n = Math.sqrt(Math.max(1e-12, (1 - p) * (1 - p) + p * p + 2 * p * (1 - p) * c0));
+      dot = ((1 - p) * c0 + p) / n;
+    }
+    return A + S * dot;
+  }
+
+  /**
+   * @private l8-reel-collar — the catch's commanded speed `crem` metres from its end: the class reel speed, then
+   * a constant-deceleration slow-down (DECEL_MPS2) that reaches SLOW_MPS at SLOW_ZONE_M and holds it to arrival.
+   * @param {number} crem — catch distance still to go, metres
+   * @param {number} nominalMps
+   * @returns {number} m/s
+   */
+  _reelCatchSpeed(crem, nominalMps) {
+    const H = CN.REEL_HOME;
+    const room = Math.max(0, crem - H.SLOW_ZONE_M - (H.DECEL_LEAD_M ?? 0));
+    return Math.min(nominalMps, H.SLOW_MPS + Math.sqrt(2 * H.DECEL_MPS2 * room));
+  }
+
+  /**
+   * l8-reel-collar — seconds the inward reel still needs at the commanded profile (cruise at the class reel speed,
+   * the constant-deceleration slow-down, the creep over the last SLOW_ZONE_M). An estimate for callers that size a
+   * wall-clock bound (CameraSystem's REEL_IN beat); null before the reel is seeded.
+   * @returns {number|null} seconds
+   */
+  reelEtaS() {
+    if (this._homeSeatM == null || this._remainingM == null || !this._fwdLagged) return null;
+    const H = CN.REEL_HOME;
+    const endA = Math.max(this._homeApexM, this._effectiveStandoffM ?? this._homeApexM);
+    const crem = Math.max(0, this._catchAxialAt(this._remainingM) - this._catchAxialAt(endA));
+    const v = this.netClass?.REEL_SPEED || 2.0;
+    const creepM = H.SLOW_ZONE_M + (H.DECEL_LEAD_M ?? 0);
+    // the profile is v = SLOW + sqrt(2 a x) (x = distance beyond the creep): the slow-down spans (v - SLOW)^2 / 2a
+    const decelM = (v - H.SLOW_MPS) * (v - H.SLOW_MPS) / (2 * H.DECEL_MPS2);
+    const cruiseM = Math.max(0, crem - creepM - decelM);
+    const decelInM = Math.min(decelM, Math.max(0, crem - creepM));
+    return cruiseM / v + decelInM / (0.5 * (v + H.SLOW_MPS)) + Math.min(crem, creepM) / H.SLOW_MPS;
+  }
+
+  /**
+   * @private l8-reel-collar — one frame of the inward reel: the CATCH advances `_reelCatchSpeed × dt` toward its end
+   * (the apex distance `endA`), and the apex is whatever puts it there (bisection on the monotone closed form).
+   * Never overshoots: the step that would reach the end lands exactly on it.
+   * @param {number} dt
+   * @param {number} nominalMps
+   * @param {number} endA — apex distance at the end of the reel (home, or the extended standoff)
+   */
+  _reelStepCatch(dt, nominalMps, endA) {
+    const A = this._remainingM;
+    if (A <= endA) { this._remainingM = endA; return; }
+    const cEnd = this._catchAxialAt(endA);
+    const cOld = this._catchAxialAt(A);
+    const target = cOld - this._reelCatchSpeed(cOld - cEnd, nominalMps) * dt;
+    if (target <= cEnd) { this._remainingM = endA; return; }
+    let lo = endA, hi = A;
+    for (let i = 0; i < 28; i++) {
+      const mid = 0.5 * (lo + hi);
+      if (this._catchAxialAt(mid) < target) lo = mid; else hi = mid;
+    }
+    this._remainingM = 0.5 * (lo + hi);
   }
 
   /**
@@ -1996,7 +2228,11 @@ export class NetProjectile {
     const M_NET = Constants.SCENE_UNITS_PER_METER;
     // The standoff in force: raised to CORRIDOR_EXTENDED_STANDOFF_M after a
     // corridor-timeout berth (Phase C-lite, plan §10).
-    const baseStandoffM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+    // l8-reel-collar: the APEX target at home is the bag's mouth at the ring
+    // (CN.REEL_HOME.APEX_AT_RING_M), NOT the old size/2 + 1.0 m standoff. A
+    // corridor-timeout berth still raises it (the extended standoff).
+    if (this._homeSeatM == null) this._seedReelHome(d, player);
+    const baseStandoffM = this._homeApexM;
     if (this._effectiveStandoffM == null) this._effectiveStandoffM = baseStandoffM;
     const berthStandoffM = Math.max(baseStandoffM, this._effectiveStandoffM);
 
@@ -2090,7 +2326,9 @@ export class NetProjectile {
         // an outward pop to it would violate the continuity law.
         this._remainingM = Math.min(berthStandoffM, this._remainingM + reelSpeed * dt);
       } else {
-        this._remainingM = Math.max(berthStandoffM, this._remainingM - reelSpeed * dt);
+        // l8-reel-collar: the speed (and the arrival taper) is the CATCH's, so the
+        // last 0.30 m runs at <= 0.10 m/s whatever the seat; the apex follows.
+        this._reelStepCatch(dt, reelSpeed, berthStandoffM);
       }
     } else if (this._remainingM < this._corridorHoldLevelM) {
       // Item 73: the queue-glide — the one bounded OUTWARD move the reel
@@ -2121,9 +2359,13 @@ export class NetProjectile {
       ? player.getNetBerthCollarPositionInto(_v3c)
       : (typeof player.getNetPodPositionInto === 'function')
         ? player.getNetPodPositionInto(this.podIndex, _v3c) : _v3c.set(0, 0, 0);
+    // l8-reel-collar: the seat shrinks and the bag axis turns onto the ship
+    // axis as the apex nears the ring (progress p 0 → 1), and the apex's lateral
+    // offset dies with it, so at home the catch is exactly on the collar axis.
+    const seatP = this._applySeatLaw(this._remainingM);
     _v3d.copy(anchorWorld)
       .addScaledVector(this._fwdLagged, this._remainingM * M_NET)
-      .add(this._lateral);
+      .addScaledVector(this._lateral, 1 - seatP);
 
     // net.position is the bag's apex anchor (CaptureNetVisual seats the kit
     // there × M every frame; the tether draws to it) — written BEFORE the
@@ -2132,11 +2374,12 @@ export class NetProjectile {
     this.position.y = _v3d.y / M_NET;
     this.position.z = _v3d.z / M_NET;
 
-    // The catch rides _catchSeatM metres INSIDE the bag along the frozen bag
-    // axis (launchDirection — the axis the visual orients to), not AT the
-    // apex (whale-in-cone follow-up 2: co-locating the two left the catch on
-    // the bag apex unwrapped — the metres gate's COLOCATION-DEFECT).
+    // The catch rides _catchSeatM metres INSIDE the bag along the bag axis
+    // (launchDirection — the axis the visual orients to), not AT the apex
+    // (whale-in-cone follow-up 2: co-locating the two left the catch on the
+    // bag apex unwrapped — the metres gate's COLOCATION-DEFECT).
     if (this._catchSeatM) _v3d.addScaledVector(this.launchDirection, this._catchSeatM * M_NET);
+    this._reelDistM = Math.hypot(_v3d.x - anchorWorld.x, _v3d.y - anchorWorld.y, _v3d.z - anchorWorld.z) / M_NET;
 
     // Orientation follows the ship (plan §1.2), PLUS the Phase D.7 (a)
     // tumble-carryover offset — shared helper (V7: the twin sites are one
@@ -2366,7 +2609,9 @@ export class NetProjectile {
     }
     if (ext <= 0) return 0;
     // near face = level + seat − half ≥ ext + clearance.
-    const seat = this._catchSeatM || 0;
+    // l8-reel-collar: the seat at the hold is between the captured depth and the home seat; the HOME seat is the
+    // smallest, so the level it gives is the conservative (largest) one.
+    const seat = this._homeSeatM ?? this._catchSeatM ?? 0;
     const halfSelf = (d.sizeMeter || 2) / 2;
     return ext + (CN.BERTH_CLEARANCE_M ?? 1.0) + halfSelf - seat;
   }
@@ -2398,7 +2643,10 @@ export class NetProjectile {
     // (sizeMeter/2 + BERTH_CLEARANCE_M 1.0) is exactly "cargo surface at the
     // ring, centre at ring-z + size/2 + clearance" — the seat the rigid
     // complete-berth mate holds (no pendulum from COLLARED on, see below).
-    const baseStandoffM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+    // l8-reel-collar: HOME — the bag's mouth at the ring, the catch seated on the collar axis
+    // (CN.REEL_HOME). A corridor-timeout berth still holds at its extended standoff.
+    if (this._homeSeatM == null) this._seedReelHome(d, player);
+    const baseStandoffM = this._homeApexM;
     const berthStandoffM = Math.max(baseStandoffM, this._effectiveStandoffM ?? baseStandoffM);
     this._remainingM = berthStandoffM;
 
@@ -2459,9 +2707,16 @@ export class NetProjectile {
       ? player.getNetBerthCollarPositionInto(_v3c)
       : (typeof player.getNetPodPositionInto === 'function')
         ? player.getNetPodPositionInto(this.podIndex, _v3c) : _v3c.set(0, 0, 0);
+    // The seat and the bag axis were fixed by the last reel tick (`_applySeatLaw`); the hold only reads them — the
+    // seat is NOT re-derived here, so the nose reel (a fallback for a catch parked deeper than the line reaches)
+    // can still shrink `_catchSeatM`. At HOME the bag axis follows the ship axis (the mouth is on the ring).
+    const seatP = this._seatProgress(berthStandoffM);
+    if (seatP >= 1 && this.launchDirection && this._fwdLagged) {
+      this.launchDirection.x = this._fwdLagged.x; this.launchDirection.y = this._fwdLagged.y; this.launchDirection.z = this._fwdLagged.z;
+    }
     _v3d.copy(anchorWorld)
       .addScaledVector(this._fwdLagged, berthStandoffM * M_NET)
-      .add(this._lateral);
+      .addScaledVector(this._lateral, 1 - seatP);
 
     // net.position = the bag's apex anchor (the tether end), written BEFORE
     // the seat offset — same split as _updateMotherReel, so the catch stays
@@ -2470,6 +2725,7 @@ export class NetProjectile {
     this.position.y = _v3d.y / M_NET;
     this.position.z = _v3d.z / M_NET;
     if (this._catchSeatM) _v3d.addScaledVector(this.launchDirection, this._catchSeatM * M_NET);
+    this._reelDistM = Math.hypot(_v3d.x - anchorWorld.x, _v3d.y - anchorWorld.y, _v3d.z - anchorWorld.z) / M_NET;
 
     // Phase D.7 (a) — tumble carryover (shared helper — V7, same as the reel path).
     this._applyCatchOrientation(d, player, dt);
@@ -3225,6 +3481,10 @@ export class CaptureNetSystem {
           }
         }
 
+        // l5c-reach E1: the leash driver is pulling this catch in to the nose (the berth seat shrinks, the hold
+        // above keeps pinning it). The hand-off decision, the furnace clock and the retry all wait for it.
+        if (net.state === STATES.COLLARED && net._leashNoseReel) continue;
+
         // ── Cargo hand-off decision (cargo-continuity S7 + the T2 race fix) ──
         // AUTOMATIC by owner ruling: the player holds no information the ship
         // lacks, so there is no keypress. The hand-off is decided on the FIRST
@@ -3303,7 +3563,9 @@ export class CaptureNetSystem {
       // nose → strut tip, whole catch, no chunk pool, no scale ramp. The pin is
       // rewritten EVERY frame (a gap reads as a release — S3's lesson) and the
       // net's own position rides the same curve so the bag stays the container.
-      if (net.state === STATES.TRANSFERRING) {
+      // Leash hand-off (lane l5b-wire): a net on its leash is driven by LeashDriver.update
+      // (main.js, right after this system) — it pins the catch and moves the net itself.
+      if (net.state === STATES.TRANSFERRING && !net._leash) {
         if (this._updateCargoTransfer(net, dt)) {
           this.activeNets.splice(i, 1);      // handed over: the net's job is done
           continue;
@@ -3418,6 +3680,16 @@ export class CaptureNetSystem {
     // completes at the collar and the mass leaves the ledger exactly once.
     if (net._breakdownStarted) return false;
 
+    // Leash hand-off (lane l5b-wire, DECISIONS §1): a small catch goes to a radiator tip on its
+    // own leash. A leash that failed (snag, rejected turn) brought the catch back to the nose:
+    // no second try and never the rack — the nose furnace takes it (coordinator ruling 2026-10-14).
+    if (net._leashFailed) return false;
+    if (FEATURE_FLAGS.LEASH_HANDOFF) {
+      const verdict = this._tryLeash(net, d);
+      if (verdict === 'started') return true;
+      if (verdict === 'declined') return false;
+    }
+
     const massKg = net.capturedMass || d.mass || 0;
     // CUT_AT_NOSE dust guard: the planner guarantees every piece ≤
     // maxPieceKg×(1+1e-9); a float-dust overhang on the held part (≤1e-6 kg)
@@ -3518,6 +3790,59 @@ export class CaptureNetSystem {
       from: { kind: 'collar', podIndex: net.podIndex },
       to:   { kind: 'strutTip', armIndex },
     });
+    return true;
+  }
+
+  /**
+   * Leash hand-off (lane l5b-wire) — D1. Decide whether this COLLARED catch goes by leash.
+   * @param {NetProjectile} net
+   * @param {object} d — the catch
+   * @returns {'started'|'declined'|'rack'} 'rack' = not a leash catch (too big for a tip, no
+   *   free tip, no driver): the caller takes today's path unchanged. 'declined' = it fits but
+   *   cannot start now (refusal said once per reason): retried on the usual 0.5 s cadence,
+   *   never sent to the rack.
+   * @private
+   */
+  _tryLeash(net, d) {
+    const player = this._player;
+    const drv = player && player.leashDriver;
+    const tc = player && player.tipCargo;
+    if (!drv || !tc || typeof drv.start !== 'function') return 'rack';
+    const radiusM = (d.sizeMeter || 2) / 2;
+    if (!tc.fits(radiusM)) return 'rack';
+    const tip = tc.pickTip();
+    if (tip == null) return 'rack';
+    // Out of the line's reach at the berth seat (a mother-net catch rides 3.3-5.0 m deep in the bag, 5.9-7.5 m
+    // from the ship centre, measured l5c-reach Step 0): the net's winch first pulls it in to the nose
+    // (l5c-reach E1) if the line can reach it from there; if it cannot even then, folding the radiators would be
+    // for nothing and today's rack path takes it.
+    let noseReel = false;
+    if (typeof drv.canReach === 'function' && !drv.canReach(d, tip)) {
+      if (typeof drv.canReachAtNose !== 'function' || !drv.canReachAtNose(net, d, tip)) return 'rack';
+      noseReel = true;
+    }
+    const why = drv.refusal(net);
+    if (why) {
+      drv.announceRefusal(net, why);
+      return 'declined';
+    }
+    return drv.start(net, d, tip, { noseReel }) ? 'started' : 'declined';
+  }
+
+  /**
+   * Take a net out of play in this very tick (lane l5b-wire): the leash driver calls it right
+   * after it stows the catch on a radiator tip, so the nose ledger and the tip ledger never
+   * both hold the mass, and the next tick's prune never clears the pins of the stowed body.
+   * Safe to call outside the update loop only (it splices `activeNets`).
+   * @param {NetProjectile} net
+   * @returns {boolean} true when the net was in the list
+   */
+  removeNetNow(net) {
+    net.isActive = false;
+    net._leashNoseReel = false;      // l5c-reach: a net taken out of play is no longer being reeled in to the nose
+    const i = this.activeNets.indexOf(net);
+    if (i < 0) return false;
+    this.activeNets.splice(i, 1);
     return true;
   }
 
@@ -4462,12 +4787,22 @@ export class CaptureNetSystem {
     const net = this.getDockedCatch();
     if (!net) return false;
     if (net.state === STATES.TRANSFERRING) {
+      // l5c-reach E10: the leash hand-off (net._leash) is not a flight to a daughter
+      const onLeash = net._leash === true;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD',
-        text: 'Cargo is already in transit to the daughter — too late to jettison.',
+        text: onLeash
+          ? `The catch is on its leash to radiator ${(net._leashTipIndex ?? 0) + 1}. Too late to jettison.`
+          : 'Cargo is already in transit to the daughter — too late to jettison.',
         priority: 'warning',
       });
       return false;
+    }
+    // l5c-reach E10: [K] during the nose reel-in stops the reel cleanly before the release.
+    if (net._leashNoseReel) {
+      const drv = this._player && this._player.leashDriver;
+      if (drv && typeof drv.cancelNoseReel === 'function') drv.cancelNoseReel(net);
+      net._leashNoseReel = false;
     }
     return net.release();
   }
@@ -4512,8 +4847,9 @@ export class CaptureNetSystem {
     dropSeveredCatchClaim(target);
 
     const M_NET = Constants.SCENE_UNITS_PER_METER;
-    const sizeM = target.sizeMeter || 2;
-    const standoffM = sizeM / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+    // l8-reel-collar: the adopted piece is born at HOME (the same place the mother reel ends: bag mouth at the
+    // ring, catch seated on the collar axis) — no 1.0 m standoff, no 2.856 m bag seat. LassoSystem's reel
+    // delivers to the same point (catchHomeDistM), so the hand-off does not snap.
     // S13(e): the adoption seats on the COLLAR anchor (on-axis), not the
     // launcher muzzle (30 mm behind it since 2026-10-13).
     const berthAnchor = (typeof player.getNetBerthCollarPositionInto === 'function')
@@ -4546,10 +4882,12 @@ export class CaptureNetSystem {
     };
     net.catchResult = 'success';
     net.capturedMass = target.mass || 0;
-    net.tetherPaidOut = standoffM;
-    net._remainingM = standoffM;
-    net._reelSeedM = standoffM;
-    net._effectiveStandoffM = standoffM;
+    const apexM = CN.REEL_HOME.APEX_AT_RING_M;
+    net.tetherPaidOut = apexM;
+    net._remainingM = apexM;
+    net._reelSeedM = apexM;
+    net._effectiveStandoffM = apexM;
+    net._seedReelHome(target, player);
     // 2026-08-26 round 2 (ENGULF) — the piece rides INSIDE the bag, not at the
     // apex tip. Seat depth 0 pinned the catch AT the bag apex: the drawn bag
     // extended fore of it, so the piece read "alongside the net" at the nose
@@ -4561,7 +4899,10 @@ export class CaptureNetSystem {
     // lasso reel delivers the piece to collar-seat + fwd × the SAME constant
     // (LassoSystem._reelDeliveryWorld), so the hand-off stays pin-exact — the
     // no-snap contract holds with the piece engulfed instead of alongside.
-    net._catchSeatM = CN.ADOPT_CATCH_SEAT_M ?? 0;
+    // l8-reel-collar: the seat is the HOME seat now (was ADOPT_CATCH_SEAT_M 2.856); the apex is at the ring.
+    net._catchSeatM = net._homeSeatM;
+    net._seat0M = net._homeSeatM;
+    net._reelDistM = net._homeCatchM;
     net._lateral = new THREE.Vector3();
     net._fwdLagged = fwd.clone();
     if (target.tumbleAxis && player.quaternion) {
@@ -4613,6 +4954,16 @@ export class CaptureNetSystem {
     if ('_attitudeInertia' in player) player._attitudeInertia = null;
 
     return net;
+  }
+
+  /**
+   * l8-reel-collar — metres from the berth anchor (the collar plane) to where a catch's centre ends on the collar
+   * axis (HOME, see `catchHomeDistM`). The lasso's reel and adoption read this so they agree with the mother reel.
+   * @param {object} d — the catch (sizeMeter)
+   * @returns {number} metres
+   */
+  getCatchHomeDistM(d) {
+    return catchHomeDistM(this._player, this._armManager, d);
   }
 
   /**

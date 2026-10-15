@@ -38,6 +38,22 @@ const AP_ROT_RATE = 0.2;
 /** Dead zone (radians) — ignore tiny corrections to prevent jitter */
 const AP_ROT_DEADZONE = 0.01;
 
+/**
+ * Leash turn (requestAttitudeTurn): default peak body rate, 5 °/s. Slow on
+ * purpose — gas depends on peak rate and inertia, never on the angle, so a slow
+ * turn is cheap and keeps a hanging bag's lag small.
+ */
+export const TURN_DEFAULT_MAX_RATE = 5 * Math.PI / 180;
+
+/** Largest |body-frame nose-axis component| of a turn axis we accept (roll has ~1 % of pitch authority; estimate). */
+const TURN_ROLL_MAX = 0.2;
+
+/** A couple fired at ≤ this fraction folds into the dominant couple (fireRcsRotation skips billing at ≤ 0.01). */
+const TURN_MIN_MAG = 0.02;
+
+/** Body axis → RCS couple name, for the two couples with real authority (x = pitch, y = yaw). */
+const TURN_COUPLES = Object.freeze([['pitch', 'x'], ['yaw', 'y']]);
+
 /** How often to re-scan for nearest large debris (seconds) */
 const DEBRIS_SCAN_INTERVAL = 2.0;
 
@@ -166,8 +182,13 @@ export class AutopilotSystem {
     /** @type {object|null} Active aim-before-launch coroutine state (net/daughter) */
     this._aimCoroutine = null;
 
+    /** @type {object|null} Active scripted whole-ship turn (requestAttitudeTurn) */
+    this._turn = null;
+
     /** @type {boolean} Attitude hold (steady freeze) during a catch reel-in. */
     this._attitudeHold = false;
+    /** l5c-reach E7: who owns the attitude hold ('leash' = LeashDriver), or null. Other listeners may not release an owned hold. */
+    this._attitudeHoldOwner = null;
     /** @type {number} Seconds the current attitude hold has been active (safety cap). */
     this._attitudeHoldElapsed = 0;
 
@@ -215,6 +236,19 @@ export class AutopilotSystem {
   /** @returns {boolean} True while an aim-before-launch attitude sequence is active. */
   isAiming() { return !!this._aimCoroutine; }
 
+  /** @returns {boolean} True while a scripted whole-ship turn (requestAttitudeTurn) is running. */
+  isTurning() { return !!this._turn; }
+
+  /**
+   * Signed angle (rad) the running scripted turn has turned so far, about its
+   * own axis in the direction of the request. 0 when no turn is running.
+   * @returns {number}
+   */
+  turnProgressRad() {
+    const t = this._turn;
+    return t ? t.sign * this._turnAngleAt(t, t.t) : 0;
+  }
+
   /**
    * Session M (COPILOT): the flight-mode-annunciator snapshot, polled at
    * <= 1 Hz by the FMA strip (js/ui/hud/FmaStrip.js). A fresh plain object per
@@ -248,9 +282,16 @@ export class AutopilotSystem {
    * prograde auto-orient and the autopilot's steering so the attitude stays put
    * — no active slew runs, so it cannot waver. Released on reel-in end.
    */
-  holdAttitude() {
+  holdAttitude(timeoutS, opts) {
+    const owner = (opts && opts.owner) || null;
+    // l5c-reach E7: a hold somebody owns (the leash hand-off) is not taken over, re-timed or shortened by an
+    // anonymous request (a lasso firing, another net launching): only the owner re-asserts it.
+    if (this._attitudeHold && this._attitudeHoldOwner && this._attitudeHoldOwner !== owner) return;
     this._attitudeHold = true;
     this._attitudeHoldElapsed = 0;
+    this._attitudeHoldOwner = owner;
+    // Optional own safety cap (scripted turn); omitted → the shared AIM_TIMEOUT_S.
+    if (timeoutS != null) this._attitudeHoldTimeoutS = timeoutS;
     if (this._player) this._player.aimHold = true;
   }
 
@@ -262,20 +303,31 @@ export class AutopilotSystem {
    * the line.
    */
   holdAttitudeForNet() {
+    if (this._attitudeHold && this._attitudeHoldOwner) return;     // l5c-reach E7: an owned hold keeps its owner and cap
     this._attitudeHold = true;
     this._attitudeHoldElapsed = 0;
+    this._attitudeHoldOwner = null;
     this._attitudeHoldTimeoutS = (Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE
       ? (Constants.CAPTURE_NET.LARGE.MAX_FLIGHT_TIME ?? 11) : 11)
       + 25 + (Constants.CAPTURE_NET?.BERTH_SECURE_S ?? 4) + 6; // flight + reel + berth + margin
     if (this._player) this._player.aimHold = true;
   }
 
-  /** Release the reel-in attitude hold (unless an aim seq owns it). */
-  releaseAttitudeHold() {
+  /**
+   * Release the reel-in attitude hold (unless an aim seq owns it).
+   * @param {{ifUnowned?: boolean}} [opts] — l5c-reach E7: `ifUnowned` (the lasso / net listeners) leaves a hold
+   *   that an owner took (the leash hand-off) alone; the owner and the safety cap release it for real.
+   * @returns {boolean} true if the hold was released
+   */
+  releaseAttitudeHold(opts) {
+    if (opts && opts.ifUnowned && this._attitudeHoldOwner) return false;
+    this._attitudeHoldOwner = null;
     this._attitudeHold = false;
     this._attitudeHoldElapsed = 0;
     this._attitudeHoldTimeoutS = null;
-    if (this._player && !this._aimCoroutine) this._player.aimHold = false;
+    // A running scripted turn keeps the aim ownership (it re-asserts the hold when it ends).
+    if (this._player && !this._aimCoroutine && !this._turn) this._player.aimHold = false;
+    return true;
   }
 
   /**
@@ -596,10 +648,14 @@ export class AutopilotSystem {
     // C-11: Tick aim coroutine independently of autopilot engagement
     this._tickAimCoroutine(dt);
 
+    // Scripted whole-ship turn (leash hand-off) — also independent of engagement.
+    // A held world (the drawer) neither turns the ship nor bills gas.
+    this._tickTurnCoroutine(dtWorld > 0 ? dt : 0);
+
     // Attitude-hold: actively track the catch during reel-in (also independent
     // of engagement). Reel-in always ends with a stow/snap/miss event; the
     // internal safety cap releases if one is ever missed.
-    this._tickAttitudeHold(dt);
+    this._tickAttitudeHold(dtWorld > 0 ? dt : 0);   // the 120 s cap does not run while the world is held
 
     if (!this._engaged || !this._player) return;
 
@@ -1442,7 +1498,7 @@ export class AutopilotSystem {
     // via player.aimHold) and the autopilot's _rotateTowardWorld (guarded on
     // _attitudeHold); no active slew runs, so the attitude can't waver.
     eventBus.on(Events.LASSO_FIRED, () => this.holdAttitude());
-    const endHold = () => this.releaseAttitudeHold();
+    const endHold = () => this.releaseAttitudeHold({ ifUnowned: true });
     eventBus.on(Events.LASSO_STOWED, endHold);
     eventBus.on(Events.LASSO_SNAPPED, endHold);
     eventBus.on(Events.LASSO_MISSED, endHold);
@@ -1456,7 +1512,7 @@ export class AutopilotSystem {
       if (data && data.podIndex >= 0) this.holdAttitudeForNet();
     });
     const endNetHold = (data) => {
-      if (data && data.podIndex >= 0) this.releaseAttitudeHold();
+      if (data && data.podIndex >= 0) this.releaseAttitudeHold({ ifUnowned: true });
     };
     eventBus.on(Events.NET_CATCH_MISS, endNetHold);
     eventBus.on(Events.NET_RELEASED, endNetHold);
@@ -1693,10 +1749,11 @@ export class AutopilotSystem {
       ? dirProvider
       : () => dirProvider;
 
-    // Supersede any existing coroutine.
+    // Supersede any existing coroutine (and any scripted turn).
     if (this._aimCoroutine) {
       this._rejectAim('Superseded by new aim request');
     }
+    if (this._turn) this._rejectTurn('Superseded by aim request');
 
     const AIM = Constants.AIM;
     const tolRad = (mode === 'net' ? AIM.NET_AIM_TOLERANCE_DEG : AIM.DAUGHTER_AIM_TOLERANCE_DEG)
@@ -1768,6 +1825,236 @@ export class AutopilotSystem {
       text: `Launch aborted — ${reason}.`, priority: 'warning', source: 'HOUSTON',
     });
     c.reject(new Error(reason));
+  }
+
+  // ==========================================================================
+  // SCRIPTED WHOLE-SHIP TURN (leash hand-off)
+  // ==========================================================================
+
+  /**
+   * Turn the WHOLE ship by `angleRad` about a fixed WORLD axis, slowly and
+   * smoothly, then keep the new attitude until the caller lets go.
+   *
+   * Motion: inertial bang-coast-bang. Accelerate at α, coast at `maxRate`,
+   * brake at α (a triangle when the angle is too short to reach `maxRate`).
+   * Each frame the attitude is written ABSOLUTELY as R(axis, θ(t)) · qStart —
+   * never accumulated — so frame rate cannot change where the turn ends.
+   * Gas is billed only while the thrusters would actually fire (the two ramps),
+   * by the overlap of each frame with the burn windows; the coast is free.
+   * Unlike requestAimRotation this does NOT call fireRcsRotation every frame
+   * (that bills ~49 % of the tank for a 146° slew).
+   *
+   * Ownership: takes the attitude hold (holdAttitude → aimHold, owner AIM) and
+   * emits AIM_SEQUENCE_START/END with mode 'turn'. After it resolves the hold
+   * STAYS ON — the caller must call releaseAttitudeHold() when done (the hold
+   * also has its own `holdS` safety cap, default 120 s, counted from the end of
+   * the turn). A mid-turn cancel/reject leaves the hold on as well.
+   *
+   * Refuses at once (rejects, nothing moves, no gas): no player; an aim or a
+   * turn already running; a daughter out on its tether (rotation-lock tier not
+   * 'none'); a turn axis with more than TURN_ROLL_MAX along the nose (the ship
+   * has almost no roll authority); not enough cold gas for the two burns.
+   *
+   * @param {{x:number,y:number,z:number}} axisWorld — turn axis (WORLD frame, need not be unit)
+   * @param {number} angleRad — signed angle about that axis (right-hand rule)
+   * @param {object} [opts]
+   * @param {number} [opts.maxRate=TURN_DEFAULT_MAX_RATE] — peak rate (rad/s), capped at ATTITUDE.MAX_RATE
+   * @param {number} [opts.accel] — ramp acceleration (rad/s²); default and ceiling = the couples' α
+   * @param {number} [opts.timeoutS] — default profile time × 2 + 5
+   * @param {number} [opts.holdS=120] — safety cap of the hold that outlives the turn
+   * @param {string} [opts.holdOwner] — l5c-reach E7: who owns the hold (every hold this turn makes: the request, the end);
+   *   the lasso / net listeners do not release an owned hold
+   * @returns {Promise<{ angleRad:number, gasUnits:number, seconds:number }>}
+   *   A rejection is an Error carrying `progressRad` and `gasUnits` (what was done so far).
+   */
+  requestAttitudeTurn(axisWorld, angleRad, opts = {}) {
+    const player = this._player;
+    const fail = (msg) => Promise.reject(new Error(msg));
+    if (!player) return fail('AutopilotSystem not initialized (no player).');
+    if (this._aimCoroutine) return fail('Aim in progress');
+    if (this._turn) return fail('Turn in progress');
+    if (!axisWorld || !Number.isFinite(angleRad)
+        || typeof player.getAttitudeInertia !== 'function'
+        || typeof player._coupleTauMag !== 'function') {
+      return fail('Bad attitude-turn request');
+    }
+    const axis = new THREE.Vector3(axisWorld.x, axisWorld.y, axisWorld.z);
+    const axisLenSq = axis.lengthSq();
+    if (!(axisLenSq > 1e-12) || !Number.isFinite(axisLenSq)) return fail('Bad attitude-turn axis');
+    axis.normalize();
+
+    // A daughter on its tether limits how far the ship may turn.
+    const tier = this._armManager?.getRotationLockTier?.() ?? 'none';
+    if (tier !== 'none') return fail('daughter on its tether');
+
+    // World axis → body frame. Roll (nose axis) has ~1 % of pitch authority.
+    const qStart = player.quaternion.clone();
+    const nBody = axis.clone().applyQuaternion(qStart.clone().invert());
+    if (Math.abs(nBody.z) > TURN_ROLL_MAX) return fail('roll axis — no roll authority');
+
+    // α = the slowest couple the turn needs (torque = I·α·n for a fixed axis).
+    const I = player.getAttitudeInertia();
+    const inertia = { x: I.ixx, y: I.iyy };
+    const tau = { x: player._coupleTauMag('x'), y: player._coupleTauMag('y') };
+    const comp = { x: Math.abs(nBody.x), y: Math.abs(nBody.y) };
+    let aMax = Infinity;
+    for (const k of ['x', 'y']) {
+      if (comp[k] > 1e-6) aMax = Math.min(aMax, tau[k] / (inertia[k] * comp[k]));
+    }
+    if (!Number.isFinite(aMax) || !(aMax > 0)) return fail('no steering authority about that axis');
+
+    let maxRate = (Number.isFinite(opts.maxRate) && opts.maxRate > 0) ? opts.maxRate : TURN_DEFAULT_MAX_RATE;
+    const rateCap = Constants.ATTITUDE?.MAX_RATE;
+    if (rateCap > 0) maxRate = Math.min(maxRate, rateCap);
+    const a = (Number.isFinite(opts.accel) && opts.accel > 0) ? Math.min(opts.accel, aMax) : aMax;
+
+    // Trapezoid (triangle when the angle is shorter than maxRate²/α).
+    const sign = angleRad < 0 ? -1 : 1;
+    const A = Math.abs(angleRad);
+    const triangle = A < (maxRate * maxRate) / a;
+    const wp = triangle ? Math.sqrt(A * a) : maxRate;
+    const ta = wp / a;
+    const tc = triangle ? 0 : (A - wp * ta) / wp;
+    const T = 2 * ta + tc;
+
+    // Per-couple firing fraction during a ramp (x = pitch couple, y = yaw couple);
+    // a sliver on the minor couple folds into the dominant one.
+    const mag = { x: 0, y: 0 };
+    for (const k of ['x', 'y']) if (comp[k] > 1e-6) mag[k] = inertia[k] * a * comp[k] / tau[k];
+    const dom = mag.x >= mag.y ? 'x' : 'y';
+    const oth = dom === 'x' ? 'y' : 'x';
+    if (mag[oth] > 0 && mag[oth] <= TURN_MIN_MAG) { mag[dom] += mag[oth]; mag[oth] = 0; }
+    mag.x = Math.min(1, mag.x);
+    mag.y = Math.min(1, mag.y);
+    const dir = { x: Math.sign(sign * nBody.x) || 1, y: Math.sign(sign * nBody.y) || 1 };
+
+    // Same unit price as PlayerSatellite.fireRcsRotation (units per full-throttle second).
+    const k = (player._coldGasRate ?? 0.5) * (Constants.ATTITUDE?.RCS_ATTITUDE_N2_FACTOR ?? 0.3);
+    const gasEstimate = k * (mag.x + mag.y) * 2 * ta;
+    const coldGas = player.resources ? player.resources.coldGas : undefined;
+    if (Number.isFinite(coldGas) && coldGas < gasEstimate) return fail('not enough steering gas');
+
+    const timeoutS = (Number.isFinite(opts.timeoutS) && opts.timeoutS > 0) ? opts.timeoutS : T * 2 + 5;
+    const holdS = (Number.isFinite(opts.holdS) && opts.holdS > 0) ? opts.holdS : 120;
+    const holdOwner = opts.holdOwner || null;
+
+    return new Promise((resolve, reject) => {
+      this._turn = {
+        axis, sign, A, wp, a, ta, tc, T, qStart, mag, dir, k,
+        t: 0,            // profile time
+        wall: 0,         // time since the request (timeout clock)
+        timeoutS, holdS, holdOwner,
+        gasUnits: 0,
+        qRot: new THREE.Quaternion(),
+        resolve, reject,
+      };
+      this.holdAttitude(holdS, { owner: holdOwner });
+      this._player.aimHold = true;
+      eventBus.emit(Events.AIM_SEQUENCE_START, { mode: 'turn' });
+    });
+  }
+
+  /**
+   * Stop a running turn where it is (no snap). Rejects its promise with
+   * `reason`; the attitude hold stays on and the caller releases it.
+   * @param {string} [reason]
+   * @returns {boolean} true if a turn was running
+   */
+  cancelAttitudeTurn(reason = 'Turn cancelled') {
+    if (!this._turn) return false;
+    this._rejectTurn(reason);
+    return true;
+  }
+
+  /**
+   * Angle (rad, unsigned) the profile has covered at time `t`.
+   * @private
+   */
+  _turnAngleAt(c, t) {
+    if (t <= 0) return 0;
+    if (t >= c.T) return c.A;
+    if (t < c.ta) return 0.5 * c.a * t * t;
+    if (t < c.ta + c.tc) return 0.5 * c.a * c.ta * c.ta + c.wp * (t - c.ta);
+    const r = c.T - t;
+    return c.A - 0.5 * c.a * r * r;
+  }
+
+  /**
+   * Fire one couple for `seconds` of burn and add the gas it bills to the turn.
+   * Below TURN_MIN_MAG the magnitude is raised and the time shortened so
+   * fireRcsRotation's 0.01 billing floor cannot make a gentle ramp free.
+   * @private
+   */
+  _turnFire(c, name, sign, m, seconds) {
+    const p = this._player;
+    if (typeof p.setThrusterFire === 'function') p.setThrusterFire(name, sign, m);
+    let fm = m, fdt = seconds;
+    if (m < TURN_MIN_MAG) { fm = TURN_MIN_MAG; fdt = seconds * m / TURN_MIN_MAG; }
+    if (typeof p.fireRcsRotation === 'function') p.fireRcsRotation(name, sign, fm, fdt);
+    const gas = p.resources ? p.resources.coldGas : undefined;
+    if (!(gas <= 0)) c.gasUnits += c.k * Math.min(1, m) * seconds; // empty tank bills nothing
+  }
+
+  /** @private Resolve the running turn; the attitude hold stays on. */
+  _resolveTurn() {
+    const c = this._turn;
+    if (!c) return;
+    this._turn = null;
+    // Re-assert the hold (a stray releaseAttitudeHold mid-turn cleared the flag
+    // but kept aimHold) and restart its clock: it counts from the END of the turn.
+    this.holdAttitude(c.holdS, { owner: c.holdOwner });
+    eventBus.emit(Events.AIM_SEQUENCE_END, { mode: 'turn', result: 'resolved' });
+    c.resolve({ angleRad: c.sign * c.A, gasUnits: c.gasUnits, seconds: c.t });
+  }
+
+  /** @private Reject the running turn at its current attitude; the hold stays on. */
+  _rejectTurn(reason) {
+    const c = this._turn;
+    if (!c) return;
+    const progressRad = c.sign * this._turnAngleAt(c, c.t);
+    this._turn = null;
+    this.holdAttitude(c.holdS, { owner: c.holdOwner });
+    eventBus.emit(Events.AIM_SEQUENCE_END, { mode: 'turn', result: 'rejected', reason });
+    const err = new Error(reason);
+    err.progressRad = progressRad;
+    err.gasUnits = c.gasUnits;
+    c.reject(err);
+  }
+
+  /**
+   * Tick the scripted turn. Called each frame from update() regardless of
+   * autopilot engagement, right after the aim coroutine. Writes the absolute
+   * attitude for the end of this frame and bills the burn windows it overlaps.
+   * @param {number} dt — frame time in seconds
+   * @private
+   */
+  _tickTurnCoroutine(dt) {
+    const c = this._turn;
+    if (!c || !this._player || !(dt > 0)) return;
+
+    c.wall += dt;
+    if (c.wall >= c.timeoutS) { this._rejectTurn('attitude turn timed out'); return; }
+
+    const t0 = c.t;
+    const t1 = Math.min(t0 + dt, c.T);
+    c.t = t1;
+    c.qRot.setFromAxisAngle(c.axis, c.sign * this._turnAngleAt(c, t1));
+    this._player.quaternion.copy(c.qRot).multiply(c.qStart);
+
+    // Burn windows: [0, ta] accelerating, [T − ta, T] braking. Bill the overlap.
+    const wAcc = Math.max(0, Math.min(t1, c.ta) - t0);
+    const wBrk = Math.max(0, t1 - Math.max(t0, c.T - c.ta));
+    if (wAcc > 0 || wBrk > 0) {
+      for (let i = 0; i < TURN_COUPLES.length; i++) {
+        const name = TURN_COUPLES[i][0], ax = TURN_COUPLES[i][1];
+        const m = c.mag[ax];
+        if (!(m > 0)) continue;
+        if (wAcc > 0) this._turnFire(c, name, c.dir[ax], m, wAcc);
+        if (wBrk > 0) this._turnFire(c, name, -c.dir[ax], m, wBrk);
+      }
+    }
+
+    if (t1 >= c.T) this._resolveTurn();
   }
 
   /**

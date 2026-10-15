@@ -496,6 +496,8 @@ export class PlayerSatellite extends THREE.Group {
      *  player intent wins mid-swing (a new toggle overwrites an in-flight
      *  target), bounded rate, never a snap, cleared on arrival. */
     this._flowerTargetTheta = undefined;
+    /** Catch hand-off hold (holdFlowerForHandoff): θ in rad while held, else null. */
+    this._flowerHandoffHold = null;
     /** VENT push-through state (owner ask 2026-09-16). `_flowerVentArmed`
      *  lifts the driver's ladder ceiling from the bud (POSE_STOW_DEG) to
      *  POSE_VENT_DEG; `_lastFlowerTap` timestamps the last O press, so a
@@ -4006,6 +4008,7 @@ export class PlayerSatellite extends THREE.Group {
    * @returns {boolean} true when now deploying (opening toward OPEN_DEG)
    */
   toggleFlowerDeploy() {
+    if (this._flowerHandoffHold != null) return this._refuseFlowerWhileHeld();
     const FL = Constants.THERMAL.FLOWER;
     const restDeg = this._flowerRestDeg();
     const restRad = (restDeg * Math.PI) / 180;
@@ -4153,6 +4156,7 @@ export class PlayerSatellite extends THREE.Group {
     *   false when folding (toward LAUNCH 0°), null when no flower is fitted
     */
   toggleFlowerOverride() {
+    if (this._flowerHandoffHold != null) return this._refuseFlowerWhileHeld();
     if (this._flowerGroups.length === 0) return null;
     const FL = Constants.THERMAL.FLOWER;
     const midRad = ((FL.POSE_LAUNCH_DEG + FL.POSE_STOW_DEG) / 2) * Math.PI / 180;
@@ -4203,6 +4207,7 @@ export class PlayerSatellite extends THREE.Group {
    * @returns {number|null} the accepted target θ in degrees (0 for LAUNCH), or null
    */
   setFlowerPose(pose, opts = undefined) {
+    if (this._flowerHandoffHold != null) return this._refuseFlowerWhileHeld();
     const FL = Constants.THERMAL.FLOWER;
     if (this._flowerGroups.length === 0) return null;
     this._flowerCmdClockS = this._flowerClockS || 0;   // restarts the 180° → 146° settle clock (non-player callers never run above 146°)
@@ -4212,6 +4217,16 @@ export class PlayerSatellite extends THREE.Group {
       const forced = !!(opts && opts.force === true);
       const override = !!(opts && opts.override === true);
       if (!launchActive && !forced && !override) return null;
+      // A catch bag on a radiator tip: the fold would park θ at the 2° floor
+      // under the bag, never release the lock and inhibit thrust (review of l5a).
+      if (this.tipCargo?.count?.() > 0) {
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          sender: 'THERMAL',
+          text: 'Radiators cannot fold flat with a catch on a radiator tip.',
+          priority: 'info',
+        });
+        return null;
+      }
       // DECISIONS §10 (supersedes the 2026-09-09 (B) centre hold; the
       // measured curve lives in the Constants WING_DODGE_* comment): the fold
       // corridor below the pose floor contacts the DEPLOYED ROSA beyond ~7° of
@@ -4242,6 +4257,78 @@ export class PlayerSatellite extends THREE.Group {
   /** @returns {boolean} Design 7b — whether the one-shot flower launch lock is armed. */
   get flowerLaunchLocked() { return this._flowerLaunchLock; }
 
+  /** @returns {boolean} whether the radiators are held for the catch hand-off. */
+  get flowerHandoffHeld() { return this._flowerHandoffHold != null; }
+
+  /**
+   * Catch hand-off hold: slew the radiators to `thetaRad` (the normal
+   * rate-limited slew, never a snap) and refuse every other commanded radiator
+   * move until releaseFlowerHandoff() or a snap-to-stow/launch (new game).
+   * Calling it again while held just retargets.
+   * @param {number} thetaRad
+   * @returns {number|null} the angle in degrees after the bag-band cap (what
+   *   the radiators will really reach), or null with no radiator fitted or
+   *   while the launch lock is armed
+   */
+  holdFlowerForHandoff(thetaRad) {
+    if (this._flowerGroups.length === 0 || this._flowerLaunchLock) return null;
+    if (!Number.isFinite(thetaRad)) return null;
+    thetaRad = this._flowerClampRad(thetaRad);
+    if (this._flowerHandoffHold == null) this._flowerHoldWarned = false;
+    this._flowerHandoffHold = thetaRad;
+    this._flowerTargetTheta = thetaRad;
+    this._flowerCmdClockS = this._flowerClockS || 0;
+    return this._flowerCappedDeg(thetaRad);
+  }
+
+  /**
+   * End the hand-off hold and slew to `thetaRad` (the tip-bag band retarget in
+   * _updateFlower still caps it).
+   * @returns {number|null} capped degrees, or null when no hold was active
+   */
+  releaseFlowerHandoff(thetaRad) {
+    if (this._flowerHandoffHold == null) return null;
+    if (!Number.isFinite(thetaRad)) return null;
+    thetaRad = this._flowerClampRad(thetaRad);
+    this._flowerHandoffHold = null;
+    this._flowerTargetTheta = thetaRad;
+    this._flowerCmdClockS = this._flowerClockS || 0;
+    return this._flowerCappedDeg(thetaRad);
+  }
+
+  /** @private Clamp a finite θ (rad) to [POSE_FLOOR_DEG, POSE_STOW_DEG]. */
+  _flowerClampRad(thetaRad) {
+    const FL = Constants.THERMAL.FLOWER;
+    const lo = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
+    const hi = (FL.POSE_STOW_DEG * Math.PI) / 180;
+    return Math.max(lo, Math.min(hi, thetaRad));
+  }
+
+  /**
+   * @private θ (rad) → degrees the radiators really reach: above the tip-bag
+   * band the slew aims SETTLE_EPS_RAD under it (see _updateFlower).
+   */
+  _flowerCappedDeg(thetaRad) {
+    const band = this.tipCargo?.maxRadiatorThetaRad?.() ?? Infinity;
+    if (thetaRad > band + 1e-9) {
+      return ((band - Constants.THERMAL.FLOWER.SETTLE_EPS_RAD) * 180) / Math.PI;
+    }
+    return (thetaRad * 180) / Math.PI;
+  }
+
+  /** @private A radiator command while held: one comms line per hold, then null. */
+  _refuseFlowerWhileHeld() {
+    if (!this._flowerHoldWarned) {
+      this._flowerHoldWarned = true;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'THERMAL',
+        text: 'Radiators held for the catch hand-off.',
+        priority: 'info',
+      });
+    }
+    return null;
+  }
+
   /**
    * Design 7b — LaunchSequence.start()'s hand-off: the ship is launched ALREADY
    * folded (the fold happens on the pad, not in the fairing — and the 9.7 s
@@ -4253,6 +4340,7 @@ export class PlayerSatellite extends THREE.Group {
    * @returns {boolean} true when snapped
    */
   snapFlowerToLaunch() {
+    this._flowerHandoffHold = null;
     if (this._flowerGroups.length === 0) return false;
     const ls = this._launchSequence;
     if (!(ls && typeof ls.isActive === 'function' && ls.isActive())) return false;
@@ -4278,6 +4366,7 @@ export class PlayerSatellite extends THREE.Group {
    * produced); no POSE event — nothing slewed. No hardware → no-op.
    */
   snapFlowerToStow() {
+    this._flowerHandoffHold = null;
     if (this._flowerGroups.length === 0) return;
     const restDeg = this._flowerRestDeg();
     const wasLocked = this._flowerLaunchLock;
@@ -4570,6 +4659,35 @@ export class PlayerSatellite extends THREE.Group {
     // silhouette and read as an octagon (Mother fixes, round ends).
     const padGeo = new THREE.CylinderGeometry(0.05 * M, 0.05 * M, 0.065 * M, 48);
     const boltGeo = new THREE.CylinderGeometry(0.008 * M, 0.008 * M, 0.012 * M, 24);
+
+    // ── l6-look: the leash tip hardware (owner 2026-10-14, DECISIONS §1 "reel in at a petal tip") ───────────────
+    // A telescoping stalk (two nested tubes) carries a slotted cone out to the latch point: TipCargo puts it
+    // TIP_STALK_M 0.15 m past the PAD ORIGIN (the pad's centre, tip-local x -0.0275) = tip-local x 0.1225, which is
+    // the cone's MOUTH centre (plan said 0.15 from the tip origin; measured otherwise, logged). Round-parts rule counts: r 8 / 6 mm -> 24 around, the
+    // cone r 40 mm -> 48. The cone is an open-ended CylinderGeometry (not ConeGeometry) so test-RoundParts measures
+    // it; four slots (2 of the 48 segments wide, mouth row only) are cut out of its index.
+    const tipHwGeo = (() => {
+      const cone = new THREE.CylinderGeometry(0.04 * M, 0.012 * M, 0.03 * M, 48, 2, true);   // top (+Y) = the mouth
+      const pos = cone.getAttribute('position'), idx = cone.index.array, keep = [];
+      const mouthY = 0.015 * M;
+      for (let t = 0; t < idx.length; t += 3) {
+        let cx = 0, cy = 0, cz = 0;
+        for (let k = 0; k < 3; k++) { cx += pos.getX(idx[t + k]); cy += pos.getY(idx[t + k]); cz += pos.getZ(idx[t + k]); }
+        cx /= 3; cy /= 3; cz /= 3;
+        const seg = ((Math.atan2(cz, cx) / (Math.PI * 2) + 1) % 1) * 48;        // 0..48 around
+        const slotted = cy > mouthY * 0.1 && (Math.floor(seg + 1e-6) % 12) < 2;  // mouth row, 4 slots 2 segments wide
+        if (!slotted) keep.push(idx[t], idx[t + 1], idx[t + 2]);
+      }
+      cone.setIndex(keep);
+      cone.clearGroups();
+      return {
+        cone,
+        outer: new THREE.CylinderGeometry(0.008 * M, 0.008 * M, 0.060 * M, 24),
+        inner: new THREE.CylinderGeometry(0.006 * M, 0.006 * M, 0.060 * M, 24),
+      };
+    })();
+    const tipConeMat = padMat.clone();
+    tipConeMat.side = THREE.DoubleSide;           // an open cone: the inside shows through the slots
 
     // ── v4-radiator-look ────────────────────────────────────────────────────────────────────────────────────────
     // Owner 2026-10-13: the white slabs read flat and the root hinge looked like a box with an 8-sided pin
@@ -4970,7 +5088,33 @@ export class PlayerSatellite extends THREE.Group {
       pad.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
       tip.add(pad);
 
-      this._flowerGroups.push({ hinge, azDeg, pair: pairKey, wings });
+      // l6-look: the leash tip hardware — two nested tubes and a slotted cone on a pivot at its narrow end.
+      // _updateTipStalks (below) owns their POSITIONS (retracted into the pad for the launch fold, out at the
+      // latch point); LeashVisual owns the cone pivot's ROTATION (the swivel). Same render tier as the pad.
+      const stalk = new THREE.Mesh(tipHwGeo.outer, padMat);
+      stalk.rotation.z = Math.PI / 2;                // tube axis along local X
+      stalk.name = `FlowerStrutTipStalk_${i}`;
+      stalk.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      tip.add(stalk);
+      const stalkIn = new THREE.Mesh(tipHwGeo.inner, padMat);
+      stalkIn.rotation.z = Math.PI / 2;
+      stalkIn.name = `FlowerStrutTipStalk_${i}_Inner`;
+      stalkIn.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      tip.add(stalkIn);
+      const conePivot = new THREE.Group();
+      conePivot.name = `FlowerStrutTipConePivot_${i}`;
+      tip.add(conePivot);
+      const cone = new THREE.Mesh(tipHwGeo.cone, tipConeMat);
+      cone.rotation.z = -Math.PI / 2;                // cone mouth (+Y) -> local +X, outward
+      cone.position.x = 0.015 * M;                   // pivot sits at the narrow end; the mouth is 0.03 m out
+      cone.name = `FlowerStrutTipCone_${i}`;
+      cone.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      conePivot.add(cone);
+
+      this._flowerGroups.push({
+        hinge, azDeg, pair: pairKey, wings,
+        tipHw: { index: i, stalk, stalkIn, conePivot, cone, u: NaN },
+      });
     }
 
     // Initialize the new pair at the current shared pose immediately (a pair
@@ -4981,6 +5125,43 @@ export class PlayerSatellite extends THREE.Group {
     for (const fg of this._flowerGroups) {
       fg.hinge.rotation.y = rotY;
       for (const wh of fg.wings) wh.rotation.x = foldX;
+    }
+    this._updateTipStalks(this._flowerThetaRad);
+  }
+
+  /**
+   * l6-look — pose the leash tip hardware for radiator angle θ. Sets only the POSITIONS of the two stalk tubes and
+   * the cone pivot (never scale: scale 0 breaks keep-out maths); the cone's rotation is LeashVisual's.
+   * Retracted (tubes slid into the pad, cone sunk so its mouth is level with the pad's outer face) at or below the
+   * closed floor (POSE_FLOOR_DEG 2°) — the launch fold length stays 1.505 m — and linearly out between 2° and 3°.
+   * A tip holding a bag, or the one the hand-off is using, stays fully out at any θ (the bag hangs on it; the
+   * radiators settle near 2.5° at the 3° hand-off).
+   * @param {number} [thetaRad] — default: the current radiator angle
+   */
+  _updateTipStalks(thetaRad) {
+    const groups = this._flowerGroups;
+    if (!groups || groups.length === 0) return;
+    const FL = Constants.THERMAL.FLOWER;
+    const th = Number.isFinite(thetaRad) ? thetaRad : this._flowerThetaRad;
+    const floor = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
+    const open = Math.max(0, Math.min(1, (th - floor) / (Math.PI / 180)));     // 0 at 2° .. 1 at 3°
+    const tc = this.tipCargo;
+    const view = this.leashDriver && typeof this.leashDriver.view === 'function' ? this.leashDriver.view() : null;
+    for (const fg of groups) {
+      const hw = fg.tipHw;
+      if (!hw) continue;
+      const held = (tc && typeof tc.has === 'function' && tc.has(hw.index)) || (view && view.tipIndex === hw.index);
+      const u = held ? 1 : open;
+      if (u === hw.u) continue;
+      hw.u = u;
+      // tip-local x, metres. Out: outer tube 0.000..0.060 (its root buried in the pad), inner tube 0.0345..0.0945
+      // (25 mm engaged, its end 2 mm into the cone's neck), cone narrow end 0.0925 / mouth 0.1225 = the latch point
+      // (TipCargo: pad origin -0.0275 + 0.15). In: both tubes inside the boom behind the pad (every end face >= 2 mm
+      // off the pad's and boom's), the cone sunk so its mouth sits 1 mm below the pad's outer face (0.005) — launch
+      // length stays 1.505 m and no faces are coplanar.
+      hw.stalk.position.x = (-0.042 + (0.030 - -0.042) * u) * M;
+      hw.stalkIn.position.x = (-0.0395 + (0.0645 - -0.0395) * u) * M;
+      hw.conePivot.position.x = (-0.026 + (0.0925 - -0.026) * u) * M;
     }
   }
 
@@ -5046,6 +5227,36 @@ export class PlayerSatellite extends THREE.Group {
     // the rate limit below do the (never-snapping) swing.
     this._flowerClockS = (this._flowerClockS || 0) + (dt > 0 ? dt : 0);
     settleFlowerToOpen(this);
+
+    // Radiator ceiling with bags on the tips (TipCargo): a bag on a radiator
+    // tip would sit in the engine plume cones past its band row (measured,
+    // tmp/probes/leash/lat15/bsum.txt). Retarget the SLEW — never clamp θ —
+    // so the normal rate-limited swing brings the radiator down: no jumps.
+    // The band target sits SETTLE_EPS_RAD below the band edge, so the arrival
+    // latch (it clears within SETTLE_EPS_RAD of the target) lands strictly
+    // inside the band and the retarget below cannot churn.
+    const tipBand = (this.tipCargo && typeof this.tipCargo.maxRadiatorThetaRad === 'function')
+      ? this.tipCargo.maxRadiatorThetaRad() : Infinity;
+    const holdsTipBag = tipBand !== Infinity;
+    if (holdsTipBag) {
+      const bandTarget = tipBand - FL.SETTLE_EPS_RAD;
+      if (this._flowerTargetTheta !== undefined && this._flowerTargetTheta > tipBand + 1e-9) {
+        this._flowerTargetTheta = bandTarget;
+        if (!this._flowerBandWarned) {
+          this._flowerBandWarned = true;
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            sender: 'THERMAL',
+            text: `Radiators stop at ${Math.floor((tipBand * 180) / Math.PI + 1e-6)}° — a catch on a radiator tip would sit in the engine plume.`,
+            priority: 'info',
+          });
+        }
+      } else if (this._flowerTargetTheta === undefined && this._flowerThetaRad > tipBand + 1e-6) {
+        this._flowerTargetTheta = bandTarget;
+      }
+    } else {
+      this._flowerBandWarned = false;
+    }
+
     const target = this._flowerTargetTheta;
     const stepping = target !== undefined && dt > 0;
     const theta0 = this._flowerThetaRad;
@@ -5061,7 +5272,8 @@ export class PlayerSatellite extends THREE.Group {
     // both dodge/fold clear on their own — so an OVERRIDE fold drops below
     // POSE_FLOOR_DEG at once, same as the sequence / dev-force armings.
     const orbitFloorRad = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
-    const foldFloorOpen = this._flowerLaunchLock;
+    // A bag held on a tip refuses the launch fold: the floor stays at POSE_FLOOR_DEG.
+    const foldFloorOpen = this._flowerLaunchLock && !holdsTipBag;
     const floorRad = foldFloorOpen ? (FL.POSE_LAUNCH_DEG * Math.PI) / 180 : orbitFloorRad;
     // Vent push-through (owner ask): the ladder ceiling lifts from the bud to
     // POSE_VENT_DEG only while the player has explicitly double-commanded it.
@@ -5141,6 +5353,7 @@ export class PlayerSatellite extends THREE.Group {
       fg.hinge.rotation.y = rotY;
       for (const wh of fg.wings) wh.rotation.x = foldX;
     }
+    if (typeof this._updateTipStalks === 'function') this._updateTipStalks(this._flowerThetaRad);   // l6-look: stalks follow θ, a held bag, the hand-off tip (guard: test stubs borrow this method)
   }
 
   // --------------------------------------------------------------------------

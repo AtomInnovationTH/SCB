@@ -2071,8 +2071,16 @@ export class GameFlowManager {
     if (!p) return;
     if (!(dt > 0) || !gameState.isGameplay()) return;
     p.elapsedS += dt;
+    // l5c-reach E6: while the leash hand-off carries the catch to a radiator tip the 20 s cap does not run
+    // (the hand-off is ~45-120 s; the catch leaving the nose releases the start by itself). A safety cap of
+    // LEASH.MISSION_WAIT_MAX_S game seconds in total still ends the wait if the hand-off never finishes.
+    // Ref path: this._refs.player.leashDriver (built in main.js; absent in headless tests).
+    if (p.elapsedS >= Constants.LEASH.MISSION_WAIT_MAX_S) { this._releaseMissionStart(); return; }
+    const busy = !!(this._refs && this._refs.player && this._refs.player.leashDriver && this._refs.player.leashDriver.busy);
+    if (busy) return;
+    p.idleS = (p.idleS || 0) + dt;
     const cap = Constants.MISSIONS.START_AFTER_CATCH_MAX_S;
-    if (p.elapsedS >= cap) this._releaseMissionStart();
+    if (p.idleS >= cap) this._releaseMissionStart();
   }
 
   /**

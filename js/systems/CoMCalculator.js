@@ -343,6 +343,22 @@ export function computeCoM(armManager, playerSatellite) {
     armMasses.push(dMass);
   }
 
+  // Bags latched on the radiator tips (TipCargo): real mass at the bag centre,
+  // ship frame in metres — the same frame as the arm points above.
+  const tipBags = playerSatellite && playerSatellite.tipCargo
+    && typeof playerSatellite.tipCargo.massBookings === 'function'
+    ? playerSatellite.tipCargo.massBookings() : null;
+  if (tipBags) {
+    for (let b = 0; b < tipBags.length; b++) {
+      const m = tipBags[b].massKg;
+      const p = tipBags[b].posShip;
+      cx += m * p.x;
+      cy += m * p.y;
+      cz += m * p.z;
+      totalMass += m;
+    }
+  }
+
   const invTotal = totalMass > 0 ? 1 / totalMass : 0;
   return {
     position: {
@@ -465,6 +481,21 @@ export function computeInertia(armManager, playerSatellite) {
     if (Constants.FEATURE_FLAGS.BRIDLE_RING && Constants.FEATURE_FLAGS.COM_TRACKING) {
       const bridleMass = BridleRing.getRingMassKg(i);
       if (bridleMass > 0) addPoint(bridleMass, strutTipMeters(dp, alpha));
+    }
+  }
+
+  // Bags latched on the radiator tips: cargo, so they join the clamped sum.
+  const tipBags = playerSatellite && playerSatellite.tipCargo
+    && typeof playerSatellite.tipCargo.massBookings === 'function'
+    ? playerSatellite.tipCargo.massBookings() : null;
+  if (tipBags) {
+    for (let b = 0; b < tipBags.length; b++) {
+      const m = tipBags[b].massKg;
+      const p = tipBags[b].posShip;
+      if (!(m > 0)) continue;
+      cargoIxx += m * (p.y * p.y + p.z * p.z);
+      cargoIyy += m * (p.x * p.x + p.z * p.z);
+      cargoIzz += m * (p.x * p.x + p.y * p.y);
     }
   }
 

@@ -651,8 +651,8 @@ export const Events = {
   AUTOPILOT_TARGET_UNLOCK: 'autopilot:targetUnlock',   // { debrisId } — AP released debris lock
 
   // === AIM-BEFORE-LAUNCH (aim-before-launch plan) ===
-  AIM_SEQUENCE_START:     'aim:sequenceStart',         // { mode: 'net'|'daughter' }
-  AIM_SEQUENCE_END:       'aim:sequenceEnd',           // { mode, result: 'resolved'|'rejected', reason? }
+  AIM_SEQUENCE_START:     'aim:sequenceStart',         // { mode: 'net'|'daughter'|'turn' }
+  AIM_SEQUENCE_END:       'aim:sequenceEnd',           // { mode: 'net'|'daughter'|'turn', result: 'resolved'|'rejected', reason? }
   MOTHER_MANUAL_ROTATE:   'mother:manualRotate',       // arrow-key attitude input in mother mode (cancels aim seq)
 
   // === THRUST VISUAL (Phase 4 — Velocity Streaks) ===
@@ -985,6 +985,11 @@ export const Events = {
   /** Quality tier changed by QualityManager (initial selection or runtime auto-downshift).
    *  Payload: { from: 'HIGH'|'MEDIUM'|'LOW', to: 'HIGH'|'MEDIUM'|'LOW', reason: string } */
   PERF_TIER_CHANGED:         'perf:tier-changed',
+
+  // === L2 LAUNCH LINE (ArmManager keep-out gate) ===
+  /** A daughter launch was refused: a part of the ship is in the way (or opening struts never cleared it in 8 s).
+   *  Payload: { armIndex, armId, part: plain-words part, cat: 'hull'|'wing'|'rad'|'nose'|'strutN'|'dauN'|'catch', reason: 'blocked'|'timeout' } */
+  ARM_LAUNCH_HELD:           'arm:launchHeld',
 };
 
 export default Events;

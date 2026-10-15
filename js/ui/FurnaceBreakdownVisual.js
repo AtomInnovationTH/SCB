@@ -159,6 +159,13 @@ export class FurnaceBreakdownVisual {
     return this._motherCenter(out);
   }
 
+  /** World position of a radiator tip's latch point (TipCargo), else the bus centre. */
+  _tipWorld(index, out) {
+    const tc = this._player && this._player.tipCargo;
+    if (tc && typeof tc.latchWorldInto === 'function' && tc.latchWorldInto(index, out)) return out;
+    return this._motherCenter(out);
+  }
+
   /** World position of the mother's furnace port (bus center). */
   _motherCenter(out) {
     const p = this._player;
@@ -203,14 +210,20 @@ export class FurnaceBreakdownVisual {
 
   /**
    * Resolve a breakdown-event payload to a station anchor: the daughter rack's
-   * strut tip (armIndex, the shipped path) or the S13(c) collar
-   * ({anchor:{kind:'collar', podIndex}}). Returns null when nothing resolves.
+   * strut tip (armIndex, the shipped path), the S13(c) collar
+   * ({anchor:{kind:'collar', podIndex}}) or a radiator tip
+   * ({anchor:{kind:'tip', index}}, TipCargo). Returns null when nothing resolves.
    * @returns {{ key: number|string, worldOf: (out: THREE.Vector3) => THREE.Vector3 }|null}
    * @private
    */
   _resolveAnchor(payload) {
     if (payload && payload.anchor && payload.anchor.kind === 'collar') {
       return { key: 'collar', worldOf: (out) => this._collarWorld(out) };
+    }
+    // A bag latched on a radiator tip (TipCargo): the station is the tip's latch point.
+    if (payload && payload.anchor && payload.anchor.kind === 'tip') {
+      const index = payload.anchor.index;
+      return { key: 'tip' + index, worldOf: (out) => this._tipWorld(index, out) };
     }
     const armIndex = resolveArmIndex(this._player, payload);
     if (armIndex < 0) return null;

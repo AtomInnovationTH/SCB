@@ -15,7 +15,8 @@ import { powerDistribution } from '../systems/PowerDistribution.js';
 import { checkActiveSatArming } from '../systems/ActiveSatGuard.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import { computeCoM, computeInducedTorque, strutTipMeters, heldCargoPlumeConflictAt } from '../systems/CoMCalculator.js';
-import { strutTipFoulsCorridor } from './ArmDockBasis.js';
+import { strutTipFoulsCorridor, strutLocalDirection } from './ArmDockBasis.js';
+import { createShipKeepOut } from '../systems/ShipKeepOut.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit } from './ArmUnit.js';
 import { engineGasKg, engineDeltaV } from '../systems/ResourceSystem.js';
@@ -516,7 +517,10 @@ export class ArmManager {
     }
 
     if (!canCeremony) {
-      return arm.deploy(target);
+      // L2: no aim ceremony → the daughter fires along the direct bearing; the
+      // launch line is checked along that same bearing.
+      return this._launchArm(arm, 'target', () => this._launchDirShip(arm, target),
+        () => arm.deploy(target));
     }
 
     // Concurrency guard: don't supersede an in-flight aim sequence (e.g. a
@@ -549,14 +553,20 @@ export class ArmManager {
       mode: 'daughter', armManager: this, arm, pairIndex: arm.index,
     }).then(() => {
       arm._aimReserved = false;
-      // Tell deploy() the strut was physically aimed at the target, so it fires
-      // along the strut basis (SSOT) rather than the direct-bearing fallback.
-      arm._aimConverged = true;
-      const ok = arm.deploy(target);
-      // Camera ceremony must start when the arm ACTUALLY deploys (post-rotation),
-      // not during the slew. The synchronous InputManager emit is skipped for
-      // ceremony deploys (arm isn't deployed yet at that point), so emit here.
-      if (ok) eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
+      // L2: the launch goes through the keep-out gate. The line is checked along
+      // the converged STRUT direction (re-derived each check — struts move); a
+      // clear line fires this same frame, as before.
+      this._launchArm(arm, 'ceremony', () => this._strutDirShip(arm), () => {
+        // Tell deploy() the strut was physically aimed at the target, so it fires
+        // along the strut basis (SSOT) rather than the direct-bearing fallback.
+        arm._aimConverged = true;
+        const ok = arm.deploy(target);
+        // Camera ceremony must start when the arm ACTUALLY deploys (post-rotation),
+        // not during the slew. The synchronous InputManager emit is skipped for
+        // ceremony deploys (arm isn't deployed yet at that point), so emit here.
+        if (ok) eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
+        return ok;
+      });
     }).catch(() => {
       arm._aimReserved = false;
       // Abort comms already emitted by AutopilotSystem.
@@ -578,7 +588,8 @@ export class ArmManager {
     if (checkActiveSatArming(target, this._catalogLoader, eventBus)) return false;
     const arm = this.arms.find(a => a.id === armId);
     if (!arm) return false;
-    return arm.deploy(target);
+    return this._launchArm(arm, 'target', () => this._launchDirShip(arm, target),
+      () => arm.deploy(target));
   }
 
   /**
@@ -622,12 +633,9 @@ export class ArmManager {
       return false;
     }
 
-    if (target) {
-      return arm.deploy(target);
-    } else {
-      // No target — deploy in free-fly mode (TRANSIT with manual control)
-      return arm.deployFreefly();
-    }
+    // No target → free-fly mode (TRANSIT with manual control). L2: through the
+    // keep-out gate, along the direction the arm will actually fire.
+    return this._launchTargetOrFree(arm, target);
   }
 
   /**
@@ -704,7 +712,8 @@ export class ArmManager {
       return false;
     }
 
-    return arm.deployTrawl(direction);
+    return this._launchArm(arm, 'trawl', () => this._trawlDirShip(arm, direction),
+      () => arm.deployTrawl(direction));
   }
 
   /**
@@ -919,7 +928,7 @@ export class ArmManager {
     for (const arm of this.arms) {
       if (arm.state !== ARM_STATES.DOCKED) continue;
       if (!arm.springCharged) continue;
-      const ok = target ? arm.deploy(target) : arm.deployFreefly();
+      const ok = this._launchTargetOrFree(arm, target);
       if (ok) deployed++;
     }
 
@@ -974,7 +983,7 @@ export class ArmManager {
       // Distinct target for this daughter; surplus daughters reuse the
       // fallback (mother's active target) or free-fly when none.
       const target = (assigned < list.length) ? list[assigned] : fallbackTarget;
-      const ok = target ? arm.deploy(target) : arm.deployFreefly();
+      const ok = this._launchTargetOrFree(arm, target);
       if (ok) {
         deployed++;
         if (assigned < list.length) assigned++;
@@ -1162,11 +1171,16 @@ export class ArmManager {
     if (arm1.state !== ARM_STATES.DOCKED || !arm1.springCharged) return false;
     if (arm2.state !== ARM_STATES.DOCKED || !arm2.springCharged) return false;
 
-    // Deploy both within sync window
-    const deployed1 = target1 ? arm1.deploy(target1) : arm1.deployFreefly();
-    const deployed2 = target2 ? arm2.deploy(target2) : arm2.deployFreefly();
+    // Deploy both within sync window. L2: each goes through the keep-out gate; a
+    // pair only counts as a DUAL fire (recoil cancelled) when BOTH fired now —
+    // a launch the gate deferred leaves a single-arm launch later.
+    const deployed1 = this._launchTargetOrFree(arm1, target1);
+    const deployed2 = this._launchTargetOrFree(arm2, target2);
+    const pend = this._pendingLaunches;
+    const firedTogether = deployed1 && deployed2
+      && !(pend && (pend.has(armIndex1) || pend.has(armIndex2)));
 
-    if (deployed1 && deployed2) {
+    if (firedTogether) {
       // Calculate net recoil (should be ~zero for same-type pairs)
       const mass1 = arm1.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
       const mass2 = arm2.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
@@ -1189,7 +1203,9 @@ export class ArmManager {
       return true;
     }
 
-    return false;
+    // Both accepted but one was deferred by the gate: no DUAL_FIRE yet (they will
+    // not fire together). Otherwise at least one was refused.
+    return !!(deployed1 && deployed2);
   }
 
   /**
@@ -1516,59 +1532,52 @@ export class ArmManager {
 
   /**
    * Session L (plan item 4): the "." hotkey's strut toggle as a PUBLIC method
-   * — the REFIT BERTHS card's STRUTS chip drives it through the hub. It MIRRORS
-   * InputManager's Period case (do-not-edit there; both paths must agree —
-   * test-ArmManager-Salvage pins the same latch field + the same guard against
-   * that source and drives both on one stub arm set): the same
-   * `_strutTargetAlpha` write on the same arm set (DOCKED only), the same
-   * decision (any docked strut past STRUT_OPEN_THRESHOLD, half the open angle
-   * → stow ALL to 0, else deploy ALL to STRUT_DEPLOY_ALPHA, 90°; a quick second
-   * tap pushes through to 180°), the same live read (getAimAlpha, a pending latch winning —
-   * never the latch alone, it clears to undefined on arrival). Emitting
-   * Events.STRUT_DEPLOY_INPUT stays the CALLER's job (InputManager emits its
-   * own; the hub emits for the pane), as does the click.
-   * @returns {boolean|null} the new state — true = deploying (π), false =
-   *   stowing (0); null when no DOCKED arm could take the write (nothing
-   *   toggled — the caller should skip its emit).
+   * — the REFIT BERTHS card's STRUTS chip and the F1 bar's `struts` actuator
+   * drive it through the hub; InputManager's Period case delegates here. It is
+   * the ONE copy of the strut law. It writes `_strutTargetAlpha` on DOCKED arms
+   * only, and decides from the live read (getAimAlpha, a pending latch winning
+   * — never the latch alone, it clears to undefined on arrival).
+   *
+   * The law (owner 2026-10-14; angles measured from the tail):
+   *   • a press while any docked strut is open (live or pending, past
+   *     STRUT_OPEN_THRESHOLD, half the rest angle, 17°) → ALL to 0°;
+   *   • otherwise → ALL to STRUT_REST_ALPHA, 34° (swept back);
+   *   • a press within STRUT_PUSH_WINDOW_MS (600 ms) of the previous press → ALL
+   *     to STRUT_DEPLOY_ALPHA, 90°, whatever the first press did, and the window
+   *     resets (a third quick press is a fresh single press). So a second press
+   *     inside 600 ms ALWAYS means 90°; reversing a swing needs a press after 600 ms.
+   *   • no tap sequence ever targets 180° (STRUT_SWEEP_MAX is the range, not a target).
+   * Emitting Events.STRUT_DEPLOY_INPUT stays the CALLER's job (InputManager
+   * emits its own; the hub emits for the pane), as does the click.
+   * @returns {boolean|null} true = opening (34° or 90°), false = closing (0°);
+   *   null when no DOCKED arm could take the write (nothing toggled — the
+   *   caller should skip its emit).
    */
   toggleStruts() {
     const docked = (this.arms || []).filter((a) => a && a.state === ARM_STATES.DOCKED);
     if (!docked.length) return null;
-    const anyDeployed = docked.some((a) => _strutLiveAlpha(a) >= Constants.OCTOPUS_V5.STRUT_OPEN_THRESHOLD);
-    // Deploy TARGET is 90° (owner 2026-10-12; Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA),
-    // not the π sweep ceiling — named once; InputManager's Period case delegates here.
-    // "Open" is past half of it (STRUT_OPEN_THRESHOLD): a strut that stops at
-    // 89.99° still reads open, so the next press closes it.
-    //
-    // PUSH-THROUGH (owner 2026-09-22: "daughter struts ... can fully open to
-    // 180 degree and fully close to stowed position"). The rest pose is 90°,
-    // but STRUT_SWEEP_MAX is already π — 90 is a resting choice, not a limit.
-    // Two taps inside STRUT_PUSH_WINDOW_MS that both land on "deploy" push the
-    // whole ring to the full 180° zenith. Measured clear on the built model
-    // (tmp/strut180-probe.mjs / tmp/strut180-neighbour.mjs): 110 mm to the
-    // radiator petals across every (α, θ) pair, 178 mm between neighbouring
-    // daughters at the converged pose, and plume-clear because the swing goes
-    // FORE, away from the aft thrusters. Nothing blocks it.
+    const V5 = Constants.OCTOPUS_V5;
+    const anyOpen = docked.some((a) => _strutLiveAlpha(a) >= V5.STRUT_OPEN_THRESHOLD);
     const now = (typeof performance !== 'undefined' && performance.now)
       ? performance.now() : Date.now();
     const doubleTap = this._lastStrutTap !== undefined
-      && now - this._lastStrutTap < Constants.OCTOPUS_V5.STRUT_PUSH_WINDOW_MS;
-    this._lastStrutTap = now;
+      && now - this._lastStrutTap < V5.STRUT_PUSH_WINDOW_MS;
 
-    if (!anyDeployed && doubleTap) {
-      this._lastStrutTap = undefined;               // one push per double-tap
-      for (const a of docked) a._strutTargetAlpha = Constants.OCTOPUS_V5.STRUT_SWEEP_MAX;
+    if (doubleTap) {
+      this._lastStrutTap = undefined;               // one 90° per double tap
+      for (const a of docked) a._strutTargetAlpha = V5.STRUT_DEPLOY_ALPHA;
       return true;
     }
 
-    const targetAlpha = anyDeployed ? 0 : Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA;
+    this._lastStrutTap = now;
+    const targetAlpha = anyOpen ? 0 : V5.STRUT_REST_ALPHA;
     for (const arm of docked) arm._strutTargetAlpha = targetAlpha;
-    return !anyDeployed;
+    return !anyOpen;
   }
 
   /**
    * Read-only: the SAME predicate toggleStruts() decides from — true while any
-   * DOCKED strut is past STRUT_OPEN_THRESHOLD, half the 90° open angle (45°; a
+   * DOCKED strut is past STRUT_OPEN_THRESHOLD, half the 34° rest angle (17°; a
    * pending latch counts, so the read flips the instant the toggle writes; the
    * REFIT chip re-reads truth, no optimism). No docked arm → false.
    * @returns {boolean}
@@ -1866,6 +1875,9 @@ export class ArmManager {
     // Task 7 (opening-dance plan) — lean-aside safety-net timeout tick.
     this._updateLeanAside(dt);
 
+    // L2: a launch held back by the keep-out gate re-checks its line here.
+    this._updateLaunchGates(dt);
+
     // z-layer fix: toggle each daughter's hull in/out of the near-field depth
     // pass by distance to the mother (runs AFTER arm.update so positions are
     // current for this frame).
@@ -2011,7 +2023,11 @@ export class ArmManager {
         for (const held of arm.heldCatches) rack += (held && held.mass) || 0;
       }
     }
-    return berthed + rack;
+    // Bags latched on the radiator tips (TipCargo) are cargo aboard too.
+    const tip = (this.playerSatellite && this.playerSatellite.tipCargo
+        && typeof this.playerSatellite.tipCargo.totalMassKg === 'function')
+      ? this.playerSatellite.tipCargo.totalMassKg() : 0;
+    return berthed + rack + tip;
   }
 
   // ── S9: strut posing — held cargo stays out of the plumes (register 32) ───
@@ -2148,11 +2164,11 @@ export class ArmManager {
   // Decision 6 (LOCKED, governing law for this task): nothing crosses or
   // tangles — tethers, struts, debris. The daughters' open pose used to be
   // 146°, which sat inside an inbound catch's berth corridor for pieces over
-  // ~0.7 m. It is now 90° (STRUT_DEPLOY_ALPHA, owner 2026-10-12): the tip is
-  // aft of the muzzle plane (tipZ ≈ −0.30 m), so no catch of any size fouls it
-  // and the open pose is never ducked. The duck still runs for a strut the
-  // player has pushed through to 180° (double tap), to 90° — the open angle,
-  // never past it.
+  // ~0.7 m. The one-press rest is now 34° (STRUT_REST_ALPHA, tip z −0.41 m) and
+  // a double tap is 90° (STRUT_DEPLOY_ALPHA, tip z ≈ −0.30 m): both tips are aft
+  // of the muzzle plane, so no catch of any size fouls them and neither is ever
+  // ducked. The duck still runs for a strut set to 180° directly (no button
+  // reaches it), to 90° — STRUT_DEPLOY_ALPHA, never past it.
 
   /**
    * Does arm `armIndex`'s CURRENT (live, `getAimAlpha()`) strut tip sit
@@ -2207,8 +2223,8 @@ export class ArmManager {
    * DOCKED arm's live strut alpha against the SAME corridor cylinder
    * `_corridorClear` uses (mirrored above); only the arms that would
    * actually foul duck to `STRUT_DEPLOY_ALPHA` (90°, the open angle). A strut
-   * at the 90° rest never fouls any catch (tip aft of the muzzle plane), so
-   * only a strut pushed past it (180°) ducks; unresolved-size pieces never
+   * at the 34° rest or 90° never fouls any catch (tip aft of the muzzle plane),
+   * so only a strut past 90° (set directly, 180°) ducks; unresolved-size pieces never
    * trigger a duck. Sole writer of `_strutTargetAlpha` for the arms it ducks,
    * for the duration of the duck only (`_releaseLeanAside` restores them to
    * `STRUT_DEPLOY_ALPHA`, the same angle).
@@ -2246,7 +2262,7 @@ export class ArmManager {
   }
 
   /**
-   * Release: restore every arm this lane ducked back to the 90° rest pose
+   * Release: restore every arm this lane ducked back to the 90° duck angle
    * (`STRUT_DEPLOY_ALPHA`). Wired to `Events.NET_BERTHED` (the plan's own
    * release event) and the "net clears/fails" events (LASSO_MISSED,
    * LASSO_SNAPPED, NET_FAILED, NET_RELEASED, NET_TORN), plus a bounded
@@ -2868,5 +2884,383 @@ export class ArmManager {
       arm.dispose();
     }
     this.arms = [];
+  }
+
+  // ==========================================================================
+  // L2 — LAUNCH LINE: nothing is fired into a part of the ship
+  // ==========================================================================
+  // Every launch path (ceremony, key D by index, free-fly, trawl, fan-out, dual
+  // fire) goes through `_launchArm` → `requestClearLaunch`. The line is the
+  // daughter's body swept 15 m along the direction she will fire, checked
+  // against the ship's REAL triangles (ShipKeepOut). Known limit: the line is
+  // not re-checked during the 1.5 s magnetic-clamp hold before the spring fires
+  // (CROSSBOW_UNDOCK_TIME) — a strut moved in that window is not caught.
+
+  /**
+   * One ShipKeepOut for this manager's ship (lazy). Null when there is no real
+   * ship (bare-ArmUnit tests, mock ships): the launch gate is then a no-op.
+   *
+   * Held-catch obstacles are supplied through `setSphereProvider`:
+   * the nose catch (CaptureNet BERTHED/COLLARED/TRANSFERRING) at its REAL radius
+   * `sizeMeter / 2` + 0.05 m of net margin — NOT the 2 m readability floor
+   * (`MOTHER_CATCH_MIN_RENDER_M` is a drawing floor, Ruling 0: physically real) —
+   * and every daughter's parked rack (`heldSlotWorldInto`). Lane l5a feeds tip
+   * bags in by extending `_heldCatchSpheres` (push `{ c: [x,y,z] ship metres,
+   * r, name, cat: 'catch' }`) or by calling `getKeepOut().setSphereProvider(fn)`
+   * with a wrapper that also returns `this._heldCatchSpheres()`.
+   * @returns {ReturnType<typeof createShipKeepOut>|null}
+   */
+  getKeepOut() {
+    const p = this.playerSatellite;
+    if (!p || typeof p.updateWorldMatrix !== 'function' || typeof p.traverse !== 'function') return null;
+    if (!this._keepOut || this._keepOutShip !== p) {
+      this._keepOut = createShipKeepOut({ player: p, armManager: this });
+      this._keepOutShip = p;
+      this._keepOut.setSphereProvider(() => this._heldCatchSpheres());
+    }
+    return this._keepOut;
+  }
+
+  /**
+   * Held catches as keep-out spheres in the SHIP frame, metres. Called by the
+   * keep-out once per query, after it has brought the matrices up to date.
+   * @returns {Array<{c:number[], r:number, name:string, cat:string}>}
+   * @private
+   */
+  _heldCatchSpheres() {
+    const out = this._catchSpheres || (this._catchSpheres = []);
+    out.length = 0;
+    const p = this.playerSatellite;
+    if (!p || !p.matrixWorld) return out;
+    const inv = this._koInv || (this._koInv = new THREE.Matrix4());
+    const v = this._koVec || (this._koVec = new THREE.Vector3());
+    inv.copy(p.matrixWorld).invert();
+    const push = (worldScene, radiusM, name) => {
+      v.copy(worldScene).applyMatrix4(inv).multiplyScalar(1 / M);
+      out.push({ c: [v.x, v.y, v.z], r: radiusM, name, cat: 'catch' });
+    };
+
+    // The nose catch held by the mother net.
+    const CN = Constants.CAPTURE_NET;
+    const cns = p._captureNetSystem;
+    const nets = cns && Array.isArray(cns.activeNets) ? cns.activeNets : null;
+    if (nets && CN && CN.STATES) {
+      const S = CN.STATES;
+      for (const net of nets) {
+        if (!net || !net._isMother) continue;
+        if (net.state !== S.BERTHED && net.state !== S.COLLARED && net.state !== S.TRANSFERRING) continue;
+        const d = net.targetDebris;
+        if (!d || !d._scenePosition) continue;
+        push(d._scenePosition, (d.sizeMeter || 2) / 2 + 0.05, 'nose catch');
+      }
+    }
+
+    // Bags held on the radiator tips (lane l5b-wire). Raw bag radius, no net margin: the measured
+    // hand-off clearances (tmp/probes/leash/multi2) are against the bag itself.
+    const tc = p.tipCargo;
+    if (tc && typeof tc.count === 'function' && tc.count() > 0) {
+      for (const sp of tc.spheres()) {
+        out.push({ c: [sp.c.x, sp.c.y, sp.c.z], r: sp.r, name: `tip bag ${sp.name.split('_')[1]}`, cat: 'catch' });
+      }
+    }
+
+    // Pieces parked on a daughter's rack.
+    const slot = this._koSlot || (this._koSlot = new THREE.Vector3());
+    for (let i = 0; i < this.arms.length; i++) {
+      const arm = this.arms[i];
+      const held = arm && arm.heldCatches;
+      if (!held || held.length === 0 || typeof arm.heldSlotWorldInto !== 'function') continue;
+      for (let k = 0; k < held.length; k++) {
+        const d = held[k];
+        if (!d) continue;
+        const size = d.sizeMeter || 1;
+        arm.heldSlotWorldInto(k, size, p.position, slot);
+        push(slot, size / 2 + 0.05, `rack catch ${i}`);
+      }
+    }
+    return out;
+  }
+
+  /** Ship-frame unit vector: origin → strut tip of `arm` (what free-fly / trawl fire along). @private */
+  _dockDirShip(arm) {
+    return arm.dockOffset.clone().normalize();
+  }
+
+  /** Ship-frame unit vector along the arm's CURRENT strut (what deploy() fires along after the aim ceremony). @private */
+  _strutDirShip(arm) {
+    const az = Math.atan2(arm.dockOffset.y, arm.dockOffset.x);
+    return strutLocalDirection(arm.getAimAlpha(), az, new THREE.Vector3()).normalize();
+  }
+
+  /** World (scene) direction → ship frame. @private */
+  _worldToShipDir(vec) {
+    const q = this.playerSatellite && this.playerSatellite.quaternion;
+    const out = new THREE.Vector3(vec.x, vec.y, vec.z);
+    if (q) out.applyQuaternion(q.clone().invert());
+    return out.normalize();
+  }
+
+  /**
+   * The direction `ArmUnit.deploy(target)` will fire along, in the ship frame:
+   * the converged strut after an aim ceremony, else the direct bearing to the
+   * target, else (no target position) the dock direction.
+   * @private
+   */
+  _launchDirShip(arm, target) {
+    const tp = target && target._scenePosition;
+    if (!tp) return this._dockDirShip(arm);
+    if (arm._aimConverged) return this._strutDirShip(arm);
+    return this._worldToShipDir(new THREE.Vector3(tp.x - arm.position.x, tp.y - arm.position.y, tp.z - arm.position.z));
+  }
+
+  /** Trawl direction (world, optional) in the ship frame. @private */
+  _trawlDirShip(arm, direction) {
+    return direction ? this._worldToShipDir(direction) : this._dockDirShip(arm);
+  }
+
+  /**
+   * Launch `arm` at `target` (deploy) or free-fly (no target) through the gate.
+   * @private
+   */
+  _launchTargetOrFree(arm, target) {
+    return target
+      ? this._launchArm(arm, 'target', () => this._launchDirShip(arm, target), () => arm.deploy(target))
+      : this._launchArm(arm, 'freefly', () => this._dockDirShip(arm), () => arm.deployFreefly());
+  }
+
+  /**
+   * The ONE seam every ArmManager launch call site goes through.
+   * @param {ArmUnit} arm
+   * @param {string} mode — 'ceremony' | 'target' | 'freefly' | 'trawl' (for diagnostics)
+   * @param {() => THREE.Vector3} getDirShip — fire direction in the SHIP frame, re-derived each call
+   * @param {() => boolean} fire — the real ArmUnit call
+   * @returns {boolean} true when the launch fired or was accepted (deferred); false when refused
+   * @private
+   */
+  _launchArm(arm, mode, getDirShip, fire) {
+    const i = this.arms.indexOf(arm);
+    if (i < 0) return !!fire();
+    return this.requestClearLaunch(i, getDirShip, fire, mode);
+  }
+
+  /**
+   * Capsule from the daughter's body centre along `dirShip` for 15 m, radius =
+   * her own half-width across that direction (measured from her mesh), ignoring
+   * herself, her strut and her own rack. Reports every part the capsule touches.
+   * @param {number} armIndex
+   * @param {{x:number,y:number,z:number}|number[]} dirShip — ship frame, need not be unit
+   * @returns {{blocked:boolean, part:string, cat:string, name:string, hits:Array<{name:string,cat:string,gap:number}>}}
+   */
+  launchLineBlocked(armIndex, dirShip) {
+    const none = { blocked: false, part: '', cat: '', name: '', hits: [] };
+    const ko = this.getKeepOut();
+    const arm = this.arms[armIndex];
+    if (!ko || !arm || !dirShip) return none;
+    const raw = Array.isArray(dirShip) ? dirShip : [dirShip.x, dirShip.y, dirShip.z];
+    const len = Math.hypot(raw[0], raw[1], raw[2]);
+    if (!(len > 1e-9)) return none;
+    const d = [raw[0] / len, raw[1] / len, raw[2] / len];
+
+    const body = ko.measureCat('dau' + armIndex, d);
+    let c, r;
+    if (body.n > 0) {
+      c = body.centre; r = body.halfWidth;
+    } else {                                   // no mesh to measure: tip + table size
+      c = [arm.dockOffset.x / M, arm.dockOffset.y / M, arm.dockOffset.z / M];
+      r = Math.max(...(arm.config.bodyDims || [0.4])) / 2;
+    }
+    const L = 15;
+    const res = ko.segment(c, [c[0] + d[0] * L, c[1] + d[1] * L, c[2] + d[2] * L], r, {
+      hits: true,
+      ignore: ['dau' + armIndex, 'strut' + armIndex, 'rack catch ' + armIndex],
+    });
+    if (!res.hits || res.hits.length === 0) return none;
+    const h = res.hits[0];
+    return { blocked: true, part: this._plainPart(h), cat: h.cat, name: h.name, hits: res.hits };
+  }
+
+  /** Plain-words name of a blocking part, for the comms line. @private */
+  _plainPart(h) {
+    const cat = (h && h.cat) || '';
+    if (cat === 'wing') return 'a solar wing';
+    if (cat === 'rad') return 'a radiator';
+    if (cat === 'catch') return /^nose catch/.test(h.name || '') ? 'the catch at the nose' : 'a held catch';
+    if (/^(strut|dau)\d+$/.test(cat)) return 'another strut';
+    return 'the hull';
+  }
+
+  /**
+   * Can the blockers on arm `i`'s line be moved out of the way by opening
+   * struts to the open angle (90°)? Two cures exist:
+   *   - another strut/daughter in the line: that arm is DOCKED, not held by the
+   *     lean-aside duck, and not already at the open angle → open IT;
+   *   - anything else (hull, nose, radiator, wing, held catch): the launching
+   *     strut itself is below the open angle (the 0° park) → open IT, since the
+   *     line is re-derived from the open pose. If the part is STILL in the way
+   *     once the strut has arrived (own strut no longer movable), the launch is
+   *     refused with that part's line.
+   * The plan's literal rule only opened the own strut for the hull; the owner's
+   * wording ("open ... struts to 90 or as needed") and the measured park
+   * geometry (a 0° strut's line crosses folded radiators too) made that
+   * too strict — logged in tmp/plans/l2-keepout.md.
+   * @private
+   */
+  _launchVerdict(i, dirShip, mode) {
+    const res = this.launchLineBlocked(i, dirShip);
+    if (!res.blocked) return { blocked: false, fixable: true, open: [], openOwn: false, part: '', cat: '', hits: [] };
+    const arm = this.arms[i];
+    const openAlpha = Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA;
+    const tol = Math.PI / 180;
+    const lean = this._leanAsideArmIndices;
+    const ownLive = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : openAlpha;
+    // A ceremony launch fires along the strut she has just aimed: her own strut is never
+    // moved for it (a wing, radiator, catch or the hull in that line refuses, with its line).
+    const ownMovable = mode !== 'ceremony' && ownLive < openAlpha - tol && !lean.has(i)
+      && typeof arm.setAimAlpha === 'function';
+    const open = new Set();
+    let openOwn = false;
+    let stuck = null;
+    for (const h of res.hits) {
+      const m = /^(strut|dau)(\d+)$/.exec(h.cat);
+      const n = m ? +m[2] : -1;
+      const o = n >= 0 ? this.arms[n] : null;
+      if (o && n !== i && o.state === ARM_STATES.DOCKED && !lean.has(n)
+          && typeof o.getAimAlpha === 'function' && Math.abs(o.getAimAlpha() - openAlpha) > tol) {
+        open.add(n);
+      } else if (ownMovable) {
+        openOwn = true;
+      } else if (!stuck) {
+        stuck = h;
+      }
+    }
+    const shown = stuck || res.hits[0];
+    return {
+      blocked: true, fixable: !stuck, open: [...open], openOwn,
+      part: this._plainPart(shown), cat: shown.cat, name: shown.name, hits: res.hits,
+    };
+  }
+
+  /** Command the struts a blocked line needs open to the open angle (90°). @private */
+  _openForLaunch(i, verdict) {
+    const openAlpha = Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA;
+    for (const n of verdict.open) {
+      const o = this.arms[n];
+      if (o && o.state === ARM_STATES.DOCKED && !this._leanAsideArmIndices.has(n)) o._strutTargetAlpha = openAlpha;
+    }
+    if (verdict.openOwn) {
+      const a = this.arms[i];
+      if (a && !this._leanAsideArmIndices.has(i)) {
+        a._strutTargetAlpha = openAlpha;
+        const p = this._pendingLaunches && this._pendingLaunches.get(i);
+        if (p) p.openedOwn = true;
+      }
+    }
+  }
+
+  /** No fire: one comms line + one event. @private */
+  _launchHeld(i, verdict, reason) {
+    const arm = this.arms[i];
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `Launch held: ${verdict.part} is in the way.`, priority: 'warning',
+    });
+    eventBus.emit(Events.ARM_LAUNCH_HELD, {
+      armIndex: i, armId: arm ? arm.id : null, part: verdict.part, cat: verdict.cat, reason,
+    });
+  }
+
+  /** Forget a pending launch and give back the arm reservation we took. @private */
+  _dropPendingLaunch(i) {
+    const pend = this._pendingLaunches;
+    const p = pend && pend.get(i);
+    if (!p) return;
+    pend.delete(i);
+    const arm = this.arms[i];
+    if (arm && p.reservedByUs) arm._aimReserved = false;
+  }
+
+  /**
+   * Gate a launch on a clear line. Clear → `fire()` now (same frame as before
+   * the gate existed). Blocked only by what opening struts can clear → open them,
+   * keep ONE pending launch (arm reserved) that re-checks every update() and
+   * fires when clear, giving up after 8 s. Any other blocker → no fire. With no
+   * real ship the gate is a no-op. A checker error fails OPEN (the launch fires):
+   * a broken check must not strand the fleet.
+   * @param {number} armIndex
+   * @param {() => THREE.Vector3} getDirShip — ship-frame fire direction, re-derived every check
+   * @param {() => boolean} fire
+   * @param {string} [mode] — launch mode ('ceremony' never moves her own strut)
+   * @returns {boolean} fired, or accepted and waiting (true); refused (false)
+   */
+  requestClearLaunch(armIndex, getDirShip, fire, mode) {
+    const arm = this.arms[armIndex];
+    if (!arm || !this.getKeepOut()) return !!fire();
+    const pend = this._pendingLaunches || (this._pendingLaunches = new Map());
+    if (pend.has(armIndex)) return true;
+
+    let v;
+    try {
+      const dir = getDirShip();
+      v = dir ? this._launchVerdict(armIndex, dir, mode) : { blocked: false };
+    } catch (err) {
+      if (!this._keepOutWarned) { this._keepOutWarned = true; console.warn('[ArmManager] launch-line check failed; launching unchecked:', err); }
+      v = { blocked: false };
+    }
+    if (!v.blocked) return !!fire();
+    if (!v.fixable) { this._launchHeld(armIndex, v, 'blocked'); return false; }
+
+    const reservedByUs = !arm._aimReserved;
+    arm._aimReserved = true;
+    pend.set(armIndex, { armIndex, getDirShip, fire, mode, t: 0, stateTimer: arm.stateTimer || 0, reservedByUs });
+    this._openForLaunch(armIndex, v);
+    return true;
+  }
+
+  /**
+   * Per-update tick for launches the gate is holding: cancel when the arm has
+   * left DOCKED (or was reset), safe mode started, or the arm bus is off; fire
+   * when the line is clear; keep the needed struts opening; give up after 8 s or
+   * as soon as the remaining blocker is one opening cannot clear.
+   * @param {number} dt
+   * @private
+   */
+  _updateLaunchGates(dt) {
+    const pend = this._pendingLaunches;
+    if (!pend || pend.size === 0) return;
+    for (const [i, p] of [...pend]) {
+      const arm = this.arms[i];
+      // reset() zeroes stateTimer, which otherwise only grows while DOCKED.
+      if (!arm || arm.state !== ARM_STATES.DOCKED || (arm.stateTimer || 0) < p.stateTimer - 1e-6) {
+        this._dropPendingLaunch(i);
+        continue;
+      }
+      if (this.playerSatellite && this.playerSatellite.safeMode) {
+        this._dropPendingLaunch(i);
+        eventBus.emit(Events.COMMS_MESSAGE, { text: 'Launch cancelled: safe mode.', priority: 'warning' });
+        continue;
+      }
+      if (powerDistribution.armMultiplier <= 0) {
+        this._dropPendingLaunch(i);
+        eventBus.emit(Events.COMMS_MESSAGE, { text: 'Launch cancelled: daughter power is off.', priority: 'warning' });
+        continue;
+      }
+      p.t += dt;
+      p.stateTimer = arm.stateTimer || 0;
+      let v;
+      try {
+        const dir = p.getDirShip();
+        v = dir ? this._launchVerdict(i, dir, p.mode) : { blocked: false };
+      } catch (err) { v = { blocked: false }; }
+      if (!v.blocked) {
+        this._dropPendingLaunch(i);
+        // The gate opened her strut to clear her line: it stops where the line cleared, so she never
+        // floats off a strut that keeps swinging towards the full-open angle (owner: "to 90 or as needed").
+        if (p.openedOwn && typeof arm.getAimAlpha === 'function') arm._strutTargetAlpha = arm.getAimAlpha();
+        p.fire();
+        continue;
+      }
+      if (!v.fixable) { this._dropPendingLaunch(i); this._launchHeld(i, v, 'blocked'); continue; }
+      if (p.t >= 8) { this._dropPendingLaunch(i); this._launchHeld(i, v, 'timeout'); continue; }
+      this._openForLaunch(i, v);
+    }
   }
 }

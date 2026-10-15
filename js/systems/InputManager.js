@@ -842,8 +842,10 @@ export class InputManager {
             }
           } else {
             const deploying = d.player.toggleFlowerDeploy();
-            d.audioSystem?.playClick();
-            eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
+            // null = radiators held for the catch hand-off: the ship already said so, announce nothing.
+            const held = deploying === null;
+            if (!held) d.audioSystem?.playClick();
+            if (!held) eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
             // A double tap that PUSHED THROUGH (to 180°, or past CLOSED into
             // the launch fold) is narrated by the ship itself, and the plain
             // line would then be false ("…opening to 146°" while heading for
@@ -851,7 +853,7 @@ export class InputManager {
             // clears its own `_lastFlowerTap` on exactly that branch.
             const pushedThrough = Object.prototype.hasOwnProperty.call(d.player, '_lastFlowerTap')
               && d.player._lastFlowerTap === undefined;
-            if (!pushedThrough) {
+            if (!pushedThrough && !held) {
               eventBus.emit(Events.COMMS_MESSAGE, {
                 sender: 'THERMAL',
                 text: deploying
@@ -1082,12 +1084,14 @@ export class InputManager {
           const selArm = (am && selIdx >= 0) ? am.arms[selIdx] : null;
           const target = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
           let deployedOk = false;
+          let launchedByIndex = false;
           if (selArm && selArm.state === Constants.ARM_STATES.DOCKED) {
             // deployArmByIndex + arm.deploy/deployFreefly already emit a specific
             // refusal comms on every reachable failure (spring/fuel/power/
             // safe-mode/mass); the only silent path (not-DOCKED) is guarded
             // above, so no extra backstop is needed here.
             deployedOk = am.deployArmByIndex(selIdx, target);
+            launchedByIndex = true;
           } else {
             d.deployArm();   // auto-pick best docked arm (backstops its own refusals)
             deployedOk = true;
@@ -1095,10 +1099,16 @@ export class InputManager {
           // Notify tutorial / discovery before the ceremony for ordering.
           eventBus.emit(Events.TUTORIAL_DEPLOY_INPUT);
           if (deployedOk && am) {
-            const deployed = am.arms.filter(a =>
-              a.state !== 'DOCKED' && a.state !== 'EXPENDED' &&
-              a.state !== 'RETURNING' && a.state !== 'DOCKING'
-            );
+            // L2: a launch the keep-out gate is holding back (or the aim ceremony,
+            // which emits its own LAUNCH_CEREMONY_START when it fires) leaves the
+            // selected daughter DOCKED for now — announce only a launch that has
+            // happened, and only for the daughter that was actually selected.
+            const deployed = launchedByIndex
+              ? (selArm.state !== 'DOCKED' ? [selArm] : [])
+              : am.arms.filter(a =>
+                a.state !== 'DOCKED' && a.state !== 'EXPENDED' &&
+                a.state !== 'RETURNING' && a.state !== 'DOCKING'
+              );
             if (deployed.length > 0) {
               const arm = deployed[deployed.length - 1];
               eventBus.emit(Events.COMMS_MESSAGE, {
@@ -1298,10 +1308,9 @@ export class InputManager {
         } else if (isGameplay && d.armManager) {
           // ONE copy of the strut law. This case used to duplicate
           // ArmManager.toggleStruts()'s latch/guard inline, which is exactly
-          // the shape that rots: the 2026-09-22 push-through (double-tap to the
-          // full 180° zenith, STRUT_PUSH_WINDOW_MS) would have had to be
-          // written twice and would have drifted the first time one copy was
-          // edited. Delegate; the geometry and the double-tap timer live there.
+          // the shape that rots. Delegate; the angles (one press 34°, a quick
+          // second press 90°, the next press 0°) and the double-tap timer
+          // (STRUT_PUSH_WINDOW_MS) live there.
           d.armManager.toggleStruts();
           d.audioSystem?.playClick();
           // Delegation 2 onboarding (2026-05-31): notify the OnboardingDirector.
@@ -2213,7 +2222,9 @@ export class InputManager {
     const _skGuardArm = this.armPilotMode && d.cameraSystem?.getPilotedArm();
     const _inStationKeep = _skGuardArm && _skGuardArm.state === Constants.ARM_STATES.STATION_KEEP;
 
-    if (!apEngaged && !_inStationKeep) {
+    // A scripted whole-ship turn (leash hand-off) locks the arrows out: they take the
+    // else branch below — no MOTHER_MANUAL_ROTATE, no commandAttitude (no gas, no plumes).
+    if (!apEngaged && !_inStationKeep && !d.autopilotSystem?.isTurning?.()) {
       // Phase 3: attitude is now rate-commanded through the rigid-body integrator.
       // Derive per-axis input (+1/0/−1), emit the manual-rotate cancel on a fresh
       // press, pass the tether lock tier, and hand off to commandAttitude — the
@@ -2264,7 +2275,7 @@ export class InputManager {
       if (rcsLevel > 0) d.audioSystem.startRcsHiss?.(rcsLevel);
       else d.audioSystem.stopRcsHiss?.();
     } else {
-      // AP / station-keep active: drop the held-key record so re-enabling manual
+      // AP / station-keep / scripted turn active: drop the held-key record so re-enabling manual
       // control can't fire a phantom command from a stale "held" state.
       this._prevArrowKeys = null;
       // Autopilot/station-keep owns attitude — the manual RCS hiss must not stick.

@@ -326,6 +326,19 @@ const WELCOME_FIELD = [
  *  game time; with a 10 s dwell (Constants.MISSIONS.RESEAT.DWELL_S) a 2 s
  *  cadence resolves the dwell in 5 steps at a fraction of the per-frame cost. */
 const RESEAT_SCAN_PERIOD_S = 2;
+/** A welcome piece this close to the ship is never re-seated (holds even if RESEAT.DIST_M is retuned below it). */
+const RESEAT_NEVER_WITHIN_M = 100;
+/** True when any live net in the registry (`activeNets`) targets or holds `debris`. */
+function netHoldsPiece(src, debris) {
+  const nets = src && src.activeNets;
+  if (!Array.isArray(nets)) return false;
+  for (const net of nets) {
+    if (!net || net.isActive === false) continue;
+    const t = net.targetDebris;
+    if (t && (t === debris || (t.id != null && t.id === debris.id))) return true;
+  }
+  return false;
+}
 
 /** The HOUSTON line posted once per re-seat scan that moved a single piece
  *  (plain ASCII; muted at suppression tier 0 by design — there the reticle
@@ -593,6 +606,13 @@ export class DebrisField {
     this._reseatGuard = null;
     /** @type {number} real seconds since the last re-seat scan */
     this._reseatScanS = 0;
+    /** @type {{x:number,y:number,z:number}|null} ship position as of the PREVIOUS
+     *  update call — the same step the pieces' last _scenePosition is from */
+    this._reseatPrevShip = null;
+    this._reseatHasPrev = false;
+    /** @type {{activeNets?: object[]}|null} optional mother-net registry
+     *  (CaptureNetSystem) — see setReseatNetSource */
+    this._reseatNetSource = null;
 
     // ST-4.C: Mission profile state
     /** @type {object|null} Current mission profile from Constants.MISSIONS.PROFILES */
@@ -4358,6 +4378,17 @@ export class DebrisField {
   }
 
   /**
+   * Install the mother-net registry (an object with an `activeNets` array, i.e.
+   * the CaptureNetSystem) so the re-seat safety net never moves a piece any
+   * live net is flying at or holding (net.targetDebris). DebrisField cannot
+   * import CaptureNet (cycle), so it is handed in. Absent = "no net busy".
+   * @param {{activeNets?: object[]}|null} src
+   */
+  setReseatNetSource(src) {
+    this._reseatNetSource = (src && typeof src === 'object') ? src : null;
+  }
+
+  /**
    * Re-seat a LOST welcome piece onto its cone-fan slot ahead of the mother.
    *
    * This is a TELEPORT, and it is gated hard — every clause must hold:
@@ -4410,6 +4441,19 @@ export class DebrisField {
    */
   _reseatDriftedWelcome(playerPos, playerOrbit, dt, gameDt = TimeAuthority.baseGameDt(dt)) {
     if (!playerPos || !playerOrbit) return 0;
+    // Consistent frame: pieces' _scenePosition was written by the PREVIOUS
+    // update's propagation loop, i.e. at the previous step's time — the ship
+    // position handed to that call. Measure against it, not this frame's
+    // post-step playerPos (one 0.1 s x10 frame moves the ship ~7.7 km, so a
+    // piece 9 m away read as "far"). Cached on every call, before any early
+    // return, so it is always exactly one update old.
+    const prev = this._reseatPrevShip || (this._reseatPrevShip = { x: 0, y: 0, z: 0 });
+    const hadPrev = this._reseatHasPrev === true;
+    const refX = hadPrev ? prev.x : playerPos.x;
+    const refY = hadPrev ? prev.y : playerPos.y;
+    const refZ = hadPrev ? prev.z : playerPos.z;
+    prev.x = playerPos.x; prev.y = playerPos.y; prev.z = playerPos.z;
+    this._reseatHasPrev = true;
     if (!this.isGuidedChapter()) return 0;
     const cfg = Constants.MISSIONS.RESEAT;
     if (!cfg) return 0;
@@ -4423,6 +4467,8 @@ export class DebrisField {
 
     const farScene = cfg.DIST_M * METRE_SCENE;
     const farSq = farScene * farScene;
+    const nearScene = RESEAT_NEVER_WITHIN_M * METRE_SCENE;
+    const nearSq = nearScene * nearScene;
     let reseated = 0;
     let frameCompRad = null; // computed lazily — most scans move nothing
 
@@ -4436,11 +4482,18 @@ export class DebrisField {
         debris._reseatFarS = 0;
         continue;
       }
+      // Any net (mother registry, or a daughter committed/drifting in its net)
+      // targeting or holding the piece: never ours to move.
+      if (debris._netted || debris._committedNetArmId != null || netHoldsPiece(this._reseatNetSource, debris)) {
+        debris._reseatFarS = 0;
+        continue;
+      }
       const sp = debris._scenePosition;
       if (!sp) continue; // never positioned yet — nothing to measure
-      const dx = sp.x - playerPos.x, dy = sp.y - playerPos.y, dz = sp.z - playerPos.z;
+      const dx = sp.x - refX, dy = sp.y - refY, dz = sp.z - refZ;
       const distSq = dx * dx + dy * dy + dz * dz;
-      if (distSq <= farSq) {
+      // Never re-seat a piece within RESEAT_NEVER_WITHIN_M of the ship.
+      if (distSq <= nearSq || distSq <= farSq) {
         debris._reseatFarS = 0;
         continue;
       }

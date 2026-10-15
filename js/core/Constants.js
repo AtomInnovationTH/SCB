@@ -1656,31 +1656,32 @@ export const Constants = {
     STRUT_SWEEP_MAX: Math.PI,      // rad (180°) — the RANGE; unchanged by the opening-dance plan
     STRUT_SLEW_RATE: 15 * Math.PI / 180, // rad/s (15°/s — slowed 50% so new players can see strut deploy)
 
-    // The "." strut toggle's deploy TARGET and the pose the daughters rest at:
-    // 90° from the tail — straight out sideways (owner 2026-10-12: "146 for
-    // daughter cause interference with captured debris from other net, bad.
-    // try so... try 90"; it was 146° from the opening-dance plan, decision 5,
-    // 2026-09-16). Named once here; ArmManager.toggleStruts() reads it.
+    // The "." strut toggle has two angles, both measured from the tail
+    // (0° along the hull toward the tail, 90° straight out, 180° along the nose).
+    // STRUT_REST_ALPHA: ONE press opens here, 34° — swept back from the nose at
+    // the radiators' angle, mirrored (radiators are 146° from the nose; owner
+    // 2026-10-14: "try daughter struts at swept back ... opposite 146 degree",
+    // "I said 146 but meant 34"). Measured (tmp/probes/strut34/): tips z -0.41,
+    // 1.34 m off axis, never fouls the 1.30 m catch plane; strut-to-radiator
+    // >= 51 mm over the whole radiator sweep, hull 176 mm, neighbours 305 mm;
+    // swing 0->34 2.27 s, 136 J for four struts.
+    STRUT_REST_ALPHA: 34 * Math.PI / 180, // rad (34°)
+    // STRUT_DEPLOY_ALPHA: a DOUBLE TAP opens to 90°, straight out sideways; it is
+    // also the catch-duck angle (ArmManager duck target/release). Was the single-
+    // press target 2026-10-12 and 146° before that (opening-dance plan, 2026-09-16).
+    // Measured: at 90° the tip is aft of the muzzle plane (z 1.0 vs 1.30), so no
+    // catch of any size can touch it; swing 34->90 3.73 s, 224 J.
     // STRUT_SWEEP_MAX above is untouched — the RANGE stays [0, π].
-    // Measured (tmp/probes/strut-angle/pa2.mjs, 2026-10-12): at 90° the tip is
-    // aft of the muzzle plane (z 1.0 vs 1.30), so no catch of any size can touch
-    // it; clearances 175 mm to the wing clamp drum, 53.5 mm to the radiator
-    // closed (2°), 280 mm hull, 306 mm neighbour; swing 0→90° 5.97 s, 358 J.
     STRUT_DEPLOY_ALPHA: 90 * Math.PI / 180, // rad (90°)
-    // "Open" means past HALF the open angle (45°): a strut that arrives at
-    // 89.99° — or is stopped short — still reads open, so the toggle closes it
-    // and the DAUGHTERS pane gate opens. Read by ArmManager.strutsDeployed() and
-    // toggleStruts(); derived so it cannot drift from the open angle.
-    get STRUT_OPEN_THRESHOLD() { return this.STRUT_DEPLOY_ALPHA / 2; },
-    // Push-through window (owner 2026-09-22: struts "can fully open to 180
-    // degree and fully close to stowed position"). 90° is the RESTING pose,
-    // not a limit — STRUT_SWEEP_MAX above has always been π. Two "." taps
-    // inside this window that both land on "deploy" drive the ring to the full
-    // 180° zenith; the same key still closes all the way to 0. Matches the
-    // radiator's VENT_DOUBLE_TAP_MS so one gesture means one thing everywhere.
-    // Measured clear: 110 mm to the radiator petals over every (α, θ) pair,
-    // 178 mm between neighbouring daughters at the converged pose, plume-clear
-    // (the swing goes fore, away from the aft thrusters).
+    // "Open" means past HALF the rest angle (17°): a strut that arrives at
+    // 33.99° — or is stopped short — still reads open, so the toggle closes it
+    // and the DAUGHTERS pane gate opens from the first press. Read by
+    // ArmManager.strutsDeployed() and toggleStruts(); derived so it cannot drift.
+    get STRUT_OPEN_THRESHOLD() { return this.STRUT_REST_ALPHA / 2; },
+    // Double-tap window: a second "." press inside it opens to STRUT_DEPLOY_ALPHA
+    // (90°) whatever the first press did; no tap sequence targets 180° (the range
+    // allows it, the button does not — owner 2026-10-14). Matches the radiator's
+    // VENT_DOUBLE_TAP_MS so one gesture means one thing everywhere.
     STRUT_PUSH_WINDOW_MS: 600,
 
     // ── Recoil Safety (NEW — ST-9.3 C-3) ──
@@ -2489,6 +2490,12 @@ export const Constants = {
     // OFF = byte-identical legacy (the whole body rides the collar until the
     // furnace takes it, or jettison [K]).
     CUT_AT_NOSE:              true,
+
+    // Leash hand-off (lane l5b-wire; docs/research/2026-10-leash.md, DECISIONS §1):
+    // a small mother catch (radius <= 0.50 m) leaves the nose on its own leash and
+    // is reeled onto a radiator tip (js/systems/LeashDriver.js). OFF = the catch
+    // goes by today's flight to a daughter's rack (CaptureNetSystem._updateCargoTransfer).
+    LEASH_HANDOFF:            true,
   },
 
   // ============================================================================
@@ -3895,6 +3902,40 @@ export const Constants = {
     //   WRAP_SEAT_FRAC = 4.0 × 2 × 0.85 × 0.42 = 2.856 —
     // pinned by test so the derivation cannot drift from the drawn bag.
     ADOPT_CATCH_SEAT_M:   2.856,
+    // l8-reel-collar (DECISIONS §25, owner 2026-10-15: "debris should be reeled-in
+    // firm against docking collar"): the reel goes ALL THE WAY to the collar —
+    // no 1.0 m standoff, no parked seat. HOME = the catch centre on the collar
+    // axis: max(RING_TOUCH_Z_M + r, clearZ(r)), clearZ(r) the smallest bag-centre
+    // z that clears every ship part by CLEARANCE_M (ShipKeepOut, measured once
+    // per catch at reel entry; tmp/probes collar/RESULTS.md: 1.390 … 1.828 for
+    // r 0.10 … 0.50). That table is the same at every radiator angle 0-180°
+    // ONLY for r <= 0.5 (small catches). A bigger bag is not: its home moves with
+    // the radiator angle (measured, r 1.0: z 2.340 at 146°, 2.466 at 3°, and the
+    // strut tip cone sets 0 clearance) — so for r > 0.5 the single query at reel
+    // entry is the home for THAT angle only. Big catches (a later boss level,
+    // owner 2026-10-15) are OPEN: the plan's Fix round 1 log carries the case.
+    // BERTH_CLEARANCE_M above stays as the CORRIDOR / queue-spacing radius only.
+    REEL_HOME: {
+      RING_TOUCH_Z_M:   1.32,   // ship-local z of the ring's fore face: a bag of radius r touches it at 1.32 + r
+      CLEARANCE_M:      0.02,   // bag surface to every ship part at home (owner rule)
+      SEARCH_TOP_Z_M:   4.5,    // the keep-out sweep starts here and walks down the axis
+      SEARCH_STEP_M:    0.05,   // sweep step before the bisection
+      BISECT_M:         0.001,  // bisection stops at 1 mm
+      MAX_ABOVE_TOUCH_M: 2.0,   // a clearZ more than this above ring-touch is a bad query: fall back to ring-touch
+      APEX_AT_RING_M:   0.02,   // the bag's mouth (the tether end) sits this far fore of the collar plane at home = the ring's fore face
+      // Speed profile for the CATCH centre (the nominal speed is the net class reel speed): full speed, then a
+      // constant-deceleration (DECEL_MPS2, an estimate) slow-down that reaches SLOW_MPS at SLOW_ZONE_M from home and
+      // holds it to arrival.
+      SLOW_ZONE_M:      0.30,
+      SLOW_MPS:         0.08,   // <= 0.10 m/s arrival and in the last 0.30 m (LATCH_ALIGNED_MPS class contact speed)
+      DECEL_MPS2:       1.0,    // m/s^2 — estimate: 2 m/s -> 0.08 m/s over ~2 m
+      DECEL_LEAD_M:     0.10,   // the slow-down reaches SLOW_MPS this much BEFORE the slow zone, so a frame that straddles its edge is already slow
+      // Drawn size (D3): the net-held readability floor applies at >= FLOOR_FAR_M from the collar, eases to the true
+      // size by FLOOR_NEAR_M (smoothstep). Per frame the drawn size never moves more than FLOOR_MAX_STEP_FRAC of the floor.
+      FLOOR_FAR_M:      20,
+      FLOOR_NEAR_M:     3,
+      FLOOR_MAX_STEP_FRAC: 0.15,
+    },
     // Securing ceremony: after NET_BERTHED the catch sits at the launcher for
     // this long while Houston reads the mass, then CATCH_PROCESSED fires with
     // source:'mother' (score + salvage + clearDebris + autosave via the
@@ -4514,6 +4555,83 @@ export const Constants = {
                                     // invisible; now ~6% — the settle reads)
       DRAPE_JIGGLE_CINCH_FRAC:   0.06,  // mouthRadius × this — V7 rescale (was 0.02)
       DRAPE_JIGGLE_HZ:           2.5,   // settle-jiggle rate
+    },
+  },
+
+  // --- Leash hand-off (mother nose -> radiator tip) -----------------------
+  // docs/research/2026-10-leash.md + DECISIONS §1/§19. Used by
+  // js/systems/LeashTransfer.js (pure; the wiring lane reads it, nothing else).
+  // Each number carries its source; "estimate" = no measured source.
+  // Metres, seconds, newtons, kg.
+  LEASH: {
+    // Ship turn (the turn itself belongs to the autopilot; passed through)
+    TURN_MAX_RATE_DEG:   5,      // °/s peak — tmp/research/leash/turn-dynamics.md
+    TURN_ACCEL_DEG:      2,      // °/s² ramp — turn-dynamics.md
+    // Reel
+    REEL_SPEED_MPS:      0.05,   // estimate; <= LATCH_ALIGNED_MPS (arrival speed = reel speed)
+    REEL_ACCEL_MPS2:     0.05,   // estimate; TSS-1 ramped the reel (NTRS 19970011947)
+    PAYOUT_PUSH_MPS:     0.02,   // estimate (separation spring)
+    PAYOUT_MAX_MPS:      0.25,   // clutch cap; peak line demand 0.113 m/s in a 5°/s turn (reviewer probe)
+    TAKEUP_MPS:          0.05,   // estimate
+    BACK_TENSION_PER_KG: 5e-4,   // N/kg — estimate (line never slack, TSS); bag drifts <= 0.05 m over a turn
+    BACK_TENSION_MAX_N:  0.2,    // N — estimate
+    // The line: one pull-only soft constraint (Box2D "soft step")
+    LINE_RADIUS_M:       0.005,  // estimate
+    LINE_FREQ_HZ:        1,      // 1-D probe tmp/research/leash/probe2.mjs: stable at dt 0.02-1 s
+    LINE_DAMPING:        1,      // critically damped
+    // Snag
+    SNAG_TENSION_N:      5,      // DECISIONS §1 "a few newtons"
+    SNAG_MEAN_S:         0.25,   // s — mean tension window
+    // Latch (swivel cone at the radiator tip)
+    LATCH_OK_MPS:        0.03,   // Orbital Express capture <= 3 cm/s
+    LATCH_ALIGNED_MPS:   0.10,   // IDSS IDD Rev A Table 3-1 (5-10 cm/s, 5°)
+    LATCH_ALIGN_DEG:     5,      // IDSS IDD Rev A Table 3-1
+    FUNNEL_MOUTH_R_M:    0.06,   // estimate
+    RESTITUTION:         0.5,    // estimate, no measured source
+    MAX_BOUNCES:         3,      // DECISIONS §19
+    CATCH_TOL_M:         0.05,   // estimate: latch point to the line, at the end of the turn
+    // Hand-off geometry
+    D_MIN_M:             0.3,    // m — bag-to-tip range on the line, probe d range
+    D_MIN_PER_R:         1.2,    // radii — l8-reel-collar D5: a bag of radius r starts its line at least this many radii from the tip (r 0.50: 0.6 m; at 0.3 m it snagged the tip's own strut); r <= 0.25 m stays at D_MIN_M
+    D_MAX_M:             2.0,    // m — estimate; d up to 2.0 is used as is (REEL covers the extra length); beyond → 'too far' (fix round 1 F4)
+    HANDOFF_THETA_DEG:   3,      // radiator angle for a hand-off, all four tips; measured tmp/probes/leash/lat15b/
+    // Waits and tolerances
+    THETA_TOL_DEG:       1.0,    // ° — FOLD/UNFOLD wait; the radiator arrival latch stops 0.5° short of a 146°→3° target at every frame step 1/120–1/20 s (l5b-hold plan check 2026-10-14)
+    HOME_REEL_MPS:       0.025,  // m/s — estimate; REEL_HOME reels in this fast at most: the bag passes the nose at <= LATCH_OK_MPS (a pull-only line cannot slow it once the reel stops)
+    HOME_TOL_M:          0.05,   // m — estimate; REEL_HOME ends when the bag is this close to its nose spot (and slow)
+    SLACK_S:             1.0,    // s of slack before the SLACK event
+    SLACK_MIN_M:         0.15,   // m — estimate; the anchor's own approach in a 30° turn leaves ~0.07 m of normal slack (measured, test (c))
+    RAMP_TAU_S:          0.5,    // s — estimate; smooth tail of the reel speed ramp (a hard end overshoots the 1 Hz line by 3 mm/s)
+    RING_IGNORE_R_M:     0.10,   // m — the line bends over the ring rim within this distance of the anchor
+    CONE_IGNORE_R_M:     0.05,   // m — the swivel cone sits at the latch point; contacts inside this ball are ignored
+    LIFT_OUT_M:          0.10,   // m — estimate; REEL_HOME from the tip pays out this much to lift out of the slot
+    CONTACT_M:           0.005,  // m — estimate; latch contact when the neck is within this of the tip
+    PAYOUT_ACCEPT_M:     0.02,   // m — estimate; PAYOUT replan accepts |payoutM| below this
+    // Wiring (lane l5b-wire)
+    NOSE_REEL_MPS:       0.10,   // m/s — estimate (lane l5c-reach): the winch pulls a catch seated deep in the bag in to the nose before the hand-off; the same <= 10 cm/s contact limit as the tip latch (LATCH_ALIGNED_MPS)
+    MISSION_WAIT_MAX_S:  240,    // game s — estimate (lane l5c-reach): the longest the next mission waits for a leash hand-off (GameFlowManager); the 20 s MISSIONS.START_AFTER_CATCH_MAX_S cap does not run while the hand-off is busy
+    EXPECTED_S:          45,     // s — estimate (two radiator slews + a 30° turn + reel); the camera's park-hold reads it as the hand-off length
+    ANCHOR_AZ_R_M:       0.16,   // m — line anchor radius on the capture ring rim = OCTOPUS_V5.BERTH_COLLAR_INNER_R_M (probes tmp/probes/leash/lat15b/lib3.mjs:10 measured with 0.16)
+    // Radiator angle for the hand-off (degrees) by arriving bag radius (row) and the largest bag already
+    // held on a tip (column). Measured 2026-10-14, tmp/probes/leash/multi2/summ.txt: every clearance >= 0.02 m,
+    // the same for all four tips. Round a radius up to the next row/column; no held bag -> HANDOFF_THETA_DEG.
+    HANDOFF_THETA_TABLE: {
+      radiiM: [0.15, 0.22, 0.30, 0.35, 0.40, 0.50],
+      deg: [
+        [3, 3, 3, 3, 4, 6],   // Ra 0.15
+        [3, 3, 3, 3, 4, 6],   // Ra 0.22
+        [3, 3, 3, 3, 5, 7],   // Ra 0.30
+        [3, 3, 3, 4, 5, 7],   // Ra 0.35
+        [3, 3, 3, 4, 6, 8],   // Ra 0.40
+        [3, 3, 4, 6, 7, 9],   // Ra 0.50
+      ],
+    },
+    SUBSTEP_MAX_S:       1/60,   // s — line substep ceiling
+    SUBSTEP_MAX_MOVE_M:  0.05,   // m — a substep moves the bag at most this far
+    CUT_DWELL_S:         1.0,    // s after the cutter fires
+    PHASE_TIMEOUT_S: {           // s — estimates; a stall in any phase starts the recovery
+      FOLD: 60, RELEASE: 5, PAYOUT: 60, TURN: 90, CATCH: 10,
+      REEL: 90, CUT: 5, SWING: 30, UNFOLD: 60, REEL_HOME: 120,
     },
   },
 

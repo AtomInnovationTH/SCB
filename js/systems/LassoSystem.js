@@ -499,6 +499,27 @@ export class LassoSystem {
     }
 
     /**
+     * l8-reel-collar (D3) — the lasso's net-held readability floor for a piece at `scenePos`. It is the old fixed
+     * floor (MOTHER_CATCH_MIN_RENDER_M) at >= REEL_HOME.FLOOR_FAR_M from the ship, eased (smoothstep) to the piece's
+     * TRUE size by FLOOR_NEAR_M — the same law the mother reel uses (CaptureNet._catchFloorScale) — so the piece
+     * shrinks smoothly on its way in and the adoption (which writes the true size at home) does not pop.
+     * @param {object} target — the piece
+     * @param {THREE.Vector3} scenePos — where the piece is drawn (scene units)
+     * @param {THREE.Vector3} playerPos — ship position (scene units)
+     * @returns {number} scene-unit scale floor for `_catchRenderMin`
+     * @private
+     */
+    _catchFloorFor(target, scenePos, playerPos) {
+        const full = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, target.type, target.id);
+        const H = Constants.CAPTURE_NET.REEL_HOME;
+        if (!H || !scenePos || !playerPos) return full;
+        const distM = scenePos.distanceTo(playerPos) / M;
+        const t = Math.min(1, Math.max(0, (distM - H.FLOOR_NEAR_M) / (H.FLOOR_FAR_M - H.FLOOR_NEAR_M)));
+        const base = DebrisField.baseRenderScale(target);
+        return base + (full - base) * (t * t * (3 - 2 * t));
+    }
+
+    /**
      * Cargo-continuity S13(d): world position of the collar seat the one holding
      * model berths a catch at — berth anchor + berth-axis × (size/2 + clearance),
      * the exact standoff CaptureNet.updateBerthHold holds (the S13(c) collar seat).
@@ -515,8 +536,14 @@ export class LassoSystem {
      * @private
      */
     _collarSeatWorld(target, playerPos, playerVelDir, out) {
-        const standoffM = ((target && target.sizeMeter ? target.sizeMeter : 2) / 2)
-            + (Constants.CAPTURE_NET.BERTH_CLEARANCE_M ?? 1.0);
+        // l8-reel-collar: the seat is HOME — the catch's centre on the collar axis, the bag's surface on the ring
+        // (or clear of the nose parts by 0.02 m) — the SAME place the mother reel ends, from the one helper
+        // (CaptureNetSystem.getCatchHomeDistM → catchHomeDistM). It was size/2 + 1.0 m.
+        const cnsHome = this._captureNetSystem;
+        const R = Constants.CAPTURE_NET.REEL_HOME;
+        const standoffM = (cnsHome && typeof cnsHome.getCatchHomeDistM === 'function' && target)
+            ? cnsHome.getCatchHomeDistM(target)
+            : ((target && target.sizeMeter ? target.sizeMeter : 2) / 2) + R.APEX_AT_RING_M;
         const player = this._player;
         if (player && typeof player.getNetBerthCollarPositionInto === 'function') {
             player.getNetBerthCollarPositionInto(out);
@@ -542,13 +569,9 @@ export class LassoSystem {
      * @private
      */
     _reelDeliveryWorld(target, playerPos, playerVelDir, out) {
-        this._collarSeatWorld(target, playerPos, playerVelDir, out);
-        const seatM = Constants.CAPTURE_NET.ADOPT_CATCH_SEAT_M ?? 0;
-        if (seatM > 0) {
-            this._berthAxis(playerVelDir, _scratchFwd);
-            out.addScaledVector(_scratchFwd, seatM * M);
-        }
-        return out;
+        // l8-reel-collar: adoption now seats the catch at HOME (apex at the ring, seat = home seat), so the
+        // delivery point IS the collar seat — no interior-seat term (was ADOPT_CATCH_SEAT_M 2.856).
+        return this._collarSeatWorld(target, playerPos, playerVelDir, out);
     }
 
     /** Create capture net projectile group, tube tether, trail, and flash visuals */
@@ -1583,7 +1606,7 @@ export class LassoSystem {
                 // write, idempotent, and the field's own doc says exactly this
                 // ("an arm capture releases the pin first, _armPinned wins after").
                 this.target._onboardingPinned = false;
-                this.target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, this.target.type, this.target.id);
+                this.target._catchRenderMin = this._catchFloorFor(this.target, piecePos, playerPos);
                 // Round 3: SAME-FRAME pin — pinCapturedDebris force-writes
                 // `_scenePosition` + the rendered instance NOW (debrisField
                 // already ran this frame; a bare `_armPinPos` write would not
@@ -1668,7 +1691,7 @@ export class LassoSystem {
                     // the arm pin owns the piece from contact on, regardless of
                     // whether the LASSO_CONTACT release listener wins its race.
                     this.target._onboardingPinned = false;
-                    this.target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, this.target.type, this.target.id);
+                    this.target._catchRenderMin = this._catchFloorFor(this.target, this.target._scenePosition || this._targetScenePos || this.projectilePos, playerPos);
                     // Round 3: same-frame pin (register-9 idiom — see _pinFresh).
                     this._pinFresh(debrisField, this.target,
                         this.target._scenePosition || this._targetScenePos || this.projectilePos);
@@ -2034,7 +2057,7 @@ export class LassoSystem {
         if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
         target._armPinPos.copy(p.fromPos).lerp(_scratchMuzzle, ease);
         target._motherParked = true;
-        target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, target.type, target.id);
+        target._catchRenderMin = this._catchFloorFor(target, target._armPinPos, playerPos);
         // Round 3: same-frame pin (register-9 idiom — see _pinFresh). The glide
         // must RENDER each eased step this frame, not one ship-step behind.
         this._pinFresh(debrisField, target, target._armPinPos);
@@ -2070,9 +2093,12 @@ export class LassoSystem {
         const depthM = cns ? cns.getCollarQueueDepthM() : 0;
         this._berthAxis(playerVelDir, _scratchFwd);
         if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
-        target._armPinPos.copy(_scratchMuzzle).addScaledVector(_scratchFwd, depthM * M);
+        // l8-reel-collar: the hold-off sits one BERTH_CLEARANCE_M (the keep-clear spacing) past the occupant's far
+        // face; with the collar free it is home itself (the old size/2 + 1.0 standoff carried that clearance).
+        const holdOffM = depthM > 0 ? depthM + (Constants.CAPTURE_NET.BERTH_CLEARANCE_M ?? 1.0) : 0;
+        target._armPinPos.copy(_scratchMuzzle).addScaledVector(_scratchFwd, holdOffM * M);
         target._motherParked = true;
-        target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, target.type, target.id);
+        target._catchRenderMin = this._catchFloorFor(target, target._armPinPos, playerPos);
         // Round 3: same-frame pin (register-9 idiom — see _pinFresh).
         this._pinFresh(debrisField, target, target._armPinPos);
     }

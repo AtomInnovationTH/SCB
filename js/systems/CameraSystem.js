@@ -2416,7 +2416,10 @@ export class CameraSystem {
     // the capture beats. (remaining/speed)×1.2+0.5 floors at 0.5 s, so a raw
     // duration check can never exclude this case; gate on the distance itself.
     if (remaining <= 0.5) return false;
-    const estimate = (remaining / reelSpeed) * 1.2 + 0.5;
+    // l8-reel-collar: the reel now runs all the way to the collar and eases off for the last metres, so the net
+    // gives its own time-to-go (the apex distance alone under-counts the catch's seat and the slow tail)
+    const eta = typeof net.reelEtaS === 'function' ? net.reelEtaS() : null;
+    const estimate = (eta != null ? eta : remaining / reelSpeed) * 1.2 + 0.5;
     const duration = Math.min(estimate, NC.REEL_BEAT_MAX_S ?? 12.0);
     if (duration <= 0.25) return false;
 

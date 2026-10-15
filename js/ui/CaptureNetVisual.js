@@ -120,6 +120,44 @@ const TETHER_BASE_COLOR = Constants.NET_WEB.WEB_COLOR;   // C0/V5: one colour SS
 // _NT above so the hot flight/drape branches stay readable.
 const _NW = Constants.NET_WEB;
 
+// ── l8c: the held bag + the tether in the near pass ─────────────────────
+// A mother net that closes on a catch is drawn as a compact bag around that catch from the moment the cinch is
+// closed until the hand-off ends. The kit is built as the 6.8 m flight cone (apex at the tether end, rim ring at
+// its mouth plane); the reel then drew the piece home while that cone stayed full size, so the rim ring and the
+// strands ran metres past the piece (probe tmp/l8c: rim 6.5 m from a 0.3 m piece at the collar). Sizes below are in
+// catch radii (the DRAWN radius: the readability floor included, the digestion chop deflation included), so the
+// bag always wraps what is drawn: the apex ball touches the rear of the catch, the rim ring sits RIM_AHEAD_FRAC
+// radii past its centre, the open-mouth radius is MOUTH_FRAC radii (the kit closes it to
+// DRAWSTRING_RADIUS_FRAC_CLOSED of that, floored onto the catch by its contents floor). The flight cone gathers into
+// that shape with the drawstring (CINCH_CLOSING: closed = compact); a bag that lets go un-gathers over GATHER_S.
+const BAG = {
+  GATHER_S: 1.2,
+  APEX_BACK_FRAC: 1.0,
+  RIM_AHEAD_FRAC: 1.35,
+  MOUTH_FRAC: 3.0,
+  MIN_RADIUS_M: 0.03,
+  // the rim weights are drawn 0.08 m (8x their ~1 cm tungsten, for the flight read); on a compact bag at a few metres
+  // that is a clump of glowing balls bigger than a 0.3 m catch (browser shot 2026-10-15), so a held bag draws them
+  // at this radius (estimate: near true size, still a visible bead)
+  WEIGHT_RADIUS_M: 0.02,
+};
+// The net tether is drawn like the leash line (LeashVisual): in the near-field pass, where a world-unit width is
+// in metres, 2 x LEASH.LINE_RADIUS_M = 1 cm. That pass brackets only +-10 m (SceneManager NEAR_FIELD_RADIUS) around
+// the ship, so a line with an end farther from the ship than that stays in the far pass, at the same true width
+// (x M in the 1e5 m/unit scene). The test is the FARTHEST END of the line from the ship, not its length: a daughter
+// net's short line hangs from a muzzle far from the mother, and a mother line from the collar reaches 1+ m beyond
+// its own length. Near-field radius minus a margin: in when both ends are within 8.5 m, out beyond 9.5 m (the gap
+// stops a line near the limit hopping between the two passes).
+const TETHER_NEAR_ON_M = 8.5;
+const TETHER_NEAR_OFF_M = 9.5;
+
+// l6-look D6 — the big net bag gives way to the real-size bag (LeashVisual) while the leash hand-off runs:
+// fade the WHOLE bag (cone, film, rim weights, drawstring) out over this long, then hide it; fade it back in
+// if the net returns to the nose. The tether line is not part of it (the net's own tether stays drawn).
+const LEASH_FADE_S = 0.5;
+/** material -> { base, applied, transparent }: what the fade wrote last, so a value the visual rewrote is not scaled twice */
+const _leashFadeRec = new WeakMap();
+
 // ── Kit-frame attitude helper (register item 13, 2026-08-06) ─────────────
 // Plan: .kilo/plans/1786017377440-pin-scenario-catch-tumble.md (D2).
 //
@@ -866,7 +904,10 @@ export class CaptureNetVisual {
     tetherLine.visible = false;
     tetherLine.frustumCulled = false;
     tetherLine.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_CONNECTOR;
-    group.add(tetherLine);
+    // l8-reel-collar D4: the strand lives in the SCENE, not under `group` — `group` sits at net.position and is
+    // turned by lookAt, so a child at `anchor` was drawn at group + anchor (twice the ship's distance from the origin,
+    // ~6.7e6 m off: the tether was never on screen) and its world-aligned vertices were rotated with the bag.
+    this._scene.add(tetherLine);
 
     this._scene.add(group);
     this._activeVisuals.set(key, {
@@ -971,9 +1012,13 @@ export class CaptureNetVisual {
       color: TETHER_BASE_COLOR,
       transparent: true,
       opacity: 0.7,
-      linewidth: Constants.NET_WEB.TETHER_WIDTH_M, // V3: world units (m) — the
-      // strand thickens on approach, AA-smooth at distance (was fixed 2.0 px)
-      worldUnits: true,             // width is metres, not screen px
+      // V3: world units — the strand thickens on approach, AA-smooth at distance (was fixed 2.0 px).
+      // l8-reel-collar D4: this scene is 1 unit = 1e5 m (M = 1e-5), so a true width is metres * M (it was the bare
+      // 0.05 = a 5 km wide ribbon). l8c: the true width is the leash line's, 2 x LEASH.LINE_RADIUS_M = 1 cm (the
+      // 5 cm TETHER_WIDTH_M is the old estimate). This is the FAR-pass width; _tetherPass switches the material to
+      // the near-pass width (1 unit = 1 m) while the line is short enough to be drawn there.
+      linewidth: 2 * Constants.LEASH.LINE_RADIUS_M * M,
+      worldUnits: true,
       dashed: false,
       blending: THREE.NormalBlending,
       depthWrite: false,
@@ -984,7 +1029,8 @@ export class CaptureNetVisual {
     tetherLine.visible = false;
     tetherLine.frustumCulled = false;
     tetherLine.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_CONNECTOR;
-    group.add(tetherLine);
+    // l8-reel-collar D4: scene child (see the flag-OFF twin above): world-aligned, anchor-relative vertices.
+    this._scene.add(tetherLine);
 
     this._scene.add(group);
     this._activeVisuals.set(key, {
@@ -1033,6 +1079,8 @@ export class CaptureNetVisual {
     if (!vis) return;
 
     this._scene.remove(vis.group);
+    this._scene.remove(vis.tetherLine);       // l8-reel-collar D4: it is a scene child, not under the group
+    if (this._tetherRoot) this._tetherRoot.remove(vis.tetherLine);   // l8c: ... or a child of the near-pass tether root
 
     // Dispose geometries + materials
     vis.canisterMesh.geometry.dispose();
@@ -1353,6 +1401,9 @@ export class CaptureNetVisual {
 
       } // end else (non-ceremony)
 
+      // l6-look D6: during the leash hand-off the big bag fades out (after every state write above, so it wins).
+      this._updateLeashFade(vis, net, dt);
+
       // ── Tether update: launcher anchor (canister muzzle / pod muzzle) → net ──
       if (tetherLine.visible && this._player) {
         // Daughter arms anchor at the source arm's net-launcher canister
@@ -1371,6 +1422,11 @@ export class CaptureNetVisual {
           srcArm.getNetMuzzleWorldInto(_v3a);
         } else if (vis.armIndex >= 0 && this._player.strutTipNodes && this._player.strutTipNodes[vis.armIndex]) {
           this._player.strutTipNodes[vis.armIndex].getWorldPosition(_v3a);
+        } else if (vis.podIndex >= 0 && (state === STATES.REELING || state === STATES.BERTHED || state === STATES.COLLARED)
+            && typeof this._player.getNetBerthCollarPositionInto === 'function') {
+          // l8-reel-collar D4: the reel winds in on the capture RING (the collar plane, the same anchor the reel pins on),
+          // not the launcher muzzle 30 mm behind it
+          this._player.getNetBerthCollarPositionInto(_v3a);
         } else if (vis.podIndex >= 0 && typeof this._player.getNetPodPositionInto === 'function') {
           this._player.getNetPodPositionInto(vis.podIndex, _v3a);
         } else if (this._player.getPosition) {
@@ -1384,6 +1440,87 @@ export class CaptureNetVisual {
         this._updateTetherCatenary(vis, net, _v3a, _v3b, dt);
       }
     }
+  }
+
+  /**
+   * l6-look D6 — fade the big bag out while `player.leashDriver.view()` is non-null for this net (from the nose
+   * reel on), then hide it; when the view ends after a fade-out and the net is back at the nose (COLLARED), show it
+   * again and fade it in. Acts only after a fade-out happened (`vis._leashFadeT > 0`). Called every frame from
+   * update(), after the state-driven writes (they reset canister/disc/cone visibility and opacity each frame).
+   * Only the bag parts are touched: `canisterMesh`, `discMesh` (flag-off disc) and `kitHandle.group` (cone, film,
+   * rim weights, drawstring, apex hub). `vis.group` and `vis.tetherLine` are never hidden or faded — the net's own
+   * tether is what the catch is pulled in on during the nose reel (fix round 1, F1).
+   * @private
+   */
+  _updateLeashFade(vis, net, dt) {
+    const ld = this._player && this._player.leashDriver;
+    const view = ld && typeof ld.view === 'function' ? ld.view() : null;
+    const t0 = vis._leashFadeT || 0;
+    let t;
+    if (view && view.net === net) t = Math.min(1, t0 + dt / LEASH_FADE_S);
+    else if (t0 > 0 && net.state === STATES.COLLARED) t = Math.max(0, t0 - dt / LEASH_FADE_S);
+    else if (t0 >= 1) { this._setBagHidden(vis, true); return; }       // hand-off over, not back at the nose yet
+    else return;
+    vis._leashFadeT = t;
+    if (t >= 1) {
+      // faded out: materials are written once (on the frame the fade completes); afterwards only the three
+      // visibility flags are held each frame (the state code re-shows canister/disc) — no traverse, no closure.
+      if (t0 < 1) this._fadeBagMaterials(vis, 0);
+      this._setBagHidden(vis, true);
+      return;
+    }
+    this._setBagHidden(vis, false);
+    this._fadeBagMaterials(vis, 1 - t);
+  }
+
+  /** @private hide/show the bag-only children of `vis.group`; the tether (and the group) stay as they are */
+  _setBagHidden(vis, hidden) {
+    if (hidden) {
+      vis.canisterMesh.visible = false;
+      if (vis.discMesh) vis.discMesh.visible = false;
+    }
+    if (vis.kitHandle) vis.kitHandle.group.visible = !hidden;
+  }
+
+  /** @private the bag's materials (canister, disc, every kit surface), found once per visual; never the tether's */
+  _bagMaterials(vis) {
+    if (vis._leashBagMats) return vis._leashBagMats;
+    const out = [];
+    const skip = vis.tetherLine && vis.tetherLine.material;
+    const take = (o) => {
+      const m = o.material;
+      if (!m) return;
+      for (const mm of Array.isArray(m) ? m : [m]) if (mm !== skip && !out.includes(mm)) out.push(mm);
+    };
+    if (vis.canisterMesh) take(vis.canisterMesh);
+    if (vis.discMesh) take(vis.discMesh);
+    if (vis.kitHandle) vis.kitHandle.group.traverse(take);
+    vis._leashBagMats = out;
+    return out;
+  }
+
+  /** @private scale every bag material's opacity by `f` (1 restores); never the tether strand */
+  _fadeBagMaterials(vis, f) {
+    const mats = this._bagMaterials(vis);
+    for (let i = 0; i < mats.length; i++) this._fadeMaterial(mats[i], f);
+  }
+
+  /** @private */
+  _fadeMaterial(m, f) {
+    let r = _leashFadeRec.get(m);
+    if (f >= 1) {
+      if (r) {
+        if (m.opacity === r.applied) m.opacity = r.base;               // not rewritten since: put back what was there
+        m.transparent = r.transparent;
+        _leashFadeRec.delete(m);
+      }
+      return;
+    }
+    if (!r) { r = { base: m.opacity, applied: NaN, transparent: m.transparent }; _leashFadeRec.set(m, r); }
+    else if (m.opacity !== r.applied) r.base = m.opacity;              // the visual rewrote it this frame: new base
+    m.transparent = true;
+    m.opacity = r.base * f;
+    r.applied = m.opacity;
   }
 
   /**
@@ -1406,17 +1543,23 @@ export class CaptureNetVisual {
    */
   _updateTetherCatenary(vis, net, anchor, netPos, dt) {
     const { tetherLine, tetherPositions } = vis;
-    // Park the strand at the anchor; vertices are anchor-relative.
-    tetherLine.position.copy(anchor);
-
     const dx = netPos.x - anchor.x;
     const dy = netPos.y - anchor.y;
     const dz = netPos.z - anchor.z;
     const straight = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
+    // Park the strand at the anchor; vertices are anchor-relative. l8c: in the near pass the parent is the
+    // tether root (at the ship), so the strand's position is root-relative there.
+    this._tetherPass(vis, anchor, netPos);
+    if (vis._tetherNear) tetherLine.position.copy(anchor).sub(this._tetherRoot.position);
+    else tetherLine.position.copy(anchor);
+
     // Slack ratio: how much paid-out tether exceeds the straight distance.
     // tetherPaidOut is metres; straight is scene units → convert.
-    const paidScene = (net.tetherPaidOut ?? straight / M) * M;
+    // l8-reel-collar D4: while the mother reels / holds the catch the line is wound in as fast as it is hauled:
+    // taut, ring -> bag mouth, never the flight-time bow (tetherPaidOut keeps the shot length through the reel).
+    const reeled = net._isMother && (net.state === STATES.REELING || net.state === STATES.BERTHED || net.state === STATES.COLLARED);
+    const paidScene = reeled ? straight : (net.tetherPaidOut ?? straight / M) * M;
     const slack = Math.max(0, paidScene - straight);
     const slackRatio = straight > 1e-12 ? slack / straight : 0;
     const taut = slackRatio < TETHER_TAUT_SLACK;
@@ -1497,6 +1640,69 @@ export class CaptureNetVisual {
     } else {
       // Fallback (buffer not captured, e.g. an externally-built vis): safe path.
       tetherLine.geometry.setPositions(tetherPositions);
+    }
+  }
+
+  /**
+   * l8c: the near-field root the short net tethers hang from (made on first use). It rides the ship (children are
+   * root-relative, as LeashVisual does) and is registered with the scene manager like the ship and the leash root,
+   * so the line is drawn in the depth-cleared near pass: the hull cannot paint over it and a world-unit width is in
+   * metres there.
+   * @returns {THREE.Group}
+   * @private
+   */
+  _ensureTetherRoot() {
+    if (!this._tetherRoot) {
+      const root = new THREE.Group();
+      root.name = 'NetTetherRoot';
+      this._scene.add(root);
+      this._tetherRoot = root;
+      const sm = this._sceneManager;
+      if (sm && typeof sm.registerNearFieldRoot === 'function') sm.registerNearFieldRoot(root);
+    }
+    const pp = this._player && this._player.position;
+    if (pp && Number.isFinite(pp.x) && Number.isFinite(pp.y) && Number.isFinite(pp.z)) this._tetherRoot.position.copy(pp);
+    else this._tetherRoot.position.set(0, 0, 0);
+    return this._tetherRoot;
+  }
+
+  /**
+   * l8c: pick the pass a net's tether is drawn in. A world-unit Line2 has the leash line's true width (2 x
+   * LEASH.LINE_RADIUS_M = 1 cm): in the near-field pass (the line a child of the tether root, which rides the ship)
+   * while BOTH its ends are within the pass's +-10 m depth bracket of the ship (minus a margin), else in the far
+   * pass (scene child, the same width x M). Not by the line's length: a daughter net hangs from a muzzle that can
+   * be tens of metres from the mother, and a mother line starts at the collar, off the ship's centre. Legacy
+   * screen-space lines (flag-off path) are left alone.
+   * @param {object} vis
+   * @param {THREE.Vector3} anchor — the line's launcher end, scene units
+   * @param {THREE.Vector3} end — the line's net end, scene units
+   * @private
+   */
+  _tetherPass(vis, anchor, end) {
+    const line = vis.tetherLine;
+    if (!vis.useCeremony || !line.material.worldUnits) return;
+    const pp = this._player && this._player.position;
+    const ok = !!pp && Number.isFinite(pp.x) && Number.isFinite(pp.y) && Number.isFinite(pp.z);
+    const cx = ok ? pp.x : 0, cy = ok ? pp.y : 0, cz = ok ? pp.z : 0;    // where _ensureTetherRoot parks the root
+    const reachM = Math.max(
+      Math.hypot(anchor.x - cx, anchor.y - cy, anchor.z - cz),
+      Math.hypot(end.x - cx, end.y - cy, end.z - cz)) / M;
+    const wantNear = vis._tetherNear ? reachM <= TETHER_NEAR_OFF_M : reachM <= TETHER_NEAR_ON_M;
+    const root = (wantNear || vis._tetherNear) ? this._ensureTetherRoot() : null;   // also parks the root on the ship
+    if (wantNear === !!vis._tetherNear) return;
+    vis._tetherNear = wantNear;
+    const width = 2 * Constants.LEASH.LINE_RADIUS_M;
+    if (wantNear) {
+      this._scene.remove(line);
+      root.add(line);
+      line.material.linewidth = width;          // near pass: 1 unit = 1 m
+      const sm = this._sceneManager;
+      if (sm && typeof sm.refreshNearFieldLayers === 'function') sm.refreshNearFieldLayers(root);
+    } else {
+      this._tetherRoot.remove(line);
+      this._scene.add(line);
+      line.layers.set(0);                       // back to the far camera's layer
+      line.material.linewidth = width * M;      // far pass: 1 unit = 1e5 m
     }
   }
 
@@ -1583,9 +1789,17 @@ export class CaptureNetVisual {
    */
   _updateCeremonyState(key, vis, net, dt) {
     const { coneMesh, rimWeights, drawstringLine,
-            apexHub, mouthRadius, coneHeight, closedRadius,
-            weightCount, rimWeightMats, canisterMesh } = vis;
+            apexHub, weightCount, rimWeightMats, canisterMesh } = vis;
     const state = net.state;
+
+    // l8c: a mother net closing on / holding its catch is drawn as a compact bag around it, placed and sized BEFORE
+    // the drape driver reads the group's frame (the contents spec is taken in the group's own space). Every
+    // placement below reads the LIVE size; for any other net it is the build-time size, unchanged.
+    if (vis.kitHandle) this._shapeHeldBag(vis, net, dt);
+    const kitLive = vis.kitHandle || vis;
+    const mouthRadius = kitLive.mouthRadius;
+    const coneHeight = kitLive.coneHeight;
+    const closedRadius = kitLive.closedRadius;
 
     // ── Phase D.5 drape driver (mother-net-reel plan §11.5) ──
     // Map the net FSM onto the kit's per-frame drape state. The web drapes
@@ -2021,7 +2235,9 @@ export class CaptureNetVisual {
           // through HOLDING_CATCH for daughter catches) — render a steady,
           // fully-cinched bag: fixed opacity, frozen spin, rim ring pinned
           // at the closed radius. No expand/contract pulse.
-          coneMesh.material.opacity = 0.55;
+          // l8-reel-collar F1: the same size-aware rest as the berthed bag, so
+          // a small catch reads through the threads while it is hauled in.
+          coneMesh.material.opacity = this._heldThreadOpacity(net);
           this._setCinchedRim(vis);
         } else if (vis.failure) {
           this._stageFailureFurniture(vis);
@@ -2074,19 +2290,7 @@ export class CaptureNetVisual {
         // fabric (film + rosette + weights) carries the small-bag read and
         // the lattice recedes. Whale class (≥ LARGE_SIZE_M) and size-less
         // mocks keep the 0.55 byte — every gated pod subject is unmoved.
-        {
-          const NW = Constants.NET_WEB;
-          const dSize = net.targetDebris?.sizeMeter || 0;
-          let threadO = 0.55;
-          const oSmall = NW.THREAD_OPACITY_HELD_SMALL;
-          const szHi = NW.MEMBRANE_WELDED_LARGE_SIZE_M ?? 2.0;
-          const szLo = NW.MEMBRANE_WELDED_SMALL_SIZE_M ?? 0.8;
-          if (oSmall != null && dSize > 0 && szHi > szLo) {
-            const st = Math.max(0, Math.min(1, (szHi - dSize) / (szHi - szLo)));
-            threadO += (oSmall - threadO) * st;
-          }
-          coneMesh.material.opacity = threadO;
-        }
+        coneMesh.material.opacity = this._heldThreadOpacity(net);
         this._setCinchedRim(vis);
         break;
 
@@ -2122,15 +2326,7 @@ export class CaptureNetVisual {
     // cinch ring on the DAUGHTER side of the net center — exactly the
     // "cinch happens between daughter and debris" symptom diagnosed via
     // NET_CINEMATIC_DEBUG instrumentation (see HANDOFF / CAPTURE_NET_QA).
-    if (net.launchDirection) {
-      _v3a.set(
-        net.launchDirection.x * 0.001,
-        net.launchDirection.y * 0.001,
-        net.launchDirection.z * 0.001,
-      );
-      _v3b.copy(vis.group.position).sub(_v3a);
-      vis.group.lookAt(_v3b);
-    }
+    this._aimBag(vis, net);
 
     // net-fabric-look Task 3: the V2 membrane film was built by NetMeshKit but
     // NO ceremony state ever set its .visible, so the kit's build default
@@ -2140,11 +2336,180 @@ export class CaptureNetVisual {
     // threads whenever the bag does. The film's material/deformation are driven
     // separately (Kit.updateWebDrape writes membranePositions + normals), so
     // this one line is the entire wiring fix.
+    // l8-reel-collar F1: a SMALL catch held by the mother (reel, berth, collar)
+    // must show through the net — the lit film (opacity 0.24, two-sided,
+    // transmission, emissive floor) covers a true-size 0.3 m piece to 0-10 px
+    // (measured). Hide it with `visible = false`, not an opacity write:
+    // updateWebDrape rewrites the film's opacity every frame.
     if (vis.kitHandle && vis.kitHandle.membraneMesh) {
-      vis.kitHandle.membraneMesh.visible = coneMesh.visible;
+      vis.kitHandle.membraneMesh.visible = coneMesh.visible && !this._filmHiddenForSmallCatch(net);
     }
 
     return false;
+  }
+
+  /**
+   * Orient the bag group so local -Z points along the launch direction (see the convention block in
+   * _updateCeremonyState). No-op without a launch direction. Allocation-free.
+   * @param {object} vis
+   * @param {object} net
+   * @private
+   */
+  _aimBag(vis, net) {
+    const L = vis._bagAxisOn ? vis._bagAxis : net.launchDirection;   // l8c: a held bag lines up with its tether
+    if (!L) return;
+    _v3a.set(L.x * 0.001, L.y * 0.001, L.z * 0.001);
+    _v3b.copy(vis.group.position).sub(_v3a);
+    vis.group.lookAt(_v3b);
+  }
+
+  /**
+   * l8c: the radius, in scene units, the catch is DRAWN at: the instance's render scale (the CAPTURED readability
+   * floor eased down to true size near the collar) times its bounding radius, deflated by the digestion chop. The
+   * same two numbers _catchContentsSpec floors the film on.
+   * @param {object} d — the catch
+   * @param {number|null} chopMul
+   * @returns {number}
+   * @private
+   */
+  _drawnCatchRadius(d, chopMul) {
+    DebrisWireframe.getGeometry(d.type, d.id);            // fills the bounding-radius cache
+    const br = DebrisWireframe.getBoundingRadius(d.type, d.id) || 1;
+    let renderScale = DebrisField.effectiveRenderScale(d);
+    if (chopMul != null) renderScale *= chopMul;
+    return renderScale * br;
+  }
+
+  /**
+   * l8c: from the closed cinch to the end of the hand-off, draw a mother net as a compact bag around its catch (see
+   * BAG): the apex ball (where the tether ends) touching the rear of the catch (never behind the capture ring), the
+   * rim ring just past it, the web wrapping it, the bag lined up with its tow line. The simulation's apex
+   * (net.position) trails the catch by the reel's seat law (up to ~4.6 m) and the kit was built as the 6.8 m flight
+   * cone; neither is a bag around a 0.3 m piece. The flight shape gathers into the compact one while the drawstring
+   * closes (CINCH_CLOSING), so the closed bag is compact; a net born held (an adopted lasso catch) starts compact; a
+   * bag that lets go (failed resolve, slip) un-gathers over BAG.GATHER_S, then is put back exactly as built. Runs
+   * before the drape driver and the tether: it moves vis.group (the tether's end) and re-sizes the kit. Nothing in
+   * the simulation is touched (the reel's momentum, seat law and timings are unchanged).
+   * @param {object} vis
+   * @param {object} net
+   * @param {number} dt — seconds
+   * @private
+   */
+  _shapeHeldBag(vis, net, dt) {
+    const kit = vis.kitHandle;
+    const d = net.targetDebris;
+    const st = net.state;
+    const can = !vis.detached && net._isMother && !!d && !!d._scenePosition && !!net.launchDirection;
+    const closing = can && !vis.failure && st === STATES.CINCH_CLOSING;
+    const held = can && !vis.failure && net.catchResult === 'success'
+      && (st === STATES.CAPTURED || st === STATES.REELING || st === STATES.BERTHED
+        || st === STATES.COLLARED || st === STATES.TRANSFERRING);
+    const keep = can && !vis.failure && st === STATES.SECURE_CHECK;
+    let g = vis._bagG || 0;
+    if (closing) {
+      // the drawstring closing draws the bag in with it: closed bag = compact bag
+      const p = Math.min(1, Math.max(0, (net.stateTimer || 0) / CN.CINCH_CLOSE_TIME));
+      g = Math.max(g, p * p * (3 - 2 * p));
+    } else if (held) {
+      // a net born held (an adopted lasso catch) starts compact; otherwise finish any gather left
+      g = vis._bagG === undefined ? 1 : Math.min(1, g + dt / BAG.GATHER_S);
+    } else if (!keep) {
+      // let go (a failed resolve, a slip, any other net): un-gather back to the built cone, then forget
+      g = can ? Math.max(0, g - dt / BAG.GATHER_S) : 0;
+    }
+    if (!(g > 0)) {
+      if (kit._bagBase) {
+        NetMeshKit.resetBagShape(kit);
+        for (const w of vis.rimWeights) w.scale.setScalar(1);
+      }
+      vis._bagG = (closing || held) ? 0 : undefined;
+      vis._bagAxisOn = false;
+      return;
+    }
+    vis._bagG = g;
+    const ws = 1 + (BAG.WEIGHT_RADIUS_M / NET_CER.RIM_WEIGHT_RENDER_RADIUS_M - 1) * g;
+    for (const w of vis.rimWeights) w.scale.setScalar(ws);
+
+    const chopMul = (st === STATES.COLLARED && d._breakdownActive && net._digestPhaseT != null)
+      ? Constants.FURNACE_TRANSFER.chopScaleMul(net._digestPhaseT)
+      : null;
+    const rS = Math.max(BAG.MIN_RADIUS_M * M, this._drawnCatchRadius(d, chopMul));   // drawn radius, scene units
+    const c = d._scenePosition;
+    // the bag's axis: from the launch direction to the tow line (capture ring -> catch), so a bag hauled in from
+    // off-centre lines up with its tether
+    const L = vis._bagAxis || (vis._bagAxis = new THREE.Vector3());
+    const lx = net.launchDirection.x, ly = net.launchDirection.y, lz = net.launchDirection.z;
+    let ringOk = false;
+    if (this._player && typeof this._player.getNetBerthCollarPositionInto === 'function') {
+      this._player.getNetBerthCollarPositionInto(_v3d);
+      ringOk = Number.isFinite(_v3d.x) && Number.isFinite(_v3d.y) && Number.isFinite(_v3d.z);
+    }
+    L.set(lx, ly, lz);
+    if (ringOk) {
+      _v3a.copy(c).sub(_v3d);
+      const dist = _v3a.length();
+      if (dist > 0.05 * M) L.multiplyScalar(1 - g).addScaledVector(_v3a.multiplyScalar(1 / dist), g);
+    }
+    if (L.lengthSq() < 1e-12) L.set(lx, ly, lz);
+    L.normalize();
+    vis._bagAxisOn = true;
+    // the drawn apex: from the simulation's (update() wrote net.position into vis.group) to "touching the rear of
+    // the catch", but never behind the capture ring the tether winds onto (a catch drawn larger than its seat
+    // would put it inside the ship)
+    let back = BAG.APEX_BACK_FRAC * rS;
+    if (ringOk) {
+      const fromRing = (c.x - _v3d.x) * L.x + (c.y - _v3d.y) * L.y + (c.z - _v3d.z) * L.z;
+      if (Number.isFinite(fromRing)) back = Math.min(back, Math.max(0.01 * M, fromRing));
+    }
+    const apex = vis.group.position;
+    apex.x += (c.x - L.x * back - apex.x) * g;
+    apex.y += (c.y - L.y * back - apex.y) * g;
+    apex.z += (c.z - L.z * back - apex.z) * g;
+    // the size: from the built cone to apex -> rim plane = back + RIM_AHEAD_FRAC radii, mouth MOUTH_FRAC radii
+    const coneH = vis.coneHeight + (back + BAG.RIM_AHEAD_FRAC * rS - vis.coneHeight) * g;
+    const mouth = vis.mouthRadius + (BAG.MOUTH_FRAC * rS - vis.mouthRadius) * g;
+    NetMeshKit.setBagShape(kit, coneH, mouth);
+    this._aimBag(vis, net);
+  }
+
+  /**
+   * l8-reel-collar F1: true while the mother hauls or holds a catch smaller
+   * than MEMBRANE_WELDED_SMALL_SIZE_M — the film is then not drawn so the
+   * catch stays visible through the thread lattice. Mother nets only
+   * (`_isMother`, so mocks and daughter nets keep the old draw).
+   * @param {object} net
+   * @returns {boolean}
+   * @private
+   */
+  _filmHiddenForSmallCatch(net) {
+    if (!net._isMother || net.catchResult !== 'success') return false;
+    const st = net.state;
+    if (st !== STATES.REELING && st !== STATES.BERTHED && st !== STATES.COLLARED) return false;
+    const dSize = net.targetDebris?.sizeMeter || 0;
+    const szLo = Constants.NET_WEB.MEMBRANE_WELDED_SMALL_SIZE_M ?? 0.8;
+    return dSize > 0 && dSize < szLo;
+  }
+
+  /**
+   * Thread-lattice opacity of a held (cinched) bag: 0.55, lerped toward
+   * THREAD_OPACITY_HELD_SMALL across the same size band as the welded film.
+   * Whale class (>= LARGE_SIZE_M) and size-less mocks keep 0.55.
+   * @param {object} net
+   * @returns {number}
+   * @private
+   */
+  _heldThreadOpacity(net) {
+    const NW = Constants.NET_WEB;
+    const dSize = net.targetDebris?.sizeMeter || 0;
+    let threadO = 0.55;
+    const oSmall = NW.THREAD_OPACITY_HELD_SMALL;
+    const szHi = NW.MEMBRANE_WELDED_LARGE_SIZE_M ?? 2.0;
+    const szLo = NW.MEMBRANE_WELDED_SMALL_SIZE_M ?? 0.8;
+    if (oSmall != null && dSize > 0 && szHi > szLo) {
+      const st = Math.max(0, Math.min(1, (szHi - dSize) / (szHi - szLo)));
+      threadO += (oSmall - threadO) * st;
+    }
+    return threadO;
   }
 
   /**
@@ -2155,7 +2520,11 @@ export class CaptureNetVisual {
    * @private
    */
   _setCinchedRim(vis) {
-    const { rimWeights, drawstringLine, apexHub, closedRadius, coneHeight, weightCount } = vis;
+    const { rimWeights, drawstringLine, apexHub, weightCount } = vis;
+    // l8c: the LIVE bag size (a held mother bag is shrunk onto its catch by _shapeHeldBag; otherwise these are the
+    // build-time numbers vis carries).
+    const closedRadius = vis.kitHandle.closedRadius;
+    const coneHeight = vis.kitHandle.coneHeight;
     apexHub.visible = true;
     drawstringLine.visible = true;
     // Item 10: the rim furniture honours the same mouth-plane contents floor
@@ -2206,8 +2575,10 @@ export class CaptureNetVisual {
    * @private
    */
   _stageFailureFurniture(vis) {
-    const { rimWeights, drawstringLine, apexHub, mouthRadius, closedRadius,
-            coneHeight, weightCount } = vis;
+    const { rimWeights, drawstringLine, apexHub, weightCount } = vis;
+    // l8c: the live bag size (a bag that let go of its catch un-gathers from the compact held shape)
+    const kitLive = vis.kitHandle || vis;
+    const { mouthRadius, closedRadius, coneHeight } = kitLive;
     apexHub.visible = true;
     drawstringLine.visible = true;
     const cinch = vis.failure ? vis.failure.cinch : 0;
@@ -2273,6 +2644,13 @@ export class CaptureNetVisual {
     // Remove all visuals
     for (const key of [...this._activeVisuals.keys()]) {
       this._removeNetVisual(key);
+    }
+    // l8c: the near-pass tether root goes with them
+    if (this._tetherRoot) {
+      const sm = this._sceneManager;
+      if (sm && typeof sm.unregisterNearFieldRoot === 'function') sm.unregisterNearFieldRoot(this._tetherRoot);
+      if (this._scene) this._scene.remove(this._tetherRoot);
+      this._tetherRoot = null;
     }
 
     // Unsubscribe events

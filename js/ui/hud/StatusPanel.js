@@ -1091,6 +1091,17 @@ export class StatusPanel {
     } else {
       seg.title = 'Mother Large Net (whale hunts)';
     }
+
+    // l6-look: catches hanging on the radiator tips (the leash hand-off). Plain words: "Tips 1/2" = one of the two
+    // tips is holding a catch; "cooking 40%" while it digests. Nothing is printed while no tip holds one.
+    const tipCargo = this._armManager && this._armManager.playerSatellite
+      && this._armManager.playerSatellite.tipCargo;
+    const tipDigest = tipCargo && typeof tipCargo.digest === 'function' ? tipCargo.digest() : null;
+    if (tipDigest && tipDigest.held > 0) {
+      let txt = `${count.textContent} · Tips ${tipDigest.held}/${tipDigest.tips}`;
+      if (tipDigest.cookingPct !== null) txt += ` · cooking ${tipDigest.cookingPct}%`;
+      count.textContent = txt;
+    }
   }
 
   /** Clean up DOM elements appended outside the HUD container. */

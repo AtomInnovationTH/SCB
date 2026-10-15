@@ -153,7 +153,10 @@ import { nearestWithin as tapNearestWithin, TAP_SLOP_PX, TAP_SLOP_MS } from './s
 import { pressKey as dispatchKeyPress } from './core/KeyDispatch.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
+import { LeashVisual } from './ui/LeashVisual.js';
 import { captureNetSystem, isInsideCone, coneRadiusAtDepth } from './entities/CaptureNet.js';
+import { TipCargo } from './systems/TipCargo.js';
+import { LeashDriver } from './systems/LeashDriver.js';
 import perfReportOverlay, { captureBootInfo } from './ui/PerfReportOverlay.js';
 import { isAvifSupported } from './scene/Earth.js';
 import { profileFlags } from './core/ProfileFlags.js';
@@ -177,6 +180,7 @@ let sceneManager;
 let earth;
 let starfield;
 let sunLight;
+let leashVisual = null;   // l6-look: built after the capture-net visual (CAPTURE_NET on), updated each frame
 // Black-flicker triage: `?bfp=1|2` in-page probe (js/core/BlackFrameProbe.js).
 // Null in normal play — the per-frame hook below is a single falsy check.
 let blackFrameProbe = null;
@@ -1354,6 +1358,8 @@ async function init() {
   // --- Config G Arm Manager (Y0 Quad: 4 arms — 2 Weaver + 2 Spinner) ---
   armManager = new ArmManager(scene, player);
   armManager.setDebrisField(debrisField);
+  // Bags held on the radiator tips (lane l5a-tip-cargo). Always built; empty until the leash (l5b) stows a bag.
+  player.tipCargo = new TipCargo({ player, debrisField, armManager, eventBus });
   armManager.setCatalogLoader(catalogLoader);    // ST-6.1: active-sat treaty guard
   // z-layer fix (A.6): let docked/close daughters join the near-field depth pass
   // so they aren't occluded by it and don't z-fight the mother's strut-tip collars.
@@ -1391,6 +1397,8 @@ async function init() {
   // trawlManager: imported singleton from TrawlManager.js
   autopilotSystem = new AutopilotSystem();
   collisionAvoidanceSystem = new CollisionAvoidanceSystem();
+  // The leash hand-off driver (lane l5b-wire): CaptureNetSystem._tryCargoTransfer asks it; the game loop ticks it.
+  player.leashDriver = new LeashDriver({ player, autopilot: autopilotSystem, captureNetSystem, debrisField, armManager, eventBus });
 
   // --- Phase 4A: Skills + Lasso systems ---
   skillsSystem = new SkillsSystem();
@@ -1709,10 +1717,13 @@ async function init() {
     captureNetSystem.init({ player, debrisField, audioSystem, armManager, lassoSystem });   // ST-9.4: initialize mother pod inventory + set _initialized; deps back the mother-pod anchor provider + Phase-A pin API + Phase-B winch pitch + Phase C-lite corridor test
     player.setCaptureNetSystem(captureNetSystem);     // §4.4: berthed-mass translational scaling in _applyThrust
     lassoSystem.setCaptureNetSystem(captureNetSystem);   // Cargo-continuity S13(d): a lassoed catch adopts onto the nose-collar berth (the one holding model)
+    debrisField.setReseatNetSource(captureNetSystem);   // 2026-10-14: the welcome re-seat never moves a piece a mother net is flying at or holding
     cameraSystem.setLassoSystem(lassoSystem);   // 2026-08-26: the short lasso catch cut reads the live cast state
     captureNetVisual.init(scene, player, captureNetSystem, sceneManager);   // sceneManager backs the Phase D.8 LOW-tier garnish gate
     // Item 1: staged furnace-breakdown choreography (chunks → furnace, net drawn in).
     furnaceBreakdownVisual.init(scene, player);
+    // l6-look: the leash hand-off — line, real-size bags, cone swivel (reads player.leashDriver.view()).
+    leashVisual = new LeashVisual({ scene, player, sceneManager });   // F2: drawn in the near-field pass with the ship
   }
 
   // CP-2: mother-mounted de-spin laser (flag-gated; operates on the active target)
@@ -2292,6 +2303,7 @@ async function init() {
           const lastTap = player._lastFlowerTap;
           if (lastTap !== undefined && performance.now() - lastTap < Constants.THERMAL.FLOWER.VENT_DOUBLE_TAP_MS) return;
           const deploying = player.toggleFlowerDeploy();
+          if (deploying === null) return;   // radiators held for the catch hand-off: the ship already said so
           audioSystem?.playClick?.();
           eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
           eventBus.emit(Events.COMMS_MESSAGE, {
@@ -6922,7 +6934,13 @@ function gameLoop(timestamp) {
 
     // V-8: Capture net FSM + visual effects (flag-gated internally)
     try { captureNetSystem.update(dt); } catch (e) { console.error('[GameLoop] captureNetSystem:', e); }
+    // The leash hand-off: radiators, ship turn, pin and push (zero time while the world is held).
+    if (player.leashDriver) { try { player.leashDriver.update(_worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] leashDriver:', e); } }
+    // Bags on the radiator tips: pin every frame, cook on the rack's clock (zero time while the world is held).
+    if (player.tipCargo) { try { player.tipCargo.update(_worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] tipCargo:', e); } }
     try { captureNetVisual.update(dt); } catch (e) { console.error('[GameLoop] captureNetVisual:', e); }
+    // l6-look: after the driver, tip cargo and the net visual — it reads the view and the pinned catches.
+    if (leashVisual) { try { leashVisual.update(dt); } catch (e) { console.error('[GameLoop] leashVisual:', e); } }
     try { furnaceBreakdownVisual.update(dt); } catch (e) { console.error('[GameLoop] furnaceBreakdownVisual:', e); }
 
     // CP-2: mother-mounted de-spin laser (flag-gated internally)
