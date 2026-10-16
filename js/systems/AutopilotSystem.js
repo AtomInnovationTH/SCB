@@ -32,6 +32,31 @@ const ENGAGE_DV_MIN = 50;
 /** ΔV (m/s) threshold for automatic disengage */
 const DISENGAGE_DV_MIN = 30;
 
+/**
+ * Has this piece been caught so that chasing it is over? True exactly when
+ * `DebrisField.update` has stopped propagating its orbit for a reason that is
+ * NOT an onboarding tease pin: `_motherParked` (the mother's hold owns the
+ * piece's position — CaptureNet berth / collar / cargo flight / cut piece,
+ * LeashDriver hand-off, LassoSystem pending adoption — and the mesh is pinned
+ * at the nose every frame). A parked piece stays `alive`, but its orbit is
+ * frozen at the moment of the catch, so the position the orbit gives is a ghost
+ * that the moving mother leaves behind at orbital speed (~77 km per real second
+ * at the 10x game clock). Steering at it burned about three quarters of mission
+ * 1's engine gas (g2-ghost-chase: argon 5.33 -> 1.30 kg once it stopped).
+ *
+ * Deliberately NOT `_captured`, `_armPinned` or `_capturedByArm`: those are set
+ * at grapple / during the reel (mother net or daughter) while the orbit still
+ * propagates, and the HOLD "close on the daughter" burn runs exactly then. An
+ * onboarding pin (`_onboardingPinned`) is never "done": the T4 path resolves it
+ * to its mesh (`_targetSceneState`).
+ *
+ * @param {object|null|undefined} target — a debris record
+ * @returns {boolean}
+ */
+export function isChaseDone(target) {
+  return !!(target && target._motherParked && !target._onboardingPinned);
+}
+
 /** Autopilot rotation rate (rad/s) — gentler than manual (0.3) */
 const AP_ROT_RATE = 0.2;
 
@@ -596,7 +621,7 @@ export class AutopilotSystem {
 
   /**
    * Disengage autopilot with a reason tag.
-   * @param {string} reason — 'MANUAL'|'DELTAV'|'ARRIVED'|'COLLISION'|'ARROW_INPUT'|'TRAWL'|'TARGET_LOST'
+   * @param {string} reason — 'MANUAL'|'DELTAV'|'ARRIVED'|'COLLISION'|'ARROW_INPUT'|'TRAWL'|'TARGET_LOST'|'TARGET_CAUGHT'
    */
   disengage(reason) {
     if (!this._engaged) return;
@@ -669,6 +694,18 @@ export class AutopilotSystem {
     // --- Locked target still alive? ---
     if (this._lockedTargetRef && !this._lockedTargetRef.alive) {
       this.disengage('TARGET_LOST');
+      return;
+    }
+
+    // --- Locked target already caught? (g2-ghost-chase) ---
+    // A parked catch is still `alive`, but DebrisField no longer propagates its
+    // orbit, so the orbit-derived goal is a ghost the mother leaves behind at
+    // orbital speed — hand the ship back instead of burning toward it. Must come
+    // BEFORE _resolveTargetState (which would otherwise steer at the ghost).
+    // The reel-in attitude hold (_tickAttitudeHold above) is independent of
+    // engagement and keeps running.
+    if (this._lockedTargetRef && isChaseDone(this._lockedTargetRef)) {
+      this.disengage('TARGET_CAUGHT');
       return;
     }
 
@@ -1005,7 +1042,9 @@ export class AutopilotSystem {
           //   (b) a locked target is still alive — the pilot engaged AP toward
           //       a specific debris, so the UX contract is "hold indefinitely
           //       until manual disengage, target captured/burned, or arm work
-          //       starts".  Without (b) the mother auto-disengages 1.5 s after
+          //       starts" (captured = isChaseDone → TARGET_CAUGHT, burned =
+          //       TARGET_LOST; both are checked at the top of update()).
+          //       Without (b) the mother auto-disengages 1.5 s after
           //       arrival and drifts away — the symptom the user reported
           //       2026-05-15 ("mother autopilot turns off after approaching
           //       target").  (a) alone wasn't enough because it only covers
@@ -1174,6 +1213,14 @@ export class AutopilotSystem {
    */
   _resolveTargetState(dt) {
     // Locked TARGET ref (persists through target cycling) ---------------------
+    // g2-ghost-chase: a locked piece that is already caught (frozen orbit, see
+    // isChaseDone) yields NO state — not its ghost orbit, and not the selector's
+    // next target either (falling through would silently re-target). update()
+    // disengages before it gets here; this keeps the resolver itself from ever
+    // steering at the ghost for any other caller.
+    if (this._lockedTargetRef && this._lockedTargetRef.alive && isChaseDone(this._lockedTargetRef)) {
+      return null;
+    }
     if (this._lockedTargetRef && this._lockedTargetRef.alive && this._lockedTargetRef.orbit) {
       // Sprint 2 / PR A — scratch-output variant; no per-tick literal alloc.
       // T4: a pinned piece resolves to its _scenePosition + the mother's
