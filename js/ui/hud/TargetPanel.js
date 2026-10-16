@@ -133,7 +133,7 @@ export class TargetPanel {
     /** h4b D2: called when the player taps the already-selected row (= analyse; HUD wires noteAnalyse). */
     this.onAnalyse = null;
     this._downId = null;             // row id at pointerdown (the list is rebuilt at 2 Hz: ids survive, nodes do not)
-    this._skipClick = false;         // pointerup handled the tap; the click that follows must not count again
+    this._skipClick = null;          // pointerup handled the tap: { id, t } of the row; ONLY its own click must not count again
 
     /** Currently-selected target ID (public for coordinator read-access) */
     this.selectedTargetId = null;
@@ -497,18 +497,29 @@ export class TargetPanel {
         const id = row ? parseInt(row.dataset.id) : NaN;
         return isNaN(id) ? null : id;
       };
-      listEl.addEventListener('pointerdown', (e) => { this._downId = rowId(e); this._skipClick = false; });
+      // p1-newgame-panes D3: only the primary button taps (a missing `button` counts as 0).
+      const primary = (e) => !(e && typeof e.button === 'number' && e.button !== 0);
+      listEl.addEventListener('pointerdown', (e) => {
+        if (!primary(e)) return;
+        this._downId = rowId(e); this._skipClick = null;
+      });
       listEl.addEventListener('pointerup', (e) => {
+        if (!primary(e)) return;
         const id = rowId(e);
         const down = this._downId;
         this._downId = null;
         if (id == null || down !== id) return;     // dragged off the row / scroll: not a tap
-        this._skipClick = true;
+        // p1-newgame-panes D4: remember WHICH click to swallow (this row, soon after); a pointerup that
+        // no click follows (rebuilt row, cancelled touch) must not eat a later keyboard / programmatic click.
+        this._skipClick = { id, t: (typeof e.timeStamp === 'number') ? e.timeStamp : null };
         this._rowTap(id);
       });
       listEl.addEventListener('click', (e) => {
-        if (this._skipClick) { this._skipClick = false; return; }
         const id = rowId(e);
+        const skip = this._skipClick;
+        this._skipClick = null;                    // spent after one click, matched or not
+        if (skip && id === skip.id &&
+            (skip.t === null || typeof e.timeStamp !== 'number' || e.timeStamp - skip.t <= 500)) return;
         if (id != null) this._rowTap(id);
       });
     }

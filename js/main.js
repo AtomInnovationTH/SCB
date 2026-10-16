@@ -2660,7 +2660,10 @@ async function init() {
     //   the first engage (MENU_CONTINUE emits it before ORBITAL_VIEW), so a
     //   continue re-engages where the player left; a NEW game has no save →
     //   the intro ride as shipped. GAME_RESET clears the run's floor memory
-    //   (the core back to the shipped initial view) but NOT the player's rooms.
+    //   (the core back to the shipped initial view) and arms the new game's
+    //   first engage to forget the player's reveals of default-hidden panes
+    //   (a `+` past a floor's room); every other room entry stays, and a
+    //   continue (PERSISTENCE_LOADED) keeps the room exactly.
     // All inside the gate: a ?ladder=0 boot constructs no store, registers no
     // listener, never writes the key, and its save never carries `ladder`
     // (PersistenceManager omits the key when absent) — byte-identical.

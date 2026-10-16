@@ -378,6 +378,13 @@ export class LadderController {
      */
     this._introPending = null;
     /**
+     * p1-newgame-panes D1: armed by resetView() (GAME_RESET), disarmed by restoreView()
+     * (PERSISTENCE_LOADED = a continue), spent by the next _engage(): the mask first drops the
+     * reveals of default-hidden panes on every floor. A field of its own — _disengage clears
+     * _introPending, and a new game must forget even without an intro ride.
+     */
+    this._forgetRevealsPending = false;
+    /**
      * Session N.5 (owner 2026-09-07): RAILS SHY — true after a `-` press
      * found the density rungs already clear and bowed the RAILS out too.
      * Transient view state: never persisted, never a room edit; any `+`,
@@ -452,7 +459,9 @@ export class LadderController {
      * `resetView()` (GAME_RESET) places the core back here so a NEW run starts
      * on the shipped floor (the intro ride as shipped), whatever floor the last
      * run ended on. The player's rooms (FloorMask memory / the view store) are
-     * NOT touched by a reset — they belong to the player, not the run.
+     * kept by a reset, except the reveals of default-hidden panes: a NEW game
+     * forgets those at its first engage (`_forgetRevealsPending`), a continue
+     * keeps the room exactly (p1-newgame-panes D1).
      */
     const s0 = (this._ladder && this._ladder.getState) ? this._ladder.getState() : null;
     this._initialView = s0 ? { floor: s0.floor, z01: s0.z01 } : null;
@@ -991,6 +1000,7 @@ export class LadderController {
    * @returns {boolean} true when the core was placed
    */
   restoreView(saved) {
+    this._forgetRevealsPending = false;   // a continue keeps the room exactly (p1-newgame-panes D1)
     if (!saved || typeof saved !== 'object') return false;
     const floor = saved.floor, z01 = saved.z01;
     if (!Number.isFinite(floor) || !FloorContract.FLOORS.some((f) => f.id === floor)) return false;
@@ -1004,14 +1014,20 @@ export class LadderController {
    * construction, so a NEW game starts on the shipped floor with the intro ride
    * as shipped, whatever floor the last run ended on. A CONTINUE restores the
    * saved view again right after (GameFlowManager emits PERSISTENCE_LOADED after
-   * resetGame()). The player's rooms and pane memory are NOT touched (D5: they
-   * belong to the player, not the run). Same engaged-in-gameplay refusal as
-   * restoreView.
+   * resetGame()). resetView() arms the forget-reveals drop (p1-newgame-panes D1): the player's
+   * rooms stay (D5: they belong to the player, not the run) except the panes a
+   * `+` revealed past a floor's default, which the first engage of this run drops
+   * from the mask's memory — a new game starts every room at its default level.
+   * restoreView() (a continue) disarms it. Same engaged-in-gameplay refusal as
+   * restoreView (and nothing is armed then: the live room stands).
    * @returns {boolean} true when the core was placed
    */
   resetView() {
-    if (!this._initialView) return false;
-    return this._placeWhileHidden(this._initialView.floor, this._initialView.z01);
+    let placed = false;
+    if (this._initialView) placed = this._placeWhileHidden(this._initialView.floor, this._initialView.z01);
+    // Armed AFTER the placement: _placeWhileHidden may _disengage, which captures and persists the live layout.
+    if (!this._engaged) this._forgetRevealsPending = true;
+    return placed;
   }
 
   /**
@@ -1423,6 +1439,12 @@ export class LadderController {
     // (the same permanent-boost class as the ceremony leak). Settle it FIRST —
     // the helper is a no-op while engaged, so it must run before the flag.
     this._settleStaleRide();
+    // p1-newgame-panes D1: a NEW run's first engage drops the reveals of default-hidden panes
+    // BEFORE _applyFloorContent applies the room (which persists the result right after).
+    if (this._forgetRevealsPending) {
+      this._forgetRevealsPending = false;
+      if (this._floorMask && typeof this._floorMask.forgetReveals === 'function') this._floorMask.forgetReveals();
+    }
     this._engaged = true;
     this._railsShy = false;                    // a fresh engagement is never shy (Session N.5)
     this._resetHudClear();                    // rev-3: a fresh engage never leaves the tabs hidden

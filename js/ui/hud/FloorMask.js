@@ -525,6 +525,28 @@ export class FloorMask {
   }
 
   /**
+   * p1-newgame-panes D1: a NEW game forgets the player's reveals. Drops, on EVERY floor, each D5
+   * memory entry that shows a pane that floor's DEFAULT_ROOMS row marks 'gone' (the `+` pulls). A
+   * pane the player hid, and every 'faint' / 'shown' row, stays; a floor left with no entry loses
+   * its row. Memory only: the caller runs it while disengaged (no applied floor), and the next
+   * `setFloor` applies the result. Event-rate only (one new game).
+   * @returns {boolean} true when an entry was dropped
+   */
+  forgetReveals() {
+    if (this._disposed) return false;
+    let changed = false;
+    for (const [floor, panes] of Array.from(this._memory)) {
+      const room = DEFAULT_ROOMS[floor];
+      if (!room) continue;
+      for (const [pane, vis] of Array.from(panes)) {
+        if (vis === true && room[pane] === 'gone') { panes.delete(pane); changed = true; }
+      }
+      if (!panes.size) this._memory.delete(floor);
+    }
+    return changed;
+  }
+
+  /**
    * D5 memory as a plain-JSON persistence surface (Wave 5 serializes this):
    * `{ floors: { "<floorId>": { "<paneId>": boolean } } }`.
    * @returns {{floors: Object<string, Object<string, boolean>>}}
