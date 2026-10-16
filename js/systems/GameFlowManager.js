@@ -21,7 +21,6 @@ import { targetSelector } from './TargetSelector.js';
 import { kesslerSystem } from './KesslerSystem.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
 import { trawlManager } from './TrawlManager.js';
-import { launchSequence } from './LaunchSequence.js';
 import { openingDance } from './OpeningDance.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { computeStartOrbit } from './startOrbitMath.js';
@@ -439,11 +438,6 @@ export class GameFlowManager {
       gameState.currentState = GameStates.MENU; // Allow transition from MENU
       persistenceManager.backupSave(); // F1 save-guard: back up before New Game clears it
       persistenceManager.deleteSave(); // New Game clears any existing save
-      // ST-9.11 C-5: Start launch sequence on new game (flag-gated)
-      if (Constants.FEATURE_FLAGS.LAUNCH_SEQUENCE) {
-        const { armManager } = this._refs;
-        launchSequence.start(armManager, persistenceManager);
-      }
       // Opening dance (2026-09-16): the sim ship joins the unfold HERE — after
       // resetGame() (whose snapFlowerToStow / furl reset just ran) and in the
       // same tick, so no frame draws a deployed ship after the cut. A skipped
@@ -471,11 +465,6 @@ export class GameFlowManager {
       gameState.currentState = GameStates.MENU;
       persistenceManager.backupSave(); // F1 save-guard: back up before New Game clears it
       persistenceManager.deleteSave(); // New Game clears any existing save
-      // ST-9.11 C-5: Start launch sequence on new game (flag-gated)
-      if (Constants.FEATURE_FLAGS.LAUNCH_SEQUENCE) {
-        const { armManager } = this._refs;
-        launchSequence.start(armManager, persistenceManager);
-      }
       this.transitionToState(GameStates.ORBITAL_VIEW);
     });
 
@@ -578,24 +567,6 @@ export class GameFlowManager {
       // immediately (no 2 s settle delay). The ORBITAL_VIEW timer is gated behind
       // _firstOrbitalView (set false above) so it won't fire for this path.
       eventBus.emit(Events.HUD_GROUP_ACTIVATE, { group: 'score' });
-
-      // ST-9.11 C-5: Resume launch sequence from persisted phase
-      if (Constants.FEATURE_FLAGS.LAUNCH_SEQUENCE) {
-        const savedPhase = persistenceManager.getLaunchPhase();
-        const earlyPhases = ['STOWED_IN_FAIRING', 'LIFTOFF', 'FAIRING_SEPARATION',
-                             'ORBIT_INSERTION', 'LAUNCH_LOCK_RELEASE'];
-        if (savedPhase !== 'READY') {
-          const { armManager } = this._refs;
-          if (earlyPhases.includes(savedPhase)) {
-            // Pre-ROSA: restart fresh launch (game-design choice — documented)
-            launchSequence.start(armManager, persistenceManager);
-          } else {
-            // Mid/post-ROSA: snap to READY with full power + all arms STOWED
-            launchSequence.start(armManager, persistenceManager);
-            launchSequence.skipToReady();
-          }
-        }
-      }
 
       // Continue routes straight to flight (like new game) — no BRIEFING card
       // on startup. _firstOrbitalView is false (set above), so the ORBITAL_VIEW
@@ -1750,9 +1721,6 @@ export class GameFlowManager {
     // debrisWireframe: self-manages via GAME_RESET listener
     // kesslerSystem: self-manages via GAME_RESET listener
 
-    // ST-9.11 C-5: Reset launch sequence state
-    launchSequence.reset();
-
     // Notify self-resetting systems (CommsSystem, KesslerSystem,
     // TutorialSystem, TrawlManager listen for this)
     eventBus.emit(Events.GAME_RESET);
@@ -1767,13 +1735,12 @@ export class GameFlowManager {
     player.orbit.semiMajorAxis = Constants.EARTH_RADIUS + Constants.START_ALTITUDE;
     player.orbit.trueAnomaly = 0;
 
-    // Reset ROSA furl state so a retry never inherits a furled array (the retry
-    // path skips the launch sequence, which would otherwise re-deploy them).
+    // Reset ROSA furl state so a retry never inherits a furled array.
     if (player.resetRosaFurlState) player.resetRosaFurlState();
     // Owner amendment 2026-09-09 (OVERRIDE radiator sweep): the fold is now
     // reachable in play, so a run can end with the flower FOLDED (lock armed,
-    // FEEP inhibited, ROSA held centred). The retry hand-off mirrors
-    // LaunchSequence.skipToReady: snap to the STOW bud, lock + hold cleared
+    // FEEP inhibited, ROSA held centred). The retry hand-off
+    // snaps to the STOW bud, lock + hold cleared
     // (one THERMAL_FLOWER_RELEASED if the lock was armed). No-op unfitted.
     if (player.snapFlowerToStow) player.snapFlowerToStow();
 

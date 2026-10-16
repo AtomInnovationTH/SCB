@@ -471,25 +471,6 @@ export class HUD {
     `;
     this.container.appendChild(this._conjunctionPanel);
 
-    // --- Launch Phase Banner (ST-9.11 C-5) ---
-    // TODO: visual cinematic — replace text banner with 3D launch sequence overlay
-    this._launchBanner = document.createElement('div');
-    this._launchBanner.id = 'hud-launch-banner';
-    Object.assign(this._launchBanner.style, {
-      position: 'absolute', top: '100px', left: '50%',
-      transform: 'translateX(-50%)', minWidth: '320px', maxWidth: '400px',
-      textAlign: 'center', display: 'none',
-      background: 'rgb(var(--hud-ink-rgb, 0 0 0) / 0.92)', border: '1px solid rgb(var(--hud-info-rgb, 0 200 255) / 0.5)',
-      borderRadius: '4px', padding: '12px 24px', zIndex: '130',
-      fontFamily: 'var(--font-mono)', color: 'var(--hud-info, #00ccff)',
-      letterSpacing: '1.5px', fontSize: '13px',
-    });
-    this._launchBanner.innerHTML = `
-      <div id="hud-launch-phase" style="font-weight:bold;font-size:14px;letter-spacing:2px;"></div>
-      <div id="hud-launch-detail" style="font-size:11px;margin-top:6px;opacity:0.85;"></div>
-    `;
-    this.container.appendChild(this._launchBanner);
-
     // --- Pause Overlay ---
     this._pauseOverlay = document.createElement('div');
     this._pauseOverlay.id = 'hud-pause-overlay';
@@ -1441,39 +1422,6 @@ export class HUD {
         this._pinned = null;
         this._updatePinWidget();
       }
-    });
-
-    // ST-9.11 C-5: Launch sequence phase indicator with countdown
-    eventBus.on(Events.LAUNCH_PHASE_CHANGED, (data) => {
-      if (!this._launchBanner) return;
-      const phaseEl = this._launchBanner.querySelector('#hud-launch-phase');
-      const detailEl = this._launchBanner.querySelector('#hud-launch-detail');
-      if (!phaseEl || !detailEl) return;
-
-      const label = (data.toPhase || '').replace(/_/g, ' ');
-      const t = Math.round(data.elapsedTotalS || 0);
-      phaseEl.textContent = label;
-
-      // Build countdown detail: "T+12s — NEXT PHASE in 28s"
-      const dur = data.phaseDurationS || 0;
-      const next = data.nextPhase;
-      if (next && dur > 0 && isFinite(dur)) {
-        const nextLabel = next.replace(/_/g, ' ');
-        detailEl.textContent = `T+${t}s. ${nextLabel} in ${Math.round(dur)}s`;
-      } else {
-        detailEl.textContent = `T+${t}s`;
-      }
-
-      // Show banner (hidden when READY)
-      if (data.toPhase !== 'READY') {
-        this._launchBanner.style.display = 'block';
-      } else {
-        this._launchBanner.style.display = 'none';
-      }
-    });
-
-    eventBus.on(Events.LAUNCH_SEQUENCE_COMPLETE, () => {
-      if (this._launchBanner) this._launchBanner.style.display = 'none';
     });
 
     eventBus.on(Events.COLLISION_WARNING, (data) => {

@@ -6,7 +6,7 @@
  * the menu hero's solar wings roll out at the SHIPPED hardware rate (the
  * player's ship keeps its wings rolled up — w4-power D2), and the player gets
  * the wheel 4.0 s after the menu cuts away. No rocket, no fairing, no
- * launch-phase persistence writes, no arm launch lock.
+ * persistence writes, no arm launch lock.
  *
  * DECISIONS §15 row 4 (owner 2026-10-08, lane w2-start-pose): the ship STARTS
  * CLOSED — the radiator stays folded flat along the body (it only eases off
@@ -153,7 +153,7 @@ const SKIP_DEAF_MS = 120;
 class OpeningDance {
   constructor() {
     /** Duck-typed tag: PlayerSatellite's message-silence gates read this (no
-     * instanceof, no import — the launch-sequence driver stays distinct). */
+     * instanceof, no import — the dance is the only driver of that slot). */
     this.isOpeningDance = true;
     /** @private wall-clock ms at t = 0 (jet-off), or null when not armed */
     this._t0Ms = null;

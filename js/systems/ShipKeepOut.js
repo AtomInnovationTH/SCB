@@ -39,7 +39,7 @@
  *     `_detailMeshes` are solid whatever their `.visible` says (except her
  *     bridle ring / hardpoints, which ArmUnit also hides BY STATE while the
  *     tether is stowed); a docked daughter's `group.visible` / `mesh.visible`
- *     (hidden while LOCKED/STOWED in its channel) are ignored too.
+ *     (hidden by the caller, e.g. at the menu) are ignored too.
  *   - every OTHER `.visible === false` (own or ancestor) or `material.visible
  *     === false` means "this part does not exist in the current state" (the
  *     furled-wing coil while the wings are out, a retracted clamp pin, a

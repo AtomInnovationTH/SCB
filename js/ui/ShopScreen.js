@@ -14,15 +14,6 @@ import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
 import { upgradePrereqsMet, upgradeCostNow, engineTankFull } from './shopGating.js';
 import { gasPriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
-import {
-  getAvailableTiers,
-  getCurrentTier,
-  getUpgradePath,
-  canUpgrade,
-  executeUpgrade,
-  buildGameState,
-  getEffectiveTRL,
-} from '../systems/ArmTierCatalog.js';
 
 /**
  * Upgrade definitions — 36 items across 9 categories, all wired to live systems
@@ -326,11 +317,6 @@ export class ShopScreen {
     this._scoringSystem = null;
     this._contractMassKg = 0;
 
-    // C-10: arm tier upgrade references
-    this._armManager = null;
-    this._launchSequence = null;
-    this._persistenceManager = null;
-
     this._injectStyles();
     this._build();
 
@@ -367,16 +353,6 @@ export class ShopScreen {
 
   /** Get contract mass (for save serialization). */
   getContractMass() { return this._contractMassKg || 0; }
-
-  // C-10: Arm tier upgrade setters
-  /** Set ArmManager reference for tier upgrades. */
-  setArmManager(am) { this._armManager = am; }
-
-  /** Set LaunchSequence reference for tier upgrade gating. */
-  setLaunchSequence(ls) { this._launchSequence = ls; }
-
-  /** Set PersistenceManager reference for tier upgrades. */
-  setPersistenceManager(pm) { this._persistenceManager = pm; }
 
   // ========================================================================
   // STYLES
@@ -826,11 +802,6 @@ export class ShopScreen {
     html += this._renderTierSection('spring', '🛰️ CRADLE SPRINGS', Constants.SPRING_TIERS, SPRING_DESCRIPTIONS, this._springTier);
     html += this._renderTierSection('tether', '🧵 TETHER MATERIALS', Constants.TETHER_TIERS, TETHER_DESCRIPTIONS, this._tetherTier);
 
-    // C-10: Arm tier upgrade section (gated by feature flag)
-    if (Constants.FEATURE_FLAGS.TIER_UPGRADES) {
-      html += this._renderArmTierSection();
-    }
-
     catContainer.innerHTML = html;
 
     // Inline-glossary affordances: decorated jargon in upgrade/tier descriptions
@@ -863,16 +834,6 @@ export class ShopScreen {
         this._purchaseTierUpgrade(tierType, tierIndex);
       });
     });
-
-    // C-10: Arm tier buy button handlers
-    if (Constants.FEATURE_FLAGS.TIER_UPGRADES) {
-      catContainer.querySelectorAll('.shop-arm-tier-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const targetTier = btn.dataset.targetTier;
-          this._purchaseArmTier(targetTier);
-        });
-      });
-    }
 
     // Apply flash animation to last purchased card
     if (this._lastPurchasedId) {
@@ -1125,188 +1086,6 @@ export class ShopScreen {
         </div>
       </div>
     `;
-  }
-
-  // ========================================================================
-  // ARM TIER SECTION (C-10)
-  // ========================================================================
-
-  /**
-   * @private Render the arm tier upgrade section.
-   * Shows all 3 tiers: current (✓), available (price + buy), locked (TRL hint).
-   */
-  _renderArmTierSection() {
-    const currentTier = this._armManager ? getCurrentTier(this._armManager) : 'Y0_QUAD';
-    const tiers = getAvailableTiers();
-    const gs = this._armManager
-      ? buildGameState({
-          scoringSystem,
-          armManager: this._armManager,
-          launchSequence: this._launchSequence,
-        })
-      : { credits: scoringSystem.credits, debrisCleared: scoringSystem.debrisCleared || 0,
-          launchReady: true, allArmsStowed: true, noActiveOps: true };
-
-    const cards = tiers.map(tier => {
-      const isCurrent = tier.tierKey === currentTier;
-      const isPast = tier.tierKey !== currentTier &&
-        getAvailableTiers().findIndex(t => t.tierKey === tier.tierKey) <
-        getAvailableTiers().findIndex(t => t.tierKey === currentTier);
-      const isNext = !isCurrent && !isPast && tier.prereqTier === currentTier;
-      const isLocked = !isCurrent && !isPast && !isNext;
-
-      const check = isNext ? canUpgrade(currentTier, tier.tierKey, gs) : { allowed: false, reason: null };
-      const canAfford = isNext && check.allowed;
-
-      // Visual states
-      let borderColor, bgColor, opacity;
-      if (isCurrent) {
-        borderColor = 'rgba(0,255,136,0.5)';
-        bgColor = 'rgba(0,255,136,0.08)';
-        opacity = 1.0;
-      } else if (isPast) {
-        borderColor = 'rgba(0,255,136,0.2)';
-        bgColor = 'rgba(0,255,136,0.05)';
-        opacity = 0.5;
-      } else if (isNext) {
-        borderColor = canAfford ? 'rgba(240,192,64,0.4)' : 'rgba(255,68,68,0.15)';
-        bgColor = 'rgba(0,20,40,0.5)';
-        opacity = canAfford ? 1.0 : 0.6;
-      } else {
-        borderColor = 'rgba(100,100,100,0.2)';
-        bgColor = 'rgba(0,10,20,0.3)';
-        opacity = 0.35;
-      }
-
-      const statsLine = `${tier.armCount} daughters · ${tier.massDryKg} kg dry · ${tier.massWetKg} kg wet`;
-      const featuresLine = tier.features.join(' · ');
-
-      let statusHtml;
-      if (isCurrent) {
-        statusHtml = `<span style="color:#00ff88;font-size:0.75rem;">▶ EQUIPPED</span>`;
-      } else if (isPast) {
-        statusHtml = `<span style="color:rgba(0,255,136,0.5);font-size:0.75rem;">✓ OWNED</span>`;
-      } else if (isLocked) {
-        const needed = tier.prereqTier
-          ? getAvailableTiers().find(t => t.tierKey === tier.prereqTier)?.displayName || tier.prereqTier
-          : '';
-        statusHtml = `<span style="color:rgba(100,100,100,0.5);font-size:0.75rem;">🔒 Requires ${needed}</span>`;
-      } else {
-        // isNext — purchasable or error
-        const costColor = canAfford ? '#f0c040' : '#ff4444';
-        statusHtml = `
-          <div style="font-size:0.8rem;color:${costColor};">${tier.costCredits.toLocaleString()} cr</div>
-          <button class="shop-arm-tier-btn" data-target-tier="${tier.tierKey}" style="
-            font-family:var(--font-mono); font-size:0.7rem; color:${canAfford ? '#00ff88' : 'rgba(0,255,136,0.3)'};
-            background: ${canAfford ? 'rgba(0,255,136,0.15)' : 'transparent'};
-            border: 1px solid ${canAfford ? 'rgba(0,255,136,0.4)' : 'rgba(0,255,136,0.15)'};
-            padding: 3px 12px; cursor: ${canAfford ? 'pointer' : 'default'}; border-radius: 2px;
-            pointer-events: ${canAfford ? 'auto' : 'none'}; transition: all 0.2s;
-          ">UPGRADE</button>
-        `;
-        if (!canAfford && check.reason) {
-          statusHtml += `<div style="font-size:0.6rem;color:rgba(255,68,68,0.5);margin-top:2px;">${check.reason}</div>`;
-        }
-      }
-
-      // UX-11 #10: Tech-Level badge for the tier (player-facing relabel of TRL)
-      const trlValue = tier.unlockTRL;
-      const effectiveTRL = getEffectiveTRL(gs.debrisCleared || 0);
-      const trlMet = effectiveTRL >= trlValue;
-      const trlColor = trlMet ? '#22dd44' : '#ff6644';
-
-      return `
-        <div data-tier-id="arm-${tier.tierKey}" style="display:flex;justify-content:space-between;align-items:center;
-                    padding:8px 12px;margin:4px 0;border-radius:3px;
-                    background:${bgColor};border:1px solid ${borderColor};
-                    opacity:${opacity};transition:all 0.3s;">
-          <div style="flex:1;">
-            <div style="font-size:0.85rem;color:${isCurrent ? '#00ff88' : isPast ? 'rgba(0,255,136,0.6)' : isLocked ? 'rgba(100,100,100,0.5)' : '#00ff88'};">
-              ${tier.displayName}
-              <span style="font-size:0.6rem;font-weight:bold;padding:1px 5px;border-radius:2px;
-                           letter-spacing:0.05em;color:${trlColor};border:1px solid ${trlColor};
-                           background:rgba(0,0,0,0.3);margin-left:6px;">${techLevelBadgeText(trlValue)}</span>
-              ${tier.endFaceArms > 0 ? '<span style="font-size:0.6rem;color:#ff8800;margin-left:6px;">+END-FACE</span>' : ''}
-            </div>
-            <div style="font-size:0.7rem;color:rgba(0,255,136,0.5);">${statsLine}</div>
-            <div style="font-size:0.65rem;color:rgba(0,255,136,0.35);margin-top:1px;">${featuresLine}</div>
-            <div style="font-size:0.6rem;color:rgba(0,255,136,0.25);margin-top:1px;font-style:italic;">${decorateGlossary(tier.description, { once: true })}</div>
-          </div>
-          <div style="text-align:right;min-width:100px;">
-            ${statusHtml}
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    return `
-      <div style="margin-bottom:1rem;">
-        <div style="font-size:0.8rem;color:rgba(0,255,136,0.5);letter-spacing:0.1em;
-                     margin-bottom:6px;padding-bottom:3px;border-bottom:1px solid rgba(0,255,136,0.15);">
-          🐙 DAUGHTER CONFIGURATION
-        </div>
-        ${cards}
-      </div>
-    `;
-  }
-
-  /**
-   * @private Purchase an arm tier upgrade (C-10).
-   * Shows confirmation modal, then executes via ArmTierCatalog.executeUpgrade.
-   */
-  _purchaseArmTier(targetTier) {
-    if (!this._armManager) return;
-
-    const currentTier = getCurrentTier(this._armManager);
-    const gs = buildGameState({
-      scoringSystem,
-      armManager: this._armManager,
-      launchSequence: this._launchSequence,
-    });
-
-    const check = canUpgrade(currentTier, targetTier, gs);
-    if (!check.allowed) {
-      audioSystem.playDeny();
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'SHIPYARD',
-        text: `Tier upgrade denied: ${check.reason}`,
-        priority: 'warning',
-      });
-      return;
-    }
-
-    const target = getAvailableTiers().find(t => t.tierKey === targetTier);
-    if (!target) return;
-
-    // Simple confirmation via browser confirm (no custom modal needed).
-    // Register item 86 (owner-ruled "make words honest"): executeUpgrade
-    // sets the tier key + persistence only — the live fleet is rebuilt at
-    // reconstruction (the item-62 tombstone's contract), so the copy says
-    // exactly that instead of promising an in-session arm swap.
-    const msg = `UPGRADE TO ${target.displayName}?\n\n` +
-      `Daughters: ${target.armCount} (${target.features[0]})\n` +
-      `Mass: ${target.massDryKg} kg dry / ${target.massWetKg} kg wet\n` +
-      `Cost: ${target.costCredits.toLocaleString()} credits\n\n` +
-      `Your current daughters finish this flight unchanged.\n` +
-      `The new configuration takes effect at your NEXT LAUNCH\n` +
-      `(per-daughter state — nets, tethers, bridle — resets then).`;
-
-    if (!confirm(msg)) return;
-
-    const result = executeUpgrade(currentTier, targetTier, gs, {
-      armManager: this._armManager,
-      scoringSystem,
-      persistenceManager: this._persistenceManager,
-    });
-
-    if (result.success) {
-      this._lastPurchasedId = `arm-${targetTier}`;
-      audioSystem.playPurchase();
-    } else {
-      audioSystem.playDeny();
-    }
-
-    this.refresh();
   }
 
   // ========================================================================

@@ -168,7 +168,7 @@ export function generateDockPositions(tierKeyOrCount) {
   // ride the SAME stored convention as the ring — ship Z lives in the stored
   // Y slot (the S13(a) swap) — so hingePosition (0, ±CORE_LENGTH/2, 0)_stored
   // reads (0, 0, ±CORE_LENGTH/2)_ship: ON the barrel axis at the end faces,
-  // exactly where TierVisualManager._createEndFaceMount draws its mounts.
+  // exactly where the end-face mounts were once drawn (that visual was removed 2026-10-16).
   // dockOutward likewise carries ship-Z in its stored-Y slot, so a face's
   // arm deploys straight off its face at α=π/2. (The pre-fix rows parked
   // hinge AND outward in the stored-Z slots = side stations at
@@ -258,9 +258,6 @@ export class ArmManager {
      * @type {number}
      */
     this.selectedArmIndex = -1;
-
-    // ST-9.11 C-5: Launch sequence lock — blocks strutDeploy/strutStow/fireDualPair
-    this._launchLock = false;
 
     // V5 Pulse scan state
     this._pulseScanCooldown = 0;
@@ -1260,18 +1257,6 @@ export class ArmManager {
     return this._activeTierKey;
   }
 
-  /**
-   * Set the active arm tier (ST-9.2). Persists via PersistenceManager.
-   * Used by C-10 shop refit when player upgrades to a new tier.
-   * Does NOT rebuild arms — caller must dispose + reconstruct if live.
-   * @param {string} tierName — 'Y0_QUAD', 'Y1_HEX', or 'Y3_OCTO'
-   */
-  setCurrentTier(tierName) {
-    if (!Constants.ARM_LADDER[tierName]) return;
-    this._activeTierKey = tierName;
-    persistenceManager.setArmTier(tierName);
-  }
-
   // ==========================================================================
   // ST-9.2 CONFIG G STRUT TIP GEOMETRY
   // ==========================================================================
@@ -1307,20 +1292,14 @@ export class ArmManager {
   /**
    * Fire an antipodal arm pair simultaneously for recoil cancellation.
    * Pre-fire gating: BOTH arms must be in an operational state that allows fire
-   * (e.g., DOCKED) AND deployState === DEPLOYED AND hinge in ROTATE
-   * (so we can auto-lock). If either arm fails gating, fire is rejected.
+   * (e.g., DOCKED) AND hinge in ROTATE (so we can auto-lock). If either arm
+   * fails gating, fire is rejected.
    *
    * @param {number} pairIndex — index of one arm in the pair (partner auto-resolved)
    * @param {number} [motherOmega=0] — |ω| of mother in rad/s (for safety interlock)
    * @returns {{ success: boolean, reason?: string }} Result with rejection reason if failed
    */
   fireDualPair(pairIndex, motherOmega = 0) {
-    // ST-9.11 C-5: Block fire during launch sequence
-    if (this._launchLock) {
-      eventBus.emit(Events.ARM_DUAL_FIRE_REJECTED, { pairIndex, reason: 'launch_sequence_active' });
-      return { success: false, reason: 'launch_sequence_active' };
-    }
-
     const partnerIndex = this.getDualFirePair(pairIndex);
     if (partnerIndex === null) {
       const reason = `No antipodal partner for arm ${pairIndex}`;
@@ -1344,18 +1323,6 @@ export class ArmManager {
         threshold: Constants.OCTOPUS_V5.FIRE_RATE_INTERLOCK,
       });
       return { success: false, reason: `Mother ω too high: ${(motherOmega * 180 / Math.PI).toFixed(1)}°/s` };
-    }
-
-    // C-4: Check deploy state — getDeployState() returns DEPLOYED when flag
-    // OFF (backward-compat), or live state when STOW_DEPLOY_STATE_MACHINE ON.
-    const DS = Constants.DEPLOY_STATES;
-    const d1 = arm1.getDeployState();
-    const d2 = arm2.getDeployState();
-
-    if (d1 !== DS.DEPLOYED || d2 !== DS.DEPLOYED) {
-      const reason = `Deploy state not ready: arm${pairIndex}=${d1}, arm${partnerIndex}=${d2}`;
-      eventBus.emit(Events.ARM_DUAL_FIRE_REJECTED, { pairIndex, reason });
-      return { success: false, reason };
     }
 
     // Check arm operational state (must be in a fireable state)
@@ -1433,112 +1400,6 @@ export class ArmManager {
     return { success: true };
   }
 
-  // ==========================================================================
-  // ST-9.10 C-4: STRUT DEPLOY/STOW COORDINATION
-  // ==========================================================================
-
-  /**
-   * Deploy a single arm's strut (STOWED → DEPLOYING → DEPLOYED).
-   * Delegates to ArmUnit.strutDeploy(). Records deploy time for telemetry.
-   *
-   * No-op when STOW_DEPLOY_STATE_MACHINE flag is false.
-   *
-   * @param {number} armIndex — 0-based arm index
-   * @param {number} [targetAlpha=Math.PI/2] — target sweep angle
-   * @returns {Promise<void>} Resolves when arm reaches DEPLOYED
-   */
-  strutDeployArm(armIndex, targetAlpha) {
-    if (!Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE) return Promise.resolve();
-    // ST-9.11 C-5: Block deploy during launch sequence
-    if (this._launchLock) return Promise.reject(new Error('Launch sequence active'));
-    const arm = this.arms[armIndex];
-    if (!arm) return Promise.reject(new Error(`Invalid arm index: ${armIndex}`));
-
-    this._lastDeployTime = Date.now();
-    return arm.strutDeploy(targetAlpha);
-  }
-
-  /**
-   * Stow a single arm's strut (DEPLOYED → STOWING → STOWED).
-   * Delegates to ArmUnit.strutStow().
-   *
-   * No-op when STOW_DEPLOY_STATE_MACHINE flag is false.
-   *
-   * @param {number} armIndex — 0-based arm index
-   * @returns {Promise<void>} Resolves when arm reaches STOWED
-   */
-  strutStowArm(armIndex) {
-    if (!Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE) return Promise.resolve();
-    // ST-9.11 C-5: Block stow during launch sequence
-    if (this._launchLock) return Promise.reject(new Error('Launch sequence active'));
-    const arm = this.arms[armIndex];
-    if (!arm) return Promise.reject(new Error(`Invalid arm index: ${armIndex}`));
-
-    return arm.strutStow();
-  }
-
-  /**
-   * Deploy all stowed arms in azimuthal order with a small stagger (~200 ms)
-   * to avoid simultaneous center-of-mass spike.
-   *
-   * No-op when STOW_DEPLOY_STATE_MACHINE flag is false.
-   *
-   * @param {number} [targetAlpha=Math.PI/2] — target sweep angle for all arms
-   * @param {number} [staggerMs=200] — delay between successive deploys
-   * @returns {Promise<void[]>} Resolves when ALL arms reach DEPLOYED
-   */
-  strutDeployAll(targetAlpha, staggerMs = 200) {
-    if (!Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE) return Promise.resolve([]);
-
-    const DS = Constants.DEPLOY_STATES;
-    const stowedArms = this.arms
-      .map((arm, idx) => ({ arm, idx }))
-      .filter(({ arm }) => arm.getDeployState() === DS.STOWED);
-
-    // Sort by azimuth for predictable order
-    stowedArms.sort((a, b) => (a.arm._azimuthDeg || 0) - (b.arm._azimuthDeg || 0));
-
-    const promises = stowedArms.map(({ arm, idx }, order) => {
-      return new Promise((resolve) => {
-        setTimeout(() => {
-          arm.strutDeploy(targetAlpha).then(resolve).catch(() => resolve());
-        }, order * staggerMs);
-      });
-    });
-
-    return Promise.all(promises);
-  }
-
-  /**
-   * Stow all deployed arms in reverse azimuthal order with stagger.
-   *
-   * No-op when STOW_DEPLOY_STATE_MACHINE flag is false.
-   *
-   * @param {number} [staggerMs=200] — delay between successive stows
-   * @returns {Promise<void[]>} Resolves when ALL arms reach STOWED
-   */
-  strutStowAll(staggerMs = 200) {
-    if (!Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE) return Promise.resolve([]);
-
-    const DS = Constants.DEPLOY_STATES;
-    const deployedArms = this.arms
-      .map((arm, idx) => ({ arm, idx }))
-      .filter(({ arm }) => arm.getDeployState() === DS.DEPLOYED);
-
-    // Sort by azimuth descending (reverse order)
-    deployedArms.sort((a, b) => (b.arm._azimuthDeg || 0) - (a.arm._azimuthDeg || 0));
-
-    const promises = deployedArms.map(({ arm, idx }, order) => {
-      return new Promise((resolve) => {
-        setTimeout(() => {
-          arm.strutStow().then(resolve).catch(() => resolve());
-        }, order * staggerMs);
-      });
-    });
-
-    return Promise.all(promises);
-  }
-
   /**
    * Session L (plan item 4): the "." hotkey's strut toggle as a PUBLIC method
    * — the REFIT BERTHS card's STRUTS chip and the F1 bar's `struts` actuator
@@ -1607,18 +1468,6 @@ export class ArmManager {
     return (this.arms || []).some((a) =>
       a && a.state === ARM_STATES.DOCKED
       && _strutLiveAlpha(a) >= Constants.OCTOPUS_V5.STRUT_OPEN_THRESHOLD);
-  }
-
-  /**
-   * Get a snapshot of all arm deploy states for HUD/persistence.
-   * @returns {Array<{ armIndex: number, deployState: string, alpha: number }>}
-   */
-  getDeploySnapshot() {
-    return this.arms.map((arm, idx) => ({
-      armIndex: idx,
-      deployState: arm.getDeployState(),
-      alpha: arm.getAimAlpha(),
-    }));
   }
 
   /**
@@ -2203,8 +2052,6 @@ export class ArmManager {
    * test" the plan asks for rather than a mirror that can drift. This method
    * supplies only the POLICY: which arm, which anchor, which radius.
    * `_corridorClear`'s own behaviour is untouched.
-   * Skips LOCKED/STOWED struts (clear by construction), matching
-   * `_corridorClear`'s own skip.
    * @param {number} armIndex
    * @param {number} radiusM — the inbound catch's corridor radius
    *   (`debris.sizeMeter / 2 + CAPTURE_NET.BERTH_CLEARANCE_M`)
@@ -2214,8 +2061,6 @@ export class ArmManager {
   _strutFoulsInboundCorridor(armIndex, radiusM) {
     const arm = this.arms[armIndex];
     if (!arm || typeof arm.getAimAlpha !== 'function') return false;
-    const ds = (typeof arm.getDeployState === 'function') ? arm.getDeployState() : 'DEPLOYED';
-    if (ds === 'LOCKED' || ds === 'STOWED') return false;
 
     const player = this.playerSatellite;
     const V5 = Constants.OCTOPUS_V5;
@@ -2861,9 +2706,6 @@ export class ArmManager {
     this._pulseScanTimer = 0;
     this._pulseScanActive = false;
 
-    // ST-9.11 C-5: Clear launch lock on reset
-    this._launchLock = false;
-
     // arms-auto: forget the automatic-pose state and any manual-override markers.
     if (this._strutAuto) this._strutAuto.reset();
     this._strutPress = 0;
@@ -2951,7 +2793,6 @@ export class ArmManager {
         const p = self.playerSatellite;
         return Constants.FEATURE_FLAGS.STRUT_AUTO !== true
           || !self._debrisField
-          || self.isLaunchLocked()
           || !!(p && p.safeMode)
           || !!(p && typeof p._danceDrivesMe === 'function' && p._danceDrivesMe());
       },
@@ -3050,22 +2891,6 @@ export class ArmManager {
     const b = ko.sphere(tip, 0.13, { ignore });
     return Math.min(a.gap, b.gap);
   }
-
-  // ========================================================================
-  // ST-9.11 C-5: Launch Sequence Lock
-  // ========================================================================
-
-  /**
-   * Set the launch sequence lock.  When true, strutDeploy/strutStow/fireDualPair
-   * are blocked.  Set by LaunchSequence.start(), cleared on LAUNCH_SEQUENCE_COMPLETE.
-   * @param {boolean} locked
-   */
-  setLaunchLock(locked) { this._launchLock = !!locked; }
-
-  /**
-   * @returns {boolean} Whether the launch lock is currently engaged.
-   */
-  isLaunchLocked() { return this._launchLock; }
 
   /**
    * Dispose all arms and remove from scene.

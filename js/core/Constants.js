@@ -986,10 +986,9 @@ export const Constants = {
   // ── Rigid-body attitude dynamics (supersedes kinematic rotation) ──
   // Lives OUTSIDE FEATURE_FLAGS deliberately (D7): REALITY_MODE forces every
   // FEATURE_FLAGS.* false, and disabling *physics* is not what REALITY_MODE means.
-  // DYNAMICS_ENABLED is a plain master switch — false restores the legacy kinematic
-  // path (old mass*0.25 MOI + kinematic slerp) with no rollback needed.
+  // (The master switch and the legacy kinematic path it restored — old mass*0.25
+  // MOI + kinematic slerp — were removed 2026-10-16.)
   ATTITUDE: {
-    DYNAMICS_ENABLED: true,     // master switch; legacy kinematic path when false
     NOZZLE_THRUST_N: 40.0,      // per-nozzle cold-gas thrust — the single feel dial (D1).
                                 // 40 N chosen over raising MAX_RATE: higher thrust shortens the
                                 // burn, so overshoot improves (17.1° → 10.7°) instead of degrading
@@ -1750,7 +1749,6 @@ export const Constants = {
     // stays live every frame, only the (pricier) occlusion test is cached.
     BODY_SHADE_UPDATE_S: 0.5,      // s — throttle period (2 Hz), per plan §4 "≤1-2 Hz"
     BODY_SHADE_MAX_DIST_M: 3.0,    // m — beyond this nothing on the ship can shade a cell
-    ROSA_DEPLOY_DURATION_S: 6.0,   // seconds per wing (ST-9.11 C-5)
 
     // ── ROSA fidelity geometry (verified vs. real Redwire/NASA ROSA) ──
     // Real ROSA: flexible PV "center wing" with a high-strain composite slit-tube
@@ -1836,9 +1834,9 @@ export const Constants = {
     WING_MOTOR_PAD_H: 0.003,      // m — standoff pad between the hull and the motor box
 
     // ── Wing-drum launch clamps (mother-wings step 3, DECISIONS §10) ──
-    // "The brackets are still needed for launch?" — yes: each drum end is held
-    // to the front/back end ring (z = ±CORE_LENGTH/2) through launch, released
-    // at LAUNCH_LOCK_RELEASE before the wing unrolls or tilts. The drum-half
+    // Each drum end is held to the front/back end ring (z = ±CORE_LENGTH/2)
+    // by a re-latchable hold-down latch (closed when the wings are fully
+    // rolled up, open before the wing unrolls or tilts). The drum-half
     // rides the drum (a collar at the drum's own tip, z ±1.02·ROSA_LENGTH/2).
     // The BODY half is a hold-down BRACKET BOLTED TO THE END RING: a block
     // bearing on the barrel's last WING_CLAMP_LAND of length and overhanging
@@ -1945,20 +1943,12 @@ export const Constants = {
       TENSION_WARNING_FRAC: 0.75,     // fraction of breaking tension → debounced warning
     },
 
-    // ── Bridle Ring (NEW — ST-9.7 C-8, Config G simplified) ──
-    // Simple load-distribution ring at strut tip. Replaces Y-harness (superseded).
-    // Cable exits from strut-tip reel through bridle ring to capture devices.
-    BRIDLE: {
-      ATTACH_POINTS_PER_RING: 3,       // 3 hardpoints per ring
-      MAX_LOAD_PER_POINT_KG: 200,      // kg — max load per single attach point
-      RING_MASS_KG: 0.3,              // kg — ring structural mass (small)
-      OVERLOAD_FACTOR: 1.2,           // load > 120% of max → DAMAGED state
-    },
   },
 
   // ============================================================================
   // ST-9.2 ARM TECH LADDER — Quad Y0 → Hex Y1 → Octo Y3
-  // Progression from 4 to 8 arms. Hex/Octo gated by FEATURE_FLAGS.SHIPYARD_REFIT.
+  // Progression from 4 to 8 arms. Only Quad ships; Hex/Octo are reserved rows
+  // (the shipyard-refit switch that once gated them was removed).
   // See CROSSBOW_ARMS.md §12.5 + §25 for mass derivation.
   // ============================================================================
   ARM_LADDER: {
@@ -2250,7 +2240,7 @@ export const Constants = {
       // its wings folded (four 0.30 × 0.101 × 1.70 m packs at r ≤ 0.546, tips
       // z 1.505; probe 7b.4c B′: MGA 0.023 / PV 0.031 / weaver 0.025 / coil
       // 0.032 m). Reachable ONLY under the launch lock: setFlowerPose('LAUNCH')
-      // while LaunchSequence.isActive(), the ?shot=1 dev hook with
+      // while a launch driver is active, the ?shot=1 dev hook with
       // { force: true }, or — owner amendment 2026-09-09 — the SAFETY OVERRIDE
       // sweep with { override: true } (PlayerSatellite.toggleFlowerOverride);
       // the lock clears the frame the release swing reaches POSE_FLOOR_DEG and
@@ -2361,34 +2351,17 @@ export const Constants = {
   // ST-9.9 Reality Mode toggle forces ALL of these to false at runtime.
   // ============================================================================
   FEATURE_FLAGS: {
-    SHIPYARD_REFIT:        false,  // ST-9.2 — Quad/Hex/Double config switching
-    CROSSBOW_MECHANISM:    false,  // ST-9.3 — full spring physics + 2-DOF + interlock
-    DUAL_OPPOSITE_FIRE:    false,  // ST-9.3 — recoil-cancelling pair fire
-    NET_TERMINOLOGY:       false,  // ST-9.4 — Capture Net terminology refit
-    NET_PRIMARY_DOCTRINE:  false,  // ST-9.4 — net primary, bola secondary
-    NET_CLING_MODEL:       false,  // ST-9.4c — cling probability + empty-net + mercy rule
-    NET_TANGLE_MECHANICS:  false,  // ST-9.4d — 5-scenario tangle detection + recovery
-    PER_PLATFORM_NETS:     false,  // ST-9.4e — Large/Medium/Small Net per-platform classes
-    DYNEEMA_TETHER:        false,  // ST-9.5 — Dyneema SK78 + reel-cycle wear
-    REEL_CYCLE_RESOURCE:   false,  // ST-9.5 — 20-cycle wear counter
-    ABLATION_MODULE:       false,  // ST-9.6 — mother-mounted deorbit laser
     LASER_DESPIN:          true,   // CP-2 ON — mother-mounted de-spin laser (hold L) + net tumble coupling
-    BRIDLE_RING_GEOMETRY:  false,  // ST-9.7 — Y-harness FEEP plume exclusion
-    TECH_LADDER_SHOP:      false,  // ST-9.8 — Y0–Y4 tier surfacing
     REALITY_MODE:          false,  // ST-9.9 — locks all FEATURE_* false (master)
 
-    // NEW — Epic 9 Config G gaps
-    STOW_DEPLOY_STATE_MACHINE: false,  // ST-9.10 — arm stow/deploy gating
-    LAUNCH_SEQUENCE:           false,  // ST-9.11 — launch lock cinematic
     // The OPENING DANCE (2026-09-16) — the ship unpacks itself. Starts in the
     // menu as the EVA astronaut jets off the hull she is welding, cascades
     // radiator → solar wings → daughters at the SHIPPED hardware rates, and
     // hands the player the wheel ~7.8 s after the menu cuts away. Off = the
     // ship simply boots deployed (OpeningDance.endState), exactly as before.
-    // This REPLACES the 60 s rocket launch above; LAUNCH_SEQUENCE stays false
-    // and untouched. A later "full launch" toggle, if it is ever wanted, hooks
-    // in by driving LaunchSequence instead of OpeningDance from the same menu
-    // departure wiring — no scaffolding for it exists, deliberately.
+    // This REPLACED the 60 s rocket launch (that sequence, its cinematic and
+    // its switch were removed 2026-10-16); no scaffolding for a "full launch"
+    // exists, deliberately.
     OPENING_DANCE:             true,
     // Scripted launch-plume cameo from the player's home spaceport during the
     // opening orbital pass (js/scene/LaunchCameo.js). AMBIENT extends it: any
@@ -2415,15 +2388,6 @@ export const Constants = {
     DAUGHTER_MULTITOOL:        true,   // P2 ON — tool-selection HUD, backtick cycle, MAGNETIC_GRAPPLE
     WEAVER_GRIPPER:            true,   // P3 ON — Weaver tertiary gripper jaws (GRIPPER_GRAPPLE)
     SPINNER_PAD:               true,   // P4 ON — Spinner secondary multi-modal pad (PAD_CONTACT)
-
-    // NEW — ST-9.5 C-7: Strut-Mounted Tether Reel
-    TETHER_REEL:               false,  // ST-9.5 C-7 — strut-mounted reel state machine + cable physics
-
-    // NEW — ST-9.7 C-8: Bridle Ring (simplified Config G)
-    BRIDLE_RING:               false,  // ST-9.7 C-8 — strut-tip load-distribution ring
-
-    // NEW — ST-9.8 C-10: Arm Tier Upgrades (shop entries)
-    TIER_UPGRADES:             false,  // ST-9.8 C-10 — Y0/Y1/Y3 tier shop entries + upgrade flow
 
     // NEW — P2 aft flower preview (owner ruling 2026-08-27: "just flip it on.
     // you can flip it off later p3"). ON: both flower pairs are pre-installed
@@ -2534,58 +2498,6 @@ export const Constants = {
     STRUT_AUTO:               true,
   },
 
-  // ============================================================================
-  // ARM TIER UPGRADE ECONOMY — ST-9.8 C-10
-  // Costs match IMPLEMENTATION_PLAN.md §ST-9.8 (5 000 / 15 000 credits).
-  // TRL gates: Y1 ≥ 6, Y3 ≥ 8.  Debris-cleared thresholds map progression
-  // to effective TRL (display-only TRL values exist on other shop items).
-  // ============================================================================
-  ARM_TIER_COSTS: {
-    Y1_HEX:  5000,
-    Y3_OCTO: 15000,
-  },
-  ARM_TIER_TRL_GATE: {
-    Y1_HEX:  6,
-    Y3_OCTO: 8,
-  },
-  ARM_TIER_DEBRIS_GATE: {
-    Y1_HEX:  15,   // debris cleared ≥ 15 → effective TRL 6
-    Y3_OCTO: 30,   // debris cleared ≥ 30 → effective TRL 8
-  },
-
-  // =========================================================================
-  // CONFIG G REEL STATES (NEW — for ST-9.5 C-7)
-  // =========================================================================
-  REEL_STATES: {
-    STOWED:      'STOWED',       // cable fully spooled, no load
-    PAYING_OUT:  'PAYING_OUT',   // cable extending; rate-limited by reel motor
-    STATIC:      'STATIC',       // cable paid out, no movement
-    REELING_IN:  'REELING_IN',   // retracting; speed scales with payload mass
-    JAMMED:      'JAMMED',       // physical jam; clear via clearJam (player action with cooldown)
-    CUT:         'CUT',          // terminal; cable lost; reel must be reloaded
-  },
-
-  // =========================================================================
-  // CONFIG G BRIDLE RING STATES (NEW — for ST-9.7 C-8)
-  // =========================================================================
-  BRIDLE_STATES: {
-    IDLE:       'IDLE',        // ring empty, no payloads attached
-    ATTACHED:   'ATTACHED',    // one or more payloads attached, within load limits
-    OVERLOADED: 'OVERLOADED',  // load exceeds max but not yet damaged
-    DAMAGED:    'DAMAGED',     // load exceeded OVERLOAD_FACTOR — ring structurally compromised
-  },
-
-  // =========================================================================
-  // CONFIG G DEPLOY STATES (NEW — for ST-9.10)
-  // =========================================================================
-  DEPLOY_STATES: {
-    LOCKED:    'LOCKED',     // launch lock engaged
-    STOWED:    'STOWED',     // free but folded (α ≈ 0)
-    DEPLOYING: 'DEPLOYING',  // motor driving open
-    DEPLOYED:  'DEPLOYED',   // at target α
-    STOWING:   'STOWING',    // motor driving closed
-  },
-
   // =========================================================================
   // CONFIG G HINGE STATES (NEW — for ST-9.3 #9)
   // =========================================================================
@@ -2658,17 +2570,6 @@ export const Constants = {
     INNER_EMISSIVE_BASE: 0.3,       // idle emissive intensity for nozzle interior liner
     INNER_EMISSIVE_FIRE_SCALE: 1.2, // additional emissiveIntensity per unit firing intensity
   },
-
-  // =========================================================================
-  // LAUNCH SEQUENCE (NEW — for ST-9.11 #7)
-  // =========================================================================
-  LAUNCH_SEQUENCE_ENABLED: true,
-  LAUNCH_PYRO_DELAY: 40,                 // seconds after orbit insertion
-  LAUNCH_LOCK_COUNT: 3,                  // pyro pins per arm
-  PYRO_PIN_MASS: 0.005,                  // kg per pin
-  FAIRING_SEP_DELAY_S: 4.0,             // seconds from liftoff to fairing sep (ST-9.11 C-5)
-  ORBIT_INSERTION_DELAY_S: 4.0,          // seconds from fairing sep to orbit insertion (ST-9.11 C-5)
-  LAUNCH_LOCK_STAGGER_S: 0.1,           // seconds between per-arm pyro releases (ST-9.11 C-5)
 
   // =========================================================================
   // OPENING DANCE (2026-09-16) — the beat table for the ship unpacking itself.
@@ -4218,7 +4119,7 @@ export const Constants = {
       WRONG_NET:     0.85,
     },
 
-    // ── Tangle base probabilities — per §4.6 (gated by NET_TANGLE_MECHANICS) ──
+    // ── Tangle base probabilities — per §4.6 (the tangle mechanic and its switch are gone) ──
     TANGLE_SELF_P:          0.015,
     TANGLE_MOTHER_P:        0.02,
     TANGLE_DAUGHTER_P:      0.05,
@@ -5505,26 +5406,6 @@ export const Constants = {
       fragMassKg: 12,                 // small Starlink-frag mass
       trackSpreadDeg: 45,             // wider spread — a fragmentation cloud, not a string
     },
-  },
-
-  // === TRAIL SYSTEM (ST-5.2) ===
-  TRAILS: {
-    SAMPLE_RATE_HZ: 10,                // samples per game-second
-    MOTHER_BUFFER_SECONDS: 90,         // player trail history length (game-seconds)
-    ARM_BUFFER_SECONDS: 30,            // arm trail history length (game-seconds)
-    MOTHER_WIDTH_SCALE: 1.0,           // ribbon width multiplier for player trail
-    ARM_TRAIL_WIDTH: 0.5,              // ribbon width multiplier for arm trails
-    PROGRADE_DOT_THRESHOLD: 0.7,       // dot > this → prograde (green)
-    RETROGRADE_DOT_THRESHOLD: -0.7,    // dot < this → retrograde (red); else → amber
-    FADE_ALPHA_MIN: 0.05,              // alpha of oldest point in buffer
-    COLOR_PROGRADE: 0x22ff66,          // green
-    COLOR_RETROGRADE: 0xff3344,        // red
-    COLOR_NORMAL: 0xffaa22,            // amber (radial/normal-plane)
-    COLOR_ARM: 0xe6e6ff,               // near-white, slight blue tint
-    BASE_WIDTH_METRES: 5,              // base ribbon width in metres (multiplied by M at render)
-    STALE_HIDE_SECONDS: 3,             // seconds after last sample before trail hides
-    MIN_SAMPLE_DIST_M: 2,             // minimum metres between consecutive samples
-    ENABLED: false,                    // master toggle (disabled — pending visual rework)
   },
 
   // === COMMS SYSTEM (ST-5.1) ===

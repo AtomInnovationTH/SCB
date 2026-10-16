@@ -524,8 +524,7 @@ export class AutopilotSystem {
     this._engaged = true;
     if (this._player) {
       this._player.autopilotEngaged = true;
-      // Legacy kinematic path only (arbiter owns dynamics-path continuity).
-      if (!Constants.ATTITUDE?.DYNAMICS_ENABLED) this._player._manualRotation.set(0, 0, 0, 1);
+      // No manual-offset reset here: the attitude arbiter owns continuity.
     }
     this._headingTarget = heading ? heading.position : null;
     this._headingMode = heading ? heading.mode : 'PROGRADE';
@@ -597,11 +596,9 @@ export class AutopilotSystem {
 
     if (this._player) {
       this._player.autopilotEngaged = true;
-      // Legacy kinematic path only: reset the manual offset on AP transitions.
-      // Under the rigid-body dynamics path the attitude arbiter owns handback
-      // continuity (_handAttitudeToPlayer folds the current attitude into the
-      // offset), so this hard reset must NOT run there or it would cause a snap.
-      if (!Constants.ATTITUDE?.DYNAMICS_ENABLED) this._player._manualRotation.set(0, 0, 0, 1);
+      // No manual-offset reset on AP transitions: the attitude arbiter owns
+      // handback continuity (_handAttitudeToPlayer folds the current attitude
+      // into the offset), and a hard reset would cause a snap.
     }
 
     // Emit target lock for CollisionAvoidanceSystem exemption
@@ -641,10 +638,9 @@ export class AutopilotSystem {
 
     if (this._player) {
       this._player.autopilotEngaged = false;
-      // Legacy kinematic path only. On the dynamics path the arbiter's handback
-      // (_handAttitudeToPlayer) folds the AP-left attitude into the offset for a
-      // jump-free return to manual — resetting to identity here would snap it.
-      if (!Constants.ATTITUDE?.DYNAMICS_ENABLED) this._player._manualRotation.set(0, 0, 0, 1);
+      // The arbiter's handback (_handAttitudeToPlayer) folds the AP-left attitude
+      // into the offset for a jump-free return to manual — resetting to identity
+      // here would snap it.
     }
     this._headingTarget = null;
     this._headingMode = 'NONE';

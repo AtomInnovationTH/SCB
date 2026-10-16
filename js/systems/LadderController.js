@@ -1525,8 +1525,8 @@ export class LadderController {
     if (this._workbench && this._workbench.setEnabled) this._workbench.setEnabled(false);
     // Per-floor audio bed: fade to silence on disengage (optional dep).
     if (this._audioBeds && this._audioBeds.setFloor) this._audioBeds.setFloor(null);
-    // Per-floor HUD pane mask: restore the shipped fully-visible cockpit and
-    // hide the vitals line on disengage (optional dep — the beds contract).
+    // Per-floor HUD pane mask: restore the shipped fully-visible cockpit on
+    // disengage (optional dep — the beds contract).
     if (this._floorMask && this._floorMask.setFloor) this._floorMask.setFloor(null);
     // D5: setFloor(null) captured the departing floor's live room into the
     // mask's memory — export it to the player store now (write-on-change; a

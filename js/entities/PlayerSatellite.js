@@ -289,7 +289,7 @@ function commandFlowerHome(ship) {
  * 30 s". Called every `_updateFlower`. Fires once θ is more than 1° past
  * OPEN_DEG, RETURN_TO_OPEN_S real seconds have passed since the last player
  * radiator command, and nothing else owns the radiator (launch lock, OVERRIDE
- * fold, an active LaunchSequence or opening dance). One plain COMMS line.
+ * fold, an active launch driver — the opening dance). One plain COMMS line.
  * @param {PlayerSatellite} ship
  */
 function settleFlowerToOpen(ship) {
@@ -298,9 +298,9 @@ function settleFlowerToOpen(ship) {
   if (!(FL.RETURN_TO_OPEN_S > 0)) return;
   if (ship._flowerThetaRad <= ((FL.OPEN_DEG + 1) * Math.PI) / 180) return;
   if ((ship._flowerClockS || 0) - (ship._flowerCmdClockS || 0) < FL.RETURN_TO_OPEN_S) return;
-  // An active LaunchSequence holds it — and that covers the opening dance: the
-  // dance drives through the same `_launchSequence` slot (`_danceDrivesMe()`
-  // is `isOpeningDance && isActive()`, a subset of this check).
+  // An active launch driver holds it: the opening dance drives the ship
+  // through the `_launchSequence` slot (`_danceDrivesMe()` is
+  // `isOpeningDance && isActive()`, the same check).
   const ls = ship._launchSequence;
   if (ls && typeof ls.isActive === 'function' && ls.isActive()) return;
   if (!commandFlowerHome(ship)) return;
@@ -461,7 +461,7 @@ export class PlayerSatellite extends THREE.Group {
 
     // ROSA furl/unfurl state (Comma key). 1 = unfurled (deployed), 0 = furled
     // (rolled up). _rosaManualControl latches once the player toggles, so the
-    // post-launch READY state defers to the player instead of LaunchSequence.
+    // opening dance hands the panels to the player at hand-over.
     this._rosaFurlTarget = 1.0;
     this._rosaFurlProgress = 1.0;
     this._rosaManualControl = false;
@@ -518,7 +518,7 @@ export class PlayerSatellite extends THREE.Group {
     /** Design 7b one-shot launch lock: while armed the driver floor is
      *  POSE_LAUNCH_DEG (0°) instead of POSE_FLOOR_DEG (CLOSED 2°; 90° before
      *  DECISIONS §15 row 4) and thrust is refused. Armed ONLY by
-     *  setFlowerPose('LAUNCH') under LaunchSequence.isActive(), by the dev
+     *  setFlowerPose('LAUNCH') under an active launch driver, by the dev
      *  hook's { force: true }, or — owner amendment 2026-09-09 (plan
      *  .kilo/plans/1788863400000-radiator-launch-fold-redesign.md, last
      *  section) — by the SAFETY OVERRIDE actuator path's { override: true }
@@ -539,8 +539,8 @@ export class PlayerSatellite extends THREE.Group {
      *  (§11, 2026-09-23: a new player can't read a halfway-stop interlock) —
      *  a double-tap folds straight through at any strut angle. Set by
      *  setFlowerPose's override branch, cleared with the lock.
-     *  Scoped to the OVERRIDE arming: the launch sequence and the ?shot=1 dev
-     *  force are byte-identical (their own procedures furl ROSA). */
+     *  Scoped to the OVERRIDE arming: the ?shot=1 dev force is
+     *  byte-identical (its own procedure furls ROSA). */
     this._flowerOverrideFold = false;
 
     // Tether reel states: 'ready', 'deployed', 'empty' — V5: expanded to 8 reels
@@ -608,8 +608,6 @@ export class PlayerSatellite extends THREE.Group {
     this._attitudeInertia = null;
     const _invalidateInertia = () => { this._attitudeInertia = null; };
     eventBus.on(Events.ARM_STATE_CHANGE, _invalidateInertia);
-    eventBus.on(Events.ARM_DEPLOY_COMPLETED, _invalidateInertia);
-    eventBus.on(Events.ARM_STOW_COMPLETED, _invalidateInertia);
     eventBus.on(Events.NET_BERTHED, _invalidateInertia);
     this._crossbowAutoRcs = true;   // Auto-compensate crossbow recoil with RCS
     this._frameRecoilDv = 0;        // Accumulated recoil ΔV this frame (for dual-fire tracking)
@@ -1688,7 +1686,7 @@ export class PlayerSatellite extends THREE.Group {
     // over the hull, was overkill for 4 hinge points, and sat in the fore axial
     // RCS exhaust path (~27 mm clearance). Struts now mount on discrete hinge
     // pads (see below). this.collarRing is intentionally no longer set
-    // (TierVisualManager guards on it and no-ops).
+    // (the tier visual manager that guarded on it was removed 2026-10-16).
 
     // ── Hinge mounting pads — discrete feet replacing the old collar ring ──
     // One low plate per strut hinge. Base buried 4 mm below the hull surface
@@ -2442,7 +2440,7 @@ export class PlayerSatellite extends THREE.Group {
       // for field-emission. Now an open frustum, narrow at the exit (r=nozzle exit
       // 0.06M) widening to ~2.2× downstream, vertex-alpha fading to 0 at the tip.
       // Kept in mainThrusterPlumes as a Mesh with .material.opacity/.color/.visible
-      // — the exact hooks LaunchCinematic + _animateThrusterGlow drive.
+      // — the exact hooks _animateThrusterGlow drives.
       const plumeGeo = this._makePlumeFrustum(M * FEEP_APERTURE_R, M * 0.13, M * 0.35);
       const feepPlumeMat = new THREE.MeshBasicMaterial({
         color: 0x99bbdd, transparent: true, opacity: 0.0, vertexColors: true,
@@ -3508,13 +3506,12 @@ export class PlayerSatellite extends THREE.Group {
       }
     }
 
-    // ── Wing-drum launch clamps (mother-wings step 3, DECISIONS §10) ──
-    // "The brackets are still needed for launch?" — yes: each drum end is held
-    // to the front/back end ring through launch, released at
-    // LAUNCH_LOCK_RELEASE before the wing unrolls or tilts — and re-latched
-    // by motor whenever the player rolls the wings fully up again (owner
-    // 2026-09-25: re-latchable hold-down latches, not one-shot pyros —
-    // _wingClampsLatched(), _updateWingClamps()). The DRUM half is a collar
+    // ── Wing-drum clamps (mother-wings step 3, DECISIONS §10) ──
+    // Each drum end is held to the front/back end ring by a hold-down latch.
+    // The ship starts released; the latch closes by motor whenever the player
+    // rolls the wings fully up (owner 2026-09-25: re-latchable hold-down
+    // latches, not one-shot pyros — _wingClampsLatched(),
+    // _updateWingClamps()). The DRUM half is a collar
     // on the drum's own tip — it moves and spins exactly with the drum. The
     // BODY half is a hold-down BRACKET bolted to the end ring: it bears on the
     // barrel's last WING_CLAMP_LAND of length (bottom sunk into the skin, so
@@ -3625,9 +3622,9 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * @private Drive ROSA panel roll-out. While the launch sequence is actively
-   * running, the panels follow its scripted roll-out. Once launch is READY (or
-   * absent), the player-owned furl state takes over so "," can furl/unfurl the
+   * @private Drive ROSA panel roll-out. While the opening dance is actively
+   * running, the panels follow its scripted roll-out. Once it has handed over
+   * (or is absent), the player-owned furl state takes over so "," can furl/unfurl the
    * arrays to dodge debris or tether strikes.
    * @param {number} dt — seconds since last frame
    */
@@ -3647,23 +3644,22 @@ export class PlayerSatellite extends THREE.Group {
     const launchActive = !!(ls && ls.isActive && ls.isActive());
 
     if (launchActive && ls.getRosaProgress) {
-      // Scripted launch roll-out owns the panels — and the clamps: the early
-      // phases hold them through _launchClampsLatched(). The re-stow latch is
-      // forced off here so a sequence started from a player-stowed ship can
-      // never inherit it; it re-engages only under player furl control below.
+      // The scripted roll-out (the opening dance) owns the panels. The
+      // re-stow latch is forced off here so a dance started from a
+      // player-stowed ship can never inherit it; it re-engages only under
+      // player furl control below.
       this._rosaStowLatched = false;
       const prog = ls.getRosaProgress();
       this._setRosaWingProgress(1, prog.wing1);
       this._setRosaWingProgress(2, prog.wing2);
       // Opening-dance task 6: the AVERAGE, not the min (the dance's staggered
       // wing roll-out would otherwise read as body-only power until the second
-      // wing starts). w4-power D2: the opening dance now reports 0 for both
-      // wings, so both end at 0 and the hand-over state is rolled up; only the
-      // scripted rocket launch still ends at 1.0.
+      // wing starts). w4-power D2: the opening dance reports 0 for both
+      // wings, so both end at 0 and the hand-over state is rolled up.
       this._rosaFurlProgress = (prog.wing1 + prog.wing2) / 2;
       // w4-power D2: the opening dance holds the wings rolled up and leaves
       // the target to the player (a `,` pressed during the dance is kept and
-      // rolls them out at hand-over); a scripted rocket launch still ends out.
+      // rolls them out at hand-over).
       if (!ls.isOpeningDance) this._rosaFurlTarget = 1.0;
       this._updateWingClamps();
       return;
@@ -3724,45 +3720,16 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * @private Mother-wings step 3 (DECISIONS §10, owner 2026-09-23): true while
-   * the wing-drum launch clamps are latched — the drum's fore/aft ends are
-   * still bolted to the front/back end-ring plane and the wing must not tilt
-   * or unroll. Latched through STOWED_IN_FAIRING / LIFTOFF /
-   * FAIRING_SEPARATION / ORBIT_INSERTION; released AT LAUNCH_LOCK_RELEASE
-   * (the same phase the per-strut pyros fire in), before ROSA_DEPLOY_PRIMARY
-   * can start rolling the blanket out.
-   *
-   * Duck-typed on `this._launchSequence` (no import — same pattern as
-   * `_danceDrivesMe`/`_updateRosaPanels`, avoids a circular import with
-   * LaunchSequence.js). With FEATURE_FLAGS.LAUNCH_SEQUENCE off (the default),
-   * `_launchSequence` is never set (LaunchSequence.start() early-returns
-   * before calling setLaunchSequence), so this is always false — the ship
-   * starts released, pins withdrawn, exactly as normal (non-flagged) play
-   * always has. Post-launch re-latching on a player furl is NOT this query —
-   * it is the re-stow latch, combined into `_wingClampsLatched()`.
-   * @returns {boolean}
-   */
-  _launchClampsLatched() {
-    const ls = this._launchSequence;
-    if (!ls || typeof ls.isActive !== 'function' || !ls.isActive()) return false;
-    const phase = typeof ls.getCurrentPhase === 'function' ? ls.getCurrentPhase() : null;
-    const EARLY_PHASES = [
-      'STOWED_IN_FAIRING', 'LIFTOFF', 'FAIRING_SEPARATION', 'ORBIT_INSERTION',
-    ];
-    return EARLY_PHASES.includes(phase);
-  }
-
-  /**
    * @private Owner 2026-09-25: true while the wing-drum clamps hold the
-   * wings — through the early launch phases (`_launchClampsLatched()`) OR
-   * after the re-stow latch has closed on fully-rolled-up wings
-   * (`_rosaStowLatched`, driven in `_updateRosaPanels`). This is the query
+   * wings — after the re-stow latch has closed on fully-rolled-up wings
+   * (`_rosaStowLatched`, driven in `_updateRosaPanels`). The ship starts
+   * released, pins withdrawn. This is the query
    * every clamp-driven behaviour reads: the pin visibility in
    * `_updateWingClamps()` and the tilt hold in `_animateSolarTracking`.
    * @returns {boolean}
    */
   _wingClampsLatched() {
-    return this._launchClampsLatched() || (this._rosaStowLatched ?? false);
+    return this._rosaStowLatched ?? false;
   }
 
   /**
@@ -3770,9 +3737,8 @@ export class PlayerSatellite extends THREE.Group {
    * clamp's release pin while latched (bridging bracket → drum collar), hide
    * it once released (withdrawn into the bracket). The bracket itself is
    * bolted to the end ring and never moves; the drum half rides the drum.
-   * Latched is the combined query `_wingClampsLatched()` — the early launch
-   * phases OR the re-stow latch — because the clamps are re-latchable
-   * motor-driven hold-down latches, not one-shot pyros: they grab the wings
+   * Latched is `_wingClampsLatched()` (the re-stow latch) because the clamps
+   * are re-latchable motor-driven hold-down latches, not one-shot pyros: they grab the wings
    * again every time the player rolls them fully up. A snap, not an
    * animation: the latch is a motor-driven detent, not a player-paced motion.
    */
@@ -3866,9 +3832,9 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * Wire up a LaunchSequence instance so ROSA panels can read
-   * roll-out progress.  Called from main.js or GameFlowManager.
-   * @param {import('../systems/LaunchSequence.js').default} ls
+   * Wire up a launch driver (the opening dance) so ROSA panels can read
+   * roll-out progress.  Called by OpeningDance.
+   * @param {object|null} ls — duck-typed: isActive(), getRosaProgress()
    */
   setLaunchSequence(ls) {
     this._launchSequence = ls;
@@ -3880,8 +3846,7 @@ export class PlayerSatellite extends THREE.Group {
    * The unfold is wordless — anything it would say is suppressed AT SOURCE, not
    * held by the HUD toast inhibit (an inhibited prompt is held and REPLAYED
    * when the window closes, which would parade at hand-over). Duck-typed on the
-   * driver's `isOpeningDance` marker: no import either way, and the
-   * LaunchSequence driver (a distinct class) never trips it.
+   * driver's `isOpeningDance` marker: no import either way.
    * @returns {boolean}
    */
   _danceDrivesMe() {
@@ -4181,7 +4146,7 @@ export class PlayerSatellite extends THREE.Group {
    *
    * Design 7b: 'LAUNCH' (θ 0 — fore along the barrel, wings folded) is the
    * fairing pose behind the launch lock. It is accepted ONLY (a) while the
-   * launch sequence owns the ship (`this._launchSequence?.isActive?.()`),
+   * a launch driver (the opening dance, through the `_launchSequence` slot) owns the ship,
    * (b) from the ?shot=1 dev hook with an explicit `{ force: true }`, or
    * (c) — owner amendment 2026-09-09 — from the SAFETY OVERRIDE actuator path
    * with an explicit `{ override: true }` (toggleFlowerOverride, and the O
@@ -4330,12 +4295,12 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * Design 7b — LaunchSequence.start()'s hand-off: the ship is launched ALREADY
+   * Design 7b — the launch hand-off: the ship is launched ALREADY
    * folded (the fold happens on the pad, not in the fairing — and the 9.7 s
-   * slew would not finish before ORBIT_INSERTION at t ≈ 8 s), so the sequence
+   * slew would not finish before orbit insertion at t ≈ 8 s), so the driver
    * snaps the flower to LAUNCH: lock armed, θ = POSE_LAUNCH_DEG exactly, wings
    * folded, latch idle, hinges written now. Same gate as setFlowerPose('LAUNCH')
-   * minus the dev force: ONLY while an active LaunchSequence is wired; refused
+   * minus the dev force: ONLY while an active launch driver is wired; refused
    * (false) from orbit. No POSE event — nothing slewed. No hardware → false.
    * @returns {boolean} true when snapped
    */
@@ -4358,8 +4323,8 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * Snap the flower to its stowed REST pose — CLOSED (θ 2°, folded along the
    * body) since DECISIONS §15 row 4; the name is historical (it snapped to the
-   * 146° bud before) and is kept because LaunchSequence.skipToReady(),
-   * GameFlowManager.resetGame() and OpeningDance.endState() all call it. The
+   * 146° bud before) and is kept because GameFlowManager.resetGame() and
+   * OpeningDance.endState() call it. The
    * launch lock is cleared and the latch idle, and the hinges / wings are
    * written now (no slew). Emits THERMAL_FLOWER_RELEASED once if the lock WAS
    * armed (so listeners see the same release the real swing would have
@@ -6837,7 +6802,7 @@ export class PlayerSatellite extends THREE.Group {
     // BEFORE _orientAlongVelocity composes quaternion = prograde · _manualRotation.
     // Placed here (not earlier): _updateCartesian already ran, so the prograde base
     // and the handback continuity read the current velocity/position.
-    if (Constants.ATTITUDE?.DYNAMICS_ENABLED) this._tickAttitudeDynamics(dt);
+    this._tickAttitudeDynamics(dt);
 
     this._orientAlongVelocity();
 
@@ -6966,23 +6931,6 @@ export class PlayerSatellite extends THREE.Group {
       }
     }
 
-    // --- ST-5.2: Trail sample emission (continuous 10 Hz) ---
-    // Samples emitted continuously; TrailSystem controls visibility via
-    // THRUST_VISUAL events (only shows trail during active thrust).
-    if (Constants.TRAILS && Constants.TRAILS.ENABLED !== false) {
-      this._trailSampleAccum = (this._trailSampleAccum || 0) + gameDt;
-      const trailInterval = 1 / (Constants.TRAILS.SAMPLE_RATE_HZ || 10);
-      if (this._trailSampleAccum >= trailInterval) {
-        this._trailSampleAccum -= trailInterval;
-        // Clamp accumulator to prevent burst after long pauses
-        if (this._trailSampleAccum > trailInterval) this._trailSampleAccum = 0;
-        eventBus.emit(Events.PLAYER_TRAIL_SAMPLE, {
-          pos: { x: this.position.x, y: this.position.y, z: this.position.z },
-          vel: this._cartesian ? this._cartesian.velocity : { x: 0, y: 0, z: 0 },
-        });
-      }
-    }
-
     // --- Emit telemetry ---
     if (Math.random() < 0.02) {
       // Phase 4: Include current fuel info in telemetry
@@ -7047,8 +6995,8 @@ export class PlayerSatellite extends THREE.Group {
     if (!sunDirection) return;
 
     // Mother-wings step 3 (DECISIONS §10) + owner 2026-09-25: while the
-    // wing-drum clamps are latched — the early launch phases, or the re-stow
-    // latch once the player has rolled the wings fully up — the tilt law
+    // wing-drum clamps are latched — the re-stow latch, closed once the
+    // player has rolled the wings fully up — the tilt law
     // holds 0 outright. The clamp is the actual physical constraint (the drum
     // ends are bolted to the end rings; see _buildRosaStructure), so it gets
     // an explicit, unconditional hold rather than relying on the furl-coupled
@@ -7084,7 +7032,7 @@ export class PlayerSatellite extends THREE.Group {
     // First-frame seed for the spawn-already-deployed case (jitter plan): assign
     // directly so a sim that starts deployed doesn't sweep from 0. Only when the
     // wing is ALREADY essentially deployed on the first tracking frame — during
-    // a launch-sequence deploy (progress rising through 0.9) the smooth blend
+    // a roll-out (progress rising through 0.9) the smooth blend
     // above must carry the gimbal up, not a one-frame snap.
     if (!this._rosaTrackSeeded) {
       this._rosaTrackSeeded = true;
@@ -7192,8 +7140,8 @@ export class PlayerSatellite extends THREE.Group {
    *     the wing root hardware; the limit drops to WING_DODGE_ALPHA_LIMIT.
    *
    * A furled wing never sees this (the furl blend parks tilt 0 first); the
-   * launch sequence and the ?shot=1 dev force furl ROSA by their own
-   * procedures. No pivot hardware → Infinity (nothing to dodge with).
+   * ?shot=1 dev force furls ROSA by its own
+   * procedure. No pivot hardware → Infinity (nothing to dodge with).
    * @returns {number} max |tilt| in radians, or Infinity
    */
   _rosaDodgeLimitRad() {
@@ -7901,7 +7849,7 @@ export class PlayerSatellite extends THREE.Group {
    */
   applyRecoilAngularImpulse(torqueImpulse) {
     if (!Constants.FEATURE_FLAGS.RECOIL_PHYSICS) return;
-    // Real yaw MOI from the mass tree (SSOT); legacy mass*0.25 when dynamics off.
+    // Real yaw MOI from the mass tree (SSOT).
     const I_mother = this._attitudeMOI('y');
     const deltaOmega = torqueImpulse / I_mother;
     this._recoilAngularVel += deltaOmega;      // legacy C-11 scalar (RCS-nulled, HUD bookkeeping)
@@ -8238,18 +8186,13 @@ export class PlayerSatellite extends THREE.Group {
 
   /**
    * Moment of inertia about a body axis for the recoil/attitude integrators.
-   * With ATTITUDE.DYNAMICS_ENABLED (default) this is the real MOI from the mass
-   * tree (SSOT); with the master switch off it falls back to the legacy
-   * mass*0.25 so the old kinematic path is byte-for-byte restorable.
+   * The real MOI from the mass tree (SSOT).
    * @param {'x'|'y'|'z'} axis
    * @returns {number} kg·m²
    */
   _attitudeMOI(axis) {
-    if (Constants.ATTITUDE?.DYNAMICS_ENABLED) {
-      const I = this.getAttitudeInertia();
-      return axis === 'x' ? I.ixx : (axis === 'z' ? I.izz : I.iyy);
-    }
-    return (this.mass || 130) * 0.25;
+    const I = this.getAttitudeInertia();
+    return axis === 'x' ? I.ixx : (axis === 'z' ? I.izz : I.iyy);
   }
 
   /**
@@ -9674,7 +9617,7 @@ export class PlayerSatellite extends THREE.Group {
       }
 
       // Read current sweep angle from arm FSM (default π/2 = radially out)
-      let alpha = (arm.getAimAlpha ? arm.getAimAlpha() : Math.PI / 2);
+      const alpha = (arm.getAimAlpha ? arm.getAimAlpha() : Math.PI / 2);
 
       // w4-power D5: the strut hinge motor bills on every frame its angle
       // moved since the last one — whoever drove it (the latch slew above,
@@ -9685,14 +9628,6 @@ export class PlayerSatellite extends THREE.Group {
         billMotorW(this, Constants.MOTOR_DRAW_W?.STRUT_HINGE ?? 0, dt);
       }
       sg._billAlpha = alpha;
-
-      // V-11: Stowage — force α = 0 (aft, against barrel) when LOCKED or STOWED
-      if (arm.getDeployState) {
-        const ds = arm.getDeployState();
-        if (ds === 'LOCKED' || ds === 'STOWED') {
-          alpha = 0;
-        }
-      }
 
       // Compute desired strut direction (shared SSOT convention):
       //   sin(α)·radial − cos(α)·Z  →  strutLocalDirection(α, az)
@@ -9738,57 +9673,23 @@ export class PlayerSatellite extends THREE.Group {
    *
    * Must be called from the game loop AFTER `armManager.update()` so that
    * `_updateDocked()`'s unconditional `mesh.visible = false` can be overridden
-   * for daughter arms whose deploy state is DEPLOYED / DEPLOYING / STOWING
-   * (i.e. the strut has swept out and the arm should be visible at the tip).
-   *
-   * Arms in LOCKED or STOWED deploy state remain hidden (folded inside barrel).
+   * for docked daughter arms (the arm is always shown clamped at the strut tip).
    */
   postArmUpdate() {
     if (!this.armManager || !this.strutGroups) return;
     const arms = this.armManager.arms;
     if (!arms) return;
 
-    const DS = Constants.DEPLOY_STATES;
-
     for (let i = 0; i < this.strutGroups.length; i++) {
       if (i >= arms.length) break;
       const arm = arms[i];
       const sg  = this.strutGroups[i];
 
-      // ── V-10: Deploy State LEDs — color each hinge LED by arm deploy state ──
+      // ── V-10: hinge LEDs — amber in the high-recoil zone, green otherwise ──
       if (this.hingeLEDs && this.hingeLEDs[i]) {
         const led = this.hingeLEDs[i];
-        const state = arm.getDeployState ? arm.getDeployState() : DS.DEPLOYED;
         const isRecoil = arm.isHighRecoilZone ? arm.isHighRecoilZone() : false;
-
-        let color;
-        let intensity = 1.0;
-
-        if (state === DS.LOCKED) {
-          color = 0x222222;
-        } else if (state === DS.STOWED) {
-          color = 0x664400;
-        } else if (state === DS.DEPLOYING) {
-          // Pulsing blue (0.3–1.0 intensity)
-          intensity = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(Date.now() * 0.005));
-          color = 0x0066ff;
-        } else if (state === DS.STOWING) {
-          // Pulsing amber (0.3–1.0 intensity)
-          intensity = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(Date.now() * 0.005));
-          color = 0xff8800;
-        } else if (state === DS.DEPLOYED && isRecoil) {
-          // High recoil zone — amber override
-          color = 0xff6600;
-        } else {
-          // Default: DEPLOYED green
-          color = 0x00ff44;
-        }
-
-        led.material.color.setHex(color);
-        // Dim pulsing states by scaling color channels
-        if (intensity < 1.0) {
-          led.material.color.multiplyScalar(intensity);
-        }
+        led.material.color.setHex(isRecoil ? 0xff6600 : 0x00ff44);
       }
 
       // Only override visibility + orientation for DOCKED arms (strut-mounted).
@@ -9833,24 +9734,20 @@ export class PlayerSatellite extends THREE.Group {
         continue;
       }
 
-      if (arm.getDeployState) {
-        const ds = arm.getDeployState();
-        const shouldShow = (ds === DS.DEPLOYED || ds === DS.DEPLOYING || ds === DS.STOWING);
-        if (arm.mesh) arm.mesh.visible = shouldShow;
+      if (arm.mesh) arm.mesh.visible = true;
 
-        // Orient arm.group so its +Z (forward) faces outward along strut
-        // direction in world space.  Compose mother's full quaternion with
-        // the local strut rotation so the arm inherits pitch/yaw/roll —
-        // not just the forward axis.  strutDir is in player-local frame.
-        //
-        // SYMMETRY: use the deterministic basis (forward + azimuth-radial up)
-        // instead of setFromUnitVectors, so every docked daughter shares one
-        // roll convention and their body-conformal cells / panel lines stay
-        // symmetric around the ring.
-        if (shouldShow && arm.group && sg.strutDir.lengthSq() > 0) {
-          _composeDockedArmQuat(sg.strutDir, sg.azRad, _armQuat);  // local strut rotation
-          arm.group.quaternion.copy(this.quaternion).multiply(_armQuat);
-        }
+      // Orient arm.group so its +Z (forward) faces outward along strut
+      // direction in world space.  Compose mother's full quaternion with
+      // the local strut rotation so the arm inherits pitch/yaw/roll —
+      // not just the forward axis.  strutDir is in player-local frame.
+      //
+      // SYMMETRY: use the deterministic basis (forward + azimuth-radial up)
+      // instead of setFromUnitVectors, so every docked daughter shares one
+      // roll convention and their body-conformal cells / panel lines stay
+      // symmetric around the ring.
+      if (arm.group && sg.strutDir.lengthSq() > 0) {
+        _composeDockedArmQuat(sg.strutDir, sg.azRad, _armQuat);  // local strut rotation
+        arm.group.quaternion.copy(this.quaternion).multiply(_armQuat);
       }
     }
   }
@@ -10190,63 +10087,19 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   _orientAlongVelocity() {
-    const dyn = Constants.ATTITUDE?.DYNAMICS_ENABLED;
-    // Owner: under dynamics it was already resolved (with handback) by
-    // _tickAttitudeDynamics this frame; under the legacy path resolve it here.
-    const owner = dyn ? (this._attitudeOwner || 'PLAYER') : this._updateAttitudeOwner();
+    // Owner: already resolved (with handback) by _tickAttitudeDynamics this frame.
+    const owner = this._attitudeOwner || 'PLAYER';
 
-    // AUTOPILOT writes this.quaternion directly (slerp) on both paths — leave it.
-    // AIM: under the dynamics path it too owns the quaternion directly (the
-    // latent-bug fix). Under the LEGACY path it must behave EXACTLY as pre-diff —
-    // grouped into `inspecting` so the manual-offset apply/decay below still runs
-    // (a faithful DYNAMICS_ENABLED=false revert). So only short-circuit AIM here
-    // when dynamics are on.
-    if (owner === 'AUTOPILOT') return;
-    if (owner === 'AIM' && dyn) return;
+    // AUTOPILOT writes this.quaternion directly (slerp) — leave it. AIM too owns
+    // the quaternion directly (the latent-bug fix).
+    if (owner === 'AUTOPILOT' || owner === 'AIM') return;
 
     // ── Rigid-body path (D4): base = EXACT prograde, no slerp, no decay. The
     // offset (_manualRotation) is advanced by the integrator in
     // _tickAttitudeDynamics. Applies to PLAYER and the CINEMATIC inspect hold.
-    if (dyn) {
-      const pg = this._progradeQuat(_qAttA);
-      if (pg) this.quaternion.copy(pg).multiply(this._manualRotation).normalize();
-      else this.quaternion.copy(this._manualRotation).normalize();
-      return;
-    }
-
-    // ── Legacy kinematic path (DYNAMICS_ENABLED = false) ──────────────────
-    // CINEMATIC (hull inspection) and AIM suspend the prograde slerp; the manual
-    // offset still applies so the player can turn the hull while inspecting.
-    const inspecting = (owner === 'CINEMATIC' || owner === 'AIM');
-
-    const v = this._cartesian.velocity;
-    const vLen = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-
-    if (!inspecting && vLen >= 1e-10) {
-      const velDir = new THREE.Vector3(v.x, v.y, v.z).normalize();
-      const radial = this.position.clone().normalize();
-
-      // lookAt: eye=pos+vel, target=pos → +Z = velDir (model +Z = forward/prograde).
-      // Model convention: thrusters at -Z (aft), sensors at +Z (fore).
-      const mat = new THREE.Matrix4();
-      const eye = this.position.clone().add(velDir);
-      mat.lookAt(eye, this.position, radial);
-
-      // Slerp toward velocity heading — preserves spin momentum on startup
-      const targetQuat = new THREE.Quaternion().setFromRotationMatrix(mat);
-      this.quaternion.slerp(targetQuat, 0.02); // Low alpha = slow settling, longer spin
-    }
-
-    // F13: Apply manual rotation offset. During normal flight this rides on top of
-    // the velocity alignment above; during inspection it is the sole attitude
-    // driver, letting the player rotate the hull freely.
-    if (this._manualRotation.x !== 0 || this._manualRotation.y !== 0 || this._manualRotation.z !== 0) {
-      this.quaternion.multiply(this._manualRotation);
-      this.quaternion.normalize();
-    }
-
-    // F13: Decay manual rotation slowly back to identity when not actively rotating
-    this._manualRotation.slerp(new THREE.Quaternion(), 0.01);
+    const pg = this._progradeQuat(_qAttA);
+    if (pg) this.quaternion.copy(pg).multiply(this._manualRotation).normalize();
+    else this.quaternion.copy(this._manualRotation).normalize();
   }
 
   // ==========================================================================

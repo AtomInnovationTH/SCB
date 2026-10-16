@@ -41,7 +41,6 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { BridleRing } from '../entities/BridleRing.js';
 import { heldSlotAnchorInto } from '../entities/ArmUnit.js';
 
 /** 1 meter in scene units — matches ArmManager/PlayerSatellite convention */
@@ -328,18 +327,6 @@ export function computeCoM(armManager, playerSatellite) {
       dMass += m;
     });
 
-    // ST-9.7 C-8: Bridle ring mass + attached loads at strut tip
-    if (Constants.FEATURE_FLAGS.BRIDLE_RING && Constants.FEATURE_FLAGS.COM_TRACKING) {
-      const bridleMass = BridleRing.getRingMassKg(i);
-      if (bridleMass > 0) {
-        const tip = strutTipMeters(dp, alpha);
-        cx += bridleMass * tip.x;
-        cy += bridleMass * tip.y;
-        cz += bridleMass * tip.z;
-        totalMass += bridleMass;
-      }
-    }
-
     armMasses.push(dMass);
   }
 
@@ -391,7 +378,6 @@ export function computeCoM(armManager, playerSatellite) {
  *       (R = COLLAR_RADIUS, L = CORE_LENGTH. Stowed transverse ≈ 66.5 kg·m².)
  *   - Struts: point mass STRUT_MASS at the α-dependent midpoint (parallel axis).
  *   - Daughters: point mass WEAVER/SPINNER at the α-dependent tip (parallel axis).
- *   - Bridle rings: same as computeCoM, only when the flags are on.
  *   - Berthed catch mass (D6): included as a fore point mass but the ADDED
  *     transverse/roll contribution is clamped so the total never exceeds
  *     INERTIA_MAX_FACTOR × the stowed bus inertia. 23 t unclamped would freeze
@@ -477,11 +463,6 @@ export function computeInertia(armManager, playerSatellite) {
       }
     }
 
-    // Bridle rings — only when both flags are on (mirror computeCoM).
-    if (Constants.FEATURE_FLAGS.BRIDLE_RING && Constants.FEATURE_FLAGS.COM_TRACKING) {
-      const bridleMass = BridleRing.getRingMassKg(i);
-      if (bridleMass > 0) addPoint(bridleMass, strutTipMeters(dp, alpha));
-    }
   }
 
   // Bags latched on the radiator tips: cargo, so they join the clamped sum.
@@ -692,9 +673,7 @@ export function suggestStowArm(armManager, playerSatellite) {
     const dp = docks[i];
     if (!dp) continue;
 
-    // Only suggest stow for arms that are deployed and not detached/expended
-    const deployState = arm.getDeployState ? arm.getDeployState() : 'DEPLOYED';
-    if (deployState !== 'DEPLOYED' && deployState !== 'DEPLOYING') continue;
+    // Only suggest stow for arms that are not detached/expended
     if (arm.isDetached || arm.state === Constants.ARM_STATES.EXPENDED) continue;
 
     const alpha = arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0);
@@ -721,7 +700,7 @@ export function suggestStowArm(armManager, playerSatellite) {
  *
  * This is the INVERSE question to `suggestStowArm`, which answers "which arm
  * contributes most to CoM drift" (its score is the mass-weighted tip projection
- * ONTO the CoM offset, and its filter keeps DEPLOYED/DEPLOYING arms). A carrier
+ * ONTO the CoM offset). A carrier
  * must instead be HOME with a free cargo cell, and loading it should make trim
  * BETTER — so this scores the anti-projection: the measured drop in CoM drift
  * from adding the cargo at that rack slot (S13(b): the pinned point, not the
@@ -1038,8 +1017,7 @@ export function checkPlumeInterference(armManager, thrusterId) {
     const dp = docks[i];
     if (!dp) continue;
 
-    // Skip arms that are stowed (effectively alongside barrel, not in plume path)
-    // But still check DEPLOYING/STOWING since the strut is in motion
+    // Skip arms that are detached or expended (not in the plume path)
     if (arm.isDetached || arm.state === Constants.ARM_STATES.EXPENDED) continue;
 
     const alpha = arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0);

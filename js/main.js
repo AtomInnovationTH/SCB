@@ -21,8 +21,6 @@ import { Earth } from './scene/Earth.js';
 import { Starfield, raDec2xyz } from './scene/Starfield.js';
 import { BRIGHT_STARS, CONSTELLATION_FIGURES, galacticBasis } from './scene/starCatalog.js';
 import { SunLight } from './scene/SunLight.js';
-import { launchCinematic } from './scene/LaunchCinematic.js';
-import { tierVisualManager } from './scene/TierVisualManager.js';
 
 import { PlayerSatellite } from './entities/PlayerSatellite.js';
 import { DebrisField } from './entities/DebrisField.js';
@@ -50,7 +48,6 @@ import { InputManager } from './systems/InputManager.js';
 import { gameFlowManager } from './systems/GameFlowManager.js';
 import { AutoLockController } from './systems/AutoLockController.js';
 import { powerDistribution } from './systems/PowerDistribution.js';
-import { launchSequence } from './systems/LaunchSequence.js';
 import { openingDance } from './systems/OpeningDance.js';
 import timerManager from './systems/TimerManager.js';
 import { trawlManager } from './systems/TrawlManager.js';
@@ -61,7 +58,6 @@ import { IssConjunctionBoss } from './systems/IssConjunctionBoss.js';
 import { StarlinkCascadeBoss } from './systems/StarlinkCascadeBoss.js';
 import { LassoSystem } from './systems/LassoSystem.js';
 import { despinLaser } from './systems/DespinLaser.js';
-import { tetherReel } from './systems/TetherReel.js';
 import { RewardSystem } from './systems/RewardSystem.js';
 import { CodexSystem } from './systems/CodexSystem.js';import { loadCodexData } from './systems/codex/codexData.js';
 import { SpaceWeatherSystem } from './systems/SpaceWeatherSystem.js';
@@ -90,7 +86,6 @@ import { DebrisWireframe } from './ui/DebrisWireframe.js';
 import { drawnRimRadiusAtDepth, contentsFloorRadius, contentsFloorRadiusBox, contentsFloorClamped, contentsBoxValid, chordBoxPenetration } from './ui/NetMeshKit.js';
 import { DockingReticle } from './ui/DockingReticle.js';
 import { VelocityStreaks } from './ui/VelocityStreaks.js';
-import { TrailSystem } from './ui/TrailSystem.js';
 import { DebugOverlay } from './ui/DebugOverlay.js';
 import { SweepReportUI } from './ui/SweepReportUI.js';
 import { CodexViewerUI } from './ui/CodexViewerUI.js';
@@ -668,7 +663,6 @@ let debrisMap = null;
 let debrisWireframe;
 let dockingReticle;
 let velocityStreaks;
-let trailSystem;
 let debugOverlay;
 let sweepReportUI;
 let codexViewerUI;
@@ -1626,7 +1620,7 @@ async function init() {
   if (motherCallouts?.setLiveCtx) {
     motherCallouts.setLiveCtx({
       resourceSystem, commsSystem, codexSystem,
-      powerDistribution, tetherReel, despinLaser, player, armManager,
+      powerDistribution, despinLaser, player, armManager,
     });
   }
 
@@ -1677,9 +1671,6 @@ async function init() {
   // Canvas starts visible — empty overlay is transparent, no visual impact;
   // STATE_CHANGE listener hides/clears when leaving gameplay states
 
-  // --- ST-5.2: Trail System (3-D world-space historical trajectory ribbons) ---
-  trailSystem = new TrailSystem(scene, eventBus);
-
   // --- Debris Map (ST-4.A — full-screen strategic sweep planning overlay) ---
   debrisMap = new DebrisMap();
 
@@ -1710,11 +1701,6 @@ async function init() {
   // can poll initial ammo state.
   if (lassoSystem && typeof hud.setLassoSystem === 'function') hud.setLassoSystem(lassoSystem);
 
-  // V-7: Launch cinematic visual effects (flag-gated internally)
-  if (Constants.FEATURE_FLAGS && Constants.FEATURE_FLAGS.LAUNCH_SEQUENCE) {
-    launchCinematic.init(scene, player, sceneManager);
-  }
-
   // V-8: Capture net system + visual effects
   if (Constants.FEATURE_FLAGS.CAPTURE_NET) {
     captureNetSystem.init({ player, debrisField, audioSystem, armManager, lassoSystem });   // ST-9.4: initialize mother pod inventory + set _initialized; deps back the mother-pod anchor provider + Phase-A pin API + Phase-B winch pitch + Phase C-lite corridor test
@@ -1732,11 +1718,6 @@ async function init() {
   // CP-2: mother-mounted de-spin laser (flag-gated; operates on the active target)
   if (Constants.FEATURE_FLAGS.LASER_DESPIN) {
     despinLaser.init({ scene, player, targetSelector });
-  }
-
-  // V-9: Tier progression visual (flag-gated internally)
-  if (Constants.FEATURE_FLAGS.TIER_UPGRADES) {
-    tierVisualManager.init(scene, player, armManager);
   }
 
   // Reward-first onboarding: front-arc autolock + net-range tracking.
@@ -1766,7 +1747,6 @@ async function init() {
   shopScreen.setCargoSystem(cargoSystem);
   shopScreen.setResourceSystem(resourceSystem);   // g1-gas-upgrades D5: the resupply is priced by the tank gas
   shopScreen.setScoringSystem(scoringSystem);
-  shopScreen.setPersistenceManager(persistenceManager);
 
   // --- CH5 ISS conjunction boss (MISSION_ARC §6) — protect-the-asset event ---
   // Needs the shop (elevator-mass award) + debrisField (ISS-track spawn), so it
@@ -2044,12 +2024,9 @@ async function init() {
     },
     comms: () => (commsSystem && commsSystem.getSuppressionTier
       ? [`LINK: ${commsSystem.getSuppressionTier() > 0 ? 'SUPPRESSED' : 'NOMINAL'}`] : []),
-    cargo: () => {
-      if (!tetherReel || !tetherReel.getAllReelStates) return [];
-      const states = tetherReel.getAllReelStates() || [];
-      const active = states.filter((s) => s && s.state && s.state !== 'STOWED').length;
-      return [`REELS ACTIVE ${active}/${states.length || 4}`];
-    },
+    // The tether reels were never switched on (the reel system was removed 2026-10-16),
+    // so this line has always read 0/4. Kept as-is: dropping visible text is the owner's call.
+    cargo: () => ['REELS ACTIVE 0/4'],
     // thermal: omitted until the flower refit lands — the static MLI spec
     // rows from the blueprint manifest carry that card.
   };
@@ -2328,7 +2305,7 @@ async function init() {
       // `flower`): FOLDED (LAUNCH θ 0, packs along the barrel, wings folded) ↔
       // DEPLOYED (STOW 146) over the whole travel, 'SLEWING' while moving. The
       // toggle is PlayerSatellite.toggleFlowerOverride — the ONE production path
-      // that arms the launch lock outside the launch sequence — and it is
+      // that arms the launch lock — and it is
       // reachable ONLY while the pane is engaged (isExpanded): a collapsed pane
       // makes this a no-op, so REFIT / plain O / autopilot never fold the
       // flower. The O key takes the same path through isOverrideEngaged
@@ -3509,8 +3486,8 @@ async function init() {
   const _setPlayerShipHidden = (hide) => {
     if (player) player.visible = !hide;
     // Docked daughters are separate scene objects tracking the struts; at MENU
-    // they're usually LOCKED/STOWED (already hidden), but hide their groups too
-    // so nothing peeks out behind the hero if a save left one deployed.
+    // they're always deployed on their struts, so hide their groups too
+    // so nothing peeks out behind the hero.
     if (armManager && Array.isArray(armManager.arms)) {
       for (const arm of armManager.arms) {
         if (arm && arm.group) arm.group.visible = !hide;
@@ -3570,7 +3547,7 @@ async function init() {
     });
     // ONE deferred tick at jet-off: the t = 0 beat edges (latch clunk + the
     // ship's own STOW latch) fire while the state is still MENU, where the
-    // game loop's launchSequence.tick site (inside the isGameplay gate) has
+    // game loop's openingDance.tick site (inside the isGameplay gate) has
     // not been reached yet. Idempotent edges make a late fire harmless (a
     // skipped menu fires it after the clock was advanced to cut-time).
     const jetoffMs = Math.max(0, Math.round(Constants.OPENING_DANCE.BEAT_JETOFF * durMs));
@@ -4062,7 +4039,7 @@ async function init() {
       //     ladder pose ('STOW' | 'PARK' | 'CARGO'). Design 7b: 'LAUNCH' (the
       //     fore-folded fairing pose) is refused from orbit unless the caller
       //     passes { force: true } — the dev-only override the frames harness
-      //     uses; the production arming path is the LaunchSequence (T6).
+      //     uses; no production path arms it any more (the launch sequence was removed).
       //   window.__scbLaunchConfig(on) → Design 7b: the whole ship in its
       //     launch configuration (ROSA furled, docked struts to α 0 in their
       //     channels, flower LAUNCH) — the three writes of the 7b mock script
@@ -4842,7 +4819,7 @@ async function init() {
 
           // 6. Fire pod 0 AT the pinned whale — not along ship +Z. The pin
           //    sits on the prograde axis, and nose ≠ prograde whenever the
-          //    attitude is driven (launch cinematic, slews), so an aimed
+          //    attitude is driven (opening dance, slews), so an aimed
           //    shot is the only attitude-independent fire. Compute the pin
           //    position analytically (same math as DebrisField's basis):
           //    pinnedPos = playerPos + prograde × 25 m; dir = muzzle → pin.
@@ -6926,11 +6903,8 @@ function gameLoop(timestamp) {
     _mechLive = FrameSched.anyMoved(_mechPrev, _mechCur, MECH_EPS_RAD_PER_S * dt);
     { const _tmp = _mechPrev; _mechPrev = _mechCur; _mechCur = _tmp; }
 
-    // V-4: Sync arm mesh visibility with deploy state (must run AFTER arm._updateDocked)
+    // V-4: Sync docked-arm mesh visibility (must run AFTER arm._updateDocked)
     try { player.postArmUpdate(); } catch (e) { console.error('[GameLoop] postArmUpdate:', e); }
-
-    // ST-9.11 C-5: Tick launch sequence (flag-gated internally)
-    try { launchSequence.tick(dt); } catch (e) { console.error('[GameLoop] launchSequence:', e); }
 
     // Opening dance (2026-09-16): beat-edge emission only — the pose itself is
     // derived from the wall clock so the menu loop and this loop always agree.
@@ -6938,9 +6912,6 @@ function gameLoop(timestamp) {
     // beat edge (t = 0, jet-off) is fired by the deferred tick scheduled in the
     // MENU_DEPARTURE_START handler while the state is still MENU.
     try { openingDance.tick(dt); } catch (e) { console.error('[GameLoop] openingDance:', e); }
-
-    // V-7: Drive launch cinematic visual effects (flag-gated internally)
-    try { launchCinematic.update(dt); } catch (e) { console.error('[GameLoop] launchCinematic:', e); }
 
     // V-8: Capture net FSM + visual effects (flag-gated internally)
     try { captureNetSystem.update(dt); } catch (e) { console.error('[GameLoop] captureNetSystem:', e); }
@@ -6979,9 +6950,6 @@ function gameLoop(timestamp) {
       try { if (issConjunctionBoss) issConjunctionBoss.update(dt); } catch (e) { console.error('[GameLoop] issConjunctionBoss:', e); }
       try { if (starlinkCascadeBoss) starlinkCascadeBoss.update(dt); } catch (e) { console.error('[GameLoop] starlinkCascadeBoss:', e); }
     }
-
-    // V-9: Tier progression visual transition animation
-    try { tierVisualManager.update(dt); } catch (e) { console.error('[GameLoop] tierVisualManager:', e); }
 
     // Update target selector
     try { targetSelector.update(dt); } catch (e) { console.error('[GameLoop] targetSelector:', e); }
@@ -7272,11 +7240,6 @@ function gameLoop(timestamp) {
     // --- Velocity Streaks update (Canvas 2D acceleration overlay) ---
     if (velocityStreaks) {
       velocityStreaks.update(dt);
-    }
-
-    // --- ST-5.2: Trail System update (3-D ribbon geometry rebuild) ---
-    if (trailSystem) {
-      try { trailSystem.update(dt); } catch (e) { console.error('[GameLoop] trailSystem:', e); }
     }
 
     // --- Comms System update ---

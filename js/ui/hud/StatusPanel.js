@@ -23,8 +23,6 @@ import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { VisualLaw } from '../../core/VisualLaw.js';
 import { powerDistribution } from '../../systems/PowerDistribution.js';
-import { tetherReel } from '../../systems/TetherReel.js';
-import { BridleRing } from '../../entities/BridleRing.js';
 import { captureNetSystem, netMaxReachM } from '../../entities/CaptureNet.js';
 import { PaneChrome } from './PaneChrome.js';
 import { GestureHints } from './GestureHints.js';
@@ -575,8 +573,8 @@ export class StatusPanel {
     //     in premium real estate. It now lives gated atop the comms pane
     //     (CommsPanel._onContractUpdate), revealed on the first contribution,
     //     grouped with the channel that already narrates its milestones.
-    //   • The daughter-tier badge (#hud-arm-tier, feature-flagged) moved to the
-    //     DAUGHTERS pane header where it is contextual.
+    //   • The daughter-tier badge (it lived in the DAUGHTERS pane header) was
+    //     deleted with the tier upgrades, 2026-10-16.
     this.panels.score.innerHTML = `
       <div style="display:flex;align-items:center;gap:14px;white-space:nowrap;line-height:1;">
         <div style="display:flex;align-items:baseline;gap:7px;">
@@ -649,8 +647,6 @@ export class StatusPanel {
       <div class="pane-title" id="fleet-header" style="font-size:11px;margin-bottom:3px;color:var(--hud-normal, #00ff88);opacity:0.7;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;">
         <span>DAUGHTERS</span>
         <span id="fleet-select-hint" style="font-weight:normal;letter-spacing:normal;font-size:10px;opacity:0.4;white-space:nowrap;">select 1–4</span>
-        <span id="hud-arm-tier" title="Current daughter configuration tier"
-              style="display:none;color:var(--hud-caution, #ff8800);font-weight:normal;letter-spacing:0.05em;font-size:10px;">Y0 Quad. 4 daughters</span>
       </div>
       <div id="hud-arms-status" style="font-size:11px;line-height:1.6;">
         <span style="opacity:0.5">Initializing daughter fleet…</span>
@@ -769,47 +765,6 @@ export class StatusPanel {
   setArmManager(armManager) {
     this._armManager = armManager;
     this._renderArmPanel();
-    this._updateArmTierBadge();
-
-    // C-10: Listen for tier upgrades to update the badge
-    eventBus.on(Events.TIER_UPGRADED, () => this._updateArmTierBadge());
-  }
-
-  /**
-   * @private Update the arm tier badge in the score panel (C-10).
-   * Only visible when FEATURE_FLAGS.TIER_UPGRADES is enabled.
-   * Register item 86: the key changes at PURCHASE but the physical fleet
-   * lags until reconstruction — while the live arm count disagrees with the
-   * purchased ladder row, the badge says "· next launch". Keyed on the
-   * mismatch itself (no extra state) so it self-clears after the rebuild;
-   * refreshed from update() too, so a stale marker can never outlive the
-   * reconstruction that resolves it.
-   */
-  _updateArmTierBadge() {
-    const badge = this._container.querySelector('#hud-arm-tier');
-    if (!badge) return;
-
-    if (!Constants.FEATURE_FLAGS.TIER_UPGRADES) {
-      badge.style.display = 'none';
-      return;
-    }
-
-    let text = null;
-    if (this._armManager && typeof this._armManager.getCurrentTier === 'function') {
-      const tierKey = this._armManager.getCurrentTier();
-      const ladder = Constants.ARM_LADDER[tierKey];
-      if (ladder) {
-        const displayNames = { Y0_QUAD: 'Y0 Quad', Y1_HEX: 'Y1 Hex', Y3_OCTO: 'Y3 Octo' };
-        const liveFleet = Array.isArray(this._armManager.arms) ? this._armManager.arms : [];
-        const pending = liveFleet.length !== ladder.armCount ? ' · next launch' : '';
-        text = `${displayNames[tierKey] || tierKey}. ${ladder.armCount} daughters${pending}`;
-      }
-    }
-    if (text === null) return;
-    badge.style.display = 'inline-block';
-    if (badge.textContent !== text) {
-      badge.textContent = text; // write-guard: the 10 Hz tick stays cheap
-    }
   }
 
   /**
@@ -846,11 +801,6 @@ export class StatusPanel {
 
     // V5: Re-render arm panel at 10Hz for live tension/scan/flash updates
     this._renderArmPanel();
-
-    // Register item 86: keep the tier badge honest at 10 Hz — a "· next
-    // launch" marker clears the tick after reconstruction resolves the lag
-    // (the write-guard inside makes the no-op case free).
-    this._updateArmTierBadge();
 
     // ST-1.3: Update lasso cooldown ring at 10Hz for smooth arc depletion
     this._updateNetDigest();

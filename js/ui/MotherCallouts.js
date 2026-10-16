@@ -1120,7 +1120,7 @@ export class MotherCallouts {
    * before commsSystem). Every reference is optional — cards degrade to static
    * rows if a system is missing.
    * @param {object} ctx { resourceSystem, commsSystem, codexSystem,
-   *   powerDistribution, tetherReel, despinLaser, player }
+   *   powerDistribution, despinLaser, player }
    */
   setLiveCtx(ctx) {
     this._liveCtx = ctx || null;
@@ -2176,14 +2176,9 @@ export class MotherCallouts {
           break;
         }
         case 'tether': {
-          const tr = ctx.tetherReel;
-          if (tr?.getAllReelStates) {
-            const states = tr.getAllReelStates() || [];
-            const active = states.filter((s) => s?.state && s.state !== 'STOWED').length;
-            out.push(`Reels active: ${active}/${states.length || 4}`);
-          } else if (tr?.getReelState) {
-            out.push(`Reel 0: ${tr.getReelState(0) ?? '—'}`);
-          }
+          // The reel system was removed 2026-10-16; it never ran, so this has always read 0/4.
+          // Kept as-is: dropping visible text is the owner's call.
+          out.push('Reels active: 0/4');
           break;
         }
         case 'ttc': {

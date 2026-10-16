@@ -28,7 +28,7 @@
  *     `(shipLocalU) -> {x,y,visible}` is passed in (the serial track composes
  *     player.localToWorld ∘ world→screen); anchors resolve through an optional
  *     `shipMeshSource.getAnchorLocalU(meshName)` adapter (live-mesh anchors,
- *     the MotherCallouts/TierVisualManager T1 pattern) with the static manifest
+ *     the MotherCallouts T1 pattern) with the static manifest
  *     offset as the designed fallback — never a hole, never a throw.
  *   - `providers[readout]()` feeds the detail lens live rows (power/thermal/…
  *     numbers); absent or throwing providers degrade to the static spec rows

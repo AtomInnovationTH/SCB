@@ -38,7 +38,7 @@
  *
  * `mesh` names an optional live PlayerSatellite mesh: when the serial track
  * injects a shipMeshSource adapter (HullCamFloor deps), the anchor re-resolves
- * from the live mesh position (TierVisualManager / MotherCallouts T1 pattern);
+ * from the live mesh position (MotherCallouts T1 pattern);
  * otherwise the static offset here is the anchor. Both paths are ship-local.
  * `meshOffsetM` is an optional [x, y, z] in METRES (ship frame) that
  * HullCamFloor._anchorU adds to the LIVE mesh position only (Mother audit T10:

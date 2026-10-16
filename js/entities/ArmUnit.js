@@ -20,7 +20,6 @@ import { makePlumeFrustum } from '../scene/plumeGeometry.js';
 import { computeDaughterPlumeIntensity, DAUGHTER_PLUME } from './armPlumeModel.js';
 import { applyDetailLod } from '../scene/detailLodCull.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
-import { tetherReel } from '../systems/TetherReel.js';
 import { strutLocalDirection } from './ArmDockBasis.js';
 import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT, seedShipRelativeAttitude, applyShipRelativeAttitude, clearShipRelativeAttitude } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
@@ -93,9 +92,9 @@ const {
  * (`tetherTension / tetherBreakStrength`, the scalar _updateReeling computes
  * for snap physics) — NOT from distance. HISTORY: the original always-on
  * driver colored by distance strain; in the orbital frame that scalar jitters
- * frame-to-frame and the line strobed red/white, so it was flag-gated behind
- * TETHER_REEL (OFF) and the channel went dead (see _updateTether). The tension
- * fraction is stable within a reel and zero outside one.
+ * frame-to-frame and the line strobed red/white, so it was switched off and
+ * the channel went dead (see _updateTether). The tension fraction is stable
+ * within a reel and zero outside one.
  *
  * Thresholds are the canonical tension-fraction pair REEL_TENSION_WARNING /
  * REEL_TENSION_CRITICAL — the SAME constants the DockingReticle tension bar
@@ -451,58 +450,6 @@ export class ArmUnit {
      * @type {string}
      */
     this._hingeState = Constants.HINGE_STATES.ROTATE;
-
-    // ══════════════════════════════════════════════════════════════════
-    // ST-9.10 C-4: DEPLOY STATE MACHINE
-    // ══════════════════════════════════════════════════════════════════
-    //
-    // Two state machines coexist on ArmUnit and must NOT be conflated (§V-3):
-    //   1. deployState (THIS) — physical/mechanical:
-    //        LOCKED → STOWED → DEPLOYING → DEPLOYED → STOWING (→ STOWED)
-    //      Transitions take real time and animate strut alpha.
-    //   2. armState (this.state / ARM_STATES) — operational mission role:
-    //        DOCKED → LAUNCHING → TRANSIT → ...
-    //      Set by gameplay code.
-    //
-    // A fully-deployed arm (deployState=DEPLOYED) can be in any operational
-    // state. An arm cannot fire/operate (DOCKED→LAUNCHING) unless
-    // deployState === DEPLOYED.
-    //
-    // When FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE is false:
-    //   - deployState is always DEPLOYED (C-3 placeholder behavior)
-    //   - strutDeploy/strutStow/strutUnlock are no-ops
-    //   - All existing code paths continue to work unchanged
-    // ══════════════════════════════════════════════════════════════════
-
-    /**
-     * Physical deploy state of the strut hinge mechanism.
-     * Gated by FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE.
-     * When flag OFF: always DEPLOYED. When flag ON: starts LOCKED.
-     * @type {string} One of Constants.DEPLOY_STATES values
-     */
-    this._deployState = Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE
-      ? Constants.DEPLOY_STATES.LOCKED
-      : Constants.DEPLOY_STATES.DEPLOYED;
-
-    /**
-     * Target alpha for deploy/stow animation.
-     * During DEPLOYING: sweeps toward this value at STRUT_SLEW_RATE.
-     * During STOWING: sweeps toward 0 at STRUT_SLEW_RATE.
-     * @type {number}
-     */
-    this._deployTargetAlpha = Math.PI / 2; // default deploy target = equatorial
-
-    /**
-     * Promise resolve callback for strutDeploy(). Called when DEPLOYED is reached.
-     * @type {Function|null}
-     */
-    this._deployResolve = null;
-
-    /**
-     * Promise resolve callback for strutStow(). Called when STOWED is reached.
-     * @type {Function|null}
-     */
-    this._stowResolve = null;
 
     /**
      * Timer for auto-unlock after fire recoil settles.
@@ -2369,15 +2316,6 @@ export class ArmUnit {
       return false; // Rotation rejected — hinge is locked
     }
 
-    // C-4: Deploy state gate — during DEPLOYING/STOWING, the deploy state
-    // machine owns alpha. User aim changes are rejected.
-    if (Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE) {
-      const ds = this._deployState;
-      if (ds === Constants.DEPLOY_STATES.DEPLOYING || ds === Constants.DEPLOY_STATES.STOWING) {
-        return false; // Alpha driven by deploy animation
-      }
-    }
-
     const V5 = Constants.OCTOPUS_V5;
     const target = Math.max(V5.STRUT_SWEEP_MIN, Math.min(alpha, V5.STRUT_SWEEP_MAX));
 
@@ -2418,19 +2356,6 @@ export class ArmUnit {
     if (!Constants.FEATURE_FLAGS.LOCKABLE_HINGE) return;
     if (this._hingeState === Constants.HINGE_STATES.LOCKED) return;
 
-    // C-4: Cannot lock hinge during DEPLOYING/STOWING — strut motor is active
-    if (Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE) {
-      const ds = this._deployState;
-      if (ds === Constants.DEPLOY_STATES.DEPLOYING || ds === Constants.DEPLOY_STATES.STOWING) {
-        eventBus.emit(Events.ARM_DEPLOY_REJECTED, {
-          armIndex: this.index,
-          currentState: ds,
-          reason: `Cannot lock hinge during ${ds}`,
-        });
-        return;
-      }
-    }
-
     this._hingeState = Constants.HINGE_STATES.LOCKED;
     eventBus.emit(Events.ARM_HINGE_LOCKED, { armIndex: this.index });
   }
@@ -2465,216 +2390,6 @@ export class ArmUnit {
    */
   getHingeState() {
     return this._hingeState;
-  }
-
-  /**
-   * Get the physical deploy state of the strut.
-   * When STOW_DEPLOY_STATE_MACHINE flag is OFF: always returns 'DEPLOYED'
-   * (C-3 placeholder behavior — existing code paths unaffected).
-   * When flag is ON: returns the live deploy state.
-   * @returns {string} One of Constants.DEPLOY_STATES values
-   */
-  getDeployState() {
-    if (!Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE) {
-      return Constants.DEPLOY_STATES.DEPLOYED;
-    }
-    return this._deployState;
-  }
-
-  // ==========================================================================
-  // ST-9.10 C-4: DEPLOY STATE MACHINE — STRUT DEPLOY/STOW
-  // ==========================================================================
-
-  /**
-   * Begin strut deployment: STOWED → DEPLOYING → DEPLOYED.
-   * Strut sweeps from α=0 to α=deployTargetAlpha at STRUT_SLEW_RATE.
-   * Duration: deployTargetAlpha / STRUT_SLEW_RATE (default π/2 at 30°/s ≈ 3s).
-   *
-   * No-op when STOW_DEPLOY_STATE_MACHINE is false.
-   * Rejects if current deployState is not STOWED.
-   *
-   * @param {number} [targetAlpha=Math.PI/2] — target sweep angle (default equatorial)
-   * @returns {Promise<void>} Resolves when DEPLOYED is reached
-   */
-  strutDeploy(targetAlpha) {
-    if (!Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE) {
-      return Promise.resolve(); // No-op when flag off
-    }
-
-    const DS = Constants.DEPLOY_STATES;
-    if (this._deployState !== DS.STOWED) {
-      eventBus.emit(Events.ARM_DEPLOY_REJECTED, {
-        armIndex: this.index,
-        currentState: this._deployState,
-        reason: `Cannot deploy from ${this._deployState} (must be STOWED)`,
-      });
-      return Promise.reject(new Error(`Cannot deploy from ${this._deployState}`));
-    }
-
-    this._deployTargetAlpha = targetAlpha !== undefined ? targetAlpha : Math.PI / 2;
-    this._deployState = DS.DEPLOYING;
-
-    eventBus.emit(Events.ARM_DEPLOY_STARTED, {
-      armIndex: this.index,
-      fromState: DS.STOWED,
-    });
-
-    return new Promise((resolve) => {
-      this._deployResolve = resolve;
-    });
-  }
-
-  /**
-   * Begin strut stow: DEPLOYED → STOWING → STOWED.
-   * Strut sweeps from current α to α=0 at STRUT_SLEW_RATE.
-   * Duration: currentAlpha / STRUT_SLEW_RATE.
-   *
-   * No-op when STOW_DEPLOY_STATE_MACHINE is false.
-   * Rejects if current deployState is not DEPLOYED.
-   *
-   * @returns {Promise<void>} Resolves when STOWED is reached
-   */
-  strutStow() {
-    if (!Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE) {
-      return Promise.resolve(); // No-op when flag off
-    }
-
-    const DS = Constants.DEPLOY_STATES;
-    if (this._deployState !== DS.DEPLOYED) {
-      eventBus.emit(Events.ARM_DEPLOY_REJECTED, {
-        armIndex: this.index,
-        currentState: this._deployState,
-        reason: `Cannot stow from ${this._deployState} (must be DEPLOYED)`,
-      });
-      return Promise.reject(new Error(`Cannot stow from ${this._deployState}`));
-    }
-
-    const fromAlpha = this._aimAlpha;
-    this._deployState = DS.STOWING;
-
-    eventBus.emit(Events.ARM_STOW_STARTED, {
-      armIndex: this.index,
-      fromAlpha,
-    });
-
-    return new Promise((resolve) => {
-      this._stowResolve = resolve;
-    });
-  }
-
-  /**
-   * Unlock strut from launch lock: LOCKED → STOWED.
-   * Used by C-5 launch sequence; here we just implement the transition.
-   * No animation — instantaneous transition.
-   *
-   * No-op when STOW_DEPLOY_STATE_MACHINE is false.
-   * Rejects if current deployState is not LOCKED.
-   */
-  strutUnlock() {
-    if (!Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE) {
-      return; // No-op when flag off
-    }
-
-    const DS = Constants.DEPLOY_STATES;
-    if (this._deployState !== DS.LOCKED) {
-      eventBus.emit(Events.ARM_DEPLOY_REJECTED, {
-        armIndex: this.index,
-        currentState: this._deployState,
-        reason: `Cannot unlock from ${this._deployState} (must be LOCKED)`,
-      });
-      return;
-    }
-
-    this._deployState = DS.STOWED;
-    // Alpha should already be 0 (stowed), ensure it
-    this._aimAlpha = 0;
-  }
-
-  /**
-   * Internal/test setter for deploy state.
-   * NOT a gameplay API — used for testing and persistence restore.
-   * @param {string} state — one of Constants.DEPLOY_STATES values
-   */
-  setDeployState(state) {
-    const DS = Constants.DEPLOY_STATES;
-    const valid = Object.values(DS);
-    if (!valid.includes(state)) return;
-    this._deployState = state;
-  }
-
-  /**
-   * Get the deploy sweep progress as a fraction [0, 1].
-   * 0 at start of sweep, 1 at completion.
-   * Returns -1 if not in a transitional state (DEPLOYING/STOWING).
-   * Used by HUD for progress display.
-   * @returns {number} Progress fraction, or -1 if not transitioning
-   */
-  getDeployProgress() {
-    const DS = Constants.DEPLOY_STATES;
-    if (this._deployState === DS.DEPLOYING) {
-      const target = this._deployTargetAlpha || (Math.PI / 2);
-      if (target <= 0) return 1;
-      return Math.min(1, this._aimAlpha / target);
-    }
-    if (this._deployState === DS.STOWING) {
-      // Stow goes from some alpha toward 0. Progress = 1 - (current/start).
-      // We approximate using the deploy target as the "start" reference.
-      const startAlpha = this._deployTargetAlpha || (Math.PI / 2);
-      if (startAlpha <= 0) return 1;
-      return Math.min(1, 1 - (this._aimAlpha / startAlpha));
-    }
-    return -1;
-  }
-
-  /**
-   * Tick the deploy state animation each frame.
-   * Drives _aimAlpha toward target during DEPLOYING/STOWING at STRUT_SLEW_RATE.
-   * Completes transitions when target is reached.
-   * @param {number} dt — frame delta time
-   * @private
-   */
-  _tickDeployState(dt) {
-    if (!Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE) return;
-
-    const DS = Constants.DEPLOY_STATES;
-    const slewRate = Constants.OCTOPUS_V5.STRUT_SLEW_RATE;
-
-    if (this._deployState === DS.DEPLOYING) {
-      // Sweep alpha toward target
-      const target = this._deployTargetAlpha;
-      const maxDelta = slewRate * dt;
-      const remaining = target - this._aimAlpha;
-
-      if (remaining <= maxDelta) {
-        // Target reached — snap and complete
-        this._aimAlpha = target;
-        this._deployState = DS.DEPLOYED;
-        eventBus.emit(Events.ARM_DEPLOY_COMPLETED, { armIndex: this.index });
-        if (this._deployResolve) {
-          this._deployResolve();
-          this._deployResolve = null;
-        }
-      } else {
-        this._aimAlpha += maxDelta;
-      }
-    } else if (this._deployState === DS.STOWING) {
-      // Sweep alpha toward 0
-      const maxDelta = slewRate * dt;
-      const remaining = this._aimAlpha;
-
-      if (remaining <= maxDelta) {
-        // Target reached — snap and complete
-        this._aimAlpha = 0;
-        this._deployState = DS.STOWED;
-        eventBus.emit(Events.ARM_STOW_COMPLETED, { armIndex: this.index });
-        if (this._stowResolve) {
-          this._stowResolve();
-          this._stowResolve = null;
-        }
-      } else {
-        this._aimAlpha -= maxDelta;
-      }
-    }
   }
 
   /**
@@ -2851,13 +2566,6 @@ export class ArmUnit {
     // C-3: Reset aim/hinge state
     this._aimAlpha = 0;
     this._hingeState = Constants.HINGE_STATES.ROTATE;
-    // C-4: Reset deploy state — flag-gated initial value
-    this._deployState = Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE
-      ? Constants.DEPLOY_STATES.LOCKED
-      : Constants.DEPLOY_STATES.DEPLOYED;
-    this._deployTargetAlpha = Math.PI / 2;
-    this._deployResolve = null;
-    this._stowResolve = null;
     this._hingeSettleTimer = 0;
 
     this.mesh.visible = false;
@@ -2875,9 +2583,6 @@ export class ArmUnit {
 
    // C-3: Tick hinge auto-unlock settle timer
    this._tickHingeSettle(dt);
-
-   // C-4: Tick deploy state animation (DEPLOYING/STOWING strut sweep)
-   this._tickDeployState(dt);
 
    // §11.3: reaction-wheel momentum bleed (magnetorquers) — every state.
    this._tickWheelDecay(dt);
@@ -2982,23 +2687,6 @@ export class ArmUnit {
         this._leadTargetPrevPos = null;
         this._leadArmPrevPos = null;
         this._leadTargetVelValid = false;
-      }
-    }
-
-   // --- ST-5.2: Trail sample emission (10 Hz gated by game time) ---
-    if (Constants.TRAILS && Constants.TRAILS.ENABLED !== false &&
-        this.state !== S.DOCKED && this.state !== S.RELOADING) {
-      const gameDt = dt * TimeAuthority.BASE_SCALE;
-      this._trailSampleAccum = (this._trailSampleAccum || 0) + gameDt;
-      const trailInterval = 1 / (Constants.TRAILS.SAMPLE_RATE_HZ || 10);
-      if (this._trailSampleAccum >= trailInterval) {
-        this._trailSampleAccum -= trailInterval;
-        if (this._trailSampleAccum > trailInterval) this._trailSampleAccum = 0;
-        eventBus.emit(Events.ARM_TRAIL_SAMPLE, {
-          armId: this.id,
-          pos: { x: this.position.x, y: this.position.y, z: this.position.z },
-          vel: { x: this.velocity.x, y: this.velocity.y, z: this.velocity.z },
-        });
       }
     }
 
@@ -3228,10 +2916,7 @@ export class ArmUnit {
     eventBus.emit(Events.ARM_STATE_CHANGE, {
       armId: this.id, from: old, to: newState,
     });
-    // ST-5.2: Clear trail buffer on dock/reload
     if (newState === S.DOCKED || newState === S.RELOADING) {
-      this._trailSampleAccum = 0;
-      eventBus.emit(Events.ARM_TRAIL_CLEAR, { armId: this.id });
       this._captureToolKind = 'NET';   // P2: reset capture-verb to default on a clean slate
     }
     // REEL_PROFILE_V2 bookkeeping reset on a fresh capture/dock cycle so the
@@ -3383,8 +3068,8 @@ export class ArmUnit {
     this.position.copy(parentPos).add(offset);
     // POLISH FIX: do NOT unconditionally hide the daughter mesh on DOCKED.
     // PlayerSatellite.postArmUpdate() (runs immediately after armManager.update)
-    // owns visibility based on deploy state — DEPLOYED → visible at strut tip,
-    // LOCKED/STOWED → hidden.  Hiding here made the daughter "disappear" after
+    // owns visibility — a docked daughter is shown clamped at the strut tip.
+    // Hiding here made the daughter "disappear" after
     // re-dock at the end of REELING, before the next undock.  Now she stays
     // visibly clamped to the strut after a successful retrieval.
     this.tetherLine.visible = false;
@@ -6616,14 +6301,6 @@ export class ArmUnit {
     this._pinCatchToSelf(parentPos);
 
     if (this.stateTimer > Constants.ARM_DOCK_DURATION) {
-      // POLISH FIX: keep daughter VISIBLE at the strut after a successful
-      // retrieval — set deploy state to DEPLOYED so PlayerSatellite.postArmUpdate
-      // shows her clamped to the strut tip (instead of hiding her until next
-      // undock).  Was previously left at LOCKED post-retrieval → invisible.
-      if (this._deployState === Constants.DEPLOY_STATES.LOCKED ||
-          this._deployState === Constants.DEPLOY_STATES.STOWED) {
-        this._deployState = Constants.DEPLOY_STATES.DEPLOYED;
-      }
       this.reeling = false;
       this.tetherTension = 0;
 
@@ -7444,55 +7121,20 @@ export class ArmUnit {
       return;
     }
 
-    // C-7: When TETHER_REEL flag is ON, hide tether if reel is CUT
-    if (Constants.FEATURE_FLAGS.TETHER_REEL) {
-      const reelState = tetherReel.getReelState(this.index);
-      if (reelState === Constants.REEL_STATES.CUT) {
-        this.tetherLine.visible = false;
-        return;
-      }
-    }
-
     if (this.state === S.EXPENDED) {
       // Tether still visible but dimmed
       this.tetherMaterial.opacity = 0.2;
     }
     this.tetherLine.visible = true;
 
-    // C-7: Strain-based color only when TETHER_REEL feature flag is ON
-    // (authoritative tension/length from reel system). When OFF, keep
-    // nominal Dyneema color — the distance-based strain calculation was
-    // causing erratic red/white flashing due to orbital frame artifacts.
-    if (Constants.FEATURE_FLAGS.TETHER_REEL) {
-      const cableLen = tetherReel.getCableLength(this.index);
-      const maxLen = tetherReel.getMaxCableLength(this.index);
-      let strain = maxLen > 0 ? cableLen / maxLen : 0;
-      const tensionN = tetherReel.getTensionN(this.index);
-      const breakingN = Constants.OCTOPUS_V5.REEL.BREAKING_TENSION_N;
-      const tensionFrac = breakingN > 0 ? tensionN / breakingN : 0;
-      strain = Math.max(strain, tensionFrac);
-
-      if (strain > 0.7 && this.state !== S.DOCKED && this.state !== S.EXPENDED) {
-        eventBus.emit(Events.TETHER_TENSION, { tensionFraction: strain, armId: this.id });
-      }
-
-      if (strain > 0.9) {
-        this.tetherMaterial.color.setHex(Constants.TETHER_COLOR_CRITICAL);
-      } else if (strain > 0.7) {
-        this.tetherMaterial.color.setHex(Constants.TETHER_COLOR_STRESSED);
-      } else {
-        this.tetherMaterial.color.setHex(Constants.TETHER_COLOR_NOMINAL);
-      }
-    } else {
-      // TETHER_REEL OFF (production): drive the tint from the LIVE REEL TENSION
-      // fraction via tetherTensionTint — replacing the old always-on distance
-      // strain driver whose orbital-frame jitter caused the red/white flashing
-      // artifact documented above. The tension fraction is computed in
-      // _updateReeling for snap physics (stable within a reel, zero outside
-      // one), so the line eases through amber toward red exactly while the
-      // winch is straining, and eases home when the reel ends.
-      this._updateTetherTensionTint(dt);
-    }
+    // Drive the tint from the LIVE REEL TENSION fraction via tetherTensionTint —
+    // replacing the old always-on distance strain driver whose orbital-frame
+    // jitter caused the red/white flashing artifact documented above. The
+    // tension fraction is computed in _updateReeling for snap physics (stable
+    // within a reel, zero outside one), so the line eases through amber toward
+    // red exactly while the winch is straining, and eases home when the reel
+    // ends.
+    this._updateTetherTensionTint(dt);
     this.tetherMaterial.opacity = (this.state === S.EXPENDED) ? 0.2 : 0.9;
 
     // Compute mother-side anchor point — strut tip via dockOffset (PlayerSatellite frame),
@@ -7599,8 +7241,7 @@ export class ArmUnit {
 
   /**
    * @private Wave1: ease the tether material color toward the tension-fraction
-   * tint (tetherTensionTint). Runs ONLY on the TETHER_REEL-OFF path of
-   * _updateTether (the flag-on reel path owns its own stepped colors).
+   * tint (tetherTensionTint). Called every frame from _updateTether.
    *
    * Per-frame exponential ease (1 − e^(−dt/tau)) toward the target — never a
    * step — so a single-frame tension sample can only nudge the line a few

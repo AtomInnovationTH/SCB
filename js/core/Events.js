@@ -560,9 +560,8 @@ export const Events = {
    *  release swing carried θ up through the orbit ladder floor (90°); from
    *  here the flower is an ordinary orbit actuator and the lock can never be
    *  re-armed from orbit. Emitted exactly once per arming, by the driver, the
-   *  frame θ reaches the floor (before the pose latch settles). Distinct from
-   *  LAUNCH_LOCK_RELEASED (the per-daughter strut pyros — their counts in
-   *  test-LaunchSequence.js stay 4 / 6). Payload: { thetaDeg: number }. */
+   *  frame θ reaches the floor (before the pose latch settles). Payload:
+   *  { thetaDeg: number }. */
   THERMAL_FLOWER_RELEASED: 'thermal:flowerReleased',
   /** Owner ask 2026-09-16: the radiator was deliberately VENTED past the 146°
    *  thrust band to POSE_VENT_DEG, by a double-command into the bud. The drive
@@ -728,11 +727,6 @@ export const Events = {
    *  Payload: { clusterId: string, name: string, count: number } */
   CLUSTER_CLEARED:     'cluster:cleared',
 
-  // === TRAIL SYSTEM (ST-5.2) ===
-  PLAYER_TRAIL_SAMPLE:    'player:trailSample',      // { pos: {x,y,z}, vel: {x,y,z} } — scene units
-  ARM_TRAIL_SAMPLE:       'arm:trailSample',          // { armId, pos: {x,y,z}, vel: {x,y,z} } — scene units
-  ARM_TRAIL_CLEAR:        'arm:trailClear',            // { armId } — arm docked/reloading, clear buffer
-
   // === STRATEGIC MAP (ST-6.4) ===
   STRATEGIC_MAP_TOGGLE:  'ui:strategic_map_toggle',   // Shift+V — toggle strategic map overlay
   STRATEGIC_MAP_OPENED:  'ui:strategic_map_opened',   // map opened (camera transition started)
@@ -816,30 +810,6 @@ export const Events = {
    *  Visuals hook (counter-burn flash) — emitted by ArmUnit.applyNetFireRecoil.
    *  Payload: { armIndex, armId, dv: {x,y,z} (m/s, world axes), dvMps, netClass } */
   ARM_RECOIL_KICK:         'arm:recoilKick',
-
-  // ── ST-9.10 C-4: Deploy State Machine Events ──────────────────────────
-  /** Deploy started (STOWED → DEPLOYING). Payload: { armIndex, fromState } */
-  ARM_DEPLOY_STARTED:      'arm:deployStarted',
-  /** Deploy completed (DEPLOYING → DEPLOYED). Payload: { armIndex } */
-  ARM_DEPLOY_COMPLETED:    'arm:deployCompleted',
-  /** Stow started (DEPLOYED → STOWING). Payload: { armIndex, fromAlpha } */
-  ARM_STOW_STARTED:        'arm:stowStarted',
-  /** Stow completed (STOWING → STOWED). Payload: { armIndex } */
-  ARM_STOW_COMPLETED:      'arm:stowCompleted',
-  /** Deploy/stow/unlock rejected (invalid transition). Payload: { armIndex, currentState, reason } */
-  ARM_DEPLOY_REJECTED:     'arm:deployRejected',
-
-  // ── ST-9.11 C-5: Launch Sequence Events ─────────────────────────────────
-  /** Phase transition. Payload: { fromPhase, toPhase, elapsedTotalS } */
-  LAUNCH_PHASE_CHANGED:      'launch:phaseChanged',
-  /** Per-arm pyro release. Payload: { armIndex } */
-  LAUNCH_LOCK_RELEASED:      'launch:lockReleased',
-  /** ROSA wing deploy started. Payload: { wing: 1|2 } */
-  ROSA_DEPLOY_STARTED:       'launch:rosaDeployStarted',
-  /** ROSA wing deploy finished. Payload: { wing: 1|2, powerW } */
-  ROSA_DEPLOY_COMPLETED:     'launch:rosaDeployCompleted',
-  /** Launch sequence finished — control handed to player. Payload: {} */
-  LAUNCH_SEQUENCE_COMPLETE:  'launch:sequenceComplete',
 
   // ── Opening Dance (2026-09-16) — the ship unpacks itself ────────────────
   // The deployment cinematic that replaces the launch sequence at boot: it
@@ -945,36 +915,6 @@ export const Events = {
    *  external view change aborting the ceremony). Always paired with a prior
    *  NET_CINEMATIC_ENTERED. Payload: { completedNormally: boolean } */
   NET_CINEMATIC_EXITED:      'net:cinematicExited',
-
-  // ── ST-9.5 C-7: Tether Reel Events (strut-mounted, Config G §10.4) ──────
-  /** Tether payout started. Payload: { armIndex, targetLengthM } */
-  TETHER_PAYOUT_STARTED:     'tether:payoutStarted',
-  /** Tether reel-in started. Payload: { armIndex, payloadMassKg } */
-  TETHER_REELIN_STARTED:     'tether:reelinStarted',
-  /** Tether reel-in completed (cable fully spooled). Payload: { armIndex } */
-  TETHER_REELIN_COMPLETED:   'tether:reelinCompleted',
-  /** Reel jammed. Payload: { armIndex, lengthM } */
-  TETHER_JAMMED:             'tether:jammed',
-  /** Tether cut (emergency or overload). Payload: { armIndex, reason } */
-  TETHER_CUT:                'tether:cut',
-  /** Tension > 75% of breaking — debounced warning. Payload: { armIndex, tensionN, breakingN } */
-  TETHER_TENSION_HIGH:       'tether:tensionHigh',
-
-  // ── ST-9.7 C-8: Bridle Ring Events (simplified Config G) ──────────────────
-  /** Payload attached to bridle ring point. Payload: { armIndex, pointId, payloadId, loadKg } */
-  BRIDLE_ATTACH:             'bridle:attach',
-  /** Payload detached from bridle ring point. Payload: { armIndex, pointId, payloadId } */
-  BRIDLE_DETACH:             'bridle:detach',
-  /** Bridle ring point overloaded (load > OVERLOAD_FACTOR × max). Payload: { armIndex, pointId, loadKg, maxKg } */
-  BRIDLE_OVERLOAD:           'bridle:overload',
-
-  // ── ST-9.8 C-10: Arm Tier Upgrade Events ──────────────────────────────────
-  /** Tier upgrade is available to purchase. Payload: { fromTier, toTier, costCredits, prereqMet } */
-  TIER_UPGRADE_AVAILABLE:    'tier:upgradeAvailable',
-  /** Tier upgrade rejected (pre-condition failed). Payload: { fromTier, toTier, reason } */
-  TIER_UPGRADE_REJECTED:     'tier:upgradeRejected',
-  /** Tier upgrade applied. Payload: { fromTier, toTier, newArmCount, newMassDryKg } */
-  TIER_UPGRADED:             'tier:upgraded',
 
   // === AUDIO UNLOCK (PR 6 / P3.13) ===
   /** AudioContext still suspended 200ms after first user gesture.

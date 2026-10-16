@@ -18,7 +18,6 @@ import { Constants } from '../core/Constants.js';
 import { TimeAuthority } from '../systems/TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { BridleRing } from './BridleRing.js';
 import { DebrisField } from './DebrisField.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
@@ -2515,12 +2514,6 @@ export class NetProjectile {
       for (let i = 0; i < arms.length; i++) {
         const arm = arms[i];
         if (!arm) continue;
-        // Stowed/locked struts sit at α=0 (aft, against the barrel) — clear
-        // by construction, and getAimAlpha already reflects the forced α=0,
-        // but skip them explicitly so a mid-stow strut doesn't flicker the
-        // gate.
-        const ds = (typeof arm.getDeployState === 'function') ? arm.getDeployState() : 'DEPLOYED';
-        if (ds === 'LOCKED' || ds === 'STOWED') continue;
         const alpha = (typeof arm.getAimAlpha === 'function') ? arm.getAimAlpha() : Math.PI / 2;
         const azRad = (arm._azimuthDeg || 0) * Math.PI / 180;
         // ONE geometry (ArmDockBasis.strutTipFoulsCorridor) — shared with
@@ -3597,17 +3590,6 @@ export class CaptureNetSystem {
         // is never stuffed into a cargo cell it cannot fit).
         if (net.state === STATES.STOWED && net.catchResult === 'success' && net.capturedMass > 0
             && !(net.podIndex >= 0 && net.armIndex < 0)) {
-          // ST-9.7 C-8: Route through bridle ring if both flags enabled
-          if (Constants.FEATURE_FLAGS.BRIDLE_RING && Constants.FEATURE_FLAGS.CAPTURE_NET && net.armIndex >= 0) {
-            const freePoint = BridleRing.findFreePoint(net.armIndex);
-            if (freePoint) {
-              const captureId = net.targetDebris?.id || `capture-${Date.now()}`;
-              BridleRing.attach(net.armIndex, freePoint, captureId, net.capturedMass);
-              // Brief intermediary — immediately release to cargo system
-              BridleRing.detach(net.armIndex, freePoint);
-            }
-          }
-
           eventBus.emit(Events.CARGO_STORE, {
             debrisId:     net.targetDebris?.id,
             mass:         net.capturedMass,
@@ -5185,13 +5167,6 @@ export class CaptureNetSystem {
    */
   fireDaughterNet(arm, armIndex, launchPos, launchDir, target, mode) {
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return null;
-
-    // Deploy state gate (C-4 integration)
-    if (Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE) {
-      if (typeof arm.getDeployState === 'function' && arm.getDeployState() !== 'DEPLOYED') {
-        return null;
-      }
-    }
 
     // Net inventory gate
     const inventory = (typeof arm.getNetInventory === 'function') ? arm.getNetInventory() : 0;

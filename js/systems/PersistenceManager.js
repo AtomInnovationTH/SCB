@@ -4,7 +4,6 @@
  * @module systems/PersistenceManager
  */
 
-import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { StorageKeys } from '../core/StorageKeys.js';
@@ -143,20 +142,14 @@ class PersistenceManager {
         // return this.save(data)`. Because save() is a WHITELIST, a setter key
         // missing from this list is silently dropped on write — the setter
         // still returns true and its getter then reads the default forever.
-        // That is exactly how launchPhase/armDeployStates/captureNet/
-        // tetherReels/bridleRings were dead: every Epic-9 arm-state slice and
-        // the C-5 launch-phase resume persisted nothing. Additive (no
-        // SAVE_VERSION bump) — each getter already defaults on absence.
-        // setLaunchPhase / getLaunchPhase (ST-9.11 C-5)
-        launchPhase: data.launchPhase ?? 'READY',
-        // setArmDeployStates / getArmDeployStates (ST-9.10 C-4)
-        armDeployStates: data.armDeployStates ?? null,
+        // That is exactly how the Epic-9 arm-state slices were dead: they
+        // persisted nothing. (The launch-phase, deploy-state, tether-reel and
+        // bridle-ring slices were removed 2026-10-16; an old save that still
+        // carries their keys loads fine and they are dropped on the next
+        // write.) Additive (no SAVE_VERSION bump) — each getter already
+        // defaults on absence.
         // setNetInventory / getNetInventory (ST-9.4 C-6)
         captureNet: data.captureNet ?? null,
-        // setReelStates / getReelStates (ST-9.5 C-7)
-        tetherReels: data.tetherReels ?? null,
-        // setBridleState / getBridleState (ST-9.7 C-8)
-        bridleRings: data.bridleRings ?? null,
       };
 
       localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
@@ -233,19 +226,6 @@ class PersistenceManager {
     return data?.armTier ?? 'Y0_QUAD';
   }
 
-  /**
-   * Persist the active arm tier (ST-9.2).
-   * Read-modify-write: loads existing save, patches armTier, writes back.
-   * @param {string} tierName — 'Y0_QUAD', 'Y1_HEX', or 'Y3_OCTO'
-   * @returns {boolean} Whether save succeeded
-   */
-  setArmTier(tierName) {
-    if (!this._storageAvailable) return false;
-    const data = this.peek() || {};
-    data.armTier = tierName;
-    return this.save(data);
-  }
-
   // =========================================================================
   // Q2 NET-LAUNCH CEREMONY FIRST-TIME FLAGS — CEREMONY_REDESIGN.md §5.6
   // =========================================================================
@@ -273,78 +253,6 @@ class PersistenceManager {
     const data = this.peek() || {};
     data.ceremonyFlags = { ...(data.ceremonyFlags || {}), [name]: !!value };
     return this.save(data);
-  }
-
-  // =========================================================================
-  // ST-9.11 C-5: LAUNCH PHASE PERSISTENCE
-  // =========================================================================
-
-  /**
-   * Persist the current launch phase (ST-9.11 C-5).
-   * Defaults to 'READY' so existing saves don't get retroactively unlaunched.
-   * @param {string} phase — one of LAUNCH_PHASES
-   * @returns {boolean} Whether save succeeded
-   */
-  setLaunchPhase(phase) {
-    if (!this._storageAvailable) return false;
-    const data = this.peek() || {};
-    data.launchPhase = phase;
-    return this.save(data);
-  }
-
-  /**
-   * Read persisted launch phase (ST-9.11 C-5).
-   * Returns 'READY' for missing/legacy saves (backward-compat).
-   * @returns {string}
-   */
-  getLaunchPhase() {
-    const data = this.peek();
-    return data?.launchPhase ?? 'READY';
-  }
-
-  // =========================================================================
-  // ST-9.10 C-4: ARM DEPLOY STATE PERSISTENCE
-  // =========================================================================
-
-  /**
-   * Persist per-arm deploy states (ST-9.10 C-4).
-   * Array indexed by armIndex: ['LOCKED', 'STOWED', 'DEPLOYED', ...].
-   *
-   * Mid-transition snapping rule: DEPLOYING is persisted as its destination
-   * (DEPLOYED), STOWING is persisted as its destination (STOWED).
-   * On restore, we do NOT resume animation mid-frame — we snap to the
-   * completed state. This avoids visual artifacts on load.
-   *
-   * @param {string[]} states — array of deploy state strings indexed by armIndex
-   * @returns {boolean} Whether save succeeded
-   */
-  setArmDeployStates(states) {
-    if (!this._storageAvailable) return false;
-
-    // Apply mid-transition snap before persisting
-    const snapped = states.map(s => {
-      if (s === 'DEPLOYING') return 'DEPLOYED';
-      if (s === 'STOWING') return 'STOWED';
-      return s;
-    });
-
-    const data = this.peek() || {};
-    data.armDeployStates = snapped;
-    return this.save(data);
-  }
-
-  /**
-   * Read persisted per-arm deploy states (ST-9.10 C-4).
-   * Returns null if no deploy states are saved (new game / legacy save).
-   *
-   * Default for new game: all 'LOCKED' (pre-launch).
-   * Mid-transition states are already snapped by setArmDeployStates().
-   *
-   * @returns {string[]|null} Array of deploy state strings, or null
-   */
-  getArmDeployStates() {
-    const data = this.peek();
-    return data?.armDeployStates ?? null;
   }
 
   // =========================================================================
@@ -379,142 +287,6 @@ class PersistenceManager {
   getNetInventory() {
     const data = this.peek();
     return data?.captureNet ?? null;
-  }
-
-  // =========================================================================
-  // ST-9.5 C-7: TETHER REEL STATE PERSISTENCE
-  // =========================================================================
-
-  /**
-   * Persist per-arm tether reel states (ST-9.5 C-7).
-   * Array of objects: { armIndex, state, cableLengthM, attachedEndpointId }.
-   *
-   * Mid-transition snapping rule: PAYING_OUT is persisted as STATIC,
-   * REELING_IN is persisted as STOWED. On restore, we do NOT resume
-   * animation mid-frame — we snap to the completed state.
-   * JAMMED and CUT are preserved as-is.
-   *
-   * @param {Array<{armIndex: number, state: string, cableLengthM: number, attachedEndpointId: string|null}>} reelStates
-   * @returns {boolean} Whether save succeeded
-   */
-  setReelStates(reelStates) {
-    if (!this._storageAvailable) return false;
-
-    // Apply mid-transition snap before persisting
-    const snapped = (reelStates || []).map(r => ({
-      armIndex: r.armIndex,
-      state: r.state === 'PAYING_OUT' ? 'STATIC'
-           : r.state === 'REELING_IN' ? 'STOWED'
-           : r.state,
-      cableLengthM: r.state === 'REELING_IN' ? 0 : (r.cableLengthM || 0),
-      attachedEndpointId: r.attachedEndpointId || null,
-    }));
-
-    const data = this.peek() || {};
-    data.tetherReels = snapped;
-    return this.save(data);
-  }
-
-  /**
-   * Read persisted tether reel states (ST-9.5 C-7).
-   * Returns null if no reel data saved (new game / legacy save).
-   *
-   * @returns {Array<{armIndex: number, state: string, cableLengthM: number, attachedEndpointId: string|null}>|null}
-   */
-  getReelStates() {
-    const data = this.peek();
-    return data?.tetherReels ?? null;
-  }
-
-  // =========================================================================
-  // ST-9.7 C-8: BRIDLE RING STATE PERSISTENCE
-  // =========================================================================
-
-  /**
-   * Persist bridle ring state per arm (ST-9.7 C-8).
-   * Array of { armIndex, state, attachments: [{ pointId, payloadId, loadKg }] }.
-   *
-   * @param {Array<{armIndex: number, state: string, attachments: Array}>} bridleData
-   * @returns {boolean} Whether save succeeded
-   */
-  setBridleState(bridleData) {
-    if (!this._storageAvailable) return false;
-    const data = this.peek() || {};
-    data.bridleRings = bridleData || [];
-    return this.save(data);
-  }
-
-  /**
-   * Read persisted bridle ring state (ST-9.7 C-8).
-   * Returns null if no bridle data saved (new game / legacy save).
-   *
-   * @returns {Array<{armIndex: number, state: string, attachments: Array}>|null}
-   */
-  getBridleState() {
-    const data = this.peek();
-    return data?.bridleRings ?? null;
-  }
-
-  // =========================================================================
-  // ST-9.8 C-10: ARM TIER MISMATCH VALIDATION
-  // =========================================================================
-
-  /**
-   * Validate that persisted per-arm state arrays match the saved tier's arm count.
-   * If mismatched (e.g., save corruption or tier change without state reset),
-   * returns validated/defaulted arrays with a warning flag.
-   *
-   * @param {string} tierKey — saved tier key (e.g., 'Y1_HEX')
-   * @returns {{ valid: boolean, armCount: number,
-   *             armDeployStates: string[]|null,
-   *             armNetCounts: number[]|null,
-   *             reelStates: Array|null,
-   *             bridleRings: Array|null }}
-   */
-  validateArmStateForTier(tierKey) {
-    const ladder = Constants.ARM_LADDER[tierKey];
-    if (!ladder) {
-      console.warn(`[PersistenceManager] Unknown tier "${tierKey}", defaulting to Y0_QUAD`);
-      return { valid: false, armCount: 4, armDeployStates: null, armNetCounts: null, reelStates: null, bridleRings: null };
-    }
-
-    const expectedCount = ladder.armCount;
-    const data = this.peek();
-    let valid = true;
-
-    // Deploy states
-    let armDeployStates = data?.armDeployStates ?? null;
-    if (armDeployStates && armDeployStates.length !== expectedCount) {
-      console.warn(`[PersistenceManager] Arm deploy state count mismatch: saved ${armDeployStates.length}, tier ${tierKey} expects ${expectedCount}. Resetting to defaults.`);
-      armDeployStates = null;
-      valid = false;
-    }
-
-    // Net inventory
-    let armNetCounts = data?.captureNet?.armNetCounts ?? null;
-    if (armNetCounts && armNetCounts.length !== expectedCount) {
-      console.warn(`[PersistenceManager] Net inventory count mismatch: saved ${armNetCounts.length}, tier ${tierKey} expects ${expectedCount}. Resetting to defaults.`);
-      armNetCounts = null;
-      valid = false;
-    }
-
-    // Reel states
-    let reelStates = data?.tetherReels ?? null;
-    if (reelStates && reelStates.length !== expectedCount) {
-      console.warn(`[PersistenceManager] Reel state count mismatch: saved ${reelStates.length}, tier ${tierKey} expects ${expectedCount}. Resetting to defaults.`);
-      reelStates = null;
-      valid = false;
-    }
-
-    // Bridle rings
-    let bridleRings = data?.bridleRings ?? null;
-    if (bridleRings && bridleRings.length !== expectedCount) {
-      console.warn(`[PersistenceManager] Bridle ring count mismatch: saved ${bridleRings.length}, tier ${tierKey} expects ${expectedCount}. Resetting to defaults.`);
-      bridleRings = null;
-      valid = false;
-    }
-
-    return { valid, armCount: expectedCount, armDeployStates, armNetCounts, reelStates, bridleRings };
   }
 
   /**
@@ -607,60 +379,3 @@ class PersistenceManager {
 /** Singleton instance */
 export const persistenceManager = new PersistenceManager();
 export default persistenceManager;
-
-// ============================================================================
-// EXPORTED PURE FUNCTION — Arm state tier validation (testable without localStorage)
-// ============================================================================
-
-/**
- * Validate persisted per-arm state data against a tier's expected arm count.
- * Pure function — no side effects. Used by PersistenceManager.validateArmStateForTier()
- * and directly by tests.
- *
- * @param {string} tierKey — tier key (e.g., 'Y1_HEX')
- * @param {object} data — raw save data (or null)
- * @returns {{ valid: boolean, armCount: number,
- *             armDeployStates: string[]|null,
- *             armNetCounts: number[]|null,
- *             reelStates: Array|null,
- *             bridleRings: Array|null }}
- */
-export function validateArmStateData(tierKey, data) {
-  const ladder = Constants.ARM_LADDER[tierKey];
-  if (!ladder) {
-    return { valid: false, armCount: 4, armDeployStates: null, armNetCounts: null, reelStates: null, bridleRings: null };
-  }
-
-  const expectedCount = ladder.armCount;
-  let valid = true;
-
-  // Deploy states
-  let armDeployStates = data?.armDeployStates ?? null;
-  if (armDeployStates && armDeployStates.length !== expectedCount) {
-    armDeployStates = null;
-    valid = false;
-  }
-
-  // Net inventory
-  let armNetCounts = data?.captureNet?.armNetCounts ?? null;
-  if (armNetCounts && armNetCounts.length !== expectedCount) {
-    armNetCounts = null;
-    valid = false;
-  }
-
-  // Reel states
-  let reelStates = data?.tetherReels ?? null;
-  if (reelStates && reelStates.length !== expectedCount) {
-    reelStates = null;
-    valid = false;
-  }
-
-  // Bridle rings
-  let bridleRings = data?.bridleRings ?? null;
-  if (bridleRings && bridleRings.length !== expectedCount) {
-    bridleRings = null;
-    valid = false;
-  }
-
-  return { valid, armCount: expectedCount, armDeployStates, armNetCounts, reelStates, bridleRings };
-}

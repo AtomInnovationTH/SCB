@@ -42,7 +42,8 @@ class PowerDistribution {
     // Total available power (watts) — set by ResourceSystem each frame
     this.totalPower = 8000;
 
-    // Solar input (watts) — set by LaunchSequence during ROSA deploy (ST-9.11 C-5)
+    // Solar input (watts) — read by the HUD solar row and MotherCallouts. Nothing writes
+    // it any more (the launch sequence that did was removed), so those rows read 0 W.
     this._solarInputW = 0;
 
     // Warning state
@@ -194,17 +195,6 @@ class PowerDistribution {
       sensorMultiplier: this.sensorMultiplier,
       armMultiplier: this.armMultiplier,
     };
-  }
-
-  /**
-   * Set solar power input from ROSA deployment (ST-9.11 C-5).
-   * Called by LaunchSequence during ROSA phases and on skipToReady().
-   * Does NOT override totalPower (which ResourceSystem sets each frame);
-   * stores separately for readout / downstream integration.
-   * @param {number} watts — current solar output (0–2240 typical)
-   */
-  setSolarInput(watts) {
-    this._solarInputW = watts;
   }
 
   /**

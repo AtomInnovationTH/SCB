@@ -40,10 +40,10 @@
  * D7 (the always set): alerts (warnings strip, conjunction panel) and the
  * rail are NEVER masked on any floor, regardless of tier tables or player
  * memory — the engine never references their rungs or elements at all
- * (ALWAYS_ON below is the pinned list). The VitalsLine left this set in
- * Session O (plan D8, owner 2026-09-07): cryptic, every number duplicated
- * elsewhere — the module + its test stay dormant in the tree, unwired. The
- * score strip left on 2026-09-23 (plan 1789561832042 C2, owner: "every zoom
+ * (ALWAYS_ON below is the pinned list). The one-line safety readout left
+ * this set in Session O (plan D8, owner 2026-09-07): cryptic, every number
+ * duplicated elsewhere — it sat dormant, unwired, until module and test were
+ * deleted (2026-10-16). The score strip left on 2026-09-23 (plan 1789561832042 C2, owner: "every zoom
  * except the hull") and comms left in Session N.5 — both are maskable room
  * panes now.
  *
@@ -212,8 +212,8 @@ export const MASK_PANES = Object.freeze({
  * ALWAYS_ON — the D7 always set, pinned for tests. The engine never touches
  * these: no rung call, no element query, no attribute — on any floor, under
  * any player memory. (Display counterpart of "alarms always land at 1×".)
- * The VitalsLine left this set in Session O (plan D8, owner 2026-09-07):
- * cryptic, every number duplicated elsewhere; module + test stay dormant.
+ * The one-line safety readout left this set in Session O (plan D8, owner 2026-09-07):
+ * cryptic, every number duplicated elsewhere; the module was deleted 2026-10-16.
  */
 export const ALWAYS_ON = Object.freeze([
   'alerts',      // #hud-warnings-panel, #hud-conjunction-panel — never referenced

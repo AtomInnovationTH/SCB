@@ -1386,8 +1386,8 @@ export class MenuScene3D {
     // Mother satellite — the REAL in-game PlayerSatellite, so the hero ship is
     // literally the same mesh the player flies (no hand replica to drift from).
     // The constructor parents the satellite into whatever "scene" we pass, so we
-    // hand it the orbit pivot. It also seeds an orbital position + 13 eventBus
-    // listeners (12 in the constructor body, plus one wired deeper in
+    // hand it the orbit pivot. It also seeds an orbital position + 11 eventBus
+    // listeners (10 in the constructor body, plus one wired deeper in
     // _buildModel → _buildNetPods); we zero the position and otherwise leave it
     // static (never call update()), exactly as the old replica was static.
     const mother = new PlayerSatellite(this._pivot);
