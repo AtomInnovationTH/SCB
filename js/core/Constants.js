@@ -2496,6 +2496,11 @@ export const Constants = {
     // move on their own (0° idle, 34° when a piece is within 90 m), a "." press
     // holds 10 s, and the full range is shown once per player. OFF = manual only.
     STRUT_AUTO:               true,
+
+    // Launch-aim (lane launch-aim, 2026-10-16): a daughter's strut first swings (at its real
+    // 15°/s) to the best angle toward where she is going, then the spring pushes her along the
+    // strut; the launch cut-scene never moves a strut. OFF = today's bearing launch + 4x swing.
+    LAUNCH_AIMS_STRUT:        true,
   },
 
   // =========================================================================

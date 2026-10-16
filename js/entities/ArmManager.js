@@ -15,7 +15,7 @@ import { powerDistribution } from '../systems/PowerDistribution.js';
 import { checkActiveSatArming } from '../systems/ActiveSatGuard.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import { computeCoM, computeInducedTorque, strutTipMeters, heldCargoPlumeConflictAt } from '../systems/CoMCalculator.js';
-import { strutTipFoulsCorridor, strutLocalDirection } from './ArmDockBasis.js';
+import { strutTipFoulsCorridor, strutLocalDirection, bestStrutAlpha } from './ArmDockBasis.js';
 import { createShipKeepOut } from '../systems/ShipKeepOut.js';
 import { StrutAutoController } from '../systems/StrutAuto.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
@@ -34,6 +34,17 @@ const M = 0.00001;
 // regardless of which capture path resolved it. Not a plan requirement —
 // see the lane's final report.
 const LEAN_ASIDE_TIMEOUT_S = 8;
+
+const _aimTmpWanted = new THREE.Vector3();
+const _aimTmpAxis = new THREE.Vector3();
+/** launch-aim: the aim stage counts a strut as "in place" within 1° of the best angle. */
+const AIM_TOL_RAD = Math.PI / 180;
+/** launch-aim: a new best angle replaces the one she is swinging to only if it points the strut this much closer (rad, 0.5°). */
+const AIM_GAIN_RAD = 0.5 * Math.PI / 180;
+/** launch-aim: how many times the aim stage may REVERSE its aim (follow a best angle that flipped back) before it commits. */
+const AIM_MAX_REAIMS = 4;
+/** launch-aim: catch states in which the mother holds (or is taking in) a catch whose berth corridor a strut must not enter. */
+const AIM_CATCH_HELD_STATES = ['CINCH_CLOSING', 'SECURE_CHECK', 'CAPTURED', 'REELING', 'BERTHED', 'COLLARED', 'TRANSFERRING'];
 
 /** The "." toggle's live sweep read (InputManager.js Period case, mirrored
  *  for toggleStruts / strutsDeployed): a pending `_strutTargetAlpha` latch
@@ -604,9 +615,12 @@ export class ArmManager {
    * Used by number key deploy+select flow (Phase 1B).
    * @param {number} index - 0-based arm index
    * @param {object|null} target - Optional target to aim toward
+   * @param {{announce?: boolean}} [opts] - `announce`: the number-key launch (InputManager). A launch
+   *   the aim stage holds back then announces itself ("deployed. Tracking…" + the cut-scene) when
+   *   it fires; an immediate launch is announced by the caller as before.
    * @returns {boolean} true if deployment started
    */
-  deployArmByIndex(index, target) {
+  deployArmByIndex(index, target, opts) {
     // ST-6.7: Safe-mode guard — refuse arm deployment when spacecraft is in safe mode
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -641,7 +655,7 @@ export class ArmManager {
 
     // No target → free-fly mode (TRANSIT with manual control). L2: through the
     // keep-out gate, along the direction the arm will actually fire.
-    return this._launchTargetOrFree(arm, target);
+    return this._launchTargetOrFree(arm, target, opts);
   }
 
   /**
@@ -718,8 +732,9 @@ export class ArmManager {
       return false;
     }
 
+    // No direction given: she sweeps along her own dock direction (launch-aim: that one is frozen at the request).
     return this._launchArm(arm, 'trawl', () => this._trawlDirShip(arm, direction),
-      () => arm.deployTrawl(direction));
+      () => arm.deployTrawl(direction), direction ? undefined : { frozenAim: true });
   }
 
   /**
@@ -2055,10 +2070,11 @@ export class ArmManager {
    * @param {number} armIndex
    * @param {number} radiusM — the inbound catch's corridor radius
    *   (`debris.sizeMeter / 2 + CAPTURE_NET.BERTH_CLEARANCE_M`)
-   * @returns {boolean} true when this arm's live tip fouls the corridor
+   * @param {number} [alphaRad] — test this strut angle instead of her live one (launch-aim cap)
+   * @returns {boolean} true when this arm's live tip (or the tip at `alphaRad`) fouls the corridor
    * @private
    */
-  _strutFoulsInboundCorridor(armIndex, radiusM) {
+  _strutFoulsInboundCorridor(armIndex, radiusM, alphaRad) {
     const arm = this.arms[armIndex];
     if (!arm || typeof arm.getAimAlpha !== 'function') return false;
 
@@ -2077,7 +2093,7 @@ export class ArmManager {
     const dp = this._dockPositions[armIndex];
     const azRad = dp ? (dp.azimuthDeg * Math.PI / 180) : 0;
     return strutTipFoulsCorridor(
-      arm.getAimAlpha(),
+      alphaRad === undefined ? arm.getAimAlpha() : alphaRad,
       azRad,
       V5.COLLAR_RADIUS ?? 0.40,
       V5.COLLAR_Y ?? 1.00,
@@ -3038,10 +3054,10 @@ export class ArmManager {
    * Launch `arm` at `target` (deploy) or free-fly (no target) through the gate.
    * @private
    */
-  _launchTargetOrFree(arm, target) {
+  _launchTargetOrFree(arm, target, opts) {
     return target
-      ? this._launchArm(arm, 'target', () => this._launchDirShip(arm, target), () => arm.deploy(target))
-      : this._launchArm(arm, 'freefly', () => this._dockDirShip(arm), () => arm.deployFreefly());
+      ? this._launchArm(arm, 'target', () => this._launchDirShip(arm, target), () => arm.deploy(target), opts)
+      : this._launchArm(arm, 'freefly', () => this._dockDirShip(arm), () => arm.deployFreefly(), opts);
   }
 
   /**
@@ -3050,13 +3066,14 @@ export class ArmManager {
    * @param {string} mode — 'ceremony' | 'target' | 'freefly' | 'trawl' (for diagnostics)
    * @param {() => THREE.Vector3} getDirShip — fire direction in the SHIP frame, re-derived each call
    * @param {() => boolean} fire — the real ArmUnit call
+   * @param {{announce?: boolean}} [opts] — see `deployArmByIndex`
    * @returns {boolean} true when the launch fired or was accepted (deferred); false when refused
    * @private
    */
-  _launchArm(arm, mode, getDirShip, fire) {
+  _launchArm(arm, mode, getDirShip, fire, opts) {
     const i = this.arms.indexOf(arm);
     if (i < 0) return !!fire();
-    return this.requestClearLaunch(i, getDirShip, fire, mode);
+    return this.requestClearLaunch(i, getDirShip, fire, mode, opts);
   }
 
   /**
@@ -3131,7 +3148,10 @@ export class ArmManager {
     const ownLive = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : openAlpha;
     // A ceremony launch fires along the strut she has just aimed: her own strut is never
     // moved for it (a wing, radiator, catch or the hull in that line refuses, with its line).
-    const ownMovable = mode !== 'ceremony' && ownLive < openAlpha - tol && !lean.has(i)
+    // launch-aim: an aimed launch (strut already swung toward the target) may open her own strut
+    // toward 90° from EITHER side (e.g. 170° → 90°); the old gate only ever opened from below.
+    const ownOffOpen = this._aimsStrut(mode) ? Math.abs(ownLive - openAlpha) > tol : ownLive < openAlpha - tol;
+    const ownMovable = mode !== 'ceremony' && ownOffOpen && !lean.has(i)
       && typeof arm.setAimAlpha === 'function';
     const open = new Set();
     let openOwn = false;
@@ -3192,6 +3212,8 @@ export class ArmManager {
     pend.delete(i);
     const arm = this.arms[i];
     if (arm && p.reservedByUs) arm._aimReserved = false;
+    // launch-aim: a launch cancelled mid-swing stops the strut where it is (the latch is ours if it still holds our angle).
+    if (arm && p.stage === 'aim' && arm._strutTargetAlpha === p.aimAlpha) arm._strutTargetAlpha = undefined;
   }
 
   /**
@@ -3205,13 +3227,28 @@ export class ArmManager {
    * @param {() => THREE.Vector3} getDirShip — ship-frame fire direction, re-derived every check
    * @param {() => boolean} fire
    * @param {string} [mode] — launch mode ('ceremony' never moves her own strut)
+   * @param {{announce?: boolean}} [opts] — `announce`: the number-key launch; if the aim stage holds
+   *   it back, it announces itself ("deployed. Tracking…" + the cut-scene) when it fires.
    * @returns {boolean} fired, or accepted and waiting (true); refused (false)
    */
-  requestClearLaunch(armIndex, getDirShip, fire, mode) {
+  requestClearLaunch(armIndex, getDirShip, fire, mode, opts) {
     const arm = this.arms[armIndex];
     if (!arm || !this.getKeepOut()) return !!fire();
     const pend = this._pendingLaunches || (this._pendingLaunches = new Map());
     if (pend.has(armIndex)) return true;
+
+    // launch-aim: one driver per strut. The D-key ceremony reserves her while it aims; a second launch
+    // request would swing her strut under it (the ceremony fires along the strut it converged on).
+    if (Constants.FEATURE_FLAGS.LAUNCH_AIMS_STRUT === true && mode !== 'ceremony' && arm._aimReserved) {
+      eventBus.emit(Events.COMMS_MESSAGE, { text: `Daughter ${arm.displayName} is already aiming.`, priority: 'warning' });
+      return false;
+    }
+
+    // launch-aim: swing the strut toward where she is going first, then check the line along it.
+    if (this._aimsStrut(mode)) {
+      const r = this._requestAimedLaunch(armIndex, getDirShip, fire, mode, opts);
+      if (r !== undefined) return r;                    // undefined = could not aim: today's gate below
+    }
 
     let v;
     try {
@@ -3261,6 +3298,7 @@ export class ArmManager {
       }
       p.t += dt;
       p.stateTimer = arm.stateTimer || 0;
+      if (p.stage) { this._tickAimedLaunch(i, p, arm, dt); continue; }
       let v;
       try {
         const dir = p.getDirShip();
@@ -3278,5 +3316,245 @@ export class ArmManager {
       if (p.t >= 8) { this._dropPendingLaunch(i); this._launchHeld(i, v, 'timeout'); continue; }
       this._openForLaunch(i, v);
     }
+  }
+
+  // ==========================================================================
+  // launch-aim — the strut aims first, then the spring pushes along it
+  // (FEATURE_FLAGS.LAUNCH_AIMS_STRUT; lane launch-aim, 2026-10-16)
+  // ==========================================================================
+  // Every 'target' / 'freefly' / 'trawl' launch through `requestClearLaunch` first swings the
+  // daughter's own strut — at its real motor rate (STRUT_SLEW_RATE, 15°/s), never faster — to the
+  // best angle toward where she is going (`bestStrutAlpha`, capped short of a held catch's berth
+  // corridor), then checks the launch line ALONG THE STRUT and fires with the push along the strut.
+  // Pending entries carry `stage`: 'aim' (swinging; no line verdict — the swing path is not
+  // checked: the full 0–180° range is measured clear of the ship's own parts) then 'line' (the
+  // gate's old open-the-blockers logic, on the strut-axis line). OFF = today's gate, untouched.
+
+  /** Does a launch in `mode` aim the strut first? ('ceremony' already aimed; bare modes keep the old gate.) @private */
+  _aimsStrut(mode) {
+    return Constants.FEATURE_FLAGS.LAUNCH_AIMS_STRUT === true
+      && (mode === 'target' || mode === 'freefly' || mode === 'trawl');
+  }
+
+  /**
+   * Radius (m) of the berth corridor of the catch the mother is holding or taking in
+   * (`sizeMeter / 2 + BERTH_CLEARANCE_M`, the same radius the lean-aside duck uses), or null.
+   * @private
+   */
+  _heldCatchCorridorRadiusM() {
+    const cns = this.playerSatellite && this.playerSatellite._captureNetSystem;
+    const nets = cns && Array.isArray(cns.activeNets) ? cns.activeNets : null;
+    if (!nets) return null;
+    const CN = Constants.CAPTURE_NET;
+    let r = null;
+    for (const n of nets) {
+      if (!n || !n._isMother || AIM_CATCH_HELD_STATES.indexOf(n.state) < 0) continue;
+      const d = n.targetDebris;
+      if (!d || !d.sizeMeter) continue;                 // unresolved size: never cap (the lean-aside rule)
+      const rr = d.sizeMeter / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+      if (r === null || rr > r) r = rr;
+    }
+    return r;
+  }
+
+  /**
+   * The strut angle arm `i` should swing to for a launch toward `wantedShip` (ship frame):
+   * `bestStrutAlpha`, capped below the first angle (1° steps from her live angle toward it) at
+   * which her tip would foul a held catch's berth corridor. Fouling only happens at the high
+   * angles, so only an upward swing is capped; if her live angle already fouls, she stays.
+   * @private
+   */
+  _aimAlphaFor(i, wantedShip) {
+    const arm = this.arms[i];
+    // bestStrutAlpha(dir exactly along ±z) can return -π (atan2(-0, negative)); |.| is the same strut angle in [0, π].
+    const best = Math.min(Math.PI, Math.abs(bestStrutAlpha(wantedShip, Math.atan2(arm.dockOffset.y, arm.dockOffset.x))));
+    const radiusM = this._heldCatchCorridorRadiusM();
+    const now = arm.getAimAlpha();
+    if (radiusM === null || best <= now) return best;
+    const step = Math.PI / 180;
+    let prev = now;
+    for (let a = now + step; ; a += step) {
+      const at = Math.min(a, best);
+      if (this._strutFoulsInboundCorridor(i, radiusM, at)) return prev;
+      prev = at;
+      if (at >= best) return best;
+    }
+  }
+
+  /** How much closer (rad) the strut axis at `toAlpha` points to `wantedShip` than at `fromAlpha`. @private */
+  _aimGainRad(arm, wantedShip, fromAlpha, toAlpha) {
+    const az = Math.atan2(arm.dockOffset.y, arm.dockOffset.x);
+    const w = _aimTmpWanted.copy(wantedShip).normalize();
+    const angTo = (alpha) => Math.acos(Math.max(-1, Math.min(1, strutLocalDirection(alpha, az, _aimTmpAxis).dot(w))));
+    return angTo(fromAlpha) - angTo(toAlpha);
+  }
+
+  /**
+   * Fire a launch whose strut is in place: nothing may move her strut while LAUNCHING (clear the
+   * latch), and `_aimConverged` tells `deploy()` / `deployFreefly()` / `deployTrawl()` to push along
+   * the strut axis. The flag never outlives the call.
+   * @private
+   */
+  _fireAimed(i, fire) {
+    const arm = this.arms[i];
+    arm._strutTargetAlpha = undefined;
+    arm._aimConverged = true;
+    try { return !!fire(); } finally { arm._aimConverged = false; }
+  }
+
+  /** The number-key launch fired after waiting to aim: the lines InputManager emits for an immediate one. @private */
+  _announceLaunch(arm) {
+    eventBus.emit(Events.COMMS_MESSAGE, { text: `Daughter ${arm.displayName} deployed. Tracking…`, priority: 'info' });
+    eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
+  }
+
+  /** The strut never swung into place: one comms line + one event. @private */
+  _launchHeldAim(i) {
+    const arm = this.arms[i];
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `Launch held: ${arm ? arm.displayName : 'daughter'}'s strut could not swing into place.`, priority: 'warning',
+    });
+    eventBus.emit(Events.ARM_LAUNCH_HELD, {
+      armIndex: i, armId: arm ? arm.id : null, part: '', cat: '', reason: 'aim',
+    });
+  }
+
+  /**
+   * `requestClearLaunch` for an aimed mode. Returns true (fired or waiting), false (refused), or
+   * undefined when the wanted direction cannot be derived (the caller falls back to today's gate).
+   * @private
+   */
+  _requestAimedLaunch(armIndex, getDirShip, fire, mode, opts) {
+    const arm = this.arms[armIndex];
+    const pend = this._pendingLaunches;
+    if (typeof arm.getAimAlpha !== 'function') return undefined;
+    let wanted;
+    try {
+      wanted = getDirShip();
+    } catch (err) {
+      if (!this._keepOutWarned) { this._keepOutWarned = true; console.warn('[ArmManager] launch-aim direction failed; using the plain gate:', err); }
+      return undefined;
+    }
+    if (!wanted) return undefined;
+
+    // The dock direction (free-fly; a trawl without a direction) is the ray from the ship's centre through HER
+    // OWN strut tip, so it moves whenever her strut moves: following it would chase its own tail (measured: a
+    // free-fly launch swung to 155° and took 4-10 s instead of 2-3 s). Freeze it at the request; it does not
+    // change when the ship turns (it is a ship-frame direction), so there is nothing to follow.
+    if (mode === 'freefly' || (opts && opts.frozenAim)) {
+      const frozen = wanted.clone();
+      getDirShip = () => frozen;
+    }
+
+    const now = arm.getAimAlpha();
+    const ducked = this._leanAsideArmIndices.has(armIndex);   // the duck owns her latch: never aim a ducked arm
+    const aim = ducked ? now : this._aimAlphaFor(armIndex, wanted);
+    const needAim = !ducked && Math.abs(aim - now) > AIM_TOL_RAD;
+    const swingS = needAim ? Math.abs(aim - now) / Constants.OCTOPUS_V5.STRUT_SLEW_RATE : 0;
+    const entry = {
+      armIndex, getDirShip, fire, mode, opts: opts || null, t: 0, stateTimer: arm.stateTimer || 0,
+      reservedByUs: !arm._aimReserved, stage: needAim ? 'aim' : 'line', aimAlpha: aim,
+      aimDir: aim > now ? 1 : -1, reaims: 0,                 // reaims = REVERSALS of the aim so far (see _tickAimedLaunch)
+      giveUpAt: swingS + 8,                              // the swing is not part of the 8 s patience
+    };
+
+    if (!needAim) {
+      let v;
+      try {
+        v = this._launchVerdict(armIndex, this._strutDirShip(arm), mode);
+      } catch (err) {
+        if (!this._keepOutWarned) { this._keepOutWarned = true; console.warn('[ArmManager] launch-line check failed; launching unchecked:', err); }
+        v = { blocked: false };
+      }
+      if (!v.blocked) return this._fireAimed(armIndex, fire);
+      if (!v.fixable) { this._launchHeld(armIndex, v, 'blocked'); return false; }
+      arm._aimReserved = true;
+      pend.set(armIndex, entry);
+      this._openForLaunch(armIndex, v);
+      return true;
+    }
+
+    arm._aimReserved = true;
+    arm._strutTargetAlpha = aim;
+    pend.set(armIndex, entry);
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `Daughter ${arm.displayName}: aiming, about ${Math.max(1, Math.ceil(swingS - 1e-9))} s.`, priority: 'info',
+    });
+    return true;
+  }
+
+  /**
+   * One tick of a pending aimed launch (the arm is still DOCKED, not cancelled).
+   * 'aim': keep the latch on the best angle (the ship may turn, her tip moves as she swings) until
+   * she is within 1° of it with the latch cleared (or the duck takes her); 'line': the gate's line
+   * logic on the strut-axis line. Gives up at (swing time + 8 s).
+   * @private
+   */
+  _tickAimedLaunch(i, p, arm, dt) {
+    // Headless mocks have no ship strut driver: slew the latch here (the _updateCargoPlumePoses idiom).
+    // (dt > 0 only: a zero-step call must not snap the strut.)
+    if (dt > 0 && !(this.playerSatellite && this.playerSatellite.strutGroups)
+        && arm._strutTargetAlpha !== undefined && typeof arm.setAimAlpha === 'function') {
+      arm.setAimAlpha(arm._strutTargetAlpha, dt);
+      if (Math.abs(arm.getAimAlpha() - arm._strutTargetAlpha) < 0.01) arm._strutTargetAlpha = undefined;
+    }
+
+    if (p.stage === 'aim') {
+      if (this._leanAsideArmIndices.has(i)) {
+        p.stage = 'line';                               // mid-aim duck: the duck owns her latch; aim ends where she is
+      } else {
+        let wanted = null;
+        try { wanted = p.getDirShip(); } catch (err) { wanted = null; }
+        if (wanted) {
+          // Her tip (the bearing's origin) and the ship's own turn move the wanted direction, so the best
+          // angle drifts: follow it when it moved > 1° AND the move points the strut closer to the wanted
+          // direction by at least 0.5° and a quarter of the move. That second test stops a flip-flop when
+          // the wanted direction is nearly tangential to her swing plane (the best angle then jumps
+          // 0 <-> 180° while both are about equally far off: measured, a 46 m target did this for 17 s).
+          // A follow-up that keeps the direction of the previous move (a ship turning steadily) is free;
+          // only a REVERSAL counts toward AIM_MAX_REAIMS, so a flip-flop still ends after 4 and a steady
+          // drift is bounded by the 0-180° range. Each follow-up adds its swing time to the give-up clock.
+          const aim = this._aimAlphaFor(i, wanted);
+          const move = Math.abs(aim - p.aimAlpha);
+          if (move > AIM_TOL_RAD) {
+            const dir = aim > p.aimAlpha ? 1 : -1;
+            const reverses = dir !== p.aimDir;
+            if ((!reverses || p.reaims < AIM_MAX_REAIMS)
+                && this._aimGainRad(arm, wanted, p.aimAlpha, aim) > Math.max(AIM_GAIN_RAD, 0.25 * move)) {
+              if (reverses) p.reaims++;
+              p.aimDir = dir;
+              p.aimAlpha = aim;
+              p.giveUpAt += move / Constants.OCTOPUS_V5.STRUT_SLEW_RATE;
+            }
+          }
+        }
+        if (Math.abs(arm.getAimAlpha() - p.aimAlpha) > AIM_TOL_RAD) {
+          arm._strutTargetAlpha = p.aimAlpha;           // (re)assert: another writer may have replaced the latch
+        }
+        if (arm._strutTargetAlpha === undefined && Math.abs(arm.getAimAlpha() - p.aimAlpha) <= AIM_TOL_RAD) {
+          p.stage = 'line';
+        } else if (p.t >= p.giveUpAt) {
+          arm._strutTargetAlpha = undefined;
+          this._dropPendingLaunch(i);
+          this._launchHeldAim(i);
+          return;
+        }
+      }
+      if (p.stage === 'aim') return;
+    }
+
+    // line stage: the launch line is the strut axis from her tip.
+    let v;
+    try {
+      v = this._launchVerdict(i, this._strutDirShip(arm), p.mode);
+    } catch (err) { v = { blocked: false }; }
+    if (!v.blocked) {
+      this._dropPendingLaunch(i);
+      if (this._fireAimed(i, p.fire) && p.opts && p.opts.announce) this._announceLaunch(arm);
+      return;
+    }
+    if (!v.fixable) { this._dropPendingLaunch(i); this._launchHeld(i, v, 'blocked'); return; }
+    if (p.t >= p.giveUpAt) { this._dropPendingLaunch(i); this._launchHeld(i, v, 'timeout'); return; }
+    this._openForLaunch(i, v);
   }
 }

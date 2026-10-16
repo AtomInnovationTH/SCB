@@ -1090,7 +1090,7 @@ export class InputManager {
             // refusal comms on every reachable failure (spring/fuel/power/
             // safe-mode/mass); the only silent path (not-DOCKED) is guarded
             // above, so no extra backstop is needed here.
-            deployedOk = am.deployArmByIndex(selIdx, target);
+            deployedOk = am.deployArmByIndex(selIdx, target, { announce: true });
             launchedByIndex = true;
           } else {
             d.deployArm();   // auto-pick best docked arm (backstops its own refusals)

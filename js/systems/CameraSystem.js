@@ -1988,8 +1988,12 @@ export class CameraSystem {
       // Phase 1: OBSERVE (3.25s) — Camera at CHASE, watching the satellite
       // ════════════════════════════════════════════════════════════════════
       case 1: {
-        // Drive strut slew toward target direction during clamp hold
-        if (arm.launchDirection && arm._dockOutward && playerQuat && arm.setAimAlpha) {
+        // Drive strut slew toward target direction during clamp hold.
+        // launch-aim: with LAUNCH_AIMS_STRUT on, the launch gate has already swung the strut at its
+        // real 15°/s and the spring pushes along it — the cut-scene never writes a strut (this
+        // 4x+ swing was the "teleporting strut" the owner's physics ruling forbids).
+        if (!Constants.FEATURE_FLAGS.LAUNCH_AIMS_STRUT
+            && arm.launchDirection && arm._dockOutward && playerQuat && arm.setAimAlpha) {
           const invQuat = playerQuat.clone().invert();
           const localDir = arm.launchDirection.clone().applyQuaternion(invQuat).normalize();
           // Strut-alpha in the PlayerSatellite MODEL frame.

@@ -1710,6 +1710,22 @@ export class ArmUnit {
   }
 
   /**
+   * launch-aim: when the launch gate has aimed this strut (`_aimConverged`, set by
+   * ArmManager right before `fire()` with FEATURE_FLAGS.LAUNCH_AIMS_STRUT on), the spring pushes
+   * along the live strut axis (world frame) instead of the direction the caller derived.
+   * Consumes the flag, as `deploy()` does. No-op with the switch off.
+   * @private
+   */
+  _takeStrutAxisLaunchDirection() {
+    if (!Constants.FEATURE_FLAGS.LAUNCH_AIMS_STRUT || !this._aimConverged) return;
+    const az = Math.atan2(this.dockOffset.y, this.dockOffset.x);
+    const axis = strutLocalDirection(this._aimAlpha, az, new THREE.Vector3());
+    if (this._lastParentQuat) axis.applyQuaternion(this._lastParentQuat);
+    this.launchDirection = axis.normalize();
+    this._aimConverged = false;
+  }
+
+  /**
    * Deploy this arm in free-fly mode (no target).
    * Goes through LAUNCHING → TRANSIT with manual pilot control.
    * Used by number key deploy when no target is selected.
@@ -1743,6 +1759,8 @@ export class ArmUnit {
 
     // V5: Launch direction = outward along world-space dock direction (§4.6 fix)
     this.launchDirection = this._worldDockDirection(this._lastParentQuat);
+    // launch-aim: the launch gate aimed the strut first → the spring pushes along it.
+    this._takeStrutAxisLaunchDirection();
 
     // V5: Use LAUNCHING state
     this._transitionTo(S.LAUNCHING);
@@ -1795,8 +1813,10 @@ export class ArmUnit {
     this._trawlingMode = true;
     this.target = null;
 
-    // V5: Launch direction for trawling
+    // V5: Launch direction for trawling (the sweep heading `_trawlDirection` stays as passed)
     this.launchDirection = this._trawlDirection.clone();
+    // launch-aim: the launch gate aimed the strut first → the spring pushes along it.
+    this._takeStrutAxisLaunchDirection();
 
     // V5: Use LAUNCHING state
     this._transitionTo(S.LAUNCHING);

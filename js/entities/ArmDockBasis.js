@@ -89,6 +89,28 @@ export function strutLocalDirection(alpha, azRad, out) {
   return out.set(sinA * Math.cos(azRad), sinA * Math.sin(azRad), -Math.cos(alpha));
 }
 
+/**
+ * The strut sweep angle whose axis points closest to a wanted direction (launch-aim lane).
+ *
+ * u(α) = sinα·(cos az, sin az, 0) + cosα·(0, 0, −1) is the strut axis, so the angle to a wanted
+ * direction `dir` is smallest where dir·u(α) = t_out·sinα + t_aft·cosα is largest, with
+ * t_out = dir·(cos az, sin az, 0) and t_aft = −dir.z. Over α ∈ [0, π]:
+ *   t_out >= 0 → the unconstrained maximum atan2(t_out, t_aft) is already in range;
+ *   t_out <  0 → the maximum is an end point: 0 when t_aft >= 0, else π.
+ * (CameraSystem's `|sinA|` and AutopilotSystem's signed-then-clamped forms are wrong for t_out < 0.)
+ *
+ * @param {{x:number,y:number,z:number}} dirShip - wanted direction, player-LOCAL frame (need not be unit)
+ * @param {number} azRad - the arm's collar azimuth (radians): atan2(dockOffset.y, dockOffset.x)
+ * @returns {number} α in [0, π]
+ */
+export function bestStrutAlpha(dirShip, azRad) {
+  // `+ 0` turns −0 into +0, so a direction exactly along +z gives atan2(+0, −1) = π, not −π.
+  const tOut = dirShip.x * Math.cos(azRad) + dirShip.y * Math.sin(azRad) + 0;
+  const tAft = -dirShip.z;
+  if (tOut >= 0) return Math.atan2(tOut, tAft);
+  return tAft >= 0 ? 0 : Math.PI;
+}
+
 /* Preallocated temp for strutTipFoulsCorridor — module-private. */
 const _tipDir = new THREE.Vector3();
 
