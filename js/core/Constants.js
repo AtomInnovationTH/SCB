@@ -3869,17 +3869,29 @@ export const Constants = {
     // axis: max(RING_TOUCH_Z_M + r, clearZ(r)), clearZ(r) the smallest bag-centre
     // z that clears every ship part by CLEARANCE_M (ShipKeepOut, measured once
     // per catch at reel entry; tmp/probes collar/RESULTS.md: 1.390 … 1.828 for
-    // r 0.10 … 0.50). That table is the same at every radiator angle 0-180°
-    // ONLY for r <= 0.5 (small catches). A bigger bag is not: its home moves with
-    // the radiator angle (measured, r 1.0: z 2.340 at 146°, 2.466 at 3°, and the
-    // strut tip cone sets 0 clearance) — so for r > 0.5 the single query at reel
+    // r 0.10 … 0.50). On the 2.30 m radiators the home is the same at every
+    // radiator angle for r <= 1.4 (measured 2026-10-17, 8 angles 2-180°: r 1.0
+    // z 2.340 everywhere; the 2.466-at-3° figure was the 2.5 m arms). A bigger
+    // bag's home moves with the angle (r 2-3: 16-41 mm; r 4.0: 5.349 at 146°,
+    // 5.402 at 3°, set by the radiator tip cone) — so the single query at reel
     // entry is the home for THAT angle only. Big catches (a later boss level,
-    // owner 2026-10-15) are OPEN: the plan's Fix round 1 log carries the case.
+    // owner 2026-10-15) are OPEN: this block makes today's biggest piece (the
+    // act-3 rocket body, sizeM 8 -> r 4.0) correct and designs no boss.
+    // big-catch-home (2026-10-17): the sweep used to start at SEARCH_TOP_Z_M
+    // only, so for r >= 3.2 (ring-touch z 1.32 + r above 4.5) it never ran and
+    // the home was the UNCHECKED ring-touch z: r 4.0 z 5.320 where the true
+    // clear home is 5.349 (5.402 at 3°) — 8.7 mm inside a sun-sensor window at
+    // 7 angles, 61.0 mm inside the tip cone at 3° (r 3.2: 7.9 / 50.8 mm), all
+    // measured on the real meshes. The sweep now starts at
+    // max(SEARCH_TOP_Z_M, ring-touch z + MAX_ABOVE_TOUCH_M) — SEARCH_TOP_Z_M
+    // is only the floor of that start (r <= 1.18 m: unchanged). If the sphere
+    // at that start is itself blocked, the ring-touch z is kept but flagged
+    // (`unchecked`, home source 'unchecked', one console.warn per catch).
     // BERTH_CLEARANCE_M above stays as the CORRIDOR / queue-spacing radius only.
     REEL_HOME: {
       RING_TOUCH_Z_M:   1.32,   // ship-local z of the ring's fore face: a bag of radius r touches it at 1.32 + r
       CLEARANCE_M:      0.02,   // bag surface to every ship part at home (owner rule)
-      SEARCH_TOP_Z_M:   4.5,    // the keep-out sweep starts here and walks down the axis
+      SEARCH_TOP_Z_M:   4.5,    // the keep-out sweep starts at max(this, RING_TOUCH_Z_M + r + MAX_ABOVE_TOUCH_M) and walks down the axis
       SEARCH_STEP_M:    0.05,   // sweep step before the bisection
       BISECT_M:         0.001,  // bisection stops at 1 mm
       MAX_ABOVE_TOUCH_M: 2.0,   // a clearZ more than this above ring-touch is a bad query: fall back to ring-touch
@@ -3921,6 +3933,16 @@ export const Constants = {
     // reel berths at CORRIDOR_EXTENDED_STANDOFF_M instead of clipping through.
     // Full clear-the-deck choreography (auto-park intruding struts) is
     // deferred until playtest shows real clipping.
+    // big-catch-home (2026-10-17): the gate ALSO reads the ship keep-out for the
+    // RADIATORS and the bags on their tips — the catch as a capsule (radius
+    // sizeMeter/2) on the collar axis from its current distance down to its
+    // home; any radiator part or tip bag closer than REEL_HOME.CLEARANCE_M holds
+    // the reel (read only, no radiator command). The r + BERTH_CLEARANCE_M
+    // cylinder is deliberately NOT applied to them: the closed radiators' tips
+    // (2-13°) sit inside it for every r, yet a catch clears them by 0.085 m or
+    // more (measured), so the cylinder would hold every catch whenever they are
+    // closed. A home found before the radiators moved is not refreshed: this
+    // read holds it and the timeout below berths it.
     CORRIDOR_HOLD_M:              10,   // m from the muzzle where the gate arms
     CORRIDOR_TIMEOUT_S:           8,    // s held before berthing at extended standoff
     // Extended standoff: berth here on timeout. Must be ≥ CORRIDOR_HOLD_M —
@@ -4581,6 +4603,7 @@ export const Constants = {
     // the lowest angle >= 3° where it AND the next degree pass (the radiators stop up to ~1° above a target). A radius
     // rounds UP to the next row/column. The 0.60 and 0.75 rows sit at 13° and 18° because the bag's clearance to its own
     // strut dips to 19.2 mm (0.60 m) and 16.7 mm (0.75 m) at 8-9° and only clears 0.02 m again from 13° / 18°.
+    // 0.50/0.40 raised 5→6 2026-10-17: 0.41–0.46 m arriving with 0.40 m held need 6° (0.01 m sweep).
     HANDOFF_THETA_TABLE: {
       radiiM: [0.15, 0.22, 0.30, 0.35, 0.40, 0.50, 0.60, 0.75],
       noneDeg: [3, 3, 3, 3, 3, 3, 3, 18],   // nothing held: one entry per row
@@ -4590,7 +4613,7 @@ export const Constants = {
         [3, 3, 3, 4, 5, 7, 10, 13],      // Ra 0.30
         [3, 3, 3, 4, 5, 8, 10, 13],      // Ra 0.35
         [3, 3, 3, 4, 6, 8, 10, 13],      // Ra 0.40
-        [3, 3, 3, 4, 5, 8, 11, 14],      // Ra 0.50
+        [3, 3, 3, 4, 6, 8, 11, 14],      // Ra 0.50
         [3, 3, 13, 13, 13, 13, 13, 14],  // Ra 0.60
         [18, 18, 18, 18, 18, 18, 18, 18], // Ra 0.75
       ],

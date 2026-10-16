@@ -297,33 +297,57 @@ const _homeScratchC = [0, 0, 0];
 const _homeIgnore = ['BerthCollar', 'BerthFace', 'nose catch'];
 const _homeOpts = { ignore: _homeIgnore };
 
+// big-catch-home D2 — the corridor gate's keep-out read: the capsule's two ends (ship-local metres), the query options
+// and the ignore list (every keep-out category EXCEPT the radiators 'rad'; tip bags are catch spheres, never ignored).
+const _corrA = [0, 0, 0];
+const _corrB = [0, 0, 0];
+const _corrOpts = { ignore: null, hits: true, margin: 0 };
+let _corrIgnore = null;
+let _corrIgnoreN = -1;
+let _corrKeepOutWarned = false;
+function corridorIgnoreList(armCount) {
+  if (_corrIgnoreN !== armCount) {
+    const l = ['hull', 'wing', 'nose', 'nose catch'];
+    for (let i = 0; i < armCount; i++) l.push('strut' + i, 'dau' + i);
+    _corrIgnore = l; _corrIgnoreN = armCount;
+  }
+  return _corrIgnore;
+}
+
 /**
  * The catch's home z (ship-local metres, on the collar axis) for a bag of radius `r`:
  * `max(RING_TOUCH_Z_M + r, clearZ(r))`, clearZ = the smallest bag-centre z that clears every ship part by
- * CLEARANCE_M, walking DOWN the axis from SEARCH_TOP_Z_M (so a part higher up the axis is seen), bisected to
- * BISECT_M. BerthCollar*, BerthFace* and the held-catch obstacle 'nose catch' are ignored (the ring is what the
- * catch seats on; the catch must not block itself). With no keep-out (mock ships) the answer is ring-touch.
+ * CLEARANCE_M, walking DOWN the axis from `top = max(SEARCH_TOP_Z_M, touchZ + MAX_ABOVE_TOUCH_M)` (so a part higher
+ * up the axis is seen, and a big bag whose ring-touch z is above SEARCH_TOP_Z_M still gets its walk: r <= 1.18 m
+ * keeps top = SEARCH_TOP_Z_M), bisected to BISECT_M. BerthCollar*, BerthFace* and the held-catch obstacle 'nose
+ * catch' are ignored (the ring is what the catch seats on; the catch must not block itself). With no keep-out (mock
+ * ships) the answer is ring-touch. If the sphere at `top` is itself blocked there is no clear z to walk from: the
+ * answer stays ring-touch but is marked `unchecked` (with the blocking part's name in `blocker`) — never a silent
+ * skip; `catchHomeDistM` reports it.
  * @param {object|null} keepOut — ShipKeepOut (`sphere(c, r, opts)`), or null
  * @param {number} r — bag radius, metres
- * @returns {{z:number, touchZ:number, clearZ:number|null, queryMs:number, queries:number}}
+ * @returns {{z:number, touchZ:number, clearZ:number|null, queryMs:number, queries:number, unchecked?:boolean, top?:number, blocker?:string}}
  */
 export function catchHomeZ(keepOut, r) {
   const H = CN.REEL_HOME;
   const touchZ = H.RING_TOUCH_Z_M + r;
   const out = { z: touchZ, touchZ, clearZ: null, queryMs: 0, queries: 0 };
   if (!keepOut || typeof keepOut.sphere !== 'function') return out;
+  const top = Math.max(H.SEARCH_TOP_Z_M, touchZ + H.MAX_ABOVE_TOUCH_M);
+  let topPart = '';
   const clearAt = (z) => {
     _homeScratchC[2] = z;
     out.queries++;
     const g = keepOut.sphere(_homeScratchC, r, _homeOpts);
+    if (z === top) topPart = g.name || '';
     return g.gap >= H.CLEARANCE_M - 1e-9;
   };
   const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
   try {
     let lastClear = null, firstBlocked = null;
-    if (clearAt(H.SEARCH_TOP_Z_M)) {
-      lastClear = H.SEARCH_TOP_Z_M;
-      for (let z = H.SEARCH_TOP_Z_M - H.SEARCH_STEP_M; z >= touchZ - 1e-9; z -= H.SEARCH_STEP_M) {
+    if (clearAt(top)) {
+      lastClear = top;
+      for (let z = top - H.SEARCH_STEP_M; z >= touchZ - 1e-9; z -= H.SEARCH_STEP_M) {
         if (clearAt(z)) lastClear = z; else { firstBlocked = z; break; }
       }
       if (firstBlocked === null) {
@@ -340,17 +364,30 @@ export function catchHomeZ(keepOut, r) {
       } else {
         out.clearZ = lastClear;
       }
+    } else {
+      // The top of the window is itself blocked: nothing above it to walk down from. Keep the ring-touch z, but say so.
+      out.unchecked = true; out.top = top; out.blocker = topPart;
     }
-  } catch (_e) { out.clearZ = null; }
+  } catch (_e) { out.clearZ = null; out.unchecked = true; out.top = top; out.blocker = 'keep-out query failed'; }
   out.queryMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
-  if (out.clearZ !== null && out.clearZ - touchZ <= H.MAX_ABOVE_TOUCH_M) out.z = Math.max(touchZ, out.clearZ);
+  if (out.clearZ !== null && out.clearZ - touchZ <= H.MAX_ABOVE_TOUCH_M + 1e-9) out.z = Math.max(touchZ, out.clearZ);
+  else if (out.clearZ !== null) {
+    // Only reachable for r < 1.18 (top = SEARCH_TOP_Z_M > touchZ + MAX_ABOVE_TOUCH_M): a clear z this far above
+    // ring-touch is a bad query, so the ring-touch z is kept — flagged, like every other unchecked home.
+    out.unchecked = true; out.top = top; out.blocker = 'clear z more than MAX_ABOVE_TOUCH_M above ring-touch';
+  }
   return out;
 }
 
 /**
  * Home distance (metres) of a catch's CENTRE from the berth anchor (the collar plane) along the collar axis.
  * Cached on the debris per radius (`_homeCache`): the ship does not change shape between the reel entry and the
- * lasso's delivery, and the answer is the same at every radiator angle (probe collar/RESULTS.md).
+ * lasso's delivery. On the 2.30 m radiators the answer is the same at every radiator angle for r <= 1.4 m (measured
+ * 2026-10-17, 8 angles);
+ * a bigger catch's home moves with the angle (r 4.0: 5.349 at 146°, 5.402 at 3°), so the cache is the home for the
+ * angle at reel entry — a later move is caught by the reel's corridor gate (`_corridorClear`, the keep-out read),
+ * not by a refresh. A home that could not be checked (`source: 'unchecked'`, see `catchHomeZ`) is logged once per
+ * catch with console.warn.
  * @param {object} player — PlayerSatellite (collar anchor z)
  * @param {object|null} armManager — for `getKeepOut()`
  * @param {object} d — the catch (sizeMeter)
@@ -369,7 +406,10 @@ export function catchHomeDistM(player, armManager, d) {
   try { ko = armManager && typeof armManager.getKeepOut === 'function' ? armManager.getKeepOut() : null; } catch (_e) { ko = null; }
   const home = catchHomeZ(ko, r);
   const distM = Math.max(CN.REEL_HOME.APEX_AT_RING_M + r, home.z - anchorZ);
-  if (d) d._homeCache = { r, anchorZ, distM, z: home.z, clearZ: home.clearZ, queryMs: home.queryMs, queries: home.queries, source: ko ? 'keepout' : 'ring-touch' };
+  if (home.unchecked) {
+    console.warn(`[CaptureNet] reel home UNCHECKED for r ${r} m: the keep-out sphere at the top of the search window (z ${home.top.toFixed(2)} m) is blocked by "${home.blocker}"; using the ring-touch z ${home.z.toFixed(3)} m`);
+  }
+  if (d) d._homeCache = { r, anchorZ, distM, z: home.z, clearZ: home.clearZ, queryMs: home.queryMs, queries: home.queries, source: home.unchecked ? 'unchecked' : (ko ? 'keepout' : 'ring-touch') };
   return distM;
 }
 
@@ -2279,9 +2319,13 @@ export class NetProjectile {
       }
       if (this._corridorTimer >= (CN.CORRIDOR_TIMEOUT_S ?? 8)) {
         // Timeout — berth AT the held position (clamped into [base, extended]).
-        // The hold level is already outside every intruder's reach — that is
-        // why the gate froze the approach there — so completing at the held
-        // range neither slides inward past the intruder nor pops outward.
+        // For strut tips and mated cargo the hold level is already outside every
+        // intruder's reach — that is why the gate froze the approach there — so
+        // completing at the held range neither slides inward past the intruder
+        // nor pops outward. NOT so for the radiator read (big-catch-home): a
+        // radiator or tip bag that folds in during the last metres can latch the
+        // hold with the catch already touching it, and this timeout berths it
+        // there anyway (plan D3 accepted it; open item, docs/research/2026-10-leash.md).
         const extended = Math.max(holdM, CN.CORRIDOR_EXTENDED_STANDOFF_M ?? 10);
         this._effectiveStandoffM = Math.min(Math.max(baseStandoffM, this._corridorHoldLevelM), extended);
         // Keep _corridorHold TRUE for the rest of this frame: berthStandoffM
@@ -2452,6 +2496,18 @@ export class NetProjectile {
    *      BERTHED/COLLARED/TRANSFERRING — is an obstacle to THIS approach, so
    *      a second catch holds at the gate instead of seating inside the
    *      occupant; a berthing net's own catch exempts itself, as today).
+   *   3. NO radiator part and NO bag held on a radiator tip (big-catch-home
+   *      D2): a READ of the ship keep-out (`armManager.getKeepOut()`, exact
+   *      triangles / spheres), ONLY categories 'rad' and spheres named 'tip
+   *      bag N'. The catch is a capsule of radius sizeMeter/2 on the collar
+   *      axis, from its CURRENT distance from the anchor (never nearer than
+   *      home) down to its home distance; a part closer than
+   *      REEL_HOME.CLEARANCE_M holds the reel. The cylinder above is NOT
+   *      applied to the radiators (it would hold every catch while they are
+   *      closed — their tips sit inside it at 2-13° though the real gap is
+   *      >= 0.085 m). The home is not refreshed when the radiators move after
+   *      reel entry (D3): this read holds the reel and the timeout berths it.
+   *      No keep-out (a mock armManager with only `arms`) -> this read passes.
    * The lasso cargo-cell read is GONE (S13(d)) — a lassoed piece rides this
    * same mother berth path (adoptLassoCatch), so it is never an obstacle to
    * itself.
@@ -2554,6 +2610,41 @@ export class NetProjectile {
         // metres, origin at the berth anchor.
         _v3d.copy(sp).sub(collarWorld).applyQuaternion(_q0);
         if (testLocal(_v3d.x / M_NET, _v3d.y / M_NET, _v3d.z / M_NET)) return false;
+      }
+    }
+
+    // ── 3. Radiators and tip bags (big-catch-home D2) — a READ of the ship keep-out ──
+    // The analytic r + BERTH_CLEARANCE_M cylinder would hold EVERY catch whenever the radiators are closed (their tips
+    // sit inside it at 2-13°, yet the real catch clears them by 0.085 m or more), so the radiators and the bags on the
+    // tips are read as exact triangles / spheres instead: the catch is a capsule of radius sizeMeter/2 on the collar
+    // axis, from its CURRENT distance from the anchor down to its home distance, and any radiator part or tip bag
+    // closer than CLEARANCE_M holds the reel (the existing hold/timeout then handles it; no radiator command, §3.1).
+    // A home found earlier is not refreshed (D3): radiators that moved since reel entry foul it and are caught HERE.
+    // No keep-out (mock armManagers with only `arms`) -> this read passes, byte-identical to before.
+    let ko = null;
+    try { ko = armManager && typeof armManager.getKeepOut === 'function' ? armManager.getKeepOut() : null; } catch (_e) { ko = null; }
+    if (ko && typeof ko.segment === 'function') {
+      try {
+        const clearanceM = CN.REEL_HOME.CLEARANCE_M;
+        const homeM = this._homeCatchM != null ? this._homeCatchM : catchHomeDistM(player, armManager, d);
+        let farM = homeM;
+        if (this._remainingM != null && this._homeSeatM != null) farM = Math.max(homeM, this._catchAxialAt(this._remainingM));
+        _corrA[0] = mx; _corrA[1] = my; _corrA[2] = mz + farM;
+        _corrB[0] = mx; _corrB[1] = my; _corrB[2] = mz + homeM;
+        const azN = Constants.THERMAL?.FLOWER?.AZIMUTHS_DEG?.length ?? 4;
+        _corrOpts.ignore = corridorIgnoreList(Math.max(arms ? arms.length : 0, azN));
+        _corrOpts.margin = clearanceM;
+        const res = ko.segment(_corrA, _corrB, (d.sizeMeter || 2) / 2, _corrOpts);
+        const hits = res && res.hits;
+        if (hits) {
+          for (let i = 0; i < hits.length; i++) {
+            const h = hits[i];
+            if (h.cat !== 'rad' && !(typeof h.name === 'string' && h.name.startsWith('tip bag'))) continue;
+            if (h.gap < clearanceM - 1e-6) return false;
+          }
+        }
+      } catch (err) {
+        if (!_corrKeepOutWarned) { _corrKeepOutWarned = true; console.warn('[CaptureNet] corridor keep-out read failed; the radiator/tip-bag read is skipped:', err); }
       }
     }
 
