@@ -17,6 +17,7 @@ import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { DebrisTextureAtlas, getUVOffsetForType, getBaseColorForType, getEmissiveForMOID } from './DebrisTextureAtlas.js';
 import { FlagDecalSystem, getUVOffsetForCountry, hasFlag } from './FlagDecalSystem.js';
+import { salvageGasKg } from '../systems/ResourceSystem.js';
 import { dossierSystem, DOSSIER_TIERS, appraiseSalvage } from '../systems/DossierSystem.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { mono } from '../core/Typeface.js';
@@ -2182,7 +2183,7 @@ export class DebrisWireframe {
       // Exact amounts shown with scanner upgrade
       if (salvage.xenon > 0) {
         ctx.fillStyle = '#00ccff';
-        ctx.fillText(`Xe: ~${salvage.xenon.toFixed(1)} kg (ion fuel)`, WIRE_CX, infoY);
+        ctx.fillText(`Gas: ~${salvageGasKg(salvage.xenon).toFixed(1)} kg`, WIRE_CX, infoY);
         infoY += 11;
       }
       if (salvage.indium > 0) {
@@ -2212,7 +2213,7 @@ export class DebrisWireframe {
     } else {
       // Without scanner: show type hints only
       const hints = [];
-      if (salvage.xenon > 0) hints.push('Xe');
+      if (salvage.xenon > 0) hints.push('Gas');
       if (salvage.indium > 0) hints.push('In');
       if (salvage.gaAs > 0) hints.push('GaAs');
       if (salvage.battery > 0) hints.push('Bat');

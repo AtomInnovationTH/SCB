@@ -656,10 +656,10 @@
       "i18n": {
         "title": "Xenon Propellant",
         "shortText": "Heavy, inert, and easy to ionise: the default ion-drive propellant for half a century, and expensive.",
-        "fullText": "Xenon has been the propellant of choice for electric propulsion for decades because it checks every box: it is heavy, giving good momentum per ion, chemically inert and therefore safe to store, and easy to ionise. Your mothership's main ion drive burns it.\n\nThe drawback is price, around 3,000 dollars a kilogram, which is one more reason efficiency matters when every gram counts. It is why the propellant gauge is a resource to respect rather than ignore, and why cheaper substitutes like krypton and argon exist as deliberate trade-downs. Xenon is the gold standard you burn when performance outweighs cost.",
+        "fullText": "Xenon has been the propellant of choice for electric propulsion for decades because it checks every box: it is heavy, giving good momentum per ion, chemically inert and therefore safe to store, and easy to ionise. In the shop it is the top engine-gas upgrade: more push for the same watts than krypton or argon.\n\nThe drawback is price, around 3,000 dollars a kilogram, which is one more reason efficiency matters when every gram counts. It is why the propellant gauge is a resource to respect rather than ignore, and why cheaper substitutes like krypton and argon exist. Xenon is the gold standard when performance outweighs cost, and in your ship it is the most expensive gas per kilo.",
         "realWorld": "Xenon flown on Dawn, SMART-1, and most GEO comsat electric thrusters; ~$3,000/kg.",
         "trlRationale": "Standard electric-propulsion propellant.",
-        "unlockHint": "Burn xenon below 70%."
+        "unlockHint": "Buy the xenon gas upgrade."
       },
       "track": "propellant_story",
       "trackOrder": 10
@@ -676,10 +676,10 @@
       "i18n": {
         "title": "Krypton Propellant",
         "shortText": "Cheaper than xenon at a slight efficiency cost: the trade SpaceX made to fly thousands of thrusters.",
-        "fullText": "Krypton costs around 400 dollars a kilogram against xenon's 3,000, and that gap is the whole story. It is lighter, at 83.8 atomic mass units versus xenon's 131.3, which costs roughly 15% in specific impulse, but the savings let a mission carry far more propellant for the same budget.\n\nSpaceX made exactly this trade for the first-generation Starlink satellites, whose Hall thrusters run on krypton because flying thousands of them on xenon would have been prohibitive. Upgrading your thrusters to krypton opens the same door: cheaper bulk operations, accepting a modest efficiency hit in exchange for burning far more freely.",
+        "fullText": "Krypton costs around 400 dollars a kilogram against xenon's 3,000, and that gap is the whole story. It is lighter, at 83.8 atomic mass units versus xenon's 131.3, which costs roughly 15% in specific impulse, but the savings let a mission carry far more propellant for the same budget.\n\nSpaceX made exactly this trade for the first-generation Starlink satellites, whose Hall thrusters run on krypton because flying thousands of them on xenon would have been prohibitive. In your ship, krypton is the shop upgrade over the argon you start with: more push for the same watts, at a higher price per kilo.",
         "realWorld": "SpaceX Starlink v1 Hall thrusters use krypton (~$400/kg vs xenon ~$3,000/kg; ~15% lower Isp).",
         "trlRationale": "Krypton Hall thrusters operational at scale.",
-        "unlockHint": "Fit a krypton thruster upgrade."
+        "unlockHint": "Buy the krypton gas upgrade."
       },
       "track": "propellant_story",
       "trackOrder": 11
@@ -696,10 +696,10 @@
       "i18n": {
         "title": "Argon Propellant",
         "shortText": "Dirt-cheap and abundant, at a further efficiency hit: the next step down the propellant cost curve.",
-        "fullText": "Argon makes up about 1% of Earth's atmosphere, so it is extraordinarily cheap to produce, on the order of 5 dollars a kilogram, roughly 600 times cheaper than xenon. The price of that abundance is performance: at 39.9 atomic mass units it is much lighter, giving around 2,000 seconds of specific impulse against xenon's 3,000.\n\nFor bulk work the arithmetic can still favour it. When you are processing thousands of objects, argon's cost advantage can outweigh its lower efficiency, and SpaceX moved its second-generation Starlink thrusters to argon for exactly that reason. It is the propellant for operations measured in tonnes and volume rather than in precision.",
+        "fullText": "Argon makes up about 1% of Earth's atmosphere, so it is extraordinarily cheap to produce, on the order of 5 dollars a kilogram, roughly 600 times cheaper than xenon. The price of that abundance is performance: at 39.9 atomic mass units it is much lighter, giving around 2,000 seconds of specific impulse against xenon's 3,000.\n\nFor bulk work the arithmetic can still favour it. When you are processing thousands of objects, argon's cost advantage can outweigh its lower efficiency, and SpaceX moved its second-generation Starlink thrusters to argon for exactly that reason. It is the propellant for operations measured in tonnes and volume rather than in precision, and it is the gas your ship starts with.",
         "realWorld": "SpaceX Starlink v2 Hall thrusters use argon (~$5/kg, ~600× cheaper than xenon; Isp ~2,000 s).",
         "trlRationale": "Argon Hall thrusters operational on Starlink v2.",
-        "unlockHint": "Fit an argon thruster upgrade."
+        "unlockHint": "Burn 30% of the argon you launched with."
       },
       "track": "propellant_story",
       "trackOrder": 12
@@ -3139,7 +3139,7 @@
       "i18n": {
         "title": "ΔV Is Everything",
         "shortText": "Fuel doesn't refill on its own. Every burn spends a budget you can't get back for free.",
-        "fullText": "Delta-V (ΔV), your ability to change orbit, is the master resource. Your xenon and cold-gas tanks do not magically refill: the only way to top up is to salvage metal and run it through the Forge into propellant.\n\nSo fly cheap. Let autopilot pick efficient routes, and don't chase a target across the sky when a closer one will do. Run every tank dry and the mission ends, wherever you happen to be.",
+        "fullText": "Delta-V (ΔV), your ability to change orbit, is the master resource. Your engine-gas and cold-gas tanks do not magically refill: the only way to top up is to salvage metal and run it through the Forge into propellant.\n\nSo fly cheap. Let autopilot pick efficient routes, and don't chase a target across the sky when a closer one will do. Run every tank dry and the mission ends, wherever you happen to be.",
         "unlockHint": "Reach orbit."
       },
       "track": "cowboy_basics",

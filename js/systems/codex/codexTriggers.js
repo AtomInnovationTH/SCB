@@ -52,7 +52,7 @@ const E = Events;
 export const CODEX_TRIGGERS = {
   // ===== ORBITAL_MECHANICS =====
   keplerian_orbit:        [{ event: E.STATE_CHANGE, match: (p) => p.newState === 'ORBITAL_VIEW' }],
-  delta_v:                [{ event: E.PLAYER_TELEMETRY, match: (p) => p.xenonPct < 0.9 }],
+  delta_v:                [{ event: E.PLAYER_TELEMETRY, match: (p) => p.engineGasPct < 0.9 }],
   hohmann_transfer:       [{ event: E.COMMS_MESSAGE, match: txt('transfer') }],
   orbital_inclination:    [{ event: E.TARGET_SELECTED, match: always }],
   prograde_paradox:       [{ event: E.THROTTLE_CHANGE, match: always }],
@@ -67,13 +67,16 @@ export const CODEX_TRIGGERS = {
   // survivor of ← specific_impulse_explained (union: SCORING_AWARD + FUEL_CHANGED)
   specific_impulse:       [{ event: E.SCORING_AWARD, match: (p) => !!p.reason && p.reason.includes('fuel') },
                            { event: E.FUEL_CHANGED, match: (p) => !(p && p.initial) }],   // h3b D5: the boot/load announcement is not a player action
-  xenon_propellant:       [{ event: E.PLAYER_TELEMETRY, match: (p) => p.xenonPct < 0.7 }],
-  // F6: krypton/argon were reference propellants with NO in-game upgrade to buy; since g1-gas-upgrades
-  // (2026-10-16) krypton and xenon ARE upgrades again (gas_krypton / gas_xenon). Their old
-  // UPGRADE_APPLIED (id includes 'krypton'/'argon') triggers could never fire.
-  // Repointed to progression thresholds, matching the other encyclopedic cards.
-  krypton_propellant:     [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 22 }],
-  argon_propellant:       [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 28 }],
+  // q1-gas-leftovers D3: the ladder is argon (the gas the ship starts with) -> krypton -> xenon, the last two
+  // shop upgrades (gas_krypton / gas_xenon, ShopScreen UPGRADE_PURCHASED). A save that bought one earlier
+  // unlocks it from the telemetry's resources.tankGasId (the gas IN the tank; never currentFuelId, which can
+  // be a cargo fuel). engineGasPct is the engine gas against what the ship launched with, so none of these
+  // fires on the first frame.
+  xenon_propellant:       [{ event: E.UPGRADE_PURCHASED, match: (p) => p.id === 'gas_xenon' },
+                           { event: E.PLAYER_TELEMETRY, match: (p) => p.resources?.tankGasId === 'xenon' }],
+  krypton_propellant:     [{ event: E.UPGRADE_PURCHASED, match: (p) => p.id === 'gas_krypton' },
+                           { event: E.PLAYER_TELEMETRY, match: (p) => p.resources?.tankGasId === 'krypton' }],
+  argon_propellant:       [{ event: E.PLAYER_TELEMETRY, match: (p) => p.resources?.tankGasId === 'argon' && p.engineGasPct < 0.7 }],
   cold_gas_thruster:      [{ event: E.PLAYER_TELEMETRY, match: (p) => p.coldGasPct < 0.8 }],
   // F6: MPD_BURST_START's only emitter is the uncallable toggleMPDArmed (MPD
   // burst input isn't wired until the Wave-4 MPD-activation work). Added an

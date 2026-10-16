@@ -46,6 +46,18 @@ export function gasPriceCr(gasId, kg) {
   return Math.round(Math.max(0, kg) * perKg / Constants.USD_PER_CREDIT / 10) * 10;
 }
 
+/**
+ * q1-gas-leftovers D1: the kg a salvaged-gas amount is worth. Debris `salvage.xenon` is in pool units
+ * (100 = one full tank of the default gas), so 10 units on argon = 2.08 kg. The one owner of this
+ * conversion: the award (x refinery multiplier), the wireframe line and the dossier label all call it.
+ * @param {number} units - salvage.xenon (pool units)
+ * @returns {number} kg
+ */
+export function salvageGasKg(units) {
+  const kgFull = Constants.FUELS[Constants.DEFAULT_FUEL].kgFull || 0;
+  return Math.max(0, Number.isFinite(units) ? units : 0) / 100 * kgFull;
+}
+
 /** g1-gas-upgrades D2: the mass of engine gas every launch carries, whatever the gas or tank — 12.48 kg
  *  (today's 60 % of the base argon tank). Derived, never typed. */
 export const START_GAS_KG = Constants.PROPELLANT_START_FRACTION * Constants.FUELS[Constants.DEFAULT_FUEL].kgFull;

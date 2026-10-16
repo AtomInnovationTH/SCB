@@ -26,6 +26,7 @@ import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
+import { salvageGasKg } from './ResourceSystem.js';
 import { cityLabels } from '../scene/CityLabels.js';
 import { launchCameo, padFor, LAUNCH_FLASH_S } from '../scene/LaunchCameo.js';
 import { ambientLaunchScheduler } from './AmbientLaunchScheduler.js';
@@ -1011,8 +1012,7 @@ export class GameFlowManager {
           // g1-gas-upgrades D8: salvaged gas is MASS — today's argon amount in kg, loaded as kg of the gas
           // IN the tank (the resupply path, clamped to free space), named for the real gas and the real kg.
           if (salvage.xenon > 0 && resourceSystem) {
-            const argonKg = (Constants.FUELS[Constants.DEFAULT_FUEL].kgFull || 0);
-            const wantKg = salvage.xenon * refineryMult / 100 * argonKg;
+            const wantKg = salvageGasKg(salvage.xenon) * refineryMult;
             const gotKg = resourceSystem.resupplyEngineGas(wantKg);
             const gasName = (Constants.FUELS[resourceSystem.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL]).name;
             eventBus.emit(Events.COMMS_MESSAGE, {

@@ -23,7 +23,7 @@ import { applyDetailLod } from '../scene/detailLodCull.js';
 import { getOrbitalFoilEnv } from '../scene/orbitalFoilEnv.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
-import { engineGasKg, engineTankDryKg, engineGasLowFrac, startEnginePool } from '../systems/ResourceSystem.js';
+import { engineGasKg, engineTankDryKg, engineGasLowFrac, startEnginePool, START_GAS_KG } from '../systems/ResourceSystem.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import {
   computeCoM, computeCoMDrift, computeCoMDriftVector,
@@ -6938,10 +6938,16 @@ export class PlayerSatellite extends THREE.Group {
         ? this._resourceSystem.getCurrentFuel()
         : Constants.FUELS[Constants.DEFAULT_FUEL];
 
+      const frac = (v, of) => (of > 0 && Number.isFinite(v) ? Math.max(0, v) / of : 1);   // q1 D2
       eventBus.emit(Events.PLAYER_TELEMETRY, {
         altitude: altKm,
         velocity: this._cartesian.velocity,
         resources: { ...this.resources },
+        // q1-gas-leftovers D2: the fractions the codex triggers read, against what the ship LAUNCHED with
+        // (so nothing unlocks on the first frame). 0..1; gas may exceed 1 after a resupply.
+        engineGasPct: START_GAS_KG > 0 ? engineGasKg(this.resources) / START_GAS_KG : 1,
+        coldGasPct: frac(this.resources.coldGas, Constants.COLD_GAS_MAX * (Constants.PROPELLANT_START_FRACTION ?? 1)),
+        batteryPct: frac(this.resources.battery, this._resourceSystem?.batteryMax ?? Constants.BATTERY_MAX),
         orbit: { ...this.orbit },
         deltaVSpent: this._deltaVSpent,
         thrustDirection: this._thrustDirection,

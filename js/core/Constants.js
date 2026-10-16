@@ -2881,10 +2881,10 @@ export const Constants = {
   SALVAGE_PROB_DEFUNCT_SAT_LITHIUM: 0.25,      // Lithium from defunct satellite batteries/propulsion
 
   // --- Salvage Amount Ranges ---
-  SALVAGE_XENON_MIN: 2,               // kg
-  SALVAGE_XENON_MAX: 8,               // kg (standard sat)
-  SALVAGE_XENON_LARGE_MIN: 5,         // kg (large sat >500kg)
-  SALVAGE_XENON_LARGE_MAX: 15,        // kg
+  SALVAGE_XENON_MIN: 2,               // pool units (100 = a full argon tank)
+  SALVAGE_XENON_MAX: 8,               // pool units (standard sat)
+  SALVAGE_XENON_LARGE_MIN: 5,         // pool units (large sat >500kg)
+  SALVAGE_XENON_LARGE_MAX: 15,        // pool units
   SALVAGE_INDIUM_MIN: 0.01,           // kg
   SALVAGE_INDIUM_MAX: 0.05,           // kg
   SALVAGE_GAAS_MIN: 0.005,            // fraction (0.5% panel health)

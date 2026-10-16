@@ -29,6 +29,7 @@
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { salvageGasKg } from './ResourceSystem.js';
 
 /** 1 metre in scene units (matches ArmUnit / DockingReticle M). */
 const M = 0.00001;
@@ -55,7 +56,7 @@ export function appraiseSalvage(salvage) {
     value = Math.round(value);
     if (value > 0) rows.push({ label, value });
   };
-  if (salvage.xenon > 0) push(`Xenon ${salvage.xenon.toFixed(1)}kg`, salvage.xenon * (V.XENON_PER_KG || 0));
+  if (salvage.xenon > 0) push(`Engine gas ${salvageGasKg(salvage.xenon).toFixed(1)} kg`, salvage.xenon * (V.XENON_PER_KG || 0));
   if (salvage.indium > 0) push(`Indium ${(salvage.indium * 1000).toFixed(0)}g`, salvage.indium * (V.INDIUM_PER_KG || 0));
   if (salvage.gaAs > 0) push(`GaAs panel ${(salvage.gaAs * 100).toFixed(0)}%`, salvage.gaAs * (V.GAAS_PER_FRAC || 0));
   if (salvage.battery > 0) push(`Battery ${salvage.battery.toFixed(0)}Wh`, salvage.battery * (V.BATTERY_PER_WH || 0));

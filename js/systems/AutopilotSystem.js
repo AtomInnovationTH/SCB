@@ -512,6 +512,18 @@ export class AutopilotSystem {
       });
       return;
     }
+    // q1-gas-leftovers D5: a piece that is already berthed has nothing left to chase. Refuse up front
+    // (no AUTOPILOT_ENGAGE, no state change) instead of engaging for one frame and disengaging
+    // TARGET_CAUGHT on the next update(). The in-flight TARGET_CAUGHT disengage stays.
+    if (isChaseDone(activeTarget)) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'HOUSTON',
+        text: 'That piece is already caught. Pick another target.',
+        priority: 'info',
+        _reactive: true,
+      });
+      return;
+    }
 
     const heading = this._determineHeading();
     if (!heading) {

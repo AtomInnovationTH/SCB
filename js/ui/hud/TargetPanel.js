@@ -1067,11 +1067,11 @@ export class TargetPanel {
     return `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`;
   }
 
-  /** @private Get compact salvage hint HTML (e.g. "Xe In M3") with tooltips */
+  /** @private Get compact salvage hint HTML (e.g. "Gas In M3") with tooltips */
   _getSalvageHint(salvage) {
     if (!salvage) return '';
     const hints = [];
-    if (salvage.xenon > 0) hints.push('<span title="Xenon fuel">Xe</span>');
+    if (salvage.xenon > 0) hints.push('<span title="Engine gas">Gas</span>');
     if (salvage.indium > 0) hints.push('<span title="Indium metal">In</span>');
     if (salvage.gaAs > 0) hints.push('<span title="Solar panel (GaAs)">GaAs</span>');
     if (salvage.battery > 0) hints.push('<span title="Battery">Bat</span>');
