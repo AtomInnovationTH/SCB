@@ -571,7 +571,7 @@ const SYSTEMS = [
     parts: [
       { id: 'flower_plates', name: 'RADIATOR PLATES', risk: 'GREEN', tier: 'major', codexId: 'space_radiator',
         massKg: 37, priority: 6, flowerGated: true,
-        specs: ['4× 1.70×0.60 m tri-panel radiators, fold flat for launch', 'Reject heat as infrared — numbers come with the loop refit'],
+        specs: ['4× 1.50×0.60 m tri-panel radiators, fold flat for launch', 'Reject heat as infrared — numbers come with the loop refit'],
         // Mother audit T10: the leader follows plate 0 (pair A — az 40 since
         // Design 7b, was 45) through the pose — the static tuple only ever
         // matched the STOW bud. The flowerGated one-shot binds the frame after
@@ -587,7 +587,7 @@ const SYSTEMS = [
         anchor: [ -0.30 * M, -0.30 * M, -1.15 * M ] },
       { id: 'flower_struts', name: 'AFT FLOWER STRUTS', risk: 'GREEN', tier: 'major', codexId: 'vacuum_mechanisms',
         massKg: 10, priority: 6, flowerGated: true,
-        specs: ['4× aft-pivot booms, 2.5 m — fold fore along the bus for launch', 'They open LIKE A FLOWER — O opens to 146° / folds flat'],
+        specs: ['4× aft-pivot booms, 2.30 m — fold fore along the bus for launch', 'They open LIKE A FLOWER — O opens to 146° / folds flat'],
         // §13 r4 roll-up: the 4 booms and their seams (the wing hinge lugs
         // stay with the hinge brackets below).
         pickPrefixes: ['FlowerStrut_', 'FlowerStrutSeam'],

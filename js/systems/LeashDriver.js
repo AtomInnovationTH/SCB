@@ -66,20 +66,22 @@ const smoothstep01 = (t) => { const f = t < 0 ? 0 : t > 1 ? 1 : t; return f * f 
 /**
  * Radiator angle (degrees) for a hand-off: the arriving bag's radius picks the row, the largest bag
  * already held on another tip picks the column; a radius rounds UP to the next row/column. No bag
- * held -> HANDOFF_THETA_DEG (3°). Measured table: Constants.LEASH.HANDOFF_THETA_TABLE.
+ * held -> the table's own "none held" column (`noneDeg`): 3° up to a 0.60 m catch, 18° for 0.75 m.
+ * Measured at the 2.30 m radiators (v12-big-bags: tmp/probes/arm-length/ho5.mjs, tmp/v12bb/summ.txt);
+ * Constants.LEASH.HANDOFF_THETA_TABLE.
  * @param {number} arrivingR — metres
  * @param {number} [heldR] — metres, the largest held bag (0/undefined = none)
  * @returns {number} degrees
  */
 export function handoffThetaDeg(arrivingR, heldR = 0) {
-  const K = Constants.LEASH;
-  if (!(heldR > 0)) return K.HANDOFF_THETA_DEG;
-  const T = K.HANDOFF_THETA_TABLE;
+  const T = Constants.LEASH.HANDOFF_THETA_TABLE;
   const idx = (r) => {
     for (let i = 0; i < T.radiiM.length; i++) if (r <= T.radiiM[i] + 1e-9) return i;
     return T.radiiM.length - 1;
   };
-  return T.deg[idx(arrivingR)][idx(heldR)];
+  const row = idx(arrivingR);
+  if (!(heldR > 0)) return T.noneDeg[row];
+  return T.deg[row][idx(heldR)];
 }
 
 /** Ship-frame ring anchor (metres) for tip i: the capture ring rim on the tip's side. */

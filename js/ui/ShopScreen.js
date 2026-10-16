@@ -207,7 +207,7 @@ export const UPGRADES = [
   // at the Design 7b pin 25.8 kg/pair: −288.7 / −236.3 m/s, stations
   // 40/220 · 140/320, the plates fold in two for launch).
   { id: 'flower_pair_a', cat: 'Thermal & Services', name: 'Aft Flower — Pair A', cost: 1200,
-    desc: 'Two aft-pivot radiator struts at az 40/220 (trim-neutral diagonal): 2.5 m booms, 1.70×0.60 m tri-panel plates that fold in two and lie along the bus for launch, inert tip hardpoints. They open LIKE A FLOWER — O opens them to 146°, and folds them flat to 2°. Mass tax said out loud: +26 kg dry, ΔV 2896 → 2607 m/s at full tanks (−289). Observe-only: radiates nothing yet — the loop refit prices heat later.',
+    desc: 'Two aft-pivot radiator struts at az 40/220 (trim-neutral diagonal): 2.30 m booms, 1.50×0.60 m tri-panel plates that fold in two and lie along the bus for launch, inert tip hardpoints. They open LIKE A FLOWER — O opens them to 146°, and folds them flat to 2°. Mass tax said out loud: +26 kg dry, ΔV 2896 → 2607 m/s at full tanks (−289). Observe-only: radiates nothing yet — the loop refit prices heat later.',
     effect: 'flowerPairA', value: 1, maxLevel: 1,
     trl: 8, trlRationale: 'Rigid deployable radiators flown (ISS HRS/EATCS class); aft-pivot cargo-tip config is this program\'s own' },
   { id: 'flower_pair_b', cat: 'Thermal & Services', name: 'Aft Flower — Pair B', cost: 1000,

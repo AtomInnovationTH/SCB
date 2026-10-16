@@ -4495,13 +4495,13 @@ export class PlayerSatellite extends THREE.Group {
     const plateLen = (FL.PLATE_END_M - FL.PLATE_START_M) * M;
     const plateX = ((FL.PLATE_START_M + FL.PLATE_END_M) / 2) * M;
     // Design 7b (2026-09-08, "has to fold to fit in rocket for launch"): the
-    // 1.70 × 0.60 plate is a 0.30 m CENTRE panel on the boom plus two FULL
+    // 1.50 × 0.60 plate (1.70 before 2026-10-16) is a 0.30 m CENTRE panel on the boom plus two FULL
     // 0.15 m WINGS hinged along the boom line (GEO-comsat intercostal-hinge
-    // pattern). Open: butt-jointed, width 0.60, area 4 × 1.02 = 4.08 m²
-    // preserved. Folded (launch, θ 0): both wings land side by side on ONE
+    // pattern). Open: butt-jointed, width 0.60, area 4 × 0.90 = 3.60 m²
+    // (3.582 built: the wings end 15 mm short). Folded (launch, θ 0): both wings land side by side on ONE
     // layer over the centre panel's −Z_hinge face (= radially OUTBOARD when
     // the strut lies fore along the barrel) and meet at the boom line
-    // edge-to-edge under the boom — a 0.32 × 0.117 × 1.70 m pack with its
+    // edge-to-edge under the boom — a 0.32 × 0.117 × 1.50 m pack with its
     // hinges (r_max 0.560 on the built model; 0.546 before the 20 mm gap).
     // Measured: tmp/pack-size.mjs, test-FlowerLaunchFold (ii).
     const cHalf = FL.PLATE_CENTRE_HALF_WIDTH_M;
@@ -4616,9 +4616,9 @@ export class PlayerSatellite extends THREE.Group {
     const bracketGeo = new THREE.ExtrudeGeometry(padShape, { depth: 0.10 * M, bevelEnabled: false });
     bracketGeo.translate(0, 0, -0.05 * M);                  // centred in z like the old box
     // Mother audit T11 (X2): the tip boss grows over the plate/boom seam —
-    // h 0.04 → 0.065 at tip-local x −0.0275 spans boom-x 2.44…2.505: the
-    // plate's end face (PLATE_END_M 2.45, pinned) is buried 10 mm inside the
-    // boss and the boom tip (2.50) sits 5 mm inside the boss's outer face — no
+    // h 0.04 → 0.065 at tip-local x −0.0275 spans boom-x (R − 0.06)…(R + 0.005) (2.24…2.305 at R 2.30): the
+    // plate's end face (PLATE_END_M 2.25, pinned) is buried 10 mm inside the
+    // boss and the boom tip (2.30) sits 5 mm inside the boss's outer face — no
     // bare 10 mm of boom between plate and boss, no coplanar end discs.
     // 48 radial segments (was 24, 8): the boss's outer face is the strut tip's
     // silhouette and read as an octagon (Mother fixes, round ends).
@@ -5048,7 +5048,7 @@ export class PlayerSatellite extends THREE.Group {
       hinge.add(tip);
       const pad = new THREE.Mesh(padGeo, padMat);
       pad.rotation.z = Math.PI / 2;                  // pad axis along local X
-      pad.position.x = -0.0275 * M;                  // X2: boss spans boom-x 2.44…2.505 (see padGeo)
+      pad.position.x = -0.0275 * M;                  // X2: boss spans boom-x R−0.06…R+0.005 (see padGeo)
       pad.name = `FlowerStrutTipPad_${i}`;
       pad.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
       tip.add(pad);
@@ -5098,7 +5098,7 @@ export class PlayerSatellite extends THREE.Group {
    * l6-look — pose the leash tip hardware for radiator angle θ. Sets only the POSITIONS of the two stalk tubes and
    * the cone pivot (never scale: scale 0 breaks keep-out maths); the cone's rotation is LeashVisual's.
    * Retracted (tubes slid into the pad, cone sunk so its mouth is level with the pad's outer face) at or below the
-   * closed floor (POSE_FLOOR_DEG 2°) — the launch fold length stays 1.505 m — and linearly out between 2° and 3°.
+   * closed floor (POSE_FLOOR_DEG 2°) — the launch fold's tip z stays 1.305 (2.30 m boom; 1.505 at 2.5) — and linearly out between 2° and 3°.
    * A tip holding a bag, or the one the hand-off is using, stays fully out at any θ (the bag hangs on it; the
    * radiators settle near 2.5° at the 3° hand-off).
    * @param {number} [thetaRad] — default: the current radiator angle
@@ -5123,7 +5123,7 @@ export class PlayerSatellite extends THREE.Group {
       // (25 mm engaged, its end 2 mm into the cone's neck), cone narrow end 0.0925 / mouth 0.1225 = the latch point
       // (TipCargo: pad origin -0.0275 + 0.15). In: both tubes inside the boom behind the pad (every end face >= 2 mm
       // off the pad's and boom's), the cone sunk so its mouth sits 1 mm below the pad's outer face (0.005) — launch
-      // length stays 1.505 m and no faces are coplanar.
+      // tip z stays 1.305 (2.30 m boom) and no faces are coplanar.
       hw.stalk.position.x = (-0.042 + (0.030 - -0.042) * u) * M;
       hw.stalkIn.position.x = (-0.0395 + (0.0645 - -0.0395) * u) * M;
       hw.conePivot.position.x = (-0.026 + (0.0925 - -0.026) * u) * M;

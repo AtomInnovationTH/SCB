@@ -45,15 +45,22 @@ const M = Constants.SCENE_UNITS_PER_METER ?? 0.00001;
 
 /** Latch point offset beyond the pad origin along the outward boom (m). Measured: lat15/bsum.txt. */
 export const TIP_STALK_M = 0.15;
-/** Largest bag radius a tip takes (m). */
-export const MAX_BAG_R_M = 0.50;
+/**
+ * Largest bag radius a tip takes (m). 0.75 since v12-big-bags (the 2.30 m radiators): every radius up to 0.75 has a
+ * measured hand-off angle with and without bags held on the other tips — Constants.LEASH.HANDOFF_THETA_TABLE,
+ * tmp/v12bb/summ.txt. (0.50 at the 2.5 m radiators.)
+ */
+export const MAX_BAG_R_M = 0.75;
 /**
  * Bag radius (m) → max radiator angle (deg) with that bag on a tip, 0.15 m
  * floor to every engine plume cone (the same for all four tips). Measured with
- * the 0.15 m latch — tmp/probes/leash/lat15/bsum.txt. A bag takes the row for
- * the next radius at or above its own.
+ * the 0.15 m latch — tmp/probes/leash/lat15/bsum.txt at 2.5 m; re-measured at
+ * the 2.30 m radiators (tmp/probes/arm-length/band.mjs, tmp/v12bb/band-s0.2.txt:
+ * 0.10 146 | 0.15 145 | 0.22 143.5 | 0.30 142 | 0.40 140 | 0.50 138 | 0.60 136.5 |
+ * 0.75 134; the old rows are unchanged, the new ones are floored to a whole degree
+ * like the old). A bag takes the row for the next radius at or above its own.
  */
-export const TIP_BAND = [[0.10, 146], [0.15, 145], [0.22, 143], [0.30, 142], [0.40, 140], [0.50, 138]];
+export const TIP_BAND = [[0.10, 146], [0.15, 145], [0.22, 143], [0.30, 142], [0.40, 140], [0.50, 138], [0.60, 136], [0.75, 134]];
 /** How fast a bag turns from the line it arrived on to the boom axis (deg/s). ESTIMATE, not measured. */
 export const SWING_RATE_DEG_S = 10;
 /** Tip order for the next free tip: azimuth 40 → 220 → 140 → 320 (AZIMUTHS_DEG indices). */

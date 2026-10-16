@@ -365,15 +365,19 @@ export const Constants = {
     // daylight closed eq 35.1 °C (shadow 24.2); scripted M1 closed first warns
     // at 152 s (peak 62.4); auto-open at 70 → < 55 °C in ~21 s; M1 opened at
     // start peaks 36 °C; 3 wide scans held closed peak 93 °C.
+    // v12-radiator-20 (owner 2026-10-16, "20 cm, please"): radiators 20 cm shorter, so RAD_AREA_M2 8.12 → 7.20 (real geometry, 4 × 1.50 × 0.60 × 2)
+    // and the two guessed inputs nudged the least that keeps the behaviour above: SINK_K 220 → 205 (−7 %), SUN_HULL_W 120 → 110 (−8 %)
+    // (all 54 test-ShipHeat tests, targets unedited; idle eq 35.2 °C vs 35.1). Sweep: tmp/probes/rs-sweep.mjs (SINK_K 190–220 × SUN_HULL_W 40–120);
+    // 01-numbers.md "Ship heat, power and scan cost". (The 25 cm step, 6.96 m², had needed SINK_K 195 and the heater cap 950 W; superseded.)
     HEAT_CAPACITY_J_PER_K: 16000, // ≈ 18 kg of aluminium (900 J/kg·K): avionics boxes + bay + saddle
     EMISSIVITY: 0.85,           // white paint / OSR radiator faces (typical 0.8–0.9)
-    SINK_K: 220,                // tuned (est): Earth IR alone on a plate seeing ~⅓ Earth (237 W/m²)
+    SINK_K: 205,                // tuned (est; 220 before the 20 cm radiator step): Earth IR alone on a plate seeing ~⅓ Earth (237 W/m²)
                                 // gives ≈ 193 K; daylight albedo and the warm hull in view raise it
     HULL_AREA_M2: 0.3,          // tuned (est): MLI hull leak as ε 0.85-equivalent area (~6 m² × ε* 0.03 / 0.85 + body cells' share)
-    RAD_AREA_M2: 8.12,          // 4 plates × 1.70 × 0.60 m (4.062 m², THERMAL.FLOWER) × 2 faces at full bloom
+    RAD_AREA_M2: 7.20,          // 4 plates × 1.50 × 0.60 m (3.60 m² rectangle; the built meshes give 3.582 — the wings end 15 mm short) × 2 faces at full bloom (was 8.12 at 1.70 m; test-RadiatorShort pins it to the geometry)
     G_CLOSED: 0.20,             // folded flat (§15 row 4) each pack shows one 0.32 m face outward (~¼ of
                                 // the two-sided area), partly hidden by the barrel and wings → ~0.2
-    SUN_HULL_W: 120,            // tuned (est): daylight sun reaching the bay — body cells' waste heat share + MLI leak (0 in shadow)
+    SUN_HULL_W: 110,            // tuned (est; was 120 before the 20 cm radiator step): daylight sun reaching the bay — body cells' waste heat share + MLI leak (0 in shadow)
     START_LOAD_W: 500,          // the base load (PlayerSatellite._basePowerDraw 0.5/s × W_PER_UNIT_S): a new
                                 // game starts at the closed daylight equilibrium for it — the needle
                                 // does not move until the player does something (§2 row 6)
@@ -406,10 +410,11 @@ export const Constants = {
     ENABLED: true,              // the one-line veto
     HOLD_C: 0,                  // °C — lithium-ion charge floor (cells must stay above freezing)
     // Measured from the model (SHIP_HEAT constants, w4-power probe): radiator
-    // at 180° (openFrac 1, A_eff 8.42 m²), eclipse (no SUN_HULL_W), base load
-    // 500 W: σ·ε·A_eff·(273.15⁴ − 220⁴) = 1308.5 W radiated at 0 °C, minus
-    // 500 W = 808.5 W → rounded up to 810 W. test-PowerCosts recomputes it.
-    MAX_W: 810,
+    // at 180° (openFrac 1, A_eff 7.50 m²), eclipse (no SUN_HULL_W), base load
+    // 500 W: σ·ε·A_eff·(273.15⁴ − 205⁴) − 500 W = 873.9 W at 7.20 m² radiators
+    // → rounded up to 880 W. test-PowerCosts recomputes it.
+    // (v12-radiator-20: was 810 W at 8.12 m² and SINK_K 220; the 25 cm step had 950 W at SINK_K 195.)
+    MAX_W: 880,
     PULL_S: 20,                 // battery-clock s — how hard the hold pulls back to HOLD_C
     LINE_AFTER_S: 10,           // game s of heater running before the comms line
     LINE_EVERY_S: 300,          // at most one heater line per 5 min of game time
@@ -1876,13 +1881,16 @@ export const Constants = {
     // The widest stowed item is now the folded flower pack (r_max 0.546 →
     // Ø1.092), measured by test-FlowerLaunchFold T7(ii).
     // The stack got 18 cm narrower purely by telling the truth about the coil.
-    // Length is unchanged: FEEP exits (z −1.075) to folded flower tips (z 1.505).
+    // Length (until 2026-10-15): FEEP exits (z −1.075) to folded flower tips (z 1.505); now set by the sun-sensor windows (z 1.332) — see STOWED_ENVELOPE_LEN.
     LAUNCH_VEHICLE: 'SSLV',
     FAIRING_DIAMETER: 2.1,         // m
     FAIRING_LENGTH: 3.0,           // m — was 2.5 (the bare ship was already 2.515)
     STOWED_ENVELOPE_DIA: 1.13,     // m — folded flower packs Ø1.121 (was Ø1.092 before the 20 mm wing gap cleared the boom; furled ROSA coils Ø1.089 sit inside)
 
-    STOWED_ENVELOPE_LEN: 2.58,     // m — FEEP exits −1.075 … folded flower tips +1.505
+    // v12-radiator-20 (owner 2026-10-16): the folded tips now end at +1.305, inside the docking collar (ring z 1.280–1.320), so
+    // they no longer set the length. Measured (tmp/probes/rs-top.mjs, LAUNCH hull state, real meshes): hull z −1.085 (FEEP neutralisers)
+    // … +1.332 (SunSensor windows) = 2.417 m → 2.42. Was 2.58 = FEEP −1.075 … folded tips +1.505.
+    STOWED_ENVELOPE_LEN: 2.42,     // m — FEEP/neutralisers −1.085 … sun-sensor windows +1.332 (folded flower tips +1.305 are inside)
 
     // ── Mass Budget (UPDATED for Config G — §10.11 canonical) ──
     // Cargo-continuity S13(c): +15 kg for the nose berthing collar (B is
@@ -2048,12 +2056,12 @@ export const Constants = {
       HINGE_Z_M: -1.0,             // rim plane
 
       // ── Design 7b two-layer folding plate (GEO-comsat pattern) ──
-      // Each 1.70 × 0.60 plate is a 0.30 m CENTRE panel on the boom plus two
+      // Each 1.50 × 0.60 plate (1.70 before 2026-10-16) is a 0.30 m CENTRE panel on the boom plus two
       // FULL 0.15 m wings hinged along the boom line on 2.5 cm offset hinges
-      // (butt-jointed when open — width 0.60, area 4.062 m²: 4.08 less the
-      // wings' 15 mm tip inset). For launch the wings fold onto the centre side by side
+      // (butt-jointed when open — width 0.60, area 3.582 m² built: 3.60 less the
+      // wings' 15 mm tip inset; test-FlowerPose). For launch the wings fold onto the centre side by side
       // (one layer, meeting edge-to-edge at the boom line) and the strut
-      // swings to θ 0: four 0.32 × 0.117 × 1.70 m packs (hinges included) along the
+      // swings to θ 0: four 0.32 × 0.117 × 1.50 m packs (hinges included) along the
       // barrel. Wing angle is a pure function of θ (lanyard law, T4) — no new
       // persisted state; orbit always shows them open.
       PLATE_CENTRE_HALF_WIDTH_M: 0.15,   // centre panel ±0.15 (wings 0.15..0.30)
@@ -2066,8 +2074,9 @@ export const Constants = {
       WING_GAP_M: 0.020,
       // The wings stop this far short of the plate's tip end: folded, they
       // move under the centre panel, where the Ø100 mm tip boss (boom x
-      // 2.44…2.505) would otherwise hold their last 10 mm (measured, same
-      // probes). 15 mm → 5 mm clear of the boss.
+      // 2.44…2.505 at the old 2.5 m boom; it moves with the boom end, so about
+      // 2.24…2.305 at 2.30 m — shifted by 0.20, not re-probed) would otherwise
+      // hold their last 10 mm (measured, same probes). 15 mm → 5 mm clear of the boss.
       WING_TIP_INSET_M: 0.015,
       // Real hinge hardware on each fold line (the design booked 0.4 kg per
       // strut for "the two wing hinge lines" and never built them — nothing
@@ -2089,11 +2098,11 @@ export const Constants = {
       // ── Geometry (probe 2 §1/§4: min enforced-cone clearance with THIS
       //    plate at stow/park/cargo = 0.571/0.746/1.062 m — all ≥ 0.15 floor;
       //    plate root 0.601 m off the Y3 X=0 sweep plane vs 0.28 grant) ──
-      STRUT_LENGTH_M: 2.5,         // bare-strut band ceiling 148.76° > reserved 146°
+      STRUT_LENGTH_M: 2.30,        // v12-radiator-20 (owner 2026-10-16, "20 cm, please"): was 2.5; tips end just inside the docking collar (closed 2° pad top z 1.305 vs ring front face 1.320). Bare-strut band ceiling 148.76° > reserved 146° was measured at 2.5
       STRUT_RADIUS_M: 0.030,       // boom tube
       PLATE_HALF_WIDTH_M: 0.30,    // TANGENTIAL half-width (allocation clause)
       PLATE_START_M: 0.75,         // ≥ w/2 + 0.28/sin45 off the sweep plane (probe §1e)
-      PLATE_END_M: 2.45,           // 0.05 m bare at the tip for the hardpoint
+      PLATE_END_M: 2.25,           // 0.05 m bare at the tip for the hardpoint (was 2.45)
       PLATE_THICK_M: 0.03,
 
       // ── Pose ladder (probe 2 §4; θ from +Z, α_aft = 180° − θ — P1 ledger
@@ -2115,11 +2124,14 @@ export const Constants = {
       //    5     ≥ 40                  —      45.1             (safe to 15°)
       //   (strut rows: `--only B --thetas 0,1,1.5,2 --alphas
       //   0,3,4,5,6,7,8,9,10,12,13,15`, 1° α steps, reproducible)
-      //   At θ 2 the packs end at z 1.505, past the muzzle plane (1.30), and
+      //   At θ 2 the packs end at z 1.249 (tip pads 1.305, 15 mm short of the collar ring's
+      //   front face 1.320; were 1.505 at the 2.5 m boom), about at the muzzle plane (1.30), and
       //   still clear (§H): the held catch's near face (z 2.30) by 795 mm, the
       //   net-launch path (launcher r 0.12 along +Z from the centred muzzle,
       //   2026-10-13) by 390 mm [it was 120 mm for the two ±0.45 m pods], a daughter leaving
-      //   or returning along its dock line at α 0 by 50.0 mm.
+      //   or returning along its dock line at α 0 by 50.0 mm. (These three were measured at the
+      //   1.505 tips; shortening removes only the outer 0.20 m of each pack, so each is unchanged or
+      //   larger at 2.30 m — not re-measured.)
       //
       // The 0° launch fold fails the gate only against a strut SWINGING
       // through α 3–13° (PClip_3_25 passes a folded pack); 2° is the smallest
@@ -2237,8 +2249,8 @@ export const Constants = {
       // that two unrelated stow presses never read as one.
       VENT_DOUBLE_TAP_MS: 600,
       // Design 7b LAUNCH pose: θ 0 — the strut lies FORE along the barrel with
-      // its wings folded (four 0.30 × 0.101 × 1.70 m packs at r ≤ 0.546, tips
-      // z 1.505; probe 7b.4c B′: MGA 0.023 / PV 0.031 / weaver 0.025 / coil
+      // its wings folded (four 0.30 × 0.101 × 1.50 m packs at r ≤ 0.560, tips
+      // z 1.305 at the 2.30 m boom; 0.546 and 1.505 when the probe 7b.4c B′ below was run: MGA 0.023 / PV 0.031 / weaver 0.025 / coil
       // 0.032 m). Reachable ONLY under the launch lock: setFlowerPose('LAUNCH')
       // while a launch driver is active, the ?shot=1 dev hook with
       // { force: true }, or — owner amendment 2026-09-09 — the SAFETY OVERRIDE
@@ -2328,6 +2340,10 @@ export const Constants = {
       STRUT_DRY_MASS_KG: 12.9,
       PAIR_DRY_MASS_KG: 25.8,
 
+      // v12-radiator-20: STRUT_LENGTH_M is now 2.30 (was 2.5). These bands were derived at R 2.5 and are NOT re-derived for 2.30 (tmp/flower-pose-band.mjs
+      // hard-codes its R 2.5 gates); nothing in js/ reads TIP_BAG_BANDS (rg), only test-FlowerPose's paper-pin check. A rough re-sweep at the earlier
+      // 25 cm step (R 2.25; tmp/probes/rs-bands.mjs, a coarser method that does not reproduce the 2.5 figures) said the bands move by a few degrees;
+      // none was run at 2.30: re-derive before P5 uses them.
       // ── Per-size tip-bag pose bands (probe 2 §1c′, R=2.5, exact tip-sphere
       //    vs enforced cones at the LIVE pin — hinge r 0.475, stations
       //    40/140/220/320; tmp/flower-pose-band.mjs reads both from this
@@ -2487,7 +2503,7 @@ export const Constants = {
     CUT_AT_NOSE:              true,
 
     // Leash hand-off (lane l5b-wire; docs/research/2026-10-leash.md, DECISIONS §1):
-    // a small mother catch (radius <= 0.50 m) leaves the nose on its own leash and
+    // a small mother catch (radius <= 0.75 m, TipCargo MAX_BAG_R_M) leaves the nose on its own leash and
     // is reeled onto a radiator tip (js/systems/LeashDriver.js). OFF = the catch
     // goes by today's flight to a daughter's rack (CaptureNetSystem._updateCargoTransfer).
     LEASH_HANDOFF:            true,
@@ -4539,7 +4555,7 @@ export const Constants = {
     D_MIN_M:             0.3,    // m — bag-to-tip range on the line, probe d range
     D_MIN_PER_R:         1.2,    // radii — l8-reel-collar D5: a bag of radius r starts its line at least this many radii from the tip (r 0.50: 0.6 m; at 0.3 m it snagged the tip's own strut); r <= 0.25 m stays at D_MIN_M
     D_MAX_M:             2.0,    // m — estimate; d up to 2.0 is used as is (REEL covers the extra length); beyond → 'too far' (fix round 1 F4)
-    HANDOFF_THETA_DEG:   3,      // radiator angle for a hand-off, all four tips; measured tmp/probes/leash/lat15b/
+    HANDOFF_THETA_DEG:   3,      // radiator angle when LeashTransfer is built without one (tests); the game asks handoffThetaDeg(), whose no-bag-held answer is HANDOFF_THETA_TABLE.noneDeg (3° up to a 0.60 m catch, 18° for 0.75 m) — measured tmp/probes/leash/lat15b/ at 2.5 m, re-measured at 2.30 m below
     // Waits and tolerances
     THETA_TOL_DEG:       1.0,    // ° — FOLD/UNFOLD wait; the radiator arrival latch stops 0.5° short of a 146°→3° target at every frame step 1/120–1/20 s (l5b-hold plan check 2026-10-14)
     HOME_REEL_MPS:       0.025,  // m/s — estimate; REEL_HOME reels in this fast at most: the bag passes the nose at <= LATCH_OK_MPS (a pull-only line cannot slow it once the reel stops)
@@ -4558,17 +4574,25 @@ export const Constants = {
     EXPECTED_S:          45,     // s — estimate (two radiator slews + a 30° turn + reel); the camera's park-hold reads it as the hand-off length
     ANCHOR_AZ_R_M:       0.16,   // m — line anchor radius on the capture ring rim = OCTOPUS_V5.BERTH_COLLAR_INNER_R_M (probes tmp/probes/leash/lat15b/lib3.mjs:10 measured with 0.16)
     // Radiator angle for the hand-off (degrees) by arriving bag radius (row) and the largest bag already
-    // held on a tip (column). Measured 2026-10-14, tmp/probes/leash/multi2/summ.txt: every clearance >= 0.02 m,
-    // the same for all four tips. Round a radius up to the next row/column; no held bag -> HANDOFF_THETA_DEG.
+    // held on a tip (column; `noneDeg` = nothing held). Measured at the 2.30 m radiators, v12-big-bags 2026-10-16
+    // (tmp/probes/arm-length/ho5.mjs, summary tmp/v12bb/summ.txt, table in docs/research/2026-10-leash.md): every
+    // clearance >= 0.02 m on the real ship meshes, tilts 0/±limit, the same for all four tips, the other three tips each
+    // holding a bag of the column's radius, the line starting minHandoffD(Ra) = max(0.3, 1.2·Ra) from the tip. A cell is
+    // the lowest angle >= 3° where it AND the next degree pass (the radiators stop up to ~1° above a target). A radius
+    // rounds UP to the next row/column. The 0.60 and 0.75 rows sit at 13° and 18° because the bag's clearance to its own
+    // strut dips to 19.2 mm (0.60 m) and 16.7 mm (0.75 m) at 8-9° and only clears 0.02 m again from 13° / 18°.
     HANDOFF_THETA_TABLE: {
-      radiiM: [0.15, 0.22, 0.30, 0.35, 0.40, 0.50],
+      radiiM: [0.15, 0.22, 0.30, 0.35, 0.40, 0.50, 0.60, 0.75],
+      noneDeg: [3, 3, 3, 3, 3, 3, 3, 18],   // nothing held: one entry per row
       deg: [
-        [3, 3, 3, 3, 4, 6],   // Ra 0.15
-        [3, 3, 3, 3, 4, 6],   // Ra 0.22
-        [3, 3, 3, 3, 5, 7],   // Ra 0.30
-        [3, 3, 3, 4, 5, 7],   // Ra 0.35
-        [3, 3, 3, 4, 6, 8],   // Ra 0.40
-        [3, 3, 4, 6, 7, 9],   // Ra 0.50
+        [3, 3, 3, 3, 4, 7, 10, 13],      // Ra 0.15
+        [3, 3, 3, 3, 4, 7, 10, 13],      // Ra 0.22
+        [3, 3, 3, 4, 5, 7, 10, 13],      // Ra 0.30
+        [3, 3, 3, 4, 5, 8, 10, 13],      // Ra 0.35
+        [3, 3, 3, 4, 6, 8, 10, 13],      // Ra 0.40
+        [3, 3, 3, 4, 5, 8, 11, 14],      // Ra 0.50
+        [3, 3, 13, 13, 13, 13, 13, 14],  // Ra 0.60
+        [18, 18, 18, 18, 18, 18, 18, 18], // Ra 0.75
       ],
     },
     SUBSTEP_MAX_S:       1/60,   // s — line substep ceiling
