@@ -17,6 +17,7 @@ import { persistenceManager } from '../systems/PersistenceManager.js';
 import { computeCoM, computeInducedTorque, strutTipMeters, heldCargoPlumeConflictAt } from '../systems/CoMCalculator.js';
 import { strutTipFoulsCorridor, strutLocalDirection } from './ArmDockBasis.js';
 import { createShipKeepOut } from '../systems/ShipKeepOut.js';
+import { StrutAutoController } from '../systems/StrutAuto.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit } from './ArmUnit.js';
 import { engineGasKg, engineDeltaV } from '../systems/ResourceSystem.js';
@@ -273,6 +274,14 @@ export class ArmManager {
     this._leanAsideArmIndices = new Set();
     this._leanAsideActive = false;
     this._leanAsideTimer = 0;
+
+    // Daughter-arm automation (lane arms-auto): the controller, the once-per-player
+    // store (main.js hands it in; no store → the full-range show never runs) and the
+    // "." press counter the show uses to notice a player taking over.
+    this._strutAuto = new StrutAutoController();
+    this._strutAutoStore = null;
+    this._strutAutoView = null;
+    this._strutPress = 0;
 
     this._initArms();
     this._setupListeners();
@@ -1563,15 +1572,27 @@ export class ArmManager {
     const doubleTap = this._lastStrutTap !== undefined
       && now - this._lastStrutTap < V5.STRUT_PUSH_WINDOW_MS;
 
+    // Daughter-arm automation (arms-auto, item 5): a press is a manual override — each
+    // commanded arm gets a marker; StrutAuto leaves it alone until 10 s after it ARRIVES.
+    // Plain data writes only (the Salvage tests run this body on bare stub objects).
+    const autoOn = Constants.FEATURE_FLAGS.STRUT_AUTO === true;
+    if (autoOn) this._strutPress = (this._strutPress | 0) + 1;
+
     if (doubleTap) {
       this._lastStrutTap = undefined;               // one 90° per double tap
-      for (const a of docked) a._strutTargetAlpha = V5.STRUT_DEPLOY_ALPHA;
+      for (const a of docked) {
+        a._strutTargetAlpha = V5.STRUT_DEPLOY_ALPHA;
+        if (autoOn) a._strutManual = { quietS: 0 };
+      }
       return true;
     }
 
     this._lastStrutTap = now;
     const targetAlpha = anyOpen ? 0 : V5.STRUT_REST_ALPHA;
-    for (const arm of docked) arm._strutTargetAlpha = targetAlpha;
+    for (const arm of docked) {
+      arm._strutTargetAlpha = targetAlpha;
+      if (autoOn) arm._strutManual = { quietS: 0 };
+    }
     return !anyOpen;
   }
 
@@ -1784,7 +1805,7 @@ export class ArmManager {
    * Update all arms.
    * @param {number} dt - Real-time delta in seconds
    */
-  update(dt) {
+  update(dt, opts) {
     const parentPos = this.playerSatellite.position || this.playerSatellite.mesh?.position || new THREE.Vector3();
     const parentQuat = this.playerSatellite.quaternion || null;
 
@@ -1877,6 +1898,9 @@ export class ArmManager {
 
     // L2: a launch held back by the keep-out gate re-checks its line here.
     this._updateLaunchGates(dt);
+
+    // arms-auto: the daughter arms mostly move themselves (flat idle, 34° near, ...).
+    this._updateStrutAuto(dt, !!(opts && opts.noStrutAuto));
 
     // z-layer fix: toggle each daughter's hull in/out of the near-field depth
     // pass by distance to the mother (runs AFTER arm.update so positions are
@@ -2245,6 +2269,19 @@ export class ArmManager {
     const CN = Constants.CAPTURE_NET;
     const radiusM = debris.sizeMeter / 2 + (CN?.BERTH_CLEARANCE_M ?? 1.0);
 
+    this._duckFoulingStruts(radiusM);
+  }
+
+  /**
+   * Duck every DOCKED strut whose live tip fouls a berth corridor of `radiusM` to
+   * `STRUT_DEPLOY_ALPHA` (90°) and arm the lean-aside release timer. The ONE copy of the
+   * duck loop: `_onInboundCatchCaptured` (LASSO_CAPTURED) and the arms-auto controller
+   * (the mother net's own approach) both call it.
+   * @param {number} radiusM
+   * @returns {boolean} true when at least one strut was ducked
+   * @private
+   */
+  _duckFoulingStruts(radiusM) {
     let ducked = false;
     for (let i = 0; i < this.arms.length; i++) {
       const arm = this.arms[i];
@@ -2259,6 +2296,7 @@ export class ArmManager {
       this._leanAsideActive = true;
       this._leanAsideTimer = LEAN_ASIDE_TIMEOUT_S;
     }
+    return ducked;
   }
 
   /**
@@ -2823,6 +2861,11 @@ export class ArmManager {
     // ST-9.11 C-5: Clear launch lock on reset
     this._launchLock = false;
 
+    // arms-auto: forget the automatic-pose state and any manual-override markers.
+    if (this._strutAuto) this._strutAuto.reset();
+    this._strutPress = 0;
+    for (const arm of this.arms) delete arm._strutManual;
+
     // Re-apply any purchased upgrades to the freshly reset arms
     this._reapplyStoredUpgrades();
   }
@@ -2858,6 +2901,151 @@ export class ArmManager {
       d._breakdownActive = false;      // a mid-chop reset owns no furnace timeline
       d._catchRenderMin = 0;           // the held-readability floor dies with the hold
     }
+  }
+
+  // ========================================================================
+  // arms-auto — the daughter arms mostly move themselves (DECISIONS §25 ruling 5)
+  // ========================================================================
+
+  /**
+   * Hand the once-per-player record to the automation (main.js, next to setDebrisField).
+   * No store (tests, a bare boot) → the full-range show never runs.
+   * @param {import('../systems/StrutAuto.js').StrutAutoStore|null} store
+   */
+  setStrutAutoStore(store) { this._strutAutoStore = store || null; }
+
+  /**
+   * Per frame, after the launch gates: run the StrutAuto controller over this manager's
+   * state. Inert unless FEATURE_FLAGS.STRUT_AUTO and a debris field is wired (production
+   * wires it; the bare mocks of most tests never do).
+   * @param {number} dt
+   * @private
+   */
+  _updateStrutAuto(dt, paused = false) {
+    if (!this._strutAuto) return;                  // bare Object.create(ArmManager.prototype) test objects
+    if (paused) { this._strutAuto.suspend(); return; }   // menu / briefing / shop: no show, no auto moves
+    if (!this._strutAutoView) this._strutAutoView = this._buildStrutAutoView();
+    this._strutAuto.update(dt, this._strutAutoView);
+  }
+
+  /** The read-only snapshot + few actions StrutAutoController works through. @private */
+  _buildStrutAutoView() {
+    const self = this;
+    const CN = Constants.CAPTURE_NET;
+    const ST = CN.STATES;
+    const INBOUND = new Set([ST.CINCH_CLOSING, ST.SECURE_CHECK, ST.CAPTURED, ST.REELING]);
+    const OVER = new Set([ST.FOLDED, ST.STOWED, ST.MISSED, ST.RELEASED]);
+    const motherNets = () => {
+      const cns = self.playerSatellite && self.playerSatellite._captureNetSystem;
+      const nets = cns && Array.isArray(cns.activeNets) ? cns.activeNets : null;
+      return nets ? nets.filter((n) => n && n._isMother) : [];
+    };
+    return {
+      get arms() { return self.arms; },
+      get headless() { return !(self.playerSatellite && self.playerSatellite.strutGroups); },
+      get store() { return self._strutAutoStore; },
+      inert() {
+        const p = self.playerSatellite;
+        return Constants.FEATURE_FLAGS.STRUT_AUTO !== true
+          || !self._debrisField
+          || self.isLaunchLocked()
+          || !!(p && p.safeMode)
+          || !!(p && typeof p._danceDrivesMe === 'function' && p._danceDrivesMe());
+      },
+      busy() {
+        if (self._pendingLaunches && self._pendingLaunches.size > 0) return true;
+        if (self._leanAsideActive) return true;
+        for (const a of self.arms) {
+          if (!a) continue;
+          if (a._aimReserved) return true;
+          if (a.state === ARM_STATES.LAUNCHING || a.state === ARM_STATES.UNDOCKING) return true;
+        }
+        const ld = self.playerSatellite && self.playerSatellite.leashDriver;
+        return !!(ld && typeof ld.isActive === 'function' && ld.isActive());
+      },
+      catchActive() {
+        const ld = self.playerSatellite && self.playerSatellite.leashDriver;
+        if (ld && typeof ld.isActive === 'function' && ld.isActive()) return true;
+        return motherNets().some((n) => !OVER.has(n.state));
+      },
+      netInFlight() {
+        const cns = self.playerSatellite && self.playerSatellite._captureNetSystem;
+        const nets = cns && Array.isArray(cns.activeNets) ? cns.activeNets : [];
+        return nets.some((n) => n && !OVER.has(n.state));
+      },
+      inboundNetRadiusM() {
+        let r = null;
+        for (const n of motherNets()) {
+          if (!INBOUND.has(n.state)) continue;
+          const d = n.targetDebris;
+          if (!d || !d.sizeMeter) continue;       // unresolved size: never duck (the lean-aside rule)
+          const rr = d.sizeMeter / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+          if (r === null || rr > r) r = rr;
+        }
+        return r;
+      },
+      duck(radiusM) { self._duckFoulingStruts(radiusM); },
+      pressCount() { return self._strutPress | 0; },
+      nearestPieceM() { return self._nearestFreePieceM(); },
+      gapAt(arm, alphaRad) { return self._strutGapAt(arm, alphaRad); },
+      say(text) {
+        eventBus.emit(Events.COMMS_MESSAGE, { text, priority: 'info' });
+      },
+    };
+  }
+
+  /**
+   * Metres to the nearest discovered, free (not netted, not pinned) piece within the
+   * "leave" ring (NET_LOCK_RANGE_M x STRUT_AUTO.LEAVE_FACTOR) of the ship; Infinity when none.
+   * Always re-filtered by distance: a same-frame call can hand back a cached larger set.
+   * @returns {number}
+   * @private
+   */
+  _nearestFreePieceM() {
+    const df = this._debrisField;
+    const p = this.playerSatellite;
+    if (!df || typeof df.getDebrisNear !== 'function' || !p) return Infinity;
+    const pos = p.position || (p.mesh && p.mesh.position);
+    if (!pos) return Infinity;
+    const V = Constants.OCTOPUS_V5.STRUT_AUTO;
+    const reachM = Constants.NET_LOCK_RANGE_M * V.LEAVE_FACTOR;
+    const list = df.getDebrisNear(pos, reachM * M) || [];
+    let best = Infinity;
+    for (const d of list) {
+      if (!d || d.alive === false) continue;
+      // canonical flag: the frame cache can hold pre-reveal snapshots (main.js does the same)
+      const live = typeof df.getDebrisById === 'function' ? df.getDebrisById(d.id) : null;
+      const src = live || d;
+      if (src.discovered === false) continue;
+      if (src._captured || src._armPinned || src._capturedByArm) continue;
+      const m = typeof d.distance === 'number' ? d.distance / M : Infinity;
+      if (m <= reachM && m < best) best = m;
+    }
+    return best;
+  }
+
+  /**
+   * Show safety net: clearance (m) of arm `arm`'s strut + daughter at sweep angle `alphaRad`
+   * against the ship, from a thin strut capsule plus a daughter sphere. Infinity when there
+   * is no keep-out (mock ship). Own strut/daughter/rack are ignored.
+   * @private
+   */
+  _strutGapAt(arm, alphaRad) {
+    const ko = this.getKeepOut();
+    const i = this.arms.indexOf(arm);
+    if (!ko || i < 0) return Infinity;
+    const V5 = Constants.OCTOPUS_V5;
+    const az = Math.atan2(arm.dockOffset.y, arm.dockOffset.x);
+    const d = strutLocalDirection(alphaRad, az, new THREE.Vector3());
+    const hinge = [Math.cos(az) * V5.COLLAR_RADIUS, Math.sin(az) * V5.COLLAR_RADIUS, V5.COLLAR_Y];
+    const L = V5.STRUT_LENGTH;
+    const start = [hinge[0] + d.x * 0.30, hinge[1] + d.y * 0.30, hinge[2] + d.z * 0.30];
+    const tip = [hinge[0] + d.x * L, hinge[1] + d.y * L, hinge[2] + d.z * L];
+    const ignore = ['dau' + i, 'strut' + i, 'rack catch ' + i];
+    const rStrut = (V5.STRUT_TUBE_OD ?? 0.05) / 2 + 0.03;
+    const a = ko.segment(start, tip, rStrut, { ignore });
+    const b = ko.sphere(tip, 0.13, { ignore });
+    return Math.min(a.gap, b.gap);
   }
 
   // ========================================================================

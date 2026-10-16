@@ -50,6 +50,12 @@ export const StorageKeys = {
    * ?ladder=0 boot never reads or writes it).
    */
   TOUCH_MAP:   'sc_touch_map_v1',
+  /**
+   * Daughter-arm automation (StrutAutoStore): whether this player has seen the
+   * once-only full-range show. PLAYER-owned like TOUCH_MAP — never in the run
+   * save, so a New Game does not repeat it.
+   */
+  STRUT_AUTO:  'sc_strut_auto_v1',
   /** CityLabels visibility toggle ('0' | '1'). */
   CITY_LABELS: 'sc_city_labels_visible',
   /**

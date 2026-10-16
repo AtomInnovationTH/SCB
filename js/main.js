@@ -144,6 +144,7 @@ import { NextPane } from './ui/hud/NextPane.js';
 import { CopilotVoice } from './systems/CopilotVoice.js';
 import { GestureSplash } from './ui/GestureSplash.js';
 import { TouchMapStore } from './systems/TouchMapStore.js';
+import { StrutAutoStore } from './systems/StrutAuto.js';
 import { RAIL_GEOMETRY, footerBand } from './ui/RailGeometry.js';
 import { EdgeChrome } from './ui/EdgeChrome.js';
 import { TouchControls } from './ui/TouchControls.js';
@@ -1358,6 +1359,8 @@ async function init() {
   // --- Config G Arm Manager (Y0 Quad: 4 arms — 2 Weaver + 2 Spinner) ---
   armManager = new ArmManager(scene, player);
   armManager.setDebrisField(debrisField);
+  // Daughter arms mostly move themselves; the once-per-player full-range show (DECISIONS §25 ruling 5).
+  armManager.setStrutAutoStore(new StrutAutoStore());
   // Bags held on the radiator tips (lane l5a-tip-cargo). Always built; empty until the leash (l5b) stows a bag.
   player.tipCargo = new TipCargo({ player, debrisField, armManager, eventBus });
   armManager.setCatalogLoader(catalogLoader);    // ST-6.1: active-sat treaty guard
@@ -7285,7 +7288,7 @@ function gameLoop(timestamp) {
     try { player.update(dt * 0.1, sunDir, undefined, true); /* true: no motor billing off-play (w4-power) */ } catch (e) { console.error('[GameLoop] player.update (bg):', e); }
     try { debrisField.update(dt * 0.1); } catch (e) { console.error('[GameLoop] debrisField (bg):', e); }
     try { activeSatellites.update(dt * 0.1); } catch (e) { console.error('[GameLoop] activeSats (bg):', e); }
-    if (armManager) { try { armManager.update(dt * 0.1); } catch (e) { console.error('[GameLoop] armManager (bg):', e); } }
+    if (armManager) { try { armManager.update(dt * 0.1, { noStrutAuto: true }); } catch (e) { console.error('[GameLoop] armManager (bg):', e); } }
     try { player.postArmUpdate(); } catch (e) { /* bg visibility sync */ }
 
     // Camera still follows (slow) for nice menu background

@@ -1684,6 +1684,28 @@ export const Constants = {
     // VENT_DOUBLE_TAP_MS so one gesture means one thing everywhere.
     STRUT_PUSH_WINDOW_MS: 600,
 
+    // Daughter-arm automation (lane arms-auto; DECISIONS §25 ruling 5): the struts
+    // sit at 0° while nothing is near, swing to STRUT_REST_ALPHA (34°) when a piece
+    // is within NET_LOCK_RANGE_M (90 m) or a catch is under way, and ease back to
+    // automatic OVERRIDE_S after a "." press. Real motor rate throughout
+    // (STRUT_SLEW_RATE); nothing here teleports. Read by systems/StrutAuto.js.
+    // DEMO_TOP_RAD: the once-per-player full-range show goes out to this angle. Probe
+    // 2026-10-15: strut 0-180° in 2° steps x 20 radiator/wing states, clear from 4° (0-2° is
+    // the rest cradle, touching by design). Tightest gaps: 22 mm hull at 4°, 30 mm radiator
+    // plate at 6° (radiator 2°), 54 mm wing clamp at 8° (tilt -30°); neighbours 190 mm and
+    // nose collar 207 mm at 180°. So DEMO_TOP_RAD = 180°.
+    STRUT_AUTO: {
+      OVERRIDE_S: 10,                 // s after the arm ARRIVES at the player's angle
+      FLAT_DWELL_S: 20,               // s continuously not-near before going flat
+      HANDOFF_S: 3,                   // s hands-off after a launch/leash/duck ends
+      SCAN_INTERVAL_S: 0.5,           // s between debris scans (2 Hz)
+      LEAVE_FACTOR: 1.1,              // enter at <= 90 m, leave only past 99 m
+      DEADBAND_RAD: 2 * Math.PI / 180, // rad — no re-command inside 2°
+      DEMO_TOP_RAD: Math.PI,          // rad (180°) — measured clear
+      DEMO_CLEAR_M: 0.010,            // m — the show turns back if the gap falls under this
+      DEMO_CHECK_FROM_RAD: 12 * Math.PI / 180, // rad — below this the strut is still in its rest cradle (touching by design); proxy gap measured >= 12 mm from 9°
+    },
+
     // ── Recoil Safety (NEW — ST-9.3 C-3) ──
     HIGH_RECOIL_ALPHA_LOW:  Math.PI / 6,     // rad (30°) — below this = high axial recoil
     HIGH_RECOIL_ALPHA_HIGH: 5 * Math.PI / 6, // rad (150°) — above this = high axial recoil
@@ -2496,6 +2518,11 @@ export const Constants = {
     // is reeled onto a radiator tip (js/systems/LeashDriver.js). OFF = the catch
     // goes by today's flight to a daughter's rack (CaptureNetSystem._updateCargoTransfer).
     LEASH_HANDOFF:            true,
+
+    // Daughter-arm automation (lane arms-auto; DECISIONS §25 ruling 5): the struts
+    // move on their own (0° idle, 34° when a piece is within 90 m), a "." press
+    // holds 10 s, and the full range is shown once per player. OFF = manual only.
+    STRUT_AUTO:               true,
   },
 
   // ============================================================================
