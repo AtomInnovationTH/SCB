@@ -173,6 +173,18 @@ export class TipCargo {
     return out.copy(_X).applyQuaternion(_q1).applyQuaternion(this.player.quaternion).normalize();
   }
 
+  /**
+   * The turn from tip i's HINGE frame to the ship body frame, as plain {x,y,z,w} into `out` (read-only view of
+   * `_hingeQuatShip`; the frame `_place` seats the bag in). null when the tip does not exist.
+   */
+  hingeQuatShipInto(i, out) {
+    const rec = this._tipRec(i);
+    if (!rec) return null;
+    this._hingeQuatShip(rec, _q1);
+    out.x = _q1.x; out.y = _q1.y; out.z = _q1.z; out.w = _q1.w;
+    return out;
+  }
+
   // ── slots ────────────────────────────────────────────────────────────────
 
   /** Next free tip that exists (order az 40 → 220 → 140 → 320), or null. */

@@ -39,9 +39,7 @@ const FLOOR_EASE_S = 1.0;      // s — l5c-reach E3: the drawn size eases from 
 const OWN_TIP_RADIUS_M = 0.20; // m — l5c-reach E4: the hand-off's own tip hardware is never a snag within this of the latch
 
 const _v = new THREE.Vector3();
-const _off = { x: 0, y: 0, z: 0 };
-/** a + b into a module scratch (the per-frame path allocates nothing) */
-function _v3Off(a, b) { _off.x = a.x + b.x; _off.y = a.y + b.y; _off.z = a.z + b.z; return _off; }
+const _off = { x: 0, y: 0, z: 0 };   // module scratch (the per-frame path allocates nothing)
 const _vReach = new THREE.Vector3();
 
 // ── small quaternion helpers (plain {x,y,z,w}) ──────────────────────────────
@@ -137,6 +135,7 @@ export class LeashDriver {
       debris: null, net: null,
     };
     this._q = { x: 0, y: 0, z: 0, w: 1 };
+    this._hq = { x: 0, y: 0, z: 0, w: 1 };   // the tip's hinge -> ship turn (scratch, `_buildIo`)
     this._dv = new THREE.Vector3();
     this._pinV = new THREE.Vector3();
     this._sc = { x: 0, y: 0, z: 0 };
@@ -571,13 +570,25 @@ export class LeashDriver {
       // l8-reel-collar D7: DEFINED in every latched frame. The tip's bag sphere is the truth; a frame where the ledger
       // has not (yet) listed it keeps the last known position, and before any was known the bag is at the latch point
       // (it is on the tip). It was `undefined` there, and the picture drew no bag for the first ~1 s after the latch.
-      // The ledger drops the sphere once the radiators fold the bag away (UNFOLD, measured: gone ~4 s in, while the
-      // tip is still moving 4 m): then the bag rides the latch point at the offset it last had from it, in the ship frame.
+      // The tip's sphere drops out of the ledger when ITS COOK ENDS (the slot is freed, TipCargo.js `_cook`), whatever
+      // phase the hand-off is in — in UNFOLD the boom is still turning, so a ship-frame offset would swing into the strut.
+      // So the bag's offset from the latch point is kept in the tip's HINGE frame and turned back to the ship frame with
+      // the hinge's turn this frame: the ghost rides the boom. Two edges (D6): if the tip is gone (no hinge turn) the
+      // ghost stays where it was last; if the cook ends mid-SWING the ghost keeps the bag's last hinge-frame offset
+      // (TipCargo stops swinging a freed slot, so nothing turns it further).
+      const hq = tc.hingeQuatShipInto(h.tipIndex, this._hq);
       if (s) {
         qRotInto(q, s.c, h.bagW); h.bagKnown = true;
-        h.bagOff.x = s.c.x - h.tipShip.x; h.bagOff.y = s.c.y - h.tipShip.y; h.bagOff.z = s.c.z - h.tipShip.z;
+        if (hq) {
+          _off.x = s.c.x - h.tipShip.x; _off.y = s.c.y - h.tipShip.y; _off.z = s.c.z - h.tipShip.z;
+          qInvRotInto(hq, _off, h.bagOff);
+        }
       } else if (h.bagKnown) {
-        qRotInto(q, _v3Off(h.tipShip, h.bagOff), h.bagW);
+        if (hq) {
+          qRotInto(hq, h.bagOff, _off);
+          _off.x += h.tipShip.x; _off.y += h.tipShip.y; _off.z += h.tipShip.z;
+          qRotInto(q, _off, h.bagW);
+        }
       } else if (h.debris && h.debris._scenePosition) {
         // l8-reel-collar F4: before the ledger lists the tip's bag the LIVE catch is where it is (the latch frame), so
         // the picture's shift (live catch - bagWorld) is zero there instead of a tip-to-catch jump.
