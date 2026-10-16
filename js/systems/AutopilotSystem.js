@@ -21,7 +21,7 @@ import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
 import { findNearestLiveDebris } from './NavRecoveryAdvisor.js';
 import { strutLocalDirection } from '../entities/ArmDockBasis.js';
-import { engineGasKg, engineDeltaV } from './ResourceSystem.js';
+import { engineGasKg, engineDeltaV, engineTankDryKg } from './ResourceSystem.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
@@ -1473,7 +1473,7 @@ export class AutopilotSystem {
     const c = typeof this._player.getConsumptionMultiplier === 'function'
       ? this._player.getConsumptionMultiplier() : 1;
     return engineDeltaV({
-      dryKg: Constants.OCTOPUS_V5.CORE_DRY_MASS + Constants.ENGINE_TANK_DRY_MASS_KG,
+      dryKg: Constants.OCTOPUS_V5.CORE_DRY_MASS + engineTankDryKg(r),
       coldGasKg: Constants.OCTOPUS_CORE_COLD_GAS * ((r.coldGas || 0) / (r.coldGasMax || Constants.COLD_GAS_MAX)),
       gasKg: engineGasKg(r),
       isp: fuel.isp,

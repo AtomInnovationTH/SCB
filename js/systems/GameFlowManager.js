@@ -1037,10 +1037,17 @@ export class GameFlowManager {
           const refineryMult = this._hasUpgrade('refinery_arm') ? 1.5 : 1.0;
 
           // Xenon → main satellite fuel
+          // g1-gas-upgrades D8: salvaged gas is MASS — today's argon amount in kg, loaded as kg of the gas
+          // IN the tank (the resupply path, clamped to free space), named for the real gas and the real kg.
           if (salvage.xenon > 0 && resourceSystem) {
-            resourceSystem.replenish('xenon', salvage.xenon * refineryMult);
+            const argonKg = (Constants.FUELS[Constants.DEFAULT_FUEL].kgFull || 0);
+            const wantKg = salvage.xenon * refineryMult / 100 * argonKg;
+            const gotKg = resourceSystem.resupplyEngineGas(wantKg);
+            const gasName = (Constants.FUELS[resourceSystem.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL]).name;
             eventBus.emit(Events.COMMS_MESSAGE, {
-              text: `\u26CF Salvaged ${salvage.xenon.toFixed(1)} kg Xenon \u2014 \u0394V extended!`,
+              text: gotKg > 0
+                ? `\u26CF Salvaged ${gotKg.toFixed(1)} kg ${gasName} \u2014 \u0394V extended!`
+                : `\u26CF Salvaged ${wantKg.toFixed(1)} kg ${gasName} \u2014 engine tank already full`,
               priority: 'good',
             });
           }

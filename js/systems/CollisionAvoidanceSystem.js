@@ -21,6 +21,7 @@ import { Constants } from '../core/Constants.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
 import { classifyContact, sweptClosestDistM } from './collisionModel.js';
 import { audioSystem } from './AudioSystem.js';
+import { engineGasLowFrac } from './ResourceSystem.js';
 
 // ============================================================================
 // LOCAL CONSTANTS (derived from Constants.COLLISION_AVOIDANCE)
@@ -930,13 +931,13 @@ export class CollisionAvoidanceSystem {
     const frac = CA.PROPELLANT_RESERVE_FRAC ?? 0;
     if (frac <= 0 || !this._player) return null;
     const res = this._player.resources || {};
-    const xenonReserve = (Constants.XENON_FUEL_MAX || 100) * frac;
     const batteryReserve = (Constants.BATTERY_MAX || 100) * frac;
     const fuel = this._getActiveFuel();
     const batteryLow = (res.battery ?? Infinity) <= batteryReserve;
-    const xenonLow = (!fuel || !fuel.fromCargo) && (res.xenon ?? Infinity) <= xenonReserve;
+    // g1-gas-upgrades D7: the reserve is MASS against the base argon tank (the same for every gas), 5 %.
+    const xenonLow = (!fuel || !fuel.fromCargo) && (res.xenon == null ? false : engineGasLowFrac(res) <= frac);
     if (batteryLow) return 'battery reserve — preserving power for essential systems';
-    if (xenonLow) return 'xenon reserve — preserving propellant for essential maneuvers';
+    if (xenonLow) return `${this._tankGasName(res)} reserve — preserving propellant for essential maneuvers`;
     return null;
   }
 
@@ -953,7 +954,7 @@ export class CollisionAvoidanceSystem {
     const res = p.resources || {};
     if ((res.battery ?? 1) <= 0) return 'battery depleted';
     const fuel = this._getActiveFuel();
-    if ((!fuel || !fuel.fromCargo) && (res.xenon ?? 1) <= 0) return 'xenon tank dry';
+    if ((!fuel || !fuel.fromCargo) && (res.xenon ?? 1) <= 0) return `${this._tankGasName(res)} tank dry`;
     return 'maneuver envelope limit';
   }
 
@@ -965,7 +966,18 @@ export class CollisionAvoidanceSystem {
     if (this._resourceSystem && typeof this._resourceSystem.getCurrentFuel === 'function') {
       return this._resourceSystem.getCurrentFuel();
     }
-    return (Constants.FUELS && Constants.FUELS.xenon) || null;
+    return (Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL]) || null;   // g1-gas-upgrades D9: was xenon
+  }
+
+  /**
+   * g1-gas-upgrades D9: the lower-case name of the gas IN the engine tank, for the refusal texts.
+   * @private
+   * @param {object} [res] - player.resources
+   * @returns {string}
+   */
+  _tankGasName(res) {
+    const f = (Constants.FUELS && (Constants.FUELS[res && res.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL])) || null;
+    return f && f.name ? f.name.toLowerCase() : 'engine gas';
   }
 
   // ==========================================================================

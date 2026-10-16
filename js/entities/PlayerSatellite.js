@@ -23,7 +23,7 @@ import { applyDetailLod } from '../scene/detailLodCull.js';
 import { getOrbitalFoilEnv } from '../scene/orbitalFoilEnv.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
-import { engineGasKg } from '../systems/ResourceSystem.js';
+import { engineGasKg, engineTankDryKg, engineGasLowFrac, startEnginePool } from '../systems/ResourceSystem.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import {
   computeCoM, computeCoMDrift, computeCoMDriftVector,
@@ -117,7 +117,7 @@ function shipMassKg(ship) {
   const r = ship.resources || {};
   const cold = Constants.OCTOPUS_CORE_COLD_GAS
     * ((r.coldGas || 0) / (r.coldGasMax || Constants.COLD_GAS_MAX));
-  return Constants.OCTOPUS_V5.CORE_DRY_MASS + Constants.ENGINE_TANK_DRY_MASS_KG + engineGasKg(r) + cold;
+  return Constants.OCTOPUS_V5.CORE_DRY_MASS + engineTankDryKg(r) + engineGasKg(r) + cold;
 }
 
 /**
@@ -339,7 +339,7 @@ export class PlayerSatellite extends THREE.Group {
     // RESOURCES
     // ========================================================================
     this.resources = {
-      xenon: Constants.XENON_FUEL_MAX * (Constants.PROPELLANT_START_FRACTION ?? 1),     // h1-mother-pane D5: 60 %
+      xenon: startEnginePool(Constants.DEFAULT_FUEL, Constants.XENON_FUEL_MAX),     // h1-mother-pane D5: 60 % (g1 D2: START_GAS_KG of the tank gas)
       tankGasId: Constants.DEFAULT_FUEL,   // h3-argon-engine D2: the gas the `xenon` pool holds (kept name = pool)
       coldGas: Constants.COLD_GAS_MAX * (Constants.PROPELLANT_START_FRACTION ?? 1),
       battery: Constants.BATTERY_MAX * (Constants.BATTERY_START_FRACTION ?? 1),   // w4-power D1: half
@@ -10464,8 +10464,12 @@ export class PlayerSatellite extends THREE.Group {
     if (this.resources.battery < 10) {
       eventBus.emit(Events.PLAYER_LOW_BATTERY, { level: this.resources.battery, batteryMax: this.resources.batteryMax });
     }
-    if (this.resources.xenon < 10) {
-      eventBus.emit(Events.PLAYER_LOW_XENON, { level: this.resources.xenon });
+    // g1-gas-upgrades D7: "low" is MASS against the base argon tank scaled by the tank size, the same for every
+    // gas (xenon's 12.48 kg must not read 9.7 % of its own 129 kg tank). `level` stays a percent of the base tank
+    // (CommsSystem turns it into the printed percent with / XENON_FUEL_MAX).
+    const gasFrac = engineGasLowFrac(this.resources);
+    if (gasFrac < 0.10) {
+      eventBus.emit(Events.PLAYER_LOW_XENON, { level: gasFrac * 100 });
     }
   }
 

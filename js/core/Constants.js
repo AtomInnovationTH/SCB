@@ -329,6 +329,12 @@ export const Constants = {
                                    // tank start at this fraction of their max on every boot (new game, retry,
                                    // loaded save), the same paths as BATTERY_START_FRACTION.
 
+  // g1-gas-upgrades D1 (owner 2026-10-14: "every kg is expensive to send up on rockets"; DECISIONS §2b): engine gas
+  // is priced by what it costs to launch. Price per kg = (LAUNCH_USD_PER_KG + FUELS[gas].usdPerKg) / USD_PER_CREDIT.
+  LAUNCH_USD_PER_KG: 7000,        // research §3: about the same whatever the gas
+  USD_PER_CREDIT: 100,            // anchor: the old extra-tank row, 600 cr for +10.4 kg argon, about $121 per credit; rounded
+  GAS_RESUPPLY_KG: 5,             // one "Engine Gas Resupply" load, kg
+
   // === SHIP HEAT (w2-heat, 2026-10-08) =======================================
   // DECISIONS §15 rows 2/4/5/6 + §2 rows 5–7: the ship heats up from what the
   // player does, warns at 60 / 85 °C, and opens its radiator itself a little
@@ -1340,7 +1346,10 @@ export const Constants = {
     // (flower_pair_a 1 200 + flower_pair_b 1 000; placeholder economy-pass
     // prices per the charter). Same sanctioned path: the pacing test computes
     // Σ UPGRADES live and this pin re-derives with it.
-    CATALOG_TOTAL_CR: 45000,
+    // g1-gas-upgrades (2026-10-16): 45 000 → 47 130 — the one-way gas rows gas_krypton 920 + gas_xenon 1 210
+    // (priced by launch mass, ResourceSystem.gasPriceCr). The gas resupply is a consumable and is excluded,
+    // like mother_net_restock.
+    CATALOG_TOTAL_CR: 47130,
     // Ordered recommendation preference for the starter highlight. The shop
     // marks the first item here that is un-owned and currently affordable.
     RECOMMENDED_STARTERS: ['capture_net', 'fast_reel', 'enhanced_eo', 'efficient_ion'],
@@ -3171,6 +3180,7 @@ export const Constants = {
       isp: 1700,          // seconds — ESTIMATE (research §2.3: small Hall thrusters get ~Kr's Isp on Ar)
       thrustScale: 0.46,  // 18 / 39 mN at 600 W (CAMILA anode-efficiency ratio vs xenon, research §2.3)
       kgFull: 20.8,       // kg in 60 L @ 200 bar (research §2.2)
+      usdPerKg: 10,       // g1-gas-upgrades D1: gas price, research §2.4 (the launch cost per kg is LAUNCH_USD_PER_KG)
       color: '#9fb8c8',   // cool grey-blue
       resourceKey: 'xenon', // burns from the ship tank pool (pool key kept; it holds whichever gas is loaded)
       fromCargo: false,
@@ -3181,6 +3191,7 @@ export const Constants = {
       isp: 1650,          // seconds — Busek 1.5 kW lab data: Kr +140..190 s over Xe (IEPC-2017-26), research §2.3
       thrustScale: 0.67,  // 26 / 39 mN at 600 W (research §2.3)
       kgFull: 58.0,       // kg in 60 L @ 200 bar (research §2.2)
+      usdPerKg: 400,      // g1-gas-upgrades D1 (research §2.4)
       color: '#b39ddb',
       resourceKey: 'xenon',
       fromCargo: false,
@@ -3191,6 +3202,7 @@ export const Constants = {
       isp: 1500,          // seconds — Busek BHT-600 "up to 1500 s"; equals OCTOPUS_CORE_HALL_ISP (was 1600 here)
       thrustScale: 1.0,   // baseline thrust (39 mN at 600 W, Busek BHT-600)
       kgFull: 129.2,      // kg in 60 L @ 200 bar (research §2.2)
+      usdPerKg: 2700,     // g1-gas-upgrades D1 (research §2.4)
       color: '#4fc3f7',   // light blue
       resourceKey: 'xenon', // consumes from ResourceSystem xenon tank
       fromCargo: false,    // uses ship's built-in tank

@@ -12,7 +12,8 @@ import { scoringSystem, computeContributionPayout } from '../systems/ScoringSyst
 import { decorateGlossary } from '../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
-import { upgradePrereqsMet } from './shopGating.js';
+import { upgradePrereqsMet, upgradeCostNow, engineTankFull } from './shopGating.js';
+import { gasPriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
 import {
   getAvailableTiers,
   getCurrentTier,
@@ -24,7 +25,7 @@ import {
 } from '../systems/ArmTierCatalog.js';
 
 /**
- * Upgrade definitions — 33 items across 9 categories, all wired to live systems
+ * Upgrade definitions — 36 items across 9 categories, all wired to live systems
  * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins
  * this header to them).
  * ST-6.6: Each upgrade carries a `trl` (NASA TRL 1-9) and optional `trlRationale`
@@ -32,16 +33,33 @@ import {
  * Exported for Node.js test harness (test-TRL.js integrity check).
  */
 export const UPGRADES = [
-  // Propulsion (6)
+  // Propulsion (9)
   { id: 'efficient_ion', cat: 'Propulsion', name: 'Efficient Ion Drive', cost: 500,
     desc: '-20% engine gas consumption', effect: 'xenonEfficiency', value: 0.8, maxLevel: 1,
     trl: 9, trlRationale: 'Xenon ion drives flown since Deep Space 1 (1998)' },
   { id: 'high_thrust_ion', cat: 'Propulsion', name: 'High-Thrust Ion', cost: 800,
     desc: '+50% thrust power', effect: 'thrustMultiplier', value: 1.5, maxLevel: 1,
     trl: 8, trlRationale: 'High-power Hall thrusters flown on Starlink, AEHF; kW-class ion still maturing' },
-  { id: 'extra_xenon', cat: 'Propulsion', name: 'Extra Xenon Tank', cost: 600,
-    desc: '+50 max xenon', effect: 'xenonMax', value: 50, maxLevel: 2,
+  // g1-gas-upgrades D6: id and effect kept (saves); a bigger tank is SPACE — fill it with a resupply.
+  { id: 'extra_xenon', cat: 'Propulsion', name: 'Bigger Engine Tank', cost: 600,
+    desc: '+30 L of engine tank space (empty: fill it with a resupply)', effect: 'xenonMax', value: 50, maxLevel: 2,
     trl: 9, trlRationale: 'COPV xenon tanks flight-proven since 1990s' },
+  // g1-gas-upgrades D3: krypton and xenon are one-way upgrades of the gas in the tank, priced by the mass
+  // they put in orbit (D1). Xenon replaces krypton for good (supersededBy, enforced in upgradePrereqsMet).
+  { id: 'gas_krypton', cat: 'Propulsion', name: 'Krypton Engine Gas', cost: gasPriceCr('krypton', GAS_SWITCH_FILL_KG),
+    desc: "1.5× argon's push on the same power, so chases are quicker. Drains the tank and fills 12.5 kg of krypton — the same launch mass as your argon start.",
+    effect: 'engineGasSwitch', value: 'krypton', maxLevel: 1, supersededBy: 'gas_xenon',
+    trl: 9, trlRationale: 'Krypton Hall thrusters fly on Starlink v1 (2019)' },
+  { id: 'gas_xenon', cat: 'Propulsion', name: 'Xenon Engine Gas', cost: gasPriceCr('xenon', GAS_SWITCH_FILL_KG),
+    desc: "2.2× argon's push on the same power, so chases are quicker. Drains the tank and fills 12.5 kg of xenon — the same launch mass as your argon start.",
+    effect: 'engineGasSwitch', value: 'xenon', maxLevel: 1,
+    trl: 9, trlRationale: 'Xenon Hall thrusters flown since the 1970s; Deep Space 1 (1998)' },
+  // g1-gas-upgrades D4: range is bought by the kilo. Repeatable; the price is read through upgradeCostNow
+  // (the gas in the tank), `cost` here is the argon price for the catalogue tables.
+  { id: 'gas_resupply', cat: 'Propulsion', name: 'Engine Gas Resupply', cost: gasPriceCr('argon', Constants.GAS_RESUPPLY_KG),
+    desc: 'Load 5 kg of the gas in your tank (less if the tank is nearly full). Every kilo has to be launched, so range costs credits.',
+    effect: 'engineGasResupply', value: Constants.GAS_RESUPPLY_KG, maxLevel: Infinity, consumable: true,
+    trl: 6, trlRationale: 'In-orbit propellant transfer demonstrated by Orbital Express (2007, hydrazine); xenon transfer not yet flown' },
   { id: 'extra_coldgas', cat: 'Propulsion', name: 'Extra Cold Gas', cost: 400,
     desc: '+10 max cold gas', effect: 'coldGasMax', value: 10, maxLevel: 2,
     trl: 9, trlRationale: 'Cold gas tanks ubiquitous since 1960s' },
@@ -304,6 +322,7 @@ export class ShopScreen {
 
     // Phase 5: system references for cargo selling
     this._cargoSystem = null;
+    this._resourceSystem = null;   // g1-gas-upgrades D5
     this._scoringSystem = null;
     this._contractMassKg = 0;
 
@@ -336,6 +355,9 @@ export class ShopScreen {
 
   /** Set CargoSystem reference for cargo manifest access. */
   setCargoSystem(cs) { this._cargoSystem = cs; }
+
+  /** g1-gas-upgrades D5: ResourceSystem reference — the engine-gas resupply is priced and gated by the tank. */
+  setResourceSystem(rs) { this._resourceSystem = rs; }
 
   /** Set ScoringSystem reference for addCredits. */
   setScoringSystem(ss) { this._scoringSystem = ss; }
@@ -876,7 +898,8 @@ export class ShopScreen {
   _renderUpgradeCard(upgrade, recommendedId = null) {
     const currentLevel = this.purchasedUpgrades.get(upgrade.id) || 0;
     const maxed = currentLevel >= upgrade.maxLevel;
-    const canAfford = scoringSystem.credits >= upgrade.cost;
+    const price = upgradeCostNow(upgrade, this._resourceSystem);   // g1-gas-upgrades D4: the ONE price accessor
+    const canAfford = scoringSystem.credits >= price;
     const isRecommended = recommendedId === upgrade.id;
     // Prerequisite gate (E5 SSOT): shared with the purchase guard in
     // _purchaseUpgrade so the render's disabled-state and the actual purchase
@@ -884,8 +907,9 @@ export class ShopScreen {
     const requiresMet = upgradePrereqsMet(upgrade, this.purchasedUpgrades, (f) => Constants.isFeatureEnabled(f));
     // Consumable restock with no remaining capacity (both Mother pods full) is
     // unavailable — don't let the player pay for a net that can't be loaded.
-    const consumableFull = upgrade.effect === 'motherNetRestock'
-      && !captureNetSystem.hasMotherPodSpace();
+    const consumableFull = (upgrade.effect === 'motherNetRestock'
+      && !captureNetSystem.hasMotherPodSpace())
+      || (upgrade.effect === 'engineGasResupply' && engineTankFull(this._resourceSystem));
     const available = !maxed && canAfford && requiresMet && !consumableFull;
     // S1 retention: pinnable = gated-open, not-maxed, non-consumable.
     const pinnable = !maxed && requiresMet && !upgrade.consumable && upgrade.maxLevel !== Infinity;
@@ -947,13 +971,15 @@ export class ShopScreen {
           <div style="font-size:0.7rem;color:rgba(0,255,136,0.5);">${decorateGlossary(upgrade.desc, { once: true })}</div>
           ${whyLine}
           ${upgrade.requires && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${UPGRADES.find(u => u.id === upgrade.requires)?.name}</div>` : ''}
+          ${upgrade.supersededBy && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Replaced by ${UPGRADES.find(u => u.id === upgrade.supersededBy)?.name}</div>` : ''}
+          ${consumableFull && upgrade.effect === 'engineGasResupply' ? `<div style="font-size:0.65rem;color:#ff6644;">Engine tank full</div>` : ''}
           ${upgrade.requiresAll && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${upgrade.requiresAll.map(id => UPGRADES.find(u => u.id === id)?.name || id).join(' + ')}</div>` : ''}
-          ${!canAfford && !maxed ? `<div style="font-size:0.6rem;color:rgba(255,68,68,0.5);margin-top:2px;">Need ${(upgrade.cost - scoringSystem.credits).toLocaleString()} more cr</div>` : ''}
+          ${!canAfford && !maxed ? `<div style="font-size:0.6rem;color:rgba(255,68,68,0.5);margin-top:2px;">Need ${(price - scoringSystem.credits).toLocaleString()} more cr</div>` : ''}
         </div>
         <div style="text-align:right;min-width:90px;">
           ${maxed
             ? `<span style="color:rgba(0,255,136,0.5);font-size:0.75rem;">✓ OWNED</span>`
-            : `<div style="font-size:0.8rem;color:${costColor};${costStrike}">${upgrade.cost.toLocaleString()} cr</div>
+            : `<div style="font-size:0.8rem;color:${costColor};${costStrike}">${price.toLocaleString()} cr</div>
                <button class="shop-buy-btn" data-id="${upgrade.id}" style="
                  font-family:var(--font-mono); font-size:0.7rem; color:${available ? '#00ff88' : 'rgba(0,255,136,0.3)'};
                  background: ${available ? 'rgba(0,255,136,0.15)' : 'transparent'};
@@ -1313,7 +1339,12 @@ export class ShopScreen {
         audioSystem.playDeny();
         return;
       }
-      if (!scoringSystem.spendCredits(upgrade.cost)) {
+      // g1-gas-upgrades D4: nor for gas that has no room in the tank (free < 0.1 kg)
+      if (upgrade.effect === 'engineGasResupply' && engineTankFull(this._resourceSystem)) {
+        audioSystem.playDeny();
+        return;
+      }
+      if (!scoringSystem.spendCredits(upgradeCostNow(upgrade, this._resourceSystem))) {
         audioSystem.playDeny();
         return;
       }
@@ -1341,7 +1372,7 @@ export class ShopScreen {
       return;
     }
 
-    if (!scoringSystem.spendCredits(upgrade.cost)) {
+    if (!scoringSystem.spendCredits(upgradeCostNow(upgrade, this._resourceSystem))) {
       audioSystem.playDeny();
       return;
     }

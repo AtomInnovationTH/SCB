@@ -50,6 +50,10 @@ export const EFFECT_ROUTES = {
   solarEfficiency: [RESOURCE_SYSTEM],
   panelDegradation: [RESOURCE_SYSTEM],
 
+  // ── g1-gas-upgrades: engine gas (D3 one-way gas switch, D4 consumable resupply) → ResourceSystem ──
+  engineGasSwitch: [RESOURCE_SYSTEM],
+  engineGasResupply: [RESOURCE_SYSTEM],
+
   // ── S3b power infrastructure (F4: these three were inert) ──
   supercapUpgrade: [RESOURCE_SYSTEM, PLAYER], // +100 Wh burst store + MPD thermal flag (ResourceSystem.js:480, PlayerSatellite.js:3616)
   rtgPower: [RESOURCE_SYSTEM],                 // constant Wh/s generation (ResourceSystem.js:486)
@@ -141,6 +145,9 @@ export const EFFECT_ROUTES = {
  */
 export const RESOURCE_RESTORED_EFFECTS = new Set([
   'xenonMax', 'coldGasMax', 'batteryMax', 'supercapUpgrade',
+  // g1-gas-upgrades D10: restore() already set the tank gas (`tankGasId`) and fills the launch mass — a
+  // replay on MENU_CONTINUE must not vent or refill. (GAMEOVER_CONTINUE replays from a reset base.)
+  'engineGasSwitch',
 ]);
 
 /**

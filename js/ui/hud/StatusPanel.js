@@ -1813,8 +1813,10 @@ export class StatusPanel {
 
     const mb = this._armManager.getMassBudget();
     this._paintFuelLine(mb);
-    const xeColor = mb.xenonCurrent > mb.xenonMax * 0.5 ? 'var(--hud-normal, #00ff88)' :
-                     mb.xenonCurrent > mb.xenonMax * 0.2 ? 'var(--hud-caution, #ffaa00)' : 'var(--hud-warning, #ff4444)';
+    // g1-gas-upgrades D7: colour tiers read the mass fraction (same for every gas), else kg / kg-max
+    const gasFrac = Number.isFinite(mb.gasFrac) ? mb.gasFrac : (mb.xenonMax > 0 ? mb.xenonCurrent / mb.xenonMax : 0);
+    const xeColor = gasFrac > 0.5 ? 'var(--hud-normal, #00ff88)' :
+                     gasFrac > 0.2 ? 'var(--hud-caution, #ffaa00)' : 'var(--hud-warning, #ff4444)';
 
     el.innerHTML = `
       <div style="display:flex;justify-content:space-between;opacity:0.7;">
@@ -1859,7 +1861,9 @@ export class StatusPanel {
     // h4-simple-first D10: the tank fraction is the mass budget's (the engine half's bar), else
     // the resource pool's own — no propellant constant here.
     let frac = 1;
-    if (mb && mb.xenonMax > 0 && Number.isFinite(mb.xenonCurrent)) {
+    if (mb && Number.isFinite(mb.gasFrac)) {
+      frac = Math.max(0, Math.min(1, mb.gasFrac));   // g1-gas-upgrades D7: by mass, the same for every gas
+    } else if (mb && mb.xenonMax > 0 && Number.isFinite(mb.xenonCurrent)) {
       frac = Math.max(0, Math.min(1, mb.xenonCurrent / mb.xenonMax));
     } else if (res.xenonMax > 0 && Number.isFinite(res.xenon)) {
       frac = Math.max(0, Math.min(1, res.xenon / res.xenonMax));

@@ -43,6 +43,7 @@
 import { Constants } from '../core/Constants.js';
 import { UPGRADES } from '../ui/ShopScreen.js';
 import { EFFECT_ROUTES } from '../systems/upgradeEffectRoutes.js';
+import { engineGasKg, START_GAS_KG } from '../systems/ResourceSystem.js';
 import { SENSOR_TIERS } from '../systems/SensorSystem.js';
 import { M_TO_U } from './blueprintSubsystems.js';
 
@@ -130,7 +131,7 @@ export const ROUTE_READS = Object.freeze({
 // Subsystem tag law (D9): tag by what the upgrade PHYSICALLY changes.
 // Borderline calls are commented at the row.
 const FITTING_SPECS = {
-  // ════ ENGINEERING — the thruster block / bus structure (7) ════
+  // ════ ENGINEERING — the thruster block / bus structure (10) ════
   efficient_ion: {
     subsystem: 'ENGINEERING', reads: 'player',
     // PlayerSatellite: _ionThrustXenonRate = base × value. The base rate is a
@@ -146,9 +147,31 @@ const FITTING_SPECS = {
     current: (deps) => deps.player?._thrustMult,
   },
   extra_xenon: {
+    // g1-gas-upgrades D6: a bigger tank is SPACE — shown in litres (the pool is a percentage of the 60 L base tank).
     subsystem: 'ENGINEERING', reads: 'resourceSystem',
-    display: (row) => ({ param: 'xenonMax', base: Constants.XENON_FUEL_MAX, unit: 'kg', op: `+${row.value}` }),
-    current: (deps) => deps.resourceSystem?.xenonMax,
+    display: (row) => ({ param: 'engineTankL', base: Constants.ENGINE_TANK_VOLUME_L, unit: 'L',
+      op: `+${row.value / Constants.XENON_FUEL_MAX * Constants.ENGINE_TANK_VOLUME_L}` }),
+    current: (deps) => deps.resourceSystem?.xenonMax / Constants.XENON_FUEL_MAX * Constants.ENGINE_TANK_VOLUME_L,
+  },
+  // g1-gas-upgrades D3: krypton / xenon are one-way upgrades of the gas in the tank. The number shown is
+  // the push (thrust scale) the gas gives on the same power; `current` reads the tank gas's.
+  gas_krypton: {
+    subsystem: 'ENGINEERING', reads: 'resourceSystem',
+    display: (row) => ({ param: 'gasThrustScale', base: Constants.FUELS[Constants.DEFAULT_FUEL].thrustScale, unit: '×',
+      op: `=${Constants.FUELS[row.value].thrustScale}` }),
+    current: (deps) => Constants.FUELS[deps.resourceSystem?.tankGasId]?.thrustScale,
+  },
+  gas_xenon: {
+    subsystem: 'ENGINEERING', reads: 'resourceSystem',
+    display: (row) => ({ param: 'gasThrustScale', base: Constants.FUELS[Constants.DEFAULT_FUEL].thrustScale, unit: '×',
+      op: `=${Constants.FUELS[row.value].thrustScale}` }),
+    current: (deps) => Constants.FUELS[deps.resourceSystem?.tankGasId]?.thrustScale,
+  },
+  // g1-gas-upgrades D4: range is bought by the kilo. Shown as the engine gas aboard, kg.
+  gas_resupply: {
+    subsystem: 'ENGINEERING', reads: 'resourceSystem',
+    display: (row) => ({ param: 'engineGasKg', base: START_GAS_KG, unit: 'kg', op: `+${row.value}` }),
+    current: (deps) => (deps.resourceSystem ? engineGasKg(deps.resourceSystem) : undefined),
   },
   extra_coldgas: {
     subsystem: 'ENGINEERING', reads: 'resourceSystem',
@@ -413,7 +436,7 @@ function buildEntry(row) {
 }
 
 /**
- * One entry per ShopScreen UPGRADES row, same order (33 — the coverage test
+ * One entry per ShopScreen UPGRADES row, same order (36 — the coverage test
  * pins the count so a catalog edit without fitting metadata trips loudly).
  * @type {ReadonlyArray<object>}
  */

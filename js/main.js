@@ -39,7 +39,7 @@ import { targetSelector } from './systems/TargetSelector.js';
 import { audioSystem } from './systems/AudioSystem.js';
 import { CameraSystem } from './systems/CameraSystem.js';
 import { CommsSystem } from './systems/CommsSystem.js';
-import { ResourceSystem } from './systems/ResourceSystem.js';
+import { ResourceSystem, engineGasKg } from './systems/ResourceSystem.js';
 import { SensorSystem } from './systems/SensorSystem.js';
 import { dossierSystem } from './systems/DossierSystem.js';
 import { kesslerSystem } from './systems/KesslerSystem.js';
@@ -1764,6 +1764,7 @@ async function init() {
 
   // --- Phase 5: Wire cargo & scoring refs into shop for sell/contribute ---
   shopScreen.setCargoSystem(cargoSystem);
+  shopScreen.setResourceSystem(resourceSystem);   // g1-gas-upgrades D5: the resupply is priced by the tank gas
   shopScreen.setScoringSystem(scoringSystem);
   shopScreen.setPersistenceManager(persistenceManager);
 
@@ -2034,9 +2035,12 @@ async function init() {
       if (!resourceSystem || !resourceSystem.getStatus) return [];
       const st = resourceSystem.getStatus();
       const fuel = resourceSystem.getCurrentFuel ? resourceSystem.getCurrentFuel() : null;
-      if (fuel && !fuel.fromCargo) return [`FUEL ${st.currentFuelName} ${Math.round(st.xenon)}/${st.xenonMax} kg`];
+      // g1-gas-upgrades D9: the pool is a percentage of the base tank, not kg — print the real kilograms.
+      const gasNow = Math.round(engineGasKg(st));
+      const gasCap = Math.round(engineGasKg({ xenon: st.xenonMax, tankGasId: st.tankGasId }));
+      if (fuel && !fuel.fromCargo) return [`FUEL ${st.currentFuelName} ${gasNow}/${gasCap} kg`];
       if (fuel) return [`FUEL ${st.currentFuelName} (CARGO)`];
-      return [`FUEL ${Math.round(st.xenon)}/${st.xenonMax} kg`];
+      return [`FUEL ${gasNow}/${gasCap} kg`];
     },
     comms: () => (commsSystem && commsSystem.getSuppressionTier
       ? [`LINK: ${commsSystem.getSuppressionTier() > 0 ? 'SUPPRESSED' : 'NOMINAL'}`] : []),

@@ -20,7 +20,7 @@ import { createShipKeepOut } from '../systems/ShipKeepOut.js';
 import { StrutAutoController } from '../systems/StrutAuto.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit } from './ArmUnit.js';
-import { engineGasKg, engineDeltaV } from '../systems/ResourceSystem.js';
+import { engineGasKg, engineDeltaV, engineTankDryKg, engineGasLowFrac } from '../systems/ResourceSystem.js';
 
 /** 1 meter in scene units */
 const M = 0.00001;
@@ -2361,14 +2361,15 @@ export class ArmManager {
       ? this.playerSatellite.getFlowerDryMassKg() : 0;
     // h3-argon-engine D3: the 60 L engine tank is structure too (9.5 kg, research §2.2). CORE_DRY_MASS
     // (176 = bus + ROSA + body-mount + collar) carries no tank, so this is ADDED, not a replacement.
-    const tankDry = Constants.ENGINE_TANK_DRY_MASS_KG || 0;
+    // g1-gas-upgrades D6: the tank's dry mass follows its size (the Bigger Engine Tank carries more tank).
+    const resources = this.playerSatellite.resources || {};
+    const rsStatus = this._resourceSystem ? this._resourceSystem.getStatus() : null;
+    const xenonPoolMax = rsStatus ? rsStatus.xenonMax : Constants.XENON_FUEL_MAX;
+    const tankDry = engineTankDryKg({ xenonMax: xenonPoolMax });
     const coreDry = V5.CORE_DRY_MASS + tankDry + strutMassTotal + flowerMass;
     const coldGasMax = Constants.OCTOPUS_CORE_COLD_GAS;
 
     // Get current propellant from player resources
-    const resources = this.playerSatellite.resources || {};
-    const rsStatus = this._resourceSystem ? this._resourceSystem.getStatus() : null;
-    const xenonPoolMax = rsStatus ? rsStatus.xenonMax : Constants.XENON_FUEL_MAX;
     const coldGasPoolMax = rsStatus ? rsStatus.coldGasMax : Constants.COLD_GAS_MAX;
     // h3-argon-engine D2: engine gas in kg = pool/100 x kgFull of the gas IN THE TANK (tankGasId), via the
     // ONE exported converter. `xenonCurrent` / `xenonMax` keep their names (HUD readers) but are now the
@@ -2441,6 +2442,8 @@ export class ArmManager {
       flowerMass: Math.round(flowerMass * 10) / 10,
       xenonCurrent: Math.round(xenonCurrent * 10) / 10,
       xenonMax,
+      // g1-gas-upgrades D7: "how full is the engine tank" by MASS, the same for every gas (bars and colours read this)
+      gasFrac: engineGasLowFrac({ xenon: gasRes.xenon, xenonMax: xenonPoolMax, tankGasId: gasRes.tankGasId }),
       coldGasCurrent: Math.round(coldGasCurrent * 10) / 10,
       coldGasMax,
       dockedArmMass: Math.round(dockedArmMass * 10) / 10,

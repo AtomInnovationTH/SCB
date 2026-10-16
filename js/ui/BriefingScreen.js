@@ -29,6 +29,13 @@ export class BriefingScreen {
     this.visible = false;
     this._targets = [];
     this._selectedIdx = -1;
+    // g1-gas-upgrades D9: the briefing names the gas in the tank (learned from FUEL_CHANGED, which
+    // ResourceSystem announces at boot, load and reset); a cargo fuel is not the tank gas.
+    this._gasId = Constants.DEFAULT_FUEL;
+    eventBus.on(Events.FUEL_CHANGED, (d) => {
+      const f = d && Constants.FUELS[d.fuelId];
+      if (f && !f.fromCargo) this._gasId = f.id;
+    });
     this._boundKeyHandler = this._onKeyDown.bind(this);
     this._build();
 
@@ -295,7 +302,11 @@ export class BriefingScreen {
                        t.type === 'missionDebris' ? 'Mission Related' : 'Fragment';
       const difficulty = t.deltaV < 0.1 ? 1 : t.deltaV < 0.3 ? 2 : t.deltaV < 0.6 ? 3 : t.deltaV < 1.0 ? 4 : 5;
       const stars = '●'.repeat(difficulty) + '○'.repeat(5 - difficulty);   // difficulty pips, monochrome
-      const estFuel = (t.deltaV * 20).toFixed(1); // Rough fuel estimate
+      // g1-gas-upgrades D9: real kilograms of the tank gas this ΔV burns (Tsiolkovsky over the core + tank + cold gas
+      // the engine pushes) — not the old ΔV × 20 guess labelled "Xe". An estimate, hence the "~".
+      const gas = Constants.FUELS[this._gasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
+      const pushedKg = Constants.OCTOPUS_V5.CORE_DRY_MASS + Constants.ENGINE_TANK_DRY_MASS_KG + Constants.OCTOPUS_CORE_COLD_GAS;
+      const estFuel = (pushedKg * (Math.exp(t.deltaV * 1000 / (gas.isp * Constants.G0)) - 1)).toFixed(1);
 
       return `
         <div class="briefing-card" data-idx="${i}" style="
@@ -311,7 +322,7 @@ export class BriefingScreen {
           </div>
           <div style="text-align:right;min-width:120px;">
             <div style="font-size:0.75rem;color:rgba(0,255,136,0.6);">${decorateGlossary('ΔV', { once: true })}: ${t.deltaV.toFixed(3)} km/s</div>
-            <div style="font-size:0.75rem;color:rgba(0,255,136,0.4);">Fuel: ~${estFuel} kg Xe</div>
+            <div style="font-size:0.75rem;color:rgba(0,255,136,0.4);">Fuel: ~${estFuel} kg ${gas.name}</div>
             <div style="font-size:0.85rem;color:#ffaa00;">${stars}</div>
           </div>
         </div>

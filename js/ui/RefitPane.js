@@ -85,7 +85,7 @@ import { Constants } from '../core/Constants.js';
 import { FITTING_CATALOG, groupBySubsystem } from '../data/fittingCatalog.js';
 import { BLUEPRINT_SUBSYSTEMS } from '../data/blueprintSubsystems.js';
 import { subsystemForPart, partsForSubsystem } from '../data/refitIndex.js';
-import { upgradePrereqsMet } from './shopGating.js';
+import { upgradePrereqsMet, upgradeCostNow, engineTankFull } from './shopGating.js';
 
 /** G1 write cap — the ProxContextPanel/TransferWindows house value. */
 const DOM_WRITE_MIN_INTERVAL_MS = 250;
@@ -254,10 +254,14 @@ export class RefitPane {
       const level = ctx.levelOf ? (ctx.levelOf(entry.id) || 0) : 0;
       const maxed = !shop.consumable && Number.isFinite(shop.maxLevel) && level >= shop.maxLevel;
       if (maxed) return;                       // OWNED at maxLevel: never offered
-      const prereqs = ctx.prereqsMet ? !!ctx.prereqsMet(shop) : true;
-      const affordable = (shop.cost ?? Infinity) <= (ctx.credits ?? 0);
+      // g1-gas-upgrades D4: the price is read through the one accessor (the resupply follows the tank gas);
+      // a resupply with a full tank is not offered as buyable.
+      const price = shop.cost == null ? Infinity : upgradeCostNow(shop, ctx.res);
+      const prereqs = (ctx.prereqsMet ? !!ctx.prereqsMet(shop) : true)
+        && !(shop.effect === 'engineGasResupply' && engineTankFull(ctx.res));
+      const affordable = price <= (ctx.credits ?? 0);
       const cls = prereqs ? (affordable ? 0 : 1) : 2;
-      ranked.push({ entry, cls, _cost: shop.cost ?? Infinity, _i: i });
+      ranked.push({ entry, cls, _cost: price, _i: i });
     });
     ranked.sort((a, b) => (a.cls - b.cls) || (a._cost - b._cost) || (a._i - b._i));
     return ranked.map(({ entry, cls }) => ({ entry, cls }));
@@ -289,6 +293,14 @@ export class RefitPane {
     if (!shop.consumable && Number.isFinite(shop.maxLevel) && level >= shop.maxLevel) {
       return { kind: 'owned', text: `OWNED ${level}/${shop.maxLevel}` };
     }
+    // g1-gas-upgrades D3: a superseded row (krypton once xenon is owned) says so — not "needs prerequisite".
+    if (shop.supersededBy && ctx.ownedHas && ctx.ownedHas(shop.supersededBy)) {
+      const by = (ctx.nameOf && ctx.nameOf(shop.supersededBy)) || shop.supersededBy;
+      return { kind: 'needs', text: `replaced by ${String(by).replace(/ Engine Gas$/, '')}` };
+    }
+    if (shop.effect === 'engineGasResupply' && engineTankFull(ctx.res)) {
+      return { kind: 'needs', text: 'tank full' };
+    }
     if (ctx.prereqsMet && !ctx.prereqsMet(shop)) {
       const ids = [];
       if (shop.requires) ids.push(shop.requires);
@@ -297,7 +309,7 @@ export class RefitPane {
       const name = (missing && ctx.nameOf && ctx.nameOf(missing)) || missing || 'prerequisite';
       return { kind: 'needs', text: `needs ${name}` };
     }
-    const cost = shop.cost ?? 0;
+    const cost = upgradeCostNow(shop, ctx.res) ?? 0;
     if (cost <= (ctx.credits ?? 0)) return { kind: 'buy', text: 'BUY' };
     const n = RefitPane.catchesAway(cost, ctx.credits ?? 0, ctx.avg);
     if (n != null) return { kind: 'wait', text: n === 1 ? '1 catch away' : `${n} catches away` };
@@ -357,7 +369,9 @@ export class RefitPane {
       const level = ctx.levelOf ? (ctx.levelOf(entry.id) || 0) : 0;
       if (!shop.consumable && Number.isFinite(shop.maxLevel) && level >= shop.maxLevel) continue;
       if (ctx.prereqsMet && !ctx.prereqsMet(shop)) continue;
-      if ((shop.cost ?? Infinity) <= (ctx.credits ?? 0)) n++;
+      if (shop.effect === 'engineGasResupply' && engineTankFull(ctx.res)) continue;
+      const price = shop.cost == null ? Infinity : upgradeCostNow(shop, ctx.res);
+      if (price <= (ctx.credits ?? 0)) n++;
     }
     return n;
   }
@@ -638,9 +652,13 @@ export class RefitPane {
       const a = this._getAvg ? this._getAvg() : null;
       avg = Number.isFinite(a) ? a : null;
     } catch (_e) { avg = null; }
+    // g1-gas-upgrades D4/D5: the live ResourceSystem (through the adapter deps) prices the engine-gas resupply
+    let res = null;
+    try { res = this._adapterDeps().resourceSystem || null; } catch (_e) { res = null; }
     return {
       credits,
       avg,
+      res,
       levelOf,
       ownedHas: (id) => ownedShim.has(id),
       nameOf: (id) => CATALOG_BY_ID.get(id)?.shop?.name || null,
@@ -744,7 +762,7 @@ export class RefitPane {
         name: entry.shop?.name || entry.id,
         num: display ? `${RefitPane.fmtValue(value)} ${display.unit} ${display.op}` : '',
         arrow: RefitPane.deltaArrow(display, current),
-        cost: entry.shop?.cost ?? 0,
+        cost: entry.shop ? upgradeCostNow(entry.shop, ctx.res) : 0,
         level,
         maxLevel: entry.shop?.maxLevel,
         chip,

@@ -726,7 +726,8 @@ export class VitalsPane {
       this._write(r, { band: 'none', fill: '0%', value: DASH });
       return;
     }
-    const frac = clamp01(v / max);
+    // g1-gas-upgrades D7: the bar is the tank by MASS, the same for every gas (the budget's `gasFrac`).
+    const frac = mb && Number.isFinite(mb.gasFrac) ? clamp01(mb.gasFrac) : clamp01(v / max);
     this._write(r, {
       band: frac <= 0 ? 'red' : levelBand(frac, VITALS_LAW.ION_AMBER, null),
       fill: pctStr(frac),

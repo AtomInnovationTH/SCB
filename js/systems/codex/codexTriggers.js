@@ -68,8 +68,8 @@ export const CODEX_TRIGGERS = {
   specific_impulse:       [{ event: E.SCORING_AWARD, match: (p) => !!p.reason && p.reason.includes('fuel') },
                            { event: E.FUEL_CHANGED, match: (p) => !(p && p.initial) }],   // h3b D5: the boot/load announcement is not a player action
   xenon_propellant:       [{ event: E.PLAYER_TELEMETRY, match: (p) => p.xenonPct < 0.7 }],
-  // F6: krypton/argon are reference propellants with NO in-game upgrade to buy
-  // (the propulsion tree is xenon/cold-gas/lithium/FEEP), so their old
+  // F6: krypton/argon were reference propellants with NO in-game upgrade to buy; since g1-gas-upgrades
+  // (2026-10-16) krypton and xenon ARE upgrades again (gas_krypton / gas_xenon). Their old
   // UPGRADE_APPLIED (id includes 'krypton'/'argon') triggers could never fire.
   // Repointed to progression thresholds, matching the other encyclopedic cards.
   krypton_propellant:     [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 22 }],

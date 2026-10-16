@@ -22,7 +22,7 @@ import { calmBreathe, finitePulse, prefersReducedMotion } from './hudPulse.js';
 import { classify } from './hud/TargetColorLaw.js';
 import { mono } from '../core/Typeface.js';
 import { isMarked } from '../systems/ScanMarks.js';
-import { engineGasKg, engineDeltaV } from '../systems/ResourceSystem.js';
+import { engineGasKg, engineDeltaV, engineTankDryKg } from '../systems/ResourceSystem.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -306,7 +306,7 @@ export class TargetReticle {
     const res = t.resources;
     const fuel = Constants.FUELS[t.currentFuelId] || Constants.FUELS[res.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
     this._cachedPlayerDeltaV = engineDeltaV({
-      dryKg: Constants.OCTOPUS_V5.CORE_DRY_MASS + Constants.ENGINE_TANK_DRY_MASS_KG,
+      dryKg: Constants.OCTOPUS_V5.CORE_DRY_MASS + engineTankDryKg(res),
       coldGasKg: Constants.OCTOPUS_CORE_COLD_GAS * ((res.coldGas || 0) / (res.coldGasMax || Constants.COLD_GAS_MAX)),
       gasKg: engineGasKg(res),
       isp: fuel.isp,

@@ -32,6 +32,84 @@ export function engineGasKg(res) {
 }
 
 /**
+ * g1-gas-upgrades D1: price of `kg` kilograms of engine gas, credits — priced by what it costs to
+ * LAUNCH the mass (every kilo about the same, research §3) plus the gas itself (research §2.4).
+ * Rounded to 10 cr. Used by the upgrade rows, the resupply and the shop's price accessor.
+ * @param {string} gasId - 'argon' | 'krypton' | 'xenon'
+ * @param {number} kg
+ * @returns {number} credits
+ */
+export function gasPriceCr(gasId, kg) {
+  const fuels = Constants.FUELS || {};
+  const fuel = fuels[gasId] || fuels[Constants.DEFAULT_FUEL];
+  const perKg = Constants.LAUNCH_USD_PER_KG + (fuel && Number.isFinite(fuel.usdPerKg) ? fuel.usdPerKg : 0);
+  return Math.round(Math.max(0, kg) * perKg / Constants.USD_PER_CREDIT / 10) * 10;
+}
+
+/** g1-gas-upgrades D2: the mass of engine gas every launch carries, whatever the gas or tank — 12.48 kg
+ *  (today's 60 % of the base argon tank). Derived, never typed. */
+export const START_GAS_KG = Constants.PROPELLANT_START_FRACTION * Constants.FUELS[Constants.DEFAULT_FUEL].kgFull;
+/** g1-gas-upgrades D3: what a gas switch fills the tank with (the same launch mass). */
+export const GAS_SWITCH_FILL_KG = START_GAS_KG;
+
+/** g1-gas-upgrades D3: argon < krypton < xenon — a gas switch only goes up. */
+const GAS_RANK = { argon: 0, krypton: 1, xenon: 2 };
+
+/**
+ * g1-gas-upgrades D2: the engine pool (a percentage of the base 60 L tank, as everywhere) that holds
+ * min(START_GAS_KG, capacity) kg of `tankGasId`. On the base argon tank this is exactly 60.
+ * @param {string} tankGasId
+ * @param {number} xenonMax - pool capacity
+ * @returns {number} pool units
+ */
+export function startEnginePool(tankGasId, xenonMax) {
+  const fuels = Constants.FUELS || {};
+  const def = fuels[Constants.DEFAULT_FUEL];
+  const fuel = fuels[tankGasId] || def;
+  const frac = Constants.PROPELLANT_START_FRACTION;
+  const f = Number.isFinite(frac) ? Math.max(0, Math.min(1, frac)) : 1;
+  const pool = f * 100 * (def.kgFull / fuel.kgFull);   // START_GAS_KG / kgFull × 100, exact for the default gas
+  return Math.min(pool, Number.isFinite(xenonMax) ? xenonMax : Constants.XENON_FUEL_MAX);
+}
+
+/**
+ * g1-gas-upgrades D4: free space in the engine tank, kg of the gas IN the tank.
+ * @param {{xenon?: number, xenonMax?: number, tankGasId?: string}} res
+ * @returns {number} kg
+ */
+export function engineTankFreeKg(res) {
+  const fuels = Constants.FUELS || {};
+  const fuel = fuels[(res && res.tankGasId) || Constants.DEFAULT_FUEL] || fuels[Constants.DEFAULT_FUEL];
+  const max = res && Number.isFinite(res.xenonMax) ? res.xenonMax : Constants.XENON_FUEL_MAX;
+  const pool = res && Number.isFinite(res.xenon) ? res.xenon : 0;
+  return Math.max(0, max - pool) / 100 * fuel.kgFull;
+}
+
+/**
+ * g1-gas-upgrades D6: dry mass of the engine tank itself — it follows the tank's size (the Bigger Engine Tank).
+ * @param {{xenonMax?: number}} res - ResourceSystem or player.resources
+ * @returns {number} kg
+ */
+export function engineTankDryKg(res) {
+  const max = res && Number.isFinite(res.xenonMax) ? res.xenonMax : Constants.XENON_FUEL_MAX;
+  return Constants.ENGINE_TANK_DRY_MASS_KG * max / Constants.XENON_FUEL_MAX;
+}
+
+/**
+ * g1-gas-upgrades D7: "how full is the engine tank", by MASS and the same for every gas — against the
+ * base argon tank scaled by the tank's size. On argon it is exactly xenon / xenonMax; xenon's 12.48 kg
+ * reads 0.6 (12.48 / 20.8), not 9.7 % of its own 129 kg tank. Every low warning / bar / alarm reads this.
+ * @param {{xenon?: number, xenonMax?: number, tankGasId?: string}} res - ResourceSystem or player.resources
+ * @returns {number} 0..1
+ */
+export function engineGasLowFrac(res) {
+  const def = (Constants.FUELS || {})[Constants.DEFAULT_FUEL];
+  const max = res && Number.isFinite(res.xenonMax) ? res.xenonMax : Constants.XENON_FUEL_MAX;
+  const ref = def.kgFull * max / Constants.XENON_FUEL_MAX;
+  return ref > 0 ? Math.max(0, Math.min(1, engineGasKg(res) / ref)) : 0;
+}
+
+/**
  * h3-argon-engine D4: the ONE Tsiolkovsky formula for the Hall engine. Cold gas is CARRIED, not
  * burned by this engine, so it sits in both the loaded and the empty mass.
  *   ΔV = (Isp / c) · g0 · ln((dry + coldGas + gas) / (dry + coldGas))
@@ -54,7 +132,7 @@ export class ResourceSystem {
     // ── Resource pools (canonical — synced to player.resources) ──────────
     // h3-argon-engine D2: `xenon` / `xenonMax` are POOL names kept for compatibility — the pool holds
     // whichever gas is in the tank (`tankGasId`), as a fill percentage (100 = one full 60 L base tank).
-    this.xenon = ResourceSystem.startPropellant(Constants.XENON_FUEL_MAX);     // h1-mother-pane D5: 60 %
+    this.xenon = 0;   // filled below, once xenonMax and tankGasId exist (g1-gas-upgrades D2)
     this.coldGas = ResourceSystem.startPropellant(Constants.COLD_GAS_MAX);
     // w4-power D1: every boot starts at BATTERY_START_FRACTION (half) of the max.
     this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);
@@ -109,6 +187,8 @@ export class ResourceSystem {
     this.tankGasId = Constants.DEFAULT_FUEL || 'argon';
     this._currentFuelId = this.tankGasId;
     this._availableFuels = [this.tankGasId]; // always have the tank gas; others added dynamically
+    // g1-gas-upgrades D2: every launch carries START_GAS_KG of the tank gas (h1-mother-pane D5: 60 % of argon)
+    this.xenon = startEnginePool(this.tankGasId, this.xenonMax);
     this._cargoSystem = null;
     /** h3b-argon-push D5: true once FUEL_CHANGED { initial: true } has named the loaded fuel to the readers. */
     this._fuelAnnounced = false;
@@ -719,7 +799,7 @@ export class ResourceSystem {
     if (data.rtgRate !== undefined) this._rtgRate = data.rtgRate;
     if (data.powerBeamRate !== undefined) this._powerBeamRate = data.powerBeamRate;
     // Refill to max for the new mission (the battery: half — w4-power D1)
-    this.xenon = ResourceSystem.startPropellant(this.xenonMax);
+    this.xenon = startEnginePool(this.tankGasId, this.xenonMax);   // g1-gas-upgrades D2: the same kg, any gas
     this.coldGas = ResourceSystem.startPropellant(this.coldGasMax);
     this.battery = ResourceSystem.startCharge(this.batteryMax);
     this.solarPanelHealth = 1.0;
@@ -824,6 +904,59 @@ export class ResourceSystem {
   }
 
   // ======================================================================
+  // ENGINE GAS (g1-gas-upgrades)
+  // ======================================================================
+
+  /**
+   * g1-gas-upgrades D3: change the gas IN the tank to a better one (argon < krypton < xenon). What is left is
+   * vented (gone); the tank is filled with `kg` of the new gas (clamped to capacity). Refused for a gas ranked
+   * at or below the tank's, so a replay in any order never downgrades.
+   * @param {string} gasId
+   * @param {number} kg
+   * @returns {boolean} true if the switch happened
+   */
+  switchEngineGas(gasId, kg) {
+    const fuel = Constants.FUELS[gasId];
+    if (!fuel || fuel.fromCargo || !(gasId in GAS_RANK)) return false;
+    if (GAS_RANK[gasId] <= (GAS_RANK[this.tankGasId] ?? -1)) return false;
+    const wasActive = this._currentFuelId === this.tankGasId;   // a cargo fuel stays active
+    this.tankGasId = gasId;
+    if (wasActive) this._currentFuelId = gasId;
+    this._availableFuels = [this.tankGasId];
+    this.xenon = Math.min(Math.max(0, kg) / fuel.kgFull * 100, this.xenonMax);
+    this._depletionEmitted = false;
+    this._syncToPlayer();
+    const active = this.getCurrentFuel();
+    eventBus.emit(Events.FUEL_CHANGED, {
+      fuelId: active.id,
+      name: active.name,
+      isp: active.isp,
+      color: active.color,
+      thrustScale: active.thrustScale,
+    });
+    eventBus.emit(Events.RESOURCE_UPGRADED, { effect: 'engineGasSwitch', value: gasId });
+    return true;
+  }
+
+  /**
+   * g1-gas-upgrades D4: load up to `kg` of the gas in the tank, limited by free tank space.
+   * Also the path salvaged gas takes (D8).
+   * @param {number} kg
+   * @returns {number} kg actually loaded (0 when the tank is full: free < 0.1 kg)
+   */
+  resupplyEngineGas(kg) {
+    const free = engineTankFreeKg(this);
+    if (free < 0.1 || !(kg > 0)) return 0;
+    const add = Math.min(kg, free);
+    const fuel = Constants.FUELS[this.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
+    this.xenon = Math.min(this.xenonMax, this.xenon + add / fuel.kgFull * 100);
+    this._depletionEmitted = false;
+    this._syncToPlayer();
+    eventBus.emit(Events.RESOURCE_UPGRADED, { effect: 'engineGasResupply', value: add });
+    return add;
+  }
+
+  // ======================================================================
   // UPGRADES
   // ======================================================================
 
@@ -837,9 +970,15 @@ export class ResourceSystem {
       case 'xenonMax':
         // BUG FIX: was `= Constants.XENON_FUEL_MAX + data.value` (non-cumulative).
         // Now cumulative: buying twice gives base+50+50, not base+50 both times.
+        // g1-gas-upgrades D6: a bigger tank is SPACE, not gas — it raises the max only (fill it with a resupply)
         this.xenonMax += data.value;
-        this.xenon = Math.min(this.xenon + data.value, this.xenonMax);
         break;
+      case 'engineGasSwitch':
+        if (!this.switchEngineGas(data.value, GAS_SWITCH_FILL_KG)) return false;
+        return true;   // switchEngineGas synced, emitted FUEL_CHANGED and RESOURCE_UPGRADED itself
+      case 'engineGasResupply':
+        if (this.resupplyEngineGas(data.value) <= 0) return false;
+        return true;
       case 'coldGasMax':
         this.coldGasMax += data.value;
         this.coldGas = Math.min(this.coldGas + data.value, this.coldGasMax);
@@ -895,7 +1034,6 @@ export class ResourceSystem {
    * Reset all resources to starting values (new game / retry).
    */
   reset() {
-    this.xenon = ResourceSystem.startPropellant(Constants.XENON_FUEL_MAX);
     this.coldGas = ResourceSystem.startPropellant(Constants.COLD_GAS_MAX);
     this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);   // w4-power D1: half
     this.solarPanelHealth = 1.0;
@@ -910,6 +1048,7 @@ export class ResourceSystem {
     this.tankGasId = Constants.DEFAULT_FUEL || 'argon';
     this._currentFuelId = this.tankGasId;
     this._availableFuels = [this.tankGasId];
+    this.xenon = startEnginePool(this.tankGasId, this.xenonMax);   // g1-gas-upgrades D2: after xenonMax and tankGasId
     // S3b: Reset power infrastructure
     this._hasSupercap = false;
     this._rtgRate = 0;
