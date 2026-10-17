@@ -3870,11 +3870,15 @@ export const Constants = {
     // z that clears every ship part by CLEARANCE_M (ShipKeepOut, measured once
     // per catch at reel entry; tmp/probes collar/RESULTS.md: 1.390 … 1.828 for
     // r 0.10 … 0.50). On the 2.30 m radiators the home is the same at every
-    // radiator angle for r <= 1.4 (measured 2026-10-17, 8 angles 2-180°: r 1.0
-    // z 2.340 everywhere; the 2.466-at-3° figure was the 2.5 m arms). A bigger
-    // bag's home moves with the angle (r 2-3: 16-41 mm; r 4.0: 5.349 at 146°,
-    // 5.402 at 3°, set by the radiator tip cone) — so the single query at reel
-    // entry is the home for THAT angle only. Big catches (a later boss level,
+    // radiator angle for r <= 1.4 (measured 2026-10-17 at EVERY whole degree
+    // 0-180°: spread 0.00 mm on the rows 0.15 … 1.4; the 2.466-at-3° figure was
+    // the 2.5 m arms). A bigger bag's home moves with the angle (r 2-3: 16-41 mm;
+    // r 4.0: 5.349 at 146°, 5.402 at 3°, set by the radiator tip cone), so a
+    // single query at reel entry is the home for THAT angle only — a catch
+    // parked there fouls the cone when the radiators close later (r 4.0 at 146°,
+    // then 3°: -32.4 mm). big-catch-every-angle (2026-10-17): ALL_ANGLE_HOME
+    // (below) lifts the home of every catch above angleFreeMaxR so it clears at
+    // EVERY angle; catchHomeDistM reads it. Big catches (a later boss level,
     // owner 2026-10-15) are OPEN: this block makes today's biggest piece (the
     // act-3 rocket body, sizeM 8 -> r 4.0) correct and designs no boss.
     // big-catch-home (2026-10-17): the sweep used to start at SEARCH_TOP_Z_M
@@ -3896,6 +3900,22 @@ export const Constants = {
       BISECT_M:         0.001,  // bisection stops at 1 mm
       MAX_ABOVE_TOUCH_M: 2.0,   // a clearZ more than this above ring-touch is a bad query: fall back to ring-touch
       APEX_AT_RING_M:   0.02,   // the bag's mouth (the tether end) sits this far fore of the collar plane at home = the ring's fore face
+      // big-catch-every-angle (2026-10-17): the home that clears the bare ship at EVERY radiator angle. MEASURED on the
+      // real meshes (tmp/probes/followups-1017/allangle/allangle.mjs): catchHomeZ(keep-out, r) at every whole degree
+      // 0-180°, no tip bags, no held catches, arms as built. liftM[i] = max over the angles of (home z) minus the
+      // ring-touch z (RING_TOUCH_Z_M + r), rounded UP to 0.1 mm; it includes the hull part (r 0.5: 0.0075 m) and, above
+      // angleFreeMaxR, the radiator tip cone at 3° (r 4.0: 5.402 vs 5.320 = 0.082). Each row's home spread over the
+      // angles: 0.00 mm for 0.15 … 1.4, then 16.4 (r 2.0), 31.3, 40.6, 47.7, 53.1 (r 4.0), 57.0, 60.2 mm (r 5.0) —
+      // the worst angle is 3° on every row above 1.4. angleFreeMaxR = the largest row whose spread AND every smaller
+      // row's is < BISECT_M: at or below it the home does not move with the angle, so catchHomeDistM adds NO term (the
+      // current-pose home, byte-identical to before). Above it: home z = max(current-pose home, RING_TOUCH_Z_M + r +
+      // lift(r)), lift linear between the two rows that bracket r (the test checks every row and the midpoints on the
+      // meshes: test-BigCatchHome p1). Above the last row there is no measurement: the home is flagged `unchecked`.
+      ALL_ANGLE_HOME: {
+        radiiM: [0.15, 0.30, 0.50, 0.75, 1.0, 1.4, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0],
+        liftM:  [0, 0, 0.0075, 0.0160, 0.0197, 0.0235, 0.0422, 0.0586, 0.0688, 0.0766, 0.0821, 0.0868, 0.0899],
+        angleFreeMaxR: 1.4,
+      },
       // Speed profile for the CATCH centre (the nominal speed is the net class reel speed): full speed, then a
       // constant-deceleration (DECEL_MPS2, an estimate) slow-down that reaches SLOW_MPS at SLOW_ZONE_M from home and
       // holds it to arrival.

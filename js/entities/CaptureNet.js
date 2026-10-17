@@ -383,11 +383,17 @@ export function catchHomeZ(keepOut, r) {
  * Home distance (metres) of a catch's CENTRE from the berth anchor (the collar plane) along the collar axis.
  * Cached on the debris per radius (`_homeCache`): the ship does not change shape between the reel entry and the
  * lasso's delivery. On the 2.30 m radiators the answer is the same at every radiator angle for r <= 1.4 m (measured
- * 2026-10-17, 8 angles);
- * a bigger catch's home moves with the angle (r 4.0: 5.349 at 146°, 5.402 at 3°), so the cache is the home for the
- * angle at reel entry — a later move is caught by the reel's corridor gate (`_corridorClear`, the keep-out read),
- * not by a refresh. A home that could not be checked (`source: 'unchecked'`, see `catchHomeZ`) is logged once per
- * catch with console.warn.
+ * 2026-10-17 at every whole degree 0-180°: `REEL_HOME.ALL_ANGLE_HOME.angleFreeMaxR`), so there it is the current-pose
+ * home (`catchHomeZ`) exactly as before. A bigger catch's current-pose home moves with the angle (r 4.0: 5.349 at
+ * 146°, 5.402 at 3°) and a catch parked at the 146° one fouls the tip cone when the radiators then close (-32.4 mm
+ * at 3°), so above `angleFreeMaxR` the home is the HIGHER of the current-pose home and the measured every-angle one:
+ * `RING_TOUCH_Z_M + r + lift(r)`, lift linear between the two bracketing `ALL_ANGLE_HOME` rows. The table term applies
+ * only when there is a keep-out and the current-pose home was checked (a mock armManager keeps ring-touch, no
+ * warning); `_homeCache.allAngleLiftM` is the lift used (null when no term). A radius above the last row has no
+ * measurement: the current-pose home is kept, marked `unchecked` (`blocker: 'radius above ALL_ANGLE_HOME'`, `top:
+ * null`) and warned once. The reel's corridor gate (`_corridorClear`, the keep-out read) still catches radiators
+ * moved onto a home with tip bags or held catches the bare-ship table does not know. A home that could not be
+ * checked (`source: 'unchecked'`, see `catchHomeZ`) is logged once per catch with console.warn.
  * @param {object} player — PlayerSatellite (collar anchor z)
  * @param {object|null} armManager — for `getKeepOut()`
  * @param {object} d — the catch (sizeMeter)
@@ -405,11 +411,30 @@ export function catchHomeDistM(player, armManager, d) {
   let ko = null;
   try { ko = armManager && typeof armManager.getKeepOut === 'function' ? armManager.getKeepOut() : null; } catch (_e) { ko = null; }
   const home = catchHomeZ(ko, r);
-  const distM = Math.max(CN.REEL_HOME.APEX_AT_RING_M + r, home.z - anchorZ);
-  if (home.unchecked) {
-    console.warn(`[CaptureNet] reel home UNCHECKED for r ${r} m: the keep-out sphere at the top of the search window (z ${home.top.toFixed(2)} m) is blocked by "${home.blocker}"; using the ring-touch z ${home.z.toFixed(3)} m`);
+  // big-catch-every-angle: above angleFreeMaxR the home must also clear every OTHER radiator angle (ALL_ANGLE_HOME).
+  const T = CN.REEL_HOME.ALL_ANGLE_HOME;
+  let z = home.z, allAngleLiftM = null, unchecked = !!home.unchecked, blocker = home.blocker, top = home.top;
+  if (ko && typeof ko.sphere === 'function' && !home.unchecked && T && r > T.angleFreeMaxR + 1e-9) {
+    const R = T.radiiM, L = T.liftM, n = R.length;
+    if (r > R[n - 1] + 1e-9) {
+      unchecked = true; blocker = 'radius above ALL_ANGLE_HOME'; top = null;      // no measurement: keep the current-pose home, say so
+    } else {
+      let i = 0;
+      while (i + 1 < n - 1 && r > R[i + 1]) i++;                                  // R[i] < r <= R[i + 1] (i + 1 <= n - 1)
+      const t = Math.min(1, Math.max(0, (r - R[i]) / (R[i + 1] - R[i])));
+      allAngleLiftM = L[i] + t * (L[i + 1] - L[i]);
+      z = Math.max(home.z, home.touchZ + allAngleLiftM);
+    }
   }
-  if (d) d._homeCache = { r, anchorZ, distM, z: home.z, clearZ: home.clearZ, queryMs: home.queryMs, queries: home.queries, source: home.unchecked ? 'unchecked' : (ko ? 'keepout' : 'ring-touch') };
+  const distM = Math.max(CN.REEL_HOME.APEX_AT_RING_M + r, z - anchorZ);
+  if (unchecked) {
+    if (top != null) {
+      console.warn(`[CaptureNet] reel home UNCHECKED for r ${r} m: the keep-out sphere at the top of the search window (z ${top.toFixed(2)} m) is blocked by "${blocker}"; using the ring-touch z ${z.toFixed(3)} m`);
+    } else {
+      console.warn(`[CaptureNet] reel home UNCHECKED for r ${r} m: ${blocker} (measured up to r ${T ? T.radiiM[T.radiiM.length - 1] : '?'} m); using the current-pose home z ${z.toFixed(3)} m, which may foul the radiators at other angles`);
+    }
+  }
+  if (d) d._homeCache = { r, anchorZ, distM, z, clearZ: home.clearZ, queryMs: home.queryMs, queries: home.queries, allAngleLiftM, source: unchecked ? 'unchecked' : (ko ? 'keepout' : 'ring-touch'), blocker: unchecked ? blocker : undefined, top: unchecked ? top : undefined };
   return distM;
 }
 
