@@ -29,6 +29,9 @@
  * the codex unlocks on it). A player command always wins: one seen in the
  * last PLAYER_WINS_S blocks the auto-open, and the auto never folds a radiator
  * at all: it opens to the OPEN pose (146°) and leaves it there.
+ * During a catch hand-off hold it does not call setFlowerPose at all (the
+ * hold refuses every pose and the ship would speak the player's refusal line);
+ * it opens after the hold ends.
  *
  * @module systems/ThermalSystem
  */
@@ -345,6 +348,8 @@ export class ThermalSystem {
     if (!p || typeof p.setFlowerPose !== 'function') return;
     const ls = p._launchSequence;
     if (ls && typeof ls.isActive === 'function' && ls.isActive()) return;   // the launch owns the ship
+    // A catch hand-off hold refuses every pose and would make setFlowerPose speak the player's refusal line; wait it out (opens after the hold ends).
+    if (p.flowerHandoffHeld === true) return;
 
     if (this._autoOpened) return;   // it opened once and stays open
 

@@ -4066,6 +4066,7 @@ export class PlayerSatellite extends THREE.Group {
       text: `WARNING: radiator swept to ${th}° — past the ${FL.POSE_THRUST_MAX_DEG}° thrust band.${why} `
         + `Drive inhibited until the radiator returns. It swings back to ${FL.OPEN_DEG}° by itself after ${FL.RETURN_TO_OPEN_S} s, or at once when the ion engine fires — unless a held catch is in the way.`,
       priority: 'warning',
+      _reactive: true,
     });
     eventBus.emit(Events.THERMAL_FLOWER_VENTED, { thetaDeg: th });
   }
@@ -4085,6 +4086,7 @@ export class PlayerSatellite extends THREE.Group {
       text: `Radiator folded to ${FL.POSE_LAUNCH_DEG}° — the launch fold. `
         + `Folded panels radiate almost nothing: heat will build. Tap RADIATORS / O to open it to ${FL.OPEN_DEG}°.`,
       priority: 'warning',
+      _reactive: true,
     });
   }
 
@@ -4198,6 +4200,7 @@ export class PlayerSatellite extends THREE.Group {
           sender: 'THERMAL',
           text: 'Radiators cannot fold flat with a catch on a radiator tip.',
           priority: 'info',
+          _reactive: true,
         });
         return null;
       }
@@ -4302,6 +4305,7 @@ export class PlayerSatellite extends THREE.Group {
         sender: 'THERMAL',
         text: 'Radiators held for the catch hand-off.',
         priority: 'info',
+        _reactive: true,
       });
     }
     return null;

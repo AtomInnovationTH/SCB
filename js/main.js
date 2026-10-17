@@ -2220,6 +2220,7 @@ async function init() {
             sender: 'THERMAL',
             text: deploying ? 'Radiator opening.' : 'Radiator folding.',
             priority: 'info',
+            _reactive: true,
           });
         },
       },
@@ -2248,6 +2249,7 @@ async function init() {
             sender: 'THERMAL',
             text: deploying ? 'Radiator opening.' : 'Radiator folding.',
             priority: 'info',
+            _reactive: true,
           });
         },
       },
@@ -2293,6 +2295,7 @@ async function init() {
               ? 'OVERRIDE — aft radiator deploying: struts swing out to 146°, wings open between 60° and 90°.'
               : 'OVERRIDE — aft radiator folding: struts swing fore to the closed rest (0°), wings fold between 90° and 60°. Engines keep working.',
             priority: 'info',
+            _reactive: true,
           });
         },
       },

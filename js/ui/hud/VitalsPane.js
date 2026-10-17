@@ -1092,12 +1092,15 @@ export class VitalsPane {
       @keyframes vp-flash-b { from { opacity: 1; } to { opacity: 0; } }
       #${VITALS_ID} .vp-tag {
         position: absolute; left: 3px; top: 0; bottom: 0;
-        font-size: 8px;
+        font-size: 9px;
         letter-spacing: 0.04em;
         font-weight: 700;
         line-height: ${G.TRACK_PX}px;
         color: ${LABEL};
-        text-shadow: ${HALO};
+        background: var(--hud-ink, #000);
+        padding: 0 3px;
+        border-radius: 2px;
+        text-shadow: none;
       }
       #${VITALS_ID} .vp-rate[data-dir="up"]   { color: ${NORMAL}; }
       #${VITALS_ID} .vp-rate[data-dir="down"] { color: ${CAUTION}; }

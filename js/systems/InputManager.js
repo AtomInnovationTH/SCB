@@ -838,6 +838,7 @@ export class InputManager {
                   ? 'OVERRIDE — aft radiator deploying: swinging out the whole way to 146°, side panels opening between 60° and 90°.'
                   : 'OVERRIDE — aft radiator folding: swinging all the way in to the closed rest (0°), side panels folding between 90° and 60°. Engines keep working.',
                 priority: 'info',
+                _reactive: true,
               });
             }
           } else {
@@ -860,6 +861,7 @@ export class InputManager {
                   ? 'Radiator opening to 146° — the struts open LIKE A FLOWER.'
                   : 'Radiator closing — folding flat along the hull. Engines still work.',
                 priority: 'info',
+                _reactive: true,
               });
             }
           }
