@@ -4,7 +4,7 @@
  * command-deck, prox-tactical, navcom-drone, downlink-static).
  *
  * One module owns all seven beds. Each bed is a procedural WebAudio loop in
- * the house style (AudioSystem.js startAmbientLoop / startForgeHum idiom):
+ * the house style (AudioSystem.js startAmbientLoop / startThrusterHum idiom):
  * looped-noise-buffer + biquad-filter layers and low oscillator drones, each
  * layer shaped by an optional slow LFO, all at VERY low gain — beds sit UNDER
  * gameplay sfx, mood not melody. Bed character is entirely data-driven

@@ -20,7 +20,7 @@ import { Constants } from '../core/Constants.js';
 // ============================================================================
 
 /**
- * All 30 teaching moments (TEACHING_MOMENTS.length is the SSOT; test-shop-cadence
+ * All 29 teaching moments (TEACHING_MOMENTS.length is the SSOT; test-shop-cadence
  * pins this header to it). Each defines:
  *   id       — unique key, also used in persistence
  *   title    — overlay heading (SHORT, caps)
@@ -134,13 +134,6 @@ export const TEACHING_MOMENTS = [
     body: 'You\'re crossing the Van Allen belt. A band of trapped radiation around Earth. Expect sensor static and laggy comms; don\'t linger.',
     duration: 8000,
     icon: 'RAD',
-  },
-  {
-    id: 'first_strategic_map',
-    title: 'Strategic Overview',
-    body: 'The strategic map shows your full orbital environment. Drag to rotate, scroll to zoom. Plan your next approach.',
-    duration: 8000,
-    icon: 'MAP',
   },
   // UX-3 N1: Scan & arm deploy teaching moments
   {
@@ -416,11 +409,6 @@ export class TeachingSystem {
       });
     }
 
-    // 15. first_strategic_map — STRATEGIC_MAP_OPENED (ST-6.4)
-    if (Events.STRATEGIC_MAP_OPENED) {
-      on(Events.STRATEGIC_MAP_OPENED, () => this._trigger('first_strategic_map'));
-    }
-
     // 16. first_scan — SCAN_INITIATED (UX-3 N1)
     on(Events.SCAN_INITIATED, () => this._trigger('first_scan'));
 
@@ -573,14 +561,6 @@ export class TeachingSystem {
    */
   markSeen(momentId) {
     this._seen.add(momentId);
-    this._saveSeen();
-  }
-
-  /**
-   * Clear all seen flags — dev/debug tool.
-   */
-  resetAll() {
-    this._seen.clear();
     this._saveSeen();
   }
 

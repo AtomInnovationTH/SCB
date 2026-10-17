@@ -78,10 +78,9 @@ export const CODEX_TRIGGERS = {
                            { event: E.PLAYER_TELEMETRY, match: (p) => p.resources?.tankGasId === 'krypton' }],
   argon_propellant:       [{ event: E.PLAYER_TELEMETRY, match: (p) => p.resources?.tankGasId === 'argon' && p.engineGasPct < 0.7 }],
   cold_gas_thruster:      [{ event: E.PLAYER_TELEMETRY, match: (p) => p.coldGasPct < 0.8 }],
-  // F6: MPD_BURST_START's only emitter is the uncallable toggleMPDArmed (MPD
-  // burst input isn't wired until the Wave-4 MPD-activation work). Added an
-  // UPGRADE_APPLIED fallback so the entry unlocks when the MPD thruster is
-  // installed; the burst trigger stays for when it goes live.
+  // F6: MPD_BURST_START has no emitter (its arming verb was deleted, t6 2026-10-17; MPD
+  // burst input isn't wired). The UPGRADE_APPLIED fallback unlocks the entry when the
+  // MPD thruster is installed; the burst trigger stays for if burst mode ever returns.
   mpd_burst:              [{ event: E.MPD_BURST_START, match: always },
                            { event: E.UPGRADE_APPLIED, match: (p) => !!p.id && p.id.includes('mpd') }],
   spring_energy:          [{ event: E.CROSSBOW_FIRE, match: always }],

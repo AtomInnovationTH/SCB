@@ -1998,7 +1998,7 @@ export class CameraSystem {
           const localDir = arm.launchDirection.clone().applyQuaternion(invQuat).normalize();
           // Strut-alpha in the PlayerSatellite MODEL frame.
           // Model convention: barrel axis = Z, collar radial plane = XY.
-          // _dockOutward stores (cos θ, 0, sin θ) in AimDecomposition's XZ convention,
+          // _dockOutward stores (cos θ, 0, sin θ) in the XZ collar convention,
           // so _dockOutward.z = sin(θ) maps to the model's Y-radial component.
           // sin(α) = target · model_outward = target.x·cos(θ) + target.y·sin(θ)
           const sinA = localDir.x * arm._dockOutward.x + localDir.y * arm._dockOutward.z;

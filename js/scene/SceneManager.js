@@ -1309,17 +1309,6 @@ export class SceneManager {
   }
 
   /**
-   * Drop a previously-registered near-field light (e.g. a transient launch pyro
-   * flash being disposed) so the near pass stops transforming it. No-op if the
-   * light was never registered.
-   * @param {THREE.Light} light
-   */
-  unregisterNearFieldLight(light) {
-    const i = this._nearFieldLights.indexOf(light);
-    if (i !== -1) this._nearFieldLights.splice(i, 1);
-  }
-
-  /**
    * Re-tag a near-field root's subtree onto NEAR_FIELD_LAYER. Call if a root
    * gains children AFTER registration (dynamically added meshes default to
    * layer 0 and would otherwise leak into the far pass). Cheap; safe to skip.

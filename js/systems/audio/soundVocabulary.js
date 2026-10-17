@@ -46,9 +46,7 @@ export const soundVocabulary = {
   playNetEnvelopSting: { family: 'PHYSICAL', meaning: 'net envelop sweep',  trigger: 'NET_ENVELOP_PEAK (mother full / daughter scaled)' },
   playNetCinchTick:    { family: 'PHYSICAL', meaning: 'net cinch ratchet progress', trigger: 'NET_CINCH_PROGRESS (mother full / daughter scaled)' },
   playNetStrainRip:    { family: 'PHYSICAL', meaning: 'mother net strain slip let-go', trigger: "NET_CATCH_MISS reason 'strain_slip' (mother only — ARM_CAPTURE_FAILED owns the daughter miss voice)" },
-  playMPDArm:          { family: 'PHYSICAL', meaning: 'MPD burst armed',           trigger: 'MPD_BURST_START' },
   playMPDDisarm:       { family: 'PHYSICAL', meaning: 'MPD burst disarmed',        trigger: 'MPD burst end' },
-  startForgeHum:       { family: 'PHYSICAL', meaning: 'forge hum',                 trigger: 'forge active' },
   startThrusterHum:    { family: 'PHYSICAL', meaning: 'thruster hum',              trigger: 'thrust active' },
   startRcsHiss:        { family: 'PHYSICAL', meaning: 'RCS attitude hiss',         trigger: 'manual RCS couple firing' },
   playRcsPuff:         { family: 'PHYSICAL', meaning: 'RCS ignition puff',         trigger: 'fresh RCS couple ignition' },
@@ -87,7 +85,6 @@ export const soundVocabulary = {
   playFailBuzz:        { family: 'ALARM', meaning: 'catch failed (arm lost)',      trigger: 'ARM_CAPTURE_FAILED' },
   playWeatherAlert:    { family: 'ALARM', meaning: 'space weather alert',          trigger: 'weather alert' },
   playConjunctionAlert:{ family: 'ALARM', meaning: 'conjunction proximity alert',  trigger: 'conjunction tier' },
-  playMPDOverheat:     { family: 'ALARM', meaning: 'MPD overheat',                 trigger: 'MPD overheat' },
   playKlaxon:         { family: 'ALARM', meaning: "FURNACE gag — two-tone sawtooth klaxon (SAFETY OVERRIDE panel's broken button; 440/620 Hz at 2 Hz, ~2 s)", trigger: "SAFETY OVERRIDE panel FURNACE press (broken self-destruct gag)" },
 
   // ---- REWARD — you gained something ----
@@ -95,7 +92,6 @@ export const soundVocabulary = {
   playNetBerthChime:   { family: 'REWARD', meaning: 'mother whale secured at the berth', trigger: 'NET_BERTHED' },
   playScoreTally:      { family: 'REWARD', meaning: 'score tick (reserved HUD count-up)', trigger: 'reserved (unsubscribed)' },
   playVictory:         { family: 'REWARD', meaning: 'run victory',                 trigger: 'victory' },
-  playForgeComplete:   { family: 'REWARD', meaning: 'forge complete',              trigger: 'forge done' },
   playTrawlCapture:    { family: 'REWARD', meaning: 'trawl catch',                 trigger: 'trawl capture' },
   playSalvageReveal:   { family: 'REWARD', meaning: 'salvage revealed',            trigger: 'salvage reveal' },
   playCodexUnlock:     { family: 'REWARD', meaning: 'codex entry unlocked',        trigger: 'codex unlock' },

@@ -253,10 +253,6 @@ export class StatusPanel {
     });
 
     // S3b: MPD burst mode indicators
-    eventBus.on(Events.MPD_BURST_START, () => {
-      this._mpdArmed = true;
-      this._updateMPDBurstDisplay();
-    });
     eventBus.on(Events.MPD_BURST_END, () => {
       this._mpdArmed = false;
       this._updateMPDBurstDisplay();
@@ -453,16 +449,6 @@ export class StatusPanel {
           <div style="display:flex;align-items:center;gap:4px;">
             <span style="color:var(--hud-dim, #666);">[F] Forge:</span>
             <span id="forge-inline-status" style="color:var(--hud-dim, #666);">Idle</span>
-          </div>
-          <div id="forge-progress-inline" style="display:none;margin-top:2px;">
-            <div style="position:relative;width:100%;height:10px;background:rgb(var(--hud-ink-rgb, 0 0 0) / 0.5);
-                 border:1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.3);border-radius:2px;overflow:hidden;">
-              <div id="forge-inline-bar" style="height:100%;width:0%;transition:width 0.3s ease;"></div>
-            </div>
-            <div style="display:flex;justify-content:space-between;margin-top:1px;">
-              <span id="forge-inline-batch" style="font-size:10px;color:var(--hud-dim, #888);"></span>
-              <span id="forge-inline-pct" style="font-size:10px;color:var(--hud-dim, #888);"></span>
-            </div>
           </div>
           <div id="forge-hint" style="display:none;font-size:10px;color:var(--hud-caution, #ffaa00);margin-top:1px;"></div>
         </div>
@@ -796,9 +782,7 @@ export class StatusPanel {
     this._updateDeltaVBar(data.cachedTargets);
     this._updatePowerBars();
     this._renderThermalGroup();
-    if (data.forgeState) {
-      this._updateForgePanel(data.forgeState);
-    }
+    this._updateForgePanel();
     if (data.cargoStatus) {
       this._cargoStatus = data.cargoStatus;
     }
@@ -2445,94 +2429,32 @@ export class StatusPanel {
       + `</div>`;
   }
 
-  /** @private Update forge panel from ForgeSystem state (Sprint A2: enhanced) */
-  _updateForgePanel(forgeState) {
-    if (!forgeState) return;
-
-    // Auto-reveal forge section if forge has been used or is active (handles save-restore)
-    if (!this._forgeRevealed && (forgeState.isActive || forgeState.totalBatches > 0)) {
-      this._forgeRevealed = true;
-      const forgeInline = document.getElementById('forge-inline');
-      if (forgeInline) forgeInline.style.display = '';
-    }
-
+  /**
+   * @private The "[F] Forge" line. The furnace itself is gone (the F key runs the
+   * FURNACE gag), so the line only ever reads Idle; the cargo hint stays.
+   */
+  _updateForgePanel() {
     const inlineEl = document.getElementById('forge-inline-status');
-    const progressContainer = document.getElementById('forge-progress-inline');
-    const progressBar = document.getElementById('forge-inline-bar');
-    const batchLabel = document.getElementById('forge-inline-batch');
-    const pctLabel = document.getElementById('forge-inline-pct');
     const hintEl = document.getElementById('forge-hint');
 
-    const phaseColors = {
-      INTAKE: 'var(--hud-info, #4fc3f7)',
-      SEPARATE: 'var(--hud-target, #ce93d8)',
-      MELT: 'var(--hud-caution, #ff9800)',
-      COOL: 'var(--hud-normal, #81c784)',
-    };
-
-    if (!forgeState.isActive) {
-      // --- Idle state ---
-      if (inlineEl) {
-        if (forgeState.totalBatches > 0) {
-          inlineEl.textContent = `Idle · ${forgeState.totalProcessedKg}kg processed`;
-        } else {
-          inlineEl.textContent = 'Idle';
-        }
-        inlineEl.style.color = 'var(--hud-dim, #666)';
-      }
-      if (progressContainer) progressContainer.style.display = 'none';
-
-      // Sprint A2: Show forge hotkey hint when idle with cargo available.
-      // Hotkey revamp 2026-06-14: the live Forge/Kiln binding is F (was 5/F4).
-      // Keep this hint in sync with InputManager 'KeyF'.
-      if (hintEl) {
-        const hasCargo = this._cargoStatus && this._cargoStatus.totalMassKg > 0;
-        if (hasCargo) {
-          hintEl.style.display = '';
-          hintEl.textContent = '▸ Press [F] to process cargo';
-          hintEl.style.color = 'var(--hud-caution, #ffaa00)';
-        } else {
-          hintEl.style.display = 'none';
-        }
-      }
-      return;
-    }
-
-    // --- Active state: show progress bar ---
-    const phase = forgeState.phase;
-    const progressPct = (forgeState.phaseProgress * 100).toFixed(0);
-    const color = phaseColors[phase] || 'var(--hud-caution, #ff9800)';
-
     if (inlineEl) {
-      inlineEl.textContent = phase;
-      inlineEl.style.color = color;
+      inlineEl.textContent = 'Idle';
+      inlineEl.style.color = 'var(--hud-dim, #666)';
     }
 
-    if (progressContainer) progressContainer.style.display = '';
-
-    if (progressBar) {
-      progressBar.style.width = `${progressPct}%`;
-      progressBar.style.backgroundColor = color;
-    }
-
-    if (batchLabel) {
-      if (forgeState.currentBatch) {
-        const b = forgeState.currentBatch;
-        batchLabel.textContent = `${b.massKg.toFixed(1)}kg ${b.name} → ${b.outputMode}`;
-        batchLabel.style.color = b.color || color;
+    // Sprint A2: Show forge hotkey hint when idle with cargo available.
+    // Hotkey revamp 2026-06-14: the live Forge/Kiln binding is F (was 5/F4).
+    // Keep this hint in sync with InputManager 'KeyF'.
+    if (hintEl) {
+      const hasCargo = this._cargoStatus && this._cargoStatus.totalMassKg > 0;
+      if (hasCargo) {
+        hintEl.style.display = '';
+        hintEl.textContent = '▸ Press [F] to process cargo';
+        hintEl.style.color = 'var(--hud-caution, #ffaa00)';
       } else {
-        batchLabel.textContent = '';
+        hintEl.style.display = 'none';
       }
     }
-
-    if (pctLabel) {
-      const remaining = Math.max(0, forgeState.phaseDuration - forgeState.phaseTimer);
-      pctLabel.textContent = `${progressPct}% · ${remaining.toFixed(0)}s`;
-      pctLabel.style.color = color;
-    }
-
-    // Hide hint while active
-    if (hintEl) hintEl.style.display = 'none';
   }
 
   // ==========================================================================

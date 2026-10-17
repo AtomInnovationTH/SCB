@@ -2205,7 +2205,6 @@ export class HUD {
         debrisCleared: this._debrisCleared,
         resources: this._resources,
         cachedTargets: this._cachedTargets,
-        forgeState: data.forgeState,
         cargoStatus: data.cargoStatus,
         totalMassKg: this._totalMassKg || 0,
         thrusterInterlocked: player.thrusterInterlocked || false,

@@ -4,11 +4,11 @@
  * Replaces the three shipped wheel listeners (T3 — docs/ladder/02-traps.md):
  *   - InputManager window-capture listener  (js/systems/InputManager.js:296)
  *   - CameraSystem canvas listener          (js/systems/CameraSystem.js:3414)
- *   - StrategicMap own-canvas listener       (js/ui/StrategicMap.js:374)
- * All three are removed in the SAME commit this module lands; their handler
+ *   - the strategic map's own-canvas listener (that map has since been deleted)
+ * All three were removed in the SAME commit this module landed; the handler
  * BODIES survive as callable methods the router dispatches to
- * (inputManager.handleArmPilotWheel, cameraSystem.handleWheelZoom,
- * strategicMap.handleWheel), so the flag-off path stays byte-identical.
+ * (inputManager.handleArmPilotWheel, cameraSystem.handleWheelZoom), so the
+ * flag-off path stays byte-identical.
  *
  * Routing recipe (T3, docs/ladder/02-traps.md §T3):
  *   1. arm-pilot STATION_KEEP branch — highest priority, verbatim (consumes).
@@ -48,7 +48,7 @@
  *
  * When `Constants.LADDER.ENABLED` is false (ships false) OR the ladder is not
  * active (non-gameplay states), the router reproduces the shipped dispatch:
- * arm-SK, then StrategicMap zoom (when open), then camera zoom (canvas only).
+ * arm-SK, then camera zoom (canvas only).
  *
  * @module systems/WheelRouter
  */
@@ -221,7 +221,6 @@ export class WheelRouter {
    * @param {HTMLCanvasElement} [deps.canvas]        - the game canvas (game-canvas)
    * @param {object} [deps.inputManager]  - provides handleArmPilotWheel(e) -> boolean
    * @param {object} [deps.cameraSystem]  - provides handleWheelZoom(e) (legacy zoom)
-   * @param {object} [deps.strategicMap]  - provides isOpen() + handleWheel(e)
    * @param {object} [deps.ladderController] - provides isActive() + wheel({tMs,dir,mag});
    *   Session C (optional, duck-typed): wantsPaneSwipe() + pagePane({tMs,toward}) for the
    *   F3 horizontal pane swipe — absent, horizontal events flow to the zoom feed as before
@@ -231,7 +230,6 @@ export class WheelRouter {
     this._canvas = deps.canvas || null;
     this._inputManager = deps.inputManager || null;
     this._cameraSystem = deps.cameraSystem || null;
-    this._strategicMap = deps.strategicMap || null;
     this._ladder = deps.ladderController || null;
     this._now = deps.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     this._onWheel = this._handleWheel.bind(this);
@@ -303,8 +301,8 @@ export class WheelRouter {
    * Touch bridge (iPad port — Ipad.md §5.1 "same code path" doctrine): route a
    * SYNTHETIC wheel of `deltaY` px through the exact dispatch recipe below, so
    * pinch gestures and on-screen zoom buttons inherit every routing rule —
-   * arm-SK priority, StrategicMap ownership, ladder active/inactive, and the
-   * legacy canvas-only camera zoom — without growing a second input path.
+   * arm-SK priority, ladder active/inactive, and the legacy canvas-only
+   * camera zoom — without growing a second input path.
    *
    * @param {number} deltaY  px, wheel convention (negative = zoom in)
    * @param {EventTarget|null} [target]  event target for the canvas-only
@@ -380,14 +378,6 @@ export class WheelRouter {
     }
 
     // ── Ladder off / inactive: byte-identical shipped dispatch ──────────────
-    if (this._strategicMap && this._strategicMap.isOpen && this._strategicMap.isOpen()) {
-      // Strategic map renders onto the SAME canvas as the game; its shipped
-      // listener preventDefaults + zooms the map. (The shipped CameraSystem
-      // canvas listener also fired here but only mutated an unrendered
-      // orbit.distance — invisible; not reproduced.)
-      if (this._strategicMap.handleWheel) this._strategicMap.handleWheel(e);
-      return;
-    }
     // Camera zoom only when the event actually lands on the game canvas — a DOM
     // overlay covering the canvas swallowed the shipped canvas listener and let
     // the page scroll, which this preserves.

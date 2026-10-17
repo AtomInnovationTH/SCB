@@ -40,7 +40,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
-import { latLonToPosition } from '../ui/StrategicMap.js';
+import { latLonToPosition } from './Ephemeris.js';
 import { getRadialGlowTexture } from './glowSpriteTexture.js';
 import { cityFacingDot } from './CityLabels.js';
 import { makePlumeRibbon, updateRibbon } from './plumeRibbon.js';

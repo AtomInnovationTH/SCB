@@ -43,7 +43,7 @@
 import * as THREE from 'three';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { latLonToPosition } from '../ui/StrategicMap.js';
+import { latLonToPosition } from './Ephemeris.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 import { fetchData } from '../core/dataUrl.js';
 import { MONO_ADVANCE_EM } from '../core/Typeface.js';

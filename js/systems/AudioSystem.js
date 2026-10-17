@@ -549,20 +549,6 @@ class AudioSystem {
       // This prevents double-click sounds
     });
 
-    // Forge events
-    eventBus.on(Events.FORGE_PHASE_CHANGE, (data) => {
-      if (data.phase === 'IDLE') {
-        this.stopForgeHum();
-      } else {
-        this.startForgeHum(data.phase);
-      }
-    });
-
-    eventBus.on(Events.FORGE_COMPLETE, () => {
-      this.stopForgeHum();
-      this.playForgeComplete();
-    });
-
     // === Phase R8 event wiring ===
 
     // Target lock ceremony sounds (Phase 5) — reward-first spine.
@@ -949,16 +935,8 @@ class AudioSystem {
     });
 
     // S3b: MPD Burst Mode audio
-    eventBus.on(Events.MPD_BURST_START, () => {
-      this.playMPDArm();
-    });
-
     eventBus.on(Events.MPD_BURST_END, (data) => {
       this.playMPDDisarm();
-    });
-
-    eventBus.on(Events.MPD_OVERHEAT, () => {
-      this.playMPDOverheat();
     });
 
     // ST-3.4: Skill celebration audio
@@ -1762,39 +1740,6 @@ class AudioSystem {
   }
 
   /**
-   * Metallic anvil ping for forge completion — G5 with inharmonic overtone.
-   */
-  playForgeComplete() {
-    if (!this.available) return;
-    const now = this.ctx.currentTime;
-
-    // Main ping
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.value = 784; // G5
-    gain.gain.setValueAtTime(0.2, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
-
-    // Overtone for metallic character
-    const osc2 = this.ctx.createOscillator();
-    osc2.type = 'sine';
-    osc2.frequency.value = 784 * 2.76; // Inharmonic partial for metallic ring
-    const gain2 = this.ctx.createGain();
-    gain2.gain.setValueAtTime(0.06, now);
-    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
-
-    osc.connect(gain);
-    osc2.connect(gain2);
-    gain.connect(this.rewardBus);
-    gain2.connect(this.rewardBus);
-    osc.start(now);
-    osc2.start(now);
-    osc.stop(now + 0.7);
-    osc2.stop(now + 0.5);
-  }
-
-  /**
    * Softer single-note "ding" for trawl auto-captures (C5).
    * Distinct from manual capture's ascending triad.
    */
@@ -1904,7 +1849,7 @@ class AudioSystem {
 
   /**
    * Update ambient sound state based on ship systems.
-   * @param {{ solarRate: number, batteryPct: number, forgeActive: boolean }} state
+   * @param {{ solarRate: number, batteryPct: number }} state
    */
   updateAmbientState(state) {
     if (!this._ambientActive) return;
@@ -1921,221 +1866,6 @@ class AudioSystem {
     if (this._ambientFilter) {
       const freq = state.batteryPct > 30 ? 200 : state.batteryPct > 10 ? 120 : 80;
       this._ambientFilter.frequency.linearRampToValueAtTime(freq, now + 2);
-    }
-  }
-
-  // ==========================================================================
-  // FORGE SOUNDS
-  // ==========================================================================
-
-  /**
-   * Start forge electromagnetic hum — varies by processing phase.
-   * @param {'INTAKE'|'SEPARATE'|'MELT'|'COOL'} [phase='MELT']
-   */
-  startForgeHum(phase = 'MELT') {
-    this.stopForgeHum();
-    if (!this.available) return;
-
-    try {
-      const ctx = this.ctx;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      const filter = ctx.createBiquadFilter();
-
-      // Phase-specific frequencies
-      const freqs = {
-        INTAKE: 120,
-        SEPARATE: 200,
-        MELT: 280,
-        COOL: 90,
-      };
-
-      osc.type = 'sawtooth';
-      osc.frequency.value = freqs[phase] || 200;
-
-      filter.type = 'lowpass';
-      filter.frequency.value = 600;
-      filter.Q.value = 2;
-
-      gain.gain.value = 0;
-      gain.gain.linearRampToValueAtTime(0.06, ctx.currentTime + 0.5);
-
-      osc.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.physicalBus);
-      osc.start();
-
-      this._forgeOsc = osc;
-      this._forgeGain = gain;
-      this._forgeFilter = filter;
-
-      // Add crackling for MELT phase
-      if (phase === 'MELT') {
-        const noise = ctx.createOscillator();
-        const noiseGain = ctx.createGain();
-        noise.type = 'square';
-        noise.frequency.value = 37; // low crackle
-        noiseGain.gain.value = 0.015;
-        noise.connect(noiseGain);
-        noiseGain.connect(this.physicalBus);
-        noise.start();
-        this._forgeCrackle = noise;
-        this._forgeCrackleGain = noiseGain;
-      }
-
-      // ── Phase-specific texture layers ──────────────────────────
-
-      // INTAKE: Metallic clank — short noise burst through bandpass
-      if (phase === 'INTAKE') {
-        const noiseLen = 0.08; // 80ms
-        const noiseBuf = ctx.createBuffer(1, ctx.sampleRate * noiseLen, ctx.sampleRate);
-        const noiseData = noiseBuf.getChannelData(0);
-        for (let i = 0; i < noiseData.length; i++) noiseData[i] = (Math.random() * 2 - 1);
-
-        const noiseSrc = ctx.createBufferSource();
-        noiseSrc.buffer = noiseBuf;
-        const bp = ctx.createBiquadFilter();
-        bp.type = 'bandpass';
-        bp.frequency.value = 300;
-        bp.Q.value = 3;
-        const ng = ctx.createGain();
-        ng.gain.value = 0.12;
-
-        noiseSrc.connect(bp);
-        bp.connect(ng);
-        ng.connect(this.physicalBus);
-        noiseSrc.start(ctx.currentTime);
-      }
-
-      // SEPARATE: Random micro-clicks (magnetic separation texture)
-      if (phase === 'SEPARATE') {
-        const clickCount = 8;
-        for (let i = 0; i < clickCount; i++) {
-          const clickTime = ctx.currentTime + Math.random() * 2; // spread over 2s
-          const clickLen = 0.015; // 15ms each
-          const clickBuf = ctx.createBuffer(1, ctx.sampleRate * clickLen, ctx.sampleRate);
-          const clickData = clickBuf.getChannelData(0);
-          for (let j = 0; j < clickData.length; j++) clickData[j] = (Math.random() * 2 - 1);
-
-          const clickSrc = ctx.createBufferSource();
-          clickSrc.buffer = clickBuf;
-          const cg = ctx.createGain();
-          cg.gain.value = 0.06;
-          clickSrc.connect(cg);
-          cg.connect(this.physicalBus);
-          clickSrc.start(clickTime);
-        }
-      }
-
-      // MELT: Random filtered noise bursts (layered on top of 37Hz crackle)
-      if (phase === 'MELT') {
-        const burstCount = 12;
-        for (let i = 0; i < burstCount; i++) {
-          const burstTime = ctx.currentTime + Math.random() * 4; // spread over 4s
-          const burstLen = 0.03 + Math.random() * 0.04; // 30-70ms
-          const burstBuf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * burstLen), ctx.sampleRate);
-          const burstData = burstBuf.getChannelData(0);
-          for (let j = 0; j < burstData.length; j++) burstData[j] = (Math.random() * 2 - 1);
-
-          const burstSrc = ctx.createBufferSource();
-          burstSrc.buffer = burstBuf;
-          const bg = ctx.createGain();
-          bg.gain.value = 0.04 + Math.random() * 0.04; // vary intensity
-          const blp = ctx.createBiquadFilter();
-          blp.type = 'lowpass';
-          blp.frequency.value = 800 + Math.random() * 400;
-          burstSrc.connect(blp);
-          blp.connect(bg);
-          bg.connect(this.physicalBus);
-          burstSrc.start(burstTime);
-        }
-      }
-
-      // COOL: Descending sweep — sine 400→80Hz for "powering down" character
-      if (phase === 'COOL') {
-        const sweepOsc = ctx.createOscillator();
-        const sweepGain = ctx.createGain();
-        sweepOsc.type = 'sine';
-        sweepOsc.frequency.setValueAtTime(400, ctx.currentTime);
-        sweepOsc.frequency.exponentialRampToValueAtTime(80, ctx.currentTime + 3);
-        sweepGain.gain.setValueAtTime(0.05, ctx.currentTime);
-        sweepGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 4);
-        sweepOsc.connect(sweepGain);
-        sweepGain.connect(this.physicalBus);
-        sweepOsc.start(ctx.currentTime);
-        sweepOsc.stop(ctx.currentTime + 4);
-        this._forgeSweep = sweepOsc;
-        this._forgeSweepGain = sweepGain;
-      }
-    } catch (e) {
-      // Audio not available
-    }
-  }
-
-  /**
-   * Stop forge electromagnetic hum with fade-out.
-   */
-  stopForgeHum() {
-    if (this._forgeOsc) {
-      try {
-        if (this._forgeGain && this.ctx) {
-          this._forgeGain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.3);
-        }
-        const osc = this._forgeOsc;
-        const gain = this._forgeGain;
-        const filter = this._forgeFilter;
-        this._forgeOsc = null;
-        this._forgeGain = null;
-        this._forgeFilter = null;
-        timerManager.setTimeout(() => {
-          try { osc.stop(); } catch(e) {}
-          try { osc.disconnect(); } catch(e) {}
-          try { gain.disconnect(); } catch(e) {}
-          try { filter.disconnect(); } catch(e) {}
-        }, 350, { owner: this });
-      } catch (e) {
-        this._forgeOsc = null;
-        this._forgeGain = null;
-        this._forgeFilter = null;
-      }
-    }
-    if (this._forgeCrackle) {
-      try {
-        if (this._forgeCrackleGain && this.ctx) {
-          this._forgeCrackleGain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.2);
-        }
-        const crackle = this._forgeCrackle;
-        const crackleGain = this._forgeCrackleGain;
-        this._forgeCrackle = null;
-        this._forgeCrackleGain = null;
-        timerManager.setTimeout(() => {
-          try { crackle.stop(); } catch(e) {}
-          try { crackle.disconnect(); } catch(e) {}
-          try { crackleGain.disconnect(); } catch(e) {}
-        }, 250, { owner: this });
-      } catch (e) {
-        this._forgeCrackle = null;
-        this._forgeCrackleGain = null;
-      }
-    }
-    if (this._forgeSweep) {
-      try {
-        if (this._forgeSweepGain && this.ctx) {
-          this._forgeSweepGain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.2);
-        }
-        const sweep = this._forgeSweep;
-        const sweepGain = this._forgeSweepGain;
-        this._forgeSweep = null;
-        this._forgeSweepGain = null;
-        timerManager.setTimeout(() => {
-          try { sweep.stop(); } catch(e) {}
-          try { sweep.disconnect(); } catch(e) {}
-          try { sweepGain.disconnect(); } catch(e) {}
-        }, 250, { owner: this });
-      } catch (e) {
-        this._forgeSweep = null;
-        this._forgeSweepGain = null;
-      }
     }
   }
 
@@ -4196,41 +3926,6 @@ class AudioSystem {
   // ==========================================================================
 
   /**
-   * MPD arm sound — deep capacitor charge-up hum (50 Hz → 200 Hz ramp, 0.5s).
-   */
-  playMPDArm() {
-    if (!this.available) return;
-    try {
-      const ctx = this.ctx;
-      const now = ctx.currentTime;
-
-      // Main charge-up oscillator
-      const osc = ctx.createOscillator();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(50, now);
-      osc.frequency.exponentialRampToValueAtTime(200, now + 0.5);
-
-      const gain = ctx.createGain();
-      gain.gain.setValueAtTime(0, now);
-      gain.gain.linearRampToValueAtTime(0.12, now + 0.1);
-      gain.gain.setValueAtTime(0.12, now + 0.35);
-      gain.gain.linearRampToValueAtTime(0.04, now + 0.5);
-
-      // Low-pass filter for warmth
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(300, now);
-      filter.frequency.linearRampToValueAtTime(800, now + 0.5);
-
-      osc.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.physicalBus);
-      osc.start(now);
-      osc.stop(now + 0.55);
-    } catch (e) { /* audio error — non-critical */ }
-  }
-
-  /**
    * MPD disarm sound — power-down descending tone (200 Hz → 30 Hz, 0.3s) + relay click.
    */
   playMPDDisarm() {
@@ -4273,60 +3968,6 @@ class AudioSystem {
       click.connect(clickGain);
       clickGain.connect(this.physicalBus);
       click.start(now + 0.05);
-    } catch (e) { /* audio error — non-critical */ }
-  }
-
-  /**
-   * MPD overheat alarm — rapid 880 Hz pulses (1s) + steam hiss (white noise burst 0.5s).
-   */
-  playMPDOverheat() {
-    if (!this.available) return;
-    this._duckPulse(1500); // P2 ducking: overheat danger
-    try {
-      const ctx = this.ctx;
-      const now = ctx.currentTime;
-
-      // Rapid alarm beeps (880 Hz, 6 pulses over 1s)
-      const osc = ctx.createOscillator();
-      osc.type = 'square';
-      osc.frequency.value = 880;
-
-      const alarmGain = ctx.createGain();
-      alarmGain.gain.setValueAtTime(0, now);
-      // 6 pulses: on/off every ~0.08s
-      for (let i = 0; i < 6; i++) {
-        const t = now + i * 0.16;
-        alarmGain.gain.setValueAtTime(0.1, t);
-        alarmGain.gain.setValueAtTime(0, t + 0.08);
-      }
-
-      osc.connect(alarmGain);
-      alarmGain.connect(this.alarmBus);
-      osc.start(now);
-      osc.stop(now + 1.0);
-
-      // Steam hiss (white noise burst)
-      const bufferSize = ctx.sampleRate;
-      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < bufferSize; i++) {
-        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.3));
-      }
-      const noise = ctx.createBufferSource();
-      noise.buffer = buffer;
-
-      const hissFilter = ctx.createBiquadFilter();
-      hissFilter.type = 'highpass';
-      hissFilter.frequency.value = 2000;
-
-      const hissGain = ctx.createGain();
-      hissGain.gain.setValueAtTime(0.08, now + 0.1);
-      hissGain.gain.linearRampToValueAtTime(0, now + 0.6);
-
-      noise.connect(hissFilter);
-      hissFilter.connect(hissGain);
-      hissGain.connect(this.alarmBus);
-      noise.start(now + 0.1);
     } catch (e) { /* audio error — non-critical */ }
   }
 

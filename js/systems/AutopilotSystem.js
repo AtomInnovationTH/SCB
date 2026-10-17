@@ -6,8 +6,7 @@
  * The goal pose is P_m* = P_d − v̂_d · D_trail, V_m* = V_d, nose* = v̂_d.
  * Commands are issued as world-frame Cartesian ΔV via
  * [`PlayerSatellite.applyCartesianImpulse`](js/entities/PlayerSatellite.js:2125),
- * keeping orbit updates physically consistent. Manual `thrustIon()` feel is
- * untouched.
+ * keeping orbit updates physically consistent.
  *
  * See AUTOPILOT_ANALYSIS.md §C & §D for the full design rationale.
  * @module systems/AutopilotSystem

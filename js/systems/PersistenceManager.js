@@ -137,19 +137,13 @@ class PersistenceManager {
           // true), and getCeremonyFlag() then reads false forever.
           FIRST_MOTHER_NET_DEPLOY: data.ceremonyFlags?.FIRST_MOTHER_NET_DEPLOY ?? false,
         },
-        // ── Keys written by this class's own read-modify-write setters ───────
-        // Each setter below does `const data = this.peek() || {}; data.X = …;
-        // return this.save(data)`. Because save() is a WHITELIST, a setter key
-        // missing from this list is silently dropped on write — the setter
-        // still returns true and its getter then reads the default forever.
-        // That is exactly how the Epic-9 arm-state slices were dead: they
-        // persisted nothing. (The launch-phase, deploy-state, tether-reel and
-        // bridle-ring slices were removed 2026-10-16; an old save that still
+        // save() is a WHITELIST: a key that a read-modify-write setter writes
+        // (as setCeremonyFlag does with ceremonyFlags above) but that is
+        // missing from this list is silently dropped on the next write. (The
+        // launch-phase, deploy-state, tether-reel, bridle-ring and capture-net
+        // inventory slices were removed 2026-10-16/17; an old save that still
         // carries their keys loads fine and they are dropped on the next
-        // write.) Additive (no SAVE_VERSION bump) — each getter already
-        // defaults on absence.
-        // setNetInventory / getNetInventory (ST-9.4 C-6)
-        captureNet: data.captureNet ?? null,
+        // write.) Additive (no SAVE_VERSION bump).
       };
 
       localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
@@ -253,40 +247,6 @@ class PersistenceManager {
     const data = this.peek() || {};
     data.ceremonyFlags = { ...(data.ceremonyFlags || {}), [name]: !!value };
     return this.save(data);
-  }
-
-  // =========================================================================
-  // ST-9.4 C-6: CAPTURE NET INVENTORY PERSISTENCE
-  // =========================================================================
-
-  /**
-   * Persist capture net system state (ST-9.4 C-6).
-   * Includes mother pod inventory + per-arm net counts + mercy rule flag.
-   *
-   * @param {object} netState — from CaptureNetSystem.getState()
-   * @param {number[]} [armNetCounts] — per-arm net inventory indexed by armIndex
-   * @returns {boolean} Whether save succeeded
-   */
-  setNetInventory(netState, armNetCounts) {
-    if (!this._storageAvailable) return false;
-    const data = this.peek() || {};
-    data.captureNet = {
-      motherPodInventory: netState?.motherPodInventory || [0],
-      playerHasFragmented: netState?.playerHasFragmented || false,
-      armNetCounts: armNetCounts || [],
-    };
-    return this.save(data);
-  }
-
-  /**
-   * Read persisted capture net state (ST-9.4 C-6).
-   * Returns null if no capture net data saved (new game / legacy save).
-   *
-   * @returns {{ motherPodInventory: number[], playerHasFragmented: boolean, armNetCounts: number[] }|null}
-   */
-  getNetInventory() {
-    const data = this.peek();
-    return data?.captureNet ?? null;
   }
 
   /**

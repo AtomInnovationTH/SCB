@@ -44,7 +44,7 @@
  * ── THE DRIVER DUCK-TYPE ────────────────────────────────────────────────────
  * PlayerSatellite consumes only isActive() and getRosaProgress() from its
  * injected launch driver (PlayerSatellite.js — the setLaunchSequence handshake),
- * plus the isActive() gate on setFlowerPose('LAUNCH') and snapFlowerToLaunch().
+ * plus the isActive() gate on setFlowerPose('LAUNCH').
  * So this class needs no edits to the flower/ROSA code at all: it is bound with
  * ship.setLaunchSequence(dance) and UNBOUND (setLaunchSequence(null)) at
  * hand-over, which is what returns the player's own furl control. The
@@ -589,7 +589,7 @@ class OpeningDance {
    * Snap `ship` to the PACKED pose — wings furled, radiator folded (θ 0, launch
    * lock armed). Idempotent. Used at hero build (lane C, before any departure
    * arms the clock — so the flower's own isActive() gate cannot be used and the
-   * same fields snapFlowerToLaunch writes are written directly) and at
+   * launch-lock fields are written directly) and at
    * MENU_DEPARTURE_REVEAL on the sim ship (belt and braces: the hero still
    * frame-fills at the reveal, and the live pose is applied at MENU_START).
    * @param {object} ship - a PlayerSatellite

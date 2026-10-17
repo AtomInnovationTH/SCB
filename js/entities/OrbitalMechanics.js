@@ -281,7 +281,7 @@ export function reseatOrbitFromScene(orbit, scenePos, velocityKmS) {
  *  - The visual Earth mesh does NOT rotate (no GMST applied to geometry), so the
  *    ECI longitude equals the *negative* of the geographic east-longitude
  *    because the equirectangular Earth texture is longitude-mirrored
- *    (`mirrorLon` in main.js / CityLabels / StrategicMap).
+ *    (`mirrorLon` in main.js / CityLabels).
  *  - Circular orbit with argPerigee = 0 (the player's default).
  *
  * Sub-point latitude is bounded by inclination; if `|lat| > inclination` the

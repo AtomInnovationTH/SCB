@@ -110,7 +110,6 @@ export const Constants = {
 
   // === ORBITAL ALTITUDES (scene units = km × SCENE_SCALE) ===
   VLEO_MIN: 2.0,                  // 200 km × 0.01
-  VLEO_MAX: 4.0,                  // 400 km × 0.01
   LEO_MAX: 20.0,                  // 2000 km × 0.01
 
   // === STARTING ORBIT ===
@@ -442,7 +441,7 @@ export const Constants = {
     // Reels bill the real mechanical power, line tension × line speed ÷ REEL_EFFICIENCY,
     // floored at their own 15 W motor constant while turning, capped at HAUL_MOTOR_POWER.
     STRUT_REEL_MIN: 15,         // ×4 strut reel cartridges (ReelCartridge_) = the daughter tether
-                                // reel — the game's own OCTOPUS_V5.REEL.MOTOR_POWER_W
+                                // reel motor (15 W)
     MOTHER_REEL_MIN: 15,        // the mother's net reel and lasso reel — the game's own TETHER_REEL_POWER
     REEL_MAX: 2500,             // the game's own REEL_PROFILE.HAUL_MOTOR_POWER (it sets the cruise speed)
     REEL_EFFICIENCY: 0.5,       // estimate: geared DC motor ~0.7 × gearbox + spool ~0.7
@@ -469,7 +468,6 @@ export const Constants = {
   TIER1_BASE: 100,                // Data capture
   TIER2_BASE: 300,                // Deorbit
   TIER3_BASE: 500,                // Physical capture
-  TIER4_BASE: 2000,               // Boss-class
   WIN_DEBRIS_COUNT: 60,           // 12 chapters × DEBRIS_PER_MISSION(5); ch12 = elevator-anchor finale (F2 Option A)
   // E1 despin doctrine tuning: the capture tumble bonus scales with the ABOVE-SPEC
   // spin the player tamed ((initialDeg - IN_SPEC_DEG) / SLOPE), capped at MAX_BONUS.
@@ -502,29 +500,16 @@ export const Constants = {
     CUBESAT:        'cubesat',
   },
 
-  // === DEBRIS TIERS (by difficulty) ===
-  DEBRIS_TIER_RANGES: {
-    fragment:       { tier: 1, label: 'Fragment' },
-    rocketBody:     { tier: 3, label: 'Rocket Body' },
-    defunctSat:     { tier: 2, label: 'Defunct Satellite' },
-    missionDebris:  { tier: 1, label: 'Mission Debris' },
-    cubesat:        { tier: 2, label: 'CubeSat' },
-  },
 
   // === PHYSICS ===
   CATASTROPHIC_THRESHOLD: 40,     // J/g
   KESSLER_FRAGMENT_LIMIT: 50,
   LEO_AVG_COLLISION_VEL: 10,      // km/s
-  LEO_MAX_COLLISION_VEL: 15.4,    // km/s
   LEO_MIN_ALT: 180,               // km — reentry threshold
-  LEO_MAX_ALT: 2000,              // km — out of bounds
 
   // === TIME ===
-  TIME_SCALE_TRANSFER: 60,        // 1 real sec = 60 game sec
   TIME_SCALE_GAMEPLAY: 10,        // 1 real sec = 10 game sec
   ORBITAL_PERIOD_400KM: 5556,     // seconds (~92.6 min)
-  EARTH_ROTATION_PERIOD: 86400,   // seconds (24 h)
-  CLOUD_ROTATION_FACTOR: 0.33,    // Clouds at 1/3 Earth speed
 
   // === ATMOSPHERE LAYERS (scene units, radii) ===
   CLOUD_RADIUS: 63.81,            // +10 km above surface
@@ -738,15 +723,7 @@ export const Constants = {
   MW_SIZE_FLOOR: 1.2,           // px — MUST equal STAR_FIELD_SIZE_FLOOR. The band's old
                                 // 0.4–0.9 px points were the exact sub-pixel crawl class
                                 // the floor cured; band points get the same floor.
-  MW_SIZE_MAX: 2.6,             // px — the large end of the band GRAIN sizes. Was 4.5, which
-                                // reached 6.75 px on screen (x uSizeScale 1.5) — larger than
-                                // a real field star at 1.8 px, so the band's unresolved stars
-                                // were the biggest dots in the sky. That value dates from
-                                // when grain had to supply the band's glow by itself; the
-                                // MW_HAZE_* layer does that now, via genuinely large soft
-                                // sprites. Grain went back to being fine texture: 1.8-3.9 px,
-                                // spread floor→max with a bias toward small.
-  MW_SIZE_VAR: 1.4,             // max − floor (1.2 → 2.6).
+  MW_SIZE_VAR: 1.4,             // px — grain spans MW_SIZE_FLOOR … FLOOR + VAR (1.2 → 2.6); the old 4.5 max out-sized real field stars.
   // Licensed structure (per doctrine B — the shape is real, the contrast is
   // exaggerated ~2× over real so it reads at a glance):
   MW_CENTER_CONTRAST: 2.0,      // center:anticenter density/brightness ratio (licensed).
@@ -973,19 +950,8 @@ export const Constants = {
 
   // --- Core ("The Brain") ---
   OCTOPUS_CORE_DRY_MASS: 170,           // kg
-  OCTOPUS_CORE_XENON: 40,               // kg propellant — LEGACY fallback only (h3-argon-engine: the ship's real
-                                         // engine gas is FUELS[tankGasId].kgFull × pool/100; HUD files and
-                                         // ReachabilityModel still read this constant as a no-ship fallback)
   OCTOPUS_CORE_COLD_GAS: 6,             // kg N₂ RCS
-  OCTOPUS_CORE_WET_MASS: 216,           // kg (170 + 40 + 6)
   OCTOPUS_CORE_BATTERY: 600,            // Wh
-  OCTOPUS_CORE_SOLAR_AREA: 5.0,         // m² (2 wings)
-  OCTOPUS_CORE_SOLAR_POWER: 1900,       // W peak
-  OCTOPUS_CORE_LASER_POWER: 200,        // W electrical input
-  OCTOPUS_CORE_LASER_OPTICAL: 120,      // W optical output (60% wall-plug)
-  OCTOPUS_CORE_ACROSS_FLATS: 1.0,       // m (octagonal prism)
-  OCTOPUS_CORE_LENGTH: 1.2,             // m
-  OCTOPUS_CORE_HALL_THRUST: 0.01,       // N (2× HT-100, 10 mN each)
   OCTOPUS_CORE_HALL_ISP: 1500,          // s — fallback (h3-argon-engine: the active fuel's FUELS[..].isp is the ship's Isp; xenon = 1500 too)
 
   // ── Rigid-body attitude dynamics (supersedes kinematic rotation) ──
@@ -1035,46 +1001,29 @@ export const Constants = {
   },
 
   // --- Weaver (Large Arm) — 3 units in hexagonal config ---
-  WEAVER_COUNT: 3,
   WEAVER_MASS: 11.0,                    // kg per unit
-  WEAVER_FUEL_MAX: 100,                 // game fuel units (maps to FEEP total impulse)
   WEAVER_DELTA_V: 500,                  // m/s total FEEP budget
   WEAVER_TOTAL_IMPULSE: 5500,           // Ns (Enpulsion NANO R3)
   WEAVER_THRUST: 0.00035,              // N (0.35 mN FEEP)
   WEAVER_TETHER_LENGTH: 2000,           // m (2 km)
-  WEAVER_TETHER_REEL_SPEED: 2.0,       // m/s
   WEAVER_NET_SIZE: 5.0,                 // m (5×5 deployed Dyneema SK78)
   WEAVER_MAX_CAPTURE_MASS: 500,         // kg
-  WEAVER_GRIPPER_SPAN: 0.05,           // m (50mm 3-jaw chuck, backup)
-  WEAVER_LASER_POWER_RECV: 19.5,       // W at 2 km via 808nm PV
-  WEAVER_COLD_GAS: 0.2,               // kg N₂ (rapid attitude during capture)
   WEAVER_BODY: [0.2, 0.2, 0.3],       // m [x, y, z] dimensions
   WEAVER_CAPTURES_PER_FUEL: 33,        // captures before FEEP depletion
 
   // --- Spinner (Small Arm) — 3 units in hexagonal config ---
-  SPINNER_COUNT: 3,
   SPINNER_MASS: 3.7,                    // kg per unit
-  SPINNER_FUEL_MAX: 100,                // game fuel units
   SPINNER_DELTA_V: 297,                 // m/s total FEEP budget
   SPINNER_TOTAL_IMPULSE: 1100,          // Ns (Enpulsion IFM Nano SE)
   SPINNER_THRUST: 0.0005,             // N (0.5 mN FEEP)
   SPINNER_TETHER_LENGTH: 500,           // m (0.5 km)
-  SPINNER_TETHER_REEL_SPEED: 2.0,      // m/s
   SPINNER_NET_SIZE: 1.5,                // m (1.5×1.5 deployed)
   SPINNER_MAX_CAPTURE_MASS: 50,         // kg — derived from CAPTURE_NET.SMALL.MAX_CAPTURE_MASS (drift-guard test enforces)
-  SPINNER_GECKO_PAD_FORCE: 3.5,        // N/cm² (PDMS Van der Waals)
-  SPINNER_LASER_POWER_RECV: 19.5,      // W at 1 km
   SPINNER_BODY: [0.1, 0.1, 0.15],     // m [x, y, z] dimensions
   SPINNER_CAPTURES_PER_FUEL: 37,       // captures before FEEP depletion
 
   // --- Tether ---
-  TETHER_LINEAR_DENSITY: 1.2,          // kg/km (Dyneema/Vectran/Cu/SMA ribbon)
-  TETHER_TENSILE_STRENGTH: 500,        // N (5× safety margin over 100N design load)
-  TETHER_WIDTH: 0.003,                  // m (3 mm ribbon)
-  TETHER_THICKNESS: 0.0001,            // m (0.1 mm)
   TETHER_REEL_POWER: 15,               // W per reel motor
-  TETHER_EDT_CURRENT: 0.1,             // A (100 mA for Lorentz EDT propulsion)
-  TETHER_EDT_FORCE_PER_KM: 1.65,       // mN per km at 100 mA in 30 µT
 
   // --- Tether Visual ---
   // Dyneema SK78 fiber — naturally white, dyed hi-vis for space operations.
@@ -1097,18 +1046,7 @@ export const Constants = {
   TETHER_COLOR_EASE_TAU_S: 0.25,       // s — exponential ease of the tether tint toward its tension target
   TETHER_CREAK_MIN_INTERVAL_S: 1.5,    // s — hard floor between daughter TETHER_TENSION creak emits (per arm)
 
-  // --- Docking (EPM — Electro-Permanent Magnets) ---
-  DOCK_EPM_HOLD_FORCE: 50,             // N (pair of modules, zero power)
-  DOCK_EPM_SWITCH_ENERGY: 0.5,         // J per toggle (100ms pulse)
-  DOCK_EPM_MASS_PER_CAVITY: 0.08,     // kg (pair)
-  DOCK_CONE_HALF_ANGLE: 15,            // degrees — guide funnel acceptance
-  DOCK_ALIGNMENT_TOLERANCE: 0.02,      // m (±2 cm)
 
-  // --- Optical System ---
-  OPTICAL_RANGE_ACCURACY: 0.02,        // m (±2 cm via TDC7200 ToF)
-  OPTICAL_BEARING_ACCURACY: 0.1,       // degrees (quad detector at 2 km)
-  OPTICAL_COMMS_RATE: 1000000,         // bps (1 Mbps via MRR)
-  OPTICAL_BEAM_DIVERGENCE: 0.00005,    // rad (50 µrad half-angle)
 
   // --- Arm State Machine ---
   ARM_STATES: {
@@ -1572,7 +1510,6 @@ export const Constants = {
   ARM_HAUL_SPEED: 0.0000025,           // m/s (0.25 m/s loaded return)
 
   // --- Total System (3W + 3S configuration) ---
-  OCTOPUS_TOTAL_WET_MASS: 260,         // kg (216 core + 33 Weavers + 11.1 Spinners)
   OCTOPUS_TOTAL_DRY_MASS: 214,         // kg (without propellant)
   OCTOPUS_ARM_COUNT: 6,                // 3 Weaver + 3 Spinner
 
@@ -1586,12 +1523,8 @@ export const Constants = {
   WEB_SHOT_DEORBIT_SCORE: 300,           // points awarded for web-shot de-orbit
 
   // --- V4 "Opussy" GSL Upgrade Multipliers (unlockable) ---
-  V4_TETHER_MASS_MULT: 0.167,         // GSL tether 6× lighter (0.20 vs 1.2 kg/km)
-  V4_NET_MASS_MULT: 0.08,             // GSL net 92% lighter
   V4_TETHER_LENGTH_MULT: 6.25,        // Same mass → 6.25× longer reach (12.5 km)
   V4_NET_SIZE_MULT: 10.0,             // Same mass → 10× net area (50×50m)
-  V4_ELECTROSTATIC_FORCE: 160,        // N (HBN-coated GSL at 3 kV)
-  V4_SYSTEM_MASS_SAVINGS: 17.3,       // kg lighter than V3
 
   // ============================================================================
   // OCTOPUS V5 BASELINE (Epic 9 — V5 Hardware)
@@ -1722,7 +1655,6 @@ export const Constants = {
     // ── Recoil Safety (NEW — ST-9.3 C-3) ──
     HIGH_RECOIL_ALPHA_LOW:  Math.PI / 6,     // rad (30°) — below this = high axial recoil
     HIGH_RECOIL_ALPHA_HIGH: 5 * Math.PI / 6, // rad (150°) — above this = high axial recoil
-    FIRE_RATE_INTERLOCK: 0.5 * Math.PI / 180, // rad/s (0.5°/s) — ω threshold to block fire
     HINGE_SETTLE_TIME: 0.5,                   // seconds — auto-unlock delay after fire recoil settles
 
     // ── 3-Plane Layout (NEW) ──
@@ -1883,8 +1815,6 @@ export const Constants = {
     // The stack got 18 cm narrower purely by telling the truth about the coil.
     // Length (until 2026-10-15): FEEP exits (z −1.075) to folded flower tips (z 1.505); now set by the sun-sensor windows (z 1.332) — see STOWED_ENVELOPE_LEN.
     LAUNCH_VEHICLE: 'SSLV',
-    FAIRING_DIAMETER: 2.1,         // m
-    FAIRING_LENGTH: 3.0,           // m — was 2.5 (the bare ship was already 2.515)
     STOWED_ENVELOPE_DIA: 1.13,     // m — folded flower packs Ø1.121 (was Ø1.092 before the 20 mm wing gap cleared the boom; furled ROSA coils Ø1.089 sit inside)
 
     // v12-radiator-20 (owner 2026-10-16): the folded tips now end at +1.305, inside the docking collar (ring z 1.280–1.320), so
@@ -1898,7 +1828,6 @@ export const Constants = {
     // ship is 179 → 194 kg, wet 242.4 → 257.4, ΔV 3096 → 2897 m/s empty (the
     // S12 memo's structural row, measured M1).
     TOTAL_DRY_MASS: 211.4,         // was 196.4
-    TOTAL_WET_MASS: 257.4,         // was 242.4
     CORE_DRY_MASS: 176.0,          // was 161 — bus + ROSA + body-mount + collar (S13(c))
     CORE_WET_MASS: 222,            // was 216 — 176 + 40 + 6 (collar-era dry + carried propellant; register item 56)
     WEAVER_MASS: 6.6,              // unchanged
@@ -1932,25 +1861,6 @@ export const Constants = {
     // ── Tether (unchanged) ──
     TETHER_LENGTH_DEFAULT: 2000,   // m
     TETHER_MATERIAL: 'Dyneema SK78',
-
-    // ── Strut-Mounted Reel (NEW — ST-9.5 C-7, Config G §10.4) ──
-    // Reel housing sits on the strut near the tip (not at arm base).
-    // Cable pays out from reel toward working end (target debris, daughter, etc.).
-    REEL: {
-      MAX_CABLE_LENGTH_M: { Y0: 50, Y1: 80, Y3: 120 },  // per arm tier
-      PAYOUT_RATE_M_PER_S: 5.0,       // max pay-out rate
-      REEL_IN_RATE_M_PER_S: 2.0,      // base reel-in rate (scales down with payload mass)
-      BREAKING_TENSION_N: 800,         // Dyneema SK78 break threshold
-      CABLE_MASS_PER_M_KG: 0.05,      // kg per metre of cable
-      JAM_PROBABILITY_PER_REEL: 0.005, // per reel-in cycle
-      CABLE_SPRING_K: 500,             // N/m — taut cable restoring force (Hooke)
-      CABLE_DAMPING_C: 50,             // N·s/m — damping coefficient
-      JAM_CLEAR_COOLDOWN_S: 5.0,       // seconds cooldown before clearJam available
-      REEL_MASS_KG: 1.2,              // kg — reel housing mass (included in STRUT_MASS 4.5)
-      MOTOR_POWER_W: 15,              // watts — reel motor draw from arm power bus
-      TENSION_WARNING_FRAC: 0.75,     // fraction of breaking tension → debounced warning
-    },
-
   },
 
   // ============================================================================
@@ -2646,9 +2556,6 @@ export const Constants = {
 
   // --- Reload Mechanism ---
   CROSSBOW_RELOAD_POWER: 15,              // watts — worm gear motor power draw
-  CROSSBOW_RELOAD_TIME_SPINNER_10: 20,    // seconds — Spinner reload at 10 m/s
-  CROSSBOW_RELOAD_TIME_WEAVER_10: 37,     // seconds — Weaver reload at 10 m/s
-  CROSSBOW_RELOAD_TIME_MULT: 0.37,        // reload time scales as v² — t = E/(P×η), η=0.80
   CROSSBOW_WORM_GEAR_EFFICIENCY: 0.80,    // 80% mechanical efficiency
 
   // --- Tether Reel (on mothership) ---
@@ -2923,9 +2830,6 @@ export const Constants = {
   // contract income (addCredits) are OUTSIDE the taper by design — the late-game
   // money loop shifts from raw captures to refine-and-contribute.
   CAPTURE_CREDITS_TAPER: { START_X: 1.5, CEILING_X: 2.5 },
-  SALVAGE_XENON_CREDIT_BONUS: 200,    // Flat credits for Xenon recovery
-  SALVAGE_INDIUM_CREDIT_BONUS: 500,   // Flat credits for Indium (scarce)
-  SALVAGE_HAZMAT_MULTIPLIER: 1.4,     // ×1.4 for hydrazine recovery (risky)
 
   // =========================================================================
   // DEORBIT SACRIFICE SYSTEM — One-way arm missions (Session 10)
@@ -2947,7 +2851,6 @@ export const Constants = {
       id: 'aluminum',
       name: 'Aluminum',
       density: 2700,          // kg/m³
-      meltPoint: 660,         // °C
       ispAsThrust: 800,       // seconds (metal-ion propulsion)
       marketValue: 2.5,       // credits per kg
       color: '#C0C0C0',
@@ -2957,7 +2860,6 @@ export const Constants = {
       id: 'titanium',
       name: 'Titanium',
       density: 4507,
-      meltPoint: 1668,
       ispAsThrust: 900,
       marketValue: 12.0,
       color: '#8B8682',
@@ -2967,7 +2869,6 @@ export const Constants = {
       id: 'steel',
       name: 'Steel',
       density: 7850,
-      meltPoint: 1370,
       ispAsThrust: 500,       // iron-based
       marketValue: 1.0,
       color: '#71797E',
@@ -2977,7 +2878,6 @@ export const Constants = {
       id: 'copper',
       name: 'Copper',
       density: 8960,
-      meltPoint: 1085,
       ispAsThrust: 600,
       marketValue: 8.0,
       color: '#B87333',
@@ -2987,7 +2887,6 @@ export const Constants = {
       id: 'carbon_composite',
       name: 'Carbon Composite',
       density: 1600,
-      meltPoint: 3550,
       ispAsThrust: 0,         // not usable as propellant
       marketValue: 15.0,
       color: '#2C2C2C',
@@ -2997,7 +2896,6 @@ export const Constants = {
       id: 'gallium',
       name: 'Gallium',
       density: 5910,
-      meltPoint: 30,          // melts near room temp!
       ispAsThrust: 3000,      // excellent as propellant
       marketValue: 50.0,
       color: '#7B8D8E',
@@ -3007,7 +2905,6 @@ export const Constants = {
       id: 'glass_ceramic',
       name: 'Glass/Ceramic',
       density: 2500,
-      meltPoint: 1700,
       ispAsThrust: 0,
       marketValue: 0.5,
       color: '#E8E8E8',
@@ -3017,7 +2914,6 @@ export const Constants = {
       id: 'iridium',
       name: 'Iridium',
       density: 22560,
-      meltPoint: 2446,
       ispAsThrust: 1200,
       marketValue: 150.0,     // very valuable
       color: '#E8E0D0',
@@ -3027,7 +2923,6 @@ export const Constants = {
       id: 'kevlar',
       name: 'Kevlar/MLI',
       density: 1440,
-      meltPoint: 500,
       ispAsThrust: 0,
       marketValue: 3.0,
       color: '#DAA520',
@@ -3053,36 +2948,6 @@ export const Constants = {
   // needs throughput: 12 depots × TIER3 (3,000) ≫ the 10,000 kg contract.
   CARGO_BAY_TIER2_KG: 1500,      // cargo_bay_2: base 500 → 1,500 (+1,000)
   CARGO_BAY_TIER3_KG: 3000,      // cargo_bay_3: 1,500 → 3,000 (+1,500)
-
-  // =========================================================================
-  // FORGE — Electromagnetic Levitation Melting (EML) Furnace (Phase 3)
-  // Based on ISS TEMPUS facility (TRL 8-9), scaled to 5kg batches
-  // =========================================================================
-
-  FORGE: {
-    BATCH_SIZE_KG: 5.0,          // max kg per processing batch
-    POWER_DRAW: 0.15,            // Wh per second while melting (an absolute draw, NOT a
-                                  // fraction of capacity — 0.15 Wh/s, tuned before the 600 Wh battery)
-    REFINE_MULTIPLIER: 2.5,      // refined metal worth 2.5× raw value
-    PROPELLANT_EFFICIENCY: 0.85, // 85% mass retained when converting to propellant slugs
-
-    // Processing times (seconds) per phase
-    PHASE_TIMES: {
-      INTAKE: 5,               // loading sample into EML chamber (S3 balance: was 3)
-      SEPARATE: 15,            // electromagnetic separation of alloys (S3 balance: was 8)
-      MELT: 30,                // levitation melting (S3 balance: was 12)
-      COOL: 10,                // controlled cooling/solidification (S3 balance: was 5)
-    },
-
-    // Total cycle: ~60 seconds per batch (S3 balance: was ~28s — now matches 2-3 capture cadence)
-    // Higher melt-point metals take longer (multiplier)
-    MELT_POINT_TIME_SCALE: {
-      low: 0.7,    // < 500°C (gallium, kevlar)
-      medium: 1.0,  // 500-1500°C (aluminum, copper, steel)
-      high: 1.5,    // > 1500°C (titanium, carbon composite, glass)
-      extreme: 2.0, // > 2000°C (iridium)
-    },
-  },
 
   // =========================================================================
   // FUELS — Dual-Mode Hall Thruster Propellant Definitions (Phase 4)
@@ -3178,32 +3043,16 @@ export const Constants = {
   // High-thrust lithium-propellant system with cathode erosion mechanic
   // =========================================================================
 
-  MPD_THRUST: 25,                    // Newtons (much higher than ion's ~0.5N)
-  MPD_ISP: 3000,                     // seconds (specific impulse)
-  MPD_POWER_DRAW: 150,               // kW (S3b: restored from 5 — Ludicrous Mode with power infrastructure upgrade chain)
   MPD_CATHODE_LIFE: 600,             // seconds of operation before erosion
-  MPD_CATHODE_LIFE_UPGRADED: 1200,   // seconds — doubled with Hardened Cathode upgrade
-  MPD_DEGRADED_FACTOR: 0.5,          // thrust multiplier after cathode erosion
-  MPD_COST: 3000,                    // credits
   MPD_LITHIUM_CAPACITY: 100,         // max lithium units
-  MPD_LITHIUM_PER_SECOND: 0.5,       // lithium consumption rate
-  MPD_DELTA_V: 0.0015,               // scene units/s² — scaled for gameplay feel (~5× ion)
   MPD_PASSIVE_THRUST_MULT: 1.5,      // F2: passive ion-drive boost while MPD installed (folds MPD gain into the normal drive; the burst path stays dormant). +50% primary thrust for the GEO/ch11 climb.
 
   // --- MPD Burst Mode (S3b) ---
-  MPD_BURST_HEAT_RATE: 1.0,               // heat units/s while firing
   MPD_BURST_COOL_RATE: 0.3,               // heat units/s passive dissipation
   MPD_BURST_COOL_RATE_SUPERCAP: 0.5,      // heat dissipation with supercap upgrade
   MPD_BURST_OVERHEAT_THRESHOLD: 40,       // heat units for thermal shutdown
-  MPD_BURST_COOLDOWN_TIME: 15,            // seconds forced cooldown after overheat
-  MPD_BURST_POWER_WARN: 0.15,             // battery fraction for MPD power warning
-  MPD_BURST_POWER_DEGRADE: 0.05,          // battery fraction for thrust degradation (50%)
 
-  // --- RTG (S3b) ---
-  RTG_POWER: 2.0,                         // kW constant generation (Wh/s)
 
-  // --- Power Beaming (S3b) ---
-  POWER_BEAM_RATE: 5.0,                   // kW during ground station pass (Wh/s)
 
   // =========================================================================
   // MARKET & BOUNTY SYSTEM (Phase 5)
@@ -3390,13 +3239,6 @@ export const Constants = {
   // GAMEPLAY LOOP — Phase 1 Core Feel (from GAMEPLAY_LOOP.md)
   // =========================================================================
 
-  // --- Arm Game-ification ---
-  // DEPRECATED V5 — replaced by crossbow spring physics (CROSSBOW_LAUNCH_SPEED_DEFAULT)
-  ARM_GAMIFIED_THRUST_MULT: 200,       // multiply real FEEP thrust for responsive feel (1-2s response)
-  // DEPRECATED V5 — replaced by crossbow spring physics (CROSSBOW_LAUNCH_SPEED_DEFAULT)
-  ARM_LAUNCH_SPEED: 10.0,              // m/s initial cast velocity (spring/gas push on deploy)
-  ARM_LAUNCH_DURATION: 0.5,            // seconds of launch animation
-
   // --- Lasso System ---
   LASSO_RANGE: NET_REACH_M,            // meters — === NET_LOCK_RANGE_M (W1 net-reach D1: the gate is the in-range ring the player sees; was 200)
   LASSO_SPEED: 10,                     // m/s launch velocity — 10 m/s (50% slower) for deliberate space-sim cast feel
@@ -3404,7 +3246,6 @@ export const Constants = {
   LASSO_MAX_FLIGHT_TIME: 8,            // seconds real-time before auto-retract. MEASURED (c64c911, static target): the head flies
                                        // LASSO_SPEED × TIME_SCALE_GAMEPLAY = 100 m/s per REAL second, so 8 s ≈ 808 m of physical reach —
                                        // far past the 90 m LASSO_RANGE gate. test-NetReachTruth.js pins reach ≥ 1.1 × NET_LOCK_RANGE_M.
-  LASSO_TRAIL_SAMPLE_INTERVAL: 0.03,   // seconds between trail position samples (halved from 0.06 for denser trail)
   LASSO_REEL_SPEED: 0.33,             // reel-in progress per real second (0→1; ~3 s total) — SLOWER than outbound to avoid tangles
   LASSO_MAX_CAPTURE_MASS: 10,          // kg
   LASSO_AMMO_MAX: 50,                  // UX-3 #7 — web tether ammo count (50 shots per session/refill)
@@ -3505,53 +3346,22 @@ export const Constants = {
 
   // --- Capture Net Visual (ST-2.4 → FIX-2.4a → v2 polish) ---
   NET_SPIN_HZ: 4,                       // rotations per second during flight (gyroscopic stabilisation)
-  NET_WEIGHT_COUNT: 4,                   // perimeter weight spheres (keep net spread open)
-  NET_WEIGHT_RADIUS: 1.5,               // metres — each weight sphere radius
-  NET_PERIMETER_RADIUS: 4,              // metres — net ring radius
-  NET_SEGMENTS: 8,                       // octagonal perimeter line segments
-  NET_CROSS_LINES: 4,                    // cross-mesh lines (diameters through center)
   NET_COMPACT_SCALE: 0.45,              // scale factor during reel-in (was 0.15 — too small to see)
   // Phase 2 net kinematics (flag LASSO_NET_KINEMATICS) — open-on-launch + cinch-on-capture.
   NET_SPIN_UP_TIME: 0.4,                // seconds — net opens from compact to full as gyro spin ramps
   NET_LAUNCH_COMPACT_FRAC: 0.3,         // mouth radius fraction at launch (leaves the canister compact, then opens)
-  NET_CINCH_RADIUS_FRAC: 0.25,          // mouth radius fraction when fully cinched on the catch (drawstring close)
-  // Coaxial tether (v2): dark outer sheath + bright inner core
-  NET_TETHER_SHEATH_RADIUS: 0.4,        // metres — outer sheath radius (slimmed from 0.7 → gossamer cable, not a heavy column)
-  NET_TETHER_CORE_RADIUS: 0.18,         // metres — inner luminous core (slimmed from 0.35; also softens the bloom blob at the web apex)
+  // Tether catenary
   NET_TETHER_SAG: 2.0,                   // metres — catenary sag at tether midpoint
   NET_TETHER_SEGMENTS: 24,              // segments along tether curve (more = smoother sag — was 20)
-  NET_TETHER_RADIAL_SEGMENTS: 10,       // radial segments for tube cross-section (smoother — was 6/8, looked faceted/jagged)
-  NET_PULSE_HZ: 2.0,                    // pulse beads per second travelling along tether during reel-in
-  NET_PULSE_RADIUS: 0.8,                // metres — pulse bead radius
-  NET_SPARK_COUNT: 12,                   // radial spark lines on contact
-  NET_SPARK_DURATION: 0.4,              // seconds — spark animation time
-  NET_SPARK_LENGTH: 15,                  // metres — spark line length
-  // Legacy tether radius alias for tests
-  NET_TETHER_RADIUS: 0.4,              // = sheath radius (backwards compat)
 
-  // Legacy aliases (backwards compat for any external refs)
-  get BOLAS_SPIN_HZ() { return this.NET_SPIN_HZ; },
-  get BOLAS_WEIGHT_COUNT() { return this.NET_WEIGHT_COUNT; },
-  get BOLAS_TORUS_RADIUS() { return this.NET_PERIMETER_RADIUS; },
-  get BOLAS_TORUS_TUBE() { return 0.8; },
-  get BOLAS_WEIGHT_RADIUS() { return this.NET_WEIGHT_RADIUS; },
-  get BOLAS_SHAFT_LENGTH() { return 6; },
-  get BOLAS_SHAFT_RADIUS() { return 0.5; },
-  get BOLAS_TETHER_RADIUS() { return this.NET_TETHER_RADIUS; },
-  get BOLAS_TETHER_SEGMENTS() { return this.NET_TETHER_SEGMENTS; },
-  get BOLAS_TETHER_RADIAL_SEGMENTS() { return this.NET_TETHER_RADIAL_SEGMENTS; },
-  get BOLAS_SPARK_COUNT() { return this.NET_SPARK_COUNT; },
-  get BOLAS_SPARK_DURATION() { return this.NET_SPARK_DURATION; },
-  get BOLAS_SPARK_LENGTH() { return this.NET_SPARK_LENGTH; },
 
   // --- Unified "web in space" net look (NetMeshKit — both Mother + Daughter) ---
   // The Mother net (LassoSystem) renders through the shared NetMeshKit, sized +
   // styled by these knobs so it reads as a delicate translucent WEB the small
   // operator casts — never the rejected 8 m chrome octagon-cage + 3 m boulders.
   // The "small child / large balloon" scale rule (GAME_DESIGN.md §2.1): the net
-  // is subordinate to mother + catch. The legacy NET_PERIMETER_RADIUS (8 m dia) /
-  // NET_WEIGHT_RADIUS (1.5 m) above are SUPERSEDED for the Mother mesh and remain
-  // only for the BOLAS_* aliases + legacy tests.
+  // is subordinate to mother + catch. (The old 8 m perimeter / 1.5 m weight
+  // spheres and their BOLAS_* aliases were deleted 2026-10-17: nothing read them.)
   NET_WEB: {
     MOTHER_DIAMETER:    7.0,    // m — Mother net mouth diameter. Restored to the
                                 // owner-approved spike value (was briefly shrunk to
@@ -4122,7 +3932,7 @@ export const Constants = {
     // rad/s of swing velocity per METRE of RCS drift. The call site converts
     // _rcsVelocity to m/s and scales by dt, so the total kick over a burst is the
     // RCS displacement — framerate-independent. Tuned against real input: RCS
-    // equilibrium is ~0.38 m/s (RCS_IMPULSE vs RCS_DAMPING) and RCS_MAX_SPEED is
+    // equilibrium was ~0.38 m/s (the removed RCS_IMPULSE vs RCS_DAMPING) and RCS_MAX_SPEED is
     // 0.5 m/s, so a ~1 s burst gives ~0.02 rad (~⅓ of MAX_RAD) and a short tap
     // reads as a gentle sway. Do NOT tune this against a single-frame kick.
     BERTH_PENDULUM_RCS_EXCITE: 0.6,
@@ -4648,13 +4458,10 @@ export const Constants = {
   },
 
   // --- Mothership RCS Fine Positioning ---
-  RCS_IMPULSE: 0.0000002,             // scene units/s² — very small nudge (20 m/s² real → tiny in scene scale)
   RCS_MAX_SPEED: 0.000005,            // scene units/s — max RCS drift speed (0.5 m/s real)
   RCS_DAMPING: 0.95,                  // velocity damping per frame when not thrusting (stops quickly)
 
   // --- Catch Juice (S4 — Core Feel) ---
-  CATCH_SLOWMO_DURATION: 0.4,          // seconds of slow-motion on contact (was 0.2 — extended for more juice)
-  CATCH_SLOWMO_FACTOR: 0.1,            // time scale during slo-mo
   CATCH_SHAKE_DURATION: 0.3,           // seconds — camera micro-shake on capture
   CATCH_SHAKE_INTENSITY: 0.000003,     // scene units (= 0.3 m) — shake amplitude.
                                        // Was 0.003 "scene units" — a metres-vs-scene-units
@@ -4664,8 +4471,6 @@ export const Constants = {
                                        // 150–420 m camera arcs scrambling the mother catch's
                                        // SECURED_SETTLE frames). A micro-shake is ~0.3 m.
 
-  // --- Field Clearing (Phase 5 — reserve constants) ---
-  FIELD_CLEAR_100_BONUS: 2000,         // credits for 100% sector clear
 
   // =========================================================================
   // SALVAGE SYNERGIES — Complementary metal bonuses (Phase 5 Rewards)
@@ -4679,7 +4484,6 @@ export const Constants = {
     { metals: ['CARBON_COMPOSITE', 'COPPER'],  name: 'Propulsion Package',     points: 350 },
     { metals: ['GLASS_CERAMIC', 'GALLIUM'],    name: 'Sensor Package',         points: 250 },
   ],
-  FIELD_CLEAR_BONUS: 1000,              // bonus points for 100% field clear
   FIELD_CLEAR_THRESHOLDS: [
     { pct: 0.50, bonus: 200,  label: 'Half Clear' },
     { pct: 0.75, bonus: 500,  label: 'Three-Quarter Clear' },
@@ -5240,8 +5044,6 @@ export const Constants = {
   },
 
   // === HUD PANEL READABILITY (ST-2.2) ===
-  HUD_PANEL_BG_ALPHA: 0.95,             // Base panel background opacity
-  HUD_PANEL_EARTH_OVERLAP_ALPHA: 0.98,  // Fallback when overlapping bright Earth
   SELECTED_ROW_ALPHA: 0.22,             // Target list selected‐row highlight
   SELECTED_ROW_GLOW_ALPHA: 0.4,         // Inset box-shadow glow
   SELECTED_ROW_TEXT_GLOW: 0.5,          // Text-shadow on selected name
@@ -5724,7 +5526,7 @@ export const Constants = {
     DEFAULT_DURATION_MS: 7000,
     PERSISTENCE_KEY: 'teachingSeen',
     QUEUE_DRAIN_INTERVAL_S: 6,   // CP-4 §4 — drain queued overlays at ≤1 per this many seconds
-    TOTAL_MOMENTS: 30,           // UX-3 N1: +first_scan/first_arm_deploy; +first_net_failed/first_tether_snap; Phase 0.6: +first_high_tumble_target/first_despin_in_spec; Phase 1.5: +first_detail_scan; Phase 2: +first_aspect_target; Phase 3b: +first_fragmentation; Net ladder: +first_small_daughter_deploy/first_large_daughter_deploy/first_whale_target/first_deltav_waste; cargo-continuity S4: +first_net_park; item 100 (2026-08-21): +speed_dial (29→30)
+    TOTAL_MOMENTS: 29,           // UX-3 N1: +first_scan/first_arm_deploy; +first_net_failed/first_tether_snap; Phase 0.6: +first_high_tumble_target/first_despin_in_spec; Phase 1.5: +first_detail_scan; Phase 2: +first_aspect_target; Phase 3b: +first_fragmentation; Net ladder: +first_small_daughter_deploy/first_large_daughter_deploy/first_whale_target/first_deltav_waste; cargo-continuity S4: +first_net_park; item 100 (2026-08-21): +speed_dial (29→30); t6: -the strategic-map moment (30→29)
   },
 
   // ============================================================================
@@ -6165,47 +5967,6 @@ export const Constants = {
     DOD_SKILL_MITIGATION: 0.5,         // halved with manage_power
   },
 
-  // ============================================================================
-  // ST-6.4: STRATEGIC MAP — Zoomed-out 3-D orbital overview (Shift+V toggle)
-  // Renders the full orbital environment: Earth wireframe, altitude band rings,
-  // debris dots, player marker + orbit ellipse, hazard zones, ground stations,
-  // top-N threat overlay, and legend/status bar.
-  // ============================================================================
-  STRATEGIC_MAP: {
-    CAMERA_FOV: 45,
-    CAMERA_NEAR: 0.1,
-    CAMERA_FAR: 100000,
-    CAMERA_INITIAL_DISTANCE: 800,     // scene units (~3× GEO in scene scale)
-    CAMERA_ELEVATION_DEG: 45,
-    CAMERA_TRANSITION_MS: 500,
-    ZOOM_MIN: 50,                     // scene units (don't zoom inside Earth)
-    ZOOM_MAX: 5000,                   // scene units
-    ORBIT_SEGMENTS: 64,               // segments for player orbit ellipse
-    DOT_SIZE_DEBRIS: 2,
-    DOT_SIZE_PLAYER: 5,
-    DOT_SIZE_GROUND_STATION: 3,
-    EARTH_WIREFRAME_COLOR: '#1a4a5a',
-    PLAYER_COLOR: '#00ffcc',
-    PLAYER_ORBIT_COLOR: '#00ccff',
-    THREAT_LIST_COUNT: 5,
-    AO_ZONE_COLOR: '#ff6600',
-    AO_ZONE_OPACITY: 0.06,
-    RADIATION_ZONE_COLOR: '#cc44ff',
-    RADIATION_ZONE_OPACITY: 0.05,
-    GROUND_STATION_COLOR: '#22ff44',
-    ALT_BAND_COLORS: ['#22aa44', '#22aa44', '#22aadd', '#22aadd', '#22aadd', '#ddcc00', '#aa44dd'],
-    ALT_BAND_OPACITY: [0.10, 0.10, 0.08, 0.08, 0.08, 0.06, 0.05],
-    DOT_COLOR_DEBRIS:      '#888888',
-    DOT_COLOR_ROCKET_BODY: '#aaaabb',
-    DOT_COLOR_INACTIVE:    '#444488',
-    DOT_COLOR_ACTIVE:      '#eeeeff',
-    DOT_COLOR_FRAGMENT:    '#555555',
-    DOT_COLOR_FALLBACK:   '#666666',
-    // Calm-HUD: MOID_PULSE_SPEED removed — it was declared but never consumed
-    // (the NavSphere HI badge is now steady red; StrategicMap's modal-map
-    // shimmer uses its own local rate and is deliberately out of scope).
-  },
-
   // =========================================================================
   // EPIC 8 — STATION_KEEP & FEEP ION THRUSTER PARAMETERS
   // =========================================================================
@@ -6484,18 +6245,6 @@ export const Constants = {
     mercury:  { ispMin: 3000,  ispMax: 10000, thrustPerW: 0.040, mass: 200.6, unlock: 'forge_mercury',  trl: 5, codex_warning: 'toxic' },
     cesium:   { ispMin: 8000,  ispMax: 22000, thrustPerW: 0.030, mass: 132.9, unlock: 'forge_cesium',   trl: 5, codex_warning: 'reactive' },
     tungsten: { ispMin: 1500,  ispMax: 3500,  thrustPerW: 0.080, mass: 183.8, unlock: 'forge_tungsten', trl: 4, requires: 'mpd_class_power' },
-  },
-
-  // === FORGE_METAL_YIELDS — what metals each debris type yields in propellant mode ===
-  FORGE_METAL_YIELDS: {
-    electronics:    { gallium: 0.4, indium: 0.3, copper: 0.3 },
-    heatsink:       { bismuth: 0.5, aluminum: 0.5 },
-    medical_sat:    { iodine: 0.6, gold: 0.1, aluminum: 0.3 },
-    comms_eqp:      { gallium: 0.3, indium: 0.5, gold: 0.2 },
-    rocket_body:    { aluminum: 0.7, titanium: 0.2, steel: 0.1 },
-    heat_shield:    { tungsten: 0.6, titanium: 0.4 },
-    old_switchgear: { mercury: 0.4, copper: 0.3, aluminum: 0.3 },
-    rare_sat:       { cesium: 0.2, gallium: 0.4, gold: 0.4 },
   },
 
   // ============================================================================

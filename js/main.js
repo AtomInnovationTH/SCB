@@ -42,7 +42,6 @@ import { SensorSystem } from './systems/SensorSystem.js';
 import { dossierSystem } from './systems/DossierSystem.js';
 import { kesslerSystem } from './systems/KesslerSystem.js';
 import { CargoSystem } from './systems/CargoSystem.js';
-import { ForgeSystem } from './systems/ForgeSystem.js';
 import { ConjunctionSystem } from './systems/ConjunctionSystem.js';
 import { InputManager } from './systems/InputManager.js';
 import { gameFlowManager } from './systems/GameFlowManager.js';
@@ -109,7 +108,6 @@ import { GuidanceDirector } from './systems/GuidanceDirector.js';
 import { settingsManager } from './systems/SettingsManager.js';
 import { applyLook, resolveClassic } from './ui/HudLook.js';
 import { persistenceManager } from './systems/PersistenceManager.js';
-import { StrategicMap } from './ui/StrategicMap.js';
 import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController, INTRO_RIDE_MS, INTRO_DANCE_LANDING_Z01, INTRO_DANCE_DRIFT_Z01, INTRO_DANCE_DOLLY_MS, INTRO_DANCE_DWELL_CEILING_MS, INTRO_DANCE_HANDOVER_Z01, INTRO_DANCE_PULLBACK_MS } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
@@ -634,7 +632,6 @@ let starlinkCascadeBoss;
 let resourceSystem;
 let sensorSystem;
 let cargoSystem;
-let forgeSystem;
 let conjunctionSystem;
 let skillsSystem;
 let skillsPane;
@@ -672,7 +669,6 @@ let teachingSystem;
 let teachingOverlay;
 let onboardingDirector;
 let guidanceDirector;
-let strategicMap;
 
 // Zoom Ladder (S2 skeleton — behind Constants.LADDER.ENABLED)
 let wheelRouter;
@@ -1389,7 +1385,6 @@ async function init() {
   resourceSystem.createThermalSystem(player);
   // kesslerSystem: imported singleton from KesslerSystem.js
   cargoSystem = new CargoSystem();
-  forgeSystem = new ForgeSystem(cargoSystem, resourceSystem);
   conjunctionSystem = new ConjunctionSystem();
   // trawlManager: imported singleton from TrawlManager.js
   autopilotSystem = new AutopilotSystem();
@@ -1428,7 +1423,7 @@ async function init() {
   // --- ST-6.7: Environment Hazards (AO, MMOD, Safe-Mode, Radiation, Battery DOD) ---
   environmentSystem = new EnvironmentSystem(eventBus, player, powerDistribution, resourceSystem, skillsSystem);
   environmentSystem.init();
-  _bootMark('Subsystems constructed (resource/sensor/cargo/forge/conjunction/autopilot/skills/lasso/rewards/codex/spaceWeather/missionEvents/environment)');
+  _bootMark('Subsystems constructed (resource/sensor/cargo/conjunction/autopilot/skills/lasso/rewards/codex/spaceWeather/missionEvents/environment)');
 
   // --- F17: Codex Viewer UI (browse unlocked entries) ---
   // Lane E (F1 workbench plan, 2026-09-23): the full-screen reader mirrors the
@@ -1790,22 +1785,8 @@ async function init() {
   // Aim-before-launch: give ArmManager the autopilot for the daughter ceremony.
   if (typeof armManager.setAutopilot === 'function') armManager.setAutopilot(autopilotSystem);
 
-  // --- ST-6.4: Strategic Map (Shift+V orbital overview) ---
-  strategicMap = new StrategicMap({
-    scene: sceneManager.getScene(),
-    renderer: sceneManager.getRenderer(),
-    catalogLoader,
-    debrisField,
-    playerSatellite: player,
-    conjunctionSystem,
-    environmentSystem,
-    eventBus,
-  });
-  strategicMap.init();
-
   // --- UX-11 #5: Earth city labels (5 key, off by default, persisted) ---
-  // Offline-first local JSON; attaches to BOTH the command-view Earth and the
-  // Strategic Map's wireframe Earth so one toggle drives both surfaces.
+  // Offline-first local JSON; attaches to the command-view Earth.
   cityLabels.load().then((count) => {
     if (!count) return;
     cityLabels.attach({
@@ -1817,8 +1798,6 @@ async function init() {
       // texture (prime meridian at +X, east toward -Z). latLonToPosition runs
       // east toward +Z, so mirror longitude to align labels with continents.
       mirrorLon: true,
-      // Hide command-view labels while the Strategic Map covers the screen.
-      isActive: () => !(strategicMap && strategicMap.isOpen()),
       // Selectivity caps: in-view peaks are 22-39 labels, so 28 binds only in
       // the densest stretches (Europe, East Asia, Ganges plain). 6 = measured
       // global peak pads-in-one-view, so pads are never truncated here.
@@ -1828,29 +1807,6 @@ async function init() {
       // ship's screen circle (live position, no clone; radius covers every radiator pose).
       occluders: cityLabels.shipOccluders(() => player && player.position),
     });
-    if (strategicMap && strategicMap._earthMesh && strategicMap._camera) {
-      cityLabels.attach({
-        parent: strategicMap._earthMesh,
-        radius: Constants.EARTH_RADIUS,
-        camera: strategicMap._camera,
-        container: strategicMap._containerEl,
-        isActive: () => strategicMap.isOpen(),
-        // Mirror longitude to match the corrected ground stations + debris
-        // (real world frame), so the wireframe map's geography matches reality
-        // and the command view.
-        mirrorLon: true,
-        // The map camera orbits much farther out (initial ~12.5 Earth radii,
-        // zoom range ~0.8–78 r) than the command view. Default zoom shows
-        // tier 1 only; zoom in to reveal tiers 2–3.
-        lodNear: Constants.EARTH_RADIUS * 6,
-        lodFar: Constants.EARTH_RADIUS * 13,
-        // The whole hemisphere is a candidate at default zoom; cap the mix so
-        // it stays a strategic overview, with a bounded pad budget so the map
-        // doesn't read pad-only.
-        maxVisible: 30,
-        maxVisibleLaunch: 8,
-      });
-    }
 
     // --- Launch cameo: a single plume rises from the player's home spaceport
     // during the opening pass. Anchored to the same Earth group + mirrorLon
@@ -1875,7 +1831,6 @@ async function init() {
       radius: Constants.EARTH_RADIUS,
       mirrorLon: true,
       cities: cityLabels.getCities(),
-      canFire: () => !(strategicMap && strategicMap.isOpen()),
     });
   }).catch((e) => console.warn('[main] cityLabels:', e));
 
@@ -1892,7 +1847,7 @@ async function init() {
     gameState, player, armManager, cameraSystem, targetSelector,
     debrisField, debrisWireframe, dockingReticle, hud, targetReticle,
     navSphere, debrisMap, audioSystem, debugOverlay, sensorSystem,
-    lassoSystem, autopilotSystem, codexViewerUI, strategicMap, hotkeyOverlay,
+    lassoSystem, autopilotSystem, codexViewerUI, hotkeyOverlay,
     // Scan auto-select: unified acquire helper (Shift+N / Shift+A route here).
     targetAcquisition,
     // Net ladder Phase B: Mother Large Net routing (>500 kg → fireMotherNet).
@@ -1935,8 +1890,8 @@ async function init() {
 
   // --- Zoom Ladder (S2 walking skeleton — docs/ladder/03-plan.md M1) ---
   // The single WheelRouter (T3) owns ALL wheel input: it replaces the three
-  // shipped listeners (InputManager window-capture, CameraSystem canvas,
-  // StrategicMap own-canvas — all removed this commit) and dispatches to the
+  // shipped listeners (InputManager window-capture, CameraSystem canvas, and
+  // the since-deleted strategic map's own canvas) and dispatches to the
   // arm-SK branch, the ladder (flag on), or the legacy zoom (flag off).
   // LadderController owns the pure ZoomLadder core + the CameraSystem ride
   // engine + the per-floor render block; the rail is the S2 stub. Everything is
@@ -2004,10 +1959,9 @@ async function init() {
   // guarded, and HullCamFloor itself swallows provider throws (best-effort).
   // The providers object is HOISTED so the Wave-5 REFIT pane consumes the
   // SAME rows (one source of live-row truth — 08-workbench §2 "the providers
-  // that already feed SOLAR / FUEL / LINK / REELS").
+  // that already feed FUEL / LINK"). `power` and `cargo` have no provider: the
+  // static spec rows of the blueprint manifest carry those two cards.
   const hullcamProviders = {
-    power: () => (powerDistribution && powerDistribution.getSolarInput
-      ? [`SOLAR ${Math.round(powerDistribution.getSolarInput())} W`] : []),
     engineering: () => {
       // Fuel row honesty rule (MotherCallouts 'feep' live row, R4): a
       // cargo-fed metal is NOT drawn from the xenon tank — never report
@@ -2024,9 +1978,6 @@ async function init() {
     },
     comms: () => (commsSystem && commsSystem.getSuppressionTier
       ? [`LINK: ${commsSystem.getSuppressionTier() > 0 ? 'SUPPRESSED' : 'NOMINAL'}`] : []),
-    // The tether reels were never switched on (the reel system was removed 2026-10-16),
-    // so this line has always read 0/4. Kept as-is: dropping visible text is the owner's call.
-    cargo: () => ['REELS ACTIVE 0/4'],
     // thermal: omitted until the flower refit lands — the static MLI spec
     // rows from the blueprint manifest carry that card.
   };
@@ -3133,7 +3084,6 @@ async function init() {
     canvas,
     inputManager,
     cameraSystem,
-    strategicMap,
     ladderController,
   });
   wheelRouter.start();
@@ -3388,9 +3338,6 @@ async function init() {
     slowMoFactor = Constants.DETACH_SLOWMO_FACTOR;
   });
 
-  // ST-6.4 Strategic Map toggle listener removed 2026-10-09 (H1: Shift+V retired).
-  // Events.STRATEGIC_MAP_TOGGLE stays defined (count pin); nothing emits it.
-
   // --- Delegation 2 (2026-05-31): Welcome field on first mission ever ---
   // On the player's very first MISSION_START we seed the curated 7–8 fragment
   // welcome cluster in the player's own orbit so the onboarding `scan` and
@@ -3468,7 +3415,6 @@ async function init() {
       // Leaving gameplay — kill loops defensively.
       if (typeof audioSystem.stopThrusterHum === 'function') audioSystem.stopThrusterHum();
       if (typeof audioSystem.stopDeltaVAlarm === 'function') audioSystem.stopDeltaVAlarm();
-      if (typeof audioSystem.stopForgeHum === 'function') audioSystem.stopForgeHum();
     }
     _syncAudioCtxState();
     _flushScheduledFrame();
@@ -3633,7 +3579,6 @@ async function init() {
       if (audioSystem) {
         if (typeof audioSystem.stopThrusterHum === 'function') audioSystem.stopThrusterHum();
         if (typeof audioSystem.stopDeltaVAlarm === 'function') audioSystem.stopDeltaVAlarm();
-        if (typeof audioSystem.stopForgeHum === 'function') audioSystem.stopForgeHum();
         if (typeof audioSystem.stopAmbientLoop === 'function') audioSystem.stopAmbientLoop();
         if (typeof audioSystem.stopLassoWireWhistle === 'function') audioSystem.stopLassoWireWhistle();
         if (typeof audioSystem.stopAlignmentTone === 'function') audioSystem.stopAlignmentTone();
@@ -3668,7 +3613,6 @@ async function init() {
     if (audioSystem) {
       if (typeof audioSystem.stopThrusterHum === 'function') audioSystem.stopThrusterHum();
       if (typeof audioSystem.stopDeltaVAlarm === 'function') audioSystem.stopDeltaVAlarm();
-      if (typeof audioSystem.stopForgeHum === 'function') audioSystem.stopForgeHum();
       if (typeof audioSystem.stopAmbientLoop === 'function') audioSystem.stopAmbientLoop();
       if (typeof audioSystem.stopLassoWireWhistle === 'function') audioSystem.stopLassoWireWhistle();
       if (typeof audioSystem.stopAlignmentTone === 'function') audioSystem.stopAlignmentTone();
@@ -6377,8 +6321,7 @@ function gameLoop(timestamp) {
     lastTime = timestamp;
     _blurKeepalivePresentTs = timestamp;
     try {
-      if (strategicMap && strategicMap.isOpen()) strategicMap.render();
-      else if (sceneManager) sceneManager.render();
+      if (sceneManager) sceneManager.render();
       if (blackFrameProbe) blackFrameProbe.tick(timestamp);
     } catch (_e) { /* keepalive must never break the halt path */ }
     _scheduleNextFrame(); // ~33 ms interval while blurred (_getScheduleIntervalMs)
@@ -6416,7 +6359,6 @@ function gameLoop(timestamp) {
   if (gameFlowManager.paused) {
     audioSystem.stopThrusterHum();
     audioSystem.stopDeltaVAlarm();
-    audioSystem.stopForgeHum();
     // §12.12 Suspend ctx via centralised policy helper. Previously inlined
     // the `if (ctx.state === 'running') ctx.suspend()` check; now the helper
     // covers all suspend / resume call sites consistently.
@@ -6978,9 +6920,6 @@ function gameLoop(timestamp) {
     } catch (e) { console.error('[GameLoop] dossierSystem:', e); }
     if (!_worldHeld) { try { kesslerSystem.update(dt); } catch (e) { console.error('[GameLoop] kesslerSystem:', e); } }
 
-    // Update forge system
-    if (!_worldHeld) { try { forgeSystem.update(dt); } catch (e) { console.error('[GameLoop] forgeSystem:', e); } }
-
     // Update trawl manager (Phase 2 — trawl system)
     try {
       trawlManager.update(dt, {
@@ -7115,7 +7054,6 @@ function gameLoop(timestamp) {
       autopilotSystem,
       cameraSystem,
       armManager,                          // Delegation 3: daughter wireframe + arm count
-      forgeState: forgeSystem.getState(),
       cargoStatus: cargoSystem.getStatus(),
       targetLaw: _lawFrame,                // Session Q (plan D15): → TargetPanel rows / dot / odds
     });
@@ -7247,7 +7185,7 @@ function gameLoop(timestamp) {
       commsSystem.update(dt, { debrisField, player, activeSatellites });
     }
   } else {
-    // §12.12 Per-frame `stopThrusterHum / stopDeltaVAlarm / stopForgeHum`
+    // §12.12 Per-frame `stopThrusterHum / stopDeltaVAlarm`
     // calls removed from this branch — moved to the STATE_CHANGE listener
     // (init() block above) which fires once per transition instead of
     // 30-120 times per second across menu / briefing / shop screens. The
@@ -7305,10 +7243,7 @@ function gameLoop(timestamp) {
     _bootMark('first sceneManager.render(). START');
   }
   if (_shotDrawMeter) _shotDrawMeter.before();   // ?shot draw-call meter (null in play)
-  if (strategicMap && strategicMap.isOpen()) {
-    strategicMap.update(dt);
-    if (!_skipPaint) strategicMap.render();
-  } else if (!_skipPaint) {
+  if (!_skipPaint) {
     // viewCover 'full' (Tech Library / ShopScreen plate): the whole composer
     // pipeline is skipped — the canvas keeps its last presented frame under
     // the ~opaque plate. Never skipped while ?bfp / ?shot are armed.
@@ -7326,9 +7261,9 @@ function gameLoop(timestamp) {
   // frame's final render, so its readbacks see this frame's buffer pre-present.
   if (blackFrameProbe) blackFrameProbe.tick(timestamp);
   // Black-box self-repair: same rAF task, same pre-present buffer. Skipped when
-  // this frame's scene render was (viewCover plate, strategic map) — the buffer
+  // this frame's scene render was (viewCover plate) — the buffer
   // then holds no scene. Never part of diagnosticsArmed / _frameSched.n.
-  if (blackPatchHeal && !_skipPaint && !(strategicMap && strategicMap.isOpen())) blackPatchHeal.tick(timestamp);
+  if (blackPatchHeal && !_skipPaint) blackPatchHeal.tick(timestamp);
 
   // §13 boot-timeline: mark the very first rendered frame. Continuous capture
   // mode — user calls window.__dumpBootTimeline() from DevTools when they want
@@ -7551,8 +7486,7 @@ function onResize() {
   // canvas content and the DOM labels locked together. Cost: one extra render
   // per resize event (~2–3 ms GPU on the reference M4), only while resizing.
   try {
-    if (strategicMap && strategicMap.isOpen()) strategicMap.render();
-    else sceneManager.render();
+    sceneManager.render();
     cityLabels.update();
   } catch (_e) { /* resize repaint must never break the handler */ }
 }

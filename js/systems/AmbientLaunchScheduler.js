@@ -50,7 +50,7 @@ import { gameState } from '../core/GameState.js';
 import { Constants } from '../core/Constants.js';
 import { launchCameo, launchVisible, LAUNCH_FLASH_S, FIRE_GATE } from '../scene/LaunchCameo.js';
 import { cityLabels, cityFacingDot } from '../scene/CityLabels.js';
-import { latLonToPosition } from '../ui/StrategicMap.js';
+import { latLonToPosition } from '../scene/Ephemeris.js';
 
 /** How often the scheduler evaluates pad visibility (seconds). Short so the
  * fire happens within ~0.5 s of the pad rising — the player needs the whole

@@ -138,9 +138,9 @@ export function moonEphemeris(date) {
  * Geographic (lat, east-lon) → unit direction in the game's Earth-fixed world
  * frame. AUTHORITATIVE geographic→scene entry point: the mirrored-longitude
  * convention is applied INTERNALLY here (pass real east longitude, get the
- * scene direction). By contrast, StrategicMap.latLonToPosition is a raw
- * spherical helper that does NOT mirror — its callers negate longitude
- * themselves (StrategicMap.js:722, CityLabels.js:250 `mirrorLon`). Prefer this
+ * scene direction). By contrast, latLonToPosition (below) is a raw spherical
+ * helper that does NOT mirror — its callers negate longitude themselves
+ * (CityLabels `mirrorLon`, AmbientLaunchScheduler, LaunchCameo). Prefer this
  * function when converting real-world coordinates; never negate before
  * calling it.
  *
@@ -157,5 +157,31 @@ export function latLonToUnitVec(latDeg, lonEastDeg) {
     x: Math.cos(lat) * Math.cos(lon),
     y: Math.sin(lat),
     z: Math.cos(lat) * Math.sin(lon),
+  };
+}
+
+/**
+ * Convert latitude / longitude to a 3-D position on a sphere of the given
+ * radius. Convention: Y-up (Three.js default). lat=0, lon=0 → +X axis.
+ * lat=90 → +Y (north pole).
+ *
+ * NOTE: this is a RAW spherical helper — it does NOT apply the game's
+ * mirrored-longitude convention. Callers converting real geographic east
+ * longitude must negate it themselves (see `mirrorLon` in CityLabels), or use
+ * latLonToUnitVec above, which applies the mirror internally and is the
+ * authoritative geographic→scene entry point.
+ *
+ * @param {number} lat_deg - Latitude in degrees (-90…+90)
+ * @param {number} lon_deg - Longitude in degrees (-180…+180)
+ * @param {number} radius  - Sphere radius
+ * @returns {{ x: number, y: number, z: number }}
+ */
+export function latLonToPosition(lat_deg, lon_deg, radius) {
+  const lat = lat_deg * Math.PI / 180;
+  const lon = lon_deg * Math.PI / 180;
+  return {
+    x: radius * Math.cos(lat) * Math.cos(lon),
+    y: radius * Math.sin(lat),
+    z: radius * Math.cos(lat) * Math.sin(lon),
   };
 }

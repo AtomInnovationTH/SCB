@@ -2413,18 +2413,6 @@ export class ArmUnit {
   }
 
   /**
-   * Auto-lock hinge for crossbow fire, then schedule auto-unlock after settle time.
-   * Called by fireDualPair and single-fire paths.
-   * Choice: one-shot timer approach (HINGE_SETTLE_TIME seconds after fire).
-   * @private
-   */
-  _autoLockForFire() {
-    this.lockHinge();
-    // Schedule auto-unlock after recoil settle time
-    this._hingeSettleTimer = Constants.OCTOPUS_V5.HINGE_SETTLE_TIME;
-  }
-
-  /**
    * Tick the hinge settle timer. Call each frame from the update loop.
    * When timer expires, the hinge auto-unlocks.
    * @param {number} dt — frame delta time
@@ -2498,41 +2486,6 @@ export class ArmUnit {
     }
     // Defensive fallback (mesh not built): body centre.
     return out.copy(this.position);
-  }
-
-  /**
-   * Compute the residual recoil angular impulse for a dual-fire at current alpha.
-   * Per ARM_PIVOT_ANALYSIS.md §4.3:
-   *   residual = 2 × F_impulse × COLLAR_Y × cos(α)
-   *
-   * F_impulse = m_daughter × v_launch (momentum per arm).
-   * The factor of 2 accounts for the antipodal pair.
-   * cos(α) = 1 at stowed (max residual), 0 at equatorial (zero residual).
-   *
-   * @param {number} [launchSpeed] — override launch speed (m/s). Defaults to this.launchSpeed.
-   * @returns {number} Residual angular impulse in N·m·s (positive = +Y torque)
-   */
-  computeRecoilResidual(launchSpeed) {
-    const speed = launchSpeed !== undefined ? launchSpeed : this.launchSpeed;
-    const mass = this.config.mass;
-    const collarY = Constants.OCTOPUS_V5.COLLAR_Y; // meters
-    const alpha = this._aimAlpha;
-
-    // Derivation (§4.3): For a pair at azimuths θ and θ+π, both at swing angle α,
-    // the net linear impulse = 2·m·v·cos(α) along ±Y.
-    // The angular impulse about the Mother CoM comes from the collar offset:
-    //   torque_impulse ≈ 2 × (m × v) × COLLAR_Y × cos(α)
-    // This is approximate — treats COLLAR_Y as the lever arm for the Y-component force.
-    return 2 * mass * speed * collarY * Math.cos(alpha);
-  }
-
-  /**
-   * Check if the Mother angular rate is below the fire safety threshold.
-   * @param {number} omegaMagnitude — |ω| in rad/s of the mother spacecraft
-   * @returns {boolean} true if safe to fire (ω below threshold)
-   */
-  static isFireRateSafe(omegaMagnitude) {
-    return omegaMagnitude <= Constants.OCTOPUS_V5.FIRE_RATE_INTERLOCK;
   }
 
   /**

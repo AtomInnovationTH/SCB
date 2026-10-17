@@ -48,11 +48,10 @@
  *
  * `readout` keys the HullCamFloor detail-lens provider (deps.providers[readout])
  * whose live rows expand the focused card; `spec` rows are the static fallback
- * so the card is never blank headless. NOTE: the shipped 'cargo' provider
- * (main.js) reports tether-winch activity ("REELS ACTIVE n/4") — that data
- * describes the winches at the daughter berths, so BERTHS keys it now; CARGO
- * keys 'cargoBay' (no provider yet → honest static rows until a hold/capacity
- * provider lands with the serial track).
+ * so the card is never blank headless. NOTE: main.js ships no 'cargo' (or
+ * 'power') provider, so BERTHS (keyed 'cargo') and CARGO (keyed 'cargoBay')
+ * show their honest static rows until a hold/capacity provider lands with the
+ * serial track.
  *
  * `codexId` is the Tech Library deep-link a title click opens
  * (CODEX_OPEN_ENTRY — the MotherCallouts grammar). Ids are reused from the
@@ -109,8 +108,7 @@ export const BLUEPRINT_SUBSYSTEMS = [
                                       // berth (deployed it walks out with the
                                       // strut; the static rim is the fallback)
     priority: 7,
-    readout: 'cargo',                 // shipped provider: REELS ACTIVE n/4 —
-                                      // winch activity, i.e. THIS hardware
+    readout: 'cargo',                 // no shipped provider: the static spec rows show
     codexId: 'docking_berthing',      // MotherCallouts `berths`
     spec: ['4\u00d7 daughter berths \u00b7 2 large, 2 small', 'Dyneema tether winches'],
   },

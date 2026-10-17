@@ -8,7 +8,7 @@
  *        a. two-finger PINCH on the game canvas → synthetic wheel through
  *           `WheelRouter.routeSyntheticWheel(...)`, the SAME dispatch recipe as
  *           the physical wheel (Ipad.md §5.1 "one behavior, two triggers"), so
- *           arm-SK priority, StrategicMap ownership, ladder active/inactive and
+ *           arm-SK priority, ladder active/inactive and
  *           the legacy camera zoom all keep working through one path;
  *        b. a one-finger DRAG on an invisible grip laid over the visible
  *           Zoom-Ladder rail (#ladder-rail) → `ladderController.jump({toFloor})`,

@@ -86,7 +86,7 @@ function cargoThrustFactor(ship) {
 /**
  * The active fuel's thrustScale: how hard the engine pushes per watt, relative to xenon (argon 0.46,
  * krypton 0.67, xenon 1.0; a cargo fuel its own). h3b-argon-push D1: the SAME scale acts in the
- * manual-thrust path (thrustIon) and the live burn path (applyCartesianImpulse), and the autopilot reads
+ * live burn path (applyCartesianImpulse; the old manual-thrust path is gone), and the autopilot reads
  * it (getThrustScale) to plan a braking rate its engine can really deliver.
  * @param {object} ship
  * @returns {number} > 0
@@ -367,7 +367,6 @@ export class PlayerSatellite extends THREE.Group {
     this._hasMPD = false;           // unlocked via shop purchase
     this._mpdCathodeTime = 0;       // cumulative seconds of MPD firing
     this._mpdCathodeLife = Constants.MPD_CATHODE_LIFE || 600; // upgradable via Hardened Cathode
-    this._mpdDeltaV = Constants.MPD_DELTA_V || 0.0015; // scene-scale ΔV per tick
 
     // ========================================================================
     // MPD BURST MODE STATE (S3b)
@@ -388,13 +387,11 @@ export class PlayerSatellite extends THREE.Group {
     this._coldGasRate = 0.5;
     this._basePowerDraw = 0.5;
     this._ionDeltaV = 0.0003;
-    this._coldGasDeltaV = 0.002;
 
     // Base values for upgrade multipliers (so upgrades modify the rate properties
-    // that thrustIon()/thrustColdGas() already read directly)
+    // that the live burn path reads directly)
     this._baseIonDeltaV = this._ionDeltaV;
     this._baseIonXenonRate = this._ionThrustXenonRate;
-    this._baseColdGasDeltaV = this._coldGasDeltaV;
     this._baseColdGasRate = this._coldGasRate;
 
     // Ion-drive multiplier factors, kept separate so they compose without one
@@ -613,20 +610,18 @@ export class PlayerSatellite extends THREE.Group {
     this._frameRecoilDv = 0;        // Accumulated recoil ΔV this frame (for dual-fire tracking)
     this._frameRecoilCount = 0;     // Number of crossbow fires this frame
     this._frameN2Consumed = 0;      // Actual N₂ consumed (kg) this frame for refund on dual-fire
-    this._recoilAngularVel = 0;     // C-11: Pending recoil angular velocity (rad/s) for RCS nulling
     // Mother-net recoil (2026-07-23, sim-fidelity fix): a whale-net launch is a
     // real momentum event. `_recoilPitchAngle` is the integrated transient hull
     // pitch (rad) from the OFF-AXIS muzzle lever arm; RCS springs it back to 0
-    // (attitude hold) while `_recoilAngularVel` is nulled. Because the muzzle
+    // (attitude hold). Because the muzzle
     // sits 0.25 m below the CoM (packaging around the sensor turret), an
     // uncompensated shot pitches the ship — the sim now reflects that and bills
     // the correction in cold-gas N₂. A centred muzzle would produce zero torque.
     this._recoilPitchAngle = 0;
-    this._recoilPitchVel = 0;                 // mother-net pitch rate (rad/s), separate from the crossbow C-11 _recoilAngularVel
-    // Crossbow / dual-fire angular recoil now perturbs a REAL transient yaw
-    // (2026-07-23): the legacy scalar _recoilAngularVel above still exists for
-    // the C-11 magnitude bookkeeping + its RCS null, but it was never applied to
-    // the hull. These drive the visible transient yaw and settle it (ζ≈1, ~2 s).
+    this._recoilPitchVel = 0;                 // mother-net pitch rate (rad/s)
+    // Angular recoil perturbs a REAL transient yaw (2026-07-23). These drive the
+    // visible transient yaw and settle it (ζ≈1, ~2 s). (t6: the legacy C-11
+    // angular scalar — written only by the dual-fire chain — went with it.)
     this._recoilYawAngle = 0;
     this._recoilYawVel = 0;
     this._qRecoil = new THREE.Quaternion();   // scratch: transient recoil rotation
@@ -4228,7 +4223,7 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * Catch hand-off hold: slew the radiators to `thetaRad` (the normal
    * rate-limited slew, never a snap) and refuse every other commanded radiator
-   * move until releaseFlowerHandoff() or a snap-to-stow/launch (new game).
+   * move until releaseFlowerHandoff() or a snap-to-stow (new game).
    * Calling it again while held just retargets.
    * @param {number} thetaRad
    * @returns {number|null} the angle in degrees after the bag-band cap (what
@@ -4292,32 +4287,6 @@ export class PlayerSatellite extends THREE.Group {
       });
     }
     return null;
-  }
-
-  /**
-   * Design 7b — the launch hand-off: the ship is launched ALREADY
-   * folded (the fold happens on the pad, not in the fairing — and the 9.7 s
-   * slew would not finish before orbit insertion at t ≈ 8 s), so the driver
-   * snaps the flower to LAUNCH: lock armed, θ = POSE_LAUNCH_DEG exactly, wings
-   * folded, latch idle, hinges written now. Same gate as setFlowerPose('LAUNCH')
-   * minus the dev force: ONLY while an active launch driver is wired; refused
-   * (false) from orbit. No POSE event — nothing slewed. No hardware → false.
-   * @returns {boolean} true when snapped
-   */
-  snapFlowerToLaunch() {
-    this._flowerHandoffHold = null;
-    if (this._flowerGroups.length === 0) return false;
-    const ls = this._launchSequence;
-    if (!(ls && typeof ls.isActive === 'function' && ls.isActive())) return false;
-    const FL = Constants.THERMAL.FLOWER;
-    this._flowerLaunchLock = true;
-    this._flowerOverrideFold = false;   // the sequence's arming is not an OVERRIDE fold — no ROSA hold, the floor drops at once
-    this._flowerTargetTheta = undefined;
-    this._flowerVentArmed = false;
-    this._lastFlowerTap = undefined;
-    this._flowerThetaRad = (FL.POSE_LAUNCH_DEG * Math.PI) / 180;
-    this._updateFlower(0);
-    return true;
   }
 
   /**
@@ -6721,15 +6690,9 @@ export class PlayerSatellite extends THREE.Group {
     // --- V5: Thruster interlock check ---
     this._updateThrusterInterlock();
 
-    // --- C-11: RCS nulling of recoil angular velocity ---
-    if (Constants.FEATURE_FLAGS.RECOIL_PHYSICS) {
-      this._tickRecoilRcs(gameDt);
-    }
-
     // --- Mother-net recoil: integrate the transient hull pitch and let RCS
     // (attitude hold) spring it back to zero. Ungated — only the mother net
-    // feeds _recoilAngularVel/_recoilPitchAngle (crossbow angular stays behind
-    // RECOIL_PHYSICS above), so this never touches unrelated behaviour.
+    // feeds _recoilPitchAngle, so this never touches unrelated behaviour.
     this._tickRecoilAttitude(gameDt);
 
     // --- Apply accumulated thrust ---
@@ -7846,51 +7809,9 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * C-11: Apply angular impulse from Config G dual-fire residual.
-   * Converts torque impulse (N·m·s) to angular velocity change via
-   * approximate moment of inertia (I ≈ mass × r² where r = 0.5 m).
-   * RCS nulling runs in _tickRecoilRcs() during update loop.
-   *
-   * @param {number} torqueImpulse — angular impulse in N·m·s
-   */
-  applyRecoilAngularImpulse(torqueImpulse) {
-    if (!Constants.FEATURE_FLAGS.RECOIL_PHYSICS) return;
-    // Real yaw MOI from the mass tree (SSOT).
-    const I_mother = this._attitudeMOI('y');
-    const deltaOmega = torqueImpulse / I_mother;
-    this._recoilAngularVel += deltaOmega;      // legacy C-11 scalar (RCS-nulled, HUD bookkeeping)
-    // 2026-07-23: also drive the REAL transient yaw so the dual-fire residual
-    // actually perturbs the hull (the scalar above was never applied to
-    // orientation). Yaw about the ship's +Y axis; RCS springs it back in ~2 s.
-    this._recoilYawVel += deltaOmega;
-  }
-
-  /**
-   * C-11: RCS damping of recoil angular velocity.
-   * Nulls _recoilAngularVel toward zero at RCS angular authority rate.
-   * Called each frame from update(). Settles within ~2 s.
-   * @param {number} dt — frame time in seconds
-   * @private
-   */
-  _tickRecoilRcs(dt) {
-    if (Math.abs(this._recoilAngularVel) < 1e-6) {
-      this._recoilAngularVel = 0;
-      return;
-    }
-    // RCS angular authority: ~0.5 rad/s² (cold-gas thrusters)
-    const rcsAuthority = 0.5; // rad/s²
-    const maxDelta = rcsAuthority * dt;
-    if (Math.abs(this._recoilAngularVel) <= maxDelta) {
-      this._recoilAngularVel = 0;
-    } else {
-      this._recoilAngularVel -= Math.sign(this._recoilAngularVel) * maxDelta;
-    }
-  }
-
-  /**
    * Integrate the mother-net recoil pitch and let RCS attitude-hold spring it
    * back to zero. Models the muzzle-lever-arm kick as a critically-damped 2nd
-   * order system: the launch injects angular velocity (`_recoilAngularVel`),
+   * order system: the launch injects angular velocity (`_recoilPitchVel`),
    * RCS applies a restoring torque proportional to the pitch error and a
    * damping torque proportional to the rate, so the hull kicks then recovers to
    * neutral in ~2 s (ζ≈1). The propellant cost of the correction is billed at
@@ -7929,26 +7850,6 @@ export class PlayerSatellite extends THREE.Group {
     if (Math.abs(this._recoilYawVel) < 1e-5 && Math.abs(this._recoilYawAngle) < 1e-5) {
       this._recoilYawVel = 0; this._recoilYawAngle = 0;
     }
-  }
-
-  /**
-   * C-11: Apply induced torque from CoM offset during recoil.
-   * Called by ArmManager when both RECOIL_PHYSICS and COM_TRACKING are enabled.
-   * The torque vector comes from computeInducedTorque(comPos, recoilForce).
-   *
-   * @param {{ x: number, y: number, z: number }} torqueVec — torque in N·m
-   */
-  applyInducedTorque(torqueVec) {
-    if (!Constants.FEATURE_FLAGS.RECOIL_PHYSICS) return;
-    if (!torqueVec) return;
-    // Convert torque vector magnitude to angular velocity (simplified)
-    const I_mother = this._attitudeMOI('y'); // real yaw MOI (SSOT); legacy when off
-    const mag = Math.sqrt(torqueVec.x ** 2 + torqueVec.y ** 2 + torqueVec.z ** 2);
-    this._recoilAngularVel += mag / I_mother;
-    // 2026-07-23: also perturb the visible transient. The CoM-offset induced
-    // torque from asymmetric fire is dominantly a yaw/roll about +Y at ship
-    // scale; feed the magnitude into the yaw spring (sign follows the residual).
-    this._recoilYawVel += (torqueVec.y >= 0 ? 1 : -1) * (mag / I_mother);
   }
 
   /**
@@ -8051,7 +7952,7 @@ export class PlayerSatellite extends THREE.Group {
    * not answer when the reason is the aft radiator (the pose-band guard: the
    * launch lock armed — folded, folding under OVERRIDE, or releasing below the
    * CLOSED floor — or θ outside [POSE_FLOOR_DEG, POSE_THRUST_MAX_DEG]). Called by
-   * every refused thrust path (thrustIon / thrustMPD / applyCartesianImpulse)
+   * every refused thrust path (applyCartesianImpulse)
    * AFTER the interlock has refused, so it never changes the refusal — it
    * narrates it (and, ABOVE the band with the lock off, starts the swing back
    * to OPEN_DEG 146° — DECISIONS §15, "swing to 146°, then fire"; the burn
@@ -8067,7 +7968,7 @@ export class PlayerSatellite extends THREE.Group {
     // DECISIONS §15 (owner 2026-10-09): "180 is allowed but dumb when ion
     // thrusters are on" — the engine commands the radiator home: swing to
     // OPEN_DEG (146°), then fire. Every refused caller counts as thrust
-    // commanded (thrustIon / thrustMPD, autopilot and dodge burns, recoil),
+    // commanded (autopilot and dodge burns, recoil),
     // so this runs before the dance gate and the 3 s throttle; the burn that
     // asked is still refused THIS time and goes through once θ is back in the
     // band (the guard re-reads θ every frame). The lock owns the radiator
@@ -8224,7 +8125,7 @@ export class PlayerSatellite extends THREE.Group {
 
   /**
    * Apply a shop upgrade that affects propulsion properties.
-   * Modifies the rate properties that thrustIon()/thrustColdGas() already read.
+   * Modifies the rate properties the live burn path reads.
    * @param {object} data - { effect: string, value: number }
    */
   applyUpgrade(data) {
@@ -8239,8 +8140,9 @@ export class PlayerSatellite extends THREE.Group {
         this._recomputeIonDeltaV();
         break;
       case 'coldGasThrust':
-        // value=1.3 → 30% more cold gas thrust per tick
-        this._coldGasDeltaV = this._baseColdGasDeltaV * data.value;
+        // value=1.3 → 30% more cold gas thrust per tick. No consumer since the manual
+        // cold-gas thrust method went (t6 2026-10-17); the case stays so the shop route
+        // (upgradeEffectRoutes) still lands on a handler.
         break;
       case 'coldGasEfficiency':
         // value=0.8 → 20% less cold gas consumption per tick
@@ -8248,7 +8150,7 @@ export class PlayerSatellite extends THREE.Group {
         break;
       case 'mpdThruster':
         // F16 + F2: Unlock MPD thruster from shop purchase. The burst subsystem
-        // (toggleMPDArmed) stays dormant (no hotkey); the MPD instead delivers a
+        // has no arming verb (it was deleted, t6 2026-10-17); the MPD instead delivers a
         // REAL passive gain by boosting the primary ion drive so ch11's copy
         // ("its passive drive trims your transfer burns") is honest. Idempotent on
         // save-restore because it recomputes _ionDeltaV from base × factors.
@@ -8826,294 +8728,6 @@ export class PlayerSatellite extends THREE.Group {
     try { return am.getMassBudget().deltaV; } catch (_) { return undefined; }
   }
 
-  /**
-   * Apply ion thrust (costs fuel + battery).
-   * Phase 4: fuel type determines thrustScale and consumption source.
-   * Electric engine (2026-09-25): thrust is limited by the energy actually
-   * available — the battery pays what it holds, up to the frame's need, and
-   * thrust scales by that fraction. Empty battery in sunlight → the panels'
-   * per-frame contribution only; empty in shadow → nothing.
-   * @param {{ x: number, y: number, z: number }} direction
-   * @param {number} dt
-   */
-  thrustIon(direction, dt) {
-    // Power distribution: block thrust entirely if THRUST bus is at 0%
-    if (powerDistribution.thrustMultiplier <= 0) {
-      const now = performance.now();
-      if (now - this._lastThrustOfflineWarning > 3000) {
-        this._lastThrustOfflineWarning = now;
-        eventBus.emit(Events.COMMS_MESSAGE, {
-            text: 'CAUTION: ION DRIVE OFFLINE. Increase THRUST power allocation',
-          priority: 'warning',
-        });
-      }
-      return;
-    }
-
-    // V5: Thruster interlock — back arm in danger zone near FEEP thruster exhaust;
-    // Design 7b / amendment 2026-09-09: the folded radiator (the pose-band
-    // guard) is the one reason the player is TOLD about — refused before any
-    // billing / thrustInput write, so the FEEP glow ramp never starts.
-    if (this._thrusterInterlock) {
-      this._warnFlowerThrustInhibit('FEEP');
-      return;
-    }
-
-    // Phase 4: Get current fuel definition for thrust scaling
-    const fuel = this._resourceSystem
-      ? this._resourceSystem.getCurrentFuel()
-      : Constants.FUELS[Constants.DEFAULT_FUEL];
-    const thrustScale = fuel.thrustScale || 1.0;
-
-    // Electric engine: draw what the battery holds, up to this frame's need
-    // (2026-09-25 — the old `battery <= 0` gate never tripped once the
-    // battery parked below one frame's draw, and the consume() refusal
-    // downstream was silent: full thrust for free). Thrust scales by the
-    // fraction actually drawn.
-    const powerNeed = this._ionThrustPowerRate * dt;
-    const powerFraction = this._drawBurnResource('battery', powerNeed);
-    if (powerFraction <= 0) {
-      this._warnPowerLimited('ion', 0);
-      eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_power', type: 'ion' });
-      return;
-    }
-    if (powerFraction < 1) this._warnPowerLimited('ion', powerFraction);
-
-    // Check fuel availability — xenon tank for default, cargo existence for alt fuels
-    if (!fuel.fromCargo && this.resources.xenon <= 0) {
-      eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_fuel', type: 'ion' });
-      return;
-    }
-
-    // Apply thrust scaled by fuel's thrustScale, throttle level (F14) and the
-    // power actually drawn
-    const thr = this.throttleLevel;
-    const burnScale = thrustScale * thr * powerFraction;
-    this.thrustInput.x += direction.x * this._ionDeltaV * burnScale * dt;
-    this.thrustInput.y += direction.y * this._ionDeltaV * burnScale * dt;
-    this.thrustInput.z += direction.z * this._ionDeltaV * burnScale * dt;
-
-    // Classify thrust direction (z = prograde/retrograde axis)
-    if (direction.z > 0.5) this._thrustDirection = 'prograde';
-    else if (direction.z < -0.5) this._thrustDirection = 'retrograde';
-    else if (!this._thrustDirection) this._thrustDirection = 'lateral';
-    this._lastThrustType = 'ion';
-
-    // h3-argon-engine D5: gas is billed from the Δv this tick actually produced
-    // (ṁ = c·m·Δv/(Isp·g0)): the Hall engine's flow follows thrust and Isp, so the ΔV the HUD
-    // promises (Tsiolkovsky, D4) and the gas the burn costs are the same law. c = the shop upgrade
-    // × the power-split efficiency (both act as Isp gains). It is billed only for thrust that
-    // happened (burnScale already carries the power fraction) and drawn partially, so the tank
-    // can truly empty — no silent all-or-nothing refusal parking it just above zero.
-    // Δv: thrustInput is km/s (see _applyThrust: da = 2a·ti/v with v in km/s), × 1000 -> m/s.
-    const dvMps = Math.hypot(direction.x, direction.y, direction.z)
-      * this._ionDeltaV * burnScale * dt * 1000 * cargoThrustFactor(this);
-    const fuelAmount = ionGasUnits(this, dvMps, fuel);
-
-    // Phase 4: Route fuel consumption through dual-mode system. Cargo fuels
-    // keep consumeIonFuel() semantics (existence check + auto-switch to
-    // xenon on depletion); the tank path draws partially.
-    if (this._resourceSystem && fuel.fromCargo) {
-      this._resourceSystem.consumeIonFuel(fuelAmount);
-    } else {
-      this._drawBurnResource('xenon', fuelAmount);
-    }
-
-    // Phase 4: Emit thrust visual event for velocity streaks overlay
-    // (magnitude reflects the power actually drawn)
-    eventBus.emit(Events.THRUST_VISUAL, {
-      magnitude: thr * powerFraction,
-      direction: this._thrustDirection || 'lateral',
-      type: 'ion',
-    });
-
-    // Visual: fire RCS puff opposite to thrust direction
-    this._fireRcsPuff(direction);
-  }
-
-  /**
-   * Apply cold-gas thrust (emergency).
-   * @param {{ x: number, y: number, z: number }} direction
-   * @param {number} dt
-   */
-  thrustColdGas(direction, dt) {
-    if (this.resources.coldGas <= 0) {
-      eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_fuel', type: 'coldGas' });
-      return;
-    }
-
-    // F14: Scale by throttle level
-    const thr = this.throttleLevel;
-    this.thrustInput.x += direction.x * this._coldGasDeltaV * thr * dt;
-    this.thrustInput.y += direction.y * this._coldGasDeltaV * thr * dt;
-    this.thrustInput.z += direction.z * this._coldGasDeltaV * thr * dt;
-
-    // Classify thrust direction (z = prograde/retrograde axis)
-    if (direction.z > 0.5) this._thrustDirection = 'prograde';
-    else if (direction.z < -0.5) this._thrustDirection = 'retrograde';
-    else if (!this._thrustDirection) this._thrustDirection = 'lateral';
-    this._lastThrustType = 'coldgas';
-
-    eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'coldGas', amount: this._coldGasRate * dt });
-
-    // Phase 4: Emit thrust visual event for velocity streaks overlay
-    eventBus.emit(Events.THRUST_VISUAL, {
-      magnitude: thr,
-      direction: this._thrustDirection || 'lateral',
-      type: 'coldgas',
-    });
-
-    // Visual: fire RCS puff opposite to thrust direction
-    this._fireRcsPuff(direction);
-  }
-
-  /**
-   * Apply MPD thrust (F16). Costs lithium + battery. High thrust, cathode erosion.
-   * @param {{ x: number, y: number, z: number }} direction
-   * @param {number} dt
-   */
-  thrustMPD(direction, dt) {
-    // Guard: MPD must be unlocked
-    if (!this._hasMPD) return;
-
-    // V5: Thruster interlock — back arm in danger zone near FEEP thruster exhaust
-    // (+ the folded-radiator guard, told to the player — see thrustIon)
-    if (this._thrusterInterlock) { this._warnFlowerThrustInhibit('MPD'); return; }
-
-    // Guard: power distribution — block if THRUST bus is at 0%
-    if (powerDistribution.thrustMultiplier <= 0) {
-      const now = performance.now();
-      if (now - this._lastThrustOfflineWarning > 3000) {
-        this._lastThrustOfflineWarning = now;
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'CAUTION: MPD DRIVE OFFLINE. Increase THRUST power allocation',
-          priority: 'warning',
-        });
-      }
-      return;
-    }
-
-    // Guard: need lithium
-    if (this.resources.lithium <= 0) {
-      eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_fuel', type: 'mpd' });
-      return;
-    }
-
-    // Electric engine (2026-09-25): same power law as the ion drive — the
-    // battery pays what it holds, up to the frame's need, and thrust scales
-    // by that fraction. (The old `battery <= 0` gate never tripped on a
-    // parked battery and the consume() refusal was silent: half-thrust MPD
-    // for free.) The S3b ≤5 % battery degrade rule still applies on top.
-    const powerNeed = (Constants.MPD_POWER_DRAW || 150) * 0.1 * dt; // 150 kW × 0.1 = 15 Wh/s draw
-    const powerFraction = this._drawBurnResource('battery', powerNeed);
-    if (powerFraction <= 0) {
-      this._warnPowerLimited('mpd', 0);
-      eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_power', type: 'mpd' });
-      return;
-    }
-    if (powerFraction < 1) this._warnPowerLimited('mpd', powerFraction);
-
-    // Cathode degradation factor
-    const cathodeLife = this._mpdCathodeLife;
-    const degradedFactor = Constants.MPD_DEGRADED_FACTOR || 0.5;
-    const cathodeFactor = this._mpdCathodeTime >= cathodeLife ? degradedFactor : 1.0;
-
-    // S3b: Battery degradation — reduce thrust at low battery
-    const batteryFraction = this.resources.batteryMax > 0
-      ? this.resources.battery / this.resources.batteryMax : 0;
-    const degradeThreshold = Constants.MPD_BURST_POWER_DEGRADE || 0.05;
-    const batteryThrustMult = batteryFraction <= degradeThreshold ? 0.5 : 1.0;
-
-    // Apply battery thrust degradation message
-    if (batteryThrustMult < 1.0 && !this._mpdDegraded) {
-      this._mpdDegraded = true;
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'PROPULSION',
-        text: 'CAUTION: MPD degraded. Critical power',
-        priority: 'warning',
-      });
-    } else if (batteryThrustMult >= 1.0) {
-      this._mpdDegraded = false;
-    }
-
-    // Apply thrust scaled by throttle level, cathode health, the ≤5 %
-    // battery degrade rule and the power actually drawn
-    const thr = this.throttleLevel;
-    const dv = this._mpdDeltaV * cathodeFactor * batteryThrustMult * thr * powerFraction * dt;
-    this.thrustInput.x += direction.x * dv;
-    this.thrustInput.y += direction.y * dv;
-    this.thrustInput.z += direction.z * dv;
-
-    // Classify thrust direction
-    if (direction.z > 0.5) this._thrustDirection = 'prograde';
-    else if (direction.z < -0.5) this._thrustDirection = 'retrograde';
-    else if (!this._thrustDirection) this._thrustDirection = 'lateral';
-    this._lastThrustType = 'mpd';
-
-    // Consume lithium — billed only for the thrust that actually happened
-    // (× the power fraction) and drawn partially, so the tank can truly
-    // empty (no silent all-or-nothing refusal parking it above zero).
-    const lithiumCost = (Constants.MPD_LITHIUM_PER_SECOND || 0.5) * dt * powerFraction;
-    this._drawBurnResource('lithium', lithiumCost);
-
-    // Track cathode time (increment when firing)
-    this._mpdCathodeTime += dt;
-
-    // Check cathode erosion threshold — emit event once when crossed
-    if (this._mpdCathodeTime >= cathodeLife &&
-        this._mpdCathodeTime - dt < cathodeLife) {
-      eventBus.emit(Events.MPD_CATHODE_WORN, {
-        cathodeTime: this._mpdCathodeTime,
-        degradedFactor,
-      });
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'PROPULSION',
-        text: `CAUTION: MPD cathode eroded. Thrust degraded to ${Math.round(degradedFactor * 100)}%`,
-        priority: 'warning',
-      });
-    }
-
-    // S3b: Thermal tracking
-    const heatRate = Constants.MPD_BURST_HEAT_RATE || 1.0;
-    this._mpdHeat += heatRate * dt;
-
-    // Check overheat
-    if (this._mpdHeat >= (Constants.MPD_BURST_OVERHEAT_THRESHOLD || 40)) {
-      this._mpdArmed = false;
-      this._mpdCooldownTimer = Constants.MPD_BURST_COOLDOWN_TIME || 15;
-      eventBus.emit(Events.MPD_OVERHEAT, { heat: this._mpdHeat });
-      eventBus.emit(Events.MPD_BURST_END, { reason: 'overheat' });
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'PROPULSION',
-        text: 'MPD THERMAL SHUTDOWN. Mandatory cooldown',
-        priority: 'critical',
-      });
-    }
-
-    // S3b: Battery low warning
-    const warnThreshold = Constants.MPD_BURST_POWER_WARN || 0.15;
-    if (batteryFraction < warnThreshold && batteryFraction > 0) {
-      eventBus.emit(Events.MPD_POWER_WARNING, { batteryFraction });
-    }
-
-    // Fire event
-    eventBus.emit(Events.MPD_FIRE, {
-      direction,
-      thrust: Constants.MPD_THRUST * cathodeFactor * thr,
-      cathodeHealth: Math.max(0, 1 - this._mpdCathodeTime / cathodeLife),
-    });
-
-    // Phase 4: Emit thrust visual event for velocity streaks overlay
-    eventBus.emit(Events.THRUST_VISUAL, {
-      magnitude: thr * cathodeFactor,
-      direction: this._thrustDirection || 'lateral',
-      type: 'mpd',
-    });
-
-    // Visual: fire RCS puff opposite to thrust direction (reuse existing)
-    this._fireRcsPuff(direction);
-  }
-
   /** @returns {boolean} Whether MPD thruster is unlocked */
   get hasMPD() { return this._hasMPD; }
 
@@ -9121,28 +8735,19 @@ export class PlayerSatellite extends THREE.Group {
   // S3b: MPD BURST MODE
   // ========================================================================
   //
-  // FUTURE TEAMS — DORMANT FEATURE (note added 2026-06-16)
-  // This entire MPD "Ludicrous mode" burst subsystem (toggleMPDArmed + heat /
-  // cooldown / lithium / MPD_BURST_START|END events + the StatusPanel HEAT row +
-  // the CodexSystem trigger + the AudioSystem burst SFX) is currently
-  // UNREACHABLE by the player. `toggleMPDArmed()` has NO caller: it used to be
-  // bound to the `M` key, but `M` was reassigned to the Debris Map in the
-  // 2026-06-14 hotkey revamp and the arming verb was never re-homed. As of
-  // 2026-06-16 the shop now describes the MPD as a passive thrust upgrade (no
-  // hotkey promised), so today buying it gives no burst benefit at all.
+  // DEAD FEATURE (note rewritten t6 2026-10-17; first written 2026-06-16)
+  // The MPD "Ludicrous mode" burst subsystem — the heat / cooldown / lithium
+  // bookkeeping in the tick, the MPD_BURST_END event, the StatusPanel HEAT row,
+  // the CodexSystem trigger and the AudioSystem disarm SFX — can no longer be
+  // started: its arming verb had no caller since the `M`
+  // key became the Debris Map (2026-06-14 hotkey revamp) and was deleted with
+  // the manual thrust methods. The shop describes the MPD as a passive thrust
+  // upgrade (no hotkey promised) and that passive gain is the live one.
   //
-  // DECISION NEEDED before this ships as a real feature — pick ONE:
-  //   (a) Give it an affordance again — bind arming to a free key (`W`, `Y`,
-  //       `O`, `,`, or the freed `C`), add it to HotkeyOverlay.HOTKEY_GROUPS +
-  //       the README/ARCHITECTURE §6 tables, and wire InputManager →
-  //       toggleMPDArmed(). (Re-instate the MPD_BURST control-mode branch that
-  //       was removed from InputManager.processInput on 2026-06-16.)  OR
-  //   (b) Make it genuinely passive — fold the thrust gain into the normal
-  //       drive when `hasMPD` is true and DELETE the burst/heat/arm machinery
-  //       (this getter, toggleMPDArmed, the MPD_BURST events, StatusPanel HEAT
-  //       row, CodexSystem trigger).  OR
-  //   (c) Cut the upgrade from the shop entirely.
-  // Until then, leave the code intact but be aware it does nothing in-game.
+  // DECISION NEEDED if burst mode is ever wanted back: re-add an arming verb on
+  // a free key (HotkeyOverlay.HOTKEY_GROUPS + README/ARCHITECTURE §6 tables +
+  // InputManager), or delete what is left (these getters, the tick bookkeeping,
+  // the StatusPanel HEAT row, the CodexSystem trigger).
   // See ARCHITECTURE.md §16 (drift register) for the cross-reference.
 
   /** @returns {boolean} Whether MPD is armed (Ludicrous mode active) */
@@ -9162,125 +8767,12 @@ export class PlayerSatellite extends THREE.Group {
   /** @returns {boolean} Whether Graphene Supercap upgrade is installed */
   get hasSupercap() { return this._hasSupercap; }
 
-  /**
-   * Toggle MPD armed state.
-   *
-   * NO CALLER as of 2026-06-16 — this is dead until a team re-homes the
-   * arming verb (its old `M` key is now the Debris Map). See the "DORMANT
-   * FEATURE" banner above the `isMPDArmed` getter for the decision options.
-   * If you re-bind it, also restore the MPD_BURST control-mode branch in
-   * InputManager.processInput and add it to the help pane + docs.
-   */
-  toggleMPDArmed() {
-    if (!this._hasMPD) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'PROPULSION',
-        text: 'MPD thruster not installed.',
-        priority: 'warning',
-      });
-      return;
-    }
-    if (this._mpdCooldownTimer > 0) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'PROPULSION',
-        text: `MPD cooling. ${Math.ceil(this._mpdCooldownTimer)}s remaining`,
-        priority: 'warning',
-      });
-      return;
-    }
-    if (this.resources.lithium <= 0) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'PROPULSION',
-        text: 'MPD FUEL DEPLETED. No lithium',
-        priority: 'warning',
-      });
-      return;
-    }
-
-    this._mpdArmed = !this._mpdArmed;
-    this._mpdDegraded = false;
-
-    if (this._mpdArmed) {
-      eventBus.emit(Events.MPD_BURST_START, { armed: true });
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'PROPULSION',
-        text: 'MPD ARMED. Ludicrous mode active',
-        priority: 'info',
-      });
-    } else {
-      eventBus.emit(Events.MPD_BURST_END, { reason: 'manual' });
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'PROPULSION',
-        text: 'MPD standby. Ion drive resumed',
-        priority: 'info',
-      });
-    }
-  }
-
   /** @returns {number} Cumulative cathode operation time in seconds */
   get mpdCathodeTime() { return this._mpdCathodeTime; }
 
   /** @returns {number} Cathode health as fraction (1.0 = new, 0.0 = fully worn) */
   get mpdCathodeHealth() {
     return Math.max(0, 1 - this._mpdCathodeTime / this._mpdCathodeLife);
-  }
-
-  /**
-   * Apply RCS cold-gas impulse for fine positioning within debris field.
-   * Unlike thrustIon/thrustColdGas which change orbital elements,
-   * RCS applies tiny velocity nudges to the world position directly.
-   * @param {{ x: number, y: number, z: number }} direction - Normalized thrust direction in local frame
-   * @param {number} dt - Delta time
-   */
-  applyRCS(direction, dt) {
-    const impulse = Constants.RCS_IMPULSE * this.throttleLevel * dt;
-
-    // Build local-frame axes: prograde (velocity), radial (up from Earth), cross-track
-    const vel = this._cartesian.velocity;
-    const vLen = Math.sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
-    let prograde, radialUp, crossTrack;
-
-    if (vLen > 1e-10) {
-      prograde = new THREE.Vector3(vel.x, vel.y, vel.z).normalize();
-    } else {
-      prograde = new THREE.Vector3(0, 0, 1);
-    }
-    radialUp = this.position.clone().normalize();
-    crossTrack = new THREE.Vector3().crossVectors(prograde, radialUp).normalize();
-    // Re-orthogonalize radialUp
-    radialUp = new THREE.Vector3().crossVectors(crossTrack, prograde).normalize();
-
-    // Map direction: W/S = prograde/retrograde (z), A/D = cross-track (x).
-    // The radial (y) axis is retained for completeness but no key feeds it
-    // since Q/E radial thrust was removed (hotkey revamp 2026-06-14) —
-    // direction.y is always 0 in normal play.
-    const worldImpulse = new THREE.Vector3()
-      .addScaledVector(prograde, direction.z * impulse)
-      .addScaledVector(crossTrack, direction.x * impulse)
-      .addScaledVector(radialUp, direction.y * impulse);
-
-    this._rcsVelocity.add(worldImpulse);
-
-    // Visual: fire RCS puff opposite to thrust direction
-    this._fireRcsPuff(direction);
-
-    // Phase 4: Emit thrust visual event for velocity streaks overlay (RCS)
-    let rcsDir = 'lateral';
-    if (direction.z > 0.5) rcsDir = 'prograde';
-    else if (direction.z < -0.5) rcsDir = 'retrograde';
-    else if (direction.x < -0.5) rcsDir = 'lateral-left';
-    else if (direction.x > 0.5) rcsDir = 'lateral-right';
-    eventBus.emit(Events.THRUST_VISUAL, {
-      magnitude: this.throttleLevel,
-      direction: rcsDir,
-      type: 'rcs',
-    });
-
-    // Clamp to max RCS speed
-    const maxV = Constants.RCS_MAX_SPEED;
-    if (this._rcsVelocity.length() > maxV) {
-      this._rcsVelocity.normalize().multiplyScalar(maxV);
-    }
   }
 
   /**
@@ -9774,14 +9266,14 @@ export class PlayerSatellite extends THREE.Group {
    *
    * Side-effects: mutates `this.orbit`, refreshes `this._cartesian`, charges
    * fuel/battery, accumulates `_deltaVSpent`. Does NOT touch `_rcsVelocity`.
-   * The billed path obeys the electric-engine power law (see thrustIon,
-   * 2026-09-25): the impulse scales by the fraction of its power draw the
+   * The billed path obeys the electric-engine power law (2026-09-25):
+   * the impulse scales by the fraction of its power draw the
    * battery actually holds; dt = 0 physics responses (recoil compensations)
    * draw no power but still pay for their gas (h3b-argon-push D3).
    *
    * h3b-argon-push D1 — same watts, less push: a billed burn applies the
    * ACTIVE fuel's thrustScale (argon 0.46, krypton 0.67, xenon 1.0) to the Δv
-   * as well as the power fraction, exactly as thrustIon does; the power draw
+   * as well as the power fraction; the power draw
    * per tick is unchanged and the gas is billed for the Δv actually applied
    * (once — see ionGasUnits). A `noBill` call is NOT the engine (the net tug
    * is passive momentum transfer), so it is exempt.
@@ -9839,7 +9331,7 @@ export class PlayerSatellite extends THREE.Group {
       // THRUST_VISUAL emit — nothing downstream sees a burn. The folded
       // radiator (Design 7b guard / amendment 2026-09-09) is told to the player.
       if (this._thrusterInterlock) { this._warnFlowerThrustInhibit('FEEP'); return false; }
-      // Electric engine (2026-09-25): the same law as thrustIon — the battery
+      // Electric engine (2026-09-25): the battery
       // pays what it holds, up to this burn's need, and the impulse scales by
       // that fraction. (The old `battery <= 0` gate never tripped on a battery
       // parked below one frame's draw, and the consume() refusal downstream
@@ -9921,7 +9413,7 @@ export class PlayerSatellite extends THREE.Group {
         ? this._resourceSystem.getCurrentFuel()
         : (Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL]) || null;
       // h3-argon-engine D5: billed from the Δv actually applied (dvMag·dvScale m/s — power fraction AND
-      // thrustScale already in dvScale), same law as thrustIon; billed once
+      // thrustScale already in dvScale); billed once
       const fuelAmount = ionGasUnits(this, dvMag * dvScale, fuel);
 
       if (this._resourceSystem && fuel && fuel.fromCargo) {

@@ -482,7 +482,7 @@ const SYSTEMS = [
         // callout, whose anchor is the craft body mid-pocket (z=-0.70).
         anchor: [ 0.0512 * M, 0.3967 * M, -0.85 * M ] },
       { id: 'tether_reels', name: 'TETHER WINCHES', risk: 'GREEN', tier: 'major', codexId: 'reel_mechanics',
-        massKg: 4, priority: 6, live: 'tether', specs: ['4× Dyneema fiber reels'],
+        massKg: 4, priority: 6, specs: ['4× Dyneema fiber reels'],
         // Reel cartridges ride the struts (stowed z≈−0.46, deployed ≈1.5 m out).
         // ReelCartridge_0 stays the ANCHOR mesh (reel #0 only); pick the 4 reel
         // housings so hover covers all four winches. Stand-in at az 64 (r 0.40,
@@ -2144,9 +2144,6 @@ export class MotherCallouts {
     try {
       switch (def.live) {
         case 'rosa': {
-          if (ctx.powerDistribution?.getSolarInput) {
-            out.push(`Solar: ${Math.round(ctx.powerDistribution.getSolarInput())} W`);
-          }
           // Wings state (round-3 T10): makes the furl state legible on the card.
           // Supersedes round-2 R12's Battery row — battery is already on the HUD.
           const furl = ctx.player?._rosaFurlProgress;
@@ -2171,14 +2168,8 @@ export class MotherCallouts {
             }
           }
           // No "Thrust" row: its data source (player.thrustInput) is dead —
-          // thrustIon/thrustColdGas/thrustMPD have no production callers and
+          // the manual thrust methods that wrote it are gone and
           // _applyThrust zeroes the accumulator before callouts update (review).
-          break;
-        }
-        case 'tether': {
-          // The reel system was removed 2026-10-16; it never ran, so this has always read 0/4.
-          // Kept as-is: dropping visible text is the owner's call.
-          out.push('Reels active: 0/4');
           break;
         }
         case 'ttc': {

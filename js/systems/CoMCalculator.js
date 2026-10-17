@@ -19,7 +19,7 @@
  * FRAME CONTRACT (cargo-continuity S13(a), register item 57): the dock ring is
  * STORED in generateDockPositions' Y-barrel convention (hinge ring in the XZ
  * plane, COLLAR_Y in the y slot, stow direction −ŷ) — CameraSystem's
- * AimDecomposition bridge reads `arm._dockOutward` in that convention, so the
+ * aim bridge reads `arm._dockOutward` in that convention, so the
  * stored fields cannot move. The mass model converts at the ONE boundary —
  * strutTipMeters / strutMidpointMeters — via the Y/Z swap
  * (x, y, z)_ship = (x, z, y)_stored, a rigid remapping: every magnitude

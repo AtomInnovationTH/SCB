@@ -42,10 +42,6 @@ class PowerDistribution {
     // Total available power (watts) — set by ResourceSystem each frame
     this.totalPower = 8000;
 
-    // Solar input (watts) — read by the HUD solar row and MotherCallouts. Nothing writes
-    // it any more (the launch sequence that did was removed), so those rows read 0 W.
-    this._solarInputW = 0;
-
     // Warning state
     this._lastArmWarning = 0;
 
@@ -198,14 +194,6 @@ class PowerDistribution {
   }
 
   /**
-   * Get current solar power input (watts).
-   * @returns {number}
-   */
-  getSolarInput() {
-    return this._solarInputW || 0;
-  }
-
-  /**
    * Serialize for persistence
    */
   serialize() {
@@ -221,7 +209,6 @@ class PowerDistribution {
     this.arms = 30;
     this.selectedBus = PowerBuses.THRUST;
     this._lastArmWarning = 0;
-    this._solarInputW = 0;
     this._updateMultipliers();
   }
 

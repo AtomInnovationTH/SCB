@@ -392,12 +392,7 @@ export const Events = {
   CARGO_FUEL_TRANSFER: 'cargo:fuelTransfer',
 
   // === FORGE (Phase 3) ===
-  FORGE_START:         'forge:start',
-  FORGE_PHASE_CHANGE:  'forge:phaseChange',
-  FORGE_COMPLETE:      'forge:complete',
-  FORGE_CANCEL:        'forge:cancel',
-  FORGE_QUEUE_ADD:     'forge:queueAdd',
-  FORGE_TOGGLE:        'forge:toggle',
+  FORGE_TOGGLE:        'forge:toggle',   // the F key; the furnace itself is gone, the event feeds the journal skill + chapter beat
 
   // === FUEL (Phase 4) ===
   FUEL_CHANGED:        'fuel:changed',        // fuel type switched — { fuelId, name, isp, color }
@@ -658,15 +653,11 @@ export const Events = {
   THRUST_VISUAL:          'thrust:visual',             // { magnitude, direction, type }
 
   // === MPD THRUSTER (F16) ===
-  MPD_FIRE:               'mpd:fire',                  // { direction, thrust, cathodeHealth }
-  MPD_CATHODE_WORN:       'mpd:cathode_worn',          // { cathodeTime, degradedFactor }
   LITHIUM_CHANGE:         'resource:lithium_change',   // { lithium, lithiumMax, delta }
 
   // === MPD BURST MODE (S3b) ===
-  MPD_BURST_START:        'mpd:burstStart',            // { armed } — player armed MPD
+  MPD_BURST_START:        'mpd:burstStart',            // { armed } — no emitter (the arming verb was deleted, t6); codexTriggers mpd_burst still names it
   MPD_BURST_END:          'mpd:burstEnd',              // { reason: 'manual'|'overheat'|'battery_depleted'|'lithium_depleted' }
-  MPD_OVERHEAT:           'mpd:overheat',              // { heat } — thermal shutdown triggered
-  MPD_POWER_WARNING:      'mpd:powerWarning',          // { batteryFraction } — battery low during MPD
 
   // === CONTROL MODE (S4 — Core Feel) ===
   CONTROL_MODE_CHANGE:    'control:modeChange',        // { mode: 'RCS'|'COLD_GAS'|'ARM_PILOT'|'MPD_BURST' }
@@ -726,11 +717,6 @@ export const Events = {
    *  guided loop (replaces TRAWL_SWEEP_COMPLETE in the core flow).
    *  Payload: { clusterId: string, name: string, count: number } */
   CLUSTER_CLEARED:     'cluster:cleared',
-
-  // === STRATEGIC MAP (ST-6.4) ===
-  STRATEGIC_MAP_TOGGLE:  'ui:strategic_map_toggle',   // Shift+V — toggle strategic map overlay
-  STRATEGIC_MAP_OPENED:  'ui:strategic_map_opened',   // map opened (camera transition started)
-  STRATEGIC_MAP_CLOSED:  'ui:strategic_map_closed',   // map closed (camera returned to gameplay)
 
   // === ENVIRONMENT HAZARDS (ST-6.7) ===
   /** Generic environment effect event.
@@ -800,12 +786,6 @@ export const Events = {
   ARM_HINGE_LOCKED:        'arm:hingeLocked',
   /** Hinge brake released. Payload: { armIndex } */
   ARM_HINGE_UNLOCKED:      'arm:hingeUnlocked',
-  /** Dual-fire rejected (pre-fire gating). Payload: { pairIndex, reason } */
-  ARM_DUAL_FIRE_REJECTED:  'arm:dualFireRejected',
-  /** Fire blocked — Mother angular rate too high. Payload: { omega, threshold } */
-  ARM_FIRE_BLOCKED_HIGH_RATE: 'arm:fireBlockedHighRate',
-  /** Recoil compensation applied after crossbow fire. Payload: { residualImpulse, rcsN2Used } */
-  ARM_RECOIL_COMPENSATED:  'arm:recoilCompensated',
   /** Daughter net-fire recoil kick applied (§11.4, FEATURE_FLAGS.DAUGHTER_NET_RECOIL).
    *  Visuals hook (counter-burn flash) — emitted by ArmUnit.applyNetFireRecoil.
    *  Payload: { armIndex, armId, dv: {x,y,z} (m/s, world axes), dvMps, netClass } */

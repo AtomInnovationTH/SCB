@@ -14,7 +14,7 @@ import { Events } from '../core/Events.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
 import { checkActiveSatArming } from '../systems/ActiveSatGuard.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
-import { computeCoM, computeInducedTorque, strutTipMeters, heldCargoPlumeConflictAt } from '../systems/CoMCalculator.js';
+import { strutTipMeters, heldCargoPlumeConflictAt } from '../systems/CoMCalculator.js';
 import { strutTipFoulsCorridor, strutLocalDirection, bestStrutAlpha } from './ArmDockBasis.js';
 import { createShipKeepOut } from '../systems/ShipKeepOut.js';
 import { StrutAutoController } from '../systems/StrutAuto.js';
@@ -113,8 +113,8 @@ const _SOFT_ROT_STATES = new Set([
  * Ring arms hinge at the top collar (Y = COLLAR_Y = +1.00 m).
  * End-face arms (Y3 Octo only) hinge at the barrel end caps (±Z faces).
  *
- * This is the STORED convention (CameraSystem's AimDecomposition bridge reads
- * `arm._dockOutward` in it). The mass model does NOT consume it raw:
+ * This is the STORED convention (CameraSystem's aim bridge reads
+ * `arm._dockOutward` in it: the XZ collar convention). The mass model does NOT consume it raw:
  * CoMCalculator converts these fields to the rendered ship frame (barrel = Z,
  * stowed aft at −Z) at its strutTipMeters/strutMidpointMeters boundary — the
  * Y/Z swap of register item 57 (S13(a)). Do not "fix" this convention; the
@@ -1300,121 +1300,6 @@ export class ArmManager {
     return strutTipMeters(this._dockPositions[armIndex], alpha);
   }
 
-  // ==========================================================================
-  // ST-9.3 C-3: DUAL-FIRE + PAIRED-FIRE COORDINATION (Gap #14)
-  // ==========================================================================
-
-  /**
-   * Fire an antipodal arm pair simultaneously for recoil cancellation.
-   * Pre-fire gating: BOTH arms must be in an operational state that allows fire
-   * (e.g., DOCKED) AND hinge in ROTATE (so we can auto-lock). If either arm
-   * fails gating, fire is rejected.
-   *
-   * @param {number} pairIndex — index of one arm in the pair (partner auto-resolved)
-   * @param {number} [motherOmega=0] — |ω| of mother in rad/s (for safety interlock)
-   * @returns {{ success: boolean, reason?: string }} Result with rejection reason if failed
-   */
-  fireDualPair(pairIndex, motherOmega = 0) {
-    const partnerIndex = this.getDualFirePair(pairIndex);
-    if (partnerIndex === null) {
-      const reason = `No antipodal partner for arm ${pairIndex}`;
-      eventBus.emit(Events.ARM_DUAL_FIRE_REJECTED, { pairIndex, reason });
-      return { success: false, reason };
-    }
-
-    const arm1 = this.arms[pairIndex];
-    const arm2 = this.arms[partnerIndex];
-
-    if (!arm1 || !arm2) {
-      const reason = `Invalid arm index: ${pairIndex} or ${partnerIndex}`;
-      eventBus.emit(Events.ARM_DUAL_FIRE_REJECTED, { pairIndex, reason });
-      return { success: false, reason };
-    }
-
-    // Safety interlock: block fire if Mother angular rate too high
-    if (!ArmUnit.isFireRateSafe(motherOmega)) {
-      eventBus.emit(Events.ARM_FIRE_BLOCKED_HIGH_RATE, {
-        omega: motherOmega,
-        threshold: Constants.OCTOPUS_V5.FIRE_RATE_INTERLOCK,
-      });
-      return { success: false, reason: `Mother ω too high: ${(motherOmega * 180 / Math.PI).toFixed(1)}°/s` };
-    }
-
-    // Check arm operational state (must be in a fireable state)
-    const fireableStates = [ARM_STATES.DOCKED];
-    if (!fireableStates.includes(arm1.state)) {
-      const reason = `Arm ${pairIndex} in state ${arm1.state}, not fireable`;
-      eventBus.emit(Events.ARM_DUAL_FIRE_REJECTED, { pairIndex, reason });
-      return { success: false, reason };
-    }
-    if (!fireableStates.includes(arm2.state)) {
-      const reason = `Arm ${partnerIndex} in state ${arm2.state}, not fireable`;
-      eventBus.emit(Events.ARM_DUAL_FIRE_REJECTED, { pairIndex, reason });
-      return { success: false, reason };
-    }
-
-    // Check spring charge
-    if (!arm1.springCharged || !arm2.springCharged) {
-      const reason = 'One or both arms not spring-charged';
-      eventBus.emit(Events.ARM_DUAL_FIRE_REJECTED, { pairIndex, reason });
-      return { success: false, reason };
-    }
-
-    // All gates passed — auto-lock both hinges, fire, then schedule auto-unlock
-    arm1._autoLockForFire();
-    arm2._autoLockForFire();
-
-    // Compute residual recoil (§4.3: 2 × m × v × cos(α) along the barrel axis)
-    const residualImpulse = arm1.computeRecoilResidual();
-
-    // Emit dual-fire event
-    eventBus.emit(Events.DUAL_FIRE, {
-      armIndex1: pairIndex,
-      armIndex2: partnerIndex,
-    });
-
-    // Emit recoil compensation event (for RCS handler)
-    const motherMass = Constants.OCTOPUS_V5.TOTAL_WET_MASS;
-    const residualDv = Math.abs(residualImpulse) / motherMass;
-    // Approximate RCS N₂ cost: impulse / (Isp × g0)
-    const rcsN2 = Math.abs(residualImpulse) / (60 * Constants.G0);
-
-    eventBus.emit(Events.ARM_RECOIL_COMPENSATED, {
-      residualImpulse,
-      rcsN2Used: rcsN2,
-    });
-
-    eventBus.emit(Events.DUAL_FIRE_RECOIL, {
-      cancelled: residualDv < 0.01,
-      residualDv,
-    });
-
-    // C-11: Apply recoil angular impulse + CoM-induced torque to Mother
-    if (Constants.FEATURE_FLAGS.RECOIL_PHYSICS && this.playerSatellite) {
-      if (typeof this.playerSatellite.applyRecoilAngularImpulse === 'function') {
-        this.playerSatellite.applyRecoilAngularImpulse(residualImpulse);
-      }
-
-      // C-11 + C-9: Compute induced torque from CoM offset (if COM_TRACKING on)
-      if (Constants.FEATURE_FLAGS.COM_TRACKING) {
-        const com = computeCoM(this, this.playerSatellite);
-        if (com && com.position) {
-          // Recoil force acts along the barrel axis (residual from cos(α)) —
-          // ship frame: barrel = Z. S13(a): com.position now arrives ship-frame
-          // (register item 57), so the force direction must be ship-frame too
-          // or τ = r × F mixes frames. Dormant while COM_TRACKING is false.
-          const recoilForce = { x: 0, y: 0, z: residualImpulse > 0 ? 1 : -1 };
-          const inducedTorque = computeInducedTorque(com.position, recoilForce);
-          if (typeof this.playerSatellite.applyInducedTorque === 'function') {
-            this.playerSatellite.applyInducedTorque(inducedTorque);
-          }
-        }
-      }
-    }
-
-    return { success: true };
-  }
-
   /**
    * Session L (plan item 4): the "." hotkey's strut toggle as a PUBLIC method
    * — the REFIT BERTHS card's STRUTS chip and the F1 bar's `struts` actuator
@@ -1483,32 +1368,6 @@ export class ArmManager {
     return (this.arms || []).some((a) =>
       a && a.state === ARM_STATES.DOCKED
       && _strutLiveAlpha(a) >= Constants.OCTOPUS_V5.STRUT_OPEN_THRESHOLD);
-  }
-
-  /**
-   * Recommend the next arm to deploy, based on antipodal pairing.
-   * Suggests the partner of the last deployed arm to preserve dual-fire option.
-   * @returns {{ armIndex: number, reason: string }|null} Recommendation or null
-   */
-  getNextDeployRecommendation() {
-    // Find arms that are deployed (not DOCKED)
-    const deployed = this.arms.filter(a => a.state !== ARM_STATES.DOCKED);
-    if (deployed.length === 0) return null;
-
-    // Find the most recently deployed arm
-    const lastDeployed = deployed[deployed.length - 1];
-    const partnerIdx = this.getDualFirePair(lastDeployed.index);
-    if (partnerIdx === null) return null;
-
-    const partner = this.arms[partnerIdx];
-    // Only recommend if partner is still docked
-    if (partner.state === ARM_STATES.DOCKED) {
-      return {
-        armIndex: partnerIdx,
-        reason: 'Deploy opposing arm for balanced fire',
-      };
-    }
-    return null;
   }
 
   // ==========================================================================

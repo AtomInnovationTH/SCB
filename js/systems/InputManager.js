@@ -1166,8 +1166,8 @@ export class InputManager {
 
       // F key — the furnace joke (H1 2026-10-09, owner: the old forge "doesn't
       // really work"). FORGE_TOGGLE is still emitted so the journal skill and
-      // chapter beat that trigger on it stay reachable (ForgeSystem no longer
-      // subscribes); then the F1-bar FURNACE gag runs. Both mother and daughter.
+      // chapter beat that trigger on it stay reachable (the old forge module is
+      // gone, nothing subscribes); then the F1-bar FURNACE gag runs. Both mother and daughter.
       case 'KeyF':
         if (isGameplay && !e.repeat) {
           eventBus.emit(Events.FORGE_TOGGLE);
@@ -2048,8 +2048,7 @@ export class InputManager {
     // (Hotkey history: migrated U → H 2026-06-13, then H → L 2026-06-15.)
     const overlayOpen = !!((d.codexViewerUI && d.codexViewerUI.isVisible && d.codexViewerUI.isVisible())
       || (d.hotkeyOverlay && d.hotkeyOverlay.isVisible && d.hotkeyOverlay.isVisible())
-      || (d.debrisMap && d.debrisMap.isVisible && d.debrisMap.isVisible())
-      || (d.strategicMap && d.strategicMap.isOpen && d.strategicMap.isOpen()));
+      || (d.debrisMap && d.debrisMap.isVisible && d.debrisMap.isVisible()));
     let skDespinTarget = null;
     if (this.armPilotMode) {
       skDespinTarget = this._getPilotedSkDespinTarget();
@@ -2080,9 +2079,6 @@ export class InputManager {
 
     // Suppress continuous input while debris map is open
     if (d.debrisMap && d.debrisMap.isVisible()) return;
-
-    // ST-6.4: Suppress continuous input while strategic map is open
-    if (d.strategicMap && d.strategicMap.isOpen()) return;
 
     const ionDir = { x: 0, y: 0, z: 0 };
     let hasIon = false;
