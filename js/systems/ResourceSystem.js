@@ -748,14 +748,18 @@ export class ResourceSystem {
   }
 
   /**
-   * Serialize upgraded max capacities for persistence.
-   * Current resource levels are NOT saved — they reset each mission.
+   * Serialize upgraded max capacities and the two gas levels for persistence.
+   * 2026-10-17 (s1-gas-survives-load): the engine pool (`xenon`, pool units — pool/100 x kgFull of the saved
+   * `tankGasId`) and `coldGas` are SAVED, so a reload is not a refuel (Ruling 0: tanks do not magically refill)
+   * and does not throw away gas bought in the shop. The battery level is still NOT saved: it starts at half.
    * @returns {object}
    */
   serialize() {
     return {
       xenonMax: this.xenonMax,
       coldGasMax: this.coldGasMax,
+      xenon: this.xenon,
+      coldGas: this.coldGas,
       batteryMax: this.batteryMax,
       currentFuelId: this._currentFuelId,
       tankGasId: this.tankGasId,   // h3-argon-engine D6: the gas in the tank survives reloads
@@ -770,9 +774,10 @@ export class ResourceSystem {
 
   /**
    * Restore upgraded max capacities from saved data.
-   * Refills xenon / cold gas to the restored max for a fresh mission; the
-   * battery starts at BATTERY_START_FRACTION of its rebased max (w4-power D1 —
-   * saves carry no charge, and every boot starts packed at half).
+   * 2026-10-17 (s1-gas-survives-load): a saved `xenon` / `coldGas` level is restored (clamped to [0, max]) — a
+   * reload must neither refill nor drain the tanks. An old save without the keys (or a non-finite value) gets the
+   * start fill. The battery starts at BATTERY_START_FRACTION of its rebased max (w4-power D1 — saves carry no
+   * charge, and every boot starts packed at half).
    * @param {object} data - Previously serialized resource maxes
    */
   restore(data) {
@@ -810,9 +815,15 @@ export class ResourceSystem {
     if (data.hasSupercap) this._hasSupercap = true;
     if (data.rtgRate !== undefined) this._rtgRate = data.rtgRate;
     if (data.powerBeamRate !== undefined) this._powerBeamRate = data.powerBeamRate;
-    // Refill to max for the new mission (the battery: half — w4-power D1)
-    this.xenon = startEnginePool(this.tankGasId, this.xenonMax);   // g1-gas-upgrades D2: the same kg, any gas
-    this.coldGas = ResourceSystem.startPropellant(this.coldGasMax);
+    // Gas levels: the saved level when there is one (s1-gas-survives-load D2); else the start fill (old save,
+    // or a game-over save, which strips the levels so CONTINUE is a fresh attempt). Battery: half — w4-power D1.
+    const clampLevel = (v, max) => Math.min(Math.max(v, 0), max);
+    this.xenon = Number.isFinite(data.xenon)
+      ? clampLevel(data.xenon, this.xenonMax)
+      : startEnginePool(this.tankGasId, this.xenonMax);   // g1-gas-upgrades D2: the same kg, any gas
+    this.coldGas = Number.isFinite(data.coldGas)
+      ? clampLevel(data.coldGas, this.coldGasMax)
+      : ResourceSystem.startPropellant(this.coldGasMax);
     this.battery = ResourceSystem.startCharge(this.batteryMax);
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;

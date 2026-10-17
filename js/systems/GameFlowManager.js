@@ -503,7 +503,7 @@ export class GameFlowManager {
         debrisByTier: save.stats?.debrisByTier || { data: 0, deorbit: 0, capture: 0 },
       });
 
-      // Restore upgraded resource capacities (refills to max)
+      // Restore upgraded resource capacities and the saved gas levels (s1-gas-survives-load; battery starts at half)
       resourceSystem.restore(save.resourceMaxes || {});
 
       // Restore power distribution allocations
@@ -1903,6 +1903,12 @@ export class GameFlowManager {
     const { shopScreen, resourceSystem } = this._refs;
     const scoring = scoringSystem.serialize();
     const resources = resourceSystem.serialize();
+    // s1-gas-survives-load D3: a game-over save carries no gas levels — CONTINUE after a game over is a fresh
+    // attempt (like retry), so the load falls back to the start fill. Every other save keeps the levels.
+    if (gameState.currentState === GameStates.GAME_OVER) {
+      delete resources.xenon;
+      delete resources.coldGas;
+    }
     const upgrades = shopScreen.getSerializableUpgrades();
 
     const saveData = {
