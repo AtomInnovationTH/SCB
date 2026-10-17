@@ -100,6 +100,33 @@ export const LADDER_DOWN_ROLL_FRAC = 0.45;
  */
 export const LADDER_PANE_REFRAME_MS = 270;
 
+/**
+ * reel-visible (owner 2026-10-16: "the reel-in phase is invisible"; docs/DECISIONS.md §25 item 2: "the reel-in must be
+ * seen") — the CATCH FOCUS: under the zoom ladder the camera holds 24.5 m (F2) and never moves, so a 0.3 m catch
+ * is ~16 px while it is reeled in, handed to a radiator tip and fed to the furnace. When the player's own mother
+ * net catches something, the ladder camera comes in to 6 m on the catch (reel), the middle of collar and tip
+ * (hand-off) and the tip (cook), then goes back. It is a SEPARATE camera-layer blend (an anchor offset from the
+ * mother plus a distance pull) over the ladder's own state, which it never writes: when the blend reaches 0 the
+ * camera is exactly where the ladder holds it. Firing the net is the player-initiated cause (docs/ladder/00-spec.md
+ * :262 "the camera never moves on its own without a player-initiated cause"); any camera input of his ends it.
+ * In-module numbers (the LADDER_LEVEL_MS precedent), not FloorContract numbers.
+ */
+export const CATCH_FOCUS = Object.freeze({
+  DIST_U: 6e-5,        // 6 m: F2's floor (FloorContract), so no near-plane change
+  TAU_S: 0.6,          // the anchor's time constant toward the focus point
+  IN_S: 0.8,           // the blend weight in (smoothstep)
+  OUT_S: 1.0,          // ... and back out, after the catch is processed
+  CANCEL_S: 0.3,       // ... and out after a player camera input: no cut, no walk back
+  END_HOLD_S: 1.0,     // stay on the tip this long after CATCH_PROCESSED
+  WAIT_S: 8.0,         // berthed and no hand-off begins this soon (rack / collar furnace): not a leash catch, let go
+  TIP_MAX_S: 40,       // safety valve: never hold the cook longer than this
+  LEAD_FILTER_S: 0.25, // smoothing of the focus point's velocity (the lead that cancels the ease's lag)
+  LEAD_MAX_U_S: 8e-5,  // a faster "velocity" than this (8 m/s, scene units / s) is a hop between phases, not motion: ignored
+});
+
+/** A ceremony kept only for its slow motion under the ladder ends by itself after this (real seconds). */
+const QUIET_CEREMONY_MAX_S = 60;
+
 /** Cubic in-out ease shared by the ride engine, the down-ride roll and the level phase. */
 function cubicInOut(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -453,6 +480,7 @@ export class CameraSystem {
       _launcher: null,     // { getPos(out), getDebrisPos(out) } | null
       _net: null,          // the NetProjectile (either path)
       _reelBeatChained: false, // Phase D.2 — the REEL_IN beat chains at most once
+      _quiet: false,           // reel-visible — started while the ladder owns the camera: slow motion only, no view
       // Persistent geometry (set once at ceremony start)
       _launchFwd: new THREE.Vector3(),     // launch direction (unit)
       _sideDir: new THREE.Vector3(),       // port-side (cross fwd × radialUp)
@@ -602,6 +630,7 @@ export class CameraSystem {
       else CeremonyTimeScale.reset(this);
       // A hard state transition can't carry the lasso cut across it either.
       if (this._lassoCut && this._lassoCut.active) this._exitLassoCut(false);
+      this._resetCatchFocus();
     }));
     this._unsubs.push(eventBus.on(Events.PAUSE_MENU, () => {
       CeremonyTimeScale.reset(this);
@@ -743,6 +772,44 @@ export class CameraSystem {
       followFromOff: new THREE.Vector3(), // anchor − mother when the target last changed
       followLastOff: new THREE.Vector3(), // anchor − mother as resolved on the previous frame
     };
+
+    // reel-visible: the catch focus (see CATCH_FOCUS). A blend OVER the ladder camera, never a write into it.
+    this._catchFocus = {
+      active: false,                      // from NET_CATCH_SUCCESS until the blend has eased back to 0
+      engaging: true,                     // false once released / cancelled: the blend is only easing out
+      phase: 'idle',                      // 'reel' | 'wait' | 'handoff' | 'tip' | 'end'
+      u: 0,                               // blend progress 0..1 (smoothstep -> w)
+      w: 0,                               // blend weight applied to the ladder camera this frame
+      rate: 1 / CATCH_FOCUS.IN_S,         // |du/dt| in the current direction
+      timer: 0,                           // real seconds in the current phase (wait / tip / end)
+      net: null,                          // the mother NetProjectile that caught it
+      debris: null,                       // the catch
+      podIndex: -1,
+      tipIndex: -1,                       // the radiator tip it goes to (-1 until known)
+      off: new THREE.Vector3(),           // eased focus point − mother position (scene units)
+      tgt: new THREE.Vector3(),           // this frame's focus point (world)
+      tmp: new THREE.Vector3(),
+      dir: new THREE.Vector3(),           // eased viewing direction out of the focus point (unit, world)
+      dirSeeded: false,
+      rel: new THREE.Vector3(),           // the focus point relative to the mother, last frame
+      relSeeded: false,
+      vel: new THREE.Vector3(),           // its velocity relative to the mother (filtered), scene units / s
+      aim: new THREE.Vector3(),
+      q2a: new THREE.Vector3(),           // scratch for _catchFocusBlendDir
+      q2b: new THREE.Vector3(),
+      q2c: new THREE.Vector3(),
+      azSide: 1,                          // which way round the blend turns when the two directions are opposite
+      v: new THREE.Vector3(),
+    };
+    this._unsubs.push(eventBus.on(Events.NET_CATCH_SUCCESS, (p) => this._onCatchFocusStart(p)));
+    this._unsubs.push(eventBus.on(Events.NET_RELEASED, (p) => this._onCatchFocusLost(p)));
+    this._unsubs.push(eventBus.on(Events.NET_CATCH_MISS, (p) => this._onCatchFocusLost(p)));
+    this._unsubs.push(eventBus.on(Events.CARGO_TRANSFER_START, (p) => {
+      // to a daughter's rack: not a radiator-tip catch, nothing more to show from here
+      if (p && p.to && p.to.kind !== 'tip') this._onCatchFocusLost(p);
+    }));
+    this._unsubs.push(eventBus.on(Events.CATCH_BREAKDOWN_START, (p) => this._onCatchFocusBreakdown(p)));
+    this._unsubs.push(eventBus.on(Events.CATCH_PROCESSED, (p) => this._onCatchFocusProcessed(p)));
 
     this._boundMouseDown = this._onMouseDown.bind(this);
     this._boundMouseMove = this._onMouseMove.bind(this);
@@ -980,6 +1047,7 @@ export class CameraSystem {
     // Zoom Ladder override (S2) — highest-priority camera driver when engaged.
     // Bypasses the normal view path entirely; the follow-light rig + shake below
     // still run so the ship stays lit on the ladder.
+    if (this._netCeremony.active && this._netCeremony._quiet) this._tickQuietNetCeremony(dt);
     if (this._ladderCam.active) {
       // H2 (D4): a launch ceremony's camera never shows under the ladder, yet
       // it would swallow every key until it ended. Stand it down here — a frame
@@ -2219,9 +2287,10 @@ export class CameraSystem {
     let launcher = null;
     let net = null;
     let arm = null;
+    const cns = this._netSystemRef();
     if (isMother) {
-      net = captureNetSystem.getActiveNetForPod
-        ? captureNetSystem.getActiveNetForPod(payload.podIndex)
+      net = cns.getActiveNetForPod
+        ? cns.getActiveNetForPod(payload.podIndex)
         : null;
       const player = this._player;
       const podIndex = payload.podIndex;
@@ -2236,7 +2305,7 @@ export class CameraSystem {
       }
     } else {
       arm = this.armPilot.arm;
-      net = captureNetSystem.getActiveNetForArm(payload.armIndex);
+      net = cns.getActiveNetForArm(payload.armIndex);
       if (arm && arm.position) {
         launcher = {
           getPos: (out) => out.copy(arm.position),
@@ -2312,6 +2381,17 @@ export class CameraSystem {
       CeremonyTimeScale.set(beats[0].timeScale ?? 1.0, this);
     }
 
+    // reel-visible: under the zoom ladder the ceremony's camera never shows (update() hands the frame to the ladder
+    // before it ever reaches _updateNetCeremony), so a NET_CINEMATIC cut here would only leave a ghost view and a
+    // ceremony nothing advances. Keep what the player does feel — the slow motion of the net flight, released the
+    // moment the catch resolves (NET_CEREMONY_COMPLETE) — and take no view, FOV, near plane or cinema-dim event.
+    // The catch focus (CATCH_FOCUS) is what the player sees instead.
+    if (this._ladderCam.active) {
+      c._quiet = true;
+      return;
+    }
+    c._quiet = false;
+
     // Switch to NET_CINEMATIC mode
     this.currentView = CameraViews.NET_CINEMATIC;
     this._transitioning = false;
@@ -2364,6 +2444,13 @@ export class CameraSystem {
                        : (c.armIndex !== payload.armIndex)) return;
 
     c.success = payload.success;
+
+    // reel-visible: a quiet ceremony (ladder on) has no beats to play out — the catch has resolved either way, so
+    // the slow motion ends here (the reel must run at full speed) and the catch focus takes over.
+    if (c._quiet) {
+      this._endQuietNetCeremony();
+      return;
+    }
 
     if (payload.success === false) {
       // Miss path: truncate immediately, do NOT set first-deploy flag
@@ -2945,6 +3032,45 @@ export class CameraSystem {
   }
 
   /**
+   * reel-visible — end a QUIET net ceremony (one started while the zoom ladder owned the camera): clear its state and
+   * give the net its full speed back. Deliberately NOT the cinematic exit: it never took a view, so it restores no
+   * view, FOV or near plane (the ladder owns all three), writes no first-deploy flag and emits no
+   * NET_CINEMATIC_EXITED (its ENTERED was never sent — the pair stays balanced).
+   * @private
+   */
+  _endQuietNetCeremony() {
+    const c = this._netCeremony;
+    if (!c.active) return;
+    c.active = false;
+    c._quiet = false;
+    c.beatIndex = 0;
+    c.beatTimer = 0;
+    c.beats = [];
+    c.arm = null;
+    c._launcher = null;
+    c._reelBeatChained = false;
+    c._net = null;
+    c.success = null;
+    CeremonyTimeScale.reset();
+  }
+
+  /**
+   * reel-visible — the per-frame guard for a quiet ceremony: nothing advances it, so it must end by itself if the
+   * ladder lets go of the camera (its beats would then pull the camera to beat anchors it never entered), the net
+   * is gone without a COMPLETE (a release mid-flight), or a safety cap passes.
+   * @private
+   */
+  _tickQuietNetCeremony(dt) {
+    const c = this._netCeremony;
+    c.beatTimer += dt;
+    if (!this._ladderCam.active
+        || (c._net && c._net.isActive === false)
+        || c.beatTimer > QUIET_CEREMONY_MAX_S) {
+      this._endQuietNetCeremony();
+    }
+  }
+
+  /**
    * Q2 Stage 6 — abort an active net ceremony WITHOUT routing through
    * setView(prevView). Used by setView() when an external view change is
    * requested mid-ceremony; the new view is set by setView's normal flow,
@@ -2955,6 +3081,7 @@ export class CameraSystem {
   _abortNetCeremony() {
     const c = this._netCeremony;
     if (!c.active) return;
+    if (c._quiet) { this._endQuietNetCeremony(); return; }
 
     // Restore FOV
     this._baseFov = c.savedFov;
@@ -2989,6 +3116,7 @@ export class CameraSystem {
   _exitNetCeremony(completedNormally) {
     const c = this._netCeremony;
     if (!c.active) return;
+    if (c._quiet) { this._endQuietNetCeremony(); return; }
 
     // Small-catch plan W4 (2026-08-25): capture the subject's size BEFORE the
     // state is cleared below — the exit over a sub-metre bundle cuts in
@@ -3052,7 +3180,9 @@ export class CameraSystem {
    * @returns {boolean} true if a ceremony was skipped
    */
   skipNetCeremony() {
-    if (!this._netCeremony.active) return false;
+    // reel-visible: the same keys (Esc / Space / Enter) also end a catch focus, which is what is on screen under the ladder
+    const focus = this.ladderCancelCatchFocus();
+    if (!this._netCeremony.active) return focus;
     this._exitNetCeremony(false);
     return true;
   }
@@ -3130,6 +3260,10 @@ export class CameraSystem {
     if (!Constants.FEATURE_FLAGS.LASSO_CATCH_CUT) return 'refused';
     const lc = this._lassoCut;
     if (lc.active) return 'refused';
+    // reel-visible: under the zoom ladder the lasso cut's camera never shows (the ladder drives the frame), so
+    // entering it would only leave a NET_CINEMATIC ghost view and a cut nothing advances. The lasso keeps its slow
+    // reel; the ladder camera stays where the player holds it.
+    if (this._ladderCam.active) return 'refused';
     if (this._netCeremony.active || this._launchCeremony.active) return 'refused';
     if (this.currentView === CameraViews.NET_CINEMATIC) return 'refused';
     if (this._prefersReducedMotion()) return 'refused';
@@ -3717,6 +3851,7 @@ export class CameraSystem {
         d.lastMouseY = e.clientY;
         d.velocityTheta = -dx * d.rotateSpeed;
         d.velocityPhi = dy * d.rotateSpeed;
+        this.ladderCancelCatchFocus();   // reel-visible: his own camera input ends the catch focus
       }
       return;
     }
@@ -3856,6 +3991,7 @@ export class CameraSystem {
     lc.active = true;
     lc.riding = false;
     lc.onDone = null;
+    this._resetCatchFocus();   // reel-visible: a fresh engage never inherits a focus
     lc.anchor = frame.anchor;
     lc.targetDistU = frame.distU;
     lc.curDistU = frame.distU;
@@ -3901,6 +4037,7 @@ export class CameraSystem {
     lc.leveling = false;
     lc.levelT = 0;
     lc.levelHoldFloor = null;
+    this._resetCatchFocus();     // reel-visible
     this._ladderResetFollow();   // H2
     // Reset the whole drag block — nothing may leak into the next engage.
     lc.drag.enabled = false;
@@ -4003,6 +4140,7 @@ export class CameraSystem {
     const dx = Number.isFinite(dxPx) ? dxPx : 0;
     const dy = Number.isFinite(dyPx) ? dyPx : 0;
     if (dx === 0 && dy === 0) return;
+    this.ladderCancelCatchFocus();   // reel-visible: a touch drag is his own camera input too (the mouse path does the same)
     lc.drag.velocityTheta = -dx * lc.drag.rotateSpeed;
     lc.drag.velocityPhi = dy * lc.drag.rotateSpeed;
   }
@@ -4128,6 +4266,266 @@ export class CameraSystem {
 
   /** @returns {boolean} whether the ladder camera currently owns the view. */
   isLadderActive() { return this._ladderCam.active; }
+
+  // ==========================================================================
+  // CATCH FOCUS (reel-visible) — see CATCH_FOCUS. Camera-layer only: it adds an
+  // anchor offset and a distance pull to the ladder camera's own pose, and never
+  // writes the ladder's state (lc.curDistU / lc.dir / lc.floor / the rides).
+  // ==========================================================================
+
+  /** @returns {object|null} the capture-net system this camera's ship uses (the singleton in the shipped build). */
+  _netSystemRef() {
+    const p = this._player;
+    return (p && p._captureNetSystem) || captureNetSystem;
+  }
+
+  /** @returns {boolean} whether the catch focus is on screen (engaged, or still easing back out). */
+  isCatchFocusActive() { return this._catchFocus.active; }
+
+  /**
+   * @returns {{active:boolean, engaging:boolean, phase:string, w:number, tipIndex:number}} the focus, for tests and
+   *   the dev overlay. A copy: never write through it.
+   */
+  catchFocusState() {
+    const f = this._catchFocus;
+    return { active: f.active, engaging: f.engaging, phase: f.phase, w: f.w, tipIndex: f.tipIndex };
+  }
+
+  /** Drop the focus at once (a state change, a re-engage, a disengage): the camera is the ladder's again this frame. */
+  _resetCatchFocus() {
+    const f = this._catchFocus;
+    if (!f) return;
+    f.active = false; f.engaging = true; f.phase = 'idle';
+    f.u = 0; f.w = 0; f.rate = 1 / CATCH_FOCUS.IN_S; f.timer = 0;
+    f.net = null; f.debris = null; f.podIndex = -1; f.tipIndex = -1;
+    f.off.set(0, 0, 0);
+    f.dirSeeded = false;
+    f.azSide = 1;
+    f.relSeeded = false;
+    f.vel.set(0, 0, 0);
+  }
+
+  /** The player's own mother net has caught something: come in on it (floors 2-3 only). */
+  _onCatchFocusStart(payload) {
+    if (!payload || (payload.podIndex == null) || payload.podIndex < 0 || (payload.armIndex != null && payload.armIndex >= 0)) return;
+    const lc = this._ladderCam;
+    if (!lc.active || lc.anchor !== 'ship' || lc.riding) return;
+    if (lc.floor !== 2 && lc.floor !== 3) return;                          // F1 is already close; F4+ is a map
+    if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return;                     // the cinematic switch is the focus switch
+    if (this.currentView === CameraViews.ARM_PILOT) return;                // a piloted daughter has the camera
+    if (this._prefersReducedMotion()) return;                              // same accessibility gate as the reel beat
+    const cns = this._netSystemRef();
+    const net = cns && typeof cns.getActiveNetForPod === 'function' ? cns.getActiveNetForPod(payload.podIndex) : null;
+    const d = net && net.targetDebris;
+    if (!d || !d._scenePosition) return;
+    const f = this._catchFocus;
+    f.active = true; f.engaging = true; f.phase = 'reel'; f.timer = 0;
+    f.rate = 1 / CATCH_FOCUS.IN_S;
+    f.net = net; f.debris = d; f.podIndex = payload.podIndex; f.tipIndex = -1;
+    if (f.u <= 0) { f.off.set(0, 0, 0); f.dirSeeded = false; f.relSeeded = false; f.vel.set(0, 0, 0); }   // a fresh focus starts ON the mother
+  }
+
+  /** Ease the focus out after a normal end (the catch is processed, let go, or went to a rack). */
+  _releaseCatchFocus() {
+    const f = this._catchFocus;
+    if (!f.active || !f.engaging) return;
+    f.engaging = false;
+    f.rate = 1 / CATCH_FOCUS.OUT_S;
+  }
+
+  /**
+   * A player camera input (wheel, key, drag, jump): end the focus NOW and leave the camera to the ladder, which the
+   * input is about to move. No walk back by itself beyond a short fade of the blend.
+   * @returns {boolean} true when a focus was engaged and has been cancelled
+   */
+  ladderCancelCatchFocus() {
+    const f = this._catchFocus;
+    if (!f.active) return false;
+    const was = f.engaging;
+    f.engaging = false;
+    f.rate = 1 / CATCH_FOCUS.CANCEL_S;                                    // also speeds up an ease-out already running
+    return was;
+  }
+
+  /** The net let go / the catch was lost / it went to a rack. */
+  _onCatchFocusLost(p) {
+    const f = this._catchFocus;
+    if (!f.active || !f.engaging) return;
+    if (p && p.debrisId != null && f.debris && p.debrisId !== f.debris.id) return;
+    if (p && p.podIndex != null && p.podIndex >= 0 && p.podIndex !== f.podIndex) return;
+    this._releaseCatchFocus();
+  }
+
+  /** The furnace starts on the catch: a radiator tip keeps the focus (and names the tip); the nose collar or a rack lets go. */
+  _onCatchFocusBreakdown(p) {
+    const f = this._catchFocus;
+    if (!f.active || !f.engaging || !f.debris || !p || p.debrisId !== f.debris.id) return;
+    if (p.anchor && p.anchor.kind === 'tip') {
+      f.tipIndex = p.anchor.index;
+      if (f.phase !== 'handoff' && f.phase !== 'end') { f.phase = 'tip'; f.timer = 0; }
+    } else {
+      this._releaseCatchFocus();
+    }
+  }
+
+  /** The tip's furnace has eaten the catch: hold the tip one more second, then go back. */
+  _onCatchFocusProcessed(p) {
+    const f = this._catchFocus;
+    if (!f.active || !f.engaging || !f.debris || !p || p.debrisId !== f.debris.id || p.digested !== true) return;
+    if (f.tipIndex < 0 && p.tipIndex != null) f.tipIndex = p.tipIndex;
+    f.phase = 'end'; f.timer = 0;
+  }
+
+  /**
+   * This frame's focus point (world, scene units) into `f.tgt`: the catch while it is reeled in, the middle of
+   * collar and tip during the hand-off, the tip while it cooks. Moves the phase on, or lets go.
+   * @returns {boolean} false when there is nothing to look at (the focus has been released)
+   */
+  _catchFocusPoint(dt) {
+    const f = this._catchFocus;
+    const player = this._player;
+    const d = f.debris;
+    if (!d || d.alive === false || !d._scenePosition) { this._releaseCatchFocus(); return false; }
+    const ld = player && player.leashDriver;
+    const view = ld && typeof ld.view === 'function' ? ld.view() : null;
+    const tc = player && player.tipCargo;
+    const onView = !!(view && view.debris === d);
+    const tipHolds = (i) => i >= 0 && tc && typeof tc.debrisAt === 'function' && tc.debrisAt(i) === d;
+    const tipPoint = (i) => !!(i >= 0 && tc && typeof tc.latchWorldInto === 'function' && tc.latchWorldInto(i, f.tmp));
+
+    if (f.phase === 'reel' || f.phase === 'wait') {
+      const net = f.net;
+      if (onView) { f.phase = 'handoff'; f.timer = 0; }
+      else if (f.phase === 'reel' && net && (net.state === 'BERTHED' || net.state === 'COLLARED')) { f.phase = 'wait'; f.timer = 0; }
+      else if (f.phase === 'wait') {
+        f.timer += dt;
+        if (f.timer > CATCH_FOCUS.WAIT_S) { this._releaseCatchFocus(); return false; }   // a rack / collar-furnace catch
+      }
+    }
+    if (f.phase === 'handoff') {
+      if (onView) {
+        f.tipIndex = view.tipIndex != null ? view.tipIndex : f.tipIndex;
+      } else if (tipHolds(f.tipIndex)) { f.phase = 'tip'; f.timer = 0; }
+      else { f.phase = 'wait'; f.timer = 0; }                                 // the leash failed: the catch is back at the nose
+    }
+    if (f.phase === 'tip') {
+      f.timer += dt;
+      if (!tipHolds(f.tipIndex) || f.timer > CATCH_FOCUS.TIP_MAX_S) { this._releaseCatchFocus(); return false; }
+    }
+    if (f.phase === 'end') {
+      f.timer += dt;
+      if (f.timer >= CATCH_FOCUS.END_HOLD_S) { this._releaseCatchFocus(); return false; }
+    }
+
+    if (f.phase === 'handoff') {
+      const collar = player && typeof player.getNetBerthCollarPositionInto === 'function'
+        ? player.getNetBerthCollarPositionInto(f.tgt) : null;
+      if (collar && tipPoint(f.tipIndex)) {
+        f.tgt.add(f.tmp).multiplyScalar(0.5);                               // the middle of collar and tip
+        return true;
+      }
+    } else if ((f.phase === 'tip' || f.phase === 'end') && tipPoint(f.tipIndex)) {
+      f.tgt.copy(f.tmp);
+      return true;
+    }
+    f.tgt.copy(d._scenePosition);                                           // reel / wait (and the fallbacks)
+    return true;
+  }
+
+  /**
+   * Where the camera looks FROM, as a unit direction out of the focus point: OUTSIDE the ship, along the line
+   * mother -> focus point, so the hull is behind the shot and never between the camera and the catch (measured:
+   * from the ladder's usual behind-and-above seat the barrel and the solar panels hid the catch in most hand-off
+   * frames). Eased like the anchor, and kept off the radial pole so the up vector never flips.
+   */
+  _catchFocusAim(k, playerPos) {
+    const f = this._catchFocus;
+    const out = f.v.copy(f.off);                                           // mother -> focus point
+    if (out.lengthSq() < 1e-20) return;
+    out.normalize();
+    const R = this._radialDir;                                            // set by update() this frame
+    const a = out.dot(R);
+    const POLE = 0.94;                                                     // ~20 deg off the radial
+    if (Math.abs(a) > POLE) {
+      out.addScaledVector(R, -a);                                          // keep its horizontal part
+      if (out.lengthSq() < 1e-12) out.copy(this._ladderCam.dir).addScaledVector(R, -this._ladderCam.dir.dot(R));
+      out.normalize().multiplyScalar(Math.sqrt(1 - POLE * POLE)).addScaledVector(R, a > 0 ? POLE : -POLE);
+    }
+    if (!f.dirSeeded) { f.dir.copy(this._ladderCam.dir); f.dirSeeded = true; }
+    this._catchFocusBlendDir(f.dir, out, k, f.dir);
+  }
+
+  /**
+   * Blend two unit directions by weight t WITHOUT passing the radial pole: the azimuth about the radial turns the short
+   * way (180 deg apart: always the same way, so it is steady) and the elevation is blended on its own (so it stays between
+   * the two ends, which the focus aim keeps outside the ~20 deg pole cone). A plain slerp or lerp between two directions on opposite
+   * sides of the ship passes over the pole, where camera.up (= the radial) flips the view.
+   * @param {THREE.Vector3} a - from (unit)
+   * @param {THREE.Vector3} b - to (unit)
+   * @param {number} t - 0..1
+   * @param {THREE.Vector3} out - may be a or b
+   * @returns {THREE.Vector3} out
+   */
+  _catchFocusBlendDir(a, b, t, out) {
+    const R = this._radialDir;
+    const f = this._catchFocus;
+    const sa = Math.max(-1, Math.min(1, a.dot(R))), sb = Math.max(-1, Math.min(1, b.dot(R)));
+    const ha = f.q2a.copy(a).addScaledVector(R, -sa);                       // horizontal parts
+    const hb = f.q2b.copy(b).addScaledVector(R, -sb);
+    const la = ha.length(), lb = hb.length();
+    if (la < 1e-6 && lb < 1e-6) { ha.copy(this._ladderCam.dir).addScaledVector(R, -this._ladderCam.dir.dot(R)); hb.copy(ha); }
+    else if (la < 1e-6) ha.copy(hb);
+    else if (lb < 1e-6) hb.copy(ha);
+    if (ha.lengthSq() < 1e-12) { ha.set(1, 0, 0).addScaledVector(R, -R.x); if (ha.lengthSq() < 1e-12) ha.set(0, 1, 0).addScaledVector(R, -R.y); }
+    ha.normalize(); hb.normalize();
+    let ang = Math.atan2(f.q2c.crossVectors(ha, hb).dot(R), ha.dot(hb));    // signed, about the radial
+    // near opposite the short way is a coin toss that noise would flip every frame: keep the side last taken
+    if (Math.abs(ang) > Math.PI - 0.35) { if (ang * f.azSide < 0) ang += f.azSide * 2 * Math.PI; }
+    else f.azSide = ang >= 0 ? 1 : -1;
+    const az = ang * t;
+    const el = sa + (sb - sa) * t;                                         // sin(elevation): between the ends, so never nearer the pole than the nearer end
+    // horizontal direction turned by az about R:  h cos + (R x h) sin
+    const cx = f.q2c.crossVectors(R, ha);
+    out.copy(ha).multiplyScalar(Math.cos(az)).addScaledVector(cx, Math.sin(az));
+    return out.normalize().multiplyScalar(Math.sqrt(1 - el * el)).addScaledVector(R, el);
+  }
+
+  /**
+   * Per ladder frame: advance the blend and ease the focus point. Runs before the pose is written.
+   * @param {number} dt - real seconds
+   * @param {THREE.Vector3} playerPos - the mother
+   */
+  _updateCatchFocus(dt, playerPos) {
+    const f = this._catchFocus;
+    if (!f.active) { f.w = 0; return; }
+    const lc = this._ladderCam;
+    if (f.engaging) {
+      const gone = lc.floor !== 2 && lc.floor !== 3;
+      if (gone || lc.riding || this.currentView === CameraViews.ARM_PILOT || this._ladderFollowTarget()) {
+        this.ladderCancelCatchFocus();                                     // someone else owns the shot now
+      } else if (this._catchFocusPoint(dt)) {
+        const k = dt > 0 ? 1 - Math.exp(-dt / CATCH_FOCUS.TAU_S) : 1;
+        f.tgt.sub(playerPos);                                              // a point on the mother's own frame
+        // A first-order ease trails a moving point by v * TAU (1.2 m behind a catch reeled at 2 m/s, which put the
+        // camera 7.1 m from it, not 6): lead the aim by the point's own (filtered) velocity, so the ease keeps
+        // its soft feel and the lag goes. A hop between phases is not a velocity: it keeps the last estimate.
+        if (f.relSeeded && dt > 0) {
+          f.aim.copy(f.tgt).sub(f.rel).multiplyScalar(1 / dt);
+          if (f.aim.length() < CATCH_FOCUS.LEAD_MAX_U_S) {
+            f.vel.lerp(f.aim, 1 - Math.exp(-dt / CATCH_FOCUS.LEAD_FILTER_S));
+          }
+        }
+        f.rel.copy(f.tgt);
+        f.relSeeded = true;
+        f.aim.copy(f.tgt).addScaledVector(f.vel, CATCH_FOCUS.TAU_S);
+        f.off.lerp(f.aim, k);
+        this._catchFocusAim(k, playerPos);
+      }
+    }
+    f.u = Math.min(1, Math.max(0, f.u + (f.engaging ? 1 : -1) * dt * f.rate));
+    f.w = f.u * f.u * (3 - 2 * f.u);                                       // smoothstep
+    if (!f.engaging && f.u <= 0) this._resetCatchFocus();
+  }
 
   /**
    * Q10 warp-feed rule (hub wire in main.js): while a cross-anchor ride is going
@@ -4358,6 +4756,9 @@ export class CameraSystem {
       lc.followT = Math.min(1, lc.followT + dt / (VisualLaw.TIMINGS.SUBJECT_REAIM_MS / 1000));
     }
 
+    // reel-visible: advance the catch-focus blend (needs this frame's follow target; writes nothing of the ladder's).
+    this._updateCatchFocus(dt, playerPos);
+
     // B1: on a ship anchor the dolly direction is heading-relative — build the
     // live orbital frame first (the drag and the direction rebuild below both
     // need it), and seed the local pose from the world dir the FIRST time a
@@ -4470,8 +4871,19 @@ export class CameraSystem {
       anchorPos = this._anchorWorld(lc.anchor, playerPos, this._tmpVecB);
     }
     this._ladderShipOffset(playerPos, lc.followLastOff);   // H2: where the next target change starts from
+    // reel-visible: the catch focus pulls the anchor toward the catch and the distance in to CATCH_FOCUS.DIST_U by
+    // its blend weight w. The ladder's own state (curDistU, dir, floor, rides) is not touched, so w = 0 is exactly
+    // the pose above. A ship-anchored frame only (a cross-anchor ride has already cancelled the focus).
+    let distU = lc.curDistU;
+    let dirUse = lc.dir;
+    const cf = this._catchFocus;
+    if (cf.w > 0 && lc.anchor === 'ship' && !(lc.riding && lc.rideAnchorFrom !== lc.anchor)) {
+      anchorPos.addScaledVector(cf.off, cf.w);
+      distU += (Math.min(lc.curDistU, CATCH_FOCUS.DIST_U) - lc.curDistU) * cf.w;
+      if (cf.dirSeeded) dirUse = this._catchFocusBlendDir(lc.dir, cf.dir, cf.w, cf.v);   // never over the radial pole
+    }
     // camera = anchor + dir * distance
-    this.camera.position.copy(anchorPos).addScaledVector(lc.dir, lc.curDistU);
+    this.camera.position.copy(anchorPos).addScaledVector(dirUse, distU);
     // Up-frame (Q10 — "one change at a time: the roll is its own phase"). On-
     // floor (and same-anchor rides) the up rule is exact: radial for a ship
     // anchor (roll-free), Earth-north for an earth anchor. Cross-anchor rides

@@ -27,6 +27,7 @@ import { NetMeshKit } from './NetMeshKit.js';
 // no cycle (DebrisField does not import CaptureNetVisual).
 import { DebrisWireframe } from './DebrisWireframe.js';
 import { DebrisField } from '../entities/DebrisField.js';
+import { wireBagRadiusM } from './LeashVisual.js';
 // S5 failure staging: the reason→beat mapper lives with missReasonToText in
 // the entity (one home for "which failures are staged" — logic and visual must
 // never diverge). ui → entities edge; no cycle (CaptureNet does not import ui).
@@ -140,6 +141,14 @@ const BAG = {
   // that is a clump of glowing balls bigger than a 0.3 m catch (browser shot 2026-10-15), so a held bag draws them
   // at this radius (estimate: near true size, still a visible bead)
   WEIGHT_RADIUS_M: 0.02,
+  // reel-visible Decision 4: during the leash hand-off the net cinches tight round the catch, so that at the latch the
+  // net bag is the size of the wire bag that takes over (LeashVisual: catch radius + its margin): every part of the
+  // bag lies on a sphere of that radius round the catch (apex at the rear, rim ring at CINCH_RIM_AHEAD_OF_SPHERE of the
+  // radius ahead of the centre, the weights' own radius inside it). The bag eases from the reel's shape to that one as
+  // the catch nears the latch point (see _handOffCinch).
+  CINCH_RIM_AHEAD_OF_SPHERE: 0.5,
+  CINCH_ARRIVED_FRAC: 0.1,             // the cinch is complete when the catch is this close (of its starting distance) to the latch point
+  HUB_RADIUS_M: 0.05,                   // the apex hub's drawn radius (measured 0.048 m)
 };
 // The net tether is drawn like the leash line (LeashVisual): in the near-field pass, where a world-unit width is
 // in metres, 2 x LEASH.LINE_RADIUS_M = 1 cm. That pass brackets only +-10 m (SceneManager NEAR_FIELD_RADIUS) around
@@ -151,12 +160,10 @@ const BAG = {
 const TETHER_NEAR_ON_M = 8.5;
 const TETHER_NEAR_OFF_M = 9.5;
 
-// l6-look D6 — the big net bag gives way to the real-size bag (LeashVisual) while the leash hand-off runs:
-// fade the WHOLE bag (cone, film, rim weights, drawstring) out over this long, then hide it; fade it back in
-// if the net returns to the nose. The tether line is not part of it (the net's own tether stays drawn).
-const LEASH_FADE_S = 0.5;
-/** material -> { base, applied, transparent }: what the fade wrote last, so a value the visual rewrote is not scaled twice */
-const _leashFadeRec = new WeakMap();
+// reel-visible (owner 2026-10-16: "net and debris seem to disappear after capture, then reappear at docking collar"):
+// the big net bag used to fade out over 0.5 s once the leash hand-off began (l6-look D6) and was hidden for the rest
+// of it; it now stays drawn round the catch (true size, see CaptureNet._catchFloorScale) until the latch removes the
+// net, so the reel and the hand-off are seen. The tether line is the net's own and is drawn as before.
 
 // ── Kit-frame attitude helper (register item 13, 2026-08-06) ─────────────
 // Plan: .kilo/plans/1786017377440-pin-scenario-catch-tumble.md (D2).
@@ -1401,9 +1408,6 @@ export class CaptureNetVisual {
 
       } // end else (non-ceremony)
 
-      // l6-look D6: during the leash hand-off the big bag fades out (after every state write above, so it wins).
-      this._updateLeashFade(vis, net, dt);
-
       // ── Tether update: launcher anchor (canister muzzle / pod muzzle) → net ──
       if (tetherLine.visible && this._player) {
         // Daughter arms anchor at the source arm's net-launcher canister
@@ -1440,87 +1444,6 @@ export class CaptureNetVisual {
         this._updateTetherCatenary(vis, net, _v3a, _v3b, dt);
       }
     }
-  }
-
-  /**
-   * l6-look D6 — fade the big bag out while `player.leashDriver.view()` is non-null for this net (from the nose
-   * reel on), then hide it; when the view ends after a fade-out and the net is back at the nose (COLLARED), show it
-   * again and fade it in. Acts only after a fade-out happened (`vis._leashFadeT > 0`). Called every frame from
-   * update(), after the state-driven writes (they reset canister/disc/cone visibility and opacity each frame).
-   * Only the bag parts are touched: `canisterMesh`, `discMesh` (flag-off disc) and `kitHandle.group` (cone, film,
-   * rim weights, drawstring, apex hub). `vis.group` and `vis.tetherLine` are never hidden or faded — the net's own
-   * tether is what the catch is pulled in on during the nose reel (fix round 1, F1).
-   * @private
-   */
-  _updateLeashFade(vis, net, dt) {
-    const ld = this._player && this._player.leashDriver;
-    const view = ld && typeof ld.view === 'function' ? ld.view() : null;
-    const t0 = vis._leashFadeT || 0;
-    let t;
-    if (view && view.net === net) t = Math.min(1, t0 + dt / LEASH_FADE_S);
-    else if (t0 > 0 && net.state === STATES.COLLARED) t = Math.max(0, t0 - dt / LEASH_FADE_S);
-    else if (t0 >= 1) { this._setBagHidden(vis, true); return; }       // hand-off over, not back at the nose yet
-    else return;
-    vis._leashFadeT = t;
-    if (t >= 1) {
-      // faded out: materials are written once (on the frame the fade completes); afterwards only the three
-      // visibility flags are held each frame (the state code re-shows canister/disc) — no traverse, no closure.
-      if (t0 < 1) this._fadeBagMaterials(vis, 0);
-      this._setBagHidden(vis, true);
-      return;
-    }
-    this._setBagHidden(vis, false);
-    this._fadeBagMaterials(vis, 1 - t);
-  }
-
-  /** @private hide/show the bag-only children of `vis.group`; the tether (and the group) stay as they are */
-  _setBagHidden(vis, hidden) {
-    if (hidden) {
-      vis.canisterMesh.visible = false;
-      if (vis.discMesh) vis.discMesh.visible = false;
-    }
-    if (vis.kitHandle) vis.kitHandle.group.visible = !hidden;
-  }
-
-  /** @private the bag's materials (canister, disc, every kit surface), found once per visual; never the tether's */
-  _bagMaterials(vis) {
-    if (vis._leashBagMats) return vis._leashBagMats;
-    const out = [];
-    const skip = vis.tetherLine && vis.tetherLine.material;
-    const take = (o) => {
-      const m = o.material;
-      if (!m) return;
-      for (const mm of Array.isArray(m) ? m : [m]) if (mm !== skip && !out.includes(mm)) out.push(mm);
-    };
-    if (vis.canisterMesh) take(vis.canisterMesh);
-    if (vis.discMesh) take(vis.discMesh);
-    if (vis.kitHandle) vis.kitHandle.group.traverse(take);
-    vis._leashBagMats = out;
-    return out;
-  }
-
-  /** @private scale every bag material's opacity by `f` (1 restores); never the tether strand */
-  _fadeBagMaterials(vis, f) {
-    const mats = this._bagMaterials(vis);
-    for (let i = 0; i < mats.length; i++) this._fadeMaterial(mats[i], f);
-  }
-
-  /** @private */
-  _fadeMaterial(m, f) {
-    let r = _leashFadeRec.get(m);
-    if (f >= 1) {
-      if (r) {
-        if (m.opacity === r.applied) m.opacity = r.base;               // not rewritten since: put back what was there
-        m.transparent = r.transparent;
-        _leashFadeRec.delete(m);
-      }
-      return;
-    }
-    if (!r) { r = { base: m.opacity, applied: NaN, transparent: m.transparent }; _leashFadeRec.set(m, r); }
-    else if (m.opacity !== r.applied) r.base = m.opacity;              // the visual rewrote it this frame: new base
-    m.transparent = true;
-    m.opacity = r.base * f;
-    r.applied = m.opacity;
   }
 
   /**
@@ -2461,15 +2384,53 @@ export class CaptureNetVisual {
       const fromRing = (c.x - _v3d.x) * L.x + (c.y - _v3d.y) * L.y + (c.z - _v3d.z) * L.z;
       if (Number.isFinite(fromRing)) back = Math.min(back, Math.max(0.01 * M, fromRing));
     }
+    // the hand-off cinch: from the reel's bag to the one that is the wire bag's size (a sphere of its radius)
+    const cinch = this._handOffCinch(vis, net, d);
+    let ahead = BAG.RIM_AHEAD_FRAC * rS;
+    let mouthR = BAG.MOUTH_FRAC * rS;
+    if (cinch > 0) {
+      const rho = Math.max(0.01, wireBagRadiusM(d) - BAG.WEIGHT_RADIUS_M) * M;
+      const f = BAG.CINCH_RIM_AHEAD_OF_SPHERE;
+      // the apex hub is the bag's farthest point from the catch (the closed rim and weights sit inside it), so its far
+      // edge lands ON the wire bag's surface: the swap at the latch changes nothing
+      back += (Math.max(0, wireBagRadiusM(d) * M - BAG.HUB_RADIUS_M * M) - back) * cinch;
+      ahead += (f * rho - ahead) * cinch;
+      mouthR += (Math.sqrt(1 - f * f) * rho - mouthR) * cinch;
+    }
     const apex = vis.group.position;
     apex.x += (c.x - L.x * back - apex.x) * g;
     apex.y += (c.y - L.y * back - apex.y) * g;
     apex.z += (c.z - L.z * back - apex.z) * g;
     // the size: from the built cone to apex -> rim plane = back + RIM_AHEAD_FRAC radii, mouth MOUTH_FRAC radii
-    const coneH = vis.coneHeight + (back + BAG.RIM_AHEAD_FRAC * rS - vis.coneHeight) * g;
-    const mouth = vis.mouthRadius + (BAG.MOUTH_FRAC * rS - vis.mouthRadius) * g;
+    const coneH = vis.coneHeight + (back + ahead - vis.coneHeight) * g;
+    const mouth = vis.mouthRadius + (mouthR - vis.mouthRadius) * g;
     NetMeshKit.setBagShape(kit, coneH, mouth);
     this._aimBag(vis, net);
+  }
+
+  /**
+   * reel-visible Decision 4: how far the net has cinched round its catch during the leash hand-off, 0 (the bag as
+   * the reel left it) to 1 (tight: the same size as the wire bag that takes over at the latch). It follows the
+   * catch's real approach to the radiator tip's latch point (distance now against distance when the hand-off was
+   * first seen), only ever grows, and is smoothed, so the bag shrinks as the catch comes in, never in a step.
+   * 0 when no hand-off of this net runs (the daughter-rack transfer and every other state keep the old bag).
+   * @param {object} vis
+   * @param {object} net
+   * @param {object} d the catch (debris)
+   * @returns {number} 0..1
+   * @private
+   */
+  _handOffCinch(vis, net, d) {
+    const drv = this._player && this._player.leashDriver;
+    const view = drv && typeof drv.view === 'function' ? drv.view() : null;
+    if (!view || view.net !== net || !view.tipWorld || !d || !d._scenePosition) return vis._handCinch || 0;
+    const dist = view.tipWorld.distanceTo(d._scenePosition);
+    if (!(vis._handD0 > 0)) vis._handD0 = Math.max(dist, 1e-6);
+    // "arrived" = within CINCH_ARRIVED_FRAC of the starting distance (the catch is seated on the tip's bag, not at a point)
+    const x = Math.min(1, Math.max(0, (1 - dist / vis._handD0) / (1 - BAG.CINCH_ARRIVED_FRAC)));
+    const c = x * x * (3 - 2 * x);
+    vis._handCinch = Math.max(vis._handCinch || 0, c);
+    return vis._handCinch;
   }
 
   /**

@@ -657,6 +657,17 @@ export class LadderController {
     const px = ARROW_TURN_PX_PER_S * dtS;
     this._cameraSystem.ladderDragNudge(dx * px, dy * px);
     this._lastInputMs = tMs;
+    this._endCatchFocus();
+  }
+
+  /**
+   * reel-visible: any camera input of the player's ends the catch focus (CameraSystem CATCH_FOCUS) at once; the
+   * ladder state the input is about to change is the camera's own, which the focus never wrote.
+   * @private
+   */
+  _endCatchFocus() {
+    const cs = this._cameraSystem;
+    if (cs && typeof cs.ladderCancelCatchFocus === 'function') cs.ladderCancelCatchFocus();
   }
 
   /** Router entry: one router-normalized wheel event. */
@@ -664,6 +675,7 @@ export class LadderController {
     if (!this._engaged) return [];
     const t = (tMs === undefined) ? this._now() : tMs;
     this._lastInputMs = t;
+    this._endCatchFocus();
     const decisions = this._ladder.wheel({ tMs: t, dir, mag });
     this._apply(decisions, t);
     this._refreshRail();
@@ -675,6 +687,7 @@ export class LadderController {
     if (!this._engaged) return [];
     const t = (tMs === undefined) ? this._now() : tMs;
     this._lastInputMs = t;
+    this._endCatchFocus();
     const decisions = this._ladder.command({ tMs: t, type });
     this._apply(decisions, t);
     this._refreshRail();
@@ -686,6 +699,7 @@ export class LadderController {
     if (!this._engaged) return [];
     const t = (tMs === undefined) ? this._now() : tMs;
     this._lastInputMs = t;
+    this._endCatchFocus();
     const decisions = this._ladder.jump({ tMs: t, toFloor });
     this._apply(decisions, t);
     this._refreshRail();

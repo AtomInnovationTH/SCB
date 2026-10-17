@@ -512,6 +512,8 @@ const _geoCache = new Map();
 
 /** @type {Map<string, number>} Local-space bounding radius per geometry type */
 const _geoRadiusCache = new Map();
+/** farthest vertex from the mesh ORIGIN (the instance origin: where the catch is pinned) per cache key, in mesh units */
+const _geoOriginRadiusCache = new Map();
 
 /** @type {Map<string, {x:number,y:number,z:number}>} Bounding-box half-extents per geometry */
 const _geoHalfExtentCache = new Map();
@@ -1108,6 +1110,12 @@ export class DebrisWireframe {
     geo.computeBoundingSphere();
     const br = geo.boundingSphere ? geo.boundingSphere.radius : 1;
     _geoRadiusCache.set(cacheKey, br);
+    // The bounding sphere is NOT centred on the origin (a fragment's sits up to 0.3 mesh units off, so its vertices
+    // reach 16 % past `br` from the origin); anything centred on the catch needs the origin-centred reach.
+    const pos = geo.attributes && geo.attributes.position;
+    let reach = 0;
+    if (pos) for (let i = 0; i < pos.count; i++) reach = Math.max(reach, Math.hypot(pos.getX(i), pos.getY(i), pos.getZ(i)));
+    _geoOriginRadiusCache.set(cacheKey, reach || br);
 
     // Cache bounding-box half-extents too. The bounding *sphere* is dominated by
     // far-reaching parts (e.g. solar wings), so using it to place a flag decal
@@ -1143,6 +1151,21 @@ export class DebrisWireframe {
     const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
     const cacheKey = type === 'fragment' ? `fragment_${(id >>> 0) % N}` : type;
     return _geoRadiusCache.has(cacheKey) ? _geoRadiusCache.get(cacheKey) : 1;
+  }
+
+  /**
+   * Farthest vertex of the mesh from its origin (the instance origin the catch is pinned and bagged at), in mesh
+   * units: multiply by the render scale for the drawn reach. >= `getBoundingRadius` only when the bounding sphere
+   * is centred off the origin. Primes the cache itself (no uncached-returns-1 trap).
+   * @param {string} type
+   * @param {number} [id=0]
+   * @returns {number}
+   */
+  static getOriginRadius(type, id = 0) {
+    const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
+    const cacheKey = type === 'fragment' ? `fragment_${(id >>> 0) % N}` : type;
+    if (!_geoOriginRadiusCache.has(cacheKey)) this.getGeometry(type, id);
+    return _geoOriginRadiusCache.get(cacheKey) || 1;
   }
 
   /**

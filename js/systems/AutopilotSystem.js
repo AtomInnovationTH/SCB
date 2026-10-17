@@ -277,6 +277,24 @@ export class AutopilotSystem {
   isTurning() { return !!this._turn; }
 
   /**
+   * mother-aims: true while some system holds the mother's attitude steady (a mother-net reel-in, the leash
+   * hand-off, a launch's hold from the end of its aim to its spring). ArmManager reads it to decide whether a
+   * launch may turn the mother.
+   * @returns {boolean}
+   */
+  isAttitudeHeld() { return !!this._attitudeHold; }
+
+  /**
+   * True while the attitude hold is a catch's reel-in (a mother-net or lasso hold): held, with no owner (the leash
+   * hand-off owns its hold) and not the hold a daughter's launch took.
+   * @returns {boolean}
+   */
+  isReelInHeld() {
+    return !!(this._attitudeHold && !this._attitudeHoldOwner
+      && !(this._launchHold && this._launchHoldIsOurs(this._launchHold)));
+  }
+
+  /**
    * Signed angle (rad) the running scripted turn has turned so far, about its
    * own axis in the direction of the request. 0 when no turn is running.
    * @returns {number}
@@ -1937,6 +1955,18 @@ export class AutopilotSystem {
       ? dirProvider
       : () => dirProvider;
 
+    // mother-aims: a daughter out on her line limits how far the mother may turn. ArmManager checks this
+    // before it asks (the launch then aims the strut alone); this is the backstop for any other caller.
+    if (mode === 'daughter') {
+      const am = opts.armManager || this._armManager;
+      const tier = (am && typeof am.getRotationLockTier === 'function') ? am.getRotationLockTier() : 'none';
+      if (tier !== 'none') {
+        const reason = 'a daughter is out on her line';
+        eventBus.emit(Events.COMMS_MESSAGE, { text: `Launch aborted — ${reason}.`, priority: 'warning', source: 'HOUSTON' });
+        return Promise.reject(new Error(reason));
+      }
+    }
+
     // Supersede any existing coroutine (and any scripted turn).
     if (this._aimCoroutine) {
       this._rejectAim('Superseded by new aim request');
@@ -2009,6 +2039,7 @@ export class AutopilotSystem {
   _rejectAim(reason) {
     const c = this._aimCoroutine;
     if (!c) return;
+    this._billAimTail(c);          // mother-aims: a cancelled aim still has to be stopped
     this._aimCoroutine = null;
     c._cleanup();
     eventBus.emit(Events.AIM_SEQUENCE_END, { mode: c.mode, result: 'rejected', reason });
@@ -2312,6 +2343,7 @@ export class AutopilotSystem {
 
     // Converged? Resolve with the ACTUAL current launcher direction.
     if (errAngle <= c.tolRad) {
+      this._billAimTail(c);          // mother-aims: the rest of the brake a real ship still needs
       this._resolveAim({ x: b.x, y: b.y, z: b.z });
       return;
     }
@@ -2326,8 +2358,12 @@ export class AutopilotSystem {
     q.slerp(this._aimTargetQuat, alphaSlerp);
     q.normalize();
 
-    // Plumes + N₂ draw via the manual RCS path (feel only). Decompose the error
-    // rotation axis into local pitch (X) / yaw (Y) components to pick nozzles.
+    // Plumes + N₂ draw. mother-aims: billed by torque × time (_billAimBurns); a player that cannot say its
+    // inertia / couple torque (a headless stub) keeps the old full-throttle bill below.
+    if (this._billAimBurns(c, b, T, errAngle, dt)) return;
+
+    // Old bill (feel only): decompose the error rotation axis into local pitch (X) / yaw (Y) components
+    // to pick nozzles; full throttle until the last 10°.
     this._aimErrAxis.crossVectors(b, T);
     if (this._aimErrAxis.lengthSq() > 1e-12) {
       this._aimInvQuat.copy(q).invert();
@@ -2346,5 +2382,94 @@ export class AutopilotSystem {
         this._player.fireRcsRotation('yaw', yawSign, yMag, dt);
       }
     }
+  }
+
+  /**
+   * mother-aims: bill the aim's cold gas by torque × time, reactively, and fire the plumes only while a burn
+   * lasts (it used to bill full throttle for the whole slew: ~19 % of the tank for a 60° aim, ~10× what the
+   * same turn costs as `requestAttitudeTurn` bang-coast-bang).
+   *
+   * The aim's motion stays a kinematic slerp at the peak rate; the bill follows a shadow of the rate a real
+   * ship would have, ω: it climbs at α = the slowest couple's torque / inertia (as the ramps of
+   * `requestAttitudeTurn`) up to the aim's peak rate, then coasts for free, and brakes once
+   * (remaining angle − tolerance) < ω²/2α. The aim is feedback-driven (the target moves, the strut slews, it
+   * ends `tol` early), so the choice is made afresh every frame. What is left of the brake when the aim ends
+   * (the slerp arrives before a real ship would have stopped) is billed then — see `_billAimTail`.
+   *
+   * @param {object} c — the aim coroutine record
+   * @param {THREE.Vector3} b — launcher axis in the world (this._aimBoresightWorld)
+   * @param {THREE.Vector3} T — target direction in the world
+   * @param {number} errAngle — angle between them (rad)
+   * @param {number} dt
+   * @returns {boolean} false when the player cannot tell its inertia / couple torque (caller bills the old way)
+   * @private
+   */
+  _billAimBurns(c, b, T, errAngle, dt) {
+    const p = this._player;
+    if (typeof p.getAttitudeInertia !== 'function' || typeof p._coupleTauMag !== 'function') return false;
+
+    this._aimErrAxis.crossVectors(b, T);
+    if (!(this._aimErrAxis.lengthSq() > 1e-12)) return true;       // no turn axis: nothing to burn
+    this._aimInvQuat.copy(p.quaternion).invert();
+    const ax = this._aimErrAxis.applyQuaternion(this._aimInvQuat).normalize();
+    const I = p.getAttitudeInertia();
+    const tauX = p._coupleTauMag('x'), tauY = p._coupleTauMag('y');
+    const cx = Math.abs(ax.x), cy = Math.abs(ax.y);
+    let a = Infinity;                                              // slowest couple sets the angular acceleration
+    if (cx > 1e-6) a = Math.min(a, tauX / (I.ixx * cx));
+    if (cy > 1e-6) a = Math.min(a, tauY / (I.iyy * cy));
+    if (!Number.isFinite(a) || !(a > 0)) return false;
+
+    // Firing fraction of each couple during a burn (as requestAttitudeTurn); a sliver on the minor couple folds in.
+    let mx = cx > 1e-6 ? I.ixx * a * cx / tauX : 0;
+    let my = cy > 1e-6 ? I.iyy * a * cy / tauY : 0;
+    if (mx >= my) { if (my > 0 && my <= TURN_MIN_MAG) { mx += my; my = 0; } }
+    else if (mx > 0 && mx <= TURN_MIN_MAG) { my += mx; mx = 0; }
+    mx = Math.min(1, mx);
+    my = Math.min(1, my);
+
+    if (c.omega === undefined) {
+      c.omega = 0;                                                 // the shadow body rate along the turn axis (rad/s)
+      c.gasUnits = 0;
+      c.k = (p._coldGasRate ?? 0.5) * (Constants.ATTITUDE?.RCS_ATTITUDE_N2_FACTOR ?? 0.3);
+      c.burn = { mx: 0, my: 0, dx: 1, dy: 1, a: 0 };
+    }
+    const burn = c.burn;
+    burn.mx = mx; burn.my = my; burn.dx = ax.x >= 0 ? 1 : -1; burn.dy = ax.y >= 0 ? 1 : -1; burn.a = a;
+
+    const rateCap = Constants.ATTITUDE?.MAX_RATE;
+    const peak = rateCap > 0 ? Math.min(c.rate, rateCap) : c.rate;
+    const rem = errAngle - c.tolRad;                                // angle still to go before the aim counts as done
+    let seconds = 0;
+    let sign = 1;
+    if (c.omega > 0 && rem <= (c.omega * c.omega) / (2 * a)) {      // braking: thrust against the turn
+      seconds = Math.min(dt, c.omega / a);
+      c.omega = Math.max(0, c.omega - a * dt);
+      sign = -1;
+    } else if (c.omega < peak) {                                    // accelerating toward the peak rate
+      seconds = Math.min(dt, (peak - c.omega) / a);
+      c.omega = Math.min(peak, c.omega + a * dt);
+    }                                                              // else coasting: no burn, no gas, no plume
+    if (seconds > 0) this._fireAimCouples(c, sign, seconds);
+    return true;
+  }
+
+  /** @private Fire both couples of the last burn for `seconds` (sign −1 = against the turn). */
+  _fireAimCouples(c, sign, seconds) {
+    const burn = c.burn;
+    if (burn.mx > 0) this._turnFire(c, 'pitch', sign * burn.dx, burn.mx, seconds);
+    if (burn.my > 0) this._turnFire(c, 'yaw', sign * burn.dy, burn.my, seconds);
+  }
+
+  /**
+   * mother-aims: the aim ends (arrived, or cancelled) while the shadow rate is still above zero: a real ship
+   * would still have to stop. Bill that rest of the brake (ω/α seconds against the turn) and zero the rate.
+   * @private
+   */
+  _billAimTail(c) {
+    if (!c || !(c.omega > 0) || !c.burn || !(c.burn.a > 0)) return;
+    const seconds = c.omega / c.burn.a;
+    c.omega = 0;
+    this._fireAimCouples(c, -1, seconds);
   }
 }

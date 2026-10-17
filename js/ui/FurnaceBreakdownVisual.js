@@ -30,6 +30,12 @@
  *   CATCH_BREAKDOWN_CHUNK { armId, debrisId, index, total, [anchor] }
  *     → launch that chunk on a curve from the station toward the mother's
  *       furnace port (bus center), shrinking + warm glow, then dispose.
+ *       RADIATOR-TIP stations (anchor.kind 'tip', reel-visible 2026-10-17) feed
+ *       the tip itself instead: the chunks are sized from the catch (each ~0.45
+ *       of its radius), start at random points on its surface and sink into the
+ *       tip's latch point over ~1 s, shrinking and glowing; the tip is read every
+ *       frame, so the whole path rides with the ship. They never fly to the ship's
+ *       centre (the tip IS the furnace there). No dish mesh yet (follow-up).
  *   NET_CONSUMED { armIndex } / { podIndex } (collar)
  *     → draw a station ghost bag toward the mother — a no-op since no station
  *       spawns one any more (the `_bags` consumers are kept tolerant).
@@ -58,6 +64,12 @@ const COL_CHUNK_HOT  = 0xff7a1a;   // heated as it nears the furnace
 
 const _v3a = new THREE.Vector3();
 const _v3b = new THREE.Vector3();
+const _qa = new THREE.Quaternion();
+
+/** reel-visible: a radiator-tip chunk's radius as a fraction of the catch's radius. */
+export const TIP_CHUNK_FRAC = 0.45;
+/** ... and how far it shrinks while it sinks into the tip (1 - this at the end). */
+const TIP_CHUNK_END_SCALE = 0.1;
 
 /**
  * Resolve an arm index from an armId like "weaver-1" / "spinner-2" by matching
@@ -166,6 +178,12 @@ export class FurnaceBreakdownVisual {
     return this._motherCenter(out);
   }
 
+  /** The ship's world orientation into `out` (identity for a mock without one). */
+  _shipQuat(out) {
+    const q = this._player && this._player.quaternion;
+    return q ? out.copy(q) : out.identity();
+  }
+
   /** World position of the mother's furnace port (bus center). */
   _motherCenter(out) {
     const p = this._player;
@@ -230,9 +248,10 @@ export class FurnaceBreakdownVisual {
     return { key: armIndex, worldOf: (out) => this._strutTipWorld(armIndex, out) };
   }
 
-  _makeChunkMesh() {
-    // Small irregular chunk; size ~0.6 m so it reads at gameplay distance.
-    const r = 0.6 * M;
+  _makeChunkMesh(radius = 0.6 * M) {
+    // Small irregular chunk; size ~0.6 m so it reads at gameplay distance. A radiator-tip chunk is sized from its
+    // catch instead (TIP_CHUNK_FRAC of the catch radius), so a 0.3 m piece does not break into 0.6 m lumps.
+    const r = radius;
     const geo = new THREE.IcosahedronGeometry(r, 0);
     // Jitter vertices for an irregular "chopped" look.
     const pos = geo.attributes.position;
@@ -272,6 +291,11 @@ export class FurnaceBreakdownVisual {
     if (!anchor) return;
     const count = payload.chunkCount || (Constants.FURNACE_TRANSFER?.CHUNK_COUNT ?? 5);
 
+    if (payload.anchor && payload.anchor.kind === 'tip') {
+      this._startTipPool(anchor, payload.anchor.index, count);
+      return;
+    }
+
     const tip = anchor.worldOf(_v3a).clone();
 
     // Pre-build a pool of chunk meshes parked at the station with a small
@@ -305,6 +329,42 @@ export class FurnaceBreakdownVisual {
     // feed payoff); every `_bags` consumer already tolerates a missing bag.
   }
 
+  /**
+   * @private reel-visible — a radiator-tip breakdown: park `count` chunks at random points on the catch's surface, each
+   * a fraction of its radius, remembered as offsets from the tip in the SHIP's frame so they ride with the ship
+   * (and the radiator) until their CHUNK event sinks them into the tip.
+   * @param {{key:string}} anchor
+   * @param {number} index — the tip
+   * @param {number} count
+   */
+  _startTipPool(anchor, index, count) {
+    const tc = this._player && this._player.tipCargo;
+    const d = tc && typeof tc.debrisAt === 'function' ? tc.debrisAt(index) : null;
+    let radiusM = d && Number.isFinite(d.sizeMeter) ? d.sizeMeter / 2 : 0.2;
+    if (tc && typeof tc.spheres === 'function') {                          // the bag's own radius (TipCargo slot data)
+      const sph = tc.spheres().find((x) => x.name === 'tipBag_' + index);
+      if (sph && sph.r > 0) radiusM = sph.r;
+    }
+    const tip = this._tipWorld(index, new THREE.Vector3());
+    const centre = d && d._scenePosition ? d._scenePosition : tip;
+    const inv = this._shipQuat(new THREE.Quaternion()).invert();
+    const pool = [];
+    pool.tipIndex = index;
+    for (let i = 0; i < count; i++) {
+      const mesh = this._makeChunkMesh(TIP_CHUNK_FRAC * radiusM * M);
+      const u = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
+      if (u.lengthSq() < 1e-6) u.set(0, 1, 0);
+      u.normalize().multiplyScalar(radiusM * M);                           // a point on the catch's surface
+      mesh.position.copy(centre).add(u);
+      mesh.userData.tipOff = mesh.position.clone().sub(tip).applyQuaternion(inv);   // from the tip, in the ship's frame
+      mesh.userData.spin = new THREE.Vector3(
+        (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4);
+      this._scene.add(mesh);
+      pool.push(mesh);
+    }
+    this._pools.set(anchor.key, pool);
+  }
+
   /** @private */
   _onBreakdownChunk(payload) {
     if (!this._enabled || !this._scene) return;
@@ -314,6 +374,18 @@ export class FurnaceBreakdownVisual {
     if (!pool || pool.length === 0) return;
     const mesh = pool.shift();
     if (!mesh) return;
+
+    if (pool.tipIndex != null) {
+      // reel-visible: sink into the tip (its path is the stored ship-frame offset shrinking to 0, read every frame)
+      this._chunks.push({
+        mesh, t: 0, dur: 0.9 + Math.random() * 0.3, tipIndex: pool.tipIndex,
+        off: mesh.userData.tipOff.clone(),
+        spin: mesh.userData.spin || new THREE.Vector3(2, 1, 3),
+        baseScale: mesh.scale.x || 1,
+      });
+      if (pool.length === 0) this._pools.delete(anchor.key);
+      return;
+    }
 
     const start = mesh.position.clone();
     const end = this._motherCenter(_v3b).clone();
@@ -399,20 +471,36 @@ export class FurnaceBreakdownVisual {
     if (!this._enabled || this._disposed) return;
 
     // Chunks: quadratic-Bézier flight to the furnace, shrinking + heating.
+    // reel-visible: parked radiator-tip chunks ride with the tip (and the ship) until their CHUNK event.
+    for (const [, pool] of this._pools) {
+      if (pool.tipIndex == null) continue;
+      this._tipWorld(pool.tipIndex, _v3b);
+      this._shipQuat(_qa);
+      for (const m of pool) m.position.copy(m.userData.tipOff).applyQuaternion(_qa).add(_v3b);
+    }
+
     for (let i = this._chunks.length - 1; i >= 0; i--) {
       const c = this._chunks[i];
       c.t += dt;
       const u = Math.min(1, c.t / c.dur);
       const iu = 1 - u;
-      // B(u) = iu²·start + 2·iu·u·ctrl + u²·end
-      _v3a.copy(c.start).multiplyScalar(iu * iu)
-        .addScaledVector(c.ctrl, 2 * iu * u)
-        .addScaledVector(c.end, u * u);
+      if (c.tipIndex != null) {
+        // sink into the tip: tip(now) + R(now) · offset · (1 - ease). Monotone toward the tip, exactly on it at u = 1.
+        this._tipWorld(c.tipIndex, _v3b);
+        this._shipQuat(_qa);
+        const e = u * u * (3 - 2 * u);
+        _v3a.copy(c.off).applyQuaternion(_qa).multiplyScalar(1 - e).add(_v3b);
+      } else {
+        // B(u) = iu²·start + 2·iu·u·ctrl + u²·end
+        _v3a.copy(c.start).multiplyScalar(iu * iu)
+          .addScaledVector(c.ctrl, 2 * iu * u)
+          .addScaledVector(c.end, u * u);
+      }
       c.mesh.position.copy(_v3a);
       c.mesh.rotation.x += c.spin.x * dt;
       c.mesh.rotation.y += c.spin.y * dt;
       c.mesh.rotation.z += c.spin.z * dt;
-      const s = c.baseScale * (1 - 0.85 * u);
+      const s = c.baseScale * (1 - (c.tipIndex != null ? 1 - TIP_CHUNK_END_SCALE : 0.85) * u);
       c.mesh.scale.setScalar(Math.max(1e-4, s));
       if (c.mesh.material && c.mesh.material.emissiveIntensity != null) {
         c.mesh.material.emissiveIntensity = 0.2 + 1.6 * u;   // warm glow as it nears the furnace

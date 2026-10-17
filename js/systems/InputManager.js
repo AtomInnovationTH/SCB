@@ -1085,6 +1085,7 @@ export class InputManager {
           const target = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
           let deployedOk = false;
           let launchedByIndex = false;
+          const dockedBefore = this._dockedArms(am);
           if (selArm && selArm.state === Constants.ARM_STATES.DOCKED) {
             // deployArmByIndex + arm.deploy/deployFreefly already emit a specific
             // refusal comms on every reachable failure (spring/fuel/power/
@@ -1103,12 +1104,11 @@ export class InputManager {
             // which emits its own LAUNCH_CEREMONY_START when it fires) leaves the
             // selected daughter DOCKED for now — announce only a launch that has
             // happened, and only for the daughter that was actually selected.
+            // Auto-pick: only an arm that was docked at the press and is not now (a daughter already out,
+            // or a launch still waiting, must not be announced: the waiting one announces itself when it fires).
             const deployed = launchedByIndex
               ? (selArm.state !== 'DOCKED' ? [selArm] : [])
-              : am.arms.filter(a =>
-                a.state !== 'DOCKED' && a.state !== 'EXPENDED' &&
-                a.state !== 'RETURNING' && a.state !== 'DOCKING'
-              );
+              : dockedBefore.filter(a => a.state !== 'DOCKED');
             if (deployed.length > 0) {
               const arm = deployed[deployed.length - 1];
               // launch-seq: no "deployed. Tracking…" line — the one launch line is "Spring released.
@@ -2727,18 +2727,21 @@ export class InputManager {
       .catch(() => { /* aborted — nothing fired/spent */ });
   }
 
+  /** The arms docked right now: the auto-pick launch announces only one of these that has left the dock. @private */
+  _dockedArms(am) {
+    return am && am.arms ? am.arms.filter(a => a && a.state === Constants.ARM_STATES.DOCKED) : [];
+  }
+
   /** Smart-default helper — deploys the next docked daughter (mirrors `case 'KeyD':`). */
   deployDaughter() {
     const d = this._deps; if (!d) return;
     if (this.armPilotMode) return;
     if (typeof d.deployArm !== 'function') return;
+    const dockedBefore = this._dockedArms(d.armManager);
     d.deployArm();
     eventBus.emit(Events.TUTORIAL_DEPLOY_INPUT);
     if (d.armManager) {
-      const deployed = d.armManager.arms.filter(a =>
-        a.state !== 'DOCKED' && a.state !== 'EXPENDED' &&
-        a.state !== 'RETURNING' && a.state !== 'DOCKING'
-      );
+      const deployed = dockedBefore.filter(a => a.state !== 'DOCKED');
       if (deployed.length > 0) {
         const arm = deployed[deployed.length - 1];
         eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });

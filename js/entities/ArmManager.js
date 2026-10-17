@@ -506,12 +506,15 @@ export class ArmManager {
   /**
    * Run the daughter launch ceremony for a selected+validated arm, then deploy.
    * Returns true when the ceremony starts (or the immediate fallback fires).
+   * mother-aims: the ceremony turns the mother only when she is free to turn (`_motherTurnBlock`);
+   * otherwise the strut alone aims the launch, with one comms line saying why.
    * @param {ArmUnit} arm
    * @param {object} target
+   * @param {{announce?: boolean}} [opts] — see `deployArmByIndex`; handed on to the strut-only launch
    * @returns {boolean}
    * @private
    */
-  _deployWithCeremony(arm, target) {
+  _deployWithCeremony(arm, target, opts) {
     const ap = this._autopilot;
     const player = this.playerSatellite;
     const canCeremony = ap && typeof ap.requestAimRotation === 'function'
@@ -537,11 +540,23 @@ export class ArmManager {
       // L2: no aim ceremony → the daughter fires along the direct bearing; the
       // launch line is checked along that same bearing.
       return this._launchArm(arm, 'target', () => this._launchDirShip(arm, target),
-        () => arm.deploy(target));
+        () => arm.deploy(target), opts);
+    }
+
+    // mother-aims: not free to turn (a daughter on her line, a catch on the collar, a hand-off or another
+    // launch under way) → no turn; the strut alone aims the launch. `announce`: a launch the aim stage
+    // holds back announces itself when it fires (the D key's auto-pick caller announces only a launch that
+    // has already happened).
+    const blocked = this._motherTurnBlock();
+    if (blocked) {
+      this._sayCantTurn(blocked);
+      return this._launchArm(arm, 'target', () => this._launchDirShip(arm, target),
+        () => arm.deploy(target), { ...(opts || {}), announce: true });
     }
 
     // Concurrency guard: don't supersede an in-flight aim sequence (e.g. a
     // Mother net aim already rotating). Defer, matching InputManager.fireMotherNet.
+    // (mother-aims: `_motherTurnBlock` already refuses while an aim runs, so this is a backstop only.)
     if (typeof ap.isAiming === 'function' && ap.isAiming()) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'Rotating to launch attitude — stand by.', priority: 'info',
@@ -613,6 +628,9 @@ export class ArmManager {
    * Deploy a specific arm by index (0-based).
    * If target is provided, deploys toward target. If null, deploys in free-fly mode.
    * Used by number key deploy+select flow (Phase 1B).
+   * mother-aims: with a target and the mother free to turn, the number key does what the D key does: the
+   * mother turns (and the strut slews) until the strut points at the target, then the spring fires. Not
+   * free (a daughter out on her line, a catch on the collar, a hand-off or another launch): the strut aims alone.
    * @param {number} index - 0-based arm index
    * @param {object|null} target - Optional target to aim toward
    * @param {{announce?: boolean}} [opts] - `announce`: the number-key launch (InputManager). A launch
@@ -654,9 +672,58 @@ export class ArmManager {
       return false;
     }
 
+    // mother-aims: with a target, the number key turns the mother too (the D key's ceremony) when she is
+    // free to turn; otherwise only the arm's strut aims (today's launch aim). A launch of this arm that is
+    // already waiting keeps its single entry (requestClearLaunch answers "accepted" for it).
+    if (target && !(this._pendingLaunches && this._pendingLaunches.has(index))) {
+      const blocked = this._motherTurnBlock();
+      if (!blocked) return this._deployWithCeremony(arm, target, opts);
+      // The D key with this daughter selected (`announce`) says why the mother does not turn, once; a launch
+      // of hers that already waits keeps its single entry and says nothing again.
+      if (opts && opts.announce) this._sayCantTurn(blocked);
+    }
+
     // No target → free-fly mode (TRANSIT with manual control). L2: through the
     // keep-out gate, along the direction the arm will actually fire.
     return this._launchTargetOrFree(arm, target, opts);
+  }
+
+  // ==========================================================================
+  // mother-aims — the launch turns the mother when she is free to turn
+  // ==========================================================================
+
+  /** The one comms line for a launch the mother may not turn for. @private */
+  _sayCantTurn(reason) {
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `Mother can't turn now (${reason}): aiming the arm only.`, priority: 'info',
+    });
+  }
+
+  /**
+   * Why the mother may NOT turn for a launch right now, in plain words, or null when she is free to turn.
+   * Free = no daughter out on a line (rotation-lock tier 'none'), no launch in flight or waiting (another arm
+   * LAUNCHING, an arm reserved, a pending launch, an aim running), no catch on the collar / nose (state + size:
+   * `_heldCatchCorridorRadiusM`, whatever its mass), no hand-off, no scripted turn and no other system holding
+   * the attitude (a mother-net reel-in). Catches latched on radiator tips and on daughters' racks do NOT block:
+   * they are held rigidly and their inertia is already in the turn's gas bill (`getAttitudeInertia`).
+   * @returns {string|null}
+   * @private
+   */
+  _motherTurnBlock() {
+    if (this.getRotationLockTier() !== 'none') return 'a daughter is out on her line';
+    const ap = this._autopilot;
+    if ((this._pendingLaunches && this._pendingLaunches.size > 0)
+        || this.arms.some((a) => a && (a._aimReserved || a.state === ARM_STATES.LAUNCHING))
+        || (ap && typeof ap.isAiming === 'function' && ap.isAiming())) {
+      return 'a launch is in progress';
+    }
+    const ld = this.playerSatellite && this.playerSatellite.leashDriver;
+    if (ld && typeof ld.isActive === 'function' && ld.isActive()) return 'a hand-off is running';
+    if (this._heldCatchCorridorRadiusM() !== null) return 'a catch is on the collar';
+    if (ap && typeof ap.isTurning === 'function' && ap.isTurning()) return 'a hand-off is running';   // a scripted turn takes an anonymous hold too
+    if (ap && typeof ap.isReelInHeld === 'function' && ap.isReelInHeld()) return 'a catch is being reeled in';
+    if (ap && typeof ap.isAttitudeHeld === 'function' && ap.isAttitudeHeld()) return 'a hand-off is running';
+    return null;
   }
 
   /**

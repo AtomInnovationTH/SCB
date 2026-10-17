@@ -2343,6 +2343,7 @@ export class GameFlowManager {
     }
     if (!armManager) return;
 
+    const dockedBefore = (armManager.arms || []).filter(a => a.state === Constants.ARM_STATES.DOCKED);
     const deployed = armManager.deployArm(target);
 
     // Aim-before-launch: when a rotation ceremony is in flight, deployArm returns
@@ -2350,9 +2351,12 @@ export class GameFlowManager {
     // premature "deployed" confirmation — AutopilotSystem already posted the
     // "Rotating to launch attitude" comms, and the real launch fires after the
     // slew resolves. Only confirm here for immediate (non-ceremony) deploys.
-    const ceremonyInFlight = armManager._autopilot
+    // mother-aims: the same holds for a strut-only launch that waits for her strut to swing
+    // (the mother cannot turn): deployArm is true, no arm has left the dock yet.
+    const ceremonyInFlight = (armManager._autopilot
       && typeof armManager._autopilot.isAiming === 'function'
-      && armManager._autopilot.isAiming();
+      && armManager._autopilot.isAiming())
+      || (dockedBefore.length > 0 && dockedBefore.every(a => a.state === Constants.ARM_STATES.DOCKED));
 
     // UX: Confirm deployment via comms (ARM_PILOT is auto-entered by InputManager)
     if (deployed && !ceremonyInFlight) {

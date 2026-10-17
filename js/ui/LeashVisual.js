@@ -31,12 +31,35 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { Constants } from '../core/Constants.js';
 import { NetMeshKit } from './NetMeshKit.js';
+import { DebrisWireframe } from './DebrisWireframe.js';
+import { DebrisField } from '../entities/DebrisField.js';
 
 const M = Constants.SCENE_UNITS_PER_METER;
 const SEGMENTS = 20;                 // line segments (21 points) — the net tether's count
 const TIP_SEGMENTS = 6;              // of those, anchor -> tip while the line runs through the tip
 const SAG_FRAC = Constants.CAPTURE_NET.NET_TETHER.SAG_FRAC;   // the net tether's sag idiom
 const BAG_MARGIN_M = 0.03;           // the drawn bag stands this far outside the catch
+/**
+ * Radius (m) the catch is DRAWN at, measured from the point the catch is pinned and the bag is centred on: the render
+ * scale the renderer really uses (DebrisField.effectiveRenderScale, floor included) times the mesh's farthest vertex
+ * from its origin. `sizeMeter` is not the drawn size (test-DebrisField-SizeSSOT): this is 0.76 - 1.8 x sizeMeter.
+ * @param {{sizeMeter?: number, sceneSize?: number, type?: string, id?: number}|null} d the catch
+ * @returns {number}
+ */
+export function drawnCatchRadiusM(d) {
+  const scale = (d && DebrisField.effectiveRenderScale(d)) || 0.4 * Constants.SCENE_UNITS_PER_METER;
+  return scale / Constants.SCENE_UNITS_PER_METER * DebrisWireframe.getOriginRadius(d ? d.type : undefined, d ? d.id : 0);
+}
+/**
+ * Radius (m) of the wire bag the leash hand-off draws round a catch: the catch as drawn plus the margin, so the bag
+ * encloses it. CaptureNetVisual cinches the net bag to this size over the hand-off, so the swap at the latch does not
+ * change the bag's size.
+ * @param {{sizeMeter?: number}|null} d the catch
+ * @returns {number}
+ */
+export function wireBagRadiusM(d) {
+  return Math.max(0.02, drawnCatchRadiusM(d)) + BAG_MARGIN_M;
+}
 const BAG_FADE_S = 0.5;              // real-size bag fades in/out over this long
 const BAG_OPACITY = 0.55;
 const CONE_EASE_PER_S = 8;           // cone swivel easing rate (1/s)
@@ -269,8 +292,7 @@ export class LeashVisual {
   }
 
   _radiusM(d) {
-    const size = d && Number.isFinite(d.sizeMeter) ? d.sizeMeter : 0.4;
-    return Math.max(0.02, size / 2);
+    return wireBagRadiusM(d) - BAG_MARGIN_M;
   }
 
   /** Place one bag (or fade it out). `neck` = direction from the bag centre to its neck (any length). */

@@ -969,10 +969,10 @@ export const Constants = {
     RECENTER_GAIN: 1.0,         // 1/s — ω_target = clamp(GAIN·θ, RECENTER_RATE)
     HOLD_DEADBAND_RAD: 0.035,   // ~2°, no recenter inside this
     INERTIA_MAX_FACTOR: 3.0,    // D6 berthed-mass clamp: total ≤ 3× stowed transverse
-    RCS_ATTITUDE_N2_FACTOR: 1.6, // D9: gas is billed as rate × time, so 40 N shortens the burn and
-                                // a 90° turn would cost only 1.57% of tank. 1.6 holds the intended
-                                // ~2.5%/turn (was 1.0 at 25 N → 2.50%; the old comment's "~5%" was
-                                // never measured — the real 25 N cost was 2.50%).
+    RCS_ATTITUDE_N2_FACTOR: 1.6, // D9: gas is billed as rate × time. MEASURED 2026-10-17 (20 kg N2):
+                                // a 60° arrow-key turn (spin-up + arrest) costs 1.13 kg = 5.7% of the
+                                // tank (DECISIONS "roughly 6%"); the old "~2.5%/turn" comment was stale.
+                                // An aim bills torque × time (mother-aims): ~1.9% for a 60° turn.
   },
 
   // FIX_PLAN §3: Tether-aware rotation limits (exponential spring-resistance model).

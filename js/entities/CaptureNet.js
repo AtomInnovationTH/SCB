@@ -2072,47 +2072,22 @@ export class NetProjectile {
   }
 
   /**
-   * @private The ramped `_catchRenderMin` VALUE for the reel/berth write sites
-   * (whale-in-cone register item 15, 2026-08-09 — owner decision: RAMP; plan
-   * 1786237166000). Pre-item-15 the floor engaged at full strength on the
-   * first reel frame — a measured one-frame pop of 1.31× (2 m catch,
-   * tmp/i11-step.log) to 3.33× (0.6 m fragment,
-   * test-CaptureNet-CaptureTransition.js) at exactly the instant the ceremony
-   * camera is on the catch. The written value now eases base → fullFloor over
-   * MOTHER_CATCH_MIN_RENDER_RAMP_S of net dt (the ceremony-scaled domain this
-   * tick already runs in, so the ramp stretches under slow-mo like every
-   * other net animation), on a smoothstep so both ends have zero velocity.
+   * @private The `_catchRenderMin` VALUE for the reel/berth write sites (and LeashDriver's `easeFull`).
    *
-   * Writer-side ONLY: every reader (the probe, the bag's contents floor, both
-   * matrix writers) still reads the one clamp-aware SSOT
-   * DebrisField.effectiveRenderScale, whose predicate (`_catchRenderMin >
-   * base`, only raises) makes a ramped value ≤ base inert — an at/above-floor
-   * catch's drawn size never moves. The scenario's `_catchRenderMin` property
-   * freeze swallows this write whatever its value, so every gate stays
-   * bit-identical (item-8 D3). The accumulator is seeded at _enterMotherReel
-   * and never reset while held (the berth re-ramp trap — item-15 plan F6).
-   * Scalar arithmetic only — the per-frame path stays allocation-free.
+   * reel-visible (owner 2026-10-16, DECISIONS §25 row 2: "the reel-in must be seen"; Ruling 0, physically real
+   * wins): a mother-net catch is drawn at its TRUE size from capture to latch. The CAPTURE_NET readability floor
+   * (MOTHER_CATCH_MIN_RENDER_M, 2.0 m: whale-in-cone items 8/15, l8-reel-collar D3) drew a 0.3 m piece up to 3.3x
+   * big at reel start and shrank it between 20 m and 3 m from the collar: the owner saw "debris and net magically
+   * shrink". The value written is now the piece's BASE render scale, which DebrisField.catchRenderFloorScale (its
+   * predicate only raises, `_catchRenderMin > base`) treats as no floor, so every reader (the probe, the bag's
+   * contents spec, both matrix writers, LeashDriver's easeFull) sees the real size. The floor constants stay in
+   * Constants.js (the lasso path and the non-ladder ceremony hold distance still read their own).
    * @param {object} d — the canonical catch debris
-   * @param {number} dt — net-domain seconds (already ceremony-scaled)
-   * @returns {number} scene-unit scale floor for `_catchRenderMin`
+   * @param {number} _dt — unused (the old ramp clock)
+   * @returns {number} scene-unit scale for `_catchRenderMin` (== the base render scale)
    */
-  _catchFloorScale(d, dt) {
-    this._floorRampT += dt;
-    const fullFloor = DebrisWireframe.scaleForRenderRadiusM(CN.MOTHER_CATCH_MIN_RENDER_M ?? 2.0, d.type, d.id);
-    const rampS = Math.max(1e-6, CN.MOTHER_CATCH_MIN_RENDER_RAMP_S ?? 0.6);
-    const frac = Math.min(1, this._floorRampT / rampS);
-    const ease = frac * frac * (3 - 2 * frac);           // smoothstep
-    const base = DebrisField.baseRenderScale(d);   // item 19: ONE static — was a byte-copy of the SSOT base
-    // l8-reel-collar (D3): the floor also eases with the catch's distance from the collar — full at >= FLOOR_FAR_M,
-    // gone (true size) at <= FLOOR_NEAR_M — so the piece shrinks smoothly on its way in and is true size at home.
-    // `_reelDistM` is written by the reel/berth pin; unset (mocks, adoption before its first tick) = no distance term.
-    const H = CN.REEL_HOME;
-    let dist = 1;
-    if (H && this._reelDistM != null) {
-      const t = Math.min(1, Math.max(0, (this._reelDistM - H.FLOOR_NEAR_M) / (H.FLOOR_FAR_M - H.FLOOR_NEAR_M)));
-      dist = t * t * (3 - 2 * t);
-    }
-    return base + (fullFloor - base) * ease * dist;
+  _catchFloorScale(d, _dt) {
+    return DebrisField.baseRenderScale(d);   // item 19: ONE static for the base
   }
 
   /**
@@ -2249,11 +2224,12 @@ export class NetProjectile {
   /**
    * Small-catch plan W4 (2026-08-25) — the DRAWN bundle's radius in metres:
    * what the ceremony camera is actually holding on. `sizeMeter` is the
-   * logical size; the renderer draws effectiveRenderScale × boundingRadius,
-   * which the net-held readability floor (`_catchRenderMin`, ramped in by
-   * `_catchFloorScale` from reel entry) raises to ~MOTHER_CATCH_MIN_RENDER_M
-   * for every sub-floor catch — measured tmp/frag-before: a 0.5 m fragment
-   * draws at 2.0 m radius from REEL_IN on. The camera's hold-distance formula
+   * logical size; the renderer draws effectiveRenderScale × boundingRadius.
+   * (Before reel-visible, 2026-10-17, the net-held readability floor raised
+   * every sub-floor catch to ~MOTHER_CATCH_MIN_RENDER_M — measured
+   * tmp/frag-before: a 0.5 m fragment drew at 2.0 m radius from REEL_IN on;
+   * `_catchFloorScale` now returns the base scale, so this is the true size.)
+   * The camera's hold-distance formula
    * reads THIS (through the one clamp-aware SSOT chain), so the shot frames
    * the bundle the player sees, never the invisible logical size. Returns 0
    * with no target (callers fall back to the sizeMeter-only term); headless
@@ -5009,9 +4985,8 @@ export class CaptureNetSystem {
     } else {
       net._qLocal = new THREE.Quaternion();
     }
-    // The lasso reel already floored the catch's render scale; seed the item-15
-    // ramp DONE so updateBerthHold's _catchFloorScale returns the full floor at
-    // once (re-ramping from 0 would pop the drawn size at adoption).
+    // Seed the old item-15 ramp clock DONE (re-ramping from 0 would have popped the drawn size at adoption). Since
+    // reel-visible _catchFloorScale ignores the clock and returns the true base scale, so this is bookkeeping only.
     net._floorRampT = CN.MOTHER_CATCH_MIN_RENDER_RAMP_S ?? 0.6;
     net._berthTimer = CN.BERTH_SECURE_S ?? 4.0;
     net._berthProcessed = false;
