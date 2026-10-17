@@ -4027,7 +4027,7 @@ async function init() {
           player._rosaManualControl = false;
           player._rosaFurlTarget = 1.0;
         }
-        // The release back to the orbit rest (CLOSED since DECISIONS §15 row 4): the lock clears at the 2° floor.
+        // The release back to the orbit rest (CLOSED since DECISIONS §15 row 4): the lock clears at the 0° rest (was a 2° floor until 2026-10-16).
         const target = player.setFlowerPose(Constants.THERMAL.FLOWER.REST_POSE || 'STOW');
         return { on: false, struts: docked.length, flower: target, status: player.getFlowerStatus() };
       };

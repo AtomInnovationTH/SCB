@@ -1643,7 +1643,7 @@ export const Constants = {
     // DEMO_TOP_RAD: the once-per-player full-range show goes out to this angle. Probe
     // 2026-10-15: strut 0-180° in 2° steps x 20 radiator/wing states, clear from 4° (0-2° is
     // the rest cradle, touching by design). Tightest gaps: 22 mm hull at 4°, 30 mm radiator
-    // plate at 6° (radiator 2°), 54 mm wing clamp at 8° (tilt -30°); neighbours 190 mm and
+    // plate at 6° (radiator then at 2°; it rests at 0° since 2026-10-16), 54 mm wing clamp at 8° (tilt -30°); neighbours 190 mm and
     // nose collar 207 mm at 180°. So DEMO_TOP_RAD = 180°.
     STRUT_AUTO: {
       OVERRIDE_S: 10,                 // s after the arm ARRIVES at the player's angle
