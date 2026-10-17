@@ -2246,16 +2246,44 @@ export class GameFlowManager {
   }
 
   /**
+   * x1-held-catch D1: has this held piece been paid for? A catch pays exactly once, in the CATCH_PROCESSED handler
+   * above (`payCredit`): it marks the FIELD object `debris._credited = true` (looked up by id). A holder may keep a
+   * shallow SNAPSHOT of that body instead (a mother net's `targetDebris`, and the very object `_stowHeldCatch` pushes
+   * onto a daughter's rack after the cargo hand-off), so the field object is read first, then the piece's own flag.
+   * A piece that is missing, or has no id to look up, counts as NOT paid: it keeps blocking, as before this rule.
+   * @param {object|null|undefined} piece - a rack entry, a tip-cargo debris, a daughter's in-hand catch, a net's target
+   * @returns {boolean}
+   * @private
+   */
+  _piecePaid(piece) {
+    if (!piece || piece.id == null) return false;
+    const { debrisField } = this._refs || {};
+    if (debrisField && typeof debrisField.getDebrisById === 'function') {
+      const field = debrisField.getDebrisById(piece.id);
+      if (field && field._credited === true) return true;
+    }
+    return piece._credited === true;
+  }
+
+  /**
    * D1 (d): is anything under way that could still pay credits or load gas without the mother thrusting?
-   * Predicates (each guarded: headless tests wire only some of these):
-   *  - a daughter out: any arm whose state is not DOCKED / EXPENDED / ADRIFT / RELOADING (ArmManager.js:2283
+   * Credits, salvage and gas all land in ONE place, the catch's CATCH_PROCESSED credit (see `_piecePaid`); a catch that
+   * has been paid can never pay again, however long it takes to digest. So a held catch blocks only until it is paid
+   * (x1-held-catch D1-D3). Predicates (each guarded: headless tests wire only some of these):
+   *  - a daughter out: any arm whose state is not DOCKED / EXPENDED / ADRIFT / RELOADING / HOLDING_CATCH (ArmManager.js:2283
    *    getDeployedCount counts ADRIFT and RELOADING too, which the plan says must not block, so the filter is
-   *    spelled out here); HOLDING_CATCH blocks.
-   *  - a daughter holding a catch: arm.heldCatches.length (ArmManager.js:1654, :2877).
-   *  - tip cargo: player.tipCargo.count() (TipCargo.js:233; ArmManager.js:2866).
+   *    spelled out here). She winches home within seconds, so every other out state blocks. ADRIFT stays non-blocking:
+   *    R drops an adrift daughter's catch unpaid (ArmUnit.recall).
+   *  - a daughter holding a catch: any piece on her rack (arm.heldCatches) that is not yet paid; HOLDING_CATCH blocks
+   *    only while a rack piece or her in-hand capturedDebris is unpaid. A rack digests in max(6 s, 2 s/kg) (up to
+   *    2000 s, slower in eclipse) but pays nothing at its end once the mate or an earlier digestion has paid.
+   *  - tip cargo: a piece on a radiator tip (player.tipCargo.debrisAt(i)) that is not yet paid; tip cargo is always
+   *    already paid in the game, so this is the same rule, not a special case.
    *  - a mother-net catch or net in flight: any active mother net not in {FOLDED, STOWED, MISSED, RELEASED} - that
    *    is BERTHED / COLLARED / TRANSFERRING (ArmManager.js:2836-2890) and the flight states before them
-   *    (ArmManager.js:2671-2672 netInFlight); CaptureNet.activeNets (CaptureNet.js:3370).
+   *    (ArmManager.js:2671-2672 netInFlight); CaptureNet.activeNets (CaptureNet.js:3370). A COLLARED or TRANSFERRING net
+   *    blocks only while its catch is unpaid (`net._berthProcessed` is set when the mate pays, CaptureNet.js ~:3549);
+   *    a paid catch can sit at the collar for good (over 2000 kg, no daughter to take it, a cut plan under way).
    *  - a leash hand-off carrying a catch: player.leashDriver.isActive() (LeashDriver.js:167).
    *  - the lasso: lassoSystem.active (LassoSystem.js:89).
    * @returns {boolean}
@@ -2267,17 +2295,40 @@ export class GameFlowManager {
     const arms = (armManager && Array.isArray(armManager.arms)) ? armManager.arms : [];
     for (const arm of arms) {
       if (!arm) continue;
-      if (arm.heldCatches && arm.heldCatches.length > 0) return true;
+      const rack = arm.heldCatches;
+      if (rack && rack.length > 0) {
+        for (let i = 0; i < rack.length; i++) if (!this._piecePaid(rack[i])) return true;
+      }
       const st = arm.state;
+      if (st === A.HOLDING_CATCH) {
+        if (arm.capturedDebris && !this._piecePaid(arm.capturedDebris)) return true;
+        continue;
+      }
       if (st !== A.DOCKED && st !== A.EXPENDED && st !== A.ADRIFT && st !== A.RELOADING) return true;
     }
     const tc = player && player.tipCargo;
-    if (tc && typeof tc.count === 'function' && tc.count() > 0) return true;
+    const tipCount = (tc && typeof tc.count === 'function') ? tc.count() : 0;
+    if (tipCount > 0) {
+      // TipCargo has 4 slots (SLOT_COUNT, not exported); an empty slot reads null. Any bag this loop cannot read
+      // (no debrisAt, a slot past the scan) counts as unpaid and blocks.
+      let seen = 0;
+      if (typeof tc.debrisAt === 'function') {
+        for (let i = 0; i < 16 && seen < tipCount; i++) {
+          const d = tc.debrisAt(i);
+          if (!d) continue;
+          if (!this._piecePaid(d)) return true;
+          seen++;
+        }
+      }
+      if (seen < tipCount) return true;
+    }
     const S = Constants.CAPTURE_NET.STATES;
     const OVER = [S.FOLDED, S.STOWED, S.MISSED, S.RELEASED];
     const nets = Array.isArray(captureNetSystem.activeNets) ? captureNetSystem.activeNets : [];
     for (const n of nets) {
-      if (n && n._isMother && !OVER.includes(n.state)) return true;
+      if (!n || !n._isMother || OVER.includes(n.state)) continue;
+      if ((n.state === S.COLLARED || n.state === S.TRANSFERRING) && (n._berthProcessed || this._piecePaid(n.targetDebris))) continue;
+      return true;
     }
     const ld = player && player.leashDriver;
     if (ld && typeof ld.isActive === 'function' && ld.isActive()) return true;
