@@ -22,8 +22,8 @@
  *            trend); a small RADIATOR AUTO tag while the ship opened the
  *            radiator itself. Source: `ResourceSystem.getThermalSnapshot()`.
  *   BATTERY  ONE row: fill = level; number = `312/600 Wh`; the trend arrow ▲/▼
- *            and the time left (`empty in 19 min` / `full in 8 min`) on the
- *            same row. Both come from the MEDIAN of the last 30 one-second
+ *            and the time left (`empty in 5 min` / `full in 2 min`; real minutes
+ *            on the battery clock, `W_PER_UNIT_S`) on the same row. Both come from the MEDIAN of the last 30 one-second
  *            means of the net power (`NetPowerMedian`), so a scan burst (measured
  *            2026-10-15: ~10.5-12 kW for ~7 s, ~86 Wh) never reads "empty in
  *            1 min"; both stay blank until 30 such means exist (the first 30 s). amber < 25 %, red < 10 %; the
@@ -338,8 +338,11 @@ export function fmtMinutes(min) {
 const TIME_LEFT_MAX_MIN = 24 * 60;
 
 /**
- * The battery time-left text: draining -> `empty in 19 min` (level / |net|),
- * charging -> `full in 8 min` ((max - level) / net). '' when the net is under
+ * The battery time-left text: draining -> `empty in 5 min` (level / |net|),
+ * charging -> `full in 2 min` ((max - level) / net). The minutes are REAL
+ * minutes on the battery clock: seconds = Wh x W_PER_UNIT_S / |W|
+ * (312 Wh at -984 W -> 317 s -> `5 min`). Under one minute it reads
+ * `empty in under 1 min` / `full in under 1 min`. '' when the net is under
  * RATE_HIDE_W, when the answer is over 24 h, or when the battery is already
  * empty / full.
  * @param {number} level  Wh
@@ -353,9 +356,12 @@ export function fmtTimeLeft(level, max, netW) {
   if (abs < VITALS_LAW.RATE_HIDE_W) return '';
   const toGo = netW < 0 ? level : max - level;
   if (!(toGo > 0)) return '';
-  const min = (toGo / abs) * 60;
+  // The battery runs on its own clock (ResourceSystem.billWatts): 1 Wh unit = W_PER_UNIT_S watt-seconds.
+  const seconds = (toGo * Constants.SHIP_HEAT.W_PER_UNIT_S) / abs;
+  const min = seconds / 60;
   if (min > TIME_LEFT_MAX_MIN) return '';
-  return `${netW < 0 ? 'empty' : 'full'} in ${fmtMinutes(min)}`;
+  const word = netW < 0 ? 'empty' : 'full';
+  return min < 1 ? `${word} in under 1 min` : `${word} in ${fmtMinutes(min)}`;
 }
 
 /** `1234 m/s` — the ship's ΔV, whole m/s ('—' when not a number). */
