@@ -63,6 +63,8 @@
 //   cards, each continuing its card in order of need ('col' starts the next);
 //   small gaps between clusters; unbuilt keys and the dev key last. Shorter
 //   words so three columns fit 1180 wide; Shift Z still steps back a part.
+//   2026-10-17 owner ruling (DECISIONS §26): B still opens the upgrade drawer to look, but buying and
+//   selling happen only at the resupply stop after a mission, so the B row says so.
 // The live bindings are owned by InputManager._handleKeyDown; test-HelpTruth.js
 // fails when a bound key is missing here or a chip names an unbound key.
 export const HOTKEY_GROUPS = [
@@ -105,7 +107,7 @@ export const HOTKEY_GROUPS = [
       [['T', '/', 'Tab'], 'Next target'],
       [['Space'], 'Main action'],
       [['Esc'], 'Back'],
-      [['B'], 'Buy upgrades'],
+      [['B'], 'Upgrades (buy at resupply stop)'],
       [['I'], 'Info'],
       [['J'], 'Journal'],
       'gap',

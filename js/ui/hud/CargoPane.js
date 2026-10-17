@@ -443,6 +443,9 @@ export class CargoPane {
       #${CARGO_PANE_ID} .cargo-btn:hover { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.18); border-color: var(--hud-normal, ${VisualLaw.COLORS.PLAYER}); }
       #${CARGO_PANE_ID} .cargo-btn:active { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.35); color: var(--hud-label, ${VisualLaw.COLORS.LABEL}); }
       #${CARGO_PANE_ID} .cargo-btn:focus { outline: none; }
+      /* Mid-mission (not at the resupply stop): the button still takes the click (the shop answers it with the
+       * reason in comms) but reads as unavailable. */
+      #${CARGO_PANE_ID} .cargo-btn[data-closed] { opacity: 0.55; }
       #${CARGO_PANE_ID} .cargo-btn[aria-disabled="true"] { opacity: 0.35; cursor: default; pointer-events: none; }
       /* Compact: the header line + the two buttons; the progress line and the list fold away. */
       #${CARGO_PANE_ID}[${MODE_ATTR}="compact"] .cargo-elev,
@@ -453,6 +456,15 @@ export class CargoPane {
 
   /** @private Subscribe the render to the cargo / contract / capacity / reset events (injected bus). */
   _subscribe() {
+    // u1-resupply-stop D3: the shop tells us when the resupply stop opens / closes (a plain callback — no new
+    // EventBus event), so the button words below follow it. A stub shop without the hook is simply never told.
+    const shop = this._shop;
+    if (shop && typeof shop.onResupplyStopChange === 'function') {
+      try {
+        const off = shop.onResupplyStopChange(() => this._render());
+        if (typeof off === 'function') this._unsubs.push(off);
+      } catch (_e) { /* stub shop */ }
+    }
     const bus = this._bus;
     const E = this._events;
     if (!bus || typeof bus.on !== 'function' || !E) return;
@@ -491,6 +503,36 @@ export class CargoPane {
       } catch (_e) { /* fall through */ }
     }
     return { totalMassKg: 0, capacityKg: 0, totalValue: 0 };
+  }
+
+  /**
+   * @private u1-resupply-stop D3: may the shop trade right now? False only when the shop says it is mid-mission
+   * (`canTrade() === false`); a stub shop without the reader is permissive.
+   */
+  _tradeOpen() {
+    const s = this._shop;
+    if (!s || typeof s.canTrade !== 'function') return true;
+    try { return s.canTrade() !== false; } catch (_e) { return true; }
+  }
+
+  /**
+   * @private Word one sell / contribute button by the stop: mid-mission it carries the full sentence as its tooltip
+   * and accessible name and is dimmed (data-closed); a click still goes to the shop, whose gate refuses it with
+   * the comms line. Write-on-change. The visible text stays short — the pane's footer is a fixed-budget row.
+   */
+  _wordTradeButton(btn, closed, openLabel, closedLabel) {
+    if (!btn || !btn.setAttribute) return;
+    const had = btn.hasAttribute ? btn.hasAttribute('data-closed') : false;
+    if (closed === had && (!closed || btn.getAttribute('title') === closedLabel)) return;
+    if (closed) {
+      btn.setAttribute('data-closed', '');
+      btn.setAttribute('title', closedLabel);
+      btn.setAttribute('aria-label', closedLabel);
+    } else {
+      btn.removeAttribute('data-closed');
+      btn.removeAttribute('title');
+      if (openLabel) btn.setAttribute('aria-label', openLabel); else btn.removeAttribute('aria-label');
+    }
   }
 
   /** @private The contract mass so far (shop.getContractMass, guarded). */
@@ -578,6 +620,11 @@ export class CargoPane {
     this._setStyle(el.empty, 'display', empty ? '' : 'none');
     this._setDisabled(el.sellAll, empty);
     this._setDisabled(el.elevator, empty);
+    // u1-resupply-stop D3: mid-mission every sell / contribute button reads "... at the resupply stop".
+    const closed = !this._tradeOpen();
+    this._wordTradeButton(el.sellAll, closed, null, 'sell at the resupply stop');
+    this._wordTradeButton(el.elevator, closed, null, 'contribute at the resupply stop');
+    for (const rec of this._rows.values()) this._wordTradeButton(rec.btn, closed, null, 'sell at the resupply stop');
     this._empty = empty;
     this._rowCount = Math.max(1, items.length);
 

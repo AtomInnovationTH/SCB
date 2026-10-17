@@ -16,15 +16,16 @@ export const GAME_OVER_REASONS = {
   collision: 'COLLISION WITH ACTIVE SATELLITE',
   debris: 'CATASTROPHIC DEBRIS COLLISION',
   fuel: 'FUEL DEPLETED. STRANDED IN ORBIT',
-  // t1-stranded: both tanks empty and no way to pay for more (GameFlowManager.update, STRANDED_GRACE_S).
-  stranded: 'OUT OF GAS. NOT ENOUGH CREDITS TO BUY MORE',
+  // t1-stranded: both tanks empty and no way to get more (GameFlowManager.update, STRANDED_GRACE_S). True mid-mission
+  // (no store in flight, u1-resupply-stop, owner 2026-10-17) and at a stop the credits can't pay for.
+  stranded: 'OUT OF GAS. STRANDED IN ORBIT',
   reentry: 'UNCONTROLLED REENTRY',
   // NOTE: no 'battery' reason. Battery depletion folds into 'fuel'
   // (ResourceSystem fires RESOURCE_DEPLETED{reason:'fuel'} only when xenon AND
   // coldGas AND battery are all 0; battery self-recharges in sunlight/RTG/beam,
   // so a battery-alone death is transient by design). The other resource reason
-  // is 'stranded' (t1-stranded): both gas tanks empty with the credits unable to
-  // buy a resupply — fired by GameFlowManager.update after STRANDED_GRACE_S.
+  // is 'stranded' (t1-stranded): both gas tanks empty and no gas to be had (mid-
+  // mission, or a stop the credits can't pay) — GameFlowManager.update, STRANDED_GRACE_S.
   // A real power-failure death mechanic is a backlog item (ROADMAP §7, via PowerDistribution).
 };
 

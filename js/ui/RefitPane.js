@@ -164,6 +164,9 @@ export class RefitPane {
    * @param {boolean} [deps.glass] - the boot's glass answer (Session L / D10):
    *   the actuator chips, the subsystem chips, the BUY buttons and the
    *   alternative rows wear the 44 pt HIG box on glass; desktop sizes otherwise
+   * @param {function} [deps.getAtStop] - () => (boolean|null): u1-resupply-stop D3 — is the ship at the
+   *   resupply stop (GameFlowManager.atResupplyStop)? `false` turns every BUY chip into `buy at the resupply
+   *   stop` and counts nothing as affordable; absent / `null` = permissive (the shipped behaviour).
    * @param {function} [deps.getRecommended] - () => (string|null): the shop's
    *   recommended-starter id for a FIRST depot visit (ShopScreen's pure
    *   `recommendedStarter`) — Wave 5 Session K: the one-shop REFIT drawer hosts
@@ -192,6 +195,7 @@ export class RefitPane {
     this._onOpenEntry = deps.onOpenEntry || null;
     this._adapterDepsFn = deps.adapterDeps || null;
     this._getRecommended = deps.getRecommended || null;
+    this._getAtStop = deps.getAtStop || null;
     /** Session L / D10: glass boot → every tap target wears the 44 pt HIG box. */
     this._glass = !!deps.glass;
     this._actuators = (deps.actuators && typeof deps.actuators === 'object') ? deps.actuators : null;
@@ -259,7 +263,8 @@ export class RefitPane {
       const price = shop.cost == null ? Infinity : upgradeCostNow(shop, ctx.res);
       const prereqs = (ctx.prereqsMet ? !!ctx.prereqsMet(shop) : true)
         && !(shop.effect === 'engineGasResupply' && engineTankFull(ctx.res));
-      const affordable = price <= (ctx.credits ?? 0);
+      // u1-resupply-stop D3: mid-mission (ctx.atStop === false) nothing can be bought, so nothing is "affordable now".
+      const affordable = price <= (ctx.credits ?? 0) && ctx.atStop !== false;
       const cls = prereqs ? (affordable ? 0 : 1) : 2;
       ranked.push({ entry, cls, _cost: price, _i: i });
     });
@@ -284,7 +289,8 @@ export class RefitPane {
    * falls back to the plain cost chip.
    * @param {object} entry - fitting entry
    * @param {{ credits:number, avg:(number|null), levelOf:function,
-   *           prereqsMet:function, nameOf:function, ownedHas:function }} ctx
+   *           prereqsMet:function, nameOf:function, ownedHas:function,
+   *           atStop?:(boolean|null) }} ctx — `atStop === false` (mid-mission) never offers BUY
    * @returns {{ kind:'buy'|'wait'|'needs'|'owned'|'cost', text:string }}
    */
   static chipFor(entry, ctx) {
@@ -310,7 +316,11 @@ export class RefitPane {
       return { kind: 'needs', text: `needs ${name}` };
     }
     const cost = upgradeCostNow(shop, ctx.res) ?? 0;
-    if (cost <= (ctx.credits ?? 0)) return { kind: 'buy', text: 'BUY' };
+    if (cost <= (ctx.credits ?? 0)) {
+      // u1-resupply-stop D3: the wallet is enough, the place is wrong (owner 2026-10-17: no store in the middle of space).
+      if (ctx.atStop === false) return { kind: 'needs', text: 'buy at the resupply stop' };
+      return { kind: 'buy', text: 'BUY' };
+    }
     const n = RefitPane.catchesAway(cost, ctx.credits ?? 0, ctx.avg);
     if (n != null) return { kind: 'wait', text: n === 1 ? '1 catch away' : `${n} catches away` };
     return { kind: 'cost', text: `${cost} cr` };
@@ -364,6 +374,7 @@ export class RefitPane {
    */
   static countAffordable(catalog, ctx) {
     let n = 0;
+    if (ctx.atStop === false) return 0;   // u1-resupply-stop D3: the tab's gold count must not promise a buy mid-mission
     for (const entry of (catalog || [])) {
       const shop = entry.shop || {};
       const level = ctx.levelOf ? (ctx.levelOf(entry.id) || 0) : 0;
@@ -652,6 +663,9 @@ export class RefitPane {
       const a = this._getAvg ? this._getAvg() : null;
       avg = Number.isFinite(a) ? a : null;
     } catch (_e) { avg = null; }
+    // u1-resupply-stop D3: only an explicit `false` from the dep means "mid-mission"; absent / throwing / null = permissive.
+    let atStop = null;
+    try { const v = this._getAtStop ? this._getAtStop() : null; atStop = (v === false) ? false : (v === true ? true : null); } catch (_e) { atStop = null; }
     // g1-gas-upgrades D4/D5: the live ResourceSystem (through the adapter deps) prices the engine-gas resupply
     let res = null;
     try { res = this._adapterDeps().resourceSystem || null; } catch (_e) { res = null; }
@@ -659,6 +673,7 @@ export class RefitPane {
       credits,
       avg,
       res,
+      atStop,
       levelOf,
       ownedHas: (id) => ownedShim.has(id),
       nameOf: (id) => CATALOG_BY_ID.get(id)?.shop?.name || null,

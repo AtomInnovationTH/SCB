@@ -2309,6 +2309,9 @@ async function init() {
       // One-click LIVE buy through the shop's own guarded flow (maxLevel /
       // E5 prereqs / wallet) — ShopScreen.purchaseUpgrade, the public wrapper.
       purchase: (id) => shopScreen.purchaseUpgrade(id),
+      // u1-resupply-stop D3: buying happens only at the resupply stop after a mission — mid-mission the chips
+      // read "buy at the resupply stop" and the tab's gold count promises nothing.
+      getAtStop: () => gameFlowManager.atResupplyStop(),
       // Alternative hover → the hull hardware pulses cyan (MotherCallouts
       // ghost outlines, the one outline system).
       onGhost: (ids) => motherCallouts.setGhostOutline(ids),
@@ -2487,6 +2490,11 @@ async function init() {
     // Registered inside the gate — a ?ladder=0 boot adds no listeners.
     eventBus.on(Events.CODEX_UNLOCKED, () => { if (workbenchPane) workbenchPane.refresh(); });
     eventBus.on(Events.CODEX_VIEWED, () => { if (workbenchPane) workbenchPane.refresh(); });
+    // u1-resupply-stop F1: the tab's gold "can buy" count is cached from the last refresh — repaint it the moment the
+    // stop opens or closes, so it never stays gold after the stop ends (same pane refresh as the codex events).
+    if (shopScreen && typeof shopScreen.onResupplyStopChange === 'function') {
+      shopScreen.onResupplyStopChange(() => { if (workbenchPane) workbenchPane.refresh(); });
+    }
     // Session J item 3 (plan D-C): "the unlock chip's tap opens SPECS on the
     // new entry" — the ticker's "+ Library" ack row (CodexSystem posts it with
     // `codexId`) is tappable ONLY while this sink is wired, and it lands on the

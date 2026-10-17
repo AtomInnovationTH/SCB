@@ -5827,7 +5827,7 @@ export const Constants = {
           id: 'ch12_contribute',
           type: 'interactive',
           source: 'HASSAN',
-          text: 'Dock, open the Shop, and contribute your refined salvage to the elevator contract. Watch the anchor-mass gauge climb — top it off and the tether holds on its own.',
+          text: 'Dock, open the Shop at a resupply stop, and contribute your refined salvage to the elevator contract. Watch the anchor-mass gauge climb — top it off and the tether holds on its own.',
           skillId: 'manage_shop',
           triggerEvent: 'CONTRACT_UPDATE',
           title: 'SET THE ANCHOR',
@@ -6023,7 +6023,7 @@ export const Constants = {
     {
       state: 'STATION_KEEP', idleS: 6, when: 'outOfNets',
       hintId: 'sk_out_of_nets', title: 'Out of nets',
-      text: 'No nets left in the magazine. Press R to reel her in, then restock at the shop (B).',
+      text: 'No nets left in the magazine. Press R to reel her in, then restock at the resupply stop.',
       icon: 'NETS',
     },
   ],

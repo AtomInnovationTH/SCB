@@ -5138,10 +5138,10 @@ export class CaptureNetSystem {
     if (!(podIndex >= 0) || podIndex >= this._motherPodCount()) return null;
     // Phase 0.3 (capture-feedback overhaul): refusals speak — mirror the
     // LassoSystem denial-comms style so the player knows WHY nothing fired
-    // and what fixes it (wait N s / restock at shop [B]).
+    // and what fixes it (wait N s / restock at the resupply stop).
     if (this._motherPodInventory[podIndex] <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Mother net magazine empty. Restock at shop [B]',
+        text: 'Mother net magazine empty. Restock at the resupply stop.',
         source: 'SYSTEM',
         channel: 'CMD',
         priority: 'warning',

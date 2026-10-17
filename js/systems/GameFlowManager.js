@@ -85,6 +85,16 @@ export class GameFlowManager {
     this._depotInvitation = null;
 
     /**
+     * u1-resupply-stop D1 (owner ruling 2026-10-17, DECISIONS §26): true while the ship is "at the resupply stop"
+     * — the only time credits may be spent or earned in the shop. OPENS when a mission is completed
+     * (`_onMissionBoundary`), when GAMEOVER_CONTINUE sends the player to the shop, and when a save made at a mission
+     * boundary is continued. CLOSES at the next credited catch, and on game over / win / menu / reset. Nothing else
+     * closes it (not the invitation's 'entered', not WORKBENCH_RESUME, not SHOP_DEPLOY). Pushed to the shop through
+     * `_setResupplyStop`; read by `atResupplyStop()`. In-memory: a reload re-derives it from the saved mission count.
+     */
+    this._atResupplyStop = false;
+
+    /**
      * w1-hud-calm review fix (2026-10-05): the first INVITATION pays the
      * first-depot floor and persists FIRST_DEPOT_VISITED, but the player has
      * not come down yet — so the first-visit framing (the REFIT drawer's
@@ -110,7 +120,7 @@ export class GameFlowManager {
 
     /**
      * t1-stranded D1/D2: seconds of running gameplay the ship has been stranded (both gas tanks empty, no way to
-     * pay for a resupply, nothing under way that could pay). Ends the run at Constants.STRANDED_GRACE_S.
+     * buy a resupply — mid-mission, or at the stop with too little to pay — nothing under way that could pay). Ends the run at Constants.STRANDED_GRACE_S.
      * @type {number}
      */
     this._strandedS = 0;
@@ -193,6 +203,43 @@ export class GameFlowManager {
    */
   init(refs) {
     this._refs = refs;
+    // u1-resupply-stop D1: the real game starts mid-mission — the shop's trade gate is closed until the first
+    // completed mission (a shop that was never told stays permissive, so bare test rigs are unaffected).
+    this._setResupplyStop(false);
+  }
+
+  /**
+   * u1-resupply-stop D1: is the ship at the resupply stop right now (a completed mission, or the game-over
+   * shop, and no credited catch since)? The shop's trade gate and the REFIT chips read this through the
+   * shop's pushed flag; tests and the HUD may read it here.
+   * @returns {boolean}
+   */
+  atResupplyStop() {
+    return this._atResupplyStop;
+  }
+
+  /**
+   * Is `count` credited clears exactly a completed mission (a positive multiple of the mission length)? The same
+   * pure getMissionProgress pairing `_startMissionAfterCredit` uses — no second modulo.
+   * @param {number} count
+   * @returns {boolean}
+   * @private
+   */
+  _isMissionBoundaryCount(count) {
+    const { perMission, debrisUntilShop } = getMissionProgress(count);
+    return count > 0 && debrisUntilShop === perMission;
+  }
+
+  /**
+   * The ONE writer of the resupply-stop state: the flag here plus the guarded push to the shop
+   * (many test rigs have no shop or a stub without the setter).
+   * @param {boolean} open
+   * @private
+   */
+  _setResupplyStop(open) {
+    this._atResupplyStop = !!open;
+    const shop = this._refs && this._refs.shopScreen;
+    if (shop && typeof shop.setResupplyStop === 'function') shop.setResupplyStop(this._atResupplyStop);
   }
 
   // ==========================================================================
@@ -246,6 +293,7 @@ export class GameFlowManager {
     // the drawer on its own; nothing may stay pending into the next run.
     if (state === GameStates.GAME_OVER || state === GameStates.WIN || state === GameStates.MENU) {
       this._workbenchBreak = false;
+      this._setResupplyStop(false);   // u1-resupply-stop D1: game over / win / menu end the stop
     }
 
     // First-depot visit signal, computed BEFORE the flag is persisted so the
@@ -385,7 +433,9 @@ export class GameFlowManager {
 
       case GameStates.SHOP:
         // HUD self-manages visibility via GAME_STATE_CHANGE
-        firstDepotVisit = this._applyFirstDepotFloor();
+        // u1-resupply-stop D4: the first-visit floor is paid at the resupply stop only (a mid-mission look at the
+        // full-screen shop pays nothing — the first invitation pays it, and the framing is owed to the next stop).
+        firstDepotVisit = this._atResupplyStop ? this._applyFirstDepotFloor() : false;
         // Any depot entry (the doorway, the B key, the iPad chip) takes the
         // open invitation up — the notch glow ends (Wave 5 Session E).
         this._closeDepotInvitation('entered');
@@ -586,6 +636,13 @@ export class GameFlowManager {
         return;
       }
 
+      // u1-resupply-stop D1: a save made at a mission boundary (a multiple of DEBRIS_PER_MISSION cleared, no catch
+      // since) reloads AT the stop — closing the game must not close the shop. Any other count reloads mid-mission.
+      // (resetGame above closed it; the gameOver save returned earlier and GAMEOVER_CONTINUE opens its own stop.)
+      // F2: a save written inside the game-over shop carries `resupplyStop: true` (0 cleared, so the count cannot
+      // say); old saves without the key keep the boundary-count rule.
+      this._setResupplyStop(save.resupplyStop === true || this._isMissionBoundaryCount(gameState.debrisCleared));
+
       // Returning players already know what the score bar is — activate it
       // immediately (no 2 s settle delay). The ORBITAL_VIEW timer is gated behind
       // _firstOrbitalView (set false above) so it won't fire for this path.
@@ -750,6 +807,10 @@ export class GameFlowManager {
         this.applyUpgradeEffect(data);
       });
 
+      // u1-resupply-stop D1/F2: the game-over shop is a resupply stop (open BEFORE the save, so a reload inside
+      // the shop keeps it, and before the shop shows, so its first render already trades); it stays open through
+      // SHOP_DEPLOY until the first credited catch.
+      this._setResupplyStop(true);
       this.saveGame();
 
       // Comms notification
@@ -1164,7 +1225,8 @@ export class GameFlowManager {
         }
 
         // Auto-save after successful capture
-        if (payCredit) this.saveGame();
+        // (F2: this catch is about to close any open stop below, so the save must not carry it.)
+        if (payCredit) this.saveGame({ resupplyStop: false });
 
         // Wireframe self-clears via DEBRIS_REMOVED listener (Batch 3)
 
@@ -1213,6 +1275,10 @@ export class GameFlowManager {
         if (payCredit && debrisCount > 0 && debrisCount % SHOP_CADENCE === 0) {
           if (gameState.isGameplay()) this._onMissionBoundary(debrisCount);
         } else if (payCredit) {
+          // u1-resupply-stop D1: the player has flown out for the next mission — the stop closes at this credited
+          // catch whether or not the invitation was still open (a visit closes the invitation as 'entered'; it
+          // does not close the stop).
+          this._setResupplyStop(false);
           // The invitation window is "until the next credited catch" (owner
           // decision 2, 2026-09-04): a catch that is not a boundary lapses it.
           this._closeDepotInvitation('lapsed');
@@ -1304,6 +1370,7 @@ export class GameFlowManager {
 
       // Update game state
       gameState.clearDebris();
+      this._setResupplyStop(this._isMissionBoundaryCount(gameState.debrisCleared));   // u1 D1: a sacrifice that completes a mission opens the stop; any other closes it
       // Wave 5 Session F (D4): the second credited-clear path (Ctrl+Shift+D →
       // ARM_DEORBIT_CMD → ArmUnit.startDeorbit) — the mission boundary check
       // follows its increment too, so a sacrifice that lands the 5th clear
@@ -1820,6 +1887,7 @@ export class GameFlowManager {
     }
     // An open depot invitation belongs to the game that just ended.
     this._closeDepotInvitation('reset');
+    this._setResupplyStop(false);         // u1-resupply-stop D1: a new run starts mid-mission
     this._pendingMissionStart = null;     // c2-fifth-catch D2: so does a held mission start
     this._strandedS = 0;                  // t1-stranded: a new run starts with no stranded spell
     timerManager.clearByOwner(this);
@@ -1941,6 +2009,8 @@ export class GameFlowManager {
 
     const saveData = {
       gameOver: !!(opts && opts.gameOver === true),
+      // u1-resupply-stop F2: the stop survives a reload inside the game-over shop (see MENU_CONTINUE).
+      resupplyStop: (opts && typeof opts.resupplyStop === 'boolean') ? opts.resupplyStop : this._atResupplyStop === true,
       credits: scoring.credits,
       totalScore: scoring.totalScore,
       missionNumber: scoring.missionNumber,
@@ -2217,7 +2287,8 @@ export class GameFlowManager {
 
   /**
    * D1: is the ship stranded RIGHT NOW? All of (a)-(d) hold: gameplay; both tanks empty (below one second of thrust);
-   * the credits plus the cargo's sale value cannot buy the engine-gas resupply row (or it is not purchasable);
+   * (c) the ship is not at the resupply stop (nothing can be bought mid-mission — u1-resupply-stop D6), or it is
+   * and the credits plus the cargo's sale value cannot buy the engine-gas resupply row (or it is not purchasable);
    * nothing under way could still pay.
    * @returns {boolean}
    * @private
@@ -2232,13 +2303,11 @@ export class GameFlowManager {
     const row = UPGRADES.find((u) => u.id === 'gas_resupply');
     const owned = shopScreen && shopScreen.purchasedUpgrades;
     const purchasable = !!row && upgradePrereqsMet(row, owned || new Map(), (f) => Constants.isFeatureEnabled(f));
-    if (purchasable) {
-      let credits = scoringSystem.credits;
-      // The first shop / REFIT opening tops a first-time visitor up to FIRST_DEPOT_FLOOR (_applyFirstDepotFloor).
-      if (!persistenceManager.getCeremonyFlag('FIRST_DEPOT_VISITED')) {
-        credits = Math.max(credits, (Constants.SHOP && Constants.SHOP.FIRST_DEPOT_FLOOR) || 600);
-      }
-      const wealth = credits + this._strandedCargoCredits();
+    // u1-resupply-stop D6 (owner 2026-10-17: there is no store in the middle of space): credits and cargo can pay
+    // for gas only AT the resupply stop. Mid-mission nothing can be bought, so condition (c) holds whatever the
+    // wallet; at the stop it holds when credits plus the cargo's sale value fall short of the resupply price.
+    if (purchasable && this._atResupplyStop) {
+      const wealth = scoringSystem.credits + this._strandedCargoCredits();
       if (wealth >= upgradeCostNow(row, resourceSystem)) return false;
     }
     // Last of the tank checks: it needs the ship-mass lookup, so a frame with gas or money never pays for it.
@@ -2259,8 +2328,10 @@ export class GameFlowManager {
     if (!this._isStranded()) { this._strandedS = 0; return; }
     const grace = Constants.STRANDED_GRACE_S;
     if (this._strandedS === 0) {
+      // D6: mid-mission the wallet is irrelevant (nothing can be bought); at the stop it is the reason.
+      const why = this._atResupplyStop ? 'Out of gas, and not enough credits to buy more.' : 'Out of gas.';
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Out of gas, and not enough credits to buy more. The mission ends in ${grace} s unless a catch is under way.`,
+        text: `${why} The mission ends in ${grace} s unless a catch is under way.`,
         priority: 'high',
         _critical: true,                // pass the onboarding comms filter (commsSuppression)
       });
@@ -2291,7 +2362,8 @@ export class GameFlowManager {
     if (this._workbenchBreak) return;
     // First visit = the floor pays now, OR the first invitation already paid it
     // and the framing is still owed (consumed here, once).
-    const floorPaid = this._applyFirstDepotFloor();
+    // u1-resupply-stop D4: the floor is paid at the resupply stop only; a mid-mission look pays nothing.
+    const floorPaid = this._atResupplyStop ? this._applyFirstDepotFloor() : false;
     const owed = this._firstVisitOwed;
     this._firstVisitOwed = false;
     const firstDepotVisit = floorPaid || owed;
@@ -2354,6 +2426,9 @@ export class GameFlowManager {
     const M = Constants.MISSIONS;
     const ladderOn = !!(Constants.LADDER && Constants.LADDER.ENABLED);
     const { missionsCompleted } = getMissionProgress(debrisCount);
+    // u1-resupply-stop D1: a completed mission opens the resupply stop on EVERY path below (the ladder-on
+    // invitation, the forced stop, the ladder-off boundary shop) — it stays open until the next credited catch.
+    this._setResupplyStop(true);
     if (ladderOn && (!M.FORCED_DEPOT_STOP || missionsCompleted > M.FORCED_DEPOT_CHAPTERS)) {
       this._openDepotInvitation(debrisCount, missionsCompleted);
       return;
@@ -2412,7 +2487,7 @@ export class GameFlowManager {
     // success cue (HUD / AudioSystem listen). Not a stop: no card, no hold (DECISIONS §14).
     eventBus.emit(Events.MISSION_COMPLETE, { mission: missionsCompleted, debrisCleared: debrisCount });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `UPGRADES AVAILABLE \u2014 ${debrisCount} debris cleared. Come down when ready, or fly on.`,
+      text: `UPGRADES AVAILABLE \u2014 ${debrisCount} debris cleared. Come down when ready, or fly on. The stop closes at your next catch.`,
       priority: 'high',
     });
     eventBus.emit(Events.DEPOT_INVITATION, {

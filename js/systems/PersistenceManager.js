@@ -142,6 +142,10 @@ class PersistenceManager {
         // applies the game-over screen's CONTINUE rule (half the credits, fresh mission).
         // Additive (no SAVE_VERSION bump): old saves lack it and load as a normal save.
         gameOver: data.gameOver === true,
+        // u1-resupply-stop F2: true when the save is written AT the resupply stop that has no boundary count to
+        // re-derive it from (the game-over shop: 0 cleared). MENU_CONTINUE reopens the stop on it; a save without
+        // the key falls back to the mission-boundary count. Additive (no SAVE_VERSION bump).
+        resupplyStop: data.resupplyStop === true,
         // save() is a WHITELIST: a key that a read-modify-write setter writes
         // (as setCeremonyFlag does with ceremonyFlags above) but that is
         // missing from this list is silently dropped on the next write. (The

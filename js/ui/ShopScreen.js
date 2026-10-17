@@ -317,6 +317,12 @@ export class ShopScreen {
     this._scoringSystem = null;
     this._contractMassKg = 0;
 
+    // u1-resupply-stop D2 (owner 2026-10-17): buying and selling happen only at the resupply stop. null = no
+    // GameFlowManager wired (bare test rigs trade freely); only `false` refuses. GameFlowManager sets it.
+    this._atResupplyStop = null;
+    /** @type {Array<function(boolean|null): void>} u1-resupply-stop D3: panes that word their buttons by the stop (CARGO). */
+    this._stopListeners = [];
+
     this._injectStyles();
     this._build();
 
@@ -347,6 +353,58 @@ export class ShopScreen {
 
   /** Set ScoringSystem reference for addCredits. */
   setScoringSystem(ss) { this._scoringSystem = ss; }
+
+  /**
+   * u1-resupply-stop D1/D2: GameFlowManager pushes whether the ship is at the resupply stop (a completed mission
+   * or the game-over shop, and no credited catch since). `false` refuses every trade below; `null` (never set)
+   * leaves the shop permissive for bare test rigs.
+   * @param {boolean|null} atStop
+   */
+  setResupplyStop(atStop) {
+    const next = (atStop === null || atStop === undefined) ? null : !!atStop;
+    const changed = next !== this._atResupplyStop;
+    this._atResupplyStop = next;
+    if (!changed) return;
+    // A plain callback list, not an EventBus event (no Events.js churn): the CARGO pane repaints its button words.
+    // (`|| []`: tests build shops with Object.create(ShopScreen.prototype), which skips the constructor)
+    for (const fn of [...(this._stopListeners || [])]) { try { fn(next); } catch (_e) { /* a pane's repaint must not break the flow */ } }
+  }
+
+  /**
+   * u1-resupply-stop D3: call `fn(atStop)` whenever the stop flag changes (the CARGO pane re-words its buttons).
+   * @param {function(boolean|null): void} fn
+   * @returns {function(): void} unsubscribe
+   */
+  onResupplyStopChange(fn) {
+    if (typeof fn !== 'function') return () => {};
+    this._stopListeners = [...(this._stopListeners || []), fn];
+    return () => { this._stopListeners = (this._stopListeners || []).filter((f) => f !== fn); };
+  }
+
+  /**
+   * u1-resupply-stop D2/D3: may credits change hands right now? False only when GameFlowManager has said the
+   * ship is NOT at the resupply stop. The REFIT chips and the CARGO pane read this to word their buttons.
+   * @returns {boolean}
+   */
+  canTrade() { return this._atResupplyStop !== false; }
+
+  /**
+   * u1-resupply-stop D2: the trade gate. When the ship is mid-mission, plays the deny sound, posts ONE comms
+   * line and returns true (the caller returns without touching credits, upgrades, tiers or cargo).
+   * @returns {boolean} true = refused
+   * @private
+   */
+  _refuseTrade() {
+    if (this.canTrade()) return false;
+    audioSystem.playDeny();
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'MARKET',
+      text: 'Buying and selling happen at the resupply stop after a mission.',
+      priority: 'warning',
+      _reactive: true,   // feedback to the click the player just made — never muted by the onboarding tiers
+    });
+    return true;
+  }
 
   /** Set contract mass (from save restore). */
   setContractMass(kg) { this._contractMassKg = kg || 0; }
@@ -630,6 +688,7 @@ export class ShopScreen {
     const manifest = this._cargoSystem.getManifest();
     const item = manifest.find(m => m.metalId === metalId);
     if (!item) return;
+    if (this._refuseTrade()) return;   // u1-resupply-stop D2: no buyer in space
 
     this._cargoSystem.removeMetal(metalId, item.massKg);
 
@@ -655,6 +714,7 @@ export class ShopScreen {
     if (!this._cargoSystem) return;
     const manifest = this._cargoSystem.getManifest();
     if (manifest.length === 0) return;
+    if (this._refuseTrade()) return;   // u1-resupply-stop D2
 
     let totalValue = 0;
     let totalMass = 0;
@@ -682,6 +742,7 @@ export class ShopScreen {
   /** @private Contribute refined metal to the space elevator contract */
   _contributeToElevator(metalId, massKg) {
     if (!this._cargoSystem) return;
+    if (this._refuseTrade()) return;   // u1-resupply-stop D2: the contract pays credits, so it is a sale
 
     // Read the item BEFORE removal so we can value the contribution at market.
     const item = this._cargoSystem.getManifest().find(m => m.metalId === metalId);
@@ -1095,8 +1156,9 @@ export class ShopScreen {
   /**
    * Public one-click purchase — the Wave-5 (2) REFIT pane's BUY path
    * (docs/ladder/08-workbench.md §2: "Buying is one click … no browser
-   * confirm(), no undo"; buying LIVE is allowed — the shipped B key already
-   * allows it). Runs the EXACT private flow below (maxLevel gate, the E5
+   * confirm(), no undo"). u1-resupply-stop D2 (owner 2026-10-17): buying
+   * happens only at the resupply stop — the gate is in the private flow below,
+   * so a pane buy and a depot buy are refused alike mid-mission. Runs the EXACT private flow below (maxLevel gate, the E5
    * shopGating prereq guard, wallet spend, UPGRADE_PURCHASED emit, refresh),
    * so a pane buy and a depot buy are indistinguishable; the pane then
    * re-renders from purchasedUpgrades/credits truth.
@@ -1108,6 +1170,7 @@ export class ShopScreen {
   _purchaseUpgrade(upgradeId) {
     const upgrade = UPGRADES.find(u => u.id === upgradeId);
     if (!upgrade) return;
+    if (this._refuseTrade()) return;   // u1-resupply-stop D2: no store in the middle of space
 
     // Consumables (e.g. Mother Large Net restock) are repeatable — no maxLevel
     // gate, no ownership record. They just spend credits and emit the effect.
@@ -1191,6 +1254,7 @@ export class ShopScreen {
     // Must be the next tier in sequence
     if (tierIndex !== currentTier + 1) return;
     if (tierIndex >= tiers.length) return;
+    if (this._refuseTrade()) return;   // u1-resupply-stop D2
 
     const tier = tiers[tierIndex];
     if (!scoringSystem.spendCredits(tier.cost)) {
