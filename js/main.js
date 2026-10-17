@@ -39,6 +39,7 @@ import { CameraSystem } from './systems/CameraSystem.js';
 import { CommsSystem } from './systems/CommsSystem.js';
 import { ResourceSystem, engineGasKg } from './systems/ResourceSystem.js';
 import { SensorSystem } from './systems/SensorSystem.js';
+import { wingsHint } from './systems/WingsHint.js';
 import { dossierSystem } from './systems/DossierSystem.js';
 import { kesslerSystem } from './systems/KesslerSystem.js';
 import { CargoSystem } from './systems/CargoSystem.js';
@@ -6911,6 +6912,9 @@ function gameLoop(timestamp) {
     if (!_worldHeld) { try { sensorSystem.drawAnalysis(dt); const _heat = resourceSystem.getThermalSource(); if (_heat) _heat.update(dt); } catch (e) { console.error('[GameLoop] thermal:', e); } }
     else { try { resourceSystem.discardHeldFrame(); const _heat = resourceSystem.getThermalSource(); if (_heat) _heat.skipHeld(); } catch (e) { console.error('[GameLoop] thermal (held):', e); } }
     try { sensorSystem.update(dt, player.getPosition(), debrisField); } catch (e) { console.error('[GameLoop] sensorSystem:', e); }
+    // m1-finish: the wings hint stays until the wings are out. Outside the held-world guard on
+    // purpose: it is a screen row, not a fate clock, and it must go the frame the wings are out.
+    try { wingsHint.update(player, hud && hud.hintTicker); } catch (e) { console.error('[GameLoop] wingsHint:', e); }
     // Phase 1.5 (capture-feedback overhaul): close-range survey → Full Profile
     try {
       dossierSystem.update(dt, {

@@ -14,6 +14,8 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { powerDistribution } from './PowerDistribution.js';
 import { Constants } from '../core/Constants.js';
+import { wingsHint } from './WingsHint.js';
+import { GestureHints } from '../ui/hud/GestureHints.js';
 
 // ============================================================================
 // SENSOR TIER DEFINITIONS
@@ -332,12 +334,20 @@ export class SensorSystem {
     const cost = this.getScanCost(type, { cold });
     if (cost.total <= 0) return true;
     if (!rs.canAfford('battery', cost.sweep)) {
+      // m1-finish: with the wings rolled up the true way out is the wings, not
+      // "wait for sunlight" — say so and put the wings row back up. Wings already
+      // commanded out (still rolling, or out) or no ship seen yet (null: unit
+      // tests) keeps the old line byte for byte.
+      const wingsUp = wingsHint.needsOpening() === true;
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'V5',
-        text: 'Battery too low to scan — it recharges in sunlight.',
+        text: wingsUp
+          ? GestureHints.speak('Battery too low to scan. The wings are rolled up: press , (the comma key) or WINGS on floor 1 to roll them out.')
+          : 'Battery too low to scan — it recharges in sunlight.',
         priority: 'warning',
         _reactive: true,   // answers the S press — never muted (commsSuppression)
       });
+      if (wingsUp) wingsHint.post();
       return false;
     }
     rs.consume('battery', cost.sweep);

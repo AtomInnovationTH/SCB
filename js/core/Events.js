@@ -95,6 +95,13 @@ export const Events = {
    *  emitted for mission 1, nor at a continue (the first clear after a resume
    *  re-asserts the restored mission). */
   MISSION_START:      'mission:start',
+  /** A mission's last catch just landed (m1-finish, owner 2026-10-17): the HUD shows a
+   *  "MISSION N COMPLETE" headline that fades by itself and the audio plays one success
+   *  cue. Emitted ONCE per mission boundary from GameFlowManager._openDepotInvitation
+   *  (the live ladder-on path), just before the "UPGRADES AVAILABLE" comms line — never
+   *  on the forced-card path (the card says it there). Not a stop: no world hold.
+   *  Payload: { mission: number (missionsCompleted: 1 at the 5th catch), debrisCleared: number } */
+  MISSION_COMPLETE:   'mission:complete',
 
   // === MISSION MID-FLIGHT EVENTS (ST-4.D) ===
   /** Scanned debris revealed as hydrazine hazard. Payload: { debrisId, type, hazardType } */

@@ -945,6 +945,10 @@ class AudioSystem {
     });
     eventBus.on(Events.MASTERY_FANFARE, () => this.playMasteryFanfare());
 
+    // m1-finish: a mission's last catch — one existing success cue. The same catch can also
+    // clear a cluster (RewardSystem -> AUDIO_CUE fieldCleared), so both go through one guard.
+    eventBus.on(Events.MISSION_COMPLETE, () => this._playFieldClearedOnce());
+
     // Delegation 2 (2026-05-31) — onboarding "hint posted" soft chime.
     // Generic AUDIO_CUE channel — payload: { id|cue: string, volume?: number }.
     // Recognised cues: `hint_post`, `sweepComplete` (trawl sweep), and
@@ -964,7 +968,7 @@ class AudioSystem {
         this.playSweepComplete();
       } else if (id === 'fieldCleared') {
         // P4 (fixes #8) — cluster-cleared milestone gets its own bigger voice.
-        this.playFieldCleared();
+        this._playFieldClearedOnce();
       }
     });
   }
@@ -2815,6 +2819,18 @@ class AudioSystem {
    */
   playFieldCleared() {
     this._playEchoFanfare([523, 659, 784, 1047]); // C5, E5, G5, C6
+  }
+
+  /**
+   * @private The field-cleared cue, at most once per 2 s: the 5th catch of a
+   * mission can end a cluster AND the mission in one go (AUDIO_CUE fieldCleared + MISSION_COMPLETE),
+   * and two stacked fanfares would read as a glitch. Real time, so a pause cannot stretch it.
+   */
+  _playFieldClearedOnce() {
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    if (this._fieldClearedAtMs !== undefined && now - this._fieldClearedAtMs < 2000) return;
+    this._fieldClearedAtMs = now;
+    this.playFieldCleared();
   }
 
   /**

@@ -78,6 +78,7 @@ import { Events } from '../core/Events.js';
 import { audioSystem } from './AudioSystem.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { devShotGate } from '../core/DevShotGate.js';
+import { wingsHint } from './WingsHint.js';
 
 /** Beat-table anchors — the ONE named constants block (Constants.js). */
 const OD = Constants.OPENING_DANCE;
@@ -444,7 +445,16 @@ class OpeningDance {
       sender: 'HOUSTON',
       text: GestureHints.speak(wingsOpening ? HANDOVER_LINE_OPENING : HANDOVER_LINE),
       priority: 'info',
+      // m1-finish: the hand-over starts the Director first (OPENING_DANCE_HANDOVER ->
+      // ONBOARDING_STARTED), which drops comms to tier 0; an untagged line was muted
+      // there (measured by test-WingsHint A1). _onboarding is the tier-0 pass.
+      _onboarding: true,
     });
+    // m1-finish: the comms line scrolls away, the battery keeps falling — keep ONE
+    // ticker row up until the wings are out (WingsHint; removed by the game loop's
+    // update once the ship's wing value passes WINGS_OUT_PROGRESS). Not when the
+    // player already asked for the wings.
+    if (!wingsOpening) wingsHint.post();
   }
 
   /** @private The dance is over (fires in the hand-over tick). */

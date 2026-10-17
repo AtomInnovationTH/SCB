@@ -2199,6 +2199,9 @@ export class GameFlowManager {
     const firstInvitation = this._applyFirstDepotFloor();
     if (firstInvitation) this._firstVisitOwed = true;   // the framing waits for the visit
     this._depotInvitation = { chapter: missionsCompleted + 1, debrisCleared: debrisCount };
+    // m1-finish: the "mission complete" moment — a headline that fades by itself and one
+    // success cue (HUD / AudioSystem listen). Not a stop: no card, no hold (DECISIONS §14).
+    eventBus.emit(Events.MISSION_COMPLETE, { mission: missionsCompleted, debrisCleared: debrisCount });
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `UPGRADES AVAILABLE \u2014 ${debrisCount} debris cleared. Come down when ready, or fly on.`,
       priority: 'high',

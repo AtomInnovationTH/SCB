@@ -1518,6 +1518,10 @@ export class HUD {
       if (d?.largeToast) this.showMasteryToast(d);
     });
 
+    // m1-finish: the end of a mission is a headline that fades by itself (no card,
+    // no hold: DECISIONS §14 — the depot is an invitation, never a forced stop).
+    eventBus.on(Events.MISSION_COMPLETE, (d) => this.showMissionComplete(d));
+
     // Codex unlock feedback deliberately lives OFF the flight HUD: the
     // Discoveries pane (SkillsPane, TECH_UNLOCKED) records every unlock and the
     // audio chime (AudioSystem, CODEX_UNLOCKED) cues it. No popup over the view.
@@ -3150,6 +3154,59 @@ export class HUD {
     const durMs = Constants.SKILLS.CELEBRATION.MASTERY_TOAST_DURATION_MS;
     timerManager.setTimeout(() => { toast.style.opacity = '0'; }, durMs - 300, { owner: this });
     timerManager.setTimeout(() => { toast.remove(); }, durMs, { owner: this });
+  }
+
+  // ==========================================================================
+  // m1-finish: MISSION COMPLETE HEADLINE
+  // ==========================================================================
+
+  /**
+   * Show the centred "MISSION N COMPLETE" headline when a mission's last catch lands
+   * (Events.MISSION_COMPLETE). Same look and mechanics as showMasteryToast: fixed, top 28 %,
+   * click-through, faded by timerManager. Visible MISSION_COMPLETE_MS in all, then removed.
+   * No button, no world hold, no dimming, no countdown (DECISIONS §14 rows 1 and 3), and it is
+   * not part of any floor, so FloorMask never hides it.
+   * @param {{ mission?: number, debrisCleared?: number }} data
+   */
+  showMissionComplete(data) {
+    const MISSION_COMPLETE_MS = 4000;
+    const mission = Math.max(1, Math.floor(Number(data && data.mission)) || 1);
+    const pieces = (Constants.MISSIONS && Constants.MISSIONS.DEBRIS_PER_MISSION) || 5;
+    if (this._missionCompleteEl && this._missionCompleteEl.remove) this._missionCompleteEl.remove();
+    // A mastery toast on screen sits at 28 %; go below it instead of on top of it.
+    const top = document.querySelector('.hud-mastery-toast') ? 40 : 28;
+    const el = document.createElement('div');
+    el.className = 'hud-mission-complete';
+    el.style.cssText = `
+      position: fixed;
+      left: 50%;
+      top: ${top}%;
+      transform: translate(-50%, -50%);
+      padding: 14px 36px;
+      background: linear-gradient(135deg, rgb(var(--hud-ink-rgb, 20 12 40) / 0.9), rgb(var(--hud-target-rgb, 60 30 80) / 0.9));
+      border: 2px solid rgb(var(--hud-caution-rgb, 255 200 80) / 0.85);
+      box-shadow: 0 0 24px rgb(var(--hud-caution-rgb, 255 200 80) / 0.55), 0 4px 18px rgb(var(--hud-ink-rgb, 0 0 0) / 0.6);
+      color: var(--hud-label, #fff);
+      font-family: var(--font-mono);
+      text-align: center;
+      z-index: 9000;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      pointer-events: none;
+    `;
+    el.innerHTML = `
+      <div style="font-size:22px; letter-spacing:4px; color:var(--hud-label, #fff);">MISSION ${mission} COMPLETE</div>
+      <div style="font-size:13px; letter-spacing:2px; margin-top:6px; color:var(--hud-caution, #ffcc66);">${pieces} of ${pieces} pieces caught</div>
+    `;
+    document.body.appendChild(el);
+    this._missionCompleteEl = el;
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => { el.style.opacity = '1'; });
+    else el.style.opacity = '1';
+    timerManager.setTimeout(() => { el.style.opacity = '0'; }, MISSION_COMPLETE_MS - 300, { owner: this });
+    timerManager.setTimeout(() => {
+      el.remove();
+      if (this._missionCompleteEl === el) this._missionCompleteEl = null;
+    }, MISSION_COMPLETE_MS, { owner: this });
   }
 
   // ==========================================================================
