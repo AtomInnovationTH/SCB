@@ -13,7 +13,7 @@ import { gameState, GameStates } from '../core/GameState.js';
 import { getMissionProgress, isGuidedChapterNumber } from '../core/missionProgress.js';
 import timerManager from './TimerManager.js';
 import { CameraViews } from './CameraSystem.js';
-import { scoringSystem } from './ScoringSystem.js';
+import { scoringSystem, computeSaleValue } from './ScoringSystem.js';
 import { audioSystem } from './AudioSystem.js';
 import { persistenceManager } from './PersistenceManager.js';
 import { powerDistribution } from './PowerDistribution.js';
@@ -27,6 +27,8 @@ import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
 import { salvageGasKg } from './ResourceSystem.js';
+import { UPGRADES } from '../ui/ShopScreen.js';
+import { upgradePrereqsMet, upgradeCostNow } from '../ui/shopGating.js';
 import { cityLabels } from '../scene/CityLabels.js';
 import { launchCameo, padFor, LAUNCH_FLASH_S } from '../scene/LaunchCameo.js';
 import { ambientLaunchScheduler } from './AmbientLaunchScheduler.js';
@@ -105,6 +107,13 @@ export class GameFlowManager {
      * @type {{debrisId: number|string, elapsedS: number, start: () => void}|null}
      */
     this._pendingMissionStart = null;
+
+    /**
+     * t1-stranded D1/D2: seconds of running gameplay the ship has been stranded (both gas tanks empty, no way to
+     * pay for a resupply, nothing under way that could pay). Ends the run at Constants.STRANDED_GRACE_S.
+     * @type {number}
+     */
+    this._strandedS = 0;
 
     /** @type {number|null} Timer for delayed score-group HUD activation in ORBITAL_VIEW */
     this._scoreGroupTimer = null;
@@ -383,7 +392,8 @@ export class GameFlowManager {
         break;
 
       case GameStates.GAME_OVER:
-        this.saveGame(); // Persist progress before game over
+        // t1-stranded D4: the ONLY save that carries the game-over flag; menu CONTINUE reads it
+        this.saveGame({ gameOver: true }); // Persist progress before game over
         // HUD self-manages visibility via GAME_STATE_CHANGE
         break;
 
@@ -563,6 +573,18 @@ export class GameFlowManager {
       // Notify self-managing systems that a saved game was loaded
       // (TutorialSystem listens to skip tutorial for veterans)
       eventBus.emit(Events.PERSISTENCE_LOADED);
+
+      // t1-stranded D4: a save written on entering GAME_OVER is continued by the SAME rule as the game-over
+      // screen's CONTINUE — half the credits, fresh mission, start-fill gas, upgrades kept, then the shop.
+      // The save is loaded exactly as above, then this hands off to the very same GAMEOVER_CONTINUE listeners
+      // (no welcome-back comms, no flight route). MENU -> SHOP is not a valid transition and GAME_OVER -> SHOP
+      // is, so the state is set by hand first (as at the top of this handler). The listener's own save carries
+      // no flag, so a second menu CONTINUE does not halve again.
+      if (save.gameOver === true) {
+        gameState.currentState = GameStates.GAME_OVER;
+        this._continueAfterGameOver();
+        return;
+      }
 
       // Returning players already know what the score bar is — activate it
       // immediately (no 2 s settle delay). The ORBITAL_VIEW timer is gated behind
@@ -1799,6 +1821,7 @@ export class GameFlowManager {
     // An open depot invitation belongs to the game that just ended.
     this._closeDepotInvitation('reset');
     this._pendingMissionStart = null;     // c2-fifth-catch D2: so does a held mission start
+    this._strandedS = 0;                  // t1-stranded: a new run starts with no stranded spell
     timerManager.clearByOwner(this);
   }
 
@@ -1898,8 +1921,13 @@ export class GameFlowManager {
   // SAVE / LOAD
   // ==========================================================================
 
-  /** Save current game state to localStorage */
-  saveGame() {
+  /**
+   * Save current game state to localStorage.
+   * @param {{ gameOver?: boolean }} [opts] - t1-stranded D4: `gameOver: true` ONLY from the GAME_OVER entry; the
+   *   save then carries `gameOver: true` so menu CONTINUE applies the game-over CONTINUE rule. Every other call
+   *   writes no flag.
+   */
+  saveGame(opts) {
     const { shopScreen, resourceSystem } = this._refs;
     const scoring = scoringSystem.serialize();
     const resources = resourceSystem.serialize();
@@ -1912,6 +1940,7 @@ export class GameFlowManager {
     const upgrades = shopScreen.getSerializableUpgrades();
 
     const saveData = {
+      gameOver: !!(opts && opts.gameOver === true),
       credits: scoring.credits,
       totalScore: scoring.totalScore,
       missionNumber: scoring.missionNumber,
@@ -2047,6 +2076,8 @@ export class GameFlowManager {
    * @param {number} dt - seconds of game time this frame (0 while the world is held)
    */
   update(dt) {
+    // t1-stranded D1: first, before the held-mission-start early return below (that one returns on almost every frame)
+    this._updateStranded(dt);
     const p = this._pendingMissionStart;
     if (!p) return;
     if (!(dt > 0) || !gameState.isGameplay()) return;
@@ -2061,6 +2092,184 @@ export class GameFlowManager {
     p.idleS = (p.idleS || 0) + dt;
     const cap = Constants.MISSIONS.START_AFTER_CATCH_MAX_S;
     if (p.idleS >= cap) this._releaseMissionStart();
+  }
+
+  /**
+   * t1-stranded D4: menu CONTINUE of a game-over save hands off to the game-over screen's CONTINUE: the very same
+   * listeners run (the GFM one above, KesslerSystem's self-reset). A method rather than an inline emit so the
+   * GAMEOVER_CONTINUE listener stays the first place the event name appears in this file (test-OpeningDance and
+   * test-SunStaging slice that listener's body by source text).
+   * @private
+   */
+  _continueAfterGameOver() {
+    eventBus.emit(Events.GAMEOVER_CONTINUE);
+  }
+
+  // ==========================================================================
+  // STRANDED (t1-stranded) — out of gas and unable to pay for more ends the run
+  // ==========================================================================
+
+  /**
+   * The two "empty" levels the thrust paths use, in the tanks' own units.
+   *  - `ion`: engine pool units one second of full ion thrust costs. Mirrors ionGasUnits
+   *    (PlayerSatellite.js:134): ṁ = c·m·Δv/(Isp·g0), pool = ṁ/kgFull·100, with Δv = the autopilot's thrust ceiling
+   *    Constants.AUTOPILOT.MAX_ACCEL (× the tank gas's thrustScale) for 1 s, m = the ship's total mass
+   *    (armManager.getMassBudget), c = the Efficient Ion Drive gain × the THRUST-bus split
+   *    (PlayerSatellite.js:53 consumptionMultiplier).
+   *  - `cold`: cold-gas units one second of full RCS attitude command costs: `_coldGasRate` × RCS_ATTITUDE_N2_FACTOR
+   *    (PlayerSatellite.js:8934 / :8428). Below this the tank cannot pay a one-second command.
+   * A float residue (1e-6) is below both, so it counts as empty.
+   * @returns {{ion: number, cold: number}}
+   * @private
+   */
+  _strandedThresholds() {
+    return { ion: this._strandedIonThreshold(), cold: this._strandedColdThreshold() };
+  }
+
+  /** Cold-gas half of `_strandedThresholds` (no mass lookup). @private */
+  _strandedColdThreshold() {
+    const { player } = this._refs;
+    const rate = player && Number.isFinite(player._coldGasRate) ? player._coldGasRate : 0.5;
+    return rate * ((Constants.ATTITUDE && Constants.ATTITUDE.RCS_ATTITUDE_N2_FACTOR) ?? 1.0);
+  }
+
+  /** Engine-pool half of `_strandedThresholds` (does the `getMassBudget` lookup). @private */
+  _strandedIonThreshold() {
+    const { player, armManager, resourceSystem } = this._refs;
+    const fuels = Constants.FUELS || {};
+    const tank = fuels[resourceSystem.tankGasId] || fuels[Constants.DEFAULT_FUEL];
+    let massKg = 0;
+    try {
+      const b = armManager && typeof armManager.getMassBudget === 'function' ? armManager.getMassBudget() : null;
+      massKg = b && b.shipMassKg > 0 ? b.shipMassKg : 0;
+    } catch (_) { massKg = 0; }
+    if (!(massKg > 0)) massKg = Constants.OCTOPUS_V5.CORE_DRY_MASS;
+    const base = player && player._baseIonXenonRate;
+    const gain = base > 0 && Number.isFinite(player._ionThrustXenonRate) ? player._ionThrustXenonRate / base : 1;
+    const tm = powerDistribution.thrustMultiplier;
+    const c = gain * (tm > 0 ? 1 / tm : 1);
+    const dv = Constants.AUTOPILOT.MAX_ACCEL * (tank.thrustScale > 0 ? tank.thrustScale : 1);   // m/s in 1 s
+    const kg = c * massKg * dv / (tank.isp * Constants.G0);
+    return tank.kgFull > 0 ? kg / tank.kgFull * 100 : 0;
+  }
+
+  /**
+   * Credits the CARGO pane would pay right now for everything in the hold: SELL ALL (ShopScreen._sellAllCargo ->
+   * computeSaleValue: SELL_PRICE_MODIFIER, plus the bulk bonus on the total), plus the elevator's per-kg bonus on
+   * refined metal while the contract is still open (a contribution pays sale value + bonus). Needs neither depot
+   * nor thrust. 0 with no cargo system.
+   * @returns {number}
+   * @private
+   */
+  _strandedCargoCredits() {
+    const { cargoSystem } = this._refs;
+    if (!cargoSystem || typeof cargoSystem.getManifest !== 'function') return 0;
+    let totalValue = 0, totalMass = 0, bonus = 0;
+    const perKg = (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.BONUS_CREDITS_PER_KG) || 5;
+    for (const item of cargoSystem.getManifest()) {
+      if (!item || typeof item.metalId !== 'string') continue;
+      totalValue += item.value || 0;
+      totalMass += item.massKg || 0;
+      if (!this._elevatorWinTriggered && item.metalId.startsWith('refined_')) bonus += Math.round((item.massKg || 0) * perKg);
+    }
+    return computeSaleValue(totalValue, totalMass).saleValue + bonus;
+  }
+
+  /**
+   * D1 (d): is anything under way that could still pay credits or load gas without the mother thrusting?
+   * Predicates (each guarded: headless tests wire only some of these):
+   *  - a daughter out: any arm whose state is not DOCKED / EXPENDED / ADRIFT / RELOADING (ArmManager.js:2283
+   *    getDeployedCount counts ADRIFT and RELOADING too, which the plan says must not block, so the filter is
+   *    spelled out here); HOLDING_CATCH blocks.
+   *  - a daughter holding a catch: arm.heldCatches.length (ArmManager.js:1654, :2877).
+   *  - tip cargo: player.tipCargo.count() (TipCargo.js:233; ArmManager.js:2866).
+   *  - a mother-net catch or net in flight: any active mother net not in {FOLDED, STOWED, MISSED, RELEASED} - that
+   *    is BERTHED / COLLARED / TRANSFERRING (ArmManager.js:2836-2890) and the flight states before them
+   *    (ArmManager.js:2671-2672 netInFlight); CaptureNet.activeNets (CaptureNet.js:3370).
+   *  - a leash hand-off carrying a catch: player.leashDriver.isActive() (LeashDriver.js:167).
+   *  - the lasso: lassoSystem.active (LassoSystem.js:89).
+   * @returns {boolean}
+   * @private
+   */
+  _paymentUnderWay() {
+    const { player, armManager, lassoSystem } = this._refs;
+    const A = Constants.ARM_STATES;
+    const arms = (armManager && Array.isArray(armManager.arms)) ? armManager.arms : [];
+    for (const arm of arms) {
+      if (!arm) continue;
+      if (arm.heldCatches && arm.heldCatches.length > 0) return true;
+      const st = arm.state;
+      if (st !== A.DOCKED && st !== A.EXPENDED && st !== A.ADRIFT && st !== A.RELOADING) return true;
+    }
+    const tc = player && player.tipCargo;
+    if (tc && typeof tc.count === 'function' && tc.count() > 0) return true;
+    const S = Constants.CAPTURE_NET.STATES;
+    const OVER = [S.FOLDED, S.STOWED, S.MISSED, S.RELEASED];
+    const nets = Array.isArray(captureNetSystem.activeNets) ? captureNetSystem.activeNets : [];
+    for (const n of nets) {
+      if (n && n._isMother && !OVER.includes(n.state)) return true;
+    }
+    const ld = player && player.leashDriver;
+    if (ld && typeof ld.isActive === 'function' && ld.isActive()) return true;
+    if (lassoSystem && lassoSystem.active) return true;
+    return false;
+  }
+
+  /**
+   * D1: is the ship stranded RIGHT NOW? All of (a)-(d) hold: gameplay; both tanks empty (below one second of thrust);
+   * the credits plus the cargo's sale value cannot buy the engine-gas resupply row (or it is not purchasable);
+   * nothing under way could still pay.
+   * @returns {boolean}
+   * @private
+   */
+  _isStranded() {
+    if (!gameState.isGameplay()) return false;
+    const { resourceSystem, shopScreen } = this._refs || {};
+    if (!resourceSystem) return false;
+    const fuel = typeof resourceSystem.getCurrentFuel === 'function' ? resourceSystem.getCurrentFuel() : null;
+    if (fuel && fuel.fromCargo) return false;                         // a cargo-fed fuel counts as engine gas present
+    if (!(resourceSystem.coldGas < this._strandedColdThreshold())) return false;   // cold gas for >= 1 s
+    const row = UPGRADES.find((u) => u.id === 'gas_resupply');
+    const owned = shopScreen && shopScreen.purchasedUpgrades;
+    const purchasable = !!row && upgradePrereqsMet(row, owned || new Map(), (f) => Constants.isFeatureEnabled(f));
+    if (purchasable) {
+      let credits = scoringSystem.credits;
+      // The first shop / REFIT opening tops a first-time visitor up to FIRST_DEPOT_FLOOR (_applyFirstDepotFloor).
+      if (!persistenceManager.getCeremonyFlag('FIRST_DEPOT_VISITED')) {
+        credits = Math.max(credits, (Constants.SHOP && Constants.SHOP.FIRST_DEPOT_FLOOR) || 600);
+      }
+      const wealth = credits + this._strandedCargoCredits();
+      if (wealth >= upgradeCostNow(row, resourceSystem)) return false;
+    }
+    // Last of the tank checks: it needs the ship-mass lookup, so a frame with gas or money never pays for it.
+    if (!(resourceSystem.xenon < this._strandedIonThreshold())) return false;   // engine gas for >= 1 s of thrust
+    return !this._paymentUnderWay();
+  }
+
+  /**
+   * D1/D2 per-frame step: the stranded timer. A held world (dt 0) advances nothing and changes nothing. When any of
+   * (a)-(d) stops holding the timer resets and the spell may announce again. At STRANDED_GRACE_S emits
+   * RESOURCE_DEPLETED { reason: 'stranded' } once (the listener moves to GAME_OVER) and resets.
+   * @param {number} dt - seconds of game time this frame
+   * @private
+   */
+  _updateStranded(dt) {
+    if (!this._refs) return;
+    if (!(dt > 0)) return;
+    if (!this._isStranded()) { this._strandedS = 0; return; }
+    const grace = Constants.STRANDED_GRACE_S;
+    if (this._strandedS === 0) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `Out of gas, and not enough credits to buy more. The mission ends in ${grace} s unless a catch is under way.`,
+        priority: 'high',
+        _critical: true,                // pass the onboarding comms filter (commsSuppression)
+      });
+    }
+    this._strandedS += dt;
+    if (this._strandedS >= grace) {
+      this._strandedS = 0;
+      eventBus.emit(Events.RESOURCE_DEPLETED, { reason: 'stranded' });
+    }
   }
 
   /**

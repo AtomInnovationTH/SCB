@@ -137,6 +137,11 @@ class PersistenceManager {
           // true), and getCeremonyFlag() then reads false forever.
           FIRST_MOTHER_NET_DEPLOY: data.ceremonyFlags?.FIRST_MOTHER_NET_DEPLOY ?? false,
         },
+        // t1-stranded D4: true ONLY on the save written when the run enters GAME_OVER
+        // (GameFlowManager.saveGame({ gameOver: true })). MENU_CONTINUE reads it and
+        // applies the game-over screen's CONTINUE rule (half the credits, fresh mission).
+        // Additive (no SAVE_VERSION bump): old saves lack it and load as a normal save.
+        gameOver: data.gameOver === true,
         // save() is a WHITELIST: a key that a read-modify-write setter writes
         // (as setCeremonyFlag does with ceremonyFlags above) but that is
         // missing from this list is silently dropped on the next write. (The

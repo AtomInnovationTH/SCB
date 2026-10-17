@@ -1775,6 +1775,7 @@ async function init() {
     player, debrisField, armManager, cameraSystem,
     shopScreen,
     resourceSystem, cargoSystem,
+    lassoSystem, // t1-stranded D1(d): a lasso in flight blocks the stranded rule
     sunLight, // M1 opening-light staging (_stageOpeningLight, new-game paths only)
   });
 

@@ -11,17 +11,21 @@ import { getMissionProgress } from '../core/missionProgress.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { scoringSystem } from '../systems/ScoringSystem.js';
 
-const GAME_OVER_REASONS = {
+export const GAME_OVER_REASONS = {
   kessler: 'KESSLER CASCADE EVENT',
   collision: 'COLLISION WITH ACTIVE SATELLITE',
   debris: 'CATASTROPHIC DEBRIS COLLISION',
   fuel: 'FUEL DEPLETED. STRANDED IN ORBIT',
+  // t1-stranded: both tanks empty and no way to pay for more (GameFlowManager.update, STRANDED_GRACE_S).
+  stranded: 'OUT OF GAS. NOT ENOUGH CREDITS TO BUY MORE',
   reentry: 'UNCONTROLLED REENTRY',
   // NOTE: no 'battery' reason. Battery depletion folds into 'fuel'
   // (ResourceSystem fires RESOURCE_DEPLETED{reason:'fuel'} only when xenon AND
   // coldGas AND battery are all 0; battery self-recharges in sunlight/RTG/beam,
-  // so a battery-alone death is transient by design). A real power-failure
-  // death mechanic is a backlog item (ROADMAP §7, via PowerDistribution).
+  // so a battery-alone death is transient by design). The other resource reason
+  // is 'stranded' (t1-stranded): both gas tanks empty with the credits unable to
+  // buy a resupply — fired by GameFlowManager.update after STRANDED_GRACE_S.
+  // A real power-failure death mechanic is a backlog item (ROADMAP §7, via PowerDistribution).
 };
 
 const ADR_FACTS = [

@@ -333,6 +333,10 @@ export const Constants = {
   LAUNCH_USD_PER_KG: 7000,        // research §3: about the same whatever the gas
   USD_PER_CREDIT: 100,            // anchor: the old extra-tank row, 600 cr for +10.4 kg argon, about $121 per credit; rounded
   GAS_RESUPPLY_KG: 5,             // one "Engine Gas Resupply" load, kg
+  // t1-stranded D2: both tanks empty AND the credits (plus what the cargo would sell for) cannot buy one resupply AND
+  // nothing that could still pay is under way (a daughter out, a catch held, a net or lasso in flight) -> the
+  // mission ends after this many seconds of running gameplay (GameFlowManager.update; a held world counts nothing).
+  STRANDED_GRACE_S: 15,
 
   // === SHIP HEAT (w2-heat, 2026-10-08) =======================================
   // DECISIONS §15 rows 2/4/5/6 + §2 rows 5–7: the ship heats up from what the
