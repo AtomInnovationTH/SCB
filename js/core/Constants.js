@@ -5009,7 +5009,10 @@ export const Constants = {
       // players: Shift+G still emits TRAWL_START (testable) but the skill never
       // surfaces in the Discovery pane / reminders. noReminder keeps it silent.
       { id: 'collect_trawl',      label: 'Dragnet',              key: 'Shift+G', tier: 4, category: 'collect', hudGroup: null,  prereqs: ['dragnet_unlock'],  prereqType: 'hard',   noReminder: true,  triggerEvent: 'TRAWL_START' },
-      { id: 'manage_forge',       label: 'Forge',                key: 'F', tier: 4, category: 'manage',    hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'FORGE_TOGGLE' },
+      // F is the furnace joke until a furnace is built (DECISIONS §15): id/key/event stay, the game never nags for it.
+      { id: 'manage_forge',       label: 'Furnace',              key: 'F', tier: 4, category: 'manage',    hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: true,  triggerEvent: 'FORGE_TOGGLE' },
+      // Salvage is fuel / hold cargo (GameFlowManager → CARGO_STORE); taught by the ch6 beat.
+      { id: 'collect_salvage',    label: 'Salvage',              key: null, tier: 4, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: true,  triggerEvent: 'CARGO_STORE' },
       { id: 'manage_shop',        label: 'Shop Navigation',      key: null, tier: 4, category: 'manage',    hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'UPGRADE_PURCHASED' },
       { id: 'awareness_kessler',  label: 'Kessler Event',        key: null, tier: 4, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: true,  triggerEvent: 'KESSLER_CASCADE' },
       { id: 'awareness_weather',  label: 'Space Weather',        key: null, tier: 4, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: true,  triggerEvent: 'WEATHER_EFFECT_START' },
@@ -5639,11 +5642,11 @@ export const Constants = {
           id: 'ch4_map',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Open the debris map (M), then use , / . to pick a cluster. The launch-window countdown times your transfer for minimum ΔV.',
+          text: 'Zoom out to LEO. The best cluster is picked for you; click another to change it, then press Space to fly the transfer. The launch window shows when it is cheapest.',
           skillId: 'strategic_map',
           triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED',
           title: 'TRANSFER MAP',
-          body: 'Press M to open the debris map, then , / . to select a cluster and read its transfer window.',
+          body: 'Zoom out to LEO (Esc), pick a cluster, press Space to fly to it.',
         },
       ],
 
@@ -5669,23 +5672,24 @@ export const Constants = {
         },
       ],
 
-      // ── Chapter 6 — The Forge: melt salvage into FEEP propellant ──
+      // ── Chapter 6 — Salvage is fuel: indium, xenon and metals from catches ──
       6: [
         {
           id: 'ch6_intro',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'That cargo isn\'t just mass for the elevator. It\'s fuel. The Forge melts salvage into FEEP propellant. Bismuth burns hot now; cesium is worth more if you can wait. Your call.',
+          text: 'That cargo isn\'t just mass for the elevator. Salvage feeds you: indium refuels the daughters, xenon tops up the engine, and metals ride in the hold to the next resupply stop.',
         },
         {
           id: 'ch6_forge',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Open the Forge (F) and run a metal through the FEEP cycle. Refine your catch into thrust.',
-          skillId: 'manage_forge',
-          triggerEvent: 'FORGE_TOGGLE',
-          title: 'THE FORGE',
-          body: 'Press F to open the Forge and convert salvage into FEEP propellant.',
+          text: 'Catch a piece that carries metal and watch comms: it goes straight into the hold.',
+          skillId: 'collect_salvage',
+          triggerEvent: 'CARGO_STORE',
+          triggerFilter: (d) => typeof d?.metalId === 'string',
+          title: 'SALVAGE',
+          body: 'Catch a metal-bearing piece; its metal is stored in the hold.',
         },
       ],
 
@@ -5701,11 +5705,11 @@ export const Constants = {
           id: 'ch7_cluster',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Open the Debris Map (M) and pick this cluster. Then target (T), autopilot (A), and net it piece by piece until it\'s clear. Cheaper than re-planning every grab.',
+          text: 'At LEO pick this cluster and press Space to fly there. Then target (T), autopilot (A), and net it piece by piece until it\'s clear. Cheaper than re-planning every grab.',
           skillId: 'strategic_map',
           triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED',
           title: 'WORK THE CLUSTER',
-          body: 'Press M to open the Debris Map and select a cluster, then clear it with Target (T) and Autopilot (A).',
+          body: 'At LEO pick the cluster and press Space, then clear it with Target (T) and Autopilot (A).',
         },
       ],
 
@@ -5725,7 +5729,7 @@ export const Constants = {
           id: 'ch8_discipline',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'No new gear this stretch. Just discipline. Clear the dead stuff, plan your transfers on the map, and confirm every target before you launch. The treaty guard is your backstop, not your plan.',
+          text: 'No new gear this stretch. Just discipline. Clear the dead stuff, plan your transfers at LEO, and confirm every target before you launch. The treaty guard is your backstop, not your plan.',
         },
       ],
 
@@ -5799,7 +5803,7 @@ export const Constants = {
           skillId: 'orbital_hohmann',
           triggerEvent: 'CLUSTER_WINDOW_OPEN',
           title: 'HOHMANN WINDOW',
-          body: 'Engage a transfer on the map and wait for the launch window to open before you burn.',
+          body: 'Engage a transfer at LEO and wait for the launch window to open before you burn.',
         },
         {
           id: 'ch11_mpd',
@@ -5821,17 +5825,17 @@ export const Constants = {
           id: 'ch12_intro',
           type: 'narrative',
           source: 'HASSAN',
-          text: 'This is the last leg, Cowboy. Every tonne you\'ve refined has been climbing a tether to geostationary. The anchor counterweight needs its final mass — and there\'s no crew but you left to carry it. Bring the rest home.',
+          text: 'This is the last leg, Cowboy. Every tonne you\'ve hauled has been climbing a tether to geostationary. The anchor counterweight needs its final mass — and there\'s no crew but you left to carry it. Bring the rest home.',
         },
         {
           id: 'ch12_contribute',
           type: 'interactive',
           source: 'HASSAN',
-          text: 'Dock, open the Shop at a resupply stop, and contribute your refined salvage to the elevator contract. Watch the anchor-mass gauge climb — top it off and the tether holds on its own.',
+          text: 'Dock, open the Shop at a resupply stop, and contribute your salvage to the elevator contract. Watch the anchor-mass gauge climb — top it off and the tether holds on its own.',
           skillId: 'manage_shop',
           triggerEvent: 'CONTRACT_UPDATE',
           title: 'SET THE ANCHOR',
-          body: 'Contribute refined metal to the space elevator contract from the Shop to raise the anchor mass.',
+          body: 'Contribute metal to the space elevator contract from the Shop to raise the anchor mass.',
         },
         {
           id: 'ch12_outro',

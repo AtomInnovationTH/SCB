@@ -186,7 +186,7 @@ export const ONBOARDING_BEATS = [
   },
   {
     id: 'final',
-    commsSource: 'HOUSTON', commsText: 'That\'s real cowboy work. Clear the field, then check the map for the next cluster. Good hunting.',
+    commsSource: 'HOUSTON', commsText: 'That\'s real cowboy work. Clear the field, then check LEO for the next cluster. Good hunting.',
     commsAck: null,
     glyph: '◆', keys: [], skillId: null,
     autoAdvanceAfter: 4000,

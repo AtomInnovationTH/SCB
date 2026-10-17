@@ -628,7 +628,7 @@ export class AutopilotSystem {
       // (Constants.js:1006 nav_autopilot_no_target).
       eventBus.emit(Events.AUTOPILOT_NO_TARGET);
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'CAUTION: AUTOPILOT DENIED. No live contacts in the field. Check the Debris Map (`) for the next cluster.',
+        text: 'CAUTION: AUTOPILOT DENIED. No live contacts in the field. Zoom out to LEO for the next cluster.',
         priority: 'warning',
       });
       return;

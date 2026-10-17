@@ -143,7 +143,6 @@ export class StatusPanel {
     this._memoBoxedPainted = false;   // the outline's last written state
     this._memoEl = null;              // cached #autopilot-indicator once found
     this._fleetClickBound = false;   // the ONE #hud-arms-status click delegate, attached once
-    this._forgeRevealed = false;
     this._cargoStatus = null;   // cached from CARGO_UPDATED events
     // Locked #15: Mother's CARGO kg/cap line is hidden while the Cargo pane's
     // rung is visible (injected getter; default false so tests without HUD
@@ -212,15 +211,6 @@ export class StatusPanel {
         this._mpdArmed = !!t.mpdArmed;
         this._mpdTelemetry = t;
         this._updateMPDBurstDisplay();
-      }
-    });
-
-    // Phase R3: Reveal forge inline on first metal cargo store
-    eventBus.on(Events.CARGO_STORE, (data) => {
-      if (!this._forgeRevealed) {
-        this._forgeRevealed = true;
-        const forgeInline = document.getElementById('forge-inline');
-        if (forgeInline) forgeInline.style.display = '';
       }
     });
 
@@ -445,13 +435,6 @@ export class StatusPanel {
           <span style="opacity:0.7;">Rate: </span><span id="att-rate-val" style="font-weight:bold;color:var(--hud-normal, #00ff88);">P 0.0°/s · Y 0.0°/s · R 0.0°/s</span>
         </div>
         <div id="cargo-summary" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;color:var(--hud-dim, #666);display:none;"></div>
-        <div id="forge-inline" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;display:none;">
-          <div style="display:flex;align-items:center;gap:4px;">
-            <span style="color:var(--hud-dim, #666);">[F] Forge:</span>
-            <span id="forge-inline-status" style="color:var(--hud-dim, #666);">Idle</span>
-          </div>
-          <div id="forge-hint" style="display:none;font-size:10px;color:var(--hud-caution, #ffaa00);margin-top:1px;"></div>
-        </div>
         <div class="panel-expand-section propulsion-expand">
           <div style="font-size:10px;margin-top:6px;padding-top:4px;color:var(--hud-info, #4488ff);opacity:0.7;" title="Fuel mass breakdown (Tsiolkovsky)">MASS BUDGET</div>
           <div id="hud-mass-budget" style="font-size:10px;line-height:1.5;">
@@ -782,7 +765,6 @@ export class StatusPanel {
     this._updateDeltaVBar(data.cachedTargets);
     this._updatePowerBars();
     this._renderThermalGroup();
-    this._updateForgePanel();
     if (data.cargoStatus) {
       this._cargoStatus = data.cargoStatus;
     }
@@ -2427,34 +2409,6 @@ export class StatusPanel {
       + telemetryLine
       + keysLine
       + `</div>`;
-  }
-
-  /**
-   * @private The "[F] Forge" line. The furnace itself is gone (the F key runs the
-   * FURNACE gag), so the line only ever reads Idle; the cargo hint stays.
-   */
-  _updateForgePanel() {
-    const inlineEl = document.getElementById('forge-inline-status');
-    const hintEl = document.getElementById('forge-hint');
-
-    if (inlineEl) {
-      inlineEl.textContent = 'Idle';
-      inlineEl.style.color = 'var(--hud-dim, #666)';
-    }
-
-    // Sprint A2: Show forge hotkey hint when idle with cargo available.
-    // Hotkey revamp 2026-06-14: the live Forge/Kiln binding is F (was 5/F4).
-    // Keep this hint in sync with InputManager 'KeyF'.
-    if (hintEl) {
-      const hasCargo = this._cargoStatus && this._cargoStatus.totalMassKg > 0;
-      if (hasCargo) {
-        hintEl.style.display = '';
-        hintEl.textContent = '▸ Press [F] to process cargo';
-        hintEl.style.color = 'var(--hud-caution, #ffaa00)';
-      } else {
-        hintEl.style.display = 'none';
-      }
-    }
   }
 
   // ==========================================================================

@@ -384,8 +384,8 @@ export class NetInventoryPanel {
     // Fire the HOUSTON comms hint.
     const bothZero = (this._lasso_state.remaining === 0 && this._net_state.total === 0);
     const text = bothZero
-      ? 'Out of capture tools. Restock at the resupply stop, or Forge (5) to reload.'
-      : 'Low on nets, Cowboy. Restock at the resupply stop, or Forge new ones (5).';
+      ? 'Out of capture tools. Restock at the resupply stop.'
+      : 'Low on nets, Cowboy. Restock at the resupply stop.';
     this._eventBus?.emit?.(Events.COMMS_MESSAGE, {
       source: 'HOUSTON',
       channel: 'HOUSTON',
@@ -404,7 +404,7 @@ export class NetInventoryPanel {
       const max       = this._lasso_state.max ?? 0;
       const label = max > 0 ? `${remaining}/${max}` : `${remaining}`;
       this._lassoChip._textNode.textContent = label;
-      this._lassoChip.title = `Lasso shots: ${label}.  Restock at the resupply stop, or press F to forge.`;
+      this._lassoChip.title = `Lasso shots: ${label}.  Restock at the resupply stop.`;
       this._styleChip(this._lassoChip, this._lasso_state.severity);
     }
     // Net chip text + breakdown tooltip + colour.

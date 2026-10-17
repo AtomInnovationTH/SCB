@@ -568,7 +568,7 @@
       "i18n": {
         "title": "FEEP Propellant: Mercury",
         "shortText": "The first ion-drive propellant ever flown: mechanically simple, effective, and far too toxic to use today.",
-        "fullText": "Mercury was the very first ion-thruster propellant flown in space: NASA's SERT-I in 1964 and the Soviet Zond programme both used mercury bombardment thrusters. It works well, offering 3,000-10,000 seconds of specific impulse at a solid 40 millinewtons per kilowatt, and being liquid at room temperature with a high atomic mass makes it mechanically simple to handle.\n\nThe dealbreaker is toxicity. Contamination risk led NASA to abandon mercury propulsion in the 1980s, and modern planetary-protection rules effectively ban it. Your forge can still extract mercury from old switchgear salvage, so it remains an option of last resort, but the codex is blunt about it: use it only if you are desperate, and handle it with extreme caution.",
+        "fullText": "Mercury was the very first ion-thruster propellant flown in space: NASA's SERT-I in 1964 and the Soviet Zond programme both used mercury bombardment thrusters. It works well, offering 3,000-10,000 seconds of specific impulse at a solid 40 millinewtons per kilowatt, and being liquid at room temperature with a high atomic mass makes it mechanically simple to handle.\n\nThe dealbreaker is toxicity. Contamination risk led NASA to abandon mercury propulsion in the 1980s, and modern planetary-protection rules effectively ban it. Mercury can still be extracted from old switchgear salvage, so it remains an option of last resort, but the codex is blunt about it: use it only if you are desperate, and handle it with extreme caution.",
         "realWorld": "NASA SERT-I (1964) and Soviet Zond used mercury; abandoned ~1980s over toxicity; effectively banned now.",
         "formula": "Isp ≈ 3,000-10,000 s · ~40 mN/W",
         "trlRationale": "Flew historically; abandoned for toxicity.",
@@ -1391,10 +1391,10 @@
       "i18n": {
         "title": "Aluminum in Space",
         "shortText": "The default spacecraft metal, and roughly 40% of the debris mass in low orbit is aluminium alloy.",
-        "fullText": "Aluminium alloys, mostly 6061-T6 and 7075, dominate spacecraft construction because they are light, strong, cheap, easy to machine, and shrug off radiation. That ubiquity has a flip side: about 40% of the debris mass in low Earth orbit is aluminium, the metal that built the satellites now dead around you.\n\nThat makes it your bread-and-butter salvage. Aluminium re-melts cleanly, so the forge can take a captured strut or panel, run it through an electromagnetic levitation furnace, and cast it into new stock. It is the closest thing up here to a universal feedstock, turning yesterday's spacecraft into tomorrow's structure.",
+        "fullText": "Aluminium alloys, mostly 6061-T6 and 7075, dominate spacecraft construction because they are light, strong, cheap, easy to machine, and shrug off radiation. That ubiquity has a flip side: about 40% of the debris mass in low Earth orbit is aluminium, the metal that built the satellites now dead around you.\n\nThat makes it your bread-and-butter salvage. Aluminium re-melts cleanly, so a captured strut or panel can be run through an electromagnetic levitation furnace and cast into new stock. It is the closest thing up here to a universal feedstock, turning yesterday's spacecraft into tomorrow's structure.",
         "realWorld": "Aircraft/spacecraft alloys 6061-T6 and 7075; ~40% of LEO debris mass is aluminium.",
         "trlRationale": "Ubiquitous aerospace structural metal.",
-        "unlockHint": "Store salvaged aluminium in the Forge."
+        "unlockHint": "Capture debris that holds aluminium."
       }
     },
     {
@@ -1412,10 +1412,10 @@
       "i18n": {
         "title": "Carbon Fiber Composites",
         "shortText": "Stiffer than steel at a fifth of the weight, but the cured polymer cannot be melted down and recast in orbit.",
-        "fullText": "Carbon-fibre reinforced polymer (CFRP) gives satellite structures and solar-panel substrates an exceptional stiffness-to-weight ratio, which is why so much modern hardware is built from it rather than metal. Fibres carry the load; a cured polymer matrix holds them in place.\n\nThat matrix is the catch for a salvager. Unlike aluminium, CFRP is a thermoset: once cured it cannot be re-melted and recast, so the forge cannot reflow it into new stock. It still has value as radiation-shielding mass or as structural patching material, but a captured composite panel is a fixed shape, not raw feedstock. Chemically it is the same carbon lattice as the nanotubes in your capture nets, just arranged differently.",
+        "fullText": "Carbon-fibre reinforced polymer (CFRP) gives satellite structures and solar-panel substrates an exceptional stiffness-to-weight ratio, which is why so much modern hardware is built from it rather than metal. Fibres carry the load; a cured polymer matrix holds them in place.\n\nThat matrix is the catch for a salvager. Unlike aluminium, CFRP is a thermoset: once cured it cannot be re-melted and recast, so it cannot be reflowed into new stock. It still has value as radiation-shielding mass or as structural patching material, but a captured composite panel is a fixed shape, not raw feedstock. Chemically it is the same carbon lattice as the nanotubes in your capture nets, just arranged differently.",
         "realWorld": "CFRP standard for satellite bus structures and solar-array substrates; thermoset matrix is not re-meltable.",
         "trlRationale": "Standard aerospace structural composite.",
-        "unlockHint": "Store salvaged carbon composite in the Forge."
+        "unlockHint": "Capture debris that holds carbon composite."
       }
     },
     {
@@ -1437,10 +1437,10 @@
         "title": "Gallium Arsenide Solar Cells",
         "shortText": "GaAs cells convert ~30% of sunlight and shrug off radiation. They are the gold standard for space power, at a gold-standard price.",
         "hardwareNote": "The dark tiles on the barrel are body-mounted GaAs cells, topping up the batteries when the wings are furled or off-Sun; the material is the briefing.",
-        "fullText": "Gallium arsenide (GaAs) is the semiconductor of choice for space solar power. It converts around 30% of incident sunlight, close to double a silicon cell, and it tolerates radiation far better, which matters over a long mission. Nearly every high-value satellite flies GaAs multi-junction cells.\n\nThe drawback is cost: GaAs runs on the order of a hundred times more per watt than silicon. That flips the economics for a salvager, because a dead satellite's array is studded with a material worth far more than its mass in scrap aluminium. Your forge can recover gallium from captured panels, turning a derelict's wings into genuinely valuable feedstock.",
+        "fullText": "Gallium arsenide (GaAs) is the semiconductor of choice for space solar power. It converts around 30% of incident sunlight, close to double a silicon cell, and it tolerates radiation far better, which matters over a long mission. Nearly every high-value satellite flies GaAs multi-junction cells.\n\nThe drawback is cost: GaAs runs on the order of a hundred times more per watt than silicon. That flips the economics for a salvager, because a dead satellite's array is studded with a material worth far more than its mass in scrap aluminium. Gallium can be recovered from captured panels, turning a derelict's wings into genuinely valuable feedstock.",
         "realWorld": "Space GaAs cells ~29-32% efficient and radiation-tolerant; ~100× the per-watt cost of silicon.",
         "trlRationale": "GaAs cells standard on GEO satellites and deep-space probes.",
-        "unlockHint": "Store salvaged gallium in the Forge."
+        "unlockHint": "Capture debris that holds gallium."
       }
     },
     {
@@ -1503,7 +1503,7 @@
         "fullText": "Iridium is among the rarest elements in Earth's crust, and it earns its place on spacecraft as a hydrazine-thruster catalyst and in high-temperature thermal coatings. A little goes a long way, so recovering it from salvage is disproportionately valuable.\n\nThe metal shares a name with the Iridium communications constellation, 66 satellites launched from 1997 to 2002, whose debris still carries recoverable components. One of them, Iridium 33, was destroyed in the 2009 collision with the derelict Cosmos 2251 that scattered more than 2,000 tracked fragments, a reminder that today's valuable hardware is tomorrow's hazard, and salvage.",
         "realWorld": "Iridium used as hydrazine-thruster catalyst and thermal coating; Iridium 33 lost in the 2009 Iridium-Cosmos collision.",
         "trlRationale": "Flight-proven catalyst and coating material.",
-        "unlockHint": "Store salvaged iridium in the Forge."
+        "unlockHint": "Capture debris that holds iridium."
       }
     },
     {
@@ -1524,7 +1524,7 @@
         "fullText": "A spacecraft skin has two jobs the interior structure cannot do: hold off the temperature swing between sunlight and shadow, and stop small impactors. Multi-layer insulation blankets, thin aluminised film separated by spacers, handle the thermal side, cutting the heat exchange between a +150°C sunlit face and a -150°C shadowed one.\n\nBeneath the blankets, tough aramid fabric like Kevlar adds a bumper against micrometeoroids and small debris, catching and spreading a hit the way a bulletproof vest does. The International Space Station layers a dozen or more sheets of insulation over this kind of shielding across its exterior. Your salvaged blankets carry both the erosion and the impact scars of that duty.",
         "realWorld": "MLI (aluminised film) + aramid (Kevlar) micrometeoroid layers; the ISS uses 14+ MLI layers on exterior surfaces.",
         "trlRationale": "Standard spacecraft thermal + micrometeoroid protection.",
-        "unlockHint": "Store salvaged Kevlar in the Forge."
+        "unlockHint": "Capture debris that holds Kevlar."
       }
     },
     {
@@ -1543,10 +1543,10 @@
       "i18n": {
         "title": "Titanium Aerospace Alloys",
         "shortText": "Ti-6Al-4V: half the weight of steel, corrosion-proof, and strong up past 400°C. The aerospace workhorse alloy.",
-        "fullText": "Titanium alloy Ti-6Al-4V is the workhorse where aluminium is too weak and steel too heavy. It holds its strength well above 400°C, resists corrosion including atomic-oxygen attack, and does it all at roughly half the density of steel, which is why it turns up in engine parts, thruster nozzles, and load-bearing satellite frames.\n\nFor a salvager that resilience is a gift. Titanium comes off a derelict already refined and formed, effectively pre-processed ore ready for the forge, and it has usually survived years in orbit better than the softer metals around it. A captured titanium fitting is some of the most useful mass you can bring home.",
+        "fullText": "Titanium alloy Ti-6Al-4V is the workhorse where aluminium is too weak and steel too heavy. It holds its strength well above 400°C, resists corrosion including atomic-oxygen attack, and does it all at roughly half the density of steel, which is why it turns up in engine parts, thruster nozzles, and load-bearing satellite frames.\n\nFor a salvager that resilience is a gift. Titanium comes off a derelict already refined and formed, effectively pre-processed ore ready for a furnace, and it has usually survived years in orbit better than the softer metals around it. A captured titanium fitting is some of the most useful mass you can bring home.",
         "realWorld": "Ti-6Al-4V in engines, nozzles, and frames; strong to ~400°C+ at ~half steel density; corrosion-resistant.",
         "trlRationale": "Ubiquitous aerospace structural alloy.",
-        "unlockHint": "Store salvaged titanium in the Forge."
+        "unlockHint": "Capture debris that holds titanium."
       }
     },
     {
