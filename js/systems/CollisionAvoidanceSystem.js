@@ -613,10 +613,15 @@ export class CollisionAvoidanceSystem {
    * @param {THREE.Vector3} playerPos — player scene position
    * @param {{x,y,z}} playerVel — player velocity (km/s)
    * @returns {object|null} Worst threat { debrisId, tca, missDistScene, missDistM, evasionDir, threatDir }
+   *
+   * 2026-10-17 (r1-release-dodge): a piece whose relative speed is below
+   * `Constants.COLLISION_MODEL.GLANCING_MIN_SPEED_MS` is skipped — a touch that slow does
+   * nothing (collisionModel.js), so a dodge would burn gas for no harm. Read live each scan.
    */
   _scanForThreats(playerPos, playerVel) {
     const CA = Constants.COLLISION_AVOIDANCE;
     const avoidRadius = this._getAvoidanceRadius();
+    const glancingFloorMs = (Constants.COLLISION_MODEL || {}).GLANCING_MIN_SPEED_MS || 0;
 
     // ST-6.3: MOID prefilter — if ConjunctionSystem has MOID data, scan only top-N pairs
     const moidPairs = this._conjunctionSystem
@@ -678,6 +683,7 @@ export class CollisionAvoidanceSystem {
         cart.position, cart.velocity, playerPos, playerVel,
       );
       if (!prediction) continue;
+      if (prediction.relSpeedMs < glancingFloorMs) continue; // too slow to do harm
 
       // Only interested if approaching (TCA > 0) and within avoidance envelope
       if (prediction.tca <= 0 || prediction.minDist > avoidRadius) continue;
@@ -715,7 +721,7 @@ export class CollisionAvoidanceSystem {
    * @param {{x,y,z}} dVel — debris velocity (km/s from orbitToSceneCartesian)
    * @param {{x,y,z}} pPos — player position (scene units)
    * @param {{x,y,z}} pVel — player velocity (km/s from getVelocity)
-   * @returns {{ tca:number, minDist:number, threatDir:{x,y,z} } | null}
+   * @returns {{ tca:number, minDist:number, threatDir:{x,y,z}, relSpeedMs:number } | null}
    */
   _predictClosestApproach(dPos, dVel, pPos, pVel) {
     const CA = Constants.COLLISION_AVOIDANCE;
@@ -749,7 +755,7 @@ export class CollisionAvoidanceSystem {
       ? { x: rpx / rLen, y: rpy / rLen, z: rpz / rLen }
       : { x: 1, y: 0, z: 0 };
 
-    return { tca, minDist, threatDir };
+    return { tca, minDist, threatDir, relSpeedMs: Math.sqrt(rvDotRv) / M };
   }
 
   // ==========================================================================

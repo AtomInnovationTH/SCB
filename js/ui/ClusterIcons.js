@@ -14,7 +14,7 @@
  *   - FUEL-REACHABILITY (optional opts.assessments): unreachable clusters are
  *     dimmed + dash-ringed, marginal read VALUE gold + dashed (never
  *     color-alone), and the FOCUSED cluster's label gains an estimate line
- *     ('ΔV 320 · Xe 2.1 kg · 14 min'); icon hitboxes (ring + count only — the
+ *     ('ΔV 320 · Gas 2.1 kg · 14 min'); icon hitboxes (ring + count only — the
  *     root stays pointer-events:none) click-dispatch to the onSelect sink;
  *   - at most `labelBudget` (F6 = 7) icons carry a text label, the rest are
  *     ranked out (highest count first) — hover would reveal the rest (S6).
@@ -74,7 +74,7 @@ export class ClusterIcons {
 
   /**
    * Format a reachability assessment as the focused icon's estimate line,
-   * e.g. 'ΔV 320 · Xe 2.1 kg · 14 min'. Pure + static.
+   * e.g. 'ΔV 320 · Gas 2.1 kg · 14 min'. Pure + static.
    * @param {{dvCost:number, fuelKg:number, timeS:number}} a
    * @returns {string}
    */
@@ -82,7 +82,7 @@ export class ClusterIcons {
     if (!a) return '';
     const dv = Number.isFinite(a.dvCost) ? Math.round(a.dvCost) : '\u2014';
     const xe = Number.isFinite(a.fuelKg) ? (Math.round(a.fuelKg * 10) / 10) : '\u2014';
-    return `\u0394V ${dv} \u00b7 Xe ${xe} kg \u00b7 ${ClusterIcons.formatTime(a.timeS)}`;
+    return `\u0394V ${dv} \u00b7 Gas ${xe} kg \u00b7 ${ClusterIcons.formatTime(a.timeS)}`;
   }
 
   /**

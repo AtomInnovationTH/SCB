@@ -426,9 +426,9 @@
       ],
       "i18n": {
         "title": "Specific Impulse",
-        "shortText": "How many seconds a kilo of propellant holds up one newton of thrust. The efficiency yardstick every engine is judged by.",
-        "fullText": "Specific impulse (Isp), measured in seconds, is the efficiency rating of a thruster: how much velocity change it wrings from each kilogram of propellant. Higher is better, and the range is enormous. A chemical rocket manages around 300 seconds, a xenon ion drive around 3,000, and a FEEP thruster over 6,000.\n\nThe universal catch is that efficiency and thrust trade against each other: the most efficient engines are also the weakest. That single tension shapes your whole ship, which is why the mothership cruises on an efficient ion drive while the attitude thrusters use responsive, thirsty cold gas. You pick the engine to match the job, not the other way around.",
-        "realWorld": "Cold gas ~70 s · hydrazine ~230 s · xenon ion ~3,000 s · FEEP ~6,000 s.",
+        "shortText": "How many seconds a kilo of propellant can hold up its own weight in thrust. The efficiency yardstick every engine is judged by.",
+        "fullText": "Specific impulse (Isp), measured in seconds, is the efficiency rating of a thruster: how much velocity change it wrings from each kilogram of propellant. Higher is better, and the range is enormous. A chemical rocket manages around 300 seconds, a big gridded xenon ion drive around 3,000, and a FEEP thruster over 6,000.\n\nThe universal catch is that efficiency and thrust trade against each other: the most efficient engines are also the weakest. That single tension shapes your whole ship, which is why the mothership cruises on an efficient electric thruster (your small Hall thruster manages about 1,500-1,700 seconds, well short of a big gridded ion drive) while the attitude thrusters use responsive, thirsty cold gas. You pick the engine to match the job, not the other way around.",
+        "realWorld": "Cold gas ~70 s · hydrazine ~230 s · your small Hall thruster ~1,500-1,700 s · big gridded xenon ion ~3,000 s · FEEP ~6,000 s.",
         "formula": "Isp = F / (ṁ · g₀)",
         "trlRationale": "Fundamental propulsion metric.",
         "unlockHint": "Earn a fuel-efficiency award."
@@ -656,8 +656,8 @@
       "i18n": {
         "title": "Xenon Propellant",
         "shortText": "Heavy, inert, and easy to ionise: the default ion-drive propellant for half a century, and expensive.",
-        "fullText": "Xenon has been the propellant of choice for electric propulsion for decades because it checks every box: it is heavy, giving good momentum per ion, chemically inert and therefore safe to store, and easy to ionise. In the shop it is the top engine-gas upgrade: more push for the same watts than krypton or argon.\n\nThe drawback is price, around 3,000 dollars a kilogram, which is one more reason efficiency matters when every gram counts. It is why the propellant gauge is a resource to respect rather than ignore, and why cheaper substitutes like krypton and argon exist. Xenon is the gold standard when performance outweighs cost, and in your ship it is the most expensive gas per kilo.",
-        "realWorld": "Xenon flown on Dawn, SMART-1, and most GEO comsat electric thrusters; ~$3,000/kg.",
+        "fullText": "Xenon has been the propellant of choice for electric propulsion for decades because it checks every box: it is heavy, giving good momentum per ion, chemically inert and therefore safe to store, and easy to ionise. In the shop it is the top engine-gas upgrade: more push for the same watts than krypton or argon.\n\nThe drawback is price, around 2,700 dollars a kilogram, which is one more reason efficiency matters when every gram counts. It is why the propellant gauge is a resource to respect rather than ignore, and why cheaper substitutes like krypton and argon exist. Xenon is the gold standard when performance outweighs cost, and in your ship it is the most expensive gas per kilo.",
+        "realWorld": "Xenon flown on Dawn, SMART-1, and most GEO comsat electric thrusters; ~$2,700/kg.",
         "trlRationale": "Standard electric-propulsion propellant.",
         "unlockHint": "Buy the xenon gas upgrade."
       },
@@ -675,9 +675,9 @@
       ],
       "i18n": {
         "title": "Krypton Propellant",
-        "shortText": "Cheaper than xenon at a slight efficiency cost: the trade SpaceX made to fly thousands of thrusters.",
-        "fullText": "Krypton costs around 400 dollars a kilogram against xenon's 3,000, and that gap is the whole story. It is lighter, at 83.8 atomic mass units versus xenon's 131.3, which costs roughly 15% in specific impulse, but the savings let a mission carry far more propellant for the same budget.\n\nSpaceX made exactly this trade for the first-generation Starlink satellites, whose Hall thrusters run on krypton because flying thousands of them on xenon would have been prohibitive. In your ship, krypton is the shop upgrade over the argon you start with: more push for the same watts, at a higher price per kilo.",
-        "realWorld": "SpaceX Starlink v1 Hall thrusters use krypton (~$400/kg vs xenon ~$3,000/kg; ~15% lower Isp).",
+        "shortText": "Cheaper than xenon at a cost in push per watt: the trade SpaceX made to fly thousands of thrusters.",
+        "fullText": "Krypton costs around 400 dollars a kilogram against xenon's 2,700, and that gap is the whole story. It is lighter, at 83.8 atomic mass units versus xenon's 131.3. In a small Hall thruster like yours that barely changes specific impulse (krypton about 1,650 seconds, xenon 1,500); what it costs is push per watt, roughly two-thirds of xenon's thrust for the same power. The savings let a mission carry far more propellant for the same budget.\n\nSpaceX made exactly this trade for the first-generation Starlink satellites, whose Hall thrusters run on krypton because flying thousands of them on xenon would have been prohibitive. In your ship, krypton is the shop upgrade over the argon you start with: more push for the same watts, at a higher price per kilo.",
+        "realWorld": "SpaceX Starlink v1 Hall thrusters use krypton (~$400/kg vs xenon ~$2,700/kg; Isp about the same in a small Hall thruster, thrust per watt ~2/3 of xenon).",
         "trlRationale": "Krypton Hall thrusters operational at scale.",
         "unlockHint": "Buy the krypton gas upgrade."
       },
@@ -695,9 +695,9 @@
       ],
       "i18n": {
         "title": "Argon Propellant",
-        "shortText": "Dirt-cheap and abundant, at a further efficiency hit: the next step down the propellant cost curve.",
-        "fullText": "Argon makes up about 1% of Earth's atmosphere, so it is extraordinarily cheap to produce, on the order of 5 dollars a kilogram, roughly 600 times cheaper than xenon. The price of that abundance is performance: at 39.9 atomic mass units it is much lighter, giving around 2,000 seconds of specific impulse against xenon's 3,000.\n\nFor bulk work the arithmetic can still favour it. When you are processing thousands of objects, argon's cost advantage can outweigh its lower efficiency, and SpaceX moved its second-generation Starlink thrusters to argon for exactly that reason. It is the propellant for operations measured in tonnes and volume rather than in precision, and it is the gas your ship starts with.",
-        "realWorld": "SpaceX Starlink v2 Hall thrusters use argon (~$5/kg, ~600× cheaper than xenon; Isp ~2,000 s).",
+        "shortText": "Dirt-cheap and abundant, at a bigger cost in push per watt: the next step down the propellant cost curve.",
+        "fullText": "Argon makes up about 1% of Earth's atmosphere, so it is extraordinarily cheap to produce, on the order of 10 dollars a kilogram, roughly 270 times cheaper than xenon. The price of that abundance is thrust: at 39.9 atomic mass units it is much lighter, so in a small Hall thruster like yours specific impulse barely moves (about 1,700 seconds against xenon's 1,500) but push per watt falls to under half of xenon's. SpaceX's big 4.2 kW argon thruster reaches about 2,500 seconds, but that is a big thruster, not a small one.\n\nFor bulk work the arithmetic can still favour it. When you are processing thousands of objects, argon's cost advantage can outweigh its lower push per watt, and SpaceX moved its second-generation Starlink thrusters to argon for exactly that reason. It is the propellant for operations measured in tonnes and volume rather than in precision, and it is the gas your ship starts with.",
+        "realWorld": "SpaceX Starlink v2 Hall thrusters use argon (~$10/kg, ~270× cheaper than xenon; ~1,700 s in a small Hall thruster, ~2,500 s in SpaceX's big 4.2 kW one).",
         "trlRationale": "Argon Hall thrusters operational on Starlink v2.",
         "unlockHint": "Burn 30% of the argon you launched with."
       },
@@ -3139,7 +3139,7 @@
       "i18n": {
         "title": "ΔV Is Everything",
         "shortText": "Fuel doesn't refill on its own. Every burn spends a budget you can't get back for free.",
-        "fullText": "Delta-V (ΔV), your ability to change orbit, is the master resource. Your engine-gas and cold-gas tanks do not magically refill: the only way to top up is to salvage metal and run it through the Forge into propellant.\n\nSo fly cheap. Let autopilot pick efficient routes, and don't chase a target across the sky when a closer one will do. Run every tank dry and the mission ends, wherever you happen to be.",
+        "fullText": "Delta-V (ΔV), your ability to change orbit, is the master resource. Your engine-gas and cold-gas tanks do not magically refill: the engine tank tops up with gas salvaged from your catches, or with gas bought in the shop.\n\nSo fly cheap. Let autopilot pick efficient routes, and don't chase a target across the sky when a closer one will do. Run every tank dry and the mission ends, wherever you happen to be.",
         "unlockHint": "Reach orbit."
       },
       "track": "cowboy_basics",
@@ -3224,8 +3224,8 @@
       ],
       "i18n": {
         "title": "The Salvage Economy",
-        "shortText": "Dead satellites are a gas station. Grab the metal, run the Forge, refuel. It's your only way to top up.",
-        "fullText": "A captured object is more than a tick on the counter. It is raw material. Salvage yields metal, and sometimes a splash of propellant or an on-the-spot panel repair.\n\nFeed salvaged metal into the Forge in propellant mode and it becomes fuel you can burn. Because the tanks never refill for free, the salvage-to-Forge-to-propellant loop is the heartbeat that keeps you flying. You clean up and gas up in the same move.",
+        "shortText": "Dead satellites are a gas station. Catch one, take its gas, refuel. Salvage and the shop are how you top up.",
+        "fullText": "A captured object is more than a tick on the counter. It is raw material. Salvage yields metal, and sometimes a splash of propellant or an on-the-spot panel repair.\n\nWhen a catch carries gas, it goes straight into your engine tank as real kilograms of the gas in your tank, up to the room left. Because the tanks never refill for free, that salvaged gas, topped up with gas bought in the shop, is what keeps you flying. You clean up and gas up in the same move.",
         "unlockHint": "Reach orbit."
       },
       "track": "cowboy_basics",

@@ -14,7 +14,7 @@
  * legacy DebrisMap readout (coOrbitalReadout precedent). The DOM panel is fully
  * guarded (inert headless). FUEL-REACHABILITY: `readout`/`refresh` accept an
  * optional `opts.assessment` (ReachabilityModel.assess result) and surface a
- * verdict + xenon + margin row; without it the model/markup are unchanged.
+ * verdict + engine gas + margin row; without it the model/markup are unchanged.
  *
  * OrbitMFD retirement: `readout`/`refresh` also accept optional `opts.route`
  * (systems/OrbitPlanners.computeRoutePlan result) and `opts.sweep`
@@ -184,8 +184,8 @@ export class TransferWindows {
   }
 
   /**
-   * FUEL-REACHABILITY row text: verdict + xenon cost + post-burn ΔV margin,
-   * e.g. 'REACHABLE · Xe 2.1 kg · 512 m/s left'. Pure + static.
+   * FUEL-REACHABILITY row text: verdict + engine gas cost + post-burn ΔV margin,
+   * e.g. 'REACHABLE · Gas 2.1 kg · 512 m/s left'. Pure + static.
    * @param {{verdict:string, fuelKg:number, budgetAfter:number}} a
    * @returns {string}
    */
@@ -193,7 +193,7 @@ export class TransferWindows {
     if (!a || !a.verdict) return '';
     const xe = Number.isFinite(a.fuelKg) ? (Math.round(a.fuelKg * 10) / 10) : '\u2014';
     const left = Number.isFinite(a.budgetAfter) ? Math.round(a.budgetAfter) : '\u2014';
-    return `${String(a.verdict).toUpperCase()} \u00b7 Xe ${xe} kg \u00b7 ${left} m/s left`;
+    return `${String(a.verdict).toUpperCase()} \u00b7 Gas ${xe} kg \u00b7 ${left} m/s left`;
   }
 
   /**
