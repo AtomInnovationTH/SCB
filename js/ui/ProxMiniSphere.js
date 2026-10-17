@@ -14,7 +14,7 @@
  * the costume transform the FloorContract names — through two ADDITIVE
  * NavSphere opts (both absent ⇒ shipped behavior byte-identical):
  *   - setCornerMount(radiusPx|null): shrink the sphere in place (same
- *     top-right, comms-anchored corner, smaller radius) and force the layer
+ *     bottom-right, where the 8-key disc sits, smaller radius) and force the layer
  *     on while mounted (the minimap is the floor costume, not the 8-key orb);
  *   - setTacticalOverlay(ov|null):   the floor-fed layer NavSphere draws on
  *     top of its radar — focused cluster bearing + the selected insertion

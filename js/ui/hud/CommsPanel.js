@@ -31,6 +31,15 @@ const COMMS_STEPS = ['line', 'normal', 'large'];
 // so the message log keeps its full per-step height (no clipped lines).
 const CONTRACT_HEADER_PX = 26;
 
+// One rendered message row (the template in `_updateCommsPanel`): margin 2 px 0, padding 3 px 6 px. The trim and the
+// tall-row clamp (D4) read the same numbers, so the markup and the arithmetic cannot drift apart.
+const ROW_MARGIN_Y_PX = 2;
+const ROW_PAD_Y_PX = 3;
+// Line height of a message row where the browser cannot tell us (no getComputedStyle: node tests): 13 px body x 1.45.
+const ROW_LINE_HEIGHT_FALLBACK_PX = 13 * 1.45;
+// COMMS_SCROLL_UP / _DOWN move the window by at most this many messages (fewer when fewer rows are shown).
+const SCROLL_STEP_MAX = 3;
+
 // ----------------------------------------------------------------------------
 // SIMPLIFIED 3-COLOUR PALETTE (priority-based, not per-channel)
 // Keeps the pane easy to scan: green = normal, amber = warning, red = critical.
@@ -224,6 +233,15 @@ export class CommsPanel {
      */
     this._glossaryState = null;
 
+    /** @type {number} Message rows left in the log after the last render's trim (see `_scrollStep`); -1 = none yet. */
+    this._shownRows = -1;
+    /** @type {number} The log's last seen `offsetWidth` (D3: only a WIDTH change re-renders); -1 = not seen yet. */
+    this._logWidth = -1;
+    this._logResizeObserver = null;
+    this._logResizeListener = null;
+    this._logResizeRaf = 0;
+    this._disposed = false;
+
     this._build();
     this._setupListeners();
   }
@@ -311,6 +329,7 @@ export class CommsPanel {
 
     this._logEl.addEventListener('transitionend', (e) => this._onLogTransitionEnd(e));
     this.panels.comms.appendChild(this._logEl);
+    this._observeLogWidth();
 
     // Inline-glossary affordances: a one-time stylesheet for `.glossary-term`
     // and a delegated click handler that deep-links terms with a codex entry.
@@ -360,15 +379,13 @@ export class CommsPanel {
     });
 
     // PageUp / PageDown history scrolling
+    // The step is the number of rows actually on screen (at most 3), so a trimmed window never skips a message.
     eventBus.on(Events.COMMS_SCROLL_UP, () => {
-      this._scrollOffset = Math.min(this._scrollOffset + 3, this._getMaxScroll());
+      this._scrollOffset = Math.min(this._scrollOffset + this._scrollStep(), this._getMaxScroll());
       this._updateCommsPanel();
     });
 
-    eventBus.on(Events.COMMS_SCROLL_DOWN, () => {
-      this._scrollOffset = Math.max(this._scrollOffset - 3, 0);
-      this._updateCommsPanel();
-    });
+    eventBus.on(Events.COMMS_SCROLL_DOWN, () => this._scrollDown());
 
     // When an onboarding hint is satisfied (the player followed the direction),
     // drop the matching guidance line's attention highlight right away so it
@@ -456,6 +473,17 @@ export class CommsPanel {
   /** Clean up DOM elements. */
   dispose() {
     // No center popup to remove (ST-5.1: _buildCommsMenu deleted)
+    this._disposed = true;
+    if (this._logResizeObserver && typeof this._logResizeObserver.disconnect === 'function') {
+      this._logResizeObserver.disconnect();
+    }
+    this._logResizeObserver = null;
+    if (this._logResizeListener && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+      window.removeEventListener('resize', this._logResizeListener);
+    }
+    this._logResizeListener = null;
+    if (this._logResizeRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this._logResizeRaf);
+    this._logResizeRaf = 0;
   }
 
   // ==========================================================================
@@ -557,19 +585,115 @@ export class CommsPanel {
   }
 
   /**
-   * @private Remove the oldest rendered message rows while the log content overflows its box (so no row is shown cut
-   * through). Leaves at least one row. No-op where the log has no layout (tests, hidden pane).
+   * @private Watch the log's WIDTH (D3). A narrower window narrows the log, the same message then wraps onto more lines,
+   * and the rows rendered at the old width can end up cut; only a render re-trims them. A `ResizeObserver` on the log's
+   * border box (a `window` `resize` listener where there is none); nothing at all in node tests, where neither exists.
+   */
+  _observeLogWidth() {
+    if (typeof ResizeObserver === 'function') {
+      this._logResizeObserver = new ResizeObserver(() => this._onLogObserved());
+      this._logResizeObserver.observe(this._logEl, { box: 'border-box' });
+    } else if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      this._logResizeListener = () => this._onLogResized();
+      window.addEventListener('resize', this._logResizeListener);
+    }
+  }
+
+  /**
+   * @private True when the log's width differs from the last one seen (and remembers the new one). The width is the
+   * border-box `offsetWidth`: the observer's content width shifts by the 4 px scrollbar whenever it appears, which
+   * would re-render, hide the scrollbar, and oscillate. The 0.3 s height animation changes only the height, which is
+   * D2's business (the transitionend render), so a pure height change reports false.
+   */
+  _logWidthChanged() {
+    const w = this._logEl ? this._logEl.offsetWidth : NaN;
+    if (typeof w !== 'number' || !(w >= 0) || w === this._logWidth) return false;
+    this._logWidth = w;
+    return true;
+  }
+
+  /**
+   * @private The ResizeObserver fired. The FIRST callback (it arrives right after the first layout, around boot) only
+   * records the width: nothing is rendered before boot has finished. Later, a width change renders AT ONCE, inside the
+   * callback: an observer callback runs after layout and before paint, so the re-trimmed rows are the ones that get
+   * painted (deferring to the next animation frame left one painted frame with a cut row, measured 2026-10-17).
+   * Re-rendering cannot re-trigger the observer: the log's border box does not change (its height is set inline per
+   * step, its width comes from the panel).
+   */
+  _onLogObserved() {
+    if (this._disposed || !this._logEl) return;
+    if (this._logWidth < 0) {
+      const w = this._logEl.offsetWidth;
+      if (typeof w === 'number' && w >= 0) this._logWidth = w;
+      return;
+    }
+    if (this._logWidthChanged()) this._updateCommsPanel();
+  }
+
+  /**
+   * @private The `window` `resize` fallback (no ResizeObserver): re-render once (per animation frame at most) when the
+   * log's width changed. A `resize` event can come in bursts while a window is dragged, so these are coalesced.
+   */
+  _onLogResized() {
+    if (this._disposed || !this._logEl) return;
+    if (!this._logWidthChanged()) return;
+    if (typeof requestAnimationFrame !== 'function') { this._updateCommsPanel(); return; }
+    if (this._logResizeRaf) return;
+    this._logResizeRaf = requestAnimationFrame(() => {
+      this._logResizeRaf = 0;
+      if (!this._disposed) this._updateCommsPanel();
+    });
+  }
+
+  /**
+   * @private Show whole message rows only, at every size step (D1): remove the oldest rendered rows while the log
+   * content overflows its box, so no row is cut through at the top edge. Leaves at least one row, and when that last
+   * row is itself taller than the box, clamps it to the lines that fit (`_clampTallRow`, D4). No-op where the log has no
+   * layout (tests, hidden pane).
    */
   _trimCutRows() {
     const log = this._logEl;
     if (!log || !log.children || typeof log.removeChild !== 'function') return;
-    // q3 round 3 (S1): trim against the TARGET height. On a step change the log's `height` animates (0.3 s) and
-    // clientHeight is still the old one, so measuring against it lets a row that will not fit come back at the end.
+    // q3 round 3 (S1) + D2: trim against the SMALLER of the target height and the height the box has right now. A
+    // step change animates the log's `height` over 0.3 s: shrinking, the target is the smaller (a row that will not
+    // fit must not come back at the end); growing, the box as it is now is the smaller (a row that does not fit yet
+    // must not stick out over the top while the box is still small; the transitionend render adds what fits later).
+    // With no layout yet the target alone counts.
     const target = parseFloat(log.style && log.style.height);
-    const box = () => (target > 0 ? target : log.clientHeight);
+    const box = () => {
+      const now = log.clientHeight;
+      if (target > 0 && now > 0) return Math.min(target, now);
+      return target > 0 ? target : now;
+    };
     while (log.children.length > 1 && log.clientHeight > 0 && this._logContentHeight() > box() + 1) {
       log.removeChild(log.children[0]);
     }
+    if (log.children.length === 1 && log.clientHeight > 0) this._clampTallRow(log.children[0], box());
+  }
+
+  /**
+   * @private D4: the one row left is still taller than the box. Showing its END (the old scroll-to-bottom) cut the START
+   * of the message in half a row; instead keep its START and end it with an ellipsis: clamp to the whole lines that fit
+   * (`-webkit-line-clamp`), and keep the full text in the row's tooltip. Every render builds fresh rows, so a clamp never
+   * outlives its render: when the box or the width grows enough, the next render's row simply is not clamped.
+   * @param {HTMLElement} row
+   * @param {number} boxH the log box height the row has to fit
+   */
+  _clampTallRow(row, boxH) {
+    if (!row || !row.style || !(boxH > 0)) return;
+    if (!(this._logContentHeight() > boxH + 1)) return;
+    let lineH = NaN;
+    try {
+      if (typeof getComputedStyle === 'function') lineH = parseFloat(getComputedStyle(row).lineHeight);
+    } catch (_e) { /* no style engine */ }
+    if (!(lineH > 0)) lineH = ROW_LINE_HEIGHT_FALLBACK_PX;
+    const room = boxH - 2 * (ROW_MARGIN_Y_PX + ROW_PAD_Y_PX);
+    const lines = Math.max(1, Math.floor(room / lineH + 1e-3));
+    row.style.display = '-webkit-box';
+    row.style.webkitBoxOrient = 'vertical';
+    row.style.overflow = 'hidden';
+    row.style.webkitLineClamp = String(lines);   // CSS -webkit-line-clamp: N whole lines, then "…"
+    row.title = String(row.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
   /** @private Height of the rendered rows (with their 2 px margins), independent of the box they sit in. */
@@ -579,17 +703,19 @@ export class CommsPanel {
     const first = kids[0], last = kids[kids.length - 1];
     if (first && last && typeof first.getBoundingClientRect === 'function' && typeof last.getBoundingClientRect === 'function') {
       const a = first.getBoundingClientRect(), b = last.getBoundingClientRect();
-      if (b.bottom > a.top) return b.bottom - a.top + 4;
+      if (b.bottom > a.top) return b.bottom - a.top + 2 * ROW_MARGIN_Y_PX;
     }
     return log.scrollHeight;   // no layout (tests): the content height of a box that is not mid-animation
   }
 
-  /** @private The log's height finished animating: re-trim against the settled box and keep the newest row in view. */
+  /**
+   * @private The log's height finished animating (D2): render again against the settled box. Shrinking, that
+   * re-trims what the target already trimmed; growing, the rows that now fit come back whole. `_updateCommsPanel`
+   * also keeps the newest row in view when the log is not scrolled up.
+   */
   _onLogTransitionEnd(e) {
     if (e && e.propertyName && e.propertyName !== 'height') return;
-    if (this._commsStep !== 'line') return;
-    this._trimCutRows();
-    if (this._scrollOffset === 0 && this._logEl) this._logEl.scrollTop = this._logEl.scrollHeight;
+    this._updateCommsPanel();
   }
 
   /** @private Visible line count for the current size step. */
@@ -600,10 +726,49 @@ export class CommsPanel {
     return COMMS.PANE_LINES_DEFAULT;
   }
 
-  /** @private Get max scroll offset */
+  /**
+   * @private Message rows on screen after the last render's trim (D4b), at most the step's line count. Before any
+   * render, or when the log cannot say, the step's line count.
+   */
+  _rowsOnScreen() {
+    const cap = this._visibleLineCount();
+    const n = this._shownRows;
+    return (n >= 0 && n < cap) ? n : cap;
+  }
+
+  /**
+   * @private How many messages one COMMS_SCROLL_UP / _DOWN moves (D4b): 3 as ever, but never more than the rows on
+   * screen (a trimmed window of 1 row steps by 1, not 3, so no message is jumped over), at least 1.
+   */
+  _scrollStep() {
+    return Math.max(1, Math.min(SCROLL_STEP_MAX, this._rowsOnScreen()));
+  }
+
+  /**
+   * @private PageDown (D4b): move toward the newest messages by one step, without jumping over a message. The step is
+   * the number of rows on screen NOW, but the window below can hold taller messages, so the new window may show fewer
+   * rows than the step moved: its oldest row would then be newer than the message right after the previous newest, and
+   * that one is skipped. Then step back (one render each, at most the step) until the new window reaches down to it.
+   * In offsets (messages newer than the window): the new oldest shown row has `offset + rows - 1` newer messages, and the
+   * message after the previous newest has `prevOffset - 1`.
+   */
+  _scrollDown() {
+    const prevOffset = this._scrollOffset;
+    this._scrollOffset = Math.max(prevOffset - this._scrollStep(), 0);
+    this._updateCommsPanel();
+    while (this._scrollOffset + Math.max(1, this._shownRows) < prevOffset) {
+      this._scrollOffset = Math.max(this._scrollOffset + 1, prevOffset - Math.max(1, this._shownRows));
+      this._updateCommsPanel();
+    }
+  }
+
+  /**
+   * @private Get max scroll offset. The oldest window holds `total - rows on screen` messages above it: when the trim
+   * leaves fewer rows than the step's line count, the oldest messages would otherwise never come into view.
+   */
   _getMaxScroll() {
     const total = this._commsSystem ? this._commsSystem.getMessages().length : 0;
-    return Math.max(0, total - this._visibleLineCount());
+    return Math.max(0, total - Math.max(1, this._rowsOnScreen()));
   }
 
   /** @private Update the comms panel log display */
@@ -614,6 +779,7 @@ export class CommsPanel {
 
     if (allMessages.length === 0) {
       this._logEl.innerHTML = `<span style="opacity:0.4;font-size:13px;">Awaiting transmission…</span>`;
+      this._shownRows = 0;
       return;
     }
 
@@ -658,15 +824,20 @@ export class CommsPanel {
         links: msg.link ? [msg.link] : undefined,
       });
 
-      return `<div style="margin:2px 0;padding:3px 6px;border-left:${COMMS.STRIPE_WIDTH_PX}px solid ${color};background:${rowBg};border-radius:2px;">
+      // The inner <div> keeps the label and the body inline when `_clampTallRow` turns the row into a -webkit-box
+      // (some engines make every direct child of a -webkit-box its own block, which would put them on two lines).
+      return `<div style="margin:${ROW_MARGIN_Y_PX}px 0;padding:${ROW_PAD_Y_PX}px 6px;border-left:${COMMS.STRIPE_WIDTH_PX}px solid ${color};background:${rowBg};border-radius:2px;"><div>
         <span style="color:${color};font-weight:700;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;">${sourceText}</span><span style="color:${color};opacity:${textOpacity};font-weight:${weight};font-size:13px;">${body}</span>
-      </div>`;
+      </div></div>`;
     }).join('');
 
-    // q3 round 2 (R3): in the short 'line' step the log is one message tall, so the older of the two rendered rows
-    // can stick out over the top edge and show half a line. Whole messages only: drop the oldest rendered row while
-    // the content is taller than the log (never the last one: a single long message may still scroll).
-    if (this._commsStep === 'line') this._trimCutRows();
+    // q3 round 2 (R3) + D1: whole message rows only, at EVERY size step (it was the 'line' step alone). The rendered
+    // rows (the step's line count of them) can be taller than the log box, and then the oldest sticks out over the top
+    // edge and shows half a line: drop the oldest rendered row while the content is taller than the box. Never the
+    // last one; a last row that is still too tall is clamped to the lines that fit (D4).
+    this._trimCutRows();
+    const rendered = this._logEl.children;
+    this._shownRows = (rendered && rendered.length > 0) ? rendered.length : visible.length;
 
     // Auto-scroll to bottom (unless scrolled up)
     if (this._scrollOffset === 0) {

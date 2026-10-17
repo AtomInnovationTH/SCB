@@ -31,10 +31,6 @@ import { isMarked } from '../systems/ScanMarks.js';
 // ============================================================================
 
 const SPHERE_RADIUS = 140;         // px radius — diameter 280 matches targets panel width
-const MARGIN_RIGHT = 0;            // px from right screen edge — flush with viewport edge
-const MARGIN_TOP_FALLBACK = 10;    // px from top edge — fallback when comms panel is absent
-const COMMS_GAP = 6;              // px gap between comms panel bottom and NavSphere top (UX-2 #11)
-const MIN_READOUT_HEIGHT = 20;     // px vertical footprint of the minimized LAT/LON/ALT one-liner
 
 /** SPECS tab visual width (LibraryPane tab padding 10+12 + "SPECS "). Not exported. */
 const SPECS_TAB_WIDTH_PX = 59;
@@ -190,22 +186,6 @@ export class NavSphere {
     this._tmpDir  = new THREE.Vector3();
     this._eqDir   = new THREE.Vector3();  // reusable for equatorial projection
 
-    // §13 Sprint 4 (Phase 3 audit): cached comms-panel bottom (CSS px). The
-    // NavSphere draw loop runs at 10 Hz; the previous code called
-    // `document.getElementById('hud-comms-panel').getBoundingClientRect()`
-    // every draw, forcing a synchronous layout flush (HUD CSS animations +
-    // StatusPanel text mutations on the same frame guarantee the layout was
-    // dirty). Mirror the Sprint 2 / PR E pattern from
-    // [`HUD.js`](js/ui/HUD.js:140): cache the bottom Y, invalidate on resize
-    // and VIEW_CONFIG_CHANGE (which can show/hide the comms panel).
-    /** @type {number|null} */
-    this._commsBottomCache = null;
-    /** @type {HTMLElement|null} */
-    this._commsElCache = null;
-    /** @type {number|null} Timestamp (ms) until which the comms-bottom cache is
-     *  recomputed every draw, covering the comms panel's ~0.3s height animation. */
-    this._commsResizeSettleAt = null;
-
     // --- Zoom Ladder PROX NET (id 3) additive opts (S4, 'NavSphere:corner-minimap') ---
     // Both null by default ⇒ every shipped code path below is byte-identical.
     // While CORNER-MOUNTED (ProxMiniSphere.mount) the sphere shrinks in place
@@ -225,16 +205,12 @@ export class NavSphere {
     if (this._win && typeof this._win.addEventListener === 'function') {
       this._win.addEventListener('resize', () => {
         this._onResize();
-        this._commsBottomCache = null; // resize may move the panel
       });
     }
 
     // Self-manage visibility via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.VIEW_CONFIG_CHANGE, (config) => {
       if (config.showNavSphere !== undefined) this.setVisible(config.showNavSphere);
-      // Comms panel can show/hide too — invalidate the cache so the next
-      // draw recomputes the bottom Y from the new layout.
-      this._commsBottomCache = null;
     });
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
       const gameplay = (to === GameStates.ORBITAL_VIEW || to === GameStates.APPROACH || to === GameStates.INTERACTION);
@@ -251,14 +227,6 @@ export class NavSphere {
       this._frameSkip = -1;
       this._syncCanvasDisplay();
       this._syncChip();
-    });
-    // Comms panel stepped to a new size — its bottom edge (which anchors the
-    // sphere's vertical position) moved. The height animates over ~0.3s, so
-    // keep recomputing through a short settle window (see update()).
-    eventBus.on(Events.COMMS_PANEL_RESIZED, () => {
-      this._commsBottomCache = null;
-      this._commsResizeSettleAt =
-        (typeof performance !== 'undefined' ? performance.now() : Date.now()) + Constants.COMMS_RESIZE_SETTLE_MS;
     });
     eventBus.on(Events.HUD_TARGET_CLICK, (data) => {
       this.setSelectedTarget(data.id);
@@ -450,7 +418,7 @@ export class NavSphere {
    * Zoom Ladder PROX NET additive opt — corner-minimap mount (S4,
    * FloorContract.FLOORS[4].costume 'NavSphere:corner-minimap', transform
    * 'navsphere-to-minimap'). While mounted the sphere draws at `radiusPx` in
-   * its usual comms-anchored top-right corner, the canvas is forced visible
+   * the bottom-right corner (where the 8-key disc sits), the canvas is forced visible
    * (the minimap is the floor costume — `_hidden`/`_minimized` are suspended
    * but PRESERVED, so the player's 8-key state resumes on unmount), and the
    * [8] badge is suppressed. Pass null to unmount and restore the shipped
@@ -509,14 +477,6 @@ export class NavSphere {
     this.ctx.clearRect(0, 0, this._width, this._height);
     if (!this._visible || !data || !data.playerPos) return;
 
-    // While the comms panel's height animates after a size step, force a
-    // per-draw recompute of its bottom edge so the sphere tracks it smoothly.
-    if (this._commsResizeSettleAt != null) {
-      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-      if (now < this._commsResizeSettleAt) this._commsBottomCache = null;
-      else this._commsResizeSettleAt = null;
-    }
-
     // Geolocation readout — refresh at 2 Hz (every 5th 10Hz draw frame)
     this._geoDrawCount++;
     if (this._geoDrawCount % 5 === 0 && data.playerPos) {
@@ -560,32 +520,15 @@ export class NavSphere {
     this._up.setFromMatrixColumn(m, 1);
     this._forward.setFromMatrixColumn(m, 2).negate();
 
-    // Sphere center. Unmounted (Task 10): bottom-right above the footer band
-    // (cx = W − HUD_EDGE_PX − R, cy = H − footerTop − 8 − R). Corner-mounted
-    // PROX NET keeps the comms-anchored top-right slot.
+    // Sphere center: bottom-right above the footer band, where the 8-key disc
+    // sits (cx = W − HUD_EDGE_PX − R, cy = H − footerTop − 8 − R). Corner-mounted
+    // PROX NET uses the same spot at its smaller radius, so it never depends on
+    // the COMMS height and can't cover the NEXT pane (n1-nav-corner).
     const R = this._cornerMountRadiusPx != null ? this._cornerMountRadiusPx : SPHERE_RADIUS;
-    let cx, cy;
-    if (this._cornerMountRadiusPx != null) {
-      cx = this._width - MARGIN_RIGHT - R;
-      if (this._commsBottomCache == null) {
-        if (!this._commsElCache) {
-          this._commsElCache = (this._doc && this._doc.getElementById)
-            ? this._doc.getElementById('hud-comms-panel')
-            : null;
-        }
-        this._commsBottomCache = this._commsElCache
-          ? this._commsElCache.getBoundingClientRect().bottom
-          : MARGIN_TOP_FALLBACK;
-      }
-      cy = this._commsBottomCache + COMMS_GAP + R;
-    } else {
-      const a = orbDiscCenter({
-        width: this._width, height: this._height, radius: R,
-        footerTop: this._footerTop, edgePx: HUD_EDGE_PX,
-      });
-      cx = a.cx;
-      cy = a.cy;
-    }
+    const { cx, cy } = orbDiscCenter({
+      width: this._width, height: this._height, radius: R,
+      footerTop: this._footerTop, edgePx: HUD_EDGE_PX,
+    });
     const ctx = this.ctx;
 
     ctx.save();
@@ -774,7 +717,10 @@ export class NavSphere {
       const latStr = `${geo.lat >= 0 ? '+' : ''}${geo.lat.toFixed(1)}\u00B0`;
       const lonStr = `${geo.lon >= 0 ? '+' : ''}${geo.lon.toFixed(1)}\u00B0`;
       const altStr = `${Math.round(geo.alt)}`;
-      ctx.fillText(`LAT ${latStr}  LON ${lonStr}  ALT ${altStr} km`, cx, cy - R - 14);
+      const geoText = `LAT ${latStr}  LON ${lonStr}  ALT ${altStr} km`;
+      // Centred on the ball, but never past the right screen edge (84 px corner ball).
+      const geoX = Math.min(cx, this._width - HUD_EDGE_PX - ctx.measureText(geoText).width / 2);
+      ctx.fillText(geoText, geoX, cy - R - 14);
     }
 
     // ---- ST-9.3 C-3: HIGH RECOIL warning indicator ----
@@ -790,7 +736,8 @@ export class NavSphere {
         // Calm-HUD: steady amber — a standing state, not an event; the WARN word
         // and amber already carry the warning (was a 0.64 Hz infinite blink).
         ctx.globalAlpha = 1;
-        ctx.fillText('WARN HIGH RECOIL', cx, warnY);
+        const warnX = Math.min(cx, this._width - HUD_EDGE_PX - ctx.measureText('WARN HIGH RECOIL').width / 2);
+        ctx.fillText('WARN HIGH RECOIL', warnX, warnY);
       }
     }
 
@@ -905,37 +852,6 @@ export class NavSphere {
     ctx.globalAlpha = 1;
     ctx.restore();
   }
-
-  /**
-   * @private Draw the minimized NavSphere — just a compact LAT / LON / ALT
-   * one-liner at the top-right corner where the sphere would sit (8 key).
-   */
-  _drawMinReadout() {
-    const ctx = this.ctx;
-    if (!ctx) return;
-    // Anchor at the sphere's corner; reuse the cached comms-panel bottom.
-    if (this._commsBottomCache == null) {
-      if (!this._commsElCache) this._commsElCache = document.getElementById('hud-comms-panel');
-      this._commsBottomCache = this._commsElCache
-        ? this._commsElCache.getBoundingClientRect().bottom
-        : MARGIN_TOP_FALLBACK;
-    }
-    const x = this._width - MARGIN_RIGHT - 8;
-    const y = this._commsBottomCache + COMMS_GAP + 12;
-
-    const geo = this._geoCache;
-    const latStr = geo ? `${geo.lat >= 0 ? '+' : ''}${geo.lat.toFixed(1)}\u00B0` : '--';
-    const lonStr = geo ? `${geo.lon >= 0 ? '+' : ''}${geo.lon.toFixed(1)}\u00B0` : '--';
-    const altStr = geo ? `${Math.round(geo.alt)} km` : '--';
-
-    ctx.save();
-    ctx.font = mono(11);
-    ctx.fillStyle = C.geo;
-    ctx.textAlign = 'right';
-    ctx.fillText(`NAV  LAT ${latStr}  LON ${lonStr}  ALT ${altStr}`, x, y);
-    ctx.restore();
-  }
-
 
   /**
    * Hybrid log + dual-zone distance mapping.
