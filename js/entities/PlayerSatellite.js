@@ -166,6 +166,7 @@ const _v3TmpD  = new THREE.Vector3();
 // Mother-wings step 4: shared raycaster for the throttled body-cell shading
 // estimate (_computeBodyPowerW) — one instance, reused every call.
 const _solarRaycaster = new THREE.Raycaster();
+_solarRaycaster.layers.enableAll();   // ship meshes sit on the near-field layer (SceneManager.registerNearFieldRoot)
 /* RCS direction-aware firing temps (per-frame, single instance — no alloc). */
 const _rcsL  = new THREE.Vector3();
 const _rcsLn = new THREE.Vector3();
@@ -9791,6 +9792,7 @@ export class PlayerSatellite extends THREE.Group {
     // ray's pick threshold; additive glow shells are light, not matter.
     const list = [];
     for (const root of roots) {
+      root.updateWorldMatrix(true, true);   // the renderer refreshes matrixWorld after player.update moves the ship: this root's matrices are last frame's
       root.traverseVisible((o) => {
         if (!o.isMesh || o.isSprite) return;
         const m = Array.isArray(o.material) ? o.material[0] : o.material;

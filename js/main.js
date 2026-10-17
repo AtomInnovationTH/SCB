@@ -5395,6 +5395,7 @@ async function init() {
                       cam.position.clone(),
                       new THREE.Vector3(sp.x - cam.position.x, sp.y - cam.position.y, sp.z - cam.position.z).normalize());
                     ray.params.Line.threshold = 0; ray.params.Points.threshold = 0;
+                    ray.layers.enableAll();   // ship meshes sit on the near-field layer
                     const hits = ray.intersectObject(player, true).filter(h => h.object.isMesh);
                     if (hits.length) {
                       hullHitM = +(hits[0].distance / M).toFixed(2);
