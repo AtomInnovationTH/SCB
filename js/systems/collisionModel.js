@@ -7,7 +7,9 @@
  * calls this once per candidate and routes the result to graduated consequences:
  *
  *   'none'     → nothing (out of envelope, receding, or a gentle sub-threshold touch)
- *   'warning'  → COLLISION_WARNING (HUD proximity heads-up; no damage)
+ *   'warning'  → COLLISION_WARNING (HUD proximity heads-up; no damage). Needs a closing
+ *                speed at or above the harmless-touch floor (GLANCING_MIN_SPEED_MS): a piece
+ *                too slow to hurt on contact draws no red warning (r3-slow-warning, 2026-10-17).
  *   'glancing' → subsystem damage (solar-panel health hit + battery drain) + comms
  *   'hard'     → GAME_COLLISION (routed to the Whipple-shield absorb / game-over path)
  *
@@ -24,6 +26,9 @@ import { Constants } from '../core/Constants.js';
 
 /**
  * Classify a single debris contact.
+ * 2026-10-17 (r3-slow-warning): the 'warning' band (inside WARN_RADIUS_M, outside the
+ * touch envelope) needs a closing speed at or above model.GLANCING_MIN_SPEED_MS — the
+ * speed below which a touch is already harmless — so a slow drifter raises no red strip.
  * @param {object} contact
  * @param {number} contact.distanceM      — effective closest distance this scan window (m, ≥0)
  * @param {number} contact.hullRadiusM    — player hull contact radius (m); falls back to model default
@@ -46,9 +51,10 @@ export function classifyContact({ distanceM, hullRadiusM, closingSpeedMs, massKg
   // Out of the warning envelope entirely.
   if (d > warnRadius) return 'none';
 
-  // Inside the warning envelope but not touching: a heads-up only while closing.
+  // Inside the warning envelope but not touching: a heads-up only while closing
+  // fast enough to hurt (at or above the harmless-touch floor; r3-slow-warning).
   if (d > contactRadius) {
-    return closing > 0 ? 'warning' : 'none';
+    return (closing > 0 && closing >= (m.GLANCING_MIN_SPEED_MS || 0)) ? 'warning' : 'none';
   }
 
   // --- Physical contact envelope ---
