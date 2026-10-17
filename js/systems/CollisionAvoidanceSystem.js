@@ -19,7 +19,8 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
-import { classifyContact, sweptClosestDistM } from './collisionModel.js';
+import { classifyContact } from './collisionModel.js';
+import { TimeAuthority } from './TimeAuthority.js';
 import { audioSystem } from './AudioSystem.js';
 import { engineGasLowFrac } from './ResourceSystem.js';
 
@@ -47,6 +48,11 @@ export class CollisionAvoidanceSystem {
 
     /** @type {number} Scan throttle accumulator */
     this._scanTimer = 0;
+
+    /** @type {number} WORLD (game) seconds since the previous scan tick — the contact scan's look-ahead window */
+    this._worldSinceScan = 0;
+    /** @type {boolean} true once update() has been given a world dt (old callers pass none) */
+    this._worldDtSeen = false;
 
     /** @type {object|null} Current tracked threat */
     this._currentThreat = null;
@@ -198,6 +204,7 @@ export class CollisionAvoidanceSystem {
         // Not in gameplay — freeze scanning but don't disable toggle. Reset the
         // spawn-grace clock so re-entering gameplay re-arms after the grace.
         this._scanTimer = 0;
+        this._worldSinceScan = 0;
         this._currentThreat = null;
         this._gameplayElapsed = 0;
       }
@@ -253,6 +260,8 @@ export class CollisionAvoidanceSystem {
   /** Reset all state (called on GAME_RESET) */
   reset() {
     this._scanTimer = 0;
+    this._worldSinceScan = 0;
+    this._worldDtSeen = false;
     this._currentThreat = null;
     this._lastDodgeTime = -Infinity;
     this._elapsedTime = 0;
@@ -315,10 +324,19 @@ export class CollisionAvoidanceSystem {
 
   /**
    * Main update tick — called after autopilot, before player.update().
-   * @param {number} dt — delta time in seconds
+   * @param {number} dt — REAL delta time in seconds (all timers here run on it)
+   * @param {number} [dtWorld] — WORLD (game) seconds that passed this frame
+   *   (`timeAuthority.dtWorld`); the contact scan's look-ahead window is the
+   *   sum of these since the previous scan tick. Omitted → the nominal
+   *   SCAN_INTERVAL × TIME_SCALE_GAMEPLAY.
    */
-  update(dt) {
+  update(dt, dtWorld) {
     if (!this._player || !this._debrisField) return;
+
+    if (dtWorld !== undefined && dtWorld !== null) {
+      this._worldDtSeen = true;
+      if (dtWorld > 0) this._worldSinceScan += dtWorld;
+    }
 
     this._elapsedTime += dt;
     if (this._inGameplay) this._gameplayElapsed += dt;
@@ -333,6 +351,16 @@ export class CollisionAvoidanceSystem {
     if (this._scanTimer < CA.SCAN_INTERVAL) return;
     this._scanTimer = 0;
 
+    // World seconds since the previous scan tick (reset on EVERY tick, before
+    // the armed check, so the spawn grace never piles into one window), clamped
+    // to 10 s: the ladder can run time at 4x/20x/100x and a straight line over
+    // minutes is wrong. No world dt ever supplied → the nominal window.
+    const CAw = Constants.COLLISION_AVOIDANCE;
+    const windowWorldS = this._worldDtSeen
+      ? Math.min(this._worldSinceScan, CAw.CONTACT_WINDOW_MAX_S)
+      : undefined;
+    this._worldSinceScan = 0;
+
     // --- Scan for threats ---
     const playerPos = this._player.getPosition();
     const playerVel = this._player.getVelocity();
@@ -343,7 +371,7 @@ export class CollisionAvoidanceSystem {
     // to debris. Internally gated (gameplay / onboarding / spawn-grace /
     // ceremony / per-debris cooldown / captured-pinned exemption). Reuses this
     // 4 Hz cadence + the already-computed player state — no new per-frame scan.
-    this._scanAndProcessContacts(playerPos, playerVel);
+    this._scanAndProcessContacts(playerPos, playerVel, windowWorldS);
 
     // --- Auto-dodge (gated by the enable toggle + ARM_PILOT suppression) -----
     if (!this._enabled || this._armPilotMode) return;
@@ -402,13 +430,20 @@ export class CollisionAvoidanceSystem {
    * @private
    * @param {THREE.Vector3} playerPos
    * @param {{x,y,z}} playerVel — km/s
+   * @param {number} [windowWorldS] — look-ahead window in WORLD seconds (default
+   *   the nominal world time of one SCAN_INTERVAL, TimeAuthority.baseGameDt); 0 grades by the current distance only
    */
-  _scanAndProcessContacts(playerPos, playerVel) {
+  _scanAndProcessContacts(playerPos, playerVel, windowWorldS) {
     if (!this._collisionArmed()) return;
 
     const CA = Constants.COLLISION_AVOIDANCE;
     const CM = Constants.COLLISION_MODEL || {};
-    const scanInterval = CA.SCAN_INTERVAL;
+    const T = (typeof windowWorldS === 'number' && windowWorldS >= 0)
+      ? windowWorldS
+      : TimeAuthority.baseGameDt(CA.SCAN_INTERVAL);
+    // Pre-filter reaches as far as the fastest crossing can travel in the window.
+    const reach = CA.SCAN_RADIUS + CA.CONTACT_PREFILTER_SPEED_MS * M * T;
+    const reachSq = reach * reach;
     const hullRadiusM = CM.HULL_RADIUS_M || 12;
 
     const list = this._debrisField.debrisList;
@@ -431,9 +466,9 @@ export class CollisionAvoidanceSystem {
       const dy = sp.y - playerPos.y;
       const dz = sp.z - playerPos.z;
       const distSq = dx * dx + dy * dy + dz * dz;
-      if (distSq > CA.SCAN_RADIUS_SQ) continue;
+      if (distSq > reachSq) continue;
 
-      // --- Closing speed from full cartesian state (m/s). Use the zero-alloc
+      // --- Relative state (world seconds). Use the zero-alloc
       //     scratch variant so the emitter loop allocates nothing per candidate. ---
       orbitToSceneCartesianInto(debris.orbit, this._contactScratchPos, this._contactScratchVel);
       const vel = this._contactScratchVel;
@@ -441,11 +476,22 @@ export class CollisionAvoidanceSystem {
       const rvy = (vel.y - playerVel.y) * KM_TO_SCENE;
       const rvz = (vel.z - playerVel.z) * KM_TO_SCENE;
       const rLen = Math.sqrt(distSq);
-      // Positive when approaching (distance shrinking).
-      const closingScene = rLen > 1e-12 ? -(dx * rvx + dy * rvy + dz * rvz) / rLen : 0;
-      const closingMs = closingScene / M;
-      const distM = rLen / M;
-      const effDistM = sweptClosestDistM(distM, closingMs, scanInterval);
+      // Real closest pass inside the window: t* = clamp(-(r.v)/|v|^2, 0, T),
+      // graded distance |r + v t*|.
+      const rDotV = dx * rvx + dy * rvy + dz * rvz;
+      const vSq = rvx * rvx + rvy * rvy + rvz * rvz;
+      let tStar = vSq > 1e-30 ? -rDotV / vSq : 0;
+      if (tStar < 0) tStar = 0; else if (tStar > T) tStar = T;
+      const cx = dx + rvx * tStar;
+      const cy = dy + rvy * tStar;
+      const cz = dz + rvz * tStar;
+      const effDistM = Math.sqrt(cx * cx + cy * cy + cz * cz) / M;
+      // Approaching: grade at the relative speed (constant along a straight
+      // pass = the impact speed). Receding keeps the signed radial rate (<= 0)
+      // so classifyContact still reads it as receding.
+      const closingMs = rDotV < 0
+        ? Math.sqrt(vSq) / M
+        : (rLen > 1e-12 ? -rDotV / rLen / M : 0);
 
       const severity = classifyContact({
         distanceM: effDistM,

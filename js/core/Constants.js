@@ -4852,9 +4852,18 @@ export const Constants = {
                                      // propagation via gameDt = dtReal × TIME_SCALE_GAMEPLAY,
                                      // so 10 "TCA seconds" here elapse in ~1 real wall-clock
                                      // second at the shipped 10× rate. CA's own scan/cooldown/
-                                     // override timers below run on REAL dt — a pre-existing
-                                     // detector-timing question this lane does not change.)
+                                     // override timers below run on REAL dt. The contact
+                                     // sweep (_scanAndProcessContacts) now also measures its
+                                     // look-ahead window in WORLD seconds — main.js passes
+                                     // dtWorld to update().)
     SCAN_INTERVAL: 0.25,            // seconds — scan every 250 ms (4 Hz)
+    // Contact sweep (q2-contact-sweep): the contact scan's look-ahead window is the
+    // WORLD seconds that passed since the previous scan (main.js passes dtWorld),
+    // not SCAN_INTERVAL real seconds; it is clamped to this many world seconds.
+    CONTACT_WINDOW_MAX_S: 10,       // world seconds — max contact look-ahead window
+    // The contact pre-filter reaches SCAN_RADIUS + this speed x the window: the
+    // fastest crossing in LEO (measured max relative speed 15.6 km/s at mission-2 start).
+    CONTACT_PREFILTER_SPEED_MS: 16000, // m/s
     // real-dodge lane (2026-09-15): BASE_DODGE_DV is now a FLOOR, not a peak.
     // The dodge magnitude is geometry-driven (see DODGE_DV_CEILING_MS below);
     // this is the minimum committed burn once a dodge fires, so a threat that

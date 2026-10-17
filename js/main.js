@@ -6866,7 +6866,7 @@ function gameLoop(timestamp) {
 
     // Collision Avoidance — after autopilot, before player.update (dodge impulse applied to _rcsVelocity)
     // Held world (Session I follow-up): no scan, no dodge, no consequence while the clock is 0.
-    if (!_worldHeld) { try { collisionAvoidanceSystem.update(dt); } catch (e) { console.error('[GameLoop] collisionAvoidance:', e); } }
+    if (!_worldHeld) { try { collisionAvoidanceSystem.update(dt, dtWorld); } catch (e) { console.error('[GameLoop] collisionAvoidance:', e); } }
 
     // Update game state timer
     // Held world (Session I follow-up): pass zero rather than skipping the
