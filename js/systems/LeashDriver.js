@@ -214,7 +214,7 @@ export class LeashDriver {
   /** The angles this hand-off runs with, from the catch and the bags already on the tips. */
   _params(debris, tipIndex) {
     const p = this.player, tc = this._tc, FL = Constants.THERMAL.FLOWER;
-    const radiusM = (debris.sizeMeter || 2) / 2;
+    const radiusM = DebrisField.trueReachM(debris, 2);      // tip-fit: the catch as drawn (true size), not half its nominal size
     let heldR = 0;
     for (const sp of tc.spheres()) if (sp.r > heldR) heldR = sp.r;      // the largest bag already held: the table's column
     const thetaHRad = handoffThetaDeg(radiusM, heldR) * DEG;
@@ -257,7 +257,7 @@ export class LeashDriver {
     const tipBody = this._tipBodyAt(tipIndex, prm.thetaHRad);
     if (!tipBody) return false;
     const bagBodyNow = qInvRot(this._quat(), this._toMachine(sp));
-    const plan = planHandoff({ anchorBody: leashAnchorShip(tipIndex), tipBody, bagBodyNow, dMin: minHandoffD((debris.sizeMeter || 2) / 2), dMax: K.D_MAX_M });
+    const plan = planHandoff({ anchorBody: leashAnchorShip(tipIndex), tipBody, bagBodyNow, dMin: minHandoffD(prm.radiusM), dMax: K.D_MAX_M });
     return plan.ok;
   }
 
@@ -291,7 +291,7 @@ export class LeashDriver {
     if (!net || !debris || !debris._scenePosition || !tc || this._h || this.refusal(net)) return false;
     if (!(tipIndex >= 0 && tipIndex < 4) || tc.has(tipIndex)) return false;
     const massKg = net.capturedMass || debris.mass || 0;
-    const radiusM = (debris.sizeMeter || 2) / 2;
+    const radiusM = DebrisField.trueReachM(debris, 2);      // tip-fit: the keep-out and the stow radius follow the drawn catch
     if (!tc.fits(radiusM)) return false;
     const reel = !!(opts && opts.noseReel) && (net._catchSeatM || 0) > (net._homeSeatM || 0) + 1e-9;
 

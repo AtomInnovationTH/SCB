@@ -1833,6 +1833,24 @@ export class DebrisField {
   }
 
   /**
+   * Lane tip-fit (2026-10-17) — the ONE radius (m) a radiator tip must clear for this catch: the farthest point the
+   * catch is DRAWN at, from the point it is pinned and bagged at, at TRUE size with no readability floor
+   * (`sizeMeter × DebrisWireframe.getOriginRadius`). `sizeMeter / 2` is not that: the meshes reach 1.5 – 3.6 × it
+   * (fragment 2.4-2.9, rocketBody 2.0, defunctSat 3.6, missionDebris 1.5, cubesat 1.5; probe 2026-10-17). Every tip
+   * check (CaptureNet._tryLeash, LeashDriver, TipCargo.stow) reads this, so the physics sphere encloses the drawn mesh.
+   * @param {{sizeMeter?: number, type?: string, id?: number}} debris
+   * @param {number} [defaultSizeM=0] — size used when `sizeMeter` is missing / 0 / not a number (as the old `||` did)
+   * @returns {number} metres
+   */
+  static trueReachM(debris, defaultSizeM = 0) {
+    const s = debris ? debris.sizeMeter : undefined;
+    const sizeM = (Number.isFinite(s) && s !== 0) ? s : defaultSizeM;
+    // no `type` = a test rig that never drew a mesh: the legacy sphere
+    if (!debris || !debris.type) return sizeM / 2;
+    return sizeM * DebrisWireframe.getOriginRadius(debris.type, debris.id);
+  }
+
+  /**
    * Atmospheric-drag deceleration (km/s²) for one debris piece — the ONE place
    * the drag ballistic coefficient (area / mass) is chosen, factored out of
    * update()'s propagation loop so it is unit-testable (test-WelcomeDrag.js).

@@ -3882,7 +3882,7 @@ export class CaptureNetSystem {
     const drv = player && player.leashDriver;
     const tc = player && player.tipCargo;
     if (!drv || !tc || typeof drv.start !== 'function') return 'rack';
-    const radiusM = (d.sizeMeter || 2) / 2;
+    const radiusM = DebrisField.trueReachM(d, 2);       // tip-fit: the catch as drawn, not half its nominal size
     if (!tc.fits(radiusM)) return 'rack';
     const tip = tc.pickTip();
     if (tip == null) return 'rack';

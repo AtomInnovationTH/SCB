@@ -40,6 +40,7 @@ import {
   applyShipRelativeAttitude,
   clearShipRelativeAttitude,
 } from '../entities/CaptureNet.js';
+import { DebrisField } from '../entities/DebrisField.js';
 
 const M = Constants.SCENE_UNITS_PER_METER ?? 0.00001;
 
@@ -256,7 +257,7 @@ export class TipCargo {
     if (!rec) return false;
     for (const s of this._slots) if (s && s.debris === debris) return false;
     const massKg = Number.isFinite(opts.massKg) ? opts.massKg : (debris.mass || 0);
-    const radiusM = Number.isFinite(opts.radiusM) ? opts.radiusM : ((debris.sizeMeter || 0) / 2);
+    const radiusM = Number.isFinite(opts.radiusM) ? opts.radiusM : DebrisField.trueReachM(debris, 0);   // tip-fit: the catch as drawn
     if (!this.fits(radiusM)) return false;
 
     const dirLocal = new THREE.Vector3(1, 0, 0);
