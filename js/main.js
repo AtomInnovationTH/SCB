@@ -2199,10 +2199,11 @@ async function init() {
           if (!FL || typeof player.getFlowerStatus !== 'function') return null;
           // Owner amendment 2026-09-09 (plan 1788863400000 last section, spec 4):
           // a flower left FOLDED by the SAFETY OVERRIDE sweep (launch lock armed,
-          // commanded / live θ below the CLOSED floor) says so on the REFIT chip too
+          // commanded / live θ at the fold, 0°) says so on the REFIT chip too
           // — 'FLOWER · FOLDED', unpressed. Otherwise the bar's readout (D4).
+          // (The rest is 0° too since 2026-10-16, so the lock — not the angle — tells a fold from the rest.)
           const cmd = player._flowerTargetTheta ?? player._flowerThetaRad;
-          if (player.flowerLaunchLocked === true && cmd < (FL.POSE_FLOOR_DEG * Math.PI) / 180) return 'FOLDED';
+          if (player.flowerLaunchLocked === true && cmd <= (FL.POSE_LAUNCH_DEG * Math.PI) / 180 + 1e-9) return 'FOLDED';
           return _flowerReadout();
         },
         toggle: () => {
@@ -2287,8 +2288,8 @@ async function init() {
           eventBus.emit(Events.COMMS_MESSAGE, {
             sender: 'THERMAL',
             text: deploying
-              ? 'OVERRIDE — aft radiator deploying: struts swing out to 146°, wings open between 60° and 90°. Engines back as soon as it leaves the launch fold.'
-              : 'OVERRIDE — aft radiator folding: struts swing fore to the launch pack (θ 0°), wings fold between 90° and 60°. FEEP INHIBITED until deployed.',
+              ? 'OVERRIDE — aft radiator deploying: struts swing out to 146°, wings open between 60° and 90°.'
+              : 'OVERRIDE — aft radiator folding: struts swing fore to the closed rest (0°), wings fold between 90° and 60°. Engines keep working.',
             priority: 'info',
           });
         },

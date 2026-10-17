@@ -1699,12 +1699,10 @@ export class ArmUnit {
     this._springFired = false;
     this._dockWorldPos = this.position.clone();
 
+    // launch-seq: no launch line here — she is only clamped now; the one line is
+    // "Spring released. Separating" at ARM_SPRING_FIRED (see _updateLaunching).
     eventBus.emit(Events.ARM_DEPLOYED, {
       armId: this.id, type: this.type, targetId: target.id,
-    });
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.displayName}: Cradle launch. Target ${target.id || 'acquired'}`,
-      priority: 'info',
     });
     return true;
   }
@@ -1771,10 +1769,6 @@ export class ArmUnit {
     eventBus.emit(Events.ARM_DEPLOYED, {
       armId: this.id, type: this.type, mode: 'freefly',
     });
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.displayName}: Cradle launch. Free-fly mode`,
-      priority: 'info',
-    });
     return true;
   }
 
@@ -1826,9 +1820,6 @@ export class ArmUnit {
 
     eventBus.emit(Events.TRAWL_START, { armId: this.id });
     eventBus.emit(Events.ARM_DEPLOYED, { armId: this.id, type: this.type, mode: 'trawling' });
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      sender: this.displayName, text: 'Cradle launch. Trawling deployed', priority: 'info',
-    });
 
     return true;
   }
@@ -2575,8 +2566,11 @@ export class ArmUnit {
    // NOTE: _prevParentPos is updated AFTER the state machine (below) so that the
    // drift calculation `(parentPos - _prevParentPos)` in _updateTransit still sees
    // the correct per-frame parent displacement, not zero.
+   // launch-seq (Decision 6): DOCKING is corrected too. It was skipped here (initial commit) while
+   // _updateDocking only lerps 5 %/frame to the dock point, so on an orbiting ship she fell behind by
+   // ~19 frames of ship travel (measured 2.4 km at 60 fps over one DOCKING, then snapped home at DOCKED).
    if (parentPos) {
-     if (this.state !== S.DOCKED && this.state !== S.DOCKING) {
+     if (this.state !== S.DOCKED) {
        if (this._prevParentPos) {
          this.position.x += (parentPos.x - this._prevParentPos.x);
          this.position.y += (parentPos.y - this._prevParentPos.y);
@@ -2588,7 +2582,7 @@ export class ArmUnit {
    switch (this.state) {
      case S.DOCKED:     this._updateDocked(dt, parentPos, parentQuat); break;
      case S.UNDOCKING:  this._updateUndocking(dt, parentPos); break;
-     case S.LAUNCHING:  this._updateLaunching(dt, parentPos); break;
+     case S.LAUNCHING:  this._updateLaunching(dt, parentPos, parentQuat); break;
      case S.TRANSIT:    this._updateTransit(dt, parentPos); break;
      case S.APPROACH:   this._updateApproach(dt, parentPos); break;
      case S.NETTING:    this._updateNetting(dt); break;
@@ -2800,6 +2794,13 @@ export class ArmUnit {
       // [DBG-ARM] ATTITUDE per-frame log removed (excessive noise — was firing every frame
       // for every arm in every state). If needed, re-enable with a much tighter throttle.
     }
+
+    // launch-seq (Decision 5): _updateTether (above) baked the line's counter-rotation from the PREVIOUS
+    // frame's group quaternion, and the slerp just now changed it. The line's vertices are group-local, so
+    // the stale counter-rotation swung the whole line about her end by this frame's slerp delta: at
+    // TRANSIT -> REELING the reel heading flips ~180°, the 10 % slerp turns her ~18° in one frame, and a
+    // 30 m line's strut-side end jumped 9 m (then eased back as the deltas shrank, ~35 frames). Re-sync it.
+    if (this.tetherLine.visible) this.tetherLine.quaternion.copy(this.group.quaternion).invert();
 
     // Thruster plume animation
     this._updatePlumes(dt);
@@ -3080,6 +3081,7 @@ export class ArmUnit {
         eventBus.emit(Events.ARM_SPRING_FIRED, {
           armId: this.id, type: this.type, speed: this.launchSpeed, mode: 'normal',
         });
+        this._emitSpringReleasedLine();
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `${this.displayName}: Clear of core. In transit`,
           priority: 'info',
@@ -3095,17 +3097,31 @@ export class ArmUnit {
    * LAUNCHING: V5 crossbow spring release sequence.
    * Phase 1: Magnetic clamp release (0..CROSSBOW_UNDOCK_TIME)
    * Phase 2: Spring release (CROSSBOW_UNDOCK_TIME..+ CROSSBOW_RELEASE_TIME)
+   *
+   * launch-seq (2026-10-17): until the spring fires she is still CLAMPED — physically part of the
+   * ship — so every frame she rides her strut tip, from the same pose source as DOCKED, whatever
+   * the mother does. (Before, she kept her old world position while the mother turned and her
+   * strut tip walked away from her: 0.26 m in the measured run.) The spring then pushes from the tip.
+   * @param {number} dt
+   * @param {THREE.Vector3} parentPos
+   * @param {THREE.Quaternion} [parentQuat] — the quaternion _updateDocked uses
    * @private
    */
-  _updateLaunching(dt, parentPos) {
+  _updateLaunching(dt, parentPos, parentQuat) {
     this.mesh.visible = true;
     this.tetherLine.visible = true;
 
     this._undockTimer = (this._undockTimer || 0) + dt;
 
+    if (!this._springFired && parentPos) {
+      // Clamped: ride the strut tip (also on the frame the spring fires, so she departs from the tip).
+      const offset = _dockOffTmp.copy(this.dockOffset);
+      if (parentQuat) offset.applyQuaternion(parentQuat);
+      this.position.copy(parentPos).add(offset);
+    }
+
     if (this._undockTimer < CROSSBOW_UNDOCK_TIME) {
-      // Phase 1: Magnetic clamp release — arm holds at current position
-      // (position was set correctly by _updateDocked on prior frame)
+      // Phase 1: Magnetic clamp release — she holds on her strut tip (above)
     } else if (this._undockTimer >= CROSSBOW_UNDOCK_TIME && !this._springFired) {
       // Phase 2: Fire the spring!
       this._springFired = true;
@@ -3117,6 +3133,7 @@ export class ArmUnit {
         armId: this.id, type: this.type, speed: this.launchSpeed,
         mode: this._trawlingMode ? 'trawl' : 'normal',
       });
+      this._emitSpringReleasedLine();
     }
 
     if (this._springFired) {
@@ -3145,6 +3162,20 @@ export class ArmUnit {
       this._undockTimer = 0;
       this._springFired = false;
     }
+  }
+
+  /**
+   * launch-seq: the ONE launch line, at the real moment — the spring has fired and she departs.
+   * Every launch path (target, free-fly, trawl, ceremony, number key) goes through ARM_SPRING_FIRED,
+   * with or without the camera cut-scene, so this replaces the deploy-time "Cradle launch" /
+   * "deployed. Tracking…" lines and the cut-scene's own copy.
+   * @private
+   */
+  _emitSpringReleasedLine() {
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `${this.displayName}: Spring released. Separating`,
+      priority: 'info',
+    });
   }
 
   /** TRANSIT: fly toward target using FEEP thrust */
@@ -5865,7 +5896,7 @@ export class ArmUnit {
     // window. (Accel ramp-UP from launch is implicit — the daughter starts at
     // rest at the GRAPPLED co-location and the per-frame move clamps to the
     // remaining distance.)
-    const accel = P.ACCEL ?? 8.0;
+    const accel = P.ACCEL ?? 3.4;
     const vDecel = Math.sqrt(vDock * vDock + 2 * accel * Math.max(0, distMeters));
     let speed = Math.min(vCruise, vDecel);
 

@@ -1774,9 +1774,6 @@ export class CameraSystem {
     const lookDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
     c.prevLook.copy(this.camera.position).add(lookDir.multiplyScalar(0.001));
 
-    // Track spring-fire camera shake (trigger once during Phase 1)
-    c._shookOnFire = false;
-
     // Reset dynamic slew multiplier — recomputed on first Phase 1 frame
     c._slewMultiplier = undefined;
 
@@ -2036,14 +2033,8 @@ export class CameraSystem {
           arm.position.copy(playerPos).add(tipOffset);
         }
 
-        // Comms message on spring fire — detect the moment _springFired flips true.
-        if (c._springLatch && !c._shookOnFire) {
-          c._shookOnFire = true;
-          eventBus.emit(Events.COMMS_MESSAGE, {
-            text: `${arm.displayName}: Spring released. Separating`,
-            priority: 'info',
-          });
-        }
+        // launch-seq: the "Spring released. Separating" line is ArmUnit's now (at ARM_SPRING_FIRED, so it
+        // shows with or without this cut-scene); the copy that lived here made it cut-scene-only.
 
         // Camera: stay exactly at CHASE (tracks orbiting player at ~7.6 km/s).
         // Look directly at the arm — starts at strut tip, flies away after spring fires.

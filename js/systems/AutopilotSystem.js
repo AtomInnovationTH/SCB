@@ -78,6 +78,17 @@ const TURN_MIN_MAG = 0.02;
 /** Body axis → RCS couple name, for the two couples with real authority (x = pitch, y = yaw). */
 const TURN_COUPLES = Object.freeze([['pitch', 'x'], ['yaw', 'y']]);
 
+/**
+ * launch-seq: the attitude hold that carries an aimed daughter launch from the end of the aim to the spring.
+ * While she is clamped on LAUNCHING (before the spring) it stays at most CROSSBOW_UNDOCK_TIME + this many seconds
+ * (safety only: the spring releases it at CROSSBOW_UNDOCK_TIME); while her launch waits in the keep-out gate
+ * (DOCKED, pending) it stays at most LAUNCH_HOLD_GATE_MAX_S; a launch that never starts (refused) lets go after
+ * LAUNCH_HOLD_GRACE_S (the aim promise's callback runs at the end of the frame the aim resolved in).
+ */
+const LAUNCH_HOLD_CLAMP_EXTRA_S = 1.0;
+const LAUNCH_HOLD_GATE_MAX_S = 20;
+const LAUNCH_HOLD_GRACE_S = 0.2;
+
 /** How often to re-scan for nearest large debris (seconds) */
 const DEBRIS_SCAN_INTERVAL = 2.0;
 
@@ -215,6 +226,8 @@ export class AutopilotSystem {
     this._attitudeHoldOwner = null;
     /** @type {number} Seconds the current attitude hold has been active (safety cap). */
     this._attitudeHoldElapsed = 0;
+    /** launch-seq: the attitude hold from the end of an aimed daughter launch's aim to her spring, or null. */
+    this._launchHold = null;
 
     // Aim-before-launch: scratch for the attitude coroutine (net + daughter modes).
     this._aimBoresightWorld = new THREE.Vector3();
@@ -366,6 +379,126 @@ export class AutopilotSystem {
     this._attitudeHoldElapsed += dt;
     const timeout = this._attitudeHoldTimeoutS ?? Constants.AIM.AIM_TIMEOUT_S;
     if (this._attitudeHoldElapsed > timeout) this.releaseAttitudeHold();
+  }
+
+  /**
+   * launch-seq: keep the mother where the aim left her until the spring fires. Owner 2026-10-16: "daughters seem
+   * to be released, then mother turns, then crossbow fires, looks strange". The aim cleanup used to drop the
+   * hold the moment the aim resolved, so the mother handed back to the player, the clamped daughter's tether tier
+   * pulled her back toward her heading and she swung back ~24° (measured) while the strut walked off the target.
+   * Under this hold the attitude owner stays AIM: no dynamics, no recentering, no tether spring.
+   * Not started when somebody else already holds the attitude (a net reel-in, the leash hand-off): theirs stays.
+   * @param {object} arm — the daughter being launched
+   * @private
+   */
+  _beginLaunchHold(arm) {
+    if (!arm) return;
+    const maxS = LAUNCH_HOLD_GATE_MAX_S + (Constants.CROSSBOW_UNDOCK_TIME ?? 1.5) + LAUNCH_HOLD_CLAMP_EXTRA_S + 1;
+    const h = this._launchHold;
+    // A second D-key launch while the first still holds: the one hold covers both. Restart its clock so the
+    // newcomer gets her whole gate wait + clamp; released only when every daughter it covers is done.
+    if (h && this._launchHoldIsOurs(h)) {
+      if (!h.entries.some((e) => e.arm === arm)) h.entries.push(this._launchHoldEntry(arm));
+      this._attitudeHoldElapsed = 0;
+      h.lastElapsed = 0;
+      return;
+    }
+    if (this._attitudeHold) return;
+    this.holdAttitude(maxS);
+    this._launchHold = {
+      entries: [this._launchHoldEntry(arm)], timeoutS: maxS, lastElapsed: this._attitudeHoldElapsed,
+      onManual: () => this._launchHoldManualRotate(),
+    };
+    eventBus.on(Events.MOTHER_MANUAL_ROTATE, this._launchHold.onManual);
+  }
+
+  /** @private */
+  _launchHoldEntry(arm) { return { arm, t: 0, ticks: 0, clampT: 0, clamped: false }; }
+
+  /** @private Is the attitude hold still the one this launch hold took (nobody re-timed, took over or released it)? */
+  _launchHoldIsOurs(h) {
+    return !!(this._attitudeHold && !this._attitudeHoldOwner
+      && this._attitudeHoldTimeoutS === h.timeoutS && this._attitudeHoldElapsed >= h.lastElapsed);
+  }
+
+  /** @private Forget the launch hold (the attitude hold itself is the caller's business). */
+  _clearLaunchHold() {
+    const h = this._launchHold;
+    this._launchHold = null;
+    if (h && h.onManual) eventBus.off(Events.MOTHER_MANUAL_ROTATE, h.onManual);
+  }
+
+  /**
+   * launch-seq F6: an arrow / rotation key press while a D-key launch still waits in the keep-out gate (before her
+   * spring is even clamped) drops that launch with the cancel message the aim uses, and gives the ship back to the
+   * player. A daughter already in the 1.5 s clamp keeps the hold: the press does nothing until her spring.
+   * @private
+   */
+  _launchHoldManualRotate() {
+    const h = this._launchHold;
+    if (!h || !this._launchHoldIsOurs(h)) return;
+    const am = this._armManager;
+    const S = Constants.ARM_STATES;
+    let dropped = false;
+    h.entries = h.entries.filter((e) => {
+      const arm = e.arm;
+      if (arm.state !== S.DOCKED) return true;                       // clamped or flying: keep
+      const waiting = !!(am && am._pendingLaunches && am._pendingLaunches.has(arm.index));
+      if (!waiting) return true;                                     // between the aim end and her gate: nothing to cancel yet
+      if (typeof am.cancelPendingLaunch === 'function') am.cancelPendingLaunch(arm.index);
+      dropped = true;
+      return false;
+    });
+    if (dropped) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'Launch aborted — Manual attitude input.', priority: 'warning', source: 'HOUSTON',
+      });
+    }
+    if (h.entries.length === 0) {
+      this._clearLaunchHold();
+      this.releaseAttitudeHold({ ifUnowned: true });
+    }
+  }
+
+  /**
+   * launch-seq: release the launch hold when the spring has fired, or the launch is refused / cancelled / over,
+   * or its safety time is up. Runs right after _tickAttitudeHold. A hold that changed hands (a net or the leash
+   * re-asserted it: other timeout, or its clock restarted) is no longer ours and is left alone. One hold covers
+   * every daughter clamped or waiting under it (F8): it goes when the last of them is done.
+   * @param {number} dt
+   * @private
+   */
+  _tickLaunchHold(dt) {
+    const h = this._launchHold;
+    if (!h) return;
+    if (!this._launchHoldIsOurs(h)) {
+      this._clearLaunchHold();                       // released by someone else, or taken over
+      return;
+    }
+    h.lastElapsed = this._attitudeHoldElapsed;
+    const S = Constants.ARM_STATES;
+    const am = this._armManager;
+    h.entries = h.entries.filter((e) => {
+      const arm = e.arm;
+      e.t += dt;
+      e.ticks++;
+      if (arm.state === S.LAUNCHING) {
+        e.clamped = true;
+        e.clampT += dt;
+        return !arm._springFired && e.clampT <= (Constants.CROSSBOW_UNDOCK_TIME ?? 1.5) + LAUNCH_HOLD_CLAMP_EXTRA_S;
+      }
+      if (arm.state === S.DOCKED && !e.clamped) {
+        const pending = !!(am && am._pendingLaunches && am._pendingLaunches.has(arm.index));
+        // The aim promise's callback runs at the END of the frame the aim resolved in (this tick is that
+        // frame's), so the first tick never judges a launch that has not had its turn — whatever the dt.
+        return pending ? e.t <= LAUNCH_HOLD_GATE_MAX_S : (e.ticks <= 1 || e.t <= LAUNCH_HOLD_GRACE_S);
+      }
+      return false;                                  // cancelled, returned, or past the spring
+    });
+    if (h.entries.length === 0) {
+      this._clearLaunchHold();
+      this.releaseAttitudeHold({ ifUnowned: true });
+    }
   }
 
   // ==========================================================================
@@ -688,6 +821,7 @@ export class AutopilotSystem {
     // of engagement). Reel-in always ends with a stow/snap/miss event; the
     // internal safety cap releases if one is ever missed.
     this._tickAttitudeHold(dtWorld > 0 ? dt : 0);   // the 120 s cap does not run while the world is held
+    this._tickLaunchHold(dtWorld > 0 ? dt : 0);     // launch-seq: the hold from the end of the aim to the spring
 
     if (!this._engaged || !this._player) return;
 
@@ -1863,6 +1997,9 @@ export class AutopilotSystem {
     const c = this._aimCoroutine;
     if (!c) return;
     this._aimCoroutine = null;
+    // launch-seq: a daughter launch keeps the mother still from here to the spring. Set BEFORE _cleanup so
+    // aimHold never drops (cleanup keeps aimHold = _attitudeHold).
+    if (c.mode === 'daughter' && c.arm) this._beginLaunchHold(c.arm);
     c._cleanup();
     eventBus.emit(Events.AIM_SEQUENCE_END, { mode: c.mode, result: 'resolved' });
     c.resolve({ mode: c.mode, launchDir });

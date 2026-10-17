@@ -9,9 +9,9 @@
  * persistence writes, no arm launch lock.
  *
  * DECISIONS §15 row 4 (owner 2026-10-08, lane w2-start-pose): the ship STARTS
- * CLOSED — the radiator stays folded flat along the body (it only eases off
- * its launch latch, 0° → POSE_CLOSED_DEG 2°, measured as the smallest angle
- * that clears every strut swing) and the daughter struts stay shut at α 0.
+ * CLOSED — the radiator stays folded flat along the body, at its 0° launch
+ * latch (= POSE_CLOSED_DEG since 2026-10-16: owner, no slightly-open step
+ * after the clamp release; it eased to 2° before) and the daughter struts stay shut at α 0.
  * Before that ruling the dance swept the radiator out to the 146° bud and
  * opened the struts to 146° after the hand-over; both beats are gone.
  *
@@ -52,7 +52,7 @@
  * message-silence gates read (never an instanceof — no import either way).
  *
  * ── BEATS (t = 0 at jet-off; anchors in Constants.OPENING_DANCE) ────────────
- *   t = 0.00  latches pop; the radiator eases 0° → CLOSED 2° (ends 0.13) — the
+ *   t = 0.00  latches pop; the radiator rests at CLOSED 0° (no ease; was 2°, 0.13 s) — the
  *             SHIP's own 15°/s driver (setFlowerPose(REST_POSE) latches the
  *             target and releases the launch lock; the hero is driven from
  *             progress() by MenuScene3D, the sim ship slews itself once bound)
@@ -105,8 +105,8 @@ const ZERO_PROGRESS = Object.freeze({
   t: 0,
   /** radiator θ as a fraction of the 0° → 146° sweep (θ = flower × 146°, the
    *  mapping MenuScene3D's hero and the sim-ship sync both use). Since
-   *  DECISIONS §15 row 4 the dance only eases it 0 → CLOSED 2°, so it ends at
-   *  FLOWER_REST_FRAC (2/146), not 1. */
+   *  DECISIONS §15 row 4 the dance leaves it at CLOSED 0° (it eased to 2° until 2026-10-16), so it ends at
+   *  FLOWER_REST_FRAC (0), not 1. */
   flower: 0,
   /** ROSA wing roll-out 0..1 */
   wing1: 0,
@@ -126,7 +126,7 @@ const ZERO_PROGRESS = Object.freeze({
 const REST_DEG = FL.REST_DEG;
 const REST_RAD = (REST_DEG * Math.PI) / 180;
 /** The radiator's dance travel, LAUNCH 0° → REST at the shipped 15°/s — 0.133 s
- *  for CLOSED 2°: it only eases off its launch latch (was 9.73 s to the bud). */
+ *  for CLOSED 0°: no travel at all (was 0.13 s to 2°, 9.73 s to the bud). */
 const FLOWER_TRAVEL_S = (REST_DEG - FL.POSE_LAUNCH_DEG) / (FL.SLEW_RATE_RAD_S * 180 / Math.PI);
 /** progress().flower once the radiator is at rest: θ_rest / 146°. */
 const FLOWER_REST_FRAC = REST_DEG / FL.POSE_STOW_DEG;

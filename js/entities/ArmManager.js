@@ -616,8 +616,9 @@ export class ArmManager {
    * @param {number} index - 0-based arm index
    * @param {object|null} target - Optional target to aim toward
    * @param {{announce?: boolean}} [opts] - `announce`: the number-key launch (InputManager). A launch
-   *   the aim stage holds back then announces itself ("deployed. Tracking…" + the cut-scene) when
-   *   it fires; an immediate launch is announced by the caller as before.
+   *   the aim stage holds back then announces itself (the cut-scene start) when it fires; an
+   *   immediate launch is announced by the caller as before. The launch LINE is not announced
+   *   here: ArmUnit says "Spring released. Separating" when the spring really fires.
    * @returns {boolean} true if deployment started
    */
   deployArmByIndex(index, target, opts) {
@@ -1312,6 +1313,9 @@ export class ArmManager {
    *   • a press while any docked strut is open (live or pending, past
    *     STRUT_OPEN_THRESHOLD, half the rest angle, 17°) → ALL to 0°;
    *   • otherwise → ALL to STRUT_REST_ALPHA, 34° (swept back);
+   *   • with `armIndex` of a DOCKED daughter ("." with her selected, lane
+   *     arms-default, owner 2026-10-16) "ALL" below means just her, and the
+   *     open/closed test reads only her strut;
    *   • a press within STRUT_PUSH_WINDOW_MS (600 ms) of the previous press → ALL
    *     to STRUT_DEPLOY_ALPHA, 90°, whatever the first press did, and the window
    *     resets (a third quick press is a fresh single press). So a second press
@@ -1323,8 +1327,14 @@ export class ArmManager {
    *   null when no DOCKED arm could take the write (nothing toggled — the
    *   caller should skip its emit).
    */
-  toggleStruts() {
-    const docked = (this.arms || []).filter((a) => a && a.state === ARM_STATES.DOCKED);
+  toggleStruts(armIndex) {
+    let docked = (this.arms || []).filter((a) => a && a.state === ARM_STATES.DOCKED);
+    // A selected, docked daughter (the "." key passes her index): the same law, for her alone.
+    // No index, or she is away → every docked arm, as before.
+    if (Number.isInteger(armIndex) && armIndex >= 0) {
+      const only = (this.arms || [])[armIndex];
+      if (only && only.state === ARM_STATES.DOCKED) docked = [only];
+    }
     if (!docked.length) return null;
     const V5 = Constants.OCTOPUS_V5;
     const anyOpen = docked.some((a) => _strutLiveAlpha(a) >= V5.STRUT_OPEN_THRESHOLD);
@@ -2297,12 +2307,17 @@ export class ArmManager {
    * 'block' — hard-block rotation (high-risk: REELING, HAULING, GRAPPLED, STATION_KEEP, NETTING, DOCKING)
    * 'soft'  — soft-cap rotation to TETHER_ROTATION.SOFT_CAP_RATE (TRANSIT, APPROACH, TRAWLING, LAUNCHING, RETURNING, SCANNING, ABLATING)
    * 'none'  — no constraint (all arms DOCKED/EXPENDED/RELOADING or detached)
+   *
+   * launch-seq: a LAUNCHING daughter whose spring has NOT fired is still clamped to her strut — part of the
+   * ship, no tether out — so she contributes 'none'. Her tier is 'soft' from the spring on (she is flying out
+   * on the line). Before, the clamp hold counted as tethered and dragged the mother back from the aim.
    */
   getRotationLockTier() {
     let tier = 'none';
     for (const arm of this.arms) {
       if (arm.isDetached) continue;             // free-flying — severed tether, no shear risk
       const s = arm.state;
+      if (s === ARM_STATES.LAUNCHING && !arm._springFired) continue;  // clamped: part of the ship
       if (_HIGH_RISK_ROT_STATES.has(s)) return 'block'; // early exit — max severity
       if (_SOFT_ROT_STATES.has(s)) tier = 'soft';
       // DOCKED / RELOADING / HOLDING_CATCH / EXPENDED contribute 'none' — leave tier unchanged
@@ -3063,6 +3078,17 @@ export class ArmManager {
     });
   }
 
+  /**
+   * Drop a launch the keep-out gate is holding (the player's arrow key: AutopilotSystem._launchHoldManualRotate).
+   * @param {number} i — arm index
+   * @returns {boolean} true if one was waiting
+   */
+  cancelPendingLaunch(i) {
+    const had = !!(this._pendingLaunches && this._pendingLaunches.has(i));
+    if (had) this._dropPendingLaunch(i);
+    return had;
+  }
+
   /** Forget a pending launch and give back the arm reservation we took. @private */
   _dropPendingLaunch(i) {
     const pend = this._pendingLaunches;
@@ -3087,7 +3113,7 @@ export class ArmManager {
    * @param {() => boolean} fire
    * @param {string} [mode] — launch mode ('ceremony' never moves her own strut)
    * @param {{announce?: boolean}} [opts] — `announce`: the number-key launch; if the aim stage holds
-   *   it back, it announces itself ("deployed. Tracking…" + the cut-scene) when it fires.
+   *   it back, it announces itself (the cut-scene start) when it fires.
    * @returns {boolean} fired, or accepted and waiting (true); refused (false)
    */
   requestClearLaunch(armIndex, getDirShip, fire, mode, opts) {
@@ -3261,9 +3287,13 @@ export class ArmManager {
     try { return !!fire(); } finally { arm._aimConverged = false; }
   }
 
-  /** The number-key launch fired after waiting to aim: the lines InputManager emits for an immediate one. @private */
+  /**
+   * The number-key launch fired after waiting to aim: what InputManager emits for an immediate one.
+   * launch-seq: the cut-scene start only. The "deployed. Tracking…" line is gone; the one launch line is
+   * "Spring released. Separating", from ArmUnit when the spring fires.
+   * @private
+   */
   _announceLaunch(arm) {
-    eventBus.emit(Events.COMMS_MESSAGE, { text: `Daughter ${arm.displayName} deployed. Tracking…`, priority: 'info' });
     eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
   }
 

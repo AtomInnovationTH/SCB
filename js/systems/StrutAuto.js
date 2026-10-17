@@ -2,8 +2,11 @@
  * StrutAuto.js — the daughter arms mostly move themselves (lane arms-auto;
  * DECISIONS §25 ruling 5, owner 2026-10-15), and the player can take over.
  *
- *   1. Flat (0°) while nothing is near.
- *   2. Swept back 34° when a piece is within the 90 m ring or a catch is under way.
+ *   1. Closed (0°) at the start of a run, until the first opening.
+ *   2. Swept back 34° from then on (owner 2026-10-16: "default position"), PER ARM: an arm's first
+ *      opening is a piece within the 90 m ring or a catch under way (these open every arm), or a
+ *      press / launch that opens that arm (a "." with a daughter picked opens only her); after it
+ *      THAT arm rests at 34° and never folds flat on its own again. An arm never opened rests closed.
  *   3. The launching arm aims itself: the launch (aim ceremony / number-key gate)
  *      owns its struts; this module keeps its hands off until 3 s after it ends,
  *      then brings a re-docked strut to the due angle.
@@ -33,13 +36,13 @@ import { StorageKeys } from '../core/StorageKeys.js';
 export const STRUT_AUTO_VERSION = 1;
 
 /**
- * The due angle: swept back (STRUT_REST_ALPHA, 34°) while a piece is near,
- * flat (0°) otherwise.
- * @param {boolean} near
+ * The due angle: swept back (STRUT_REST_ALPHA, 34°) once an arm has been opened in this
+ * run (or a piece is near, which opens them), closed (0°) before that.
+ * @param {boolean} open near, or this arm opened once this run
  * @returns {number} radians
  */
-export function autoPoseFor(near) {
-  return near ? Constants.OCTOPUS_V5.STRUT_REST_ALPHA : 0;
+export function autoPoseFor(open) {
+  return open ? Constants.OCTOPUS_V5.STRUT_REST_ALPHA : 0;
 }
 
 /** @private default storage: the global localStorage when present. */
@@ -111,7 +114,7 @@ export class StrutAutoStore {
 }
 
 /** One arm's private bookkeeping (WeakMap-keyed; never stored on the arm). @private */
-const _newArmState = () => ({ mine: null });
+const _newArmState = () => ({ mine: null, opened: false, prevClosed: true });
 
 /**
  * Per-frame logic. Construct once; call `update(dt, view)` every frame.
@@ -140,13 +143,14 @@ export class StrutAutoController {
   /** Forget everything (ArmManager.reset / a new game). */
   reset() {
     this._near = false;
-    this._farS = 0;
+    this._anyOpened = false;     // some arm has left closed in this run (per-arm record: _st(arm).opened; not saved)
     this._scanS = Infinity;      // scan on the first live frame
     this._coolS = 0;
     this._hadMarkers = false;
     this._expired = false;
-    this._prevClosed = true;
     this._showPending = false;
+    this._showArms = new Set();  // arms that just left closed while the show was unseen: they get the show
+    this._retryArms = [];        // the arms of a cut-short show
     this._show = null;
     this._checkS = 0;
     this._retry = false;         // a show was cut short: try again at the next quiet chance
@@ -165,8 +169,21 @@ export class StrutAutoController {
 
   /** @returns {boolean} whether a piece/catch currently counts as near (hysteresis applied) */
   get near() { return this._near; }
+  /** @returns {boolean} whether ANY arm has been opened in this run (each opened arm rests at 34° from then on) */
+  get openedOnce() { return this._anyOpened; }
+  /** @param {object} arm @returns {boolean} whether this arm has been opened in this run */
+  armOpened(arm) { return !!(arm && this._arm.get(arm)?.opened); }
   /** @returns {object|null} the running show, if any */
   get show() { return this._show; }
+
+  /** @private Record that these arms have been opened in this run. */
+  _markOpened(arms) {
+    for (const a of arms) {
+      if (!a) continue;
+      this._st(a).opened = true;
+      this._anyOpened = true;
+    }
+  }
 
   /** @private */
   _st(arm) {
@@ -192,21 +209,14 @@ export class StrutAutoController {
     }
     const docked = arms.filter((a) => a && a.state === Constants.ARM_STATES.DOCKED);
 
-    // ── near / flat (item 1, 2) ────────────────────────────────────────────
+    // ── near (item 1, 2): a piece inside the ring / a catch opens the arms for the first time ──
     this._scanS += dt;
     if (this._scanS >= V.SCAN_INTERVAL_S) {
-      const elapsed = Number.isFinite(this._scanS) ? this._scanS : 0;
       this._scanS = 0;
       const d = view.nearestPieceM();
       const ring = Constants.NET_LOCK_RANGE_M;
-      const raw = view.catchActive() || d <= (this._near ? ring * V.LEAVE_FACTOR : ring);
-      if (raw) {
-        this._near = true;
-        this._farS = 0;
-      } else if (this._near) {
-        this._farS += elapsed;
-        if (this._farS >= V.FLAT_DWELL_S) this._near = false;
-      }
+      this._near = view.catchActive() || d <= (this._near ? ring * V.LEAVE_FACTOR : ring);
+      if (this._near) { this._anyOpened = true; this._markOpened(arms); }   // a piece / a catch opens every arm
     }
 
     // ── dodge an inbound catch (item 4) ───────────────────────────────────
@@ -220,12 +230,18 @@ export class StrutAutoController {
     const eff = (a) => a._strutTargetAlpha ?? (a.getAimAlpha ? a.getAimAlpha() : 0);
     const thr = Constants.OCTOPUS_V5.STRUT_OPEN_THRESHOLD;
     const anyOpen = docked.some((a) => eff(a) >= thr);
-    const allClosed = docked.length > 0 && !anyOpen;
-    if (view.store && !view.store.seen && !this._show) {
-      if (this._prevClosed && anyOpen) this._showPending = true;
-      if (allClosed) this._showPending = false;
+    const showOpen = !!(view.store && !view.store.seen && !this._show);
+    for (const a of docked) {
+      const st = this._st(a);
+      const open = eff(a) >= thr;
+      if (open) this._markOpened([a]);        // an opening of THIS arm counts: a press, a launch gate, a dodge
+      if (showOpen) {
+        if (st.prevClosed && open) { this._showArms.add(a); this._showPending = true; }
+        if (!open) this._showArms.delete(a);
+      }
+      st.prevClosed = !open;
     }
-    if (docked.length > 0) this._prevClosed = allClosed;
+    if (this._showArms.size === 0) this._showPending = false;
 
     // ── busy → hands off, 3 s cool-off (item 3) ───────────────────────────
     const busy = view.busy();
@@ -247,9 +263,9 @@ export class StrutAutoController {
     }
 
     // ── per-arm automatic pose (items 1–3) ────────────────────────────────
-    const due = autoPoseFor(this._near);
     for (const arm of docked) {
       const st = this._st(arm);
+      const due = autoPoseFor(st.opened);
       const latch = arm._strutTargetAlpha;
       // A latch someone else wrote (launch gate, duck, cargo re-pose, a "." press) is theirs.
       if (latch !== undefined && latch !== st.mine) { st.mine = null; continue; }
@@ -319,18 +335,23 @@ export class StrutAutoController {
   /** @private */
   _startShow(docked, view) {
     const V = Constants.OCTOPUS_V5.STRUT_AUTO;
-    // Return to what was due: the angle a "." press asked for, else the automatic one.
-    let back = autoPoseFor(this._near);
-    for (const a of docked) {
-      if (a._strutManual && a._strutTargetAlpha !== undefined) { back = a._strutTargetAlpha; break; }
-    }
-    this._show = {
-      phase: 'out', back, press: view.pressCount(), arms: docked.slice(), top: V.DEMO_TOP_RAD,
-    };
+    // Only the arms opened in this event (or cut short before) play the show.
+    const want = new Set([...this._showArms, ...this._retryArms]);
+    const arms = docked.filter((a) => want.has(a));
     this._showPending = false;
     this._retry = false;
+    this._showArms.clear();
+    this._retryArms = [];
+    if (arms.length === 0) return;
+    // Each arm returns to what was due: the angle its "." press asked for, else its automatic one.
+    const backs = new Map();
+    for (const a of arms) {
+      backs.set(a, (a._strutManual && a._strutTargetAlpha !== undefined)
+        ? a._strutTargetAlpha : autoPoseFor(this._st(a).opened));
+    }
+    this._show = { phase: 'out', backs, press: view.pressCount(), arms, top: V.DEMO_TOP_RAD };
     this._checkS = 0;
-    for (const a of docked) { a._strutTargetAlpha = V.DEMO_TOP_RAD; this._st(a).mine = V.DEMO_TOP_RAD; }
+    for (const a of arms) { a._strutTargetAlpha = V.DEMO_TOP_RAD; this._st(a).mine = V.DEMO_TOP_RAD; }
   }
 
   /**
@@ -343,6 +364,7 @@ export class StrutAutoController {
     if (s) {
       this._retry = true;                       // cut short: not marked seen, try again when quiet
       this._retryPress = this._lastPress;
+      this._retryArms = s.arms.slice();
       for (const a of s.arms) {
         const st = this._st(a);
         if (st.mine !== null && a._strutTargetAlpha === st.mine) a._strutTargetAlpha = undefined;
@@ -366,8 +388,8 @@ export class StrutAutoController {
       this._cancelShow();
       return;
     }
-    const target = s.phase === 'out' ? s.top : s.back;
     for (const a of s.arms) {
+      const target = s.phase === 'out' ? s.top : s.backs.get(a);
       const l = a._strutTargetAlpha;
       if (l !== undefined && l !== target) { this._cancelShow(); return; }
     }
@@ -400,7 +422,8 @@ export class StrutAutoController {
   _turnBack(s) {
     s.phase = 'back';
     for (const a of s.arms) {
-      if (Math.abs(a.getAimAlpha() - s.back) > 1e-6) { a._strutTargetAlpha = s.back; this._st(a).mine = s.back; }
+      const back = s.backs.get(a);
+      if (Math.abs(a.getAimAlpha() - back) > 1e-6) { a._strutTargetAlpha = back; this._st(a).mine = back; }
       else a._strutTargetAlpha = undefined;
     }
   }

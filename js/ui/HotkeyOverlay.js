@@ -110,7 +110,7 @@ export const HOTKEY_GROUPS = [
       [['J'], 'Journal'],
       'gap',
       [['O'], 'Radiator struts out / in'],
-      [['.'], 'Daughter struts out / in'],
+      [['.'], 'Struts out / in (picked, or all)'],
       [[','], 'Solar wings out / in'],
     ],
   },

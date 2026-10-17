@@ -1347,7 +1347,10 @@ export const Constants = {
   REEL_PROFILE: {
     V_CRUISE_MAX:        60,    // m/s — cruise cap (empty / light catch)
     V_DOCK:              1.0,   // m/s — gentle speed entering the soft-dock window
-    ACCEL:               8.0,   // m/s² — ramp-up / ramp-down magnitude
+    ACCEL:               3.4,   // m/s² — ramp-down magnitude: sets the recall speed from 50 m / 200 m
+                                //   (decel bound √(1+2·a·d), below the 60 m/s cap there). Was 8.0;
+                                //   3.4 makes a recall ~1.5× slower (owner 2026-10-16: "a little
+                                //   slower would be realistic"; lane arms-default).
     DECEL_DISTANCE_M:    15,    // m — begin ramp-down within this of the strut dock
     HAUL_MOTOR_POWER:    2500,  // sets v_cruise = POWER / max(T_reel, T_MIN)
     T_MIN:               5,     // N — denominator floor so light catches hit V_CRUISE_MAX
@@ -1631,10 +1634,12 @@ export const Constants = {
     STRUT_PUSH_WINDOW_MS: 600,
 
     // Daughter-arm automation (lane arms-auto; DECISIONS §25 ruling 5): the struts
-    // sit at 0° while nothing is near, swing to STRUT_REST_ALPHA (34°) when a piece
-    // is within NET_LOCK_RANGE_M (90 m) or a catch is under way, and ease back to
-    // automatic OVERRIDE_S after a "." press. Real motor rate throughout
-    // (STRUT_SLEW_RATE); nothing here teleports. Read by systems/StrutAuto.js.
+    // start closed at 0° and stay closed until the first opening of the run (a piece
+    // within NET_LOCK_RANGE_M (90 m), a catch under way, or a "." press); from then on
+    // they REST at STRUT_REST_ALPHA (34°, lane arms-default, owner 2026-10-16) and never
+    // fold flat on their own. They ease back to 34° OVERRIDE_S after a "." press. Real
+    // motor rate throughout (STRUT_SLEW_RATE); nothing here teleports. Read by
+    // systems/StrutAuto.js.
     // DEMO_TOP_RAD: the once-per-player full-range show goes out to this angle. Probe
     // 2026-10-15: strut 0-180° in 2° steps x 20 radiator/wing states, clear from 4° (0-2° is
     // the rest cradle, touching by design). Tightest gaps: 22 mm hull at 4°, 30 mm radiator
@@ -1642,14 +1647,13 @@ export const Constants = {
     // nose collar 207 mm at 180°. So DEMO_TOP_RAD = 180°.
     STRUT_AUTO: {
       OVERRIDE_S: 10,                 // s after the arm ARRIVES at the player's angle
-      FLAT_DWELL_S: 20,               // s continuously not-near before going flat
       HANDOFF_S: 3,                   // s hands-off after a launch/leash/duck ends
       SCAN_INTERVAL_S: 0.5,           // s between debris scans (2 Hz)
       LEAVE_FACTOR: 1.1,              // enter at <= 90 m, leave only past 99 m
       DEADBAND_RAD: 2 * Math.PI / 180, // rad — no re-command inside 2°
       DEMO_TOP_RAD: Math.PI,          // rad (180°) — measured clear
-      DEMO_CLEAR_M: 0.010,            // m — the show turns back if the gap falls under this
-      DEMO_CHECK_FROM_RAD: 12 * Math.PI / 180, // rad — below this the strut is still in its rest cradle (touching by design); proxy gap measured >= 12 mm from 9°
+      DEMO_CLEAR_M: 0.006,            // m — the show turns back if the gap falls under this (proxy at radiator 0°: min 7.3 mm at strut 162°, measured 2026-10-17)
+      DEMO_CHECK_FROM_RAD: 30 * Math.PI / 180, // rad — below this the strut is near its rest cradle (touching by design); the coarse proxy (55 mm capsule + 0.13 m sphere) reads -4.9..9.9 mm at 9-29° with the radiator at 0° while the real meshes measure >= 9.6 mm (log in plan)
     },
 
     // ── Recoil Safety (NEW — ST-9.3 C-3) ──
@@ -2019,42 +2023,28 @@ export const Constants = {
       //    §10 row 7 convention). The orbit band was [90°,146°] until
       //    DECISIONS §15 row 4 (2026-10-08) added CLOSED below it. ──
       //
-      // CLOSED — the orbit REST pose since DECISIONS §15 row 4 (owner,
-      // 2026-10-08: "the ship starts closed … radiator folded flat along the
-      // body"). Measured 2026-10-09 on the built model (lane w2-start-pose,
-      // tmp/probes/start-pose-fold.mjs: real meshes, real ArmUnit daughters,
-      // exact point-to-triangle refinement, 20 mm gate):
+      // CLOSED — the orbit REST pose, FULLY FOLDED at 0° (owner 2026-10-16: "radiator struts should start in fully
+      // closed position. The slightly open position after clamp release is just too much reality for a sim,
+      // confusing, not needed now. Perhaps later for advanced players or flight engineers that care about every
+      // detail"). It was 2° (DECISIONS §15 row 4, 2026-10-08/09) only to keep the repo's 20 mm design margin while a
+      // daughter strut swings past. Measured 2026-10-16 on the built model (probe on main 01c96e30; real meshes
+      // incl. the daughters and hinge parts, exact point-to-triangle, ±3 mm):
       //
-      //   θ    strut sweep α 0–180   docked   fixed hull     wings @ law
-      //    0      9.6 mm (α 9)        55 mm   21.8 MGA patch   40.9 mm
-      //           (18.3 / 14.7 / 11.4 at α 6 / 7 / 8)
-      //    1     18.5     (α 6)        —      —                —
-      //    1.5   22.5     (α 6)        —      —                —
-      //    2     26.1     (α 7)       58.9    45.2 Barrel      78.3 (safe to 8°)
-      //    5     ≥ 40                  —      45.1             (safe to 15°)
-      //   (strut rows: `--only B --thetas 0,1,1.5,2 --alphas
-      //   0,3,4,5,6,7,8,9,10,12,13,15`, 1° α steps, reproducible)
-      //   At θ 2 the packs end at z 1.249 (tip pads 1.305, 15 mm short of the collar ring's
-      //   front face 1.320; were 1.505 at the 2.5 m boom), about at the muzzle plane (1.30), and
-      //   still clear (§H): the held catch's near face (z 2.30) by 795 mm, the
-      //   net-launch path (launcher r 0.12 along +Z from the centred muzzle,
-      //   2026-10-13) by 390 mm [it was 120 mm for the two ±0.45 m pods], a daughter leaving
-      //   or returning along its dock line at α 0 by 50.0 mm. (These three were measured at the
-      //   1.505 tips; shortening removes only the outer 0.20 m of each pack, so each is unchanged or
-      //   larger at 2.30 m — not re-measured.)
+      //                                      radiator 0°            radiator 2°
+      //   min gap, strut sweep 0-180°        9.6 mm (strut 9.0°)    26.1 mm (strut 6.9°)
+      //   strut held at 0° / at 34°          50.9 mm / 23.5 mm      54.9 / 50.6 mm
+      //   strut angles under 20 mm           3-15° (25 of 361)      none
       //
-      // The 0° launch fold fails the gate only against a strut SWINGING
-      // through α 3–13° (PClip_3_25 passes a folded pack); 2° is the smallest
-      // whole degree that clears every strut angle with or without daughters.
-      // Every θ 0–90 sits fore of every FEEP apex (3-D ≥ 0.325 m to the 35°
-      // cones), so thrust is allowed over the whole driver band [2°, 146°].
-      // The side-wings fold on the lanyard below 60°, so CLOSED is the narrow
-      // launch pack eased 2° off the body. Costs at θ 2 (measured, not
-      // collisions): solar sphere average 527 W vs 634 W at the bloom (−17 %)
-      // and 767 W at the bud (−31 %) — wings held at the 5° dodge, body cells
-      // shaded; the folded packs block 67 % of the MGA patch and 71–74 % of
-      // sun sensors 2/3 (14 % / 24–28 % at the bud; the _sensorClearance meter).
-      POSE_CLOSED_DEG: 2,
+      // No contact anywhere (closest pair: the daughter clip on strut 3 vs that radiator's plate). Net-launch path
+      // 305 mm (385 at 2°), plume cones 0.325 m (0.326). So a stowed radiator
+      // is held to a 9 mm margin (test-StartPose D0), every other angle keeps 20 mm. Older rows, 2026-10-09
+      // (tmp/probes/start-pose-fold.mjs, 20 mm gate): θ 1 → 18.5 mm, 1.5 → 22.5, 5 → ≥ 40; fixed hull 21.8 mm
+      // at 0° (MGA patch), 45.2 at 2°; wings at their 5° dodge 40.9 mm at 0°, 78.3 at 2°.
+      // Every θ 0-90 sits fore of every FEEP apex (3-D ≥ 0.325 m to the 35° cones), so thrust is allowed over the
+      // whole driver band [0°, 146°]. The side-wings fold on the lanyard below 60°. Power/sensor costs of a folded
+      // radiator (measured at 2°, 2026-10-09; not re-measured at 0°): solar sphere average 527 W vs 634 W at the
+      // bloom, the folded packs block most of the MGA patch and sun sensors 2/3.
+      POSE_CLOSED_DEG: 0,
       REST_POSE: 'CLOSED',         // the orbit rest (D4 contract: boot, the
                                    // opening dance, every endState(), O's
                                    // closed end); 'STOW' is the old bud
@@ -2111,12 +2101,14 @@ export const Constants = {
                                    // Still a valid angle (dev flag, openFrac's
                                    // full scale); nothing in play commands it
                                    // since OPEN_POSE became 146°
-      POSE_FLOOR_DEG: 2,           // θ ≥ CLOSED in ORBIT — enforced IN the driver
-                                   // (the floor drops to POSE_LAUNCH_DEG only
-                                   // while the one-shot launch lock is armed);
-                                   // = POSE_CLOSED_DEG — it was 90 (the bloom)
-                                   // before DECISIONS §15 row 4. Also the low
+      POSE_FLOOR_DEG: 0,           // θ ≥ CLOSED in ORBIT — enforced IN the driver
+                                   // (= POSE_CLOSED_DEG = POSE_LAUNCH_DEG since
+                                   // 2026-10-16; it was 2, and 90 (the bloom)
+                                   // before DECISIONS §15 row 4). Also the low
                                    // edge of the thrust band.
+      // Tip stalks (leash tip hardware, PlayerSatellite._updateTipStalks): retracted at or below this θ and linearly out
+      // over the next 1° — 2°..3°, as when the closed floor was 2°. Its own constant: the floor is now 0°.
+      STALK_FROM_DEG: 2,
       POSE_THRUST_MAX_DEG: 146,    // P1 global keep-out 7 (reserved band edge)
       // VENT — the deliberate over-open pose past the bud, reached only by a
       // double-command (PlayerSatellite.toggleFlowerDeploy) and warned in COMMS.
@@ -2512,8 +2504,8 @@ export const Constants = {
   // jet-off, NOT the departure start.
   //
   // DECISIONS §15 row 4 (2026-10-08, lane w2-start-pose): the ship starts
-  // CLOSED. The radiator stays folded (it only eases 0° → POSE_CLOSED_DEG 2°
-  // off its launch latch, 0.13 s) and the daughter struts stay shut, so the
+  // CLOSED. The radiator stays folded (it rests at its 0° launch latch, no ease
+  // to 2° any more — owner 2026-10-16) and the daughter struts stay shut, so the
   // two solar wings ARE the unfold, and the hand-over is the moment wing 2 is
   // out — 8.70 s (was 9.73). The wings keep 5.20 / 6.20: they start as the
   // camera's dive lands, so the intro DOLLY (LadderController

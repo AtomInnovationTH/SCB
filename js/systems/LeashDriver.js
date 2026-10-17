@@ -191,6 +191,12 @@ export class LeashDriver {
     if (am && typeof am.getRotationLockTier === 'function' && am.getRotationLockTier() !== 'none') {
       return { key: 'daughter', text: 'A daughter is out on her tether, so the ship cannot turn. The catch stays at the nose.' };
     }
+    // launch-seq: a daughter clamped for launch reads tier 'none' (she is part of the ship), but the whole-ship turn
+    // must not start under her: she would be swung round on her strut with the spring still to fire.
+    const arms = am && am.arms;
+    if (arms && arms.some((x) => x && x.state === Constants.ARM_STATES.LAUNCHING)) {
+      return { key: 'daughter', text: 'A daughter is leaving the ship, so the ship cannot turn. The catch stays at the nose.' };
+    }
     return null;
   }
 
@@ -736,6 +742,7 @@ export class LeashDriver {
     if (am && typeof am.getRotationLockTier === 'function' && am.getRotationLockTier() !== 'none') {
       return 'a daughter is out on her tether';
     }
+    if (am && am.arms && am.arms.some((x) => x && x.state === Constants.ARM_STATES.LAUNCHING)) return 'a daughter is leaving the ship';
     return 'the turn was refused';
   }
 

@@ -835,8 +835,8 @@ export class InputManager {
               eventBus.emit(Events.COMMS_MESSAGE, {
                 sender: 'THERMAL',
                 text: sweeping
-                  ? 'OVERRIDE — aft radiator deploying: swinging out the whole way to 146°, side panels opening between 60° and 90°. Engines back as soon as it leaves the launch fold.'
-                  : 'OVERRIDE — aft radiator folding: swinging all the way into the launch fold (0°), side panels folding between 90° and 60°. Engines stay off until it opens again.',
+                  ? 'OVERRIDE — aft radiator deploying: swinging out the whole way to 146°, side panels opening between 60° and 90°.'
+                  : 'OVERRIDE — aft radiator folding: swinging all the way in to the closed rest (0°), side panels folding between 90° and 60°. Engines keep working.',
                 priority: 'info',
               });
             }
@@ -850,9 +850,9 @@ export class InputManager {
             // the launch fold) is narrated by the ship itself, and the plain
             // line would then be false ("…opening to 146°" while heading for
             // 180°, "Engines still work" while folding into the lock). The ship
-            // clears its own `_lastFlowerTap` on exactly that branch.
-            const pushedThrough = Object.prototype.hasOwnProperty.call(d.player, '_lastFlowerTap')
-              && d.player._lastFlowerTap === undefined;
+            // sets its own `_flowerPushedThrough` on exactly that branch
+            // (not "the tap timer is clear": that clears on every double tap, pushed or not).
+            const pushedThrough = d.player._flowerPushedThrough === true;
             if (!pushedThrough && !held) {
               eventBus.emit(Events.COMMS_MESSAGE, {
                 sender: 'THERMAL',
@@ -1111,10 +1111,8 @@ export class InputManager {
               );
             if (deployed.length > 0) {
               const arm = deployed[deployed.length - 1];
-              eventBus.emit(Events.COMMS_MESSAGE, {
-                text: `Daughter ${arm.displayName} deployed. Tracking…`,
-                priority: 'info',
-              });
+              // launch-seq: no "deployed. Tracking…" line — the one launch line is "Spring released.
+              // Separating" (ArmUnit, at ARM_SPRING_FIRED); only the cut-scene start is announced here.
               eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
             }
           }
@@ -1311,7 +1309,10 @@ export class InputManager {
           // the shape that rots. Delegate; the angles (one press 34°, a quick
           // second press 90°, the next press 0°) and the double-tap timer
           // (STRUT_PUSH_WINDOW_MS) live there.
-          d.armManager.toggleStruts();
+          // With a daughter selected (1-4) and docked, "." moves only her strut; with no
+          // selection (or she is away) it moves every docked arm.
+          const selStrutIdx = d.armManager.selectedArmIndex;
+          d.armManager.toggleStruts(selStrutIdx >= 0 ? selStrutIdx : undefined);
           d.audioSystem?.playClick();
           // Delegation 2 onboarding (2026-05-31): notify the OnboardingDirector.
           eventBus.emit(Events.STRUT_DEPLOY_INPUT);

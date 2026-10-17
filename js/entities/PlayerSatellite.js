@@ -486,8 +486,8 @@ export class PlayerSatellite extends THREE.Group {
     this._flowerPairs = { A: false, B: false };
     /** @type {Array<{hinge: THREE.Group, azDeg: number, pair: string, wings: THREE.Group[]}>} */
     this._flowerGroups = [];
-    // Boot at the orbit REST pose — CLOSED (θ 2°, folded along the body) since
-    // DECISIONS §15 row 4; it was the 146° bud before.
+    // Boot at the orbit REST pose — CLOSED (θ 0°, folded flat along the body — 2° until
+    // 2026-10-16) since DECISIONS §15 row 4; it was the 146° bud before.
     this._flowerThetaRad = (this._flowerRestDeg() * Math.PI) / 180;
     /** Slew latch — the daughter `_strutTargetAlpha` contract mirrored:
      *  player intent wins mid-swing (a new toggle overwrites an in-flight
@@ -503,6 +503,10 @@ export class PlayerSatellite extends THREE.Group {
      *  every reset path — the vent is never a resting default. */
     this._flowerVentArmed = false;
     this._lastFlowerTap = undefined;
+    /** Whether the LAST toggleFlowerDeploy was a double tap that pushed through (to 180°, or past
+     *  closed into the launch fold) and so narrated itself; the O handler reads it to skip its plain
+     *  line. A flag, not `_lastFlowerTap === undefined`: the timer is cleared on every double tap. */
+    this._flowerPushedThrough = false;
     /** Settle clock (DECISIONS §15, owner 2026-10-09): `_flowerClockS` is real
      *  seconds advanced by `_updateFlower(dt)`; `_flowerCmdClockS` is its value
      *  at the last PLAYER radiator command (toggleFlowerDeploy,
@@ -513,7 +517,7 @@ export class PlayerSatellite extends THREE.Group {
     this._flowerClockS = 0;
     this._flowerCmdClockS = 0;
     /** Design 7b one-shot launch lock: while armed the driver floor is
-     *  POSE_LAUNCH_DEG (0°) instead of POSE_FLOOR_DEG (CLOSED 2°; 90° before
+     *  POSE_LAUNCH_DEG (0°) instead of POSE_FLOOR_DEG (CLOSED, now also 0°; 2° until 2026-10-16, 90° before
      *  DECISIONS §15 row 4) and thrust is refused. Armed ONLY by
      *  setFlowerPose('LAUNCH') under an active launch driver, by the dev
      *  hook's { force: true }, or — owner amendment 2026-09-09 (plan
@@ -3895,7 +3899,7 @@ export class PlayerSatellite extends THREE.Group {
    *
    * DECISIONS §15 row 4 — the D4 contract (lane w2-start-pose, 2026-10-09;
    * the heat and F1-bar lanes code against it): `openFrac` is 0 at the REST
-   * pose (CLOSED 2°) and 1 at CARGO (90°), linear in θ between, clamped to
+   * pose (CLOSED 0°) and 1 at CARGO (90°), linear in θ between, clamped to
    * [0, 1] — so the bud (146°) and the vent read 1 too. It used to be
    * (146 − θ)/56, i.e. 0 at the bud. `pose` reads 'CLOSED' within 1° of
    * POSE_CLOSED_DEG while the launch lock is off. Every other field is
@@ -3935,7 +3939,7 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * O key — toggle the aft radiator between the REST pose (CLOSED 2°, folded
+   * O key — toggle the aft radiator between the REST pose (CLOSED 0°, folded
    * along the body — DECISIONS §15 row 4) and the OPEN pose (OPEN_POSE, 146° —
    * owner 2026-10-09, DECISIONS §15 "Radiator angles"; it opened to the 90°
    * bloom before).
@@ -3982,14 +3986,21 @@ export class PlayerSatellite extends THREE.Group {
     const doubleTap = this._lastFlowerTap !== undefined
       && now - this._lastFlowerTap < FL.VENT_DOUBLE_TAP_MS;
     this._lastFlowerTap = now;
+    this._flowerPushedThrough = false;
     this._flowerCmdClockS = this._flowerClockS || 0;   // a player command — restarts the 180° → 146° settle clock
 
     if (doubleTap && this._flowerGroups.length > 0) {
-      this._lastFlowerTap = undefined;             // one push per double-tap
       // The end this tap lands on, and which way past it the push goes.
       const landDeg = deploying ? openDeg : restDeg;
       const fromDeg = deploying ? restDeg : openDeg;
+      // Closed end with nothing past it (rest = launch fold = 0°, since 2026-10-16): this is an ordinary
+      // tap — `_flowerPushedThrough` stays false, so the input handler still says its plain line.
+      const nothingPast = landDeg <= fromDeg && restDeg <= FL.POSE_LAUNCH_DEG;
+      // One push per double-tap: the timer always clears, so a third quick tap is a first tap again
+      // (it used to stay set at the closed end, and tap 3 then pushed on to 180°).
+      this._lastFlowerTap = undefined;
       if (landDeg > fromDeg) {
+        this._flowerPushedThrough = true;
         // θ rising past the open end: 180°.
         this._flowerVentArmed = true;
         this._flowerTargetTheta = (FL.POSE_VENT_DEG * Math.PI) / 180;
@@ -4001,7 +4012,11 @@ export class PlayerSatellite extends THREE.Group {
       // floor to 0 AND engages the early wing dodge (folding with the arrays
       // tracking is a measured collision — DECISIONS §10). A refusal (no
       // hardware) falls through to the ordinary command below.
-      if (this.setFlowerPose('LAUNCH', { override: true }) !== null) {
+      // Owner 2026-10-16: the radiators rest fully closed (REST_DEG = POSE_LAUNCH_DEG = 0°), so there is
+      // nothing left to fold to — the second tap only returns to the closed end and never arms the lock
+      // (a "launch fold, locked down" at the rest angle would refuse the engines for no visible change).
+      if (!nothingPast && this.setFlowerPose('LAUNCH', { override: true }) !== null) {
+        this._flowerPushedThrough = true;
         this._flowerVentArmed = false;
         this._warnFlowerFold();
         return deploying;
@@ -4059,16 +4074,14 @@ export class PlayerSatellite extends THREE.Group {
    * past CLOSED folds the radiator the last 2° into the LAUNCH pose (θ 0),
    * through the SAFETY OVERRIDE path so the early wing dodge comes with it.
    *
-   * Worth saying out loud because, unlike CLOSED, the launch fold arms the
-   * launch lock: the engines are refused until the radiator opens again, and
-   * a folded radiator is barely radiating.
+   * Worth saying out loud: a folded radiator is barely radiating. (Only reachable with a rest angle
+   * above the fold; the override fold arms no launch lock since 2026-10-17, so the engines keep working.)
    */
   _warnFlowerFold() {
     const FL = Constants.THERMAL.FLOWER;
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'THERMAL',
-      text: `Radiator folded to ${FL.POSE_LAUNCH_DEG}° — the launch fold, locked down. `
-        + 'Engines stay off until it opens again. '
+      text: `Radiator folded to ${FL.POSE_LAUNCH_DEG}° — the launch fold. `
         + `Folded panels radiate almost nothing: heat will build. Tap RADIATORS / O to open it to ${FL.OPEN_DEG}°.`,
       priority: 'warning',
     });
@@ -4090,7 +4103,7 @@ export class PlayerSatellite extends THREE.Group {
    * else deploy. A fold goes through setFlowerPose('LAUNCH', { override: true })
    * — the ONE production arming of the launch lock outside the launch
    * sequence — so the driver floor drops to 0°; a deploy is the ordinary STOW
-   * release (the lock clears at the CLOSED floor, 2°, with
+   * release (the lock clears at the CLOSED floor, 0°, with
    * THERMAL_FLOWER_RELEASED, once per arming). FEEP thrust stays inhibited the
    * whole time the lock is armed (_flowerPoseBandGuard) — the physics law is
    * untouched, the player simply sees the mechanism.
@@ -4177,7 +4190,7 @@ export class PlayerSatellite extends THREE.Group {
       const forced = !!(opts && opts.force === true);
       const override = !!(opts && opts.override === true);
       if (!launchActive && !forced && !override) return null;
-      // A catch bag on a radiator tip: the fold would park θ at the 2° floor
+      // A catch bag on a radiator tip: the fold would park θ at the floor
       // under the bag, never release the lock and inhibit thrust (review of l5a).
       if (this.tipCargo?.count?.() > 0) {
         eventBus.emit(Events.COMMS_MESSAGE, {
@@ -4202,7 +4215,11 @@ export class PlayerSatellite extends THREE.Group {
       if (override) {
         this._flowerOverrideFold = true;
       }
-      this._flowerLaunchLock = true;
+      // The lock is the launch latch at boot (sequence / dev force) only. The OVERRIDE sweep to 0° does not
+      // arm it (owner 2026-10-16, rest = 0°): the floor is 0° too, so a lock would switch the engines off
+      // with no visible change. The wing dodge above still engages; the driver drops it on the next
+      // command that leaves the fold.
+      if (!override || launchActive || forced) this._flowerLaunchLock = true;
       this._flowerTargetTheta = ((FL.POSE_LAUNCH_DEG - 0.5) * Math.PI) / 180;
       return FL.POSE_LAUNCH_DEG;
     }
@@ -4290,7 +4307,7 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * Snap the flower to its stowed REST pose — CLOSED (θ 2°, folded along the
+   * Snap the flower to its stowed REST pose — CLOSED (θ 0°, folded flat along the
    * body) since DECISIONS §15 row 4; the name is historical (it snapped to the
    * 146° bud before) and is kept because GameFlowManager.resetGame() and
    * OpeningDance.endState() call it. The
@@ -4309,6 +4326,7 @@ export class PlayerSatellite extends THREE.Group {
     this._flowerTargetTheta = undefined;
     this._flowerVentArmed = false;
     this._lastFlowerTap = undefined;
+    this._flowerPushedThrough = false;
     this._flowerThetaRad = (restDeg * Math.PI) / 180;
     this._updateFlower(0);
     // Opening dance: the release event is suppressed while the dance drives
@@ -5066,8 +5084,8 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * l6-look — pose the leash tip hardware for radiator angle θ. Sets only the POSITIONS of the two stalk tubes and
    * the cone pivot (never scale: scale 0 breaks keep-out maths); the cone's rotation is LeashVisual's.
-   * Retracted (tubes slid into the pad, cone sunk so its mouth is level with the pad's outer face) at or below the
-   * closed floor (POSE_FLOOR_DEG 2°) — the launch fold's tip z stays 1.305 (2.30 m boom; 1.505 at 2.5) — and linearly out between 2° and 3°.
+   * Retracted (tubes slid into the pad, cone sunk so its mouth is level with the pad's outer face) at or below
+   * STALK_FROM_DEG (2°; the closed rest is 0° since 2026-10-16) — the launch fold's tip z stays 1.305 (2.30 m boom; 1.505 at 2.5) — and linearly out between 2° and 3°.
    * A tip holding a bag, or the one the hand-off is using, stays fully out at any θ (the bag hangs on it; the
    * radiators settle near 2.5° at the 3° hand-off).
    * @param {number} [thetaRad] — default: the current radiator angle
@@ -5077,7 +5095,7 @@ export class PlayerSatellite extends THREE.Group {
     if (!groups || groups.length === 0) return;
     const FL = Constants.THERMAL.FLOWER;
     const th = Number.isFinite(thetaRad) ? thetaRad : this._flowerThetaRad;
-    const floor = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
+    const floor = (FL.STALK_FROM_DEG * Math.PI) / 180;     // its own constant: the radiator floor is 0° now (the stalks keep 2°..3°)
     const open = Math.max(0, Math.min(1, (th - floor) / (Math.PI / 180)));     // 0 at 2° .. 1 at 3°
     const tc = this.tipCargo;
     const view = this.leashDriver && typeof this.leashDriver.view === 'function' ? this.leashDriver.view() : null;
@@ -5124,13 +5142,13 @@ export class PlayerSatellite extends THREE.Group {
    * idiom mirrored (PlayerSatellite.js `_strutTargetAlpha` latch contract):
    * bounded rate, never a snap; player intent wins mid-swing (toggle/setPose
    * overwrite the latch); latch cleared on arrival. The struts open LIKE A
-   * FLOWER between CLOSED (2°, folded along the body) and the full bloom
+   * FLOWER between CLOSED (0°, folded along the body) and the full bloom
    * (90°), and on to the bud (146°).
    *
    * POSE FLOOR: θ ≥ POSE_FLOOR_DEG is enforced HERE every frame. It was the
    * 90° bloom ("a fore-of-rim excursion enters daughter-pocket real estate")
    * until DECISIONS §15 row 4 (2026-10-08) made the folded radiator the orbit
-   * rest: the floor is now CLOSED (2°), measured clear of the docked
+   * rest: the floor is now CLOSED (0° since 2026-10-16; 2° before), measured clear of the docked
    * daughters, every strut swing, the hull and the deployed wings at their
    * dodge limit (the Constants POSE_CLOSED_DEG table). The ceiling is the
    * stow bud: no legal pose exists past 146° (Y3 axial reserve + plume band —
@@ -5249,6 +5267,12 @@ export class PlayerSatellite extends THREE.Group {
     // Design 7b release: an orbit-bound swing under the lock clears it the
     // frame θ reaches the orbit floor. Exactly once per arming. The ROSA centre
     // hold (override folds) clears with it — sun-track resumes.
+    // An OVERRIDE sweep to 0° arms no lock (setFlowerPose), so its wing dodge ends here: the first
+    // command whose target is not below the floor (any deploy, or a tap back to the closed rest).
+    if (this._flowerOverrideFold && !this._flowerLaunchLock
+        && target !== undefined && target >= orbitFloorRad - 1e-9) {
+      this._flowerOverrideFold = false;
+    }
     const releasing = this._flowerLaunchLock && target !== undefined && target >= orbitFloorRad - 1e-9;
     if (releasing && this._flowerThetaRad >= orbitFloorRad - 1e-9) {
       this._flowerLaunchLock = false;
@@ -5264,7 +5288,7 @@ export class PlayerSatellite extends THREE.Group {
         && !(this._flowerLaunchLock && releasing)) {
       // CLOSED is the orbit floor and the rest pose: land on it EXACTLY (a
       // final step of < SETTLE_EPS_RAD, about two frames of 15°/s slew), so a
-      // closed radiator reads θ 2° / openFrac 0 rather than up to 2.57° /
+      // closed radiator reads θ 0° / openFrac 0 rather than up to 0.57° /
       // 0.0065 — the D4 contract the heat lane reads. Other poses keep the
       // daughter-contract residual.
       if (!this._flowerLaunchLock && target <= orbitFloorRad + 1e-9) this._flowerThetaRad = orbitFloorRad;
@@ -7931,7 +7955,7 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * @private Design 7b — true when the installed flower is outside the thrust
    * band θ ∈ [POSE_FLOOR_DEG, POSE_THRUST_MAX_DEG] or the one-shot launch
-   * lock is armed. No hardware → false. Boot (θ = CLOSED 2° = the floor, lock
+   * lock is armed. No hardware → false. Boot (θ = CLOSED 0° = the floor, lock
    * off) → false: DECISIONS §15 row 4 — the engines work with the radiator
    * folded, because every θ from CLOSED to the bud sits outside the FEEP
    * plume cones (measured 2026-10-09, tmp/probes/start-pose-fold.mjs §E:
