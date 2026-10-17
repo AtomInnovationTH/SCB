@@ -4676,7 +4676,12 @@ export const Constants = {
     // Contact sweep (q2-contact-sweep): the contact scan's look-ahead window is the
     // WORLD seconds that passed since the previous scan (main.js passes dtWorld),
     // not SCAN_INTERVAL real seconds; it is clamped to this many world seconds.
+    // s2-fast-time-hits (2026-10-17): it ALSO sets the world-time cadence — the contact
+    // scan runs every SCAN_INTERVAL real s OR every this many world s, whichever comes
+    // first (F4 ~every 3 frames, F5 every frame); the dodge scan stays at 4 Hz real.
     CONTACT_WINDOW_MAX_S: 10,       // world seconds — max contact look-ahead window
+    // Backward chord: longest world gap it spans; a chord between true positions errs ~1/4 of a straight line (25 s: 13 m at 2 km/s, 67 m at 10 km/s, so <= ~17 m).
+    CONTACT_CHORD_MAX_S: 25,        // world seconds
     // The contact pre-filter reaches SCAN_RADIUS + this speed x the window: the
     // fastest crossing in LEO (measured max relative speed 15.6 km/s at mission-2 start).
     CONTACT_PREFILTER_SPEED_MS: 16000, // m/s

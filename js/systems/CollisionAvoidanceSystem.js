@@ -54,6 +54,17 @@ export class CollisionAvoidanceSystem {
     /** @type {boolean} true once update() has been given a world dt (old callers pass none) */
     this._worldDtSeen = false;
 
+    // --- Backward chord memory (s2-fast-time-hits, 2026-10-17) -----------------
+    /** @type {number} Contact-scan sequence number: advances on EVERY contact-scan call
+     *  (armed or not), so a chord is only ever drawn between two ADJACENT scans. */
+    this._contactSeq = 0;
+    /** @type {Map<*, {seq:number, x:number, y:number, z:number}>} Per-debris relative position
+     *  (piece - ship, scene units) as of the contact scan numbered `seq`. One object per id, reused. */
+    this._contactMem = new Map();
+    /** @private Scratch outputs of _chordSeverity (closest distance m / implied speed m/s). */
+    this._chordDistM = 0;
+    this._chordSpeedMs = 0;
+
     /** @type {object|null} Current tracked threat */
     this._currentThreat = null;
 
@@ -183,6 +194,9 @@ export class CollisionAvoidanceSystem {
       if (typeof d?.missionNumber === 'number') {
         this._missionNumber = d.missionNumber;
       }
+      // A new mission re-seats / respawns the field: positions remembered from the
+      // old one must never be chorded to the new ones (s2-fast-time-hits D5).
+      this._contactMem.clear();
     });
     eventBus.on(Events.SCORE_UPDATE, (d) => {
       if (typeof d?.debrisCleared === 'number') {
@@ -205,6 +219,7 @@ export class CollisionAvoidanceSystem {
         // spawn-grace clock so re-entering gameplay re-arms after the grace.
         this._scanTimer = 0;
         this._worldSinceScan = 0;
+        this._contactMem.clear(); // no chord across a pause / menu / re-entry
         this._currentThreat = null;
         this._gameplayElapsed = 0;
       }
@@ -280,6 +295,8 @@ export class CollisionAvoidanceSystem {
     this._ceremonyActive = false;
     this._gameplayElapsed = 0;
     this._contactCooldowns.clear();
+    this._contactMem.clear();
+    this._contactSeq = 0;
   }
 
   /**
@@ -324,10 +341,22 @@ export class CollisionAvoidanceSystem {
 
   /**
    * Main update tick — called after autopilot, before player.update().
+   *
+   * 2026-10-17 (s2-fast-time-hits) — cadence. The DODGE scan and every real-time timer
+   * run at 4 Hz of REAL time (SCAN_INTERVAL), as ever. The CONTACT scan runs on that
+   * tick AND ALSO whenever the world seconds since the previous contact scan reach
+   * CONTACT_WINDOW_MAX_S (only once a world dt has been seen) — whichever comes first.
+   * Why: the forward look is clamped to 10 world s, so a 4 Hz real scan at 40×/200×/1000×
+   * (floors 3/4/5) left 10.0-10.7 / 50 / 250 world s per scan mostly unchecked: measured
+   * real hits of a dead-on 10 kg pass were 40× 19-20/20, 100× 7-8/20, 200× 4/20,
+   * 1000× 1/20. Now F1-F3 tick as before, F4 scans about every 3 frames, F5 every frame.
+   * A world-time-only tick runs the contact scan and nothing else (no dodge scan, no
+   * `_scanTimer` reset). See `_scanAndProcessContacts` for the backward chord.
+   *
    * @param {number} dt — REAL delta time in seconds (all timers here run on it)
    * @param {number} [dtWorld] — WORLD (game) seconds that passed this frame
    *   (`timeAuthority.dtWorld`); the contact scan's look-ahead window is the
-   *   sum of these since the previous scan tick. Omitted → the nominal
+   *   sum of these since the previous contact scan. Omitted → the nominal
    *   SCAN_INTERVAL × TIME_SCALE_GAMEPLAY.
    */
   update(dt, dtWorld) {
@@ -346,19 +375,25 @@ export class CollisionAvoidanceSystem {
     // Track player movement input for override detection (cheap, every frame).
     this._detectPlayerInput();
 
-    // --- Scan throttle (4 Hz) — shared by the dodge scan AND the contact scan ---
+    // --- Scan throttle: the real 4 Hz tick runs the dodge scan AND the contact
+    //     scan; a world-time tick (D1) runs the contact scan alone. ---
     this._scanTimer += dt;
-    if (this._scanTimer < CA.SCAN_INTERVAL) return;
-    this._scanTimer = 0;
+    const realDue = this._scanTimer >= CA.SCAN_INTERVAL;
+    const worldDue = !realDue && this._worldDtSeen
+      && this._worldSinceScan >= CA.CONTACT_WINDOW_MAX_S;
+    if (!realDue && !worldDue) return;
+    if (realDue) this._scanTimer = 0;
 
-    // World seconds since the previous scan tick (reset on EVERY tick, before
-    // the armed check, so the spawn grace never piles into one window), clamped
-    // to 10 s: the ladder can run time at 4x/20x/100x and a straight line over
-    // minutes is wrong. No world dt ever supplied → the nominal window.
+    // World seconds since the previous CONTACT scan (reset on EVERY contact scan,
+    // before the armed check, so the spawn grace never piles into one window), clamped
+    // to 10 s for the forward look: a straight line over minutes is wrong. The raw,
+    // unclamped value is the backward chord's elapsed time. No world dt ever
+    // supplied → the nominal window and no chord.
     const CAw = Constants.COLLISION_AVOIDANCE;
     const windowWorldS = this._worldDtSeen
       ? Math.min(this._worldSinceScan, CAw.CONTACT_WINDOW_MAX_S)
       : undefined;
+    const sinceScanWorldS = this._worldDtSeen ? this._worldSinceScan : undefined;
     this._worldSinceScan = 0;
 
     // --- Scan for threats ---
@@ -369,9 +404,12 @@ export class CollisionAvoidanceSystem {
     // Runs INDEPENDENT of the dodge enable-toggle and ARM_PILOT so that turning
     // auto-dodge off (or piloting a daughter) can't make the mother invincible
     // to debris. Internally gated (gameplay / onboarding / spawn-grace /
-    // ceremony / per-debris cooldown / captured-pinned exemption). Reuses this
-    // 4 Hz cadence + the already-computed player state — no new per-frame scan.
-    this._scanAndProcessContacts(playerPos, playerVel, windowWorldS);
+    // ceremony / per-debris cooldown / captured-pinned exemption). Runs on the
+    // 4 Hz real tick AND on world-time ticks (every frame at 1000x; s2-fast-time-hits).
+    this._scanAndProcessContacts(playerPos, playerVel, windowWorldS, sinceScanWorldS);
+
+    // World-time-only tick: the dodge scan keeps its 4 Hz real cadence (D1/D6).
+    if (!realDue) return;
 
     // --- Auto-dodge (gated by the enable toggle + ARM_PILOT suppression) -----
     if (!this._enabled || this._armPilotMode) return;
@@ -426,14 +464,44 @@ export class CollisionAvoidanceSystem {
   /**
    * Scan the same candidate set as the dodge scan for genuine CONTACTS (not
    * near-misses to dodge) and route graduated consequences. Called once per
-   * 4 Hz tick, independent of the dodge toggle. No per-iteration allocation.
+   * contact-scan tick (the real 4 Hz tick, or a world-time tick — see `update()`),
+   * independent of the dodge toggle. No per-iteration allocation.
+   *
+   * Two looks per candidate (2026-10-17, s2-fast-time-hits — the hit check must see a
+   * pass at every time rate; measured real hits of a dead-on 10 kg pass, same at
+   * 20..10 000 m/s: 10×/20× 20/20, 40× 19-20, 100× 7-8, 200× 4/20, 1000× 1/20):
+   *   1. FORWARD (unchanged): straight line from the current state over the window
+   *      `min(world s since the last contact scan, CONTACT_WINDOW_MAX_S)`.
+   *   2. BACKWARD CHORD (new): the segment between this piece's relative position at the
+   *      IMMEDIATELY previous contact scan and now, both read from the orbit
+   *      (`orbitToSceneCartesianInto` minus the ship). It catches a pass that happened
+   *      between two scans and so lies behind the forward window. Used only when
+   *      `0 < Tb <= CONTACT_CHORD_MAX_S` (Tb = world s between the two scans, unclamped;
+   *      a chord between two TRUE positions errs about a quarter of a straight-line
+   *      extrapolation: <= ~17 m at 10 km/s over 25 s, so longer gaps — e.g. F5 under
+   *      ~40 fps — skip it), the pair was approaching at the start (r0·d < 0), the
+   *      implied speed is <= CONTACT_PREFILTER_SPEED_MS and agrees with the orbit-derived
+   *      relative speed (a teleport or re-seat fails this and is skipped). It acts on
+   *      'glancing'/'hard' only; a chord 'warning' is ignored (warnings stay forward-only).
+   *      One pass = one consequence: both looks go through `_handleContact`, whose
+   *      per-piece real-time contact cooldown (5 s >> the 0.25 s real gap between scans)
+   *      swallows the second.
+   *
+   * Loop order per piece: exemption -> store gate (distance to the ship, so the memory
+   * covers everything the next, possibly longer, interval could bring in) -> chord +
+   * store -> forward `reachSq` skip -> forward look. The scan sequence number advances on
+   * EVERY call, armed or not, and an unarmed scan stores nothing, so the first armed scan
+   * after a gap draws no chord.
    * @private
    * @param {THREE.Vector3} playerPos
    * @param {{x,y,z}} playerVel — km/s
    * @param {number} [windowWorldS] — look-ahead window in WORLD seconds (default
    *   the nominal world time of one SCAN_INTERVAL, TimeAuthority.baseGameDt); 0 grades by the current distance only
+   * @param {number} [sinceScanWorldS] — raw (unclamped) WORLD seconds since the previous
+   *   contact scan = the chord's elapsed time Tb; undefined / 0 → no chord this scan
    */
-  _scanAndProcessContacts(playerPos, playerVel, windowWorldS) {
+  _scanAndProcessContacts(playerPos, playerVel, windowWorldS, sinceScanWorldS) {
+    const seq = ++this._contactSeq;
     if (!this._collisionArmed()) return;
 
     const CA = Constants.COLLISION_AVOIDANCE;
@@ -446,8 +514,18 @@ export class CollisionAvoidanceSystem {
     const reachSq = reach * reach;
     const hullRadiusM = CM.HULL_RADIUS_M || 12;
 
+    // Chord: needs a real elapsed world time, inside the cap.
+    const Tb = (typeof sinceScanWorldS === 'number' && sinceScanWorldS > 0) ? sinceScanWorldS : 0;
+    const chordOn = Tb > 0 && Tb <= (CA.CONTACT_CHORD_MAX_S || 0);
+    // Store gate: a margin of 2x for the next interval being longer; never inside reach.
+    const storeReach = CA.SCAN_RADIUS + CA.CONTACT_PREFILTER_SPEED_MS * M * 2
+      * Math.max(Tb, CA.CONTACT_WINDOW_MAX_S);
+    const storeReachSq = Math.max(storeReach * storeReach, reachSq);
+
     const list = this._debrisField.debrisList;
     if (!list) return;
+    const mem = this._contactMem;
+    if (mem.size > 2 * list.length + 64) this._pruneContactMem(seq);
 
     for (let i = 0, len = list.length; i < len; i++) {
       const debris = list[i];
@@ -466,12 +544,30 @@ export class CollisionAvoidanceSystem {
       const dy = sp.y - playerPos.y;
       const dz = sp.z - playerPos.z;
       const distSq = dx * dx + dy * dy + dz * dz;
-      if (distSq > reachSq) continue;
+      if (distSq > storeReachSq) continue;
+      if (!debris.orbit) continue; // no orbit to read (the store radius reaches past the old pre-filter)
 
-      // --- Relative state (world seconds). Use the zero-alloc
-      //     scratch variant so the emitter loop allocates nothing per candidate. ---
-      orbitToSceneCartesianInto(debris.orbit, this._contactScratchPos, this._contactScratchVel);
+      // --- State from the orbit (world seconds). Zero-alloc scratch variant: one
+      //     read serves the chord, the memory and the forward look. ---
+      const pos = this._contactScratchPos;
       const vel = this._contactScratchVel;
+      orbitToSceneCartesianInto(debris.orbit, pos, vel);
+
+      // --- Backward chord + memory: the relative position (piece - ship) from the
+      //     same source (the orbit) at both ends. ---
+      const r1x = pos.x - playerPos.x;
+      const r1y = pos.y - playerPos.y;
+      const r1z = pos.z - playerPos.z;
+      let m = mem.get(debris.id);
+      if (!m) { m = { seq: -1, x: 0, y: 0, z: 0 }; mem.set(debris.id, m); } // -1: never chordable on its first scan
+      if (chordOn && m.seq === seq - 1) {
+        const sev = this._chordSeverity(m, r1x, r1y, r1z, vel, playerVel, Tb, hullRadiusM, debris.mass, CA, CM);
+        if (sev !== 'none') this._handleContact(sev, debris, this._chordSpeedMs, this._chordDistM);
+      }
+      m.seq = seq; m.x = r1x; m.y = r1y; m.z = r1z;
+
+      // --- Forward look (unchanged) ---
+      if (distSq > reachSq) continue;
       const rvx = (vel.x - playerVel.x) * KM_TO_SCENE;
       const rvy = (vel.y - playerVel.y) * KM_TO_SCENE;
       const rvz = (vel.z - playerVel.z) * KM_TO_SCENE;
@@ -502,6 +598,76 @@ export class CollisionAvoidanceSystem {
 
       if (severity === 'none') continue;
       this._handleContact(severity, debris, closingMs, effDistM);
+    }
+  }
+
+  /**
+   * The backward chord for one piece (see `_scanAndProcessContacts`). Pure
+   * arithmetic on the stored previous relative position `m` and the current one
+   * (r1) — no allocation except the classifier's argument object, built only
+   * for a chord that passes inside the warning envelope.
+   * @private
+   * @param {{x,y,z}} m — previous relative position (piece - ship, scene units)
+   * @param {number} r1x — relative position now, x (scene units)
+   * @param {number} r1y — relative position now, y
+   * @param {number} r1z — relative position now, z
+   * @param {{x,y,z}} vel — piece velocity now (km/s)
+   * @param {{x,y,z}} playerVel — km/s
+   * @param {number} Tb — world seconds between the two scans (> 0)
+   * @param {number} hullRadiusM — ship hull radius for the classifier (m)
+   * @param {number} massKg — piece mass
+   * @param {object} CA — Constants.COLLISION_AVOIDANCE
+   * @param {object} CM — Constants.COLLISION_MODEL
+   * @returns {'none'|'glancing'|'hard'} — on a hit, `_chordDistM` / `_chordSpeedMs` hold
+   *   the closest distance (m) and the implied closing speed (m/s)
+   */
+  _chordSeverity(m, r1x, r1y, r1z, vel, playerVel, Tb, hullRadiusM, massKg, CA, CM) {
+    const dx = r1x - m.x;
+    const dy = r1y - m.y;
+    const dz = r1z - m.z;
+    const dd = dx * dx + dy * dy + dz * dz;
+    if (dd < 1e-30) return 'none';
+    const r0d = m.x * dx + m.y * dy + m.z * dz;
+    if (r0d >= 0) return 'none'; // not approaching at the start of the segment
+    // Implied relative speed along the chord must be physical...
+    const impliedMs = Math.sqrt(dd) / Tb / M;
+    if (impliedMs > CA.CONTACT_PREFILTER_SPEED_MS) return 'none';
+    // ...and agree with the orbit-derived relative speed now; otherwise it is a
+    // teleport / re-seat, not flight.
+    const rvx = (vel.x - playerVel.x) * KM_TO_SCENE;
+    const rvy = (vel.y - playerVel.y) * KM_TO_SCENE;
+    const rvz = (vel.z - playerVel.z) * KM_TO_SCENE;
+    const orbitMs = Math.sqrt(rvx * rvx + rvy * rvy + rvz * rvz) / M;
+    if (Math.abs(impliedMs - orbitMs) > 0.25 * orbitMs + 50) return 'none';
+    // Closest point on the segment.
+    let s = -r0d / dd;
+    if (s < 0) s = 0; else if (s > 1) s = 1;
+    const cx = m.x + dx * s;
+    const cy = m.y + dy * s;
+    const cz = m.z + dz * s;
+    const distM = Math.sqrt(cx * cx + cy * cy + cz * cz) / M;
+    if (distM > (CM.WARN_RADIUS_M || 0)) return 'none'; // outside the envelope: cannot be a hit
+    const sev = classifyContact({
+      distanceM: distM,
+      hullRadiusM,
+      closingSpeedMs: impliedMs,
+      massKg,
+    }, CM);
+    if (sev !== 'glancing' && sev !== 'hard') return 'none'; // chord warnings are ignored
+    this._chordDistM = distM;
+    this._chordSpeedMs = impliedMs;
+    return sev;
+  }
+
+  /**
+   * Drop chord-memory entries that can no longer be chorded (older than the
+   * previous scan) — pieces that died or flew out of the store radius.
+   * @private
+   * @param {number} seq — the current scan sequence number
+   */
+  _pruneContactMem(seq) {
+    for (const [id, m] of this._contactMem) {
+      if (m.seq < seq - 1) this._contactMem.delete(id);
     }
   }
 
@@ -573,7 +739,7 @@ export class CollisionAvoidanceSystem {
   }
 
   // ==========================================================================
-  // DETECTION (Phase 1 — 4 Hz scan)
+  // DETECTION (Phase 1 — dodge scan, 4 Hz real)
   // ==========================================================================
 
   /**
