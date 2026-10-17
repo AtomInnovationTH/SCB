@@ -385,23 +385,23 @@ export class StatusPanel {
     return `${memo ? `
       <span id="autopilot-indicator" class="mother-memo" style="font-size:10px;letter-spacing:0.08em;color:var(--hud-normal, ${VisualLaw.COLORS.PLAYER});opacity:1;white-space:nowrap;"></span>` : `
       <div id="autopilot-indicator" style="font-size:10px;padding:2px 6px;border-radius:2px;display:inline-block;background:rgb(var(--hud-ink-rgb, 0 0 0) / 0.4);border:1px solid rgb(var(--hud-text-rgb, 255 255 255) / 0.1);color:var(--hud-dim, #555);">[Autopilot: OFF]</div>`}
-      <div id="mother-digest" style="font-size:11px;line-height:1.4;white-space:nowrap;display:flex;align-items:center;gap:6px;transition:opacity 0.3s ease;">
+      <div id="mother-digest" style="font-size:11px;white-space:nowrap;display:flex;align-items:center;gap:6px;transition:opacity 0.3s ease;">
         <span id="mother-digest-net" class="md-seg" style="display:inline-flex;align-items:center;gap:4px;color:${NET_COLOR};">
           <span class="md-core">
           <span class="md-label">NET</span>
           <span class="md-track"><span class="md-fill" id="mother-digest-net-fill"></span></span>
-          <span class="md-count" id="mother-digest-net-count">${Constants.LASSO_AMMO_MAX}</span>
+          <span class="md-count" id="mother-digest-net-count" title="Small net shots left">${Constants.LASSO_AMMO_MAX}/${Constants.LASSO_AMMO_MAX}</span>
           <span id="mother-digest-net-reload" style="display:none;">↻</span>
           </span>
-          <span class="md-reach-group" id="mother-digest-net-reach-group"><span class="md-sep">·</span><span class="md-reach" id="mother-digest-net-reach" title="Net reach">${StatusPanel.reachText(Constants.LASSO_RANGE)}</span></span>
+          <span class="md-reach-group" id="mother-digest-net-reach-group"><span class="md-sep">·</span><span class="md-reach" id="mother-digest-net-reach" title="Small net reach">${StatusPanel.reachText(Constants.LASSO_RANGE)}</span></span>
         </span>
-        <span class="md-sep" id="mother-digest-mnet-sep" style="display:none;">·</span>
+        <span class="md-sep" id="mother-digest-mnet-sep" style="display:none;">│</span>
         <span id="mother-digest-mnet" class="md-seg" style="display:none;align-items:center;gap:4px;color:${NET_COLOR};" title="Mother Large Net (whale hunts)">
           <span class="md-core">
-          <span class="md-label">LARGE NET</span>
-          <span class="md-count" id="mother-digest-mnet-count">0/0</span>
+          <span class="md-label">LARGE</span>
+          <span class="md-count" id="mother-digest-mnet-count" title="Large net nets left">0/0</span>
           </span>
-          <span class="md-reach-group"><span class="md-sep">·</span><span class="md-reach" id="mother-digest-mnet-reach" title="Large net reach">${StatusPanel.reachText(netMaxReachM(Constants.CAPTURE_NET.LARGE))}</span></span>
+          <span class="md-reach-group" id="mother-digest-mnet-reach-group"><span class="md-sep">·</span><span class="md-reach" id="mother-digest-mnet-reach" title="Large net reach">${StatusPanel.reachText(netMaxReachM(Constants.CAPTURE_NET.LARGE))}</span></span>
         </span>
       </div>
       <div class="mother-detail">
@@ -745,6 +745,17 @@ export class StatusPanel {
     const chip = typeof mother.querySelector === 'function' ? mother.querySelector('#autopilot-indicator') : null;
     const slot = vitals.titleSlot;
     if (chip && slot && typeof slot.appendChild === 'function') slot.appendChild(chip);
+    // q3-mother-pane D2: the net line (`NET ━ 50/50 · 90 m │ LARGE 4/4 · 100 m`) rides the title row too, left of the
+    // chip. It stays the mother rung's: index.html hides it wherever `#hud-mother-panel` is hidden (F1, F3, F4, −).
+    const digest = typeof mother.querySelector === 'function' ? mother.querySelector('#mother-digest') : null;
+    if (digest && slot && slot.parentNode && typeof slot.parentNode.insertBefore === 'function') slot.parentNode.insertBefore(digest, slot);
+    // q3 round 2 (R2): re-fit the net line when the title row or the chip slot changes width (resize, a new chip text).
+    if (digest && slot && slot.parentNode && typeof ResizeObserver === 'function') {
+      if (this._fitObserver) this._fitObserver.disconnect();
+      this._fitObserver = new ResizeObserver(() => this._fitDigest());
+      this._fitObserver.observe(slot.parentNode);
+      this._fitObserver.observe(slot);
+    }
     // Hover / glass tap: off the panel, onto the merged root.
     if (typeof mother.removeEventListener === 'function') {
       mother.removeEventListener('mouseenter', this._onMotherEnter);
@@ -934,8 +945,9 @@ export class StatusPanel {
 
     fill.style.width = `${pct}%`;
     fill.style.backgroundColor = color;
-    count.textContent = String(Math.max(0, ammo));
+    count.textContent = `${Math.max(0, ammo)}/${ammoMax}`;   // q3: count / max, like BATTERY 298/600 and the Large Net 4/4
     count.style.color = color;
+    this._digestFull = { ...(this._digestFull || {}), net: count.textContent };
 
     if (reloadGlyph) reloadGlyph.style.display = reloading ? '' : 'none';
 
@@ -943,20 +955,7 @@ export class StatusPanel {
     // dark-cockpit dimming of the whole digest line.
     this._netNominal = ammo > 10 && !reloading && !denied;
     this._refreshDigestDim();
-  }
-
-  /**
-   * W2 meters: show / hide the small-net reach (`· 90 m`) in the MOTHER digest,
-   * write-on-change. Hidden while the large net shows, so the row never clips.
-   * @param {boolean} shown
-   * @private
-   */
-  _setNetReachShown(shown) {
-    if (this._netReachShown === shown) return;
-    const g = typeof document !== 'undefined' ? document.getElementById('mother-digest-net-reach-group') : null;
-    if (!g) return;
-    this._netReachShown = shown;
-    g.style.display = shown ? '' : 'none';
+    this._fitDigest();
   }
 
   /**
@@ -977,7 +976,7 @@ export class StatusPanel {
     if (!Array.isArray(this._motherPods)) {
       seg.style.display = 'none';
       if (sep) sep.style.display = 'none';
-      this._setNetReachShown(true);
+      this._digestFull = { ...(this._digestFull || {}), mnet: null };
       return;
     }
 
@@ -993,7 +992,6 @@ export class StatusPanel {
 
     seg.style.display = 'inline-flex';
     if (sep) sep.style.display = '';
-    this._setNetReachShown(false);   // W2 meters: one reach at a time — the large net's
     count.textContent = `${nets}/${maxNets}`;
     count.style.color = color;
     seg.style.color = color;
@@ -1052,6 +1050,65 @@ export class StatusPanel {
       if (tipDigest.cookingPct !== null) txt += ` · cooking ${tipDigest.cookingPct}%`;
       count.textContent = txt;
     }
+    this._digestFull = { ...(this._digestFull || {}), mnet: count.textContent };
+    this._fitDigest();
+  }
+
+  /**
+   * q3 round 2 (R2) — the net line never clips. The title row (MOTHER · net line · memo chip) is one line; when the
+   * line is wider than the room the chip leaves it, optional parts drop in this order, and come back when room returns:
+   *   1 the two reaches  2 the gauge `━`  3 the Large Net tail (reload countdown / BERTHED / COOK % / Tips; the
+   *   tooltip and colour keep it)  4 the `/max` suffixes (`NET 50 │ LARGE 4`).
+   * The counts, `NET`, `LARGE` and the chip are never hidden. Each change re-checks from the fullest form (level 0),
+   * at most once per change: the key is (row width, chip slot width, the two full count texts, shown?).
+   * Hidden parts are `data-fit` tokens on `#mother-digest` (index.html has the matching rules).
+   */
+  _fitDigest(force = false) {
+    if (typeof document === 'undefined' || !document || typeof document.getElementById !== 'function') return;
+    const digest = document.getElementById('mother-digest');
+    const row = digest && digest.parentNode;
+    if (!digest || !row) return;
+    const slot = row.querySelector ? row.querySelector('.vp-title-slot') : null;
+    const full = this._digestFull || {};
+    const key = [row.clientWidth, slot ? slot.offsetWidth : 0, full.net, full.mnet, digest.scrollWidth > 0 ? 1 : 0].join('|');
+    if (!force && key === this._digestFitKey && this._digestFitLevel !== undefined) {
+      this._applyDigestFit(this._digestFitLevel);   // the updater just rewrote the full texts: put the level back
+      return;
+    }
+    const tooWide = () => row.scrollWidth > row.clientWidth || digest.scrollWidth > digest.clientWidth;
+    let level = 0;
+    for (; level <= StatusPanel.DIGEST_FIT_STEPS.length - 1; level++) {
+      this._applyDigestFit(level);
+      if (!tooWide()) break;
+    }
+    if (level >= StatusPanel.DIGEST_FIT_STEPS.length) level = StatusPanel.DIGEST_FIT_STEPS.length - 1;
+    this._digestFitLevel = level;
+    this._digestFitKey = [row.clientWidth, slot ? slot.offsetWidth : 0, full.net, full.mnet, digest.scrollWidth > 0 ? 1 : 0].join('|');
+  }
+
+  /** @private Show the digest at fit `level` (0 = fullest): the hidden-part tokens and the shortened count texts. */
+  _applyDigestFit(level) {
+    const digest = document.getElementById('mother-digest');
+    if (!digest) return;
+    const hidden = StatusPanel.DIGEST_FIT_STEPS[Math.max(0, Math.min(level, StatusPanel.DIGEST_FIT_STEPS.length - 1))];
+    const tokens = hidden.join(' ');
+    if (typeof digest.setAttribute === 'function') digest.setAttribute('data-fit', tokens);
+    else if (digest.dataset) digest.dataset.fit = tokens;
+    const full = this._digestFull || {};
+    const short = (text) => {
+      if (typeof text !== 'string') return text;
+      const m = /^(\d+)\/(\d+)/.exec(text);
+      if (!m) return text;
+      if (hidden.includes('max')) return m[1];
+      if (hidden.includes('tail')) return `${m[1]}/${m[2]}`;
+      return text;
+    };
+    for (const [id, text] of [['mother-digest-net-count', full.net], ['mother-digest-mnet-count', full.mnet]]) {
+      if (typeof text !== 'string') continue;
+      const el = document.getElementById(id);
+      const next = short(text);
+      if (el && el.textContent !== next) el.textContent = next;
+    }
   }
 
   /** Clean up DOM elements appended outside the HUD container. */
@@ -1059,6 +1116,7 @@ export class StatusPanel {
     // Body-mounted priority panels (objective) are appended to document.body
     // by _createTopPanel, so they are not torn down with the HUD container —
     // remove them explicitly to avoid orphaned duplicate-id nodes.
+    if (this._fitObserver) { this._fitObserver.disconnect(); this._fitObserver = null; }   // q3 round 3 (S5)
     for (const p of [this.panels.score]) {
       if (p && p.parentNode) p.parentNode.removeChild(p);
     }
@@ -1162,7 +1220,7 @@ export class StatusPanel {
     const el = document.getElementById('fuel-type-indicator');
     if (!el) return;
     const isp = mb && Number.isFinite(mb.isp) ? mb.isp : this._fuelIsp;
-    const text = Number.isFinite(isp) ? `${this._currentFuelName()} · ${Math.round(isp)} s` : this._currentFuelName();
+    const text = Number.isFinite(isp) ? `${this._currentFuelName()} · Isp ${Math.round(isp)} s` : this._currentFuelName();
     if (el.textContent !== text) el.textContent = text;
   }
 
@@ -1386,6 +1444,7 @@ export class StatusPanel {
     if (text !== '') this._memoBoxedUntil = this._now() + RAIL_GEOMETRY.BOX_MS;
     const el = this._memoElement();
     if (el) el.textContent = text;
+    this._fitDigest();   // q3 round 2: the chip's width changed the room for the net line
   }
 
   /**
@@ -1449,6 +1508,8 @@ export class StatusPanel {
         letter-spacing: 0.06em;
       }
       #mother-digest .md-sep { opacity: 0.25; }
+      /* q3 round 3 (S4): the divider between the two nets reads like the PROPULSION row's: label colour, 0.35 */
+      #mother-digest > .md-sep { color: var(--hud-label, #9fb0c0); opacity: 0.35; }
       #mother-digest .md-track {
         width: 38px;
         height: 3px;
@@ -1470,17 +1531,14 @@ export class StatusPanel {
         text-align: right;
       }
       #mother-digest-net-reload { opacity: 0.8; }
-      /* W2 meters: the reach is the digest's lowest-priority text and is never
-       * clipped. The small-net reach hides while the large net shows (JS,
-       * _updateMotherPodDigest); under any further pressure (the measured
-       * worst case M-NET + ΔV % + PWR CRIT) a segment shrinks to its core and
-       * its reach group wraps onto a second line the fixed height hides — the
-       * whole reach goes, the counts, bars and PWR word stay. */
+      /* q3-mother-pane: the digest sits on MOTHER's title row (attachToVitals moves it there),
+       * beside the memo chip. Each net names its own count and reach: NET ━ 50/50 · 90 m │ LARGE 4/4 · 100 m.
+       * Title styles (wide letter-spacing, bold, glow) are reset for the digest; the reaches drop out on
+       * narrow panes by a CSS rule in index.html (they stay in the tooltips); under any other pressure
+       * the line shrinks from its right end rather than overlapping MOTHER or the chip. */
+      #mother-digest { line-height: 16px; letter-spacing: 0.015em; font-weight: 400; text-shadow: none; text-transform: none; }   /* S2: units read 90 m and ·8s, not the title capitals */
       #mother-digest > * { flex-shrink: 0; }
-      #mother-digest .md-seg {
-        flex-shrink: 1 !important; flex-wrap: wrap; align-content: flex-start;
-        min-width: min-content; height: 1.4em; overflow: hidden;
-      }
+      #mother-digest .md-seg { min-width: min-content; }
       #mother-digest .md-core { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
       #mother-digest .md-reach-group { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; }
       #mother-digest .md-reach { opacity: 0.7; }
@@ -2281,6 +2339,9 @@ export class StatusPanel {
    * @param {number} m metres
    * @returns {string}
    */
+  /** q3 round 2: what the net line has dropped at fit level 0..4 (see `_fitDigest`). */
+  static DIGEST_FIT_STEPS = [[], ['reach'], ['reach', 'track'], ['reach', 'track', 'tail'], ['reach', 'track', 'tail', 'max']];
+
   static reachText(m) {
     if (!Number.isFinite(m) || m <= 0) return '';
     if (m < 1000) return `${Math.round(m)} m`;

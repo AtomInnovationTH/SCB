@@ -5486,7 +5486,8 @@ export const Constants = {
     // CP-4 guidance arbiter — graduated post-onboarding suppression ramp (s of play).
     // Tier 1 (0→TIER2) HOUSTON+MISSION only · Tier 2 (→TIER3) +ALERT+CMD · Tier 3 all.
     SUPPRESSION_RAMP: { TIER2_AFTER_S: 30, TIER3_AFTER_S: 60 },
-    PANE_HEIGHT_MIN_PX: 80,               // 'line' step — compact 2-message view (≥1 full message always visible)
+    // q3-mother-pane D3: the 'line' step's height is MOTHER's collapsed height (VITALS_COLLAPSED_HEIGHT_PX, js/ui/hud/VitalsPane.js —
+    // Constants must not import UI); it shows PANE_LINES_MIN messages (≥1 full message always visible).
     // rev 3 — the right arm's top follows it; 144/300 on demand
     PANE_STEP_DEFAULT: 'line',
     PANE_HEIGHT_PX: 144,

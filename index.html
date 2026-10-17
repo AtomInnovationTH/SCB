@@ -413,6 +413,41 @@
     #hud-vitals:has(> #hud-mother-panel:not([data-density-hidden]):not([data-floor-gone]):not([style*="display: none"])) {
       pointer-events: auto;
     }
+    /* q3-mother-pane D2/D3: the net line (#mother-digest, built by StatusPanel, moved by attachToVitals) rides MOTHER's
+       title row, left of the memo chip. It stays the `mother` rung's: wherever the section is hidden (F1, F3, F4, the
+       MORE ladder, display none) the line is hidden with it. The now-empty section would still cost one flex gap, so a
+       -3 px margin cancels it: the collapsed pane is VITALS_COLLAPSED_HEIGHT_PX (91), the height comms matches. */
+    #hud-vitals > #hud-mother-panel { margin-top: -3px; }
+    #hud-vitals .vp-title > #mother-digest {
+      margin-left: auto;
+      flex: 0 1 auto;
+      min-width: 0;
+      overflow: hidden;
+    }
+    #hud-vitals .vp-title > #mother-digest + .vp-title-slot { margin-left: 0; }
+    #hud-vitals:not(:has(> #hud-mother-panel:not([data-density-hidden]):not([data-floor-gone]):not([style*="display: none"]))) .vp-title > #mother-digest {
+      display: none !important;
+    }
+    /* Narrow panes (--hud-side-w clamps from 480 down to 300 below a 1304 px screen): the full line plus the longest
+       memo chip (`AP PROGRADE · HOLD`) needs about 430 px of pane, i.e. a 1204 px screen. Below 1220 px the two
+       reaches drop out and the line reads `NET ━ 50/50 │ LARGE 4/4`; the reaches stay in the tooltips. */
+    @media (max-width: 1220px) {
+      #hud-vitals #mother-digest .md-reach-group { display: none !important; }
+    }
+    /* Below ~1060 px the pane is under ~350 px: the mini-bar goes too (the number says the same), so the line still
+       clears MOTHER and a typical memo chip at the 300 px floor. */
+    @media (max-width: 1060px) {
+      #hud-vitals #mother-digest .md-track { display: none !important; }
+      #hud-vitals .vp-title { gap: 4px; }
+      #hud-vitals #mother-digest { gap: 3px; }
+      #hud-vitals #mother-digest .md-core { gap: 3px; }
+    }
+
+    /* q3 round 2 (R2): the net line never clips. StatusPanel._fitDigest sets data-fit on #mother-digest when the title
+       row is too narrow, dropping parts in this order: reaches, gauge, Large Net tail (countdown), /max suffixes. */
+    #hud-vitals #mother-digest[data-fit~="reach"] .md-reach-group { display: none !important; }
+    #hud-vitals #mother-digest[data-fit~="track"] .md-track { display: none !important; }
+
     /* Nested Propulsion / Energy blocks must NOT render their own boxed
        border/background — only the MOTHER container is a visible box. */
     #hud-mother-panel .mother-block {

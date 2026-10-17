@@ -33,7 +33,7 @@
  *            lives in the MOTHER hover detail (`flowText()` feeds it).
  *            Source: `getPowerSnapshot()`, falling back to the plain
  *            `player.resources` copy.
- *   PROPULSION one row, two halves: `N₂ ▮▮▮▯ 3.6 kg │ XENON ▮▮▮▯ 1468 m/s`.
+ *   PROPULSION one row, two halves: `N₂ ▮▮▮▯ 3.6 kg │ ARGON ▮▮▮▯ 1468 m/s`.
  *            The nitrogen half = the cold-gas tank (kg from the mass budget's
  *            `coldGasCurrent`); amber < 25 %, red < 10 %; the same cost flash
  *            for any spend of >= 0.25 % of the tank. The engine half = the
@@ -91,7 +91,9 @@ export const VITALS_HALVES = Object.freeze(['gas', 'ion']);
 
 /** Row / half labels. The engine half's label follows the loaded fuel's name. */
 export const VITALS_LABELS = Object.freeze({
-  heat: 'HEAT', battery: 'BATTERY', propulsion: 'PROPULSION', gas: 'N\u2082', ion: 'XENON',
+  heat: 'HEAT', battery: 'BATTERY', propulsion: 'PROPULSION', gas: 'N\u2082',
+  // q3 D4: until the loaded fuel is known the engine half carries the DEFAULT fuel's name (argon), not 'XENON'.
+  ion: String((Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL] && Constants.FUELS[Constants.DEFAULT_FUEL].name) || 'Argon').toUpperCase(),
 });
 
 /**
@@ -114,6 +116,15 @@ export const VITALS_GEOMETRY = Object.freeze({
   FLOW_PX: 11,
   TITLE_PX: 16,
 });
+
+/**
+ * q3-mother-pane D3: MOTHER's collapsed height, the ONE number the comms pane's default ('line') step reads, so the
+ * two panes end at the same height. = 2 border + 2 x PAD_Y + TITLE + 3 meter rows + 3 gaps (the net line rides the
+ * title row; the empty MOTHER section's flex gap is cancelled by a -GAP_PX margin in index.html). A browser test
+ * (tmp/q3 notes in the plan log) measured the rendered pane at this height.
+ */
+export const VITALS_COLLAPSED_HEIGHT_PX = 2 + 2 * VITALS_GEOMETRY.PAD_Y_PX + VITALS_GEOMETRY.TITLE_PX
+  + VITALS_ROWS.length * VITALS_GEOMETRY.ROW_PX + VITALS_ROWS.length * VITALS_GEOMETRY.GAP_PX;
 
 /**
  * VITALS_LAW — the thresholds (DECISIONS §2 row 5 + §15 row 5), the update
@@ -855,7 +866,7 @@ export class VitalsPane {
       el.appendChild(label);
 
       if (key === 'propulsion') {
-        // One row, two halves: `N₂ ▮▮▮▯ 3.6 kg │ XENON ▮▮▮▯ 1468 m/s`. Each half has its own band.
+        // One row, two halves: `N₂ ▮▮▮▯ 3.6 kg │ ARGON ▮▮▮▯ 1468 m/s`. Each half has its own band.
         this._row.propulsion = { el, label, st: { band: 'none', fill: '', value: '', rate: '', tag: '' } };
         VITALS_HALVES.forEach((hk, i) => {
           if (i > 0) el.appendChild(mk('span', 'vp-sep', '\u2502'));

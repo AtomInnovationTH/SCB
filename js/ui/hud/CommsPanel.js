@@ -18,6 +18,7 @@ import { decorateGlossary, escapeHtml } from '../../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from '../glossaryDom.js';
 import { TouchControls } from '../TouchControls.js';
 import { RAIL_GEOMETRY } from '../RailGeometry.js';
+import { VITALS_COLLAPSED_HEIGHT_PX } from './VitalsPane.js';
 
 const COMMS = Constants.COMMS;
 
@@ -308,6 +309,7 @@ export class CommsPanel {
       transition: 'height 0.3s ease',
     });
 
+    this._logEl.addEventListener('transitionend', (e) => this._onLogTransitionEnd(e));
     this.panels.comms.appendChild(this._logEl);
 
     // Inline-glossary affordances: a one-time stylesheet for `.glossary-term`
@@ -487,7 +489,7 @@ export class CommsPanel {
     const step = COMMS_STEPS.includes(stepArg) ? stepArg : this._currentStep();
     this._commsStep = step;
     let h;
-    if (step === 'line') h = COMMS.PANE_HEIGHT_MIN_PX;
+    if (step === 'line') h = VITALS_COLLAPSED_HEIGHT_PX;   // q3 D3: as tall as MOTHER's collapsed pane (one number, VitalsPane)
     else if (step === 'large') h = COMMS.PANE_EXPAND_HEIGHT_PX;
     else h = COMMS.PANE_HEIGHT_PX;
 
@@ -552,6 +554,42 @@ export class CommsPanel {
       // the layout (NavSphere slot + right-hand pane column) to reflow.
       this._applyCommsStep();
     }
+  }
+
+  /**
+   * @private Remove the oldest rendered message rows while the log content overflows its box (so no row is shown cut
+   * through). Leaves at least one row. No-op where the log has no layout (tests, hidden pane).
+   */
+  _trimCutRows() {
+    const log = this._logEl;
+    if (!log || !log.children || typeof log.removeChild !== 'function') return;
+    // q3 round 3 (S1): trim against the TARGET height. On a step change the log's `height` animates (0.3 s) and
+    // clientHeight is still the old one, so measuring against it lets a row that will not fit come back at the end.
+    const target = parseFloat(log.style && log.style.height);
+    const box = () => (target > 0 ? target : log.clientHeight);
+    while (log.children.length > 1 && log.clientHeight > 0 && this._logContentHeight() > box() + 1) {
+      log.removeChild(log.children[0]);
+    }
+  }
+
+  /** @private Height of the rendered rows (with their 2 px margins), independent of the box they sit in. */
+  _logContentHeight() {
+    const log = this._logEl;
+    const kids = log.children;
+    const first = kids[0], last = kids[kids.length - 1];
+    if (first && last && typeof first.getBoundingClientRect === 'function' && typeof last.getBoundingClientRect === 'function') {
+      const a = first.getBoundingClientRect(), b = last.getBoundingClientRect();
+      if (b.bottom > a.top) return b.bottom - a.top + 4;
+    }
+    return log.scrollHeight;   // no layout (tests): the content height of a box that is not mid-animation
+  }
+
+  /** @private The log's height finished animating: re-trim against the settled box and keep the newest row in view. */
+  _onLogTransitionEnd(e) {
+    if (e && e.propertyName && e.propertyName !== 'height') return;
+    if (this._commsStep !== 'line') return;
+    this._trimCutRows();
+    if (this._scrollOffset === 0 && this._logEl) this._logEl.scrollTop = this._logEl.scrollHeight;
   }
 
   /** @private Visible line count for the current size step. */
@@ -624,6 +662,11 @@ export class CommsPanel {
         <span style="color:${color};font-weight:700;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;">${sourceText}</span><span style="color:${color};opacity:${textOpacity};font-weight:${weight};font-size:13px;">${body}</span>
       </div>`;
     }).join('');
+
+    // q3 round 2 (R3): in the short 'line' step the log is one message tall, so the older of the two rendered rows
+    // can stick out over the top edge and show half a line. Whole messages only: drop the oldest rendered row while
+    // the content is taller than the log (never the last one: a single long message may still scroll).
+    if (this._commsStep === 'line') this._trimCutRows();
 
     // Auto-scroll to bottom (unless scrolled up)
     if (this._scrollOffset === 0) {
