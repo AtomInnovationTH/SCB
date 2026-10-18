@@ -21,7 +21,9 @@
  *
  * w4-power D7 (2026-10-12): below HEATER.HOLD_C (0 °C) the battery heaters
  * draw what holds it (capped at HEATER.MAX_W), billed through the battery, so
- * an open radiator in the cold costs power — `_updateHeater`.
+ * an open radiator in the cold costs power — `_updateHeater`. Its one line is
+ * visible in mission 1 (`_critical`, though priority 'info') because the heaters
+ * cost battery and the line names the fix.
  *
  * Speaks only through Events.COMMS_MESSAGE (sender 'THERMAL'). The auto
  * radiator calls player.setFlowerPose() ONLY — it never emits
@@ -230,7 +232,7 @@ export class ThermalSystem {
         && this._clockS - this._heaterLineAtS >= H.LINE_EVERY_S) {
       this._heaterLineAtS = this._clockS;
       this._heaterRunGameS = 0;
-      this._say(`Ship cold — battery heaters on, ${Math.round(w)} W. Folding the radiator saves the power.`, 'info');
+      this._say(`Ship cold — battery heaters on, ${Math.round(w)} W. Folding the radiator saves the power.`, 'info', { critical: true });
     }
     return w;
   }
@@ -371,9 +373,9 @@ export class ThermalSystem {
    * on glass "Press O" reads "Tap RADIATORS on floor 1" (the comms panel does
    * not rewrite key words itself); off glass speak returns the same string.
    */
-  _say(text, priority) {
+  _say(text, priority, opts) {
     const msg = { sender: 'THERMAL', text: GestureHints.speak(text), priority };
-    if (priority === 'warning') msg._critical = true;
+    if (priority === 'warning' || (opts && opts.critical)) msg._critical = true;
     eventBus.emit(Events.COMMS_MESSAGE, msg);
   }
 }

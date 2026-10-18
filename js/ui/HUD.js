@@ -1382,10 +1382,14 @@ export class HUD {
     // h4b D2: analyse is the game's own Z path (InputManager KeyZ → noteAnalyse) and a tap on the
     // selected target row (TargetPanel → onAnalyse); no raw document keydown listener.
 
+    // SCORE_UPDATE is emitted before gameState.clearDebris() increments the count, so the cache
+    // below stays one behind a catch; DEBRIS_CLEARED carries the new count.
+    eventBus.on(Events.DEBRIS_CLEARED, (d) => { if (d && Number.isFinite(d.count)) this._debrisCleared = d.count; });
+
     eventBus.on(Events.SCORE_UPDATE, (data) => {
       this._score = data.total;
       this._credits = data.credits != null ? data.credits : this._credits;
-      this._debrisCleared = data.debrisCleared || this._debrisCleared;
+      if (data && Number.isFinite(data.debrisCleared)) this._debrisCleared = data.debrisCleared;
       this._totalMassKg = data.totalMassKg || this._totalMassKg || 0;
       // Phase 3 (onboarding gating): keep the mission number current from the
       // debris count too. MISSION_START is the authoritative profile source but

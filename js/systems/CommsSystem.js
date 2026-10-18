@@ -569,7 +569,7 @@ export class CommsSystem {
     eventBus.on(Events.PLAYER_LOW_XENON, (data) => {
       if (!this._canSend('lowXenon')) return;
       const tmpl = PLAYER_STATUS_TEMPLATES.lowXenon;
-      const pct = data && data.level ? Math.round(data.level / Constants.XENON_FUEL_MAX * 100) : 10;
+      const pct = data && Number.isFinite(data.level) ? Math.round(data.level / Constants.XENON_FUEL_MAX * 100) : 10;
       // CP-4: survival warning — must reach the player even during the wake ramp.
       // h4-simple-first D10: the text names the fuel actually loaded (last FUEL_CHANGED, else the default fuel's).
       this.addMessage(tmpl.priority, tmpl.source, tmpl.template.replace('{fuel}', this._fuelName().toLowerCase()).replace('{pct}', pct), { _critical: true });
@@ -579,7 +579,7 @@ export class CommsSystem {
       if (!this._canSend('lowBattery')) return;
       const tmpl = PLAYER_STATUS_TEMPLATES.lowBattery;
       const max = (data && data.batteryMax) || Constants.BATTERY_MAX;
-      const pct = data && data.level ? Math.round(data.level / max * 100) : 10;
+      const pct = data && Number.isFinite(data.level) ? Math.round(data.level / max * 100) : 10;
       this.addMessage(tmpl.priority, tmpl.source, tmpl.template.replace('{pct}', pct), { _critical: true });
     });
 
