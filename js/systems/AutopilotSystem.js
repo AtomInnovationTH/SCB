@@ -101,6 +101,12 @@ const TURN_MIN_MAG = 0.02;
 /** Body axis → RCS couple name, for the two couples with real authority (x = pitch, y = yaw). */
 const TURN_COUPLES = Object.freeze([['pitch', 'x'], ['yaw', 'y']]);
 
+/** aim-track-settle: while the aim direction itself turns, an aim is on target at the target's rate plus at most this much (rad/s; the brake step cap). */
+const AIM_TRACK_SLACK_MAX = 0.003;
+
+/** aim-track-settle: seconds inside the tolerance before an aim may count as tracking (a still piece's last stretch lasts up to 1.25 s, measured). */
+const AIM_TRACK_DWELL_S = 2.0;
+
 /**
  * launch-seq: the attitude hold that carries an aimed daughter launch from the end of the aim to the spring.
  * While she is clamped on LAUNCHING (before the spring) it stays at most CROSSBOW_UNDOCK_TIME + this many seconds
@@ -2131,6 +2137,8 @@ export class AutopilotSystem {
       this._aimCoroutine = {
         mode, provider, tolRad, rate,
         stopErr: 0.5 * tolRad,     // launch-smooth: the eased turn comes to rest this far from the target (inside tolRad)
+        pT: null,                  // aim-track-settle: last frame's aim direction (a clone), for the target's turn rate
+        inTolS: 0,                 // aim-track-settle: seconds inside the tolerance, strut done
         armManager: opts.armManager || this._armManager,
         arm: opts.arm || null,
         pairIndex: (opts.pairIndex != null) ? opts.pairIndex : null,
@@ -2623,6 +2631,23 @@ export class AutopilotSystem {
     // limited to ±α·dt per frame and to the peak. Frames of a stop run ω−δ, ω−2δ, … (δ = α·dt), so the angle one
     // step ω·dt plus that stop covers is ω·dt + ω(ω−δ)/2α; solve for ω.
     const dOm = a * dt;
+
+    // aim-track-settle: how fast the aim direction itself turns (rad/s). T is the shared scratch vector (rewritten
+    // every frame), so the previous one is a per-aim clone. A drifting piece's line of sight keeps her turning at
+    // its rate with the error just above stopErr, so "at rest" (now <= 0) never came and the aim ran to the
+    // timeout, burning gas; a pointing controller is on target when within tolerance and matching the target's motion.
+    let wT = 0;
+    if (c.pT) {
+      if (dt > 0) wT = Math.acos(Math.max(-1, Math.min(1, c.pT.dot(T)))) / dt;
+      c.pT.copy(T);
+    } else {
+      c.pT = T.clone();
+    }
+    // ...but only once she has stayed inside the tolerance for AIM_TRACK_DWELL_S. The lead aim moves with her own
+    // braking (the net inherits her muzzle's speed), so even a still piece shows wT > 1e-4 during the last stretch of
+    // every turn; the relaxation must not cut that stop short (measured: the end of a still-piece turn is unchanged).
+    c.inTolS = (strutDone && errM <= c.tolRad) ? c.inTolS + dt : 0;
+    const slack = (wT > 1e-4 && c.inTolS >= AIM_TRACK_DWELL_S) ? wT + Math.min(dOm, AIM_TRACK_SLACK_MAX) : 0;
     const rem = errM - c.stopErr;
     const want = rem > 0 ? 0.5 * (-dOm + Math.sqrt(dOm * dOm + 8 * a * rem)) : 0;
     const was = c.omega;
@@ -2630,7 +2655,7 @@ export class AutopilotSystem {
     const vLim = strutDone ? c.vCap : c.vPeak;                         // once the strut is there nothing is left to wait for
     const now = Math.min(Math.max(want, lo), Math.max(lo, Math.min(vLim, was + dOm)));
 
-    if (strutDone && errM <= c.tolRad && now <= 0) {
+    if (strutDone && errM <= c.tolRad && now <= slack) {
       if (was > 0) this._fireAimCouples(c, -1, was / a);               // the last of the brake
       c.omega = 0;
       this._resolveAim({ x: bm.x, y: bm.y, z: bm.z });                 // strut is there: this IS the launcher axis
