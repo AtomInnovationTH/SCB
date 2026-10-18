@@ -1,67 +1,20 @@
 /**
- * HudLook — the HUD's two looks ("new" and "classic") and the one switch between them.
+ * HudLook — the HUD's one look, and the colour-role helper that feeds it.
  *
- * h2-hud-look (owner 2026-10-14: "default on, menu switch goes back to current style").
+ * h2-hud-look (owner 2026-10-14); owner 2026-10-18: "keep the new look, don't need classic
+ * any more" — the classic look and its menu switch are gone.
  *
- * MECHANISM. Every converted HUD colour reads `var(--hud-<role>, <today's literal>)`.
- * index.html defines the `--hud-*` variables ONLY under `html[data-look="new"]`; `<html>`
- * ships with that attribute (new look is the default, no first-paint flash). The classic
- * setting REMOVES the attribute, so every `var()` falls back to the literal it was written
- * with — classic is today's look by construction, not by a second set of values.
- *
- * `applyLook(classic)` is the ONLY code that sets or removes `data-look` on `<html>` (a
- * test greps for it). Callers: boot in main.js (before the HUD builds) and the main-menu
- * toggle. Pure DOM, no events, no imports.
+ * MECHANISM. Every converted HUD colour reads `var(--hud-<role>, <literal>)`. index.html
+ * defines the `--hud-*` variables under `html[data-look="new"]`, and `<html>` ships with that
+ * attribute (no first-paint flash); nothing sets or removes it at run time. The literal in
+ * each `var()` is only a CSS fallback now (it is the value the colour had before the new look).
  *
  * `lookColor(c)` wraps a colour that is only known at run time (a palette entry handed
  * through the target-colour law, a skill-tier colour from Constants) in the same
  * `var(--hud-<role>, c)` form. It classifies by hue with the same rules used to convert
  * the static literals, so a runtime colour and a literal of the same value get one role.
+ * Pure functions, no DOM, no imports.
  */
-
-/** The attribute that carries the look; `<html data-look="new">` is the default. */
-const ATTR = 'data-look';
-
-/**
- * Set (classic = false) or remove (classic = true) the new-look attribute.
- * @param {boolean} classic  true → today's look (attribute removed)
- * @param {Document} [doc]   defaults to the global document; a headless run no-ops
- * @returns {boolean} true when an element was changed
- */
-export function applyLook(classic, doc) {
-  const d = doc || (typeof document !== 'undefined' ? document : null);
-  const root = d && d.documentElement;
-  if (!root || typeof root.setAttribute !== 'function') return false;
-  if (classic === true) root.removeAttribute(ATTR);
-  else root.setAttribute(ATTR, 'new');
-  return true;
-}
-
-/**
- * Which look a boot should show: the URL's `?look=` value wins for this load only
- * (`classic` → true, `new` → false; never saved), otherwise the saved choice.
- * @param {string|null|undefined} urlLook  the `look` query value
- * @param {boolean} saved                  settingsManager.getClassicLook()
- * @returns {boolean} true → classic
- */
-export function resolveClassic(urlLook, saved) {
-  if (urlLook === 'classic') return true;
-  if (urlLook === 'new') return false;
-  return saved === true;
-}
-
-/**
- * Whether the page is showing today's ("classic") look right now (attribute absent).
- * Read-only; the menu toggle uses it so its label tells the truth under a `?look=` override.
- * @param {Document} [doc]
- * @returns {boolean}
- */
-export function isClassic(doc) {
-  const d = doc || (typeof document !== 'undefined' ? document : null);
-  const root = d && d.documentElement;
-  if (!root || typeof root.hasAttribute !== 'function') return false;
-  return !root.hasAttribute(ATTR);
-}
 
 /** Colours whose role cannot be read off the hue. */
 const OVERRIDE = { 'rgba(180,200,210,0.45)': 'dim' };

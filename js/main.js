@@ -107,7 +107,6 @@ import { TeachingOverlay } from './ui/TeachingOverlay.js';
 import { OnboardingDirector } from './systems/OnboardingDirector.js';
 import { GuidanceDirector } from './systems/GuidanceDirector.js';
 import { settingsManager } from './systems/SettingsManager.js';
-import { applyLook, resolveClassic } from './ui/HudLook.js';
 import { persistenceManager } from './systems/PersistenceManager.js';
 import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController, INTRO_RIDE_MS, INTRO_DANCE_LANDING_Z01, INTRO_DANCE_DRIFT_Z01, INTRO_DANCE_DOLLY_MS, INTRO_DANCE_DWELL_CEILING_MS, INTRO_DANCE_HANDOVER_Z01, INTRO_DANCE_PULLBACK_MS } from './systems/LadderController.js';
@@ -1162,13 +1161,6 @@ async function init() {
       } else if (lp === '0') {
         Constants.LADDER.ENABLED = false;
       }
-    }
-    // h2-hud-look (D6): ?look=classic | ?look=new wins for this load only (never saved);
-    // otherwise the saved choice. Applied here, before any HUD pane builds. HudLook.applyLook
-    // is the only writer of the look attribute on <html>.
-    {
-      const lk = urlParams.get('look');
-      applyLook(resolveClassic(lk, settingsManager.getClassicLook()));
     }
     // Session N: `&intro=1` lets a ?shot harness run see the intro ride (every
     // New Game from the menu since 2026-09-09) and the first-run GestureSplash

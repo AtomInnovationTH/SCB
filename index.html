@@ -53,8 +53,8 @@
       src: url('fonts/B612Mono-Bold.ttf') format('truetype');
     }
     /* h2-hud-look D3: D-DIN (Datto Inc., SIL OFL 1.1, ./fonts/D-DIN-OFL.txt) — the DIN-style label face.
-       Used only by the new look (--font-label below); the faces download lazily, so the classic
-       look never fetches them. Numbers stay B612 Mono in both looks. */
+       Used by the HUD label face (--font-label below); the faces download lazily.
+       Numbers stay B612 Mono. */
     @font-face {
       font-family: 'D-DIN';
       font-style: normal;
@@ -80,12 +80,11 @@
       --hud-side-w: clamp(300px, calc((100vw - 344px) / 2), 480px);
     }
 
-    /* === HUD LOOK (h2-hud-look, owner 2026-10-14: default on, a menu switch back to today's style) ===
+    /* === HUD LOOK (h2-hud-look; owner 2026-10-18: the new look is the only look) ===
        The variables are defined ONLY here, under html[data-look="new"]. Every converted HUD
-       colour reads var(--hud-<role>, <today's literal>), so when js/ui/HudLook.js removes the
-       attribute (classic) every var() falls back to the literal it was written with: classic is
-       today's look by construction. Nothing below is defined at :root. `<html>` ships with the
-       attribute (no first-paint flash). Roles follow FAA AC 25-11B: green normal, amber caution,
+       colour reads var(--hud-<role>, <literal>); the literal is just a CSS fallback now.
+       Nothing below is defined at :root. `<html>` ships with the attribute (no first-paint
+       flash); nothing removes it. Roles follow FAA AC 25-11B: green normal, amber caution,
        red warning, cyan selected/info, magenta target, white data. */
     html[data-look="new"] {
       --hud-plate: rgba(11, 16, 22, 0.92);
@@ -125,7 +124,7 @@
       letter-spacing: 0.06em !important;
     }
     /* Game-over / victory screen (y1-gameover-look): inherited stat text takes the label colour, bare values the data white.
-       An inline <b style="color:…"> still wins. New look only; classic keeps body green. */
+       An inline <b style="color:…"> still wins. */
     html[data-look="new"] #gameover-stats { color: var(--hud-label); }
     html[data-look="new"] #gameover-stats b { color: var(--hud-text); }
 
