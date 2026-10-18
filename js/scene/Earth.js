@@ -1038,42 +1038,22 @@ export function selectLOD(maxTextureSize, deviceMemory, isAppleGPU = false) {
   return ''; // base resolution (4k or less)
 }
 
-/**
- * OPEN-2 mitigation (2026-08): cap the NIGHT map at 8k on Apple GPUs.
- * Pure + exported for tests, like {@link selectLOD}.
+/*
+ * Picture sizes on a capable desktop: day AND night maps are 16k (owner
+ * 2026-10-18: "8k looks like shit, defeats the whole purpose of this game ...
+ * back to 16k", then "Night 16k too"). Do not cap either.
  *
- * Field evidence (user's M4 Max / Brave 151+152 / ANGLE-Metal): with the 16k
- * set, the night-side city lights render pure BLACK in real sessions, and
- * under DevTools' extra GPU memory the 16k DAY map blanked too — while the
- * probe shows a perfectly healthy pipeline (decoded 16384×8192, uploaded
- * version-complete, zero gl.getError, zero context losses). Headed harness
- * runs on the SAME GPU (tmp/night-ab.mjs, tmp/night-pressure.mjs) render 16k
- * lights fine in fresh sessions, even under a deliberate 10 GB same-GPU-process
- * allocation — so the blackout is a long-session Metal residency/eviction
- * failure of the largest resources (512 MB + mips apiece), which GL cannot
- * even observe, not a decode/upload/shader bug. Mitigation, not band-aid:
- * evict-proofing by size. The night map drops to 8k (~171 MB with mips) on the
- * implicated GPU family only:
- *   - City lights are viewed at orbital distance → sampled at mip levels where
- *     the 16k and 8k pyramids converge; headed A/B measured sub-2% disc-bright
- *     deltas between the tiers (drift-dominated). The 16k night map buys
- *     nothing visible in gameplay while costing the exact resource class that
- *     goes black in the field.
- *   - The DAY map keeps 16k: its detail IS visible (daylit terrain at every
- *     altitude), and the field blackout hits the night map in normal play.
- *     Owner 2026-10-18, after trying 8k for start time: "8k looks like shit,
- *     defeats the whole purpose of this game ... back to 16k". Do not cap it.
- *   - `?tex=16k` still forces BOTH maps to 16k (A/B lever unchanged), so the
- *     field experiment stays one URL away.
- *
- * @param {'16k'|'8k'|''} quality  overall tier from selectLOD()
- * @param {boolean} [isAppleGPU=false]  WEBGL_debug_renderer_info contains 'Apple'
- * @returns {'16k'|'8k'|''} night-map tier (== quality except 16k-on-Apple → 8k)
+ * History (OPEN-2, 2026-08-31, commit 31b6fd47): the night map was capped at
+ * 8k on Apple GPUs because on the owner's M4 Max (Brave, ANGLE-Metal) the 16k
+ * night-side city lights rendered pure BLACK in long real sessions (and under
+ * DevTools the 16k day map once blanked too), while every GL-visible witness
+ * stayed healthy (decoded 16384×8192, upload complete, zero gl.getError, zero
+ * context losses) and headed runs on the same GPU rendered 16k fine even under
+ * a 10 GB allocation. Best explanation, never proven: long-session Metal
+ * residency eviction of the largest textures (512 MB + mips apiece). If the
+ * lights go black again, check `?bfp=1` and BLACK_SCREEN_TRIAGE.md first;
+ * the owner decides any cap. `?tex=16k|8k|base` still forces both maps.
  */
-export function selectNightLOD(quality, isAppleGPU = false) {
-  if (quality === '16k' && isAppleGPU) return '8k';
-  return quality;
-}
 
 /**
  * iPad port Phase 2 (Ipad.md §4.2 resolution discipline + §4.5 touch gate):
@@ -1088,7 +1068,7 @@ export function selectNightLOD(quality, isAppleGPU = false) {
  *   2. Resolution discipline on glass: an iPad reports Apple GPU +
  *      maxTextureSize 16384 and would walk into the 512 MB (+mips) 16k day
  *      map — the exact resource class that goes residency-black in long
- *      sessions on Apple GPUs (OPEN-2, selectNightLOD above) — on a device
+ *      sessions on Apple GPUs (OPEN-2, see the note above) — on a device
  *      with none of a Mac's memory headroom.
  *
  * Gate: TouchControls.detect() — the ONE touch gate (Ipad.md §4.5). Desktops
@@ -1097,7 +1077,7 @@ export function selectNightLOD(quality, isAppleGPU = false) {
  * getTextureQuality() bypasses this clamp (it returns before detection), so
  * the full 16k set stays one URL away for on-glass A/B.
  *
- * Pure + exported for the Node suite, like selectLOD/selectNightLOD.
+ * Pure + exported for the Node suite, like selectLOD.
  *
  * @param {'16k'|'8k'|''} quality  overall tier from selectLOD()
  * @param {boolean} hasTouch      real-touch detection result
@@ -1125,7 +1105,7 @@ export function clampLODForGlass(quality, hasTouch) {
  * @param {Navigator} [opts.nav] navigator for deviceMemory (default: global)
  * @returns {{quality: '16k'|'8k'|'', dayQuality: '16k'|'8k'|'', nightQuality: '16k'|'8k'|''}}
  *   `quality` = hardware tier (mesh detail, anisotropy, cloud file);
- *   `dayQuality` = `quality` (16k day map kept, owner 2026-10-18); `nightQuality` per selectNightLOD
+ *   `dayQuality` = `nightQuality` = `quality` (16k day and night kept, owner 2026-10-18)
  */
 export function getTextureQuality({ renderer, doc, nav } = {}) {
   // Black-flicker triage (H3) / OPEN-2 (16k night texture renders black on
@@ -1133,7 +1113,7 @@ export function getTextureQuality({ renderer, doc, nav } = {}) {
   // 1.2+ GB 16k day+night set can be A/B'd against 8k in one URL, no rebuild.
   // Opt-in, exact-value only (DevShotGate idiom); any other value falls through
   // to detection. Dev-only — never ship URLs with it. The override forces the
-  // NIGHT map too (bypasses the selectNightLOD Apple cap) — that is the point:
+  // NIGHT map too — that is the point:
   // ?tex=16k must reproduce the full failing 16k set on demand.
   try {
     if (typeof window !== 'undefined' && typeof URLSearchParams !== 'undefined') {
@@ -1199,10 +1179,10 @@ export function getTextureQuality({ renderer, doc, nav } = {}) {
     // Touch gate (Ipad.md §4.5): glass caps at 8k — see clampLODForGlass.
     TouchControls.detect()
   );
-  // OPEN-2: the night map rides one tier lower on Apple GPUs (see selectNightLOD).
-  // The day map rides the full hardware tier (16k on a capable desktop; owner 2026-10-18).
+  // Day and night pictures ride the full hardware tier (16k on a capable
+  // desktop; owner 2026-10-18 — see the note above clampLODForGlass).
   const dayQuality = quality;
-  const nightQuality = selectNightLOD(quality, isAppleGPU);
+  const nightQuality = quality;
   // PR 5 / P2.10: gate verbose LOD log behind DEBUG flag (?debug=1).
   if (Constants && Constants.DEBUG && Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS) {
     console.log(`[Earth] LOD selected: ${quality || '4k (base)'} (pictures: day ${dayQuality || '4k (base)'}, night: ${nightQuality || '4k (base)'}). MaxTextureSize=${maxTextureSize}`);
@@ -1259,9 +1239,8 @@ export class Earth {
     this._useLowDetail = profileFlags.disableEarthNoise === true;
 
     // Adaptive quality: pick texture resolution based on hardware. `quality` is
-    // the hardware tier (mesh detail, anisotropy, cloud file); the day picture
-    // follows it (16k on a capable desktop, owner 2026-10-18); the night picture
-    // may sit one tier lower (OPEN-2: selectNightLOD caps it at 8k on Apple GPUs).
+    // the hardware tier (mesh detail, anisotropy, cloud file); the day and night
+    // pictures follow it (16k on a capable desktop, owner 2026-10-18).
     const { quality, dayQuality, nightQuality } = getTextureQuality({ renderer: options && options.renderer });
     const texSuffix = dayQuality ? `_${dayQuality}` : '';
     const nightSuffix = nightQuality ? `_${nightQuality}` : '';
