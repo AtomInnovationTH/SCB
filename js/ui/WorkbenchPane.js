@@ -182,10 +182,12 @@ export class WorkbenchPane {
    * @param {boolean|function} [deps.reducedMotion] - override for the matchMedia probe
    * @param {boolean} [deps.glass] - the boot's glass answer (the house idiom;
    *   main.js passes `_glassBoot`). Recorded on the shell for parity with the
-   *   hub's construction line; the footer plate is FOOTER_BAND_PX tall on both
-   *   surfaces (RailGeometry.footerBand) and the D10 44-pt targets are the
-   *   engines' (each takes its own `glass` dep), so the shell consumes it for
-   *   no DOM law today.
+   *   hub's construction line. The D10 44-pt targets are the engines' (each
+   *   takes its own `glass` dep); the shell's one glass law (u4-phone-fold D6)
+   *   is the SPECS tab's HIT AREA: a transparent child 44 (TOUCH_PITCH_PX) tall
+   *   on glass, 32 (FOOTER_BAND_PX) otherwise, centred on the plate. The visible
+   *   plate (border, background) stays FOOTER_BAND_PX tall at the same place
+   *   (review fix 2: the owner's D6 - the tab looks the same).
    * @param {number} [deps.footerBottomPx] - the FOOTER BAND's bottom offset
    *   from the viewport bottom (the hub passes RailGeometry.footerBand().bottom
    *   = 132); the tab's own `bottom` is that minus the root's 96. Default: the
@@ -236,6 +238,7 @@ export class WorkbenchPane {
     this._refitSlot = null;       // .workbench-refit (RefitPane section)
     this._tail = null;            // .workbench-tail  (LibraryPane TAIL)
     this._tab = null;             // the edge tab, a child of the root at its inner edge
+    this._tabHit = null;          // its transparent hit layer (44 px on glass; u4 review fix 2)
     this._tabCount = null;
     this._closeBtn = null;        // the ESC × button, a child of the root at its top-right (§13 r5 — the body scrolls, the X must not)
     // Session P (plan D2/D6): whether the tab is PINNED awake on THIS floor
@@ -588,6 +591,16 @@ export class WorkbenchPane {
     return Math.max(0, Math.round(this._footerBottomPx - this._rootBottomInForce()));
   }
 
+  /** @private u4-phone-fold D6: the SPECS tab's TAP height - 44 on glass, the footer band's 32 otherwise. */
+  _tabHitPx() {
+    return this._glass ? RAIL_GEOMETRY.TOUCH_PITCH_PX : RAIL_GEOMETRY.FOOTER_BAND_PX;
+  }
+
+  /** @private How far the transparent hit layer reaches past the plate's top and bottom edge: (44 - 32) / 2 = 6 on glass, 0 off. */
+  _tabHitOutsetPx() {
+    return (this._tabHitPx() - RAIL_GEOMETRY.FOOTER_BAND_PX) / 2;
+  }
+
   /** @private The root bottom actually in force (§13 r1): F1 → 16, else 96. */
   _rootBottomInForce() {
     return this._floor === 1 ? ROOT_BOTTOM_PX_F1 : ROOT_BOTTOM_PX;
@@ -761,8 +774,21 @@ export class WorkbenchPane {
     const tabCount = doc.createElement('span');
     tabCount.className = 'workbench-tab-count';
     tabCount.style.cssText = `color:${VisualLaw.COLORS.VALUE};font-weight:bold`;
+    // u4 review fix 2: the 44 px tap area is a TRANSPARENT child reaching past the plate's top / bottom
+    // edges; the plate (border, background) stays 32 px. Taps on it bubble to the tab's click handler.
+    const tabHit = doc.createElement('div');
+    tabHit.id = 'ladder-workbench-tab-hit';
+    tabHit.className = 'workbench-tab-hit';
+    tabHit.style.cssText = [
+      // the layer is placed against the tab's PADDING box (inside its 1 px border), so -1 reaches the border edge
+      // (measured: -6 gave 42 px, the plate's 32 + 2 x 6 less its two borders)
+      'position:absolute', 'left:0', 'right:-1px',
+      `top:${-(this._tabHitOutsetPx() + 1)}px`, `bottom:${-(this._tabHitOutsetPx() + 1)}px`,
+      'background:transparent', 'pointer-events:auto',
+    ].join(';');
     tab.appendChild(tabLabel);
     tab.appendChild(tabCount);
+    tab.appendChild(tabHit);        // last: the label and the count stay children 0 and 1
     tab.addEventListener('click', () => { this._wake(); this.toggle(); });
     root.appendChild(tab);
 
@@ -774,6 +800,7 @@ export class WorkbenchPane {
     this._tail = tail;
     this._tab = tab;
     this._tabCount = tabCount;
+    this._tabHit = tabHit;
     this._closeBtn = closeBtn;
     this._floorLayoutWritten = f1;  // the cssText above baked the floor layout (§13 r1)
     this._tabPhaseWritten = null;   // the phase truth table writes the fresh tab

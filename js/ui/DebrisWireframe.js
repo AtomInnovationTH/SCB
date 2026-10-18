@@ -1327,25 +1327,9 @@ export class DebrisWireframe {
       // Keep a container ref so the 9 key can clear a density-ladder hide.
       this._container = container;
 
-      // [9] hotkey badge (top-right corner) — matches the [7]/[0] pane badges
-      // so the player can see the key that shows/hides the Debris pane.
+      // u4-phone-fold D5: no visible [9] badge. The 9 key still shows / hides the pane (Help page, hover tip);
+      // the container stays position:relative for the pane's own absolutely placed children.
       container.style.position = container.style.position || 'relative';
-      const keyBadge = document.createElement('div');
-      keyBadge.className = 'hud-pane-badge';
-      keyBadge.textContent = '[9]';
-      Object.assign(keyBadge.style, {
-        position: 'absolute',
-        top: '5px',
-        right: '7px',
-        font: 'bold 10px var(--font-mono)',
-        color: 'rgba(0,255,136,0.35)',
-        letterSpacing: '0.5px',
-        pointerEvents: 'none',
-        userSelect: 'none',
-        zIndex: '5',
-      });
-      container.appendChild(keyBadge);
-      this._keyBadge = keyBadge;
     } else {
       // Legacy fixed positioning (fallback) — top-right below NavSphere so it
       // never collides with bottom-anchored panels (DaughterWireframe bottom-

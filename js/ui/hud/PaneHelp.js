@@ -16,7 +16,7 @@
  *              entry's shortText after 400 ms.")
  *   • click  → CODEX_OPEN_ENTRY deep link to the entry (main.js routes it to
  *              CodexViewerUI.openEntry). Clicks on interactive descendants
- *              (glossary terms, pane badges, sort buttons, target rows, the
+ *              (glossary terms, fold toggles, sort buttons, target rows, the
  *              Discoveries header toggle) keep their own behavior.
  *   • touch  → long-press = hover (gated behind the house TouchControls.detect()
  *              real-touch detection); a plain tap still deep-links. The tooltip
@@ -106,11 +106,11 @@ export const PANE_HELP = [
 
 /**
  * Clicks on these keep their own behavior (never hijacked into a deep link):
- * glossary terms already deep-link themselves; pane badges resize; the sort
+ * glossary terms already deep-link themselves; fold toggles (short screens) fold / unfold; the sort
  * button sorts; target rows select; the Discoveries header toggles the tree.
  */
 export const INTERACTIVE_GUARD =
-  'button, a, input, select, textarea, .glossary-term, .hud-pane-badge, .sp-header, .target-row, .target-sort-btn';
+  'button, a, input, select, textarea, .glossary-term, .fold-toggle, .sp-header, .target-row, .target-sort-btn';
 
 /**
  * Live density-rung copy for a PANE_HELP row. Slider position is 1-based

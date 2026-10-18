@@ -57,6 +57,7 @@
 
 import { RAIL_GEOMETRY } from './RailGeometry.js';
 import { VisualLaw } from '../core/VisualLaw.js';
+import { shortScreenNow, watchShortScreen } from './hud/PhoneFold.js';
 
 /** The root element id (the probe reads its rect, aria-valuenow and tick count). */
 export const DETAIL_SLIDER_ID = 'ladder-detail-slider';
@@ -102,6 +103,9 @@ const _normalizeMilestones = (arr) => {
   return out;
 };
 
+/** Short screens: the slider's visual-band bottom (px), bottom centre. */
+const SHORT_BOTTOM_PX = 8;
+
 export class DetailSlider {
   /**
    * @param {object} [deps]
@@ -112,6 +116,9 @@ export class DetailSlider {
    * @param {number}   [deps.footerBottomPx] CSS bottom of the VISUAL band (the hub passes footerBand().bottom).
    *                                         Default THUMB_REST_PX + FOOTER_GAP_PX when absent / non-finite.
     * @param {boolean}  [deps.glass]          true → the 44 pt hit box (6 px pads, bottom shifted down 6).
+    * @param {Window|null} [deps.win]         window for the short-screen answer (default: the global one; none = tall).
+    *                                         On a SHORT screen (innerHeight < 500, live) the slider sits bottom
+    *                                         centre so it never covers the right column (lane u4-phone-fold).
     * @param {boolean}  [deps.reducedMotion]  true → inline `transition:none` on the root.
     * @param {number[]} [deps.milestones]     LEVEL indices whose ticks render bold (thicker /
     *                                         longer). Default [] → tick DOM identical to rev 2.
@@ -132,6 +139,11 @@ export class DetailSlider {
     this._doc = deps.doc !== undefined ? deps.doc
       : (typeof document !== 'undefined' ? document : null);
     this._now = typeof deps.now === 'function' ? deps.now : null;
+    this._win = deps.win !== undefined ? deps.win : (typeof window !== 'undefined' ? window : null);
+    /** @private the placement last WRITTEN ('tall' | 'short'; write-on-change) and the unwatch fn */
+    this._placed = 'tall';
+    this._unwatchShort = null;
+    this._placeWrites = 0;
 
     this._root = null;
     this._track = null;
@@ -243,6 +255,7 @@ export class DetailSlider {
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
+    if (this._unwatchShort) { try { this._unwatchShort(); } catch (_e) { /* stub */ } this._unwatchShort = null; }
     const root = this._root;
     if (root) {
       for (const [type, fn] of this._listeners) {
@@ -308,6 +321,34 @@ export class DetailSlider {
 
   // ── Build ───────────────────────────────────────────────────────────────────
 
+  /**
+   * @private Short screens (phone sideways): bottom centre, `bottom: 8px` less the glass pad (so the
+   * 44 px hit box keeps its 6 px pads), clear of the right column. Tall screens: the footer-right slot
+   * exactly as built. Writes only when the answer flips.
+   * @param {boolean} short
+   */
+  _applyPlacement(short) {
+    const root = this._root;
+    if (!root || this._disposed) return;
+    const want = short ? 'short' : 'tall';
+    if (want === this._placed) return;
+    this._placed = want;
+    this._placeWrites++;
+    const s = root.style;
+    const pad = this._pad || 0;
+    if (short) {
+      s.left = '50%';
+      s.transform = 'translateX(-50%)';
+      s.right = 'auto';
+      s.bottom = `${SHORT_BOTTOM_PX - pad}px`;
+    } else {
+      s.left = '';
+      s.transform = '';
+      s.right = `${RAIL_GEOMETRY.EDGE_PX}px`;
+      s.bottom = `${this._footerBottomPx - pad}px`;
+    }
+  }
+
   /** @private the root under doc.body (headless: nothing) */
   _build() {
     const doc = this._doc;
@@ -322,6 +363,7 @@ export class DetailSlider {
     s.position = 'fixed';
     s.right = `${RAIL_GEOMETRY.EDGE_PX}px`;
     s.bottom = `${this._footerBottomPx - pad}px`;
+    this._pad = pad;
     s.height = `${height}px`;
     s.width = `${TRACK_WIDTH_PX + 2 * SIDE_PAD_PX}px`;
     s.padding = `${pad}px ${SIDE_PAD_PX}px`;
@@ -351,6 +393,8 @@ export class DetailSlider {
     this._root = root;
     this._track = track;
     this._thumb = thumb;
+    this._applyPlacement(shortScreenNow(this._win));
+    this._unwatchShort = watchShortScreen(this._win, (short) => this._applyPlacement(short));
 
     const on = (type, fn) => {
       if (typeof root.addEventListener !== 'function') return;

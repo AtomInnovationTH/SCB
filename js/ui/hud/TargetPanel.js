@@ -25,6 +25,10 @@ import { classify, oddsColor, reachKmFrom, THIN_ALPHA } from './TargetColorLaw.j
 import { lookColor } from '../HudLook.js';
 import { TouchControls } from '../TouchControls.js';
 import { TARGETS_PANE_WIDTH_PX } from '../RailGeometry.js';
+import {
+  shortScreenNow, watchShortScreen, foldedTargetRow, foldedMoreCount, targetsFoldText,
+  FOLD_TOGGLE_TOUCH_PX,
+} from './PhoneFold.js';
 
 /**
  * The Targets row's short word for a debris type. Shared with the payoff line
@@ -118,6 +122,49 @@ export function targetHeightPx(step, glass, viewportH, simple) {
   return TARGET_PANE_CHROME_PX + TARGET_HEADER_PX + k * row;
 }
 
+/**
+ * u4-phone-fold D3: on a SHORT screen (window.innerHeight < 500) the Targets header is a 44 px fold line on
+ * touch (24 px otherwise) and the pane's height is built from the rows it really renders, never a step table.
+ */
+export const TARGET_FOLD_HEADER_PX = 24;
+/** Where the Targets pane top sits when the live rect is unknown (comms bottom + 10 on a phone; measured 145, 2026-10-19). */
+export const TARGET_SHORT_TOP_FALLBACK_PX = 145;
+/** Breathing room kept under the pane on a short screen. */
+export const TARGET_SHORT_BOTTOM_PX = 8;
+/**
+ * Extra height the SELECTED detail row (non-simple level) takes over a plain row: the econ line, the optional
+ * MOID line and the hint line. MEASURED 2026-10-19 in the browser (iPhone landscape 844 x 390, glass, full
+ * level, one target selected; tmp/u4/data/iphoneL-m5.json): the selected `.target-row` is 73 px tall
+ * (`.target-expanded` 54 px of it) against 44 px for a plain glass row, so 73 - 44 = 29 px. A wrapped econ
+ * line or a MOID line would add more; `_applyTargetHeight` therefore also takes the live list height.
+ */
+export const TARGET_EXPANDED_EXTRA_PX = 29;
+/**
+ * UNTRACKED / ACTIVE SATS sections on a short screen (review fix 3): each costs a fixed overhead (separator
+ * margin + border + padding + its header line) plus one row per entry. MEASURED 2026-10-19 (iphoneL, three sample
+ * rows each): section 79 px = 25 px of border box overhead + 3 x 18 px rows, + the 4 px top margin = 29 px overhead.
+ */
+export const TARGET_SECTION_OVERHEAD_PX = 29;
+export const TARGET_SECTION_ROW_PX = 18;
+
+/**
+ * Pane height on a short screen: chrome + header + the rows really rendered (each at its real row height) +
+ * the selected row's expansion (non-simple level) when it is among them. `min` = chrome + header + one summary line.
+ * @param {string} step 'min' | 'normal' | 'max'
+ * @param {boolean} glass
+ * @param {number} rows rendered rows
+ * @param {boolean} expandedSelected the selected detail row (non-simple) is rendered
+ * @param {number} [sectionsPx] px taken by the UNTRACKED / ACTIVE SATS sections that are rendered (0 = none)
+ * @returns {number}
+ */
+export function shortTargetHeightPx(step, glass, rows, expandedSelected, sectionsPx = 0) {
+  const header = glass ? FOLD_TOGGLE_TOUCH_PX : TARGET_FOLD_HEADER_PX;
+  if (step === 'min') return TARGET_PANE_CHROME_PX + header + 20;
+  const row = glass ? TARGET_ROW_GLASS_PX : TARGET_ROW_PX;
+  return TARGET_PANE_CHROME_PX + header + Math.max(0, rows) * row + (expandedSelected ? TARGET_EXPANDED_EXTRA_PX : 0)
+    + Math.max(0, sectionsPx || 0);
+}
+
 /** The live viewport height, or undefined headless (→ the tall-viewport rows). */
 function viewportHeight() {
   return (typeof window !== 'undefined' && window && Number.isFinite(window.innerHeight)) ? window.innerHeight : undefined;
@@ -159,6 +206,23 @@ export class TargetPanel {
     this.onAnalyse = null;
     this._downId = null;             // row id at pointerdown (the list is rebuilt at 2 Hz: ids survive, nodes do not)
     this._skipClick = null;          // pointerup handled the tap: { id, t } of the row; ONLY its own click must not count again
+
+    // u4-phone-fold D3: the short-screen fold (see PhoneFold.js). Folded = header line + ONE row.
+    this._short = false;             // window.innerHeight < 500, live
+    this._folded = false;            // folded while short (in memory only)
+    this._foldToggleEl = null;       // the header line (built with createElement in _build)
+    this._foldRightEl = null;
+    this._sortBtnEl = null;
+    this._lastData = null;           // the last update() payload, so a fold tap repaints at once
+    this._listed = 0;                // targets the open pane lists (rows + "more"), for "+ n more"
+    this._shownRows = 0;             // rows rendered in the last paint
+    this._shownExpanded = false;     // the selected detail row (non-simple) is among them
+    this._shownMore = 0;             // targets left out of the open list on a short screen
+    this._shownListPx = 0;           // the rendered list's live offsetHeight (0 = unknown, e.g. a stub DOM)
+    this._shownSectionsPx = 0;       // px of the UNTRACKED / ACTIVE SATS sections rendered on a short screen
+    this._shortKey = '';             // last painted inputs of _applyShortChrome (write-on-change)
+    this._shortWrites = 0;           // count of real paints (tests)
+    this._unwatchShort = null;       // the resize unwatch (dispose)
 
     /** Currently-selected target ID (public for coordinator read-access) */
     this.selectedTargetId = null;
@@ -315,6 +379,10 @@ export class TargetPanel {
             user-select: none;
         }
         
+        /* u4-phone-fold D3: on a short screen the header line IS the fold toggle. */
+        .target-fold-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+        .target-fold-head.fold-toggle { cursor: pointer; user-select: none; margin-bottom: 0; }
+        .target-fold-head .fold-right { font-size: 11px; opacity: 0.85; white-space: nowrap; color: var(--hud-normal, #00ff88); }
         /* Sort button */
         .target-sort-btn {
             font-size: 10px;
@@ -481,10 +549,6 @@ export class TargetPanel {
     this.panels.targets.style.cursor = 'default';
 
     this.panels.targets.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;padding-right:24px;">
-        <span class="pane-title target-section-header" style="color:var(--hud-normal, #00ff88);padding:0;">TARGETS <span style="opacity:0.4;font-size:10px;">[T]</span></span>
-        <button id="hud-sort-btn" class="target-sort-btn" title="Click to cycle sort">TPI ↑</button>
-      </div>
       <div id="hud-targets-min-summary" data-pane-show="min" style="display:none;font-size:11px;color:var(--hud-normal, #00ff88);opacity:0.7;">. </div>
       <div data-pane-hide="min">
         <div id="hud-target-list"></div>
@@ -499,8 +563,36 @@ export class TargetPanel {
       </div>
     `;
 
+    // The header line (title, sort button, fold text) is built with createElement (u4-phone-fold D3: stub-DOM
+    // tests tap it) and put first. No key badge: the keys are in the Help page and the hover tip (D5).
+    const head = document.createElement('div');
+    head.className = 'target-fold-head';
+    head.style.marginBottom = '4px';
+    const title = document.createElement('span');
+    title.className = 'pane-title target-section-header';
+    title.style.color = 'var(--hud-normal, #00ff88)';
+    title.style.padding = '0';
+    title.textContent = 'TARGETS';
+    const sortBtn = document.createElement('button');
+    sortBtn.id = 'hud-sort-btn';
+    sortBtn.className = 'target-sort-btn';
+    sortBtn.title = 'Click to cycle sort';
+    sortBtn.textContent = 'TPI ↑';
+    const foldRight = document.createElement('span');
+    foldRight.className = 'fold-right';
+    foldRight.style.display = 'none';
+    head.appendChild(title);
+    head.appendChild(sortBtn);
+    head.appendChild(foldRight);
+    head.addEventListener('click', () => { if (this._short) this.toggleFold(); });
+    const pane = this.panels.targets;
+    if (typeof pane.insertBefore === 'function') pane.insertBefore(head, pane.firstChild || null);
+    else pane.appendChild(head);
+    this._foldToggleEl = head;
+    this._foldRightEl = foldRight;
+    this._sortBtnEl = sortBtn;
+
     // Sort button handler — FIX_PLAN §4: 4-way cycle tpi → deltaV → distance → points → tpi
-    const sortBtn = this.panels.targets.querySelector('#hud-sort-btn');
     if (sortBtn) {
       const SORT_CYCLE = ['tpi', 'deltaV', 'distance', 'points'];
       const SORT_LABELS = {
@@ -509,7 +601,8 @@ export class TargetPanel {
         distance: 'Dist ↑',
         points: 'Pts ↓',
       };
-      sortBtn.addEventListener('click', () => {
+      sortBtn.addEventListener('click', (e) => {
+        if (e && typeof e.stopPropagation === 'function') e.stopPropagation();   // a sort tap never folds the pane
         const idx = SORT_CYCLE.indexOf(this._sortMode);
         const next = SORT_CYCLE[(idx + 1) % SORT_CYCLE.length];
         this._sortMode = next;
@@ -557,19 +650,86 @@ export class TargetPanel {
 
     // --- Resize chrome (3-step: min / normal / max) ---
     // min: header + one-line count only. normal: standard list. max: taller list.
+    // u4-phone-fold D5: no visible [0] badge - the 0 key still shows / hides the pane (Help page, hover tip).
     this._chrome = new PaneChrome({
       pane: this.panels.targets,
       keyLabel: '0',
+      badge: false,
       steps: ['min', 'normal', 'max'],
       initial: 'normal',
       color: 'var(--hud-normal, #00ff88)',
-      title: 'Targets pane — 0 shows / hides · click to resize min / normal / max',
+      title: 'Targets pane — 0 shows / hides',
       onStep: (step) => {
         // Step table = header + k rows (recomputed from the live row height).
         this._applyTargetHeight(step);
         this._updateMinSummary();
       },
     });
+
+    // u4-phone-fold D1/D3: fold when the screen is (or becomes) short.
+    const win = (typeof window !== 'undefined') ? window : null;
+    this._short = shortScreenNow(win);
+    this._folded = this._short;
+    this._unwatchShort = watchShortScreen(win, (short) => {
+      this._short = short;
+      this._folded = short;
+      this._applyShortChrome();
+      this._repaint();
+    });
+    this._applyShortChrome();
+  }
+
+  /** Stop watching the screen height (HUD.dispose). Idempotent. */
+  dispose() {
+    if (this._unwatchShort) { this._unwatchShort(); this._unwatchShort = null; }
+  }
+
+  /** True while the Targets pane is folded to its header line + one row (short screens only). */
+  isFolded() { return !!(this._short && this._folded); }
+
+  /** Fold / unfold the pane (the header's tap; a no-op on a tall screen). Key 0 and the fold state are independent. */
+  toggleFold() {
+    if (!this._short) return false;
+    this._folded = !this._folded;
+    if (!this._repaint()) this._applyShortChrome();   // the repaint paints the header itself (one paint per tap)
+    return this._folded;
+  }
+
+  /** @private Repaint the list from the last payload (a fold tap shows at once, not on the next 2 Hz tick). Returns false when there was nothing to repaint from. */
+  _repaint() {
+    const d = this._lastData;
+    if (!d || typeof document === 'undefined') return false;
+    this._updateTargetList(d.cachedTargets, d.cachedUntracked, d.cachedActiveSats);
+    return true;
+  }
+
+  /**
+   * @private Header line, width and sort button for the short / tall state. Write on change (CONVENTIONS): the
+   * inputs (short, folded, "more" count, glass) are keyed and an unchanged key writes nothing (2 Hz otherwise).
+   */
+  _applyShortChrome() {
+    const head = this._foldToggleEl;
+    const pane = this.panels && this.panels.targets;
+    if (!head || !pane) return;
+    const short = !!this._short;
+    const folded = this.isFolded();
+    const more = short ? (folded ? foldedMoreCount(this._listed) : this._shownMore) : 0;
+    const key = `${short ? 1 : 0}|${folded ? 1 : 0}|${more}|${this._glass ? 1 : 0}`;
+    if (key === this._shortKey) return;
+    this._shortKey = key;
+    this._shortWrites++;
+    if (head.classList && typeof head.classList.toggle === 'function') head.classList.toggle('fold-toggle', short);
+    head.style.minHeight = short ? `${this._glass ? FOLD_TOGGLE_TOUCH_PX : TARGET_FOLD_HEADER_PX}px` : '';
+    head.style.marginBottom = short ? '0' : '4px';   // the header line IS the toggle on a short screen: the height law counts no gap under it
+    if (this._foldRightEl) {
+      this._foldRightEl.style.display = short ? '' : 'none';
+      this._foldRightEl.textContent = short ? targetsFoldText(more, folded) : '';
+    }
+    const width = short ? 'var(--hud-side-w, 300px)' : `${TARGETS_PANE_WIDTH_PX}px`;
+    if (pane.style.width !== width) pane.style.width = width;
+    pane.style.flexShrink = short ? '0' : '';
+    this._simpleBtn = null;      // the key changed: let _applySimpleChrome re-decide the sort button once
+    this._applySimpleChrome();
   }
 
   /**
@@ -585,8 +745,67 @@ export class TargetPanel {
     const pane = this.panels && this.panels.targets;
     if (!pane || !pane.style) return;
     const name = step || (this._chrome && this._chrome.step) || 'normal';
-    const h = `${targetHeightPx(name, this._glass, viewportHeight(), this._simple)}px`;   // one viewport read per pass
+    // u4-phone-fold D3: a short screen sizes the box from the rows it really rendered (no clipped row).
+    let shortPx = 0;
+    if (this._short) {
+      shortPx = shortTargetHeightPx(name, this._glass, this._shownRows, this._shownExpanded, this._shownSectionsPx);
+      if (name !== 'min' && this._shownListPx > 0) {
+        // the rendered list's real height wins when taller than the row arithmetic (a wrapped econ line, a MOID line)
+        const header = this._glass ? FOLD_TOGGLE_TOUCH_PX : TARGET_FOLD_HEADER_PX;
+        // +2: the 1 px line gap under the header and sub-pixel rounding (measured: scrollHeight - clientHeight = 2 without it)
+        shortPx = Math.max(shortPx, TARGET_PANE_CHROME_PX + header + this._shownListPx + this._shownSectionsPx + 2);
+      }
+    }
+    const h = this._short
+      ? `${shortPx}px`
+      : `${targetHeightPx(name, this._glass, viewportHeight(), this._simple)}px`;   // one viewport read per pass
     if (pane.style.height !== h) pane.style.height = h;
+  }
+
+  /**
+   * @private Pixels the OPEN pane has for its content on a short screen: from the pane's live top (else the
+   * phone's measured 145) to the screen bottom less a margin, minus the pane chrome and the header line.
+   * @returns {number} Infinity when the viewport height is unknown (headless)
+   */
+  _shortAvailPx() {
+    const pane = this.panels && this.panels.targets;
+    let top = TARGET_SHORT_TOP_FALLBACK_PX;
+    if (pane && typeof pane.getBoundingClientRect === 'function') {
+      const t = pane.getBoundingClientRect().top;
+      if (Number.isFinite(t) && t > 0) top = t;
+    }
+    const h = viewportHeight();
+    const header = this._glass ? FOLD_TOGGLE_TOUCH_PX : TARGET_FOLD_HEADER_PX;
+    return Number.isFinite(h) ? (h - top - TARGET_SHORT_BOTTOM_PX - TARGET_PANE_CHROME_PX - header) : Infinity;
+  }
+
+  /**
+   * @private How many TARGET rows the OPEN pane shows on a short screen: what fits in `availPx` at the real
+   * row height (less the selected detail row's expansion when a non-simple selected row is among them, which
+   * always stays), at most what the level shows (simple 3; glass 5; desktop 5), at least 1.
+   * @param {number} available rows the level would list
+   * @param {number} availPx   from _shortAvailPx()
+   * @param {boolean} expanded the selected detail row (non-simple) will be rendered
+   * @returns {number}
+   */
+  _shortRowBudget(available, availPx, expanded) {
+    const row = this._glass ? TARGET_ROW_GLASS_PX : TARGET_ROW_PX;
+    const fit = Number.isFinite(availPx) ? Math.floor((availPx - (expanded ? TARGET_EXPANDED_EXTRA_PX : 0)) / row) : Infinity;
+    const level = this._simple ? TARGET_SIMPLE_NEAREST : (this._glass ? TARGET_STEP_ROWS_GLASS.normal : TARGET_NORMAL_ROWS_SHORT);
+    return Math.max(1, Math.min(available, level, fit));
+  }
+
+  /**
+   * @private How many entries of a section (UNTRACKED / ACTIVE SATS) fit in `px` after the target rows: its
+   * overhead plus one row each. 0 = the section is not rendered (never clipped).
+   * @param {number} entries entries the section would list
+   * @param {number} px      room left
+   * @returns {number}
+   */
+  _sectionFit(entries, px) {
+    if (!(entries > 0)) return 0;
+    if (!Number.isFinite(px)) return entries;
+    return Math.max(0, Math.min(entries, Math.floor((px - TARGET_SECTION_OVERHEAD_PX) / TARGET_SECTION_ROW_PX)));
   }
 
   /** @private Populate the minimized one-line target summary. */
@@ -743,6 +962,7 @@ export class TargetPanel {
     this._simple = !!data.simple;
     this._analyseChip = !!data.analyseChip;
     this._applySimpleChrome();
+    this._lastData = data;
     this._updateTargetList(data.cachedTargets, data.cachedUntracked, data.cachedActiveSats);
   }
 
@@ -762,9 +982,9 @@ export class TargetPanel {
 
   /** @private The TPI sort toggle hides in simple mode (write-on-change). */
   _applySimpleChrome() {
-    const btn = this.panels.targets && this.panels.targets.querySelector('#hud-sort-btn');
+    const btn = this._sortBtnEl || (this.panels.targets && this.panels.targets.querySelector('#hud-sort-btn'));
     if (!btn || !btn.style) return;
-    const want = this._simple ? 'none' : '';
+    const want = (this._simple || this.isFolded()) ? 'none' : '';   // no sort button while folded
     if (this._simpleBtn === want) return;
     this._simpleBtn = want;
     btn.style.display = want;
@@ -779,6 +999,14 @@ export class TargetPanel {
     // Track count for the minimized one-line summary.
     this._lastTrackedCount = Array.isArray(cachedTargets) ? cachedTargets.length : 0;
     if (this._chrome && this._chrome.isMinimized) this._updateMinSummary();
+
+    // The two side sections' entries. On a short screen (review fix 3) they are hidden while folded and, when
+    // open, take what is left under the target rows; whatever does not fit is not rendered (never clipped).
+    const untrackedAll = cachedUntracked.slice(0, 3);
+    const satsAll = cachedActiveSats.filter(s => s.distance / Constants.SCENE_SCALE < 50).slice(0, 3);
+    let untrackedShow = untrackedAll.length;
+    let satsShow = satsAll.length;
+    this._shownSectionsPx = 0;
 
     // --- TARGETS (the tracked list) ---
     const listEl = document.getElementById('hud-target-list');
@@ -802,6 +1030,7 @@ export class TargetPanel {
       // (when the selected target is further out: the 2 nearest + the selected one, still 3 rows), then
       // one "+ n more" line. Always 4 lines.
       let moreCount = 0;
+      const totalKnown = targets.length;
       if (this._simple) {
         const total = targets.length;
         const byDist = [...targets].sort((a, b) => a.distanceKm - b.distanceKm);
@@ -812,11 +1041,59 @@ export class TargetPanel {
       } else {
         targets = targets.slice(0, TARGET_STEP_ROWS.max);   // as many rows as the tallest step shows (9)
       }
+      // u4-phone-fold D3: on a short screen the open pane lists what the level lists (rows + its "+ m more"),
+      // and shows only the rows that fit at their real height; the rest are counted in the header. Folded =
+      // the selected row, else the nearest (the first row the open pane would show), nothing else.
+      this._listed = this._simple ? totalKnown : targets.length;
+      if (this._short) {
+        const base = targets;
+        const availPx = this._shortAvailPx();
+        let usedPx = 0;
+        if (this.isFolded()) {
+          // The folded row is the selected target, else the NEAREST by distance (D3) - not the head of the
+          // current sort (TPI first at the full level) - so pick from a distance-sorted copy of every target.
+          const byDistance = [...cachedTargets].sort((a, b) => a.distanceKm - b.distanceKm);
+          const one = foldedTargetRow(byDistance, this.selectedTargetId);
+          targets = one ? [one] : [];
+          untrackedShow = 0;
+          satsShow = 0;
+        } else {
+          const selIn = base.some(t => t.id === this.selectedTargetId);
+          const budget = this._shortRowBudget(base.length, availPx, !this._simple && selIn);
+          if (base.length > budget) {
+            const sel = base.find(t => t.id === this.selectedTargetId);
+            targets = base.slice(0, budget);
+            if (sel && !targets.includes(sel)) targets[budget - 1] = sel;   // the selected row always stays
+          }
+          const expanded = !this._simple && targets.some(t => t.id === this.selectedTargetId);
+          const rowPx = this._glass ? TARGET_ROW_GLASS_PX : TARGET_ROW_PX;
+          let left = availPx - Math.max(1, targets.length) * rowPx - (expanded ? TARGET_EXPANDED_EXTRA_PX : 0);
+          untrackedShow = this._sectionFit(untrackedAll.length, left);
+          if (untrackedShow > 0) {
+            const px = TARGET_SECTION_OVERHEAD_PX + untrackedShow * TARGET_SECTION_ROW_PX;
+            usedPx += px; left -= px;
+          }
+          satsShow = this._sectionFit(satsAll.length, left);
+          if (satsShow > 0) usedPx += TARGET_SECTION_OVERHEAD_PX + satsShow * TARGET_SECTION_ROW_PX;
+        }
+        this._shownSectionsPx = usedPx;
+        this._shownMore = Math.max(0, this._listed - targets.length);
+        this._shownRows = targets.length;
+        this._shownExpanded = !this._simple && targets.some(t => t.id === this.selectedTargetId);
+        moreCount = 0;                                   // the count lives in the header on a short screen
+        this._applyShortChrome();
+      } else {
+        this._shownMore = 0;
+        this._shownRows = targets.length;
+        this._shownExpanded = false;
+      }
       // The mother net's reach (km), read live: the simple level's "in reach" is the NET, not the tethers.
       const netReachKm = Number(Constants.NET_LOCK_RANGE_M) / 1000;
 
       if (targets.length === 0) {
         listEl.innerHTML = '<span style="opacity:0.4">No targets nearby</span>';
+        this._shownListPx = 0;
+        this._shownRows = 1;   // the "No targets nearby" line takes one row's height
         this._applyTargetHeight();
       } else {
         listEl.innerHTML = targets.map(t => {
@@ -991,6 +1268,7 @@ export class TargetPanel {
 </div>`;
           }
         }).join('') + (this._simple && moreCount > 0 ? `<div class="target-more">+ ${moreCount} more</div>` : '');
+        this._shownListPx = (this._short && Number.isFinite(listEl.offsetHeight)) ? listEl.offsetHeight : 0;
 
         // UX-3 #9: Apply discovery animation to newly discovered rows
         if (this._newlyDiscovered.size > 0) {
@@ -1010,7 +1288,7 @@ export class TargetPanel {
     const untrackedEl = document.getElementById('hud-untracked-list');
     const untrackedSection = document.getElementById('hud-untracked-section');
     if (untrackedEl && untrackedSection) {
-      const untracked = cachedUntracked.slice(0, 3);
+      const untracked = untrackedAll.slice(0, untrackedShow);
       if (untracked.length === 0) {
         untrackedSection.classList.add('hidden');
       } else {
@@ -1031,9 +1309,7 @@ export class TargetPanel {
     const activeSatEl = document.getElementById('hud-activesat-list');
     const activeSatSection = document.getElementById('hud-activesat-section');
     if (activeSatEl && activeSatSection) {
-      const sats = cachedActiveSats
-        .filter(s => s.distance / Constants.SCENE_SCALE < 50)
-        .slice(0, 3);
+      const sats = satsAll.slice(0, satsShow);
       if (sats.length === 0) {
         activeSatSection.classList.add('hidden');
       } else {

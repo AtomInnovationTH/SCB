@@ -15,6 +15,7 @@ import { StatusPanel } from './hud/StatusPanel.js';
 import { VitalsPane } from './hud/VitalsPane.js';
 import { isSimpleTargets, currentMissionNumber } from './hud/SimpleFirst.js';
 import { TargetPanel } from './hud/TargetPanel.js';
+import { shortScreenNow } from './hud/PhoneFold.js';
 import { CommsPanel } from './hud/CommsPanel.js';
 import { HintTicker } from './hud/HintTicker.js';
 import { NetInventoryPanel } from './hud/NetInventoryPanel.js';
@@ -1276,10 +1277,14 @@ export class HUD {
     }
     const newTop = Math.round(this._commsRectBottom + 10);
     if (leaving) this._commsRectBottom = null;   // mid-glide — never cache it
-    if (this._lastRightColTop !== newTop) {
+    // u4-phone-fold D3: on a SHORT screen (innerHeight < 500) the 189 px rail clearance would leave the column
+    // 56 px tall on a 390 px phone (every Targets row clipped); the column keeps the non-ladder 30 px instead.
+    const clear = shortScreenNow(typeof window !== 'undefined' ? window : null) ? 30 : (this._rightColBottomClearPx ?? 30);
+    if (this._lastRightColTop !== newTop || this._lastRightColClear !== clear) {
       this._rightColumn.style.top = newTop + 'px';
-      this._rightColumn.style.maxHeight = `calc(100vh - ${newTop + (this._rightColBottomClearPx ?? 30)}px)`;
+      this._rightColumn.style.maxHeight = `calc(100vh - ${newTop + clear}px)`;
       this._lastRightColTop = newTop;
+      this._lastRightColClear = clear;
     }
   }
 

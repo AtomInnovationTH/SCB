@@ -28,6 +28,10 @@ import { captureNetSystem, netMaxReachM } from '../../entities/CaptureNet.js';
 import timerManager from '../../systems/TimerManager.js';
 import { shortTypeName } from './TargetPanel.js';
 import { PaneChrome } from './PaneChrome.js';
+import {
+  shortScreenNow, watchShortScreen, daughtersSummary, departureEdges,
+  FOLD_TOGGLE_TOUCH_PX, FOLD_CLOSED_GLYPH, FOLD_OPEN_GLYPH,
+} from './PhoneFold.js';
 import { GestureHints } from './GestureHints.js';
 import { pressKey } from '../../core/KeyDispatch.js';
 import { RAIL_GEOMETRY, PANE_CORNER_PX, MOTHER_PANE_WIDTH_PX, ARMS_PANE_WIDTH_PX, LEFT_COLUMN_WIDTH_PX } from '../RailGeometry.js';
@@ -147,6 +151,16 @@ export class StatusPanel {
     this._memoEl = null;              // cached #autopilot-indicator once found
     this._simple = false;            // z1-calm-scan D5: mission-1 simple level (update() data.simple); DAUGHTERS hides LAUNCH + ΔV
     this._fleetClickBound = false;   // the ONE #hud-arms-status click delegate, attached once
+    // u4-phone-fold D2: the DAUGHTERS fold (short screens only; see PhoneFold.js).
+    this._armsShort = false;         // window.innerHeight < 500, live
+    this._armsFolded = false;        // folded to one line while short (in memory only)
+    this._armsDockedPrev = null;     // id -> was at the dock (the departure edge detector)
+    this._armsSummary = '';          // last written "N of M ready" (write-on-change)
+    this._foldToggleEl = null;       // the DAUGHTERS fold line (built in _buildArmsFold)
+    this._foldRightEl = null;
+    this._armsFoldKey = '';          // last painted fold inputs (write-on-change; u4 review fix 6)
+    this._armsFoldWrites = 0;        // count of real paints (tests)
+    this._unwatchArmsShort = null;   // the resize unwatch (dispose; u4 review fix 8)
     this._cargoStatus = null;   // cached from CARGO_UPDATED events
     // Locked #15: Mother's CARGO kg/cap line is hidden while the Cargo pane's
     // rung is visible (injected getter; default false so tests without HUD
@@ -631,8 +645,10 @@ export class StatusPanel {
     // highlights and shows the single action it can take right now.
     this.panels.arms.innerHTML = `
       <div class="pane-title" id="fleet-header" style="font-size:11px;margin-bottom:3px;color:var(--hud-normal, #00ff88);opacity:0.7;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;">
-        <span>DAUGHTERS</span>
-        <span id="fleet-select-hint" style="font-weight:normal;letter-spacing:normal;font-size:10px;opacity:0.4;white-space:nowrap;">select 1–4</span>
+        <span id="fleet-legacy" style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;">
+          <span>DAUGHTERS</span>
+          <span id="fleet-select-hint" style="font-weight:normal;letter-spacing:normal;font-size:10px;opacity:0.4;white-space:nowrap;">select 1–4</span>
+        </span>
       </div>
       <div id="hud-arms-status" style="font-size:11px;line-height:1.6;">
         <span style="opacity:0.5">Initializing daughter fleet…</span>
@@ -654,6 +670,7 @@ export class StatusPanel {
       this._injectFleetButtonStyle();
       this._bindFleetClicks();
     }
+    this._buildArmsFold();
 
     // --- Resize chrome for the MOTHER pane (2-step: min / normal) ---
     // The MOTHER pane defaults to 'min' (compact digest only); hovering reveals
@@ -1119,6 +1136,7 @@ export class StatusPanel {
     // by _createTopPanel, so they are not torn down with the HUD container —
     // remove them explicitly to avoid orphaned duplicate-id nodes.
     if (this._fitObserver) { this._fitObserver.disconnect(); this._fitObserver = null; }   // q3 round 3 (S5)
+    if (this._unwatchArmsShort) { this._unwatchArmsShort(); this._unwatchArmsShort = null; }   // u4 review fix 8
     this.clearPayoff();
     for (const p of [this.panels.score]) {
       if (p && p.parentNode) p.parentNode.removeChild(p);
@@ -1264,8 +1282,9 @@ export class StatusPanel {
    * DEBRIS_CAPTURED; a synergy or field-clear award at the capture) is part of the same payoff: the line adds it, so
    * `+N cr` equals the strip's credit jump. Identified by the payload (`kind: 'catch-bonus'`, set by ScoringSystem from the
    * award's `withCatch`), not by timing; "with the catch" means the same frame (JS task), whichever event comes first:
-   * after the catch's line it is added to it; before it, it waits (`_payoffPending`) for the catch of the same frame and
-   * is dropped at the frame's end if none comes (a bonus at the grab, seconds before the park, is the strip's own jump).
+   * after the catch's line it is added to it (a bonus from ANOTHER arm in the same frame joins the line the same way);
+   * before it, it waits (`_payoffPending`) for the catch of the same frame and is dropped at the frame's end if none
+   * comes (a bonus at the grab, seconds before the park, is the strip's own jump).
    * @param {object} d  a SCORE_UPDATE payload
    * @returns {boolean} true when it was taken as a catch bonus
    */
@@ -1305,6 +1324,9 @@ export class StatusPanel {
   /** Hide the payoff line now (timer end, GAME_RESET, GAME_WIN, game over). */
   clearPayoff() {
     if (this._payoffTimer != null) { timerManager.clear(this._payoffTimer); this._payoffTimer = null; }
+    // u4-phone-fold D8: a cleared line forgets the same-frame state too (a bonus waiting for a catch, a catch in frame).
+    this._payoffPending = 0;
+    this._payoffCatchInFrame = false;
     if (this._payoffEl) {
       this._payoffEl.style.display = 'none';
       this._payoffData = null;
@@ -2176,6 +2198,118 @@ export class StatusPanel {
     this._keyDispatch = typeof fn === 'function' ? fn : pressKey;
   }
 
+  // ==========================================================================
+  // DAUGHTERS FOLD (u4-phone-fold D2) - short screens only
+  // ==========================================================================
+
+  /**
+   * @private Build the DAUGHTERS fold line (a `.fold-toggle` inside #fleet-header, built with createElement
+   * so stub-DOM tests can tap it) and start watching the screen height. On a tall screen the line stays
+   * hidden and the pane is today's pane. The toggle is a CHILD of the header (the header is PaneHelp's
+   * deep-link element; a fold tap must never deep-link).
+   */
+  _buildArmsFold() {
+    if (typeof document === 'undefined' || !document || typeof document.createElement !== 'function') return;
+    const arms = this.panels.arms;
+    const header = (arms && typeof arms.querySelector === 'function') ? arms.querySelector('#fleet-header') : null;
+    const toggle = document.createElement('div');
+    toggle.className = 'fold-toggle';
+    Object.assign(toggle.style, {
+      display: 'none', alignItems: 'center', justifyContent: 'space-between', flex: '1 1 100%',
+      minHeight: `${this._glass ? FOLD_TOGGLE_TOUCH_PX : 24}px`, cursor: 'pointer', userSelect: 'none',
+    });
+    const left = document.createElement('span');
+    left.textContent = 'DAUGHTERS';
+    const right = document.createElement('span');
+    right.className = 'fold-right';
+    Object.assign(right.style, { fontWeight: 'normal', letterSpacing: 'normal', fontSize: '11px', opacity: '0.85', whiteSpace: 'nowrap' });
+    toggle.appendChild(left);
+    toggle.appendChild(right);
+    toggle.addEventListener('click', () => this.toggleFold());
+    if (header && typeof header.appendChild === 'function') header.appendChild(toggle);
+    this._foldToggleEl = toggle;
+    this._foldRightEl = right;
+    this._armsHeaderEl = header;
+    const win = (typeof window !== 'undefined') ? window : null;
+    this._armsShort = shortScreenNow(win);
+    this._armsFolded = this._armsShort;
+    this._unwatchArmsShort = watchShortScreen(win, (short) => {
+      this._armsShort = short;
+      this._armsFolded = short;            // folded whenever the screen becomes short
+      this._applyArmsFold();
+    });
+    this._applyArmsFold();
+  }
+
+  /** True while the DAUGHTERS pane is folded to its one line (short screens only). */
+  isFolded() { return !!(this._armsShort && this._armsFolded); }
+
+  /** Fold / unfold the DAUGHTERS pane (the fold toggle's tap; a no-op on a tall screen). */
+  toggleFold() {
+    if (!this._armsShort) return false;
+    this._armsFolded = !this._armsFolded;
+    this._applyArmsFold();
+    return this._armsFolded;
+  }
+
+  /** @private Find a DAUGHTERS part: the pane's own tree first, then the document (stub DOMs register either). */
+  _armsPart(id) {
+    const arms = this.panels && this.panels.arms;
+    let el = (arms && typeof arms.querySelector === 'function') ? arms.querySelector('#' + id) : null;
+    if (!el && typeof document !== 'undefined' && document && typeof document.getElementById === 'function') el = document.getElementById(id);
+    return el || null;
+  }
+
+  /**
+   * @private Paint the fold state: toggle line, header, list, padding. Write on change (CONVENTIONS):
+   * the inputs (short, folded, summary text) are keyed and an unchanged key writes nothing (this runs
+   * at 10 Hz on every screen).
+   */
+  _applyArmsFold() {
+    const toggle = this._foldToggleEl;
+    if (!toggle) return;
+    const short = !!this._armsShort;
+    const folded = this.isFolded();
+    const text = this._foldRightText();
+    const key = `${short ? 1 : 0}|${folded ? 1 : 0}|${text}`;
+    if (key === this._armsFoldKey) return;
+    this._armsFoldKey = key;
+    this._armsFoldWrites = (this._armsFoldWrites || 0) + 1;
+    toggle.style.display = short ? 'flex' : 'none';
+    if (this._foldRightEl && this._foldRightEl.textContent !== text) this._foldRightEl.textContent = text;
+    const legacy = this._armsPart('fleet-legacy');
+    if (legacy && legacy.style) legacy.style.display = short ? 'none' : 'flex';
+    const list = this._armsPart('hud-arms-status');
+    if (list && list.style) list.style.display = folded ? 'none' : '';
+    const header = this._armsHeaderEl || this._armsPart('fleet-header');
+    if (header && header.style) header.style.marginBottom = folded ? '0' : '3px';
+    const pane = this.panels && this.panels.arms;
+    if (pane && pane.style) pane.style.padding = folded ? '0 8px' : '';
+  }
+
+  /** @private `N of M ready ▸` / `▾` - the right side of the DAUGHTERS fold line. */
+  _foldRightText() {
+    return `${this._armsSummary} ${this.isFolded() ? FOLD_CLOSED_GLYPH : FOLD_OPEN_GLYPH}`.trim();
+  }
+
+  /**
+   * @private Called from _renderArmPanel with the current statuses: refresh the summary and open the pane
+   * once on each new departure (a daughter going docked -> not docked). Folding it again while she is out
+   * keeps it folded until the next departure.
+   */
+  _updateArmsFold(statuses) {
+    const list = Array.isArray(statuses) ? statuses : [];
+    const rows = list.map((a, idx) => ({ label: this._daughterStatus(a, idx).label }));
+    this._armsSummary = daughtersSummary(rows).text;
+    const edges = departureEdges(this._armsDockedPrev, list.map((a) => ({
+      id: a.id,
+      docked: a.state === 'DOCKED' || a.state === 'RELOADING' || a.state === 'HOLDING_CATCH',
+    })));
+    this._armsDockedPrev = edges.next;
+    if (edges.departed && this._armsShort && this._armsFolded) this._armsFolded = false;
+    if (this._foldToggleEl) this._applyArmsFold();
+  }
+
   /**
    * @private Attach the ONE click delegate for the FLEET list (#hud-arms-status)
    * — once. The list body is re-rendered via innerHTML on every ARM_SELECT /
@@ -2239,6 +2373,7 @@ export class StatusPanel {
 
     if (!this._armManager) {
       el.innerHTML = '<span style="opacity:0.5">No daughters</span>';
+      this._updateArmsFold([]);
       this._updateFleetHeader();
       return;
     }
@@ -2246,9 +2381,11 @@ export class StatusPanel {
     const statuses = this._armManager.getAllStatus();
     if (statuses.length === 0) {
       el.innerHTML = '<span style="opacity:0.5">No daughters</span>';
+      this._updateArmsFold([]);
       this._updateFleetHeader();
       return;
     }
+    this._updateArmsFold(statuses);   // u4-phone-fold D2: the "N of M ready" line + the departure auto-open
 
     // Register item 100: the speed-dial header — fleet launch speed, the
     // equipped spring tier's ceiling, and the dial keys. Reads the same
@@ -2656,7 +2793,8 @@ export class StatusPanel {
     const hint = document.getElementById('fleet-select-hint');
     if (!hint) return;
     const hasSelection = !!this._armManager && this._armManager.selectedArmIndex >= 0;
-    hint.style.display = hasSelection ? 'none' : '';
+    // u4-phone-fold D5: no keys on a touch device - "select 1–4" is hidden on glass.
+    hint.style.display = (hasSelection || this._glass) ? 'none' : '';
   }
 
   // ==========================================================================

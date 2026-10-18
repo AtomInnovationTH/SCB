@@ -123,6 +123,12 @@
       text-transform: uppercase !important;
       letter-spacing: 0.06em !important;
     }
+    /* u4 review fix 1: the right part of a fold line ("4 of 4 ready ▸", "+ 4 more ▸") is a sentence, not a pane title:
+       lowercase and normal spacing even though .pane-title (the DAUGHTERS header) uppercases its children. */
+    html[data-look="new"] .fold-toggle .fold-right {
+      text-transform: none !important;
+      letter-spacing: normal !important;
+    }
     /* Game-over / victory screen (y1-gameover-look): inherited stat text takes the label colour, bare values the data white.
        An inline <b style="color:…"> still wins. */
     html[data-look="new"] #gameover-stats { color: var(--hud-label); }
@@ -594,14 +600,20 @@
      * "comms should be visible on f2 at start of game"). MOTHER and comms are the same
      * width (--hud-side-w, defined at :root: 480 px, narrowing together so the centred
      * 280 px score strip, x centre +-140, y 8-36, stays clear of both; the floor is 300).
-     * Below 920 px comms also drops 34 px so it sits under the strip (y 8-36). */
+     * Below 920 px (u4-phone-fold D4, owner 2026-10-18 "no overlap"): the strip leaves the centre and starts 18 px right of
+     * MOTHER's edge (--hud-side-w: 300 / 418 / 480 px) however wide the wallet makes it, so the payoff line (max 300 px,
+     * centred under the strip) keeps clear of MOTHER; comms drops to 60 px = strip bottom 36 + payoff margin 4 + line
+     * ~16 + 4 clear, so the payoff line never lands on it; the materials line under the payoff line is a Details extra and
+     * is hidden here (the payoff line stays). Above 920 px the strip stays centred, as before. */
     @media (max-width: 920px) {
-      #hud-comms-panel { top: 44px !important; }
+      #hud-comms-panel { top: 60px !important; }
+      #hud-score-panel { left: calc(var(--hud-side-w) + 18px) !important; transform: none !important; }
+      #hud-payoff .payoff-materials { display: none !important; }
     }
 
     /* MOTHER (top-left) and COMMS (top-right) sit IN their screen corners (PANE_CORNER_PX 0, js/ui/RailGeometry.js;
      * owner 2026-10-18): no border and no corner radius on the sides that touch the screen. Inner padding is
-     * unchanged, so the text stays 7-8 px from the edge. Below 920 px COMMS sits 44 px down (under the score strip),
+     * unchanged, so the text stays 7-8 px from the edge. Below 920 px COMMS sits 60 px down (under the strip and its payoff line),
      * so only its right side touches the screen there; the top border returns. */
     #hud-left-column > #hud-vitals {
       /* The dropped top border (-1 px) is given back as top padding (PAD_Y_PX 5 + 1), so MOTHER stays

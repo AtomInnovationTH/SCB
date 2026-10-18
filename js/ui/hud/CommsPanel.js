@@ -17,7 +17,7 @@ import { GestureHints } from './GestureHints.js';
 import { decorateGlossary, escapeHtml } from '../../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from '../glossaryDom.js';
 import { TouchControls } from '../TouchControls.js';
-import { RAIL_GEOMETRY, PANE_CORNER_PX } from '../RailGeometry.js';
+import { PANE_CORNER_PX } from '../RailGeometry.js';
 import { VITALS_COLLAPSED_HEIGHT_PX } from './VitalsPane.js';
 
 const COMMS = Constants.COMMS;
@@ -142,7 +142,7 @@ const COMMS_STEP_STORE_KEY = 'spacecowboy_comms_pane_step_v2';
 
 /**
  * Glass: ctor `glass` wins; else GestureHints.isGlass(); else detectGlass().
- * Plan Task 6 / locked #13 — [7] badge 44 px hit on glass only.
+ * Plan Task 6 / locked #13 (the [7] badge hit retired with the badge, u4-phone-fold D5).
  * @param {boolean|null|undefined} explicit
  * @returns {boolean}
  */
@@ -175,23 +175,6 @@ export function commsInitialStep({ ladderEnabled, stored } = {}) {
   return 'normal';
 }
 
-/**
- * 44 px hit box on the [7] badge (Apple HIG / RAIL_GEOMETRY.TOUCH_PITCH_PX).
- * No-op off glass.
- * @param {HTMLElement|null} badge
- * @param {boolean} glass
- */
-export function applyCommsBadgeHit(badge, glass) {
-  if (!badge || !badge.style || !glass) return;
-  const px = `${RAIL_GEOMETRY.TOUCH_PITCH_PX}px`;
-  badge.style.minWidth = px;
-  badge.style.minHeight = px;
-  badge.style.display = 'flex';
-  badge.style.alignItems = 'center';
-  badge.style.justifyContent = 'center';
-  badge.style.boxSizing = 'border-box';
-}
-
 // ============================================================================
 // COMMS PANEL CLASS
 // ============================================================================
@@ -199,7 +182,7 @@ export function applyCommsBadgeHit(badge, glass) {
 export class CommsPanel {
   /**
    * @param {HTMLElement} container
-   * @param {{ glass?: boolean|null }} [opts]  `glass` — Task 6: 44 px [7] badge hit.
+   * @param {{ glass?: boolean|null }} [opts]  `glass` — Task 6.
    */
   constructor(container, { glass = null } = {}) {
     this._container = container;
@@ -337,15 +320,16 @@ export class CommsPanel {
     delegateGlossaryClicks(this._logEl);
 
     // --- Resize chrome (3-step: line / normal / large) ---
-    // Clickable top-right [7] badge cycles the size; the 7 key also cycles via
-    // _expandPane(). No "GROUND COMMS" label — keep the pane clean.
+    // The 7 key cycles the size via _expandPane(). No "GROUND COMMS" label and, since u4-phone-fold
+    // D5, no visible [7] badge (resize by badge is dropped; the key is in the Help page and the hover tip).
     this._chrome = new PaneChrome({
       pane: this.panels.comms,
       keyLabel: '7',
+      badge: false,
       steps: COMMS_STEPS,
       initial: commsInitialStep(),
       color: COMMS_COLOR_NORMAL,
-      title: 'Comms size (7). Click to cycle line / normal / large',
+      title: 'Comms size (7)',
       onStep: (step) => {
         // PaneChrome applies the initial step from INSIDE its constructor, so
         // on that first call `this._chrome` is still null — the step MUST come
@@ -359,9 +343,6 @@ export class CommsPanel {
       },
     });
     this._commsStepReady = true;
-    if (this.panels.comms && this.panels.comms.querySelector) {
-      applyCommsBadgeHit(this.panels.comms.querySelector('.hud-pane-badge'), this._glass);
-    }
   }
 
   // ==========================================================================

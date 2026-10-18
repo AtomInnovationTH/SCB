@@ -38,6 +38,10 @@
  * @property {string}      [color]      Badge text colour (default green).
  * @property {(step:string, index:number)=>void} [onStep] Called after each change.
  * @property {string}      [title]      Tooltip for the badge.
+ * @property {boolean}     [badge]      Build the corner badge (default true). Set
+ *                                       false for a pane with no visible key text
+ *                                       (u4-phone-fold D5): the step cycle still
+ *                                       works through cycle() / setStep().
  */
 
 export class PaneChrome {
@@ -55,9 +59,12 @@ export class PaneChrome {
     if (!startName) startName = this._steps.includes('normal') ? 'normal' : this._steps[0];
     this._index = Math.max(0, this._steps.indexOf(startName));
 
-    this._badge = this._buildBadge(opts.keyLabel, opts.title, opts.bracket !== false);
+    // u4-phone-fold D5: `badge: false` builds no badge element at all.
+    this._badge = opts.badge === false
+      ? null
+      : this._buildBadge(opts.keyLabel, opts.title, opts.bracket !== false);
     // The 34 px offset for the dormant keycap glyph retired in Session S — the glyph never renders since _applySkillReveal stopped applying hud-dormant.
-    this._pane.appendChild(this._badge);
+    if (this._badge) this._pane.appendChild(this._badge);
 
     // Apply the initial step (no callback churn — pane is mid-build, but the
     // callback is generally idempotent; callers can also call refresh()).
