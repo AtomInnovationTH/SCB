@@ -175,8 +175,10 @@ const _v3AttA = new THREE.Vector3();
 const _v3AttB = new THREE.Vector3();
 const _v3AttC = new THREE.Vector3();
 const _v3AttD = new THREE.Vector3();
+const _v3AttE = new THREE.Vector3();
 const _qAttA  = new THREE.Quaternion();
 const _qAttB  = new THREE.Quaternion();
+const _qAttC  = new THREE.Quaternion();
 const _matAtt = new THREE.Matrix4();
 /** Clamp a scalar to ±limit. */
 const clampAbs = (v, limit) => (v > limit ? limit : (v < -limit ? -limit : v));
@@ -431,6 +433,11 @@ export class PlayerSatellite extends THREE.Group {
 
     // F13: Manual rotation offset (applied on top of velocity-aligned orientation)
     this._manualRotation = new THREE.Quaternion(); // identity = no offset
+    // launch-smooth: the heading the tether rotation limit is measured from. Latched (as an offset from prograde,
+    // like _manualRotation) when the aim hold hands the attitude back to the player; cleared when no daughter is out
+    // (setAttitudeConstraintTier('none')). Without it the limit is measured from prograde. See _tetherRefAngles.
+    this._tetherLatch = new THREE.Quaternion();
+    this._tetherLatchOn = false;
 
     // Phase 3: rigid-body attitude state. _rcsOmega is body-frame angular
     // velocity (rad/s): x pitch, y yaw, z roll (D10 — recoil/parasitic torques
@@ -8338,9 +8345,15 @@ export class PlayerSatellite extends THREE.Group {
    * returns to PLAYER, fold the current world attitude into the manual offset so
    * `quaternion = prograde · _manualRotation` reproduces it exactly — no snap —
    * and zero the body rate so the hull is not left spinning.
+   *
+   * launch-smooth: when the hold that aimed the ship (owner AIM: a launch aim) hands back, the heading she hands back
+   * at becomes the heading the tether rotation limit is measured from (`_tetherLatch`), so the limit starts at 0 there
+   * instead of at the old offset from prograde (which, with the daughter just sprung, pulled her 24° back, hard).
+   * Computed from prograde⁻¹ · quaternion, not `_manualRotation` (stale under AIM until it is folded just above).
+   * @param {boolean} [fromAim=false] — the owner that hands back is AIM
    * @private
    */
-  _handAttitudeToPlayer() {
+  _handAttitudeToPlayer(fromAim = false) {
     const pg = this._progradeQuat(_qAttA);
     if (pg) {
       // _manualRotation = prograde⁻¹ · quaternion
@@ -8349,6 +8362,10 @@ export class PlayerSatellite extends THREE.Group {
       this._manualRotation.identity();
     }
     if (this._rcsOmega) this._rcsOmega.set(0, 0, 0);
+    if (fromAim) {
+      this._tetherLatch.copy(this._manualRotation);
+      this._tetherLatchOn = true;
+    }
   }
 
   /**
@@ -8393,7 +8410,11 @@ export class PlayerSatellite extends THREE.Group {
     const wasDirect = prev === 'AUTOPILOT' || prev === 'AIM';
     const entersManual = owner === 'PLAYER' || owner === 'CINEMATIC';
     if (entersManual && wasDirect) {
-      this._handAttitudeToPlayer();
+      // launch-smooth: latch on ANY aim-to-player hand-back (launch aim, lasso hold, net aim, net reel-in hold, leash
+      // hand-off turn): wherever an aim leaves her pointing is where the tether limit starts. Also latch when the
+      // AUTOPILOT hands back while a daughter is out: the constraint tier is only updated outside autopilot, so the old
+      // latch (if any) points at a heading she has since left, and a 'block' tier would push her back hard.
+      this._handAttitudeToPlayer(prev === 'AIM' || (prev === 'AUTOPILOT' && this._holdsHeadingForTether()));
     }
 
     // AP / AIM drive the quaternion directly — hold zero body rate under them.
@@ -8447,7 +8468,8 @@ export class PlayerSatellite extends THREE.Group {
       // non-zero target here would compare ω against a rate the thrusters were
       // never asked for and flash a plume on an idle couple — visible precisely
       // when the player is zoomed in inspecting the hull.
-      const inspecting = (owner === 'CINEMATIC');
+      // launch-smooth: nor while a daughter is out (rotation tier not 'none'): she keeps her heading then.
+      const inspecting = (owner === 'CINEMATIC') || this._holdsHeadingForTether();
       const wTx = (!inspecting && cmdP === 0 && Math.abs(th.x) > A.HOLD_DEADBAND_RAD)
         ? -clampAbs(A.RECENTER_GAIN * th.x, A.RECENTER_RATE) : 0;
       const wTy = (!inspecting && cmdY === 0 && Math.abs(th.y) > A.HOLD_DEADBAND_RAD)
@@ -8518,8 +8540,11 @@ export class PlayerSatellite extends THREE.Group {
     let holdFired = false;
 
     const coldGas = this.resources ? (this.resources.coldGas || 0) : 0;
-    const tethered = this._attitudeConstraintTier && this._attitudeConstraintTier !== 'none';
-    const recentering = !inspecting && coldGas > 0;
+    const tethered = this._holdsHeadingForTether();
+    // launch-smooth: no recenter while a daughter is out (any rotation tier): she keeps the heading she launched at
+    // (owner 2026-10-18: "then mother turns back jerking tether"); the arrest servo still stops any rate. When the
+    // tier returns to 'none' the recenter resumes: at most RECENTER_RATE, driven by the couple torque only.
+    const recentering = !inspecting && coldGas > 0 && !tethered;
     // Decompose the manual offset to its body-frame rotation vector ONCE (shared
     // by the recenter ω_target and the tether spring — both read the same
     // unmutated _manualRotation). th_i = ang·axis_i, so |th| = ang (total offset).
@@ -8563,7 +8588,7 @@ export class PlayerSatellite extends THREE.Group {
     // couple clamp — a stiffening spring that comfortably exceeds τ_max at the
     // limit, so angular momentum physically cannot carry the offset past it.
     if (tethered && th) {
-      this._applyTetherTorque(tau, th);
+      this._applyTetherTorque(tau, this._tetherLatchOn ? this._tetherRefAngles(_v3AttE) : th);
     }
 
     // N₂ accounting for the HOLD (arrest + recenter). Bill by ACTUAL applied
@@ -8624,6 +8649,17 @@ export class PlayerSatellite extends THREE.Group {
    */
   setAttitudeConstraintTier(tier) {
     this._attitudeConstraintTier = tier || 'none';
+    if (this._attitudeConstraintTier === 'none') this._tetherLatchOn = false;   // launch-smooth: no daughter out, no latch
+  }
+
+  /**
+   * launch-smooth: is a daughter out (rotation tier 'soft' or 'block')? Then the ship keeps her heading: the hold
+   * controller does not recenter her toward prograde (see `_integrateAttitudeStep`).
+   * @returns {boolean} @private
+   */
+  _holdsHeadingForTether() {
+    const t = this._attitudeConstraintTier;
+    return !!t && t !== 'none';
   }
 
   /**
@@ -8636,7 +8672,7 @@ export class PlayerSatellite extends THREE.Group {
     if (!tier || tier === 'none') return false;
     const TR = Constants.TETHER_ROTATION;
     const maxDisp = tier === 'block' ? TR.MAX_DISPLACEMENT_BLOCK : TR.MAX_DISPLACEMENT_SOFT;
-    const th = this._tetherOffsetAngles(_v3AttA);
+    const th = this._tetherRefAngles(_v3AttA);
     const sat = TR.SATURATION_THRESHOLD * maxDisp;
     const pitchSat = Math.abs(th.x) >= sat && Math.sign(th.x) === Math.sign(pitchIn) && pitchIn !== 0;
     const yawSat = Math.abs(th.y) >= sat && Math.sign(th.y) === Math.sign(yawIn) && yawIn !== 0;
@@ -8647,12 +8683,24 @@ export class PlayerSatellite extends THREE.Group {
    * Decompose the manual offset into per-axis rotation-vector angles (rad) in
    * body frame: {x: pitch, y: yaw, z: roll}. @param {THREE.Vector3} out @private
    */
-  _tetherOffsetAngles(out) {
-    const mr = this._manualRotation;
+  _tetherOffsetAngles(out, mr = this._manualRotation) {
     const ang = 2 * Math.acos(Math.min(1, Math.abs(mr.w)));
     const s = Math.sqrt(Math.max(0, 1 - mr.w * mr.w)) || 1;
     const sign = mr.w >= 0 ? 1 : -1;
     return out.set(ang * sign * mr.x / s, ang * sign * mr.y / s, ang * sign * mr.z / s);
+  }
+
+  /**
+   * launch-smooth: the offset the tether rotation limit is measured from, as body-frame angles (rad) like
+   * `_tetherOffsetAngles`. With a latch (`_handAttitudeToPlayer` after a launch aim) it is the offset from the latched
+   * heading; otherwise from prograde as before. (A rotation has the same axis in both frames, so the angles read the
+   * same in the latch's frame and the current one.)
+   * @param {THREE.Vector3} out @private
+   */
+  _tetherRefAngles(out) {
+    if (!this._tetherLatchOn) return this._tetherOffsetAngles(out);
+    const rel = _qAttC.copy(this._tetherLatch).invert().multiply(this._manualRotation);   // latch⁻¹ · offset
+    return this._tetherOffsetAngles(out, rel);
   }
 
   /**
@@ -8661,8 +8709,13 @@ export class PlayerSatellite extends THREE.Group {
    * (n = STIFFNESS_EXPONENT) plus a damping term beyond half-limit. τ_wall is set
    * to several × the couple authority so the momentum equilibrium sits well below
    * θ_max — the offset physically cannot reach the limit.
-   * @param {THREE.Vector3} tau @param {THREE.Vector3} th precomputed body-frame
-   *   offset rotation vector (from `_tetherOffsetAngles`, shared with RECENTER) @private
+   *
+   * launch-smooth: the 'soft' tier (a daughter flying out on her line) is a slack line, not a wall: its torque and
+   * the thrusters' together stay inside the couple authority (an acceleration she can really make), so it never
+   * kicks her. It used to add up to 6× the authority on top of the thrusters (the 24° swing-back seen at the
+   * spring). The 'block' tier (a loaded, reeling or hauling line) is the wall it was.
+   * @param {THREE.Vector3} tau @param {THREE.Vector3} th body-frame offset rotation vector the limit is measured
+   *   from (`_tetherRefAngles`; RECENTER reads `_tetherOffsetAngles`, the offset from prograde) @private
    */
   _applyTetherTorque(tau, th) {
     const tier = this._attitudeConstraintTier;
@@ -8680,6 +8733,10 @@ export class PlayerSatellite extends THREE.Group {
     };
     tau.x += axis(th.x, w.x, I.ixx);
     tau.y += axis(th.y, w.y, I.iyy);
+    if (tier !== 'block') {
+      tau.x = clampAbs(tau.x, this._coupleTauMag('x'));
+      tau.y = clampAbs(tau.y, this._coupleTauMag('y'));
+    }
   }
 
   // ==========================================================================

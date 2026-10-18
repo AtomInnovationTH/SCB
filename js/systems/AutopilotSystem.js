@@ -259,6 +259,7 @@ export class AutopilotSystem {
     this._aimTargetQuat = new THREE.Quaternion();
     this._aimInvQuat = new THREE.Quaternion();
     this._aimLocalDir = new THREE.Vector3();
+    this._aimBm = new THREE.Vector3();     // launch-smooth: the mother's boresight with the strut at its target angle
 
     this._setupListeners();
   }
@@ -2074,6 +2075,7 @@ export class AutopilotSystem {
 
       this._aimCoroutine = {
         mode, provider, tolRad, rate,
+        stopErr: 0.5 * tolRad,     // launch-smooth: the eased turn comes to rest this far from the target (inside tolRad)
         armManager: opts.armManager || this._armManager,
         arm: opts.arm || null,
         pairIndex: (opts.pairIndex != null) ? opts.pairIndex : null,
@@ -2353,6 +2355,10 @@ export class AutopilotSystem {
    * Tick the aim coroutine. Called each frame from update() regardless of
    * autopilot engagement. Drives attitude (and daughter α) toward the target
    * and resolves with the ACTUAL launcher direction at convergence.
+   *
+   * launch-smooth: a player that can say its inertia and couple torque is turned by `_tickAimEased` (speeds up,
+   * coasts, slows to a stop at the target, strut and mother ending together). Any other player (a headless stub)
+   * keeps the plain constant-rate slerp below.
    * @param {number} dt — frame time in seconds
    * @private
    */
@@ -2370,6 +2376,9 @@ export class AutopilotSystem {
     if (T.lengthSq() < 1e-12) return; // degenerate this frame; wait
     T.normalize();
 
+    if (c.eased === undefined) c.eased = this._aimCanEase();
+    if (c.eased) { this._tickAimEased(c, T, dt); return; }
+
     const q = this._player.quaternion;
 
     // Resolve the boresight (launcher axis) in LOCAL frame.
@@ -2377,12 +2386,7 @@ export class AutopilotSystem {
     // daughter → physical strut fire dir (sinα·cos az, sinα·sin az, −cosα).
     let boresightLocalX = 0, boresightLocalY = 0, boresightLocalZ = 1;
     if (c.mode === 'daughter') {
-      // Resolve azimuth from dock geometry once.
-      if (c.azRad == null && c.armManager && c.armManager._dockPositions && c.pairIndex != null) {
-        const dp = c.armManager._dockPositions[c.pairIndex];
-        c.azRad = dp ? (dp.azimuthDeg * Math.PI / 180) : 0;
-      }
-      const az = c.azRad || 0;
+      const az = this._aimAzimuth(c);
 
       // Slew α toward the in-plane solution (transform target into local frame).
       this._aimInvQuat.copy(q).invert();
@@ -2413,7 +2417,6 @@ export class AutopilotSystem {
 
     // Converged? Resolve with the ACTUAL current launcher direction.
     if (errAngle <= c.tolRad) {
-      this._billAimTail(c);          // mother-aims: the rest of the brake a real ship still needs
       this._resolveAim({ x: b.x, y: b.y, z: b.z });
       return;
     }
@@ -2428,12 +2431,8 @@ export class AutopilotSystem {
     q.slerp(this._aimTargetQuat, alphaSlerp);
     q.normalize();
 
-    // Plumes + N₂ draw. mother-aims: billed by torque × time (_billAimBurns); a player that cannot say its
-    // inertia / couple torque (a headless stub) keeps the old full-throttle bill below.
-    if (this._billAimBurns(c, b, T, errAngle, dt)) return;
-
-    // Old bill (feel only): decompose the error rotation axis into local pitch (X) / yaw (Y) components
-    // to pick nozzles; full throttle until the last 10°.
+    // Plumes + N₂ draw (feel only; a player that cannot say its inertia / couple torque): decompose the error
+    // rotation axis into local pitch (X) / yaw (Y) components to pick nozzles; full throttle until the last 10°.
     this._aimErrAxis.crossVectors(b, T);
     if (this._aimErrAxis.lengthSq() > 1e-12) {
       this._aimInvQuat.copy(q).invert();
@@ -2454,74 +2453,174 @@ export class AutopilotSystem {
     }
   }
 
+  /** @private The dock azimuth (rad) of the daughter's pair, resolved once from the dock geometry. */
+  _aimAzimuth(c) {
+    if (c.azRad == null && c.armManager && c.armManager._dockPositions && c.pairIndex != null) {
+      const dp = c.armManager._dockPositions[c.pairIndex];
+      c.azRad = dp ? (dp.azimuthDeg * Math.PI / 180) : 0;
+    }
+    return c.azRad || 0;
+  }
+
   /**
-   * mother-aims: bill the aim's cold gas by torque × time, reactively, and fire the plumes only while a burn
-   * lasts (it used to bill full throttle for the whole slew: ~19 % of the tank for a 60° aim, ~10× what the
-   * same turn costs as `requestAttitudeTurn` bang-coast-bang).
-   *
-   * The aim's motion stays a kinematic slerp at the peak rate; the bill follows a shadow of the rate a real
-   * ship would have, ω: it climbs at α = the slowest couple's torque / inertia (as the ramps of
-   * `requestAttitudeTurn`) up to the aim's peak rate, then coasts for free, and brakes once
-   * (remaining angle − tolerance) < ω²/2α. The aim is feedback-driven (the target moves, the strut slews, it
-   * ends `tol` early), so the choice is made afresh every frame. What is left of the brake when the aim ends
-   * (the slerp arrives before a real ship would have stopped) is billed then — see `_billAimTail`.
-   *
-   * @param {object} c — the aim coroutine record
-   * @param {THREE.Vector3} b — launcher axis in the world (this._aimBoresightWorld)
-   * @param {THREE.Vector3} T — target direction in the world
-   * @param {number} errAngle — angle between them (rad)
-   * @param {number} dt
-   * @returns {boolean} false when the player cannot tell its inertia / couple torque (caller bills the old way)
+   * launch-smooth: can the aim be eased? The player must say its inertia and its pitch / yaw couple torque (the
+   * rate law needs the angular acceleration). A stub without them keeps the plain slerp.
+   * @returns {boolean}
    * @private
    */
-  _billAimBurns(c, b, T, errAngle, dt) {
+  _aimCanEase() {
     const p = this._player;
     if (typeof p.getAttitudeInertia !== 'function' || typeof p._coupleTauMag !== 'function') return false;
+    const I = p.getAttitudeInertia();
+    return !!I && I.ixx > 0 && I.iyy > 0 && p._coupleTauMag('x') > 0 && p._coupleTauMag('y') > 0;
+  }
 
-    this._aimErrAxis.crossVectors(b, T);
-    if (!(this._aimErrAxis.lengthSq() > 1e-12)) return true;       // no turn axis: nothing to burn
-    this._aimInvQuat.copy(p.quaternion).invert();
-    const ax = this._aimErrAxis.applyQuaternion(this._aimInvQuat).normalize();
+  /**
+   * launch-smooth: one frame of the eased aim (launch and net aims alike). Owner 2026-10-18: "arm aims (could be
+   * improved), mother turns (could be improved)". It used to slerp at a constant 0.2 rad/s with no ramp at either
+   * end (0 → 11.5°/s in one frame, and 11.5°/s → 0 in one frame once the boresight was within 5°) while the strut
+   * ran at 15°/s and stopped 1.5 s before her.
+   *
+   * The mother follows the rate law the gas bill (mother-aims) used to only shadow: her rate ω climbs at the angular
+   * acceleration of her slowest couple (α = torque / inertia about the turn axis, as `requestAttitudeTurn`),
+   * coasts at the aim's peak rate, and slows so that it reaches 0 as she gets to the target: each frame the largest ω
+   * from which a stop of at most α per frame still ends within the angle left (no step in the rate bigger than α·dt,
+   * none at the end). Gas is billed by torque × time from the same ω.
+   *
+   * Strut: the strut angle her boresight is aimed for is fixed when the aim starts (the live optimum moves with
+   * her attitude and would chase its own tail); the mother turns the rest (the part of the error out of the strut's
+   * plane). The aim lasts max(her turn, the strut's shortest eased move); if the strut needs longer her peak rate
+   * is lowered so both end together, and the strut's move (`setAimAlpha`'s `ease`) lasts that long. She never goes
+   * above AP_ROT_RATE. The aim resolves once the strut is there, she is within the tolerance and at rest.
+   * @param {object} c — the aim coroutine record
+   * @param {THREE.Vector3} T — target direction in the world (unit)
+   * @param {number} dt
+   * @private
+   */
+  _tickAimEased(c, T, dt) {
+    const p = this._player;
+    const q = p.quaternion;
+    const daughter = c.mode === 'daughter';
+    const arm = (daughter && c.arm && typeof c.arm.setAimAlpha === 'function') ? c.arm : null;
+    const az = daughter ? this._aimAzimuth(c) : 0;
+
+    // The strut angle her boresight is aimed for. A real strut: fixed when the aim starts. No strut object: the
+    // in-plane optimum for her attitude now (nothing slews, so nothing chases).
+    let alphaT = 0;
+    if (daughter) {
+      if (arm && c.alphaF !== undefined) {
+        alphaT = c.alphaF;
+      } else {
+        this._aimInvQuat.copy(q).invert();
+        const tl = this._aimLocalDir.copy(T).applyQuaternion(this._aimInvQuat);
+        alphaT = Math.max(0, Math.min(Math.PI, Math.atan2(tl.x * Math.cos(az) + tl.y * Math.sin(az), -tl.z)));
+        if (arm) c.alphaF = alphaT;
+      }
+    }
+    const bm = this._aimBm;
+    if (daughter) strutLocalDirection(alphaT, az, bm); else bm.set(0, 0, 1);
+    bm.applyQuaternion(q).normalize();
+    const errM = Math.acos(Math.max(-1, Math.min(1, bm.dot(T))));      // what is left for her to turn
+
+    const a = this._aimAccel(c, bm, T);
+    if (!(a > 0)) return;
+
+    if (c.law === undefined) {
+      c.law = true;
+      c.omega = 0;                                                     // her rate along the turn axis (rad/s)
+      c.gasUnits = 0;
+      c.k = (p._coldGasRate ?? 0.5) * (Constants.ATTITUDE?.RCS_ATTITUDE_N2_FACTOR ?? 0.3);
+      const vCap = c.rate;                                             // today's peak (AP_ROT_RATE): never above it
+      const theta = Math.max(0, errM - c.stopErr);
+      const tM = theta <= 0 ? 0 : (theta >= vCap * vCap / a ? theta / vCap + vCap / a : 2 * Math.sqrt(theta / a));
+      let tS = 0;
+      if (arm) {
+        tS = (typeof arm.aimEaseMinTime === 'function')
+          ? arm.aimEaseMinTime(alphaT)
+          : Math.abs(alphaT - (arm.getAimAlpha ? arm.getAimAlpha() : alphaT)) / Constants.OCTOPUS_V5.STRUT_SLEW_RATE;
+      }
+      c.vCap = vCap;
+      c.vPeak = vCap;
+      if (tS > tM && theta > 0) {                                      // the strut needs longer: slow her peak
+        c.vPeak = Math.min(vCap, 0.5 * a * (tS - Math.sqrt(Math.max(0, tS * tS - 4 * theta / a))));
+      }
+      c.tPlan = Math.max(tM, tS);
+      c.ease = (arm && tS > 0) ? { durationS: c.tPlan } : null;
+    }
+
+    let strutDone = true;
+    if (arm) {
+      const ok = arm.setAimAlpha(c.alphaF, dt, c.ease || undefined);
+      if (ok === false) { this._rejectAim('hinge LOCKED — release the hinge brake [H]'); return; }
+      if (typeof arm.getAimAlpha === 'function') strutDone = Math.abs(arm.getAimAlpha() - c.alphaF) < 1e-6;
+    }
+
+    // Her rate: the largest ω she can still stop from inside the angle left (stopping at c.stopErr from the target),
+    // limited to ±α·dt per frame and to the peak. Frames of a stop run ω−δ, ω−2δ, … (δ = α·dt), so the angle one
+    // step ω·dt plus that stop covers is ω·dt + ω(ω−δ)/2α; solve for ω.
+    const dOm = a * dt;
+    const rem = errM - c.stopErr;
+    const want = rem > 0 ? 0.5 * (-dOm + Math.sqrt(dOm * dOm + 8 * a * rem)) : 0;
+    const was = c.omega;
+    const lo = Math.max(0, was - dOm);
+    const vLim = strutDone ? c.vCap : c.vPeak;                         // once the strut is there nothing is left to wait for
+    const now = Math.min(Math.max(want, lo), Math.max(lo, Math.min(vLim, was + dOm)));
+
+    if (strutDone && errM <= c.tolRad && now <= 0) {
+      if (was > 0) this._fireAimCouples(c, -1, was / a);               // the last of the brake
+      c.omega = 0;
+      this._resolveAim({ x: bm.x, y: bm.y, z: bm.z });                 // strut is there: this IS the launcher axis
+      return;
+    }
+
+    c.omega = now;
+    if (now !== was) this._fireAimCouples(c, now > was ? 1 : -1, Math.abs(now - was) / a);
+    const step = Math.min(now * dt, errM);
+    if (step > 0 && errM > 1e-9) {
+      this._aimDeltaQuat.setFromUnitVectors(bm, T);
+      this._aimTargetQuat.copy(this._aimDeltaQuat).multiply(q);
+      q.slerp(this._aimTargetQuat, step / errM);
+      q.normalize();
+    }
+  }
+
+  /**
+   * launch-smooth: the angular acceleration (rad/s²) she turns with about the axis that takes boresight `bm` onto
+   * `T` — her slowest couple's torque / inertia (as `requestAttitudeTurn`) — and the firing fraction of each couple
+   * during a burn, kept on `c.burn` for the gas bill (`_fireAimCouples`, `_billAimTail`).
+   * @returns {number} α, or 0 when the player cannot say it
+   * @private
+   */
+  _aimAccel(c, bm, T) {
+    const p = this._player;
+    const err = this._aimErrAxis.crossVectors(bm, T);
+    if (err.lengthSq() > 1e-12) {
+      this._aimInvQuat.copy(p.quaternion).invert();
+      const ax = err.applyQuaternion(this._aimInvQuat).normalize();
+      c.axX = ax.x; c.axY = ax.y;
+    } else if (c.axX === undefined) {
+      c.axX = 1; c.axY = 0;                                            // no turn axis yet (aligned): any, nothing burns
+    }
     const I = p.getAttitudeInertia();
     const tauX = p._coupleTauMag('x'), tauY = p._coupleTauMag('y');
-    const cx = Math.abs(ax.x), cy = Math.abs(ax.y);
-    let a = Infinity;                                              // slowest couple sets the angular acceleration
+    const cx = Math.abs(c.axX), cy = Math.abs(c.axY);
+    let a = Infinity;                                                  // slowest couple sets the angular acceleration
     if (cx > 1e-6) a = Math.min(a, tauX / (I.ixx * cx));
     if (cy > 1e-6) a = Math.min(a, tauY / (I.iyy * cy));
-    if (!Number.isFinite(a) || !(a > 0)) return false;
+    // A turn about the roll axis alone (no pitch / yaw part: boresight in the xy plane): the slower of the two
+    // couples stands for it, so the aim never waits on an acceleration it cannot name (no burn is billed then).
+    if (!Number.isFinite(a)) a = Math.min(tauX / I.ixx, tauY / I.iyy);
+    if (!Number.isFinite(a) || !(a > 0)) return 0;
 
     // Firing fraction of each couple during a burn (as requestAttitudeTurn); a sliver on the minor couple folds in.
     let mx = cx > 1e-6 ? I.ixx * a * cx / tauX : 0;
     let my = cy > 1e-6 ? I.iyy * a * cy / tauY : 0;
     if (mx >= my) { if (my > 0 && my <= TURN_MIN_MAG) { mx += my; my = 0; } }
     else if (mx > 0 && mx <= TURN_MIN_MAG) { my += mx; mx = 0; }
-    mx = Math.min(1, mx);
-    my = Math.min(1, my);
-
-    if (c.omega === undefined) {
-      c.omega = 0;                                                 // the shadow body rate along the turn axis (rad/s)
-      c.gasUnits = 0;
-      c.k = (p._coldGasRate ?? 0.5) * (Constants.ATTITUDE?.RCS_ATTITUDE_N2_FACTOR ?? 0.3);
-      c.burn = { mx: 0, my: 0, dx: 1, dy: 1, a: 0 };
-    }
-    const burn = c.burn;
-    burn.mx = mx; burn.my = my; burn.dx = ax.x >= 0 ? 1 : -1; burn.dy = ax.y >= 0 ? 1 : -1; burn.a = a;
-
-    const rateCap = Constants.ATTITUDE?.MAX_RATE;
-    const peak = rateCap > 0 ? Math.min(c.rate, rateCap) : c.rate;
-    const rem = errAngle - c.tolRad;                                // angle still to go before the aim counts as done
-    let seconds = 0;
-    let sign = 1;
-    if (c.omega > 0 && rem <= (c.omega * c.omega) / (2 * a)) {      // braking: thrust against the turn
-      seconds = Math.min(dt, c.omega / a);
-      c.omega = Math.max(0, c.omega - a * dt);
-      sign = -1;
-    } else if (c.omega < peak) {                                    // accelerating toward the peak rate
-      seconds = Math.min(dt, (peak - c.omega) / a);
-      c.omega = Math.min(peak, c.omega + a * dt);
-    }                                                              // else coasting: no burn, no gas, no plume
-    if (seconds > 0) this._fireAimCouples(c, sign, seconds);
-    return true;
+    const burn = c.burn || (c.burn = { mx: 0, my: 0, dx: 1, dy: 1, a: 0 });
+    burn.mx = Math.min(1, mx); burn.my = Math.min(1, my);
+    burn.dx = c.axX >= 0 ? 1 : -1; burn.dy = c.axY >= 0 ? 1 : -1; burn.a = a;
+    return a;
   }
 
   /** @private Fire both couples of the last burn for `seconds` (sign −1 = against the turn). */

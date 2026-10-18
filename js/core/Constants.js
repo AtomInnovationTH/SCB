@@ -1609,6 +1609,11 @@ export const Constants = {
     STRUT_SWEEP_MIN: 0,            // rad
     STRUT_SWEEP_MAX: Math.PI,      // rad (180°) — the RANGE; unchanged by the opening-dance plan
     STRUT_SLEW_RATE: 15 * Math.PI / 180, // rad/s (15°/s — slowed 50% so new players can see strut deploy)
+    // launch-smooth: the strut of a daughter being aimed (the launch ceremony) does not jump to 15°/s and stop dead:
+    // it speeds up at this rate, coasts at its peak (never above STRUT_SLEW_RATE) and slows at this rate, so it starts
+    // and ends together with the mother's own turn (her ramps are ~0.3 s). Only a caller that passes an `ease` to
+    // `setAimAlpha` is eased; every other strut move keeps the constant rate above.
+    STRUT_EASE_ACCEL: 50 * Math.PI / 180, // rad/s² (50°/s²: 15°/s in 0.3 s)
 
     // The "." strut toggle has two angles, both measured from the tail
     // (0° along the hull toward the tail, 90° straight out, 180° along the nose).
@@ -4784,8 +4789,10 @@ export const Constants = {
   AIM: {
     /** Mother net: ship +Z must align with the lead-intercept dir this tightly. */
     NET_AIM_TOLERANCE_DEG: 0.5,
-    /** Daughter deploy: physical strut fire dir vs target, loose (TRANSIT corrects). */
-    DAUGHTER_AIM_TOLERANCE_DEG: 5,
+    /** Daughter deploy: physical strut fire dir vs target (TRANSIT corrects the rest). launch-smooth: 1°, was 5°.
+     *  The aim now slows to a stop at the target (eased, `_tickAimEased`), so it ends with ~0 rate instead of
+     *  stopping the turn dead 5° short and snapping the last degrees. */
+    DAUGHTER_AIM_TOLERANCE_DEG: 1,
     /** Abort the aim sequence if it cannot converge within this many seconds. */
     AIM_TIMEOUT_S: 30,
     /** Autopilot-managed slew rate (rad/s) — matches AutopilotSystem AP_ROT_RATE. */

@@ -58,6 +58,32 @@ const _plumeSig = {
   arrestFeepActive: false, recoilFlashS: 0,
 };const _driftPDelta  = new THREE.Vector3();
 const _driftRaw     = new THREE.Vector3();
+
+/**
+ * launch-smooth: the rest-to-rest strut move of `d` rad (≥ 0): speed up at `a`, coast at a peak `v`, slow down at `a`.
+ * `vMax` caps the peak (the strut motor's 15°/s). With `durationS` > the shortest time the move takes the peak is
+ * lowered so it lasts exactly that long (a coast at the lower peak); with 0 / less, the move is as short as it can be.
+ * @returns {{v:number, T:number}} the peak rate (rad/s) and the total time (s)
+ */
+function strutEaseProfile(d, a, vMax, durationS) {
+  if (!(d > 1e-9)) return { v: 0, T: 0 };
+  const tri = Math.sqrt(d * a);                              // peak of a move with no coast
+  const tMin = vMax >= tri ? 2 * Math.sqrt(d / a) : d / vMax + vMax / a;
+  if (!(durationS > tMin)) return { v: Math.min(vMax, tri), T: tMin };
+  const v = 0.5 * a * (durationS - Math.sqrt(Math.max(0, durationS * durationS - 4 * d / a)));   // v/a + d/v = durationS
+  return { v, T: durationS };
+}
+
+/** Distance covered `t` seconds into a `strutEaseProfile` move (`e` = { d, a, v, T }). */
+function strutEaseDistance(e, t) {
+  if (t <= 0) return 0;
+  if (t >= e.T) return e.d;
+  const ta = e.v / e.a;
+  if (t < ta) return 0.5 * e.a * t * t;
+  if (t < e.T - ta) return 0.5 * e.a * ta * ta + e.v * (t - ta);
+  const r = e.T - t;
+  return e.d - 0.5 * e.a * r * r;
+}
 const _relVel       = new THREE.Vector3();
 const _goalDir      = new THREE.Vector3();
 const _posCmd       = new THREE.Vector3();
@@ -443,6 +469,8 @@ export class ArmUnit {
     // ── ST-9.3 C-3: Config G Aim + Hinge State ──
     /** Meridian sweep angle α ∈ [0, π]. 0=stowed(−Y), π/2=equatorial, π=zenith(+Y) */
     this._aimAlpha = 0;
+    /** launch-smooth: the eased strut move in progress (see setAimAlpha's `ease`), else null. */
+    this._aimEase = null;
 
     /**
      * Hinge state: 'ROTATE' (motor drives, brake off) or 'LOCKED' (brake on, motor off).
@@ -2316,12 +2344,21 @@ export class ArmUnit {
    *
    * Rejected if hinge is LOCKED (when LOCKABLE_HINGE feature flag is on).
    *
+   * launch-smooth: with an `ease` the strut does not start and stop at the full 15°/s: the move from the angle it is at
+   * when the ease begins to `alpha` speeds up at STRUT_EASE_ACCEL, coasts at a peak (never above STRUT_SLEW_RATE) and
+   * slows down at the same rate, lasting `ease.durationS` (or, when that is 0 / missing / shorter than the move can be
+   * done, as short as it can be). The launch aim uses it so the strut and the mother's turn end together. The ease is
+   * keyed by the `ease` object and the target angle: the same object and angle go on with the move (call it once a
+   * frame with the same `ease`), a new object or angle starts a new move from where the strut is. A call without an
+   * `ease`, or a snap (dt = 0), ends it. Every caller that passes none keeps the constant-rate slew above.
+   *
    * @param {number} alpha — target angle in radians [0, π]
    * @param {number} [dt=0] — frame deltaTime for slew-rate clamping.
    *   If 0, snaps immediately (used for initialization).
+   * @param {{durationS?:number}|null} [ease=null] — launch-smooth: ease the move (see above)
    * @returns {boolean} true if alpha was changed, false if rejected (hinge locked)
    */
-  setAimAlpha(alpha, dt = 0) {
+  setAimAlpha(alpha, dt = 0, ease = null) {
     // Hinge lock gate (only enforced when feature flag is on)
     if (Constants.FEATURE_FLAGS.LOCKABLE_HINGE && this._hingeState === Constants.HINGE_STATES.LOCKED) {
       return false; // Rotation rejected — hinge is locked
@@ -2331,16 +2368,47 @@ export class ArmUnit {
     const target = Math.max(V5.STRUT_SWEEP_MIN, Math.min(alpha, V5.STRUT_SWEEP_MAX));
 
     if (dt > 0) {
+      let desired = target;
+      if (ease && V5.STRUT_EASE_ACCEL > 0) {
+        let e = this._aimEase;
+        if (!e || e.src !== ease || e.to !== target) {
+          const d = Math.abs(target - this._aimAlpha);
+          const prof = strutEaseProfile(d, V5.STRUT_EASE_ACCEL, V5.STRUT_SLEW_RATE, ease.durationS || 0);
+          e = this._aimEase = {
+            src: ease, from: this._aimAlpha, to: target, sign: target >= this._aimAlpha ? 1 : -1,
+            d, a: V5.STRUT_EASE_ACCEL, v: prof.v, T: prof.T, t: 0,
+          };
+        }
+        e.t += dt;
+        desired = e.t >= e.T ? e.to : e.from + e.sign * strutEaseDistance(e, e.t);
+      } else {
+        this._aimEase = null;
+      }
       // Slew-rate clamp: max angular change per frame
       const maxDelta = V5.STRUT_SLEW_RATE * dt;
-      const delta = target - this._aimAlpha;
+      const delta = desired - this._aimAlpha;
       const clampedDelta = Math.max(-maxDelta, Math.min(delta, maxDelta));
       this._aimAlpha += clampedDelta;
     } else {
       // Snap (initialization or test)
+      this._aimEase = null;
       this._aimAlpha = target;
     }
     return true;
+  }
+
+  /**
+   * launch-smooth: the shortest time (s) an eased `setAimAlpha` move from the strut's angle now to `alpha` takes.
+   * 0 when she is already there (or the ease is not configured: the constant-rate time then).
+   * @param {number} alpha — target angle in radians [0, π]
+   * @returns {number}
+   */
+  aimEaseMinTime(alpha) {
+    const V5 = Constants.OCTOPUS_V5;
+    const target = Math.max(V5.STRUT_SWEEP_MIN, Math.min(alpha, V5.STRUT_SWEEP_MAX));
+    const d = Math.abs(target - this._aimAlpha);
+    if (!(V5.STRUT_EASE_ACCEL > 0)) return d / V5.STRUT_SLEW_RATE;
+    return strutEaseProfile(d, V5.STRUT_EASE_ACCEL, V5.STRUT_SLEW_RATE, 0).T;
   }
 
   /**
