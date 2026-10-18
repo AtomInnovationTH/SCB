@@ -1059,13 +1059,12 @@ export function selectLOD(maxTextureSize, deviceMemory, isAppleGPU = false) {
  *     deltas between the tiers (drift-dominated). The 16k night map buys
  *     nothing visible in gameplay while costing the exact resource class that
  *     goes black in the field.
- *   - st3 (2026-10-18, owner pick "menu at once + 8k Earth"): the DAY map no
- *     longer keeps 16k either — {@link capPictureTier} caps both pictures at
- *     8k on every device unless `?tex=16k`, because the 16k decode was most of
- *     the 3.8 s freeze before the menu answered. Close-up daylight views on a
- *     desktop are a little less sharp.
- *   - `?tex=16k` still forces ALL maps to 16k (A/B lever unchanged), so the
- *     sharp set stays one URL away.
+ *   - The DAY map keeps 16k: its detail IS visible (daylit terrain at every
+ *     altitude), and the field blackout hits the night map in normal play.
+ *     Owner 2026-10-18, after trying 8k for start time: "8k looks like shit,
+ *     defeats the whole purpose of this game ... back to 16k". Do not cap it.
+ *   - `?tex=16k` still forces BOTH maps to 16k (A/B lever unchanged), so the
+ *     field experiment stays one URL away.
  *
  * @param {'16k'|'8k'|''} quality  overall tier from selectLOD()
  * @param {boolean} [isAppleGPU=false]  WEBGL_debug_renderer_info contains 'Apple'
@@ -1110,19 +1109,6 @@ export function clampLODForGlass(quality, hasTouch) {
 }
 
 /**
- * st3 D1: the picture tier actually requested from the network: '16k' → '8k'
- * for the day and the night map (owner pick, 2026-10-18, start time). The
- * hardware tier `quality` (mesh detail, anisotropy, cloud file) is untouched.
- * Pure + exported for tests; `?tex=16k` bypasses it in getTextureQuality().
- *
- * @param {'16k'|'8k'|''} tier
- * @returns {'8k'|''} tier with 16k capped to 8k
- */
-export function capPictureTier(tier) {
-  return tier === '16k' ? '8k' : tier;
-}
-
-/**
  * Detect hardware capability and return the best texture quality tier.
  * Gathers runtime inputs, delegates to selectLOD() for the actual decision.
  *
@@ -1139,7 +1125,7 @@ export function capPictureTier(tier) {
  * @param {Navigator} [opts.nav] navigator for deviceMemory (default: global)
  * @returns {{quality: '16k'|'8k'|'', dayQuality: '16k'|'8k'|'', nightQuality: '16k'|'8k'|''}}
  *   `quality` = hardware tier (mesh detail, anisotropy, cloud file);
- *   `dayQuality` / `nightQuality` = the picture tiers (st3 D1: never 16k unless `?tex=16k`)
+ *   `dayQuality` = `quality` (16k day map kept, owner 2026-10-18); `nightQuality` per selectNightLOD
  */
 export function getTextureQuality({ renderer, doc, nav } = {}) {
   // Black-flicker triage (H3) / OPEN-2 (16k night texture renders black on
@@ -1214,9 +1200,9 @@ export function getTextureQuality({ renderer, doc, nav } = {}) {
     TouchControls.detect()
   );
   // OPEN-2: the night map rides one tier lower on Apple GPUs (see selectNightLOD).
-  // st3 D1: neither picture is 16k unless ?tex=16k (returned above).
-  const dayQuality = capPictureTier(quality);
-  const nightQuality = capPictureTier(selectNightLOD(quality, isAppleGPU));
+  // The day map rides the full hardware tier (16k on a capable desktop; owner 2026-10-18).
+  const dayQuality = quality;
+  const nightQuality = selectNightLOD(quality, isAppleGPU);
   // PR 5 / P2.10: gate verbose LOD log behind DEBUG flag (?debug=1).
   if (Constants && Constants.DEBUG && Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS) {
     console.log(`[Earth] LOD selected: ${quality || '4k (base)'} (pictures: day ${dayQuality || '4k (base)'}, night: ${nightQuality || '4k (base)'}). MaxTextureSize=${maxTextureSize}`);
@@ -1273,9 +1259,9 @@ export class Earth {
     this._useLowDetail = profileFlags.disableEarthNoise === true;
 
     // Adaptive quality: pick texture resolution based on hardware. `quality` is
-    // the hardware tier (mesh detail, anisotropy, cloud file); the day and night
-    // PICTURES come from dayQuality / nightQuality, which are never 16k unless
-    // `?tex=16k` (st3 D1; OPEN-2 had already capped the night map on Apple GPUs).
+    // the hardware tier (mesh detail, anisotropy, cloud file); the day picture
+    // follows it (16k on a capable desktop, owner 2026-10-18); the night picture
+    // may sit one tier lower (OPEN-2: selectNightLOD caps it at 8k on Apple GPUs).
     const { quality, dayQuality, nightQuality } = getTextureQuality({ renderer: options && options.renderer });
     const texSuffix = dayQuality ? `_${dayQuality}` : '';
     const nightSuffix = nightQuality ? `_${nightQuality}` : '';
