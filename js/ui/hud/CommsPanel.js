@@ -17,7 +17,7 @@ import { GestureHints } from './GestureHints.js';
 import { decorateGlossary, escapeHtml } from '../../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from '../glossaryDom.js';
 import { TouchControls } from '../TouchControls.js';
-import { RAIL_GEOMETRY } from '../RailGeometry.js';
+import { RAIL_GEOMETRY, PANE_CORNER_PX } from '../RailGeometry.js';
 import { VITALS_COLLAPSED_HEIGHT_PX } from './VitalsPane.js';
 
 const COMMS = Constants.COMMS;
@@ -269,11 +269,11 @@ export class CommsPanel {
   /** @private */
   _build() {
     // --- Comms Panel (top-right — fixed size, UX-2 #11) ---
-    // Follow-up 2026-09-09 (§1.14): flush with the right arm — `right` is the
-    // ONE inset every other edge uses (HUD_EDGE_PX 16; was 10, 6 px outboard).
+    // COMMS sits IN the top-right corner (owner 2026-10-18): `top` and `right` read PANE_CORNER_PX (0), each under a
+    // safe-area max so a notched screen (viewport-fit=cover, index.html:5) is cleared. Rails/tabs keep HUD_EDGE_PX.
     this.panels.comms = this._createPanel('hud-comms-panel', {
-      top: '10px',
-      right: `${RAIL_GEOMETRY.HUD_EDGE_PX}px`,
+      top: `max(${PANE_CORNER_PX}px, env(safe-area-inset-top))`,
+      right: `max(${PANE_CORNER_PX}px, env(safe-area-inset-right))`,
       width: `var(--hud-side-w, ${COMMS.PANE_WIDTH_PX}px)`,
       height: `${COMMS.PANE_HEIGHT_PX}px`,
       overflowY: 'hidden',

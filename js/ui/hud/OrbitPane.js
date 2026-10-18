@@ -16,18 +16,17 @@
  * DETAIL slider counts it as a rung (Session P) and FloorMask rooms it per floor.
  *
  * HOME (owner 2026-09-07; before that: right of the DISPLAY rail): bottom-left,
- * FLUSH with the left HUD column (x = HUD_EDGE_PX 16), UNDER the left HUD column
+ * FLUSH with the left HUD column (x = PANE_CORNER_PX 0), UNDER the left HUD column
  * (Session P: the DISPLAY rail it rode under retired — the ceiling is the
  * column's own bottom, a 1 Hz hub read) and ABOVE the hint ticker — so the
  * bottom-centre stays free for the SAFETY OVERRIDE button. The hub (main.js,
  * inside the LADDER gate) constructs the pane, pushes `rung()` into
  * hud.paneDensity.rungs before the first floorMask.setFloor, and calls
- * `setAnchor(EDGE_PX − GAP_PX, floorPx, leftColumnBottom)` once per frame
- * with cached numbers and `update(nowMs)`
- * per frame. setAnchor is write-on-change on its three inputs; every edge of
- * the root comes from it (left = leftEdge + GAP; the bottom edge = floor − GAP,
- * placed via top = bottom − the pane's fixed height — pure arithmetic, no
- * layout read). Modes by the vertical budget between the ceiling (the column's
+ * `update(nowMs)` per frame; the LeftStack places it with
+ * `setStack(top, height, mode)` (write-on-change on its three inputs; `top`
+ * is set BEFORE un-hiding; pure arithmetic, no layout read). `left` is set once
+ * at build: max(PANE_CORNER_PX, env(safe-area-inset-left)). Modes by the
+ * vertical budget between the ceiling (the column's
  * bottom + GAP, or the screen top) and the bottom edge: `full` (the one form,
  * FULL_PX = 104 tall) when ≥ FULL_PX, else `hidden` (display none via the
  * `data-orbit-mode` attribute — never the rung bit). The left-edge cascade:
@@ -82,7 +81,7 @@
 
 import { Constants } from '../../core/Constants.js';
 import { VisualLaw } from '../../core/VisualLaw.js';
-import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
+import { PANE_CORNER_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 import { DENSITY_MOTION_MS, DENSITY_MOTION_EASING } from '../HUD.js';
 import { orbitToKm, subSatellitePoint, nextShadowTransition } from '../../entities/OrbitalMechanics.js';
 import { RESERVE_FRAC, usableDeltaV } from '../../entities/ReachabilityModel.js';
@@ -108,7 +107,7 @@ export const ORBIT_RUNG_ID = 'orbit';
  * HUD_COLUMN_WIDTH_PX − H_CHROME_PX (8 px padding + 1 px border a side).
  * FULL_PX = FRAME + slotsPx() is the pane's ONE height (two rows).
  * Labels are 11 px (type floor, locked #14).
- * rightPx() = HUD_EDGE_PX + HUD_COLUMN_WIDTH_PX (296) — import, don't hard-code.
+ * rightPx() = PANE_CORNER_PX + HUD_COLUMN_WIDTH_PX (280) — import, don't hard-code.
  */
 const VALUE_FONT_PX = 13;
 const VALUE_CH = 10;
@@ -382,8 +381,8 @@ export class OrbitPane {
   /**
    * SAFETY OVERRIDE (owner 2026-09-07; rev 3 inverted U): the pane's placed
    * RIGHT edge (CSS px) while it is on screen — placed by setStack, mode not
-   * 'hidden', density bit clear — else null. Equals HUD_EDGE_PX +
-   * HUD_COLUMN_WIDTH_PX (296) — import, don't hard-code. One attribute read,
+   * 'hidden', density bit clear — else null. Equals PANE_CORNER_PX +
+   * HUD_COLUMN_WIDTH_PX (280) — import, don't hard-code. One attribute read,
    * never a layout read. The OVERRIDE panel centres itself in the band right
    * of this edge (the hub's gameLoop wire), so the two never overlap.
    * @returns {number|null}
@@ -392,7 +391,7 @@ export class OrbitPane {
     const el = this._root;
     if (!el || this._disposed || this._mode === 'hidden') return null;
     if (el.hasAttribute && (el.hasAttribute(DENSITY_HIDDEN_ATTR) || el.hasAttribute(STACK_HIDDEN_ATTR))) return null;
-    return HUD_EDGE_PX + HUD_COLUMN_WIDTH_PX;
+    return PANE_CORNER_PX + HUD_COLUMN_WIDTH_PX;
   }
 
   /**
@@ -492,7 +491,7 @@ export class OrbitPane {
     root.id = ORBIT_PANE_ID;
     // Geometry: left / width at build (inverted U); top / height by setStack.
     root.style.position = 'absolute';
-    root.style.left = `${HUD_EDGE_PX}px`;
+    root.style.left = `max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`;   // = the left column's edge
     root.style.width = `${HUD_COLUMN_WIDTH_PX}px`;
     root.style.boxSizing = 'border-box';
     root.style.pointerEvents = 'none';

@@ -87,13 +87,14 @@
  *   LEFT_COLUMN_WIDTH_PX   `#hud-left-column`: 480 (= the widest child, Mother,
  *                  over the 350 Daughters, as comms is over the 350 Targets); the column is `align-items:
  *                  flex-start`, so the 280 riders hug the left edge — the outer
- *                  edges of the U stay straight at HUD_EDGE_PX
+ *                  edges of the U stay straight at PANE_CORNER_PX (0)
  *   RIGHT_COLUMN_WIDTH_PX  `#hud-right-column`: 350 (= Targets); `align-items:
  *                  flex-end` hugs the 280 Debris / Next to the right edge. Comms
- *                  stays 480 at `right: HUD_EDGE_PX` (flush with the arm's outer
- *                  edge, 6 px inboard of the old 10). `OrbitPane.rightPx()` and
- *                  the target-law recentre inputs (296 / W − 296) stay on the
- *                  base width on purpose (dead API / a later pass).
+ *                  stays 480 at `right: max(PANE_CORNER_PX, safe-area)` (the
+ *                  top-right corner, owner 2026-10-18). `OrbitPane.rightPx()` is
+ *                  PANE_CORNER_PX + 280 (it follows the rider); the target-law
+ *                  recentre inputs (296 / W − 296) stay on the base width on
+ *                  purpose (a later pass).
  *
  * (NOTCH_PX 40, SLOP_PX 44 and MAX_NOTCHES 8 — the DISPLAY rail's row height,
  * tap slop and height cap — RETIRED with the rail: 2026-09-06 and Session P.)
@@ -122,6 +123,14 @@ export const RAIL_GEOMETRY = Object.freeze({
 
 /** The HUD arms' edge inset (rev 3) — reads EDGE_PX so the table stays ONE number. */
 export const HUD_EDGE_PX = RAIL_GEOMETRY.EDGE_PX;
+/**
+ * The side pane stacks' inset from the screen edge (owner 2026-10-18: "mother pane is NOT in top left corner, that is the
+ * whole point"). MOTHER (left column top) and COMMS (right column top) sit flush in their corners: top and the side edge
+ * both read this (0). The panes stacked under them move with it so each edge stays straight: the left column's children,
+ * the LeftStack riders (Cargo, Orbit, FMA), the pin widget, the right column. HUD_EDGE_PX (16) stays the inset of the
+ * rails, tabs, footer chips, the SkillsPane popover and the orb. index.html keeps a CSS copy (`#hud-left-column` left).
+ */
+export const PANE_CORNER_PX = 0;   // deliberately NOT in RAIL_GEOMETRY (its key list is pinned): a named export of its own
 /** The BASE pane width (rev 3; `.hud-panel`, riders, popover, Next) — the ONE number, re-exported by name. */
 export const HUD_COLUMN_WIDTH_PX = RAIL_GEOMETRY.HUD_COLUMN_WIDTH_PX;
 /** The inverted U's real widths (follow-up 2026-09-09 §1.15) — re-exported by name like HUD_COLUMN_WIDTH_PX. */

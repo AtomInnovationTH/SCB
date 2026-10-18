@@ -24,7 +24,7 @@ import { AlertArbiter, STRIP_KIND } from './hud/AlertHierarchy.js';
 import { approachLive } from './hud/TargetColorLaw.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { pinProgress } from './shopPin.js'; // S1 retention: pinned-upgrade progress math (pure, DOM-free)
-import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX, RIGHT_COLUMN_WIDTH_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
+import { PANE_CORNER_PX, HUD_COLUMN_WIDTH_PX, RIGHT_COLUMN_WIDTH_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
  import { DebrisWireframe }   from './DebrisWireframe.js';
  import { DaughterWireframe } from './DaughterWireframe.js';
 import { StrutLabels }       from './hud/StrutLabels.js';
@@ -338,11 +338,11 @@ export class HUD {
     // Follow-up 2026-09-09 (plan 1788926404388-hud-followups-0909.md §1.15 —
     // the inverted U): the column is as wide as its widest child (Targets 350);
     // `align-items: flex-end` hugs the 280 Debris / Next to the RIGHT edge, so
-    // the U's outer edge stays straight at HUD_EDGE_PX.
+    // the U's outer edge stays straight at PANE_CORNER_PX (0: COMMS is in the corner).
     Object.assign(this._rightColumn.style, {
       position: 'absolute',
       top: '90px',          // placeholder; update() rewrites from commsBottom + 10
-      right: `${HUD_EDGE_PX}px`,
+      right: `max(${PANE_CORNER_PX}px, env(safe-area-inset-right))`,   // = COMMS's right edge
       width: `${RIGHT_COLUMN_WIDTH_PX}px`,
       display: 'flex',
       flexDirection: 'column',
@@ -774,7 +774,7 @@ export class HUD {
     el.id = 'hud-pin-widget';
     Object.assign(el.style, {
       position: 'absolute',
-      left: `${HUD_EDGE_PX}px`,
+      left: `max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`,   // = the left column's edge
       width: `${HUD_COLUMN_WIDTH_PX}px`,
       padding: '4px 8px',
       background: 'rgb(var(--hud-ink-rgb, 0 0 0) / 0.72)',

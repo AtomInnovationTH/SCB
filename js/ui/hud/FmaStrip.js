@@ -40,7 +40,7 @@
  */
 
 import { VisualLaw } from '../../core/VisualLaw.js';
-import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
+import { PANE_CORNER_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 import { DENSITY_MOTION_MS, DENSITY_MOTION_EASING } from '../HUD.js';
 
 /** The root element id (FloorMask MASK_PANES.copilot.els = ['#hud-fma-strip']). */
@@ -337,7 +337,7 @@ export class FmaStrip {
     root.className = 'hud-panel';
     // Overlay rider (plan Task 8): left column width, stacked by LeftStack.
     root.style.position = 'absolute';
-    root.style.left = `${HUD_EDGE_PX}px`;
+    root.style.left = `max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`;   // = the left column's edge
     root.style.width = `${HUD_COLUMN_WIDTH_PX}px`;
     root.style.boxSizing = 'border-box';
     root.style.height = `${FMA_GEOMETRY.HEIGHT_PX}px`;

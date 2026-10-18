@@ -38,7 +38,7 @@ import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { VisualLaw } from '../../core/VisualLaw.js';
-import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
+import { PANE_CORNER_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 import { DENSITY_MOTION_MS, DENSITY_MOTION_EASING } from '../HUD.js';
 
 /** The root element id (FloorMask MASK_PANES.cargo.els = ['#hud-cargo-pane']). */
@@ -308,7 +308,7 @@ export class CargoPane {
     // Geometry: left / width at build (inverted U, locked #8); `top` and
     // `max-height` are written ONLY by setStack. Plan Task 8.
     root.style.position = 'absolute';
-    root.style.left = `${HUD_EDGE_PX}px`;
+    root.style.left = `max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`;   // = the left column's edge
     root.style.width = `${G.WIDTH_PX}px`;
     root.style.boxSizing = 'border-box';
     root.style.pointerEvents = 'auto';

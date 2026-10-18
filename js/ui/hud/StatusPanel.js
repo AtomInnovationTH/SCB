@@ -27,7 +27,7 @@ import { captureNetSystem, netMaxReachM } from '../../entities/CaptureNet.js';
 import { PaneChrome } from './PaneChrome.js';
 import { GestureHints } from './GestureHints.js';
 import { pressKey } from '../../core/KeyDispatch.js';
-import { RAIL_GEOMETRY, HUD_EDGE_PX, MOTHER_PANE_WIDTH_PX, ARMS_PANE_WIDTH_PX, LEFT_COLUMN_WIDTH_PX } from '../RailGeometry.js';
+import { RAIL_GEOMETRY, PANE_CORNER_PX, MOTHER_PANE_WIDTH_PX, ARMS_PANE_WIDTH_PX, LEFT_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 import { BOX_OUTLINE, BOX_OUTLINE_OFFSET } from '../RailIndicator.js';
 import { TouchControls } from '../TouchControls.js';
 
@@ -498,13 +498,13 @@ export class StatusPanel {
     // Follow-up 2026-09-09 (plan 1788926404388-hud-followups-0909.md §1.15 —
     // the inverted U): the column is as wide as its widest child (Mother 480, as wide as comms);
     // `align-items: flex-start` hugs the 350 Daughters and the 280 riders to
-    // the LEFT edge, so the U's outer edge stays straight at HUD_EDGE_PX.
+    // the LEFT edge, so the U's outer edge stays straight at PANE_CORNER_PX (0: MOTHER is in the corner).
     this._leftColumn = document.createElement('div');
     this._leftColumn.id = 'hud-left-column';
     Object.assign(this._leftColumn.style, {
       position: 'absolute',
-      top: '10px',
-      left: `max(${HUD_EDGE_PX}px, env(safe-area-inset-left))`,
+      top: `max(${PANE_CORNER_PX}px, env(safe-area-inset-top))`,   // MOTHER sits IN the top-left corner (owner 2026-10-18); safe-area clears a notch
+      left: `max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`,
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'flex-start',
