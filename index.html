@@ -678,14 +678,14 @@
   }
   </script>
 
-  <!-- PR P0.2 — Resource hints: preload critical modules and the first Earth
-       texture so the browser can fetch them in parallel with parsing the
-       import map. Three.js is vendored same-origin under ./vendor/ (relative
+  <!-- PR P0.2 — Resource hints: preload critical modules so the browser
+       can fetch them in parallel with parsing the import map. (The small Earth
+       day picture was preloaded here until 2026-10-18; no tier asks for it
+       first, so the preload only cost bytes.) Three.js is vendored same-origin under ./vendor/ (relative
        paths resolve to '/' locally and '/SCB/' on GitHub Pages) so the sim is
        fully offline-first — no CDN, no internet dependency at runtime. -->
   <link rel="modulepreload" href="./js/main.js">
   <link rel="modulepreload" href="./vendor/three/build/three.module.js">
-  <link rel="preload" as="image" href="./textures/earth_day.avif" type="image/avif" fetchpriority="high">
   <!-- Session L (D-J): the body face, fetched in parallel with the parse so the
        font-display:swap flip lands before the loading screen settles. `crossorigin`
        is mandatory on font preloads (CSS fetches fonts in CORS mode; without it

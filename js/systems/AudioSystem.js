@@ -4161,5 +4161,82 @@ class AudioSystem {
   }
 }
 
+/**
+ * Start-up prewarm (st2-start-quick D1): build the sound system in an idle
+ * moment after the first draw, so the first click does not pay the 0.26 s
+ * `AudioContext` start (measured, st1 phase 1). The browser only needs a
+ * gesture to RESUME a context, not to create one: the context stays
+ * suspended and the first gesture's `InputManager._tryAudioUnlock` resumes it
+ * (`init()` is idempotent, so that path never builds a second one).
+ *
+ * Desktop only: when the primary pointer is coarse (iPad / iPhone) nothing is
+ * scheduled and the first-gesture path stays as it was, until it is tried on a
+ * device. No `matchMedia` → also nothing scheduled (unknown environment).
+ *
+ * @param {object} opts
+ * @param {object} opts.win - window stand-in (`matchMedia`, `requestIdleCallback`, `setTimeout`)
+ * @param {{init: Function}} opts.audio - the AudioSystem
+ * @param {Function} [opts.afterInit] - called after init (main.js `_syncAudioCtxState`:
+ *   the menu keeps the context suspended even if the browser allowed autoplay)
+ * @returns {boolean} true when the prewarm was scheduled
+ */
+export function scheduleAudioPrewarm({ win, audio, afterInit } = {}) {
+  if (!win || !audio || typeof audio.init !== 'function') return false;
+  let coarse = true;
+  try {
+    coarse = typeof win.matchMedia !== 'function' || !!win.matchMedia('(pointer: coarse)')?.matches;
+  } catch (_e) { coarse = true; }
+  if (coarse) return false;
+  const callAfterInit = () => {
+    try { if (typeof afterInit === 'function') afterInit(); } catch (_e) { /* never fatal */ }
+  };
+  const run = () => {
+    // A gesture (or any other explicit init()) got here first: that path built and
+    // resumed the sound system for a reason — e.g. the menu's departure swell is
+    // playing — so the prewarm must not touch it (afterInit would suspend it).
+    if (audio._initialized) return;   // init() latches this on success and on ?noAudio
+    try { audio.init(); } catch (_e) { /* init() reports its own failures */ }
+    const ctx = audio.ctx;
+    if (!ctx || !audio.available) { callAfterInit(); return; }
+    // Hold: until someone calls init() on purpose (a gesture's _tryAudioUnlock, the
+    // menu's Start, comms), play*() stays a no-op exactly as before the prewarm
+    // (`available` was false). Else events that fire on the menu before the first
+    // click (e.g. a saved engine-gas switch -> FUEL_CHANGED) would queue on the
+    // suspended context and all sound at once at the first click.
+    const hadOwnInit = Object.prototype.hasOwnProperty.call(audio, 'init');
+    const prevInit = audio.init;
+    let held = true;
+    let onChange = null;
+    const release = () => {
+      if (!held) return;
+      held = false;
+      if (hadOwnInit) audio.init = prevInit; else delete audio.init;
+      audio.available = true;
+      if (onChange && typeof ctx.removeEventListener === 'function') ctx.removeEventListener('statechange', onChange);
+    };
+    audio.available = false;
+    audio.init = function (...args) { release(); return prevInit.apply(audio, args); };
+    callAfterInit();
+    // A browser that allows autoplay may report 'suspended' now and flip to 'running'
+    // later; the menu must not run the context, so afterInit runs once more then.
+    // Only while still held: after a gesture the context is meant to run.
+    if (typeof ctx.addEventListener === 'function') {
+      onChange = () => {
+        if (!held) { ctx.removeEventListener?.('statechange', onChange); return; }
+        if (ctx.state !== 'running') return;
+        ctx.removeEventListener?.('statechange', onChange);
+        callAfterInit();
+      };
+      ctx.addEventListener('statechange', onChange);
+    }
+  };
+  if (typeof win.requestIdleCallback === 'function') {
+    win.requestIdleCallback(run, { timeout: 2000 });
+  } else {
+    (typeof win.setTimeout === 'function' ? win.setTimeout.bind(win) : setTimeout)(run, 0);
+  }
+  return true;
+}
+
 export const audioSystem = new AudioSystem();
 export default audioSystem;

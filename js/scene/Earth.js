@@ -865,9 +865,21 @@ export function clampLODForGlass(quality, hasTouch) {
 /**
  * Detect hardware capability and return the best texture quality tier.
  * Gathers runtime inputs, delegates to selectLOD() for the actual decision.
+ *
+ * st2-start-quick D3: when the game's own renderer exists it is asked for the
+ * maximum texture size and the Apple GPU string, so no throw-away WebGL context
+ * is built just to read them (a cost of ~20 ms on a GPU, seconds on a software
+ * renderer). With no renderer (tests, other callers) the old probe canvas runs,
+ * and each probe context is released with WEBGL_lose_context after reading.
+ *
+ * @param {object} [opts]
+ * @param {{capabilities?: {maxTextureSize?: number}, getContext?: Function}} [opts.renderer]
+ *   the game's THREE.WebGLRenderer (or a stand-in)
+ * @param {Document} [opts.doc] document used for the probe canvas (default: global)
+ * @param {Navigator} [opts.nav] navigator for deviceMemory (default: global)
  * @returns {{quality: '16k'|'8k'|'', nightQuality: '16k'|'8k'|''}}
  */
-function getTextureQuality() {
+export function getTextureQuality({ renderer, doc, nav } = {}) {
   // Black-flicker triage (H3) / OPEN-2 (16k night texture renders black on
   // ANGLE-Metal): `?tex=16k|8k|base` overrides hardware LOD detection so the
   // 1.2+ GB 16k day+night set can be A/B'd against 8k in one URL, no rebuild.
@@ -890,18 +902,47 @@ function getTextureQuality() {
   } catch (_e) { /* fall through to detection */ }
 
   // navigator.deviceMemory is Chrome/Edge only (NOT available in Safari/Firefox).
-  const deviceMemory = navigator.deviceMemory; // may be undefined
-  const gl = document.createElement('canvas').getContext('webgl2') ||
-             document.createElement('canvas').getContext('webgl');
-  const maxTextureSize = gl ? gl.getParameter(gl.MAX_TEXTURE_SIZE) : 4096;
+  const navigatorRef = nav || (typeof navigator !== 'undefined' ? navigator : undefined);
+  const deviceMemory = navigatorRef ? navigatorRef.deviceMemory : undefined; // may be undefined
 
-  // Also detect Apple Silicon via renderer string (Safari-specific fallback)
-  let isAppleGPU = false;
-  if (gl) {
+  // The Apple string is read from the debug-info extension (Safari-specific fallback).
+  const readAppleGPU = (gl) => {
     const dbgExt = gl.getExtension('WEBGL_debug_renderer_info');
-    if (dbgExt) {
-      const renderer = gl.getParameter(dbgExt.UNMASKED_RENDERER_WEBGL) || '';
-      isAppleGPU = /Apple/i.test(renderer);
+    if (!dbgExt) return false;
+    return /Apple/i.test(gl.getParameter(dbgExt.UNMASKED_RENDERER_WEBGL) || '');
+  };
+
+  let maxTextureSize = 4096;
+  let isAppleGPU = false;
+  let fromRenderer = false;
+  const rendererGl = (renderer && typeof renderer.getContext === 'function') ? renderer.getContext() : null;
+  if (rendererGl) {
+    const cap = renderer.capabilities && renderer.capabilities.maxTextureSize;
+    maxTextureSize = cap || rendererGl.getParameter(rendererGl.MAX_TEXTURE_SIZE);
+    isAppleGPU = readAppleGPU(rendererGl);
+    fromRenderer = true;
+  }
+  if (!fromRenderer) {
+    const d = doc || document;
+    // Probe path (no renderer yet). The context is released after reading so a
+    // throw-away context never lingers (a second one only when webgl2 fails).
+    const probes = [];
+    const open = (kind) => {
+      const gl = d.createElement('canvas').getContext(kind);
+      if (gl) probes.push(gl);
+      return gl;
+    };
+    const gl = open('webgl2') || open('webgl');
+    try {
+      maxTextureSize = gl ? gl.getParameter(gl.MAX_TEXTURE_SIZE) : 4096;
+      if (gl) isAppleGPU = readAppleGPU(gl);
+    } finally {
+      for (const p of probes) {
+        try {
+          const lose = p.getExtension('WEBGL_lose_context');
+          if (lose) lose.loseContext();
+        } catch (_e) { /* best effort */ }
+      }
     }
   }
 
@@ -947,8 +988,10 @@ export function selectSphereSegments(quality) {
 export class Earth {
   /**
    * @param {THREE.Scene} scene
+   * @param {{renderer?: THREE.WebGLRenderer}} [options] renderer: the game's own,
+   *   so the texture-tier probe needs no throw-away WebGL context (st2 D3)
    */
-  constructor(scene) {
+  constructor(scene, options = {}) {
     this.scene = scene;
     this.group = new THREE.Group();
     this.group.name = 'EarthGroup';
@@ -969,7 +1012,7 @@ export class Earth {
     // map can ride one tier below the day map (OPEN-2: selectNightLOD caps it
     // at 8k on Apple GPUs, where the 16k night map goes residency-black in
     // long Brave/ANGLE-Metal sessions; `?tex=` forces both tiers equal).
-    const { quality, nightQuality } = getTextureQuality();
+    const { quality, nightQuality } = getTextureQuality({ renderer: options && options.renderer });
     const texSuffix = quality ? `_${quality}` : '';
     const nightSuffix = nightQuality ? `_${nightQuality}` : '';
     const cloudSuffix = quality === '16k' ? '_8k' : (quality === '8k' ? '_8k' : '');

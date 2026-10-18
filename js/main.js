@@ -34,7 +34,7 @@ import { CeremonyTimeScale } from './systems/CeremonyTimeScale.js';
 // Systems
 import { scoringSystem } from './systems/ScoringSystem.js';
 import { targetSelector } from './systems/TargetSelector.js';
-import { audioSystem } from './systems/AudioSystem.js';
+import { audioSystem, scheduleAudioPrewarm } from './systems/AudioSystem.js';
 import { CameraSystem } from './systems/CameraSystem.js';
 import { CommsSystem } from './systems/CommsSystem.js';
 import { ResourceSystem, engineGasKg } from './systems/ResourceSystem.js';
@@ -594,6 +594,10 @@ let _profileFrameCount = 0;
 // (GPU_PROBE_FRAMES samples), we check the median and optionally downshift.
 // After that, the flag flips true and the probe is disabled for the session.
 let _gpuProbeComplete = false;
+
+// st2-start-quick D1 — once-only flag: the sound-system prewarm is scheduled after
+// the first draw has finished (independent of ?logBoot, which gates only the marks).
+let _audioPrewarmScheduled = false;
 
 // Perf warmup/settle guard (Constants.PERF.ADAPT_WARMUP_MS). Timestamp (rAF /
 // performance.now clock) before which adaptive tier changes are suppressed, so
@@ -1230,7 +1234,7 @@ async function init() {
   _bootMark('SceneManager constructed (renderer + composer + bloom)');
 
   // --- Earth (visual centerpiece) ---
-  earth = new Earth(scene);
+  earth = new Earth(scene, { renderer: sceneManager.renderer });
   // Sprint 2 / PR C — register so SceneManager.applyTier() can toggle the
   // LOW_DETAIL fragment-shader branch when the tier changes.
   sceneManager.setEarth(earth);
@@ -7272,6 +7276,13 @@ function gameLoop(timestamp) {
   if (_shotDrawMeter) _shotDrawMeter.after();
   if (_bootFirstRenderCall) {
     _bootMark('first sceneManager.render(). END');
+  }
+  // st2-start-quick D1: the first draw is done — build the sound system in an idle
+  // moment (desktop only, see scheduleAudioPrewarm) so the first click does not
+  // pay for it. The menu keeps the context suspended (_syncAudioCtxState).
+  if (!_audioPrewarmScheduled) {
+    _audioPrewarmScheduled = true;
+    scheduleAudioPrewarm({ win: window, audio: audioSystem, afterInit: _syncAudioCtxState });
   }
   if (_logBootEnabled) {
     _bootSpikeDetect(performance.now() - _bootRenderStart);
