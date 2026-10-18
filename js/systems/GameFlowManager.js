@@ -95,6 +95,16 @@ export class GameFlowManager {
     this._atResupplyStop = false;
 
     /**
+     * followups-1018 D1 (owner 2026-10-18, "Unload at every mission end"): true from the moment a COMPLETED MISSION
+     * opens the resupply stop (`_onMissionBoundary`, the sacrifice path at a boundary) until the stop closes. While
+     * set, `update` has the station take any paid catch that has come to rest, shop opened or not (the mother-net
+     * catch that ended the mission is still berthed at the boundary; a hand-off can land later). NOT set by game
+     * over or a save load, which unload nothing. Cleared by every `_setResupplyStop` call (the mission-end paths re-arm it right after).
+     */
+    this._missionEndUnload = false;
+    this._missionEndUnloadS = 0;
+
+    /**
      * w1-hud-calm review fix (2026-10-05): the first INVITATION pays the
      * first-depot floor and persists FIRST_DEPOT_VISITED, but the player has
      * not come down yet — so the first-visit framing (the REFIT drawer's
@@ -238,6 +248,7 @@ export class GameFlowManager {
    */
   _setResupplyStop(open) {
     this._atResupplyStop = !!open;
+    this._missionEndUnload = false; this._missionEndUnloadS = 0;   // followups-1018 D1: only a mission end re-arms the unload poll (right after this call); closing, game over and a save load clear it
     const shop = this._refs && this._refs.shopScreen;
     if (shop && typeof shop.setResupplyStop === 'function') shop.setResupplyStop(this._atResupplyStop);
   }
@@ -1379,7 +1390,9 @@ export class GameFlowManager {
 
       // Update game state
       gameState.clearDebris();
-      this._setResupplyStop(this._isMissionBoundaryCount(gameState.debrisCleared));   // u1 D1: a sacrifice that completes a mission opens the stop; any other closes it
+      const atBoundary = this._isMissionBoundaryCount(gameState.debrisCleared);
+      this._setResupplyStop(atBoundary);   // u1 D1: a sacrifice that completes a mission opens the stop; any other closes it
+      if (atBoundary) this._beginMissionEndUnload();   // followups-1018 D1
       // Wave 5 Session F (D4): the second credited-clear path (Ctrl+Shift+D →
       // ARM_DEORBIT_CMD → ArmUnit.startDeorbit) — the mission boundary check
       // follows its increment too, so a sacrifice that lands the 5th clear
@@ -2159,6 +2172,14 @@ export class GameFlowManager {
   update(dt) {
     // t1-stranded D1: first, before the held-mission-start early return below (that one returns on almost every frame)
     this._updateStranded(dt);
+    // followups-1018 D1: after a mission end, the station takes a paid catch that has come to rest (at most every 0.5 s)
+    if (this._missionEndUnload && dt > 0) {
+      this._missionEndUnloadS += dt;
+      if (this._missionEndUnloadS >= 0.5) {
+        this._missionEndUnloadS = 0;
+        if (this._atResupplyStop) this._stationTakesCargo();
+      }
+    }
     const p = this._pendingMissionStart;
     if (!p) return;
     if (!(dt > 0) || !gameState.isGameplay()) return;
@@ -2447,7 +2468,27 @@ export class GameFlowManager {
       text: `The station took your ${ids.length} catch${ids.length === 1 ? '' : 'es'}.`,
       priority: 'info',
     });
+    // The collar hand-over emits only NET_CONSUMED, which no start-release listener hears: a mission start held on
+    // the taken catch (a parked credit at a boundary) would wait out START_AFTER_CATCH_MAX_S. Release it here.
+    for (const id of ids) this._releaseMissionStartFor(id);
     return ids.length;
+  }
+
+  /**
+   * followups-1018 D1 (owner 2026-10-18, "Unload at every mission end"): a completed mission has just opened the
+   * resupply stop. The station takes the paid catches now, and keeps taking any paid catch that comes to rest while the
+   * stop stays open (`update` polls every 0.5 s): the mother-net catch that ended the mission is
+   * still BERTHED here (it reaches COLLARED a moment later, with no event), and a hand-off can land on a tip or rack.
+   * Edge case (logged): a catch still moving when the next mission's first credit closes the stop is carried on.
+   * @private
+   */
+  _beginMissionEndUnload() {
+    this._missionEndUnload = true;
+    // Primed so the very next update polls: main.js runs gameFlowManager.update BEFORE captureNetSystem.update, and a
+    // mother-net catch that ended the mission is COLLARED (and `_berthProcessed`) by then but has not yet had its first
+    // collar tick, so the station takes it before the cargo hand-off can start a leash to a tip the station just emptied.
+    this._missionEndUnloadS = 0.5;
+    this._stationTakesCargo();
   }
 
   /**
@@ -2537,6 +2578,7 @@ export class GameFlowManager {
     // u1-resupply-stop D1: a completed mission opens the resupply stop on EVERY path below (the ladder-on
     // invitation, the forced stop, the ladder-off boundary shop) — it stays open until the next credited catch.
     this._setResupplyStop(true);
+    this._beginMissionEndUnload();   // followups-1018 D1: the mission end unloads, whether or not the shop is opened
     if (ladderOn && (!M.FORCED_DEPOT_STOP || missionsCompleted > M.FORCED_DEPOT_CHAPTERS)) {
       this._openDepotInvitation(debrisCount, missionsCompleted);
       return;

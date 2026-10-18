@@ -11,6 +11,7 @@
  */
 
 import { soundLog, plainName } from '../../systems/audio/SoundLog.js';
+import { PANE_CORNER_PX } from '../RailGeometry.js';
 
 export const SOUND_LOG_PANE_ID = 'hud-sound-log';
 export const SOUND_LOG_REFRESH_MS = 250;
@@ -37,7 +38,7 @@ export class SoundLogPane {
     el.id = SOUND_LOG_PANE_ID;
     el.setAttribute('aria-hidden', 'true');
     Object.assign(el.style, {
-      position: 'absolute', left: '16px', bottom: '176px', maxWidth: '520px',
+      position: 'absolute', left: `max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`, bottom: '176px', maxWidth: '520px',   // followups-1018 D4: left edge = the MOTHER pane's
       padding: '6px 8px', background: 'rgb(var(--hud-ink-rgb, 0 0 0) / 0.55)', color: 'var(--hud-normal, #9fd)',
       fontFamily: 'var(--font-mono)', fontSize: '11px', lineHeight: '1.35', whiteSpace: 'pre',
       pointerEvents: 'none', zIndex: '60',

@@ -35,6 +35,7 @@ import { Constants } from '../core/Constants.js';
 import { FloorContract } from '../core/FloorContract.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { coOrbitalReadout } from '../entities/LaunchWindow.js';
+import { PANE_CORNER_PX } from './RailGeometry.js';
 
 /** T-minus threshold at which a window reads "imminent" (shared with DebrisMap). */
 const IMMINENT_S = Constants.DEBRIS_MAP.WINDOW_IMMINENT_S;
@@ -233,7 +234,7 @@ export class TransferWindows {
     const root = document.createElement('div');
     root.id = 'ladder-transfer-windows';
     root.style.cssText = [
-      'position:absolute', 'left:16px', 'bottom:16px', 'min-width:220px',
+      'position:absolute', `left:max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`, 'bottom:16px', 'min-width:220px',   // followups-1018 D4: left edge = the MOTHER pane's
       'padding:8px 12px', 'border:1px solid rgba(0,204,255,0.4)', 'border-radius:4px',
       'background:rgba(0,16,32,0.72)', 'color:' + VisualLaw.COLORS.INFO,
       'font-family: var(--font-mono)', 'font-size:0.7rem', 'letter-spacing:0.06em',

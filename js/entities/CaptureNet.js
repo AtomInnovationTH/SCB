@@ -3410,6 +3410,10 @@ export class CaptureNetSystem {
     this._audioSystem = deps.audioSystem || this._audioSystem || null;
     this._armManager = deps.armManager || this._armManager || null;
     this._lassoSystem = deps.lassoSystem || this._lassoSystem || null;
+    // followups-1018 D3: room appearing (a tip slot or a rack cell freeing, both emit NET_CONSUMED synchronously)
+    // re-arms a declined collar catch in the same tick. Re-subscribed on every init so a cleared bus cannot orphan it.
+    if (this._unsubNetConsumed) this._unsubNetConsumed();
+    this._unsubNetConsumed = eventBus.on(Events.NET_CONSUMED, (p) => this._onRoomFreed(p));
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return;
 
     this._motherPodInventory = new Array(this._motherPodCount()).fill(CN.LARGE.MAGAZINE_SIZE);
@@ -4815,6 +4819,26 @@ export class CaptureNetSystem {
       sunScale: this._digestSunScale ?? 1.0,
       kg: d.mass || 0,
     };
+  }
+
+  /**
+   * followups-1018 D3: something just left a tip slot or a rack cell (NET_CONSUMED: `TipCargo.releaseSlot` for the
+   * station unload and a tip jettison, `ArmManager.unloadHeldCatches` for the racks), so room may exist now. Clear the
+   * sticky `_cargoDeclined` on every COLLARED mother net other than the one consumed, in this same tick: the nose-full
+   * line, the camera reader and the mission-start reader stop saying "nowhere to go" at once, and the first-tick
+   * decision runs again on the next net update (a retry that still finds no room declines again, silently: the refusal
+   * comms is once per catch, `_cargoRefused`).
+   * @param {{debrisId?: (number|string)}} [p] - the NET_CONSUMED payload
+   * @private
+   */
+  _onRoomFreed(p) {
+    const gone = p && p.debrisId;
+    for (const n of this.activeNets) {
+      if (!n._isMother || n.state !== STATES.COLLARED || !n._cargoDeclined) continue;
+      if (gone != null && n.targetDebris && n.targetDebris.id === gone) continue;
+      n._cargoDeclined = false;
+      n._cargoRetryS = 0;
+    }
   }
 
   /**

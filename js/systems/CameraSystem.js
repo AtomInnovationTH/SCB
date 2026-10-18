@@ -2584,7 +2584,9 @@ export class CameraSystem {
       let duration = c.isFirstEver ? (NC.PARK_HOLD_FIRST_S ?? 10.0) : (NC.PARK_HOLD_S ?? 5.0);
       const d = c._net?.targetDebris;
       const sizeGateM = NC.PARK_HOLD_DIGEST_MAX_SIZE_M ?? 0;
-      if (d && typeof d.sizeMeter === 'number' && d.sizeMeter < sizeGateM) {
+      // followups-1018 D2: with no furnace (FURNACE_COOK off) there is no chop to wait for, so the hold stays the plain
+      // PARK_HOLD_FIRST_S / PARK_HOLD_S; the lengthening below runs only while the cook is on.
+      if (Constants.isFeatureEnabled('FURNACE_COOK') && d && typeof d.sizeMeter === 'number' && d.sizeMeter < sizeGateM) {
         const CN = Constants.CAPTURE_NET;
         const FT = Constants.FURNACE_TRANSFER;
         const chopEndS = (CN.BERTH_SECURE_S ?? 4.0)

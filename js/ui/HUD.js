@@ -514,20 +514,27 @@ export class HUD {
     Object.assign(this.panels, this.targetPanel.panels);
     Object.assign(this.panels, this.commsPanel.panels);
 
-    // --- Weather Indicator Container (top-left, small badges) ---
+    // --- Weather Indicator Container (small badges) ---
+    // followups-1018 D4: it no longer floats at top:10px/left:10px over the MOTHER pane (which now sits flush in the
+    // top-left corner); it is a child of the left column, directly after the MOTHER pane, so a badge sits below it at
+    // the same left edge. Empty = display:none = no space, nothing shifts in normal play (_addWeatherBadge shows it).
     this._weatherContainer = document.createElement('div');
     this._weatherContainer.id = 'hud-weather-indicator';
     Object.assign(this._weatherContainer.style, {
-      position: 'absolute',
-      top: '10px',
-      left: '10px',
-      display: 'flex',
+      display: 'none',
       flexDirection: 'column',
       gap: '4px',
-      zIndex: '110',
       pointerEvents: 'none',
     });
-    this.container.appendChild(this._weatherContainer);
+    const leftCol = this.statusPanel && this.statusPanel.leftColumn;
+    const motherPane = this.statusPanel && this.statusPanel.panels && this.statusPanel.panels.mother;
+    if (leftCol && motherPane && typeof leftCol.insertBefore === 'function' && motherPane.parentNode === leftCol) {
+      leftCol.insertBefore(this._weatherContainer, motherPane.nextSibling || null);
+    } else if (leftCol && typeof leftCol.appendChild === 'function') {
+      leftCol.appendChild(this._weatherContainer);
+    } else {
+      this.container.appendChild(this._weatherContainer);
+    }
     /** @type {Map<string, HTMLElement>} Active weather badge elements by type */
     this._weatherBadges = new Map();
 
@@ -2916,6 +2923,7 @@ export class HUD {
     badge.innerHTML = `<span style="font-size:12px;">${data.icon || '🌐'}</span><span>${data.name}</span>`;
     badge.dataset.weatherType = data.type;
     this._weatherContainer.appendChild(badge);
+    this._weatherContainer.style.display = 'flex';   // followups-1018 D4: takes space only while it holds a badge
     this._weatherBadges.set(data.type, badge);
   }
 
@@ -2929,6 +2937,7 @@ export class HUD {
     if (badge) {
       badge.remove();
       this._weatherBadges.delete(type);
+      if (this._weatherBadges.size === 0) this._weatherContainer.style.display = 'none';
     }
   }
 

@@ -40,6 +40,7 @@
 import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
 import { ProxOverlay } from './ProxOverlay.js';
+import { PANE_CORNER_PX } from './RailGeometry.js';
 import { ZONE_CORE_MIN, ZONE_MID_MIN } from '../entities/FieldRiskModel.js';
 
 /**
@@ -203,7 +204,7 @@ export class ProxContextPanel {
     // TransferWindows' slot (left/bottom, z 34): the two never coexist — that
     // panel is the F6 costume, this is F5's.
     root.style.cssText = [
-      'position:absolute', 'left:16px', 'bottom:16px', 'min-width:240px',
+      'position:absolute', `left:max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`, 'bottom:16px', 'min-width:240px',   // followups-1018 D4: left edge = the MOTHER pane's
       'padding:8px 12px', 'border:1px solid rgba(0,204,255,0.4)', 'border-radius:4px',
       'background:rgba(0,16,32,0.72)', 'color:' + VisualLaw.COLORS.INFO,
       'font-family: var(--font-mono)', 'font-size:0.7rem', 'letter-spacing:0.06em',
