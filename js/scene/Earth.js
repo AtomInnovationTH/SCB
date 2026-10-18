@@ -608,7 +608,7 @@ void main() {
 `;
 
 // ============================================================================
-// TEXTURE LOADER + AVIF SUPPORT PROBE (PR P0.1)
+// TEXTURE LOADER + AVIF SUPPORT PROBE (PR P0.1)  +  OFF-THREAD PICTURES (st3)
 // ============================================================================
 //
 // AVIF compresses Earth textures ~5× smaller than JPG at visually equivalent
@@ -618,12 +618,21 @@ void main() {
 // supporting browsers (Chrome 85+, Edge 85+, Firefox 93+, Safari 16+) and
 // transparently falls back to the original `.jpg` everywhere else.
 //
-// The probe uses top-level await so the boolean is settled before any Earth
+// st3-earth-quick (2026-10-18): the three Earth pictures used to be decoded and
+// uploaded in one 3.8 s block at the first draw (phase-1 measurement,
+// docs/research/2026-10-startup.md). They are now decoded OFF the main thread
+// with THREE.ImageBitmapLoader, and each bitmap is freed after its upload
+// (see onEarthTextureUpdate / attachEarthRestore). A second module-level probe
+// (probeBitmapOrientation) proves the bitmap path puts north up with the same
+// texels before it is used; if it fails, or there is no DOM, every file takes
+// the old TextureLoader path.
+//
+// The probes use top-level await so the booleans are settled before any Earth
 // instance is constructed. In non-browser environments (Node test runner) the
-// `Image` global is absent, the probe short-circuits to `false`, and Earth.js
+// `Image` global is absent, both probes short-circuit to `false`, and Earth.js
 // continues to behave exactly as before — important because test-EarthLOD.js
 // imports `selectLOD` from this module.
-const textureLoader = new THREE.TextureLoader();
+let textureLoader = new THREE.TextureLoader();
 
 // 2×2 AVIF still-picture, av1 codec, ~311 bytes. Generated locally with
 // `ffmpeg -f lavfi -i color=c=black:s=2x2 -c:v libaom-av1 -still-picture 1
@@ -633,7 +642,7 @@ const textureLoader = new THREE.TextureLoader();
 const AVIF_PROBE_DATA_URL =
   'data:image/avif;base64,AAAAIGZ0eXBhdmlmAAAAAGF2aWZtaWYxbWlhZk1BMUIAAAD5bWV0YQAAAAAAAAAvaGRscgAAAAAAAAAAcGljdAAAAAAAAAAAAAAAAFBpY3R1cmVIYW5kbGVyAAAAAA5waXRtAAAAAAABAAAAHmlsb2MAAAAARAAAAQABAAAAAQAAASEAAAAWAAAAKGlpbmYAAAAAAAEAAAAaaW5mZQIAAAAAAQAAYXYwMUNvbG9yAAAAAGppcHJwAAAAS2lwY28AAAAUaXNwZQAAAAAAAAACAAAAAgAAABBwaXhpAAAAAAMICAgAAAAMYXYxQ4EADAAAAAATY29scm5jbHgAAgACAAIAAAAAF2lwbWEAAAAAAAAAAQABBAECgwQAAAAebWRhdAoFGAA2wCAyDReAAABIAAAADAZusnI=';
 
-const avifSupported = await (async () => {
+async function probeAvifSupport() {
   if (typeof Image === 'undefined' || typeof document === 'undefined') {
     return false; // Node / non-DOM environment (test runner)
   }
@@ -645,10 +654,84 @@ const avifSupported = await (async () => {
   } catch (_e) {
     return false;
   }
-})();
+}
+
+/** createImageBitmap options of the bitmap path (three adds colorSpaceConversion 'none'). */
+const BITMAP_LOADER_OPTIONS = Object.freeze({ imageOrientation: 'flipY', premultiplyAlpha: 'none' });
+
+/**
+ * st3 D3 self-test gate: does the off-thread bitmap path give the same picture
+ * the HTML-image path gives? Draws a tiny canvas (top row red, bottom row
+ * blue), encodes it to PNG, decodes it with `createImageBitmap(blob, …exact
+ * loader options…)`, draws the bitmap back and reads it. True only when the
+ * rows came back flipped (imageOrientation 'flipY' honoured; three ignores
+ * texture.flipY for bitmaps). False — never a throw — with no DOM, no
+ * createImageBitmap, or any failure; the caller then uses the old path.
+ *
+ * @param {{doc?: Document, createBitmap?: Function}} [inputs]  injectable for tests
+ * @returns {Promise<boolean>}
+ */
+export async function probeBitmapOrientation({ doc, createBitmap } = {}) {
+  try {
+    const d = doc || (typeof document !== 'undefined' ? document : null);
+    const make = createBitmap || (typeof createImageBitmap === 'function' ? createImageBitmap : null);
+    if (!d || !make) return false;
+    const src = d.createElement('canvas');
+    src.width = 2; src.height = 2;
+    const sctx = src.getContext('2d');
+    sctx.fillStyle = 'rgb(255,0,0)'; sctx.fillRect(0, 0, 2, 1); // top row red
+    sctx.fillStyle = 'rgb(0,0,255)'; sctx.fillRect(0, 1, 2, 1); // bottom row blue
+    const blob = await new Promise((resolve, reject) => {
+      src.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob gave null'))), 'image/png');
+    });
+    const bmp = await make(blob, { ...BITMAP_LOADER_OPTIONS, colorSpaceConversion: 'none' });
+    try {
+      if (!bmp || bmp.width !== 2 || bmp.height !== 2) return false;
+      const dst = d.createElement('canvas');
+      dst.width = 2; dst.height = 2;
+      const dctx = dst.getContext('2d');
+      dctx.drawImage(bmp, 0, 0);
+      const top = dctx.getImageData(0, 0, 1, 1).data;
+      const bottom = dctx.getImageData(0, 1, 1, 1).data;
+      return top[2] > 200 && top[0] < 55 && bottom[0] > 200 && bottom[2] < 55;
+    } finally {
+      try { bmp && bmp.close && bmp.close(); } catch (_e) { /* best effort */ }
+    }
+  } catch (_e) {
+    return false;
+  }
+}
+
+/** Longest start-up wait for the orientation self-test (ms) before the old image path is used. */
+export const BITMAP_PROBE_TIMEOUT_MS = 500;
+
+/**
+ * Race the self-test against a timer so a callback that never fires (e.g. a
+ * `toBlob` that is never called) cannot hang module evaluation, and with it the
+ * game's start. Resolves false on timeout, on a throw, or on a non-true result;
+ * the timer is cleared when the test wins. A late result is ignored.
+ *
+ * @param {() => Promise<boolean>} [test]  the self-test (injectable for tests)
+ * @param {number} [ms]
+ * @returns {Promise<boolean>}
+ */
+export function gateBitmapProbe(test = probeBitmapOrientation, ms = BITMAP_PROBE_TIMEOUT_MS) {
+  let timer = null;
+  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(false), ms); });
+  const run = (async () => {
+    try { return (await test()) === true; } catch (_e) { return false; }
+  })();
+  return Promise.race([run, timeout]).finally(() => clearTimeout(timer));
+}
+
+// Both probes run in parallel (no added wait at module load); the bitmap
+// self-test is bounded by BITMAP_PROBE_TIMEOUT_MS. The AVIF probe is not.
+const [avifSupported, bitmapProbeResult] = await Promise.all([probeAvifSupport(), gateBitmapProbe()]);
+let bitmapPathOk = bitmapProbeResult === true;
 
 if (typeof console !== 'undefined' && typeof document !== 'undefined') {
   console.log(`[Earth] AVIF support: ${avifSupported ? 'YES (preferring .avif)' : 'NO (falling back to .jpg)'}`);
+  console.log(`[Earth] off-thread picture decode: ${bitmapPathOk ? 'YES (ImageBitmap)' : 'NO (image loader)'}`);
 }
 
 /**
@@ -660,6 +743,31 @@ export function isAvifSupported() {
   return avifSupported === true;
 }
 
+/** @returns {boolean} Whether Earth pictures are decoded off-thread (st3 D3 probe passed). */
+export function isBitmapPathSupported() {
+  return bitmapPathOk === true;
+}
+
+let bitmapLoader = null;
+/** Created lazily: node has no createImageBitmap and a module-level `new` would warn in every test. */
+function getBitmapLoader() {
+  if (!bitmapLoader) bitmapLoader = new THREE.ImageBitmapLoader().setOptions({ ...BITMAP_LOADER_OPTIONS });
+  return bitmapLoader;
+}
+
+/**
+ * Test seam: inject a fake bitmap loader / image loader and the D3 result.
+ * Returns a function that restores the previous state.
+ * @param {{bitmapLoader?: object|null, imageLoader?: object, bitmapOk?: boolean}} o
+ */
+export function setEarthLoadersForTests({ bitmapLoader: bl, imageLoader, bitmapOk } = {}) {
+  const prev = { bl: bitmapLoader, il: textureLoader, ok: bitmapPathOk };
+  if (bl !== undefined) bitmapLoader = bl;
+  if (imageLoader !== undefined) textureLoader = imageLoader;
+  if (bitmapOk !== undefined) bitmapPathOk = bitmapOk === true;
+  return () => { bitmapLoader = prev.bl; textureLoader = prev.il; bitmapPathOk = prev.ok; };
+}
+
 /**
  * OPEN-2 triage (night-side city lights black on 16k / ANGLE-Metal): every
  * texture-load outcome is also recorded into `window.__earthTexEvents` so the
@@ -668,7 +776,7 @@ export function isAvifSupported() {
  * (handle live, image empty → samples black) is exactly the E2 hypothesis this
  * must witness. Capped ring, try/catch'd, no-op outside the DOM (Node tests).
  *
- * @param {string} kind   'loaded' | 'avif-fail' | 'fallback-loaded' | 'error'
+ * @param {string} kind   'loaded' | 'avif-fail' | 'bitmap-fail' | 'fallback-loaded' | 'error'
  * @param {string} file   path as requested
  * @param {{width?: number, height?: number}|null} image  decoded image, if any
  */
@@ -687,53 +795,113 @@ function recordTexEvent(kind, file, image) {
   } catch (_e) { /* diagnostics must never break texture loading */ }
 }
 
-/**
- * Load a texture, preferring the .avif sibling when the browser supports AVIF.
- * On AVIF load failure we automatically reissue the load against the .jpg path
- * and patch the resulting image into the already-returned THREE.Texture so the
- * material binding stays valid.
- *
- * @param {string} path  JPG path (e.g. 'textures/earth_day_16k.jpg'). When AVIF
- *                       is supported, the .jpg suffix is rewritten to .avif.
- */
-function loadTexture(path, anisotropy = 8) {
-  const avifPath = path.replace(/\.jpg$/i, '.avif');
-  const useAvif = avifSupported && avifPath !== path;
-  const initialPath = useAvif ? avifPath : path;
+/** Boot-timeline mark (?logBoot=1) — same text as before st3, so probes keep reading it. */
+function bootMark(text) {
+  try {
+    // eslint-disable-next-line no-undef
+    window.__bootMark?.(text);
+  } catch (_e) { /* swallow — diagnostic only */ }
+}
 
-  const tex = textureLoader.load(
+/** True when `img` is an ImageBitmap-like object that has not been closed yet. */
+function isOpenBitmap(img) {
+  return !!img && typeof img.close === 'function' && img.width > 0;
+}
+
+/**
+ * Give a texture a new picture. A texture that has been uploaded once keeps its
+ * GL storage (three allocates immutable storage once per GL texture), so the
+ * texture is disposed first — otherwise a bigger picture would go into the old
+ * (e.g. 1×1 restore placeholder) storage and the Earth would stay blank.
+ */
+function setEarthImage(tex, image) {
+  if (tex.userData.uploaded) tex.dispose();
+  tex.image = image;
+  tex.needsUpdate = true;
+}
+
+/**
+ * `texture.onUpdate` (three calls it after every upload). Acts only when
+ * `tex.image` is an open ImageBitmap at call time: remember its size for the
+ * diagnostics (a closed bitmap reads 0×0), then free its memory. The 1×1
+ * restore placeholder is ignored.
+ */
+function onEarthTextureUpdate(tex) {
+  tex.userData.uploaded = true;
+  const img = tex.image;
+  if (!isOpenBitmap(img)) return;
+  tex.userData.uploadedWidth = img.width;
+  tex.userData.uploadedHeight = img.height;
+  try { img.close(); } catch (_e) { /* best effort */ }
+}
+
+/** Load (or reload) the picture of an Earth texture into `tex`. */
+function loadEarthImage(tex) {
+  const seq = (tex.userData.loadSeq = (tex.userData.loadSeq || 0) + 1);
+  const { initialPath } = tex.userData.src;
+  if (!bitmapPathOk) { loadViaImageLoader(tex, seq); return; }
+  let settled = false;
+  getBitmapLoader().load(
     initialPath,
-    (loaded) => {
-      console.log(`[Earth] Loaded: ${initialPath} (${loaded.image?.width}×${loaded.image?.height})`);
-      recordTexEvent('loaded', initialPath, loaded.image);
-      // §13 boot timeline (?logBoot=1). Optional-chained so this is a no-op
-      // when the flag is off — `window.__bootMark` is only attached by main.js
-      // when `?logBoot=1` is set. This timestamps each Earth texture load (the
-      // prime suspect for the boot-time fan spike per the suspect list).
+    (bmp) => {
+      if (settled) return;
+      settled = true;
+      if (tex.userData.loadSeq !== seq) { try { bmp.close(); } catch (_e) { /* stale */ } return; }
       try {
-        const fname = initialPath.split('/').pop();
-        const dims = `${loaded.image?.width}×${loaded.image?.height}`;
-        // eslint-disable-next-line no-undef
-        window.__bootMark?.(`Earth texture decoded: ${fname} (${dims})`);
-      } catch (_e) { /* swallow — diagnostic only */ }
+        const dims = `${bmp.width}×${bmp.height}`;
+        setEarthImage(tex, bmp);
+        console.log(`[Earth] Loaded: ${initialPath} (${dims})`);
+        recordTexEvent('loaded', initialPath, { width: bmp.width, height: bmp.height });
+        // §13 boot timeline (?logBoot=1): no-op when the flag is off.
+        bootMark(`Earth texture decoded: ${initialPath.split('/').pop()} (${dims})`);
+      } catch (e) {
+        console.error(`[Earth] Texture arrival failed: ${initialPath}`, e);
+      }
     },
     undefined,
     (err) => {
+      if (settled) return;
+      settled = true;
+      if (tex.userData.loadSeq !== seq) return;
+      console.warn(`[Earth] bitmap load failed for ${initialPath}, using the image loader`, err);
+      recordTexEvent('bitmap-fail', initialPath, null);
+      loadViaImageLoader(tex, seq);
+    }
+  );
+}
+
+/**
+ * The pre-st3 path (HTML image via THREE.TextureLoader, AVIF → JPG fallback),
+ * assigning into the already-returned texture. three honours `flipY` only for
+ * HTML images, so it is set to true before one is assigned.
+ */
+function loadViaImageLoader(tex, seq) {
+  const { path, useAvif, initialPath } = tex.userData.src;
+  const stale = () => tex.userData.loadSeq !== seq;
+  textureLoader.load(
+    initialPath,
+    (loaded) => {
+      if (stale()) return;
+      tex.flipY = true;
+      setEarthImage(tex, loaded.image);
+      console.log(`[Earth] Loaded: ${initialPath} (${loaded.image?.width}×${loaded.image?.height})`);
+      recordTexEvent('loaded', initialPath, loaded.image);
+      bootMark(`Earth texture decoded: ${initialPath.split('/').pop()} (${loaded.image?.width}×${loaded.image?.height})`);
+    },
+    undefined,
+    (err) => {
+      if (stale()) return;
       if (useAvif) {
         // AVIF file missing or decode failed at runtime — fall back to JPG.
         console.warn(`[Earth] AVIF load failed for ${initialPath}, falling back to ${path}`, err);
         recordTexEvent('avif-fail', initialPath, null);
         textureLoader.load(path, (loaded) => {
-          tex.image = loaded.image;
-          tex.needsUpdate = true;
+          if (stale()) return;
+          tex.flipY = true;
+          setEarthImage(tex, loaded.image);
           console.log(`[Earth] Loaded fallback: ${path} (${loaded.image?.width}×${loaded.image?.height})`);
           recordTexEvent('fallback-loaded', path, loaded.image);
-          try {
-            const fname = path.split('/').pop();
-            const dims = `${loaded.image?.width}×${loaded.image?.height}`;
-            // eslint-disable-next-line no-undef
-            window.__bootMark?.(`Earth texture decoded (fallback): ${fname} (${dims})`);
-          } catch (_e) { /* swallow */ }
+          bootMark(`Earth texture decoded (fallback): ${path.split('/').pop()} (${loaded.image?.width}×${loaded.image?.height})`);
         }, undefined, (err2) => {
           // Both AVIF and JPG failed — the texture will sample black forever.
           console.error(`[Earth] Fallback JPG load ALSO failed: ${path}`, err2);
@@ -745,7 +913,39 @@ function loadTexture(path, anisotropy = 8) {
       }
     }
   );
+}
+
+/**
+ * Load a texture, preferring the .avif sibling when the browser supports AVIF.
+ * The Texture is returned at once and its picture arrives later. Pictures are
+ * decoded off the main thread (ImageBitmapLoader) when the D3 self-test passed;
+ * any bitmap failure reissues the load through THREE.TextureLoader (which keeps
+ * the AVIF → JPG fallback) and patches the image into the returned texture so
+ * the material binding stays valid.
+ *
+ * @param {string} path  JPG path (e.g. 'textures/earth_day_16k.jpg'). When AVIF
+ *                       is supported, the .jpg suffix is rewritten to .avif.
+ * @param {number} [anisotropy=8]
+ * @returns {THREE.Texture}
+ */
+export function loadTexture(path, anisotropy = 8) {
+  const avifPath = path.replace(/\.jpg$/i, '.avif');
+  const useAvif = avifSupported && avifPath !== path;
+  const initialPath = useAvif ? avifPath : path;
+
+  // A texture with no image and version 0 is skipped silently by three until
+  // the picture arrives.
+  const tex = new THREE.Texture();
+  tex.userData.src = { path, useAvif, initialPath };
+  // Bitmaps are closed after their first upload (onEarthTextureUpdate). Any later
+  // change to this texture's anisotropy / filters / wrap / format makes three
+  // re-upload, which would hit a closed bitmap and throw: change those only
+  // through a reload (loadEarthImage), never on a live texture.
+  tex.onUpdate = onEarthTextureUpdate;
   tex.colorSpace = THREE.SRGBColorSpace;
+  // flipY is ignored by three for ImageBitmaps (the loader flips instead); it is
+  // set to true again if an HTML image has to be used (loadViaImageLoader).
+  tex.flipY = !bitmapPathOk;
   // C1 (tier-gated): anisotropy is chosen by the caller from the detected LOD
   // tier (see the Earth constructor) — the full 16x on capable 16k GPUs, less on
   // weaker hardware — so the extra grazing-angle sampling cost only lands where
@@ -759,7 +959,51 @@ function loadTexture(path, anisotropy = 8) {
   tex.wrapS = THREE.ClampToEdgeWrapping;   // prevent antimeridian seam
   tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.generateMipmaps = true;
+  loadEarthImage(tex);
   return tex;
+}
+
+/**
+ * st3 D4: survive a lost graphics context. Bitmaps are closed after upload, so
+ * after `webglcontextrestored` (three re-uploads every texture) the closed
+ * images are replaced at once by a 1×1 placeholder (uploading a closed bitmap
+ * throws) and the pictures are reloaded; each arrival disposes the texture
+ * first (setEarthImage) so the big picture gets fresh GL storage.
+ *
+ * @param {{dayTexture?: THREE.Texture, nightTexture?: THREE.Texture, cloudTexture?: THREE.Texture}} earth
+ * @param {{domElement?: EventTarget}} renderer
+ * @returns {Function} removes the listener
+ */
+export function attachEarthRestore(earth, renderer) {
+  const target = renderer && renderer.domElement;
+  if (!target || typeof target.addEventListener !== 'function') return () => {};
+  const onRestored = () => {
+    for (const tex of [earth.dayTexture, earth.nightTexture, earth.cloudTexture]) {
+      if (!tex || !tex.userData || !tex.userData.src || !tex.userData.uploaded) continue;
+      const img = tex.image;
+      // Only bitmap-backed textures need this: an HTML image is re-uploaded by three itself.
+      if (!img || (typeof img.close !== 'function' && !img.isPlaceholder)) continue;
+      if (isOpenBitmap(img)) { try { img.close(); } catch (_e) { /* best effort */ } }
+      tex.image = makeRestorePlaceholder();
+      tex.needsUpdate = true;
+      loadEarthImage(tex);
+    }
+  };
+  target.addEventListener('webglcontextrestored', onRestored);
+  return () => { try { target.removeEventListener('webglcontextrestored', onRestored); } catch (_e) { /* noop */ } };
+}
+
+/** 1×1 image three can upload (canvas in a browser, a plain object in node tests). */
+function makeRestorePlaceholder() {
+  try {
+    if (typeof document !== 'undefined') {
+      const c = document.createElement('canvas');
+      c.width = 1; c.height = 1;
+      c.isPlaceholder = true;
+      return c;
+    }
+  } catch (_e) { /* fall through */ }
+  return { width: 1, height: 1, isPlaceholder: true };
 }
 
 // ============================================================================
@@ -815,10 +1059,13 @@ export function selectLOD(maxTextureSize, deviceMemory, isAppleGPU = false) {
  *     deltas between the tiers (drift-dominated). The 16k night map buys
  *     nothing visible in gameplay while costing the exact resource class that
  *     goes black in the field.
- *   - The DAY map keeps 16k: its detail IS visible (daylit terrain at every
- *     altitude), and the field blackout hits the night map in normal play.
- *   - `?tex=16k` still forces BOTH maps to 16k (A/B lever unchanged), so the
- *     field experiment stays one URL away.
+ *   - st3 (2026-10-18, owner pick "menu at once + 8k Earth"): the DAY map no
+ *     longer keeps 16k either — {@link capPictureTier} caps both pictures at
+ *     8k on every device unless `?tex=16k`, because the 16k decode was most of
+ *     the 3.8 s freeze before the menu answered. Close-up daylight views on a
+ *     desktop are a little less sharp.
+ *   - `?tex=16k` still forces ALL maps to 16k (A/B lever unchanged), so the
+ *     sharp set stays one URL away.
  *
  * @param {'16k'|'8k'|''} quality  overall tier from selectLOD()
  * @param {boolean} [isAppleGPU=false]  WEBGL_debug_renderer_info contains 'Apple'
@@ -863,6 +1110,19 @@ export function clampLODForGlass(quality, hasTouch) {
 }
 
 /**
+ * st3 D1: the picture tier actually requested from the network: '16k' → '8k'
+ * for the day and the night map (owner pick, 2026-10-18, start time). The
+ * hardware tier `quality` (mesh detail, anisotropy, cloud file) is untouched.
+ * Pure + exported for tests; `?tex=16k` bypasses it in getTextureQuality().
+ *
+ * @param {'16k'|'8k'|''} tier
+ * @returns {'8k'|''} tier with 16k capped to 8k
+ */
+export function capPictureTier(tier) {
+  return tier === '16k' ? '8k' : tier;
+}
+
+/**
  * Detect hardware capability and return the best texture quality tier.
  * Gathers runtime inputs, delegates to selectLOD() for the actual decision.
  *
@@ -877,7 +1137,9 @@ export function clampLODForGlass(quality, hasTouch) {
  *   the game's THREE.WebGLRenderer (or a stand-in)
  * @param {Document} [opts.doc] document used for the probe canvas (default: global)
  * @param {Navigator} [opts.nav] navigator for deviceMemory (default: global)
- * @returns {{quality: '16k'|'8k'|'', nightQuality: '16k'|'8k'|''}}
+ * @returns {{quality: '16k'|'8k'|'', dayQuality: '16k'|'8k'|'', nightQuality: '16k'|'8k'|''}}
+ *   `quality` = hardware tier (mesh detail, anisotropy, cloud file);
+ *   `dayQuality` / `nightQuality` = the picture tiers (st3 D1: never 16k unless `?tex=16k`)
  */
 export function getTextureQuality({ renderer, doc, nav } = {}) {
   // Black-flicker triage (H3) / OPEN-2 (16k night texture renders black on
@@ -892,11 +1154,11 @@ export function getTextureQuality({ renderer, doc, nav } = {}) {
       const raw = (new URLSearchParams(window.location.search).get('tex') || '').toLowerCase();
       if (raw === '16k' || raw === '8k') {
         console.info(`[Earth] texture LOD URL override → ${raw}`);
-        return { quality: raw, nightQuality: raw };
+        return { quality: raw, dayQuality: raw, nightQuality: raw };
       }
       if (raw === 'base' || raw === '4k') {
         console.info('[Earth] texture LOD URL override → base');
-        return { quality: '', nightQuality: '' };
+        return { quality: '', dayQuality: '', nightQuality: '' };
       }
     }
   } catch (_e) { /* fall through to detection */ }
@@ -952,12 +1214,14 @@ export function getTextureQuality({ renderer, doc, nav } = {}) {
     TouchControls.detect()
   );
   // OPEN-2: the night map rides one tier lower on Apple GPUs (see selectNightLOD).
-  const nightQuality = selectNightLOD(quality, isAppleGPU);
+  // st3 D1: neither picture is 16k unless ?tex=16k (returned above).
+  const dayQuality = capPictureTier(quality);
+  const nightQuality = capPictureTier(selectNightLOD(quality, isAppleGPU));
   // PR 5 / P2.10: gate verbose LOD log behind DEBUG flag (?debug=1).
   if (Constants && Constants.DEBUG && Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS) {
-    console.log(`[Earth] LOD selected: ${quality || '4k (base)'} (night: ${nightQuality || '4k (base)'}). MaxTextureSize=${maxTextureSize}`);
+    console.log(`[Earth] LOD selected: ${quality || '4k (base)'} (pictures: day ${dayQuality || '4k (base)'}, night: ${nightQuality || '4k (base)'}). MaxTextureSize=${maxTextureSize}`);
   }
-  return { quality, nightQuality };
+  return { quality, dayQuality, nightQuality };
 }
 
 /**
@@ -1008,12 +1272,12 @@ export class Earth {
     // procedural-terrain cost in one session.
     this._useLowDetail = profileFlags.disableEarthNoise === true;
 
-    // Adaptive quality: pick texture resolution based on hardware. The night
-    // map can ride one tier below the day map (OPEN-2: selectNightLOD caps it
-    // at 8k on Apple GPUs, where the 16k night map goes residency-black in
-    // long Brave/ANGLE-Metal sessions; `?tex=` forces both tiers equal).
-    const { quality, nightQuality } = getTextureQuality({ renderer: options && options.renderer });
-    const texSuffix = quality ? `_${quality}` : '';
+    // Adaptive quality: pick texture resolution based on hardware. `quality` is
+    // the hardware tier (mesh detail, anisotropy, cloud file); the day and night
+    // PICTURES come from dayQuality / nightQuality, which are never 16k unless
+    // `?tex=16k` (st3 D1; OPEN-2 had already capped the night map on Apple GPUs).
+    const { quality, dayQuality, nightQuality } = getTextureQuality({ renderer: options && options.renderer });
+    const texSuffix = dayQuality ? `_${dayQuality}` : '';
     const nightSuffix = nightQuality ? `_${nightQuality}` : '';
     const cloudSuffix = quality === '16k' ? '_8k' : (quality === '8k' ? '_8k' : '');
     // Sphere tessellation rides the same hardware signal (Task 3b) — see
@@ -1021,7 +1285,7 @@ export class Earth {
     // Keyed on the DAY tier: geometry detail tracks the primary map.
     this._sphereSegments = selectSphereSegments(quality);
 
-    console.log(`[Earth] Texture quality: ${quality || 'base'} (suffix: "${texSuffix}", night: "${nightSuffix || 'base'}")`);
+    console.log(`[Earth] Texture quality: hardware ${quality || 'base'}, pictures day "${texSuffix || 'base'}" night "${nightSuffix || 'base'}"`);
 
     // C1 (tier-gated anisotropy): scale the grazing-angle sampling cost with the
     // detected LOD tier so the weakest GPUs — the base tier (low maxTextureSize /
@@ -1030,14 +1294,16 @@ export class Earth {
     // the full 16x.
     const texAniso = quality === '16k' ? 16 : (quality === '8k' ? 8 : 4);
 
-    // Load textures at detected quality tier (night may sit one tier lower —
-    // aniso stays keyed on the day tier; three.js clamps it at upload anyway).
+    // Load the pictures at their tiers (aniso stays keyed on the hardware tier;
+    // three.js clamps it at upload anyway).
     this.dayTexture = loadTexture(`textures/earth_day${texSuffix}.jpg`, texAniso);
     this.nightTexture = loadTexture(`textures/earth_night${nightSuffix}.jpg`, texAniso);
     // Clouds are low-frequency; anisotropy cost concentrates at grazing angles
     // (the limb) where clouds are softest — 4x is indistinguishable from the tier
     // aniso and trims bandwidth on the overdraw-heaviest (transparent) layer.
     this.cloudTexture = loadTexture(`textures/earth_clouds${cloudSuffix}.jpg`, Math.min(texAniso, 4));
+    // st3 D4: bitmaps are closed after upload; reload them after a lost context.
+    if (options && options.renderer) attachEarthRestore(this, options.renderer);
 
     this._createSurface();
     // Sprint 3 GPU profiling — `?disableClouds=1` skips the 8K-textured

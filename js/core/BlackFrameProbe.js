@@ -97,6 +97,23 @@ function parseMode() {
 }
 
 /**
+ * Decoded size of a texture's picture. st3: Earth bitmaps are closed after their
+ * upload (a closed ImageBitmap reads 0×0), so the size stored by Earth.js in
+ * `userData.uploadedWidth/Height` is reported while the image is closed/empty.
+ * @param {THREE.Texture|null|undefined} t
+ * @returns {{w: number, h: number}}
+ */
+export function textureImageSize(t) {
+  const img = t && t.image;
+  const w = img && img.width ? img.width : 0;
+  const h = img && img.height ? img.height : 0;
+  if (w === 0 && t && t.userData && t.userData.uploadedWidth) {
+    return { w: t.userData.uploadedWidth, h: t.userData.uploadedHeight || 0 };
+  }
+  return { w, h };
+}
+
+/**
  * Install the probe. Call once after SceneManager (+ Earth) exist; returns
  * null when `?bfp=` is absent so the per-frame hook stays a single falsy check.
  *
@@ -267,9 +284,7 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
       const p = props.get(t);
       if (p && p.__version !== undefined) up = p.__version;
     } catch (_e) { /* noop */ }
-    const img = t.image;
-    const w = img && img.width ? img.width : 0;
-    const h = img && img.height ? img.height : 0;
+    const { w, h } = textureImageSize(t);
     return { live: glLive(t), w, h, ver: t.version, up, ghost: glLive(t) && w === 0 };
   };
   /** Compact ring-snap form: `d:16384/1/1 n:...` = imageW/version/uploadedVersion. */
