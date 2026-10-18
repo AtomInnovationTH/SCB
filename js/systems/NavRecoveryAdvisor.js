@@ -17,7 +17,7 @@
  *
  * The one-tap re-acquire itself lives in
  * [`AutopilotSystem.engage`](js/systems/AutopilotSystem.js:167): pressing A
- * with no target auto-selects the nearest live large debris.
+ * with no target auto-selects the nearest catchable piece.
  *
  * Pure helpers (`findNearestLiveDebris`, `classifyBearing`,
  * `formatDistanceKm`) are exported for unit tests and reused by

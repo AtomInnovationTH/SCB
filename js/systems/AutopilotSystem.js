@@ -650,6 +650,11 @@ export class AutopilotSystem {
       // yields null (e.g. an undiscovered field, or fragments-only Kessler
       // end-state) — this honours the NavRecoveryAdvisor "press A to approach"
       // promise, which uses a mass-0 nearest lookup, in all cases.
+      //
+      // The fallback takes the nearest catchable piece of ANY mass. Mission 2
+      // restores heavy background debris, and the old 50 kg preference sent A
+      // to a satellite ~5,000 km away over 7 small pieces 100-340 m off
+      // (2026-10-18).
       let acquired = null;
       if (this._targetAcquisition && typeof this._targetAcquisition.acquireBestTarget === 'function') {
         acquired = this._targetAcquisition.acquireBestTarget({ source: 'autopilot_reacquire' });
@@ -661,7 +666,7 @@ export class AutopilotSystem {
           priority: 'info',
         });
       } else {
-        const nearest = this._findNearestLargeDebris() || this._findNearestLargeDebris(0);
+        const nearest = this._findNearestCatchableDebris();
         if (nearest && nearest.debris && this._targetSelector &&
             typeof this._targetSelector.setTarget === 'function') {
           this._targetSelector.setTarget(nearest.debris, { source: 'autopilot_reacquire' });
@@ -1610,6 +1615,36 @@ export class AutopilotSystem {
       { x: playerPos.x, y: playerPos.y, z: playerPos.z },
       this._debrisField.debrisList,
       minMassKg
+    );
+    if (!nearest) return null;
+    const d = nearest.debris;
+    return {
+      pos: new THREE.Vector3(nearest.pos.x, nearest.pos.y, nearest.pos.z),
+      orbit: d.orbit,
+      id: d.id != null ? d.id : null,
+      debris: d,
+    };
+  }
+
+  /**
+   * Nearest live piece of ANY mass that can still be caught. Skips the same
+   * pieces the target list and auto-lock skip: caught (`_captured`, e.g. still
+   * on the rack), parked (`isChaseDone`), and hazard shards. Undiscovered
+   * pieces count: N and A work before a scan. Allocates a filtered list per
+   * call; A is a rare keypress.
+   * @returns {{ pos: THREE.Vector3, orbit: object, id: (number|string|null), debris: object }|null}
+   * @private
+   */
+  _findNearestCatchableDebris() {
+    if (!this._debrisField || !this._debrisField.debrisList) return null;
+    const playerPos = this._player.getPosition();
+    const catchable = this._debrisField.debrisList.filter(
+      (d) => d && !d._captured && !d.hazard && !isChaseDone(d)
+    );
+    const nearest = findNearestLiveDebris(
+      { x: playerPos.x, y: playerPos.y, z: playerPos.z },
+      catchable,
+      0
     );
     if (!nearest) return null;
     const d = nearest.debris;
