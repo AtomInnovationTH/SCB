@@ -121,6 +121,8 @@ export class LassoSystem {
 
         /** @type {THREE.Vector3|null} Live target scene position (updated each frame) */
         this._targetScenePos = null;
+        /** @type {boolean} catch-focus D0: `target` is the canonical field object (live `_scenePosition`), not a snapshot */
+        this._targetIsLive = false;
 
         /** @type {THREE.Vector3} Offset of projectile relative to player (local frame) */
         this._projOffset = new THREE.Vector3();
@@ -499,24 +501,21 @@ export class LassoSystem {
     }
 
     /**
-     * l8-reel-collar (D3) — the lasso's net-held readability floor for a piece at `scenePos`. It is the old fixed
-     * floor (MOTHER_CATCH_MIN_RENDER_M) at >= REEL_HOME.FLOOR_FAR_M from the ship, eased (smoothstep) to the piece's
-     * TRUE size by FLOOR_NEAR_M — the same law the mother reel uses (CaptureNet._catchFloorScale) — so the piece
-     * shrinks smoothly on its way in and the adoption (which writes the true size at home) does not pop.
+     * catch-focus (owner 2026-10-18, "debris still magically shrinks"; DECISIONS Ruling 0, physically real wins):
+     * a lasso catch is drawn at its TRUE size from contact to the collar, the same law the mother net has kept since
+     * 2026-10-16 (CaptureNet._catchFloorScale). The old floor (MOTHER_CATCH_MIN_RENDER_M, 1.5-2.0 m bounding radius,
+     * 4-5.5x a small fragment) eased to true size between FLOOR_FAR_M and FLOOR_NEAR_M: the visible shrink. The value
+     * written to `_catchRenderMin` is now the piece's BASE render scale, which DebrisField.catchRenderFloorScale (its
+     * predicate only raises, `_catchRenderMin > base`) treats as no floor. The constant MOTHER_CATCH_MIN_RENDER_M stays
+     * in Constants.js (the non-ladder ceremony hold distance reads it).
      * @param {object} target — the piece
-     * @param {THREE.Vector3} scenePos — where the piece is drawn (scene units)
-     * @param {THREE.Vector3} playerPos — ship position (scene units)
-     * @returns {number} scene-unit scale floor for `_catchRenderMin`
+     * @param {THREE.Vector3} _scenePos — unused (the old distance ease)
+     * @param {THREE.Vector3} _playerPos — unused (the old distance ease)
+     * @returns {number} scene-unit scale for `_catchRenderMin` (== the base render scale: no floor)
      * @private
      */
-    _catchFloorFor(target, scenePos, playerPos) {
-        const full = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, target.type, target.id);
-        const H = Constants.CAPTURE_NET.REEL_HOME;
-        if (!H || !scenePos || !playerPos) return full;
-        const distM = scenePos.distanceTo(playerPos) / M;
-        const t = Math.min(1, Math.max(0, (distM - H.FLOOR_NEAR_M) / (H.FLOOR_FAR_M - H.FLOOR_NEAR_M)));
-        const base = DebrisField.baseRenderScale(target);
-        return base + (full - base) * (t * t * (3 - 2 * t));
+    _catchFloorFor(target, _scenePos, _playerPos) {
+        return DebrisField.baseRenderScale(target);
     }
 
     /**
@@ -916,6 +915,37 @@ export class LassoSystem {
     }
 
     /**
+     * catch-focus Decision 0 (owner 2026-10-18, "the lasso catch never leaves the line"): the CANONICAL field object
+     * for a debris handed out by getDebrisNear (a read-only SNAPSHOT: frozen `_scenePosition` and `orbit`) or by a
+     * stale selection, found by id. The lasso reel seeds its start offset and its pin from the target's
+     * `_scenePosition`; a snapshot taken at fire is frozen while the ship moves ~78 km/s in scene space, so the catch
+     * was drawn tens of km from the line at contact and vanished for 1.8-4.0 s.
+     * @param {object|null} debrisField
+     * @param {object|null} d
+     * @returns {object|null} the live field object, or null when the field has no `getDebrisById`, does not know
+     *   the id, or the piece is dead (the caller then keeps `d` and reads the live `_targetScenePos` instead)
+     * @private
+     */
+    _canonicalDebris(debrisField, d) {
+        if (!d || !debrisField || typeof debrisField.getDebrisById !== 'function') return null;
+        const live = debrisField.getDebrisById(d.id);
+        return (live && live.id === d.id && live.alive !== false) ? live : null;
+    }
+
+    /**
+     * catch-focus Decision 0: where the target piece is NOW (scene units, a shared reference — copy before keeping).
+     * A canonical target's own `_scenePosition` is live; a snapshot fallback's is frozen at fire, so prefer the
+     * `_targetScenePos` that update() refreshes from the canonical object by id every frame.
+     * @returns {THREE.Vector3|null}
+     * @private
+     */
+    _livePiecePos() {
+        const t = this.target;
+        if (this._targetIsLive && t && t._scenePosition) return t._scenePosition;
+        return this._targetScenePos || (t && t._scenePosition) || this.projectilePos;
+    }
+
+    /**
      * Extract scene position from a debris object returned by getDebrisNear.
      * getDebrisNear returns objects with _cartesian.position = { x, y, z }.
      * @param {object} debris
@@ -1124,6 +1154,8 @@ export class LassoSystem {
 
         // PRIORITY 1: If player has Tab-selected a target and it's in range, use it (S1 Fix C2)
         if (selectedTarget) {
+            // catch-focus D0: a Tab-selected target can be a stale snapshot — read its LIVE field object.
+            selectedTarget = this._canonicalDebris(debrisField, selectedTarget) || selectedTarget;
             const selectedPos = this._getDebrisScenePos(selectedTarget);
             if (selectedPos) {
                 const dist = playerPos.distanceTo(selectedPos);
@@ -1228,6 +1260,11 @@ export class LassoSystem {
         }
 
         // Fire!
+        // catch-focus D0: getDebrisNear hands out SNAPSHOT copies (frozen `_scenePosition`/`orbit`). Hold the
+        // CANONICAL field object so every read of the target (contact seeding, the reel pin) is live.
+        const liveTarget = this._canonicalDebris(debrisField, bestTarget);
+        this._targetIsLive = !!liveTarget;
+        if (liveTarget) bestTarget = liveTarget;
         this.active = true;
         this.target = bestTarget;
         this._targetId = bestTarget.id;
@@ -1652,9 +1689,9 @@ export class LassoSystem {
                 // contact (the piece is what reels home; the apex trails it by
                 // the interior seat). The apex→piece depth at contact seeds the
                 // seat ease so the wrap slides the net OVER the stationary piece.
-                const pieceAtContact = (this.target && this.target._scenePosition)
-                    ? this.target._scenePosition
-                    : (this._targetScenePos || this.projectilePos);
+                // catch-focus D0: the piece's LIVE position. `_targetScenePos` was refreshed from the canonical
+                // object at the top of this update; a snapshot target's own `_scenePosition` is frozen at fire.
+                const pieceAtContact = this._livePiecePos();
                 this._reelStartOffset.copy(pieceAtContact).sub(playerPos);
                 // Contact-tick forensics (dev probe): name the source when the
                 // start offset reads km-scale garbage in a live take.
@@ -1691,10 +1728,9 @@ export class LassoSystem {
                     // the arm pin owns the piece from contact on, regardless of
                     // whether the LASSO_CONTACT release listener wins its race.
                     this.target._onboardingPinned = false;
-                    this.target._catchRenderMin = this._catchFloorFor(this.target, this.target._scenePosition || this._targetScenePos || this.projectilePos, playerPos);
+                    this.target._catchRenderMin = this._catchFloorFor(this.target, pieceAtContact, playerPos);
                     // Round 3: same-frame pin (register-9 idiom — see _pinFresh).
-                    this._pinFresh(debrisField, this.target,
-                        this.target._scenePosition || this._targetScenePos || this.projectilePos);
+                    this._pinFresh(debrisField, this.target, pieceAtContact);
                 }
 
                 // Contact flash removed per user feedback ("NOT an arcade game")
@@ -2407,6 +2443,7 @@ export class LassoSystem {
         this.target = null;
         this._targetId = null;
         this._targetScenePos = null;
+        this._targetIsLive = false;
         this._projOffset.set(0, 0, 0);
         this.projectilePos = null;
         this.projectileVel = null;

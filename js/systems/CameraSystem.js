@@ -110,6 +110,12 @@ export const LADDER_PANE_REFRAME_MS = 270;
  * camera is exactly where the ladder holds it. Firing the net is the player-initiated cause (docs/ladder/00-spec.md
  * :262 "the camera never moves on its own without a player-initiated cause"); any camera input of his ends it.
  * In-module numbers (the LADDER_LEVEL_MS precedent), not FloorContract numbers.
+ *
+ * catch-focus (owner 2026-10-18, "no camera doesn't seem to move in on the catch"): EVERY catch gets the focus, not
+ * only a mother net on F2/F3 with motion allowed. Daughter net catches (a far one is a CUT in and out), lasso catches
+ * (from LASSO_CONTACT, on to the collar), and a collar catch keeps it until it is processed. Levels F1-F3 (ship
+ * anchor) run it; F4-F5 (Earth anchor) refuse with a console line. Reduced motion CUTS in and out instead of
+ * refusing. Each start / refusal / cancel / end prints exactly one `[catch-focus]` console line.
  */
 export const CATCH_FOCUS = Object.freeze({
   DIST_U: 6e-5,        // 6 m: F2's floor (FloorContract), so no near-plane change
@@ -118,10 +124,15 @@ export const CATCH_FOCUS = Object.freeze({
   OUT_S: 1.0,          // ... and back out, after the catch is processed
   CANCEL_S: 0.3,       // ... and out after a player camera input: no cut, no walk back
   END_HOLD_S: 1.0,     // stay on the tip this long after CATCH_PROCESSED
-  WAIT_S: 8.0,         // berthed and no hand-off begins this soon (rack / collar furnace): not a leash catch, let go
+  WAIT_S: 8.0,         // a lasso catch waiting for a busy collar to adopt it: let go after this (a mother catch AT the collar is COLLAR_MAX_S)
+  COLLAR_MAX_S: 60,    // catch-focus (2026-10-18): a catch sitting at the nose collar keeps the focus this long (it used to let go after WAIT_S), then lets go
   TIP_MAX_S: 40,       // safety valve: never hold the cook longer than this
+  FAR_CUT_U: 5e-4,     // 50 m: a catch farther than this from the camera's anchor is a CUT in and out, not an ease over hundreds of metres
+  DAUGHTER_HOLD_S: 3.0, // a daughter's catch: stay on it this long after she holds it at her strut (ArmUnit state HOLDING_CATCH)
+  DAUGHTER_MAX_S: 300, // safety valve for a daughter's long haul (4 m/s over a 500 m tether is ~125 s)
+  ADOPT_GRACE_S: 0.5,  // a lasso reel that ended: wait this long for a net to adopt the catch before letting go
   LEAD_FILTER_S: 0.25, // smoothing of the focus point's velocity (the lead that cancels the ease's lag)
-  LEAD_MAX_U_S: 8e-5,  // a faster "velocity" than this (8 m/s, scene units / s) is a hop between phases, not motion: ignored
+  LEAD_MAX_U_S: 2e-4,  // a faster "velocity" than this (20 m/s, scene units / s) is a hop between phases, not motion: ignored (a lasso reel runs ~9-14 m/s)
 });
 
 /** A ceremony kept only for its slow motion under the ladder ends by itself after this (real seconds). */
@@ -630,7 +641,7 @@ export class CameraSystem {
       else CeremonyTimeScale.reset(this);
       // A hard state transition can't carry the lasso cut across it either.
       if (this._lassoCut && this._lassoCut.active) this._exitLassoCut(false);
-      this._resetCatchFocus();
+      this._resetCatchFocus('game state change');
     }));
     this._unsubs.push(eventBus.on(Events.PAUSE_MENU, () => {
       CeremonyTimeScale.reset(this);
@@ -777,7 +788,14 @@ export class CameraSystem {
     this._catchFocus = {
       active: false,                      // from NET_CATCH_SUCCESS until the blend has eased back to 0
       engaging: true,                     // false once released / cancelled: the blend is only easing out
-      phase: 'idle',                      // 'reel' | 'wait' | 'handoff' | 'tip' | 'end'
+      phase: 'idle',                      // mother: 'reel' | 'wait' | 'handoff' | 'tip' | 'end'; daughter: 'haul' | 'held'; lasso: 'lasso' | 'adopt'
+      kind: 'mother',                     // 'mother' | 'daughter' | 'lasso' (what caught it; a lasso catch becomes a collar catch once a net adopts it)
+      cut: false,                         // reduced motion, or a catch farther than FAR_CUT_U: CUT in and out instead of easing
+      snapPending: false,                 // a cut waiting for the first frame that knows the focus point
+      armIndex: -1,                       // daughter: which one
+      arm: null,                          // daughter: her ArmUnit (state HOLDING_CATCH ends the haul)
+      totalS: 0,                          // real seconds since the focus began (the daughter's safety valve)
+      collarS: 0,                         // real seconds a catch has sat at the nose collar (COLLAR_MAX_S)
       u: 0,                               // blend progress 0..1 (smoothstep -> w)
       w: 0,                               // blend weight applied to the ladder camera this frame
       rate: 1 / CATCH_FOCUS.IN_S,         // |du/dt| in the current direction
@@ -802,14 +820,18 @@ export class CameraSystem {
       v: new THREE.Vector3(),
     };
     this._unsubs.push(eventBus.on(Events.NET_CATCH_SUCCESS, (p) => this._onCatchFocusStart(p)));
-    this._unsubs.push(eventBus.on(Events.NET_RELEASED, (p) => this._onCatchFocusLost(p)));
-    this._unsubs.push(eventBus.on(Events.NET_CATCH_MISS, (p) => this._onCatchFocusLost(p)));
+    this._unsubs.push(eventBus.on(Events.NET_RELEASED, (p) => this._onCatchFocusLost(p, 'net released')));
+    this._unsubs.push(eventBus.on(Events.NET_CATCH_MISS, (p) => this._onCatchFocusLost(p, 'net missed')));
     this._unsubs.push(eventBus.on(Events.CARGO_TRANSFER_START, (p) => {
       // to a daughter's rack: not a radiator-tip catch, nothing more to show from here
-      if (p && p.to && p.to.kind !== 'tip') this._onCatchFocusLost(p);
+      if (p && p.to && p.to.kind !== 'tip') this._onCatchFocusLost(p, 'catch went to a rack');
     }));
     this._unsubs.push(eventBus.on(Events.CATCH_BREAKDOWN_START, (p) => this._onCatchFocusBreakdown(p)));
     this._unsubs.push(eventBus.on(Events.CATCH_PROCESSED, (p) => this._onCatchFocusProcessed(p)));
+    // catch-focus: a lasso catch gets the focus from contact; a snapped or missed line lets it go
+    this._unsubs.push(eventBus.on(Events.LASSO_CONTACT, (p) => this._onCatchFocusLassoStart(p)));
+    this._unsubs.push(eventBus.on(Events.LASSO_SNAPPED, () => this._onCatchFocusLassoLost('lasso snapped')));
+    this._unsubs.push(eventBus.on(Events.LASSO_MISSED, () => this._onCatchFocusLassoLost('lasso missed')));
 
     this._boundMouseDown = this._onMouseDown.bind(this);
     this._boundMouseMove = this._onMouseMove.bind(this);
@@ -3181,7 +3203,7 @@ export class CameraSystem {
    */
   skipNetCeremony() {
     // reel-visible: the same keys (Esc / Space / Enter) also end a catch focus, which is what is on screen under the ladder
-    const focus = this.ladderCancelCatchFocus();
+    const focus = this.ladderCancelCatchFocus('skip key');
     if (!this._netCeremony.active) return focus;
     this._exitNetCeremony(false);
     return true;
@@ -3851,7 +3873,7 @@ export class CameraSystem {
         d.lastMouseY = e.clientY;
         d.velocityTheta = -dx * d.rotateSpeed;
         d.velocityPhi = dy * d.rotateSpeed;
-        this.ladderCancelCatchFocus();   // reel-visible: his own camera input ends the catch focus
+        this.ladderCancelCatchFocus('mouse drag');   // reel-visible: his own camera input ends the catch focus
       }
       return;
     }
@@ -3991,7 +4013,7 @@ export class CameraSystem {
     lc.active = true;
     lc.riding = false;
     lc.onDone = null;
-    this._resetCatchFocus();   // reel-visible: a fresh engage never inherits a focus
+    this._resetCatchFocus('ladder engaged again');   // reel-visible: a fresh engage never inherits a focus
     lc.anchor = frame.anchor;
     lc.targetDistU = frame.distU;
     lc.curDistU = frame.distU;
@@ -4037,7 +4059,7 @@ export class CameraSystem {
     lc.leveling = false;
     lc.levelT = 0;
     lc.levelHoldFloor = null;
-    this._resetCatchFocus();     // reel-visible
+    this._resetCatchFocus('ladder disengaged');     // reel-visible
     this._ladderResetFollow();   // H2
     // Reset the whole drag block — nothing may leak into the next engage.
     lc.drag.enabled = false;
@@ -4140,7 +4162,7 @@ export class CameraSystem {
     const dx = Number.isFinite(dxPx) ? dxPx : 0;
     const dy = Number.isFinite(dyPx) ? dyPx : 0;
     if (dx === 0 && dy === 0) return;
-    this.ladderCancelCatchFocus();   // reel-visible: a touch drag is his own camera input too (the mouse path does the same)
+    this.ladderCancelCatchFocus('touch drag');   // reel-visible: a touch drag is his own camera input too (the mouse path does the same)
     lc.drag.velocityTheta = -dx * lc.drag.rotateSpeed;
     lc.drag.velocityPhi = dy * lc.drag.rotateSpeed;
   }
@@ -4283,21 +4305,31 @@ export class CameraSystem {
   isCatchFocusActive() { return this._catchFocus.active; }
 
   /**
-   * @returns {{active:boolean, engaging:boolean, phase:string, w:number, tipIndex:number}} the focus, for tests and
-   *   the dev overlay. A copy: never write through it.
+   * @returns {{active:boolean, engaging:boolean, phase:string, w:number, tipIndex:number, kind:string, cut:boolean}}
+   *   the focus, for tests and the dev overlay. A copy: never write through it.
    */
   catchFocusState() {
     const f = this._catchFocus;
-    return { active: f.active, engaging: f.engaging, phase: f.phase, w: f.w, tipIndex: f.tipIndex };
+    return { active: f.active, engaging: f.engaging, phase: f.phase, w: f.w, tipIndex: f.tipIndex, kind: f.kind, cut: f.cut };
   }
 
-  /** Drop the focus at once (a state change, a re-engage, a disengage): the camera is the ladder's again this frame. */
-  _resetCatchFocus() {
+  /** One console line per catch-focus event (start / refused / cancel / end), never per frame. */
+  _catchFocusLog(text) {
+    console.log(`[catch-focus] ${text}`);
+  }
+
+  /**
+   * Drop the focus at once (a state change, a re-engage, a disengage): the camera is the ladder's again this frame.
+   * @param {string} [cause] when given and a focus was engaged, prints its one `cancel <cause>` line
+   */
+  _resetCatchFocus(cause) {
     const f = this._catchFocus;
     if (!f) return;
+    if (cause && f.active && f.engaging) this._catchFocusLog(`cancel ${cause}`);
     f.active = false; f.engaging = true; f.phase = 'idle';
     f.u = 0; f.w = 0; f.rate = 1 / CATCH_FOCUS.IN_S; f.timer = 0;
     f.net = null; f.debris = null; f.podIndex = -1; f.tipIndex = -1;
+    f.kind = 'mother'; f.cut = false; f.snapPending = false; f.armIndex = -1; f.arm = null; f.totalS = 0; f.collarS = 0;
     f.off.set(0, 0, 0);
     f.dirSeeded = false;
     f.azSide = 1;
@@ -4305,75 +4337,179 @@ export class CameraSystem {
     f.vel.set(0, 0, 0);
   }
 
-  /** The player's own mother net has caught something: come in on it (floors 2-3 only). */
-  _onCatchFocusStart(payload) {
-    if (!payload || (payload.podIndex == null) || payload.podIndex < 0 || (payload.armIndex != null && payload.armIndex >= 0)) return;
+  /**
+   * Why a catch cannot get the focus right now, or null when it can: the ladder camera must be up on a ship-anchored
+   * level (F1-F3; F4-F5 are Earth-anchored maps), not mid-ride, the net ceremony switch on, and no piloted daughter
+   * holding the camera. Reduced motion is NOT a reason: it cuts instead (see `_beginCatchFocus`).
+   * @returns {string|null}
+   */
+  _catchFocusRefusal() {
     const lc = this._ladderCam;
-    if (!lc.active || lc.anchor !== 'ship' || lc.riding) return;
-    if (lc.floor !== 2 && lc.floor !== 3) return;                          // F1 is already close; F4+ is a map
-    if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return;                     // the cinematic switch is the focus switch
-    if (this.currentView === CameraViews.ARM_PILOT) return;                // a piloted daughter has the camera
-    if (this._prefersReducedMotion()) return;                              // same accessibility gate as the reel beat
-    const cns = this._netSystemRef();
-    const net = cns && typeof cns.getActiveNetForPod === 'function' ? cns.getActiveNetForPod(payload.podIndex) : null;
-    const d = net && net.targetDebris;
-    if (!d || !d._scenePosition) return;
-    const f = this._catchFocus;
-    f.active = true; f.engaging = true; f.phase = 'reel'; f.timer = 0;
-    f.rate = 1 / CATCH_FOCUS.IN_S;
-    f.net = net; f.debris = d; f.podIndex = payload.podIndex; f.tipIndex = -1;
-    if (f.u <= 0) { f.off.set(0, 0, 0); f.dirSeeded = false; f.relSeeded = false; f.vel.set(0, 0, 0); }   // a fresh focus starts ON the mother
+    if (!lc.active) return 'ladder camera is off';
+    if (lc.riding) return 'ladder is changing level';
+    if (lc.anchor !== 'ship' || (lc.floor != null && (lc.floor < 1 || lc.floor > 3))) return `level F${lc.floor} is a map`;
+    if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return 'net ceremony is off';
+    if (this.currentView === CameraViews.ARM_PILOT) return 'a daughter is piloted';
+    return null;
   }
 
-  /** Ease the focus out after a normal end (the catch is processed, let go, or went to a rack). */
-  _releaseCatchFocus() {
+  /**
+   * Start (or re-aim) the focus on a catch.
+   * @param {'mother'|'daughter'|'lasso'} kind
+   * @param {object|null} net - the NetProjectile that holds the catch (null for a lasso reel)
+   * @param {object} d - the catch (needs `_scenePosition`)
+   * @param {string} phase - first phase
+   * @param {string} label - for the console line: `mother` | `daughter N` | `lasso`
+   * @private
+   */
+  _beginCatchFocus(kind, net, d, phase, label) {
+    const f = this._catchFocus;
+    const lc = this._ladderCam;
+    f.active = true; f.engaging = true; f.phase = phase; f.timer = 0;
+    f.kind = kind; f.totalS = 0; f.collarS = 0;
+    f.rate = 1 / CATCH_FOCUS.IN_S;
+    f.net = net; f.debris = d; f.podIndex = net && net.podIndex != null ? net.podIndex : -1; f.tipIndex = -1;
+    f.armIndex = -1; f.arm = null;
+    if (f.u <= 0) { f.off.set(0, 0, 0); f.dirSeeded = false; f.relSeeded = false; f.vel.set(0, 0, 0); }   // a fresh focus starts ON the mother
+    // A CUT, not an ease: reduced motion asks for no camera travel, and a catch tens or hundreds of metres from the
+    // camera's anchor (a daughter's, a far lasso) would take the anchor ease (TAU_S) seconds to cross, leaving the
+    // camera far from it for the first ~2 s. The focus snaps in on its first frame and snaps out at its end.
+    // The ship is read LIVE (an event fires mid-frame, before this frame's camera update, and `_lastPlayerPos` is the
+    // previous frame's: the ship moves ~78 km/s in scene space, so that is ~1.3 km stale at 60 fps).
+    const p = this._player;
+    const now = (p && p.position && p.position.isVector3) ? p.position : this._lastPlayerPos;
+    const anchor = this._ladderShipAnchor(now, f.tmp);
+    const far = anchor.distanceTo(d._scenePosition) > CATCH_FOCUS.FAR_CUT_U;
+    f.cut = this._prefersReducedMotion() || far;
+    f.snapPending = f.cut;
+    this._catchFocusLog(`start ${label} level F${lc.floor}${f.cut ? ' (cut)' : ''}`);
+  }
+
+  /** The player's own mother net has caught something, or a daughter's net has: come in on it (floors 1-3). */
+  _onCatchFocusStart(payload) {
+    if (!payload) return;
+    const daughter = payload.armIndex != null && payload.armIndex >= 0;
+    if (!daughter && (payload.podIndex == null || payload.podIndex < 0)) return;
+    const label = daughter ? `daughter ${payload.armIndex}` : 'mother';
+    const why = this._catchFocusRefusal();
+    if (why) { this._catchFocusLog(`refused ${label}: ${why}`); return; }
+    const cns = this._netSystemRef();
+    let net = null;
+    if (cns) {
+      if (daughter && typeof cns.getActiveNetForArm === 'function') net = cns.getActiveNetForArm(payload.armIndex);
+      else if (!daughter && typeof cns.getActiveNetForPod === 'function') net = cns.getActiveNetForPod(payload.podIndex);
+      if ((!net || !net.targetDebris || (payload.debrisId != null && net.targetDebris.id !== payload.debrisId))
+          && Array.isArray(cns.activeNets) && payload.debrisId != null) {
+        net = cns.activeNets.find((n) => n.targetDebris && n.targetDebris.id === payload.debrisId) || net;
+      }
+    }
+    const d = net && net.targetDebris;
+    if (!d || !d._scenePosition) { this._catchFocusLog(`refused ${label}: no catch to look at`); return; }
+    const on = this._catchFocus;
+    if (on.active && on.engaging && on.debris === d) return;                // the same catch announced twice: already on it
+    this._beginCatchFocus(daughter ? 'daughter' : 'mother', net, d, daughter ? 'haul' : 'reel', label);
+    if (daughter) {
+      const f = this._catchFocus;
+      const arms = this._player && this._player.armManager && this._player.armManager.arms;
+      f.armIndex = payload.armIndex;
+      f.arm = (arms && arms[payload.armIndex]) || null;
+      f.podIndex = -1;
+    }
+  }
+
+  /** A lasso net has touched its piece: the camera comes in on it and follows the reel to the collar. */
+  _onCatchFocusLassoStart(_p) {
+    const why = this._catchFocusRefusal();
+    if (why) { this._catchFocusLog(`refused lasso: ${why}`); return; }
+    const ls = this._lassoSystem;
+    const d = ls && ls.target;
+    if (!d || !d._scenePosition) { this._catchFocusLog('refused lasso: no catch to look at'); return; }
+    const on = this._catchFocus;
+    if (on.active && on.engaging && on.debris === d) return;                // already on it
+    this._beginCatchFocus('lasso', null, d, 'lasso', 'lasso');
+  }
+
+  /** The lasso line snapped or the cast failed while the camera is still on the reel. */
+  _onCatchFocusLassoLost(reason) {
+    const f = this._catchFocus;
+    if (!f.active || !f.engaging || f.kind !== 'lasso' || f.phase !== 'lasso') return;
+    this._releaseCatchFocus(reason);
+  }
+
+  /**
+   * Ease the focus out after a normal end (the catch is processed, let go, or went to a rack). A cut focus (reduced
+   * motion, a far catch) cuts back at once.
+   * @param {string} [reason] printed as the one `end <reason>` line
+   */
+  _releaseCatchFocus(reason = 'done') {
     const f = this._catchFocus;
     if (!f.active || !f.engaging) return;
     f.engaging = false;
     f.rate = 1 / CATCH_FOCUS.OUT_S;
+    if (f.cut) f.u = 0;
+    this._catchFocusLog(`end ${reason}`);
   }
 
   /**
    * A player camera input (wheel, key, drag, jump): end the focus NOW and leave the camera to the ladder, which the
    * input is about to move. No walk back by itself beyond a short fade of the blend.
+   * @param {string} [cause] printed as the one `cancel <cause>` line
    * @returns {boolean} true when a focus was engaged and has been cancelled
    */
-  ladderCancelCatchFocus() {
+  ladderCancelCatchFocus(cause = 'camera input') {
     const f = this._catchFocus;
     if (!f.active) return false;
     const was = f.engaging;
     f.engaging = false;
     f.rate = 1 / CATCH_FOCUS.CANCEL_S;                                    // also speeds up an ease-out already running
+    if (f.cut) f.u = 0;                                                    // a cut focus cuts back (no 0.3 s zip over hundreds of metres)
+    if (was) this._catchFocusLog(`cancel ${cause}`);
     return was;
   }
 
   /** The net let go / the catch was lost / it went to a rack. */
-  _onCatchFocusLost(p) {
+  _onCatchFocusLost(p, reason = 'catch lost') {
     const f = this._catchFocus;
     if (!f.active || !f.engaging) return;
     if (p && p.debrisId != null && f.debris && p.debrisId !== f.debris.id) return;
     if (p && p.podIndex != null && p.podIndex >= 0 && p.podIndex !== f.podIndex) return;
-    this._releaseCatchFocus();
+    this._releaseCatchFocus(reason);
   }
 
-  /** The furnace starts on the catch: a radiator tip keeps the focus (and names the tip); the nose collar or a rack lets go. */
+  /**
+   * The furnace starts on the catch: a radiator tip keeps the focus (and names the tip). The nose collar's own furnace
+   * keeps it too (catch-focus: it used to let go here): the focus ends when the collar has eaten the catch, or at
+   * COLLAR_MAX_S.
+   */
   _onCatchFocusBreakdown(p) {
     const f = this._catchFocus;
     if (!f.active || !f.engaging || !f.debris || !p || p.debrisId !== f.debris.id) return;
     if (p.anchor && p.anchor.kind === 'tip') {
       f.tipIndex = p.anchor.index;
       if (f.phase !== 'handoff' && f.phase !== 'end') { f.phase = 'tip'; f.timer = 0; }
-    } else {
-      this._releaseCatchFocus();
     }
   }
 
-  /** The tip's furnace has eaten the catch: hold the tip one more second, then go back. */
+  /** The furnace has eaten the catch: hold the place one more second, then go back. */
   _onCatchFocusProcessed(p) {
     const f = this._catchFocus;
     if (!f.active || !f.engaging || !f.debris || !p || p.debrisId !== f.debris.id || p.digested !== true) return;
     if (f.tipIndex < 0 && p.tipIndex != null) f.tipIndex = p.tipIndex;
     f.phase = 'end'; f.timer = 0;
+  }
+
+  /**
+   * A lasso reel that has ended: the net that adopted the catch at the nose collar (podIndex 0, holds this piece), or
+   * null while it is not there (yet).
+   * @param {object} d - the catch
+   * @returns {object|null}
+   */
+  _adoptingNet(d) {
+    const cns = this._netSystemRef();
+    const nets = cns && cns.activeNets;
+    if (!Array.isArray(nets)) return null;
+    for (const n of nets) if (n && n.targetDebris === d && n.isActive !== false) return n;
+    return null;
   }
 
   /**
@@ -4385,7 +4521,53 @@ export class CameraSystem {
     const f = this._catchFocus;
     const player = this._player;
     const d = f.debris;
-    if (!d || d.alive === false || !d._scenePosition) { this._releaseCatchFocus(); return false; }
+    if (!d || d.alive === false || !d._scenePosition) { this._releaseCatchFocus('catch gone'); return false; }
+    f.totalS += dt;
+
+    // A lasso reel: the camera rides the piece in to the collar. When the reel ends, the net that adopts it takes over
+    // (a collar catch from there on); a catch with no net to adopt it lets go after a short grace.
+    if (f.phase === 'lasso') {
+      const ls = this._lassoSystem;
+      if (!(ls && ls.active && ls.target && ls.target.id === d.id)) { f.phase = 'adopt'; f.timer = 0; }
+    }
+    if (f.phase === 'adopt') {
+      const net = this._adoptingNet(d);
+      if (net) {
+        f.net = net; f.podIndex = net.podIndex != null ? net.podIndex : -1;
+        f.phase = 'reel'; f.timer = 0;                                       // the mother collar logic below takes it from here
+      } else {
+        const pa = this._lassoSystem && this._lassoSystem._pendingAdoption;
+        f.timer += dt;
+        const pending = !!(pa && pa.target && pa.target.id === d.id);
+        if (pending ? f.timer > CATCH_FOCUS.WAIT_S : f.timer > CATCH_FOCUS.ADOPT_GRACE_S) {
+          this._releaseCatchFocus(pending ? 'collar stayed busy' : 'no net took the catch');
+          return false;
+        }
+      }
+    }
+    if (f.phase === 'lasso' || f.phase === 'adopt') {
+      f.tgt.copy(d._scenePosition);
+      return true;
+    }
+
+    // A daughter's catch: follow it while she hauls it home, then stay on it a few seconds once she holds it at her strut.
+    if (f.phase === 'haul' || f.phase === 'held') {
+      const st = f.arm && f.arm.state;
+      const AS = Constants.ARM_STATES;
+      if (f.totalS > CATCH_FOCUS.DAUGHTER_MAX_S) { this._releaseCatchFocus('daughter haul took too long'); return false; }
+      if (f.phase === 'haul' && st === AS.HOLDING_CATCH) { f.phase = 'held'; f.timer = 0; }
+      else if (st === AS.DOCKED || st === AS.RELOADING || st === AS.EXPENDED || st === AS.DEORBITING) {
+        this._releaseCatchFocus('daughter lost the catch');
+        return false;
+      }
+      if (f.phase === 'held') {
+        f.timer += dt;
+        if (f.timer >= CATCH_FOCUS.DAUGHTER_HOLD_S) { this._releaseCatchFocus('daughter holds the catch'); return false; }
+      }
+      f.tgt.copy(d._scenePosition);
+      return true;
+    }
+
     const ld = player && player.leashDriver;
     const view = ld && typeof ld.view === 'function' ? ld.view() : null;
     const tc = player && player.tipCargo;
@@ -4398,8 +4580,12 @@ export class CameraSystem {
       if (onView) { f.phase = 'handoff'; f.timer = 0; }
       else if (f.phase === 'reel' && net && (net.state === 'BERTHED' || net.state === 'COLLARED')) { f.phase = 'wait'; f.timer = 0; }
       else if (f.phase === 'wait') {
+        // At the nose collar: a catch too big for a tip cooks right there, a rack catch leaves (CARGO_TRANSFER_START
+        // lets go), a leash catch hands over to the tip phase below. It used to let go after WAIT_S; now it stays until
+        // the collar has processed it, or COLLAR_MAX_S.
         f.timer += dt;
-        if (f.timer > CATCH_FOCUS.WAIT_S) { this._releaseCatchFocus(); return false; }   // a rack / collar-furnace catch
+        f.collarS += dt;
+        if (f.collarS > CATCH_FOCUS.COLLAR_MAX_S) { this._releaseCatchFocus('collar time limit'); return false; }
       }
     }
     if (f.phase === 'handoff') {
@@ -4410,11 +4596,12 @@ export class CameraSystem {
     }
     if (f.phase === 'tip') {
       f.timer += dt;
-      if (!tipHolds(f.tipIndex) || f.timer > CATCH_FOCUS.TIP_MAX_S) { this._releaseCatchFocus(); return false; }
+      if (!tipHolds(f.tipIndex)) { this._releaseCatchFocus('tip let go of the catch'); return false; }
+      if (f.timer > CATCH_FOCUS.TIP_MAX_S) { this._releaseCatchFocus('tip time limit'); return false; }
     }
     if (f.phase === 'end') {
       f.timer += dt;
-      if (f.timer >= CATCH_FOCUS.END_HOLD_S) { this._releaseCatchFocus(); return false; }
+      if (f.timer >= CATCH_FOCUS.END_HOLD_S) { this._releaseCatchFocus('processed'); return false; }
     }
 
     if (f.phase === 'handoff') {
@@ -4500,11 +4687,13 @@ export class CameraSystem {
     if (!f.active) { f.w = 0; return; }
     const lc = this._ladderCam;
     if (f.engaging) {
-      const gone = lc.floor !== 2 && lc.floor !== 3;
+      // someone else owns the shot now (the level changed, a ride began, a daughter is piloted or followed)
+      const gone = lc.anchor !== 'ship' || (lc.floor != null && (lc.floor < 1 || lc.floor > 3));
       if (gone || lc.riding || this.currentView === CameraViews.ARM_PILOT || this._ladderFollowTarget()) {
-        this.ladderCancelCatchFocus();                                     // someone else owns the shot now
+        this.ladderCancelCatchFocus(lc.riding ? 'ladder changing level' : gone ? 'level changed' : 'daughter piloted');
       } else if (this._catchFocusPoint(dt)) {
-        const k = dt > 0 ? 1 - Math.exp(-dt / CATCH_FOCUS.TAU_S) : 1;
+        const snap = f.snapPending;
+        const k = (snap || dt <= 0) ? 1 : 1 - Math.exp(-dt / CATCH_FOCUS.TAU_S);
         f.tgt.sub(playerPos);                                              // a point on the mother's own frame
         // A first-order ease trails a moving point by v * TAU (1.2 m behind a catch reeled at 2 m/s, which put the
         // camera 7.1 m from it, not 6): lead the aim by the point's own (filtered) velocity, so the ease keeps
@@ -4518,8 +4707,9 @@ export class CameraSystem {
         f.rel.copy(f.tgt);
         f.relSeeded = true;
         f.aim.copy(f.tgt).addScaledVector(f.vel, CATCH_FOCUS.TAU_S);
-        f.off.lerp(f.aim, k);
+        f.off.lerp(f.aim, k);                                              // a cut (k = 1) lands on the catch this frame
         this._catchFocusAim(k, playerPos);
+        if (snap) { f.snapPending = false; f.u = 1; }                      // ... at full weight: the camera is there NOW
       }
     }
     f.u = Math.min(1, Math.max(0, f.u + (f.engaging ? 1 : -1) * dt * f.rate));
