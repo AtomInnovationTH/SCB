@@ -446,6 +446,9 @@ export class PlayerSatellite extends THREE.Group {
     // _tickAttitudeDynamics and cleared when nothing commands attitude.
     this._rcsOmega = new THREE.Vector3();
     this._attitudeCmd = null;
+    // net-refuse-hold: a refused mother-net shot / lasso cast leaves the ship pointed where the aim turned it: no
+    // recenter toward prograde until the next deliberate attitude change. See holdHeadingAfterRefusal.
+    this._recenterPaused = false;
 
     // Autopilot flag — suppresses orientation decay when autopilot is steering (Fix 2)
     this.autopilotEngaged = false;
@@ -8303,6 +8306,7 @@ export class PlayerSatellite extends THREE.Group {
     // Latch the RAW demand — the integrator re-applies the rate-cap gate itself
     // (it must, since ω changes across substeps within the frame).
     this._attitudeCmd = (p !== 0 || y !== 0) ? { pitch: p, yaw: y } : null;
+    if (this._attitudeCmd) this._recenterPaused = false;   // net-refuse-hold: a manual command ends the pause
 
     // Rate-cap gate for FEEDBACK/BILLING (mirrors _integrateAttitudeStep): drop
     // the demand on an axis already at the cap in the demanded direction, so the
@@ -8338,6 +8342,25 @@ export class PlayerSatellite extends THREE.Group {
     const cmd = this._cmdTauFrac || 0;
     const hold = this._holdTauFrac || 0;
     return Math.max(cmd, hold);
+  }
+
+  /**
+   * net-refuse-hold: a mother-net shot or lasso cast was refused AFTER the aim turn ran (the target left the envelope
+   * during the slew, the net system said no). The ship stays pointed where the turn left her: the recenter toward
+   * prograde pauses, so no thruster fires to turn her back to an arbitrary reference nobody asked for (owner
+   * 2026-10-18: "if it can't launch thrusters seem to stay on"). Same end state as a fired shot's freeze, without the
+   * hold. The arrest servo still nulls any rate. The pause ends on the next deliberate attitude change: a manual
+   * pitch/yaw command (`commandAttitude`), autopilot engage or a new aim (the owner becomes AUTOPILOT / AIM, see
+   * `_tickAttitudeDynamics`), or a daughter going out on her line (`setAttitudeConstraintTier`). Never on a timer.
+   *
+   * The refusal is known one microtask after the aim resolved, i.e. after the frame that already handed the attitude
+   * back to the player: that frame ran the recenter servo once. This undoes it (the hand-back itself zeroes the rate
+   * by fiat, `_handAttitudeToPlayer`), so the refusal costs no spin and no hiss beyond that single frame.
+   */
+  holdHeadingAfterRefusal() {
+    this._recenterPaused = true;
+    if (this._rcsOmega) this._rcsOmega.set(0, 0, 0);
+    this._holdTauFrac = 0;
   }
 
   /**
@@ -8423,6 +8446,7 @@ export class PlayerSatellite extends THREE.Group {
       this._attitudeCmd = null;
       this._cmdTauFrac = 0;  // no command under AP/AIM
       this._holdTauFrac = 0; // no hold burn under AP/AIM — keep the audio level honest
+      this._recenterPaused = false; // net-refuse-hold: autopilot engage / a new aim ends the pause
       return;
     }
     if (dt <= 0) return;
@@ -8469,7 +8493,8 @@ export class PlayerSatellite extends THREE.Group {
       // never asked for and flash a plume on an idle couple — visible precisely
       // when the player is zoomed in inspecting the hull.
       // launch-smooth: nor while a daughter is out (rotation tier not 'none'): she keeps her heading then.
-      const inspecting = (owner === 'CINEMATIC') || this._holdsHeadingForTether();
+      // net-refuse-hold: nor after a refused shot (`_recenterPaused`).
+      const inspecting = (owner === 'CINEMATIC') || this._holdsHeadingForTether() || this._recenterPaused;
       const wTx = (!inspecting && cmdP === 0 && Math.abs(th.x) > A.HOLD_DEADBAND_RAD)
         ? -clampAbs(A.RECENTER_GAIN * th.x, A.RECENTER_RATE) : 0;
       const wTy = (!inspecting && cmdY === 0 && Math.abs(th.y) > A.HOLD_DEADBAND_RAD)
@@ -8544,7 +8569,9 @@ export class PlayerSatellite extends THREE.Group {
     // launch-smooth: no recenter while a daughter is out (any rotation tier): she keeps the heading she launched at
     // (owner 2026-10-18: "then mother turns back jerking tether"); the arrest servo still stops any rate. When the
     // tier returns to 'none' the recenter resumes: at most RECENTER_RATE, driven by the couple torque only.
-    const recentering = !inspecting && coldGas > 0 && !tethered;
+    // net-refuse-hold: nor after a refused mother-net shot / lasso cast (`holdHeadingAfterRefusal`): the ship stays
+    // where the aim turned her until the next deliberate attitude change. The arrest servo still stops any rate.
+    const recentering = !inspecting && coldGas > 0 && !tethered && !this._recenterPaused;
     // Decompose the manual offset to its body-frame rotation vector ONCE (shared
     // by the recenter ω_target and the tether spring — both read the same
     // unmutated _manualRotation). th_i = ang·axis_i, so |th| = ang (total offset).
@@ -8650,6 +8677,7 @@ export class PlayerSatellite extends THREE.Group {
   setAttitudeConstraintTier(tier) {
     this._attitudeConstraintTier = tier || 'none';
     if (this._attitudeConstraintTier === 'none') this._tetherLatchOn = false;   // launch-smooth: no daughter out, no latch
+    else this._recenterPaused = false;   // net-refuse-hold: a daughter out on her line has her own rules for the heading
   }
 
   /**

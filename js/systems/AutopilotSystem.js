@@ -2079,7 +2079,7 @@ export class AutopilotSystem {
 
     // Supersede any existing coroutine (and any scripted turn).
     if (this._aimCoroutine) {
-      this._rejectAim('Superseded by new aim request');
+      this._rejectAim('Superseded by new aim request', 'SUPERSEDED');
     }
     if (this._turn) this._rejectTurn('Superseded by aim request');
 
@@ -2090,11 +2090,16 @@ export class AutopilotSystem {
 
     return new Promise((resolve, reject) => {
       // Cancel handlers — manual attitude input, target change, superseding.
-      const onManualRotate = () => this._rejectAim('Manual attitude input');
-      const onTargetChange = () => this._rejectAim('Target changed');
+      const onManualRotate = () => this._rejectAim('Manual attitude input', 'MANUAL');
+      // TARGET_SELECTED = the player (or the auto-lock) picked another piece: a deliberate change.
+      // TARGET_CLEARED is only ever emitted by TargetSelector.setTarget(null), and every caller of that is the target
+      // going away (drifted/!alive, DEBRIS_REMOVED, capture/berth bookkeeping, game reset) — there is no player
+      // "deselect" — so it is a lost target (measured by reading the callers, 2026-10-18; see the plan Log).
+      const onTargetChange = () => this._rejectAim('Target changed', 'TARGET_CHANGED');
+      const onTargetGone = () => this._rejectAim('Target changed', 'TARGET_LOST');
       eventBus.on(Events.MOTHER_MANUAL_ROTATE, onManualRotate);
       eventBus.on(Events.TARGET_SELECTED, onTargetChange);
-      eventBus.on(Events.TARGET_CLEARED, onTargetChange);
+      eventBus.on(Events.TARGET_CLEARED, onTargetGone);
 
       this._player.aimHold = true;
 
@@ -2124,7 +2129,7 @@ export class AutopilotSystem {
         _cleanup: () => {
           eventBus.off(Events.MOTHER_MANUAL_ROTATE, onManualRotate);
           eventBus.off(Events.TARGET_SELECTED, onTargetChange);
-          eventBus.off(Events.TARGET_CLEARED, onTargetChange);
+          eventBus.off(Events.TARGET_CLEARED, onTargetGone);
           // Preserve an active reel-in freeze — don't clobber its aimHold.
           if (this._player) this._player.aimHold = this._attitudeHold;
         },
@@ -2146,8 +2151,14 @@ export class AutopilotSystem {
     c.resolve({ mode: c.mode, launchDir });
   }
 
-  /** @private Reject the active aim coroutine (nothing fired/spent). */
-  _rejectAim(reason) {
+  /**
+   * @private Reject the active aim coroutine (nothing fired/spent).
+   * @param {string} reason — shown to the player in comms
+   * @param {string} [code] — `err.code` of the rejection: 'MANUAL' | 'TIMEOUT' | 'TARGET_LOST' | 'TARGET_CHANGED' |
+   *   'SUPERSEDED' | 'OTHER'. net-refuse-hold: the callers keep the normal recenter after MANUAL / SUPERSEDED /
+   *   TARGET_CHANGED and leave the ship quiet after TIMEOUT / TARGET_LOST (a refusal).
+   */
+  _rejectAim(reason, code = 'OTHER') {
     const c = this._aimCoroutine;
     if (!c) return;
     this._billAimTail(c);          // mother-aims: a cancelled aim still has to be stopped
@@ -2157,7 +2168,9 @@ export class AutopilotSystem {
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `Launch aborted — ${reason}.`, priority: 'warning', source: 'HOUSTON',
     });
-    c.reject(new Error(reason));
+    const err = new Error(reason);
+    err.code = code;
+    c.reject(err);
   }
 
   // ==========================================================================
@@ -2406,11 +2419,11 @@ export class AutopilotSystem {
     if (!c || !this._player) return;
 
     c.elapsed += dt;
-    if (c.elapsed >= c.timeout) { this._rejectAim('attitude not held (timeout)'); return; }
+    if (c.elapsed >= c.timeout) { this._rejectAim('attitude not held (timeout)', 'TIMEOUT'); return; }
 
     // Current world aim direction (recomputed per tick — tracks moving target).
     const raw = c.provider();
-    if (!raw) { this._rejectAim('target lost'); return; }
+    if (!raw) { this._rejectAim('target lost', 'TARGET_LOST'); return; }
     const T = this._aimTargetDir.set(raw.x, raw.y, raw.z);
     if (T.lengthSq() < 1e-12) return; // degenerate this frame; wait
     T.normalize();

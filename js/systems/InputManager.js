@@ -2445,8 +2445,11 @@ export class InputManager {
         }
         if (!aligned) {
           ap.requestAimRotation(provider, { mode: 'net' })
-            .then(() => this._castLasso())
-            .catch(() => { /* aborted — nothing cast */ });
+            .then(() => this._castLasso({ afterAim: true }))
+            .catch((err) => {
+              // aborted — nothing cast; a timed-out aim / lost target leaves the ship quiet (as the net does)
+              if (err && (err.code === 'TIMEOUT' || err.code === 'TARGET_LOST')) d.player.holdHeadingAfterRefusal?.();
+            });
           return;
         }
       }
@@ -2459,9 +2462,12 @@ export class InputManager {
    * The lasso windup → cast, extracted so the aim-before-launch flow can defer
    * it until the mother has slewed to face the target. Safe to call directly
    * (headless mocks / no-target auto-aim / already-aligned fast path).
+   * @param {{afterAim?: boolean}} [opts] — net-refuse-hold: `afterAim` = the ship has just turned to face the target;
+   *   a cast refused after that turn leaves her pointed where she is instead of recentering toward prograde.
    */
-  _castLasso() {
+  _castLasso(opts) {
     const d = this._deps; if (!d || !d.lassoSystem) return;
+    const afterAim = !!(opts && opts.afterAim);
     if (this._lassoWindingUp || d.lassoSystem.active) return;
     // Hold attitude from the instant we commit to the cast — BEFORE the windup —
     // so the prograde auto-orient can't slew the nose off-target during the
@@ -2491,7 +2497,10 @@ export class InputManager {
       // If the cast was refused (out of arc, cargo full, no ammo, cooldown…),
       // no reel-in end event will fire — release the attitude hold now so the
       // ship isn't frozen until the safety cap.
-      if (cast === false) d.autopilotSystem?.releaseAttitudeHold?.();
+      if (cast === false) {
+        d.autopilotSystem?.releaseAttitudeHold?.();
+        if (afterAim) d.player.holdHeadingAfterRefusal?.();   // net-refuse-hold: no turn back after a refused cast
+      }
     }, windupMs);
   }
 
@@ -2672,11 +2681,13 @@ export class InputManager {
     // Fire helper — launches along the ACTUAL ship +Z at fire time (honest to
     // attitude), from the current muzzle position. Falls back to a direct
     // bearing when no attitude is available (headless mocks).
+    // Returns true when the net left, false when the shot was refused (net-refuse-hold: the caller that has just
+    // turned the ship tells her to stay put).
     const fireNow = () => {
       // Fire-time re-check: the slew can take several seconds, during which
       // the range/drift picture changes (the AP's own VEL_TOL residual moves
       // the range ~45 m over a 9 s slew+flight — plan §3).
-      if (checkRefusals(lead.relVel)) return;
+      if (checkRefusals(lead.relVel)) return false;
       const posScene = (typeof d.player.getNetPodPosition === 'function')
         ? d.player.getNetPodPosition(podIndex) : d.player.getPosition();
       // TRAP 2 (plan §0): NetProjectile works in METRES; the pod accessor
@@ -2706,6 +2717,7 @@ export class InputManager {
           text: 'Attitude locked — net away.', priority: 'info', source: 'HOUSTON',
         });
       }
+      return !!net;
     };
 
     // No attitude-aware aiming available (no autopilot or no live attitude) →
@@ -2731,9 +2743,16 @@ export class InputManager {
         // §9.6: aim-resolve double-tick — the slew settled on the launch
         // attitude (the "locked, then confirmed" gesture before the thump).
         d.audioSystem?.playAimResolveTick?.();
-        fireNow();
+        // net-refuse-hold: refused at fire time (the target left the envelope during the slew, the net system said
+        // no) after the ship has turned: she stays where the turn left her, no thruster fires to turn her back.
+        if (!fireNow()) d.player.holdHeadingAfterRefusal?.();
       })
-      .catch(() => { /* aborted — nothing fired/spent */ });
+      .catch((err) => {
+        // Aborted — nothing fired/spent. A timed-out aim or a lost target is a refusal after the turn: the ship
+        // stays where it turned (net-refuse-hold). Manual input / superseded / a deliberate target change keep the
+        // normal recenter.
+        if (err && (err.code === 'TIMEOUT' || err.code === 'TARGET_LOST')) d.player.holdHeadingAfterRefusal?.();
+      });
   }
 
   /** The arms docked right now: the auto-pick launch announces only one of these that has left the dock. @private */
