@@ -87,12 +87,12 @@ const FL = Constants.THERMAL.FLOWER;
 /** w4-power D2: what getRosaProgress() reports to the bound ship — rolled up. */
 const SHIP_WINGS_ROLLED_UP = Object.freeze({ wing1: 0, wing2: 0 });
 
-/** w4-power D3: the start line — true to the start (wings rolled up, the
- *  battery at half and draining). Desktop reads "Press , (the comma key) or
- *  WINGS on floor 1 to roll them out"; on glass GestureHints.speak turns the
- *  Press-comma part into "Tap WINGS on floor 1" (and drops the doubled button). */
-const HANDOVER_LINE = 'Battery at half and falling, Cowboy — the wings are rolled up. '
-  + 'Press , (the comma key) or WINGS on floor 1 to roll them out. She is yours.';
+/** w4-power D3 / u2-one-voice D3: the start line — true to the start (wings
+ *  rolled up, the battery at half and draining) and key-free: the wings chip
+ *  (and on touch its OPEN THE WINGS button) carries the how, so the instruction
+ *  is said once. */
+export const HANDOVER_LINE = 'Battery at half and falling, Cowboy. The wings are still rolled up. '
+  + 'She is yours.';
 /** …and the true version of the old line, for a player who already asked
  *  for the wings during the dance. */
 const HANDOVER_LINE_OPENING = 'Arrays rolling out, Cowboy. The radiator stays folded until she runs warm — she is yours.';

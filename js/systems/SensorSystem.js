@@ -15,7 +15,6 @@ import { Events } from '../core/Events.js';
 import { powerDistribution } from './PowerDistribution.js';
 import { Constants } from '../core/Constants.js';
 import { wingsHint } from './WingsHint.js';
-import { GestureHints } from '../ui/hud/GestureHints.js';
 
 // ============================================================================
 // SENSOR TIER DEFINITIONS
@@ -337,12 +336,13 @@ export class SensorSystem {
       // m1-finish: with the wings rolled up the true way out is the wings, not
       // "wait for sunlight" — say so and put the wings row back up. Wings already
       // commanded out (still rolling, or out) or no ship seen yet (null: unit
-      // tests) keeps the old line byte for byte.
+      // tests) keeps the old line byte for byte. u2-one-voice D5: the line no longer
+      // names the key or the floor-1 button - the re-posted wings chip carries the how.
       const wingsUp = wingsHint.needsOpening() === true;
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'V5',
         text: wingsUp
-          ? GestureHints.speak('Battery too low to scan. The wings are rolled up: press , (the comma key) or WINGS on floor 1 to roll them out.')
+          ? 'Battery too low to scan. The wings are rolled up.'
           : 'Battery too low to scan — it recharges in sunlight.',
         priority: 'warning',
         _reactive: true,   // answers the S press — never muted (commsSuppression)

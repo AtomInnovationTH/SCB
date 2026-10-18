@@ -45,9 +45,15 @@ export const WINGS_HINT_ID = 'wings_open';
 /** Wing progress (0..1) at or above which the wings count as out. */
 export const WINGS_OUT_PROGRESS = 0.98;
 
-/** The row's text (ASCII). On glass GestureHints.speak (the ticker's own pass) says "Tap WINGS on floor 1". */
-export const WINGS_HINT_TEXT =
-  'Battery falling. Press , (the comma key) or WINGS on floor 1 to roll out the wings.';
+/**
+ * The row's body (ASCII, u2-one-voice D2): the cap carries the key (`,`), the
+ * body says what it does, the key once. On touch the row is the OPEN THE WINGS
+ * button instead (HintTicker step button, `press: 'Comma'`).
+ */
+export const WINGS_HINT_TEXT = 'Open the wings (comma key)';
+
+/** The touch button's label (HintTicker renders the row as this button on glass). */
+export const WINGS_HINT_BUTTON = 'OPEN THE WINGS';
 
 export class WingsHint {
   /** @param {{ on: Function, emit: Function }} [bus] */
@@ -137,6 +143,9 @@ export class WingsHint {
       keys: ['Comma'],
       duration: 0,
       priority: 'normal',
+      step: true,
+      press: 'Comma',
+      button: WINGS_HINT_BUTTON,
     });
   }
 }

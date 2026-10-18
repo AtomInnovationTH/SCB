@@ -2964,6 +2964,9 @@ async function init() {
         glass: _glassBoot,
         store: touchMapStore,
         floor: () => ((ladderController && !ladderController.isRiding() && !(ladderController.introInFlight && ladderController.introInFlight())) ? ladderController.currentFloor() : null),
+        // u2-one-voice D6: the arrival is about the wings; in mission 1 the zoom memo waits
+        // for the 3rd catch (the detail chip's gate). Mission 2+ first run: as before.
+        quiet: () => scoringSystem.getMissionNumber() === 1 && !(gameState.debrisCleared >= 3),
       });
     }
   }
@@ -3179,6 +3182,11 @@ async function init() {
     // Flipped once, here, under the same broad touch gate as the affordances;
     // desktop never flips it → desktop rendering byte-identical.
     GestureHints.setGlass(true);
+    // u2-one-voice D8: on touch the step chip IS the button - a tap presses the SAME key
+    // (KeyDispatch -> window), so the wings / scan / net / autopilot paths are the keyboard's.
+    if (hud && hud.hintTicker && hud.hintTicker.setStepTap) {
+      hud.hintTicker.setStepTap((code) => dispatchKeyPress(code));
+    }
     const stampEl = (typeof document !== 'undefined') ? document.getElementById('build-stamp') : null;
     const touchTelemetry = new TouchTelemetry({
       build: stampEl ? stampEl.textContent : null,

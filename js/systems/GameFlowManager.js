@@ -1605,7 +1605,8 @@ export class GameFlowManager {
             target.type === 'defunctSat' ? 'Satellite' : 'Contact';
           eventBus.emit(Events.COMMS_MESSAGE, {
             sender: 'SPACECRAFT',
-            text: `${typeLabel} locked. Press A to approach.`,
+            // u2-one-voice D3: no key name - the Director's one step (the net chip) is the voice.
+            text: `${typeLabel} locked.`,
             priority: 'info',
           });
         }

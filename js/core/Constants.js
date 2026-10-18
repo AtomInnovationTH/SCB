@@ -6046,18 +6046,22 @@ export const Constants = {
       hintId: 'transit_pilot_nudge', title: 'Daughter in transit',
       text: 'Press 1-4 to take manual control. A piloted capture scores 2×.',
       icon: 'FLY',
+      // u2-one-voice D7: the chip form (HintTicker step chip: cap = glyph, body = chip).
+      chip: 'Fly her: 2× score', glyph: '1-4', keys: ['Digit1', 'Digit2', 'Digit3', 'Digit4'],
     },
     {
       state: 'STATION_KEEP', idleS: 20, when: 'noNetInFlightHasNets',
       hintId: 'sk_idle_fire_or_pilot', title: 'Daughter holding standoff',
       text: 'She is holding station on the target. Press N to launch the net (or 1-4 to pilot her).',
       icon: 'NET',
+      chip: 'Launch her net', glyph: 'N', keys: ['KeyN'],
     },
     {
       state: 'STATION_KEEP', idleS: 6, when: 'outOfNets',
       hintId: 'sk_out_of_nets', title: 'Out of nets',
       text: 'No nets left in the magazine. Press R to reel her in, then restock at the resupply stop.',
       icon: 'NETS',
+      chip: 'Reel her in', glyph: 'R', keys: ['KeyR'],
     },
   ],
   // ARM_PILOT idle hint is mode-based (not an FSM state), handled directly by the
@@ -6066,6 +6070,7 @@ export const Constants = {
     idleS: 45, hintId: 'arm_pilot_return',
     title: 'Piloting a daughter', icon: 'FLY',
     text: 'Press her number again (1-4) or Esc to back out to Command view.',
+    chip: 'Back to the ship', glyph: 'Esc', keys: ['Escape'],
   },
 
   STATION_KEEP: {

@@ -34,6 +34,7 @@ import { Constants } from '../core/Constants.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { gameState } from '../core/GameState.js';
+import { wingsHint, WINGS_HINT_ID } from './WingsHint.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // BEAT TABLE — fixed by spec.  Do not edit individual values without bumping
@@ -57,9 +58,12 @@ export const ONBOARDING_BEATS = [
   },
   {
     id: 'handshake',
-    commsSource: 'HOUSTON', commsText: 'We have you on telemetry. Nothing is marked until you scan.',
+    // u2-one-voice D3/D4: no key names (the chip carries the how), and ONE step at a
+    // time - the line (and the scan after it) waits until the wings are commanded out.
+    commsSource: 'HOUSTON', commsText: 'Power coming in. Nothing is marked until you scan.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
+    requiresWingsCommanded: true,
     autoAdvanceAfter: 3000,
   },
   {
@@ -70,11 +74,15 @@ export const ONBOARDING_BEATS = [
     // → _recheckHeldGate). AutoLockController then locks the close glinting panel
     // right in front of the mother. Teach the ONE key the opening forces: the net.
     id: 'tease_lock',
-    commsSource: 'HOUSTON', commsText: 'Debris {distM} meters in front. Launch net with N.',
+    commsSource: 'HOUSTON', commsText: 'Debris {distM} meters in front. Launch the net.',
     commsAck: 'Clean catch, Cowboy.',
-    text: 'Launch net (N)',
+    // u2-one-voice D2/D8: the cap says N, the body says what it does (key once); on touch
+    // the chip is the LAUNCH NET button. Durable (D1b): it stays until the catch.
+    text: 'Launch net',
     glyph: 'N',
     keys: ['KeyN'],
+    press: 'KeyN',
+    button: 'LAUNCH NET',
     requiresContacts: true,
     // Owner 2026-10-13: "Press S to Scan." — on glass GestureHints.speak turns
     // it into "Tap empty space to Scan." (its own "to <verb>" is not doubled).
@@ -83,6 +91,8 @@ export const ONBOARDING_BEATS = [
     // (and, on glass, the "tap empty space to scan" gesture chip).
     nudgeGlyph: 'S',
     nudgeKeys: ['KeyS'],
+    nudgePress: 'KeyS',
+    nudgeButton: 'SCAN',
     triggerEvent: 'LASSO_FIRED',
     skillId: 'collect_lasso',
     credit: 10,
@@ -117,9 +127,11 @@ export const ONBOARDING_BEATS = [
     id: 'second_catch',
     commsSource: 'HOUSTON', commsText: 'Good. Keep netting what the reticle locks.',
     commsAck: null,
-    text: 'Net the next lock (N)',
+    text: 'Net the next one',
     glyph: 'N',
     keys: ['KeyN'],
+    press: 'KeyN',
+    button: 'LAUNCH NET',
     triggerEvent: 'LASSO_CAPTURED',
     altTriggerEvents: ['DEBRIS_CAPTURED'],
     counterTarget: 1,
@@ -139,11 +151,13 @@ export const ONBOARDING_BEATS = [
     // The range wall. The third piece is beyond net range — autolock went
     // silent + yellow OUT OF RANGE. Teach Autopilot (A) here and ONLY here.
     id: 'range_wall',
-    commsSource: 'BANGALORE', commsText: 'That one\'s too far for the net. See OUT OF RANGE. Press A to autopilot in.',
+    commsSource: 'BANGALORE', commsText: 'That one\'s too far for the net. See OUT OF RANGE. The autopilot can take us in.',
     commsAck: 'On station. Net it now.',
-    text: 'Autopilot in (A)',
+    text: 'Autopilot in',
     glyph: 'A',
     keys: ['KeyA'],
+    press: 'KeyA',
+    button: 'AUTOPILOT',
     triggerEvent: 'AUTOPILOT_ENGAGE',
     skillId: 'nav_autopilot',
     credit: 10,
@@ -154,9 +168,11 @@ export const ONBOARDING_BEATS = [
     // and a player who skipped S can still net #1/#2 with N (the lasso's no-
     // target auto-aim) — so the nudge asks for the scan that marks the far one.
     // Its chip is S, like tease_lock's (glass: the scan gesture).
-    outOfRangeNudge: 'Clear the close pieces, then press S. The reticle will lock the far one and show OUT OF RANGE.',
+    outOfRangeNudge: 'Scan for the far piece',
     nudgeGlyph: 'S',
     nudgeKeys: ['KeyS'],
+    nudgePress: 'KeyS',
+    nudgeButton: 'SCAN',
     escalationText: 'A engages autopilot to the locked target. It closes the gap; the bracket turns cyan when the net can reach.',
   },
   {
@@ -268,6 +284,8 @@ export class OnboardingDirector {
     this._deferWhile = typeof deps.deferWhile === 'function' ? deps.deferWhile : null;
     /** @type {object|null} GuidanceDirector — scales coaching depth per persona. */
     this._guidance = deps.guidanceDirector || null;
+    /** u2-one-voice D4: the wings hint (needsOpening()) the handshake gate reads; shared instance by default. */
+    this._wings = deps.wings || wingsHint;
 
     /** @type {Set<string>} ids of beats already satisfied (across runs). */
     this._completedBeats = new Set();
@@ -426,6 +444,11 @@ export class OnboardingDirector {
 
   /** Reset all persisted state — used by tests / dev. */
   reset() {
+    // u2-one-voice: a durable beat chip (and its nudge) must not outlive a retry.
+    if (this._active && this._active.beat) {
+      this._dropBeatChip(this._active.beat);
+      this._emit(Events.HINT_SATISFIED, { id: this._active.beat.id + '_wait' });
+    }
     this._completedBeats.clear();
     this._skippedBeats.clear();
     this._mastered = false;
@@ -559,6 +582,12 @@ export class OnboardingDirector {
       if (!e) continue;
       on(e, () => this._recheckHeldGate());
     }
+    // u2-one-voice D4: the wings chip coming down (WingsHint emits it once the wings
+    // are commanded out, after `needsOpening()` went false) releases a handshake held
+    // on `requiresWingsCommanded`. The held-beat poll tick is the backstop.
+    if (Events.HINT_SATISFIED) {
+      on(Events.HINT_SATISFIED, (d) => { if (d && d.id === WINGS_HINT_ID) this._recheckHeldGate(); });
+    }
 
     // #5 (2026-06-04): surface spaced-repetition skill reminders as gentle
     // bottom-ticker hints once onboarding is finished. SkillsSystem already
@@ -617,6 +646,7 @@ export class OnboardingDirector {
       a.autoAdvanceTimer = this._setTimeout(() => {
         if (this._active && this._active.beat.id === beat.id) {
           if (!beat.triggerEvent && beat.onEnter === 'mastered=true') this._mastered = true;
+          this._dropBeatChip(beat);
           this._completedBeats.add(beat.id);
           this._persist();
           this._active = null;
@@ -646,13 +676,14 @@ export class OnboardingDirector {
       ? this._skills.getHintPresentation() : 'modal';
     this._emit(Events.HINT_POSTED, {
       id: 'jit_arrows_sk',
-      text: 'Daughter on station. Arrow keys rotate the mother to line her up.',
+      text: 'Turn to line her up',
       glyph: '←→↑↓',
       keys: ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'],
       skillId,
       duration: Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000,
       priority: 'normal',
       presentation,
+      step: true,
     });
   }
 
@@ -808,15 +839,30 @@ export class OnboardingDirector {
    * @param {object} beat @param {number} count @private
    */
   _repostCounterHint(beat, count) {
+    // A step chip (one with a button, D1b) carries no (n/N) counter and stays up.
+    const isStep = !!beat.press;
     this._emit(Events.HINT_POSTED, {
       id: beat.id,
-      text: `${beat.text || beat.commsText || ''} (${count}/${beat.counterTarget})`,
+      text: isStep
+        ? (beat.text || beat.commsText || '')
+        : `${beat.text || beat.commsText || ''} (${count}/${beat.counterTarget})`,
       glyph: beat.glyph || '#',
       keys: beat.keys || [],
       skillId: beat.skillId || undefined,
-      duration: beat.hintDuration || (Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000),
+      duration: isStep ? 0 : (beat.hintDuration || (Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000)),
       priority: 'normal',
+      ...(isStep ? { step: true, press: beat.press, button: beat.button } : {}),
     });
+  }
+
+  /**
+   * u2-one-voice D1b: a beat chip with a button is durable, so every path that
+   * moves past the beat without a trigger (auto-advance timers, optional skip)
+   * takes it down itself.
+   * @private
+   */
+  _dropBeatChip(beat) {
+    if (beat && beat.press) this._emit(Events.HINT_SATISFIED, { id: beat.id });
   }
 
   _advanceToNextBeat() {
@@ -910,8 +956,13 @@ export class OnboardingDirector {
         glyph: beat.glyph,
         keys: beat.keys,
         skillId: beat.skillId || undefined,
-        duration: beat.hintDuration || (Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000),
+        // D1b: a beat chip with a button is durable - it leaves on the Director's own
+        // HINT_SATISFIED (advance / complete), not after 12 s.
+        duration: beat.press ? 0 : (beat.hintDuration || (Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000)),
         priority: 'normal',
+        step: true,
+        press: beat.press,
+        button: beat.button,
       });
     }
 
@@ -942,6 +993,7 @@ export class OnboardingDirector {
         if (beat.onEnter === 'mastered=true') {
           this._mastered = true;
         }
+        this._dropBeatChip(beat);
         this._completedBeats.add(beat.id);
         this._persist();
         this._active = null;
@@ -960,6 +1012,7 @@ export class OnboardingDirector {
       if (beat.triggerEvent && Number.isFinite(beat.autoAdvanceAfter)) {
         this._active.autoAdvanceTimer = this._setTimeout(() => {
           if (this._active && this._active.beat.id === beat.id) {
+            this._dropBeatChip(beat);
             this._completedBeats.add(beat.id);
             this._persist();
             this._active = null;
@@ -972,6 +1025,7 @@ export class OnboardingDirector {
         const skipMs = beat.skipAfter || OPTIONAL_DEFAULT_SKIP_MS;
         this._active.skipTimer = this._setTimeout(() => {
           if (this._active && this._active.beat.id === beat.id) {
+            this._dropBeatChip(beat);
             this._skippedBeats.add(beat.id);
             this._persist();
             this._active = null;
@@ -997,6 +1051,14 @@ export class OnboardingDirector {
    */
   _beatGateMet(beat) {
     if (!beat) return true;
+    // u2-one-voice D4: one step at a time - hold while the wings still need opening.
+    // Unknown (null: no ship seen yet, unit tests) never holds. Independent of the context.
+    if (beat.requiresWingsCommanded) {
+      let needs = null;
+      try { needs = this._wings && typeof this._wings.needsOpening === 'function' ? this._wings.needsOpening() : null; }
+      catch (_e) { needs = null; }
+      if (needs === true) return false;
+    }
     if (!beat.requiresContacts && !Number.isFinite(beat.requiresProximityM) && !beat.requiresOutOfRange) return true;
     if (!this._context) return true; // no provider → don't block
     let ctx = null;
@@ -1027,6 +1089,12 @@ export class OnboardingDirector {
     if (!this._active) return;
     this._active.held = true;
 
+    // One step at a time: while the wings are the job, make sure their chip is
+    // on screen (a repeat post is a no-op).
+    if (beat.requiresWingsCommanded && this._wings && typeof this._wings.post === 'function') {
+      this._wings.post();
+    }
+
     // Post a soft nudge hint explaining what to do to unblock (once).
     const nudge = beat.requiresContacts ? beat.noContactNudge
                 : Number.isFinite(beat.requiresProximityM) ? beat.farNudge
@@ -1040,6 +1108,9 @@ export class OnboardingDirector {
         keys: Array.isArray(beat.nudgeKeys) ? beat.nudgeKeys : [],
         duration: 0, // persistent until satisfied/cleared
         priority: 'normal',
+        step: true,
+        press: beat.nudgePress,
+        button: beat.nudgeButton,
       });
     }
 

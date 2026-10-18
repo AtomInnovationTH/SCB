@@ -48,10 +48,11 @@ export const AP_BATTERY_EMPTY_LINE =
 /**
  * Same event with the wings rolled up: the body cells (≈ 120 W) are below the
  * 500 W base load there, so "it recharges in sunlight" would be false
- * (precedent: the m1-finish scan refusal in SensorSystem._payScan).
+ * (precedent: the m1-finish scan refusal in SensorSystem._payScan). u2-one-voice D5:
+ * the wings chip (re-posted with this line) carries the how, so no key here.
  */
 export const AP_BATTERY_EMPTY_WINGS_LINE =
-  'Battery empty — autopilot off. The wings are rolled up: press , (the comma key) or WINGS on floor 1 to roll them out.';
+  'Battery empty — autopilot off. The wings are rolled up.';
 
 /**
  * Has this piece been caught so that chasing it is over? True exactly when

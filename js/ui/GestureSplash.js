@@ -8,6 +8,10 @@
  * commit) in the hub's exact wiring slot — but it is a MEMO, not a
  * teaching card: no header, no counter, no SKIP chip, no rows ticking.
  *
+ * u2-one-voice D6 (2026-10-18): ZOOM is the only row (the N -> NET row repeated the net
+ * chip); in mission 1 it waits for the 3rd catch (`deps.quiet`) so the arrival stays about
+ * the wings; before the show only a ZOOM input suppresses it, after the show any input hides it.
+ *
  * The splash omits a player WHO ALREADY DID the grammar: it SHOWS on the
  * first tick where `deps.floor()` reads 2 (the getter returns null while
  * the intro flyby is in flight / a ride is riding — so the splash lands only
@@ -66,9 +70,9 @@ export const FADE_MS = 300;
 const ARROW = '\u2192';
 
 /**
- * The two rows, one gesture each — the glass labels REUSE GestureHints
- * TABLE's chips (the retired card's 1:1 rows; the desktop labels name
- * the key). Frozen: read at build time, nothing may edit them.
+ * The row: ZOOM only (u2-one-voice D6 - the N -> NET row went: it repeated the
+ * net chip). The glass label REUSES GestureHints TABLE's chip; the desktop label
+ * names the key. Frozen: read at build time, nothing may edit them.
  *
  * @type {ReadonlyArray<Readonly<{glass:string, desktop:string}>>}
  */
@@ -76,7 +80,6 @@ export const ROWS = Object.freeze([
   // Ladder reorder rev 3 (Task 15): Equal / Minus now name the HUD-pane ladder
   // (`− / + → HUD PANES`); the pinch-zoom chip is the numpad zoom keys' row.
   Object.freeze({ glass: GestureHints.TABLE.NumpadAdd.chip, desktop: `WHEEL ${ARROW} ZOOM` }),
-  Object.freeze({ glass: GestureHints.TABLE.KeyN.chip,   desktop: `N ${ARROW} NET` }),
 ]);
 
 /** The four bus witnesses (the retired card's four; the FIRST one witnessed
@@ -101,6 +104,7 @@ export class GestureSplash {
    * @param {object|null} [deps.bus]     event bus with on(event, fn) → unsubscribe (default: eventBus; null ⇒ no bus witnesses).
    * @param {object}   [deps.events]     the Events name table (default: Events).
    * @param {function} [deps.floor]      () → the current floor (2 is the show floor; null while the intro / a ride is in flight).
+   * @param {function} [deps.quiet]      () → true while the memo should wait (u2-one-voice D6: mission 1 before the 3rd catch). Absent ⇒ never quiet.
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc
@@ -111,6 +115,7 @@ export class GestureSplash {
     this._bus = deps.bus !== undefined ? deps.bus : eventBus;
     this._events = deps.events !== undefined ? deps.events : Events;
     this._floor = typeof deps.floor === 'function' ? deps.floor : null;
+    this._quiet = typeof deps.quiet === 'function' ? deps.quiet : null;
     this._parent = deps.parent;
 
     this._root = null;
@@ -153,6 +158,7 @@ export class GestureSplash {
     if (this._shownAt === null) {
       const floor = this._readFloor();
       if (floor !== 2) return;
+      if (this._readQuiet()) return;      // D6: the wings are the job at the arrival - wait for a calm moment
       this._shownAt = t;
       this._build();
       return;
@@ -276,7 +282,13 @@ export class GestureSplash {
     for (const name of INPUT_EVENTS) {
       const key = E[name];
       if (!key) continue;
-      const onEvent = () => this._hide();
+      // D6: before the show only a ZOOM input suppresses (a player who already
+      // zoomed needs no zoom lesson); a net / click before the memo is no reason
+      // to skip it. After the show any input hides it, as before.
+      const onEvent = () => {
+        if (this._shownAt === null && name !== 'CAMERA_ZOOM_INPUT') return;
+        this._hide();
+      };
       const off = bus.on(key, onEvent);
       if (typeof off === 'function') this._unsubs.push(off);
       else if (typeof bus.off === 'function') this._unsubs.push(() => bus.off(key, onEvent));
@@ -298,6 +310,12 @@ export class GestureSplash {
     const s = this._store;
     if (!s || typeof s.isFirstRun !== 'function') return true;
     try { return s.isFirstRun() !== false; } catch (_e) { return true; }
+  }
+
+  /** @private The quiet getter guarded (absent / throwing ⇒ false - never blocks the show). */
+  _readQuiet() {
+    if (!this._quiet) return false;
+    try { return this._quiet() === true; } catch (_e) { return false; }
   }
 
   /** @private The floor getter guarded (absent / throwing ⇒ null — never shows). */

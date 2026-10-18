@@ -4,8 +4,8 @@
  * Small Node-safe system (NOT a new engine) that watches each daughter arm's FSM
  * state once per second. When an arm sits in a hint's `state` for ≥ its `idleS`
  * AND the hint's `when` predicate holds, it fires a one-shot guidance hint —
- * routed through Events.TEACHING_MOMENT_FORCE so it surfaces in the same overlay
- * pipeline as other teaching beats. Each hint fires once PER DEPLOYMENT (reset on
+ * posted as a one-line step chip in the hint ticker (u2-one-voice D7; it was a
+ * TEACHING_MOMENT_FORCE card over the score strip). Each hint fires once PER DEPLOYMENT (reset on
  * any state change for that arm). Veterans (SkillsSystem.isVeteran) never see them.
  *
  * The hint table is data in Constants.ARM_IDLE_HINTS (+ ARM_PILOT_IDLE for the
@@ -94,7 +94,25 @@ export class ArmIdleAdvisor {
     }
   }
 
-  _fire(hintId, title, text, icon) {
+  /**
+   * u2-one-voice D7: the coach sentence is a STEP CHIP in the ticker (cap = the key,
+   * body <= 5 words), not a card over the score strip. Entries without a `chip` keep
+   * the old TEACHING_MOMENT_FORCE card (none today).
+   */
+  _fire(hintId, title, text, icon, chip, glyph, keys) {
+    if (chip) {
+      eventBus.emit(Events.HINT_POSTED, {
+        id: hintId,
+        text: chip,
+        glyph: glyph || '',
+        keys: Array.isArray(keys) ? keys : [],
+        duration: Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000,
+        priority: 'normal',
+        step: true,
+        _postOnboarding: true,
+      });
+      return;
+    }
     eventBus.emit(Events.TEACHING_MOMENT_FORCE, {
       id: hintId,
       title: title || 'HINT',
@@ -147,7 +165,7 @@ export class ArmIdleAdvisor {
         if (rec.fired.has(hint.hintId)) continue;
         if (!this._predicateHolds(hint.when, arm)) continue;
         rec.fired.add(hint.hintId);
-        this._fire(hint.hintId, hint.title, hint.text, hint.icon);
+        this._fire(hint.hintId, hint.title, hint.text, hint.icon, hint.chip, hint.glyph, hint.keys);
       }
     }
 
@@ -160,7 +178,7 @@ export class ArmIdleAdvisor {
       this._pilotIdleS += step;
       if (!this._pilotFired && this._pilotIdleS >= pilotCfg.idleS) {
         this._pilotFired = true;
-        this._fire(pilotCfg.hintId, pilotCfg.title, pilotCfg.text, pilotCfg.icon);
+        this._fire(pilotCfg.hintId, pilotCfg.title, pilotCfg.text, pilotCfg.icon, pilotCfg.chip, pilotCfg.glyph, pilotCfg.keys);
       }
     } else {
       this._pilotIdleS = 0;
