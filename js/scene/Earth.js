@@ -749,6 +749,10 @@ export function isBitmapPathSupported() {
 }
 
 let bitmapLoader = null;
+/** st6 test seam: true / false forces the strip path on / off; null = decide from the browser. */
+let stripsForced = null;
+/** st7 test seam: replaces the run-time pixel check of the strip path (see EarthStripFeeder.verify). */
+let stripCheckHook = null;
 /** Created lazily: node has no createImageBitmap and a module-level `new` would warn in every test. */
 function getBitmapLoader() {
   if (!bitmapLoader) bitmapLoader = new THREE.ImageBitmapLoader().setOptions({ ...BITMAP_LOADER_OPTIONS });
@@ -756,16 +760,20 @@ function getBitmapLoader() {
 }
 
 /**
- * Test seam: inject a fake bitmap loader / image loader and the D3 result.
- * Returns a function that restores the previous state.
- * @param {{bitmapLoader?: object|null, imageLoader?: object, bitmapOk?: boolean}} o
+ * Test seam: inject a fake bitmap loader / image loader, the D3 result and the
+ * strip switch (st6; null = decide from the browser). Returns a function that
+ * restores the previous state.
+ * st7: `stripCheck(renderer, feeder)` (boolean or promise of one) replaces the run-time pixel check.
+ * @param {{bitmapLoader?: object|null, imageLoader?: object, bitmapOk?: boolean, stripsOk?: boolean|null, stripCheck?: Function|null}} o
  */
-export function setEarthLoadersForTests({ bitmapLoader: bl, imageLoader, bitmapOk } = {}) {
-  const prev = { bl: bitmapLoader, il: textureLoader, ok: bitmapPathOk };
+export function setEarthLoadersForTests({ bitmapLoader: bl, imageLoader, bitmapOk, stripsOk, stripCheck } = {}) {
+  const prev = { bl: bitmapLoader, il: textureLoader, ok: bitmapPathOk, st: stripsForced, ck: stripCheckHook };
   if (bl !== undefined) bitmapLoader = bl;
   if (imageLoader !== undefined) textureLoader = imageLoader;
   if (bitmapOk !== undefined) bitmapPathOk = bitmapOk === true;
-  return () => { bitmapLoader = prev.bl; textureLoader = prev.il; bitmapPathOk = prev.ok; };
+  if (stripsOk !== undefined) stripsForced = stripsOk === null ? null : stripsOk === true;
+  if (stripCheck !== undefined) stripCheckHook = stripCheck;
+  return () => { bitmapLoader = prev.bl; textureLoader = prev.il; bitmapPathOk = prev.ok; stripsForced = prev.st; stripCheckHook = prev.ck; };
 }
 
 /**
@@ -847,16 +855,32 @@ function loadEarthImage(tex) {
       if (settled) return;
       settled = true;
       if (tex.userData.loadSeq !== seq) { try { bmp.close(); } catch (_e) { /* stale */ } return; }
-      try {
-        const dims = `${bmp.width}×${bmp.height}`;
-        setEarthImage(tex, bmp);
-        console.log(`[Earth] Loaded: ${initialPath} (${dims})`);
-        recordTexEvent('loaded', initialPath, { width: bmp.width, height: bmp.height });
-        // §13 boot timeline (?logBoot=1): no-op when the flag is off.
-        bootMark(`Earth texture decoded: ${initialPath.split('/').pop()} (${dims})`);
-      } catch (e) {
-        console.error(`[Earth] Texture arrival failed: ${initialPath}`, e);
-      }
+      const place = () => {
+        try {
+          const dims = `${bmp.width}×${bmp.height}`;
+          // st6: on a strip-capable browser the picture is queued and reaches the
+          // GPU one strip per frame; this texture stays empty until the finished
+          // one replaces it (Earth._setPicture). Otherwise: one-shot, as before.
+          const sp = tex.userData.strips;
+          if (sp && sp.feeder.accepts(bmp)) sp.feeder.enqueue(tex, bmp, sp.priority, sp.onReady);
+          else setEarthImage(tex, bmp);
+          console.log(`[Earth] Loaded: ${initialPath} (${dims})`);
+          recordTexEvent('loaded', initialPath, { width: bmp.width, height: bmp.height });
+          // §13 boot timeline (?logBoot=1): no-op when the flag is off.
+          bootMark(`Earth texture decoded: ${initialPath.split('/').pop()} (${dims})`);
+        } catch (e) {
+          console.error(`[Earth] Texture arrival failed: ${initialPath}`, e);
+        }
+      };
+      // st7: the run-time pixel check of the strip path normally finishes long
+      // before a 16k picture is decoded; if not, this picture waits for it.
+      const feeder = tex.userData.strips && tex.userData.strips.feeder;
+      if (feeder && feeder.verdict === null) {
+        feeder.verify().then(() => {
+          if (tex.userData.loadSeq !== seq) { try { bmp.close(); } catch (_e) { /* stale */ } return; }
+          place();
+        });
+      } else place();
     },
     undefined,
     (err) => {
@@ -926,9 +950,13 @@ function loadViaImageLoader(tex, seq) {
  * @param {string} path  JPG path (e.g. 'textures/earth_day_16k.jpg'). When AVIF
  *                       is supported, the .jpg suffix is rewritten to .avif.
  * @param {number} [anisotropy=8]
+ * @param {{feeder: EarthStripFeeder, priority: number, onReady: Function}|null} [strips]
+ *   st6: when given, a bitmap that the feeder accepts is built into a separate
+ *   texture in strips and `onReady(finishedTexture)` is called once; this
+ *   (returned) texture then stays the empty "not arrived yet" one.
  * @returns {THREE.Texture}
  */
-export function loadTexture(path, anisotropy = 8) {
+export function loadTexture(path, anisotropy = 8, strips = null) {
   const avifPath = path.replace(/\.jpg$/i, '.avif');
   const useAvif = avifSupported && avifPath !== path;
   const initialPath = useAvif ? avifPath : path;
@@ -937,6 +965,7 @@ export function loadTexture(path, anisotropy = 8) {
   // the picture arrives.
   const tex = new THREE.Texture();
   tex.userData.src = { path, useAvif, initialPath };
+  if (strips) tex.userData.strips = strips;
   // Bitmaps are closed after their first upload (onEarthTextureUpdate). Any later
   // change to this texture's anisotropy / filters / wrap / format makes three
   // re-upload, which would hit a closed bitmap and throw: change those only
@@ -970,6 +999,9 @@ export function loadTexture(path, anisotropy = 8) {
  * throws) and the pictures are reloaded; each arrival disposes the texture
  * first (setEarthImage) so the big picture gets fresh GL storage.
  *
+ * st6: a picture finished through strips is swapped back to its empty texture
+ * and built again; strips in flight are dropped and requested again.
+ *
  * @param {{dayTexture?: THREE.Texture, nightTexture?: THREE.Texture, cloudTexture?: THREE.Texture}} earth
  * @param {{domElement?: EventTarget}} renderer
  * @returns {Function} removes the listener
@@ -978,8 +1010,23 @@ export function attachEarthRestore(earth, renderer) {
   const target = renderer && renderer.domElement;
   if (!target || typeof target.addEventListener !== 'function') return () => {};
   const onRestored = () => {
-    for (const tex of [earth.dayTexture, earth.nightTexture, earth.cloudTexture]) {
-      if (!tex || !tex.userData || !tex.userData.src || !tex.userData.uploaded) continue;
+    // st6: strips in flight are dropped (the new context has none of their GPU
+    // memory); each of those pictures is requested again below.
+    const dropped = earth._strips ? earth._strips.abandonAll() : [];
+    for (const slot of PICTURE_SLOTS) {
+      const tex = earth[slot];
+      if (!tex || !tex.userData || !tex.userData.src) continue;
+      if (tex.userData.stripBuilt) {
+        // Finished through strips: the lost context took its GPU copy. Back to
+        // the empty texture (nothing allocated for it), then build it again.
+        const pending = tex.userData.pending;
+        swapEarthPicture(earth, slot, pending);
+        try { tex.dispose(); } catch (_e) { /* best effort */ }
+        loadEarthImage(pending);
+        continue;
+      }
+      if (dropped.includes(tex)) { loadEarthImage(tex); continue; }
+      if (!tex.userData.uploaded) continue;
       const img = tex.image;
       // Only bitmap-backed textures need this: an HTML image is re-uploaded by three itself.
       if (!img || (typeof img.close !== 'function' && !img.isPlaceholder)) continue;
@@ -1004,6 +1051,367 @@ function makeRestorePlaceholder() {
     }
   } catch (_e) { /* fall through */ }
   return { width: 1, height: 1, isPlaceholder: true };
+}
+
+// ============================================================================
+// PICTURES TO THE GPU IN STRIPS (st6, 2026-10-18)
+// ============================================================================
+//
+// The one remaining start-up freeze was the upload of the 16k day picture:
+// 2.3 s in one frame (docs/research/2026-10-startup.md, phase 4). The cost is
+// the sRGB format of the texture (SRGB8_ALPHA8 16k ≈ 1.45 s, plain RGBA8 ≈
+// 150 ms on the same GPU), so the format stays and the work is cut up instead:
+// each picture goes to the GPU as horizontal strips of about 2 M texels, ONE per
+// rendered frame (Earth.update), into a texture that is allocated once with its
+// full mip chain, and the mipmaps are generated once after the last strip. The
+// texels are identical to the one-shot upload (probe: 0/255 at 5 mip levels and
+// every strip seam). Measured on Apple M5 Max / Chrome (ANGLE Metal): longest
+// frame 1480 ms → 31 ms for 16k, 310 → 25 ms for 8k.
+//
+// Until a picture is complete the Earth shows exactly what it showed before that
+// picture arrived: the texture the shaders hold stays EMPTY, and the finished
+// one replaces it in a single step (Earth._setPicture → onReady). Source of the
+// strips is a fresh THREE.Texture around the ImageBitmap that is never bound to
+// a material (a texture three has seen would take its framebuffer-blit branch).
+//
+// Used only on Chromium-family browsers (the one measured). Safari/WebKit gives
+// the same pixels but the 16k allocation alone took 1.1 s and the strips ~180 ms
+// each on the test Mac, so it keeps the one-shot upload; so does everything
+// else (Firefox: unmeasured), the HTML-image fallback, and any failure here.
+
+/** st7: frames before the strip pixel check starts (it must be done long before the first 16k picture lands). */
+export const CHECK_AFTER_TICKS = 20;
+
+/** Texels per strip (16k: 128 rows, 8k: 256 rows). */
+export const STRIP_TEXELS = 2 * 1024 * 1024;
+
+/** Rows per strip for a picture `width` pixels wide. */
+export function stripRows(width) {
+  return Math.max(1, Math.round(STRIP_TEXELS / Math.max(1, width)));
+}
+
+/** Chromium-family engine (the strip upload is measured there only). */
+export function stripsSupportedByBrowser(nav = typeof navigator !== 'undefined' ? navigator : null) {
+  const brands = nav && nav.userAgentData && nav.userAgentData.brands;
+  return Array.isArray(brands) && brands.some((b) => b && /^Chromium$/i.test(b.brand));
+}
+
+/** True when pictures built for `renderer` may use strips. */
+export function stripsUsable(renderer) {
+  if (!bitmapPathOk || !renderer) return false;
+  if (typeof renderer.initTexture !== 'function' || typeof renderer.copyTextureToTexture !== 'function') return false;
+  return stripsForced !== null ? stripsForced : stripsSupportedByBrowser();
+}
+
+const _scratchCentre = new THREE.Vector3();
+const _scratchRel = new THREE.Vector3();
+const PICTURE_SLOTS = ['dayTexture', 'nightTexture', 'cloudTexture'];
+
+/** Put `texture` into one of an Earth's picture slots (field + shader uniforms). */
+function swapEarthPicture(earth, slot, texture) {
+  if (typeof earth._setPicture === 'function') earth._setPicture(slot, texture);
+  else earth[slot] = texture;
+}
+
+function closeBitmap(bmp) {
+  if (bmp && typeof bmp.close === 'function') { try { bmp.close(); } catch (_e) { /* best effort */ } }
+}
+
+/**
+ * st7: the run-time pixel check. Builds a tiny picture (top and bottom half in
+ * different colours) the way a real one is built (same bitmap options, same
+ * destination, two strips), uploads the same bitmap in one go as the reference,
+ * draws both into a small target and compares the bytes. True only if the strip
+ * result is identical to the reference. Never throws; about a millisecond or two.
+ * @param {EarthStripFeeder} feeder
+ * @returns {Promise<boolean>}
+ */
+async function runStripCheck(feeder) {
+  const renderer = feeder.renderer;
+  let bmp = null, ref = null, dst = null, rt = null, geo = null, mat = null, prevRT = null, haveRT = false;
+  try {
+    if (typeof document === 'undefined' || typeof createImageBitmap !== 'function') return false;
+    if (typeof renderer.render !== 'function' || typeof renderer.readRenderTargetPixels !== 'function') return false;
+    const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+    const W = 4, H = 8;
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const g = canvas.getContext('2d');
+    if (!g) return false;
+    g.fillStyle = 'rgb(220,40,90)'; g.fillRect(0, 0, W, H / 2);
+    g.fillStyle = 'rgb(30,200,120)'; g.fillRect(0, H / 2, W, H / 2);
+    bmp = await createImageBitmap(canvas, { ...BITMAP_LOADER_OPTIONS });
+
+    // The reference: one-shot upload, with the same settings as a real picture.
+    ref = new THREE.Texture(bmp);
+    ref.colorSpace = THREE.SRGBColorSpace;
+    ref.flipY = false;
+    ref.minFilter = THREE.LinearMipmapLinearFilter;
+    ref.magFilter = THREE.LinearFilter;
+    ref.wrapS = ref.wrapT = THREE.ClampToEdgeWrapping;
+    ref.generateMipmaps = true;
+    ref.needsUpdate = true;
+    // The strips: the feeder's own allocation + copy code, two strips of H/2 rows.
+    dst = feeder._buildNow(ref, bmp, H / 2);
+    // Let a frame go by between the two halves of the work (each is its own task).
+    await new Promise((r) => setTimeout(r, 0));
+
+    rt = new THREE.WebGLRenderTarget(W, H, {
+      depthBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+    });
+    geo = new THREE.PlaneGeometry(2, 2);
+    mat = new THREE.ShaderMaterial({
+      uniforms: { uTex: { value: ref } },
+      vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: 'uniform sampler2D uTex; void main() { gl_FragColor = texelFetch(uTex, ivec2(gl_FragCoord.xy), 0); }',
+      depthTest: false, depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.frustumCulled = false;
+    const scene = new THREE.Scene();
+    scene.add(mesh);
+    const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    prevRT = renderer.getRenderTarget();
+    haveRT = true;
+    const draw = (tex) => {
+      mat.uniforms.uTex.value = tex;
+      renderer.setRenderTarget(rt);
+      renderer.render(scene, cam);
+      const out = new Uint8Array(W * H * 4);
+      renderer.readRenderTargetPixels(rt, 0, 0, W, H, out);
+      return out;
+    };
+    const a = draw(ref);
+    const b = draw(dst);
+    let same = a.length === b.length;
+    for (let i = 0; same && i < a.length; i++) if (a[i] !== b[i]) same = false;
+    // The reference must be a real picture: both halves present and different.
+    const top = a.slice(0, 4).join(','), bottom = a.slice((H - 1) * W * 4, (H - 1) * W * 4 + 4).join(',');
+    const sane = top !== bottom && a.some((v) => v !== 0);
+    const ok = same && sane;
+    if (typeof console !== 'undefined') {
+      const ms = typeof performance !== 'undefined' ? (performance.now() - t0).toFixed(1) : '?';
+      console.log(`[Earth] strip pixel check: ${ok ? 'ok' : 'FAILED (one-shot upload instead)'} (${ms} ms incl. waiting for the bitmap)`);
+    }
+    return ok;
+  } catch (e) {
+    if (typeof console !== 'undefined') console.warn('[Earth] strip pixel check failed, one-shot upload instead', e);
+    return false;
+  } finally {
+    try { if (haveRT) renderer.setRenderTarget(prevRT); } catch (_e) { /* best effort */ }
+    for (const d of [dst, ref, rt, geo, mat]) { try { d && d.dispose(); } catch (_e) { /* best effort */ } }
+    closeBitmap(bmp);
+  }
+}
+
+/**
+ * Builds the Earth pictures on the GPU one strip per `tick()`.
+ * Order (st7): the side of the Earth the camera sees first. Camera over the sunlit
+ * side (or not known yet): day, clouds, night. Over the dark side: night, day,
+ * clouds. Decided when a picture starts, never in the middle of one; a picture
+ * that has started is finished before the next one starts (each unfinished
+ * picture holds its own full-size GPU allocation).
+ * Used for a picture only if `verify()` found the strip result identical to a
+ * one-shot upload (once, at start-up) and the picture fits the GPU's texture size.
+ */
+export class EarthStripFeeder {
+  /**
+   * @param {{initTexture: Function, copyTextureToTexture: Function, getContext?: Function}} renderer
+   * @param {{sunlit?: () => (boolean|null)}} [opts] sunlit(): true / false = the camera is over the
+   *   sunlit / dark side, null = not known yet
+   */
+  constructor(renderer, opts = {}) {
+    this.renderer = renderer;
+    this.sunlit = opts.sunlit || null;
+    this.queue = [];
+    this.active = null;
+    this.broken = false;
+    this._order = 0;
+    /** @type {boolean|null} null while the pixel check runs */
+    this.verdict = null;
+    this._verdictPromise = null;
+    this._ticks = 0;
+    // A test check or the test switch answers at once. The real check touches the
+    // GPU (a few ms, ~50 ms measured under load 50), so it waits until the game is
+    // drawing frames (CHECK_AFTER_TICKS), or a picture arrives, whichever is first.
+    if (stripCheckHook || stripsForced !== null) this.verify();
+  }
+
+  /** @returns {boolean} true while pictures are queued or being built */
+  get busy() { return !!this.active || this.queue.length > 0; }
+
+  /**
+   * st7: the run-time pixel check (plan D1), run once; the answer is cached in
+   * `verdict`. Never throws. Under the test switch `stripsOk` it is skipped (true)
+   * unless a test brings its own check.
+   * @returns {Promise<boolean>}
+   */
+  verify() {
+    if (this._verdictPromise) return this._verdictPromise;
+    const done = (v) => { this.verdict = v === true; return this.verdict; };
+    let r;
+    try {
+      r = stripCheckHook ? stripCheckHook(this.renderer, this) : (stripsForced !== null ? true : runStripCheck(this));
+    } catch (_e) { r = false; }
+    if (r && typeof r.then === 'function') this._verdictPromise = r.then(done, () => done(false));
+    else { done(r); this._verdictPromise = Promise.resolve(this.verdict); }
+    return this._verdictPromise;
+  }
+
+  _lost() {
+    try {
+      const gl = this.renderer.getContext && this.renderer.getContext();
+      return !!(gl && typeof gl.isContextLost === 'function' && gl.isContextLost());
+    } catch (_e) { return false; }
+  }
+
+  _fitsGpu(bmp) {
+    const max = this.renderer.capabilities && this.renderer.capabilities.maxTextureSize;
+    return !(typeof max === 'number' && max > 0) || Math.max(bmp.width, bmp.height) <= max;
+  }
+
+  /**
+   * Does this bitmap go through strips? Needs: the pixel check passed, more than
+   * one strip of rows, a live context, and a size the GPU accepts (a bigger one is
+   * shrunk by the one-shot upload; strips would fail on it).
+   */
+  accepts(bmp) {
+    return this.verdict === true && !this.broken && !!bmp && bmp.height > stripRows(bmp.width)
+      && this._fitsGpu(bmp) && !this._lost();
+  }
+
+  /** Queue a picture; `onReady(finishedTexture)` runs once, after its last strip. */
+  enqueue(tex, bmp, priority, onReady) {
+    this.queue.push({ tex, bmp, priority, onReady, order: this._order++, step: 0, dst: null, src: null, rows: 0, count: 0 });
+  }
+
+  /**
+   * One step of work: allocate the next picture, or upload its next strip.
+   * Nothing happens while the context is lost.
+   * @returns {boolean} whether a step ran
+   */
+  tick() {
+    if (this.verdict === null && !this._verdictPromise && ++this._ticks >= CHECK_AFTER_TICKS) this.verify();
+    if (this._lost()) return false;
+    if (!this.active) {
+      if (this.queue.length === 0) return false;
+      let sunlit = true;
+      try { if (this.sunlit) sunlit = this.sunlit() !== false; } catch (_e) { sunlit = true; }
+      // priority: 0 day, 1 clouds, 2 night. Dark side in view: night, day, clouds.
+      const rank = (p) => (sunlit ? p : (p === 2 ? 0 : p + 1));
+      let best = 0;
+      for (let i = 1; i < this.queue.length; i++) {
+        const a = this.queue[i], b = this.queue[best];
+        if (rank(a.priority) < rank(b.priority) || (rank(a.priority) === rank(b.priority) && a.order < b.order)) best = i;
+      }
+      this.active = this.queue.splice(best, 1)[0];
+      this.active.sunlit = sunlit;
+    }
+    const job = this.active;
+    let finished = false;
+    try {
+      if (job.step === 0) this._allocate(job);
+      else finished = this._strip(job);
+      job.step++;
+    } catch (e) {
+      console.error('[Earth] strip upload failed, using the one-shot upload', e);
+      this.broken = true;
+      this._giveUp(job);
+      return true;
+    }
+    if (finished) this._finish(job);
+    return true;
+  }
+
+  _allocate(job) {
+    const { tex, bmp } = job;
+    const dst = new THREE.Texture({ width: bmp.width, height: bmp.height });
+    dst.source.dataReady = false; // allocate the storage, upload nothing
+    dst.colorSpace = tex.colorSpace;
+    dst.flipY = false; // the bitmap was flipped by the loader
+    dst.anisotropy = tex.anisotropy;
+    dst.minFilter = tex.minFilter;
+    dst.magFilter = tex.magFilter;
+    dst.wrapS = tex.wrapS;
+    dst.wrapT = tex.wrapT;
+    dst.generateMipmaps = true; // three sizes the mip chain from this flag
+    dst.needsUpdate = true;
+    this.renderer.initTexture(dst);
+    // copyTextureToTexture would rebuild the mip chain after EVERY strip while this is true.
+    dst.generateMipmaps = false;
+    job.dst = dst;
+    job.src = new THREE.Texture(bmp);
+    job.src.flipY = false;
+    job.rows = job.rows || stripRows(bmp.width);
+    job.count = Math.ceil(bmp.height / job.rows);
+    job.width = bmp.width;
+    job.height = bmp.height;
+  }
+
+  /** st7: allocate and fill a whole picture at once (the pixel check uses this). */
+  _buildNow(tex, bmp, rows) {
+    const job = { tex, bmp, rows, step: 0, dst: null, src: null, count: 0 };
+    this._allocate(job);
+    for (job.step = 1; !this._strip(job); job.step++);
+    return job.dst;
+  }
+
+  _strip(job) {
+    const i = job.step - 1;
+    const y = i * job.rows;
+    const y2 = Math.min(job.height, y + job.rows);
+    const last = i === job.count - 1;
+    job.dst.generateMipmaps = last; // the mip chain is built once, with the last strip
+    this.renderer.copyTextureToTexture(
+      job.src, job.dst,
+      new THREE.Box2(new THREE.Vector2(0, y), new THREE.Vector2(job.width, y2)),
+      new THREE.Vector2(0, y)
+    );
+    return last;
+  }
+
+  _finish(job) {
+    const { tex, dst } = job;
+    this.active = null;
+    closeBitmap(job.bmp);
+    dst.userData.src = tex.userData.src;
+    dst.userData.uploaded = true;
+    dst.userData.uploadedWidth = job.width;
+    dst.userData.uploadedHeight = job.height;
+    dst.userData.stripBuilt = true;
+    dst.userData.pending = tex;
+    const file = tex.userData.src.initialPath;
+    console.log(`[Earth] Ready: ${file} (${job.width}×${job.height}, ${job.count} strips of ${job.rows} rows, camera over the ${job.sunlit === false ? 'dark' : 'sunlit'} side when it started)`);
+    recordTexEvent('ready', file, { width: job.width, height: job.height });
+    bootMark(`Earth texture complete: ${file.split('/').pop()} (${job.width}×${job.height})`);
+    try { job.onReady(dst); } catch (e) { console.error('[Earth] onReady failed', e); }
+  }
+
+  /** A strip failed: free the half-built texture and upload the bitmap in one go instead. */
+  _giveUp(job) {
+    this.active = null;
+    try { job.dst && job.dst.dispose(); } catch (_e) { /* best effort */ }
+    try { setEarthImage(job.tex, job.bmp); } catch (e) { console.error('[Earth] one-shot fallback failed', e); }
+    const rest = this.queue.splice(0);
+    for (const j of rest) { try { setEarthImage(j.tex, j.bmp); } catch (_e) { /* best effort */ } }
+  }
+
+  /**
+   * Context restored: drop everything in flight (closing the bitmaps).
+   * @returns {THREE.Texture[]} the empty textures whose pictures must be loaded again
+   */
+  abandonAll() {
+    const dropped = [];
+    for (const job of [this.active, ...this.queue]) {
+      if (!job) continue;
+      dropped.push(job.tex);
+      try { job.dst && job.dst.dispose(); } catch (_e) { /* best effort */ }
+      closeBitmap(job.bmp);
+    }
+    this.active = null;
+    this.queue = [];
+    return dropped;
+  }
 }
 
 // ============================================================================
@@ -1261,12 +1669,22 @@ export class Earth {
 
     // Load the pictures at their tiers (aniso stays keyed on the hardware tier;
     // three.js clamps it at upload anyway).
-    this.dayTexture = loadTexture(`textures/earth_day${texSuffix}.jpg`, texAniso);
-    this.nightTexture = loadTexture(`textures/earth_night${nightSuffix}.jpg`, texAniso);
+    // st6: on a strip-capable browser each picture is built on the GPU one strip
+    // per frame (priority day, clouds, night) and swapped in when complete.
+    this._camPos = new THREE.Vector3();
+    this._camSeen = false;
+    this._strips = options && stripsUsable(options.renderer)
+      ? new EarthStripFeeder(options.renderer, { sunlit: () => this._cameraOverSunlitSide() })
+      : null;
+    const strips = (slot, priority) => (this._strips
+      ? { feeder: this._strips, priority, onReady: (t) => this._setPicture(slot, t) }
+      : null);
+    this.dayTexture = loadTexture(`textures/earth_day${texSuffix}.jpg`, texAniso, strips('dayTexture', 0));
+    this.nightTexture = loadTexture(`textures/earth_night${nightSuffix}.jpg`, texAniso, strips('nightTexture', 2));
     // Clouds are low-frequency; anisotropy cost concentrates at grazing angles
     // (the limb) where clouds are softest — 4x is indistinguishable from the tier
     // aniso and trims bandwidth on the overdraw-heaviest (transparent) layer.
-    this.cloudTexture = loadTexture(`textures/earth_clouds${cloudSuffix}.jpg`, Math.min(texAniso, 4));
+    this.cloudTexture = loadTexture(`textures/earth_clouds${cloudSuffix}.jpg`, Math.min(texAniso, 4), strips('cloudTexture', 1));
     // st3 D4: bitmaps are closed after upload; reload them after a lost context.
     if (options && options.renderer) attachEarthRestore(this, options.renderer);
 
@@ -1292,6 +1710,42 @@ export class Earth {
     }
 
     scene.add(this.group);
+  }
+
+  /**
+   * st6: a picture built in strips is complete — hand it to the shaders and to
+   * `earth.dayTexture` / `nightTexture` / `cloudTexture` (BlackFrameProbe reads
+   * them) in one step. The cloud picture sits in two uniforms; the cloud shell
+   * is null under `?disableClouds=1`.
+   * @param {'dayTexture'|'nightTexture'|'cloudTexture'} slot
+   * @param {THREE.Texture} texture
+   */
+  _setPicture(slot, texture) {
+    this[slot] = texture;
+    const surface = this.surfaceMaterial && this.surfaceMaterial.uniforms;
+    if (slot === 'dayTexture' && surface) surface.uDayTexture.value = texture;
+    else if (slot === 'nightTexture' && surface) surface.uNightTexture.value = texture;
+    else if (slot === 'cloudTexture') {
+      if (surface) surface.uCloudTexture.value = texture;
+      if (this.cloudMaterial) this.cloudMaterial.uniforms.uCloudTexture.value = texture;
+    }
+  }
+
+  /**
+   * st7: is the camera over the sunlit half of the Earth? dot(camera position
+   * relative to the Earth's centre, sun direction) >= 0.
+   * @returns {boolean|null} null until the surface has been drawn once
+   */
+  _cameraOverSunlitSide() {
+    if (!this._camSeen) return null;
+    const centre = this.group.getWorldPosition(_scratchCentre);
+    const rel = _scratchRel.copy(this._camPos).sub(centre);
+    return rel.dot(this.sunDirection) >= 0;
+  }
+
+  /** Feed at most one picture strip (once per drawn frame; main.js also calls this while the window is unfocused). */
+  tickStrips() {
+    if (this._strips) this._strips.tick();
   }
 
   // --- SURFACE SPHERE (tier-tessellated: 256² top tier … 96² base — Task 3b) ---
@@ -1323,6 +1777,12 @@ export class Earth {
 
     this.surfaceMesh = new THREE.Mesh(geometry, this.surfaceMaterial);
     this.surfaceMesh.name = 'EarthSurface';
+    // st7: remember where the camera is (world space), for the strip order.
+    this.surfaceMesh.onBeforeRender = (_renderer, _scene, camera) => {
+      const e = camera.matrixWorld.elements;
+      this._camPos.set(e[12], e[13], e[14]);
+      this._camSeen = true;
+    };
     this.group.add(this.surfaceMesh);
   }
 
@@ -1467,6 +1927,8 @@ export class Earth {
    * @param {number} dt — delta time (seconds)
    */
   update(dt) {
+    // st6: at most one picture strip per rendered frame (no-op when none are queued).
+    this.tickStrips();
     // Sprint 3 GPU profiling — atmosphere may be null when `?disableAtmosphere=1`.
     if (this.atmosphereMaterial) {
       // Keep the analytic shader's Earth-center uniform in sync (group may move).

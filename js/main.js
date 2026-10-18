@@ -6342,6 +6342,7 @@ function gameLoop(timestamp) {
     lastTime = timestamp;
     _blurKeepalivePresentTs = timestamp;
     try {
+      if (earth) earth.tickStrips(); // st7: earth.update does not run here, so the Earth picture strips would stall
       if (sceneManager) sceneManager.render();
       if (blackFrameProbe) blackFrameProbe.tick(timestamp);
     } catch (_e) { /* keepalive must never break the halt path */ }
