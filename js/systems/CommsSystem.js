@@ -482,8 +482,12 @@ export class CommsSystem {
       // ST-5.1: Coalescing — check recent window for same-channel flood
       const windowMs = COMMS.COALESCE_WINDOW_MS || 2000;
       this._coalesceWindow = this._coalesceWindow.filter(e => (nowMs - e.timestamp) < windowMs);
-      const coal = shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
-      this._coalesceWindow.push({ channel, timestamp: nowMs });
+      // D8: a _critical / _reactive line is "kept": never summarised away, and it
+      // does not count toward tipping plain lines into a summary.
+      const kept = data._critical === true || data._reactive === true;
+      const coal = kept ? { shouldCoalesce: false, count: 0 }
+        : shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
+      if (!kept) this._coalesceWindow.push({ channel, timestamp: nowMs });
 
       if (coal.shouldCoalesce) {
         // Replace last same-channel messages with a summary line
@@ -492,7 +496,7 @@ export class CommsSystem {
         // Find and remove the last same-channel messages that were part of this burst
         let removed = 0;
         for (let i = this.messages.length - 1; i >= 0 && removed < coal.count - 1; i--) {
-          if (this.messages[i].channel === channel) {
+          if (this.messages[i].channel === channel && !this.messages[i].keep) {
             this.messages.splice(i, 1);
             removed++;
           }
@@ -527,6 +531,7 @@ export class CommsSystem {
         // null. CommsPanel wraps the term as a SPECS link; nothing else reads it.
         link: sanitizeCommsLink(data.link),
       };
+      if (kept) msg.keep = true;
 
       this.messages.push(msg);
       while (this.messages.length > MAX_MESSAGES) {
@@ -945,14 +950,17 @@ export class CommsSystem {
     // ST-5.1: Coalescing — check recent window for same-channel flood
     const windowMs = COMMS.COALESCE_WINDOW_MS || 2000;
     this._coalesceWindow = this._coalesceWindow.filter(e => (nowMs - e.timestamp) < windowMs);
-    const coal = shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
-    this._coalesceWindow.push({ channel, timestamp: nowMs });
+    // D8: a _critical / _reactive line is "kept" (see the COMMS_MESSAGE listener).
+    const kept = !!extra && (extra._critical === true || extra._reactive === true);
+    const coal = kept ? { shouldCoalesce: false, count: 0 }
+      : shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
+    if (!kept) this._coalesceWindow.push({ channel, timestamp: nowMs });
 
     if (coal.shouldCoalesce) {
       const summaryText = `× ${coal.count} ${channel.toLowerCase()} messages queued`;
       let removed = 0;
       for (let i = this.messages.length - 1; i >= 0 && removed < coal.count - 1; i--) {
-        if (this.messages[i].channel === channel) {
+        if (this.messages[i].channel === channel && !this.messages[i].keep) {
           this.messages.splice(i, 1);
           removed++;
         }
@@ -978,6 +986,7 @@ export class CommsSystem {
       channel,
       age: 0,
     };
+    if (kept) msg.keep = true;
 
     this.messages.push(msg);
 

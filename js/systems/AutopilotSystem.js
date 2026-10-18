@@ -21,6 +21,8 @@ import { orbitToSceneCartesian, orbitToSceneCartesianInto } from '../entities/Or
 import { findNearestLiveDebris } from './NavRecoveryAdvisor.js';
 import { strutLocalDirection } from '../entities/ArmDockBasis.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg } from './ResourceSystem.js';
+import { wingsHint } from './WingsHint.js';
+import { GestureHints } from '../ui/hud/GestureHints.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
@@ -30,6 +32,26 @@ const ENGAGE_DV_MIN = 50;
 
 /** ΔV (m/s) threshold for automatic disengage */
 const DISENGAGE_DV_MIN = 30;
+
+/**
+ * Battery (Wh) below which the autopilot counts the battery as empty: the HUD
+ * battery row prints 0 there (`fmtBattery` rounds, js/ui/hud/VitalsPane.js:322-328).
+ * DECISIONS §27 (owner, 2026-10-17): the autopilot switches itself off at empty
+ * and refuses to engage until there is charge again.
+ */
+const BATTERY_EMPTY_WH = 0.5;
+
+/** The owner's words (2026-10-17) for the autopilot stopping at an empty battery. */
+export const AP_BATTERY_EMPTY_LINE =
+  'Battery empty — autopilot off. It recharges in sunlight; press A when charged.';
+
+/**
+ * Same event with the wings rolled up: the body cells (≈ 120 W) are below the
+ * 500 W base load there, so "it recharges in sunlight" would be false
+ * (precedent: the m1-finish scan refusal in SensorSystem._payScan).
+ */
+export const AP_BATTERY_EMPTY_WINGS_LINE =
+  'Battery empty — autopilot off. The wings are rolled up: press , (the comma key) or WINGS on floor 1 to roll them out.';
 
 /**
  * Has this piece been caught so that chasing it is over? True exactly when
@@ -523,6 +545,34 @@ export class AutopilotSystem {
   // ENGAGE / DISENGAGE / TOGGLE
   // ==========================================================================
 
+  /**
+   * True when the player's battery is a real number below BATTERY_EMPTY_WH.
+   * Players or stubs without a battery number are never "empty".
+   * @returns {boolean}
+   * @private
+   */
+  _batteryEmpty() {
+    const wh = this._player?.resources?.battery;
+    return Number.isFinite(wh) && wh < BATTERY_EMPTY_WH;
+  }
+
+  /**
+   * Say the autopilot is off because the battery is empty (owner's line, or the
+   * wings variant when the wings are rolled up, which also puts the wings row up).
+   * @param {object} tag — the comms priority tag: `{ _critical: true }` for the
+   *   automatic switch-off, `{ _reactive: true }` for a refused A press.
+   * @private
+   */
+  _emitBatteryEmpty(tag) {
+    const wingsUp = wingsHint.needsOpening() === true;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: GestureHints.speak(wingsUp ? AP_BATTERY_EMPTY_WINGS_LINE : AP_BATTERY_EMPTY_LINE),
+      priority: 'warning',
+      ...tag,
+    });
+    if (wingsUp) wingsHint.post();
+  }
+
   /** Toggle autopilot on/off. */
   toggle() {
     if (this._engaged) {
@@ -538,6 +588,11 @@ export class AutopilotSystem {
    * target with a reactive hint instead of engaging (T4).
    */
   engage() {
+    // Empty battery (DECISIONS §27): refuse, and say so (answers the A press).
+    if (this._batteryEmpty()) {
+      this._emitBatteryEmpty({ _reactive: true });
+      return;
+    }
     // ΔV safety FIRST — before any destructive side effect. A second-press
     // trawl abort (below) must never fire when the engage would be denied
     // anyway (review finding: low-ΔV double-A used to kill the sweep and
@@ -734,6 +789,11 @@ export class AutopilotSystem {
    *   the heading should prefer over cluster.center.
    */
   engageCluster(cluster, opts = {}) {
+    // Empty battery (DECISIONS §27): refuse, and say so (answers the player's press).
+    if (this._batteryEmpty()) {
+      this._emitBatteryEmpty({ _reactive: true });
+      return;
+    }
     if (!cluster?.center) return;
     this._debrisMapCluster = cluster;
     // F5 arrival point: resolve {pos:{x,y,z}} (planner candidate) or bare
@@ -780,7 +840,7 @@ export class AutopilotSystem {
 
   /**
    * Disengage autopilot with a reason tag.
-   * @param {string} reason — 'MANUAL'|'DELTAV'|'ARRIVED'|'COLLISION'|'ARROW_INPUT'|'TRAWL'|'TARGET_LOST'|'TARGET_CAUGHT'
+   * @param {string} reason — 'MANUAL'|'DELTAV'|'ARRIVED'|'COLLISION'|'ARROW_INPUT'|'TRAWL'|'TARGET_LOST'|'TARGET_CAUGHT'|'BATTERY'
    */
   disengage(reason) {
     if (!this._engaged) return;
@@ -809,10 +869,14 @@ export class AutopilotSystem {
     this._setPhase(PHASE.OFF);
 
     eventBus.emit(Events.AUTOPILOT_DISENGAGE, { reason });
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `AUTOPILOT OFF. ${reason}`,
-      priority: reason === 'DELTAV' || reason === 'COLLISION' ? 'warning' : 'info',
-    });
+    if (reason === 'BATTERY') {
+      this._emitBatteryEmpty({ _critical: true });
+    } else {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `AUTOPILOT OFF. ${reason}`,
+        priority: reason === 'DELTAV' || reason === 'COLLISION' ? 'warning' : 'info',
+      });
+    }
     // UX-2 #12: Route autopilot disengage through notification zone.
     // Session O (plan D12): kind 'memo' (see the engage note above).
     eventBus.emit(Events.SHOW_NOTIFICATION, { text: 'AUTOPILOT DISENGAGED', kind: 'memo' });
@@ -847,6 +911,12 @@ export class AutopilotSystem {
     const dv = this._getRemainingDeltaV();
     if (dv < DISENGAGE_DV_MIN) {
       this.disengage('DELTAV');
+      return;
+    }
+
+    // --- Empty battery? (DECISIONS §27) ---
+    if (this._batteryEmpty()) {
+      this.disengage('BATTERY');
       return;
     }
 
