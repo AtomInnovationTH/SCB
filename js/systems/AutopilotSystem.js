@@ -1351,9 +1351,9 @@ export class AutopilotSystem {
 
     // --- Issue impulse via the new Cartesian API (no element-basis misuse) ---
     // Resource bookkeeping inside applyCartesianImpulse uses the raw dt so
-    // fuel consumption remains physical, not time-warped.
+    // fuel consumption remains physical, not time-warped. `continuous`: a per-frame burn is billed per second, whatever the frame rate.
     if (dvCmd.lengthSq() > 1e-18) {
-      this._player.applyCartesianImpulse(dvCmd, dt);
+      this._player.applyCartesianImpulse(dvCmd, dt, { continuous: true });
     }
 
     // --- Rotate ship toward nose* = v̂_d ---

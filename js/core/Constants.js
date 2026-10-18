@@ -349,8 +349,9 @@ export const Constants = {
   //   A_eff = HULL_AREA_M2 + RAD_AREA_M2 × (G_CLOSED + (1 − G_CLOSED) × openFrac)
   // The lump is NOT the whole 130 kg ship (≈ 117 kJ/K): it is the electronics
   // bay and the heat-pipe saddle that feeds the radiator — the mass that warms
-  // first. The load table is taken AS GIVEN (base 500 W, ion 5 kW, autopilot up
-  // to 25 kW — far above §2a's "a few kilowatts"); its scale is a logged
+  // first. The load table is taken AS GIVEN (base 500 W, ion 5 kW, autopilot
+  // ≈ 5.6 kW at full command at any frame rate (until 2026-10-18 it grew with the frame time: 5.6 kW at
+  // 60 fps, up to 25 kW at 10 fps)); its scale is a logged
   // follow-up, not tuned here. Tuning targets T1–T6 (DECISIONS §15 row 6) are
   // pinned in js/test/test-ShipHeat.js — see docs/ladder/01-numbers.md "Ship
   // heat and scan cost".

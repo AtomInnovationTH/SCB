@@ -385,6 +385,8 @@ export class PlayerSatellite extends THREE.Group {
     // fittingCatalog `efficient_ion`) — their 0.02 absolute value is no longer a flow.
     this._ionThrustXenonRate = 0.02;
     this._ionThrustPowerRate = 5.0;
+    // The frame the 0.3 m/s per-tick proxy was written for; a continuous burn is billed per second against it.
+    this._ionBillTickS = 1 / 60;
     this._coldGasRate = 0.5;
     this._basePowerDraw = 0.5;
     this._ionDeltaV = 0.0003;
@@ -9314,6 +9316,9 @@ export class PlayerSatellite extends THREE.Group {
    *   resource/power gates (mother-net-reel plan §9.10: the line-taut tug is
    *   passive momentum transfer — it costs no propellant, so it must not be
    *   refused by an empty tank or a powered-down bus either).
+   * @param {boolean} [opts.continuous=false] — this Δv is a burn spread over `dt`
+   *   (the autopilot's per-frame thrust): the power bill is scaled to the frame, so the
+   *   Wh per second does not depend on the frame rate. A one-shot (the dodge) leaves it off.
    * @returns {boolean} true when the impulse was applied; false when refused
    *   (envelope guard, degenerate orbit, or — with billing on — resource gates).
    *   Callers that keep the Δv (the tug) must surface a false return honestly
@@ -9335,8 +9340,13 @@ export class PlayerSatellite extends THREE.Group {
     if (!noBill) {
       const baselineDv_mps =
         (this._ionDeltaV || 0.0003) * (this.throttleLevel || 1) * 1000; // rough m/s per tick proxy
-      usage = baselineDv_mps > 1e-6
-        ? Math.min(5.0, dvMag / baselineDv_mps)
+      // ap-fps-cost: a continuous burn (the autopilot's per-frame thrust) is a Δv spread over dt, so the
+      // per-tick proxy is scaled to this frame — the Wh per second no longer depends on the frame rate.
+      const perTick = (opts.continuous === true && dt > 0)
+        ? baselineDv_mps * (dt / (this._ionBillTickS || 1 / 60))
+        : baselineDv_mps;
+      usage = perTick > 1e-6
+        ? Math.min(5.0, dvMag / perTick)
         : 1.0;
       powerNeed = this._ionThrustPowerRate * dt * usage;
     }
