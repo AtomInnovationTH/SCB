@@ -275,7 +275,8 @@ const WELCOME_FIELD = [
   // fwdMinM/fwdMaxM (fwd is randomised inside the band per spawn) plus a fixed
   // latM (right, +) and radM (up, +). Only _placeWelcomePiece reads them.
   // M1 cluster (.kilo/plans/onboarding-tease-2-lateral-tune.md). Physical
-  // hierarchy: every fragment renders sub-metre (sizeM ≈ radius, render ≈ 1.9×)
+  // hierarchy: every fragment renders sub-metre (sizeM = its drawn longest side
+  // since lane true-size, 2026-10-18; it used to read as a radius, drawn ≈ 1.9×)
   // so NONE renders larger than the ~2 m mother; the cubesat #7 is the small,
   // dense, valuable "graduation" catch. Reward climbs 1→7 via mass + lowValue
   // (kept only on #1–#2) so early catches are cheap and later ones pay more —
@@ -1742,9 +1743,11 @@ export class DebrisField {
    * SSOT for the sizeMeter ↔ sceneSize pair (1 m = 1e-5 scene units) — and,
    * post-item-7, for the aspect pair lengthM/widthM that feeds the capture
    * verdicts (assessNetFit / presentedWidthForApproach / oversize_aspect).
-   * Whale-in-cone phase 3 (Task 3): `sizeMeter` is NOT the rendered size — the
-   * renderer scales instances by `sceneSize` (`_updateInstanceTransform`), and
-   * the rendered extent is `renderScale × DebrisWireframe.getBoundingRadius`.
+   * Whale-in-cone phase 3 (Task 3): the renderer scales instances by `sceneSize`
+   * (`_updateInstanceTransform`), and the rendered extent is
+   * `renderScale × DebrisWireframe.getBoundingRadius`. Lane true-size (2026-10-18): every mesh is built with its
+   * longest bounding-box side = 1 mesh unit, so the drawn longest side IS `sizeMeter` (it used to be 1.5-3.6 x
+   * bigger: `sizeMeter` was NOT the rendered size).
    * Every size mutation must go through here so the fields can never desync
    * (the ceremony scenario wrote `sizeMeter = 7` without `sceneSize` and
    * cinched an 8 m net around a 0.23 m pebble while every gate believed 7 m).
@@ -1835,8 +1838,10 @@ export class DebrisField {
   /**
    * Lane tip-fit (2026-10-17) — the ONE radius (m) a radiator tip must clear for this catch: the farthest point the
    * catch is DRAWN at, from the point it is pinned and bagged at, at TRUE size with no readability floor
-   * (`sizeMeter × DebrisWireframe.getOriginRadius`). `sizeMeter / 2` is not that: the meshes reach 1.5 – 3.6 × it
-   * (fragment 2.4-2.9, rocketBody 2.0, defunctSat 3.6, missionDebris 1.5, cubesat 1.5; probe 2026-10-17). Every tip
+   * (`sizeMeter × DebrisWireframe.getOriginRadius`). `sizeMeter / 2` is not that, but since lane true-size (2026-10-18) every
+   * mesh is drawn with its longest side = sizeMeter, so it is close: reach / (sizeMeter / 2) is fragment 1.07-1.26,
+   * rocketBody 1.31, defunctSat 1.00, missionDebris 1.13, cubesat 1.16 (it was 2.4-2.9, 2.0, 3.6, 1.5, 1.5; probe
+   * 2026-10-17 / tmp/ts-probe.mjs). Every tip
    * check (CaptureNet._tryLeash, LeashDriver, TipCargo.stow) reads this, so the physics sphere encloses the drawn mesh.
    * @param {{sizeMeter?: number, type?: string, id?: number}} debris
    * @param {number} [defaultSizeM=0] — size used when `sizeMeter` is missing / 0 / not a number (as the old `||` did)
@@ -4700,7 +4705,7 @@ export class DebrisField {
    *  - `label`      1-based piece number (= spec index + 1 → "debris 1..7")
    *  - `type`       rendered debris type (fragment / cubesat)
    *  - `sizeM`      live size in metres (`sizeMeter`)
-   *  - `renderM`    approximate on-screen size (≈ 1.9× sizeMeter, see WELCOME_FIELD)
+   *  - `renderM`    on-screen size (the longest side of the drawn mesh = sizeMeter since lane true-size, 2026-10-18)
    *  - `rangeM`     straight-line distance from the player (m) or null
    *  - `fwdM`/`latM` along-track / cross-track offset in the mother's local
    *                 frame (m) — fwd>0 ahead, lat>0 to the right; null if frame
@@ -4757,7 +4762,9 @@ export class DebrisField {
         label: d._welcomeSpecIndex + 1,
         type: d.type || '?',
         sizeM,
-        renderM: sizeM * 1.9,
+        // lane true-size (2026-10-18): a piece is DRAWN at its listed size (longest bounding-box side = sizeMeter), so the
+        // on-screen size IS sizeM. This was `sizeM * 1.9`, the old fragment mesh (bounding radius 0.95 -> diameter 1.9).
+        renderM: sizeM,
         rangeM,
         fwdM,
         latM,

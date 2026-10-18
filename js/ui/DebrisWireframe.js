@@ -624,8 +624,8 @@ function _buildRocketBodyGeo() {
   }
 
   const geo = _mergeGeometries(parts);
-  // Match prior scene-size convention.
-  geo.scale(1.5, 1.5, 1.5);
+  // Raw build size (was scaled x1.5 to a "scene-size convention"). getGeometry sizes every mesh the same way:
+  // longest bounding-box side = 1 mesh unit (lane true-size, 2026-10-18).
   return geo;
 }
 
@@ -691,8 +691,7 @@ function _buildDefunctSatGeo() {
   parts.push(nozzle);
 
   const geo = _mergeGeometries(parts);
-  // Normalise to scene-size convention (old merged geo scaled 1.5×).
-  geo.scale(1.35, 1.35, 1.35);
+  // Raw build size (was scaled x1.35). getGeometry sizes every mesh: longest bounding-box side = 1 mesh unit.
   return geo;
 }
 
@@ -742,8 +741,7 @@ function _buildMissionDebrisGeo() {
   parts.push(stub);
 
   const geo = _mergeGeometries(parts);
-  // Match prior scene-size convention (old hex prism scaled 2.3×).
-  geo.scale(1.85, 1.85, 1.85);
+  // Raw build size (was scaled x1.85). getGeometry sizes every mesh: longest bounding-box side = 1 mesh unit.
   return geo;
 }
 
@@ -789,8 +787,7 @@ function _buildCubesatGeo() {
   parts.push(adapter);
 
   const geo = _mergeGeometries(parts);
-  // Normalise toward the scene-size convention (compact body).
-  geo.scale(1.4, 1.4, 1.4);
+  // Raw build size (was scaled x1.4). getGeometry sizes every mesh: longest bounding-box side = 1 mesh unit.
   return geo;
 }
 
@@ -929,13 +926,24 @@ function _buildFragmentGeo(variantIndex) {
     return new THREE.IcosahedronGeometry(0.9, 1);
   }
 
-  const geo = _buildFlatGeometry(pts, faces);
+  // Raw hull, any size: `DebrisWireframe.getGeometry` is the one place that sizes it (longest bounding-box side =
+  // 1 mesh unit). It used to normalise the bounding RADIUS to 0.95 here and ×1.3 there, which drew fragments
+  // 2.4 – 2.9 × their listed size; a second normaliser here would only fight the real one.
+  return _buildFlatGeometry(pts, faces);
+}
 
-  // Normalise bounding radius so all variants occupy a similar footprint,
-  // matching the scene-size convention used by the other types.
-  geo.computeBoundingSphere();
-  const br = geo.boundingSphere ? geo.boundingSphere.radius : 1;
-  if (br > 0) geo.scale(0.95 / br, 0.95 / br, 0.95 / br);
+/**
+ * Scale a freshly built geometry IN PLACE so its bounding box's longest side is exactly 1 mesh unit (uniform: the
+ * shape is unchanged). The one size rule of `DebrisWireframe.getGeometry`. Call it only on a geometry nobody else
+ * holds yet (see the note there).
+ * @param {THREE.BufferGeometry} geo
+ * @returns {THREE.BufferGeometry} the same geometry
+ */
+function _normaliseLongestSideToOne(geo) {
+  geo.computeBoundingBox();
+  const b = geo.boundingBox;
+  const longest = b ? Math.max(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z) : 0;
+  if (longest > 0 && Number.isFinite(longest)) geo.scale(1 / longest, 1 / longest, 1 / longest);
   return geo;
 }
 
@@ -1099,10 +1107,18 @@ export class DebrisWireframe {
       case 'fragment':
       default:
         geo = _buildFragmentGeo((id >>> 0) % N);
-        // Scale up fragments so they're visible at distance (rocket 1.5×, mission 2.3×, fragment 1.3×)
-        geo.scale(1.3, 1.3, 1.3);
         break;
     }
+
+    // ONE size rule (lane true-size, Decision 1): the freshly built mesh is scaled uniformly so its bounding box's
+    // LONGEST side is exactly 1.0 mesh unit. DebrisField draws an instance at scale `sizeMeter × 1e-5`, so the drawn
+    // longest side is then `sizeMeter` metres: a piece listed as 0.30 m is drawn 0.30 m. This replaces the per-type
+    // legacy scales that used to sit in each builder (rocket ×1.5, defunct ×1.35, mission ×1.85, cubesat ×1.4, fragment
+    // radius 0.95 × 1.3: they drew the meshes 1.5 – 3.6 × bigger than their label; the builders now return raw size). It runs on the NEW geometry, BEFORE any cache below is filled
+    // and before the geometry is handed out: ArmUnit keeps per-geometry vertex caches (a WeakMap keyed by the
+    // BufferGeometry), so a geometry that is cached or handed out must never be rescaled afterwards. The origin is
+    // not moved (no re-centring): the per-type origin offset stays what the builder made it.
+    _normaliseLongestSideToOne(geo);
 
     // Cache the local bounding radius so flag decals can be mounted exactly on
     // the surface. Keyed by cacheKey (includes the fragment variant) so each
