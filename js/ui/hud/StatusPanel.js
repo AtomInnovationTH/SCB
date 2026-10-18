@@ -142,6 +142,7 @@ export class StatusPanel {
     this._memoBoxedUntil = -Infinity; // the A4 box window's end (a local timestamp, no timer)
     this._memoBoxedPainted = false;   // the outline's last written state
     this._memoEl = null;              // cached #autopilot-indicator once found
+    this._simple = false;            // z1-calm-scan D5: mission-1 simple level (update() data.simple); DAUGHTERS hides LAUNCH + ΔV
     this._fleetClickBound = false;   // the ONE #hud-arms-status click delegate, attached once
     this._cargoStatus = null;   // cached from CARGO_UPDATED events
     // Locked #15: Mother's CARGO kg/cap line is hidden while the Cargo pane's
@@ -756,6 +757,7 @@ export class StatusPanel {
    * @param {number} data.debrisCleared
    * @param {object} data.resources
    * @param {Array}  data.cachedTargets
+   * @param {boolean} [data.simple]  mission-1 simple level (DAUGHTERS hides LAUNCH and ΔV); default false
    */
   update(data) {
     this._updateScorePanel(data);
@@ -776,7 +778,10 @@ export class StatusPanel {
     // Attitude: live body angular-rate readout (rigid-body dynamics legibility)
     this._updateAttitudeRate(data);
 
-    // V5: Re-render arm panel at 10Hz for live tension/scan/flash updates
+    // V5: Re-render arm panel at 10Hz for live tension/scan/flash updates.
+    // z1-calm-scan D5: `data.simple` = HUD.isSimpleTargets() (mission 1, no extra pane) — the ONE gate
+    // TargetPanel uses; kept on the instance so the event-driven renders agree. Absent = detail level.
+    this._simple = !!data.simple;
     this._renderArmPanel();
 
     // ST-1.3: Update lasso cooldown ring at 10Hz for smooth arc depletion
@@ -2044,7 +2049,8 @@ export class StatusPanel {
       .sort((x, y) => (sizeRank[x.a.type] ?? 2) - (sizeRank[y.a.type] ?? 2) || x.idx - y.idx);
 
     let prevType = null;
-    el.innerHTML = _dialHeader + sorted.map((e) => {
+    // z1-calm-scan D5: the simple level has no LAUNCH row (launch speed / dial keys come one level up).
+    el.innerHTML = (this._simple ? '' : _dialHeader) + sorted.map((e) => {
       const gap = (prevType !== null && e.a.type !== prevType) ? '<div style="height:6px;"></div>' : '';
       prevType = e.a.type;
       return gap + this._renderDaughterLine(e.a, e.idx);
@@ -2349,7 +2355,10 @@ export class StatusPanel {
       // (config.tetherMax — purchases / old saves scale it) beside its nets.
       const reach = StatusPanel.reachText(armObj.config && armObj.config.tetherMax);
       const reachHtml = reach ? `<span class="fleet-reach" style="opacity:0.7;" title="Tether reach"> · ${reach}</span>` : '';
-      netHtml = `<span style="color:${netColor};white-space:nowrap;" title="Nets remaining">NET ${nets}/${maxNets}${reachHtml}</span>`;
+      netHtml = this._simple
+        // z1-calm-scan D5: "2 nets · 2 km" - how many nets and how far, nothing else.
+        ? `<span style="color:${netColor};white-space:nowrap;" title="Nets remaining · tether reach">${nets} net${nets === 1 ? '' : 's'}${reachHtml}</span>`
+        : `<span style="color:${netColor};white-space:nowrap;" title="Nets remaining">NET ${nets}/${maxNets}${reachHtml}</span>`;
     }
 
     // ΔV — same label/colour ladder as the MOTHER pane (no fuel-gauge icon).
@@ -2370,11 +2379,11 @@ export class StatusPanel {
     // vertically down the list. The number column is right-aligned (the ▸ marker
     // hangs left of the digit); the ΔV column is right-aligned to the pane edge.
     // W2 meters: the NET column carries the reach too (`NET 4/4 · 500 m`, 110 px measured), 50 -> 112 px.
-    const detailLine = `<div style="display:grid;grid-template-columns:20px 1fr 112px 56px;column-gap:8px;align-items:baseline;">`
+    const detailLine = `<div style="display:grid;grid-template-columns:${this._simple ? '20px 1fr 112px' : '20px 1fr 112px 56px'};column-gap:8px;align-items:baseline;">`
       + `<span style="text-align:right;">${numHtml}</span>`
       + `<span style="color:${statusColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"${statusTitle ? ` title="${statusTitle}"` : ''}>${status}${catchFlag}</span>`
       + netHtml
-      + dvHtml
+      + (this._simple ? '' : dvHtml)
       + `</div>`;
 
     // 2nd line: pilot telemetry for launched daughters (empty when docked).

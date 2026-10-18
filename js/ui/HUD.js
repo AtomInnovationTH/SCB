@@ -2220,6 +2220,7 @@ export class HUD {
         comSuggestedStowArm,
         plumeBlocks,
         angularRate,
+        simple: this.isSimpleTargets(),   // z1-calm-scan D5: DAUGHTERS hides LAUNCH and ΔV on the simple level
       });
       // W2 meters: the four vitals rows (self-throttled to 10 Hz, write-on-change).
       if (this.vitalsPane) this.vitalsPane.update(player);

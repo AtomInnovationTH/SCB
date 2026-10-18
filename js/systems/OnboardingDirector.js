@@ -33,6 +33,7 @@ import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
+import { gameState } from '../core/GameState.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // BEAT TABLE — fixed by spec.  Do not edit individual values without bumping
@@ -303,7 +304,6 @@ export class OnboardingDirector {
      * ("− / + fewer / more panes") waits for it — the first frames stay calm.
      * @type {boolean}
      */
-    this._scanSeen = false;
 
     /** @type {Array<{ event: string, at: number }>} recent trigger event buffer. */
     this._recentInputs = [];
@@ -506,7 +506,7 @@ export class OnboardingDirector {
     }
     // h4-simple-first D9: the first completed scan releases the DETAIL beat in mission 1.
     if (Events.SCAN_COMPLETE) {
-      on(Events.SCAN_COMPLETE, () => { this._scanSeen = true; this._maybeDetailHint(); });
+      on(Events.SCAN_COMPLETE, () => this._maybeDetailHint());
     }
 
     // Recent-input buffer + unrelated-input counter for repeated-fail escalation.
@@ -668,9 +668,10 @@ export class OnboardingDirector {
     let floor = null;
     try { floor = this._floorProvider(); } catch (_e) { return; }
     if (floor !== 2) return;
-    // h4-simple-first D9 (owner 2026-10-15, DECISIONS §23 row 5): in mission 1 the hint waits for the
-    // first scan; from mission 2 on (or without a scoring system to ask) it is today's behaviour.
-    if (!this._scanSeen && this._inMissionOne()) return;
+    // z1-calm-scan D6 (owner 2026-10-18; was h4-simple-first D9 "waits for the first scan"): in mission 1
+    // the hint waits for the THIRD catch - the first scan already brings the Targets list, and a new
+    // player has enough on screen. Mission 2 on (or without a scoring system to ask): today's behaviour.
+    if (this._inMissionOne() && !(gameState.debrisCleared >= 3)) return;
     this._detailHintShown = true;
     this._clearDetailHintPoll();
     this._persist();

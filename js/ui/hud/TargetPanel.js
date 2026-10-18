@@ -68,6 +68,13 @@ export const TARGET_NORMAL_ROWS_SHORT = 5;
  * w1-hud-calm plan Log); `max` takes the 9 rows (434) — the player's remedy.
  */
 export const TARGET_STEP_ROWS_GLASS = Object.freeze({ min: 1, normal: 5, max: 9 });
+/**
+ * z1-calm-scan D3/D4 (owner 2026-10-18): the mission-1 simple list is the 3 nearest targets plus one
+ * `+ n more` line - a FIXED 4 lines whatever the count ("nothing should move"; it changes only when the
+ * level changes). The `min` step still collapses the pane (the 0 key's remedy), see `targetHeightPx`.
+ */
+export const TARGET_SIMPLE_NEAREST = 3;
+export const TARGET_SIMPLE_LINES = TARGET_SIMPLE_NEAREST + 1;
 
 /**
  * Target pane height for a chrome step: the pane's own chrome + the header +
@@ -79,11 +86,16 @@ export const TARGET_STEP_ROWS_GLASS = Object.freeze({ min: 1, normal: 5, max: 9 
  * @param {boolean} [glass]
  * @param {number} [viewportH]  window.innerHeight, read once per layout pass by
  *   the caller; absent / non-finite = a tall viewport (desktop normal 7)
+ * @param {boolean} [simple]  mission-1 simple level: 4 lines (3 rows + the more line) at normal / max,
+ *   whatever the count; `min` still collapses. Absent = the detail table above.
  * @returns {number}
  */
-export function targetHeightPx(step, glass, viewportH) {
+export function targetHeightPx(step, glass, viewportH, simple) {
   const rows = glass ? TARGET_STEP_ROWS_GLASS : TARGET_STEP_ROWS;
   const name = rows[step] ? step : 'normal';
+  if (simple && name !== 'min') {
+    return TARGET_PANE_CHROME_PX + TARGET_HEADER_PX + TARGET_SIMPLE_LINES * (glass ? TARGET_ROW_GLASS_PX : TARGET_ROW_PX);
+  }
   const short = !glass && name === 'normal' && Number.isFinite(viewportH) && viewportH < TARGET_TALL_VIEWPORT_PX;
   const k = short ? TARGET_NORMAL_ROWS_SHORT : rows[name];
   const row = glass ? TARGET_ROW_GLASS_PX : TARGET_ROW_PX;
@@ -112,9 +124,6 @@ function hexToRgb(hex) {
   const n = parseInt(String(hex).replace('#', ''), 16);
   return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
 }
-
-/** h4b D4: the simple list shows the colour-law hazard word as one glyph (title = the word). Unknown word → '!'. */
-const SIMPLE_WORD_GLYPH = Object.freeze({ TUMBLING: '\u21BB', HYDRAZINE: '!', HEAVY: '\u25A0', CONJUNCTION: '!', 'CLOSE PASS': '!' });
 
 export class TargetPanel {
   constructor(container, { colorLaw = false, glass = null } = {}) {
@@ -200,12 +209,18 @@ export class TargetPanel {
             min-height: ${TARGET_ROW_GLASS_PX}px;
             box-sizing: border-box;
         }
-        /* h4-simple-first D6: mission 1 on F1/F2 — name, distance, in-reach dot (no ΔV column). */
+        /* z1-calm-scan D2: mission 1 on F1/F2 — name, distance, "in reach" / "too far" (no icon, ΔV or dot). */
         .target-row.simple {
-            grid-template-columns: 16px minmax(0, 1fr) 72px 16px;
+            grid-template-columns: minmax(0, 1fr) 64px 64px;
         }
-        /* h4b D4: a simple row is ONE line - the hazard word is a glyph (word in its title), the analyse chip sits inside the name cell. */
-        .target-row.simple .target-word-glyph { margin-left: 4px; font-weight: bold; }
+        .target-row.simple .target-reach { text-align: right; white-space: nowrap; }
+        /* z1-calm-scan D3: the "+ n more" line - the 4th line of the fixed simple height, same pitch as a row. */
+        .target-more {
+            font-size: 11px; font-family: var(--font-mono); color: var(--hud-dim, #888888);
+            padding: 2px 4px; margin: 1px 0; min-height: ${TARGET_ROW_PX}px; box-sizing: border-box;
+        }
+        #hud-targets-panel[data-glass] .target-more { min-height: ${TARGET_ROW_GLASS_PX}px; }
+        /* h4b D4: a simple row is ONE line - the analyse chip sits inside the name cell. */
         .target-row.simple .analyse-chip {
             margin-left: 6px; font-size: 0.85em; font-weight: normal; letter-spacing: 0.04em;
             color: var(--hud-info, ${sel}); opacity: 0.8; text-shadow: none;
@@ -554,7 +569,7 @@ export class TargetPanel {
     const pane = this.panels && this.panels.targets;
     if (!pane || !pane.style) return;
     const name = step || (this._chrome && this._chrome.step) || 'normal';
-    const h = `${targetHeightPx(name, this._glass, viewportHeight())}px`;   // one viewport read per pass
+    const h = `${targetHeightPx(name, this._glass, viewportHeight(), this._simple)}px`;   // one viewport read per pass
     if (pane.style.height !== h) pane.style.height = h;
   }
 
@@ -767,7 +782,22 @@ export class TargetPanel {
       }
       // 'tpi' mode: already sorted upstream
 
-      targets = targets.slice(0, TARGET_STEP_ROWS.max);   // as many rows as the tallest step shows (9)
+      // z1-calm-scan D3: the simple level shows the 3 NEAREST by distance (whatever the sort mode), plus
+      // (when the selected target is further out: the 2 nearest + the selected one, still 3 rows), then
+      // one "+ n more" line. Always 4 lines.
+      let moreCount = 0;
+      if (this._simple) {
+        const total = targets.length;
+        const byDist = [...targets].sort((a, b) => a.distanceKm - b.distanceKm);
+        const near = byDist.slice(0, TARGET_SIMPLE_NEAREST);
+        const sel = near.some(t => t.id === this.selectedTargetId) ? null : byDist.find(t => t.id === this.selectedTargetId);
+        targets = sel ? [...near.slice(0, TARGET_SIMPLE_NEAREST - 1), sel] : near;
+        moreCount = total - targets.length;
+      } else {
+        targets = targets.slice(0, TARGET_STEP_ROWS.max);   // as many rows as the tallest step shows (9)
+      }
+      // The mother net's reach (km), read live: the simple level's "in reach" is the NET, not the tethers.
+      const netReachKm = Number(Constants.NET_LOCK_RANGE_M) / 1000;
 
       if (targets.length === 0) {
         listEl.innerHTML = '<span style="opacity:0.4">No targets nearby</span>';
@@ -824,25 +854,23 @@ export class TargetPanel {
             : '';
 
           if (this._simple) {
-            // h4-simple-first D6: name, distance and the in-reach dot — no ΔV column, no MOID badge,
-            // no detail line, no key prompts (those come one pane level up and from mission 2).
+            // z1-calm-scan D2: name · distance · "in reach" / "too far" against the MOTHER NET's reach
+            // (Constants.NET_LOCK_RANGE_M, read live). No icon, `*`, hazard glyph, ΔV, MOID or dot - those
+            // come one pane level up and from mission 2 (DECISIONS §23 r5).
             const name = selected ? this._getFullTypeName(t.type) : typeName;
             const nameStyle = selected
               ? (law ? ` style="color:${lookColor(law.color)}"` : '')
               : ` style="color:${tierColor}${law ? `;opacity:${law.alpha}` : ''}"`;
-            // h4b D4: the hazard word is ONE glyph in the name cell (the word stays in its title), never a second line.
-            const glyph = (law && law.word)
-              ? `<span class="target-word-glyph" title="${law.word}" style="color:${lookColor(law.wordColor)}">${SIMPLE_WORD_GLYPH[law.word] || '!'}</span>`
-              : '';
             // h4b D3: ONE prompt for the selected row until target info was opened once (touch has no Z).
             const chip = (selected && this._analyseChip)
               ? `<span class="analyse-chip">${this._glass ? 'tap again: analyse' : 'Z analyse'}</span>`
               : '';
+            const inNet = t.distanceKm <= netReachKm;
+            const reachStyle = `color:var(--hud-normal, ${VisualLaw.COLORS.PLAYER})${inNet ? '' : `;opacity:${THIN_ALPHA}`}`;
             return `<div class="target-row simple${selected ? ' selected' : ''}" data-id="${t.id}">
-    <span class="${iconClass}">${typeIcon}</span>
-    <span class="target-name"${nameStyle}>${name}${selected ? '' : salvageIcon}${glyph}${chip}</span>
+    <span class="target-name"${nameStyle}>${name}${chip}</span>
     <span class="target-dist">${dist}</span>
-    <span class="range-dot" style="${rangeStyle}">${range.dot}</span>
+    <span class="target-reach" style="${reachStyle}">${inNet ? 'in reach' : 'too far'}</span>
 </div>`;
           }
 
@@ -946,7 +974,7 @@ export class TargetPanel {
     ${wordTag(law ? law.alpha : null)}
 </div>`;
           }
-        }).join('');
+        }).join('') + (this._simple && moreCount > 0 ? `<div class="target-more">+ ${moreCount} more</div>` : '');
 
         // UX-3 #9: Apply discovery animation to newly discovered rows
         if (this._newlyDiscovered.size > 0) {
