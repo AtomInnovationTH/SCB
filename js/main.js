@@ -1633,11 +1633,13 @@ async function init() {
   // With a service worker the truth is a build installed and waiting (js/core/
   // UpdateWatch.js); data/build-tag.json (sw.js serves it local-first, from the
   // running build's cache) is the baseline read here at boot and the truth when
-  // there is no worker. Re-checked on entering the MENU state (+ a
-  // 60 s poll while the menu shows), on visibilitychange → visible (the iPad
-  // resumed days later) and on a serviceWorker controllerchange (a reason to
+  // there is no worker. Checked once per start (the first MENU entry, or a return
+  // after ≥ 1 h hidden — the iPad resumed days later), once more a minute later if
+  // nothing was found, then not again (owner 2026-10-18, DECISIONS §16); also on a
+  // serviceWorker controllerchange (a reason to
   // re-read, never a second truth). A new hash → Events.UPDATE_AVAILABLE once
-  // per build → MenuScreen mounts the card (menu ONLY). Flag-INDEPENDENT by
+  // per build → MenuScreen mounts the card (menu ONLY); before a game has begun,
+  // Events.UPDATE_AUTO_APPLY → the menu switches to it by itself. Flag-INDEPENDENT by
   // owner law: a ?ladder=0 fallback build must still be able to say "update
   // ready" (the module never reads Constants.LADDER; no DOM until a change).
   // Started BEFORE the boot MENU transition below so the first menu counts.

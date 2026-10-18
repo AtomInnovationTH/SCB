@@ -295,6 +295,7 @@ export const Events = {
   // orientation-seamless and needs no mask).
   MENU_ORIENT_MODE: 'menu:orientMode',
   UPDATE_AVAILABLE: 'app:updateAvailable',   // { hash, tag, bullets } — UpdateWatch → MenuScreen (Session J.5)
+  UPDATE_AUTO_APPLY: 'app:updateAutoApply',  // { hash, tag, bullets } — UpdateWatch → MenuScreen: switch now, on the menu, before a game began (up1)
   BRIEFING_COMMENCE:  'briefing:commence',
   BRIEFING_SKIP:      'briefing:skip',
   SHOP_DEPLOY:        'shop:deploy',

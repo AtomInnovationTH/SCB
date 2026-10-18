@@ -18,6 +18,13 @@ import { MenuScene3D } from './MenuScene3D.js';
 import { resolvePrimaryMenuAction, startRequiresConfirm, NEW_GAME_CONFIRM_MESSAGE } from './menuActions.js';
 import { buildUpdateCard } from './UpdateCard.js';
 import { applyUpdate } from '../core/UpdateWatch.js';
+import { claimAutoApply } from '../core/UpdateWatch.js';   // the loop-guard claim (kept a separate line: test-UpdateCard.js pins the applyUpdate import)
+
+/** up1: the one line on the menu while the game switches to the new build by itself. */
+const UPDATE_NOTICE_TEXT = 'Updating to the new version\u2026';
+/** up1: if the page is still here this long after the switch was asked for, give up: drop the notice and show the card (ms). */
+const AUTO_UPDATE_RELEASE_MS = 20000;
+
 export class MenuScreen {
   /**
    * @param {string|null} [initialTier] — current SceneManager quality tier so the
@@ -50,6 +57,14 @@ export class MenuScreen {
     this._update = null;
     this._updateDismissed = null;
     this._updateCard = null;
+    // up1: UPDATE_AUTO_APPLY — the game is switching to the new build by itself.
+    // While `_autoUpdating` is true no departure can begin (every start path is
+    // guarded), so a game never starts on the build being deleted.
+    this._autoUpdating = false;
+    this._autoUpdateTimer = null;
+    this._autoAttempt = 0;         // which auto switch is current (a released one is cancelled for good)
+    this._reloadIssued = false;    // _reload() ran: the page is going away, the failsafe must not open the lock
+    this._updateNotice = null;
     // w1-first-minute D3: what the "?" button opens (set by setHelpOpener).
     this._helpOpener = null;
     this._build();
@@ -62,6 +77,8 @@ export class MenuScreen {
     // Session J.5: UpdateWatch → "NEW VERSION READY" (mounted now if visible,
     // else on the next show()). Flag-independent: no LADDER gate here.
     eventBus.on(Events.UPDATE_AVAILABLE, (p) => this._onUpdateAvailable(p));
+    // up1: the same news, but the menu is up and no game has begun — switch now.
+    eventBus.on(Events.UPDATE_AUTO_APPLY, (p) => this._onUpdateAutoApply(p));
   }
 
   /** @private */
@@ -970,6 +987,7 @@ export class MenuScreen {
    * departure fast-forwards it without re-confirming.
    */
   _requestStartGame() {
+    if (this._autoUpdating) return;   // up1: the update switch is under way — no confirm, no start
     if (this._departing) { this._finishDeparture(true); return; }
     if (startRequiresConfirm(persistenceManager.hasSave())) {
       const canConfirm = typeof window !== 'undefined' && typeof window.confirm === 'function';
@@ -985,6 +1003,7 @@ export class MenuScreen {
    * MENU_START fires at the end (or immediately, on skip / reduced motion).
    */
   _startGame() {
+    if (this._autoUpdating) return;
     if (this._departing) { this._finishDeparture(true); return; }
     // Note: the new-game save-wipe confirm lives in _requestStartGame() (the
     // button/key entry point). _startGame() is the confirmed departure path.
@@ -1007,6 +1026,7 @@ export class MenuScreen {
    * @param {number} cameraDur — seconds for the 3D hero camera pull-back.
    */
   _beginDeparture(event, durationMs, cameraDur) {
+    if (this._autoUpdating) return;   // up1: the backstop — no departure while the update switch is under way
     this._departEvent = event;
 
     const reduced = !!(window.matchMedia &&
@@ -1139,6 +1159,7 @@ export class MenuScreen {
    * value speed.
    */
   _continueGame() {
+    if (this._autoUpdating) return;
     if (this._departing) { this._finishDeparture(true); return; }
     audioSystem.init();
     audioSystem.resume();
@@ -1190,6 +1211,7 @@ export class MenuScreen {
   _mountUpdateCard() {
     const p = this._update;
     if (!p || !this.element) return;
+    if (this._autoUpdating) return;   // up1: the notice holds the place; the card returns only if the switch gives up
     if (this._updateDismissed === p.hash) return;
     if (this._updateCard && this._updateCard._hash === p.hash) return;
     this._unmountUpdateCard();
@@ -1218,20 +1240,109 @@ export class MenuScreen {
   }
 
   /**
+   * @private Events.UPDATE_AUTO_APPLY `{ hash, tag, bullets }` (UpdateWatch
+   * emits it INSTEAD of UPDATE_AVAILABLE when a build is waiting, the state is
+   * the menu, no game has begun, this is the only window and this build was not
+   * tried yet): show one line and switch, through the same `_applyUpdate()` as
+   * the tap, so `_reload()` stays the page's one reload site. While `_autoUpdating`
+   * every start path returns early. If a departure is already playing (or the
+   * menu is not up) it never switches: the card path takes over.
+   */
+  _onUpdateAutoApply(p) {
+    if (!p || typeof p.hash !== 'string' || !p.hash) return;
+    if (this._autoUpdating) return;
+    if (!this.visible || this._departing || this._applyingUpdate) { this._onUpdateAvailable(p); return; }
+    // D3: the loop-guard key is written HERE, only when the switch really starts; a menu
+    // that fell back to the card above leaves the build "untried". No usable key → the card.
+    if (!this._claimAutoApply(p.appBuild)) { this._onUpdateAvailable(p); return; }
+    this._update = p;
+    this._autoUpdating = true;
+    const attempt = ++this._autoAttempt;
+    this._unmountUpdateCard();
+    this._mountUpdateNotice();
+    this._armAutoUpdateRelease();
+    // Cancellable: once the failsafe let go (or a later attempt began) a still-pending switch posts and reloads nothing.
+    this._applyUpdate(() => !this._autoUpdating || this._autoAttempt !== attempt);
+  }
+
+  /** @private Take the one auto-apply attempt for this build (sessionStorage guard). Overridable for tests. */
+  _claimAutoApply(appBuild) {
+    return claimAutoApply(appBuild);
+  }
+
+  /**
+   * @private The one-line notice, right after #menu-continue-wrapper (where the
+   * card would sit), looked up on this.element only. Text via textContent.
+   */
+  _mountUpdateNotice() {
+    if (!this.element) return;
+    this._unmountUpdateNotice();
+    const anchor = this.element.querySelector('#menu-continue-wrapper');
+    if (!anchor || !anchor.insertAdjacentElement) return;
+    const note = document.createElement('div');
+    note.id = 'menu-update-notice';
+    note.setAttribute('role', 'status');
+    note.setAttribute('aria-live', 'polite');
+    note.textContent = UPDATE_NOTICE_TEXT;
+    note.style.cssText = `
+      display: block; box-sizing: border-box; width: 100%; max-width: 420px;
+      margin: 0.9rem auto 0; padding: 12px 16px; text-align: center;
+      background: rgba(4,12,30,0.52); border: 1px solid rgba(0,255,136,0.14); border-radius: 8px;
+      font-family: var(--font-mono); font-size: 0.95rem; letter-spacing: 0.12em; color: #00ff88;
+    `;
+    anchor.insertAdjacentElement('afterend', note);
+    this._updateNotice = note;
+  }
+
+  /** @private Remove the notice (no-op when absent). */
+  _unmountUpdateNotice() {
+    if (this._updateNotice) {
+      if (this._updateNotice.remove) this._updateNotice.remove();
+      this._updateNotice = null;
+    }
+  }
+
+  /** @private Failsafe: a switch that never lands must not lock the menu for good. */
+  _armAutoUpdateRelease() {
+    if (this._autoUpdateTimer) clearTimeout(this._autoUpdateTimer);
+    this._autoUpdateTimer = setTimeout(() => this._releaseAutoUpdate(), AUTO_UPDATE_RELEASE_MS);
+  }
+
+  /**
+   * @private The switch did not take the page away: open the lock, drop the
+   * notice, let a tap try again, and show the card.
+   */
+  _releaseAutoUpdate() {
+    this._autoUpdateTimer = null;
+    if (this._reloadIssued) return;   // the page is already going away: do not open the lock under it
+    if (!this._autoUpdating) return;
+    this._autoUpdating = false;
+    this._applyingUpdate = false;
+    this._unmountUpdateNotice();
+    if (this.visible && this._update) this._mountUpdateCard();
+  }
+
+  /**
    * @private TAP TO UPDATE. The new build is installed and WAITING in the
    * service worker (it never takes over by itself): switch to it, and reload
    * once it has taken over. With no worker waiting this is a plain reload.
    * core/UpdateWatch.js applyUpdate() owns the order (listener first, then
    * SKIP_WAITING) and reloads through _reload(). Overridable for tests.
    */
-  _applyUpdate() {
+  _applyUpdate(cancelled) {
     if (this._applyingUpdate) return;   // a second tap must not stack a second listener
     this._applyingUpdate = true;
+    if (typeof cancelled === 'function') {
+      // The automatic switch: it can be called off (see _onUpdateAutoApply), and then it never reloads.
+      applyUpdate({ reload: () => this._reload(), cancelled }).catch(() => { if (!cancelled()) this._reload(); });
+      return;
+    }
     applyUpdate({ reload: () => this._reload() }).catch(() => this._reload());
   }
 
   /** @private The page's ONE reload site. Overridable for tests. */
   _reload() {
+    this._reloadIssued = true;
     window.location.reload();
   }
 
