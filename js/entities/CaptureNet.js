@@ -380,6 +380,13 @@ export function catchHomeZ(keepOut, r) {
 }
 
 /**
+ * The largest drawn reach (m) a catch is still seated by (home-seat): the same limit as TipCargo.MAX_BAG_R_M (a tip
+ * takes a bag up to 0.75 m). Mirrored here, not imported: TipCargo imports CaptureNet (a cycle); test-HomeSeatTrueReach
+ * pins the two equal.
+ */
+export const TIP_HOME_MAX_REACH_M = 0.75;
+
+/**
  * Home distance (metres) of a catch's CENTRE from the berth anchor (the collar plane) along the collar axis.
  * Cached on the debris per radius (`_homeCache`): the ship does not change shape between the reel entry and the
  * lasso's delivery. On the 2.30 m radiators the answer is the same at every radiator angle for r <= 1.4 m (measured
@@ -396,11 +403,18 @@ export function catchHomeZ(keepOut, r) {
  * checked (`source: 'unchecked'`, see `catchHomeZ`) is logged once per catch with console.warn.
  * @param {object} player — PlayerSatellite (collar anchor z)
  * @param {object|null} armManager — for `getKeepOut()`
- * @param {object} d — the catch (sizeMeter)
+ * @param {object} d — the catch (sizeMeter, type, id). The seating radius is its drawn reach (`DebrisField.trueReachM`) when that
+ *   is <= TIP_HOME_MAX_REACH_M (a tip takes it; home-seat, 2026-10-18), else `sizeMeter / 2` (typeless pieces: the same number).
  * @returns {number} metres from the berth anchor
  */
 export function catchHomeDistM(player, armManager, d) {
-  const r = (d && d.sizeMeter ? d.sizeMeter : 2) / 2;
+  // home-seat (2026-10-18): the radius the catch is SEATED by is its drawn reach (DebrisField.trueReachM, the same
+  // number the tip hand-off uses as its bag radius) when that reach fits a tip (<= TIP_HOME_MAX_REACH_M); a bigger
+  // catch keeps sizeMeter / 2, because its drawn reach would run past the measured ALL_ANGLE_HOME rows. A typeless
+  // piece has trueReachM = sizeMeter / 2, so its home is unchanged.
+  const nominalR = (d && d.sizeMeter ? d.sizeMeter : 2) / 2;
+  const reachR = DebrisField.trueReachM(d, 2);
+  const r = reachR <= TIP_HOME_MAX_REACH_M + 1e-9 ? reachR : nominalR;
   const M = Constants.SCENE_UNITS_PER_METER;
   const V5 = Constants.OCTOPUS_V5;
   const anchorZ = (player && player._netBerthCollar && player._netBerthCollar.position)
