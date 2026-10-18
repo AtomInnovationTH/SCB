@@ -2668,7 +2668,9 @@ export const Constants = {
     // whole sky, so it costs at least the wide scan's energy whatever scan is
     // pressed (× COST_MULT; the normal sweep / analysis split, the analysis over
     // WIDE.ANALYSIS_S). Later scans pay their own cost. Not persisted.
-    COLD_SEARCH_WH: 90,
+    // 90 → 160 Wh (owner 2026-10-18, "First scan hotter": mission 1 must warn
+    // about heat through normal play; replay tmp/heat-opts/replay2.mjs, option 2).
+    COLD_SEARCH_WH: 160,
     QUICK: {
       DURATION: 0.3,          // seconds to complete quick scan (fast S→reward feedback)
       COOLDOWN: 5.0,          // seconds between quick scans (raised from 3.0 — anti-spam)

@@ -67,7 +67,8 @@ const smoothstep01 = (t) => { const f = t < 0 ? 0 : t > 1 ? 1 : t; return f * f 
  * Radiator angle (degrees) for a hand-off: the arriving bag's radius picks the row, the largest bag
  * already held on another tip picks the column; a radius rounds UP to the next row/column. No bag
  * held -> the table's own "none held" column (`noneDeg`): 3° up to a 0.60 m catch, 18° for 0.75 m.
- * Measured at the 2.30 m radiators (v12-big-bags: tmp/probes/arm-length/ho5.mjs, tmp/v12bb/summ.txt);
+ * Measured at the 2.30 m radiators (v12-big-bags 2026-10-16), then every held-bag cell re-run with the
+ * catch at the nose (2026-10-18, commit 19204e83; docs/research/2026-10-leash.md "held bag" re-measure);
  * Constants.LEASH.HANDOFF_THETA_TABLE.
  * @param {number} arrivingR — metres
  * @param {number} [heldR] — metres, the largest held bag (0/undefined = none)
@@ -92,10 +93,22 @@ export function leashAnchorShip(tipIndex) {
   return { x: K.ANCHOR_AZ_R_M * Math.cos(az), y: K.ANCHOR_AZ_R_M * Math.sin(az), z };
 }
 
-/** Plain words for a machine failure reason (the comms line). */
-function plainReason(f) {
+/**
+ * Plain words for a machine failure reason (the comms line). A turn the autopilot refused at once names its own
+ * cause (leash-fail-rack, Decision 3): out of steering gas, busy aiming, already turning, a daughter on her tether.
+ * Any other turn rejection keeps "the ship could not make the turn".
+ * @param {{reason?:string}} f
+ * @returns {string}
+ */
+export function plainReason(f) {
   const r = String((f && f.reason) || '');
-  if (/^turn rejected/.test(r)) return 'the ship could not make the turn';
+  if (/^turn rejected/.test(r)) {
+    if (/steering gas/i.test(r)) return 'the ship is out of steering gas';
+    if (/aim in progress/i.test(r)) return 'the ship was busy aiming';
+    if (/turn in progress/i.test(r)) return 'the ship was already turning';
+    if (/daughter on its tether/i.test(r)) return 'a daughter is out on her tether';
+    return 'the ship could not make the turn';
+  }
   if (/^timeout/.test(r)) return 'it took too long';
   if (/too far/.test(r)) return 'the radiator was too far from the catch';
   if (/opposite|wrong side/.test(r)) return 'the radiator is on the far side of the ship';
@@ -727,10 +740,19 @@ export class LeashDriver {
       t.reason = (err && err.message) || 'turn refused';
       return;
     }
-    h.tookHold = true;
     if (promise && typeof promise.then === 'function') {
       promise.then(() => {}, (err) => { if (t.state !== 'done' && err && err.message) t.reason = t.reason || err.message; });
     }
+    // leash-fail-rack: the autopilot's own refusal text, read at once (its rejection handler runs later, and
+    // isTurning() is true when another turn was already running: that turn is not ours to adopt, and a refused
+    // request took no hold, so _releaseHold must not release someone else's).
+    const refusal = typeof ap.lastAttitudeTurnRefusal === 'function' ? ap.lastAttitudeTurnRefusal() : null;
+    if (refusal) {
+      t.state = 'rejected';
+      t.reason = refusal;
+      return;
+    }
+    h.tookHold = true;
     if (!ap.isTurning()) {
       t.state = 'rejected';
       t.reason = t.reason || this._whyNoTurn();
@@ -790,7 +812,10 @@ export class LeashDriver {
     h.relatched = true;
     net._leash = false;
     net._leashNoseReel = false;
-    net._leashFailed = true;       // no second try, and never the rack: the nose furnace takes it
+    // No second leash try. With FURNACE_COOK on, never the rack either: the nose furnace takes it. With it off
+    // (the shipped default) nothing at the nose takes it, so CaptureNet._tryCargoTransfer sends it to the daughter
+    // rack instead (leash-fail-rack).
+    net._leashFailed = true;
     net._cargoDeclined = true;
     net._cargoRetryS = 0;
     net._floorRampT = 0;           // E3: the drawn size ramps up from the real size again, no pop to the full floor

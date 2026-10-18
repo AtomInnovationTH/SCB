@@ -3777,9 +3777,19 @@ export class CaptureNetSystem {
 
     // Leash hand-off (lane l5b-wire, DECISIONS §1): a small catch goes to a radiator tip on its
     // own leash. A leash that failed (snag, rejected turn) brought the catch back to the nose:
-    // no second try and never the rack — the nose furnace takes it (coordinator ruling 2026-10-14).
-    if (net._leashFailed) return false;
-    if (FEATURE_FLAGS.LEASH_HANDOFF) {
+    // no second try. With FURNACE_COOK on, never the rack either — the nose furnace takes it
+    // (coordinator ruling 2026-10-14). With it off (no-melt, DECISIONS §12) nothing at the nose
+    // takes it, so a failed hand-off skips the leash block and goes to the daughter rack below —
+    // no ship turn, no gas (lane leash-fail-rack). The 0.5 s retry above re-offers it; with no
+    // free cell the usual refusal line is said once. It waits (silently) until the hand-off has
+    // finished: the net is relatched when the catch is home, but the radiators are still unfolding
+    // for ~9 s and the failure line comes at the end (measured: rack flight at 35.0-38.1 s with the
+    // radiators folded, "did not work" at 43.9 s). The rack beat starts after the radiators are home.
+    if (net._leashFailed) {
+      if (Constants.isFeatureEnabled('FURNACE_COOK')) return false;
+      const leashDrv = player && player.leashDriver;
+      if (leashDrv && typeof leashDrv.isActive === 'function' && leashDrv.isActive()) return false;
+    } else if (FEATURE_FLAGS.LEASH_HANDOFF) {
       const verdict = this._tryLeash(net, d);
       if (verdict === 'started') return true;
       if (verdict === 'declined') return false;

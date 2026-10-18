@@ -242,6 +242,8 @@ export class AutopilotSystem {
 
     /** @type {object|null} Active scripted whole-ship turn (requestAttitudeTurn) */
     this._turn = null;
+    /** @type {string|null} leash-fail-rack: why the last requestAttitudeTurn() call refused at once (null = it was accepted) */
+    this._lastTurnRefusal = null;
 
     /** @type {boolean} Attitude hold (steady freeze) during a catch reel-in. */
     this._attitudeHold = false;
@@ -299,6 +301,15 @@ export class AutopilotSystem {
 
   /** @returns {boolean} True while a scripted whole-ship turn (requestAttitudeTurn) is running. */
   isTurning() { return !!this._turn; }
+
+  /**
+   * leash-fail-rack: the reason the most recent requestAttitudeTurn() call refused at once (its synchronous
+   * rejection: 'Aim in progress', 'Turn in progress', 'not enough steering gas', …), or null when that call was
+   * accepted. Read it right after the call: the rejected promise's handler runs later, and isTurning() cannot
+   * tell a refusal from a turn somebody else already had running.
+   * @returns {string|null}
+   */
+  lastAttitudeTurnRefusal() { return this._lastTurnRefusal; }
 
   /**
    * mother-aims: true while some system holds the mother's attitude steady (a mother-net reel-in, the leash
@@ -2215,7 +2226,8 @@ export class AutopilotSystem {
    */
   requestAttitudeTurn(axisWorld, angleRad, opts = {}) {
     const player = this._player;
-    const fail = (msg) => Promise.reject(new Error(msg));
+    this._lastTurnRefusal = null;
+    const fail = (msg) => { this._lastTurnRefusal = msg; return Promise.reject(new Error(msg)); };
     if (!player) return fail('AutopilotSystem not initialized (no player).');
     if (this._aimCoroutine) return fail('Aim in progress');
     if (this._turn) return fail('Turn in progress');
