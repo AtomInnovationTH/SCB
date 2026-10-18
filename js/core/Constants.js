@@ -4457,18 +4457,33 @@ export const Constants = {
     // rounds UP to the next row/column. The 0.60 and 0.75 rows sit at 13° and 18° because the bag's clearance to its own
     // strut dips to 19.2 mm (0.60 m) and 16.7 mm (0.75 m) at 8-9° and only clears 0.02 m again from 13° / 18°.
     // 0.50/0.40 raised 5→6 2026-10-17: 0.41–0.46 m arriving with 0.40 m held need 6° (0.01 m sweep).
+    // RE-MEASURED 2026-10-18 (lane leash-held-angle) with the catch AT THE NOSE, as the game starts it (the 2026-10-16 table was
+    // measured with the catch off the nose): at the old angle the arriving catch overlapped the held bag and the line "touched a
+    // held catch" (mission 1 catch 2, reach 0.373 m beside catch 1, r 0.32 m: 4° snagged, 6° passes). Method: the whole hand-off on
+    // the real ship (LeashWiring rig, 30 fps, typed fragments, arriving 4 kg, furnace cook off), the cell's angle forced; a pass
+    // = a latch AND the end of the hand-off (DONE, no snag). Every held bag at the column's radius, three fills in the game's
+    // tip order 0, 2, 1, 3 (held {0} → arriving tip 2; {0,2} → tip 1; {0,2,1} → tip 3), and three arriving radii per row: the row's
+    // edge, the midpoint to the row below and just above the row below (the pass angle is U-shaped in the arriving radius: a
+    // small catch sits lower and needs MORE, so the bottom of a low row binds; row 0.15 uses 0.15 and 0.125). A cell is the
+    // smallest angle that passes in all of those, plus 1° (so the angle below it passes too). No cell was lowered: the 16 that pass at
+    // their old value and one degree under it keep it (3° cells in the low rows and columns, the 13° cells of row 0.60, the 18° cells
+    // of row 0.75 up to column 0.60); the other 48 rose, by up to 6°.
+    // No bag held (`noneDeg`) re-checked at 3° and 2°, arriving tips 0 and 2, all three radii: unchanged. Every cell is under the 45°
+    // cap (the hull touches at 52°). The new cells were run again through the game's own lookup (552 runs, all pass) and with all 12
+    // single-held tip pairs (768 runs, all pass). Probe: tmp/probe/grid.mjs (gitignored; raw runs in tmp/probe/out/);
+    // summary in docs/research/2026-10-leash.md.
     HANDOFF_THETA_TABLE: {
       radiiM: [0.15, 0.22, 0.30, 0.35, 0.40, 0.50, 0.60, 0.75],
       noneDeg: [3, 3, 3, 3, 3, 3, 3, 18],   // nothing held: one entry per row
       deg: [
-        [3, 3, 3, 3, 4, 7, 10, 13],      // Ra 0.15
-        [3, 3, 3, 3, 4, 7, 10, 13],      // Ra 0.22
-        [3, 3, 3, 4, 5, 7, 10, 13],      // Ra 0.30
-        [3, 3, 3, 4, 5, 8, 10, 13],      // Ra 0.35
-        [3, 3, 3, 4, 6, 8, 10, 13],      // Ra 0.40
-        [3, 3, 3, 4, 6, 8, 11, 14],      // Ra 0.50
-        [3, 3, 13, 13, 13, 13, 13, 14],  // Ra 0.60
-        [18, 18, 18, 18, 18, 18, 18, 18], // Ra 0.75
+        [3, 5, 7, 9, 10, 12, 15, 18],       // Ra 0.15
+        [3, 4, 6, 7, 9, 11, 13, 16],        // Ra 0.22
+        [3, 3, 5, 7, 8, 10, 12, 14],        // Ra 0.30
+        [3, 4, 6, 7, 8, 11, 13, 15],        // Ra 0.35
+        [3, 4, 7, 8, 9, 11, 13, 16],        // Ra 0.40
+        [4, 6, 8, 9, 10, 12, 14, 17],       // Ra 0.50
+        [5, 7, 13, 13, 13, 14, 16, 18],     // Ra 0.60
+        [18, 18, 18, 18, 18, 18, 18, 20],   // Ra 0.75
       ],
     },
     SUBSTEP_MAX_S:       1/60,   // s — line substep ceiling
