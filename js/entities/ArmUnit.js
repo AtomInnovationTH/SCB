@@ -27,6 +27,8 @@ import { recommendArmTool } from '../systems/ToolRecommender.js';
 import { computeToolOdds, makeNetOddsLockCache } from '../systems/ToolOdds.js';
 import { gameState } from '../core/GameState.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
+import { DebrisField } from './DebrisField.js';          // catch-snug: the drawn scale of a held catch
+import { DebrisWireframe } from '../ui/DebrisWireframe.js'; // catch-snug: the drawn mesh vertices
 
 /** 1 meter in scene units (1 scene unit = 100 km) — CAPTURE_NET.md §11.7 hoist
  * (2026-08-27): reads the one authoritative scale (Constants.SCENE_UNITS_PER_METER,
@@ -204,6 +206,131 @@ export function heldSlotAnchorInto(anchor, holdDir, up, slotIndex, sizeMeter, ou
   }
   return out;
 }
+
+// ── catch-snug (2026-10-18): a catch held IN HAND sits tight at her end ──────
+// Owner, play report 2026-10-18: "debris seems to float .5 meter away from end of
+// daughter, should be reeled in firmly to end of daughter." The old in-hand pin put
+// the catch centre at sizeMeter/2 + ARM_HOLD_CLEARANCE_M (1.0 m) along the hold axis;
+// the DRAWN mesh reaches 0.7-1.1 m off her end (measured 2026-10-18). Now, every
+// frame, the centre distance is her support along the axis + the catch's support
+// along -axis + ARM_HOLD_NET_GAP_M, so the nearest DRAWN point is one net gap from
+// her end whatever either of them is doing. Measured from the real shapes: her
+// bodyDims box plus every SOLID mesh of hers (nozzles, socket, net launcher,
+// antenna ...; NOT plume/halo meshes, sprites or lines: `collectSolidPointsM`) and
+// the catch's cached mesh vertices at the scale the renderer uses
+// (`DebrisField.effectiveRenderScale`, the one shared reader), in the orientation
+// it is drawn at (tumbleAxis/tumbleAngle). No size factor anywhere, so a change to
+// the drawn scale or mesh follows by itself.
+const _holdVertCache = new WeakMap();   // BufferGeometry -> Float32Array of UNIQUE vertices (xyz)
+function _holdVertices(geo) {
+  let verts = _holdVertCache.get(geo);
+  if (verts) return verts;
+  const pos = geo && geo.attributes && geo.attributes.position;
+  const seen = new Set();
+  const list = [];
+  if (pos) {
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const key = `${x.toFixed(5)},${y.toFixed(5)},${z.toFixed(5)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      list.push(x, y, z);
+    }
+  }
+  verts = new Float32Array(list);
+  _holdVertCache.set(geo, verts);
+  return verts;
+}
+const _snugQuat = new THREE.Quaternion();
+const _snugDirLocal = new THREE.Vector3();
+
+/**
+ * Every vertex of the SOLID meshes under `root` (a daughter's `mesh` group), in `root`'s own
+ * frame, in METRES (the daughter is modelled in scene units). Plume/halo meshes (named
+ * `*plume*`, or drawn additively), sprites and line objects are not solid and are skipped.
+ * Duplicates are merged (0.1 mm), so the list stays a few hundred points.
+ * @param {THREE.Object3D} root
+ * @returns {Float32Array} xyz triples, metres
+ */
+export function collectSolidPointsM(root) {
+  const out = [];
+  const seen = new Set();
+  const m = new THREE.Matrix4();
+  const v = new THREE.Vector3();
+  root.traverse((o) => {
+    if (o === root || !o.isMesh || !o.geometry) return;
+    if (/plume/i.test(o.name || '')) return;
+    if (o.material && o.material.blending === THREE.AdditiveBlending) return;
+    const pos = o.geometry.attributes && o.geometry.attributes.position;
+    if (!pos) return;
+    // matrix of `o` relative to `root`
+    m.identity();
+    for (let p = o; p && p !== root; p = p.parent) { p.updateMatrix(); m.premultiply(p.matrix); }
+    for (let i = 0; i < pos.count; i++) {
+      v.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(m).multiplyScalar(1 / M);
+      const key = `${Math.round(v.x * 1e4)},${Math.round(v.y * 1e4)},${Math.round(v.z * 1e4)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(v.x, v.y, v.z);
+    }
+  });
+  return new Float32Array(out);
+}
+
+/**
+ * Distance (metres) from a daughter's centre to the centre of the catch she holds,
+ * such that the nearest drawn point of the catch is `gapM` off her real drawn end along
+ * the unit hold axis `dir` (world frame): the end of her bodyDims box, or of any solid
+ * mesh of hers (`solidPointsM`, from `collectSolidPointsM`) that sticks out further.
+ * The catch's drawn scale is `DebrisField.effectiveRenderScale(d)` (the one shared
+ * reader) — the caller marks the catch `_armPinned` first, as the renderer will see it.
+ * @param {THREE.Quaternion} bodyQuat daughter's current world attitude (group.quaternion)
+ * @param {number[]} bodyDims [x, y, z] full box dimensions, metres
+ * @param {object} d the catch (reads type, id, sizeMeter, sceneSize, tumbleAxis/Angle, _catchRenderMin)
+ * @param {THREE.Vector3} dir unit hold axis, world frame (daughter -> catch)
+ * @param {number} gapM air gap, metres
+ * @param {Float32Array|null} [solidPointsM] her solid-mesh vertices, her frame, metres
+ * @returns {number|null} metres, or null when the catch has no drawn mesh (no type)
+ */
+export function catchHoldStandoffM(bodyQuat, bodyDims, d, dir, gapM, solidPointsM = null) {
+  if (!d || !d.type || !bodyDims || !dir) return null;
+  // Her support along dir: box half-extents, in her own frame ...
+  _snugDirLocal.copy(dir).applyQuaternion(_snugQuat.copy(bodyQuat).invert());
+  let daughterM = Math.abs(_snugDirLocal.x) * bodyDims[0] / 2
+    + Math.abs(_snugDirLocal.y) * bodyDims[1] / 2
+    + Math.abs(_snugDirLocal.z) * bodyDims[2] / 2;
+  // ... or any solid part of her mesh that reaches further (aft nozzle 1.9 cm past the box,
+  // the net launcher 5 cm past the fore face, the antenna ...).
+  if (solidPointsM) {
+    const sx = _snugDirLocal.x, sy = _snugDirLocal.y, sz = _snugDirLocal.z;
+    for (let i = 0; i < solidPointsM.length; i += 3) {
+      const dot = solidPointsM[i] * sx + solidPointsM[i + 1] * sy + solidPointsM[i + 2] * sz;
+      if (dot > daughterM) daughterM = dot;
+    }
+  }
+  // Her catch's support along -dir: its vertices, at the drawn scale and attitude.
+  const geo = DebrisWireframe.getGeometry(d.type, d.id);
+  const verts = _holdVertices(geo);
+  if (verts.length < 3) return null;
+  if (d.tumbleAxis) _snugQuat.setFromAxisAngle(d.tumbleAxis, d.tumbleAngle || 0);
+  else _snugQuat.identity();
+  _snugDirLocal.copy(dir).negate().applyQuaternion(_snugQuat.invert());
+  const lx = _snugDirLocal.x, ly = _snugDirLocal.y, lz = _snugDirLocal.z;
+  let best = -Infinity;
+  for (let i = 0; i < verts.length; i += 3) {
+    const dot = verts[i] * lx + verts[i + 1] * ly + verts[i + 2] * lz;
+    if (dot > best) best = dot;
+  }
+  // The drawn scale, from the game's own reader (what pinCapturedDebris / _updateInstanceTransform
+  // draw it at); published on the catch so a test can assert the two never disagree.
+  const scaleScene = DebrisField.effectiveRenderScale(d);
+  d._holdDrawnScale = scaleScene;
+  const catchM = best * (scaleScene / M);
+  const total = daughterM + catchM + gapM;
+  return Number.isFinite(total) ? total : null;
+}
+
+const _glideFromTmp = new THREE.Vector3();
 
 // ---------------------------------------------------------------------------
 // §11.5 capture-torque settle — pure physics (exported for headless tests).
@@ -2870,6 +2997,13 @@ export class ArmUnit {
     // 30 m line's strut-side end jumped 9 m (then eased back as the deltas shrank, ~35 frames). Re-sync it.
     if (this.tetherLine.visible) this.tetherLine.quaternion.copy(this.group.quaternion).invert();
 
+    // catch-snug: _updateReeling pinned the catch with her attitude from BEFORE the slerp above turned her
+    // (up to ~18° on the first reel frame: the gap wobbled 0.00-0.05 m instead of 0.03). Pin once more so
+    // the catch sits one net gap off her end in the frame that is drawn (ArmManager draws it from _armPinPos).
+    if (this.state === S.REELING && this.capturedDebris && this.capturedDebris._armPinned) {
+      this._pinCatchToSelf(parentPos);
+    }
+
     // Thruster plume animation
     this._updatePlumes(dt);
 
@@ -5527,8 +5661,13 @@ export class ArmUnit {
    * the catch drift hundreds of metres away on its own orbit during the haul.
    *
    * 2026-06-12 (Issue 13): the pin carries a STANDOFF along the hold axis —
-   * `arm.position + holdDir × (sizeMeter/2 + ARM_HOLD_CLEARANCE_M)` — so the
-   * daughter never renders inside a catch larger than herself. holdDir is the
+   * `arm.position + holdDir × standoff` — so the daughter never renders inside a
+   * catch larger than herself. catch-snug (2026-10-18): for a catch with a drawn
+   * mesh the standoff is `d._holdStandoffM`, recomputed EVERY pin from the two
+   * drawn shapes (`catchHoldStandoffM`: her support along the axis + the catch's
+   * support along -axis + ARM_HOLD_NET_GAP_M), so the nearest drawn point sits one
+   * net gap off her end. A catch with no type (old saves, rigs) has no
+   * `_holdStandoffM` and keeps `sizeMeter/2 + ARM_HOLD_CLEARANCE_M`. holdDir is the
    * capture axis (net launchDirection while the fired-net ref lives), else the
    * outboard direction from the mother (so the catch hangs outboard of the
    * daughter in REELING and outboard of the strut in HOLDING_CATCH, tracking
@@ -5557,7 +5696,21 @@ export class ArmUnit {
     }
     if (hasDir) dir.normalize(); else dir.set(0, 0, 0);
     const clearance = (Constants.ARM_HOLD_CLEARANCE_M ?? 1.0);
-    const standoffScene = ((d.sizeMeter || 0) / 2 + clearance) * M;
+    // catch-snug: ONE number for the in-hand pin — the per-frame tight standoff when the
+    // catch has a drawn mesh, else (no type / no axis) today's sizeMeter/2 + clearance.
+    // The renderer draws a pinned catch at the net-held floor: mark it pinned BEFORE measuring so
+    // the standoff reads the drawn scale through DebrisField.effectiveRenderScale.
+    d._armPinned = true;
+    const snugM = hasDir
+      ? catchHoldStandoffM(this.group.quaternion, this.config.bodyDims, d, dir,
+        Constants.ARM_HOLD_NET_GAP_M ?? 0.03, this._solidPointsM())
+      : null;
+    if (snugM !== null) d._holdStandoffM = snugM;
+    else if (d._holdStandoffM !== undefined) d._holdStandoffM = undefined;
+    const standoffM = Number.isFinite(d._holdStandoffM)
+      ? d._holdStandoffM
+      : (d.sizeMeter || 0) / 2 + clearance;
+    const standoffScene = standoffM * M;
     if (!d._armPinPos) d._armPinPos = new THREE.Vector3();
     d._armPinPos.copy(this.position).addScaledVector(dir, standoffScene);
 
@@ -5602,6 +5755,17 @@ export class ArmUnit {
   _stowHeldCatch(debris) {
     if (this.holdCellsFree <= 0) return false;
     this.heldCatches.push(debris);
+    // catch-snug: the piece she is carrying IN HAND (tight at her end) is moving to its rack
+    // slot — remember where it sits relative to her so `_pinHeldCatches` glides it there
+    // over ARM_HOLD_GLIDE_S instead of jumping in one frame. Only the in-hand piece glides
+    // (a cargo hand-off arrives from the mother net on its own arc).
+    if (debris === this.capturedDebris && debris._armPinned && debris._armPinPos
+        && (Constants.ARM_HOLD_GLIDE_S ?? 0) > 0) {
+      debris._holdGlide = {
+        arm: this,
+        from: new THREE.Vector3().subVectors(debris._armPinPos, this.position),
+      };
+    }
     return true;
   }
 
@@ -5649,9 +5813,42 @@ export class ArmUnit {
   }
 
   /**
+   * catch-snug: her solid-mesh vertices (her frame, metres), collected once — the hold standoff
+   * measures against these as well as the bodyDims box. Null before the mesh exists.
+   * @returns {Float32Array|null}
+   * @private
+   */
+  _solidPointsM() {
+    if (!this.mesh) return null;
+    if (!this._holdSolidPts) this._holdSolidPts = collectSolidPointsM(this.mesh);
+    return this._holdSolidPts;
+  }
+
+  /**
+   * catch-snug: ease a freshly stowed piece from where it sat in hand to its rack slot.
+   * `d._armPinPos` holds the slot on entry; on exit it holds the point `smoothstep` of the
+   * way from the in-hand point (which rides with the daughter) to the slot. The glide is
+   * driven by this daughter's own HOLDING_CATCH `stateTimer` (the stow frame itself is
+   * still DOCKING, so it lands exactly where the in-hand pin put it — no jump).
+   * @param {object} d the stowed piece (carries `_holdGlide`)
+   * @private
+   */
+  _glideHeldCatch(d) {
+    const g = d._holdGlide;
+    const dur = Constants.ARM_HOLD_GLIDE_S ?? 0;
+    const f = this.state === S.HOLDING_CATCH ? this.stateTimer / dur : 0;
+    if (!g || g.arm !== this || !(dur > 0) || !(f < 1)) { d._holdGlide = null; return; }
+    const s = f * f * (3 - 2 * f);
+    _glideFromTmp.copy(this.position).add(g.from);
+    d._armPinPos.lerpVectors(_glideFromTmp, d._armPinPos, s);
+  }
+
+  /**
    * Cargo-continuity S6: pin every piece on the parked cargo rack, one slot
-   * per piece. Each piece gets the SAME standoff as the in-hand pin
-   * (`sizeMeter/2 + ARM_HOLD_CLEARANCE_M` along the hold axis); the
+   * per piece. Each piece gets the rack standoff (`sizeMeter/2 +
+   * ARM_HOLD_CLEARANCE_M` along the hold axis — the pre-catch-snug in-hand
+   * standoff; the in-hand pin itself is now tight, see `_pinCatchToSelf`, and a
+   * freshly stowed piece glides from there to its slot, `_glideHeldCatch`); the
    * lateral-bias direction is rotated `i × 2π/DAUGHTER_CARGO_CELLS` about that
    * axis so N pieces ring the strut tip instead of stacking in one spot.
    * Slot 0's rotation is zero, so a one-piece rack lands byte-identically on
@@ -5678,6 +5875,7 @@ export class ArmUnit {
       if (!d) continue;
       if (!d._armPinPos) d._armPinPos = new THREE.Vector3();
       this.heldSlotWorldInto(i, d.sizeMeter, parentPos, d._armPinPos);
+      if (d._holdGlide) this._glideHeldCatch(d);
       d._armPinned = true;
       if (parentQuat) applyShipRelativeAttitude(d, parentQuat);
     }

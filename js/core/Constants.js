@@ -1447,7 +1447,20 @@ export const Constants = {
   // the catch is held at arm.position + holdDir × (sizeMeter/2 + clearance) so
   // the daughter never renders INSIDE a catch larger than herself. ≈ daughter
   // half-length + net bag slack.
+  // catch-snug (2026-10-18): this 1.0 m is NO LONGER the in-hand standoff for a
+  // catch that has a drawn mesh (owner: "debris seems to float .5 meter away from
+  // end of daughter, should be reeled in firmly"). A typed catch in hand sits
+  // ARM_HOLD_NET_GAP_M off her end, recomputed each frame from the two drawn
+  // shapes (ArmUnit catchHoldStandoffM -> debris._holdStandoffM). It remains the
+  // rack slot's standoff (heldSlotAnchorInto, CoMCalculator, pinned by tests) and
+  // the fallback for a catch with no type (old saves, rigs).
   ARM_HOLD_CLEARANCE_M: 1.0,           // metres
+  // catch-snug: air gap (the net, ~3 cm) between the daughter's end and the nearest
+  // drawn point of a catch held in hand (pulled in, reeling, docking).
+  ARM_HOLD_NET_GAP_M: 0.03,            // metres
+  // catch-snug: the move from the tight in-hand pin to the rack slot at the end of
+  // docking glides over this long (smoothstep) instead of jumping in one frame.
+  ARM_HOLD_GLIDE_S: 1.0,               // seconds
   // While parked in HOLDING_CATCH the full-size catch is biased laterally
   // (perpendicular to the outboard hold axis) by this factor × catch radius so
   // the bag never eclipses the ~1 m daughter on the camera→daughter view axis
