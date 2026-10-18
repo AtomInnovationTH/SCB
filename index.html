@@ -118,11 +118,16 @@
     /* Labels and pane titles: D-DIN, capitals, +0.06em. Sizes and weights are left as they are.
        !important because several of these classes set their own spacing behind an id selector. */
     html[data-look="new"] :is(.pane-title, .vp-title, .vp-label, .power-label, .md-label, .orbit-label,
-        .next-title, .next-label, .cargo-title, .fma-label, .ovr-main-title, .mpd-burst-label, .hud-pin-label) {
+        .next-title, .next-label, .cargo-title, .fma-label, .ovr-main-title, .mpd-burst-label, .hud-pin-label,
+        .go-heading) {
       font-family: var(--font-label) !important;
       text-transform: uppercase !important;
       letter-spacing: 0.06em !important;
     }
+    /* Game-over / victory screen (y1-gameover-look): inherited stat text takes the label colour, bare values the data white.
+       An inline <b style="color:…"> still wins. New look only; classic keeps body green. */
+    html[data-look="new"] #gameover-stats { color: var(--hud-label); }
+    html[data-look="new"] #gameover-stats b { color: var(--hud-text); }
 
     /* === RESET & BASE === */
     * {
