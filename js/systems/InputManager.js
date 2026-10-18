@@ -188,9 +188,13 @@ export class InputManager {
           .filter(t => t.id !== capturedId && !t._captured &&
             (t.tracked !== false || (d.sensorSystem && d.sensorSystem.canDetectUntracked)));
 
-        if (targets.length > 0) {
+        // 2026-10-18: an automatic pick stays within AUTOLOCK.RANGE_M — a 385 km
+        // auto-pick emptied the argon in mission 2. Keep the list's order (TPI),
+        // take the first entry in range; none → select nothing.
+        const rangeM = Constants.AUTOLOCK.RANGE_M;
+        const next = targets.find(t => t.distanceKm * 1000 <= rangeM);
+        if (next) {
           // FIX_PLAN §4: best target = lowest TPI (composite score)
-          const next = targets[0];
           const debris = d.debrisField.getDebrisById(next.id);
           if (debris) {
             d.targetSelector.setTarget(debris, { distanceKm: next.distanceKm, deltaV: next.deltaV });

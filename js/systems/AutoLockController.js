@@ -293,10 +293,12 @@ export class AutoLockController {
     const anywhere = field.getDebrisNear(playerPos, radiusScene);
     if (!anywhere || anywhere.length === 0) return null;
     // Sorted nearest-first; the first alive, uncaptured, MARKED, non-hazard
-    // entry is the pick (scan-first: an unscanned piece is never auto-locked,
-    // even here; a hazard shard is drawn but uncatchable, so never locked).
+    // WELCOME entry is the pick (scan-first: an unscanned piece is never
+    // auto-locked, even here; a hazard shard is drawn but uncatchable, so never
+    // locked). 2026-10-18: welcome pieces only — the pre-discovered cast pieces
+    // 7-8 km away qualified and pulled mission 2 off its near pieces.
     for (const d of anywhere) {
-      if (d && d.alive && !d._captured && isMarked(d) && d.hazard !== true) return d;
+      if (d && d.alive && !d._captured && isMarked(d) && d.hazard !== true && d.welcomeSpawn === true) return d;
     }
     return null;
   }

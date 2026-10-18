@@ -1264,7 +1264,15 @@ export class GameFlowManager {
           const playerPos = player ? player.getPosition() : null;
           if (playerPos && debrisField) {
             const nearby = debrisField.getDebrisNear(playerPos, 0.5); // wide radius
-            const nextTarget = nearby.find(d => d.discovered && d.alive);
+            // 2026-10-18: the NEAREST eligible piece within AUTOLOCK.RANGE_M, else
+            // nothing — a 385 km auto-pick emptied the argon in mission 2.
+            const rangeM = Constants.AUTOLOCK.RANGE_M;
+            let nextTarget = null;
+            for (const d of nearby) {
+              if (!d || !d.discovered || !d.alive || d._captured || d.hazard === true) continue;
+              if (!(d.distanceKm * 1000 <= rangeM)) continue;
+              if (!nextTarget || d.distanceKm < nextTarget.distanceKm) nextTarget = d;
+            }
             if (nextTarget) {
               const original = debrisField.getDebrisById(nextTarget.id);
               if (original) {

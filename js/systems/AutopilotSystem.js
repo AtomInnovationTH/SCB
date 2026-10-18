@@ -658,7 +658,10 @@ export class AutopilotSystem {
       // (2026-10-18).
       let acquired = null;
       if (this._targetAcquisition && typeof this._targetAcquisition.acquireBestTarget === 'function') {
-        acquired = this._targetAcquisition.acquireBestTarget({ source: 'autopilot_reacquire' });
+        acquired = this._targetAcquisition.acquireBestTarget({
+          source: 'autopilot_reacquire',
+          maxRangeM: Constants.AUTOLOCK.RANGE_M, // 2026-10-18: a 385 km auto-pick emptied the argon in mission 2
+        });
       }
       if (acquired) {
         hasSelectedTarget = this._targetSelector.getActiveTarget();

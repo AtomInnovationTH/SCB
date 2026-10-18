@@ -38,6 +38,9 @@ import { formatDistanceKm } from './NavRecoveryAdvisor.js';
 /** Min seconds between scan-sourced verb hints (module-local cooldown). */
 const VERB_HINT_COOLDOWN_S = 30;
 
+/** Sources that pick on the player's behalf (range-bounded); everything else is the player's own pick. */
+const AUTOMATIC_SOURCES = new Set(['scan', 'autopilot_reacquire']);
+
 export class TargetAcquisition {
   constructor() {
     this._player = null;
@@ -151,7 +154,17 @@ export class TargetAcquisition {
     const list = Array.isArray(eligible) ? eligible : this.getEligibleTargets();
     if (list.length === 0) return null;
 
-    const t = list[0]; // best rank (near-first on M1, TPI later)
+    // 2026-10-18: an AUTOMATIC pick stays within AUTOLOCK.RANGE_M — a 385 km
+    // auto-pick emptied the argon in mission 2. `maxRangeM` is read here and
+    // kept out of the setTarget context; the two automatic sources default to
+    // AUTOLOCK.RANGE_M, a player's own pick (e.g. 'shift_n') is unbounded.
+    const { maxRangeM: explicitRangeM, ...ctx } = context;
+    const maxRangeM = Number.isFinite(explicitRangeM)
+      ? explicitRangeM
+      : (AUTOMATIC_SOURCES.has(ctx.source) ? Constants.AUTOLOCK.RANGE_M : Infinity);
+    // list.find: best rank first (near-first on M1, TPI later) among entries in range.
+    const t = maxRangeM === Infinity ? list[0] : list.find(e => e.distanceKm * 1000 <= maxRangeM);
+    if (!t) return null;
     const debris = (this._debrisField && typeof this._debrisField.getDebrisById === 'function')
       ? this._debrisField.getDebrisById(t.id)
       : null;
@@ -162,7 +175,7 @@ export class TargetAcquisition {
       deltaV: t.deltaV,
       autoAcquire: true,
       _suppressLockSound: true,
-      ...context,
+      ...ctx,
     });
 
     // Sync the consumers that don't self-heal from TARGET_SELECTED
@@ -199,9 +212,11 @@ export class TargetAcquisition {
     if (eligible.length === 0) return; // nothing to fill (empty pane) — no hint
 
     // Reuse the list we just computed — avoids a second O(N) pane rebuild.
-    const debris = this.acquireBestTarget({ source: 'scan' }, eligible);
+    // 2026-10-18: bounded to AUTOLOCK.RANGE_M (see acquireBestTarget); the hint
+    // describes the piece actually picked, not eligible[0].
+    const debris = this.acquireBestTarget({ source: 'scan', maxRangeM: Constants.AUTOLOCK.RANGE_M }, eligible);
     if (!debris) return;
-    this._postVerbHint(debris, eligible[0]);
+    this._postVerbHint(debris, eligible.find(e => e.id === debris.id) || eligible[0]);
   }
 
   // ─── CONTEXT-AWARE VERB HINT ───────────────────────────────────────────────
