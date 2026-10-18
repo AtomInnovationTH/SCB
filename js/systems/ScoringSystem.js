@@ -179,6 +179,8 @@ export class ScoringSystem {
         streak: this.currentStreak,
         massKg: 0,
         totalMassKg: this.totalMassRecovered,
+        // u3-payoff-calm D1: a bounty released with the catch (data.withCatch) is part of the catch's payoff.
+        ...(data.withCatch ? { kind: 'catch-bonus' } : {}),
       });
       return pts;
     }
@@ -376,6 +378,9 @@ export class ScoringSystem {
       streak: this.currentStreak,
       massKg: debrisMassKg,
       totalMassKg: this.totalMassRecovered,
+      // u3-payoff-calm D1: tells the payoff line a credited catch from other credit changes.
+      debrisType: data.debris?.type ?? null,
+      kind: data.deorbitSacrifice ? 'deorbit' : 'catch',
     });
 
     // ST-4.C mission transition check — MOVED (Wave 5 Session F, D4). It ran

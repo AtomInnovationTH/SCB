@@ -351,17 +351,71 @@ const TIME_LEFT_MAX_MIN = 24 * 60;
  * @returns {string}
  */
 export function fmtTimeLeft(level, max, netW) {
-  if (!Number.isFinite(level) || !Number.isFinite(max) || !(max > 0) || !Number.isFinite(netW)) return '';
+  const min = timeLeftMinutes(level, max, netW);
+  if (Number.isNaN(min)) return '';
+  const word = netW < 0 ? 'empty' : 'full';
+  return min < 1 ? `${word} in under 1 min` : `${word} in ${fmtMinutes(min)}`;
+}
+
+/**
+ * The real minutes behind `fmtTimeLeft` (u3-payoff-calm D3): the same guards, so it is NaN exactly
+ * when `fmtTimeLeft` would be ''.
+ * @param {number} level  Wh
+ * @param {number} max    Wh
+ * @param {number} netW   + charging, - draining
+ * @returns {number} minutes, or NaN when the text would be ''
+ */
+export function timeLeftMinutes(level, max, netW) {
+  if (!Number.isFinite(level) || !Number.isFinite(max) || !(max > 0) || !Number.isFinite(netW)) return NaN;
   const abs = Math.abs(netW);
-  if (abs < VITALS_LAW.RATE_HIDE_W) return '';
+  if (abs < VITALS_LAW.RATE_HIDE_W) return NaN;
   const toGo = netW < 0 ? level : max - level;
-  if (!(toGo > 0)) return '';
+  if (!(toGo > 0)) return NaN;
   // The battery runs on its own clock (ResourceSystem.billWatts): 1 Wh unit = W_PER_UNIT_S watt-seconds.
   const seconds = (toGo * Constants.SHIP_HEAT.W_PER_UNIT_S) / abs;
   const min = seconds / 60;
-  if (min > TIME_LEFT_MAX_MIN) return '';
-  const word = netW < 0 ? 'empty' : 'full';
-  return min < 1 ? `${word} in under 1 min` : `${word} in ${fmtMinutes(min)}`;
+  if (min > TIME_LEFT_MAX_MIN) return NaN;
+  return min;
+}
+
+/** u3-payoff-calm D3: the shown time left changes at most once a minute... */
+export const TIME_LEFT_HOLD_MS = 60000;
+/** ...unless it is this far off the truth (a fraction of the true minutes)... */
+export const TIME_LEFT_VALVE_FRAC = 0.5;
+/** ...for this long in a row (the honesty valve). */
+export const TIME_LEFT_VALVE_MS = 15000;
+
+/** The calm time-left state: nothing shown yet. */
+export function newTimeHold() {
+  return { text: '', min: NaN, changedAt: -Infinity, farSince: NaN };
+}
+
+/**
+ * u3-payoff-calm D3: what the BATTERY time-left shows, given what is true now. The shown text changes
+ * only when it appears or hides, when the direction flips (empty <-> full), when 60 s have passed since
+ * the last shown change and the new text differs, or when the shown minutes were >= 50 % off the true
+ * minutes for 15 s in a row (then the true text shows and the 60 s start again). Pure: returns the next
+ * state, never mutates `state`.
+ * @param {{text:string, min:number, changedAt:number, farSince:number}} state
+ * @param {string} trueText  `fmtTimeLeft(...)` now ('' = quiet / empty / full / warm-up)
+ * @param {number} trueMin   `timeLeftMinutes(...)` now (NaN when trueText is '')
+ * @param {number} t         ms (the clock `update()` receives)
+ * @returns {{text:string, min:number, changedAt:number, farSince:number}}
+ */
+export function nextShown(state, trueText, trueMin, t) {
+  const take = () => ({ text: trueText, min: trueMin, changedAt: t, farSince: NaN });
+  const withFar = (farSince) => (Object.is(farSince, state.farSince) ? state : { ...state, farSince });
+  if (!trueText) return state.text === '' ? state : newTimeHold();                  // (a) hide
+  if (state.text === '') return take();                                             // (a) appear
+  const word = (x) => x.slice(0, x.indexOf(' '));
+  if (word(trueText) !== word(state.text)) return take();                           // (b) the direction flipped
+  if (trueText === state.text) return withFar(NaN);
+  if (t - state.changedAt >= TIME_LEFT_HOLD_MS) return take();                      // (c) a minute has passed
+  const far = trueMin > 0 && Math.abs(trueMin - state.min) / trueMin >= TIME_LEFT_VALVE_FRAC;
+  if (!far) return withFar(NaN);
+  const since = Number.isNaN(state.farSince) ? t : state.farSince;
+  if (t - since >= TIME_LEFT_VALVE_MS) return take();                               // (d) the valve
+  return withFar(since);
 }
 
 /** `1234 m/s` — the ship's ΔV, whole m/s ('—' when not a number). */
@@ -458,6 +512,8 @@ export class VitalsPane {
     this._plumeEl = null;        // #plume-block-row
     this._timeEl = null;         // the battery time-left text
     this._timeText = '';
+    this._timeHold = newTimeHold();   // u3-payoff-calm D3: the calm time-left state
+    this._trueTimeText = '';          // the unfiltered text now (read-only; the harness and tests)
     this._fuelLabel = VITALS_LABELS.ion;
     this._median = new NetPowerMedian();   // D4: the trend / time-left use the median net power
     // D4: the arrow and the time left wait until this many one-second means exist (a full window by
@@ -481,7 +537,7 @@ export class VitalsPane {
    * h4b D5: a new game forgets the last game's power samples; the warm-up (30 one-second means)
    * starts again, so the arrow and the time left stay blank until a full window exists.
    */
-  resetMedian() { this._median.reset(); this._writeTime(''); }
+  resetMedian() { this._median.reset(); this._timeHold = newTimeHold(); this._trueTimeText = ''; this._writeTime(''); }
 
   /** The root element, or null headless. */
   get root() { return this._root; }
@@ -553,6 +609,9 @@ export class VitalsPane {
 
   /** The BATTERY time-left text, e.g. `empty in 19 min` ('' when quiet). */
   timeText() { return this._timeText || ''; }
+
+  /** The unfiltered time-left text now (read-only; the calm `timeText()` lags it by up to a minute). */
+  trueTimeText() { return this._trueTimeText || ''; }
 
   /** The engine half's label (the loaded fuel's name in capitals). */
   fuelLabel() { return this._fuelLabel; }
@@ -631,7 +690,7 @@ export class VitalsPane {
     else this._median.reset();
     if (!(max > 0)) {
       this._write(r, { band: 'none', fill: '0%', value: DASH, rate: '', rateDir: '' });
-      this._writeTime('');
+      this._holdTime('', NaN, t);
       return;
     }
     const frac = clamp01(level / max);
@@ -644,7 +703,7 @@ export class VitalsPane {
       rate: trend.text,
       rateDir: trend.dir,
     });
-    this._writeTime(fmtTimeLeft(level, max, net));
+    this._holdTime(fmtTimeLeft(level, max, net), timeLeftMinutes(level, max, net), t);
     this._cost('battery', t, level, max, VITALS_LAW.FLASH_BATT_FRAC * max, VITALS_LAW.FLASH_EXTEND_BATT_FRAC_PER_S * max);
   }
 
@@ -667,6 +726,13 @@ export class VitalsPane {
       }
     }
     this._flowText = text;
+  }
+
+  /** @private D3: feed the true text through the calm hold, then draw what it says. */
+  _holdTime(trueText, trueMin, t) {
+    this._trueTimeText = trueText;
+    this._timeHold = nextShown(this._timeHold, trueText, trueMin, t);
+    this._writeTime(this._timeHold.text);
   }
 
   /** @private The battery time-left text (write-on-change; empty = nothing drawn). */

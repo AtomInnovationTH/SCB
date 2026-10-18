@@ -21,9 +21,12 @@
 import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
+import { GameStates } from '../../core/GameState.js';
 import { VisualLaw } from '../../core/VisualLaw.js';
 import { powerDistribution } from '../../systems/PowerDistribution.js';
 import { captureNetSystem, netMaxReachM } from '../../entities/CaptureNet.js';
+import timerManager from '../../systems/TimerManager.js';
+import { shortTypeName } from './TargetPanel.js';
 import { PaneChrome } from './PaneChrome.js';
 import { GestureHints } from './GestureHints.js';
 import { pressKey } from '../../core/KeyDispatch.js';
@@ -186,6 +189,19 @@ export class StatusPanel {
     this.panels = {};
 
     this._build();
+
+    // u3-payoff-calm D1/D2: the one payoff line under the score strip.
+    this._payoffTimer = null;
+    this._payoffData = null;
+    this._payoffEl = null;
+    this._payoffLineEl = null;
+    this._payoffNameEl = null;   // "Caught a rocket body · 4,232 kg": the only part that may shorten
+    this._payoffCrEl = null;     // "+1,250 cr": never shrinks
+    this._payoffMatEl = null;
+    this._payoffPending = 0;     // catch-bonus credits that arrived before their catch's line (same frame)
+    this._payoffFrame = false;   // true until the microtask after the first catch / bonus event (= the same frame)
+    this._payoffCatchInFrame = false;   // a catch's line was written in this same frame
+    this._bindPayoff();
 
     // Phase 4: Listen for fuel changes
     eventBus.on(Events.FUEL_CHANGED, (data) => this._updateFuelIndicator(data));
@@ -998,20 +1014,29 @@ export class StatusPanel {
       ? captureNetSystem.getCollarDigestion() : null;
     // no-melt: with no furnace nothing cooks, so a collared catch reads HELD (no percentage that can never move).
     const cookOn = Constants.isFeatureEnabled('FURNACE_COOK');
+    // u3-payoff-calm D4: the HELD / COOK n% / BERTHED words are Details — the simple level (mission 1)
+    // keeps the bare `nets/max` count (and the hover title); from mission 2 they show. Nets and reach stay.
+    const tagOn = !this._simple;
     if (docked && collarCook && !cookOn) {
-      count.textContent = `${nets}/${maxNets} HELD`;
-      count.style.color = 'var(--hud-info, #66ddff)';
+      if (tagOn) {
+        count.textContent = `${nets}/${maxNets} HELD`;
+        count.style.color = 'var(--hud-info, #66ddff)';
+      }
       seg.title = 'Catch held at the collar until the station takes it — [K] jettison';
     } else if (docked && collarCook) {
       const pct = Math.round(Math.min(1, Math.max(0, collarCook.frac || 0)) * 100);
-      count.textContent = `${nets}/${maxNets} COOK ${pct}%`;
-      count.style.color = 'var(--hud-caution, #ff9800)';   // the forge panel's MELT — furnace language
+      if (tagOn) {
+        count.textContent = `${nets}/${maxNets} COOK ${pct}%`;
+        count.style.color = 'var(--hud-caution, #ff9800)';   // the forge panel's MELT — furnace language
+      }
       seg.title = (collarCook.sunScale ?? 1.0) < 1
         ? `Solar furnace cooking the catch — ${pct}% · eclipse: embers until dawn · [K] jettison`
         : `Solar furnace cooking the catch — ${pct}% · [K] jettison`;
     } else if (docked) {
-      count.textContent = `${nets}/${maxNets} BERTHED`;
-      count.style.color = 'var(--hud-info, #66ddff)';
+      if (tagOn) {
+        count.textContent = `${nets}/${maxNets} BERTHED`;
+        count.style.color = 'var(--hud-info, #66ddff)';
+      }
       seg.title = 'Catch mated at the collar — [K] jettison';
     } else {
       seg.title = 'Mother Large Net (whale hunts)';
@@ -1094,6 +1119,7 @@ export class StatusPanel {
     // by _createTopPanel, so they are not torn down with the HUD container —
     // remove them explicitly to avoid orphaned duplicate-id nodes.
     if (this._fitObserver) { this._fitObserver.disconnect(); this._fitObserver = null; }   // q3 round 3 (S5)
+    this.clearPayoff();
     for (const p of [this.panels.score]) {
       if (p && p.parentNode) p.parentNode.removeChild(p);
     }
@@ -1102,6 +1128,192 @@ export class StatusPanel {
   // ==========================================================================
   // PRIVATE UPDATERS
   // ==========================================================================
+
+  // ==========================================================================
+  // PAYOFF LINE (u3-payoff-calm D1 + D2)
+  // ==========================================================================
+
+  /** Seconds-in-ms the payoff line stays after a credited catch. */
+  static get PAYOFF_MS() { return 3000; }
+
+  /** @private Listen for the catch's SCORE_UPDATE, the salvage detail and the clear events. */
+  _bindPayoff() {
+    eventBus.on(Events.SCORE_UPDATE, (d) => { if (!this.addPayoffBonus(d)) this.showPayoff(d); });
+    eventBus.on(Events.SALVAGE_REVEAL, (d) => this.showPayoffMaterials(d));
+    eventBus.on(Events.GAME_RESET, () => this.clearPayoff());
+    if (Events.GAME_WIN) eventBus.on(Events.GAME_WIN, () => this.clearPayoff());
+    eventBus.on(Events.GAME_STATE_CHANGE, (d) => {
+      const to = d && d.to;
+      if (to === GameStates.GAME_OVER || to === GameStates.WIN) this.clearPayoff();
+    });
+  }
+
+  /**
+   * The payoff line in two parts: `name` (`Caught a rocket body · 4,232 kg`) and `cr` (`+1,250 cr`).
+   * kg: 0.1-99.9 one decimal, under 0.1 two decimals, 100 and over whole kg with a thousands separator.
+   * Numbers use `toLocaleString()` like the strip's credits.
+   * @param {{debrisType?: string|null, massKg?: number, creditsDelta?: number}} d
+   * @returns {{name: string, cr: string}}
+   */
+  static payoffParts(d) {
+    const name = shortTypeName(d && d.debrisType).toLowerCase();
+    const article = (d && d.debrisType && name !== 'debris') ? 'a ' : '';
+    const parts = [`Caught ${article}${name}`];
+    const kg = Number(d && d.massKg);
+    if (Number.isFinite(kg) && kg > 0) {
+      parts.push(kg >= 100 ? `${Math.round(kg).toLocaleString()} kg` : `${kg < 0.1 ? kg.toFixed(2) : kg.toFixed(1)} kg`);
+    }
+    const cr = Number.isFinite(Number(d && d.creditsDelta)) ? Math.round(Number(d.creditsDelta)) : 0;
+    return { name: parts.join(' \u00b7 '), cr: `+${cr.toLocaleString()} cr` };
+  }
+
+  /**
+   * The payoff text for one credited catch: `Caught a fragment · 4.0 kg · +508 cr`.
+   * @param {{debrisType?: string|null, massKg?: number, creditsDelta?: number}} d
+   * @returns {string}
+   */
+  static payoffText(d) {
+    const { name, cr } = StatusPanel.payoffParts(d);
+    return `${name} \u00b7 ${cr}`;
+  }
+
+  /** @private Write the shown payoff data into the line's name / separator / credits spans. */
+  _paintPayoff() {
+    const { name, cr } = StatusPanel.payoffParts(this._payoffData);
+    this._payoffNameEl.textContent = name;
+    this._payoffCrEl.textContent = cr;
+  }
+
+  /** @private The payoff element, created under the strip on first use. */
+  _ensurePayoff() {
+    if (this._payoffEl && this._payoffEl.parentNode) return this._payoffEl;
+    const strip = this.panels.score;
+    if (!strip) return null;
+    const el = document.createElement('div');
+    el.id = 'hud-payoff';
+    el.setAttribute('role', 'status');
+    el.style.cssText = 'position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:4px;'
+      + 'max-width:300px;text-align:center;pointer-events:none;display:none;'
+      + 'color:var(--hud-text, #e8f0e8);text-shadow:0 0 4px rgb(var(--hud-ink-rgb, 0 0 0) / 0.95), 0 1px 2px rgb(var(--hud-ink-rgb, 0 0 0) / 0.95);';
+    // The line is a flex row: the name part may shorten (ellipsis), the credits never do (a big catch keeps its payoff).
+    const line = document.createElement('div');
+    line.className = 'payoff-line';
+    line.style.cssText = 'display:flex;justify-content:center;align-items:baseline;font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums;';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'payoff-name';
+    nameEl.style.cssText = 'flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;';
+    const sepEl = document.createElement('span');
+    sepEl.className = 'payoff-sep';
+    sepEl.style.cssText = 'flex:none;white-space:pre;';
+    sepEl.textContent = ' \u00b7 ';
+    const crEl = document.createElement('span');
+    crEl.className = 'payoff-cr';
+    crEl.style.cssText = 'flex:none;white-space:nowrap;';
+    line.appendChild(nameEl);
+    line.appendChild(sepEl);
+    line.appendChild(crEl);
+    const mat = document.createElement('div');
+    mat.className = 'payoff-materials';
+    mat.style.cssText = 'font-size:10px;opacity:0.75;margin-top:2px;display:none;';
+    el.appendChild(line);
+    el.appendChild(mat);
+    strip.appendChild(el);
+    this._payoffEl = el;
+    this._payoffLineEl = line;
+    this._payoffNameEl = nameEl;
+    this._payoffCrEl = crEl;
+    this._payoffMatEl = mat;
+    return el;
+  }
+
+  /**
+   * Show the payoff line for a credited catch (SCORE_UPDATE with kind === 'catch').
+   * A new catch replaces the line and restarts its 3 s.
+   * @param {object} d  the SCORE_UPDATE payload
+   */
+  showPayoff(d) {
+    if (!d || d.kind !== 'catch') return;
+    const el = this._ensurePayoff();
+    if (!el) return;
+    this._payoffData = { ...d };
+    // A bonus released with this catch can come BEFORE its SCORE_UPDATE (a daughter's first dock emits DEBRIS_CAPTURED, then
+    // CATCH_PROCESSED; a lasso emits ARM_CAPTURED, then the award): it waits here, same frame, and joins the line.
+    if (this._payoffPending > 0) {
+      this._payoffData.creditsDelta = (Number(d.creditsDelta) || 0) + this._payoffPending;
+      this._payoffPending = 0;
+    }
+    this._openPayoffFrame();
+    this._payoffCatchInFrame = true;
+    this._paintPayoff();
+    this._payoffMatEl.textContent = '';
+    this._payoffMatEl.style.display = 'none';
+    el.style.display = 'block';
+    if (this._payoffTimer != null) timerManager.clear(this._payoffTimer);
+    this._payoffTimer = timerManager.setTimeout(() => this.clearPayoff(), StatusPanel.PAYOFF_MS, { owner: this });
+  }
+
+  /** @private The "same frame" window: open from the first catch / bonus event to the end of the current task (a microtask). */
+  _openPayoffFrame() {
+    if (this._payoffFrame) return;
+    this._payoffFrame = true;
+    queueMicrotask(() => { this._payoffFrame = false; this._payoffCatchInFrame = false; this._payoffPending = 0; });
+  }
+
+  /**
+   * A credit released WITH the catch (the survey bounty deferred during onboarding is released on the first dock's
+   * DEBRIS_CAPTURED; a synergy or field-clear award at the capture) is part of the same payoff: the line adds it, so
+   * `+N cr` equals the strip's credit jump. Identified by the payload (`kind: 'catch-bonus'`, set by ScoringSystem from the
+   * award's `withCatch`), not by timing; "with the catch" means the same frame (JS task), whichever event comes first:
+   * after the catch's line it is added to it; before it, it waits (`_payoffPending`) for the catch of the same frame and
+   * is dropped at the frame's end if none comes (a bonus at the grab, seconds before the park, is the strip's own jump).
+   * @param {object} d  a SCORE_UPDATE payload
+   * @returns {boolean} true when it was taken as a catch bonus
+   */
+  addPayoffBonus(d) {
+    if (!d || d.kind !== 'catch-bonus' || !(Number(d.delta) > 0)) return false;
+    this._openPayoffFrame();
+    const shownNow = this._payoffData && this._payoffEl && this._payoffEl.style.display !== 'none';
+    if (shownNow && this._payoffCatchInFrame) {
+      this._payoffData.creditsDelta = (Number(this._payoffData.creditsDelta) || 0) + Number(d.delta);
+      this._paintPayoff();
+    } else {
+      this._payoffPending += Number(d.delta);
+    }
+    return true;
+  }
+
+  /**
+   * D2: above the simple level the SALVAGE_REVEAL that follows the catch adds a
+   * smaller materials line under the payoff line. At the simple level: nothing.
+   * @param {{metals?: Array<{name?: string, subtype?: string, amount?: number, massKg?: number}>}} d
+   */
+  showPayoffMaterials(d) {
+    if (this._simple) return;
+    const el = this._payoffEl;
+    if (!el || el.style.display === 'none') return;
+    const metals = (d && d.metals) || [];
+    if (metals.length === 0) return;
+    const text = metals.map((m) => {
+      const name = m.name || m.subtype || 'Unknown';
+      const amt = Number(m.amount != null ? m.amount : m.massKg) || 0;
+      return `${name} ${amt.toFixed(1)}`;
+    }).join(' \u00b7 ') + ' kg';
+    this._payoffMatEl.textContent = text;
+    this._payoffMatEl.style.display = 'block';
+  }
+
+  /** Hide the payoff line now (timer end, GAME_RESET, GAME_WIN, game over). */
+  clearPayoff() {
+    if (this._payoffTimer != null) { timerManager.clear(this._payoffTimer); this._payoffTimer = null; }
+    if (this._payoffEl) {
+      this._payoffEl.style.display = 'none';
+      this._payoffData = null;
+      this._payoffNameEl.textContent = '';
+      this._payoffCrEl.textContent = '';
+      this._payoffMatEl.textContent = '';
+      this._payoffMatEl.style.display = 'none';
+    }
+  }
 
   /** @private */
   _updateScorePanel(data) {

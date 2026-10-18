@@ -107,14 +107,14 @@ export class DossierSystem {
     // without capturing is never stranded.
     this._unsubs.push(eventBus.on(Events.ONBOARDING_COMPLETE, () => {
       this._onboardingActive = false;
-      this._flushDeferredBounties();
+      this._flushDeferredBounties();   // no catch is released here: no withCatch (u3-payoff-calm)
     }));
     // First capture while onboarding is active releases the deferred queue so
     // the survey data lands in the same HUD credit flash as the catch reward.
     this._unsubs.push(eventBus.on(Events.DEBRIS_CAPTURED, () => {
       if (this._onboardingActive && !this._firstCaptureDone) {
         this._firstCaptureDone = true;
-        this._flushDeferredBounties();
+        this._flushDeferredBounties({ withCatch: true });   // u3-payoff-calm: released WITH the first catch
       }
     }));
   }
@@ -145,9 +145,11 @@ export class DossierSystem {
    * Release every deferred survey bounty as a single combined SCORING_AWARD +
    * one `_onboarding`-tagged comms line that bypasses tier-0 suppression.
    * No-op (and silent) when nothing is queued.
+   * @param {{withCatch?: boolean}} [opts]  withCatch: the first capture releases it (the payoff line adds it to the catch);
+   *   the ONBOARDING_COMPLETE flush releases no catch and leaves it off.
    * @private
    */
-  _flushDeferredBounties() {
+  _flushDeferredBounties({ withCatch = false } = {}) {
     if (this._deferredBounties.size === 0) return;
     let total = 0;
     for (const amount of this._deferredBounties.values()) total += amount;
@@ -157,6 +159,7 @@ export class DossierSystem {
     eventBus.emit(Events.SCORING_AWARD, {
       points: total,
       reason: 'Close-range survey data',
+      ...(withCatch ? { withCatch: true } : {}),
     });
     // Combined narration — the capture's own SCORING_AWARD lands on the same
     // DEBRIS_CAPTURED event, so the wallet shows one combined jump.

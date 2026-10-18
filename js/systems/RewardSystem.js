@@ -348,6 +348,7 @@ export class RewardSystem {
     eventBus.emit(Events.SCORING_AWARD, {
       points: synergy.points,
       reason: `Synergistic Salvage: ${synergy.name}`,
+      withCatch: true,   // u3-payoff-calm D1: part of the catch's payoff line
     });
 
     // Comms
@@ -389,6 +390,7 @@ export class RewardSystem {
         eventBus.emit(Events.SCORING_AWARD, {
           points: tier.bonus,
           reason: tier.label,
+          withCatch: true,   // u3-payoff-calm D1: part of the catch's payoff line
         });
         if (tier.pct >= 1.0) {
           this._sendComms('Houston: Field completely cleared! Perfect sweep. Bonus authorized.');

@@ -26,6 +26,22 @@ import { lookColor } from '../HudLook.js';
 import { TouchControls } from '../TouchControls.js';
 import { TARGETS_PANE_WIDTH_PX } from '../RailGeometry.js';
 
+/**
+ * The Targets row's short word for a debris type. Shared with the payoff line
+ * under the score strip (StatusPanel), which lower-cases it. Default 'Debris'.
+ * @param {string} type
+ * @returns {string}
+ */
+export function shortTypeName(type) {
+  switch (type) {
+    case 'rocketBody': return 'Rocket Body';
+    case 'defunctSat': return 'Defunct Sat';
+    case 'missionDebris': return 'Mission Deb';
+    case 'fragment': return 'Fragment';
+    default: return 'Debris';
+  }
+}
+
 /** Desktop target-row min-height (shipped). */
 export const TARGET_ROW_PX = 20;
 /** Glass hit-box (Apple HIG; RAIL_GEOMETRY.TOUCH_PITCH_PX). Plan Task 13. */
@@ -1113,13 +1129,7 @@ export class TargetPanel {
 
   /** @private Get short type name */
   _getShortTypeName(type) {
-    switch (type) {
-      case 'rocketBody': return 'Rocket Body';
-      case 'defunctSat': return 'Defunct Sat';
-      case 'missionDebris': return 'Mission Deb';
-      case 'fragment': return 'Fragment';
-      default: return 'Debris';
-    }
+    return shortTypeName(type);
   }
 
   /** @private Get full type name for expanded rows */

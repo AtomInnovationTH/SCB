@@ -684,14 +684,6 @@ export class HUD {
           30%  { opacity: 1; transform: translate(-50%, -70%) scale(1.2); }
           100% { opacity: 0; transform: translate(-50%, -130%) scale(0.9); }
         }
-        @keyframes salvageRevealIn {
-          0%   { opacity: 0; transform: translate(-50%, 0) scale(0.8); }
-          100% { opacity: 1; transform: translate(-50%, 0) scale(1.0); }
-        }
-        @keyframes salvageRevealOut {
-          0%   { opacity: 1; transform: translate(-50%, 0); }
-          100% { opacity: 0; transform: translate(-50%, -20px); }
-        }
         /* Item 6 stage 5 — HUD power-on: panels slide+fade in with a stagger
          * on the first mission start (matches SkillsPane's slide-in feel).
          * Applied per-panel via .hud-poweron with a per-element delay set in
@@ -1409,7 +1401,7 @@ export class HUD {
         this._missionNumber = Math.floor(data.debrisCleared / per) + 1;
       }
       // Phase 2 (capture feedback): the delivery moment is confirmed by the
-      // salvage-reveal card (SALVAGE_REVEAL) + the top-strip CLEARED counter +
+      // payoff line under the score strip + the top-strip CLEARED counter +
       // comms. The old center-screen capture-notif pop was redundant — removed.
       // S1 retention: advance the pinned-upgrade progress on every credit change.
       this._updatePinWidget();
@@ -1554,10 +1546,9 @@ export class HUD {
     // game always has sound — no audio-blocked toast; InputManager retries
     // the unlock on every gesture).
 
-    // Phase 8: Salvage reveal loot popup
-    eventBus.on(Events.SALVAGE_REVEAL, (data) => {
-      this.showSalvageReveal(data);
-    });
+    // u3-payoff-calm D2: the salvage card is gone. The payoff line under the score strip
+    // (StatusPanel) carries the catch; SALVAGE_REVEAL stays for the sound and the
+    // above-simple materials line.
 
     // V5: Crossbow reload events → re-render arm panel
     eventBus.on(Events.CROSSBOW_RELOAD_START, () => this.statusPanel.renderArmPanel());
@@ -2939,68 +2930,6 @@ export class HUD {
       this._weatherBadges.delete(type);
       if (this._weatherBadges.size === 0) this._weatherContainer.style.display = 'none';
     }
-  }
-
-  // ==========================================================================
-  // SALVAGE REVEAL POPUP (Phase 8 — Audio & Polish)
-  // ==========================================================================
-
-  /**
-   * Show a salvage reveal loot popup — gold-bordered with metal icons.
-   * Displays for 3 seconds center-bottom, then fades out.
-   * @param {{ metals: Array<{name: string, amount: number}>, totalMass: number, debrisType: string }} data
-   */
-  showSalvageReveal(data) {
-    const popup = document.createElement('div');
-    popup.style.cssText = `
-      position: fixed;
-      bottom: 120px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgb(var(--hud-ink-rgb, 10 8 4) / 0.92);
-      border: 2px solid var(--hud-caution, #d4a017);
-      border-radius: 8px;
-      padding: 10px 20px;
-      font-family: var(--font-mono);
-      font-size: 13px;
-      color: var(--hud-caution, #ffe088);
-      text-align: center;
-      z-index: 150;
-      pointer-events: none;
-      box-shadow: 0 0 20px rgb(var(--hud-caution-rgb, 212 160 23) / 0.4), inset 0 0 12px rgb(var(--hud-caution-rgb, 212 160 23) / 0.1);
-      animation: salvageRevealIn 0.3s ease-out forwards;
-      min-width: 200px;
-    `;
-
-    // Build content
-    let metalHtml = '';
-    const metals = data.metals || [];
-    if (metals.length > 0) {
-      const metalIcons = { aluminum: '🔩', titanium: '⚙️', copper: '🔶', steel: '🔧', gold: '✨', platinum: '💎' };
-      metalHtml = metals.map(m => {
-        const icon = metalIcons[m.name?.toLowerCase()] || metalIcons[m.subtype?.toLowerCase()] || '🔩';
-        const name = (m.name || m.subtype || 'Unknown').charAt(0).toUpperCase() + (m.name || m.subtype || 'Unknown').slice(1);
-        const amount = (m.amount || m.massKg || 0).toFixed(1);
-        return `${icon} ${name} ${amount}kg`;
-      }).join(' <span style="color:var(--hud-caution, #665522)">|</span> ');
-    } else {
-      metalHtml = '🔧 Salvage Collected';
-    }
-
-    const typeLabel = (data.debrisType || 'debris').toUpperCase();
-    popup.innerHTML = `
-      <div style="font-size:11px;color:var(--hud-caution, #aa8844);letter-spacing:2px;margin-bottom:4px;">▸ SALVAGE. ${typeLabel} ◂</div>
-      <div>${metalHtml}</div>
-      ${data.totalMass ? `<div style="font-size:10px;color:var(--hud-caution, #887744);margin-top:4px;">Total: ${data.totalMass.toFixed(1)}kg recovered</div>` : ''}
-    `;
-
-    document.body.appendChild(popup);
-
-    // Fade out after 2.5s, remove at 3s
-    timerManager.setTimeout(() => {
-      popup.style.animation = 'salvageRevealOut 0.5s ease-in forwards';
-    }, 2500, { owner: this });
-    timerManager.setTimeout(() => popup.remove(), 3100, { owner: this });
   }
 
   // ==========================================================================

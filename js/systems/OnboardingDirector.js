@@ -335,6 +335,9 @@ export class OnboardingDirector {
     /** @type {boolean} */
     this._disposed = false;
 
+    /** u3-payoff-calm D5: the after-completion advance timer (cleared by reset / dispose). */
+    this._advanceTimer = null;
+
     this._loadPersisted();
     this._setupListeners();
   }
@@ -444,6 +447,9 @@ export class OnboardingDirector {
 
   /** Reset all persisted state — used by tests / dev. */
   reset() {
+    // u3-payoff-calm D5: a beat's pending timers (idle, auto-advance, skip, gate) must not fire into the new run.
+    this._clearActiveTimers();
+    this._clearAdvanceTimer();
     // u2-one-voice: a durable beat chip (and its nudge) must not outlive a retry.
     if (this._active && this._active.beat) {
       this._dropBeatChip(this._active.beat);
@@ -468,6 +474,7 @@ export class OnboardingDirector {
     if (this._disposed) return;
     this._disposed = true;
     this._clearActiveTimers();
+    this._clearAdvanceTimer();
     this._clearDetailHintPoll();
     for (const u of this._unsubs) {
       if (typeof u === 'function') u();
@@ -989,7 +996,10 @@ export class OnboardingDirector {
 
     // (5) Auto-advance narrative beats (no triggerEvent).
     if (!beat.triggerEvent && Number.isFinite(beat.autoAdvanceAfter)) {
+      const armed = this._active;
       this._active.autoAdvanceTimer = this._setTimeout(() => {
+        // u3-payoff-calm D5: only the beat that armed this timer may complete it (reset() / a skip moved on).
+        if (this._active !== armed) return;
         if (beat.onEnter === 'mastered=true') {
           this._mastered = true;
         }
@@ -1252,7 +1262,12 @@ export class OnboardingDirector {
 
     // (4) Advance after `beat.advanceDelay`.
     const delay = Number.isFinite(beat.advanceDelay) ? beat.advanceDelay : (Constants.ONBOARDING?.ADVANCE_DELAY_MS || 1500);
-    this._setTimeout(() => this._advanceToNextBeat(), delay);
+    // u3-payoff-calm D5: kept, so reset() / dispose() can drop it (a reset inside the delay must not advance the new run).
+    this._clearAdvanceTimer();
+    this._advanceTimer = this._setTimeout(() => {
+      this._advanceTimer = null;
+      this._advanceToNextBeat();
+    }, delay);
   }
 
   /**
@@ -1504,6 +1519,12 @@ export class OnboardingDirector {
       return null;
     }
     return setTimeout(fn, ms);
+  }
+
+  /** u3-payoff-calm D5: drop the after-completion advance timer (reset / dispose). */
+  _clearAdvanceTimer() {
+    if (this._advanceTimer != null && typeof clearTimeout === 'function') clearTimeout(this._advanceTimer);
+    this._advanceTimer = null;
   }
 
   _clearActiveTimers() {
