@@ -480,8 +480,17 @@ export class ArmManager {
     }
 
     if (!arm) {
+      // no-melt: with no furnace a daughter that holds a catch stays holding it until the station takes it, so say
+      // that plainly instead of the bare "no daughters" line.
+      const holding = Constants.isFeatureEnabled('FURNACE_COOK') ? 0
+        : this.arms.filter((a) => a && a.state === ARM_STATES.HOLDING_CATCH).length;
+      const usable = this.arms.filter((a) => a && a.state !== ARM_STATES.EXPENDED && !a.isDetached).length;
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'No daughters available for deployment (check spring charge)',
+        text: holding > 0 && holding >= usable
+          ? 'All daughters are holding catches. The station unloads them at the end of the mission.'
+          : holding > 0
+            ? `No daughter is free: ${holding} holding catches. The station unloads them at the end of the mission.`
+            : 'No daughters available for deployment (check spring charge)',
         priority: 'warning',
       });
       return false;
@@ -2703,6 +2712,43 @@ export class ArmManager {
       d._breakdownActive = false;      // a mid-chop reset owns no furnace timeline
       d._catchRenderMin = 0;           // the held-readability floor dies with the hold
     }
+  }
+
+  /**
+   * no-melt: the station takes the catches parked on the daughters' racks (the resupply stop; GameFlowManager).
+   * Each paid piece leaves the rack and is returned for the caller to remove from the field; the rack is cleared, so
+   * ArmUnit's empty-rack fallback sends her to reload next frame and she can launch again. A piece that is not yet
+   * paid is left on the rack. Emits NET_CONSUMED per piece (the bag visual clears the way the cook's end does); no
+   * CATCH_PROCESSED (nothing is credited or digested).
+   * @param {(piece: object) => boolean} [isPaid] - true when the piece has been credited (default: `_credited`)
+   * @returns {Array<object>} the pieces handed over
+   */
+  unloadHeldCatches(isPaid) {
+    const paid = typeof isPaid === 'function' ? isPaid : (d) => !!(d && d._credited);
+    const out = [];
+    for (const arm of this.arms) {
+      if (!arm || arm.state !== ARM_STATES.HOLDING_CATCH || !Array.isArray(arm.heldCatches)) continue;
+      const keep = [];
+      for (const d of arm.heldCatches) {
+        if (!d) continue;
+        if (!paid(d)) { keep.push(d); continue; }
+        d._armPinned = false;
+        d._armPinPos = null;
+        d._capturedByArm = null;
+        d._breakdownActive = false;
+        out.push(d);
+        eventBus.emit(Events.NET_CONSUMED, { armIndex: arm.index, armId: arm.id, debrisId: d.id });
+      }
+      if (keep.length !== arm.heldCatches.length) {
+        arm.heldCatches = keep;
+        arm.stateTimer = 0;
+      }
+    }
+    if (out.length > 0) {
+      const ps = this.playerSatellite;
+      if (ps && '_attitudeInertia' in ps) ps._attitudeInertia = null;
+    }
+    return out;
   }
 
   // ========================================================================

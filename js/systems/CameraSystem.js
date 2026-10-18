@@ -4365,6 +4365,9 @@ export class CameraSystem {
   _beginCatchFocus(kind, net, d, phase, label) {
     const f = this._catchFocus;
     const lc = this._ladderCam;
+    // no-melt: a focus that is still engaged when another catch begins ends first, with its own `end` line (it used to be
+    // overwritten silently, so a catch's focus had a `start` and no `end`).
+    if (f.active && f.engaging) this._releaseCatchFocus('a new catch began');
     f.active = true; f.engaging = true; f.phase = phase; f.timer = 0;
     f.kind = kind; f.totalS = 0; f.collarS = 0;
     f.rate = 1 / CATCH_FOCUS.IN_S;
@@ -4508,8 +4511,26 @@ export class CameraSystem {
     const cns = this._netSystemRef();
     const nets = cns && cns.activeNets;
     if (!Array.isArray(nets)) return null;
-    for (const n of nets) if (n && n.targetDebris === d && n.isActive !== false) return n;
+    // no-melt: match by id, not by object identity. A net's `targetDebris` can be a different object (a snapshot) from the
+    // `d` the focus holds, and identity then never found the adopting net (the catch-focus "no net took the catch" bug).
+    for (const n of nets) {
+      const td = n && n.targetDebris;
+      if (td && (td === d || (d && d.id != null && td.id === d.id)) && n.isActive !== false) return n;
+    }
     return null;
+  }
+
+  /**
+   * no-melt: has the catch at the nose collar settled for good? True once the collar's hand-off was tried and declined
+   * (nothing is pending: no leash, no cut, no flight), so with no furnace nothing more will happen to it here.
+   * @param {object|null} net - the mother net holding the catch
+   * @returns {boolean}
+   */
+  _collarCatchSettled(net) {
+    if (!net || net.state !== 'COLLARED' || net._cargoDeclined !== true || net._leash || net._leashNoseReel) return false;
+    const cns = this._netSystemRef();
+    const cutting = cns && typeof cns._cutActive === 'function' ? cns._cutActive(net) : !!net._cutPlan;
+    return !cutting;
   }
 
   /**
@@ -4585,7 +4606,10 @@ export class CameraSystem {
         // the collar has processed it, or COLLAR_MAX_S.
         f.timer += dt;
         f.collarS += dt;
-        if (f.collarS > CATCH_FOCUS.COLLAR_MAX_S) { this._releaseCatchFocus('collar time limit'); return false; }
+        // no-melt: with no furnace the collar never "processes" the catch. The focus ends END_HOLD_S after the catch has
+        // settled there (hand-off declined, nothing pending) instead of waiting for a digest that cannot come.
+        if (!Constants.isFeatureEnabled('FURNACE_COOK') && this._collarCatchSettled(f.net)) { f.phase = 'end'; f.timer = 0; }
+        else if (f.collarS > CATCH_FOCUS.COLLAR_MAX_S) { this._releaseCatchFocus('collar time limit'); return false; }
       }
     }
     if (f.phase === 'handoff') {
@@ -4597,11 +4621,19 @@ export class CameraSystem {
     if (f.phase === 'tip') {
       f.timer += dt;
       if (!tipHolds(f.tipIndex)) { this._releaseCatchFocus('tip let go of the catch'); return false; }
-      if (f.timer > CATCH_FOCUS.TIP_MAX_S) { this._releaseCatchFocus('tip time limit'); return false; }
+      // no-melt: with no furnace the tip never digests the catch. The focus ends END_HOLD_S after the bag has settled on
+      // its tip (the swing onto the boom is done and the leash hand-off has finished).
+      const leashBusy = !!(ld && (typeof ld.isActive === 'function' ? ld.isActive() : ld.busy));
+      const swinging = !!(tc && typeof tc.isSwinging === 'function' && tc.isSwinging(f.tipIndex));
+      if (!Constants.isFeatureEnabled('FURNACE_COOK') && !leashBusy && !swinging) { f.phase = 'end'; f.timer = 0; }
+      else if (f.timer > CATCH_FOCUS.TIP_MAX_S) { this._releaseCatchFocus('tip time limit'); return false; }
     }
     if (f.phase === 'end') {
       f.timer += dt;
-      if (f.timer >= CATCH_FOCUS.END_HOLD_S) { this._releaseCatchFocus('processed'); return false; }
+      if (f.timer >= CATCH_FOCUS.END_HOLD_S) {
+        this._releaseCatchFocus(Constants.isFeatureEnabled('FURNACE_COOK') ? 'processed' : 'settled');
+        return false;
+      }
     }
 
     if (f.phase === 'handoff') {

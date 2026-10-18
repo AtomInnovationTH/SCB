@@ -1121,8 +1121,11 @@ export class LassoSystem {
         const cns = this._captureNetSystem;
         if (cns && (cns.getDockedCatch() || cns.hasMotherNetInFlight() || this._pendingAdoption)) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'collar_busy' });
+            // no-melt: a catch the nose cannot get rid of (no furnace; every tip and daughter cell taken) gets the
+            // plain "nose is full" line; while a hand-off is still pending today's wait line stays.
+            const noseFull = typeof cns.getNoseFullLine === 'function' ? cns.getNoseFullLine() : null;
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Cargo berth busy. Wait for the nose collar to clear.',
+                text: noseFull || 'Cargo berth busy. Wait for the nose collar to clear.',
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',

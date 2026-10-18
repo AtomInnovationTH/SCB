@@ -6615,8 +6615,17 @@ export class ArmUnit {
             type: this.type,
             parked: true,                     // held at strut, not removed/processed
           });
+          // no-melt: the daughter's own catch pays HERE, when it is parked on her rack, whatever the furnace flag
+          // (mother catches pay at the collar mate). { parked: true } keeps the body; source 'rack' tells the
+          // mission-start hold, the "at the nose" line and the net-park teaching beat that this is not a nose park.
+          // GameFlowManager's per-body ledger (`_credited`) makes a later cook-end event pay nothing more.
+          eventBus.emit(Events.CATCH_PROCESSED, {
+            armId: this.id, debrisId: debris.id, type: this.type, parked: true, source: 'rack',
+          });
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: `${this.displayName}: Catch secured at the strut. Holding in net (awaiting processing). Capture #${this.captures}.`,
+            text: Constants.isFeatureEnabled('FURNACE_COOK')
+              ? `${this.displayName}: Catch secured at the strut. Holding in net (awaiting processing). Capture #${this.captures}.`
+              : `${this.displayName}: Catch secured at the strut. Holding it in the net until the station takes it. Capture #${this.captures}.`,
             priority: 'success',
           });
           return;
@@ -6677,6 +6686,15 @@ export class ArmUnit {
         armIndex: this.index,
         duration: this.reloadDuration,
       });
+      return;
+    }
+
+    // no-melt (owner 2026-10-18, "Stay full size, no melting"): with no furnace there is no cook clock. She keeps the
+    // catch pinned to her rack, full size, until the station takes it at the resupply stop (ArmManager.unloadHeldCatches
+    // clears the rack; the empty-rack fallback above then reloads her). The staged breakdown below is kept for the
+    // day a real furnace exists (FEATURE_FLAGS.FURNACE_COOK).
+    if (!Constants.isFeatureEnabled('FURNACE_COOK')) {
+      this._pinHeldCatches(parentPos, parentQuat);
       return;
     }
 

@@ -996,7 +996,13 @@ export class StatusPanel {
     // tag + title stay byte-identical whenever nothing cooks.
     const collarCook = (typeof captureNetSystem?.getCollarDigestion === 'function')
       ? captureNetSystem.getCollarDigestion() : null;
-    if (docked && collarCook) {
+    // no-melt: with no furnace nothing cooks, so a collared catch reads HELD (no percentage that can never move).
+    const cookOn = Constants.isFeatureEnabled('FURNACE_COOK');
+    if (docked && collarCook && !cookOn) {
+      count.textContent = `${nets}/${maxNets} HELD`;
+      count.style.color = 'var(--hud-info, #66ddff)';
+      seg.title = 'Catch held at the collar until the station takes it — [K] jettison';
+    } else if (docked && collarCook) {
       const pct = Math.round(Math.min(1, Math.max(0, collarCook.frac || 0)) * 100);
       count.textContent = `${nets}/${maxNets} COOK ${pct}%`;
       count.style.color = 'var(--hud-caution, #ff9800)';   // the forge panel's MELT — furnace language
@@ -1018,7 +1024,7 @@ export class StatusPanel {
     const tipDigest = tipCargo && typeof tipCargo.digest === 'function' ? tipCargo.digest() : null;
     if (tipDigest && tipDigest.held > 0) {
       let txt = `${count.textContent} · Tips ${tipDigest.held}/${tipDigest.tips}`;
-      if (tipDigest.cookingPct !== null) txt += ` · cooking ${tipDigest.cookingPct}%`;
+      if (tipDigest.cookingPct !== null && cookOn) txt += ` · cooking ${tipDigest.cookingPct}%`;
       count.textContent = txt;
     }
     this._digestFull = { ...(this._digestFull || {}), mnet: count.textContent };
@@ -2103,6 +2109,10 @@ export class StatusPanel {
         // the head piece's _digestProgress / span (ArmUnit.getStatus().digest).
         // The eclipse trickle dims to embers; the title tells the dawn story.
         // No digest field (legacy mocks) → the pre-48 line, byte-identical.
+        // no-melt: with no furnace the digest fraction never moves; the line reads "Catch held" instead.
+        if (a.digest && !Constants.isFeatureEnabled('FURNACE_COOK')) {
+          return { label: 'Catch held', color: 'var(--hud-caution, #ffaa00)', title: 'Held on the rack until the station takes it' };
+        }
         if (a.digest) {
           const pct = Math.round(Math.min(1, Math.max(0, a.digest.frac || 0)) * 100);
           const q = (a.digest.queued || 0) > 0 ? ` +${a.digest.queued}` : '';

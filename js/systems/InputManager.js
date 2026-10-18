@@ -2586,6 +2586,9 @@ export class InputManager {
         refuse('Net already away.');
         return true;
       }
+      // no-melt: a catch at the collar with nowhere to go says so plainly, before any rotation starts.
+      const noseFull = typeof cns.getNoseFullLine === 'function' ? cns.getNoseFullLine() : null;
+      if (noseFull) { refuse(noseFull); return true; }
       // Shot fouls the mated cargo (S13(e): per-shot and geometric — the pods
       // are off the boresight, so collar occupancy is NEVER a refusal by
       // itself; only a shot whose corridor intersects the cargo refuses).

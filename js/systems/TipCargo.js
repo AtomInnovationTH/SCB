@@ -392,12 +392,15 @@ export class TipCargo {
     const bus = this.eventBus;
     const anchor = slot.anchor;
 
-    if (dt > 0) {
+    // no-melt (owner 2026-10-18, "Stay full size, no melting"): with no furnace the clock never runs, so the bag
+    // never reaches the hold/chop/feed phases below — no breakdown events, no shrink, the slot stays held.
+    const cook = Constants.isFeatureEnabled('FURNACE_COOK');
+    if (dt > 0 && cook) {
       const span = FT.digestSpanS(slot.massKg);
       d._digestProgress = (d._digestProgress || 0) + dt * TimeAuthority.BASE_SCALE * this._sunScale();
       slot.phaseT = Math.min(FT.FEED_S, (d._digestProgress / span) * FT.FEED_S);
     }
-    const t = slot.phaseT;
+    const t = cook ? slot.phaseT : 0;
 
     // Pin every frame (a gap reads as a release); position + ship-relative attitude.
     d._armPinned = true;
@@ -420,7 +423,7 @@ export class TipCargo {
     }
     applyShipRelativeAttitude(d, this.player.quaternion, this.debrisField);
 
-    if (t < FT.HOLD_S) return;
+    if (!cook || t < FT.HOLD_S) return;
 
     if (t >= FT.CHOP_S && t < FT.FEED_S) {
       const feedFrac = (t - FT.CHOP_S) / Math.max(1e-6, FT.FEED_S - FT.CHOP_S);
@@ -487,6 +490,32 @@ export class TipCargo {
       out.push({ c: { x: p.x, y: p.y, z: p.z }, r: s.radiusM, name: `tipBag_${s.i}` });
     }
     return out;
+  }
+
+  // ── station hand-over ────────────────────────────────────────────────────
+
+  /**
+   * no-melt: let go of tip i's bag WITHOUT cooking it (the station takes the cargo at the resupply stop). Frees the
+   * slot and clears every pin the tip wrote; the caller owns what happens to the body (the game removes it from the
+   * field, already paid). Emits NET_CONSUMED so the bag visual clears the way the cook's end does; no
+   * CATCH_PROCESSED (nothing is credited or digested).
+   * @param {number} i tip index (0..3)
+   * @returns {object|null} the released debris, or null when the tip is empty
+   */
+  releaseSlot(i) {
+    const s = this._slots[i];
+    if (!s) return null;
+    const d = s.debris;
+    this._slots[i] = null;
+    d._armPinned = false;
+    d._armPinPos = null;
+    d._captured = false;
+    d._breakdownActive = false;
+    d._tipIndex = undefined;
+    clearShipRelativeAttitude(d);
+    this._invalidateInertia();
+    this.eventBus.emit(Events.NET_CONSUMED, { armId: 'mother', debrisId: d.id, anchor: s.anchor });
+    return d;
   }
 
   // ── reset ────────────────────────────────────────────────────────────────

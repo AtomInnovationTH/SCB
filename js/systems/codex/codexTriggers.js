@@ -16,6 +16,7 @@
  */
 
 import { Events } from '../../core/Events.js';
+import { Constants } from '../../core/Constants.js';
 
 // --- tiny matcher helpers (keep predicates terse + consistent) -------------
 /** any-of, case-insensitive substring on p.text */
@@ -101,7 +102,8 @@ export const CODEX_TRIGGERS = {
   // park or daughter digestion (both fire CATCH_PROCESSED). Event-based, no
   // comms-text coupling (the lines live in GameFlowManager, outside the
   // reachability corpus).
-  solar_furnace:          [{ event: E.CATCH_PROCESSED, match: always }],
+  // no-melt (owner 2026-10-18): with no furnace a parked catch is not a furnace event; only a digested one unlocks it.
+  solar_furnace:          [{ event: E.CATCH_PROCESSED, match: (p) => Constants.isFeatureEnabled('FURNACE_COOK') || (!!p && p.digested === true) }],
   battery_chemistry:      [{ event: E.COMMS_MESSAGE, match: txt('battery cycle') },
                            { event: E.SUBSYSTEM_EVENT, match: src('POWER') }],
   supercapacitors:        [{ event: E.COMMS_MESSAGE, match: txt('supercapacitor') }],

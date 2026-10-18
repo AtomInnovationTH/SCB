@@ -38,6 +38,9 @@ const MODES = CN.MODES;
 // a live object reference, so a test that retunes a key is seen immediately.
 const CT = CN.CARGO_TRANSFER || {};
 const FEATURE_FLAGS = Constants.FEATURE_FLAGS;
+// no-melt (owner 2026-10-18): the plain refusal for a new catch while the nose holds one that has nowhere to go.
+const NOSE_FULL_LINE = 'Nose is full: there is no furnace yet, and this catch has nowhere to go. '
+  + 'The station unloads catches at the end of the mission, or jettison [K].';
 
 // Module-level scratch objects for the mother reel/berth per-frame math —
 // the reel/berth path must not allocate per frame (plan §13: use the Into
@@ -3815,11 +3818,16 @@ export class CaptureNetSystem {
             priority: 'warning',
           });
         } else {
+          // no-melt: with no furnace, do not promise one — the station unloads the nose at the resupply stop.
+          const furnace = Constants.isFeatureEnabled('FURNACE_COOK');
+          const fate = furnace
+            ? 'It rides the collar until the furnace takes it, or jettison [K].'
+            : 'It stays at the collar until the station unloads it at the end of the mission, or jettison [K].';
           eventBus.emit(Events.COMMS_MESSAGE, {
             source: 'HOUSTON', channel: 'CMD',
             text: overGate
-              ? `Catch is ${Math.round(gateMassKg)} kg — too heavy for a daughter's cargo rack. It rides the collar until the furnace takes it, or jettison [K].`
-              : 'No daughter can take the catch (none docked with a free cargo cell). It rides the collar until the furnace takes it, or jettison [K].',
+              ? `Catch is ${Math.round(gateMassKg)} kg — too heavy for a daughter's cargo rack. ${fate}`
+              : `No daughter can take the catch (none docked with a free cargo cell). ${fate}`,
             priority: 'warning',
           });
         }
@@ -4575,6 +4583,9 @@ export class CaptureNetSystem {
   _tickCollarDigestion(net, dt) {
     const d = net.targetDebris;
     if (!d) return false;
+    // no-melt (owner 2026-10-18, "Stay full size, no melting"): no furnace, no cook clock. The catch stays welded
+    // full size at the collar (the berth hold pins it) until the station takes it or [K] jettisons it.
+    if (!Constants.isFeatureEnabled('FURNACE_COOK')) return false;
     const FT = Constants.FURNACE_TRANSFER;
     const HOLD_S = FT.HOLD_S, CHOP_S = FT.CHOP_S, FEED_S = FT.FEED_S;
     const CHUNK_COUNT = FT.CHUNK_COUNT;
@@ -4804,6 +4815,54 @@ export class CaptureNetSystem {
       sunScale: this._digestSunScale ?? 1.0,
       kg: d.mass || 0,
     };
+  }
+
+  /**
+   * no-melt: the plain refusal for a new catch while the nose collar is holding one that has nowhere to go, or null.
+   * With no furnace the nose never empties by itself; once the hand-off has been tried and declined (every tip full or
+   * too small, every daughter cell taken, a catch too heavy) the catch stays until the station unloads it at the
+   * resupply stop, or [K] jettisons it. While a hand-off is still pending (securing, a leash under way, a piece in
+   * flight, a cut under way) this returns null and today's refusals speak. Shared by the mother net (N), the lasso and
+   * the InputManager pre-flight, so the words live in one place. Pure read: it emits nothing.
+   * @returns {string|null}
+   */
+  getNoseFullLine() {
+    if (Constants.isFeatureEnabled('FURNACE_COOK')) return null;
+    for (const n of this.activeNets) {
+      if (!n._isMother || n.state !== STATES.COLLARED) continue;
+      if (!n._cargoDeclined || n._leash || n._leashNoseReel || this._cutActive(n)) continue;
+      return NOSE_FULL_LINE;
+    }
+    return null;
+  }
+
+  /**
+   * no-melt: the station takes the catch parked at the nose collar (the resupply stop; GameFlowManager). The catch is
+   * already paid (the mate credited it), so nothing is credited or digested here: the pins clear, the net leaves the
+   * system and the collar is free again. The caller removes the body from the field. A catch still being reeled,
+   * flown, leashed or cut is left alone.
+   * @returns {number|string|null} the debris id handed over, or null when nothing was handed over
+   */
+  handOverCollarCatch() {
+    const idx = this.activeNets.findIndex((n) => n._isMother && n.state === STATES.COLLARED && n._berthProcessed
+      && !n._leash && !n._leashNoseReel && !this._cutActive(n));
+    if (idx < 0) return null;
+    const net = this.activeNets[idx];
+    const d = net.targetDebris;
+    if (!d) return null;
+    d._breakdownActive = false;
+    this._clearCatchPins(d);
+    net.isActive = false;
+    net._berthTimer = -1;
+    net._digestedOut = true;
+    this.activeNets.splice(idx, 1);
+    const player = this._player;
+    if (player && '_attitudeInertia' in player) player._attitudeInertia = null;
+    eventBus.emit(Events.NET_CONSUMED, {
+      podIndex: net.podIndex, armId: 'mother', debrisId: d.id,
+      anchor: { kind: 'collar', podIndex: net.podIndex },
+    });
+    return d.id;
   }
 
   /**
@@ -5178,6 +5237,14 @@ export class CaptureNetSystem {
     // (not a blocked launcher). Since 2026-10-13 the launcher is back on the
     // axis, where the catch seat is, so a catch held at the collar fouls every
     // shot (owner-approved physics: the catch is in the way).
+    // no-melt: a catch at the collar with nowhere to go refuses every new net, in plain words (once per press).
+    const full = this.getNoseFullLine();
+    if (full) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: full, source: 'SYSTEM', channel: 'CMD', priority: 'warning',
+      });
+      return null;
+    }
     const foulNet = this.getCollarShotFoul(podIndex, launchPos, launchDir);
     if (foulNet) {
       eventBus.emit(Events.COMMS_MESSAGE, {

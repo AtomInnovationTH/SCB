@@ -436,6 +436,7 @@ export class GameFlowManager {
         // u1-resupply-stop D4: the first-visit floor is paid at the resupply stop only (a mid-mission look at the
         // full-screen shop pays nothing — the first invitation pays it, and the framing is owed to the next stop).
         firstDepotVisit = this._atResupplyStop ? this._applyFirstDepotFloor() : false;
+        if (this._atResupplyStop) this._stationTakesCargo();   // no-melt: the station unloads the parked catches
         // Any depot entry (the doorway, the B key, the iPad chip) takes the
         // open invitation up — the notch glow ends (Wave 5 Session E).
         this._closeDepotInvitation('entered');
@@ -987,6 +988,9 @@ export class GameFlowManager {
     // on CATCH_PROCESSED below. Gameplay (salvage/score/remove) still keys off the
     // single CATCH_PROCESSED only — this handler is comms-only.
     eventBus.on(Events.CATCH_BREAKDOWN_START, (data) => {
+      // no-melt: nothing is chopped for a furnace that does not exist (the event cannot fire with the cook off; the
+      // guard keeps a stray emit from printing a line that promises one).
+      if (!Constants.isFeatureEnabled('FURNACE_COOK')) return;
       eventBus.emit(Events.COMMS_SEND, {
         source: (data.armId || 'DAUGHTER').toUpperCase(),
         text: `Chopping the catch for the furnace. Feeding ${data.chunkCount || 5} sections`,
@@ -1078,13 +1082,18 @@ export class GameFlowManager {
         // so "fully processed" ran ahead of the visual. Split the line:
         // parked → secured; digested (daughter furnace feed-end, or the
         // collar's digestion completion — S13(c)) → processed.
-        eventBus.emit(Events.COMMS_SEND, {
-          source: (data.source || data.armId || 'DAUGHTER').toUpperCase(),
-          text: data.parked
-            ? 'Catch secured — parked at the nose'
-            : 'Catch fully processed. Salvage in the bin',
-          priority: 'INFO',
-        });
+        // no-melt: a daughter's rack credit ({ parked: true, source: 'rack' }) is not "at the nose" (ArmUnit says its own
+        // "Catch secured at the strut" line), and with no furnace "fully processed" is never true: say nothing.
+        const rackPark = !!(data.parked && data.source === 'rack');
+        if (!rackPark && (data.parked || Constants.isFeatureEnabled('FURNACE_COOK'))) {
+          eventBus.emit(Events.COMMS_SEND, {
+            source: (data.source || data.armId || 'DAUGHTER').toUpperCase(),
+            text: data.parked
+              ? 'Catch secured — parked at the nose'
+              : 'Catch fully processed. Salvage in the bin',
+            priority: 'INFO',
+          });
+        }
 
         // --- SALVAGE RECOVERY (Session 10) ---
         if (payCredit && hasSalvage) {
@@ -2111,7 +2120,8 @@ export class GameFlowManager {
     // (test-FifthCatchCalm pins that they agree).
     const invites = this._ladderOn() &&
       (!M.FORCED_DEPOT_STOP || missionsCompleted > M.FORCED_DEPOT_CHAPTERS);
-    if (data && data.parked && data.debrisId != null && atBoundary && invites && gameState.isGameplay()) {
+    // no-melt: a daughter's rack credit (source 'rack') is not a catch sitting at the nose: nothing to wait for.
+    if (data && data.parked && data.source !== 'rack' && data.debrisId != null && atBoundary && invites && gameState.isGameplay()) {
       this._pendingMissionStart = { debrisId: data.debrisId, elapsedS: 0, start };
       return;
     }
@@ -2151,6 +2161,9 @@ export class GameFlowManager {
     const p = this._pendingMissionStart;
     if (!p) return;
     if (!(dt > 0) || !gameState.isGameplay()) return;
+    // no-melt: with no furnace a catch the nose cannot place never leaves it by itself, so the hold has nothing to wait
+    // for once the hand-off has been tried and declined. (A hand-off still under way keeps the hold, and its cap.)
+    if (!Constants.isFeatureEnabled('FURNACE_COOK') && typeof captureNetSystem.getNoseFullLine === 'function' && captureNetSystem.getNoseFullLine()) { this._releaseMissionStart(); return; }
     p.elapsedS += dt;
     // l5c-reach E6: while the leash hand-off carries the catch to a radiator tip the 20 s cap does not run
     // (the hand-off is ~45-120 s; the catch leaving the nose releases the start by itself). A safety cap of
@@ -2395,6 +2408,48 @@ export class GameFlowManager {
   }
 
   /**
+   * no-melt (owner 2026-10-18, "Stay full size, no melting"; coordinator's gap-fill under Ruling 0 and DECISIONS §26):
+   * with no furnace aboard, catches stay parked full size on the radiator tips, the daughters' racks and the nose
+   * collar. At the resupply stop the station takes them: each PAID catch leaves the field and its slot frees. Nothing
+   * is credited again (they paid when they were parked) and nothing cooks. A catch still being reeled, flown or
+   * leashed is left alone. One plain line says how many went. A no-op while the furnace flag is on (the furnace owns
+   * the cargo then) and outside the resupply stop (callers gate on `_atResupplyStop`).
+   * @returns {number} how many catches the station took
+   * @private
+   */
+  _stationTakesCargo() {
+    if (Constants.isFeatureEnabled('FURNACE_COOK')) return 0;
+    const { debrisField, player, armManager } = this._refs || {};
+    const paid = (d) => this._piecePaid(d);
+    const ids = [];
+    const tc = player && player.tipCargo;
+    if (tc && typeof tc.debrisAt === 'function' && typeof tc.releaseSlot === 'function') {
+      for (let i = 0; i < 16; i++) {
+        const d = tc.debrisAt(i);
+        if (!d || !paid(d)) continue;
+        const gone = tc.releaseSlot(i);
+        if (gone) ids.push(gone.id);
+      }
+    }
+    if (armManager && typeof armManager.unloadHeldCatches === 'function') {
+      for (const d of armManager.unloadHeldCatches(paid)) ids.push(d.id);
+    }
+    if (typeof captureNetSystem.handOverCollarCatch === 'function') {
+      const id = captureNetSystem.handOverCollarCatch();
+      if (id != null) ids.push(id);
+    }
+    if (ids.length === 0) return 0;
+    if (debrisField && typeof debrisField.removeDebris === 'function') {
+      for (const id of ids) debrisField.removeDebris(id);
+    }
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `The station took your ${ids.length} catch${ids.length === 1 ? '' : 'es'}.`,
+      priority: 'info',
+    });
+    return ids.length;
+  }
+
+  /**
    * Wave 5 Session K — the ONE ladder-on-gameplay depot entry (plan D-B: one
    * shop, one place). Called by the `transitionToState(SHOP)` redirect (site 1)
    * and by the boundary dwell (site 2); never with the ladder off, never
@@ -2415,6 +2470,7 @@ export class GameFlowManager {
     // and the framing is still owed (consumed here, once).
     // u1-resupply-stop D4: the floor is paid at the resupply stop only; a mid-mission look pays nothing.
     const floorPaid = this._atResupplyStop ? this._applyFirstDepotFloor() : false;
+    if (this._atResupplyStop) this._stationTakesCargo();   // no-melt: the station unloads the parked catches
     const owed = this._firstVisitOwed;
     this._firstVisitOwed = false;
     const firstDepotVisit = floorPaid || owed;

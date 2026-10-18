@@ -2442,6 +2442,14 @@ export const Constants = {
     // 15°/s) to the best angle toward where she is going, then the spring pushes her along the
     // strut; the launch cut-scene never moves a strut. OFF = today's bearing launch + 4x swing.
     LAUNCH_AIMS_STRUT:        true,
+
+    // Furnace cook (lane no-melt, owner 2026-10-18: "debris still magically shrinks, should handoff and stay same size
+    // until furnace works and is activated" -> "Stay full size, no melting"). DECISIONS §12 Q3: the collar cook has no
+    // hardware behind it. OFF: nothing cooks, melts, chops or shrinks a catch anywhere (radiator tip, nose collar,
+    // daughter rack): a catch stays full size where it was parked until the station takes it at the resupply stop.
+    // ON: today's staged cook (hold, chop, feed, digested CATCH_PROCESSED), kept for the day a real furnace exists.
+    // Read through Constants.isFeatureEnabled('FURNACE_COOK'), so REALITY_MODE can never turn it on.
+    FURNACE_COOK:             false,
   },
 
   // =========================================================================

@@ -339,7 +339,8 @@ export class TeachingSystem {
     // first_net_park — CATCH_PROCESSED with the body KEPT (cargo-continuity
     // S3/S4): the mother parks her catch at the nose; the teaching beat lands
     // during the PARK_HOLD camera hold on the first mother catch.
-    on(Events.CATCH_PROCESSED, (d) => { if (d && d.parked) this._trigger('first_net_park'); });
+    // no-melt: a daughter's catch parked on her rack ({ source: 'rack' }) is not a net park at the nose.
+    on(Events.CATCH_PROCESSED, (d) => { if (d && d.parked && d.source !== 'rack') this._trigger('first_net_park'); });
 
     // 4 & 12. first_conjunction / first_active_sat_warning — CONJUNCTION_ALERT
     on(Events.CONJUNCTION_ALERT, (data) => {
