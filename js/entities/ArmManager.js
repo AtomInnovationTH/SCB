@@ -20,6 +20,8 @@ import { createShipKeepOut } from '../systems/ShipKeepOut.js';
 import { StrutAutoController } from '../systems/StrutAuto.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit } from './ArmUnit.js';
+import { DebrisField } from './DebrisField.js';
+import { clearRackCell } from './CaptureNet.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg, engineGasLowFrac } from '../systems/ResourceSystem.js';
 
 /** 1 meter in scene units */
@@ -2711,6 +2713,7 @@ export class ArmManager {
       d._netted = true;                // drifting in its net (the haul-failure idiom)
       d._breakdownActive = false;      // a mid-chop reset owns no furnace timeline
       d._catchRenderMin = 0;           // the held-readability floor dies with the hold
+      clearRackCell(d);                // rack-snug: and the cell it held on her
     }
   }
 
@@ -2736,6 +2739,7 @@ export class ArmManager {
         d._armPinPos = null;
         d._capturedByArm = null;
         d._breakdownActive = false;
+        clearRackCell(d);               // rack-snug: it leaves her rack
         out.push(d);
         eventBus.emit(Events.NET_CONSUMED, { armIndex: arm.index, armId: arm.id, debrisId: d.id });
       }
@@ -2993,8 +2997,10 @@ export class ArmManager {
         const d = held[k];
         if (!d) continue;
         const size = d.sizeMeter || 1;
-        arm.heldSlotWorldInto(k, size, p.position, slot);
-        push(slot, size / 2 + 0.05, `rack catch ${i}`);
+        // rack-snug (Decision 4): the sphere sits where the piece IS — its cell on her, not a slot in a hold axis.
+        // Decision 7: its radius is the drawn reach from that point (true size), not sizeMeter / 2.
+        arm.heldSlotWorldInto(k, size, p.position, slot, d, p.quaternion);
+        push(slot, DebrisField.trueReachM(d, size) + 0.05, `rack catch ${i}`);
       }
     }
     return out;

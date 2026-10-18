@@ -197,6 +197,54 @@ export function clearShipRelativeAttitude(d) {
   if (d) d._qLocalShip = null;
 }
 
+// ── A rack cell is a place on HER (rack-snug, 2026-10-18; Decisions 1, 4) ────
+// A catch parked on a daughter's cargo rack is rigid in HER body frame from the moment its cell is assigned:
+// `d._rackCell` (0|1), `d._rackLocalM` (centre, her frame, metres), `d._qLocalHer` (her⁻¹ × the catch's attitude)
+// and `d._rackArm` (the daughter who owns the cell; a cargo flight assigns at its start, the stow keeps it).
+// Turning the ship or swinging her strut carries the catch with her; world up plays no part. The tip bags and every
+// other user of `applyShipRelativeAttitude` keep the ship-relative form above.
+
+/**
+ * Record the catch's CURRENT drawn attitude relative to the daughter: `d._qLocalHer = herQuat⁻¹ × catchQuat`
+ * (identity for a catch with no tumbleAxis). Always overwrites.
+ * @param {object} d — debris
+ * @param {{x:number,y:number,z:number,w:number}|null} herQuat — her WORLD attitude (mother quaternion × docked basis)
+ * @param {object|null} [debrisField] — resolves the canonical (drawn) object
+ * @returns {boolean} true when seeded from a real attitude
+ */
+export function seedHerFrameAttitude(d, herQuat, debrisField = null) {
+  if (!d) return false;
+  const q = d._qLocalHer || (d._qLocalHer = new THREE.Quaternion());
+  if (!herQuat || !d.tumbleAxis) { q.identity(); return false; }
+  catchQuaternionInto(canonicalOf(d, debrisField) || d, _qCatchPose);
+  q.copy(herQuat).invert().multiply(_qCatchPose);
+  return true;
+}
+
+/**
+ * Turn the catch with her: write `herQuat × d._qLocalHer` into tumbleAxis/tumbleAngle (and mirror it onto the drawn
+ * object). Does nothing without a stored `_qLocalHer`, a tumbleAxis or a quaternion.
+ * @param {object} d — debris
+ * @param {{x:number,y:number,z:number,w:number}|null} herQuat — her WORLD attitude
+ * @param {object|null} [debrisField]
+ * @returns {boolean} true when written
+ */
+export function applyHerFrameAttitude(d, herQuat, debrisField = null) {
+  if (!d || !herQuat || !d._qLocalHer || !d.tumbleAxis) return false;
+  _qCatchPose.copy(herQuat).multiply(d._qLocalHer);
+  writeCatchAttitude(d, _qCatchPose, debrisField);
+  return true;
+}
+
+/** The catch leaves her rack (release / jettison / drop / unload / digestion): forget its cell. */
+export function clearRackCell(d) {
+  if (!d) return;
+  d._rackCell = null;
+  d._rackLocalM = null;
+  d._qLocalHer = null;
+  d._rackArm = null;
+}
+
 /**
  * The ship's live pose for the cargo arcs: position (scene units) into `outPos`,
  * orientation into `outQuat`. False when the player cannot supply both — the
@@ -3986,6 +4034,7 @@ export class CaptureNetSystem {
     // Target or carrier lost mid-beat (mission transition / detach): put the
     // catch back at the collar rather than dropping it — cargo is never destroyed.
     if (!d || d.alive === false || !arm || !net._cargoFrom || !net._cargoTo) {
+      clearRackCell(d);                 // rack-snug: an aborted flight forgets the cell it was heading for
       // CUT_AT_NOSE: a cut piece never "goes back to the collar" — the boss
       // owns the collar. The piece returns to the nose as a waiting piece
       // (the driver re-pins it and retries), or is simply dropped from the
@@ -4016,6 +4065,7 @@ export class CaptureNetSystem {
     // to the collar and the retry re-picks a carrier.
     const SA = Constants.ARM_STATES;
     if (arm.state !== SA.DOCKED && arm.state !== SA.HOLDING_CATCH) {
+      clearRackCell(d);                 // rack-snug: the retry computes a fresh cell (the carrier may differ)
       // CUT_AT_NOSE: same abort, cut-piece routing — back to the nose as a
       // waiting piece; the piece net splices (never COLLARED: the collar's
       // occupant is the boss). The comms line below is still true: the cargo
@@ -4087,9 +4137,10 @@ export class CaptureNetSystem {
 
     // ── Arrival: the rack takes ownership ──
     const stowed = (typeof arm._stowHeldCatch === 'function')
-      ? arm._stowHeldCatch(d)
+      ? arm._stowHeldCatch(d, this._player?.quaternion || null)
       : false;
     if (!stowed) {
+      clearRackCell(d);                 // rack-snug: the cell it was heading for is gone; the retry assigns a fresh one
       // Rack filled during the beat (should be unreachable — the scorer reserved
       // a cell). Keep the cargo: put it back on the collar and let the retry pick
       // another carrier.
@@ -4126,10 +4177,12 @@ export class CaptureNetSystem {
       if (typeof arm._transitionTo === 'function') arm._transitionTo(S.HOLDING_CATCH);
       else arm.state = S.HOLDING_CATCH;
     }
-    // The rack takes the catch's attitude in the SHIP's frame (this frame's
-    // value, written by _applyCatchOrientation above — no jump at the strut) and
-    // keeps turning it with the ship from here on (_pinHeldCatches, every frame).
-    seedShipRelativeAttitude(d, this._player?.quaternion, this._debrisField);
+    // rack-snug (Decisions 1, 4): the rack takes the catch as a place on HER. Its cell, offset and her-frame attitude
+    // were assigned when the flight began (`_cargoSlotWorld`) and `_stowHeldCatch` kept them, so the arc's end
+    // is exactly where the pin below holds it — no jump at the strut — and from here on it turns with her
+    // (`_pinHeldCatches`, every frame). A carrier with no rack seam of her own (a duck-typed stub) keeps the old
+    // ship-relative attitude.
+    if (!d._qLocalHer) seedShipRelativeAttitude(d, this._player?.quaternion, this._debrisField);
     if (typeof arm._pinHeldCatches === 'function') {
       arm._pinHeldCatches(
         this._player?.getPosition ? this._player.getPosition() : null,
@@ -4158,7 +4211,7 @@ export class CaptureNetSystem {
       podIndex:  net.podIndex,
       armIndex:  net._cargoArmIndex,
       armId:     arm.id,
-      cellIndex: Math.max(0, (arm.heldCatches?.length || 1) - 1),
+      cellIndex: Number.isInteger(d._rackCell) ? d._rackCell : Math.max(0, (arm.heldCatches?.length || 1) - 1),
       // CUT_AT_NOSE (plan L6): the documented payload, plus ONE extra field
       // on the cut-piece path only. Ordinary transfers carry no `cut` key —
       // byte-identical to the pre-flag payload.
@@ -4254,6 +4307,10 @@ export class CaptureNetSystem {
    * transfer arc ends exactly where `_pinHeldCatches` will hold it (no arrival
    * snap). Delegates to `ArmUnit.heldSlotWorldInto` — ONE computation for the
    * rack's geometry, shared by the pin and the arc, so the two cannot drift.
+   *
+   * rack-snug (Decision 4): the first call for this carrier (the start of the flight) ASSIGNS the cell — its
+   * offset on her, and the piece's attitude in her frame — so the flight's end is known; later calls (the arc is
+   * rebuilt every frame) find the assignment valid and only read it. `_stowHeldCatch` keeps it on arrival.
    * @param {object} arm — the carrier
    * @param {object} d — the piece being handed over
    * @param {THREE.Vector3} out
@@ -4261,10 +4318,14 @@ export class CaptureNetSystem {
    * @private
    */
   _cargoSlotWorld(arm, d, out) {
-    const slot = Array.isArray(arm.heldCatches) ? arm.heldCatches.length : 0;
     const parentPos = this._player?.getPosition ? this._player.getPosition() : null;
+    const parentQuat = this._player?.quaternion || null;
     if (typeof arm.heldSlotWorldInto === 'function') {
-      return arm.heldSlotWorldInto(slot, d.sizeMeter, parentPos, out);
+      if (typeof arm.assignRackCell === 'function') arm.assignRackCell(d, parentQuat);
+      const slot = Number.isInteger(d._rackCell)
+        ? d._rackCell
+        : (Array.isArray(arm.heldCatches) ? arm.heldCatches.length : 0);
+      return arm.heldSlotWorldInto(slot, d.sizeMeter, parentPos, out, d, parentQuat);
     }
     return out.copy(arm.position || _v3a.set(0, 0, 0));
   }
@@ -4568,6 +4629,7 @@ export class CaptureNetSystem {
     piece._motherParked = false;
     piece._catchRenderMin = 0;
     clearShipRelativeAttitude(piece);
+    clearRackCell(piece);                 // rack-snug: a cut piece that was heading for a cell forgets it
     if (piece._scenePosition && piece.orbit) {
       reseatOrbitFromScene(piece.orbit, piece._scenePosition,
         player?.getVelocity ? player.getVelocity() : null);
@@ -4718,6 +4780,7 @@ export class CaptureNetSystem {
     debris._motherParked = false;
     debris._catchRenderMin = 0;
     clearShipRelativeAttitude(debris);   // a released catch tumbles on its own again
+    clearRackCell(debris);               // rack-snug: and forgets any cell a cargo flight had assigned
   }
 
   /**

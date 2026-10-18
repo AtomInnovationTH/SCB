@@ -27,10 +27,10 @@
  * and every downstream consumer (CoM, inertia, drift, both scorers, the plume
  * cone test) computes in ONE frame.
  *
- * BOOKING CONTRACT (S13(b), register item 58): held rack cargo is booked where
- * the pin actually holds it — the strut tip PLUS the pin's slot offset (the
- * √2·(sizeMeter/2 + ARM_HOLD_CLEARANCE_M) standoff), via ONE computation
- * (heldCargoBookingMeters → ArmUnit.heldSlotAnchorInto). Pre-S13(b) the model
+ * BOOKING CONTRACT (S13(b), register item 58; rack-snug 2026-10-18): held rack cargo is booked where
+ * the pin actually holds it — the strut tip PLUS the rack cell's offset on the daughter
+ * (her +Z support + the catch's drawn extent + the net gap, beside her end), turned by her attitude, via ONE
+ * computation (heldCargoBookingMeters → ArmUnit.heldSlotAnchorInto). Pre-S13(b) the model
  * booked rack cargo AT the tip, understating the CoM lever ~10× (measured at
  * S12's M1: 1600 kg finale 0.68 m modelled vs 6.80 m at the pin).
  *
@@ -41,7 +41,8 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { heldSlotAnchorInto } from '../entities/ArmUnit.js';
+import { heldSlotAnchorInto, rackOffsetFor, catchLongAxisInto, nextFreeRackCell } from '../entities/ArmUnit.js';
+import { composeDockedArmQuat } from '../entities/ArmDockBasis.js';
 
 /** 1 meter in scene units — matches ArmManager/PlayerSatellite convention */
 const M = 0.00001;
@@ -116,88 +117,143 @@ export function strutMidpointMeters(dockPos, alpha) {
   };
 }
 
-// ── S13(b): rack-cargo booking (register item 58) ───────────────────────────
+// ── S13(b) / rack-snug: rack-cargo booking (register item 58) ───────────────
 // Module temps — the repo hot-path idiom (computeCoM runs per frame; none of
 // these may be retained across calls).
 const _hcdAnchor = new THREE.Vector3();
 const _hcdDir = new THREE.Vector3();
-const _hcdUp = new THREE.Vector3();
-const _hcdQInv = new THREE.Quaternion();
 const _hcdOut = new THREE.Vector3();
+const _hcdOff = new THREE.Vector3();
+const _hcdLong = new THREE.Vector3();
+const _hcdQ = new THREE.Quaternion();
+const _ihAnchor = new THREE.Vector3();   // in-hand booking temps (base behaviour)
+const _ihDir = new THREE.Vector3();
+const _ihUp = new THREE.Vector3();
+const _ihLat = new THREE.Vector3();
+const _ihQInv = new THREE.Quaternion();
 /** Reused plain-object target for heldCargoBookingMeters on the hot paths. */
 const _slotPoint = { x: 0, y: 0, z: 0 };
 
 /**
  * Where a held rack piece actually IS, booked in the honest ship frame, in
  * meters. The anchor is the strut tip from strutTipMeters (the ONE S13(a)
- * conversion lives inside it — read it, never re-derive it); the offset is the
- * pin's own slot offset — `heldSlotAnchorInto`, the ONE computation shared with
- * `ArmUnit.heldSlotWorldInto` (register item 58).
+ * conversion lives inside it — read it, never re-derive it).
  *
- * The hold axis follows the pin's sources in the pin's order:
- *   1. the fired net's launch direction (authored world-frame), transformed
- *      into the body frame by the inverse attitude quaternion — an identity
- *      quaternion is an exact no-op;
- *   2. else the strut-outboard fallback — the pin's `this.position −
- *      parentPos`, whose body-frame equivalent is the tip direction;
- *   3. else zero (the piece books AT the tip, as the pin parks AT the arm).
- * World-up transforms with the same inverse attitude on every path, so the
- * lat axis (holdDir × up) always lives in the frame of the axis that reaches
- * the helper.
+ * rack-snug (Decision 4): a rack cell is a place on HER, so the booking is the tip PLUS the cell's offset on her,
+ * turned by her attitude in the ship's body frame at this strut angle — `heldSlotAnchorInto(tip, herQuat, offset)`,
+ * the ONE computation shared with `ArmUnit.heldSlotWorldInto` (register item 58). The offset is the piece's stored
+ * `_rackLocalM`; a piece without one (a prediction by size, an old save, a mock) takes the typeless form for `slotIndex`
+ * (`ArmUnit.rackOffsetFor`). Her attitude is the docked basis `composeDockedArmQuat(strutDir(α), azimuth)` — the same
+ * one the pin composes with the ship's quaternion — so no world direction, hold axis or ship attitude enters:
+ * `playerSatellite` is kept in the signature for the callers only.
+ *
+ * `axisOut` receives the unit body-frame LONG axis of the piece as it sits — the piece's longest mesh axis turned by
+ * its attitude in her frame — for the plume volume model (S9); a piece with no stored attitude (or no mesh) reports her
+ * +Z (the strut's outboard direction).
  *
  * Internally the arithmetic runs on the pin's scene-unit tree (tip × M in,
  * ÷ M out) so that under an identity ship fixture the booking equals
  * `heldSlotWorldInto`'s output to float equality — same operands, same order.
  *
- * @param {object} arm — ArmUnit instance or mock (reads arm._firedNet only)
+ * @param {object} arm — ArmUnit instance or mock (reads herSupportZM / config for the typeless form only)
  * @param {object} dp — dock position (stored convention; see the FRAME CONTRACT)
  * @param {number} alpha — strut sweep angle (rad)
- * @param {object|null} playerSatellite — source of the attitude quaternion
- * @param {number} slotIndex — rack slot (0-based; slot 0 carries no lat rotation)
- * @param {number} sizeMeter — the piece's size, for the standoff radius
+ * @param {object|null} playerSatellite — unused (see above)
+ * @param {number} slotIndex — the cell (0-based) when `held` carries none
+ * @param {number} sizeMeter — the piece's size, for a prediction
  * @param {{x:number,y:number,z:number}} out — receives the booking point, meters
- * @param {{x:number,y:number,z:null}} [axisOut] — when provided, receives the
- *   RESOLVED body-frame hold axis (unit; the zero vector when no source
- *   resolves). The ONE resolution of the axis — S9's volume model rides it
- *   instead of re-deriving the pin's direction (register item 32 / S13(b)'s
- *   one-computation rule).
+ * @param {{x:number,y:number,z:null}} [axisOut] — receives the unit body-frame long axis (see above)
+ * @param {object|null} [held] — the piece (its stored cell, offset and attitude)
  * @returns {{x:number,y:number,z:number}} out
  */
-export function heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotIndex, sizeMeter, out, axisOut) {
+export function heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotIndex, sizeMeter, out, axisOut, held = null) {
   const tip = strutTipMeters(dp, alpha);
   _hcdAnchor.set(tip.x * M, tip.y * M, tip.z * M);
+
+  // Her attitude in the ship's body frame at this α: the docked basis (identity mother).
+  const g = _dockToShipFrame(dp);
+  const sinA = Math.sin(alpha);
+  const cosA = Math.cos(alpha);
+  _hcdDir.set(sinA * g.ox, sinA * g.oy, sinA * g.oz - cosA);
+  const az = Number.isFinite(dp.azimuthDeg) ? (dp.azimuthDeg * Math.PI) / 180 : Math.atan2(g.oy, g.ox);
+  composeDockedArmQuat(_hcdDir, az, _hcdQ);
+
+  const cell = (held && Number.isInteger(held._rackCell)) ? held._rackCell : slotIndex;
+  rackOffsetFor(_hcdOff, arm, held, cell, sizeMeter);
+  heldSlotAnchorInto(_hcdAnchor, _hcdQ, _hcdOff, _hcdOut);
+  out.x = _hcdOut.x / M;
+  out.y = _hcdOut.y / M;
+  out.z = _hcdOut.z / M;
+  if (axisOut) {
+    if (held && held._qLocalHer && held.type) catchLongAxisInto(held, _hcdLong);
+    else _hcdLong.set(0, 0, 1);
+    if (held && held._qLocalHer) _hcdLong.applyQuaternion(held._qLocalHer);
+    _hcdLong.applyQuaternion(_hcdQ);
+    axisOut.x = _hcdLong.x;
+    axisOut.y = _hcdLong.y;
+    axisOut.z = _hcdLong.z;
+  }
+  return out;
+}
+
+/**
+ * Where a catch held IN HAND (`arm.capturedDebris`: pulled in, reeling, docking) is booked, in meters, ship frame.
+ * rack-snug did NOT change this (the plan covers the rack only): it is the base behaviour, kept byte for byte —
+ * the slot-0 geometry along the hold axis: anchor (strut tip) + holdDir·(size/2 + ARM_HOLD_CLEARANCE_M) + the
+ * lateral bias along (holdDir × world up). The hold axis follows the pin's sources in the pin's order: 1. the fired
+ * net's launch direction (world → body by the inverse attitude); 2. else the strut-outboard direction (the tip
+ * direction); 3. else zero (books AT the tip). `axisOut` receives the resolved unit hold axis (zero when none).
+ *
+ * @param {object} arm — ArmUnit instance or mock (reads arm._firedNet only)
+ * @param {object} dp — dock position (stored convention)
+ * @param {number} alpha — strut sweep angle (rad)
+ * @param {object|null} playerSatellite — source of the attitude quaternion
+ * @param {number} sizeMeter — the piece's size, for the standoff radius
+ * @param {{x:number,y:number,z:number}} out — receives the booking point, meters
+ * @param {{x:number,y:number,z:number}} [axisOut] — receives the resolved body-frame hold axis
+ * @returns {{x:number,y:number,z:number}} out
+ */
+export function heldInHandBookingMeters(arm, dp, alpha, playerSatellite, sizeMeter, out, axisOut) {
+  const tip = strutTipMeters(dp, alpha);
+  _ihAnchor.set(tip.x * M, tip.y * M, tip.z * M);
 
   let hasDir = false;
   const ld = arm && arm._firedNet && arm._firedNet.launchDirection;
   const q = playerSatellite && playerSatellite.quaternion;
   const hasQ = q && typeof q.x === 'number';
-  _hcdUp.set(0, 1, 0);
+  _ihUp.set(0, 1, 0);
   if (hasQ) {
-    _hcdQInv.copy(q).invert();
-    // World-up → body-up — on EVERY path, not just the fired-net one: the
-    // lat axis is holdDir × up, and the up must live in the same frame as the
-    // holdDir that reaches the helper (identity attitude ⇒ exact no-op).
-    _hcdUp.applyQuaternion(_hcdQInv);
+    _ihQInv.copy(q).invert();
+    _ihUp.applyQuaternion(_ihQInv);       // world-up → body-up, on EVERY path
   }
   if (ld) {
-    _hcdDir.set(ld.x, ld.y, ld.z);
-    hasDir = _hcdDir.lengthSq() > 1e-12;
-    if (hasDir && hasQ) _hcdDir.applyQuaternion(_hcdQInv);   // world → body
+    _ihDir.set(ld.x, ld.y, ld.z);
+    hasDir = _ihDir.lengthSq() > 1e-12;
+    if (hasDir && hasQ) _ihDir.applyQuaternion(_ihQInv);   // world → body
   }
   if (!hasDir) {
-    _hcdDir.copy(_hcdAnchor);   // strut-outboard (the pin's position − mother)
-    hasDir = _hcdDir.lengthSq() > 1e-12;
+    _ihDir.copy(_ihAnchor);               // strut-outboard (the pin's position − mother)
+    hasDir = _ihDir.lengthSq() > 1e-12;
   }
-  if (hasDir) _hcdDir.normalize(); else _hcdDir.set(0, 0, 0);
+  if (hasDir) _ihDir.normalize(); else _ihDir.set(0, 0, 0);
 
-  heldSlotAnchorInto(_hcdAnchor, _hcdDir, _hcdUp, slotIndex, sizeMeter, _hcdOut);
+  const clearance = (Constants.ARM_HOLD_CLEARANCE_M ?? 1.0);
+  const bias = Constants.ARM_HOLD_LATERAL_BIAS ?? 0;
+  const radius = (sizeMeter || 0) / 2 + clearance;
+  _hcdOut.copy(_ihAnchor).addScaledVector(_ihDir, radius * M);
+  if (bias !== 0 && _ihDir.lengthSq() > 1e-12) {
+    _ihLat.crossVectors(_ihDir, _ihUp);
+    if (_ihLat.lengthSq() < 1e-8) _ihLat.set(1, 0, 0); // holdDir ∥ up — pick world-X
+    _ihLat.normalize();
+    _hcdOut.addScaledVector(_ihLat, radius * M * bias);   // slot 0: no rotation
+  }
   out.x = _hcdOut.x / M;
   out.y = _hcdOut.y / M;
   out.z = _hcdOut.z / M;
   if (axisOut) {
-    axisOut.x = hasDir ? _hcdDir.x : 0;
-    axisOut.y = hasDir ? _hcdDir.y : 0;
-    axisOut.z = hasDir ? _hcdDir.z : 0;
+    axisOut.x = hasDir ? _ihDir.x : 0;
+    axisOut.y = hasDir ? _ihDir.y : 0;
+    axisOut.z = hasDir ? _ihDir.z : 0;
   }
   return out;
 }
@@ -221,14 +277,14 @@ function _forEachArmMassPoint(arm, dp, alpha, playerSatellite, cb) {
   const handMass = (arm.capturedDebris && arm.capturedDebris.mass) || 0;
   if (handMass > 0) {
     cb(handMass,
-      heldCargoBookingMeters(arm, dp, alpha, playerSatellite, 0, arm.capturedDebris.sizeMeter, _slotPoint));
+      heldInHandBookingMeters(arm, dp, alpha, playerSatellite, arm.capturedDebris.sizeMeter, _slotPoint));
   }
   if (Array.isArray(arm.heldCatches)) {
     for (let i = 0; i < arm.heldCatches.length; i++) {
       const held = arm.heldCatches[i];
       const m = (held && held.mass) || 0;
       if (m > 0) {
-        cb(m, heldCargoBookingMeters(arm, dp, alpha, playerSatellite, i, held.sizeMeter, _slotPoint));
+        cb(m, heldCargoBookingMeters(arm, dp, alpha, playerSatellite, i, held.sizeMeter, _slotPoint, undefined, held));
       }
     }
   }
@@ -443,7 +499,7 @@ export function computeInertia(armManager, playerSatellite) {
       // the tip — ONE computation with the rack pin (heldCargoBookingMeters).
       const handMass = (arm.capturedDebris && arm.capturedDebris.mass) || 0;
       if (handMass > 0) {
-        const p = heldCargoBookingMeters(arm, dp, alpha, playerSatellite, 0,
+        const p = heldInHandBookingMeters(arm, dp, alpha, playerSatellite,
           arm.capturedDebris.sizeMeter, _slotPoint);
         cargoIxx += handMass * (p.y * p.y + p.z * p.z);
         cargoIyy += handMass * (p.x * p.x + p.z * p.z);
@@ -455,7 +511,7 @@ export function computeInertia(armManager, playerSatellite) {
           const m = (held && held.mass) || 0;
           if (m <= 0) continue;
           const p = heldCargoBookingMeters(arm, dp, alpha, playerSatellite, si,
-            held.sizeMeter, _slotPoint);
+            held.sizeMeter, _slotPoint, undefined, held);
           cargoIxx += m * (p.y * p.y + p.z * p.z);
           cargoIyy += m * (p.x * p.x + p.z * p.z);
           cargoIzz += m * (p.x * p.x + p.y * p.y);
@@ -782,12 +838,11 @@ export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMe
     if (captureCapable(arm) && capableCount <= 1) continue;
 
     const alpha = arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0);
-    // S13(b): the hypothetical add books where the piece would actually be
-    // PINNED — this arm's next free slot (register item 58; ONE computation
-    // with the rack pin). Rankings on symmetric fixtures are unchanged:
-    // fallback axes are tip-radial, so |p_i| and p_i.z are arm-independent
-    // (tip·lat = 0) and the CG term ties exactly as before.
-    const book = heldCargoBookingMeters(arm, dp, alpha, playerSatellite, held, sizeMeter, _slotPoint);
+    // S13(b) / rack-snug: the hypothetical add books where the piece would actually be
+    // PINNED — this arm's next FREE cell, on her (register item 58; ONE computation
+    // with the rack pin). A prediction has no mesh yet, so it is the typeless form.
+    const book = heldCargoBookingMeters(arm, dp, alpha, playerSatellite,
+      nextFreeRackCell(arm.heldCatches), sizeMeter, _slotPoint);
 
     // CoM after adding `mass` at this slot: (M·p + m·slot) / (M + m).
     const denom = totalMass + mass;
@@ -819,8 +874,10 @@ export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMe
 
 // ── S9: the held-cargo VOLUME model (register item 32) ──────────────────────
 // The box: dims from the item-7 SSOT (DebrisField.setDebrisSize keeps
-// lengthM/widthM tracking sizeMeter per type), oriented by the booking's hold
-// frame — long axis ALONG the resolved hold direction, square widthM × widthM
+// lengthM/widthM tracking sizeMeter per type), oriented as the piece sits
+// (rack-snug: its longest mesh axis turned by its attitude in the daughter's
+// frame — `heldCargoBookingMeters`' axisOut; her +Z for a piece with no stored
+// attitude), square widthM × widthM
 // cross-section. The check encloses that box EXACTLY by a chain of
 // PLUME_CARGO_CHAIN_K balls riding the long axis: each slab's half-extents are
 // (L/2K, W/2, W/2), so radius √((L/2K)² + W²/2) covers its slab and the union
@@ -853,12 +910,19 @@ const _plumeAxisTmp = { x: 0, y: 0, z: 0 };
  * @param {object|null} debris — the held piece (sizeMeter + lengthM/widthM)
  * @param {Array<{x:number,y:number,z:number,r:number}>} out — preallocated
  *   scratch with >= PLUME_CARGO_CHAIN_K entries (module temps on hot paths)
+ * @param {boolean} [inHand=false] — true for `arm.capturedDebris` (a catch in hand): booked by
+ *   `heldInHandBookingMeters` (base behaviour), `slotIndex` unused
  * @returns {number} balls written (1 = sphere fallback, else CHAIN_K)
  */
-export function heldCargoPlumeChainInto(arm, dp, alpha, playerSatellite, slotIndex, debris, out) {
+export function heldCargoPlumeChainInto(arm, dp, alpha, playerSatellite, slotIndex, debris, out, inHand = false) {
   const sizeMeter = (debris && debris.sizeMeter) || 0;
-  heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotIndex, sizeMeter,
-    _plumeBookingTmp, _plumeAxisTmp);
+  if (inHand) {
+    // a catch held in hand keeps its base booking and hold-axis box (rack-snug changed the rack only)
+    heldInHandBookingMeters(arm, dp, alpha, playerSatellite, sizeMeter, _plumeBookingTmp, _plumeAxisTmp);
+  } else {
+    heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotIndex, sizeMeter,
+      _plumeBookingTmp, _plumeAxisTmp, debris);
+  }
   const L = debris ? debris.lengthM : undefined;
   const W = debris ? debris.widthM : undefined;
   const hasAxis = (_plumeAxisTmp.x !== 0) || (_plumeAxisTmp.y !== 0) || (_plumeAxisTmp.z !== 0);
@@ -913,7 +977,7 @@ function _ballInPlumeCone(bx, by, bz, r, n, dx, dy, dz, halfAngle) {
 function _armHoldsCargoInCone(arm, dp, alpha, playerSatellite, n, dx, dy, dz, halfAngle) {
   const hand = arm.capturedDebris;
   if (hand && hand.mass) {
-    const count = heldCargoPlumeChainInto(arm, dp, alpha, playerSatellite, 0, hand, _plumeChainBall);
+    const count = heldCargoPlumeChainInto(arm, dp, alpha, playerSatellite, 0, hand, _plumeChainBall, true);
     for (let j = 0; j < count; j++) {
       const b = _plumeChainBall[j];
       if (_ballInPlumeCone(b.x, b.y, b.z, b.r, n, dx, dy, dz, halfAngle)) return true;
@@ -1235,6 +1299,7 @@ export default {
   computeInducedTorque,
   suggestStowArm,
   heldCargoBookingMeters,
+  heldInHandBookingMeters,
   heldCargoPlumeChainInto,
   heldCargoPlumeConflictAt,
   strutTipMeters,

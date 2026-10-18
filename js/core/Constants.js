@@ -1452,16 +1452,23 @@ export const Constants = {
   // end of daughter, should be reeled in firmly"). A typed catch in hand sits
   // ARM_HOLD_NET_GAP_M off her end, recomputed each frame from the two drawn
   // shapes (ArmUnit catchHoldStandoffM -> debris._holdStandoffM). It remains the
-  // rack slot's standoff (heldSlotAnchorInto, CoMCalculator, pinned by tests) and
-  // the fallback for a catch with no type (old saves, rigs).
+  // typeless in-hand fallback (`_pinCatchToSelf`: a catch with no type — old saves, rigs).
+  // rack-snug (2026-10-18): it is NOT the rack's standoff any more — a rack cell is a place
+  // on the daughter (ArmUnit.rackCellOffsetInto: her +Z support + the catch's drawn extent +
+  // ARM_HOLD_NET_GAP_M, beside her end), nothing here enters it.
   ARM_HOLD_CLEARANCE_M: 1.0,           // metres
   // catch-snug: air gap (the net, ~3 cm) between the daughter's end and the nearest
   // drawn point of a catch held in hand (pulled in, reeling, docking).
+  // rack-snug: the SAME number seats a parked rack catch against her +Z end
+  // (one number, the net) and spaces the two cells (half of it on each side).
   ARM_HOLD_NET_GAP_M: 0.03,            // metres
   // catch-snug: the move from the tight in-hand pin to the rack slot at the end of
   // docking glides over this long (smoothstep) instead of jumping in one frame.
   ARM_HOLD_GLIDE_S: 1.0,               // seconds
-  // While parked in HOLDING_CATCH the full-size catch is biased laterally
+  // (rack-snug 2026-10-18: the rack no longer uses this — a parked catch sits beside her end, out of
+  // the swing plane, fixed in HER frame. Its one remaining reader is CoMCalculator's booking of a
+  // catch held IN HAND, which keeps its base geometry: hold axis from the net's launch direction,
+  // slot-0 lateral bias along world up.) While in hand the full-size catch is biased laterally
   // (perpendicular to the outboard hold axis) by this factor × catch radius so
   // the bag never eclipses the ~1 m daughter on the camera→daughter view axis
   // (re-dock "daughter disappeared for 2 s" fix). 0 = pure outboard (old).
@@ -1469,6 +1476,7 @@ export const Constants = {
   // Cargo-continuity S6 (2026-08-12): a parked daughter's hold is a cargo RACK —
   // capacity in pieces pinned at the strut tip (owner: "a daughter may store more
   // than one piece"). 2 is the smallest honest rack — tuning, not doctrine.
+  // rack-snug: cell 0 sits on her +X side, cell 1 on her -X side.
   DAUGHTER_CARGO_CELLS: 2,
 
   // ── S9 strut posing (2026-08-22, register item 32): the held-cargo plume
@@ -1490,15 +1498,30 @@ export const Constants = {
   // the axis); the largest class barely moved (106° here vs 107° before —
   // the two errors partly offset at that extreme). Old → new (maxBiteADeg):
   // 11→16, 30→33, 45→48, 65→67, 86→87, 107→106.
+  // RE-MEASURED 2026-10-19 (lane rack-snug): a parked rack catch is no longer slotted
+  // round a world-up ring at the strut tip — it sits in a cell ON the daughter, beside
+  // her end, fixed in her frame (ArmUnit.rackCellOffsetInto). The ring phase is gone;
+  // the probe (tmp/rack-snug-plume-probe.mjs → js/test/fixtures/rack-snug-plume.json,
+  // shared code js/test/_rackSnugPlume.js) calls the REAL cell function and CoMCalculator's
+  // box-chain over 4 daughters × cells 0,1 × 30 catch attitudes in her frame (6 axis-aligned
+  // + 24 seeded, js/test/_rackSnugAttitudes.js) × α 0–180° (1° grid) × every size/aspect
+  // case (aspect bound as before: all three aspect types at every named size, plus every
+  // fragment mesh and the cubesat). The deepest row is measured over pieces the game can
+  // spawn there (defunctSat ≤ 8 × 1.15 jitter = 9.2 m, rocketBody ≤ 12.65 m): the old
+  // "fat 12.4 m hull" (a 12.4 m defunctSat) is a test fixture, not a spawnable piece, and
+  // under the new cells it bites at every α to 180° so no floor could express it. Old → new
+  // (maxBiteADeg): 16→10, 33→28, 48→48, 67→75, 87→115, 106→141 (the large pieces now sit
+  // 4–6 m to the side of her end, which brings the fat hulls into the cone farther out;
+  // the small ones sit nearer her axis than the old √2·(size/2 + 1 m) standoff).
   // Read by ArmManager's re-pose driver and the S9 tests; the plume CHECK
   // itself is band-free (it tests geometry, not policy).
   PLUME_CARGO_ALPHA_LADDER: [
-    { maxSizM: 0.5,  maxBiteADeg: 16,  safeAlphaMinRad: 26 * Math.PI / 180 },
-    { maxSizM: 1.5,  maxBiteADeg: 33,  safeAlphaMinRad: 43 * Math.PI / 180 },
+    { maxSizM: 0.5,  maxBiteADeg: 10,  safeAlphaMinRad: 20 * Math.PI / 180 },
+    { maxSizM: 1.5,  maxBiteADeg: 28,  safeAlphaMinRad: 38 * Math.PI / 180 },
     { maxSizM: 2.8,  maxBiteADeg: 48,  safeAlphaMinRad: 58 * Math.PI / 180 },
-    { maxSizM: 5.0,  maxBiteADeg: 67,  safeAlphaMinRad: 77 * Math.PI / 180 },
-    { maxSizM: 8.0,  maxBiteADeg: 87,  safeAlphaMinRad: 97 * Math.PI / 180 },
-    { maxSizM: Infinity, maxBiteADeg: 106, safeAlphaMinRad: 116 * Math.PI / 180 },
+    { maxSizM: 5.0,  maxBiteADeg: 75,  safeAlphaMinRad: 85 * Math.PI / 180 },
+    { maxSizM: 8.0,  maxBiteADeg: 115, safeAlphaMinRad: 125 * Math.PI / 180 },
+    { maxSizM: Infinity, maxBiteADeg: 141, safeAlphaMinRad: 151 * Math.PI / 180 },
   ],
   // The ONE band read (the digestSpanS in-table-method precedent): the piece's
   // re-pose floor for its size class — ceil to the NEXT row (intermediate
@@ -2112,7 +2135,17 @@ export const Constants = {
       // automatic swings to OPEN_DEG (the 30 s settle, the ion-thrust swing)
       // wait; the player's own commands are untouched (DECISIONS §11: held
       // cargo is out of scope for the fold corridor).
-      CARGO_CLEAR_ALPHA_ROWS: [[0.5, 25], [1, 30], [1.5, 35], [Infinity, 40]],
+      // RE-MEASURED 2026-10-19 (lane rack-snug, Decision 6): a parked rack catch is no longer a sphere on a world-up ring at
+      // the strut tip — it is the REAL drawn mesh in a cell on the daughter, beside her end, fixed in her frame
+      // (ArmUnit.rackCellOffsetInto). tmp/rack-snug-radiator-probe.mjs (shared code js/test/_rackSnugRadiator.js, fixture
+      // js/test/fixtures/rack-snug-radiator.json): 4 real daughters × cells 0,1 × the 30 seeded catch attitudes in her frame
+      // (js/test/_rackSnugAttitudes.js) × α 0–90° (5° grid) × every size/type case (every fragment mesh; defunctSat to
+      // 9.2 m and rocketBody to 12.65 m, the largest the game spawns) against every petal triangle over θ 146–180° (2°
+      // steps), clear = 20 mm. A case's value is the smallest grid α from which every higher α clears. Old → new:
+      // 25→15 (≤ 0.5 m), 30→25 (≤ 1 m), 35→30 (≤ 1.5 m), 40→55 (beyond: rocketBody 8 m sets it; defunctSat 9.2 m 55,
+      // 8 m 50). Small cargo now clears sooner (it sits beside her end, not 1 m round the ring); the large rows rise
+      // (a long body parked beside her end reaches the petals farther out). Every row still sits below the plume floor.
+      CARGO_CLEAR_ALPHA_ROWS: [[0.5, 15], [1, 25], [1.5, 30], [Infinity, 55]],
       POSE_STOW_DEG: 146,          // band-edge bud: θ→180° camps the Y3 axial
                                    // reserve (r ≤ 0.45, ANY R — probe §2
                                    // discovery) and is plume-illegal for

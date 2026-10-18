@@ -20,8 +20,8 @@ import { makePlumeFrustum } from '../scene/plumeGeometry.js';
 import { computeDaughterPlumeIntensity, DAUGHTER_PLUME } from './armPlumeModel.js';
 import { applyDetailLod } from '../scene/detailLodCull.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
-import { strutLocalDirection } from './ArmDockBasis.js';
-import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT, seedShipRelativeAttitude, applyShipRelativeAttitude, clearShipRelativeAttitude } from './CaptureNet.js';
+import { strutLocalDirection, composeDockedArmQuat } from './ArmDockBasis.js';
+import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT, seedHerFrameAttitude, applyHerFrameAttitude, clearShipRelativeAttitude, clearRackCell } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
 import { computeToolOdds, makeNetOddsLockCache } from '../systems/ToolOdds.js';
@@ -169,42 +169,169 @@ function _ensureSharedBridleGeo() {
   return _sharedBridleGeo;
 }
 
-// ── Cargo-continuity S13(b): the ONE rack-slot geometry computation ──────────
-// (register item 58) — extracted from ArmUnit.heldSlotWorldInto so the rack pin
-// and the CoMCalculator mass model share ONE computation (§6 house rules).
-// Frame-free: works in whatever consistent frame `holdDir` and `up` are
-// expressed; `anchor` and `out` are scene-unit positions in that frame.
-// Applies the pin's exact arithmetic, in order (byte-stable by construction):
-//   out = anchor + holdDir·(r·M)          then, when bias applies:
-//   out += lat(slot)·(r·M·bias)           r = sizeMeter/2 + ARM_HOLD_CLEARANCE_M
-// with lat = normalize(holdDir × up), rotated about holdDir by
-// slotIndex × 2π/DAUGHTER_CARGO_CELLS (slot 0: no rotation — the S6 no-jump
-// contract). A zero holdDir lands the piece AT the anchor with no lateral term
-// (the pin's own degenerate case).
-const _slotLatTmp = new THREE.Vector3();   // module temps — the repo hot-path idiom
-const _slotRotTmp = new THREE.Quaternion();
-export function heldSlotAnchorInto(anchor, holdDir, up, slotIndex, sizeMeter, out) {
-  const clearance = (Constants.ARM_HOLD_CLEARANCE_M ?? 1.0);
-  const bias = Constants.ARM_HOLD_LATERAL_BIAS ?? 0;
-  const cells = Constants.DAUGHTER_CARGO_CELLS ?? 2;
-  const radius = (sizeMeter || 0) / 2 + clearance;
+// ── rack-snug (2026-10-18): a rack cell is a place on HER ────────────────────
+// Owner, play report 8a: "debris seems to float .5 meter away from end of daughter, should be reeled in
+// firmly to end of daughter." catch-snug tightened the in-hand hold and left the rack to this lane. A
+// parked catch is now a rigid part of her (docs/DECISIONS Ruling 0, physically real): its centre and its
+// attitude are fixed in HER body frame (+Z out along the strut, Y in the strut's swing plane, X out of it)
+// from the moment its cell is assigned, so the ship turning or the strut swinging carries it with her and
+// world up plays no part. Cell k sits beside her end, out of the swing plane:
+//   z = s_her + s_catch + ARM_HOLD_NET_GAP_M     (the in-hand rule along her +Z: no part of the catch
+//                                                 nearer than the net gap)
+//   x = (-1)^k · (reach_k + ARM_HOLD_NET_GAP_M/2)  (cell 0 +X, cell 1 -X: a catch's place never depends on
+//                                                 what the other cell holds; two catches never touch)
+// s_her = max z over her bodyDims box and every solid mesh vertex of hers; s_catch = max of -z over the
+// catch's drawn vertices at the drawn scale in its frozen attitude. ONE computation (`rackCellOffsetInto`)
+// runs when a cell is assigned and stores `d._rackCell`, `d._rackLocalM`, `d._qLocalHer` (+ `d._rackArm`, the
+// owner); every reader — the pin, the cargo flight's end, the keep-out sphere, the CoM booking — goes
+// through `heldSlotAnchorInto`: her position + her attitude · the stored offset.
+const _rcQ = new THREE.Quaternion();
+const _rcDir = new THREE.Vector3();
+const _rcZ = new THREE.Vector3(0, 0, -1);
 
-  out.copy(anchor).addScaledVector(holdDir, radius * M);
-  // `holdDir.lengthSq() > 1e-12` on the RESOLVED axis is the pin's `hasDir`:
-  // a resolvable source is normalized (lengthSq 1) before we get here; an
-  // unresolvable one arrives as (0,0,0).
-  if (bias !== 0 && holdDir.lengthSq() > 1e-12) {
-    const lat = _slotLatTmp;
-    lat.crossVectors(holdDir, up);
-    if (lat.lengthSq() < 1e-8) lat.set(1, 0, 0); // holdDir ∥ up — pick world-X
-    lat.normalize();
-    if (slotIndex !== 0) {
-      _slotRotTmp.setFromAxisAngle(holdDir, (slotIndex * 2 * Math.PI) / cells);
-      lat.applyQuaternion(_slotRotTmp);
+/**
+ * Where a rack cell is, frame-free: `anchor + herQuat · offset`. `anchor` (her centre) and `out` are scene
+ * units in the frame `herQuat` maps into; `offsetM` is her-frame metres.
+ * @param {THREE.Vector3} anchor
+ * @param {THREE.Quaternion} herQuat her attitude in the anchor's frame
+ * @param {THREE.Vector3} offsetM the cell's centre in her frame, metres
+ * @param {THREE.Vector3} out
+ * @returns {THREE.Vector3} out
+ */
+export function heldSlotAnchorInto(anchor, herQuat, offsetM, out) {
+  return out.copy(offsetM).multiplyScalar(M).applyQuaternion(herQuat).add(anchor);
+}
+
+/** Which side of the swing plane a cell is on: cell 0 +X, cell 1 -X. */
+function rackCellSign(cell) { return (cell % 2 === 0) ? 1 : -1; }
+
+/**
+ * The cell the next arrival takes: the smallest free one. A piece without a `_rackCell` (an old save, a rig that
+ * pushed straight onto `heldCatches`) holds the cell of its array position.
+ * @param {Array<object>|null} rack
+ * @param {object|null} [except] a piece to ignore (the one being placed)
+ * @returns {number}
+ */
+export function nextFreeRackCell(rack, except = null) {
+  const cells = Constants.DAUGHTER_CARGO_CELLS ?? 2;
+  let used = 0;
+  if (Array.isArray(rack)) {
+    for (let i = 0; i < rack.length; i++) {
+      const h = rack[i];
+      if (!h || h === except) continue;
+      const c = Number.isInteger(h._rackCell) ? h._rackCell : i;
+      if (c >= 0 && c < 30) used |= (1 << c);
     }
-    out.addScaledVector(lat, radius * M * bias);
   }
+  for (let k = 0; k < cells; k++) if (!(used & (1 << k))) return k;
+  return Array.isArray(rack) ? rack.length : cells;
+}
+
+/**
+ * Her +Z support, metres: max z over her bodyDims box and every solid mesh vertex of hers (the set
+ * `catchHoldStandoffM` measures against), in her frame.
+ * @param {number[]|null} bodyDims [x, y, z] full box dimensions, metres
+ * @param {Float32Array|null} [solidPointsM] her solid-mesh vertices, her frame, metres
+ * @returns {number}
+ */
+export function herSupportZM(bodyDims, solidPointsM = null) {
+  let s = bodyDims ? bodyDims[2] / 2 : 0;
+  if (solidPointsM) {
+    for (let i = 2; i < solidPointsM.length; i += 3) if (solidPointsM[i] > s) s = solidPointsM[i];
+  }
+  return s;
+}
+
+/**
+ * The catch's support along `dirFrame` (a unit vector in the frame its attitude `qCatch` is expressed in), metres:
+ * the farthest of its DRAWN vertices (cached mesh, at the scale the renderer uses) in that direction.
+ * @param {object} d the catch (reads type, id, sizeMeter, sceneSize, _catchRenderMin)
+ * @param {THREE.Quaternion} qCatch the catch's attitude in that frame
+ * @param {THREE.Vector3} dirFrame
+ * @returns {number|null} null when the catch has no drawn mesh
+ */
+function catchSupportAlongM(d, qCatch, dirFrame) {
+  if (!d || !d.type) return null;
+  const verts = _holdVertices(DebrisWireframe.getGeometry(d.type, d.id));
+  if (verts.length < 3) return null;
+  _rcDir.copy(dirFrame).applyQuaternion(_rcQ.copy(qCatch).invert());   // direction in the mesh's own frame
+  const lx = _rcDir.x, ly = _rcDir.y, lz = _rcDir.z;
+  let best = -Infinity;
+  for (let i = 0; i < verts.length; i += 3) {
+    const dot = verts[i] * lx + verts[i + 1] * ly + verts[i + 2] * lz;
+    if (dot > best) best = dot;
+  }
+  return best * (DebrisField.effectiveRenderScale(d) / M);
+}
+
+/**
+ * ONE computation of a rack cell's offset on her, her frame, metres (Decision 3). With a typed catch and its
+ * attitude in her frame (`qLocalHer`) it is measured from the drawn mesh; otherwise (a prediction in
+ * `suggestCargoArm`, an old save, a typeless rig) it is the typeless form: s_catch = sizeMeter/2 and the reach from
+ * `DebrisField.trueReachM`.
+ * @param {THREE.Vector3} out receives (x, 0, z), metres
+ * @param {number} sHerM her +Z support (`herSupportZM`)
+ * @param {object|null} d the catch (may be null for a size-only prediction)
+ * @param {number} cell 0 or 1
+ * @param {THREE.Quaternion|null} qLocalHer the catch's attitude in her frame (null: typeless form)
+ * @param {number} [sizeMeter=0] used when `d` carries no size
+ * @returns {THREE.Vector3} out
+ */
+export function rackCellOffsetInto(out, sHerM, d, cell, qLocalHer, sizeMeter = 0) {
+  const gap = Constants.ARM_HOLD_NET_GAP_M ?? 0.03;
+  const size = (d && Number.isFinite(d.sizeMeter) && d.sizeMeter !== 0) ? d.sizeMeter : (sizeMeter || 0);
+  let reach = d ? DebrisField.trueReachM(d, size) : size / 2;
+  let sCatch = size / 2;
+  if (d && d.type && qLocalHer) {
+    const s = catchSupportAlongM(d, qLocalHer, _rcZ);
+    if (s !== null) {
+      sCatch = s;
+      // Her catch may be drawn above its true size (a readability floor kept from the nose): the lateral
+      // spacing follows the drawn reach so two floored catches still never touch. Equal to trueReachM otherwise.
+      const drawn = DebrisWireframe.getOriginRadius(d.type, d.id) * (DebrisField.effectiveRenderScale(d) / M);
+      if (drawn > reach) reach = drawn;
+    }
+  }
+  return out.set(rackCellSign(cell) * (reach + gap / 2), 0, sHerM + sCatch + gap);
+}
+
+/**
+ * The catch's longest mesh axis (unit, in the mesh's own frame): the largest half-extent of its drawn bounding box.
+ * The plume volume model (S9) lays its box along this axis. `+Z` for a catch with no drawn mesh.
+ * @param {object} d the catch (reads type, id)
+ * @param {THREE.Vector3} out
+ * @returns {THREE.Vector3} out
+ */
+export function catchLongAxisInto(d, out) {
+  out.set(0, 0, 1);
+  if (!d || !d.type) return out;
+  const bb = DebrisWireframe.getBoundingBoxExtents(d.type, d.id);
+  if (!bb) return out;
+  if (bb.hx >= bb.hy && bb.hx >= bb.hz) out.set(1, 0, 0);
+  else if (bb.hy >= bb.hz) out.set(0, 1, 0);
   return out;
+}
+
+/**
+ * A cell's offset for a reader that may not have one stored: the piece's stored offset when it has one, else the
+ * typeless prediction for `cell` on `arm` (a real ArmUnit, or a duck-typed mock with `config.bodyDims`/`config.type`).
+ * @param {THREE.Vector3} out
+ * @param {object} arm
+ * @param {object|null} d
+ * @param {number} cell
+ * @param {number} [sizeMeter=0]
+ * @returns {THREE.Vector3} out
+ */
+export function rackOffsetFor(out, arm, d, cell, sizeMeter = 0) {
+  if (d && d._rackLocalM) return out.copy(d._rackLocalM);
+  let sHer;
+  if (arm && typeof arm.herSupportZM === 'function') sHer = arm.herSupportZM();
+  else {
+    const cfg = arm && arm.config;
+    const dims = (cfg && cfg.bodyDims) || (cfg && cfg.type === 'spinner' ? Constants.SPINNER_BODY : Constants.WEAVER_BODY);
+    sHer = herSupportZM(dims, null);
+  }
+  return rackCellOffsetInto(out, sHer, d, cell, null, sizeMeter);
 }
 
 // ── catch-snug (2026-10-18): a catch held IN HAND sits tight at her end ──────
@@ -330,7 +457,19 @@ export function catchHoldStandoffM(bodyQuat, bodyDims, d, dir, gapM, solidPoints
   return Number.isFinite(total) ? total : null;
 }
 
-const _glideFromTmp = new THREE.Vector3();
+// rack-snug scratch (the repo's no-per-frame-allocation idiom)
+const _stowHerQ = new THREE.Quaternion();
+const _stowInvQ = new THREE.Quaternion();
+const _stowTmp = new THREE.Vector3();
+const _asgHerQ = new THREE.Quaternion();
+const _slotHerQ = new THREE.Quaternion();
+const _pinHerQ = new THREE.Quaternion();
+const _herDirTmp = new THREE.Vector3();
+const _slotOffTmp = new THREE.Vector3();
+const _pinLocal = new THREE.Vector3();
+const _gdDir = new THREE.Vector3();
+const _gdAxis = new THREE.Vector3();
+const _gdWorld = new THREE.Vector3();
 
 // ---------------------------------------------------------------------------
 // §11.5 capture-torque settle — pure physics (exported for headless tests).
@@ -5645,6 +5784,7 @@ export class ArmUnit {
       debris._capturedByArm = null;
       debris._armPinned = false;       // release authoritative arm pin
       clearShipRelativeAttitude(debris);
+      clearRackCell(debris);           // rack-snug: and any cell it was assigned
     }
     // This arm no longer owns the catch for docking/processing in either case.
     this.capturedDebris = null;
@@ -5748,68 +5888,134 @@ export class ArmUnit {
    * path can never trip the capacity guard (a daughter parks with exactly one
    * piece into an empty rack) — it exists so a full rack REFUSES the push
    * instead of silently dropping cargo (the two laws, §1).
+   *
+   * rack-snug (Decisions 1, 4, 5): the stow ASSIGNS the cell — the smallest free one — unless a cargo flight to
+   * this daughter already did (`d._rackArm === this`, its end was fixed at the flight's start). The piece's
+   * attitude in HER frame is frozen from its attitude now, so it does not jump. The piece she carries IN HAND
+   * (tight at her end, along the net's launch direction) then glides to the cell over ARM_HOLD_GLIDE_S.
    * @param {object} debris
+   * @param {THREE.Quaternion|null} [parentQuat] mother world attitude (her attitude is computed fresh from it)
    * @returns {boolean} true if stowed
    * @private
    */
-  _stowHeldCatch(debris) {
+  _stowHeldCatch(debris, parentQuat = null) {
     if (this.holdCellsFree <= 0) return false;
-    this.heldCatches.push(debris);
+    const inHand = debris === this.capturedDebris;
+    const herQ = this._herQuatWorldInto(parentQuat, _stowHerQ);
+    this._assignRackCellWith(debris, herQ, inHand);        // the in-hand piece always takes a fresh cell
     // catch-snug: the piece she is carrying IN HAND (tight at her end) is moving to its rack
     // slot — remember where it sits relative to her so `_pinHeldCatches` glides it there
     // over ARM_HOLD_GLIDE_S instead of jumping in one frame. Only the in-hand piece glides
     // (a cargo hand-off arrives from the mother net on its own arc).
-    if (debris === this.capturedDebris && debris._armPinned && debris._armPinPos
-        && (Constants.ARM_HOLD_GLIDE_S ?? 0) > 0) {
+    if (inHand && debris._armPinned && debris._armPinPos
+        && (Constants.ARM_HOLD_GLIDE_S ?? 0) > 0 && this.heldCatches.length === 0) {
+      const fromM = _stowTmp.subVectors(debris._armPinPos, this.position)
+        .applyQuaternion(_stowInvQ.copy(herQ).invert()).multiplyScalar(1 / M);   // her frame, metres
+      const len = fromM.length();
       debris._holdGlide = {
         arm: this,
-        from: new THREE.Vector3().subVectors(debris._armPinPos, this.position),
+        fromM: fromM.clone(),
+        // a typed catch swings round her on the tight "support shell" (see `_glideHeldCatch`); a typeless one
+        // (no drawn mesh to measure) goes straight
+        dir0: (debris.type && len > 1e-9) ? fromM.clone().multiplyScalar(1 / len) : null,
       };
     }
+    this.heldCatches.push(debris);
     return true;
+  }
+
+  /**
+   * rack-snug (Decision 4a): her WORLD attitude while parked, computed fresh — never read from `group.quaternion`,
+   * which PlayerSatellite writes AFTER `armManager.update` (one frame stale in the pin). The mother's quaternion
+   * × the docked basis `composeDockedArmQuat(strutDir, azRad)`, with the inputs PlayerSatellite itself uses
+   * (`strutGroups[i].strutDir` / `.azRad`; `_updateStruts` runs BEFORE `armManager.update`, so strutDir is current
+   * when the pin runs). Without a player (a bare rig) the strut direction is rebuilt from this daughter's own aim
+   * angle and dock azimuth, the same convention.
+   * @param {THREE.Quaternion|null} [parentQuat] mother world attitude; falls back to the player's, then the last cached
+   * @param {THREE.Quaternion} out
+   * @returns {THREE.Quaternion} out
+   */
+  _herQuatWorldInto(parentQuat, out) {
+    const ps = this._playerSatellite;
+    const sg = ps && ps.strutGroups && this.index != null ? ps.strutGroups[this.index] : null;
+    if (sg && sg.strutDir && sg.strutDir.lengthSq() > 1e-12) {
+      composeDockedArmQuat(sg.strutDir, sg.azRad, out);
+    } else {
+      const az = Number.isFinite(this._azimuthDeg)
+        ? (this._azimuthDeg * Math.PI) / 180
+        : Math.atan2(this.dockOffset.y, this.dockOffset.x);
+      strutLocalDirection(this._aimAlpha || 0, az, _herDirTmp);
+      composeDockedArmQuat(_herDirTmp, az, out);
+    }
+    const pq = parentQuat || (ps && ps.quaternion) || this._lastParentQuat;
+    if (pq && typeof pq.x === 'number') out.premultiply(pq);
+    return out;
+  }
+
+  /** rack-snug: her +Z support, metres (box ∪ every solid mesh vertex), cached once her mesh exists. */
+  herSupportZM() {
+    const solid = this._solidPointsM();
+    if (solid) {
+      if (this._herSupportZ === undefined) this._herSupportZ = herSupportZM(this.config.bodyDims, solid);
+      return this._herSupportZ;
+    }
+    return herSupportZM(this.config.bodyDims, null);
+  }
+
+  /**
+   * rack-snug (Decision 4): assign (or confirm) the rack cell of `d` on this daughter — the cell, its offset on her
+   * and the piece's attitude in her frame. Idempotent while the assignment is valid (same daughter, cell not taken
+   * by another piece): the cargo flight calls it every frame and only the first call computes. Overwrites otherwise.
+   * @param {object} d the piece
+   * @param {THREE.Quaternion|null} [parentQuat] mother world attitude
+   * @returns {number} the cell
+   */
+  assignRackCell(d, parentQuat = null) {
+    return this._assignRackCellWith(d, this._herQuatWorldInto(parentQuat, _asgHerQ), false);
+  }
+
+  /** @private — `assignRackCell` with her world attitude already in hand; `force` overwrites a valid assignment. */
+  _assignRackCellWith(d, herQ, force) {
+    const rack = this.heldCatches;
+    if (!force && d._rackArm === this && Number.isInteger(d._rackCell) && d._rackLocalM && d._qLocalHer) {
+      let taken = false;
+      for (let i = 0; i < rack.length; i++) {
+        const h = rack[i];
+        if (h && h !== d && (Number.isInteger(h._rackCell) ? h._rackCell : i) === d._rackCell) { taken = true; break; }
+      }
+      if (!taken) return d._rackCell;
+    }
+    const cell = nextFreeRackCell(rack, d);
+    d._armPinned = true;                       // the renderer draws a rack catch at the net-held floor: measure as it does
+    seedHerFrameAttitude(d, herQ);             // d._qLocalHer = her⁻¹ × the attitude it is drawn at NOW
+    if (!d._rackLocalM) d._rackLocalM = new THREE.Vector3();
+    rackCellOffsetInto(d._rackLocalM, this.herSupportZM(), d, cell, d._qLocalHer);
+    d._rackCell = cell;
+    d._rackArm = this;
+    return cell;
   }
 
   /**
    * Cargo-continuity S6/S7: world position of ONE cargo-rack slot.
    *
-   * Extracted from `_pinHeldCatches` (which now calls it per piece) so the rack's
-   * geometry has exactly ONE computation — the S7 cargo hand-off needs to know
-   * where a piece WILL be pinned before it flies there, and a second copy of this
-   * expression is precisely the drift class register item 19 describes.
+   * rack-snug (Decision 4): her position + her attitude · the cell's stored offset on her
+   * (`heldSlotAnchorInto`) — the ONE computation the rack pin, the cargo flight's end, the keep-out sphere and the
+   * CoM booking all read. A piece with no stored offset yet (a prediction by size, an old save) takes the
+   * typeless form for `slotIndex`.
    *
-   * S13(b): the slot offset itself moved to the module-level
-   * `heldSlotAnchorInto` (register item 58) so the CoMCalculator mass model books
-   * held cargo AT the pin — same axes, same arithmetic, exactly one computation.
-   * This method keeps only the hold-axis resolution (fired net's launch
-   * direction, else outboard from the mother).
-   *
-   * @param {number} slotIndex — rack slot (0-based); slot 0 has zero bias rotation
-   * @param {number} sizeMeter — the piece's size, for the standoff radius
-   * @param {THREE.Vector3|null} parentPos — freshest mother position
+   * @param {number} slotIndex — the cell (0-based) when no piece is given or stored
+   * @param {number} sizeMeter — the piece's size, for a prediction
+   * @param {THREE.Vector3|null} parentPos — unused (her position is `this.position`); kept for the callers
    * @param {THREE.Vector3} out — receives the position, scene units
+   * @param {object|null} [d] — the piece; defaults to `heldCatches[slotIndex]`
+   * @param {THREE.Quaternion|null} [parentQuat] — mother world attitude
    * @returns {THREE.Vector3} out
    */
-  heldSlotWorldInto(slotIndex, sizeMeter, parentPos, out) {
-    // Hold axis: net launch direction while the fired-net ref lives, else
-    // outboard from the mother.
-    const dir = this._tmpHoldDir || (this._tmpHoldDir = new THREE.Vector3());
-    let hasDir = false;
-    const ld = this._firedNet && this._firedNet.launchDirection;
-    if (ld) {
-      dir.set(ld.x, ld.y, ld.z);
-      hasDir = dir.lengthSq() > 1e-12;
-    }
-    const pp = parentPos || this._prevParentPos;
-    if (!hasDir && pp) {
-      dir.subVectors(this.position, pp);
-      hasDir = dir.lengthSq() > 1e-12;
-    }
-    if (hasDir) dir.normalize(); else dir.set(0, 0, 0);
-
-    // S13(b): the slot offset itself is ONE computation shared with the
-    // CoMCalculator mass model (register item 58) — this call applies the
-    // pin's exact pre-extraction arithmetic, order included.
-    return heldSlotAnchorInto(this.position, dir, _WORLD_UP, slotIndex, sizeMeter, out);
+  heldSlotWorldInto(slotIndex, sizeMeter, parentPos, out, d = null, parentQuat = null) {
+    const piece = d || this.heldCatches[slotIndex] || null;
+    const cell = (piece && Number.isInteger(piece._rackCell)) ? piece._rackCell : slotIndex;
+    rackOffsetFor(_slotOffTmp, this, piece, cell, sizeMeter);
+    return heldSlotAnchorInto(this.position, this._herQuatWorldInto(parentQuat, _slotHerQ), _slotOffTmp, out);
   }
 
   /**
@@ -5825,59 +6031,87 @@ export class ArmUnit {
   }
 
   /**
-   * catch-snug: ease a freshly stowed piece from where it sat in hand to its rack slot.
-   * `d._armPinPos` holds the slot on entry; on exit it holds the point `smoothstep` of the
-   * way from the in-hand point (which rides with the daughter) to the slot. The glide is
-   * driven by this daughter's own HOLDING_CATCH `stateTimer` (the stow frame itself is
-   * still DOCKING, so it lands exactly where the in-hand pin put it — no jump).
+   * catch-snug / rack-snug (Decision 5): ease a freshly stowed piece from where it sat IN HAND to its cell on her
+   * over ARM_HOLD_GLIDE_S (smoothstep), in HER frame, writing the centre (her frame, metres) into `out`. Driven by
+   * this daughter's own HOLDING_CATCH `stateTimer` (the stow frame itself is still DOCKING, so it lands exactly
+   * where the in-hand pin put it — no jump). Her attitude on the piece is frozen from the stow, so only the centre
+   * moves.
+   *
+   * The in-hand point is along the net's launch direction, which can be any side of her (even behind), so a straight
+   * line could pass through her. The path therefore keeps the in-hand rule at every instant: first (60 %) the
+   * direction from her to the piece swings from the in-hand direction to her +Z while the centre rides the "support
+   * shell" `dir · catchHoldStandoffM(dir)` — no part of it ever nearer than the net gap along `dir`, so it cannot
+   * touch her — then it slides sideways along her X at the cell's height (above her +Z support, clear of all of her)
+   * to the cell. A typeless piece (nothing drawn to measure) goes straight.
    * @param {object} d the stowed piece (carries `_holdGlide`)
+   * @param {THREE.Quaternion} herQ her world attitude (the piece's attitude is already herQ × qLocalHer)
+   * @param {THREE.Vector3} out receives the centre, her frame, metres
+   * @returns {boolean} false when the glide is over (it is cleared) — `out` is untouched
    * @private
    */
-  _glideHeldCatch(d) {
+  _glideHeldCatch(d, herQ, out) {
     const g = d._holdGlide;
     const dur = Constants.ARM_HOLD_GLIDE_S ?? 0;
     const f = this.state === S.HOLDING_CATCH ? this.stateTimer / dur : 0;
-    if (!g || g.arm !== this || !(dur > 0) || !(f < 1)) { d._holdGlide = null; return; }
+    if (!g || g.arm !== this || !(dur > 0) || !(f < 1) || !d._rackLocalM) { d._holdGlide = null; return false; }
     const s = f * f * (3 - 2 * f);
-    _glideFromTmp.copy(this.position).add(g.from);
-    d._armPinPos.lerpVectors(_glideFromTmp, d._armPinPos, s);
+    const cell = d._rackLocalM;
+    const SWING = 0.6;
+    if (g.dir0 === null) { out.lerpVectors(g.fromM, cell, s); return true; }
+    if (s < SWING) {
+      const u = s / SWING;
+      const c = Math.max(-1, Math.min(1, g.dir0.z));         // cos of the angle from her +Z
+      if (c > 1 - 1e-9) _gdDir.set(0, 0, 1);
+      else {
+        _gdAxis.set(g.dir0.y, -g.dir0.x, 0);                  // dir0 × (0,0,1)
+        if (_gdAxis.lengthSq() < 1e-12) _gdAxis.set(1, 0, 0); // dead behind her: round her X
+        else _gdAxis.normalize();
+        _gdDir.copy(g.dir0).applyAxisAngle(_gdAxis, Math.acos(c) * u);
+      }
+      _gdWorld.copy(_gdDir).applyQuaternion(herQ);
+      const standoff = catchHoldStandoffM(herQ, this.config.bodyDims, d, _gdWorld,
+        Constants.ARM_HOLD_NET_GAP_M ?? 0.03, this._solidPointsM());
+      if (standoff === null) { out.lerpVectors(g.fromM, cell, s); return true; }
+      out.copy(_gdDir).multiplyScalar(standoff);
+      return true;
+    }
+    const w = (s - SWING) / (1 - SWING);
+    out.set(cell.x * w, 0, cell.z);
+    return true;
   }
 
   /**
-   * Cargo-continuity S6: pin every piece on the parked cargo rack, one slot
-   * per piece. Each piece gets the rack standoff (`sizeMeter/2 +
-   * ARM_HOLD_CLEARANCE_M` along the hold axis — the pre-catch-snug in-hand
-   * standoff; the in-hand pin itself is now tight, see `_pinCatchToSelf`, and a
-   * freshly stowed piece glides from there to its slot, `_glideHeldCatch`); the
-   * lateral-bias direction is rotated `i × 2π/DAUGHTER_CARGO_CELLS` about that
-   * axis so N pieces ring the strut tip instead of stacking in one spot.
-   * Slot 0's rotation is zero, so a one-piece rack lands byte-identically on
-   * the pre-S6 biased `_pinCatchToSelf(parentPos, ARM_HOLD_LATERAL_BIAS)`
-   * position (the no-one-frame-jump contract from _updateDocking).
+   * Cargo-continuity S6: pin every piece on the parked cargo rack at its cell.
    *
-   * S7: the per-slot geometry lives in `heldSlotWorldInto` — one computation,
-   * shared with the cargo hand-off's arc terminus.
-   * c1-catch-pose (D4): a piece that carries a ship-relative attitude
-   * (`_qLocalShip`, handed over by the cargo flight or seeded at the stow below)
-   * ALSO has its tumbleAxis/tumbleAngle rewritten from `parentQuat ×
-   * _qLocalShip`, so a catch held rigidly by a docked daughter turns with the
-   * ship instead of keeping its world attitude (the engine reads those two
-   * fields for the drawn instance; nobody else writes them once it is pinned).
-   * No `parentQuat` (tests, early boot) or no `_qLocalShip` → position only,
-   * exactly as before.
-   * @param {THREE.Vector3|null} [parentPos] freshest mother position
+   * rack-snug (Decisions 1-5): a cell is a place ON HER. Each piece is held at her position + her attitude · its
+   * stored offset (`d._rackLocalM`, assigned when it arrived: `_stowHeldCatch`, or the start of a cargo flight),
+   * and its drawn attitude is rewritten every frame from `herQ × d._qLocalHer` (the engine reads tumbleAxis /
+   * tumbleAngle for the drawn instance; nobody else writes them once it is pinned). So turning the ship or swinging
+   * the strut carries the whole rack with her, and the piece's place never depends on world up, a hold axis or the
+   * other cell. A piece with no assignment yet (an old save, a rig that pushed straight onto `heldCatches`) is
+   * assigned here, at its array position, keeping its current attitude.
+   *
+   * A freshly stowed in-hand piece glides in (`_glideHeldCatch`). Her attitude is computed fresh each call
+   * (`_herQuatWorldInto`), from `parentQuat` or the player's; with neither it is the strut basis in the ship frame.
+   * @param {THREE.Vector3|null} [parentPos] freshest mother position (unused; her position is `this.position`)
    * @param {THREE.Quaternion|null} [parentQuat] mother world attitude
    * @private
    */
   _pinHeldCatches(parentPos = null, parentQuat = null) {
-    for (let i = 0; i < this.heldCatches.length; i++) {
-      const d = this.heldCatches[i];
+    const rack = this.heldCatches;
+    if (rack.length === 0) return;
+    const herQ = this._herQuatWorldInto(parentQuat, _pinHerQ);
+    for (let i = 0; i < rack.length; i++) {
+      const d = rack[i];
       if (!d) continue;
       if (!d._armPinPos) d._armPinPos = new THREE.Vector3();
-      this.heldSlotWorldInto(i, d.sizeMeter, parentPos, d._armPinPos);
-      if (d._holdGlide) this._glideHeldCatch(d);
       d._armPinned = true;
-      if (parentQuat) applyShipRelativeAttitude(d, parentQuat);
+      if (d._rackArm !== this || !d._rackLocalM || !d._qLocalHer || !Number.isInteger(d._rackCell)) {
+        this._assignRackCellWith(d, herQ, true);
+      }
+      applyHerFrameAttitude(d, herQ);
+      if (!d._holdGlide || !this._glideHeldCatch(d, herQ, _pinLocal)) _pinLocal.copy(d._rackLocalM);
+      heldSlotAnchorInto(this.position, herQ, _pinLocal, d._armPinPos);
     }
   }
 
@@ -6596,15 +6830,11 @@ export class ArmUnit {
         // daughter is not redeployable, so the rack is empty here and the
         // capacity guard cannot trip — it is the S7 transfer's refusal seam.
         const debris = this.capturedDebris;
-        if (this._stowHeldCatch(debris)) {
+        if (this._stowHeldCatch(debris, parentQuat)) {
           this.capturedDebris = null;
-          // Pin with the same lateral bias HOLDING_CATCH will use, so there's no
-          // one-frame jump of the bag when the park state begins. Rack slot 0
-          // is byte-identical to the pre-S6 biased pin.
-          // c1-catch-pose (D4): a catch the daughter made herself has no
-          // ship-relative attitude yet — seed it from its attitude NOW (no jump
-          // at the stow), so it turns with the ship on the rack from here on.
-          seedShipRelativeAttitude(debris, parentQuat);
+          // rack-snug (Decisions 1, 4, 5): the stow assigned the cell and froze the catch's attitude in HER frame
+          // from its attitude NOW (no jump); the pin below starts the glide from the in-hand point (no
+          // one-frame jump of the bag when the park state begins) and the piece turns with her from here on.
           this._pinHeldCatches(parentPos, parentQuat);
           this._breakdownStarted = false;     // reset staged-furnace bookkeeping (Item 1)
           this._breakdownChunksFired = 0;
@@ -6804,6 +7034,7 @@ export class ArmUnit {
       debris._armPinPos = null;
       debris._breakdownActive = false;
       clearShipRelativeAttitude(debris);
+      clearRackCell(debris);                // rack-snug: it leaves her rack
       // S6: pop the digested piece off the rack.
       this.heldCatches.shift();
       this.reeling = false;
