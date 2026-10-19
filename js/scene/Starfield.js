@@ -90,6 +90,228 @@ function createConstellationLabel(text) {
 }
 
 // ============================================================================
+// STEADY SPRITE PROFILE (st10, 2026-10-19)
+// ============================================================================
+// A point sprite narrower than ~2 device px is rasterized on a fragment lattice:
+// as a star slides sub-pixel its pixel centres move in and out of the bright
+// core, so its summed light swings by 100 %+ (measured on the menu sky, DPR 2 /
+// renderer ratio 1.5: field-star p50 (max-min)/mean 0.62; DPR 1: 3.2). The cure
+// is a Gaussian footprint whose sigma is >= ~0.6 canvas px (a unit-lattice sum
+// of a Gaussian is constant to 2*exp(-2*pi^2*sigma^2) per axis; 0.9 px when the
+// browser stretches the canvas by a non-integer factor), drawn at a minimum
+// diameter, with alpha scaled by (size / drawn size)^2 so the star's
+// TOTAL light stays what the old sprite delivered. Faintness stays in aAlpha.
+// One more factor, per star (aGain): the stars sit in the toe of the ACES tone
+// curve, which is convex, so the same linear light spread over more pixels shows
+// DIMMER (measured: field stars at 0.40x on DPR 1, 0.83x on DPR 2 without it).
+// steadyGain() matches each star's DISPLAYED light (ACES + sRGB + the browser's
+// stretch of the canvas to the screen) to the old sprite's average over sub-pixel
+// positions — the same stars, the same brightness, just steady.
+/** Smallest Gaussian sigma in canvas px when the canvas reaches the screen 1:1 (or 2:1, 3:1). */
+export const STAR_SIGMA_PX = 0.6;
+/**
+ * Smallest sigma when the browser stretches the canvas by a NON-integer factor
+ * (DPR 2 drawn at the 1.5 cap = 4/3): its bilinear stretch, done on sRGB values,
+ * beats with the star's motion; 0.6 px still swings ~25 %, 0.9 px ~10 % (model,
+ * tmp/probes/st10/scan3.mjs; whole-number stretches behave like 1:1).
+ */
+export const STAR_SIGMA_PX_BEAT = 0.9;
+/** Sigma as a fraction of the minimum sprite radius: the sprite square holds +-2.67 sigma. */
+export const STAR_SPRITE_SPAN = 0.375;
+/** Minimum drawn sprite diameter in canvas px for a 1:1 canvas (3.2); 4.8 under a 4/3 stretch. */
+export const STAR_MIN_DRAWN_PX = 2 * STAR_SIGMA_PX / STAR_SPRITE_SPAN;
+/** Smallest sigma (canvas px) for a browser stretch = devicePixelRatio / renderer pixel ratio. */
+export function steadySigmaPx(stretch = 1) { return Math.abs(stretch - Math.round(stretch)) < 0.02 ? STAR_SIGMA_PX : STAR_SIGMA_PX_BEAT; }
+/** Minimum drawn diameter (canvas px) for a browser stretch. */
+export function steadyMinDia(stretch = 1) { return 2 * steadySigmaPx(stretch) / STAR_SPRITE_SPAN; }
+/** Sigma (fraction of the radius) of the Gaussian that has the old sprite's total light at peak 1 — the large-star shape. */
+export const STAR_SIGMA_MATCH = 0.3;
+/**
+ * Tone-mapping exposure the per-star gain is calibrated at: the menu's, 1.05 —
+ * the away-from-sun target of SunLight._updateAutoExposure (SunLight.js:1654,
+ * `targetExposure = 1.05`; the menu looks away from the sun; measured 1.05 on the
+ * live menu, tmp/probes/st10/data/after2-d2.log). Fixed, not tracked per frame.
+ */
+export const STEADY_GAIN_EXPOSURE = 1.05;
+
+/** The old sprite profile: smoothstep(1,0,r) squared (the hard core). */
+export function oldProfile(r) { const t = Math.min(1, Math.max(0, 1 - r)); const s = t * t * (3 - 2 * t); return s * s; }
+/** Total light of the old profile over the unit disc (midpoint rule). */
+export function oldProfileLight() { let a = 0; const n = 4000; for (let i = 0; i < n; i++) { const r = (i + 0.5) / n; a += oldProfile(r) * r; } return 2 * Math.PI * a / n; }
+/** Gaussian fraction-of-radius sigma for a sprite drawn `drawnPx` wide: >= sigmaPx canvas px, never narrower than the old-shape match. */
+export function steadySigma(drawnPx, sigmaPx = STAR_SIGMA_PX) { return Math.max(STAR_SIGMA_MATCH, sigmaPx / (0.5 * drawnPx)); }
+/** The steady profile (peak 1 before amplitude), truncated to reach exactly 0 at r = 1. */
+export function steadyProfile(r, sigma) {
+  const e0 = Math.exp(-1 / (2 * sigma * sigma));
+  return Math.max(0, (Math.exp(-(r * r) / (2 * sigma * sigma)) - e0) / (1 - e0));
+}
+/** Peak scale giving the steady profile the SAME total light as the old one at equal size (closed form; the shader repeats it). */
+export function steadyAmplitude(sigma) {
+  const e0 = Math.exp(-1 / (2 * sigma * sigma));
+  const lightUnit = 2 * Math.PI * (sigma * sigma - e0 / (2 * (1 - e0)));   // integral of steadyProfile over the unit disc
+  return oldProfileLight() / lightUnit;
+}
+
+/**
+ * three.js ACESFilmicToneMapping on a grey value at exposure 1 — the curve the
+ * game's OutputPass applies (SceneManager: renderer.toneMapping = ACES). The
+ * input and output matrices map grey to grey, so only the RRT/ODT fit matters.
+ * Exposure is a separate input: the gains are calibrated at STEADY_GAIN_EXPOSURE
+ * (the menu's), see below. Gameplay auto-exposure runs 0.85-1.25 (SunLight), which
+ * moves the displayed light of the steady stars against the old sprite's by about
+ * -3 % (median; p10 -6 %) at 0.85 and +5 % (median; p90 +13 %) at 1.25, measured
+ * with this JS twin (stars 1.8-3.6 px, level 0.02-0.3, stretch 1 and 4/3); before
+ * the calibration it was -1 % / +7 % (p90 +15 %). Stars stay steady at any exposure.
+ * COUPLED: if SceneManager stops using ACES, steadyGain() is matching the wrong
+ * curve (test-StarSteady.js pins the pairing).
+ */
+export function acesFilmic(x) {
+  const v = x / 0.6;
+  const a = v * (v + 0.0245786) - 0.000090537;
+  const b = v * (0.983729 * v + 0.4329510) + 0.238081;
+  return Math.min(1, Math.max(0, a / b));
+}
+const _srgbEnc = (l) => (l <= 0.0031308 ? l * 12.92 : 1.055 * Math.pow(l, 1 / 2.4) - 0.055);
+const _srgbDec = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+
+/**
+ * Displayed light of one sprite at one sub-pixel offset: canvas pixels
+ * (fragment at the pixel centre) -> ACES -> sRGB; when `stretch` > 1 the encoded
+ * image is bilinearly stretched (what the browser does to a canvas drawn below
+ * devicePixelRatio), then decoded and summed. Units cancel in ratios.
+ * @param {Float64Array} base  scene-linear values on an n x n pixel grid
+ * @param {number} n  grid side
+ * @param {number} scale  multiplier applied to `base` (the gain being solved)
+ * @param {number} stretch  devicePixelRatio / renderer pixel ratio (>= 1)
+ */
+function displayedLight(base, n, scale, stretch) {
+  let sum = 0;
+  if (stretch <= 1.0001) { for (let i = 0; i < base.length; i++) sum += acesFilmic(base[i] * scale); return sum; }
+  const img = new Float64Array(base.length);
+  for (let i = 0; i < base.length; i++) img[i] = _srgbEnc(acesFilmic(base[i] * scale));
+  const m = Math.floor(n * stretch);
+  const at = (x, y) => (x < 0 || y < 0 || x >= n || y >= n ? 0 : img[y * n + x]);
+  for (let oy = 0; oy < m; oy++) {
+    const sy = (oy + 0.5) / stretch - 0.5, y0 = Math.floor(sy), ay = sy - y0;
+    for (let ox = 0; ox < m; ox++) {
+      const sx = (ox + 0.5) / stretch - 0.5, x0 = Math.floor(sx), ax = sx - x0;
+      const e = (1 - ay) * ((1 - ax) * at(x0, y0) + ax * at(x0 + 1, y0)) + ay * ((1 - ax) * at(x0, y0 + 1) + ax * at(x0 + 1, y0 + 1));
+      if (e > 0) sum += _srgbDec(e);
+    }
+  }
+  return sum / (stretch * stretch);
+}
+
+/** Scene-linear pixel grid of a sprite (peak 1) centred at sub-pixel offset (ox, oy); the steady one sized for `stretch`. */
+function spriteGrid(kind, wanted, ox, oy, stretch = 1) {
+  const D = kind === 'old' ? wanted : Math.max(wanted, steadyMinDia(stretch)), R = D / 2;
+  const n = 2 * (Math.ceil(R) + 2), c0 = n / 2, g = new Float64Array(n * n);
+  const sg = steadySigma(D, steadySigmaPx(stretch)), amp = kind === 'old' ? 1 : steadyAmplitude(sg) * (wanted * wanted) / (D * D);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const dx = x + 0.5 - c0 - ox, dy = y + 0.5 - c0 - oy;
+    if (Math.abs(dx) >= R || Math.abs(dy) >= R) continue;   // outside the point square
+    const r = Math.sqrt(dx * dx + dy * dy) / R;
+    g[y * n + x] = kind === 'old' ? oldProfile(r) : amp * steadyProfile(r, sg);
+  }
+  return { g, n };
+}
+
+/**
+ * Displayed light of one star over a k x k grid of sub-pixel positions — the
+ * JS twin of the sprite shaders, for tests and probes. 'old' = the pre-st10
+ * smoothstep-squared sprite at its wanted width; 'steady' = the current sprite
+ * (minimum width, (wanted/drawn)^2, Gaussian) times `gain`. `span` spreads the
+ * sampled positions over that many canvas px.
+ * @returns {{mean:number, min:number, max:number, range:number}} range = (max-min)/mean
+ */
+export function spriteDisplayedLight(kind, wanted, level, { stretch = 1, gain = 1, grid = 8, span = 1 } = {}) {
+  let sum = 0, min = Infinity, max = -Infinity;
+  for (let i = 0; i < grid; i++) for (let j = 0; j < grid; j++) {
+    // positions over `span` canvas px (3 covers the whole beat of a 4/3 stretch)
+    const { g, n } = spriteGrid(kind === 'old' ? 'old' : 'new', wanted, ((i + 0.5) / grid - 0.5) * span, ((j + 0.5) / grid - 0.5) * span, stretch);
+    const v = displayedLight(g, n, level * (kind === 'old' ? 1 : gain), stretch);
+    sum += v; if (v < min) min = v; if (v > max) max = v;
+  }
+  const mean = sum / (grid * grid);
+  return { mean, min, max, range: mean > 0 ? (max - min) / mean : 0 };
+}
+
+/**
+ * LUT axes: wanted sprite width (canvas px) and peak scene level (colour
+ * luminance x alpha x opacity). No star is drawn narrower than the 1.2 size
+ * floor x 1.5 at ratio 1 = 1.8 px (1.45 covers a browser zoomed out to 0.8).
+ */
+export const STEADY_GAIN_W = [1.45, 1.75, 2.1, 2.5, 3.0, 3.6, 4.4, 5.4, 8.0];
+export const STEADY_GAIN_L = [0.003, 0.008, 0.02, 0.05, 0.12, 0.3, 0.7, 1.5, 3.2];
+const _gainLUTs = new Map();
+
+/**
+ * The gain that gives the steady sprite the old sprite's average DISPLAYED light
+ * (ACES toe, sRGB, browser stretch) over sub-pixel positions. Exported for tests.
+ * @param {number} wanted  sprite width the old shader drew, canvas px
+ * @param {number} level   peak scene-linear value (colour luminance x alpha x opacity), times the tone-mapping exposure it is calibrated at (STEADY_GAIN_EXPOSURE)
+ * @param {number} [stretch=1]  devicePixelRatio / renderer pixel ratio
+ * @param {number} [k=6]  sub-pixel grid side for the old sprite's average
+ */
+export function solveSteadyGain(wanted, level, stretch = 1, k = 6) {
+  // The old sprite's average over sub-pixel positions; a non-integer stretch
+  // beats over 3 canvas px, so its positions span 3 px there.
+  const span = Math.abs(stretch - Math.round(stretch)) < 0.02 ? 1 : 3;
+  let target = 0; const kk = wanted < 5 ? k : 2;
+  for (let i = 0; i < kk; i++) for (let j = 0; j < kk; j++) {
+    const { g, n } = spriteGrid('old', wanted, ((i + 0.5) / kk - 0.5) * span, ((j + 0.5) / kk - 0.5) * span, stretch);
+    target += displayedLight(g, n, level, stretch);
+  }
+  target /= kk * kk;
+  if (!(target > 0)) return 1;
+  const { g, n } = spriteGrid('new', wanted, -0.2, 0.1, stretch);   // steady: any offset reads the same
+  // Bisection on log(gain) in [-1, 3.5] (0.37x .. 33x); light(gain) is monotone.
+  let lo = -1, hi = 3.5;
+  for (let it = 0; it < 16; it++) {
+    const mid = 0.5 * (lo + hi);
+    if (displayedLight(g, n, level * Math.exp(mid), stretch) < target) lo = mid; else hi = mid;
+  }
+  return Math.exp(0.5 * (lo + hi));
+}
+
+/** Gain table for one stretch (cached). */
+export function steadyGainLUT(stretch = 1) {
+  const key = Math.round(Math.min(3, Math.max(1, stretch)) * 1000) / 1000;
+  let lut = _gainLUTs.get(key);
+  if (!lut) {
+    lut = new Float32Array(STEADY_GAIN_W.length * STEADY_GAIN_L.length);
+    STEADY_GAIN_W.forEach((w, i) => STEADY_GAIN_L.forEach((l, j) => { lut[i * STEADY_GAIN_L.length + j] = solveSteadyGain(w, l, key); }));
+    _gainLUTs.set(key, lut);
+  }
+  return lut;
+}
+
+/**
+ * Per-star display gain: bilinear lookup of log(gain) over log(width), log(level) in the table for `stretch`,
+ * clamped to its edges. The Milky Way haze does not use it (its sprites overlap
+ * and sum before the tone curve, so the per-sprite model does not apply).
+ */
+export function steadyGain(wanted, level, stretch = 1) {
+  if (!(wanted > 0) || !(level > 0)) return 1;
+  const lut = steadyGainLUT(stretch), n = STEADY_GAIN_L.length;
+  const wi = _axisPos(_LOG_W, Math.log(wanted)), li = _axisPos(_LOG_L, Math.log(level));
+  const i = wi | 0, ti = wi - i, j = li | 0, tj = li - j;
+  const i1 = Math.min(i + 1, _LOG_W.length - 1), j1 = Math.min(j + 1, n - 1);
+  // log-gain interpolation: the gain is close to a power law in width
+  const lg = (k) => Math.log(lut[k]);
+  return Math.exp((1 - ti) * ((1 - tj) * lg(i * n + j) + tj * lg(i * n + j1)) + ti * ((1 - tj) * lg(i1 * n + j) + tj * lg(i1 * n + j1)));
+}
+const _LOG_W = STEADY_GAIN_W.map(Math.log), _LOG_L = STEADY_GAIN_L.map(Math.log);
+/** Fractional index of x in an ascending axis, clamped to its ends. */
+function _axisPos(axis, x) {
+  if (x <= axis[0]) return 0;
+  const last = axis.length - 1;
+  if (x >= axis[last]) return last;
+  let i = 0; while (axis[i + 1] < x) i++;
+  return i + (x - axis[i]) / (axis[i + 1] - axis[i]);
+}
+
+// ============================================================================
 // STARFIELD CLASS
 // ============================================================================
 
@@ -124,6 +346,12 @@ export class Starfield {
     // Reusable temporaries for the shooting-star update (no per-frame alloc).
     this._tmpMeteorA = new THREE.Vector3();
     this._tmpMeteorB = new THREE.Vector3();
+
+    // Steady-star display gains (aGain) are filled lazily by update() for the
+    // renderer's real pixel ratio; the pixel ratio and devicePixelRatio they
+    // were last filled for (numbers, so the per-frame check allocates nothing).
+    this._steadyGainPR = 0;
+    this._steadyGainDPR = 0;
 
     this.mesh = this._create();
     this.group.add(this.mesh);
@@ -305,6 +533,9 @@ export class Starfield {
     geometry.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1));
     geometry.setAttribute('aTwinkle', new THREE.BufferAttribute(twinkle, 1));
     geometry.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
+    // Steady-star display gain (see steadyGain); 1 until update() knows the
+    // renderer's pixel ratio.
+    geometry.setAttribute('aGain', new THREE.BufferAttribute(new Float32Array(count).fill(1), 1));
 
     // ShaderMaterial — honors the per-star `size` attribute (PointsMaterial
     // could not), draws round soft-edged sprites via gl_PointCoord instead of
@@ -317,6 +548,10 @@ export class Starfield {
         uPixelRatio: { value: (typeof window !== 'undefined' && window.devicePixelRatio) || 1 },
         uSizeScale: { value: 1.5 },   // matches the old PointsMaterial base size
         uOpacity: { value: 0.95 },
+        uMinDia: { value: STAR_MIN_DRAWN_PX },       // minimum drawn diameter, canvas px (update() sets it per stretch)
+        uSigmaPx: { value: STAR_SIGMA_PX },          // smallest Gaussian sigma, canvas px (ditto)
+        uSigmaMatch: { value: STAR_SIGMA_MATCH },    // large-star sigma (fraction of radius)
+        uOldLight: { value: oldProfileLight() },     // total light of the old sprite; amplitude keeps it
       },
       // NOTE: no `vertexColors: true` — raw ShaderMaterial would then inject its
       // own `attribute vec3 color` and collide with the manual declaration
@@ -331,12 +566,21 @@ export class Starfield {
         attribute float aAlpha;
         attribute float aTwinkle;
         attribute float aPhase;
+        attribute float aGain;
         uniform float uTime;
         uniform float uPixelRatio;
         uniform float uSizeScale;
+        uniform float uMinDia;
+        uniform float uSigmaPx;
+        uniform float uSigmaMatch;
+        uniform float uOldLight;
         varying vec3 vColor;
         varying float vBright;
         varying float vAlpha;
+        varying float vLight;
+        varying float vK;
+        varying float vE0;
+        varying float vNorm;
         void main() {
           vColor = color;
           vAlpha = aAlpha;
@@ -347,7 +591,20 @@ export class Starfield {
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           gl_Position = projectionMatrix * mv;
           // sizeAttenuation:false — constant screen size, scaled for retina.
-          gl_PointSize = size * uSizeScale * uPixelRatio * tw;
+          // Steady stars: never draw narrower than uMinDia device px, and scale
+          // alpha by (wanted / drawn)^2 so the star's total light is unchanged;
+          // aGain then matches the DISPLAYED light through the ACES toe.
+          float wanted = size * uSizeScale * uPixelRatio * tw;
+          float drawn = max(wanted, uMinDia);
+          gl_PointSize = drawn;
+          vLight = (wanted * wanted) / (drawn * drawn) * aGain;
+          // Gaussian sprite: sigma >= uSigmaPx device px; amplitude keeps the old
+          // sprite's total light (closed-form disc integral of the truncated Gaussian).
+          float sg = max(uSigmaMatch, uSigmaPx / (0.5 * drawn));
+          vK = 0.5 / (sg * sg);
+          vE0 = exp(-vK);
+          float lightUnit = 6.2831853 * (sg * sg - vE0 / (2.0 * (1.0 - vE0)));
+          vNorm = (uOldLight / lightUnit) / (1.0 - vE0);
         }
       `,
       fragmentShader: `
@@ -355,12 +612,16 @@ export class Starfield {
         varying vec3 vColor;
         varying float vBright;
         varying float vAlpha;
+        varying float vLight;
+        varying float vK;
+        varying float vE0;
+        varying float vNorm;
         void main() {
-          // Round soft-edged sprite: radial falloff from the point center.
+          // Round Gaussian sprite (steady under sub-pixel motion): radial falloff
+          // from the point centre, truncated to exactly 0 at the sprite edge.
           vec2 d = gl_PointCoord - vec2(0.5);
-          float r = length(d) * 2.0;              // 0 at center → 1 at edge
-          float alpha = smoothstep(1.0, 0.0, r);  // soft round disc
-          alpha *= alpha;                          // tighten core, soften halo
+          float r = length(d) * 2.0;              // 0 at center -> 1 at edge
+          float alpha = max(exp(-r * r * vK) - vE0, 0.0) * vNorm * vLight;
           // aAlpha carries faintness for field stars pinned at the size floor.
           gl_FragColor = vec4(vColor * vBright, alpha * uOpacity * vAlpha);
         }
@@ -398,8 +659,8 @@ export class Starfield {
     // TWO populations in one buffer. Raising the point count alone does NOT make
     // a band — it makes spray-paint speckle, because discrete dots stay discrete
     // however many you add. Haze needs OVERLAP: a few very large, very dim,
-    // additively-blended sprites whose soft falloff (smoothstep in the fragment
-    // shader) sums into continuous glow. The grain points then sit on top to keep
+    // additively-blended sprites whose soft falloff (Gaussian, sigma 0.3 of the
+    // radius for these big sprites, in the fragment shader) sums into continuous glow. The grain points then sit on top to keep
     // it from looking like an airbrushed smear.
     //   - HAZE  : MW_HAZE_COUNT points, ~45-105 px across, alpha ~0.05
     //   - GRAIN : MW_COUNT points, 1.2-4.5 px, the starry texture
@@ -560,6 +821,9 @@ export class Starfield {
     geometry.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1));
     geometry.setAttribute('aTwinkle', new THREE.BufferAttribute(twinkle, 1));
     geometry.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
+    // Steady-star display gain — grain only; the haze keeps 1 (see steadyGain).
+    geometry.setAttribute('aGain', new THREE.BufferAttribute(new Float32Array(count).fill(1), 1));
+    this._mwHazeCount = Math.min(placed, Constants.MW_HAZE_COUNT);
 
     // Same shader as the main stars but lower overall opacity for a haze read.
     // Presence comes from DENSITY + the size floor + collective additive overlap,
@@ -1070,6 +1334,39 @@ export class Starfield {
   }
 
   /**
+   * Fill the aGain attribute of the stars and the Milky Way grain for one pixel
+   * ratio / browser stretch (see steadyGain): each star's level is its colour
+   * luminance x aAlpha x its material's uOpacity. Called by update() when either
+   * changes; a few ms (plus one table build per new stretch).
+   * @param {number} pixelRatio  renderer pixel ratio
+   * @param {number} stretch     devicePixelRatio / pixelRatio
+   * @private
+   */
+  _applySteadyGains(pixelRatio, stretch) {
+    stretch = Math.min(3, Math.max(1, stretch));   // a ?pixelRatio override above DPR reads as 1:1
+    const fill = (points, opacity, skip) => {
+      if (!points) return;
+      const g = points.geometry.attributes;
+      const col = g.color.array, size = g.size.array, alpha = g.aAlpha.array, gain = g.aGain.array;
+      const scale = points.material.uniforms.uSizeScale.value * pixelRatio;
+      for (let i = 0; i < gain.length; i++) {
+        if (i < skip) { gain[i] = 1; continue; }
+        const lum = 0.2126 * col[3 * i] + 0.7152 * col[3 * i + 1] + 0.0722 * col[3 * i + 2];
+        gain[i] = steadyGain(size[i] * scale, lum * alpha[i] * opacity * STEADY_GAIN_EXPOSURE, stretch);
+      }
+      g.aGain.needsUpdate = true;
+    };
+    // Sprite width for this stretch (wider under a non-integer stretch).
+    for (const mat of [this._starMaterial, this._milkyWayMaterial]) {
+      if (!mat) continue;
+      mat.uniforms.uMinDia.value = steadyMinDia(stretch);
+      mat.uniforms.uSigmaPx.value = steadySigmaPx(stretch);
+    }
+    fill(this.mesh, this._starMaterial.uniforms.uOpacity.value, 0);
+    fill(this._milkyWay, this._milkyWayMaterial ? this._milkyWayMaterial.uniforms.uOpacity.value : 1, this._mwHazeCount || 0);
+  }
+
+  /**
    * Per-frame update: apply camera-follow (when enabled), advance twinkle time,
    * keep pixel-ratio + Line2 material resolution in sync with the viewport.
    * @param {number} _dt — delta time (seconds)
@@ -1121,6 +1418,15 @@ export class Starfield {
         : ((typeof window !== 'undefined' && window.devicePixelRatio) || 1);
       this._starMaterial.uniforms.uPixelRatio.value = pr;
       if (this._milkyWayMaterial) this._milkyWayMaterial.uniforms.uPixelRatio.value = pr;
+      // Steady-star gains depend on the drawn width (pixel ratio) and on how far
+      // the browser stretches the canvas (devicePixelRatio / pixel ratio): refill
+      // only when either changes (boot, tier change, display move).
+      const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || pr;
+      if (pr !== this._steadyGainPR || dpr !== this._steadyGainDPR) {
+        this._applySteadyGains(pr, dpr / pr);
+        this._steadyGainPR = pr;
+        this._steadyGainDPR = dpr;
+      }
     }
 
     // Shooting-star scheduler + active streak.
