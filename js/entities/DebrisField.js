@@ -554,6 +554,18 @@ export class DebrisField {
     this._floatingOrigin = new THREE.Vector3();
     this._floatingOriginInitialized = false;
 
+    // Background-dot glide state (see _updateBackground). Only 1/4 of the dots are
+    // propagated exactly each frame; the other 3/4 are extrapolated with their stored
+    // scene-unit velocity and re-based for the floating-origin move, so they glide
+    // every frame instead of stepping at 1/4 rate.
+    /** @type {Float32Array|null} 3 per dot, scene units per second of game time */
+    this._bgVel = null;
+    /** Game seconds elapsed since each of the 4 batches was last propagated */
+    this._bgDtAcc = [0, 0, 0, 0];
+    /** Floating origin as of the previous _updateBackground call */
+    this._bgPrevOrigin = { x: 0, y: 0, z: 0 };
+    this._bgPrevOriginValid = false;
+
     // catch-near-pass (Decision 1): the near-field host (main.js attachNearField) and the live held-piece proxies,
     // keyed by debris id. A proxy is a 1-instance InstancedMesh sharing the piece's geometry + material; it IS the
     // near-field root (registered with the scene manager; its own world pose is the piece's), so no parent has to be
@@ -1657,6 +1669,7 @@ export class DebrisField {
     const sizes = new Float32Array(BACKGROUND_COUNT);
 
     this._backgroundOrbits = [];
+    this._bgVel = new Float32Array(BACKGROUND_COUNT * 3);
 
     // S11(b): the background is the SAME field the interactive population
     // lives in — one orbital regime (register item 38), not the old
@@ -1679,6 +1692,10 @@ export class DebrisField {
       positions[i * 3] = cart.position.x;
       positions[i * 3 + 1] = cart.position.y;
       positions[i * 3 + 2] = cart.position.z;
+      // cart.velocity is km/s; positions are scene units (km * SCENE_SCALE).
+      this._bgVel[i * 3] = cart.velocity.x * Constants.SCENE_SCALE;
+      this._bgVel[i * 3 + 1] = cart.velocity.y * Constants.SCENE_SCALE;
+      this._bgVel[i * 3 + 2] = cart.velocity.z * Constants.SCENE_SCALE;
 
       // Color: slightly warm grayish
       colors[i * 3] = 0.6 + rng() * 0.3;
@@ -1962,6 +1979,11 @@ export class DebrisField {
         }
         posAttr.needsUpdate = true;
         this._floatingOriginInitialized = true;
+        // Points are now relative to playerPos: the origin "moved" by zero this frame.
+        this._bgPrevOrigin.x = playerPos.x;
+        this._bgPrevOrigin.y = playerPos.y;
+        this._bgPrevOrigin.z = playerPos.z;
+        this._bgPrevOriginValid = true;
       }
       this._floatingOrigin.copy(playerPos);
       this.group.position.copy(playerPos);
@@ -2917,10 +2939,38 @@ export class DebrisField {
     }
   }
 
-  /** @private Update background points positions (batch propagation) */
+  /**
+   * @private Update background points positions.
+   *
+   * Cost control: only one quarter of the dots (rotating `_bgBatch`) is propagated
+   * exactly each frame, using the real game time elapsed since THAT batch was last
+   * propagated (`_bgDtAcc`, so a varying / zero / hitching dt stays exact). The other
+   * three quarters are carried forward every frame with their stored velocity and
+   * re-based for the floating-origin move, so on screen every dot glides each frame
+   * rather than freezing for 3 frames and jumping. Allocation-free.
+   */
   _updateBackground(gameDt, playerPos) {
     if (!this.backgroundPoints) return;
     const posAttr = this.backgroundPoints.geometry.attributes.position;
+    const arr = posAttr.array;
+    const vel = this._bgVel;
+    const acc = this._bgDtAcc;
+    const floating = !!(Constants.FLOATING_ORIGIN_ENABLED && this._floatingOrigin);
+
+    // Floating-origin movement since the previous call (0 with the flag off, or on the
+    // first call — the first-frame re-basing in update() already made points relative).
+    let ox = 0, oy = 0, oz = 0;
+    let pox = 0, poy = 0, poz = 0;   // origin the stored local positions are currently relative to
+    if (floating) {
+      const fo = this._floatingOrigin;
+      const po = this._bgPrevOrigin;
+      if (this._bgPrevOriginValid) {
+        pox = po.x; poy = po.y; poz = po.z;
+        ox = fo.x - po.x; oy = fo.y - po.y; oz = fo.z - po.z;
+      }
+      po.x = fo.x; po.y = fo.y; po.z = fo.z;
+      this._bgPrevOriginValid = true;
+    }
 
     // Propagate every 4th particle each frame for performance (rotate batch)
     const batchSize = Math.ceil(BACKGROUND_COUNT / 4);
@@ -2930,32 +2980,78 @@ export class DebrisField {
     const start = batchIndex * batchSize;
     const end = Math.min(start + batchSize, BACKGROUND_COUNT);
 
+    // Every batch has now waited one more frame; this batch takes what it accumulated.
+    acc[0] += gameDt; acc[1] += gameDt; acc[2] += gameDt; acc[3] += gameDt;
+    const batchDt = acc[batchIndex];
+    acc[batchIndex] = 0;
+
+    // Glide the 3/4 that are NOT propagated this frame, under each dot's own gravity
+    // (a straight line is wrong under time warp: dtWorld is up to ~16.7 game-s/frame):
+    //   a = -mu r / |r|^3        r = local + previous origin (the absolute position)
+    //   j = da/dt = g (v - 3 (r.v)/|r|^2 r)        g = -mu / |r|^3
+    //   local += v dt + a dt^2/2 + j dt^3/6 - originDelta;   v += a dt + j dt^2/2
+    // The jerk term keeps a 16.7 game-s step (100x warp) within ~1e-3 scene units; with
+    // acceleration only the error was ~10x that (measured, tmp/probe-bg-dots.mjs).
+    // mu in scene units: a_scene = a_km * s, r_km = r_scene / s  =>  mu * s^3 (scene^3/s^2).
+    if (vel) {
+      const mu = Constants.MU_EARTH * (Constants.SCENE_SCALE * Constants.SCENE_SCALE * Constants.SCENE_SCALE);
+      const hdt2 = 0.5 * gameDt * gameDt;
+      const sdt3 = gameDt * gameDt * gameDt / 6;
+      for (let i = 0; i < BACKGROUND_COUNT; i++) {
+        if (i >= start && i < end) continue;
+        const k = i * 3;
+        const x = arr[k], y = arr[k + 1], z = arr[k + 2];
+        const rx = x + pox, ry = y + poy, rz = z + poz;
+        const r2 = rx * rx + ry * ry + rz * rz;
+        const g = r2 > 0 ? -mu / (r2 * Math.sqrt(r2)) : 0;
+        const ax = g * rx, ay = g * ry, az = g * rz;
+        const vx = vel[k], vy = vel[k + 1], vz = vel[k + 2];
+        const s3 = r2 > 0 ? 3 * (rx * vx + ry * vy + rz * vz) / r2 : 0;
+        const jx = g * (vx - s3 * rx), jy = g * (vy - s3 * ry), jz = g * (vz - s3 * rz);
+        arr[k] = x + vx * gameDt + ax * hdt2 + jx * sdt3 - ox;
+        arr[k + 1] = y + vy * gameDt + ay * hdt2 + jy * sdt3 - oy;
+        arr[k + 2] = z + vz * gameDt + az * hdt2 + jz * sdt3 - oz;
+        vel[k] = vx + ax * gameDt + jx * hdt2;
+        vel[k + 1] = vy + ay * gameDt + jy * hdt2;
+        vel[k + 2] = vz + az * gameDt + jz * hdt2;
+      }
+    }
+
     // Sprint 2 / PR A — mutate the pre-allocated `_tmpBgOrbit` scratch instead
     // of `{...orbit, semiMajorAxis: …}` spread (one alloc per batched debris).
     const bg = this._tmpBgOrbit;
+    const cp = this._tmpCartPos;
+    const cv = this._tmpCartVel;
+    const ss = Constants.SCENE_SCALE;
     for (let i = start; i < end; i++) {
       const orbit = this._backgroundOrbits[i];
 
-      // Propagate (4× dt since we only update 1/4 per frame)
+      // Propagate by the game time since this batch was last propagated
       bg.semiMajorAxis = orbit.semiMajorAxis / Constants.SCENE_SCALE;
       bg.eccentricity = orbit.eccentricity;
       bg.inclination = orbit.inclination;
       bg.raan = orbit.raan;
       bg.argPerigee = orbit.argPerigee;
       bg.trueAnomaly = orbit.trueAnomaly;
-      propagateOrbit(bg, gameDt * 4);
+      propagateOrbit(bg, batchDt);
       orbit.trueAnomaly = bg.trueAnomaly;
 
-      orbitToSceneCartesianInto(orbit, this._tmpCartPos, this._tmpCartVel);
+      orbitToSceneCartesianInto(orbit, cp, cv);
+      // cv is km/s (orbitToSceneCartesianInto converts position only): scale to scene units/s.
+      if (vel) {
+        vel[i * 3] = cv.x * ss;
+        vel[i * 3 + 1] = cv.y * ss;
+        vel[i * 3 + 2] = cv.z * ss;
+      }
       // UX-4: Background positions relative to floating origin
-      if (Constants.FLOATING_ORIGIN_ENABLED && this._floatingOrigin) {
+      if (floating) {
         posAttr.setXYZ(i,
-          this._tmpCartPos.x - this._floatingOrigin.x,
-          this._tmpCartPos.y - this._floatingOrigin.y,
-          this._tmpCartPos.z - this._floatingOrigin.z
+          cp.x - this._floatingOrigin.x,
+          cp.y - this._floatingOrigin.y,
+          cp.z - this._floatingOrigin.z
         );
       } else {
-        posAttr.setXYZ(i, this._tmpCartPos.x, this._tmpCartPos.y, this._tmpCartPos.z);
+        posAttr.setXYZ(i, cp.x, cp.y, cp.z);
       }
     }
 
