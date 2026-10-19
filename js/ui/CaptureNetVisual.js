@@ -606,14 +606,31 @@ export class CaptureNetVisual {
 
   /** @private Resolve the arm key for an ARM_DOCKED / CANCEL payload ({armId} or {armIndex}). */
   _armKeyFor(payload) {
-    if (payload && payload.armIndex != null && payload.armIndex >= 0) return `arm_${payload.armIndex}`;
+    const idx = this._armIndexFor(payload);
+    return idx >= 0 ? `arm_${idx}` : null;
+  }
+
+  /** @private The arm index an ARM_DOCKED / CANCEL payload names ({armIndex} or {armId}), else -1. */
+  _armIndexFor(payload) {
+    if (payload && payload.armIndex != null && payload.armIndex >= 0) return payload.armIndex;
     const id = payload && payload.armId;
     const arms = this._player && this._player.armManager && this._player.armManager.arms;
     if (id && arms) {
       const idx = arms.findIndex((a) => a && a.id === id);
-      if (idx >= 0) return `arm_${idx}`;
+      if (idx >= 0) return idx;
     }
-    return null;
+    return -1;
+  }
+
+  /**
+   * @private catch-near-pass (Decision 3): end EVERY rack carry of one daughter (the rack is empty / dropped / reset —
+   * events that name the arm, not a piece).
+   */
+  _endRackCarries(armIndex, flags) {
+    if (armIndex == null || armIndex < 0) return;
+    for (const [key, vis] of this._activeVisuals) {
+      if (vis.carry && vis.carry.rack && vis.carry.armIndex === armIndex) this._endCarry(key, vis, flags);
+    }
   }
 
   /** @private W1 net-reach D2 — the daughter reports docked (reload done: her rack is empty). */
@@ -621,6 +638,7 @@ export class CaptureNetVisual {
     const key = this._armKeyFor(payload);
     const vis = key && this._activeVisuals.get(key);
     if (vis && vis.carry) this._endCarry(key, vis, { docked: true, left: true });
+    this._endRackCarries(this._armIndexFor(payload), { docked: true, left: true });
   }
 
   /** @private W1 net-reach D2 — a mid-cook cancel dropped the rack: nothing left to carry.
@@ -630,6 +648,7 @@ export class CaptureNetVisual {
     const key = this._armKeyFor(payload);
     const vis = key && this._activeVisuals.get(key);
     if (vis && vis.carry) this._endCarry(key, vis, { docked: true, left: true });
+    this._endRackCarries(this._armIndexFor(payload), { docked: true, left: true });
   }
 
   /** @private W1 net-reach D2 — mission reset: every rack is dropped, no completion event will come. */
@@ -720,9 +739,101 @@ export class CaptureNetVisual {
     const key = `pod_${pi}`;
     const vis = this._activeVisuals.get(key);
     if (!vis) return;
+    // catch-near-pass (Decision 3, owner 2026-10-18 "net is not visible after reel-in"): onto a DAUGHTER's rack
+    // (`armIndex >= 0`) the bag does not fade — the net IS the container (CAPTURE_NET.md :1015-1019, :1044) and the
+    // catch stays in it until it is processed. A leash to a tip (`armIndex -1`) keeps the fade: LeashVisual's wire bag
+    // takes over at the tip.
+    if (payload.armIndex != null && payload.armIndex >= 0 && payload.debrisId != null
+        && this._carryOnRack(key, vis, payload.armIndex, payload.debrisId, pi)) return;
     this._captureDetachSeat(vis);
     vis.detached = true;      // state-driven updates stop; the fade owns removal
     this._fadeTimers.push({ key, timer: 0.8, duration: 0.8 });
+  }
+
+  /**
+   * catch-near-pass (Decision 3) — the mother's bag arrives on a daughter's rack with its catch and STAYS: it is re-keyed
+   * to the catch (`rack_<armIndex>_<debrisId>`, not `arm_N`: a rack has two cells and `pod_N` must be free for the next
+   * net) and enters CARRY, so the W1 net-reach drive deflates it with the chop and fades it at chop end. Each frame it is
+   * seated from the catch's own `_scenePosition` (see the detached branch of update), so a strut swing or a rack slide
+   * carries it along. It ends per piece: chop end, release (`_armPinned === false`), removal (`alive === false`), or a
+   * NET_CONSUMED that names the piece; ARM_DOCKED / the breakdown cancel end every carry of that arm.
+   * @param {string} key  the bag's current key (`pod_N`)
+   * @param {object} vis
+   * @param {number} armIndex  the rack's daughter
+   * @param {*} debrisId
+   * @param {number} podIndex  the collar the bag came from
+   * @returns {boolean} true when the bag now stays with the catch (false: no kit / no catch found → caller fades it)
+   * @private
+   */
+  _carryOnRack(key, vis, armIndex, debrisId, podIndex) {
+    if (!vis.kitHandle || !vis.group) return false;
+    const net = this._getNet(-1, podIndex);
+    // The FIELD's piece, by id (CONVENTIONS.md:154): `net.targetDebris` may be a shallow copy that the rack's pins never
+    // reach, which would leave the bag seated on a frozen position and blind to `_nearProxy`.
+    const hint = (net && net.targetDebris) || vis._catchDebris || null;
+    const d = this._fieldPiece(hint && hint.id === debrisId ? hint : { id: debrisId });
+    if (!d || d.id !== debrisId || !d._scenePosition) return false;
+    const rkey = `rack_${armIndex}_${debrisId}`;
+    if (this._activeVisuals.has(rkey)) return false;   // a duplicate event: the first one already carries it
+    this._activeVisuals.delete(key);
+    this._activeVisuals.set(rkey, vis);
+    this._fadeTimers = this._fadeTimers.filter((f) => f.key !== key);
+    vis.detached = true;
+    vis.carry = { debris: d, docked: true, left: false, ended: false, rack: true, armIndex };
+    vis._catchDebris = d;
+    // Seat the bag on the catch in the CATCH's own frame: the offset bag − catch and the bag's attitude, both turned by
+    // the piece's world attitude, so the bag keeps its place round the piece wherever the rack carries and turns it (a
+    // rack catch is fixed in the daughter's frame, not the ship's: a strut swing turns it relative to the ship). The
+    // numbers are the ones the LAST update recorded (`_noteCatchSeat`): this handler runs inside the capture system's
+    // tick, after the catch was pinned for the new frame but before this visual moved the bag, so `group.position −
+    // catch` here would carry one frame of the ship's orbital travel (km at warp; measured in the browser,
+    // tmp/look/after-rack.json). Both ends of the recorded offset are from the same frame.
+    this._captureDetachSeat(vis);
+    vis._rackOffC = null;
+    vis._rackQuatC = null;
+    if (vis._catchSeatOffC && vis._catchSeatQuatC) {
+      vis._rackOffC = vis._catchSeatOffC.clone();
+      vis._rackQuatC = vis._catchSeatQuatC.clone();
+    } else {
+      this._catchFrame(d, _qB);
+      vis._rackOffC = new THREE.Vector3().copy(vis.group.position).sub(d._scenePosition)
+        .applyQuaternion(_qA.copy(_qB).invert());
+      vis._rackQuatC = _qA.copy(_qB).invert().multiply(vis.group.quaternion).clone();
+    }
+    if (vis.tetherLine) vis.tetherLine.visible = false;   // the line left the collar with the hand-off
+    return true;
+  }
+
+  /**
+   * catch-near-pass (Decision 3): the piece's world attitude (its tumble quaternion, the one DebrisField draws it with; a
+   * held piece's tumble is frozen).
+   * @param {object} d
+   * @param {THREE.Quaternion} out
+   * @returns {THREE.Quaternion} out
+   * @private
+   */
+  _catchFrame(d, out) {
+    if (d && d.tumbleAxis) return out.setFromAxisAngle(d.tumbleAxis, d.tumbleAngle || 0);
+    return out.identity();
+  }
+
+  /**
+   * catch-near-pass: resolve a piece BY ID through the field (CONVENTIONS.md:154). A net's `targetDebris` or a carry's
+   * reference may be a shallow copy / snapshot that gets neither the field's pin writes nor its `_nearProxy` flag; the
+   * field's own object does. Falls back to `d` itself when there is no field or it does not know the id.
+   * @param {object|null} d
+   * @returns {object|null}
+   * @private
+   */
+  _fieldPiece(d) {
+    if (!d || d.id == null) return d || null;
+    const df = this._captureNetSystem && this._captureNetSystem._debrisField;
+    let live = null;
+    if (df) {
+      if (typeof df.getDebrisById === 'function') live = df.getDebrisById(d.id);
+      else if (df.debrisMap && typeof df.debrisMap.get === 'function') live = df.debrisMap.get(d.id);
+    }
+    return live || d;
   }
 
   /**
@@ -746,6 +857,14 @@ export class CaptureNetVisual {
         const akey = `arm_${ai}`;
         const avis = this._activeVisuals.get(akey);
         if (avis && avis.carry) this._endCarry(akey, avis, { left: true });
+        // catch-near-pass (Decision 3): a rack carry ends only on an event that NAMES its piece. The digest's
+        // NET_CONSUMED carries just { armIndex, armId } (ArmUnit.js ~:7046) — it must not end a bag whose piece is
+        // another cell's; `_driveCarriedBag` ends those per piece (chop end, release, removal).
+        if (payload.debrisId != null) {
+          const rkey = `rack_${ai}_${payload.debrisId}`;
+          const rvis = this._activeVisuals.get(rkey);
+          if (rvis && rvis.carry) this._endCarry(rkey, rvis, { left: true });
+        }
       }
       return;
     }
@@ -1085,6 +1204,13 @@ export class CaptureNetVisual {
     const vis = this._activeVisuals.get(key);
     if (!vis) return;
 
+    // catch-near-pass: a bag in the near pass leaves it with its group (never a dead root left in the pass).
+    if (vis._bagNear) {
+      const sm = this._sceneManager;
+      if (sm && typeof sm.unregisterNearFieldRoot === 'function') sm.unregisterNearFieldRoot(vis.group);
+      vis._bagNear = false;
+    }
+
     this._scene.remove(vis.group);
     this._scene.remove(vis.tetherLine);       // l8-reel-collar D4: it is a scene child, not under the group
     if (this._tetherRoot) this._tetherRoot.remove(vis.tetherLine);   // l8c: ... or a child of the near-pass tether root
@@ -1184,6 +1310,16 @@ export class CaptureNetVisual {
           // dock) — never teleported to the strut tip. The bag opens/fades in
           // place around the catch; the catch visibly drifts on (continuity).
           vis.group.position.copy(vis.failure.debris._scenePosition);
+        } else if (vis.carry && vis.carry.rack && vis._rackOffC && vis._rackQuatC && vis.carry.debris
+                   && vis.carry.debris._scenePosition) {
+          // catch-near-pass (Decision 3): a bag carried on a daughter's rack is seated from the CATCH each frame, in the
+          // CATCH's own frame (the once-captured ship-fixed seat below would leave it behind when the rack swings or
+          // slides, and a ship-frame offset drifts off a catch the strut turns relative to the ship): the offset and
+          // attitude taken at the hand-off, turned with the piece's attitude, from the piece's own pinned position.
+          const cd = vis.carry.debris;
+          this._catchFrame(cd, _qCarry);
+          vis.group.position.copy(vis._rackOffC).applyQuaternion(_qCarry).add(cd._scenePosition);
+          vis.group.quaternion.copy(_qCarry).multiply(vis._rackQuatC);
         } else if (vis.carry && vis._detachSeatLocal
                    && typeof this._player?.localToWorld === 'function') {
           // W1 net-reach D2: the carried bag rides the catch's ship-fixed seat
@@ -1444,6 +1580,68 @@ export class CaptureNetVisual {
         this._updateTetherCatenary(vis, net, _v3a, _v3b, dt);
       }
     }
+
+    // catch-near-pass (Decision 2): a bag round a HELD piece is drawn in the pass the piece is drawn in.
+    for (const vis of this._activeVisuals.values()) this._bagPass(vis);
+  }
+
+  /**
+   * catch-near-pass (Decision 2): the piece a bag wraps, whichever state the bag is in (a carried bag names it, a failure
+   * beat names it, a live net has it as its target, a bag whose net is gone remembers it from the reel). Always the
+   * FIELD's own object for that id (`_fieldPiece`): the reference a net holds may be a copy without the pin writes or the
+   * `_nearProxy` flag.
+   * @param {object} vis
+   * @returns {object|null}
+   * @private
+   */
+  _bagCatch(vis) {
+    if (vis.carry && vis.carry.debris) return this._fieldPiece(vis.carry.debris);
+    if (vis.failure && vis.failure.debris) return this._fieldPiece(vis.failure.debris);
+    const net = vis.detached ? null : this._getNet(vis.armIndex, vis.podIndex);
+    return this._fieldPiece((net && net.targetDebris) || vis._catchDebris || null);
+  }
+
+  /**
+   * catch-near-pass (Decision 2): put the bag's group in the near-field pass exactly while the piece it wraps is drawn
+   * there (the piece's `_nearProxy`, set by DebrisField under the 8.5 m / 9.5 m rule). The group is a scene child with a
+   * world position, which is what a near-field root is — the pass moves it to (world − camera)·S and scales it ×S, then
+   * puts it back — so none of the bag's world-position writes change. Its lines are screen-space pixels (the kit's
+   * worldUnits false), which the pass leaves alone; the tether is its own line and has its own rule (`_tetherPass`).
+   * A bag whose piece is still far pass stays far pass with it: in the near pass it would paint over the piece.
+   * @param {object} vis
+   * @private
+   */
+  _bagPass(vis) {
+    const sm = this._sceneManager;
+    if (!vis.group) return;
+    const d = this._bagCatch(vis);
+    this._noteCatchSeat(vis, d);
+    if (!sm || typeof sm.registerNearFieldRoot !== 'function') return;
+    const want = !!(d && d._nearProxy === true && vis.group.visible !== false);
+    if (want === !!vis._bagNear) return;
+    vis._bagNear = want;
+    if (want) sm.registerNearFieldRoot(vis.group);
+    else if (typeof sm.unregisterNearFieldRoot === 'function') sm.unregisterNearFieldRoot(vis.group);
+  }
+
+  /**
+   * catch-near-pass (Decision 3): once a frame, after the bag was moved, remember where it sits relative to its catch, in the
+   * CATCH's own frame (offset bag − catch and the bag's attitude, both turned into the piece's attitude, all of THIS frame).
+   * `_carryOnRack` seats a rack bag from it, so a rack that turns the catch relative to the ship carries the bag round with
+   * it.
+   * @param {object} vis
+   * @param {object|null} d  the piece the bag wraps
+   * @private
+   */
+  _noteCatchSeat(vis, d) {
+    if (!d || !d._scenePosition || (vis.carry && vis.carry.rack)) return;
+    if (!vis._catchSeatOffC) {
+      vis._catchSeatOffC = new THREE.Vector3();
+      vis._catchSeatQuatC = new THREE.Quaternion();
+    }
+    this._catchFrame(d, _qA).invert();
+    vis._catchSeatOffC.copy(vis.group.position).sub(d._scenePosition).applyQuaternion(_qA);
+    vis._catchSeatQuatC.copy(_qA).multiply(vis.group.quaternion);
   }
 
   /**

@@ -61,6 +61,31 @@ const DEBRIS_TYPES = {
 /** 1 metre expressed in scene units (1 km = SCENE_SCALE scene units). */
 const METRE_SCENE = Constants.SCENE_SCALE / 1000;
 
+/**
+ * catch-near-pass (Decision 1): a piece the ship HOLDS (on the lasso/net line, at the nose, flying to or parked on a
+ * rack, in a tip bag, in a daughter's hand — i.e. `_armPinned`) is drawn in the near-field pass while it is near the
+ * ship, so the hull cannot paint over it from the depth-cleared near pass. The rule is the net tether's exactly
+ * (CaptureNetVisual TETHER_NEAR_ON_M / TETHER_NEAR_OFF_M): in at 8.5 m from the ship, out beyond 9.5 m (the gap stops a
+ * piece on the limit hopping between the two passes). The near pass brackets +-10 m (SceneManager NEAR_FIELD_RADIUS).
+ */
+export const HELD_NEAR_ON_M = 8.5;
+export const HELD_NEAR_OFF_M = 9.5;
+/**
+ * The near camera's depth bracket half-extent in metres: SceneManager's NEAR_FIELD_RADIUS (0.0001 scene units = 10 m; a
+ * module-private constant there). test-CatchNearPass reads SceneManager.js and fails if the two drift apart.
+ */
+export const NEAR_BRACKET_M = 10;
+/**
+ * A proxy is itself a near-field root, and the near camera's depth bracket reaches only NEAR_BRACKET_M beyond a root's
+ * centre, so a piece whose far edge sits further than that out would be clipped. Pieces up to this longest side
+ * (half of it, 7 m from the centre along the longest side, stays inside the bracket with slack for the cross-section:
+ * every rocket body is <= 11 m, satellites <= 8 m) are drawn near pass; anything bigger (a whale-class hulk) stays far
+ * pass exactly as before. Derived from the bracket, so a change there moves this with it (the test asserts the relation).
+ */
+export const HELD_NEAR_MAX_SIZE_M = NEAR_BRACKET_M * 1.4;
+const HELD_PROXY_PREFIX = 'HeldCatchProxy_';
+const _heldIdentity = new THREE.Matrix4();   // a held proxy's one instance sits at its own object pose
+
 /** Material types for debris */
 const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell', 'steel'];
 
@@ -528,6 +553,16 @@ export class DebrisField {
     /** UX-4: Floating origin reference position (camera-relative rendering) */
     this._floatingOrigin = new THREE.Vector3();
     this._floatingOriginInitialized = false;
+
+    // catch-near-pass (Decision 1): the near-field host (main.js attachNearField) and the live held-piece proxies,
+    // keyed by debris id. A proxy is a 1-instance InstancedMesh sharing the piece's geometry + material; it IS the
+    // near-field root (registered with the scene manager; its own world pose is the piece's), so no parent has to be
+    // parked on the ship and a stale frame can never leave a root behind to stretch the near pass's depth bracket.
+    /** @type {object|null} */ this._nearSm = null;
+    /** @type {THREE.Object3D|null} */ this._nearPlayer = null;
+    /** @type {Map<number, {proxy: THREE.InstancedMesh, canonical: object, ref: object|null}>} */
+    this._heldProxies = new Map();
+    this._heldColor = new THREE.Color();
 
     /** Pre-allocated colors for web shot tinting (Sprint D1) */
     this._webTintColor = new THREE.Color(0.85, 0.92, 1.0);
@@ -1904,6 +1939,9 @@ export class DebrisField {
   update(dt, playerPos, playerOrbit, dtWorld = TimeAuthority.baseGameDt(dt)) {
     const gameDt = dtWorld;
 
+    // catch-near-pass: a piece that is no longer held leaves the near pass before the instance loop draws it again.
+    if (this._heldProxies && this._heldProxies.size > 0) this._sweepHeldProxies();
+
     // Cache the latest player orbit so event-driven paths with no update()
     // scope (notably _clearOnboardingPin, fired from LASSO_CONTACT etc.) can
     // re-sync a released pin's fallback orbit to the CURRENT phase. Reference
@@ -2325,6 +2363,130 @@ export class DebrisField {
   }
 
   /**
+   * catch-near-pass (Decision 1): hand over the near-field host. `sceneManager` registers/unregisters the proxies as
+   * near-field roots; `player` (the ship, a THREE.Group whose `.position` is its scene position) is what "near" is
+   * measured from. Without both, nothing is drawn by a proxy (headless / menu / old tests): every piece stays far pass.
+   * @param {object|null} sceneManager
+   * @param {THREE.Object3D|null} player
+   */
+  attachNearField(sceneManager, player) {
+    this._nearSm = sceneManager || null;
+    this._nearPlayer = player || null;
+    if (!this._nearSm || !this._nearPlayer) this._dropAllHeldProxies();
+  }
+
+  /**
+   * True while `debris` (any reference to it) is drawn by its near-pass proxy. CaptureNetVisual and LassoSystem read it
+   * so the bag / web around a held piece follows the piece into the same pass.
+   * @param {object|null} debris
+   * @returns {boolean}
+   */
+  hasHeldProxy(debris) {
+    return !!(debris && debris.id != null && this._heldProxies.has(debris.id));
+  }
+
+  /**
+   * catch-near-pass (Decision 1): draw a HELD piece in the near-field pass while it is near the ship. Called with the
+   * piece's pinned pose by every pin (`pinCapturedDebris`, and the pinned branch of `_updateInstanceTransform`). Makes the
+   * proxy when the piece comes within HELD_NEAR_ON_M of the ship, keeps it up to HELD_NEAR_OFF_M, and drops it beyond.
+   * Sets/clears `_nearProxy` on the canonical object AND the pinning reference. Allocation-free once the proxy exists.
+   *
+   * @param {object} canonical  the field's object for the piece
+   * @param {object|null} ref   the reference the pinning system holds (may differ from `canonical`)
+   * @param {{x:number,y:number,z:number}} pos  pinned WORLD position, scene units
+   * @param {THREE.Quaternion} quat  the piece's world attitude
+   * @param {number} scale  drawn scale (scene units), the same value the far instance would take
+   * @returns {boolean} true when the proxy draws the piece (the caller then writes a zero-scale far instance)
+   * @private
+   */
+  _syncHeldProxy(canonical, ref, pos, quat, scale) {
+    const sm = this._nearSm;
+    const pp = this._nearPlayer && this._nearPlayer.position;
+    const id = canonical.id;
+    let rec = id != null ? this._heldProxies.get(id) : undefined;
+    if (!sm || !pp || id == null || typeof sm.registerNearFieldRoot !== 'function'
+        || !Number.isFinite(pp.x) || !Number.isFinite(pp.y) || !Number.isFinite(pp.z)) {
+      if (rec) this._dropHeldProxy(id);
+      return false;
+    }
+    const dx = pos.x - pp.x, dy = pos.y - pp.y, dz = pos.z - pp.z;
+    const reachM = Math.sqrt(dx * dx + dy * dy + dz * dz) / METRE_SCENE;
+    const tooBig = Number.isFinite(canonical.sizeMeter) && canonical.sizeMeter > HELD_NEAR_MAX_SIZE_M;
+    const want = !tooBig && (rec ? reachM <= HELD_NEAR_OFF_M : reachM <= HELD_NEAR_ON_M);
+    if (!want) {
+      if (rec) this._dropHeldProxy(id);
+      return false;
+    }
+    const lookup = this._instanceLookup.get(id);
+    const src = lookup ? this.instancedMeshes[lookup.meshKey] : null;
+    if (!src) {
+      if (rec) this._dropHeldProxy(id);
+      return false;
+    }
+    if (!rec) {
+      const proxy = new THREE.InstancedMesh(src.geometry, src.material, 1);   // shares the piece's geometry + material
+      proxy.name = HELD_PROXY_PREFIX + id;
+      proxy.frustumCulled = false;
+      proxy.setMatrixAt(0, _heldIdentity);
+      proxy.setColorAt(0, this._defaultDebrisColor);                          // allocates the colour buffer
+      this.scene.add(proxy);
+      sm.registerNearFieldRoot(proxy);                                        // the proxy is its own near-field root
+      if (typeof sm.refreshNearFieldLayers === 'function') sm.refreshNearFieldLayers(proxy);
+      rec = { proxy, canonical, ref: ref && ref !== canonical ? ref : null };
+      this._heldProxies.set(id, rec);
+    } else if (ref && ref !== canonical) {
+      rec.ref = ref;
+    }
+    canonical._nearProxy = true;
+    if (rec.ref) rec.ref._nearProxy = true;
+    const proxy = rec.proxy;
+    proxy.position.set(pos.x, pos.y, pos.z);
+    proxy.quaternion.copy(quat);
+    proxy.scale.setScalar(scale);
+    // The per-instance colour (weathering tint, MOID badge) lives on the far instance; keep the proxy in step.
+    src.getColorAt(lookup.instanceIndex, this._heldColor);
+    proxy.setColorAt(0, this._heldColor);
+    if (proxy.instanceColor) proxy.instanceColor.needsUpdate = true;
+    return true;
+  }
+
+  /** catch-near-pass: take a piece's proxy out of the near pass and clear its flags (the far instance returns next write). @private */
+  _dropHeldProxy(id) {
+    const rec = this._heldProxies.get(id);
+    if (!rec) return;
+    this._heldProxies.delete(id);
+    const sm = this._nearSm;
+    if (sm && typeof sm.unregisterNearFieldRoot === 'function') sm.unregisterNearFieldRoot(rec.proxy);
+    this.scene.remove(rec.proxy);
+    rec.proxy.dispose();                       // frees the proxy's own instance buffers; geometry + material are shared
+    rec.canonical._nearProxy = false;
+    if (rec.ref) rec.ref._nearProxy = false;
+  }
+
+  /** @private */
+  _dropAllHeldProxies() {
+    for (const id of Array.from(this._heldProxies.keys())) this._dropHeldProxy(id);
+  }
+
+  /**
+   * catch-near-pass: once a frame, before the instance loop, drop every proxy whose piece is no longer held (released,
+   * processed, removed, field rebuilt) so the same frame's `_updateInstanceTransform` draws it far pass again.
+   * @private
+   */
+  _sweepHeldProxies() {
+    if (this._heldProxies.size === 0) return;
+    for (const [id, rec] of this._heldProxies) {
+      const d = rec.canonical;
+      const cur = this.debrisMap.get(id);
+      const lookup = this._instanceLookup.get(id);
+      const mesh = lookup ? this.instancedMeshes[lookup.meshKey] : null;
+      const held = d.alive !== false && d._armPinned === true && !!d._armPinPos
+        && (!cur || cur === d) && !!mesh && mesh.geometry === rec.proxy.geometry;
+      if (!held) this._dropHeldProxy(id);
+    }
+  }
+
+  /**
    * Authoritative catch pin (called by ArmManager AFTER arms move, and after
    * this.update() ran earlier in the frame). Forces a captured debris — both
    * the object reference the arm/net/camera hold AND the CANONICAL field object
@@ -2389,7 +2551,12 @@ export class DebrisField {
     // — probe, bag contents floor and BOTH matrix writers now compute one value).
     // Floor FIRST, scaleMul AFTER: the furnace stow-shrink must still take a held
     // catch below the floor (the deliberate chunk-mesh swap, ArmManager).
-    this._tempScale.setScalar(baseSize * (scaleMul > 0 ? scaleMul : 1));
+    const drawSize = baseSize * (scaleMul > 0 ? scaleMul : 1);
+    // catch-near-pass (Decision 1): a held piece near the ship is drawn by its near-pass proxy; the far-pass instance
+    // is then written at scale 0 (every pin, every frame, so it never flickers back). (`_nearSm` is null until
+    // main.js hands the near-field host over; the test stubs that call this on a bare receiver never have one.)
+    const nearDrawn = this._nearSm ? this._syncHeldProxy(canonical, debrisRef, armScenePos, this._tempQuat, drawSize) : false;
+    this._tempScale.setScalar(nearDrawn ? 0 : drawSize);
     this._tempMatrix.compose(this._tempPos, this._tempQuat, this._tempScale);
     mesh.setMatrixAt(lookup.instanceIndex, this._tempMatrix);
     mesh.instanceMatrix.needsUpdate = true;
@@ -2701,11 +2868,32 @@ export class DebrisField {
     // ST-6.2: Store LOD scale for flag overlay sync
     debris._lodScale = scale;
 
+    // Smooth reveal: scale up from 0→1 over 300ms using smoothstep
+    const rp = debris._revealProgress;
+    const revealScale = (rp !== undefined && rp < 1)
+      ? rp * rp * (3 - 2 * rp) // smoothstep easing
+      : 1;
+
+    // catch-near-pass (Decision 1): a held piece near the ship is drawn by its near-pass proxy, so the far-pass
+    // instance stays at scale 0 (`_lodScale` above is left as the real scale for the flag overlay). The authoritative
+    // pin (`pinCapturedDebris`) re-syncs the proxy later in the frame with the same pose; this one covers a frame in
+    // which no pin is called. `_nearProxy` without a pin is a stale flag: drop it. (Only a pinned piece pays for the
+    // attitude here; every other piece keeps the cheap scale-0 early-out below.)
+    let drawScale = scale;
+    if (_armPinned) {
+      if (this._nearSm) {
+        this._tempQuat.setFromAxisAngle(debris.tumbleAxis, debris.tumbleAngle);
+        if (this._syncHeldProxy(debris, null, debris._armPinPos, this._tempQuat, scale * revealScale)) drawScale = 0;
+      }
+    } else if (debris._nearProxy && this._heldProxies) {
+      this._dropHeldProxy(debris.id);
+    }
+
     // Perf: skip compose + setMatrixAt when debris is still invisible (scale 0)
     // from last frame — the instance buffer already holds a zero-scale matrix.
     const wasZero = debris._wasZeroScale;
-    debris._wasZeroScale = (scale === 0);
-    if (scale === 0 && wasZero) return;
+    debris._wasZeroScale = (drawScale === 0);
+    if (drawScale === 0 && wasZero) return;
 
     // Build transform matrix
     // UX-4: Instance positions relative to floating origin (eliminates float32 jitter)
@@ -2719,13 +2907,7 @@ export class DebrisField {
       this._tempPos.set(px, py, pz);
     }
     this._tempQuat.setFromAxisAngle(debris.tumbleAxis, debris.tumbleAngle);
-
-    // Smooth reveal: scale up from 0→1 over 300ms using smoothstep
-    const rp = debris._revealProgress;
-    const revealScale = (rp !== undefined && rp < 1)
-      ? rp * rp * (3 - 2 * rp) // smoothstep easing
-      : 1;
-    this._tempScale.setScalar(scale * revealScale);
+    this._tempScale.setScalar(drawScale * revealScale);
     this._tempMatrix.compose(this._tempPos, this._tempQuat, this._tempScale);
 
     // Apply to instanced mesh
@@ -4109,6 +4291,9 @@ export class DebrisField {
     const clusterId = this._clusterIdOf(debris);
 
     debris.alive = false;
+
+    // catch-near-pass: a removed piece takes its near-pass proxy with it, this frame.
+    if (this._heldProxies && this._heldProxies.has(id)) this._dropHeldProxy(id);
 
     // Set instance scale to 0 (hide)
     const lookup = this._instanceLookup.get(id);

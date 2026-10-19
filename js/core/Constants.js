@@ -1458,12 +1458,12 @@ export const Constants = {
   // typeless in-hand fallback (`_pinCatchToSelf`: a catch with no type — old saves, rigs).
   // rack-snug (2026-10-18): it is NOT the rack's standoff any more — a rack cell is a place
   // on the daughter (ArmUnit.rackCellOffsetInto: her +Z support + the catch's drawn extent +
-  // ARM_HOLD_NET_GAP_M, beside her end), nothing here enters it.
+  // ARM_HOLD_NET_GAP_M, on her axis; rack-centre 2026-10-19), nothing here enters it.
   ARM_HOLD_CLEARANCE_M: 1.0,           // metres
   // catch-snug: air gap (the net, ~3 cm) between the daughter's end and the nearest
   // drawn point of a catch held in hand (pulled in, reeling, docking).
   // rack-snug: the SAME number seats a parked rack catch against her +Z end
-  // (one number, the net) and spaces the two cells (half of it on each side).
+  // (one number, the net). rack-centre: and spaces cell 1 from cell 0's catch along her axis.
   ARM_HOLD_NET_GAP_M: 0.03,            // metres
   // catch-snug: the move from the tight in-hand pin to the rack slot at the end of
   // docking glides over this long (smoothstep) instead of jumping in one frame.
@@ -1479,7 +1479,9 @@ export const Constants = {
   // Cargo-continuity S6 (2026-08-12): a parked daughter's hold is a cargo RACK —
   // capacity in pieces pinned at the strut tip (owner: "a daughter may store more
   // than one piece"). 2 is the smallest honest rack — tuning, not doctrine.
-  // rack-snug: cell 0 sits on her +X side, cell 1 on her -X side.
+  // rack-snug: a parked catch is a place on her, fixed in her frame. rack-centre (2026-10-19, owner "debris is off
+  // center from daughter"): cell 0 is centred on her axis; cell 1 stacks on the same axis beyond cell 0's catch
+  // (one net gap past its farthest drawn point); when cell 0 empties, cell 1 slides down to cell 0.
   DAUGHTER_CARGO_CELLS: 2,
 
   // ── S9 strut posing (2026-08-22, register item 32): the held-cargo plume
@@ -1516,15 +1518,24 @@ export const Constants = {
   // (maxBiteADeg): 16→10, 33→28, 48→48, 67→75, 87→115, 106→141 (the large pieces now sit
   // 4–6 m to the side of her end, which brings the fat hulls into the cone farther out;
   // the small ones sit nearer her axis than the old √2·(size/2 + 1 m) standoff).
+  // RE-MEASURED 2026-10-19 (lane rack-centre, owner "debris is off center from daughter"): the cells moved ONTO her axis —
+  // cell 0 centred, cell 1 stacked on the same axis beyond cell 0's catch (ArmUnit.rackCellOffsetInto). Same generator
+  // (tmp/rack-snug-plume-probe.mjs → js/test/fixtures/rack-snug-plume.json, js/test/_rackSnugPlume.js) and sampling
+  // (4 daughters × cells 0,1 × the 30 attitudes × α 0–180° 1° grid × every size/aspect case, deepest row over spawnable
+  // pieces only); a cell-1 placement now has a second piece of the SAME case in cell 0 (in 3 of the 30 attitudes:
+  // the same as cell 1's, and the two that put cell 1 nearest / farthest: js/test/_rackSnugAttitudes.js
+  // `belowAttitudeIndices`), and the plume check reads both pieces. Old → new (maxBiteADeg): 10→15, 28→31, 48→55,
+  // 75→89, 115→115, 141→124 (measured, not explained: the causes were not separated; the new worst cases are named
+  // in the fixture's `worst` per row — cell 1 sets the two smallest rows, cell 0 the rest).
   // Read by ArmManager's re-pose driver and the S9 tests; the plume CHECK
   // itself is band-free (it tests geometry, not policy).
   PLUME_CARGO_ALPHA_LADDER: [
-    { maxSizM: 0.5,  maxBiteADeg: 10,  safeAlphaMinRad: 20 * Math.PI / 180 },
-    { maxSizM: 1.5,  maxBiteADeg: 28,  safeAlphaMinRad: 38 * Math.PI / 180 },
-    { maxSizM: 2.8,  maxBiteADeg: 48,  safeAlphaMinRad: 58 * Math.PI / 180 },
-    { maxSizM: 5.0,  maxBiteADeg: 75,  safeAlphaMinRad: 85 * Math.PI / 180 },
+    { maxSizM: 0.5,  maxBiteADeg: 15,  safeAlphaMinRad: 25 * Math.PI / 180 },
+    { maxSizM: 1.5,  maxBiteADeg: 31,  safeAlphaMinRad: 41 * Math.PI / 180 },
+    { maxSizM: 2.8,  maxBiteADeg: 55,  safeAlphaMinRad: 65 * Math.PI / 180 },
+    { maxSizM: 5.0,  maxBiteADeg: 89,  safeAlphaMinRad: 99 * Math.PI / 180 },
     { maxSizM: 8.0,  maxBiteADeg: 115, safeAlphaMinRad: 125 * Math.PI / 180 },
-    { maxSizM: Infinity, maxBiteADeg: 141, safeAlphaMinRad: 151 * Math.PI / 180 },
+    { maxSizM: Infinity, maxBiteADeg: 124, safeAlphaMinRad: 134 * Math.PI / 180 },
   ],
   // The ONE band read (the digestSpanS in-table-method precedent): the piece's
   // re-pose floor for its size class — ceil to the NEXT row (intermediate
@@ -2148,7 +2159,21 @@ export const Constants = {
       // 25→15 (≤ 0.5 m), 30→25 (≤ 1 m), 35→30 (≤ 1.5 m), 40→55 (beyond: rocketBody 8 m sets it; defunctSat 9.2 m 55,
       // 8 m 50). Small cargo now clears sooner (it sits beside her end, not 1 m round the ring); the large rows rise
       // (a long body parked beside her end reaches the petals farther out). Every row still sits below the plume floor.
-      CARGO_CLEAR_ALPHA_ROWS: [[0.5, 15], [1, 25], [1.5, 30], [Infinity, 55]],
+      // RE-MEASURED 2026-10-19 (lane rack-centre, owner "debris is off center from daughter"): the cells moved ONTO her
+      // axis (cell 0 centred, cell 1 stacked beyond it: ArmUnit.rackCellOffsetInto). Same probe
+      // (tmp/rack-snug-radiator-probe.mjs → js/test/fixtures/rack-snug-radiator.json) and sampling; a cell-1 placement
+      // has a second piece of the SAME case in cell 0 (3 of the 30 attitudes: js/test/_rackSnugAttitudes.js
+      // `belowAttitudeIndices`). Old → new: 15→20 (≤ 0.5 m), 25→30 (≤ 1 m), 30→35 (≤ 1.5 m), 55→80 (beyond: defunctSat
+      // 8 / 9.2 m and rocketBody 8 / 11 / 12.65 m all 80, rocketBody 5 m 75, defunctSat 5 m 65, rocketBody 3 m 55,
+      // defunctSat 3 m 45, defunctSat 2.2 m 35).
+      // FIX ROUND 1 (lane rack-centre, 2026-10-19, review): the single beyond row (80°, set by 8–12.65 m hulls) sat above
+      // the plume floor of the 1.6–2.8 m class (65°), so a 2.2 m catch re-posed to its plume floor would still have held
+      // the radiator's automatic swing back until 80°. Rows added at ≤ 2.8 m and ≤ 5 m (the plume ladder's bounds); same
+      // probe (cases defunctSat/rocketBody 2.8 m added; --skip-checks), same fixture. Old → new (this lane's first
+      // numbers → now): 80 → 50 (1.5–2.8 m: rocketBody 2.8 m 50, 2.8 defunctSat 40, 2.2 defunctSat 35), 80 → 75 (2.8–5 m:
+      // rocketBody 5 m 75, defunctSat 5 m 65, rocketBody 3 m 55, defunctSat 3 m 45), beyond 80 (unchanged: defunctSat 8 /
+      // 9.2 m, rocketBody 8 / 11 / 12.65 m). Every row now sits below the plume floor of its class (25/41/65/99/125/134°).
+      CARGO_CLEAR_ALPHA_ROWS: [[0.5, 20], [1, 30], [1.5, 35], [2.8, 50], [5, 75], [Infinity, 80]],
       POSE_STOW_DEG: 146,          // band-edge bud: θ→180° camps the Y3 axial
                                    // reserve (r ≤ 0.45, ANY R — probe §2
                                    // discovery) and is plume-illegal for

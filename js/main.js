@@ -1338,6 +1338,9 @@ async function init() {
   }
   const _fieldSeed = (Date.now() >>> 0);
   debrisField = new DebrisField(scene, { catalogLoader, seed: _fieldSeed, fieldRegime: _fieldRegime });
+  // catch-near-pass: a piece the ship holds is drawn in the near-field pass while it is near the ship (the hull cannot
+  // paint over it). Guarded like registerNearFieldRoot above (a stale cached module just leaves the pieces far pass).
+  if (typeof debrisField.attachNearField === 'function') debrisField.attachNearField(sceneManager, player);
   _bootMark('DebrisField constructed (5 authored + ~795 hazard + 5000 background)');
 
   // --- Active Satellites ---
@@ -1394,6 +1397,8 @@ async function init() {
   lassoSystem = new LassoSystem(scene);
   lassoSystem.setSkillsSystem(skillsSystem); // Phase 3 hint-gating + veteran downgrade
   lassoSystem.setPlayer(player); // Phase 1C — cosmetic launch-recoil mesh kick
+  // catch-near-pass (Decision 2): the lasso web around a held piece is drawn in the same pass as the piece.
+  if (typeof lassoSystem.attachNearField === 'function') lassoSystem.attachNearField(sceneManager, player);
 
   // --- Phase 5 Rewards: RewardSystem + SweepReportUI ---
   rewardSystem = new RewardSystem();

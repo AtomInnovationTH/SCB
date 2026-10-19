@@ -102,6 +102,12 @@ export class LassoSystem {
          *  after this.target is cleared. */
         this._reelPinTarget = null;
 
+        /** catch-near-pass (Decision 2): scene manager (null = web stays far pass), whether the web group is a
+         *  near-field root now, and the piece the web wraps (kept after `target` clears while the welded web fades). */
+        this._nearSm = null;
+        this._webNear = false;
+        this._webDebris = null;
+
         /** @type {{t:number, dur:number, seed:object}|null} 2026-08-26 — live
          *  web fade-out over a freshly adopted catch (crossfades into the
          *  berthed bag); ticked by _updateVisualEffects, cleared at zero. */
@@ -479,6 +485,42 @@ export class LassoSystem {
      */
     setPlayer(player) {
         this._player = player || null;
+    }
+
+    /**
+     * catch-near-pass (Decision 2): hand over the scene manager so the cast web can be drawn in the near-field pass.
+     * The web follows the HELD piece it wraps (the piece's `_nearProxy`, set by DebrisField when the pinned catch is
+     * within the near rule of the ship): a web in the near pass over a piece still in the far pass would paint over it.
+     * In flight (nothing held yet) the web stays far pass with the piece it is chasing. Optional: unset = far pass.
+     * @param {object|null} sceneManager — registerNearFieldRoot / unregisterNearFieldRoot
+     */
+    attachNearField(sceneManager) {
+        this._nearSm = sceneManager || null;
+        if (!this._nearSm && this._webNear) this._webNear = false;
+    }
+
+    /**
+     * catch-near-pass (Decision 2): put the web group in the near pass exactly while the piece it wraps is drawn there.
+     * The group is a scene child with a world position, which is what a near-field root is (the pass moves it to
+     * (world − camera)·S and scales it ×S, then puts it back), so no write site changes. The web's lines are screen-space
+     * pixels (worldUnits false), which the pass does not change.
+     * The piece is resolved BY ID through the field (CONVENTIONS.md:154): `target` may be a snapshot or a copy that never
+     * receives the field's `_nearProxy` flag.
+     * @param {object|null} [debrisField] the field (update() passes it); without it the target itself is read
+     * @private
+     */
+    _syncWebPass(debrisField = null) {
+        const g = this._netGroup, sm = this._nearSm;
+        if (!g || !sm || typeof sm.registerNearFieldRoot !== 'function') return;
+        if (this.target) this._webDebris = this.target;
+        else if (!g.visible) this._webDebris = null;
+        const held = this._webDebris;
+        const d = this._canonicalDebris(debrisField, held) || held;
+        const want = !!(g.visible && d && d._nearProxy === true);
+        if (want === this._webNear) return;
+        this._webNear = want;
+        if (want) sm.registerNearFieldRoot(g);
+        else if (typeof sm.unregisterNearFieldRoot === 'function') sm.unregisterNearFieldRoot(g);
     }
 
     /**
@@ -1467,6 +1509,9 @@ export class LassoSystem {
 
         // Phase 6: Update visual effects (run independently of active state)
         this._updateVisualEffects(dt);
+
+        // catch-near-pass (Decision 2): the web follows the held piece it wraps into the same pass.
+        this._syncWebPass(debrisField);
 
         // Cargo-continuity S13(d): tick a catch waiting for the nose collar to
         // free (hold clear of the occupant, settle in, then adopt onto the one
@@ -2552,6 +2597,10 @@ export class LassoSystem {
         }
         // Dispose the shared net-mesh kit (cone + nodes + drawstring + apex hub).
         if (this._netGroup) {
+            if (this._webNear && this._nearSm && typeof this._nearSm.unregisterNearFieldRoot === 'function') {
+                this._nearSm.unregisterNearFieldRoot(this._netGroup);   // catch-near-pass: never leave a dead root in the pass
+                this._webNear = false;
+            }
             if (this._netKit) NetMeshKit.dispose(this._netKit);
             this.scene.remove(this._netGroup);
         }

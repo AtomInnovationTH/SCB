@@ -243,6 +243,8 @@ export function clearRackCell(d) {
   d._rackLocalM = null;
   d._qLocalHer = null;
   d._rackArm = null;
+  d._rackBelow = null;     // rack-centre: the cell-0 piece cell 1 was placed on (ArmUnit._assignRackCellWith)
+  d._rackSlide = null;     // rack-centre: a running cell-1 → cell-0 slide (ArmUnit._lowerRackCell)
 }
 
 /**

@@ -2999,7 +2999,10 @@ export class ArmManager {
         const size = d.sizeMeter || 1;
         // rack-snug (Decision 4): the sphere sits where the piece IS — its cell on her, not a slot in a hold axis.
         // Decision 7: its radius is the drawn reach from that point (true size), not sizeMeter / 2.
-        arm.heldSlotWorldInto(k, size, p.position, slot, d, p.quaternion);
+        // rack-centre fix round 1: during the 1 s cell-1 → cell-0 slide it is where the piece is drawn NOW, not the slide's end.
+        if (!(d._rackSlide && typeof arm.heldDrawnWorldInto === 'function' && arm.heldDrawnWorldInto(d, slot, p.quaternion))) {
+          arm.heldSlotWorldInto(k, size, p.position, slot, d, p.quaternion);
+        }
         push(slot, DebrisField.trueReachM(d, size) + 0.05, `rack catch ${i}`);
       }
     }

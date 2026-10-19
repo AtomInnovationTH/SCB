@@ -175,19 +175,27 @@ function _ensureSharedBridleGeo() {
 // parked catch is now a rigid part of her (docs/DECISIONS Ruling 0, physically real): its centre and its
 // attitude are fixed in HER body frame (+Z out along the strut, Y in the strut's swing plane, X out of it)
 // from the moment its cell is assigned, so the ship turning or the strut swinging carries it with her and
-// world up plays no part. Cell k sits beside her end, out of the swing plane:
-//   z = s_her + s_catch + ARM_HOLD_NET_GAP_M     (the in-hand rule along her +Z: no part of the catch
-//                                                 nearer than the net gap)
-//   x = (-1)^k · (reach_k + ARM_HOLD_NET_GAP_M/2)  (cell 0 +X, cell 1 -X: a catch's place never depends on
-//                                                 what the other cell holds; two catches never touch)
+// world up plays no part.
+// rack-centre (2026-10-18, owner 23:18Z after playing: "check details, debris is off center from daughter"):
+// the rack-snug layout put cell k BESIDE her end (x = ±(reach + gap/2)), which measured 0.19-0.54 m off her
+// axis for the mission-1 pieces (her end is 0.078 m in radius). Now cell 0 is CENTRED on her axis and cell 1
+// stacks on the same axis beyond it:
+//   cell 0:  x = y = 0,  z = s_her + s_catch0 + ARM_HOLD_NET_GAP_M   (the in-hand rule along her +Z: no part
+//                                                 of the catch nearer than the net gap)
+//   cell 1:  x = y = 0,  z = z_cell0 + far_cell0 + ARM_HOLD_NET_GAP_M + s_catch1   (its nearest drawn point
+//                                                 one net gap past cell 0's catch's farthest drawn point)
 // s_her = max z over her bodyDims box and every solid mesh vertex of hers; s_catch = max of -z over the
-// catch's drawn vertices at the drawn scale in its frozen attitude. ONE computation (`rackCellOffsetInto`)
-// runs when a cell is assigned and stores `d._rackCell`, `d._rackLocalM`, `d._qLocalHer` (+ `d._rackArm`, the
-// owner); every reader — the pin, the cargo flight's end, the keep-out sphere, the CoM booking — goes
+// catch's drawn vertices at the drawn scale in its frozen attitude; far_cell0 = max of +z over cell 0's
+// catch's drawn vertices in ITS frozen attitude. Cell 1's place therefore depends on what cell 0 holds, so
+// when cell 0 empties the remaining catch slides down to cell 0 over ARM_HOLD_GLIDE_S (`_pinHeldCatches`).
+// ONE computation (`rackCellOffsetInto`) runs when a cell is assigned and stores `d._rackCell`,
+// `d._rackLocalM`, `d._qLocalHer` (+ `d._rackArm`, the owner, and `d._rackBelow`, the cell-0 catch cell 1 was
+// stacked on); every reader — the pin, the cargo flight's end, the keep-out sphere, the CoM booking — goes
 // through `heldSlotAnchorInto`: her position + her attitude · the stored offset.
 const _rcQ = new THREE.Quaternion();
 const _rcDir = new THREE.Vector3();
-const _rcZ = new THREE.Vector3(0, 0, -1);
+const _rcZ = new THREE.Vector3(0, 0, -1);      // the catch's near side (toward her / toward the cell below)
+const _rcZp = new THREE.Vector3(0, 0, 1);      // the catch's far side (away from her)
 
 /**
  * Where a rack cell is, frame-free: `anchor + herQuat · offset`. `anchor` (her centre) and `out` are scene
@@ -201,9 +209,6 @@ const _rcZ = new THREE.Vector3(0, 0, -1);
 export function heldSlotAnchorInto(anchor, herQuat, offsetM, out) {
   return out.copy(offsetM).multiplyScalar(M).applyQuaternion(herQuat).add(anchor);
 }
-
-/** Which side of the swing plane a cell is on: cell 0 +X, cell 1 -X. */
-function rackCellSign(cell) { return (cell % 2 === 0) ? 1 : -1; }
 
 /**
  * The cell the next arrival takes: the smallest free one. A piece without a `_rackCell` (an old save, a rig that
@@ -225,6 +230,25 @@ export function nextFreeRackCell(rack, except = null) {
   }
   for (let k = 0; k < cells; k++) if (!(used & (1 << k))) return k;
   return Array.isArray(rack) ? rack.length : cells;
+}
+
+/**
+ * The piece holding `cell` of `rack` (a piece without a `_rackCell` holds the cell of its array position, as
+ * `nextFreeRackCell` reads it), or null. rack-centre: cell 1 stacks on what cell 0 holds, so every reader that needs
+ * cell k's place asks for the piece in cell k-1.
+ * @param {Array<object>|null|undefined} rack
+ * @param {number} cell
+ * @param {object|null} [except] a piece to ignore (the one being placed)
+ * @returns {object|null}
+ */
+export function rackPieceInCell(rack, cell, except = null) {
+  if (!Array.isArray(rack) || !(cell >= 0)) return null;
+  for (let i = 0; i < rack.length; i++) {
+    const h = rack[i];
+    if (!h || h === except) continue;
+    if ((Number.isInteger(h._rackCell) ? h._rackCell : i) === cell) return h;
+  }
+  return null;
 }
 
 /**
@@ -264,35 +288,51 @@ function catchSupportAlongM(d, qCatch, dirFrame) {
   return best * (DebrisField.effectiveRenderScale(d) / M);
 }
 
+const _rcBelowOff = new THREE.Vector3();
+
 /**
- * ONE computation of a rack cell's offset on her, her frame, metres (Decision 3). With a typed catch and its
- * attitude in her frame (`qLocalHer`) it is measured from the drawn mesh; otherwise (a prediction in
- * `suggestCargoArm`, an old save, a typeless rig) it is the typeless form: s_catch = sizeMeter/2 and the reach from
- * `DebrisField.trueReachM`.
- * @param {THREE.Vector3} out receives (x, 0, z), metres
+ * ONE computation of a rack cell's offset on her, her frame, metres (rack-centre Decisions 1-2). Every cell is ON
+ * her axis (x = y = 0). With a typed catch and its attitude in her frame (`qLocalHer`) the extents are measured from
+ * the drawn mesh; otherwise (a prediction in `suggestCargoArm`, an old save, a typeless rig) the typeless form:
+ * extent = sizeMeter/2.
+ *   cell 0:   z = sHerM + (catch's support along -Z) + ARM_HOLD_NET_GAP_M
+ *   cell k:   z = z(cell k-1's piece) + (that piece's support along +Z) + ARM_HOLD_NET_GAP_M + (catch's support
+ *             along -Z)           — its nearest drawn point one net gap past the piece below's farthest one.
+ * `below` is the piece in cell k-1 (`rackPieceInCell`); with none the cell is laid out as cell 0 (a prediction for a
+ * rack the caller cannot see).
+ * @param {THREE.Vector3} out receives (0, 0, z), metres
  * @param {number} sHerM her +Z support (`herSupportZM`)
  * @param {object|null} d the catch (may be null for a size-only prediction)
  * @param {number} cell 0 or 1
  * @param {THREE.Quaternion|null} qLocalHer the catch's attitude in her frame (null: typeless form)
  * @param {number} [sizeMeter=0] used when `d` carries no size
+ * @param {object|null} [below=null] the piece in cell k-1 (its stored `_rackLocalM`, `_qLocalHer`, type)
  * @returns {THREE.Vector3} out
  */
-export function rackCellOffsetInto(out, sHerM, d, cell, qLocalHer, sizeMeter = 0) {
+export function rackCellOffsetInto(out, sHerM, d, cell, qLocalHer, sizeMeter = 0, below = null) {
   const gap = Constants.ARM_HOLD_NET_GAP_M ?? 0.03;
   const size = (d && Number.isFinite(d.sizeMeter) && d.sizeMeter !== 0) ? d.sizeMeter : (sizeMeter || 0);
-  let reach = d ? DebrisField.trueReachM(d, size) : size / 2;
-  let sCatch = size / 2;
+  let sNear = size / 2;
   if (d && d.type && qLocalHer) {
     const s = catchSupportAlongM(d, qLocalHer, _rcZ);
-    if (s !== null) {
-      sCatch = s;
-      // Her catch may be drawn above its true size (a readability floor kept from the nose): the lateral
-      // spacing follows the drawn reach so two floored catches still never touch. Equal to trueReachM otherwise.
-      const drawn = DebrisWireframe.getOriginRadius(d.type, d.id) * (DebrisField.effectiveRenderScale(d) / M);
-      if (drawn > reach) reach = drawn;
-    }
+    if (s !== null) sNear = s;
   }
-  return out.set(rackCellSign(cell) * (reach + gap / 2), 0, sHerM + sCatch + gap);
+  if (cell >= 1 && below && below !== d) {
+    // where the piece below sits (stored, else laid out as its own cell) and how far it reaches along +Z
+    let zBelow;
+    if (below._rackLocalM) zBelow = below._rackLocalM.z;
+    else {
+      rackCellOffsetInto(_rcBelowOff, sHerM, below, cell - 1, below._qLocalHer || null, 0, null);
+      zBelow = _rcBelowOff.z;
+    }
+    let farBelow = ((below.sizeMeter > 0 ? below.sizeMeter : 0)) / 2;
+    if (below.type && below._qLocalHer) {
+      const f = catchSupportAlongM(below, below._qLocalHer, _rcZp);
+      if (f !== null) farBelow = f;
+    }
+    return out.set(0, 0, zBelow + farBelow + gap + sNear);
+  }
+  return out.set(0, 0, sHerM + sNear + gap);
 }
 
 /**
@@ -314,7 +354,9 @@ export function catchLongAxisInto(d, out) {
 
 /**
  * A cell's offset for a reader that may not have one stored: the piece's stored offset when it has one, else the
- * typeless prediction for `cell` on `arm` (a real ArmUnit, or a duck-typed mock with `config.bodyDims`/`config.type`).
+ * prediction for `cell` on `arm` (a real ArmUnit, or a duck-typed mock with `config.bodyDims`/`config.type`).
+ * rack-centre (Decision 2): cell 1 stacks on what cell 0 holds, so the prediction reads the piece in cell k-1 from
+ * `arm.heldCatches` (a mock with no rack lays the cell out as cell 0).
  * @param {THREE.Vector3} out
  * @param {object} arm
  * @param {object|null} d
@@ -331,7 +373,8 @@ export function rackOffsetFor(out, arm, d, cell, sizeMeter = 0) {
     const dims = (cfg && cfg.bodyDims) || (cfg && cfg.type === 'spinner' ? Constants.SPINNER_BODY : Constants.WEAVER_BODY);
     sHer = herSupportZM(dims, null);
   }
-  return rackCellOffsetInto(out, sHer, d, cell, null, sizeMeter);
+  const below = cell >= 1 ? rackPieceInCell(arm && arm.heldCatches, cell - 1, d) : null;
+  return rackCellOffsetInto(out, sHer, d, cell, null, sizeMeter, below);
 }
 
 // ── catch-snug (2026-10-18): a catch held IN HAND sits tight at her end ──────
@@ -467,6 +510,7 @@ const _pinHerQ = new THREE.Quaternion();
 const _herDirTmp = new THREE.Vector3();
 const _slotOffTmp = new THREE.Vector3();
 const _pinLocal = new THREE.Vector3();
+const _lrFrom = new THREE.Vector3();
 const _gdDir = new THREE.Vector3();
 const _gdAxis = new THREE.Vector3();
 const _gdWorld = new THREE.Vector3();
@@ -2878,6 +2922,7 @@ export class ArmUnit {
    */
   update(dt, parentPos, parentQuat) {
    this.stateTimer += dt;
+   this._rackClockS = (this._rackClockS || 0) + dt;   // rack-centre: times a cell-down slide (stateTimer is reset by the unload)
 
    // C-3: Tick hinge auto-unlock settle timer
    this._tickHingeSettle(dt);
@@ -5983,15 +6028,23 @@ export class ArmUnit {
         const h = rack[i];
         if (h && h !== d && (Number.isInteger(h._rackCell) ? h._rackCell : i) === d._rackCell) { taken = true; break; }
       }
-      if (!taken) return d._rackCell;
+      // rack-centre (Decision 2): a cell above 0 was laid out on top of the piece then in the cell below; it stays
+      // valid only while that same piece is still there (if cell 0 emptied under a flight to cell 1, or another
+      // piece took it, the flight ends in the new place — it is re-read, not frozen).
+      if (!taken && (d._rackCell < 1 || (d._rackBelow && rackPieceInCell(rack, d._rackCell - 1, d) === d._rackBelow))) {
+        return d._rackCell;
+      }
     }
     const cell = nextFreeRackCell(rack, d);
     d._armPinned = true;                       // the renderer draws a rack catch at the net-held floor: measure as it does
     seedHerFrameAttitude(d, herQ);             // d._qLocalHer = her⁻¹ × the attitude it is drawn at NOW
     if (!d._rackLocalM) d._rackLocalM = new THREE.Vector3();
-    rackCellOffsetInto(d._rackLocalM, this.herSupportZM(), d, cell, d._qLocalHer);
+    const below = cell >= 1 ? rackPieceInCell(rack, cell - 1, d) : null;
+    rackCellOffsetInto(d._rackLocalM, this.herSupportZM(), d, cell, d._qLocalHer, 0, below);
     d._rackCell = cell;
     d._rackArm = this;
+    d._rackBelow = below;
+    d._rackSlide = null;
     return cell;
   }
 
@@ -6019,6 +6072,21 @@ export class ArmUnit {
   }
 
   /**
+   * rack-centre fix round 1: where a parked piece is DRAWN right now (scene units) — its stored cell, except during
+   * the cell-1 → cell-0 slide, when it is the slide's current point (the stored offset is already the END place).
+   * The keep-out spheres read this, so the sphere follows the piece for the second the slide takes.
+   * @param {object} d the piece (in this daughter's rack)
+   * @param {THREE.Vector3} out receives the position, scene units
+   * @param {THREE.Quaternion|null} [parentQuat] mother world attitude
+   * @returns {THREE.Vector3|null} out, or null when the piece has no stored offset
+   */
+  heldDrawnWorldInto(d, out, parentQuat = null) {
+    if (!d || !d._rackLocalM) return null;
+    const off = (d._rackSlide && this._slideHeldCatch(d, _slotOffTmp)) ? _slotOffTmp : d._rackLocalM;
+    return heldSlotAnchorInto(this.position, this._herQuatWorldInto(parentQuat, _slotHerQ), off, out);
+  }
+
+  /**
    * catch-snug: her solid-mesh vertices (her frame, metres), collected once — the hold standoff
    * measures against these as well as the bodyDims box. Null before the mesh exists.
    * @returns {Float32Array|null}
@@ -6038,11 +6106,12 @@ export class ArmUnit {
    * moves.
    *
    * The in-hand point is along the net's launch direction, which can be any side of her (even behind), so a straight
-   * line could pass through her. The path therefore keeps the in-hand rule at every instant: first (60 %) the
-   * direction from her to the piece swings from the in-hand direction to her +Z while the centre rides the "support
-   * shell" `dir · catchHoldStandoffM(dir)` — no part of it ever nearer than the net gap along `dir`, so it cannot
-   * touch her — then it slides sideways along her X at the cell's height (above her +Z support, clear of all of her)
-   * to the cell. A typeless piece (nothing drawn to measure) goes straight.
+   * line could pass through her. The path therefore keeps the in-hand rule at every instant: the direction from her
+   * to the piece swings from the in-hand direction to her +Z while the centre rides the "support shell"
+   * `dir · catchHoldStandoffM(dir)` — no part of it ever nearer than the net gap along `dir`, so it cannot touch
+   * her. rack-centre: the cell is ON her axis, so the swing's end IS the cell and it takes the whole glide (the
+   * old beside-her layout swung for 60 % and then slid sideways along her X for the rest; a cell with a sideways
+   * offset still does). A typeless piece (nothing drawn to measure) goes straight.
    * @param {object} d the stowed piece (carries `_holdGlide`)
    * @param {THREE.Quaternion} herQ her world attitude (the piece's attitude is already herQ × qLocalHer)
    * @param {THREE.Vector3} out receives the centre, her frame, metres
@@ -6056,7 +6125,7 @@ export class ArmUnit {
     if (!g || g.arm !== this || !(dur > 0) || !(f < 1) || !d._rackLocalM) { d._holdGlide = null; return false; }
     const s = f * f * (3 - 2 * f);
     const cell = d._rackLocalM;
-    const SWING = 0.6;
+    const SWING = (Math.abs(cell.x) < 1e-9 && Math.abs(cell.y) < 1e-9) ? 1 : 0.6;
     if (g.dir0 === null) { out.lerpVectors(g.fromM, cell, s); return true; }
     if (s < SWING) {
       const u = s / SWING;
@@ -6091,7 +6160,11 @@ export class ArmUnit {
    * other cell. A piece with no assignment yet (an old save, a rig that pushed straight onto `heldCatches`) is
    * assigned here, at its array position, keeping its current attitude.
    *
-   * A freshly stowed in-hand piece glides in (`_glideHeldCatch`). Her attitude is computed fresh each call
+   * A freshly stowed in-hand piece glides in (`_glideHeldCatch`). rack-centre (Decision 3): a piece in a cell above
+   * 0 whose lower cell has emptied (the piece below was digested, unloaded, dropped or released — every leave site
+   * is covered because the test is made HERE, every pin) takes the lower cell: its offset is re-laid out with the
+   * same rule, its attitude stays, and it slides there along her axis over ARM_HOLD_GLIDE_S (`_slideHeldCatch`, on
+   * this daughter's own clock). Her attitude is computed fresh each call
    * (`_herQuatWorldInto`), from `parentQuat` or the player's; with neither it is the strut basis in the ship frame.
    * @param {THREE.Vector3|null} [parentPos] freshest mother position (unused; her position is `this.position`)
    * @param {THREE.Quaternion|null} [parentQuat] mother world attitude
@@ -6109,10 +6182,55 @@ export class ArmUnit {
       if (d._rackArm !== this || !d._rackLocalM || !d._qLocalHer || !Number.isInteger(d._rackCell)) {
         this._assignRackCellWith(d, herQ, true);
       }
+      if (d._rackCell >= 1 && !rackPieceInCell(rack, d._rackCell - 1, d)) this._lowerRackCell(d);
       applyHerFrameAttitude(d, herQ);
-      if (!d._holdGlide || !this._glideHeldCatch(d, herQ, _pinLocal)) _pinLocal.copy(d._rackLocalM);
+      let shown = false;                       // _pinLocal written by a glide / slide in progress
+      if (d._holdGlide) shown = this._glideHeldCatch(d, herQ, _pinLocal);
+      if (!shown && d._rackSlide) shown = this._slideHeldCatch(d, _pinLocal);
+      if (!shown) _pinLocal.copy(d._rackLocalM);
       heldSlotAnchorInto(this.position, herQ, _pinLocal, d._armPinPos);
     }
+  }
+
+  /**
+   * rack-centre (Decision 3): the cell below `d`'s has emptied — move `d` down one cell. Its attitude is kept; its
+   * offset is re-laid out by the one cell function (so every reader sees the new place at once); the glide of its
+   * centre from where it is drawn NOW to the new place is started on this daughter's own clock (`_rackClockS`).
+   * @param {object} d the piece (already assigned to this daughter, `_rackCell` >= 1)
+   * @private
+   */
+  _lowerRackCell(d) {
+    // where it is drawn now (a slide already under way continues from its current point; `d._rackLocalM` is still the old place)
+    if (!(d._rackSlide && this._slideHeldCatch(d, _lrFrom))) _lrFrom.copy(d._rackLocalM);
+    const cell = d._rackCell - 1;
+    const below = cell >= 1 ? rackPieceInCell(this.heldCatches, cell - 1, d) : null;
+    rackCellOffsetInto(d._rackLocalM, this.herSupportZM(), d, cell, d._qLocalHer, 0, below);
+    d._rackCell = cell;
+    d._rackBelow = below;
+    d._holdGlide = null;
+    d._rackSlide = (Constants.ARM_HOLD_GLIDE_S ?? 0) > 0
+      ? { arm: this, fromM: _lrFrom.clone(), t0: this._rackClockS || 0 }
+      : null;
+  }
+
+  /**
+   * rack-centre (Decision 3): ease a piece that moved down a cell to its new place, straight along her axis (her
+   * frame), smoothstep over ARM_HOLD_GLIDE_S, on `_rackClockS` (advanced by `update`; `stateTimer` is reset by the
+   * unload and cannot time it). The target is the piece's stored offset, read now.
+   * @param {object} d
+   * @param {THREE.Vector3} out receives the centre, her frame, metres
+   * @returns {boolean} false when the slide is over (it is cleared) — `out` is untouched
+   * @private
+   */
+  _slideHeldCatch(d, out) {
+    const sl = d._rackSlide;
+    const dur = Constants.ARM_HOLD_GLIDE_S ?? 0;
+    if (!sl || sl.arm !== this || !(dur > 0) || !d._rackLocalM) { d._rackSlide = null; return false; }
+    const f = ((this._rackClockS || 0) - sl.t0) / dur;
+    if (!(f < 1)) { d._rackSlide = null; return false; }
+    const k = f <= 0 ? 0 : f * f * (3 - 2 * f);
+    out.lerpVectors(sl.fromM, d._rackLocalM, k);
+    return true;
   }
 
   /**
