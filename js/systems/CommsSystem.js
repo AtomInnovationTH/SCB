@@ -229,6 +229,7 @@ const MISSION_TEMPLATES = [
     priority: CommsPriority.INFO,
     source: 'LeoLabs',
     template: 'Got your scan data on {target}, thanks. Bonus +50 points.',
+    quiet: true,   // comms-after-tutorial D4: random timer line, no scan behind it
   },
   {
     priority: CommsPriority.WARNING,
@@ -239,6 +240,7 @@ const MISSION_TEMPLATES = [
     priority: CommsPriority.INFO,
     source: 'GROUND STN',
     template: 'Telemetry looks good. All systems green. Carry on, Cowboy.',
+    quiet: true,   // comms-after-tutorial D4: pure chatter
   },
   {
     priority: CommsPriority.INFO,
@@ -639,7 +641,9 @@ export class CommsSystem {
         tmpl.source,
         tmpl.template
           .replace('{count}', data.count)
-          .replace('{stability}', stability)
+          .replace('{stability}', stability),
+        // comms-after-tutorial D4: Houston praise ("Nice. N cleared!") stays hidden; the progress line says it.
+        { _quiet: true }
       );
     });
 
@@ -674,7 +678,8 @@ export class CommsSystem {
         this.addMessage(
           CommsPriority.INFO,
           'HOUSTON',
-          `Milestone reached: ${data.debrisCleared} debris objects cleared. Score: ${data.total.toLocaleString()}. Outstanding work.`
+          `Milestone reached: ${data.debrisCleared} debris objects cleared. Score: ${data.total.toLocaleString()}. Outstanding work.`,
+          { _quiet: true }   // comms-after-tutorial D4: praise, hidden
         );
       }
     });
@@ -739,10 +744,11 @@ export class CommsSystem {
         this._isroHandoffDone = true;
         // Queue handoff dialogue
         timerManager.setTimeout(() => {
-          this.addMessage('INFO', 'HOUSTON', 'Houston: handing off to Bangalore ISTRAC. Good hunting.');
+          // comms-after-tutorial D4: scripted radio hand-off chatter, hidden (the Bangalore coach lines are separate).
+          this.addMessage('INFO', 'HOUSTON', 'Houston: handing off to Bangalore ISTRAC. Good hunting.', { _quiet: true });
         }, 500, { owner: this });
         timerManager.setTimeout(() => {
-          this.addMessage('INFO', 'BANGALORE', 'ISTRAC Bangalore: Roger, we have the conn. Tracking nominal.');
+          this.addMessage('INFO', 'BANGALORE', 'ISTRAC Bangalore: Roger, we have the conn. Tracking nominal.', { _quiet: true });
         }, 2500, { owner: this });
       }
     });
@@ -892,7 +898,8 @@ export class CommsSystem {
   /** @private */
   _sendFlavorMessage() {
     const msg = FLAVOR_MESSAGES[Math.floor(Math.random() * FLAVOR_MESSAGES.length)];
-    this.addMessage(CommsPriority.INFO, msg.source, msg.text);
+    // comms-after-tutorial D4: radio chatter on a timer, no player action behind it - hidden at every tier.
+    this.addMessage(CommsPriority.INFO, msg.source, msg.text, { _quiet: true });
   }
 
   /** @private */
@@ -957,7 +964,7 @@ export class CommsSystem {
       .replace('{tumble}', (2 + Math.random() * 15).toFixed(1))
       .replace('{days}', (30 + Math.floor(Math.random() * 365)).toString());
 
-    this.addMessage(tmpl.priority, tmpl.source, text);
+    this.addMessage(tmpl.priority, tmpl.source, text, tmpl.quiet ? { _quiet: true } : undefined);
   }
 
   // ==========================================================================
