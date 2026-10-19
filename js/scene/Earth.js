@@ -135,9 +135,24 @@ const cloudCoverageRampGLSL = /* glsl */ `
 const earthSurfaceFragmentShader = /* glsl */ `
 #include <logdepthbuf_pars_fragment>
 
+// st9 (2026-10-19): every picture slot can show up to three pictures at once
+// while one blends into the next. *Texture = the newest picture, *Prev = the one
+// before it, *Prev2 = the oldest; *W = their weights (x oldest, y previous, z newest).
+// A finished slot is (0,0,1): the newest picture alone, and the two other fetches
+// are skipped (uniform branch). A weight sum below 1 is black: the empty start.
 uniform sampler2D uDayTexture;
+uniform sampler2D uDayPrev;
+uniform sampler2D uDayPrev2;
+uniform vec3 uDayW;
+uniform float uDayVis;             // share of the day picture that is a real picture (fades the ocean shine in with it)
 uniform sampler2D uNightTexture;
+uniform sampler2D uNightPrev;
+uniform sampler2D uNightPrev2;
+uniform vec3 uNightW;
 uniform sampler2D uCloudTexture;   // shared with the cloud layer — read for surface shadows
+uniform sampler2D uCloudPrev;
+uniform sampler2D uCloudPrev2;
+uniform vec3 uCloudW;
 uniform float uCloudRotation;      // cloudMesh.rotation.y, radians (CPU-fed per frame)
 uniform vec3 uSunDirection;
 
@@ -183,8 +198,10 @@ void main() {
   vec2 uvDx = dFdx(vUv);
   vec2 uvDy = dFdy(vUv);
 
-  // Sample textures
-  vec3 dayColor = texture2D(uDayTexture, vUv).rgb;
+  // Sample textures (st9: the pictures of a running blend are mixed here, before the grade)
+  vec3 dayColor = texture2D(uDayTexture, vUv).rgb * uDayW.z;
+  if (uDayW.y > 0.0) dayColor += textureGrad(uDayPrev, vUv, uvDx, uvDy).rgb * uDayW.y;
+  if (uDayW.x > 0.0) dayColor += textureGrad(uDayPrev2, vUv, uvDx, uvDy).rgb * uDayW.x;
 
   // BOLD GRADE (visible pass) — WATER-AWARE (2026-07-19). Applied pre-shading /
   // pre-ACES so it reads across the whole disc regardless of view distance:
@@ -245,7 +262,7 @@ void main() {
   // (B4.1: decoupled from the grade so grade retunes can't shift the spec mask).
   // Also feeds the E1 glint and the terrain-detail damping; their extents shift
   // marginally (tighter) with the raw-texel input — benign.
-  float oceanMask = smoothstep(0.35, 0.55, blueDom) * smoothstep(0.3, 0.7, rawDark);
+  float oceanMask = smoothstep(0.35, 0.55, blueDom) * smoothstep(0.3, 0.7, rawDark) * uDayVis; // st9: uDayVis is 1 once a picture is whole, so the shine fades in with the picture
 
   // Sprint 2 / PR C. Terrain detail stack is gated by LOW_DETAIL.
   // viewDist is still needed below for other effects, so it's defined either way.
@@ -302,7 +319,7 @@ void main() {
   //    <2/255 there). Exponent 3→5 + weight 0.15→0.30 keeps the bright thin
   //    rim at the true limb (crossover NdotV≈0.3) while collapsing the broad
   //    band to ~18-50% of its old lift.
-  float oceanFresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 5.0);
+  float oceanFresnel = pow(1.0 - clamp(dot(normal, viewDir), 0.0, 1.0), 5.0); // st9 D5: the dot can round above 1 (negative base = NaN)
   float sheenLobe = specular * 0.25 * clamp(NdotL, 0.0, 1.0);
   vec3 oceanSpec = oceanMask * dayFactor * sunAboveHorizon
     * (sheenLobe * vec3(1.0, 0.97, 0.90) + vec3(oceanFresnel * 0.30));
@@ -338,8 +355,15 @@ void main() {
     // Gradients ×3 (P2): biases the fetch ~+1.6 mips — a soft, physically
     // plausible penumbra instead of a cloud-sharp cutout, and a slightly
     // cheaper fetch. Registration (cloudUv) untouched.
-    float cloudCover = textureGrad(uCloudTexture, cloudUv, uvDx * 3.0, uvDy * 3.0).r;
-    cloudShade = 1.0 - smoothstep(CLOUD_COVERAGE_LO, CLOUD_COVERAGE_HI, cloudCover) * 0.35;
+    // st9: coverage is ramped per picture and then mixed by the blend weights,
+    // so shadows fade in/out exactly as the cloud layer does.
+    float cloudCover = smoothstep(CLOUD_COVERAGE_LO, CLOUD_COVERAGE_HI,
+      textureGrad(uCloudTexture, cloudUv, uvDx * 3.0, uvDy * 3.0).r) * uCloudW.z;
+    if (uCloudW.y > 0.0) cloudCover += smoothstep(CLOUD_COVERAGE_LO, CLOUD_COVERAGE_HI,
+      textureGrad(uCloudPrev, cloudUv, uvDx * 3.0, uvDy * 3.0).r) * uCloudW.y;
+    if (uCloudW.x > 0.0) cloudCover += smoothstep(CLOUD_COVERAGE_LO, CLOUD_COVERAGE_HI,
+      textureGrad(uCloudPrev2, cloudUv, uvDx * 3.0, uvDy * 3.0).r) * uCloudW.x;
+    cloudShade = 1.0 - cloudCover * 0.35;
   }
 #endif
 
@@ -351,7 +375,9 @@ void main() {
   // contributed exactly zero there (nightFactor == 0 across the day side).
   vec3 nightColor = vec3(0.0);
   if (nightFactor > 0.0) {
-    nightColor = textureGrad(uNightTexture, vUv, uvDx, uvDy).rgb;
+    nightColor = textureGrad(uNightTexture, vUv, uvDx, uvDy).rgb * uNightW.z;
+    if (uNightW.y > 0.0) nightColor += textureGrad(uNightPrev, vUv, uvDx, uvDy).rgb * uNightW.y;
+    if (uNightW.x > 0.0) nightColor += textureGrad(uNightPrev2, vUv, uvDx, uvDy).rgb * uNightW.x;
     nightColor *= 2.5;                  // dim in the source texture
     nightColor *= vec3(1.0, 0.85, 0.6); // warm city-light tint
   }
@@ -385,7 +411,7 @@ void main() {
   // B1: with A1 fixed the fresnel is genuinely limb-only, so it can breathe again —
   // gain 0.22 → 0.32, exponent 3.2 → 2.8 for a livelier limb without disc wash.
   // Verify on screenshots (nadir disc-center must stay clean).
-  float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 2.8);
+  float fresnel = pow(1.0 - clamp(dot(normal, viewDir), 0.0, 1.0), 2.8); // st9 D5: same clamp as the ocean fresnel
   finalColor += vec3(0.30, 0.50, 0.85) * fresnel * 0.32 * dayFactor;
 
   gl_FragColor = vec4(finalColor, 1.0);
@@ -427,7 +453,10 @@ void main() {
 const cloudFragmentShader = /* glsl */ `
 #include <logdepthbuf_pars_fragment>
 
-uniform sampler2D uCloudTexture;
+uniform sampler2D uCloudTexture;   // st9: newest picture; *Prev / *Prev2 and uCloudW as in the surface shader
+uniform sampler2D uCloudPrev;
+uniform sampler2D uCloudPrev2;
+uniform vec3 uCloudW;
 uniform vec3 uSunDirection;
 
 varying vec3 vNormal;
@@ -441,7 +470,17 @@ void main() {
 
   // Sample cloud texture. Use brightness as alpha
   vec3 cloudSample = texture2D(uCloudTexture, vUv).rgb;
-  float cloudAlpha = (cloudSample.r + cloudSample.g + cloudSample.b) / 3.0;
+  float cloudAlpha = smoothstep(CLOUD_COVERAGE_LO, CLOUD_COVERAGE_HI, (cloudSample.r + cloudSample.g + cloudSample.b) / 3.0) * uCloudW.z;
+  // st9: while a picture blends into the next the COVERAGE of each is mixed (not
+  // the grey), so a new picture fades in as opacity instead of growing out of the ramp.
+  if (uCloudW.y > 0.0) {
+    vec3 cs = texture2D(uCloudPrev, vUv).rgb;
+    cloudAlpha += smoothstep(CLOUD_COVERAGE_LO, CLOUD_COVERAGE_HI, (cs.r + cs.g + cs.b) / 3.0) * uCloudW.y;
+  }
+  if (uCloudW.x > 0.0) {
+    vec3 cs2 = texture2D(uCloudPrev2, vUv).rgb;
+    cloudAlpha += smoothstep(CLOUD_COVERAGE_LO, CLOUD_COVERAGE_HI, (cs2.r + cs2.g + cs2.b) / 3.0) * uCloudW.x;
+  }
 
   // Shape: crisp cloud edges via a TIGHT alpha ramp + high opacity (bold pass,
   // 2026-07-19). The 8k cloud map is bilinear-magnified (~5 km/texel), which
@@ -453,7 +492,7 @@ void main() {
   // Trade-off: the tight low edge drops the faintest wisps. Retune the window in
   // cloudCoverageRampGLSL (both clouds + their cast shadows follow) or opacity
   // down here if it looks hard/aliased.
-  cloudAlpha = smoothstep(CLOUD_COVERAGE_LO, CLOUD_COVERAGE_HI, cloudAlpha);
+  // (the coverage ramp is applied per picture above)
   // P2 (2026-07-20): clear-sky early-out. smoothstep is exactly 0.0 at/below
   // CLOUD_COVERAGE_LO, so ~half the sphere's fragments (clear sky) previously
   // ran the full lighting path plus a blend op that contributed nothing.
@@ -835,7 +874,7 @@ export class EarthDecodeWorker {
     for (const p of all) { clearTimeout(p.timer); p.reject(err); }
   }
 
-  _send(msg) {
+  _send(msg, extra) {
     if (this.dead) return Promise.reject(new Error('decode worker is dead'));
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
@@ -847,7 +886,7 @@ export class EarthDecodeWorker {
         }, this.timeoutMs);
       }
       try {
-        this.worker.postMessage({ ...msg, id, options: { ...this.options } });
+        this.worker.postMessage({ ...msg, id, options: { ...this.options, ...(extra || {}) } });
       } catch (err) {
         this.pending.delete(id);
         clearTimeout(entry.timer);
@@ -862,10 +901,11 @@ export class EarthDecodeWorker {
   /**
    * Fetch and decode one picture in the worker.
    * @param {string} url  absolute (a blob: worker cannot resolve relative paths)
+   * @param {object} [extra]  st9: createImageBitmap options added for this request only (e.g. a smaller size)
    * @returns {Promise<ImageBitmap>}
    */
-  decode(url) {
-    return this._send({ type: 'decode', url }).then((r) => {
+  decode(url, extra) {
+    return this._send({ type: 'decode', url }, extra).then((r) => {
       if (!r.bitmap) throw new Error('decode worker sent no bitmap');
       return r.bitmap;
     });
@@ -967,6 +1007,10 @@ let bitmapLoader = null;
 let stripsForced = null;
 /** st7 test seam: replaces the run-time pixel check of the strip path (see EarthStripFeeder.verify). */
 let stripCheckHook = null;
+/** st9 test seam: false = no small pictures (the pre-st9 single stage); true = the normal behaviour. */
+let smallFirstOn = true;
+/** st9 test seam: replaces performance.now() for the picture blend. */
+let clockHook = null;
 /** Created lazily: node has no createImageBitmap and a module-level `new` would warn in every test. */
 function getBitmapLoader() {
   if (!bitmapLoader) bitmapLoader = new THREE.ImageBitmapLoader().setOptions({ ...BITMAP_LOADER_OPTIONS });
@@ -984,14 +1028,19 @@ function getBitmapLoader() {
  * injecting a worker: already drawn); `firstFrameTimeoutMs` shortens the hidden-tab fallback;
  * `pendingWorker` (a worker-like) leaves its self-test "still running" until the returned
  * function's `.settleWorker(true|false)` is called.
- * @param {{bitmapLoader?: object|null, imageLoader?: object, bitmapOk?: boolean, stripsOk?: boolean|null, stripCheck?: Function|null, decodeWorker?: object|null, offlineEnv?: object|null}} o
+ * st9: `smallFirst` (false = no small pictures) and `clock` (a function replacing performance.now()
+ * for the picture blend; null = the real clock).
+ * @param {{bitmapLoader?: object|null, imageLoader?: object, bitmapOk?: boolean, stripsOk?: boolean|null, stripCheck?: Function|null, decodeWorker?: object|null, offlineEnv?: object|null, smallFirst?: boolean, clock?: Function|null}} o
  */
-export function setEarthLoadersForTests({ bitmapLoader: bl, imageLoader, bitmapOk, stripsOk, stripCheck, decodeWorker: dw, offlineEnv, firstFrame, firstFrameTimeoutMs, pendingWorker } = {}) {
+export function setEarthLoadersForTests({ bitmapLoader: bl, imageLoader, bitmapOk, stripsOk, stripCheck, decodeWorker: dw, offlineEnv, firstFrame, firstFrameTimeoutMs, pendingWorker, smallFirst, clock } = {}) {
   const prev = {
     bl: bitmapLoader, il: textureLoader, ok: bitmapPathOk, st: stripsForced, ck: stripCheckHook,
     dw: decodeWorker, wok: workerPathOk, oe: offlineEnvOverride, od: ensuredOffline,
     ff: firstFrameSeen, fw: frameWaiters, ft: firstFrameFallbackMs, ftm: frameTimers, wp: workerProbe,
+    sf: smallFirstOn, ch: clockHook,
   };
+  if (smallFirst !== undefined) smallFirstOn = smallFirst !== false;
+  if (clock !== undefined) clockHook = clock;
   if (bl !== undefined) bitmapLoader = bl;
   if (imageLoader !== undefined) textureLoader = imageLoader;
   if (bitmapOk !== undefined) bitmapPathOk = bitmapOk === true;
@@ -1016,6 +1065,7 @@ export function setEarthLoadersForTests({ bitmapLoader: bl, imageLoader, bitmapO
     firstFrameSeen = prev.ff; frameWaiters = prev.fw; firstFrameFallbackMs = prev.ft;
     for (const id of frameTimers) clearTimeout(id);
     frameTimers = prev.ftm; workerProbe = prev.wp;
+    smallFirstOn = prev.sf; clockHook = prev.ch;
   };
   restore.settleWorker = (ok) => { if (settleWorker) settleWorker(ok); };
   return restore;
@@ -1029,7 +1079,7 @@ export function setEarthLoadersForTests({ bitmapLoader: bl, imageLoader, bitmapO
  * (handle live, image empty → samples black) is exactly the E2 hypothesis this
  * must witness. Capped ring, try/catch'd, no-op outside the DOM (Node tests).
  *
- * @param {string} kind   'loaded' | 'avif-fail' | 'bitmap-fail' | 'fallback-loaded' | 'error'
+ * @param {string} kind   'loaded' | 'ready' | 'shown' (st9: blend started) | 'avif-fail' | 'bitmap-fail' | 'fallback-loaded' | 'error'
  * @param {string} file   path as requested
  * @param {{width?: number, height?: number}|null} image  decoded image, if any
  */
@@ -1145,12 +1195,20 @@ let frameTimers = [];
 export const FIRST_FRAME_FALLBACK_MS = 5000;
 let firstFrameFallbackMs = FIRST_FRAME_FALLBACK_MS;
 
-/** Runs `fn` once, after the game's first frame (or at once if it has been drawn). */
-function afterFirstFrame(fn) {
+/**
+ * Runs `fn` once, after the game's first frame (or at once if it has been drawn).
+ * st9: `urgent` puts it ahead of the others that are waiting (the small pictures are asked for first).
+ */
+function afterFirstFrame(fn, urgent = false) {
   if (firstFrameSeen) { fn(); return; }
   let done = false;
   const once = () => { if (done) return; done = true; fn(); };
-  frameWaiters.push(once);
+  if (urgent) {
+    // behind the other urgent ones (they keep the order they were asked in), ahead of the rest
+    once.urgent = true;
+    const at = frameWaiters.findIndex((w) => !w.urgent);
+    frameWaiters.splice(at < 0 ? frameWaiters.length : at, 0, once);
+  } else frameWaiters.push(once);
   if (typeof setTimeout === 'function') frameTimers.push(setTimeout(once, firstFrameFallbackMs));
 }
 
@@ -1184,6 +1242,12 @@ function usableWorker() {
 function loadLevel(tex, seq, level) {
   const src = tierSources(tex.userData.src)[level];
   const { initialPath } = src;
+  // st9: the picture's staging hook (null for a plain loadTexture call). A SMALL picture
+  // (the base-tier file shown while the sharp one loads) only ever goes the off-thread way:
+  // decoding an extra picture on the main thread would be the stutter it exists to avoid.
+  const pic = tex.userData.strips || null;
+  const isSmall = !!pic && pic.kind === 'small';
+  if (isSmall && !bitmapPathOk) return;
   if (!bitmapPathOk) { loadViaImageLoader(tex, seq, level); return; }
   const stale = () => tex.userData.loadSeq !== seq;
 
@@ -1192,16 +1256,31 @@ function loadLevel(tex, seq, level) {
     if (stale()) { closeBitmap(bmp); return; }
     const place = () => {
       try {
-        const dims = `${bmp.width}×${bmp.height}`;
+        const bw = bmp.width, bh = bmp.height; // read now: the one-shot route closes the image
+        const dims = `${bw}×${bh}`;
         tex.userData.loadedLevel = level;
         // st6: on a strip-capable browser the picture is queued and reaches the
         // GPU one strip per frame; this texture stays empty until the finished
         // one replaces it (Earth._setPicture). Otherwise: one-shot, as before.
+        // st9: a one-shot picture of an Earth goes into a NEW texture (Earth._oneShotPicture),
+        // uploaded before it is shown, so there is always something to blend from.
         const sp = tex.userData.strips;
-        if (sp && sp.feeder.accepts(bmp)) sp.feeder.enqueue(tex, bmp, sp.priority, sp.onReady);
+        if (sp && sp.dropped && sp.dropped()) {
+          // a small picture that arrives after the sharp one (or after a restore) is never shown
+          closeBitmap(bmp);
+          console.log(`[Earth] Dropped: ${initialPath} (${dims}), not needed any more`);
+          return;
+        }
+        if (sp && sp.feeder && sp.feeder.accepts(bmp, sp.kind)) sp.feeder.enqueue(tex, bmp, sp.priority, sp.onReady, { kind: sp.kind, level });
+        else if (isSmall && bmp.width * bmp.height > SMALL_ONE_SHOT_MAX_TEXELS) {
+          // no strips for it and too heavy for one frame: skip this slot's small picture
+          closeBitmap(bmp);
+          console.log(`[Earth] Skipped: ${initialPath} (${dims}), too big for a one-shot upload`);
+          return;
+        } else if (sp && sp.onOneShot) sp.onOneShot(tex, bmp, false, level);
         else setEarthImage(tex, bmp);
         console.log(`[Earth] Loaded: ${initialPath} (${dims})`);
-        recordTexEvent('loaded', initialPath, { width: bmp.width, height: bmp.height });
+        recordTexEvent('loaded', initialPath, { width: bw, height: bh });
         // §13 boot timeline (?logBoot=1): no-op when the flag is off.
         bootMark(`Earth texture decoded: ${initialPath.split('/').pop()} (${dims})`);
       } catch (e) {
@@ -1243,9 +1322,12 @@ function loadLevel(tex, seq, level) {
 
   // st8: fetch + decode in the worker; any worker failure → the main-thread loader.
   const viaWorker = (w) => {
-    w.decode(absoluteUrl(initialPath)).then(arrive, (err) => {
+    w.decode(absoluteUrl(initialPath), pic && pic.decodeExtra).then(arrive, (err) => {
       // A decode failure (not a missing file) means this browser's worker cannot decode what
       // the 2×2 PNG self-test could not show (AVIF in a worker, a killed worker): stop using it.
+      // st9 review: a failed small picture is simply dropped; it must not retire the worker,
+      // or the sharp pictures still queued in it would fall back to main-thread decoding.
+      if (isSmall) { if (!stale()) console.warn(`[Earth] small picture ${initialPath} could not be decoded in the worker; the sharp one comes alone`, err); return; }
       if (!/^HTTP \d{3}/.test(String((err && err.message) || err))) retireWorker(w);
       if (stale()) return;
       console.warn(`[Earth] worker decode failed for ${initialPath}, using the main-thread bitmap loader`, err);
@@ -1261,10 +1343,18 @@ function loadLevel(tex, seq, level) {
     // start-up (measured: decoding in parallel with the boot made the menu 30-95 ms
     // later and landed the pictures in the first game-loop frame); the old
     // main-thread path is unchanged.
-    if (w) afterFirstFrame(() => { if (!stale()) viaWorker(w); }); else viaLoader();
+    if (isSmall && !w) return; // st9: no worker, no small picture (the sharp one comes alone, as before)
+    if (w) afterFirstFrame(() => { if (!stale()) viaWorker(w); }, isSmall); else viaLoader();
   };
   // The worker's self-test normally ended long before the first picture is asked for.
   if (workerPathOk === null) workerProbe.then(start); else start();
+}
+
+/** st9: an HTML image has arrived for `tex`: into a new texture of the Earth (blended in), else into `tex` itself. */
+function placeImage(tex, image, level) {
+  const sp = tex.userData.strips;
+  if (sp && sp.onOneShot) sp.onOneShot(tex, image, true, level);
+  else setEarthImage(tex, image);
 }
 
 /**
@@ -1283,7 +1373,7 @@ function loadViaImageLoader(tex, seq, level = 0) {
       if (stale()) return;
       tex.flipY = true;
       tex.userData.loadedLevel = level;
-      setEarthImage(tex, loaded.image);
+      placeImage(tex, loaded.image, level);
       console.log(`[Earth] Loaded: ${initialPath} (${loaded.image?.width}×${loaded.image?.height})`);
       recordTexEvent('loaded', initialPath, loaded.image);
       bootMark(`Earth texture decoded: ${initialPath.split('/').pop()} (${loaded.image?.width}×${loaded.image?.height})`);
@@ -1299,7 +1389,7 @@ function loadViaImageLoader(tex, seq, level = 0) {
           if (stale()) return;
           tex.flipY = true;
           tex.userData.loadedLevel = level;
-          setEarthImage(tex, loaded.image);
+          placeImage(tex, loaded.image, level);
           console.log(`[Earth] Loaded fallback: ${path} (${loaded.image?.width}×${loaded.image?.height})`);
           recordTexEvent('fallback-loaded', path, loaded.image);
           bootMark(`Earth texture decoded (fallback): ${path.split('/').pop()} (${loaded.image?.width}×${loaded.image?.height})`);
@@ -1329,10 +1419,15 @@ function loadViaImageLoader(tex, seq, level = 0) {
  * @param {string} path  JPG path (e.g. 'textures/earth_day_16k.jpg'). When AVIF
  *                       is supported, the .jpg suffix is rewritten to .avif.
  * @param {number} [anisotropy=8]
- * @param {{feeder: EarthStripFeeder, priority: number, onReady: Function}|null} [strips]
+ * @param {{feeder: EarthStripFeeder|null, priority: number, onReady: Function, kind?: string, onOneShot?: Function, dropped?: Function|null, decodeExtra?: object}|null} [strips]
  *   st6: when given, a bitmap that the feeder accepts is built into a separate
  *   texture in strips and `onReady(finishedTexture)` is called once; this
  *   (returned) texture then stays the empty "not arrived yet" one.
+ *   st9: `kind` is 'sharp' or 'small' (the base-tier picture shown first); a picture the
+ *   feeder does not take (no feeder, too short, a failure) goes through `onOneShot(tex,
+ *   image, flipY, level)` into a NEW texture instead of into this one; `dropped()` says
+ *   a small picture is no longer wanted; `decodeExtra` = createImageBitmap options for
+ *   this picture only.
  * @param {EarthOfflineKeeper|null} [keeper]
  *   st8: when given, it is told which 16k files this picture needs and when the
  *   picture is complete on screen at that tier (it then stores the file for offline).
@@ -1397,6 +1492,18 @@ export function attachEarthRestore(earth, renderer) {
     // st6: strips in flight are dropped (the new context has none of their GPU
     // memory); each of those pictures is requested again below.
     const dropped = earth._strips ? earth._strips.abandonAll() : [];
+    // st9: an Earth with the small-first pictures. Every picture on screen (small or sharp, strip
+    // result or one-shot copy) lost its GPU copy, and a one-shot one has a closed bitmap that cannot
+    // be uploaded again, so ALL of them are dropped, including one in the middle of a blend. Only the
+    // sharp pictures are loaded again (no small stage after a restore); they blend in from black.
+    if (typeof earth._resetPicture === 'function') {
+      if (typeof earth._dropSmallPictures === 'function') earth._dropSmallPictures();
+      for (const slot of PICTURE_SLOTS) {
+        const r = earth._resetPicture(slot);
+        if (r && r.pending && (r.shown || dropped.includes(r.pending))) loadEarthImage(r.pending);
+      }
+      return;
+    }
     for (const slot of PICTURE_SLOTS) {
       const tex = earth[slot];
       if (!tex || !tex.userData || !tex.userData.src) continue;
@@ -1607,6 +1714,22 @@ export const CHECK_AFTER_TICKS = 20;
 /** Texels per strip (16k: 128 rows, 8k: 256 rows). */
 export const STRIP_TEXELS = 2 * 1024 * 1024;
 
+/**
+ * st9: the largest SMALL picture (texels) that may be uploaded in one go when it cannot go
+ * through strips (WebKit/iPad, a strip check that failed, a feeder that gave up). Measured
+ * 2026-10-19: macOS WebKit one-shot uploads cost ~23 ns/texel (16k: 2.8-3.4 s), and the
+ * 2048×1024 clouds made 29-111 ms frames there; Chromium's one-shot 66-147 ms. 0.5 M texels
+ * (1024×512) is ~12 ms by that rate.
+ */
+export const SMALL_ONE_SHOT_MAX_TEXELS = 1024 * 512;
+
+/**
+ * st9: on the one-shot route the worker decodes the small pictures at this size (createImageBitmap
+ * resize options), so they fit SMALL_ONE_SHOT_MAX_TEXELS. A browser that ignores the options
+ * sends the full size, which is then skipped (the sharp picture comes alone).
+ */
+export const SMALL_ONE_SHOT_DECODE = Object.freeze({ resizeWidth: 1024, resizeHeight: 512, resizeQuality: 'medium' });
+
 /** Rows per strip for a picture `width` pixels wide. */
 export function stripRows(width) {
   return Math.max(1, Math.round(STRIP_TEXELS / Math.max(1, width)));
@@ -1628,6 +1751,78 @@ export function stripsUsable(renderer) {
 const _scratchCentre = new THREE.Vector3();
 const _scratchRel = new THREE.Vector3();
 const PICTURE_SLOTS = ['dayTexture', 'nightTexture', 'cloudTexture'];
+
+// ============================================================================
+// SMALL FIRST, THEN SHARPEN (st9, 2026-10-19)
+// ============================================================================
+//
+// Owner 2026-10-19: the clouds / surface appearing was "acceptable but a little
+// jarring"; he chose "small first, then sharpen". Above the base tier each slot
+// (day, night, clouds) first loads its BASE-tier file (already on the device: the
+// service worker precaches it), then the tier's own picture. Every picture that
+// completes BLENDS in over EARTH_BLEND_MS from what was on screen (black for the
+// first one), so nothing pops. The small pictures never count as "complete": that
+// word still means the sharp picture (notePictureComplete, the offline store of the
+// 16k files, earth.dayTexture / nightTexture / cloudTexture for BlackFrameProbe).
+//
+// Each finished picture is a texture object of its own (the strip result, or for the
+// one-shot route a new texture uploaded BEFORE it is shown); the texture returned by
+// loadTexture() stays an empty "loading" handle. A slot can show up to three pictures
+// at once (a blend that is interrupted by the next picture continues from the current
+// mix, no jump); the shader gets them as *Texture / *Prev / *Prev2 with weights *W.
+
+/** How long a picture takes to blend in (ms). One constant for all three slots. */
+export const EARTH_BLEND_MS = 1000;
+
+/** The blend's ease: smoothstep. 0 → 0, 1 → exactly 1. */
+export function blendEase(x) {
+  const t = x <= 0 ? 0 : (x >= 1 ? 1 : x);
+  return t * t * (3 - 2 * t);
+}
+
+/** Never uploaded, never disposed: three samples its 1×1 black. Stands in for "no picture". */
+const EMPTY_TEXTURE = new THREE.Texture();
+const EMPTY_LAYER = Object.freeze({ tex: EMPTY_TEXTURE, real: false });
+
+/** Uniform-name stem per picture slot. */
+const PICTURE_STEM = { dayTexture: 'Day', nightTexture: 'Night', cloudTexture: 'Cloud' };
+
+/** The clock of the blend: performance.now() (never dt: the game can hold dt at 0 or run unfocused). */
+function nowMs() {
+  if (clockHook) return clockHook();
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+}
+
+function disposeTexture(t) {
+  try { t && t.dispose && t.dispose(); } catch (_e) { /* best effort */ }
+}
+
+function setUniformValue(u, name, value) {
+  const e = u && u[name];
+  if (e) e.value = value;
+}
+
+function setWeights(u, name, w) {
+  const e = u && u[name];
+  if (!e) return;
+  if (e.value && typeof e.value.set === 'function') e.value.set(w[0], w[1], w[2]);
+  else e.value = { x: w[0], y: w[1], z: w[2] };
+}
+
+/** The per-slot picture state (see the section note above). */
+function newPictureState(pending) {
+  return {
+    pending,               // the empty handle loadTexture() returned for the sharp picture
+    small: null,           // the empty handle of the small picture, if there is a small stage
+    layers: [EMPTY_LAYER, EMPTY_LAYER, { tex: pending, real: false }], // oldest, previous, newest
+    w: [0, 0, 1],          // weights now (a weight sum below 1 is black)
+    from: [0, 0, 1],       // weights when the running blend started
+    t0: 0,
+    active: false,
+    sharpSeen: false,      // the sharp picture has been shown: a small one is never shown after it
+    noSmall: false,        // a context restore: no small picture is shown any more
+  };
+}
 
 /** Put `texture` into one of an Earth's picture slots (field + shader uniforms). */
 function swapEarthPicture(earth, slot, texture) {
@@ -1796,15 +1991,31 @@ export class EarthStripFeeder {
    * Does this bitmap go through strips? Needs: the pixel check passed, more than
    * one strip of rows, a live context, and a size the GPU accepts (a bigger one is
    * shrunk by the one-shot upload; strips would fail on it).
+   * st9: a SMALL picture one strip tall (the 2048×1024 clouds) is taken too, as a single
+   * strip: measured 2026-10-19, its one-shot upload made a 66-147 ms frame in every warm
+   * Chromium run, where a strip of the same size costs a normal frame.
+   * @param {object} bmp
+   * @param {string} [kind]  'small' | 'sharp'
    */
-  accepts(bmp) {
-    return this.verdict === true && !this.broken && !!bmp && bmp.height > stripRows(bmp.width)
+  accepts(bmp, kind) {
+    return this.verdict === true && !this.broken && !!bmp
+      && (bmp.height > stripRows(bmp.width) || (kind === 'small' && bmp.height > 0))
       && this._fitsGpu(bmp) && !this._lost();
   }
 
-  /** Queue a picture; `onReady(finishedTexture)` runs once, after its last strip. */
-  enqueue(tex, bmp, priority, onReady) {
-    this.queue.push({ tex, bmp, priority, onReady, order: this._order++, step: 0, dst: null, src: null, rows: 0, count: 0 });
+  /**
+   * Queue a picture; `onReady(finishedTexture)` runs once, after its last strip.
+   * st9: `meta.kind` ('small' | 'sharp') ranks the job (every small picture is built before any
+   * sharp one) and `meta.level` is the tier the picture was decoded at, recorded NOW (a later
+   * decode into the same slot must not relabel this job's result).
+   * @param {{kind?: string, level?: number}} [meta]
+   */
+  enqueue(tex, bmp, priority, onReady, meta = {}) {
+    this.queue.push({
+      tex, bmp, priority, onReady, order: this._order++, step: 0, dst: null, src: null, rows: 0, count: 0,
+      kind: meta.kind === 'small' ? 'small' : 'sharp',
+      level: meta.level !== undefined ? meta.level : tex.userData.loadedLevel,
+    });
   }
 
   /**
@@ -1816,15 +2027,24 @@ export class EarthStripFeeder {
     if (this.verdict === null && !this._verdictPromise && ++this._ticks >= CHECK_AFTER_TICKS) this.verify();
     if (this._lost()) return false;
     if (!this.active) {
+      // st9: a queued small picture whose sharp one is already shown (or after a restore) is never built
+      for (let i = this.queue.length - 1; i >= 0; i--) {
+        const j = this.queue[i];
+        const sp = j.kind === 'small' && j.tex.userData.strips;
+        if (sp && sp.dropped && sp.dropped()) { this.queue.splice(i, 1); closeBitmap(j.bmp); }
+      }
       if (this.queue.length === 0) return false;
       let sunlit = true;
       try { if (this.sunlit) sunlit = this.sunlit() !== false; } catch (_e) { sunlit = true; }
       // priority: 0 day, 1 clouds, 2 night. Dark side in view: night, day, clouds.
+      // st9: every small picture comes before any sharp one (a whole Earth first), then by priority.
       const rank = (p) => (sunlit ? p : (p === 2 ? 0 : p + 1));
+      const stage = (j) => (j.kind === 'small' ? 0 : 1);
       let best = 0;
       for (let i = 1; i < this.queue.length; i++) {
         const a = this.queue[i], b = this.queue[best];
-        if (rank(a.priority) < rank(b.priority) || (rank(a.priority) === rank(b.priority) && a.order < b.order)) best = i;
+        if (stage(a) < stage(b)
+          || (stage(a) === stage(b) && (rank(a.priority) < rank(b.priority) || (rank(a.priority) === rank(b.priority) && a.order < b.order)))) best = i;
       }
       this.active = this.queue.splice(best, 1)[0];
       this.active.sunlit = sunlit;
@@ -1902,8 +2122,11 @@ export class EarthStripFeeder {
     dst.userData.uploadedHeight = job.height;
     dst.userData.stripBuilt = true;
     dst.userData.pending = tex;
-    dst.userData.loadedLevel = tex.userData.loadedLevel; // st8
-    dst.userData.keeper = tex.userData.keeper;
+    // st8/st9: the tier and the owner of this result are the ones recorded when the job was queued
+    // (never read from the slot's texture now: another decode may have changed it since).
+    dst.userData.loadedLevel = job.level;
+    dst.userData.stage = job.kind;
+    if (job.kind !== 'small') dst.userData.keeper = tex.userData.keeper; // a small picture never counts as "complete"
     const file = tex.userData.src.initialPath;
     console.log(`[Earth] Ready: ${file} (${job.width}×${job.height}, ${job.count} strips of ${job.rows} rows, camera over the ${job.sunlit === false ? 'dark' : 'sunlit'} side when it started)`);
     recordTexEvent('ready', file, { width: job.width, height: job.height });
@@ -1911,13 +2134,25 @@ export class EarthStripFeeder {
     try { job.onReady(dst); } catch (e) { console.error('[Earth] onReady failed', e); }
   }
 
+  /**
+   * Upload a queued picture in one go (the strips cannot be used). st9: a small picture is not
+   * worth a heavy upload and is dropped (the sharp one comes alone); a sharp one of an Earth
+   * goes through its one-shot hook (a new texture, blended in), any other into its own texture.
+   */
+  _oneShot(job) {
+    if (job.kind === 'small') { closeBitmap(job.bmp); return; }
+    const sp = job.tex.userData.strips;
+    if (sp && sp.onOneShot) sp.onOneShot(job.tex, job.bmp, false, job.level);
+    else setEarthImage(job.tex, job.bmp);
+  }
+
   /** A strip failed: free the half-built texture and upload the bitmap in one go instead. */
   _giveUp(job) {
     this.active = null;
     try { job.dst && job.dst.dispose(); } catch (_e) { /* best effort */ }
-    try { setEarthImage(job.tex, job.bmp); } catch (e) { console.error('[Earth] one-shot fallback failed', e); }
+    try { this._oneShot(job); } catch (e) { console.error('[Earth] one-shot fallback failed', e); }
     const rest = this.queue.splice(0);
-    for (const j of rest) { try { setEarthImage(j.tex, j.bmp); } catch (_e) { /* best effort */ } }
+    for (const j of rest) { try { this._oneShot(j); } catch (_e) { /* best effort */ } }
   }
 
   /**
@@ -2197,20 +2432,43 @@ export class Earth {
     // per frame (priority day, clouds, night) and swapped in when complete.
     this._camPos = new THREE.Vector3();
     this._camSeen = false;
+    this._renderer = (options && options.renderer) || null;
     this._strips = options && stripsUsable(options.renderer)
       ? new EarthStripFeeder(options.renderer, { sunlit: () => this._cameraOverSunlitSide() })
       : null;
-    const strips = (slot, priority) => (this._strips
-      ? { feeder: this._strips, priority, onReady: (t) => this._setPicture(slot, t) }
-      : null);
+    // st9: the picture state per slot exists before any picture is asked for (arrivals call back into it).
+    this._pics = {};
+    // The staging hook of one picture (st6 strips + st9 stages): where its result goes.
+    // kind 'sharp' = the tier's own picture, 'small' = the base-tier picture shown first.
+    const hook = (slot, priority, kind) => ({
+      kind, slot, priority,
+      feeder: this._strips,
+      onReady: (t) => this._setPicture(slot, t, kind),
+      onOneShot: (tex, image, flipY, level) => this._oneShotPicture(slot, kind, tex, image, flipY, level),
+      dropped: kind === 'small' ? () => this._smallDropped(slot) : null,
+      // no strips on this browser: decode the small picture small enough for one frame
+      decodeExtra: kind === 'small' && !this._strips ? SMALL_ONE_SHOT_DECODE : undefined,
+    });
     // st8 D4: stores the 16k files for offline once both are on screen (nothing below 16k / on touch).
+    // (The sharp pictures are asked for in this order; the small ones follow below and are
+    // DISPATCHED ahead of them once the first frame is drawn, see afterFirstFrame.)
     this._offline = new EarthOfflineKeeper();
-    this.dayTexture = loadTexture(`textures/earth_day${texSuffix}.jpg`, texAniso, strips('dayTexture', 0), this._offline);
-    this.nightTexture = loadTexture(`textures/earth_night${nightSuffix}.jpg`, texAniso, strips('nightTexture', 2), this._offline);
+    this.dayTexture = loadTexture(`textures/earth_day${texSuffix}.jpg`, texAniso, hook('dayTexture', 0, 'sharp'), this._offline);
+    this.nightTexture = loadTexture(`textures/earth_night${nightSuffix}.jpg`, texAniso, hook('nightTexture', 2, 'sharp'), this._offline);
     // Clouds are low-frequency; anisotropy cost concentrates at grazing angles
     // (the limb) where clouds are softest — 4x is indistinguishable from the tier
     // aniso and trims bandwidth on the overdraw-heaviest (transparent) layer.
-    this.cloudTexture = loadTexture(`textures/earth_clouds${cloudSuffix}.jpg`, Math.min(texAniso, 4), strips('cloudTexture', 1));
+    this.cloudTexture = loadTexture(`textures/earth_clouds${cloudSuffix}.jpg`, Math.min(texAniso, 4), hook('cloudTexture', 1, 'sharp'));
+    this._pics.dayTexture = newPictureState(this.dayTexture);
+    this._pics.nightTexture = newPictureState(this.nightTexture);
+    this._pics.cloudTexture = newPictureState(this.cloudTexture);
+    // st9 D1: above the base tier each slot shows its base-tier picture first (never at the base
+    // tier or with ?tex=base: there is nothing smaller). Order = the strip order (day, clouds, night).
+    if (smallFirstOn) {
+      if (texSuffix) this._pics.dayTexture.small = loadTexture('textures/earth_day.jpg', texAniso, hook('dayTexture', 0, 'small'));
+      if (cloudSuffix && !profileFlags.disableClouds) this._pics.cloudTexture.small = loadTexture('textures/earth_clouds.jpg', Math.min(texAniso, 4), hook('cloudTexture', 1, 'small'));
+      if (nightSuffix) this._pics.nightTexture.small = loadTexture('textures/earth_night.jpg', texAniso, hook('nightTexture', 2, 'small'));
+    }
     // st3 D4: bitmaps are closed after upload; reload them after a lost context.
     if (options && options.renderer) attachEarthRestore(this, options.renderer);
 
@@ -2239,23 +2497,202 @@ export class Earth {
   }
 
   /**
-   * st6: a picture built in strips is complete — hand it to the shaders and to
-   * `earth.dayTexture` / `nightTexture` / `cloudTexture` (BlackFrameProbe reads
-   * them) in one step. The cloud picture sits in two uniforms; the cloud shell
-   * is null under `?disableClouds=1`.
+   * A picture of a slot is ready (uploaded): hand it to the shaders, blended in.
+   * st6: a picture built in strips; st9: also a one-shot picture (a new texture) and the SMALL picture.
+   * A sharp one is also `earth.dayTexture` / `nightTexture` / `cloudTexture` (BlackFrameProbe reads
+   * them) at once; a small one never is. The cloud picture sits in two uniforms; the cloud shell is
+   * null under `?disableClouds=1`.
    * @param {'dayTexture'|'nightTexture'|'cloudTexture'} slot
    * @param {THREE.Texture} texture
+   * @param {'sharp'|'small'} [kind='sharp']
    */
-  _setPicture(slot, texture) {
-    this[slot] = texture;
-    // st8 D4: a picture finished through strips (not the empty one put back by a restore).
-    if (texture && texture.userData && texture.userData.stripBuilt) notePictureComplete(texture);
+  _setPicture(slot, texture, kind = 'sharp') {
+    const st = this._pics && this._pics[slot];
+    const small = kind === 'small';
+    if (!st) {
+      // No picture state (a partial object in a test, or an Earth that is not finished building): the plain swap.
+      this[slot] = texture;
+      if (texture && texture.userData && texture.userData.stripBuilt) notePictureComplete(texture);
+      const surface = this.surfaceMaterial && this.surfaceMaterial.uniforms;
+      if (slot === 'dayTexture' && surface) surface.uDayTexture.value = texture;
+      else if (slot === 'nightTexture' && surface) surface.uNightTexture.value = texture;
+      else if (slot === 'cloudTexture') {
+        if (surface) surface.uCloudTexture.value = texture;
+        if (this.cloudMaterial) this.cloudMaterial.uniforms.uCloudTexture.value = texture;
+      }
+      return;
+    }
+    if (small && (st.sharpSeen || st.noSmall)) {
+      // finished after the sharp picture (or after a context restore): never shown
+      disposeTexture(texture);
+      console.log(`[Earth] small ${slot} dropped (finished too late)`);
+      return;
+    }
+    if (!small) {
+      st.sharpSeen = true;
+      this[slot] = texture;
+      // st8 D4: a picture finished through strips (not the empty one put back by a restore); a small one never counts.
+      if (texture && texture.userData && texture.userData.stripBuilt) notePictureComplete(texture);
+    }
+    this._pushPicture(slot, texture);
+  }
+
+  /** st9: has the small picture of this slot become useless (the sharp one was shown, or a restore happened)? */
+  _smallDropped(slot) {
+    const st = this._pics && this._pics[slot];
+    return !!st && (st.sharpSeen === true || st.noSmall === true);
+  }
+
+  /**
+   * st9 D2 (one-shot route and fallbacks): the decoded picture goes into a NEW texture that is
+   * uploaded first, then shown (blended in). The loading handle `pending` is never uploaded, so the
+   * picture on screen is never disposed under the blend, and `earth.*Texture` never points at a
+   * texture that has not reached the GPU.
+   * @param {'dayTexture'|'nightTexture'|'cloudTexture'} slot
+   * @param {'sharp'|'small'} kind
+   * @param {THREE.Texture} pending  the loading handle the picture was asked for with
+   * @param {ImageBitmap|HTMLImageElement} image
+   * @param {boolean} flipY  true for an HTML image (a bitmap is flipped by the decoder)
+   * @param {number} level  the tier the picture was decoded at, recorded at arrival
+   */
+  _oneShotPicture(slot, kind, pending, image, flipY = false, level = pending.userData.loadedLevel) {
+    if (kind === 'small' && this._smallDropped(slot)) { closeBitmap(image); return; }
+    const t = new THREE.Texture(image);
+    t.colorSpace = pending.colorSpace;
+    t.flipY = flipY === true;
+    t.anisotropy = pending.anisotropy;
+    t.minFilter = pending.minFilter;
+    t.magFilter = pending.magFilter;
+    t.wrapS = pending.wrapS;
+    t.wrapT = pending.wrapT;
+    t.generateMipmaps = true;
+    t.onUpdate = onEarthTextureUpdate; // closes the bitmap after the upload; tells the keeper (sharp only)
+    t.userData.src = pending.userData.src;
+    t.userData.pending = pending;
+    t.userData.loadedLevel = level;
+    t.userData.stage = kind;
+    t.userData.picW = image.width; // the bitmap is closed after the upload; keep its size for the log
+    t.userData.picH = image.height;
+    if (kind !== 'small') t.userData.keeper = pending.userData.keeper;
+    t.needsUpdate = true;
+    // Upload now (the cost lands here, outside the render, exactly as the same upload did inside it before).
+    try {
+      if (this._renderer && typeof this._renderer.initTexture === 'function') this._renderer.initTexture(t);
+    } catch (e) {
+      console.warn('[Earth] early upload failed; it will upload at the first draw', e);
+    }
+    this._setPicture(slot, t, kind);
+  }
+
+  /**
+   * st9 D2: a new picture takes the newest place of its slot; the blend runs from what is on screen
+   * right now (also when another blend is still running: the weights continue, nothing jumps).
+   */
+  _pushPicture(slot, texture) {
+    const st = this._pics[slot];
+    const now = nowMs();
+    const cur = this._weightsAt(st, now);
+    const [la, lb, lc] = st.layers;
+    // The oldest picture falls off (a third arrival inside one blend; its share goes to the next).
+    if (la.real) disposeTexture(la.tex);
+    const fa = lb.real ? cur[1] + (la.real ? cur[0] : 0) : 0;
+    const fb = lc.real ? cur[2] : 0;
+    st.layers = [lb.real ? lb : EMPTY_LAYER, lc.real ? lc : EMPTY_LAYER, { tex: texture, real: true }];
+    st.from = [fa, fb, 0];
+    st.w = [fa, fb, 0];
+    st.t0 = now;
+    st.active = true;
+    this._applyPicture(slot);
+    const ud = texture.userData || {};
+    const file = ud.src ? ud.src.initialPath : slot;
+    const dims = { width: ud.uploadedWidth || ud.picW || 0, height: ud.uploadedHeight || ud.picH || 0 };
+    console.log(`[Earth] On screen (blending in over ${EARTH_BLEND_MS} ms): ${file} (${dims.width}×${dims.height})`);
+    recordTexEvent('shown', file, dims);
+    bootMark(`Earth picture on screen: ${String(file).split('/').pop()} (${dims.width}×${dims.height})`);
+  }
+
+  /** The weights [oldest, previous, newest] of a slot at time `now`. */
+  _weightsAt(st, now) {
+    if (!st.active) return st.w;
+    const e = blendEase((now - st.t0) / EARTH_BLEND_MS);
+    const k = 1 - e;
+    return [st.from[0] * k, st.from[1] * k, st.from[2] * k + e];
+  }
+
+  /** Write a slot's layers and weights into every uniform that shows it. */
+  _applyPicture(slot) {
+    const st = this._pics[slot];
+    const P = PICTURE_STEM[slot];
+    const [a, b, c] = st.layers;
     const surface = this.surfaceMaterial && this.surfaceMaterial.uniforms;
-    if (slot === 'dayTexture' && surface) surface.uDayTexture.value = texture;
-    else if (slot === 'nightTexture' && surface) surface.uNightTexture.value = texture;
-    else if (slot === 'cloudTexture') {
-      if (surface) surface.uCloudTexture.value = texture;
-      if (this.cloudMaterial) this.cloudMaterial.uniforms.uCloudTexture.value = texture;
+    const targets = [surface];
+    if (slot === 'cloudTexture') targets.push(this.cloudMaterial && this.cloudMaterial.uniforms);
+    for (const u of targets) {
+      if (!u) continue;
+      setUniformValue(u, `u${P}Texture`, c.tex);
+      setUniformValue(u, `u${P}Prev`, b.tex);
+      setUniformValue(u, `u${P}Prev2`, a.tex);
+      setWeights(u, `u${P}W`, st.w);
+    }
+    if (slot === 'dayTexture' && surface) {
+      // how much of the day picture is a real picture (the ocean shine follows it); exactly 1 when whole
+      let vis = 0;
+      if (a.real) vis += st.w[0];
+      if (b.real) vis += st.w[1];
+      if (c.real) vis += st.w[2];
+      setUniformValue(surface, 'uDayVis', vis > 1 ? 1 : vis);
+    }
+  }
+
+  /** st9: move every running blend forward to `now` (called from tickStrips, so also while unfocused). */
+  _advanceBlends(now) {
+    if (!this._pics) return;
+    for (const slot of PICTURE_SLOTS) {
+      const st = this._pics[slot];
+      if (!st || !st.active) continue;
+      if ((now - st.t0) / EARTH_BLEND_MS >= 1) {
+        // done: only the newest picture is left, the others go (each is disposed exactly once)
+        for (const l of st.layers) if (l.real && l !== st.layers[2]) disposeTexture(l.tex);
+        st.layers = [EMPTY_LAYER, EMPTY_LAYER, st.layers[2]];
+        st.w = [0, 0, 1];
+        st.from = [0, 0, 1];
+        st.active = false;
+      } else {
+        st.w = this._weightsAt(st, now);
+      }
+      this._applyPicture(slot);
+    }
+  }
+
+  /**
+   * st9: a lost graphics context. Everything shown in the slot is gone (the strip results lost their
+   * GPU memory; a one-shot picture's bitmap is closed): dispose it all, show nothing (black, then
+   * the sharp picture blends in when it has been loaded again).
+   * @returns {{pending: THREE.Texture, shown: boolean}|null}  the loading handle, and whether a
+   *   sharp picture had been shown (then it must be loaded again)
+   */
+  _resetPicture(slot) {
+    const st = this._pics && this._pics[slot];
+    if (!st) return null;
+    for (const l of st.layers) if (l.real) disposeTexture(l.tex);
+    const shown = st.sharpSeen === true;
+    st.layers = [EMPTY_LAYER, EMPTY_LAYER, { tex: st.pending, real: false }];
+    st.w = [0, 0, 1];
+    st.from = [0, 0, 1];
+    st.active = false;
+    st.sharpSeen = false;
+    this[slot] = st.pending;
+    this._applyPicture(slot);
+    return { pending: st.pending, shown };
+  }
+
+  /** st9: after a restore no small picture is shown again; one still being decoded is dropped on arrival. */
+  _dropSmallPictures() {
+    for (const slot of PICTURE_SLOTS) {
+      const st = this._pics && this._pics[slot];
+      if (!st) continue;
+      st.noSmall = true;
+      if (st.small) st.small.userData.loadSeq = (st.small.userData.loadSeq || 0) + 1;
     }
   }
 
@@ -2275,6 +2712,7 @@ export class Earth {
   tickStrips() {
     noteFirstFrame(); // st8: the decode worker starts after the first frame
     if (this._strips) this._strips.tick();
+    this._advanceBlends(nowMs()); // st9: the picture blends run on the real clock, with or without dt
   }
 
   // --- SURFACE SPHERE (tier-tessellated: 256² top tier … 96² base — Task 3b) ---
@@ -2286,9 +2724,20 @@ export class Earth {
       vertexShader: earthSurfaceVertexShader,
       fragmentShader: earthSurfaceFragmentShader,
       uniforms: {
+        // st9: newest picture, the two before it, their weights (see the shader). Start: the empty handle alone.
         uDayTexture: { value: this.dayTexture },
+        uDayPrev: { value: EMPTY_TEXTURE },
+        uDayPrev2: { value: EMPTY_TEXTURE },
+        uDayW: { value: new THREE.Vector3(0, 0, 1) },
+        uDayVis: { value: 0 },
         uNightTexture: { value: this.nightTexture },
+        uNightPrev: { value: EMPTY_TEXTURE },
+        uNightPrev2: { value: EMPTY_TEXTURE },
+        uNightW: { value: new THREE.Vector3(0, 0, 1) },
         uCloudTexture: { value: this.cloudTexture },
+        uCloudPrev: { value: EMPTY_TEXTURE },
+        uCloudPrev2: { value: EMPTY_TEXTURE },
+        uCloudW: { value: new THREE.Vector3(0, 0, 1) },
         uCloudRotation: { value: 0 },
         uSunDirection: { value: this.sunDirection },
       },
@@ -2384,6 +2833,9 @@ export class Earth {
       fragmentShader: cloudFragmentShader,
       uniforms: {
         uCloudTexture: { value: this.cloudTexture },
+        uCloudPrev: { value: EMPTY_TEXTURE },
+        uCloudPrev2: { value: EMPTY_TEXTURE },
+        uCloudW: { value: new THREE.Vector3(0, 0, 1) },
         uSunDirection: { value: this.sunDirection },
       },
       transparent: true,
