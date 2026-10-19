@@ -1551,22 +1551,9 @@ export class GameFlowManager {
           }
         }, 3600, { owner: this });
 
-        // One-time label hint — labels default ON, so tell first-timers how to
-        // hide them. Only shown when labels are actually visible AND the player
-        // has never toggled them (hasStoredPreference false = never pressed 5).
-        // Delayed to 14 s so it lands AFTER the opening arc (contacts 3.6 s →
-        // launch cameo 7 s) instead of interrupting it.
-        timerManager.setTimeout(() => {
-          if (this._firstTimeComms.has('orbital_view_labels')) return;
-          this._firstTimeComms.add('orbital_view_labels');
-          if (cityLabels.isVisible() && !cityLabels.hasStoredPreference()) {
-            eventBus.emit(Events.COMMS_MESSAGE, {
-              sender: 'SPACECRAFT',
-              text: 'Place names are on your Earth view. Press 5 to hide them.',
-              priority: 'info',
-            });
-          }
-        }, 14000, { owner: this });
+        // u5-info-ap-hold D6: the one-time "Place names are on your Earth view. Press 5 to hide them."
+        // line is gone (coordinator decision 2026-10-19): it names a key on a keyless device and sat
+        // between the wings and the scan as noise. The 5 key stays in the Help list.
 
         // Launch cameo — a single plume rises from the player's home spaceport
         // during the opening pass. The pad may not be above the horizon at the

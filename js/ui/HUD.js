@@ -1962,6 +1962,8 @@ export class HUD {
    * Write-on-change; polled from the 10 Hz block too, so a floor or mission change lands.
    */
   _syncInfoGate() {
+    // u5 D1: the target info draws its two-line simple form on the same gate as the Targets list.
+    if (this.debrisWireframe && typeof this.debrisWireframe.setSimple === 'function') this.debrisWireframe.setSimple(this.isSimpleTargets());
     const el = this._wireframeContainerEl;
     if (!el || !el.setAttribute) return;
     // The value says why it waits: '' = the first scan, 'analyse' = the player's Z (DebrisWireframe's 9-key line reads it).

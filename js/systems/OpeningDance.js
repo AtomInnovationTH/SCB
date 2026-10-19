@@ -213,6 +213,8 @@ class OpeningDance {
    */
   start(opts) {
     if (!this.enabled) return;
+    // u5-info-ap-hold D3: comms holds the start's lines until the hand-over (a disabled dance never holds).
+    eventBus.emit(Events.COMMS_HOLD, {});
     const t0Ms = (opts && Number.isFinite(opts.t0Ms))
       ? opts.t0Ms
       : this._now() + OD.BEAT_JETOFF * OD.MENU_DEPARTURE_MS;
@@ -427,6 +429,9 @@ class OpeningDance {
       this._ship = null;
     }
     this._skipStartMs = null;   // the fade is over (if any)
+    // u5-info-ap-hold D3: comms opens FIRST (the held boot lines enter the log in order), then the hand-over
+    // listeners post "Powering up ..." and the battery line, which stay the last two. Never rely on listener order.
+    eventBus.emit(Events.COMMS_RELEASE, {});
     eventBus.emit(Events.OPENING_DANCE_HANDOVER, { t: T_HANDOVER_S });
     // ONE short Houston line at hand-over (decision 12) — normal priority, no
     // force, distinct from the onboarding boot beat that fires on the event.
@@ -547,6 +552,8 @@ class OpeningDance {
     // and idempotent; callers that mean to KEEP the dance must not call this
     // (GameFlowManager.resetGame's `keepOpeningDance`).
     this._abort();
+    // u5-info-ap-hold D3: a start without the dance (CONTINUE, retry) opens comms before its own line.
+    eventBus.emit(Events.COMMS_RELEASE, {});
     if (!ship) return;
     if (typeof ship.setLaunchSequence === 'function') ship.setLaunchSequence(null);
     // Radiator: the REST pose (CLOSED) via the ship's own snap (clears any

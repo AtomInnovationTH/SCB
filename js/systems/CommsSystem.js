@@ -24,6 +24,8 @@ import { daughterDisplayName } from '../core/daughterNames.js';
 
 /** Maximum messages retained in log */
 const MAX_MESSAGES = 20;
+/** u5 D3: a shut start-up gate opens itself after this many seconds of updates (the safety). */
+const HOLD_SAFETY_S = 20;
 
 /** Message priorities */
 export const CommsPriority = {
@@ -405,10 +407,23 @@ export class CommsSystem {
     // for ~60 s. Without onboarding, steady-state tier 3 is correct.
     this._onboardingWasRun = false;
 
+    // u5-info-ap-hold D3: the start's lines are HELD until comms can be seen. The gate is open by
+    // default (tests, ladder-off boots and every later moment are unchanged); OpeningDance shuts it
+    // with COMMS_HOLD and opens it with COMMS_RELEASE just before the hand-over. Only the start:
+    // later floor-1 visits behave as before (comms keeps its buffer and shows it on return).
+    this._gateOpen = true;
+    this._held = [];                 // msg objects waiting behind a shut gate (never in `messages`)
+    this._holdElapsedS = 0;          // real seconds the gate has been shut (the safety)
+
     this._setupEventListeners();
 
     // Self-reset via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.GAME_RESET, () => this.reset());
+
+    // u5 D3: the start-up hold. GAME_RESET / reset() leave a shut gate shut and keep the held list
+    // (GAME_RESET can arrive after the hold began).
+    if (Events.COMMS_HOLD) eventBus.on(Events.COMMS_HOLD, () => this._shutGate());
+    if (Events.COMMS_RELEASE) eventBus.on(Events.COMMS_RELEASE, () => this._openGate());
 
     // CP-4 suppression tiers — onboarding drops to tier 0; completion begins the
     // graduated wake ramp. (Non-onboarding play stays at the default tier 3.)
@@ -467,6 +482,23 @@ export class CommsSystem {
       // onboarding gate). Tag bypasses (_critical/_onboarding/_postOnboarding/
       // _lassoFeedback) + CRITICAL priority are honoured in the pure helper.
       if (!messagePassesSuppression(this._suppressionTier, channel, data, data.priority)) {
+        return;
+      }
+
+      // u5 D3: behind a shut gate the line waits (no log, no callback, no sound, no summary).
+      if (!this._gateOpen) {
+        this._hold({
+          id: this._nextId++,
+          timestamp: this._clockStamp(),
+          source: src,
+          text: data.text,
+          priority: data.priority || CommsPriority.INFO,
+          channel,
+          age: 0,
+          // As on the normal post path below: the beat id and the SPECS link ride with the line.
+          onboardingBeatId: data._onboardingBeatId,
+          link: sanitizeCommsLink(data.link),
+        }, data._critical === true || data._reactive === true);
         return;
       }
 
@@ -775,6 +807,11 @@ export class CommsSystem {
    * @param {object} [gameData] - Optional game state reference
    */
   update(dt, gameData) {
+    // u5 D3: the safety - a gate left shut (a start that never reached its hand-over) opens itself.
+    if (!this._gateOpen) {
+      this._holdElapsedS += dt;
+      if (this._holdElapsedS >= HOLD_SAFETY_S) this._openGate();
+    }
     if (!this._active) return;
 
     const gameDt = dt * TimeAuthority.BASE_SCALE;
@@ -938,6 +975,17 @@ export class CommsSystem {
       return;
     }
 
+    // u5 D3: behind a shut gate the line waits (no log, no callback, no sound, no summary). The
+    // internal event still fires as today (other systems read it).
+    if (!this._gateOpen) {
+      const held = {
+        id: this._nextId++, timestamp: this._clockStamp(), source, text, priority, channel, age: 0,
+      };
+      this._hold(held, !!extra && (extra._critical === true || extra._reactive === true));
+      eventBus.emit(Events.COMMS_MESSAGE, { ...held, _internal: true });
+      return;
+    }
+
     const now = new Date();
     const timestamp = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
     const nowMs = Date.now();
@@ -1002,6 +1050,53 @@ export class CommsSystem {
     eventBus.emit(Events.COMMS_MESSAGE, { ...msg, _internal: true });
   }
 
+  // ==========================================================================
+  // u5-info-ap-hold D3 - the start-up hold
+  // ==========================================================================
+
+  /** @private HH:MM:SS of now (the log's stamp). */
+  _clockStamp() {
+    const now = new Date();
+    return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+  }
+
+  /** @private Park a built message behind the shut gate (bounded: the oldest falls off). */
+  _hold(msg, keep) {
+    if (keep) msg.keep = true;
+    this._held.push(msg);
+    while (this._held.length > MAX_MESSAGES) this._held.shift();
+  }
+
+  /** @private COMMS_HOLD: shut the gate. Idempotent; restarts the safety clock. */
+  _shutGate() {
+    this._gateOpen = false;
+    this._holdElapsedS = 0;
+  }
+
+  /**
+   * @private COMMS_RELEASE (or the safety): open the gate. The held lines go into the log in order,
+   * silently (no sound, no callback) and without a coalesce summary, ahead of anything posted after the
+   * open. Idempotent.
+   */
+  _openGate() {
+    if (this._gateOpen) return;
+    this._gateOpen = true;
+    this._holdElapsedS = 0;
+    const held = this._held;
+    this._held = [];
+    for (const msg of held) this.messages.push(msg);
+    while (this.messages.length > MAX_MESSAGES) this.messages.shift();
+    // Repaint the panel now (a timeout / endState release has no post after it to do that). Text-less, so
+    // no other listener records it; the HUD's COMMS_MESSAGE route calls commsPanel.onMessage as usual.
+    if (held.length) eventBus.emit(Events.COMMS_MESSAGE, { _internal: true, _repaint: true });
+  }
+
+  /** @returns {boolean} false while the start-up hold is shut. */
+  isGateOpen() { return this._gateOpen; }
+
+  /** @returns {number} lines waiting behind the gate. */
+  heldCount() { return this._held.length; }
+
   /**
    * Get all messages (newest last).
    * @returns {Array}
@@ -1044,6 +1139,9 @@ export class CommsSystem {
   reset() {
     this.messages = [];
     this._nextId = 0;
+    // u5 D3: a shut gate stays shut and keeps its held lines (GAME_RESET can arrive after the hold
+    // began); renumber them so they cannot collide with ids handed out after the reset.
+    for (const m of this._held) m.id = this._nextId++;
     this._gameTime = 0;
     this._nextFlavorTime = this._randomFlavorInterval();
     this._nextLaunchTime = 180 + Math.random() * 300;

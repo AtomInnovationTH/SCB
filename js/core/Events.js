@@ -252,6 +252,10 @@ export const Events = {
   COMMS_SEND:         'comms:send',
   COMMS_SOLAR_STORM:  'comms:solarStorm',
   COMMS_GEO_STORM:    'comms:geoStorm',
+  // u5-info-ap-hold D3: the start's lines wait until comms can be seen. OpeningDance.start() emits HOLD;
+  // OpeningDance (just before OPENING_DANCE_HANDOVER, and in endState) and OnboardingDirector (veteran skip) emit RELEASE.
+  COMMS_HOLD:         'comms:hold',
+  COMMS_RELEASE:      'comms:release',
 
   // === COMMS UI (ST-5.1) ===
   COMMS_FOCUS:            'comms:focus',           // C-tap → expand pane

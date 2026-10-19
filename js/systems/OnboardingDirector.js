@@ -435,6 +435,8 @@ export class OnboardingDirector {
     if (this._checkVeteranSkip()) {
       this._mastered = true;
       this._persist();
+      // u5-info-ap-hold D3: a veteran has no hand-over beat - comms opens here if a start still held it.
+      this._emit(Events.COMMS_RELEASE, {});
       this._emit(Events.ONBOARDING_COMPLETE, {});
       return;
     }

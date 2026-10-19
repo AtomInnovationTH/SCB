@@ -106,6 +106,25 @@ const _normalizeMilestones = (arr) => {
 /** Short screens: the slider's visual-band bottom (px), bottom centre. */
 const SHORT_BOTTOM_PX = 8;
 
+/**
+ * u5-info-ap-hold D7: where the slider sits on a SHORT screen (phone sideways), in CSS px, built from
+ * the same numbers `_applyPlacement` / `_build` use: bottom centre, `SHORT_BOTTOM_PX` above the screen
+ * bottom (the visual band), width = track + side padding, height = the 44 px glass box or the footer
+ * band. main.js `_edgeBandWake` reads it so a tap on the slider's own spot wakes it.
+ * @param {number} viewW  innerWidth
+ * @param {number} viewH  innerHeight
+ * @param {boolean} glass  touch device (the 44 px hit box)
+ * @returns {{left:number, top:number, right:number, bottom:number, width:number, height:number}}
+ */
+export function shortSliderRect(viewW, viewH, glass) {
+  const pad = glass ? (RAIL_GEOMETRY.TOUCH_PITCH_PX - RAIL_GEOMETRY.FOOTER_BAND_PX) / 2 : 0;
+  const height = glass ? RAIL_GEOMETRY.TOUCH_PITCH_PX : RAIL_GEOMETRY.FOOTER_BAND_PX;
+  const width = TRACK_WIDTH_PX + 2 * SIDE_PAD_PX;
+  const bottom = viewH - (SHORT_BOTTOM_PX - pad);
+  const left = viewW / 2 - width / 2;
+  return { left, top: bottom - height, right: left + width, bottom, width, height };
+}
+
 export class DetailSlider {
   /**
    * @param {object} [deps]

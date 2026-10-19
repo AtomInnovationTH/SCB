@@ -126,13 +126,14 @@ import { resolveSubject as resolveSpecsSubject } from './systems/SpecsSubject.js
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
-import { DetailSlider } from './ui/DetailSlider.js';
+import { DetailSlider, shortSliderRect } from './ui/DetailSlider.js';
+import { isShortScreen } from './ui/hud/PhoneFold.js';
 import { CargoPane } from './ui/hud/CargoPane.js';
 import * as LeftStack from './ui/hud/LeftStack.js';
 import { OverridePane } from './ui/hud/OverridePane.js';
 import { HudReboot } from './ui/hud/HudReboot.js';
 import { OrbitPane, ORBIT_GEOMETRY } from './ui/hud/OrbitPane.js';
-import { FmaStrip } from './ui/hud/FmaStrip.js';
+import { FmaStrip, DaughtersFoldKeeper } from './ui/hud/FmaStrip.js';
 import { NextPane } from './ui/hud/NextPane.js';
 import { CopilotVoice } from './systems/CopilotVoice.js';
 import { GestureSplash } from './ui/GestureSplash.js';
@@ -890,6 +891,17 @@ function _edgeBandWake(x, y, nowMs) {
     edgeChrome.wake('slider', t); edgeChrome.wake('tab', t);
     hit = hit ? `${hit}+footer` : 'footer';
   }
+  // u5-info-ap-hold D7: on a short screen (phone sideways) the slider sits bottom centre, off every band
+  // above, so a tap on its own spot (grown 16 px each side) wakes it. Tall screens: unchanged. The globals
+  // are guarded (test-EdgeChrome evaluates this function's source in a sandbox).
+  if (typeof isShortScreen === 'function' && typeof shortSliderRect === 'function' && isShortScreen(h)) {
+    const r = shortSliderRect(w, h, typeof _glassBoot !== 'undefined' && !!_glassBoot);
+    const grow = 16;
+    if (x >= r.left - grow && x <= r.right + grow && y >= r.top - grow && y <= r.bottom + grow) {
+      edgeChrome.wake('slider', t);
+      if (!hit || hit.indexOf('footer') < 0) hit = hit ? `${hit}+slider` : 'slider';
+    }
+  }
   return hit;
 }
 /**
@@ -902,6 +914,7 @@ function _edgeBandWake(x, y, nowMs) {
  */
 let _leftColBottom = null;
 let _leftColAt = -Infinity;
+const _daughtersFold = new DaughtersFoldKeeper();   // u5 D2: folds / gives back DAUGHTERS for the flying strip
 const _LEFT_COL_MS = 1000;
 function _leftColumnBottom(nowMs) {
   if (nowMs - _leftColAt < _LEFT_COL_MS) return _leftColBottom;
@@ -2832,7 +2845,13 @@ async function init() {
     fmaStrip = new FmaStrip({
       fma: () => ((autopilotSystem && autopilotSystem.fmaState) ? autopilotSystem.fmaState() : null),
       onPhaseChange: (prev, next, state) => { if (copilotVoice) copilotVoice.phase(prev, next, state); },
+      // u5-info-ap-hold D2: floor 2 shows the strip while the autopilot flies, in plain words at the simple level.
+      floor: () => (ladderFloorMask && ladderFloorMask.getAppliedFloor ? ladderFloorMask.getAppliedFloor() : null),
+      simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),
     });
+    // The strip holds no listener (test-FmaStrip pins that): the hub tells it at once, not at the next 1 s poll.
+    eventBus.on(Events.AUTOPILOT_ENGAGE, () => { if (fmaStrip) fmaStrip.setFlying(true); });
+    eventBus.on(Events.AUTOPILOT_DISENGAGE, () => { if (fmaStrip) fmaStrip.setFlying(false); });
     nextPane = new NextPane({
       glass: _glassBoot,
       // Rev 3 Task 6 (locked #5): NEXT is the right arm's LAST column child
@@ -2928,11 +2947,17 @@ async function init() {
         },
         {
           id: 'copilot',
-          hidden: () => !(hud && typeof hud.isRungVisible === 'function' && hud.isRungVisible('copilot')),
+          // u5 D2: the strip held on screen by the autopilot flying on floor 2 takes its room under the last visible pane.
+          hidden: () => !((fmaStrip && fmaStrip.isFlyingShown && fmaStrip.isFlyingShown())
+            || (hud && typeof hud.isRungVisible === 'function' && hud.isRungVisible('copilot'))),
           naturalPx: () => fmaStrip.naturalPx(),
           compactPx: () => null,
           minPx: () => null,
-          apply: (top, height, mode) => { if (fmaStrip && fmaStrip.setStack) fmaStrip.setStack(top, height, mode); },
+          apply: (top, height, mode) => {
+            if (fmaStrip && fmaStrip.setStack) fmaStrip.setStack(top, height, mode);
+            // u5 D2: no room on a short screen = DAUGHTERS folds, once per flight (the keeper, stepped each frame below).
+            _daughtersFold.setMode(mode);
+          },
         },
         {
           id: 'pin',
@@ -6718,6 +6743,8 @@ function gameLoop(timestamp) {
   // HUD column's cached bottom + GAP; floor is the footer band − GAP. Skip
   // when the column is unlaid (null ceiling) so riders do not flash-hide.
   if (_ladderActive && _leftRiders) {
+    // u5 D2: before the layout, so a fold / give-back is seen by it this frame.
+    if (fmaStrip && _daughtersFold.step(fmaStrip.isFlyingShown(), hud && hud.statusPanel)) _leftColAt = -Infinity;   // re-read the column bottom now
     const _leftCeil = _leftColumnBottom(timestamp);
     if (_leftCeil != null) {
       LeftStack.layout({

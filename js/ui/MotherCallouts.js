@@ -862,6 +862,20 @@ function staggerOutlineLayers(self, out) {
   }
 }
 
+/**
+ * u5-info-ap-hold D4: true when the player ship's centre (an NDC point, this frame's projection) is
+ * inside the view and in front of the camera (projected z in [-1, 1]; a point behind the camera
+ * projects past 1). No projection yet (a rig without one) = on screen, as before.
+ * @param {{x:number,y:number,z:number}|null|undefined} n
+ * @returns {boolean}
+ */
+export function shipOnScreen(n) {
+  if (!n) return true;
+  const { x, y, z } = n;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return true;
+  return Math.abs(x) <= 1 && Math.abs(y) <= 1 && z >= -1 && z <= 1;
+}
+
 export class MotherCallouts {
   /**
    * @param {THREE.Object3D} playerGroup  The PlayerSatellite group (labels parent here).
@@ -3857,7 +3871,10 @@ export class MotherCallouts {
   _updateHint() {
     const el = this._hintEl;
     if (!el) return;
-    const show = this._active && !this._hintDone;
+    // u5-info-ap-hold D4: the hint waits for the ship - it says "point at a part", so it shows only
+    // while the ship's centre is on screen and in front of the camera (checked only while the hint is
+    // still to be shown; once done it never comes back). Words unchanged (§13 r3).
+    const show = this._active && !this._hintDone && shipOnScreen(this._shipNDC);
     const want = show ? 'flex' : 'none';
     if (el.style.display !== want) el.style.display = want;
     if (!show) return;

@@ -331,10 +331,33 @@ export class ThermalSystem {
       this._yellowArmed = false;
       this._say(open
         ? `Ship warming up — ${SH.YELLOW_C} °C. The radiator is already open.`
-        : `Ship warming up — ${SH.YELLOW_C} °C. The radiator is folded. Press O to open it.`, 'warning');
+        // u5-info-ap-hold D5: no key and no floor-1 button named (the same words on touch): say what will happen.
+        : this._autoOpenArmed(openFrac)
+          ? `Ship warming up — ${SH.YELLOW_C} °C. The radiator opens itself at ${SH.AUTO_OPEN_C} °C.`
+          : `Ship warming up — ${SH.YELLOW_C} °C. The radiator is folded.`, 'warning');
     }
     if (!this._yellowArmed && t <= SH.YELLOW_C - SH.REARM_C) this._yellowArmed = true;
     if (!this._redArmed && t <= SH.RED_C - SH.REARM_C) this._redArmed = true;
+  }
+
+  /**
+   * @private u5 D5: would the radiator open itself once the ship reaches AUTO_OPEN_C? One answer for the
+   * self-open code and for the 60 °C line: a radiator fitted, folded (at rest), not already auto-opened,
+   * no player radiator command in the last PLAYER_WINS_S, no launch driving the ship, no catch hand-off hold.
+   * @param {number} openFrac
+   * @returns {boolean}
+   */
+  _autoOpenArmed(openFrac) {
+    const SH = Constants.SHIP_HEAT;
+    const p = this._player;
+    if (!p || typeof p.setFlowerPose !== 'function') return false;
+    if (typeof p.getFlowerStatus === 'function' && !p.getFlowerStatus()) return false;   // no radiator fitted
+    const ls = p._launchSequence;
+    if (ls && typeof ls.isActive === 'function' && ls.isActive()) return false;           // the launch owns the ship
+    if (p.flowerHandoffHeld === true) return false;
+    if (this._autoOpened) return false;
+    if ((this._clockS - this._lastPlayerCmdS) < SH.PLAYER_WINS_S) return false;
+    return openFrac <= SH.AT_REST_FRAC;
   }
 
   /**
@@ -355,8 +378,7 @@ export class ThermalSystem {
 
     if (this._autoOpened) return;   // it opened once and stays open
 
-    const playerRecent = (this._clockS - this._lastPlayerCmdS) < SH.PLAYER_WINS_S;
-    if (this.tempC >= SH.AUTO_OPEN_C && openFrac <= SH.AT_REST_FRAC && !playerRecent) {
+    if (this.tempC >= SH.AUTO_OPEN_C && this._autoOpenArmed(openFrac)) {
       const open = (Constants.THERMAL && Constants.THERMAL.FLOWER
         && Constants.THERMAL.FLOWER.OPEN_POSE) || 'STOW';
       if (p.setFlowerPose(open) === null) return;   // no radiator fitted — nothing to open
@@ -369,9 +391,8 @@ export class ThermalSystem {
    * @private One THERMAL comms line. Warnings carry `_critical` (the
    * low-battery/xenon pattern) so they pass the onboarding suppression tier —
    * mission 1 must hear them (§15 row 6), and a radiator that opens by itself
-   * must say why. w4-power D3: the text goes through GestureHints.speak, so
-   * on glass "Press O" reads "Tap RADIATORS on floor 1" (the comms panel does
-   * not rewrite key words itself); off glass speak returns the same string.
+   * must say why. w4-power D3: the text goes through GestureHints.speak (it
+   * rewrites key words for glass; u5 D5: no line here names a key any more).
    */
   _say(text, priority, opts) {
     const msg = { sender: 'THERMAL', text: GestureHints.speak(text), priority };

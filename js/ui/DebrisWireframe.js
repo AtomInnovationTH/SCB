@@ -1383,6 +1383,8 @@ export class DebrisWireframe {
     this._frameSkip = -1;
     /** @type {boolean} True when showing ADR satellite self-view */
     this._showingADR = false;
+    /** @type {boolean} u5 D1: the simple level (set by HUD.setSimple via isSimpleTargets) */
+    this._simple = false;
     /** @type {boolean} True when in daughter-piloted expanded inspection mode */
     this._expandedMode = false;
     /** @type {number|null} Index of daughter arm when expanded */
@@ -1780,11 +1782,14 @@ export class DebrisWireframe {
         ctx.fillText('UNRESOLVED \u2014 scan [S]', WIRE_CX, 150);
         return;
       }
-      ctx.fillText('TARGET INFO [Z]', WIRE_CX, 15);
-      const typeLabel = TYPE_LABELS[this._target.type] || this._target.type;
-      ctx.font = mono(12);
-      ctx.fillStyle = TYPE_COLOR;
-      ctx.fillText(typeLabel, WIRE_CX, 27);
+      ctx.fillText('TARGET INFO', WIRE_CX, 15);
+      // u5 D1: the simple level draws no lone type label (the name is in the one info line below).
+      if (!this._simple) {
+        const typeLabel = TYPE_LABELS[this._target.type] || this._target.type;
+        ctx.font = mono(12);
+        ctx.fillStyle = TYPE_COLOR;
+        ctx.fillText(typeLabel, WIRE_CX, 27);
+      }
     }
 
     // Daughter-origin badge (expanded mode from an arm pilot only)
@@ -1950,6 +1955,10 @@ export class DebrisWireframe {
 
     // --- Debris target info — dossier-tier gated (Phase 1.5) ---
     const tier = dossierSystem.getTier(this._target);
+    if (this._simple) {
+      this._renderSimpleInfo(ctx, infoY, tier);
+      return;
+    }
     if (tier === DOSSIER_TIERS.SCANNED) {
       this._renderScannedInfo(ctx, infoY);
       return;
@@ -2040,6 +2049,70 @@ export class DebrisWireframe {
       // Decrypted salvage manifest with credit values (typewriter reveal).
       this._renderProfiledManifest(ctx, Math.max(rowY, infoY + 36));
     }
+  }
+
+  /**
+   * u5-info-ap-hold D1: the simple level (mission 1, same gate as the Targets list) — exactly two
+   * text lines under the title, in the zone form, the SCANNED tier and the PROFILED tier alike:
+   * `<NAME> · <mass> kg · <size> m`, then the survey progress or the salvage worth.
+   * @private
+   */
+  _renderSimpleInfo(ctx, infoY, tier) {
+    const t = this._target;
+    const D = Constants.DOSSIER || {};
+    const scanned = tier === DOSSIER_TIERS.SCANNED;
+    const label = TYPE_LABELS[t.type] || t.type;
+    const massStr = t.mass != null ? (scanned ? `~${t.mass.toFixed(0)}` : t.mass.toFixed(1)) : '?';
+    const sizeStr = t.sizeMeter != null ? t.sizeMeter.toFixed(1) : '?';
+    ctx.font = mono(10);
+    ctx.fillStyle = DIM_COLOR;
+    ctx.textAlign = 'center';
+    ctx.fillText(`${label} \u00B7 ${massStr} kg \u00B7 ${sizeStr} m`, WIRE_CX, infoY);
+
+    let line2;
+    if (scanned) {
+      const progress = dossierSystem.getSurveyProgress(t.id);
+      line2 = progress > 0
+        ? `Surveying\u2026 ${Math.round(progress * 100)} %`
+        : `Get within ${D.DETAIL_SCAN_RANGE_M || 50} m to survey`;
+      if (progress > 0) {
+        // The survey ring is a drawing, not text: it stays.
+        const rx = PANEL_WIDTH - 26;
+        const ry = 42;
+        ctx.strokeStyle = 'rgba(0, 255, 136, 0.25)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(rx, ry, 10, 0, TWO_PI);
+        ctx.stroke();
+        ctx.strokeStyle = '#00ffaa';
+        ctx.beginPath();
+        ctx.arc(rx, ry, 10, -Math.PI / 2, -Math.PI / 2 + TWO_PI * progress);
+        ctx.stroke();
+      }
+    } else {
+      // Same total (and digits) as _renderProfiledManifest's EST. VALUE.
+      let total = 0;
+      if (t.hasSalvage && t.salvage) {
+        const a = appraiseSalvage(t.salvage);
+        if (a.rows.length > 0) total = a.total;
+      }
+      line2 = total > 0 ? `Worth about ${total} cr` : 'No salvage value';
+    }
+    ctx.font = mono(10, 'bold');
+    ctx.fillStyle = '#00ffaa';
+    ctx.fillText(line2, WIRE_CX, infoY + 14);
+  }
+
+  /**
+   * u5-info-ap-hold D1: HUD tells the wireframe whether the simple level is on (the same answer as
+   * the Targets list: HUD.isSimpleTargets). Drawn at the next frame.
+   * @param {boolean} on
+   */
+  setSimple(on) {
+    const v = !!on;
+    if (v === this._simple) return;
+    this._simple = v;
+    this._frameSkip = -1;
   }
 
   /**
