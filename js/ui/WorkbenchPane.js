@@ -145,6 +145,18 @@ export const ROOT_BOTTOM_PX = 96;
 export const ROOT_BOTTOM_PX_F1 = 16;
 /** Tab pulse length (ms) — the ONE pulse a rising count earns (§2 Grammar). */
 export const TAB_PULSE_MS = 900;
+
+/**
+ * u6 D9 (2026-10-19): should the SPECS tab step aside? On a short (phone) screen an OPEN
+ * DAUGHTERS pane covers the whole tab (measured: 2,359 px² plate / 3,243 px² hit area on both
+ * phones) and there is no room under it, so while the drawer is closed and DAUGHTERS is open and
+ * shown the tab takes no box and no taps. Taller screens never yield. Pure.
+ * @param {{drawerOpen?:boolean, short?:boolean, armsShown?:boolean, armsFolded?:boolean}} s
+ * @returns {boolean}
+ */
+export function shouldYieldSpecsTab(s = {}) {
+  return !s.drawerOpen && !!s.short && !!s.armsShown && !s.armsFolded;
+}
 /** The drawer chrome's edge border (body + tab); the left anchor's dead
  *  border side and corner rounding are baked in `_build` (§13 r5). */
 const EDGE_BORDER = '1px solid rgba(0,204,255,0.4)';
@@ -252,6 +264,8 @@ export class WorkbenchPane {
     this._chromePhase = 'hidden';
     /** @private the effective phase last WRITTEN to the tab (write-on-change) */
     this._tabPhaseWritten = null;
+    /** @private u6 D9: the tab steps aside (display:none: no box, no taps, no edge wake) */
+    this._tabYield = false;
     this._lastTabText = null;
     // Count/pulse state: baseline null so the FIRST paint (boot state) never
     // pulses; only a RISE afterwards (a new unlock, a newly affordable fit) does.
@@ -379,6 +393,22 @@ export class WorkbenchPane {
     this._chromePhase = ph;
     this._applyTabPhase();
   }
+
+  /**
+   * u6 D9: step the SPECS tab aside (or back). While on, the tab plate and its hit layer take no
+   * box and no taps (`display:none`, so an edge wake cannot show them either); off restores
+   * today's behaviour. Write-on-change; the hub calls it once a frame.
+   * @param {boolean} on
+   */
+  setTabYield(on) {
+    on = !!on;
+    if (on === this._tabYield) return;
+    this._tabYield = on;
+    this._applyTabShown();
+  }
+
+  /** u6 D9: is the tab stepped aside right now? */
+  isTabYielded() { return this._tabYield; }
 
   /**
    * ENTRY-LESS open (tab / Space / swipe / flick / restore). No-op while
@@ -827,7 +857,7 @@ export class WorkbenchPane {
   /** @private The tab's actual display: enabled → block (every floor); the phase decides the rest. */
   _applyTabShown() {
     if (this._tab) {
-      const css = this._enabled ? 'block' : 'none';
+      const css = (this._enabled && !this._tabYield) ? 'block' : 'none';
       if (this._tab.style.display !== css) this._tab.style.display = css;
     }
     this._applyTabPhase();

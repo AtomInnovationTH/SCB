@@ -36,6 +36,13 @@
  * dep is world seconds, the pass is orbit time) — the same clock as the
  * transfer readout, never the boss countdowns' paced clock.
  *
+ * u6-tests-plain D5 (2026-10-19): at the SIMPLE level (deps.simple() true — mission 1,
+ * no `+` pane pulled in) the pane speaks plain words, with NO countdowns (round 1 F1: game
+ * time runs ~40x real, so a minute countdown churns): `Next stop <cluster> window in about
+ * 2 h` (folded when co-orbital or unknown), `Close pass <threat>` (folded when clear; tier
+ * colour kept), `In sunlight` / `In Earth's shadow` (a state, changes at a flip); PASS folds. Above
+ * simple every row reads exactly as above ("Details" — today's text, unchanged).
+ *
  * @module ui/hud/NextPane
  */
 
@@ -91,6 +98,9 @@ export const PASS_STEPS = 64;
 /** The unknown mark (em dash) — the value of every row the deps cannot fill. */
 const UNKNOWN = '\u2014';
 
+/** u6 D5: the root carries this while the plain (simple) form is on. */
+const SIMPLE_ATTR = 'data-next-simple';
+
 /** The rung's ONE hide bit (HUD._initPaneDensity domRung grammar). */
 const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
 /** The dodge's mode: 'full' | 'compact' | 'hidden' (hidden = display:none via the style). */
@@ -119,6 +129,13 @@ export function fullPx() {
 export function compactPx() {
   const G = NEXT_GEOMETRY;
   return G.FRAME_PX + G.HEADER_PX + G.COMPACT_ROWS * G.ROW_PX;
+}
+
+/** u6 D5: the simple form's outer height: frame + header + `rows` shown rows (0 rows = the empty form). */
+export function simplePx(rows) {
+  const G = NEXT_GEOMETRY;
+  const n = Math.max(0, Math.min(NEXT_ROWS.length, Math.floor(Number(rows) || 0)));
+  return G.FRAME_PX + G.HEADER_PX + n * G.ROW_PX;
 }
 
 /**
@@ -207,7 +224,7 @@ export class NextPane {
    * @param {Element}  [deps.parent]    root's parent (default: doc.getElementById('hud-overlay')).
    * @param {boolean}  [deps.glass]     true on glass (the pane is display-only: no touch target changes).
    * @param {function} [deps.now]       ms clock — the fallback when update() is called without nowMs.
-   * @param {function} [deps.clusters]  () => [{ name, altKm }] (optionally orbitKm or a live
+   * @param {function} [deps.clusters]  () => [{ name, label?, altKm }] (label = the display name, u6 D5; optionally orbitKm or a live
    *   cluster with `targets`) — the transfer candidates.
    * @param {function} [deps.playerAltKm] () => the player's altitude (km).
    * @param {function} [deps.orbit]     () => the player's Keplerian elements, semiMajorAxis in
@@ -216,6 +233,7 @@ export class NextPane {
    * @param {function} [deps.eclipse]   () => { inShadow, secondsToFlip } | null (world seconds).
    * @param {function} [deps.subPoint]  (pos {x,y,z}) => { latDeg, lonEastDeg } (direction only).
    * @param {function} [deps.stations]  () => [{ name, lat, lon }] | null (degrees, east-positive).
+   * @param {function} [deps.simple]    () => true at the simple level (u6 D5; absent = never simple).
    */
   constructor(deps = {}) {
     this._glass = !!deps.glass;
@@ -229,8 +247,12 @@ export class NextPane {
     this._eclipse = deps.eclipse;
     this._subPoint = deps.subPoint;
     this._stations = deps.stations;
+    this._simpleDep = typeof deps.simple === 'function' ? deps.simple : null;   // u6 D5: () => true at the simple level
 
     this._root = null;
+    this._simple = false;            // u6 D5: the plain form is on (last render)
+    this._hide = [false, false, false, false];   // u6 D5: rows folded in the plain form
+    this._shown = NEXT_ROWS.length;  // u6 D5: rows the form shows (plain form: the unfolded ones)
     this._el = null;                 // { head, title, rows: [{ el, label, subject, value }] }
     this._model = null;              // the last computed row models (slot order)
     this._keys = NEXT_ROWS.map(() => undefined);   // last subject key per slot (undefined = never rendered)
@@ -302,6 +324,7 @@ export class NextPane {
   /** The form's geometric height (px): fullPx() | emptyPx() | 0 (headless / disposed). */
   heightPx() {
     if (this._mode === 'hidden' || !this._root) return 0;
+    if (this._simple) return simplePx(this._empty ? 0 : this._shown);
     return this._empty ? emptyPx() : fullPx();
   }
 
@@ -452,6 +475,12 @@ export class NextPane {
       }
       #${NEXT_PANE_ID} .next-subject { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
       #${NEXT_PANE_ID} .next-value { flex: 0 0 auto; text-align: right; }
+      /* u6 D5 — the plain form: sentence case (no small-caps), rows with nothing to say fold away. */
+      #${NEXT_PANE_ID}[${SIMPLE_ATTR}] .next-row[${FOLDED_ATTR}] { display: none; }
+      #${NEXT_PANE_ID}[${SIMPLE_ATTR}] .next-label {
+        flex: 0 0 auto; font-variant: normal !important; font-variant-caps: normal !important; text-transform: none !important;
+        font-size: inherit; letter-spacing: normal !important; opacity: 0.85;
+      }   /* index.html's html[data-look=new] .next-label rule is !important (the FmaStrip plain line does the same) */
       /* Compact: the two soonest rows stay; the two latest fold away (slot order kept). */
       #${NEXT_PANE_ID}[${MODE_ATTR}="compact"] .next-row[${FOLDED_ATTR}] { display: none; }
       /* TCA: an active conjunction is advisory amber; tier RED is the critical red and pulses
@@ -552,14 +581,16 @@ export class NextPane {
       let win;
       try { win = computeTransferWindow(chaser, target); } catch (_e) { continue; }
       if (!win) continue;
-      const departIn = isCoOrbital(win) ? 0 : num(win.departIn);
+      const co = isCoOrbital(win);
+      const departIn = co ? 0 : num(win.departIn);
       if (!Number.isFinite(departIn)) continue;
-      if (!best || departIn < best.seconds) best = { name, seconds: departIn };
+      if (!best || departIn < best.seconds) best = { name, label: c.label != null ? String(c.label) : '', seconds: departIn, coOrbital: co };
     }
     if (!best) return unknownRow('TRANSFER');
     return {
       label: 'TRANSFER', subject: best.name, seconds: best.seconds,
       value: TransferWindows.formatDuration(best.seconds), key: best.name, tier: null,
+      coOrbital: best.coOrbital, plainName: best.label,
     };
   }
 
@@ -635,14 +666,61 @@ export class NextPane {
     return unknownRow('PASS');
   }
 
+  // ── The plain (simple) form — u6 D5 ────────────────────────────────────────
+
+  /**
+   * @private Map the four row models to their plain-word forms. A row with
+   * nothing to say gets `hide: true` (folded). The raw models are untouched
+   * (the Details form reads them as before).
+   */
+  _plainModel(model) {
+    const [tr, tca, sh] = model;
+    const out = [];
+    // TRANSFER: folded when co-orbital or unknown; else the soonest window.
+    const when = TransferWindows.plainWindow(tr.seconds);
+    if (tr.value === UNKNOWN || tr.coOrbital || when == null) {
+      out.push({ ...tr, hide: true });
+    } else {
+      const lead = String(tr.plainName || '').split(',')[0].trim();
+      out.push({
+        ...tr, hide: false, label: 'Next stop', subject: lead || tr.subject, value: `window ${when}`,
+      });
+    }
+    // TCA: folded when clear.
+    if (slotEmpty(tca)) {
+      out.push({ ...tca, hide: true });
+    } else {
+      // F1: no seconds, no km (the clock runs ~40x real); the tier colour carries the urgency.
+      out.push({ ...tca, hide: false, label: 'Close pass', value: '' });
+    }
+    // SHADOW | SUNLIT: a state only (F1): it changes at a flip, never between.
+    if (sh.value === UNKNOWN) {
+      out.push({ ...sh, hide: true });
+    } else {
+      out.push({
+        ...sh, hide: false, label: sh.label === 'SHADOW' ? 'In sunlight' : "In Earth's shadow", subject: '', value: '',
+      });
+    }
+    // PASS: folded at the simple level (a ground-station detail).
+    out.push({ ...model[3], hide: true });
+    return out;
+  }
+
   // ── Render (1 Hz) ──────────────────────────────────────────────────────────
 
   /** @private Recompute the four rows, rank them, write on change; the change-highlight by `now`. */
   _render(now) {
     const el = this._el;
     if (!el) return;
-    const model = [this._transferRow(), this._tcaRow(), this._shadowRow(), this._passRow()];
+    const raw = [this._transferRow(), this._tcaRow(), this._shadowRow(), this._passRow()];
+    const simple = !!call(this._simpleDep);
+    const model = simple ? this._plainModel(raw) : raw;
     this._model = model;
+    const simpleChanged = simple !== this._simple;
+    this._simple = simple;
+    this._hide = simple ? model.map((m) => !!m.hide) : [false, false, false, false];
+    this._shown = simple ? this._hide.filter((h) => !h).length : NEXT_ROWS.length;
+    if (simpleChanged) { this._setAttr(this._root, SIMPLE_ATTR, simple ? '' : null); this._layout(); }
     for (let i = 0; i < model.length; i++) {
       const m = model[i];
       const r = el.rows[i];
@@ -660,7 +738,8 @@ export class NextPane {
     }
     this._order = [0, 1, 2, 3].sort((x, y) => (model[x].seconds - model[y].seconds) || (x - y));
     this._applyFold();
-    const empty = model.every(slotEmpty);
+    // The plain form is empty when every row folded; Details: every slot says nothing.
+    const empty = simple ? this._shown === 0 : raw.every(slotEmpty);
     if (empty !== this._empty) {
       this._empty = empty;
       this._setAttr(this._root, EMPTY_ATTR, empty ? '' : null);
@@ -672,6 +751,10 @@ export class NextPane {
   _applyFold() {
     const el = this._el;
     if (!el) return;
+    if (this._simple) {   // u6 D5: the plain form folds exactly the rows with nothing to say
+      for (let i = 0; i < el.rows.length; i++) this._setAttr(el.rows[i].el, FOLDED_ATTR, this._hide[i] ? '' : null);
+      return;
+    }
     const keep = new Set(this._mode === 'compact' ? this._order.slice(0, NEXT_GEOMETRY.COMPACT_ROWS) : [0, 1, 2, 3]);
     for (let i = 0; i < el.rows.length; i++) {
       this._setAttr(el.rows[i].el, FOLDED_ATTR, keep.has(i) ? null : '');
@@ -689,8 +772,8 @@ export class NextPane {
     const root = this._root;
     if (!root || !Number.isFinite(this._floorPx)) return false;
     const G = NEXT_GEOMETRY;
-    const full = this._empty ? emptyPx() : fullPx();
-    const compact = this._empty ? emptyPx() : compactPx();
+    const full = this._empty ? emptyPx() : (this._simple ? simplePx(this._shown) : fullPx());
+    const compact = this._empty ? emptyPx() : (this._simple ? simplePx(this._shown) : compactPx());
     const bottom = this._floorPx - G.GAP_PX;
     const want = bottom - full;
     let top = (this._underPx == null) ? want : Math.max(want, this._underPx + G.GAP_PX);

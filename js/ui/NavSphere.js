@@ -25,6 +25,7 @@ import { mono } from '../core/Typeface.js';
 import { HUD_EDGE_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
 import { createFooterChip } from './hud/FooterChip.js';
 import { isMarked } from '../systems/ScanMarks.js';
+import { testsRequestedHere } from './hud/TestsSwitch.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -174,6 +175,7 @@ export class NavSphere {
     this._frameSkip = -1;  // Throttle counter for Canvas2D redraws (10Hz at 60fps)
     this._geoDrawCount = 0;              // Separate frame counter for 2 Hz geo readout
     this._geoCache = null;               // { lat, lon, alt } refreshed at 2 Hz
+    this.testsSwitch = testsRequestedHere();   // u6 D3: the LAT/LON/ALT line is a Tests-switch extra; read once, tests may set it
 
     // Dynamic sensor range (km) — updated each frame from SensorSystem
     this._outerZoneKm = Constants.NAVSPHERE.OUTER_ZONE_KM_MAX;
@@ -709,7 +711,8 @@ export class NavSphere {
     ctx.stroke();
 
     // ---- Geolocation readout (LAT / LON / ALT) above the disc (Task 10) ----
-    if (this._geoCache) {
+    // u6 D3: drawn only with the Tests switch on.
+    if (this._geoCache && this.testsSwitch) {
       const geo = this._geoCache;
       ctx.font = mono(10);
       ctx.fillStyle = C.geo;

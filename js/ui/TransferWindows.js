@@ -67,9 +67,12 @@ export class TransferWindows {
   /**
    * @param {object} [deps]
    * @param {function} [deps.now] - monotonic ms clock (tests); defaults to performance.now
+   * @param {function} [deps.simple] - u6 D7: () => true at the simple level (mission 1, no `+` pane
+   *                 pulled in): the panel then paints two plain sentences instead of the numbers.
    */
   constructor(deps = {}) {
     this._now = deps.now || _nowMs;
+    this._simple = typeof deps.simple === 'function' ? deps.simple : null;
     this._root = null;
     this._built = false;
     this._visible = false;
@@ -117,6 +120,24 @@ export class TransferWindows {
   }
 
   /**
+   * u6 fix round 1 (F1): a coarse window phrase for a player line. Game time runs
+   * about 40x real, so any minute countdown churns; this changes only a few times
+   * an hour of world time. <= 0 -> `open now`; under an hour -> `in under an hour`;
+   * under a day -> `in about N h`; else `in about N days` (`in about 1 day`).
+   * Non-finite -> null (the caller folds the line / row). Pure + static.
+   * @param {number} s - seconds until the window opens
+   * @returns {?string}
+   */
+  static plainWindow(s) {
+    if (!Number.isFinite(s)) return null;
+    if (s <= 0) return 'open now';
+    if (s < 3600) return 'in under an hour';
+    if (Math.round(s / 3600) < 24) return `in about ${Math.round(s / 3600)} h`;   // 84,600 s+ reads "1 day", never "24 h"
+    const d = Math.round(s / 86400);
+    return d === 1 ? 'in about 1 day' : `in about ${d} days`;
+  }
+
+  /**
    * Build the display model for a transfer window. Pure — no DOM.
    * @param {object|null} win - a computeTransferWindow() result (or null)
    * @param {object} [opts]
@@ -129,6 +150,8 @@ export class TransferWindows {
    * @param {object} [opts.route] - OrbitMFD retirement: systems/OrbitPlanners
    *                 .computeRoutePlan() result ({plan, totalDv}), whole-field
    *                 (not the focused cluster). Absent → routeText '' (no row).
+   * @param {boolean} [opts.simple] - u6 D7: add the plain two-line form (`simple:true`,
+   *                 `plainText`, `plainFuelText`); every other field is unchanged.
    * @param {object} [opts.sweep] - OrbitMFD retirement: systems/OrbitPlanners
    *                 .computeSweepBands() result ({bands, densest}), whole-field.
    *                 Absent → sweepText '' (no row).
@@ -140,6 +163,26 @@ export class TransferWindows {
    * }}
    */
   static readout(win, opts = {}) {
+    const model = TransferWindows._readout(win, opts);
+    if (!opts.simple) return model;
+    // u6 D7 — the simple level: two plain sentences, no numbers of the trip itself.
+    let plainText;
+    let plainFuelText = '';
+    if (model.empty) plainText = 'Point at a debris field to plan a trip.';
+    else if (model.coOrbital) plainText = 'You are already at this height. No trip needed.';
+    else {
+      const when = TransferWindows.plainWindow(win.departIn);
+      plainText = when == null ? '' : `Next window ${when}`;
+      const v = model.verdict;
+      plainFuelText = v === 'reachable' ? 'Enough fuel to go'
+        : v === 'marginal' ? 'Only just enough fuel'
+        : v === 'unreachable' ? 'Not enough fuel to go' : '';
+    }
+    return { ...model, simple: true, plainText, plainFuelText };
+  }
+
+  /** @private The full (Details) model — today's text, unchanged. */
+  static _readout(win, opts = {}) {
     const targetName = opts.targetName || '\u2014';
     const a = opts.assessment || null;
     const fuelText = (win && a) ? TransferWindows.fuelLine(a) : '';
@@ -254,7 +297,9 @@ export class TransferWindows {
    * @returns {object} the display model that was rendered (readout())
    */
   refresh(win, opts = {}) {
-    const model = TransferWindows.readout(win, opts);
+    let simple = false;
+    try { simple = !!(this._simple && this._simple()); } catch (_e) { simple = false; }
+    const model = TransferWindows.readout(win, simple ? { ...opts, simple: true } : opts);
     if (!this._root) return model;
     // G1 warp churn cap: structural changes paint immediately; countdown-only
     // ticks are bounded to ≤4 Hz real (see shouldWrite / DOM_WRITE_MIN_INTERVAL_MS).
@@ -262,7 +307,7 @@ export class TransferWindows {
     // The FIELD route/sweep rows are likewise structural (NavcomFloor recomputes
     // them on its own throttled cadence, never per frame, so any change here is
     // a real change worth an immediate repaint).
-    const structKey = `${model.targetName}|${model.empty}|${model.coOrbital}|${model.imminent}|${model.dvText}|${model.showArrive}|${model.fuelText}|${model.routeText}|${model.sweepText}`;
+    const structKey = `${simple ? 'S' : 'F'}|${model.plainText || ''}|${model.plainFuelText || ''}|${model.targetName}|${model.empty}|${model.coOrbital}|${model.imminent}|${model.dvText}|${model.showArrive}|${model.fuelText}|${model.routeText}|${model.sweepText}`;
     const now = this._now();
     if (!TransferWindows.shouldWrite(structKey, this._lastStructKey, now, this._lastWriteMs)) {
       return model;
@@ -270,8 +315,27 @@ export class TransferWindows {
     // The window title never pulses (it is INFO/planning, not THREAT). "Imminent"
     // is double-encoded: LABEL-white depart line + the [IMMINENT] tag.
     const departColor = model.imminent ? VisualLaw.COLORS.LABEL : VisualLaw.COLORS.INFO;
+    const titleRow = `<div style="color:${VisualLaw.COLORS.PLAYER}">${FLOOR_TITLE} \u00b7 ${model.targetName}</div>`;
+    if (model.simple) {
+      // u6 D7: sentence case, no numbers of the trip; the verdict keeps its colour (the WORDS carry it).
+      const rowsS = [titleRow];
+      if (model.plainText) rowsS.push(`<div style="color:${departColor}">${model.plainText}</div>`);
+      if (model.plainFuelText) {
+        const fc = model.verdict === 'reachable' ? VisualLaw.COLORS.PLAYER
+          : model.verdict === 'marginal' ? VisualLaw.COLORS.VALUE : VisualLaw.COLORS.INFO;
+        rowsS.push(`<div style="color:${fc}">${model.plainFuelText}</div>`);
+      }
+      const htmlS = rowsS.join('');
+      if (htmlS !== this._lastHtml) {
+        this._root.innerHTML = htmlS;
+        this._lastHtml = htmlS;
+        this._lastStructKey = structKey;
+        this._lastWriteMs = now;
+      }
+      return model;
+    }
     const rows = [
-      `<div style="color:${VisualLaw.COLORS.PLAYER}">${FLOOR_TITLE} \u00b7 ${model.targetName}</div>`,
+      titleRow,
       `<div style="color:${departColor}">${model.departText}${model.imminent ? '  [IMMINENT]' : ''}</div>`,
     ];
     if (model.showArrive) rows.push(`<div>${model.transferText} \u2192 ${model.arriveText}</div>`);

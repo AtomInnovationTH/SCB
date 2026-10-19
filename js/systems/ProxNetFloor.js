@@ -126,7 +126,7 @@ export class ProxNetFloor {
       || (deps.navSphere ? new ProxMiniSphere({ navSphere: deps.navSphere }) : null);
     // 'tactical-approach' context panel (default fresh, the ProxOverlay
     // precedent: DOM-guarded ⇒ headless-inert).
-    this._panel = deps.contextPanel || new ProxContextPanel();
+    this._panel = deps.contextPanel || new ProxContextPanel({ simple: deps.simple });   // u6 D6: the simple-level getter rides in
     this._now = deps.now || _nowMs;
 
     this._active = false;

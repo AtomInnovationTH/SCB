@@ -18,6 +18,7 @@ import { captureNetSystem } from '../entities/CaptureNet.js';
 import { persistenceManager } from './PersistenceManager.js';
 import { CeremonyTimeScale } from './CeremonyTimeScale.js';
 import { VisualLaw } from '../core/VisualLaw.js';
+import { testsRequestedHere } from '../ui/hud/TestsSwitch.js';
 
 // ============================================================================
 // VIEW MODES
@@ -262,6 +263,9 @@ export class CameraSystem {
 
     /** @type {('mother'|'debris'|'daughter')|null} Focused subject while in INSPECTION */
     this._inspectSubject = null;
+
+    /** u6 D3: the Tests switch (?tests=1 / ?sounds=1), read once here; tests may set it. */
+    this.testsSwitch = testsRequestedHere();
 
     // ========================================================================
     // TRANSITION STATE
@@ -1614,7 +1618,8 @@ export class CameraSystem {
       // the player understands the silent threshold did something deliberate.
       if (!o.inspectTaught) {
         o.inspectTaught = true;
-        eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION. Overlays active', kind: 'inspect' });
+        // u6 D3: a developer line; players see it only with the Tests switch on.
+        if (this.testsSwitch) eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION. Overlays active', kind: 'inspect' });
       }
     } else {
       // Restore lens (per-frame ease) + near-plane.
@@ -4948,7 +4953,7 @@ export class CameraSystem {
       eventBus.emit(Events.MOTHER_INSPECTION_ENGAGED, {});
       if (!this.orbit.inspectTaught) {
         this.orbit.inspectTaught = true;
-        eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION. Overlays active', kind: 'inspect' });
+        if (this.testsSwitch) eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION. Overlays active', kind: 'inspect' });   // u6 D3
       }
     } else {
       this._applyInspectDim(false);

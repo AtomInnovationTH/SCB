@@ -69,9 +69,12 @@ export class ProxContextPanel {
   /**
    * @param {object} [deps]
    * @param {function} [deps.now] - monotonic ms clock (tests)
+   * @param {function} [deps.simple] - u6 D6: () => true at the simple level (mission 1, no `+` pane
+   *                 pulled in): the panel then shows only its title line. Absent = never simple.
    */
   constructor(deps = {}) {
     this._now = deps.now || _nowMs;
+    this._simple = typeof deps.simple === 'function' ? deps.simple : null;
     this._root = null;
     this._built = false;
     this._visible = false;
@@ -226,8 +229,12 @@ export class ProxContextPanel {
    */
   refresh(state = {}) {
     const model = ProxContextPanel.readout(state);
+    let simple = false;
+    try { simple = !!(this._simple && this._simple()); } catch (_e) { simple = false; }
+    model.simple = simple;
     if (!this._root) return model;
-    const structKey = [
+    // u6 D6: the simple level paints the title line only, so only the title can be structural.
+    const structKey = simple ? `S\u0001${model.clusterName}\u0001${model.empty}` : [
       model.clusterName, model.empty, model.verdictText, model.stateText, model.hintText,
       model.rows.map((r) => `${r.zone}:${r.selected ? 1 : 0}:${r.riskText}:${r.rateText}:${r.dvText}`).join('|'),
     ].join('\u0001');
@@ -250,6 +257,11 @@ export class ProxContextPanel {
     const rows = [
       `<div style="color:${VisualLaw.COLORS.PLAYER}">${FLOOR_TITLE} \u00b7 ${m.clusterName}</div>`,
     ];
+    if (m.simple) {   // u6 D6: no verdict, no zone rows, no autopilot / Space lines
+      // Round 1 F2: with nothing focused, keep one plain hint (the base said "aim a cluster ... to plan an approach").
+      if (m.empty) rows.push(`<div style="opacity:0.7">Point at a debris field on ${PLAN_FLOOR_LABEL} to plan a trip.</div>`);
+      return rows.join('');
+    }
     if (m.empty) {
       rows.push(`<div>${m.stateText}</div>`);
       rows.push(`<div style="opacity:0.7">${m.guideText}</div>`);

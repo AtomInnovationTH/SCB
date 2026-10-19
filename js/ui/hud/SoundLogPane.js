@@ -1,8 +1,10 @@
 /**
  * SoundLogPane.js — dev pane: the last 10 sounds, newest at the bottom.
  *
- * DECISIONS §15 row 10. Built ONLY when the URL has `?sounds=1` (a plain query
- * parameter, not a feature flag). A mono-face list bottom-left above the footer
+ * DECISIONS §15 row 10. Built ONLY when the Tests switch is on (`?tests=1`, or
+ * the old `?sounds=1`; a plain query parameter, not a feature flag). u6 D2:
+ * `opts.into` renders the lines into a given element (the Tests fold-out body)
+ * instead of building its own box. A mono-face list bottom-left above the footer
  * band, pointer-events none; oldest line on top so new sounds push the list up.
  * One line each: `2.4s  terminal blip ×4 — <meaning>`. Own 4 Hz timer; no input,
  * no persistence.
@@ -12,28 +14,37 @@
 
 import { soundLog, plainName } from '../../systems/audio/SoundLog.js';
 import { PANE_CORNER_PX } from '../RailGeometry.js';
+import { testsRequested } from './TestsSwitch.js';
 
 export const SOUND_LOG_PANE_ID = 'hud-sound-log';
 export const SOUND_LOG_REFRESH_MS = 250;
 
-/** True when `search` (a location.search string) carries `sounds=1`. */
+/** True when the Tests switch is on: `tests=1`, or the old `sounds=1` alias (u6 D1). */
 export function soundsRequested(search) {
-  try { return new URLSearchParams(search || '').get('sounds') === '1'; } catch (_e) { return false; }
+  return testsRequested(search);
 }
 
 export class SoundLogPane {
   /**
    * @param {HTMLElement} parent
-   * @param {{ log?:object, search?:string, doc?:Document, now?:()=>number, timer?:boolean }} [opts]
+   * @param {{ log?:object, search?:string, doc?:Document, now?:()=>number, timer?:boolean, into?:HTMLElement }} [opts]
    */
   constructor(parent, opts = {}) {
     this.log = opts.log || soundLog;
     this.now = opts.now || (() => performance.now() / 1000);
     this.el = null;
+    this._hosted = false;
     this._timer = null;
     const search = opts.search ?? (typeof location !== 'undefined' ? location.search : '');
     const doc = opts.doc || (typeof document !== 'undefined' ? document : null);
     if (!parent || !doc || !soundsRequested(search)) return;
+    if (opts.into) {   // u6 D2: lines go into the Tests body; the host owns position and look
+      this.el = opts.into;
+      this._hosted = true;
+      this.refresh();
+      if (opts.timer !== false) this._timer = setInterval(() => this.refresh(), SOUND_LOG_REFRESH_MS);
+      return;
+    }
     const el = doc.createElement('div');
     el.id = SOUND_LOG_PANE_ID;
     el.setAttribute('aria-hidden', 'true');
@@ -66,7 +77,7 @@ export class SoundLogPane {
   dispose() {
     if (this._timer) clearInterval(this._timer);
     this._timer = null;
-    if (this.el) this.el.remove();
+    if (this.el && !this._hosted) this.el.remove();
     this.el = null;
   }
 }

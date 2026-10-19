@@ -2241,6 +2241,22 @@ export class StatusPanel {
     this._applyArmsFold();
   }
 
+  /**
+   * u6 D9 (+ round 1 F4): is the DAUGHTERS pane on screen? False when the floor's room / the
+   * density rung hides it (`data-density-hidden`) or when the HUD hid the pane or its left
+   * column with an inline `display:none` (HUD.js applyFloorMask). Attribute / inline-style
+   * reads only - no layout read.
+   */
+  isArmsShown() {
+    const arms = this.panels && this.panels.arms;
+    if (!arms) return false;
+    if (arms.hasAttribute && arms.hasAttribute('data-density-hidden')) return false;
+    if (arms.style && arms.style.display === 'none') return false;
+    const col = this._leftColumn;
+    if (col && col.style && col.style.display === 'none') return false;
+    return true;
+  }
+
   /** True while the DAUGHTERS pane is folded to its one line (short screens only). */
   isFolded() { return !!(this._armsShort && this._armsFolded); }
 

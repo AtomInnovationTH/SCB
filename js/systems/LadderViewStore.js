@@ -79,8 +79,11 @@ export const LADDER_VIEW_VERSION = 1;
  *       TARGET INFO (`debris`) too — the scan gate in HUD holds both back until
  *       the first scan. Stored gen-7 rooms drop once, so a saved hide of COMMS
  *       on F2 (the − key) no longer outranks the defaults.
+ *   9 — 2026-10-19 (u6-tests-plain, owner 2026-10-18 "what is noise"): ORBIT
+ *       (LAT, LON, ALT, MET) is 'gone' on F3 by default. Stored gen-8 rooms
+ *       drop once, so a saved F3 room no longer outranks the new default.
  */
-export const ROOMS_GENERATION = 8;
+export const ROOMS_GENERATION = 9;
 
 /** The shipped pane state: both workbench panes closed. */
 export const DEFAULT_PANES = Object.freeze({ refit: false, library: false });

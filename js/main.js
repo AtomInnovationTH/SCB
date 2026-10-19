@@ -92,7 +92,7 @@ import { CodexViewerUI } from './ui/CodexViewerUI.js';
 import { GlossaryState } from './systems/codex/GlossaryState.js';
 import { HotkeyOverlay } from './ui/HotkeyOverlay.js';
 import { SkillsPane } from './ui/hud/SkillsPane.js';
-import { SoundLogPane } from './ui/hud/SoundLogPane.js';
+import { TestsPane } from './ui/hud/TestsPane.js';
 import { TeachingSystem } from './systems/TeachingSystem.js';
 import { armIdleAdvisor } from './systems/ArmIdleAdvisor.js';
 import { guidanceTelemetry } from './systems/GuidanceTelemetry.js';
@@ -122,6 +122,7 @@ import { HullCamFloor } from './systems/HullCamFloor.js';
 import { RefitPane } from './ui/RefitPane.js';
 import { LibraryPane } from './ui/LibraryPane.js';
 import { WorkbenchPane } from './ui/WorkbenchPane.js';
+import { shouldYieldSpecsTab } from './ui/WorkbenchPane.js';
 import { resolveSubject as resolveSpecsSubject } from './systems/SpecsSubject.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
@@ -640,7 +641,7 @@ let cargoSystem;
 let conjunctionSystem;
 let skillsSystem;
 let skillsPane;
-let soundLogPane = null;
+let testsPane = null;
 let lassoSystem;
 let rewardSystem;
 let codexSystem;
@@ -959,7 +960,7 @@ function _instrumentClusters() {
   // cased — not the long display name; the live members ride along so the
   // pane phases the window from the representative orbit (clusterToOrbitKm).
   _clustersCache = Array.isArray(list)
-    ? list.map((c) => ({ id: c.id, name: String(c.id || c.name || '').toUpperCase(), avgAltKm: c.avgAltKm, targets: c.targets }))
+    ? list.map((c) => ({ id: c.id, name: String(c.id || c.name || '').toUpperCase(), label: String(c.name || ''), avgAltKm: c.avgAltKm, targets: c.targets }))   // u6 D5: `label` = the display name (`ISS Band, 180-400 km`), plain-word NEXT rows
     : null;
   _clustersAt = now;
   return _clustersCache;
@@ -1857,7 +1858,7 @@ async function init() {
   // --- Skills Pane (mounted on #hud-overlay, after HUD build) ---
   const hudOverlay = document.getElementById('hud-overlay');
   skillsPane = new SkillsPane(hudOverlay);
-  soundLogPane = new SoundLogPane(hudOverlay); // dev tool: inert unless ?sounds=1 (own 4 Hz timer)
+  testsPane = new TestsPane(hudOverlay); // u6 D2: closed Tests fold-out (sound list inside); inert unless ?tests=1 / ?sounds=1
   // Enable skill-based progressive HUD revelation
   hud.enableSkillReveal();
 
@@ -1930,6 +1931,7 @@ async function init() {
   // shipped approach autopilot. Inert while LADDER.ENABLED is false (never
   // activated), so shipped behavior stays byte-identical.
   navcomFloor = new NavcomFloor({
+    simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),   // u6 D7: plain trip lines at the simple level
     clusterSource: debrisField,
     player,
     project: navcomProject,
@@ -1948,6 +1950,7 @@ async function init() {
   // cluster focused on NAVCOM is the corridor target here. Inert while
   // LADDER.ENABLED is false (never activated): byte-identical.
   proxNetFloor = new ProxNetFloor({
+    simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),   // u6 D6: title line only at the simple level
     debrisSource: debrisField,
     player,
     // F5 corner minimap ('NavSphere:corner-minimap'): the SHIPPED orb,
@@ -2859,6 +2862,7 @@ async function init() {
       // (Targets → Debris → Next), position:relative inside #hud-right-column;
       // the per-frame setDodge is a no-op now (the column glides as one).
       parent: hud.rightColumnEl,
+      simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),   // u6 D5: plain words at the simple level
       clusters: _instrumentClusters,
       playerAltKm: () => (player ? player.getAltitudeKm() : null),
       orbit: () => (player ? player.getOrbitalElements() : null),
@@ -6733,6 +6737,17 @@ function gameLoop(timestamp) {
   const footerFloor = window.innerHeight - (_FOOTER ? _FOOTER.top : (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0));
   if (_ladderActive && workbenchPane && workbenchPane.setTabPhase && edgeChrome) {
     workbenchPane.setTabPhase(edgeChrome.phase('tab', timestamp));
+  }
+  // u6 D9: on a phone an open DAUGHTERS pane covers the SPECS tab - the tab steps aside (write-on-change inside).
+  // Round 1 F5: with the ladder off the yield is released (once, on change), so it never sticks.
+  if (workbenchPane && workbenchPane.setTabYield) {
+    const _sp = hud && hud.statusPanel;
+    workbenchPane.setTabYield(_ladderActive && shouldYieldSpecsTab({
+      drawerOpen: workbenchPane.isOpen(),
+      short: isShortScreen(window.innerHeight),
+      armsShown: !!(_sp && _sp.isArmsShown && _sp.isArmsShown()),
+      armsFolded: !!(_sp && _sp.isFolded && _sp.isFolded()),
+    }));
   }
   // SAFETY OVERRIDE panel: STATIC since 2026-09-09 (plan
   // 1788926404388-hud-followups-0909.md §1.1 — "almost at bottom"): its root

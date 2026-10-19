@@ -99,7 +99,7 @@ export class NavcomFloor {
     this._player = deps.player || null;
     this._project = deps.project || null;
     this._icons = deps.clusterIcons || new ClusterIcons();
-    this._windows = deps.transferWindows || new TransferWindows();
+    this._windows = deps.transferWindows || new TransferWindows({ simple: deps.simple });   // u6 D7: the simple-level getter rides in
     this._onPlanTransfer = deps.onPlanTransfer || null;
     this._getMassBudget = deps.getMassBudget || null;
     this._orb = deps.reachOrb || new ReachOrb();

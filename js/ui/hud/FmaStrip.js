@@ -381,14 +381,17 @@ export class FmaStrip {
     }
 
     // u5 D2: floor 2 at the simple level says it in plain words (the autopilot is flying there).
+    // u6 D8: floors 3 and 4 too, and there the strip is plain whatever the autopilot is doing:
+    // `Autopilot off` / `Autopilot on` (aiming) / u5's engaged line.
     this._plainText = null;
-    if (engaged && this._floor() === HOME_FLOOR && this._isSimple()) {
-      const named = s.headingMode === 'TARGET' && typeof s.targetName === 'string' && s.targetName
+    const floor = this._floor();
+    if (this._isSimple() && ((engaged && floor === HOME_FLOOR) || floor === 3 || floor === 4)) {
+      const named = engaged && s.headingMode === 'TARGET' && typeof s.targetName === 'string' && s.targetName
         ? shortTypeName(s.targetName) : null;
       if (named) {
         this._plainText = rangeText === NO_RATE ? `Autopilot to ${named}` : `Autopilot to ${named} ${DOT} ${rangeText}`;
       } else {
-        this._plainText = 'Autopilot on';
+        this._plainText = (engaged || aiming) ? 'Autopilot on' : 'Autopilot off';
       }
     }
 

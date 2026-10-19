@@ -317,9 +317,11 @@ export const DEFAULT_ROOMS = Object.freeze({
     vitals: 'shown',
   }),
  3: Object.freeze({
+    // u6-tests-plain D4 (owner 2026-10-18, "what is noise"): ORBIT (LAT, LON, ALT, MET) is a
+    // Details pane on F3 too — 'gone' by default, one `+` (or the slider) away, unchanged.
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'shown',
     pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone', hints: 'gone',
-    cargo: 'gone', orbit: 'shown', copilot: 'shown', next: 'shown', comms: 'shown', override: 'gone', f1bar: 'gone',
+    cargo: 'gone', orbit: 'gone', copilot: 'shown', next: 'shown', comms: 'shown', override: 'gone', f1bar: 'gone',
     score: 'shown',
     vitals: 'shown',
   }),
