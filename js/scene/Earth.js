@@ -724,6 +724,215 @@ export function gateBitmapProbe(test = probeBitmapOrientation, ms = BITMAP_PROBE
   return Promise.race([run, timeout]).finally(() => clearTimeout(timer));
 }
 
+// ----------------------------------------------------------------------------
+// st8 (2026-10-19): the decode itself in a Worker.
+// ImageBitmapLoader's createImageBitmap(blob, {imageOrientation:'flipY', …}) still
+// RESOLVES on the main thread, and the flip makes that one frame 105–160 ms long
+// when each 16k picture arrives (probe: 108–125 ms main thread, 9 ms with the same
+// call in a Worker, 0 of 134 M pixels different; docs/research/2026-10-startup.md,
+// "Phase 5"). So the file is fetched AND decoded in one inline Worker (no new
+// file) and the finished bitmap is transferred back; everything after that (the
+// strips, the one-shot upload, the pixel check) is unchanged. The worker is used
+// only after the same 2×2 orientation self-test passed INSIDE the worker; on any
+// worker problem the main-thread ImageBitmapLoader path runs as before.
+// ----------------------------------------------------------------------------
+
+/** createImageBitmap options of the worker path: exactly what three's loader passes. */
+export const WORKER_DECODE_OPTIONS = Object.freeze({ ...BITMAP_LOADER_OPTIONS, colorSpaceConversion: 'none' });
+
+/**
+ * The worker's program. Written as a function so node tests can run it against a
+ * fake scope; the browser gets its source text (`DECODE_WORKER_SOURCE`). It must
+ * stay self-contained (no closure over this module). Messages in:
+ *   {id, type:'selftest', options}     → {id, ok}
+ *   {id, type:'decode', url, options}  → {id, bitmap} (transferred) | {id, error}
+ * `fetch` uses the default (same-origin) credentials, like three's loader with
+ * crossOrigin 'anonymous'; the page's service worker serves it when the page is
+ * controlled (probe: blob-URL workers inherit the page's controller).
+ * @param {object} scope  the worker's global (`self`)
+ */
+export function decodeWorkerMain(scope) {
+  async function selfTest(options) {
+    const OC = scope.OffscreenCanvas;
+    const src = new OC(2, 2);
+    const g = src.getContext('2d');
+    g.fillStyle = 'rgb(255,0,0)'; g.fillRect(0, 0, 2, 1); // top row red
+    g.fillStyle = 'rgb(0,0,255)'; g.fillRect(0, 1, 2, 1); // bottom row blue
+    const blob = await src.convertToBlob({ type: 'image/png' });
+    const bmp = await scope.createImageBitmap(blob, options);
+    try {
+      if (!bmp || bmp.width !== 2 || bmp.height !== 2) return false;
+      const d = new OC(2, 2).getContext('2d');
+      d.drawImage(bmp, 0, 0);
+      const top = d.getImageData(0, 0, 1, 1).data;
+      const bottom = d.getImageData(0, 1, 1, 1).data;
+      return top[2] > 200 && top[0] < 55 && bottom[0] > 200 && bottom[2] < 55;
+    } finally {
+      try { bmp && bmp.close && bmp.close(); } catch (_e) { /* best effort */ }
+    }
+  }
+  scope.onmessage = async (e) => {
+    const m = e.data || {};
+    let bmp = null;
+    try {
+      if (m.type === 'selftest') { scope.postMessage({ id: m.id, ok: (await selfTest(m.options)) === true }); return; }
+      const res = await scope.fetch(m.url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      bmp = await scope.createImageBitmap(await res.blob(), m.options);
+      scope.postMessage({ id: m.id, bitmap: bmp }, [bmp]);
+      bmp = null; // moved to the page
+    } catch (err) {
+      try { bmp && bmp.close && bmp.close(); } catch (_e) { /* best effort */ }
+      scope.postMessage({ id: m.id, error: String((err && err.message) || err) });
+    }
+  };
+}
+
+/** A decode request with no answer for this long fails (ms); a 16k AVIF is 4 MB, so this is generous even on a slow link. */
+export const WORKER_DECODE_TIMEOUT_MS = 90000;
+
+/** The worker's source text (a classic script). */
+export const DECODE_WORKER_SOURCE = `(${decodeWorkerMain.toString()})(self);`;
+
+/**
+ * Main-thread end of the decode worker: one promise per request, ids to match
+ * the replies. Any worker error (script error, message error) fails every
+ * pending request and marks the worker dead; callers then use the main-thread
+ * loader. Wraps anything with postMessage / onmessage / onerror / terminate.
+ */
+export class EarthDecodeWorker {
+  /**
+   * @param {{postMessage: Function, terminate?: Function}} worker
+   * @param {object} [options]  createImageBitmap options sent with every request
+   * @param {number} [timeoutMs]  a decode request that gets no answer for this long fails (the
+   *   page then uses the main-thread loader); a browser can kill a worker without telling us
+   */
+  constructor(worker, options = WORKER_DECODE_OPTIONS, timeoutMs = WORKER_DECODE_TIMEOUT_MS) {
+    this.worker = worker;
+    this.options = { ...options };
+    this.timeoutMs = timeoutMs;
+    this.pending = new Map();
+    this.nextId = 1;
+    this.dead = false;
+    worker.onmessage = (e) => this._reply(e && e.data);
+    worker.onerror = (e) => this._die(new Error(`decode worker error: ${(e && e.message) || 'unknown'}`));
+    worker.onmessageerror = () => this._die(new Error('decode worker message error'));
+  }
+
+  _reply(data) {
+    const p = data && this.pending.get(data.id);
+    if (!p) { if (data && data.bitmap) closeBitmap(data.bitmap); return; }
+    this.pending.delete(data.id);
+    clearTimeout(p.timer);
+    if (data.error) p.reject(new Error(String(data.error)));
+    else p.resolve(data);
+  }
+
+  _die(err) {
+    this.dead = true;
+    const all = [...this.pending.values()];
+    this.pending.clear();
+    for (const p of all) { clearTimeout(p.timer); p.reject(err); }
+  }
+
+  _send(msg) {
+    if (this.dead) return Promise.reject(new Error('decode worker is dead'));
+    return new Promise((resolve, reject) => {
+      const id = this.nextId++;
+      const entry = { resolve, reject, timer: null };
+      this.pending.set(id, entry);
+      if (msg.type === 'decode' && this.timeoutMs > 0) {
+        entry.timer = setTimeout(() => {
+          if (this.pending.delete(id)) reject(new Error(`decode worker timeout after ${this.timeoutMs} ms`));
+        }, this.timeoutMs);
+      }
+      try {
+        this.worker.postMessage({ ...msg, id, options: { ...this.options } });
+      } catch (err) {
+        this.pending.delete(id);
+        clearTimeout(entry.timer);
+        reject(err);
+      }
+    });
+  }
+
+  /** @returns {Promise<boolean>} the orientation self-test, run inside the worker */
+  selfTest() { return this._send({ type: 'selftest' }).then((r) => r.ok === true); }
+
+  /**
+   * Fetch and decode one picture in the worker.
+   * @param {string} url  absolute (a blob: worker cannot resolve relative paths)
+   * @returns {Promise<ImageBitmap>}
+   */
+  decode(url) {
+    return this._send({ type: 'decode', url }).then((r) => {
+      if (!r.bitmap) throw new Error('decode worker sent no bitmap');
+      return r.bitmap;
+    });
+  }
+
+  terminate() {
+    if (this.terminated) return; // each rejected request's handler retires the worker again
+    this.terminated = true;
+    // Requests still in flight are rejected, not dropped: each caller then falls back to the
+    // main-thread loader (the message is not "HTTP nnn", so it is not read as a missing file).
+    this._die(new Error('decode worker retired'));
+    try { this.worker.terminate && this.worker.terminate(); } catch (_e) { /* best effort */ }
+  }
+}
+
+/** Absolute URL of a page-relative path (the worker's fetch has no usable base). */
+function absoluteUrl(path) {
+  try {
+    const base = (typeof document !== 'undefined' && document.baseURI) || (typeof location !== 'undefined' && location.href) || undefined;
+    return new URL(path, base).href;
+  } catch (_e) {
+    return path;
+  }
+}
+
+/** The decode worker, once its self-test passed; null = decode on the main thread. */
+let decodeWorker = null;
+/** null while the worker's self-test runs; true / false afterwards. */
+let workerPathOk = null;
+
+/**
+ * Start the worker and its self-test (bounded by the same 500 ms as the main-thread
+ * test). Never throws; resolves false with no DOM / Worker / Blob URL support.
+ * @returns {Promise<boolean>}
+ */
+async function probeWorkerDecode() {
+  let w = null;
+  let blobUrl = null;
+  try {
+    if (typeof document === 'undefined' || typeof Worker === 'undefined' || typeof Blob === 'undefined'
+      || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return false;
+    blobUrl = URL.createObjectURL(new Blob([DECODE_WORKER_SOURCE], { type: 'text/javascript' }));
+    w = new EarthDecodeWorker(new Worker(blobUrl));
+    const ok = await gateBitmapProbe(() => w.selfTest());
+    // the worker has loaded its script by now (or never will): the blob is not needed any more
+    try { URL.revokeObjectURL(blobUrl); } catch (_e) { /* best effort */ }
+    if (!ok) { w.terminate(); return false; }
+    decodeWorker = w;
+    return true;
+  } catch (_e) {
+    try { w && w.terminate(); } catch (_e2) { /* best effort */ }
+    try { blobUrl && URL.revokeObjectURL(blobUrl); } catch (_e3) { /* best effort */ }
+    return false;
+  }
+}
+
+// Not awaited by module evaluation (the self-test starts now, in parallel with the
+// two probes below; a picture asked for before it ends waits for it, see
+// loadLevel). So the start-up wait is exactly what it was before the worker.
+let workerProbe = probeWorkerDecode().then((ok) => {
+  if (workerPathOk === null) workerPathOk = ok === true;
+  if (typeof console !== 'undefined' && typeof document !== 'undefined') {
+    console.log(`[Earth] picture decode in a worker: ${workerPathOk ? 'YES' : 'NO (main-thread bitmap loader)'}`);
+  }
+  return workerPathOk;
+});
+
 // Both probes run in parallel (no added wait at module load); the bitmap
 // self-test is bounded by BITMAP_PROBE_TIMEOUT_MS. The AVIF probe is not.
 const [avifSupported, bitmapProbeResult] = await Promise.all([probeAvifSupport(), gateBitmapProbe()]);
@@ -748,6 +957,11 @@ export function isBitmapPathSupported() {
   return bitmapPathOk === true;
 }
 
+/** @returns {boolean} Whether the pictures are decoded in a Worker (st8; false while its self-test still runs). */
+export function isWorkerDecodeSupported() {
+  return bitmapPathOk === true && workerPathOk === true && !!decodeWorker && !decodeWorker.dead;
+}
+
 let bitmapLoader = null;
 /** st6 test seam: true / false forces the strip path on / off; null = decide from the browser. */
 let stripsForced = null;
@@ -764,16 +978,47 @@ function getBitmapLoader() {
  * strip switch (st6; null = decide from the browser). Returns a function that
  * restores the previous state.
  * st7: `stripCheck(renderer, feeder)` (boolean or promise of one) replaces the run-time pixel check.
- * @param {{bitmapLoader?: object|null, imageLoader?: object, bitmapOk?: boolean, stripsOk?: boolean|null, stripCheck?: Function|null}} o
+ * st8: `decodeWorker` (an EarthDecodeWorker-like object, or null for "no worker") replaces
+ * the decode worker; `offlineEnv` replaces what the 16k-for-offline step reads from the browser;
+ * `firstFrame: false` keeps the worker waiting for the game's first frame (default after
+ * injecting a worker: already drawn); `firstFrameTimeoutMs` shortens the hidden-tab fallback;
+ * `pendingWorker` (a worker-like) leaves its self-test "still running" until the returned
+ * function's `.settleWorker(true|false)` is called.
+ * @param {{bitmapLoader?: object|null, imageLoader?: object, bitmapOk?: boolean, stripsOk?: boolean|null, stripCheck?: Function|null, decodeWorker?: object|null, offlineEnv?: object|null}} o
  */
-export function setEarthLoadersForTests({ bitmapLoader: bl, imageLoader, bitmapOk, stripsOk, stripCheck } = {}) {
-  const prev = { bl: bitmapLoader, il: textureLoader, ok: bitmapPathOk, st: stripsForced, ck: stripCheckHook };
+export function setEarthLoadersForTests({ bitmapLoader: bl, imageLoader, bitmapOk, stripsOk, stripCheck, decodeWorker: dw, offlineEnv, firstFrame, firstFrameTimeoutMs, pendingWorker } = {}) {
+  const prev = {
+    bl: bitmapLoader, il: textureLoader, ok: bitmapPathOk, st: stripsForced, ck: stripCheckHook,
+    dw: decodeWorker, wok: workerPathOk, oe: offlineEnvOverride, od: ensuredOffline,
+    ff: firstFrameSeen, fw: frameWaiters, ft: firstFrameFallbackMs, ftm: frameTimers, wp: workerProbe,
+  };
   if (bl !== undefined) bitmapLoader = bl;
   if (imageLoader !== undefined) textureLoader = imageLoader;
   if (bitmapOk !== undefined) bitmapPathOk = bitmapOk === true;
   if (stripsOk !== undefined) stripsForced = stripsOk === null ? null : stripsOk === true;
   if (stripCheck !== undefined) stripCheckHook = stripCheck;
-  return () => { bitmapLoader = prev.bl; textureLoader = prev.il; bitmapPathOk = prev.ok; stripsForced = prev.st; stripCheckHook = prev.ck; };
+  if (dw !== undefined) { decodeWorker = dw; workerPathOk = dw !== null; }
+  if (offlineEnv !== undefined) { offlineEnvOverride = offlineEnv; ensuredOffline = new Set(); }
+  // A test that injects a worker gets the "first frame is drawn" state unless it asks for the pre-frame state.
+  if (dw !== undefined || firstFrame !== undefined) { firstFrameSeen = firstFrame !== false; frameWaiters = []; }
+  if (firstFrameTimeoutMs !== undefined) firstFrameFallbackMs = firstFrameTimeoutMs;
+  let settleWorker = null;
+  if (pendingWorker !== undefined) {
+    // the worker's self-test "still running": pictures wait; settleWorker(true|false) ends it
+    decodeWorker = pendingWorker; workerPathOk = null;
+    workerProbe = new Promise((resolve) => {
+      settleWorker = (ok) => { workerPathOk = ok === true; resolve(workerPathOk); };
+    });
+  }
+  const restore = () => {
+    bitmapLoader = prev.bl; textureLoader = prev.il; bitmapPathOk = prev.ok; stripsForced = prev.st; stripCheckHook = prev.ck;
+    decodeWorker = prev.dw; workerPathOk = prev.wok; offlineEnvOverride = prev.oe; ensuredOffline = prev.od;
+    firstFrameSeen = prev.ff; frameWaiters = prev.fw; firstFrameFallbackMs = prev.ft;
+    for (const id of frameTimers) clearTimeout(id);
+    frameTimers = prev.ftm; workerProbe = prev.wp;
+  };
+  restore.settleWorker = (ok) => { if (settleWorker) settleWorker(ok); };
+  return restore;
 }
 
 /**
@@ -833,80 +1078,211 @@ function setEarthImage(tex, image) {
  * `tex.image` is an open ImageBitmap at call time: remember its size for the
  * diagnostics (a closed bitmap reads 0×0), then free its memory. The 1×1
  * restore placeholder is ignored.
+ * st8: a one-shot upload of the tier's own picture also counts as "complete" for
+ * the 16k-for-offline step (the strip path reports through Earth._setPicture).
  */
 function onEarthTextureUpdate(tex) {
   tex.userData.uploaded = true;
   const img = tex.image;
+  if (img && !img.isPlaceholder) notePictureComplete(tex);
   if (!isOpenBitmap(img)) return;
   tex.userData.uploadedWidth = img.width;
   tex.userData.uploadedHeight = img.height;
   try { img.close(); } catch (_e) { /* best effort */ }
 }
 
+/**
+ * st8 D3: the files of one picture, best first: the tier's own file, then each
+ * smaller tier (16k → 8k → base). Pure; exported for tests.
+ * @param {string} path  JPG path as given to loadTexture, e.g. 'textures/earth_day_16k.jpg'
+ * @returns {string[]}
+ */
+export function pictureChain(path) {
+  const m = /^(.*\/earth_(?:day|night|clouds))(_16k|_8k)?(\.jpg)$/i.exec(path);
+  if (!m) return [path];
+  const [, stem, tier, ext] = m;
+  if (tier === '_16k') return [path, `${stem}_8k${ext}`, `${stem}${ext}`];
+  if (tier === '_8k') return [path, `${stem}${ext}`];
+  return [path];
+}
+
+/** The sources of a texture, best first; entry 0 is `tex.userData.src` itself (which keeps the tier's real path for a restore). */
+function tierSources(src) {
+  return pictureChain(src.path).map((p, i) => (i === 0 ? src
+    : { path: p, useAvif: src.useAvif, initialPath: src.useAvif ? p.replace(/\.jpg$/i, '.avif') : p }));
+}
+
+const fileName = (p) => String(p).split('/').pop();
+
 /** Load (or reload) the picture of an Earth texture into `tex`. */
 function loadEarthImage(tex) {
   const seq = (tex.userData.loadSeq = (tex.userData.loadSeq || 0) + 1);
-  const { initialPath } = tex.userData.src;
-  if (!bitmapPathOk) { loadViaImageLoader(tex, seq); return; }
-  let settled = false;
-  getBitmapLoader().load(
-    initialPath,
-    (bmp) => {
-      if (settled) return;
-      settled = true;
-      if (tex.userData.loadSeq !== seq) { try { bmp.close(); } catch (_e) { /* stale */ } return; }
-      const place = () => {
-        try {
-          const dims = `${bmp.width}×${bmp.height}`;
-          // st6: on a strip-capable browser the picture is queued and reaches the
-          // GPU one strip per frame; this texture stays empty until the finished
-          // one replaces it (Earth._setPicture). Otherwise: one-shot, as before.
-          const sp = tex.userData.strips;
-          if (sp && sp.feeder.accepts(bmp)) sp.feeder.enqueue(tex, bmp, sp.priority, sp.onReady);
-          else setEarthImage(tex, bmp);
-          console.log(`[Earth] Loaded: ${initialPath} (${dims})`);
-          recordTexEvent('loaded', initialPath, { width: bmp.width, height: bmp.height });
-          // §13 boot timeline (?logBoot=1): no-op when the flag is off.
-          bootMark(`Earth texture decoded: ${initialPath.split('/').pop()} (${dims})`);
-        } catch (e) {
-          console.error(`[Earth] Texture arrival failed: ${initialPath}`, e);
-        }
-      };
-      // st7: the run-time pixel check of the strip path normally finishes long
-      // before a 16k picture is decoded; if not, this picture waits for it.
-      const feeder = tex.userData.strips && tex.userData.strips.feeder;
-      if (feeder && feeder.verdict === null) {
-        feeder.verify().then(() => {
-          if (tex.userData.loadSeq !== seq) { try { bmp.close(); } catch (_e) { /* stale */ } return; }
-          place();
-        });
-      } else place();
-    },
-    undefined,
-    (err) => {
-      if (settled) return;
-      settled = true;
-      if (tex.userData.loadSeq !== seq) return;
-      console.warn(`[Earth] bitmap load failed for ${initialPath}, using the image loader`, err);
-      recordTexEvent('bitmap-fail', initialPath, null);
-      loadViaImageLoader(tex, seq);
-    }
-  );
+  delete tex.userData.loadedLevel;
+  loadLevel(tex, seq, 0);
+}
+
+/**
+ * The next smaller tier of a picture whose file could not be had on any path
+ * (offline, 404, undecodable). Logs one line naming it. False when there is none
+ * (the texture then samples black, as before).
+ */
+function nextTier(tex, seq, level) {
+  if (tex.userData.loadSeq !== seq) return true;
+  const sources = tierSources(tex.userData.src);
+  const next = sources[level + 1];
+  if (!next) return false;
+  console.warn(`[Earth] ${fileName(sources[level].initialPath)} could not be loaded — showing the smaller ${fileName(next.initialPath)} instead (a reload tries the full picture again)`);
+  recordTexEvent('tier-fallback', next.initialPath, null);
+  loadLevel(tex, seq, level + 1);
+  return true;
+}
+
+/** True once the game has drawn a frame (Earth.tickStrips ran, or the fallback timer fired). */
+let firstFrameSeen = false;
+let frameWaiters = [];
+let frameTimers = [];
+/** If no frame ever ticks (hidden tab), the worker decodes anyway after this long (ms). */
+export const FIRST_FRAME_FALLBACK_MS = 5000;
+let firstFrameFallbackMs = FIRST_FRAME_FALLBACK_MS;
+
+/** Runs `fn` once, after the game's first frame (or at once if it has been drawn). */
+function afterFirstFrame(fn) {
+  if (firstFrameSeen) { fn(); return; }
+  let done = false;
+  const once = () => { if (done) return; done = true; fn(); };
+  frameWaiters.push(once);
+  if (typeof setTimeout === 'function') frameTimers.push(setTimeout(once, firstFrameFallbackMs));
+}
+
+/** Earth.tickStrips (the game loop's per-frame call) reports the first frame. */
+function noteFirstFrame() {
+  if (firstFrameSeen) return;
+  firstFrameSeen = true;
+  const waiting = frameWaiters;
+  frameWaiters = [];
+  for (const id of frameTimers) clearTimeout(id);
+  frameTimers = [];
+  for (const fn of waiting) fn();
+}
+
+/** Stop using the decode worker for pictures asked for from now on (requests in flight are rejected by terminate(), so they fall back to the main-thread loader). */
+function retireWorker(w) {
+  if (decodeWorker !== w) return;
+  workerPathOk = false;
+  try { w.terminate(); } catch (_e) { /* best effort */ }
+}
+
+/** The decode worker to use right now, or null (main-thread loader). */
+function usableWorker() {
+  return bitmapPathOk && workerPathOk === true && decodeWorker && !decodeWorker.dead ? decodeWorker : null;
+}
+
+/**
+ * One tier of a picture: worker decode (st8) → main-thread bitmap loader → HTML
+ * image (AVIF, then JPG); when all of those fail, the next smaller tier (st8 D3).
+ */
+function loadLevel(tex, seq, level) {
+  const src = tierSources(tex.userData.src)[level];
+  const { initialPath } = src;
+  if (!bitmapPathOk) { loadViaImageLoader(tex, seq, level); return; }
+  const stale = () => tex.userData.loadSeq !== seq;
+
+  // A decoded bitmap has arrived (from the worker or the main-thread loader).
+  const arrive = (bmp) => {
+    if (stale()) { closeBitmap(bmp); return; }
+    const place = () => {
+      try {
+        const dims = `${bmp.width}×${bmp.height}`;
+        tex.userData.loadedLevel = level;
+        // st6: on a strip-capable browser the picture is queued and reaches the
+        // GPU one strip per frame; this texture stays empty until the finished
+        // one replaces it (Earth._setPicture). Otherwise: one-shot, as before.
+        const sp = tex.userData.strips;
+        if (sp && sp.feeder.accepts(bmp)) sp.feeder.enqueue(tex, bmp, sp.priority, sp.onReady);
+        else setEarthImage(tex, bmp);
+        console.log(`[Earth] Loaded: ${initialPath} (${dims})`);
+        recordTexEvent('loaded', initialPath, { width: bmp.width, height: bmp.height });
+        // §13 boot timeline (?logBoot=1): no-op when the flag is off.
+        bootMark(`Earth texture decoded: ${initialPath.split('/').pop()} (${dims})`);
+      } catch (e) {
+        console.error(`[Earth] Texture arrival failed: ${initialPath}`, e);
+      }
+    };
+    // st7: the run-time pixel check of the strip path normally finishes long
+    // before a 16k picture is decoded; if not, this picture waits for it.
+    const feeder = tex.userData.strips && tex.userData.strips.feeder;
+    if (feeder && feeder.verdict === null) {
+      feeder.verify().then(() => {
+        if (stale()) { closeBitmap(bmp); return; }
+        place();
+      });
+    } else place();
+  };
+
+  // Today's path: three's ImageBitmapLoader on the main thread.
+  const viaLoader = () => {
+    let settled = false;
+    getBitmapLoader().load(
+      initialPath,
+      (bmp) => {
+        if (settled) return;
+        settled = true;
+        arrive(bmp);
+      },
+      undefined,
+      (err) => {
+        if (settled) return;
+        settled = true;
+        if (stale()) return;
+        console.warn(`[Earth] bitmap load failed for ${initialPath}, using the image loader`, err);
+        recordTexEvent('bitmap-fail', initialPath, null);
+        loadViaImageLoader(tex, seq, level);
+      }
+    );
+  };
+
+  // st8: fetch + decode in the worker; any worker failure → the main-thread loader.
+  const viaWorker = (w) => {
+    w.decode(absoluteUrl(initialPath)).then(arrive, (err) => {
+      // A decode failure (not a missing file) means this browser's worker cannot decode what
+      // the 2×2 PNG self-test could not show (AVIF in a worker, a killed worker): stop using it.
+      if (!/^HTTP \d{3}/.test(String((err && err.message) || err))) retireWorker(w);
+      if (stale()) return;
+      console.warn(`[Earth] worker decode failed for ${initialPath}, using the main-thread bitmap loader`, err);
+      recordTexEvent('worker-fail', initialPath, null);
+      viaLoader();
+    });
+  };
+
+  const start = () => {
+    if (stale()) return;
+    const w = usableWorker();
+    // st8: the worker starts decoding after the game's first frame, not during
+    // start-up (measured: decoding in parallel with the boot made the menu 30-95 ms
+    // later and landed the pictures in the first game-loop frame); the old
+    // main-thread path is unchanged.
+    if (w) afterFirstFrame(() => { if (!stale()) viaWorker(w); }); else viaLoader();
+  };
+  // The worker's self-test normally ended long before the first picture is asked for.
+  if (workerPathOk === null) workerProbe.then(start); else start();
 }
 
 /**
  * The pre-st3 path (HTML image via THREE.TextureLoader, AVIF → JPG fallback),
  * assigning into the already-returned texture. three honours `flipY` only for
  * HTML images, so it is set to true before one is assigned.
+ * st8: `level` picks the tier's file (see tierSources); when neither the AVIF nor
+ * the JPG of a tier can be had, the next smaller tier is tried.
  */
-function loadViaImageLoader(tex, seq) {
-  const { path, useAvif, initialPath } = tex.userData.src;
+function loadViaImageLoader(tex, seq, level = 0) {
+  const { path, useAvif, initialPath } = tierSources(tex.userData.src)[level];
   const stale = () => tex.userData.loadSeq !== seq;
   textureLoader.load(
     initialPath,
     (loaded) => {
       if (stale()) return;
       tex.flipY = true;
+      tex.userData.loadedLevel = level;
       setEarthImage(tex, loaded.image);
       console.log(`[Earth] Loaded: ${initialPath} (${loaded.image?.width}×${loaded.image?.height})`);
       recordTexEvent('loaded', initialPath, loaded.image);
@@ -922,18 +1298,21 @@ function loadViaImageLoader(tex, seq) {
         textureLoader.load(path, (loaded) => {
           if (stale()) return;
           tex.flipY = true;
+          tex.userData.loadedLevel = level;
           setEarthImage(tex, loaded.image);
           console.log(`[Earth] Loaded fallback: ${path} (${loaded.image?.width}×${loaded.image?.height})`);
           recordTexEvent('fallback-loaded', path, loaded.image);
           bootMark(`Earth texture decoded (fallback): ${path.split('/').pop()} (${loaded.image?.width}×${loaded.image?.height})`);
         }, undefined, (err2) => {
-          // Both AVIF and JPG failed — the texture will sample black forever.
+          // Both AVIF and JPG failed — the next smaller tier, else the texture will sample black forever.
           console.error(`[Earth] Fallback JPG load ALSO failed: ${path}`, err2);
           recordTexEvent('error', path, null);
+          nextTier(tex, seq, level);
         });
       } else {
         console.error(`[Earth] Texture load failed: ${path}`, err);
         recordTexEvent('error', path, null);
+        nextTier(tex, seq, level);
       }
     }
   );
@@ -954,9 +1333,12 @@ function loadViaImageLoader(tex, seq) {
  *   st6: when given, a bitmap that the feeder accepts is built into a separate
  *   texture in strips and `onReady(finishedTexture)` is called once; this
  *   (returned) texture then stays the empty "not arrived yet" one.
+ * @param {EarthOfflineKeeper|null} [keeper]
+ *   st8: when given, it is told which 16k files this picture needs and when the
+ *   picture is complete on screen at that tier (it then stores the file for offline).
  * @returns {THREE.Texture}
  */
-export function loadTexture(path, anisotropy = 8, strips = null) {
+export function loadTexture(path, anisotropy = 8, strips = null, keeper = null) {
   const avifPath = path.replace(/\.jpg$/i, '.avif');
   const useAvif = avifSupported && avifPath !== path;
   const initialPath = useAvif ? avifPath : path;
@@ -966,6 +1348,8 @@ export function loadTexture(path, anisotropy = 8, strips = null) {
   const tex = new THREE.Texture();
   tex.userData.src = { path, useAvif, initialPath };
   if (strips) tex.userData.strips = strips;
+  // st8 D4: told when this picture is complete on screen at its own tier.
+  if (keeper) { tex.userData.keeper = keeper; keeper.expect(initialPath); }
   // Bitmaps are closed after their first upload (onEarthTextureUpdate). Any later
   // change to this texture's anisotropy / filters / wrap / format makes three
   // re-upload, which would hit a closed bitmap and throw: change those only
@@ -1051,6 +1435,144 @@ function makeRestorePlaceholder() {
     }
   } catch (_e) { /* fall through */ }
   return { width: 1, height: 1, isPlaceholder: true };
+}
+
+// ============================================================================
+// 16K FILES STORED FOR OFFLINE (st8, 2026-10-19)
+// ============================================================================
+//
+// The service worker precaches every texture EXCEPT the _16k ones (build-precache
+// excludes them: 6 MB of AVIF would double the first download). On a first visit
+// the page is not yet controlled when it fetches the 16k files, so they never
+// reach Cache Storage, and an offline start on a desktop then had no picture at
+// all. Fix (owner 2026-10-18/19: "default to local; updating in the background is
+// ok, but must not delay or interfere with startup or game"): once BOTH 16k
+// pictures are complete on screen and the page is controlled by the service
+// worker, the page asks for each file once, one at a time, low priority, and the
+// service worker's own cache-first rule stores the response (no service-worker
+// change). The browser keeps the downloaded bytes in a Blob outside the page, so
+// the page itself does almost nothing. A file already in Cache Storage is never
+// fetched again. Nothing happens on touch devices or below the 16k tier.
+
+/** Wait after both pictures are complete before the first file is asked for (ms). */
+export const OFFLINE_START_DELAY_MS = 2000;
+/** Wait between two files (ms). */
+export const OFFLINE_GAP_MS = 1000;
+/** How long to wait for the service worker to finish storing a response (ms). */
+export const OFFLINE_STORE_WAIT_MS = 10000;
+
+/** Test seam (setEarthLoadersForTests): replaces the browser pieces the keeper reads. */
+let offlineEnvOverride = null;
+/** URLs the keeper already made sure of in this page (a second Earth does not repeat it). */
+let ensuredOffline = new Set();
+
+/** What the keeper reads from the browser; every piece is looked up when used. */
+function browserOfflineEnv() {
+  return {
+    serviceWorker: () => ((typeof navigator !== 'undefined' && navigator.serviceWorker) || null),
+    caches: () => (typeof caches !== 'undefined' ? caches : null),
+    fetch: (url, init) => fetch(url, init),
+    touch: () => { try { return TouchControls.detect() === true; } catch (_e) { return false; } },
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    absolute: absoluteUrl,
+  };
+}
+
+/**
+ * Stores the 16k files in Cache Storage for offline use (see the section note).
+ * One per Earth. `expect(path)` registers a picture (only `_16k` files count, and
+ * not on touch hardware); `complete(path)` says it is on screen at that tier; when
+ * every expected picture is complete the work starts, once.
+ */
+export class EarthOfflineKeeper {
+  /** @param {object} [env]  browser pieces (injectable for tests) */
+  constructor(env = offlineEnvOverride || browserOfflineEnv()) {
+    this.env = env;
+    /** @type {Map<string, boolean>} absolute url → complete on screen */
+    this.files = new Map();
+    this.started = false;
+    /** Resolves when the work ended (or at once if it never starts). Tests wait on it. */
+    this.done = null;
+  }
+
+  /** @returns {boolean} whether this file will be stored */
+  expect(initialPath) {
+    if (!/_16k\.[a-z0-9]+$/i.test(String(initialPath))) return false;
+    if (this.env.touch()) return false;
+    this.files.set(this.env.absolute(initialPath), false);
+    return true;
+  }
+
+  /** The picture of `initialPath` is complete on screen at its own tier. */
+  complete(initialPath) {
+    const url = this.env.absolute(initialPath);
+    if (!this.files.has(url)) return;
+    this.files.set(url, true);
+    if (this.started) return;
+    for (const v of this.files.values()) if (!v) return;
+    this.started = true;
+    this.done = this.run().catch((e) => console.warn('[Earth] storing the 16k pictures for offline failed', e));
+  }
+
+  /** @returns {Promise<string>} what happened, for tests and the log */
+  async run() {
+    const env = this.env;
+    const sw = env.serviceWorker();
+    const cs = env.caches();
+    if (!sw || !cs || typeof env.fetch !== 'function') return 'no-service-worker';
+    // Controlled = the service worker will see (and store) the page's fetches. On a
+    // first visit clients.claim() runs only after the precache install.
+    if (!sw.controller) {
+      await new Promise((resolve) => {
+        const onChange = () => {
+          if (!sw.controller) return;
+          try { sw.removeEventListener('controllerchange', onChange); } catch (_e) { /* best effort */ }
+          resolve();
+        };
+        sw.addEventListener('controllerchange', onChange);
+      });
+    }
+    await env.wait(OFFLINE_START_DELAY_MS);
+    let stored = 0;
+    for (const url of this.files.keys()) {
+      if (ensuredOffline.has(url)) continue;
+      const name = fileName(url);
+      let have = false;
+      try { have = !!(await cs.match(url, { ignoreVary: true })); } catch (_e) { have = false; }
+      if (have) {
+        ensuredOffline.add(url);
+        console.log(`[Earth] 16k picture already stored for offline: ${name}`);
+        continue;
+      }
+      try {
+        const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+        // force-cache: take the copy the page just downloaded from the HTTP cache when there is one.
+        const res = await env.fetch(url, { priority: 'low', cache: 'force-cache' });
+        if (!res || !res.ok) throw new Error(`HTTP ${res && res.status}`);
+        await res.blob();
+        // The service worker stores its copy without making the response wait for it.
+        let ok = false;
+        for (let waited = 0; !ok && waited <= OFFLINE_STORE_WAIT_MS; waited += 250) {
+          if (waited) await env.wait(250);
+          try { ok = !!(await cs.match(url, { ignoreVary: true })); } catch (_e) { ok = false; }
+        }
+        const ms = typeof performance !== 'undefined' ? Math.round(performance.now() - t0) : 0;
+        if (ok) { ensuredOffline.add(url); stored++; console.log(`[Earth] 16k picture stored for offline: ${name} (${ms} ms)`); recordTexEvent('offline-stored', url, null); }
+        else console.warn(`[Earth] 16k picture ${name} was fetched but is not in Cache Storage`);
+      } catch (err) {
+        console.warn(`[Earth] could not store ${name} for offline`, err);
+      }
+      await env.wait(OFFLINE_GAP_MS);
+    }
+    return stored > 0 ? 'stored' : 'nothing-to-do';
+  }
+}
+
+/** The picture in `tex` is on screen at its own tier: tell the keeper (if any). */
+function notePictureComplete(tex) {
+  const ud = tex && tex.userData;
+  if (!ud || !ud.keeper || ud.loadedLevel !== 0 || !ud.src) return;
+  try { ud.keeper.complete(ud.src.initialPath); } catch (_e) { /* never break picture loading */ }
 }
 
 // ============================================================================
@@ -1380,6 +1902,8 @@ export class EarthStripFeeder {
     dst.userData.uploadedHeight = job.height;
     dst.userData.stripBuilt = true;
     dst.userData.pending = tex;
+    dst.userData.loadedLevel = tex.userData.loadedLevel; // st8
+    dst.userData.keeper = tex.userData.keeper;
     const file = tex.userData.src.initialPath;
     console.log(`[Earth] Ready: ${file} (${job.width}×${job.height}, ${job.count} strips of ${job.rows} rows, camera over the ${job.sunlit === false ? 'dark' : 'sunlit'} side when it started)`);
     recordTexEvent('ready', file, { width: job.width, height: job.height });
@@ -1679,8 +2203,10 @@ export class Earth {
     const strips = (slot, priority) => (this._strips
       ? { feeder: this._strips, priority, onReady: (t) => this._setPicture(slot, t) }
       : null);
-    this.dayTexture = loadTexture(`textures/earth_day${texSuffix}.jpg`, texAniso, strips('dayTexture', 0));
-    this.nightTexture = loadTexture(`textures/earth_night${nightSuffix}.jpg`, texAniso, strips('nightTexture', 2));
+    // st8 D4: stores the 16k files for offline once both are on screen (nothing below 16k / on touch).
+    this._offline = new EarthOfflineKeeper();
+    this.dayTexture = loadTexture(`textures/earth_day${texSuffix}.jpg`, texAniso, strips('dayTexture', 0), this._offline);
+    this.nightTexture = loadTexture(`textures/earth_night${nightSuffix}.jpg`, texAniso, strips('nightTexture', 2), this._offline);
     // Clouds are low-frequency; anisotropy cost concentrates at grazing angles
     // (the limb) where clouds are softest — 4x is indistinguishable from the tier
     // aniso and trims bandwidth on the overdraw-heaviest (transparent) layer.
@@ -1722,6 +2248,8 @@ export class Earth {
    */
   _setPicture(slot, texture) {
     this[slot] = texture;
+    // st8 D4: a picture finished through strips (not the empty one put back by a restore).
+    if (texture && texture.userData && texture.userData.stripBuilt) notePictureComplete(texture);
     const surface = this.surfaceMaterial && this.surfaceMaterial.uniforms;
     if (slot === 'dayTexture' && surface) surface.uDayTexture.value = texture;
     else if (slot === 'nightTexture' && surface) surface.uNightTexture.value = texture;
@@ -1745,6 +2273,7 @@ export class Earth {
 
   /** Feed at most one picture strip (once per drawn frame; main.js also calls this while the window is unfocused). */
   tickStrips() {
+    noteFirstFrame(); // st8: the decode worker starts after the first frame
     if (this._strips) this._strips.tick();
   }
 
