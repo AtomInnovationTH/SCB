@@ -593,15 +593,17 @@ export const Events = {
    *  defer their reveal until onboarding completes.
    *  Payload: {} */
   ONBOARDING_STARTED:     'onboarding:started',
-  /** Final onboarding beat completed; veteran path is now active.
-   *  Payload: {} */
+  /** The tutorial is over: the rest of the game switches on (collision consequences, teaching
+   *  cards, bounties, tips...). Fired once per run: at the tutorial's real end right after
+   *  ONBOARDING_MASTERED (tutorial-end-switch, owner 2026-10-19), by the veteran skip, or by an
+   *  all-done start. Payload: {} — or { atTutorialEnd: true } at the tutorial's real end
+   *  (DebrisField then keeps uncaught welcome pieces held). */
   ONBOARDING_COMPLETE:    'onboarding:complete',
   /** comms-after-tutorial D1 (2026-10-19): the tutorial's beat list is finished (the `final`
    *  beat's timer, the aim-slew end, or an all-done start). Fired ONCE per run by
    *  OnboardingDirector (reset() re-arms it); CommsSystem leaves tier 0 and lets the useful
-   *  lines through. A comms-only signal: ONBOARDING_COMPLETE is deliberately NOT emitted on
-   *  these paths (about ten other listeners would switch on mid-mission-1).
-   *  Not fired by the veteran skip (that path emits ONBOARDING_COMPLETE alone).
+   *  lines through. Since tutorial-end-switch (2026-10-19) ONBOARDING_COMPLETE follows it on
+   *  these paths. Not fired by the veteran skip (that path emits ONBOARDING_COMPLETE alone).
    *  Payload: {} */
   ONBOARDING_MASTERED:    'onboarding:mastered',
   /** Guidance depth changed by the behavior-driven tuner or Settings toggle.

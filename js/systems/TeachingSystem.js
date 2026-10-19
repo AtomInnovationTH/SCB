@@ -520,7 +520,19 @@ export class TeachingSystem {
     if (Events.AIM_SEQUENCE_START) on(Events.AIM_SEQUENCE_START, () => this._blockers.add('aimSequence'));
     if (Events.AIM_SEQUENCE_END)   on(Events.AIM_SEQUENCE_END,   () => this._blockers.delete('aimSequence'));
     if (Events.ONBOARDING_STARTED)  on(Events.ONBOARDING_STARTED,  () => { this._onboardingActive = true; });
-    if (Events.ONBOARDING_COMPLETE) on(Events.ONBOARDING_COMPLETE, () => { this._onboardingActive = false; });
+    if (Events.ONBOARDING_COMPLETE) {
+      on(Events.ONBOARDING_COMPLETE, () => {
+        // tutorial-end-switch D2: moments queued while the tutorial ran are stale by its end - drop
+        // them, and un-mark them seen (they were marked at queue time) so each can still show at its
+        // next real moment. A veteran's COMPLETE comes without STARTED and keeps its queue.
+        if (this._onboardingActive && this._queue.length) {
+          for (const m of this._queue) if (m && m.id != null) this._seen.delete(m.id);
+          this._queue.length = 0;
+          this._saveSeen();
+        }
+        this._onboardingActive = false;
+      });
+    }
     if (Events.MISSION_BEAT_STARTED)   on(Events.MISSION_BEAT_STARTED,   (d) => { this._activeCoachBeat = d || {}; });
     if (Events.MISSION_BEAT_SATISFIED) on(Events.MISSION_BEAT_SATISFIED, () => this._onCoachBeatSatisfied());
     if (Events.GAME_RESET) on(Events.GAME_RESET, () => this._clearPending());

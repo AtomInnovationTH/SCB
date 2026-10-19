@@ -301,6 +301,13 @@ export class OnboardingDirector {
      */
     this._masteredAnnounced = false;
 
+    /**
+     * tutorial-end-switch D1: true once ONBOARDING_COMPLETE has been emitted by the tutorial's
+     * end this run (the all-beats-known path shares it). reset() re-arms it. Not persisted.
+     * @type {boolean}
+     */
+    this._completeAnnounced = false;
+
     /** @type {boolean} flag set after MISSION_START fires (we wait for it). */
     this._started = false;
 
@@ -468,6 +475,7 @@ export class OnboardingDirector {
     this._skippedBeats.clear();
     this._mastered = false;
     this._masteredAnnounced = false; // comms-after-tutorial D1: the next run announces again
+    this._completeAnnounced = false; // tutorial-end-switch D1: so does COMPLETE
     this._active = null;
     this._beatIndex = -1;
     this._recentInputs.length = 0;
@@ -662,9 +670,9 @@ export class OnboardingDirector {
     if (Number.isFinite(beat.autoAdvanceAfter) && a.autoAdvanceTimer == null) {
       a.autoAdvanceTimer = this._setTimeout(() => {
         if (this._active && this._active.beat.id === beat.id) {
-          // `_advanceToNextBeat()` below returns early once mastered, so ONBOARDING_COMPLETE is
-          // NOT emitted here; it announces ONBOARDING_MASTERED (comms only). Why: see
-          // tmp/plans/comms-after-tutorial.md D1 (a COMPLETE here would wake ~10 other listeners).
+          // `_advanceToNextBeat()` below returns early once mastered; there it announces
+          // ONBOARDING_MASTERED (comms) and then ONBOARDING_COMPLETE: the tutorial's end
+          // switches the rest of the game on (owner 2026-10-19, tmp/plans/tutorial-end-switch.md).
           if (!beat.triggerEvent && beat.onEnter === 'mastered=true') this._mastered = true;
           this._dropBeatChip(beat);
           this._completedBeats.add(beat.id);
@@ -886,15 +894,19 @@ export class OnboardingDirector {
   }
 
   _advanceToNextBeat() {
-    // comms-after-tutorial D1: the `final` beat's timer (and the aim-slew end) set
-    // `_mastered` BEFORE calling here, so this early return is where a finished
-    // tutorial lands. It must NOT emit ONBOARDING_COMPLETE (about ten other
-    // listeners would switch on mid-mission-1 - tmp/plans/comms-after-tutorial.md);
-    // it announces the comms-only ONBOARDING_MASTERED instead (once; reset re-arms).
-    // A persisted-mastered start() whose skills fall below the veteran threshold
-    // also lands here (STARTED fired, no beats left) and would otherwise sit at
-    // comms tier 0 for the whole run.
-    if (this._mastered) { this._announceMastered(); return; }
+    // The `final` beat's timer (and the aim-slew end) set `_mastered` BEFORE calling
+    // here, so this early return is where a finished tutorial lands. Owner 2026-10-19
+    // (tutorial-end-switch D1): the tutorial's end announces ONBOARDING_MASTERED (comms
+    // stays at its tutorial tier) and then ONBOARDING_COMPLETE, once per run (reset
+    // re-arms both), so the rest of the game switches on. The payload tells the pin
+    // release to leave the welcome pieces held (D4). A persisted-mastered start()
+    // whose skills fall below the veteran threshold also lands here (STARTED fired, no
+    // beats left): the tutorial was already finished, so it switches on at once.
+    if (this._mastered) {
+      this._announceMastered();
+      this._announceComplete({ atTutorialEnd: true });
+      return;
+    }
     // Pick next un-completed, un-skipped beat.
     let idx = this._beatIndex + 1;
     // If we're advancing past a beat with a parallel partner that's already
@@ -918,6 +930,7 @@ export class OnboardingDirector {
       // Reached the end — mark mastered.
       this._mastered = true;
       this._persist();
+      this._completeAnnounced = true; // tutorial-end-switch D1: shared guard, never a second COMPLETE
       this._emit(Events.ONBOARDING_COMPLETE, {});
       // D1/D2: the all-skipped path keeps its COMPLETE (unchanged); CommsSystem
       // still needs the mastered signal to end the wake ramp at once.
@@ -937,6 +950,17 @@ export class OnboardingDirector {
     if (this._masteredAnnounced) return;
     this._masteredAnnounced = true;
     this._emit(Events.ONBOARDING_MASTERED, {});
+  }
+
+  /**
+   * tutorial-end-switch D1: the tutorial's end switches the rest of the game on.
+   * Emits ONBOARDING_COMPLETE once per run; reset() re-arms it.
+   * @private
+   */
+  _announceComplete(payload) {
+    if (this._completeAnnounced) return;
+    this._completeAnnounced = true;
+    this._emit(Events.ONBOARDING_COMPLETE, payload);
   }
 
   _postBeat(beat) {
@@ -1036,11 +1060,9 @@ export class OnboardingDirector {
         // u3-payoff-calm D5: only the beat that armed this timer may complete it (reset() / a skip moved on).
         if (this._active !== armed) return;
         if (beat.onEnter === 'mastered=true') {
-          // Setting `_mastered` makes `_advanceToNextBeat()` below take its early return, so
-          // ONBOARDING_COMPLETE has never fired on this path (the tutorial's real end). It is
-          // still NOT emitted: that would switch on ~10 other listeners mid-mission-1 (collision
-          // consequences, teaching overlays, bounties...). `_advanceToNextBeat` announces the
-          // comms-only ONBOARDING_MASTERED instead - see tmp/plans/comms-after-tutorial.md D1.
+          // Setting `_mastered` makes `_advanceToNextBeat()` below take its early return, which
+          // is the tutorial's real end: it announces ONBOARDING_MASTERED and then
+          // ONBOARDING_COMPLETE (owner 2026-10-19, tmp/plans/tutorial-end-switch.md D1).
           this._mastered = true;
         }
         this._dropBeatChip(beat);

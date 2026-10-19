@@ -786,7 +786,8 @@ export class DebrisField {
     //    (and the orbit re-sync in _clearOnboardingPin makes it seamless).
     //  • DEBRIS_REMOVED — the reliable "tease consumed" backstop (fragmentation,
     //    web de-orbit, or any catch that ends in removeDebris).
-    //  • ONBOARDING_COMPLETE — player skipped/finished the guided flow (clear all).
+    //  • ONBOARDING_COMPLETE — veteran skip / all-done start (clear all); not at the tutorial's
+    //    real end ({ atTutorialEnd: true }: uncaught pieces stay held until caught).
     const _releaseIfMatch = (d) => {
       const id = d?.debrisId ?? d?.targetId ?? d?.id;
       if (id != null && this._onboardingPinIds.has(id)) this._clearOnboardingPin(id);
@@ -796,7 +797,13 @@ export class DebrisField {
     if (Events.NET_CATCH_SUCCESS) eventBus.on(Events.NET_CATCH_SUCCESS, _releaseIfMatch);
     if (Events.DEBRIS_REMOVED) eventBus.on(Events.DEBRIS_REMOVED, _releaseIfMatch);
     if (Events.ONBOARDING_COMPLETE) {
-      eventBus.on(Events.ONBOARDING_COMPLETE, () => this._clearOnboardingPin());
+      eventBus.on(Events.ONBOARDING_COMPLETE, (d) => {
+        // tutorial-end-switch D4: the tutorial's real end leaves uncaught welcome pieces held (they
+        // release when caught, as on a first run before this change): releasing piece #2 would move it
+        // ~18 m in one step. A veteran's / a skipped tutorial's COMPLETE ({} payload) still releases all.
+        if (d?.atTutorialEnd) return;
+        this._clearOnboardingPin();
+      });
     }
 
     console.log(`[DebrisField] ${this.debrisList.length} interactive + ${BACKGROUND_COUNT} background debris`);

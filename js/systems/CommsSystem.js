@@ -444,9 +444,10 @@ export class CommsSystem {
     if (Events.ONBOARDING_COMPLETE) {
       eventBus.on(Events.ONBOARDING_COMPLETE, () => this._beginPostOnboardingRamp());
     }
-    // comms-after-tutorial D1/D2: the tutorial's beat list finished. The real flow never
-    // emits ONBOARDING_COMPLETE here (see OnboardingDirector._advanceToNextBeat), so this is
-    // what takes the panel out of tier 0 - straight to tier 3, no 30-60 s wake ramp.
+    // comms-after-tutorial D1/D2: the tutorial's beat list finished. The tutorial's end now emits
+    // MASTERED first and then ONBOARDING_COMPLETE (owner 2026-10-19, tutorial-end-switch D1), so
+    // this is what takes the panel out of tier 0 - straight to tier 3, no 30-60 s wake ramp; the
+    // COMPLETE that follows is a no-op here (_tutorialMastered).
     if (Events.ONBOARDING_MASTERED) {
       eventBus.on(Events.ONBOARDING_MASTERED, () => this._endTutorialSilence());
     }

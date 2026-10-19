@@ -111,12 +111,18 @@ export class DossierSystem {
     }));
     // First capture while onboarding is active releases the deferred queue so
     // the survey data lands in the same HUD credit flash as the catch reward.
-    this._unsubs.push(eventBus.on(Events.DEBRIS_CAPTURED, () => {
+    // tutorial-end-switch D3a: the mother's net / lasso catch counts too (only the daughter arm's dock
+    // emitted DEBRIS_CAPTURED, so a mother-only first run never paid it). Paid when the net closes: the
+    // survey data was earned by the scan itself. `_firstCaptureDone` keeps it to once per catch run.
+    const onFirstCatch = () => {
       if (this._onboardingActive && !this._firstCaptureDone) {
         this._firstCaptureDone = true;
         this._flushDeferredBounties({ withCatch: true });   // u3-payoff-calm: released WITH the first catch
       }
-    }));
+    };
+    this._unsubs.push(eventBus.on(Events.DEBRIS_CAPTURED, onFirstCatch));
+    if (Events.NET_CATCH_SUCCESS) this._unsubs.push(eventBus.on(Events.NET_CATCH_SUCCESS, onFirstCatch));
+    if (Events.LASSO_CAPTURED) this._unsubs.push(eventBus.on(Events.LASSO_CAPTURED, onFirstCatch));
   }
 
   /**
@@ -165,7 +171,11 @@ export class DossierSystem {
     // DEBRIS_CAPTURED event, so the wallet shows one combined jump.
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
-      text: `Capture confirmed. Salvage refines into fuel and credits. Survey data: ${total} credits earned.`,
+      // tutorial-end-switch D3b: a flush released by a catch adds to that catch's line; a flush with no
+      // catch (the tutorial's end) must not claim one.
+      text: withCatch
+        ? `Survey data: ${total} credits earned.`
+        : `Survey data sent to ground station. ${total} credits earned.`,
       priority: 'success',
       _onboarding: true,
     });
