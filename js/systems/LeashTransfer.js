@@ -99,6 +99,17 @@ const DEG = Math.PI / 180;
 // ─── planHandoff ───────────────────────────────────────────────────────────
 
 /**
+ * The rate and ramp the hand-off asks the autopilot for when it turns the ship (rad/s, rad/s²). The ONE place they are
+ * read: the TURN phase sends them with `startTurn`, and the early gas check (`LeashDriver.gasShort`, gas-low-fail-fast
+ * D1) prices the turn with the same limits.
+ * @returns {{maxRate:number, accel:number}}
+ */
+export function leashTurnLimits() {
+    const k = K();
+    return { maxRate: k.TURN_MAX_RATE_DEG * DEG, accel: k.TURN_ACCEL_DEG * DEG };
+}
+
+/**
  * l8-reel-collar (D5): the nearest the bag's CENTRE may start to the tip along the line. The measured floor is
  * D_MIN_M (0.3 m, a bag of radius <= 0.25 m); a bigger bag needs `D_MIN_PER_R` radii, or its surface sweeps the
  * tip's own strut during the turn (measured: r 0.50 at 0.3 m snags FlowerStrut_0 on the first turn; at 0.6 m it
@@ -734,8 +745,8 @@ export class LeashTransfer {
     }
 
     _turnCmd(io, axisWorld, angleRad) {
-        const k = K();
-        this._cmd('startTurn', { axisWorld, angleRad, maxRate: k.TURN_MAX_RATE_DEG * DEG, accel: k.TURN_ACCEL_DEG * DEG });
+        const lim = leashTurnLimits();
+        this._cmd('startTurn', { axisWorld, angleRad, maxRate: lim.maxRate, accel: lim.accel });
     }
 
     _ph_TURN(dt, io, g) {

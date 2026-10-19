@@ -101,6 +101,78 @@ const TURN_MIN_MAG = 0.02;
 /** Body axis → RCS couple name, for the two couples with real authority (x = pitch, y = yaw). */
 const TURN_COUPLES = Object.freeze([['pitch', 'x'], ['yaw', 'y']]);
 
+/**
+ * The shape and the steering-gas price of one attitude turn (gas-low-fail-fast D1): the ONE place the estimate is
+ * computed. `requestAttitudeTurn` runs it for the turn it is about to start; the leash's early check
+ * (`LeashDriver.gasShort`) runs it, with the same limits, before it folds the radiators — so the two can never
+ * disagree about what a turn costs.
+ *
+ * @param {object} player — needs getAttitudeInertia(), _coupleTauMag(axis), `_coldGasRate`
+ * @param {{x:number,y:number,z:number}} nBody — UNIT turn axis in the SHIP (body) frame
+ * @param {number} angleRad — signed
+ * @param {object} [opts]
+ * @param {number} [opts.maxRate] — rad/s peak body rate (default TURN_DEFAULT_MAX_RATE)
+ * @param {number} [opts.accel] — rad/s² ramp, capped at what the couples give
+ * @returns {{ok:false, reason:string}
+ *   | {ok:true, sign:number, A:number, a:number, wp:number, ta:number, tc:number, T:number,
+ *      mag:{x:number,y:number}, dir:{x:number,y:number}, k:number, gasEstimate:number}}
+ */
+export function attitudeTurnProfile(player, nBody, angleRad, opts = {}) {
+  // α = the slowest couple the turn needs (torque = I·α·n for a fixed axis).
+  const I = player.getAttitudeInertia();
+  const inertia = { x: I.ixx, y: I.iyy };
+  const tau = { x: player._coupleTauMag('x'), y: player._coupleTauMag('y') };
+  const comp = { x: Math.abs(nBody.x), y: Math.abs(nBody.y) };
+  let aMax = Infinity;
+  for (const k of ['x', 'y']) {
+    if (comp[k] > 1e-6) aMax = Math.min(aMax, tau[k] / (inertia[k] * comp[k]));
+  }
+  if (!Number.isFinite(aMax) || !(aMax > 0)) return { ok: false, reason: 'no steering authority about that axis' };
+
+  let maxRate = (Number.isFinite(opts.maxRate) && opts.maxRate > 0) ? opts.maxRate : TURN_DEFAULT_MAX_RATE;
+  const rateCap = Constants.ATTITUDE?.MAX_RATE;
+  if (rateCap > 0) maxRate = Math.min(maxRate, rateCap);
+  const a = (Number.isFinite(opts.accel) && opts.accel > 0) ? Math.min(opts.accel, aMax) : aMax;
+
+  // Trapezoid (triangle when the angle is shorter than maxRate²/α).
+  const sign = angleRad < 0 ? -1 : 1;
+  const A = Math.abs(angleRad);
+  const triangle = A < (maxRate * maxRate) / a;
+  const wp = triangle ? Math.sqrt(A * a) : maxRate;
+  const ta = wp / a;
+  const tc = triangle ? 0 : (A - wp * ta) / wp;
+  const T = 2 * ta + tc;
+
+  // Per-couple firing fraction during a ramp (x = pitch couple, y = yaw couple);
+  // a sliver on the minor couple folds into the dominant one.
+  const mag = { x: 0, y: 0 };
+  for (const k of ['x', 'y']) if (comp[k] > 1e-6) mag[k] = inertia[k] * a * comp[k] / tau[k];
+  const dom = mag.x >= mag.y ? 'x' : 'y';
+  const oth = dom === 'x' ? 'y' : 'x';
+  if (mag[oth] > 0 && mag[oth] <= TURN_MIN_MAG) { mag[dom] += mag[oth]; mag[oth] = 0; }
+  mag.x = Math.min(1, mag.x);
+  mag.y = Math.min(1, mag.y);
+  const dir = { x: Math.sign(sign * nBody.x) || 1, y: Math.sign(sign * nBody.y) || 1 };
+
+  // Same unit price as PlayerSatellite.fireRcsRotation (units per full-throttle second).
+  const k = (player._coldGasRate ?? 0.5) * (Constants.ATTITUDE?.RCS_ATTITUDE_N2_FACTOR ?? 0.3);
+  const gasEstimate = k * (mag.x + mag.y) * 2 * ta;
+  return { ok: true, sign, A, a, wp, ta, tc, T, mag, dir, k, gasEstimate };
+}
+
+/**
+ * Can the tank pay `gasEstimate`? True = it cannot. A player with no gas figure (a mock) is never short here:
+ * the autopilot's own turn check is the one that stops a real empty tank. The ONE comparison — `requestAttitudeTurn`
+ * and the leash's early check both use it.
+ * @param {object} player
+ * @param {number} gasEstimate — cold-gas units, from attitudeTurnProfile
+ * @returns {boolean}
+ */
+export function turnGasShort(player, gasEstimate) {
+  const coldGas = player && player.resources ? player.resources.coldGas : undefined;
+  return Number.isFinite(coldGas) && coldGas < gasEstimate;
+}
+
 /** aim-track-settle: while the aim direction itself turns, an aim is on target at the target's rate plus at most this much (rad/s; the brake step cap). */
 const AIM_TRACK_SLACK_MAX = 0.003;
 
@@ -2258,47 +2330,11 @@ export class AutopilotSystem {
     const nBody = axis.clone().applyQuaternion(qStart.clone().invert());
     if (Math.abs(nBody.z) > TURN_ROLL_MAX) return fail('roll axis — no roll authority');
 
-    // α = the slowest couple the turn needs (torque = I·α·n for a fixed axis).
-    const I = player.getAttitudeInertia();
-    const inertia = { x: I.ixx, y: I.iyy };
-    const tau = { x: player._coupleTauMag('x'), y: player._coupleTauMag('y') };
-    const comp = { x: Math.abs(nBody.x), y: Math.abs(nBody.y) };
-    let aMax = Infinity;
-    for (const k of ['x', 'y']) {
-      if (comp[k] > 1e-6) aMax = Math.min(aMax, tau[k] / (inertia[k] * comp[k]));
-    }
-    if (!Number.isFinite(aMax) || !(aMax > 0)) return fail('no steering authority about that axis');
-
-    let maxRate = (Number.isFinite(opts.maxRate) && opts.maxRate > 0) ? opts.maxRate : TURN_DEFAULT_MAX_RATE;
-    const rateCap = Constants.ATTITUDE?.MAX_RATE;
-    if (rateCap > 0) maxRate = Math.min(maxRate, rateCap);
-    const a = (Number.isFinite(opts.accel) && opts.accel > 0) ? Math.min(opts.accel, aMax) : aMax;
-
-    // Trapezoid (triangle when the angle is shorter than maxRate²/α).
-    const sign = angleRad < 0 ? -1 : 1;
-    const A = Math.abs(angleRad);
-    const triangle = A < (maxRate * maxRate) / a;
-    const wp = triangle ? Math.sqrt(A * a) : maxRate;
-    const ta = wp / a;
-    const tc = triangle ? 0 : (A - wp * ta) / wp;
-    const T = 2 * ta + tc;
-
-    // Per-couple firing fraction during a ramp (x = pitch couple, y = yaw couple);
-    // a sliver on the minor couple folds into the dominant one.
-    const mag = { x: 0, y: 0 };
-    for (const k of ['x', 'y']) if (comp[k] > 1e-6) mag[k] = inertia[k] * a * comp[k] / tau[k];
-    const dom = mag.x >= mag.y ? 'x' : 'y';
-    const oth = dom === 'x' ? 'y' : 'x';
-    if (mag[oth] > 0 && mag[oth] <= TURN_MIN_MAG) { mag[dom] += mag[oth]; mag[oth] = 0; }
-    mag.x = Math.min(1, mag.x);
-    mag.y = Math.min(1, mag.y);
-    const dir = { x: Math.sign(sign * nBody.x) || 1, y: Math.sign(sign * nBody.y) || 1 };
-
-    // Same unit price as PlayerSatellite.fireRcsRotation (units per full-throttle second).
-    const k = (player._coldGasRate ?? 0.5) * (Constants.ATTITUDE?.RCS_ATTITUDE_N2_FACTOR ?? 0.3);
-    const gasEstimate = k * (mag.x + mag.y) * 2 * ta;
-    const coldGas = player.resources ? player.resources.coldGas : undefined;
-    if (Number.isFinite(coldGas) && coldGas < gasEstimate) return fail('not enough steering gas');
+    // The shape and the gas price of the turn: ONE helper (gas-low-fail-fast D1), shared with the leash's early check.
+    const prof = attitudeTurnProfile(player, nBody, angleRad, opts);
+    if (!prof.ok) return fail(prof.reason);
+    const { sign, A, a, wp, ta, tc, T, mag, dir, k, gasEstimate } = prof;
+    if (turnGasShort(player, gasEstimate)) return fail('not enough steering gas');
 
     const timeoutS = (Number.isFinite(opts.timeoutS) && opts.timeoutS > 0) ? opts.timeoutS : T * 2 + 5;
     const holdS = (Number.isFinite(opts.holdS) && opts.holdS > 0) ? opts.holdS : 120;

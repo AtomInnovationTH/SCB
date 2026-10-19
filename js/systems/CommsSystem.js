@@ -252,11 +252,6 @@ const PLAYER_STATUS_TEMPLATES = {
     source: 'SPACECRAFT',
     template: 'Heads up: your {fuel} thruster fuel is below {pct}%. Refuel at an orbital depot when you can.',
   },
-  lowColdGas: {
-    priority: CommsPriority.WARNING,
-    source: 'SPACECRAFT',
-    template: 'Cold-gas thruster fuel running low: {val} units left. Save it for dodging. Go easy on quick maneuvers.',
-  },
   lowBattery: {
     priority: CommsPriority.WARNING,
     source: 'SPACECRAFT',

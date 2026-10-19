@@ -316,6 +316,9 @@ export const Constants = {
                                    // 263 kg F2 dry figure did not count it). Carried as dry mass in getMassBudget().
   ENGINE_TANK_VOLUME_L: 60,       // h3-argon-engine: base engine tank volume (documentation; kgFull is derived from it)
   COLD_GAS_MAX: 20,               // kg
+  COLD_GAS_LOW_FRAC: 0.25,        // gas-low-fail-fast D4: "steering gas low" — a fraction of COLD_GAS_MAX (coldGas / coldGasMax); the HUD
+                                   // gas meter turns amber below the same fraction (VitalsPane reads this), the comms line is sent once on crossing it
+  COLD_GAS_LOW_REARM_FRAC: 0.35,  // ...and re-arms only after the tank is back above this fraction (a refill), so a tank hovering at a quarter says it once
   BATTERY_MAX: 600,               // Wh — the ship's own spec (OCTOPUS_CORE_BATTERY /
                                    // OCTOPUS_V5.CORE_BATTERY, both 600; equality pinned in
                                    // test-shop-effects). Was a 100 Wh 'simplified' placeholder

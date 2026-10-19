@@ -3833,6 +3833,7 @@ export class CaptureNetSystem {
     // finished: the net is relatched when the catch is home, but the radiators are still unfolding
     // for ~9 s and the failure line comes at the end (measured: rack flight at 35.0-38.1 s with the
     // radiators folded, "did not work" at 43.9 s). The rack beat starts after the radiators are home.
+    let gasShort = false;
     if (net._leashFailed) {
       if (Constants.isFeatureEnabled('FURNACE_COOK')) return false;
       const leashDrv = player && player.leashDriver;
@@ -3841,6 +3842,9 @@ export class CaptureNetSystem {
       const verdict = this._tryLeash(net, d);
       if (verdict === 'started') return true;
       if (verdict === 'declined') return false;
+      // gas-low-fail-fast D1/D2: 'rack' because the tank cannot pay for the swing (not because the catch is too big or
+      // no tip is free). The line is chosen below, once we know whether a cell is free.
+      gasShort = net._gasShort === true;
     }
 
     const massKg = net.capturedMass || d.mass || 0;
@@ -3879,6 +3883,11 @@ export class CaptureNetSystem {
             text: `Catch is ${Math.round(massKg)} kg — too heavy for one daughter. Cutting it into ${plan.pieces.length} pieces at the nose.`,
             priority: 'warning',
           });
+        } else if (gasShort && !overGate) {
+          // gas-low-fail-fast D2: the catch could not go by radiator for want of gas AND no daughter can take it:
+          // ONE line that names both and the way out, instead of the usual refusal line. Once per catch (the latch
+          // outlives `_cargoRefused`, which a rack flight that is called off re-arms).
+          this._sayGasShort(net, 'full');
         } else {
           // no-melt: with no furnace, do not promise one — the station unloads the nose at the resupply stop.
           const furnace = Constants.isFeatureEnabled('FURNACE_COOK');
@@ -3899,6 +3908,10 @@ export class CaptureNetSystem {
 
     const arm = armManager.arms[armIndex];
     if (!arm) return false;
+
+    // gas-low-fail-fast D2: the swing to a radiator was skipped for want of steering gas and a cell is free — say why
+    // the catch goes to the rack (it never left the nose, so there is no "did not work" line). Once per catch.
+    if (gasShort) this._sayGasShort(net, 'rack');
 
     // Endpoints, both exact so neither end snaps. START is the catch's LIVE
     // drawn position — `_scenePosition`, what `pinCapturedDebris` wrote last
@@ -3952,6 +3965,32 @@ export class CaptureNetSystem {
   }
 
   /**
+   * gas-low-fail-fast D2 — tell the player the tank is too low to swing this catch to a radiator, once per catch.
+   * `'rack'` = a cell is free, the catch goes to the daughter rack now; `'full'` = no daughter can take it, so it waits
+   * at the nose (the player can let it go with [K]). The latch (`net._gasShortSaid`) is on the net, so a new catch
+   * starts clear, and the 0.5 s retry cannot repeat a line. One exception, so no line is left untrue: a 'rack' line
+   * followed by a rack flight that was called off (the daughter left her strut) with no cell free after all says the
+   * 'full' line; and a 'full' line followed by a cell that frees needs no second line (the rack's own "Catch stowed"
+   * line follows).
+   * @param {NetProjectile} net
+   * @param {'rack'|'full'} kind
+   * @private
+   */
+  _sayGasShort(net, kind) {
+    const said = net._gasShortSaid || (net._gasShortSaid = { rack: false, full: false });
+    if (kind === 'rack' ? (said.rack || said.full) : said.full) return;
+    said[kind] = true;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: 'HOUSTON', channel: 'CMD',
+      text: kind === 'rack'
+        ? 'Not enough steering gas to swing the catch to a radiator. Stowing it on the rack.'
+        : 'Not enough steering gas to swing the catch to a radiator, and no daughter has a free cargo cell. Press K to let it go.',
+      priority: 'warning',
+      _critical: true, // review 2026-10-19: past the onboarding tier filter, so the screen always says why (owner 23:26Z)
+    });
+  }
+
+  /**
    * Leash hand-off (lane l5b-wire) — D1. Decide whether this COLLARED catch goes by leash.
    * @param {NetProjectile} net
    * @param {object} d — the catch
@@ -3962,6 +4001,7 @@ export class CaptureNetSystem {
    * @private
    */
   _tryLeash(net, d) {
+    net._gasShort = false;         // gas-low-fail-fast: set below only when THIS call finds the tank short for the swing
     const player = this._player;
     const drv = player && player.leashDriver;
     const tc = player && player.tipCargo;
@@ -3978,6 +4018,15 @@ export class CaptureNetSystem {
     if (typeof drv.canReach === 'function' && !drv.canReach(d, tip)) {
       if (typeof drv.canReachAtNose !== 'function' || !drv.canReachAtNose(net, d, tip)) return 'rack';
       noseReel = true;
+    }
+    // gas-low-fail-fast D1: a hand-off pays for one steering-gas turn. If the tank cannot pay for it, do not fold the
+    // radiators for nothing — the old path ran ~41 s, said nothing, and ended in the same refusal at the turn. The catch
+    // takes the rack path now; `_tryCargoTransfer` says why (once) when it knows whether a cell is free. D3: with the
+    // furnace on, the nose furnace takes a failed catch, so the old path stays exactly as it was.
+    if (!Constants.isFeatureEnabled('FURNACE_COOK') && typeof drv.gasShort === 'function'
+        && drv.gasShort(net, d, tip, { noseReel })) {
+      net._gasShort = true;
+      return 'rack';
     }
     const why = drv.refusal(net);
     if (why) {

@@ -27,7 +27,8 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { eventBus as defaultBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { LeashTransfer, planHandoff, minHandoffD } from './LeashTransfer.js';
+import { LeashTransfer, planHandoff, minHandoffD, leashTurnLimits } from './LeashTransfer.js';
+import { attitudeTurnProfile, turnGasShort } from './AutopilotSystem.js';
 import { bandDegForRadius } from './TipCargo.js';
 import { reseatOrbitFromScene } from '../entities/OrbitalMechanics.js';
 import { DebrisField } from '../entities/DebrisField.js';
@@ -263,15 +264,43 @@ export class LeashDriver {
    * @param {THREE.Vector3} [bagScene] — where the bag would be (scene units); default: where it is now
    */
   canReach(debris, tipIndex, bagScene = null) {
+    const plan = this._handoffPlan(debris, tipIndex, bagScene);
+    return !!plan && plan.ok;
+  }
+
+  /**
+   * The hand-off plan (the bag's target, the turn axis in the SHIP frame, the turn angle, the payout) for tip `tipIndex`
+   * once the radiators stand at the hand-off angle, for the bag at `bagScene` (scene units; default: where it is now).
+   * The same call `LeashTransfer._replan` makes once the radiators have folded, on the tip's real position at that angle.
+   * `canReach` reads its `ok`; the early gas check (`gasShort`) reads its angle and axis.
+   * @returns {null|object} `planHandoff`'s answer, or null when there is no bag position or no such tip
+   */
+  _handoffPlan(debris, tipIndex, bagScene = null) {
     const K = Constants.LEASH;
     const sp = bagScene || (debris && debris._scenePosition);
-    if (!sp) return false;
+    if (!sp) return null;
     const prm = this._params(debris, tipIndex);
     const tipBody = this._tipBodyAt(tipIndex, prm.thetaHRad);
-    if (!tipBody) return false;
+    if (!tipBody) return null;
     const bagBodyNow = qInvRot(this._quat(), this._toMachine(sp));
-    const plan = planHandoff({ anchorBody: leashAnchorShip(tipIndex), tipBody, bagBodyNow, dMin: minHandoffD(prm.radiusM), dMax: K.D_MAX_M });
-    return plan.ok;
+    return planHandoff({ anchorBody: leashAnchorShip(tipIndex), tipBody, bagBodyNow, dMin: minHandoffD(prm.radiusM), dMax: K.D_MAX_M });
+  }
+
+  /**
+   * l5c-reach E1: where the bag would sit once the net's winch had pulled it in to the nose (seat 0), predicted from the
+   * bag position the berth hold gives there: where it is now, back along the bag axis by its seat. Null = nothing to
+   * reel (already home) or no bag. A module scratch vector (valid until the next call).
+   */
+  _noseBagScene(net, debris) {
+    const seat = net && net._catchSeatM;
+    const ld = net && net.launchDirection;
+    // l8-reel-collar: "the nose" is HOME now — the seat the reel-in ends at is the net's home seat (the catch on the ring),
+    // not 0 (a seat of 0 would put the catch at the bag's mouth = inside the ring). 0 for a net with no home.
+    const floor = (net && net._homeSeatM) || 0;
+    if (!(seat > floor + 1e-9) || !ld || !debris || !debris._scenePosition) return null;
+    const sp = debris._scenePosition, M = Constants.SCENE_UNITS_PER_METER;
+    const back = seat - floor;
+    return _vReach.set(sp.x - ld.x * back * M, sp.y - ld.y * back * M, sp.z - ld.z * back * M);
   }
 
   /**
@@ -280,16 +309,43 @@ export class LeashDriver {
    * along the bag axis by its seat.
    */
   canReachAtNose(net, debris, tipIndex) {
-    const seat = net && net._catchSeatM;
-    const ld = net && net.launchDirection;
-    // l8-reel-collar: "the nose" is HOME now — the seat the reel-in ends at is the net's home seat (the catch on the ring),
-    // not 0 (a seat of 0 would put the catch at the bag's mouth = inside the ring). 0 for a net with no home.
-    const floor = (net && net._homeSeatM) || 0;
-    if (!(seat > floor + 1e-9) || !ld || !debris || !debris._scenePosition) return false;
-    const sp = debris._scenePosition, M = Constants.SCENE_UNITS_PER_METER;
-    const back = seat - floor;
-    _vReach.set(sp.x - ld.x * back * M, sp.y - ld.y * back * M, sp.z - ld.z * back * M);
-    return this.canReach(debris, tipIndex, _vReach);
+    const sp = this._noseBagScene(net, debris);
+    return sp ? this.canReach(debris, tipIndex, sp) : false;
+  }
+
+  /**
+   * gas-low-fail-fast D1: can the tank pay for the ONE steering-gas turn this hand-off makes? True = it cannot, so the
+   * hand-off must not start (the catch goes to the daughter rack at once; the ~41 s fold-and-turn that used to end in
+   * the same refusal never begins). Prices the turn with the autopilot's own helper (`attitudeTurnProfile`, the one
+   * `requestAttitudeTurn` runs at TURN) from the plan the hand-off would run — the nose-reel plan when the catch must be
+   * pulled in first — with the limits TURN sends. Inertia is the current one: measured 2026-10-19 (flower ship, 5 kg
+   * catch, seat 0) ixx 91.253 / iyy 87.766 kg·m² before the fold and again at the TURN request, so folding changes
+   * nothing, and the price was 0.29170 units both times (the early plan's angle was 31° and TURN's 36°: the line pays
+   * out 0.2 m first; a turn over ~12.5° costs the same, only the two ramps burn gas). TURN's own check stays as the fallback for gas spent elsewhere
+   * during the swing, and for a short turn whose plan angle moves.
+   * A player that cannot say its inertia (a mock), a plan with no turn, or a turn with no authority: not short (TURN
+   * still checks).
+   * @param {object} net
+   * @param {object} debris
+   * @param {number} tipIndex
+   * @param {object} [opts]
+   * @param {boolean} [opts.noseReel] — the catch is pulled in to the nose first: plan from there
+   * @returns {boolean}
+   */
+  gasShort(net, debris, tipIndex, opts = {}) {
+    const p = this.player;
+    if (!p || typeof p.getAttitudeInertia !== 'function' || typeof p._coupleTauMag !== 'function') return false;
+    const I = p.getAttitudeInertia();
+    if (!I || !(I.ixx > 0) || !(I.iyy > 0)) return false;
+    let sp = null;
+    if (opts && opts.noseReel) {
+      sp = this._noseBagScene(net, debris);
+      if (!sp) return false;
+    }
+    const plan = this._handoffPlan(debris, tipIndex, sp);
+    if (!plan || !plan.ok || !(plan.psiRad >= 1e-4)) return false;       // < 1e-4: TURN skips the turn, which costs nothing
+    const prof = attitudeTurnProfile(p, plan.axisBody, plan.psiRad, leashTurnLimits());
+    return prof.ok && turnGasShort(p, prof.gasEstimate);
   }
 
   /**

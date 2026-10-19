@@ -138,7 +138,7 @@ export const VITALS_LAW = Object.freeze({
   HEAT_RED_C: Constants.SHIP_HEAT?.RED_C ?? 85,         // red from here (tools refuse)
   BATT_AMBER: 0.25,
   BATT_RED: 0.10,
-  GAS_AMBER: 0.25,
+  GAS_AMBER: Constants.COLD_GAS_LOW_FRAC,   // gas-low-fail-fast D4: the same fraction the "steering gas low" comms line fires at
   GAS_RED: 0.10,
   ION_AMBER: 0.15,
   RATE_HIDE_W: 20,          // |net| under this -> no trend arrow, no time left

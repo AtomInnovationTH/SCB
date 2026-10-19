@@ -9947,6 +9947,38 @@ export class PlayerSatellite extends THREE.Group {
     if (gasFrac < 0.10) {
       eventBus.emit(Events.PLAYER_LOW_XENON, { level: gasFrac * 100 });
     }
+    this._updateSteeringGasLow();
+  }
+
+  /**
+   * gas-low-fail-fast D4 — one "steering gas low" line when the cold-gas tank falls below COLD_GAS_LOW_FRAC of its
+   * capacity (the HUD gas meter turns amber at the same fraction). Once per crossing: a latch, re-armed only after the
+   * tank is back above COLD_GAS_LOW_REARM_FRAC (a refill) — the heat warnings' pattern (ThermalSystem._updateLines).
+   * Sent straight to COMMS_MESSAGE with `_critical` (so mission 1 hears it) instead of through PLAYER_LOW_* + the
+   * 15 s `_canSend` cooldown, which would repeat it. Never at game start (the tank starts at PROPELLANT_START_FRACTION).
+   * What the line says is true: the gas is spent by turning the ship — the aim (AutopilotSystem aim path →
+   * fireRcsRotation, PlayerSatellite.js `fireRcsRotation`) and every `requestAttitudeTurn`.
+   * @private
+   */
+  _updateSteeringGasLow() {
+    const r = this.resources;
+    const gas = Number(r && r.coldGas);
+    if (!Number.isFinite(gas)) return;
+    const max = Number(r.coldGasMax) > 0 ? Number(r.coldGasMax) : Constants.COLD_GAS_MAX;
+    const frac = gas / max;
+    if (!this._steeringGasLowSaid) {
+      if (frac < Constants.COLD_GAS_LOW_FRAC) {
+        this._steeringGasLowSaid = true;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: 'SPACECRAFT',
+          text: 'Steering gas low: about a quarter left. Aiming the net and turning the ship use it.',
+          priority: 'warning',
+          _critical: true,
+        });
+      }
+    } else if (frac > Constants.COLD_GAS_LOW_REARM_FRAC) {
+      this._steeringGasLowSaid = false;
+    }
   }
 
   /**
