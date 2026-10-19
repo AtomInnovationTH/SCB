@@ -212,6 +212,7 @@ export class ScoringSystem {
         source: 'HOUSTON',
         text: 'Good assessment, Cowboy.',
         priority: 1,
+        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
       });
     }
 
@@ -222,6 +223,7 @@ export class ScoringSystem {
         source: 'HOUSTON',
         text: 'Clean approach. Manual piloting noted.',
         priority: 1,
+        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
       });
     }
 
@@ -256,6 +258,7 @@ export class ScoringSystem {
         source: 'HOUSTON',
         text: 'Efficient trajectory. Minimal fuel expenditure.',
         priority: 1,
+        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
       });
     }
 
@@ -266,6 +269,7 @@ export class ScoringSystem {
         source: 'HOUSTON',
         text: 'Salvage recovered. Good haul.',
         priority: 1,
+        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
       });
     }
 
@@ -277,6 +281,7 @@ export class ScoringSystem {
         source: 'HOUSTON',
         text: 'She went down with the target. Worth it.',
         priority: 1,
+        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
       });
     }
 
@@ -287,6 +292,7 @@ export class ScoringSystem {
         source: 'HOUSTON',
         text: 'COWBOY! Free-flying capture! Textbook maneuver.',
         priority: 1,
+        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
       });
     }
 
@@ -297,6 +303,7 @@ export class ScoringSystem {
         source: 'HOUSTON',
         text: 'Godspeed. She took the debris with her. Sacrifice noted.',
         priority: 1,
+        _quiet: true,   // comms-after-tutorial D3/D4: praise stays hidden
       });
     }
 

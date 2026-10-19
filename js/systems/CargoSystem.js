@@ -83,7 +83,10 @@ export class CargoSystem {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'CARGO',
         text: `+${toStore.toFixed(1)}kg ${data.name}`,
-        priority: 'info'
+        priority: 'info',
+        // comms-after-tutorial D3/D4: the per-metal weight line stays hidden. Its siblings above and in
+        // this file (hold full, no empty slot, overflow lost, bay expanded) share sender CARGO and stay shown.
+        _quiet: true,
       });
     }
 

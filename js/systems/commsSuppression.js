@@ -8,7 +8,9 @@
  *
  * Replaces the old binary `_onboardingActive` gate with a 0–3 tier model:
  *   Tier 0 — OnboardingDirector running: only tag-bypassed lines pass.
- *   Tier 1 — 0–30 s after ONBOARDING_COMPLETE: + HOUSTON, MISSION.
+ *   Tier 1 — 0–30 s after ONBOARDING_COMPLETE: + HOUSTON, MISSION. (comms-after-tutorial D2: the
+ *            real tutorial end, ONBOARDING_MASTERED, goes straight to tier 3; the ramp only runs for a
+ *            COMPLETE that follows STARTED without it.)
  *   Tier 2 — 30–60 s after: + ALERT, CMD.
  *   Tier 3 — 60 s+ (steady state, and the DEFAULT for non-onboarding play): all.
  *
@@ -37,6 +39,7 @@ export const SUPPRESSION_TIER_CHANNELS = {
  *                             failed), always passes (reactive feedback).
  *   • `_onboarding: true`   — the Director's own lines (the only thing at tier 0).
  *   • `_postOnboarding:true`— MissionCoach beats; pass at tiers ≥ 1.
+ *   • `_quiet: true`        — NOT a bypass: the opposite. Dropped at every tier (D3).
  * Plus: from tier 1 up, a CRITICAL-priority message is never muted.
  *
  * NOTE: `_proactive: true` is deliberately NOT a bypass. Proactive teach/nudge
@@ -53,6 +56,12 @@ export const SUPPRESSION_TIER_CHANNELS = {
  */
 export function messagePassesSuppression(tier, channel, data = {}, priority = null) {
   const d = data || {};
+
+  // comms-after-tutorial D3: a `_quiet` line (per-metal weights, ground-station passes, praise,
+  // scenery and display tips - the owner's "stay hidden" kinds) is dropped at EVERY tier, veterans
+  // included. This is the ONE check; both CommsSystem gates (listener + addMessage) run it before a
+  // line is stored or counted toward coalescing. It outranks even `_critical`: a hidden kind is never urgent.
+  if (d._quiet === true) return false;
 
   // Explicit critical tag bypasses every tier (incl. 0) — never mute these.
   if (d._critical === true) return true;

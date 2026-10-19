@@ -2190,7 +2190,8 @@ export class MotherCallouts {
           const cm = ctx.commsSystem;
           if (cm?.getSuppressionTier) {
             const tier = cm.getSuppressionTier();
-            out.push(`Link: ${tier > 0 ? `SUPPRESSED (${tier})` : 'NOMINAL'}`);
+            // comms-after-tutorial D6c: tier 3 = nothing suppressed (the old `tier > 0` read it backwards).
+            out.push(`Link: ${tier < 3 ? `SUPPRESSED (${tier})` : 'NOMINAL'}`);
           }
           break;
         }

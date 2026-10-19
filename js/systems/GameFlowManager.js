@@ -1582,6 +1582,7 @@ export class GameFlowManager {
               sender: 'SPACECRAFT',
               text: `${pad.vehicle} lifting off from ${pad.name} — 350 km below you.`,
               priority: 'info',
+              _quiet: true,   // comms-after-tutorial D4: scenery stays hidden
             });
           };
           let tries = 0;
@@ -1672,6 +1673,7 @@ export class GameFlowManager {
                 sender: 'SPACECRAFT',
                 text: 'Target drifting. Press A to re-approach.',
                 priority: 'info',
+                _keep: true,   // comms-after-tutorial D6: the next step - never folded into "x N queued"
               });
             }
           }, 8000, { owner: this });
@@ -2462,6 +2464,7 @@ export class GameFlowManager {
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `The station took your ${ids.length} catch${ids.length === 1 ? '' : 'es'}.`,
       priority: 'info',
+      _keep: true,   // comms-after-tutorial D6: where the catches went - never folded into "x N queued"
     });
     // The collar hand-over emits only NET_CONSUMED, which no start-release listener hears: a mission start held on
     // the taken catch (a parked credit at a boundary) would wait out START_AFTER_CATCH_MAX_S. Release it here.
@@ -2634,6 +2637,7 @@ export class GameFlowManager {
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `UPGRADES AVAILABLE \u2014 ${debrisCount} debris cleared. Come down when ready, or fly on. The stop closes at your next catch.`,
       priority: 'high',
+      _keep: true,   // comms-after-tutorial D6: the next step - never folded into "x N queued"
     });
     eventBus.emit(Events.DEPOT_INVITATION, {
       open: true, chapter: missionsCompleted + 1, debrisCleared: debrisCount, firstInvitation,
@@ -2694,6 +2698,7 @@ export class GameFlowManager {
       source: 'HOUSTON', channel: 'HOUSTON', priority: 'info',
       text: `Mission ${missionNum}: ${cleared}/${perMission} cleared. Clear ${debrisUntilShop} more for depot resupply.`,
       _postOnboarding: true,
+      _keep: true,   // comms-after-tutorial D6: mission progress - never folded into "x N queued"
     });
   }
 

@@ -258,13 +258,13 @@ export class RewardSystem {
     // First detach ever
     if (eventType === 'detach' && !this.milestones.has('firstDetach')) {
       this.milestones.set('firstDetach', true);
-      this._sendComms('Houston: Tether severed. Bold move, Cowboy. That arm is on its own now.');
+      this._sendComms('Houston: Tether severed. Bold move, Cowboy. That arm is on its own now.', false);
     }
 
     // First detached deorbit
     if (eventType === 'deorbit' && !this.milestones.has('firstDetachedDeorbit')) {
       this.milestones.set('firstDetachedDeorbit', true);
-      this._sendComms('Houston: Detached daughter completed deorbit. Sacrificial play. Debris eliminated.');
+      this._sendComms('Houston: Detached daughter completed deorbit. Sacrificial play. Debris eliminated.', false);
     }
   }
 
@@ -377,7 +377,7 @@ export class RewardSystem {
     // Comms-only milestone (no bonus)
     if (pct >= 0.25 && !this._fieldThresholdsHit.has('25')) {
       this._fieldThresholdsHit.add('25');
-      this._sendComms('Houston: Quarter of this cluster secured.');
+      this._sendComms('Houston: Quarter of this cluster secured.', false);
     }
 
     // Tiered bonuses from Constants
@@ -393,11 +393,11 @@ export class RewardSystem {
           withCatch: true,   // u3-payoff-calm D1: part of the catch's payoff line
         });
         if (tier.pct >= 1.0) {
-          this._sendComms('Houston: Field completely cleared! Perfect sweep. Bonus authorized.');
+          this._sendComms('Houston: Field completely cleared! Perfect sweep. Bonus authorized.', false);
         } else if (tier.pct >= 0.75) {
-          this._sendComms('Houston: Three-quarters clean. Almost there.');
+          this._sendComms('Houston: Three-quarters clean. Almost there.', false);
         } else if (tier.pct >= 0.50) {
-          this._sendComms('Houston: Half the cluster cleared. Keep it up.');
+          this._sendComms('Houston: Half the cluster cleared. Keep it up.', false);
         }
       }
     }
@@ -647,11 +647,14 @@ export class RewardSystem {
    * @private
    * @param {string} text
    */
-  _sendComms(text) {
+  _sendComms(text, quiet = true) {
+    // comms-after-tutorial D3/D4: Houston's praise and milestone lines are `_quiet` (hidden at every
+    // tier); the few that say what happened (cluster progress, tether severed, deorbit done) pass quiet=false.
     eventBus.emit(Events.COMMS_MESSAGE, {
       priority: 'MEDIUM',
       source: 'HOUSTON',
       text,
+      ...(quiet ? { _quiet: true } : {}),
     });
   }
 }

@@ -570,7 +570,7 @@ export class ArmManager {
     // (mother-aims: `_motherTurnBlock` already refuses while an aim runs, so this is a backstop only.)
     if (typeof ap.isAiming === 'function' && ap.isAiming()) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Rotating to launch attitude — stand by.', priority: 'info',
+        text: 'Turning the ship to line up the launch — stand by.', priority: 'info',
       });
       return false;
     }

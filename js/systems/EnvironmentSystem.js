@@ -424,7 +424,8 @@ export class EnvironmentSystem {
 
     // Houston comms
     const subsystemLabel = subsystem.charAt(0).toUpperCase() + subsystem.slice(1);
-    this._houston(`MMOD impact detected on ${subsystemLabel}. Running diagnostics.`, 'warning');
+    // comms-after-tutorial D5b: plain words (the old line opened with a raw hazard code).
+    this._houston(`A tiny piece of space debris hit the ship (${subsystemLabel}). Checking for damage.`, 'warning');
 
     // Audio cue
     this._emit(Events.AUDIO_CUE, { cue: 'mmod_impact' });

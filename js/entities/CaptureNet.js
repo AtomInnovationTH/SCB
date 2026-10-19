@@ -4281,6 +4281,7 @@ export class CaptureNetSystem {
       source: 'HOUSTON', channel: 'CMD',
       text: `Catch stowed on ${arm.displayName || arm.id}${trim}. Launcher clear.`,
       priority: 'success',
+      _keep: true, // comms-after-tutorial D6: where a catch went is never folded into "× N queued"
     });
     return true;
   }

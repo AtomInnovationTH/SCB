@@ -406,6 +406,11 @@ export class CommsSystem {
     // ONBOARDING_STARTED — and must NOT be dropped to tier 1 (muted atmosphere)
     // for ~60 s. Without onboarding, steady-state tier 3 is correct.
     this._onboardingWasRun = false;
+    /**
+     * comms-after-tutorial D1: ONBOARDING_MASTERED arrived this run (tier is 3). Makes a COMPLETE
+     * that follows it (the all-skipped path emits both) a no-op instead of starting the wake ramp.
+     */
+    this._tutorialMastered = false;
 
     // u5-info-ap-hold D3: the start's lines are HELD until comms can be seen. The gate is open by
     // default (tests, ladder-off boots and every later moment are unchanged); OpeningDance shuts it
@@ -431,10 +436,17 @@ export class CommsSystem {
       eventBus.on(Events.ONBOARDING_STARTED, () => {
         this._suppressionTier = 0;
         this._onboardingWasRun = true;
+        this._tutorialMastered = false;
       });
     }
     if (Events.ONBOARDING_COMPLETE) {
       eventBus.on(Events.ONBOARDING_COMPLETE, () => this._beginPostOnboardingRamp());
+    }
+    // comms-after-tutorial D1/D2: the tutorial's beat list finished. The real flow never
+    // emits ONBOARDING_COMPLETE here (see OnboardingDirector._advanceToNextBeat), so this is
+    // what takes the panel out of tier 0 - straight to tier 3, no 30-60 s wake ramp.
+    if (Events.ONBOARDING_MASTERED) {
+      eventBus.on(Events.ONBOARDING_MASTERED, () => this._endTutorialSilence());
     }
 
     // Self-manage lifecycle via GAME_STATE_CHANGE
@@ -511,7 +523,9 @@ export class CommsSystem {
       this._coalesceWindow = this._coalesceWindow.filter(e => (nowMs - e.timestamp) < windowMs);
       // D8: a _critical / _reactive line is "kept": never summarised away, and it
       // does not count toward tipping plain lines into a summary.
-      const kept = data._critical === true || data._reactive === true;
+      // comms-after-tutorial D6: a `_keep` status line (mission progress, where a catch went,
+      // the next step) is kept the same way - it never bypasses the suppression tier, only coalescing.
+      const kept = data._critical === true || data._reactive === true || data._keep === true;
       const coal = kept ? { shouldCoalesce: false, count: 0 }
         : shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
       if (!kept) this._coalesceWindow.push({ channel, timestamp: nowMs });
@@ -776,7 +790,6 @@ export class CommsSystem {
     // same key onboarding teaches for the net); the digits 1-4 take manual pilot control.
     eventBus.on(Events.STATION_KEEP_ENTERED, (data) => {
       const standoff = data?.standoffR != null ? Math.round(data.standoffR) : '?';
-      const targetId = data?.targetId != null ? data.targetId : '?';
       const armId = daughterDisplayName(data?.armId) || 'SYSTEM';
       // While piloting the arm, teach the station-keep orbit controls so the
       // player can inspect every side of the debris and line up a capture.
@@ -785,8 +798,9 @@ export class CommsSystem {
       const hint = data?.isPiloted
         ? 'Arrow keys orbit the debris · +/- adjust distance · [N] capture.'
         : '[N] capture · [1-4] pilot for a closer look.';
+      // comms-after-tutorial D5b: plain words - no "ON STATION", no debris id.
       this.addMessage('INFO', armId,
-        `ON STATION. Holding ${standoff}m from debris #${targetId}. ${hint}`,
+        `In position: holding ${standoff} m from the debris. ${hint}`,
         { channel: 'CMD' });
       // Plain-language follow-up for new players: name the daughter and spell
       // out the next move in a friendly command voice.
@@ -993,8 +1007,8 @@ export class CommsSystem {
     // ST-5.1: Coalescing — check recent window for same-channel flood
     const windowMs = COMMS.COALESCE_WINDOW_MS || 2000;
     this._coalesceWindow = this._coalesceWindow.filter(e => (nowMs - e.timestamp) < windowMs);
-    // D8: a _critical / _reactive line is "kept" (see the COMMS_MESSAGE listener).
-    const kept = !!extra && (extra._critical === true || extra._reactive === true);
+    // D8: a _critical / _reactive line is "kept" (see the COMMS_MESSAGE listener); so is a D6 `_keep` line.
+    const kept = !!extra && (extra._critical === true || extra._reactive === true || extra._keep === true);
     const coal = kept ? { shouldCoalesce: false, count: 0 }
       : shouldCoalesce(this._coalesceWindow, channel, COMMS.COALESCE_THRESHOLD_COUNT);
     if (!kept) this._coalesceWindow.push({ channel, timestamp: nowMs });
@@ -1161,6 +1175,7 @@ export class CommsSystem {
     this._tempTierActive = false;
     this._tempTierRestoreS = 0;
     this._onboardingWasRun = false;
+    this._tutorialMastered = false;
   }
 
   // ==========================================================================
@@ -1170,8 +1185,27 @@ export class CommsSystem {
   /** @returns {number} current suppression tier (0–3). */
   getSuppressionTier() { return this._suppressionTier; }
 
+  /**
+   * comms-after-tutorial D6b: would a raw COMMS_MESSAGE payload be shown right now? The HUD asks this
+   * before redrawing the panel, so a hidden line (tier gate or `_quiet`) does not reset the PageUp
+   * scroll. Same classification and gate as the COMMS_MESSAGE listener; lines this system already
+   * stored (`_internal`) were gated when they were added.
+   * @param {object} data — the COMMS_MESSAGE payload
+   * @returns {boolean}
+   */
+  wouldShow(data) {
+    if (!data) return false;
+    if (data._internal) return true;
+    if (!data.text) return false;
+    const src = data.source || data.sender || data.speaker || 'SYSTEM';
+    return messagePassesSuppression(this._suppressionTier, sourceToChannel(src, data), data, data.priority);
+  }
+
   /** @private Begin the graduated post-onboarding wake ramp (tier 1 → 2 → 3). */
   _beginPostOnboardingRamp() {
+    // comms-after-tutorial D2: the tutorial already ended (ONBOARDING_MASTERED came first) -
+    // stay at tier 3; a late COMPLETE must not mute the panel again.
+    if (this._tutorialMastered) return;
     // Veteran-skip path: ONBOARDING_COMPLETE fired WITHOUT ONBOARDING_STARTED
     // (the Director skipped the whole pipeline). There is no atmosphere to wake
     // from — stay at the steady-state default tier 3 instead of muting for 60 s.
@@ -1184,6 +1218,20 @@ export class CommsSystem {
       return;
     }
     this._suppressionTier = startTier;
+    this._postOnboardingElapsed = 0;
+    this._tempTierActive = false;
+    this._tempTierRestoreS = 0;
+  }
+
+  /**
+   * comms-after-tutorial D1/D2: the tutorial's beat list is done (ONBOARDING_MASTERED).
+   * Leave tier 0 for tier 3 at once: the useful lines (progress, where each catch went,
+   * autopilot, failures) show within a frame; `_quiet` lines stay hidden at every tier.
+   * @private
+   */
+  _endTutorialSilence() {
+    this._tutorialMastered = true;
+    this._suppressionTier = 3;
     this._postOnboardingElapsed = 0;
     this._tempTierActive = false;
     this._tempTierRestoreS = 0;

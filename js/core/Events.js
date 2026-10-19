@@ -596,6 +596,14 @@ export const Events = {
   /** Final onboarding beat completed; veteran path is now active.
    *  Payload: {} */
   ONBOARDING_COMPLETE:    'onboarding:complete',
+  /** comms-after-tutorial D1 (2026-10-19): the tutorial's beat list is finished (the `final`
+   *  beat's timer, the aim-slew end, or an all-done start). Fired ONCE per run by
+   *  OnboardingDirector (reset() re-arms it); CommsSystem leaves tier 0 and lets the useful
+   *  lines through. A comms-only signal: ONBOARDING_COMPLETE is deliberately NOT emitted on
+   *  these paths (about ten other listeners would switch on mid-mission-1).
+   *  Not fired by the veteran skip (that path emits ONBOARDING_COMPLETE alone).
+   *  Payload: {} */
+  ONBOARDING_MASTERED:    'onboarding:mastered',
   /** Guidance depth changed by the behavior-driven tuner or Settings toggle.
    *  Payload: { level: 'GUIDED'|'POINTERS'|'MINIMAL', reason: string } */
   GUIDANCE_LEVEL_CHANGED: 'guidance:levelChanged',

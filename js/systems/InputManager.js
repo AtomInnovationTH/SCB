@@ -973,11 +973,6 @@ export class InputManager {
             // (same path as A-key toggle when AP is on).  See Events.js note.
             d.autopilotSystem.disengage('MANUAL_REEL');
             d.audioSystem?.playClick();
-            eventBus.emit(Events.COMMS_MESSAGE, {
-              source: 'SPACECRAFT', channel: 'CMD',
-              text: 'Autopilot aborted by command.',
-              priority: 'info',
-            });
             break;
           }
           // (4) Nothing to reel and no AP to abort — never silent.
@@ -2406,7 +2401,7 @@ export class InputManager {
     if (ap && typeof ap.isAiming === 'function' && ap.isAiming()) {
       // A net aim is already slewing — don't double-book or bypass it.
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Rotating to launch attitude — stand by.', priority: 'info', source: 'HOUSTON',
+        text: 'Turning the ship to line up the launch — stand by.', priority: 'info', source: 'HOUSTON',
       });
       return;
     }
@@ -2530,7 +2525,7 @@ export class InputManager {
     // Re-press during an active aim sequence — ignore (don't double-book).
     if (ap && typeof ap.isAiming === 'function' && ap.isAiming()) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Rotating to launch attitude — stand by.', priority: 'info', source: 'HOUSTON',
+        text: 'Turning the ship to line up the launch — stand by.', priority: 'info', source: 'HOUSTON',
       });
       return;
     }

@@ -1994,8 +1994,9 @@ async function init() {
       if (fuel) return [`FUEL ${st.currentFuelName} (CARGO)`];
       return [`FUEL ${gasNow}/${gasCap} kg`];
     },
+    // comms-after-tutorial D6c: tier 3 = nothing suppressed, so SUPPRESSED only below it.
     comms: () => (commsSystem && commsSystem.getSuppressionTier
-      ? [`LINK: ${commsSystem.getSuppressionTier() > 0 ? 'SUPPRESSED' : 'NOMINAL'}`] : []),
+      ? [`LINK: ${commsSystem.getSuppressionTier() < 3 ? 'SUPPRESSED' : 'NOMINAL'}`] : []),
     // thermal: omitted until the flower refit lands — the static MLI spec
     // rows from the blueprint manifest carry that card.
   };

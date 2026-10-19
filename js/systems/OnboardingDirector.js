@@ -294,6 +294,13 @@ export class OnboardingDirector {
     /** @type {boolean} true once final `complete` beat has fired. */
     this._mastered = false;
 
+    /**
+     * comms-after-tutorial D1: true once ONBOARDING_MASTERED has been emitted this run
+     * (it fires once; reset() re-arms it). Not persisted.
+     * @type {boolean}
+     */
+    this._masteredAnnounced = false;
+
     /** @type {boolean} flag set after MISSION_START fires (we wait for it). */
     this._started = false;
 
@@ -460,6 +467,7 @@ export class OnboardingDirector {
     this._completedBeats.clear();
     this._skippedBeats.clear();
     this._mastered = false;
+    this._masteredAnnounced = false; // comms-after-tutorial D1: the next run announces again
     this._active = null;
     this._beatIndex = -1;
     this._recentInputs.length = 0;
@@ -654,6 +662,9 @@ export class OnboardingDirector {
     if (Number.isFinite(beat.autoAdvanceAfter) && a.autoAdvanceTimer == null) {
       a.autoAdvanceTimer = this._setTimeout(() => {
         if (this._active && this._active.beat.id === beat.id) {
+          // `_advanceToNextBeat()` below returns early once mastered, so ONBOARDING_COMPLETE is
+          // NOT emitted here; it announces ONBOARDING_MASTERED (comms only). Why: see
+          // tmp/plans/comms-after-tutorial.md D1 (a COMPLETE here would wake ~10 other listeners).
           if (!beat.triggerEvent && beat.onEnter === 'mastered=true') this._mastered = true;
           this._dropBeatChip(beat);
           this._completedBeats.add(beat.id);
@@ -875,7 +886,15 @@ export class OnboardingDirector {
   }
 
   _advanceToNextBeat() {
-    if (this._mastered) return;
+    // comms-after-tutorial D1: the `final` beat's timer (and the aim-slew end) set
+    // `_mastered` BEFORE calling here, so this early return is where a finished
+    // tutorial lands. It must NOT emit ONBOARDING_COMPLETE (about ten other
+    // listeners would switch on mid-mission-1 - tmp/plans/comms-after-tutorial.md);
+    // it announces the comms-only ONBOARDING_MASTERED instead (once; reset re-arms).
+    // A persisted-mastered start() whose skills fall below the veteran threshold
+    // also lands here (STARTED fired, no beats left) and would otherwise sit at
+    // comms tier 0 for the whole run.
+    if (this._mastered) { this._announceMastered(); return; }
     // Pick next un-completed, un-skipped beat.
     let idx = this._beatIndex + 1;
     // If we're advancing past a beat with a parallel partner that's already
@@ -900,10 +919,24 @@ export class OnboardingDirector {
       this._mastered = true;
       this._persist();
       this._emit(Events.ONBOARDING_COMPLETE, {});
+      // D1/D2: the all-skipped path keeps its COMPLETE (unchanged); CommsSystem
+      // still needs the mastered signal to end the wake ramp at once.
+      this._announceMastered();
       return;
     }
     this._beatIndex = idx;
     this._postBeat(ONBOARDING_BEATS[idx]);
+  }
+
+  /**
+   * comms-after-tutorial D1: tell CommsSystem (and only comms) that the tutorial's
+   * beat list is done. Emits ONBOARDING_MASTERED once per run; reset() re-arms it.
+   * @private
+   */
+  _announceMastered() {
+    if (this._masteredAnnounced) return;
+    this._masteredAnnounced = true;
+    this._emit(Events.ONBOARDING_MASTERED, {});
   }
 
   _postBeat(beat) {
@@ -1003,6 +1036,11 @@ export class OnboardingDirector {
         // u3-payoff-calm D5: only the beat that armed this timer may complete it (reset() / a skip moved on).
         if (this._active !== armed) return;
         if (beat.onEnter === 'mastered=true') {
+          // Setting `_mastered` makes `_advanceToNextBeat()` below take its early return, so
+          // ONBOARDING_COMPLETE has never fired on this path (the tutorial's real end). It is
+          // still NOT emitted: that would switch on ~10 other listeners mid-mission-1 (collision
+          // consequences, teaching overlays, bounties...). `_advanceToNextBeat` announces the
+          // comms-only ONBOARDING_MASTERED instead - see tmp/plans/comms-after-tutorial.md D1.
           this._mastered = true;
         }
         this._dropBeatChip(beat);

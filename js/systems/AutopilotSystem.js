@@ -34,6 +34,46 @@ const ENGAGE_DV_MIN = 50;
 const DISENGAGE_DV_MIN = 30;
 
 /**
+ * comms-after-tutorial D5: the autopilot's comms lines in plain words (Ruling 0) - these used to print
+ * the raw heading-mode and reason codes ("AUTOPILOT ENGAGED. TARGET", "AUTOPILOT OFF. TARGET_CAUGHT").
+ * One entry per heading mode / disengage reason; the "Autopilot ..." openers keep clear of the spoken
+ * copilot phrases (test-CopilotVoice.js: no phrase repeated verbatim). BATTERY is not here: it has its own
+ * line (AP_BATTERY_EMPTY_LINE, `_emitBatteryEmpty`).
+ */
+export const AUTOPILOT_ON_TEXT = Object.freeze({
+  TARGET:   'Autopilot on: flying to your selected target.',
+  DEBRIS:   'Autopilot on: flying to the nearest large piece of debris.',
+  TRAWL:    'Autopilot on: flying to the debris sweep.',
+  CLUSTER:  'Autopilot on: flying to the debris cluster.',
+  PROGRADE: 'Autopilot on: no target, so it is following your orbit.',
+});
+/** Any heading mode not in the table (never a raw code). */
+export const AUTOPILOT_ON_FALLBACK = 'Autopilot on.';
+
+export const AUTOPILOT_OFF_TEXT = Object.freeze({
+  MANUAL:        'Autopilot off: you took over.',
+  DELTAV:        'Autopilot off: the engine fuel is nearly gone.',
+  TARGET_LOST:   'Autopilot off: the target is gone.',
+  TARGET_CAUGHT: 'Autopilot off: catch made.',
+  ARRIVED:       'Autopilot off: arrived.',
+  COLLISION:     'Autopilot off: another object is about to pass close. Steer clear.',
+  TRAWL:         'Autopilot off: a debris sweep has started.',
+  ARROW_INPUT:   'Autopilot off: you steered with the arrow keys.',
+  MANUAL_REEL:   'Autopilot off: you took over with the reel key (R).',
+});
+/** Any reason not in the table (never a raw code). */
+export const AUTOPILOT_OFF_FALLBACK = 'Autopilot off.';
+
+/** @returns {string} the plain "autopilot on" line for a heading mode */
+export function autopilotOnText(mode) {
+  return AUTOPILOT_ON_TEXT[mode] || AUTOPILOT_ON_FALLBACK;
+}
+/** @returns {string} the plain "autopilot off" line for a disengage reason */
+export function autopilotOffText(reason) {
+  return AUTOPILOT_OFF_TEXT[reason] || AUTOPILOT_OFF_FALLBACK;
+}
+
+/**
  * Battery (Wh) below which the autopilot counts the battery as empty: the HUD
  * battery row prints 0 there (`fmtBattery` rounds, js/ui/hud/VitalsPane.js:322-328).
  * DECISIONS §27 (owner, 2026-10-17): the autopilot switches itself off at empty
@@ -757,6 +797,7 @@ export class AutopilotSystem {
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: 'No target selected. Acquiring nearest contact.',
           priority: 'info',
+          _keep: true,
         });
       } else {
         const nearest = this._findNearestCatchableDebris();
@@ -767,6 +808,7 @@ export class AutopilotSystem {
           eventBus.emit(Events.COMMS_MESSAGE, {
             text: 'No target selected. Acquiring nearest contact.',
             priority: 'info',
+            _keep: true,
           });
         } else if (nearest) {
           // No selector API available — engage in DEBRIS heading mode directly.
@@ -832,8 +874,9 @@ export class AutopilotSystem {
     const heading = this._determineHeading();
     if (!heading) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'AUTOPILOT: No valid heading. Using prograde',
+        text: 'Autopilot has no target to fly to, so it is following your orbit.',
         priority: 'info',
+        _keep: true,
       });
     }
 
@@ -866,8 +909,9 @@ export class AutopilotSystem {
       phase: this._phase,
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `AUTOPILOT ENGAGED. ${this._headingMode}`,
+      text: autopilotOnText(this._headingMode),
       priority: 'info',
+      _keep: true,   // comms-after-tutorial D6: autopilot on/off is never folded into "x N queued"
     });
     // UX-2 #12: Route autopilot engage through notification zone.
     // Session O (plan D12): kind 'memo' — Session Q relocates these into the
@@ -932,8 +976,10 @@ export class AutopilotSystem {
       phase: this._phase,
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `AUTOPILOT ENGAGED. CLUSTER: ${cluster.name || cluster.id}`,
+      // The map's own cluster name when it has one (never the raw id).
+      text: cluster.name ? `Autopilot on: flying to ${cluster.name}.` : autopilotOnText('CLUSTER'),
       priority: 'info',
+      _keep: true,
     });
   }
 
@@ -972,8 +1018,9 @@ export class AutopilotSystem {
       this._emitBatteryEmpty({ _critical: true });
     } else {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `AUTOPILOT OFF. ${reason}`,
+        text: autopilotOffText(reason),
         priority: reason === 'DELTAV' || reason === 'COLLISION' ? 'warning' : 'info',
+        _keep: true,
       });
     }
     // UX-2 #12: Route autopilot disengage through notification zone.
@@ -1244,8 +1291,10 @@ export class AutopilotSystem {
 
           eventBus.emit(Events.AUTOPILOT_ARRIVED, { mode: this._headingMode });
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: `✓ ON STATION. [N] lasso (≤${Constants.LASSO_RANGE}m) · [D] deploy daughter for far/heavy debris`,
+            // comms-after-tutorial D5b: plain words (the old line opened with a station-keeping term).
+            text: `✓ In position. [N] lasso (≤${Constants.LASSO_RANGE}m) · [D] deploy daughter for far/heavy debris`,
             priority: 'info',
+            _keep: true,   // the next step to press
           });
         } else if (posErrM > Dtrail_m * 3) {
           // Fell too far behind — back off to MATCH_ORBIT
@@ -2195,15 +2244,17 @@ export class AutopilotSystem {
       // One-time "on fumes" advisory when starting to slew with empty cold gas.
       if (this._player.resources && this._player.resources.coldGas <= 0) {
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'Attitude control on fumes — rotating anyway.',
+          text: 'Steering gas is nearly gone — turning the ship anyway.',
           priority: 'warning', source: 'HOUSTON',
         });
       }
 
       eventBus.emit(Events.AIM_SEQUENCE_START, { mode });
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Rotating to launch attitude. ~${Math.ceil(Math.PI / rate)}s max.`,
+        // comms-after-tutorial D5b: plain words (the old line talked about the ship's 'attitude').
+        text: `Turning the ship to line up the launch. About ${Math.ceil(Math.PI / rate)} s at most.`,
         priority: 'info', source: 'HOUSTON',
+        _keep: true,
       });
 
       this._aimCoroutine = {

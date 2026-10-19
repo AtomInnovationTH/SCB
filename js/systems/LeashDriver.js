@@ -973,7 +973,8 @@ export class LeashDriver {
   }
 
   _say(text, priority = 'info') {
-    this.eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority });
+    // comms-after-tutorial D6: `_keep` - where the catch went (and why a hand-off failed) is never folded into "x N queued".
+    this.eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority, _keep: true });
   }
 
   // ── ending ────────────────────────────────────────────────────────────────

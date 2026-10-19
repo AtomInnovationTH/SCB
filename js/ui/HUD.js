@@ -1499,6 +1499,10 @@ export class HUD {
 
     // Comms messages → route to CommsPanel
     eventBus.on(Events.COMMS_MESSAGE, (msg) => {
+      // comms-after-tutorial D6b: a line CommsSystem drops (suppression tier or `_quiet`) must not
+      // redraw the panel or reset the PageUp scroll - hidden lines are invisible everywhere.
+      const cs = this._commsSystem;
+      if (cs && typeof cs.wouldShow === 'function' && !cs.wouldShow(msg)) return;
       this.commsPanel.onMessage(msg);
     });
 
@@ -1831,6 +1835,7 @@ export class HUD {
    * @param {import('../systems/CommsSystem.js').CommsSystem} commsSystem
    */
   setCommsSystem(commsSystem) {
+    this._commsSystem = commsSystem;
     this.commsPanel.setCommsSystem(commsSystem);
   }
 

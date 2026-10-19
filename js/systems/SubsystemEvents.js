@@ -42,9 +42,13 @@ function formatUptime(totalSeconds) {
 /**
  * Send a comms message via EventBus with anti-spam protection.
  * Returns true if message was sent, false if suppressed.
+ *
+ * comms-after-tutorial D3/D4: `quiet` tags the line `_quiet` - the owner's "stay hidden" kinds
+ * (radio-pass chatter and routine readouts that say nothing is being done, needed or broken).
+ * CommsSystem drops a `_quiet` line at every tier; the SUBSYSTEM_EVENT below still fires.
  */
-function sendComms(text, source = 'SYSTEM', priority = 'LOW') {
-  eventBus.emit(Events.COMMS_MESSAGE, { priority, source, text });
+function sendComms(text, source = 'SYSTEM', priority = 'LOW', quiet = false) {
+  eventBus.emit(Events.COMMS_MESSAGE, quiet ? { priority, source, text, _quiet: true } : { priority, source, text });
   eventBus.emit(Events.SUBSYSTEM_EVENT, { source, text });
   return true;
 }
@@ -129,7 +133,7 @@ class CommsSubsystem extends BaseSubsystem {
     eventBus.on(Events.WEATHER_EFFECT_END, (data) => {
       if (data && data.type === 'SAA_PASSAGE') {
         this._inSAA = false;
-        sendComms('Signal restored. SAA passage complete.', 'SYSTEM', 'LOW');
+        sendComms('Signal restored. SAA passage complete.', 'SYSTEM', 'LOW', true);
       }
     });
   }
@@ -148,7 +152,7 @@ class CommsSubsystem extends BaseSubsystem {
         const nextMax = Math.floor(sub.GROUND_STATION_INTERVAL[1] / 60);
         sendComms(
           `Ground station pass complete. Next window in ~${randInt(nextMin, nextMax)} minutes.`,
-          'SYSTEM', 'LOW'
+          'SYSTEM', 'LOW', true
         );
         this._startCooldown(12);
         this._setTimerRange('groundStation', sub.GROUND_STATION_INTERVAL[0], sub.GROUND_STATION_INTERVAL[1]);
@@ -161,7 +165,7 @@ class CommsSubsystem extends BaseSubsystem {
         this._groundStationTimer = windowDuration;
         sendComms(
           `Ground station ${this._currentStation} in range. Uplink window: ${windowDuration}s.`,
-          'SYSTEM', 'MEDIUM'
+          'SYSTEM', 'MEDIUM', true
         );
         eventBus.emit(Events.GROUND_STATION_PASS, { station: this._currentStation, duration: windowDuration });
         this._startCooldown(12);
@@ -179,7 +183,7 @@ class CommsSubsystem extends BaseSubsystem {
         'COMMS DEGRADED. [garbled]. Attempting re-lock',
         'COMMS DEGRADED. HF blackout in progress',
       ]);
-      sendComms(garbled, 'SYSTEM', 'MEDIUM');
+      sendComms(garbled, 'SYSTEM', 'MEDIUM', true);
       this._startCooldown(20);
     }
 
@@ -188,7 +192,7 @@ class CommsSubsystem extends BaseSubsystem {
       const armNum = randInt(1, gameData.deployedArms);
       sendComms(
         `Telemetry bandwidth saturated. Prioritizing arm ${armNum} data stream.`,
-        'SYSTEM', 'LOW'
+        'SYSTEM', 'LOW', true
       );
       this._startCooldown(30);
     }
@@ -198,7 +202,7 @@ class CommsSubsystem extends BaseSubsystem {
       this._laserCommsHintSent = true;
       sendComms(
         'NOTICE: Optical ground link available at Svalbard. Laser comms offer 10× bandwidth. Consider upgrade.',
-        'SYSTEM', 'MEDIUM'
+        'SYSTEM', 'MEDIUM', true
       );
       this._startCooldown(30);
     }
@@ -238,7 +242,7 @@ class NavigationSubsystem extends BaseSubsystem {
         const align = (Math.random() * 4 + 0.5).toFixed(1);
         sendComms(
           `Relative navigation active. Closing at ${speed} m/s. Alignment: ${align}°.`,
-          'NAV', 'MEDIUM'
+          'NAV', 'MEDIUM', true
         );
       }
     });
@@ -252,7 +256,7 @@ class NavigationSubsystem extends BaseSubsystem {
     if (this._starTrackerPhase2Timer > 0) {
       this._starTrackerPhase2Timer -= dt;
       if (this._starTrackerPhase2Timer <= 0) {
-        sendComms('...lock acquired. Attitude accuracy: ±0.001°.', 'NAV', 'LOW');
+        sendComms('...lock acquired. Attitude accuracy: ±0.001°.', 'NAV', 'LOW', true);
         this._startCooldown(10);
       }
     }
@@ -260,7 +264,7 @@ class NavigationSubsystem extends BaseSubsystem {
     // --- Star Tracker Calibration ---
     if (this._tickTimer('starTracker', dt)) {
       if (!this._onCooldown()) {
-        sendComms('Star tracker recalibrating...', 'NAV', 'LOW');
+        sendComms('Star tracker recalibrating...', 'NAV', 'LOW', true);
         this._starTrackerPhase2Timer = 2.0;
         this._startCooldown(5);
       }
@@ -273,7 +277,7 @@ class NavigationSubsystem extends BaseSubsystem {
         const drift = (Math.random() * 0.04 + 0.01).toFixed(3);
         sendComms(
           `IMU drift detected: ${drift}°. Star tracker correction applied.`,
-          'NAV', 'LOW'
+          'NAV', 'LOW', true
         );
         this._startCooldown(15);
       }
@@ -285,7 +289,7 @@ class NavigationSubsystem extends BaseSubsystem {
       if (!this._onCooldown()) {
         sendComms(
           'GPS constellation partially occluded. Switching to star tracker primary.',
-          'NAV', 'LOW'
+          'NAV', 'LOW', true
         );
         this._startCooldown(15);
       }
@@ -345,7 +349,7 @@ class AttitudeSubsystem extends BaseSubsystem {
     if (this._desatTimer > 0) {
       this._desatTimer -= dt;
       if (this._desatTimer <= 0) {
-        sendComms('Desaturation complete. Wheels nominal.', 'NAV', 'LOW');
+        sendComms('Desaturation complete. Wheels nominal.', 'NAV', 'LOW', true);
         this._startCooldown(10);
       }
     }
@@ -357,7 +361,7 @@ class AttitudeSubsystem extends BaseSubsystem {
         const satPct = randInt(85, 95);
         sendComms(
           `Reaction wheel ${wheelId} approaching saturation at ${satPct}%. Magnetorquer desaturation scheduled.`,
-          'NAV', 'LOW'
+          'NAV', 'LOW', true
         );
         this._desatTimer = 10.0;
         this._startCooldown(12);
@@ -370,7 +374,7 @@ class AttitudeSubsystem extends BaseSubsystem {
       if (!this._onCooldown()) {
         sendComms(
           'Fiber optic gyro health check: 3/3 nominal. Ring laser backup: standby.',
-          'NAV', 'LOW'
+          'NAV', 'LOW', true
         );
         this._startCooldown(15);
       }
@@ -401,7 +405,7 @@ class PowerSubsystem extends BaseSubsystem {
         this._inEclipse = true;
         sendComms(
           `Thermal gradient: sun-side +${randInt(110, 130)}°C, shadow-side -${randInt(140, 160)}°C. MLI maintaining bus at +${randInt(18, 22)}°C.`,
-          'THERMAL', 'LOW'
+          'THERMAL', 'LOW', true
         );
       }
     });
@@ -417,7 +421,7 @@ class PowerSubsystem extends BaseSubsystem {
         const rechargeTime = randInt(3, 5);
         sendComms(
           `Supercapacitor bank discharged for arm deployment. Recharge in ${rechargeTime}s.`,
-          'POWER', 'LOW'
+          'POWER', 'LOW', true
         );
       }
     });
@@ -434,7 +438,7 @@ class PowerSubsystem extends BaseSubsystem {
         const remaining = 50000 - this._batteryCycleCount;
         sendComms(
           `Battery cycle count: ${this._batteryCycleCount}. DoD maintained at 25% for longevity. Estimated ${remaining} cycles remaining.`,
-          'POWER', 'LOW'
+          'POWER', 'LOW', true
         );
         this._startCooldown(15);
       }
@@ -449,7 +453,7 @@ class PowerSubsystem extends BaseSubsystem {
         const armNum = randInt(1, Math.max(1, gameData.deployedArms));
         sendComms(
           `Daughter ${armNum} at tether limit. Activating laser power beam to extend operational time.`,
-          'POWER', 'MEDIUM'
+          'POWER', 'MEDIUM', true
         );
         this._startCooldown(30);
       }
@@ -499,12 +503,12 @@ class AvionicsSubsystem extends BaseSubsystem {
           const recoverProc = failProc === 'B' ? 'C' : 'B';
           sendComms(
             `Watchdog timer triggered. Processor ${failProc} hung. Auto-failover to processor ${recoverProc}. No data loss.`,
-            'AVIONICS', 'MEDIUM'
+            'AVIONICS', 'MEDIUM', true
           );
         } else {
           sendComms(
             `Watchdog timer reset. All processors nominal. Uptime: ${uptimeStr}.`,
-            'AVIONICS', 'LOW'
+            'AVIONICS', 'LOW', true
           );
         }
         this._startCooldown(15);
@@ -518,7 +522,7 @@ class AvionicsSubsystem extends BaseSubsystem {
         const nominalPct = randInt(96, 100);
         sendComms(
           `Telemetry frame: 2,847 parameters logged. ${nominalPct}% channels nominal.`,
-          'AVIONICS', 'LOW'
+          'AVIONICS', 'LOW', true
         );
         this._startCooldown(10);
       }
@@ -532,7 +536,7 @@ class AvionicsSubsystem extends BaseSubsystem {
         const bank = pick(['A', 'B', 'C', 'D']);
         sendComms(
           `Single-bit error corrected in DRAM bank ${bank}. SEU rate normal for current altitude.`,
-          'AVIONICS', 'LOW'
+          'AVIONICS', 'LOW', true
         );
         this._startCooldown(15);
       }
@@ -547,7 +551,7 @@ class AvionicsSubsystem extends BaseSubsystem {
       if (!this._onCooldown()) {
         sendComms(
           'Voting check: A/B/C processors agree. TMR integrity confirmed.',
-          'AVIONICS', 'LOW'
+          'AVIONICS', 'LOW', true
         );
         this._startCooldown(15);
       }
@@ -616,7 +620,7 @@ class DegradationSubsystem extends BaseSubsystem {
         const integrity = Math.round(this._kaptonIntegrity);
         sendComms(
           `Atomic oxygen flux: ${flux} atoms/cm²/s. Kapton blankets at ${integrity}% integrity.`,
-          'STRUCTURE', 'LOW'
+          'STRUCTURE', 'LOW', true
         );
         this._startCooldown(15);
       }
@@ -630,7 +634,7 @@ class DegradationSubsystem extends BaseSubsystem {
         const severity = this._uvDose < 5 ? 'minimal' : this._uvDose < 15 ? 'moderate' : 'significant';
         sendComms(
           `Solar UV cumulative dose: ${dose} krad. Polymer surfaces showing ${severity} yellowing.`,
-          'STRUCTURE', 'LOW'
+          'STRUCTURE', 'LOW', true
         );
         this._startCooldown(15);
       }
@@ -644,12 +648,12 @@ class DegradationSubsystem extends BaseSubsystem {
         if (Math.random() < 0.05) {
           // Very rare: minor penetration
           sendComms(
-            `MMOD impact detected. Micrometeorite strike on panel ${panel}. Minor penetration detected. Self-sealing foam activated.`,
+            `A tiny piece of space debris hit panel ${panel} and made a small puncture. The self-sealing foam closed it.`,
             'STRUCTURE', 'MEDIUM'
           );
         } else {
           sendComms(
-            `MMOD impact detected. Micrometeorite strike on panel ${panel}. Whipple shield absorbed impact. No penetration.`,
+            `A tiny piece of space debris hit panel ${panel}. The shield stopped it; no damage.`,
             'STRUCTURE', 'LOW'
           );
         }
@@ -664,7 +668,7 @@ class DegradationSubsystem extends BaseSubsystem {
         const dose = this._radiationDose.toFixed(3);
         sendComms(
           `Cumulative radiation dose: ${dose} Sv. Within acceptable limits.`,
-          'STRUCTURE', 'LOW'
+          'STRUCTURE', 'LOW', true
         );
         this._startCooldown(15);
       }
