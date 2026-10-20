@@ -116,6 +116,7 @@ import { LadderViewStore } from './systems/LadderViewStore.js';
 import { LadderSfx } from './systems/LadderSfx.js';
 import { clusterSelected } from './systems/LadderBridge.js';
 import { NavcomFloor } from './systems/NavcomFloor.js';
+import { earthTurnTrigger } from './systems/EarthTurn.js';
 import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
@@ -732,6 +733,9 @@ let _vitalsUnderDrawer = false;   // w4-power D4: the meters hide under the open
 // ladder block, injected into LadderController (activates/ticks on F6), and
 // ticked explicitly from the loop with the live projector below.
 let navcomFloor;
+// u8-f4-frame-field: the trigger's memory for the floor-4 turn to the focused field (EarthTurn.earthTurnTrigger).
+let f4WasSettled = false;
+let f4LastFocusId = null;
 
 // Zoom Ladder Wave-2 floor content orchestrators (S4 serial hub wire): F5
 // (PROX NET), F7 (SDA), F3 (HULL CAM). Same lifecycle as navcomFloor —
@@ -7523,6 +7527,17 @@ function updateCamera(dt, timestamp) {
     });
     const shipAngleRad = Math.atan2(s1.y - s0.y, s1.x - s0.x);
     navcomFloor.update({ project: navcomProject, shipPos, shipAngleRad });
+    // u8-f4-frame-field: on floor 4 the camera turns (about 1 s) so the debris field in focus is in the middle:
+    // once each time a ride into floor 4 ends, and each time the focus changes while there (Tab, a click on an icon).
+    const f4Focus = navcomFloor.getFocusedCluster();
+    const f4 = earthTurnTrigger({
+      floor: ladderController.currentFloor(), riding: ladderController.isRiding(),
+      focusId: f4Focus ? f4Focus.id : null, prevSettled: f4WasSettled, prevFocusId: f4LastFocusId,
+    });
+    if (f4.turn) cameraSystem.ladderTurnEarthTo(f4Focus.center);
+    f4WasSettled = f4.settled; f4LastFocusId = f4.focusId;
+  } else {
+    f4WasSettled = false; f4LastFocusId = null;   // so the next arrival on floor 4 turns again
   }
 
   // Zoom Ladder F5 (PROX NET): same single-ticker pattern as navcom — after

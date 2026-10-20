@@ -18,6 +18,7 @@ import { captureNetSystem } from '../entities/CaptureNet.js';
 import { persistenceManager } from './PersistenceManager.js';
 import { CeremonyTimeScale } from './CeremonyTimeScale.js';
 import { VisualLaw } from '../core/VisualLaw.js';
+import { earthTurnTarget, earthTurnDirAt, EARTH_TURN_S, EARTH_TURN_MIN_GAP_U } from './EarthTurn.js';
 import { testsRequestedHere } from '../ui/hud/TestsSwitch.js';
 
 // ============================================================================
@@ -672,6 +673,7 @@ export class CameraSystem {
       active: false,
       anchor: 'ship',            // 'ship' | 'earth'
       dir: new THREE.Vector3(0, 0.35, 1).normalize(), // anchor→camera unit dir (WORLD; rebuilt from `local` on ship anchors — B1)
+      earthTurn: null,           // u8-f4-frame-field: a running turn of `dir` on an Earth anchor { start, target, t } (ladderTurnEarthTo); null = none
       curDistU: 0.0004,          // eased current distance (scene units)
       targetDistU: 0.0004,       // free-scroll / settle target
       fov: Constants.CAMERA_FOV,
@@ -3887,6 +3889,7 @@ export class CameraSystem {
         d.velocityTheta = -dx * d.rotateSpeed;
         d.velocityPhi = dy * d.rotateSpeed;
         this.ladderCancelCatchFocus('mouse drag');   // reel-visible: his own camera input ends the catch focus
+        this.ladderCancelEarthTurn('mouse drag');    // u8: so does the floor-4 turn to the focused field
       }
       return;
     }
@@ -4072,6 +4075,7 @@ export class CameraSystem {
     lc.leveling = false;
     lc.levelT = 0;
     lc.levelHoldFloor = null;
+    this.ladderCancelEarthTurn('ladder disengaged');   // u8
     this._resetCatchFocus('ladder disengaged');     // reel-visible
     this._ladderResetFollow();   // H2
     // Reset the whole drag block — nothing may leak into the next engage.
@@ -4183,6 +4187,7 @@ export class CameraSystem {
     if (this._ladderUpdateWallMs !== null &&
         this._wallNowMs() - this._ladderUpdateWallMs > LADDER_NUDGE_STALE_MS) return;
     this.ladderCancelCatchFocus('touch drag');   // reel-visible: a touch drag is his own camera input too (the mouse path does the same)
+    this.ladderCancelEarthTurn('touch drag');    // u8: and it stops the floor-4 turn to the focused field
     // Touch coalescing (2026-10-20, iPad "too slow"): a SET keeps only the LAST
     // event of a frame, so a 120 Hz touchmove on a 60 fps (or 30 fps under load)
     // canvas threw away half or more of the finger's travel (measured: a
@@ -4309,6 +4314,7 @@ export class CameraSystem {
     }
     // A ride owns the camera (G3 flick replacements included): cancel any
     // in-flight drag and its momentum; re-gate on the destination floor.
+    this.ladderCancelEarthTurn('ride');   // u8: a ride owns `dir` too
     lc.drag.enabled = this._ladderDragEnabledFor(opts.floor);
     lc.drag.isDragging = false;
     lc.drag.velocityTheta = 0;
@@ -4322,6 +4328,40 @@ export class CameraSystem {
 
   /** @returns {boolean} whether the ladder camera currently owns the view. */
   isLadderActive() { return this._ladderCam.active; }
+
+  /**
+   * u8-f4-frame-field — turn the floor-4 view (about EARTH_TURN_S) so the debris field at `center` is in the
+   * middle: the camera moves onto the line from Earth's centre through the field (EarthTurn.earthTurnTarget), so
+   * the field sits between the camera and Earth. Only `lc.dir` moves (inertial, as before); the distance, the fov
+   * and the up are untouched. Returns true and stores the turn (a call during a running turn restarts from the
+   * current dir) only when the ladder is engaged on an Earth anchor, `center` is usable (EarthTurn: finite, not
+   * inside Earth) and the camera is above the field by EARTH_TURN_MIN_GAP_U (a field at or above the camera cannot
+   * be shown by turning: the ladder has no live zoom-out). Otherwise false and nothing changes.
+   * @param {{x:number,y:number,z:number}|THREE.Vector3} center  scene units, Earth at the origin
+   * @returns {boolean} whether a turn is now running
+   */
+  ladderTurnEarthTo(center) {
+    const lc = this._ladderCam;
+    if (!lc.active || lc.anchor !== 'earth') return false;
+    const target = earthTurnTarget(center);
+    if (!target) return false;
+    const r = Math.sqrt(center.x * center.x + center.y * center.y + center.z * center.z);
+    const gap = Math.max(EARTH_TURN_MIN_GAP_U, (this.camera.near || 0) + 1);
+    if (!(lc.curDistU - r >= gap)) return false;
+    lc.earthTurn = { start: lc.dir.clone(), target, t: 0 };
+    return true;
+  }
+
+  /**
+   * u8-f4-frame-field — stop the turn to the focused field where it is (the view stays on the way); no-op when none runs.
+   * @param {string} [cause] for the reader of a call site only (nothing is printed)
+   */
+  ladderCancelEarthTurn(cause = 'camera input') {
+    this._ladderCam.earthTurn = null;
+  }
+
+  /** @returns {boolean} whether the floor-4 turn to the focused field is running. */
+  isLadderEarthTurning() { return !!this._ladderCam.earthTurn; }
 
   // ==========================================================================
   // CATCH FOCUS (reel-visible) — see CATCH_FOCUS. Camera-layer only: it adds an
@@ -5089,6 +5129,25 @@ export class CameraSystem {
         dg.velocityPhi *= dg.damping;
         if (Math.abs(dg.velocityTheta) < 1e-5) dg.velocityTheta = 0;
         if (Math.abs(dg.velocityPhi) < 1e-5) dg.velocityPhi = 0;
+      }
+    }
+
+    // u8-f4-frame-field — the turn to the focused field. Only on an Earth anchor (`dir` is the inertial view
+    // direction there) and never while a ride runs (a ride owns the camera; ladderStartRide cancels a running
+    // turn, this also keeps one stored mid-ride still). Each frame's dt is clamped to [0, 0.1] s so a stalled
+    // frame cannot jump the turn. The end is exact (dir = target), then the turn is gone and `dir` is inertial again.
+    if (lc.earthTurn) {
+      if (lc.anchor !== 'earth') {
+        this.ladderCancelEarthTurn('anchor changed');
+      } else if (!lc.riding) {
+        const et = lc.earthTurn;
+        et.t += (Number.isFinite(dt) ? Math.min(Math.max(dt, 0), 0.1) : 0) / EARTH_TURN_S;
+        if (et.t >= 1) {
+          lc.dir.copy(et.target);
+          lc.earthTurn = null;
+        } else {
+          lc.dir.copy(earthTurnDirAt(et.start, et.target, et.t));
+        }
       }
     }
 
