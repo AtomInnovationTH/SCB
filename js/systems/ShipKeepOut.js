@@ -43,7 +43,9 @@
  *   - every OTHER `.visible === false` (own or ancestor) or `material.visible
  *     === false` means "this part does not exist in the current state" (the
  *     furled-wing coil while the wings are out, a retracted clamp pin, a
- *     daughter's stowed gimbal ring) and is skipped. Radiator pairs that are
+ *     daughter's stowed gimbal ring) and is skipped. Exception: a material with
+ *     `userData.keepOutSolid` (the radiator rail / seam boxes, painted on the face
+ *     instead of drawn) is hidden but still solid. Radiator pairs that are
  *     not installed are simply not in the scene graph.
  *   - daughters count only while they sit on their strut (DOCKED, LAUNCHING
  *     before the spring fires, RELOADING, HOLDING_CATCH, DOCKING); a daughter
@@ -77,7 +79,7 @@ function isFxMesh(o) {
 function materialsHidden(o) {
   const mats = Array.isArray(o.material) ? o.material : [o.material];
   if (mats.length === 0) return false;
-  for (const m of mats) if (!m || m.visible !== false) return false;
+  for (const m of mats) if (!m || m.visible !== false || (m.userData && m.userData.keepOutSolid)) return false;
   return true;
 }
 

@@ -20,6 +20,7 @@ import { getMLIFoilMaps, MLI_FOIL_LOOK } from '../scene/mliFoilTexture.js';
 import { getRadialGlowTexture, makeLightHalo } from '../scene/glowSpriteTexture.js';
 import { makePlumeFrustum } from '../scene/plumeGeometry.js';
 import { applyDetailLod } from '../scene/detailLodCull.js';
+import { getRadiatorRailTexture } from '../scene/radiatorRailTexture.js';
 import { getOrbitalFoilEnv } from '../scene/orbitalFoilEnv.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
@@ -4479,7 +4480,6 @@ export class PlayerSatellite extends THREE.Group {
     const frontMat = new THREE.MeshStandardMaterial({ color: 0xE8E6E0, metalness: 0.05, roughness: 0.75 });
     const backMat = new THREE.MeshStandardMaterial({ color: 0x2B2B30, metalness: 0.2, roughness: 0.8 });
     const metalMat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, metalness: 0.6, roughness: 0.45 });
-    const plateMat = [metalMat, metalMat, metalMat, metalMat, frontMat, backMat];
     const bracketMat = new THREE.MeshStandardMaterial({
       color: 0x3a3a44, metalness: 0.7, roughness: 0.45,
     });
@@ -4691,6 +4691,29 @@ export class PlayerSatellite extends THREE.Group {
     // wing-local y is measured from the fold axis (the wing mesh's own centre is at y wingW / 2)
     const frameWingGeo = mergeGeos([
       boxAt(wingRailLen, RAIL_W, RAIL_H, 0, 0.142, 0), boxAt(wingRailLen, RAIL_W, RAIL_H, 0, 0.040, 0)]);
+    // §11.17: the rails are PAINTED on the faces as a mipmapped texture, not drawn as geometry: a 0.7-2 px box shimmers
+    // as the view turns (tmp/probes/rad-shimmer). The rail meshes stay in the scene (names, sizes and clearances are pinned
+    // by tests) but are not drawn: `paintedAway` is a material that three skips (material.visible false), so mesh.visible
+    // and raycasts are unchanged. ShipKeepOut skips invisible materials, so the material says `keepOutSolid` and the
+    // keep-out still counts the boxes (<= 1 mm, as the clearance fixtures were measured); MotherCallouts._chainVisible
+    // skips them for picking and outlines. Row 0 of the texture is the face's -Y edge; both rails are measured from there.
+    const paintedAway = new THREE.MeshBasicMaterial();
+    paintedAway.visible = false;
+    paintedAway.userData.keepOutSolid = true;
+    const railFace = (lengthM, widthM, bands) => [frontMat, backMat].map((base, k) => {
+      const mat = base.clone();
+      mat.map = getRadiatorRailTexture({
+        lengthM, widthM, endInsetM: FL.SEAM_END_INSET_M, faceHex: k ? 0x2B2B30 : 0xE8E6E0,
+        rails: bands.map(([c, w, kind]) => [c, w, kind === 'seam' ? 0x1c1e26 : (k ? 0x6a6e74 : 0x55585c)]),
+      });
+      mat.color.set(0xffffff);                      // the face colour lives in the texture now
+      return mat;
+    });
+    const plateMatCentre = [metalMat, metalMat, metalMat, metalMat, ...railFace(plateLen / M, 2 * cHalf, [
+      [cHalf - 0.120, RAIL_W, 'rail'], [cHalf + 0.120, RAIL_W, 'rail'],
+      [cHalf - seamY / M, FL.WING_SEAM_M, 'seam'], [cHalf + seamY / M, FL.WING_SEAM_M, 'seam']])];
+    const plateMatWing = [metalMat, metalMat, metalMat, metalMat, ...railFace(wingLen / M, wingW, [
+      [0.142, RAIL_W, 'rail'], [0.040, RAIL_W, 'rail'], [WING_DETAIL_Y_M, 0.01, 'seam']])];
     // D3 coolant channels: 11 ridges (5 centre, 3 per wing), 10 mm wide, 1.5 mm proud, +Z face only. The middle
     // centre ridge runs under the Ø60 boom spine (the boom stands 15 mm proud of the face): it is there, not seen.
     const ridge = (len, cy) => boxAt(len, RIDGE_W, RIDGE_UP + 0.001, 0, cy, FL.PLATE_THICK_M / 2 + RIDGE_UP / 2 - 0.0005);
@@ -4891,7 +4914,7 @@ export class PlayerSatellite extends THREE.Group {
       // Design 7b: FlowerStrutPlate_${i} is the 0.30 m CENTRE panel (name,
       // boom-spine mid-plane and tangential-width convention kept — the
       // callout binding and test-FlowerHardware's spine pin read this mesh).
-      const plate = new THREE.Mesh(plateGeo, plateMat);
+      const plate = new THREE.Mesh(plateGeo, plateMatCentre);
       plate.position.x = plateX;
       plate.name = `FlowerStrutPlate_${i}`;
       plate.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
@@ -4902,6 +4925,7 @@ export class PlayerSatellite extends THREE.Group {
       plateFrame.name = `FlowerStrutPlate_${i}_Frame`;
       plateFrame.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
       plateFrame.userData.noSolarShade = true;
+      plateFrame.material = paintedAway;          // §11.17: painted on the face instead
       hinge.add(plateFrame);
       const platePipes = new THREE.Mesh(pipesCentreGeo, frontMat);
       platePipes.position.x = plateX;
@@ -4942,7 +4966,7 @@ export class PlayerSatellite extends THREE.Group {
         // local +X is ship −X on the L side (the π turn), so the tip-end
         // shortening shifts the wing by −sgn·inset/2 to keep its root flush.
         const wingShiftX = -sgn * wingInset / 2;
-        const wing = new THREE.Mesh(wingGeo, plateMat);
+        const wing = new THREE.Mesh(wingGeo, plateMatWing);
         wing.position.set(wingShiftX, (wingW / 2) * M, knuckleK * M);
         wing.name = `FlowerStrutWing_${i}_${side}`;
         wing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
@@ -4953,6 +4977,7 @@ export class PlayerSatellite extends THREE.Group {
         wingFrame.name = `FlowerStrutWing_${i}_${side}_Frame`;
         wingFrame.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
         wingFrame.userData.noSolarShade = true;
+        wingFrame.material = paintedAway;         // §11.17
         wh.add(wingFrame);
         const wingPipes = new THREE.Mesh(pipesWingGeo, frontMat);
         wingPipes.position.set(wingShiftX, 0, knuckleK * M);
@@ -4991,6 +5016,7 @@ export class PlayerSatellite extends THREE.Group {
         wingSeam.position.set(wingShiftX, WING_DETAIL_Y_M * M, knuckleK * M);
         wingSeam.name = `FlowerStrutWingSeam_${i}_${side}`;
         wingSeam.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+        wingSeam.material = paintedAway;          // §11.17: painted on the face
         wh.add(wingSeam);
         [-0.6, 0, 0.6].forEach((sx, k) => {
           const wkn = new THREE.Mesh(wingKnuckleGeo, bracketMat);
@@ -5040,6 +5066,7 @@ export class PlayerSatellite extends THREE.Group {
         seam.position.set(plateX, sgn * seamY, 0);
         seam.name = `FlowerStrutSeam_${i}_${side}`;
         seam.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+        seam.material = paintedAway;              // §11.17: painted on the face
         hinge.add(seam);
         wings.push(wh);
       }

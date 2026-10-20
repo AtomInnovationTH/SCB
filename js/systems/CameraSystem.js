@@ -83,6 +83,8 @@ const VIEW_LABELS = {
  * the phase ends.
  */
 export const LADDER_LEVEL_MS = 600;
+/** Wall ms without a ladder update after which ladderDragNudge drops nudges (paused / hidden / blurred; ~15 frames at 60 fps). */
+export const LADDER_NUDGE_STALE_MS = 250;
 
 /**
  * DOWN-rides (Earth→ship, F6→F5): the roll back to ship-up completes within
@@ -663,6 +665,9 @@ export class CameraSystem {
     // + gameplay); untouched when the flag is off, so shipped views stay
     // byte-identical.
     // ========================================================================
+    this._ladderUpdateSeq = 0;   // drawn-frame counter (ladderDragNudge coalescing)
+    this._ladderUpdateWallMs = null;   // wall clock of the last ladder update (stale-nudge guard)
+    this._wallNowMs = () => ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now());
     this._ladderCam = {
       active: false,
       anchor: 'ship',            // 'ship' | 'earth'
@@ -711,6 +716,7 @@ export class CameraSystem {
         velocityPhi: 0,
         rotateSpeed: 0.005,   // mirrors this.orbit.rotateSpeed
         damping: 0.92,        // mirrors this.orbit.damping
+        nudgeSeq: -1,         // _ladderUpdateSeq of the last ladderDragNudge (touch coalescing)
       },
       _dragUp: new THREE.Vector3(),
       _dragRight: new THREE.Vector3(),
@@ -4169,9 +4175,30 @@ export class CameraSystem {
     const dx = Number.isFinite(dxPx) ? dxPx : 0;
     const dy = Number.isFinite(dyPx) ? dyPx : 0;
     if (dx === 0 && dy === 0) return;
+    // Stale-nudge guard (review of cb29fbe8): main.js stops calling update() while
+    // the game is paused, the tab is hidden or the window is blurred, yet a finger
+    // that stays down keeps sending nudges. They would all land in one frame's sum
+    // and coast ~11.5x on resume. No ladder update for LADDER_NUDGE_STALE_MS of
+    // wall time = nobody is drawing: the nudge is dropped.
+    if (this._ladderUpdateWallMs !== null &&
+        this._wallNowMs() - this._ladderUpdateWallMs > LADDER_NUDGE_STALE_MS) return;
     this.ladderCancelCatchFocus('touch drag');   // reel-visible: a touch drag is his own camera input too (the mouse path does the same)
-    lc.drag.velocityTheta = -dx * lc.drag.rotateSpeed;
-    lc.drag.velocityPhi = dy * lc.drag.rotateSpeed;
+    // Touch coalescing (2026-10-20, iPad "too slow"): a SET keeps only the LAST
+    // event of a frame, so a 120 Hz touchmove on a 60 fps (or 30 fps under load)
+    // canvas threw away half or more of the finger's travel (measured: a
+    // 1180 px swipe 506 deg at 1 event/frame, 262 deg at 2). Several nudges
+    // inside ONE drawn frame therefore SUM; the first nudge of a frame still
+    // SETS (the pointer's law, and the held arrow's one-call-per-frame).
+    const d = lc.drag;
+    const addTheta = -dx * d.rotateSpeed, addPhi = dy * d.rotateSpeed;
+    if (d.nudgeSeq === this._ladderUpdateSeq) {
+      d.velocityTheta += addTheta;
+      d.velocityPhi += addPhi;
+    } else {
+      d.velocityTheta = addTheta;
+      d.velocityPhi = addPhi;
+      d.nudgeSeq = this._ladderUpdateSeq;
+    }
   }
 
   /** @private Settle the eased look-at bias at 0 (engage / disengage). */
@@ -4972,6 +4999,8 @@ export class CameraSystem {
    */
   _updateLadderCamera(dt, playerPos, velDir, radialDir) {
     const lc = this._ladderCam;
+    this._ladderUpdateSeq++;   // one tick per drawn frame: ladderDragNudge coalesces within a tick
+    this._ladderUpdateWallMs = this._wallNowMs();
 
     // H2 — the follow blend clock, ONCE per frame and before any anchor reader.
     // A change of target (mother ↔ daughter, daughter A → B, loss) restarts the

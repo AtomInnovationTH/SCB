@@ -2417,12 +2417,19 @@ export class MotherCallouts {
   }
 
   /**
-   * True when `obj` and every parent up to and including `root` are `.visible`.
+   * True when `obj` and every parent up to and including `root` are `.visible`, and `obj` is drawn
+   * (not all of its materials `visible === false`).
    * Raycaster.intersectObject tests LAYERS only, never `.visible` (T1) — hidden
    * plumes, furled panels and docked daughter bodies would otherwise be hit.
    * @private
    */
   _chainVisible(obj, root) {
+    // A mesh whose every material is `visible = false` is not drawn (the radiator rail / seam boxes, painted on the
+    // face instead: PlayerSatellite, CONVENTIONS 11.17), so it must not be picked, outlined or counted in bounds.
+    if (obj && obj.isMesh && obj.material) {
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      if (mats.length > 0 && mats.every((m) => m && m.visible === false)) return false;
+    }
     let o = obj;
     while (o) {
       if (!o.visible) return false;
