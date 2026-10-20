@@ -40,6 +40,7 @@ import { CommsSystem } from './systems/CommsSystem.js';
 import { ResourceSystem, engineGasKg } from './systems/ResourceSystem.js';
 import { SensorSystem } from './systems/SensorSystem.js';
 import { wingsHint } from './systems/WingsHint.js';
+import { StartOpening, shipOpeningActuators } from './systems/StartOpening.js';
 import { dossierSystem } from './systems/DossierSystem.js';
 import { kesslerSystem } from './systems/KesslerSystem.js';
 import { CargoSystem } from './systems/CargoSystem.js';
@@ -682,6 +683,8 @@ let guidanceDirector;
 // Zoom Ladder (S2 skeleton — behind Constants.LADDER.ENABLED)
 let wheelRouter;
 let ladderController;
+/** Owner 2026-10-20: the ship opens on the player's first action (systems/StartOpening.js); built in init. */
+let startOpening = null;
 let railIndicator;
 // Session P (plan D5, owner 2026-09-07: "is the rail even needed… volume
 // control") — the DETAIL slider (js/ui/DetailSlider.js): ONE horizontal
@@ -3154,6 +3157,33 @@ async function init() {
   });
   wheelRouter.start();
 
+  // Owner 2026-10-20 (DECISIONS "Opening at the start"): every start leaves the
+  // ship closed (wings rolled up, radiators 0°, daughter struts 0°) until the
+  // player's FIRST ACTION (any key, tap, drag or scroll); then the wings roll
+  // out, the radiators open to 146° and the struts go to 34°, on Mac and iPad,
+  // with one comms line saying why. OpeningDance arms it whenever the start
+  // state is applied (hand-over + endState); the listeners judge the input at
+  // capture time and act after the input's own handlers (systems/StartOpening.js).
+  // Unconditional: the ladder gate does not touch it (a ?ladder=0 boot opens too).
+  const _openingShip = shipOpeningActuators({ getPlayer: () => player, getArmManager: () => armManager });
+  startOpening = new StartOpening({
+    isGameplay: () => gameState.isGameplay(),
+    introInFlight: () => !!(ladderController && typeof ladderController.introInFlight === 'function'
+      && ladderController.introInFlight()),
+    actuators: _openingShip.actuators,
+    commanded: _openingShip.commanded,
+    timers: {
+      setTimeout: (fn, ms) => timerManager.setTimeout(fn, ms, { owner: 'startOpening' }),
+      clear: (id) => timerManager.clear(id),
+    },
+  });
+  startOpening.install(window);
+  openingDance.setOnStartApplied(() => startOpening.arm());
+  // A menu visit ends the run: no poll, no armed state until the next start applies it.
+  eventBus.on(Events.GAME_STATE_CHANGE, ({ to } = {}) => {
+    if (to === GameStates.MENU && startOpening) startOpening.disarm();
+  });
+
   // --- iPad port (Ipad.md §4.5): touch controls, real-detection gated.
   // Desktop and headless contexts see zero listeners + zero DOM by
   // construction, so every existing suite stays byte-identical. Pinch
@@ -3228,7 +3258,13 @@ async function init() {
     // u2-one-voice D8: on touch the step chip IS the button - a tap presses the SAME key
     // (KeyDispatch -> window), so the wings / scan / net / autopilot paths are the keyboard's.
     if (hud && hud.hintTicker && hud.hintTicker.setStepTap) {
-      hud.hintTicker.setStepTap((code) => dispatchKeyPress(code));
+      // Owner 2026-10-20: a tap on the wings chip is the first action - its pointerdown is already
+      // waiting in StartOpening, which sets the wings out after this click. The chip's own comma press
+      // is a toggle, so hold it back while that tap waits (it could only roll the wings back up).
+      hud.hintTicker.setStepTap((code) => {
+        if (startOpening && startOpening.ownsStepTap(code)) return;
+        dispatchKeyPress(code);
+      });
     }
     const stampEl = (typeof document !== 'undefined') ? document.getElementById('build-stamp') : null;
     const touchTelemetry = new TouchTelemetry({
@@ -3271,8 +3307,8 @@ async function init() {
       },
       telemetry: touchTelemetry,
       // Session J (D-I) — the two-thumb grammar's sinks:
-      inputKeys: inputManager.keys,      // the PUBLIC key map (InputManager untouched) — drag = ship turn
-      cameraSystem,                       // ladderDragNudge — drag = the turntable while a drawer is open
+      inputKeys: inputManager.keys,      // the PUBLIC key map (InputManager untouched) — the turn pad = ship turn
+      cameraSystem,                       // ladderDragNudge(dx, dy, 'touch') — one-finger drag = turn the view (floors 1-4)
       onTap: _touchTap,
       onHold: _touchHold,
       pressKey: (code) => dispatchKeyPress(code),   // the radial's verbs press the SAME keys (KeyDispatch → window)

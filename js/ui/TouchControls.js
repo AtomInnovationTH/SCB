@@ -17,14 +17,21 @@
  *           exactly like the wheel path, because jump() runs the same wall
  *           decisions. (The old fixed +/− buttons were removed once pinch +
  *           rail-drag proved enough on glass.)
- *   2. THE TWO-THUMB GRAMMAR (Wave 5 Session J, plan D-I — no virtual stick):
- *        a. one-finger DRAG on the canvas = ship turn, by writing the PUBLIC
- *           key map `inputManager.keys` (ArrowLeft/Right/Up/Down — InputManager
- *           reads the booleans each frame; it is never edited), dead zone
- *           `turnDeadPx`; while a drawer is open on the workbench floor
- *           (`ladderController.turntableActive()`) the same drag orbits the
- *           CAMERA instead (`cameraSystem.ladderDragNudge`, D-F — the camera's
- *           drag is mouse-only, touch never reached it);
+ *   2. THE TOUCH GRAMMAR (Wave 5 Session J, plan D-I; re-cut 2026-10-20, owner
+ *      "one-finger drag turns the view" + "Turn pad, lower left"):
+ *        a. one-finger DRAG on the canvas = turn the VIEW, on floors 1-4 with or
+ *           without a drawer (floor 5: nothing): the per-move pixel delta goes
+ *           to `cameraSystem.ladderDragNudge(dx, dy, 'touch')`, the camera's ONE
+ *           drag mechanism. A drag from the LEFT 24 px band is the drawer swipe
+ *           and turns nothing; a drag from the RIGHT band turns the view;
+ *        a2. the TURN PAD (round, 112 px, lower left, floors 2-3 only, hidden
+ *           while a drawer is open): a thumb on it = ship turn, by writing the
+ *           PUBLIC key map `inputManager.keys` (ArrowLeft/Right/Up/Down —
+ *           InputManager reads the booleans each frame; it is never edited),
+ *           dead zone `turnDeadPx` measured from where the thumb landed. The pad
+ *           is its own DOM element: its finger is never a pinch finger and never
+ *           poisons the canvas gesture (thumb on the pad + a finger dragging the
+ *           view = the ship turns AND the view turns);
  *        b. TAP = `onTap({x, y})` — the hub resolves it (nearest target →
  *           HUD_TARGET_CLICK, else SCAN_QUICK; hull parts stay MotherCallouts');
  *        c. LONG-PRESS on the selected target (`onHold({x, y})` truthy) = the
@@ -35,12 +42,13 @@
  *           (ending in the left band) closes the SPECS workbench drawer
  *           through `openPane('library', open)` — the drawer is left on every
  *           floor (§13 r5); gestures follow it (§13 r6, 2026-09-26). A
- *           right-band swipe still classifies but dispatches nothing.
+ *           right-band swipe still classifies but dispatches nothing (and its
+ *           finger turns the view, see a).
  *        e. EDGE TOUCH witness (Session P, plan D3): every canvas / grip
  *           touchstart reports its landing (x, y) to `onEdgeTouch` — the hub's
  *           edge-wake bands decide what chrome wakes (never TouchControls).
- *      Any moment with two fingers down POISONS the gesture (a pinch that
- *      starts on a part is never a tap). The STORE chip stays until Session K
+ *      Any moment with two CANVAS fingers down POISONS the gesture (a pinch that
+ *      starts on a part is never a tap); the turn-pad finger does not count. The STORE chip stays until Session K
  *      retires the full-screen shop; the PANES density slider and the LIBRARY
  *      chip retired with the DISPLAY rail + the SPECS-everywhere tab (D-H / D-C).
  *      Gameplay-gated chrome: hidden on the menu / briefing / end screens
@@ -79,7 +87,7 @@ import { FloorContract } from '../core/FloorContract.js';
 
 /** Number of Zoom-Ladder floors (SSOT: FloorContract). */
 const FLOOR_COUNT = FloorContract.FLOORS.length;
-/** The four keys the one-finger drag may write — never any other (D-I). */
+/** The four keys the turn pad may write — never any other (D-I). */
 const ARROW_KEYS = Object.freeze(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 
 /** Field-tunable knobs (overridable, not forked — window.__TOUCH_TUNE). */
@@ -102,7 +110,7 @@ export const TOUCH_TUNE = {
   activeOpacity: 0.92, // touched/recent opacity
   sliderSyncMs: 700,   // rail-grip + chrome re-sync cadence (the name predates the slider's retirement)
   // Session J (plan D-I) — the two-thumb grammar:
-  turnDeadPx: 12,      // one-finger drag dead zone before an arrow key is written
+  turnDeadPx: 12,      // turn-pad dead zone (from where the thumb landed) before an arrow key is written
   tapMaxMs: 250,       // a press released within this, moved ≤ tapSlopPx = TAP
   tapSlopPx: 10,       // tap / hold movement tolerance
   holdMs: 450,         // a press held this long, moved ≤ tapSlopPx = HOLD (the radial)
@@ -122,6 +130,21 @@ export const RADIAL_VERBS = Object.freeze([
 /** Radial button size (px) and ring radius (px) — ≥ 44 pt targets around the finger. */
 export const RADIAL_BTN_PX = 64;
 export const RADIAL_RING_PX = 72;
+
+/**
+ * The turn pad (2026-10-20, research §3.3): a round pad 112 CSS px across whose
+ * centre is 110 px from the left edge and 250 px above the bottom — clear of the
+ * 24 px swipe band, the 40 px side wake band, the SPECS tab, the footer band and
+ * the Daughters pane. Shown on floors 2 and 3 only. z-index sits BELOW the
+ * radial's 38 so a radial opened near it stays on top.
+ */
+export const TURN_PAD_PX = 112;
+export const TURN_PAD_CENTRE_X = 110;
+export const TURN_PAD_CENTRE_FROM_BOTTOM = 250;
+export const TURN_PAD_Z = 37;
+export const TURN_PAD_FLOORS = Object.freeze([2, 3]);
+/** The floors where a one-finger canvas drag turns the view (floor 5: nothing). */
+export const VIEW_DRAG_FLOORS = Object.freeze([1, 2, 3, 4]);
 
 /**
  * Pinch → synthetic wheel deltaY (px), wheel convention: spreading the fingers
@@ -162,7 +185,7 @@ export function railFloorForY(clientY, topY, bottomY, count = FLOOR_COUNT) {
 }
 
 /**
- * Session J (D-I): one-finger drag → the arrow keys the SHIP would read.
+ * Session J (D-I): turn-pad thumb → the arrow keys the SHIP would read.
  * Dead zone `deadPx` from the touch start; the dominant axis alone unless
  * both axes exceed the dead zone (a diagonal drag turns both). Pure.
  * @param {number} dx  finger x − start x (px; right positive)
@@ -271,14 +294,15 @@ export class TouchControls {
    * @param {HTMLCanvasElement} deps.canvas          the game canvas
    * @param {object} deps.wheelRouter                provides routeSyntheticWheel(deltaY, target)
    * @param {object|null} [deps.ladderController]     provides jump({toFloor}) — the rail-drag sink —
-   *   and turntableActive() (Session J: the drag orbits the camera while true)
+   *   plus currentFloor() / isActive() / paneState() (which floor, engaged, drawer open: the turn pad
+   *   and the floor-5 no-drag rule)
    * @param {object|null} [deps.gameState]           provides isGameplay() — gates the chrome (menu hides it)
    * @param {object|null} [deps.openShop]            callback: open the store (KeyB path; guards its own state)
    * @param {object|null} [deps.telemetry]           optional zoom-feel sink: log(kind, data)
    * @param {object} [deps.tune]                     TOUCH_TUNE override (tests)
    * @param {object|null} [deps.inputKeys]           Session J: the PUBLIC `inputManager.keys` map — the
-   *   one-finger drag writes ArrowLeft/Right/Up/Down into it (InputManager never edited)
-   * @param {object|null} [deps.cameraSystem]        Session J: ladderDragNudge(dx, dy) — the turntable
+   *   TURN PAD writes ArrowLeft/Right/Up/Down into it (InputManager never edited)
+   * @param {object|null} [deps.cameraSystem]        ladderDragNudge(dx, dy, 'touch') — the one-finger view drag
    * @param {function|null} [deps.onTap]             Session J: ({x, y}) → the hub resolves the tap
    * @param {function|null} [deps.onHold]            Session J: ({x, y}) → truthy = a selected target is under
    *   the finger → the radial opens
@@ -304,7 +328,7 @@ export class TouchControls {
                 pressKey = null, openPane = null, onEdgeTouch = null } = {}) {
     this._canvas = canvas || null;
     this._router = wheelRouter || null;
-    this._ladder = ladderController;   // rail-drag → jump({toFloor}); turntableActive()
+    this._ladder = ladderController;   // rail-drag → jump({toFloor}); currentFloor() / paneState() for the turn pad
     this._gameState = gameState;       // isGameplay() → hide the chrome off-play
     void paneDensity; void toggleLibrary;   // retired deps (Session J) — accepted, ignored
     this._openShop = (typeof openShop === 'function') ? openShop : null;
@@ -334,10 +358,16 @@ export class TouchControls {
     this._started = false;
     // Session J: the one-finger gesture track (null between gestures) —
     // { id, startX, startY, x, y, t0, moved, maxTouches, poisoned, edge, held,
-    //   lastX, lastY, keysWritten } — and the radial state.
+    //   lastX, lastY, dragging } — and the radial state.
     this._gesture = null;
     this._holdTimer = null;
     this._radial = null;        // { el, idleTimer, fireTimer, firing }
+    this._padEl = null;         // the turn pad's DOM element (built in _buildChrome)
+    this._pad = null;           // { id, startX, startY, written } while a thumb is on the pad
+    this._padGhostId = null;    // id of a thumb still down after the pad hid under it (never a canvas finger)
+    this._onPadStart = this._handlePadStart.bind(this);
+    this._onPadMove = this._handlePadMove.bind(this);
+    this._onPadEnd = this._handlePadEnd.bind(this);
 
     this._onTouchStart = this._handleTouchStart.bind(this);
     this._onTouchMove = this._handleTouchMove.bind(this);
@@ -387,8 +417,17 @@ export class TouchControls {
     document.removeEventListener('visibilitychange', this._onVisibility);
     if (this._syncTimer) { clearInterval(this._syncTimer); this._syncTimer = null; }
     if (this._idleTimer) { clearTimeout(this._idleTimer); this._idleTimer = null; }
-    this._endGesture();                 // releases any held arrow, clears the hold timer
+    this._endGesture();                 // clears the hold timer
+    this._endPad();                     // releases any held arrow
     this._closeRadial();
+    if (this._padEl) {
+      this._padEl.removeEventListener('touchstart', this._onPadStart);
+      this._padEl.removeEventListener('touchmove', this._onPadMove);
+      this._padEl.removeEventListener('touchend', this._onPadEnd);
+      this._padEl.removeEventListener('touchcancel', this._onPadEnd);
+      if (this._padEl.parentNode) this._padEl.parentNode.removeChild(this._padEl);
+      this._padEl = null;
+    }
     if (this._grip) {
       this._grip.removeEventListener('touchstart', this._onGripStart);
       this._grip.removeEventListener('touchmove', this._onGripMove);
@@ -418,6 +457,33 @@ export class TouchControls {
     return Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
   }
 
+  /**
+   * @private The CANVAS fingers of a touch list: `e.touches` lists every finger
+   * on the glass, including a thumb resting on the turn pad (a different DOM
+   * element). That thumb is never a pinch finger and never the "second finger"
+   * that poisons the one-finger gesture. No pad thumb down → the list itself.
+   */
+  _canvasFingers(touches) {
+    const p = this._pad;
+    const ghost = this._padGhostId;
+    if (!p && ghost === null) return touches;
+    const out = [];
+    for (const t of touches) {
+      if (p && t.identifier === p.id) continue;
+      if (ghost !== null && t.identifier === ghost) continue;
+      out.push(t);
+    }
+    return out;
+  }
+
+  /** @private Forget a hidden-pad thumb whose id is no longer on the glass (its end event went missing). */
+  _pruneGhost(touches) {
+    const g = this._padGhostId;
+    if (g === null) return;
+    if (touches) for (const t of touches) if (t.identifier === g) return;
+    this._padGhostId = null;
+  }
+
   /** @private ms clock (performance.now when present). */
   _now() { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(); }
 
@@ -428,6 +494,7 @@ export class TouchControls {
     // that began on overlay DOM — cannot be canceled; trying logs a console
     // error on every such event.)
     if (e.cancelable) e.preventDefault();
+    this._pruneGhost(e.touches);
     this._touched();
     this._requestWakeLock();
     // Session P (plan D3): report where the LANDING finger touched — the hub's
@@ -443,8 +510,9 @@ export class TouchControls {
       this._gesture = { consumed: true, id: e.changedTouches[0] ? e.changedTouches[0].identifier : -1 };
       return;
     }
-    if (!this._pinch && e.touches.length >= 2) {
-      const [a, b] = [e.touches[0], e.touches[1]];
+    const fingers = this._canvasFingers(e.touches);
+    if (!this._pinch && fingers.length >= 2) {
+      const [a, b] = [fingers[0], fingers[1]];
       this._pinch = {
         idA: a.identifier,
         idB: b.identifier,
@@ -452,17 +520,18 @@ export class TouchControls {
       };
     }
     // Session J (D-I): the one-finger gesture track.
-    if (e.touches.length >= 2) {
-      this._poisonGesture();             // a second finger: never a tap / hold / drag
+    if (fingers.length >= 2) {
+      this._poisonGesture();             // a second canvas finger: never a tap / hold / drag
       return;
     }
-    if (!this._gesture && e.touches.length === 1) {
-      const t = e.touches[0];
+    if (!this._gesture && fingers.length === 1) {
+      const t = fingers[0];
       const now = this._now();
       this._gesture = {
         id: t.identifier, startX: t.clientX, startY: t.clientY, x: t.clientX, y: t.clientY,
         lastX: t.clientX, lastY: t.clientY, t0: now, t: now, moved: 0, maxTouches: 1,
-        poisoned: false, edge: this._inEdgeBand(t.clientX), held: false, keysWritten: false, consumed: false,
+        poisoned: false, edge: this._inEdgeBand(t.clientX), edgeLeft: t.clientX <= this._tune.edgeBandPx,
+        held: false, dragging: false, consumed: false,
       };
       this._armHold();
     }
@@ -472,8 +541,9 @@ export class TouchControls {
   _handleTouchMove(e) {
     if (e.cancelable) e.preventDefault();
     this._touched();
+    const fingers = this._canvasFingers(e.touches);
     if (this._pinch) {
-      const cur = this._pinchDist(e.touches);
+      const cur = this._pinchDist(fingers);
       if (Number.isFinite(cur)) {
         const dy = pinchWheelDeltaY(this._pinch.dist, cur, this._tune);
         if (dy !== 0 && this._router && this._router.routeSyntheticWheel) {
@@ -487,40 +557,46 @@ export class TouchControls {
     // Session J (D-I): the one-finger track.
     const g = this._gesture;
     if (!g || g.consumed) return;
-    if (e.touches.length >= 2) { this._poisonGesture(); return; }
+    if (fingers.length >= 2) { this._poisonGesture(); return; }
     if (g.poisoned || g.held) return;
     let t = null;
-    for (const c of e.touches) if (c.identifier === g.id) { t = c; break; }
+    for (const c of fingers) if (c.identifier === g.id) { t = c; break; }
     if (!t) return;
     g.lastX = g.x; g.lastY = g.y;
     g.x = t.clientX; g.y = t.clientY; g.t = this._now();
     g.moved = Math.max(g.moved, Math.hypot(g.x - g.startX, g.y - g.startY));
     if (g.moved > this._tune.tapSlopPx) this._clearHold();   // a moving finger is not a hold
-    if (g.edge) return;                                       // the drawer swipe writes no keys, nudges nothing
-    if (this._ladder && typeof this._ladder.turntableActive === 'function' && this._ladder.turntableActive()) {
-      // The TURNTABLE (D-F): the pixel delta since the previous move onto the
-      // camera's ONE drag mechanism — the mouse path's math, verbatim.
-      if (g.keysWritten) this._releaseKeys();                 // the drawer opened mid-drag: the ship lets go
-      if (this._camera && typeof this._camera.ladderDragNudge === 'function') {
-        const dx = g.x - g.lastX, dy = g.y - g.lastY;
-        if (dx !== 0 || dy !== 0) {
-          this._camera.ladderDragNudge(dx, dy);
-          if (this._stats) this._stats.turn++;
-        }
-      }
-      return;
+    // A drag that starts in the LEFT band is the drawer swipe: no nudge. A drag from the RIGHT band
+    // turns the view (the right-band swipe dispatches nothing, so the finger is free).
+    if (g.edgeLeft) return;
+    if (!this._viewDragFloor()) return;                       // floor 5: a drag does nothing
+    // ONE-FINGER VIEW DRAG (2026-10-20): the pixel delta since the previous move onto the camera's ONE
+    // drag mechanism — the mouse path's math, verbatim. A press that has not yet left the tap slop stays
+    // a possible tap and nudges nothing; the move that crosses the slop sends the travel from the start.
+    if (!g.dragging) {
+      if (g.moved <= this._tune.tapSlopPx) return;
+      g.dragging = true;
+      g.lastX = g.startX; g.lastY = g.startY;
     }
-    // SHIP TURN: the arrow-key state the ship reads each frame (write-on-change).
-    if (this._keys) {
-      const want = turnKeysFor(g.x - g.startX, g.y - g.startY, this._tune.turnDeadPx);
-      let changed = false;
-      for (const k of ARROW_KEYS) {
-        if (!!this._keys[k] !== want[k]) { this._keys[k] = want[k]; changed = true; }
+    if (this._camera && typeof this._camera.ladderDragNudge === 'function') {
+      const dx = g.x - g.lastX, dy = g.y - g.lastY;
+      if (dx !== 0 || dy !== 0) {
+        this._camera.ladderDragNudge(dx, dy, 'touch');
+        if (this._stats) this._stats.turn++;
       }
-      const any = want.ArrowLeft || want.ArrowRight || want.ArrowUp || want.ArrowDown;
-      if (any) { if (!g.keysWritten && this._stats) this._stats.drag++; g.keysWritten = true; }
-      if (changed && this._telemetry) this._telemetry.log('turn', want);
     }
+  }
+
+  /**
+   * @private May a one-finger drag turn the view on the current floor? Floors 1-4 yes; floor 5
+   * (and any other floor the ladder reports) no. No ladder / no reading → yes: the camera's own
+   * touch gate (CameraSystem._ladderTouchDragEnabledFor) has the last word.
+   */
+  _viewDragFloor() {
+    const L = this._ladder;
+    if (!L || typeof L.currentFloor !== 'function') return true;
+    const f = L.currentFloor();
+    return f == null || VIEW_DRAG_FLOORS.includes(f);
   }
 
   /** @private */
@@ -535,8 +611,9 @@ export class TouchControls {
       }
     }
     // Re-arm immediately when two touches remain (finger swap mid-pinch).
-    if (!this._pinch && e.touches.length >= 2) {
-      const [a, b] = [e.touches[0], e.touches[1]];
+    const fingers = this._canvasFingers(e.touches);
+    if (!this._pinch && fingers.length >= 2) {
+      const [a, b] = [fingers[0], fingers[1]];
       this._pinch = {
         idA: a.identifier,
         idB: b.identifier,
@@ -553,7 +630,7 @@ export class TouchControls {
     g.t = this._now();
     const W = this._canvasWidth();
     const kind = classifyGesture(g, this._tune, W);
-    this._endGesture();                                       // releases any written arrow first
+    this._endGesture();
     switch (kind) {
       case 'tap':
         if (this._stats) this._stats.tap++;
@@ -566,8 +643,8 @@ export class TouchControls {
       // still classify (pure classifyGesture is unchanged) but dispatch
       // nothing; the left band also keeps waking the DETAIL slider through
       // onEdgeTouch at touchstart.
-      case 'edge-open-left': this._swipePane('library', true); break;
-      case 'edge-close-left': this._swipePane('library', false); break;
+      case 'edge-open-left': this._swipePane('library', true); this._syncPad(); break;
+      case 'edge-close-left': this._swipePane('library', false); this._syncPad(); break;
       default: break;                                         // drag / slow tap / hold release / right-band swipe: nothing more
     }
   }
@@ -622,22 +699,116 @@ export class TouchControls {
     g.poisoned = true;
     g.maxTouches = 2;
     this._clearHold();
-    this._releaseKeys();
   }
 
-  /** @private Release every arrow this layer wrote (write-on-change). */
-  _releaseKeys() {
-    const g = this._gesture;
-    if (!this._keys || !g || !g.keysWritten) return;
-    for (const k of ARROW_KEYS) if (this._keys[k]) this._keys[k] = false;
-    g.keysWritten = false;
-  }
-
-  /** @private Drop the track: keys released, hold timer cleared. */
+  /** @private Drop the track: hold timer cleared. (The canvas gesture writes no keys; the turn pad does.) */
   _endGesture() {
     this._clearHold();
-    this._releaseKeys();
     this._gesture = null;
+  }
+
+  // ── the TURN PAD (2026-10-20): a thumb on it = the arrow keys the ship reads ─────
+
+  /** @private Release every arrow the pad wrote (write-on-change: only keys that are true are touched). */
+  _releasePadKeys() {
+    const p = this._pad;
+    if (!this._keys || !p || !p.written) return;
+    for (const k of ARROW_KEYS) if (this._keys[k]) this._keys[k] = false;
+    p.written = false;
+  }
+
+  /** @private The thumb leaves the pad (lift, cancel, hidden, floor change): keys released, state dropped. */
+  _endPad(keepThumb) {
+    this._releasePadKeys();
+    // Hidden mid-touch: the thumb is still on the glass. Remember its id so it
+    // stays out of the canvas-finger counts until its own touchend / touchcancel.
+    if (keepThumb && this._pad) this._padGhostId = this._pad.id;
+    else if (!keepThumb) this._padGhostId = null;
+    this._pad = null;
+    if (this._padEl) this._padEl.classList.remove('touch-pad-held');
+  }
+
+  /** @private Should the pad be on screen right now? Gameplay, engaged ladder, floor 2 or 3, no drawer open. */
+  _padWanted() {
+    const L = this._ladder;
+    if (!L || typeof L.currentFloor !== 'function') return false;
+    if (this._gameState && typeof this._gameState.isGameplay === 'function' && !this._gameState.isGameplay()) return false;
+    if (typeof L.isActive === 'function' && !L.isActive()) return false;
+    if (!TURN_PAD_FLOORS.includes(L.currentFloor())) return false;
+    if (typeof L.paneState === 'function') {
+      let ps = null;
+      try { ps = L.paneState(); } catch (_err) { ps = null; }
+      if (ps && ps.library) return false;
+    }
+    return true;
+  }
+
+  /** @private Show / hide the pad from the live state; hiding drops a held thumb (keys released). */
+  _syncPad() {
+    const el = this._padEl;
+    if (!el) return;
+    const want = this._padWanted();
+    if (!want) this._endPad(true);
+    const d = want ? '' : 'none';
+    if (el.style.display !== d) el.style.display = d;
+  }
+
+  /** @private */
+  _handlePadStart(e) {
+    if (e.cancelable) e.preventDefault();
+    e.stopPropagation();                  // the pad owns its touches, never the canvas
+    this._pruneGhost(e.touches);
+    this._touched();
+    this._requestWakeLock();
+    if (this._pad) return;                // one thumb at a time
+    if (!this._padWanted()) { this._syncPad(); return; }
+    const t = (e.changedTouches && e.changedTouches[0]) || (e.touches && e.touches[0]);
+    if (!t) return;
+    this._pad = { id: t.identifier, startX: t.clientX, startY: t.clientY, written: false };
+    if (this._padEl) this._padEl.classList.add('touch-pad-held');
+  }
+
+  /** @private */
+  _handlePadMove(e) {
+    if (e.cancelable) e.preventDefault();
+    e.stopPropagation();
+    const p = this._pad;
+    if (!p) return;
+    this._touched();
+    let t = null;
+    for (const c of e.touches) if (c.identifier === p.id) { t = c; break; }
+    if (!t) return;
+    const L = this._ladder;
+    if (L && typeof L.currentFloor === 'function' && !TURN_PAD_FLOORS.includes(L.currentFloor())) {
+      this._syncPad();                    // floor changed under the thumb: let go
+      return;
+    }
+    if (!this._keys) return;
+    const want = turnKeysFor(t.clientX - p.startX, t.clientY - p.startY, this._tune.turnDeadPx);
+    let changed = false;
+    for (const k of ARROW_KEYS) {
+      if (!!this._keys[k] !== want[k]) { this._keys[k] = want[k]; changed = true; }
+    }
+    const any = want.ArrowLeft || want.ArrowRight || want.ArrowUp || want.ArrowDown;
+    if (any) { if (!p.written && this._stats) this._stats.drag++; p.written = true; }
+    if (changed && this._telemetry) this._telemetry.log('turn', want);
+  }
+
+  /** @private */
+  _handlePadEnd(e) {
+    if (e.cancelable) e.preventDefault();
+    e.stopPropagation();
+    const p = this._pad;
+    if (!p) {
+      if (this._padGhostId === null) return;
+      for (const t of e.changedTouches) {
+        if (t.identifier === this._padGhostId) { this._padGhostId = null; return; }
+      }
+      return;
+    }
+    for (const t of e.changedTouches) {
+      if (t.identifier === p.id) { this._endPad(); return; }
+    }
   }
 
   /** @private The edge-band swipe → the hub's drawer opener. */
@@ -891,6 +1062,28 @@ export class TouchControls {
         box-shadow: 0 0 10px rgba(0, 255, 136, 0.25);
       }
       .touch-radial-btn[data-hold="1"] { border-style: dashed; }
+      /* The TURN PAD (2026-10-20): a faint ring with four small arrow marks, no text.
+         Own element outside #touch-controls (its fade classes are toggled by _touched /
+         _armIdleFade); z-index below the radial's 38. */
+      #touch-turn-pad {
+        position: fixed; z-index: ${TURN_PAD_Z};
+        left: ${TURN_PAD_CENTRE_X - TURN_PAD_PX / 2}px; bottom: ${TURN_PAD_CENTRE_FROM_BOTTOM - TURN_PAD_PX / 2}px;
+        width: ${TURN_PAD_PX}px; height: ${TURN_PAD_PX}px; box-sizing: border-box;
+        border-radius: 50%; border: 1px solid rgba(0, 255, 136, 0.55);
+        background: rgba(5, 10, 20, 0.35);
+        pointer-events: auto; touch-action: none;
+        opacity: ${this._tune.activeOpacity}; transition: opacity 0.6s ease;
+        -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+      }
+      #touch-turn-pad.touch-idle { opacity: ${this._tune.idleOpacity}; }
+      #touch-turn-pad.touch-pad-held { background: rgba(0, 255, 136, 0.14); border-color: rgba(0, 255, 136, 0.95); }
+      #touch-turn-pad i {
+        position: absolute; width: 0; height: 0; border: 6px solid transparent; pointer-events: none;
+      }
+      #touch-turn-pad i.n { left: 50%; top: 9px; margin-left: -6px; border-bottom-color: rgba(0, 255, 136, 0.8); border-top-width: 0; }
+      #touch-turn-pad i.s { left: 50%; bottom: 9px; margin-left: -6px; border-top-color: rgba(0, 255, 136, 0.8); border-bottom-width: 0; }
+      #touch-turn-pad i.w { top: 50%; left: 9px; margin-top: -6px; border-right-color: rgba(0, 255, 136, 0.8); border-left-width: 0; }
+      #touch-turn-pad i.e { top: 50%; right: 9px; margin-top: -6px; border-left-color: rgba(0, 255, 136, 0.8); border-right-width: 0; }
       .touch-radial-btn.touch-radial-arming {
         background: rgba(0, 255, 136, 0.22); border-color: rgba(0, 255, 136, 0.95);
         transition: background ${TOUCH_TUNE.fireHoldMs}ms linear;
@@ -940,6 +1133,24 @@ export class TouchControls {
     document.body.appendChild(root);
     this._root = root;
 
+    // The TURN PAD: shown by _syncPad only on floors 2-3 in gameplay with no drawer open.
+    // Its own touch listeners (like the radial / grip), so its finger never reaches the canvas path.
+    const pad = document.createElement('div');
+    pad.id = 'touch-turn-pad';
+    pad.style.display = 'none';
+    for (const d of ['n', 'e', 's', 'w']) {
+      const m = document.createElement('i');
+      m.className = d;
+      pad.appendChild(m);
+    }
+    pad.addEventListener('touchstart', this._onPadStart, { passive: false });
+    pad.addEventListener('touchmove', this._onPadMove, { passive: false });
+    pad.addEventListener('touchend', this._onPadEnd, { passive: false });
+    pad.addEventListener('touchcancel', this._onPadEnd, { passive: false });
+    document.body.appendChild(pad);
+    this._padEl = pad;
+    this._syncPad();
+
     // Rail grip lives OUTSIDE #touch-controls: it must stack above the rail
     // (#ladder-rail z-index 35), which the root's z-index 15 stacking context
     // could never reach from within. Invisible; aligned to the rail by
@@ -958,10 +1169,11 @@ export class TouchControls {
 
   /** @private Keep the grip aligned + the chrome gated (the sync cadence). */
   _startSync() {
-    if (!this._grip && !this._gameState) return;
+    if (!this._grip && !this._gameState && !this._ladder) return;
     this._syncTimer = setInterval(() => {
       this._syncGrip();
       this._syncChrome();
+      this._syncPad();
     }, this._tune.sliderSyncMs);
   }
 
@@ -1011,6 +1223,7 @@ export class TouchControls {
   _touched() {
     if (!this._root) return;
     this._root.classList.remove('touch-idle');
+    if (this._padEl) this._padEl.classList.remove('touch-idle');
     this._armIdleFade();
   }
 
@@ -1019,6 +1232,7 @@ export class TouchControls {
     if (this._idleTimer) clearTimeout(this._idleTimer);
     this._idleTimer = setTimeout(() => {
       if (this._root) this._root.classList.add('touch-idle');
+      if (this._padEl) this._padEl.classList.add('touch-idle');
     }, this._tune.idleFadeMs);
   }
 

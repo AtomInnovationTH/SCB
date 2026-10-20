@@ -54,11 +54,11 @@ const TABLE = Object.freeze({
   Tab:   Object.freeze({ chip: 'TAP → SELECT',      phrase: 'tap a target to select it' }),
   KeyT:  Object.freeze({ chip: 'TAP → SELECT',      phrase: 'tap a target to select it' }),
   Enter: Object.freeze({ chip: 'TAP → SELECT',      phrase: 'tap a target to select it' }),
-  // Right thumb — where / look.
-  ArrowUp:        Object.freeze({ chip: 'DRAG → TURN',   phrase: 'drag to turn' }),
-  ArrowDown:      Object.freeze({ chip: 'DRAG → TURN',   phrase: 'drag to turn' }),
-  ArrowLeft:      Object.freeze({ chip: 'DRAG → TURN',   phrase: 'drag to turn' }),
-  ArrowRight:     Object.freeze({ chip: 'DRAG → TURN',   phrase: 'drag to turn' }),
+  // Left thumb — the turn pad (lower left); the rest of the glass looks (2026-10-20).
+  ArrowUp:        Object.freeze({ chip: 'PAD → TURN',    phrase: 'use the turn pad' }),
+  ArrowDown:      Object.freeze({ chip: 'PAD → TURN',    phrase: 'use the turn pad' }),
+  ArrowLeft:      Object.freeze({ chip: 'PAD → TURN',    phrase: 'use the turn pad' }),
+  ArrowRight:     Object.freeze({ chip: 'PAD → TURN',    phrase: 'use the turn pad' }),
   Equal:          Object.freeze({ chip: '− / + → HUD PANES', phrase: 'fewer / more HUD panes' }),
   Minus:          Object.freeze({ chip: '− / + → HUD PANES', phrase: 'fewer / more HUD panes' }),
   NumpadAdd:      Object.freeze({ chip: 'PINCH → ZOOM',  phrase: 'pinch to zoom' }),

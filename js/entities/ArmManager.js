@@ -1446,6 +1446,29 @@ export class ArmManager {
   }
 
   /**
+   * The opening's SET (StartOpening, owner 2026-10-20 "on the player's first
+   * action"): every DOCKED strut that is still closed goes to STRUT_REST_ALPHA
+   * (34°). Never a toggle: a strut already open (live or pending past
+   * STRUT_OPEN_THRESHOLD, e.g. the player's own "." press, even its 90° double
+   * press) is left where it is, so the opening can never close what the player
+   * just opened. It is not a player press: no `_strutPress` count, no
+   * `_strutManual` 10 s hold (StrutAuto marks the arm opened from the latch and
+   * rests it at 34° on its own), no tap-timer, no emit.
+   * @returns {boolean|null} true = every docked strut is now open or opening;
+   *   null when no DOCKED arm could take the write
+   */
+  restStruts() {
+    const docked = (this.arms || []).filter((a) => a && a.state === ARM_STATES.DOCKED);
+    if (!docked.length) return null;
+    const V5 = Constants.OCTOPUS_V5;
+    for (const arm of docked) {
+      if (_strutLiveAlpha(arm) >= V5.STRUT_OPEN_THRESHOLD) continue;
+      arm._strutTargetAlpha = V5.STRUT_REST_ALPHA;
+    }
+    return true;
+  }
+
+  /**
    * Read-only: the SAME predicate toggleStruts() decides from — true while any
    * DOCKED strut is past STRUT_OPEN_THRESHOLD, half the 34° rest angle (17°; a
    * pending latch counts, so the read flips the instant the toggle writes; the

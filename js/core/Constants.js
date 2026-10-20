@@ -349,7 +349,9 @@ export const Constants = {
   //   P_in  = every watt drawn from the battery (the ResourceSystem ledger —
   //           every drawn watt ends as heat) + SUN_HULL_W in daylight (0 in shadow)
   //   P_out = σ ε A_eff (T⁴ − SINK_K⁴),
-  //   A_eff = HULL_AREA_M2 + RAD_AREA_M2 × (G_CLOSED + (1 − G_CLOSED) × openFrac)
+  //   A_eff = HULL_AREA_M2 + RAD_AREA_M2 × (G_CLOSED + (1 − G_CLOSED) × openFrac) × flow
+  //   flow  = the coolant loop (L4 radiator-loop, owner 2026-10-20): 0 at or below LOOP_OFF_C, 1 at or above
+  //           LOOP_FULL_C, linear between — an open radiator sheds heat only while the coolant flows
   // The lump is NOT the whole 130 kg ship (≈ 117 kJ/K): it is the electronics
   // bay and the heat-pipe saddle that feeds the radiator — the mass that warms
   // first. The load table is taken AS GIVEN (base 500 W, ion 5 kW, autopilot
@@ -385,6 +387,16 @@ export const Constants = {
     G_CLOSED: 0.20,             // folded flat (§15 row 4) each pack shows one 0.32 m face outward (~¼ of
                                 // the two-sided area), partly hidden by the barrel and wings → ~0.2
     SUN_HULL_W: 110,            // tuned (est; was 120 before the 20 cm radiator step): daylight sun reaching the bay — body cells' waste heat share + MLI leak (0 in shadow)
+    // ── The coolant loop (L4 radiator-loop, owner 2026-10-20: "radiators can be open without transferring heat; a
+    //    radiator can be on a running engine without cooling the engine") ──
+    // A thermostat valve the ship runs by itself (no player control, no pump draw yet): flow = 0 below LOOP_OFF_C, 1
+    // above LOOP_FULL_C, linear between. Real pumped loops hold the electronics near room temperature (typical
+    // allowable bus-electronics range ≈ 0–40 °C; an estimate, not a measured spec), so the valve works at 20–30 °C.
+    // With flow 0 the radiators — folded or open — shed nothing and only the bare hull leaks (no leak term through a dry
+    // radiator). The heaters (HEATER.HOLD_C 0 °C) sit 20 K below the valve: the two never overlap. Idle daylight closed
+    // equilibrium (35.2 °C) is above LOOP_FULL_C, so it, the 60 / 70 / 85 °C lines and the first scan are unchanged.
+    LOOP_OFF_C: 20,             // °C — coolant fully stopped at or below this
+    LOOP_FULL_C: 30,            // °C — coolant fully flowing at or above this
     START_LOAD_W: 500,          // the base load (PlayerSatellite._basePowerDraw 0.5/s × W_PER_UNIT_S): a new
                                 // game starts at the closed daylight equilibrium for it — the needle
                                 // does not move until the player does something (§2 row 6)
@@ -411,15 +423,20 @@ export const Constants = {
   // input, plus a pull toward HOLD_C (C/PULL_S W per K) — continuous, so it
   // fades out within ~1 K above HOLD_C instead of switching (ThermalSystem
   // _updateHeater). Billed through the battery like a motor, so its heat is
-  // what warms the ship. No auto-close (owner ruling 2026-10-09): the comms
-  // line tells the player that folding the radiator saves the power.
+  // what warms the ship. No auto-close (owner ruling 2026-10-09). Since L4
+  // radiator-loop (2026-10-20) the coolant stops at SHIP_HEAT.LOOP_OFF_C (20 °C),
+  // so an open radiator no longer drags the ship down to the heaters; the comms
+  // line just says the heaters are keeping the cells above freezing.
   HEATER: {
     ENABLED: true,              // the one-line veto
     HOLD_C: 0,                  // °C — lithium-ion charge floor (cells must stay above freezing)
     // Measured from the model (SHIP_HEAT constants, w4-power probe): radiator
     // at 180° (openFrac 1, A_eff 7.50 m²), eclipse (no SUN_HULL_W), base load
     // 500 W: σ·ε·A_eff·(273.15⁴ − 205⁴) − 500 W = 873.9 W at 7.20 m² radiators
-    // → rounded up to 880 W. test-PowerCosts recomputes it.
+    // → rounded up to 880 W. test-PowerCosts recomputes it. L4 radiator-loop: sized
+    // with the coolant forced to flow 1 (the worst case, the valve stuck open) — in
+    // normal running the coolant is off at 0 °C and the heaters need only the hull
+    // leak (≈ 55 W at 0 °C), so the cap is far above any real need (a follow-up).
     // (v12-radiator-20: was 810 W at 8.12 m² and SINK_K 220; the 25 cm step had 950 W at SINK_K 195.)
     MAX_W: 880,
     PULL_S: 20,                 // battery-clock s — how hard the hold pulls back to HOLD_C

@@ -35,6 +35,7 @@ import { StorageKeys } from '../core/StorageKeys.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { gameState } from '../core/GameState.js';
 import { wingsHint, WINGS_HINT_ID } from './WingsHint.js';
+import { OPENING_LINE_START } from './StartOpening.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // BEAT TABLE — fixed by spec.  Do not edit individual values without bumping
@@ -60,6 +61,9 @@ export const ONBOARDING_BEATS = [
     id: 'handshake',
     // u2-one-voice D3/D4: no key names (the chip carries the how), and ONE step at a
     // time - the line (and the scan after it) waits until the wings are commanded out.
+    // Owner 2026-10-20: the wings are commanded by the opening itself on the player's
+    // first action of any kind (StartOpening), or by the player's own `,` before it:
+    // either way WingsHint.needsOpening() reads the commanded target, so this passes.
     commsSource: 'HOUSTON', commsText: 'Power coming in. Nothing is marked until you scan.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
@@ -241,6 +245,17 @@ const RELEVANT_SKILLS = new Set(
 // Default skip-after for `optional` beats when no `skipAfter` set.
 const OPTIONAL_DEFAULT_SKIP_MS = 25000;
 
+/**
+ * Owner 2026-10-20: the ship's opening line ("Opening up: wings out, radiators to
+ * 146°, ... The radiators give the wings room to follow the Sun.") is the
+ * one place the player is told WHY the radiators open. The comms panel shows only the
+ * newest line, and the handshake beat's "Power coming in ..." is released the same
+ * frame the wings are commanded (measured headless, tmp/l2-open: 1.0 s Mac, 0.07 s
+ * touch), which would replace it at once. So the handshake beat waits this long after
+ * the opening line (a two-line message, read at a calm pace).
+ */
+export const OPENING_LINE_READ_MS = 5000;
+
 // ────────────────────────────────────────────────────────────────────────────
 // ONBOARDING DIRECTOR
 // ────────────────────────────────────────────────────────────────────────────
@@ -286,6 +301,8 @@ export class OnboardingDirector {
     this._guidance = deps.guidanceDirector || null;
     /** u2-one-voice D4: the wings hint (needsOpening()) the handshake gate reads; shared instance by default. */
     this._wings = deps.wings || wingsHint;
+    /** @type {number|null} Date.now() when the ship's opening line (StartOpening) went up; cleared when the handshake posts. */
+    this._openingLineAtMs = null;
 
     /** @type {Set<string>} ids of beats already satisfied (across runs). */
     this._completedBeats = new Set();
@@ -612,6 +629,13 @@ export class OnboardingDirector {
     // on `requiresWingsCommanded`. The held-beat poll tick is the backstop.
     if (Events.HINT_SATISFIED) {
       on(Events.HINT_SATISFIED, (d) => { if (d && d.id === WINGS_HINT_ID) this._recheckHeldGate(); });
+    }
+    // Owner 2026-10-20: note when the ship's opening line goes up (StartOpening), so the
+    // handshake beat can leave it on screen for OPENING_LINE_READ_MS (see _beatGateMet).
+    if (Events.COMMS_MESSAGE) {
+      on(Events.COMMS_MESSAGE, (m) => {
+        if (m && typeof m.text === 'string' && m.text.startsWith(OPENING_LINE_START)) this._openingLineAtMs = Date.now();
+      });
     }
 
     // #5 (2026-06-04): surface spaced-repetition skill reminders as gentle
@@ -964,6 +988,8 @@ export class OnboardingDirector {
   }
 
   _postBeat(beat) {
+    // (review 2026-10-20: never clear _openingLineAtMs here — an opening line posted
+    // before this beat starts must still get its read time; the wait is time-bounded.)
     this._clearActiveTimers();
     this._active = {
       beat,
@@ -1130,6 +1156,8 @@ export class OnboardingDirector {
       try { needs = this._wings && typeof this._wings.needsOpening === 'function' ? this._wings.needsOpening() : null; }
       catch (_e) { needs = null; }
       if (needs === true) return false;
+      // Owner 2026-10-20: leave the ship's opening line on screen long enough to read.
+      if (this._openingLineAtMs !== null && Date.now() - this._openingLineAtMs < OPENING_LINE_READ_MS) return false;
     }
     if (!beat.requiresContacts && !Number.isFinite(beat.requiresProximityM) && !beat.requiresOutOfRange) return true;
     if (!this._context) return true; // no provider → don't block
@@ -1163,7 +1191,9 @@ export class OnboardingDirector {
 
     // One step at a time: while the wings are the job, make sure their chip is
     // on screen (a repeat post is a no-op).
-    if (beat.requiresWingsCommanded && this._wings && typeof this._wings.post === 'function') {
+    // (Not once the wings are commanded out: the held beat is then only reading time.)
+    if (beat.requiresWingsCommanded && this._wings && typeof this._wings.post === 'function'
+        && !(typeof this._wings.needsOpening === 'function' && this._wings.needsOpening() === false)) {
       this._wings.post();
     }
 

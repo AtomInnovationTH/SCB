@@ -698,19 +698,19 @@ export class CameraSystem {
       // direction — the LOCAL orbital-frame pose on ship anchors
       // (heading-relative, B1), the inertial world dir on Earth anchors —
       // around the floor's up-frame with ORBIT's velocity+damping feel
-      // (constants mirror this.orbit). Enabled on floors 3/4 (PROX NET /
-      // NAVCOM) always, and on the ship-anchored floors 1–2 (the workbench,
-      // the flying view) WHILE a drawer is open — the TURNTABLE (plan D-F;
-      // floor 1 Session I, floor 2 Session J.5): arrows + one-finger drag
-      // orbit the CAMERA around the ship at held time, never the ship. The
-      // floor-5 chart stays locked; closing the drawer on floor 2 forgets the
-      // turntable pose (setLadderPaneOpen) so the flying view is exactly as
-      // shipped again. Every consumer is
+      // (constants mirror this.orbit). Two gates (2026-10-20): `enabled` is the
+      // MOUSE rule — floors 2/3/4 always (floor 2 widened, owner "Mac too"),
+      // floor 1 (the workbench) only WHILE a drawer is open (the TURNTABLE,
+      // plan D-F; arrows orbit the CAMERA, never the ship). `touchEnabled` is
+      // the TOUCH rule — a finger turns the view on floors 1–4 with or without
+      // a drawer. The floor-5 chart stays locked for both; closing the drawer
+      // on floor 2 forgets the dragged pose (setLadderPaneOpen). Every consumer is
       // additionally gated on lc.active, so the shipped mouse handling is
       // byte-identical while the ladder is off.
       paneOpen: false,        // main.js feeds setLadderPaneOpen (the ONE pane edge)
       drag: {
-        enabled: false,
+        enabled: false,       // the MOUSE gate (_ladderDragEnabledFor)
+        touchEnabled: false,  // the TOUCH gate (_ladderTouchDragEnabledFor): a finger turns the view on floors 1-4
         isDragging: false,
         lastMouseX: 0,
         lastMouseY: 0,
@@ -4051,9 +4051,9 @@ export class CameraSystem {
     lc.rideFloorFrom = null;
     lc.levelHoldFloor = null;
     this._baseFov = frame.fov;
-    // Drag gating: floors 3/4 always; floor 1 while a drawer is open (the
-    // Session I turntable). Fresh engage starts with no drag in flight.
-    lc.drag.enabled = this._ladderDragEnabledFor(frame.floor);
+    // Drag gating: the mouse rule and the touch rule (see _ladderSetDragGates).
+    // Fresh engage starts with no drag in flight.
+    this._ladderSetDragGates(frame.floor);
     lc.drag.isDragging = false;
     lc.drag.velocityTheta = 0;
     lc.drag.velocityPhi = 0;
@@ -4080,6 +4080,7 @@ export class CameraSystem {
     this._ladderResetFollow();   // H2
     // Reset the whole drag block — nothing may leak into the next engage.
     lc.drag.enabled = false;
+    lc.drag.touchEnabled = false;
     lc.drag.isDragging = false;
     lc.drag.lastMouseX = 0;
     lc.drag.lastMouseY = 0;
@@ -4139,9 +4140,9 @@ export class CameraSystem {
       delete lc.dragMemory[2];
       if (lc.floor === 2) this._ladderChaseLocal(lc.local);
     }
-    const want = this._ladderDragEnabledFor(lc.floor);
-    if (want !== lc.drag.enabled) {
-      lc.drag.enabled = want;
+    const was = lc.drag.enabled;
+    this._ladderSetDragGates(lc.floor);
+    if (lc.drag.enabled !== was) {
       lc.drag.isDragging = false;
       lc.drag.velocityTheta = 0;
       lc.drag.velocityPhi = 0;
@@ -4149,16 +4150,34 @@ export class CameraSystem {
   }
 
   /**
-   * @private The ONE drag-gate rule (Session I; floor 2 added Session J.5):
-   * floors 3/4 (PROX NET / NAVCOM) always; the ship-anchored floors 1–2 (the
-   * workbench, the flying view) while a drawer is open — the turntable (plan
-   * D-F, "any ship-anchored floor"). Floor 5 and floorless legacy frames
-   * never arm.
+   * @private The MOUSE drag-gate rule (Session I; floor 2 added Session J.5;
+   * widened 2026-10-20, owner "Mac too"): floors 2/3/4 (the flying view, PROX
+   * NET, NAVCOM) always; floor 1 (the workbench) only while a drawer is open
+   * (the turntable, plan D-F). Floor 5 and floorless legacy frames never arm.
    * @param {number|null|undefined} floor
    * @returns {boolean}
    */
   _ladderDragEnabledFor(floor) {
-    return floor === 3 || floor === 4 || ((floor === 1 || floor === 2) && this._ladderCam.paneOpen);
+    return floor === 2 || floor === 3 || floor === 4 || (floor === 1 && this._ladderCam.paneOpen);
+  }
+
+  /**
+   * @private The TOUCH drag-gate rule (2026-10-20, owner "one-finger drag turns
+   * the view"): floors 1-4 always, with or without a drawer (a finger has no
+   * other use on the canvas; the ship turns from the turn pad). Floor 5 and
+   * floorless frames never arm. A superset of the mouse rule.
+   * @param {number|null|undefined} floor
+   * @returns {boolean}
+   */
+  _ladderTouchDragEnabledFor(floor) {
+    return floor === 1 || floor === 2 || floor === 3 || floor === 4;
+  }
+
+  /** @private Re-evaluate both drag gates for `floor` (the five places that used to set drag.enabled). */
+  _ladderSetDragGates(floor) {
+    const d = this._ladderCam.drag;
+    d.enabled = this._ladderDragEnabledFor(floor);
+    d.touchEnabled = this._ladderTouchDragEnabledFor(floor);
   }
 
   /**
@@ -4166,16 +4185,19 @@ export class CameraSystem {
    * held arrow keys to this while a drawer is open on floor 1. Same math as
    * the pointer path (_onMouseMove): the px delta becomes rotation velocity
    * through drag.rotateSpeed, decays through drag.damping — one drag feel,
-   * two inputs. Gated exactly like a pointer drag: engaged + drag-enabled +
+   * two inputs. Gated like a pointer drag: engaged + drag-enabled (mouse rule, or the touch rule for source 'touch') +
    * not riding (rides own the camera). A nudge is a SET like the pointer's
    * (never accumulates across frames), so holding a key rotates at a steady
    * px-per-call rate and release coasts on the shipped momentum.
    * @param {number} dxPx - horizontal pointer-equivalent px (+ = drag right)
    * @param {number} dyPx - vertical pointer-equivalent px (+ = drag down)
+   * @param {string} [source] - 'touch' = a finger on the glass (TouchControls): gated by the
+   *   touch rule (floors 1-4). Anything else (the turntable's held arrows) keeps the mouse rule.
    */
-  ladderDragNudge(dxPx, dyPx) {
+  ladderDragNudge(dxPx, dyPx, source) {
     const lc = this._ladderCam;
-    if (!lc.active || !lc.drag.enabled || lc.riding) return;
+    if (!lc.active || lc.riding) return;
+    if (!(source === 'touch' ? lc.drag.touchEnabled : lc.drag.enabled)) return;
     const dx = Number.isFinite(dxPx) ? dxPx : 0;
     const dy = Number.isFinite(dyPx) ? dyPx : 0;
     if (dx === 0 && dy === 0) return;
@@ -4241,7 +4263,7 @@ export class CameraSystem {
     lc.targetDistU = frame.distU;
     lc.fov = frame.fov;
     if (frame.floor != null) lc.floor = frame.floor;
-    lc.drag.enabled = this._ladderDragEnabledFor(frame.floor);
+    this._ladderSetDragGates(frame.floor);
     this._ladderApplyInspectFx(frame.floor);
   }
 
@@ -4315,7 +4337,7 @@ export class CameraSystem {
     // A ride owns the camera (G3 flick replacements included): cancel any
     // in-flight drag and its momentum; re-gate on the destination floor.
     this.ladderCancelEarthTurn('ride');   // u8: a ride owns `dir` too
-    lc.drag.enabled = this._ladderDragEnabledFor(opts.floor);
+    this._ladderSetDragGates(opts.floor);
     lc.drag.isDragging = false;
     lc.drag.velocityTheta = 0;
     lc.drag.velocityPhi = 0;
@@ -5106,7 +5128,7 @@ export class CameraSystem {
       // lookAt(anchorPos) below is unchanged. Rides never reach here
       // (non-riding branch), and ladderStartRide cancels in-flight drags.
       const dg = lc.drag;
-      if (dg.enabled && (dg.velocityTheta !== 0 || dg.velocityPhi !== 0)) {
+      if ((dg.enabled || dg.touchEnabled) && (dg.velocityTheta !== 0 || dg.velocityPhi !== 0)) {
         const v = shipAnchored ? lc.local : lc.dir;
         const up = shipAnchored ? lc._localUp : this._ladderUpFor(lc.anchor, radialDir, lc._dragUp);
         v.applyAxisAngle(up, dg.velocityTheta);                 // yaw around the pole

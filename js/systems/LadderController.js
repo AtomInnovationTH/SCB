@@ -619,10 +619,11 @@ export class LadderController {
    * Allocation-free (the core's floorId
    * probe — the G4 law); main.js consults it per frame to blank the arrows
    * around processInput so they never steer the SHIP, _turntableArrows maps
-   * them to the camera drag instead, routeKeyDown consumes them ahead of
-   * InputManager, and TouchControls' one-finger drag orbits the camera
-   * instead of writing the turn keys. CameraSystem._ladderDragEnabledFor is
-   * the camera-side twin of this rule (floors 1–2 && paneOpen).
+   * them to the camera drag instead, and routeKeyDown consumes them ahead of
+   * InputManager. Touch no longer depends on it (2026-10-20): a one-finger
+   * drag turns the view on floors 1–4 and the turn pad writes the keys.
+   * CameraSystem._ladderDragEnabledFor is the mouse-side rule (the mouse
+   * now also drags on floor 2 without a drawer).
    * @returns {boolean}
    */
   turntableActive() {

@@ -12,7 +12,15 @@
  *   C dT/dt = P_in − P_out
  *   P_in  = drawn battery energy (ResourceSystem ledger) + SUN_HULL_W in daylight
  *   P_out = σ ε A_eff (T⁴ − T_sink⁴),
- *   A_eff = A_hull + A_rad × (G_closed + (1 − G_closed) × openFrac)
+ *   A_eff = A_hull + A_rad × (G_closed + (1 − G_closed) × openFrac) × flow
+ *
+ * L4 radiator-loop (owner 2026-10-20, "a radiator can be open without
+ * transferring heat; on a running engine without cooling it"): the radiators
+ * shed the ship's heat only while the coolant flows. `flow` (0…1) is the
+ * ship's own thermostat valve (`loopFlow`): 0 at or below LOOP_OFF_C (20 °C),
+ * 1 at or above LOOP_FULL_C (30 °C), linear between. With flow 0 the
+ * radiators — folded or open — shed nothing; only the bare hull leaks. The
+ * player has no control over the loop (no pump draw yet — a follow-up).
  *
  * Ticked by the game loop right after resourceSystem.update(dt), under the
  * same held-world guard, so heat stops whenever the world clock does; held
@@ -20,10 +28,12 @@
  * Reset with the battery (ResourceSystem.reset()/restore() call reset()).
  *
  * w4-power D7 (2026-10-12): below HEATER.HOLD_C (0 °C) the battery heaters
- * draw what holds it (capped at HEATER.MAX_W), billed through the battery, so
- * an open radiator in the cold costs power — `_updateHeater`. Its one line is
- * visible in mission 1 (`_critical`, though priority 'info') because the heaters
- * cost battery and the line names the fix.
+ * draw what holds it (capped at HEATER.MAX_W), billed through the battery —
+ * `_updateHeater`. Its one line is visible in mission 1 (`_critical`, though
+ * priority 'info') because the heaters cost battery. Since L4 radiator-loop the
+ * coolant stops well above HOLD_C (LOOP_OFF_C 20 °C), so an open radiator no
+ * longer pulls the ship down to the heaters; they run only when the ship is
+ * cold for another reason (a long eclipse with nothing drawn).
  *
  * Speaks only through Events.COMMS_MESSAGE (sender 'THERMAL'). The auto
  * radiator calls player.setFlowerPose() ONLY — it never emits
@@ -100,40 +110,77 @@ export class ThermalSystem {
   // ======================================================================
 
   /**
-   * Effective radiating area (ε-weighted m²) at an open fraction.
-   * @param {number} openFrac 0 folded … 1 full bloom
+   * L4 radiator-loop: how much of the radiator surface the coolant reaches
+   * (0…1) — the ship's thermostat valve. 0 at or below LOOP_OFF_C, 1 at or
+   * above LOOP_FULL_C, linear between. Pure; the heaters (HOLD_C) sit well
+   * below LOOP_OFF_C, so the two never overlap.
+   * @param {number} tempC - lump temperature, °C
    * @returns {number}
    */
-  effectiveAreaM2(openFrac) {
+  loopFlow(tempC) {
     const SH = Constants.SHIP_HEAT;
-    const f = Math.max(0, Math.min(1, openFrac || 0));
-    return SH.HULL_AREA_M2 + SH.RAD_AREA_M2 * (SH.G_CLOSED + (1 - SH.G_CLOSED) * f);
+    const off = SH.LOOP_OFF_C;
+    const full = SH.LOOP_FULL_C;
+    if (!Number.isFinite(tempC)) return 0;
+    if (!(full > off)) return tempC >= full ? 1 : 0;
+    return Math.max(0, Math.min(1, (tempC - off) / (full - off)));
   }
 
   /**
-   * Radiated power (W) at `tempC` and an open fraction.
-   * @param {number} tempC
-   * @param {number} openFrac
+   * Effective radiating area (ε-weighted m²) at an open fraction and a loop
+   * flow. With flow 0 the radiators — folded or open — add nothing (no leak
+   * term: a dry radiator is just a plate hanging off the ship).
+   * @param {number} openFrac 0 folded … 1 full bloom
+   * @param {number} [flow=1] coolant flow fraction 0…1 (`loopFlow`); 1 = loop fully open
    * @returns {number}
    */
-  radiatedW(tempC, openFrac) {
+  effectiveAreaM2(openFrac, flow = 1) {
+    const SH = Constants.SHIP_HEAT;
+    const f = Math.max(0, Math.min(1, openFrac || 0));
+    const q = Number.isFinite(flow) ? Math.max(0, Math.min(1, flow)) : 1;
+    return SH.HULL_AREA_M2 + SH.RAD_AREA_M2 * (SH.G_CLOSED + (1 - SH.G_CLOSED) * f) * q;
+  }
+
+  /**
+   * Radiated power (W) at `tempC`, an open fraction and a loop flow.
+   * @param {number} tempC
+   * @param {number} openFrac
+   * @param {number} [flow=this.loopFlow(tempC)] pass 1 to size the worst case (loop stuck open)
+   * @returns {number}
+   */
+  radiatedW(tempC, openFrac, flow = this.loopFlow(tempC)) {
     const SH = Constants.SHIP_HEAT;
     const T = tempC + K0;
     const Ts = SH.SINK_K;
-    return SIGMA * SH.EMISSIVITY * this.effectiveAreaM2(openFrac) * (T ** 4 - Ts ** 4);
+    return SIGMA * SH.EMISSIVITY * this.effectiveAreaM2(openFrac, flow) * (T ** 4 - Ts ** 4);
   }
 
   /**
-   * Steady-state temperature (°C) for a constant heat input.
+   * Steady-state temperature (°C) for a constant heat input. With `flow`
+   * omitted the thermostat rule applies: the answer depends on T, so it is
+   * bisected (radiatedW rises with T, so there is exactly one root). With
+   * `flow` given it is the closed form at that fixed flow.
    * @param {number} powerW - total heat in (electrical + sun), W
    * @param {number} [openFrac=0]
+   * @param {number|null} [flow=null] a fixed loop flow 0…1, or null for the thermostat rule
    * @returns {number}
    */
-  equilibriumC(powerW, openFrac = 0) {
+  equilibriumC(powerW, openFrac = 0, flow = null) {
     const SH = Constants.SHIP_HEAT;
-    const t4 = Math.max(0, powerW) / (SIGMA * SH.EMISSIVITY * this.effectiveAreaM2(openFrac))
-      + SH.SINK_K ** 4;
-    return t4 ** 0.25 - K0;
+    const p = Math.max(0, powerW);
+    if (flow !== null && flow !== undefined) {
+      const t4 = p / (SIGMA * SH.EMISSIVITY * this.effectiveAreaM2(openFrac, flow)) + SH.SINK_K ** 4;
+      return t4 ** 0.25 - K0;
+    }
+    // Radiated power is 0 at the sink temperature and only grows with T, so the root lies between
+    // the sink and the hull-only answer (the smallest area there is).
+    let lo = SH.SINK_K - K0;
+    let hi = (p / (SIGMA * SH.EMISSIVITY * this.effectiveAreaM2(0, 0)) + SH.SINK_K ** 4) ** 0.25 - K0;
+    for (let i = 0; i < 80; i++) {
+      const mid = 0.5 * (lo + hi);
+      if (this.radiatedW(mid, openFrac) < p) lo = mid; else hi = mid;
+    }
+    return 0.5 * (lo + hi);
   }
 
   // ======================================================================
@@ -175,7 +222,8 @@ export class ThermalSystem {
       otherJ += SH.SUN_HULL_W * clockS;
     }
 
-    // Integrate (explicit, sub-stepped: τ ≥ ~200 battery-clock s, steps ≤ 2 s).
+    // Integrate (explicit, sub-stepped: τ ≥ ~200 battery-clock s, steps ≤ 2 s). radiatedW reads the loop's
+    // flow at each sub-step's own temperature (L4: the valve follows the ship, slope ≤ ~230 W/K → 2 s × 230 / C ≈ 0.03, stable).
     const openFrac = this._openFrac();
     const steps = Math.max(1, Math.ceil(clockS / 2));
     const hStep = clockS / steps;
@@ -232,7 +280,8 @@ export class ThermalSystem {
         && this._clockS - this._heaterLineAtS >= H.LINE_EVERY_S) {
       this._heaterLineAtS = this._clockS;
       this._heaterRunGameS = 0;
-      this._say(`Ship cold — battery heaters on, ${Math.round(w)} W. Folding the radiator saves the power.`, 'info', { critical: true });
+      // L4 radiator-loop: folding the radiator no longer saves anything (the coolant is already off at this temperature).
+      this._say(`Ship cold — battery heaters on, ${Math.round(w)} W, keeping the cells above freezing.`, 'info', { critical: true });
     }
     return w;
   }
@@ -256,14 +305,15 @@ export class ThermalSystem {
 
   /**
    * The heat meter's numbers (ResourceSystem.getThermalSnapshot forwards this).
-   * @returns {{tempC:number, band:'green'|'yellow'|'red', trend:-1|0|1, autoOpened:boolean}}
+   * `flow` (L4): the coolant loop's flow fraction 0…1 (0 = the radiators shed nothing).
+   * @returns {{tempC:number, band:'green'|'yellow'|'red', trend:-1|0|1, autoOpened:boolean, flow:number}}
    */
   getSnapshot() {
     const SH = Constants.SHIP_HEAT;
     const t = this.tempC;
     const band = t >= SH.RED_C ? 'red' : (t >= SH.YELLOW_C ? 'yellow' : 'green');
     const trend = this._rateCps > SH.TREND_C_PER_S ? 1 : (this._rateCps < -SH.TREND_C_PER_S ? -1 : 0);
-    return { tempC: t, band, trend, autoOpened: this._autoOpened };
+    return { tempC: t, band, trend, autoOpened: this._autoOpened, flow: this.loopFlow(t) };
   }
 
   /**

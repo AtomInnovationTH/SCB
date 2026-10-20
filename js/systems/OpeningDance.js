@@ -29,6 +29,13 @@
  * opens them (`,` or WINGS on floor 1). The wing beats below still play on the
  * menu hero (MenuScene3D reads progress()); getRosaProgress() reports 0.
  *
+ * Owner 2026-10-20 (DECISIONS "Opening at the start"): the start state holds
+ * only until the player's FIRST ACTION. Then StartOpening (systems/
+ * StartOpening.js) rolls the wings out, opens the radiators to 146° and takes
+ * the struts to 34°. This module only arms it: `setOnStartApplied(fn)` is
+ * called once the start state is in place, at the hand-over and at the end of
+ * `endState` (every other start path).
+ *
  * ── THE CLOCK IS WALL-CLOCK, NOT ACCUMULATED dt ─────────────────────────────
  * The dance is read from TWO independent render loops: MenuScene3D runs its own
  * requestAnimationFrame (js/ui/MenuScene3D.js — its own THREE.Clock, frame-gated
@@ -87,15 +94,12 @@ const FL = Constants.THERMAL.FLOWER;
 /** w4-power D2: what getRosaProgress() reports to the bound ship — rolled up. */
 const SHIP_WINGS_ROLLED_UP = Object.freeze({ wing1: 0, wing2: 0 });
 
-/** w4-power D3 / u2-one-voice D3: the start line — true to the start (wings
- *  rolled up, the battery at half and draining) and key-free: the wings chip
- *  (and on touch its OPEN THE WINGS button) carries the how, so the instruction
- *  is said once. */
-export const HANDOVER_LINE = 'Battery at half and falling, Cowboy. The wings are still rolled up. '
+/** w4-power D3 / u2-one-voice D3: the start line — true to the start (the
+ *  battery at half and draining, the wings still rolled up) and key-free. Since
+ *  2026-10-20 (DECISIONS "Opening at the start") it also says when she opens:
+ *  on the player's first action, which StartOpening carries out. */
+export const HANDOVER_LINE = 'Battery at half and falling, Cowboy. Press or tap anything and she opens up. '
   + 'She is yours.';
-/** …and the true version of the old line, for a player who already asked
- *  for the wings during the dance. */
-const HANDOVER_LINE_OPENING = 'Arrays rolling out, Cowboy. The radiator stays folded until she runs warm — she is yours.';
 
 /**
  * Zero progress — the shape every consumer sees before t = 0 and after unbind.
@@ -170,6 +174,26 @@ class OpeningDance {
     this._skipDeafUntilMs = null;
     /** @private beat-edge latch — each edge fires exactly once per arming */
     this._fired = null;
+    /** @private StartOpening's arm(): called once the start state is applied (see setOnStartApplied) */
+    this._onStartApplied = null;
+  }
+
+  /**
+   * StartOpening hook (owner 2026-10-20: the ship opens on the player's first
+   * action). `fn` runs every time the START STATE has just been applied — the
+   * new game's hand-over (`_fireHandover`) and `endState` (CONTINUE, retry,
+   * game over → shop exit, reduced motion, flag off) — and arms the opening.
+   * No bus event: the arming is a direct call, owned by main.js's wiring.
+   * @param {(() => void)|null} fn
+   */
+  setOnStartApplied(fn) {
+    this._onStartApplied = (typeof fn === 'function') ? fn : null;
+  }
+
+  /** @private tell the opening the start state is in place (a throwing hook never breaks a start) */
+  _notifyStartApplied() {
+    if (!this._onStartApplied) return;
+    try { this._onStartApplied(); } catch (e) { console.error('[OpeningDance] onStartApplied:', e); }
   }
 
   /** @returns {boolean} the flag, read live so a test can flip it */
@@ -436,19 +460,27 @@ class OpeningDance {
     // ONE short Houston line at hand-over (decision 12) — normal priority, no
     // force, distinct from the onboarding boot beat that fires on the event.
     this._postStartLine(wingsOpening);
+    // Owner 2026-10-20: the ship opens on the player's first action. The start
+    // state is in place — arm it (a player who already asked for a part during
+    // the dance has acted: StartOpening opens the rest when the ride ends).
+    this._notifyStartApplied();
   }
 
   /**
    * @private The ONE start line (w4-power D3), shared by the dance hand-over
-   * and the non-dance starts (endState). True to the pose — wings rolled up
-   * and the battery at half and falling, and how to open them — through
-   * GestureHints.speak, so on glass it names the floor-1 WINGS button only.
-   * @param {boolean} wingsOpening - the player already asked for the wings
+   * and the non-dance starts (endState). True to the pose — the battery at
+   * half and falling, the wings still rolled up — and it says she opens up on
+   * the first action (StartOpening), key-free, so glass and desktop read the same.
+   * @param {boolean} wingsOpening - the player already asked for the wings: the
+   *   opening fires itself at the end of the ride and posts its own line, so
+   *   there is no start line (the old "Arrays rolling out ... the radiator
+   *   stays folded" is untrue now that the radiators open with it)
    */
   _postStartLine(wingsOpening) {
+    if (wingsOpening) return;
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
-      text: GestureHints.speak(wingsOpening ? HANDOVER_LINE_OPENING : HANDOVER_LINE),
+      text: GestureHints.speak(HANDOVER_LINE),
       priority: 'info',
       // m1-finish: the hand-over starts the Director first (OPENING_DANCE_HANDOVER ->
       // ONBOARDING_STARTED), which drops comms to tier 0; an untagged line was muted
@@ -457,9 +489,9 @@ class OpeningDance {
     });
     // m1-finish: the comms line scrolls away, the battery keeps falling — keep ONE
     // ticker row up until the wings are out (WingsHint; removed by the game loop's
-    // update once the ship's wing value passes WINGS_OUT_PROGRESS). Not when the
-    // player already asked for the wings.
-    if (!wingsOpening) wingsHint.post();
+    // update once the ship's wing value passes WINGS_OUT_PROGRESS). The START's
+    // row reads "Open up (any key)": any first action opens the ship.
+    wingsHint.post({ start: true });
   }
 
   /** @private The dance is over (fires in the hand-over tick). */
@@ -600,6 +632,8 @@ class OpeningDance {
       if (typeof arm.setAimAlpha === 'function') arm.setAimAlpha(0, 0);
       else arm._strutTargetAlpha = 0;
     }
+    // Owner 2026-10-20: every start path ends here, so the opening is armed here.
+    this._notifyStartApplied();
   }
 
   /**

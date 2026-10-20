@@ -4615,7 +4615,15 @@ export class PlayerSatellite extends THREE.Group {
     // |y| < 0.0315 m (1.5 mm clear of the boom) is cut from the +X end, back to x = -0.031 m (pivot-local), which
     // leaves the stop seat (stops sit at x -0.0405..-0.0305) and two side blocks that hold the ears and the harness.
     // Built from the mesh-local outline (the mesh sits at pivot-local x -0.035, so slot floor = local 0.004).
-    const padShape = new THREE.Shape([[-0.07, -0.07], [0.07, -0.07], [0.07, -0.0315], [0.004, -0.0315], [0.004, 0.0315], [0.07, 0.0315], [0.07, 0.07], [-0.07, 0.07]]
+    // 2026-10-20 (lane wing-bracket-clear): the two OUTER corners are cut 20 mm x 20 mm (45 deg), full depth. The wing
+    // end collar (R 60 mm, 12 mm thick, 1.014 m from the wing pivot) sweeps past the pad corner when the wing tilts
+    // 13..19 deg; with the sharp corner it touched (0 mm, 22-32 surface points inside the pad at 15-16 deg). The bounding
+    // box (0.14 x 0.14 x 0.10, pinned by test-FlowerHardware) is unchanged: the outer end face still spans y +-0.0315. The two
+    // outer mount bolts were moved inboard (x 0.035 -> 0.0115, y 0.055 -> 0.061, see BOLT_OUT_X/Y) and all bolt heads are now M6-size (Ø12, was Ø16), so each head sits
+    // fully on the cut pad (>= R + 2 mm from every edge) and stays >= 25 mm from the folded radiator (26.2 mm; Ø16 heads reach at most 23.1 mm).
+    const PAD_CORNER_CUT = 0.020;
+    const padShape = new THREE.Shape([[-0.07, -0.07], [0.07 - PAD_CORNER_CUT, -0.07], [0.07, -0.07 + PAD_CORNER_CUT], [0.07, -0.0315], [0.004, -0.0315], [0.004, 0.0315],
+      [0.07, 0.0315], [0.07, 0.07 - PAD_CORNER_CUT], [0.07 - PAD_CORNER_CUT, 0.07], [-0.07, 0.07]]
       .map(([px, py]) => new THREE.Vector2(px * M, py * M)));
     const bracketGeo = new THREE.ExtrudeGeometry(padShape, { depth: 0.10 * M, bevelEnabled: false });
     bracketGeo.translate(0, 0, -0.05 * M);                  // centred in z like the old box
@@ -4627,7 +4635,9 @@ export class PlayerSatellite extends THREE.Group {
     // 48 radial segments (was 24, 8): the boss's outer face is the strut tip's
     // silhouette and read as an octagon (Mother fixes, round ends).
     const padGeo = new THREE.CylinderGeometry(0.05 * M, 0.05 * M, 0.065 * M, 48);
-    const boltGeo = new THREE.CylinderGeometry(0.008 * M, 0.008 * M, 0.012 * M, 24);
+    // M6-size bolt head Ø12 (was Ø16): lane wing-bracket-clear needs the outer bolts fully on the cut pad AND >= 25 mm from the folded
+    // radiator (test-StrutHinge d); with Ø16 heads the two limits cannot both be met (best 23.1 mm).
+    const boltGeo = new THREE.CylinderGeometry(0.006 * M, 0.006 * M, 0.012 * M, 24);
 
     // ── l6-look: the leash tip hardware (owner 2026-10-14, DECISIONS §1 "reel in at a petal tip") ───────────────
     // A telescoping stalk (two nested tubes) carries a slotted cone out to the latch point: TipCargo puts it
@@ -4766,10 +4776,37 @@ export class PlayerSatellite extends THREE.Group {
     // hard stops, 0.5 mm off the boom's -X flank (the flank is at x = -0.030): Lo meets it at 0 deg, Hi at 180 deg
     const stopLoGeo = new THREE.BoxGeometry(0.010 * M, 0.024 * M, 0.012 * M);
     const stopHiGeo = new THREE.BoxGeometry(0.010 * M, 0.024 * M, 0.020 * M);
-    // U harness: out of the actuator, round the pad's +X side and into the pad (ends buried 3-5 mm)
+    // U harness: out of the actuator, round the pad's +X side and into the pad (ends buried 3-5 mm: pinned by test-WingBracketClear)
     const harnessGeo = new THREE.TubeGeometry(new THREE.CatmullRomCurve3([
-      [0.024, 0.074, 0.0], [0.050, 0.074, 0.004], [0.058, 0.074, 0.030], [0.046, 0.068, 0.058], [0.030, 0.062, 0.062],
+      [0.024, 0.074, 0.0], [0.050, 0.074, 0.004], [0.058, 0.074, 0.030], [0.046, 0.068, 0.058], [0.0175, 0.062, 0.062],
     ].map(([x, y, z]) => new THREE.Vector3(x * M, y * M, z * M))), 8, 0.0035 * M, 5, false);
+    // Hand of the clevis (lane wing-bracket-clear, 2026-10-20). All four clevises used to be copies of one build, so on the
+    // pivots at 140 and 320 deg the Ø54 x 34 motor end of the pin (pin head, motor, harness) pointed at the wing's end
+    // collar: its end-face centre stood 11.5 mm from the collar's edge and its rim and the harness lay in the collar's
+    // path at wing tilt 13..19 deg (measured 0.0 mm; test-WingBracketClear). No trim of a Ø54 motor can give 5 mm
+    // there (it would need about Ø16), so those two clevises are built as the mirror image about the pad's centre line
+    // (local Y): motor end, pin head, nut end, encoder, harness and the pin's offset all swap sides. Every clevis then shows
+    // its small Ø36 x 17 encoder end to the wing, as the clevises at 40 and 220 deg always did. Nothing else moves: the
+    // pin axis, the ears (the two are mirror images of each other already), pad, stops and bolts are unchanged.
+    const mirrorY = (g) => {
+      const n = g.index ? g.toNonIndexed() : g.clone();
+      for (const [name, sg] of [['position', -1], ['normal', -1]]) {
+        const a = n.attributes[name];
+        if (a) for (let k = 0; k < a.count; k++) a.setY(k, sg * a.getY(k));
+      }
+      for (const a of [n.attributes.position, n.attributes.normal, n.attributes.uv]) {   // reflect = reverse every triangle's winding
+        if (!a) continue;
+        const s = a.itemSize, arr = a.array;
+        for (let t = 0; t + 2 < a.count; t += 3) {
+          for (let c = 0; c < s; c++) { const tmp = arr[(t + 1) * s + c]; arr[(t + 1) * s + c] = arr[(t + 2) * s + c]; arr[(t + 2) * s + c] = tmp; }
+        }
+      }
+      return n;
+    };
+    // the pin shaft is a cylinder about its own axis, so its mirror is the same cylinder shifted the other way (stays a CylinderGeometry)
+    const pinGeoMirrored = new THREE.CylinderGeometry(0.010 * M, 0.010 * M, 0.157 * M, 24);
+    pinGeoMirrored.translate(0, -0.0085 * M, 0);
+    const mirroredClevis = { Actuator: mirrorY(actuatorGeo), Encoder: mirrorY(encoderGeo), PinEnds: mirrorY(pinEndsGeo), Harness: mirrorY(harnessGeo), Pin: pinGeoMirrored };
     // D4 header: the coolant manifold at each panel's root edge. A Ø26 tube across the panel width, axis on the
     // mid-plane (so it is entirely inside the 30 mm thickness), sticking HEADER_OUT_M out of the root end; 10 mm
     // short of each side edge so its end caps never share a plane with the panel's edge faces.
@@ -4853,15 +4890,17 @@ export class PlayerSatellite extends THREE.Group {
       pivot.add(bracket);
 
       // Hinge pin along the tangential (local Y) clevis axis: stepped, with head and nut (v4 D6).
-      const pin = new THREE.Mesh(pinGeo, metalMat);
+      const mirrored = Math.sin(azRad) * Math.cos(azRad) < 0;   // the clevises at 140 and 320 deg: motor end away from the wing (see mirrorY)
+      const hand = (part, geo) => (mirrored ? mirroredClevis[part] : geo);
+      const pin = new THREE.Mesh(hand('Pin', pinGeo), metalMat);
       pin.name = `FlowerStrutPin_${i}`;
       pin.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
       pin.userData.noSolarShade = true;
       pivot.add(pin);
       // The rest of the clevis; none of it turns.
       for (const [part, geo, mat] of [
-        ['EarL', earLGeo, bracketMat], ['EarR', earRGeo, bracketMat], ['PinEnds', pinEndsGeo, metalMat], ['Actuator', actuatorGeo, padMat],
-        ['Encoder', encoderGeo, bracketMat], ['Harness', harnessGeo, seamMat],
+        ['EarL', earLGeo, bracketMat], ['EarR', earRGeo, bracketMat], ['PinEnds', hand('PinEnds', pinEndsGeo), metalMat], ['Actuator', hand('Actuator', actuatorGeo), padMat],
+        ['Encoder', hand('Encoder', encoderGeo), bracketMat], ['Harness', hand('Harness', harnessGeo), seamMat],
       ]) {
         const m = new THREE.Mesh(geo, mat);
         m.name = `FlowerStrutBracket_${i}_${part}`;
@@ -4882,7 +4921,10 @@ export class PlayerSatellite extends THREE.Group {
       // joins the existing cull family; hidden when far, like all mm-scale
       // fittings). Ride the bracket's fore face: centre 2 mm proud of it
       // (face at z 0.11 after X1 → bolts at 0.112; 12 mm shank half-buried).
-      const boltAt = [[0.035, 0.055], [0.035, -0.055], [-0.035, 0.055], [-0.035, -0.055]];
+      // lane wing-bracket-clear fix: the two outer bolts (Ø16 heads) used to stand half off the pad (x 0.035 = the old edge, 3.5 mm outside the
+      // 20 mm corner cut). x 0.015 puts the head 10.6 mm inside the cut face (radius 8 + 2 mm), fully on the pad.
+      const BOLT_OUT_X = 0.0115, BOLT_OUT_Y = 0.061;
+      const boltAt = [[BOLT_OUT_X, BOLT_OUT_Y], [BOLT_OUT_X, -BOLT_OUT_Y], [-0.035, 0.055], [-0.035, -0.055]];
       boltAt.forEach(([bx, by], k) => {
         const bolt = new THREE.Mesh(boltGeo, padMat);
         bolt.rotation.x = Math.PI / 2;

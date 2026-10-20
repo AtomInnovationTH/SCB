@@ -78,6 +78,7 @@ export const HOTKEY_GROUPS = [
       [['Wheel · pinch'], 'Zoom in / out', { pointer: true }],
       [['Tap · hold'], 'Touch: scan / actions', { pointer: true }],
       [['↑ ↓ ← →'], 'Turn ship'],
+      [['Turn pad'], 'Turn ship (touch, lower left)', { pointer: true }],
       [['S'], 'Scan'],
       [['N'], 'Launch net'],
       [['A'], 'Fly to target (on / off)'],
