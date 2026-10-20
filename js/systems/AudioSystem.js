@@ -4162,6 +4162,46 @@ class AudioSystem {
 }
 
 /**
+ * Wake the browser's audio service without blocking (st11, 2026-10-19).
+ *
+ * The prewarm below has to make `new AudioContext()`. Measured on a warm page
+ * (Chromium GPU, headless and headed Brave on a real device): the first
+ * constructor of a page waits 117-220 ms with 1 ms of CPU, because the main
+ * thread blocks until the browser's audio service has started and answered the
+ * device query — one 122-183 ms frame about 0.2 s after the menu appears. A second
+ * constructor costs 0.1-16 ms. `mediaDevices.enumerateDevices()` makes the same
+ * service start-up, but asynchronously (the call itself returns at once); a
+ * constructor after it measured 1-2 ms. So the prewarm calls this first and builds
+ * the context when the promise settles.
+ *
+ * Same gates as the prewarm (desktop only: a coarse primary pointer, no
+ * `matchMedia`, or no `mediaDevices` → nothing), and `?noAudio=1` stays fully
+ * silent (that flag exists to keep the audio service from starting at all).
+ * It opens no device, plays nothing and asks for no permission. Called at the
+ * start of main.js instead (before the menu) it delayed the menu by ~75 ms
+ * (measured, 10 runs), so it is called after the first draw.
+ *
+ * @param {object} opts
+ * @param {object} opts.win - window stand-in (`matchMedia`, `navigator`, `location`)
+ * @param {boolean} [opts.pointerChecked=false] - the caller already asked the
+ *   coarse-pointer query (scheduleAudioPrewarm), so it is not asked twice
+ * @returns {Promise|null} the enumerateDevices() promise (never rejects), or null
+ *   when nothing was requested
+ */
+export function warmAudioService({ win, pointerChecked = false } = {}) {
+  if (!win) return null;
+  try {
+    if (!pointerChecked && (typeof win.matchMedia !== 'function' || win.matchMedia('(pointer: coarse)')?.matches)) return null;
+    if (new URLSearchParams(win.location?.search || '').get('noAudio') === '1') return null;
+    const md = win.navigator && win.navigator.mediaDevices;
+    if (!md || typeof md.enumerateDevices !== 'function') return null;
+    const p = md.enumerateDevices();
+    if (!p || typeof p.then !== 'function') return null;
+    return p.then(() => {}, () => {});   // settled either way; never an unhandled rejection
+  } catch (_e) { return null; }
+}
+
+/**
  * Start-up prewarm (st2-start-quick D1): build the sound system in an idle
  * moment after the first draw, so the first click does not pay the 0.26 s
  * `AudioContext` start (measured, st1 phase 1). The browser only needs a
@@ -4230,10 +4270,24 @@ export function scheduleAudioPrewarm({ win, audio, afterInit } = {}) {
       ctx.addEventListener('statechange', onChange);
     }
   };
-  if (typeof win.requestIdleCallback === 'function') {
-    win.requestIdleCallback(run, { timeout: 2000 });
+  const schedule = () => {
+    if (typeof win.requestIdleCallback === 'function') {
+      win.requestIdleCallback(run, { timeout: 2000 });
+    } else {
+      (typeof win.setTimeout === 'function' ? win.setTimeout.bind(win) : setTimeout)(run, 0);
+    }
+  };
+  // st11: wake the audio service first (async); build the context once that settled,
+  // so `new AudioContext()` is ~1 ms instead of a 117-220 ms frame. A cap keeps a
+  // browser that never answers from delaying the prewarm for more than 1 s.
+  const warm = warmAudioService({ win, pointerChecked: true });
+  if (warm) {
+    let scheduled = false;
+    const once = () => { if (scheduled) return; scheduled = true; schedule(); };
+    warm.then(once);
+    if (typeof win.setTimeout === 'function') win.setTimeout(once, 1000);
   } else {
-    (typeof win.setTimeout === 'function' ? win.setTimeout.bind(win) : setTimeout)(run, 0);
+    schedule();
   }
   return true;
 }
