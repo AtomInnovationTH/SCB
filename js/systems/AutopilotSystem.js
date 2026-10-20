@@ -14,6 +14,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { classifyNetTarget } from './netRouting.js';
 import { TimeAuthority } from './TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
@@ -71,6 +72,24 @@ export function autopilotOnText(mode) {
 /** @returns {string} the plain "autopilot off" line for a disengage reason */
 export function autopilotOffText(reason) {
   return AUTOPILOT_OFF_TEXT[reason] || AUTOPILOT_OFF_FALLBACK;
+}
+
+/**
+ * The ONE arrival line after the tutorial, by the weight of the target the autopilot arrived at
+ * (owner, 2026-10-20: "mother is for heavy debris. Daughters are for smaller/farther debris to save
+ * mothers deltav"). The bands are the same ones the N key uses (netRouting.classifyNetTarget).
+ * Plain words, no symbols (Ruling 0). Mass unknown (no target, or no mass) gets the general line.
+ * @param {number} [mass] target mass in kg
+ * @returns {string}
+ */
+export function arrivalLineText(mass) {
+  if (!(mass > 0)) {
+    return 'In position. The mother\'s net takes heavy pieces (N); daughters take smaller or farther ones (D).';
+  }
+  const { band } = classifyNetTarget(mass);
+  if (band === 'whale') return 'In position. Press N to fire the mother\'s large net.';
+  if (band === 'daughter') return 'In position. Press D to send a daughter: it saves the mother\'s fuel.';
+  return `In position. Press N to lasso it (within ${Constants.LASSO_RANGE} m), or D to send a daughter.`;
 }
 
 /**
@@ -1292,8 +1311,10 @@ export class AutopilotSystem {
           eventBus.emit(Events.AUTOPILOT_ARRIVED, { mode: this._headingMode });
           eventBus.emit(Events.COMMS_MESSAGE, {
             // Plain words, no symbols (Ruling 0). This is the ONE arrival line after the tutorial
-            // (the GameFlowManager one-shot that said the same thing is gone).
-            text: `In position. Press N to lasso it (within ${Constants.LASSO_RANGE} m), or D to send a daughter for far or heavy debris.`,
+            // (the GameFlowManager one-shot that said the same thing is gone). Weight-aware per the
+            // owner ruling of 2026-10-20: the mother takes heavy pieces, daughters the smaller or
+            // farther ones to save the mother's fuel (arrivalLineText, bands from classifyNetTarget).
+            text: arrivalLineText(this._lockedTargetRef ? this._lockedTargetRef.mass : 0),
             priority: 'info',
             _keep: true,   // the next step to press
           });

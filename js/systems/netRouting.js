@@ -28,13 +28,13 @@ export function classifyNetTarget(mass) {
   if (m > daughterCap) {
     return {
       band: 'whale',
-      message: 'Whale-class target. Only the Mother\'s Large Net holds that — lock it and fire [N]',
+      message: 'Too heavy for a daughter. Only the mother\'s large net holds it: select it and press N.',
     };
   }
   if (m > lassoCap) {
     return {
       band: 'daughter',
-      message: 'Daughter-sized target. Save the burn — deploy a Daughter [D]',
+      message: 'Daughter-sized piece. Press D to send a daughter and save the mother\'s fuel.',
     };
   }
   return { band: 'lasso', message: null };

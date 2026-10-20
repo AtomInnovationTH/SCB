@@ -164,7 +164,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_large_daughter_deploy',
     title: 'Large Daughter',
-    body: 'Large Daughter: nets targets up to 500 kg, ranges 2 km from the Mother. Two heavier nets aboard — send her for the big dead satellites.',
+    body: 'Large Daughter: nets pieces up to 500 kg, out to 2 km from the Mother. Send her for mid-size or far pieces, so the Mother keeps her fuel. Heavier pieces need the Mother\'s large net.',
     duration: 8000,
     icon: 'DTR',
   },
@@ -181,7 +181,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_whale_target',
     title: 'Whale',
-    body: 'Whale-class target — over 500 kg. Only the Mother\'s Large Net holds that. Fly the Mother in close and fire [N]; plan the burn, the nets are scarce.',
+    body: 'Over 500 kg: too heavy for a daughter. Only the Mother\'s large net holds it. Fly the Mother in close and press N; pick your moment, the nets are scarce.',
     duration: 9000,
     icon: 'MASS',
   },
