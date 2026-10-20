@@ -26,6 +26,7 @@ import { strutTipFoulsCorridor } from './ArmDockBasis.js';
 // Debris cutting step 5 (CUT_AT_NOSE): the pure planner — called ONCE when a
 // collared catch is over the hand-off gate.
 import { planCuts } from '../systems/cutPlanner.js';
+import { OUT_OF_MOTHER_NETS_LINE, ONE_MOTHER_NET_LEFT_LINE } from '../systems/netRouting.js';
 // Cargo-continuity S7: the carrier scorer lives with the rest of the CoM maths
 // (ONE quantity, ONE computation — it reuses computeCoM/strutTipMeters).
 import { suggestCargoArm } from '../systems/CoMCalculator.js';
@@ -3464,17 +3465,45 @@ export class CaptureNetSystem {
     // re-arms a declined collar catch in the same tick. Re-subscribed on every init so a cleared bus cannot orphan it.
     if (this._unsubNetConsumed) this._unsubNetConsumed();
     this._unsubNetConsumed = eventBus.on(Events.NET_CONSUMED, (p) => this._onRoomFreed(p));
+    // DECISIONS §33 (2026-10-20): a new game, or a restart after game over, gives the mother her 4 nets back.
+    // GameFlowManager.resetGame emits GAME_RESET; reset() is NOT used here (it zeroes the count and has no caller).
+    if (this._unsubGameReset) this._unsubGameReset();
+    this._unsubGameReset = eventBus.on(Events.GAME_RESET, () => this._reseedMotherNets());
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return;
 
     this._motherPodInventory = new Array(this._motherPodCount()).fill(CN.LARGE.MAGAZINE_SIZE);
     this._motherPodMax       = new Array(this._motherPodCount()).fill(CN.LARGE.MAGAZINE_SIZE);
     this._initialized = true;
 
-    eventBus.emit(Events.NET_INVENTORY_CHANGED, {
+    this._emitMotherInventory(true);
+  }
+
+  /**
+   * NET_INVENTORY_CHANGED for the mother's one count. Every mother emit carries `motherNets` (the total): the HUD, the
+   * autopilot arrival line and the onboarding director read that one number. `withMax` adds the capacity array.
+   * @private
+   * @param {boolean} [withMax=false]
+   */
+  _emitMotherInventory(withMax = false) {
+    const payload = {
       source: 'mother',
       podInventory: [...this._motherPodInventory],
-      podMax: [...this._motherPodMax],
-    });
+      motherNets: this.getMotherNetCount(),
+    };
+    if (withMax) payload.podMax = [...this._motherPodMax];
+    eventBus.emit(Events.NET_INVENTORY_CHANGED, payload);
+  }
+
+  /**
+   * GAME_RESET: reseed the magazine to full (MAGAZINE_SIZE). Flag-gated like init(); a bus reset before init() still
+   * leaves a full magazine for the game that follows.
+   * @private
+   */
+  _reseedMotherNets() {
+    if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return;
+    this._motherPodInventory = new Array(this._motherPodCount()).fill(CN.LARGE.MAGAZINE_SIZE);
+    this._motherPodMax       = new Array(this._motherPodCount()).fill(CN.LARGE.MAGAZINE_SIZE);
+    this._emitMotherInventory(true);
   }
 
   /**
@@ -3742,10 +3771,8 @@ export class CaptureNetSystem {
           if (net._cutPiece && !net._cutPieceFlying) this._releaseCutPiece(net._cutPiece);
         }
 
-        // §3.5: Net is NOT consumed on miss — restore inventory when empty net reels back
-        if (net.state === STATES.STOWED && net.catchResult === 'miss') {
-          this._restoreNetInventory(net);
-        }
+        // DECISIONS §33 row 1 (2026-10-20): a fired net is used up, hit or miss. A missed net cannot be refolded
+        // in space, so nothing is restored here (the §3.5 refund of the old reusable-net rule is gone).
 
         // ST-9.4d: Cargo hand-off — successful capture reeled to platform.
         // Gated OFF for mother catches (§8 A2): the berth + securing timer
@@ -5277,34 +5304,6 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Restore net inventory after a miss (§3.5: net is reusable, not consumed).
-   * @private
-   * @param {NetProjectile} net
-   */
-  _restoreNetInventory(net) {
-    if (net.podIndex >= 0) {
-      // Mother launcher — increment its magazine
-      if (this._motherPodInventory[net.podIndex] < this._motherPodMax[net.podIndex]) {
-        this._motherPodInventory[net.podIndex]++;
-        eventBus.emit(Events.NET_INVENTORY_CHANGED, {
-          source: 'mother',
-          podInventory: [...this._motherPodInventory],
-        });
-      }
-    } else if (net._sourceArm && typeof net._sourceArm.setNetInventory === 'function') {
-      // Daughter arm — restore via arm reference
-      const current = (typeof net._sourceArm.getNetInventory === 'function')
-        ? net._sourceArm.getNetInventory() : 0;
-      net._sourceArm.setNetInventory(current + 1);
-      eventBus.emit(Events.NET_INVENTORY_CHANGED, {
-        source: 'daughter',
-        armIndex: net.armIndex,
-        remaining: net._sourceArm.getNetInventory(),
-      });
-    }
-  }
-
-  /**
    * Reset to clean state (game reset / new session).
    */
   reset() {
@@ -5349,10 +5348,11 @@ export class CaptureNetSystem {
     if (!(podIndex >= 0) || podIndex >= this._motherPodCount()) return null;
     // Phase 0.3 (capture-feedback overhaul): refusals speak — mirror the
     // LassoSystem denial-comms style so the player knows WHY nothing fired
-    // and what fixes it (wait N s / restock at the resupply stop).
+    // and what fixes it (wait N s / send a daughter).
+    // DECISIONS §33 row 3: at 0 nets there is ONE line, the same one the small-net path says.
     if (this._motherPodInventory[podIndex] <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Mother net magazine empty. Restock at the resupply stop.',
+        text: OUT_OF_MOTHER_NETS_LINE,
         source: 'SYSTEM',
         channel: 'CMD',
         priority: 'warning',
@@ -5394,7 +5394,7 @@ export class CaptureNetSystem {
       return null;
     }
 
-    // Deplete inventory
+    // Deplete inventory (a launched net is used up, hit or miss: DECISIONS §33 row 1)
     this._motherPodInventory[podIndex]--;
 
     // CEREMONY_REDESIGN §4 / NET_CEREMONY alignment (2026-05-25):
@@ -5456,10 +5456,8 @@ export class CaptureNetSystem {
       remaining: this._motherPodInventory[podIndex],
     });
 
-    eventBus.emit(Events.NET_INVENTORY_CHANGED, {
-      source: 'mother',
-      podInventory: [...this._motherPodInventory],
-    });
+    this._emitMotherInventory();
+    this._announceLastMotherNet();
 
     return net;
   }
@@ -5564,6 +5562,39 @@ export class CaptureNetSystem {
     return n;
   }
 
+  /**
+   * Spend one mother net for a shot that has really launched (the small-net path in LassoSystem calls this at the point
+   * of launch, after every refusal check; fireMotherNet spends its own). One count for both paths, DECISIONS §33 row 1.
+   * @returns {boolean} true if a net was spent, false at 0 (or flag off)
+   */
+  spendMotherNet() {
+    if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return false;
+    for (let i = 0; i < this._motherPodInventory.length; i++) {
+      if ((this._motherPodInventory[i] || 0) > 0) {
+        this._motherPodInventory[i]--;
+        this._emitMotherInventory();
+        this._announceLastMotherNet();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * One line when a shot leaves exactly one mother net ("One mother net left." replaces the old "running low at 5"
+   * warning). Emitted from here so a lasso shot and a heavy-piece shot both say it, once.
+   * @private
+   */
+  _announceLastMotherNet() {
+    if (this.getMotherNetCount() !== 1) return;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: ONE_MOTHER_NET_LEFT_LINE,
+      source: 'SYSTEM',
+      channel: 'CMD',
+      priority: 'warning',
+    });
+  }
+
   /** Inventory of the Mother launcher (podIndex is always 0 — one launcher). */
   getMotherPodInventory(podIndex) {
     return this._motherPodInventory[podIndex] || 0;
@@ -5610,6 +5641,17 @@ export class CaptureNetSystem {
   }
 
   /**
+   * True when a docked daughter of `type` ('weaver' large / 'spinner' small) has room for one more net: the shop's
+   * full check for the daughter-net items (the arm manager is the one this system was initialised with).
+   * @param {'weaver'|'spinner'} type
+   */
+  hasDaughterNetSpace(type) {
+    if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return false;
+    const am = this._armManager;
+    return !!(am && typeof am.hasDaughterNetSpace === 'function' && am.hasDaughterNetSpace(type));
+  }
+
+  /**
    * Load exactly one Large Net into the Mother launcher if it has space (shop
    * restock — one net per 250 cr purchase, matching REPLACEMENT_COST; net
    * ladder Phase B, mirrors the daughters' per-net reload economy).
@@ -5626,11 +5668,7 @@ export class CaptureNetSystem {
     }
     if (bestPod < 0) return false;
     this._motherPodInventory[bestPod]++;
-    eventBus.emit(Events.NET_INVENTORY_CHANGED, {
-      source: 'mother',
-      podInventory: [...this._motherPodInventory],
-      podMax: [...this._motherPodMax],
-    });
+    this._emitMotherInventory(true);
     return true;
   }
 
@@ -5788,11 +5826,7 @@ export class CaptureNetSystem {
     // Emit so listeners (launcher caps, HUD NetInventoryPanel) sync to the restored
     // magazine — restore previously mutated inventory silently, leaving any
     // listener showing stale state after a load. Mirrors init()'s emit.
-    eventBus.emit(Events.NET_INVENTORY_CHANGED, {
-      source: 'mother',
-      podInventory: [...this._motherPodInventory],
-      podMax: [...this._motherPodMax],
-    });
+    this._emitMotherInventory(true);
   }
 }
 

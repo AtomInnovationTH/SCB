@@ -487,7 +487,7 @@ export const Events = {
   LASSO_STOWED:           'lasso:stowed',    // { debrisId, podIndex } — S13(d): catch reeled in, adopting onto the nose-collar berth (the one holding model); no cellIndex exists anymore
   LASSO_COOLDOWN_START:   'lasso:cooldownStart',  // { duration } — cooldown timer began (ST-1.3)
   LASSO_COOLDOWN_END:     'lasso:cooldownEnd',    // {} — cooldown expired, ready to fire (ST-1.3)
-  LASSO_AMMO_CHANGED:     'lasso:ammoChanged',    // { remaining, max } — UX-3 #7 ammo system
+  // LASSO_AMMO_CHANGED retired 2026-10-20 (DECISIONS §33): the mother's one net count rides on NET_INVENTORY_CHANGED { source:'mother', motherNets }.
   /**
    * Delegation 4 (2026-05-31) — emitted by [`NetInventoryPanel`](js/ui/hud/NetInventoryPanel.js:1)
    * when total capture-tool stocks cross the low or critical thresholds defined

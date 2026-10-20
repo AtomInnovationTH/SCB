@@ -75,21 +75,23 @@ export function autopilotOffText(reason) {
 }
 
 /**
- * The ONE arrival line after the tutorial, by the weight of the target the autopilot arrived at
- * (owner, 2026-10-20: "mother is for heavy debris. Daughters are for smaller/farther debris to save
- * mothers deltav"). The bands are the same ones the N key uses (netRouting.classifyNetTarget).
- * Plain words, no symbols (Ruling 0). Mass unknown (no target, or no mass) gets the general line.
+ * The ONE arrival line after the tutorial, by what the mother can still do about the piece
+ * (owner, 2026-10-20, DECISIONS §33 row 8): while she has nets, N nets it; with none left a daughter takes it (D),
+ * unless the piece is over 500 kg, which no daughter can hold: then only a restock at the resupply stop helps.
+ * Plain words, no symbols (Ruling 0). Mass unknown (no target, or no mass) follows the same net rule and never
+ * claims a piece is too heavy. The over-500 cut-off is the same band the N key uses (netRouting.classifyNetTarget).
+ * Pure: the caller (the autopilot) passes its cached count of mother nets.
  * @param {number} [mass] target mass in kg
+ * @param {number} [motherNetsLeft] the mother's nets now (default: a full magazine, the start of the game)
  * @returns {string}
  */
-export function arrivalLineText(mass) {
-  if (!(mass > 0)) {
-    return 'In position. The mother\'s net takes heavy pieces (N); daughters take smaller or farther ones (D).';
+export function arrivalLineText(mass, motherNetsLeft) {
+  const left = Number.isFinite(motherNetsLeft) ? motherNetsLeft : Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
+  if (left > 0) return 'In position. Press N to net it.';
+  if (mass > 0 && classifyNetTarget(mass).band === 'whale') {
+    return 'Out of mother nets. Restock at the resupply stop.';
   }
-  const { band } = classifyNetTarget(mass);
-  if (band === 'whale') return 'In position. Press N to fire the mother\'s large net.';
-  if (band === 'daughter') return 'In position. Press D to send a daughter: it saves the mother\'s fuel.';
-  return `In position. Press N to lasso it (within ${Constants.LASSO_RANGE} m), or D to send a daughter.`;
+  return 'In position. Press D to send a daughter.';
 }
 
 /**
@@ -271,6 +273,10 @@ export class AutopilotSystem {
   constructor() {
     /** @type {boolean} */
     this._engaged = false;
+
+    /** @type {number} The mother's nets, cached for the arrival line (DECISIONS §33 row 8): starts full, follows
+     *  NET_INVENTORY_CHANGED { source:'mother', motherNets }, reset by GAME_RESET. */
+    this._motherNetsLeft = Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
 
     /** @type {string} 'OFF'|'RENDEZVOUS_FAR'|'MATCH_ORBIT'|'TRAIL_ALIGN'|'HOLD' */
     this._phase = PHASE.OFF;
@@ -1311,10 +1317,10 @@ export class AutopilotSystem {
           eventBus.emit(Events.AUTOPILOT_ARRIVED, { mode: this._headingMode });
           eventBus.emit(Events.COMMS_MESSAGE, {
             // Plain words, no symbols (Ruling 0). This is the ONE arrival line after the tutorial
-            // (the GameFlowManager one-shot that said the same thing is gone). Weight-aware per the
-            // owner ruling of 2026-10-20: the mother takes heavy pieces, daughters the smaller or
-            // farther ones to save the mother's fuel (arrivalLineText, bands from classifyNetTarget).
-            text: arrivalLineText(this._lockedTargetRef ? this._lockedTargetRef.mass : 0),
+            // (the GameFlowManager one-shot that said the same thing is gone). Net-aware per the owner
+            // ruling of 2026-10-20 (DECISIONS §33 row 8): N while the mother has nets; D when she has none;
+            // a restock when none are left and no daughter can hold the piece (arrivalLineText).
+            text: arrivalLineText(this._lockedTargetRef ? this._lockedTargetRef.mass : 0, this._motherNetsLeft),
             priority: 'info',
             _keep: true,   // the next step to press
           });
@@ -1963,6 +1969,13 @@ export class AutopilotSystem {
 
   /** @private Wire up external event listeners for auto-disengage and trawl awareness. */
   _setupListeners() {
+    // The mother's nets, for the arrival line (DECISIONS §33 row 8): CaptureNetSystem owns the one count and
+    // announces it on every change; a new game puts the full magazine back.
+    eventBus.on(Events.NET_INVENTORY_CHANGED, (data) => {
+      if (data && data.source === 'mother' && Number.isFinite(data.motherNets)) this._motherNetsLeft = data.motherNets;
+    });
+    eventBus.on(Events.GAME_RESET, () => { this._motherNetsLeft = Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE; });
+
     // Attitude-hold across a lasso capture: HOLD the mother's orientation steady
     // from the moment it fires (the aim-before-launch has just put +Z on the
     // debris) through the entire reel-in, until the catch is stowed/lost. A

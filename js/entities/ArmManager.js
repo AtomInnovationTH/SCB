@@ -2251,11 +2251,22 @@ export class ArmManager {
       ? this.playerSatellite._captureNetSystem.getBerthedMassKg() : 0;
     const cargoMass = this.getCargoMassKg();
 
+    // DECISIONS §33 row 4 (2026-10-20): the mother's nets aboard are real mass (count x CAPTURE_NET.LARGE.MASS 1.425 kg),
+    // carried in the launcher like the cargo: in the loaded and the empty mass, and so in the engine's Tsiolkovsky dry
+    // term. A fired net leaves the ship (the count is the one CaptureNetSystem owns), so a shot lightens her. The
+    // daughters' own nets are taken to be inside V5_WEAVER_MASS / V5_SPINNER_MASS (no separate term). CoMCalculator
+    // books the same mass on the launcher axis (motherNetBooking), so the two ledgers agree.
+    const motherNetCount = (this.playerSatellite
+        && this.playerSatellite._captureNetSystem
+        && typeof this.playerSatellite._captureNetSystem.getMotherNetCount === 'function')
+      ? this.playerSatellite._captureNetSystem.getMotherNetCount() : 0;
+    const motherNetMass = motherNetCount * Constants.CAPTURE_NET.LARGE.MASS;
+
     // Cold gas is CARRIED, not burned by the Hall engine (h3-argon-engine D4: it used to be counted as
     // burnable at Hall Isp, ~30 % too high): it sits in BOTH the loaded and the empty mass.
-    const carriedDry = coreDry + coldGasCurrent + dockedArmMass + cargoMass;
+    const carriedDry = coreDry + coldGasCurrent + dockedArmMass + cargoMass + motherNetMass;
     const wetMass = carriedDry + xenonCurrent;
-    const dryMass = coreDry + dockedArmMass + cargoMass;   // reported, as before: without either gas
+    const dryMass = coreDry + dockedArmMass + cargoMass + motherNetMass;   // reported, as before: without either gas
 
     // Tsiolkovsky for the engine: ΔV = Isp_eff x g0 x ln((dry + cold + gas) / (dry + cold)).
     // Isp_eff = the ACTIVE fuel's Isp / c (D5: shop upgrade x power split act as Isp gains).
@@ -2265,7 +2276,7 @@ export class ArmManager {
     const ispActive = fuel && fuel.isp > 0 ? fuel.isp : Constants.OCTOPUS_CORE_HALL_ISP;
     const isp = ispActive / (c > 0 ? c : 1);   // effective Isp: the figure the ΔV and the flow share
     const deltaV = engineDeltaV({
-      dryKg: coreDry + dockedArmMass + cargoMass, coldGasKg: coldGasCurrent, gasKg: xenonCurrent, isp: ispActive, c,
+      dryKg: coreDry + dockedArmMass + cargoMass + motherNetMass, coldGasKg: coldGasCurrent, gasKg: xenonCurrent, isp: ispActive, c,
     });
 
     return {
@@ -2285,6 +2296,8 @@ export class ArmManager {
       dryMass: Math.round(dryMass),
       berthedMass: Math.round(berthedMass * 10) / 10,
       cargoMass: Math.round(cargoMass * 10) / 10,
+      motherNets: motherNetCount,                                   // the mother's nets aboard (count)
+      motherNetMass: Math.round(motherNetMass * 1000) / 1000,       // kg, count x 1.425 (inside wet and dry mass)
       deltaV: Math.round(deltaV),
       isp,
       shipMassKg: wetMass,   // exact (unrounded) total mass now — the gas-flow law's m_ship (PlayerSatellite)
@@ -2541,6 +2554,42 @@ export class ArmManager {
     for (const arm of this.arms) {
       arm.applyUpgradeOverride(data.effect, data.value);
     }
+  }
+
+  /**
+   * The first DOCKED daughter of `type` whose net magazine has room (DECISIONS §33 rows 2 and 5: nets refill only by
+   * buying at the resupply stop, one at a time).
+   * @param {'weaver'|'spinner'} type — weaver = the large daughter, spinner = the small
+   * @returns {object|null} the arm, or null when none is docked with room
+   */
+  findDaughterNeedingNet(type) {
+    for (const arm of this.arms) {
+      if (!arm || arm.state !== ARM_STATES.DOCKED) continue;
+      const t = arm.config ? arm.config.type : arm.type;
+      if (t !== type) continue;
+      const max = typeof arm.getNetInventoryMax === 'function' ? arm.getNetInventoryMax() : 0;
+      const have = typeof arm.getNetInventory === 'function' ? arm.getNetInventory() : 0;
+      if (max > 0 && have < max) return arm;
+    }
+    return null;
+  }
+
+  /** True when some docked daughter of `type` has room for one more net (the shop's full check). */
+  hasDaughterNetSpace(type) {
+    return this.findDaughterNeedingNet(type) !== null;
+  }
+
+  /**
+   * Shop consumable: load exactly ONE net into the first docked daughter of `type` with room. Not an upgrade (no
+   * stored override, nothing replays after a reset): the magazine is the state.
+   * @param {'weaver'|'spinner'} type
+   * @returns {boolean} true if a net was loaded
+   */
+  addDaughterNet(type) {
+    const arm = this.findDaughterNeedingNet(type);
+    if (!arm) return false;
+    arm.setNetInventory(arm.getNetInventory() + 1);
+    return true;
   }
 
   /**

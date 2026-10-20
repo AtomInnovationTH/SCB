@@ -327,6 +327,21 @@ function getDaughterMass(arm) {
 }
 
 /**
+ * DECISIONS §33 row 4 (2026-10-20): the mother's nets aboard are real mass, held in the launcher at the nose — the same
+ * `getMotherNetCount() x CAPTURE_NET.LARGE.MASS` ArmManager.getMassBudget adds to the carried dry mass, booked here
+ * on the launcher axis so the two ledgers agree. They ride in the balanced reference too (a permanent, on-axis fitting,
+ * not a player-correctable asymmetry), so the CoM DRIFT is unchanged by them.
+ * @param {object} [playerSatellite] — for `_captureNetSystem.getMotherNetCount()` (guarded: mocks may lack it)
+ * @returns {{ massKg: number, z: number }} massKg 0 when none aboard; z = the cartridge, mid-launcher (m, ship frame)
+ */
+export function motherNetBooking(playerSatellite) {
+  const cns = playerSatellite && playerSatellite._captureNetSystem;
+  const n = (cns && typeof cns.getMotherNetCount === 'function') ? cns.getMotherNetCount() : 0;
+  const massKg = n > 0 ? n * Constants.CAPTURE_NET.LARGE.MASS : 0;
+  return { massKg, z: (V5.NET_LAUNCHER_BASE_Z_M + V5.NET_LAUNCHER_MUZZLE_Z_M) / 2 };
+}
+
+/**
  * Compute composite center-of-mass of the entire spacecraft in body-local coordinates.
  *
  * Model:
@@ -402,6 +417,13 @@ export function computeCoM(armManager, playerSatellite) {
     }
   }
 
+  // The mother's nets in the launcher (on the axis: x = y = 0).
+  const nets = motherNetBooking(playerSatellite);
+  if (nets.massKg > 0) {
+    cz += nets.massKg * nets.z;
+    totalMass += nets.massKg;
+  }
+
   const invTotal = totalMass > 0 ? 1 / totalMass : 0;
   return {
     position: {
@@ -414,6 +436,7 @@ export function computeCoM(armManager, playerSatellite) {
       core: coreMass,
       struts: strutMasses,
       arms: armMasses,
+      motherNets: nets.massKg,
     },
   };
 }
@@ -521,6 +544,10 @@ export function computeInertia(armManager, playerSatellite) {
 
   }
 
+  // The mother's nets in the launcher: structure aboard (unclamped), on the axis — the same booking computeCoM makes.
+  const netsAboard = motherNetBooking(playerSatellite);
+  addPoint(netsAboard.massKg, { x: 0, y: 0, z: netsAboard.z });
+
   // Bags latched on the radiator tips: cargo, so they join the clamped sum.
   const tipBags = playerSatellite && playerSatellite.tipCargo
     && typeof playerSatellite.tipCargo.massBookings === 'function'
@@ -613,6 +640,10 @@ export function computeCoMDrift(armManager, playerSatellite) {
     });
   }
 
+  // The nets are in the actual CoM, so they are in the balanced reference too (permanent, on-axis).
+  const netsB = motherNetBooking(playerSatellite);
+  if (netsB.massKg > 0) { bcz += netsB.massKg * netsB.z; bTotal += netsB.massKg; }
+
   const invB = bTotal > 0 ? 1 / bTotal : 0;
   const bx = bcx * invB, by = bcy * invB, bz = bcz * invB;
 
@@ -668,6 +699,10 @@ export function computeCoMDriftVector(armManager, playerSatellite) {
       bTotal += m;
     });
   }
+
+  // The nets are in the actual CoM, so they are in the balanced reference too (permanent, on-axis).
+  const netsB = motherNetBooking(playerSatellite);
+  if (netsB.massKg > 0) { bcz += netsB.massKg * netsB.z; bTotal += netsB.massKg; }
 
   const invB = bTotal > 0 ? 1 / bTotal : 0;
   return {

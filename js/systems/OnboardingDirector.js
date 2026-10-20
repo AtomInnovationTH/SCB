@@ -36,6 +36,16 @@ import { GestureHints } from '../ui/hud/GestureHints.js';
 import { gameState } from '../core/GameState.js';
 import { wingsHint, WINGS_HINT_ID } from './WingsHint.js';
 import { OPENING_LINE_START } from './StartOpening.js';
+import { OUT_OF_MOTHER_NETS_LINE } from './netRouting.js';
+
+/**
+ * DECISIONS §33 row 9 (owner, 2026-10-20): the mother carries four nets for the whole run and a miss costs one, so a
+ * player can reach a net beat with none left. Those beats (`motherEmptyToD: true`) then show the one out-of-nets
+ * line and swap their N chip for this D chip; any capture (the mother's, or a daughter's dock) still completes them.
+ */
+export const MOTHER_EMPTY_CHIP = Object.freeze({
+  text: 'Send a daughter', glyph: 'D', keys: Object.freeze(['KeyD']), press: 'KeyD', button: 'SEND DAUGHTER',
+});
 
 // ────────────────────────────────────────────────────────────────────────────
 // BEAT TABLE — fixed by spec.  Do not edit individual values without bumping
@@ -98,6 +108,10 @@ export const ONBOARDING_BEATS = [
     nudgePress: 'KeyS',
     nudgeButton: 'SCAN',
     triggerEvent: 'LASSO_FIRED',
+    // The mother's nets ran out before this beat (not reachable on a fresh run; kept so the rule holds for every N beat):
+    // a daughter's capture also completes it.
+    altTriggerEvents: ['DEBRIS_CAPTURED'],
+    motherEmptyToD: true,
     skillId: 'collect_lasso',
     credit: 10,
     // No stall card (owner, 2026-09-07): the 9 s "That bracket is your lock.
@@ -146,8 +160,11 @@ export const ONBOARDING_BEATS = [
     // can never hang the pipeline here again. Premature advance is harmless —
     // range_wall HOLDS on its out-of-range gate until the close pieces clear.
     autoAdvanceAfter: 8000,
-    // No-net safety: if the player is out of nets here, graduate past rather
-    // than stranding them (the NET_EMPTY_CLICK consolation path).
+    // The mother is out of nets here (a miss costs one; four last the run): the one out-of-nets line and a D chip;
+    // the beat still completes on any capture, a daughter's dock included (altTriggerEvents above).
+    motherEmptyToD: true,
+    // No-net safety, DAUGHTER path only: NET_EMPTY_CLICK is emitted by a daughter with no nets (never by the
+    // mother), so this consolation skip cannot fire for the mother's count. Kept: it stops a hang if every net is gone.
     netEmptySkip: true,
     netEmptyComms: 'Out of nets. We\'ll resupply. Moving on, Cowboy.',
   },
@@ -191,7 +208,8 @@ export const ONBOARDING_BEATS = [
     counterTarget: 1,
     credit: 0,
     autoAdvanceAfter: 8000,
-    // No-net safety: graduate past if the player is out of nets here.
+    motherEmptyToD: true,
+    // No-net safety, DAUGHTER path only (see second_catch): NET_EMPTY_CLICK comes from a daughter with no nets.
     netEmptySkip: true,
     netEmptyComms: 'Out of nets. We\'ll resupply. Moving on, Cowboy.',
   },
@@ -312,6 +330,20 @@ export class OnboardingDirector {
     this._mastered = false;
 
     /**
+     * The mother's nets, cached from NET_INVENTORY_CHANGED { source:'mother', motherNets } (DECISIONS §33 row 9).
+     * Starts full; GAME_RESET puts the full magazine back. Not persisted.
+     * @type {number}
+     */
+    this._motherNets = Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
+
+    /**
+     * True from the moment a mother shot (the lasso or the large net) leaves the launcher until it has resolved (caught
+     * or missed). The out-of-nets line and the D chip wait for it: a last net still flying may yet catch.
+     * @type {boolean}
+     */
+    this._motherShotInFlight = false;
+
+    /**
      * comms-after-tutorial D1: true once ONBOARDING_MASTERED has been emitted this run
      * (it fires once; reset() re-arms it). Not persisted.
      * @type {boolean}
@@ -414,8 +446,10 @@ export class OnboardingDirector {
   pressActiveHint(inputManager) {
     if (!this._active || this._mastered) return false;
     const beat = this._active.beat;
-    if (!beat || !Array.isArray(beat.keys) || beat.keys.length === 0) return false;
-    const primary = beat.keys[0];
+    // A beat showing the out-of-nets D chip presses D, not its own N (DECISIONS §33 row 9).
+    const emptyD = !!this._active.motherEmptyShown && !!beat && !!beat.motherEmptyToD;
+    if (!beat || (!emptyD && (!Array.isArray(beat.keys) || beat.keys.length === 0))) return false;
+    const primary = emptyD ? MOTHER_EMPTY_CHIP.keys[0] : beat.keys[0];
     if (primary === 'Space') return false;
 
     // Map primary key → InputManager helper.
@@ -499,6 +533,8 @@ export class OnboardingDirector {
     this._smartDefaultMsgShown = false;
     this._started = false;
     this._stationKeepArrowsShown = false;
+    this._motherNets = Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
+    this._motherShotInFlight = false;
     this._clearDetailHintPoll();
     // `_detailHintShown` is per-player — not cleared (locked decision #17).
     this._persist();
@@ -650,6 +686,27 @@ export class OnboardingDirector {
     // opted into the consolation skip (solo_practice), graduate them anyway.
     if (Events.NET_EMPTY_CLICK) {
       on(Events.NET_EMPTY_CLICK, () => this._onConsolationSkip());
+    }
+
+    // DECISIONS §33 row 9: follow the mother's one count of nets; an N beat with none left points at D instead.
+    // (Registered after the GAME_RESET handler above, so a reset's full magazine is what a new run sees.)
+    if (Events.NET_INVENTORY_CHANGED) {
+      on(Events.NET_INVENTORY_CHANGED, (d) => {
+        if (d && d.source === 'mother' && Number.isFinite(d.motherNets)) this._onMotherNets(d.motherNets);
+      });
+    }
+    // R1 (review 2026-10-20): the D line waits until the last mother net has resolved. A shot is in flight from
+    // LASSO_FIRED / NET_FIRED{source:'mother'} (both are emitted before the count drops) until it catches or misses.
+    // A catch only clears the flag (the beat completes on it, so no D line); a miss clears it and re-checks the count.
+    if (Events.LASSO_FIRED) on(Events.LASSO_FIRED, () => { this._motherShotInFlight = true; });
+    if (Events.NET_FIRED) {
+      on(Events.NET_FIRED, (d) => { if (d && d.source === 'mother') this._motherShotInFlight = true; });
+    }
+    for (const name of ['LASSO_CAPTURED', 'NET_CATCH_SUCCESS']) {
+      if (Events[name]) on(Events[name], () => { this._motherShotInFlight = false; });
+    }
+    for (const name of ['LASSO_MISSED', 'NET_CATCH_MISS']) {
+      if (Events[name]) on(Events[name], () => { this._motherShotInFlight = false; this._onMotherNets(this._motherNets); });
     }
 
     // Contextual JIT teaching (.kilo plan §D.6): the arrows/RCS lesson is NOT
@@ -860,6 +917,71 @@ export class OnboardingDirector {
   // ─── INTERNAL — BEAT LIFECYCLE ────────────────────────────────────────
 
   /**
+   * The mother's count changed (DECISIONS §33 row 9). While an N beat (`motherEmptyToD`) is current and the count
+   * reaches 0, post the one out-of-nets line and swap the beat's chip to D, once; if nets come back (a restock) put
+   * the beat's own chip back. A beat still held on a gate is left to `_postBeat`, which reads the count on entry.
+   * @param {number} count
+   * @private
+   */
+  _onMotherNets(count) {
+    this._motherNets = count;
+    const a = this._active;
+    if (!a || a.held || !a.beat || !a.beat.motherEmptyToD) return;
+    if (this._motherShotInFlight) return;   // the last net may still catch: say nothing until it has resolved
+    if (count <= 0 && !a.motherEmptyShown) {
+      a.motherEmptyShown = true;
+      if (!this._isMinimal()) this._postMotherEmpty(a.beat);
+    } else if (count > 0 && a.motherEmptyShown) {
+      a.motherEmptyShown = false;
+      if (!this._isMinimal() && Array.isArray(a.beat.keys) && a.beat.keys.length > 0) this._postBeatChip(a.beat);
+    }
+  }
+
+  /**
+   * The ONE out-of-nets line plus the D chip, in place of the beat's own line and N chip. The chip re-uses the beat's
+   * id, so the beat's own HINT_SATISFIED (advance / complete / drop) takes it down like any step chip.
+   * @param {object} beat @private
+   */
+  _postMotherEmpty(beat) {
+    this._emitComms({
+      source: 'HOUSTON',
+      channel: 'HOUSTON',
+      text: OUT_OF_MOTHER_NETS_LINE,
+      priority: 'info',
+      _onboardingBeatId: beat.id,
+    });
+    this._emit(Events.HINT_POSTED, {
+      id: beat.id,
+      text: MOTHER_EMPTY_CHIP.text,
+      glyph: MOTHER_EMPTY_CHIP.glyph,
+      keys: [...MOTHER_EMPTY_CHIP.keys],
+      skillId: beat.skillId || undefined,
+      duration: 0,
+      priority: 'normal',
+      step: true,
+      press: MOTHER_EMPTY_CHIP.press,
+      button: MOTHER_EMPTY_CHIP.button,
+    });
+  }
+
+  /** The beat's own step chip (the hint-ticker emit of `_postBeat`, shared with the nets-restored path). @private */
+  _postBeatChip(beat) {
+    this._emit(Events.HINT_POSTED, {
+      id: beat.id,
+      text: beat.text || beat.commsText || '',
+      glyph: beat.glyph,
+      keys: beat.keys,
+      skillId: beat.skillId || undefined,
+      // D1b: a beat chip with a button is durable - it leaves on the Director's own HINT_SATISFIED.
+      duration: beat.press ? 0 : (beat.hintDuration || (Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000)),
+      priority: 'normal',
+      step: true,
+      press: beat.press,
+      button: beat.button,
+    });
+  }
+
+  /**
    * No-net consolation skip (§4.4): if the active beat opted in via
    * `netEmptySkip`, graduate the player past it with a consolation comms line
    * rather than stranding them when they're out of nets.
@@ -1026,36 +1148,32 @@ export class OnboardingDirector {
       this._guidance.setCoachingActive(!!beat.triggerEvent && !minimal);
     }
 
-    // (1) Comms line.
-    if (beat.commsText && !minimal) {
-      this._emitComms({
-        source: beat.commsSource || 'HOUSTON',
-        channel: 'HOUSTON',
-        text: this._renderCommsText(beat.commsText),
-        priority: 'info',
-        // Tag actionable instructions with their beat id so the comms panel can
-        // drop the attention highlight the instant the player follows it
-        // (HINT_SATISFIED), rather than leaving it highlighted until an ack.
-        _onboardingBeatId: beat.triggerEvent ? beat.id : undefined,
-      });
-    }
+    // DECISIONS §33 row 9: an N beat reached with no mother nets left says the one out-of-nets line and offers D
+    // instead of its own line and N chip. Any capture (the mother's or a daughter's dock) still completes it.
+    const motherEmpty = !!beat.motherEmptyToD && this._motherNets <= 0 && !this._motherShotInFlight;
+    if (motherEmpty) this._active.motherEmptyShown = true;
 
-    // (2) Hint ticker.
-    if (Array.isArray(beat.keys) && beat.keys.length > 0 && !minimal) {
-      this._emit(Events.HINT_POSTED, {
-        id: beat.id,
-        text: beat.text || beat.commsText || '',
-        glyph: beat.glyph,
-        keys: beat.keys,
-        skillId: beat.skillId || undefined,
-        // D1b: a beat chip with a button is durable - it leaves on the Director's own
-        // HINT_SATISFIED (advance / complete), not after 12 s.
-        duration: beat.press ? 0 : (beat.hintDuration || (Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000)),
-        priority: 'normal',
-        step: true,
-        press: beat.press,
-        button: beat.button,
-      });
+    if (motherEmpty && !minimal) {
+      this._postMotherEmpty(beat);
+    } else {
+      // (1) Comms line.
+      if (beat.commsText && !minimal) {
+        this._emitComms({
+          source: beat.commsSource || 'HOUSTON',
+          channel: 'HOUSTON',
+          text: this._renderCommsText(beat.commsText),
+          priority: 'info',
+          // Tag actionable instructions with their beat id so the comms panel can
+          // drop the attention highlight the instant the player follows it
+          // (HINT_SATISFIED), rather than leaving it highlighted until an ack.
+          _onboardingBeatId: beat.triggerEvent ? beat.id : undefined,
+        });
+      }
+
+      // (2) Hint ticker.
+      if (Array.isArray(beat.keys) && beat.keys.length > 0 && !minimal) {
+        this._postBeatChip(beat);
+      }
     }
 
     // (3) Soft chime for credit-bearing beats only.

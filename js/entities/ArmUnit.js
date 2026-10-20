@@ -24,6 +24,7 @@ import { strutLocalDirection, composeDockedArmQuat } from './ArmDockBasis.js';
 import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT, seedHerFrameAttitude, applyHerFrameAttitude, clearShipRelativeAttitude, clearRackCell } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
+import { DAUGHTER_OUT_OF_NETS_LINE } from '../systems/netRouting.js';
 import { computeToolOdds, makeNetOddsLockCache } from '../systems/ToolOdds.js';
 import { gameState } from '../core/GameState.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
@@ -2489,7 +2490,7 @@ export class ArmUnit {
       audioSystem.playDeny();
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.displayName,
-        text: `${this.displayName}: No nets remaining. Return to mother for reload.`,
+        text: DAUGHTER_OUT_OF_NETS_LINE,   // DECISIONS §33 row 8: nets refill only at the resupply stop (not "return to mother")
         channel: 'CMD',
         priority: 'warning',
       });
@@ -3768,6 +3769,7 @@ export class ArmUnit {
               targetId: this.target.id || this.target.catalogId,
               standoffR: _so,
               isPiloted: this.isManual(),
+              tool: this.selectedTool,   // the recommended tool (refreshed on SK entry): the holding line names it
             });
             return;
           }
@@ -3913,6 +3915,7 @@ export class ArmUnit {
           targetId: this.target.id || this.target.catalogId,
           standoffR: standoff,
           isPiloted: this.isManual(),
+          tool: this.selectedTool,   // the recommended tool (refreshed on SK entry): the holding line names it
         });
         return;
       }
@@ -4586,7 +4589,7 @@ export class ArmUnit {
       audioSystem.playDeny();
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.displayName,
-        text: `${this.displayName}: No nets remaining. Return to mother for reload.`,
+        text: DAUGHTER_OUT_OF_NETS_LINE,   // DECISIONS §33 row 8: nets refill only at the resupply stop (not "return to mother")
         channel: 'CMD',
         priority: 'warning',
       });
@@ -4686,6 +4689,10 @@ export class ArmUnit {
       hasFerrousFasteners: !!(target && target.hasFerrousFasteners === true),
       hasGrappleFixture: !!(target && target.hasGrappleFixture === true),
       netDepleted,
+      // DECISIONS §33 row 7: the small daughter picks her pad by herself when it suits the piece — the rule reads the
+      // surface (material -> gecko / hooks adhesion), so the piece's material and roughness must reach the recommender.
+      material: target ? target.material : undefined,
+      surfaceRoughness: target ? target.surfaceRoughness : undefined,
     });
     this.selectedTool = rec.recommended;
     // Wave-4 QA #3: SK entry is the lock/re-acquire seam — force the odds lock
@@ -5410,13 +5417,13 @@ export class ArmUnit {
            ? this.getNetInventory() : (this._netInventory || 0);
          const cdS = (typeof captureNetSystem.getCooldown === 'function')
            ? captureNetSystem.getCooldown('arm', this.index) : 0;
-         const reason = inv <= 0
-           ? 'Net magazine empty. Press R to reel home and reload.'
-           : cdS > 0
-             ? `Net launcher cooling down. Ready in ${Math.ceil(cdS)}s.`
-             : 'Net launcher unavailable. Holding station.';
+         const reason = cdS > 0
+           ? `Net launcher cooling down. Ready in ${Math.ceil(cdS)}s.`
+           : 'Net launcher unavailable. Holding station.';
          eventBus.emit(Events.COMMS_MESSAGE, {
-           source: this.displayName, text: `${this.displayName}: ${reason}`,
+           source: this.displayName,
+           // Out of nets: the ONE line, exact (nets refill only at the resupply stop; nothing reloads on docking).
+           text: inv <= 0 ? DAUGHTER_OUT_OF_NETS_LINE : `${this.displayName}: ${reason}`,
            channel: 'CMD', priority: 'warning',
          });
        }

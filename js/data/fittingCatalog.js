@@ -117,6 +117,7 @@ export const ROUTE_READS = Object.freeze({
   sensorEvent: 'sensorSystem',
   kesslerSystem: 'kesslerSystem',
   captureNet: 'captureNetSystem',
+  daughterNet: 'armManager',      // DECISIONS §33: ArmManager.addDaughterNet(type)
   cargoSystem: 'cargoSystem',
   runtime: 'hasUpgrade',
 });
@@ -319,6 +320,17 @@ const FITTING_SPECS = {
     subsystem: 'BERTHS', reads: 'captureNetSystem',
     display: (row) => ({ param: 'motherNets', base: MOTHER_NET_MAGAZINE_FULL, unit: 'nets', op: `+${row.value}` }),
     current: (deps) => deps.captureNetSystem?.getMotherNetCount?.(),
+  },
+  // DECISIONS §33 rows 2/5: a daughter's nets refill only here, one per buy, into the first docked daughter of the size.
+  large_daughter_net: {
+    subsystem: 'BERTHS', reads: 'armManager',
+    display: (row) => ({ param: 'largeDaughterNets', base: Constants.CAPTURE_NET.MEDIUM.MAGAZINE_SIZE, unit: 'nets', op: `+${row.value}` }),
+    current: (deps) => deps.armManager?.arms?.find((a) => a?.config?.type === 'weaver')?.getNetInventory?.(),
+  },
+  small_daughter_net: {
+    subsystem: 'BERTHS', reads: 'armManager',
+    display: (row) => ({ param: 'smallDaughterNets', base: Constants.CAPTURE_NET.SMALL.MAGAZINE_SIZE, unit: 'nets', op: `+${row.value}` }),
+    current: (deps) => deps.armManager?.arms?.find((a) => a?.config?.type === 'spinner')?.getNetInventory?.(),
   },
   hazmat_handler: {
     subsystem: 'BERTHS', reads: 'hasUpgrade',

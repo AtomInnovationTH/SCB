@@ -151,7 +151,18 @@ export function recommendArmTool(opts = {}) {
     netClass,
     netCount: netGone ? 0 : undefined,
   });
-  const recommended = computeBestTool(odds, toolset);
+  let recommended = computeBestTool(odds, toolset);
+
+  // ── DECISIONS §33 row 7 (2026-10-20): the small daughter picks her pad by herself when it suits the piece ────
+  // PAD is in her toolset, the pad is on, the piece is within her rating (SPINNER_MAX_CAPTURE_MASS) and the surface
+  // gives gecko or hooks adhesion (the pure ToolOdds mirror of ArmUnit._resolvePadMode — odds.PAD.mode, no third copy).
+  // Otherwise the net, as before. The tool cycle (backtick) still lets the player change it.
+  const padMode = odds.PAD ? odds.PAD.mode : null;
+  if ('PAD' in scores && padOn && mass <= (Constants.SPINNER_MAX_CAPTURE_MASS ?? 50)
+      && (padMode === 'gecko' || padMode === 'hooks')) {
+    scores.PAD = 3; hints.PAD = `${padMode} pad. Stick it on`;
+    recommended = 'PAD';
+  }
 
   return { recommended, alternatives: toolset, scores, hints, odds };
 }

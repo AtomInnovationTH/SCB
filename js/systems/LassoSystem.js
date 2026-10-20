@@ -14,7 +14,7 @@ import { devShotGate } from '../core/DevShotGate.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
-import { classifyNetTarget } from './netRouting.js';
+import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE } from './netRouting.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { DebrisField } from '../entities/DebrisField.js';
@@ -204,8 +204,8 @@ export class LassoSystem {
         /** @type {boolean} Whether the first-cast comms primer has been sent this session */
         this._firstCastPrimerSent = false;
 
-        /** @type {number} UX-3 #7 — remaining web tether ammo */
-        this._ammo = Constants.LASSO_AMMO_MAX;
+        // DECISIONS §33 (2026-10-20): the small net draws on the mother's ONE count of nets, owned by CaptureNetSystem
+        // (getAmmo() reads it, fire() spends it). LassoSystem keeps no count of its own.
 
         /** @type {number|null} Target id we last announced as "in lasso range",
          *  so the proactive prompt fires once per entry (not every frame). */
@@ -257,6 +257,8 @@ export class LassoSystem {
          *  The lasso's completed catch adopts onto its mother berth path; when null
          *  (headless tests) the catch resolves via the legacy instant path. */
         this._captureNetSystem = null;
+        /** @type {object|null} Test seam for the net count (setMotherNetSupply); null in production. */
+        this._motherNetSupply = null;
 
         /** @type {object|null} Optional SkillsSystem for hint-gating (Phase 3).
          *  Wired via setSkillsSystem(); when absent the prompt fires ungated
@@ -346,7 +348,7 @@ export class LassoSystem {
             reelProgress: +(this._reelProgress || 0).toFixed(3),
             flightTimer: +(this.flightTimer || 0).toFixed(3),
             cooldown: +(this.cooldown || 0).toFixed(2),
-            ammo: this._ammo,
+            ammo: this.getAmmo(),
             missionNumber: this._missionNumber,
             reelPhysicsActive: this._reelPhysicsActive,
             pendingAdoption: this._pendingAdoption
@@ -1030,7 +1032,7 @@ export class LassoSystem {
         if (this._onboardingActive) { this._inRangePromptId = null; return; }
 
         // A cast must be currently possible, else clear and bail.
-        const canCast = !this.active && this.cooldown <= 0 && this._ammo > 0;
+        const canCast = !this.active && this.cooldown <= 0 && this.getAmmo() > 0;
         if (!canCast || !selectedTarget || !playerPos) {
             this._inRangePromptId = null;
             return;
@@ -1143,11 +1145,12 @@ export class LassoSystem {
             return false;
         }
 
-        // UX-3 #7: Ammo check
-        if (this._ammo <= 0) {
+        // UX-3 #7: Ammo check — the mother's one count of nets (0 when the net system is not wired: flag off).
+        // One line at 0, never two (DECISIONS §33 row 3).
+        if (this.getAmmo() <= 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'no_ammo' });
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Web tether depleted. Deploy daughters [D]',
+                text: OUT_OF_MOTHER_NETS_LINE,
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',
@@ -1208,10 +1211,12 @@ export class LassoSystem {
                 // UX-3 #4: Mass-specific rejection with comms hint
                 if (mass > Constants.LASSO_MAX_CAPTURE_MASS) {
                     eventBus.emit(Events.LASSO_DENIED, { reason: 'too_heavy' });
-                    // Net ladder: route the player to the right tool by mass via
-                    // the shared classifier (single source of truth with the
-                    // Mother fire routing in InputManager) — a Daughter for
-                    // 10–500 kg, the Mother's Large Net for whales (>500 kg).
+                    // Net ladder: the shared classifier (single source of truth with the Mother fire
+                    // routing in InputManager). InputManager hands every piece over 10 kg to the mother's large
+                    // net before it ever calls fire() (fireLasso, and again after the windup), so this refusal is
+                    // only reached with no net system wired (CAPTURE_NET off) or a direct caller. It must not send
+                    // the player back to N: nothing here can fire the large net. DECISIONS §33: no 10-500 kg
+                    // 'daughter-sized' band any more.
                     const { message } = classifyNetTarget(mass);
                     eventBus.emit(Events.COMMS_MESSAGE, {
                         text: message,
@@ -1424,43 +1429,33 @@ export class LassoSystem {
             });
         }
 
-        // UX-3 #7: Decrement ammo + emit change event
-        this._ammo--;
-        eventBus.emit(Events.LASSO_AMMO_CHANGED, {
-            remaining: this._ammo,
-            max: Constants.LASSO_AMMO_MAX,
-        });
-
-        // UX-3 #7: Low ammo warning at 5 remaining
-        if (this._ammo === 5) {
-            eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Web nets running low. Daughters are reusable',
-                source: 'SYSTEM',
-                channel: 'CMD',
-                priority: 'warning',
-            });
-        }
+        // The shot has really launched (every refusal check is behind us): spend one mother net, hit or miss.
+        // CaptureNetSystem emits NET_INVENTORY_CHANGED{source:'mother'} and says "One mother net left." at 1.
+        const supply = this._motherNetSupply || this._captureNetSystem;
+        if (supply && typeof supply.spendMotherNet === 'function') supply.spendMotherNet();
 
         return true;
     }
 
     /**
-     * UX-3 #7: Refill web tether ammo to max (called by shop purchase).
-     */
-    refillAmmo() {
-        this._ammo = Constants.LASSO_AMMO_MAX;
-        eventBus.emit(Events.LASSO_AMMO_CHANGED, {
-            remaining: this._ammo,
-            max: Constants.LASSO_AMMO_MAX,
-        });
-    }
-
-    /**
-     * Get current ammo count (for HUD queries).
+     * The mother's net count (for the HUD and the cast gate): CaptureNetSystem's one count. With no net system wired
+     * (CAPTURE_NET flag off) there are no nets, so this is 0 — the lasso does not fire (DECISIONS §33 row 1).
      * @returns {number}
      */
     getAmmo() {
-        return this._ammo;
+        const cns = this._motherNetSupply || this._captureNetSystem;
+        return cns && typeof cns.getMotherNetCount === 'function' ? cns.getMotherNetCount() : 0;
+    }
+
+    /**
+     * Test seam: a separate source for the mother's net count (`getMotherNetCount()` / `spendMotherNet()`), used by the
+     * headless legacy-resolution unit tests that cast with NO capture net system wired (a wired one makes the catch
+     * adopt onto the nose collar instead of resolving instantly). Production never calls this: main.js wires the
+     * capture net system, which is the count's one owner.
+     * @param {{getMotherNetCount: Function, spendMotherNet: Function}|null} supply
+     */
+    setMotherNetSupply(supply) {
+        this._motherNetSupply = supply || null;
     }
 
     /**

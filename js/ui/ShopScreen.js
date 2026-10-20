@@ -12,11 +12,12 @@ import { scoringSystem, computeContributionPayout } from '../systems/ScoringSyst
 import { decorateGlossary } from '../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
+import { DAUGHTER_NET_EFFECT_TYPE } from '../systems/upgradeEffectRoutes.js';
 import { upgradePrereqsMet, upgradeCostNow, engineTankFull } from './shopGating.js';
 import { gasPriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
 
 /**
- * Upgrade definitions — 36 items across 9 categories, all wired to live systems
+ * Upgrade definitions — 38 items across 9 categories, all wired to live systems
  * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins
  * this header to them).
  * ST-6.6: Each upgrade carries a `trl` (NASA TRL 1-9) and optional `trlRationale`
@@ -136,12 +137,26 @@ export const UPGRADES = [
     trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
   // Net ladder Phase B: consumable Mother Large Net restock. Repeatable (no
   // maxLevel gate — see _purchaseUpgrade consumable branch). Each buy loads one
-  // net (250 cr) into the Mother's one launcher, up to 4. Whale-hunt magazine
-  // only; no in-mission resupply. Gated by CAPTURE_NET (filtered at render).
-  { id: 'mother_net_restock', cat: 'Daughters', name: 'Mother Large Net (restock)',
+  // net (250 cr) into the Mother's one launcher, up to 4 - her one count, for every
+  // piece she nets (DECISIONS §33). No in-mission resupply. Gated by CAPTURE_NET (filtered at render).
+  { id: 'mother_net_restock', cat: 'Daughters', name: 'Mother net',
     cost: Constants.CAPTURE_NET.LARGE.REPLACEMENT_COST,
-    desc: 'Load one Large Net into the Mother\'s launcher (whale hunts). Holds 4.',
+    desc: 'One net cartridge for the mother\'s launcher. Holds 4.',
     effect: 'motherNetRestock', value: 1, maxLevel: Infinity, consumable: true,
+    requiresFeature: 'CAPTURE_NET',
+    trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
+  // DECISIONS §33 rows 2 and 5: a daughter's nets refill ONLY by buying here, one at a time. Each buy loads one net
+  // into the first docked daughter of that size with room (ArmManager.addDaughterNet); refused when none has room.
+  { id: 'large_daughter_net', cat: 'Daughters', name: 'Large daughter net',
+    cost: Constants.CAPTURE_NET.MEDIUM.REPLACEMENT_COST,
+    desc: `Load one net into a docked large daughter. Holds ${Constants.CAPTURE_NET.MEDIUM.MAGAZINE_SIZE}.`,
+    effect: 'largeDaughterNet', value: 1, maxLevel: Infinity, consumable: true,
+    requiresFeature: 'CAPTURE_NET',
+    trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
+  { id: 'small_daughter_net', cat: 'Daughters', name: 'Small daughter net',
+    cost: Constants.CAPTURE_NET.SMALL.REPLACEMENT_COST,
+    desc: `Load one net into a docked small daughter. Holds ${Constants.CAPTURE_NET.SMALL.MAGAZINE_SIZE}.`,
+    effect: 'smallDaughterNet', value: 1, maxLevel: Infinity, consumable: true,
     requiresFeature: 'CAPTURE_NET',
     trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
   { id: 'hazmat_handler', cat: 'Daughters', name: 'Hazmat Handler', cost: 1200,
@@ -929,8 +944,10 @@ export class ShopScreen {
     const requiresMet = upgradePrereqsMet(upgrade, this.purchasedUpgrades, (f) => Constants.isFeatureEnabled(f));
     // Consumable restock with no remaining capacity (both Mother pods full) is
     // unavailable — don't let the player pay for a net that can't be loaded.
+    const daughterNetType = DAUGHTER_NET_EFFECT_TYPE[upgrade.effect];
     const consumableFull = (upgrade.effect === 'motherNetRestock'
       && !captureNetSystem.hasMotherPodSpace())
+      || (!!daughterNetType && !captureNetSystem.hasDaughterNetSpace(daughterNetType))
       || (upgrade.effect === 'engineGasResupply' && engineTankFull(this._resourceSystem));
     const available = !maxed && canAfford && requiresMet && !consumableFull;
     // S1 retention: pinnable = gated-open, not-maxed, non-consumable.
@@ -995,6 +1012,7 @@ export class ShopScreen {
           ${upgrade.requires && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${UPGRADES.find(u => u.id === upgrade.requires)?.name}</div>` : ''}
           ${upgrade.supersededBy && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Replaced by ${UPGRADES.find(u => u.id === upgrade.supersededBy)?.name}</div>` : ''}
           ${consumableFull && upgrade.effect === 'engineGasResupply' ? `<div style="font-size:0.65rem;color:#ff6644;">Engine tank full</div>` : ''}
+          ${consumableFull && daughterNetType ? `<div style="font-size:0.65rem;color:#ff6644;">No docked daughter has room</div>` : ''}
           ${upgrade.requiresAll && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${upgrade.requiresAll.map(id => UPGRADES.find(u => u.id === id)?.name || id).join(' + ')}</div>` : ''}
           ${!canAfford && !maxed ? `<div style="font-size:0.6rem;color:rgba(255,68,68,0.5);margin-top:2px;">Need ${(price - scoringSystem.credits).toLocaleString()} more cr</div>` : ''}
         </div>
@@ -1178,6 +1196,12 @@ export class ShopScreen {
       if (upgrade.requiresFeature && !Constants.isFeatureEnabled(upgrade.requiresFeature)) return;
       // Don't charge for a net that can't be loaded (both pods already full).
       if (upgrade.effect === 'motherNetRestock' && !captureNetSystem.hasMotherPodSpace()) {
+        audioSystem.playDeny();
+        return;
+      }
+      // Nor for a daughter net when no docked daughter of that size has room (DECISIONS §33).
+      const daughterType = DAUGHTER_NET_EFFECT_TYPE[upgrade.effect];
+      if (daughterType && !captureNetSystem.hasDaughterNetSpace(daughterType)) {
         audioSystem.playDeny();
         return;
       }

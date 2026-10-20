@@ -6,8 +6,9 @@
  *
  *   [LASSO 12/20]   [NETS 3+2+1=6/12]
  *
- *   • LASSO chip — lasso shots remaining / max, driven by
- *     [`Events.LASSO_AMMO_CHANGED`](js/core/Events.js:288).
+ *   • LASSO chip — the mother's nets remaining / max (ONE count, DECISIONS §33),
+ *     driven by [`Events.NET_INVENTORY_CHANGED`](js/core/Events.js:541)
+ *     `{ source:'mother', motherNets }`.
  *   • NETS chip — per-arm net total summed, driven by
  *     [`Events.NET_INVENTORY_CHANGED`](js/core/Events.js:541).  Hover
  *     tooltip shows the per-arm breakdown (browser `title` attribute).
@@ -255,7 +256,6 @@ export class NetInventoryPanel {
       const u = eb.on(evt, h);
       if (typeof u === 'function') this._unsubs.push(u);
     };
-    on(Events.LASSO_AMMO_CHANGED,    (d) => this._onLassoAmmo(d));
     on(Events.NET_INVENTORY_CHANGED, (d) => this._onNetInventory(d));
 
     // Delegation 4 (2026-05-31) — Browser-playtest: NetInventoryPanel is
@@ -270,7 +270,8 @@ export class NetInventoryPanel {
     // Lasso ammo — direct query.
     if (this._lasso && typeof this._lasso.getAmmo === 'function') {
       const cur = this._lasso.getAmmo() ?? 0;
-      const max = (Constants && Constants.LASSO_AMMO_MAX) || cur;
+      const max = (Constants && Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE
+        && Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE) || cur;
       this._lasso_state.remaining = cur;
       this._lasso_state.max = max;
     }
@@ -300,15 +301,14 @@ export class NetInventoryPanel {
 
   // ─── EVENT HANDLERS ────────────────────────────────────────────────────
 
-  _onLassoAmmo(d) {
-    if (!d || typeof d.remaining !== 'number') return;
-    this._lasso_state.remaining = d.remaining;
-    if (typeof d.max === 'number') this._lasso_state.max = d.max;
-    this._reclassify(/*emit=*/true);
-    this._render();
-  }
-
-  _onNetInventory(_d) {
+  _onNetInventory(d) {
+    // DECISIONS §33: the mother's one count rides on every mother event as `motherNets`.
+    if (d && d.source === 'mother' && Number.isFinite(d.motherNets)) {
+      this._lasso_state.remaining = d.motherNets;
+      const mag = Constants && Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE
+        && Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
+      if (mag) this._lasso_state.max = mag;
+    }
     // Event payload is "something changed somewhere"; re-poll authoritatively.
     if (this._armManager) {
       const arms = (this._armManager.arms || this._armManager.getArms?.() || []);
@@ -381,17 +381,10 @@ export class NetInventoryPanel {
       nets:  { total: this._net_state.total,           max: this._net_state.max  },
     });
 
-    // Fire the HOUSTON comms hint.
-    const bothZero = (this._lasso_state.remaining === 0 && this._net_state.total === 0);
-    const text = bothZero
-      ? 'Out of capture tools. Restock at the resupply stop.'
-      : 'Low on nets, Cowboy. Restock at the resupply stop.';
-    this._eventBus?.emit?.(Events.COMMS_MESSAGE, {
-      source: 'HOUSTON',
-      channel: 'HOUSTON',
-      priority: bothZero ? 'warning' : 'info',
-      text,
-    });
+    // No comms line from here (review R4, 2026-10-20). This panel is never shown, yet it kept posting "Low on nets,
+    // Cowboy..." for the daughters' nets (even at 0). The player's net lines are the one-line prompts of DECISIONS §33
+    // row 8: the mother's ("One mother net left.", "Out of mother nets. Press D to send a daughter.") and a daughter's
+    // ("Out of nets. Restock at the resupply stop."). INVENTORY_LOW above stays for any listener.
   }
 
   // ─── RENDER ────────────────────────────────────────────────────────────

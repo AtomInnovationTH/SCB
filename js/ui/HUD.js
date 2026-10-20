@@ -447,7 +447,7 @@ export class HUD {
     this.debrisWireframe = new DebrisWireframe(wireframeContainer);
     // Delegation 4 (2026-05-31) — lasso + net inventory chips, just below
     // the target list inside the right column. Subscribes to
-    // LASSO_AMMO_CHANGED and NET_INVENTORY_CHANGED; emits INVENTORY_LOW
+    // NET_INVENTORY_CHANGED (the mother's nets + the daughters'); emits INVENTORY_LOW
     // (with HOUSTON comms) when totals cross the thresholds defined in
     // [`Constants.INVENTORY`](js/core/Constants.js:1).  Dependencies are
     // injected later via setArmManager / setLassoSystem.

@@ -3351,7 +3351,8 @@ export const Constants = {
                                        // far past the 90 m LASSO_RANGE gate. test-NetReachTruth.js pins reach ≥ 1.1 × NET_LOCK_RANGE_M.
   LASSO_REEL_SPEED: 0.33,             // reel-in progress per real second (0→1; ~3 s total) — SLOWER than outbound to avoid tangles
   LASSO_MAX_CAPTURE_MASS: 10,          // kg
-  LASSO_AMMO_MAX: 50,                  // UX-3 #7 — web tether ammo count (50 shots per session/refill)
+  // LASSO_AMMO_MAX retired 2026-10-20 (DECISIONS §33): the mother has ONE count of nets,
+  // CAPTURE_NET.LARGE.MAGAZINE_SIZE (4), owned by CaptureNetSystem. The old 50 "small net shots" are gone.
   LASSO_FORWARD_ARC_DOT: 0.3,         // UX-3 #4 — min dot product for forward hemisphere (~72° cone)
   LASSO_CAST_WINDUP: 0.15,            // seconds — brief charging delay before lasso fires (cast feel)
   LASSO_COOLDOWN_CATCH: 2,            // seconds — cooldown after successful catch before next cast
@@ -3466,11 +3467,9 @@ export const Constants = {
   // is subordinate to mother + catch. (The old 8 m perimeter / 1.5 m weight
   // spheres and their BOLAS_* aliases were deleted 2026-10-17: nothing read them.)
   NET_WEB: {
-    MOTHER_DIAMETER:    7.0,    // m — Mother net mouth diameter. Restored to the
-                                // owner-approved spike value (was briefly shrunk to
-                                // 5 m, which read tiny/cold at the real M1 fire
-                                // framing — see plan §B). 7 m fills the frame like
-                                // the approved close-up without dwarfing the ship.
+    MOTHER_DIAMETER:    6.0,    // m — Mother net mouth diameter. 6 m since 2026-10-20 (DECISIONS §33
+                                // row 1: four nets must each fit in their own cartridge; was 7 m,
+                                // and the large net itself was 8 m). Matches CAPTURE_NET.LARGE.DIAMETER.
     WEB_COLOR:          0xffe9c8, // warm ivory Dyneema (V5 nudge from 0xeaf1ff —
                                 // the threads read warmer against black + the
                                 // Earth limb; still bright enough not to gray-out
@@ -3773,9 +3772,10 @@ export const Constants = {
     // still lands pin-exact (no snap). ONE-HOME LAW: byte-equal to
     // WRAP_SEAT_FRAC × the CN.LARGE bag cone height —
     //   (DIAMETER/2 × CONE_OPEN_RADIUS_FRAC) × 2 × CONE_LENGTH_FRAC ×
-    //   WRAP_SEAT_FRAC = 4.0 × 2 × 0.85 × 0.42 = 2.856 —
+    //   WRAP_SEAT_FRAC = 3.0 × 2 × 0.85 × 0.42 = 2.142 —
     // pinned by test so the derivation cannot drift from the drawn bag.
-    ADOPT_CATCH_SEAT_M:   2.856,
+    // (2.856 until the large net went 8 -> 6 m, DECISIONS §33 row 1, 2026-10-20: 4.0 -> 3.0 m radius.)
+    ADOPT_CATCH_SEAT_M:   2.142,
     // l8-reel-collar (DECISIONS §25, owner 2026-10-15: "debris should be reeled-in
     // firm against docking collar"): the reel goes ALL THE WAY to the collar —
     // no 1.0 m standoff, no parked seat. HOME = the catch centre on the collar
@@ -4131,7 +4131,7 @@ export const Constants = {
     //
     //   | Class  | D (m) | RIM_WT_COUNT | RIM_WT_MASS (kg) | SPIN_HZ | RPM | r (m) | ω (rad/s) | F/wt (N) |
     //   |--------|-------|--------------|------------------|---------|-----|-------|-----------|----------|
-    //   | LARGE  | 8.0   | 8            | 0.075            | 2       | 120 | 4.0   | 12.57     | 47.4     |
+    //   | LARGE  | 6.0   | 8            | 0.075            | 2       | 120 | 3.0   | 12.57     | 35.5     |
     //   | MEDIUM | 5.0   | 4            | 0.050            | 4       | 240 | 2.5   | 25.13     | 78.9     |
     //   | SMALL  | 1.5   | 4            | 0.015            | 6       | 360 | 0.75  | 37.70     | 16.0     |
     //
@@ -4160,9 +4160,9 @@ export const Constants = {
     LARGE: {
       CODE:             'M-NET',
       NAME:             'Large Net',
-      DIAMETER:         8.0,       // m deployed (§2.1)
-      MASS:             1.95,      // kg total net+hub (§2.3)
-      MESH_MASS:        1.200,     // kg mesh only (Dyneema Y0)
+      DIAMETER:         6.0,       // m deployed (§2.1; 8.0 until 2026-10-20, DECISIONS §33 row 1)
+      MASS:             1.425,     // kg total net+hub (§2.3): mesh + 8 rim weights + hub (was 1.95 at 8 m)
+      MESH_MASS:        0.675,     // kg mesh only (Dyneema Y0); mesh scales with area: 1.200 x (6/8)^2
       RIM_WEIGHT_COUNT: 8,         // (§2.1)
       RIM_WEIGHT_MASS:  0.075,     // kg each (§2.1)
       HUB_MASS:         0.150,     // kg (§2.3)
@@ -4217,7 +4217,10 @@ export const Constants = {
       // whale net carries far more rim inertia per kg of flexing mesh
       // (LARGE 8×0.075×4² = 9.6 kg·m² / 1.2 kg mesh = 8.0; MEDIUM 3.1;
       // SMALL 0.84) — halving its fractional bleed is conservative against
-      // that ≥ 2.6× scaling. Result: F₀ ≈ 47.37 N crosses the 10 N floor at
+      // that ≥ 2.6× scaling. [Numbers below are the 8 m net's; at the 6 m net of 2026-10-20 (DECISIONS §33)
+      // F₀ = 35.53 N, t* = 11.74 s ≈ 117 m, worst 100 m arrival 12.8 N: still outside both caps, margins
+      // 1.74 s (tether) / 0.74 s (MAX_FLIGHT) — pinned in test-CaptureNet-MouthCollapse.js.]
+      // Result: F₀ ≈ 47.37 N crosses the 10 N floor at
       // t* = (1 − √(10/47.37))/0.04 ≈ 13.51 s ≈ 135 m — OUTSIDE every
       // reachable contact (tether pay-out ends flight at 10 s / 100 m,
       // MAX_FLIGHT_TIME at 11 s) with ≥ 2.5 s margin against BOTH caps, so
@@ -6051,7 +6054,7 @@ export const Constants = {
   // safe to ship — purely cosmetic UX tuning.
   // ============================================================================
   INVENTORY: {
-    LASSO_LOW_THRESHOLD:     5,       // chip turns yellow at this remaining count
+    LASSO_LOW_THRESHOLD:     1,       // chip turns yellow at this remaining count (the mother's nets: 4 at start; 5 until 2026-10-20, when the 50-shot lasso count went)
     LASSO_CRITICAL_THRESHOLD: 0,      // chip turns red at this remaining count
     NETS_LOW_THRESHOLD:      3,       // chip turns yellow at this net total
     NETS_CRITICAL_THRESHOLD: 0,       // chip turns red at this net total
@@ -6159,9 +6162,10 @@ export const Constants = {
     {
       state: 'STATION_KEEP', idleS: 6, when: 'outOfNets',
       hintId: 'sk_out_of_nets', title: 'Out of nets',
-      text: 'No nets left in the magazine. Press R to reel her in, then restock at the resupply stop.',
+      text: 'Out of nets. Restock at the resupply stop.',   // = netRouting.DAUGHTER_OUT_OF_NETS_LINE (DECISIONS §33 row 8)
       icon: 'NETS',
-      chip: 'Reel her in', glyph: 'R', keys: ['KeyR'],
+      // Review R3: no key to press (nets are bought at the stop, nothing reloads on docking), so a glyph-only '!' cap.
+      chip: 'Restock at the stop', glyph: '!', keys: [],
     },
   ],
   // ARM_PILOT idle hint is mode-based (not an FSM state), handled directly by the

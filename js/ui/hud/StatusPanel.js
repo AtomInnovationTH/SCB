@@ -90,6 +90,19 @@ export function memoTokens(mode, phase) {
 // learns one colour for "nets". Low/empty still warns amber/red in both.
 const NET_COLOR = 'var(--hud-text, #f0ecd8)'; // ivory white
 
+/**
+ * DECISIONS §33 row 10: the mother's ONE count of nets reads red at 0, amber at the low mark (1 net left,
+ * `Constants.INVENTORY.LASSO_LOW_THRESHOLD`), and the ivory net colour otherwise.
+ * @param {number} n nets left
+ * @returns {string} a CSS colour
+ */
+export function motherNetsColor(n) {
+  const low = (Constants.INVENTORY && Constants.INVENTORY.LASSO_LOW_THRESHOLD) || 1;
+  if (n <= 0) return 'var(--hud-warning, #ff4444)';
+  if (n <= low) return 'var(--hud-caution, #ffaa00)';
+  return NET_COLOR;
+}
+
 // §11.3 reaction-wheel gauge (DAUGHTER_NET_RECOIL). Fixed 4-entry pip lookup —
 // fill is threshold-relative, so the gauge stays honest if the tuning moves.
 // Below the floor the wheel is "quiet" and the readout is hidden (no HUD noise;
@@ -328,14 +341,10 @@ export class StatusPanel {
       this._lassoDeniedFlash = Date.now();
       this._updateNetDigest();
     });
-    // UX-3 #7: Lasso ammo tracking
-    this._lassoAmmo = Constants.LASSO_AMMO_MAX;
-    this._lassoAmmoMax = Constants.LASSO_AMMO_MAX;
-    eventBus.on(Events.LASSO_AMMO_CHANGED, (data) => {
-      this._lassoAmmo = data.remaining;
-      this._lassoAmmoMax = data.max;
-      this._updateNetDigest();
-    });
+    // DECISIONS §33 (2026-10-20): ONE count of mother nets, owned by CaptureNetSystem. It arrives as
+    // NET_INVENTORY_CHANGED { source:'mother', motherNets } (handled just below); the old 50-shot lasso count is gone.
+    this._lassoAmmoMax = Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
+    this._lassoAmmo = this._lassoAmmoMax;
 
     // Net ladder Phase B: Mother Large Net inventory segment. The digest
     // NET bar counts LASSO ammo; this separate M-NET segment tracks the whale-
@@ -347,6 +356,10 @@ export class StatusPanel {
       if (!data || data.source !== 'mother') return;
       if (Array.isArray(data.podInventory)) this._motherPods = data.podInventory.slice();
       if (Array.isArray(data.podMax)) this._motherPodsMax = data.podMax.slice();
+      if (Number.isFinite(data.motherNets)) {
+        this._lassoAmmo = data.motherNets;
+        this._updateNetDigest();
+      }
       this._updateMotherPodDigest();
     });
 
@@ -411,7 +424,7 @@ export class StatusPanel {
           <span class="md-core">
           <span class="md-label">NET</span>
           <span class="md-track"><span class="md-fill" id="mother-digest-net-fill"></span></span>
-          <span class="md-count" id="mother-digest-net-count" title="Small net shots left">${Constants.LASSO_AMMO_MAX}/${Constants.LASSO_AMMO_MAX}</span>
+          <span class="md-count" id="mother-digest-net-count" title="Mother nets left">${Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE}/${Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE}</span>
           <span id="mother-digest-net-reload" style="display:none;">↻</span>
           </span>
           <span class="md-reach-group" id="mother-digest-net-reach-group"><span class="md-sep">·</span><span class="md-reach" id="mother-digest-net-reach" title="Small net reach">${StatusPanel.reachText(Constants.LASSO_RANGE)}</span></span>
@@ -420,7 +433,7 @@ export class StatusPanel {
         <span id="mother-digest-mnet" class="md-seg" style="display:none;align-items:center;gap:4px;color:${NET_COLOR};" title="Mother Large Net (whale hunts)">
           <span class="md-core">
           <span class="md-label">LARGE</span>
-          <span class="md-count" id="mother-digest-mnet-count" title="Large net nets left">0/0</span>
+          <span class="md-count" id="mother-digest-mnet-count" title="Large net launcher"></span>
           </span>
           <span class="md-reach-group" id="mother-digest-mnet-reach-group"><span class="md-sep">·</span><span class="md-reach" id="mother-digest-mnet-reach" title="Large net reach">${StatusPanel.reachText(netMaxReachM(Constants.CAPTURE_NET.LARGE))}</span></span>
         </span>
@@ -925,9 +938,10 @@ export class StatusPanel {
    * Reframe: the net is a depleting-magazine gauge — a thin bar (fraction
    * remaining) with the charges count as the hero number, mirroring the score
    * mini-track. The ~2s reload gap pulses the fill + shows a `↻` glyph (the
-   * reticle owns the fire moment, so no cooldown ring here). Color tiers: ≤5
-   * red, ≤10 amber, else ivory. Empty/`0` red at depletion; brief red flash on a
-   * denied fire. Updates stable child nodes (no per-tick innerHTML reparse).
+   * reticle owns the fire moment, so no cooldown ring here). This is the ONE
+   * count of the mother's nets (DECISIONS §33 row 10): `n/4`, red at 0, amber at
+   * 1, ivory above; brief red flash on a denied fire; the line never dims.
+   * Updates stable child nodes (no per-tick innerHTML reparse).
    * @private
    */
   _updateNetDigest() {
@@ -937,10 +951,10 @@ export class StatusPanel {
     const reloadGlyph = document.getElementById('mother-digest-net-reload');
     if (!seg || !fill || !count) return;
 
-    const ammo = this._lassoAmmo ?? Constants.LASSO_AMMO_MAX;
-    const ammoMax = this._lassoAmmoMax ?? Constants.LASSO_AMMO_MAX;
+    const ammo = this._lassoAmmo ?? Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
+    const ammoMax = this._lassoAmmoMax ?? Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
     const pct = ammoMax > 0 ? Math.max(0, Math.min(100, (ammo / ammoMax) * 100)) : 0;
-    let color = ammo <= 5 ? 'var(--hud-warning, #ff4444)' : ammo <= 10 ? 'var(--hud-caution, #ffaa00)' : NET_COLOR;
+    let color = motherNetsColor(ammo);
 
     // Reload state — resolve the ~2s cooldown window (auto-clear when elapsed).
     let remaining = 0;
@@ -963,20 +977,19 @@ export class StatusPanel {
 
     if (reloadGlyph) reloadGlyph.style.display = reloading ? '' : 'none';
 
-    // Nominal = plenty of charges, not reloading, not just denied. Drives the
-    // dark-cockpit dimming of the whole digest line.
-    this._netNominal = ammo > 10 && !reloading && !denied;
+    // DECISIONS §33 row 10: no nominal dimming. The mother carries four nets for the whole run, so the line is
+    // never the "plenty of charges" case the dark-cockpit dimming was made for (it was > 10 of 50): always full strength.
+    this._netNominal = false;
     this._refreshDigestDim();
     this._fitDigest();
   }
 
   /**
-   * Update the MOTHER digest's Large Net segment (`mother-digest-mnet`).
-   * Net ladder Phase B: shows `M-NET n/max` where n = the launcher's nets (the
-   * payload array summed) and max = LARGE.MAGAZINE_SIZE (4, one launcher;
-   * it was 2 pods x 2 until 2026-10-13). Hidden until a `source:'mother'`
-   * NET_INVENTORY_CHANGED arrives (CAPTURE_NET off ⇒ never shown). Amber ≤50%,
-   * red at 0 — the whale-hunt magazine is scarce by design.
+   * Update the MOTHER digest's Large Net segment (`mother-digest-mnet`): the large net's reach and the launcher's
+   * STATE (reload countdown, catch held / cooking / berthed, radiator tips). DECISIONS §33 row 10: it carries NO count
+   * of its own any more - the mother has one count of nets and it is the NET segment's `n/4`, so the screen never
+   * shows two. Hidden until a `source:'mother'` NET_INVENTORY_CHANGED arrives (CAPTURE_NET off => never shown). The
+   * segment takes the same colour as the count (red at 0, amber at 1).
    * @private
    */
   _updateMotherPodDigest() {
@@ -999,12 +1012,11 @@ export class StatusPanel {
       ? this._motherPodsMax.reduce((a, b) => a + (b || 0), 0)
       : perLauncher * this._motherPods.length;
 
-    const color = nets <= 0 ? 'var(--hud-warning, #ff4444)'
-      : (maxNets > 0 && nets <= maxNets * 0.5) ? 'var(--hud-caution, #ffaa00)' : NET_COLOR;
+    const color = motherNetsColor(nets);
 
     seg.style.display = 'inline-flex';
     if (sep) sep.style.display = '';
-    count.textContent = `${nets}/${maxNets}`;
+    count.textContent = '';   // no second count on screen (DECISIONS §33 row 10): only state words below
     count.style.color = color;
     seg.style.color = color;
 
@@ -1018,7 +1030,7 @@ export class StatusPanel {
       ? captureNetSystem.getCooldown('pod', 0)
       : 0;
     if (cd > 0) {
-      count.textContent = `${nets}/${maxNets} ·${Math.ceil(cd)}s`;
+      count.textContent = `${Math.ceil(cd)}s`;
       count.style.color = 'var(--hud-caution, #ffaa00)';
     }
 
@@ -1044,14 +1056,14 @@ export class StatusPanel {
     const tagOn = !this._simple;
     if (docked && collarCook && !cookOn) {
       if (tagOn) {
-        count.textContent = `${nets}/${maxNets} HELD`;
+        count.textContent = 'HELD';
         count.style.color = 'var(--hud-info, #66ddff)';
       }
       seg.title = 'Catch held at the collar until the station takes it — [K] jettison';
     } else if (docked && collarCook) {
       const pct = Math.round(Math.min(1, Math.max(0, collarCook.frac || 0)) * 100);
       if (tagOn) {
-        count.textContent = `${nets}/${maxNets} COOK ${pct}%`;
+        count.textContent = `COOK ${pct}%`;
         count.style.color = 'var(--hud-caution, #ff9800)';   // the forge panel's MELT — furnace language
       }
       seg.title = (collarCook.sunScale ?? 1.0) < 1
@@ -1059,7 +1071,7 @@ export class StatusPanel {
         : `Solar furnace cooking the catch — ${pct}% · [K] jettison`;
     } else if (docked) {
       if (tagOn) {
-        count.textContent = `${nets}/${maxNets} BERTHED`;
+        count.textContent = 'BERTHED';
         count.style.color = 'var(--hud-info, #66ddff)';
       }
       seg.title = 'Catch mated at the collar — [K] jettison';
@@ -1073,9 +1085,9 @@ export class StatusPanel {
       && this._armManager.playerSatellite.tipCargo;
     const tipDigest = tipCargo && typeof tipCargo.digest === 'function' ? tipCargo.digest() : null;
     if (tipDigest && tipDigest.held > 0) {
-      let txt = `${count.textContent} · Tips ${tipDigest.held}/${tipDigest.tips}`;
+      let txt = `Tips ${tipDigest.held}/${tipDigest.tips}`;
       if (tipDigest.cookingPct !== null && cookOn) txt += ` · cooking ${tipDigest.cookingPct}%`;
-      count.textContent = txt;
+      count.textContent = count.textContent ? `${count.textContent} · ${txt}` : txt;
     }
     this._digestFull = { ...(this._digestFull || {}), mnet: count.textContent };
     this._fitDigest();

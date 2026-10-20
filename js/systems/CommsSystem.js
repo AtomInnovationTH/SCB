@@ -776,30 +776,16 @@ export class CommsSystem {
       this.addMessage('INFO', daughterDisplayName(data?.armId) || 'SYSTEM', 'Spring re-charged. Ready for next deploy.', { channel: 'CMD' });
     });
 
-    // §4 item 4: STATION_KEEP_ENTERED → ON STATION comms with key hints.
-    // New-player guidance: speak plainly about what the daughter is doing and
-    // exactly which keys move things forward. Capture is fired with [N] (the
-    // same key onboarding teaches for the net); the digits 1-4 take manual pilot control.
+    // §4 item 4: STATION_KEEP_ENTERED → ONE line, one action (DECISIONS §33 row 8, owner 2026-10-20). The daughter
+    // holds station; N works her recommended tool (InputManager KeyN reaches a holding daughter without pilot mode).
+    // The pad is named when the recommended tool is the pad; every other tool reads as the net (the rule's two
+    // texts). Plain words, no symbols (Ruling 0); the number keys that pilot her are in the help page, not here.
     eventBus.on(Events.STATION_KEEP_ENTERED, (data) => {
-      const standoff = data?.standoffR != null ? Math.round(data.standoffR) : '?';
       const armId = daughterDisplayName(data?.armId) || 'SYSTEM';
-      // While piloting the arm, teach the station-keep orbit controls so the
-      // player can inspect every side of the debris and line up a capture.
-      // When the arm arrived under autopilot, point them at taking manual
-      // control (its number key 1-4) or capturing (N) instead.
-      const hint = data?.isPiloted
-        ? 'Arrow keys orbit the debris · +/- adjust distance · [N] capture.'
-        : '[N] capture · [1-4] pilot for a closer look.';
-      // comms-after-tutorial D5b: plain words - no "ON STATION", no debris id.
-      this.addMessage('INFO', armId,
-        `In position: holding ${standoff} m from the debris. ${hint}`,
-        { channel: 'CMD' });
-      // Plain-language follow-up for new players: name the daughter and spell
-      // out the next move in a friendly command voice.
-      const daughterName = daughterDisplayName(data?.armId) || 'your daughter';
-      this.addMessage('INFO', 'HOUSTON',
-        `${daughterName} is holding station on the debris. Press N to capture, or its number key (1-4) to pilot it in closer.`,
-        { channel: 'CMD' });
+      const text = data?.tool === 'PAD'
+        ? 'Daughter in position. Press N to stick the pad on.'
+        : 'Daughter in position. Press N to net it.';
+      this.addMessage('INFO', armId, text, { channel: 'CMD' });
     });
   }
 

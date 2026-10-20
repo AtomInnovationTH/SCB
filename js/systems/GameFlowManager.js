@@ -35,7 +35,7 @@ import { ambientLaunchScheduler } from './AmbientLaunchScheduler.js';
 import { VIEW_INFO_LEVELS } from '../ui/HUD.js';
 import {
   resolveEffectRoute,
-  RESOURCE_SYSTEM, PLAYER, ARM_MANAGER, SENSOR_EVENT,
+  RESOURCE_SYSTEM, PLAYER, ARM_MANAGER, SENSOR_EVENT, DAUGHTER_NET, DAUGHTER_NET_EFFECT_TYPE,
   KESSLER_SYSTEM, CAPTURE_NET, RUNTIME, ARM_MANAGER_EVENT, CARGO_SYSTEM,
 } from './upgradeEffectRoutes.js';
 
@@ -1969,6 +1969,10 @@ export class GameFlowManager {
           break;
         case CAPTURE_NET:
           captureNetSystem.loadOneMotherNet();
+          break;
+        case DAUGHTER_NET:
+          // One net into the first docked daughter of that type with room (a consumable: no ownership record).
+          if (armManager) armManager.addDaughterNet(DAUGHTER_NET_EFFECT_TYPE[data.effect]);
           break;
         case RUNTIME:
           // No apply-time action — checked at runtime via _hasUpgrade.

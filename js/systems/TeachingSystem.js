@@ -188,7 +188,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_deltav_waste',
     title: 'Save the Burn',
-    body: 'You\'re burning the Mother toward a daughter-sized catch. A Daughter reaches it for near-zero Δv — deploy one [D] and park the Mother. Save the burn for whales.',
+    body: 'The mother is burning fuel to reach a mid-size piece. A daughter reaches it for almost no fuel: press D to send one. Smaller or farther pieces are the daughters\' job, so the mother keeps her fuel.',
     duration: 9000,
     icon: 'FUEL',
   },
@@ -366,7 +366,8 @@ export class TeachingSystem {
         this._trigger('first_burn');
       }
       // Net ladder Phase B: Δv-efficiency nudge — burning the Mother toward a
-      // daughter-sized catch (10–500 kg) that a Daughter could take for ~0 Δv.
+      // mid-size piece (10–500 kg) that a Daughter could take for ~0 Δv (DECISIONS §31/§33: daughters take smaller or
+      // farther pieces so the mother keeps her fuel).
       if (data && data.level > 0
           && Constants.isFeatureEnabled && Constants.isFeatureEnabled('CAPTURE_NET')) {
         const m = this._selectedTargetMass;

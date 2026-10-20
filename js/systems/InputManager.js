@@ -15,7 +15,7 @@ import { settingsManager } from './SettingsManager.js';
 import timerManager from './TimerManager.js';
 import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
-import { classifyNetTarget } from './netRouting.js';
+import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE } from './netRouting.js';
 import { computeLeadAim, netMaxReachM } from '../entities/CaptureNet.js';
 import { openingDance } from './OpeningDance.js';
 
@@ -1232,6 +1232,18 @@ export class InputManager {
           d.audioSystem?.playClick();
           break;
         }
+        // (0) A daughter already HOLDING the active target (station-keeping on it): N works her tool with no pilot
+        // mode — the daughter-in-position line promises "Press N" (DECISIONS §33 row 6, 2026-10-20). Pilot mode
+        // keeps working as before (the branch below); this one never fires the mother's nets.
+        // (While piloting a daughter, the pilot-mode branch below owns N, exactly as before.)
+        if (!(this.armPilotMode && d.cameraSystem)) {
+          const holder = this.findHoldingDaughter();
+          if (holder) {
+            e.preventDefault();
+            this.captureWithDaughter(holder);
+            break;
+          }
+        }
         if (this.armPilotMode && d.cameraSystem) {
           // (1) DAUGHTER net/capture — the single capture verb (hotkey cleanup
           // 2026-06-13: F's old SK dispatch + TRANSIT net roles folded into N).
@@ -2360,27 +2372,22 @@ export class InputManager {
     const d = this._deps; if (!d || !d.lassoSystem) return;
     if (this._lassoWindingUp || d.lassoSystem.active) return;
 
-    // ── Net-ladder strict routing (net ladder Phase B) ──────────────────────
-    // The Mother's primary fire verb (N) auto-routes by the SELECTED target's
-    // mass so a beginner cannot waste a scarce, delta-v-costly Large Net on
-    // daughter-sized prey (and cannot try to lasso a whale). Bands + copy come
-    // from the shared classifyNetTarget() (single source of truth with
-    // LassoSystem's own rejection path). With no Tab-selected target we fall
-    // through to the lasso auto-aim path unchanged (welcome-field / onboarding
-    // relies on this).
+    // ── Mother nets: one count, two launchers (DECISIONS §33 row 1, 2026-10-20) ─────────────────────────────
+    // The mother has 4 nets, owned by CaptureNetSystem. N fires one at any piece in range while nets remain:
+    //   · a piece ≤ LASSO_MAX_CAPTURE_MASS (10 kg), or no Tab-selected target (the welcome field's auto-aim and
+    //     the onboarding rely on this) → the small net (LassoSystem) below;
+    //   · a heavier piece (classifyNetTarget band 'mother' or 'whale') → the large net (fireMotherNet).
+    // Both paths spend from the same count at the moment the shot really launches, so a refused press costs
+    // nothing. The old "daughter-sized, press D" refusal for 10–500 kg is gone. At 0 nets: one line, nothing starts
+    // (no aim slew toward a shot that cannot be fired).
     const activeTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
-    if (activeTarget && d.captureNetSystem && Constants.isFeatureEnabled('CAPTURE_NET')) {
-      const { band, message } = classifyNetTarget(activeTarget.mass || 0);
-      if (band === 'whale') {
-        // Whale — only the Mother's Large Net holds it. Fire a pod directly.
-        this.fireMotherNet(activeTarget);
-        return;
-      }
-      if (band === 'daughter') {
-        // Daughter-sized: refuse the Mother fire, point the player at a Daughter.
-        eventBus.emit(Events.LASSO_DENIED, { reason: 'daughter_sized' });
+    const cns = d.captureNetSystem;
+    if (cns && Constants.isFeatureEnabled('CAPTURE_NET')) {
+      // (typeof guard: the net system always has the getter; the idiom keeps headless mocks without one working)
+      if (typeof cns.getMotherNetCount === 'function' && cns.getMotherNetCount() <= 0) {
+        eventBus.emit(Events.LASSO_DENIED, { reason: 'no_ammo' });
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: message,
+          text: OUT_OF_MOTHER_NETS_LINE,
           source: 'SYSTEM',
           channel: 'CMD',
           priority: 'warning',
@@ -2389,7 +2396,25 @@ export class InputManager {
         d.audioSystem?.playDeny?.() ?? d.audioSystem?.playClick?.();
         return;
       }
-      // else band === 'lasso' (≤ 10 kg) → fall through to the lasso path below.
+      // N on a piece beyond the reach of the net that would fire, but a docked daughter can go that far: say so
+      // once and start nothing (DECISIONS §33 row 8). Not while the mission-1 tutorial runs; beyond every reach the
+      // path's own refusal speaks, as before.
+      if (activeTarget && this._beyondNetReachButDaughterCan(activeTarget)) {
+        eventBus.emit(Events.LASSO_DENIED, { reason: 'out_of_net_range' });
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: OUT_OF_NET_RANGE_LINE,
+          source: 'SYSTEM',
+          channel: 'CMD',
+          priority: 'warning',
+          _lassoFeedback: true,
+        });
+        d.audioSystem?.playDeny?.() ?? d.audioSystem?.playClick?.();
+        return;
+      }
+      if (activeTarget && classifyNetTarget(activeTarget.mass || 0).band !== 'lasso') {
+        this.fireMotherNet(activeTarget);
+        return;
+      }
     }
 
     // ── Aim-before-launch for the lasso cast ────────────────────────────────
@@ -2488,6 +2513,15 @@ export class InputManager {
       }
       if (fwdDir.lengthSq() > 0) fwdDir.normalize();
       const target = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+      // Review R2: the target is read again here, after the windup. If it is now a piece the small net cannot hold
+      // (the player Tab-selected a heavier one in the meantime), hand it to the mother-net path exactly as fireLasso
+      // routes it, instead of letting the lasso refuse it. Nothing was spent yet; the attitude hold is released first.
+      if (target && d.captureNetSystem && Constants.isFeatureEnabled('CAPTURE_NET')
+          && classifyNetTarget(target.mass || 0).band !== 'lasso') {
+        d.autopilotSystem?.releaseAttitudeHold?.();
+        this.fireMotherNet(target);
+        return;
+      }
       const cast = d.lassoSystem.fire(d.player.getPosition(), d.debrisField, fwdDir, target);
       // If the cast was refused (out of arc, cargo full, no ammo, cooldown…),
       // no reel-in end event will fire — release the attitude hold now so the
@@ -2500,10 +2534,10 @@ export class InputManager {
   }
 
   /**
-   * Fire the Mother's Large Net launcher at a whale-class target (net ladder
-   * Phase B). One launcher, on the axis (owner 2026-10-13), so podIndex is
+   * Fire the Mother's Large Net launcher at a piece heavier than the small net
+   * holds (> LASSO_MAX_CAPTURE_MASS, any mass up to the net's rating; DECISIONS §33). One launcher, on the axis (owner 2026-10-13), so podIndex is
    * always 0; fireMotherNet handles empty/cooldown comms.
-   * @param {object} target — the selected debris (mass > 500 kg)
+   * @param {object} target — the selected debris (mass > 10 kg)
    */
   fireMotherNet(target) {
     const d = this._deps; if (!d || !d.captureNetSystem || !d.player) return;
@@ -2815,15 +2849,7 @@ export class InputManager {
     if (!arm) return false;
 
     if (arm.state === Constants.ARM_STATES.STATION_KEEP) {
-      // Multi-tool dispatch (NET → net capture, MAGNET/GRIPPER/PAD → respective
-      // grapple) when DAUGHTER_MULTITOOL is on; else plain net.
-      if (Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')
-          && typeof arm.dispatchSelectedTool === 'function') {
-        arm.dispatchSelectedTool();
-      } else {
-        arm.captureFromStationKeep();
-      }
-      d.audioSystem?.playClick();
+      this.captureWithDaughter(arm);
       return true;
     }
 
@@ -2847,6 +2873,76 @@ export class InputManager {
 
     d.audioSystem?.playClick();
     return false;
+  }
+
+  /**
+   * Is the piece beyond the reach of the net that N would fire at it, yet inside the reach of a docked daughter that
+   * can hold its mass? (DECISIONS §33 row 8: then the one line points at D.)
+   *   · the net's reach: the lasso's LASSO_RANGE for a piece ≤ 10 kg, the large net's netMaxReachM above that;
+   *   · a daughter's reach: her tether x ARM_DEPLOY_RANGE_FRACTION (the ArmManager deploy-range rule);
+   *   · "can hold": spinner <= SPINNER_MAX_CAPTURE_MASS, weaver <= WEAVER_MAX_CAPTURE_MASS.
+   * False while the mission-1 tutorial is running (its range beat teaches the autopilot) and when the distance is unknown.
+   * @param {object} target — the active target
+   * @returns {boolean}
+   * @private
+   */
+  _beyondNetReachButDaughterCan(target) {
+    const d = this._deps || {};
+    const dir = d.onboardingDirector;
+    if (dir && typeof dir.isMastered === 'function' && !dir.isMastered()) return false;   // tutorial still running
+    const mass = target.mass || 0;
+    const reachM = classifyNetTarget(mass).band === 'lasso'
+      ? Constants.LASSO_RANGE
+      : netMaxReachM(Constants.CAPTURE_NET.LARGE);
+    const distM = this._activeTargetDistanceM(target);
+    if (distM == null || !(reachM > 0) || distM <= reachM) return false;
+    const arms = d.armManager && d.armManager.arms;
+    if (!Array.isArray(arms)) return false;
+    for (let i = 0; i < arms.length; i++) {
+      const a = arms[i];
+      if (!a || a.state !== Constants.ARM_STATES.DOCKED || !a.config) continue;
+      const cap = a.config.type === 'weaver' ? Constants.WEAVER_MAX_CAPTURE_MASS : Constants.SPINNER_MAX_CAPTURE_MASS;
+      if (mass > cap) continue;
+      if (distM <= a.config.tetherMax * Constants.ARM_DEPLOY_RANGE_FRACTION) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The daughter, if any, that is HOLDING the active target — N works her tool without pilot mode (DECISIONS §33 row 6).
+   * Order: the selected daughter (`armManager.selectedArmIndex`) if she is in STATION_KEEP on the active target, else
+   * the first of `armManager.arms` in STATION_KEEP whose `_stationKeepTarget || target` is the active target.
+   * @returns {object|null} the ArmUnit, or null (no target, no holder, or no arm manager)
+   */
+  findHoldingDaughter() {
+    const d = this._deps;
+    const am = d && d.armManager;
+    const target = d && d.targetSelector && typeof d.targetSelector.getActiveTarget === 'function'
+      ? d.targetSelector.getActiveTarget() : null;
+    if (!am || !Array.isArray(am.arms) || !target) return null;
+    const SK = Constants.ARM_STATES.STATION_KEEP;
+    const holds = (a) => !!a && a.state === SK && (a._stationKeepTarget || a.target) === target;
+    const sel = (am.selectedArmIndex >= 0 && am.selectedArmIndex < am.arms.length) ? am.arms[am.selectedArmIndex] : null;
+    if (holds(sel)) return sel;
+    for (let i = 0; i < am.arms.length; i++) if (holds(am.arms[i])) return am.arms[i];
+    return null;
+  }
+
+  /**
+   * Work a station-keeping daughter's selected tool: multi-tool dispatch (NET → net capture, MAGNET/GRIPPER/PAD →
+   * respective grapple) when DAUGHTER_MULTITOOL is on, else the plain net. The one dispatch shared by the pilot-mode
+   * branch (captureWithPilotedArm) and the no-pilot-mode KeyN branch above.
+   * @param {object} arm — an ArmUnit in STATION_KEEP
+   */
+  captureWithDaughter(arm) {
+    const d = this._deps;
+    if (Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')
+        && typeof arm.dispatchSelectedTool === 'function') {
+      arm.dispatchSelectedTool();
+    } else {
+      arm.captureFromStationKeep();
+    }
+    d?.audioSystem?.playClick();
   }
 
   // ==========================================================================

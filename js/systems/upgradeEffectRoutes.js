@@ -24,6 +24,7 @@ export const ARM_MANAGER = 'armManager';           // armManager.applyUpgrade(da
 export const SENSOR_EVENT = 'sensorEvent';         // emit SENSOR_UPGRADE (SensorSystem self-manages)
 export const KESSLER_SYSTEM = 'kesslerSystem';     // kesslerSystem.applyUpgrade(data)
 export const CAPTURE_NET = 'captureNet';           // captureNetSystem.loadOneMotherNet()
+export const DAUGHTER_NET = 'daughterNet';         // armManager.addDaughterNet(type): one net into a docked daughter (DECISIONS §33 row 2)
 export const RUNTIME = 'runtime';                  // no apply-time action; checked at runtime via _hasUpgrade
 export const ARM_MANAGER_EVENT = 'armManagerEvent';// handled by ArmManager's own UPGRADE_PURCHASED listener
 export const CARGO_SYSTEM = 'cargoSystem';         // cargoSystem.applyUpgrade(data) — E2 Cargo Bay chain
@@ -31,8 +32,18 @@ export const CARGO_SYSTEM = 'cargoSystem';         // cargoSystem.applyUpgrade(d
 /** The complete set of valid route targets (for test validation). */
 export const ROUTE_TARGETS = new Set([
   RESOURCE_SYSTEM, PLAYER, ARM_MANAGER, SENSOR_EVENT,
-  KESSLER_SYSTEM, CAPTURE_NET, RUNTIME, ARM_MANAGER_EVENT, CARGO_SYSTEM,
+  KESSLER_SYSTEM, CAPTURE_NET, DAUGHTER_NET, RUNTIME, ARM_MANAGER_EVENT, CARGO_SYSTEM,
 ]);
+
+/**
+ * The consumable daughter-net restock items (DECISIONS §33 rows 2 and 5): shop effect -> the daughter type whose
+ * magazine takes the net ('weaver' = the large daughter, 'spinner' = the small). The ONE table the shop's full check,
+ * the purchase guard and the apply route all read.
+ */
+export const DAUGHTER_NET_EFFECT_TYPE = Object.freeze({
+  largeDaughterNet: 'weaver',
+  smallDaughterNet: 'spinner',
+});
 
 /**
  * effect string → ordered list of subsystems that consume it.
@@ -102,6 +113,9 @@ export const EFFECT_ROUTES = {
 
   // ── Consumable Mother Large Net restock ──
   motherNetRestock: [CAPTURE_NET],
+  // ── Consumable daughter-net restock (one net into the first docked daughter of that type with room) ──
+  largeDaughterNet: [DAUGHTER_NET],
+  smallDaughterNet: [DAUGHTER_NET],
 
   // ── Cargo hold capacity → CargoSystem (E2 elevator-throughput fix) ──
   cargoCapacity: [CARGO_SYSTEM],
