@@ -30,6 +30,7 @@ import { PANE_CORNER_PX, HUD_COLUMN_WIDTH_PX, RIGHT_COLUMN_WIDTH_PX, RAIL_GEOMET
  import { DaughterWireframe } from './DaughterWireframe.js';
 import { StrutLabels }       from './hud/StrutLabels.js';
 import { updateDriftWarning, updateThrusterBlocks } from '../systems/CoMCalculator.js';
+import { FLOOR_WORDS } from '../systems/FloorWordsStore.js';   // u7 D6: the two orbit-word lines show in sentence case
 
 /** Camera view → HUD info-level mapping */
 const VIEW_INFO_LEVELS = {
@@ -193,6 +194,17 @@ export function armPilotStripBottomPx(ladderOn) {
   return ladderOn ? footerBand({ hintBandPx: _hintBandPx() }).top + RAIL_GEOMETRY.FOOTER_GAP_PX : 12;
 }
 
+/**
+ * u7 D6: the toast zone is upper-case by default; the two orbit-word explainers (FLOOR_WORDS) are plain
+ * sentences and show as written. Decided from the text itself because every toast reaches the zone through
+ * the arbiter, which forwards only text / duration / kind.
+ * @param {string} text
+ * @returns {'none'|'uppercase'}
+ */
+function _toastCase(text) {
+  return (text === FLOOR_WORDS[4] || text === FLOOR_WORDS[5]) ? 'none' : 'uppercase';
+}
+
 export class HUD {
   constructor() {
     this.container = document.getElementById('hud-overlay');
@@ -254,7 +266,7 @@ export class HUD {
     /** @type {Map<Element, {timer:*, onEnd:Function, done:boolean}>} Task 9 density phase timers */
     this._densityPhases = new Map();
     /** @type {number} Cached right-column top position (UX-2 #11 dynamic layout) */
-    this._lastRightColTop = 0;
+    this._lastRightColTop = null;   // null until the first write (u7 review: rightColumnTopPx() is null, not 0, before it)
 
     // Sprint 2 / PR E — cached comms-panel bottom (in CSS px). Avoids a
     // per-frame `getBoundingClientRect()` synchronous-layout flush in
@@ -432,6 +444,13 @@ export class HUD {
     // Mounted on document.body so the strip sits above the notification slot
     // (which lives at viewport bottom) regardless of HUD overlay visibility.
     this.hintTicker = new HintTicker();
+    // u7 D5b: the step chip steps aside for the Targets pane on a short phone (attributes only, no layout read).
+    this.hintTicker.setTargetsShown(() => {
+      const t = this.panels && this.panels.targets;
+      if (!t || !t.hasAttribute) return false;
+      return !(t.hasAttribute('data-density-hidden') || t.hasAttribute('data-scan-wait')
+        || t.hasAttribute('data-floor-gone') || (t.style && t.style.display === 'none'));
+    });
 
     // --- Warning Strip (bottom center) ---
     this.panels.warnings = this._createPanel('hud-warnings-panel', {
@@ -1286,6 +1305,27 @@ export class HUD {
       this._lastRightColTop = newTop;
       this._lastRightColClear = clear;
     }
+  }
+
+  /** u7 D5b: once a frame (main.js) - the step chip clears the Targets pane when they would overlap. */
+  syncHintPlacement() {
+    if (this.hintTicker && typeof this.hintTicker.syncPlacement === 'function') this.hintTicker.syncPlacement();
+  }
+
+  /**
+   * u7 D2: the right column's top (px) as last written by _syncRightColumnTop (comms bottom + 10), or
+   * null before the first write. While the column is hidden the cached comms bottom + 10 (null if none yet).
+   * A cached number: no layout read.
+   * @returns {number|null}
+   */
+  rightColumnTopPx() {
+    const col = this._rightColumn;
+    if (!col) return null;
+    if (col.style && col.style.display === 'none') {
+      // Hidden by a view setting (showRight false): the comms bottom is still where the disc belongs - a cached number.
+      return Number.isFinite(this._commsRectBottom) ? Math.round(this._commsRectBottom + 10) : null;
+    }
+    return Number.isFinite(this._lastRightColTop) ? this._lastRightColTop : null;
   }
 
   /** Set `top` then un-hide the right column (Task 9: top BEFORE un-hiding). */
@@ -2703,7 +2743,7 @@ export class HUD {
       this._alertZoneText = zoneText;
       const z = this._notificationZone;
       if (z) {
-        if (zoneText !== null) { z.textContent = zoneText; z.style.opacity = '1'; }
+        if (zoneText !== null) { z.textContent = zoneText; z.style.textTransform = _toastCase(zoneText); z.style.opacity = '1'; }
         else z.style.opacity = '0';
       }
     }
@@ -2735,6 +2775,24 @@ export class HUD {
   // ==========================================================================
   // NOTIFICATION ZONE (UX-2 #12)
   // ==========================================================================
+
+  /**
+   * u7 D6: would a toast sent now be lost or parked? True while gameplay toasts are muted (the "Reticles & alerts"
+   * rung) or the arbiter holds every prompt (the intro flyby, or a live approach to the selected target:
+   * measured 2026-10-20, after the first scan the LEO line sat in `held` through all of floors 4 and 5), or
+   * an amber / red alert is showing or waiting.
+   * The once-only floor lines wait for false, so they are shown, not just marked taught.
+   */
+  toastsQuiet() {
+    if (this._transientPopupsQuiet || this._introInhibit || this._approachLive) return true;
+    // u7 review: also while the arbiter shows or holds an amber / red alert - a prompt sent now would wait behind it
+    // (or be pre-empted), and the once-only line must not be marked taught unseen.
+    const a = this._alerts;
+    if (!a || typeof a.visible !== 'function') return false;
+    const v = a.visible(this._alertClock());
+    if (v && v.level >= 2) return true;
+    return a.held().some((h) => h.level >= 2);
+  }
 
   /**
    * Show a transient notification in the bottom-center zone.
@@ -2780,6 +2838,7 @@ export class HUD {
       return;
     }
     this._notificationZone.textContent = text;
+    this._notificationZone.style.textTransform = _toastCase(text);
     this._notificationZone.style.opacity = '1';
     // PR 5 / P2.8: TimerManager-tracked notification timer (debounced).
     if (this._notifTimer) timerManager.clear(this._notifTimer);

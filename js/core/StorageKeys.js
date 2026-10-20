@@ -56,6 +56,11 @@ export const StorageKeys = {
    * save, so a New Game does not repeat it.
    */
   STRUT_AUTO:  'sc_strut_auto_v1',
+  /**
+   * The once-only "LEO means low Earth orbit" / "GEO means ..." lines (FloorWordsStore, u7 D6): which floors'
+   * lines this player has seen. PLAYER-owned like STRUT_AUTO - never in the run save.
+   */
+  FLOOR_WORDS: 'sc_floor_words_v1',
   /** CityLabels visibility toggle ('0' | '1'). */
   CITY_LABELS: 'sc_city_labels_visible',
   /**

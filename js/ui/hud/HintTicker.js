@@ -44,6 +44,7 @@ import { Constants } from '../../core/Constants.js';
 import { decorateGlossary } from '../../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from '../glossaryDom.js';
 import { GestureHints } from './GestureHints.js';
+import { isShortScreen } from './PhoneFold.js';
 
 // Lazy DOM probe — checked on each use so Node-side tests can install a
 // minimal document shim AFTER the module has been first evaluated.
@@ -72,6 +73,20 @@ const DEFAULTS = {
 function _tuning() {
   const c = (Constants && Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {};
   return Object.assign({}, DEFAULTS, c);
+}
+
+/** u7 D5b: gap + Targets pane width (px) the chip clears on a short phone (Targets is 300 wide, 8 gap). */
+export const CHIP_TARGETS_CLEAR_PX = 308;
+
+/**
+ * u7 D5b: where the step chip sits. Centred (today) except on a short screen no wider than the
+ * 768 px phone rule while the Targets pane is shown: then its right edge is the pane's left edge - 8, so the
+ * two never overlap. Pure; no layout read.
+ * @param {{W:number, H:number, targetsShown:boolean}} p
+ * @returns {'center'|'left-of-targets'}
+ */
+export function chipPlacement({ W, H, targetsShown }) {
+  return (targetsShown && isShortScreen(H) && Number.isFinite(W) && W <= 768) ? 'left-of-targets' : 'center';
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -119,11 +134,46 @@ export class HintTicker {
     /** Step-button elements fading out: the strip stays tall until they are gone. */
     this._fadingButtons = new Set();
 
+    /** @type {(() => boolean)|null} u7 D5b: is the Targets pane on screen? (HUD wires it; null = never) */
+    this._targetsShown = null;
+    /** @type {'center'|'left-of-targets'} the placement last written (write-on-change) */
+    this._placement = 'center';
+
     this._build();
     this._wireListeners();
   }
 
   // ─── PUBLIC API ────────────────────────────────────────────────────────
+
+  /** u7 D5b: the Targets-shown getter (HUD passes one over the TargetPanel's attributes). */
+  setTargetsShown(fn) {
+    this._targetsShown = (typeof fn === 'function') ? fn : null;
+  }
+
+  /**
+   * u7 D5b: put the chip where chipPlacement() says; writes only on change. Called once a frame
+   * (main.js) with the window numbers the code already has. No layout read.
+   * @param {{innerWidth?:number, innerHeight?:number}|null} [win]  defaults to window
+   */
+  syncPlacement(win) {
+    if (!this._strip) return;
+    const w = win || (typeof window !== 'undefined' ? window : null);
+    let shown = false;
+    try { shown = !!(this._targetsShown && this._targetsShown()); } catch (_e) { shown = false; }
+    const next = w ? chipPlacement({ W: w.innerWidth, H: w.innerHeight, targetsShown: shown }) : 'center';
+    if (next === this._placement) return;
+    this._placement = next;
+    const st = this._strip.style;
+    if (next === 'left-of-targets') {
+      st.left = 'auto';
+      st.right = `${CHIP_TARGETS_CLEAR_PX}px`;
+      st.transform = 'none';
+    } else {
+      st.left = '50%';
+      st.right = '';
+      st.transform = 'translateX(-50%)';
+    }
+  }
 
   /** Programmatic post (used by tests).  Same payload contract as HINT_POSTED. */
   post(payload) {

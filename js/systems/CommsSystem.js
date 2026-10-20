@@ -525,7 +525,7 @@ export class CommsSystem {
       const windowMs = COMMS.COALESCE_WINDOW_MS || 2000;
       this._coalesceWindow = this._coalesceWindow.filter(e => (nowMs - e.timestamp) < windowMs);
       // D8: a _critical / _reactive line is "kept": never summarised away, and it
-      // does not count toward tipping plain lines into a summary.
+      // does not count toward tipping plain lines into a burst.
       // comms-after-tutorial D6: a `_keep` status line (mission progress, where a catch went,
       // the next step) is kept the same way - it never bypasses the suppression tier, only coalescing.
       const kept = data._critical === true || data._reactive === true || data._keep === true;
@@ -534,10 +534,8 @@ export class CommsSystem {
       if (!kept) this._coalesceWindow.push({ channel, timestamp: nowMs });
 
       if (coal.shouldCoalesce) {
-        // Replace last same-channel messages with a summary line
-        // Remove prior same-channel msgs from this window that are in messages[]
-        const summaryText = `× ${coal.count} ${channel.toLowerCase()} messages queued`;
-        // Find and remove the last same-channel messages that were part of this burst
+        // u7 D4: a burst keeps only its newest line. The older non-kept same-channel lines of the
+        // burst go; the current line is posted below as a normal message. No "× n ... queued" line.
         let removed = 0;
         for (let i = this.messages.length - 1; i >= 0 && removed < coal.count - 1; i--) {
           if (this.messages[i].channel === channel && !this.messages[i].keep) {
@@ -545,19 +543,6 @@ export class CommsSystem {
             removed++;
           }
         }
-        const msg = {
-          id: this._nextId++,
-          timestamp: tsStr,
-          source: src,
-          text: summaryText,
-          priority: data.priority || CommsPriority.INFO,
-          channel,
-          age: 0,
-        };
-        this.messages.push(msg);
-        while (this.messages.length > MAX_MESSAGES) this.messages.shift();
-        if (this.onMessage) this.onMessage(msg);
-        return;
       }
 
       const msg = {
@@ -1022,7 +1007,7 @@ export class CommsSystem {
     if (!kept) this._coalesceWindow.push({ channel, timestamp: nowMs });
 
     if (coal.shouldCoalesce) {
-      const summaryText = `× ${coal.count} ${channel.toLowerCase()} messages queued`;
+      // u7 D4: as in the COMMS_MESSAGE listener - drop the burst's older lines, post this one normally.
       let removed = 0;
       for (let i = this.messages.length - 1; i >= 0 && removed < coal.count - 1; i--) {
         if (this.messages[i].channel === channel && !this.messages[i].keep) {
@@ -1030,16 +1015,6 @@ export class CommsSystem {
           removed++;
         }
       }
-      const msg = {
-        id: this._nextId++,
-        timestamp, source, text: summaryText, priority, channel, age: 0,
-      };
-      this.messages.push(msg);
-      while (this.messages.length > MAX_MESSAGES) this.messages.shift();
-      this._playMessageSound(priority);
-      if (this.onMessage) this.onMessage(msg);
-      eventBus.emit(Events.COMMS_MESSAGE, { ...msg, _internal: true });
-      return;
     }
 
     const msg = {

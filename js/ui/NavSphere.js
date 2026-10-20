@@ -26,6 +26,7 @@ import { HUD_EDGE_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
 import { createFooterChip } from './hud/FooterChip.js';
 import { isMarked } from '../systems/ScanMarks.js';
 import { testsRequestedHere } from './hud/TestsSwitch.js';
+import { isShortScreen } from './hud/PhoneFold.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -50,6 +51,25 @@ export function orbDiscCenter({ width, height, radius = SPHERE_RADIUS, footerTop
     cx: width - edgePx - radius,
     cy: height - footerTop - RAIL_GEOMETRY.FOOTER_GAP_PX - radius,
   };
+}
+
+/** u7 D2: smallest / largest corner-orb radius on a short screen (px). */
+const SHORT_ORB_MIN_PX = 40;
+const SHORT_ORB_MAX_PX = 84;
+/** u7 D2: gap between the right column's last box and the orb disc (px). */
+export const SHORT_ORB_GAP_PX = 8;
+
+/**
+ * u7 D2: the corner orb's disc on a SHORT screen (height < 500): its right edge stays at W - 16 and it sits
+ * under the right column (comms, NEXT) instead of over it. r fits the room left above the bottom
+ * margin, clamped 40..84. Pure.
+ * @param {{W:number, H:number, top:number}} p  top = the disc's top edge (bottom of the lowest right-column
+ *   box + SHORT_ORB_GAP_PX)
+ * @returns {{cx:number, cy:number, r:number}}
+ */
+export function shortScreenOrbDisc({ W, H, top }) {
+  const r = Math.min(SHORT_ORB_MAX_PX, Math.max(SHORT_ORB_MIN_PX, Math.floor((H - 8 - top) / 2)));
+  return { cx: W - HUD_EDGE_PX - r, cy: top + r, r };
 }
 
 /** @enum {string} Color palette */
@@ -196,6 +216,8 @@ export class NavSphere {
     // suspended, not overwritten: their flags survive for the unmount).
     /** @type {number|null} corner-minimap radius (px), null = unmounted */
     this._cornerMountRadiusPx = null;
+    /** @type {(() => (number|null))|null} u7 D2: bottom of the right column's lowest box (short-screen clearance) */
+    this._cornerTopProvider = null;
     // Floor-fed tactical layer drawn over the radar (focused cluster bearing +
     // selected insertion point). Plain descriptor, see ProxMiniSphere.
     /** @type {{clusterPos:?{x,y,z}, clusterName:?string, insertionPos:?{x,y,z}, insertionZone:?string}|null} */
@@ -435,6 +457,37 @@ export class NavSphere {
   }
 
   /**
+   * u7 D2: where the right column's lowest box ends (px), asked of the HUD at each draw. Null/absent →
+   * today's disc. Only the corner mount on a short screen reads it.
+   * @param {(() => (number|null))|null} fn
+   */
+  setCornerTopProvider(fn) {
+    this._cornerTopProvider = (typeof fn === 'function') ? fn : null;
+  }
+
+  /**
+   * @private The disc this draw uses: today's orbDiscCenter at the mount radius (or SPHERE_RADIUS), except
+   * a corner mount on a short screen with a column-bottom provider, which clears the right column
+   * (shortScreenOrbDisc). Tall screens: today's numbers exactly.
+   * @returns {{cx:number, cy:number, r:number}}
+   */
+  _discGeometry() {
+    const mounted = this._cornerMountRadiusPx != null;
+    if (mounted && this._cornerTopProvider && isShortScreen(this._height)) {
+      const bottom = this._cornerTopProvider();
+      if (Number.isFinite(bottom)) {
+        return shortScreenOrbDisc({ W: this._width, H: this._height, top: bottom + SHORT_ORB_GAP_PX });
+      }
+    }
+    const r = mounted ? this._cornerMountRadiusPx : SPHERE_RADIUS;
+    const { cx, cy } = orbDiscCenter({
+      width: this._width, height: this._height, radius: r,
+      footerTop: this._footerTop, edgePx: HUD_EDGE_PX,
+    });
+    return { cx, cy, r };
+  }
+
+  /**
    * Zoom Ladder PROX NET additive opt — the floor-fed tactical layer (see
    * ProxMiniSphere): focused cluster bearing + selected insertion point,
    * drawn by update() over the radar contacts. The descriptor is stored by
@@ -526,11 +579,8 @@ export class NavSphere {
     // sits (cx = W − HUD_EDGE_PX − R, cy = H − footerTop − 8 − R). Corner-mounted
     // PROX NET uses the same spot at its smaller radius, so it never depends on
     // the COMMS height and can't cover the NEXT pane (n1-nav-corner).
-    const R = this._cornerMountRadiusPx != null ? this._cornerMountRadiusPx : SPHERE_RADIUS;
-    const { cx, cy } = orbDiscCenter({
-      width: this._width, height: this._height, radius: R,
-      footerTop: this._footerTop, edgePx: HUD_EDGE_PX,
-    });
+    // u7 D2: on a short screen the corner mount sits under the right column (see _discGeometry).
+    const { cx, cy, r: R } = this._discGeometry();
     const ctx = this.ctx;
 
     ctx.save();

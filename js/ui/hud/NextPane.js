@@ -328,6 +328,18 @@ export class NextPane {
     return this._empty ? emptyPx() : fullPx();
   }
 
+  /**
+   * u7 D2: is the box on screen right now? heightPx() alone is not enough - it stays non-zero while the
+   * density rung hides the pane. Reads attributes and the inline style only (no layout read).
+   * @returns {boolean}
+   */
+  isShown() {
+    const el = this._root;
+    if (this._mode === 'hidden' || !el) return false;
+    if (el.hasAttribute && (el.hasAttribute(DENSITY_HIDDEN_ATTR) || el.hasAttribute('data-floor-gone'))) return false;
+    return !(el.style && el.style.display === 'none');
+  }
+
   /** The current mode: 'full' while mounted; 'hidden' headless / disposed. */
   mode() { return this._mode; }
 

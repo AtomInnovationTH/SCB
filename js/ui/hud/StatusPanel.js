@@ -644,10 +644,9 @@ export class StatusPanel {
     // status + fuel). No hover layer / no resize badge — the selected daughter
     // highlights and shows the single action it can take right now.
     this.panels.arms.innerHTML = `
-      <div class="pane-title" id="fleet-header" style="font-size:11px;margin-bottom:3px;color:var(--hud-normal, #00ff88);opacity:0.7;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;">
+      <div class="pane-title" id="fleet-header" title="Keys 1–4 select a daughter" style="font-size:11px;margin-bottom:3px;color:var(--hud-normal, #00ff88);opacity:0.7;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;">
         <span id="fleet-legacy" style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;">
           <span>DAUGHTERS</span>
-          <span id="fleet-select-hint" style="font-weight:normal;letter-spacing:normal;font-size:10px;opacity:0.4;white-space:nowrap;">select 1–4</span>
         </span>
       </div>
       <div id="hud-arms-status" style="font-size:11px;line-height:1.6;">
@@ -2390,7 +2389,6 @@ export class StatusPanel {
     if (!this._armManager) {
       el.innerHTML = '<span style="opacity:0.5">No daughters</span>';
       this._updateArmsFold([]);
-      this._updateFleetHeader();
       return;
     }
 
@@ -2398,7 +2396,6 @@ export class StatusPanel {
     if (statuses.length === 0) {
       el.innerHTML = '<span style="opacity:0.5">No daughters</span>';
       this._updateArmsFold([]);
-      this._updateFleetHeader();
       return;
     }
     this._updateArmsFold(statuses);   // u4-phone-fold D2: the "N of M ready" line + the departure auto-open
@@ -2436,8 +2433,6 @@ export class StatusPanel {
         if (!live.has(id)) this._daughterRangeCache.delete(id);
       }
     }
-
-    this._updateFleetHeader();
   }
 
   /**
@@ -2798,20 +2793,8 @@ export class StatusPanel {
   // ==========================================================================
   // DAUGHTERS PANE: HEADER
   // ==========================================================================
-
-  /**
-   * @private Update the header. Shows a faint "select 1–4" hint while no
-   * daughter is selected (the entry point for new players); once one is
-   * selected, that daughter's line carries the contextual action prompt so the
-   * hint is redundant and hidden.
-   */
-  _updateFleetHeader() {
-    const hint = document.getElementById('fleet-select-hint');
-    if (!hint) return;
-    const hasSelection = !!this._armManager && this._armManager.selectedArmIndex >= 0;
-    // u4-phone-fold D5: no keys on a touch device - "select 1–4" is hidden on glass.
-    hint.style.display = (hasSelection || this._glass) ? 'none' : '';
-  }
+  // u7 D3: no "select 1–4" line on any size. The header's `title` carries the keys
+  // on desktop hover and the Help list keeps its "1 – 4  Select a daughter" row.
 
   // ==========================================================================
   // F17: CODEX UNSEEN BADGE

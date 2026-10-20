@@ -593,8 +593,12 @@
     /* === RESPONSIVE HUD === */
     @media (max-width: 768px) {
       .hud-panel { font-size: 11px; padding: 6px 8px; }
-      #hud-targets-panel { display: none !important; }
       #hud-controls-panel { display: none !important; }
+    }
+    /* u7 D5a: a portrait phone hides Targets; a short (landscape) phone keeps it - the folded line from
+     * the phone fold (PhoneFold, height < 500) shows after the scan (DECISIONS 18 r3). */
+    @media (max-width: 768px) and (min-height: 500px) {
+      #hud-targets-panel { display: none !important; }
     }
     /* Comms stays on screen on floor 2 down to 744 px wide (owner 2026-10-13:
      * "comms should be visible on f2 at start of game"). MOTHER and comms are the same

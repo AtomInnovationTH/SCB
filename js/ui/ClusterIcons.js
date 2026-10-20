@@ -47,8 +47,23 @@ const SIZE_BREAKS = [25, 100]; // <25 → 12px, <100 → 18px, else 24px
  */
 export const UNREACHABLE_DIM_OPACITY = 0.35;
 
+/**
+ * u7 D1: the focused cluster's label at the simple level - the verdict in the trip box's
+ * own words (TransferWindows.readout), no numbers. Unknown verdict → no label.
+ */
+const PLAIN_VERDICT_LINE = Object.freeze({
+  reachable: 'Enough fuel to go',
+  marginal: 'Only just enough fuel',
+  unreachable: 'Not enough fuel to go',
+});
+
 export class ClusterIcons {
-  constructor() {
+  /**
+   * @param {object} [deps]
+   * @param {function} [deps.simple] - () => boolean, true at the simple level (u7 D1). Absent → today's label.
+   */
+  constructor(deps = {}) {
+    this._simple = (deps && typeof deps.simple === 'function') ? deps.simple : null;
     this._root = null;
     this._shipEl = null;
     this._icons = new Map();  // clusterId → { el, ring, label }
@@ -165,6 +180,8 @@ export class ClusterIcons {
    * @param {Map|object} [opts.assessments] - FUEL-REACHABILITY: clusterId →
    *                 ReachabilityModel.assess() result. Absent → the pre-reach
    *                 rendering, byte-identical.
+   * @param {boolean} [opts.coOrbital] - u7 D1: the focused cluster is at the ship's own height
+   *                 (NavcomFloor passes `!!coOrbitalReadout(win)`); at the simple level it carries no label.
    * @returns {Array<{id:*, name:string, count:number, x:number, y:number, sizePx:number,
    *                  focused:boolean, verdict:?string, estimate:?string, dimmed:boolean}>}
    */
@@ -177,6 +194,8 @@ export class ClusterIcons {
       return (typeof assessments.get === 'function') ? (assessments.get(id) || null) : (assessments[id] || null);
     };
     const ranked = ClusterIcons.rank(clusters, budget);
+    const simple = !!(this._simple && this._simple());
+    const coOrbital = opts.coOrbital === true;
 
     const descriptors = [];
     const seen = new Set();
@@ -187,7 +206,11 @@ export class ClusterIcons {
       const focused = focusId != null && c.id === focusId;
       const a = assessFor(c.id);
       const verdict = a ? a.verdict : null;
-      const estimate = (focused && a) ? ClusterIcons.estimateLine(a) : null;
+      let estimate = null;
+      if (focused && a) {
+        if (!simple) estimate = ClusterIcons.estimateLine(a);
+        else if (!coOrbital) estimate = PLAIN_VERDICT_LINE[verdict] || null;   // u7 D1: co-orbital → no label
+      }
       const dimmed = verdict === 'unreachable';
       descriptors.push({
         id: c.id, name: c.name, count: c.count, x: p.x, y: p.y, sizePx, focused,
@@ -291,7 +314,7 @@ export class ClusterIcons {
       if (estimate) {
         if (!rec.est) {
           const est = document.createElement('div');
-          est.style.cssText = 'margin-top:1px;white-space:nowrap;opacity:0.85;pointer-events:none;';
+          est.style.cssText = 'margin-top:1px;white-space:nowrap;opacity:0.85;pointer-events:none;text-transform:none;';
           rec.el.appendChild(est);
           rec.est = est;
         }

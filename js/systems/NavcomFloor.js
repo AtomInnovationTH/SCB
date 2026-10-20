@@ -47,7 +47,7 @@ import { FloorContract } from '../core/FloorContract.js';
 import { ClusterIcons } from '../ui/ClusterIcons.js';
 import { TransferWindows } from '../ui/TransferWindows.js';
 import { ReachOrb } from '../ui/ReachOrb.js';
-import { computeTransferWindow, clusterToOrbitKm } from '../entities/LaunchWindow.js';
+import { computeTransferWindow, clusterToOrbitKm, coOrbitalReadout } from '../entities/LaunchWindow.js';
 import { orbitToKm, sceneToKm } from '../entities/OrbitalMechanics.js';
 import { assess } from '../entities/ReachabilityModel.js';
 import { computeRoutePlan, computeSweepBands } from './OrbitPlanners.js';
@@ -98,7 +98,7 @@ export class NavcomFloor {
     this._clusterSource = deps.clusterSource || null;
     this._player = deps.player || null;
     this._project = deps.project || null;
-    this._icons = deps.clusterIcons || new ClusterIcons();
+    this._icons = deps.clusterIcons || new ClusterIcons({ simple: deps.simple });   // u7 D1: the simple-level getter rides in
     this._windows = deps.transferWindows || new TransferWindows({ simple: deps.simple });   // u6 D7: the simple-level getter rides in
     this._onPlanTransfer = deps.onPlanTransfer || null;
     this._getMassBudget = deps.getMassBudget || null;
@@ -345,16 +345,19 @@ export class NavcomFloor {
     // planners track the player's drifting orbit — never per frame.
     this._maybeRefreshFieldPlans();
     const project = ctx.project || this._project;
+    // u7 D1: the focused cluster's window is computed first so the icon layer knows whether
+    // it is at the ship's own height (no trip → no fuel label at the simple level).
+    const focused = this.getFocusedCluster();
+    const win = this.computeWindow(focused);
     const icons = this._icons.render(this._clusters, project, {
       budget: FLOOR.labelBudget,
       focusId: this._focusId,
       assessments: this._getMassBudget ? this._assessments : null,
+      coOrbital: !!coOrbitalReadout(win),
     });
     if (ctx.shipPos && project && this._icons.renderShip) {
       this._icons.renderShip(project(ctx.shipPos), ctx.shipAngleRad || 0);
     }
-    const focused = this.getFocusedCluster();
-    const win = this.computeWindow(focused);
     const window = this._windows.refresh(win, {
       targetName: focused ? focused.name : undefined,
       assessment: focused ? (this._assessments.get(focused.id) || null) : null,

@@ -140,6 +140,7 @@ import { CopilotVoice } from './systems/CopilotVoice.js';
 import { GestureSplash } from './ui/GestureSplash.js';
 import { TouchMapStore } from './systems/TouchMapStore.js';
 import { StrutAutoStore } from './systems/StrutAuto.js';
+import { FloorWordsStore, floorWordsToShow, FLOOR_WORDS_MS } from './systems/FloorWordsStore.js';   // u7 D6
 import { RAIL_GEOMETRY, footerBand } from './ui/RailGeometry.js';
 import { EdgeChrome } from './ui/EdgeChrome.js';
 import { TouchControls } from './ui/TouchControls.js';
@@ -624,6 +625,7 @@ let player;
 let debrisField;
 let activeSatellites;
 let armManager;
+let floorWordsStore = null;   // u7 D6: which floors' "LEO means ..." line this player has seen (built in init, read in the game loop)
 let motherCallouts;
 // Systems (targetSelector, kesslerSystem, trawlManager imported as singletons above)
 let cameraSystem;
@@ -1365,6 +1367,7 @@ async function init() {
   armManager.setDebrisField(debrisField);
   // Daughter arms mostly move themselves; the once-per-player full-range show (DECISIONS §25 ruling 5).
   armManager.setStrutAutoStore(new StrutAutoStore());
+  floorWordsStore = new FloorWordsStore();   // u7 D6: LEO / GEO explained once, kept across reloads and New Game
   // Bags held on the radiator tips (lane l5a-tip-cargo). Always built; empty until the leash (l5b) stows a bag.
   player.tipCargo = new TipCargo({ player, debrisField, armManager, eventBus });
   armManager.setCatalogLoader(catalogLoader);    // ST-6.1: active-sat treaty guard
@@ -1697,6 +1700,15 @@ async function init() {
   // --- Connect NavSphere to HUD so the right pane column reserves the correct
   //     vertical slot and reclaims it when the sphere is minimized/hidden ---
   if (typeof hud.setNavSphere === 'function') hud.setNavSphere(navSphere);
+  // u7 D2: on a short screen the corner orb sits under the right column (comms, NEXT) instead of over it.
+  // The closure reads `nextPane` lazily (a module-level `let`, built later); no layout read, cached numbers only.
+  if (typeof navSphere.setCornerTopProvider === 'function') {
+    navSphere.setCornerTopProvider(() => {
+      const top = hud.rightColumnTopPx ? hud.rightColumnTopPx() : null;
+      if (top == null) return null;
+      return top + ((nextPane && nextPane.isShown()) ? nextPane.heightPx() : -10);
+    });
+  }
 
   // Pane-density pure-scenery rung also drops the constellation name labels.
   if (typeof hud.setStarfield === 'function') hud.setStarfield(starfield);
@@ -6694,6 +6706,21 @@ function gameLoop(timestamp) {
       if (_floorAttr) document.body.setAttribute('data-ladder-floor', _floorAttr);
       else document.body.removeAttribute('data-ladder-floor');
     }
+    // u7 D6: the first player-chosen arrival on floor 4 / 5 says what the rail's word means, once. One call a
+    // frame; the rule is pure (floorWordsToShow). Nothing is sent or marked while toasts are muted.
+    if (_ladderActive && floorWordsStore && _floorNow != null && !floorWordsStore.allTaught()) {
+      const _fwText = floorWordsToShow({
+        floor: _floorNow,
+        riding: ladderController.isRiding(),
+        intro: !!(ladderController.introInFlight && ladderController.introInFlight()),
+        quiet: !!(hud && hud.toastsQuiet && hud.toastsQuiet()),
+        taught: (f) => floorWordsStore.isTaught(f),
+      });
+      if (_fwText) {
+        eventBus.emit(Events.SHOW_NOTIFICATION, { text: _fwText, duration: FLOOR_WORDS_MS, kind: 'prompt' });
+        floorWordsStore.markTaught(_floorNow);
+      }
+    }
     const _hideVitals = _floorAttr === '1' && !!(workbenchPane && workbenchPane.isOpen && workbenchPane.isOpen());
     if (_hideVitals !== _vitalsUnderDrawer) {   // write-on-change; the drawer covers the meters only on F1 (w4-power D4, measured)
       _vitalsUnderDrawer = _hideVitals; const _vEl = document.getElementById('hud-vitals'); if (_vEl) _vEl.style.visibility = _hideVitals ? 'hidden' : '';
@@ -6983,6 +7010,7 @@ function gameLoop(timestamp) {
     // m1-finish: the wings hint stays until the wings are out. Outside the held-world guard on
     // purpose: it is a screen row, not a fate clock, and it must go the frame the wings are out.
     try { wingsHint.update(player, hud && hud.hintTicker); } catch (e) { console.error('[GameLoop] wingsHint:', e); }
+    try { if (hud) hud.syncHintPlacement(); } catch (e) { console.error('[GameLoop] hintPlacement:', e); }   // u7 D5b
     // Phase 1.5 (capture-feedback overhaul): close-range survey → Full Profile
     try {
       dossierSystem.update(dt, {
