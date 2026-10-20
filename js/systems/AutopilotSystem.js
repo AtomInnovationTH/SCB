@@ -1291,8 +1291,9 @@ export class AutopilotSystem {
 
           eventBus.emit(Events.AUTOPILOT_ARRIVED, { mode: this._headingMode });
           eventBus.emit(Events.COMMS_MESSAGE, {
-            // comms-after-tutorial D5b: plain words (the old line opened with a station-keeping term).
-            text: `✓ In position. [N] lasso (≤${Constants.LASSO_RANGE}m) · [D] deploy daughter for far/heavy debris`,
+            // Plain words, no symbols (Ruling 0). This is the ONE arrival line after the tutorial
+            // (the GameFlowManager one-shot that said the same thing is gone).
+            text: `In position. Press N to lasso it (within ${Constants.LASSO_RANGE} m), or D to send a daughter for far or heavy debris.`,
             priority: 'info',
             _keep: true,   // the next step to press
           });

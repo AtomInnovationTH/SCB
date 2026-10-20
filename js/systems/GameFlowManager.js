@@ -561,7 +561,7 @@ export class GameFlowManager {
       // (must be AFTER resetGame which resets these flags)
       this._firstOrbitalView = false;
       this._firstTimeComms = new Set([
-        'orbital_view_opening', 'first_target', 'autopilot_arrived',
+        'orbital_view_opening', 'first_target',
         'first_capture', 'drift_recovery',
       ]);
 
@@ -1637,20 +1637,8 @@ export class GameFlowManager {
       }
     });
 
-    // First autopilot arrival: teach the two capture paths (lasso vs arm).
+    // Arrival advice (N lasso / D daughter) comes from AutopilotSystem's single "In position." line.
     eventBus.on(Events.AUTOPILOT_ARRIVED, () => {
-      // During onboarding the Director's `decision` beat already teaches N vs D
-      // (and the in-range prompt teaches N) — don't double-teach. Post-onboarding
-      // this stays a useful one-shot reminder. (Guidance cleanup, Phase 2.)
-      if (!this._onboardingRunning && !this._firstTimeComms.has('autopilot_arrived')) {
-        this._firstTimeComms.add('autopilot_arrived');
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          sender: 'SPACECRAFT',
-          text: 'On station. Press N to lasso close debris, or D to deploy a daughter for distant or heavy targets.',
-          priority: 'info',
-        });
-      }
-
       // Drift recovery: one-shot 8s delayed check
       if (!this._firstTimeComms.has('drift_recovery')) {
         const arrivedTarget = targetSelector.getActiveTarget();

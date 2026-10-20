@@ -28,7 +28,7 @@ import { strutTipFoulsCorridor } from './ArmDockBasis.js';
 import { planCuts } from '../systems/cutPlanner.js';
 // Cargo-continuity S7: the carrier scorer lives with the rest of the CoM maths
 // (ONE quantity, ONE computation — it reuses computeCoM/strutTipMeters).
-import { suggestCargoArm, computeCoMDrift } from '../systems/CoMCalculator.js';
+import { suggestCargoArm } from '../systems/CoMCalculator.js';
 import * as THREE from 'three';
 
 const CN = Constants.CAPTURE_NET;
@@ -3945,10 +3945,6 @@ export class CaptureNetSystem {
     // net knows its ship-relative attitude before the first flight frame.
     this._seedCatchLocal(net, d);
     net._cargoArmIndex = armIndex;
-    // Trim before the hand-off, so the completion line can teach WHY this
-    // daughter was chosen (same quantity the CoM drift warning shows).
-    net._cargoDriftBefore = (armManager && armManager._dockPositions)
-      ? computeCoMDrift(armManager, player) : null;
     net._cargoS = 0;
     net._cargoDur = Math.max(1e-3, CT.FLIGHT_S ?? 3.0);
     net._transitionTo(STATES.TRANSFERRING);
@@ -4270,16 +4266,11 @@ export class CaptureNetSystem {
     });
 
     // ONE player-facing line for the whole beat (the arc is its own feedback):
-    // who took the cargo, and what it did to the trim. That is how the automatic
-    // CG-first choice teaches itself without an arm-picker UI.
-    const driftAfter = (armManager && armManager._dockPositions)
-      ? computeCoMDrift(armManager, this._player) : null;
-    const trim = (net._cargoDriftBefore != null && driftAfter != null)
-      ? ` — trim ${net._cargoDriftBefore.toFixed(2)} → ${driftAfter.toFixed(2)} m`
-      : '';
+    // who took the cargo. That is how the automatic CG-first choice teaches
+    // itself without an arm-picker UI.
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: 'HOUSTON', channel: 'CMD',
-      text: `Catch stowed on ${arm.displayName || arm.id}${trim}. Launcher clear.`,
+      text: `Catch stowed on ${arm.displayName || arm.id}. Launcher clear.`,
       priority: 'success',
       _keep: true, // comms-after-tutorial D6: where a catch went is never folded into "× N queued"
     });
@@ -4624,8 +4615,6 @@ export class CaptureNetSystem {
     this._seedCargoArc(pieceNet, start, end);
     this._seedCatchLocal(pieceNet, piece);
     pieceNet._cargoArmIndex = armIndex;
-    pieceNet._cargoDriftBefore = (armManager && armManager._dockPositions)
-      ? computeCoMDrift(armManager, player) : null;
     pieceNet._cargoS = 0;
     pieceNet._cargoDur = Math.max(1e-3, CT.FLIGHT_S ?? 3.0);
     // L6: the one extra field both transfer events carry on this path.
