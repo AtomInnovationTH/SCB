@@ -20,12 +20,14 @@ import { powerDistribution } from './PowerDistribution.js';
 import { targetSelector } from './TargetSelector.js';
 import { kesslerSystem } from './KesslerSystem.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
+import { DebrisField } from '../entities/DebrisField.js';
 import { trawlManager } from './TrawlManager.js';
 import { openingDance } from './OpeningDance.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
+import { TransferTrip } from './TransferTrip.js';
 import { salvageGasKg } from './ResourceSystem.js';
 import { UPGRADES } from '../ui/ShopScreen.js';
 import { upgradePrereqsMet, upgradeCostNow } from '../ui/shopGating.js';
@@ -95,14 +97,15 @@ export class GameFlowManager {
     this._atResupplyStop = false;
 
     /**
-     * followups-1018 D1 (owner 2026-10-18, "Unload at every mission end"): true from the moment a COMPLETED MISSION
-     * opens the resupply stop (`_onMissionBoundary`, the sacrifice path at a boundary) until the stop closes. While
-     * set, `update` has the station take any paid catch that has come to rest, shop opened or not (the mother-net
-     * catch that ended the mission is still berthed at the boundary; a hand-off can land later). NOT set by game
-     * over or a save load, which unload nothing. Cleared by every `_setResupplyStop` call (the mission-end paths re-arm it right after).
+     * trip-melt D2 (owner 2026-10-19): the burn between missions. A completed mission begins this trip instead of
+     * starting the next mission at once; the mission starts (MISSION_START, the next field) when the burn ends. The
+     * station unloads nothing (the catches stay where they are parked and the tip furnaces melt them on the trip).
+     * Created in `init` once the ship exists. In-memory only: a save holds no trip.
+     * @type {TransferTrip}
      */
-    this._missionEndUnload = false;
-    this._missionEndUnloadS = 0;
+    this._trip = new TransferTrip();
+    /** trip-melt-2 D12a: the boundary count a credit reached during a trip, run after the trip's mission start, or null. */
+    this._deferredBoundary = null;
 
     /**
      * w1-hud-calm review fix (2026-10-05): the first INVITATION pays the
@@ -213,6 +216,7 @@ export class GameFlowManager {
    */
   init(refs) {
     this._refs = refs;
+    this._syncTripDeps();
     // u1-resupply-stop D1: the real game starts mid-mission — the shop's trade gate is closed until the first
     // completed mission (a shop that was never told stays permissive, so bare test rigs are unaffected).
     this._setResupplyStop(false);
@@ -248,7 +252,6 @@ export class GameFlowManager {
    */
   _setResupplyStop(open) {
     this._atResupplyStop = !!open;
-    this._missionEndUnload = false; this._missionEndUnloadS = 0;   // followups-1018 D1: only a mission end re-arms the unload poll (right after this call); closing, game over and a save load clear it
     const shop = this._refs && this._refs.shopScreen;
     if (shop && typeof shop.setResupplyStop === 'function') shop.setResupplyStop(this._atResupplyStop);
   }
@@ -305,6 +308,8 @@ export class GameFlowManager {
     if (state === GameStates.GAME_OVER || state === GameStates.WIN || state === GameStates.MENU) {
       this._workbenchBreak = false;
       this._setResupplyStop(false);   // u1-resupply-stop D1: game over / win / menu end the stop
+      this._trip.abort();             // trip-melt D9: a trip belongs to the run that just ended (the mission is NOT started)
+      this._deferredBoundary = null;  // trip-melt-2 D12a
     }
 
     // First-depot visit signal, computed BEFORE the flag is persisted so the
@@ -447,7 +452,6 @@ export class GameFlowManager {
         // u1-resupply-stop D4: the first-visit floor is paid at the resupply stop only (a mid-mission look at the
         // full-screen shop pays nothing — the first invitation pays it, and the framing is owed to the next stop).
         firstDepotVisit = this._atResupplyStop ? this._applyFirstDepotFloor() : false;
-        if (this._atResupplyStop) this._stationTakesCargo();   // no-melt: the station unloads the parked catches
         // Any depot entry (the doorway, the B key, the iPad chip) takes the
         // open invitation up — the notch glow ends (Wave 5 Session E).
         this._closeDepotInvitation('entered');
@@ -1220,6 +1224,9 @@ export class GameFlowManager {
           });
         }
 
+        // trip-melt-2 D12a: was a trip ALREADY running when this credit landed? (Read before `_startMissionAfterCredit` below, which
+        // begins the trip for a boundary credit: that credit's own boundary runs at once, as before.)
+        const tripRunningBeforeCredit = this._trip.isActive();
         // Update game state debris counter (belt-and-suspenders with scoringSystem)
         if (payCredit) gameState.clearDebris();
         // Wave 5 Session F (D4): the mission boundary check runs HERE, right
@@ -1245,8 +1252,9 @@ export class GameFlowManager {
         }
 
         // Auto-save after successful capture
-        // (F2: this catch is about to close any open stop below, so the save must not carry it.)
-        if (payCredit) this.saveGame({ resupplyStop: false });
+        // (F2: this catch is about to close any open stop below, so the save must not carry it. trip-melt G1: during
+        // the trip nothing closes it, so the save carries the stop as it is.)
+        if (payCredit) this.saveGame({ resupplyStop: this._trip.isActive() && this._atResupplyStop === true });
 
         // Wireframe self-clears via DEBRIS_REMOVED listener (Batch 3)
 
@@ -1301,15 +1309,25 @@ export class GameFlowManager {
         // catch lives in _onMissionBoundary (Wave 5 Session E).
         const debrisCount = gameState.debrisCleared;
         if (payCredit && debrisCount > 0 && debrisCount % SHOP_CADENCE === 0) {
-          if (gameState.isGameplay()) this._onMissionBoundary(debrisCount);
+          if (gameState.isGameplay()) {
+            // trip-melt-2 D12a: a boundary reached by a credit while the trip waits or burns (five credits in one trip)
+            // must not run mid-trip: the invitation, the stop and the saved state belong to the arrival. It runs after
+            // the trip's mission start (`_beginTripThen`).
+            if (tripRunningBeforeCredit) this._deferredBoundary = debrisCount;
+            else this._onMissionBoundary(debrisCount);
+          }
         } else if (payCredit) {
           // u1-resupply-stop D1: the player has flown out for the next mission — the stop closes at this credited
           // catch whether or not the invitation was still open (a visit closes the invitation as 'entered'; it
           // does not close the stop).
-          this._setResupplyStop(false);
-          // The invitation window is "until the next credited catch" (owner
-          // decision 2, 2026-09-04): a catch that is not a boundary lapses it.
-          this._closeDepotInvitation('lapsed');
+          // trip-melt G1 (DECISIONS §26): not while the trip waits or burns - the player has not flown anywhere yet;
+          // the stop and its invitation close at the first credited catch AFTER the trip.
+          if (!this._trip.isActive()) {
+            this._setResupplyStop(false);
+            // The invitation window is "until the next credited catch" (owner
+            // decision 2, 2026-09-04): a catch that is not a boundary lapses it.
+            this._closeDepotInvitation('lapsed');
+          }
           // M1 guidance T7: the per-catch progress line (guided chapters only;
           // the boundary catch above is the ceremony's, not this line's).
           this._postMissionProgressLine();
@@ -1399,14 +1417,17 @@ export class GameFlowManager {
       // Update game state
       gameState.clearDebris();
       const atBoundary = this._isMissionBoundaryCount(gameState.debrisCleared);
-      this._setResupplyStop(atBoundary);   // u1 D1: a sacrifice that completes a mission opens the stop; any other closes it
-      if (atBoundary) this._beginMissionEndUnload();   // followups-1018 D1
+      // trip-melt G1: a sacrifice that lands while the trip waits or burns neither closes the stop nor starts a mission.
+      const tripOn = this._trip.isActive();
+      if (!tripOn) this._setResupplyStop(atBoundary);   // u1 D1: a sacrifice that completes a mission opens the stop; any other closes it
       // Wave 5 Session F (D4): the second credited-clear path (Ctrl+Shift+D →
       // ARM_DEORBIT_CMD → ArmUnit.startDeorbit) — the mission boundary check
       // follows its increment too, so a sacrifice that lands the 5th clear
       // starts mission 2 on time. (This path has never carried the depot
       // decision — pre-existing, FINDINGS.)
-      scoringSystem.checkMissionTransition();
+      // trip-melt D2: at a boundary the trip begins instead, and the mission starts when it ends.
+      if (atBoundary) this._beginTripThen(() => scoringSystem.checkMissionTransition());
+      else if (!tripOn) scoringSystem.checkMissionTransition();
       // M1 guidance T7: the per-catch progress line rides this credited clear
       // too; its own boundary guard keeps a sacrifice that lands the 5th
       // clear quiet (there is no ceremony here to speak for it — FINDINGS).
@@ -1897,6 +1918,8 @@ export class GameFlowManager {
     this._closeDepotInvitation('reset');
     this._setResupplyStop(false);         // u1-resupply-stop D1: a new run starts mid-mission
     this._pendingMissionStart = null;     // c2-fifth-catch D2: so does a held mission start
+    this._trip.abort();                   // trip-melt D9: and a trip (no mission start, the plume and the hold released)
+    this._deferredBoundary = null;        // trip-melt-2 D12a: a boundary deferred by that trip dies with it
     this._strandedS = 0;                  // t1-stranded: a new run starts with no stranded spell
     timerManager.clearByOwner(this);
   }
@@ -2114,21 +2137,113 @@ export class GameFlowManager {
    * @private
    */
   _startMissionAfterCredit(data, start) {
+    // trip-melt G1: a catch credited while the trip waits for its daughters or burns (a daughter home with a catch, a
+    // net that was already in flight) starts nothing: the burn's end runs the scorer (`start` of the trip), which
+    // starts whichever mission is then due.
+    if (this._trip.isActive()) return;
     this._pendingMissionStart = null;
     const M = Constants.MISSIONS;
     const debrisCount = gameState.debrisCleared;
     const { missionsCompleted, perMission, debrisUntilShop } = getMissionProgress(debrisCount);
     const atBoundary = debrisCount > 0 && debrisUntilShop === perMission;
+    // trip-melt D2: at a boundary the next mission starts when the burn to it ends, not now. `go` is the continuation
+    // a held start releases into as well (every release path ends in `p.start()`), so the hold and the trip compose:
+    // hold until the catch is off the nose, then burn, then start.
+    const go = atBoundary ? () => this._beginTripThen(start) : start;
     // Mirror of _onMissionBoundary's invitation test — keep the two in step
     // (test-FifthCatchCalm pins that they agree).
     const invites = this._ladderOn() &&
       (!M.FORCED_DEPOT_STOP || missionsCompleted > M.FORCED_DEPOT_CHAPTERS);
     // no-melt: a daughter's rack credit (source 'rack') is not a catch sitting at the nose: nothing to wait for.
     if (data && data.parked && data.source !== 'rack' && data.debrisId != null && atBoundary && invites && gameState.isGameplay()) {
-      this._pendingMissionStart = { debrisId: data.debrisId, elapsedS: 0, start };
+      this._pendingMissionStart = { debrisId: data.debrisId, elapsedS: 0, start: go };
       return;
     }
-    start();
+    go();
+  }
+
+  /**
+   * trip-melt D2: begin the transfer trip, with `start` (the mission transition) as what runs when the burn ends.
+   * The trip needs a ship and gameplay; without them (or with FEATURE_FLAGS.TRANSFER_TRIP off) the mission starts
+   * at once, as it did before the trip existed.
+   * @param {() => void} start
+   * @private
+   */
+  _beginTripThen(start) {
+    const r = this._refs;
+    if (!Constants.isFeatureEnabled('TRANSFER_TRIP') || !r || !r.player || !gameState.isGameplay()) { start(); return; }
+    this._syncTripDeps();
+    // trip-melt-2 D12a: a credit that reached the next boundary DURING the trip ran no boundary then (see the credit
+    // handler); it runs now, once the burn has ended and the mission it started has fired MISSION_START.
+    this._trip.begin(() => {
+      start();
+      this._runDeferredBoundary();
+    });
+  }
+
+  /** @private trip-melt-2 D12a: the boundary a mid-trip credit reached runs after the trip's mission start. */
+  _runDeferredBoundary() {
+    const n = this._deferredBoundary;
+    this._deferredBoundary = null;
+    if (n == null || !gameState.isGameplay()) return;
+    this._onMissionBoundary(n);
+  }
+
+  /** @private Hand the trip the collaborators it reads (cheap; also run from init, tests set _refs directly). */
+  _syncTripDeps() {
+    const r = this._refs || {};
+    const am = r.armManager;
+    this._trip.setDeps({
+      player: r.player,
+      armManager: r.armManager,
+      autopilot: r.autopilotSystem,
+      noseWaiting: () => this._noseCanLeash(),
+      carryBusy: () => !!(am && typeof am.isCarrying === 'function' && am.isCarrying()),
+      rackCanCarry: () => !!(am && typeof am.rackCanCarry === 'function' && am.rackCanCarry()),
+    });
+  }
+
+  /** The transfer trip (tests and main.js read its state). */
+  get trip() { return this._trip; }
+
+  /** True while a trip burns: the world clock targets Constants.TRIP.TIME_RATE (main.js). */
+  isTripRunning() { return this._trip.isBurning(); }
+
+  /**
+   * trip-melt D6: is a catch at the nose collar waiting to move to a radiator tip - one the hand-off can still take?
+   * A hand-off under way counts. Read-only mirror of `CaptureNetSystem._tryLeash`'s preconditions (it fits a tip, a tip
+   * is free, the tip is in reach, the gas is enough); a catch that fails one of them is not waited for. Rack
+   * catches (trip-melt-2) are not asked here.
+   * @returns {boolean}
+   * @private
+   */
+  _noseCanLeash() {
+    const player = this._refs && this._refs.player;
+    const drv = player && player.leashDriver;
+    const tc = player && player.tipCargo;
+    const nets = captureNetSystem && captureNetSystem.activeNets;
+    if (!drv || !tc || !Array.isArray(nets)) return false;
+    const COLLARED = Constants.CAPTURE_NET.STATES.COLLARED;
+    const cook = Constants.isFeatureEnabled('FURNACE_COOK');
+    for (const net of nets) {
+      if (!net || !net._isMother) continue;
+      // a hand-off with the catch still on its way to a tip: the trip waits for it to land (once it has landed the
+      // tip holds it, and a driver that is only putting the radiators back is not a reason to burn on)
+      if (net._leash || net._leashNoseReel) return true;
+      if (net.state !== COLLARED || net._leashFailed) continue;
+      const d = net.targetDebris;
+      if (!d) continue;
+      if (!tc.fits(DebrisField.trueReachM(d, 2))) continue;
+      const tip = tc.pickTip();
+      if (tip == null) continue;
+      if (!(drv.canReach(d, tip) || drv.canReachAtNose(net, d, tip))) continue;
+      // trip-melt G3: a hand-off the driver refuses right now (a daughter out on her tether, the radiators busy, a turn
+      // under way) is not waited for: `_tryLeash` would decline it too, and the trip would burn to its 120 s cap for nothing.
+      if (typeof drv.refusal === 'function' && drv.refusal(net)) continue;
+      if (!cook && typeof drv.gasShort === 'function' && drv.gasShort(net, d, tip, { noseReel: !drv.canReach(d, tip) })) continue;
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -2161,14 +2276,8 @@ export class GameFlowManager {
   update(dt) {
     // t1-stranded D1: first, before the held-mission-start early return below (that one returns on almost every frame)
     this._updateStranded(dt);
-    // followups-1018 D1: after a mission end, the station takes a paid catch that has come to rest (at most every 0.5 s)
-    if (this._missionEndUnload && dt > 0) {
-      this._missionEndUnloadS += dt;
-      if (this._missionEndUnloadS >= 0.5) {
-        this._missionEndUnloadS = 0;
-        if (this._atResupplyStop) this._stationTakesCargo();
-      }
-    }
+    // trip-melt D2/D6: the burn between missions (waits for the daughters, then burns; `dt` is 0 while the world is held)
+    this._trip.update(dt);
     const p = this._pendingMissionStart;
     if (!p) return;
     if (!(dt > 0) || !gameState.isGameplay()) return;
@@ -2419,69 +2528,6 @@ export class GameFlowManager {
   }
 
   /**
-   * no-melt (owner 2026-10-18, "Stay full size, no melting"; coordinator's gap-fill under Ruling 0 and DECISIONS §26):
-   * with no furnace aboard, catches stay parked full size on the radiator tips, the daughters' racks and the nose
-   * collar. At the resupply stop the station takes them: each PAID catch leaves the field and its slot frees. Nothing
-   * is credited again (they paid when they were parked) and nothing cooks. A catch still being reeled, flown or
-   * leashed is left alone. One plain line says how many went. A no-op while the furnace flag is on (the furnace owns
-   * the cargo then) and outside the resupply stop (callers gate on `_atResupplyStop`).
-   * @returns {number} how many catches the station took
-   * @private
-   */
-  _stationTakesCargo() {
-    if (Constants.isFeatureEnabled('FURNACE_COOK')) return 0;
-    const { debrisField, player, armManager } = this._refs || {};
-    const paid = (d) => this._piecePaid(d);
-    const ids = [];
-    const tc = player && player.tipCargo;
-    if (tc && typeof tc.debrisAt === 'function' && typeof tc.releaseSlot === 'function') {
-      for (let i = 0; i < 16; i++) {
-        const d = tc.debrisAt(i);
-        if (!d || !paid(d)) continue;
-        const gone = tc.releaseSlot(i);
-        if (gone) ids.push(gone.id);
-      }
-    }
-    if (armManager && typeof armManager.unloadHeldCatches === 'function') {
-      for (const d of armManager.unloadHeldCatches(paid)) ids.push(d.id);
-    }
-    if (typeof captureNetSystem.handOverCollarCatch === 'function') {
-      const id = captureNetSystem.handOverCollarCatch();
-      if (id != null) ids.push(id);
-    }
-    if (ids.length === 0) return 0;
-    if (debrisField && typeof debrisField.removeDebris === 'function') {
-      for (const id of ids) debrisField.removeDebris(id);
-    }
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `The station took your ${ids.length} catch${ids.length === 1 ? '' : 'es'}.`,
-      priority: 'info',
-      _keep: true,   // comms-after-tutorial D6: where the catches went - never folded into "x N queued"
-    });
-    // The collar hand-over emits only NET_CONSUMED, which no start-release listener hears: a mission start held on
-    // the taken catch (a parked credit at a boundary) would wait out START_AFTER_CATCH_MAX_S. Release it here.
-    for (const id of ids) this._releaseMissionStartFor(id);
-    return ids.length;
-  }
-
-  /**
-   * followups-1018 D1 (owner 2026-10-18, "Unload at every mission end"): a completed mission has just opened the
-   * resupply stop. The station takes the paid catches now, and keeps taking any paid catch that comes to rest while the
-   * stop stays open (`update` polls every 0.5 s): the mother-net catch that ended the mission is
-   * still BERTHED here (it reaches COLLARED a moment later, with no event), and a hand-off can land on a tip or rack.
-   * Edge case (logged): a catch still moving when the next mission's first credit closes the stop is carried on.
-   * @private
-   */
-  _beginMissionEndUnload() {
-    this._missionEndUnload = true;
-    // Primed so the very next update polls: main.js runs gameFlowManager.update BEFORE captureNetSystem.update, and a
-    // mother-net catch that ended the mission is COLLARED (and `_berthProcessed`) by then but has not yet had its first
-    // collar tick, so the station takes it before the cargo hand-off can start a leash to a tip the station just emptied.
-    this._missionEndUnloadS = 0.5;
-    this._stationTakesCargo();
-  }
-
-  /**
    * Wave 5 Session K — the ONE ladder-on-gameplay depot entry (plan D-B: one
    * shop, one place). Called by the `transitionToState(SHOP)` redirect (site 1)
    * and by the boundary dwell (site 2); never with the ladder off, never
@@ -2502,7 +2548,6 @@ export class GameFlowManager {
     // and the framing is still owed (consumed here, once).
     // u1-resupply-stop D4: the floor is paid at the resupply stop only; a mid-mission look pays nothing.
     const floorPaid = this._atResupplyStop ? this._applyFirstDepotFloor() : false;
-    if (this._atResupplyStop) this._stationTakesCargo();   // no-melt: the station unloads the parked catches
     const owed = this._firstVisitOwed;
     this._firstVisitOwed = false;
     const firstDepotVisit = floorPaid || owed;
@@ -2568,7 +2613,6 @@ export class GameFlowManager {
     // u1-resupply-stop D1: a completed mission opens the resupply stop on EVERY path below (the ladder-on
     // invitation, the forced stop, the ladder-off boundary shop) — it stays open until the next credited catch.
     this._setResupplyStop(true);
-    this._beginMissionEndUnload();   // followups-1018 D1: the mission end unloads, whether or not the shop is opened
     if (ladderOn && (!M.FORCED_DEPOT_STOP || missionsCompleted > M.FORCED_DEPOT_CHAPTERS)) {
       this._openDepotInvitation(debrisCount, missionsCompleted);
       return;

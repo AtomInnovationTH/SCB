@@ -152,3 +152,58 @@ export function strutTipFoulsCorridor(alpha, azRad, collarR, collarY, strutLen, 
   const tipY = Math.sin(azRad) * collarR + _tipDir.y * strutLen - anchor.y;
   return (tipX * tipX + tipY * tipY) < radiusM * radiusM;
 }
+
+// ── petal-single: the carry's attitude family ───────────────────────────────────────────────────────────────────────
+// Carried in her docked attitude, her body ended 0.04-0.15 m from the receiving radiator's cone / boom / plate whatever the
+// pose (exhaustive search, 7 x 4300+ strut/petal pairs, none clear 0.15 m). So she TURNS on the way: while she seats the
+// catch her body trails away from the radiator along one of a few directions fixed in the tip's own frame. The generator
+// (js/test/_carryGate.js) and the carry (ArmUnit) both build the final attitude with these three functions, so they cannot drift.
+
+/** Number of trailing directions (index k in the gate table's `dir`). */
+export const CARRY_DIR_COUNT = 5;
+// in the tip's hinge frame (TipCargo.hingeQuatShipInto): +X the boom, outward from the ship; Y the hinge axis; Z the in-plane perpendicular
+const CARRY_DIR_AXES = [[1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]];
+const _cdQ = new THREE.Quaternion();
+const _cdR = new THREE.Quaternion();
+
+/**
+ * Direction k of the carry's attitude family in the ship frame.
+ * @param {{x:number,y:number,z:number,w:number}} hingeQuat turn from the tip's hinge frame to the ship frame
+ * @param {number} k 0 = along the boom outward, 1/2 = along +-Z, 3/4 = along +-Y
+ * @param {THREE.Vector3} out unit vector (ship frame)
+ */
+export function carryDirInto(hingeQuat, k, out) {
+  const a = CARRY_DIR_AXES[k];
+  _cdQ.set(hingeQuat.x, hingeQuat.y, hingeQuat.z, hingeQuat.w);
+  return out.set(a[0], a[1], a[2]).applyQuaternion(_cdQ);
+}
+
+/**
+ * Her attitude at the seat: the shortest turn that takes the direction from the catch's centre to her centre (`u0`, unit,
+ * ship frame, in her DOCKED attitude `q0`) onto `dir`. out = R * q0.
+ * @returns {THREE.Quaternion} out
+ */
+export function carryFinalQuatInto(q0, u0, dir, out) {
+  _cdR.setFromUnitVectors(u0, dir);
+  return out.copy(_cdR).multiply(q0);
+}
+
+/**
+ * How far through the turn she is at fraction `t` (0..1, of the straight line her centre flies): nothing while she leaves
+ * her strut (the first `ownFreeM` metres of `lengthM`, where the gate does not count her own strut), then a linear turn
+ * that is over at 55 % of the line (later on a very short line), so the last stretch is a plain approach.
+ * @returns {{a:number, b:number}} the fractions of the line at which the turn starts and ends (`carryRotFrac` is its value)
+ */
+/** The turn is over at this fraction of the line (later on a short line), and lasts at least this much of it. Part of what the gate certifies. */
+export const CARRY_TURN_END = 0.55;
+export const CARRY_TURN_MIN_SPAN = 0.1;
+export function carryRotSpan(lengthM, ownFreeM) {
+  const a = lengthM > 0 ? Math.min(0.95, ownFreeM / lengthM) : 0;
+  return { a, b: Math.min(1, Math.max(CARRY_TURN_END, a + CARRY_TURN_MIN_SPAN)) };
+}
+export function carryRotFrac(t, lengthM, ownFreeM) {
+  const { a, b } = carryRotSpan(lengthM, ownFreeM);
+  if (t <= a) return 0;
+  if (t >= b) return 1;
+  return (t - a) / (b - a);
+}

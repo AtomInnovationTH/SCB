@@ -22,10 +22,17 @@ import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit } from './ArmUnit.js';
 import { DebrisField } from './DebrisField.js';
 import { clearRackCell } from './CaptureNet.js';
+import { tripRefuses } from '../systems/TransferTrip.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg, engineGasLowFrac } from '../systems/ResourceSystem.js';
 
 /** 1 meter in scene units */
 const M = 0.00001;
+
+// reel-home scratch
+const _rhInvQ = new THREE.Quaternion();
+const _rhGapA = new THREE.Vector3();
+const _rhGapB = new THREE.Vector3();
+const _rhAxisR = new THREE.Vector3();
 
 // Task 7 (opening-dance plan) — bounded safety-net release. LASSO_CAPTURED's
 // own downstream adoption (CaptureNetSystem.adoptLassoCatch) deliberately
@@ -79,16 +86,22 @@ const _HIGH_RISK_ROT_STATES = new Set([
   ARM_STATES.RETURNING,
   ARM_STATES.DOCKING,
   ARM_STATES.DEORBITING,
+  // trip-melt-2 (carry): she is out on her strut line, flying in her docked attitude — the mother holds still
+  ARM_STATES.CARRY_OUT,
+  ARM_STATES.CARRY_HANDOFF,
+  ARM_STATES.CARRY_BACK,
 ]);
 // Wave1 reel-drum feedback (2026-08-27): arm states where the daughter parks
 // AT her strut tip → drum 'ready'. Mirrors ArmUnit._updateTether's hidden-line
 // set (DOCKED/DOCKING/RELOADING/HOLDING_CATCH) minus EXPENDED, whose cartridge
-// maps to 'empty'.
+// maps to 'empty'. CARRY_PREP is docked too (her line is wound, the strut and radiators are moving); the three
+// states where she is out ('deployed') are not listed.
 const _DRUM_HOME_STATES = new Set([
   ARM_STATES.DOCKED,
   ARM_STATES.DOCKING,
   ARM_STATES.RELOADING,
   ARM_STATES.HOLDING_CATCH,
+  ARM_STATES.CARRY_PREP,
 ]);
 const _SOFT_ROT_STATES = new Set([
   ARM_STATES.UNDOCKING,
@@ -99,7 +112,18 @@ const _SOFT_ROT_STATES = new Set([
   ARM_STATES.TRAWLING,
   ARM_STATES.SCANNING,
   ARM_STATES.ABLATING,
+  ARM_STATES.CARRY_PREP,           // trip-melt-2: docked, but the strut and radiators are moving
 ]);
+/** trip-melt-2 (carry): the four carry states. A carrying daughter is still part of the ship's books (her mass is aboard,
+ *  recall refuses her, her rack catches are pinned to her), but not "home". */
+const _CARRY_STATES = new Set([
+  ARM_STATES.CARRY_PREP,
+  ARM_STATES.CARRY_OUT,
+  ARM_STATES.CARRY_HANDOFF,
+  ARM_STATES.CARRY_BACK,
+]);
+/** @param {string} state @returns {boolean} one of CARRY_PREP / OUT / HANDOFF / BACK */
+export function isCarryState(state) { return _CARRY_STATES.has(state); }
 
 /**
  * Config G: Generate dock positions for the given arm tier (ST-9.2).
@@ -285,6 +309,13 @@ export class ArmManager {
     this._leanAsideActive = false;
     this._leanAsideTimer = 0;
 
+    // reel-home (2026-10-19): the mother turn a daughter on the reels owns (first come), and the transient exception
+    // `getRotationLockTier` reads while that turn is being requested.
+    this._rhTurn = null;          // { arm, attempt } while a turn for a daughter on the reels is running
+    this._rhOwner = null;         // the daughter that owns the mother turn
+    this._rhSeq = 0;              // arrival counter ("first come")
+    this._lockExceptArm = null;
+
     // Daughter-arm automation (lane arms-auto): the controller, the once-per-player
     // store (main.js hands it in; no store → the full-range show never runs) and the
     // "." press counter the show uses to notice a player taking over.
@@ -407,6 +438,12 @@ export class ArmManager {
     eventBus.on(Events.NET_FAILED, releaseLeanAside);
     eventBus.on(Events.NET_RELEASED, releaseLeanAside);
     eventBus.on(Events.NET_TORN, releaseLeanAside);
+
+    // reel-home (fix round F3): the mother's own net or lasso going out wins over a reel-home turn of the mother.
+    eventBus.on(Events.NET_FIRED, (data) => {
+      if (data && data.podIndex >= 0) this._rhOnMotherCatchFired('net');
+    });
+    eventBus.on(Events.LASSO_FIRED, () => this._rhOnMotherCatchFired('lasso'));
   }
 
   // ==========================================================================
@@ -482,16 +519,16 @@ export class ArmManager {
     }
 
     if (!arm) {
-      // no-melt: with no furnace a daughter that holds a catch stays holding it until the station takes it, so say
-      // that plainly instead of the bare "no daughters" line.
+      // no-melt: with no furnace a daughter that holds a catch stays holding it until the burn to the next field, where she
+      // carries it to a furnace (trip-melt-2), so say that plainly instead of the bare "no daughters" line.
       const holding = Constants.isFeatureEnabled('FURNACE_COOK') ? 0
         : this.arms.filter((a) => a && a.state === ARM_STATES.HOLDING_CATCH).length;
       const usable = this.arms.filter((a) => a && a.state !== ARM_STATES.EXPENDED && !a.isDetached).length;
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: holding > 0 && holding >= usable
-          ? 'All daughters are holding catches. The station unloads them at the end of the mission.'
+          ? 'All daughters are holding catches. They carry them to the furnaces on the burn to the next field.'
           : holding > 0
-            ? `No daughter is free: ${holding} holding catches. The station unloads them at the end of the mission.`
+            ? `No daughter is free: ${holding} holding catches. They carry them to the furnaces on the burn to the next field.`
             : 'No daughters available for deployment (check spring charge)',
         priority: 'warning',
       });
@@ -711,6 +748,17 @@ export class ArmManager {
   }
 
   /**
+   * reel-home (Decision 6, fix round F1): does `a` NOT limit the mother's turn for `exceptArm`? True for `exceptArm`
+   * herself (her own reservation and state), and for another daughter on the strut line (state REELING and home — her
+   * line is being wound in). False without `exceptArm` (launch callers), and for a daughter still in GRAPPLED, her net
+   * reel included: that daughter is working.
+   * @private
+   */
+  _rhIgnoredForTurn(a, exceptArm) {
+    return !!exceptArm && (a === exceptArm || (a.state === ARM_STATES.REELING && a.isReelingHome === true));
+  }
+
+  /**
    * Why the mother may NOT turn for a launch right now, in plain words, or null when she is free to turn.
    * Free = no daughter out on a line (rotation-lock tier 'none'), no launch in flight or waiting (another arm
    * LAUNCHING, an arm reserved, a pending launch, an aim running), no catch on the collar / nose (state + size:
@@ -720,20 +768,28 @@ export class ArmManager {
    * @returns {string|null}
    * @private
    */
-  _motherTurnBlock() {
-    if (this.getRotationLockTier() !== 'none') return 'a daughter is out on her line';
+  _motherTurnBlock(exceptArm = null) {
+    if (this.getRotationLockTier(exceptArm) !== 'none') return 'a daughter is out on her line';
     const ap = this._autopilot;
+    // reel-home (fix round F5): the autopilot flying the ship keeps steering it back to its own heading the moment a
+    // turn ends, so a daughter's turn would be undone: she lines herself up instead. Launch callers (no argument) keep
+    // today's answer.
+    if (exceptArm && ap && ap.engaged === true) return 'the autopilot is flying the ship';
+    // reel-home (Decision 6): with `exceptArm` the daughter's own reservation does not count, nor the reservation of
+    // another daughter on the strut line (REELING); the mother's own reel-home turn (below) is not "a hand-off" either.
+    const mine = !!exceptArm && !!this._rhTurn;
     if ((this._pendingLaunches && this._pendingLaunches.size > 0)
-        || this.arms.some((a) => a && (a._aimReserved || a.state === ARM_STATES.LAUNCHING))
+        || this.arms.some((a) => a && ((a._aimReserved && !this._rhIgnoredForTurn(a, exceptArm))
+          || a.state === ARM_STATES.LAUNCHING))
         || (ap && typeof ap.isAiming === 'function' && ap.isAiming())) {
       return 'a launch is in progress';
     }
     const ld = this.playerSatellite && this.playerSatellite.leashDriver;
     if (ld && typeof ld.isActive === 'function' && ld.isActive()) return 'a hand-off is running';
     if (this._heldCatchCorridorRadiusM() !== null) return 'a catch is on the collar';
-    if (ap && typeof ap.isTurning === 'function' && ap.isTurning()) return 'a hand-off is running';   // a scripted turn takes an anonymous hold too
+    if (!mine && ap && typeof ap.isTurning === 'function' && ap.isTurning()) return 'a hand-off is running';   // a scripted turn takes an anonymous hold too
     if (ap && typeof ap.isReelInHeld === 'function' && ap.isReelInHeld()) return 'a catch is being reeled in';
-    if (ap && typeof ap.isAttitudeHeld === 'function' && ap.isAttitudeHeld()) return 'a hand-off is running';
+    if (!mine && ap && typeof ap.isAttitudeHeld === 'function' && ap.isAttitudeHeld()) return 'a hand-off is running';
     return null;
   }
 
@@ -1138,6 +1194,7 @@ export class ArmManager {
       if (arm.state === S.RETURNING) continue;
       if (arm.state === S.DOCKING) continue;
       if (arm.state === S.HOLDING_CATCH) continue; // parked with cargo — recall refuses her
+      if (_CARRY_STATES.has(arm.state)) continue;  // carrying a catch to a furnace — it ends at her dock
       if (typeof arm.recall === 'function') {
         // Zero-fuel reel on the mothership tether motor: stuck / fuel-depleted
         // tethered daughters always come home (never abandoned as EXPENDED).
@@ -1195,7 +1252,8 @@ export class ArmManager {
       && a.state !== S.EXPENDED
       && a.state !== S.RETURNING
       && a.state !== S.DOCKING
-      && a.state !== S.HOLDING_CATCH; // parked with cargo — recall refuses her
+      && a.state !== S.HOLDING_CATCH // parked with cargo — recall refuses her
+      && !_CARRY_STATES.has(a.state);  // carrying a catch to a furnace — it ends at her dock
 
     // (0) Selection-aware: recall the SELECTED deployed daughter first.
     if (this.selectedArmIndex >= 0) {
@@ -1716,6 +1774,11 @@ export class ArmManager {
       arm.update(dt, parentPos, parentQuat);
     }
 
+    // reel-home (Decisions 5-7): the strut follows a daughter on the reels; the mother turns for her when nothing limits.
+    this._updateReelHome(dt, parentPos, parentQuat);
+    this._updateCarry(dt);
+    this._tickMissionCarry(dt);
+
     // Wave1: spin/amber the strut reel cartridges per live arm state.
     this._syncTetherDrums();
 
@@ -1751,7 +1814,7 @@ export class ArmManager {
       for (const arm of this.arms) {
         // S6: HOLDING_CATCH reads the parked cargo RACK (heldCatches); the haul
         // states (REELING/DOCKING) read the in-hand scalar — unchanged.
-        const pieces = (arm.state === ARM_STATES.HOLDING_CATCH)
+        const pieces = (arm.state === ARM_STATES.HOLDING_CATCH || _CARRY_STATES.has(arm.state))
           ? (arm.heldCatches || [])
           : (arm.capturedDebris ? [arm.capturedDebris] : null);
         if (!pieces || pieces.length === 0) continue;
@@ -1762,7 +1825,9 @@ export class ArmManager {
         // vanishes when it reaches the mother".
         if (arm.state === ARM_STATES.REELING ||
             arm.state === ARM_STATES.DOCKING ||
-            arm.state === ARM_STATES.HOLDING_CATCH) {
+            arm.state === ARM_STATES.HOLDING_CATCH ||
+            _CARRY_STATES.has(arm.state) ||     // trip-melt-2: the rack rides along on the carry
+            (arm.state === ARM_STATES.GRAPPLED && arm._rhPinned === true)) {   // reel-home: the net reel winds the pinned catch in
           for (const d of pieces) {
             if (!d) continue;
             // Item 1: once the staged furnace breakdown begins (debris._breakdownActive,
@@ -1807,6 +1872,494 @@ export class ArmManager {
         }
       }
     }
+  }
+
+  // ==========================================================================
+  // trip-melt-2 "carry" — a daughter takes the catch on her rack to her radiator's tip furnace (ArmUnit.beginCarry)
+  // ==========================================================================
+
+  /** @returns {boolean} some daughter is on a carry (any CARRY state) */
+  isCarrying() {
+    for (const a of this.arms) if (a && a.isCarrying) return true;
+    return false;
+  }
+
+  /** The gate's size row of a catch: the row of `PLUME_CARGO_ALPHA_LADDER` its `sizeMeter` falls in (unknown size: the deepest). */
+  carryRowOf(debris) {
+    const ladder = Constants.PLUME_CARGO_ALPHA_LADDER || [];
+    const s = debris && debris.sizeMeter > 0 ? debris.sizeMeter : Infinity;
+    for (let i = 0; i < ladder.length; i++) if (s <= ladder[i].maxSizM) return i;
+    return Math.max(0, ladder.length - 1);
+  }
+
+  /**
+   * The gate entry for a daughter's carry: `Constants.CARRY.GATE[pair]['<row>|<cell>']` = {strutDeg, thetaDeg} or
+   * absent/null (no pose clears that row: it never carries). Generated offline (js/test/fixtures/carry-gate.json).
+   * @param {ArmUnit} arm
+   * @param {number} row size row (the larger of the pieces she holds)
+   * @param {number} cell the delivered piece's rack cell
+   * @returns {{strutDeg:number, thetaDeg:number}|null}
+   */
+  carryGateFor(arm, row, cell) {
+    const G = Constants.CARRY && Constants.CARRY.GATE;
+    const pair = G && G[arm.config.type];
+    const e = pair && pair[`${row}|${cell}`];
+    return e || null;
+  }
+
+  /** The carry is certified for the dock ring the quad has (4 daughters at its azimuths): any other layout never carries. @private */
+  _carryLayoutOk() {
+    const want = Constants.ARM_LADDER && Constants.ARM_LADDER.Y0_QUAD && Constants.ARM_LADDER.Y0_QUAD.azimuths;
+    if (!want || this.arms.length !== want.length) return false;
+    for (let i = 0; i < want.length; i++) {
+      const a = this.arms[i];
+      if (!a || Math.abs((a._azimuthDeg ?? NaN) - want[i]) > 1e-6) return false;
+    }
+    return true;
+  }
+
+  /**
+   * petal-single (Decisions 4, 7d): the conditions the gate table was certified for that can change while a daughter waits
+   * or carries - the other three petals standing in a certified shared-angle range and not on their way out of it, the
+   * other three struts within `NEIGHBOUR_TOL_DEG` of their rest angle, and her own recorded strut angle inside the swept range.
+   * Read-only. `null` = all hold, else `{reason, text}` (every one of them clears by waiting).
+   * @param {ArmUnit} arm
+   * @returns {null|{reason:string, text:string}}
+   */
+  carryConditions(arm) {
+    const V = Constants.CARRY;
+    const ps = this.playerSatellite;
+    const n = arm.index + 1;
+    const R2D = 180 / Math.PI;
+    const inRange = (deg) => V.OTHERS_RANGES_DEG.some(([lo, hi]) => deg >= lo - 1e-6 && deg <= hi + 1e-6);
+    const sharedDeg = (ps._flowerThetaRad ?? 0) * R2D;
+    const targetDeg = Number.isFinite(ps._flowerTargetTheta) ? ps._flowerTargetTheta * R2D : sharedDeg;
+    if (!inRange(sharedDeg) || !inRange(targetDeg)) {
+      return { reason: 'radiators-moving', text: `The radiators are not settled. Daughter ${n} waits.` };
+    }
+    for (const o of this.arms) {
+      if (!o || o === arm || typeof o.getAimAlpha !== 'function') continue;
+      if (Math.abs(o.getAimAlpha() * R2D - V.NEIGHBOUR_REST_DEG) > V.NEIGHBOUR_TOL_DEG + 1e-6) {
+        return { reason: 'neighbour-strut', text: `Daughter ${o.index + 1}'s strut is out of place. Daughter ${n} waits.` };
+      }
+    }
+    const recDeg = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() * R2D : NaN;
+    if (!(recDeg >= V.STRUT_REC_LO_DEG - 1e-6 && recDeg <= V.STRUT_REC_HI_DEG + 1e-6)) {
+      return { reason: 'strut-range', text: '' };
+    }
+    return null;
+  }
+
+  /**
+   * Can this daughter start a carry now? Reads, changes nothing. `retry` tells the trip whether waiting can help: a
+   * catch that does not fit a tip, a row the gate does not allow and a daughter without the fuel never carry; a busy
+   * tip, another carry, a hand-off under way, radiators or neighbour struts that are not where the gate was certified end by
+   * themselves. `giveUp` (petal-single, Decision 7e): the answer cannot change by waiting at all (the dock layout, the catch
+   * does not fit, the row is not allowed, no tip record): the scheduler marks her so it stops asking until something changes.
+   * 'swing-back' (review R8) waits too: the catch is bigger than the gate certified for the radiators' present range (closed/open).
+   * `mission`: outside a trip - the leash's mission conditions also apply (the ship is not turning or holding a heading, no
+   * daughter is leaving, time is not held) and a launch request for her blocks it.
+   * @param {ArmUnit} arm
+   * @param {{mission?:boolean}} [opts]
+   * @returns {{ok:boolean, reason:string, text:string, retry:boolean, giveUp:boolean, plan?:object}}
+   */
+  carryCheck(arm, opts = {}) {
+    const S = ARM_STATES;
+    const mission = opts.mission === true;
+    const no = (reason, text = '', retry = true, giveUp = false, sayKey = '') => ({ ok: false, reason, text, retry, giveUp, sayKey });
+    if (!arm || arm.isDetached || (arm.state !== S.HOLDING_CATCH && arm.state !== S.DOCKED)) return no('state', '', false);
+    if (arm._carryGaveUp) return no('gave-up', '', false);          // her last carry failed on its own: not again until something changes
+    const rack = Array.isArray(arm.heldCatches) ? arm.heldCatches.filter(Boolean) : [];
+    if (rack.length === 0) return no('no-catch', '', false);
+    const ps = this.playerSatellite;
+    const tc = ps && ps.tipCargo;
+    if (!tc || typeof ps.holdPetalForHandoff !== 'function' || typeof arm.beginCarry !== 'function') return no('no-tip', '', false, true);
+    if (!this._carryLayoutOk()) return no('layout', '', false, true);
+    const n = arm.index + 1;
+    // the delivered piece is the outermost one (cell 1 leads when she holds two: cell 0's cannot pass it)
+    let delivered = rack[0];
+    const cellOf = (d, i) => (Number.isInteger(d._rackCell) ? d._rackCell : i);
+    for (let i = 1; i < rack.length; i++) if (cellOf(rack[i], i) > cellOf(delivered, 0)) delivered = rack[i];
+    const cell = Math.max(0, Math.min(1, cellOf(delivered, rack.indexOf(delivered))));
+    const reach = DebrisField.trueReachM(delivered, 0);
+    if (!tc.fits(reach)) {
+      return no('fit', `Daughter ${n}'s catch is too big for a radiator tip. It stays on her rack.`, false, true);
+    }
+    let row = 0;
+    for (const d of rack) row = Math.max(row, this.carryRowOf(d));
+    const gate = this.carryGateFor(arm, row, cell);
+    if (!gate) {
+      return no('gate', `Daughter ${n} cannot carry this catch to a furnace without touching the ship. It stays on her rack.`, false, true);
+    }
+    const tipIndex = arm.index;                               // her radiator: the tip on her line (DECISIONS §29 row 4)
+    const fuelPct = typeof arm.carryFuelPct === 'function' ? arm.carryFuelPct() : 0;
+    if (!(arm.fuel >= fuelPct)) {
+      return no('fuel', `Daughter ${n} has too little fuel to carry her catch. It stays on her rack.`, false);
+    }
+    if (this.isCarrying()) return no('carry-busy');
+    const drv = ps.leashDriver || (this.player && this.player.leashDriver) || null;
+    // ANY petal on its own (a hand-off, or one still swinging back from one) or a launch fold blocks it
+    if (ps.flowerPetalsBusy || ps.flowerLaunchLocked || (drv && drv.busy)) {
+      return no('leash-busy', 'The radiators are busy with another catch. She waits.');
+    }
+    if (mission) {
+      if (this._pendingLaunches && this._pendingLaunches.has(arm.index)) return no('launch-pending');
+      const why = drv && typeof drv.refusal === 'function' ? drv.refusal(null) : null;
+      if (why) return no(`mission-${why.key}`);
+    }
+    if (tc.debrisAt(tipIndex) || (typeof tc.isReserved === 'function' && tc.isReserved(tipIndex))) {
+      return no('tip-busy', `Radiator ${tipIndex + 1}'s furnace is busy. Daughter ${n} waits.`);
+    }
+    const cond = this.carryConditions(arm);
+    if (cond) return no(cond.reason, cond.text);
+    // review R8: no carry starts whose swing BACK (her petal released, the catch in the tip bag, past her strut, her body, the hull
+    // and the other petals) is not certified 0.15 m. The gate measured the largest catch reach each range of the radiators
+    // allows (closed: the bag passes her own strut close; open: far); a bigger catch waits for the other range - it clears by itself.
+    {
+      const V = Constants.CARRY;
+      const sharedDeg = (ps._flowerThetaRad ?? 0) * 180 / Math.PI;
+      const closed = sharedDeg <= V.OTHERS_RANGES_DEG[0][1] + 1e-6;                      // [0, 1] deg = closed, [133, 146] = open (carryConditions)
+      const limit = gate.swingBackReachM ? gate.swingBackReachM[closed ? 'closed' : 'open'] : 0;
+      if (!(reach <= limit + 1e-9)) {
+        return no('swing-back',
+          closed
+            ? `Daughter ${n}'s catch is too big to hand over while the radiators are closed. She waits for them to open.`
+            : `Daughter ${n}'s catch is too big to hand over while the radiators are open. She waits for them to close.`,
+          true, false, `${arm.index}|swing-back|${delivered.id ?? delivered.sizeMeter}`);
+      }
+    }
+    return {
+      ok: true, reason: '', text: '', retry: false, giveUp: false,
+      plan: {
+        tipIndex, cell, delivered, row, mission,
+        strutRad: gate.strutDeg * Math.PI / 180, thetaRad: gate.thetaDeg * Math.PI / 180, dir: gate.dir,
+        recordedStrutRad: typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : gate.strutDeg * Math.PI / 180,
+      },
+    };
+  }
+
+  /**
+   * Start a carry for `arm` if `carryCheck` allows it. A start the daughter itself refuses (no tip record) is a give-up.
+   * @param {ArmUnit} arm
+   * @param {{mission?:boolean}} [opts]
+   * @returns {{ok:boolean, reason:string, text:string, retry:boolean, giveUp:boolean}} the check's answer (ok: she is in CARRY_PREP)
+   */
+  requestCarry(arm, opts = {}) {
+    const c = this.carryCheck(arm, opts);
+    if (!c.ok) return c;
+    if (!arm.beginCarry(c.plan)) {
+      arm._carryGaveUp = true;
+      return { ok: false, reason: 'refused', text: '', retry: false, giveUp: true };
+    }
+    return c;
+  }
+
+  /**
+   * One look of a carry scheduler: start the first daughter that can carry (first free tip first, ties by daughter index).
+   * A refusal that cannot clear by waiting marks her (`_carryGaveUp`: the scheduler stops asking); the ones worth a line say it
+   * once per `said` key. The trip calls it on its own cadence while it burns, the mission scheduler (`_tickMissionCarry`)
+   * outside a trip.
+   * @param {{mission?:boolean, say?:function(string):void, said?:object}} [o]
+   * @returns {ArmUnit|null} the daughter that started
+   */
+  scheduleCarry({ mission = false, say = null, said = null } = {}) {
+    const tc = this.playerSatellite && this.playerSatellite.tipCargo;
+    const tipTaken = (a) => (tc && typeof tc.debrisAt === 'function' && tc.debrisAt(a.index) ? 1 : 0);
+    const arms = this.arms.filter((a) => a && !a.isDetached);
+    arms.sort((a, b) => tipTaken(a) - tipTaken(b) || a.index - b.index);
+    for (const arm of arms) {
+      const r = this.carryCheck(arm, { mission });
+      if (r.ok) {
+        if (this.requestCarry(arm, { mission }).ok) return arm;
+        continue;
+      }
+      if (r.giveUp) arm._carryGaveUp = true;
+      const sayIt = say && r.text && (r.reason === 'fit' || r.reason === 'gate' || r.reason === 'fuel' || r.reason === 'swing-back');
+      if (sayIt) {
+        const key = r.sayKey || `${arm.index}|${r.reason}`;                  // swing-back: once per catch
+        if (said && !said[key]) { said[key] = true; say(r.text); }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The trip phase the mission scheduler stands aside for: 'wait' (the trip waits for the daughters: no new carry), 'burn'
+   * (the trip's own scheduler) or null (a mission). Set by TransferTrip.
+   * @param {string|null} phase
+   */
+  setTripPhase(phase) {
+    this._tripPhase = phase || null;
+    if (!this._tripPhase) { this._missionCarryAgeS = 0; this._missionTipsTaken = null; this._missionCarrySaid = Object.create(null); }
+  }
+
+  /**
+   * petal-single (Decision 5): carries outside a trip. Every `MISSION_CHECK_S` of game time, when no trip owns the
+   * carries, `scheduleCarry({mission:true})` looks for a daughter with a catch on her rack. A give-up clears when she
+   * leaves the dock (a launch) or any tip frees. Cheap exit when no daughter holds a catch.
+   * @private
+   */
+  _tickMissionCarry(dt) {
+    if (this._tripPhase || !(dt > 0)) return;
+    const V = Constants.CARRY;
+    this._missionCarryAgeS = (this._missionCarryAgeS || 0) + dt;
+    if (this._missionCarryAgeS < (V.MISSION_CHECK_S ?? 1)) return;
+    this._missionCarryAgeS = 0;
+    const said = this._missionCarrySaid || (this._missionCarrySaid = Object.create(null));
+    const tc = this.playerSatellite && this.playerSatellite.tipCargo;
+    // something changed that could let a refused carry through: a tip freed, or the daughter went out and came back
+    let taken = 0;
+    for (let i = 0; i < 4; i++) if (tc && typeof tc.debrisAt === 'function' && tc.debrisAt(i)) taken |= (1 << i);
+    const freed = this._missionTipsTaken != null && (this._missionTipsTaken & ~taken) !== 0;
+    this._missionTipsTaken = taken;
+    for (const a of this.arms) {
+      if (!a) continue;
+      const home = a.state === ARM_STATES.DOCKED || a.state === ARM_STATES.HOLDING_CATCH;
+      if (freed || !home) {
+        if (a._carryGaveUp) a._carryGaveUp = false;
+        for (const k of Object.keys(said)) if (k.startsWith(`${a.index}|`) && !k.includes('|swing-back|')) delete said[k];   // (swing-back: once per catch, its key names the catch)
+      }
+    }
+    if (!this.arms.some((a) => a && !a._carryGaveUp && Array.isArray(a.heldCatches) && a.heldCatches.length > 0
+        && (a.state === ARM_STATES.DOCKED || a.state === ARM_STATES.HOLDING_CATCH))) return;
+    this.scheduleCarry({
+      mission: true, said,
+      say: (text) => eventBus.emit(Events.COMMS_MESSAGE, { text, priority: 'info' }),
+    });
+  }
+
+
+  /** A new trip: every daughter may try a carry again (`_carryGaveUp` cleared). */
+  resetCarryGiveUps() {
+    for (const a of this.arms) if (a) a._carryGaveUp = false;
+  }
+
+  /** Stop every carry now (game over, reset, load, the trip's hard cap). @returns {number} how many were running */
+  abortAllCarries(why = 'abort') {
+    let n = 0;
+    for (const a of this.arms) if (a && a.isCarrying && a.abortCarry(why)) n++;
+    return n;
+  }
+
+  /**
+   * Can any rack catch still be carried - now, or once her tip frees / the hand-off ends / the bag in the way melts?
+   * The trip's end rule waits for it. A catch that never carries (too big for a tip, a row the gate does not allow, no
+   * fuel: fuel does not come back on the trip) does not count.
+   * @returns {boolean}
+   */
+  rackCanCarry() {
+    for (const a of this.arms) {
+      if (!a || a.isDetached || !Array.isArray(a.heldCatches) || a.heldCatches.length === 0) continue;
+      const r = this.carryCheck(a);
+      if (r.ok || r.retry) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Per frame: a daughter in CARRY_PREP whose strut has nobody to slew it (a headless rig with no strut groups) is
+   * slewed here, as reel-home does. In the game `PlayerSatellite._updateStruts` slews to `_strutTargetAlpha`.
+   * @private
+   */
+  _updateCarry(dt) {
+    const headless = !(this.playerSatellite && this.playerSatellite.strutGroups);
+    if (!headless) return;
+    for (const a of this.arms) {
+      if (!a || !a._carry || a.state !== ARM_STATES.CARRY_PREP || typeof a.setAimAlpha !== 'function') continue;
+      const t = a._carry.strutRad;
+      a.setAimAlpha(t, dt);
+      if (Math.abs(a.getAimAlpha() - t) < 0.01) a._strutTargetAlpha = undefined;
+    }
+  }
+
+  // ==========================================================================
+  // reel-home — the strut follows a daughter on the reels, the mother turns to meet her line
+  // ==========================================================================
+
+  /**
+   * reel-home (Decisions 5, 6). For every daughter on the reels (her net winding the catch in, or on the strut line):
+   *  - the strut's target angle follows her (the swing-plane angle nearest the direction hinge -> her, clamped to
+   *    REEL_HOME.STRUT_MIN_DEG..STRUT_MAX_DEG, at the existing slew rate); the strut is `_aimReserved` so StrutAuto
+   *    leaves it alone (the arm releases it when it leaves the reels);
+   *  - the mother turns to bring her into the strut's swing plane when she is off it by more than PLANE_TOL_DEG and
+   *    nothing limits the mother (`_motherTurnBlock(arm)`). One daughter owns the turn at a time, first come.
+   * Off with the flag.
+   * @private
+   */
+  _updateReelHome(dt, parentPos, parentQuat) {
+    const on = Constants.isFeatureEnabled('REEL_HOME');
+    const RH = Constants.REEL_HOME || {};
+    const D2R = Math.PI / 180;
+    const headless = !(this.playerSatellite && this.playerSatellite.strutGroups);
+    const homers = [];
+    for (const arm of this.arms) {
+      if (!arm) continue;
+      const home = on && arm.isReelingHome === true && !arm.isDetached;
+      if (!home) {
+        arm._rhSeq = 0;
+        arm._rhMotherWorking = false;
+        arm._rhGapFn = null;
+        continue;
+      }
+      if (!arm._rhSeq) arm._rhSeq = ++this._rhSeq;
+      homers.push(arm);
+      // Decision 5: the strut points at her
+      if (Number.isFinite(arm._rhBestAlpha)) {
+        const a = Math.max((RH.STRUT_MIN_DEG ?? 34) * D2R, Math.min((RH.STRUT_MAX_DEG ?? 180) * D2R, arm._rhBestAlpha));
+        if (!arm._aimReserved) { arm._aimReserved = true; arm._rhReserved = true; }
+        arm._strutTargetAlpha = a;
+        if (headless && typeof arm.setAimAlpha === 'function') {
+          arm.setAimAlpha(a, dt);                                       // production slews once, in _updateStruts
+          if (Math.abs(arm.getAimAlpha() - a) < 0.01) arm._strutTargetAlpha = undefined;
+        }
+      }
+      if (!arm._rhGapFn) arm._rhGapFn = (pos, pp, pq) => this._rhGapAt(arm, pos, pp, pq);
+    }
+    this._tickReelHomeTurn(homers, parentQuat, dt);
+  }
+
+  /**
+   * reel-home (Decision 6): who turns the mother, and when. The earliest daughter on the reels owns the turn until she
+   * leaves them (docks, loses her catch, ...); the next in line takes it then. The owner asks for a turn when she is off
+   * the strut's swing plane by more than PLANE_TOL_DEG, or (once in the plane) below the strut's STRUT_MIN_DEG..STRUT_MAX_DEG
+   * range by more than that; the mother is free (`_motherTurnBlock(owner)`) and the turn is
+   * not bigger than TURN_MAX_DEG; each request is one scripted attitude turn (the same one the leash hand-off uses), and
+   * the geometry is re-read when it ends. A request is made at most once per TURN_RETRY_S (a refusal counts), so a mother
+   * who was busy at the first look is asked again a second later, not never; the autopilot being engaged ends a running
+   * turn (it steers the ship back to its own heading, so she lines herself up). The turn axis has no component along the
+   * nose (the ship has almost no roll authority): for the plane error it is the strut's radial direction, the angle
+   * atan2(v·t, −v_z); for the range error it is the plane's normal t, the angle that brings her to the nearer end of the range.
+   * `_rhMotherWorking` tells each daughter whether the mother is turning (or may still be asked to) for her.
+   * @private
+   */
+  _tickReelHomeTurn(homers, parentQuat, dt = 0) {
+    const RH = Constants.REEL_HOME || {};
+    const D2R = Math.PI / 180;
+    // the owner: the earliest arrival still on the reels
+    let owner = null;
+    for (const a of homers) if (!owner || a._rhSeq < owner._rhSeq) owner = a;
+    this._rhOwner = owner;
+    for (const a of homers) {
+      a._rhMotherWorking = false;
+      if (a._rhTurnWaitS > 0) a._rhTurnWaitS = Math.max(0, a._rhTurnWaitS - dt);
+    }
+    if (this._rhTurn && this._rhTurn.arm !== owner) this._rhAbortTurn();     // its daughter has left the reels
+    const apNow = this._autopilot;
+    // D11b: the autopilot engaged while the turn runs. It steers the ship back to its own heading, so the turn is cancelled
+    // and she lines herself up (the check before a request, `_motherTurnBlock`, then keeps new ones away).
+    if (this._rhTurn && apNow && apNow.engaged === true) this._rhAbortTurn();
+    if (this._rhTurn && apNow && typeof apNow.isTurning === 'function' && !apNow.isTurning()) {
+      this._rhEndTurn(apNow);                                                  // the turn is over: let the attitude go
+    }
+    if (!owner) return;
+    if (this._rhTurn) { owner._rhMotherWorking = true; return; }             // her turn is running
+    if (owner._rhTurnWaitS > 0) return;                                       // D11a: asked a moment ago; look again later
+    const v = owner._rhRelShip;
+    if (!v) return;
+    const az = owner._rhAzRad();
+    const tol = (RH.PLANE_TOL_DEG ?? 5) * D2R;
+    // Which error does the turn correct? First the one across the strut's swing plane (a turn about the strut's radial
+    // direction). Once she is in the plane, the one along it (fix round F2a): the strut can only point at [STRUT_MIN,
+    // STRUT_MAX], so a daughter below the floor needs the mother turned about the plane's normal until she is inside.
+    let theta;
+    let axisL;
+    if (Math.abs(owner._rhPlaneErrRad) > tol) {
+      const vt = -v.x * Math.sin(az) + v.y * Math.cos(az);
+      theta = Math.atan2(vt, -v.z);
+      if (theta > Math.PI / 2) theta -= Math.PI; else if (theta <= -Math.PI / 2) theta += Math.PI;
+      axisL = _rhAxisR.set(Math.cos(az), Math.sin(az), 0);
+    } else {
+      const lo = (RH.STRUT_MIN_DEG ?? 34) * D2R;
+      const hi = (RH.STRUT_MAX_DEG ?? 180) * D2R;
+      const phi = Math.atan2(v.x * Math.cos(az) + v.y * Math.sin(az), -v.z);   // her angle in the strut's plane
+      if (phi >= lo && phi <= hi) return;                                       // the strut can point at her
+      const wrap = (x) => { while (x > Math.PI) x -= 2 * Math.PI; while (x <= -Math.PI) x += 2 * Math.PI; return x; };
+      const toLo = wrap(lo - phi);
+      const toHi = wrap(hi - phi);
+      theta = Math.abs(toLo) <= Math.abs(toHi) ? toLo : toHi;                   // turning the ship by +t moves her angle by +t
+      if (Math.abs(theta) <= tol) return;                                       // a few degrees short: the 2 m check decides
+      axisL = _rhAxisR.set(-Math.sin(az), Math.cos(az), 0);                     // the plane's normal
+    }
+    if (Math.abs(theta) > (RH.TURN_MAX_DEG ?? 60) * D2R || Math.abs(theta) < 1e-3) return;
+    const ap = this._autopilot;
+    if (!ap || typeof ap.requestAttitudeTurn !== 'function') return;
+    if (this._motherTurnBlock(owner)) return;                                 // limited: the line-up is hers to do
+    const pq = parentQuat || (this.playerSatellite && this.playerSatellite.quaternion);
+    if (!pq) return;
+    const axisW = new THREE.Vector3().copy(axisL).applyQuaternion(pq);
+    owner._rhTurnTries++;
+    owner._rhTurnWaitS = RH.TURN_RETRY_S ?? 1;                                // the next request, if this one fails, in a second
+    const turn = { arm: owner };
+    this._lockExceptArm = owner;                                              // the lock check inside the request
+    let p;
+    try {
+      p = ap.requestAttitudeTurn(axisW, theta, { holdOwner: 'REEL_HOME', holdS: 30 });
+    } catch (e) {
+      p = null;
+    } finally {
+      this._lockExceptArm = null;
+    }
+    if (!p || typeof p.then !== 'function') return;
+    if (typeof p.catch === 'function') p.catch(() => {});                     // a refusal / cancel is read below, not thrown
+    const refusal = typeof ap.lastAttitudeTurnRefusal === 'function' ? ap.lastAttitudeTurnRefusal() : null;
+    if (refusal) return;                                                      // refused at once: nothing moved
+    this._rhTurn = turn;
+    owner._rhMotherWorking = true;
+  }
+
+  /** reel-home: her turn is over (or its daughter left) — drop the attitude hold it took, if it is still ours. @private */
+  _rhEndTurn(ap) {
+    this._rhTurn = null;
+    if (ap && ap._attitudeHoldOwner === 'REEL_HOME' && typeof ap.releaseAttitudeHold === 'function') ap.releaseAttitudeHold();
+  }
+
+  /**
+   * reel-home (fix round F3): the mother's own net (podIndex >= 0) or lasso is fired while a reel-home turn owns her
+   * attitude. The catch wins: the turn stops where it is at once and its REEL_HOME hold is let go; then the catch's own
+   * reel-in hold is taken through AutopilotSystem's public calls (its own listener runs before or after this one;
+   * when it ran first, `holdAttitudeForNet` / `holdAttitude` left our owned hold alone, so it is taken here). The
+   * daughter then holds at 2 m (the mother is "limited": `isReelInHeld`) and lines herself up on her thrusters.
+   * @param {'net'|'lasso'} kind
+   * @private
+   */
+  _rhOnMotherCatchFired(kind) {
+    if (!this._rhTurn) return;                       // none of ours holds the attitude
+    const ap = this._autopilot;
+    this._rhAbortTurn();
+    if (!ap) return;
+    if (kind === 'net' && typeof ap.holdAttitudeForNet === 'function') ap.holdAttitudeForNet();
+    else if (kind === 'lasso' && typeof ap.holdAttitude === 'function') ap.holdAttitude();
+  }
+
+  /** reel-home: its daughter has left the reels mid-turn — stop the turn's hold from outliving her. @private */
+  _rhAbortTurn() {
+    const ap = this._autopilot;
+    if (ap && typeof ap.cancelAttitudeTurn === 'function') ap.cancelAttitudeTurn();
+    this._rhEndTurn(ap);
+  }
+
+  /**
+   * reel-home (Decision 7): the gap, metres, between the ship and a daughter placed at `pos` (world) with her catch on her
+   * nose — a capsule from her centre to the catch's centre, wide enough for the catch. Infinity without a keep-out model
+   * (a headless rig). The line-up refuses a step nearer than ALIGN_CLEAR_M.
+   * @private
+   */
+  _rhGapAt(arm, pos, parentPos, parentQuat) {
+    const ko = this.getKeepOut();
+    if (!ko || !parentPos || !parentQuat) return Infinity;
+    const q = _rhInvQ.copy(parentQuat).invert();
+    const toShipM = (w, out) => out.copy(w).sub(parentPos).applyQuaternion(q).multiplyScalar(1 / M);
+    const a = toShipM(pos, _rhGapA);
+    const d = arm.capturedDebris;
+    let rM = 0.30;
+    const b = _rhGapB.copy(a);
+    if (d && arm.group && d._rackLocalM) {
+      b.copy(d._rackLocalM).applyQuaternion(arm.group.quaternion).applyQuaternion(q).add(a);
+      rM = Math.max(rM, (d.sizeMeter || 0) / 2);
+    }
+    const ignore = ['dau' + arm.index, 'strut' + arm.index, 'rack catch ' + arm.index];
+    const hit = ko.segment([a.x, a.y, a.z], [b.x, b.y, b.z], rM, { ignore });
+    return hit && Number.isFinite(hit.gap) ? hit.gap : Infinity;
   }
 
   /**
@@ -2227,7 +2780,7 @@ export class ArmManager {
       // dipped the ship mass by one arm at the S7 arrival tick, in the same
       // moment the rack gained the cargo; CoMCalculator counts her throughout
       // (only detached/expended are excluded) and the two ledgers must agree.
-      if (arm.state === ARM_STATES.DOCKED || arm.state === ARM_STATES.HOLDING_CATCH) {
+      if (arm.state === ARM_STATES.DOCKED || arm.state === ARM_STATES.HOLDING_CATCH || _CARRY_STATES.has(arm.state)) {
         dockedArmMass += m;
       } else if (arm.state !== ARM_STATES.EXPENDED) {
         deployedArmMass += m;
@@ -2426,10 +2979,14 @@ export class ArmManager {
    * ship, no tether out — so she contributes 'none'. Her tier is 'soft' from the spring on (she is flying out
    * on the line). Before, the clamp hold counted as tethered and dragged the mother back from the aim.
    */
-  getRotationLockTier() {
+  getRotationLockTier(exceptArm = this._lockExceptArm) {
     let tier = 'none';
     for (const arm of this.arms) {
       if (arm.isDetached) continue;             // free-flying — severed tether, no shear risk
+      // reel-home (Decision 6, fix round F1): the daughter the mother turns FOR, and every other daughter that is already
+      // on the strut line (REELING home: her line is being wound in), do not hold the mother still. A daughter still in
+      // GRAPPLED (her net reel included) does. Callers with no `exceptArm` get today's answer.
+      if (this._rhIgnoredForTurn(arm, exceptArm)) continue;
       const s = arm.state;
       if (s === ARM_STATES.LAUNCHING && !arm._springFired) continue;  // clamped: part of the ship
       if (_HIGH_RISK_ROT_STATES.has(s)) return 'block'; // early exit — max severity
@@ -2671,6 +3228,9 @@ export class ArmManager {
    * Reset all arms to docked with full fuel, then re-apply stored upgrades.
    */
   reset() {
+    // trip-melt-2 (carry): a carry in progress lets go of its tip reservation, the strut reservation and the radiator hold
+    // first (this reset sets the fields below directly and never calls ArmUnit.reset, which would have done it).
+    this.abortAllCarries('reset');
     // Register item 71: release the cargo this reset drops BEFORE the fields
     // clear. Every other unpin lives on a non-reset path (_releaseCapturedDebris
     // / the rack feed-end / _clearCatchPins / the lasso releases), so a dropped
@@ -3311,6 +3871,7 @@ export class ArmManager {
    * @returns {boolean} fired, or accepted and waiting (true); refused (false)
    */
   requestClearLaunch(armIndex, getDirShip, fire, mode, opts) {
+    if (tripRefuses('daughter')) return false;      // trip-melt D7: no launch while the ship burns to the next field
     const arm = this.arms[armIndex];
     if (!arm || !this.getKeepOut()) return !!fire();
     const pend = this._pendingLaunches || (this._pendingLaunches = new Map());
@@ -3508,6 +4069,7 @@ export class ArmManager {
    * @private
    */
   _requestAimedLaunch(armIndex, getDirShip, fire, mode, opts) {
+    if (tripRefuses('daughter')) return false;      // trip-melt D7 (see requestClearLaunch)
     const arm = this.arms[armIndex];
     const pend = this._pendingLaunches;
     if (typeof arm.getAimAlpha !== 'function') return undefined;

@@ -17,6 +17,7 @@ import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
 import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE } from './netRouting.js';
 import { computeLeadAim, netMaxReachM } from '../entities/CaptureNet.js';
+import { tripRefuses } from './TransferTrip.js';
 import { openingDance } from './OpeningDance.js';
 
 export class InputManager {
@@ -2541,6 +2542,7 @@ export class InputManager {
    */
   fireMotherNet(target) {
     const d = this._deps; if (!d || !d.captureNetSystem || !d.player) return;
+    if (tripRefuses('net')) return;   // trip-melt G8: refused BEFORE the ship slews round to aim (CaptureNet would refuse after the turn)
     const cns = d.captureNetSystem;
     const ap = d.autopilotSystem;
 

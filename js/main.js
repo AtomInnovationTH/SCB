@@ -127,6 +127,7 @@ import { WorkbenchPane } from './ui/WorkbenchPane.js';
 import { shouldYieldSpecsTab } from './ui/WorkbenchPane.js';
 import { resolveSubject as resolveSpecsSubject } from './systems/SpecsSubject.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
+import { tripWarpArgs } from './systems/TransferTrip.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
 import { DetailSlider, shortSliderRect } from './ui/DetailSlider.js';
@@ -556,6 +557,10 @@ function _fillMechValues(out) {
   try {
     if (player) {
       out.push(player._flowerThetaRad || 0);
+      // petal-single: a held petal swings while the shared angle stands still; four values, always (same length every frame)
+      if (typeof player.petalThetaRad === 'function') {
+        for (const az of Constants.THERMAL.FLOWER.AZIMUTHS_DEG) out.push(player.petalThetaRad(az) || 0);
+      }
       out.push(player._rosaFurlProgress || 0);
       out.push(player._rosaFeatherProgress || 0);
       out.push(player.panelRightPivot ? player.panelRightPivot.rotation.x : 0);
@@ -1817,6 +1822,7 @@ async function init() {
     resourceSystem, cargoSystem,
     lassoSystem, // t1-stranded D1(d): a lasso in flight blocks the stranded rule
     sunLight, // M1 opening-light staging (_stageOpeningLight, new-game paths only)
+    autopilotSystem, // trip-melt D4: the transfer trip's prograde hold (holdPrograde / releasePrograde)
   });
 
   // --- F15: Wire autopilot dependencies ---
@@ -6708,15 +6714,20 @@ function gameLoop(timestamp) {
     !!(cameraSystem && cameraSystem.isLadderLeveling && cameraSystem.isLadderLeveling());
   if (_leveling && !_ladderLevelingPrev && ladderSfx) ladderSfx.onLevelPhase();
   _ladderLevelingPrev = _leveling;
-  // Danger cap: only meaningful while warp can apply (ladder engaged), so skip
+  // Danger cap: only meaningful while warp can apply (ladder engaged or a trip burning), so skip
   // the getStatus() read entirely on the shipped flag-off path (no per-frame
   // allocation there). timeAuthority.update ignores dangerActive when inactive.
-  const _danger = _ladderActive &&
+  // trip-melt D3 (owner 2026-10-19, DECISIONS §29): while the burn to the next field runs, the world clock targets
+  // Constants.TRIP.TIME_RATE (the F5 rate) whatever the floor or the ladder state - `tripWarpArgs` (TransferTrip.js)
+  // fills the args. The open drawer still holds the clock at 0 and a conjunction alert still clamps it to 1x (safety
+  // wins). Without a trip it hands the ladder's own values through unchanged (byte-identical).
+  const _alertActive = (_ladderActive || gameFlowManager.isTripRunning()) &&
     !!(conjunctionSystem && conjunctionSystem.getStatus && conjunctionSystem.getStatus().alertActive);
-  _taFrameArgs.dtReal = dt;
-  _taFrameArgs.active = _ladderActive;
-  _taFrameArgs.targetCap = _floorCap;
-  _taFrameArgs.dangerActive = _danger;
+  tripWarpArgs(_taFrameArgs, {
+    dtReal: dt, ladderActive: _ladderActive, floorCap: _floorCap,
+    workbenchOpen: _workbenchPaneOpen, alertActive: _alertActive,
+    gameplay: gameState.isGameplay(),   // trip-melt G6: the full-screen shop (ladder off) pauses the trip's clock like the drawer
+  });
   timeAuthority.update(_taFrameArgs);
   const dtWorld = timeAuthority.dtWorld;
   // Session I follow-up (review, FINDINGS (k)): THE HELD WORLD IS HELD. While a

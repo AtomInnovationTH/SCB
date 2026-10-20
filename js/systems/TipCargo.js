@@ -35,6 +35,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { TimeAuthority } from './TimeAuthority.js';
+import { tripMelting } from './TransferTrip.js';
 import {
   seedShipRelativeAttitude,
   applyShipRelativeAttitude,
@@ -95,9 +96,11 @@ export class TipCargo {
     this.eventBus = bus;
     /** @type {Array<null|object>} one bag per tip */
     this._slots = [null, null, null, null];
+    /** trip-melt-2 (carry): tips a daughter is carrying a catch to (see `reserve`) */
+    this._reserved = [false, false, false, false];
     this._tipCache = [null, null, null, null];
     this._bookings = [];
-    this._lastTheta = null;
+    this._lastThetas = [null, null, null, null];   // petal-single: each occupied tip's petal angle at the last update
     this._boundReset = () => this.reset();
     this.eventBus.on(Events.GAME_RESET, this._boundReset);
     this.eventBus.on(Events.GAMEOVER_CONTINUE, this._boundReset);
@@ -195,12 +198,58 @@ export class TipCargo {
 
   // ── slots ────────────────────────────────────────────────────────────────
 
-  /** Next free tip that exists (order az 40 → 220 → 140 → 320), or null. */
+  /**
+   * Next free tip that exists (order az 40 → 220 → 140 → 320), or null. A tip a daughter is carrying to is not free.
+   * petal-single (owner 2026-10-19, "debris should be transferred to radiators first so daughters stay available"): a free
+   * tip whose daughter holds no catch is preferred, so a nose catch does not take the tip a loaded daughter is waiting for
+   * while another tip is free; with every free tip wanted by a loaded daughter, the order above decides.
+   */
   pickTip() {
+    let wanted = null;
     for (const i of PICK_ORDER) {
-      if (!this._slots[i] && this._tipRec(i)) return i;
+      if (this._slots[i] || this._reserved[i] || !this._tipRec(i)) continue;
+      if (!this._daughterLoaded(i)) return i;
+      if (wanted === null) wanted = i;
     }
-    return null;
+    return wanted;
+  }
+
+  /** @private Tip i's daughter (the one on her line: arm index = tip index) holds a catch on her rack. */
+  _daughterLoaded(i) {
+    const arms = this.armManager && this.armManager.arms;
+    const a = Array.isArray(arms) ? arms[i] : null;
+    return !!(a && !a.isDetached && Array.isArray(a.heldCatches) && a.heldCatches.length > 0);
+  }
+
+  /**
+   * trip-melt-2 (carry): hold tip i's slot for a daughter on her way with a catch — `pickTip` skips it until the stow
+   * (which clears it), `unreserve`, or `reset`.
+   * @returns {boolean} false when the tip is taken, already reserved, or does not exist
+   */
+  reserve(i) {
+    if (!(i >= 0 && i < SLOT_COUNT) || this._slots[i] || this._reserved[i] || !this._tipRec(i)) return false;
+    this._reserved[i] = true;
+    return true;
+  }
+
+  unreserve(i) { if (i >= 0 && i < SLOT_COUNT) this._reserved[i] = false; }
+
+  isReserved(i) { return !!this._reserved[i]; }
+
+  /**
+   * Tip i's bag point for a bag of radius `radiusM`: the latch point plus the radius along the boom, SHIP-LOCAL scene units
+   * (the point `stow` seats the bag at once its direction has swung onto the boom). The carrying daughter flies the
+   * delivered catch's centre onto it. null when the tip does not exist.
+   * @returns {THREE.Vector3|null} `out`
+   */
+  bagPointShipInto(i, radiusM, out) {
+    const rec = this._tipRec(i);
+    if (!rec) return null;
+    this._latchHingeInto(rec, _v1);
+    this._hingeToShip(rec, _v1, out);
+    this._hingeQuatShip(rec, _q1);
+    _v2.copy(_X).applyQuaternion(_q1).normalize();
+    return out.addScaledVector(_v2, radiusM * M);
   }
 
   /** Does a bag of this radius fit on a tip at all? */
@@ -277,6 +326,7 @@ export class TipCargo {
       anchor: { kind: 'tip', index: i },   // one object per bag, reused by every event (no per-frame allocation)
     };
     this._slots[i] = slot;
+    this._reserved[i] = false;                     // a stow (the carry's or a leash's) ends any reservation of the slot
     this._place(slot, rec);
     debris._captured = true;
     debris._armPinned = true;
@@ -361,15 +411,21 @@ export class TipCargo {
       this._place(slot, rec);
       this._cook(slot, dt);
     }
-    // The radiator swing moves the bags (books): the cached inertia must follow.
+    // The radiator swing moves the bags (books): the cached inertia must follow. petal-single: each bag rides ITS petal, so
+    // the check is per tip (a held petal swings while the rest stay still).
     if (any) {
-      const th = player._flowerThetaRad;
-      if (this._lastTheta === null || Math.abs(th - this._lastTheta) > 1e-4) {
-        this._lastTheta = th;
-        this._invalidateInertia();
+      let moved = false;
+      for (let i = 0; i < SLOT_COUNT; i++) {
+        if (!this._slots[i]) { this._lastThetas[i] = null; continue; }
+        const th = typeof player.petalThetaRad === 'function'
+          ? player.petalThetaRad(Constants.THERMAL.FLOWER.AZIMUTHS_DEG[i])
+          : player._flowerThetaRad;
+        const last = this._lastThetas[i];
+        if (last === null || Math.abs(th - last) > 1e-4) { this._lastThetas[i] = th; moved = true; }
       }
+      if (moved) this._invalidateInertia();
     } else {
-      this._lastTheta = null;
+      for (let i = 0; i < SLOT_COUNT; i++) this._lastThetas[i] = null;
     }
   }
 
@@ -393,14 +449,18 @@ export class TipCargo {
     const anchor = slot.anchor;
 
     // no-melt (owner 2026-10-18, "Stay full size, no melting"): with no furnace the clock never runs, so the bag
-    // never reaches the hold/chop/feed phases below — no breakdown events, no shrink, the slot stays held.
-    const cook = Constants.isFeatureEnabled('FURNACE_COOK');
+    // never reaches the hold/chop/feed phases below - no breakdown events, no shrink, the slot stays held.
+    // trip-melt D5 (owner 2026-10-19, "melted down in the furnace during the long ion burn"): the four tip furnaces
+    // cook while a transfer trip burns, and only then (the nose collar and the racks have no furnace: their flag
+    // reads stay FURNACE_COOK alone). Same span, same sun factor, same real-dt clock.
+    const cook = Constants.isFeatureEnabled('FURNACE_COOK') || tripMelting();
     if (dt > 0 && cook) {
       const span = FT.digestSpanS(slot.massKg);
       d._digestProgress = (d._digestProgress || 0) + dt * TimeAuthority.BASE_SCALE * this._sunScale();
       slot.phaseT = Math.min(FT.FEED_S, (d._digestProgress / span) * FT.FEED_S);
     }
-    const t = cook ? slot.phaseT : 0;
+    // A melt the trip left unfinished keeps its stage (and its size) until the next trip: the clock is off, the bag is not reset.
+    const t = slot.phaseT || 0;
 
     // Pin every frame (a gap reads as a release); position + ship-relative attitude.
     d._armPinned = true;
@@ -495,7 +555,8 @@ export class TipCargo {
   // ── station hand-over ────────────────────────────────────────────────────
 
   /**
-   * no-melt: let go of tip i's bag WITHOUT cooking it (the station takes the cargo at the resupply stop). Frees the
+   * no-melt: let go of tip i's bag WITHOUT cooking it (the old station hand-over; the station takes nothing since
+   * trip-melt-1, so only tests call it now). Frees the
    * slot and clears every pin the tip wrote; the caller owns what happens to the body (the game removes it from the
    * field, already paid). Emits NET_CONSUMED so the bag visual clears the way the cook's end does; no
    * CATCH_PROCESSED (nothing is credited or digested).
@@ -522,6 +583,7 @@ export class TipCargo {
 
   /** Drop every bag: release the bodies to the field as free, re-targetable pieces. */
   reset() {
+    this._reserved = [false, false, false, false];
     const held = [];
     for (let i = 0; i < SLOT_COUNT; i++) {
       const s = this._slots[i];
@@ -529,7 +591,7 @@ export class TipCargo {
       held.push(s.debris);
       this._slots[i] = null;
     }
-    this._lastTheta = null;
+    this._lastThetas = [null, null, null, null];
     if (held.length === 0) return;
     const am = this.armManager;
     const vel = (this.player && typeof this.player.getVelocity === 'function')

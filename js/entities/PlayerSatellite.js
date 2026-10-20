@@ -147,6 +147,9 @@ function ionGasUnits(ship, dvMps, fuel) {
 /** 1 meter in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
 
+/** petal-single: `_petalHolds` of a test stub that borrows `_updateFlower` (never written). */
+const EMPTY_HOLDS = Object.freeze([]);
+
 /* ── Preallocated temp objects for strut sweep animation (Epic 10 V-3) ── */
 const _strutFrom = new THREE.Vector3(0, -1, 0);
 const _strutTo   = new THREE.Vector3();
@@ -180,6 +183,7 @@ const _v3AttE = new THREE.Vector3();
 const _qAttA  = new THREE.Quaternion();
 const _qAttB  = new THREE.Quaternion();
 const _qAttC  = new THREE.Quaternion();
+const _qIdentity = new THREE.Quaternion();   // never written: the target of easeOrbitFrameOffset
 const _matAtt = new THREE.Matrix4();
 /** Clamp a scalar to ±limit. */
 const clampAbs = (v, limit) => (v > limit ? limit : (v < -limit ? -limit : v));
@@ -276,6 +280,8 @@ function radiatorSweepBlocked(ship) {
  */
 function commandFlowerHome(ship) {
   if (ship._flowerGroups.length === 0 || ship._flowerLaunchLock) return false;
+  // petal-single: the shared angle does not change while a petal is held for a catch (settle and auto-open wait for it)
+  if (ship.flowerHandoffHeld === true || ship.flowerCommandsLocked === true) return false;
   const FL = Constants.THERMAL.FLOWER;
   const openRad = (FL.OPEN_DEG * Math.PI) / 180;
   if (ship._flowerThetaRad <= openRad + 1e-9) return false;
@@ -454,6 +460,11 @@ export class PlayerSatellite extends THREE.Group {
     // Autopilot flag — suppresses orientation decay when autopilot is steering (Fix 2)
     this.autopilotEngaged = false;
 
+    // trip-melt G2: the transfer trip's attitude hold keeps the heading in the ORBIT frame (quaternion = prograde ·
+    // _manualRotation, recomposed every frame from the exact prograde) while the autopilot owns the nose, so it
+    // tracks prograde at any world rate. See setOrbitFrameHold / easeOrbitFrameOffset.
+    this._orbitFrameHold = false;
+
     // Aim-before-launch: while an aim sequence is slewing attitude the coroutine
     // writes this.quaternion directly (like autopilot). Suppress the prograde
     // auto-orient slerp so it doesn't drag the nose off the aim solution.
@@ -507,8 +518,13 @@ export class PlayerSatellite extends THREE.Group {
      *  player intent wins mid-swing (a new toggle overwrites an in-flight
      *  target), bounded rate, never a snap, cleared on arrival. */
     this._flowerTargetTheta = undefined;
-    /** Catch hand-off hold (holdFlowerForHandoff): θ in rad while held, else null. */
-    this._flowerHandoffHold = null;
+    /** petal-single (owner 2026-10-19, DECISIONS §29 rows 6-7): the radiators share ONE angle (`_flowerThetaRad`, the player's),
+     *  except a petal held for a catch hand-off or a daughter's carry: it slews on its own (SLEW_RATE_RAD_S) to the hold angle
+     *  and, once released, back to the shared angle, then it is free again (and follows the shared angle). Keyed by the tip's
+     *  azimuth (`THERMAL.FLOWER.AZIMUTHS_DEG`: 40, 140, 220, 320); at most one record per fitted petal.
+     *  `petalThetaRad(az)` is DERIVED from this list and the shared angle: nothing stores a free petal's angle.
+     *  @type {Array<{az:number, thetaRad:number, targetRad:number, releasing:boolean}>} */
+    this._petalHolds = [];
     /** VENT push-through state (owner ask 2026-09-16). `_flowerVentArmed`
      *  lifts the driver's ladder ceiling from the bud (POSE_STOW_DEG) to
      *  POSE_VENT_DEG; `_lastFlowerTap` timestamps the last O press, so a
@@ -3928,7 +3944,20 @@ export class PlayerSatellite extends THREE.Group {
     const thetaDeg = (this._flowerThetaRad * 180) / Math.PI;
     const restDeg = this._flowerRestDeg();
     const span = FL.POSE_CARGO_DEG - restDeg;
-    const openFrac = span === 0 ? 1 : Math.max(0, Math.min(1, (thetaDeg - restDeg) / span));
+    const fracOf = (deg) => (span === 0 ? 1 : Math.max(0, Math.min(1, (deg - restDeg) / span)));
+    // petal-single: `thetaDeg` / `pose` are the shared angle (the player's); `openFrac` is the MEAN of the fitted petals'
+    // open fractions (one petal held at 44° among three at 146° radiates less than four at 146°)
+    let openFrac = fracOf(thetaDeg);
+    const holds = this._petalHolds;
+    if (holds.length > 0) {
+      let sum = 0;
+      let n = 0;
+      for (const fg of this._flowerGroups) {
+        sum += fracOf((this.petalThetaRad(fg.azDeg) * 180) / Math.PI);
+        n++;
+      }
+      if (n > 0) openFrac = sum / n;
+    }
     const slewing = this._flowerTargetTheta !== undefined;
     const near = (deg) => Math.abs(thetaDeg - deg) < 1.0;
     const pose = near(FL.POSE_VENT_DEG) ? 'VENT'
@@ -3938,6 +3967,18 @@ export class PlayerSatellite extends THREE.Group {
             : (!this._flowerLaunchLock && Number.isFinite(FL.POSE_CLOSED_DEG) && near(FL.POSE_CLOSED_DEG)) ? 'CLOSED'
               : near(FL.POSE_LAUNCH_DEG) ? 'LAUNCH' : 'SLEW';
     return { pairCount, thetaDeg, openFrac, slewing, pose, locked: this._flowerLaunchLock };
+  }
+
+  /**
+   * petal-single: the radiators (1-based, the numbers the comms lines use) whose petal is held for a catch right now,
+   * for the readouts ("radiator N receiving"). A new array; empty when no petal is held.
+   * @returns {number[]}
+   */
+  receivingRadiators() {
+    const AZ = Constants.THERMAL.FLOWER.AZIMUTHS_DEG;
+    const out = [];
+    for (const h of this._petalHolds) if (!h.releasing) out.push(AZ.indexOf(h.az) + 1);
+    return out.sort((a, b) => a - b);
   }
 
   /**
@@ -3986,7 +4027,7 @@ export class PlayerSatellite extends THREE.Group {
    * @returns {boolean} true when now deploying (opening toward OPEN_DEG)
    */
   toggleFlowerDeploy() {
-    if (this._flowerHandoffHold != null) return this._refuseFlowerWhileHeld();
+    if (this.flowerCommandsLocked) return this._refuseFlowerWhileHeld();
     const FL = Constants.THERMAL.FLOWER;
     const restDeg = this._flowerRestDeg();
     const restRad = (restDeg * Math.PI) / 180;
@@ -4145,7 +4186,7 @@ export class PlayerSatellite extends THREE.Group {
     *   false when folding (toward LAUNCH 0°), null when no flower is fitted
     */
   toggleFlowerOverride() {
-    if (this._flowerHandoffHold != null) return this._refuseFlowerWhileHeld();
+    if (this.flowerCommandsLocked) return this._refuseFlowerWhileHeld();
     if (this._flowerGroups.length === 0) return null;
     const FL = Constants.THERMAL.FLOWER;
     const midRad = ((FL.POSE_LAUNCH_DEG + FL.POSE_STOW_DEG) / 2) * Math.PI / 180;
@@ -4196,7 +4237,7 @@ export class PlayerSatellite extends THREE.Group {
    * @returns {number|null} the accepted target θ in degrees (0 for LAUNCH), or null
    */
   setFlowerPose(pose, opts = undefined) {
-    if (this._flowerHandoffHold != null) return this._refuseFlowerWhileHeld();
+    if (this.flowerCommandsLocked) return this._refuseFlowerWhileHeld();
     const FL = Constants.THERMAL.FLOWER;
     if (this._flowerGroups.length === 0) return null;
     this._flowerCmdClockS = this._flowerClockS || 0;   // restarts the 180° → 146° settle clock (non-player callers never run above 146°)
@@ -4251,43 +4292,129 @@ export class PlayerSatellite extends THREE.Group {
   /** @returns {boolean} Design 7b — whether the one-shot flower launch lock is armed. */
   get flowerLaunchLocked() { return this._flowerLaunchLock; }
 
-  /** @returns {boolean} whether the radiators are held for the catch hand-off. */
-  get flowerHandoffHeld() { return this._flowerHandoffHold != null; }
+  /**
+   * petal-single: some radiator petal is HELD for a catch (a leash hand-off or a daughter's carry). Player pose commands, the
+   * 180° → 146° settle and the thermal auto-open wait for it. A petal that has been released and is still swinging back to
+   * the shared angle is not held (it chases the shared angle, whatever that does); see `flowerPetalsBusy` for "any petal off
+   * the shared angle".
+   * @returns {boolean}
+   */
+  get flowerHandoffHeld() {
+    const holds = this._petalHolds;
+    for (let i = 0; i < holds.length; i++) if (!holds[i].releasing) return true;
+    return false;
+  }
 
   /**
-   * Catch hand-off hold: slew the radiators to `thetaRad` (the normal
-   * rate-limited slew, never a snap) and refuse every other commanded radiator
-   * move until releaseFlowerHandoff() or a snap-to-stow (new game).
-   * Calling it again while held just retargets.
-   * @param {number} thetaRad
-   * @returns {number|null} the angle in degrees after the bag-band cap (what
-   *   the radiators will really reach), or null with no radiator fitted or
-   *   while the launch lock is armed
+   * petal-single: some petal is off the shared angle - held, or released and still swinging back. The carry's clearance is
+   * certified with the other three petals standing still on the shared angle, so it starts only when this is false.
+   * @returns {boolean}
    */
-  holdFlowerForHandoff(thetaRad) {
-    if (this._flowerGroups.length === 0 || this._flowerLaunchLock) return null;
-    if (!Number.isFinite(thetaRad)) return null;
+  get flowerPetalsBusy() { return this._petalHolds.length > 0; }
+
+  /**
+   * petal-single (review R7): the player's radiator commands, the 180° → 146° settle and the thermal auto-open all wait while a
+   * petal is held (`flowerHandoffHeld`) OR a daughter's carry is under way, from its first step to her strut landing back on
+   * its recorded angle. The petal is released a stage before that, and the shared angle must not move while her strut still
+   * stands at the carry angle (124-130°): the gate certified the way back only with the other petals standing still.
+   * @returns {boolean}
+   */
+  get flowerCommandsLocked() {
+    if (this.flowerHandoffHeld) return true;
+    const am = this.armManager;
+    return !!(am && typeof am.isCarrying === 'function' && am.isCarrying());
+  }
+
+  /**
+   * petal-single: the angle (rad) of the petal whose tip sits at azimuth `azDeg` (`THERMAL.FLOWER.AZIMUTHS_DEG`: 40, 140,
+   * 220, 320). DERIVED: the petal's own angle while it is held or swinging back, else the shared angle (a free petal never
+   * lags it). Nothing stores a free petal's angle.
+   * @param {number} azDeg
+   * @returns {number}
+   */
+  petalThetaRad(azDeg) {
+    const holds = this._petalHolds;
+    for (let i = 0; i < holds.length; i++) if (holds[i].az === azDeg) return holds[i].thetaRad;
+    return this._flowerThetaRad;
+  }
+
+  /** @returns {boolean} the petal at azimuth `azDeg` is held or swinging back (not yet following the shared angle). */
+  isPetalHeld(azDeg) {
+    const holds = this._petalHolds;
+    for (let i = 0; i < holds.length; i++) if (holds[i].az === azDeg) return true;
+    return false;
+  }
+
+  /** @returns {boolean} the petal at azimuth `azDeg` is held (not released yet). */
+  isPetalHolding(azDeg) {
+    const holds = this._petalHolds;
+    for (let i = 0; i < holds.length; i++) if (holds[i].az === azDeg) return !holds[i].releasing;
+    return false;
+  }
+
+  /**
+   * petal-single (Decisions 1, 2): hold ONE radiator petal for a catch. It slews on its own (the normal 15°/s) from its
+   * current angle to `thetaRad`; the other petals keep the shared angle, which no pose command changes while a petal is
+   * held. Calling it again for a held (or returning) petal just retargets it.
+   * @param {number} azDeg the petal's tip azimuth (40, 140, 220 or 320)
+   * @param {number} thetaRad
+   * @returns {number|null} the angle in degrees after the bag-band cap (what the petal will really reach), or null with no
+   *   such petal fitted, while the launch lock is armed, or for a non-finite angle
+   */
+  holdPetalForHandoff(azDeg, thetaRad) {
+    if (this._flowerLaunchLock || !Number.isFinite(thetaRad)) return null;
+    if (!this._flowerGroups.some((fg) => fg.azDeg === azDeg)) return null;
     thetaRad = this._flowerClampRad(thetaRad);
-    if (this._flowerHandoffHold == null) this._flowerHoldWarned = false;
-    this._flowerHandoffHold = thetaRad;
-    this._flowerTargetTheta = thetaRad;
+    if (!this.flowerHandoffHeld) this._flowerHoldWarned = false;
+    let h = null;
+    for (const x of this._petalHolds) if (x.az === azDeg) { h = x; break; }
+    if (!h) {
+      h = { az: azDeg, thetaRad: this._flowerThetaRad, targetRad: thetaRad, releasing: false };
+      this._petalHolds.push(h);
+    }
+    h.targetRad = thetaRad;
+    h.releasing = false;
     this._flowerCmdClockS = this._flowerClockS || 0;
     return this._flowerCappedDeg(thetaRad);
   }
 
   /**
-   * End the hand-off hold and slew to `thetaRad` (the tip-bag band retarget in
-   * _updateFlower still caps it).
-   * @returns {number|null} capped degrees, or null when no hold was active
+   * petal-single: let go of the held petal at `azDeg`. It slews back to the shared angle and is free again on arrival.
+   * @returns {number|null} the shared angle it returns to (degrees, after the bag-band cap), or null when it was not held
    */
-  releaseFlowerHandoff(thetaRad) {
-    if (this._flowerHandoffHold == null) return null;
-    if (!Number.isFinite(thetaRad)) return null;
-    thetaRad = this._flowerClampRad(thetaRad);
-    this._flowerHandoffHold = null;
-    this._flowerTargetTheta = thetaRad;
-    this._flowerCmdClockS = this._flowerClockS || 0;
-    return this._flowerCappedDeg(thetaRad);
+  releasePetalHandoff(azDeg) {
+    for (const h of this._petalHolds) {
+      if (h.az !== azDeg) continue;
+      h.releasing = true;
+      this._flowerCmdClockS = this._flowerClockS || 0;
+      return this._flowerCappedDeg(this._flowerThetaRad);
+    }
+    return null;
+  }
+
+  /** @returns {number[]} the held petals' tip azimuths (a new array: read it for tests and readouts, not per frame) */
+  heldPetalAzimuths() { return this._petalHolds.map((h) => h.az); }
+
+  /**
+   * petal-single: the smallest and largest angle among the fitted petals (rad) and the smallest angle any petal is on its
+   * way to — for the gates that are about the whole ring (the thrust band, the wing dodge). Written into `out`.
+   * @param {{min:number, max:number, minTarget:number}} out
+   * @returns {{min:number, max:number, minTarget:number}}
+   */
+  _petalRangeInto(out) {
+    const th = this._flowerThetaRad;
+    out.min = th; out.max = th;
+    const tgt = this._flowerTargetTheta;
+    out.minTarget = tgt !== undefined ? Math.min(th, tgt) : th;
+    const holds = this._petalHolds;
+    for (let i = 0; i < holds.length; i++) {
+      const h = holds[i];
+      if (h.thetaRad < out.min) out.min = h.thetaRad;
+      if (h.thetaRad > out.max) out.max = h.thetaRad;
+      const to = h.releasing ? h.thetaRad : Math.min(h.thetaRad, h.targetRad);
+      if (to < out.minTarget) out.minTarget = to;
+    }
+    return out;
   }
 
   /** @private Clamp a finite θ (rad) to [POSE_FLOOR_DEG, POSE_STOW_DEG]. */
@@ -4335,7 +4462,7 @@ export class PlayerSatellite extends THREE.Group {
    * produced); no POSE event — nothing slewed. No hardware → no-op.
    */
   snapFlowerToStow() {
-    this._flowerHandoffHold = null;
+    if (this._petalHolds) this._petalHolds.length = 0;   // petal-single: every petal follows the shared angle again
     if (this._flowerGroups.length === 0) return;
     const restDeg = this._flowerRestDeg();
     const wasLocked = this._flowerLaunchLock;
@@ -5158,13 +5285,7 @@ export class PlayerSatellite extends THREE.Group {
     // Initialize the new pair at the current shared pose immediately (a pair
     // bought mid-slew joins the swing on the next driver tick). Wings follow
     // the same θ through the lanyard law (_flowerWingFoldAngle).
-    const rotY = this._flowerThetaRad - Math.PI / 2;
-    const foldX = this._flowerWingFoldAngle(this._flowerThetaRad);
-    for (const fg of this._flowerGroups) {
-      fg.hinge.rotation.y = rotY;
-      for (const wh of fg.wings) wh.rotation.x = foldX;
-    }
-    this._updateTipStalks(this._flowerThetaRad);
+    PlayerSatellite.prototype._writeFlowerPose.call(this);   // via the prototype: test stubs borrow this method
   }
 
   /**
@@ -5182,14 +5303,18 @@ export class PlayerSatellite extends THREE.Group {
     const FL = Constants.THERMAL.FLOWER;
     const th = Number.isFinite(thetaRad) ? thetaRad : this._flowerThetaRad;
     const floor = (FL.STALK_FROM_DEG * Math.PI) / 180;     // its own constant: the radiator floor is 0° now (the stalks keep 2°..3°)
-    const open = Math.max(0, Math.min(1, (th - floor) / (Math.PI / 180)));     // 0 at 2° .. 1 at 3°
+    const openAt = (t) => Math.max(0, Math.min(1, (t - floor) / (Math.PI / 180)));     // 0 at 2° .. 1 at 3°
+    const open = openAt(th);
+    const holds = this._petalHolds || EMPTY_HOLDS;
     const tc = this.tipCargo;
     const view = this.leashDriver && typeof this.leashDriver.view === 'function' ? this.leashDriver.view() : null;
     for (const fg of groups) {
       const hw = fg.tipHw;
       if (!hw) continue;
       const held = (tc && typeof tc.has === 'function' && tc.has(hw.index)) || (view && view.tipIndex === hw.index);
-      const u = held ? 1 : open;
+      let own = open;                                                         // petal-single: a held petal's stalk follows ITS angle
+      for (let i = 0; i < holds.length; i++) if (holds[i].az === fg.azDeg) { own = openAt(holds[i].thetaRad); break; }
+      const u = held ? 1 : own;
       if (u === hw.u) continue;
       hw.u = u;
       // tip-local x, metres. Out: outer tube 0.000..0.060 (its root buried in the pad), inner tube 0.0345..0.0945
@@ -5321,10 +5446,13 @@ export class PlayerSatellite extends THREE.Group {
 
     // w4-power D5: the radiator hinge drives (one per strut, swinging in
     // unison) bill on the frames θ actually moves — a ceiling/floor clamp
-    // with no slew bills nothing (dt 0 calls never bill).
+    // with no slew bills nothing (dt 0 calls never bill). petal-single: a held
+    // petal is not swinging with them; it bills for itself (`_stepPetalHolds`).
+    const holdsNow = this._petalHolds || EMPTY_HOLDS;
     if (stepping && Math.abs(this._flowerThetaRad - theta0) >= motorMoveMinRadS() * dt) {
-      billMotorW(this, (Constants.MOTOR_DRAW_W?.RADIATOR_HINGE ?? 0) * this._flowerGroups.length, dt);
+      billMotorW(this, (Constants.MOTOR_DRAW_W?.RADIATOR_HINGE ?? 0) * Math.max(0, this._flowerGroups.length - holdsNow.length), dt);
     }
+    if (holdsNow.length > 0) this._stepPetalHolds(dt, floorRad, ceilRad, holdsTipBag ? tipBand : Infinity);
 
     // Disarm on ARRIVAL, never on command. This clamp is a hard clamp: dropping
     // the ceiling from the vent to the bud while θ is still out at 180° would
@@ -5389,15 +5517,58 @@ export class PlayerSatellite extends THREE.Group {
       eventBus.emit(Events.THERMAL_FLOWER_POSE, { thetaDeg, pose });
     }
 
-    const rotY = this._flowerThetaRad - Math.PI / 2;
-    // Design 7b wings ride the same θ (lanyard law — a pure function, so the
-    // orbit band θ ≥ 90° always shows them flat; no persisted wing state).
-    const foldX = this._flowerWingFoldAngle(this._flowerThetaRad);
-    for (const fg of this._flowerGroups) {
-      fg.hinge.rotation.y = rotY;
-      for (const wh of fg.wings) wh.rotation.x = foldX;
+    PlayerSatellite.prototype._writeFlowerPose.call(this);   // via the prototype: test stubs borrow this method
+  }
+
+  /**
+   * @private petal-single: slew every held petal toward its own target (the hold angle, or the shared angle once released),
+   * at the normal SLEW_RATE_RAD_S, landing EXACTLY on it (the carry's clearance is certified at the held angle, not within
+   * a tolerance of it). A released petal that has reached the shared angle is free again: its record goes. The tip-bag band
+   * caps a hold target as it caps the shared one; each moving petal bills its own hinge drive.
+   */
+  _stepPetalHolds(dt, floorRad, ceilRad, tipBand) {
+    const FL = Constants.THERMAL.FLOWER;
+    const holds = this._petalHolds;
+    const maxDelta = dt > 0 ? FL.SLEW_RATE_RAD_S * dt : 0;
+    const bandTarget = tipBand - FL.SETTLE_EPS_RAD;
+    const hingeW = Constants.MOTOR_DRAW_W?.RADIATOR_HINGE ?? 0;
+    for (let i = holds.length - 1; i >= 0; i--) {
+      const h = holds[i];
+      let tgt = h.releasing ? this._flowerThetaRad : h.targetRad;
+      if (!h.releasing && tgt > tipBand + 1e-9) tgt = bandTarget;
+      tgt = Math.max(floorRad, Math.min(ceilRad, tgt));
+      const before = h.thetaRad;
+      if (maxDelta > 0) h.thetaRad += Math.max(-maxDelta, Math.min(tgt - h.thetaRad, maxDelta));
+      h.thetaRad = Math.max(floorRad, Math.min(ceilRad, h.thetaRad));
+      if (maxDelta > 0 && Math.abs(h.thetaRad - before) >= motorMoveMinRadS() * dt) billMotorW(this, hingeW, dt);
+      if (h.releasing && Math.abs(h.thetaRad - this._flowerThetaRad) < 1e-9) holds.splice(i, 1);
     }
-    if (typeof this._updateTipStalks === 'function') this._updateTipStalks(this._flowerThetaRad);   // l6-look: stalks follow θ, a held bag, the hand-off tip (guard: test stubs borrow this method)
+  }
+
+  /**
+   * @private Write every fitted petal's hinge, wing fold and tip stalk from ITS OWN angle (`petalThetaRad`): the shared
+   * angle for a free petal, the held petal's own for a held one. Design 7b wings ride the same θ (lanyard law - a pure
+   * function, so the orbit band θ >= 90° always shows them flat; no persisted wing state). Test stubs borrow
+   * `_updateFlower`, hence the guards.
+   */
+  _writeFlowerPose() {
+    const holds = this._petalHolds || EMPTY_HOLDS;
+    const shared = this._flowerThetaRad;
+    const sharedRotY = shared - Math.PI / 2;
+    const sharedFold = this._flowerWingFoldAngle(shared);
+    for (const fg of this._flowerGroups) {
+      let th = shared;
+      for (let i = 0; i < holds.length; i++) if (holds[i].az === fg.azDeg) { th = holds[i].thetaRad; break; }
+      if (th === shared) {
+        fg.hinge.rotation.y = sharedRotY;
+        for (const wh of fg.wings) wh.rotation.x = sharedFold;
+      } else {
+        fg.hinge.rotation.y = th - Math.PI / 2;
+        const fold = this._flowerWingFoldAngle(th);
+        for (const wh of fg.wings) wh.rotation.x = fold;
+      }
+    }
+    if (typeof this._updateTipStalks === 'function') this._updateTipStalks(shared);   // l6-look: stalks follow θ, a held bag, the hand-off tip
   }
 
   // --------------------------------------------------------------------------
@@ -7231,9 +7402,10 @@ export class PlayerSatellite extends THREE.Group {
     if (this._flowerOverrideFold) {
       limitDeg = FL.WING_DODGE_LOW_LIMIT_DEG;              // fold in flight — dodge early
     } else if (this._flowerGroups && this._flowerGroups.length > 0) {
-      let thDeg = (this._flowerThetaRad ?? Math.PI / 2) * rad180;
-      const tgt = this._flowerTargetTheta;
-      if (tgt !== undefined) thDeg = Math.min(thDeg, tgt * rad180);   // early dodge
+      // petal-single: the dodge is about the ring - the MOST RESTRICTIVE petal (the smallest angle any petal is on its way
+      // to) decides, so a petal held low for a catch keeps the wings dodging as four petals at that angle did
+      const r = this._petalRangeInto(this._petalRange || (this._petalRange = { min: 0, max: 0, minTarget: 0 }));
+      const thDeg = Math.min((this._flowerThetaRad ?? Math.PI / 2) * rad180, r.min * rad180, r.minTarget * rad180);
       if (thDeg < FL.WING_DODGE_LOW_THETA_DEG) limitDeg = FL.WING_DODGE_LOW_LIMIT_DEG;
       else if (thDeg < FL.WING_DODGE_MID_THETA_DEG) limitDeg = FL.WING_DODGE_MID_LIMIT_DEG;
     }
@@ -7377,6 +7549,9 @@ export class PlayerSatellite extends THREE.Group {
       if (hasThrust && ti.z > 0) {
         progradeTarget = Math.min(1.0, Math.abs(ti.z) * 5000);
       }
+      // trip-melt D4: the transfer trip burns the ion engine for its whole length. It fires no impulse (thrustInput
+      // stays 0: the orbit and the battery are not touched), so it lights the plume through setActiveThrustDirection.
+      if (this._activeThrustDir && this._activeThrustDir.z > 0) progradeTarget = 1.0;
 
       // Differential attitude-rotation target (per-nozzle, set by setThrusterFire)
       const diffTarget = this._differentialFireTargets[i] || 0;
@@ -8053,8 +8228,9 @@ export class PlayerSatellite extends THREE.Group {
     if (this._flowerGroups.length === 0) return false;
     if (this._flowerLaunchLock) return true;
     const FL = Constants.THERMAL.FLOWER;
-    const deg = (this._flowerThetaRad * 180) / Math.PI;
-    return deg < FL.POSE_FLOOR_DEG - 1e-6 || deg > FL.POSE_THRUST_MAX_DEG + 1e-6;
+    // petal-single: the band is about the whole ring - the most restrictive petal (any petal outside it refuses thrust)
+    const r = this._petalRangeInto(this._petalRange || (this._petalRange = { min: 0, max: 0, minTarget: 0 }));
+    return (r.min * 180) / Math.PI < FL.POSE_FLOOR_DEG - 1e-6 || (r.max * 180) / Math.PI > FL.POSE_THRUST_MAX_DEG + 1e-6;
   }
 
   /**
@@ -8458,6 +8634,41 @@ export class PlayerSatellite extends THREE.Group {
       this._tetherLatch.copy(this._manualRotation);
       this._tetherLatchOn = true;
     }
+  }
+
+  /**
+   * trip-melt G2: keep the autopilot-owned heading in the ORBIT frame. On: the attitude is folded into
+   * `_manualRotation` (prograde⁻¹ · quaternion: no snap) and from then on `_orientAlongVelocity` recomposes
+   * `prograde · _manualRotation` from the exact prograde every frame, so the nose follows the orbit at any world rate
+   * (the orbit turns ~1.1 rad per real second at the trip's 100x; a world-frame slew at the autopilot's 0.2 rad/s
+   * cannot). Off: the direct writes of the autopilot / a scripted turn stand again. Only meaningful while the owner is
+   * AUTOPILOT; a PLAYER-owned ship composes the same way anyway.
+   * @param {boolean} on
+   */
+  setOrbitFrameHold(on) {
+    const want = !!on;
+    if (want === this._orbitFrameHold) return;
+    if (want) this._handAttitudeToPlayer(false);
+    this._orbitFrameHold = want;
+  }
+
+  /** @returns {boolean} true while the heading is held in the orbit frame (see setOrbitFrameHold) */
+  isOrbitFrameHold() { return this._orbitFrameHold === true; }
+
+  /**
+   * trip-melt G2: ease the orbit-frame offset toward prograde (identity) by at most `maxAngle` rad this frame - the
+   * turn to the burn attitude, at the autopilot's own turn rate. Inside `deadzone` rad nothing moves.
+   * @param {number} maxAngle - rad this frame (rate x real dt)
+   * @param {number} [deadzone=0] - rad
+   * @returns {number} the angle (rad) still to go after this step
+   */
+  easeOrbitFrameOffset(maxAngle, deadzone = 0) {
+    const q = this._manualRotation;
+    const angle = 2 * Math.acos(Math.min(1, Math.abs(q.w)));
+    if (!(angle > deadzone) || !(maxAngle > 0)) return angle;
+    const step = Math.min(maxAngle, angle);
+    q.slerp(_qIdentity, step / angle).normalize();
+    return angle - step;
   }
 
   /**
@@ -8868,6 +9079,40 @@ export class PlayerSatellite extends THREE.Group {
     this.resources[resource] = have - drawn;
     eventBus.emit(Events.RESOURCE_CONSUME, { resource, amount: drawn });
     return drawn / amount;
+  }
+
+  /**
+   * trip-melt D4: bill the engine gas of a burn of `dvMps` WITHOUT applying an impulse - no orbit change, no battery
+   * (the transfer trip is "a burn fed by the wings"). The gas is the same Δv -> gas conversion `applyCartesianImpulse`
+   * bills with (`ionGasUnits`: ṁ = c·m_ship·Δv/(Isp·g0), the active fuel, the ship's real mass), drawn the same way
+   * (the tank pool, or the cargo metal for a cargo fuel). Takes what is there: a short tank is drained, not refused.
+   * A cargo fuel that is short (trip-melt G7) pays what the hold has, then the rest of the burn comes from the tank gas
+   * (the ResourceSystem switches back to it and says so, as for any burn that runs the cargo fuel dry).
+   * @param {number} dvMps - Δv the burn delivers, m/s (> 0)
+   * @returns {number} fraction of the gas that was in the tank / hold (0..1; 1 when nothing was due)
+   */
+  billBurnGas(dvMps) {
+    if (!(dvMps > 0)) return 1;
+    const rs = this._resourceSystem;
+    const fuel = rs
+      ? rs.getCurrentFuel()
+      : (Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL]) || null;
+    const amount = ionGasUnits(this, dvMps, fuel);
+    if (!(amount > 0)) return 1;
+    if (rs && fuel && fuel.fromCargo) {
+      const cs = rs._cargoSystem;
+      const entry = cs && typeof cs.getManifest === 'function'
+        ? cs.getManifest().find((m) => m.metalId === fuel.cargoMetalId) : null;
+      const have = entry ? Math.max(0, entry.massKg) : 0;
+      if (rs.consumeIonFuel(amount)) return 1;
+      // Short supply: consumeIonFuel took nothing and switched to the tank gas. Take what the hold had, then bill the
+      // rest of the burn (by Δv) from the tank at the tank gas's own rate.
+      const got = have > 0 && cs && typeof cs.removeMetal === 'function' ? Math.min(have, cs.removeMetal(fuel.cargoMetalId, have)) : 0;
+      const frac = Math.min(1, got / amount);
+      const paid = this._drawBurnResource('xenon', ionGasUnits(this, dvMps * (1 - frac), rs.getCurrentFuel()));
+      return frac + (1 - frac) * paid;
+    }
+    return this._drawBurnResource('xenon', amount);
   }
 
   /**
@@ -9783,7 +10028,10 @@ export class PlayerSatellite extends THREE.Group {
 
     // AUTOPILOT writes this.quaternion directly (slerp) — leave it. AIM too owns
     // the quaternion directly (the latent-bug fix).
-    if (owner === 'AUTOPILOT' || owner === 'AIM') return;
+    // trip-melt G2: the transfer trip's hold is the one AUTOPILOT-owned heading that is kept in the orbit frame: it
+    // recomposes prograde · _manualRotation below (a direct world-frame write cannot follow the orbit at 100x).
+    if (owner === 'AIM') return;
+    if (owner === 'AUTOPILOT' && !this._orbitFrameHold) return;
 
     // ── Rigid-body path (D4): base = EXACT prograde, no slerp, no decay. The
     // offset (_manualRotation) is advanced by the integrator in

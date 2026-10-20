@@ -28,6 +28,9 @@ import { NetMeshKit } from './NetMeshKit.js';
 import { DebrisWireframe } from './DebrisWireframe.js';
 import { DebrisField } from '../entities/DebrisField.js';
 import { wireBagRadiusM } from './LeashVisual.js';
+// net-cinch: where a held bag's neck sits round its catch is ONE pure home shared with the simulation (CaptureNet seats a
+// daughter's held net there, ArmUnit winds the net line to it).
+import { HELD_BAG, DAUGHTER_STAND_M, drawnCatchRadiusScene, heldBagRadiusScene, heldBagAxisInto, heldBagBack } from '../entities/heldBagShape.js';
 // S5 failure staging: the reason→beat mapper lives with missReasonToText in
 // the entity (one home for "which failures are staged" — logic and visual must
 // never diverge). ui → entities edge; no cycle (CaptureNet does not import ui).
@@ -133,10 +136,10 @@ const _NW = Constants.NET_WEB;
 // that shape with the drawstring (CINCH_CLOSING: closed = compact); a bag that lets go un-gathers over GATHER_S.
 const BAG = {
   GATHER_S: 1.2,
-  APEX_BACK_FRAC: 1.0,
+  APEX_BACK_FRAC: HELD_BAG.APEX_BACK_FRAC,   // net-cinch: the apex rule lives in entities/heldBagShape.js
   RIM_AHEAD_FRAC: 1.35,
   MOUTH_FRAC: 3.0,
-  MIN_RADIUS_M: 0.03,
+  MIN_RADIUS_M: HELD_BAG.MIN_RADIUS_M,
   // the rim weights are drawn 0.08 m (8x their ~1 cm tungsten, for the flight read); on a compact bag at a few metres
   // that is a clump of glowing balls bigger than a 0.3 m catch (browser shot 2026-10-15), so a held bag draws them
   // at this radius (estimate: near true size, still a visible bead)
@@ -715,6 +718,9 @@ export class CaptureNetVisual {
           ? vis.kitHandle.group.worldToLocal(_v3c.copy(this._sceneManager.camera.position))
           : undefined,
       });
+      // net-cinch: a small catch shows through the threads on a carried bag as on the collar's and the reel's (the film is
+      // hidden for it; `updateWebDrape` rewrites the film's opacity, never its visibility)
+      if (vis.kitHandle.membraneMesh && this._smallCatchFilm(d)) vis.kitHandle.membraneMesh.visible = false;
     }
   }
 
@@ -730,6 +736,29 @@ export class CaptureNetVisual {
    * strut tip by the rack. Continuity law: the catch never stops being drawn.
    */
   _onCargoTransferred(payload) {
+    // trip-melt-2 (carry): a daughter's RACK catch went to a radiator tip. Its bag (`rack_<arm>_<id>`) now belongs to the
+    // tip: the daughter's ARM_DOCKED / breakdown cancel / reset-by-arm must no longer end it (they end "every carry of that
+    // arm", which would also be the OTHER cell's net). It ends the way a tip catch's does: chop end (the tip's own clock),
+    // release (`_armPinned === false`) or removal. A real `podIndex` is never involved: nothing to fade below.
+    if (payload && payload.to && payload.to.kind === 'tip' && payload.fromArmIndex >= 0 && payload.debrisId != null) {
+      const rkey = `rack_${payload.fromArmIndex}_${payload.debrisId}`;
+      let rv = this._activeVisuals.get(rkey);
+      if (!rv) {
+        // net-cinch (2026-10-20, Decision 3): a catch the daughter netted HERSELF still has her own live net (`arm_N`: she holds
+        // it in REELING through HOLDING_CATCH). This event is her releasing it to the tip, in the middle of her update, one
+        // step before that net stows (and, with nothing delivered, would freeze-fade the bag on the spot). Hand the bag to
+        // the catch exactly as a mother's bag arriving on her rack is: re-keyed `rack_<arm>_<id>`, wrapped as it is now,
+        // seated from the catch each frame. Only her own live bag of THIS piece.
+        const akey = `arm_${payload.fromArmIndex}`;
+        const av = this._activeVisuals.get(akey);
+        const anet = av && !av.detached && !av.failure ? this._getNet(av.armIndex, av.podIndex) : null;
+        const ad = anet && anet.targetDebris;
+        if (ad && ad.id === payload.debrisId && this._carryOnRack(akey, av, payload.fromArmIndex, payload.debrisId, -1)) {
+          rv = this._activeVisuals.get(rkey);
+        }
+      }
+      if (rv && rv.carry && rv.carry.rack) { rv.carry.armIndex = -1; rv.carry.tipIndex = payload.to.tipIndex; }
+    }
     // CUT_AT_NOSE: a cut piece's completion carries `cut` — it rode NET-LESS
     // (no bag was ever made for it), and podIndex names the collar it came
     // FROM, whose boss bag must keep rendering. Nothing to fade here.
@@ -761,13 +790,14 @@ export class CaptureNetVisual {
    * @param {object} vis
    * @param {number} armIndex  the rack's daughter
    * @param {*} debrisId
-   * @param {number} podIndex  the collar the bag came from
+   * @param {number} podIndex  the collar the bag came from (-1: the daughter's own net, net-cinch)
    * @returns {boolean} true when the bag now stays with the catch (false: no kit / no catch found → caller fades it)
    * @private
    */
   _carryOnRack(key, vis, armIndex, debrisId, podIndex) {
     if (!vis.kitHandle || !vis.group) return false;
-    const net = this._getNet(-1, podIndex);
+    // `podIndex` -1: her OWN net (net-cinch), looked up by her arm
+    const net = podIndex >= 0 ? this._getNet(-1, podIndex) : this._getNet(armIndex, -1);
     // The FIELD's piece, by id (CONVENTIONS.md:154): `net.targetDebris` may be a shallow copy that the rack's pins never
     // reach, which would leave the bag seated on a frozen position and blind to `_nearProxy`.
     const hint = (net && net.targetDebris) || vis._catchDebris || null;
@@ -1679,7 +1709,10 @@ export class CaptureNetVisual {
     // tetherPaidOut is metres; straight is scene units → convert.
     // l8-reel-collar D4: while the mother reels / holds the catch the line is wound in as fast as it is hauled:
     // taut, ring -> bag mouth, never the flight-time bow (tetherPaidOut keeps the shot length through the reel).
-    const reeled = net._isMother && (net.state === STATES.REELING || net.state === STATES.BERTHED || net.state === STATES.COLLARED);
+    // net-cinch: a daughter's held net is wound in just the same (the arm holds it in REELING through the dock and
+    // HOLDING_CATCH): her line runs taut from her muzzle to the bag's neck
+    const reeled = (net._isMother && (net.state === STATES.REELING || net.state === STATES.BERTHED || net.state === STATES.COLLARED))
+      || (net._heldByArm === true && (net.state === STATES.CAPTURED || net.state === STATES.REELING));
     const paidScene = reeled ? straight : (net.tetherPaidOut ?? straight / M) * M;
     const slack = Math.max(0, paidScene - straight);
     const slackRatio = straight > 1e-12 ? slack / straight : 0;
@@ -2494,15 +2527,23 @@ export class CaptureNetVisual {
    * @private
    */
   _drawnCatchRadius(d, chopMul) {
-    DebrisWireframe.getGeometry(d.type, d.id);            // fills the bounding-radius cache
-    const br = DebrisWireframe.getBoundingRadius(d.type, d.id) || 1;
-    let renderScale = DebrisField.effectiveRenderScale(d);
-    if (chopMul != null) renderScale *= chopMul;
-    return renderScale * br;
+    return drawnCatchRadiusScene(d, chopMul);             // net-cinch: the one home, shared with the simulation
   }
 
   /**
-   * l8c: from the closed cinch to the end of the hand-off, draw a mother net as a compact bag around its catch (see
+   * net-cinch: the arm that fired a DAUGHTER's net, when its net-launcher muzzle can be read (the ring her net line
+   * winds on); null for a mother net, a mock, or an arm without the hardware. Only such a net is drawn as a held bag.
+   * @param {object} net
+   * @returns {object|null}
+   * @private
+   */
+  _daughterMuzzleArm(net) {
+    const arm = net && !net._isMother && net.armIndex >= 0 ? net._sourceArm : null;
+    return arm && typeof arm.getNetMuzzleWorldInto === 'function' ? arm : null;
+  }
+
+  /**
+   * l8c: from the closed cinch to the end of the hand-off, draw a net as a compact bag around its catch (see
    * BAG): the apex ball (where the tether ends) touching the rear of the catch (never behind the capture ring), the
    * rim ring just past it, the web wrapping it, the bag lined up with its tow line. The simulation's apex
    * (net.position) trails the catch by the reel's seat law (up to ~4.6 m) and the kit was built as the 6.8 m flight
@@ -2511,6 +2552,9 @@ export class CaptureNetVisual {
    * bag that lets go (failed resolve, slip) un-gathers over BAG.GATHER_S, then is put back exactly as built. Runs
    * before the drape driver and the tether: it moves vis.group (the tether's end) and re-sizes the kit. Nothing in
    * the simulation is touched (the reel's momentum, seat law and timings are unchanged).
+   * net-cinch (2026-10-20): a daughter's net is shaped the same way, on her own muzzle as the ring, through
+   * CINCH_CLOSING, CAPTURED and REELING (the arm holds the net in REELING through the dock and HOLDING_CATCH), so her
+   * catch is wrapped all the way home and the bag does not pop from the 5 m flight cone when the reel starts.
    * @param {object} vis
    * @param {object} net
    * @param {number} dt — seconds
@@ -2520,7 +2564,10 @@ export class CaptureNetVisual {
     const kit = vis.kitHandle;
     const d = net.targetDebris;
     const st = net.state;
-    const can = !vis.detached && net._isMother && !!d && !!d._scenePosition && !!net.launchDirection;
+    // net-cinch: a DAUGHTER's net is shaped the same way (owner: the net is wrapped round the catch all the way home): its
+    // ring is her net-launcher muzzle, not the mother's berth collar
+    const muzzleArm = this._daughterMuzzleArm(net);
+    const can = !vis.detached && (net._isMother || !!muzzleArm) && !!d && !!d._scenePosition && !!net.launchDirection;
     const closing = can && !vis.failure && st === STATES.CINCH_CLOSING;
     const held = can && !vis.failure && net.catchResult === 'success'
       && (st === STATES.CAPTURED || st === STATES.REELING || st === STATES.BERTHED
@@ -2554,34 +2601,27 @@ export class CaptureNetVisual {
     const chopMul = (st === STATES.COLLARED && d._breakdownActive && net._digestPhaseT != null)
       ? Constants.FURNACE_TRANSFER.chopScaleMul(net._digestPhaseT)
       : null;
-    const rS = Math.max(BAG.MIN_RADIUS_M * M, this._drawnCatchRadius(d, chopMul));   // drawn radius, scene units
+    const rS = heldBagRadiusScene(d, chopMul);          // drawn radius with the floor, scene units (the sim's own function)
     const c = d._scenePosition;
-    // the bag's axis: from the launch direction to the tow line (capture ring -> catch), so a bag hauled in from
-    // off-centre lines up with its tether
-    const L = vis._bagAxis || (vis._bagAxis = new THREE.Vector3());
-    const lx = net.launchDirection.x, ly = net.launchDirection.y, lz = net.launchDirection.z;
+    // the ring the line winds on: the mother's capture ring (berth collar), or the daughter's muzzle
     let ringOk = false;
-    if (this._player && typeof this._player.getNetBerthCollarPositionInto === 'function') {
+    if (muzzleArm) {
+      muzzleArm.getNetMuzzleWorldInto(_v3d);
+      ringOk = Number.isFinite(_v3d.x) && Number.isFinite(_v3d.y) && Number.isFinite(_v3d.z);
+    } else if (this._player && typeof this._player.getNetBerthCollarPositionInto === 'function') {
       this._player.getNetBerthCollarPositionInto(_v3d);
       ringOk = Number.isFinite(_v3d.x) && Number.isFinite(_v3d.y) && Number.isFinite(_v3d.z);
     }
-    L.set(lx, ly, lz);
-    if (ringOk) {
-      _v3a.copy(c).sub(_v3d);
-      const dist = _v3a.length();
-      if (dist > 0.05 * M) L.multiplyScalar(1 - g).addScaledVector(_v3a.multiplyScalar(1 / dist), g);
-    }
-    if (L.lengthSq() < 1e-12) L.set(lx, ly, lz);
-    L.normalize();
+    const ring = ringOk ? _v3d : null;
+    // the bag's axis: from the launch direction to the tow line (ring -> catch), so a bag hauled in from
+    // off-centre lines up with its tether
+    const L = vis._bagAxis || (vis._bagAxis = new THREE.Vector3());
+    heldBagAxisInto(L, c, ring, net.launchDirection, g);
     vis._bagAxisOn = true;
     // the drawn apex: from the simulation's (update() wrote net.position into vis.group) to "touching the rear of
-    // the catch", but never behind the capture ring the tether winds onto (a catch drawn larger than its seat
-    // would put it inside the ship)
-    let back = BAG.APEX_BACK_FRAC * rS;
-    if (ringOk) {
-      const fromRing = (c.x - _v3d.x) * L.x + (c.y - _v3d.y) * L.y + (c.z - _v3d.z) * L.z;
-      if (Number.isFinite(fromRing)) back = Math.min(back, Math.max(0.01 * M, fromRing));
-    }
+    // the catch", but never behind the ring the tether winds onto (a catch drawn larger than its seat would put it
+    // inside the ship). A daughter's neck also keeps the apex ball's radius off her muzzle (not sunk into her launcher).
+    let back = heldBagBack(rS, c, ring, L, muzzleArm ? DAUGHTER_STAND_M : 0);
     // the hand-off cinch: from the reel's bag to the one that is the wire bag's size (a sphere of its radius)
     const cinch = this._handOffCinch(vis, net, d);
     let ahead = BAG.RIM_AHEAD_FRAC * rS;
@@ -2634,17 +2674,33 @@ export class CaptureNetVisual {
   /**
    * l8-reel-collar F1: true while the mother hauls or holds a catch smaller
    * than MEMBRANE_WELDED_SMALL_SIZE_M — the film is then not drawn so the
-   * catch stays visible through the thread lattice. Mother nets only
-   * (`_isMother`, so mocks and daughter nets keep the old draw).
+   * catch stays visible through the thread lattice. net-cinch (2026-10-20): a
+   * DAUGHTER's net the same way (she holds it in REELING through the net reel,
+   * the haul, the dock and HOLDING_CATCH; CAPTURED is its one-tick lead-in), and
+   * a carried bag (`_smallCatchFilm`, the rack and the tip). Mocks (no launcher
+   * arm) keep the old draw.
    * @param {object} net
    * @returns {boolean}
    * @private
    */
   _filmHiddenForSmallCatch(net) {
-    if (!net._isMother || net.catchResult !== 'success') return false;
+    if (net.catchResult !== 'success') return false;
+    const daughter = !net._isMother && !!this._daughterMuzzleArm(net);
+    if (!net._isMother && !daughter) return false;
     const st = net.state;
-    if (st !== STATES.REELING && st !== STATES.BERTHED && st !== STATES.COLLARED) return false;
-    const dSize = net.targetDebris?.sizeMeter || 0;
+    if (st !== STATES.REELING && st !== STATES.BERTHED && st !== STATES.COLLARED
+        && !(daughter && st === STATES.CAPTURED)) return false;
+    return this._smallCatchFilm(net.targetDebris);
+  }
+
+  /**
+   * net-cinch: is this catch smaller than the size below which the welded film hides (see `_filmHiddenForSmallCatch`)?
+   * @param {object|null} d the catch
+   * @returns {boolean}
+   * @private
+   */
+  _smallCatchFilm(d) {
+    const dSize = d?.sizeMeter || 0;
     const szLo = Constants.NET_WEB.MEMBRANE_WELDED_SMALL_SIZE_M ?? 0.8;
     return dSize > 0 && dSize < szLo;
   }

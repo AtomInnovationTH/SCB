@@ -98,6 +98,10 @@ const clamp01 = (x) => (x > 1 ? 1 : (x > 0 ? x : 0));
  *                                         (_redockArrestStarted && _redockDebitApplied);
  *                                         the unfunded FUEL_FALLBACK_SLOW winch
  *                                         finish must NOT flare
+ * @param {boolean} [sig.reelHome]         REEL_HOME is on: REELING is a pure winch
+ *                                         haul, so the aft cruise glow is dark (only a
+ *                                         funded burn / the 2 m line-up lights the fore
+ *                                         nozzle); default false = today's aft read
  * @param {number}  [sig.recoilFlashS]     seconds left of the fore counter-burn
  *                                         flash (ARM_RECOIL_KICK)
  * @returns {{aft:number, fore:number}} intensities in [0,1], fractions of the
@@ -120,8 +124,10 @@ export function computeDaughterPlumeIntensity(sig) {
     // REDOCK_FEEP ARREST_DISTANCE_M window a FUNDED arrest burn brakes the
     // closing rate — nose (+Z) points at the dock, so the FORE nozzle fires
     // instead of the aft one.
+    // REEL_HOME (reel-home Decision 4, locked): no thruster fires on the reel; the winch does the work. The one burn
+    // is the 2 m line-up (arrestFeepActive carries it): shown on the fore nozzle, the picture it had before.
     if (sig.arrestFeepActive === true) fore = 1;
-    else aft = 1;
+    else if (sig.reelHome !== true) aft = 1;
   } else if (state === S.APPROACH) {
     // Crossfade on the smoothed brake read: closing burns aft; braking
     // (thrusting toward travel) burns fore. Smoothing upstream prevents a

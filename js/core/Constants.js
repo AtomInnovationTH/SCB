@@ -1103,6 +1103,11 @@ export const Constants = {
     MAGNETIC_GRAPPLE: 'MAGNETIC_GRAPPLE',  // P2 — EPM contact + 50 N hold + reel (DAUGHTER_MULTITOOL)
     GRIPPER_GRAPPLE:  'GRIPPER_GRAPPLE',   // P3 — 3-jaw chuck on protruding fixture (reserved)
     PAD_CONTACT:      'PAD_CONTACT',       // P4 — multi-modal pad contact attempt (reserved)
+    // trip-melt-2 (carry, 2026-10-19): a daughter carries a rack catch to a radiator-tip furnace on the trip and comes home.
+    CARRY_PREP:       'CARRY_PREP',        // docked: the strut and the radiators move to the carry pose
+    CARRY_OUT:        'CARRY_OUT',         // clamp release, then the straight flight to the tip (her docked attitude, ship-relative)
+    CARRY_HANDOFF:    'CARRY_HANDOFF',     // the catch leaves her rack for the tip, a beat at the tip
+    CARRY_BACK:       'CARRY_BACK',        // the same line in reverse, wound by her strut reel
   },
 
   // --- Daughter multi-tool (DAUGHTER_MULTITOOL_SPEC §4.1) ---
@@ -1382,6 +1387,82 @@ export const Constants = {
     CRUISE_TENSION_FRACTION: 0.85, // cap cruise so T_reel ≤ break×this (snap invariant:
                                    //   any in-spec catch stays under the tether break strength)
     BOOST_LOCKOUT_IN_DECEL: true, // disable REEL_BOOST inside DECEL_DISTANCE_M
+  },
+
+  // reel-home (2026-10-19, FEATURE_FLAGS.REEL_HOME, owner design): a daughter's catch comes home on reels. No jump at net
+  // close: her net winds the catch to its rack cell on her nose (NET only, no fuel, centre of mass kept:
+  // ArmUnit._rhNetReelStep). Then REELING goes TAIL FIRST (no winding while she is more than TAIL_FIRST_TOL_DEG off), her
+  // strut follows her (STRUT_MIN..MAX_DEG, _aimReserved: ArmManager._updateReelHome) and the mother turns to put the line
+  // in the strut's swing plane, and her angle inside the strut's range, when nothing limits her
+  // (_motherTurnBlock(exceptArm)). At ALIGN_DIST_M a line more than ALIGN_TOL_DEG off the strut axis holds the reel; after
+  // ALIGN_WAIT_S she lines herself up on her thrusters (mass-scaled fuel, ARM_RESERVE_FUEL included: it is kept for a safe
+  // reel-home), else she holds for the mother and looks again every second. DOCKING no longer flips her or bills thruster
+  // fuel; a catch already in its cell has no glide. Tests: js/test/test-ReelHome.js. Values marked (est) are estimates,
+  // not measurements.
+  REEL_HOME: {
+    NET_REEL_MPS:        0.5,   // m/s (est) — her net winds the catch in to her nose at this CLOSING speed (line shortening)
+    TAIL_FIRST_TOL_DEG:  10,    // the strut reel does not wind until her -Z points at the strut tip within this
+    STRUT_MIN_DEG:       34,    // strut angle floor while she is hauled home (measured: 0° scrapes hull and radiators)
+    STRUT_MAX_DEG:       180,   // strut angle ceiling
+    PLANE_TOL_DEG:       5,     // she is "in the strut's plane" within this; beyond it the mother turns
+    ALIGN_DIST_M:        2.0,   // m from the strut tip: the line-up check and hold
+    ALIGN_TOL_DEG:       10,    // the line (tip -> her) must be within this of the strut axis to go on in
+    ALIGN_WAIT_S:        5,     // s the mother gets to line her up before she uses her own thrusters
+    ALIGN_SPEED_MPS:     0.5,   // m/s (est) — her own line-up speed on the circle round the tip
+    ALIGN_CLEAR_M:       0.15,  // m — the line-up arc stays this far off the ship (keep-out query)
+    ARRIVE_TOL_DEG:      0.5,   // the catch is brought on to her axis only once her nose is this close to the line
+    TURN_RETRY_S:        1.0,   // s between mother-turn requests for one reel (D11a: was a lifetime cap of 6 requests; a refusal counts too)
+    TURN_MAX_DEG:        60,    // a mother turn bigger than this is not asked for (she lines herself up instead)
+  },
+
+  // trip-melt-2 "carry" (2026-10-19, owner: catches "need to be melted down in the furnace during the long ion burn";
+  // DECISIONS §29 row 4): while the trip burns a daughter carries the catch on her rack to HER radiator's tip furnace and
+  // comes home (ArmUnit CARRY_PREP/OUT/HANDOFF/BACK, ArmManager.requestCarry, TransferTrip's once-a-second scheduler).
+  // The pose of each carry (strut angle, radiator angle) and whether a size row may be carried at all come from the
+  // measured gate table below (GATE); everything else is a number the coordinator chose (est).
+  // Tests: js/test/test-TripCarry.js.
+  CARRY: {
+    PAYOUT_MPS:        0.2,    // m/s (est) — the flight speed (smoothstep ends); her strut line pays out and winds in at this speed
+    CLAMP_S:           1.5,    // s — the clamp release before CARRY_OUT moves (the LAUNCHING clamp's length)
+    HANDOFF_S:         1.0,    // s (est) — the beat at the tip once the bag is seated, before CARRY_BACK starts
+    STRUT_ARRIVE_DEG:  0.05,   // CARRY_PREP's strut is over when it is this close to the carry angle: the carry re-arms the strut's target until it lands EXACTLY (the driver alone stops 0.57° short), and the gate is certified for this tolerance (js/test/_carryGate.js STRUT_ARRIVE_DEG)
+    THETA_ARRIVE_DEG:  0.01,   // ... and her petal this close to the carry angle (it lands exactly: PlayerSatellite._stepPetalHolds)
+    // petal-single (Decisions 4, 7): the carry is certified for the other three petals standing anywhere in these shared-angle
+    // ranges (closed, or open - 146°, or lower when a bag on a tip caps it: TipCargo TIP_BAND 134..146 less the 0.57° settle) and for the other three
+    // struts within NEIGHBOUR_TOL_DEG of NEIGHBOUR_REST_DEG (the strut driver stops within 0.01 rad of its target). A carry
+    // outside them waits (it is not a give-up). STRUT_REC_*: the recorded strut angles the strut sweep was certified for.
+    OTHERS_RANGES_DEG: [[0, 1], [133, 146]],
+    NEIGHBOUR_REST_DEG: 34,
+    NEIGHBOUR_TOL_DEG:  0.6,
+    STRUT_REC_LO_DEG:   34,
+    STRUT_REC_HI_DEG:   180,
+    THETA_MAX_DEG:      133,   // no gate entry holds her petal higher: the tip band (>= 133.4°) would push it down mid-carry
+    MISSION_CHECK_S:    1.0,   // s of game time between two looks of the mission carry scheduler (ArmManager; the trip has its own, CHECK_S)
+    PREP_MAX_S:        40,     // s (est) — a prep that has not arrived by now gives up: she stays docked, one comms line
+    CHECK_S:           1.0,    // real seconds between two looks of the trip's carry scheduler
+    FINISH_GRACE_S:    60,     // real seconds past TRIP.MAX_REAL_S an in-flight carry gets to finish; then it is aborted
+    CLEAR_M:           0.15,   // m — the clearance the gate table was measured to (js/test/_carryGate.js CLEAR_M)
+    OWN_STRUT_FREE_M:  0.4,    // m — the gate was measured with her own strut not counted for the first 0.4 m of the flight (plan: 0.3; she is leaving its tip collar)
+    OWN_TIP_FREE_M:    0.4,    // m — ... and, for the last 0.4 m, the DELIVERED catch alone is not counted against the receiving tip's pad, stalk and cone (it is seated against them); her body, her strut and her other catch keep CLEAR_M to the whole radiator (Decision 7a)
+    SEAT_CLEAR_M:      0.10,   // m — in that last 0.4 m the DELIVERED catch keeps this (not CLEAR_M) to the rest of the receiving petal: seated against the cone it is 0.12-0.19 m from the boom end whatever she does (measured, js/test/_carryGate.js OWN_TIP_SEAT_CLEAR_M; DEVIATION from Decision 7a)
+    // The measured gate table (Decision 5; petal-single: one swinging petal and a TURNING flight), generated offline:
+    // `node scripts/probes/carry-gate-gen.mjs --all` (js/test/_carryGate.js: exact point-to-triangle clearance on the real ship,
+    // 30 fixed attitudes, every shape of the size row, BOTH daughters of the pair, every certified shared angle of the other
+    // petals) -> js/test/fixtures/carry-gate.json; this block is `node scripts/probes/carry-gate-to-constants.mjs` of that file
+    // and test-TripCarryGate.js pins the two equal. Key '<size row>|<delivered rack cell>' (rows = PLUME_CARGO_ALPHA_LADDER:
+    // 0 = up to 0.5 m, 1 = up to 1.5 m; the larger rows hold no catch that fits a tip). strutDeg / thetaDeg = her strut and HER
+    // petal at the seat; dir = how her body trails while she seats the catch (ArmDockBasis carryDirInto: 0 = along the boom
+    // outward). A missing key = no pose clears the line for that row (the daughter keeps the catch, one comms line). Pair = the
+    // body type (weaver: 64 and 244 deg; spinner: 116 and 296 deg). Generated 2026-10-20, run times in the plan Log.
+    // Result: only row 0 (catch up to 0.5 m), cell 0 (one catch on the rack) has a pose, for both pairs; the other six entries
+    // (row 1, and cell 1 = a second catch on the rack) were searched exhaustively and none passes: those catches stay on the rack.
+    // swingBackReachM (review R8): the way BACK, with the catch in the tip bag - the largest catch reach (m, `DebrisField.trueReachM`)
+    // whose petal swing back keeps 0.15 m to the ship, her strut and her body, per shared angle of the radiators: closed
+    // (0-1 deg) or open (133-146 deg). A bigger catch waits for the other range (ArmManager.carryCheck 'swing-back').
+    GATE: {
+      weaver: { '0|0': { strutDeg: 130, thetaDeg: 30, dir: 0, swingBackReachM: { closed: 0.229, open: 0.649 } } },
+      spinner: { '0|0': { strutDeg: 124, thetaDeg: 34, dir: 0, swingBackReachM: { closed: 0.282, open: 0.75 } } },
+    },
   },
 
   // Q3 — Stage-1 net snug-up (rigidize daughter+net+debris into one unit).
@@ -2447,6 +2528,13 @@ export const Constants = {
     // the flag-OFF fallback, unchanged and test-covered.
     REEL_PROFILE_V2:           true,
 
+    // reel-home (2026-10-19, owner design): a daughter does not jump to her catch. Her net winds the catch in to her
+    // nose first (the pair's centre of mass stays put), then the strut reel winds her home TAIL-FIRST onto the strut
+    // tip, catch leading away, the strut swinging and the mother turning to meet her line. Off: the old path
+    // (jump to the catch, nose-first reel, catch outboard of her). Read through Constants.isFeatureEnabled('REEL_HOME'),
+    // so REALITY_MODE can never turn it on.
+    REEL_HOME:                 true,
+
     // NEW — mother-net capture ceremony (.kilo/plans/mother-net-capture-ceremony.md)
     // Phase 2: kinematic net open-on-launch + cinch-on-capture animation.
     LASSO_NET_KINEMATICS:      true,   // Phase 2 — net opens on spin-up, cinches on contact (visual only)
@@ -2528,6 +2616,14 @@ export const Constants = {
     // ON: today's staged cook (hold, chop, feed, digested CATCH_PROCESSED), kept for the day a real furnace exists.
     // Read through Constants.isFeatureEnabled('FURNACE_COOK'), so REALITY_MODE can never turn it on.
     FURNACE_COOK:             false,
+
+    // Transfer trip (lane trip-melt-1, owner 2026-10-19, DECISIONS §29 rows 1 and 4: "they need to be melted down in the
+    // furnace during the long ion burn/transition to next debris field"). ON: a completed mission does not start the
+    // next one at once - the ship burns to the next field for a while (js/systems/TransferTrip.js), the four radiator-tip
+    // furnaces melt the catches parked on them (the tip cook runs on the trip only; FURNACE_COOK stays off for the nose
+    // collar and the daughter racks), and the next mission starts when the trip ends. OFF: the next mission starts at once
+    // and nothing melts. Read through Constants.isFeatureEnabled('TRANSFER_TRIP').
+    TRANSFER_TRIP:            true,
   },
 
   // =========================================================================
@@ -5221,6 +5317,20 @@ export const Constants = {
     MAX_DISPLAY: 5,           // top-N clusters shown in the map
     MAX_DV_MS: 500,           // clusters requiring > this ΔV (m/s) are "unreachable"
     WINDOW_IMMINENT_S: 10,    // CP-3 — countdown turns cyan + beeps at this T-minus (s)
+  },
+
+  // =========================================================================
+  // TRIP - the burn to the next debris field (lane trip-melt-1, owner 2026-10-19, DECISIONS §29;
+  // js/systems/TransferTrip.js, FEATURE_FLAGS.TRANSFER_TRIP)
+  // =========================================================================
+  TRIP: {
+    TIME_RATE: 100,        // world-clock target while the trip burns (the F5 rate, FloorContract timeCap)
+    HANDOFF_RATE: 1,       // world-clock target while a leash hand-off or a carry runs on the trip (the base rate: 10x game time; trip-melt-2 D12b)
+    DV_MPS: 20,            // m/s billed per trip: the gas of a small altitude change (coordinator ESTIMATE, owner may tune); spread over the first MIN_REAL_S
+    MIN_REAL_S: 10,        // real seconds: the shortest burn, even with nothing to melt
+    MAX_REAL_S: 120,       // real seconds: the longest; an unfinished melt keeps its progress for the next trip
+    WAIT_DOCK_MAX_S: 60,   // real seconds the trip waits for daughters to come home; then it burns as the ship points
+    REFUSAL_GAP_S: 2,      // real seconds between two "Burning to the next field." refusal lines of one kind
   },
 
   // =========================================================================

@@ -78,6 +78,7 @@ export const PHASE_LABELS = Object.freeze({
   MATCH_ORBIT: 'MATCH ORBIT',
   TRAIL_ALIGN: 'TRAIL ALIGN',
   HOLD: 'HOLD',
+  TRANSFER: 'TRANSFER',   // trip-melt D8: the burn to the next field (AutopilotSystem.holdPrograde)
 });
 
 /** The word shown while an aim sequence owns the nose and the AP is off. */
@@ -388,7 +389,9 @@ export class FmaStrip {
     if (this._isSimple() && ((engaged && floor === HOME_FLOOR) || floor === 3 || floor === 4)) {
       const named = engaged && s.headingMode === 'TARGET' && typeof s.targetName === 'string' && s.targetName
         ? shortTypeName(s.targetName) : null;
-      if (named) {
+      if (phase === 'TRANSFER') {
+        this._plainText = 'Burning to the next field';        // trip-melt D8: the ship's own burn, not "Autopilot on"
+      } else if (named) {
         this._plainText = rangeText === NO_RATE ? `Autopilot to ${named}` : `Autopilot to ${named} ${DOT} ${rangeText}`;
       } else {
         this._plainText = (engaged || aiming) ? 'Autopilot on' : 'Autopilot off';

@@ -177,6 +177,9 @@ export class LeashDriver {
   get _tc() { return this._tipCargo || this.player.tipCargo; }
   get _am() { return this._armManager || this.player.armManager; }
 
+  /** petal-single: the azimuth that keys tip `tipIndex`'s radiator petal (`THERMAL.FLOWER.AZIMUTHS_DEG`). */
+  _petalAz(tipIndex) { return Constants.THERMAL.FLOWER.AZIMUTHS_DEG[tipIndex]; }
+
   /** True while a hand-off is under way (the nose reel-in included). */
   isActive() { return this._h !== null; }
 
@@ -635,7 +638,7 @@ export class LeashDriver {
     this._toMachine(_v, io.tipWorld);
     qInvRotInto(q, io.tipWorld, h.tipShip);                // E4: the latch point in the ship frame (the radiators fold, it moves)
     if (h.koOwn) { h.koOwn.p.x = h.tipShip.x; h.koOwn.p.y = h.tipShip.y; h.koOwn.p.z = h.tipShip.z; }
-    io.radiatorThetaRad = p._flowerThetaRad;
+    io.radiatorThetaRad = typeof p.petalThetaRad === 'function' ? p.petalThetaRad(this._petalAz(h.tipIndex)) : p._flowerThetaRad;
     this._turnIoInto(h, io.turn);
     io.swingDone = h.swingIssued && !tc.isSwinging(h.tipIndex);
     io.noseReleased = h.noseReleased;
@@ -740,13 +743,15 @@ export class LeashDriver {
     const p = this.player, tc = this._tc, ap = this.autopilot;
     switch (c.type) {
       case 'foldRadiators':
-        // null = no radiator hardware / launch-locked: nothing has moved yet, so give up cleanly
-        if (typeof p.holdFlowerForHandoff !== 'function' || p.holdFlowerForHandoff(c.thetaRad) === null) {
+        // petal-single (Decision 2): only the receiving tip's petal swings to the hand-off angle; the rest keep the shared
+        // angle. null = no such petal / launch-locked: nothing has moved yet, so give up cleanly
+        if (typeof p.holdPetalForHandoff !== 'function' || p.holdPetalForHandoff(this._petalAz(h.tipIndex), c.thetaRad) === null) {
           h.abort = { why: 'radiators', text: 'The radiators would not move. The catch stays at the nose.' };
         }
         break;
       case 'unfoldRadiators':
-        if (typeof p.releaseFlowerHandoff === 'function') p.releaseFlowerHandoff(c.thetaRad);
+        // the petal swings back to the shared angle (the machine waits for it within THETA_TOL_DEG of its unfold angle)
+        if (typeof p.releasePetalHandoff === 'function') p.releasePetalHandoff(this._petalAz(h.tipIndex));
         break;
       case 'releaseNose':
         h.noseReleased = true;                    // the machine already booked the push (reactionImpulse)
@@ -982,8 +987,8 @@ export class LeashDriver {
   /** DONE or FAILED: leave nothing held and the net where its state says. */
   _finish(h) {
     const p = this.player;
-    if (typeof p.flowerHandoffHeld !== 'undefined' && p.flowerHandoffHeld && typeof p.releaseFlowerHandoff === 'function') {
-      p.releaseFlowerHandoff(h.homeThetaRad);
+    if (typeof p.isPetalHolding === 'function' && p.isPetalHolding(this._petalAz(h.tipIndex)) && typeof p.releasePetalHandoff === 'function') {
+      p.releasePetalHandoff(this._petalAz(h.tipIndex));
     }
     this._releaseHold(h);
     if (!h.latched && !h.freed) this._relatch(h);
@@ -1019,7 +1024,9 @@ export class LeashDriver {
       }
     } catch (e) { /* the turn is already over */ }
     try {
-      if (p.flowerHandoffHeld && typeof p.releaseFlowerHandoff === 'function') p.releaseFlowerHandoff(h.homeThetaRad);
+      if (typeof p.isPetalHolding === 'function' && p.isPetalHolding(this._petalAz(h.tipIndex)) && typeof p.releasePetalHandoff === 'function') {
+        p.releasePetalHandoff(this._petalAz(h.tipIndex));
+      }
     } catch (e) { /* radiators already free */ }
     try { this._releaseHold(h); } catch (e) { /* hold already free */ }
     if (!h.latched && !h.freed) {

@@ -178,7 +178,7 @@ export function shipOpeningActuators({ getPlayer, getArmManager, bus = eventBus 
       const p = getPlayer();
       if (!flowerFitted(p)) return false;
       if (flowerCommandedOpen(p)) return true;               // the player already opened it (their own O): leave it
-      if (p.flowerHandoffHeld === true) return false;       // held for a catch hand-off: the ship says so itself
+      if (p.flowerHandoffHeld === true || p.flowerCommandsLocked === true) return false;       // held for a catch hand-off or a daughter's carry: the ship says so itself
       const FL = Constants.THERMAL.FLOWER;
       if (p.setFlowerPose(FL.OPEN_POSE) === null) return false;
       bus.emit(Events.THERMAL_FLOWER_INPUT, { deploying: true });

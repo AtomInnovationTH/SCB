@@ -24,6 +24,7 @@ import { strutLocalDirection } from '../entities/ArmDockBasis.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg } from './ResourceSystem.js';
 import { wingsHint } from './WingsHint.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
+import { tripRefuses } from './TransferTrip.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
@@ -61,6 +62,7 @@ export const AUTOPILOT_OFF_TEXT = Object.freeze({
   TRAWL:         'Autopilot off: a debris sweep has started.',
   ARROW_INPUT:   'Autopilot off: you steered with the arrow keys.',
   MANUAL_REEL:   'Autopilot off: you took over with the reel key (R).',
+  TRANSFER:      'Autopilot off: burning to the next field.',
 });
 /** Any reason not in the table (never a raw code). */
 export const AUTOPILOT_OFF_FALLBACK = 'Autopilot off.';
@@ -390,6 +392,10 @@ export class AutopilotSystem {
 
     /** @type {boolean} Attitude hold (steady freeze) during a catch reel-in. */
     this._attitudeHold = false;
+    /** trip-melt D4: the transfer trip's own prograde hold is on (attitude only; NOT the autopilot - `_engaged` stays false). */
+    this._tripHold = false;
+    /** trip-melt D4: the trip hold also steers the ship to prograde (false: the trip burns as the ship points). */
+    this._tripTurn = false;
     /** l5c-reach E7: who owns the attitude hold ('leash' = LeashDriver), or null. Other listeners may not release an owned hold. */
     this._attitudeHoldOwner = null;
     /** @type {number} Seconds the current attitude hold has been active (safety cap). */
@@ -500,14 +506,71 @@ export class AutopilotSystem {
       const c = this._headingMode === 'CLUSTER' ? this._debrisMapCluster : null;
       targetName = c ? String(c.name || c.id || 'CLUSTER') : this._getTargetLabel();
     }
+    // trip-melt D8: the transfer trip's burn reads as an engaged hold with the word TRANSFER (no target, no range).
+    const trip = this._tripHold && !engaged;
     return {
-      engaged,
+      engaged: engaged || trip,
       aiming: !!this._aimCoroutine,
-      phase: this._phase,
+      phase: trip ? 'TRANSFER' : this._phase,
       headingMode: engaged ? this._headingMode : null,
       targetName,
       rangeM: (engaged && typeof range === 'number' && Number.isFinite(range)) ? range : null,
     };
+  }
+
+  /**
+   * trip-melt D4: the transfer trip's own prograde hold. ATTITUDE ONLY: turns the ship to prograde at the autopilot's
+   * turn rate and then keeps it there in the orbit frame at any world rate (G2: see `_tickTripHold`), fires no thrust,
+   * bills no battery and
+   * changes no orbit. It is NOT `engage()` (with debris left in the field that resolves to a rendezvous burn through
+   * `applyCartesianImpulse`), `_engaged` stays false, and `engage()` / `engageCluster()` keep refusing the player
+   * while the trip burns; this hold goes through none of that.
+   * `turn: false` (a daughter is still out on her line) holds nothing: the trip burns as the ship points, but the
+   * strip still reads TRANSFER. The hold drops itself at an empty battery (DECISIONS §27: the autopilot switches off
+   * at 0 Wh); the trip then goes on burning as it points.
+   * @param {{turn?: boolean}} [opts]
+   */
+  holdPrograde(opts = {}) {
+    this._tripHold = true;
+    this._tripTurn = opts.turn !== false;
+    if (this._tripTurn && this._player && !this._engaged) this._player.autopilotEngaged = true;
+  }
+
+  /** trip-melt D4: end `holdPrograde()`. The arbiter's handback folds the attitude into the player's offset (no snap). */
+  releasePrograde() {
+    this._dropTripTurn();
+    this._tripHold = false;
+  }
+
+  /** @returns {boolean} true while the transfer trip's hold is on (the strip reads TRANSFER) */
+  isTripHold() { return this._tripHold; }
+
+  /** @private Stop steering for the trip (keeps the TRANSFER word while `_tripHold` stays set). */
+  _dropTripTurn() {
+    const p = this._player;
+    if (p && typeof p.setOrbitFrameHold === 'function') p.setOrbitFrameHold(false);
+    if (this._tripTurn && p && !this._engaged) p.autopilotEngaged = false;
+    this._tripTurn = false;
+  }
+
+  /**
+   * @private trip-melt G2 (review of 46931516): the hold's heading lives in the ORBIT frame. The first round slewed the
+   * nose toward the velocity in the world frame at AP_ROT_RATE (0.2 rad/s of real time); at the trip's 100x the orbit
+   * turns ~1.1 rad per real second, so the nose never caught up. Now the player keeps `quaternion = prograde ·
+   * offset` (PlayerSatellite.setOrbitFrameHold: recomposed from the exact prograde every frame, at any world rate) and
+   * this eases the offset to nothing at the autopilot's own turn rate on REAL time: the turn to the burn attitude,
+   * then the nose stays on prograde. A held world (the drawer) does not turn it. A scripted turn, an aim or a reel-in
+   * attitude hold owns the nose while it runs: the orbit-frame hold steps aside for it and takes over from wherever it
+   * left the ship. No thrust, no battery, no orbit change.
+   * @param {number} dt real seconds
+   * @param {number} dtWorld world seconds (0 while the world is held)
+   */
+  _tickTripHold(dt, dtWorld) {
+    const p = this._player;
+    if (typeof p.setOrbitFrameHold !== 'function') return;
+    const drive = this._tripTurn && !this._turn && !this._aimCoroutine && !this._attitudeHold;
+    p.setOrbitFrameHold(drive);
+    if (drive && dtWorld > 0) p.easeOrbitFrameOffset(AP_ROT_RATE * dt, AP_ROT_DEADZONE);
   }
 
   /**
@@ -744,6 +807,8 @@ export class AutopilotSystem {
    * target with a reactive hint instead of engaging (T4).
    */
   engage() {
+    // trip-melt D7: the burn to the next field is the ship's job; the player's autopilot waits until it is over.
+    if (tripRefuses('autopilot')) return;
     // Empty battery (DECISIONS §27): refuse, and say so (answers the A press).
     if (this._batteryEmpty()) {
       this._emitBatteryEmpty({ _reactive: true });
@@ -957,6 +1022,8 @@ export class AutopilotSystem {
    *   the heading should prefer over cluster.center.
    */
   engageCluster(cluster, opts = {}) {
+    // trip-melt D7: refused while the trip burns (see engage).
+    if (tripRefuses('autopilot')) return;
     // Empty battery (DECISIONS §27): refuse, and say so (answers the player's press).
     if (this._batteryEmpty()) {
       this._emitBatteryEmpty({ _reactive: true });
@@ -1075,6 +1142,15 @@ export class AutopilotSystem {
     // internal safety cap releases if one is ever missed.
     this._tickAttitudeHold(dtWorld > 0 ? dt : 0);   // the 120 s cap does not run while the world is held
     this._tickLaunchHold(dtWorld > 0 ? dt : 0);     // launch-seq: the hold from the end of the aim to the spring
+
+    // trip-melt D4: the transfer trip's prograde hold - attitude only, not the autopilot. A held world (the drawer)
+    // does not turn the ship; a scripted turn / aim / reel-in hold owns the nose and the hold steps aside for the last
+    // two (the leash hand-off turn is `_turn`). G2: the heading is kept in the ORBIT frame (see `_tickTripHold`).
+    if (this._tripHold && !this._engaged && this._player) {
+      if (this._tripTurn && this._batteryEmpty()) this._dropTripTurn();   // §27: not at 0 Wh; the trip burns as it points
+      this._tickTripHold(dt, dtWorld);
+      return;
+    }
 
     if (!this._engaged || !this._player) return;
 

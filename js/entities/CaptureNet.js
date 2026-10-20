@@ -30,7 +30,11 @@ import { OUT_OF_MOTHER_NETS_LINE, ONE_MOTHER_NET_LEFT_LINE } from '../systems/ne
 // Cargo-continuity S7: the carrier scorer lives with the rest of the CoM maths
 // (ONE quantity, ONE computation — it reuses computeCoM/strutTipMeters).
 import { suggestCargoArm } from '../systems/CoMCalculator.js';
+import { tripRefuses } from '../systems/TransferTrip.js';
+import { heldBagNeckInto, heldBagRadiusScene, DAUGHTER_STAND_M } from './heldBagShape.js';
 import * as THREE from 'three';
+
+const _heldNeck = { x: 0, y: 0, z: 0 };   // net-cinch: scratch for a daughter's held-net neck (scene units)
 
 const CN = Constants.CAPTURE_NET;
 const STATES = CN.STATES;
@@ -40,8 +44,10 @@ const MODES = CN.MODES;
 const CT = CN.CARGO_TRANSFER || {};
 const FEATURE_FLAGS = Constants.FEATURE_FLAGS;
 // no-melt (owner 2026-10-18): the plain refusal for a new catch while the nose holds one that has nowhere to go.
-const NOSE_FULL_LINE = 'Nose is full: there is no furnace yet, and this catch has nowhere to go. '
-  + 'The station unloads catches at the end of the mission, or jettison [K].';
+// trip-melt G8 (owner 2026-10-19): nothing is unloaded by a station any more; a catch that fits a tip goes to a furnace
+// on the trip to the next field.
+const NOSE_FULL_LINE = 'Nose is full: this catch has nowhere to go yet. '
+  + 'It stays at the collar and goes to a furnace on the trip to the next field if it fits one, or jettison [K].';
 
 // Module-level scratch objects for the mother reel/berth per-frame math —
 // the reel/berth path must not allocate per frame (plan §13: use the Into
@@ -1585,10 +1591,20 @@ export class NetProjectile {
       if (motherPhysical) {
         // _updateMotherReel writes net.position later this same tick.
       } else if (sp) {
-        const back = this.netClass.DIAMETER / 2;   // mouth radius (m), apex standoff
-        this.position.x = sp.x / M_NET - this.launchDirection.x * back;
-        this.position.y = sp.y / M_NET - this.launchDirection.y * back;
-        this.position.z = sp.z / M_NET - this.launchDirection.z * back;
+        if (this._heldByArm && this._sourceArm) {
+          // net-cinch: a daughter's held net sits where its bag is drawn — the neck on the tow line from her muzzle to
+          // the catch, touching the catch's rear (entities/heldBagShape.js: the one rule CaptureNetVisual draws and
+          // ArmUnit._rhSyncBag winds the line to), not one flight-mouth radius behind it
+          heldBagNeckInto(_heldNeck, sp, anchor, this.launchDirection, heldBagRadiusScene(this.targetDebris), DAUGHTER_STAND_M);
+          this.position.x = _heldNeck.x / M_NET;
+          this.position.y = _heldNeck.y / M_NET;
+          this.position.z = _heldNeck.z / M_NET;
+        } else {
+          const back = this.netClass.DIAMETER / 2;   // mouth radius (m), apex standoff
+          this.position.x = sp.x / M_NET - this.launchDirection.x * back;
+          this.position.y = sp.y / M_NET - this.launchDirection.y * back;
+          this.position.z = sp.z / M_NET - this.launchDirection.z * back;
+        }
       } else {
         // Empty net (miss) — reel the bag back to the launcher. Effective
         // launch distance shrinks from `tetherPaidOut` (contact distance)
@@ -3918,11 +3934,11 @@ export class CaptureNetSystem {
           // outlives `_cargoRefused`, which a rack flight that is called off re-arms).
           this._sayGasShort(net, 'full');
         } else {
-          // no-melt: with no furnace, do not promise one — the station unloads the nose at the resupply stop.
+          // no-melt: the furnaces run only on the trip to the next field (trip-melt) - do not promise one now.
           const furnace = Constants.isFeatureEnabled('FURNACE_COOK');
           const fate = furnace
             ? 'It rides the collar until the furnace takes it, or jettison [K].'
-            : 'It stays at the collar until the station unloads it at the end of the mission, or jettison [K].';
+            : 'It stays at the collar and goes to a furnace on the trip to the next field if it fits one, or jettison [K].';
           eventBus.emit(Events.COMMS_MESSAGE, {
             source: 'HOUSTON', channel: 'CMD',
             text: overGate
@@ -4728,7 +4744,7 @@ export class CaptureNetSystem {
     const d = net.targetDebris;
     if (!d) return false;
     // no-melt (owner 2026-10-18, "Stay full size, no melting"): no furnace, no cook clock. The catch stays welded
-    // full size at the collar (the berth hold pins it) until the station takes it or [K] jettisons it.
+    // full size at the collar (the berth hold pins it) until a tip furnace takes it on the trip or [K] jettisons it.
     if (!Constants.isFeatureEnabled('FURNACE_COOK')) return false;
     const FT = Constants.FURNACE_TRANSFER;
     const HOLD_S = FT.HOLD_S, CHOP_S = FT.CHOP_S, FEED_S = FT.FEED_S;
@@ -4985,8 +5001,8 @@ export class CaptureNetSystem {
   /**
    * no-melt: the plain refusal for a new catch while the nose collar is holding one that has nowhere to go, or null.
    * With no furnace the nose never empties by itself; once the hand-off has been tried and declined (every tip full or
-   * too small, every daughter cell taken, a catch too heavy) the catch stays until the station unloads it at the
-   * resupply stop, or [K] jettisons it. While a hand-off is still pending (securing, a leash under way, a piece in
+   * too small, every daughter cell taken, a catch too heavy) the catch stays at the collar - a tip furnace takes it on
+   * the trip to the next field if it fits one - or [K] jettisons it. While a hand-off is still pending (securing, a leash under way, a piece in
    * flight, a cut under way) this returns null and today's refusals speak. Shared by the mother net (N), the lasso and
    * the InputManager pre-flight, so the words live in one place. Pure read: it emits nothing.
    * @returns {string|null}
@@ -5344,6 +5360,7 @@ export class CaptureNetSystem {
    * @returns {NetProjectile|null} The created projectile, or null on failure
    */
   fireMotherNet(podIndex, launchPos, launchDir, target, mode) {
+    if (tripRefuses('net')) return null;            // trip-melt D7: no net while the ship burns to the next field
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return null;
     if (!(podIndex >= 0) || podIndex >= this._motherPodCount()) return null;
     // Phase 0.3 (capture-feedback overhaul): refusals speak — mirror the

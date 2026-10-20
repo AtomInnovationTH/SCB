@@ -404,7 +404,7 @@ export class ThermalSystem {
     if (typeof p.getFlowerStatus === 'function' && !p.getFlowerStatus()) return false;   // no radiator fitted
     const ls = p._launchSequence;
     if (ls && typeof ls.isActive === 'function' && ls.isActive()) return false;           // the launch owns the ship
-    if (p.flowerHandoffHeld === true) return false;
+    if (p.flowerHandoffHeld === true || p.flowerCommandsLocked === true) return false;
     if (this._autoOpened) return false;
     if ((this._clockS - this._lastPlayerCmdS) < SH.PLAYER_WINS_S) return false;
     return openFrac <= SH.AT_REST_FRAC;
@@ -424,7 +424,7 @@ export class ThermalSystem {
     const ls = p._launchSequence;
     if (ls && typeof ls.isActive === 'function' && ls.isActive()) return;   // the launch owns the ship
     // A catch hand-off hold refuses every pose and would make setFlowerPose speak the player's refusal line; wait it out (opens after the hold ends).
-    if (p.flowerHandoffHeld === true) return;
+    if (p.flowerHandoffHeld === true || p.flowerCommandsLocked === true) return;
 
     if (this._autoOpened) return;   // it opened once and stays open
 

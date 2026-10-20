@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { TimeAuthority } from './TimeAuthority.js';
+import { tripRefuses } from './TransferTrip.js';
 import { devShotGate } from '../core/DevShotGate.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
@@ -1127,6 +1128,8 @@ export class LassoSystem {
      * @returns {boolean} true if lasso was fired
      */
     fire(playerPos, debrisField, playerVelDir, selectedTarget = null) {
+        // trip-melt D7: nothing is cast while the ship burns to the next field (one plain line, nothing fires).
+        if (tripRefuses('lasso')) return false;
         if (this.active || this.cooldown > 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'cooldown' });
             // UX: tell the player WHY the cast was rejected. Without this the

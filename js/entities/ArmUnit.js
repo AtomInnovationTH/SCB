@@ -20,7 +20,7 @@ import { makePlumeFrustum } from '../scene/plumeGeometry.js';
 import { computeDaughterPlumeIntensity, DAUGHTER_PLUME } from './armPlumeModel.js';
 import { applyDetailLod } from '../scene/detailLodCull.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
-import { strutLocalDirection, composeDockedArmQuat } from './ArmDockBasis.js';
+import { strutLocalDirection, composeDockedArmQuat, bestStrutAlpha, carryDirInto, carryFinalQuatInto, carryRotFrac } from './ArmDockBasis.js';
 import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT, seedHerFrameAttitude, applyHerFrameAttitude, clearShipRelativeAttitude, clearRackCell } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
@@ -30,6 +30,7 @@ import { gameState } from '../core/GameState.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
 import { DebrisField } from './DebrisField.js';          // catch-snug: the drawn scale of a held catch
 import { DebrisWireframe } from '../ui/DebrisWireframe.js'; // catch-snug: the drawn mesh vertices
+import { heldBagNeckInto, heldBagRadiusScene, DAUGHTER_STAND_M } from './heldBagShape.js'; // net-cinch: where the held net's neck is drawn
 
 /** 1 meter in scene units (1 scene unit = 100 km) — CAPTURE_NET.md §11.7 hoist
  * (2026-08-27): reads the one authoritative scale (Constants.SCENE_UNITS_PER_METER,
@@ -58,7 +59,7 @@ const _driftTDelta  = new THREE.Vector3();
 // vector temps above.
 const _plumeSig = {
   state: null, fuel: 0, skManeuverGlowS: 0, approachBrake01: 0,
-  arrestFeepActive: false, recoilFlashS: 0,
+  arrestFeepActive: false, reelHome: false, recoilFlashS: 0,
 };const _driftPDelta  = new THREE.Vector3();
 const _driftRaw     = new THREE.Vector3();
 
@@ -515,6 +516,29 @@ const _lrFrom = new THREE.Vector3();
 const _gdDir = new THREE.Vector3();
 const _gdAxis = new THREE.Vector3();
 const _gdWorld = new THREE.Vector3();
+// reel-home scratch
+const _rhV1 = new THREE.Vector3();
+const _rhV2 = new THREE.Vector3();
+const _rhV3 = new THREE.Vector3();
+const _rhV4 = new THREE.Vector3();
+const _rhV5 = new THREE.Vector3();
+const _rhQ1 = new THREE.Quaternion();
+const _rhQ2 = new THREE.Quaternion();
+const _rhM1 = new THREE.Matrix4();
+const _rhTailQuat = new THREE.Quaternion();
+// trip-melt-2 (carry) scratch
+const _carryLocal = new THREE.Vector3();
+const _carryC = new THREE.Vector3();
+const _carryF = new THREE.Vector3();
+const _carryV = new THREE.Vector3();
+const _carryDir = new THREE.Vector3();
+const _carryQ = new THREE.Quaternion();
+const _idQuat = new THREE.Quaternion();
+const _carryCL = new THREE.Vector3();          // petal-single: the delivered catch's centre in her frame (scene units)
+const _carryU0 = new THREE.Vector3();          // catch -> her centre, ship frame
+const _carryD2 = new THREE.Vector3();          // the direction her body trails along at the seat
+const _carryQi = new THREE.Quaternion();       // scratch inverse
+const _carryHq = {};                           // the receiving tip's hinge frame (TipCargo.hingeQuatShipInto)
 
 // ---------------------------------------------------------------------------
 // §11.5 capture-torque settle — pure physics (exported for headless tests).
@@ -776,6 +800,60 @@ export class ArmUnit {
     // Test hook mirroring _boostRipRollOverride: when non-null, replaces
     // Math.random() in the strain-gate rip roll for determinism.
     this._settleRipRollOverride = null;
+
+    // ── reel-home (FEATURE_FLAGS.REEL_HOME, 2026-10-19) ──
+    // Her net winds the catch in to her nose (a sub-phase of GRAPPLED), then the strut reel winds her home tail
+    // first. All of this stays at its defaults while the flag is off.
+    /** She is on the reels: winding the catch in (GRAPPLED net reel) or on the strut line (REELING). ArmManager reads it. */
+    this._rhHome = false;
+    /** The catch is held at its net-close separation from her (GRAPPLED, NET catch) instead of her jumping onto it. */
+    this._rhPinned = false;
+    /** catch − her, world, scene units. */
+    this._rhSep = new THREE.Vector3();
+    /** The net reel is over: the catch is in its rack cell on her and fixed in her frame. */
+    this._rhArrived = false;
+    /** The net reel (and its settle) is done: GRAPPLED hands over to REELING. */
+    this._rhNetDone = false;
+    /** Target cell offset, her frame, metres (scratch for the net reel). */
+    this._rhCellM = new THREE.Vector3();
+    /** She holds her `_aimReserved` for the reel-home strut drive (released with the reel). */
+    this._rhReserved = false;
+    /** Seconds the reel has held her at the line-up distance. */
+    this._rhHoldS = 0;
+    /** ArmManager's word: the mother is turning, or may still be asked to, for this daughter. */
+    this._rhMotherWorking = false;
+    /** Signed angle (rad) she is off the strut's plane, as seen from the strut root; ArmManager reads it. */
+    this._rhPlaneErrRad = 0;
+    /** Mother-turn requests made for this reel (ArmManager counts them). */
+    this._rhTurnTries = 0;
+    /** s until ArmManager may ask for another mother turn for this reel (REEL_HOME.TURN_RETRY_S after each request). */
+    this._rhTurnWaitS = 0;
+    /** The line-up on her own thrusters, or null. */
+    this._rhLineUp = null;
+    /** The line-up found the ship in the way (or no fuel): she waits, and tries again after a second (geometry changes). */
+    this._rhNoPath = false;
+    /** Seconds since `_rhNoPath` was set (it is re-evaluated every 1 s). */
+    this._rhNoPathS = 0;
+    /** The comms lines of this reel's line-up have been said (once each per reel). */
+    this._rhLineUpSaid = false;
+    this._rhWaitSaid = false;
+    /** DOCKING came off the strut reel: the reel did the work, no thruster fuel is billed for it (fix round F6). */
+    this._rhDockFree = false;
+    /** Unclamped swing-plane angle nearest the direction hinge -> her (rad); ArmManager clamps it to [34°, 180°]. */
+    this._rhBestAlpha = 0;
+    /** Optional clearance hook (ArmManager): (worldPos, parentPos, parentQuat) -> gap to the ship, metres. */
+    this._rhGapFn = null;
+    /** Hinge -> her, ship-local, unit (set each frame she is on the reels). */
+    this._rhRelShip = null;
+    /** Arrival order on the reels (ArmManager: first come owns the mother turn). */
+    this._rhSeq = 0;
+
+    // ── trip-melt-2 (carry): a rack catch carried to a radiator-tip furnace ──
+    /** The carry in progress (CARRY_PREP … CARRY_BACK), or null. Plain data; see beginCarry. */
+    this._carry = null;
+    /** A carry of hers ended on its own failure (prep never arrived, hold lost, no fuel at the start): she is not asked again
+     *  this trip (ArmManager.carryCheck reads it; the trip clears it at its start, `reset()` too). */
+    this._carryGaveUp = false;
 
     // ── ST-9.3 C-3: Config G Aim + Hinge State ──
     /** Meridian sweep angle α ∈ [0, π]. 0=stowed(−Y), π/2=equatorial, π=zenith(+Y) */
@@ -2236,6 +2314,14 @@ export class ArmUnit {
       });
       return;
     }
+    // trip-melt-2: she is carrying a catch to a furnace — the carry ends at her dock on its own
+    if (this._carry) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `${this.displayName}: Recall refused — carrying a catch to a furnace. She comes home when it is done.`,
+        priority: 'warning',
+      });
+      return;
+    }
 
     // Detached arms cannot be recalled — tether severed
     if (this.isDetached) {
@@ -2863,6 +2949,9 @@ export class ArmUnit {
    * Does NOT reset springTier/tetherTier — those are persistent upgrades.
    */
   reset() {
+    // trip-melt-2: a carry in progress lets go of its tip reservation, the strut reservation and the radiator hold first
+    if (this._carry) this.abortCarry('reset', { quiet: true });
+    this._carryGaveUp = false;
     this.state = S.DOCKED;
     this.fuel = 100;
     this.tetherLength = 0;
@@ -2966,13 +3055,17 @@ export class ArmUnit {
      case S.TRANSIT:    this._updateTransit(dt, parentPos); break;
      case S.APPROACH:   this._updateApproach(dt, parentPos); break;
      case S.NETTING:    this._updateNetting(dt); break;
-     case S.GRAPPLED:   this._updateGrappled(dt); break;
+     case S.GRAPPLED:   this._updateGrappled(dt, parentPos, parentQuat); break;
      case S.HAULING:    this._updateHauling(dt, parentPos); break;
      case S.REELING:    this._updateReeling(dt, parentPos, parentQuat); break;
      case S.RETURNING:  this._updateReturning(dt, parentPos, parentQuat); break;
      case S.DOCKING:    this._updateDocking(dt, parentPos, parentQuat); break;
       case S.RELOADING:  this._updateReloading(dt); break;
       case S.HOLDING_CATCH: this._updateHoldingCatch(dt, parentPos, parentQuat); break;
+      case S.CARRY_PREP:    this._updateCarryPrep(dt, parentPos, parentQuat); break;
+      case S.CARRY_OUT:     this._updateCarryOut(dt, parentPos, parentQuat); break;
+      case S.CARRY_HANDOFF: this._updateCarryHandoff(dt, parentPos, parentQuat); break;
+      case S.CARRY_BACK:    this._updateCarryBack(dt, parentPos, parentQuat); break;
      case S.TRAWLING:   this._updateTrawling(dt, parentPos); break;
      case S.DEORBITING: this._updateDeorbiting(dt); break;
      case S.WEB_SHOT:   this._updateWebShot(dt, parentPos); break;
@@ -3053,7 +3146,8 @@ export class ArmUnit {
         this.state !== S.WEB_SHOT && this.state !== S.REELING &&
         this.state !== S.RELOADING && this.state !== S.LAUNCHING &&
         this.state !== S.ABLATING && this.state !== S.SCANNING &&
-        this.state !== S.ADRIFT) {
+        this.state !== S.ADRIFT &&
+        !this._carry) {              // trip-melt-2: the carry bills its own push, once (beginCarry's fuel check, _carryBeginOut)
       this._consumeFuel(dt);
     }
 
@@ -3098,7 +3192,8 @@ export class ArmUnit {
     // Fallback: inherit mother's orientation (parentQuat) when no heading available.
     const skipAttitude = (this.state === S.DOCKED || this.state === S.DOCKING ||
                          this.state === S.RELOADING || this.state === S.LAUNCHING ||
-                         this.state === S.HOLDING_CATCH);
+                         this.state === S.HOLDING_CATCH ||
+                         this._carry != null);      // trip-melt-2: the carry states seat her in her docked attitude themselves
     if (!skipAttitude) {
       let headingDir = null;
       let reelHeading = false;
@@ -3127,7 +3222,25 @@ export class ArmUnit {
       // _applyArrestSteerToHeading (single owner: this branch — the offset is
       // part of the SAME aim this slerp has always tracked, so there is no
       // competing quaternion writer and no snap at the window boundary).
-      if (!headingDir && this.state === S.REELING
+      // reel-home (Decision 3): while her net winds the catch in she turns her nose (+Z) to it, at the reel's rate.
+      let rhQuat = null;
+      if (!headingDir && this.state === S.GRAPPLED && this._rhPinned && this._rhOn()
+          && this._rhSep.lengthSq() > 1e-20) {
+        headingDir = this._tmpVec.copy(this._rhSep).normalize();
+        reelHeading = true;
+      }
+      // reel-home (Decision 4): on the strut reel she goes home TAIL FIRST — her -Z at the strut tip, her +Z and the
+      // catch leading away, roll set so DOCKING only trims residuals. Replaces the "+Z at the dock" aim below.
+      if (!headingDir && this.state === S.REELING && this._rhHome && this._rhOn() && parentPos && this.dockOffset) {
+        const dockWP = this._tmpDockTarget || (this._tmpDockTarget = new THREE.Vector3());
+        this._resolveStrutDockWorld(parentPos, parentQuat, dockWP);
+        const toTip = this._tmpVec.subVectors(dockWP, this.position);
+        if (this._rhTailFirstQuatInto(toTip, toTip.length(), parentQuat, _rhTailQuat)) {
+          rhQuat = _rhTailQuat;
+          reelHeading = true;
+        }
+      }
+      if (!headingDir && !rhQuat && this.state === S.REELING
           && Constants.isFeatureEnabled('REEL_PROFILE_V2') && parentPos && this.dockOffset) {
         const dockWP = this._tmpDockTarget || (this._tmpDockTarget = new THREE.Vector3());
         this._resolveStrutDockWorld(parentPos, parentQuat, dockWP);
@@ -3146,7 +3259,9 @@ export class ArmUnit {
         headingDir = this._tmpVec.copy(this.velocity).normalize();
       }
 
-      if (headingDir) {
+      if (rhQuat) {
+        this.group.quaternion.slerp(rhQuat, (Constants.YOKE_CLEARANCE && Constants.YOKE_CLEARANCE.REEL_ATTITUDE_SLERP) ?? 0.1);
+      } else if (headingDir) {
         // Use Earth-radial as "up" (same convention as mother satellite)
         const radial = _orientRadial.copy(this.position).normalize();
         const eye = _orientEye.copy(this.position).add(headingDir);
@@ -3186,8 +3301,12 @@ export class ArmUnit {
     // (up to ~18° on the first reel frame: the gap wobbled 0.00-0.05 m instead of 0.03). Pin once more so
     // the catch sits one net gap off her end in the frame that is drawn (ArmManager draws it from _armPinPos).
     if (this.state === S.REELING && this.capturedDebris && this.capturedDebris._armPinned) {
-      this._pinCatchToSelf(parentPos);
+      if (!(this._rhArrived && this._rhOn() && this._rhPinInCell())) this._pinCatchToSelf(parentPos);
+    } else if (this.state === S.GRAPPLED && this._rhPinned && this._rhArrived && this.capturedDebris) {
+      this._rhPinInCell();
     }
+    // reel-home: the strut/mother geometry ArmManager reads (the swing-plane angle nearest her, how far she is off it)
+    if (this._rhHome && parentPos) this._rhStrutAim(parentPos, parentQuat);
 
     // Thruster plume animation
     this._updatePlumes(dt);
@@ -3289,6 +3408,32 @@ export class ArmUnit {
       this._redockArrestStarted = false;
       this._redockFuelLowWarned = false;
       this._redockDebitApplied = false;
+    }
+    // reel-home: a fresh capture starts the net reel over; leaving the reels (anything but GRAPPLED / REELING /
+    // DOCKING) lets go of the strut reservation and the line-up. REELING is "on the reels" only with the flag on.
+    if (newState !== S.DOCKING) this._rhDockFree = false;
+    if (newState === S.GRAPPLED) {
+      this._rhPinned = false;
+      this._rhNetDone = false;
+      this._rhArrived = false;
+      this._rhHome = false;
+    }
+    if (newState === S.REELING) {
+      this._rhHome = !this.isDetached && Constants.isFeatureEnabled('REEL_HOME');
+      this._rhHoldS = 0;
+      this._rhTurnTries = 0;
+      this._rhTurnWaitS = 0;
+      this._rhNoPath = false;
+      this._rhNoPathS = 0;
+      this._rhLineUpSaid = false;
+      this._rhWaitSaid = false;
+    } else if (newState === S.DOCKING) {
+      // home: the mother turn is hers no more (the strut stays reserved to HOLDING_CATCH). DOCKING that came off the
+      // strut reel bills no thruster fuel (F6): the reel did the work.
+      this._rhDockFree = old === S.REELING && this._rhHome && this._rhOn();
+      this._rhHome = false;
+    } else if (newState !== S.GRAPPLED) {
+      this._rhEnd();
     }
     // CP-1 / P2: refresh the per-arm tool recommendation on STATION_KEEP entry
     // and default selectedTool to the recommended verb (player can re-cycle).
@@ -5483,8 +5628,17 @@ export class ArmUnit {
 
     // Poll FSM state
     const netState = activeNet.state;
-    if (netState === CN_STATES.CAPTURED) {
+    // reel-home-look: the net system resolves a catch and auto-starts its reel in ONE update (CaptureNet.update's
+    // needsAutoReel), so this poll runs after CAPTURED has already become REELING and never saw CAPTURED. It must take
+    // that as the catch too: without `_capturedByArm` the held-net hold (CaptureNet._updateReeling) lets go next update,
+    // the net stows and its bag is dropped as a lost catch ~1 s after the catch (found with a real net, 2026-10-19).
+    const reelCaught = netState === CN_STATES.REELING && activeNet.catchResult === 'success'
+      && activeNet._heldByArm === true && activeNet.targetDebris === this.target;
+    if (netState === CN_STATES.CAPTURED || reelCaught) {
       this.capturedDebris = this.target;
+      // The STOWED branch cleared these; a catch now arrives here instead (review 2026-10-19).
+      if (this._netCommittedTarget) this._netCommittedTarget._committedNetArmId = null;
+      this._netCommittedTarget = null;
       // Phase 2 (ASPECT_CAPTURE): freeze the presented width AT CATCH TIME —
       // the reel-start oversize check judges the geometry the net actually
       // wrapped, not whatever the body has rotated to by reel time.
@@ -5502,10 +5656,12 @@ export class ArmUnit {
         mass: this.target?.mass || 0, debrisType: this.target?.type || 'unknown',
         manual: this._manualCapture, rangeM: this._captureRangeM(),
       });
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.displayName}: Target secured! SMA cinch complete.`,
-        priority: 'success',
-      });
+      if (!reelCaught) {   // a real catch reached the STOWED branch before, which said nothing; keep it quiet
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: `${this.displayName}: Target secured! SMA cinch complete.`,
+          priority: 'success',
+        });
+      }
     } else if (netState === CN_STATES.MISSED || netState === CN_STATES.RELEASED) {
       // Issue-B GUARD: if the target died mid-net-flight (deorbit, cull,
       // fragmentation, etc.), don't loop back into SK — there's nothing to
@@ -5573,10 +5729,18 @@ export class ArmUnit {
     // Otherwise: net still in flight/reeling — keep polling
   }
 
-  /** GRAPPLED: holding debris, stabilize before hauling/reeling */
-  _updateGrappled(dt) {
+  /**
+   * GRAPPLED: holding debris, stabilize before hauling/reeling.
+   * reel-home (flag on, a NET catch): she does NOT jump onto the debris. She stays where the net closed and the
+   * catch is held at its separation; after the settle her net line winds it in to her nose (`_rhNetReelStep`),
+   * the pair's centre of mass staying put, and only then does the strut reel take over.
+   */
+  _updateGrappled(dt, parentPos = null, parentQuat = null) {
+    const rh = this._rhOn() && this._rhNetCatch();
     const tPos = this._getTargetScenePos();
-    if (tPos) {
+    if (rh) {
+      this._rhHoldCatch(tPos);
+    } else if (tPos) {
       this.position.copy(tPos);
     }
     if (this.stateTimer > Constants.ARM_GRAPPLE_STABILIZE) {
@@ -5592,7 +5756,8 @@ export class ArmUnit {
       // Net-integrity check at reel start: a heavy, near-rated catch can slip
       // the net. A failure is recoverable (debris drifts free, daughter returns
       // to reload) and is handled inside the check — bail out of REELING.
-      if (this._checkNetIntegrityOnReel()) return;
+      // (reel-home: not again once the net reel runs — the check rolls dice, once per call, and the reel lasts a while)
+      if (!(rh && this._rhHome) && this._checkNetIntegrityOnReel()) return;
 
       // SNUG sub-phase (REEL_PROFILE_V2, plan Q3): before the haul, cinch the
       // stage-1 net tight so daughter+net+debris is ONE rigid unit (one CoM,
@@ -5614,6 +5779,14 @@ export class ArmUnit {
           debrisId: this.capturedDebris.id,
           mUnit: this._computeReelMUnit(armMass, true),
         });
+      }
+
+      // reel-home: her net winds the catch in to her nose before the strut reel starts. GRAPPLED keeps the
+      // sub-phase; REELING is entered once the catch sits in its rack cell on her.
+      if (rh && !this._rhNetDone) {
+        if (!this._rhHome) this._rhBeginNetReel();
+        if (!this._rhNetReelStep(dt)) return;
+        this._rhNetDone = true;
       }
 
       // V5: Zero-fuel motor reel-in instead of fuel-burning HAULING
@@ -5954,12 +6127,14 @@ export class ArmUnit {
     if (this.holdCellsFree <= 0) return false;
     const inHand = debris === this.capturedDebris;
     const herQ = this._herQuatWorldInto(parentQuat, _stowHerQ);
-    this._assignRackCellWith(debris, herQ, inHand);        // the in-hand piece always takes a fresh cell
+    // reel-home: the net reel already put the catch in its cell, fixed in her frame — it neither takes a fresh cell nor glides
+    const inCell = inHand && this._rhArrived && debris._rackArm === this && Number.isInteger(debris._rackCell);
+    this._assignRackCellWith(debris, herQ, inHand && !inCell);   // the in-hand piece always takes a fresh cell
     // catch-snug: the piece she is carrying IN HAND (tight at her end) is moving to its rack
     // slot — remember where it sits relative to her so `_pinHeldCatches` glides it there
     // over ARM_HOLD_GLIDE_S instead of jumping in one frame. Only the in-hand piece glides
     // (a cargo hand-off arrives from the mother net on its own arc).
-    if (inHand && debris._armPinned && debris._armPinPos
+    if (inHand && !inCell && debris._armPinned && debris._armPinPos
         && (Constants.ARM_HOLD_GLIDE_S ?? 0) > 0 && this.heldCatches.length === 0) {
       const fromM = _stowTmp.subVectors(debris._armPinPos, this.position)
         .applyQuaternion(_stowInvQ.copy(herQ).invert()).multiplyScalar(1 / M);   // her frame, metres
@@ -5999,6 +6174,7 @@ export class ArmUnit {
       strutLocalDirection(this._aimAlpha || 0, az, _herDirTmp);
       composeDockedArmQuat(_herDirTmp, az, out);
     }
+    if (this._carryAtt) out.copy(this._carryAtt);                  // petal-single: a carry in flight turns her (ship frame); the rack pins follow
     const pq = parentQuat || (ps && ps.quaternion) || this._lastParentQuat;
     if (pq && typeof pq.x === 'number') out.premultiply(pq);
     return out;
@@ -6237,6 +6413,837 @@ export class ArmUnit {
     if (!(f < 1)) { d._rackSlide = null; return false; }
     const k = f <= 0 ? 0 : f * f * (3 - 2 * f);
     out.lerpVectors(sl.fromM, d._rackLocalM, k);
+    return true;
+  }
+
+  // ==========================================================================
+  // CARRY (trip-melt-2 "carry", owner 2026-10-19: catches "need to be melted down in the furnace during the long ion
+  // burn"). While the trip burns, ArmManager.requestCarry sends a daughter with a catch on her rack to HER radiator's
+  // tip furnace and home again:
+  //   CARRY_PREP     docked; the strut and the radiators move to the carry pose (the gate table's angles)
+  //   CARRY_OUT      the 1.5 s clamp release, then the straight flight to the tip in her docked attitude (ship-relative,
+  //                  so the ship turning under the trip's hold does not move her relative to the ship)
+  //   CARRY_HANDOFF  the catch leaves her rack for the tip (TipCargo.stow), a beat at the tip
+  //   CARRY_BACK     the same line in reverse, wound by her strut reel (mother battery), no attitude change
+  // then DOCKED / HOLDING_CATCH as her rack says. Her thrusters start and stop the outward leg (fuel, mass-scaled).
+  // Nothing here knows where the poses come from: the manager hands a plan (js/test/fixtures/carry-gate.json).
+  // ==========================================================================
+
+  /** She is on a carry (CARRY_PREP … CARRY_BACK). ArmManager and the trip read it. */
+  get isCarrying() {
+    return this._carry != null;
+  }
+
+  /** kg she moves on a carry: her own mass, every piece on her rack and one net each (reel-home's line-up scaling). */
+  carryMassKg() {
+    const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+    const nc = getNetClassForType(this.type);
+    const netKg = nc && typeof nc.MASS === 'number' ? nc.MASS : 0;
+    let m = armMass;
+    for (const d of this.heldCatches) if (d) m += (d.mass || 0) + netKg;
+    return m;
+  }
+
+  /** The % of her fuel the push costs: her thrusters start and stop her, 2 × PAYOUT_MPS against the tank's Δv, mass-scaled. */
+  carryFuelPct() {
+    const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+    const massScale = Math.max(1, this.carryMassKg() / armMass);
+    const v = (Constants.CARRY && Constants.CARRY.PAYOUT_MPS) || 0.2;
+    return (2 * v / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV)) * 100 * massScale;
+  }
+
+  /** @private one comms line (the carry's own) */
+  _carrySay(text, priority = 'info') {
+    eventBus.emit(Events.COMMS_MESSAGE, { text, priority });
+  }
+
+  /**
+   * Start a carry: take the tip slot (reserved) and the strut (reserved, target the carry angle), and go to CARRY_PREP.
+   * ArmManager.requestCarry has already checked every precondition; this refuses (false, nothing taken) only what it
+   * cannot do itself: not at home, a carry already, no tip store / petal hold. petal-single: the prep is SEQUENCED - her
+   * strut swings first (the other petals standing still), then ONLY HER petal swings to the carry angle - because the gate
+   * certifies those two swings one after the other, not together. The petal is taken (held) when the strut is there.
+   * @param {{tipIndex:number, cell:number, delivered:object, strutRad:number, thetaRad:number, recordedStrutRad:number,
+   *   mission?:boolean}} plan  the delivered piece is the outermost on her rack
+   * @returns {boolean}
+   */
+  beginCarry(plan) {
+    if (this._carry || !plan || !plan.delivered) return false;
+    if (this.state !== S.HOLDING_CATCH && this.state !== S.DOCKED) return false;
+    if (this.heldCatches.indexOf(plan.delivered) < 0) return false;
+    const ps = this._playerSatellite;
+    const tc = ps && ps.tipCargo;
+    if (!ps || !tc || typeof tc.reserve !== 'function' || typeof ps.holdPetalForHandoff !== 'function') return false;
+    if (!tc.reserve(plan.tipIndex)) return false;
+    this._carry = {
+      tipIndex: plan.tipIndex, cell: plan.cell, delivered: plan.delivered, mission: plan.mission === true,
+      az: Constants.THERMAL.FLOWER.AZIMUTHS_DEG[plan.tipIndex],
+      strutRad: plan.strutRad, thetaRad: plan.thetaRad, recordedStrutRad: plan.recordedStrutRad,
+      dir: Number.isInteger(plan.dir) ? plan.dir : null, q0: new THREE.Quaternion(), q1: null,   // dir: how her body trails at the seat (gate); null = no turn
+      home: this.state, phase: 'prep', stage: 'strut', endWhy: null,
+      prepS: 0, clampS: 0, holdS: 0, u: 0, durationS: 1, flightM: 0, fuelPct: 0,
+      handedOff: false, strutHeld: this._aimReserved === true,
+      start: new THREE.Vector3(), flight: new THREE.Vector3(),
+    };
+    this._aimReserved = true;                       // StrutAuto leaves the strut alone until the carry is over
+    this._strutTargetAlpha = plan.strutRad;
+    this._transitionTo(S.CARRY_PREP);
+    return true;
+  }
+
+
+  /** Seat her at the ship-relative point `start + flight · smoothstep(u)` in her docked attitude, the rack riding with her. @private */
+  _carrySeat(parentPos, parentQuat, u) {
+    const c = this._carry;
+    const s = u * u * (3 - 2 * u);
+    _carryLocal.copy(c.flight).multiplyScalar(s).add(c.start);
+    if (c.q1) {                                                   // her turn (ArmDockBasis carry*): none while she leaves her strut, over at 55 % of the line
+      const att = this._carryAtt || (this._carryAtt = new THREE.Quaternion());
+      att.copy(c.q0);
+      const rho = carryRotFrac(s, c.flightM, Constants.CARRY.OWN_STRUT_FREE_M);
+      if (rho > 0) att.slerp(c.q1, rho);
+    }
+    if (parentQuat) _carryLocal.applyQuaternion(parentQuat);
+    if (parentPos) this.position.copy(parentPos).add(_carryLocal);
+    this.velocity.set(0, 0, 0);
+    this._carrySeatAttitude(parentPos, parentQuat);
+  }
+
+  /** Her docked attitude (the strut is held, so it is the one she left the dock with); the rack follows. @private */
+  _carrySeatAttitude(parentPos, parentQuat) {
+    this._lastParentQuat = parentQuat
+      ? (this._lastParentQuatV || (this._lastParentQuatV = new THREE.Quaternion())).copy(parentQuat)
+      : null;
+    this._herQuatWorldInto(parentQuat, _carryQ);
+    this.group.quaternion.copy(_carryQ);
+    this._pinHeldCatches(parentPos, parentQuat);
+  }
+
+  /**
+   * @private CARRY_PREP: docked on the strut tip while the strut and HER petal reach the carry pose - one after the other
+   * (stage 'strut', then 'petal') - and, after the flight, leave it in the reverse order (stage 'unpetal', then 'unstrut'). The
+   * gate certifies each swing alone. Before the flight the certified conditions are looked at again at each step
+   * (`ArmManager.carryConditions`): if they no longer hold she goes back the way she came and tries again later (no give-up).
+   */
+  _updateCarryPrep(dt, parentPos, parentQuat) {
+    const c = this._carry;
+    if (!c) { this._transitionTo(this.heldCatches.length ? S.HOLDING_CATCH : S.DOCKED); return; }
+    if (parentPos) {
+      const offset = _dockOffTmp.copy(this.dockOffset);
+      if (parentQuat) offset.applyQuaternion(parentQuat);
+      this.position.copy(parentPos).add(offset);
+    }
+    this.tetherLine.visible = false;
+    this.velocity.set(0, 0, 0);
+    this._carrySeatAttitude(parentPos, parentQuat);
+    c.prepS += dt;
+    const V = Constants.CARRY;
+    const ps = this._playerSatellite;
+    const D2R = Math.PI / 180;
+    const sTol = V.STRUT_ARRIVE_DEG * D2R;
+    // the strut: its driver clears the target within 0.57° of it; the carry keeps the target alive until the strut has landed
+    // within the certified tolerance (each frame's step is exact once the remainder is under one step)
+    const strutTo = (target) => {
+      const err = Math.abs(this.getAimAlpha() - target);
+      if (err >= sTol && this._strutTargetAlpha === undefined) this._strutTargetAlpha = target;
+      return err < sTol;
+    };
+    const limit = () => {
+      if (c.prepS <= V.PREP_MAX_S) return false;
+      if (c.stage === 'strut' || c.stage === 'petal') {
+        this._carrySay(`Daughter ${this.index + 1} could not reach the carry pose; her catch stays on her rack.`, 'warning');
+        this.abortCarry('prep timeout');
+      } else {
+        this.abortCarry('unprep timeout');                  // the abort restores both at once; she snaps docked
+      }
+      return true;
+    };
+    if (c.stage === 'strut' || c.stage === 'petal') {
+      const mgr = ps && ps.armManager;
+      const cond = mgr && typeof mgr.carryConditions === 'function' ? mgr.carryConditions(this) : null;
+      if (cond) { this._carryBeginUnprep('conditions'); return; }
+    }
+    if (c.stage === 'strut') {
+      if (strutTo(c.strutRad)) {
+        // her strut is there; now HER petal alone: it starts from the shared angle and lands exactly on the carry angle
+        if (!ps || ps.holdPetalForHandoff(c.az, c.thetaRad) === null) { this.abortCarry('hold lost'); return; }
+        c.stage = 'petal';
+        c.prepS = 0;
+      } else limit();
+      return;
+    }
+    if (c.stage === 'petal') {
+      // a hold that vanished (a snap-to-stow, a new game) ends the carry
+      if (!ps || typeof ps.isPetalHolding !== 'function' || !ps.isPetalHolding(c.az)) { this.abortCarry('hold lost'); return; }
+      strutTo(c.strutRad);                                 // the strut must stay on its angle while the petal swings
+      const thErr = Math.abs(ps.petalThetaRad(c.az) - c.thetaRad);
+      if (thErr < V.THETA_ARRIVE_DEG * D2R && Math.abs(this.getAimAlpha() - c.strutRad) < sTol) {
+        this._carryBeginOut(parentPos, parentQuat);        // (the conditions were looked at above, this frame)
+      } else limit();
+      return;
+    }
+    if (c.stage === 'unpetal') {
+      // the petal goes back to the shared angle first (released in `_carryBeginUnprep`); the record goes when it has landed
+      if (!ps || typeof ps.isPetalHeld !== 'function' || !ps.isPetalHeld(c.az)) { c.stage = 'unstrut'; c.prepS = 0; this._strutTargetAlpha = c.recordedStrutRad; }
+      else limit();
+      return;
+    }
+    if (c.stage === 'unstrut') {
+      if (strutTo(c.recordedStrutRad)) this._carryFinish(c.endWhy || 'home');
+      else limit();
+    }
+  }
+
+  /**
+   * End the carry the way it began, in reverse: her petal first (released: it swings back to the shared angle), then her
+   * strut back to the angle it was recorded at. She stays in CARRY_PREP until both are done. `why`: 'home' (the flight is
+   * over) or 'conditions' (the certified conditions stopped holding before the flight: she tries again later).
+   * @private
+   */
+  _carryBeginUnprep(why) {
+    const c = this._carry;
+    if (!c) return;
+    const ps = this._playerSatellite;
+    c.endWhy = why;
+    c.prepS = 0;
+    c.u = 0;
+    this._carryAtt = null;                                         // she is docked now (the flight ended at u = 0)
+    if (ps && typeof ps.isPetalHolding === 'function' && ps.isPetalHolding(c.az)) ps.releasePetalHandoff(c.az);
+    if (ps && typeof ps.isPetalHeld === 'function' && ps.isPetalHeld(c.az)) {      // held (just released) or still swinging back
+      c.stage = 'unpetal';
+    } else {
+      c.stage = 'unstrut';
+      this._strutTargetAlpha = c.recordedStrutRad;
+    }
+    if (this.state !== S.CARRY_PREP) this._transitionTo(S.CARRY_PREP);
+  }
+
+
+  /**
+   * The strut and radiators are there: plan the line from the dock to the tip's bag point for the delivered piece, pay
+   * the push, go to CARRY_OUT (the clamp hold first). The piece's centre and the bag point are both ship-local, now.
+   * @private
+   */
+  _carryBeginOut(parentPos, parentQuat) {
+    const c = this._carry;
+    const V = Constants.CARRY;
+    const ps = this._playerSatellite;
+    const tc = ps && ps.tipCargo;
+    const d = c.delivered;
+    c.start.copy(this.dockOffset);                                   // docked: the strut tip, ship-local scene units
+    this._herQuatWorldInto(_idQuat, _carryQ);                        // her attitude in the ship's frame
+    heldSlotAnchorInto(c.start, _carryQ, d._rackLocalM, _carryC);    // the delivered piece's centre, ship-local
+    const reach = DebrisField.trueReachM(d, 0);                      // the bag the tip will hold: the catch as drawn
+    if (!tc || !tc.bagPointShipInto(c.tipIndex, reach, _carryF)) {
+      this.abortCarry('no tip');
+      return;
+    }
+    // petal-single: she turns on the way so her body trails away from the radiator (the gate's final attitude, same functions)
+    c.q0 = c.q0 || new THREE.Quaternion();
+    c.q0.copy(_carryQ);
+    c.q1 = null;
+    if (Number.isInteger(c.dir) && tc.hingeQuatShipInto && tc.hingeQuatShipInto(c.tipIndex, _carryHq)) {
+      _carryCL.copy(_carryC).sub(c.start).applyQuaternion(_carryQi.copy(c.q0).invert());      // the catch in her frame
+      _carryU0.copy(c.start).sub(_carryC).normalize();                                        // catch -> her centre
+      carryDirInto(_carryHq, c.dir, _carryD2);
+      c.q1 = carryFinalQuatInto(c.q0, _carryU0, _carryD2, new THREE.Quaternion());
+      _carryF.sub(_carryCL.applyQuaternion(c.q1));                                            // her centre when the catch is on the bag point
+      c.flight.copy(_carryF).sub(c.start);
+    } else {
+      c.flight.copy(_carryF).sub(_carryC);                                                    // no turn: the catch's displacement is hers
+    }
+    c.flightM = c.flight.length() / M;
+    c.durationS = Math.max(0.5, c.flightM / (V.PAYOUT_MPS || 0.2));
+    const pct = this.carryFuelPct();
+    if (!(this.fuel >= pct)) {
+      this._carrySay(`Daughter ${this.index + 1} has too little fuel to carry her catch; it stays on her rack.`, 'warning');
+      this.abortCarry('fuel');
+      return;
+    }
+    this.fuel -= pct;                                                // her thrusters start and stop her
+    c.fuelPct = pct;
+    c.phase = 'clamp';
+    c.clampS = 0;
+    c.u = 0;
+    this._transitionTo(S.CARRY_OUT);
+    if (!c.mission) this._carrySay(`Daughter ${this.index + 1} carries her catch to radiator ${c.tipIndex + 1}'s furnace.`);   // a mission carry says its line at the end
+    this._carrySeat(parentPos, parentQuat, 0);
+  }
+
+  /** @private CARRY_OUT: the clamp hold, then the flight to the tip. */
+  _updateCarryOut(dt, parentPos, parentQuat) {
+    const c = this._carry;
+    if (!c) { this._transitionTo(this.heldCatches.length ? S.HOLDING_CATCH : S.DOCKED); return; }
+    const V = Constants.CARRY;
+    if (c.phase === 'clamp') {
+      c.clampS += dt;
+      this._carrySeat(parentPos, parentQuat, 0);
+      if (c.clampS >= V.CLAMP_S) c.phase = 'out';
+      return;
+    }
+    c.u = Math.min(1, c.u + dt / c.durationS);
+    this._carrySeat(parentPos, parentQuat, c.u);
+    if (c.u >= 1) {
+      c.phase = 'handoff';
+      c.holdS = 0;
+      this._transitionTo(S.CARRY_HANDOFF);
+      this._carryStow();
+    }
+  }
+
+  /**
+   * The delivered catch leaves her rack (unloadHeldCatches' clearing, no NET_CONSUMED) and the tip takes it, arriving
+   * along the line latch → catch centre, then turning onto the boom. A rack catch has no mother-net record: none of
+   * LeashDriver._latch's net steps. CARGO_TRANSFER_COMPLETE names no pod (podIndex -1: a real index would fade an
+   * unrelated `pod_N` bag); `fromArmIndex` lets the net visual keep the catch's bag drawn at the tip.
+   * @returns {boolean} stowed (false: the catch stays on her rack and rides home)
+   * @private
+   */
+  _carryStow() {
+    const c = this._carry;
+    const d = c && c.delivered;
+    const ps = this._playerSatellite;
+    const tc = ps && ps.tipCargo;
+    const idx = d ? this.heldCatches.indexOf(d) : -1;
+    if (!tc || idx < 0) return false;
+    const reach = DebrisField.trueReachM(d, 0);
+    if (!tc.fits(reach) || tc.debrisAt(c.tipIndex) || !tc.latchWorldInto(c.tipIndex, _carryV)) {
+      this._carrySay(`Daughter ${this.index + 1} could not seat her catch on radiator ${c.tipIndex + 1}; she brings it home.`, 'warning');
+      return false;
+    }
+    // the line the bag arrives along: latch → the catch's centre now (world; the radiator frame turns with the ship)
+    const pin = d._armPinPos || this.position;
+    _carryDir.copy(pin).sub(_carryV);
+    // rack release, as ArmManager.unloadHeldCatches does it (the piece is paid later, by the tip)
+    this.heldCatches.splice(idx, 1);
+    d._armPinned = false;
+    d._capturedByArm = null;
+    d._breakdownActive = false;
+    clearRackCell(d);
+    if (this.capturedDebris === d) this.capturedDebris = null;
+    const ok = tc.stow(c.tipIndex, d, { massKg: d.mass || 0, radiusM: reach, fromDirWorld: _carryDir });
+    if (!ok) {
+      // cannot happen after the checks above; put the piece back on its rack rather than lose it
+      this.heldCatches.splice(idx, 0, d);
+      d._armPinned = true;
+      return false;
+    }
+    tc.swingToBoom(c.tipIndex);
+    c.handedOff = true;
+    if (ps._attitudeInertia !== undefined) ps._attitudeInertia = null;
+    eventBus.emit(Events.CARGO_TRANSFER_COMPLETE, {
+      debrisId: d.id, massKg: d.mass || 0, podIndex: -1, armIndex: -1, armId: null,
+      fromArmIndex: this.index, to: { kind: 'tip', tipIndex: c.tipIndex },
+    });
+    return true;
+  }
+
+  /** @private CARRY_HANDOFF: a beat at the tip, then back. */
+  _updateCarryHandoff(dt, parentPos, parentQuat) {
+    const c = this._carry;
+    if (!c) { this._transitionTo(this.heldCatches.length ? S.HOLDING_CATCH : S.DOCKED); return; }
+    c.holdS += dt;
+    this._carrySeat(parentPos, parentQuat, 1);
+    if (c.holdS >= (Constants.CARRY.HANDOFF_S ?? 1)) {
+      c.phase = 'back';
+      this._transitionTo(S.CARRY_BACK);
+    }
+  }
+
+  /** @private CARRY_BACK: the line in reverse, wound by her strut reel (mother battery). Ends docked. */
+  _updateCarryBack(dt, parentPos, parentQuat) {
+    const c = this._carry;
+    if (!c) { this._transitionTo(this.heldCatches.length ? S.HOLDING_CATCH : S.DOCKED); return; }
+    const u0 = c.u;
+    c.u = Math.max(0, c.u - dt / c.durationS);
+    this._carrySeat(parentPos, parentQuat, c.u);
+    // the strut reel cartridge bills the mother's battery the real mechanical power: line tension × line speed ÷ efficiency,
+    // floored at its own motor while turning (as REELING bills). dt 0 (a held world) bills nothing.
+    if (dt > 0 && c.u < u0) {
+      const MD = Constants.MOTOR_DRAW_W || {};
+      const rs = this._playerSatellite && this._playerSatellite._resourceSystem;
+      if (rs && typeof rs.billWatts === 'function') {
+        const speed = (c.flightM / c.durationS) * 6 * c.u * (1 - c.u) + 1e-6;   // m/s, smoothstep derivative
+        const tension = this.carryMassKg() * speed * (Constants.REEL_TENSION_COEFF ?? 0.04);
+        const mechW = tension * speed / (MD.REEL_EFFICIENCY || 0.5);
+        rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.STRUT_REEL_MIN ?? 15, mechW)), dt);
+      }
+    }
+    if (c.u <= 0) this._carryBeginUnprep('home');                  // petal first, then the strut (the reverse of the prep)
+  }
+
+  /**
+   * End the carry: the tip reservation cleared, the strut target back to the recorded angle and its reservation released
+   * (StrutAuto acts only on DOCKED daughters), her petal released if it is still held, and she is DOCKED / HOLDING_CATCH
+   * as her rack says. The normal end comes here AFTER the sequenced unprep (petal landed, strut back), so the last two do
+   * nothing; the abort path (`abortCarry`) arrives with both still out and restores them at once. Her position snaps to the
+   * dock (the state's own update pins it from here). `why` 'home' on a mission with a catch left on a tip says so.
+   * @private
+   */
+  _carryFinish(why) {
+    const c = this._carry;
+    if (!c) return;
+    this._carry = null;
+    this._carryAtt = null;                                         // docked attitude again (derived from the strut)
+    if (why === 'prep timeout' || why === 'hold lost' || why === 'no tip' || why === 'fuel') this._carryGaveUp = true;
+    const ps = this._playerSatellite;
+    const tc = ps && ps.tipCargo;
+    if (tc && typeof tc.unreserve === 'function') tc.unreserve(c.tipIndex);
+    this._strutTargetAlpha = c.recordedStrutRad;
+    if (!c.strutHeld) this._aimReserved = false;
+    if (ps && typeof ps.isPetalHolding === 'function' && ps.isPetalHolding(c.az)) ps.releasePetalHandoff(c.az);
+    this.tetherLine.visible = false;
+    this.tetherTension = 0;
+    const held = this.heldCatches.length > 0;
+    // an empty rack on a daughter that left HOLDING_CATCH reloads through HOLDING_CATCH's own empty-rack fallback
+    this._transitionTo(held ? S.HOLDING_CATCH : (c.home === S.DOCKED ? S.DOCKED : S.HOLDING_CATCH));
+    this.velocity.set(0, 0, 0);
+    const pp = ps && ps.position;
+    if (pp && this.dockOffset) {
+      const off = _dockOffTmp.copy(this.dockOffset);
+      if (ps.quaternion) off.applyQuaternion(ps.quaternion);
+      this.position.copy(pp).add(off);
+      this.group.position.copy(this.position);
+      if (this.heldCatches.length) this._pinHeldCatches(pp, ps.quaternion || null);
+    }
+    this._lastCarryEnd = { why, tipIndex: c.tipIndex, handedOff: c.handedOff };   // for tests and the trip's log
+    if (c.mission && c.handedOff && why === 'home') {
+      this._carrySay(`Daughter ${this.index + 1} puts her catch on radiator ${c.tipIndex + 1}'s tip; she is free again.`);
+    }
+  }
+
+
+  /**
+   * Stop a carry now (game over, reset, load, the trip's hard cap, a lost radiator hold): she snaps docked, the catches
+   * still on her rack stay there, the strut and radiators are restored, the tip reservation is cleared. A catch already
+   * on the tip stays on the tip.
+   * @param {string} why
+   * @param {{quiet?:boolean}} [opts]
+   * @returns {boolean} true when a carry was running
+   */
+  abortCarry(why, opts = {}) {
+    if (!this._carry) return false;
+    this._carryFinish(why || 'abort');
+    return true;
+  }
+
+  // ==========================================================================
+  // REEL-HOME (FEATURE_FLAGS.REEL_HOME, owner design 2026-10-19): her net winds the catch in to her nose, then the
+  // strut line winds her home TAIL FIRST onto the strut tip, catch leading away; the strut swings and the mother
+  // turns (ArmManager `_updateReelHome`) to meet her line.
+  // ==========================================================================
+
+  /** reel-home is on for this tethered daughter. @private */
+  _rhOn() {
+    return !this.isDetached && Constants.isFeatureEnabled('REEL_HOME');
+  }
+
+  /** The catch she holds is NET-held — only a net has a line to wind. @private */
+  _rhNetCatch() {
+    return !!this.capturedDebris && (!this._captureToolKind || this._captureToolKind === 'NET');
+  }
+
+  /** She is on the reels (net reel or strut reel). ArmManager gives the mother turn to a daughter that is. */
+  get isReelingHome() {
+    return this._rhHome === true;
+  }
+
+  /** Let go of everything reel-home holds: the strut reservation, the line-up. @private */
+  _rhEnd() {
+    this._rhHome = false;
+    this._rhPinned = false;
+    this._rhNetDone = false;
+    this._rhArrived = false;
+    this._rhHoldS = 0;
+    this._rhLineUp = null;
+    this._rhNoPath = false;
+    this._rhNoPathS = 0;
+    this._rhLineUpSaid = false;
+    this._rhWaitSaid = false;
+    this._rhMotherWorking = false;
+    this._rhPlaneErrRad = 0;
+    if (this._rhReserved) {
+      this._aimReserved = false;
+      this._rhReserved = false;
+    }
+  }
+
+  /** Her net, while it holds the catch (else null). @private */
+  _rhNet() {
+    const net = this._firedNet
+      || (captureNetSystem.getActiveNetForArm ? captureNetSystem.getActiveNetForArm(this.index) : null);
+    return net && net._heldByArm ? net : null;
+  }
+
+  /**
+   * Decision 2: she does not jump onto the catch. The first GRAPPLED frame records where the catch is relative to her
+   * (the separation at net close); from then on the catch is pinned at her position + that separation, so the pair
+   * is one rigid thing while the net settles and the orbit-driven catch cannot drift away from her.
+   * @param {THREE.Vector3|null} tPos the catch's scene position now (first frame only)
+   * @private
+   */
+  _rhHoldCatch(tPos) {
+    const d = this.capturedDebris;
+    if (!d) return;
+    if (!this._rhPinned) {
+      if (tPos) this._rhSep.subVectors(tPos, this.position); else this._rhSep.set(0, 0, 0);
+      this._rhPinned = true;
+    }
+    if (!d._armPinPos) d._armPinPos = new THREE.Vector3();
+    d._armPinned = true;
+    if (this._rhArrived) this._rhPinInCell();
+    else d._armPinPos.copy(this.position).add(this._rhSep);
+  }
+
+  /** The net reel starts: the strut follows her from here, and the mother may turn for her. @private */
+  _rhBeginNetReel() {
+    this._rhHome = true;
+    this._rhArrived = false;
+    this._rhTurnTries = 0;
+    this._rhTurnWaitS = 0;
+    this._rhHoldS = 0;
+  }
+
+  /**
+   * Decision 3: one frame of the net reel. The line shortens at REEL_HOME.NET_REEL_MPS until the catch sits at the
+   * rack cell it will take (`rackCellOffsetInto`, the one rack-centre rule: on her +Z axis, a net gap past her nose
+   * end), the pair's centre of mass staying put — she and the catch close on each other in inverse ratio to their
+   * masses (`_computeReelMUnit`: the catch side is the catch plus its net). She turns her nose to the catch (the
+   * attitude block in `update`); the catch's own attitude stays frozen (it is pinned, not tumbling). The catch is
+   * brought onto her axis only once her nose is within REEL_HOME.ARRIVE_TOL_DEG of the line, then assigned its
+   * cell NOW (`_assignRackCellWith`) and fixed in her frame from there on.
+   * @param {number} dt seconds
+   * @returns {boolean} true when the catch is in its cell
+   * @private
+   */
+  _rhNetReelStep(dt) {
+    const d = this.capturedDebris;
+    if (!d) return true;
+    const RH = Constants.REEL_HOME || {};
+    const sep = this._rhSep;
+    const herQ = this.group.quaternion;
+    d._armPinned = true;
+    if (!d._armPinPos) d._armPinPos = new THREE.Vector3();
+
+    // Where its cell is at her attitude now (the rule reads the catch's attitude in HER frame: seed it, don't store it)
+    seedHerFrameAttitude(d, herQ);
+    const cell = nextFreeRackCell(this.heldCatches, d);
+    const below = cell >= 1 ? rackPieceInCell(this.heldCatches, cell - 1, d) : null;
+    rackCellOffsetInto(this._rhCellM, this.herSupportZM(), d, cell, d._qLocalHer, 0, below);
+    const cellW = _rhV1.copy(this._rhCellM).multiplyScalar(M).applyQuaternion(herQ);   // her centre -> cell, world
+    const cLen = cellW.length();
+    const r = sep.length();
+
+    // Wind: r goes to the cell distance at the line speed (a catch nearer than its cell pays out the same way)
+    const step = (RH.NET_REEL_MPS ?? 0.5) * M * dt;
+    const dr = Math.max(-step, Math.min(step, cLen - r));
+    const arrivedLen = Math.abs(cLen - r) <= step + 1e-12;
+    let arrive = false;
+    if (arrivedLen && r > 1e-12 && cLen > 1e-12) {
+      // the line is at its length: only a catch on her axis comes in (her nose is turning to it, at the normal rate)
+      const cosAng = sep.dot(cellW) / (r * cLen);
+      const tol = Math.cos((RH.ARRIVE_TOL_DEG ?? 0.5) * Math.PI / 180);
+      arrive = cosAng >= tol;
+    }
+    if (r <= 1e-12) arrive = true;
+
+    // Centre of mass: she moves toward (or away from) the catch by the catch's share of the closing
+    const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+    const mCatch = Math.max(0, this._computeReelMUnit(armMass, true) - armMass);
+    const herShare = mCatch / Math.max(1e-9, armMass + mCatch);
+    if (arrive) {
+      const toCell = Math.max(-step, Math.min(step, cLen - r));
+      if (r > 1e-12) this.position.addScaledVector(_rhV2.copy(sep).multiplyScalar(1 / r), -toCell * herShare);
+      sep.copy(cellW);
+      this._assignRackCellWith(d, herQ, true);          // its cell, offset and attitude in her frame: from here it is hers
+      this._rhArrived = true;
+      this._rhPinInCell();
+      return true;
+    }
+    if (r > 1e-12 && dr !== 0) {
+      _rhV2.copy(sep).multiplyScalar(1 / r);
+      this.position.addScaledVector(_rhV2, -dr * herShare);
+      sep.copy(_rhV2).multiplyScalar(r + dr);
+    }
+    d._armPinPos.copy(this.position).add(sep);
+    this._rhSyncBag(d._armPinPos, sep);
+    return false;
+  }
+
+  /**
+   * The net's bag lines up with the line it is wound on (launch direction = her centre -> catch) and its tether is
+   * drawn taut at the straight length muzzle -> the bag's NECK (net-cinch: the point the bag is drawn at, see below),
+   * so the shortening line is seen and never bows slack.
+   * @param {THREE.Vector3} catchPos the catch centre, scene units
+   * @param {THREE.Vector3} [sepW] her centre -> catch, world (else catchPos - position)
+   * @private
+   */
+  _rhSyncBag(catchPos, sepW = null) {
+    const net = this._rhNet();
+    if (!net) return;
+    const v = sepW ? _rhV3.copy(sepW) : _rhV3.subVectors(catchPos, this.position);
+    const len = v.length();
+    if (len > 1e-12 && net.launchDirection) {
+      net.launchDirection.x = v.x / len;
+      net.launchDirection.y = v.y / len;
+      net.launchDirection.z = v.z / len;
+    }
+    if (net.position && Number.isFinite(net.position.x)) {
+      this.getNetMuzzleWorldInto(_rhV4);                              // scene units; the net's position is metres
+      // Where the bag's neck will BE when it is drawn. Measuring to that, not to the net's position of the previous
+      // tick, keeps the drawn line exactly taut while she turns (the one-frame lag was up to 0.12 m at the reel-heading
+      // flip).
+      const d = net.catchResult === 'success' ? net.targetDebris : null;
+      // review R3: the catch as it will be drawn this frame is `catchPos`, the pin just written. ArmManager.update ends with the
+      // authoritative pin (DebrisField.pinCapturedDebris: `_scenePosition` = the pin, before the net system and the visual run), so
+      // `d._scenePosition` read HERE is last frame's: with the muzzle of this frame it left the line 0.078 m off the drawn neck at
+      // the reel-heading flip (measured with the field wired as main.js wires it, test-ReelHomeLook).
+      const sp = d ? catchPos : null;
+      if (sp && net.launchDirection) {
+        // net-cinch: the neck is where CaptureNetVisual draws it (entities/heldBagShape.js: on the tow line from her
+        // muzzle, touching the catch's rear, the apex ball's radius clear of the muzzle), from the catch's pin of this
+        // frame and the muzzle now, so the picture and the measure agree in the same frame
+        heldBagNeckInto(_rhV5, sp, _rhV4, net.launchDirection, heldBagRadiusScene(d), DAUGHTER_STAND_M);
+        net.tetherPaidOut = Math.hypot(_rhV4.x - _rhV5.x, _rhV4.y - _rhV5.y, _rhV4.z - _rhV5.z) / M;
+      } else {
+        net.tetherPaidOut = Math.hypot(_rhV4.x / M - net.position.x, _rhV4.y / M - net.position.y,
+          _rhV4.z / M - net.position.z);
+      }
+    }
+  }
+
+  /**
+   * Decision 8: the catch in its cell, fixed in HER frame — her actual attitude × the stored offset and attitude.
+   * One pin for the net reel's end, REELING and DOCKING (HOLDING_CATCH's `_pinHeldCatches` reads the same offsets).
+   * @returns {boolean} false when the catch holds no assignment on her
+   * @private
+   */
+  _rhPinInCell() {
+    const d = this.capturedDebris;
+    if (!d || d._rackArm !== this || !d._rackLocalM || !d._qLocalHer) return false;
+    const herQ = this.group.quaternion;
+    if (!d._armPinPos) d._armPinPos = new THREE.Vector3();
+    d._armPinned = true;
+    applyHerFrameAttitude(d, herQ);
+    heldSlotAnchorInto(this.position, herQ, d._rackLocalM, d._armPinPos);
+    this._rhSyncBag(d._armPinPos);
+    return true;
+  }
+
+  /** The mother-frame azimuth of her strut, rad (the same one PlayerSatellite and ArmManager use). @private */
+  _rhAzRad() {
+    const sg = this._playerSatellite && this._playerSatellite.strutGroups && this.index != null
+      ? this._playerSatellite.strutGroups[this.index] : null;
+    if (sg && Number.isFinite(sg.azRad)) return sg.azRad;
+    if (Number.isFinite(this._azimuthDeg)) return (this._azimuthDeg * Math.PI) / 180;
+    return Math.atan2(this.dockOffset.y, this.dockOffset.x);
+  }
+
+  /** Her strut's axis, world, unit, root -> tip — as PlayerSatellite has it now, else rebuilt from her aim angle. @private */
+  _rhStrutDirWorldInto(parentQuat, out) {
+    const ps = this._playerSatellite;
+    const sg = ps && ps.strutGroups && this.index != null ? ps.strutGroups[this.index] : null;
+    if (sg && sg.strutDir && sg.strutDir.lengthSq() > 1e-12) out.copy(sg.strutDir);
+    else strutLocalDirection(this._aimAlpha || 0, this._rhAzRad(), out);
+    const pq = parentQuat || (ps && ps.quaternion) || this._lastParentQuat;
+    if (pq && typeof pq.x === 'number') out.applyQuaternion(pq);
+    return out.normalize();
+  }
+
+  /**
+   * The strut axis at the angle the strut is HEADING for (fix round F2b): the swing-plane angle nearest the direction
+   * hinge -> her (`_rhBestAlpha`) clamped to REEL_HOME.STRUT_MIN_DEG..STRUT_MAX_DEG — the nearest direction the strut
+   * can point to, in its plane, never below 34°. The line-up aims her at THIS axis, so it does not chase a strut that
+   * is still slewing, and it cannot ask for a direction the strut can never take. Falls back to the live axis.
+   * @private
+   */
+  _rhTargetDirWorldInto(parentQuat, out) {
+    if (!Number.isFinite(this._rhBestAlpha)) return this._rhStrutDirWorldInto(parentQuat, out);
+    const RH = Constants.REEL_HOME || {};
+    const d2r = Math.PI / 180;
+    const a = Math.max((RH.STRUT_MIN_DEG ?? 34) * d2r, Math.min((RH.STRUT_MAX_DEG ?? 180) * d2r, this._rhBestAlpha));
+    strutLocalDirection(a, this._rhAzRad(), out);
+    const ps = this._playerSatellite;
+    const pq = parentQuat || (ps && ps.quaternion) || this._lastParentQuat;
+    if (pq && typeof pq.x === 'number') out.applyQuaternion(pq);
+    return out.normalize();
+  }
+
+  /**
+   * Decision 5/6 geometry, from the strut hinge (the collar point PlayerSatellite hangs it on): the swing-plane angle
+   * nearest the direction hinge -> her (`_rhBestAlpha`, the unclamped answer; ArmManager clamps it) and how far she is
+   * off the strut's swing plane (`_rhPlaneErrRad`, signed). Runs every frame while she is on the reels.
+   * @private
+   */
+  _rhStrutAim(parentPos, parentQuat) {
+    const pq = parentQuat || this._lastParentQuat;
+    if (!parentPos || !pq || !this.dockOffset) return false;
+    const V5 = Constants.OCTOPUS_V5 || {};
+    const az = this._rhAzRad();
+    const hx = Math.cos(az) * (V5.COLLAR_RADIUS ?? 0.4) * M;
+    const hy = Math.sin(az) * (V5.COLLAR_RADIUS ?? 0.4) * M;
+    const hz = (V5.COLLAR_Y ?? 1.0) * M;
+    _rhQ1.copy(pq).invert();
+    const rel = _rhV5.subVectors(this.position, parentPos).applyQuaternion(_rhQ1);
+    rel.x -= hx; rel.y -= hy; rel.z -= hz;                  // hinge -> her, ship-local
+    const len = rel.length();
+    if (len < 1e-12) return false;
+    rel.multiplyScalar(1 / len);
+    const tSide = -rel.x * Math.sin(az) + rel.y * Math.cos(az);
+    this._rhPlaneErrRad = Math.asin(Math.max(-1, Math.min(1, tSide)));
+    this._rhBestAlpha = bestStrutAlpha(rel, az);
+    if (!this._rhRelShip) this._rhRelShip = new THREE.Vector3();
+    this._rhRelShip.copy(rel);                 // hinge -> her, ship-local, unit (ArmManager's turn axis and angle)
+    return true;
+  }
+
+  /**
+   * Decision 4: her attitude on the strut reel — −Z toward the strut tip (her +Z and the catch lead away), roll so her
+   * +Y is the docked basis's +Y for this strut (DOCKING then only trims residuals). Near the tip the line direction
+   * is ill-conditioned, so the aim blends to the strut axis (the docked +Z) over the last 0.75 m.
+   * @param {THREE.Vector3} toTip her -> strut tip, scene units (not normalised)
+   * @param {number} dist its length
+   * @param {THREE.Quaternion|null} parentQuat
+   * @param {THREE.Quaternion} out
+   * @returns {boolean} false when there is no aim yet
+   * @private
+   */
+  _rhTailFirstQuatInto(toTip, dist, parentQuat, out) {
+    const z = _rhV1;
+    this._rhStrutDirWorldInto(parentQuat, _rhV2);                  // the strut axis (the docked +Z)
+    if (dist > 1e-9) z.copy(toTip).multiplyScalar(-1 / dist); else z.copy(_rhV2);
+    const distM = dist / M;
+    const w = Math.max(0, Math.min(1, (distM - 0.25) / 0.5));
+    const ws = w * w * (3 - 2 * w);
+    z.multiplyScalar(ws).addScaledVector(_rhV2, 1 - ws);
+    if (z.lengthSq() < 1e-12) return false;
+    z.normalize();
+    const dockedQ = this._herQuatWorldInto(parentQuat, _rhQ2);
+    const y = _rhV3.set(0, 1, 0).applyQuaternion(dockedQ);
+    y.addScaledVector(z, -y.dot(z));
+    if (y.lengthSq() < 1e-8) {
+      y.copy(_WORLD_UP);
+      y.addScaledVector(z, -y.dot(z));
+      if (y.lengthSq() < 1e-8) y.set(1, 0, 0).addScaledVector(z, -z.x);
+    }
+    y.normalize();
+    const x = _rhV4.crossVectors(y, z);
+    _rhM1.makeBasis(x, y, z);
+    out.setFromRotationMatrix(_rhM1);
+    return true;
+  }
+
+  /**
+   * Decision 7: start the line-up on her own thrusters — along the circle round the strut tip, into line with the strut
+   * axis the strut is heading for (`_rhTargetDirWorldInto`). Billed as her normal fuel: an impulse in and out at
+   * ALIGN_SPEED_MPS against the tank's Δv, scaled by the mass she moves (her + the catch + its net, the scaling the old
+   * arrest debit used: fix round F4). She may spend ARM_RESERVE_FUEL (F2c): that reserve is kept for a safe reel-home and
+   * this is it (a docked daughter holding a catch does not go ADRIFT on it: `_consumeFuel`). Returns false, billing
+   * nothing, when she cannot afford it (no fuel) or the whole arc is not clear of the ship; then she holds for the mother
+   * and tries again a second later (the geometry changes), with one comms line per reel.
+   * @private
+   */
+  _rhBeginLineUp(dockW, dist, parentPos, parentQuat) {
+    const RH = Constants.REEL_HOME || {};
+    const v = RH.ALIGN_SPEED_MPS ?? 0.5;
+    const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+    const massScale = Math.max(1, this._computeReelMUnit(armMass, !!this.capturedDebris) / armMass);
+    const dvPct = (2 * v / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV)) * 100 * massScale;
+    if (!(this.fuel >= dvPct) || !this._rhArcClear(dockW, dist, parentPos, parentQuat)) {
+      if (!this._rhWaitSaid) {
+        this._rhWaitSaid = true;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: this.displayName,
+          text: `${this.displayName} can't line herself up yet: holding for the mother.`,
+          channel: 'CMD', priority: 'info',
+        });
+      }
+      return false;
+    }
+    this.fuel -= dvPct;
+    this._rhLineUp = { R: dist };
+    if (!this._rhLineUpSaid) {
+      this._rhLineUpSaid = true;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: this.displayName,
+        text: `${this.displayName} lines herself up.`,
+        channel: 'CMD', priority: 'info',
+      });
+    }
+    return true;
+  }
+
+  /**
+   * The great-circle arc from her place to the target strut axis on the circle of radius R about the strut tip is
+   * clear of the ship: every 4° of it keeps ALIGN_CLEAR_M (the clearance hook; no hook = clear). Checked before the
+   * line-up bills anything, so a blocked arc costs no fuel.
+   * @private
+   */
+  _rhArcClear(dockW, R, parentPos, parentQuat) {
+    if (typeof this._rhGapFn !== 'function') return true;
+    const RH = Constants.REEL_HOME || {};
+    const s = this._rhTargetDirWorldInto(parentQuat, _rhV2);
+    const u = _rhV3.subVectors(this.position, dockW);
+    const len = u.length();
+    if (len < 1e-12) return true;
+    u.multiplyScalar(1 / len);
+    const ang = Math.acos(Math.max(-1, Math.min(1, u.dot(s))));
+    if (ang <= 1e-4) return true;
+    const axis = _rhV4.crossVectors(u, s);
+    if (axis.lengthSq() < 1e-12) axis.set(u.y, -u.x, 0);
+    if (axis.lengthSq() < 1e-12) axis.set(1, 0, 0);
+    axis.normalize();
+    const n = Math.max(1, Math.ceil(ang / (4 * Math.PI / 180)));
+    const clear = RH.ALIGN_CLEAR_M ?? 0.15;
+    for (let k = 1; k <= n; k++) {
+      _rhQ1.setFromAxisAngle(axis, ang * k / n);
+      const p = _rhV1.copy(u).applyQuaternion(_rhQ1).multiplyScalar(R).add(dockW);
+      const gap = this._rhGapFn(p, parentPos, parentQuat);
+      if (Number.isFinite(gap) && gap < clear) return false;
+    }
+    return true;
+  }
+
+  /**
+   * One frame of the line-up: she moves along the great circle of radius R about the strut tip toward the axis the
+   * strut is heading for (the swing-plane direction nearest her, never below 34°: `_rhTargetDirWorldInto`), at
+   * ALIGN_SPEED_MPS. Greedy from the live tip and the live target, so a swinging strut or a turning mother is followed.
+   * A blocked step (the clearance hook says the ship is nearer than ALIGN_CLEAR_M) stops her: she holds, and tries
+   * again after a second.
+   * @returns {boolean} true while the line-up is still moving
+   * @private
+   */
+  _rhLineUpStep(dt, dockW, parentPos, parentQuat) {
+    const lu = this._rhLineUp;
+    if (!lu) return false;
+    const RH = Constants.REEL_HOME || {};
+    const s = this._rhTargetDirWorldInto(parentQuat, _rhV2);
+    const u = _rhV3.subVectors(this.position, dockW);
+    const len = u.length();
+    if (len < 1e-12) { this._rhLineUp = null; return false; }
+    u.multiplyScalar(1 / len);
+    let ang = Math.acos(Math.max(-1, Math.min(1, u.dot(s))));
+    if (ang <= 1e-4 || ang <= 0.5 * (RH.ALIGN_TOL_DEG ?? 10) * Math.PI / 180 * 0.2) {
+      this._rhLineUp = null;                      // in line
+      return false;
+    }
+    const axis = _rhV4.crossVectors(u, s);
+    if (axis.lengthSq() < 1e-12) axis.set(u.y, -u.x, 0);        // dead opposite: any way round
+    if (axis.lengthSq() < 1e-12) axis.set(1, 0, 0);
+    axis.normalize();
+    const stepAng = Math.min(ang, ((RH.ALIGN_SPEED_MPS ?? 0.5) * dt) / Math.max(lu.R / M, 1e-6));
+    _rhQ1.setFromAxisAngle(axis, stepAng);
+    const next = _rhV1.copy(u).applyQuaternion(_rhQ1).multiplyScalar(lu.R).add(dockW);
+    if (typeof this._rhGapFn === 'function') {
+      const gap = this._rhGapFn(next, parentPos, parentQuat);
+      if (Number.isFinite(gap) && gap < (RH.ALIGN_CLEAR_M ?? 0.15)) {
+        this._rhLineUp = null;                    // the ship is in the way: she holds, and looks again in a second
+        this._rhNoPath = true;
+        this._rhNoPathS = 0;
+        return false;
+      }
+    }
+    this.position.copy(next);
     return true;
   }
 
@@ -6604,7 +7611,56 @@ export class ArmUnit {
       reelSpeed = this._computeReelProfileSpeed(distMeters, armMass, hasPayload, boostMult);
     } else {      reelSpeed = (hasPayload ? REEL_IN_SPEED_LOADED : REEL_IN_SPEED_EMPTY) * boostMult;
     }
-    const reelSpeedScaled = reelSpeed * M;
+    let reelSpeedScaled = reelSpeed * M;
+
+    // ── reel-home (Decisions 4, 7): wind only tail first, and never dock crooked ───────────────────────────────
+    // `rhGate` limits how far she may close this frame (scene units): 0 while she turns round to tail-first
+    // (her -Z within TAIL_FIRST_TOL of the strut tip), or up to the line-up distance while the line is more than
+    // ALIGN_TOL off the strut axis; there the reel holds her while strut and mother line it up.
+    const rh = this._rhHome && this._rhOn();
+    let rhGate = Infinity;
+    let rhLineHeld = false;
+    if (rh) {
+      const RH = Constants.REEL_HOME || {};
+      const distM = dist / M;
+      if (distM > 0.25 && dist > 1e-12) {
+        _rhV1.set(0, 0, 1).applyQuaternion(this.group.quaternion);                  // her +Z, world
+        const cosTail = -_rhV1.dot(toMother) / dist;                                // her -Z . unit(her -> tip)
+        if (cosTail < Math.cos((RH.TAIL_FIRST_TOL_DEG ?? 10) * Math.PI / 180)) rhGate = 0;
+      }
+      if (distM >= 0.5 && dist > 1e-12) {
+        this._rhStrutDirWorldInto(parentQuat, _rhV2);
+        const cosLine = -_rhV2.dot(toMother) / dist;                                // unit(tip -> her) . strut axis
+        if (cosLine < Math.cos((RH.ALIGN_TOL_DEG ?? 10) * Math.PI / 180)) {
+          const lim = Math.max(0, dist - (RH.ALIGN_DIST_M ?? 2.0) * M);
+          if (lim <= 0.002 * M) rhLineHeld = true;                                    // held: within 2 mm of the line-up distance
+          rhGate = Math.min(rhGate, lim);
+        }
+      }
+      // the clock of the hold: the mother gets ALIGN_WAIT_S to line her up, then she uses her own thrusters
+      this._rhHoldS = rhLineHeld ? this._rhHoldS + dt : 0;
+      // fix round F2d: a blocked path or an empty tank is looked at again every second (the geometry changes), never for good
+      if (this._rhNoPath) {
+        this._rhNoPathS += dt;
+        if (this._rhNoPathS >= 1) { this._rhNoPath = false; this._rhNoPathS = 0; }
+      }
+      if (rhLineHeld && !this._rhLineUp && !this._rhNoPath && !this._rhMotherWorking
+          && this._rhHoldS >= (RH.ALIGN_WAIT_S ?? 5)) {
+        // only if the line is also off the axis the strut is HEADING for: a strut still slewing will catch up on its own
+        this._rhTargetDirWorldInto(parentQuat, _rhV2);
+        const cosTarget = -_rhV2.dot(toMother) / dist;
+        if (cosTarget < Math.cos((RH.ALIGN_TOL_DEG ?? 10) * Math.PI / 180)
+            && !this._rhBeginLineUp(dockWorldPos, dist, parentPos, parentQuat)) {
+          this._rhNoPath = true;                                                   // she holds for the mother, and asks again in a second
+          this._rhNoPathS = 0;
+        }
+      }
+      if (this._rhLineUp) {                                                        // runs on to well inside the tolerance (no flutter at its edge)
+        rhGate = 0;
+        this._rhLineUpStep(dt, dockWorldPos, parentPos, parentQuat);
+      }
+      if (rhGate === 0 && dt > 0) { reelSpeed = 0; reelSpeedScaled = 0; }
+    }
 
     // ── FEEP soft re-dock arrest (REEL_PROFILE_V2, plan Q4) ────────────────
     // Within ARREST_DISTANCE_M the daughter fires FEEP to null the residual
@@ -6616,7 +7672,9 @@ export class ArmUnit {
     // → FUEL_FALLBACK_SLOW (zero-fuel reel-only finish + warn, never a dead-end).
     // Mission-1 is free (the learning loop). DOCKING's per-state fuel rate is
     // suppressed for this cycle (see _consumeFuel) so the arrest is charged once.
-    if (profileV2 && hasPayload && !this._redockArrestStarted && !this.isDetached) {
+    // reel-home: no thruster fires during the strut reel (her aft end leads and the winch brakes her to V_DOCK): there is
+    // no burn to price, no plume to keep off the line, so no arrest steer either (Decision 4).
+    if (profileV2 && hasPayload && !this._redockArrestStarted && !this.isDetached && !rh) {
       const RF = Constants.REDOCK_FEEP || {};
       const arrestDist = RF.ARREST_DISTANCE_M ?? 8;
       const distMeters = dist / M;
@@ -6703,7 +7761,8 @@ export class ArmUnit {
     // The dock check needs no normalize (position.copy of the resolved dock),
     // so only the move branch keeps the zero-length guard. Speeds, tension,
     // and the legacy constant-speed model are untouched.
-    const moveDistance = reelSpeedScaled * dt;
+    let moveDistance = reelSpeedScaled * dt;
+    if (rh && rhGate < moveDistance) moveDistance = rhGate;
     if (moveDistance >= dist) {
       // Close enough to dock — snap to the strut-tip dock (not mother core).
       this.position.copy(dockWorldPos);
@@ -6719,7 +7778,8 @@ export class ArmUnit {
 
     // Authoritative: drag the captured debris with us every frame so it can
     // never be left behind on its orbit while we reel home.
-    this._pinCatchToSelf(parentPos);
+    // reel-home: a catch the net reel brought in sits in its cell on her, fixed in her frame (Decision 8).
+    if (!(rh && this._rhArrived && this._rhPinInCell())) this._pinCatchToSelf(parentPos);
 
     // Update tether length
     this.tetherLength = dist / M;
@@ -6927,7 +7987,7 @@ export class ArmUnit {
     this.position.lerp(dockWorldPos, 0.05);
 
     // Keep the catch glued to us through the final dock approach too.
-    this._pinCatchToSelf(parentPos);
+    if (!(this._rhArrived && this._rhPinInCell())) this._pinCatchToSelf(parentPos);
 
     if (this.stateTimer > Constants.ARM_DOCK_DURATION) {
       this.reeling = false;
@@ -6980,7 +8040,7 @@ export class ArmUnit {
           eventBus.emit(Events.COMMS_MESSAGE, {
             text: Constants.isFeatureEnabled('FURNACE_COOK')
               ? `${this.displayName}: Catch secured at the strut. Holding in net (awaiting processing). Capture #${this.captures}.`
-              : `${this.displayName}: Catch secured at the strut. Holding it in the net until the station takes it. Capture #${this.captures}.`,
+              : `${this.displayName}: Catch secured at the strut. Holding it in the net until the burn to the next field, when she carries it to a furnace. Capture #${this.captures}.`,
             priority: 'success',
           });
           return;
@@ -7622,11 +8682,16 @@ export class ArmUnit {
       [S.SCANNING]: 0.0,          // V5: sensor mode — zero FEEP fuel (no stored-energy model)
     };
     let rate = rates[this.state] || 0;
+    // reel-home: winding the net line in is a motor on her, not a thruster burn (the strut reel is zero-fuel too)
+    if (this.state === S.GRAPPLED && this._rhHome) rate = 0;
     // REEL_PROFILE_V2 (plan Q4): the re-dock arrest is charged ONCE as a discrete
     // mass-scaled debit during REELING. Suppress the per-state DOCKING rate for
     // the cycle that fired it so the FEEP burn isn't double-charged. The flag is
     // cleared on the next clean dock/reload cycle (in _transitionTo).
     if (this.state === S.DOCKING && this._redockDebitApplied === true) rate = 0;
+    // reel-home (fix round F6): DOCKING that came off the strut reel is the winch settling her onto the strut (REELING
+    // fired no arrest burn under the flag), so the DOCKING thruster rate is not billed either.
+    if (this.state === S.DOCKING && this._rhDockFree === true) rate = 0;
     // Register item 100 (the wide sweep): autopilot TRANSIT/APPROACH fuel is
     // IMPULSE-PRICED — the spring pays launch kinetic energy, so the FEEP pays
     // only the commanded corrective impulse (Σ|dvCmd| the controller applied
@@ -7675,6 +8740,9 @@ export class ArmUnit {
     // have no winch, so the reserve can't save them — they fall through to the
     // genuine-loss path below.
     const reserve = Constants.ARM_RESERVE_FUEL ?? 0;
+    // reel-home (F2c): the line-up may spend the reserve (it is kept for a safe reel-home), so a daughter that docked on
+    // it and holds her catch is a docked daughter, not an adrift one: she keeps HOLDING_CATCH, like DOCKING does.
+    const dockedOnReserve = this.state === S.HOLDING_CATCH && Constants.isFeatureEnabled('REEL_HOME');
     if (!this.isDetached && reserve > 0 && this.fuel <= reserve && this.state !== S.ADRIFT) {
       if (this.state === S.RETURNING) {
         // Can't fly home on the reserve. Hand off to the mother's zero-fuel winch
@@ -7688,7 +8756,7 @@ export class ArmUnit {
         eventBus.emit(Events.ARM_RECALLED, { armId: this.id });
         return;
       }
-      if (this.state !== S.DOCKING) {
+      if (this.state !== S.DOCKING && !dockedOnReserve) {
         // Working daughter (transit / approach / netting / hauling / …) has spent
         // her usable propellant. Lock the reserve and go ADRIFT — tethered,
         // powered, recoverable. DOCKING is exempt: she is allowed to spend the
@@ -7718,7 +8786,7 @@ export class ArmUnit {
       // the winch still eases her in (REDOCK_FEEP FUEL_FALLBACK_SLOW), so a
       // tethered daughter is never abandoned. Hold at empty and let the dock
       // finish on motor power.
-      if (this.state === S.DOCKING) return;
+      if (this.state === S.DOCKING || dockedOnReserve) return;
 
       // Any other state hitting true zero with no tether benefit is spent.
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -7749,7 +8817,8 @@ export class ArmUnit {
     // AFTER the per-state handler, so without this early-out it re-shows a
     // stray, wrong-direction tether for the whole window.
     if (this.state === S.DOCKED || this.state === S.DOCKING ||
-        this.state === S.RELOADING || this.state === S.HOLDING_CATCH) {
+        this.state === S.RELOADING || this.state === S.HOLDING_CATCH ||
+        this.state === S.CARRY_PREP) {                 // trip-melt-2: docked while the strut and radiators move
       // Wave1: while the line is hidden, snap the tint home to NOMINAL — a
       // stressed reel-in tint would otherwise persist across the dock and
       // re-appear, stale, on the next deploy. (Tension is already 0 here; the
@@ -7955,7 +9024,9 @@ export class ArmUnit {
     sig.approachBrake01 = this._approachBrake01;
     // Funded arrest burn only — the FUEL_FALLBACK_SLOW winch finish and the
     // tether-fouls-plume hold must NOT flare (honesty: no debit, no burn).
-    sig.arrestFeepActive = this._redockArrestStarted === true && this._redockDebitApplied === true;
+    sig.reelHome = this._rhOn();
+    sig.arrestFeepActive = (this._redockArrestStarted === true && this._redockDebitApplied === true)
+      || !!this._rhLineUp;                // reel-home: her own thrusters, lining herself up (shown fore; the code moves her sideways, no nozzle is axial to that)
     sig.recoilFlashS = this._recoilFlashS;
     const vis = computeDaughterPlumeIntensity(sig);
 

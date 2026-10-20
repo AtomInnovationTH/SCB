@@ -1059,7 +1059,7 @@ export class StatusPanel {
         count.textContent = 'HELD';
         count.style.color = 'var(--hud-info, #66ddff)';
       }
-      seg.title = 'Catch held at the collar until the station takes it — [K] jettison';
+      seg.title = 'Catch held at the collar. It goes to a furnace on the trip to the next field if it fits one — [K] jettison';
     } else if (docked && collarCook) {
       const pct = Math.round(Math.min(1, Math.max(0, collarCook.frac || 0)) * 100);
       if (tagOn) {
@@ -2172,7 +2172,7 @@ export class StatusPanel {
    *          slewing:boolean, pose:string, locked?:boolean}|null} st
    * @returns {string} span HTML, or '' when nothing should be shown
    */
-  _flowerReadout(st) {
+  _flowerReadout(st, receiving = null) {
     if (!st || !st.pairCount) return '';
     const theta = Math.round(st.thetaDeg);
     // Plain words only (owner 2026-10-09: say the angle, never a pose name; h1-mother-pane
@@ -2185,10 +2185,16 @@ export class StatusPanel {
     // Inhibited = steady CAUTION amber (the denial token; the same '#ffaa00' the slew line wears).
     const c = st.locked === true ? `var(--hud-caution, ${VisualLaw.COLORS.CAUTION})`
       : st.slewing ? 'var(--hud-caution, #ffaa00)' : 'var(--hud-text, #a3d9c9)';
+    // petal-single: the angle above is the shared one (the player's); while a catch is handed to a tip only THAT radiator
+    // moves, and the panel says which one (1-based, as the player counts them).
+    const recv = Array.isArray(receiving) && receiving.length > 0
+      ? `<div style="display:flex;gap:6px;"><span style="opacity:0.7;">Radiator ${receiving.join(' and ')}</span>`
+        + `<span style="color:var(--hud-caution, #ffaa00);">receiving</span></div>`
+      : '';
     return `<div style="display:flex;gap:6px;">`
       + `<span style="opacity:0.7;">Radiator</span>`
       + `<span style="color:${c};">${label}</span>`
-      + '</div>';
+      + '</div>' + recv;
   }
 
   /** @private Per-frame thermal-group updater — DOM write only on change. */
@@ -2198,7 +2204,8 @@ export class StatusPanel {
     if (!panel || !el) return;
     const ps = this._armManager && this._armManager.playerSatellite;
     const st = (ps && typeof ps.getFlowerStatus === 'function') ? ps.getFlowerStatus() : null;
-    const html = this._flowerReadout(st);
+    const receiving = (ps && typeof ps.receivingRadiators === 'function') ? ps.receivingRadiators() : null;
+    const html = this._flowerReadout(st, receiving);
     if (html === this._lastFlowerHtml) return;
     this._lastFlowerHtml = html;
     panel.style.display = html ? '' : 'none';
@@ -2493,7 +2500,7 @@ export class StatusPanel {
         // No digest field (legacy mocks) → the pre-48 line, byte-identical.
         // no-melt: with no furnace the digest fraction never moves; the line reads "Catch held" instead.
         if (a.digest && !Constants.isFeatureEnabled('FURNACE_COOK')) {
-          return { label: 'Catch held', color: 'var(--hud-caution, #ffaa00)', title: 'Held on the rack until the station takes it' };
+          return { label: 'Catch held', color: 'var(--hud-caution, #ffaa00)', title: 'Held on the rack. It goes to a furnace on the trip to the next field' };
         }
         if (a.digest) {
           const pct = Math.round(Math.min(1, Math.max(0, a.digest.frac || 0)) * 100);
