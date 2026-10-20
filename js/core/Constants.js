@@ -5430,6 +5430,11 @@ export const Constants = {
     PANE_LINES_EXPANDED: 10,              // expanded line count (UX-2 #10)
     PANE_EXPAND_HEIGHT_PX: 300,
     PANE_EXPAND_HOLD_MS: 3000,
+    // comms-min-show (owner 2026-10-20, "Each stays 3 seconds"): the pane shows messages one at a time - a new one
+    // replaces the newest row only after the last one has been on screen PANE_MIN_SHOW_S seconds; warnings jump the
+    // queue. At most PANE_QUEUE_MAX messages wait; past that the oldest waiting one is skipped (it stays in the log).
+    PANE_MIN_SHOW_S: 3,
+    PANE_QUEUE_MAX: 4,
     STRIPE_WIDTH_PX: 3,
     // (UX-11 #9: C_HOLD_THRESHOLD_MS / C_TAP_MAX_MS / RADIAL_* removed with
     // the C-hold radial menu — C acts on keydown with zero delay.)

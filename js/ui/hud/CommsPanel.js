@@ -39,6 +39,10 @@ const ROW_PAD_Y_PX = 3;
 const ROW_LINE_HEIGHT_FALLBACK_PX = 13 * 1.45;
 // COMMS_SCROLL_UP / _DOWN move the window by at most this many messages (fewer when fewer rows are shown).
 const SCROLL_STEP_MAX = 3;
+// comms-min-show D1: the panel's own display list holds at most as many rows as CommsSystem's store (its MAX_MESSAGES).
+const SHOWN_MAX = 20;
+// A float sum of frame times can land a hair under the limit; this much slack never lets a line leave early in play.
+const SHOW_TIME_SLACK_S = 1e-6;
 
 // ----------------------------------------------------------------------------
 // SIMPLIFIED 3-COLOUR PALETTE (priority-based, not per-channel)
@@ -88,6 +92,16 @@ function getPriorityColor(priority) {
  */
 function isCriticalPriority(priority) {
   return getPriorityColor(priority) === COMMS_COLOR_CRITICAL;
+}
+
+/**
+ * comms-min-show (coordinator, review fix): true for a yellow OR red line — a warning in the owner's "warnings jump
+ * the queue". Red shows at once; yellow goes to the front of the queue (after the newest row's 3 s) and is never cut.
+ * @param {string} priority
+ * @returns {boolean}
+ */
+function isWarningOrWorse(priority) {
+  return getPriorityColor(priority) !== COMMS_COLOR_NORMAL;
 }
 
 // ============================================================================
@@ -224,6 +238,21 @@ export class CommsPanel {
     this._logResizeListener = null;
     this._logResizeRaf = 0;
     this._disposed = false;
+
+    // comms-min-show D1: the panel keeps its OWN display list so every line stays on screen at least
+    // COMMS.PANE_MIN_SHOW_S seconds. CommsSystem still stores (and coalesces) every line at once; the panel takes each
+    // stored object once (`_taken`), queues it (`_waiting`) and moves it on to `_shown` (the rows drawn, newest last)
+    // one at a time. See `_takeNew`, `_pruneQueue`, `_releaseNext`.
+    /** @type {object[]} stored comms messages waiting for their turn (oldest first) */
+    this._waiting = [];
+    /** @type {object[]} stored comms messages in the order they were drawn (newest last, at most SHOWN_MAX) */
+    this._shown = [];
+    /** @type {WeakSet<object>} stored objects already queued or shown */
+    this._taken = new WeakSet();
+    /** @type {number} real seconds since the newest row was drawn; Infinity = nothing on screen yet (the first line is at once) */
+    this._sinceShown = Infinity;
+    /** @type {number} stored objects taken so far; 0 = the panel has never queued anything (draws the store, D6) */
+    this._intakeCount = 0;
 
     this._build();
     this._setupListeners();
@@ -380,6 +409,9 @@ export class CommsPanel {
     // Elevator-contract tracker — gated header atop the comms pane (replaces the
     // former always-on score-strip segment). Reveals on first contribution.
     eventBus.on(Events.CONTRACT_UPDATE, (data) => this._onContractUpdate(data));
+
+    // comms-min-show D7: a new game empties the queue and the rows drawn (CommsSystem empties its store on the same event).
+    eventBus.on(Events.GAME_RESET, () => this._resetQueue());
   }
 
   // ==========================================================================
@@ -403,7 +435,19 @@ export class CommsPanel {
     if (isCriticalPriority(msg.priority)) {
       this._commsFlashTimer = 3.0;
     }
-    this._scrollOffset = 0; // reset scroll on new message
+    if (!this._queueReady()) {
+      this._scrollOffset = 0; // reset scroll on new message
+      this._updateCommsPanel();
+      return;
+    }
+    // comms-min-show D2-D6: take what CommsSystem stored since the last call (a text line, or the text-less repaint
+    // after a COMMS_RELEASE: either way the store is the truth), draw a warning at once and the first waiting line if
+    // its turn has come. A queued-only call keeps the scroll position but still redraws (pruning may have changed it).
+    this._pruneQueue();
+    const jumped = this._takeNew();
+    const released = this._releaseNext();
+    this._capQueue();
+    if (jumped || released) this._scrollOffset = 0; // a new row on screen: reset scroll as a new message always did
     this._updateCommsPanel();
   }
 
@@ -412,6 +456,7 @@ export class CommsPanel {
    * @param {number} dt — delta time
    */
   update(dt) {
+    this._tickQueue(dt);
     if (this._commsFlashTimer > 0) {
       this._commsFlashTimer -= dt;
       // Calm-HUD: hold a steady red border for the critical window — the red
@@ -455,6 +500,7 @@ export class CommsPanel {
   dispose() {
     // No center popup to remove (ST-5.1: _buildCommsMenu deleted)
     this._disposed = true;
+    this._resetQueue();
     if (this._logResizeObserver && typeof this._logResizeObserver.disconnect === 'function') {
       this._logResizeObserver.disconnect();
     }
@@ -470,6 +516,129 @@ export class CommsPanel {
   // ==========================================================================
   // PRIVATE
   // ==========================================================================
+
+  // --------------------------------------------------------------------------
+  // comms-min-show: every line stays on screen at least COMMS.PANE_MIN_SHOW_S seconds
+  // --------------------------------------------------------------------------
+
+  /** @private True when the constructor built the display list (a bare prototype rig in a test has none: store drawn as ever). */
+  _queueReady() {
+    return Array.isArray(this._waiting) && Array.isArray(this._shown) && !!this._taken;
+  }
+
+  /** @private The messages the log draws: the panel's own `_shown` once anything has come through intake, else the store (D6). */
+  _displayMessages() {
+    const store = this._commsSystem ? this._commsSystem.getMessages() : [];
+    if (!Array.isArray(this._shown) || !(this._intakeCount > 0)) return store;
+    return this._shown;
+  }
+
+  /** @private Append a stored message to the rows drawn (newest last). */
+  _pushShown(m) {
+    this._shown.push(m);
+    while (this._shown.length > SHOWN_MAX) this._shown.shift();
+  }
+
+  /**
+   * @private D2: forget every queued or drawn object CommsSystem no longer stores (coalescing replaced it with a
+   * summary, the ring buffer dropped it, or `CommsSystem.reset()` emptied the store). A drawn row that vanishes is
+   * redrawn at once by the caller (`true`); a scroll position past the end is brought back inside.
+   * @returns {boolean} true when a drawn row was removed
+   */
+  _pruneQueue() {
+    const store = this._commsSystem ? this._commsSystem.getMessages() : [];
+    const waiting = this._waiting;
+    for (let i = waiting.length - 1; i >= 0; i--) {
+      if (store.indexOf(waiting[i]) < 0) waiting.splice(i, 1);
+    }
+    const shown = this._shown;
+    const newest = shown.length ? shown[shown.length - 1] : null;
+    let removed = false;
+    for (let i = shown.length - 1; i >= 0; i--) {
+      if (store.indexOf(shown[i]) < 0) { shown.splice(i, 1); removed = true; }
+    }
+    // the newest row itself went (coalesced into a summary): the next waiting line may show at once
+    if (newest && store.indexOf(newest) < 0) this._sinceShown = Infinity;
+    if (removed && this._scrollOffset > 0) this._scrollOffset = Math.min(this._scrollOffset, this._getMaxScroll());
+    return removed;
+  }
+
+  /**
+   * @private D2/D4: walk the store in order and take every object not taken yet. A warning goes straight onto the
+   * screen (newest row, the show clock restarts, the border flashes); anything else waits.
+   * @returns {boolean} true when a warning was drawn
+   */
+  _takeNew() {
+    const store = this._commsSystem ? this._commsSystem.getMessages() : [];
+    let jumped = false;
+    for (let i = 0; i < store.length; i++) {
+      const m = store[i];
+      if (!m || typeof m !== 'object' || this._taken.has(m)) continue;
+      this._taken.add(m);
+      this._intakeCount++;
+      if (isCriticalPriority(m.priority)) {
+        this._pushShown(m);
+        this._sinceShown = 0;
+        this._commsFlashTimer = 3.0;
+        jumped = true;
+      } else if (isWarningOrWorse(m.priority)) {
+        // yellow: front of the queue, behind any warning already waiting (warnings keep their own order)
+        let k = this._waiting.findIndex((w) => !isWarningOrWorse(w.priority));
+        if (k < 0) k = this._waiting.length;
+        this._waiting.splice(k, 0, m);
+      } else {
+        this._waiting.push(m);
+      }
+    }
+    return jumped;
+  }
+
+  /**
+   * @private D5: at most COMMS.PANE_QUEUE_MAX lines wait. Past that the oldest waiting non-warning line is skipped
+   * (never drawn; it stays in CommsSystem's log). Run AFTER the release step, so a batch (COMMS_RELEASE) still starts
+   * with its oldest line and only then loses the surplus from the front of the queue.
+   */
+  _capQueue() {
+    const cap = COMMS.PANE_QUEUE_MAX;
+    while (this._waiting.length > cap) {
+      const k = this._waiting.findIndex((m) => !isWarningOrWorse(m.priority));
+      if (k < 0) break;
+      this._waiting.splice(k, 1);
+    }
+  }
+
+  /**
+   * @private D3: draw the head of the queue when the newest row has been on screen long enough, or when nothing is on
+   * screen at all (never "Awaiting transmission…" while a line waits). One line per call.
+   * @returns {boolean} true when a row was drawn
+   */
+  _releaseNext() {
+    if (this._waiting.length === 0) return false;
+    if (this._shown.length > 0 && this._sinceShown + SHOW_TIME_SLACK_S < COMMS.PANE_MIN_SHOW_S) return false;
+    this._pushShown(this._waiting.shift());
+    this._sinceShown = 0;
+    return true;
+  }
+
+  /** @private Per-frame: advance the show clock, drop what CommsSystem no longer stores, release when due. */
+  _tickQueue(dt) {
+    if (!this._queueReady()) return;
+    if (typeof dt === 'number' && dt > 0) this._sinceShown += dt;
+    if (this._waiting.length === 0 && this._shown.length === 0) return;
+    const pruned = this._pruneQueue();
+    const released = this._releaseNext();
+    if (released) this._scrollOffset = 0;
+    if (pruned || released) this._updateCommsPanel();
+  }
+
+  /** @private D7: GAME_RESET / dispose - nothing queued, nothing drawn, the next line shows at once. */
+  _resetQueue() {
+    if (!this._queueReady()) return;
+    this._waiting.length = 0;
+    this._shown.length = 0;
+    this._sinceShown = Infinity;
+    this._taken = new WeakSet();
+  }
 
   /** @private C-tap cycles the pane size (line → normal → large → line). */
   _expandPane() {
@@ -748,7 +917,7 @@ export class CommsPanel {
    * leaves fewer rows than the step's line count, the oldest messages would otherwise never come into view.
    */
   _getMaxScroll() {
-    const total = this._commsSystem ? this._commsSystem.getMessages().length : 0;
+    const total = this._displayMessages().length;
     return Math.max(0, total - Math.max(1, this._rowsOnScreen()));
   }
 
@@ -756,7 +925,8 @@ export class CommsPanel {
   _updateCommsPanel() {
     if (!this._logEl) return;
 
-    const allMessages = this._commsSystem ? this._commsSystem.getMessages() : [];
+    // comms-min-show D6: the rows are the panel's own `_shown` list (the store only before any line has come through intake).
+    const allMessages = this._displayMessages();
 
     if (allMessages.length === 0) {
       this._logEl.innerHTML = `<span style="opacity:0.4;font-size:13px;">Awaiting transmission…</span>`;
