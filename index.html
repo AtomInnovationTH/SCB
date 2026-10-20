@@ -640,6 +640,50 @@
       #hud-comms-panel { border-top-width: 1px; border-top-left-radius: 4px; border-top-right-radius: 0; }
     }
 
+    /* === HUD SCALE (u9-big-text; owner 2026-10-20, DECISIONS §32: text and panels 25 % bigger on the Mac and the iPad) ===
+       js/ui/HudScale.js writes --hud-scale (1.25) on <html> at boot and on resize when the screen is at least
+       1280 x 880; at every other size it removes the variable, so the default below applies and `scale: none`
+       leaves the panels exactly as before (a `scale: 1` would still make each group a stacking context).
+       The CSS individual `scale` property goes on the top-level panel GROUPS only, never on #hud-overlay: that
+       container also holds the reticles, target labels, cluster icons and city pills, which sit on 3D projections
+       and keep scale 1. Never put it on an element inside a scaled group (#hud-payoff, #hud-mother-panel,
+       #hud-vitals, the Targets pane ... scale with their group).
+       ORIGIN RULE: the individual `scale` applies OUTSIDE the `transform` list, so an inline translateX(-50%) is
+       scaled too. A group centred by an inline translate gets transform-origin x = 0 (its untransformed left edge;
+       y = 0 for a translateY(-50%)), which keeps its centre on its anchor; every other group gets its anchored
+       corner, so it grows away from the screen edge it is pinned to. */
+    :root { --hud-scale: none; }
+    /* top-left anchored */
+    #hud-left-column, #hud-cargo-pane, #hud-orbit-pane, #hud-fma-strip, #hud-pin-widget {
+      scale: var(--hud-scale); transform-origin: 0 0;
+    }
+    /* top, centred by an inline translateX(-50%) (or translate(-50%, -50%)): origin x 0, y at the anchored edge */
+    #hud-score-panel, #hud-conjunction-panel, #hud-progress-panel {
+      scale: var(--hud-scale); transform-origin: 0 0;
+    }
+    /* top-right anchored (the rail is pinned right and centred by an inline translateY(-50%): y 0) */
+    #hud-comms-panel, #hud-right-column, #ladder-rail {
+      scale: var(--hud-scale); transform-origin: 100% 0;
+    }
+    /* bottom, centred by an inline translateX(-50%): origin x 0, y 100 % (grows upward). #arm-pilot-controls stays
+       unscaled on purpose: at 1.25 x it is ~615 px wide on the iPad and runs 60 px under the Targets / Next column. */
+    #hud-hint-ticker, #notification-zone, #hud-warnings-panel, #hud-stabilize-warning, #hud-f1-bar {
+      scale: var(--hud-scale); transform-origin: 0 100%;
+    }
+    /* The floor-1 bar keeps clear of the open drawer + its SPECS tab by an offset from the bar CENTRE (OverridePane,
+       pinned by test-F1Bar: drawer + 72 px gap + half the 400 px bar). Drawn 1.25 x the bar's half width and the
+       tab (59-60 px) grow, so the bar moves right by 0.25 x (60 + 200) = 65 px. `translate` is applied outside `scale`,
+       so these are screen px. HudScale sets data-hud-scale on <html> only while the scale is above 1. */
+    html[data-hud-scale] #hud-f1-bar.f1b-drawer { translate: 65px 0; }
+    /* bottom-left anchored: the floor-3/4 text panes and the SPECS tab (the tab's own box, not its drawer) */
+    #ladder-prox-context, #ladder-transfer-windows, #ladder-workbench-tab {
+      scale: var(--hud-scale); transform-origin: 0 100%;
+    }
+    /* bottom-right anchored */
+    #ladder-detail-slider {
+      scale: var(--hud-scale); transform-origin: 100% 100%;
+    }
+
     /* Loading screen */
     #loading-screen {
       position: fixed;

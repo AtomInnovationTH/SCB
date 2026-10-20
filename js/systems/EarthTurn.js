@@ -12,10 +12,13 @@
  *                              never over a pole (Earth-north stays up)
  *   - earthTurnTrigger(...)    WHEN to turn: each time a ride into floor 4 ends, and
  *                              each time the focused field changes while on floor 4
+ *   - earthFrame(...)          u10: WHERE to turn and how far out, so the ship AND the
+ *                              field stay in view (the field wins when both cannot)
  *
- * No state, no DOM, imports only `three`. CameraSystem owns the running turn and
- * main.js owns the trigger memory. Plain words for the player: "the camera turns to the
- * debris field you picked".
+ * No state, no DOM, imports only `three`. CameraSystem owns the running turn, NavcomFloor
+ * gathers the framing inputs, LadderController glides the distance and main.js owns the
+ * trigger memory. Plain words for the player: "the camera turns to the debris field you
+ * picked, and keeps your ship in view too".
  *
  * @module systems/EarthTurn
  */
@@ -84,14 +87,15 @@ export function earthTurnTarget(center) {
  * @param {{x:number,y:number,z:number}} start
  * @param {{x:number,y:number,z:number}} target
  * @param {number} u  progress 0..1 (not yet eased)
+ * @param {function} [ease]  u10: the easing (default cubic in-out, u8's turn; a re-frame passes earthFrameEase)
  * @returns {THREE.Vector3} a new unit vector (the inputs are never mutated)
  */
-export function earthTurnDirAt(start, target, u) {
+export function earthTurnDirAt(start, target, u, ease) {
   const res = new THREE.Vector3();
   const uu = Number.isFinite(u) ? Math.min(1, Math.max(0, u)) : 0;
   if (uu <= 0) return res.set(start.x, start.y, start.z);
   if (uu >= 1) return res.set(target.x, target.y, target.z);
-  const e = cubicInOut(uu);
+  const e = (typeof ease === 'function' ? ease : cubicInOut)(uu);   // u10: a re-frame passes earthFrameEase
 
   const phiS = Math.acos(Math.max(-1, Math.min(1, start.y)));
   const phiT = Math.acos(Math.max(-1, Math.min(1, target.y)));
@@ -130,4 +134,214 @@ export function earthTurnTrigger({ floor, riding, focusId, prevSettled, prevFocu
   const prev = prevFocusId == null ? null : prevFocusId;
   const turn = settled && id != null && (!prevSettled || id !== prev);
   return { turn, settled, focusId: id };
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// u10 D3 (owner pick "Floor 4 easier to read", 2026-10-20): frame the ship AND the
+// focused field. Measured 2026-10-20 (tmp/u10/data/p1-*.json): on floor 4 both sweep
+// ~13° per real second round Earth, so a still camera keeps an orbiting object on
+// screen only if it shows the whole low-orbit shell they move in. The rule, per
+// re-frame (the same trigger as above): look from the midpoint of the ship–field arc;
+// glide out to the distance at which that shell fits a circle round Earth's centre
+// clear of the screen edges and the HUD panels (never closer than now, never past the
+// floor's free zone); if the shell cannot fit and the two cannot even fit right now,
+// the field wins (look from the field) and the ship shows its edge arrow.
+// ───────────────────────────────────────────────────────────────────────────────
+
+/** u10 D3: added to the larger of the ship's and the field's distance from Earth's centre (u). */
+export const EARTH_FRAME_PAD_U = 0.3;
+/** u10 D3: beyond 174° apart the ship–field bisector is ill-defined; the arc along the ship's travel is used. */
+export const EARTH_FRAME_ANTIPODE_COS = Math.cos(174 * Math.PI / 180);
+/**
+ * u10 D3 smoothness: a re-frame's turn is stretched so its fastest moment stays at or under this
+ * angular speed (deg/s) where it can (≤ 1.5 s): 2° per frame at 60 fps. Plan target: no
+ * frame-to-frame jump over 3°. Measured 2026-10-20 (tmp/u10/data/t6-*.json): u8's 1 s
+ * cubic in-out arrival turn (a ~69° path) peaked near 200°/s, 3.4–3.6° per game frame, on base and
+ * branch alike (cubic in-out peaks at 3x the average speed).
+ */
+export const EARTH_FRAME_MAX_DEG_S = 120;
+
+/** u10 D3: the share of a re-frame spent speeding up (and again slowing down) — earthFrameEase. */
+export const EARTH_FRAME_RAMP = 0.25;
+
+/**
+ * u10 D3: a re-frame's easing — speeds up gently over the first quarter (a sine-shaped ramp, so
+ * it starts from rest without a kick), cruises, and slows down the same way over the last
+ * quarter. It peaks at 1 / (1 − 0.25) = 1.33x the average speed; u8's cubic in-out peaks at 3x,
+ * so the same turn has well under half the fastest frame.
+ * @param {number} u 0..1
+ * @returns {number} 0..1 (monotone; e(0) = 0, e(0.5) = 0.5, e(1) = 1)
+ */
+export function earthFrameEase(u) {
+  const a = EARTH_FRAME_RAMP, v = 1 / (1 - a);
+  const uu = Math.min(1, Math.max(0, u));
+  const ramp = (x) => v * (x / 2 - (a / (2 * Math.PI)) * Math.sin((Math.PI * x) / a));
+  if (uu <= a) return ramp(uu);
+  if (uu >= 1 - a) return 1 - ramp(1 - uu);
+  return v * (a / 2 + (uu - a));
+}
+
+/** u10 D3: the longest a re-frame may take (s; plan: each re-frame eased, ≤ 1.5 s). */
+export const EARTH_FRAME_TURN_MAX_S = 1.5;
+
+/**
+ * u10 D3: how long (s) the re-frame's turn from `start` to `target` takes — EARTH_TURN_S,
+ * stretched up to EARTH_FRAME_TURN_MAX_S when the path eased by earthFrameEase (earthTurnDirAt,
+ * sampled at 240 steps) would pass EARTH_FRAME_MAX_DEG_S at its fastest. Pure.
+ * @param {{x,y,z}} start   unit vector
+ * @param {{x,y,z}} target  unit vector
+ * @returns {number} seconds in [EARTH_TURN_S, EARTH_FRAME_TURN_MAX_S]
+ */
+export function earthFrameTurnS(start, target) {
+  const N = 240;
+  let prev = earthTurnDirAt(start, target, 0, earthFrameEase), peak = 0;   // fastest angle per unit of progress (rad)
+  for (let k = 1; k <= N; k++) {
+    const d = earthTurnDirAt(start, target, k / N, earthFrameEase);
+    const a = prev.angleTo(d) * N;
+    if (a > peak) peak = a;
+    prev = d;
+  }
+  const need = (peak * 180 / Math.PI) / EARTH_FRAME_MAX_DEG_S;
+  return Math.min(EARTH_FRAME_TURN_MAX_S, Math.max(EARTH_TURN_S, Number.isFinite(need) ? need : EARTH_TURN_S));
+}
+
+const _len = (v) => (v ? Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) : NaN);
+
+/**
+ * u10 D3: where floor 4's camera looks from to frame the ship and the field — the
+ * midpoint of the shorter arc between them as seen from Earth's centre; for a pair
+ * more than 174° apart, the midpoint of the arc that leaves the ship along its
+ * velocity. Polar angle clamped to the drag window (as earthTurnTarget).
+ * @param {{x,y,z}} ship   scene units, Earth at origin
+ * @param {{x,y,z}} field
+ * @param {{x,y,z}} [shipVel] any units (direction only)
+ * @returns {THREE.Vector3|null} a new unit vector, or null when ship or field is unusable
+ */
+export function earthPairDir(ship, field, shipVel) {
+  const ls = _len(ship), lf = _len(field);
+  if (!(ls > 0) || !(lf > 0) || !Number.isFinite(ls) || !Number.isFinite(lf)) return null;
+  const s = new THREE.Vector3(ship.x / ls, ship.y / ls, ship.z / ls);
+  const f = new THREE.Vector3(field.x / lf, field.y / lf, field.z / lf);
+  const dot = s.dot(f);
+  let m;
+  if (dot >= EARTH_FRAME_ANTIPODE_COS) {
+    m = s.clone().add(f);
+    if (m.lengthSq() < 1e-18) m = f.clone();
+  } else {
+    const v = shipVel && Number.isFinite(_len(shipVel)) ? new THREE.Vector3(shipVel.x, shipVel.y, shipVel.z) : null;
+    const w = v ? v.sub(s.clone().multiplyScalar(v.dot(s))) : null;   // the travel direction, tangent at the ship
+    if (!w || w.lengthSq() < 1e-18) {
+      m = f.clone();                                                 // no travel direction: the field wins
+    } else {
+      w.normalize();
+      const half = Math.acos(Math.max(-1, Math.min(1, dot))) / 2;
+      m = s.clone().multiplyScalar(Math.cos(half)).add(w.multiplyScalar(Math.sin(half)));
+    }
+  }
+  m.normalize().multiplyScalar(2 * EARTH_RADIUS_U);
+  return earthTurnTarget(m);
+}
+
+/**
+ * u10 D3: the radius (px) of the largest circle round Earth's centre on screen whose
+ * every point keeps a marker's footprint inside the viewport and off every panel. A
+ * marker's name block faces Earth's centre (ClusterIcons.labelSide), so the footprint is
+ * `inner` px on the side toward the centre and `outer` px on the side away from it, `up`
+ * above and `down` below; each panel is inflated by it (Minkowski) and the viewport shrunk
+ * by it. A panel that a marker on the near side of the centre line (within `flip` px, the
+ * label's hysteresis) could reach with its name block is inflated by `inner` on both sides.
+ * @param {{centerPx:{x:number,y:number}, viewW:number, viewH:number,
+ *          rects?:Array<{x:number,y:number,w:number,h:number}>,
+ *          foot:{inner:number,outer:number,up:number,down:number,flip?:number}}} a
+ * @returns {number} >= 0
+ */
+export function earthSafeRadiusPx({ centerPx, viewW, viewH, rects = [], foot }) {
+  const cx = centerPx.x, cy = centerPx.y;
+  const i = foot.inner, o = foot.outer, flip = foot.flip || 0;
+  let rho = Math.min(cx - o, viewW - o - cx, cy - foot.up, viewH - foot.down - cy);
+  for (const r of rects || []) {
+    if (!r || !(r.w > 0) || !(r.h > 0)) continue;
+    let L = i, R = i;                                    // the marker box's extents left / right of its point
+    if (r.x >= cx + flip + i) { L = i; R = o; }          // right of centre: only left-facing labels reach it
+    else if (r.x + r.w <= cx - flip - i) { L = o; R = i; }
+    const x0 = r.x - R, x1 = r.x + r.w + L;
+    const y0 = r.y - foot.down, y1 = r.y + r.h + foot.up;
+    const dx = Math.max(x0 - cx, 0, cx - x1), dy = Math.max(y0 - cy, 0, cy - y1);
+    rho = Math.min(rho, Math.hypot(dx, dy));
+  }
+  return Math.max(0, rho);
+}
+
+/**
+ * u10 D3: the camera distance at which a sphere of radius `rmax` round Earth's centre
+ * (everything orbiting at or below it) projects inside a circle of `rhoPx`: the sphere's
+ * outline is asin(rmax/d) off the axis and lands f_px·tan of that from the centre,
+ * f_px = (H/2) / tan(fov/2). Infinity when rho is 0.
+ * @param {{rmax:number, fovDeg:number, viewH:number, rhoPx:number}} a
+ * @returns {number}
+ */
+export function earthShellDistance({ rmax, fovDeg, viewH, rhoPx }) {
+  const fpx = (viewH / 2) / Math.tan((fovDeg * Math.PI) / 360);
+  const beta = Math.atan(rhoPx / fpx);
+  return beta > 0 ? rmax / Math.sin(beta) : Infinity;
+}
+
+/**
+ * u10 D3: do these points, seen from `dir`·`distU` looking at Earth's centre (Earth-north
+ * up), all land with their footprint inside the viewport and off every panel? Screen
+ * positions are taken round `centerPx` (where Earth's centre lands).
+ * @returns {boolean}
+ */
+export function earthPointsFit({ points, dir, distU, fovDeg, viewW, viewH, centerPx, rects = [], foot }) {
+  const z = new THREE.Vector3(dir.x, dir.y, dir.z).normalize();
+  const x = new THREE.Vector3(0, 1, 0).cross(z);
+  if (x.lengthSq() < 1e-12) return false;
+  x.normalize();
+  const y = z.clone().cross(x);
+  const fpx = (viewH / 2) / Math.tan((fovDeg * Math.PI) / 360);
+  for (const p of points) {
+    const rx = p.x - z.x * distU, ry = p.y - z.y * distU, rz = p.z - z.z * distU;
+    const depth = -(rx * z.x + ry * z.y + rz * z.z);
+    if (!(depth > 0)) return false;
+    const px = centerPx.x + ((rx * x.x + ry * x.y + rz * x.z) / depth) * fpx;
+    const py = centerPx.y - ((rx * y.x + ry * y.y + rz * y.z) / depth) * fpx;
+    const L = px > centerPx.x ? foot.inner : foot.outer;   // the name block faces Earth's centre
+    const R = px > centerPx.x ? foot.outer : foot.inner;
+    if (px - L < 0 || px + R > viewW || py - foot.up < 0 || py + foot.down > viewH) return false;
+    for (const r of rects || []) {
+      if (!r || !(r.w > 0) || !(r.h > 0)) continue;
+      if (px > r.x - R && px < r.x + r.w + L && py > r.y - foot.down && py < r.y + r.h + foot.up) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * u10 D3: the floor-4 framing for one re-frame.
+ *   mode 'both'  : look from the ship–field midpoint; distance = the shell distance
+ *                  (capped at maxDistU), or maxDistU when the shell does not fit but the
+ *                  two fit there right now
+ *   mode 'field' : the field wins — look from the field, at maxDistU; the ship shows its
+ *                  edge arrow whenever it is off screen
+ * LadderController.frameZoomTo never zooms in, so `distU` is a "at least" target.
+ * @param {{ship:{x,y,z}, field:{x,y,z}, shipVel?:{x,y,z}, fovDeg:number, viewW:number,
+ *          viewH:number, centerPx:{x:number,y:number}, rects?:Array, foot:object,
+ *          maxDistU:number}} a
+ * @returns {{mode:string, dir:THREE.Vector3, distU:number, dShell:number, rhoPx:number}|null}
+ */
+export function earthFrame({ ship, field, shipVel, fovDeg, viewW, viewH, centerPx, rects = [], foot, maxDistU }) {
+  const ls = _len(ship), lf = _len(field);
+  if (!(ls > 0) || !(lf > 0) || !Number.isFinite(ls) || !Number.isFinite(lf)) return null;
+  if (!(viewW > 0) || !(viewH > 0) || !(fovDeg > 0) || !(maxDistU > 0) || !centerPx || !foot) return null;
+  const rmax = Math.max(ls, lf) + EARTH_FRAME_PAD_U;
+  const rhoPx = earthSafeRadiusPx({ centerPx, viewW, viewH, rects, foot });
+  const dShell = earthShellDistance({ rmax, fovDeg, viewH, rhoPx });
+  const mid = earthPairDir(ship, field, shipVel);
+  if (mid && dShell <= maxDistU) return { mode: 'both', dir: mid, distU: dShell, dShell, rhoPx };
+  if (mid && earthPointsFit({ points: [ship, field], dir: mid, distU: maxDistU, fovDeg, viewW, viewH, centerPx, rects, foot })) {
+    return { mode: 'both', dir: mid, distU: maxDistU, dShell, rhoPx };
+  }
+  const k = (2 * EARTH_RADIUS_U) / lf;
+  const fd = earthTurnTarget({ x: field.x * k, y: field.y * k, z: field.z * k });
+  return fd ? { mode: 'field', dir: fd, distU: maxDistU, dShell, rhoPx } : null;
 }

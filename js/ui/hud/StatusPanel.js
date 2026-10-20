@@ -36,7 +36,11 @@ import { GestureHints } from './GestureHints.js';
 import { pressKey } from '../../core/KeyDispatch.js';
 import { RAIL_GEOMETRY, PANE_CORNER_PX, MOTHER_PANE_WIDTH_PX, ARMS_PANE_WIDTH_PX, LEFT_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 import { BOX_OUTLINE, BOX_OUTLINE_OFFSET } from '../RailIndicator.js';
+import { dividedByScale, onHudScaleChange } from '../HudScale.js';
 import { TouchControls } from '../TouchControls.js';
+
+/** The left column's max height on screen (px room below the top edge); divided by the HUD scale on a big screen. */
+const LEFT_COLUMN_MAX_HEIGHT = 'calc(100vh - 60px)';
 
 // ST-6.6: Active-tool → NASA TRL metadata used to live here, feeding a
 // bottom-center "RCS / COLD GAS / MPD BURST / ARM PILOT" control-mode badge.
@@ -540,11 +544,16 @@ export class StatusPanel {
       alignItems: 'flex-start',
       gap: '10px',           // Pane-to-pane vertical gap — keep in sync with right column (HUD.js)
       width: `var(--hud-side-w, ${LEFT_COLUMN_WIDTH_PX}px)`,
-      maxHeight: 'calc(100vh - 60px)',
+      // u9-big-text: the column is drawn HUD_SCALE x bigger from its top edge on a big screen, so its layout box is
+      // (screen room) / scale: the scaled column still ends where it ends today, and scrolls inside when longer.
+      maxHeight: dividedByScale(LEFT_COLUMN_MAX_HEIGHT),
       overflowY: 'auto',
       zIndex: '10',
     });
     this._container.appendChild(this._leftColumn);
+    this._unsubHudScale = onHudScaleChange(() => {
+      if (this._leftColumn) this._leftColumn.style.maxHeight = dividedByScale(LEFT_COLUMN_MAX_HEIGHT);
+    });
 
     // --- Mission Objective bar (top center) ---
     // Sim-reframe: the persistent top HUD shows only the mission objective
@@ -1136,6 +1145,7 @@ export class StatusPanel {
     // remove them explicitly to avoid orphaned duplicate-id nodes.
     if (this._fitObserver) { this._fitObserver.disconnect(); this._fitObserver = null; }   // q3 round 3 (S5)
     if (this._unwatchArmsShort) { this._unwatchArmsShort(); this._unwatchArmsShort = null; }   // u4 review fix 8
+    if (this._unsubHudScale) { this._unsubHudScale(); this._unsubHudScale = null; }   // u9-big-text
     this.clearPayoff();
     for (const p of [this.panels.score]) {
       if (p && p.parentNode) p.parentNode.removeChild(p);

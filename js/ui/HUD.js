@@ -26,6 +26,7 @@ import { approachLive } from './hud/TargetColorLaw.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { pinProgress } from './shopPin.js'; // S1 retention: pinned-upgrade progress math (pure, DOM-free)
 import { PANE_CORNER_PX, HUD_COLUMN_WIDTH_PX, RIGHT_COLUMN_WIDTH_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
+import { dividedByScale, onHudScaleChange, currentHudScale } from './HudScale.js';
  import { DebrisWireframe }   from './DebrisWireframe.js';
  import { DaughterWireframe } from './DaughterWireframe.js';
 import { StrutLabels }       from './hud/StrutLabels.js';
@@ -182,6 +183,18 @@ function _hintBandPx() {
  */
 export function toastBottomPx(ladderOn) {
   return ladderOn ? footerBand({ hintBandPx: _hintBandPx() }).bottom : 48;
+}
+
+/**
+ * u9-big-text: the step chip (`#hud-hint-ticker`) is drawn HUD_SCALE x bigger from its bottom edge, so its top
+ * rises by (scale - 1) x its row height (36 px with a mouse, 48 px on touch; measured 2026-10-20). The toast sits
+ * on the footer band's edge (132 px), which the chip's top would otherwise cross by up to 16 px on the iPad; the
+ * toast rises by the larger (touch) growth, 12 px at 1.25 and 0 at scale 1.
+ * @param {number} [scale]  defaults to the installed HUD scale
+ * @returns {number}
+ */
+export function toastLiftPx(scale = currentHudScale()) {
+  return scale > 1 ? Math.ceil((scale - 1) * 48) : 0;
 }
 
 /**
@@ -374,9 +387,11 @@ export class HUD {
       // value and was clobbered on frame one). Flag-off both sites keep the
       // shipped strings byte-identical (docs/ladder/01-numbers.md §"Post-M3
       // glue").
-      maxHeight: (Constants.LADDER && Constants.LADDER.ENABLED)
+      // u9-big-text: the column is drawn HUD_SCALE x bigger from its top edge on a big screen: its layout box is
+      // (screen room) / scale, so the scaled column ends where it ends today and scrolls inside when longer.
+      maxHeight: dividedByScale((Constants.LADDER && Constants.LADDER.ENABLED)
         ? 'calc(100vh - 279px)'   // 90 top + (100vh - 279) height → bottom at 100vh - 189
-        : 'calc(100vh - 120px)',
+        : 'calc(100vh - 120px)'),
       overflowY: 'auto',
       zIndex: '10',
       outline: 'none', // No focus ring
@@ -743,7 +758,7 @@ export class HUD {
     this._notificationZone.id = 'notification-zone';
     Object.assign(this._notificationZone.style, {
       position: 'fixed',
-      bottom: `${toastBottomPx(ladderOn)}px`,
+      bottom: `${toastBottomPx(ladderOn) + toastLiftPx()}px`,
       left: '50%',
       transform: 'translateX(-50%)',
       textAlign: 'center',
@@ -1301,7 +1316,7 @@ export class HUD {
     const clear = shortScreenNow(typeof window !== 'undefined' ? window : null) ? 30 : (this._rightColBottomClearPx ?? 30);
     if (this._lastRightColTop !== newTop || this._lastRightColClear !== clear) {
       this._rightColumn.style.top = newTop + 'px';
-      this._rightColumn.style.maxHeight = `calc(100vh - ${newTop + clear}px)`;
+      this._rightColumn.style.maxHeight = dividedByScale(`calc(100vh - ${newTop + clear}px)`);   // u9-big-text: layout box = screen room / scale
       this._lastRightColTop = newTop;
       this._lastRightColClear = clear;
     }
@@ -1654,6 +1669,19 @@ export class HUD {
         this._scoreStripRect = null;
       });
     }
+
+    // u9-big-text: a HUD scale change (a resize across the 1280 x 880 line) moves every scaled rect: the cached comms
+    // bottom, the score-strip band and the right column's top / maxHeight (written divided by the scale) are all stale,
+    // so they ride the same invalidate edge as a resize (the next update() re-measures after the new layout).
+    this._unsubHudScale = onHudScaleChange(() => {
+      this._commsRectBottom = null;
+      this._scoreStripRect = null;
+      this._lastRightColTop = null;
+      this._lastRightColClear = null;
+      if (this._notificationZone) {
+        this._notificationZone.style.bottom = `${toastBottomPx(!!(Constants.LADDER && Constants.LADDER.ENABLED)) + toastLiftPx()}px`;
+      }
+    });
 
     // Comms panel stepped to a new size (line/normal/large). Its bottom edge
     // moves, so the NavSphere slot + right-hand pane column must follow. The

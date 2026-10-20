@@ -144,6 +144,7 @@ import { TouchMapStore } from './systems/TouchMapStore.js';
 import { StrutAutoStore } from './systems/StrutAuto.js';
 import { FloorWordsStore, floorWordsToShow, FLOOR_WORDS_MS } from './systems/FloorWordsStore.js';   // u7 D6
 import { RAIL_GEOMETRY, footerBand } from './ui/RailGeometry.js';
+import { installHudScale } from './ui/HudScale.js';
 import { EdgeChrome } from './ui/EdgeChrome.js';
 import { TouchControls } from './ui/TouchControls.js';
 import { TouchTelemetry } from './ui/touchTelemetry.js';
@@ -1138,6 +1139,9 @@ let inputManager;
 
 async function init() {
   _bootMark('init() entry');
+  // u9-big-text (DECISIONS §32): the HUD scale (1.25 on a screen >= 1280 x 880, else 1) is written on <html> before any
+  // panel is built, so the first layout is already the scaled one; write-on-change on resize (js/ui/HudScale.js).
+  installHudScale();
   // Session R (plan D17 / §14.2): the ONE explicit request for the four B612
   // faces — the first line of the boot, before anything rasterises text, so
   // the canvas instruments no longer depend on a DOM element happening to use
@@ -7563,17 +7567,23 @@ function updateCamera(dt, timestamp) {
     });
     const shipAngleRad = Math.atan2(s1.y - s0.y, s1.x - s0.x);
     navcomFloor.update({ project: navcomProject, shipPos, shipAngleRad });
-    // u8-f4-frame-field: on floor 4 the camera turns (about 1 s) so the debris field in focus is in the middle:
-    // once each time a ride into floor 4 ends, and each time the focus changes while there (Tab, a click on an icon).
+    // u8-f4-frame-field: on floor 4 the camera re-frames (about 1 s): once each time a ride into floor 4 ends,
+    // and each time the focus changes while there (Tab, a click on an icon).
+    // u10 D3: it turns to where your ship AND the field are both in view, and glides out until the whole
+    // low-orbit shell they move in fits clear of the panels (EarthTurn.earthFrame); the field wins when
+    // both cannot. A drag or the wheel/pinch stops it until the next arrival or focus change.
     const f4Focus = navcomFloor.getFocusedCluster();
     const f4 = earthTurnTrigger({
       floor: ladderController.currentFloor(), riding: ladderController.isRiding(),
       focusId: f4Focus ? f4Focus.id : null, prevSettled: f4WasSettled, prevFocusId: f4LastFocusId,
     });
-    if (f4.turn) cameraSystem.ladderTurnEarthTo(f4Focus.center);
+    if (f4.turn) {
+      const fr = navcomFloor.framing({ shipPos, shipVel: vel, project: navcomProject, fovDeg: cameraSystem.camera.fov });
+      if (fr && cameraSystem.ladderTurnEarthDir(fr.dir)) ladderController.frameZoomTo({ distU: fr.distU });
+    }
     f4WasSettled = f4.settled; f4LastFocusId = f4.focusId;
   } else {
-    f4WasSettled = false; f4LastFocusId = null;   // so the next arrival on floor 4 turns again
+    f4WasSettled = false; f4LastFocusId = null;   // so the next arrival on floor 4 re-frames again
   }
 
   // Zoom Ladder F5 (PROX NET): same single-ticker pattern as navcom — after

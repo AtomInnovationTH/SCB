@@ -504,6 +504,32 @@ export class ZoomLadder {
   }
 
   /**
+   * u10 D3 (owner pick "Floor 4 easier to read", 2026-10-20): one step of a
+   * live, eased zoom that S2 drives frame by frame (the floor-4 framing keeps
+   * the ship and the focused field in view). Not a ride (nothing to fly: the
+   * camera's free-scroll ease follows the move), not an input (`_lastInputTMs`
+   * untouched), and only inside the free zone: z01 is clamped to
+   * [WALL_ZONE_FRAC, 1 − WALL_ZONE_FRAC], so a glide never creeps into a wall
+   * and never triggers a settle-back. Releases the spring (no half-charged wall
+   * is left behind). Refused ([]) during a ride or for a non-finite z01.
+   * Emits one `move` tagged `glide: true` when z01 changes.
+   * @param {{ tMs: number, z01: number }} arg
+   * @returns {Array} decisions
+   */
+  glide({ tMs, z01 }) {
+    if (Number.isFinite(tMs)) this._tick(tMs);
+    if (this._ride) return [];
+    if (typeof z01 !== 'number' || !Number.isFinite(z01)) return [];
+    const w = this._geo.WALL_ZONE_FRAC;
+    const z = Math.min(1 - w, Math.max(w, z01));
+    this._settled = false;
+    this._releaseSpring();
+    if (z === this._z01) return [];
+    this._z01 = z;
+    return [{ type: 'move', floor: this._floor, z01: z, inWall: false, creepFrac: 0, glide: true }];
+  }
+
+  /**
    * D5 placement (Wave 5 Session G, docs/ladder/06-core-api.md "place"): a
    * settled CUT of the ladder position to (floor, z01) — no ride, no decision
    * emitted, nothing for S2 to fly. The ONE exception to "never a cut"

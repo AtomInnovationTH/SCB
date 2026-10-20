@@ -18,7 +18,7 @@ import { captureNetSystem } from '../entities/CaptureNet.js';
 import { persistenceManager } from './PersistenceManager.js';
 import { CeremonyTimeScale } from './CeremonyTimeScale.js';
 import { VisualLaw } from '../core/VisualLaw.js';
-import { earthTurnTarget, earthTurnDirAt, EARTH_TURN_S, EARTH_TURN_MIN_GAP_U } from './EarthTurn.js';
+import { earthTurnTarget, earthTurnDirAt, EARTH_TURN_S, EARTH_TURN_MIN_GAP_U, earthFrameTurnS, earthFrameEase } from './EarthTurn.js';
 import { testsRequestedHere } from '../ui/hud/TestsSwitch.js';
 
 // ============================================================================
@@ -4375,12 +4375,48 @@ export class CameraSystem {
   }
 
   /**
+   * u10 D3 (owner pick "Floor 4 easier to read", 2026-10-20) — the same 1 s turn as
+   * ladderTurnEarthTo, to a view DIRECTION chosen by the floor-4 framing (NavcomFloor.framing:
+   * the ship–field midpoint, or the field when both cannot fit). Polar angle clamped to the
+   * drag window like every turn target; no distance gap test (the framing picks the distance
+   * and LadderController.frameZoomTo glides to it). Refused off an Earth anchor, on any floor
+   * but 4, disengaged, or for an unusable direction.
+   * @param {{x:number,y:number,z:number}} dir  any non-zero vector from Earth's centre
+   * @returns {boolean} true when the turn starts
+   */
+  ladderTurnEarthDir(dir) {
+    const lc = this._ladderCam;
+    if (!lc.active || lc.anchor !== 'earth' || !dir) return false;
+    if (lc.floor != null && lc.floor !== 4) return false;   // floor 5 (also Earth-anchored) never re-frames
+    const n = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+    if (!(n > 0) || !Number.isFinite(n)) return false;
+    const k = 200 / n;   // a point 200 u out on that ray: beyond Earth's surface (63.71 u), as earthTurnTarget needs
+    const target = earthTurnTarget({ x: dir.x * k, y: dir.y * k, z: dir.z * k });
+    if (!target) return false;
+    // u10 smoothness: sine in-out, stretched (≤ 1.5 s) when the path would pass 120°/s at its fastest.
+    lc.earthTurn = { start: lc.dir.clone(), target, t: 0, s: earthFrameTurnS(lc.dir, target), ease: earthFrameEase };
+    return true;
+  }
+
+  /** u10 D3: the running turn's length in ms (0 when none runs) — LadderController's glide takes the same time. */
+  ladderEarthTurnMs() {
+    const et = this._ladderCam.earthTurn;
+    return et ? (et.s || EARTH_TURN_S) * 1000 : 0;
+  }
+
+  /**
    * u8-f4-frame-field — stop the turn to the focused field where it is (the view stays on the way); no-op when none runs.
+   * u10 D4: every call (a mouse drag, a touch drag, a ride, a disengage, an anchor change) also
+   * counts once in `ladderEarthFrameCancels()`, which ends LadderController's framing glide.
    * @param {string} [cause] for the reader of a call site only (nothing is printed)
    */
   ladderCancelEarthTurn(cause = 'camera input') {
     this._ladderCam.earthTurn = null;
+    this._earthFrameCancels = (this._earthFrameCancels || 0) + 1;
   }
+
+  /** u10 D4: how many times the floor-4 framing was cancelled from the camera side (LadderController watches it). */
+  ladderEarthFrameCancels() { return this._earthFrameCancels || 0; }
 
   /** @returns {boolean} whether the floor-4 turn to the focused field is running. */
   isLadderEarthTurning() { return !!this._ladderCam.earthTurn; }
@@ -5163,12 +5199,12 @@ export class CameraSystem {
         this.ladderCancelEarthTurn('anchor changed');
       } else if (!lc.riding) {
         const et = lc.earthTurn;
-        et.t += (Number.isFinite(dt) ? Math.min(Math.max(dt, 0), 0.1) : 0) / EARTH_TURN_S;
+        et.t += (Number.isFinite(dt) ? Math.min(Math.max(dt, 0), 0.1) : 0) / (et.s || EARTH_TURN_S);   // u10: a re-frame may be longer
         if (et.t >= 1) {
           lc.dir.copy(et.target);
           lc.earthTurn = null;
         } else {
-          lc.dir.copy(earthTurnDirAt(et.start, et.target, et.t));
+          lc.dir.copy(earthTurnDirAt(et.start, et.target, et.t, et.ease));
         }
       }
     }

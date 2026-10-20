@@ -21,6 +21,7 @@ import { salvageGasKg } from '../systems/ResourceSystem.js';
 import { dossierSystem, DOSSIER_TIERS, appraiseSalvage } from '../systems/DossierSystem.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { mono } from '../core/Typeface.js';
+import { currentHudScale } from './HudScale.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -1278,7 +1279,9 @@ export class DebrisWireframe {
     this._canvas = document.createElement('canvas');
 
     // HiDPI / Retina scaling — buffer at native resolution, CSS at logical size
-    const dpr = window.devicePixelRatio || 1;
+    // u9-big-text: the pane is drawn HUD_SCALE x bigger (CSS scale on its column), so the buffer is HUD_SCALE x denser
+    // to stay as sharp as before (1 off a big screen: unchanged).
+    const dpr = (window.devicePixelRatio || 1) * currentHudScale();
     /** @type {number} Device pixel ratio for HiDPI canvas scaling */
     this.dpr = dpr;
     this._canvas.width = PANEL_WIDTH * dpr;

@@ -43,7 +43,7 @@
  * @module systems/LadderController
  */
 
-import { ZoomLadder, distanceFromZ01 } from '../core/ZoomLadder.js';
+import { ZoomLadder, distanceFromZ01, z01FromDistance } from '../core/ZoomLadder.js';
 import { FloorContract } from '../core/FloorContract.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { Constants } from '../core/Constants.js';
@@ -181,6 +181,19 @@ function isFreeRest(z01) {
  */
 const ADAPT_HOLDOFF_MS =
   VisualLaw.TIMINGS.RIDE_MAX_MS + FloorContract.HUMP_SPRING.SETTLE_IDLE_MS;
+
+/**
+ * u10 D3 (owner pick "Floor 4 easier to read", 2026-10-20): the floor-4
+ * framing glide's length, ms — the same 1 s as the camera's turn
+ * (EarthTurn.EARTH_TURN_S; test-F4Readable pins the two equal), so the
+ * re-frame's spin and zoom start and end together.
+ */
+export const FRAME_GLIDE_MS = 1000;
+
+/** u10 D3: the glide's easing — cubic in-out, the turn's and the rides' curve. */
+function glideEase(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
 
 /**
  * Session I (plan D-F, the TURNTABLE): held-arrow orbit rate, expressed as
@@ -455,6 +468,12 @@ export class LadderController {
     /** True while `_restorePanes` drives the pane itself (its edge is not player intent). */
     this._paneRestoring = false;
     /**
+     * u10 D3: the running floor-4 framing glide — `{ floor, fromZ01, toZ01, t0, ms, cancels0 }`
+     * or null. Advanced in update(); ended by wheel/pinch, a ride, a floor change or a camera
+     * drag (CameraSystem.ladderEarthFrameCancels moved).
+     */
+    this._glide = null;
+    /**
      * D5: the shipped initial view, captured from the core at construction —
      * `resetView()` (GAME_RESET) places the core back here so a NEW run starts
      * on the shipped floor (the intro ride as shipped), whatever floor the last
@@ -607,8 +626,80 @@ export class LadderController {
     // Session I turntable (D-F): held arrows orbit the camera while a drawer
     // is open on the workbench floor (dt-scaled; a no-op everywhere else).
     this._turntableArrows(t);
+    // u10 D3: the floor-4 framing glide (no-op unless one runs).
+    this._glideTick(t);
     this._refreshRail();
     return decisions;
+  }
+
+  // ── u10 D3: the floor-4 framing glide (a live, eased zoom; not a ride) ─────
+
+  /** @private The camera's drag/ride/disengage cancel count (0 without the camera API). */
+  _frameCancels() {
+    const cs = this._cameraSystem;
+    return (cs && typeof cs.ladderEarthFrameCancels === 'function') ? cs.ladderEarthFrameCancels() : 0;
+  }
+
+  /**
+   * u10 D3 — the floor-4 framing's zoom: glide the view to `distU`, eased over
+   * `ms` (default: the camera's running turn length, `ladderEarthTurnMs()`, 1-1.5 s;
+   * FRAME_GLIDE_MS without one), never closer than it is now and never past the
+   * floor's free zone (no wall creep, no settle-back). Not a ride and not
+   * player input. Ended where it is by the wheel/pinch (wheel() — the player
+   * wins from there), a ride, a floor change or a camera drag (the camera's
+   * ladderCancelEarthTurn bumps the count this watches).
+   * @param {{distU:number, ms?:number, tMs?:number}} arg
+   * @returns {boolean} true when a glide started
+   */
+  frameZoomTo({ distU, ms, tMs } = {}) {
+    if (!this._engaged || this.isRiding() || typeof this._ladder.glide !== 'function') return false;
+    if (ms === undefined) {   // the camera's turn length (a long turn is stretched to <= 1.5 s), else 1 s
+      const cs = this._cameraSystem;
+      const turnMs = (cs && typeof cs.ladderEarthTurnMs === 'function') ? cs.ladderEarthTurnMs() : 0;
+      ms = turnMs > 0 ? turnMs : FRAME_GLIDE_MS;
+    }
+    const s = this._ladder.getState();
+    // Floor 4 only (as Tab's focus step, ~:1059): floors 2, 3 and 5 never glide.
+    const f = (s && s.floor === 4) ? FloorContract.byId(s.floor) : null;
+    if (!f || !(distU > 0) || !Number.isFinite(distU)) return false;
+    const w = FloorContract.LADDER_GEOMETRY.WALL_ZONE_FRAC;
+    const to = Math.min(1 - w, Math.max(s.z01, z01FromDistance(f, distU)));
+    if (!(to > s.z01 + 1e-6)) { this._glide = null; return false; }
+    this._glide = {
+      floor: s.floor, fromZ01: s.z01, toZ01: to,
+      t0: (tMs === undefined) ? this._now() : tMs,
+      ms: (Number.isFinite(ms) && ms > 0) ? ms : FRAME_GLIDE_MS,
+      cancels0: this._frameCancels(),
+    };
+    return true;
+  }
+
+  /** u10 D3: the farthest the framing may glide on the current floor (the free zone's top), scene units. */
+  frameMaxDistU() {
+    const s = this._ladder.getState();
+    const f = s ? FloorContract.byId(s.floor) : null;
+    return f ? distanceFromZ01(f, 1 - FloorContract.LADDER_GEOMETRY.WALL_ZONE_FRAC) : NaN;
+  }
+
+  /** @returns {boolean} whether the floor-4 framing glide is running. */
+  isFrameZooming() { return !!this._glide; }
+
+  /** u10 D3: end the framing glide where it is. @param {string} [cause] for the reader only */
+  cancelFrameZoom(cause = 'input') { this._glide = null; }
+
+  /** @private Advance the glide one frame (or end it on a ride, a floor change, a camera drag). */
+  _glideTick(t) {
+    const g = this._glide;
+    if (!g) return;
+    const s = this._ladder.getState();
+    if (!s || s.floor !== g.floor || s.mode === 'riding' || this._frameCancels() !== g.cancels0) {
+      this._glide = null;
+      return;
+    }
+    const u = Math.min(1, Math.max(0, (t - g.t0) / g.ms));
+    const z01 = g.fromZ01 + (g.toZ01 - g.fromZ01) * glideEase(u);
+    this._apply(this._ladder.glide({ tMs: t, z01 }), t);
+    if (u >= 1) this._glide = null;
   }
 
   /**
@@ -677,6 +768,13 @@ export class LadderController {
     const t = (tMs === undefined) ? this._now() : tMs;
     this._lastInputMs = t;
     this._endCatchFocus();
+    // u10 D4: the wheel AND the pinch (TouchControls → WheelRouter.routeSyntheticWheel → here)
+    // end the floor-4 re-frame: the glide (the step below moves from where it stopped) and,
+    // on floor 4, the camera's turn (D4: a wheel/pinch zoom stops it, like a drag).
+    this._glide = null;
+    if (this.currentFloor() === 4 && this._cameraSystem && typeof this._cameraSystem.ladderCancelEarthTurn === 'function') {
+      this._cameraSystem.ladderCancelEarthTurn('wheel');
+    }
     const decisions = this._ladder.wheel({ tMs: t, dir, mag });
     this._apply(decisions, t);
     this._refreshRail();
@@ -1591,9 +1689,10 @@ export class LadderController {
           // D5 working-position memory: a free-zone move on the applied floor
           // is where the player is working; wall creep (move.inWall) and the
           // settle-back to an edge are the leaving gesture and never count —
+          // nor does the u10 framing glide (move.glide: not the player's drive) —
           // but every one of them is the PREVIOUS POSITION for the next move's
           // direction, so _lastPosZ01 follows them all.
-          if (d.type === 'move' && !d.inWall && d.floor === this._floorApplied && isFreeRest(d.z01)) {
+          if (d.type === 'move' && !d.inWall && !d.glide && d.floor === this._floorApplied && isFreeRest(d.z01)) {
             this._noteFreeMove(d.z01, tMs);
           }
           this._lastPosZ01 = d.z01;

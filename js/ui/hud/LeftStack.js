@@ -14,10 +14,18 @@
  * `apply` is not called. The stack never writes `data-density-hidden`; a
  * layout-hidden rider collapses via its own `apply` (e.g. `data-stack-hidden`).
  *
+ * u9-big-text: on a big screen every rider is drawn HUD_SCALE (1.25) x bigger from its top-left corner (the CSS
+ * `scale` on the rider), so the stack works in SCREEN px: each rider's natural / compact / min height is multiplied
+ * by the scale before it is packed into the span, and `apply` gets the rider's own LAYOUT height (screen px / scale)
+ * so a trimmed rider's max-height still lands on the screen height this module placed. Ceiling and floor are screen
+ * px already. At scale 1 every number is the one it always was.
+ *
  * Pure / Node-testable: no DOM, no timers. Wiring lives in a later wave.
  *
  * @module ui/hud/LeftStack
  */
+
+import { currentHudScale } from '../HudScale.js';
 
 /**
  * @typedef {Object} LeftStackRider
@@ -44,13 +52,13 @@ export const LEFT_STACK_GAP_PX = 8;
  * @param {any} fn
  * @returns {number|null} a finite px value, else null
  */
-function callPx(fn) {
+function callPx(fn, k = 1) {
   if (typeof fn !== 'function') return null;
   try {
     const v = fn();
     if (v == null) return null;
     const n = Number(v);
-    return Number.isFinite(n) ? n : null;
+    return Number.isFinite(n) ? n * k : null;
   } catch (_e) {
     return null;
   }
@@ -69,9 +77,9 @@ function isDensityHidden(rider) {
  * @param {any} rider
  * @param {LeftStackPlacement} rec
  */
-function applyRider(rider, rec) {
+function applyRider(rider, rec, k = 1) {
   if (!rider || typeof rider.apply !== 'function') return;
-  try { rider.apply(rec.top, rec.height, rec.mode); } catch (_e) { /* never throw */ }
+  try { rider.apply(rec.top, k === 1 ? rec.height : rec.height / k, rec.mode); } catch (_e) { /* never throw */ }
 }
 
 /**
@@ -119,9 +127,9 @@ function leftoverFor(items, i, span, gap) {
  * @param {{rider:LeftStackRider, mode:string, height:number}} item
  * @param {number} avail
  */
-function shed(item, avail) {
+function shed(item, avail, k = 1) {
   if (item.mode === 'natural') {
-    const c = callPx(item.rider.compactPx);
+    const c = callPx(item.rider.compactPx, k);
     if (c != null && c >= 0 && c <= avail) {
       item.mode = 'compact';
       item.height = c;
@@ -129,7 +137,7 @@ function shed(item, avail) {
     }
   }
   if (item.mode === 'natural' || item.mode === 'compact') {
-    const m = callPx(item.rider.minPx);
+    const m = callPx(item.rider.minPx, k);
     if (m != null && m >= 0 && m <= avail) {
       item.mode = 'trimmed';
       item.height = avail;
@@ -149,6 +157,7 @@ function shed(item, avail) {
  */
 function plan(args) {
   const a = (args && typeof args === 'object') ? args : {};
+  const k = (Number.isFinite(a.scale) && a.scale > 0) ? a.scale : currentHudScale();
   const riders = Array.isArray(a.riders) ? a.riders : [];
   const gap = Number.isFinite(a.gapPx) ? a.gapPx : LEFT_STACK_GAP_PX;
   const ceiling = Number(a.ceilingPx);
@@ -161,15 +170,15 @@ function plan(args) {
   const degenerate = !Number.isFinite(ceiling) || !Number.isFinite(floor) || floor <= ceiling;
   const span = degenerate ? 0 : floor - ceiling;
   const items = visible.map((rider) => {
-    const nat = callPx(rider.naturalPx);
+    const nat = callPx(rider.naturalPx, k);
     if (nat != null && nat >= 0) return { rider, id: rider.id, mode: 'natural', height: nat };
-    const c = callPx(rider.compactPx);
+    const c = callPx(rider.compactPx, k);
     if (c != null && c >= 0) return { rider, id: rider.id, mode: 'compact', height: c };
     return { rider, id: rider.id, mode: 'hidden', height: 0 };
   });
   if (degenerate) {
     for (const it of items) { it.mode = 'hidden'; it.height = 0; }
-    return { ok: false, ceiling: Number.isFinite(ceiling) ? ceiling : 0, span: 0, gap, items };
+    return { ok: false, ceiling: Number.isFinite(ceiling) ? ceiling : 0, span: 0, gap, items, k };
   }
   // Bottom rider yields first (locked decision #5): shed from the tail until
   // the remaining stack fits in `span`. Placement itself is greedy top-down.
@@ -178,9 +187,9 @@ function plan(args) {
     let i = items.length - 1;
     while (i >= 0 && items[i].mode === 'hidden') i--;
     if (i < 0) break;
-    shed(items[i], leftoverFor(items, i, span, gap));
+    shed(items[i], leftoverFor(items, i, span, gap), k);
   }
-  return { ok: true, ceiling, span, gap, items };
+  return { ok: true, ceiling, span, gap, items, k };
 }
 
 /**
@@ -191,10 +200,11 @@ function plan(args) {
  * @param {number} args.floorPx     exclusive bottom (footer band top − gap)
  * @param {number} [args.gapPx=8]
  * @param {LeftStackRider[]} args.riders  vertical order top→bottom
+ * @param {number} [args.scale]  the HUD scale the riders are drawn at (default: the installed one, 1 off a big screen)
  * @returns {LeftStackPlacement[]}
  */
 export function layout(args) {
-  const { ceiling, gap, items } = plan(args);
+  const { ceiling, gap, items, k } = plan(args);
   const out = [];
   let y = ceiling;
   for (const it of items) {
@@ -202,7 +212,7 @@ export function layout(args) {
     const hidden = it.mode === 'hidden';
     const height = hidden ? 0 : Math.round(it.height);
     const rec = { id: it.id, top, height, mode: it.mode };
-    applyRider(it.rider, rec);
+    applyRider(it.rider, rec, k);
     out.push(rec);
     if (!hidden) y = top + height + gap;
   }
