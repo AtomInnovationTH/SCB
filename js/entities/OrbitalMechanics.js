@@ -630,25 +630,54 @@ export function nextShadowTransition(orbit, sunDirAt, opts = {}) {
 // ============================================================================
 
 /**
- * Simple exponential atmospheric density model.
+ * Atmospheric density, piecewise exponential (kg/m^3).
+ *
+ * The table is Vallado's exponential model, every row 0-1000 km verbatim:
+ * D. A. Vallado, "Fundamentals of Astrodynamics and Applications", 4th ed.
+ * (2013), exponential atmospheric model. Reproduction used (fetched 2026-10-21):
+ * https://raw.githubusercontent.com/JuliaSpace/SatelliteToolboxAtmosphericModels.jl/main/src/exponential/constants.jl
+ * It is the MEAN-solar-activity air (rows 100-180 km equal the CIRA mean values).
+ * Above 1000 km the density is 0; below 0 km it is the sea-level 1.225.
+ * (The table before 2026-10-21 was a garbled copy: up to 223x too thick at 900 km
+ * and with a dip between 150 and 200 km; see docs/research/2026-10-trips-by-height.md.)
+ *
  * @param {number} altitudeKm - Altitude above Earth surface (km)
- * @returns {number} Atmospheric density (kg/m³)
+ * @returns {number} Atmospheric density (kg/m^3)
  */
-function atmosphericDensity(altitudeKm) {
-  // Simplified exponential model with piecewise scale heights
+export function atmosphericDensity(altitudeKm) {
   if (altitudeKm < 0) return 1.225;
   if (altitudeKm > 1000) return 0;
 
-  // Reference values: altitude(km), density(kg/m³), scaleHeight(km)
+  // Reference rows: base altitude h (km), base density rho (kg/m^3), scale height H (km)
   const layers = [
-    { h: 0, rho: 1.225, H: 8.5 },
-    { h: 100, rho: 5.297e-7, H: 5.9 },
-    { h: 200, rho: 2.789e-10, H: 37.0 },
-    { h: 300, rho: 7.248e-11, H: 53.6 },
-    { h: 400, rho: 2.803e-11, H: 63.8 },
-    { h: 500, rho: 1.184e-11, H: 76.8 },
-    { h: 700, rho: 3.614e-12, H: 100.8 },
-    { h: 900, rho: 1.170e-12, H: 134.9 },
+    { h: 0, rho: 1.225, H: 7.249 },
+    { h: 25, rho: 3.899e-2, H: 6.349 },
+    { h: 30, rho: 1.774e-2, H: 6.682 },
+    { h: 40, rho: 3.972e-3, H: 7.554 },
+    { h: 50, rho: 1.057e-3, H: 8.382 },
+    { h: 60, rho: 3.206e-4, H: 7.714 },
+    { h: 70, rho: 8.770e-5, H: 6.549 },
+    { h: 80, rho: 1.905e-5, H: 5.799 },
+    { h: 90, rho: 3.396e-6, H: 5.382 },
+    { h: 100, rho: 5.297e-7, H: 5.877 },
+    { h: 110, rho: 9.661e-8, H: 7.263 },
+    { h: 120, rho: 2.438e-8, H: 9.473 },
+    { h: 130, rho: 8.484e-9, H: 12.636 },
+    { h: 140, rho: 3.845e-9, H: 16.149 },
+    { h: 150, rho: 2.070e-9, H: 22.523 },
+    { h: 180, rho: 5.464e-10, H: 29.740 },
+    { h: 200, rho: 2.789e-10, H: 37.105 },
+    { h: 250, rho: 7.248e-11, H: 45.546 },
+    { h: 300, rho: 2.418e-11, H: 53.628 },
+    { h: 350, rho: 9.518e-12, H: 53.298 },
+    { h: 400, rho: 3.725e-12, H: 58.515 },
+    { h: 450, rho: 1.585e-12, H: 60.828 },
+    { h: 500, rho: 6.967e-13, H: 63.822 },
+    { h: 600, rho: 1.454e-13, H: 71.835 },
+    { h: 700, rho: 3.614e-14, H: 88.667 },
+    { h: 800, rho: 1.170e-14, H: 124.64 },
+    { h: 900, rho: 5.245e-15, H: 181.05 },
+    { h: 1000, rho: 3.019e-15, H: 268.00 },
   ];
 
   // Find correct layer

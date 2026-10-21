@@ -145,17 +145,22 @@ export const TICK_MS = 1000;
 export const CHANGE_FLASH_MS = 1200;
 
 /**
- * ALT trend threshold, km per REAL second of smoothed altitude rate. Derived
- * from the game's drag: PlayerSatellite integrates atmosphericDrag(alt, v,
- * Constants.MOTHER_DRAG.AREA_M2 = 20 m², MASS_KG = 130 kg) as
- * sma *= 1 − 2·a·dt/v per world second; at 400 km (ρ =
- * 2.8e-11 kg/m³, v = 7.67 km/s) that is 4.9e-4 km per WORLD second, i.e.
- * 4.9e-3 km per REAL second at BASE_SCALE 10 / rate 1. One fifth of it: the
- * EMA (TREND_EMA, seeded at 0.15 of the first rate = 7.4e-4) crosses the line
- * on the THIRD sample at 400 km (the second EMA step, 1.36e-3), within five
- * at 500 km, and a steady orbit (no drag above 600 km) stays blank.
+ * ALT trend threshold, km per REAL second of smoothed altitude rate. One fifth
+ * of the game's sink rate at 400 km, derived from the game's drag:
+ * PlayerSatellite integrates atmosphericDrag(alt, v, Constants.MOTHER_DRAG.AREA_M2
+ * = 20 m², MASS_KG = 242.68 kg) as sma *= 1 − 2·a·dt/v per world second; at
+ * 400 km (Vallado's air, ρ = 3.7e-12 kg/m³ at the row, v = 7.67 km/s) that is
+ * 3.5e-5 km per WORLD second, i.e. 3.5e-4 km per REAL second at BASE_SCALE 10 /
+ * rate 1; a fifth is 7.0e-5. (Nets step 3 slice 1, 2026-10-21: the old value
+ * 1e-3 came from the old, 3-7x too thick air and a 130 kg mother; the sink at
+ * the 350 km start is 8.9e-4, which the old line would have hidden. The value is
+ * pinned in test-DragReal.js / test-OrbitPane.js against atmosphericDrag itself.)
+ * The EMA (TREND_EMA, seeded at 0.15 of the first rate) crosses the line on the
+ * SECOND sample at 350 km, the THIRD at 400 km (the second EMA step, 9.7e-5),
+ * the FIFTH at 450 km, and never above 497 km, where the sink is below the line;
+ * a steady orbit (no sink) stays blank.
  */
-export const ALT_TREND_KM_PER_S = 1e-3;
+export const ALT_TREND_KM_PER_S = 7.0e-5;
 
 /** The trend EMA weight on the previous rate (DockingReticle._easeOdds: 0.85 / 0.15). */
 export const TREND_EMA = 0.85;

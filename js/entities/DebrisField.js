@@ -2257,7 +2257,7 @@ export class DebrisField {
         // Accepted; deliberately NOT compensated — a one-off SMA nudge would be
         // more machinery than the effect it hides.
         const debrisAltKm = _tmpKmOrbit.semiMajorAxis - Constants.EARTH_RADIUS_KM;
-        if (debrisAltKm < 600) {
+        if (debrisAltKm < Constants.DRAG_CEILING_KM) {
           const debrisVel = orbitalVelocity(
             _tmpKmOrbit.semiMajorAxis, _tmpKmOrbit.semiMajorAxis, Constants.MU_EARTH
           );

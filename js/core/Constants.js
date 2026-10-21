@@ -131,7 +131,23 @@ export const Constants = {
   // = faster — the mother pulled ahead quadratically (≈ 0.03·t² m; > 2 km in
   // ~4 real minutes with no key pressed — the "cluster drifts away" report).
   // Same coefficient ⇒ same per-frame SMA step ⇒ lock-step decay.
-  MOTHER_DRAG: { AREA_M2: 20, MASS_KG: 130 },
+  //
+  // MASS_KG = 242.68 kg (was 130, a never-updated guess; Nets step 3 slice 1,
+  // 2026-10-21): her MEASURED start mass, ArmManager.getMassBudget().shipMassKg
+  // at game start = core dry 203.5 + cold gas 3.6 + docked daughters 17.4 +
+  // argon 12.5 + 4 nets 5.7. test-DragReal.js builds that rig and keeps this
+  // constant within 0.05 kg of it. It is a start-mass constant, not live: the
+  // live mass (gas burnt, catches aboard) is owed to slice 2 of the plan.
+  // Every reader of the mother's `mass` (drag, welcome pieces, recoils, net
+  // tug, lasso reel, autopilot compensation, cargoThrustFactor) moves with it.
+  MOTHER_DRAG: { AREA_M2: 20, MASS_KG: 242.68 },
+
+  // === DRAG CEILING (Nets step 3 slice 1, 2026-10-21) ===
+  // Altitude above which atmosphericDrag is not applied (km). 1000 km is the
+  // top of the published air table (OrbitalMechanics.atmosphericDensity, 0
+  // above it). Read by the mother (PlayerSatellite.update) and the debris loop
+  // (DebrisField.update); both used a bare 600 before.
+  DRAG_CEILING_KM: 1000,
 
   // === RENDERING ===
   FLOATING_ORIGIN_ENABLED: true,    // UX-4: Camera-relative instanced mesh positions to avoid float32 jitter
