@@ -17,9 +17,16 @@
  *   TRANSIT/APPROACH   impulse-priced autopilot burn (item 100) / manual rate
  *   HAULING/RETURNING  legacy per-state FEEP rates
  *   WEB_SHOT           fuel debited upfront in fireWebShot()
- *   REELING            zero-fuel winch — EXCEPT the REDOCK_FEEP arrest window
- *                      (one-shot funded burn → the FORE nozzle brakes the
- *                      closing rate; unfunded fallback = winch-only, no flare)
+ *   REELING            winch haul. Legacy (REEL_HOME off): aft glow, plus the
+ *                      REDOCK_FEEP arrest window (one-shot funded burn → the FORE
+ *                      nozzle brakes the closing rate; unfunded = no flare).
+ *                      REEL_HOME (owner 2026-10-20/21): her aft ion nozzle shows
+ *                      the faint steady thread (HOLD_FRACTION) the whole haul,
+ *                      keeping the line tight; the fore nozzle shows only the 2 m
+ *                      line-up burn (never both). Her cold-gas jet is drawn by
+ *                      ArmUnit as puffs, not here.
+ *   CARRY_OUT/BACK     the same thread on the nozzle whose exhaust points at her
+ *                      strut tip (`sig.carryNozzle`), billed at its real thrust
  *   STATION_KEEP       FUEL_RATE_STATIONKEEP hold / FUEL_RATE_MANEUVER inputs
  *   NETTING            0.3 %/s hold while the net flies
  *   DEORBITING         5 %/s retrograde sacrifice burn (the _updateDeorbiting
@@ -67,6 +74,10 @@ export const DAUGHTER_PLUME = {
   PUFF_BURST_COUNT: 2,
   /** Global min seconds between bursts (discrete events only — never per-frame). */
   PUFF_COOLDOWN_S: 0.15,
+  /** reel-gas: simulated seconds between the look-puffs of her cold-gas jet while it brakes the reel (a steady stream,
+   *  one sprite at a time from the shared pool; visual only). Must be >= the longest stream puff life (0.32 s) / the pool
+   *  size (4) = 0.08 s, or a sprite is re-emitted while it is still visible (reel-gas review F4): 0.09 s. */
+  GAS_STREAM_INTERVAL_S: 0.09,
 };
 
 /** States whose whole travel is an aft FEEP burn at full visual intensity. */
@@ -98,10 +109,14 @@ const clamp01 = (x) => (x > 1 ? 1 : (x > 0 ? x : 0));
  *                                         (_redockArrestStarted && _redockDebitApplied);
  *                                         the unfunded FUEL_FALLBACK_SLOW winch
  *                                         finish must NOT flare
- * @param {boolean} [sig.reelHome]         REEL_HOME is on: REELING is a pure winch
- *                                         haul, so the aft cruise glow is dark (only a
- *                                         funded burn / the 2 m line-up lights the fore
- *                                         nozzle); default false = today's aft read
+ * @param {boolean} [sig.reelHome]         REEL_HOME is on: REELING shows the faint aft
+ *                                         ion thread (HOLD_FRACTION) instead of the full
+ *                                         transit glow; the fore nozzle lights only for
+ *                                         the 2 m line-up burn (arrestFeepActive, never
+ *                                         both); default false = today's aft read
+ * @param {('aft'|'fore'|null)} [sig.carryNozzle] CARRY_OUT / CARRY_BACK: the nozzle whose
+ *                                         exhaust points at her strut tip shows the
+ *                                         HOLD_FRACTION thread; null = dark (the clamp)
  * @param {number}  [sig.recoilFlashS]     seconds left of the fore counter-burn
  *                                         flash (ARM_RECOIL_KICK)
  * @returns {{aft:number, fore:number}} intensities in [0,1], fractions of the
@@ -124,10 +139,19 @@ export function computeDaughterPlumeIntensity(sig) {
     // REDOCK_FEEP ARREST_DISTANCE_M window a FUNDED arrest burn brakes the
     // closing rate — nose (+Z) points at the dock, so the FORE nozzle fires
     // instead of the aft one.
-    // REEL_HOME (reel-home Decision 4, locked): no thruster fires on the reel; the winch does the work. The one burn
-    // is the 2 m line-up (arrestFeepActive carries it): shown on the fore nozzle, the picture it had before.
+    // REEL_HOME (owner 2026-10-20: "she is not flying back to mother, she is being reeled in. Yes, thruster toward
+    // mother to keep tension on tether so it never tangles"): her aft ion nozzle (tail first, it faces the mother)
+    // shows the faint steady thread every frame there is fuel, never both nozzles - the 2 m line-up burn
+    // (arrestFeepActive) lights the fore nozzle instead, the picture it had before. (reel-home Decision 4 had it dark.)
     if (sig.arrestFeepActive === true) fore = 1;
-    else if (sig.reelHome !== true) aft = 1;
+    else if (sig.reelHome === true) aft = DAUGHTER_PLUME.HOLD_FRACTION;
+    else aft = 1;
+  } else if (state === S.CARRY_OUT || state === S.CARRY_BACK) {
+    // reel-gas (owner 2026-10-20): the same thread on the carry's legs, on the nozzle that pushes her away from her strut
+    // tip (exhaust toward it) - the line stays tight there too. ArmUnit picks the nozzle (with a hysteresis so a turn
+    // does not strobe); no pick = dark (the clamp hold).
+    if (sig.carryNozzle === 'aft') aft = DAUGHTER_PLUME.HOLD_FRACTION;
+    else if (sig.carryNozzle === 'fore') fore = DAUGHTER_PLUME.HOLD_FRACTION;
   } else if (state === S.APPROACH) {
     // Crossfade on the smoothed brake read: closing burns aft; braking
     // (thrusting toward travel) burns fore. Smoothing upstream prevents a
@@ -147,7 +171,7 @@ export function computeDaughterPlumeIntensity(sig) {
     // thread as STATION_KEEP so the weave doesn't read as engine-off.
     aft = DAUGHTER_PLUME.HOLD_FRACTION;
   }
-  // All other states (DOCKED/DOCKING/RELOADING/LAUNCHING/GRAPPLED/HOLDING_CATCH/
+  // All other states (DOCKED/DOCKING/RELOADING/LAUNCHING/GRAPPLED/HOLDING_CATCH/CARRY_PREP/CARRY_HANDOFF/
   // TRAWLING/ABLATING/SCANNING/ADRIFT/EXPENDED/tool-closing) stay dark: no FEEP
   // burn there. (TRAWLING's 0.002 %/s drag-sail trickle is below read threshold.)
 

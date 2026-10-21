@@ -3259,6 +3259,7 @@ export class ArmManager {
       }
       arm.state = ARM_STATES.DOCKED;
       arm.fuel = 100;
+      arm.coldGasKg = arm._coldGasBottleKg();   // reel-gas: the bottle is reset wherever the FEEP fuel is
       // Register item 80: an SK target's LOD-protection flag must not survive
       // the reset. The SK session's own reference is _stationKeepTarget (set
       // together with the debris-side flag at SK entry, ArmUnit.js:3005/:3122)

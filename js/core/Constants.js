@@ -1088,7 +1088,7 @@ export const Constants = {
     DEORBITING: 'DEORBITING',      // One-way sacrifice — burning all fuel retrograde (Session 10)
     WEB_SHOT: 'WEB_SHOT',          // Brief GSL web shot launch animation (Sprint D1)
     LAUNCHING: 'LAUNCHING',        // V5 — Replaces UNDOCKING — crossbow spring release (0.05s)
-    REELING: 'REELING',            // V5 — Replaces HAULING — zero-fuel motor reel-in
+    REELING: 'REELING',            // V5 — Replaces HAULING — strut-reel motor haul (the winch pulls; reel-gas 2026-10-21: under REEL_HOME her ion thread keeps the line tight and her cold-gas jet brakes)
     RELOADING: 'RELOADING',        // V5 — worm gear compresses spring
     HOLDING_CATCH: 'HOLDING_CATCH', // Daughter docked at strut tip holding a captured debris in-net, awaiting furnace transfer (occupied — not redeployable, not reloaded)
     ABLATING: 'ABLATING',          // V5 — 10W laser de-spin/nudge
@@ -1387,6 +1387,25 @@ export const Constants = {
     CRUISE_TENSION_FRACTION: 0.85, // cap cruise so T_reel ≤ break×this (snap invariant:
                                    //   any in-spec catch stays under the tether break strength)
     BOOST_LOCKOUT_IN_DECEL: true, // disable REEL_BOOST inside DECEL_DISTANCE_M
+    // reel-gas (owner 2026-10-21, DECISIONS §REEL-IN PHYSICS): under REEL_HOME the reel PULLS HER UP to speed at this rate
+    // (no jump from 0 to peak), then cruises, then brakes on her cold-gas jet (DAUGHTER_COLD_GAS) at min(ACCEL, jet / MARGIN).
+    // Game-scale m/s per REAL s (true accel = /100: 10 -> 0.1 m/s^2; a 27 kg catch then pulls ~2.7 N, far under the 100 N line).
+    // The legacy path (REEL_HOME off, detached arms) never reads it. (est)
+    PULL_ACCEL:          10,
+  },
+
+  // reel-gas (owner 2026-10-21: "Add a gas jet": "A small gas jet on each daughter, refilled from the mother's gas at the
+  // strut. She comes in about as fast as today and brakes in the last 15 m."). A cold-gas (N2) thruster on each daughter, aft
+  // (-Z, which faces the mother on the tail-first reel). It brakes the reel-home haul (ArmUnit._rhReelStep); the mother's
+  // `coldGas` refills the bottle while she is docked (ArmUnit._updateColdGasRefill). Values marked (est) are estimates the
+  // owner may veto. Tests: js/test/test-ReelGas.js.
+  DAUGHTER_COLD_GAS: {
+    THRUST_N:   { weaver: 1.0, spinner: 0.5 },   // N (est) - jet thrust; her FEEP ion thruster stays 1.28 / 0.8 mN (ION_THRUSTER)
+    ISP_S:      60,                              // s - same as the mother's cold-gas thrusters (CROSSBOW_ARMS.md)
+    BOTTLE_KG:  { weaver: 0.5, spinner: 0.2 },   // kg (est) - starts full; the gas counts in her reel mass
+    REFILL_KG_PER_GAME_S: 0.01,                  // kg per GAME second (x10 per real second) from the mother's coldGas, docked only
+    MARGIN:     1.2,                             // the jet pushes MARGIN x what braking needs, the reel holds the rest (and the gas bill is MARGIN x)
+    EMPTY_KG:   1e-5,                            // kg - below this the bottle is empty: no jet, her ion thruster is the only brake
   },
 
   // reel-home (2026-10-19, FEATURE_FLAGS.REEL_HOME, owner design): a daughter's catch comes home on reels. No jump at net
@@ -1397,8 +1416,10 @@ export const Constants = {
   // (_motherTurnBlock(exceptArm)). At ALIGN_DIST_M a line more than ALIGN_TOL_DEG off the strut axis holds the reel; after
   // ALIGN_WAIT_S she lines herself up on her thrusters (mass-scaled fuel, ARM_RESERVE_FUEL included: it is kept for a safe
   // reel-home), else she holds for the mother and looks again every second. DOCKING no longer flips her or bills thruster
-  // fuel; a catch already in its cell has no glide. Tests: js/test/test-ReelHome.js. Values marked (est) are estimates,
-  // not measurements.
+  // fuel; a catch already in its cell has no glide. reel-gas (owner 2026-10-20/21) SUPERSEDES the old "no thruster fires on
+  // the reel": the strut reel is a sim now - her aft ion thread keeps the line tight (a tiny billed FEEP cost), the reel pulls
+  // her up (REEL_PROFILE.PULL_ACCEL) and she brakes on her cold-gas jet (DAUGHTER_COLD_GAS); only the 2 m line-up is her own
+  // fore burn. Tests: js/test/test-ReelHome.js, test-ReelGas.js. Values marked (est) are estimates, not measurements.
   REEL_HOME: {
     NET_REEL_MPS:        0.5,   // m/s (est) — her net winds the catch in to her nose at this CLOSING speed (line shortening)
     TAIL_FIRST_TOL_DEG:  10,    // the strut reel does not wind until her -Z points at the strut tip within this

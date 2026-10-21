@@ -59,8 +59,12 @@ const _driftTDelta  = new THREE.Vector3();
 // vector temps above.
 const _plumeSig = {
   state: null, fuel: 0, skManeuverGlowS: 0, approachBrake01: 0,
-  arrestFeepActive: false, reelHome: false, recoilFlashS: 0,
-};const _driftPDelta  = new THREE.Vector3();
+  arrestFeepActive: false, reelHome: false, recoilFlashS: 0, carryNozzle: null,
+};
+const _thrTip = new THREE.Vector3();     // reel-gas: carry-leg thread nozzle pick (strut tip, her -Z) scratch
+const _thrDir = new THREE.Vector3();
+const _thrZ = new THREE.Vector3();
+const _driftPDelta  = new THREE.Vector3();
 const _driftRaw     = new THREE.Vector3();
 
 /**
@@ -624,6 +628,7 @@ export class ArmUnit {
 
     // --- Runtime state ---
     this.fuel = 100;                        // 0–100 percentage
+    this.coldGasKg = this._coldGasBottleKg(); // reel-gas: her cold-gas bottle, kg (starts full; refilled from the mother's coldGas while docked)
     this.tetherLength = 0;                  // current deployed length in meters
     this.target = null;                     // assigned debris object
     this.capturedDebris = null;             // debris hauled back (the in-hand scalar)
@@ -847,6 +852,25 @@ export class ArmUnit {
     this._rhRelShip = null;
     /** Arrival order on the reels (ArmManager: first come owns the mother turn). */
     this._rhSeq = 0;
+    // ── reel-gas (owner 2026-10-21): the reel-home haul is a sim: pull-up, cruise, brake on her cold-gas jet ──
+    /** Her current reel speed under REEL_HOME, game-scale m/s (per REAL s); 0 on entering REELING, held when dt is 0. */
+    this._rhReelV = 0;
+    /** The jet is firing this frame (she is slowing on gas): drives the gas bill, the look-puffs and the tension readout. */
+    this._rhBraking = false;
+    /** This reel's first look at the bottle has been made (the "no gas" line is said once per reel, at its start). */
+    this._rhGasChecked = false;
+    /** What the reel did this frame: 'pull' | 'cruise' | 'brake' | 'hold' (tests and the tension readout). */
+    this._rhReelPhase = 'pull';
+    /** The line readout of this frame, true N (Decision 8), and the mass the reel moved (dry + gas + net + catch), kg. */
+    this._rhTensionN = 0;
+    this._rhReelMassKg = 0;
+    /** A carry leg's ion thread: 'aft' | 'fore' | null (which nozzle's exhaust points at her strut tip). */
+    this._carryThread = null;
+    /** Look-puffs of the jet: simulated seconds since the last one, and how many have been fired (visual only; tests read the count). */
+    this._gasPuffAccum = 0;
+    this._gasPuffCount = 0;
+    /** The jet's port (mesh-local): the tail, firing -Z, toward the mother on the tail-first reel. Built with the puff pool. */
+    this._gasPuffPort = null;
 
     // ── trip-melt-2 (carry): a rack catch carried to a radiator-tip furnace ──
     /** The carry in progress (CARRY_PREP … CARRY_BACK), or null. Plain data; see beginCarry. */
@@ -1764,6 +1788,9 @@ export class ArmUnit {
       { pos: new THREE.Vector3(0,  apo, portZ), dir: new THREE.Vector3(0,  1, 0) },
       { pos: new THREE.Vector3(0, -apo, portZ), dir: new THREE.Vector3(0, -1, 0) },
     ];
+
+    // reel-gas: the braking jet's port - the tail (-Z, which faces the mother on the tail-first reel), firing straight aft.
+    this._gasPuffPort = { pos: new THREE.Vector3(0, 0, -(bz / 2) * M), dir: new THREE.Vector3(0, 0, -1) };
 
     for (let i = 0; i < DAUGHTER_PLUME.PUFF_POOL_SIZE; i++) {
       const mat = new THREE.SpriteMaterial({
@@ -2954,6 +2981,7 @@ export class ArmUnit {
     this._carryGaveUp = false;
     this.state = S.DOCKED;
     this.fuel = 100;
+    this.coldGasKg = this._coldGasBottleKg();   // reel-gas: the bottle is reset wherever the FEEP fuel is
     this.tetherLength = 0;
     this.target = null;
     this.capturedDebris = null;
@@ -3078,6 +3106,7 @@ export class ArmUnit {
      case S.EXPENDED:   this._updateExpended(dt); break;
      case S.ADRIFT:     this._updateAdrift(dt); break;
    }
+   this._updateColdGasRefill(dt);       // reel-gas: docked on her strut, the mother's gas tops her bottle up
 
    // --- Orbital frame correction (STORE): update _prevParentPos AFTER state machine ---
    // Must be separate from the APPLY step above so that _updateTransit's drift
@@ -3311,6 +3340,9 @@ export class ArmUnit {
     // Thruster plume animation
     this._updatePlumes(dt);
 
+    // reel-gas: the steady look-puffs of her cold-gas jet while it brakes the reel (only while it fires)
+    this._updateGasStream(dt);
+
     // Wave1: attitude cold-gas puff animation (pooled; 4-flag check when idle)
     this._updateAttitudePuffs();
 
@@ -3418,7 +3450,12 @@ export class ArmUnit {
       this._rhArrived = false;
       this._rhHome = false;
     }
+    if (newState !== S.REELING) this._rhBraking = false;
     if (newState === S.REELING) {
+      this._rhReelV = 0;                    // reel-gas: the reel pulls her up from rest (no jump to peak)
+      this._rhBraking = false;
+      this._rhGasChecked = false;
+      this._rhReelPhase = 'pull';
       this._rhHome = !this.isDetached && Constants.isFeatureEnabled('REEL_HOME');
       this._rhHoldS = 0;
       this._rhTurnTries = 0;
@@ -6677,12 +6714,14 @@ export class ArmUnit {
     const V = Constants.CARRY;
     if (c.phase === 'clamp') {
       c.clampS += dt;
+      this._carryThread = null;
       this._carrySeat(parentPos, parentQuat, 0);
       if (c.clampS >= V.CLAMP_S) c.phase = 'out';
       return;
     }
     c.u = Math.min(1, c.u + dt / c.durationS);
     this._carrySeat(parentPos, parentQuat, c.u);
+    if (c.u < 1) this._carryThreadStep(dt, parentPos, parentQuat);       // reel-gas: the ion thread keeps the line tight on the way out
     if (c.u >= 1) {
       c.phase = 'handoff';
       c.holdS = 0;
@@ -6757,6 +6796,7 @@ export class ArmUnit {
     const u0 = c.u;
     c.u = Math.max(0, c.u - dt / c.durationS);
     this._carrySeat(parentPos, parentQuat, c.u);
+    if (c.u < u0) this._carryThreadStep(dt, parentPos, parentQuat);      // reel-gas: the same thread on the way back
     // the strut reel cartridge bills the mother's battery the real mechanical power: line tension × line speed ÷ efficiency,
     // floored at its own motor while turning (as REELING bills). dt 0 (a held world) bills nothing.
     if (dt > 0 && c.u < u0) {
@@ -6784,6 +6824,7 @@ export class ArmUnit {
     const c = this._carry;
     if (!c) return;
     this._carry = null;
+    this._carryThread = null;
     this._carryAtt = null;                                         // docked attitude again (derived from the strut)
     if (why === 'prep timeout' || why === 'hold lost' || why === 'no tip' || why === 'fuel') this._carryGaveUp = true;
     const ps = this._playerSatellite;
@@ -7493,32 +7534,9 @@ export class ArmUnit {
    */
   _computeReelProfileSpeed(distMeters, armMass, hasPayload, boostMult) {
     const P = Constants.REEL_PROFILE || {};
-    const vCruiseMax = P.V_CRUISE_MAX ?? 60;
     const vDock = P.V_DOCK ?? 1.0;
     const decelDist = P.DECEL_DISTANCE_M ?? 15;
-    const power = P.HAUL_MOTOR_POWER ?? 2500;
-    const tMin = P.T_MIN ?? 5;
-    const coeff = Constants.REEL_TENSION_COEFF ?? 0.04;
-    const mUnit = this._computeReelMUnit(armMass, hasPayload);
-
-    // Power-bounded cruise (closed form of v = P/(m·v·coeff)). The T_MIN floor
-    // caps how fast a near-massless unit may go (keeps it ≤ V_CRUISE_MAX) and
-    // the V_DOCK floor prevents a 0-speed stall for a very heavy catch.
-    const vFromMin = power / Math.max(tMin, 1e-6);            // light-catch ceiling
-    const vFromPower = Math.sqrt(power / Math.max(mUnit * coeff, 1e-6));
-    let vCruise = Math.min(vCruiseMax, vFromMin, vFromPower);
-
-    // SNAP INVARIANT (plan §Q1): cap cruise so the steady-reel tension
-    // T = m_unit·v·coeff never exceeds break×CRUISE_TENSION_FRACTION. A heavy
-    // in-spec catch is therefore throttled to a slower-but-safe cruise; only
-    // Boost (applied AFTER this throttle) may push tension past break.
-    const tensionFrac = P.CRUISE_TENSION_FRACTION ?? 0.85;
-    const breakN = this.tetherBreakStrength || 0;
-    if (breakN > 0) {
-      const vTension = (breakN * tensionFrac) / Math.max(mUnit * coeff, 1e-6);
-      vCruise = Math.min(vCruise, vTension);
-    }
-    vCruise = Math.max(vDock, vCruise);
+    const vCruise = this._reelCruiseCap(armMass, hasPayload);
 
     // Ramp DOWN to V_DOCK under a constant-deceleration (ACCEL) kinematic bound:
     // v = √(V_DOCK² + 2·ACCEL·dist), clamped to the cruise cap. This is the
@@ -7541,8 +7559,268 @@ export class ArmUnit {
   }
 
   /**
-   * REELING: V5 zero-fuel motor reel-in.
-   * Reel motor on mothership pulls arm back — no FEEP fuel consumed.
+   * The cruise cap of the reel (m/s, game-scale): the power-bounded, snap-safe speed a unit of this mass may haul at,
+   * floored at V_DOCK. Stateless; the legacy profile (`_computeReelProfileSpeed`) and the REEL_HOME physics
+   * (`_rhReelStep`) both start from it.
+   * @private
+   */
+  _reelCruiseCap(armMass, hasPayload) {
+    const P = Constants.REEL_PROFILE || {};
+    const vCruiseMax = P.V_CRUISE_MAX ?? 60;
+    const vDock = P.V_DOCK ?? 1.0;
+    const power = P.HAUL_MOTOR_POWER ?? 2500;
+    const tMin = P.T_MIN ?? 5;
+    const coeff = Constants.REEL_TENSION_COEFF ?? 0.04;
+    const mUnit = this._computeReelMUnit(armMass, hasPayload);
+
+    // Power-bounded cruise (closed form of v = P/(m·v·coeff)). The T_MIN floor
+    // caps how fast a near-massless unit may go (keeps it ≤ V_CRUISE_MAX) and
+    // the V_DOCK floor prevents a 0-speed stall for a very heavy catch.
+    const vFromMin = power / Math.max(tMin, 1e-6);            // light-catch ceiling
+    const vFromPower = Math.sqrt(power / Math.max(mUnit * coeff, 1e-6));
+    let vCruise = Math.min(vCruiseMax, vFromMin, vFromPower);
+
+    // SNAP INVARIANT (plan §Q1): cap cruise so the steady-reel tension
+    // T = m_unit·v·coeff never exceeds break×CRUISE_TENSION_FRACTION. A heavy
+    // in-spec catch is therefore throttled to a slower-but-safe cruise; only
+    // Boost (applied AFTER this throttle) may push tension past break.
+    const tensionFrac = P.CRUISE_TENSION_FRACTION ?? 0.85;
+    const breakN = this.tetherBreakStrength || 0;
+    if (breakN > 0) {
+      const vTension = (breakN * tensionFrac) / Math.max(mUnit * coeff, 1e-6);
+      vCruise = Math.min(vCruise, vTension);
+    }
+    return Math.max(vDock, vCruise);
+  }
+
+  // ==========================================================================
+  // REEL-GAS (owner 2026-10-21): the reel-home haul as a sim. Pull-up, cruise, and a braking phase on her own cold-gas
+  // jet, with her ion thruster keeping the line tight the whole way. Game-scale units in code (m/s per REAL s); true
+  // units (x 1/10 speed, x 1/100 acceleration) only where mass, thrust and gas are involved (T0 confirmed the time base).
+  // ==========================================================================
+
+  /** @private Her full cold-gas bottle, kg (by type). */
+  _coldGasBottleKg() {
+    const B = Constants.DAUGHTER_COLD_GAS && Constants.DAUGHTER_COLD_GAS.BOTTLE_KG;
+    return (B && B[this.config.type]) || 0;
+  }
+
+  /** @private Her cold-gas jet thrust, N. */
+  _coldGasThrustN() {
+    const T = Constants.DAUGHTER_COLD_GAS && Constants.DAUGHTER_COLD_GAS.THRUST_N;
+    return (T && T[this.config.type]) || 0;
+  }
+
+  /** @private Her FEEP ion thrust, N (the thread that keeps the line tight). */
+  _ionThrustN() {
+    const IT = Constants.ION_THRUSTER || {};
+    return (this.config.type === 'weaver' ? IT.WEAVER_MAX_THRUST : IT.SPINNER_MAX_THRUST) || 0;
+  }
+
+  /**
+   * @private The FEEP the ion thread burns this frame, billed at its real thrust: the Δv it gives her (thrust / mass x
+   * game seconds) against the tank's total Δv, as a percentage. Tiny (about 0.00002 % a frame) but billed, so a long
+   * haul is not free. dt 0 (a held world) bills nothing.
+   */
+  _billIonThread(dt, massKg) {
+    if (!(dt > 0) || !(this.fuel > 0)) return;
+    const aTrue = this._ionThrustN() / Math.max(massKg, 1e-6);                       // m/s^2
+    const dvTrue = aTrue * dt * TimeAuthority.BASE_SCALE;                             // m/s per game time of this frame
+    const pct = dvTrue / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV) * 100;
+    this.fuel = Math.max(0, this.fuel - pct);
+  }
+
+  /**
+   * @private The reel-home speed for this frame (game-scale m/s) - REEL_HOME only; the legacy path never comes here.
+   *
+   *  a. PULL-UP: the reel speeds her up at REEL_PROFILE.PULL_ACCEL from `_rhReelV` (0 on entering REELING). No jump.
+   *  b. CRUISE: at the cruise cap (`_reelCruiseCap`, boost included) or the speed her bottle can still pay to brake from
+   *     (v_gas), whichever is lower.
+   *  c. BRAKING: when the distance left equals her stopping distance at a_brake = min(ACCEL, jet accel / MARGIN), she slows
+   *     at that rate to V_DOCK at the dock (no fixed 15 m: a long recall starts braking where the stopping distance needs
+   *     it). Her cold-gas jet fires toward the mother the whole time and the gas is billed MARGIN x (it pushes MARGIN x what
+   *     braking needs, the reel line holds the rest). The distance used is the one left AFTER this frame's step, so the
+   *     last frame arrives at V_DOCK, not above it.
+   *  No gas (bottle empty): no jet; the only brake is her ion thruster, so v <= sqrt(V_DOCK^2 + 2 a_ion d), about V_DOCK
+   *  the whole way, and one line says so once per reel.
+   * Sets `_rhBraking`, `_rhReelPhase`, `_rhTensionN` (true N, the line readout) and `_rhReelMassKg`. dt 0 changes nothing.
+   * @param {number} dt real seconds
+   * @param {number} distM metres left to the strut tip
+   * @param {number} gateM metres she may still close this frame (the line-up gate; Infinity = none)
+   * @returns {number} the speed to reel at this frame
+   */
+  _rhReelStep(dt, distM, gateM, armMass, hasPayload, boostMult) {
+    const P = Constants.REEL_PROFILE || {};
+    const G = Constants.DAUGHTER_COLD_GAS;
+    const vDock = P.V_DOCK ?? 1.0;
+    const BS = TimeAuthority.BASE_SCALE;
+    const v0 = this._rhReelV;
+    this._rhBraking = false;
+    const gas = this.coldGasKg;
+    const mass = this._computeReelMUnit(armMass + gas, hasPayload);       // her dry mass + the gas in the bottle + net + catch
+    this._rhReelMassKg = mass;
+    if (!(dt > 0)) return v0;                                              // a held world: speed, gas and bottle stay put
+    const hasGas = gas > G.EMPTY_KG;
+    if (!this._rhGasChecked) {
+      this._rhGasChecked = true;
+      if (!hasGas) {
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: `Daughter ${this.index + 1} has no gas to brake; the reel brings her in slowly.`, priority: 'warning',
+        });
+      }
+    }
+    if (!(gateM > 1e-9)) {                                                 // the line-up hold (or tail-first turn): the reel is stopped
+      this._rhReelV = 0;
+      this._rhReelPhase = 'hold';
+      this._rhTensionN = this._ionThrustN();
+      return 0;
+    }
+
+    let vCap = this._reelCruiseCap(armMass, hasPayload);
+    const lockBoost = (P.BOOST_LOCKOUT_IN_DECEL !== false) && distM <= (P.DECEL_DISTANCE_M ?? 15);
+    if (boostMult > 1 && !lockBoost) vCap *= boostMult;
+    const dEff = Math.max(0, Math.min(distM, gateM));
+    // the speed from which a constant decel `a` just reaches V_DOCK after this frame's step (exact for the Euler step)
+    const brakeTo = (a) => -a * dt + Math.sqrt(a * a * dt * dt + vDock * vDock + 2 * a * dEff);
+
+    const aJet = this._coldGasThrustN() / mass * 100;                      // game-scale m/s^2 (true accel x 100)
+    const aBrake = Math.min(P.ACCEL ?? 3.4, aJet / G.MARGIN);
+    // F1 (review 2026-10-21): a little gas must never be slower than none. The jet speed (what the bottle can pay to brake
+    // from, at the jet's a_brake) is only used where it beats the ion limit; the jet fires (puffs + gas bill) only while
+    // she must brake harder than her ion thruster can - otherwise the ion thread is the brake. Empty bottle = ion limit.
+    const aIon = this._ionThrustN() / mass * 100;
+    const vIon = brakeTo(aIon);
+    let vDes, aSlow, jet = false;
+    if (hasGas) {
+      // the highest speed whose braking to V_DOCK the bottle can still pay for: MARGIN x mass x dv_true / (Isp g0)
+      const vGas = vDock + gas * G.ISP_S * 9.80665 * BS / (G.MARGIN * mass);
+      const vJet = Math.min(vGas, brakeTo(aBrake));
+      jet = vJet > vIon && vCap > vIon;
+      vDes = Math.min(vCap, Math.max(vJet, vIon));
+      aSlow = jet ? aJet : aIon;
+    } else {
+      vDes = Math.min(vCap, vIon);
+      aSlow = aIon;
+    }
+
+    let v;
+    if (vDes >= v0) v = Math.min(vDes, v0 + (P.PULL_ACCEL ?? 10) * dt);
+    else v = Math.max(vDes, v0 - aSlow * dt);
+    const dv = v - v0;
+
+    let phase = 'cruise';
+    if (dv > 1e-9) phase = 'pull';
+    else if (dv < -1e-9 && jet) {
+      phase = 'brake';
+      this._rhBraking = true;
+      // MARGIN x the gas braking needs: mass x speed lost (true m/s) / (Isp g0)
+      const kg = Math.min(gas, G.MARGIN * mass * (-dv / BS) / (G.ISP_S * 9.80665));
+      this.coldGasKg = gas - kg;
+    }
+    this._rhReelPhase = phase;
+    // the line readout (true N): pull-up = mass x pull accel; cruise = the ion thread; braking = the (MARGIN - 1) the reel holds
+    if (phase === 'pull') this._rhTensionN = mass * (P.PULL_ACCEL ?? 10) / 100;
+    else if (phase === 'brake') this._rhTensionN = (G.MARGIN - 1) * mass * aBrake / 100;
+    else this._rhTensionN = this._ionThrustN();
+    this._rhReelV = v;
+    return v;
+  }
+
+  /**
+   * @private Mother's cold gas -> her bottle while she sits on her strut (DOCKED, HOLDING_CATCH, RELOADING): at
+   * REFILL_KG_PER_GAME_S, until full; the mother loses exactly what she gains (ResourceSystem.drawUpTo). The mother
+   * empty = no refill and one line (re-armed when she has gas again; shared by the four daughters).
+   */
+  _updateColdGasRefill(dt) {
+    const st = this.state;
+    if (!(dt > 0) || (st !== S.DOCKED && st !== S.HOLDING_CATCH && st !== S.RELOADING)) return;
+    const G = Constants.DAUGHTER_COLD_GAS;
+    const full = this._coldGasBottleKg();
+    const need = full - this.coldGasKg;
+    if (!(need > 1e-9)) return;
+    const ps = this._playerSatellite;
+    const rs = ps && ps._resourceSystem;
+    if (!rs || typeof rs.drawUpTo !== 'function') return;
+    const want = Math.min(need, G.REFILL_KG_PER_GAME_S * dt * TimeAuthority.BASE_SCALE);
+    const got = rs.drawUpTo('coldGas', want);
+    if (got > 0) {
+      const next = this.coldGasKg + got;
+      this.coldGasKg = (full - next < 1e-12) ? full : next;           // full is full (no 1e-17 kg left over by the float sum)
+      ps._daughterGasEmptySaid = false;
+    } else if (!ps._daughterGasEmptySaid) {
+      ps._daughterGasEmptySaid = true;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'The mother is out of cold gas; daughters cannot refill their braking gas.', priority: 'warning',
+      });
+    }
+  }
+
+  /**
+   * @private One look-puff of her cold-gas jet (visual only): from the tail port (-Z, which faces the mother on the
+   * tail-first reel), pointing out of it, from the shared 4-sprite pool. Fired every GAS_STREAM_INTERVAL_S of simulated time
+   * while the jet brakes, so it reads as a steady stream, never a cloud.
+   */
+  _updateGasStream(dt) {
+    if (!this._rhBraking || this.state !== S.REELING) { this._gasPuffAccum = DAUGHTER_PLUME.GAS_STREAM_INTERVAL_S; return; }   // the first puff of a braking spell is at once
+    if (!this._attPuffs.length || !this._gasPuffPort || !(dt > 0)) return;
+    this._gasPuffAccum += dt;
+    if (this._gasPuffAccum < DAUGHTER_PLUME.GAS_STREAM_INTERVAL_S) return;
+    this._gasPuffAccum = 0;
+    this._gasPuffCount = (this._gasPuffCount || 0) + 1;
+    const now = performance.now() * 0.001;
+    const port = this._gasPuffPort;
+    const puff = this._attPuffs[this._attPuffIndex];
+    this._attPuffIndex = (this._attPuffIndex + 1) % this._attPuffs.length;
+    puff.startPos.set(
+      port.pos.x + (Math.random() - 0.5) * M * 0.004,
+      port.pos.y + (Math.random() - 0.5) * M * 0.004,
+      port.pos.z,
+    );
+    puff.dir.set(
+      port.dir.x + (Math.random() - 0.5) * 0.12,
+      port.dir.y + (Math.random() - 0.5) * 0.12,
+      port.dir.z,
+    ).normalize();
+    puff.life     = 0.22 + Math.random() * 0.10;
+    puff.maxScale = M * (0.07 + Math.random() * 0.04);
+    puff.baseOp   = 0.34 + Math.random() * 0.10;
+    puff.drift    = M * (0.35 + Math.random() * 0.15);       // a steady 35-50 cm jet
+    puff.startTime = now;
+    puff.sprite.position.copy(puff.startPos);
+    puff.sprite.material.opacity = 0;
+    puff.sprite.scale.set(M * 0.015, M * 0.015, M * 0.015);
+    puff.sprite.visible = true;
+    puff.active = true;
+  }
+
+  /**
+   * @private A carry leg's ion thread (CARRY_OUT 'out' phase, CARRY_BACK): pick the nozzle whose exhaust points at her
+   * strut tip (her -Z . direction to the tip > 0 = aft, else fore; a +-0.1 dead band keeps the last choice so a turn does
+   * not strobe; the choice is kept over the hand-off beat and cleared with the next carry's clamp) and bills the thread at
+   * its real thrust. Her mass is the carry's (her catches ride with her).
+   */
+  _carryThreadStep(dt, parentPos, parentQuat) {
+    if (!(dt > 0)) return;
+    if (this.dockOffset) {
+      this._resolveStrutDockWorld(parentPos || this.position, parentQuat, _thrTip);
+      const toTip = _thrDir.subVectors(_thrTip, this.position);
+      const d = toTip.length();
+      if (d > 1e-6 * M) {                                   // a micrometre: the direction to the tip is then sound (float noise is ~1e-9 m)
+        toTip.multiplyScalar(1 / d);
+        const dot = -_thrZ.set(0, 0, 1).applyQuaternion(this.group.quaternion).dot(toTip);       // her -Z . to the tip
+        if (dot > 0.1) this._carryThread = 'aft';
+        else if (dot < -0.1) this._carryThread = 'fore';
+        else if (!this._carryThread) this._carryThread = dot >= 0 ? 'aft' : 'fore';
+      }
+    }
+    if (!this._carryThread) this._carryThread = 'aft';
+    this._billIonThread(dt, this.carryMassKg());
+  }
+
+  /**
+   * REELING: V5 strut-reel motor reel-in. The motor on the mothership pulls the arm back; the haul itself burns no
+   * propellant (legacy path: no FEEP at all). Under REEL_HOME (reel-gas, owner 2026-10-21) it is a sim: `_rhReelStep` pulls
+   * her up, cruises, and brakes her on her cold-gas jet, while her ion thread (a tiny, billed FEEP cost) keeps the line tight.
    *
    * 2026-05-26 (Issue 1 fix): daughter docks at the end of the strut she
    * launched from, NOT mother's bus centre. Before this fix, _updateReeling
@@ -7556,6 +7834,9 @@ export class ArmUnit {
    */
   _updateReeling(dt, parentPos, parentQuat) {
     const hasPayload = this.capturedDebris !== null;
+    // reel-gas F3: the jet only fires on frames the REEL_HOME sim runs and says so (`_rhReelStep` sets it again); a frame
+    // that takes another path (detached, flag turned off mid-reel) must not leave the last braking flag, and its puffs, on.
+    this._rhBraking = false;
 
     // Catch-cleared-mid-reel guard (plan §Q3 edge): if a captured debris was
     // destroyed/removed elsewhere during the haul, don't strand the FSM holding
@@ -7659,6 +7940,14 @@ export class ArmUnit {
         rhGate = 0;
         this._rhLineUpStep(dt, dockWorldPos, parentPos, parentQuat);
       }
+      // reel-gas (owner 2026-10-21): under REEL_HOME the haul is a sim - pull-up, cruise, a braking phase on her cold-gas
+      // jet - not the stateless trapezoid above. `_rhReelStep` owns the speed (and the gas, and the line readout).
+      if (profileV2) {
+        reelSpeed = this._rhReelStep(dt, dist / M, rhGate / M, armMass, hasPayload, boostMult);
+        reelSpeedScaled = reelSpeed * M;
+        // her ion thread keeps the line tight the whole haul: billed at its real thrust (not while the line-up burn runs)
+        if (!this._rhLineUp) this._billIonThread(dt, this._rhReelMassKg);
+      }
       if (rhGate === 0 && dt > 0) { reelSpeed = 0; reelSpeedScaled = 0; }
     }
 
@@ -7672,8 +7961,9 @@ export class ArmUnit {
     // → FUEL_FALLBACK_SLOW (zero-fuel reel-only finish + warn, never a dead-end).
     // Mission-1 is free (the learning loop). DOCKING's per-state fuel rate is
     // suppressed for this cycle (see _consumeFuel) so the arrest is charged once.
-    // reel-home: no thruster fires during the strut reel (her aft end leads and the winch brakes her to V_DOCK): there is
-    // no burn to price, no plume to keep off the line, so no arrest steer either (Decision 4).
+    // reel-home: the old one-shot arrest burn is not used (her aft end leads; reel-gas 2026-10-21: the jet BRAKES her in
+    // `_rhReelStep`, billed in gas as it fires, and her aft ion thread keeps the line tight): nothing to price here and no
+    // plume to keep off the line, so no arrest steer either (Decision 4, reel-home).
     if (profileV2 && hasPayload && !this._redockArrestStarted && !this.isDetached && !rh) {
       const RF = Constants.REDOCK_FEEP || {};
       const arrestDist = RF.ARREST_DISTANCE_M ?? 8;
@@ -7762,7 +8052,11 @@ export class ArmUnit {
     // so only the move branch keeps the zero-length guard. Speeds, tension,
     // and the legacy constant-speed model are untouched.
     let moveDistance = reelSpeedScaled * dt;
-    if (rh && rhGate < moveDistance) moveDistance = rhGate;
+    if (rh && rhGate < moveDistance) {
+      moveDistance = rhGate;
+      // reel-gas: the line-up gate stopped her short of the step: her speed is what she really covered
+      if (profileV2 && dt > 0) this._rhReelV = Math.min(this._rhReelV, moveDistance / (M * dt));
+    }
     if (moveDistance >= dist) {
       // Close enough to dock — snap to the strut-tip dock (not mother core).
       this.position.copy(dockWorldPos);
@@ -7799,7 +8093,10 @@ export class ArmUnit {
     const payloadMass = hasPayload && this.capturedDebris ? (this.capturedDebris.mass || 0) : 0;
     const tensionMass = profileV2 ? this._computeReelMUnit(armMass, hasPayload) : (armMass + payloadMass);
     const tensionCoeff = Constants.REEL_TENSION_COEFF ?? 0.04;
-    const tensionTarget = tensionMass * reelSpeed * tensionCoeff;
+    let tensionTarget = tensionMass * reelSpeed * tensionCoeff;
+    // reel-gas Decision 8: under REEL_HOME the line carries what the physics asks of it (true N): the pull-up, the ion
+    // thread at cruise, the (MARGIN - 1) the reel holds while the jet brakes. Snap / rip thresholds are unchanged.
+    if (rh && profileV2) tensionTarget = this._rhTensionN;
     if (boostOn) {
       const tau = (Constants.REEL_BOOST && Constants.REEL_BOOST.TENSION_EASE_TAU_S) || 0.4;
       this.tetherTension += (tensionTarget - this.tetherTension) * Math.min(1, dt / tau);
@@ -7817,7 +8114,10 @@ export class ArmUnit {
       const MD = Constants.MOTOR_DRAW_W || {};
       const rs = this._playerSatellite && this._playerSatellite._resourceSystem;
       if (rs && typeof rs.billWatts === 'function') {
-        const mechW = Math.max(0, this.tetherTension) * reelSpeed / (MD.REEL_EFFICIENCY || 0.5);
+        // reel-gas F2: under REEL_HOME the tension is true newtons, so the line speed must be TRUE m/s too (the reel speed
+        // is game-scale: / TimeAuthority.BASE_SCALE). The legacy path keeps its game-scale pairing (old coefficient).
+        const lineSpeed = (rh && profileV2) ? reelSpeed / TimeAuthority.BASE_SCALE : reelSpeed;
+        const mechW = Math.max(0, this.tetherTension) * lineSpeed / (MD.REEL_EFFICIENCY || 0.5);
         rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.STRUT_REEL_MIN ?? 15, mechW)), dt);
       }
     }
@@ -8673,7 +8973,7 @@ export class ArmUnit {
       [S.NETTING]: 0.3,
       [S.GRAPPLED]: 0.2,
       [S.HAULING]: 2.0,
-      [S.REELING]: 0.0,           // V5: Zero-fuel motor reel-in
+      [S.REELING]: 0.0,           // V5: motor reel-in (REEL_HOME: the ion thread is billed in _updateReeling, not here)
       [S.RETURNING]: 1.2,
       [S.DOCKING]: 0.2,
       [S.RELOADING]: 0.0,         // V5: worm gear — zero FEEP fuel (no stored-energy model)
@@ -8682,7 +8982,7 @@ export class ArmUnit {
       [S.SCANNING]: 0.0,          // V5: sensor mode — zero FEEP fuel (no stored-energy model)
     };
     let rate = rates[this.state] || 0;
-    // reel-home: winding the net line in is a motor on her, not a thruster burn (the strut reel is zero-fuel too)
+    // reel-home: winding the net line in is a motor on her, not a thruster burn (the strut reel's only FEEP is the ion thread, billed in _updateReeling)
     if (this.state === S.GRAPPLED && this._rhHome) rate = 0;
     // REEL_PROFILE_V2 (plan Q4): the re-dock arrest is charged ONCE as a discrete
     // mass-scaled debit during REELING. Suppress the per-state DOCKING rate for
@@ -9028,6 +9328,8 @@ export class ArmUnit {
     sig.arrestFeepActive = (this._redockArrestStarted === true && this._redockDebitApplied === true)
       || !!this._rhLineUp;                // reel-home: her own thrusters, lining herself up (shown fore; the code moves her sideways, no nozzle is axial to that)
     sig.recoilFlashS = this._recoilFlashS;
+    // reel-gas: which nozzle carries the ion thread on a carry leg (the clamp hold and the other states: none)
+    sig.carryNozzle = (this.state === S.CARRY_OUT || this.state === S.CARRY_BACK) ? this._carryThread : null;
     const vis = computeDaughterPlumeIntensity(sig);
 
     // Frame-rate-independent shimmer (two sines, ±~5%) — replaces per-frame
