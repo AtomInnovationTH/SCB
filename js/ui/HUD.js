@@ -1580,10 +1580,7 @@ export class HUD {
       this.showNotification(`⚡ +${data.points} ${data.name} — SYNERGY BONUS`, undefined, { kind: 'notice' });
     });
 
-    // ST-3.4: Mastery celebration toast (first N masteries only)
-    eventBus.on(Events.MASTERY_FANFARE, (d) => {
-      if (d?.largeToast) this.showMasteryToast(d);
-    });
+    // Owner 2026-10-21: no mastery popup or fanfare in the sim (the skills pane still flashes the row).
 
     // m1-finish: the end of a mission is a headline that fades by itself (no card,
     // no hold: DECISIONS §14 — the depot is an invitation, never a forced stop).
@@ -3154,57 +3151,12 @@ export class HUD {
   }
 
   // ==========================================================================
-  // ST-3.4: MASTERY TOAST
-  // ==========================================================================
-
-  /**
-   * Display a centered "Mastery Unlocked — {label}" banner for the first few masteries.
-   * Fades after MASTERY_TOAST_DURATION_MS.
-   * @param {{ label: string }} data
-   */
-  showMasteryToast(data) {
-    const label = data?.label ?? 'Skill';
-    const toast = document.createElement('div');
-    toast.className = 'hud-mastery-toast';
-    toast.style.cssText = `
-      position: fixed;
-      left: 50%;
-      top: 28%;
-      transform: translate(-50%, -50%);
-      padding: 12px 28px;
-      background: linear-gradient(135deg, rgb(var(--hud-ink-rgb, 20 12 40) / 0.92), rgb(var(--hud-target-rgb, 60 30 80) / 0.92));
-      border: 2px solid rgb(var(--hud-caution-rgb, 255 200 80) / 0.85);
-      box-shadow: 0 0 24px rgb(var(--hud-caution-rgb, 255 200 80) / 0.55), 0 4px 18px rgb(var(--hud-ink-rgb, 0 0 0) / 0.6);
-      color: var(--hud-label, #fff);
-      font-family: var(--font-mono);
-      font-size: 18px;
-      letter-spacing: 2px;
-      text-align: center;
-      z-index: 9000;
-      opacity: 0;
-      transition: opacity 0.3s ease;
-      pointer-events: none;
-    `;
-    toast.innerHTML = `
-      <div style="font-size:11px; color:var(--hud-caution, #ffcc66); letter-spacing:3px; margin-bottom:4px;">◆ MASTERY UNLOCKED ◆</div>
-      <div style="font-size:18px; color:var(--hud-label, #fff);">${label.replace(/</g, '&lt;')}</div>
-    `;
-    document.body.appendChild(toast);
-    // Next frame: fade in
-    requestAnimationFrame(() => { toast.style.opacity = '1'; });
-    // Hold, then fade out and remove
-    const durMs = Constants.SKILLS.CELEBRATION.MASTERY_TOAST_DURATION_MS;
-    timerManager.setTimeout(() => { toast.style.opacity = '0'; }, durMs - 300, { owner: this });
-    timerManager.setTimeout(() => { toast.remove(); }, durMs, { owner: this });
-  }
-
-  // ==========================================================================
   // m1-finish: MISSION COMPLETE HEADLINE
   // ==========================================================================
 
   /**
    * Show the centred "MISSION N COMPLETE" headline when a mission's last catch lands
-   * (Events.MISSION_COMPLETE). Same look and mechanics as showMasteryToast: fixed, top 28 %,
+   * (Events.MISSION_COMPLETE). Fixed, centred, top 28 %,
    * click-through, faded by timerManager. Visible MISSION_COMPLETE_MS in all, then removed.
    * No button, no world hold, no dimming, no countdown (DECISIONS §14 rows 1 and 3), and it is
    * not part of any floor, so FloorMask never hides it.

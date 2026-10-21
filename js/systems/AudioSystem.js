@@ -943,7 +943,7 @@ class AudioSystem {
     eventBus.on(Events.SKILL_STATE_CHANGED, (d) => {
       if (d?.to === 'practiced') this.playPracticeChime();
     });
-    eventBus.on(Events.MASTERY_FANFARE, () => this.playMasteryFanfare());
+    // Owner 2026-10-21: no mastery popup or fanfare in the sim.
 
     // m1-finish: a mission's last catch — one existing success cue. The same catch can also
     // clear a cluster (RewardSystem -> AUDIO_CUE fieldCleared), so both go through one guard.
@@ -1102,7 +1102,6 @@ class AudioSystem {
    *   playCodexUnlock     3-note triad (per-category) — codex entry unlocked
    *   playSweepComplete   C4·E4·G4·C5 echo fanfare   — trawl sweep finished
    *   playFieldCleared    C5·E5·G5·C6 echo fanfare   — cluster/field cleared
-   *   playMasteryFanfare  C5·E5·G5 arpeggio          — MASTERED transition
    *   playVictory         (see method)               — run victory
    * PING chimes for reference: targetLock C5→E5, targetLost E5→C5.
    * ==========================================================================
@@ -4106,16 +4105,6 @@ class AudioSystem {
     // decay. Distinct from the hint (G4→B4) and lock (C5→E5) contours.
     this._playSineBlip(now,        880, 0.08, 0.18);
     this._playSineBlip(now + 0.08, 1108, 0.10, 0.22);
-  }
-
-  /** Celebratory 3-note arpeggio for MASTERED transitions. ~650 ms total. */
-  playMasteryFanfare() {
-    if (!this.available) return;
-    const now = this.ctx.currentTime;
-    // Triad arpeggio: C5 → E5 → G5 (523→659→784 Hz), each with slight overlap
-    this._playSineBlip(now,        523, 0.18, 0.32);
-    this._playSineBlip(now + 0.14, 659, 0.18, 0.32);
-    this._playSineBlip(now + 0.28, 784, 0.28, 0.40); // held longer for finale
   }
 
   /**

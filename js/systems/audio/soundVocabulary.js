@@ -100,7 +100,6 @@ export const soundVocabulary = {
   playCashRegister:    { family: 'REWARD', meaning: 'credits earned',              trigger: 'SCORING_AWARD' },
   playPurchase:        { family: 'REWARD', meaning: 'credits spent (shop)',        trigger: 'shop purchase' },
   playPracticeChime:   { family: 'REWARD', meaning: 'practiced-skill transition',  trigger: 'skill PRACTICED' },
-  playMasteryFanfare:  { family: 'REWARD', meaning: 'mastered-skill transition',   trigger: 'skill MASTERED' },
   playHintPost:        { family: 'REWARD', meaning: 'onboarding hint posted',      trigger: "AUDIO_CUE{cue:'hint_post'} (silent during mission-start grace)" },
 
   // ---- PAD — scene transition mood ----

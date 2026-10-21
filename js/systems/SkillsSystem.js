@@ -82,9 +82,6 @@ export class SkillsSystem {
         /** @type {number} Accumulator for 1 Hz reminder check (seconds) */
         this._reminderAccum = 0;
 
-        /** @type {number} Session mastery count (for largeToast threshold) */
-        this._masteryCount = 0;
-
         /** @type {number} Reminders shown within current frequency-cap window */
         this._reminderCapCount = 0;
 
@@ -391,7 +388,6 @@ export class SkillsSystem {
         this._reminderAccum      = 0;
         this._reminderCapCount   = 0;
         this._reminderCapStart   = 0;
-        this._masteryCount       = 0;
         this._sessionStartMs     = Date.now();
         // CP-4 — clear hint-gating session state
         this._recentFailures     = [];
@@ -633,13 +629,11 @@ export class SkillsSystem {
 
         // ST-3.4: Mastery celebration — emit MASTERY_FANFARE after state change
         if (newState === MASTERED) {
-            this._masteryCount++;
             eventBus.emit(Events.MASTERY_FANFARE, {
                 skillId:    rec.def.id,
                 label:      rec.def.label,
                 tier:       rec.def.tier,
                 category:   rec.def.category,
-                largeToast: this._masteryCount <= Constants.SKILLS.CELEBRATION.MASTERY_TOAST_THRESHOLD,
             });
         }
     }

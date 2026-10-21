@@ -5324,8 +5324,6 @@ export const Constants = {
 
     // --- Celebration (ST-3.4: PRACTICED / MASTERED feedback) ---
     CELEBRATION: {
-        MASTERY_TOAST_THRESHOLD: 3,      // first N masteries get the large centered toast
-        MASTERY_TOAST_DURATION_MS: 2000,
         PRACTICE_FLASH_MS: 650,
         MASTERY_FLASH_MS: 1200,
     },

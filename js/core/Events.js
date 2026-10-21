@@ -621,8 +621,8 @@ export const Events = {
   SKILL_REMINDED:       'skill:reminded',           // { skillId }
   SKILL_STATE_CHANGED:  'skill:stateChanged',       // { skillId, from, to }
   /** Fired after a skill transitions to MASTERED state.
-   *  Payload: { skillId: string, label: string, tier: number, category: string, largeToast: boolean }
-   *  `largeToast` is true for the first MASTERY_TOAST_THRESHOLD masteries in the session. */
+   *  Payload: { skillId: string, label: string, tier: number, category: string }
+   *  Only the skills pane listens (row flash); no popup or sound (owner 2026-10-21). */
   MASTERY_FANFARE:      'skill:masteryFanfare',
   SKILL_GATE_UNLOCKED:  'skill:gateUnlocked',       // { skillId }
   SKILLS_PANE_TOGGLE:   'skills:paneToggle',        // { expanded: bool }
