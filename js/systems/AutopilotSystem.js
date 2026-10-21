@@ -20,7 +20,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
 import { findNearestLiveDebris } from './NavRecoveryAdvisor.js';
-import { strutLocalDirection } from '../entities/ArmDockBasis.js';
+import { strutLocalDirection, bestStrutAlpha } from '../entities/ArmDockBasis.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg } from './ResourceSystem.js';
 import { wingsHint } from './WingsHint.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
@@ -2661,9 +2661,9 @@ export class AutopilotSystem {
       // Slew α toward the in-plane solution (transform target into local frame).
       this._aimInvQuat.copy(q).invert();
       const tl = this._aimLocalDir.copy(T).applyQuaternion(this._aimInvQuat);
-      const radialComp = tl.x * Math.cos(az) + tl.y * Math.sin(az);
-      let alphaDesired = Math.atan2(radialComp, -tl.z);
-      alphaDesired = Math.max(0, Math.min(Math.PI, alphaDesired));
+      // d-launch-ahead: the maximiser over [0, π], not a signed atan2 clamped. A target nearly dead ahead with a slightly
+      // negative radial part gave atan2 ≈ −178° and the clamp made it 0° (strut aft) instead of ~180° (forward).
+      const alphaDesired = bestStrutAlpha(tl, az);
 
       let alpha = alphaDesired;
       if (c.arm && typeof c.arm.setAimAlpha === 'function') {
@@ -2783,7 +2783,7 @@ export class AutopilotSystem {
       } else {
         this._aimInvQuat.copy(q).invert();
         const tl = this._aimLocalDir.copy(T).applyQuaternion(this._aimInvQuat);
-        alphaT = Math.max(0, Math.min(Math.PI, Math.atan2(tl.x * Math.cos(az) + tl.y * Math.sin(az), -tl.z)));
+        alphaT = bestStrutAlpha(tl, az);                               // not a signed atan2 clamped: wrong dead ahead
         if (arm) c.alphaF = alphaT;
       }
     }

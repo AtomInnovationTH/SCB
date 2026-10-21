@@ -97,7 +97,9 @@ export function strutLocalDirection(alpha, azRad, out) {
  * t_out = dir·(cos az, sin az, 0) and t_aft = −dir.z. Over α ∈ [0, π]:
  *   t_out >= 0 → the unconstrained maximum atan2(t_out, t_aft) is already in range;
  *   t_out <  0 → the maximum is an end point: 0 when t_aft >= 0, else π.
- * (CameraSystem's `|sinA|` and AutopilotSystem's signed-then-clamped forms are wrong for t_out < 0.)
+ * (A signed atan2 clamped to [0, π] is wrong for t_out < 0: a target nearly dead ahead gave about −178° and the clamp made it 0°,
+ * strut aft. AutopilotSystem's two aim paths used that form until d-launch-ahead (2026-10-20) and now call this. CameraSystem's
+ * `|sinA|` form is also wrong for t_out < 0, but runs only when LAUNCH_AIMS_STRUT is off.)
  *
  * @param {{x:number,y:number,z:number}} dirShip - wanted direction, player-LOCAL frame (need not be unit)
  * @param {number} azRad - the arm's collar azimuth (radians): atan2(dockOffset.y, dockOffset.x)
