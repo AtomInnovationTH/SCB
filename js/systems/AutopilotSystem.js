@@ -88,15 +88,51 @@ const ARRIVAL_NO_LOCK = Symbol('arrivalNoLock');
  * Pure: the caller (the autopilot) passes its cached count of mother nets.
  * @param {number} [mass] target mass in kg
  * @param {number} [motherNetsLeft] the mother's nets now (default: a full magazine, the start of the game)
- * @returns {string}
+ * @param {object} [readiness] `ArmManager.daughterLaunchReadiness` for the piece; with nets 0 the D line then waits
+ *   until a daughter can launch (null = say nothing yet / a daughter is already out), or names the real blocker
+ * @returns {string|null}
  */
-export function arrivalLineText(mass, motherNetsLeft) {
+export function arrivalLineText(mass, motherNetsLeft, readiness) {
   const left = Number.isFinite(motherNetsLeft) ? motherNetsLeft : Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
   if (left > 0) return 'In position. Press N to net it.';
   if (mass > 0 && classifyNetTarget(mass).band === 'whale') {
     return 'Out of mother nets. Restock at the resupply stop.';
   }
-  return 'In position. Press D to send a daughter.';
+  if (!readiness) return 'In position. Press D to send a daughter.';
+  // Nets gone: the D line only once a daughter can really launch (DECISIONS §33 row 3, one line, one action).
+  if (readiness.going) return null;
+  if (readiness.ready) return 'In position. Press D to send a daughter.';
+  if (readiness.wait) return null;
+  return daughterBlockerText(readiness);
+}
+
+/** @returns {string} 'name' and 's' for a count: "1 holding a catch" / "2 holding catches" */
+function _blockerParts(c) {
+  const parts = [];
+  if (c.noFuel > 0) parts.push(`${c.noFuel} out of fuel`);
+  if (c.holding > 0) parts.push(c.holding === 1 ? '1 holding a catch' : `${c.holding} holding catches`);
+  if (c.heavy > 0) parts.push(`${c.heavy} too small for this piece`);
+  return parts;
+}
+
+/**
+ * The one plain line naming why no daughter can go (readiness from ArmManager.daughterLaunchReadiness, nothing
+ * will become ready by itself). Null when `readiness` names no blocker.
+ * @param {{why:(string|null), counts:{noFuel:number, holding:number, heavy:number}}} readiness
+ * @returns {string|null}
+ */
+function daughterBlockerText(readiness) {
+  const head = 'In position. ';
+  switch (readiness.why) {
+    case 'safe': return `${head}The daughters are locked in safe mode.`;
+    case 'power': return `${head}Daughter power is off.`;
+    case 'none': return `${head}No daughter can go: none are left.`;
+    case 'fuel': return `${head}No daughter can go: all are out of fuel.`;
+    case 'holding': return `${head}No daughter can go: all hold catches until the burn to the next field.`;
+    case 'heavy': return `${head}No daughter can go: the piece is too heavy for them.`;
+    case 'mixed': return `${head}No daughter can go: ${_blockerParts(readiness.counts).join(', ')}.`;
+    default: return null;
+  }
 }
 
 /**
@@ -353,6 +389,10 @@ export class AutopilotSystem {
     /** nets-1b: what the arrival line was last said for (the locked target, or ARRIVAL_NO_LOCK); undefined = not yet.
      *  The line is said once per lock; engage / disengage reset it. */
     this._arrivalSaidFor = undefined;
+
+    /** The lock the D line is waiting on (nets 0, no daughter can launch yet, but one will); undefined = not waiting. */
+    this._arrivalPendingFor = undefined;
+    this._arrivalPendingT = 0;
 
     /** @type {number|string|null} Currently-emitted lock id (for LOCK/UNLOCK events) */
     this._lockedEmittedId = null;
@@ -991,6 +1031,7 @@ export class AutopilotSystem {
     // Lock target reference so cycling targets doesn't change AP destination
     this._lockedTargetRef = null;
     this._arrivalSaidFor = undefined;   // a new lock: the arrival line may be said again (nets-1b)
+    this._arrivalPendingFor = undefined;
     if (this._headingMode === 'TARGET' && this._targetSelector) {
       this._lockedTargetRef = this._targetSelector.getActiveTarget();
     }
@@ -1062,6 +1103,7 @@ export class AutopilotSystem {
       : new THREE.Vector3(cluster.center.x, cluster.center.y, cluster.center.z);
     this._lockedTargetRef = null;
     this._arrivalSaidFor = undefined;   // a new engagement (cluster B after cluster A, no disengage between): said again (nets-1b R2)
+    this._arrivalPendingFor = undefined;
 
     if (this._player) {
       this._player.autopilotEngaged = true;
@@ -1097,6 +1139,7 @@ export class AutopilotSystem {
     this._engaged = false;
     this._lockedTargetRef = null;
     this._arrivalSaidFor = undefined;
+    this._arrivalPendingFor = undefined;
     this._debrisMapCluster = null;
     this._clusterArrivalPoint = null;
     this._goalPos = null;
@@ -1137,6 +1180,37 @@ export class AutopilotSystem {
   // PER-FRAME UPDATE (state machine + control law)
   // ==========================================================================
 
+  /** The arrival line, as the one COMMS_MESSAGE (plain words; the next step to press stays up). */
+  _emitArrivalLine(text) {
+    eventBus.emit(Events.COMMS_MESSAGE, { text, priority: 'info', _keep: true });
+  }
+
+  /**
+   * The "Press D" line waiting for a daughter (nets 0 at arrival, none able to launch yet, one soon able to). Looks
+   * again every second of real time: ready -> the line once; a daughter already out for the piece -> silence;
+   * a blocker that will not clear -> that one plain line. Ends quietly if the lock changed or the piece is gone.
+   * @param {number} dt real frame seconds
+   */
+  _tickDaughterLinePending(dt) {
+    const key = this._arrivalPendingFor;
+    if (key === undefined) return;
+    const lockRef = this._lockedTargetRef;
+    if (!lockRef || key !== lockRef || lockRef._captured === true || lockRef.alive === false) {
+      this._arrivalPendingFor = undefined;
+      return;
+    }
+    this._arrivalPendingT += dt;
+    if (this._arrivalPendingT < 1.0) return;
+    this._arrivalPendingT = 0;
+    const readiness = this._armManager?.daughterLaunchReadiness?.(lockRef);
+    if (!readiness) { this._arrivalPendingFor = undefined; this._arrivalSaidFor = key; return; }
+    const text = arrivalLineText(lockRef.mass, this._motherNetsLeft, readiness);
+    if (text === null && !readiness.going) return;   // still waiting
+    this._arrivalPendingFor = undefined;
+    this._arrivalSaidFor = key;
+    if (text !== null) this._emitArrivalLine(text);
+  }
+
   /**
    * Called each gameplay frame from the main game loop.
    * Advances the rendezvous state machine and commands Cartesian impulses.
@@ -1166,6 +1240,8 @@ export class AutopilotSystem {
     }
 
     if (!this._engaged || !this._player) return;
+
+    this._tickDaughterLinePending(dt);
 
     // --- ΔV safety check ---
     const dv = this._getRemainingDeltaV();
@@ -1407,20 +1483,22 @@ export class AutopilotSystem {
           // nets-1b (DECISIONS §33, one line per fact): said once per lock, and never for a piece that is already
           // caught or gone. A HOLD excursion (4*POS_TOL) drops to TRAIL_ALIGN and re-arrives on the same lock; the
           // bot run read "In position. Press D to send a daughter." twice more after the daughter had caught it.
+          // With no mother nets the D line waits until a daughter can really launch (_tickDaughterLinePending);
+          // if none ever can, it names why instead; a daughter already out for this piece: nothing to say.
           const lockRef = this._lockedTargetRef;
           const lockKey = lockRef || ARRIVAL_NO_LOCK;
           const lockDone = !!lockRef && (lockRef._captured === true || lockRef.alive === false);
-          if (!lockDone && this._arrivalSaidFor !== lockKey) {
-            this._arrivalSaidFor = lockKey;
-            eventBus.emit(Events.COMMS_MESSAGE, {
-              // Plain words, no symbols (Ruling 0). This is the ONE arrival line after the tutorial
-              // (the GameFlowManager one-shot that said the same thing is gone). Net-aware per the owner
-              // ruling of 2026-10-20 (DECISIONS §33 row 8): N while the mother has nets; D when she has none;
-              // a restock when none are left and no daughter can hold the piece (arrivalLineText).
-              text: arrivalLineText(lockRef ? lockRef.mass : 0, this._motherNetsLeft),
-              priority: 'info',
-              _keep: true,   // the next step to press
-            });
+          if (!lockDone && this._arrivalSaidFor !== lockKey && this._arrivalPendingFor !== lockKey) {
+            const readiness = (lockRef && !(this._motherNetsLeft > 0))
+              ? (this._armManager?.daughterLaunchReadiness?.(lockRef) ?? null) : null;
+            const text = arrivalLineText(lockRef ? lockRef.mass : 0, this._motherNetsLeft, readiness);
+            if (text === null && !readiness?.going) {
+              this._arrivalPendingFor = lockKey;    // a daughter will be ready soon: say it then
+              this._arrivalPendingT = 0;
+            } else {
+              this._arrivalSaidFor = lockKey;
+              if (text !== null) this._emitArrivalLine(text);
+            }
           }
         } else if (posErrM > Dtrail_m * 3) {
           // Fell too far behind — back off to MATCH_ORBIT

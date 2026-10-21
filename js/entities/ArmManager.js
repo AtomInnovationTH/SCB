@@ -242,6 +242,17 @@ export function generateDockPositions(tierKeyOrCount) {
   return positions;
 }
 
+/**
+ * Can this daughter be sent right now? Docked, spring charged, fuel above the 5 dead-end line, not reserved by an
+ * aim in progress. The one filter of `_findDockedArm` (minus the type) and `daughterLaunchReadiness`. Module scope, not a
+ * method, so `_findDockedArm` still works when borrowed onto another object (main.js's chip helper test does that).
+ * @param {object} a an ArmUnit
+ * @returns {boolean}
+ */
+function armCanLaunchNow(a) {
+  return !!a && a.state === ARM_STATES.DOCKED && !!a.springCharged && a.fuel > 5 && !a._aimReserved;
+}
+
 export class ArmManager {
   /**
    * @param {THREE.Scene} scene
@@ -3063,6 +3074,53 @@ export class ArmManager {
   }
 
   /**
+   * Pure read (no comms, no state change): can a daughter go at `target` now, will one without the player doing
+   * anything, or what stops them all? Mirrors the gates of `deployArm` (safe mode, ARM power, the arm `_findDockedArm`
+   * picks by type, its capture mass), so `ready` is true exactly when `deployArm(target)` gets past them.
+   * Daughter fuel never refills in play, so fuel <= 5 is a dead end (`noFuel`).
+   * @param {object} target - needs `.mass` (default 1 kg, as deployArm)
+   * @returns {{ready:boolean, wait:boolean, going:boolean, why:(string|null), counts:{noFuel:number, holding:number, heavy:number}}}
+   *   `going`: a daughter already out for this very piece. `wait`: not ready, but one will be (spring reloading, or
+   *   out on her line). `why`: 'safe' | 'power' | 'none' | 'fuel' | 'holding' | 'heavy' | 'mixed' when nothing will be ready.
+   */
+  daughterLaunchReadiness(target) {
+    const S = ARM_STATES;
+    const counts = { noFuel: 0, holding: 0, heavy: 0 };
+    const out = { ready: false, wait: false, going: false, why: null, counts };
+    const arms = this.arms || [];
+    out.going = !!target && arms.some((a) => a && a.state !== S.DOCKED && a.target === target);
+    if (this.playerSatellite && this.playerSatellite.safeMode) { out.why = 'safe'; return out; }
+    if (powerDistribution.armMultiplier <= 0) { out.why = 'power'; return out; }
+
+    const mass = (target && target.mass) || 1;
+    // The arm deployArm would pick: the preferred type first, the other type if none of it can go.
+    const first = mass > Constants.SPINNER_MAX_CAPTURE_MASS ? 'weaver' : 'spinner';
+    const order = [first, first === 'weaver' ? 'spinner' : 'weaver'];
+    for (const type of order) {
+      const eligible = arms.filter((a) => a && a.type === type && armCanLaunchNow(a));
+      if (eligible.length > 0) {
+        out.ready = eligible.some((a) => mass <= a.config.maxCaptureMass);
+        break;
+      }
+    }
+    if (out.ready) return out;
+
+    for (const a of arms) {
+      if (!a || a.state === S.EXPENDED || a.state === S.ADRIFT || a.isDetached) continue;
+      if (a.state === S.HOLDING_CATCH) { counts.holding++; continue; }
+      if (!(a.fuel > 5)) { counts.noFuel++; continue; }
+      if (mass > a.config.maxCaptureMass) { counts.heavy++; continue; }
+      out.wait = true;    // docked with the spring reloading / aim-reserved, or out on her line: she will be ready
+    }
+    if (out.wait) return out;
+    const kinds = (counts.noFuel > 0) + (counts.holding > 0) + (counts.heavy > 0);
+    out.why = kinds === 0 ? 'none'
+      : kinds > 1 ? 'mixed'
+        : counts.noFuel > 0 ? 'fuel' : counts.holding > 0 ? 'holding' : 'heavy';
+    return out;
+  }
+
+  /**
    * Find a docked arm matching the preferred type, with highest fuel.
    * V5: Also checks springCharged — can't deploy an uncharged arm.
    * If targetDir (ship-local) is provided, prefers the arm whose dockOffset
@@ -3074,9 +3132,7 @@ export class ArmManager {
    * @returns {ArmUnit|null}
    */
   _findDockedArm(type, targetDir = null) {
-    const eligible = this.arms
-      .filter(a => a.type === type && a.state === ARM_STATES.DOCKED && a.springCharged && a.fuel > 5
-        && !a._aimReserved);
+    const eligible = this.arms.filter(a => a.type === type && armCanLaunchNow(a));
     if (eligible.length === 0) return null;
 
     if (targetDir && targetDir.lengthSq() > 0) {
