@@ -82,6 +82,7 @@ const TABLE = Object.freeze({
 
 /** The module switch. OFF by default — desktop never consults the table. */
 let _glass = false;
+let _chipLineListener = null;   // u11 R3: TouchActionChip hears which action keys a stored comms line named
 
 // The three prose token shapes. Each captures the ONE key — a capital letter
 // or (w4-power D3) a comma; the replacer keeps the original token when the
@@ -98,6 +99,16 @@ function rowFor(ch) { return TABLE[ch === ',' ? 'Comma' : 'Key' + ch]; }
 
 /** @private escape a literal for a RegExp. */
 function reEscape(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+/**
+ * u11 D4: the four action keys whose touch chip is a floor-2/3 button (TouchActionChip / the step chips), by the
+ * label that button carries. Comms lines on glass name the button instead of the key.
+ * @type {Readonly<Record<string,string>>}
+ */
+const CHIP_LABELS = Object.freeze({ N: 'LAUNCH NET', D: 'SEND DAUGHTER', A: 'AUTOPILOT', S: 'SCAN', R: 'REEL' });
+const RE_PAD_CHIP = /\b([Pp])ress N to stick the pad on\b/g;   // the daughter's pad tool: its own button
+const RE_NEXT_CHIP = /\b([Pp])ress T for next target\b/g;   // no chip: a tap on the piece itself selects it
+const RE_PRESS_CHIP = /\b([Pp])ress ([NDASR])\b( to [A-Za-z]+\b)?/g;
 
 export class GestureHints {
   /** @returns {Readonly<Record<string, Readonly<GestureRow>>>} the frozen table */
@@ -146,6 +157,58 @@ export class GestureHints {
     }
     return null;
   }
+
+  /**
+   * u11 D4: comms text on glass. "Press N / D / A / S" becomes "Tap LAUNCH NET / SEND DAUGHTER / AUTOPILOT / SCAN"
+   * (case of the verb and the punctuation after it kept; a " to <verb>" that repeats the whole button name is
+   * dropped: "Press S to scan" -> "Tap SCAN"). Other key names ("[K]", Esc, Tab) are left as they are. OFF glass or
+   * for a non-string the SAME value comes back, so desktop text is byte-identical. This is NOT `speak`: its N/D/A rows
+   * name the long-press radial, which is not what the chip does.
+   * @param {string} text
+   * @returns {string}
+   */
+  static chipPhrase(text) {
+    if (!_glass || typeof text !== 'string') return text;
+    return text.replace(RE_PAD_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' STICK PAD')
+      .replace(RE_NEXT_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' a piece to pick the next target').replace(RE_PRESS_CHIP, (tok, p, letter, toVerb) => {
+      const label = CHIP_LABELS[letter];
+      const lead = (p === 'P' ? 'Tap ' : 'tap ') + label;
+      if (!toVerb) return lead;
+      const verb = toVerb.slice(4).toLowerCase();
+      // "Press R to reel her home" keeps its verb: "Tap REEL her home" would read like a command to the button.
+      return (label.toLowerCase() === verb && letter !== 'R') ? lead : lead + toVerb;
+    });
+  }
+
+  /**
+   * u11 R3: which chips a line's "Press N/D/A/S" (and the pad line) asks for, in reading order, as chip kinds
+   * ('net'|'pad'|'daughter'|'autopilot'|'scan'|'reel'). Pure (not glass-gated): the same tokens `chipPhrase` rewrites.
+   * @param {string} text
+   * @returns {string[]}
+   */
+  static chipKinds(text) {
+    if (typeof text !== 'string') return [];
+    const found = [];
+    const KIND = { N: 'net', D: 'daughter', A: 'autopilot', S: 'scan', R: 'reel' };
+    const rest = text.replace(RE_PAD_CHIP, (tok, p, off) => { found.push([off, 'pad']); return ' '.repeat(tok.length); });
+    rest.replace(RE_PRESS_CHIP, (tok, p, letter, toVerb, off) => { found.push([off, KIND[letter]]); return tok; });
+    return found.sort((a, b) => a[0] - b[0]).map(f => f[1]);
+  }
+
+  /**
+   * u11 R3: the ONE place a stored comms line is reported to the touch chip. The comms store calls this with the
+   * line it just stored; on glass, when the line named an action key, the registered listener gets the chip kinds.
+   * Desktop: nothing happens. No listener: nothing happens.
+   * @param {string} text  the line as emitted (before `chipPhrase`)
+   */
+  static noteChipLine(text) {
+    if (!_glass || !_chipLineListener) return;
+    const kinds = GestureHints.chipKinds(text);
+    if (kinds.length) { try { _chipLineListener(kinds, text); } catch (_e) { /* a listener must not break comms */ } }
+  }
+
+  /** u11 R3: register (or clear with null) the one listener for `noteChipLine` (TouchActionChip). */
+  static setChipLineListener(fn) { _chipLineListener = (typeof fn === 'function') ? fn : null; }
 
   /**
    * Rewrite key tokens in prose as gestures. OFF glass (or for a non-string)

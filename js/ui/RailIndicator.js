@@ -69,6 +69,7 @@
 import { FloorContract } from '../core/FloorContract.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { midHeightCss, dodgeTop } from './RailGeometry.js';
+import { GestureHints } from './hud/GestureHints.js';
 
 /** The HUD column on the WHERE rail's side — what the dodge measures (HUD.js's right stack). */
 export const SIDE_COLUMN_ID = 'hud-right-column';
@@ -497,7 +498,11 @@ export class RailIndicator {
    */
   _applyPhase(now) {
     if (!this._edgeChrome || !this._root) return;
-    const ph = this._edgeChrome.phase('rail', now);
+    let ph = this._edgeChrome.phase('rail', now);
+    // u11 D6: on glass the rail is the only thing that says which floor you are on (floors 1-2 have no caption), and
+    // an edge tap to wake it is not discoverable. Once revealed (the mission-1 quiet state is its own CSS attribute)
+    // it never fades or hides. Desktop keeps the fade.
+    if (ph !== 'awake' && GestureHints.isGlass()) ph = 'awake';
     if (ph === this._phase) return;
     this._phase = ph;
     if (ph === 'awake') {

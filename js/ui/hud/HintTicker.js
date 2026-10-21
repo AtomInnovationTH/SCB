@@ -207,6 +207,19 @@ export class HintTicker {
     this._onStepTap = (typeof fn === 'function') ? fn : null;
   }
 
+  /**
+   * u11 D2: is a step row other than `exceptId` alive (on screen, or waiting off screen for the newer one to leave)?
+   * TouchActionChip asks before it posts: one step chip, one action.
+   * @param {string} [exceptId]
+   * @returns {boolean}
+   */
+  hasStepChip(exceptId) {
+    // u11 R11: only a step row WITH a button is a tappable chip; a text-only step hint ("Turn to line her up")
+    // does not hold the slot against a line chip.
+    const isStep = (it) => it && it.id !== exceptId && it.payload && it.payload.step === true && !!it.payload.button;
+    return this._items.some(isStep) || this._waiting.some(isStep);
+  }
+
   /** Number of currently-visible hint rows. */
   getVisibleCount() {
     return this._items.length;

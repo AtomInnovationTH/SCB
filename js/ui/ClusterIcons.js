@@ -398,8 +398,7 @@ export class ClusterIcons {
       ring.style.cursor = 'pointer';
       label.style.pointerEvents = 'auto';
       label.style.cursor = 'pointer';
-      name.style.pointerEvents = 'auto';
-      name.style.cursor = 'pointer';
+      name.style.pointerEvents = 'none';   // u11 D7: a drag that starts on the name pill turns the view; the ring is the tap target
       el.addEventListener('click', (ev) => {
         if (ev && ev.stopPropagation) ev.stopPropagation();
         this.clickIcon(cluster.id);

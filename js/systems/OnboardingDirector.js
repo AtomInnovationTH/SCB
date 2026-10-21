@@ -47,6 +47,11 @@ export const MOTHER_EMPTY_CHIP = Object.freeze({
   text: 'Send a daughter', glyph: 'D', keys: Object.freeze(['KeyD']), press: 'KeyD', button: 'SEND DAUGHTER',
 });
 
+/** u11 D3: the range wall's nudge while its target is already within net reach (same wording as the net beats' chip). */
+const IN_REACH_NUDGE = Object.freeze({
+  text: 'Launch the net', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'LAUNCH NET',
+});
+
 // ────────────────────────────────────────────────────────────────────────────
 // BEAT TABLE — fixed by spec.  Do not edit individual values without bumping
 // Constants.ONBOARDING.STORAGE_KEY (since they affect "satisfied" semantics).
@@ -663,6 +668,8 @@ export class OnboardingDirector {
     const gateNudgeEvents = [
       Events.TARGET_DISCOVERED, Events.SCAN_COMPLETE, Events.AUTOPILOT_ENGAGE,
       Events.TARGET_OUT_OF_RANGE, Events.DEBRIS_CAPTURED, Events.LASSO_CAPTURED,
+      // u11 D3: a held range wall swaps its nudge when its target comes within net reach (or leaves it).
+      Events.TARGET_IN_RANGE, Events.TARGET_CLEARED,
     ];
     for (const e of gateNudgeEvents) {
       if (!e) continue;
@@ -944,7 +951,8 @@ export class OnboardingDirector {
       : (typeof def.say === 'string' && def.say ? def.say : `Reminder: ${def.label}`);
     this._emit(Events.HINT_POSTED, {
       id: 'remind_' + d.skillId,
-      text,
+      // u11 R13: on glass the line names the chip ("Tap LAUNCH NET ..."), as comms lines do; desktop: the same string.
+      text: GestureHints.chipPhrase(text),
       glyph: def.key || '?',
       keys: [],
       skillId: d.skillId,
@@ -964,6 +972,8 @@ export class OnboardingDirector {
       this._clearActiveTimers();
       this._emit(Events.HINT_SATISFIED, { id: beat.id + '_wait' });
       this._postBeat(beat);
+    } else {
+      this._refreshHeldNudge(beat);
     }
   }
 
@@ -979,6 +989,7 @@ export class OnboardingDirector {
   _onMotherNets(count) {
     this._motherNets = count;
     const a = this._active;
+    if (a && a.held && a.beat) this._refreshHeldNudge(a.beat);   // u11 D3: the in-reach nudge of a held range beat
     if (!a || a.held || !a.beat || !a.beat.motherEmptyToD) return;
     if (this._motherShotInFlight) return;   // the last net may still catch: say nothing until it has resolved
     if (count <= 0 && !a.motherEmptyShown) {
@@ -1370,23 +1381,8 @@ export class OnboardingDirector {
     }
 
     // Post a soft nudge hint explaining what to do to unblock (once).
-    const nudge = beat.requiresContacts ? beat.noContactNudge
-                : Number.isFinite(beat.requiresProximityM) ? beat.farNudge
-                : beat.requiresOutOfRange ? beat.outOfRangeNudge
-                : null;
-    if (nudge) {
-      this._emit(Events.HINT_POSTED, {
-        id: beat.id + '_wait',
-        text: nudge,
-        glyph: beat.nudgeGlyph || beat.glyph || '…',
-        keys: Array.isArray(beat.nudgeKeys) ? beat.nudgeKeys : [],
-        duration: 0, // persistent until satisfied/cleared
-        priority: 'normal',
-        step: true,
-        press: beat.nudgePress,
-        button: beat.nudgeButton,
-      });
-    }
+    this._active.nudgeKind = null;
+    this._postHeldNudge(beat);
 
     const poll = Constants.ONBOARDING?.GATE_POLL_MS || 1200;
     const tick = () => {
@@ -1397,9 +1393,82 @@ export class OnboardingDirector {
         this._postBeat(beat);
         return;
       }
+      this._refreshHeldNudge(beat);
       this._active.gateTimer = this._setTimeout(tick, poll);
     };
     this._active.gateTimer = this._setTimeout(tick, poll);
+  }
+
+  /**
+   * u11 D3: what a held beat's nudge asks for right now. Every gate has one fixed nudge, except the range wall:
+   * while its target is already within net reach the nudge is the net itself (SEND DAUGHTER with no mother nets
+   * left; a net still in flight counts as left), not "Scan for the far piece" with nothing to tap that helps.
+   * @param {object} beat
+   * @returns {{kind:string,text:string,glyph:string,keys:string[],press?:string,button?:string}|null}
+   * @private
+   */
+  _heldNudgeFor(beat) {
+    if (beat.requiresOutOfRange && !beat.requiresContacts) {
+      let inReach = false; let daughterReady = false;
+      try {
+        const c = (this._context && this._context()) || {};
+        inReach = !!c.targetInRange;
+        daughterReady = !!c.daughterReady;
+      } catch (_e) { inReach = false; }
+      if (inReach) {
+        const asDaughter = () => ({ kind: 'daughter', text: MOTHER_EMPTY_CHIP.text, glyph: MOTHER_EMPTY_CHIP.glyph,
+          keys: [...MOTHER_EMPTY_CHIP.keys], press: MOTHER_EMPTY_CHIP.press, button: MOTHER_EMPTY_CHIP.button });
+        const asNet = () => ({ kind: 'net', text: IN_REACH_NUDGE.text, glyph: IN_REACH_NUDGE.glyph,
+          keys: [...IN_REACH_NUDGE.keys], press: IN_REACH_NUDGE.press, button: IN_REACH_NUDGE.button });
+        if (this._motherNets > 0) return asNet();
+        // R4c: no mother nets. The last net still flying may catch: keep the nudge that is up until it resolves
+        // (never a NEW LAUNCH NET at 0 nets). Settled: SEND DAUGHTER only when a docked daughter has nets to send.
+        if (this._motherShotInFlight) {
+          const k = this._active && this._active.nudgeKind;
+          if (k === 'net') return asNet();
+          if (k === 'daughter') return asDaughter();
+        } else if (daughterReady) {
+          return asDaughter();
+        }
+      }
+    }
+    const nudge = beat.requiresContacts ? beat.noContactNudge
+                : Number.isFinite(beat.requiresProximityM) ? beat.farNudge
+                : beat.requiresOutOfRange ? beat.outOfRangeNudge
+                : null;
+    if (!nudge) return null;
+    return {
+      kind: 'base', text: nudge, glyph: beat.nudgeGlyph || beat.glyph || '…',
+      keys: Array.isArray(beat.nudgeKeys) ? beat.nudgeKeys : [], press: beat.nudgePress, button: beat.nudgeButton,
+    };
+  }
+
+  /** Post the held beat's nudge for the current state (id `<beat>_wait`; a repeat post of a live id is a no-op). @private */
+  _postHeldNudge(beat) {
+    const n = this._heldNudgeFor(beat);
+    if (!n) return;
+    if (this._active) this._active.nudgeKind = n.kind;
+    this._emit(Events.HINT_POSTED, {
+      id: beat.id + '_wait',
+      text: n.text,
+      glyph: n.glyph,
+      keys: n.keys,
+      duration: 0, // persistent until satisfied/cleared
+      priority: 'normal',
+      step: true,
+      press: n.press,
+      button: n.button,
+    });
+  }
+
+  /** The nudge kind changed while the beat stays held (target came within reach, nets ran out): swap the chip. @private */
+  _refreshHeldNudge(beat) {
+    const a = this._active;
+    if (!a || !a.held || a.beat.id !== beat.id || !beat.requiresOutOfRange) return;
+    const n = this._heldNudgeFor(beat);
+    if (!n || n.kind === a.nudgeKind) return;
+    this._emit(Events.HINT_SATISFIED, { id: beat.id + '_wait' });
+    this._postHeldNudge(beat);
   }
 
   _onTrigger(beat) {

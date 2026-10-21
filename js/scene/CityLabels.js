@@ -454,6 +454,31 @@ export function slotTransform(slot, textW, offX = 0, offY = 0) {
   }
 }
 
+/**
+ * u13-polish D4 (owner 2026-10-21: "Niagara Falls" read "agara Falls" at the left edge): is the whole box inside the
+ * W x H viewport? A label is drawn whole or not at all.
+ * @param {{x:number,y:number,w:number,h:number}} b @param {number} W @param {number} H
+ * @returns {boolean}
+ */
+export function boxInViewport(b, W, H) {
+  return b.x >= 0 && b.y >= 0 && b.x + b.w <= W && b.y + b.h <= H;
+}
+
+/**
+ * Does ANY slot (E, W, NE, SE) put the whole pill inside the viewport, and the dot too? When none does the label is
+ * not drawn at all: never pulled off its dot, never half shown.
+ * @returns {boolean}
+ */
+export function labelFitsViewport(sx, sy, textW, W, H, offX = 0, offY = 0) {
+  _fitDot.x = sx - DOT_PX / 2; _fitDot.y = sy - DOT_PX / 2;
+  if (!boxInViewport(_fitDot, W, H)) return false;
+  for (const slot of LABEL_SLOTS) {
+    slotBox(sx, sy, textW, slot, _fitBox, offX, offY);
+    if (boxInViewport(_fitBox, W, H)) return true;
+  }
+  return false;
+}
+
 /** Axis-aligned box overlap. */
 function _boxesOverlap(a, b) {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
@@ -463,6 +488,9 @@ function _boxesOverlap(a, b) {
 const _scanBox = { x: 0, y: 0, w: 0, h: 0 };
 // Scratch dot square for the dot-only free test (w/h fixed; x/y set per use).
 const _dotBox = { x: 0, y: 0, w: DOT_PX, h: DOT_PX };
+// Scratch boxes for labelFitsViewport / the held-slot check (D4).
+const _fitDot = { x: 0, y: 0, w: DOT_PX, h: DOT_PX };
+const _fitBox = { x: 0, y: 0, w: 0, h: 0 };
 
 /**
  * Pick the first free slot for a label, honouring hysteresis: if `prevSlot`
@@ -477,12 +505,14 @@ const _dotBox = { x: 0, y: 0, w: DOT_PX, h: DOT_PX };
  * @returns {string|null}
  */
 export function pickSlot(sx, sy, textW, keptBoxes, prevSlot = null, keptCount = keptBoxes.length,
-                         offX = 0, offY = 0) {
+                         offX = 0, offY = 0, view = null) {
   const order = prevSlot && LABEL_SLOTS.includes(prevSlot)
     ? [prevSlot, ...LABEL_SLOTS.filter(s => s !== prevSlot)]
     : LABEL_SLOTS;
   for (const slot of order) {
     slotBox(sx, sy, textW, slot, _scanBox, offX, offY);
+    // u13-polish D4: a pill that a screen edge would cut is not a place to put it
+    if (view && !boxInViewport(_scanBox, view.W, view.H)) continue;
     let blocked = false;
     for (let j = 0; j < keptCount; j++) {
       if (_boxesOverlap(_scanBox, keptBoxes[j])) { blocked = true; break; }
@@ -851,6 +881,7 @@ export class CityLabels {
       // nearer the camera.
       cand.sort(_byPriority);
       const kept = layer._kept;
+      const view = { W, H };   // D4: the viewport a whole label must fit in
       let keptCount = 0;
       let placedLaunch = 0, placedOther = 0;
 
@@ -898,8 +929,16 @@ export class CityLabels {
       // it was until it has been without a slot for SLOT_LOSS_GRACE_MS — it
       // reserves no box and counts toward no cap while held, so it can only
       // overlap for that grace; a hidden one just stays hidden.
+      const heldWhole = (item) => {
+        _fitDot.x = item._sx - DOT_PX / 2; _fitDot.y = item._sy - DOT_PX / 2;
+        if (!boxInViewport(_fitDot, W, H)) return false;
+        if (item._dotOnly) return true;
+        slotBox(item._sx, item._sy, item.w, item._slot || 'E', _fitBox, item.offX, item.offY);
+        return boxInViewport(_fitBox, W, H);
+      };
       const lose = (item) => {
-        if (item.shown && holdAfterLoss(true, item._lostAt, now)) {
+        // D4: a label held where it was is held only while that place is still whole on screen
+        if (item.shown && holdAfterLoss(true, item._lostAt, now) && heldWhole(item)) {
           if (item._lostAt < 0) item._lostAt = now;
           draw(item, item._slot || 'E', item._dotOnly);
         } else {
@@ -911,8 +950,14 @@ export class CityLabels {
       // pill box AND its dot square, position the DOM. Returns true if placed
       // (counts toward the caps). Allocation-free: writes into the `kept` pool.
       const place = (item) => {
+        // D4: drawn whole or not at all — a dot or a pill a screen edge would cut hides the label (no dot-only
+        // fallback: that is for a pill blocked by another label, not by the edge).
+        if (!labelFitsViewport(item._sx, item._sy, item.w, W, H, item.offX, item.offY)) {
+          this._hide(item);
+          return false;
+        }
         const slot = pickSlot(item._sx, item._sy, item.w, kept, item._slot, keptCount,
-                              item.offX, item.offY);
+                              item.offX, item.offY, view);
         if (slot) {
           // Pill box, then dot square (so no pill covers another entry's dot).
           slotBox(item._sx, item._sy, item.w, slot, kept[keptCount++], item.offX, item.offY);

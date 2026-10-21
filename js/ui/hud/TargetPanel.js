@@ -305,6 +305,12 @@ export class TargetPanel {
             margin-left: 6px; font-size: 0.85em; font-weight: normal; letter-spacing: 0.04em;
             color: var(--hud-info, ${sel}); opacity: 0.8; text-shadow: none;
         }
+        /* u13-polish D2 (owner 2026-10-20, iPad): on touch the chip goes on its own line under the name, so the name is
+           never cut ("Fragment  tap again: analy..."). The row keeps its 44 px (two lines of 11 px + 9.4 px fit in it
+           under border-box), so the pane height does not change. Desktop keeps the one-line "Z analyse". */
+        #hud-targets-panel[data-glass] .target-row.simple .analyse-chip {
+            display: block; margin-left: 0; margin-top: 1px; line-height: 1.2;
+        }
         .target-row:hover {
             background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.06);
         }
@@ -1156,7 +1162,7 @@ export class TargetPanel {
               : ` style="color:${tierColor}${law ? `;opacity:${law.alpha}` : ''}"`;
             // h4b D3: ONE prompt for the selected row until target info was opened once (touch has no Z).
             const chip = (selected && this._analyseChip)
-              ? `<span class="analyse-chip">${this._glass ? 'tap again: analyse' : 'Z analyse'}</span>`
+              ? `<span class="analyse-chip">${this._glass ? 'Tap again to analyse' : 'Z analyse'}</span>`
               : '';
             const inNet = t.distanceKm <= netReachKm;
             const reachStyle = `color:var(--hud-normal, ${VisualLaw.COLORS.PLAYER})${inNet ? '' : `;opacity:${THIN_ALPHA}`}`;

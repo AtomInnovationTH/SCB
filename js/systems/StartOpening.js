@@ -286,6 +286,13 @@ export class StartOpening {
   /** @returns {boolean} a counted action is waiting to actuate */
   isPending() { return this._armed && this._pending !== null; }
 
+  /**
+   * u11 D5: a pointer press is waiting here as the player's first action (it opens the wings when it fires). The
+   * canvas tap that is that same press must not also run a scan: the next empty tap scans.
+   * @returns {boolean}
+   */
+  isPointerPending() { return this._armed && this._pending !== null && this._pending.kind === 'pointer'; }
+
   /** @returns {number} times it has fired */
   get fires() { return this._fires; }
 

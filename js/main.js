@@ -153,6 +153,7 @@ import { TouchTelemetry } from './ui/touchTelemetry.js';
 import { GestureHints } from './ui/hud/GestureHints.js';
 import { nearestWithin as tapNearestWithin, TAP_SLOP_PX, TAP_SLOP_MS } from './systems/TapPick.js';
 import { pressKey as dispatchKeyPress } from './core/KeyDispatch.js';
+import { TouchActionChip } from './ui/TouchActionChip.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
 import { LeashVisual } from './ui/LeashVisual.js';
@@ -643,6 +644,93 @@ let autoLockController;
 /** Reward-first spine: live OUT-OF-RANGE flag for the selected target, fed into
  *  the OnboardingDirector contextProvider for the `range_wall` gate. */
 let _onboardingTargetOutOfRange = false;
+let touchActionChip = null;   // u11: the touch net / daughter button (glass only)
+/**
+ * u11 R2/R4c/R6/R12: the ONE daughter that D would launch at the selected piece, and can she go. SEND DAUGHTER is
+ * offered only for her (one helper feeds `hasDaughter`, the far state, the range-wall `daughterReady` flag and the
+ * "daughter" line chips), so no chip offers a launch the game would refuse. D's own choice, mirrored:
+ *   · a DOCKED daughter selected with 1-4 is the one (InputManager KeyD -> deployArmByIndex), else
+ *   · ArmManager.deployArm: the type by mass (a piece above SPINNER_MAX_CAPTURE_MASS wants a weaver, else a spinner),
+ *     `_findDockedArm` (docked, spring charged, fuel > 5, not held back for aiming; the dock best aligned with the
+ *     piece, else the most fuel), the other type when the first has none.
+ * She can go when she passes that same gate, still has nets, can hold the piece's mass (ArmUnit.deploy) and the piece is
+ * within her reach (tetherMax x ARM_DEPLOY_RANGE_FRACTION, the "Target 492m away (max 400m)" refusal). R4 run: taps at
+ * t=162 s and 177 s were refused because an "any daughter" test passed while the daughter D picked was out of reach.
+ * @param {object} [target] the piece (default: the selected one; none = no mass or reach test)
+ */
+function _daughterReadyWithNets(target) {
+  const arms = armManager && Array.isArray(armManager.arms) ? armManager.arms : null;
+  if (!arms) return false;
+  const S = Constants.ARM_STATES;
+  const t = target !== undefined ? target
+    : (targetSelector && targetSelector.getActiveTarget ? targetSelector.getActiveTarget() : null);
+  const gate = (a) => !!a && a.state === S.DOCKED && !!a.springCharged && a.fuel > 5 && !a._aimReserved;
+  const sel = armManager.selectedArmIndex >= 0 ? arms[armManager.selectedArmIndex] : null;
+  let arm = null;
+  if (sel && sel.state === S.DOCKED) {
+    arm = sel;
+  } else if (typeof armManager._findDockedArm === 'function') {
+    const mass = (t && t.mass) || 1;
+    const want = mass > Constants.SPINNER_MAX_CAPTURE_MASS ? 'weaver' : 'spinner';
+    let dir = null;
+    const ps = armManager.playerSatellite;
+    if (t && t._scenePosition && ps) {
+      const pp = ps.position || (ps.mesh && ps.mesh.position);
+      if (pp) {
+        dir = t._scenePosition.clone().sub(pp);
+        if (ps.quaternion) dir.applyQuaternion(ps.quaternion.clone().invert());
+      }
+    }
+    arm = armManager._findDockedArm(want, dir) || armManager._findDockedArm(want === 'weaver' ? 'spinner' : 'weaver', dir);
+  }
+  if (!gate(arm)) return false;
+  if (typeof arm.getNetInventory === 'function' && arm.getNetInventory() <= 0) return false;
+  if (t && arm.config) {
+    if ((t.mass || 0) > arm.config.maxCaptureMass) return false;
+    const tp = t._scenePosition;
+    if (tp && arm.position && arm.config.tetherMax > 0) {
+      const dx = tp.x - arm.position.x, dy = tp.y - arm.position.y, dz = tp.z - arm.position.z;
+      if (Math.sqrt(dx * dx + dy * dy + dz * dz) / Constants.SCENE_UNITS_PER_METER > arm.config.tetherMax * Constants.ARM_DEPLOY_RANGE_FRACTION) return false;
+    }
+  }
+  return true;
+}
+/**
+ * u11 R9: R would bring home a daughter that is out and idle - adrift (fuel spent, still on the tether), holding
+ * station or trawling - so the REEL chip frees her. KeyR acts on ONE arm (ArmManager.recallClosestDeployed): the
+ * selected daughter if she can be recalled, else the closest recallable one. So this asks about THAT arm:
+ * the selected recallable arm must be idle; with no selected recallable arm, every recallable arm must be idle
+ * (whichever is closest). R3 run (r3a, t=225 s): Small 2 adrift but Large 2, selected and mid-flight, got the R.
+ * Recallable = the game's own rule: not docked / expended / returning / docking / holding a catch / carrying one /
+ * cut loose. Not mid-flight (REEL would cancel the catch she was sent for).
+ */
+function _daughterReelable() {
+  const arms = armManager && Array.isArray(armManager.arms) ? armManager.arms : null;
+  if (!arms) return false;
+  const S = Constants.ARM_STATES;
+  const recallable = (a) => !!a && !a.isDetached && !a._carry
+    && a.state !== S.DOCKED && a.state !== S.EXPENDED && a.state !== S.RETURNING && a.state !== S.DOCKING
+    && a.state !== S.HOLDING_CATCH && !/^CARRY_/.test(String(a.state));
+  const idle = (a) => a.state === S.ADRIFT || a.state === S.STATION_KEEP || a.state === S.TRAWLING;
+  const sel = armManager.selectedArmIndex >= 0 ? arms[armManager.selectedArmIndex] : null;
+  if (sel && recallable(sel)) return idle(sel);
+  const out = arms.filter(recallable);
+  return out.length > 0 && out.every(idle);
+}
+/**
+ * u11 R2: for a selected piece beyond net reach, once the tutorial is over: can a docked daughter with nets reach it
+ * (InputManager's own test for OUT_OF_NET_RANGE_LINE), and is the autopilot already flying? null = no piece, or the
+ * tutorial still teaches (its range-wall beat owns the autopilot lesson).
+ */
+function _touchFarState() {
+  if (!onboardingDirector || !onboardingDirector.isMastered()) return null;
+  const t = targetSelector && targetSelector.getActiveTarget ? targetSelector.getActiveTarget() : null;
+  if (!t) return null;
+  let daughterCan = false;
+  try { daughterCan = !!(inputManager && inputManager._beyondNetReachButDaughterCan(t)) && _daughterReadyWithNets(t); } catch (_e) { /* best-effort */ }
+  return { daughterCan, autopilot: !!(autopilotSystem && autopilotSystem.engaged) };
+}
+let _onboardingTargetInRange = false;   // u11 D3: the selected target is within net reach (the range wall's net nudge)
 let missionCoach;
 let issConjunctionBoss;
 let starlinkCascadeBoss;
@@ -1538,10 +1626,10 @@ async function init() {
   // range_wall's trigger, collapsing the teach into a single tick. Setting the
   // flag first means the gate opens the instant the reticle reports OUT OF
   // RANGE, so the "too far — press A" coaching is shown before the player acts.
-  eventBus.on(Events.TARGET_OUT_OF_RANGE, () => { _onboardingTargetOutOfRange = true; });
-  eventBus.on(Events.TARGET_IN_RANGE, () => { _onboardingTargetOutOfRange = false; });
-  eventBus.on(Events.TARGET_CLEARED, () => { _onboardingTargetOutOfRange = false; });
-  if (Events.GAME_RESET) eventBus.on(Events.GAME_RESET, () => { _onboardingTargetOutOfRange = false; });
+  eventBus.on(Events.TARGET_OUT_OF_RANGE, () => { _onboardingTargetOutOfRange = true; _onboardingTargetInRange = false; });
+  eventBus.on(Events.TARGET_IN_RANGE, () => { _onboardingTargetOutOfRange = false; _onboardingTargetInRange = true; });
+  eventBus.on(Events.TARGET_CLEARED, () => { _onboardingTargetOutOfRange = false; _onboardingTargetInRange = false; });
+  if (Events.GAME_RESET) eventBus.on(Events.GAME_RESET, () => { _onboardingTargetOutOfRange = false; _onboardingTargetInRange = false; });
 
   onboardingDirector = new OnboardingDirector({
     eventBus,
@@ -1581,7 +1669,7 @@ async function init() {
       try {
         ladderAway = !!(ladderController && ladderController.isActive() && ladderController.currentFloor() !== 2);
       } catch (_e) { /* best-effort */ }
-      return { trackedContacts, nearestDebrisM, hasTarget, targetOutOfRange: _onboardingTargetOutOfRange, ladderAway };
+      return { trackedContacts, nearestDebrisM, hasTarget, targetOutOfRange: _onboardingTargetOutOfRange, targetInRange: _onboardingTargetInRange, daughterReady: _daughterReadyWithNets(), ladderAway };
     },
     // Ladder reorder rev 3: live floor for the DETAIL onboarding beat.
     // ladderController is constructed later; read live (GestureSplash idiom).
@@ -3267,6 +3355,8 @@ async function init() {
     const hit = tapNearestWithin(pts, x, y);
     if (hit) { eventBus.emit(Events.HUD_TARGET_CLICK, { id: hit.point.id }); return 'target'; }
     if (opts && opts.scanOnMiss === false) return null;
+    // u11 D5: this tap is the player's first action - it opens the wings (StartOpening); the next empty tap scans.
+    if (startOpening && startOpening.isPointerPending()) return 'opening';
     eventBus.emit(Events.SCAN_QUICK);
     return 'scan';
   };
@@ -3286,6 +3376,22 @@ async function init() {
       hud.hintTicker.setStepTap((code) => {
         if (startOpening && startOpening.ownsStepTap(code)) return;
         dispatchKeyPress(code);
+      });
+      // u11 D1/D2: whenever the game asks for the net or a daughter, that button is on screen (floors 2-3).
+      touchActionChip = new TouchActionChip({
+        eventBus,
+        ticker: hud.hintTicker,
+        getFloor: () => ((ladderController && ladderController.isActive && ladderController.isActive() && ladderController.currentFloor)
+          ? ladderController.currentFloor() : null),
+        getMotherNets: () => captureNetSystem.getMotherNetCount(),
+        hasDaughter: _daughterReadyWithNets,
+        // R1: "a daughter is holding" is read from the arm's state (the same lookup N uses), never from enter/exit events.
+        getHolding: () => {
+          const a = inputManager && inputManager.findHoldingDaughter ? inputManager.findHoldingDaughter() : null;
+          return a ? (a.selectedTool || 'NET') : null;
+        },
+        getFarState: _touchFarState,
+        getReelable: _daughterReelable,   // R9
       });
     }
     const stampEl = (typeof document !== 'undefined') ? document.getElementById('build-stamp') : null;

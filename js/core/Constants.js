@@ -5805,6 +5805,16 @@ export const Constants = {
     OVERLAY_WIDTH_PX: 400,
     OVERLAY_MIN_WIDTH_PX: 280,
     OVERLAY_TOP_MARGIN_PX: 20,
+    // u13-polish D1 (screens at least OVERLAY_WIDE_MIN_PX wide; narrower = phones, frozen, keep the 20 px margin):
+    // the card sits OVERLAY_GAP_PX below the lowest of the score strip, the line under it, the collision warning and
+    // the autopilot badge (drawn on the canvas at y 92 + 19 = 111, js/ui/TargetReticle.js AP_BADGE_TOP_PX), and keeps
+    // its left edge OVERLAY_GAP_PX right of the pause button. The strip fallback is used only when the strip's element
+    // is not in the page: top 8 + 28 tall, times the HUD scale (--hud-scale 1.25 on big screens).
+    OVERLAY_WIDE_MIN_PX: 920,
+    OVERLAY_GAP_PX: 8,
+    OVERLAY_STRIP_TOP_PX: 8,
+    OVERLAY_STRIP_H_PX: 28,
+    OVERLAY_AP_BADGE_BOTTOM_PX: 111,
     OVERLAY_BG: 'rgba(0, 10, 20, 0.85)',
     OVERLAY_BORDER_COLOR: '#00ccff',
     OVERLAY_TITLE_COLOR: '#00ccff',

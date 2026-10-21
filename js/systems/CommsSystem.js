@@ -17,6 +17,7 @@ import timerManager from './TimerManager.js';
 import { messagePassesSuppression, rampSuppressionTier, postOnboardingStartTier } from './commsSuppression.js';
 import { missReasonToText } from '../entities/CaptureNet.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
+import { GestureHints } from '../ui/hud/GestureHints.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -553,7 +554,10 @@ export class CommsSystem {
       if (!rawSrc) console.debug('[CommsSystem] sourceless emit defaulted to SYSTEM:', data.text);
       const src = rawSrc || 'SYSTEM';
       if (!body) return;
-      const text = stripSenderPrefix(src, body);   // nets-1b: the sender is shown once
+      const rawText = stripSenderPrefix(src, body);   // nets-1b: the sender is shown once
+      // u11 D4: on glass the line names the button (LAUNCH NET ...), not the key; desktop text is untouched.
+      // Runs AFTER the nets-1b strip/split helpers.
+      const text = GestureHints.chipPhrase(rawText);
 
       // ST-5.1: Classify channel
       const channel = sourceToChannel(src, data);
@@ -628,6 +632,7 @@ export class CommsSystem {
       if (kept) msg.keep = true;
 
       this.messages.push(msg);
+      GestureHints.noteChipLine(rawText);   // u11 R3: glass - a line that names an action key brings that chip up
       while (this.messages.length > MAX_MESSAGES) {
         this.messages.shift();
       }
@@ -1025,6 +1030,8 @@ export class CommsSystem {
     }
     if (!text) return;
     text = stripSenderPrefix(source, text);   // nets-1b: the sender is shown once (COMMS_SEND lands here too)
+    const rawText = text;
+    text = GestureHints.chipPhrase(text);   // u11 D4: glass names the button, not the key (desktop: same string)
     // ST-5.1: Classify channel
     const channel = sourceToChannel(source, { text, ...(extra || {}) });
 
@@ -1082,6 +1089,7 @@ export class CommsSystem {
     if (kept) msg.keep = true;
 
     this.messages.push(msg);
+    GestureHints.noteChipLine(rawText);   // u11 R3 (the text as passed in, before chipPhrase)
 
     // Trim old messages
     while (this.messages.length > MAX_MESSAGES) {

@@ -54,6 +54,87 @@ const COLORS = {
 };
 
 // ============================================================================
+// OFF-SCREEN MARKER LABEL PLACEMENT (u13-polish D3) — pure, so it is testable without a canvas
+// ============================================================================
+
+/** Clear space kept between an edge arrow and its label block (px). */
+export const OFFSCREEN_LABEL_GAP_PX = 4;
+
+/**
+ * The box (axis-aligned, px) that `_drawArrowShape(x, y, angle, size)` fills and strokes: its four corners rotated
+ * exactly as the canvas does (`translate(x, y)`, `rotate(-angle)`), grown by the stroke (the mitre at the tip reaches
+ * ~1.35 line widths past the corner). Kept next to the draw call so a change to one shows in the other's test.
+ * @param {number} x @param {number} y @param {number} angle @param {number} size @param {number} [lineWidth=2.5]
+ * @returns {{x:number, y:number, w:number, h:number}}
+ */
+export function arrowShapeBox(x, y, angle, size, lineWidth = 2.5) {
+  const th = -angle;
+  const c = Math.cos(th), sn = Math.sin(th);
+  const pts = [[size, 0], [-size * 0.5, -size * 0.6], [-size * 0.2, 0], [-size * 0.5, size * 0.6]];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [px, py] of pts) {
+    const rx = x + px * c - py * sn;
+    const ry = y + px * sn + py * c;
+    if (rx < x0) x0 = rx; if (rx > x1) x1 = rx;
+    if (ry < y0) y0 = ry; if (ry > y1) y1 = ry;
+  }
+  const pad = lineWidth * 1.4;
+  return { x: x0 - pad, y: y0 - pad, w: x1 - x0 + 2 * pad, h: y1 - y0 + 2 * pad };
+}
+
+/**
+ * Where an off-screen marker's text goes: a centred block of lines, on the screen-centre side of its edge arrow, far
+ * enough from the arrow's box that the two never touch (owner 2026-10-21: "FR▶MENT", the arrow drawn over the
+ * letters). The old rule put the text centre a fixed 20 px behind the arrow, which on a side edge is inside half the
+ * word's width. The block moves along the line from the arrow towards the screen centre until it clears the arrow box
+ * by `gap`, so a long word sits further out than a short one.
+ *
+ * @param {object} o
+ * @param {{x:number,y:number,angle:number}} o.edge   the arrow anchor (`_getEdgePosition`)
+ * @param {number} o.size                             arrow size
+ * @param {number} [o.lineWidth=2.5]
+ * @param {Array<{w:number,h:number}>} o.lines        text lines, top to bottom (each is centred in the block)
+ * @param {number} o.viewW @param {number} o.viewH    the canvas size (the block heads for its centre)
+ * @param {number} [o.gap=OFFSCREEN_LABEL_GAP_PX]
+ * @returns {{arrow:{x,y,w,h}, block:{x,y,w,h}, lines:Array<{cx:number, cy:number}>}}  line centres, for `textAlign:'center'` + `textBaseline:'middle'`
+ */
+export function offscreenLabelLayout(o) {
+  const gap = o.gap != null ? o.gap : OFFSCREEN_LABEL_GAP_PX;
+  const arrow = arrowShapeBox(o.edge.x, o.edge.y, o.edge.angle, o.size, o.lineWidth != null ? o.lineWidth : 2.5);
+  const bw = Math.max(0, ...o.lines.map((l) => l.w));
+  const bh = o.lines.reduce((n, l) => n + l.h, 0);
+  // unit vector from the anchor towards the screen centre
+  const vw = o.viewW > 0 ? o.viewW : 1280, vh = o.viewH > 0 ? o.viewH : 720;
+  let ux = vw / 2 - o.edge.x, uy = vh / 2 - o.edge.y;
+  const len = Math.hypot(ux, uy);
+  if (len < 1e-6) { ux = 0; uy = 1; } else { ux /= len; uy /= len; }
+  // smallest d >= 0 with the block centre c = anchor + u d separated from the arrow box on x or on y
+  const acx = arrow.x + arrow.w / 2, acy = arrow.y + arrow.h / 2;
+  const hx = (arrow.w + bw) / 2 + gap, hy = (arrow.h + bh) / 2 + gap;
+  const rx = o.edge.x - acx, ry = o.edge.y - acy;
+  const sepAt = (d) => Math.abs(rx + ux * d) >= hx - 1e-9 || Math.abs(ry + uy * d) >= hy - 1e-9;
+  let d = 0;
+  if (!sepAt(0)) {
+    const cands = [];
+    if (Math.abs(ux) > 1e-9) cands.push((hx - rx) / ux, (-hx - rx) / ux);
+    if (Math.abs(uy) > 1e-9) cands.push((hy - ry) / uy, (-hy - ry) / uy);
+    d = Math.min(...cands.filter((v) => v >= 0 && sepAt(v + 1e-6)).map((v) => v + 1e-6));
+    if (!isFinite(d)) d = hx + hy;   // unreachable with a finite box; keeps the result finite
+  }
+  let cx = o.edge.x + ux * d, cy = o.edge.y + uy * d;
+  // A wide block near a corner is slid back inside the canvas, but only if that keeps it clear of the arrow.
+  const m = 2;
+  const kx = Math.max(bw / 2 + m, Math.min(vw - bw / 2 - m, cx));
+  const ky = Math.max(bh / 2 + m, Math.min(vh - bh / 2 - m, cy));
+  if ((kx !== cx || ky !== cy) && vw >= bw + 2 * m && vh >= bh + 2 * m
+      && (Math.abs(kx - acx) >= hx - 1e-9 || Math.abs(ky - acy) >= hy - 1e-9)) { cx = kx; cy = ky; }
+  const block = { x: cx - bw / 2, y: cy - bh / 2, w: bw, h: bh };
+  let top = block.y;
+  const lines = o.lines.map((l) => { const c = { cx, cy: top + l.h / 2 }; top += l.h; return c; });
+  return { arrow, block, lines };
+}
+
+// ============================================================================
 // TARGET RETICLE SYSTEM
 // ============================================================================
 
@@ -1188,24 +1269,37 @@ export class TargetReticle {
     const arrowSize = (law || isSelected) ? 12 : 8;
     this._drawArrowShape(edge.x, edge.y, edge.angle, arrowSize);
 
-    // Distance text
+    // Distance text (+ the type name above it for the selected target), in a block beside the arrow, never on it
     ctx.shadowBlur = 0;
+    const fontPx = isSelected ? 11 : 10;
     ctx.font = isSelected ? mono(11, 'bold') : mono(10);
     ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     const distText = distKm < 1 ? `${(distKm * 1000).toFixed(0)}m` : `${distKm.toFixed(1)}km`;
-
-    // Position text near the arrow
-    const textOffsetX = Math.cos(edge.angle + Math.PI) * 20;
-    const textOffsetY = -Math.sin(edge.angle + Math.PI) * 20;
-    ctx.fillText(distText, edge.x + textOffsetX, edge.y + textOffsetY);
-
-    // Selected target: show type name too
-    if (isSelected) {
-      const typeName = this._getTypeName(target.type);
-      ctx.fillText(typeName, edge.x + textOffsetX, edge.y + textOffsetY - 12);
-    }
+    const typeName = isSelected ? this._getTypeName(target.type) : null;
+    const lines = [];
+    if (typeName) lines.push({ t: typeName, w: this._textWidth(typeName, fontPx), h: fontPx + 1 });
+    lines.push({ t: distText, w: this._textWidth(distText, fontPx), h: fontPx + 1 });
+    const lay = offscreenLabelLayout({
+      edge, size: arrowSize, lineWidth: ctx.lineWidth, lines, viewW: this._width, viewH: this._height,
+    });
+    for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i].t, lay.lines[i].cx, lay.lines[i].cy);
 
     ctx.restore();
+  }
+
+  /**
+   * Width of `text` in the current canvas font. The headless test canvas has no `measureText`, so fall back to the
+   * fixed-pitch advance (the HUD font is fixed-pitch, ~0.62 em per character).
+   * @private
+   */
+  _textWidth(text, fontPx) {
+    const ctx = this.ctx;
+    if (ctx && typeof ctx.measureText === 'function') {
+      const m = ctx.measureText(text);
+      if (m && m.width > 0) return m.width;
+    }
+    return text.length * fontPx * 0.62;
   }
 
   // ==========================================================================
@@ -1297,18 +1391,23 @@ export class TargetReticle {
     ctx.lineWidth = urgent ? 2.5 : 1.5;
     ctx.globalAlpha = alpha;
 
-    this._drawArrowShape(edge.x, edge.y, edge.angle, urgent ? 12 : 8);
+    const arrowSize = urgent ? 12 : 8;
+    this._drawArrowShape(edge.x, edge.y, edge.angle, arrowSize);
 
     ctx.shadowBlur = 0;
+    const fontPx = 10;
     ctx.font = urgent ? mono(10, 'bold') : mono(10);
     ctx.textAlign = 'center';
-
-    const textOffsetX = Math.cos(edge.angle + Math.PI) * 22;
-    const textOffsetY = -Math.sin(edge.angle + Math.PI) * 22;
+    ctx.textBaseline = 'middle';
 
     const distText = `${distKm.toFixed(1)}km`;
     const label = urgent ? `WARN ${sat.name} ${distText}` : `${sat.name} ${distText}`;
-    ctx.fillText(label, edge.x + textOffsetX, edge.y + textOffsetY);
+    // u13 D3: the label sits beside the arrow, never under it (same placement as the debris marker)
+    const lay = offscreenLabelLayout({
+      edge, size: arrowSize, lineWidth: ctx.lineWidth, lines: [{ w: this._textWidth(label, fontPx), h: fontPx + 1 }],
+      viewW: this._width, viewH: this._height,
+    });
+    ctx.fillText(label, lay.lines[0].cx, lay.lines[0].cy);
 
     ctx.restore();
   }

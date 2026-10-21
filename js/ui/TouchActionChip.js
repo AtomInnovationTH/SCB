@@ -1,0 +1,345 @@
+/**
+ * TouchActionChip.js — u11 D1/D2: on glass, every game line that asks for an action with a key has a button.
+ *
+ * The comms lines say "Launch the net" / "Tap SEND DAUGHTER" (GestureHints.chipPhrase). A touch player has no N or D
+ * key, so this module keeps ONE tappable step chip on screen while the action is on offer:
+ *   · a piece is within net reach, a mother net is left, none is in flight  → LAUNCH NET  (KeyN)
+ *   · the mother has no nets left, or N was refused as "out of net range"   → SEND DAUGHTER (KeyD)
+ *   · a daughter holds station on the piece ("Daughter in position. Press N…") → LAUNCH NET / STICK PAD (KeyN: her tool)
+ * It reuses the ticker's step-chip mechanism (HINT_POSTED step:true + press + button): a tap takes exactly the
+ * keyboard's path, refusals included. It never covers a teaching-beat chip (HintTicker.hasStepChip) and takes its
+ * own chip down the moment its condition ends. Driven by events and live state, never by matching comms text
+ * (R3 below is the one exception: it is told WHICH KEY a shown line named, not what the line said). Glass only (the
+ * caller constructs it inside the TouchControls.detect() block); floors 2-3 only.
+ *
+ * u11 fix round R1-R4 (2026-10-21):
+ *   R1 "a daughter is holding" is read from the arms' state (STATION_KEEP) on the 500 ms poll, not from enter/exit
+ *      events: a daughter that returns to station after a missed net never emits STATION_KEEP_ENTERED.
+ *   R2 out of net reach with a piece selected (tutorial over, no beat chip): SEND DAUGHTER when a docked daughter with
+ *      nets can reach it (main.js `getFarState().daughterCan`), else AUTOPILOT. Gone when the piece is in reach.
+ *   R3 every comms line that says "Tap X" (CommsSystem -> GestureHints.noteChipLine -> this class) brings X's chip up
+ *      for 30 s (gone on that key's press, target cleared, floor left). A line chip outranks a state chip.
+ *   R8/R9 (2026-10-21) REEL (KeyR): a "Press R" line gets the same line chip as the other keys; and the state rule: a
+ *      piece that needs a daughter (beyond net reach, or no mother nets), no daughter can launch, and one is out and
+ *      idle (adrift / on station / trawling: `getReelable`) -> REEL, ahead of AUTOPILOT. A daughter mid-flight is
+ *      never offered (REEL would cancel the catch she was sent for). Gone when she docks / can launch.
+ *   R13 (2026-10-21) the spaced-repetition reminders (OnboardingDirector `remind_<skillId>` hints: "Press N to launch the
+ *      net." ...) bring their chip too, but ONLY when the key would act now: net = a daughter holds the piece, or a
+ *      piece is in net reach with a mother net left and none in flight; daughter = the daughter D would launch can go
+ *      (R12); autopilot = a piece is selected; scan as for any line. Other lines keep R3's rule (they are said by the
+ *      game at the moment the action is on offer).
+ *   R14 (2026-10-21) a reminder whose chip its gate holds back is taken down (HINT_SATISFIED for its id), so no text
+ *      names a button that is not on screen; when the gate is open the reminder stays, with its chip. Glass only.
+ *   R4 (a) HINT_SATISFIED is re-read one tick later (a beat chip leaving and the next arriving in the same tick must
+ *      not flash ours); (b) only a MOTHER shot counts as "in flight".
+ *
+ * @module ui/TouchActionChip
+ */
+
+import { Events } from '../core/Events.js';
+import { Constants } from '../core/Constants.js';
+import { GestureHints } from './hud/GestureHints.js';
+
+export const TOUCH_ACTION_CHIP_ID = 'touch_action_chip';
+
+/** The two chips, same wording as the teaching beats' chips (OnboardingDirector IN_REACH_NUDGE / MOTHER_EMPTY_CHIP). */
+const CHIPS = Object.freeze({
+  net: Object.freeze({ text: 'Launch the net', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'LAUNCH NET' }),
+  pad: Object.freeze({ text: 'Stick the pad on', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'STICK PAD' }),
+  daughter: Object.freeze({ text: 'Send a daughter', glyph: 'D', keys: Object.freeze(['KeyD']), press: 'KeyD', button: 'SEND DAUGHTER' }),
+  autopilot: Object.freeze({ text: 'Autopilot in', glyph: 'A', keys: Object.freeze(['KeyA']), press: 'KeyA', button: 'AUTOPILOT' }),
+  scan: Object.freeze({ text: 'Scan', glyph: 'S', keys: Object.freeze(['KeyS']), press: 'KeyS', button: 'SCAN' }),
+  // R8: the radial's REEL (TouchControls RADIAL_VERBS) - KeyR recalls the selected daughter if eligible, else the closest.
+  reel: Object.freeze({ text: 'Reel her home', glyph: 'R', keys: Object.freeze(['KeyR']), press: 'KeyR', button: 'REEL' }),
+});
+
+/** The key each chip kind presses (a physical or tapped press of it ends a line chip). */
+const KIND_KEY = Object.freeze({ net: 'KeyN', pad: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR' });
+
+/**
+ * R13: the skill reminders that name an action key (SKILLS.CATALOG `say`, posted by OnboardingDirector._onSkillReminded
+ * as HINT_POSTED id 'remind_<skillId>'), by the chip kind their key has.
+ */
+export const REMINDER_KIND = Object.freeze({
+  scan_quick: 'scan', collect_lasso: 'net', arm_pilot_capture: 'net', collect_deploy: 'daughter', nav_autopilot: 'autopilot',
+});
+
+/** R3: how long a line chip stays when nothing else ends it. */
+export const LINE_CHIP_MS = 30000;
+
+/** How often the state is re-read for what no event announces (floor, the ticker's beat chip leaving, the arms). */
+const POLL_MS = 500;
+
+export class TouchActionChip {
+  /**
+   * @param {object} deps
+   * @param {object} deps.eventBus
+   * @param {{hasStepChip:(id?:string)=>boolean}|null} deps.ticker  HintTicker (or a stand-in with hasStepChip)
+   * @param {() => (number|null)} [deps.getFloor]   live floor (2 and 3 only); omitted = no floor limit
+   * @param {() => (number|undefined)} [deps.getMotherNets]  live mother-net count, read once at start
+   * @param {() => boolean} [deps.hasDaughter]  a docked daughter with nets is ready (omitted = assume yes)
+   * @param {() => (string|null)} [deps.getHolding]  R1: the tool ('NET'|'PAD'|...) of a daughter in STATION_KEEP on the
+   *        target, or null. When given it replaces the STATION_KEEP enter/exit events (read on every evaluate).
+   * @param {() => boolean} [deps.getReelable]  R9: a daughter is out and idle (reeling her home frees one); omitted = never
+   * @param {() => ({daughterCan:boolean, autopilot:boolean}|null)} [deps.getFarState]  R2: null = no piece selected;
+   *        else whether a docked daughter with nets can reach it, and whether the autopilot is already flying.
+   * @param {() => number} [deps.now]  ms clock (tests)
+   * @param {(fn:Function)=>void} [deps.schedule]  runs `fn` one tick later (R4a); tests pass a synchronous or queued one
+   * @param {boolean} [deps.glass=true]  false -> never posts (desktop)
+   * @param {boolean} [deps.poll=true]   false -> no timer (tests drive `evaluate()`)
+   */
+  constructor({ eventBus, ticker = null, getFloor = null, getMotherNets = null, hasDaughter = null, getHolding = null,
+    getFarState = null, getReelable = null, now = null, schedule = null, glass = true, poll = true } = {}) {
+    this._eb = eventBus;
+    this._ticker = ticker;
+    this._getFloor = getFloor;
+    this._hasDaughter = hasDaughter;
+    this._getHolding = getHolding;
+    this._getFarState = getFarState;
+    this._getReelable = getReelable;
+    this._now = now || (() => Date.now());
+    this._schedule = schedule || ((fn) => { if (typeof setTimeout === 'function') setTimeout(fn, 0); else fn(); });
+    this._glass = glass !== false;
+    this._inRange = false;
+    this._rangeKnown = false;      // an IN/OUT crossing has been seen for the selected piece (R2: no flash on select)
+    this._selected = false;
+    this._denied = false;          // N was refused as out_of_net_range: the game routes the player to a daughter
+    this._inFlight = false;        // a MOTHER net is flying (R4b)
+    this._daughterOut = false;     // a daughter was just sent for this target
+    this._holding = new Map();     // armId -> tool: daughters holding station on the target (event fallback, no getHolding)
+    this._line = null;             // R3: { kind, until } - a shown line named this key
+    this._nets = Constants?.CAPTURE_NET?.LARGE?.MAGAZINE_SIZE ?? 4;
+    try {
+      const n = getMotherNets ? getMotherNets() : undefined;
+      if (Number.isFinite(n)) this._nets = n;
+    } catch (_e) { /* best-effort */ }
+    this._shown = null;            // chip kind we have posted
+    this._unsubs = [];
+    this._timer = null;
+    this._disposed = false;
+    this._busy = false;
+    this._keyHandler = null;
+    if (!this._glass || !this._eb) return;
+
+    const on = (name, h) => {
+      if (!name) return;
+      const u = this._eb.on(name, h);
+      if (typeof u === 'function') this._unsubs.push(u);
+    };
+    const re = (fn) => (d) => { fn(d); this.evaluate(); };
+    on(Events.TARGET_IN_RANGE, re(() => { this._inRange = true; this._rangeKnown = true; this._selected = true; }));
+    on(Events.TARGET_OUT_OF_RANGE, re(() => { this._inRange = false; this._rangeKnown = true; this._selected = true; }));
+    on(Events.TARGET_CLEARED, re(() => {
+      this._inRange = false; this._rangeKnown = false; this._selected = false;
+      this._denied = false; this._daughterOut = false; this._line = null;
+    }));
+    on(Events.TARGET_SELECTED, re(() => { this._denied = false; this._rangeKnown = false; this._selected = true; }));
+    on(Events.NET_INVENTORY_CHANGED, re((d) => {
+      if (d && d.source === 'mother' && Number.isFinite(d.motherNets)) this._nets = d.motherNets;
+    }));
+    on(Events.LASSO_DENIED, re((d) => { if (d && d.reason === 'out_of_net_range') this._denied = true; }));
+    // R4b: only the MOTHER's shots count. The small lasso is always the mother's; a large net is hers when its
+    // armIndex is negative (CaptureNet: -1 = the mother launcher) and NET_FIRED says source:'mother'.
+    const motherNet = (d) => !d || !(d.armIndex >= 0);
+    on(Events.LASSO_FIRED, re(() => { this._inFlight = true; }));
+    on(Events.NET_FIRED, re((d) => { if (d && d.source === 'mother') this._inFlight = true; }));
+    for (const n of ['LASSO_CAPTURED', 'LASSO_MISSED']) {
+      on(Events[n], re(() => { this._inFlight = false; }));
+    }
+    for (const n of ['NET_CATCH_SUCCESS', 'NET_CATCH_MISS']) {
+      on(Events[n], re((d) => { if (motherNet(d)) this._inFlight = false; }));
+    }
+    on(Events.ARM_DEPLOYED, re(() => { this._denied = false; this._daughterOut = true; }));
+    if (!getHolding) {
+      on(Events.STATION_KEEP_ENTERED, re((d) => { if (d && d.armId != null) this._holding.set(d.armId, d.tool || null); }));
+      on(Events.STATION_KEEP_EXITED, re((d) => { if (d && d.armId != null) this._holding.delete(d.armId); }));
+    }
+    // R7c: an empty-canvas tap scan (SCAN_QUICK) sends no keydown; it ends a "Tap SCAN" line chip like the key does.
+    on(Events.SCAN_QUICK, () => this._onKey('KeyS'));
+    on(Events.ARM_DOCKED, re(() => { this._daughterOut = false; }));
+    on(Events.ARM_RETURNED, re(() => { this._daughterOut = false; }));
+    // R4a: a beat chip leaving frees the slot - but the next beat's chip often arrives in the same tick (run-ipad.json
+    // t=23314: ours was up and down within 1 ms). Look again one tick later.
+    on(Events.HINT_SATISFIED, () => this._schedule(() => this.evaluate()));
+    on(Events.GAME_RESET, re(() => {
+      this._inRange = false; this._rangeKnown = false; this._selected = false; this._denied = false;
+      this._inFlight = false; this._daughterOut = false; this._holding.clear(); this._line = null;
+      this._nets = Constants?.CAPTURE_NET?.LARGE?.MAGAZINE_SIZE ?? 4;
+    }));
+    // R13: a skill reminder that names an action key (gated by state: see wanted()).
+    on(Events.HINT_POSTED, (d) => {
+      if (!d || typeof d.id !== 'string' || !d.id.startsWith('remind_')) return;
+      const kind = REMINDER_KIND[d.skillId];
+      if (kind) this.onLine([kind], true, d.id);
+    });
+    // R3: the comms store tells us which key(s) a line it just stored named.
+    GestureHints.setChipLineListener((kinds) => this.onLine(kinds));
+    if (typeof window !== 'undefined' && window && typeof window.addEventListener === 'function') {
+      this._keyHandler = (e) => this._onKey(e && e.code);
+      window.addEventListener('keydown', this._keyHandler);
+    }
+    if (poll !== false && typeof setInterval === 'function') {
+      this._timer = setInterval(() => this.evaluate(), POLL_MS);
+      if (this._timer && typeof this._timer.unref === 'function') this._timer.unref();
+    }
+  }
+
+  /**
+   * R3: a comms line naming these chip kinds ('net'|'pad'|'daughter'|'autopilot'|'scan') was stored. The first one
+   * gets a chip for LINE_CHIP_MS (it outranks the state chip), unless a beat chip holds the slot.
+   * @param {string[]} kinds
+   * @param {boolean} [gated=false]  R13: a reminder - the chip comes (and stays) only while its key would act now
+   * @param {string} [hintId]  R14: the reminder's ticker hint id; taken down (HINT_SATISFIED) while its chip is held back
+   */
+  onLine(kinds, gated = false, hintId = null) {
+    if (!this._glass || this._disposed || !Array.isArray(kinds) || !kinds.length) return;
+    const kind = kinds.find(k => CHIPS[k]);
+    if (!kind) return;
+    this._line = { kind, until: this._now() + LINE_CHIP_MS, gated: gated === true, hintId: gated === true ? hintId : null };
+    this.evaluate();
+  }
+
+  /** @private a key went down: it ends a line chip for that key */
+  _onKey(code) {
+    if (this._line && code && KIND_KEY[this._line.kind] === code) {
+      this._line = null;
+      this.evaluate();
+    }
+  }
+
+  /** @private the floor is one where the chip lives (2 or 3; no getter = any) */
+  _floorOk() {
+    if (!this._getFloor) return true;
+    let f = null;
+    try { f = this._getFloor(); } catch (_e) { f = null; }
+    return f === 2 || f === 3;
+  }
+
+  /**
+   * @private R13: would this key do something now? net: a daughter holds the piece, or a piece is in net reach with a
+   * mother net left and none in flight; daughter: R12's daughter can go; autopilot: a piece is selected; others: yes.
+   */
+  _keyWouldAct(kind, holding) {
+    if (kind === 'net' || kind === 'pad') return !!holding || (this._inRange && this._nets > 0 && !this._inFlight);
+    if (kind === 'daughter') { try { return this._hasDaughter ? !!this._hasDaughter() : true; } catch (_e) { return true; } }
+    if (kind === 'autopilot') return this._selected;
+    return true;
+  }
+
+  /**
+   * @private R14: the reminder's chip is held back by its gate, so its text ("Tap LAUNCH NET ...") would name a button
+   * that is not on screen: take the hint down (HINT_SATISFIED, as HintTicker removes any hint). One tick later, so it
+   * lands after the ticker has stored the post this very event announced. Once per reminder.
+   */
+  _takeDownReminder() {
+    const id = this._line && this._line.hintId;
+    if (!id) return;
+    this._line.hintId = null;
+    this._schedule(() => { if (!this._disposed) this._eb.emit(Events.HINT_SATISFIED, { id }); });
+  }
+
+  /** @private R9: a daughter is out and idle */
+  _reelable() {
+    if (!this._getReelable) return false;
+    try { return !!this._getReelable(); } catch (_e) { return false; }
+  }
+
+  /** @private R9: the selected piece is one a daughter has to take (N was refused for range, beyond reach, or no mother nets) */
+  _needsDaughter() {
+    if (this._denied) return true;
+    if (this._inRange) return !(this._nets > 0);
+    if (!(this._selected && this._rangeKnown && this._getFarState)) return false;
+    try { return !!this._getFarState(); } catch (_e) { return false; }   // null = tutorial still teaches
+  }
+
+  /** @returns {'net'|'pad'|'daughter'|'autopilot'|'scan'|'reel'|null} the chip the current state asks for (ignoring other chips on screen) */
+  wanted() {
+    if (!this._glass) return null;
+    if (!this._floorOk()) { this._line = null; return null; }   // floor left: a line chip does not wait for the way back
+    const canSend = () => { try { return this._hasDaughter ? !!this._hasDaughter() : true; } catch (_e) { return true; } };
+    let holding = null;
+    if (this._getHolding) {
+      try { holding = this._getHolding(); } catch (_e) { holding = null; }
+    } else if (this._holding.size > 0) {
+      holding = [...this._holding.values()][0] || 'NET';
+    }
+    if (this._line) {
+      if (this._now() >= this._line.until) this._line = null;
+      // R6 run: "Press D to send a daughter" while both daughters hold catches - the launch would be refused, so no chip.
+      else if (this._line.kind === 'daughter' && !canSend()) { /* no chip */ }
+      // R13: a reminder offers only what its key would do now.
+      else if (this._line.gated && !this._keyWouldAct(this._line.kind, holding)) this._takeDownReminder();
+      else return this._line.gated && this._line.kind === 'net' && holding === 'PAD' ? 'pad' : this._line.kind;
+    }
+    if (holding) return holding === 'PAD' ? 'pad' : 'net';
+    if (this._inFlight) return null;
+    // R9: the piece needs a daughter, none can launch, and one is out and idle: bringing her home is what frees one.
+    // Before the "daughter out" rule below, which keeps quiet for a daughter that is on her way (adrift is not).
+    if (!canSend() && this._needsDaughter() && this._reelable()) return 'reel';
+    if (this._daughterOut) return null;
+    if (this._denied) return canSend() ? 'daughter' : null;
+    if (this._inRange) {
+      if (this._nets > 0) return 'net';
+      return canSend() ? 'daughter' : null;
+    }
+    // R2: a piece is selected and beyond net reach (the crossing has been seen, so a fresh pick does not flash).
+    if (this._selected && this._rangeKnown && this._getFarState) {
+      let far = null;
+      try { far = this._getFarState(); } catch (_e) { far = null; }
+      if (far) {
+        if (far.daughterCan) return 'daughter';
+        return far.autopilot ? null : 'autopilot';
+      }
+    }
+    return null;
+  }
+
+  /** Bring the chip in line with the state: post, swap or take down. Safe to call at any time. */
+  evaluate() {
+    if (this._disposed || this._busy) return;   // our own HINT_SATISFIED comes back through the listener
+    this._busy = true;
+    try { this._evaluate(); } finally { this._busy = false; }
+  }
+
+  /** @private */
+  _evaluate() {
+    const want = this.wanted();
+    if (want === this._shown) return;
+    if (this._shown) {
+      this._shown = null;
+      this._eb.emit(Events.HINT_SATISFIED, { id: TOUCH_ACTION_CHIP_ID });
+    }
+    if (!want) return;
+    // One chip, one action: a teaching-beat chip (or any other step chip) on screen keeps the slot.
+    if (this._ticker && typeof this._ticker.hasStepChip === 'function' && this._ticker.hasStepChip(TOUCH_ACTION_CHIP_ID)) return;
+    const c = CHIPS[want];
+    this._eb.emit(Events.HINT_POSTED, {
+      id: TOUCH_ACTION_CHIP_ID,
+      text: c.text,
+      glyph: c.glyph,
+      keys: [...c.keys],
+      duration: 0,           // stays until the action is done or no longer possible
+      priority: 'normal',
+      step: true,
+      press: c.press,
+      button: c.button,
+    });
+    this._shown = want;
+  }
+
+  dispose() {
+    if (this._disposed) return;
+    this._disposed = true;
+    if (this._shown && this._eb) this._eb.emit(Events.HINT_SATISFIED, { id: TOUCH_ACTION_CHIP_ID });
+    this._shown = null;
+    for (const u of this._unsubs) { try { u(); } catch (_e) { /* ignore */ } }
+    this._unsubs.length = 0;
+    if (this._glass) GestureHints.setChipLineListener(null);
+    if (this._keyHandler && typeof window !== 'undefined' && window.removeEventListener) window.removeEventListener('keydown', this._keyHandler);
+    this._keyHandler = null;
+    if (this._timer != null && typeof clearInterval === 'function') clearInterval(this._timer);
+    this._timer = null;
+  }
+}
+
+export default TouchActionChip;
