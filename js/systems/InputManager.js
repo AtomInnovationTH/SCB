@@ -2664,7 +2664,7 @@ export class InputManager {
         const dM = { x: (tp.x - muzzle.x) / M, y: (tp.y - muzzle.y) / M, z: (tp.z - muzzle.z) / M };
         const dl = Math.sqrt(dM.x * dM.x + dM.y * dM.y + dM.z * dM.z) || 1;
         if (cns.getCollarShotFoul(podIndex, pM, { x: dM.x / dl, y: dM.y / dl, z: dM.z / dl })) {
-          refuse('This shot fouls the cargo at the collar — pull off the nose, or jettison [K].');
+          refuse('This shot fouls the cargo at the collar — pull off the nose, or press K to let the catch go.');
           return true;
         }
       }

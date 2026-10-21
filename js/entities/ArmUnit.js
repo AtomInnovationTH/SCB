@@ -656,6 +656,9 @@ export class ArmUnit {
     /** @type {THREE.Vector3|null} Previous frame's parent position — for orbital frame correction */
     this._prevParentPos = null;
 
+    /** @type {THREE.Vector3|null} THIS frame's parent position (set at the top of `update`; nets-1b R9) */
+    this._frameParentPos = null;
+
     /** @type {THREE.Vector3|null} Previous frame's target scene position — for orbital drift correction */
     this._prevTargetScenePos = null;
 
@@ -742,6 +745,7 @@ export class ArmUnit {
     this._padPhase = null;
     this._padTimer = 0;
     this._padResolvedMode = null;
+    this._padOffset = null;   // scene units — her offset from the piece while the pad closes (rides with it)
     // §13 Q3 — per-arm UV-cure magazine (finite; runtime-only at Y0, persistence deferred).
     this._padUvCureDosesRemaining = (Constants.PAD_CONTACT && Constants.PAD_CONTACT.UV_CURE_DOSES_Y0) || 10;
 
@@ -3009,6 +3013,7 @@ export class ArmUnit {
     this._trawlTimer = 0;
     this._lastParentQuat = null;   // ST-1.1: clear cached parent quaternion
     this._prevParentPos = null;    // Orbital frame correction: reset on arm reset
+    this._frameParentPos = null;   // nets-1b R9: this frame's parent position, same reset
 
     // V5 Crossbow resets
     this.springCharged = true;
@@ -3067,6 +3072,11 @@ export class ArmUnit {
    // _updateDocking only lerps 5 %/frame to the dock point, so on an orbiting ship she fell behind by
    // ~19 frames of ship travel (measured 2.4 km at 60 fps over one DOCKING, then snapped home at DOCKED).
    if (parentPos) {
+     // nets-1b R9: remember THIS frame's parent position. `position` is shifted to it just below, while
+     // `_prevParentPos` is still last frame's until the end of `update`, so a range measured between `position`
+     // and `_prevParentPos` (a capture mid-frame) reads one whole orbital step (~7.7 km live) too far.
+     if (!this._frameParentPos) this._frameParentPos = new THREE.Vector3();
+     this._frameParentPos.copy(parentPos);
      if (this.state !== S.DOCKED) {
        if (this._prevParentPos) {
          this.position.x += (parentPos.x - this._prevParentPos.x);
@@ -5195,14 +5205,18 @@ export class ArmUnit {
    * Distance from the mother at the capture instant (metres). Register item
    * 100: the wide-sweep mission beat filters ARM_CAPTURED on this — a catch
    * past 1 km is only possible past the tether-tier-aware deploy gate.
-   * Reads _prevParentPos (the per-frame-fresh parent position from the update
-   * loop); null-safe → 0 before the first parent frame.
+   * Measured against THIS frame's parent position (`_frameParentPos`, set at the
+   * top of `update`, after which `position` has had this frame's orbital step), else
+   * `_prevParentPos` (a caller with no `update` frame); null-safe → 0 before the first
+   * parent frame. nets-1b R9: against `_prevParentPos` alone every live capture read one
+   * orbital step (~7.7 km) and tripped the `rangeM >= 1000` wide-sweep trigger.
    * @private
    * @returns {number} range in metres
    */
   _captureRangeM() {
-    if (!this._prevParentPos) return 0;
-    return this.position.distanceTo(this._prevParentPos) / M;
+    const ref = this._frameParentPos || this._prevParentPos;
+    if (!ref) return 0;
+    return this.position.distanceTo(ref) / M;
   }
 
   /**
@@ -5371,6 +5385,9 @@ export class ArmUnit {
     this._padPhase = 'APPROACH';
     this._padTimer = 0;
     this._padResolvedMode = null;
+    // Her real offset from the piece NOW (both last frame's scene positions), so the first approach frame already
+    // rides with the piece; `_updatePadContact` falls back to taking it lazily if a caller drives that without this.
+    this._padOffset = target._scenePosition ? this.position.clone().sub(target._scenePosition) : null;
     this._captureToolKind = 'PAD';
     audioSystem.playClick();
     this._toolLockedDebrisId = target.id;
@@ -5383,7 +5400,18 @@ export class ArmUnit {
     return true;
   }
 
-  /** @private PAD_CONTACT sub-FSM: APPROACH_SOFT → CONTACT → grip roll. */
+  /**
+   * @private PAD_CONTACT sub-FSM: APPROACH_SOFT → CONTACT → grip roll.
+   *
+   * APPROACH is a station-keeping final approach, not a chase: she moves WITH the piece exactly (her offset from it is
+   * kept and re-added to the piece's scene position every frame) and closes along the line to it at a speed
+   * proportional to the gap, clamped (`APPROACH_GAIN_PER_S`, `APPROACH_V_MIN_M_S`, `APPROACH_V_MAX_M_S`). She closes to
+   * the piece's SURFACE (its drawn reach, `DebrisField.trueReachM`, plus the pad radius), not its centre. The speed she
+   * touches at is the commanded closing speed there (V_MIN floor), her speed RELATIVE to the piece, not her own stored
+   * velocity or the shortened last step over dt. The old
+   * `position.lerp(tPos, dt*1.5)` trailed a moving piece and slowed to zero, so a drifting piece timed the approach out.
+   * `_padContactVelOverride` stays as the test seam for a deliberately fast contact.
+   */
   _updatePadContact(dt) {
     this._padTimer += dt;
     const P = Constants.PAD_CONTACT;
@@ -5396,12 +5424,28 @@ export class ArmUnit {
     if (this._padPhase === 'APPROACH') {
       const tPos = target._scenePosition;
       if (tPos) {
-        this.position.lerp(tPos, Math.min(1, dt * 1.5));   // soft closing
-        const distM = this.position.distanceTo(tPos) / M;
-        if (distM <= P.PAD_RADIUS_M) {
-          const contactVel = (this._padContactVelOverride != null)
-            ? this._padContactVelOverride
-            : this.velocity.length() / M;
+        const off = this._padOffset || (this._padOffset = this.position.clone().sub(tPos));
+        const prevX = this.position.x, prevY = this.position.y, prevZ = this.position.z;
+        // R4 (nets-1b review): she closes to the piece's SURFACE, not its centre. The piece's reach is the same radius the
+        // tip-fit and the seating use (`DebrisField.trueReachM`: the catch as drawn); contact is when her gap to that
+        // surface is the pad radius. A piece with no size (a bare test rig) has reach 0: its centre, as before.
+        const stopM = DebrisField.trueReachM(target, 0) + P.PAD_RADIUS_M;   // distance from the piece's centre at contact
+        const dM = off.length() / M;
+        const gapM = dM - stopM;
+        // R3: the commanded closing speed (proportional to the gap, clamped); this is also the speed she touches at.
+        const vClose = Math.min(P.APPROACH_V_MAX_M_S, Math.max(P.APPROACH_V_MIN_M_S, P.APPROACH_GAIN_PER_S * gapM));
+        if (gapM > 0 && dM > 0) {
+          const closeM = Math.min(vClose * dt, gapM);   // never past the pad radius off the surface
+          off.multiplyScalar((dM - closeM) / dM);
+        }
+        this.position.copy(tPos).add(off);
+        if (dt > 1e-6) {
+          this.velocity.set((this.position.x - prevX) / dt, (this.position.y - prevY) / dt,
+            (this.position.z - prevZ) / dt);
+        }
+        const distM = off.length() / M;
+        if (distM - stopM <= 1e-6) {
+          const contactVel = (this._padContactVelOverride != null) ? this._padContactVelOverride : vClose;
           eventBus.emit(Events.PAD_CONTACT_ATTEMPT, { armId: this.id, targetId: target.id, contactVel });
           if (contactVel > P.CONTACT_VEL_MAX_M_S) { this._failPadContact('too_fast'); return; }
           this._padResolvedMode = this._resolvePadMode(target);
@@ -5410,11 +5454,21 @@ export class ArmUnit {
           return;
         }
       }
-      if (this._padTimer >= P.APPROACH_TIMEOUT_S) this._failPadContact('too_fast');
+      if (this._padTimer >= P.APPROACH_TIMEOUT_S) this._failPadContact('timeout');
       return;
     }
 
     if (this._padPhase === 'CONTACT') {
+      // Stuck to it: keep riding with the piece through the hold (it drifts, she does not stay behind).
+      const tPos = target._scenePosition;
+      if (tPos && this._padOffset) {
+        const prevX = this.position.x, prevY = this.position.y, prevZ = this.position.z;
+        this.position.copy(tPos).add(this._padOffset);
+        if (dt > 1e-6) {
+          this.velocity.set((this.position.x - prevX) / dt, (this.position.y - prevY) / dt,
+            (this.position.z - prevZ) / dt);
+        }
+      }
       if (this._padTimer >= P.CONTACT_HOLD_S) this._resolvePadGrip(target);
     }
   }
@@ -5449,7 +5503,9 @@ export class ArmUnit {
       eventBus.emit(Events.PAD_RELEASED, { armId: this.id, targetId: target.id });
     }
     const msg = reason === 'too_fast'
-      ? `${this.displayName}: Pad bounced. Contact too fast. Returning; ease the approach and retry.`
+      ? `${this.displayName}: Pad bounced: contact too fast. Returning.`
+      : reason === 'timeout'
+        ? `${this.displayName}: Pad could not reach it. Returning.`
       : reason === 'no_mode'
         ? `${this.displayName}: Pad found no adhesion mode for this surface. Returning to reload.`
         : `${this.displayName}: Pad failed to adhere. Returning to reload.`;
@@ -5767,6 +5823,22 @@ export class ArmUnit {
   }
 
   /**
+   * nets-1b R8: a tool catch (pad, magnet, gripper) is pinned TO HER (`_secureToolCatch` -> `_pinCatchToSelf`), and
+   * `DebrisField.pinCapturedDebris` copies that pin back into the piece's `_scenePosition` every frame. So the
+   * piece's scene position is last frame's pin, i.e. where she was BEFORE this frame's orbital APPLY step: copying it
+   * onto her (the net catch's snap) throws away the mother's orbital step each frame (~7.7 km live) and leaves her
+   * ~150 km out when the reel starts. A tool catch already rides with her; a net catch is a free piece she goes to.
+   * @private
+   * @returns {boolean}
+   */
+  _toolCatchRidesWithHer() {
+    // nets-1b review 3: also require the catch to be pinned to her (`_secureToolCatch` pins it), so a stale tool
+    // kind left by a net entry that does not reset it can never skip a net catch's snap.
+    return !!this._captureToolKind && this._captureToolKind !== 'NET'
+      && !!this.capturedDebris && this.capturedDebris._armPinned === true;
+  }
+
+  /**
    * GRAPPLED: holding debris, stabilize before hauling/reeling.
    * reel-home (flag on, a NET catch): she does NOT jump onto the debris. She stays where the net closed and the
    * catch is held at its separation; after the settle her net line winds it in to her nose (`_rhNetReelStep`),
@@ -5777,6 +5849,10 @@ export class ArmUnit {
     const tPos = this._getTargetScenePos();
     if (rh) {
       this._rhHoldCatch(tPos);
+    } else if (this._toolCatchRidesWithHer()) {
+      // nets-1b review 3: the catch rides with her through the hold too (it was pinned once at the grip and left at
+      // the capture point while she moved on with the mother; ArmManager draws it from this pin in GRAPPLED).
+      this._pinCatchToSelf(parentPos);
     } else if (tPos) {
       this.position.copy(tPos);
     }
@@ -6091,7 +6167,7 @@ export class ArmUnit {
       dir.set(ld.x, ld.y, ld.z);
       hasDir = dir.lengthSq() > 1e-12;
     }
-    const pp = parentPos || this._prevParentPos;
+    const pp = parentPos || this._frameParentPos || this._prevParentPos;   // nets-1b review 3: this frame's mother first
     if (!hasDir && pp) {
       dir.subVectors(this.position, pp);
       hasDir = dir.lengthSq() > 1e-12;

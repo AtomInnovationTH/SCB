@@ -515,7 +515,7 @@ export const Events = {
   GRIPPER_RELEASED:       'gripper:released',       // { armId, targetId }
   PAD_CONTACT_ATTEMPT:    'pad:contactAttempt',     // { armId, targetId, contactVel }
   PAD_ADHERED:            'pad:adhered',            // { armId, targetId, mode }
-  PAD_BOUNCED:            'pad:bounced',            // { armId, targetId, reason: 'too_fast'|'no_mode'|'p_roll' }
+  PAD_BOUNCED:            'pad:bounced',            // { armId, targetId, reason: 'too_fast'|'timeout'|'no_mode'|'p_roll' }
   PAD_RELEASED:           'pad:released',           // { armId, targetId }
   PAD_UV_DOSE_USED:       'pad:uvDoseUsed',         // { armId, dosesRemaining } — §13 Q3
 

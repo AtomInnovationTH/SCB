@@ -196,55 +196,62 @@ export class RewardSystem {
   // MILESTONES
   // ==========================================================================
 
-  /** @private */
+  /**
+   * Record every milestone this catch reaches, say ONE line: the most specific one (nets-1b, DECISIONS §33:
+   * one line per fact). Specific = about this very catch (a free-flying catch, a large daughter's first, the
+   * first lasso catch) before the running counts (50 total, 25 / 10 / 5 this sweep), and the plain
+   * "first capture ever" last. Every milestone is still recorded as reached.
+   * @private
+   */
   _checkMilestones(data, method) {
+    // [rank (lower = more specific), line]
+    const reached = [];
+    const reach = (key, rank, line) => { this.milestones.set(key, true); reached.push([rank, line]); };
+
     // First catch ever
     if (this._totalCatches === 1 && !this.milestones.has('firstCatch')) {
-      this.milestones.set('firstCatch', true);
-      this._sendComms('Houston: Confirmed first capture. Welcome to the cleanup crew, Cowboy.');
+      reach('firstCatch', 7, 'Houston: Confirmed first capture. Welcome to the cleanup crew, Cowboy.');
     }
 
     // 5 catches this trawl
     if (this._trawlCatches === 5 && !this.milestones.has('trawl5')) {
-      this.milestones.set('trawl5', true);
-      this._sendComms('Houston: Five captures this sweep. Solid work out there.');
+      reach('trawl5', 6, 'Houston: Five captures this sweep. Solid work out there.');
     }
 
     // 10 catches this trawl
     if (this._trawlCatches === 10 && !this.milestones.has('trawl10')) {
-      this.milestones.set('trawl10', true);
-      this._sendComms('Houston: Ten confirmed. You\'re making a real dent in this cluster.');
+      reach('trawl10', 5, 'Houston: Ten confirmed. You\'re making a real dent in this cluster.');
     }
 
     // 25 catches this trawl
     if (this._trawlCatches === 25 && !this.milestones.has('trawl25')) {
-      this.milestones.set('trawl25', true);
-      this._sendComms('Houston: Twenty-five. That\'s a record pace. Ground team is watching.');
+      reach('trawl25', 4, 'Houston: Twenty-five. That\'s a record pace. Ground team is watching.');
     }
 
     // 50 total catches
     if (this._totalCatches === 50 && !this.milestones.has('total50')) {
-      this.milestones.set('total50', true);
-      this._sendComms('Houston: Fifty objects secured. Command is talking about naming a procedure after you.');
+      reach('total50', 3, 'Houston: Fifty objects secured. Command is talking about naming a procedure after you.');
     }
 
     // First Weaver catch (large arm, type 'weaver')
     if (method === 'arm' && data && data.type === 'weaver' && !this.milestones.has('firstWeaver')) {
-      this.milestones.set('firstWeaver', true);
-      this._sendComms('Houston: First catch by a large daughter. The mother keeps her fuel for the heavy pieces.');
+      reach('firstWeaver', 1, 'Houston: First catch by a large daughter. The mother keeps her fuel for the heavy pieces.');
     }
 
     // First lasso catch
     if (method === 'lasso' && !this.milestones.has('firstLasso')) {
-      this.milestones.set('firstLasso', true);
-      this._sendComms('Houston: Lasso capture confirmed. Quick reflexes out there.');
+      reach('firstLasso', 2, 'Houston: Lasso capture confirmed. Quick reflexes out there.');
     }
 
     // First detached capture (Phase 6 — arm was free-flying when it caught)
     if (data && data.detached && !this.milestones.has('firstDetachedCapture')) {
       this._detachedCaptures++;
-      this.milestones.set('firstDetachedCapture', true);
-      this._sendComms('Houston: Free-flying capture confirmed! That\'s one for the textbooks.');
+      reach('firstDetachedCapture', 0, 'Houston: Free-flying capture confirmed! That\'s one for the textbooks.');
+    }
+
+    if (reached.length > 0) {
+      reached.sort((x, y) => x[0] - y[0]);
+      this._sendComms(reached[0][1]);
     }
   }
 

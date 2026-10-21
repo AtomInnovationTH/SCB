@@ -89,7 +89,9 @@ export const ONBOARDING_BEATS = [
     // right in front of the mother. Teach the ONE key the opening forces: the net.
     id: 'tease_lock',
     commsSource: 'HOUSTON', commsText: 'Debris {distM} meters in front. Launch the net.',
-    commsAck: 'Clean catch, Cowboy.',
+    // nets-1b (DECISIONS §33): one line per fact, said when it happens. Firing the net is not a catch, so no
+    // "Clean catch" here; first_catch says it when the catch really lands.
+    commsAck: null,
     // u2-one-voice D2/D8: the cap says N, the body says what it does (key once); on touch
     // the chip is the LAUNCH NET button. Durable (D1b): it stays until the catch.
     text: 'Launch net',
@@ -129,14 +131,20 @@ export const ONBOARDING_BEATS = [
     // — so the ack lands at the visual moment, not ~8 s later at the collar's
     // CATCH_PROCESSED mate. DEBRIS_CAPTURED stays as the daughter alternative.
     id: 'first_catch',
-    commsSource: 'HOUSTON', commsText: 'Capture confirmed. Salvage refines into fuel and credits.',
-    commsAck: null,
+    // nets-1b: nothing at beat start (the net is still in flight); the line is the beat's ack, so it posts when the
+    // beat completes on LASSO_CAPTURED / DEBRIS_CAPTURED, i.e. after the catch.
+    commsSource: 'HOUSTON', commsText: null,
+    commsAck: 'Capture confirmed. Salvage refines into fuel and credits.',
     glyph: '✓', keys: [], skillId: null,
     triggerEvent: 'LASSO_CAPTURED',
     altTriggerEvents: ['DEBRIS_CAPTURED'],
     counterTarget: 1,
     credit: 0,
     autoAdvanceAfter: 6000,
+    // nets-1b R1: the mother's net takes ~8 s to fly and reel, longer than this fallback; a fallback that completed the
+    // beat in flight lost the ack ("Capture confirmed") and started second_catch before the catch. While a mother net
+    // is in flight the fallback waits; a miss (or a large-net catch) re-arms it (`_rearmDeferredFallback`), so the tutorial never stalls.
+    holdFallbackWhileNetInFlight: true,
   },
   {
     // Second easy catch — repetition, slightly more value. Already locked.
@@ -702,11 +710,24 @@ export class OnboardingDirector {
     if (Events.NET_FIRED) {
       on(Events.NET_FIRED, (d) => { if (d && d.source === 'mother') this._motherShotInFlight = true; });
     }
+    // nets-1b review 2: a daughter's net result (armIndex >= 0) says nothing about the mother's shot. A mother catch
+    // the beat does not complete on (the large net's NET_CATCH_SUCCESS) re-arms a held fallback, so it never freezes
+    // the tutorial; once the beat has completed on its own trigger the re-arm does nothing.
+    const daughterNet = (d) => !!d && Number.isInteger(d.armIndex) && d.armIndex >= 0;
     for (const name of ['LASSO_CAPTURED', 'NET_CATCH_SUCCESS']) {
-      if (Events[name]) on(Events[name], () => { this._motherShotInFlight = false; });
+      if (Events[name]) on(Events[name], (d) => {
+        if (name === 'NET_CATCH_SUCCESS' && daughterNet(d)) return;
+        this._motherShotInFlight = false;
+        this._rearmDeferredFallback();
+      });
     }
     for (const name of ['LASSO_MISSED', 'NET_CATCH_MISS']) {
-      if (Events[name]) on(Events[name], () => { this._motherShotInFlight = false; this._onMotherNets(this._motherNets); });
+      if (Events[name]) on(Events[name], (d) => {
+        if (name === 'NET_CATCH_MISS' && daughterNet(d)) return;
+        this._motherShotInFlight = false;
+        this._onMotherNets(this._motherNets);
+        this._rearmDeferredFallback();
+      });
     }
 
     // Contextual JIT teaching (.kilo plan §D.6): the arrows/RCS lesson is NOT
@@ -726,6 +747,36 @@ export class OnboardingDirector {
     // repeated N/D presses during the slew don't count as unrelated input.
     if (Events.AIM_SEQUENCE_START) on(Events.AIM_SEQUENCE_START, () => this._onAimSequenceStart());
     if (Events.AIM_SEQUENCE_END)   on(Events.AIM_SEQUENCE_END,   () => this._onAimSequenceEnd());
+  }
+
+  /**
+   * @private R1 (nets-1b review): a beat flagged `holdFallbackWhileNetInFlight` does not let its auto-advance fallback
+   * complete it while a mother net is in flight (fired, not yet caught or missed). Returns true when it deferred; the
+   * timer is then spent and `_rearmDeferredFallback` starts it again if the net resolves without a catch.
+   */
+  _deferFallbackWhileNetInFlight(beat) {
+    if (!beat || !beat.holdFallbackWhileNetInFlight || !this._motherShotInFlight) return false;
+    const a = this._active;
+    if (a && a.beat && a.beat.id === beat.id) { a.autoAdvanceTimer = null; a.fallbackDeferred = true; }
+    return true;
+  }
+
+  /** @private The net resolved without a catch: a fallback that was held in flight runs again, from now. */
+  _rearmDeferredFallback() {
+    const a = this._active;
+    if (!a || !a.fallbackDeferred || !a.beat || this._aimActive) return;
+    const beat = a.beat;
+    a.fallbackDeferred = false;
+    if (a.autoAdvanceTimer != null || !Number.isFinite(beat.autoAdvanceAfter)) return;
+    a.autoAdvanceTimer = this._setTimeout(() => {
+      if (!this._active || this._active.beat.id !== beat.id) return;
+      if (this._deferFallbackWhileNetInFlight(beat)) return;
+      this._dropBeatChip(beat);
+      this._completedBeats.add(beat.id);
+      this._persist();
+      this._active = null;
+      this._advanceToNextBeat();
+    }, beat.autoAdvanceAfter);
   }
 
   /** @private Pause beat timers while the aim-rotation slew is active. */
@@ -751,6 +802,7 @@ export class OnboardingDirector {
     if (Number.isFinite(beat.autoAdvanceAfter) && a.autoAdvanceTimer == null) {
       a.autoAdvanceTimer = this._setTimeout(() => {
         if (this._active && this._active.beat.id === beat.id) {
+          if (this._deferFallbackWhileNetInFlight(beat)) return;
           // `_advanceToNextBeat()` below returns early once mastered; there it announces
           // ONBOARDING_MASTERED (comms) and then ONBOARDING_COMPLETE: the tutorial's end
           // switches the rest of the game on (owner 2026-10-19, tmp/plans/tutorial-end-switch.md).
@@ -881,14 +933,15 @@ export class OnboardingDirector {
     if (!this._mastered || this._active) return;
     const def = this._lookupSkillDef(d.skillId);
     if (!def || def.noReminder) return;
-    const keyHint = def.key ? ` [${def.key}]` : '';
     // Slice 8 — codex resurfacing: when the manage_codex reminder carries a
     // "did you know?" pick, point the player at a specific unread entry instead
     // of the generic library reminder. Same HINT_POSTED path, same gating.
     const dyk = d.didYouKnow;
     const text = (dyk && dyk.title)
       ? `Did you know? ${dyk.icon || ''} ${dyk.title} is in your library — press ${def.key || 'I'}`
-      : `Reminder: ${def.label}${keyHint}`;
+      // nets-1b (Ruling 0): the def's own plain phrase ("Press S to scan."); a def without one is its label alone.
+      // No "[key]" glue: GestureHints rewrites the letter-key phrases for touch, and a bracket reads as code.
+      : (typeof def.say === 'string' && def.say ? def.say : `Reminder: ${def.label}`);
     this._emit(Events.HINT_POSTED, {
       id: 'remind_' + d.skillId,
       text,
@@ -1228,6 +1281,7 @@ export class OnboardingDirector {
       if (beat.triggerEvent && Number.isFinite(beat.autoAdvanceAfter)) {
         this._active.autoAdvanceTimer = this._setTimeout(() => {
           if (this._active && this._active.beat.id === beat.id) {
+            if (this._deferFallbackWhileNetInFlight(beat)) return;
             this._dropBeatChip(beat);
             this._completedBeats.add(beat.id);
             this._persist();

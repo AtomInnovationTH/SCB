@@ -220,6 +220,9 @@ export class LeashDriver {
   /** Say a refusal once per reason per catch (the catch is retried every 0.5 s; the line is not). */
   announceRefusal(net, why) {
     if (!net || !why) return;
+    // nets-1b: 'busy' (the last catch still holds the driver) is never spoken. The catch starts by itself when the
+    // 0.5 s retry finds the driver free, and "Handing the catch to radiator N" is then the one line about it.
+    if (why.key === 'busy') return;
     const said = net._leashSaid || (net._leashSaid = {});
     if (said[why.key]) return;
     said[why.key] = true;

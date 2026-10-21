@@ -302,16 +302,17 @@ export class DossierSystem {
 
     // The full salvage appraisal lives in the dossier pane; the comms line
     // just announces the data is in and names the credits earned for it.
-    const bountyClause = bountyPaid ? ` ${D.SURVEY_BOUNTY} credits earned.` : '';
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      sender: 'HOUSTON',
-      text: `Survey data sent to ground station.${bountyClause}`,
-      priority: 'success',
-      // During onboarding the neutral reveal line must bypass tier-0 suppression
-      // too, so the "chest opens" beat is still legible. The bounty itself is
-      // held back for the combined capture release above.
-      ...(bountyDeferred ? { _onboarding: true } : {}),
-    });
+    // nets-1b (DECISIONS §33, one line per fact): while the bounty is held back for the catch's release, this
+    // line is NOT said: the release says "Survey data: N credits earned." when the catch lands (or, at the
+    // tutorial's end, "Survey data sent to ground station. N credits earned."). Said now otherwise, one line.
+    if (!bountyDeferred) {
+      const bountyClause = bountyPaid ? ` ${D.SURVEY_BOUNTY} credits earned.` : '';
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'HOUSTON',
+        text: `Survey data sent to ground station.${bountyClause}`,
+        priority: 'success',
+      });
+    }
   }
 }
 

@@ -76,6 +76,9 @@ export function autopilotOffText(reason) {
   return AUTOPILOT_OFF_TEXT[reason] || AUTOPILOT_OFF_FALLBACK;
 }
 
+/** nets-1b: the `_arrivalSaidFor` key of an engagement with no locked target (cluster / heading arrivals). */
+const ARRIVAL_NO_LOCK = Symbol('arrivalNoLock');
+
 /**
  * The ONE arrival line after the tutorial, by what the mother can still do about the piece
  * (owner, 2026-10-20, DECISIONS §33 row 8): while she has nets, N nets it; with none left a daughter takes it (D),
@@ -343,6 +346,10 @@ export class AutopilotSystem {
 
     /** @type {object|null} Locked target reference (persists through target cycling) */
     this._lockedTargetRef = null;
+
+    /** nets-1b: what the arrival line was last said for (the locked target, or ARRIVAL_NO_LOCK); undefined = not yet.
+     *  The line is said once per lock; engage / disengage reset it. */
+    this._arrivalSaidFor = undefined;
 
     /** @type {number|string|null} Currently-emitted lock id (for LOCK/UNLOCK events) */
     this._lockedEmittedId = null;
@@ -980,6 +987,7 @@ export class AutopilotSystem {
 
     // Lock target reference so cycling targets doesn't change AP destination
     this._lockedTargetRef = null;
+    this._arrivalSaidFor = undefined;   // a new lock: the arrival line may be said again (nets-1b)
     if (this._headingMode === 'TARGET' && this._targetSelector) {
       this._lockedTargetRef = this._targetSelector.getActiveTarget();
     }
@@ -1050,6 +1058,7 @@ export class AutopilotSystem {
       ? this._clusterArrivalPoint.clone()
       : new THREE.Vector3(cluster.center.x, cluster.center.y, cluster.center.z);
     this._lockedTargetRef = null;
+    this._arrivalSaidFor = undefined;   // a new engagement (cluster B after cluster A, no disengage between): said again (nets-1b R2)
 
     if (this._player) {
       this._player.autopilotEngaged = true;
@@ -1084,6 +1093,7 @@ export class AutopilotSystem {
 
     this._engaged = false;
     this._lockedTargetRef = null;
+    this._arrivalSaidFor = undefined;
     this._debrisMapCluster = null;
     this._clusterArrivalPoint = null;
     this._goalPos = null;
@@ -1391,15 +1401,24 @@ export class AutopilotSystem {
           }
 
           eventBus.emit(Events.AUTOPILOT_ARRIVED, { mode: this._headingMode });
-          eventBus.emit(Events.COMMS_MESSAGE, {
-            // Plain words, no symbols (Ruling 0). This is the ONE arrival line after the tutorial
-            // (the GameFlowManager one-shot that said the same thing is gone). Net-aware per the owner
-            // ruling of 2026-10-20 (DECISIONS §33 row 8): N while the mother has nets; D when she has none;
-            // a restock when none are left and no daughter can hold the piece (arrivalLineText).
-            text: arrivalLineText(this._lockedTargetRef ? this._lockedTargetRef.mass : 0, this._motherNetsLeft),
-            priority: 'info',
-            _keep: true,   // the next step to press
-          });
+          // nets-1b (DECISIONS §33, one line per fact): said once per lock, and never for a piece that is already
+          // caught or gone. A HOLD excursion (4*POS_TOL) drops to TRAIL_ALIGN and re-arrives on the same lock; the
+          // bot run read "In position. Press D to send a daughter." twice more after the daughter had caught it.
+          const lockRef = this._lockedTargetRef;
+          const lockKey = lockRef || ARRIVAL_NO_LOCK;
+          const lockDone = !!lockRef && (lockRef._captured === true || lockRef.alive === false);
+          if (!lockDone && this._arrivalSaidFor !== lockKey) {
+            this._arrivalSaidFor = lockKey;
+            eventBus.emit(Events.COMMS_MESSAGE, {
+              // Plain words, no symbols (Ruling 0). This is the ONE arrival line after the tutorial
+              // (the GameFlowManager one-shot that said the same thing is gone). Net-aware per the owner
+              // ruling of 2026-10-20 (DECISIONS §33 row 8): N while the mother has nets; D when she has none;
+              // a restock when none are left and no daughter can hold the piece (arrivalLineText).
+              text: arrivalLineText(lockRef ? lockRef.mass : 0, this._motherNetsLeft),
+              priority: 'info',
+              _keep: true,   // the next step to press
+            });
+          }
         } else if (posErrM > Dtrail_m * 3) {
           // Fell too far behind — back off to MATCH_ORBIT
           this._setPhase(PHASE.MATCH_ORBIT);

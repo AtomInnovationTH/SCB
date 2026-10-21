@@ -50,6 +50,41 @@ const VALID_CHANNELS = new Set(COMMS.CHANNELS || ['CMD', 'ALERT', 'HOUSTON', 'SC
 const DEFAULT_CHANNEL = COMMS.DEFAULT_CHANNEL || 'FLAVOR';
 
 /**
+ * nets-1b (2026-10-20): the sender is shown once. Emitters write `source: 'Small 1'` AND start the text with
+ * `Small 1: `, so the log read "SMALL 1: Small 1: Pad adhered". Strips a leading `<source>: ` from the text,
+ * case-insensitively ("Houston: " under source HOUSTON too). Nothing else is touched; a text that is only the
+ * prefix is returned whole.
+ *
+ * @param {string} source
+ * @param {string} text
+ * @returns {string}
+ */
+export function stripSenderPrefix(source, text) {
+  if (typeof source !== 'string' || typeof text !== 'string' || !source) return text;
+  const prefix = `${source.toLowerCase()}: `;
+  if (text.length > prefix.length && text.slice(0, prefix.length).toLowerCase() === prefix) {
+    const rest = text.slice(prefix.length).replace(/^\s+/, '');
+    return rest || text;
+  }
+  return text;
+}
+
+/**
+ * nets-1b R6: a source-less emit whose text starts with a daughter's own name ("Small 1: Pad adhered") read
+ * "SYSTEM: Small 1: Pad adhered". The name IS the sender: returns it as the source with the rest as the text, or null.
+ * The name format is `daughterDisplayName`'s: "Small N" / "Large N" (N = the arm's number).
+ *
+ * @param {string} text
+ * @returns {{source: string, text: string}|null}
+ */
+export function splitDaughterPrefix(text) {
+  if (typeof text !== 'string') return null;
+  const m = /^(small|large) (\d+): +(?=\S)/i.exec(text);
+  if (!m) return null;
+  return { source: `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()} ${m[2]}`, text: text.slice(m[0].length) };
+}
+
+/**
  * Classify a message into one of the 6 channels.
  * Priority: explicit channel → source heuristic → text heuristic → FLAVOR.
  *
@@ -218,16 +253,25 @@ const LAUNCH_TEMPLATES = [
   },
 ];
 
-/** Mission update templates */
+/**
+ * Mission update templates.
+ * nets-1b (2026-10-20, Ruling 0: plain words): `{target}` is the name of a live piece from the field (see
+ * `_sendMissionUpdate`), so a template that uses it is not sent when no piece is alive. The spin line carries the piece's
+ * own spin rate when it has one (`templateNoSpin` otherwise), says "slow its spin" (not "detumble") and spells out the unit.
+ */
 const MISSION_TEMPLATES = [
   {
     priority: CommsPriority.INFO,
     source: 'GROUND STN',
-    template: '{target} is spinning at {tumble}°/s. Hit it with the laser first to slow the spin (detumble). Makes it far easier to grab.',
+    needsTarget: true,
+    needsSpin: true,
+    template: '{target} is spinning at {tumble} degrees a second. Hit it with the laser first to slow its spin. Makes it far easier to grab.',
+    templateNoSpin: '{target} is spinning. Hit it with the laser first to slow its spin. Makes it far easier to grab.',
   },
   {
     priority: CommsPriority.INFO,
     source: 'LeoLabs',
+    needsTarget: true,
     template: 'Got your scan data on {target}, thanks. Bonus +50 points.',
     quiet: true,   // comms-after-tutorial D4: random timer line, no scan behind it
   },
@@ -245,9 +289,23 @@ const MISSION_TEMPLATES = [
   {
     priority: CommsPriority.INFO,
     source: 'ESOC',
+    needsTarget: true,
     template: '{target} is slowly falling out of orbit. It\'ll burn up on re-entry in {days} days if you don\'t grab it first.',
   },
 ];
+
+/** nets-1b: a live piece's plain name for a mission update (its catalogue name if it has one, else by type). */
+const MISSION_TYPE_NAMES = {
+  rocketBody: 'SL-16 R/B',
+  defunctSat: 'Cosmos Fragment',
+  missionDebris: 'MLI Fragment',
+  fragment: 'Debris Fragment',
+  cubesat: 'Cubesat',
+};
+function missionTargetName(d) {
+  if (typeof d.name === 'string' && d.name && !/^Cataloged-/.test(d.name)) return d.name;
+  return MISSION_TYPE_NAMES[d.type] || 'Debris Fragment';
+}
 
 /** Player status templates (triggered by events) */
 const PLAYER_STATUS_TEMPLATES = {
@@ -485,10 +543,17 @@ export class CommsSystem {
       if (!data || data._internal) return;
       // External emitters use 'source', 'sender', or 'speaker' — normalize
       // §0.1 fix: default missing source to 'SYSTEM' so capture-loop comms render
-      const rawSrc = data.source || data.sender || data.speaker;
+      let rawSrc = data.source || data.sender || data.speaker;
+      let body = data.text;
+      if (!rawSrc && body) {
+        // nets-1b R6: no source, but the text names a daughter ("Small 1: ..."): she is the sender, said once.
+        const named = splitDaughterPrefix(body);
+        if (named) { rawSrc = named.source; body = named.text; }
+      }
       if (!rawSrc) console.debug('[CommsSystem] sourceless emit defaulted to SYSTEM:', data.text);
       const src = rawSrc || 'SYSTEM';
-      if (!data.text) return;
+      if (!body) return;
+      const text = stripSenderPrefix(src, body);   // nets-1b: the sender is shown once
 
       // ST-5.1: Classify channel
       const channel = sourceToChannel(src, data);
@@ -506,7 +571,7 @@ export class CommsSystem {
           id: this._nextId++,
           timestamp: this._clockStamp(),
           source: src,
-          text: data.text,
+          text,
           priority: data.priority || CommsPriority.INFO,
           channel,
           age: 0,
@@ -549,7 +614,7 @@ export class CommsSystem {
         id: this._nextId++,
         timestamp: tsStr,
         source: src,
-        text: data.text,
+        text,
         priority: data.priority || CommsPriority.INFO,
         channel,
         age: 0,
@@ -910,30 +975,27 @@ export class CommsSystem {
 
   /** @private */
   _sendMissionUpdate(gameData) {
-    const tmpl = MISSION_TEMPLATES[Math.floor(Math.random() * MISSION_TEMPLATES.length)];
+    // nets-1b: `{target}` is a LIVE piece from the field, never a made-up "Object-NNN". With no live piece the
+    // templates that need one are not sent (the others still are).
+    const list = (gameData && gameData.debrisField && Array.isArray(gameData.debrisField.debrisList))
+      ? gameData.debrisField.debrisList : [];
+    // R7: a piece that is already caught (`_captured`) is not named either: it is no longer there to be scanned or slowed.
+    const live = list.filter((d) => d && d.alive !== false && d._captured !== true);
+    const piece = live.length > 0 ? live[Math.floor(Math.random() * live.length)] : null;
+    const eligible = MISSION_TEMPLATES.filter((t) => !t.needsTarget || piece);
+    if (eligible.length === 0) return;
+    const tmpl = eligible[Math.floor(Math.random() * eligible.length)];
 
-    // Try to fill in target names from game data
-    let targetName = 'Object-' + (100 + Math.floor(Math.random() * 900));
-    if (gameData && gameData.debrisField) {
-      const debris = gameData.debrisField.debrisList;
-      if (debris.length > 0) {
-        const rnd = debris[Math.floor(Math.random() * debris.length)];
-        if (rnd.alive) {
-          const typeNames = {
-            rocketBody: 'SL-16 R/B',
-            defunctSat: 'Cosmos Fragment',
-            missionDebris: 'MLI Fragment',
-            fragment: 'Debris Fragment',
-          };
-          targetName = typeNames[rnd.type] || 'Unknown Object';
-        }
-      }
-    }
+    // The spin number is that piece's own spin rate (rad/s on the record); without one the line is said without a number.
+    const spinDegS = (piece && Number.isFinite(piece.tumbleRate) && piece.tumbleRate > 0)
+      ? piece.tumbleRate * 180 / Math.PI : null;
+    let template = tmpl.template;
+    if (tmpl.needsSpin && spinDegS === null) template = tmpl.templateNoSpin;
 
-    const text = tmpl.template
-      .replace('{target}', targetName)
+    const text = template
+      .replace('{target}', piece ? missionTargetName(piece) : '')
       .replace('{alt}', (400 + Math.floor(Math.random() * 800)).toString())
-      .replace('{tumble}', (2 + Math.random() * 15).toFixed(1))
+      .replace('{tumble}', spinDegS === null ? '' : spinDegS.toFixed(1))
       .replace('{days}', (30 + Math.floor(Math.random() * 365)).toString());
 
     this.addMessage(tmpl.priority, tmpl.source, text, tmpl.quiet ? { _quiet: true } : undefined);
@@ -954,10 +1016,15 @@ export class CommsSystem {
   addMessage(priority, source, text, extra) {
     // §0.1 fix: default missing source to 'SYSTEM'; bail only on missing text
     if (!source) {
-      console.debug('[CommsSystem] addMessage() sourceless call defaulted to SYSTEM:', text);
-      source = 'SYSTEM';
+      const named = splitDaughterPrefix(text);   // nets-1b R6: "Small 1: ..." with no source: she is the sender
+      if (named) { source = named.source; text = named.text; }
+      else {
+        console.debug('[CommsSystem] addMessage() sourceless call defaulted to SYSTEM:', text);
+        source = 'SYSTEM';
+      }
     }
     if (!text) return;
+    text = stripSenderPrefix(source, text);   // nets-1b: the sender is shown once (COMMS_SEND lands here too)
     // ST-5.1: Classify channel
     const channel = sourceToChannel(source, { text, ...(extra || {}) });
 

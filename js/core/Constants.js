@@ -1152,7 +1152,14 @@ export const Constants = {
   PAD_CONTACT: {
     PAD_RADIUS_M:        0.080,   // 8 cm contact patch
     CONTACT_VEL_MAX_M_S: 0.20,    // any faster and the pad bounces (soft-contact regime)
-    APPROACH_TIMEOUT_S:  4.0,     // max APPROACH_SOFT duration before bounce
+    APPROACH_TIMEOUT_S:  75.0,    // safety cap on APPROACH_SOFT, >= 2x the measured 12 m approach (35.0 s, a tiny piece); a timeout fails as 'timeout'
+    // Soft final approach (nets-1b, 2026-10-20): she rides with the piece and closes to its SURFACE (reach + PAD_RADIUS_M
+    // from its centre, `DebrisField.trueReachM`) at v = clamp(GAIN*gap, MIN, MAX). Gain, min and max are estimates (owner
+    // may veto). Measured (test-PadApproach.js, 60 fps, 0.5 m fragment): 8 m -> contact at 26.6 s, 12 m -> 34.6 s, still or
+    // drifting at 0.5 m/s alike; touch speed = the commanded closing speed at contact = 0.03 m/s (limit 0.20).
+    APPROACH_GAIN_PER_S: 0.25,    // 1/s — closing speed per metre of range
+    APPROACH_V_MIN_M_S:  0.03,    // m/s — the slowest she creeps in (this is her touch speed)
+    APPROACH_V_MAX_M_S:  0.5,     // m/s — the fastest she closes from far
     CONTACT_HOLD_S:      1.0,     // dwell before the P_GRIP roll
     ENERGIZE_PULSE_S:    0.3,
     RELEASE_PULSE_S:     0.2,
@@ -5176,7 +5183,8 @@ export const Constants = {
     ],
 
     // --- Skill Catalog (41 skills) -----------------------------------------------------------
-    // Fields: id, label, key, tier, category, hudGroup, prereqs, prereqType, noReminder, triggerEvent, triggerFilter?
+    // Fields: id, label, key, say?, tier, category, hudGroup, prereqs, prereqType, noReminder, triggerEvent, triggerFilter?
+    // say: the plain phrase a stale-skill reminder shows ("Press S to scan."), nets-1b; none -> the label alone, no key glue.
     // triggerEvent: Events.js constant name (string key) or null if auto/timer/needs new event
     // triggerFilter: OPTIONAL (data) => boolean — payload predicate so several skills can share one
     //   triggerEvent but discriminate by payload (e.g. ARM_CAPTURED{manual:true}, SCAN_INITIATED{type:'wide'}).
@@ -5188,33 +5196,33 @@ export const Constants = {
     //   safety — irreversible destructive action gated by catch count
     CATALOG: [
       // ── Tier 1: Orientation (6 skills — independent, any order) ─────────
-      { id: 'nav_zoom',         label: 'Zoom',         key: 'Scroll',    tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CAMERA_ZOOM' },
-      { id: 'nav_rotate',       label: 'Rotate View',  key: 'Drag',      tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CAMERA_ORBIT_DRAG' },
-      { id: 'nav_camera',       label: 'Camera Views', key: 'V',         tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CAMERA_VIEW_CHANGE' },
-      { id: 'nav_arrows',       label: 'Ship Rotation', key: '←↑↓→',    tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'TUTORIAL_ARROW_INPUT' },
-      { id: 'nav_throttle',     label: 'Throttle',     key: '+/-', tier: 1, category: 'nav',      hudGroup: 'propulsion',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'THROTTLE_CHANGE' },
-      { id: 'scan_quick',       label: 'Quick Scan',   key: 'S',         tier: 1, category: 'scan',      hudGroup: 'targets',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_QUICK' },
+      { id: 'nav_zoom',         label: 'Zoom',         key: 'Scroll', say: 'Scroll to zoom.',    tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CAMERA_ZOOM' },
+      { id: 'nav_rotate',       label: 'Rotate View',  key: 'Drag', say: 'Drag to look around.',      tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CAMERA_ORBIT_DRAG' },
+      { id: 'nav_camera',       label: 'Camera Views', key: 'V', say: 'Press V to change the camera view.',         tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CAMERA_VIEW_CHANGE' },
+      { id: 'nav_arrows',       label: 'Ship Rotation', key: '←↑↓→', say: 'Use the arrow keys to turn.',    tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'TUTORIAL_ARROW_INPUT' },
+      { id: 'nav_throttle',     label: 'Throttle',     key: '+/-', say: 'Press Shift and plus or minus to change the thrust.', tier: 1, category: 'nav',      hudGroup: 'propulsion',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'THROTTLE_CHANGE' },
+      { id: 'scan_quick',       label: 'Quick Scan',   key: 'S', say: 'Press S to scan.',         tier: 1, category: 'scan',      hudGroup: 'targets',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_QUICK' },
       // ── Delegation 4 (2026-05-31): two Tier-1 skills added to back the onboarding `struts` and `inspect` beats. ──
-      { id: 'arm_struts',       label: 'Strut Deployment', key: '.',      tier: 1, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'STRUT_DEPLOY_INPUT' },
-      { id: 'inspect_mother',   label: 'Spacecraft Inspection (V, then scroll in)', key: 'V', tier: 1, category: 'awareness', hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'INSPECTION_TOGGLE' },
+      { id: 'arm_struts',       label: 'Strut Deployment', key: '.', say: 'Press the period key to move the struts out or in.',      tier: 1, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'STRUT_DEPLOY_INPUT' },
+      { id: 'inspect_mother',   label: 'Spacecraft Inspection (V, then scroll in)', key: 'V', say: 'Press V, then scroll in, to look over the ship.', tier: 1, category: 'awareness', hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'INSPECTION_TOGGLE' },
       // ── Tier 2: Core Tools (6 skills) ───────────────────────────────────
-      { id: 'scan_wide',            label: 'Wide Scan',    key: 'Shift+S',     tier: 2, category: 'scan',      hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_WIDE' },
-      { id: 'nav_target',           label: 'Target Selection', key: 'T', tier: 2, category: 'nav',     hudGroup: 'target-info',   prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'TARGET_SELECTED' },
-      { id: 'nav_autopilot',        label: 'Autopilot',    key: 'A',     tier: 2, category: 'nav',       hudGroup: 'orbit-mfd',     prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'AUTOPILOT_ENGAGE' },
-      { id: 'collect_deploy',       label: 'Deploy Daughter',   key: 'D',     tier: 2, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'ARM_DEPLOYED' },
-      { id: 'collect_lasso',        label: 'Lasso',        key: 'N', tier: 2, category: 'collect',   hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'LASSO_FIRED' },
+      { id: 'scan_wide',            label: 'Wide Scan',    key: 'Shift+S', say: 'Press Shift S for a wide scan.',     tier: 2, category: 'scan',      hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_WIDE' },
+      { id: 'nav_target',           label: 'Target Selection', key: 'T', say: 'Press T to pick the next target.', tier: 2, category: 'nav',     hudGroup: 'target-info',   prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'TARGET_SELECTED' },
+      { id: 'nav_autopilot',        label: 'Autopilot',    key: 'A', say: 'Press A to fly to your target.',     tier: 2, category: 'nav',       hudGroup: 'orbit-mfd',     prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'AUTOPILOT_ENGAGE' },
+      { id: 'collect_deploy',       label: 'Deploy Daughter',   key: 'D', say: 'Press D to send a daughter.',     tier: 2, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'ARM_DEPLOYED' },
+      { id: 'collect_lasso',        label: 'Lasso',        key: 'N', say: 'Press N to launch the net.', tier: 2, category: 'collect',   hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'LASSO_FIRED' },
       { id: 'awareness_mouse_look', label: 'Mouse Look',   key: null,    tier: 2, category: 'awareness', hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: true,  triggerEvent: 'CAMERA_FREE_LOOK' },
 
       // ── Tier 3: Proficiency (7 skills) ──────────────────────────────────
       { id: 'nav_autopilot_no_target', label: 'Autopilot w/o Target', key: null, tier: 3, category: 'nav',    hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: true,  triggerEvent: 'AUTOPILOT_NO_TARGET' },
       { id: 'scan_discovery',          label: 'Scan Discovery',       key: null, tier: 3, category: 'scan',   hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_DISCOVERY' },
       { id: 'collect_dual_fire',       label: 'Dual Launch',            key: null, tier: 3, category: 'collect', hudGroup: null,          prereqs: [],  prereqType: 'hard', noReminder: false, triggerEvent: 'DUAL_FIRE' },
-      { id: 'manage_power',            label: 'Power Distribution',   key: 'Shift+1/2/3', tier: 3, category: 'manage', hudGroup: 'power',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'POWER_BUS_SELECTED' },
-      { id: 'manage_comms',            label: 'Comms Menu',           key: '7',  tier: 3, category: 'manage', hudGroup: 'comms',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'COMMS_OPENED' },
-      { id: 'manage_codex',            label: 'SPECS',                key: 'I',  tier: 3, category: 'manage', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CODEX_OPENED' },
+      { id: 'manage_power',            label: 'Power Distribution',   key: 'Shift+1/2/3', say: 'Press Shift and 1, 2 or 3 to pick a power line.', tier: 3, category: 'manage', hudGroup: 'power',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'POWER_BUS_SELECTED' },
+      { id: 'manage_comms',            label: 'Comms Menu',           key: '7', say: 'Press 7 for comms.',  tier: 3, category: 'manage', hudGroup: 'comms',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'COMMS_OPENED' },
+      { id: 'manage_codex',            label: 'SPECS',                key: 'I', say: 'Press I to read the specs.',  tier: 3, category: 'manage', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CODEX_OPENED' },
       // ── CP-4 ch2 (MissionCoach): Daughter piloting (payload-discriminated via triggerFilter) ──
-      { id: 'arm_pilot',         label: 'Daughter Piloting', key: '1-4', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'CONTROL_MODE_CHANGE', triggerFilter: (d) => d && d.mode === 'ARM_PILOT' },
-      { id: 'arm_pilot_capture', label: 'Manual Capture',    key: 'N', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_CAPTURED',        triggerFilter: (d) => d && d.manual === true },
+      { id: 'arm_pilot',         label: 'Daughter Piloting', key: '1-4', say: 'Press 1 to 4 to pick a daughter to fly.', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'CONTROL_MODE_CHANGE', triggerFilter: (d) => d && d.mode === 'ARM_PILOT' },
+      { id: 'arm_pilot_capture', label: 'Manual Capture',    key: 'N', say: 'Press N to use the daughter\'s tool.', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_CAPTURED',        triggerFilter: (d) => d && d.manual === true },
       // ── CP-4 ch4 (MissionCoach): Cluster/transfer agency on the Debris Map (CP-3) ──
       // M retired 2026-10-09 (H1): the F4 plan-transfer / F3 approach emit
       // DEBRIS_MAP_CLUSTER_SELECTED through LadderBridge, so no key opens this skill.
@@ -5230,11 +5238,11 @@ export const Constants = {
       // ch11 orbital_hohmann: a committed transfer window opening (CLUSTER_WINDOW_OPEN)
       //   is the "you timed a Hohmann" moment; the porkchop viz is deferred (EN-5/6).
       { id: 'confirm_before_fire', label: 'Confirm Before Launch', key: null, tier: 3, category: 'awareness', hudGroup: null, prereqs: [], prereqType: 'none', noReminder: true,  triggerEvent: 'CONJUNCTION_ALERT', triggerFilter: (d) => d && d.reason === 'ACTIVE_SAT_ARMING' },
-      { id: 'radial_menu',         label: 'Fleet Recall',        key: 'Shift+R',  tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_RECALL_ALL' },
+      { id: 'radial_menu',         label: 'Fleet Recall',        key: 'Shift+R', say: 'Press Shift R to reel in all daughters.',  tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_RECALL_ALL' },
       // ── item 100 (2026-08-21): the launch-speed dial. Discovered by moving
       //   the dial (LAUNCH_SPEED_CHANGED); the ch10 wide-sweep beat teaches its
       //   application (ARM_CAPTURED rangeM ≥ 1000 — the tether-gated unlock).
-      { id: 'speed_dial',          label: 'Launch-Speed Dial',   key: "; / '",   tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'LAUNCH_SPEED_CHANGED' },
+      { id: 'speed_dial',          label: 'Launch-Speed Dial',   key: "; / '", say: 'Press the semicolon or apostrophe key to change the launch speed.',   tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'LAUNCH_SPEED_CHANGED' },
       { id: 'orbital_hohmann',     label: 'Hohmann Window',      key: null, tier: 4, category: 'nav',       hudGroup: null,    prereqs: [], prereqType: 'soft', noReminder: false, triggerEvent: 'CLUSTER_WINDOW_OPEN' },
 
       // ── Tier 4: Advanced (8 skills) ─────────────────────────────────────
@@ -5263,13 +5271,13 @@ export const Constants = {
 
       // ── Tier 5: Mastery (7 skills) ──────────────────────────────────────
       { id: 'nav_hohmann',        label: 'Hohmann Transfer',     key: null,  tier: 5, category: 'nav',       hudGroup: null,  prereqs: ['nav_orbit_mfd'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'AUTOPILOT_ARRIVED' },
-      { id: 'collect_arm_pilot',  label: 'DAUGHTER PILOT Mode',       key: '1-4',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'soft',   noReminder: false, triggerEvent: 'ARM_SELECT' },
-      { id: 'mastery_detach',     label: 'Risk Detach',          key: 'X',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: ['collect_deploy'],  prereqType: 'safety', noReminder: false, triggerEvent: 'ARM_DETACHED',       safetyGate: { minCatches: 2 } },
+      { id: 'collect_arm_pilot',  label: 'DAUGHTER PILOT Mode',       key: '1-4', say: 'Press 1 to 4 to pick a daughter to fly.',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'soft',   noReminder: false, triggerEvent: 'ARM_SELECT' },
+      { id: 'mastery_detach',     label: 'Risk Detach',          key: 'X', say: 'Press X to cut a daughter loose.',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: ['collect_deploy'],  prereqType: 'safety', noReminder: false, triggerEvent: 'ARM_DETACHED',       safetyGate: { minCatches: 2 } },
       // F5: was key 'T' + triggerEvent 'TOOL_CYCLE'. T is now "Target debris"
       // and TOOL_CYCLE has no emitter; the tool-cycle verb moved to Backquote in
       // ARM_PILOT/STATION_KEEP, which emits TOOL_SELECTED (ArmUnit cycleTool).
       // Repointed so the skill is discoverable; glyph updated to the live key.
-      { id: 'mastery_tool_cycle', label: 'Tool Cycling',         key: '`', tier: 5, category: 'manage', hudGroup: null, prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'TOOL_SELECTED' },
+      { id: 'mastery_tool_cycle', label: 'Tool Cycling',         key: '`', say: 'Press the backtick key for the next tool.', tier: 5, category: 'manage', hudGroup: null, prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'TOOL_SELECTED' },
       { id: 'mastery_ca_dodge',   label: 'CA Manual Override',   key: null,  tier: 5, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'CA_DODGE_EXECUTED' },
       { id: 'mastery_synergy',    label: 'Synergistic Salvage',  key: null,  tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'hard',   noReminder: false, triggerEvent: 'SYNERGY_BONUS' },
       { id: 'mastery_full_sweep', label: 'Full Sweep',           key: null,  tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'hard',   noReminder: false, triggerEvent: 'TRAWL_SWEEP_COMPLETE' },
@@ -6284,7 +6292,7 @@ export const Constants = {
       chip: 'Fly her: 2× score', glyph: '1-4', keys: ['Digit1', 'Digit2', 'Digit3', 'Digit4'],
     },
     {
-      state: 'STATION_KEEP', idleS: 20, when: 'noNetInFlightHasNets',
+      state: 'STATION_KEEP', idleS: 0, when: 'noNetInFlightHasNets',
       hintId: 'sk_idle_fire_or_pilot', title: 'Daughter holding standoff',
       text: 'She is holding station on the target. Press N to launch the net (or 1-4 to pilot her).',
       icon: 'NET',

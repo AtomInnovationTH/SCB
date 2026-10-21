@@ -1827,7 +1827,8 @@ export class ArmManager {
             arm.state === ARM_STATES.DOCKING ||
             arm.state === ARM_STATES.HOLDING_CATCH ||
             _CARRY_STATES.has(arm.state) ||     // trip-melt-2: the rack rides along on the carry
-            (arm.state === ARM_STATES.GRAPPLED && arm._rhPinned === true)) {   // reel-home: the net reel winds the pinned catch in
+            (arm.state === ARM_STATES.GRAPPLED && arm._rhPinned === true) ||   // reel-home: the net reel winds the pinned catch in
+            (arm.state === ARM_STATES.GRAPPLED && arm._toolCatchRidesWithHer?.())) {   // nets-1b review 3: a pad/magnet/gripper catch rides with her in the hold
           for (const d of pieces) {
             if (!d) continue;
             // Item 1: once the staged furnace breakdown begins (debris._breakdownActive,
@@ -2891,7 +2892,7 @@ export class ArmManager {
     if (arm && typeof arm.setSelectedHighlight === 'function') arm.setSelectedHighlight(true);
     eventBus.emit(Events.ARM_SELECT, { armIndex: index });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `Selected ${arm.displayName} [${index + 1}]`,
+      text: `${arm.displayName} selected.`,
       priority: 'info',
     });
   }

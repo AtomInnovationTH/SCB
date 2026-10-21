@@ -47,7 +47,7 @@ const FEATURE_FLAGS = Constants.FEATURE_FLAGS;
 // trip-melt G8 (owner 2026-10-19): nothing is unloaded by a station any more; a catch that fits a tip goes to a furnace
 // on the trip to the next field.
 const NOSE_FULL_LINE = 'Nose is full: this catch has nowhere to go yet. '
-  + 'It stays at the collar and goes to a furnace on the trip to the next field if it fits one, or jettison [K].';
+  + 'It stays at the collar and goes to a furnace on the trip to the next field if it fits one. Press K to let it go.';
 
 // Module-level scratch objects for the mother reel/berth per-frame math —
 // the reel/berth path must not allocate per frame (plan §13: use the Into
@@ -3932,13 +3932,17 @@ export class CaptureNetSystem {
           // gas-low-fail-fast D2: the catch could not go by radiator for want of gas AND no daughter can take it:
           // ONE line that names both and the way out, instead of the usual refusal line. Once per catch (the latch
           // outlives `_cargoRefused`, which a rack flight that is called off re-arms).
+          // nets-1b R5: the catch really stays at the nose; this line is the only one (it says no daughter has a cell, and
+          // how to let it go), so there is no separate "parked at the nose" line.
           this._sayGasShort(net, 'full');
         } else {
+          // nets-1b R5: stays at the nose (no cell, or over the gate with no cut). The reason line below already says
+          // where it stays, so it is the only line: no separate "parked at the nose" line, and plain words for the key.
           // no-melt: the furnaces run only on the trip to the next field (trip-melt) - do not promise one now.
           const furnace = Constants.isFeatureEnabled('FURNACE_COOK');
           const fate = furnace
-            ? 'It rides the collar until the furnace takes it, or jettison [K].'
-            : 'It stays at the collar and goes to a furnace on the trip to the next field if it fits one, or jettison [K].';
+            ? 'It rides the collar until the furnace takes it. Press K to let it go.'
+            : 'It stays at the collar and goes to a furnace on the trip to the next field if it fits one. Press K to let it go.';
           eventBus.emit(Events.COMMS_MESSAGE, {
             source: 'HOUSTON', channel: 'CMD',
             text: overGate
@@ -4071,6 +4075,8 @@ export class CaptureNetSystem {
     }
     const why = drv.refusal(net);
     if (why) {
+      // A 'busy' refusal (the previous catch still holds the leash driver) is never spoken: this catch simply starts
+      // when the retry finds the driver free ("Handing the catch to radiator N" is then the one line).
       drv.announceRefusal(net, why);
       return 'declined';
     }
@@ -5403,7 +5409,7 @@ export class CaptureNetSystem {
     const foulNet = this.getCollarShotFoul(podIndex, launchPos, launchDir);
     if (foulNet) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'This shot fouls the cargo at the collar — pull off the nose, or jettison [K].',
+        text: 'This shot fouls the cargo at the collar — pull off the nose, or press K to let the catch go.',
         source: 'SYSTEM',
         channel: 'CMD',
         priority: 'warning',

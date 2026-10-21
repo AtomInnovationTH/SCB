@@ -1099,13 +1099,13 @@ export class GameFlowManager {
         // collar's digestion completion — S13(c)) → processed.
         // no-melt: a daughter's rack credit ({ parked: true, source: 'rack' }) is not "at the nose" (ArmUnit says its own
         // "Catch secured at the strut" line), and with no furnace "fully processed" is never true: say nothing.
-        const rackPark = !!(data.parked && data.source === 'rack');
-        if (!rackPark && (data.parked || Constants.isFeatureEnabled('FURNACE_COOK'))) {
+        // nets-1b: a mother catch's "parked at the nose" line is no longer said here, at the mate, before anyone knows
+        // where the catch goes (a radiator leash or a daughter's rack take it; the line then lied). R5: nothing says it
+        // any more; when the catch really stays at the nose, CaptureNet's reason line (`_tryCargoTransfer`) says where.
+        if (!data.parked && Constants.isFeatureEnabled('FURNACE_COOK')) {
           eventBus.emit(Events.COMMS_SEND, {
             source: (data.source || data.armId || 'DAUGHTER').toUpperCase(),
-            text: data.parked
-              ? 'Catch secured — parked at the nose'
-              : 'Catch fully processed. Salvage in the bin',
+            text: 'Catch fully processed. Salvage in the bin',
             priority: 'INFO',
           });
         }
@@ -1652,7 +1652,8 @@ export class GameFlowManager {
         this._firstTimeComms.add('first_net_physics');
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'SCI', channel: 'SCI',
-          text: 'DISCOVERY: Watch the net slow as it blossoms. No brakes involved. Angular momentum is conserved: the mouth opening grows its inertia (I ∝ r²), so spin falls. The yo-yo despin. Codex [I] updated.',
+          // nets-1b (Ruling 0): two short plain sentences, no tag, no symbols, no bracketed key.
+          text: 'Watch the net slow its spin as it opens, like a skater opening her arms. Press I to read more.',
           priority: 'info',
         });
       }
