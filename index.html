@@ -212,6 +212,45 @@
       z-index: 10;
     }
 
+    /* === PAUSE BUTTON (touch only; js/ui/PauseButton.js builds it) ===
+       44x44 CSS px at x 448, y 128 on a 1366x1024 iPad: in the notch beside the left column, between the Daughters pane's right edge
+       (x 437.5), MOTHER's bottom edge (y 113.8) and the collision warning (x 502, y 60..203, z 120). The top 212 px of the centre
+       hold, on some floor or moment, the score strip (y 8..43), the catch line under it (y 47..66, 3 s after every catch) and that
+       warning; a spot in the centre column floated over the 3D view (target brackets, orbit-band labels). Smallest gap 10.4 px to
+       anything in tmp/pause/forced.json (transients forced, F1-F5, drawer open and closed; tmp/pause/cand.mjs); outside the 24 px
+       swipe band and the 40 px side bands. Mounted on <body> (not inside #hud-overlay, a z-10 stacking context) at z 40: above
+       the world-label layers (reticles 11-12, prox/reach/blueprint 32, SDA chart and cluster icons 33, transfer windows 34,
+       workbench and detail slider 35, turn pad 37, radial 38) and below the menus (50+), help and the teaching card (9000);
+       it hides itself while the pause overlay shows. The background is nearly opaque so a label behind it cannot be read through it. */
+    #hud-pause-btn {
+      position: fixed;
+      top: calc(max(0px, env(safe-area-inset-top)) + 128px);
+      left: 448px;
+      width: 44px;
+      height: 44px;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0;
+      background: rgba(4, 12, 30, 0.94);
+      border: 1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.4);
+      border-radius: 6px;
+      color: var(--hud-normal, #00ff88);
+      pointer-events: auto;
+      cursor: pointer;
+      touch-action: manipulation;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+      z-index: 40;
+    }
+    #hud-pause-btn[hidden] { display: none; }
+    #hud-pause-btn .hud-pause-bar { display: block; width: 5px; height: 18px; border-radius: 1px; background: currentColor; }
+    #hud-pause-btn:active { background: rgb(18, 70, 52); }
+
      .hud-panel {
       position: absolute;
       width: 280px; /* = HUD_COLUMN_WIDTH_PX (js/ui/RailGeometry.js) — CSS cannot import */

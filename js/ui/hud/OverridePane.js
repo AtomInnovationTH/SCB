@@ -174,6 +174,8 @@ export const F1_BAR_GEOMETRY = Object.freeze({
   GAP_PX: 8,
   BOTTOM_PX: 12,           // CSS bottom floor: max(12px, env(safe-area-inset-bottom, 0px)); the bar's top is 12 + 48 = 60 < the hint ticker's 88
   TICK_MS: 500,            // the bar's live-state refresh (struts have no arrival event)
+  HOLD_VENT_MS: 450,       // a press held this long on RADIATORS sends 180° (= TouchControls' radial holdMs; deps.holdMs overrides)
+  HOLD_SWALLOW_MS: 1000,   // the click after a hold's release is swallowed for this long; a long press that sends no click never eats a later tap
   TAP_DEBOUNCE_MS: 600,    // = Constants.THERMAL.FLOWER.VENT_DOUBLE_TAP_MS (main.js passes the live value as deps.tapDebounceMs)
   // The override pane pulled out on F1 (the panel-count +) sits at the same bottom-centre spot
   // (12 + 64): the bar lifts above it AND above the transient hint band (Constants.ONBOARDING.TICKER
@@ -304,6 +306,7 @@ const CTA_OPEN = 'PRESS TO CLOSE';
 const BAR_ACTUATOR_OF = Object.freeze({ struts: 'struts', radiator: 'flowerDeploy', wings: 'rosaFurl' });
 const BAR_NAME_OF = Object.freeze({ struts: 'DAUGHTERS', radiator: 'RADIATORS', wings: 'WINGS', furnace: 'FURNACE' });
 const BAR_NULL_STATE = Object.freeze({ struts: 'NO DAUGHTER', radiator: 'OFFLINE', wings: 'OFFLINE' });
+const HOLDING_ATTR = 'data-holding';      // RADIATORS while a press is on its way to the 450 ms hold (not the "pressed" look: that means radiators open)
 const FLOOR_GONE_ATTR = 'data-floor-gone';  // FloorMask's attribute-pane bit (the mask is its one writer)
 
 /** Panel key → actuators key (RADIATOR → the OVERRIDE full-range sweep, amendment 2026-09-09). */
@@ -422,6 +425,7 @@ export class OverridePane {
     this._now = typeof deps.now === 'function' ? deps.now : _nowMs;
     this._barTickOn = deps.barTick === true;   // opt-in: the hub passes true (a default timer would show in every pane test's pending count)
     this._tapDebounceMs = Number.isFinite(deps.tapDebounceMs) ? deps.tapDebounceMs : F1_BAR_GEOMETRY.TAP_DEBOUNCE_MS;
+    this._holdMs = Number.isFinite(deps.holdMs) ? deps.holdMs : F1_BAR_GEOMETRY.HOLD_VENT_MS;
 
     this._root = null;
     this._grid = null;
@@ -436,6 +440,8 @@ export class OverridePane {
     this._barModels = {};            // key → last applied { name, state, disabled, pressed }
     this._barTickId = null;          // the bar's self-rescheduling refresh (NOT a gag timer)
     this._lastRadiatorTapMs = -Infinity;
+    this._hold = null;               // the RADIATORS press in flight: { pointerId, timerId, fired, btn }
+    this._swallowClickAtMs = -Infinity;   // > -Infinity while the click after a fired hold is still to be swallowed (stamp = fire / release time)
     this._lastFurnaceTapMs = -Infinity;
     this._furnacePresses = 0;        // every FURNACE press, bar or grid (the bar's reset checks no press came since)
     this._barFurnacePressNo = -1;    // _furnacePresses right after the bar's last FURNACE press
@@ -469,6 +475,11 @@ export class OverridePane {
 
     this._onClick = (e) => this._handleClick(e);
     this._onBarClick = (e) => this._handleBarClick(e);
+    this._onBarDown = (e) => this._handleBarDown(e);
+    this._onBarUp = (e) => this._handleBarUp(e);
+    this._onBarMove = (e) => this._handleBarMove(e);
+    this._onBarCancel = (e) => this._cancelHold(e);
+    this._onBarMenu = (e) => this._handleBarMenu(e);
 
     this._build(deps.parent);
     this._subscribe();
@@ -599,6 +610,7 @@ export class OverridePane {
     if (this._disposed) return;
     this._stopTick();
     this._stopBarTick();
+    this._cancelHold();
     this._clearAttract();
     this._abortGag();
     this._setBodyOpen(false);
@@ -612,7 +624,15 @@ export class OverridePane {
     }
     _removeEl(this._root);
     if (this._bar && typeof this._bar.removeEventListener === 'function') {
-      try { this._bar.removeEventListener('click', this._onBarClick); } catch (_e) { /* stub */ }
+      try {
+        this._bar.removeEventListener('click', this._onBarClick);
+        this._bar.removeEventListener('pointerdown', this._onBarDown);
+        this._bar.removeEventListener('pointerup', this._onBarUp);
+        this._bar.removeEventListener('pointermove', this._onBarMove);
+        this._bar.removeEventListener('pointercancel', this._onBarCancel);
+        this._bar.removeEventListener('pointerleave', this._onBarCancel);
+        this._bar.removeEventListener('contextmenu', this._onBarMenu);
+      } catch (_e) { /* stub */ }
     }
     _removeEl(this._bar);
     this._bar = null;
@@ -817,7 +837,16 @@ export class OverridePane {
       this._barBtns[key] = btn;
       this._barParts[key] = { name, state };
     }
-    if (typeof bar.addEventListener === 'function') bar.addEventListener('click', this._onBarClick);
+    if (typeof bar.addEventListener === 'function') {
+      bar.addEventListener('click', this._onBarClick);
+      // Hold RADIATORS = 180° (touch has no double press: the bar drops quick double taps on purpose).
+      bar.addEventListener('pointerdown', this._onBarDown);
+      bar.addEventListener('pointerup', this._onBarUp);
+      bar.addEventListener('pointermove', this._onBarMove);
+      bar.addEventListener('pointercancel', this._onBarCancel);
+      bar.addEventListener('pointerleave', this._onBarCancel);
+      bar.addEventListener('contextmenu', this._onBarMenu);
+    }
     parent.appendChild(bar);
     this._bar = bar;
   }
@@ -1102,6 +1131,7 @@ export class OverridePane {
       ${BAR} .f1b-state { font-size: 10px; letter-spacing: 0.1em; line-height: 1.1; white-space: nowrap; opacity: 0.85; }
       ${BAR} .f1b-btn:hover:not(:disabled) { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.16); }
       ${BAR} .f1b-btn:active:not(:disabled) { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.28); }
+      ${BAR} .f1b-btn[${HOLDING_ATTR}]:not(:disabled) { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.28); border-color: ${COLOR_PLAYER}; outline: 2px dashed ${COLOR_PLAYER}; outline-offset: -3px; }
       ${BAR} .f1b-btn[aria-pressed="true"] { background: rgb(var(--hud-normal-rgb, 0 255 136) / 0.2); border-color: ${COLOR_PLAYER}; }
       ${BAR} .f1b-btn:disabled { color: ${COLOR_CAUTION}; opacity: 0.6; cursor: not-allowed; border-color: rgb(var(--hud-caution-rgb, 255 170 0) / 0.35); }
       ${BAR} .f1b-furnace { color: ${COLOR_CAUTION}; border-color: rgb(var(--hud-caution-rgb, 255 170 0) / 0.5); }
@@ -1355,6 +1385,12 @@ export class OverridePane {
     if (!model || model.disabled) return;                 // a disabled button drops the tap
     if (key === 'radiator') {
       const now = this._now();
+      // The click that follows the release of a hold (180° already sent) is not a tap: swallow it once.
+      if (this._swallowClickAtMs > -Infinity) {
+        const fresh = now - this._swallowClickAtMs < F1_BAR_GEOMETRY.HOLD_SWALLOW_MS;
+        this._swallowClickAtMs = -Infinity;
+        if (fresh) return;
+      }
       if (now - this._lastRadiatorTapMs < this._tapDebounceMs) return;
       this._lastRadiatorTapMs = now;
     }
@@ -1363,6 +1399,94 @@ export class OverridePane {
       try { a.toggle(); } catch (_e) { /* dep */ }
     }
     this._refreshBar();                                   // re-read truth, never an optimistic flip
+  }
+
+  /**
+   * @private A press on RADIATORS starts the hold clock (any pointer: finger or mouse). Held `_holdMs` it sends 180°
+   * once (`flowerDeploy.vent()`); released earlier it is an ordinary tap (the click toggles as before). A new press
+   * ends any old swallow flag, so a long press that sent no click never eats the next real tap.
+   */
+  _handleBarDown(e) {
+    if (this._disposed || !e) return;
+    const btn = _closestKey(e.target);
+    if (!btn || btn.getAttribute(KEY_ATTR) !== 'radiator') return;
+    this._swallowClickAtMs = -Infinity;
+    this._cancelHold();
+    if (e.pointerType === 'mouse' && e.button !== undefined && e.button !== 0) return;
+    const fl = this._actuators && this._actuators[BAR_ACTUATOR_OF.radiator];
+    if (!fl || typeof fl.vent !== 'function' || typeof this._setTimeoutFn !== 'function') return;
+    const model = this._barModels.radiator || this._barModel('radiator');
+    if (!model || model.disabled) return;
+    const hold = { pointerId: e.pointerId, timerId: null, fired: false, btn };
+    this._hold = hold;
+    try { btn.setAttribute(HOLDING_ATTR, ''); } catch (_e) { /* stub */ }
+    const f = this._setTimeoutFn;
+    hold.timerId = f(() => this._fireHold(hold), this._holdMs);
+  }
+
+  /** @private The hold reached `_holdMs` with the finger still on the button: send 180°, stamp the tap debounce. */
+  _fireHold(hold) {
+    if (this._disposed || this._hold !== hold || hold.fired) return;
+    // A floor change (FloorMask hides the bar) while the finger is down: the press belongs to a bar that is gone.
+    if (this._barGone()) { this._cancelHold(); return; }
+    hold.fired = true;
+    hold.timerId = null;
+    const now = this._now();
+    this._lastRadiatorTapMs = now;
+    this._swallowClickAtMs = now;
+    try { hold.btn.removeAttribute(HOLDING_ATTR); } catch (_e) { /* stub */ }
+    const a = this._actuators && this._actuators[BAR_ACTUATOR_OF.radiator];
+    if (a && typeof a.vent === 'function') {
+      try { a.vent(); } catch (_e) { /* dep */ }
+    }
+    this._refreshBar();
+  }
+
+  /** @private Release: a fired hold re-stamps the swallow clock (the click arrives just after); an early release is a plain tap. */
+  _handleBarUp(e) {
+    const hold = this._hold;
+    if (!hold) return;
+    if (e && hold.pointerId !== undefined && e.pointerId !== undefined && e.pointerId !== hold.pointerId) return;
+    if (hold.fired) this._swallowClickAtMs = this._now();
+    this._cancelHold(null, true);
+  }
+
+  /** @private Sliding off the button (touch keeps the pointer captured, so no leave event fires) ends the hold, unfired. */
+  _handleBarMove(e) {
+    const hold = this._hold;
+    if (!hold || hold.fired || !e) return;
+    if (e.pointerId !== undefined && hold.pointerId !== undefined && e.pointerId !== hold.pointerId) return;
+    const btn = hold.btn;
+    if (!btn || typeof btn.getBoundingClientRect !== 'function') return;
+    if (!Number.isFinite(e.clientX) || !Number.isFinite(e.clientY)) return;
+    const r = btn.getBoundingClientRect();
+    if (!r || !(r.width > 0)) return;
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) this._cancelHold();
+  }
+
+  /**
+   * @private End the hold in flight: clear its timer and the holding look. A cancelled or slid-off press does nothing
+   * (a fired hold has already sent 180°; its swallow flag stays until the click, the next press or 1 s).
+   * @param {*} [_e] event arg (unused; lets this be a listener)
+   * @param {boolean} [released] true from pointerup
+   */
+  _cancelHold(_e, released) {
+    const hold = this._hold;
+    if (!hold) return;
+    if (!released && hold.fired) { this._hold = null; return; }   // a leave / cancel after the send: nothing left to undo
+    this._hold = null;
+    if (hold.timerId !== null && typeof this._clearTimeoutFn === 'function') {
+      const c = this._clearTimeoutFn;
+      try { c(hold.timerId); } catch (_e2) { /* stub */ }
+    }
+    hold.timerId = null;
+    try { hold.btn.removeAttribute(HOLDING_ATTR); } catch (_e2) { /* stub */ }
+  }
+
+  /** @private No iPad long-press menu (and no text selection) on RADIATORS: the hold is ours. */
+  _handleBarMenu(e) {
+    const btn = e && _closestKey(e.target);
+    if (btn && btn.getAttribute(KEY_ATTR) === 'radiator' && typeof e.preventDefault === 'function') e.preventDefault();
   }
 
   /**
@@ -1401,6 +1525,11 @@ export class OverridePane {
     else _removeClass(this._bar, 'f1b-drawer');
   }
 
+  /** @private True while FloorMask hides the bar (a floor change, or the bar gone on this floor). */
+  _barGone() {
+    return !!this._bar && typeof this._bar.hasAttribute === 'function' && this._bar.hasAttribute(FLOOR_GONE_ATTR);
+  }
+
   /** @private The bar's live refresh: self-rescheduling; the actuator re-read is skipped while the mask hides the bar. */
   _startBarTick() {
     this._stopBarTick();
@@ -1410,7 +1539,8 @@ export class OverridePane {
       this._barTickId = setTimer(() => {
         this._barTickId = null;
         if (this._disposed || !this._bar) return;
-        const gone = typeof this._bar.hasAttribute === 'function' && this._bar.hasAttribute(FLOOR_GONE_ATTR);
+        const gone = this._barGone();
+        if (gone) this._cancelHold();                     // a press in flight on a bar that just went (floor change)
         this._syncBarDrawer();
         if (!gone) this._refreshBar();
         else this._resetBarFurnaceWarn();                 // the bar hidden: the joke starts over next time

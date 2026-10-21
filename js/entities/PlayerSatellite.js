@@ -4055,11 +4055,8 @@ export class PlayerSatellite extends THREE.Group {
       // (it used to stay set at the closed end, and tap 3 then pushed on to 180°).
       this._lastFlowerTap = undefined;
       if (landDeg > fromDeg) {
-        this._flowerPushedThrough = true;
-        // θ rising past the open end: 180°.
-        this._flowerVentArmed = true;
-        this._flowerTargetTheta = (FL.POSE_VENT_DEG * Math.PI) / 180;
-        this._warnFlowerVent();
+        // θ rising past the open end: 180° — the one shared method (a hold on the touch bar uses it too).
+        this.pushFlowerToVent();
         return deploying;
       }
       // θ falling past the closed end: the LAUNCH fold (θ 0). Go through the
@@ -4088,6 +4085,27 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
+   * Command the radiators to 180° (`POSE_VENT_DEG`). The ONE place that logic lives: the O key's double press
+   * (`toggleFlowerDeploy`'s push-through) and a 450 ms hold on the touch bar's RADIATORS button both call it.
+   * From any angle (0°, 146°, or already 180° — then it only restarts the 30 s settle-back clock). The settle-back
+   * rules (30 s, or at once when the ion engine fires) are untouched. Refused while the radiators are held for
+   * a catch hand-off, like every radiator command.
+   * @returns {boolean|null} true when commanded; null when refused (the ship has already said so)
+   */
+  pushFlowerToVent() {
+    if (this.flowerCommandsLocked) return this._refuseFlowerWhileHeld();
+    if (!this._flowerGroups || this._flowerGroups.length === 0) return null;
+    const FL = Constants.THERMAL.FLOWER;
+    this._lastFlowerTap = undefined;
+    this._flowerPushedThrough = true;
+    this._flowerCmdClockS = this._flowerClockS || 0;   // a player command — restarts the 180° → 146° settle clock
+    this._flowerVentArmed = true;
+    this._flowerTargetTheta = (FL.POSE_VENT_DEG * Math.PI) / 180;
+    this._warnFlowerVent();
+    return true;
+  }
+
+  /**
    * @private Say what the VENT pose costs, once per entry. The radiator is now
    * past the thrust band, so the drive is inhibited (the existing pose-band
    * law); the line names the physical reason rather than just the refusal.
@@ -4107,18 +4125,22 @@ export class PlayerSatellite extends THREE.Group {
   _warnFlowerVent() {
     const FL = Constants.THERMAL.FLOWER;
     const th = FL.POSE_VENT_DEG;
+    // Owner 2026-10-20: player text is positive and plain. Every fact stays: the angle, past the thrust band,
+    // each hazard the pose crosses, the ion engine waits, the swing back (30 s or when the engine fires, unless held).
     const hazards = [];
     if (th >= FL.POSE_VENT_CONE_DEG) {
-      hazards.push('inside the exhaust cone — metal propellant condenses on the panels and does not come off');
+      hazards.push('inside the exhaust cone (metal propellant would condense on the panels for good)');
     }
     if (th >= FL.POSE_VENT_Y3_DEG) {
-      hazards.push('camping the aft axial reserve');
+      hazards.push(`across the strip along the ship's centre line that is kept free (from ${FL.POSE_VENT_Y3_DEG}°)`);
     }
-    const why = hazards.length ? ` Panel is ${hazards.join(', and ')}.` : '';
+    const where = hazards.length ? ` The panels are ${hazards.join(' and ')}.` : '';
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'THERMAL',
-      text: `WARNING: radiator swept to ${th}° — past the ${FL.POSE_THRUST_MAX_DEG}° thrust band.${why} `
-        + `Drive inhibited until the radiator returns. It swings back to ${FL.OPEN_DEG}° by itself after ${FL.RETURN_TO_OPEN_S} s, or at once when the ion engine fires — unless a held catch is in the way.`,
+      text: `Radiators swinging to ${th}°: the most heat goes out. That is past the ${FL.POSE_THRUST_MAX_DEG}° thrust band,`
+        + ` so the ion engine waits while they are there.${where}`
+        + ` They swing back to ${FL.OPEN_DEG}° by themselves after ${FL.RETURN_TO_OPEN_S} s, or at once when the ion engine fires,`
+        + ' unless a held catch is in the way.',
       priority: 'warning',
       _reactive: true,
     });

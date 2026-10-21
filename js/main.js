@@ -148,6 +148,7 @@ import { RAIL_GEOMETRY, footerBand } from './ui/RailGeometry.js';
 import { installHudScale } from './ui/HudScale.js';
 import { EdgeChrome } from './ui/EdgeChrome.js';
 import { TouchControls } from './ui/TouchControls.js';
+import { PauseButton } from './ui/PauseButton.js';
 import { TouchTelemetry } from './ui/touchTelemetry.js';
 import { GestureHints } from './ui/hud/GestureHints.js';
 import { nearestWithin as tapNearestWithin, TAP_SLOP_PX, TAP_SLOP_MS } from './systems/TapPick.js';
@@ -2301,6 +2302,15 @@ async function init() {
             _reactive: true,
           });
         },
+        // Hold on the RADIATORS button (touch has no double press): 180° from any angle, through the same
+        // PlayerSatellite method the O key's double press uses. The ship's own warning line says the rest.
+        vent: () => {
+          if (!player || typeof player.pushFlowerToVent !== 'function'
+            || typeof player.getFlowerPairCount !== 'function' || player.getFlowerPairCount() === 0) return;
+          if (player.pushFlowerToVent() === null) return;   // radiators held for the catch hand-off: the ship already said so
+          audioSystem?.playClick?.();
+          eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying: true });
+        },
       },
       // SAFETY OVERRIDE radiator sweep (owner 2026-09-09: "when player presses
       // override button, and press "O" or clicks radiator button, they need to
@@ -3340,6 +3350,18 @@ async function init() {
     });
     touchControls.start();
     _bootMark('TouchControls started');
+    // The pause button (iPad slices 2-3): glass has no Esc, and with the ladder engaged Esc rides up a floor instead
+    // of pausing. Same touch gate as the turn pad above; it calls the pause path itself, never a key.
+    new PauseButton({
+      touch: true,
+      doc: document,
+      parent: document.body, // not #hud-overlay: that is a z-10 stacking context, and the world labels sit above it
+      bus: eventBus,
+      events: Events,
+      isPlaying: () => gameState.isGameplay(),
+      isPaused: () => gameFlowManager.paused,
+      togglePause: () => inputManager.togglePause(),
+    });
   }
 
   // Session J FINDINGS (a) CLOSED (owner call 2026-09-06) — DESKTOP
@@ -6542,7 +6564,7 @@ function gameLoop(timestamp) {
     _planArgs.riding = _launchCeremonyLive
       || !!(ladderController && ladderController.isRiding && ladderController.isRiding());
     _planArgs.dragLive = !!(_dragS && (_dragS.isDragging
-      || Math.abs(_dragS.velocityTheta) > 1e-4 || Math.abs(_dragS.velocityPhi) > 1e-4));
+      || Math.abs(_dragS.velocityTheta) > 6e-3 || Math.abs(_dragS.velocityPhi) > 6e-3));   // rad/s (1e-4 rad per frame at 60 fps)
     _planArgs.mechLive = _mechLive;
     _planArgs.periodMs = _rafPeriodMs;
     const _sched = FrameSched.plan(_planArgs);

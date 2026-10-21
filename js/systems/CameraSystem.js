@@ -88,6 +88,29 @@ export const LADDER_LEVEL_MS = 600;
 export const LADDER_NUDGE_STALE_MS = 250;
 
 /**
+ * Drag coast, PER SECOND (2026-10-21, iPad "slow view"): the coast used to decay
+ * `damping` per DRAWN FRAME, so a flick coasted ~2x as far at 30 fps and half as
+ * far at 120 fps. Speed is now rad/s and decays `damping ** (step * 60)`: the
+ * `damping` constants (0.92) mean "per 1/60 s", so 60 fps feels as it always did.
+ */
+export const COAST_REF_FPS = 60;
+/** Real-time step bounds for the coast: no divide by zero, a long hitch never flings the view. */
+export const COAST_STEP_MIN_S = 1 / 240;
+export const COAST_STEP_MAX_S = 0.1;
+/** Rest snap: 1e-5 rad per frame at 60 fps = 6e-4 rad/s. */
+export const COAST_REST_RAD_S = 1e-5 * COAST_REF_FPS;
+
+/**
+ * Real-clock gap in seconds between two wall readings (ms), at least COAST_STEP_MIN_S (no divide by zero).
+ * First frame (prev null) = one 60 fps frame. Only the coast caps it at COAST_STEP_MAX_S (`_coastDrag`): a move
+ * frame divides by the TRUE gap, so a slow frame (0.1-0.25 s) never sets a speed above the finger's.
+ */
+function coastStepS(prevMs, nowMs) {
+  if (prevMs === null || prevMs === undefined || !Number.isFinite(prevMs) || !Number.isFinite(nowMs)) return 1 / COAST_REF_FPS;
+  return Math.max(COAST_STEP_MIN_S, (nowMs - prevMs) / 1000);
+}
+
+/**
  * DOWN-rides (Earth→ship, F6→F5): the roll back to ship-up completes within
  * this FRACTION of the ride (the cubic in-out barely moves the dolly there),
  * so the camera is fully ship-up before the dive dominates.
@@ -334,9 +357,13 @@ export class CameraSystem {
       isDragging: false,
       lastMouseX: 0,
       lastMouseY: 0,
-      damping: 0.92,           // Rotation momentum damping
-      velocityTheta: 0,
+      damping: 0.92,           // Rotation momentum damping, per 1/60 s (the coast is per second since 2026-10-21)
+      velocityTheta: 0,        // rad/s
       velocityPhi: 0,
+      pendTheta: 0,            // turn (rad) of the moves since the last drawn frame
+      pendPhi: 0,
+      hasPend: false,
+      lastWallMs: null,        // wall clock of the last orbit frame (coast step)
 
       // ----------------------------------------------------------------------
       // Zoom-driven inspection sub-state (2026-06-03 consolidation rev. 2)
@@ -371,9 +398,13 @@ export class CameraSystem {
       isDragging: false,
       lastMouseX: 0,
       lastMouseY: 0,
-      damping: 0.92,
-      velocityTheta: 0,
+      damping: 0.92,           // per 1/60 s
+      velocityTheta: 0,        // rad/s
       velocityPhi: 0,
+      pendTheta: 0,
+      pendPhi: 0,
+      hasPend: false,
+      lastWallMs: null,
       fov: 35,                  // Narrow FOV like zoom lens
       savedFov: null,           // Stores previous FOV to restore on exit
     };
@@ -714,10 +745,13 @@ export class CameraSystem {
         isDragging: false,
         lastMouseX: 0,
         lastMouseY: 0,
-        velocityTheta: 0,
+        velocityTheta: 0,     // rad/s
         velocityPhi: 0,
+        pendTheta: 0,         // turn (rad) of the moves since the last drawn frame
+        pendPhi: 0,
+        hasPend: false,
         rotateSpeed: 0.005,   // mirrors this.orbit.rotateSpeed
-        damping: 0.92,        // mirrors this.orbit.damping
+        damping: 0.92,        // mirrors this.orbit.damping (per 1/60 s)
         nudgeSeq: -1,         // _ladderUpdateSeq of the last ladderDragNudge (touch coalescing)
       },
       _dragUp: new THREE.Vector3(),
@@ -947,11 +981,9 @@ export class CameraSystem {
 
     // Reset orbit + inspection drag state
     this.orbit.isDragging = false;
-    this.orbit.velocityTheta = 0;
-    this.orbit.velocityPhi = 0;
+    this._dragStop(this.orbit);
     this.inspection.isDragging = false;
-    this.inspection.velocityTheta = 0;
-    this.inspection.velocityPhi = 0;
+    this._dragStop(this.inspection);
 
     // Reset free look
     this.firstPerson.freeLookYaw = 0;
@@ -1468,6 +1500,85 @@ export class CameraSystem {
   }
 
   /**
+   * Drag moves (mouse delta, finger nudge) since the last drawn frame, as a
+   * TURN in rad. The frame that draws them turns by exactly this (_coastDrag);
+   * `velocity*` is set to the speed it will have (turn / last step) at once so
+   * "a drag is live" readers (the frame scheduler) see it before the frame.
+   * @param {object} d - drag config (orbit / inspection / ladder drag)
+   * @param {boolean} sum - add to the turn already pending (touch coalescing) instead of replacing it
+   * @private
+   */
+  _dragMove(d, addTheta, addPhi, sum) {
+    if (sum && d.hasPend) {
+      d.pendTheta += addTheta;
+      d.pendPhi += addPhi;
+    } else {
+      d.pendTheta = addTheta;
+      d.pendPhi = addPhi;
+    }
+    d.hasPend = true;
+    const step = this._lastCoastStepS || 1 / COAST_REF_FPS;
+    d.velocityTheta = d.pendTheta / step;
+    d.velocityPhi = d.pendPhi / step;
+  }
+
+  /** Drop all drag motion (speed and unapplied moves). @private */
+  _dragStop(d) {
+    d.velocityTheta = 0;
+    d.velocityPhi = 0;
+    d.pendTheta = 0;
+    d.pendPhi = 0;
+    d.hasPend = false;
+  }
+
+  /**
+   * One frame of drag motion at the REAL step (seconds) — the same total coast
+   * at every frame rate.
+   *  - a frame WITH new moves turns by exactly those moves and sets the speed
+   *    (turn / step; scaled by `carry`, below), no decay that frame;
+   *  - a frame without coasts: angle += speed * (1 - d) / k, speed *= d, with
+   *    d = damping ** (step * 60), k = -60 ln(damping)  (damping = per 1/60 s).
+   * `carry` = d60 * (-ln d60) / (1 - d60): the old law decayed once in the frame
+   * that applied the move, so at 60 fps the speed after a move frame was
+   * `damping` x the move (and the discrete sum d/(1-d) differs 4 % from the
+   * continuous 1/k). With `carry` the 60 fps turn per frame is bit-for-bit the
+   * old 0.92^n series, and the total coast is still frame-rate independent.
+   * Writes the turn to this._coastOut ({theta, phi}, rad) and returns it.
+   * @private
+   */
+  _coastDrag(d, stepS) {
+    const out = this._coastOut || (this._coastOut = { theta: 0, phi: 0 });
+    const dmp = Math.min(0.999999, Math.max(1e-6, d.damping));
+    this._lastCoastStepS = stepS;
+    if (d.hasPend) {
+      const carry = dmp * (-Math.log(dmp)) / (1 - dmp);
+      out.theta = d.pendTheta;
+      out.phi = d.pendPhi;
+      d.velocityTheta = d.pendTheta / stepS * carry;
+      d.velocityPhi = d.pendPhi / stepS * carry;
+      d.pendTheta = 0;
+      d.pendPhi = 0;
+      d.hasPend = false;
+      return out;
+    }
+    if (d.velocityTheta === 0 && d.velocityPhi === 0) {
+      out.theta = 0;
+      out.phi = 0;
+      return out;
+    }
+    const dec = Math.pow(dmp, Math.min(COAST_STEP_MAX_S, stepS) * COAST_REF_FPS);   // a long hitch never flings the view
+    const k = -COAST_REF_FPS * Math.log(dmp);
+    const gain = (1 - dec) / k;
+    out.theta = d.velocityTheta * gain;
+    out.phi = d.velocityPhi * gain;
+    d.velocityTheta *= dec;
+    d.velocityPhi *= dec;
+    if (Math.abs(d.velocityTheta) < COAST_REST_RAD_S) d.velocityTheta = 0;
+    if (Math.abs(d.velocityPhi) < COAST_REST_RAD_S) d.velocityPhi = 0;
+    return out;
+  }
+
+  /**
    * Compute orbit camera position (free orbit around player).
    * Uses LVLH (Local Vertical Local Horizontal) frame so the orbit camera
    * is aligned with the orbital reference frame — no skew or roll artifacts.
@@ -1475,11 +1586,12 @@ export class CameraSystem {
    * @private
    */
   _computeOrbit(dt, playerPos, velDir, radialDir) {
-    // Apply momentum damping
-    this.orbit.theta += this.orbit.velocityTheta;
-    this.orbit.phi += this.orbit.velocityPhi;
-    this.orbit.velocityTheta *= this.orbit.damping;
-    this.orbit.velocityPhi *= this.orbit.damping;
+    // Apply the drag turn / momentum coast (per second, real clock)
+    const _wallNow = this._wallNowMs();
+    const _turn = this._coastDrag(this.orbit, coastStepS(this.orbit.lastWallMs, _wallNow));
+    this.orbit.lastWallMs = _wallNow;
+    this.orbit.theta += _turn.theta;
+    this.orbit.phi += _turn.phi;
 
     // Clamp phi to avoid gimbal lock
     this.orbit.phi = Math.max(0.1, Math.min(Math.PI - 0.1, this.orbit.phi));
@@ -1668,11 +1780,12 @@ export class CameraSystem {
   _computeInspection(dt, playerPos, velDir, radialDir) {
     const cfg = this.inspection;
 
-    // Apply momentum damping
-    cfg.theta += cfg.velocityTheta;
-    cfg.phi += cfg.velocityPhi;
-    cfg.velocityTheta *= cfg.damping;
-    cfg.velocityPhi *= cfg.damping;
+    // Apply the drag turn / momentum coast (per second, real clock)
+    const _wallNow = this._wallNowMs();
+    const _turn = this._coastDrag(cfg, coastStepS(cfg.lastWallMs, _wallNow));
+    cfg.lastWallMs = _wallNow;
+    cfg.theta += _turn.theta;
+    cfg.phi += _turn.phi;
 
     // Clamp phi to avoid gimbal lock
     cfg.phi = Math.max(0.1, Math.min(Math.PI - 0.1, cfg.phi));
@@ -3844,8 +3957,7 @@ export class CameraSystem {
         d.isDragging = true;
         d.lastMouseX = e.clientX;
         d.lastMouseY = e.clientY;
-        d.velocityTheta = 0;
-        d.velocityPhi = 0;
+        this._dragStop(d);
       }
       return;
     }
@@ -3859,8 +3971,7 @@ export class CameraSystem {
         cfg.isDragging = true;
         cfg.lastMouseX = e.clientX;
         cfg.lastMouseY = e.clientY;
-        cfg.velocityTheta = 0;
-        cfg.velocityPhi = 0;
+        this._dragStop(cfg);
       }
     } else if (this.currentView === CameraViews.FIRST_PERSON) {
       // Right click starts free-look
@@ -3875,8 +3986,8 @@ export class CameraSystem {
   /** @private */
   _onMouseMove(e) {
     // ZOOM LADDER (S4): accumulate rotate-drag velocities exactly like ORBIT
-    // (velocity = last-move delta × rotateSpeed; damping decays it per frame in
-    // _updateLadderCamera). Deliberately NO CAMERA_ORBIT_DRAG emit — that is an
+    // (the turn of the moves since the last frame = delta × rotateSpeed; the speed
+    // coasts per second in _updateLadderCamera). Deliberately NO CAMERA_ORBIT_DRAG emit — that is an
     // ORBIT-view skills-discovery signal; the ladder keeps the events graph
     // unchanged. RETURN keeps the legacy paths unreachable while engaged.
     if (this._ladderCam.active) {
@@ -3886,8 +3997,7 @@ export class CameraSystem {
         const dy = e.clientY - d.lastMouseY;
         d.lastMouseX = e.clientX;
         d.lastMouseY = e.clientY;
-        d.velocityTheta = -dx * d.rotateSpeed;
-        d.velocityPhi = dy * d.rotateSpeed;
+        this._dragMove(d, -dx * d.rotateSpeed, dy * d.rotateSpeed, false);   // a SET: the last move of a frame wins
         this.ladderCancelCatchFocus('mouse drag');   // reel-visible: his own camera input ends the catch focus
         this.ladderCancelEarthTurn('mouse drag');    // u8: so does the floor-4 turn to the focused field
       }
@@ -3901,8 +4011,7 @@ export class CameraSystem {
       cfg.lastMouseX = e.clientX;
       cfg.lastMouseY = e.clientY;
 
-      cfg.velocityTheta = -dx * cfg.rotateSpeed;
-      cfg.velocityPhi = dy * cfg.rotateSpeed;
+      this._dragMove(cfg, -dx * cfg.rotateSpeed, dy * cfg.rotateSpeed, false);
 
       // Skills discovery: orbit drag event
       eventBus.emit(Events.CAMERA_ORBIT_DRAG);
@@ -4055,8 +4164,7 @@ export class CameraSystem {
     // Fresh engage starts with no drag in flight.
     this._ladderSetDragGates(frame.floor);
     lc.drag.isDragging = false;
-    lc.drag.velocityTheta = 0;
-    lc.drag.velocityPhi = 0;
+    this._dragStop(lc.drag);
     // Wave 5 (3): the look-at bias starts settled at 0 on every engage (the
     // pane is enabled by the controller only AFTER engage); the request itself
     // (paneInsetPx) stays the caller's — main.js owns it through the setter.
@@ -4084,8 +4192,7 @@ export class CameraSystem {
     lc.drag.isDragging = false;
     lc.drag.lastMouseX = 0;
     lc.drag.lastMouseY = 0;
-    lc.drag.velocityTheta = 0;
-    lc.drag.velocityPhi = 0;
+    this._dragStop(lc.drag);
     // Wave 5 (3): no eased look-at bias may leak into the next engage either.
     this._ladderResetPaneBias();
     // F3 inspect absorption: a disengage while on F3 reverts the arrival
@@ -4144,8 +4251,7 @@ export class CameraSystem {
     this._ladderSetDragGates(lc.floor);
     if (lc.drag.enabled !== was) {
       lc.drag.isDragging = false;
-      lc.drag.velocityTheta = 0;
-      lc.drag.velocityPhi = 0;
+      this._dragStop(lc.drag);
     }
   }
 
@@ -4183,8 +4289,8 @@ export class CameraSystem {
   /**
    * Session I (plan D-F) — the turntable's ARROW nudge: LadderController maps
    * held arrow keys to this while a drawer is open on floor 1. Same math as
-   * the pointer path (_onMouseMove): the px delta becomes rotation velocity
-   * through drag.rotateSpeed, decays through drag.damping — one drag feel,
+   * the pointer path (_onMouseMove): the px delta becomes a pending turn (then a per-second coast speed)
+   * through drag.rotateSpeed, decaying through drag.damping per 1/60 s — one drag feel,
    * two inputs. Gated like a pointer drag: engaged + drag-enabled (mouse rule, or the touch rule for source 'touch') +
    * not riding (rides own the camera). A nudge is a SET like the pointer's
    * (never accumulates across frames), so holding a key rotates at a steady
@@ -4204,7 +4310,7 @@ export class CameraSystem {
     // Stale-nudge guard (review of cb29fbe8): main.js stops calling update() while
     // the game is paused, the tab is hidden or the window is blurred, yet a finger
     // that stays down keeps sending nudges. They would all land in one frame's sum
-    // and coast ~11.5x on resume. No ladder update for LADDER_NUDGE_STALE_MS of
+    // and fling the view on resume. No ladder update for LADDER_NUDGE_STALE_MS of
     // wall time = nobody is drawing: the nudge is dropped.
     if (this._ladderUpdateWallMs !== null &&
         this._wallNowMs() - this._ladderUpdateWallMs > LADDER_NUDGE_STALE_MS) return;
@@ -4218,14 +4324,9 @@ export class CameraSystem {
     // SETS (the pointer's law, and the held arrow's one-call-per-frame).
     const d = lc.drag;
     const addTheta = -dx * d.rotateSpeed, addPhi = dy * d.rotateSpeed;
-    if (d.nudgeSeq === this._ladderUpdateSeq) {
-      d.velocityTheta += addTheta;
-      d.velocityPhi += addPhi;
-    } else {
-      d.velocityTheta = addTheta;
-      d.velocityPhi = addPhi;
-      d.nudgeSeq = this._ladderUpdateSeq;
-    }
+    const same = d.nudgeSeq === this._ladderUpdateSeq;
+    this._dragMove(d, addTheta, addPhi, same);
+    d.nudgeSeq = this._ladderUpdateSeq;
   }
 
   /** @private Settle the eased look-at bias at 0 (engage / disengage). */
@@ -4339,8 +4440,7 @@ export class CameraSystem {
     this.ladderCancelEarthTurn('ride');   // u8: a ride owns `dir` too
     this._ladderSetDragGates(opts.floor);
     lc.drag.isDragging = false;
-    lc.drag.velocityTheta = 0;
-    lc.drag.velocityPhi = 0;
+    this._dragStop(lc.drag);
     // F3 inspect absorption: the 3/4 down-hump ride applies the ARRIVAL
     // effects at ride start (destination floor 3 — same moment the render
     // block swaps, LadderController._startRide); the up-hump ride's
@@ -5098,7 +5198,11 @@ export class CameraSystem {
   _updateLadderCamera(dt, playerPos, velDir, radialDir) {
     const lc = this._ladderCam;
     this._ladderUpdateSeq++;   // one tick per drawn frame: ladderDragNudge coalesces within a tick
-    this._ladderUpdateWallMs = this._wallNowMs();
+    // The coast's REAL step (not the game dt, which slow motion shrinks): computed BEFORE the
+    // wall stamp below overwrites the previous frame's (ladderDragNudge's stale guard reads it).
+    const wallNow = this._wallNowMs();
+    const coastStep = coastStepS(this._ladderUpdateWallMs, wallNow);
+    this._ladderUpdateWallMs = wallNow;
 
     // H2 — the follow blend clock, ONCE per frame and before any anchor reader.
     // A change of target (mother ↔ daughter, daughter A → B, loss) restarts the
@@ -5154,9 +5258,9 @@ export class CameraSystem {
 
       // F5/F6 drag-to-rotate (S4): rotate the dolly direction by the
       // accumulated drag velocities — yaw around the floor's up-frame pole,
-      // pitch around camera-right clamped to ORBIT's pole window — then decay
-      // the velocities (ORBIT momentum: ×damping per frame, snap to 0 below
-      // 1e-5). On a SHIP anchor (F5) the rotation is applied to the LOCAL pose
+      // pitch around camera-right clamped to ORBIT's pole window — then coast
+      // the speeds (ORBIT momentum, per second: ×damping per 1/60 s, snap to 0 below
+      // 6e-4 rad/s; _coastDrag). On a SHIP anchor (F5) the rotation is applied to the LOCAL pose
       // — yaw about local R, pitch about local right — so a drag stays
       // heading-relative as the ship orbits (B1), and the result is remembered
       // per floor (D5) as the Earth→ship arrival pose. On an Earth anchor (F6)
@@ -5164,10 +5268,11 @@ export class CameraSystem {
       // lookAt(anchorPos) below is unchanged. Rides never reach here
       // (non-riding branch), and ladderStartRide cancels in-flight drags.
       const dg = lc.drag;
-      if ((dg.enabled || dg.touchEnabled) && (dg.velocityTheta !== 0 || dg.velocityPhi !== 0)) {
+      if ((dg.enabled || dg.touchEnabled) && (dg.hasPend || dg.velocityTheta !== 0 || dg.velocityPhi !== 0)) {
+        const turn = this._coastDrag(dg, coastStep);
         const v = shipAnchored ? lc.local : lc.dir;
         const up = shipAnchored ? lc._localUp : this._ladderUpFor(lc.anchor, radialDir, lc._dragUp);
-        v.applyAxisAngle(up, dg.velocityTheta);                 // yaw around the pole
+        v.applyAxisAngle(up, turn.theta);                       // yaw around the pole
         const right = lc._dragRight.crossVectors(up, v);
         if (right.lengthSq() > 1e-12) {
           right.normalize();
@@ -5175,7 +5280,7 @@ export class CameraSystem {
           // the pole (right-hand rule); clamp the resulting polar angle to
           // ORBIT's gimbal window [0.1, π−0.1] (see _computeOrbit).
           const angle = Math.acos(Math.max(-1, Math.min(1, v.dot(up))));
-          const target = Math.max(0.1, Math.min(Math.PI - 0.1, angle + dg.velocityPhi));
+          const target = Math.max(0.1, Math.min(Math.PI - 0.1, angle + turn.phi));
           if (target !== angle) v.applyAxisAngle(right, target - angle);
         }
         v.normalize();
@@ -5183,10 +5288,6 @@ export class CameraSystem {
           const m = lc.dragMemory[lc.floor] || (lc.dragMemory[lc.floor] = new THREE.Vector3());
           m.copy(v);
         }
-        dg.velocityTheta *= dg.damping;
-        dg.velocityPhi *= dg.damping;
-        if (Math.abs(dg.velocityTheta) < 1e-5) dg.velocityTheta = 0;
-        if (Math.abs(dg.velocityPhi) < 1e-5) dg.velocityPhi = 0;
       }
     }
 

@@ -456,6 +456,35 @@ export class InputManager {
   }
 
   /**
+   * Pause or resume the game — the ONE body behind Esc and the touch pause button (PauseButton). Gameplay only.
+   * Pausing shows the pause overlay; resuming hides it, resets the frame timer and emits PAUSE_RESUME (the main.js
+   * loop's wake hook: without it the screen froze after resuming). With the zoom ladder engaged Esc rides up a floor
+   * instead of pausing, so the button calls this directly and never sends Esc.
+   * @returns {boolean|null} true when now paused, false when now running, null when not in gameplay (nothing done)
+   */
+  togglePause() {
+    const d = this._deps;
+    if (!d || !d.gameState || !d.gameState.isGameplay()) return null;
+    const wasPaused = d.getPaused();
+    d.setPaused(!wasPaused);
+    if (!wasPaused) {
+      // Just paused — show pause overlay
+      if (d.hud) d.hud.showPause();
+      return true;
+    }
+    // Unpaused — hide overlay + reset timer
+    if (d.hud) d.hud.hidePause();
+    d.setLastTime(performance.now());
+    // Emit PAUSE_RESUME so the rAF loop in main.js gets woken back
+    // up. Without this the gameLoop stays asleep after ESC-unpause
+    // (the `_scheduleNextFrame()` wake hook lives behind this event).
+    // Symptom prior to this emit: screen froze after pressing ESC
+    // to resume because nothing scheduled the next rAF callback.
+    eventBus.emit(Events.PAUSE_RESUME);
+    return false;
+  }
+
+  /**
    * Handle keydown events — routes to game systems.
    * @param {KeyboardEvent} e
    */
@@ -717,6 +746,13 @@ export class InputManager {
         // true → a pane was open and is now closed: consume the key, the
         // ride-up is the NEXT Esc. false (no pane / closed / a controller
         // without the method) → the shipped ride-up, unchanged.
+        // Paused: Esc resumes FIRST (the overlay says "RESUME [ESC]"), before any ride-up. Pausing itself is
+        // Esc with the ladder off, or the touch pause button (togglePause) with it on.
+        if (isGameplay && d.getPaused()) {
+          this.togglePause();
+          e.preventDefault();
+          return;
+        }
         const escLadder = this._ladderIfEngaged();
         if (escLadder) {
           if (typeof escLadder.closeTopPane === 'function' && escLadder.closeTopPane()) {
@@ -762,22 +798,7 @@ export class InputManager {
             this._exitArmPilotCamera();
             if (d.armManager) d.armManager.deselectArm();
           } else {
-            const wasPaused = d.getPaused();
-            d.setPaused(!wasPaused);
-            if (!wasPaused) {
-              // Just paused — show pause overlay
-              if (d.hud) d.hud.showPause();
-            } else {
-              // Unpaused — hide overlay + reset timer
-              if (d.hud) d.hud.hidePause();
-              d.setLastTime(performance.now());
-              // Emit PAUSE_RESUME so the rAF loop in main.js gets woken back
-              // up. Without this the gameLoop stays asleep after ESC-unpause
-              // (the `_scheduleNextFrame()` wake hook lives behind this event).
-              // Symptom prior to this emit: screen froze after pressing ESC
-              // to resume because nothing scheduled the next rAF callback.
-              eventBus.emit(Events.PAUSE_RESUME);
-            }
+            this.togglePause();
           }
         }
         break;
