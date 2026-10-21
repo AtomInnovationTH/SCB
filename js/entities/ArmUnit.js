@@ -546,6 +546,25 @@ const _carryD2 = new THREE.Vector3();          // the direction her body trails 
 const _carryQi = new THREE.Quaternion();       // scratch inverse
 const _carryHq = {};                           // the receiving tip's hinge frame (TipCargo.hingeQuatShipInto)
 
+/**
+ * reel-turn (2026-10-21): the angle the mother must still turn about her strut's RADIAL axis to bring a point into the
+ * strut's swing plane. The point is in the ship's frame, measured from the ship's CENTRE (px, py, pz; any one unit): the
+ * turn's axis runs through the centre, not through the strut hinge (which hangs ~1 m off it), so the direction hinge -> her
+ * is not her lever on it and goes wrong near the strut. Turning the ship by θ about the radial axis moves her tangential
+ * coordinate (across the plane) to pt·cosθ + pz·sinθ, which is zero at tanθ = −pt/pz. The smaller of the two such turns
+ * (the other flips her to the far side of the axis). pz near 0 (she is level with the axis) means no turn about this axis
+ * can help: ±90°, which the caller reads as "out of reach".
+ * @param {number} px @param {number} py @param {number} pz
+ * @param {number} az — the strut's azimuth, rad
+ * @returns {number} rad in (−π/2, π/2]; positive = right-handed about the radial axis (cos az, sin az, 0)
+ */
+export function planeTurnLeftRad(px, py, pz, az) {
+  const pt = -px * Math.sin(az) + py * Math.cos(az);
+  let th = Math.atan2(-pt, pz);
+  if (th > Math.PI / 2) th -= Math.PI; else if (th <= -Math.PI / 2) th += Math.PI;
+  return th;
+}
+
 // ---------------------------------------------------------------------------
 // §11.5 capture-torque settle — pure physics (exported for headless tests).
 // See the Constants.CAPTURE_TORQUE_SETTLE block for the full derivation.

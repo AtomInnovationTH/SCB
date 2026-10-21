@@ -1448,7 +1448,7 @@ export const Constants = {
     TAIL_FIRST_TOL_DEG:  10,    // the strut reel does not wind until her -Z points at the strut tip within this
     STRUT_MIN_DEG:       34,    // strut angle floor while she is hauled home (measured: 0° scrapes hull and radiators)
     STRUT_MAX_DEG:       180,   // strut angle ceiling
-    PLANE_TOL_DEG:       5,     // she is "in the strut's plane" within this; beyond it the mother turns
+    PLANE_TOL_DEG:       5,     // she is "in the strut's plane" within this; beyond it the mother turns, and the turn ends inside half of it (reel-turn: closed loop, test-ReelTurnSettle.js)
     ALIGN_DIST_M:        2.0,   // m from the strut tip: the line-up check and hold
     ALIGN_TOL_DEG:       10,    // the line (tip -> her) must be within this of the strut axis to go on in
     ALIGN_WAIT_S:        5,     // s the mother gets to line her up before she uses her own thrusters
@@ -1456,7 +1456,7 @@ export const Constants = {
     ALIGN_CLEAR_M:       0.15,  // m — the line-up arc stays this far off the ship (keep-out query)
     ARRIVE_TOL_DEG:      0.5,   // the catch is brought on to her axis only once her nose is this close to the line
     TURN_RETRY_S:        1.0,   // s between mother-turn requests for one reel (D11a: was a lifetime cap of 6 requests; a refusal counts too)
-    TURN_MAX_DEG:        60,    // a mother turn bigger than this is not asked for (she lines herself up instead)
+    TURN_MAX_DEG:        60,    // a mother turn bigger than this is not asked for (she lines herself up instead); a running plane turn stops when more than this is left (her lever on the axis is gone)
   },
 
   // fail-reel (owner 2026-10-21, DECISIONS: a failed catch winds her home): when a catch fails (pad bounce, net miss, slip,

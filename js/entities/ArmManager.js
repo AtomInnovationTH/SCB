@@ -19,7 +19,7 @@ import { strutTipFoulsCorridor, strutLocalDirection, bestStrutAlpha } from './Ar
 import { createShipKeepOut } from '../systems/ShipKeepOut.js';
 import { StrutAutoController } from '../systems/StrutAuto.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
-import { ArmUnit } from './ArmUnit.js';
+import { ArmUnit, planeTurnLeftRad } from './ArmUnit.js';
 import { DebrisField } from './DebrisField.js';
 import { clearRackCell } from './CaptureNet.js';
 import { tripRefuses } from '../systems/TransferTrip.js';
@@ -33,6 +33,8 @@ const _rhInvQ = new THREE.Quaternion();
 const _rhGapA = new THREE.Vector3();
 const _rhGapB = new THREE.Vector3();
 const _rhAxisR = new THREE.Vector3();
+const _rhTurnP = new THREE.Vector3();      // reel-turn: her place in the ship's frame, from the ship's centre
+const _rhTurnQ = new THREE.Quaternion();
 
 // Task 7 (opening-dance plan) — bounded safety-net release. LASSO_CAPTURED's
 // own downstream adoption (CaptureNetSystem.adoptLassoCatch) deliberately
@@ -2258,8 +2260,16 @@ export class ArmManager {
    * the geometry is re-read when it ends. A request is made at most once per TURN_RETRY_S (a refusal counts), so a mother
    * who was busy at the first look is asked again a second later, not never; the autopilot being engaged ends a running
    * turn (it steers the ship back to its own heading, so she lines herself up). The turn axis has no component along the
-   * nose (the ship has almost no roll authority): for the plane error it is the strut's radial direction, the angle
-   * atan2(v·t, −v_z); for the range error it is the plane's normal t, the angle that brings her to the nearer end of the range.
+   * nose (the ship has almost no roll authority): for the plane error it is the strut's radial direction; for the range
+   * error it is the plane's normal t, the angle that brings her to the nearer end of the range.
+   * reel-turn (owner 2026-10-21, "strange oscillations ... not good"): the PLANE turn is closed loop. It is a tracked turn
+   * (`requestAttitudeTurn` with `opts.track`): every frame `_rhTrackPlane` reads the angle left from her live place relative
+   * to the ship's centre (`planeTurnLeftRad`: the turning axis runs through the centre, the strut hinge hangs ~1 m off it),
+   * and the autopilot's rate law (√(2·α·left), α = the couples' own, at most the 5°/s peak) brakes to rest on it. It starts
+   * beyond PLANE_TOL_DEG and ends inside half of it (hysteresis), or when her lever on the axis is gone (more than
+   * TURN_MAX_DEG left). Before, the angle was fixed once while she was ~13 m out: she reeled in during the 8-11 s turn, the
+   * same rotation moved her plane angle 1.3-1.4x as far near the strut, the turn overshot, the next request reversed it, and
+   * the reel went hold -> pull -> hold -> pull (up to 7 toggles). The range turn is still one fixed profile.
    * `_rhMotherWorking` tells each daughter whether the mother is turning (or may still be asked to) for her.
    * @private
    */
@@ -2294,10 +2304,21 @@ export class ArmManager {
     // STRUT_MAX], so a daughter below the floor needs the mother turned about the plane's normal until she is inside.
     let theta;
     let axisL;
+    let tracked = false;
     if (Math.abs(owner._rhPlaneErrRad) > tol) {
-      const vt = -v.x * Math.sin(az) + v.y * Math.cos(az);
-      theta = Math.atan2(vt, -v.z);
-      if (theta > Math.PI / 2) theta -= Math.PI; else if (theta <= -Math.PI / 2) theta += Math.PI;
+      // reel-turn (owner 2026-10-21, "strange oscillations ... not good"): the turn is CLOSED LOOP. The angle left is read from
+      // her live place every frame (`_rhTrackPlane`), because she reels in during the turn and the strut hinge hangs ~1 m off
+      // the turning axis: an angle fixed at the request overshot, the next request reversed it, and the reel held and pulled
+      // by turns. Without the ship's place (a headless stub) the old open-loop angle from the hinge direction stays.
+      const live = this._rhPlaneTurnLeft(owner, az);
+      if (live !== null) {
+        theta = live;
+        tracked = true;
+      } else {
+        const vt = -v.x * Math.sin(az) + v.y * Math.cos(az);
+        theta = Math.atan2(vt, -v.z);
+        if (theta > Math.PI / 2) theta -= Math.PI; else if (theta <= -Math.PI / 2) theta += Math.PI;
+      }
       axisL = _rhAxisR.set(Math.cos(az), Math.sin(az), 0);
     } else {
       const lo = (RH.STRUT_MIN_DEG ?? 34) * D2R;
@@ -2320,11 +2341,16 @@ export class ArmManager {
     const axisW = new THREE.Vector3().copy(axisL).applyQuaternion(pq);
     owner._rhTurnTries++;
     owner._rhTurnWaitS = RH.TURN_RETRY_S ?? 1;                                // the next request, if this one fails, in a second
-    const turn = { arm: owner };
+    const turn = { arm: owner, tracked };
+    const opts = { holdOwner: 'REEL_HOME', holdS: 30 };
+    if (tracked) {
+      opts.track = () => this._rhTrackPlane(turn, owner, az, tol);
+      opts.timeoutS = 60;                                                     // a moving target: the planned-time default is too short
+    }
     this._lockExceptArm = owner;                                              // the lock check inside the request
     let p;
     try {
-      p = ap.requestAttitudeTurn(axisW, theta, { holdOwner: 'REEL_HOME', holdS: 30 });
+      p = ap.requestAttitudeTurn(axisW, theta, opts);
     } catch (e) {
       p = null;
     } finally {
@@ -2336,6 +2362,36 @@ export class ArmManager {
     if (refusal) return;                                                      // refused at once: nothing moved
     this._rhTurn = turn;
     owner._rhMotherWorking = true;
+  }
+
+  /**
+   * reel-turn: the angle (rad) the mother must still turn about the strut's radial axis to bring this daughter into the swing
+   * plane, from her place NOW and the ship's centre (`planeTurnLeftRad`). Null without the ship's place (a headless stub).
+   * @private
+   */
+  _rhPlaneTurnLeft(owner, az) {
+    const ps = this.playerSatellite;
+    if (!ps || !ps.position || !ps.quaternion || !owner.position) return null;
+    _rhTurnQ.copy(ps.quaternion).invert();
+    _rhTurnP.copy(owner.position).sub(ps.position).applyQuaternion(_rhTurnQ);
+    return planeTurnLeftRad(_rhTurnP.x, _rhTurnP.y, _rhTurnP.z, az);
+  }
+
+  /**
+   * reel-turn: the autopilot asks this EVERY frame of a tracked plane turn: how far is the mother still to turn (signed, rad)?
+   * Null = stop where she is (the autopilot brakes at the couples' α): the turn is not ours any more (its daughter left the
+   * reels, another turn replaced it), she is inside half the tolerance (the hysteresis: a turn starts beyond PLANE_TOL_DEG and
+   * ends inside half of it, so it cannot restart on the edge), or her lever on this axis is gone (she is level with it, or the
+   * turn left is bigger than TURN_MAX_DEG): turning on would only spin the mother, and the 2 m line-up deals with the rest.
+   * @private
+   */
+  _rhTrackPlane(turn, owner, az, tol) {
+    if (this._rhTurn !== turn || !owner._rhHome || owner.isDetached) return null;
+    if (Math.abs(owner._rhPlaneErrRad) < 0.5 * tol) return null;
+    const left = this._rhPlaneTurnLeft(owner, az);
+    const RH = Constants.REEL_HOME || {};
+    if (left === null || Math.abs(left) > (RH.TURN_MAX_DEG ?? 60) * Math.PI / 180) return null;
+    return left;
   }
 
   /** reel-home: her turn is over (or its daughter left) — drop the attitude hold it took, if it is still ours. @private */

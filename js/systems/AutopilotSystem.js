@@ -197,6 +197,9 @@ export const TURN_DEFAULT_MAX_RATE = 5 * Math.PI / 180;
 /** Largest |body-frame nose-axis component| of a turn axis we accept (roll has ~1 % of pitch authority; estimate). */
 const TURN_ROLL_MAX = 0.2;
 
+/** reel-turn: a tracked turn that has come to rest with this much (rad, 0.1°) or less left is over. */
+const TURN_TRACK_STOP_RAD = 0.1 * Math.PI / 180;
+
 /** A couple fired at ≤ this fraction folds into the dominant couple (fireRcsRotation skips billing at ≤ 0.01). */
 const TURN_MIN_MAG = 0.02;
 
@@ -535,7 +538,8 @@ export class AutopilotSystem {
    */
   turnProgressRad() {
     const t = this._turn;
-    return t ? t.sign * this._turnAngleAt(t, t.t) : 0;
+    if (!t) return 0;
+    return t.track ? t.progress : t.sign * this._turnAngleAt(t, t.t);
   }
 
   /**
@@ -2541,8 +2545,11 @@ export class AutopilotSystem {
    *
    * Motion: inertial bang-coast-bang. Accelerate at α, coast at `maxRate`,
    * brake at α (a triangle when the angle is too short to reach `maxRate`).
-   * Each frame the attitude is written ABSOLUTELY as R(axis, θ(t)) · qStart —
-   * never accumulated — so frame rate cannot change where the turn ends.
+    * A fixed-profile turn writes the attitude ABSOLUTELY each frame as
+    * R(axis, θ(t)) · qStart — never accumulated — so frame rate cannot change
+    * where it ends. A tracked turn (`opts.track`, reel-turn 2026-10-21) instead
+    * writes increments: its end is set by the live error the tracker returns,
+    * not by a planned angle.
    * Gas is billed only while the thrusters would actually fire (the two ramps),
    * by the overlap of each frame with the burn windows; the coast is free.
    * Unlike requestAimRotation this does NOT call fireRcsRotation every frame
@@ -2568,6 +2575,11 @@ export class AutopilotSystem {
    * @param {number} [opts.holdS=120] — safety cap of the hold that outlives the turn
    * @param {string} [opts.holdOwner] — l5c-reach E7: who owns the hold (every hold this turn makes: the request, the end);
    *   the lasso / net listeners do not release an owned hold
+   * @param {() => (number|null)} [opts.track] — reel-turn: a TRACKED turn. `angleRad` then only sizes the first look (its
+   *   sign, the gas check, the acceleration); the turn is run closed loop (`_tickTrackedTurn`): every frame `track()` gives the
+   *   signed angle still to turn about the axis (rad) and her rate follows it; `null` / NaN = stop here (she brakes at the
+   *   couples' α). The turn ends at rest, when the angle left is inside `opts.stopRad` (default 0.1°) or `track()` said stop.
+   * @param {number} [opts.stopRad] — tracked turns: the angle left (rad) at which a turn that has slowed to rest is over
    * @returns {Promise<{ angleRad:number, gasUnits:number, seconds:number }>}
    *   A rejection is an Error carrying `progressRad` and `gasUnits` (what was done so far).
    */
@@ -2606,6 +2618,7 @@ export class AutopilotSystem {
     const timeoutS = (Number.isFinite(opts.timeoutS) && opts.timeoutS > 0) ? opts.timeoutS : T * 2 + 5;
     const holdS = (Number.isFinite(opts.holdS) && opts.holdS > 0) ? opts.holdS : 120;
     const holdOwner = opts.holdOwner || null;
+    const track = typeof opts.track === 'function' ? opts.track : null;
 
     return new Promise((resolve, reject) => {
       this._turn = {
@@ -2616,6 +2629,12 @@ export class AutopilotSystem {
         gasUnits: 0,
         qRot: new THREE.Quaternion(),
         resolve, reject,
+        // reel-turn: a tracked turn (closed loop on `track()`); the fixed profile above is then only its first look
+        track,
+        omega: 0,        // tracked: signed rate about the axis (rad/s)
+        progress: 0,     // tracked: signed angle turned so far (rad)
+        stopRad: (Number.isFinite(opts.stopRad) && opts.stopRad > 0) ? opts.stopRad : TURN_TRACK_STOP_RAD,
+        dirPos: { x: Math.sign(nBody.x) || 1, y: Math.sign(nBody.y) || 1 },   // couple signs that speed a POSITIVE turn up
       };
       this.holdAttitude(holdS, { owner: holdOwner });
       this._player.aimHold = true;
@@ -2673,14 +2692,15 @@ export class AutopilotSystem {
     // but kept aimHold) and restart its clock: it counts from the END of the turn.
     this.holdAttitude(c.holdS, { owner: c.holdOwner });
     eventBus.emit(Events.AIM_SEQUENCE_END, { mode: 'turn', result: 'resolved' });
-    c.resolve({ angleRad: c.sign * c.A, gasUnits: c.gasUnits, seconds: c.t });
+    c.resolve({ angleRad: c.track ? c.progress : c.sign * c.A, gasUnits: c.gasUnits, seconds: c.track ? c.wall : c.t });
   }
 
   /** @private Reject the running turn at its current attitude; the hold stays on. */
   _rejectTurn(reason) {
     const c = this._turn;
     if (!c) return;
-    const progressRad = c.sign * this._turnAngleAt(c, c.t);
+    if (c.track) this._billTrackTail(c);                       // a real ship would still have to stop
+    const progressRad = c.track ? c.progress : c.sign * this._turnAngleAt(c, c.t);
     this._turn = null;
     this.holdAttitude(c.holdS, { owner: c.holdOwner });
     eventBus.emit(Events.AIM_SEQUENCE_END, { mode: 'turn', result: 'rejected', reason });
@@ -2703,6 +2723,7 @@ export class AutopilotSystem {
 
     c.wall += dt;
     if (c.wall >= c.timeoutS) { this._rejectTurn('attitude turn timed out'); return; }
+    if (c.track) { this._tickTrackedTurn(c, dt); return; }
 
     const t0 = c.t;
     const t1 = Math.min(t0 + dt, c.T);
@@ -2724,6 +2745,62 @@ export class AutopilotSystem {
     }
 
     if (t1 >= c.T) this._resolveTurn();
+  }
+
+  /**
+   * reel-turn: one frame of a TRACKED turn (`requestAttitudeTurn` with `opts.track`). The angle left is read live every
+   * frame (`c.track()`: signed rad about the axis; null / NaN = stop here) instead of being fixed when the turn is asked
+   * for, so a target that moves while the mother turns (a daughter reeling in past a hinge that is not on her turning
+   * axis) cannot make her overshoot. The ship's rate follows the law of the eased aim (`_tickAimEased`): the largest ω it
+   * can still stop from inside the angle left at the couples' α (frames of a stop run ω−δ, ω−2δ, … with δ = α·dt, so
+   * the angle one step plus that stop covers is ω·dt + ω(ω−δ)/2α), never above the peak rate (5°/s, `c.wp`) and never
+   * a step in the rate bigger than δ — a target on the other side of zero is first braked to rest. The turn ends at rest
+   * with the angle left inside `c.stopRad`, or at rest after `track()` said stop. Gas is billed by the couples' firing
+   * time for each change of rate (as the ramps of the fixed profile: the coast is free).
+   * @param {object} c — the turn record
+   * @param {number} dt
+   * @private
+   */
+  _tickTrackedTurn(c, dt) {
+    const a = c.a;
+    const dOm = a * dt;
+    let rem = null;
+    try { rem = c.track(); } catch (e) { rem = null; }
+    const live = Number.isFinite(rem);
+    const left = live ? Math.abs(rem) : 0;
+    const was = c.omega;
+    if ((!live || left <= c.stopRad) && Math.abs(was) <= dOm + 1e-12) {      // at rest where she was told to stop
+      if (was !== 0) this._fireTrackCouples(c, was > 0 ? -1 : 1, Math.abs(was) / a);   // the last of the brake
+      c.omega = 0;
+      this._resolveTurn();
+      return;
+    }
+    const want = left > 0 ? 0.5 * (-dOm + Math.sqrt(dOm * dOm + 8 * a * left)) : 0;
+    const target = (rem < 0 ? -1 : 1) * Math.min(c.wp, want);
+    const now = Math.max(was - dOm, Math.min(was + dOm, target));
+    c.omega = now;
+    const step = now * dt;                                            // the new rate over the frame, as the eased aim (the stop above is sized for it)
+    if (step !== 0) {
+      c.qRot.setFromAxisAngle(c.axis, step);
+      this._player.quaternion.premultiply(c.qRot).normalize();
+      c.progress += step;
+    }
+    if (now !== was) this._fireTrackCouples(c, now > was ? 1 : -1, Math.abs(now - was) / a);
+  }
+
+  /** @private Fire both couples of a tracked turn for `seconds` (sign +1 = speeding a positive turn up, −1 = braking it). */
+  _fireTrackCouples(c, sign, seconds) {
+    if (c.mag.x > 0) this._turnFire(c, 'pitch', sign * c.dirPos.x, c.mag.x, seconds);
+    if (c.mag.y > 0) this._turnFire(c, 'yaw', sign * c.dirPos.y, c.mag.y, seconds);
+  }
+
+  /** @private A tracked turn ends (cancelled, timed out) while still turning: bill the rest of the brake and zero the rate. */
+  _billTrackTail(c) {
+    if (!c || !c.track || !(Math.abs(c.omega) > 0)) return;
+    const seconds = Math.abs(c.omega) / c.a;
+    const sign = c.omega > 0 ? -1 : 1;
+    c.omega = 0;
+    this._fireTrackCouples(c, sign, seconds);
   }
 
   /**
