@@ -1632,13 +1632,30 @@ export class ArmManager {
   }
 
   /**
-   * Apply tether tier upgrade to all arms.
+   * Apply tether tier upgrade to all arms. This is the one hub for the line-fibre upgrade (DECISIONS §33 row 5): the
+   * purchase, the save-load replay and the reset replay all land here, and the tier raises the tether length AND the
+   * net capacities (Constants.TETHER_TIERS[tier].nets: mother / large daughter / small daughter).
+   * Loaded nets stay loaded (the new cartridges arrive empty and fill at the stop); `fill` (the save-load replay)
+   * loads every launcher full instead. Capacity never drops. No second listener anywhere.
    * @param {number} tier - Tether tier index
+   * @param {{fill?: boolean}} [opts] fill = load every launcher to the new capacity (save-load path)
    */
-  applyTetherUpgrade(tier) {
+  applyTetherUpgrade(tier, opts = {}) {
     for (const arm of this.arms) {
       arm.setTetherTier(tier);
     }
+    const idx = Math.max(0, Math.min(Number.isFinite(tier) ? Math.floor(tier) : 0, Constants.TETHER_TIERS.length - 1));
+    const nets = Constants.TETHER_TIERS[idx].nets;
+    if (!nets) return;
+    const fill = !!opts.fill;
+    for (const arm of this.arms) {
+      if (typeof arm.setNetCapacity !== 'function') continue;
+      arm.setNetCapacity(arm.type === 'weaver' ? nets.large : nets.small, { fill });
+    }
+    const cns = this.playerSatellite && this.playerSatellite._captureNetSystem;
+    if (cns && typeof cns.setMotherNetCapacity === 'function') cns.setMotherNetCapacity(nets.mother, { tier: idx, fill });
+    const ps = this.playerSatellite;
+    if (ps && typeof ps.setNetCellCount === 'function') ps.setNetCellCount(nets.mother);
   }
 
   // ==========================================================================
@@ -2810,11 +2827,13 @@ export class ArmManager {
     // term. A fired net leaves the ship (the count is the one CaptureNetSystem owns), so a shot lightens her. The
     // daughters' own nets are taken to be inside V5_WEAVER_MASS / V5_SPINNER_MASS (no separate term). CoMCalculator
     // books the same mass on the launcher axis (motherNetBooking), so the two ledgers agree.
-    const motherNetCount = (this.playerSatellite
-        && this.playerSatellite._captureNetSystem
-        && typeof this.playerSatellite._captureNetSystem.getMotherNetCount === 'function')
-      ? this.playerSatellite._captureNetSystem.getMotherNetCount() : 0;
-    const motherNetMass = motherNetCount * Constants.CAPTURE_NET.LARGE.MASS;
+    // 2026-10-21 (nets-step2): every loaded net weighs the current line-fibre tier's packed mass
+    // (CaptureNetSystem.getMotherNetMassKg: count x TETHER_TIERS[tier].netMassKg.mother; 1.425 kg at the start tier).
+    const mCns = this.playerSatellite && this.playerSatellite._captureNetSystem;
+    const motherNetCount = (mCns && typeof mCns.getMotherNetCount === 'function') ? mCns.getMotherNetCount() : 0;
+    const motherNetMass = (mCns && typeof mCns.getMotherNetMassKg === 'function')
+      ? mCns.getMotherNetMassKg()
+      : motherNetCount * Constants.CAPTURE_NET.LARGE.MASS;
 
     // Cold gas is CARRIED, not burned by the Hall engine (h3-argon-engine D4: it used to be counted as
     // burnable at Hall Isp, ~30 % too high): it sits in BOTH the loaded and the empty mass.
@@ -3094,7 +3113,7 @@ export class ArmManager {
    * instances — no new ArmUnit construction outside _initArms).
    * @param {object} data - { effect: string, value: number }
    */
-  applyUpgrade(data) {
+  applyUpgrade(data, opts = {}) {
     // Store for re-application after reset
     this._storedUpgrades[data.effect] = data.value;
 
@@ -3104,7 +3123,8 @@ export class ArmManager {
       return;
     }
     if (data.type === 'tetherTier' || data.effect === 'tetherTier') {
-      this.applyTetherUpgrade(data.value || data.level);
+      // opts.restore = the save-load replay (GameFlowManager MENU_CONTINUE): every launcher comes up full.
+      this.applyTetherUpgrade(data.value || data.level, { fill: !!(opts && opts.restore) });
       return;
     }
 

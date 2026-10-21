@@ -31,6 +31,7 @@ import {
   computeInertia, getActiveBlocks,
 } from '../systems/CoMCalculator.js';
 import { composeDockedArmQuat, strutLocalDirection } from './ArmDockBasis.js';
+import { netCellLayout } from './netCellLayout.js';
 import {
   propagateOrbit,
   orbitToSceneCartesian,
@@ -5996,8 +5997,9 @@ export class PlayerSatellite extends THREE.Group {
    * turntable top at 1.055 and passing through the 5 mm berth plate, z
    * 1.055–1.060, so it never shares a plane with either) with its front face
    * at z 1.27 (NET_LAUNCHER_MUZZLE_Z_M), 10 mm behind the collar ring. The
-   * front face is the magazine window: a 2 × 2 grid of cells at (±0.05, ±0.05),
-   * each a dark open bore (r 0.030) with a pale Dyneema cap (r 0.028) shown
+   * front face is the magazine window: one round cell per net, drawn by
+   * _buildNetCells from netCellLayout (4 at the start line-fibre tier, 6 / 8 / 10
+   * after the upgrade), each a dark open bore with a pale Dyneema cap shown
    * while that net is loaded (cap i shows while i < count). The muzzle anchor
    * is the launch point used by fireMotherNet (via getNetPodPosition).
    *
@@ -6053,7 +6055,7 @@ export class PlayerSatellite extends THREE.Group {
     housing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(housing);
 
-    // The 2 × 2 magazine window on the front face. On the housing
+    // The magazine window on the front face (one cell per net). On the housing
     // (rotation.x = π/2) the local axes map: local X → ship X, local Z → ship
     // −Y, local Y → ship +Z (the proud offset). Front face is at local
     // y = +LAUNCH_LEN / 2.
@@ -6084,38 +6086,13 @@ export class PlayerSatellite extends THREE.Group {
     lip.name = 'NetLauncherLip';
     lip.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     housing.add(lip);
-    const cellBaseY = faceLocalY + DISC_TOP;                          // the cells sit on the disc top
-    const cellRimGeo = new THREE.LatheGeometry([
-      new THREE.Vector2(M * 0.0335, -M * 0.002), new THREE.Vector2(M * 0.0335, M * 0.004),
-      new THREE.Vector2(M * 0.0300, M * 0.004),
-    ], 48);
-    for (let c = 0; c < 4; c++) {
-      const lx = (c % 2 === 0) ? CELL_D : -CELL_D;                 // ship ±X
-      const lz = (c < 2) ? -CELL_D : CELL_D;                       // local Z = ship −Y: c 0-1 → upper row (+Y)
-      const hole = new THREE.Mesh(new THREE.CircleGeometry(M * 0.030, 48), cellHoleMat);
-      hole.position.set(lx, cellBaseY + M * 0.001, lz);           // 1 mm proud of the white disc
-      hole.rotation.x = -Math.PI / 2;
-      hole.name = `NetLauncherCellHole_${c}`;
-      hole.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-      housing.add(hole);
-
-      // v6-nose-tail D3: a low gunmetal rim round each cell (outer r 33.5 mm, 4 mm proud, 2 mm buried). Geometry shared.
-      const rim = new THREE.Mesh(cellRimGeo, gunmetalMat);
-      rim.position.set(lx, cellBaseY, lz);
-      rim.name = `NetLauncherCellRim_${c}`;
-      rim.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-      housing.add(rim);
-
-      const cap = new THREE.Mesh(new THREE.CircleGeometry(M * 0.028, 48), cellCapMat);
-      cap.position.set(lx, cellBaseY + M * 0.0015, lz);           // distinct offset — no coplanar tie
-      cap.rotation.x = -Math.PI / 2;
-      cap.name = `NetLauncherCellCap_${c}`;
-      cap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-      cap.visible = true;                      // default full; init() emit syncs
-      housing.add(cap);
-      caps.push(cap);
-    }
-    this._netPodCaps.push(caps);
+    // nets-step2 (DECISIONS §33 row 5): the cells are drawn by _buildNetCells(n) from netCellLayout - 4 at the start
+    // line-fibre tier, 6 / 8 / 10 after the fibre upgrade (setNetCellCount, called by ArmManager.applyTetherUpgrade).
+    this._netPodHousing = housing;
+    this._netPodMats = { hole: cellHoleMat, cap: cellCapMat, rim: gunmetalMat };
+    this._netPodCellBaseY = faceLocalY + DISC_TOP;                    // the cells sit on the disc top
+    this._netPodCells = [];
+    this._buildNetCells(Constants.TETHER_TIERS[0].nets.mother);
 
     // Muzzle anchor — invisible Object3D at the front-face centre, a child of
     // the ship frame (NOT the rotated housing): x = y = 0 on the centre-of-mass
@@ -6140,6 +6117,84 @@ export class PlayerSatellite extends THREE.Group {
       launcherCaps.forEach((cap, i) => { cap.visible = i < n; });
     };
     eventBus.on(Events.NET_INVENTORY_CHANGED, this._onNetInventoryChanged);
+  }
+
+  /**
+   * @private - draw the launcher face's `n` cells (nets-step2): per cell a dark bore (hole), a low gunmetal rim and a
+   * pale cap shown while that net is loaded. Positions and size come from netCellLayout(n, disc radius 0.105, 1.5 mm gap):
+   * the largest round cell that fits the white disc (n = 4: hole r 0.0389 on a 0.0611 ring; 10: hole r 0.0223, one centre
+   * cell + nine). Cell outer = the rim's outer edge; hole = outer - 3.5 mm; cap = hole - 2 mm (the rim profile as it
+   * was: 4 mm proud, 2 mm buried, 3.5 mm wide). Names are NetLauncherCellHole_i / Rim_i / Cap_i.
+   * Behind the face the cartridges are sectors filling the housing (not drawn; test-NetTiers sizes them).
+   * @param {number} n
+   */
+  _buildNetCells(n) {
+    const housing = this._netPodHousing;
+    const { hole: cellHoleMat, cap: cellCapMat, rim: rimMat } = this._netPodMats;
+    const baseY = this._netPodCellBaseY;
+    const cells = netCellLayout(n, 0.105, 0.0015);
+    const outer = cells.length ? cells[0].r : 0.03;
+    const holeR = outer - 0.0035;
+    const capR = holeR - 0.002;
+    const holeGeo = new THREE.CircleGeometry(M * holeR, 48);
+    const capGeo = new THREE.CircleGeometry(M * capR, 48);
+    const rimGeo = new THREE.LatheGeometry([
+      new THREE.Vector2(M * outer, -M * 0.002), new THREE.Vector2(M * outer, M * 0.004),
+      new THREE.Vector2(M * holeR, M * 0.004),
+    ], 48);
+    this._netPodCellGeos = [holeGeo, capGeo, rimGeo];
+    const caps = [];
+    const made = [];
+    cells.forEach((cell, c) => {
+      // face (x, y) -> housing local: local X = ship X, local Z = ship -Y
+      const lx = M * cell.x;
+      const lz = -M * cell.y;
+      const hole = new THREE.Mesh(holeGeo, cellHoleMat);
+      hole.position.set(lx, baseY + M * 0.001, lz);               // 1 mm proud of the white disc
+      hole.rotation.x = -Math.PI / 2;
+      hole.name = `NetLauncherCellHole_${c}`;
+      hole.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      housing.add(hole);
+
+      // v6-nose-tail D3: a low gunmetal rim round each cell (4 mm proud, 2 mm buried). Geometry shared.
+      const rim = new THREE.Mesh(rimGeo, rimMat);
+      rim.position.set(lx, baseY, lz);
+      rim.name = `NetLauncherCellRim_${c}`;
+      rim.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      housing.add(rim);
+
+      const cap = new THREE.Mesh(capGeo, cellCapMat);
+      cap.position.set(lx, baseY + M * 0.0015, lz);               // distinct offset - no coplanar tie
+      cap.rotation.x = -Math.PI / 2;
+      cap.name = `NetLauncherCellCap_${c}`;
+      cap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      cap.visible = true;                      // default full; init() emit syncs
+      housing.add(cap);
+      caps.push(cap);
+      made.push(hole, rim, cap);
+    });
+    this._netPodCells = made;
+    this._netPodCaps[0] = caps;
+  }
+
+  /**
+   * Redraw the launcher face for `n` cartridges (the line-fibre upgrade: 4 / 6 / 8 / 10). Removes the old cells
+   * (their geometries are disposed; the shared materials stay), builds `n`, and re-lights the caps from the live count
+   * (the mother's net system, when it is wired; else all lit like a fresh build). Called by ArmManager.applyTetherUpgrade.
+   * @param {number} n
+   */
+  setNetCellCount(n) {
+    if (!this._netPodHousing) return;
+    const want = Math.max(1, Math.floor(n) || 0);
+    if (this._netPodCells && this._netPodCells.length === want * 3) return;
+    for (const m of this._netPodCells || []) this._netPodHousing.remove(m);
+    for (const g of this._netPodCellGeos || []) g.dispose();
+    this._buildNetCells(want);
+    const cns = this._captureNetSystem;
+    if (cns && typeof cns.getMotherNetCount === 'function') {
+      const live = cns.getMotherNetCount();
+      this._netPodCaps[0].forEach((cap, i) => { cap.visible = i < live; });
+    }
   }
 
   // --------------------------------------------------------------------------

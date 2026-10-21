@@ -3435,6 +3435,12 @@ export class CaptureNetSystem {
     this._motherPodInventory = new Array(this._motherPodCount()).fill(0);
     this._motherPodMax       = new Array(this._motherPodCount()).fill(0);
 
+    // Line-fibre tier (Constants.TETHER_TIERS index) and the mother's net capacity at that tier (DECISIONS §33 row 5:
+    // 4 / 6 / 8 / 10 / 10). Set by ArmManager.applyTetherUpgrade through setMotherNetCapacity; survives GAME_RESET
+    // and reset() (a bought upgrade, like the tether tier itself).
+    this._motherNetTier = 0;
+    this._motherNetCapacity = CN.LARGE.MAGAZINE_SIZE;
+
     /** @type {Map<string, number>} Cooldown timers keyed by 'pod_0', 'arm_3', etc. */
     this._cooldownTimers = new Map();
 
@@ -3487,8 +3493,8 @@ export class CaptureNetSystem {
     this._unsubGameReset = eventBus.on(Events.GAME_RESET, () => this._reseedMotherNets());
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return;
 
-    this._motherPodInventory = new Array(this._motherPodCount()).fill(CN.LARGE.MAGAZINE_SIZE);
-    this._motherPodMax       = new Array(this._motherPodCount()).fill(CN.LARGE.MAGAZINE_SIZE);
+    this._motherPodInventory = new Array(this._motherPodCount()).fill(this._motherNetCapacity);
+    this._motherPodMax       = new Array(this._motherPodCount()).fill(this._motherNetCapacity);
     this._initialized = true;
 
     this._emitMotherInventory(true);
@@ -3511,14 +3517,15 @@ export class CaptureNetSystem {
   }
 
   /**
-   * GAME_RESET: reseed the magazine to full (MAGAZINE_SIZE). Flag-gated like init(); a bus reset before init() still
-   * leaves a full magazine for the game that follows.
+   * GAME_RESET: reseed the magazine to full at the current line-fibre capacity (4 at the start tier; the tier
+   * survives a reset). Flag-gated like init(); a bus reset before init() still leaves a full magazine for the game
+   * that follows.
    * @private
    */
   _reseedMotherNets() {
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return;
-    this._motherPodInventory = new Array(this._motherPodCount()).fill(CN.LARGE.MAGAZINE_SIZE);
-    this._motherPodMax       = new Array(this._motherPodCount()).fill(CN.LARGE.MAGAZINE_SIZE);
+    this._motherPodInventory = new Array(this._motherPodCount()).fill(this._motherNetCapacity);
+    this._motherPodMax       = new Array(this._motherPodCount()).fill(this._motherNetCapacity);
     this._emitMotherInventory(true);
   }
 
@@ -5585,6 +5592,43 @@ export class CaptureNetSystem {
     return n;
   }
 
+  /** Mother net capacity at the current line-fibre tier (4 at the start tier). */
+  getMotherNetCapacity() { return this._motherNetCapacity; }
+
+  /**
+   * Mass of the mother's nets aboard, kg: count x the current line-fibre tier's packed-net mass
+   * (Constants.TETHER_TIERS[tier].netMassKg.mother; 1.425 kg at the start tier). Every loaded net weighs the current
+   * tier's mass (nets bought before an upgrade count as re-packed: a simplification). The net's flight physics keep
+   * CAPTURE_NET.LARGE.MASS.
+   */
+  getMotherNetMassKg() {
+    const row = Constants.TETHER_TIERS[this._motherNetTier];
+    const each = (row && row.netMassKg && row.netMassKg.mother) || CN.LARGE.MASS;
+    return this.getMotherNetCount() * each;
+  }
+
+  /**
+   * Line-fibre upgrade (ArmManager.applyTetherUpgrade, the one hub): raise the mother's magazine to `n` nets.
+   * Capacity never drops. The loaded count stays as it is (the new cartridges arrive empty and fill at the stop at
+   * today's price) unless `fill` is set, which is the save-load path: every launcher full. Emits
+   * NET_INVENTORY_CHANGED (mother, with the new podMax) so the launcher face, the HUD and the autopilot follow.
+   * @param {number} n nets the launcher holds at this tier
+   * @param {{tier?: number, fill?: boolean}} [opts] `tier` = the TETHER_TIERS index (for the net mass; derived from `n`
+   *   when absent), `fill` = load every cartridge
+   */
+  setMotherNetCapacity(n, opts = {}) {
+    const cap = Math.max(this._motherNetCapacity, Math.floor(n) || 0);
+    this._motherNetCapacity = cap;
+    let tier = opts.tier;
+    if (!Number.isInteger(tier)) tier = Constants.TETHER_TIERS.findIndex((t) => t.nets && t.nets.mother === cap);
+    if (tier >= 0 && tier < Constants.TETHER_TIERS.length) this._motherNetTier = Math.max(this._motherNetTier, tier);
+    // Before init() (or with the flag off) only the capacity is recorded: init() / the GAME_RESET reseed fill to it.
+    if (!Constants.FEATURE_FLAGS.CAPTURE_NET || !this._initialized) return;
+    this._motherPodMax = new Array(this._motherPodCount()).fill(cap);
+    if (opts.fill) this._motherPodInventory = new Array(this._motherPodCount()).fill(cap);
+    this._emitMotherInventory(true);
+  }
+
   /**
    * Spend one mother net for a shot that has really launched (the small-net path in LassoSystem calls this at the point
    * of launch, after every refusal check; fireMotherNet spends its own). One count for both paths, DECISIONS §33 row 1.
@@ -5837,7 +5881,7 @@ export class CaptureNetSystem {
       // count per ±0.45 m pod) is summed and capped: [2, 1] -> [3], [3, 4] -> [4].
       // No save-version bump; the writer (getState) emits [n].
       if (!this._motherPodMax.some((m) => m > 0)) {
-        this._motherPodMax = new Array(this._motherPodCount()).fill(CN.LARGE.MAGAZINE_SIZE);
+        this._motherPodMax = new Array(this._motherPodCount()).fill(this._motherNetCapacity);
       }
       this._motherPodInventory = [Math.min(saved, this._motherPodMax[0] || 0)];
     }

@@ -305,8 +305,10 @@ export class NetInventoryPanel {
     // DECISIONS §33: the mother's one count rides on every mother event as `motherNets`.
     if (d && d.source === 'mother' && Number.isFinite(d.motherNets)) {
       this._lasso_state.remaining = d.motherNets;
-      const mag = Constants && Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE
-        && Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
+      // nets-step2: the capacity grows with the line-fibre upgrade; the mother's events carry it as podMax.
+      const podCap = Array.isArray(d.podMax) ? d.podMax.reduce((a, b) => a + (b || 0), 0) : 0;
+      const mag = podCap > 0 ? podCap : (this._lasso_state.max || (Constants && Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE
+        && Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE));
       if (mag) this._lasso_state.max = mag;
     }
     // Event payload is "something changed somewhere"; re-poll authoritatively.

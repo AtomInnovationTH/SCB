@@ -352,17 +352,30 @@ export class StatusPanel {
     // Owner 2026-10-13: ONE launcher, so the payload is a one-element array.
     this._motherPods = null;      // [n0] once a mother event arrives
     this._motherPodsMax = null;   // [max0]
-    eventBus.on(Events.NET_INVENTORY_CHANGED, (data) => {
-      if (!data || data.source !== 'mother') return;
-      if (Array.isArray(data.podInventory)) this._motherPods = data.podInventory.slice();
-      if (Array.isArray(data.podMax)) this._motherPodsMax = data.podMax.slice();
-      if (Number.isFinite(data.motherNets)) {
-        this._lassoAmmo = data.motherNets;
-        this._updateNetDigest();
-      }
-      this._updateMotherPodDigest();
-    });
+    eventBus.on(Events.NET_INVENTORY_CHANGED, (data) => this._onMotherInventory(data));
 
+  }
+
+  /**
+   * The mother's inventory event (NET_INVENTORY_CHANGED { source:'mother', podInventory, podMax?, motherNets }): the NET
+   * digest reads left / capacity. nets-step2: the capacity grows with the line-fibre upgrade (4 -> 6 -> 8 -> 10), so it
+   * comes from the event's podMax, never a fixed 4. Not a mother event: ignored.
+   * @private
+   * @param {object} data
+   */
+  _onMotherInventory(data) {
+    if (!data || data.source !== 'mother') return;
+    if (Array.isArray(data.podInventory)) this._motherPods = data.podInventory.slice();
+    if (Array.isArray(data.podMax)) {
+      this._motherPodsMax = data.podMax.slice();
+      const cap = this._motherPodsMax.reduce((a, b) => a + (b || 0), 0);
+      if (cap > 0) this._lassoAmmoMax = cap;
+    }
+    if (Number.isFinite(data.motherNets)) {
+      this._lassoAmmo = data.motherNets;
+      this._updateNetDigest();
+    }
+    this._updateMotherPodDigest();
   }
 
   // ==========================================================================

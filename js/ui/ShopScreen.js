@@ -141,7 +141,7 @@ export const UPGRADES = [
   // piece she nets (DECISIONS §33). No in-mission resupply. Gated by CAPTURE_NET (filtered at render).
   { id: 'mother_net_restock', cat: 'Daughters', name: 'Mother net',
     cost: Constants.CAPTURE_NET.LARGE.REPLACEMENT_COST,
-    desc: 'One net cartridge for the mother\'s launcher. Holds 4.',
+    desc: 'One net cartridge for the mother\'s launcher.',
     effect: 'motherNetRestock', value: 1, maxLevel: Infinity, consumable: true,
     requiresFeature: 'CAPTURE_NET',
     trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
@@ -149,13 +149,13 @@ export const UPGRADES = [
   // into the first docked daughter of that size with room (ArmManager.addDaughterNet); refused when none has room.
   { id: 'large_daughter_net', cat: 'Daughters', name: 'Large daughter net',
     cost: Constants.CAPTURE_NET.MEDIUM.REPLACEMENT_COST,
-    desc: `Load one net into a docked large daughter. Holds ${Constants.CAPTURE_NET.MEDIUM.MAGAZINE_SIZE}.`,
+    desc: 'Load one net into a docked large daughter.',
     effect: 'largeDaughterNet', value: 1, maxLevel: Infinity, consumable: true,
     requiresFeature: 'CAPTURE_NET',
     trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
   { id: 'small_daughter_net', cat: 'Daughters', name: 'Small daughter net',
     cost: Constants.CAPTURE_NET.SMALL.REPLACEMENT_COST,
-    desc: `Load one net into a docked small daughter. Holds ${Constants.CAPTURE_NET.SMALL.MAGAZINE_SIZE}.`,
+    desc: 'Load one net into a docked small daughter.',
     effect: 'smallDaughterNet', value: 1, maxLevel: Infinity, consumable: true,
     requiresFeature: 'CAPTURE_NET',
     trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
@@ -301,13 +301,23 @@ const SPRING_DESCRIPTIONS = [
 ];
 
 /** Tether tier descriptions for shop display */
-const TETHER_DESCRIPTIONS = [
-  "Ultra-high molecular weight polyethylene. Industry standard.",
-  "PBO fiber. High modulus, UV sensitive. Handle with care.",
-  "Carbon nanotube yarn. Aerospace grade.",
-  "Graphene Superlattice 50 GPa. First-gen GSL technology.",
-  "Graphene Superlattice 100 GPa. Carries power, data, and steering.",
+export const TETHER_DESCRIPTIONS = [
+  "Ultra-strong plastic fibre. Where you start.",
+  "A tougher synthetic fibre. More nets, longer tethers.",
+  "Carbon nanotube yarn. Lighter again, so more nets fit.",
+  "Graphene fibre. Future tech.",
+  "Graphene fibre, longer reach. Future tech.",
 ];
+
+/**
+ * The tether card's one stats line (DECISIONS §33 row 5): what the fibre buys, in plain words. Mother nets, then the
+ * large and small daughters' nets, then the large daughter's tether length. "6 mother nets, 3 and 6 per daughter, 4 km tethers".
+ * @param {{nets:{mother:number,large:number,small:number}, maxLength:number}} tier a Constants.TETHER_TIERS row
+ */
+export function tetherStatsLine(tier) {
+  const km = tier.maxLength / 1000;
+  return `${tier.nets.mother} mother nets, ${tier.nets.large} and ${tier.nets.small} per daughter, ${km} km tethers`;
+}
 
 export class ShopScreen {
   constructor() {
@@ -876,7 +886,7 @@ export class ShopScreen {
 
     // Append crossbow spring & tether material tier sections
     html += this._renderTierSection('spring', '🛰️ CRADLE SPRINGS', Constants.SPRING_TIERS, SPRING_DESCRIPTIONS, this._springTier);
-    html += this._renderTierSection('tether', '🧵 TETHER MATERIALS', Constants.TETHER_TIERS, TETHER_DESCRIPTIONS, this._tetherTier);
+    html += this._renderTierSection('tether', '🧵 LINE FIBRE', Constants.TETHER_TIERS, TETHER_DESCRIPTIONS, this._tetherTier);
 
     catContainer.innerHTML = html;
 
@@ -1057,7 +1067,7 @@ export class ShopScreen {
     if (tierType === 'spring') {
       sectionNote = '<div style="font-size:0.65rem;color:rgba(0,255,136,0.4);margin-bottom:6px;">The ceiling your cradle can fire at — set the fleet launch speed in flight with [;] down / [\'] up. Hotter shots reload ∝ v².</div>';
     } else if (tierType === 'tether') {
-      sectionNote = '<div style="font-size:0.65rem;color:rgba(0,255,136,0.4);margin-bottom:6px;">Sets the real tether length (Spinner carries ¼ of it) and the deploy gate at 80% of that length. Long tethers pair with hot springs for the wide sweep.</div>';
+      sectionNote = '<div style="font-size:0.65rem;color:rgba(0,255,136,0.4);margin-bottom:6px;">Stronger fibre holds more nets and reaches further. Small daughters reach a quarter as far.</div>';
     }
 
     return `
@@ -1113,7 +1123,7 @@ export class ShopScreen {
     if (tierType === 'spring') {
       statsLine = `Max ${tier.maxSpeed} m/s`;
     } else {
-      statsLine = `${tier.breakStrength}N break · ${(tier.maxLength / 1000).toFixed(0)}km max`;
+      statsLine = tier.nets ? tetherStatsLine(tier) : `${tier.breakStrength}N break · ${(tier.maxLength / 1000).toFixed(0)}km max`;
     }
 
     // Status badge / action area
@@ -1155,7 +1165,7 @@ export class ShopScreen {
             <span style="font-size:0.65rem;color:${isCurrent ? '#f0c040' : 'rgba(0,255,136,0.4)'};
                          padding:1px 5px;border-radius:2px;border:1px solid ${isCurrent ? 'rgba(240,192,64,0.3)' : 'rgba(0,255,136,0.15)'};
                          background:${isCurrent ? 'rgba(240,192,64,0.08)' : 'transparent'};margin-right:6px;">${tierLabel}</span>
-            ${tier.name}
+            ${tier.label || tier.name}
           </div>
           <div style="font-size:0.7rem;color:rgba(0,255,136,0.5);">${statsLine}</div>
           <div style="font-size:0.65rem;color:rgba(0,255,136,0.35);margin-top:1px;">${decorateGlossary(desc, { once: true })}</div>

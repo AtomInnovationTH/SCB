@@ -2977,12 +2977,26 @@ export const Constants = {
   V5_BACK_ARM_TYPE: 'spinner',           // retrograde arm type
 
   // --- Tether Materials (upgrade tiers) ---
+  // 2026-10-21 (DECISIONS §33 row 5, lane nets-step2): the tether tier IS the line-fibre upgrade. One purchase raises the
+  // tether length (maxLength, as before) AND the net capacities: `nets` = mother / large daughter / small daughter
+  // (4/2/4 at the start tier = CAPTURE_NET.LARGE/MEDIUM/SMALL.MAGAZINE_SIZE, drift-tested). `label` is what the player
+  // reads (Ruling 0: plain words; `name` stays the code-side key and the purchase payload). `netMassKg` is the mass of
+  // ONE packed mother / large / small net at that fibre: MESH_MASS * mf + RIM_WEIGHT_COUNT * RIM_WEIGHT_MASS + HUB_MASS,
+  // mf = [1, 0.970, 0.469, 0.0375, 0.0156] (strength and density per fibre: Dyneema 3.5 GPa 0.97 g/cm3, Zylon 5.8 GPa
+  // 1.56, carbon nanotube yarn 10 GPa 1.3 (speculative), graphene from the game's own GSL rows 2.0 (future tech; the best
+  // graphene fibre made today is 5.9 GPa)). ESTIMATES from the probe tmp/netpack/step2.mjs (packing fraction 0.5), not
+  // measurements; the drawn cartridges (netCellLayout) are sized to hold them (test-NetPack).
   TETHER_TIERS: [
-    { name: 'Dyneema',   breakStrength: 100,  mass_per_km: 0.8,  maxLength: 2000,  cost: 0 },
-    { name: 'Zylon',     breakStrength: 200,  mass_per_km: 0.6,  maxLength: 4000,  cost: 1500 },
-    { name: 'CNT',       breakStrength: 350,  mass_per_km: 0.3,  maxLength: 6000,  cost: 5000 },
-    { name: 'GSL-50',    breakStrength: 500,  mass_per_km: 0.15, maxLength: 8000,  cost: 15000 },
-    { name: 'GSL-100',   breakStrength: 800,  mass_per_km: 0.10, maxLength: 10000, cost: 40000 },
+    { name: 'Dyneema',   label: 'Dyneema',          breakStrength: 100,  mass_per_km: 0.8,  maxLength: 2000,  cost: 0,
+      nets: { mother: 4,  large: 2, small: 4  }, netMassKg: { mother: 1.425, large: 0.680, small: 0.120 } },
+    { name: 'Zylon',     label: 'Zylon',            breakStrength: 200,  mass_per_km: 0.6,  maxLength: 4000,  cost: 1500,
+      nets: { mother: 6,  large: 3, small: 6  }, netMassKg: { mother: 1.405, large: 0.668, small: 0.119 } },
+    { name: 'CNT',       label: 'Carbon nanotube',  breakStrength: 350,  mass_per_km: 0.3,  maxLength: 6000,  cost: 5000,
+      nets: { mother: 8,  large: 4, small: 8  }, netMassKg: { mother: 1.067, large: 0.468, small: 0.099 } },
+    { name: 'GSL-50',    label: 'Graphene',         breakStrength: 500,  mass_per_km: 0.15, maxLength: 8000,  cost: 15000,
+      nets: { mother: 10, large: 5, small: 10 }, netMassKg: { mother: 0.775, large: 0.295, small: 0.082 } },
+    { name: 'GSL-100',   label: 'Graphene, 10 km',  breakStrength: 800,  mass_per_km: 0.10, maxLength: 10000, cost: 40000,
+      nets: { mother: 10, large: 5, small: 10 }, netMassKg: { mother: 0.761, large: 0.286, small: 0.081 } },
   ],
 
   // --- Spring Upgrade Tiers ---

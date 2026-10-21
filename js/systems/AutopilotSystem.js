@@ -282,6 +282,9 @@ export class AutopilotSystem {
     /** @type {number} The mother's nets, cached for the arrival line (DECISIONS §33 row 8): starts full, follows
      *  NET_INVENTORY_CHANGED { source:'mother', motherNets }, reset by GAME_RESET. */
     this._motherNetsLeft = Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
+    /** @type {number} The mother's magazine capacity (4 at the start line-fibre tier; 6 / 8 / 10 after the upgrade), from the
+     *  podMax on her inventory events. A new game puts this many nets back. */
+    this._motherNetCap = Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
 
     /** @type {string} 'OFF'|'RENDEZVOUS_FAR'|'MATCH_ORBIT'|'TRAIL_ALIGN'|'HOLD' */
     this._phase = PHASE.OFF;
@@ -2067,9 +2070,14 @@ export class AutopilotSystem {
     // The mother's nets, for the arrival line (DECISIONS §33 row 8): CaptureNetSystem owns the one count and
     // announces it on every change; a new game puts the full magazine back.
     eventBus.on(Events.NET_INVENTORY_CHANGED, (data) => {
-      if (data && data.source === 'mother' && Number.isFinite(data.motherNets)) this._motherNetsLeft = data.motherNets;
+      if (!data || data.source !== 'mother') return;
+      if (Array.isArray(data.podMax)) {
+        const cap = data.podMax.reduce((a, b) => a + (b || 0), 0);
+        if (cap > 0) this._motherNetCap = cap;
+      }
+      if (Number.isFinite(data.motherNets)) this._motherNetsLeft = data.motherNets;
     });
-    eventBus.on(Events.GAME_RESET, () => { this._motherNetsLeft = Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE; });
+    eventBus.on(Events.GAME_RESET, () => { this._motherNetsLeft = this._motherNetCap; });
 
     // Attitude-hold across a lasso capture: HOLD the mother's orientation steady
     // from the moment it fires (the aim-before-launch has just put +Z on the

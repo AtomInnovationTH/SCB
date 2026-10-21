@@ -1980,7 +1980,7 @@ export class GameFlowManager {
           player.applyUpgrade(data);
           break;
         case ARM_MANAGER:
-          if (armManager) armManager.applyUpgrade(data);
+          if (armManager) armManager.applyUpgrade(data, opts);
           break;
         case CARGO_SYSTEM:
           if (cargoSystem) cargoSystem.applyUpgrade(data);

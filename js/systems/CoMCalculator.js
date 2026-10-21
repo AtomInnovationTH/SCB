@@ -337,7 +337,11 @@ function getDaughterMass(arm) {
 export function motherNetBooking(playerSatellite) {
   const cns = playerSatellite && playerSatellite._captureNetSystem;
   const n = (cns && typeof cns.getMotherNetCount === 'function') ? cns.getMotherNetCount() : 0;
-  const massKg = n > 0 ? n * Constants.CAPTURE_NET.LARGE.MASS : 0;
+  // 2026-10-21 (nets-step2): the current line-fibre tier's packed-net mass (getMotherNetMassKg); mocks without it keep
+  // the start-tier mass.
+  const massKg = n > 0
+    ? ((typeof cns.getMotherNetMassKg === 'function') ? cns.getMotherNetMassKg() : n * Constants.CAPTURE_NET.LARGE.MASS)
+    : 0;
   return { massKg, z: (V5.NET_LAUNCHER_BASE_Z_M + V5.NET_LAUNCHER_MUZZLE_Z_M) / 2 };
 }
 

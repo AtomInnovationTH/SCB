@@ -30,6 +30,7 @@ import { gameState } from '../core/GameState.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
 import { DebrisField } from './DebrisField.js';          // catch-snug: the drawn scale of a held catch
 import { DebrisWireframe } from '../ui/DebrisWireframe.js'; // catch-snug: the drawn mesh vertices
+import { netCellLayout } from './netCellLayout.js';
 import { heldBagNeckInto, heldBagRadiusScene, DAUGHTER_STAND_M } from './heldBagShape.js'; // net-cinch: where the held net's neck is drawn
 
 /** 1 meter in scene units (1 scene unit = 100 km) — CAPTURE_NET.md §11.7 hoist
@@ -1412,20 +1413,25 @@ export class ArmUnit {
     const cellCount = (netClass && netClass.MAGAZINE_SIZE)
       ?? Constants.ARM_NET_CAPACITY?.[isWeaverLaunch ? 'weaver' : 'spinner'] ?? 0;
     const canR = isWeaverLaunch ? 0.055 : 0.035;
-    const canH = isWeaverLaunch ? 0.07 : 0.05;
+    // nets-step2 (DECISIONS §33 row 5): the can is DEEP enough to hold the cartridges of the strongest fibre (large 5, small
+    // 10 nets; litres in test-NetPack): 0.24 m large, 0.16 m small. The FRONT FACE stays where it was (z 0.200 / 0.1075:
+    // the old can was 0.07 / 0.05 m tall about the same face), so the extra length runs back inside her body (back ends
+    // z -0.040 / -0.0525, body half-lengths 0.15 / 0.075), hidden behind the end cap. The radius cannot grow (the fore
+    // thruster box is placed from it).
+    const canH = isWeaverLaunch ? 0.24 : 0.16;
+    const canHOld = isWeaverLaunch ? 0.07 : 0.05;
     const canGeo = new THREE.CylinderGeometry(canR * M, canR * M, canH * M, 48, 1, false);
     const canMat = new THREE.MeshStandardMaterial({ ...AVIONICS_GUNMETAL });   // matches mother (SSOT recipe)
     const canister = new THREE.Mesh(canGeo, canMat);
-    const canCz = bz * 0.55 * M;                 // housing centre z (fore centreline)
+    const cellFaceZ = bz * 0.55 * M + (canHOld * M) / 2;   // the front face: unchanged by the deeper can
+    const canCz = cellFaceZ - (canH * M) / 2;              // housing centre z (fore centreline)
     canister.position.set(0, 0, canCz);
     canister.rotation.x = Math.PI / 2;           // cylinder axis → +Z
     canister.name = `${this.id}-net-launcher`;
     this.mesh.add(canister);
 
-    // Front-face magazine cells (front face = housing centre + half-length in +Z).
-    // Layout derived from the magazine count (drift-guarded — never hardcode 2/4):
-    // ≤2 → side-by-side in X; else a 2×2 grid.
-    const cellFaceZ = canCz + (canH * M) / 2;
+    // Front-face magazine cells (front face = housing centre + half-length in +Z): drawn by _buildNetCells from
+    // netCellLayout, one round bore per net (start tier: 2 large / 4 small; 3-5 and 6-10 after the fibre upgrade).
 
     // Net-launch MUZZLE (SSOT, net-canister continuity fix): the launcher
     // housing's front face on the fore centreline — the same plane the
@@ -1434,22 +1440,6 @@ export class ArmUnit {
     // net-tether anchor can never drift from the visible hardware. Read back
     // in world space via getNetMuzzleWorldInto(). Scene units, mesh-local.
     this._netMuzzleLocal = new THREE.Vector3(0, 0, cellFaceZ);
-    const cellSpread = (isWeaverLaunch ? 0.024 : 0.014) * M;
-    const cellBoreR = (isWeaverLaunch ? 0.018 : 0.010) * M;
-    const cellOffsets = [];
-    if (cellCount <= 2) {
-      for (let i = 0; i < cellCount; i++) {
-        cellOffsets.push([ (cellCount === 1 ? 0 : (i === 0 ? -cellSpread : cellSpread)), 0 ]);
-      }
-    } else {
-      // 2×2 (and beyond) grid.
-      const cols = 2;
-      for (let i = 0; i < cellCount; i++) {
-        const cx = (i % cols) === 0 ? -cellSpread : cellSpread;
-        const cy = (i < cols) ? cellSpread : -cellSpread;
-        cellOffsets.push([cx, cy]);
-      }
-    }
     // v10-look-r5 D3: the mother launcher's white disc + gunmetal lip, scaled to the can. Disc = can R - 6 mm (weaver)
     // / - 3 mm (spinner), top 1 mm proud of the front face; the lip ring stands 2 mm / 1.5 mm above the disc top, so the
     // white reads inset. Bores and caps are lifted by the disc's 1 mm. The muzzle (_netMuzzleLocal) is unchanged.
@@ -1476,23 +1466,11 @@ export class ArmUnit {
     this.mesh.add(lip);
     const boreMat = new THREE.MeshStandardMaterial({ ...AVIONICS_DARK_OPTIC });    // dark bore (matches mother)
     const capMat = new THREE.MeshStandardMaterial({ ...AVIONICS_THERMAL_WHITE });  // pale Dyneema cap (matches mother)
+    this._netCan = { canR, cellFaceZ, DISC_TOP, boreMat, capMat };
+    this._netCellMeshes = [];
+    this._netCellGeos = [];
     this._netCellCaps = [];
-    for (let i = 0; i < cellCount; i++) {
-      const [cx, cy] = cellOffsets[i];
-      // Dark bore disc — always visible (an empty cell shows the bore).
-      const bore = new THREE.Mesh(new THREE.CircleGeometry(cellBoreR, 24), boreMat);
-      bore.position.set(cx, cy, cellFaceZ + DISC_TOP + 0.001 * M);   // 1 mm proud of the white disc (EO-lens pattern)
-      bore.name = `${this.id}-DNetCellHole_${i}`;
-      bore.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-      this.mesh.add(bore);
-      // Pale cap — visible only when the cell is LOADED (inventory-driven).
-      const cap = new THREE.Mesh(new THREE.CircleGeometry(cellBoreR * 0.9, 24), capMat.clone());
-      cap.position.set(cx, cy, cellFaceZ + DISC_TOP + 0.0015 * M);   // 1.5 mm proud of the disc (over the bore)
-      cap.name = `${this.id}-DNetCellCap_${i}`;
-      cap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-      this.mesh.add(cap);
-      this._netCellCaps.push(cap);
-    }
+    this._buildNetCells(cellCount);
 
     // Inventory wiring — the daughter net emits use TWO field shapes: CaptureNet
     // emits {remaining}, ArmUnit's own set/decrement/reload emit {nets}. Accept
@@ -9566,6 +9544,52 @@ export class ArmUnit {
   }
 
   /**
+   * @private - draw the can's front-face cells (nets-step2): one dark bore and one pale cap per net, from
+   * netCellLayout(n, can radius - 3 mm, 2 mm gap): bore r = cell outer - 2 mm, cap r = 0.9 x bore. Large can 2 / 3 / 4 / 5
+   * bores (r 0.0225 .. 0.0159 m), small 4 / 6 / 8 / 10 (r 0.0098 .. 0.0049 m). The radius, face, disc and lip do not move.
+   * Names: `<id>-DNetCellHole_i` / `<id>-DNetCellCap_i`.
+   * @param {number} n
+   */
+  _buildNetCells(n) {
+    const { canR, cellFaceZ, DISC_TOP, boreMat, capMat } = this._netCan;
+    const cells = netCellLayout(n, canR - 0.003, 0.002);
+    const boreR = (cells.length ? cells[0].r : 0.01) - 0.002;
+    const around = (r) => (r >= 0.02 ? 48 : 24);   // test-RoundParts radius rule: 0.02 <= r < 0.10 -> 48, 0.005 <= r < 0.02 -> 24
+    const boreGeo = new THREE.CircleGeometry(boreR * M, around(boreR));
+    const capGeo = new THREE.CircleGeometry(boreR * 0.9 * M, around(boreR * 0.9));
+    this._netCellGeos = [boreGeo, capGeo];
+    this._netCellMeshes = [];
+    this._netCellCaps = [];
+    cells.forEach((cell, i) => {
+      const cx = cell.x * M, cy = cell.y * M;
+      // Dark bore disc - always visible (an empty cell shows the bore).
+      const bore = new THREE.Mesh(boreGeo, boreMat);
+      bore.position.set(cx, cy, cellFaceZ + DISC_TOP + 0.001 * M);   // 1 mm proud of the white disc (EO-lens pattern)
+      bore.name = `${this.id}-DNetCellHole_${i}`;
+      bore.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.mesh.add(bore);
+      // Pale cap - visible only when the cell is LOADED (inventory-driven).
+      const cap = new THREE.Mesh(capGeo, capMat.clone());
+      cap.position.set(cx, cy, cellFaceZ + DISC_TOP + 0.0015 * M);   // 1.5 mm proud of the disc (over the bore)
+      cap.name = `${this.id}-DNetCellCap_${i}`;
+      cap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.mesh.add(cap);
+      this._netCellMeshes.push(bore, cap);
+      this._netCellCaps.push(cap);
+    });
+  }
+
+  /** @private - setNetCapacity's redraw: drop the old cells (geometry and the per-cap material freed), build `n`. */
+  _rebuildNetCells(n) {
+    for (const m of this._netCellMeshes || []) {
+      this.mesh.remove(m);
+      if (m.material && m.material !== this._netCan.boreMat) m.material.dispose();
+    }
+    for (const g of this._netCellGeos || []) g.dispose();
+    this._buildNetCells(n);
+  }
+
+  /**
    * Show exactly `n` loaded Dyneema caps on the mini launcher's front face
    * (empty cells show only the dark bore). Direct (no-emit) helper called from
    * the inventory listener AND initNetInventory(). @private
@@ -9576,6 +9600,29 @@ export class ArmUnit {
     for (let i = 0; i < this._netCellCaps.length; i++) {
       this._netCellCaps[i].visible = i < n;
     }
+  }
+
+  /**
+   * Line-fibre upgrade (ArmManager.applyTetherUpgrade, the one hub): raise this daughter's net capacity to `n`
+   * (DECISIONS §33 row 5: large 2/3/4/5/5, small 4/6/8/10/10). Capacity never drops. The loaded count stays
+   * (the new cartridges arrive empty and fill at the stop) unless `fill` is set (the save-load path: every launcher
+   * full). Redraws the launcher face for `n` cartridges and emits NET_INVENTORY_CHANGED like any other count change.
+   * @param {number} n
+   * @param {{fill?: boolean}} [opts]
+   */
+  setNetCapacity(n, opts = {}) {
+    const cap = Math.max(this._netInventoryMax || 0, Math.floor(n) || 0);
+    this._netInventoryMax = cap;
+    if (opts.fill) this._netInventory = cap;
+    else this._netInventory = Math.min(this._netInventory ?? 0, cap);
+    if (typeof this._rebuildNetCells === 'function') this._rebuildNetCells(cap);
+    this._syncNetCells(this._netInventory);
+    eventBus.emit(Events.NET_INVENTORY_CHANGED, {
+      source: 'daughter',
+      armIndex: this.index ?? null,
+      nets: this._netInventory,
+      max:  this._netInventoryMax,
+    });
   }
 
   /** Current net count remaining in magazine. */
