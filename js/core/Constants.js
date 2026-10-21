@@ -1443,6 +1443,15 @@ export const Constants = {
     TURN_MAX_DEG:        60,    // a mother turn bigger than this is not asked for (she lines herself up instead)
   },
 
+  // fail-reel (owner 2026-10-21, DECISIONS: a failed catch winds her home): when a catch fails (pad bounce, net miss, slip,
+  // rip) under REEL_HOME, a daughter within AUTO_REEL_MAX_M of her strut tip is reeled straight home on her strut line;
+  // farther out she holds near the piece for a retry and the comms line gives the reel-in time, so he can choose
+  // (owner 12:37Z: "auto reel-in on failure for close debris. over 500 meters, consider retry versus reel-in time").
+  // Tests: js/test/test-FailReel.js.
+  FAIL_REEL: {
+    AUTO_REEL_MAX_M: 500,   // m from her strut tip (owner's number)
+  },
+
   // trip-melt-2 "carry" (2026-10-19, owner: catches "need to be melted down in the furnace during the long ion burn";
   // DECISIONS §29 row 4): while the trip burns a daughter carries the catch on her rack to HER radiator's tip furnace and
   // comes home (ArmUnit CARRY_PREP/OUT/HANDOFF/BACK, ArmManager.requestCarry, TransferTrip's once-a-second scheduler).

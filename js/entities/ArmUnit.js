@@ -525,6 +525,7 @@ const _gdWorld = new THREE.Vector3();
 const _rhV1 = new THREE.Vector3();
 const _rhV2 = new THREE.Vector3();
 const _rhV3 = new THREE.Vector3();
+const _failTip = new THREE.Vector3();   // fail-reel: her strut tip, world, for the 500 m rule
 const _rhV4 = new THREE.Vector3();
 const _rhV5 = new THREE.Vector3();
 const _rhQ1 = new THREE.Quaternion();
@@ -653,6 +654,7 @@ export class ArmUnit {
     // world-space deploy direction from the LOCAL dockOffset (§4.6 180° bug).
     /** @type {THREE.Quaternion|null} */
     this._lastParentQuat = null;
+    this._frameParentQuat = null;   // fail-reel: the mother's orientation of her last out-frame (set in _updateTether)
 
     /** @type {THREE.Vector3|null} Previous frame's parent position — for orbital frame correction */
     this._prevParentPos = null;
@@ -2307,9 +2309,14 @@ export class ArmUnit {
    * strut/tether reel motor and is never abandoned as EXPENDED for low fuel —
    * her emergency FEEP reserve (if any) funds the soft-dock arrest. Only a
    * detached (severed-tether) daughter is beyond reel-in.
+   *
+   * fail-reel (owner 2026-10-21): a daughter flying home on her FEEP (RETURNING) is on her line too, so R winds her in
+   * instead of being refused.
+   * @returns {boolean|'already'} true = she is now being reeled home; 'already' = she already was (REELING);
+   *   false = refused (a comms line says why: holding a catch, carrying, detached) or nothing to recall (DOCKED / EXPENDED)
    */
   recall() {
-    if (this.state === S.DOCKED || this.state === S.EXPENDED) return;
+    if (this.state === S.DOCKED || this.state === S.EXPENDED) return false;
 
     // HOLDING_CATCH: she is already home at her strut tip and OCCUPIED with a
     // parked catch — recall is meaningless, so refuse it (player-facing, in the
@@ -2321,7 +2328,7 @@ export class ArmUnit {
         text: `${this.displayName}: Recall refused — holding a catch. Furnace transfer clears her.`,
         priority: 'warning',
       });
-      return;
+      return false;
     }
     // trip-melt-2: she is carrying a catch to a furnace — the carry ends at her dock on its own
     if (this._carry) {
@@ -2329,7 +2336,7 @@ export class ArmUnit {
         text: `${this.displayName}: Recall refused — carrying a catch to a furnace. She comes home when it is done.`,
         priority: 'warning',
       });
-      return;
+      return false;
     }
 
     // Detached arms cannot be recalled — tether severed
@@ -2338,7 +2345,7 @@ export class ArmUnit {
         text: `${this.displayName}: Cannot recall. Tether severed. Daughter is autonomous.`,
         priority: 'warning',
       });
-      return;
+      return false;
     }
 
     this._manualMode = false; // always exit manual on recall
@@ -2347,9 +2354,9 @@ export class ArmUnit {
     this._trawlingMode = false;
     this._webShotTarget = null; // clear web shot state on recall
 
-    // V5: If reeling or returning, allow recall to just continue return
-    // If other states, transition to REELING (zero-fuel return)
-    if (this.state === S.REELING || this.state === S.RETURNING) return;
+    // V5: already reeling -> nothing to do. RETURNING (FEEP flight home, e.g. after a failed catch with REEL_HOME off)
+    // falls through: she is on her line, so the strut reel winds her in (fail-reel). Other states: REELING (zero-fuel return).
+    if (this.state === S.REELING) return 'already';
 
     // STATION_KEEP has its own bookkeeping (the SK target flag, orbit rates,
     // polar-axis cache). Route through the dedicated zero-fuel strut reel so it
@@ -2359,7 +2366,7 @@ export class ArmUnit {
       this.target = null;
       this.reelFromStationKeep();
       eventBus.emit(Events.ARM_RECALLED, { armId: this.id });
-      return;
+      return true;
     }
 
     // The strut/tether reel motor lives on the mothership, so a TETHERED daughter
@@ -2383,6 +2390,7 @@ export class ArmUnit {
       });
     }
     eventBus.emit(Events.ARM_RECALLED, { armId: this.id });
+    return true;
   }
 
   // ==========================================================================
@@ -2990,6 +2998,7 @@ export class ArmUnit {
     this._trawlDirection = null;
     this._trawlTimer = 0;
     this._lastParentQuat = null;   // ST-1.1: clear cached parent quaternion
+    this._frameParentQuat = null;  // fail-reel: same reset
     this._prevParentPos = null;    // Orbital frame correction: reset on arm reset
     this._frameParentPos = null;   // nets-1b R9: this frame's parent position, same reset
 
@@ -4604,17 +4613,19 @@ export class ArmUnit {
       armId: this.id, armIndex: this.index,
       debrisId: debris.id, strain: bandT,
     });
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.displayName}: Net RIPPED — catch still tumbling at `
-        + `${rateDegS.toFixed(0)}°/s and the wrench tore the weave. Debris drifting `
-        + `free, spin resumed. Lase it below ${CTS.STRAIN_GATE_DEG_S.toFixed(0)}°/s `
-        + 'before the next net.',
-      priority: 'warning',
+    // fail-reel: the cause stays; REEL_HOME winds her home (or holds her near the piece beyond 500 m), else RETURNING
+    this._finishFailedCatch({
+      cause: `Net RIPPED: catch still tumbling at ${rateDegS.toFixed(0)}°/s and the wrench tore the weave. `
+        + `Debris drifting free, spin resumed. Lase it below ${CTS.STRAIN_GATE_DEG_S.toFixed(0)}°/s before the next net.`,
+      legacy: {
+        text: `${this.displayName}: Net RIPPED — catch still tumbling at `
+          + `${rateDegS.toFixed(0)}°/s and the wrench tore the weave. Debris drifting `
+          + `free, spin resumed. Lase it below ${CTS.STRAIN_GATE_DEG_S.toFixed(0)}°/s `
+          + 'before the next net.',
+        priority: 'warning',
+      },
+      holdTarget: debris,
     });
-    if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
-    this._stationKeepTarget = null;
-    this.target = null;
-    this._transitionTo(S.RETURNING);
   }
 
   /**
@@ -4740,6 +4751,12 @@ export class ArmUnit {
     this._skRightVec  = null;
     this._skPitch0    = 0;
     this._skIdleS     = 0;
+    // Review F1 (fail-reel): on her strut line (REEL_HOME on, tethered) the piece being gone winds her home on the reel,
+    // never the slow FEEP flight. 'fuel' and the player's explicit FEEP 'recall' keep their meaning (RETURNING).
+    if (reason === 'lost' && this._rhOn()) {
+      this._reelHomeAfterFailure();
+      return;
+    }
     this._transitionTo(S.RETURNING);
   }
 
@@ -5166,6 +5183,14 @@ export class ArmUnit {
       eventBus.emit(Events.MAGNETIC_GRIP_FAILED, { armId: this.id, targetId: target.id, reason });
       eventBus.emit(Events.MAGNETIC_RELEASE, { armId: this.id, targetId: target.id });
     }
+    // cause (kept under REEL_HOME, where the outcome is reeled home / held) + the old whole line (REEL_HOME off)
+    const cause = reason === 'too_heavy'
+      ? 'Magnetic grapple failed: target too massive for the EPM.'
+      : reason === 'non_ferrous'
+        ? 'No magnetic purchase: target is non-ferrous (try the net).'
+        : reason === 'standoff'
+          ? 'Lost contact on approach: magnetic grapple aborted.'
+          : 'Magnetic grip slipped.';
     const msg = reason === 'too_heavy'
       ? `${this.displayName}: Magnetic grapple failed. Target too massive for the EPM. Returning to reload.`
       : reason === 'non_ferrous'
@@ -5173,8 +5198,8 @@ export class ArmUnit {
         : reason === 'standoff'
           ? `${this.displayName}: Lost contact on approach. Magnetic grapple aborted. Returning.`
           : `${this.displayName}: Magnetic grip slipped. Returning to reload. Re-attempt or try the net.`;
-    eventBus.emit(Events.COMMS_MESSAGE, { source: this.displayName, text: msg, channel: 'CMD', priority: 'warning' });
-    this._endToolFailure();
+    this._endToolFailure(cause,
+      { source: this.displayName, text: msg, channel: 'CMD', priority: 'warning' });
   }
 
   // ── Shared non-net catch plumbing (magnet / gripper / pad) ──────────────
@@ -5220,13 +5245,166 @@ export class ArmUnit {
     this._transitionTo(S.GRAPPLED);  // _transitionTo releases the CA lock on exit
   }
 
-  /** @private Shared cleanup tail for a failed/aborted non-net tool attempt. */
-  _endToolFailure() {
+  /**
+   * @private Shared tail for a failed/aborted non-net tool attempt (magnet / gripper / pad). Under REEL_HOME the failure
+   * goes through `_finishFailedCatch` (reeled home within FAIL_REEL.AUTO_REEL_MAX_M of her strut, else held near the piece
+   * for a retry); with the flag off (or no tether) it is the old FEEP flight home.
+   * @param {string} [cause] the cause, one sentence ending in a full stop; with it, `_finishFailedCatch` says the line
+   * @param {object|null} [legacy] the whole comms message (REEL_HOME off); null/undefined = say nothing
+   */
+  _endToolFailure(cause, legacy) {
+    const piece = this._stationKeepTarget || this.target;
+    this._finishFailedCatch({ cause: cause || '', legacy, holdTarget: piece });
+  }
+
+  // ============================================================================
+  // FAILED CATCH (fail-reel, owner 2026-10-21): the reel winds her home
+  // ============================================================================
+
+  /**
+   * @private How far she is from her strut tip (metres), or null when no mother position has been seen yet (a bare test
+   * rig). Uses this frame's mother position (`_frameParentPos`) and the strut offset (`dockOffset`, kept live by the
+   * mother) in the mother's orientation of her last out-frame (`_frameParentQuat`, set in `_updateTether`; before the
+   * first one, the docked cache `_lastParentQuat`).
+   */
+  _strutTipDistM() {
+    const pp = this._frameParentPos || this._prevParentPos;
+    if (!pp) return null;
+    const tip = this._resolveStrutDockWorld(pp, this._frameParentQuat || this._lastParentQuat, _failTip);
+    return this.position.distanceTo(tip) / M;
+  }
+
+  /**
+   * @private Seconds her strut reel needs to wind her home from `distM` metres out, empty-handed. Not a guess: the real speed
+   * rule (`_rhReelStep` under the reel-gas profile, `_computeReelProfileSpeed` otherwise) stepped over the distance; the
+   * state the rule keeps (speed, gas bottle, readouts) is saved and put back, so nothing of her changes. The tail-first
+   * turn and the 2 m line-up hold are not in it (they depend on the mother), so it reads "about".
+   * @param {number} distM
+   * @returns {number} seconds (Infinity if the sim does not arrive within 10 000 s)
+   */
+  _reelHomeEtaS(distM) {
+    if (!(distM > 0)) return 0;
+    const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+    if (!Constants.isFeatureEnabled('REEL_PROFILE_V2')) {
+      return distM / (REEL_IN_SPEED_EMPTY || 1);
+    }
+    const keep = [this._rhReelV, this.coldGasKg, this._rhBraking, this._rhReelPhase, this._rhTensionN,
+      this._rhReelMassKg, this._rhGasChecked];
+    this._rhReelV = 0;
+    this._rhGasChecked = true;                    // the "no gas" line belongs to the real reel
+    const dt = 0.05;
+    let left = distM, t = 0;
+    for (let i = 0; i < 200000 && left > 1e-6; i++) {
+      const v = this._rhReelStep(dt, left, Infinity, armMass, false, 1);
+      left -= Math.min(left, v * dt);
+      t += dt;
+    }
+    [this._rhReelV, this.coldGasKg, this._rhBraking, this._rhReelPhase, this._rhTensionN,
+      this._rhReelMassKg, this._rhGasChecked] = keep;
+    return left > 1e-6 ? Infinity : t;
+  }
+
+  /** @private She leaves whatever she was doing and is wound home on her strut line (REELING), nothing held. */
+  _reelHomeAfterFailure() {
     if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
     this._stationKeepTarget = null;
     this.target = null;
     this._captureToolKind = 'NET';
-    this._transitionTo(S.RETURNING);  // _transitionTo releases the CA lock on exit
+    this._thetaRate = 0;
+    this._phiRate = 0;
+    this._radiusRate = 0;
+    this._skPolarAxis = null;
+    this._skEquator0 = null;
+    this._skRightVec = null;
+    this._skPitch0 = 0;
+    this._skIdleS = 0;
+    if (this.state !== S.REELING) this._transitionTo(S.REELING);
+  }
+
+  /**
+   * @private She holds near the piece for a retry (STATION_KEEP on `piece`). Eases from where she is now to the usual
+   * standoff (as on arrival), with a fresh orbit frame, so nothing snaps.
+   */
+  _holdForRetry(piece) {
+    const SKC = Constants.STATION_KEEP;
+    if (this._stationKeepTarget && this._stationKeepTarget !== piece) this._stationKeepTarget._isStationKeepTarget = false;
+    this._stationKeepTarget = piece;
+    this.target = piece;
+    piece._isStationKeepTarget = true;
+    this._captureToolKind = 'NET';
+    const standoff = Math.max(SKC.DEFAULT_STANDOFF,
+      Math.min(SKC.MAX_STANDOFF, (piece.sizeMeter || 1) * SKC.DEFAULT_STANDOFF_MULT));
+    const tp = piece._scenePosition;
+    const nowM = tp ? this.position.distanceTo(tp) / M : standoff;
+    this._standoffR = nowM;
+    this._standoffTargetR = standoff;
+    this._standoffSettling = true;
+    this._thetaRate = 0;
+    this._phiRate = 0;
+    this._radiusRate = 0;
+    this._orbitTheta = 0;
+    this._orbitPhi = 0;
+    this._skPolarAxis = null;      // re-framed from here by the SK update
+    this._skEquator0 = null;
+    this._skRightVec = null;
+    this._skPitch0 = 0;
+    this._skIdleS = 0;
+    this._transitionTo(S.STATION_KEEP);
+  }
+
+  /**
+   * @private The ONE end of a failed catch (pad bounce / timeout / no grip, magnet, gripper, a net miss, a net that slips
+   * or rips, the target lost mid-net). Owner 2026-10-21: "reel her home"; "auto reel-in on failure for close debris. over
+   * 500 meters, consider retry versus reel-in time".
+   *   REEL_HOME off or no tether (detached): the old way, her line `legacy` and her FEEP flight home (RETURNING) or, with
+   *     `legacyHold`, the hold she was already in (a net miss).
+   *   Within FAIL_REEL.AUTO_REEL_MAX_M of her strut tip (or the distance unknown): she is wound home on her strut line.
+   *   Farther out with a live piece to retry on: she holds near it, and the line gives the distance and the reel-in time.
+   *   Farther out with no piece (lost): wound home, the time in the line.
+   * @param {object} o
+   * @param {string} o.cause one sentence ending in a full stop: "Pad bounced: contact too fast."
+   * @param {object|null} [o.legacy] the whole old comms message; null = say nothing (REEL_HOME off)
+   * @param {object|null} [o.holdTarget] the piece she may hold near; null/dead/captured = none
+   * @param {boolean} [o.legacyHold] REEL_HOME off: she stays in STATION_KEEP (net miss) instead of RETURNING
+   * @returns {'reel'|'hold'|'return'|'legacy-hold'}
+   */
+  _finishFailedCatch({ cause, legacy = null, holdTarget = null, legacyHold = false }) {
+    const nc = this._netCommittedTarget;
+    if (nc) nc._committedNetArmId = null;
+    this._netCommittedTarget = null;
+    const say = (text) => eventBus.emit(Events.COMMS_MESSAGE, {
+      source: this.displayName, text: `${this.displayName}: ${text}`, channel: 'CMD', priority: 'warning',
+    });
+    if (!this._rhOn()) {
+      if (legacy) eventBus.emit(Events.COMMS_MESSAGE, legacy);
+      this._captureToolKind = 'NET';
+      if (legacyHold) { this._transitionTo(S.STATION_KEEP); return 'legacy-hold'; }
+      if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
+      this._stationKeepTarget = null;
+      this.target = null;
+      this._transitionTo(S.RETURNING);  // _transitionTo releases the CA lock on exit
+      return 'return';
+    }
+    const piece = (holdTarget && holdTarget.alive !== false && !holdTarget._captured) ? holdTarget : null;
+    const distM = this._strutTipDistM();
+    const far = distM != null && distM > ((Constants.FAIL_REEL && Constants.FAIL_REEL.AUTO_REEL_MAX_M) ?? 500);
+    const etaS = far ? Math.round(this._reelHomeEtaS(distM)) : 0;
+    const etaTxt = Number.isFinite(etaS) ? `about ${etaS} s` : 'a long haul';
+    const lead = cause ? `${cause} ` : '';
+    // Review F2: a hold is for a retry; with no net left in a net daughter's magazine there is none, so reel whatever the range.
+    const noRetry = Constants.isFeatureEnabled('CAPTURE_NET') && (this._netInventory ?? 0) <= 0
+      && (!this.selectedTool || this.selectedTool === 'NET');
+    if (far && piece && !noRetry) {
+      // Review F3: "Press X" is what GestureHints.chipPhrase turns into a touch button (DECISIONS §32).
+      say(`${lead}${Math.round(distM)} m out: holding for a retry. Press N to retry, Press R to reel her home (${etaTxt}).`);
+      this._holdForRetry(piece);
+      return 'hold';
+    }
+    say(far
+      ? `${lead}${Math.round(distM)} m out. Reeling her home, ${etaTxt}; Press D to relaunch.`
+      : `${lead}Reeling her home; Press D to relaunch.`);
+    this._reelHomeAfterFailure();
+    return 'reel';
   }
 
   // ============================================================================
@@ -5316,13 +5494,18 @@ export class ArmUnit {
       eventBus.emit(Events.GRIPPER_SLIPPED, { armId: this.id, targetId: target.id, reason });
       eventBus.emit(Events.GRIPPER_RELEASED, { armId: this.id, targetId: target.id });
     }
+    const cause = reason === 'oversize'
+      ? 'Gripper failed: target beyond the jaw mass limit.'
+      : reason === 'no_fixture'
+        ? 'Gripper found no fixture to grab (the net may suit this target).'
+        : 'Gripper slipped off the fixture.';
     const msg = reason === 'oversize'
       ? `${this.displayName}: Gripper failed. Target beyond jaw mass limit. Returning to reload.`
       : reason === 'no_fixture'
         ? `${this.displayName}: Gripper found no fixture to grab. Returning; the net may suit this target.`
         : `${this.displayName}: Gripper slipped off the fixture. Returning to reload.`;
-    eventBus.emit(Events.COMMS_MESSAGE, { source: this.displayName, text: msg, channel: 'CMD', priority: 'warning' });
-    this._endToolFailure();
+    this._endToolFailure(cause,
+      { source: this.displayName, text: msg, channel: 'CMD', priority: 'warning' });
   }
 
   // ============================================================================
@@ -5480,6 +5663,13 @@ export class ArmUnit {
       eventBus.emit(Events.PAD_BOUNCED, { armId: this.id, targetId: target.id, reason });
       eventBus.emit(Events.PAD_RELEASED, { armId: this.id, targetId: target.id });
     }
+    const cause = reason === 'too_fast'
+      ? 'Pad bounced: contact too fast.'
+      : reason === 'timeout'
+        ? 'Pad could not reach it.'
+        : reason === 'no_mode'
+          ? 'Pad found no adhesion mode for this surface.'
+          : 'Pad failed to adhere.';
     const msg = reason === 'too_fast'
       ? `${this.displayName}: Pad bounced: contact too fast. Returning.`
       : reason === 'timeout'
@@ -5487,8 +5677,8 @@ export class ArmUnit {
       : reason === 'no_mode'
         ? `${this.displayName}: Pad found no adhesion mode for this surface. Returning to reload.`
         : `${this.displayName}: Pad failed to adhere. Returning to reload.`;
-    eventBus.emit(Events.COMMS_MESSAGE, { source: this.displayName, text: msg, channel: 'CMD', priority: 'warning' });
-    this._endToolFailure();
+    this._endToolFailure(cause,
+      { source: this.displayName, text: msg, channel: 'CMD', priority: 'warning' });
   }
 
   /** NETTING: net deployment + capture attempt (3s) */
@@ -5742,23 +5932,20 @@ export class ArmUnit {
         armId: this.id, targetId: this.target?.id,
       });
       if (!committedAlive) {
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.displayName}: Target lost during net flight. Returning empty.`,
-          priority: 'warning',
+        // fail-reel: under REEL_HOME she is wound home on her strut line (no piece left to hold near); else RETURNING.
+        this._finishFailedCatch({
+          cause: 'Target lost during net flight.',
+          legacy: { text: `${this.displayName}: Target lost during net flight. Returning empty.`, priority: 'warning' },
         });
-        if (this._netCommittedTarget) this._netCommittedTarget._committedNetArmId = null;
-        this._netCommittedTarget = null;
-        if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
-        this._stationKeepTarget = null;
-        this._transitionTo(S.RETURNING);
       } else {
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.displayName}: Netting failed. Holding standoff. Press N to retry.`,
-          priority: 'warning',
+        // fail-reel: REEL_HOME - within FAIL_REEL.AUTO_REEL_MAX_M she is wound home, farther out she holds for a retry
+        // with the reel-in time in the line. Legacy: fall back to SK (not APPROACH) — arm stays at standoff; pilot
+        // retries with N. APPROACH causes "screen-races-to-debris" effect at orbital speed.
+        this._finishFailedCatch({
+          cause: 'Netting failed.',
+          legacy: { text: `${this.displayName}: Netting failed. Holding standoff. Press N to retry.`, priority: 'warning' },
+          holdTarget: this._netCommittedTarget, legacyHold: true,
         });
-        // Fall back to SK (not APPROACH) — arm stays at standoff; pilot retries with F.
-        // APPROACH causes "screen-races-to-debris" effect at orbital speed.
-        this._transitionTo(S.STATION_KEEP);
       }
     } else if (netState === CN_STATES.STOWED) {
       // Net returned stowed (either success cargo-stored or miss-returned)
@@ -5782,18 +5969,16 @@ export class ArmUnit {
         // Issue-B GUARD (STOWED miss path): same target-alive check.
         const committedAliveStowed = this._netCommittedTarget && this._netCommittedTarget.alive !== false;
         if (!committedAliveStowed) {
-          eventBus.emit(Events.COMMS_MESSAGE, {
-            text: `${this.displayName}: Target lost during net flight. Returning empty.`,
-            priority: 'warning',
+          this._finishFailedCatch({
+            cause: 'Target lost during net flight.',
+            legacy: { text: `${this.displayName}: Target lost during net flight. Returning empty.`, priority: 'warning' },
           });
-          if (this._netCommittedTarget) this._netCommittedTarget._committedNetArmId = null;
-          this._netCommittedTarget = null;
-          if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
-          this._stationKeepTarget = null;
-          this._transitionTo(S.RETURNING);
         } else {
-          // Miss STOWED: also stay in SK so pilot can retry without re-approaching.
-          this._transitionTo(S.STATION_KEEP);
+          // Miss STOWED: legacy stays in SK so pilot can retry without re-approaching; REEL_HOME: reeled home within
+          // FAIL_REEL.AUTO_REEL_MAX_M, held for a retry beyond it (fail-reel). It said nothing before: now one line.
+          this._finishFailedCatch({
+            cause: 'Netting failed.', holdTarget: this._netCommittedTarget, legacyHold: true,
+          });
         }
       }
     }
@@ -7406,11 +7591,15 @@ export class ArmUnit {
       // Phase 0.4 (capture-feedback overhaul): name the CAUSE so the slip is
       // legible — the catch was deep in the 80-100% strain band, not bad luck.
       : `Net failed. Debris slipped free and is drifting (catch was ${Math.round(strain * 100)}% of the net's rated mass. Slips become likely above ${Math.round((Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8) * 100)}%). Returning to reload; re-net to retry.`;
-    eventBus.emit(Events.COMMS_MESSAGE, { text: `${this.displayName}: ${reason}`, priority: 'warning' });
-    if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
-    this._stationKeepTarget = null;
-    this.target = null;
-    this._transitionTo(S.RETURNING);
+    // fail-reel: REEL_HOME keeps the cause and says the outcome itself (reeled home / held for a retry)
+    const cause = oversized
+      ? `Net failed: debris too wide for the net (${debrisSize.toFixed(1)}m vs ${netDia.toFixed(1)}m mouth; a larger net is needed).`
+      : `Net failed: debris slipped free and is drifting (catch was ${Math.round(strain * 100)}% of the net's rated mass; slips become likely above ${Math.round((Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8) * 100)}%).`;
+    this._finishFailedCatch({
+      cause,
+      legacy: { text: `${this.displayName}: ${reason}`, priority: 'warning' },
+      holdTarget: debris,
+    });
     return true;
   }
 
@@ -7438,15 +7627,16 @@ export class ArmUnit {
       armId: this.id, armIndex: this.index,
       debrisId: debris.id, strain,
     });
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.displayName}: Net RIPPED under boost reel (catch was ${Math.round(strain * 100)}% of rated mass). `
+    this._finishFailedCatch({
+      cause: `Net RIPPED under boost reel (catch was ${Math.round(strain * 100)}% of rated mass). `
         + 'Debris drifting free. Nominal reel speed is safe; boost prices heavy catches.',
-      priority: 'warning',
+      legacy: {
+        text: `${this.displayName}: Net RIPPED under boost reel (catch was ${Math.round(strain * 100)}% of rated mass). `
+          + 'Debris drifting free. Nominal reel speed is safe; boost prices heavy catches.',
+        priority: 'warning',
+      },
+      holdTarget: debris,
     });
-    if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
-    this._stationKeepTarget = null;
-    this.target = null;
-    this._transitionTo(S.RETURNING);
   }
 
   /**
@@ -9161,6 +9351,11 @@ export class ArmUnit {
    * @param {number} [dt] — frame delta (seconds) for REELING dash-flow animation
    */
   _updateTether(parentPos, parentQuat, dt) {
+    // fail-reel: remember the mother's orientation of the last frame she was out (the 500 m rule measures to the live
+    // strut tip, `_strutTipDistM`); one persistent quaternion, no allocation after the first frame.
+    if (parentQuat) {
+      (this._frameParentQuat || (this._frameParentQuat = new THREE.Quaternion())).copy(parentQuat);
+    }
     // States where the daughter is AT (or arriving at) her strut-tip dock —
     // no tether should render. REELING/RETURNING already snap her to the strut
     // tip before entering DOCKING (Issue 1/8 fixes), so by DOCKING the cable

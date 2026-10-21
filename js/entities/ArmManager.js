@@ -1186,8 +1186,8 @@ export class ArmManager {
 
   /**
    * Recall every *deployed* daughter (Shift+R). Unlike recallAll(), this skips
-   * arms that are already resting / homing / spent (DOCKED, EXPENDED, RETURNING,
-   * DOCKING) or parked with a catch (HOLDING_CATCH — recall refuses her, so
+   * arms that are already resting / homing / spent (DOCKED, EXPENDED, DOCKING;
+   * a detached RETURNING daughter has no line) or parked with a catch (HOLDING_CATCH — recall refuses her, so
    * commanding her would eat the hold; see ArmUnit.recall) and returns the
    * number actually commanded home, so the caller can
    * give honest feedback ("Reeling in all daughters (N)" vs "nothing to reel")
@@ -1202,15 +1202,16 @@ export class ArmManager {
       if (!arm) continue;
       if (arm.state === S.DOCKED) continue;
       if (arm.state === S.EXPENDED) continue;
-      if (arm.state === S.RETURNING) continue;
+      // fail-reel: a tethered RETURNING daughter (limping home on her FEEP) is on her line: R winds her in (recall() -> REELING)
+      if (arm.state === S.RETURNING && arm.isDetached) continue;
       if (arm.state === S.DOCKING) continue;
       if (arm.state === S.HOLDING_CATCH) continue; // parked with cargo — recall refuses her
       if (_CARRY_STATES.has(arm.state)) continue;  // carrying a catch to a furnace — it ends at her dock
       if (typeof arm.recall === 'function') {
         // Zero-fuel reel on the mothership tether motor: stuck / fuel-depleted
         // tethered daughters always come home (never abandoned as EXPENDED).
-        arm.recall();
-        count++;
+        // fail-reel review F4: count only real recalls (recall() === true); 'already' (reeling) and refusals are not recalls
+        if (arm.recall() === true) count++;
       }
     }
     return count;
@@ -1241,9 +1242,10 @@ export class ArmManager {
    *     closest scan; selection alone must never short-circuit eligibility.
    *   • Otherwise iterates this.arms.
    *   • Selects arms in any non-resting state (i.e. NOT DOCKED, EXPENDED,
-   *     RETURNING, DOCKING, HOLDING_CATCH — those are already on their way
-   *     home, unable to be recalled, or parked with a catch recall must not
-   *     destroy).
+   *     DOCKING, HOLDING_CATCH, a detached RETURNING one — those are already
+   *     docking, unable to be recalled, or parked with a catch recall must not
+   *     destroy). A tethered RETURNING daughter IS eligible (fail-reel: R winds
+   *     her in on the strut reel).
    *   • Picks the candidate with the smallest world-space distance from
    *     the mother. When `motherPos`/`arm.position` is unresolvable the scan
    *     silently keeps `eligible[0]` — acceptable fallback.
@@ -1261,7 +1263,7 @@ export class ArmManager {
     const isRecallable = (a) => a
       && a.state !== S.DOCKED
       && a.state !== S.EXPENDED
-      && a.state !== S.RETURNING
+      && !(a.state === S.RETURNING && a.isDetached)   // fail-reel: tethered RETURNING is recallable (R winds her in)
       && a.state !== S.DOCKING
       && a.state !== S.HOLDING_CATCH // parked with cargo — recall refuses her
       && !_CARRY_STATES.has(a.state);  // carrying a catch to a furnace — it ends at her dock

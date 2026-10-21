@@ -817,9 +817,10 @@ export class CommsSystem {
     });
 
     // Net-integrity failure (recoverable): the net lost its grip on a heavy
-    // catch. The daughter is fine and returning to reload; the debris is loose.
+    // catch. The daughter is fine; the debris is loose. Where she goes next (reeled home / held for a retry)
+    // is her own line's job (ArmUnit._finishFailedCatch, fail-reel).
     eventBus.on(Events.NET_FAILED, (data) => {
-      this.addMessage('WARNING', daughterDisplayName(data?.armId) || 'SYSTEM', 'NET FAILED. Debris slipped the net and is drifting. Daughter returning to reload; re-net to retry.', { channel: 'ALERT' });
+      this.addMessage('WARNING', daughterDisplayName(data?.armId) || 'SYSTEM', 'NET FAILED. Debris slipped the net and is drifting.', { channel: 'ALERT' });
     });
 
     // UX-11 #1: net MISS reasons → actionable plain text. A miss is fully

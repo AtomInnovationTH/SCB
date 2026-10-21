@@ -936,7 +936,9 @@ export class InputManager {
                   source: 'SPACECRAFT', channel: 'CMD',
                   text: n > 0
                     ? `Reeling in all daughters (${n}).`
-                    : 'No deployed daughters to reel in.',
+                    : (am && Array.isArray(am.arms) && am.arms.some((a) => a && a.state === Constants.ARM_STATES.REELING)
+                      ? 'Every daughter that is out is already reeling home.'   // fail-reel F4: a reel in progress is not "none out"
+                      : 'No deployed daughters to reel in.'),
                   priority: 'info',
                 });
               }
@@ -958,8 +960,17 @@ export class InputManager {
             if (pilotArmR && typeof pilotArmR.recall === 'function'
                 && pilotArmR.state !== Constants.ARM_STATES.DOCKED
                 && pilotArmR.state !== Constants.ARM_STATES.EXPENDED) {
-              pilotArmR.recall();
+              const res = pilotArmR.recall();
               d.audioSystem?.playClick();
+              // fail-reel: R is never silent. recall() says why itself when it refuses (holding a catch, carrying,
+              // detached); the one case it stays quiet is "already on her line" - say so here.
+              if (res === 'already') {
+                eventBus.emit(Events.COMMS_MESSAGE, {
+                  source: 'SPACECRAFT', channel: 'CMD',
+                  text: `${pilotArmR.displayName || 'Daughter'} is already reeling home.`,
+                  priority: 'info',
+                });
+              }
             } else {
               d.audioSystem?.playClick();
               eventBus.emit(Events.COMMS_MESSAGE, {
