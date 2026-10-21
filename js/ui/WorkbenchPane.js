@@ -319,7 +319,7 @@ export class WorkbenchPane {
 
   /**
    * The pane's laid-out width in CSS px (its box, border-box: the
-   * clamp(380px, 28vw, 440px) of 01-numbers) — 0 headless or before the root
+   * clamp(380px, 28vw, 440px) of 01-numbers, times the HUD scale on a big screen) — 0 headless or before the root
    * is built, never NaN. The number main.js hands to
    * `CameraSystem.setLadderPaneInset` (signed by `isLeft()`: +w left, -w
    * right) and `motherCallouts.setPaneInsets` (the side's slot gets w, the
@@ -328,7 +328,17 @@ export class WorkbenchPane {
    * @returns {number}
    */
   widthPx() {
-    const w = this._root ? this._root.offsetWidth : 0;
+    const root = this._root;
+    if (!root) return 0;
+    // u12-drawer-text D1b: the DRAWN width. offsetWidth ignores a CSS scale on the box, getBoundingClientRect() does
+    // not (the slide translate never changes a width). Today the scaled screens widen the root itself to the drawn
+    // body width (index.html), so both agree; reading the drawn box keeps the camera inset and the callout insets
+    // right if the scale ever moves onto the root. Fake / headless roots without a rect fall back to offsetWidth.
+    let w = NaN;
+    if (typeof root.getBoundingClientRect === 'function') {
+      try { const r = root.getBoundingClientRect(); w = r ? r.width : NaN; } catch (_e) { w = NaN; }
+    }
+    if (!(Number.isFinite(w) && w > 0)) w = root.offsetWidth;
     return (Number.isFinite(w) && w > 0) ? w : 0;
   }
 

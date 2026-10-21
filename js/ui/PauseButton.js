@@ -9,6 +9,8 @@
  *   tests build it directly). Not on the Mac.
  * - Shown during play only: hidden on the menu, briefing, shop and game over (not `isPlaying()`), and while the pause
  *   overlay shows (its own RESUME button and MAIN MENU take over).
+ * - Also hidden while the SPECS drawer is open (`deps.isDrawerOpen`): on the iPad the drawer (x 0-478) would run under
+ *   the button (x 448-492). The owner of the drawer edge calls `refresh()` when it opens or closes.
  * - A tap pauses. It must not start a view drag or open the radial: the pointer / touch / mouse down events stop at
  *   the button (the canvas handlers never see them), and the button sits outside the canvas.
  *
@@ -30,6 +32,7 @@ export class PauseButton {
    * @param {object}   [deps.events]     the Events table
    * @param {function(): boolean} deps.isPlaying   gameplay state (not menu / briefing / shop / game over)
    * @param {function(): boolean} deps.isPaused
+   * @param {function(): boolean} [deps.isDrawerOpen]  true while the SPECS drawer is open (the button hides)
    * @param {function(): *} deps.togglePause       InputManager.togglePause (bound)
    */
   constructor(deps = {}) {
@@ -55,7 +58,7 @@ export class PauseButton {
     this._stop = (e) => { if (e && typeof e.stopPropagation === 'function') e.stopPropagation(); };
     this._onClick = (e) => {
       this._stop(e);
-      if (this._disposed) return;
+      if (this._disposed || !this.isShown()) return;
       try { btn.blur(); } catch (_e) { /* stub */ }
       if (typeof deps.togglePause === 'function') {
         try { deps.togglePause(); } catch (_e) { /* dep */ }
@@ -96,7 +99,8 @@ export class PauseButton {
     const playing = typeof d.isPlaying === 'function' ? !!d.isPlaying() : false;
     const paused = force && typeof force.paused === 'boolean' ? force.paused
       : (typeof d.isPaused === 'function' ? !!d.isPaused() : false);
-    const show = playing && !paused;
+    const drawer = typeof d.isDrawerOpen === 'function' ? !!d.isDrawerOpen() : false;
+    const show = playing && !paused && !drawer;
     if (show === !btn.hasAttribute('hidden')) return show;
     if (show) btn.removeAttribute('hidden'); else btn.setAttribute('hidden', '');
     return show;

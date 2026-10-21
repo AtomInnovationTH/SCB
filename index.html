@@ -709,11 +709,37 @@
     #hud-hint-ticker, #notification-zone, #hud-warnings-panel, #hud-stabilize-warning, #hud-f1-bar {
       scale: var(--hud-scale); transform-origin: 0 100%;
     }
-    /* The floor-1 bar keeps clear of the open drawer + its SPECS tab by an offset from the bar CENTRE (OverridePane,
-       pinned by test-F1Bar: drawer + 72 px gap + half the 400 px bar). Drawn 1.25 x the bar's half width and the
-       tab (59-60 px) grow, so the bar moves right by 0.25 x (60 + 200) = 65 px. `translate` is applied outside `scale`,
-       so these are screen px. HudScale sets data-hud-scale on <html> only while the scale is above 1. */
-    html[data-hud-scale] #hud-f1-bar.f1b-drawer { translate: 65px 0; }
+    /* The floor-1 bar keeps clear of the open drawer + its SPECS tab (u12-drawer-text, D2). OverridePane's own rule
+       (pinned by test-F1Bar) is `left: max(50%, clamp(380px, 28vw, 440px) + 72px + 200px)`: the bar centre is at
+       least the UNSCALED drawer + SPECS tab (60) + a 12 px gap + half the bar (200) from the left edge, and 50 %
+       wins wherever that already clears. Drawn 1.25 x, the drawer, the tab and the bar's half width grow with
+       the scale (the 12 px gap does not), so on a scaled screen the same max() is rewritten with the scale
+       inside: the bar sits at 50 % while that clears the drawer and moves right only when it would not. This
+       replaces u9's flat `translate: 65px` (it also shifted a bar that was already clear). The selector is
+       the only thing that scopes it: the attribute is on <html> only while --hud-scale is a number, so the
+       calc() below is never evaluated against `none`. */
+    html[data-hud-scale] #hud-f1-bar.f1b-drawer {
+      left: max(50%, calc((clamp(380px, 28vw, 440px) + 260px) * var(--hud-scale) + 12px));
+    }
+    /* The SPECS drawer body (u12-drawer-text, D1). The drawer ROOT #ladder-workbench stays unscaled: the SPECS tab
+       #ladder-workbench-tab is its child (WorkbenchPane) and already scales on its own (the list below), so
+       scaling the root would draw the tab 1.56 x. The root is made as wide as the scaled body is drawn
+       (so the tab, placed at the root's right edge, and widthPx() both follow), and the BODY, the panel with
+       all the text, scales from its top-left corner. Its layout box is 1 / scale of the root's width and
+       height, so the drawn panel exactly fills the root (top 56 px, bottom 16 / 96 px, as before) and its own
+       overflow scroll still works. The inline styles WorkbenchPane writes (width, height:100%, max-height)
+       lose to the !important lines; off floor 1 the body keeps `height:auto` and shrink-wraps under the cap.
+       The ESC x close button is also a root child, so it scales from the root's top-right corner. */
+    html[data-hud-scale] #ladder-workbench { width: calc(clamp(380px, 28vw, 440px) * var(--hud-scale)) !important; }
+    html[data-hud-scale] #ladder-workbench .workbench-body {
+      scale: var(--hud-scale); transform-origin: 0 0;
+      width: calc(100% / var(--hud-scale)) !important;
+      max-height: calc(100% / var(--hud-scale)) !important;
+    }
+    html[data-hud-scale] #ladder-workbench #workbench-close-btn { scale: var(--hud-scale); transform-origin: 100% 0; }
+    /* The LOCKED chips are written as 0.7 em / 0.75 em of the body text (7.6 / 8.2 px, 9.5 / 10.2 drawn): the one
+       drawer text left under 11 px on screen once the body scales. 11.2 px drawn (a little over 11 for rounding) = 11.2 / scale in the body's own px. */
+    html[data-hud-scale] #ladder-workbench .library-lock { font-size: calc(11.2px / var(--hud-scale)) !important; }
     /* bottom-left anchored: the floor-3/4 text panes and the SPECS tab (the tab's own box, not its drawer) */
     #ladder-prox-context, #ladder-transfer-windows, #ladder-workbench-tab {
       scale: var(--hud-scale); transform-origin: 0 100%;
