@@ -18,6 +18,7 @@ import { TargetPanel } from './hud/TargetPanel.js';
 import { shortScreenNow } from './hud/PhoneFold.js';
 import { CommsPanel } from './hud/CommsPanel.js';
 import { HintTicker } from './hud/HintTicker.js';
+import { GestureHints } from './hud/GestureHints.js';
 import { NetInventoryPanel } from './hud/NetInventoryPanel.js';
 import { PaneDensity, compositeRung } from './hud/PaneDensity.js';
 import { PaneHelp } from './hud/PaneHelp.js';
@@ -3283,12 +3284,34 @@ export class HUD {
     if (!this._armPilotStrip) return;
 
     const isStationKeep = arm && arm.state === Constants.ARM_STATES.STATION_KEEP;
+    // u15b fix 4: glass is read when the strip is drawn (D7), and the glass strip lists only the controls that exist right
+    // now (a chip on screen), so the cached mode carries them: a glass flip or a chip coming and going redraws the strip.
+    // Desktop keeps the bare 'sk' / 'pilot' keys and its HTML byte for byte.
+    const glass = GestureHints.isGlass();
+    const chip = glass ? this._glassStripChips() : null;
+    const base = isStationKeep ? 'sk' : 'pilot';
+    const mode = glass ? `${base}:glass:${chip.net}:${chip.reel}` : base;
     // Avoid redundant DOM writes — track which variant is showing
-    if (isStationKeep && this._armStripMode === 'sk') return;
-    if (!isStationKeep && this._armStripMode === 'pilot') return;
+    if (this._armStripMode === mode) return;
+    this._armStripMode = mode;
+
+    if (glass) {
+      // Touch controls that really exist in that state (InputManager ~:1952 / ~:2142-2166, TouchActionChip):
+      // the turn pad steers her only while she holds station; tapping her DAUGHTERS row again hands her back; the net
+      // button and REEL are named only while their chip is up; no +/- distance control exists on glass.
+      const sep = '<span class="apc-sep">│</span>';
+      const key = (w) => `<span class="apc-key">${w}</span>`;
+      const parts = isStationKeep
+        ? ['<span class="apc-badge">🛰️ STATION KEEP</span>', `${key('TURN PAD')} Orbit`]
+        : ['<span class="apc-badge">🤖 DAUGHTER PILOT</span>'];
+      if (chip.net) parts.push(`${key(chip.net)} ${isStationKeep ? 'Capture' : 'Deploy Net'}`);
+      if (chip.reel) parts.push(`${key('REEL')} Recall`);
+      parts.push('Tap her row in DAUGHTERS again to exit');
+      this._armPilotStrip.innerHTML = parts.join(sep);
+      return;
+    }
 
     if (isStationKeep) {
-      this._armStripMode = 'sk';
       // Hotkey cleanup 2026-06-13: capture verb is N (was F); Shift = fine
       // folded onto the Orbit hint.
       this._armPilotStrip.innerHTML =
@@ -3302,7 +3325,6 @@ export class HUD {
         '<span class="apc-sep">│</span>' +
         '<span class="apc-key">ESC</span> Recall';
     } else {
-      this._armStripMode = 'pilot';
       // Hotkey revamp 2026-06-14: WASD/Q-E daughter thrust was removed — the
       // daughter flies autonomously to her target. The only pilot-mode actions
       // are deploy-net (N), recall (R), and exit (ESC).
@@ -3315,6 +3337,17 @@ export class HUD {
         '<span class="apc-sep">│</span>' +
         '<span class="apc-key">ESC</span> Exit';
     }
+  }
+
+  /**
+   * @private u15b fix 4: which touch chips are on screen right now, for the glass pilot strip: the net button
+   * ('LAUNCH NET' or 'STICK PAD', else '') and whether REEL is up. Read from the ticker's step buttons (TouchActionChip posts them).
+   * @returns {{net:string, reel:boolean}}
+   */
+  _glassStripChips() {
+    const t = this.hintTicker;
+    const has = (label) => !!(t && typeof t.hasStepButton === 'function' && t.hasStepButton(label));
+    return { net: has('LAUNCH NET') ? 'LAUNCH NET' : has('STICK PAD') ? 'STICK PAD' : '', reel: has('REEL') };
   }
 
   /** @private Show the ARM PILOT controls strip with fade-in. */

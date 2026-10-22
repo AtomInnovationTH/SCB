@@ -154,7 +154,9 @@ import { TouchTelemetry } from './ui/touchTelemetry.js';
 import { GestureHints } from './ui/hud/GestureHints.js';
 import { nearestWithin as tapNearestWithin, TAP_SLOP_PX, TAP_SLOP_MS } from './systems/TapPick.js';
 import { pressKey as dispatchKeyPress } from './core/KeyDispatch.js';
+import { holdKey as dispatchKeyHold, releaseKey as dispatchKeyRelease } from './core/KeyDispatch.js';   // u15a: DE-SPIN holds KeyL
 import { TouchActionChip } from './ui/TouchActionChip.js';
+import { TouchVerbButton } from './ui/TouchVerbButton.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
 import { LeashVisual } from './ui/LeashVisual.js';
@@ -646,6 +648,7 @@ let autoLockController;
  *  the OnboardingDirector contextProvider for the `range_wall` gate. */
 let _onboardingTargetOutOfRange = false;
 let touchActionChip = null;   // u11: the touch net / daughter button (glass only)
+let touchVerbButton = null;   // u15a: FLY THERE (floor 4) and DE-SPIN (floors 2-3, hold) - glass only
 /**
  * u11 R2/R4c/R6/R12: the ONE daughter that D would launch at the selected piece, and can she go. SEND DAUGHTER is
  * offered only for her (one helper feeds `hasDaughter`, the far state, the range-wall `daughterReady` flag and the
@@ -3407,8 +3410,49 @@ async function init() {
         },
         getFarState: _touchFarState,
         getReelable: _daughterReelable,   // R9
+        // u15a A-T4: the manual-capture lesson's LAUNCH NET waits for a piloted daughter in flight (N then nets by hand).
+        getPilotState: () => {
+          if (!inputManager || !inputManager.armPilotMode || !cameraSystem || !cameraSystem.getPilotedArm) return null;
+          const a = cameraSystem.getPilotedArm();
+          return a ? a.state : null;
+        },
       });
     }
+    // u15a A-T1 / A-T3: FLY THERE (floor 4) and DE-SPIN (hold, floors 2-3). Both press keys through KeyDispatch, so the
+    // ladder's Space verb and the held-L laser read are the keyboard's own paths. Parent is <body>: #hud-overlay is a
+    // z-10 stacking context under the world labels.
+    touchVerbButton = new TouchVerbButton({
+      doc: document,
+      parent: document.body,
+      bus: eventBus,
+      events: Events,
+      getFloor: () => ((ladderController && ladderController.isActive && ladderController.isActive() && ladderController.currentFloor)
+        ? ladderController.currentFloor() : null),
+      isRiding: () => !!(ladderController && ladderController.isRiding && ladderController.isRiding()),
+      getFocusedCluster: () => (navcomFloor && navcomFloor.getFocusedCluster ? navcomFloor.getFocusedCluster() : null),
+      // Space / KeyL are swallowed or ignored in exactly these cases (InputManager: the codex, help and old-map intercepts,
+      // the launch / net ceremony Space-skips, processInput's overlayOpen); a paused or non-gameplay game acts on neither.
+      isInputBlocked: () => !gameState.isGameplay() || !!(gameFlowManager && gameFlowManager.paused)
+        || !!(codexViewerUI && codexViewerUI.isVisible && codexViewerUI.isVisible())
+        || !!(hotkeyOverlay && hotkeyOverlay.isVisible && hotkeyOverlay.isVisible())
+        || !!(debrisMap && debrisMap.isVisible && debrisMap.isVisible())
+        || !!(cameraSystem && ((cameraSystem._launchCeremony && cameraSystem._launchCeremony.active)
+          || (cameraSystem._netCeremony && cameraSystem._netCeremony.active))),
+      press: (code) => dispatchKeyPress(code),
+      hold: (code) => dispatchKeyHold(code),
+      release: (code) => dispatchKeyRelease(code),
+      // The KeyL path's own target rule (InputManager KeyL / processInput): piloting -> the daughter's station-keep target.
+      getDespinTarget: () => {
+        if (!inputManager) return null;
+        if (inputManager.armPilotMode) return inputManager._getPilotedSkDespinTarget();
+        return targetSelector ? targetSelector.getActiveTarget() : null;
+      },
+      getTargetDistanceM: (t) => {
+        const mp = player && player.getPosition ? player.getPosition() : null;
+        const tp = t && t._scenePosition;
+        return mp && tp ? mp.distanceTo(tp) / 0.00001 : null;   // DespinLaser: scene units per metre
+      },
+    });
     const stampEl = (typeof document !== 'undefined') ? document.getElementById('build-stamp') : null;
     const touchTelemetry = new TouchTelemetry({
       build: stampEl ? stampEl.textContent : null,

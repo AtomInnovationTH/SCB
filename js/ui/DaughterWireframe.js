@@ -19,6 +19,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus }  from '../core/EventBus.js';
 import { Events }    from '../core/Events.js';
 import { mono } from '../core/Typeface.js';
+import { GestureHints } from './hud/GestureHints.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -451,7 +452,7 @@ export class DaughterWireframe {
       ctx.font      = mono(10);
       ctx.fillStyle = DIM_COL;
       ctx.textAlign = 'center';
-      ctx.fillText('. Press 1–4 to pilot a daughter. ', WIRE_CX, WIRE_CY + 20);
+      ctx.fillText(GestureHints.isGlass() ? '. Tap her row in DAUGHTERS to fly her. ' : '. Press 1–4 to pilot a daughter. ', WIRE_CX, WIRE_CY + 20);   // u15b: glass read at draw time (D7)
       return;
     }
 

@@ -14,6 +14,7 @@ import { settingsManager } from '../systems/SettingsManager.js';
 import { LANGUAGES } from '../core/Languages.js';
 import { FlagDecalSystem } from './FlagDecalSystem.js';
 import { MenuScene3D } from './MenuScene3D.js';
+import { GestureHints } from './hud/GestureHints.js';
 import { resolvePrimaryMenuAction, startRequiresConfirm, NEW_GAME_CONFIRM_MESSAGE } from './menuActions.js';
 import { buildUpdateCard } from './UpdateCard.js';
 import { applyUpdate } from '../core/UpdateWatch.js';
@@ -67,6 +68,9 @@ export class MenuScreen {
     // w1-first-minute D3: what the "?" button opens (set by setHelpOpener).
     this._helpOpener = null;
     this._build();
+    // u15b D7: the hub flips glass AFTER this screen is built (and the menu may already be showing), so the start hint is
+    // re-worded the moment glass turns on, as well as on every show().
+    this._offGlass = GestureHints.onGlassOn(() => this._syncStartHint());
 
     // Self-manage visibility via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
@@ -1304,6 +1308,22 @@ export class MenuScreen {
     window.location.reload();
   }
 
+  /**
+   * @private The START button's hint line. Desktop: "Press Enter or Click" / "Click to start new (confirms)". Glass
+   * (read now, D7): "Tap to start" / "Tap to start new (confirms)" - a tap on the button starts the same way.
+   * @param {boolean} [hasSave] omit to ask the save store
+   */
+  _syncStartHint(hasSave) {
+    if (!this.element) return;
+    const startHint = this.element.querySelector('#menu-start-hint');
+    if (!startHint) return;
+    const saved = (hasSave === undefined) ? persistenceManager.hasSave() : hasSave;
+    const glass = GestureHints.isGlass();
+    startHint.textContent = saved
+      ? (glass ? 'Tap to start new (confirms)' : 'Click to start new (confirms)')
+      : (glass ? 'Tap to start' : 'Press Enter or Click');
+  }
+
   show() {
     this.visible = true;
     // Clear any leftover departure state from a prior run (e.g. returning to
@@ -1323,10 +1343,7 @@ export class MenuScreen {
     // F1 save-guard: when a save exists, Enter maps to CONTINUE (the safe
     // action), so the START button's key hint must not claim Enter starts a
     // new game. Keep the copy honest with the actual key mapping.
-    const startHint = this.element.querySelector('#menu-start-hint');
-    if (startHint) {
-      startHint.textContent = hasSave ? 'Click to start new (confirms)' : 'Press Enter or Click';
-    }
+    this._syncStartHint(hasSave);
     // Session J.5: an update that arrived while the menu was hidden (or that
     // the watcher found before the first show) mounts its card now.
     if (this._update) this._mountUpdateCard();

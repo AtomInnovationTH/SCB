@@ -157,6 +157,7 @@ export class StatusPanel {
     this._container = container;
     this._armManager = null;
     this._keyDispatch = keyDispatch;
+    this._glassArg = glass;
     this._glass = resolveGlass(glass);
     // Session Q (plan D12b): the MEMO slot option + its local box clock.
     this._memoSlot = !!memoSlot;
@@ -2555,8 +2556,10 @@ export class StatusPanel {
    * launch (D) and recall (R).
    */
   _daughterHotkeys(a) {
-    const key = (k, verb) => `<span style="color:var(--hud-info, ${VisualLaw.COLORS.SELECTION});font-weight:bold;">${k}</span>`
-      + `<span style="opacity:0.8;"> ${verb}</span>`;
+    // u15b B-T7: on glass the DEPLOY / REEL IN / RECALL button IS the control - no key span beside it (read when drawn, D7).
+    const glassNow = this._glassArg !== false && (this._glass || GestureHints.isGlass());
+    const key = (k, verb) => (glassNow ? '' : `<span style="color:var(--hud-info, ${VisualLaw.COLORS.SELECTION});font-weight:bold;">${k}</span>`
+      + `<span style="opacity:0.8;"> ${verb}</span>`);
     // type=button (never submits), tabindex=-1 (Tab is a game key; the button
     // must not become the keyboard's focus target).
     // Flag-gated (review fix): flag-off, the shipped letter hint alone.

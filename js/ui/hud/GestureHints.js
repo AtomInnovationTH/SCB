@@ -76,6 +76,11 @@ const TABLE = Object.freeze({
   // w4-power D3 (2026-10-12): the two floor-1 workbench buttons the comms lines
   // name — the wings (`,`) and the radiator (O). On glass they are the F1 bar's
   // WINGS and RADIATORS buttons (pinch down to floor 1).
+  // u15b B-T2: 1-4 pick a daughter; on glass a tap on her row in the DAUGHTERS list sends the same Digit key (StatusPanel).
+  Digit1: Object.freeze({ chip: 'DAUGHTERS', phrase: 'tap her row in DAUGHTERS' }),
+  Digit2: Object.freeze({ chip: 'DAUGHTERS', phrase: 'tap her row in DAUGHTERS' }),
+  Digit3: Object.freeze({ chip: 'DAUGHTERS', phrase: 'tap her row in DAUGHTERS' }),
+  Digit4: Object.freeze({ chip: 'DAUGHTERS', phrase: 'tap her row in DAUGHTERS' }),
   Comma:  Object.freeze({ chip: 'FLOOR 1 → WINGS',      phrase: 'tap WINGS on floor 1' }),
   KeyO:   Object.freeze({ chip: 'FLOOR 1 → RADIATORS',  phrase: 'tap RADIATORS on floor 1' }),
 });
@@ -83,6 +88,7 @@ const TABLE = Object.freeze({
 /** The module switch. OFF by default — desktop never consults the table. */
 let _glass = false;
 let _chipLineListener = null;   // u11 R3: TouchActionChip hears which action keys a stored comms line named
+const _glassListeners = new Set();   // u15b D7: text built once at construction is re-applied when glass turns on
 
 // The three prose token shapes. Each captures the ONE key — a capital letter
 // or (w4-power D3) a comma; the replacer keeps the original token when the
@@ -106,6 +112,20 @@ function reEscape(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
  * @type {Readonly<Record<string,string>>}
  */
 const CHIP_LABELS = Object.freeze({ N: 'LAUNCH NET', D: 'SEND DAUGHTER', A: 'AUTOPILOT', S: 'SCAN', R: 'REEL' });
+
+const RE_KEY_HINT = /\s*[(\[][A-Z][)\]]/g;
+// A raw key glyph: one letter or digit, "1-4", "Esc", "Shift+S", "?", a bare arrow set. '!', '…', '✓', '◆' and button words are not.
+const RE_RAW_GLYPH = /^(?:[A-Za-z0-9?,.;']|[1-4]\s*[-–]\s*[1-4]|Esc|Tab|Space|Enter|Shift[^]*|Scroll|Drag|\+\/-|←↑↓→|←→↑↓|[←→↑↓]+)$/;
+/**
+ * u15b B-T5/B-T6: skill id -> the word a glass player sees where desktop shows its key. Chip skills use their chip button
+ * (CHIP_LABELS); the touch-word skills a touch word; every other skill has none. scan_wide is absent on purpose (D4: a
+ * wide scan by touch exists only as the mission-3 lesson chip).
+ */
+const SKILL_WORDS = Object.freeze({
+  scan_quick: CHIP_LABELS.S, collect_lasso: CHIP_LABELS.N, arm_pilot_capture: CHIP_LABELS.N, collect_deploy: CHIP_LABELS.D,
+  nav_autopilot: CHIP_LABELS.A, manage_codex: 'READ MORE',
+  nav_target: 'TAP', nav_zoom: 'PINCH', nav_rotate: 'DRAG', nav_arrows: 'TURN PAD', arm_pilot: 'DAUGHTERS',
+});
 const LETGO_LABEL = 'LET GO';      // u14b B1: K - the one button that lets the catch at the collar go
 const READ_LABEL = 'READ MORE';    // u14b B2: I - the full-screen library (the SPECS tab opens a different view)
 const RE_PAD_CHIP = /\b([Pp])ress N to stick the pad on\b/g;   // the daughter's pad tool: its own button
@@ -138,6 +158,81 @@ export const GLASS_REMINDER_SKILLS = Object.freeze(['scan_quick', 'collect_lasso
  */
 export const GLASS_TOUCH_WORD_SKILLS = Object.freeze(['nav_target', 'nav_zoom', 'nav_rotate', 'nav_arrows']);
 
+/**
+ * u15b (no keys on glass, D5 "words must be true"): whole-phrase rows, exact source text -> the touch wording. Applied by
+ * `speak` AND `chipPhrase` (comms, ticker, cards agree) BEFORE their token rules. Each `to` names only a control that
+ * exists on glass: FLY THERE / WIDE SCAN / DE-SPIN (u15a), the DAUGHTERS list row, the chips of CHIP_LABELS, READ MORE,
+ * LET GO, ORB, RADIATORS (floor 1). A sentence whose control has no touch form (the launch-speed dial, throttle, power
+ * bus keys) is left out instead of naming a key. test-NoKeysOnGlass.js sweeps every source through the real path, so a
+ * source edit that breaks a row's `from` text fails there.
+ * @type {ReadonlyArray<readonly [string,string]>}
+ */
+const GLASS_LINES = Object.freeze([
+  // B-T1 travel: pinch out to the map, FLY THERE (the Space verb on floor 4)
+  ['Scroll out to LEO and press Space to fly to the next cluster.', 'Pinch out to LEO, then tap FLY THERE to fly to the next cluster.'],
+  ['Zoom out to LEO. The best cluster is picked for you; click another to change it, then press Space to fly the transfer.', 'Pinch out to LEO. The best cluster is picked for you; tap another to change it, then tap FLY THERE to fly the transfer.'],
+  ['Zoom out to LEO (Esc), pick a cluster, press Space to fly to it.', 'Pinch out to LEO, pick a cluster, tap FLY THERE to fly to it.'],
+  ['At LEO pick this cluster and press Space to fly there. Then target (T), autopilot (A), and net it piece by piece', 'At LEO pick this cluster and tap FLY THERE. Then tap a piece to target it, tap AUTOPILOT, and net it piece by piece'],
+  ['At LEO pick the cluster and press Space, then clear it with Target (T) and Autopilot (A).', 'At LEO pick the cluster and tap FLY THERE, then clear it: tap a piece to target it and tap AUTOPILOT.'],
+  // B-T2 daughters: a tap on her row in DAUGHTERS sends her number
+  ['Deploy a daughter (D), then press 1-4 to pilot her directly.', 'Hold the target for DAUGHTER, then tap her row in DAUGHTERS to pilot her directly.'],
+  ['Press 1-4 while a daughter is deployed to fly her yourself.', 'Tap her row in DAUGHTERS while she is deployed to fly her yourself.'],
+  ['Press 1-4 to take manual control. A piloted capture scores 2×.', 'Tap her row in DAUGHTERS to take manual control. A piloted capture scores 2×.'],
+  ['Press N to launch the net (or 1-4 to pilot her).', 'Tap LAUNCH NET to launch the net (or tap her row in DAUGHTERS to pilot her).'],
+  ['Press her number again (1-4) or Esc to back out to Command view.', 'Tap her row in DAUGHTERS again to back out to Command view.'],
+  ['Daughters capture heavier targets at longer range. Press 1-4 to pilot a launched daughter.', 'Daughters capture heavier targets at longer range. Tap her row in DAUGHTERS to pilot a launched daughter.'],
+  ['Run both daughters: [D] deploys, [1-4] select and pilot (press again to switch back), [Shift+R] recalls the whole fleet.', 'Run both daughters: hold the target for DAUGHTER to send one, and tap her row in DAUGHTERS to pilot her (tap again to switch back).'],
+  ['Press D twice to deploy both daughters, then [1]/[2] to switch between them.', 'Hold the target for DAUGHTER twice to send both daughters, then tap a daughter\'s row in DAUGHTERS to switch between them.'],
+  ['Line up on a target and capture by hand (N). Manual catches score double. Watch the odds strip: de-spin (L) or close in', 'Line up on a target and capture by hand with LAUNCH NET. Manual catches score double. Watch the odds strip: hold DE-SPIN or close in'],
+  ['Close on a target under manual pilot and press N to net it for 2× score.', 'Close on a target under manual pilot and tap LAUNCH NET for 2× score.'],
+  // B-T3 scan: WIDE SCAN is the mission-3 lesson chip; the quick ping is SCAN
+  ['Press Shift+S for a wide-aperture deep scan. Slower, but it paints debris your quick ping (S) can\'t see.', 'Tap WIDE SCAN for a wide-aperture deep scan. Slower, but it paints debris your quick ping (SCAN) can\'t see.'],
+  ['Press Shift+S to run a wide-aperture scan and reveal distant contacts.', 'Tap WIDE SCAN to run a wide-aperture scan and reveal distant contacts.'],
+  ['; Shift+S runs a Wide Scan for longer range.', '.'],
+  // B-T4 other key words
+  ['Press A to autopilot toward it, or deploy a daughter with D.', 'Tap AUTOPILOT to fly toward it, or hold the target for DAUGHTER.'],
+  // D5: no READ MORE button is up on this teaching card (the READ MORE chip only follows a comms line that says "Press I"), so the sentence is left out
+  [' Open the Codex (I) to learn more.', ''],
+  ['until you jettison it with K.', 'until you tap LET GO.'],
+  ['Launch another daughter (D) to chase', 'Hold the target for DAUGHTER to send another daughter to chase'],
+  ['Hold L to fire the de-spin laser', 'Hold DE-SPIN to fire the de-spin laser'],
+  ['Hand-flying in orbit is a black-belt skill. For almost everything, press A and let the computer do it.', 'Hand-flying in orbit is a black-belt skill. For almost everything, tap AUTOPILOT and let the computer do it.'],
+  [' Set the fleet launch speed with [\'] up and [;] down — a hotter shot reaches farther', ' A hotter shot reaches farther'],
+  [', dial the fleet launch speed up with [\'] (down with [;]) and take a catch', ' and take a catch'],
+  [' plus the [;]/[\'] launch-speed dial makes the transit', ' makes the transit'],
+  // u15a's THROTTLE UP beat chip (Shift+=) is up for the whole ch5_burn lesson, the only place these two lines show.
+  [' Trim your closing rate on the throttle (+/-) to nail the intercept window.', ' Tap THROTTLE UP to trim your closing rate and nail the intercept window.'],
+  ['Use + / - to throttle and time your intercept burn on the ISS threat frags.', 'Tap THROTTLE UP and time your intercept burn on the ISS threat frags.'],
+  ['They open LIKE A FLOWER: press O.', 'They open LIKE A FLOWER: tap RADIATORS on floor 1.'],
+  [' O opens them to ', ' RADIATORS on floor 1 opens them to '],
+  ['Nav orb shown (8 to hide)', 'Nav orb shown (tap ORB to fold it)'],
+  ['Nav orb hidden (8 to show)', 'Nav orb folded (tap ORB to show it)'],
+  ['Select a target with Tab first.', 'Tap a piece first.'],
+  // skill names (SkillsPane rows) that carry a key or a mouse
+  ['Spacecraft Inspection (V, then scroll in)', 'Spacecraft Inspection'],
+  ['Mouse Look', 'Free Look'],
+  // the codex: sentences whose control has no touch form
+  [', and you can shift the balance: Shift+1/2/3 selects a bus, then [ and ] trim it.', '.'],
+  ['fills toward the next floor as you scroll', 'fills toward the next floor as you pinch'],
+  ['Space opens the pane; clicking any hull part or its card lands the block on', 'Tapping any hull part or its card opens the pane and lands the block on'],
+  ['you clicked', 'you tapped'],
+  ['BUY is one click', 'BUY is one tap'],
+  ['BUY one click away', 'BUY one tap away'],
+  ['Clicking a part whose page', 'Tapping a part whose page'],
+  ['Esc slides the pane away and leaves you exactly where you were', 'CLOSE × slides the pane away and leaves you exactly where you were'],
+]);
+// u15b fix 8: only the INSTRUCTION form of "click" becomes "tap": a bare Click / click, then a space and a word, at the start of a
+// sentence or after , ; : ( or a joining word ("click another to change it", "Click to upgrade it"). "right-click", "double-click"
+// (a hyphen before) and a noun ("the relay click", "relay clicks") stay raw, so test-NoKeysOnGlass' K2 sweep still catches them.
+const RE_CLICK = /(^|[.!?:;,(]\s+|\n\s*|\b(?:and|or|then|to|can|will|just|simply|please|should|must)\s+)([Cc])lick(?=\s+[A-Za-z])/g;
+
+/** @private shared first step of `speak` and `chipPhrase`: the whole-phrase rows, then click -> tap. */
+function applyLines(text) {
+  let out = text;
+  for (const [from, to] of GLASS_LINES) if (out.indexOf(from) >= 0) out = out.split(from).join(to);
+  return out.replace(RE_CLICK, (tok, lead, c) => lead + (c === 'C' ? 'T' : 't') + 'ap');
+}
+
 export class GestureHints {
   /** @returns {Readonly<Record<string, Readonly<GestureRow>>>} the frozen table */
   static get TABLE() { return TABLE; }
@@ -147,7 +242,24 @@ export class GestureHints {
    * `TouchControls.detect()` gate; nothing else in production touches it.
    * @param {boolean} on
    */
-  static setGlass(on) { _glass = on === true; }
+  static setGlass(on) {
+    const was = _glass;
+    _glass = on === true;
+    // u15b D7: text a module wrote once at build time (before this flip) is re-applied when glass turns on.
+    if (_glass && !was) for (const fn of Array.from(_glassListeners)) { try { fn(); } catch (_e) { /* a listener must not break boot */ } }
+  }
+
+  /**
+   * u15b D7: call `fn` whenever glass turns ON (not at registration). Returns the remover. Draw-time `isGlass()` reads
+   * are preferred; this is for text set once at build (MotherCallouts' hint, MenuScreen's start hint).
+   * @param {Function} fn
+   * @returns {Function}
+   */
+  static onGlassOn(fn) {
+    if (typeof fn !== 'function') return () => {};
+    _glassListeners.add(fn);
+    return () => { _glassListeners.delete(fn); };
+  }
 
   /** @returns {boolean} whether hints currently render as gestures */
   static isGlass() { return _glass; }
@@ -197,7 +309,7 @@ export class GestureHints {
    */
   static chipPhrase(text) {
     if (!_glass || typeof text !== 'string') return text;
-    return text.replace(RE_PAD_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' STICK PAD')
+    return applyLines(text).replace(RE_PAD_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' STICK PAD')
       .replace(RE_NEXT_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' a piece to pick the next target')
       .replace(RE_PICK_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' a piece to pick the next target')
       .replace(RE_ZOOM_WORDS, (tok, s) => (s === 'S' ? 'Pinch' : 'pinch') + ' to zoom')
@@ -212,6 +324,51 @@ export class GestureHints {
       // "Press R to reel her home" keeps its verb: "Tap REEL her home" would read like a command to the button.
       return (label.toLowerCase() === verb && letter !== 'R') ? lead : lead + toVerb;
     });
+  }
+
+
+  /**
+   * u15b B-T4: codex text (QUICK LOOK, body, real-world, unlock hints) on glass. `chipPhrase` first (so "press A" ->
+   * "tap AUTOPILOT", "Press I" -> "Tap READ MORE"), then a single-capital key hint "(S)" / "[T]" is dropped: the
+   * sentence reads the same without it and a key letter names a control a touch player does not have. OFF glass or for a
+   * non-string the SAME value comes back.
+   * @param {string} text
+   * @returns {string}
+   */
+  static glassWords(text) {
+    if (!_glass || typeof text !== 'string') return text;
+    return GestureHints.chipPhrase(text).replace(RE_KEY_HINT, '');
+  }
+
+  /**
+   * u15b B-T5/B-T6: the touch word for a skill's key on glass: the chip word for the chip skills, a touch word for the
+   * touch-word skills, '' for every other (no key shown). Desktop: always '' (callers keep their key text).
+   * @param {{id?:string}|null} def  the SKILLS.CATALOG entry
+   * @param {string} [skillId]
+   * @returns {string}
+   */
+  static skillWord(def, skillId) {
+    if (!_glass) return '';
+    return GestureHints.wordForSkill((def && def.id) || skillId);
+  }
+
+  /** u15b: the touch word for a skill id, NOT glass-gated (a pane that knows it is on glass by its own flag uses this). */
+  static wordForSkill(id) {
+    return (typeof id === 'string' && SKILL_WORDS[id]) || '';
+  }
+
+  /**
+   * u15b B-T5: the ticker badge text for a hint on glass, or undefined when this is not a reminder-style key glyph and
+   * the caller keeps its own. Never a raw key glyph or "?" on glass: a skill reminder shows its skill word or nothing
+   * (null); a one-letter / digit / "Esc" / "1-4" glyph with no skill shows nothing.
+   * @param {{glyph?:string, skillId?:string|null}} payload
+   * @returns {string|null|undefined}
+   */
+  static badgeFor(payload) {
+    if (!_glass || !payload) return undefined;
+    const g = payload.glyph;
+    if (typeof g !== 'string' || !RE_RAW_GLYPH.test(g)) return undefined;
+    return SKILL_WORDS[payload.skillId] || null;
   }
 
   /**
@@ -278,7 +435,7 @@ export class GestureHints {
   static speak(text) {
     if (!_glass || typeof text !== 'string') return text;
     const used = [];
-    let out = text
+    let out = applyLines(text)
       .replace(RE_BRACKET, (tok, key) => {
         const row = rowFor(key);
         return row ? '[' + row.chip + ']' : tok;

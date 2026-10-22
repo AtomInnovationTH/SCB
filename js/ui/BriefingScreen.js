@@ -8,6 +8,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
+import { GestureHints } from './hud/GestureHints.js';
 import { getMissionProgress } from '../core/missionProgress.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { scoringSystem } from '../systems/ScoringSystem.js';
@@ -103,7 +104,7 @@ export class BriefingScreen {
           <span style="color:rgba(0,255,136,0.6);">Cleared: <b id="briefing-cleared">0</b>/<b>${Constants.WIN_DEBRIS_COUNT}</b></span>
         </div>
 
-        <div style="font-size:0.72rem;color:rgba(0,255,136,0.4);text-align:center;margin-bottom:0.4rem;">
+        <div id="briefing-select-hint" style="font-size:0.72rem;color:rgba(0,255,136,0.4);text-align:center;margin-bottom:0.4rem;">
           ↑↓ Arrow keys or Tab to select target
         </div>
 
@@ -387,8 +388,22 @@ export class BriefingScreen {
     }
   }
 
+  /**
+   * @private u15b B-T7: the two key lines in touch words, read when the screen is shown (D7). A tap on a target card selects it
+   * (the card click handler) and COMMENCE APPROACH launches the selected one (_launchSelected), so the words are true.
+   * Desktop keeps the markup's text.
+   */
+  _syncKeyLines() {
+    if (!this.element || !GestureHints.isGlass()) return;
+    const sel = this.element.querySelector('#briefing-select-hint');
+    if (sel) sel.textContent = 'Tap a target to select it';
+    const prompt = this.element.querySelector('#briefing-enter-prompt');
+    if (prompt) prompt.textContent = '▶ Tap COMMENCE APPROACH to launch';
+  }
+
   show() {
     this.visible = true;
+    this._syncKeyLines();
     this.element.style.display = 'flex';
     this.element.style.opacity = '1';
     // T10 — briefing card entrance: a 280ms slide-up + fade of the card panel

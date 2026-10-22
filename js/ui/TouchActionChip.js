@@ -38,6 +38,12 @@
  *   fix round 1 (2026-10-22) R3: a missing debris id is never "the same catch" (no LET GO chip for a catch with no id; a new berth
  *      ends the line). R4: LET GO takes the step slot from a teaching step chip (the ticker shelves the beat's chip and brings it
  *      back when LET GO leaves; a beat chip posted meanwhile is answered by re-posting LET GO on top).
+ *   u15a A-T2 / A-T4 (2026-10-22) BEAT CHIPS: a mission-coach lesson whose trigger event only a key press makes
+ *      (BEAT_CHIPS: ch2_manual_capture N, ch3_wide_scan Shift+S, ch3_codex I, ch5_burn Shift+=) brings its button from
+ *      MISSION_BEAT_STARTED (payload `beatId`) until MISSION_BEAT_SATISFIED for it, GAME_RESET, or another beat starting.
+ *      Unlike a line chip it is never timed out, never ends on a floor change (it is only held back while the floor is
+ *      not 2-3, and comes back), and no later line or state chip replaces it. WIDE SCAN presses 'Shift+KeyS' (KeyDispatch
+ *      parses the Shift form), so InputManager emits SCAN_WIDE exactly as the keyboard does.
  *   R4 (a) HINT_SATISFIED is re-read one tick later (a beat chip leaving and the next arriving in the same tick must
  *      not flash ours); (b) only a MOTHER shot counts as "in flight".
  *
@@ -64,10 +70,31 @@ const CHIPS = Object.freeze({
   letgo: Object.freeze({ text: 'Let the catch go', glyph: 'K', keys: Object.freeze(['KeyK']), press: 'KeyK', button: 'LET GO' }),
   // u14b B2: I opens the full-screen library; the SPECS tab opens a different (side) view, so it needs its own button.
   read: Object.freeze({ text: 'Read more', glyph: 'I', keys: Object.freeze(['KeyI']), press: 'KeyI', button: 'READ MORE' }),
+  // u15a A-T2: mission 3's wide-scan lesson. Shift+S is the only way to a wide scan; a touch player had no key for it
+  // (D2 label WIDE SCAN). The Shift form is parsed by KeyDispatch.pressKey. Beat chip only (D4: no wide scan outside the lesson).
+  widescan: Object.freeze({ text: 'Wide scan', glyph: 'S', keys: Object.freeze(['Shift+KeyS']), press: 'Shift+KeyS', button: 'WIDE SCAN' }),
+  // u15a A-T4: mission 5's burn lesson waits for THROTTLE_CHANGE; the throttle is Shift+= (+10 %), no touch control exists.
+  throttle: Object.freeze({ text: 'Throttle up', glyph: '+', keys: Object.freeze(['Shift+Equal']), press: 'Shift+Equal', button: 'THROTTLE UP' }),
+});
+
+/**
+ * u15a A-T4: the lessons (BEATS_BY_MISSION ids) whose trigger event only a key press makes on glass, by chip kind.
+ * `needs` names a state the key needs to do the lesson's thing (the chip is held back, not removed, while it is false):
+ * 'pilot' = a piloted daughter in flight (TRANSIT / APPROACH) - N then deploys the MANUAL net (ArmUnit.manualNetDeploy,
+ * the only source of ARM_CAPTURED manual:true); with no pilot N would fire the mother's net and teach nothing.
+ */
+export const BEAT_CHIPS = Object.freeze({
+  ch2_manual_capture: Object.freeze({ kind: 'net', needs: 'pilot' }),
+  ch3_wide_scan: Object.freeze({ kind: 'widescan', needs: null }),
+  ch3_codex: Object.freeze({ kind: 'read', needs: null }),
+  ch5_burn: Object.freeze({ kind: 'throttle', needs: null }),
 });
 
 /** The key each chip kind presses (a physical or tapped press of it ends a line chip). */
-const KIND_KEY = Object.freeze({ net: 'KeyN', pad: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR', letgo: 'KeyK', read: 'KeyI' });
+const KIND_KEY = Object.freeze({ net: 'KeyN', pad: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR', letgo: 'KeyK', read: 'KeyI', widescan: 'Shift+KeyS', throttle: 'Shift+Equal' });
+
+/** The daughter states in which N deploys a MANUAL net (ArmUnit.manualNetDeploy). */
+const MANUAL_NET_STATES = Object.freeze(['TRANSIT', 'APPROACH']);
 
 /**
  * R13: the skill reminders that name an action key (SKILLS.CATALOG `say`, posted by OnboardingDirector._onSkillReminded
@@ -101,13 +128,15 @@ export class TouchActionChip {
    *        captureNetSystem singleton). LET GO stands only while it is BERTHED or COLLARED with the debris the line was made
    *        for: a hand-off to a radiator or a daughter (TRANSFERRING), a leash that is cut, a teardown or a later catch end it
    *        even when no event says so. `null` -> events only (tests).
+   * @param {() => (string|null)} [deps.getPilotState]  u15a A-T4: the state ('TRANSIT'|'APPROACH'|'STATION_KEEP'|...) of the daughter
+   *        the player is piloting, or null when not piloting. Gates the ch2_manual_capture beat chip; omitted = never shown.
    * @param {() => number} [deps.now]  ms clock (tests)
    * @param {(fn:Function)=>void} [deps.schedule]  runs `fn` one tick later (R4a); tests pass a synchronous or queued one
    * @param {boolean} [deps.glass=true]  false -> never posts (desktop)
    * @param {boolean} [deps.poll=true]   false -> no timer (tests drive `evaluate()`)
    */
   constructor({ eventBus, ticker = null, getFloor = null, getMotherNets = null, hasDaughter = null, getHolding = null,
-    getFarState = null, getReelable = null, getCollarCatch = () => captureNetSystem.getDockedCatch(), now = null, schedule = null, glass = true, poll = true } = {}) {
+    getFarState = null, getReelable = null, getPilotState = null, getCollarCatch = () => captureNetSystem.getDockedCatch(), now = null, schedule = null, glass = true, poll = true } = {}) {
     this._eb = eventBus;
     this._ticker = ticker;
     this._getFloor = getFloor;
@@ -115,6 +144,7 @@ export class TouchActionChip {
     this._getHolding = getHolding;
     this._getFarState = getFarState;
     this._getReelable = getReelable;
+    this._getPilotState = getPilotState;
     this._getCollarCatch = typeof getCollarCatch === 'function' ? getCollarCatch : null;
     this._now = now || (() => Date.now());
     this._schedule = schedule || ((fn) => { if (typeof setTimeout === 'function') setTimeout(fn, 0); else fn(); });
@@ -127,6 +157,7 @@ export class TouchActionChip {
     this._daughterOut = false;     // a daughter was just sent for this target
     this._holding = new Map();     // armId -> tool: daughters holding station on the target (event fallback, no getHolding)
     this._line = null;             // R3: { kind, until } - a shown line named this key
+    this._beat = null;             // u15a A-T4: { id, kind, needs } - the running lesson whose key has this chip
     this._collarId = null;         // u14b B1: debris id of the catch at the collar (from NET_BERTHED / the parked credit)
     this._nets = Constants?.CAPTURE_NET?.LARGE?.MAGAZINE_SIZE ?? 4;
     try {
@@ -197,7 +228,18 @@ export class TouchActionChip {
     // R4a: a beat chip leaving frees the slot - but the next beat's chip often arrives in the same tick (run-ipad.json
     // t=23314: ours was up and down within 1 ms). Look again one tick later.
     on(Events.HINT_SATISFIED, () => this._schedule(() => this.evaluate()));
+    // u15a A-T4: a coach lesson whose key has a chip (BEAT_CHIPS). The payload carries `beatId` (MissionCoach._postBeat).
+    // Any other beat starting means the chapter moved on; the satisfied event, a reset or a new game ends it too.
+    on(Events.MISSION_BEAT_STARTED, re((d) => {
+      const id = d && typeof d.beatId === 'string' ? d.beatId : null;
+      const row = id ? BEAT_CHIPS[id] : null;
+      this._beat = row ? { id, kind: row.kind, needs: row.needs } : null;
+    }));
+    on(Events.MISSION_BEAT_SATISFIED, re((d) => {
+      if (this._beat && d && d.beatId === this._beat.id) this._beat = null;
+    }));
     on(Events.GAME_RESET, re(() => {
+      this._beat = null;
       this._inRange = false; this._rangeKnown = false; this._selected = false; this._denied = false;
       this._inFlight = false; this._daughterOut = false; this._holding.clear(); this._line = null; this._collarId = null;
       this._nets = Constants?.CAPTURE_NET?.LARGE?.MAGAZINE_SIZE ?? 4;
@@ -328,6 +370,21 @@ export class TouchActionChip {
     return !this._sameCatch(this._line.catchId, st.id);
   }
 
+  /**
+   * @private u15a A-T4: the chip kind of the running lesson, or null. A lesson that needs a piloted daughter in flight
+   * ('pilot') waits until she is: N on its own would fire the mother's net, which does not satisfy it.
+   */
+  _beatKind() {
+    const b = this._beat;
+    if (!b) return null;
+    if (b.needs === 'pilot') {
+      let st = null;
+      try { st = this._getPilotState ? this._getPilotState() : null; } catch (_e) { st = null; }
+      if (!MANUAL_NET_STATES.includes(st)) return null;
+    }
+    return b.kind;
+  }
+
   /** @private R9: a daughter is out and idle */
   _reelable() {
     if (!this._getReelable) return false;
@@ -342,7 +399,7 @@ export class TouchActionChip {
     try { return !!this._getFarState(); } catch (_e) { return false; }   // null = tutorial still teaches
   }
 
-  /** @returns {'net'|'pad'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'read'|null} the chip the current state asks for (ignoring other chips on screen) */
+  /** @returns {'net'|'pad'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'read'|'widescan'|'throttle'|null} the chip the current state asks for (ignoring other chips on screen) */
   wanted() {
     if (!this._glass) return null;
     if (!this._floorOk()) { this._line = null; return null; }   // floor left: a line chip does not wait for the way back
@@ -352,6 +409,13 @@ export class TouchActionChip {
       try { holding = this._getHolding(); } catch (_e) { holding = null; }
     } else if (this._holding.size > 0) {
       holding = [...this._holding.values()][0] || 'NET';
+    }
+    // u15a A-T4: a running lesson's button outranks every line and state chip, except LET GO (a catch that cannot move on
+    // blocks the lesson too). It is never timed out; it only waits while its key would teach nothing (_beatKind).
+    if (this._line && this._line.kind === 'letgo' && (this._now() >= this._line.until || this._letGoOver())) this._line = null;
+    if (!(this._line && this._line.kind === 'letgo')) {
+      const beat = this._beatKind();
+      if (beat) return beat;
     }
     if (this._line) {
       if (this._now() >= this._line.until) this._line = null;

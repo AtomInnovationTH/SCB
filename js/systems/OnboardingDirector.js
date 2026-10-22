@@ -974,7 +974,7 @@ export class OnboardingDirector {
       id: 'remind_' + d.skillId,
       // u11 R13: on glass the line names the chip ("Tap LAUNCH NET ..."), as comms lines do; desktop: the same string.
       text: GestureHints.chipPhrase(text),
-      glyph: def.key || '?',
+      glyph: GestureHints.isGlass() ? GestureHints.skillWord(def, d.skillId) : (def.key || '?'),   // u15b B-T5: glass never shows a raw key or '?'
       keys: [],
       skillId: d.skillId,
       duration: Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000,

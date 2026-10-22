@@ -220,6 +220,11 @@ export class HintTicker {
     return this._items.some(isStep) || this._waiting.some(isStep);
   }
 
+  /** u15b fix 4: is a step button with this label showing now? (the glass pilot strip names only buttons that are up) */
+  hasStepButton(label) {
+    return this._items.some((it) => it && it.payload && it.payload.step === true && it.payload.button === label);
+  }
+
   /** Number of currently-visible hint rows. */
   getVisibleCount() {
     return this._items.length;
@@ -730,8 +735,12 @@ export class HintTicker {
   _resolveGlyph(payload) {
     const g = GestureHints.chipFor(payload.keys);
     if (g) return g;
+    // u15b B-T5: on glass a raw key glyph ("S", "?", "1-4") is never shown: the skill's touch word, else no badge.
+    const word = GestureHints.badgeFor(payload);
+    if (word !== undefined) return word;
     if (payload.glyph) return payload.glyph;
     if (Array.isArray(payload.keys) && payload.keys.length > 0) {
+      if (GestureHints.isGlass()) return null;   // u15b B-T5: a key with no gesture row shows no badge on glass
       // Friendly fallback: just take first character of first key.
       const k = String(payload.keys[0]);
       // Strip 'Key' prefix from KeyS / KeyD codes.

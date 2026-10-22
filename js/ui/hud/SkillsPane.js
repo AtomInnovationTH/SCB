@@ -109,6 +109,7 @@ export class SkillsPane {
         /** @type {HTMLElement} */
         this._hudContainer = hudContainer;
         this._doc = doc || (typeof document !== 'undefined' ? document : null);
+        this._glassArg = glass;
         this._glass = resolveGlass(glass);
         const ticker = (Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {};
         this._hintBandPx = Number.isFinite(Number(hintBandPx))
@@ -924,7 +925,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         const backBtn = doc.createElement('span');
         backBtn.className = 'sp-ex-back';
         backBtn.textContent = '◂ SKILL TREE';
-        backBtn.title = 'Close (J or ESC)';
+        backBtn.title = this._glassNow() ? 'Close' : 'Close (J or ESC)';
         if (typeof backBtn.addEventListener === 'function') {
             backBtn.addEventListener('click', () => this._closeExpanded());
         }
@@ -1062,6 +1063,30 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
 
         // Log threshold crossings (novice → apprentice → veteran)
         this._checkLevelTransition();
+    }
+
+    /**
+     * u15b D7: glass is read when text is drawn, never at construction (the hub flips GestureHints AFTER this pane is
+     * built). An explicit ctor `glass: false` still wins.
+     * @private
+     * @returns {boolean}
+     */
+    _glassNow() {
+        if (this._glassArg === false) return false;
+        return this._glass || GestureHints.isGlass();
+    }
+
+    /**
+     * u15b B-T6: the key text of a skill row. Desktop: "[S]". Glass: the touch word ("SCAN", "READ MORE") or nothing,
+     * never a key in brackets.
+     * @private
+     * @param {{id?:string,key?:(string|null)}} def
+     * @returns {string}
+     */
+    _keyText(def) {
+        if (!def || !def.key) return '';
+        if (this._glassNow()) return GestureHints.wordForSkill(def.id);
+        return '[' + def.key + ']';
     }
 
     /**
@@ -1232,7 +1257,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
                 const entry = document.createElement('div');
                 entry.className = 'sp-tech-entry';
                 entry.textContent = `▸ ${tech.title}`;
-                entry.title = tech.shortText || '';
+                entry.title = GestureHints.glassWords(tech.shortText || '');
                 this._paneBody.appendChild(entry);
             }
 
@@ -1289,8 +1314,8 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
             item.className = 'sp-cl-item sp-cl-done';
             item.innerHTML =
                 `<span class="sp-cl-mark">✓</span>` +
-                `<span class="sp-cl-label">${def.label}</span>` +
-                `<span class="sp-cl-key">${def.key ? '[' + def.key + ']' : ''}</span>`;
+                `<span class="sp-cl-label">${GestureHints.glassWords(def.label)}</span>` +
+                `<span class="sp-cl-key">${this._keyText(def)}</span>`;
             items.appendChild(item);
         }
 
@@ -1304,15 +1329,15 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
                 item.style.setProperty('--tier-color', tierColor);
                 item.innerHTML =
                     `<span class="sp-cl-mark">→</span>` +
-                    `<span class="sp-cl-label">${def.label}</span>` +
-                    `<span class="sp-cl-key">${def.key ? '[' + def.key + ']' : ''}</span>`;
+                    `<span class="sp-cl-label">${GestureHints.glassWords(def.label)}</span>` +
+                    `<span class="sp-cl-key">${this._keyText(def)}</span>`;
                 isFirst = false;
             } else {
                 item.className = 'sp-cl-item sp-cl-upcoming';
                 item.innerHTML =
                     `<span class="sp-cl-mark">○</span>` +
-                    `<span class="sp-cl-label">${def.label}</span>` +
-                    `<span class="sp-cl-key">${def.key ? '[' + def.key + ']' : ''}</span>`;
+                    `<span class="sp-cl-label">${GestureHints.glassWords(def.label)}</span>` +
+                    `<span class="sp-cl-key">${this._keyText(def)}</span>`;
             }
             items.appendChild(item);
         }
@@ -1404,7 +1429,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         // Label
         const lbl = document.createElement('span');
         lbl.className = 'sp-lbl';
-        lbl.textContent = def ? def.label : skillId;
+        lbl.textContent = def ? GestureHints.glassWords(def.label) : skillId;
         if (!isSuggestion) {
             lbl.style.color = state === MASTERED ? 'var(--hud-normal, #00ff88)' : color;
         }
@@ -1413,7 +1438,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         // Key binding hint
         const keyEl = document.createElement('span');
         keyEl.className = 'sp-key';
-        if (def && def.key) keyEl.textContent = `[${def.key}]`;
+        if (def && def.key) keyEl.textContent = this._keyText(def);
         entry.appendChild(keyEl);
 
         // Discovery animation (pulse + slide)
@@ -1554,7 +1579,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         // Label
         const lbl = document.createElement('span');
         lbl.className = 'sp-ex-lbl';
-        lbl.textContent = def.label;
+        lbl.textContent = GestureHints.glassWords(def.label);
         if (state !== UNDISCOVERED && !isLocked) {
             lbl.style.color = state === MASTERED ? 'var(--hud-normal, #00ff88)' : tierColor;
         }
@@ -1563,7 +1588,7 @@ body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
         // Key hint
         const keyEl = document.createElement('span');
         keyEl.className = 'sp-ex-key';
-        if (def.key) keyEl.textContent = `[${def.key}]`;
+        if (def.key) keyEl.textContent = this._keyText(def);
         entry.appendChild(keyEl);
 
         return entry;

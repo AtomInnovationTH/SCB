@@ -123,6 +123,7 @@
 
 import { VisualLaw } from '../core/VisualLaw.js';
 import { RAIL_GEOMETRY } from './RailGeometry.js';
+import { GestureHints } from './hud/GestureHints.js';
 import { INVITE_HALO } from './RailIndicator.js';
 
 /** Pane slide duration (ms) — inside the 240–300 ms house window
@@ -586,6 +587,7 @@ export class WorkbenchPane {
    */
   dispose() {
     this._disposed = true;
+    if (this._offGlassLabel) { this._offGlassLabel(); this._offGlassLabel = null; }   // u15b: the glass listener dies with the pane
     this._clearIdleTimer();
     this._clearPulseTimer();
     const wasOpen = this._open;
@@ -759,9 +761,16 @@ export class WorkbenchPane {
     const closeBtn = doc.createElement('button');
     closeBtn.id = 'workbench-close-btn';
     closeBtn.className = 'workbench-close';
-    closeBtn.textContent = 'ESC ×';
+    // u15b B-T7: on glass there is no Esc key - "CLOSE ×". The hub flips glass AFTER this pane is built (D7), so the label
+    // is also re-applied the moment glass turns on.
+    const closeLabel = () => {
+      const g = this._glass || GestureHints.isGlass();
+      closeBtn.textContent = g ? 'CLOSE ×' : 'ESC ×';
+      closeBtn.setAttribute('title', g ? 'Close' : 'Close (Esc)');
+    };
+    closeLabel();
     closeBtn.setAttribute('aria-label', 'Close');
-    closeBtn.setAttribute('title', 'Close (Esc)');
+    this._offGlassLabel = GestureHints.onGlassOn(closeLabel);
     closeBtn.style.cssText = [
       'position:absolute', 'top:0', 'right:0', 'z-index:2',
       'background:none', 'border:1px solid rgba(255,255,255,0.2)', 'color:#888',

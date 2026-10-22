@@ -158,6 +158,7 @@
  */
 
 import { VisualLaw } from '../core/VisualLaw.js';
+import { GestureHints } from './hud/GestureHints.js';
 import { trlToLabel, techLevelBadgeText } from '../core/Constants.js';
 
 /** Dwell before an open entry is marked seen — the shipped CodexViewerUI
@@ -835,7 +836,7 @@ export class LibraryPane {
     );
     if (!m.entry) {
       // The no-entry landing (D6: the click verb is the part's dossier).
-      parts.push(`<div class="library-empty" style="opacity:0.7">${EMPTY_COPY}</div>`);
+      parts.push(`<div class="library-empty" style="opacity:0.7">${GestureHints.glassWords(EMPTY_COPY)}</div>`);
       return parts.join('');
     }
     const e = m.entry;
@@ -880,14 +881,14 @@ export class LibraryPane {
     // shortText — the one-line "why it matters" (always visible, the
     // syllabus rule).
     parts.push(
-      `<div class="library-short" style="color:#aaddff;line-height:1.5;padding:6px 8px;background:rgba(0,204,255,0.06);border-left:2px solid rgba(0,204,255,0.5);margin-bottom:8px">${e.shortText || ''}</div>`,
+      `<div class="library-short" style="color:#aaddff;line-height:1.5;padding:6px 8px;background:rgba(0,204,255,0.06);border-left:2px solid rgba(0,204,255,0.5);margin-bottom:8px">${GestureHints.glassWords(e.shortText || '')}</div>`,
     );
     if (locked) {
       // The viewer's honest locked stub: how to unlock, nothing invented. It
       // stays in the HEAD — the identity half says why there is no depth yet.
       parts.push(
         `<div class="library-locked" style="color:${C.VALUE};border:1px dashed rgba(255,209,102,0.5);border-radius:3px;padding:6px 8px;margin-bottom:8px">` +
-        `LOCKED \u00b7 How to unlock: ${e.unlockHint || 'Discover through gameplay.'}` +
+        `LOCKED \u00b7 How to unlock: ${GestureHints.glassWords(e.unlockHint || 'Discover through gameplay.')}` +
         '</div>',
       );
     }

@@ -194,6 +194,7 @@ export class TargetPanel {
     this._sortMode = 'tpi';  // FIX_PLAN §4: Default to composite TPI sort
     this._armManager = null;
     this._colorLaw = !!colorLaw;
+    this._glassArg = glass;
     this._glass = resolveGlass(glass);
     this._targetLaw = null;
     this._reachKm = 0;
@@ -946,7 +947,7 @@ export class TargetPanel {
       const overflow = pct >= 80 && renderedSpanOverflows(t, CN && CN.LARGE);
       const col = this._targetLaw ? lookColor(oddsColor(pct, overflow)) : overflow ? 'var(--hud-caution, #ffd166)' : pct >= 80 ? 'var(--hud-normal, #00ffaa)' : pct >= 50 ? 'var(--hud-caution, #ffd166)' : 'var(--hud-warning, #ff7755)';
       const tip = overflow ? ` — drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${CN.LARGE.DIAMETER} m bag: it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)` : '';
-      return `<span style="color:${col};font-size:10px;font-weight:bold;" title="Mother Large Net odds${tip}">${pct}% [N]</span>`;
+      return `<span style="color:${col};font-size:10px;font-weight:bold;" title="Mother Large Net odds${tip}">${pct}%${this._glassNow() ? '' : ' [N]'}</span>`;   // u15b: no key letter on glass
     }
     const blocker = (o && o.blocker) || 'NO NET';
     const word = blocker === 'WIDE' ? 'TOO WIDE'
@@ -1162,7 +1163,7 @@ export class TargetPanel {
               : ` style="color:${tierColor}${law ? `;opacity:${law.alpha}` : ''}"`;
             // h4b D3: ONE prompt for the selected row until target info was opened once (touch has no Z).
             const chip = (selected && this._analyseChip)
-              ? `<span class="analyse-chip">${this._glass ? 'Tap again to analyse' : 'Z analyse'}</span>`
+              ? `<span class="analyse-chip">${this._glassNow() ? 'Tap again to analyse' : 'Z analyse'}</span>`
               : '';
             const inNet = t.distanceKm <= netReachKm;
             const reachStyle = `color:var(--hud-normal, ${VisualLaw.COLORS.PLAYER})${inNet ? '' : `;opacity:${THIN_ALPHA}`}`;
@@ -1256,7 +1257,9 @@ export class TargetPanel {
             <span>${t.estimatedPoints}pt</span>
             ${fitBadge}${valueBadge ? `\n            ${valueBadge}` : ''}
         </div>${moidStat}
-        <div class="hint-line">[D] Deploy · [A] Auto · [Z] Analyze</div>
+        ${this._glassNow()
+          ? '<div class="hint-line">Hold: DAUGHTER or AUTOPILOT · tap again: analyse</div>'   // u15b B-T7: the radial + the tap-again analyse (48 ch: fits the glass column on one line)
+          : '<div class="hint-line">[D] Deploy · [A] Auto · [Z] Analyze</div>'}
     </div>
 </div>`;
           } else {
@@ -1462,6 +1465,17 @@ export class TargetPanel {
   // ==========================================================================
   // ST-6.3: MOID BADGE RENDERING
   // ==========================================================================
+
+  /**
+   * u15b D7: glass is read when text is drawn. The hub flips GestureHints AFTER this panel is built, so the constructor's
+   * `_glass` is false on a real iPad; an explicit ctor `glass: false` still wins.
+   * @private
+   * @returns {boolean}
+   */
+  _glassNow() {
+    if (this._glassArg === false) return false;
+    return this._glass || GestureHints.isGlass();
+  }
 
   /**
    * Render a small coloured MOID badge next to target name.

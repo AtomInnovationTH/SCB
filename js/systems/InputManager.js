@@ -19,6 +19,20 @@ import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE } fro
 import { computeLeadAim, netMaxReachM } from '../entities/CaptureNet.js';
 import { tripRefuses } from './TransferTrip.js';
 import { openingDance } from './OpeningDance.js';
+import { GestureHints } from '../ui/hud/GestureHints.js';
+
+/**
+ * u15b B-T2: the line posted when a daughter's pilot view opens. It says only what works: the arrow keys (the turn pad on
+ * glass) steer her only while she holds station (the STATION_KEEP block of update()); the way out is Esc / V / her number
+ * again on a keyboard, a tap on her row in DAUGHTERS again on glass. Glass is read now (D7).
+ * @param {string} name
+ * @returns {string}
+ */
+export function pilotLine(name) {
+  return GestureHints.isGlass()
+    ? `Piloting ${name}. The turn pad steers her once she holds station · tap her row in DAUGHTERS again: back to the mother.`
+    : `Piloting ${name}. Arrow keys steer her once she holds station · Esc, V or her number again: back to the mother.`;
+}
 
 export class InputManager {
   constructor() {
@@ -2022,7 +2036,7 @@ export class InputManager {
     // the daughter, so spell out the way home the moment they enter.
     if (!wasPiloting) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Piloting ${arm.displayName}. Arrow keys fly her · Esc, V or her number again: back to the mother.`,
+        text: pilotLine(arm.displayName),
         source: 'HOUSTON',
         channel: 'CMD',
         priority: 'info',

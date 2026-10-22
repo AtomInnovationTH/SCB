@@ -28,6 +28,7 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { entryMatchesQuery, ALIASES } from '../systems/CodexSystem.js';
+import { GestureHints } from './hud/GestureHints.js';
 import { decorateGlossary, escapeHtml } from '../systems/codex/glossary.js';
 import { layoutEgoMap, EGO_LAYOUT_VIEW } from '../systems/codex/egoLayout.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
@@ -430,8 +431,12 @@ export class CodexViewerUI {
 
     this._overlay = overlay;
 
-    // Close button
-    overlay.querySelector('#codex-close-btn').addEventListener('click', () => this._requestClose());
+    // Close button. u15b B-T7: on glass there is no Esc key - "CLOSE ×" (re-applied when glass turns on, D7).
+    const closeBtn = overlay.querySelector('#codex-close-btn');
+    closeBtn.addEventListener('click', () => this._requestClose());
+    const closeLabel = () => { closeBtn.textContent = GestureHints.isGlass() ? 'CLOSE ×' : 'ESC ×'; };
+    closeLabel();
+    this._offGlassLabel = GestureHints.onGlassOn(closeLabel);
 
     // UX-11 #10: live search — filters across ALL categories as you type;
     // sidebar selection is ignored while a query is active. Debounced (each
@@ -824,7 +829,7 @@ export class CodexViewerUI {
    */
   _lockedRowTitleText(entry) {
     if (!entry || entry.unlocked) return '';
-    const hint = entry.unlockHint || 'Discover through gameplay.';
+    const hint = GestureHints.glassWords(entry.unlockHint || 'Discover through gameplay.');
     return `How to unlock: ${hint}`;
   }
 
@@ -867,7 +872,7 @@ export class CodexViewerUI {
     row.innerHTML = `
       <span style="flex:1;min-width:0;">
         <span style="display:block;font-size:13px;font-weight:bold;color:${isLocked ? '#9ab' : '#eee'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${entry.title}</span>
-        <span style="display:block;font-size:11px;line-height:1.35;color:#889;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:${isLocked ? 0.6 : 0.85};">${entry.shortText}</span>
+        <span style="display:block;font-size:11px;line-height:1.35;color:#889;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:${isLocked ? 0.6 : 0.85};">${GestureHints.glassWords(entry.shortText)}</span>
       </span>
       ${pip}
     `;
@@ -1211,7 +1216,7 @@ export class CodexViewerUI {
         ${sectionHeader('QUICK LOOK', accent)}
         <div style="font-family:var(--font-ui);font-size:16px;color:#aaddff;line-height:1.6;
           padding:12px 16px;background:${accentBg(0.06)};border-left:3px solid ${accentBg(0.5)};
-          border-radius:2px;">${decorateGlossary(entry.shortText, { once: true })}</div>
+          border-radius:2px;">${decorateGlossary(GestureHints.glassWords(entry.shortText), { once: true })}</div>
       </div>`;
 
     // Lane E — the entry's rendered part portrait (the "two-column" reading
@@ -1280,7 +1285,7 @@ export class CodexViewerUI {
     }
 
     // BRIEFING (fullText) — unlocked only; locked shows the how-to-unlock panel.
-    const hint = entry.unlockHint || 'Discover through gameplay.';
+    const hint = GestureHints.glassWords(entry.unlockHint || 'Discover through gameplay.');
     let briefingHtml;
     if (isLocked) {
       briefingHtml = `
@@ -1297,7 +1302,7 @@ export class CodexViewerUI {
       briefingHtml = `
         <div style="margin-bottom:22px;">
           ${sectionHeader('BRIEFING')}
-          <div style="font-family:var(--font-ui);font-size:15px;color:#ccc;line-height:1.8;white-space:pre-wrap;">${decorateGlossary(entry.fullText, { once: true })}</div>
+          <div style="font-family:var(--font-ui);font-size:15px;color:#ccc;line-height:1.8;white-space:pre-wrap;">${decorateGlossary(GestureHints.glassWords(entry.fullText), { once: true })}</div>
           ${this._verifiedStampHtml(entry)}
         </div>`;
     }
@@ -1312,7 +1317,7 @@ export class CodexViewerUI {
             ${sectionHeader('IN THE REAL WORLD', accent)}
             <div style="padding:12px 16px;border-radius:4px;
               background:${accentBg(0.06)};border:1px solid ${accentBg(0.25)};
-              font-family:var(--font-ui);font-size:14px;color:#cde;line-height:1.6;">${decorateGlossary(entry.realWorld, { once: true })}</div>
+              font-family:var(--font-ui);font-size:14px;color:#cde;line-height:1.6;">${decorateGlossary(GestureHints.glassWords(entry.realWorld), { once: true })}</div>
           </div>`;
       }
       if (entry.formula) {
@@ -1563,7 +1568,7 @@ export class CodexViewerUI {
     if (!picks.length) return '';
 
     const chips = picks.map(({ r, kind }) => {
-      const hint = r.unlockHint || 'Discover through gameplay.';
+      const hint = GestureHints.glassWords(r.unlockHint || 'Discover through gameplay.');
       const text = (kind === 'locked')
         ? `Locked: ${r.title}. To unlock: ${hint}`
         : `${r.title} is in SPECS, unread.`;
@@ -1684,7 +1689,7 @@ export class CodexViewerUI {
           <div style="flex:1;">
             <div style="font-size:11px;letter-spacing:0.14em;font-weight:bold;color:${accent};">CONNECTIONS</div>
             <div style="font-size:16px;font-weight:bold;color:#eee;">${entry.title}</div>
-            <div style="font-size:11px;color:#889;margin-top:2px;">Click a node to re-center · double-click or Enter to open</div>
+            <div style="font-size:11px;color:#889;margin-top:2px;">${GestureHints.isGlass() ? 'Tap a node to re-center · double-tap it to open' : 'Click a node to re-center · double-click or Enter to open'}</div>
           </div>
           ${this._mapToggleHtml('READ', accent, accentBg)}
         </div>

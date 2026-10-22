@@ -99,6 +99,7 @@ import { createCardTexture, CARD_W_OVER_TITLE_H, wrapHint } from '../scene/label
 import { fontEpoch as defaultFontEpoch } from '../core/Typeface.js';
 import { orderRail } from '../scene/railOrder.js';
 import { RAIL_GEOMETRY } from './RailGeometry.js';
+import { GestureHints } from './hud/GestureHints.js';   // u15b D7: the hint's words follow glass, read when drawn
 import { TAP_SLOP_PX, TAP_SLOP_MS } from '../systems/TapPick.js';
 import { engineGasKg } from '../systems/ResourceSystem.js';
 
@@ -764,6 +765,10 @@ const GUIDE_HOLD_S = 0.6;   // initial hold before the tour starts
 // Shown while active and not yet dismissed (once per page load), centred in
 // the pane-free strip inside the transient band; see _buildHint/_updateHint.
 const HINT_TEXT = 'Point at a part to see what it does. Click to upgrade it.';
+// u15b B-T7: the glass wording. A tap on a part opens the SPECS drawer with the REFIT card (WorkbenchPane.showPart), which is
+// where the upgrade is bought, so the line says that. Read when the hint is DRAWN (D7): the hub flips glass after this is built.
+const HINT_TEXT_GLASS = 'Tap a part to see what it does and upgrade it.';
+const hintText = () => (GestureHints.isGlass() ? HINT_TEXT_GLASS : HINT_TEXT);
 
 const FADE_RATE = 6.0;      // opacity ease rate for band crossfades
 
@@ -3844,7 +3849,7 @@ export class MotherCallouts {
     const T = Constants.ONBOARDING?.TICKER || {};
     const el = document.createElement('div');
     el.id = 'mother-callout-hint';
-    el.textContent = HINT_TEXT;
+    el.textContent = hintText();
     // Individual assignments (not one cssText string) so the initial state is
     // explicit and headless DOM shims read back every pinned property.
     const s = el.style;
@@ -3884,6 +3889,7 @@ export class MotherCallouts {
     // still to be shown; once done it never comes back). Words unchanged (§13 r3).
     const show = this._active && !this._hintDone && shipOnScreen(this._shipNDC);
     const want = show ? 'flex' : 'none';
+    if (show) { const t = hintText(); if (el.textContent !== t) el.textContent = t; }   // u15b D7: draw-time glass read
     if (el.style.display !== want) el.style.display = want;
     if (!show) return;
     const now = this._nowMs || 0;
