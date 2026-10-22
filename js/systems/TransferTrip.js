@@ -16,8 +16,30 @@
  *     `tripRefuses(kind)` (the launch / net / lasso / autopilot guards), `isTripBurning()` and `tripWarpArgs()`
  *     (main.js: the world-clock target).
  *
- * It imports only core modules and TimeAuthority, so the entities that ask it things (ArmManager, CaptureNet,
- * TipCargo) never form an import cycle with it. Every other collaborator is injected (`setDeps`).
+ * It imports only core modules, TimeAuthority and the pure TripProfile, so the entities that ask it things (ArmManager,
+ * CaptureNet, TipCargo) never form an import cycle with it. Every other collaborator is injected (`setDeps`).
+ *
+ * FIELDS BY HEIGHT (Nets step 3 slice 2b, FEATURE_FLAGS.FIELDS_BY_HEIGHT, plan decisions G-K): `begin(onArrive, { field })`
+ * with the flag on and the `fields` dep set flies her to another debris field. The burn then PLAYS TripProfile's climb or
+ * descent for her real thruster: P real seconds (clamp(60 + 1.5 x days, 60, 120)), each frame her orbit's semi-major axis
+ * is set from the profile at the fraction played (eccentricity eased to 0, tilt and node held at their departure values, the
+ * anomaly runs on), the strip reads "Climbing to 425 km · day d of D", and the burn ends when the profile has played (a carry
+ * still running extends it). A descent holds her nose against her motion.
+ *
+ * The push follows where her nose really points, ALL the way (review F6, decision I; Ruling 0): the profile is computed once,
+ * at burn start, for the push she was planned with (`_planCos`: 1 when she can turn, her measured angle when a daughter out
+ * keeps her where she points). Each frame the fraction played advances by (her cosine to the way she goes now / the planned
+ * one) x dt / P: a nose 60 deg off plays at half pace, one that comes round plays faster, one at 90 deg or more plays
+ * nothing (no push, no gas, the strip says so) until it comes back - for ever once she has pushed (the player can turn her);
+ * a trip that has not pushed once waits TURN_WAIT_MAX_S and then stays, as at burn start. The gas is billed by the time the
+ * engine really pushed, at the profile's steady flow (its kg / P per real second), and the ship's clock gets the whole burn's
+ * real time x days / P (a pause counts: her orbit moves while she waits), so a slow push costs more gas and more days. The flat
+ * 20 m/s trip that does not move her is untouched (flag off, or no field given).
+ *
+ * Power (review R1, Ruling 0): at an empty battery she cannot hold her nose, the autopilot's trip hold lets go of its turn, and a
+ * descent (which needs the nose against her motion) pauses with the strip saying "no power to turn". The hold asks for the turn
+ * again once the battery holds TRIP.TURN_POWER_WH, and she turns and pushes on. That wait has NO time limit (the bound above is
+ * for a turn that is not waiting for power).
  *
  * Time: `update(dt)` takes REAL seconds and GameFlowManager hands it 0 while the world is held (the workbench drawer),
  * so the trip timer, the gas bill and the melt (TipCargo.update gets the same 0) all pause together. The 100x world
@@ -27,6 +49,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus as defaultBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { TimeAuthority } from './TimeAuthority.js';
+import { profileAt } from './TripProfile.js';
 
 /** The plain words (DECISIONS §29; owner: plain language, no phase names). */
 export const TRIP_LINES = Object.freeze({
@@ -35,6 +58,20 @@ export const TRIP_LINES = Object.freeze({
   ARRIVED_LAST_GAS: 'Arrived on the last of the gas.',
 });
 
+/** Nets step 3 slice 2b: the plain words of a trip to a named field (heights in km, as the strip says them). */
+export function fieldStartLine(dir, toKm, n) {
+  const go = `${dir < 0 ? 'Descending' : 'Climbing'} to the ${Math.round(toKm)} km field.`;
+  if (!(n > 0)) return go;
+  return `${go} The furnaces melt ${n} ${n === 1 ? 'catch' : 'catches'}.`;
+}
+/** @param {number} toKm */
+export function fieldArrivedLine(toKm) { return `Arrived at the ${Math.round(toKm)} km field.`; }
+/** @param {number} toKm */
+export function fieldNoGasLine(toKm) { return `Not enough gas to reach the ${Math.round(toKm)} km field.`; }
+/** Her nose cannot be pointed the way the push must go (review F2): `dir` +1 = along her motion (a climb), -1 = against it. */
+export function fieldNoPointLine(dir, toKm) {
+  return `Cannot point the ship ${dir < 0 ? 'against' : 'along'} its motion to reach the ${Math.round(toKm)} km field.`;
+}
 /** "Burning to the next field. The furnaces melt N catches." (or just the first part with none). */
 export function startLine(n) {
   if (!(n > 0)) return 'Burning to the next field.';
@@ -149,6 +186,24 @@ export class TransferTrip {
     this._rackAgeS = 0;
     this._rackCached = false;
     this.melted = 0;                // catches melted by this trip so far
+    // Nets step 3 slice 2b (fields by height): null/0 unless the trip flies to a field
+    this._field = null;             // the destination field ({id, altKm, ...}) while a field trip is pending or burning
+    this._profile = null;           // TripProfile's answer, fixed at burn start
+    this._playP = 0;                // P: real seconds the profile plays in
+    this._playS = 0;                // real seconds of the profile played so far (stands still while the push is blocked)
+    this._overS = 0;                // real seconds since the profile ended (a carry still running holds the end)
+    this._turnWaitS = 0;            // real seconds the push has waited for her nose to come round
+    this._pausedS = 0;              // real seconds the push has waited with her nose not along the way she goes (cos <= 0)
+    this._pushS = 0;                // real seconds the engine has really pushed (the gas is billed by this, not by the profile's fraction)
+    this._flownS = 0;               // real seconds of the burn up to the end of the profile, pauses included (the ship's days follow this)
+    this._wasPower = false;         // last frame the turn was let go of for want of power (its return gives the new turn its own wait)
+    this._billedKg = 0;             // kg of the profile's gas billed so far
+    this._veEff = 0;                // exhaust speed of the profile (m/s, the gas multiplier c folded in)
+    this._dep = null;               // her tilt, node and perigee at departure (held for the whole trip)
+    this._poseAsked = false;        // the radiators were asked to the burn angle (once per trip)
+    this._planCos = 1;              // the share of the push along the way she wants that the profile was planned with (the pace is her cosine now over this)
+    /** The last leg flown ({fieldId, altKm, days, gasKg}), set when a field trip arrives; GameFlowManager reads it in `onArrive`. */
+    this.lastLeg = null;
     this.setDeps(deps);
   }
 
@@ -162,11 +217,12 @@ export class TransferTrip {
    * @param {function} [deps.rackCanCarry] () => true when a rack catch can still be carried, now or once its tip frees
    *   (default: armManager.rackCanCarry())
    * @param {function} [deps.describe] (debris) => "<size> m <name>"
+   * @param {object} [deps.fields] Nets step 3 slice 2b: {planTo(field, {cos}), depart(), arrive(fieldId)} (FieldRegistry's trip face)
    * @param {object} [deps.bus] event bus (tests)
    */
   setDeps(deps) {
     if (!deps) return;
-    for (const k of ['player', 'armManager', 'autopilot', 'noseWaiting', 'carryBusy', 'rackCanCarry', 'describe']) {
+    for (const k of ['player', 'armManager', 'autopilot', 'noseWaiting', 'carryBusy', 'rackCanCarry', 'describe', 'fields']) {
       if (deps[k] !== undefined) this._d[k] = deps[k];
     }
     if (deps.bus) this._bus = deps.bus;
@@ -188,6 +244,16 @@ export class TransferTrip {
   get gasShort() { return this._gasShort; }
   /** Δv (m/s) billed so far this trip. */
   get billedDv() { return this._billedDv; }
+  /** The field this trip flies to ({id, altKm, ...}), or null (a flat trip, or none). */
+  get field() { return this._field; }
+  /** The TripProfile this trip plays (fixed at burn start), or null. */
+  get profile() { return this._profile; }
+  /** Real seconds the profile takes to play (P), or 0. */
+  get playSeconds() { return this._playP; }
+  /** How far along the profile is, 0..1 (0 when there is none). */
+  get progress() { return this._profile && this._playP > 0 ? Math.min(1, this._playS / this._playP) : 0; }
+  /** kg of the profile's gas billed so far. */
+  get billedKg() { return this._billedKg; }
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -196,10 +262,26 @@ export class TransferTrip {
    * ends (it starts the mission). A second call while a trip is pending or burning is ignored (the first one's
    * `onArrive` covers it: it asks the scorer, which starts whichever mission is due).
    * @param {function} [onArrive]
+   * @param {{field?: object}} [opts] Nets step 3 slice 2b: `field` (a FieldRegistry field) flies her there with the flag on
+   *   (FIELDS_BY_HEIGHT) and the `fields` dep set. False when the gas does not cover the whole profile (nothing begins, the
+   *   words are said); without a field, or with the flag off, the flat trip as ever.
    * @returns {boolean} true = the trip was begun
    */
-  begin(onArrive) {
+  begin(onArrive, opts) {
     if (this._phase !== 'idle') return false;
+    let field = null;
+    const want = opts && opts.field;
+    if (want && this._d.fields && Constants.isFeatureEnabled('FIELDS_BY_HEIGHT')) {
+      const plan = this._d.fields.planTo(want, { cos: 1 });
+      if (!plan || !plan.enough) {
+        this._say(fieldNoGasLine(want.altKm), { _keep: true });
+        return false;                // no start without the gas for the whole profile
+      }
+      field = want;
+    }
+    this._field = field;
+    this._profile = null;
+    this._poseAsked = false;
     this._onArrive = typeof onArrive === 'function' ? onArrive : null;
     this._phase = 'wait';
     this._waitS = 0;
@@ -217,6 +299,7 @@ export class TransferTrip {
     if (am && typeof am.resetCarryGiveUps === 'function') am.resetCarryGiveUps();   // a daughter whose last carry failed may try again
     if (am && typeof am.setTripPhase === 'function') am.setTripPhase('wait');         // petal-single: the mission scheduler stands aside; no new carry starts until the burn
     this._desc.clear();
+    if (field) this._askBurnPose();    // the radiators come to the burn band while the daughters come home
     return true;
   }
 
@@ -290,8 +373,30 @@ export class TransferTrip {
     // The prograde turn only when every daughter is home and the rotation lock lets the ship turn: a daughter
     // still on her line is never swung round (the 60 s cap case burns as the ship points).
     const turn = allHome && this._canTurn();
+    // Nets step 3 slice 2b: a trip to a field is planned HERE, with her mass, radiators and attitude as they are now. When she
+    // can turn the whole push goes the way she wants; when a daughter out on her line keeps her where she points, only the
+    // share along her nose does (the profile still burns full thrust). No gas for it, or no push that way: she stays.
+    let plan = null;
+    if (this._field) {
+      this._askBurnPose();
+      const fields = this._d.fields;
+      const dirWanted = this._field.altKm >= this._fromKm() ? 1 : -1;
+      const cos = turn ? 1 : this._aimCos(dirWanted);
+      if (!(cos > 1e-9)) {                // she cannot turn and her nose is not along (or against) her motion: no push that way, she stays (review F2)
+        this._say(fieldNoPointLine(dirWanted, this._field.altKm), { _keep: true });
+        this._stay();
+        return;
+      }
+      plan = fields && Constants.isFeatureEnabled('FIELDS_BY_HEIGHT') ? fields.planTo(this._field, { cos }) : null;
+      this._planCos = cos;
+      if (!plan || !plan.enough) {
+        this._say(fieldNoGasLine(this._field.altKm), { _keep: true });
+        this._stay();
+        return;
+      }
+    }
     this._turned = turn;
-    if (ap && typeof ap.holdPrograde === 'function') ap.holdPrograde({ turn });
+    if (ap && typeof ap.holdPrograde === 'function') ap.holdPrograde(plan ? { turn, retro: plan.profile.dir < 0, reask: true } : { turn });
     if (p && typeof p.setActiveThrustDirection === 'function') p.setActiveThrustDirection(PLUME_ON);
 
     this._phase = 'burn';
@@ -303,7 +408,229 @@ export class TransferTrip {
     this._offProcessed = this._bus.on(Events.CATCH_PROCESSED, (e) => this._onProcessed(e));
 
     const n = this._tipCount() + (this._noseWaiting(true) ? 1 : 0);
-    this._say(startLine(n), { _keep: true });
+    if (plan) {
+      this._beginProfile(plan);
+      this._say(fieldStartLine(plan.profile.dir, this._field.altKm, n), { _keep: true });
+    } else {
+      this._say(startLine(n), { _keep: true });
+    }
+  }
+
+  // ── fields by height (Nets step 3 slice 2b) ───────────────────────────────
+
+  /** @private Her height now, km (from her orbit), or the destination's own when there is no orbit to read. */
+  _fromKm() {
+    const o = this._d.player && this._d.player.orbit;
+    return o && Number.isFinite(o.semiMajorAxis)
+      ? o.semiMajorAxis / Constants.SCENE_SCALE - Constants.EARTH_RADIUS_KM
+      : (this._field ? this._field.altKm : 0);
+  }
+
+  /** @private The cosine of the angle between her nose (+Z) and her motion; null when either is unknown (a stub, no velocity). */
+  _noseCos() {
+    const p = this._d.player;
+    if (!p || !p.quaternion || typeof p.getVelocity !== 'function') return null;
+    let v;
+    try { v = p.getVelocity(); } catch (_e) { return null; }
+    const len = v ? Math.hypot(v.x, v.y, v.z) : 0;
+    if (!(len > 0)) return null;
+    const q = p.quaternion;
+    const nx = 2 * (q.x * q.z + q.w * q.y);      // the third column of her rotation: her +Z in the world
+    const ny = 2 * (q.y * q.z - q.w * q.x);
+    const nz = 1 - 2 * (q.x * q.x + q.y * q.y);
+    return (nx * v.x + ny * v.y + nz * v.z) / len;
+  }
+
+  /**
+   * @private How much of her thrust goes the way the trip wants, 0..1, from where her nose points RIGHT NOW: cos of the angle
+   * between the nose and her motion (a climb pushes along it, a descent against it), nothing below zero. 1 when it cannot be read.
+   * @param {number} dir +1 climb, -1 descent
+   */
+  _aimCos(dir) {
+    const c = this._noseCos();
+    return c === null ? 1 : Math.max(0, Math.min(1, dir * c));
+  }
+
+  /**
+   * @private The radiators above the burn band's edge are brought down to it (the public pose command, once per trip). While a
+   * petal is held for a catch hand-off or a daughter carries, the ship refuses every pose command and speaks the PLAYER's
+   * refusal line ("Radiators held for the catch hand-off."): the trip does not ask then (as ThermalSystem's auto-open does not),
+   * keeps the request unspent and asks again on a later frame (review F4; the push waits for the radiators meanwhile).
+   */
+  _askBurnPose() {
+    const p = this._d.player;
+    if (this._poseAsked || !p || typeof p.setFlowerPose !== 'function') return;
+    if (!this._radiatorsAboveBurnBand()) return;
+    if (p.flowerCommandsLocked === true) return;
+    this._poseAsked = true;
+    p.setFlowerPose('STOW');                     // 146 deg, the burn band's edge
+  }
+
+  /** @private The radiators are above the angle she can thrust at (no push then). */
+  _radiatorsAboveBurnBand() {
+    const p = this._d.player;
+    const th = p && p._flowerThetaRad;
+    return Number.isFinite(th) && th * 180 / Math.PI > Constants.TRIP.BURN_POSE_MAX_DEG + 0.01;
+  }
+
+  /** @private Fix the plan at burn start: the profile, how long it plays, her tilt and node, and the departure of the field. */
+  _beginProfile(plan) {
+    this._profile = plan.profile;
+    this._playP = plan.playS;
+    this._playS = 0;
+    this._overS = 0;
+    this._turnWaitS = 0;
+    this._pausedS = 0;
+    this._pushS = 0;
+    this._flownS = 0;
+    this._wasPower = false;
+    this._billedKg = 0;
+    this._veEff = plan.ispS * Constants.G0;
+    const o = this._d.player && this._d.player.orbit;
+    this._dep = o ? { e0: o.eccentricity || 0, inclination: o.inclination, raan: o.raan, argPerigee: o.argPerigee } : null;
+    this._d.fields.depart();                     // the field she leaves keeps its pieces: stored, not simulated
+    this._pushStatus(0);
+  }
+
+  /** @private The trip could not go (no gas for it once planned with the real mass and attitude): she stays, the mission starts. */
+  _stay() {
+    const cb = this._onArrive;
+    this._onArrive = null;
+    this._finish();
+    if (cb) cb();
+  }
+
+  /** @private No push while the radiators are above the burn band, or her nose is still coming round (bounded). */
+  _pushBlocked(dt) {
+    if (this._radiatorsAboveBurnBand()) { this._askBurnPose(); return true; }
+    const ap = this._d.autopilot;
+    if (ap && typeof ap.tripTurnErrorRad === 'function' && this._turnWaitS < Constants.TRIP.TURN_WAIT_MAX_S
+        && ap.tripTurnErrorRad() > Constants.TRIP.TURN_OK_DEG * Math.PI / 180) {
+      this._turnWaitS += dt;
+      return true;
+    }
+    return false;
+  }
+
+  /** @private Set her orbit from the profile at `f` (0..1): height from the profile, shape and plane held, the anomaly runs on. */
+  _applyProfile(f) {
+    const o = this._d.player && this._d.player.orbit;
+    const dep = this._dep;
+    if (!o || !dep) return;
+    const s = profileAt(this._profile, f);
+    o.semiMajorAxis = s.a * Constants.SCENE_SCALE;
+    o.meanMotion = Math.sqrt(Constants.MU_EARTH / (s.a * s.a * s.a));
+    o.eccentricity = dep.e0 * (1 - f);
+    o.inclination = dep.inclination;
+    o.raan = dep.raan;
+    // keep her place along the orbit (the argument of latitude) while the perigee is held: a push that nudged the shape
+    // must not move her round the circle
+    const u = o.argPerigee + o.trueAnomaly;
+    o.argPerigee = dep.argPerigee;
+    o.trueAnomaly = u - dep.argPerigee;
+  }
+
+  /**
+   * @private Bill the gas for the time the engine has really pushed (review F6): the profile's steady flow, its kg / P per real
+   * second, through the ship's own gas bill (`billBurnGas`). At the planned pace this IS the profile's mass drop at the fraction
+   * played; a slow push burns for longer and so bills more, a pause bills nothing.
+   */
+  _billPush() {
+    const p = this._d.player;
+    if (!p || typeof p.billBurnGas !== 'function' || !(this._playP > 0)) return;
+    const due = this._profile.gasKg * this._pushS / this._playP;
+    const chunk = due - this._billedKg;
+    if (!(chunk > 0)) return;
+    const mNow = p.mass;
+    this._billedKg = due;
+    if (!(mNow > 0) || !(this._veEff > 0)) return;
+    const dv = chunk * this._veEff / mNow;        // billBurnGas bills c * m_ship * dv / (Isp g0): this makes it `chunk` kg
+    this._billedDv += dv;
+    if (p.billBurnGas(dv) < 1 - 1e-9) this._gasShort = true;
+  }
+
+  /**
+   * @private The days on the ship's clock: the burn's real time up to the end of the profile x the profile's days / P. A pause
+   * counts (her orbit moves while she waits; review R3), a slow push takes longer. Time after the profile has played (a carry
+   * still finishing) does not: she has arrived.
+   */
+  _flownDays() {
+    return this._profile && this._playP > 0 ? this._profile.days * this._flownS / this._playP : 0;
+  }
+
+  /** @private The turn is let go of for want of power (the autopilot's trip hold waits for the battery: review R1). */
+  _waitsForPower() {
+    const ap = this._d.autopilot;
+    return !!(ap && typeof ap.tripTurnWaitsForPower === 'function' && ap.tripTurnWaitsForPower());
+  }
+
+  /** @private The strip's words: where, and which day of how many; `paused` = the push waits for her nose (no thrust that way) or for power to turn. */
+  _pushStatus(f, paused = false) {
+    const ap = this._d.autopilot;
+    if (!ap || typeof ap.setTripStatus !== 'function' || !this._profile) return;
+    const days = Math.max(1, Math.round(this._profile.days));
+    ap.setTripStatus({
+      dir: this._profile.dir, toKm: this._field.altKm, day: Math.min(days, Math.floor(f * days) + 1), days,
+      ...(paused ? { wait: this._waitsForPower() ? 'power' : 'nose' } : {}),
+    });
+  }
+
+  /**
+   * @private One frame of the profile burn (see the header): the fraction played advances by pace x dt / P, where the pace is her
+   * nose's cosine to the way she goes NOW over the cosine the profile was planned with; the gas follows the time pushed. Ends the
+   * trip once the profile has played.
+   */
+  _tickProfile(dt) {
+    this._elapsedS += dt;
+    this._noseAgeS += dt;
+    let paused = false;
+    if (this._playS < this._playP) {
+      let used = dt;                              // real time flown this frame: all of it, a pause or a wait for the turn included (R3)
+      const power = this._waitsForPower();
+      if (this._wasPower && !power) this._turnWaitS = 0;   // the power is back and the turn is asked for again: it gets its own wait
+      this._wasPower = power;
+      if (!this._pushBlocked(dt)) {
+        const cosNow = this._aimCos(this._profile.dir);
+        if (cosNow > 1e-9) {                      // (the floor is numeric noise: an exact 90 deg reads +-1e-16)
+          const pace = cosNow / this._planCos;
+          const left = this._playP - this._playS;
+          const adv = Math.min(left, pace * dt);
+          this._playS += adv;
+          this._pushS += adv / pace;              // (the last frame counts only the time it needed)
+          used = adv / pace;
+        } else {
+          paused = true;                          // her nose is not along the way she goes: no push, no gas, until it is
+          // A pause for want of power has no bound (R1: the turn comes back with the battery, and she turns and pushes on). A trip
+          // that has not pushed once and cannot for another reason (the turn never completes) would wait for ever: after the turn
+          // wait's own bound she stays, as at burn start (F2).
+          if (!this._waitsForPower()) {
+            this._pausedS += dt;
+            if (this._pushS === 0 && this._pausedS >= Constants.TRIP.TURN_WAIT_MAX_S) {
+              this._say(fieldNoPointLine(this._profile.dir, this._field.altKm), { _keep: true });
+              this._stay();
+              return;
+            }
+          }
+        }
+      }
+      this._flownS += used;
+    }
+    const f = this._playP > 0 ? this._playS / this._playP : 1;
+    this._applyProfile(f);
+    this._billPush();
+    this._pushStatus(f, paused);
+    this._noteTips();
+    this._tickCarry(dt);
+    if (this._playS < this._playP) return;
+    // The profile is over. A carry still running holds the end (it finishes, CARRY_BACK to docked); one still running
+    // FINISH_GRACE_S later (stuck) is aborted, she snaps docked.
+    this._overS += dt;
+    if (this._carryBusy()) {
+      if (this._overS < Constants.CARRY.FINISH_GRACE_S) return;
+      const am = this._d.armManager;
+      if (am && typeof am.abortAllCarries === 'function') am.abortAllCarries('trip cap');
+    }
+    this._end();
   }
 
   /** @private Nothing limits the ship's turn: no daughter out on a tether, none clamped for a launch. */
@@ -318,6 +645,7 @@ export class TransferTrip {
 
   /** @private */
   _tickBurn(dt) {
+    if (this._profile) { this._tickProfile(dt); return; }
     const T = Constants.TRIP;
     this._elapsedS += dt;
     this._noseAgeS += dt;
@@ -374,7 +702,8 @@ export class TransferTrip {
     this._carryAgeS += dt;
     if (this._carryAgeS < Constants.CARRY.CHECK_S) return;
     this._carryAgeS = 0;
-    if (this._elapsedS >= Constants.TRIP.MAX_REAL_S) return;      // the cap: no new carry
+    // the cap: no new carry (a field trip's cap is the end of its profile, P)
+    if (this._profile ? this._playS >= this._playP : this._elapsedS >= Constants.TRIP.MAX_REAL_S) return;
     if (this._carryBusy()) return;                                // one at a time
     // petal-single: the look itself is the arm manager's (the same one a mission uses); the trip owns when and what it says
     if (typeof am.scheduleCarry === 'function') {
@@ -467,14 +796,25 @@ export class TransferTrip {
 
   /** @private The burn is over: settle the gas, say it, stop the plume and the hold, then run the callback. */
   _end() {
-    // Whatever of the trip's gas was not billed yet (a frame that ended it early) is billed now: exactly one trip's worth.
-    const rest = Constants.TRIP.DV_MPS - this._billedDv;
-    if (rest > 1e-9) {
-      this._billedDv = Constants.TRIP.DV_MPS;
-      const p = this._d.player;
-      if (p && typeof p.billBurnGas === 'function' && p.billBurnGas(rest) < 1 - 1e-9) this._gasShort = true;
+    let line;
+    if (this._profile) {
+      // Nets step 3 slice 2b: she lands exactly on the field's height (circular), the registry records the arrival (it lays the
+      // field out at the mission start, not here), the leg is kept for the caller: the days of the whole burn, pauses included
+      // (review R3), and the gas billed for the time the engine pushed (review F6: not the profile's, when her nose was off).
+      this._applyProfile(1);
+      this.lastLeg = { fieldId: this._field.id, altKm: this._field.altKm, days: this._flownDays(), gasKg: this._billedKg };
+      if (this._d.fields) this._d.fields.arrive(this._field.id);
+      line = this._gasShort ? TRIP_LINES.ARRIVED_LAST_GAS : fieldArrivedLine(this._field.altKm);
+    } else {
+      // Whatever of the trip's gas was not billed yet (a frame that ended it early) is billed now: exactly one trip's worth.
+      const rest = Constants.TRIP.DV_MPS - this._billedDv;
+      if (rest > 1e-9) {
+        this._billedDv = Constants.TRIP.DV_MPS;
+        const p = this._d.player;
+        if (p && typeof p.billBurnGas === 'function' && p.billBurnGas(rest) < 1 - 1e-9) this._gasShort = true;
+      }
+      line = this._gasShort ? TRIP_LINES.ARRIVED_LAST_GAS : TRIP_LINES.ARRIVED;
     }
-    const line = this._gasShort ? TRIP_LINES.ARRIVED_LAST_GAS : TRIP_LINES.ARRIVED;
     const cb = this._onArrive;
     this._onArrive = null;
     this._finish();             // idle and no longer "burning" BEFORE the mission starts (the field spawns, melting is off)
@@ -485,6 +825,9 @@ export class TransferTrip {
   /** @private Common tail of an arrival and an abort. */
   _finish() {
     this._phase = 'idle';
+    this._field = null;
+    this._profile = null;
+    this._dep = null;
     if (_burning === this) _burning = null;
     const amF = this._d.armManager;
     if (amF && typeof amF.setTripPhase === 'function') amF.setTripPhase(null);      // petal-single: carries are a mission thing again

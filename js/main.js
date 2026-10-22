@@ -24,6 +24,7 @@ import { SunLight } from './scene/SunLight.js';
 
 import { PlayerSatellite } from './entities/PlayerSatellite.js';
 import { DebrisField } from './entities/DebrisField.js';
+import { FieldRegistry } from './systems/FieldRegistry.js';
 import { regimeFromStartOrbit } from './entities/CatalogConverter.js';
 import { computeStartOrbit } from './systems/startOrbitMath.js';
 import { ActiveSatellites } from './entities/ActiveSatellite.js';
@@ -636,6 +637,7 @@ const _lassoVelScratch = new THREE.Vector3();
 // Entities
 let player;
 let debrisField;
+let fieldRegistry; // Nets step 3 slice 2b: the debris fields by height and which of their pieces are left (FIELDS_BY_HEIGHT)
 let activeSatellites;
 let armManager;
 let floorWordsStore = null;   // u7 D6: which floors' "LEO means ..." line this player has seen (built in init, read in the game loop)
@@ -1432,6 +1434,9 @@ async function init() {
       if (fp === 'bloom') player.setFlowerPose('CARGO');
     }
   }
+  // Nets step 3 slice 2b: `?fields` turns on fields by height for this boot (FEATURE_FLAGS.FIELDS_BY_HEIGHT, off by default):
+  // the mission boundary flies her to another debris field with her real thruster instead of burning in place.
+  if (new URLSearchParams(window.location.search).get('fields') !== null) Constants.FEATURE_FLAGS.FIELDS_BY_HEIGHT = true;
   // MLI foil v6: per-material orbital envMap on the gold MLI (near-mirror foil
   // needs a contrasty environment to reflect, not the near-uniform RoomEnvironment
   // that leaves it a smooth brass pipe). scene.environment is unchanged for the
@@ -1477,6 +1482,10 @@ async function init() {
   // paint over it). Guarded like registerNearFieldRoot above (a stale cached module just leaves the pieces far pass).
   if (typeof debrisField.attachNearField === 'function') debrisField.attachNearField(sceneManager, player);
   _bootMark('DebrisField constructed (5 authored + ~795 hazard + 5000 background)');
+  // Nets step 3 slice 2b: the fields by height. Inert with FIELDS_BY_HEIGHT off (the field then lays out today's welcome field).
+  fieldRegistry = new FieldRegistry();
+  fieldRegistry.init({ debrisField, player });
+  debrisField.setFieldSource(fieldRegistry);
 
   // --- Active Satellites ---
   activeSatellites = new ActiveSatellites(scene);
@@ -1929,6 +1938,7 @@ async function init() {
     lassoSystem, // t1-stranded D1(d): a lasso in flight blocks the stranded rule
     sunLight, // M1 opening-light staging (_stageOpeningLight, new-game paths only)
     autopilotSystem, // trip-melt D4: the transfer trip's prograde hold (holdPrograde / releasePrograde)
+    fieldRegistry, // Nets step 3 slice 2b: the field she is at, the save block, where the trip goes (FIELDS_BY_HEIGHT)
   });
 
   // --- F15: Wire autopilot dependencies ---

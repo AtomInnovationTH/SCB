@@ -146,6 +146,11 @@ class PersistenceManager {
         // re-derive it from (the game-over shop: 0 cleared). MENU_CONTINUE reopens the stop on it; a save without
         // the key falls back to the mission-boundary count. Additive (no SAVE_VERSION bump).
         resupplyStop: data.resupplyStop === true,
+        // Nets step 3 slice 2b (FEATURE_FLAGS.FIELDS_BY_HEIGHT): the field she is at, which pieces of each field are left,
+        // and the days of ship time the trips have added. Written only when the caller has them (the flag is on), so a flag-off
+        // save is byte-for-byte what it was. Additive (no SAVE_VERSION bump): an old save loads as "fresh, at the start field".
+        ...(data.fields != null ? { fields: data.fields } : {}),
+        ...(Number.isFinite(data.shipDays) && data.shipDays > 0 ? { shipDays: data.shipDays } : {}),
         // save() is a WHITELIST: a key that a read-modify-write setter writes
         // (as setCeremonyFlag does with ceremonyFlags above) but that is
         // missing from this list is silently dropped on the next write. (The

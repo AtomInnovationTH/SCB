@@ -183,6 +183,8 @@ export function isChaseDone(target) {
 
 /** Autopilot rotation rate (rad/s) — gentler than manual (0.3) */
 const AP_ROT_RATE = 0.2;
+/** Nets step 3 slice 2b: the orbit-frame offset of a retrograde trip hold: 180 deg about her up (+Y) axis. */
+const _Q_TRIP_RETRO = new THREE.Quaternion(0, 1, 0, 0);
 
 /**
  * Skip threshold (radians) for the rotation slew: below this the nose is already where it should be (numerical noise),
@@ -455,6 +457,12 @@ export class AutopilotSystem {
     this._tripHold = false;
     /** trip-melt D4: the trip hold also steers the ship to prograde (false: the trip burns as the ship points). */
     this._tripTurn = false;
+    /** Nets step 3 slice 2b: the trip hold steers to RETROGRADE instead (a descent pushes against her motion): nose -Z of the orbit frame. */
+    this._tripRetro = false;
+    /** Review R1: the trip asked for the turn (holdPrograde `turn`), whether or not it runs right now: an empty battery drops it and it comes back with power. */
+    this._tripTurnWanted = false;
+    /** Nets step 3 slice 2b: what the strip says about a trip between fields ({dir, toKm, day, days}), or null. */
+    this._tripStatus = null;
     /** ap-smooth: the engaged prograde follow keeps the heading in the ORBIT frame (time warp above 1; see `_holdFrameForWarp`). */
     this._apFrameHold = false;
     /** l5c-reach E7: who owns the attitude hold ('leash' = LeashDriver), or null. Other listeners may not release an owned hold. */
@@ -577,6 +585,8 @@ export class AutopilotSystem {
       headingMode: engaged ? this._headingMode : null,
       targetName,
       rangeM: (engaged && typeof range === 'number' && Number.isFinite(range)) ? range : null,
+      // Nets step 3 slice 2b: a trip between fields tells the strip where it is going and how far along it is (FmaStrip).
+      ...(trip && this._tripStatus ? { trip: { ...this._tripStatus } } : {}),
     };
   }
 
@@ -588,13 +598,20 @@ export class AutopilotSystem {
    * `applyCartesianImpulse`), `_engaged` stays false, and `engage()` / `engageCluster()` keep refusing the player
    * while the trip burns; this hold goes through none of that.
    * `turn: false` (a daughter is still out on her line) holds nothing: the trip burns as the ship points, but the
-   * strip still reads TRANSFER. The hold drops itself at an empty battery (DECISIONS §27: the autopilot switches off
-   * at 0 Wh); the trip then goes on burning as it points.
+   * strip still reads TRANSFER. The hold drops its turn at an empty battery (DECISIONS §27: the autopilot switches off
+   * at 0 Wh) and the trip goes on burning as she points; review R1: the turn comes back once the battery holds
+   * TRIP.TURN_POWER_WH (`tripTurnWaitsForPower`, `_tickTripPower`), so a descent that needs it waits for power instead of for ever.
    * @param {{turn?: boolean}} [opts]
    */
   holdPrograde(opts = {}) {
     this._tripHold = true;
     this._tripTurn = opts.turn !== false;
+    // Nets step 3 slice 2b: `retro: true` holds her nose AGAINST her motion (a descent pushes against it): the same orbit-frame
+    // hold, eased to a half turn about her up axis instead of to nothing.
+    this._tripRetro = opts.retro === true;
+    // Review R1 is for the field trip only (`reask: true` from TransferTrip when it plays a profile): today's flat trip (flag off)
+    // keeps the old rule, the turn dropped at an empty battery stays dropped and the player keeps the nose.
+    this._tripTurnWanted = this._tripTurn && opts.reask === true;
     if (this._tripTurn && this._player && !this._engaged) this._player.autopilotEngaged = true;
   }
 
@@ -602,10 +619,60 @@ export class AutopilotSystem {
   releasePrograde() {
     this._dropTripTurn();
     this._tripHold = false;
+    this._tripRetro = false;
+    this._tripTurnWanted = false;
+    this._tripStatus = null;
+  }
+
+  /**
+   * Nets step 3 slice 2b: the trip between fields says where it is going and how far along (the strip's line).
+   * @param {{dir: number, toKm: number, day: number, days: number, wait?: string}|null} status null clears it; `wait: 'nose'` =
+   *   the push waits for her nose to point the way she goes (review F6: the strip says so)
+   */
+  setTripStatus(status) { this._tripStatus = status || null; }
+
+  /**
+   * Nets step 3 slice 2b: how far the trip hold's turn to the burn attitude still has to go, rad (0 when it is not turning
+   * her: no hold, a burn "as she points", or the hold is on a scripted turn / aim / reel-in that owns the nose). The trip
+   * waits for it to be small before the push counts.
+   * @returns {number}
+   */
+  tripTurnErrorRad() {
+    const p = this._player;
+    if (!this._tripHold || !this._tripTurn || this._engaged || !p || !p._manualRotation) return 0;
+    if (this._turn || this._aimCoroutine || this._attitudeHold) return 0;
+    return this._tripRetro ? p._manualRotation.angleTo(_Q_TRIP_RETRO) : 2 * Math.acos(Math.min(1, Math.abs(p._manualRotation.w)));
   }
 
   /** @returns {boolean} true while the transfer trip's hold is on (the strip reads TRANSFER) */
   isTripHold() { return this._tripHold; }
+
+  /**
+   * Review R1 (Ruling 0: without power she cannot hold her nose): true while the trip's turn is wanted but let go of at an empty
+   * battery, so the ship waits for power. The hold asks for its turn again by itself once the battery holds TRIP.TURN_POWER_WH
+   * (`_tickTripPower`); there is no time limit. The trip reads it to say why a push waits and to keep the wait out of its bound.
+   * @returns {boolean}
+   */
+  tripTurnWaitsForPower() { return this._tripHold && this._tripTurnWanted && !this._tripTurn && !this._engaged; }
+
+  /**
+   * @private Review R1: the trip hold's power rule, once per frame. An empty battery (under BATTERY_EMPTY_WH) drops the turn
+   * (DECISIONS §27, as before: the trip burns as she points). Once the battery holds TRIP.TURN_POWER_WH the turn is asked for
+   * again - the same hold, the same handback: `autopilotEngaged` goes back on and `_tickTripHold` eases the nose round from
+   * wherever it ended up. A hold that never wanted a turn (a daughter out on her line) is never asked to turn.
+   */
+  _tickTripPower() {
+    if (this._tripTurn) {
+      if (this._batteryEmpty()) this._dropTripTurn();
+      return;
+    }
+    if (!this._tripTurnWanted || this._engaged || !this._player || this._batteryEmpty()) return;
+    const wh = this._player.resources && this._player.resources.battery;
+    if (Number.isFinite(wh) && wh >= Constants.TRIP.TURN_POWER_WH) {
+      this._tripTurn = true;
+      this._player.autopilotEngaged = true;
+    }
+  }
 
   /** @private Stop steering for the trip (keeps the TRANSFER word while `_tripHold` stays set). */
   _dropTripTurn() {
@@ -632,7 +699,16 @@ export class AutopilotSystem {
     if (typeof p.setOrbitFrameHold !== 'function') return;
     const drive = this._tripTurn && !this._turn && !this._aimCoroutine && !this._attitudeHold;
     p.setOrbitFrameHold(drive);
-    if (drive && dtWorld > 0) p.easeOrbitFrameOffset(AP_ROT_RATE * dt, AP_ROT_DEADZONE);
+    if (!drive || !(dtWorld > 0)) return;
+    if (!this._tripRetro) { p.easeOrbitFrameOffset(AP_ROT_RATE * dt, AP_ROT_DEADZONE); return; }
+    // Nets step 3 slice 2b, retrograde: the same ease (PlayerSatellite.easeOrbitFrameOffset goes to nothing), toward the
+    // half turn about her up axis instead - her +Z then points against her motion with +Y still away from the Earth.
+    const q = p._manualRotation;
+    if (!q || typeof q.slerp !== 'function') return;
+    const angle = q.angleTo(_Q_TRIP_RETRO);
+    const maxAngle = AP_ROT_RATE * dt;
+    if (!(angle > AP_ROT_DEADZONE) || !(maxAngle > 0)) return;
+    q.slerp(_Q_TRIP_RETRO, Math.min(maxAngle, angle) / angle).normalize();
   }
 
   /**
@@ -1259,7 +1335,7 @@ export class AutopilotSystem {
     // does not turn the ship; a scripted turn / aim / reel-in hold owns the nose and the hold steps aside for the last
     // two (the leash hand-off turn is `_turn`). G2: the heading is kept in the ORBIT frame (see `_tickTripHold`).
     if (this._tripHold && !this._engaged && this._player) {
-      if (this._tripTurn && this._batteryEmpty()) this._dropTripTurn();   // §27: not at 0 Wh; the trip burns as it points
+      this._tickTripPower();   // §27: not at 0 Wh (the trip burns as she points); R1: the turn comes back with the power
       this._tickTripHold(dt, dtWorld);
       return;
     }

@@ -50,6 +50,9 @@ class GameState {
 
     /** @type {number} */
     this.missionTime = 0;
+
+    /** @type {number} Nets step 3 slice 2b: days of ship time the trips between fields have added (FIELDS_BY_HEIGHT; saved). */
+    this.shipDays = 0;
   }
 
   /**
@@ -167,6 +170,7 @@ class GameState {
     this.score = 0;
     this.debrisCleared = 0;
     this.missionTime = 0;
+    this.shipDays = 0;
     this._winEmitted = false;  // S1 Fix L2: reset guard on new game
     this._penultimateHailed = false; // last-debris ceremony guards
     this._finalHailed = false;

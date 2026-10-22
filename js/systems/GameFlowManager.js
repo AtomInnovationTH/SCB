@@ -636,6 +636,16 @@ export class GameFlowManager {
       gameState.debrisCleared = save.debrisCleared || 0;
       gameState.score = save.totalScore || 0;
 
+      // Nets step 3 slice 2b (FIELDS_BY_HEIGHT): resetGame put her at the start altitude; with the flag on, the field the
+      // save was made in puts her back at ITS height with ITS remaining pieces (DebrisField lays them out on its next
+      // update: a load fires no MISSION_START). A game-over save restarts at the start field (the CONTINUE rule below).
+      gameState.shipDays = Number.isFinite(save.shipDays) && save.shipDays > 0 ? save.shipDays : 0;
+      if (save.gameOver !== true && this._refs.fieldRegistry && this._refs.fieldRegistry.isOn()) {
+        // (the scorer's own, UNCAPPED mission number - the one MISSION_START carries and the registry's `at` follows; the arc's
+        // `missionNum` stops at 12, so past 60 catches a boundary save would never look owed)
+        this._refs.fieldRegistry.restore(save.fields, { missionNumber: scoringSystem.getMissionNumber() });
+      }
+
       // Notify self-managing systems that a saved game was loaded
       // (TutorialSystem listens to skip tutorial for veterans)
       eventBus.emit(Events.PERSISTENCE_LOADED);
@@ -782,6 +792,7 @@ export class GameFlowManager {
       gameState.score = 0;
       gameState.debrisCleared = 0;
       gameState.missionTime = 0;
+      gameState.shipDays = 0;   // slice 2b: the FieldRegistry resets itself on this event
 
       // Reset scoring, then restore carried credits
       scoringSystem.reset();
@@ -2032,6 +2043,11 @@ export class GameFlowManager {
    *   writes no flag.
    */
   saveGame(opts) {
+    // Nets step 3 slice 2b: a save written while she is flying to a field would hold the gas billed so far and the field she
+    // LEFT (the trip is not saved as a trip). So none is written mid-flight: a reload then finds the save of the mission
+    // boundary - at the field she left, with the gas she had before the trip - and the arrival writes the next one.
+    // (A game-over save is always written.)
+    if (this._trip && this._trip.isBurning() && this._trip.field && !(opts && opts.gameOver === true)) return;
     const { shopScreen, resourceSystem } = this._refs;
     const scoring = scoringSystem.serialize();
     const resources = resourceSystem.serialize();
@@ -2071,6 +2087,14 @@ export class GameFlowManager {
         debrisByTier: scoring.debrisByTier,
       },
     };
+
+    // Nets step 3 slice 2b (FIELDS_BY_HEIGHT): the field she is at, which pieces of each field are left, and the days the
+    // trips have added. `serialize()` answers null with the flag off, so a flag-off save is exactly what it was.
+    const fieldsSave = this._refs.fieldRegistry ? this._refs.fieldRegistry.serialize() : null;
+    if (fieldsSave) {
+      saveData.fields = fieldsSave;
+      if (gameState.shipDays > 0) saveData.shipDays = gameState.shipDays;
+    }
 
     // Let self-managing systems contribute their state (e.g. SubsystemEvents)
     eventBus.emit(Events.PERSISTENCE_GATHER, saveData);
@@ -2174,12 +2198,46 @@ export class GameFlowManager {
     const r = this._refs;
     if (!Constants.isFeatureEnabled('TRANSFER_TRIP') || !r || !r.player || !gameState.isGameplay()) { start(); return; }
     this._syncTripDeps();
+    // Nets step 3 slice 2b (FIELDS_BY_HEIGHT): with the flag on the boundary flies her to another field (until lane 2b-2's list,
+    // the nearest one she can reach: `FieldRegistry.defaultNext`); none = she stays and the next mission starts at once. The
+    // arrival adds the profile's days to the ship's clock, starts the mission (MISSION_START lays the field out) and saves.
+    const reg = r.fieldRegistry;
+    if (reg && reg.isOn()) {
+      if (this._trip.isActive()) return;           // a trip is already on its way: its arrival starts whichever mission is due
+      const field = reg.defaultNext();
+      const begun = field && this._trip.begin(() => {
+        const leg = this._trip.lastLeg;
+        this._trip.lastLeg = null;
+        if (leg) gameState.shipDays += leg.days;
+        start();
+        this._runDeferredBoundary();
+        if (leg) this.saveGame();
+      }, { field });
+      if (!begun) start();
+      return;
+    }
     // trip-melt-2 D12a: a credit that reached the next boundary DURING the trip ran no boundary then (see the credit
     // handler); it runs now, once the burn has ended and the mission it started has fired MISSION_START.
     this._trip.begin(() => {
       start();
       this._runDeferredBoundary();
     });
+  }
+
+  /**
+   * @private Nets step 3 slice 2b (FIELDS_BY_HEIGHT; review F1): the mission boundary credit writes its save while the trip to the
+   * next field is still to be flown (the daughters are coming home), and a mid-flight save is skipped, so a reload of it finds her
+   * at the field she left with the next mission's catch count. The save says so (`FieldRegistry` keeps the last mission that
+   * started); after the load, once her field is laid out, the boundary is taken again: the trip begins from here, with the gas
+   * she had before it. Where the player picks the field (lane 2b-2) this is the place that opens the list.
+   * @param {number} dt real seconds (0 while the world is held)
+   */
+  _resumeOwedTrip(dt) {
+    const reg = this._refs && this._refs.fieldRegistry;
+    if (!reg || typeof reg.takeResumeTrip !== 'function' || !(dt > 0) || this._trip.isActive() || !gameState.isGameplay()) return;
+    if (!reg.takeResumeTrip()) return;
+    // (the one call site of the mission check that follows no clearDebris(): the start a load found owed; test-ScoringSystem pins it)
+    this._beginTripThen(() => { scoringSystem.checkMissionTransition(); });
   }
 
   /** @private trip-melt-2 D12a: the boundary a mid-trip credit reached runs after the trip's mission start. */
@@ -2201,6 +2259,13 @@ export class GameFlowManager {
       noseWaiting: () => this._noseCanLeash(),
       carryBusy: () => !!(am && typeof am.isCarrying === 'function' && am.isCarrying()),
       rackCanCarry: () => !!(am && typeof am.rackCanCarry === 'function' && am.rackCanCarry()),
+      // Nets step 3 slice 2b: the trip's face of the field registry (the piece store is DebrisField's; the selection is cleared
+      // because a stored piece may be the target)
+      fields: r.fieldRegistry ? {
+        planTo: (f, o) => r.fieldRegistry.planTo(f, o),
+        depart: () => { r.fieldRegistry.depart(); targetSelector.setTarget(null, { silent: true }); },
+        arrive: (id) => r.fieldRegistry.arrive(id),
+      } : null,
     });
   }
 
@@ -2277,6 +2342,7 @@ export class GameFlowManager {
   update(dt) {
     // t1-stranded D1: first, before the held-mission-start early return below (that one returns on almost every frame)
     this._updateStranded(dt);
+    this._resumeOwedTrip(dt);
     // trip-melt D2/D6: the burn between missions (waits for the daughters, then burns; `dt` is 0 while the world is held)
     this._trip.update(dt);
     const p = this._pendingMissionStart;

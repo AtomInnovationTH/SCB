@@ -2694,6 +2694,15 @@ export const Constants = {
     // collar and the daughter racks), and the next mission starts when the trip ends. OFF: the next mission starts at once
     // and nothing melts. Read through Constants.isFeatureEnabled('TRANSFER_TRIP').
     TRANSFER_TRIP:            true,
+
+    // Fields by height (Nets step 3 slice 2b, DECISIONS §33 rows 6 and 10; js/systems/FieldRegistry.js, TripProfile.js).
+    // ON: the debris fields are destinations stacked by height (Constants.FIELDS); a mission boundary flies the mother to
+    // another field with her real thruster (the trip plays a climb or descent from the drag-and-thrust profile), fields keep
+    // the pieces nobody caught, and the field state and the ship days are saved. OFF: today's game exactly (the flat 20 m/s
+    // trip that does not move her, a fresh welcome field every mission). Built behind the flag so the satellite lane (slice 3)
+    // can turn it on together with missions 2-3 rewritten around the map; the URL `?fields` turns it on for a boot.
+    // Read through Constants.isFeatureEnabled('FIELDS_BY_HEIGHT'), so REALITY_MODE can never turn it on.
+    FIELDS_BY_HEIGHT:         false,
   },
 
   // =========================================================================
@@ -5414,6 +5423,47 @@ export const Constants = {
     MAX_REAL_S: 120,       // real seconds: the longest; an unfinished melt keeps its progress for the next trip
     WAIT_DOCK_MAX_S: 60,   // real seconds the trip waits for daughters to come home; then it burns as the ship points
     REFUSAL_GAP_S: 2,      // real seconds between two "Burning to the next field." refusal lines of one kind
+
+    // ── Fields by height (FEATURE_FLAGS.FIELDS_BY_HEIGHT; TripProfile.js, TransferTrip.js) ────────────────────────────────
+    // The real thruster (DECISIONS §33 row 10): the Busek BHT-600 pushes 39 mN on xenon at 600 W; the loaded gas pushes
+    // `FUELS[gas].thrustScale` of that (argon 0.46 = 18 mN). The research doc quotes both ("18 / 39 mN at 600 W").
+    XENON_THRUST_N: 0.039,
+    PROFILE_STEP_S: 60,    // game seconds per step of the trip profile (the integrator of TripProfile.js)
+    PROFILE_MAX_DAYS: 400, // a profile that has not arrived by then does not (drag beats the push, or a typo): not flyable
+    // The trip PLAYS the profile (row 10: "sped up to 1-2 minutes"): P = clamp(PLAY_BASE_S + PLAY_PER_DAY_S x days, PLAY_MIN_S,
+    // PLAY_MAX_S) real seconds. A 5-day climb plays in 68 s, a 17-day one in 86 s, a 40-day one in 120 s.
+    PLAY_BASE_S: 60,
+    PLAY_PER_DAY_S: 1.5,
+    PLAY_MIN_S: 60,
+    PLAY_MAX_S: 120,
+    BURN_POSE_MAX_DEG: 146, // the radiators the profile is flown at (THERMAL.FLOWER.POSE_THRUST_MAX_DEG, the burn band's edge)
+    TURN_OK_DEG: 10,        // the push counts once her nose is within this of the burn attitude (a descent turns a half turn first)
+    TURN_WAIT_MAX_S: 45,    // ... but the profile never waits longer than this for the turn (real s; the turn itself takes about 16 s)
+    // Review R1: at an empty battery (under 0.5 Wh) the ship cannot hold her nose and the trip's turn lets go; the trip asks for
+    // it again once the battery holds this much (Wh). Higher than the off line on purpose: at the trip's 100x clock an eclipse
+    // lasts ~2 real s and the base load takes ~1 Wh of it (measured 2026-10-22, research doc), so 2 Wh rides one out and the
+    // turn does not let go again at the next shadow. No time limit: without power she waits for it.
+    TURN_POWER_WH: 2,
+  },
+
+  // =========================================================================
+  // FIELDS - the debris fields, stacked by height in the start orbit's tilt and node (Nets step 3 slice 2b,
+  // DECISIONS §33 row 6; js/systems/FieldRegistry.js, FEATURE_FLAGS.FIELDS_BY_HEIGHT)
+  // =========================================================================
+  // The start field (350 km, mission 1) is today's welcome field, unchanged. The four small fields above it follow row 6:
+  // "small pieces at 350-450 km" in the SAME tilt and node as the start orbit (tilting costs 134 m/s per degree, research doc).
+  // Each holds PIECES pieces laid out like DebrisField's WELCOME_FIELD rows (3-10 kg fragments and a cubesat, the rows' own
+  // masses); `seed` fixes the along-track rolls of the free rows, so the same field always looks the same.
+  // Heights, counts and seeds are ESTIMATES to tune (§33: "counts and prices are estimates to tune").
+  FIELDS: {
+    PIECES: 7,
+    LIST: [
+      { id: 'f350', altKm: 350, seed: 350, start: true },
+      { id: 'f375', altKm: 375, seed: 375 },
+      { id: 'f400', altKm: 400, seed: 400 },
+      { id: 'f425', altKm: 425, seed: 425 },
+      { id: 'f450', altKm: 450, seed: 450 },
+    ],
   },
 
   // =========================================================================

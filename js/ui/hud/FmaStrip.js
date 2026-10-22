@@ -390,7 +390,18 @@ export class FmaStrip {
       const named = engaged && s.headingMode === 'TARGET' && typeof s.targetName === 'string' && s.targetName
         ? shortTypeName(s.targetName) : null;
       if (phase === 'TRANSFER') {
-        this._plainText = 'Burning to the next field';        // trip-melt D8: the ship's own burn, not "Autopilot on"
+        // trip-melt D8: the ship's own burn, not "Autopilot on". Nets step 3 slice 2b: a trip between fields says where she is
+        // going and which day of it this is ("Climbing to 425 km · day 3 of 5"); without that data, the old words.
+        // Review F6: while her nose is not along the way she goes (a climb pushes along her motion, a descent against it) the push
+        // waits, and the line says why. Review R1: the same when the turn waits for power (an empty battery).
+        const t = s.trip;
+        this._plainText = (t && Number.isFinite(t.toKm) && Number.isFinite(t.day) && Number.isFinite(t.days) && t.days >= 1)
+          ? (t.wait === 'power'
+            ? (t.dir < 0 ? 'Descent paused: no power to turn' : 'Climb paused: no power to turn')
+            : t.wait === 'nose'
+              ? (t.dir < 0 ? 'Descent paused: nose not backward' : 'Climb paused: nose not forward')
+              : `${t.dir < 0 ? 'Descending' : 'Climbing'} to ${Math.round(t.toKm)} km ${DOT} day ${t.day} of ${t.days}`)
+          : 'Burning to the next field';
       } else if (named) {
         this._plainText = rangeText === NO_RATE ? `Autopilot to ${named}` : `Autopilot to ${named} ${DOT} ${rangeText}`;
       } else {

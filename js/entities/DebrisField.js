@@ -632,6 +632,11 @@ export class DebrisField {
 
     /** @type {boolean} Welcome field already spawned this game */
     this._welcomeFieldSpawned = false;
+    /** Nets step 3 slice 2b (FEATURE_FLAGS.FIELDS_BY_HEIGHT): the FieldRegistry that says which field's pieces the
+     *  mission-start spawn lays out (null = today's welcome field), and the pieces of the fields she has left. */
+    this._fieldSource = null;
+    /** @type {Map<string, object>} `${fieldId}|${row}` -> a piece taken out of play when she left its field */
+    this._fieldStored = new Map();
     /** @type {Set<number|string>} ids of onboarding tease pieces pinned ahead of
      *  the mother (orbit re-synced each frame) until each is caught. */
     this._onboardingPinIds = new Set();
@@ -759,7 +764,10 @@ export class DebrisField {
       this._currentMissionNumber = 1;       // ST-4.C
       for (const d of this.debrisList) d.welcomeSpawn = false;
       this._clearOnboardingPin();
+      this._reviveStoredFieldPieces();      // slice 2b: the pieces of the fields she left go back to the pool
     });
+    // slice 2b: a game-over CONTINUE is a fresh attempt at the start field (the registry resets itself): the same clean-up
+    eventBus.on(Events.GAMEOVER_CONTINUE, () => this._reviveStoredFieldPieces());
 
     // M1 guidance T6: the re-seat safety net's "busy" set follows the
     // AUTOPILOT_TARGET_LOCK / UNLOCK pair (mother AP + every daughter) and is
@@ -3399,6 +3407,87 @@ export class DebrisField {
     return { fwdM, latM, radM };
   }
 
+  // ==========================================================================
+  // FIELDS BY HEIGHT (Nets step 3 slice 2b, FEATURE_FLAGS.FIELDS_BY_HEIGHT; js/systems/FieldRegistry.js)
+  // ==========================================================================
+
+  /**
+   * Give the field its registry: the mission-start spawn (and the spawn after a load) asks it which field she is at and which
+   * of that field's pieces are left. Null = today's welcome field. @param {object|null} source
+   */
+  setFieldSource(source) { this._fieldSource = source || null; }
+
+  /**
+   * A seeded roll in [0, 1) for a field's row: the same field always lays its free rows out the same way. (mulberry32 on a
+   * mix of the seed and the row.)
+   * @param {number} seed @param {number} row @returns {number}
+   */
+  static fieldRoll(seed, row) {
+    let t = (Math.imul((seed | 0) ^ 0x9e3779b9, 0x85ebca6b) + Math.imul((row | 0) + 1, 0xc2b2ae35)) >>> 0;
+    t = (t + 0x6d2b79f5) >>> 0;
+    let r = Math.imul(t ^ (t >>> 15), t | 1);
+    r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  }
+
+  /**
+   * She is leaving a field (or laying it out again on a Stay): every piece of a field that is still free is taken out of play
+   * - not alive, not tracked, its instance scaled to nothing - and kept by (field, row) so the next visit puts the SAME piece
+   * back. They are stored, not simulated. A piece somebody holds (a catch on her nose, a rack, a tip, a net, a daughter's hand)
+   * is not free: it rides with her and is credited later, still tagged with its field. No event is emitted: nothing was
+   * caught, so the registry keeps the row.
+   * @returns {number} how many pieces were stored
+   */
+  storeFieldPieces() {
+    let stored = 0;
+    for (const d of this.debrisList) {
+      if (!d.alive || d.fieldId == null) continue;
+      if (d._captured || d._armPinned || d._capturedByArm || d._motherParked || d._netted || d._committedNetArmId != null) continue;
+      if (d._onboardingPinned) this._clearOnboardingPin(d.id);
+      if (this._heldProxies && this._heldProxies.has(d.id)) this._dropHeldProxy(d.id);
+      d.alive = false;
+      d.tracked = false;
+      d._fieldStored = true;
+      const lookup = this._instanceLookup && this._instanceLookup.get(d.id);
+      if (lookup) {
+        const mesh = this.instancedMeshes[lookup.meshKey];
+        if (mesh) {
+          this._tempMatrix.makeScale(0, 0, 0);
+          mesh.setMatrixAt(lookup.instanceIndex, this._tempMatrix);
+          mesh.instanceMatrix.needsUpdate = true;
+        }
+      }
+      this._fieldStored.set(`${d.fieldId}|${d.fieldRow}`, d);
+      stored++;
+    }
+    return stored;
+  }
+
+  /** @private The piece stored for (field, row), taken out of the store; null when there is none (or it is back in play). */
+  _takeStoredFieldPiece(fieldId, row) {
+    const key = `${fieldId}|${row}`;
+    const d = this._fieldStored.get(key);
+    if (!d) return null;
+    this._fieldStored.delete(key);
+    return d.alive ? null : d;
+  }
+
+  /**
+   * @private A new run: the stored pieces go back to the pool (alive, as the ordinary debris they were) and no piece keeps a
+   * field tag - the next game's registry starts fresh, and a stale tag would take a row out of a field it never belonged to.
+   */
+  _reviveStoredFieldPieces() {
+    for (const d of this._fieldStored.values()) {
+      d.alive = true;
+      d.tracked = !d.hazard;
+      d._fieldStored = false;
+    }
+    this._fieldStored.clear();
+    for (const d of this.debrisList) {
+      if (d.fieldId != null) { d.fieldId = null; d.fieldRow = null; }
+    }
+  }
+
   /**
    * Spawn welcome field debris near the player for immediate first-game engagement.
    * Repositions far-away debris to nearby co-orbital positions.
@@ -3417,7 +3506,19 @@ export class DebrisField {
     // orbital cluster regions populate globally (handled elsewhere), NOT the
     // local welcome group. Slicing this by profile.clusters was a regression
     // introduced in ST-4.C that reduced M1 to a single debris item.
-    const fieldToSpawn = WELCOME_FIELD;
+    // Nets step 3 slice 2b (FEATURE_FLAGS.FIELDS_BY_HEIGHT): with the flag on the registry names the field she is at and
+    // the rows of it nobody has caught; THOSE rows are laid out (same rows, same placement, same tags), the pieces of the
+    // field she left are stored, and a row's piece comes back from the store when she has been here before. Flag off (or no
+    // registry, or a test mock that never had one): `fieldPlan` is null and this is today's seven.
+    const fieldPlan = this._fieldSource && typeof this._fieldSource.spawnPlan === 'function' ? this._fieldSource.spawnPlan() : null;
+    let fieldRows = null;                       // the WELCOME_FIELD row index of each piece to lay out (null = all, in order)
+    if (fieldPlan) {
+      this.storeFieldPieces();                  // anything of hers still free goes back into store first (a Stay re-seats it)
+      fieldRows = fieldPlan.rows.filter((r) => Number.isInteger(r) && WELCOME_FIELD[r]);
+      if (Number.isInteger(fieldPlan.missionNumber) && fieldPlan.missionNumber > 0) this._currentMissionNumber = fieldPlan.missionNumber;
+    }
+    const fieldToSpawn = fieldRows ? fieldRows.map((r) => WELCOME_FIELD[r]) : WELCOME_FIELD;
+    const rowOf = (i) => (fieldRows ? fieldRows[i] : i);   // the WELCOME_FIELD row spec i of `fieldToSpawn` came from
 
     // Collect candidates: alive debris not already special-tagged. Prefer debris
     // in different orbit bands (farThreshold ≈ 3km altitude diff) so we don't
@@ -3513,7 +3614,9 @@ export class DebrisField {
       // pickFar already scans the combined fragment+cubesat scorePool and returns
       // any unused candidate (score ≥ 0), so it only returns null when that pool
       // is exhausted/empty — fall straight through to far-other then near.
-      let chosen = pickFar(spec) || pickAny(farOther) || pickAny(fallbackCandidates);
+      // slice 2b: a row she has been to before gets ITS piece back (taken out of play when she left); else a fresh candidate.
+      let chosen = (fieldPlan && this._takeStoredFieldPiece(fieldPlan.fieldId, rowOf(i)))
+        || pickFar(spec) || pickAny(farOther) || pickAny(fallbackCandidates);
       if (!chosen) break; // ran out of candidates entirely
       usedIds.add(chosen.id);
       assigned[i] = chosen;
@@ -3548,6 +3651,13 @@ export class DebrisField {
       // Tolerant of mock receivers (tests bind only _spawnWelcomeField onto a
       // plain object): fall back to the prototype's helper.
       const _place = this._placeWelcomePiece || DebrisField.prototype._placeWelcomePiece;
+      // slice 2b: a field's free rows take their along-track roll from the field's seed (the same field always looks the
+      // same); the placement keeps a roll that lies inside the row band, so this decides it. Pinned rows have no roll.
+      if (fieldPlan && !spec.pin) {
+        const fMin = Number.isFinite(spec.fwdMinM) ? spec.fwdMinM : 0;
+        const fMax = Number.isFinite(spec.fwdMaxM) ? spec.fwdMaxM : fMin;
+        debris._welcomeFwdM = fMin + DebrisField.fieldRoll(fieldPlan.seed, rowOf(i)) * (fMax - fMin);
+      }
       _place.call(this, debris, spec, playerOrbit, _frameComp);
 
       // Adjust mass to spec
@@ -3671,7 +3781,12 @@ export class DebrisField {
       // Which curated WELCOME_FIELD spec row realised this piece (0-based).
       // Score-based candidate matching means debrisList order != spec order, so
       // this lets consumers/tests recover the intended progression position.
-      debris._welcomeSpecIndex = i;
+      debris._welcomeSpecIndex = rowOf(i);
+      if (fieldPlan) {   // slice 2b: which field and which of its rows this piece is (FieldRegistry reads them when it is removed)
+        debris.fieldId = fieldPlan.fieldId;
+        debris.fieldRow = rowOf(i);
+        debris._fieldStored = false;
+      }
 
       // Flag safety guard. Welcome pieces are reused from far candidates that
       // may have been flag-eligible (≥2 m sat/rocket) at build time — and the
