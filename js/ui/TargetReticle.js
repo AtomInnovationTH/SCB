@@ -21,6 +21,7 @@ import { orbitToSceneCartesian, orbitToSceneCartesianInto, keplerianToCartesian,
 import { calmBreathe, finitePulse, prefersReducedMotion } from './hudPulse.js';
 import { classify } from './hud/TargetColorLaw.js';
 import { mono } from '../core/Typeface.js';
+import { GestureHints } from './hud/GestureHints.js';   // u17: the fire prompt follows glass, read when drawn
 import { isMarked } from '../systems/ScanMarks.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg } from '../systems/ResourceSystem.js';
 
@@ -1146,6 +1147,11 @@ export class TargetReticle {
     }
   }
 
+  /** @private u17: glass is read when a caption is drawn, never cached; no GestureHints (headless) means desktop. */
+  _glassNow() {
+    return !!(GestureHints && typeof GestureHints.isGlass === 'function' && GestureHints.isGlass());
+  }
+
   /**
    * Draw on-screen bracket reticle for debris.
    * @private
@@ -1390,7 +1396,9 @@ export class TargetReticle {
       if (!outOfRange && this._debrisCleared < 2) {
         if (this._firstInRangeLockTime == null) this._firstInRangeLockTime = this._time;
         const sinceLock = this._time - this._firstInRangeLockTime;
-        if (sinceLock >= NUDGE_DELAY_S) {
+        // u17 browser-check fix (owner u15 D5): on a touch screen the N key is never shown, and this prompt has no touch control to
+        // name instead (the LAUNCH NET chip and the comms lesson teach the net there), so it is left out. Read at draw time.
+        if (sinceLock >= NUDGE_DELAY_S && !this._glassNow()) {
           // Stays visible until the net is fired, but the pulse is intentionally
           // calm: a slow breath (~0.29 Hz) whose amplitude eases from ±0.16 down
           // to ±0.05 over the first ~6 s, so it greets the eye then settles into
