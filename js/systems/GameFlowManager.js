@@ -1074,6 +1074,13 @@ export class GameFlowManager {
         const creditPaid = !!(debris && debris._credited);
         const payCredit = !data.digested && !creditPaid;
 
+        // Nets step 3 (lane s3-field-credit): a credited catch has left its field, even one kept aboard ({ parked: true }: mated
+        // at the nose collar or parked on a rack, paid but not removed below; the removal is the only other place a row leaves).
+        // The row leaves HERE, before the credit legs, the boundary's where-next list and the credit's save read the rows in
+        // this same handler; the later DEBRIS_REMOVED (a digest, a burn) finds it gone. Explicit, not a registry listener: that
+        // would work only while main.js builds the registry before this handler's init. No field tag, no body: nothing changes.
+        if (debris && this._refs && this._refs.fieldRegistry) this._refs.fieldRegistry.markCaught(debris);
+
         // Cargo-continuity S13(c): a collar completion carries { digested: true } —
         // a SECOND CATCH_PROCESSED for a body already credited at the mate
         // ({ parked: true }). The comms split and the field removal still run

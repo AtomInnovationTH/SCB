@@ -4,9 +4,11 @@
  *
  * `Constants.FIELDS.LIST` names the fields: an id, a height, a seed. The start field (350 km) is mission 1's welcome field.
  * Each field holds `FIELDS.PIECES` pieces, laid out like DebrisField's WELCOME_FIELD rows (row i = the i-th row of that
- * table); the registry keeps, per field, the ROWS nobody has caught yet. A caught piece stays gone: when a piece that carries
- * a `fieldId` is removed (Events.DEBRIS_REMOVED, the one path every catch ends in) its row leaves its field. A field that
- * is left keeps its other pieces (DebrisField stores them on `depart()` and puts them back on the next visit).
+ * table); the registry keeps, per field, the ROWS nobody has caught yet. A caught piece stays gone: a row leaves its field
+ * at the credit (`markCaught(piece)`, called by GameFlowManager's CATCH_PROCESSED handler: a catch kept aboard, mated at the
+ * nose or parked on a rack, is paid but not removed) or at the removal (Events.DEBRIS_REMOVED: a burn, a digest), whichever
+ * comes first; the second is a no-op. A field that is left keeps its other pieces (DebrisField stores them on `depart()` and
+ * puts them back on the next visit).
  *
  * What it does NOT do: fly the trip (TransferTrip), draw or place pieces (DebrisField asks `spawnPlan()`), or ask the player
  * where to go (lane 2b-2: `defaultNext()` is today's one-button pick, the nearest other field she can reach).
@@ -289,15 +291,24 @@ export class FieldRegistry {
     this._resume = false;
   }
 
-  /** @private A piece left the sky (caught, burned): its row leaves its field. */
-  _onRemoved(d) {
-    if (!d || !this._debris || typeof this._debris.getDebrisById !== 'function') return;
-    const piece = this._debris.getDebrisById(d.id);
+  /**
+   * A piece of a field has been caught and paid (a credited catch has left the field, even while it is still aboard): its row
+   * leaves its field. No-op for null, a piece with no `fieldId`, an unknown field, or a row already gone (idempotent).
+   * Rows update with the flag off too (as `_onRemoved` always did); `serialize()` answers null then.
+   * @param {object} piece a debris body (`fieldId`, `fieldRow`)
+   */
+  markCaught(piece) {
     if (!piece || piece.fieldId == null) return;
     const rows = this._state.remaining[piece.fieldId];
     if (!rows) return;
     const i = rows.indexOf(piece.fieldRow);
     if (i >= 0) rows.splice(i, 1);
+  }
+
+  /** @private A piece left the sky (caught, burned, digested): its row leaves its field (a no-op if the credit already took it). */
+  _onRemoved(d) {
+    if (!d || !this._debris || typeof this._debris.getDebrisById !== 'function') return;
+    this.markCaught(this._debris.getDebrisById(d.id));
   }
 
   /** @private */
