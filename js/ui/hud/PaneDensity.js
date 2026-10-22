@@ -2,8 +2,8 @@
  * PaneDensity.js — the HUD pane-priority "density ladder" (rev 3).
  *
  * ONE ordered array (`this.rungs`). Slider level k shows the last k rungs:
- * index 0 sheds first on `-`, the right end is full clutter. 16 rungs (12 base + 4
- * instruments) → 17 detents (level 0 = empty view: no HUD, no sky labels, no city names, no
+ * index 0 sheds first on `-`, the right end is full clutter. 14 rungs (10 base + 4
+ * instruments) → 15 detents (level 0 = empty view: no HUD, no sky labels, no city names, no
  * ships). Plan: tmp/plans/1788867799156-hud-pane-ladder-reorder.md
  *
  * Design — NO COUNTER. The ladder holds no hidden-count state of its own; each
@@ -25,10 +25,19 @@
  * appends (main.js drops the Override gag into `experimental` at the ladder
  * gate).
  *
- * World rungs (`world: true` — sky labels, ships, city pills) are scene
+ * World rungs (`world: true` — sky labels, and the one "Ships & city labels" step) are scene
  * objects, not HUD chrome. `hudClear()` is true iff every non-world rung is
- * currently hidden (slider level 2 of the final ladder: only `citypills` +
- * `craft`; level 3 with `reticles` visible is false; level 0 is true).
+ * currently hidden (slider level 1 of the final ladder: only the ships step;
+ * level 2 with the MOTHER box visible is false; level 0 is true).
+ *
+ * Followers (`opts.followers`, not in `rungs`): a follower is chrome that rides the HUD instead of
+ * being a step of its own — the alerts & indicators flag. It never counts as a slider position
+ * and `-`/`+` never stop on it, because a press that only moved it showed the player nothing.
+ * Rule: followers read hidden exactly while no HUD (non-world) step is showing. The press that hides
+ * the last HUD step hides them in the same press, the press that brings a HUD step back shows
+ * them again. `+`, restore, floor changes, the panes' own keys and the HUD poll can only SHOW them (`revealFollowers`):
+ * muting alerts is something only a `-` press may do, so a pane that is merely not laid out
+ * yet can never silence a warning.
  *
  * The ladder is ONE array, edited in place by the hub before the FloorMask
  * caches it: `insertBefore(anchorId, rung)` splices an instrument ahead of a
@@ -111,6 +120,8 @@ export class PaneDensity {
    *   'prompt' = the pure-scenery reminder ("HUD already clear · + restores"),
    *   the exit affordance (must always show — Session O, plan D12).
    * @param {(text: string) => void} [opts.log]     Reactive comms-history line.
+   * @param {DensityRung[]} [opts.followers]  Chrome that follows the last HUD step (see the
+   *   header): `{id, label, isVisible, setVisible}` like a rung, but not part of `rungs`.
    * @param {(paneId: string, shown: boolean) => void} [opts.onFlip]  Fired once
    *   per FLIPPED rung, AFTER its setVisible ran (Wave 5 Session H, Job A —
    *   the D5 room-memory write trigger). Injected like notify/log so this
@@ -119,9 +130,11 @@ export class PaneDensity {
    *   up() with nothing hidden) never fire it; setLevel() fires it once per
    *   rung it actually flips (`_silent` silences notices, never this edge).
    */
-  constructor({ rungs, notify, log, onFlip } = {}) {
+  constructor({ rungs, followers, notify, log, onFlip } = {}) {
     /** @type {DensityRung[]} */
     this.rungs = Array.isArray(rungs) ? rungs.slice() : [];
+    /** @type {DensityRung[]} chrome that hides and shows with the last HUD step (not a step). */
+    this.followers = Array.isArray(followers) ? followers.slice() : [];
     this._notify = typeof notify === 'function' ? notify : () => {};
     this._log = typeof log === 'function' ? log : () => {};
     this._onFlip = typeof onFlip === 'function' ? onFlip : null;
@@ -187,8 +200,8 @@ export class PaneDensity {
   /**
    * True iff every non-world rung is currently hidden. World rungs (sky
    * labels, ships, city pills) are scene objects — they do not count as HUD
-   * chrome. Slider level 2 of the final ladder (only `citypills` + `craft`,
-   * both world) is true; level 3 (`reticles` visible) is false; level 0 is
+   * chrome. Slider level 1 of the final ladder (only the ships & city labels
+   * step, world) is true; level 2 (the MOTHER box visible) is false; level 0 is
    * true. Reads live via `_safeVisible`; does not recurse into members — a
    * visible composite (no `world` flag) is HUD chrome even if its only
    * showing member is a world leaf.
@@ -230,7 +243,39 @@ export class PaneDensity {
       }
       return null;
     };
-    return walk(this.rungs);
+    return walk(this.rungs) || walk(this.followers);
+  }
+
+  /**
+   * Hide the followers when no HUD step is showing, show them when one is. Run by `down()` only
+   * (setLevel's down steps are `down()`): muting is something only a `-` press may do. `up()` and
+   * `restore()` call the show-only `revealFollowers()` instead.
+   * No flip event: a follower is derived state, not a pane the room memory should record.
+   * @private
+   */
+  _syncFollowers() {
+    if (!this.followers.length) return;
+    const want = !this.hudClear();
+    for (const f of this.followers) {
+      if (this._safeVisible(f) !== want) {
+        try { f.setVisible(want); } catch (_e) { /* follower refused */ }
+      }
+    }
+  }
+
+  /**
+   * Show followers that are hidden while a HUD step is showing (`+`, restore, floor change, a pane's
+   * own key, the HUD's poll). It never hides one: only a `-` press may mute alerts, so a HUD that
+   * is merely not laid out (menu, view switch) and a `+` that brings back only a world step can
+   * never silence a warning. Cheap when nothing is hidden.
+   */
+  revealFollowers() {
+    if (!this.followers.length) return;
+    if (!this.followers.some((f) => !this._safeVisible(f))) return;
+    if (this.hudClear()) return;
+    for (const f of this.followers) {
+      if (!this._safeVisible(f)) { try { f.setVisible(true); } catch (_e) { /* refused */ } }
+    }
   }
 
   /**
@@ -292,11 +337,13 @@ export class PaneDensity {
     const rung = this.rungs.find(r => this._safeVisible(r));
     if (!rung) {
       // Everything is already hidden — remind the player how to get it back.
+      this._syncFollowers();
       if (!this._silent) this._notify('HUD already clear · + restores', 'prompt');
       return null;
     }
     rung.setVisible(false);
     if (this._onFlip) this._onFlip(rung.id, false);   // AFTER the bit flip (Job A)
+    this._syncFollowers();                            // the last HUD step took the alerts with it
     const pure = this.rungs.every(r => !this._safeVisible(r));
     const text = pure
       ? 'HUD clear — pure scenery · + restores'
@@ -335,6 +382,7 @@ export class PaneDensity {
       if (this._safeVisible(rung)) { shown = rung; break; }
       // Content/dodge-hidden: bit cleared, nothing to see yet — keep walking.
     }
+    this.revealFollowers();                           // a HUD step is back: so are the alerts (never mutes)
     if (!flipped) {
       if (!this._silent) this._notify('All panes visible', 'confirm');
       return null;
@@ -414,6 +462,7 @@ export class PaneDensity {
       shown++;
     }
     this._stash = null;
+    this.revealFollowers();                           // show-only: `+` never mutes the alerts
     if (shown > 0) this.announceLevel();
     return shown;
   }

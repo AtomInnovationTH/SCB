@@ -10,13 +10,16 @@ collision-avoidance AI keeps you alive while you focus on the catch.
 ## Run locally
 
 ```bash
-npm start        # http-server on :8080  →  http://localhost:8080
+npm start        # local node server on :8080  →  http://localhost:8080
 # or
 ./start.sh       # same server (no caching) on :8081, opens your browser
+                 # SC_PORT=8095 ./start.sh  or  ./start.sh --no-browser
 ```
 
 No build step. ES6 modules; Three.js is vendored same-origin under `./vendor/`
-(no CDN — fully offline). Procedural geometry, NASA public-domain textures.
+(no CDN — fully offline). Both start commands serve with plain node, nothing
+to download, so they start at once with no internet (2026-10-22). Procedural
+geometry, NASA public-domain textures.
 
 ## Controls (essentials)
 

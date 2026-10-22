@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "(node scripts/build-tag.mjs || true) && npx --yes http-server -p 8080 -c-1 .",
-    "serve": "(node scripts/build-tag.mjs || true) && npx --yes http-server -p 8080 -c-1 .",
+    "start": "SC_PORT=8080 bash start.sh --no-browser",
+    "serve": "(node scripts/build-tag.mjs || true) && node scripts/serve.mjs --port 8080",
     "test": "node js/test/run-parallel.mjs",
     "test:serial": "node js/test/run-tests.js",
     "test:cold": "SC_TEST_CACHE=0 node js/test/run-parallel.mjs",

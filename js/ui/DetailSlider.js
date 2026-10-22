@@ -51,6 +51,9 @@
  * milestone ticks. Tap / release, reduced-motion, and the total() /
  * level() / onLevel contract are unchanged. Milestone names (never on
  * screen): 0 Scenery · 2 Ships · 8 Flight · 10 Ops · 14 Instruments · 16 All.
+ * 2026-10-22: the numbers above are the full ladder; the slider shows only the positions that can
+ * show right now (up to 14: the alerts ride the last HUD pane and city labels ride the ships, so neither is a
+ * position), and the milestones are read live. Ships = position 1.
  *
  * @module ui/DetailSlider
  */

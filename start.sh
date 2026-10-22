@@ -3,9 +3,20 @@
 # 🚀 Space Cowboy - Game Launcher
 # Starts a local HTTP server and opens the game in your browser
 
-PORT=8081
+# SC_PORT=8095 ./start.sh   → another port (default 8081). Not PORT: a shell that
+#                             already exports PORT would make the kill below hit
+#                             some other program's server.
+# ./start.sh --no-browser   → serve only, do not open a browser (tests, remote use)
+cd "$(dirname "$0")" || exit 1   # serve this game folder, wherever the script is run from
+PORT="${SC_PORT:-8081}"
+OPEN_BROWSER=1
+ARGS=()
+for a in "$@"; do
+    if [[ "$a" == "--no-browser" ]]; then OPEN_BROWSER=0; else ARGS+=("$a"); fi
+done
+[[ -n "${NO_BROWSER:-}" ]] && OPEN_BROWSER=0
 
-# Kill any existing process on port 8081 to ensure it's available
+# Kill any existing process on the port to ensure it is available
 lsof -ti :$PORT | xargs kill -9 2>/dev/null
 sleep 0.5
 
@@ -17,17 +28,19 @@ echo ""
 echo "   🌐 Starting server on port $PORT..."
 echo ""
 
-# Start the server in the background — the SAME server as `npm start`
-# (http-server with caching disabled, -c-1) so the browser always loads the
-# code that is on disk. Python's http.server sends no Cache-Control header, so
-# browsers kept stale JS for hours after `main` moved (owner, 2026-09-09: "not
-# seeing the changes" on :8081 right after a deploy). The build-tag step is
-# what `npm start` runs too: it stamps data/build-tag.json so the corner hash
-# is the checkout's real commit (Ipad.md §2.5 update-honesty law).
-# Fallback when node/npx is not installed: python with the same no-store rule.
+# Serve from this folder with NOTHING to download (2026-10-22). It used to run
+# `npx --yes http-server`, which asks the npm registry first; with Wi-Fi up but
+# no internet that hung for a minute or more and the browser opened on a dead
+# page. scripts/serve.mjs is plain node (no-cache headers like http-server -c-1,
+# so the browser always loads the code on disk: owner 2026-09-09 "not seeing the
+# changes"). three.js is already local under vendor/. build-tag stamps
+# data/build-tag.json so the corner hash is the checkout's real commit
+# (Ipad.md §2.5 update-honesty law); it only calls local git.
+# The published site artifact has no scripts/ folder: there (or without node)
+# python serves the same way, still with no download.
 (node scripts/build-tag.mjs >/dev/null 2>&1 || true)
-if command -v npx >/dev/null 2>&1; then
-    npx --yes http-server -p $PORT -c-1 . >/dev/null 2>&1 &
+if command -v node >/dev/null 2>&1 && [[ -f scripts/serve.mjs ]]; then
+    node scripts/serve.mjs --port "$PORT" >/dev/null 2>&1 &
     SERVER_PID=$!
 else
     python3 - "$PORT" >/dev/null 2>&1 <<'PY' &
@@ -41,25 +54,28 @@ PY
     SERVER_PID=$!
 fi
 
-# Wait for server to be ready (npx may need a moment the first time)
-for _ in $(seq 1 40); do
-    if curl -s -o /dev/null "http://localhost:$PORT/" 2>/dev/null; then break; fi
+# Wait (up to ~15 s) until the server really answers, before anything opens.
+READY=0
+for _ in $(seq 1 60); do
+    if curl -s -o /dev/null -m 1 "http://127.0.0.1:$PORT/" 2>/dev/null; then READY=1; break; fi
+    kill -0 $SERVER_PID 2>/dev/null || break
     sleep 0.25
 done
 
 # Verify server started
-if ! kill -0 $SERVER_PID 2>/dev/null; then
-    echo "   ❌ Failed to start server!"
+if [[ $READY -ne 1 ]]; then
+    kill $SERVER_PID 2>/dev/null
+    echo "   ❌ The server did not start on port $PORT. Try: SC_PORT=8095 ./start.sh"
     exit 1
 fi
 
 # Optional query string argument — pass the URL params you want, with or
 # without a leading "?". Examples:
-#   ./start.sh                   → http://localhost:8081/
-#   ./start.sh autoProfile=1     → http://localhost:8081/?autoProfile=1
+#   ./start.sh                   → http://localhost:$PORT/
+#   ./start.sh autoProfile=1     → http://localhost:$PORT/?autoProfile=1
 #   ./start.sh '?perfReport=1&tier=LOW'
-#                                → http://localhost:8081/?perfReport=1&tier=LOW
-QS="${1:-}"
+#                                → http://localhost:$PORT/?perfReport=1&tier=LOW
+QS="${ARGS[0]:-}"
 QS="${QS#\?}"   # strip leading '?' if user supplied one
 if [[ -n "$QS" ]]; then
   URL="http://localhost:$PORT/?$QS"
@@ -87,10 +103,11 @@ if pgrep -f "Brave Browser Nightly" >/dev/null 2>&1; then
     echo "      on a fresh launch. Quit it fully (Cmd+Q) and re-run ./start.sh,"
     echo "      or ignore this if you're playing in stable Brave/Safari/Chrome."
 fi
-open "$URL" --args $BROWSER_FLAGS
-
 echo "   ✅ Server running at: $URL"
-echo "   🎮 Opening game in browser..."
+if [[ $OPEN_BROWSER -eq 1 ]]; then
+    open "$URL" --args $BROWSER_FLAGS
+    echo "   🎮 Opening game in browser..."
+fi
 echo ""
 echo "   To stop the server:"
 echo "   kill $SERVER_PID"

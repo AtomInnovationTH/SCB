@@ -2969,7 +2969,7 @@ async function init() {
     // (FloorMask._resolve caches the rung map ONCE at that first apply; the
     // DETAIL slider reads the same live array). Fed per frame by setDodge in
     // the gameLoop. Inside the gate: a ?ladder=0 boot builds no pane and
-    // pushes no rung — the HUD.js base 11 rungs are the `?ladder=0` order.
+    // pushes no rung — the HUD.js base 10 rungs are the `?ladder=0` order.
     cargoPane = new CargoPane({
       cargo: cargoSystem,
       shop: shopScreen,
@@ -3077,18 +3077,25 @@ async function init() {
       // insertBefore splices instruments ahead of debris; the gag joins
       // experimental. Final top-level ids: experimental, decor, copilot, next,
       // orbit, cargo, debris, targets, targetmarks, arms, comms, score, motherbox
-      // (composite: vitals + mother members), reticles, craft, citypills (16). All BEFORE new FloorMask ( _resolve caches once).
+      // (composite: vitals + mother members), craft (composite: ships + city labels, ONE step) (14; the
+      // alerts ride the HUD as a follower, not a rung). All BEFORE new FloorMask ( _resolve caches once).
       const pd = hud && hud.paneDensity;
       if (pd && typeof pd.insertBefore === 'function') pd.insertBefore('debris', cargoPane.rung());
       if (pd && typeof pd.insertBefore === 'function') pd.insertBefore('cargo', orbitPane.rung());
       if (pd && typeof pd.insertBefore === 'function') pd.insertBefore('orbit', nextPane.rung());
       if (pd && typeof pd.insertBefore === 'function') pd.insertBefore('next', fmaStrip.rung());
+      // The target-marks step exists only on floors where the ladder lets the marks show (not F4/F5).
+      if (hud && typeof hud.setTargetMarksFloorGate === 'function') {
+        hud.setTargetMarksFloorGate(() => !(ladderController && typeof ladderController.reticlesSuppressed === 'function' && ladderController.reticlesSuppressed()));
+      }
       const exp = pd && typeof pd.find === 'function' ? pd.find('experimental') : null;
       if (exp && typeof exp.addMember === 'function') exp.addMember(overridePane.rung());
       if (detailSlider && typeof detailSlider.setMilestones === 'function' && pd && Array.isArray(pd.rungs)) {
-        // Scenery · Ships · Flight · Ops · Instruments · All. Flight is the suffix that starts at
-        // the target marks: marks, daughters, comms, score, mother, meters box, alerts, ships, city.
-        // (It used to start at daughters; the marks now hide just before them, so they join it.)
+        // Scenery · Ships · Flight · Ops · Instruments · All. Ships = the one last step (ships and city
+        // labels together). Flight is the suffix that starts at the target marks: marks, daughters, comms,
+        // score, the mother box (meters + MOTHER section), ships & city labels. The alerts & indicators are
+        // no step: they hide with the last HUD step. (The marks hide just before the daughters, so they
+        // join Flight.)
         // The slider counts only the steps that can show right now, so the levels are read live
         // (DetailSlider.refresh calls this on every unthrottled read).
         const lvl = (id) => (typeof pd.levelOf === 'function' ? pd.levelOf(id) : null);

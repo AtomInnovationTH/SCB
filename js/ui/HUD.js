@@ -881,10 +881,11 @@ export class HUD {
     * HUD_DENSITY_DOWN/UP. Plan:
     * tmp/plans/1788867799156-hud-pane-ladder-reorder.md
     *
-    * 12 base rungs (also the `?ladder=0` order; hide order 2026-10-22). Index 0 sheds first on `-`;
+    * 10 base rungs (also the `?ladder=0` order; hide order 2026-10-22). Index 0 sheds first on `-`;
     * slider level k = last k rungs. main.js (ladder gate) splices four
     * instruments via insertBefore and adds the Override gag as a member of
-    * `experimental`. 16 rungs → 17 detents. Adapters read/drive LIVE pane
+    * `experimental`. 14 rungs → 15 detents. The alerts & indicators chrome is a FOLLOWER, not a
+    * rung (it goes with the last HUD step). Adapters read/drive LIVE pane
     * state so the ladder needs no counter and composes with the 7/8/9/0
     * toggles.
     */
@@ -980,15 +981,25 @@ export class HUD {
       if (am && typeof am.setFleetVisible === 'function') am.setFleetVisible(!hidden);
     };
 
+    // World steps (owner 2026-10-22: no `-`/`+` press shows nothing). A step's gate reads what the
+    // floor and the settings fix, never what the camera happens to see this frame, so the slider's
+    // positions do not change while the player pans. Sky labels and ships have none: measured on
+    // floors 1-5 they exist on every floor (tmp/t2/walk-before-mac.json); only the city labels
+    // (`cityCanShow`) and the target marks (scan + floor gate) can be steadily absent.
+    const cityCanShow = () => {
+      const cl = self._cityLabels;
+      if (!cl) return false;
+      return typeof cl.canShow === 'function' ? cl.canShow() !== false : true;
+    };
     const skylabelsFlag = flagRung('skylabels', 'Sky labels', applySkyLabels, true);
 
     // Rungs ordered lowest-priority → highest (index 0 hides FIRST on `-`,
-    // restores LAST on `+`). 12 base rungs (also `?ladder=0`); main.js splices
+    // restores LAST on `+`). 10 base rungs (also `?ladder=0`); main.js splices
     // four instruments in at the ladder gate (copilot, next, orbit, cargo) and
-    // adds the Override gag to `experimental` as a member: 16 rungs → 17
+    // adds the Override gag to `experimental` as a member: 14 rungs → 15
     // detents; slider level k = last k rungs. Hide order (owner 2026-10-22):
     // targets → target marks → daughters → comms → score → whole mother box
-    // (section included, one step) → alerts.
+    // (section included, one step) → ships & city labels (one step); the alerts go with the last HUD step.
     const rungs = [
       // 0 — Experimental: nav orb + discoveries. main.js addMember()s the
       //     Override gag at the ladder gate (still the last `+`).
@@ -1020,9 +1031,13 @@ export class HUD {
       //     `reticles` entry points at this step.
       //     It waits for the first scan like the Targets and Target info panes ("No reticles until
       //     you scan", DECISIONS §15 row 1; owner 2026-10-22 "Keep scan-first", and no empty `-`/`+`
-      //     press): before it nothing is painted, so a `-` there would change nothing.
+      //     press): before it nothing is painted, so a `-` there would change nothing. The same
+      //     holds on the route and chart floors (F4/F5), where the ladder keeps the aiming
+      //     reticles off whatever this step says (LadderController._setReticlesHidden):
+      //     main.js hands `setTargetMarksFloorGate` the floor's answer.
       flagRung('targetmarks', 'Target marks', (hidden) => { applyAttr(['#reticle-canvas'], hidden); },
-        false, () => self._scanGateOpen === true),
+        false, () => self._scanGateOpen === true
+          && (typeof self._targetMarksFloorGate !== 'function' || self._targetMarksFloorGate() !== false)),
       // 5 — Daughters / arms pane (owner 2026-10-21: before comms).
       domRung('arms', 'Daughters pane', byId('hud-arms-panel')),
       // 6 — Comms pane (7 key re-reveals it).
@@ -1044,41 +1059,55 @@ export class HUD {
         domRung('vitals', 'Meters box', byId('hud-vitals')),
         domRung('mother', 'Mother pane', byId('hud-mother-panel')),
       ]),
-      // 9 — Remaining alert/indicator chrome + transient gameplay toasts (safety: stays
-      //     late). The targeting brackets left for `targetmarks`. The old standalone
-      //     "chrome" rung had no visible effect when no warning/target was active, so this
-      //     one hides the docking reticle, warnings / progress / conjunction / weather /
-      //     arm-pilot / view chrome AND mutes transient SHOW_NOTIFICATION toasts so pure
-      //     scenery is quiet.
-      flagRung('reticles', 'Alerts & indicators', (hidden) => {
-        applyAttr([
-          '#docking-reticle-canvas',
-          '#hud-warnings-panel', '#hud-progress-panel', '#hud-conjunction-panel',
-          '#hud-weather-indicator', '#arm-pilot-controls', '#camera-view-indicator',
-        ], hidden);
-        // Mute gameplay toasts (autopilot/view/inspection); the ladder's own
-        // toasts pass force:true and still show (see showNotification). The body
-        // attribute additionally CSS-hides transient teaching/hint popups
-        // (.teaching-overlay) that are re-created per show() (onboarding
-        // escalations like "LAUNCH NET (N)"), which per-element tagging misses.
-        this._transientPopupsQuiet = hidden;
-        if (typeof document !== 'undefined' && document.body) {
-          document.body.toggleAttribute('data-density-quiet', hidden);
-        }
-      }),
-      // 10 — Craft: mother ship + daughters (world).
-      flagRung('craft', 'Ships', applyCraft, true),
-      // 11 — City/landmark pills (world). Adapter reads CityLabels' OWN
-      //      density flag — not the DOM — so it engages while F1/F5
-      //      suppression already hides the pills, and the 5 key can clear
-      //      the gate coherently. Parallel agent owns CityLabels.js.
-      { id: 'citypills', label: 'City labels', world: true,
-        isVisible: () => !!(this._cityLabels && typeof this._cityLabels.isDensityHidden === 'function' && !this._cityLabels.isDensityHidden()),
-        setVisible: (v) => { const cl = this._cityLabels; if (cl && typeof cl.setDensityHidden === 'function') cl.setDensityHidden(!v); } },
+      // 9 — Ships & city labels (world, the last step; owner 2026-10-22). One step because whether a
+      //     city label is in view depends on the camera, so a step of its own could show nothing.
+      //     One `-` hides both, one `+` shows both. Members: the mother ship + daughters, and the
+      //     city/landmark pills. The pills adapter reads CityLabels' OWN density flag — not the DOM —
+      //     so it engages while F1/F5 suppression already hides the pills, and the 5 key can clear
+      //     the gate coherently; its gate (`cityCanShow`: 5-key preference on, floor not
+      //     suppressing) only decides whether the LABELS part can show. The ships always can, so
+      //     the step is always a slot. Whether a pill happens to be in view this frame is the
+      //     camera's business, never the step's.
+      (() => {
+        const ships = flagRung('ships', 'Ships', applyCraft, true);
+        const cityPills = {
+          id: 'citypills', label: 'City labels', world: true,
+          isVisible: () => cityCanShow() && !!(this._cityLabels && typeof this._cityLabels.isDensityHidden === 'function' && !this._cityLabels.isDensityHidden()),
+          isAvailable: () => cityCanShow(),
+          setVisible: (v) => { const cl = this._cityLabels; if (cl && typeof cl.setDensityHidden === 'function') cl.setDensityHidden(!v); },
+        };
+        const step = compositeRung('craft', 'Ships & city labels', [ships, cityPills]);
+        step.world = true;
+        return step;
+      })(),
     ];
+
+    // Alerts & indicators: not a step of its own. It hides the warnings, progress, conjunction and
+    // weather chrome, the arm-pilot controls, the camera-view indicator and the docking reticle, and
+    // mutes gameplay toasts, but only while no HUD step is showing — the press that hides the last
+    // HUD step takes it along, the press that brings a HUD step back returns it (owner 2026-10-22:
+    // as its own step it showed the player nothing, so `+` next to the mother ship looked dead).
+    // Safety: it stays late, because it only ever goes with the last HUD step.
+    const alertsFollower = flagRung('reticles', 'Alerts & indicators', (hidden) => {
+      applyAttr([
+        '#docking-reticle-canvas',
+        '#hud-warnings-panel', '#hud-progress-panel', '#hud-conjunction-panel',
+        '#hud-weather-indicator', '#arm-pilot-controls', '#camera-view-indicator',
+      ], hidden);
+      // Mute gameplay toasts (autopilot/view/inspection); the ladder's own
+      // toasts pass force:true and still show (see showNotification). The body
+      // attribute additionally CSS-hides transient teaching/hint popups
+      // (.teaching-overlay) that are re-created per show() (onboarding
+      // escalations like "LAUNCH NET (N)"), which per-element tagging misses.
+      this._transientPopupsQuiet = hidden;
+      if (typeof document !== 'undefined' && document.body) {
+        document.body.toggleAttribute('data-density-quiet', hidden);
+      }
+    });
 
     this._paneDensity = new PaneDensity({
       rungs,
+      followers: [alertsFollower],
       notify: (text, kind) => this.showNotification(text, 2500, { force: true, kind }),
       log: (text) => eventBus.emit(Events.COMMS_MESSAGE, {
         text, priority: 'info', source: 'HUD', _reactive: true,
@@ -1094,6 +1123,16 @@ export class HUD {
       }),
     });
     this._paneDensity.attach(eventBus, Events);
+  }
+
+  /**
+   * 10 Hz guard: if any HUD pane is showing while the alerts & indicators are muted, show them. The 7
+   * key, panes that get content or appear after a scan, and leaving the look-around view bring a pane
+   * back without any visibility event. Show-only (only a `-` press mutes); cheap when nothing is muted.
+   * @private
+   */
+  _pollAlerts() {
+    if (this._paneDensity) this._paneDensity.revealFollowers();
   }
 
   /**
@@ -1747,6 +1786,9 @@ export class HUD {
       // density attribute flips display at once; the next read re-measures and
       // reads zero-area → null → no band).
       if (data && data.pane === 'score') this._scoreStripRect = null;
+      // A pane the player just brought back with its own key (7/8/9/0) ends a muted-alerts
+      // state: the alerts return with the first HUD pane. Show-only — see revealFollowers.
+      if (data && data.shown === true && this._paneDensity) this._paneDensity.revealFollowers();
     });
 
     eventBus.on(Events.COMMS_PANEL_RESIZED, () => {
@@ -2144,6 +2186,16 @@ export class HUD {
   }
 
   /**
+   * The floor's answer to "can target marks show here?" for the `targetmarks` step: false on the
+   * route and chart floors, where the ladder keeps the aiming reticles off. Wired from main.js at
+   * the ladder gate (`!ladderController.reticlesSuppressed()`); absent = open.
+   * @param {(() => boolean)|null} fn
+   */
+  setTargetMarksFloorGate(fn) {
+    this._targetMarksFloorGate = typeof fn === 'function' ? fn : null;
+  }
+
+  /**
    * Set the SunLight reference so the pane-density "sky labels" rung can also
    * drop the Sun / Moon / planet NAME labels alongside the constellation names
    * (the discs stay — they are scenery). Wired from main.js.
@@ -2351,6 +2403,7 @@ export class HUD {
       this._tickArmsGate();      // DAUGHTERS pane waits for the struts
       this._syncInfoGate();      // TARGET INFO: simple-first follows the floor and the mission
       this._syncRailQuiet(true); // floor rail: not on mission 1's first frames
+      this._pollAlerts();        // alerts & indicators return with any HUD pane (no event covers the 7 key etc.)
 
       // V5: STABILIZE warning when angular velocity too high for crossbow fire
       if (player.isCrossbowFireSafe && !player.isCrossbowFireSafe()) {

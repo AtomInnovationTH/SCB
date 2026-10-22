@@ -591,6 +591,15 @@ export class CityLabels {
     };
   }
 
+  /**
+   * Can the pills show at all right now: the 5-key preference is on and the floor does not
+   * suppress them (F1, F5). The ladder's `citypills` step exists only while this is true (a `-`
+   * there would change nothing). Steady by design: ignores the density gate (the ladder's own bit)
+   * and whether a pill is in view this frame.
+   * @returns {boolean}
+   */
+  canShow() { return this._visible && !this._suppressed; }
+
   /** @returns {boolean} true while the density ladder's `citypills` rung is hidden. */
   isDensityHidden() { return this._densityHidden; }
 

@@ -668,6 +668,9 @@ export class FloorMask {
     // returns early), and the next engage re-runs this floor apply — cached values can
     // never be read stale across an engage.
     this._hud.invalidateCommsLayout?.();
+    // A room that shows HUD panes ends a muted-alerts state (the alerts ride the HUD). Show-only:
+    // a floor change never mutes anything.
+    this._hud.paneDensity?.revealFollowers?.();
   }
 
   /**
