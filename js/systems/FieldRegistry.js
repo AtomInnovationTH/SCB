@@ -16,6 +16,12 @@
  * Everything is a no-op while FEATURE_FLAGS.FIELDS_BY_HEIGHT is off: `spawnPlan()` answers null (DebrisField then spawns the
  * welcome field exactly as before), `serialize()` answers null (the save blob stays byte-identical), `defaultNext()` null.
  *
+ * THE SATELLITE (Nets step 3 slice 3, DECISIONS §33 row 7; `Constants.RESUPPLY`): she is at a field OR berthed at the resupply
+ * satellite (500 km), never both. `arrive('sat500')` berths her; her field id is kept for the fields' state (the pieces she left
+ * stay stored as left), `arrive(fieldId)` and `reset()` end the berth. While berthed no field is laid out (`spawnPlan()` answers
+ * no rows, and counts as laid out so a load can open the list), no field is "hers", and `defaultNext()` is the nearest field by
+ * height from the satellite. `serialize()` adds `berth: 'sat500'` only while berthed.
+ *
  * Save: `serialize()` -> `{ v: 1, current: 'f425', remaining: { f350: [0, 2, 3], ... }, at: 2 }`. `at` is the number of the
  * last mission that STARTED (MISSION_START: an arrival, or a Stay); a mission boundary credit writes its save while the trip
  * to the next field is still to be flown, so a save whose mission number (from the catches) is above `at` has a trip owing.
@@ -94,6 +100,26 @@ export class FieldRegistry {
   /** @param {string} id @returns {number} pieces left in that field. */
   remainingCount(id) { return (this._state.remaining[id] || []).length; }
 
+  // ── the resupply satellite (slice 3) ─────────────────────────────────────────
+
+  /** @returns {Array<{id: string, altKm: number, name: string}>} the resupply satellites, low to high. */
+  satellites() { return Constants.RESUPPLY.SATS.slice(); }
+
+  /** @param {string} id @returns {object|null} */
+  satelliteById(id) { return Constants.RESUPPLY.SATS.find((s) => s.id === id) || null; }
+
+  /** @returns {string|null} the id of the satellite she is berthed at, or null (she is at a field). */
+  berthId() { return this._state.berthId; }
+
+  /** @returns {boolean} berthed at a satellite (then no field is hers and none is laid out). */
+  isBerthed() { return this._state.berthId != null; }
+
+  /** @returns {object|null} the satellite she is berthed at, or null. */
+  berthedSatellite() { return this._state.berthId != null ? this.satelliteById(this._state.berthId) : null; }
+
+  /** She lets go (a game over, a win, the menu): no longer berthed. Her field and the pieces are as they were. */
+  clearBerth() { this._state.berthId = null; }
+
   // ── what DebrisField asks ────────────────────────────────────────────────────
 
   /**
@@ -106,7 +132,11 @@ export class FieldRegistry {
     if (!this.isOn()) return null;
     this._laidOut = true;             // the field is being laid out now: a trip owing after a load may depart from it
     const f = this.currentField();
-    const plan = { fieldId: f.id, altKm: f.altKm, rows: this.remainingRows(f.id), seed: f.seed, missionNumber: this._pendingMission };
+    // Berthed: no field is out, but this still counts as laid out (a load into the berth then opens the list from it)
+    const sat = this.berthedSatellite();
+    const plan = {
+      fieldId: f.id, altKm: sat ? sat.altKm : f.altKm, rows: sat ? [] : this.remainingRows(f.id), seed: f.seed, missionNumber: this._pendingMission,
+    };
     this._pendingMission = null;
     return plan;
   }
@@ -124,14 +154,14 @@ export class FieldRegistry {
    * What the trip to `target` costs her NOW, with the real thruster and the gas in the tank: the profile, the gas aboard and
    * whether the gas is enough. `cos` is how much of the push goes the way she wants (1 = she can turn; TransferTrip passes
    * less when a daughter out on her line keeps her where she points).
-   * @param {string|{id: string, altKm: number}} target a field id or a field
+   * @param {string|{id: string, altKm: number}} target a field id or a field, or a satellite (its id or the satellite)
    * @param {{cos?: number, fromKm?: number, thetaRad?: number}} [opts] `thetaRad`: the radiator angle the drag area is taken
    *   at (default her own now, `_flowerThetaRad`; capped at the burn band's edge, 146 deg: TripProfile.tripDragAreaM2)
    * @returns {{field: object, fromKm: number, profile: object, ispS: number, areaM2: number, gasAboardKg: number, enough: boolean,
    *   playS: number}|null} `ispS` is the Isp the profile was flown with (the gas's, divided by the gas multiplier c: the power share x the ion-drive upgrade)
    */
   planTo(target, opts = {}) {
-    const field = typeof target === 'string' ? this.fieldById(target) : target;
+    const field = typeof target === 'string' ? (this.fieldById(target) || this.satelliteById(target)) : target;
     const p = this._player;
     if (!field || !p) return null;
     const fromKm = Number.isFinite(opts.fromKm) ? opts.fromKm : this.altitudeKm();
@@ -157,14 +187,16 @@ export class FieldRegistry {
   /**
    * Today's one-button pick (lane 2b-2 replaces it with a list): the NEAREST other field, by height from the one she is at,
    * that still has pieces and that she has the gas to reach. Ties go to the cheaper trip. Null = none (stay).
+   * Berthed at the satellite no field is hers: every field counts, nearest by height from the satellite.
    * @returns {object|null} the field
    */
   defaultNext() {
     if (!this.isOn()) return null;
-    const here = this.currentField();
+    const sat = this.berthedSatellite();
+    const here = sat || this.currentField();
     let best = null;
     for (const f of this.fields()) {
-      if (f.id === here.id || this.remainingCount(f.id) === 0) continue;
+      if ((!sat && f.id === here.id) || this.remainingCount(f.id) === 0) continue;
       const plan = this.planTo(f);
       if (!plan || !plan.enough) continue;
       const gap = Math.abs(f.altKm - here.altKm);
@@ -190,9 +222,14 @@ export class FieldRegistry {
     if (this._debris && typeof this._debris.storeFieldPieces === 'function') this._debris.storeFieldPieces();
   }
 
-  /** She has arrived: this is the field now; the next spawn lays out its pieces. @param {string} id */
+  /**
+   * She has arrived. A field: this is her field now, the berth ends, the next spawn lays out its pieces. A satellite: she is
+   * berthed there (her field id stays as it was, the fields keep their state). An unknown id changes nothing.
+   * @param {string} id
+   */
   arrive(id) {
-    if (this.fieldById(id)) this._state.currentId = id;
+    if (this.fieldById(id)) { this._state.currentId = id; this._state.berthId = null; return; }
+    if (this.satelliteById(id)) this._state.berthId = id;
   }
 
   /**
@@ -216,7 +253,9 @@ export class FieldRegistry {
     if (!this.isOn()) return null;
     const remaining = {};
     for (const f of this.fields()) remaining[f.id] = this.remainingRows(f.id);
-    return { v: SAVE_VERSION, current: this.currentField().id, remaining, at: this._state.at };
+    const out = { v: SAVE_VERSION, current: this.currentField().id, remaining, at: this._state.at };
+    if (this._state.berthId != null) out.berth = this._state.berthId;     // only while berthed: today's saves stay byte-identical
+    return out;
   }
 
   /**
@@ -235,6 +274,8 @@ export class FieldRegistry {
     if (saved && typeof saved === 'object' && saved.v === SAVE_VERSION) {
       if (typeof saved.current === 'string' && this.fieldById(saved.current)) this._state.currentId = saved.current;
       if (Number.isInteger(saved.at) && saved.at > 0) this._state.at = saved.at;
+      // a berth she was saved at (an unknown or broken one is dropped: she is at her saved field)
+      if (typeof saved.berth === 'string' && this.satelliteById(saved.berth)) this._state.berthId = saved.berth;
       const rem = saved.remaining;
       if (rem && typeof rem === 'object') {
         for (const f of this.fields()) {
@@ -246,10 +287,12 @@ export class FieldRegistry {
       }
     }
     if (!this.isOn()) return;
-    this.setHeight(this.currentField().altKm);
+    const sat = this.berthedSatellite();
+    this.setHeight(sat ? sat.altKm : this.currentField().altKm);
     // A boundary credit saves while the trip to the next field has not been flown (the daughters are still coming home): the
     // catches say mission N + 1, the last mission started is N. She is still in the field she left, and the trip is owed.
-    this._resume = !!missionNumber && missionNumber > this._state.at;
+    // A berth always owes the list (she can only be berthed with a start owed, or a call mid-mission: lane 3c): the count says so.
+    this._resume = (!!missionNumber && missionNumber > this._state.at) || !!sat;
     // the field she is laid out in belongs to the mission that started there, not to the one the catches count has reached
     this._pendingMission = this._resume ? this._state.at : missionNumber;
   }
@@ -271,7 +314,7 @@ export class FieldRegistry {
   _fresh() {
     const remaining = {};
     for (const f of Constants.FIELDS.LIST) remaining[f.id] = allRows();
-    return { currentId: this._startField().id, remaining, at: 1 };
+    return { currentId: this._startField().id, berthId: null, remaining, at: 1 };
   }
 
   /** @private The gas that pushes her: the one in the tank (a cargo fuel's own Isp when she is burning cargo metal). */

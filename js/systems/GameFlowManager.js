@@ -28,7 +28,7 @@ import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
 import { TransferTrip } from './TransferTrip.js';
-import { buildWhereNextRows, STAY_ID, OPEN_LINE } from './WhereNextRows.js';
+import { buildWhereNextRows, STAY_ID, OPEN_LINE, BERTH_LINE } from './WhereNextRows.js';
 import { salvageGasKg } from './ResourceSystem.js';
 import { UPGRADES } from '../ui/ShopScreen.js';
 import { upgradePrereqsMet, upgradeCostNow } from '../ui/shopGating.js';
@@ -261,6 +261,25 @@ export class GameFlowManager {
     this._atResupplyStop = !!open;
     const shop = this._refs && this._refs.shopScreen;
     if (shop && typeof shop.setResupplyStop === 'function') shop.setResupplyStop(this._atResupplyStop);
+    this._pushTradeWording();
+  }
+
+  /**
+   * Nets step 3 slice 3 (S7; FEATURE_FLAGS.FIELDS_BY_HEIGHT; DECISIONS §33 row 7): is the resupply SATELLITE where buying happens?
+   * True with the flag on AND floor 4 there to ask on (the "where next" list: with `?ladder=0` there is no list, so no satellite to
+   * fly to and today's stop after every mission stays). Read live (the flags are flipped per rig).
+   * @returns {boolean}
+   * @private
+   */
+  _satelliteIsTheStop() {
+    const reg = this._refs && this._refs.fieldRegistry;
+    return !!(reg && typeof reg.isOn === 'function' && reg.isOn() && this._whereNextOn);
+  }
+
+  /** @private Tell the shop which place its trade refusal names (the stop after a mission, or the satellite). Guarded: many rigs have none. */
+  _pushTradeWording() {
+    const shop = this._refs && this._refs.shopScreen;
+    if (shop && typeof shop.setSatelliteStop === 'function') shop.setSatelliteStop(this._satelliteIsTheStop());
   }
 
   // ==========================================================================
@@ -317,6 +336,7 @@ export class GameFlowManager {
       this._setResupplyStop(false);   // u1-resupply-stop D1: game over / win / menu end the stop
       this._trip.abort();             // trip-melt D9: a trip belongs to the run that just ended (the mission is NOT started)
       this._deferredBoundary = null;  // trip-melt-2 D12a
+      this._clearBerth();             // slice 3: nor does a berth at the resupply satellite
     }
 
     // First-depot visit signal, computed BEFORE the flag is persisted so the
@@ -674,7 +694,12 @@ export class GameFlowManager {
       // (resetGame above closed it; the gameOver save returned earlier and GAMEOVER_CONTINUE opens its own stop.)
       // F2: a save written inside the game-over shop carries `resupplyStop: true` (0 cleared, so the count cannot
       // say); old saves without the key keep the boundary-count rule.
-      this._setResupplyStop(save.resupplyStop === true || this._isMissionBoundaryCount(gameState.debrisCleared));
+      // Nets step 3 slice 3 (S7): with the satellite as the stop a boundary count opens nothing (the stop is at the satellite): only a save
+      // that says so (`resupplyStop`: written berthed, or inside the game-over shop) or a registry that loaded berthed reopens buying.
+      const loadedReg = this._refs.fieldRegistry;
+      const berthedAtLoad = !!(loadedReg && loadedReg.isOn() && loadedReg.isBerthed());
+      this._setResupplyStop(berthedAtLoad || save.resupplyStop === true
+        || (!this._satelliteIsTheStop() && this._isMissionBoundaryCount(gameState.debrisCleared)));
 
       // Returning players already know what the score bar is — activate it
       // immediately (no 2 s settle delay). The ORBITAL_VIEW timer is gated behind
@@ -1444,7 +1469,8 @@ export class GameFlowManager {
       const atBoundary = this._isMissionBoundaryCount(gameState.debrisCleared);
       // trip-melt G1: a sacrifice that lands while the trip waits or burns neither closes the stop nor starts a mission.
       const tripOn = this._trip.isActive();
-      if (!tripOn) this._setResupplyStop(atBoundary);   // u1 D1: a sacrifice that completes a mission opens the stop; any other closes it
+      // u1 D1: a sacrifice that completes a mission opens the stop; any other closes it. Slice 3 (S7): with the satellite as the stop it opens nothing here.
+      if (!tripOn) this._setResupplyStop(atBoundary && !this._satelliteIsTheStop());
       // Wave 5 Session F (D4): the second credited-clear path (Ctrl+Shift+D →
       // ARM_DEORBIT_CMD → ArmUnit.startDeorbit) — the mission boundary check
       // follows its increment too, so a sacrifice that lands the 5th clear
@@ -2241,36 +2267,126 @@ export class GameFlowManager {
    * @returns {boolean} false = the gas does not cover the whole profile (nothing begins; the words were said)
    */
   _flyToField(field, start) {
+    const reg = this._refs && this._refs.fieldRegistry;
+    const toSat = !!(reg && typeof reg.satelliteById === 'function' && reg.satelliteById(field.id));
+    const fromBerth = !!(reg && typeof reg.isBerthed === 'function' && reg.isBerthed());
     return !!this._trip.begin(() => {
       const leg = this._trip.lastLeg;
       this._trip.lastLeg = null;
       if (leg) gameState.shipDays += leg.days;
+      // Nets step 3 slice 3: a trip that is not to a field she will start a mission at. A trip to the satellite that arrived berths her
+      // (no mission starts: the same start waits for the field she picks from there); one that could not go (`_stay`: no gas once planned
+      // with her real mass, her nose could not be pointed) is a refused pick, from the berth too: she is where she was and the list is back.
+      if (toSat && leg) { this._arriveAtSatellite(field, start); return; }
+      if (!leg && (toSat || fromBerth)) { this._tripCouldNotGo(start, fromBerth); return; }
       start();
       this._runDeferredBoundary();
       if (leg) this.saveGame();
     }, { field });
   }
 
+  /**
+   * @private Nets step 3 slice 3 (S4, S5): the trip to the resupply satellite has arrived (the registry has berthed her: `arrive`). She
+   * is handed any catch still mated at her nose collar, the stop opens (buying), the first berth tops credits up, one line says what to
+   * do, `RESUPPLY_BERTH {berthed}` goes out, the game saves, and the list opens again from here with the SAME mission start kept: no
+   * mission starts at the satellite, and a boundary a mid-choice credit deferred waits for the field she picks.
+   * @param {object} sat the satellite @param {() => void} start the mission transition kept for the field pick
+   */
+  _arriveAtSatellite(sat, start) {
+    this._enterBerth(sat, false);
+    this.saveGame();
+    this._openWhereNext(start, { said: true });
+  }
+
+  /**
+   * @private The berth proper (arrival, or a trip from it that could not go and put her back). `again`: the second kind (the floor and the
+   * line were done at the first berth).
+   * @param {object} sat @param {boolean} again
+   */
+  _enterBerth(sat, again) {
+    this._handOverCollarCatches();
+    this._setResupplyStop(true);                                         // buying and selling open (the same flag today's stop uses)
+    if (!again) {
+      // the first-depot floor moves here (the boundary no longer opens the invitation that paid it): once per profile, the framing owed
+      if (this._applyFirstDepotFloor()) this._firstVisitOwed = true;
+      eventBus.emit(Events.COMMS_MESSAGE, { text: BERTH_LINE, priority: 'info', _keep: true });
+    }
+    eventBus.emit(Events.RESUPPLY_BERTH, { phase: 'berthed', satId: sat.id, altKm: sat.altKm });
+  }
+
+  /**
+   * @private S5: a catch still mated at her nose collar (no free tip on the trip) goes to the satellite first. It was paid at the mate
+   * (CATCH_PROCESSED { parked: true }), so the hand-over credits nothing: the net leaves the system (CaptureNet.handOverCollarCatch frees
+   * the collar) and the body leaves the field (`removeDebris`: its row was already taken at the credit). Catches on the daughters' racks and
+   * the radiator tips stay with her.
+   */
+  _handOverCollarCatches() {
+    const cns = captureNetSystem;
+    const df = this._refs && this._refs.debrisField;
+    if (!cns || typeof cns.handOverCollarCatch !== 'function') return;
+    for (let i = 0; i < 8; i++) {                                        // (one collar: the loop is only a bound)
+      const id = cns.handOverCollarCatch();
+      if (id == null) break;
+      if (df && typeof df.removeDebris === 'function') df.removeDebris(id);
+    }
+  }
+
+  /**
+   * @private A trip begun from the list that did not go (the words were said by the trip): the choice is put back as after a refused pick,
+   * rebuilt. From the berth she never left in fact: buying opens again and `RESUPPLY_BERTH {berthed}` says so (no line, no floor).
+   * @param {() => void} start @param {boolean} fromBerth
+   */
+  _tripCouldNotGo(start, fromBerth) {
+    const reg = this._refs && this._refs.fieldRegistry;
+    const sat = fromBerth && reg ? reg.berthedSatellite() : null;
+    if (sat) this._enterBerth(sat, true);
+    this._trip.choose({ start }, { again: true });
+  }
+
+  /** @private Nets step 3 slice 3: she lets go of the satellite (the trip from it begins): buying closes, `RESUPPLY_BERTH {left}`. */
+  _leaveBerth(sat) {
+    this._setResupplyStop(false);
+    eventBus.emit(Events.RESUPPLY_BERTH, { phase: 'left', satId: sat.id, altKm: sat.altKm });
+  }
+
+  /** @private A game over, a win or the menu: she is no longer berthed anywhere (the registry's reset follows on a new run). */
+  _clearBerth() {
+    const reg = this._refs && this._refs.fieldRegistry;
+    if (reg && typeof reg.clearBerth === 'function') reg.clearBerth();
+  }
+
+  /** @private The mother nets aboard now (the list pre-focuses the satellite with none), or undefined when it cannot be read. */
+  _motherNetsAboard() {
+    return captureNetSystem && typeof captureNetSystem.getMotherNetCount === 'function' ? captureNetSystem.getMotherNetCount() : undefined;
+  }
+
   /** main.js: floor 4 exists and hosts the "where next" list (see `_whereNextOn`). @param {boolean} on */
-  setWhereNextAvailable(on) { this._whereNextOn = !!on; }
+  setWhereNextAvailable(on) {
+    this._whereNextOn = !!on;
+    this._pushTradeWording();                  // slice 3: with the list there the satellite is the stop: the shop's refusal names it
+  }
 
   /**
    * @private Nets step 3 slice 2b, lane 2b-2 (decision K): open the "where next" choice. Nothing she can pick (no reachable field
    * and nothing left here) says so and starts the next mission where she is, as `defaultNext()` = none does; otherwise the trip
    * waits in phase `choose` with the mission start kept for the pick, one comms line says what to do, and `Events.WHERE_NEXT`
    * opens the list on floor 4 (main.js). The choice waits for her: no timeout.
+   * Slice 3: berthed at the resupply satellite (the list reopened from it, or a load into the berth) nothing starts here ever: with
+   * nothing she can pick the list stays open with the line "Buy gas at the workbench, then pick a field." and the opening line is the
+   * berth's (not "Mission done").
    * @param {() => void} start the mission transition
+   * @param {{said?: boolean}} [opts] `said`: the line was just said (the berth arrival says its own)
    */
-  _openWhereNext(start) {
+  _openWhereNext(start, opts) {
     const reg = this._refs.fieldRegistry;
-    const rows = buildWhereNextRows(reg);
+    const berthed = typeof reg.isBerthed === 'function' && reg.isBerthed();
+    const rows = buildWhereNextRows(reg, { motherNets: this._motherNetsAboard() });
     if (rows.line) {
       eventBus.emit(Events.COMMS_MESSAGE, { text: rows.line, priority: 'info', _keep: true });
-      start();
-      return;
+      if (!berthed) { start(); return; }
     }
     this._syncTripDeps();
-    eventBus.emit(Events.COMMS_MESSAGE, { text: OPEN_LINE, priority: 'info', _keep: true });
+    if (!(opts && opts.said)) eventBus.emit(Events.COMMS_MESSAGE, { text: berthed ? BERTH_LINE : OPEN_LINE, priority: 'info', _keep: true });
     this._trip.choose({ start });
   }
 
@@ -2288,7 +2404,11 @@ export class GameFlowManager {
     if (!trip.isChoosing() || !reg) return false;
     const choice = trip.choice;
     const start = choice && typeof choice.start === 'function' ? choice.start : () => {};        // (`_openWhereNext` always hands one)
+    // Nets step 3 slice 3: berthed at the resupply satellite no field is hers and there is no Stay (S6); the satellite itself is a pick
+    // only from a field (S4). Everything else is as before.
+    const berth = typeof reg.berthedSatellite === 'function' ? reg.berthedSatellite() : null;
     if (id === STAY_ID) {
+      if (berth) return false;                                             // no Stay at the satellite (the list has no such row)
       if (reg.remainingCount(reg.currentId()) <= 0) return false;          // nothing here to stay for (the list has no such row)
       trip.leaveChoice();
       start();
@@ -2296,11 +2416,17 @@ export class GameFlowManager {
       this.saveGame();
       return true;
     }
-    const field = reg.fieldById(id);
-    if (!field || field.id === reg.currentId() || reg.remainingCount(field.id) <= 0) return false;
+    const sat = typeof reg.satelliteById === 'function' ? reg.satelliteById(id) : null;
+    const field = sat || reg.fieldById(id);
+    if (!field) return false;
+    if (sat ? !!berth : (!berth && field.id === reg.currentId())) return false;     // (berthed: the satellite is where she is; the field she left is a pick)
+    if (!sat && reg.remainingCount(field.id) <= 0) return false;
     this._syncTripDeps();
     trip.leaveChoice();                                                    // idle again, so `begin` accepts the trip
-    if (this._flyToField(field, start)) return true;
+    if (this._flyToField(field, start)) {
+      if (berth) this._leaveBerth(berth);                                  // the trip began: buying closes, she lets go
+      return true;
+    }
     trip.choose(choice, { again: true });                                  // the gas changed: back to the list, rebuilt, with the refusal said
     return false;
   }
@@ -2753,6 +2879,9 @@ export class GameFlowManager {
    *     2): the CATCH_PROCESSED handler lapses it; any SHOP entry closes it as
    *     'entered'.
    *
+   *   • Nets step 3 slice 3 (S7; `_satelliteIsTheStop()`: flag on, floor 4 there): none of the above. The boundary opens NO stop and no
+   *     invitation (buying moved to the resupply satellite, reached from the "where next" list); only the MISSION_COMPLETE headline stays.
+   *
    * @param {number} debrisCount - gameState.debrisCleared at the boundary (a
    *   positive multiple of SHOP_CADENCE)
    * @private
@@ -2761,6 +2890,13 @@ export class GameFlowManager {
     const M = Constants.MISSIONS;
     const ladderOn = !!(Constants.LADDER && Constants.LADDER.ENABLED);
     const { missionsCompleted } = getMissionProgress(debrisCount);
+    // Nets step 3 slice 3 (S7; DECISIONS §33 row 7): with the resupply satellite as the stop (flag on, floor 4 there to ask on) a completed
+    // mission opens NO stop and no depot invitation: all buying moved to the satellite, reached by the "where next" list the 5th catch
+    // opens. The "MISSION N COMPLETE" headline and its cue stay (the same event the invitation used to carry).
+    if (this._satelliteIsTheStop()) {
+      eventBus.emit(Events.MISSION_COMPLETE, { mission: missionsCompleted, debrisCleared: debrisCount });
+      return;
+    }
     // u1-resupply-stop D1: a completed mission opens the resupply stop on EVERY path below (the ladder-on
     // invitation, the forced stop, the ladder-off boundary shop) — it stays open until the next credited catch.
     this._setResupplyStop(true);

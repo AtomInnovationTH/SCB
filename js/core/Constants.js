@@ -5500,6 +5500,22 @@ export const Constants = {
   },
 
   // =========================================================================
+  // RESUPPLY - the resupply satellite (Nets step 3 slice 3, DECISIONS §33 rows 2, 7, 10; js/systems/FieldRegistry.js,
+  // GameFlowManager; FEATURE_FLAGS.FIELDS_BY_HEIGHT)
+  // =========================================================================
+  // Row 7: "Resupply satellite about 150 km above the start fields (about 85 m/s): it berths the mother at her nose collar, its arm
+  // swaps net cartridges, it pumps gas; all buying moves there." One satellite at 500 km (350 -> 500 km = 84.5 m/s, research doc
+  // 2026-10-trips-by-height), in the start orbit's tilt and node like the fields; a second one near 800 km is slice 4. It is a PLACE,
+  // not a field: she is at a field or berthed at the satellite, and nothing is laid out while she is berthed.
+  // CALL_CREDITS is row 7's "Stuck: call it to you for 1,000 credits" (slice 3 lane 3c reads it; nothing here does yet).
+  RESUPPLY: {
+    SATS: [
+      { id: 'sat500', altKm: 500, name: 'Resupply satellite' },
+    ],
+    CALL_CREDITS: 1000,
+  },
+
+  // =========================================================================
   // MISSIONS — ST-4.C Mission Spawn Difficulty Profiles
   // Each profile applies when missionNumber >= minMission (highest matching wins).
   // =========================================================================

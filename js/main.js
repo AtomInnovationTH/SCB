@@ -2222,7 +2222,8 @@ async function init() {
     // there is no floor 4, the flow manager is never told it can ask, and a mission boundary flies to defaultNext() as before.
     whereNextList = new WhereNextList({
       doc: (typeof document !== 'undefined') ? document : null,
-      getRows: () => buildWhereNextRows(fieldRegistry),
+      // slice 3: with no mother nets aboard (mission 1 used all four) the resupply satellite is the pre-focused row
+      getRows: () => buildWhereNextRows(fieldRegistry, { motherNets: captureNetSystem.getMotherNetCount() }),
       onPick: (id) => gameFlowManager.pickWhereNext(id),
       glass: () => GestureHints.isGlass(),
       isInputBlocked: () => whereNextInputBlocked(),

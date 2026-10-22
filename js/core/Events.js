@@ -100,6 +100,13 @@ export const Events = {
    *  `{ open: false }` when it closes (a pick, Stay, game over, a new run). main.js turns `open: true` into the jump to floor 4 and
    *  shows the list (ui/WhereNextList.js). Never emitted with the flag off, with `?ladder=0` (no floor 4), or by the old flat trip. */
   WHERE_NEXT:         'trip:whereNext',
+  /** Nets step 3 slice 3 (lane 3a, FEATURE_FLAGS.FIELDS_BY_HEIGHT, DECISIONS §33 row 7): the mother berths at the resupply
+   *  satellite or lets go of it. Emitted by GameFlowManager: `{ phase: 'berthed', satId, altKm }` once when a trip to the satellite
+   *  has arrived (the satellite takes any catch mated at her nose collar first, buying opens, the first berth tops credits up),
+   *  `{ phase: 'left', satId, altKm }` once when a field pick from the berth begins its trip (buying closes). A trip from the
+   *  berth that could not go puts her back with a second `berthed`. Lane 3b's look (the arm takes her collar, cartridge swaps)
+   *  and 3d's teaching listen; nothing else does. Never emitted with the flag off. */
+  RESUPPLY_BERTH:     'resupply:berth',
   /** A mission's last catch just landed (m1-finish, owner 2026-10-17): the HUD shows a
    *  "MISSION N COMPLETE" headline that fades by itself and the audio plays one success
    *  cue. Emitted ONCE per mission boundary from GameFlowManager._openDepotInvitation

@@ -41,6 +41,10 @@
  * again once the battery holds TRIP.TURN_POWER_WH, and she turns and pushes on. That wait has NO time limit (the bound above is
  * for a turn that is not waiting for power).
  *
+ * The resupply satellite (Nets step 3 slice 3, lane 3a): a trip to it is a field trip to a place at 500 km (`begin(onArrive, {field:
+ * satellite})`, `Constants.RESUPPLY`); only its words differ (`isSatelliteTarget`: "Climbing to the resupply satellite.", "Arrived at the
+ * resupply satellite.", the gas and the nose refusals). `_end` hands the registry the satellite's id: it berths her there.
+ *
  * Where next (Nets step 3 slice 2b, lane 2b-2): with the flag on and floor 4 there to ask on, a mission boundary does not pick the
  * field for her. The trip waits in phase `choose` (before `wait`): `isActive()` is true, so every credit guard that waits while a
  * trip is on (a catch landing while she chooses starts no mission, the stop stays open, a boundary reached is deferred) holds,
@@ -79,6 +83,31 @@ export function fieldNoGasLine(toKm) { return `Not enough gas to reach the ${Mat
 export function fieldNoPointLine(dir, toKm) {
   return `Cannot point the ship ${dir < 0 ? 'against' : 'along'} its motion to reach the ${Math.round(toKm)} km field.`;
 }
+
+// ── the resupply satellite's words (Nets step 3 slice 3, Constants.RESUPPLY): a place, not "the 500 km field" ──────────────────
+/** @param {{id?: string}|null} target @returns {boolean} the target of a trip is a resupply satellite (not a field) */
+export function isSatelliteTarget(target) {
+  const sats = Constants.RESUPPLY && Constants.RESUPPLY.SATS;
+  return !!(target && Array.isArray(sats) && sats.some((s) => s.id === target.id));
+}
+/** @param {number} dir +1 climb, -1 descent @param {number} n catches the furnaces melt */
+export function satelliteStartLine(dir, n) {
+  const go = `${dir < 0 ? 'Descending' : 'Climbing'} to the resupply satellite.`;
+  if (!(n > 0)) return go;
+  return `${go} The furnaces melt ${n} ${n === 1 ? 'catch' : 'catches'}.`;
+}
+export const SATELLITE_ARRIVED_LINE = 'Arrived at the resupply satellite.';
+export const SATELLITE_NO_GAS_LINE = 'Not enough gas to reach the resupply satellite.';
+/** @param {number} dir +1 along her motion, -1 against it */
+export function satelliteNoPointLine(dir) {
+  return `Cannot point the ship ${dir < 0 ? 'against' : 'along'} its motion to reach the resupply satellite.`;
+}
+// the trip's own words for its destination (a field or a satellite)
+const tripStartLine = (dir, f, n) => (isSatelliteTarget(f) ? satelliteStartLine(dir, n) : fieldStartLine(dir, f.altKm, n));
+const tripArrivedLine = (f) => (isSatelliteTarget(f) ? SATELLITE_ARRIVED_LINE : fieldArrivedLine(f.altKm));
+const tripNoGasLine = (f) => (isSatelliteTarget(f) ? SATELLITE_NO_GAS_LINE : fieldNoGasLine(f.altKm));
+const tripNoPointLine = (dir, f) => (isSatelliteTarget(f) ? satelliteNoPointLine(dir) : fieldNoPointLine(dir, f.altKm));
+
 /** "Burning to the next field. The furnaces melt N catches." (or just the first part with none). */
 export function startLine(n) {
   if (!(n > 0)) return 'Burning to the next field.';
@@ -286,7 +315,7 @@ export class TransferTrip {
     if (want && this._d.fields && Constants.isFeatureEnabled('FIELDS_BY_HEIGHT')) {
       const plan = this._d.fields.planTo(want, { cos: 1 });
       if (!plan || !plan.enough) {
-        this._say(fieldNoGasLine(want.altKm), { _keep: true });
+        this._say(tripNoGasLine(want), { _keep: true });
         return false;                // no start without the gas for the whole profile
       }
       field = want;
@@ -425,14 +454,14 @@ export class TransferTrip {
       const dirWanted = this._field.altKm >= this._fromKm() ? 1 : -1;
       const cos = turn ? 1 : this._aimCos(dirWanted);
       if (!(cos > 1e-9)) {                // she cannot turn and her nose is not along (or against) her motion: no push that way, she stays (review F2)
-        this._say(fieldNoPointLine(dirWanted, this._field.altKm), { _keep: true });
+        this._say(tripNoPointLine(dirWanted, this._field), { _keep: true });
         this._stay();
         return;
       }
       plan = fields && Constants.isFeatureEnabled('FIELDS_BY_HEIGHT') ? fields.planTo(this._field, { cos }) : null;
       this._planCos = cos;
       if (!plan || !plan.enough) {
-        this._say(fieldNoGasLine(this._field.altKm), { _keep: true });
+        this._say(tripNoGasLine(this._field), { _keep: true });
         this._stay();
         return;
       }
@@ -452,7 +481,7 @@ export class TransferTrip {
     const n = this._tipCount() + (this._noseWaiting(true) ? 1 : 0);
     if (plan) {
       this._beginProfile(plan);
-      this._say(fieldStartLine(plan.profile.dir, this._field.altKm, n), { _keep: true });
+      this._say(tripStartLine(plan.profile.dir, this._field, n), { _keep: true });
     } else {
       this._say(startLine(n), { _keep: true });
     }
@@ -648,7 +677,7 @@ export class TransferTrip {
           if (!this._waitsForPower()) {
             this._pausedS += dt;
             if (this._pushS === 0 && this._pausedS >= Constants.TRIP.TURN_WAIT_MAX_S) {
-              this._say(fieldNoPointLine(this._profile.dir, this._field.altKm), { _keep: true });
+              this._say(tripNoPointLine(this._profile.dir, this._field), { _keep: true });
               this._stay();
               return;
             }
@@ -846,7 +875,7 @@ export class TransferTrip {
       this._applyProfile(1);
       this.lastLeg = { fieldId: this._field.id, altKm: this._field.altKm, days: this._flownDays(), gasKg: this._billedKg };
       if (this._d.fields) this._d.fields.arrive(this._field.id);
-      line = this._gasShort ? TRIP_LINES.ARRIVED_LAST_GAS : fieldArrivedLine(this._field.altKm);
+      line = this._gasShort ? TRIP_LINES.ARRIVED_LAST_GAS : tripArrivedLine(this._field);
     } else {
       // Whatever of the trip's gas was not billed yet (a frame that ended it early) is billed now: exactly one trip's worth.
       const rest = Constants.TRIP.DV_MPS - this._billedDv;

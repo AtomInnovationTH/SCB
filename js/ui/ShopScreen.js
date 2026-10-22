@@ -345,6 +345,8 @@ export class ShopScreen {
     // u1-resupply-stop D2 (owner 2026-10-17): buying and selling happen only at the resupply stop. null = no
     // GameFlowManager wired (bare test rigs trade freely); only `false` refuses. GameFlowManager sets it.
     this._atResupplyStop = null;
+    /** Nets step 3 slice 3 (S7): the stop is the resupply SATELLITE (flag on, the "where next" list there): the trade refusal names it. */
+    this._satelliteStop = false;
     /** @type {Array<function(boolean|null): void>} u1-resupply-stop D3: panes that word their buttons by the stop (CARGO). */
     this._stopListeners = [];
 
@@ -396,6 +398,13 @@ export class ShopScreen {
   }
 
   /**
+   * Nets step 3 slice 3 (S7): GameFlowManager says whether the stop is the resupply satellite (FIELDS_BY_HEIGHT on and the list there to
+   * ask on). Only the refusal's words change: away from it every trade is still refused, "at the resupply satellite" instead of "stop".
+   * @param {boolean} on
+   */
+  setSatelliteStop(on) { this._satelliteStop = !!on; }
+
+  /**
    * u1-resupply-stop D3: call `fn(atStop)` whenever the stop flag changes (the CARGO pane re-words its buttons).
    * @param {function(boolean|null): void} fn
    * @returns {function(): void} unsubscribe
@@ -424,7 +433,9 @@ export class ShopScreen {
     audioSystem.playDeny();
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'MARKET',
-      text: 'Buying and selling happen at the resupply stop after a mission.',
+      text: this._satelliteStop
+        ? 'Buying and selling happen at the resupply satellite.'          // slice 3: the stop moved there
+        : 'Buying and selling happen at the resupply stop after a mission.',
       priority: 'warning',
       _reactive: true,   // feedback to the click the player just made — never muted by the onboarding tiers
     });
