@@ -95,6 +95,11 @@ export const Events = {
    *  emitted for mission 1, nor at a continue (the first clear after a resume
    *  re-asserts the restored mission). */
   MISSION_START:      'mission:start',
+  /** Nets step 3 slice 2b (lane 2b-2, FEATURE_FLAGS.FIELDS_BY_HEIGHT): the "where next" choice at a mission boundary. Emitted by
+   *  TransferTrip (phase `choose`) as `{ open: true }` when the choice opens (`again: true` when a refused pick puts it back) and
+   *  `{ open: false }` when it closes (a pick, Stay, game over, a new run). main.js turns `open: true` into the jump to floor 4 and
+   *  shows the list (ui/WhereNextList.js). Never emitted with the flag off, with `?ladder=0` (no floor 4), or by the old flat trip. */
+  WHERE_NEXT:         'trip:whereNext',
   /** A mission's last catch just landed (m1-finish, owner 2026-10-17): the HUD shows a
    *  "MISSION N COMPLETE" headline that fades by itself and the audio plays one success
    *  cue. Emitted ONCE per mission boundary from GameFlowManager._openDepotInvitation

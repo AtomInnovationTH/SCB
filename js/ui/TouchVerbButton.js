@@ -98,6 +98,7 @@ export class TouchVerbButton {
    * @param {() => boolean} [deps.isRiding]           the ladder is riding between floors
    * @param {() => (string|null)} [deps.getSpaceVerb] floor -> that floor's Space verb; default FloorContract.byId(floor).spaceVerb
    * @param {() => (object|null)} [deps.getFocusedCluster]  NavcomFloor.getFocusedCluster
+   * @param {() => (string|null)} [deps.getChoiceLabel]  Nets step 3 slice 2b (lane 2b-2): NavcomFloor.choiceLabel - while the "where next" list is open, the chip's word ('FLY THERE' on a field row, 'STAY' on the Stay row); null otherwise
    * @param {() => boolean} [deps.isInputBlocked]     the game would swallow the key: not gameplay, paused, codex / help / old map open, a ceremony
    * @param {(code:string) => *} deps.press           KeyDispatch.pressKey
    * @param {(code:string) => *} deps.hold            KeyDispatch.holdKey (keydown only)
@@ -246,7 +247,9 @@ export class TouchVerbButton {
 
   /**
    * FLY THERE's label now, or null when it is not on offer: glass, floor 4, the floor's Space verb has a button, a
-   * cluster is focused, the ladder is not riding and Space would act.
+   * cluster is focused, the ladder is not riding and Space would act. While the "where next" list is open (lane 2b-2) a
+   * cluster need not be focused: the chip is the pick, "FLY THERE" on a field row and "STAY" on the Stay row, and its tap
+   * is the same Space.
    * @returns {string|null}
    */
   flyLabel() {
@@ -255,6 +258,9 @@ export class TouchVerbButton {
     const label = VERB_LABELS[this._verb(FLY_FLOOR)];
     if (!label) return null;
     try { if (this._d.isRiding && this._d.isRiding()) return null; } catch (_e) { return null; }
+    let pick = null;
+    try { pick = this._d.getChoiceLabel ? this._d.getChoiceLabel() : null; } catch (_e) { pick = null; }
+    if (pick) return this._blocked() ? null : pick;
     let c = null;
     try { c = this._d.getFocusedCluster ? this._d.getFocusedCluster() : null; } catch (_e) { c = null; }
     if (!c) return null;

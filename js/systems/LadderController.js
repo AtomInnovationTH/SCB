@@ -1074,7 +1074,8 @@ export class LadderController {
    *      plan the shipped debris cycle runs untouched.
    *   3. TAB on floor 4 (LEO / NAVCOM): steps the focused cluster
    *      (`navcom.focusStep(±1)`); consumed when a cluster is focused after
-   *      the step.
+   *      the step. While the "where next" list is open (`navcom.choosing()`,
+   *      Nets step 3 slice 2b) it steps the list's rows instead, always consumed.
    *
    * A key whose target is a text field (INPUT / TEXTAREA / contentEditable —
    * the Codex search box) is never routed: InputManager's own guard, mirrored,
@@ -1105,6 +1106,12 @@ export class LadderController {
       if (f === 3 && this._proxNet && typeof this._proxNet.cycleInsertion === 'function') {
         const c = this._proxNet.cycleInsertion(dir);
         if (!c) return false;
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        return true;
+      }
+      // Nets step 3 slice 2b (lane 2b-2): while the "where next" list is open on floor 4 Tab steps over its rows, not the clusters.
+      if (f === 4 && this._navcom && typeof this._navcom.choosing === 'function' && this._navcom.choosing()) {
+        this._navcom.choiceStep(dir);
         if (typeof e.preventDefault === 'function') e.preventDefault();
         return true;
       }
@@ -2090,6 +2097,12 @@ export class LadderController {
    * @private
    */
   _dispatchVerb(verb) {
+    // Nets step 3 slice 2b (lane 2b-2): while the "where next" list is open Space picks its focused row; planning a transfer to
+    // a cluster waits (the FLY THERE chip's tap is this same Space).
+    if (verb === 'plan-transfer' && this._navcom && typeof this._navcom.choosing === 'function' && this._navcom.choosing()) {
+      this._navcom.choicePick();
+      return;
+    }
     if (verb === 'plan-transfer' && this._navcom && this._navcom.planTransfer) {
       this._navcom.planTransfer();
       this._noteSubjectChange(4);

@@ -28,6 +28,7 @@ import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
 import { TransferTrip } from './TransferTrip.js';
+import { buildWhereNextRows, STAY_ID, OPEN_LINE } from './WhereNextRows.js';
 import { salvageGasKg } from './ResourceSystem.js';
 import { UPGRADES } from '../ui/ShopScreen.js';
 import { upgradePrereqsMet, upgradeCostNow } from '../ui/shopGating.js';
@@ -106,6 +107,12 @@ export class GameFlowManager {
     this._trip = new TransferTrip();
     /** trip-melt-2 D12a: the boundary count a credit reached during a trip, run after the trip's mission start, or null. */
     this._deferredBoundary = null;
+    /**
+     * Nets step 3 slice 2b (lane 2b-2, FIELDS_BY_HEIGHT): floor 4 exists and hosts the "where next" list (main.js sets it once the
+     * list is built, inside the ladder block). With the flag on and this set, a mission boundary opens the choice instead of
+     * flying to `defaultNext()`; with `?ladder=0` (no floor 4) or in a rig that never wired it, `defaultNext()` as before.
+     */
+    this._whereNextOn = false;
 
     /**
      * w1-hud-calm review fix (2026-10-05): the first INVITATION pays the
@@ -2198,22 +2205,17 @@ export class GameFlowManager {
     const r = this._refs;
     if (!Constants.isFeatureEnabled('TRANSFER_TRIP') || !r || !r.player || !gameState.isGameplay()) { start(); return; }
     this._syncTripDeps();
-    // Nets step 3 slice 2b (FIELDS_BY_HEIGHT): with the flag on the boundary flies her to another field (until lane 2b-2's list,
-    // the nearest one she can reach: `FieldRegistry.defaultNext`); none = she stays and the next mission starts at once. The
-    // arrival adds the profile's days to the ship's clock, starts the mission (MISSION_START lays the field out) and saves.
+    // Nets step 3 slice 2b (FIELDS_BY_HEIGHT): with the flag on the boundary flies her to another field: the one the player picks on
+    // the "where next" list (lane 2b-2), or with no floor 4 to ask on the nearest one she can reach (`FieldRegistry.defaultNext`);
+    // none = she stays and the next mission starts at once. The arrival adds the profile's days to the ship's clock, starts the
+    // mission (MISSION_START lays the field out) and saves.
     const reg = r.fieldRegistry;
     if (reg && reg.isOn()) {
-      if (this._trip.isActive()) return;           // a trip is already on its way: its arrival starts whichever mission is due
+      if (this._trip.isActive()) return;           // a trip is already on its way (or she is choosing): its arrival starts whichever mission is due
+      // Lane 2b-2: with floor 4 there to ask on, the player picks the field (or Stay) on the LEO map; the trip waits in phase `choose`.
+      if (this._whereNextOn) { this._openWhereNext(start); return; }
       const field = reg.defaultNext();
-      const begun = field && this._trip.begin(() => {
-        const leg = this._trip.lastLeg;
-        this._trip.lastLeg = null;
-        if (leg) gameState.shipDays += leg.days;
-        start();
-        this._runDeferredBoundary();
-        if (leg) this.saveGame();
-      }, { field });
-      if (!begun) start();
+      if (!(field && this._flyToField(field, start))) start();
       return;
     }
     // trip-melt-2 D12a: a credit that reached the next boundary DURING the trip ran no boundary then (see the credit
@@ -2225,11 +2227,83 @@ export class GameFlowManager {
   }
 
   /**
+   * @private Nets step 3 slice 2b: begin the trip to `field`. The arrival adds the profile's days to the ship's clock, starts the
+   * mission (MISSION_START lays the field out), runs the boundary a mid-trip credit reached, and saves.
+   * @param {object} field a FieldRegistry field
+   * @param {() => void} start the mission transition
+   * @returns {boolean} false = the gas does not cover the whole profile (nothing begins; the words were said)
+   */
+  _flyToField(field, start) {
+    return !!this._trip.begin(() => {
+      const leg = this._trip.lastLeg;
+      this._trip.lastLeg = null;
+      if (leg) gameState.shipDays += leg.days;
+      start();
+      this._runDeferredBoundary();
+      if (leg) this.saveGame();
+    }, { field });
+  }
+
+  /** main.js: floor 4 exists and hosts the "where next" list (see `_whereNextOn`). @param {boolean} on */
+  setWhereNextAvailable(on) { this._whereNextOn = !!on; }
+
+  /**
+   * @private Nets step 3 slice 2b, lane 2b-2 (decision K): open the "where next" choice. Nothing she can pick (no reachable field
+   * and nothing left here) says so and starts the next mission where she is, as `defaultNext()` = none does; otherwise the trip
+   * waits in phase `choose` with the mission start kept for the pick, one comms line says what to do, and `Events.WHERE_NEXT`
+   * opens the list on floor 4 (main.js). The choice waits for her: no timeout.
+   * @param {() => void} start the mission transition
+   */
+  _openWhereNext(start) {
+    const reg = this._refs.fieldRegistry;
+    const rows = buildWhereNextRows(reg);
+    if (rows.line) {
+      eventBus.emit(Events.COMMS_MESSAGE, { text: rows.line, priority: 'info', _keep: true });
+      start();
+      return;
+    }
+    this._syncTripDeps();
+    eventBus.emit(Events.COMMS_MESSAGE, { text: OPEN_LINE, priority: 'info', _keep: true });
+    this._trip.choose({ start });
+  }
+
+  /**
+   * Nets step 3 slice 2b, lane 2b-2: the player's pick on the "where next" list. A field id begins the trip to it (the arrival is as
+   * after any trip); STAY_ID starts the next mission where she is, runs the boundary a mid-choice credit reached and always saves
+   * (the boundary save says the trip is still owed). A pick that cannot be flown (the gas changed, the field was emptied) puts the
+   * choice back and rebuilds the list; it never leaves the choice, or the next catch would start the mission unasked.
+   * @param {string} id a field id ('f400') or STAY_ID
+   * @returns {boolean} true = the trip began or the mission started here; false = nothing happened (not choosing, or refused)
+   */
+  pickWhereNext(id) {
+    const trip = this._trip;
+    const reg = this._refs && this._refs.fieldRegistry;
+    if (!trip.isChoosing() || !reg) return false;
+    const choice = trip.choice;
+    const start = choice && typeof choice.start === 'function' ? choice.start : () => {};        // (`_openWhereNext` always hands one)
+    if (id === STAY_ID) {
+      if (reg.remainingCount(reg.currentId()) <= 0) return false;          // nothing here to stay for (the list has no such row)
+      trip.leaveChoice();
+      start();
+      this._runDeferredBoundary();
+      this.saveGame();
+      return true;
+    }
+    const field = reg.fieldById(id);
+    if (!field || field.id === reg.currentId() || reg.remainingCount(field.id) <= 0) return false;
+    this._syncTripDeps();
+    trip.leaveChoice();                                                    // idle again, so `begin` accepts the trip
+    if (this._flyToField(field, start)) return true;
+    trip.choose(choice, { again: true });                                  // the gas changed: back to the list, rebuilt, with the refusal said
+    return false;
+  }
+
+  /**
    * @private Nets step 3 slice 2b (FIELDS_BY_HEIGHT; review F1): the mission boundary credit writes its save while the trip to the
    * next field is still to be flown (the daughters are coming home), and a mid-flight save is skipped, so a reload of it finds her
    * at the field she left with the next mission's catch count. The save says so (`FieldRegistry` keeps the last mission that
    * started); after the load, once her field is laid out, the boundary is taken again: the trip begins from here, with the gas
-   * she had before it. Where the player picks the field (lane 2b-2) this is the place that opens the list.
+   * she had before it. With floor 4 there to ask on (lane 2b-2) `_beginTripThen` opens the "where next" list here.
    * @param {number} dt real seconds (0 while the world is held)
    */
   _resumeOwedTrip(dt) {
@@ -2274,6 +2348,9 @@ export class GameFlowManager {
 
   /** True while a trip burns: the world clock targets Constants.TRIP.TIME_RATE (main.js). */
   isTripRunning() { return this._trip.isBurning(); }
+
+  /** Nets step 3 slice 2b (lane 2b-2): the mission boundary is waiting for the player's pick on the "where next" list (the FMA strip's line). */
+  isWhereNextPending() { return this._trip.isChoosing(); }
 
   /**
    * trip-melt D6: is a catch at the nose collar waiting to move to a radiator tip - one the hand-off can still take?

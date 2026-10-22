@@ -158,6 +158,8 @@ import { pressKey as dispatchKeyPress } from './core/KeyDispatch.js';
 import { holdKey as dispatchKeyHold, releaseKey as dispatchKeyRelease } from './core/KeyDispatch.js';   // u15a: DE-SPIN holds KeyL
 import { TouchActionChip } from './ui/TouchActionChip.js';
 import { TouchVerbButton } from './ui/TouchVerbButton.js';
+import { WhereNextList } from './ui/WhereNextList.js';
+import { buildWhereNextRows } from './systems/WhereNextRows.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
 import { LeashVisual } from './ui/LeashVisual.js';
@@ -651,6 +653,33 @@ let autoLockController;
 let _onboardingTargetOutOfRange = false;
 let touchActionChip = null;   // u11: the touch net / daughter button (glass only)
 let touchVerbButton = null;   // u15a: FLY THERE (floor 4) and DE-SPIN (floors 2-3, hold) - glass only
+let whereNextList = null;     // Nets step 3 slice 2b (lane 2b-2): the "where next" list floor 4 hosts (ui/WhereNextList.js); built in the ladder block
+let whereNextJumpOwed = false; // the choice opened and the ladder has not yet taken her to floor 4
+/**
+ * Nets step 3 slice 2b (lane 2b-2): take her to floor 4 once, when the "where next" choice opens. A jump the ladder refuses (a ride is
+ * running, it is not engaged yet) is tried again each frame until she is there; it never pulls her back after that, and it waits while
+ * the depot drawer is open. Leaving floor 4 keeps the choice pending (the list is there again on return).
+ */
+function whereNextJump() {
+  if (!whereNextJumpOwed || !ladderController) return;
+  if (!ladderController.isActive()) return;
+  if (ladderController.isRiding()) return;
+  if (ladderController.currentFloor() === 4) { whereNextJumpOwed = false; return; }
+  if (gameFlowManager && gameFlowManager.isDepotStopPending()) return;
+  ladderController.jump({ toFloor: 4 });
+}
+/**
+ * Nets step 3 slice 2b (lane 2b-2): the game would swallow a Space - the same cases as the FLY THERE chip's `isInputBlocked` (the chip
+ * exists on glass only; the list also takes mouse clicks). A tap on a "where next" row does nothing then.
+ */
+function whereNextInputBlocked() {
+  return !gameState.isGameplay() || !!(gameFlowManager && gameFlowManager.paused)
+    || !!(codexViewerUI && codexViewerUI.isVisible && codexViewerUI.isVisible())
+    || !!(hotkeyOverlay && hotkeyOverlay.isVisible && hotkeyOverlay.isVisible())
+    || !!(debrisMap && debrisMap.isVisible && debrisMap.isVisible())
+    || !!(cameraSystem && ((cameraSystem._launchCeremony && cameraSystem._launchCeremony.active)
+      || (cameraSystem._netCeremony && cameraSystem._netCeremony.active)));
+}
 /**
  * u11 R2/R4c/R6/R12: the ONE daughter that D would launch at the selected piece, and can she go. SEND DAUGHTER is
  * offered only for her (one helper feeds `hasDaughter`, the far state, the range-wall `daughterReady` flag and the
@@ -2183,6 +2212,26 @@ async function init() {
   // Wave 5 (Session B): the SPECS engine joins it in the same gate; Session U:
   // the WorkbenchPane shell that hosts both is constructed right after them.
   if (Constants.LADDER && Constants.LADDER.ENABLED) {
+    // Nets step 3 slice 2b (lane 2b-2, FIELDS_BY_HEIGHT): the "where next" list floor 4 hosts. Inside the ladder gate: with ?ladder=0
+    // there is no floor 4, the flow manager is never told it can ask, and a mission boundary flies to defaultNext() as before.
+    whereNextList = new WhereNextList({
+      doc: (typeof document !== 'undefined') ? document : null,
+      getRows: () => buildWhereNextRows(fieldRegistry),
+      onPick: (id) => gameFlowManager.pickWhereNext(id),
+      glass: () => GestureHints.isGlass(),
+      isInputBlocked: () => whereNextInputBlocked(),
+    });
+    navcomFloor.setWhereNext(whereNextList);
+    gameFlowManager.setWhereNextAvailable(true);
+    // The choice opens / closes (TransferTrip phase `choose`): show the rows and take her to floor 4; a refused pick that puts the
+    // choice back (`again`) only rebuilds the rows.
+    eventBus.on(Events.WHERE_NEXT, (d) => {
+      const open = !!(d && d.open);
+      if (whereNextList) whereNextList.setPending(open);
+      if (open && !d.again) whereNextJumpOwed = true;
+      if (!open) whereNextJumpOwed = false;
+      whereNextJump();
+    });
     // ONE workbench-pane edge, four consumers (Session B — never a second
     // signal path). The shell's ONE onOpenChange calls this (Session U: one
     // pane, one open state — the two engines have no open edge of their own;
@@ -3013,6 +3062,8 @@ async function init() {
       // u5-info-ap-hold D2: floor 2 shows the strip while the autopilot flies, in plain words at the simple level.
       floor: () => (ladderFloorMask && ladderFloorMask.getAppliedFloor ? ladderFloorMask.getAppliedFloor() : null),
       simple: () => !!(hud && hud.isSimpleTargets && hud.isSimpleTargets()),
+      // Nets step 3 slice 2b (lane 2b-2): the boundary waits for her pick of the next field ("Where next? Pick on the LEO map").
+      choosing: () => !!(gameFlowManager && gameFlowManager.isWhereNextPending && gameFlowManager.isWhereNextPending()),
     });
     // The strip holds no listener (test-FmaStrip pins that): the hub tells it at once, not at the next 1 s poll.
     eventBus.on(Events.AUTOPILOT_ENGAGE, () => { if (fmaStrip) fmaStrip.setFlying(true); });
@@ -3456,6 +3507,8 @@ async function init() {
         ? ladderController.currentFloor() : null),
       isRiding: () => !!(ladderController && ladderController.isRiding && ladderController.isRiding()),
       getFocusedCluster: () => (navcomFloor && navcomFloor.getFocusedCluster ? navcomFloor.getFocusedCluster() : null),
+      // Nets step 3 slice 2b (lane 2b-2): while the "where next" list is open the chip is the pick (FLY THERE / STAY; its tap is Space).
+      getChoiceLabel: () => (navcomFloor && navcomFloor.choiceLabel ? navcomFloor.choiceLabel() : null),
       // Space / KeyL are swallowed or ignored in exactly these cases (InputManager: the codex, help and old-map intercepts,
       // the launch / net ceremony Space-skips, processInput's overlayOpen); a paused or non-gameplay game acts on neither.
       isInputBlocked: () => !gameState.isGameplay() || !!(gameFlowManager && gameFlowManager.paused)
@@ -7785,6 +7838,7 @@ function updateCamera(dt, timestamp) {
   // WheelRouter also feeds ladder.wheel(). Internally gated on the flag +
   // gameplay, so this is inert when Constants.LADDER.ENABLED is false.
   if (ladderController) ladderController.update(timestamp);
+  if (whereNextJumpOwed) whereNextJump();       // lane 2b-2: a "where next" jump the ladder refused is tried again
 
   // Update the camera system
   cameraSystem.update(dt, playerPos, playerVel, playerQuat);

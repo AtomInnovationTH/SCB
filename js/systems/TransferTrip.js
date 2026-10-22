@@ -41,6 +41,13 @@
  * again once the battery holds TRIP.TURN_POWER_WH, and she turns and pushes on. That wait has NO time limit (the bound above is
  * for a turn that is not waiting for power).
  *
+ * Where next (Nets step 3 slice 2b, lane 2b-2): with the flag on and floor 4 there to ask on, a mission boundary does not pick the
+ * field for her. The trip waits in phase `choose` (before `wait`): `isActive()` is true, so every credit guard that waits while a
+ * trip is on (a catch landing while she chooses starts no mission, the stop stays open, a boundary reached is deferred) holds,
+ * `update()` does nothing, nothing burns, saves are written. GameFlowManager keeps what happens after the pick in the payload it
+ * hands `choose()`; `Events.WHERE_NEXT` says when the list opens and closes (js/ui/WhereNextList.js). `abort()` drops a pending
+ * choice, so game over, a win, the menu and a new run leave nothing behind.
+ *
  * Time: `update(dt)` takes REAL seconds and GameFlowManager hands it 0 while the world is held (the workbench drawer),
  * so the trip timer, the gas bill and the melt (TipCargo.update gets the same 0) all pause together. The 100x world
  * clock does not speed any of them: melting is `dt x BASE_SCALE x sun`, real dt.
@@ -169,8 +176,9 @@ export class TransferTrip {
   constructor(deps = {}) {
     this._d = {};
     this._bus = deps.bus || defaultBus;
-    this._phase = 'idle';           // 'idle' | 'wait' | 'burn'
+    this._phase = 'idle';           // 'idle' | 'choose' (waiting for the player's pick of the next field) | 'wait' | 'burn'
     this._onArrive = null;
+    this._choice = null;            // what the flow manager keeps while the player chooses (opaque here), or null
     this._waitS = 0;
     this._elapsedS = 0;
     this._billedDv = 0;
@@ -230,8 +238,12 @@ export class TransferTrip {
 
   // ── asking ────────────────────────────────────────────────────────────────
 
-  /** A trip is pending or burning (the mission start waits for it). */
+  /** A trip is pending or burning, or she is choosing where to go (the mission start waits for it). */
   isActive() { return this._phase !== 'idle'; }
+  /** Nets step 3 slice 2b (lane 2b-2): the player is picking the next field (nothing burns, nothing waits for the daughters yet). */
+  isChoosing() { return this._phase === 'choose'; }
+  /** What was handed to `choose()` while the choice is pending, else null. */
+  get choice() { return this._phase === 'choose' ? this._choice : null; }
   /** Waiting for the daughters to come home. */
   isWaiting() { return this._phase === 'wait'; }
   /** Burning: the clock runs at TRIP.TIME_RATE, the tip furnaces melt, launches are refused. */
@@ -304,11 +316,40 @@ export class TransferTrip {
   }
 
   /**
+   * Nets step 3 slice 2b (lane 2b-2): the boundary asks the player where to go instead of picking for her. The trip waits in phase
+   * `choose` until `leaveChoice()`; `Events.WHERE_NEXT {open: true}` tells the list to open. Only from idle.
+   * @param {*} payload what the caller needs back after the pick (the mission start); read through `choice`
+   * @param {{again?: boolean}} [opts] `again`: a refused pick puts the choice back (the list is rebuilt, not a first opening)
+   * @returns {boolean} true = now choosing
+   */
+  choose(payload, opts) {
+    if (this._phase !== 'idle') return false;
+    this._phase = 'choose';
+    this._choice = payload === undefined ? null : payload;
+    this._bus.emit(Events.WHERE_NEXT, opts && opts.again ? { open: true, again: true } : { open: true });
+    return true;
+  }
+
+  /**
+   * The pick was made (or the choice is dropped): back to idle and `Events.WHERE_NEXT {open: false}`. The caller then begins a trip
+   * or starts the mission; if its trip is refused it calls `choose(payload, {again: true})` to put the choice back.
+   * @returns {*} the payload given to `choose()` (null when she was not choosing)
+   */
+  leaveChoice() {
+    if (this._phase !== 'choose') return null;
+    const payload = this._choice;
+    this._choice = null;
+    this._phase = 'idle';
+    this._bus.emit(Events.WHERE_NEXT, { open: false });
+    return payload;
+  }
+
+  /**
    * One frame. `dt` is real seconds (0 while the world is held).
    * @param {number} dt
    */
   update(dt) {
-    if (this._phase === 'idle' || !(dt > 0)) return;
+    if (this._phase === 'idle' || this._phase === 'choose' || !(dt > 0)) return;     // choosing: nothing runs, she waits for the player
     if (this._phase === 'wait') {
       this._waitS += dt;
       const home = this.daughtersHome();
@@ -324,6 +365,7 @@ export class TransferTrip {
    */
   abort() {
     if (this._phase === 'idle') return;
+    if (this._phase === 'choose') { this.leaveChoice(); return; }      // nothing was set up yet: just drop the choice (and close the list)
     // trip-melt-2 D8: a game over / reset / load mid-carry: she snaps docked, her catches stay on her rack, the strut and
     // the radiators go back, the tip reservation is cleared (ArmUnit.abortCarry)
     const am = this._d.armManager;

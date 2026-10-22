@@ -40,6 +40,7 @@
  */
 
 import { VisualLaw } from '../../core/VisualLaw.js';
+import { FloorContract } from '../../core/FloorContract.js';
 import { PANE_CORNER_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 import { DENSITY_MOTION_MS, DENSITY_MOTION_EASING } from '../HUD.js';
 import { shortTypeName } from './TargetPanel.js';
@@ -107,6 +108,8 @@ const HOME_FLOOR = 2;
 
 const MINUS = '\u2212';                          // − (Math Operators, allowed)
 const DOT = '\u00b7';                            // · (Latin-1, allowed)
+/** Nets step 3 slice 2b (lane 2b-2): the plain line while the boundary waits for her pick of the next field (floors 3 and 4, simple level). */
+export const WHERE_NEXT_LINE = `Where next? Pick on the ${(FloorContract.byId(4) || { name: 'map' }).name} map`;   // the floor's name from the contract, never typed here
 
 /**
  * Range text: `412 m` below 1 km, `1.4 km` below 10 km, `12 km` / `1235 km`
@@ -153,6 +156,9 @@ export class FmaStrip {
    * @param {function} [deps.onPhaseChange] (prevPhase, nextPhase, state) on every AP phase change after the first sample.
    * @param {function} [deps.floor]      () → the applied floor id (u5 D2: the flying rule and the plain line are floor 2's). Absent ⇒ null.
    * @param {function} [deps.simple]     () → true at the simple level (u5 D2: HUD.isSimpleTargets). Absent ⇒ false.
+   * @param {function} [deps.choosing]   () → true while the mission boundary's "where next" choice is pending (Nets step 3 slice 2b,
+   *                                      lane 2b-2: GameFlowManager.isWhereNextPending, the trip's phase, not the autopilot's burn-only
+   *                                      status). The plain line then reads WHERE_NEXT_LINE. Absent ⇒ false.
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc
@@ -162,6 +168,7 @@ export class FmaStrip {
     this._onPhaseChange = typeof deps.onPhaseChange === 'function' ? deps.onPhaseChange : null;
     this._floorFn = typeof deps.floor === 'function' ? deps.floor : null;
     this._simpleFn = typeof deps.simple === 'function' ? deps.simple : null;
+    this._choosingFn = typeof deps.choosing === 'function' ? deps.choosing : null;
 
     this._root = null;
     this._el = null;                 // { ap, sep1, phase, sep2, range, sep3, closing }
@@ -302,6 +309,12 @@ export class FmaStrip {
     try { return !!this._simpleFn(); } catch (_e) { return false; }
   }
 
+  /** @private The "where next" choice is pending (the injected getter; never throws). */
+  _choosing() {
+    if (!this._choosingFn) return false;
+    try { return !!this._choosingFn(); } catch (_e) { return false; }
+  }
+
   /**
    * The poll (the hub calls it per frame; it accepts one sample per POLL_MS).
    * Reads deps.fma(), advances the closing estimator, boxes / unboxes the
@@ -389,7 +402,10 @@ export class FmaStrip {
     if (this._isSimple() && ((engaged && floor === HOME_FLOOR) || floor === 3 || floor === 4)) {
       const named = engaged && s.headingMode === 'TARGET' && typeof s.targetName === 'string' && s.targetName
         ? shortTypeName(s.targetName) : null;
-      if (phase === 'TRANSFER') {
+      if (this._choosing()) {
+        // Nets step 3 slice 2b (lane 2b-2): the boundary is waiting for her pick; no trip exists yet, so there is no TRANSFER phase.
+        this._plainText = WHERE_NEXT_LINE;
+      } else if (phase === 'TRANSFER') {
         // trip-melt D8: the ship's own burn, not "Autopilot on". Nets step 3 slice 2b: a trip between fields says where she is
         // going and which day of it this is ("Climbing to 425 km · day 3 of 5"); without that data, the old words.
         // Review F6: while her nose is not along the way she goes (a climb pushes along her motion, a descent against it) the push

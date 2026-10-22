@@ -139,6 +139,8 @@ export class NavcomFloor {
     this._getMassBudget = deps.getMassBudget || null;
     this._orb = deps.reachOrb || new ReachOrb();
     this._now = deps.now || _nowMs;
+    // Nets step 3 slice 2b (lane 2b-2): the "where next" list (ui/WhereNextList.js) this floor hosts - set by main.js once built.
+    this._whereNext = null;
 
     this._active = false;
     this._clusters = [];
@@ -194,6 +196,7 @@ export class NavcomFloor {
     // The orb exists only with the fuel-reachability dep: without it, no DOM
     // is mounted and no budget is read (byte-identical to the pre-reach floor).
     if (this._getMassBudget && this._orb.show) this._orb.show();
+    if (this._whereNext) this._whereNext.setFloorShown(true);     // pending choice: the list is there again on return
   }
 
   /** Leave NAVCOM: hide the costume (state kept so re-entry is cheap). */
@@ -203,7 +206,25 @@ export class NavcomFloor {
     if (this._icons.hide) this._icons.hide();
     if (this._windows.hide) this._windows.hide();
     if (this._orb.hide) this._orb.hide();
+    if (this._whereNext) this._whereNext.setFloorShown(false);    // a pending choice stays pending; only the panel goes
   }
+
+  // ── The "where next" list (Nets step 3 slice 2b, lane 2b-2) ─────────────────────
+
+  /** main.js: the list this floor hosts (null = none). Its floor-shown state follows this floor from here on. */
+  setWhereNext(list) {
+    this._whereNext = list || null;
+    if (this._whereNext) this._whereNext.setFloorShown(this._active);
+  }
+
+  /** The list is open (a choice is pending and this floor is shown): Tab, Space and the FLY THERE chip belong to it. */
+  choosing() { return !!(this._active && this._whereNext && this._whereNext.isOpen()); }
+  /** Tab / Shift+Tab while choosing: move over the rows that can be picked. @returns {boolean} */
+  choiceStep(dir) { return this.choosing() ? this._whereNext.focusStep(dir) : false; }
+  /** Space while choosing: pick the focused row. @returns {boolean} the pick was made */
+  choicePick() { return this.choosing() ? this._whereNext.pickFocused() : false; }
+  /** The FLY THERE chip's word while choosing ('STAY' / 'FLY THERE'), else null (the chip then follows the focused cluster). */
+  choiceLabel() { return this.choosing() ? this._whereNext.chipLabel() : null; }
 
   // ── Cluster data + focus ─────────────────────────────────────────────────────
 
@@ -613,6 +634,7 @@ export class NavcomFloor {
     // FUEL-REACHABILITY: throttled budget poll (no-op without the dep) so a
     // burn/cargo change refreshes assessments without per-frame recompute.
     this._maybePollBudget();
+    if (this._whereNext) this._whereNext.tick(this._now());       // the list's rows follow the gas and the pieces, about once a second
     // OrbitMFD retirement: throttled whole-field route/sweep poll so the
     // planners track the player's drifting orbit — never per frame.
     this._maybeRefreshFieldPlans();
@@ -690,6 +712,7 @@ export class NavcomFloor {
 
   /** Tear down the owned views. */
   dispose() {
+    this._whereNext = null;           // main.js owns the list's life
     if (this._icons.dispose) this._icons.dispose();
     if (this._windows.dispose) this._windows.dispose();
     if (this._orb.dispose) this._orb.dispose();
