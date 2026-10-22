@@ -804,6 +804,16 @@ export class InputManager {
         break;
       }
 
+      // P — pause / resume (owner 2026-10-22). The one key that pauses on every setup: with the zoom ladder on,
+      // Esc rides up a floor and never pauses. Cmd/Ctrl/Alt+P stay the browser's. Works while piloting a daughter.
+      // No guard above returns early while paused, so the same key resumes. A held key does not flicker it.
+      case 'KeyP':
+        if (isGameplay && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          if (!e.repeat) this.togglePause();
+          e.preventDefault();
+        }
+        break;
+
       // Camera view toggle (V key). Shift+V (strategic map) retired 2026-10-09.
       // 2026-07-23 audit: V in MOTHER mode cycles FLY ↔ LOOK AROUND (close
       // inspection engages by zooming in while in LOOK AROUND). V while PILOTING

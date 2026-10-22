@@ -2,8 +2,8 @@
  * PaneDensity.js — the HUD pane-priority "density ladder" (rev 3).
  *
  * ONE ordered array (`this.rungs`). Slider level k shows the last k rungs:
- * index 0 sheds first on `-`, the right end is full clutter. 17 rungs (13 base + 4
- * instruments) → 18 detents (level 0 = empty view: no HUD, no sky labels, no city names, no
+ * index 0 sheds first on `-`, the right end is full clutter. 16 rungs (12 base + 4
+ * instruments) → 17 detents (level 0 = empty view: no HUD, no sky labels, no city names, no
  * ships). Plan: tmp/plans/1788867799156-hud-pane-ladder-reorder.md
  *
  * Design — NO COUNTER. The ladder holds no hidden-count state of its own; each

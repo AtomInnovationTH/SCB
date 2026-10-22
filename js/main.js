@@ -3057,8 +3057,8 @@ async function init() {
       // Ladder reorder rev 3 (plan tmp/plans/1788867799156-hud-pane-ladder-reorder.md):
       // insertBefore splices instruments ahead of debris; the gag joins
       // experimental. Final top-level ids: experimental, decor, copilot, next,
-      // orbit, cargo, debris, targets, targetmarks, arms, comms, score, mother,
-      // vitals, reticles, craft, citypills (17). All BEFORE new FloorMask ( _resolve caches once).
+      // orbit, cargo, debris, targets, targetmarks, arms, comms, score, motherbox
+      // (composite: vitals + mother members), reticles, craft, citypills (16). All BEFORE new FloorMask ( _resolve caches once).
       const pd = hud && hud.paneDensity;
       if (pd && typeof pd.insertBefore === 'function') pd.insertBefore('debris', cargoPane.rung());
       if (pd && typeof pd.insertBefore === 'function') pd.insertBefore('cargo', orbitPane.rung());

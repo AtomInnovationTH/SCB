@@ -108,6 +108,7 @@ export const HOTKEY_GROUPS = [
       [['T', '/', 'Tab'], 'Next target'],
       [['Space'], 'Main action'],
       [['Esc'], 'Back'],
+      [['P'], 'Pause'],
       [['B'], 'Upgrades (buy at resupply stop)'],
       [['I'], 'Info'],
       [['J'], 'Journal'],

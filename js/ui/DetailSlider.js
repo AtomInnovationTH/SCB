@@ -46,11 +46,11 @@
  * nothing thrown); every DOM write is write-on-change (G1); emoji-free.
  *
  * Rev 3 (tmp/plans/1788867799156-hud-pane-ladder-reorder.md, locked #11):
- * 18 detents (levels 0..17), a 3 px drag dead-zone past each detent
+ * 17 detents (levels 0..16), a 3 px drag dead-zone past each detent
  * boundary so a thumb held still never flickers, and optional bold
  * milestone ticks. Tap / release, reduced-motion, and the total() /
  * level() / onLevel contract are unchanged. Milestone names (never on
- * screen): 0 Scenery · 2 Ships · 9 Flight · 11 Ops · 15 Instruments · 17 All.
+ * screen): 0 Scenery · 2 Ships · 8 Flight · 10 Ops · 14 Instruments · 16 All.
  *
  * @module ui/DetailSlider
  */
@@ -468,7 +468,7 @@ export class DetailSlider {
         transform: translate(-50%, -50%);
         background: ${_rgba(info, 0.55)};
       }
-      /* Bold ticks at 0 · 2 · 5 · 9 · 13 · 15 (Scenery · Ships · Flight · Ops · Instruments · All). Names never on screen. */
+      /* Bold ticks at 0 · 2 · 8 · 10 · 14 · 16 (Scenery · Ships · Flight · Ops · Instruments · All). Names never on screen. */
       #${DETAIL_SLIDER_ID} .ds-tick-milestone {
         width: 2px;
         height: 10px;

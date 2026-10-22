@@ -525,7 +525,7 @@ export class HUD {
         <div id="pause-resume-btn" style="font-size:1rem;color:var(--hud-normal, #00ff88);cursor:pointer;padding:10px 30px;
             border:1px solid rgb(var(--hud-normal-rgb, 0 255 136) / 0.5);border-radius:4px;margin:8px;
             background:rgb(var(--hud-normal-rgb, 0 255 136) / 0.1);letter-spacing:0.15em;">
-            RESUME [ESC]
+            RESUME [P / ESC]
         </div>
         <div id="pause-menu-btn" style="font-size:1rem;color:var(--hud-caution, #ffaa00);cursor:pointer;padding:10px 30px;
             border:1px solid rgb(var(--hud-caution-rgb, 255 170 0) / 0.4);border-radius:4px;margin:8px;
@@ -879,10 +879,10 @@ export class HUD {
     * HUD_DENSITY_DOWN/UP. Plan:
     * tmp/plans/1788867799156-hud-pane-ladder-reorder.md
     *
-    * 13 base rungs (also the `?ladder=0` order; hide order 2026-10-22). Index 0 sheds first on `-`;
+    * 12 base rungs (also the `?ladder=0` order; hide order 2026-10-22). Index 0 sheds first on `-`;
     * slider level k = last k rungs. main.js (ladder gate) splices four
     * instruments via insertBefore and adds the Override gag as a member of
-    * `experimental`. 17 rungs → 18 detents. Adapters read/drive LIVE pane
+    * `experimental`. 16 rungs → 17 detents. Adapters read/drive LIVE pane
     * state so the ladder needs no counter and composes with the 7/8/9/0
     * toggles.
     */
@@ -974,12 +974,12 @@ export class HUD {
     const skylabelsFlag = flagRung('skylabels', 'Sky labels', applySkyLabels, true);
 
     // Rungs ordered lowest-priority → highest (index 0 hides FIRST on `-`,
-    // restores LAST on `+`). 13 base rungs (also `?ladder=0`); main.js splices
+    // restores LAST on `+`). 12 base rungs (also `?ladder=0`); main.js splices
     // four instruments in at the ladder gate (copilot, next, orbit, cargo) and
-    // adds the Override gag to `experimental` as a member: 17 rungs → 18
+    // adds the Override gag to `experimental` as a member: 16 rungs → 17
     // detents; slider level k = last k rungs. Hide order (owner 2026-10-22):
-    // targets → target marks → daughters → comms → score → mother section →
-    // whole mother box → alerts.
+    // targets → target marks → daughters → comms → score → whole mother box
+    // (section included, one step) → alerts.
     const rungs = [
       // 0 — Experimental: nav orb + discoveries. main.js addMember()s the
       //     Override gag at the ladder gate (still the last `+`).
@@ -1019,14 +1019,19 @@ export class HUD {
         document.getElementById('hud-score-panel'),
         document.getElementById('hud-hint-ticker'),
       ]),
-      // 8 — Mother pane (the MOTHER section inside the meters box).
-      domRung('mother', 'Mother pane', byId('hud-mother-panel')),
-      // 9 — The whole MOTHER box (owner 2026-10-21: "the new and improved mother pane should
-      //     be hidable"): heat, battery, gas, ion and the MOTHER section. The ONE writer of
-      //     #hud-vitals's hide bit (FloorMask's `vitals` entry points here); the F1 drawer
-      //     cover in main.js writes `style.visibility`, a different bit.
-      domRung('vitals', 'Mother & meters', byId('hud-vitals')),
-      // 10 — Remaining alert/indicator chrome + transient gameplay toasts (safety: stays
+      // 8 — The whole MOTHER box in ONE step (owner 2026-10-22: "can these be combined into one
+      //     '-' or '+' keypress"): heat, battery, gas, ion and the MOTHER section inside it. A
+      //     composite, so one `-` hides both and one `+` brings both back. The members keep their
+      //     own ids because FloorMask drives them separately: `vitals` is the ONE writer of
+      //     #hud-vitals's hide bit (the F1 drawer cover in main.js writes `style.visibility`, a
+      //     different bit), `mother` the ONE writer of the MOTHER section's (shown on F2 only by
+      //     default). The composite reads visible while the box shows, even with the section
+      //     hidden; a `-` then `+` brings the section back on floors that start without it.
+      compositeRung('motherbox', 'Mother & meters', [
+        domRung('vitals', 'Meters box', byId('hud-vitals')),
+        domRung('mother', 'Mother pane', byId('hud-mother-panel')),
+      ]),
+      // 9 — Remaining alert/indicator chrome + transient gameplay toasts (safety: stays
       //     late). The targeting brackets left for `targetmarks`. The old standalone
       //     "chrome" rung had no visible effect when no warning/target was active, so this
       //     one hides the docking reticle, warnings / progress / conjunction / weather /
@@ -1048,9 +1053,9 @@ export class HUD {
           document.body.toggleAttribute('data-density-quiet', hidden);
         }
       }),
-      // 11 — Craft: mother ship + daughters (world).
+      // 10 — Craft: mother ship + daughters (world).
       flagRung('craft', 'Ships', applyCraft, true),
-      // 12 — City/landmark pills (world). Adapter reads CityLabels' OWN
+      // 11 — City/landmark pills (world). Adapter reads CityLabels' OWN
       //      density flag — not the DOM — so it engages while F1/F5
       //      suppression already hides the pills, and the 5 key can clear
       //      the gate coherently. Parallel agent owns CityLabels.js.

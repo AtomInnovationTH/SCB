@@ -167,11 +167,14 @@ export const MASK_PANES = Object.freeze({
   pin:         Object.freeze({ rung: 'pin',         els: Object.freeze(['#hud-pin-widget']),          memory: true }),
   // Task 10: Discoveries is the #hud-discoveries wrapper (chip + popover).
   discoveries: Object.freeze({ rung: 'discoveries', els: Object.freeze(['#hud-discoveries']),         memory: true, shipped: 'gone' }),
+  // The MOTHER section inside the meters box. Since 2026-10-22 (owner: one `-`/`+` for the
+  // section and the box) `mother` and `vitals` are the two MEMBERS of the ONE `motherbox` step:
+  // each stays the ONE writer of its own element's hide bit, addressed here by its own id.
   mother:      Object.freeze({ rung: 'mother',      els: Object.freeze(['#hud-mother-panel']),        memory: true }),
   // W2 meters (owner 2026-10-08, DECISIONS §15 row 5): heat, battery, gas and ion,
   // top left, with the MOTHER section. Since 2026-10-22 (owner: "the new and improved
-  // mother pane should be hidable") a RUNG pane: the `vitals` step, right after
-  // `mother`, is its ONE hide writer. Shown on F1-F4, gone on F5 by default.
+  // mother pane should be hidable") a RUNG pane: the `vitals` member of the `motherbox`
+  // step is its ONE hide writer. Shown on F1-F4, gone on F5 by default.
   vitals:      Object.freeze({ rung: 'vitals',      els: Object.freeze(['#hud-vitals']),              memory: true }),
   arms:        Object.freeze({ rung: 'arms',        els: Object.freeze(['#hud-arms-panel']),          memory: true }),
   // Target marks (owner 2026-10-22: hidden before the daughters pane): the whole
