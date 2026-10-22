@@ -28,17 +28,18 @@ import { Events }    from '../../core/Events.js';
 import { Constants } from '../../core/Constants.js';
 import timerManager  from '../../systems/TimerManager.js';
 import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX, RAIL_GEOMETRY, footerBand } from '../RailGeometry.js';
-import { TRACK_WIDTH_PX } from '../DetailSlider.js';
 import { TouchControls } from '../TouchControls.js';
-import { createFooterChip } from './FooterChip.js';
+import { createFooterChip, leftOfSliderCss, leftOfSliderBasePx, ORB_CHIP_WIDTH_PX, FOOTER_CHIP_GAP_PX } from './FooterChip.js';
 import { GestureHints } from './GestureHints.js';
 
 export const DISCOVERIES_WRAPPER_ID = 'hud-discoveries';
 export const DISCOVERIES_CHIP_ID = 'hud-chip-discoveries';
-/** SIDE_PAD_PX is not exported from DetailSlider.js:79 — 8+160+8 = 176. */
-const DETAIL_SIDE_PAD_PX = 8;
-const DETAIL_SLIDER_FOOTPRINT_PX = TRACK_WIDTH_PX + 2 * DETAIL_SIDE_PAD_PX;
-export const DISCOVERIES_CHIP_OFFSET_PX = HUD_EDGE_PX + DETAIL_SLIDER_FOOTPRINT_PX + HUD_EDGE_PX;
+/**
+ * DISCOVERIES chip `right` offset (2026-10-22): left of the ORB chip, which stands left of the DETAIL slider
+ * (FooterChip.js has the layout and why). Scale 1 value; the live CSS is {@link DISCOVERIES_CHIP_RIGHT_CSS}.
+ */
+export const DISCOVERIES_CHIP_OFFSET_PX = leftOfSliderBasePx(ORB_CHIP_WIDTH_PX + FOOTER_CHIP_GAP_PX);
+export const DISCOVERIES_CHIP_RIGHT_CSS = leftOfSliderCss(ORB_CHIP_WIDTH_PX + FOOTER_CHIP_GAP_PX);
 export const DISCOVERIES_POPOVER_MAX_PX = 300;
 
 function resolveGlass(explicit) {
@@ -437,13 +438,19 @@ export class SkillsPane {
 /* ── Discoveries footer-chip popover (Task 10 / locked #7) ─── */
 #hud-discoveries:not([data-expanded]) > .skills-pane { display: none !important; }
 #hud-discoveries[data-expanded] > .skills-pane { display: block; }
+/* Floor 1 only: the F1 bar (WINGS..FURNACE, 48 px buttons x --hud-scale = 60 px at 1.25, on the footer baseline) is centred and
+   reaches under the popover on the iPad (measured 2026-10-22: 20 px of overlap). The popover rises to clear it by 8 px. */
+body[data-ladder-floor="1"] #hud-discoveries[data-expanded] > .skills-pane {
+    bottom: calc(${this._band.bottom}px + 48px * var(--hud-scale, 1) + 8px) !important;
+}
 #hud-discoveries[data-glass] .sp-header {
     min-height: ${RAIL_GEOMETRY.TOUCH_PITCH_PX}px;
     box-sizing: border-box;
 }
 .skills-pane {
     position: fixed;
-    left: ${HUD_EDGE_PX}px;
+    left: auto;
+    right: ${HUD_EDGE_PX}px;
     width: ${HUD_COLUMN_WIDTH_PX}px;
     box-sizing: border-box;
     max-height: ${DISCOVERIES_POPOVER_MAX_PX}px;
@@ -825,7 +832,8 @@ export class SkillsPane {
         const popBottom = this._band.top + RAIL_GEOMETRY.FOOTER_GAP_PX;
         const ps = pane.style;
         ps.position = 'fixed';
-        ps.left = `${HUD_EDGE_PX}px`;
+        ps.left = 'auto';
+        ps.right = DISCOVERIES_CHIP_RIGHT_CSS;   // right edge lines up with the chip's
         ps.bottom = `${popBottom}px`;
         ps.width = `${HUD_COLUMN_WIDTH_PX}px`;
         ps.maxHeight = `${DISCOVERIES_POPOVER_MAX_PX}px`;
@@ -855,8 +863,8 @@ export class SkillsPane {
         this._chip = createFooterChip({
             id: DISCOVERIES_CHIP_ID,
             label: 'Discoveries',
-            side: 'left',
-            offsetPx: DISCOVERIES_CHIP_OFFSET_PX,
+            side: 'right',
+            offsetPx: DISCOVERIES_CHIP_RIGHT_CSS,
             onTap: () => this._toggleChip(),
             doc,
             bottomPx: this._band.bottom,

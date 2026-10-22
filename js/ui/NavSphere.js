@@ -23,7 +23,7 @@ import { gmstDeg } from '../scene/Ephemeris.js';
 import { prefersReducedMotion } from './hudPulse.js';
 import { mono } from '../core/Typeface.js';
 import { HUD_EDGE_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
-import { createFooterChip } from './hud/FooterChip.js';
+import { createFooterChip, leftOfSliderCss, leftOfSliderBasePx, ORB_CHIP_WIDTH_PX } from './hud/FooterChip.js';
 import { isMarked } from '../systems/ScanMarks.js';
 import { testsRequestedHere } from './hud/TestsSwitch.js';
 import { isShortScreen } from './hud/PhoneFold.js';
@@ -34,10 +34,12 @@ import { isShortScreen } from './hud/PhoneFold.js';
 
 const SPHERE_RADIUS = 140;         // px radius — diameter 280 matches targets panel width
 
-/** SPECS tab visual width (LibraryPane tab padding 10+12 + "SPECS "). Not exported. */
-const SPECS_TAB_WIDTH_PX = 59;
-/** ORB chip `right` offset: HUD_EDGE_PX + SPECS tab + HUD_EDGE_PX (16+59+16=91). */
-export const ORB_CHIP_OFFSET_PX = HUD_EDGE_PX + SPECS_TAB_WIDTH_PX + HUD_EDGE_PX;
+/**
+ * ORB chip `right` offset (2026-10-22): one gap left of the DETAIL slider (bottom right), so the chip never sits
+ * on it. Scale 1 value; the live CSS is {@link ORB_CHIP_RIGHT_CSS} (the slider grows with `--hud-scale`).
+ */
+export const ORB_CHIP_OFFSET_PX = leftOfSliderBasePx(0);
+export const ORB_CHIP_RIGHT_CSS = leftOfSliderCss(0);
 export const ORB_CHIP_ID = 'hud-chip-orb';
 
 /**
@@ -288,7 +290,8 @@ export class NavSphere {
       id: ORB_CHIP_ID,
       label: 'Orb',
       side: 'right',
-      offsetPx: ORB_CHIP_OFFSET_PX,
+      offsetPx: ORB_CHIP_RIGHT_CSS,
+      minWidthPx: ORB_CHIP_WIDTH_PX,
       onTap: () => this.toggleMinimized(),
       doc,
       bottomPx: this._band.bottom,

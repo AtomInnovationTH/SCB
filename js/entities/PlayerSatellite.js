@@ -673,6 +673,12 @@ export class PlayerSatellite extends THREE.Group {
     this._recoilYawAngle = 0;
     this._recoilYawVel = 0;
     this._qRecoil = new THREE.Quaternion();   // scratch: transient recoil rotation
+    // ap-smooth: the recoil shake is a transient overlay on the commanded attitude. Under an owner that does not
+    // rebuild the quaternion each frame (AIM; AUTOPILOT without the orbit-frame hold) the overlay would pile up, so the
+    // rotation last multiplied in is kept here (`_recoilApplied`) and taken off again before the next frame's goes on.
+    this._recoilApplied = false;
+    this._qRecoilApplied = new THREE.Quaternion();   // the overlay now sitting on this.quaternion (valid while _recoilApplied)
+    this._qRecoilUndo = new THREE.Quaternion();      // scratch: its inverse
     this._vRecoilPitchAxis = new THREE.Vector3(1, 0, 0); // ship-local pitch axis (+X)
     this._vRecoilYawAxis = new THREE.Vector3(0, 1, 0);   // ship-local yaw axis (+Y)
 
@@ -7153,13 +7159,23 @@ export class PlayerSatellite extends THREE.Group {
     // _orientAlongVelocity early-returns from). Both springs settle in ~2 s.
     //   • pitch (+X): mother whale-net launch off the CoM axis
     //   • yaw   (+Y): crossbow / dual-fire angular residual (C-11)
-    if (this._recoilPitchAngle !== 0) {
-      this._qRecoil.setFromAxisAngle(this._vRecoilPitchAxis, this._recoilPitchAngle);
-      this.quaternion.multiply(this._qRecoil);
-    }
-    if (this._recoilYawAngle !== 0) {
-      this._qRecoil.setFromAxisAngle(this._vRecoilYawAxis, this._recoilYawAngle);
-      this.quaternion.multiply(this._qRecoil);
+    //
+    // ap-smooth: a quaternion that was NOT rebuilt this frame (AIM; AUTOPILOT without the orbit-frame hold) still
+    // carries last frame's overlay, so that comes off first - otherwise every frame stacks another on top (a 0.3 rad/s
+    // kick drifted the nose 7 deg under AP, a 3 s reel tug 14 deg under AIM, vs 1.5 / 0.1 deg for the player). A rebuilt
+    // quaternion (`_orientAlongVelocity`) dropped the old overlay already and cleared the record, so nothing comes off
+    // twice. The AutopilotSystem takes it off at the top of its own update too (before it slews), same call.
+    this.undoRecoilOverlay();
+    if (this._recoilPitchAngle !== 0 || this._recoilYawAngle !== 0) {
+      const applied = this._qRecoilApplied.identity();
+      if (this._recoilPitchAngle !== 0) {
+        applied.multiply(this._qRecoil.setFromAxisAngle(this._vRecoilPitchAxis, this._recoilPitchAngle));
+      }
+      if (this._recoilYawAngle !== 0) {
+        applied.multiply(this._qRecoil.setFromAxisAngle(this._vRecoilYawAxis, this._recoilYawAngle));
+      }
+      this.quaternion.multiply(applied);
+      this._recoilApplied = true;
     }
 
     // --- Solar power ---
@@ -8800,6 +8816,7 @@ export class PlayerSatellite extends THREE.Group {
    * @private
    */
   _handAttitudeToPlayer(fromAim = false) {
+    this.undoRecoilOverlay();   // ap-smooth: the transient shake must not be folded into the lasting offset
     const pg = this._progradeQuat(_qAttA);
     if (pg) {
       // _manualRotation = prograde⁻¹ · quaternion
@@ -8888,6 +8905,7 @@ export class PlayerSatellite extends THREE.Group {
     // quaternion from _manualRotation, so entering CINEMATIC straight from AP/AIM
     // (camera zoom while AP disengages) would otherwise snap to a stale offset.
     const prev = this._prevAttitudeOwner;
+    if (owner !== prev) this.undoRecoilOverlay();   // ap-smooth: a new owner starts from the commanded attitude
     const wasDirect = prev === 'AUTOPILOT' || prev === 'AIM';
     const entersManual = owner === 'PLAYER' || owner === 'CINEMATIC';
     if (entersManual && wasDirect) {
@@ -10207,8 +10225,8 @@ export class PlayerSatellite extends THREE.Group {
 
     // AUTOPILOT writes this.quaternion directly (slerp) — leave it. AIM too owns
     // the quaternion directly (the latent-bug fix).
-    // trip-melt G2: the transfer trip's hold is the one AUTOPILOT-owned heading that is kept in the orbit frame: it
-    // recomposes prograde · _manualRotation below (a direct world-frame write cannot follow the orbit at 100x).
+    // trip-melt G2 + ap-smooth: the AUTOPILOT-owned headings kept in the orbit frame (the transfer trip's hold, and prograde
+    // follow above warp 1) recompose prograde · _manualRotation below (a direct world-frame write cannot follow the orbit at 100x).
     if (owner === 'AIM') return;
     if (owner === 'AUTOPILOT' && !this._orbitFrameHold) return;
 
@@ -10218,6 +10236,20 @@ export class PlayerSatellite extends THREE.Group {
     const pg = this._progradeQuat(_qAttA);
     if (pg) this.quaternion.copy(pg).multiply(this._manualRotation).normalize();
     else this.quaternion.copy(this._manualRotation).normalize();
+    this._recoilApplied = false;   // ap-smooth: the rebuild dropped last frame's recoil overlay with the rest
+  }
+
+  /**
+   * ap-smooth: take the recoil overlay that `update()` multiplied onto `this.quaternion` last frame off again, then
+   * forget it. Exact (the overlay was multiplied on the right, so it comes off on the right), idempotent, and a no-op
+   * once the quaternion has been rebuilt (the rebuild already cleared the record) or when no shake is on. Callers: the
+   * overlay block of `update()` (before this frame's goes on), `_handAttitudeToPlayer` (so no overlay is folded into
+   * `_manualRotation`), an owner change, and the AutopilotSystem (before its slew and its aim / turn writes).
+   */
+  undoRecoilOverlay() {
+    if (!this._recoilApplied) return;
+    this._recoilApplied = false;
+    this.quaternion.multiply(this._qRecoilUndo.copy(this._qRecoilApplied).invert()).normalize();
   }
 
   // ==========================================================================

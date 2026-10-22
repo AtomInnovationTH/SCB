@@ -16,7 +16,8 @@
  */
 
 import { VisualLaw } from '../../core/VisualLaw.js';
-import { RAIL_GEOMETRY, footerBand } from '../RailGeometry.js';
+import { HUD_EDGE_PX, RAIL_GEOMETRY, footerBand } from '../RailGeometry.js';
+import { TRACK_WIDTH_PX } from '../DetailSlider.js';
 
 /** Visual height — the footer band (RailGeometry.FOOTER_BAND_PX). */
 export const FOOTER_CHIP_PX = RAIL_GEOMETRY.FOOTER_BAND_PX;
@@ -34,6 +35,47 @@ export const FOOTER_CHIP_BOTTOM_PX = 132;
 
 /** Ticker band that yields FOOTER_CHIP_BOTTOM_PX via footerBand (124 + 8). */
 const DEFAULT_HINT_BAND_PX = FOOTER_CHIP_BOTTOM_PX - RAIL_GEOMETRY.FOOTER_GAP_PX;
+
+/**
+ * Where the two chips sit (2026-10-22, plan hud-hide-order Task 4; measured, tmp/chips/before.json): the
+ * DETAIL slider lives bottom RIGHT (its right edge HUD_EDGE_PX from the screen, 176 px wide x `--hud-scale`)
+ * and the SPECS tab bottom LEFT, so the old left/right offsets put ORB on top of the slider and DISCOVERIES
+ * under the transfer-windows / approach panels. Both chips now stand left of the slider on the footer
+ * baseline: [DISCOVERIES] gap [ORB] gap [slider] edge. One gap everywhere (>= 8 px to anything).
+ */
+export const FOOTER_CHIP_GAP_PX = 10;
+/** ORB's fixed width (its text is about 46 px) so DISCOVERIES can be placed by number. */
+export const ORB_CHIP_WIDTH_PX = 52;
+const SLIDER_FOOTPRINT_PX = TRACK_WIDTH_PX + 2 * 8;   // DetailSlider.js: track + 8 px pad each side
+
+/**
+ * CSS `right` of a chip that stands `extraPx` left of the slider's left edge (+ one gap). The slider scales with
+ * `--hud-scale` (index.html), the chips do not, so the footprint is multiplied by the live scale.
+ * @param {number} [extraPx]
+ * @returns {string}
+ */
+export function leftOfSliderCss(extraPx = 0) {
+  return `calc(${HUD_EDGE_PX + FOOTER_CHIP_GAP_PX + extraPx}px + ${SLIDER_FOOTPRINT_PX}px * var(--hud-scale, 1))`;
+}
+
+/** Unscaled (scale 1) value of {@link leftOfSliderCss}, for tests and docs. */
+export function leftOfSliderBasePx(extraPx = 0) {
+  return HUD_EDGE_PX + FOOTER_CHIP_GAP_PX + extraPx + SLIDER_FOOTPRINT_PX;
+}
+
+/**
+ * The F1 SPECS drawer covers the footer band's right half (its bar reaches the chips), so both chips step aside
+ * while it is open. Writes `style.visibility` on the DISCOVERIES wrapper (chip + popover) and the ORB chip: a
+ * bit of its own, so it never fights the density step or FloorMask; '' when the drawer closes restores them.
+ * @param {boolean} hidden
+ * @param {Document} [doc]
+ */
+export function setChipsUnderDrawer(hidden, doc = document) {
+  for (const id of ['hud-discoveries', 'hud-chip-orb']) {
+    const el = doc.getElementById(id);
+    if (el) el.style.visibility = hidden ? 'hidden' : '';
+  }
+}
 
 const STYLE_ID = 'hud-footer-chip-style';
 const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
@@ -99,7 +141,8 @@ function _ensureStyle(doc) {
  * @param {string} opts.id
  * @param {string} opts.label
  * @param {'left'|'right'} opts.side
- * @param {number} opts.offsetPx
+ * @param {number|string} opts.offsetPx  px, or a CSS length such as a calc()
+ * @param {number} [opts.minWidthPx]
  * @param {function} [opts.onTap]
  * @param {Document} [opts.doc]
  * @param {number} [opts.bottomPx] CSS `bottom` — defaults to footerBand().bottom
@@ -109,7 +152,7 @@ function _ensureStyle(doc) {
  * @returns {{el: object, setVisible: function, isVisible: function, setExpanded: function, isExpanded: function, setRailsShy: function, destroy: function}}
  */
 export function createFooterChip({
-  id, label, side, offsetPx, onTap, doc = document,
+  id, label, side, offsetPx, onTap, doc = document, minWidthPx,
   bottomPx, glass = false, hintBandPx, parent,
 } = {}) {
   _ensureStyle(doc);
@@ -135,8 +178,10 @@ export function createFooterChip({
   s.bottom = `${bottom}px`;
   s.height = `${FOOTER_CHIP_PX}px`;
   s.boxSizing = 'border-box';
-  if (side === 'right') s.right = `${Number(offsetPx)}px`;
-  else s.left = `${Number(offsetPx)}px`;
+  const off = typeof offsetPx === 'string' ? offsetPx : `${Number(offsetPx)}px`;
+  if (side === 'right') s.right = off;
+  else s.left = off;
+  if (Number.isFinite(Number(minWidthPx))) s.minWidth = `${Number(minWidthPx)}px`;
   s.color = `var(--hud-info, ${VisualLaw.COLORS.INFO})`;
   s.background = GLASS_BG;
   s.fontSize = `${FONT_PX}px`;

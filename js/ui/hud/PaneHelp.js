@@ -73,23 +73,23 @@ export const HELP_TUNE = {
  *         MEMBERS use the member id (`discoveries`, `pin`, …), not the
  *         composite id; the DETAIL slider and floor instruments omit it.
  *         Live tooltip text is derived on each render (plan
- *         1788867799156 Task 16) so `?ladder=0` (11 rungs) and the
- *         15-rung gate both read right.
+ *         1788867799156 Task 16) so `?ladder=0` (13 rungs) and the
+ *         17-rung gate both read right.
  *
  * test-PaneHelp.js walks this table against data/codex.json — a typo'd
  * codexId fails the suite.
  */
 export const PANE_HELP = [
-  { pane: 'comms log',          selector: '#hud-comms-panel',                        codexId: 'pane_comms_log',          key: '7',  rungId: 'comms',        rung: 'Comms (rung 7/15)' },
-  { pane: 'discoveries/skills', selector: '#hud-discoveries',                        codexId: 'pane_discoveries',        key: null, rungId: 'discoveries',  rung: 'Experimental · Discoveries (rung 15/15)' },
-  { pane: 'upgrade pin',        selector: '#hud-pin-widget',                         codexId: 'pane_upgrade_pin',        key: null, rungId: 'pin',          rung: 'Sky labels & goal pin · Upgrade goal (rung 14/15)' },
-  { pane: 'status/vitals',      selector: '#hud-vitals .vp-title',               codexId: 'reading_the_hud',         key: null, rungId: 'mother',       rung: 'Mother pane (rung 4/15)' },
-  { pane: 'daughters/fleet',    selector: '#fleet-header',                           codexId: 'tool_choice',             key: null, rungId: 'arms',         rung: 'Daughters pane (rung 5/15)' },
-  { pane: 'score strip',        selector: '#hud-score-panel',                        codexId: 'core_loop',               key: null, rungId: 'score',        rung: 'Score strip (rung 6/15)' },
-  { pane: 'target list',        selector: '#hud-targets-panel .target-section-header', codexId: 'ssa_network',           key: '0',  rungId: 'targets',      rung: 'Targets pane (rung 8/15)' },
-  { pane: 'conjunction alerts', selector: '#hud-conjunction-panel',                  codexId: 'pane_conjunction_alerts', key: null, rungId: 'reticles',     rung: 'Reticles & alerts (rung 3/15)' },
-  { pane: 'space weather',      selector: '#hud-weather-indicator',                  codexId: 'pane_space_weather',      key: null, rungId: 'reticles',     rung: 'Reticles & alerts (rung 3/15)' },
-  { pane: 'debris chart',       selector: '#hud-wireframe-container',                codexId: 'pane_debris_chart',       key: '9',  rungId: 'debris',       rung: 'Target info pane (rung 9/15)' },
+  { pane: 'comms log',          selector: '#hud-comms-panel',                        codexId: 'pane_comms_log',          key: '7',  rungId: 'comms',        rung: 'Comms (rung 7/17)' },
+  { pane: 'discoveries/skills', selector: '#hud-discoveries',                        codexId: 'pane_discoveries',        key: null, rungId: 'discoveries',  rung: 'Experimental · Discoveries (rung 17/17)' },
+  { pane: 'upgrade pin',        selector: '#hud-pin-widget',                         codexId: 'pane_upgrade_pin',        key: null, rungId: 'pin',          rung: 'Sky labels & goal pin · Upgrade goal (rung 16/17)' },
+  { pane: 'status/vitals',      selector: '#hud-vitals .vp-title',               codexId: 'reading_the_hud',         key: null, rungId: 'vitals',       rung: 'Mother & meters (rung 4/17)' },
+  { pane: 'daughters/fleet',    selector: '#fleet-header',                           codexId: 'tool_choice',             key: null, rungId: 'arms',         rung: 'Daughters pane (rung 8/17)' },
+  { pane: 'score strip',        selector: '#hud-score-panel',                        codexId: 'core_loop',               key: null, rungId: 'score',        rung: 'Score strip (rung 6/17)' },
+  { pane: 'target list',        selector: '#hud-targets-panel .target-section-header', codexId: 'ssa_network',           key: '0',  rungId: 'targets',      rung: 'Targets pane (rung 10/17)' },
+  { pane: 'conjunction alerts', selector: '#hud-conjunction-panel',                  codexId: 'pane_conjunction_alerts', key: null, rungId: 'reticles',     rung: 'Alerts & indicators (rung 3/17)' },
+  { pane: 'space weather',      selector: '#hud-weather-indicator',                  codexId: 'pane_space_weather',      key: null, rungId: 'reticles',     rung: 'Alerts & indicators (rung 3/17)' },
+  { pane: 'debris chart',       selector: '#hud-wireframe-container',                codexId: 'pane_debris_chart',       key: '9',  rungId: 'debris',       rung: 'Target info pane (rung 11/17)' },
   { pane: 'ladder rail',        selector: '#ladder-rail',                            codexId: 'pane_ladder_rail',        key: null, rung: 'always shown' },
   { pane: 'transfer windows',   selector: '#ladder-transfer-windows',                codexId: 'pane_transfer_windows',   key: null, rung: 'route-planning instrument' },
   { pane: 'tactical approach',  selector: '#ladder-prox-context',                    codexId: 'pane_tactical_approach',  key: null, rung: 'approach instrument' },
@@ -114,12 +114,12 @@ export const INTERACTIVE_GUARD =
 
 /**
  * Live density-rung copy for a PANE_HELP row. Slider position is 1-based
- * FROM THE TOP (i = total − index) so `citypills` reads `1/15` — the first
- * thing the slider reveals — and `experimental` reads `15/15`. A composite
+ * FROM THE TOP (i = total − index) so `citypills` reads `1/17` — the first
+ * thing the slider reveals — and `experimental` reads `17/17`. A composite
  * MEMBER (`pd.find(id)` then walk `pd.rungs` for the parent) uses the
  * composite's index and `Composite · Member` labels. Never caches — the
- * caller reads the live ladder each render so `?ladder=0` (11 rungs) and
- * the 15-rung gate both read right. Absent ladder / unknown id → the
+ * caller reads the live ladder each render so `?ladder=0` (13 rungs) and
+ * the 17-rung gate both read right. Absent ladder / unknown id → the
  * row's static `rung` with no live suffix (today's behaviour). Plan
  * 1788867799156 Task 16.
  *

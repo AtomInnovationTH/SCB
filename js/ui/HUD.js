@@ -879,10 +879,10 @@ export class HUD {
     * HUD_DENSITY_DOWN/UP. Plan:
     * tmp/plans/1788867799156-hud-pane-ladder-reorder.md
     *
-    * 11 base rungs (also the `?ladder=0` order). Index 0 sheds first on `-`;
+    * 13 base rungs (also the `?ladder=0` order; hide order 2026-10-22). Index 0 sheds first on `-`;
     * slider level k = last k rungs. main.js (ladder gate) splices four
     * instruments via insertBefore and adds the Override gag as a member of
-    * `experimental`. 15 rungs → 16 detents. Adapters read/drive LIVE pane
+    * `experimental`. 17 rungs → 18 detents. Adapters read/drive LIVE pane
     * state so the ladder needs no counter and composes with the 7/8/9/0
     * toggles.
     */
@@ -974,10 +974,12 @@ export class HUD {
     const skylabelsFlag = flagRung('skylabels', 'Sky labels', applySkyLabels, true);
 
     // Rungs ordered lowest-priority → highest (index 0 hides FIRST on `-`,
-    // restores LAST on `+`). Ladder reorder rev 3 (plan
-    // tmp/plans/1788867799156-hud-pane-ladder-reorder.md): 11 base rungs
-    // (also `?ladder=0`); main.js splices four instruments + adds the Override
-    // gag; slider level k = last k rungs; 15 rungs → 16 detents.
+    // restores LAST on `+`). 13 base rungs (also `?ladder=0`); main.js splices
+    // four instruments in at the ladder gate (copilot, next, orbit, cargo) and
+    // adds the Override gag to `experimental` as a member: 17 rungs → 18
+    // detents; slider level k = last k rungs. Hide order (owner 2026-10-22):
+    // targets → target marks → daughters → comms → score → mother section →
+    // whole mother box → alerts.
     const rungs = [
       // 0 — Experimental: nav orb + discoveries. main.js addMember()s the
       //     Override gag at the ladder gate (still the last `+`).
@@ -1001,27 +1003,38 @@ export class HUD {
       domRung('debris', 'Target info pane', byId('hud-wireframe-container')),
       // 3 — Targets pane (0 key re-reveals it).
       domRung('targets', 'Targets pane', byId('hud-targets-panel')),
-      // 4 — Comms pane (7 key re-reveals it).
+      // 4 — Target marks (owner 2026-10-21: "targeting reticles should be hidden before
+      //     daughters pane"): the whole #reticle-canvas — target brackets and their "▸ N"
+      //     prompt, prograde/retrograde markers, active-satellite diamonds, lasso cooldown
+      //     ring, AP badge, off-screen arrows. A flag rung (engages even when the canvas is
+      //     momentarily blank), and the ONE writer of the canvas's hide bit: FloorMask's
+      //     `reticles` entry points at this step.
+      flagRung('targetmarks', 'Target marks', (hidden) => { applyAttr(['#reticle-canvas'], hidden); }),
+      // 5 — Daughters / arms pane (owner 2026-10-21: before comms).
+      domRung('arms', 'Daughters pane', byId('hud-arms-panel')),
+      // 6 — Comms pane (7 key re-reveals it).
       domRung('comms', 'Comms', byId('hud-comms-panel')),
-      // 5 — Score strip + hint ticker (one rung).
+      // 7 — Score strip + hint ticker (one rung).
       domRung('score', 'Score strip', () => [
         document.getElementById('hud-score-panel'),
         document.getElementById('hud-hint-ticker'),
       ]),
-      // 6 — Daughters / arms pane.
-      domRung('arms', 'Daughters pane', byId('hud-arms-panel')),
-      // 7 — Mother pane (HUD readout).
+      // 8 — Mother pane (the MOTHER section inside the meters box).
       domRung('mother', 'Mother pane', byId('hud-mother-panel')),
-      // 8 — Debris reticles + remaining alert/indicator chrome + transient
-      //     gameplay toasts. Merged (the old standalone "chrome" rung had no
-      //     visible effect when no warning/target was active, so `-` read as a
-      //     dead press). This one visibly clears the targeting brackets & their
-      //     "▸ N" action prompt (both drawn on #reticle-canvas), hides the
-      //     warnings / progress / conjunction / weather / arm-pilot / view chrome,
-      //     AND mutes transient SHOW_NOTIFICATION toasts so pure scenery is quiet.
-      flagRung('reticles', 'Reticles & alerts', (hidden) => {
+      // 9 — The whole MOTHER box (owner 2026-10-21: "the new and improved mother pane should
+      //     be hidable"): heat, battery, gas, ion and the MOTHER section. The ONE writer of
+      //     #hud-vitals's hide bit (FloorMask's `vitals` entry points here); the F1 drawer
+      //     cover in main.js writes `style.visibility`, a different bit.
+      domRung('vitals', 'Mother & meters', byId('hud-vitals')),
+      // 10 — Remaining alert/indicator chrome + transient gameplay toasts (safety: stays
+      //     late). The targeting brackets left for `targetmarks`. The old standalone
+      //     "chrome" rung had no visible effect when no warning/target was active, so this
+      //     one hides the docking reticle, warnings / progress / conjunction / weather /
+      //     arm-pilot / view chrome AND mutes transient SHOW_NOTIFICATION toasts so pure
+      //     scenery is quiet.
+      flagRung('reticles', 'Alerts & indicators', (hidden) => {
         applyAttr([
-          '#reticle-canvas', '#docking-reticle-canvas',
+          '#docking-reticle-canvas',
           '#hud-warnings-panel', '#hud-progress-panel', '#hud-conjunction-panel',
           '#hud-weather-indicator', '#arm-pilot-controls', '#camera-view-indicator',
         ], hidden);
@@ -1035,9 +1048,9 @@ export class HUD {
           document.body.toggleAttribute('data-density-quiet', hidden);
         }
       }),
-      // 9 — Craft: mother ship + daughters (world).
+      // 11 — Craft: mother ship + daughters (world).
       flagRung('craft', 'Ships', applyCraft, true),
-      // 10 — City/landmark pills (world). Adapter reads CityLabels' OWN
+      // 12 — City/landmark pills (world). Adapter reads CityLabels' OWN
       //      density flag — not the DOM — so it engages while F1/F5
       //      suppression already hides the pills, and the 5 key can clear
       //      the gate coherently. Parallel agent owns CityLabels.js.

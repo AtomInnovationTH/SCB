@@ -99,8 +99,8 @@ export const REDUCED_CROSSFADE_MS = 200;
  *         ONE visibility bit; null = mask-owned attribute pane.
  * els:    DOM selectors for the faint/fade treatments (and for attribute
  *         panes, the visibility itself). '#id' or a class selector.
- * memory: participates in D5 per-floor player memory. The reticle canvas has
- *         no player toggle, so its state is table-driven only.
+ * memory: participates in D5 per-floor player memory. The reticle canvas
+ *         (rung `targetmarks`) has memory too: the `-` step hides it per floor.
  * shipped: the pane's state in the SHIPPED cockpit — what `_restoreAll`
  *         (disengage → menu / shop, setEnabled(false), dispose) restores.
  *         Absent = 'shown' (the default). 'gone' marks the three
@@ -114,8 +114,8 @@ export const REDUCED_CROSSFADE_MS = 200;
  * Deliberately NOT here (the always set + world rungs): the 'alerts' and
  * 'rail' members of the always set (D7 — never masked), the 'reticles'
  * DENSITY flag-rung (it bundles the warnings/conjunction chrome — hiding it
- * would violate D7; the mask's 'reticles' pane touches ONLY the
- * targeting-bracket canvas), and the 'skylabels'/'craft' world rungs (scene
+ * would violate D7; the mask's 'reticles' pane drives the separate
+ * `targetmarks` step, which touches ONLY the targeting canvas), and the 'skylabels'/'craft' world rungs (scene
  * objects, owned by their own floor systems — the map rule here governs
  * PANES). The score strip and comms ARE here (maskable room panes since
  * 2026-09-23 and Session N.5 respectively).
@@ -169,11 +169,15 @@ export const MASK_PANES = Object.freeze({
   discoveries: Object.freeze({ rung: 'discoveries', els: Object.freeze(['#hud-discoveries']),         memory: true, shipped: 'gone' }),
   mother:      Object.freeze({ rung: 'mother',      els: Object.freeze(['#hud-mother-panel']),        memory: true }),
   // W2 meters (owner 2026-10-08, DECISIONS §15 row 5): heat, battery, gas and ion,
-  // top left. An ATTRIBUTE pane like 'score' (never a density rung, so the MORE
-  // ladder cannot hide it), table-driven only: shown on F1-F4, gone on F5.
-  vitals:      Object.freeze({ rung: null,          els: Object.freeze(['#hud-vitals']),              memory: false }),
+  // top left, with the MOTHER section. Since 2026-10-22 (owner: "the new and improved
+  // mother pane should be hidable") a RUNG pane: the `vitals` step, right after
+  // `mother`, is its ONE hide writer. Shown on F1-F4, gone on F5 by default.
+  vitals:      Object.freeze({ rung: 'vitals',      els: Object.freeze(['#hud-vitals']),              memory: true }),
   arms:        Object.freeze({ rung: 'arms',        els: Object.freeze(['#hud-arms-panel']),          memory: true }),
-  reticles:    Object.freeze({ rung: null,          els: Object.freeze(['#reticle-canvas']),          memory: false }),
+  // Target marks (owner 2026-10-22: hidden before the daughters pane): the whole
+  // #reticle-canvas. A RUNG pane since then: the `targetmarks` step is its ONE hide
+  // writer (the entry keeps its name, so no room table changes).
+  reticles:    Object.freeze({ rung: 'targetmarks', els: Object.freeze(['#reticle-canvas']),          memory: true }),
   hints:       Object.freeze({ rung: null,          els: Object.freeze(['#hud-hint-ticker']),         memory: false }),
   // The score strip (owner 2026-09-23, plan 1789561832042 C2): "it is the
   // score" narrows to "every zoom EXCEPT the hull" — gone on the F1 room,

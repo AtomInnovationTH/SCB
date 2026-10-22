@@ -184,8 +184,14 @@ export function isChaseDone(target) {
 /** Autopilot rotation rate (rad/s) — gentler than manual (0.3) */
 const AP_ROT_RATE = 0.2;
 
-/** Dead zone (radians) — ignore tiny corrections to prevent jitter */
-const AP_ROT_DEADZONE = 0.01;
+/**
+ * Skip threshold (radians) for the rotation slew: below this the nose is already where it should be (numerical noise),
+ * so no write. It is NOT a visible dead zone. It was 0.01 rad (0.57 deg): a prograde follow at the ship's 0.011 rad/s
+ * turn rate then waited for the error to pass 0.57 deg and hopped 11.5 deg/s back to zero, 2-7 hops/s with a mean of
+ * 0.65 deg/s (the "rotation jitter" under autopilot, measured 2026-10-22). Never an "aligned" gate (that is
+ * Constants ANG_TOL_DEG).
+ */
+const AP_ROT_DEADZONE = 1e-5;
 
 /**
  * Leash turn (requestAttitudeTurn): default peak body rate, 5 °/s. Slow on
@@ -449,6 +455,8 @@ export class AutopilotSystem {
     this._tripHold = false;
     /** trip-melt D4: the trip hold also steers the ship to prograde (false: the trip burns as the ship points). */
     this._tripTurn = false;
+    /** ap-smooth: the engaged prograde follow keeps the heading in the ORBIT frame (time warp above 1; see `_holdFrameForWarp`). */
+    this._apFrameHold = false;
     /** l5c-reach E7: who owns the attitude hold ('leash' = LeashDriver), or null. Other listeners may not release an owned hold. */
     this._attitudeHoldOwner = null;
     /** @type {number} Seconds the current attitude hold has been active (safety cap). */
@@ -1155,6 +1163,9 @@ export class AutopilotSystem {
     // Release any active target lock
     this._releaseTargetLock();
 
+    // ap-smooth: a leftover orbit-frame hold would overwrite every later direct write to the nose (PlayerSatellite
+    // `_orientAlongVelocity`), so it ends with the autopilot. The attitude stays where it is (no snap).
+    this._dropFrameHold();
     if (this._player) {
       this._player.autopilotEngaged = false;
       // The arbiter's handback (_handAttitudeToPlayer) folds the AP-left attitude
@@ -1221,6 +1232,16 @@ export class AutopilotSystem {
    * @param {number} dt — frame delta in seconds (game-scaled)
    */
   update(dt, dtWorld = TimeAuthority.baseGameDt(dt)) {
+    // ap-smooth: last frame's transient recoil shake comes off the nose before anything below (the slew, the aim,
+    // the scripted turn) reads or writes it, so they work on the commanded attitude; PlayerSatellite puts this
+    // frame's shake back on after it has composed the attitude. Idempotent and a no-op without a shake.
+    const apPlayer = this._player;
+    if (apPlayer && typeof apPlayer.undoRecoilOverlay === 'function') apPlayer.undoRecoilOverlay();
+
+    // ap-smooth: the orbit-frame hold steps aside whenever something else owns the nose (an aim, a scripted turn, a
+    // reel-in / launch hold), and never outlives the engagement.
+    if (this._apFrameHold && (!this._engaged || this._aimCoroutine || this._turn || this._attitudeHold)) this._dropFrameHold();
+
     // C-11: Tick aim coroutine independently of autopilot engagement
     this._tickAimCoroutine(dt);
 
@@ -1283,9 +1304,12 @@ export class AutopilotSystem {
     if (!targetState) {
       // Prograde fallback — just rotate toward current velocity, no thrust.
       this._fmaRangeM = null;                              // no goal ⇒ no range
-      this._updateProgradeOnly(dt);
+      this._updateProgradeOnly(dt, dtWorld);
       return;
     }
+    // ap-smooth: a target takes over the nose (the control law slews it in the world frame): the prograde follow's
+    // orbit-frame hold ends here, or it would overwrite every `_rotateTowardWorld` write.
+    this._dropFrameHold();
     const { Pd, Vd, mode } = targetState;
 
     // Emit AUTOPILOT_ENGAGE if heading mode changed (legacy listeners)
@@ -1860,8 +1884,17 @@ export class AutopilotSystem {
     return { Pd: heading.position, Vd, mode: heading.mode };
   }
 
-  /** @private Prograde fallback: face velocity, no thrust. */
-  _updateProgradeOnly(dt) {
+  /**
+   * @private Prograde fallback: face velocity, no thrust.
+   *
+   * ap-smooth: at warp 1 the nose follows by the world-frame slew (`_rotateTowardWorld`, 0.2 rad/s of real time). Above
+   * warp 1 the orbit turns the prograde frame faster than that (measured: 42 deg behind at 20x, up to 180 deg at 100x),
+   * so the heading is kept in the ORBIT frame instead (the way the transfer trip's hold does, `_tickTripHold`): the
+   * player recomposes prograde · offset from the exact prograde every frame and the slew eases the offset to nothing.
+   * @param {number} dt real seconds
+   * @param {number} [dtWorld] world seconds; undefined = a caller that knows no warp (the world-frame slew)
+   */
+  _updateProgradeOnly(dt, dtWorld) {
     const pv = this._player.getVelocity();
     // P3: _tmpV1 is free here — the main control law (vHat) only runs when
     // _resolveTargetState() returns non-null, which routes AWAY from this path.
@@ -1871,8 +1904,43 @@ export class AutopilotSystem {
       // Aim-before-launch mutual exclusion: the aim coroutine / reel-in freeze
       // owns the quaternion while active — don't let prograde-hold fight it
       // (mirrors the guard on the main control path).
-      if (!this._aimCoroutine && !this._attitudeHold) this._rotateTowardWorld(dir, dt);
+      if (this._aimCoroutine || this._attitudeHold) { this._dropFrameHold(); return; }
+      if (!this._turn && this._holdFrameForWarp(dt, dtWorld)) return;   // (a scripted turn owns the nose: no hold)
+      this._dropFrameHold();
+      this._rotateTowardWorld(dir, dt);
     }
+  }
+
+  /**
+   * @private ap-smooth: is the world running faster than warp 1? `dtWorld` is the TimeAuthority-owned clock; warp 1 is
+   * already BASE_SCALE (10x) real time, so "above warp 1" is `dtWorld > dt * BASE_SCALE * 1.001` (the ramp snaps onto 1
+   * within 1e-4, TimeAuthority.update). A held world (`dtWorld` 0), a slowed one and an unknown clock count as not warping.
+   * @param {number} dt @param {number} [dtWorld] @returns {boolean}
+   */
+  _isWarpAbove1(dt, dtWorld) {
+    return dt > 0 && dtWorld > dt * TimeAuthority.BASE_SCALE * 1.001;
+  }
+
+  /**
+   * @private ap-smooth: above warp 1, steer the engaged prograde follow through the player's orbit-frame hold
+   * (`setOrbitFrameHold`; recomposed from the exact prograde every frame, so it follows the orbit at any world rate) and
+   * ease the offset from prograde to nothing at the autopilot's own turn rate on REAL time (`easeOrbitFrameOffset`).
+   * @returns {boolean} true when the hold steered this frame (warp above 1); false: the caller slews in the world frame
+   */
+  _holdFrameForWarp(dt, dtWorld) {
+    const p = this._player;
+    if (!this._isWarpAbove1(dt, dtWorld) || typeof p.setOrbitFrameHold !== 'function') return false;
+    if (!this._apFrameHold) { p.setOrbitFrameHold(true); this._apFrameHold = true; }
+    p.easeOrbitFrameOffset(AP_ROT_RATE * dt, AP_ROT_DEADZONE);
+    return true;
+  }
+
+  /** @private ap-smooth: end the autopilot's own orbit-frame hold (the attitude stays where it is). Idempotent. */
+  _dropFrameHold() {
+    if (!this._apFrameHold) return;
+    this._apFrameHold = false;
+    const p = this._player;
+    if (p && typeof p.setOrbitFrameHold === 'function') p.setOrbitFrameHold(false);
   }
 
   // ==========================================================================
@@ -2605,6 +2673,9 @@ export class AutopilotSystem {
     if (tier !== 'none') return fail('daughter on its tether');
 
     // World axis → body frame. Roll (nose axis) has ~1 % of pitch authority.
+    // ap-smooth review: start from the commanded attitude, never one with a recoil shake applied (the request can
+    // arrive after player.update re-applied it; the turn would carry that frozen shake into the hand-back offset).
+    if (typeof player.undoRecoilOverlay === 'function') player.undoRecoilOverlay();
     const qStart = player.quaternion.clone();
     const nBody = axis.clone().applyQuaternion(qStart.clone().invert());
     if (Math.abs(nBody.z) > TURN_ROLL_MAX) return fail('roll axis — no roll authority');

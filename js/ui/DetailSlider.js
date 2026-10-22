@@ -46,11 +46,11 @@
  * nothing thrown); every DOM write is write-on-change (G1); emoji-free.
  *
  * Rev 3 (tmp/plans/1788867799156-hud-pane-ladder-reorder.md, locked #11):
- * 16 detents (levels 0..15), a 3 px drag dead-zone past each detent
+ * 18 detents (levels 0..17), a 3 px drag dead-zone past each detent
  * boundary so a thumb held still never flickers, and optional bold
  * milestone ticks. Tap / release, reduced-motion, and the total() /
  * level() / onLevel contract are unchanged. Milestone names (never on
- * screen): 0 Scenery · 2 Ships · 5 Flight · 9 Ops · 13 Instruments · 15 All.
+ * screen): 0 Scenery · 2 Ships · 9 Flight · 11 Ops · 15 Instruments · 17 All.
  *
  * @module ui/DetailSlider
  */

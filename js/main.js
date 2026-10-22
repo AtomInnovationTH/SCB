@@ -113,6 +113,7 @@ import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController, INTRO_RIDE_MS, INTRO_DANCE_LANDING_Z01, INTRO_DANCE_DRIFT_Z01, INTRO_DANCE_DOLLY_MS, INTRO_DANCE_DWELL_CEILING_MS, INTRO_DANCE_HANDOVER_Z01, INTRO_DANCE_PULLBACK_MS } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
 import { FloorMask } from './ui/hud/FloorMask.js';
+import { setChipsUnderDrawer } from './ui/hud/FooterChip.js';
 import { LadderViewStore } from './systems/LadderViewStore.js';
 import { LadderSfx } from './systems/LadderSfx.js';
 import { clusterSelected } from './systems/LadderBridge.js';
@@ -3056,8 +3057,8 @@ async function init() {
       // Ladder reorder rev 3 (plan tmp/plans/1788867799156-hud-pane-ladder-reorder.md):
       // insertBefore splices instruments ahead of debris; the gag joins
       // experimental. Final top-level ids: experimental, decor, copilot, next,
-      // orbit, cargo, debris, targets, comms, score, arms, mother, reticles,
-      // craft, citypills (15). All BEFORE new FloorMask ( _resolve caches once).
+      // orbit, cargo, debris, targets, targetmarks, arms, comms, score, mother,
+      // vitals, reticles, craft, citypills (17). All BEFORE new FloorMask ( _resolve caches once).
       const pd = hud && hud.paneDensity;
       if (pd && typeof pd.insertBefore === 'function') pd.insertBefore('debris', cargoPane.rung());
       if (pd && typeof pd.insertBefore === 'function') pd.insertBefore('cargo', orbitPane.rung());
@@ -3067,8 +3068,10 @@ async function init() {
       if (exp && typeof exp.addMember === 'function') exp.addMember(overridePane.rung());
       if (detailSlider && typeof detailSlider.setMilestones === 'function' && pd && Array.isArray(pd.rungs)) {
         const lvl = (id) => { const i = pd.rungs.findIndex(r => r && r.id === id); return i < 0 ? null : pd.rungs.length - i; };
-        // Scenery · Ships · Flight · Ops · Instruments · All
-        const milestones = [0, lvl('craft'), lvl('arms'), lvl('debris'), lvl('copilot'), pd.rungs.length].filter(n => Number.isFinite(n));
+        // Scenery · Ships · Flight · Ops · Instruments · All. Flight is the suffix that starts at
+        // the target marks: marks, daughters, comms, score, mother, meters box, alerts, ships, city.
+        // (It used to start at daughters; the marks now hide just before them, so they join it.)
+        const milestones = [0, lvl('craft'), lvl('targetmarks'), lvl('debris'), lvl('copilot'), pd.rungs.length].filter(n => Number.isFinite(n));
         detailSlider.setMilestones(milestones);
       }
       // Plan Task 8: left-arm overlay riders, once, after the rungs exist.
@@ -6922,6 +6925,7 @@ function gameLoop(timestamp) {
     const _hideVitals = _floorAttr === '1' && !!(workbenchPane && workbenchPane.isOpen && workbenchPane.isOpen());
     if (_hideVitals !== _vitalsUnderDrawer) {   // write-on-change; the drawer covers the meters only on F1 (w4-power D4, measured)
       _vitalsUnderDrawer = _hideVitals; const _vEl = document.getElementById('hud-vitals'); if (_vEl) _vEl.style.visibility = _hideVitals ? 'hidden' : '';
+      setChipsUnderDrawer(_hideVitals);   // the drawer's bar reaches the DISCOVERIES / ORB chips too (R1)
     }
   }
   // Session P (plan D5): the DETAIL slider follows the live visible count
