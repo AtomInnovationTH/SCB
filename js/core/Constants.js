@@ -5343,15 +5343,17 @@ export const Constants = {
       //   historical id ('radial_menu') so old saves restore cleanly, but it
       //   now tracks the fleet-recall verb (Shift+R → ARM_RECALL_ALL; was
       //   H / Shift+O before the 2026-06-12 hotkey cleanup).
-      // ch11 orbital_hohmann: a committed transfer window opening (CLUSTER_WINDOW_OPEN)
-      //   is the "you timed a Hohmann" moment; the porkchop viz is deferred (EN-5/6).
+      // ch11 orbital_hohmann (u16a): discovered when the ch11_hohmann lesson is finished, i.e. the
+      //   player flew a cluster transfer (FLY THERE / Space) after the lesson pointed at the LEO
+      //   window pane. The old CLUSTER_WINDOW_OPEN trigger only fired from a dev key (Shift+A);
+      //   the porkchop viz is deferred (EN-5/6).
       { id: 'confirm_before_fire', label: 'Confirm Before Launch', key: null, tier: 3, category: 'awareness', hudGroup: null, prereqs: [], prereqType: 'none', noReminder: true,  triggerEvent: 'CONJUNCTION_ALERT', triggerFilter: (d) => d && d.reason === 'ACTIVE_SAT_ARMING' },
       { id: 'radial_menu',         label: 'Fleet Recall',        key: 'Shift+R', say: 'Press Shift R to reel in all daughters.',  tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_RECALL_ALL' },
       // ── item 100 (2026-08-21): the launch-speed dial. Discovered by moving
       //   the dial (LAUNCH_SPEED_CHANGED); the ch10 wide-sweep beat teaches its
       //   application (ARM_CAPTURED rangeM ≥ 1000 — the tether-gated unlock).
       { id: 'speed_dial',          label: 'Launch-Speed Dial',   key: "; / '", say: 'Press the semicolon or apostrophe key to change the launch speed.',   tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'LAUNCH_SPEED_CHANGED' },
-      { id: 'orbital_hohmann',     label: 'Hohmann Window',      key: null, tier: 4, category: 'nav',       hudGroup: null,    prereqs: [], prereqType: 'soft', noReminder: false, triggerEvent: 'CLUSTER_WINDOW_OPEN' },
+      { id: 'orbital_hohmann',     label: 'Hohmann Window',      key: null, tier: 4, category: 'nav',       hudGroup: null,    prereqs: [], prereqType: 'soft', noReminder: false, triggerEvent: 'MISSION_BEAT_SATISFIED', triggerFilter: (d) => !!d && d.beatId === 'ch11_hohmann' },
 
       // ── Tier 4: Advanced (8 skills) ─────────────────────────────────────
       // F5: was triggerEvent 'ORBIT_MFD_TOGGLE' — that event has NO emitter
@@ -6214,8 +6216,10 @@ export const Constants = {
       ],
 
       // ── Chapter 11 — GEO Transit / Thaicom 4: Hohmann window + Hassan handover (GEO 35,786) ──
-      //    The porkchop/Lambert viz is deferred to ROADMAP EN-5/6; `orbital_hohmann`
-      //    is discovered when a committed transfer window opens (CLUSTER_WINDOW_OPEN).
+      //    The porkchop/Lambert viz is deferred to ROADMAP EN-5/6. u16a (owner 2026-10-22):
+      //    the lesson teaches the transfer-window pane on the LEO view (it shows when the
+      //    cheapest climb lines up) and finishes when the player flies a cluster transfer
+      //    (DEBRIS_MAP_CLUSTER_SELECTED, as ch7); `orbital_hohmann` is discovered with it.
       11: [
         {
           id: 'ch11_intro',
@@ -6227,11 +6231,11 @@ export const Constants = {
           id: 'ch11_hohmann',
           type: 'interactive',
           source: 'HASSAN',
-          text: 'GEO is a long Hohmann climb. Half an orbit of coasting. Pick the cluster and let the transfer window open before you commit; burn early and you\'ll arrive where the target isn\'t.',
+          text: 'The cheapest climb to a cluster is a Hohmann transfer. On the LEO view, pick a cluster. The line right under its name counts down, like T-2h10m, to that climb. It says OPEN NOW when it lines up, or LAUNCH ANYTIME when the timing does not matter. Press Space to fly there.',
           skillId: 'orbital_hohmann',
-          triggerEvent: 'CLUSTER_WINDOW_OPEN',
-          title: 'HOHMANN WINDOW',
-          body: 'Engage a transfer at LEO and wait for the launch window to open before you burn.',
+          triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED',
+          title: 'READ THE WINDOW',
+          body: 'On the LEO view, pick a cluster: the line right under its name counts down to the cheapest climb, or says LAUNCH ANYTIME. Press Space to fly there.',
         },
         {
           id: 'ch11_mpd',

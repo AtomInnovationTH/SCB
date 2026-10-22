@@ -129,6 +129,20 @@ export class TimeAuthority {
   }
 
   /**
+   * u16a (owner 2026-10-22: "Stop the world while it's open"): the ONE held-world input. The world is held while a
+   * workbench drawer (REFIT / TECH LIBRARY) is open (D-F, DECISIONS §13 row 5) OR the full-screen codex / help page
+   * (SPECS, opened by tapping a HUD pane) is showing during gameplay. Out of gameplay (menu, shop, game over) the
+   * codex holds nothing: those screens have their own pause rules. The result feeds `calmCap` and `tripWarpArgs`
+   * (`workbenchOpen`) in main.js's time loop, once per frame. Pure.
+   * @param {{paneOpen?:boolean, codexVisible?:boolean, gameplay?:boolean}} p
+   * @returns {boolean} true = clamp the world clock to 0
+   */
+  static worldHoldOpen(p) {
+    if (!p) return false;
+    return !!p.paneOpen || (!!p.codexVisible && !!p.gameplay);
+  }
+
+  /**
    * @param {object} [opts]
    * @param {number} [opts.rampUpTauMs=400]   - exponential τ ramping warp UP (gentle auto-warp drift)
    * @param {number} [opts.rampDownTauMs=120] - exponential τ ramping warp DOWN (fast safety / down-crossing pre-ramp)

@@ -22,6 +22,7 @@ import { dossierSystem, DOSSIER_TIERS, appraiseSalvage } from '../systems/Dossie
 import { audioSystem } from '../systems/AudioSystem.js';
 import { mono } from '../core/Typeface.js';
 import { currentHudScale } from './HudScale.js';
+import { GestureHints } from './hud/GestureHints.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -1782,7 +1783,8 @@ export class DebrisWireframe {
         ctx.font = mono(11, 'bold');
         ctx.fillStyle = DIM_COLOR;
         ctx.textAlign = 'center';
-        ctx.fillText('UNRESOLVED \u2014 scan [S]', WIRE_CX, 150);
+        // u16b fix 1: glass has no S key; an empty tap is the scan there (floors 2-3). Read at draw time.
+        ctx.fillText(GestureHints.isGlass() ? 'UNRESOLVED \u2014 tap empty space to scan' : 'UNRESOLVED \u2014 scan [S]', WIRE_CX, 150);
         return;
       }
       ctx.fillText('TARGET INFO', WIRE_CX, 15);
@@ -1951,7 +1953,8 @@ export class DebrisWireframe {
         }
         ctx.fillStyle = DIM_COLOR;
         ctx.textAlign = 'center';
-        ctx.fillText('[Z] Cycle zones', WIRE_CX, infoY + 16);
+        // u16b fix 1: no touch control cycles the zones, so glass leaves the label out (draw-time read).
+        if (!GestureHints.isGlass()) ctx.fillText('[Z] Cycle zones', WIRE_CX, infoY + 16);
       }
       return;
     }

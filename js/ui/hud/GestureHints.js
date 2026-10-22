@@ -118,8 +118,8 @@ const RE_KEY_HINT = /\s*[(\[][A-Z][)\]]/g;
 const RE_RAW_GLYPH = /^(?:[A-Za-z0-9?,.;']|[1-4]\s*[-–]\s*[1-4]|Esc|Tab|Space|Enter|Shift[^]*|Scroll|Drag|\+\/-|←↑↓→|←→↑↓|[←→↑↓]+)$/;
 /**
  * u15b B-T5/B-T6: skill id -> the word a glass player sees where desktop shows its key. Chip skills use their chip button
- * (CHIP_LABELS); the touch-word skills a touch word; every other skill has none. scan_wide is absent on purpose (D4: a
- * wide scan by touch exists only as the mission-3 lesson chip).
+ * (CHIP_LABELS); the touch-word skills a touch word; every other skill has none. scan_wide is absent on purpose (u16b: the
+ * WIDE SCAN button is a floor 2-3 control, not a ticker chip, so its reminder stays off glass).
  */
 const SKILL_WORDS = Object.freeze({
   scan_quick: CHIP_LABELS.S, collect_lasso: CHIP_LABELS.N, arm_pilot_capture: CHIP_LABELS.N, collect_deploy: CHIP_LABELS.D,
@@ -147,7 +147,8 @@ const RE_READ_CHIP = /\b([Pp])ress I\b( to (?:read more|read the specs|open Info
  * u14b B3: the skill reminders (SKILLS.CATALOG, OnboardingDirector `remind_<skillId>`) whose key has a touch button, so the
  * line can name it on glass: S, N, the daughter's tool, D, A (action chips) and I (READ MORE). Must equal the keys of
  * TouchActionChip.REMINDER_KIND (a test ties them). Every other reminder that names a key or a mouse gesture (V, 7, 1-4, X,
- * Shift S / R / 1-3 / +/-, period, ; ', Scroll, Drag) has no touch control, so on glass it is not posted.
+ * Shift R / 1-3 / +/-, period, ; ', Scroll, Drag) has no touch control, so on glass it is not posted. (Shift S has one, the
+ * WIDE SCAN button of u16b, but it is a floor 2-3 button, not a chip, so the scan_wide reminder is still not posted.)
  */
 export const GLASS_REMINDER_SKILLS = Object.freeze(['scan_quick', 'collect_lasso', 'arm_pilot_capture', 'collect_deploy', 'nav_autopilot', 'manage_codex']);
 
@@ -174,6 +175,9 @@ const GLASS_LINES = Object.freeze([
   ['Zoom out to LEO (Esc), pick a cluster, press Space to fly to it.', 'Pinch out to LEO, pick a cluster, tap FLY THERE to fly to it.'],
   ['At LEO pick this cluster and press Space to fly there. Then target (T), autopilot (A), and net it piece by piece', 'At LEO pick this cluster and tap FLY THERE. Then tap a piece to target it, tap AUTOPILOT, and net it piece by piece'],
   ['At LEO pick the cluster and press Space, then clear it with Target (T) and Autopilot (A).', 'At LEO pick the cluster and tap FLY THERE, then clear it: tap a piece to target it and tap AUTOPILOT.'],
+  // u16a ch11_hohmann (READ THE WINDOW): the pane is on the floor-4 view (LEO); the Space verb is FLY THERE
+  ['when the timing does not matter. Press Space to fly there.', 'when the timing does not matter. Tap FLY THERE.'],
+  ['or says LAUNCH ANYTIME. Press Space to fly there.', 'or says LAUNCH ANYTIME. Tap FLY THERE.'],
   // B-T2 daughters: a tap on her row in DAUGHTERS sends her number
   ['Deploy a daughter (D), then press 1-4 to pilot her directly.', 'Hold the target for DAUGHTER, then tap her row in DAUGHTERS to pilot her directly.'],
   ['Press 1-4 while a daughter is deployed to fly her yourself.', 'Tap her row in DAUGHTERS while she is deployed to fly her yourself.'],
@@ -189,7 +193,7 @@ const GLASS_LINES = Object.freeze([
   ['Press D twice to deploy both daughters, then [1]/[2] to switch between them.', 'Hold the target for DAUGHTER twice to send both daughters, then tap a daughter\'s row in DAUGHTERS to switch between them.'],
   ['Line up on a target and capture by hand (N). Manual catches score double. Watch the odds strip: de-spin (L) or close in', 'Line up on a target and capture by hand with LAUNCH NET. Manual catches score double. Watch the odds strip: hold DE-SPIN or close in'],
   ['Close on a target under manual pilot and press N to net it for 2× score.', 'Close on a target under manual pilot and tap LAUNCH NET for 2× score.'],
-  // B-T3 scan: WIDE SCAN is the mission-3 lesson chip; the quick ping is SCAN
+  // B-T3 scan: WIDE SCAN is the mission-3 lesson chip, then (u16b) the WIDE SCAN button on floors 2-3; the quick ping is SCAN
   ['Press Shift+S for a wide-aperture deep scan. Slower, but it paints debris your quick ping (S) can\'t see.', 'Tap WIDE SCAN for a wide-aperture deep scan. Slower, but it paints debris your quick ping (SCAN) can\'t see.'],
   ['Press Shift+S to run a wide-aperture scan and reveal distant contacts.', 'Tap WIDE SCAN to run a wide-aperture scan and reveal distant contacts.'],
   ['; Shift+S runs a Wide Scan for longer range.', '.'],
@@ -224,6 +228,55 @@ const GLASS_LINES = Object.freeze([
   ['BUY one click away', 'BUY one tap away'],
   ['Clicking a part whose page', 'Tapping a part whose page'],
   ['Esc slides the pane away and leaves you exactly where you were', 'CLOSE × slides the pane away and leaves you exactly where you were'],
+  // u16b D6 (the glass-words sweep, test-NoKeysOnGlass "every player line in js/"): appended rows. Each `to` names only a
+  // control that exists on glass in that moment, or leaves the key out.
+  // the start of the game: the ticker's fallback body when no OPEN UP / OPEN THE WINGS step button is up (on glass the row IS the
+  // button whenever the ticker has its step sink, main.js). What really opens the wings then: at a START any tap (StartOpening
+  // takes the first pointerdown on the page as the first action); later the WINGS button of the floor 1 bar (OverridePane).
+  ['Open up (any key)', 'Open up: tap anywhere'],
+  ['Open the wings (comma key)', 'Open the wings: tap WINGS on floor 1'],
+  // daughter refusals (ticker hints and comms)
+  ['Wait for charge, or deploy another daughter [1-4]', 'Wait for charge, or use another daughter'],
+  ['Deploy another [1-4] or refuel', 'Use another daughter or refuel'],
+  ['Pick a lighter one [T]', 'Pick a lighter one'],
+  ['Press [A] to autopilot closer first', 'Hold the target for AUTOPILOT to get closer first'],
+  ['Reel her in (R) instead.', 'Reel her in instead.'],
+  ['Pilot her in manually (1-4) for a better grip.', 'Pilot her in manually (tap her row in DAUGHTERS) for a better grip.'],
+  ['Pilot daughters with 1-4 for 2× score bonus.', 'Pilot daughters by tapping their rows in DAUGHTERS for 2× score bonus.'],
+  ['de-spin the target (hold L), then re-fire.', 'de-spin the target, then re-fire.'],
+  // the catch at the collar: K is LET GO (chipPhrase already did this; speak, the ticker's path, did not)
+  ['Press K to let it go.', 'Tap LET GO.'],
+  ['press K to let the catch go.', 'tap LET GO.'],
+  // the radiator refusal: O is RADIATORS on floor 1
+  ['Tap O to fold it', 'Tap RADIATORS on floor 1 to fold it'],
+  ['(O / RADIATORS) to thrust.', '(RADIATORS on floor 1) to thrust.'],
+  // autopilot and the camera
+  ['launch the net (N).', 'tap LAUNCH NET.'],
+  ['you took over with the reel key (R).', 'you took over with REEL.'],
+  ['you steered with the arrow keys.', 'you steered with the turn pad.'],
+  ['Release arrow keys. Autopilot has control.', 'Release the turn pad. Autopilot has control.'],
+  ['hinge LOCKED — release the hinge brake [H]', 'hinge LOCKED'],
+  ['Arrow keys orbit debris, ESC to recall', 'Use the turn pad to orbit the debris once she holds station'],
+  // target and fleet refusals
+  ['Press [T] to cycle targets', 'Tap a piece to pick a target'],
+  ['All arms deployed or returning. Press [Shift+R] to reel in all', 'All arms deployed or returning'],
+  ['Match velocity first [A].', 'Match velocity first: hold the target for AUTOPILOT.'],
+  ['. [N] net · [D] daughter.', '. Net it, or send a daughter.'],
+  ['. [A] autopilot to close.', '. Hold the target for AUTOPILOT to close in.'],
+  // reactive lines to a key press (a hardware keyboard on glass): the toggles keep the sentence, drop the key
+  [' (6 to hide)', ''],
+  [' (6 to show)', ''],
+  [' (9 to hide)', ''],
+  [' (9 to show)', ''],
+  [' (0 to hide)', ''],
+  [' (0 to show)', ''],
+  [' (5 to hide)', ''],
+  [' (5 to show)', ''],
+  [' after your first scan (S)', ' after your first scan'],
+  [' when you analyse a target (Z)', ' when you analyse a target'],
+  // u16 integration: the hold-catch lines (ArmManager) name C, which has no touch control yet (owed): the sentence is left out
+  ['All daughters are holding catches. Press C to move one to a radiator.', 'All daughters are holding catches.'],
+  ['; move it to a radiator (Press C).', '.'],
 ]);
 // u15b fix 8: only the INSTRUCTION form of "click" becomes "tap": a bare Click / click, then a space and a word, at the start of a
 // sentence or after , ; : ( or a joining word ("click another to change it", "Click to upgrade it"). "right-click", "double-click"
@@ -395,7 +448,7 @@ export class GestureHints {
   /**
    * u14b B3: may a stale-skill reminder for this skill be posted now? Desktop: always. Glass: only when the skill has no key
    * (label-only reminder) or its key has a touch button (GLASS_REMINDER_SKILLS); a reminder that tells a touch player to
-   * press V, 7, X or Shift S would name a key they do not have.
+   * press V, 7, X or Shift R would name a key they do not have.
    * @param {{id?:string, key?:(string|null)}} def  the SKILLS.CATALOG entry
    * @param {string} [skillId]  the reminder's skill id (when the entry carries none)
    * @returns {boolean}

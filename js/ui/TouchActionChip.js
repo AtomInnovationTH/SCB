@@ -71,7 +71,7 @@ const CHIPS = Object.freeze({
   // u14b B2: I opens the full-screen library; the SPECS tab opens a different (side) view, so it needs its own button.
   read: Object.freeze({ text: 'Read more', glyph: 'I', keys: Object.freeze(['KeyI']), press: 'KeyI', button: 'READ MORE' }),
   // u15a A-T2: mission 3's wide-scan lesson. Shift+S is the only way to a wide scan; a touch player had no key for it
-  // (D2 label WIDE SCAN). The Shift form is parsed by KeyDispatch.pressKey. Beat chip only (D4: no wide scan outside the lesson).
+  // (D2 label WIDE SCAN). The Shift form is parsed by KeyDispatch.pressKey. Beat chip only; outside the lesson the WIDE SCAN button (u16b, TouchVerbButton) carries it, after a first wide scan.
   widescan: Object.freeze({ text: 'Wide scan', glyph: 'S', keys: Object.freeze(['Shift+KeyS']), press: 'Shift+KeyS', button: 'WIDE SCAN' }),
   // u15a A-T4: mission 5's burn lesson waits for THROTTLE_CHANGE; the throttle is Shift+= (+10 %), no touch control exists.
   throttle: Object.freeze({ text: 'Throttle up', glyph: '+', keys: Object.freeze(['Shift+Equal']), press: 'Shift+Equal', button: 'THROTTLE UP' }),

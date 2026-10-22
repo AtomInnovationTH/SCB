@@ -3471,6 +3471,10 @@ async function init() {
         const tp = t && t._scenePosition;
         return mp && tp ? mp.distanceTo(tp) / 0.00001 : null;   // DespinLaser: scene units per metre
       },
+      getActiveTarget: () => targetSelector && targetSelector.getActiveTarget(),   // u16b WIDE SCAN deps
+      isPiloting: () => !!(inputManager && inputManager.armPilotMode),
+      isWideScanLearned: () => !!(skillsSystem && skillsSystem.isDiscovered('scan_wide')),
+      getWideScanState: () => sensorSystem && sensorSystem.getScanStatus(),
     });
     const stampEl = (typeof document !== 'undefined') ? document.getElementById('build-stamp') : null;
     const touchTelemetry = new TouchTelemetry({
@@ -6899,6 +6903,15 @@ function gameLoop(timestamp) {
   // the flight. Down-rides report no hold: the existing destination pre-ramp
   // settles time first (TimeAuthority.ladderTargetCap is the pure rule).
   const _ladderActive = !!(ladderController && ladderController.isActive && ladderController.isActive());
+  // u16a (owner 2026-10-22, DECISIONS §13 row 5 rule extended): the full-screen help page (a tap on a HUD pane opens the
+  // codex SPECS page) stops the world exactly like the side drawer. ONE combined value per frame, read by BOTH clamps below
+  // (calmCap and tripWarpArgs), so every consumer the drawer reaches (dtWorld -> _worldHeld -> GameFlowManager, TipCargo,
+  // the hazard systems; the trip clock) follows with no other edit. TimeAuthority.worldHoldOpen is the testable rule.
+  const _worldHoldOpen = TimeAuthority.worldHoldOpen({
+    paneOpen: _workbenchPaneOpen,
+    codexVisible: !!(codexViewerUI && codexViewerUI.isVisible && codexViewerUI.isVisible()),
+    gameplay: gameState.isGameplay(),
+  });
   let _floorCap = 1;
   if (_ladderActive && ladderController.ladder && ladderController.ladder.getState) {
     const _lf = ladderController.ladder.getState().floor;
@@ -6913,7 +6926,7 @@ function gameLoop(timestamp) {
     // STOPS while you shop or read (the rail reads HOLD; the frame scheduler
     // is on its 10 fps heartbeat). Applied AFTER the Q10 hold rule; a clamp,
     // never a raise.
-    _floorCap = TimeAuthority.calmCap(_floorCap, _workbenchPaneOpen);
+    _floorCap = TimeAuthority.calmCap(_floorCap, _worldHoldOpen);
   }
   // Q10 level-phase sound (S4): one settle cue on the RISE edge of the
   // camera's post-arrival level-to-north phase (~600 ms, "its own sound" —
@@ -6934,7 +6947,7 @@ function gameLoop(timestamp) {
     !!(conjunctionSystem && conjunctionSystem.getStatus && conjunctionSystem.getStatus().alertActive);
   tripWarpArgs(_taFrameArgs, {
     dtReal: dt, ladderActive: _ladderActive, floorCap: _floorCap,
-    workbenchOpen: _workbenchPaneOpen, alertActive: _alertActive,
+    workbenchOpen: _worldHoldOpen, alertActive: _alertActive,
     gameplay: gameState.isGameplay(),   // trip-melt G6: the full-screen shop (ladder off) pauses the trip's clock like the drawer
   });
   timeAuthority.update(_taFrameArgs);

@@ -1,5 +1,5 @@
 /**
- * TouchVerbButton.js - u15a (2026-10-22): two controls a touch player had no way to reach, glass only.
+ * TouchVerbButton.js - u15a (2026-10-22): controls a touch player had no way to reach, glass only (u16b added WIDE SCAN).
  *
  *   FLY THERE  (floor 4)        The Space key on floor 4 flies the transfer to the focused cluster. The button sends the
  *                               SAME key (KeyDispatch.pressKey('Space')), so the ladder's verb dispatch runs
@@ -18,6 +18,16 @@
  *                               button hiding (target gone, floor change, laser in spec), dispose. The laser can never stay
  *                               on with no finger down.
  *
+ *   WIDE SCAN  (floors 2-3)     u16b (2026-10-22, coordinator design D4, the owner may veto). Shift+S had no touch control outside
+ *                               the mission 3 lesson chip. Shown when a wide scan would help: floor 2 or 3, no target selected
+ *                               (a wide scan is for finding targets), not piloting a daughter, the player has done one wide
+ *                               scan before (the mission 3 lesson teaches it), the lesson's own ticker chip is not up
+ *                               (`ch3_wide_scan` is the active beat: on floor 2 the chip keeps that moment; on floor 3, where
+ *                               the hint strip and its chip are hidden, the button shows for the lesson even before the first
+ *                               wide scan), input not blocked. A tap presses Shift+S. While a scan
+ *                               runs or the wide scanner cools down it is dimmed but still pressable (the sensor's own
+ *                               "Wide scanner cooling down." line explains). DE-SPIN wins the slot if both ever qualify.
+ *
  * Why not ticker chips: the hint strip is display:none on floors 3-5 (FloorMask) and a ticker step button is click-only
  * (down and up back to back), so neither a floor-4 button nor a hold fits there.
  *
@@ -32,18 +42,28 @@ import { FloorContract } from '../core/FloorContract.js';
 
 export const FLY_BTN_ID = 'touch-verb-fly';
 export const DESPIN_BTN_ID = 'touch-verb-despin';
+export const WIDE_BTN_ID = 'touch-verb-widescan';
 
 /** The floor's Space verb (FloorContract spaceVerb) -> the label of the button that sends Space. One row per verb. */
 export const VERB_LABELS = Object.freeze({ 'plan-transfer': 'FLY THERE' });
 export const DESPIN_LABEL = 'DE-SPIN';
+export const WIDE_LABEL = 'WIDE SCAN';
 
 /** The key each button presses. */
 export const FLY_KEY = 'Space';
 export const DESPIN_KEY = 'KeyL';
+export const WIDE_KEY = 'Shift+KeyS';
+/** The mission 3 lesson beat whose own ticker chip (TouchActionChip BEAT_CHIPS) owns the wide-scan moment. */
+export const WIDE_LESSON_BEAT = 'ch3_wide_scan';
+/** The skill a first wide scan discovers (SkillsSystem scan_wide). */
+export const WIDE_SKILL = 'scan_wide';
 
 /** Floors that carry each button. */
 export const FLY_FLOOR = 4;
 export const DESPIN_FLOORS = Object.freeze([2, 3]);
+export const WIDE_FLOORS = Object.freeze([2, 3]);
+/** The floor where this button carries the mission 3 wide-scan lesson (the ticker chip is hidden on floor 3). */
+export const LESSON_BUTTON_FLOOR = 3;
 
 /** CSS px above the viewport bottom, by floor (floor 2: clear of the hint strip, 88 up to ~148 with a 44 px step button on it; gone on 3-5). */
 export const BOTTOM_PX = Object.freeze({ 2: 168, 3: 88, 4: 88 });
@@ -85,6 +105,10 @@ export class TouchVerbButton {
    * @param {() => boolean} [deps.isDespinEnabled]    default Constants.isFeatureEnabled('LASER_DESPIN')
    * @param {() => (object|null)} [deps.getDespinTarget]  the debris the laser would fire at (selector target, or the piloted daughter's station-keep target)
    * @param {(target:object) => (number|null)} [deps.getTargetDistanceM]  metres from the mother optic, null = unknown (laser treats as in range)
+   * @param {() => (object|null)} [deps.getActiveTarget]  u16b: the selected target (targetSelector.getActiveTarget); WIDE SCAN shows only with none
+   * @param {() => boolean} [deps.isPiloting]         u16b: a daughter is being piloted (WIDE SCAN hides)
+   * @param {() => boolean} [deps.isWideScanLearned]  u16b: SkillsSystem.isDiscovered('scan_wide'); default false (no button until the lesson)
+   * @param {() => ({active:boolean, wideCooldown:number}|null)} [deps.getWideScanState]  u16b: SensorSystem.getScanStatus (dims the button)
    * @param {Document} [deps.visibilityDoc]           where `visibilitychange` is heard (default `doc`)
    * @param {object} [deps.win]                       where blur / pagehide / pointer lift are heard (default `window`)
    * @param {boolean} [deps.poll=true]                false -> no timer (tests call refresh())
@@ -98,8 +122,11 @@ export class TouchVerbButton {
     this._pid = null;
     this._flyShown = false;
     this._despinShown = false;
+    this._wideShown = false;
+    this._beatId = null;
     this.flyEl = null;
     this.despinEl = null;
+    this.wideEl = null;
     this._winOff = [];
     this._glass = deps.glass !== false;
     if (!this._glass || !deps.doc || !deps.parent) return;
@@ -107,16 +134,21 @@ export class TouchVerbButton {
 
     this.flyEl = this._makeButton(doc, FLY_BTN_ID, 'FLY THERE');
     this.despinEl = this._makeButton(doc, DESPIN_BTN_ID, DESPIN_LABEL);
+    this.wideEl = this._makeButton(doc, WIDE_BTN_ID, WIDE_LABEL);
 
     // A finger on a button is nobody else's: no view drag, no radial, no scan-on-empty-tap from it.
     this._stop = (e) => { if (e && typeof e.stopPropagation === 'function') e.stopPropagation(); };
     for (const t of ['touchstart', 'mousedown', 'mouseup']) {
       this.flyEl.addEventListener(t, this._stop);
       this.despinEl.addEventListener(t, this._stop);
+      this.wideEl.addEventListener(t, this._stop);
     }
     this.flyEl.addEventListener('pointerdown', this._stop);
     this.flyEl.addEventListener('pointerup', this._stop);
     this.flyEl.addEventListener('click', (e) => this._onFlyClick(e));
+    this.wideEl.addEventListener('pointerdown', this._stop);
+    this.wideEl.addEventListener('pointerup', this._stop);
+    this.wideEl.addEventListener('click', (e) => this._onWideClick(e));
 
     const de = this.despinEl;
     de.addEventListener('pointerdown', (e) => this._onDespinDown(e));
@@ -130,6 +162,7 @@ export class TouchVerbButton {
 
     deps.parent.appendChild(this.flyEl);
     deps.parent.appendChild(this.despinEl);
+    deps.parent.appendChild(this.wideEl);
 
     // The page going away from the finger: hidden tab, lost focus, a lifted finger the button never heard.
     const vdoc = deps.visibilityDoc || doc;
@@ -156,6 +189,17 @@ export class TouchVerbButton {
         const off = deps.bus.on(E[name], () => this.refresh());
         if (typeof off === 'function') this._unsubs.push(off);
       }
+      // u16b: the mission 3 lesson's ticker chip owns the wide-scan moment while its beat is the active one (same events and
+      // rule as TouchActionChip: any beat starting replaces it; its own satisfied event, a reset or a new game ends it).
+      const sub = (name, fn) => {
+        if (!E[name]) return;
+        const off = deps.bus.on(E[name], fn);
+        if (typeof off === 'function') this._unsubs.push(off);
+      };
+      sub('MISSION_BEAT_STARTED', (d) => { this._beatId = d && typeof d.beatId === 'string' ? d.beatId : null; this.refresh(); });
+      sub('MISSION_BEAT_SATISFIED', (d) => { if (d && d.beatId === this._beatId) this._beatId = null; this.refresh(); });
+      sub('GAME_RESET', () => { this._beatId = null; this.refresh(); });
+      for (const name of ['SCAN_INITIATED', 'SCAN_COMPLETE', 'SKILL_DISCOVERED']) sub(name, () => this.refresh());
     }
     if (deps.poll !== false && typeof setInterval === 'function') {
       this._timer = setInterval(() => this.refresh(), POLL_MS);
@@ -246,6 +290,38 @@ export class TouchVerbButton {
     return t;
   }
 
+  /**
+   * True when WIDE SCAN is on offer: glass, floors 2-3, not riding, input free, no target selected, not piloting, the wide
+   * scan learned, the lesson's chip not up, and DE-SPIN not already holding the slot.
+   * @returns {boolean}
+   */
+  wideOffer() {
+    if (!this._glass || this._disposed) return false;
+    if (!WIDE_FLOORS.includes(this._floor())) return false;
+    try { if (this._d.isRiding && this._d.isRiding()) return false; } catch (_e) { return false; }
+    if (this._blocked()) return false;
+    try { if (this._d.isPiloting && this._d.isPiloting()) return false; } catch (_e) { return false; }
+    try { if (this._d.getActiveTarget && this._d.getActiveTarget()) return false; } catch (_e) { return false; }
+    if (this._beatId === WIDE_LESSON_BEAT) {
+      // The mission 3 lesson. Floor 2: the ticker chip (WIDE SCAN) owns the moment. Floor 3: the hint strip and its chip are
+      // hidden there, so this button is the only wide-scan control, and the skill is not learned yet (the lesson teaches it).
+      if (this._floor() !== LESSON_BUTTON_FLOOR) return false;
+    } else {
+      let learned = false;
+      try { learned = typeof this._d.isWideScanLearned === 'function' ? !!this._d.isWideScanLearned() : false; } catch (_e) { learned = false; }
+      if (!learned) return false;
+    }
+    if (this.despinTarget()) return false;
+    return true;
+  }
+
+  /** @returns {boolean} a wide scan is running or the wide scanner is cooling down (the button is dimmed, still pressable) */
+  wideBusy() {
+    let st = null;
+    try { st = this._d.getWideScanState ? this._d.getWideScanState() : null; } catch (_e) { st = null; }
+    return !!st && (st.active === true || (st.wideCooldown || 0) > 0);
+  }
+
   // ── drawing ─────────────────────────────────────────────────────────────
 
   /** @private write-on-change show / hide */
@@ -275,6 +351,34 @@ export class TouchVerbButton {
     }
     this._show(this.despinEl, !!t);
     this._despinShown = !!t;
+
+    const wide = this.wideOffer();
+    if (wide) {
+      const bottom = (BOTTOM_PX[floor] ?? BOTTOM_PX[3]) + 'px';
+      if (this.wideEl.style.bottom !== bottom) this.wideEl.style.bottom = bottom;
+      const busy = this.wideBusy();
+      const opacity = busy ? '0.5' : '1';
+      if (this.wideEl.style.opacity !== opacity) this.wideEl.style.opacity = opacity;
+      const cooling = this.wideEl.hasAttribute('data-cooling');
+      if (busy && !cooling) this.wideEl.setAttribute('data-cooling', 'true');
+      else if (!busy && cooling) this.wideEl.removeAttribute('data-cooling');
+    }
+    this._show(this.wideEl, wide);
+    this._wideShown = wide;
+  }
+
+  // ── WIDE SCAN ───────────────────────────────────────────────────────────
+
+  /** @private a tap = Shift+S (dimmed while cooling down: still pressed, the sensor says why it refuses) */
+  _onWideClick(e) {
+    this._stop(e);
+    if (this._disposed) return;
+    if (!this.wideOffer()) { this.refresh(); return; }   // stale: no target-free floor-2/3 moment any more
+    try { if (typeof this.wideEl.blur === 'function') this.wideEl.blur(); } catch (_e) { /* stub */ }
+    if (typeof this._d.press === 'function') {
+      try { this._d.press(WIDE_KEY); } catch (_e) { /* dep */ }
+    }
+    this.refresh();
   }
 
   // ── FLY THERE ───────────────────────────────────────────────────────────
@@ -364,11 +468,12 @@ export class TouchVerbButton {
     this._winOff = [];
     if (this._timer != null && typeof clearInterval === 'function') clearInterval(this._timer);
     this._timer = null;
-    for (const el of [this.flyEl, this.despinEl]) {
+    for (const el of [this.flyEl, this.despinEl, this.wideEl]) {
       try { if (el && el.parentNode) el.parentNode.removeChild(el); } catch (_e) { /* stub */ }
     }
     this.flyEl = null;
     this.despinEl = null;
+    this.wideEl = null;
   }
 }
 

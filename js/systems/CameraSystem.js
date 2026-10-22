@@ -21,6 +21,7 @@ import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
 import { earthTurnTarget, earthTurnDirAt, EARTH_TURN_S, EARTH_TURN_MIN_GAP_U, earthFrameTurnS, earthFrameEase } from './EarthTurn.js';
 import { testsRequestedHere } from '../ui/hud/TestsSwitch.js';
+import { GestureHints } from '../ui/hud/GestureHints.js';
 
 // ============================================================================
 // VIEW MODES
@@ -5790,12 +5791,14 @@ export class CameraSystem {
     // get stuck in LOOK AROUND (or the legacy INSPECTION view) unknowingly.
     const isDefault = view === CameraViews.CHASE;
 
+    // u16b fix 1: glass has no V or 1-4 keys, so the badge is the bare label there (read at draw time, desktop unchanged).
+    const glass = GestureHints.isGlass();
     if (view === CameraViews.ARM_PILOT) {
-      this._viewIndicator.textContent = `${VIEW_LABELS[view]}  [1-4]`;
+      this._viewIndicator.textContent = glass ? `${VIEW_LABELS[view]}` : `${VIEW_LABELS[view]}  [1-4]`;
     } else if (isDefault) {
-      this._viewIndicator.textContent = `${VIEW_LABELS[view]}  [V]`;
+      this._viewIndicator.textContent = glass ? `${VIEW_LABELS[view]}` : `${VIEW_LABELS[view]}  [V]`;
     } else {
-      this._viewIndicator.textContent = `${VIEW_LABELS[view]} · [V] to fly`;
+      this._viewIndicator.textContent = glass ? `${VIEW_LABELS[view]}` : `${VIEW_LABELS[view]} · [V] to fly`;
     }
 
     this._viewIndicator.style.opacity = '1';

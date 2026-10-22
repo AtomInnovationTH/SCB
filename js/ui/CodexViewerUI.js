@@ -118,6 +118,8 @@ const LOCKED_TAG_HTML = ' <span class="codex-locked-tag" style="font-size:10px;l
 // selection has *rested* on an unlocked/unseen entry this long — arrow-scrubbing
 // and transient renders (deep-link routing, filter churn) never mark seen.
 const SEEN_DWELL_MS = 1500;
+/** u16b fix 1: how long the overlay swallows clicks after an open from the connections map (a double-click / double-tap's second click). */
+const MAP_OPEN_SWALLOW_MS = 400;
 
 // A deep link that lands on the page's WARNING box (FURNACE gag v2 amendment,
 // plan 1788957399035 §7.27 — Houston's "manual"): after the entry renders the
@@ -291,6 +293,30 @@ export class CodexViewerUI {
     return true;
   }
 
+  /** @private ms clock for the map-open click guard (tests replace it) */
+  _nowMs() { return (typeof performance !== 'undefined' && performance && typeof performance.now === 'function') ? performance.now() : Date.now(); }
+
+  /**
+   * @private u16b fix 1: open `id` from the connections map and swallow clicks on the overlay for MAP_OPEN_SWALLOW_MS, so the
+   * second click of a double-click / double-tap cannot act on the article that just replaced the map.
+   * @param {string} id
+   * @returns {boolean}
+   */
+  _openFromMap(id) {
+    this._swallowClicksUntil = this._nowMs() + MAP_OPEN_SWALLOW_MS;
+    return this.openEntry(id);
+  }
+
+  /** @private u16b fix 1: true while the map-open click guard is up */
+  _swallowsClick() { return typeof this._swallowClicksUntil === 'number' && this._nowMs() < this._swallowClicksUntil; }
+
+  /** @private u16b fix 1: the overlay's capture-phase click handler (see _buildDOM) */
+  _onOverlayClickCapture(e) {
+    if (!this._swallowsClick() || !e) return;
+    if (typeof e.stopPropagation === 'function') e.stopPropagation();
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+  }
+
   // ==========================================================================
   // DOM CONSTRUCTION
   // ==========================================================================
@@ -308,6 +334,10 @@ export class CodexViewerUI {
       justifyContent: 'center', alignItems: 'center',
       fontFamily: "var(--font-mono)", color: '#ccc',
     });
+    // u16b fix 1: right after an open FROM THE MAP, the overlay swallows clicks for a moment (capture phase, so no link or node
+    // under the finger hears them): the first click of a double-click / double-tap opened the article, its second click would
+    // land on the new article's text and could open a link.
+    overlay.addEventListener('click', (e) => this._onOverlayClickCapture(e), true);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) this._requestClose(); });
 
     // --- Panel ---
@@ -1629,7 +1659,7 @@ export class CodexViewerUI {
   }
 
   /** @private Slice 8 — render the reading pane as an SVG ego-map for `entry`.
-   * Single-click a node → re-center (stay in map); dblclick / Enter → openEntry
+   * Click a node → re-center (stay in map); click the CENTRED node, dblclick or Enter → openEntry
    * (exits map). Nodes are focusable for Enter. Locked nodes are dimmed, dashed,
    * and their label leads with [LOCKED]. Nodes carry no glyph: the label under
    * each circle is the entry's title (plan D-J). No physics/pan/zoom.
@@ -1689,7 +1719,7 @@ export class CodexViewerUI {
           <div style="flex:1;">
             <div style="font-size:11px;letter-spacing:0.14em;font-weight:bold;color:${accent};">CONNECTIONS</div>
             <div style="font-size:16px;font-weight:bold;color:#eee;">${entry.title}</div>
-            <div style="font-size:11px;color:#889;margin-top:2px;">${GestureHints.isGlass() ? 'Tap a node to re-center · double-tap it to open' : 'Click a node to re-center · double-click or Enter to open'}</div>
+            <div style="font-size:11px;color:#889;margin-top:2px;">${GestureHints.isGlass() ? 'Tap a node to center it · tap the center one to open' : 'Click a node to re-center · double-click or Enter to open'}</div>
           </div>
           ${this._mapToggleHtml('READ', accent, accentBg)}
         </div>
@@ -1719,12 +1749,17 @@ export class CodexViewerUI {
     reading.querySelectorAll('.codex-map-node').forEach(g => {
       const id = g.dataset.id;
       const isFocus = g.dataset.ring === '0';
-      if (!isFocus) {
+      // u16b D5: a tap on the centred node opens it (a touch player's double-tap is unreliable on iPad Safari); a tap on
+      // any other node moves it to the centre. dblclick and Enter still open; a desktop double-click that opens twice is
+      // harmless (openEntry just re-selects the same entry), and the overlay swallows clicks for MAP_OPEN_SWALLOW_MS after an open from the map.
+      if (isFocus) {
+        g.addEventListener('click', () => this._openFromMap(id));
+      } else {
         g.addEventListener('click', () => this._recenterMap(id));
       }
-      g.addEventListener('dblclick', () => this.openEntry(id));
+      g.addEventListener('dblclick', () => this._openFromMap(id));
       g.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); this.openEntry(id); }
+        if (e.key === 'Enter') { e.preventDefault(); this._openFromMap(id); }
       });
     });
   }
