@@ -40,7 +40,10 @@ const SELECTED_RETICLE_SCALE = 1.6;   // Selected target is bigger
  *  label) touches the band + this pad is skipped whole (never a half-drawn reticle). */
 const SCORE_STRIP_PAD_PX = 8;
 const CALLOUT_DURATION = 8;          // seconds for first-encounter callout labels
-const AP_BADGE_TOP_PX = 92;          // fixed y of the autopilot-engaged chip
+/** Fixed y of the autopilot-engaged chip, and its height (px). `Constants.TEACHING.OVERLAY_AP_BADGE_BOTTOM_PX` must equal
+ *  their sum (test-TeachingOverlay.js); `_drawApBadge` draws with both, so the drawing and the constant cannot drift. */
+export const AP_BADGE_TOP_PX = 92;
+export const AP_BADGE_H_PX = 19;
 
 /** Color scheme */
 const COLORS = {
@@ -62,13 +65,15 @@ export const OFFSCREEN_LABEL_GAP_PX = 4;
 
 /**
  * The box (axis-aligned, px) that `_drawArrowShape(x, y, angle, size)` fills and strokes: its four corners rotated
- * exactly as the canvas does (`translate(x, y)`, `rotate(-angle)`), grown by the stroke (the mitre at the tip reaches
+ * exactly as the canvas does (`translate(x, y)`, `rotate(angle)`), grown by the stroke (the mitre at the tip reaches
  * ~1.35 line widths past the corner). Kept next to the draw call so a change to one shows in the other's test.
  * @param {number} x @param {number} y @param {number} angle @param {number} size @param {number} [lineWidth=2.5]
  * @returns {{x:number, y:number, w:number, h:number}}
  */
 export function arrowShapeBox(x, y, angle, size, lineWidth = 2.5) {
-  const th = -angle;
+  // `angle` is a CANVAS angle (clockwise from +x, y down): `_getEdgePosition` returns atan2(screen dy, dx), so the tip
+  // (size, 0) lands on the bearing of the target. (u14: this used to be `-angle`, which pointed top / bottom arrows inward.)
+  const th = angle;
   const c = Math.cos(th), sn = Math.sin(th);
   const pts = [[size, 0], [-size * 0.5, -size * 0.6], [-size * 0.2, 0], [-size * 0.5, size * 0.6]];
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -135,15 +140,173 @@ export function offscreenLabelLayout(o) {
 }
 
 // ============================================================================
+// KEEPING MARKERS OFF THE HUD PANES (u14a) — pure helpers, testable without a canvas or a DOM
+// ============================================================================
+
+/** Ids of the HUD blocks a target marker must not cover (u14a A4). Rects are read from the DOM while shown. */
+export const HUD_OBSTACLE_IDS = [
+  'hud-score-panel', 'hud-left-column', 'hud-right-column', 'hud-targets-panel',
+  'hud-comms-panel', 'hud-pause-btn', 'hud-conjunction-panel',
+];
+/** The obstacle rects are re-read at most this often (seconds of reticle time) and on resize. */
+export const OBSTACLE_REFRESH_S = 0.25;
+/** Below this canvas width (phones, frozen by DECISIONS §32) there are no obstacles: today's drawing. */
+export const OBSTACLE_MIN_VIEW_W = 920;
+/** Clear space an edge marker keeps from an obstacle (px). */
+export const OBSTACLE_GAP_PX = 4;
+/** An edge arrow slides at most this fraction of the way to the screen centre looking for a clear spot. */
+export const OBSTACLE_SLIDE_MAX = 0.8;
+const OBSTACLE_SLIDE_STEP_PX = 32;   // coarse walk; the first clear stretch is then bisected down to OBSTACLE_SLIDE_FINE_PX
+const OBSTACLE_SLIDE_FINE_PX = 1;
+
+/**
+ * The visible HUD blocks, as `{left, top, right, bottom}` client rects: width and height > 0, not `display:none` /
+ * `visibility:hidden`. No DOM (tests, the menu backdrop) = an empty list.
+ * @param {Document} [doc] @param {Window} [win]
+ * @returns {Array<{left:number, top:number, right:number, bottom:number}>}
+ */
+export function readHudObstacles(doc = (typeof document !== 'undefined' ? document : null), win = (typeof window !== 'undefined' ? window : null)) {
+  const out = [];
+  if (!doc || typeof doc.getElementById !== 'function') return out;
+  for (const id of HUD_OBSTACLE_IDS) {
+    let el = null;
+    try { el = doc.getElementById(id); } catch (_) { el = null; }
+    if (!el || typeof el.getBoundingClientRect !== 'function') continue;
+    const b = el.getBoundingClientRect();
+    if (!b || !(b.width > 0) || !(b.height > 0)) continue;
+    try {
+      const cs = win && typeof win.getComputedStyle === 'function' ? win.getComputedStyle(el) : null;
+      if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) continue;
+    } catch (_) { /* no computed style: the rect alone decides */ }
+    out.push({ left: b.left, top: b.top, right: b.right, bottom: b.bottom });
+  }
+  return out;
+}
+
+/** The pane rect grown outward to whole pixels, so an anti-aliased clip edge never leaves a faint line inside the pane. */
+export function snapRectOut(r) {
+  return { left: Math.floor(r.left), top: Math.floor(r.top), right: Math.ceil(r.right), bottom: Math.ceil(r.bottom) };
+}
+
+/**
+ * Rects that cover exactly the same area but never overlap each other (contained ones dropped, partly overlapping ones
+ * cut into pieces). An even-odd clip needs this: two overlapping holes would cancel in their overlap and let a marker
+ * through. Input and output are `{left, top, right, bottom}`.
+ */
+export function disjointRects(rects) {
+  const pieces = [];
+  for (const r of rects) {
+    let cur = [{ left: r.left, top: r.top, right: r.right, bottom: r.bottom }];
+    for (const q of pieces) {
+      const next = [];
+      for (const c of cur) {
+        if (q.left >= c.right || q.right <= c.left || q.top >= c.bottom || q.bottom <= c.top) { next.push(c); continue; }
+        if (c.top < q.top) next.push({ left: c.left, top: c.top, right: c.right, bottom: q.top });
+        if (c.bottom > q.bottom) next.push({ left: c.left, top: q.bottom, right: c.right, bottom: c.bottom });
+        const t = Math.max(c.top, q.top), b = Math.min(c.bottom, q.bottom);
+        if (c.left < q.left) next.push({ left: c.left, top: t, right: q.left, bottom: b });
+        if (c.right > q.right) next.push({ left: q.right, top: t, right: c.right, bottom: b });
+      }
+      cur = next;
+    }
+    for (const c of cur) if (c.right > c.left && c.bottom > c.top) pieces.push(c);
+  }
+  return pieces;
+}
+
+/** Area (px²) of the box `{x, y, w, h}` that lies inside the obstacle grown by `gap` on every side. */
+export function boxObstacleOverlap(box, ob, gap = OBSTACLE_GAP_PX) {
+  const w = Math.min(box.x + box.w, ob.right + gap) - Math.max(box.x, ob.left - gap);
+  const h = Math.min(box.y + box.h, ob.bottom + gap) - Math.max(box.y, ob.top - gap);
+  return w > 0 && h > 0 ? w * h : 0;
+}
+
+/**
+ * Edge arrow clear of the HUD panes (u14a A3). If the arrow's box or its label block (from `layoutFn`) touches an
+ * obstacle (+ gap), the anchor slides inward along the line from the anchor to the screen centre, so the arrow keeps
+ * its bearing and still points at the target, and the label layout is recomputed at every step, until both boxes clear
+ * every obstacle. It stops at `OBSTACLE_SLIDE_MAX` of the way; if nothing clears, the position with the least overlap wins.
+ * Cost (u14a fix round 1): the walk is coarse (`opts.step`, 32 px), then the last blocked/clear pair is bisected to
+ * `opts.fine` (1 px), so a slide of 150 px takes about 11 layout calls, not 75.
+ *
+ * @param {{x:number,y:number,angle:number}} edge   the anchor from `_getEdgePosition`
+ * @param {{x:number,y:number}} centre              screen centre
+ * @param {Array<{left:number,top:number,right:number,bottom:number}>} obstacles
+ * @param {(edge:{x:number,y:number,angle:number}) => {arrow:{x,y,w,h}, block:{x,y,w,h}}} layoutFn
+ * @param {{gap?:number, max?:number, step?:number, fine?:number}} [opts]
+ * @returns {{edge:{x:number,y:number,angle:number}, layout:object, moved:boolean, fraction:number, overlap:number}}
+ */
+export function clearOfObstacles(edge, centre, obstacles, layoutFn, opts = {}) {
+  const gap = opts.gap != null ? opts.gap : OBSTACLE_GAP_PX;
+  const max = opts.max != null ? opts.max : OBSTACLE_SLIDE_MAX;
+  const step = opts.step != null ? opts.step : OBSTACLE_SLIDE_STEP_PX;
+  const fine = opts.fine != null ? opts.fine : OBSTACLE_SLIDE_FINE_PX;
+  const overlapAt = (lay) => {
+    let n = 0;
+    for (const ob of obstacles) n += boxObstacleOverlap(lay.arrow, ob, gap) + boxObstacleOverlap(lay.block, ob, gap);
+    return n;
+  };
+  const first = layoutFn(edge);
+  const o0 = obstacles && obstacles.length ? overlapAt(first) : 0;
+  if (o0 === 0) return { edge, layout: first, moved: false, fraction: 0, overlap: 0 };
+  const dx = centre.x - edge.x, dy = centre.y - edge.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1e-6) return { edge, layout: first, moved: false, fraction: 0, overlap: o0 };
+  let best = { edge, layout: first, moved: false, fraction: 0, overlap: o0 };
+  const reach = dist * max;                       // furthest slide, in px
+  const n = Math.max(1, Math.floor(reach / step));
+  const at = (px) => ({ x: edge.x + dx * (px / dist), y: edge.y + dy * (px / dist), angle: edge.angle });
+  let lastBlocked = 0;                            // slide (px) of the last position that still overlapped
+  for (let i = 1; i <= n; i++) {
+    const px = Math.min(i * step, reach);
+    const e = at(px);
+    const lay = layoutFn(e);
+    const o = overlapAt(lay);
+    if (o < best.overlap) best = { edge: e, layout: lay, moved: true, fraction: px / dist, overlap: o };
+    if (o === 0) {
+      // first clear stretch found: bisect between the last blocked position and this one down to `fine` px
+      let lo = lastBlocked, hi = px;
+      while (hi - lo > fine) {
+        const mid = (lo + hi) / 2;
+        const em = at(mid);
+        const lm = layoutFn(em);
+        if (overlapAt(lm) === 0) { hi = mid; best = { edge: em, layout: lm, moved: true, fraction: mid / dist, overlap: 0 }; }
+        else lo = mid;
+      }
+      break;
+    }
+    lastBlocked = px;
+  }
+  return best;
+}
+
+const NO_OBSTACLES = Object.freeze([]);
+
+// ============================================================================
 // TARGET RETICLE SYSTEM
 // ============================================================================
 
 export class TargetReticle {
   /**
    * @param {THREE.PerspectiveCamera} camera - The scene camera
+   * @param {object} [opts]
+   * @param {() => Array<{left:number,top:number,right:number,bottom:number}>} [opts.obstacleReader] — the HUD rects markers
+   *   keep clear of (u14a A4); default: the visible HUD blocks read from the DOM (`readHudObstacles`).
    */
-  constructor(camera) {
+  constructor(camera, opts = {}) {
     this.camera = camera;
+
+    // u14a: HUD rects target markers stay off (cached, re-read every OBSTACLE_REFRESH_S and on resize)
+    this._obstacleReader = (opts && typeof opts.obstacleReader === 'function') ? opts.obstacleReader : null;
+    this._obstacleCache = null;
+    this._obstacleDisjoint = null;
+    this._obstacleAt = 0;
+    this._shakeX = 0;          // the shake translate in effect, so the clip stays in SCREEN coordinates
+    this._shakeY = 0;
+    this._apBadgeRect = null;  // where the AP chip was last drawn (edge arrows keep clear of it)
+    this._apRectObj = { left: 0, top: 0, right: 0, bottom: 0 };  // reused every frame: no per-frame allocation
+    this._edgeObsBase = null;  // the cached HUD list `_edgeObsList` was built from
+    this._edgeObsList = null;  // HUD rects + the AP rect, for edge arrows while AP is on
 
     /** @type {HTMLCanvasElement} */
     this.canvas = null;
@@ -421,6 +584,7 @@ export class TargetReticle {
     this._height = window.innerHeight;
     this._halfW = this._width / 2;
     this._halfH = this._height / 2;
+    this._obstacleCache = null;   // u14a: the HUD moves with the window
     this.canvas.width = this._width * dpr;
     this.canvas.height = this._height * dpr;
     this.canvas.style.width = this._width + 'px';
@@ -440,6 +604,68 @@ export class TargetReticle {
    */
   setSelectedTarget(id) {
     this._selectedTargetId = id;
+  }
+
+  /**
+   * Replace the function that returns the HUD rects markers keep clear of (tests; or a host with its own layout).
+   * `null` = the default DOM reader. The cache is dropped.
+   * @param {(() => Array<{left:number,top:number,right:number,bottom:number}>)|null} fn
+   */
+  setObstacleReader(fn) {
+    this._obstacleReader = typeof fn === 'function' ? fn : null;
+    this._obstacleCache = null;
+  }
+
+  /**
+   * The visible HUD rects (u14a A4), cached for OBSTACLE_REFRESH_S of reticle time and dropped on resize. Empty below
+   * OBSTACLE_MIN_VIEW_W (phones: today's drawing) and without a DOM.
+   * @returns {Array<{left:number,top:number,right:number,bottom:number}>}
+   */
+  _getObstacles() {
+    if (!(this._width >= OBSTACLE_MIN_VIEW_W)) return NO_OBSTACLES;
+    const t = this._time || 0;
+    if (this._obstacleCache == null || t - this._obstacleAt >= OBSTACLE_REFRESH_S || t < this._obstacleAt) {
+      let r = null;
+      try { r = (this._obstacleReader || readHudObstacles)(); } catch (_) { r = null; }
+      this._obstacleCache = Array.isArray(r) ? r : [];
+      this._obstacleDisjoint = null;
+      this._obstacleAt = t;
+    }
+    return this._obstacleCache;
+  }
+
+  /** Obstacles for an edge arrow: the HUD blocks plus the AP chip while it is drawn (u14a A3 / A4). */
+  _getEdgeObstacles() {
+    const obs = this._getObstacles();
+    if (obs === NO_OBSTACLES || !this._apEngaged || !this._apBadgeRect) return obs;
+    // one list, rebuilt only when the cached HUD rects change (the AP rect is one object, updated in place)
+    if (this._edgeObsBase !== obs || this._edgeObsList == null) {
+      this._edgeObsBase = obs;
+      this._edgeObsList = obs.concat([this._apBadgeRect]);
+    }
+    return this._edgeObsList;
+  }
+
+  /**
+   * Cut the HUD blocks out of everything drawn from here to the caller's `ctx.restore()` (u14a A2): an even-odd clip of
+   * the whole canvas minus each obstacle rect. In SCREEN coordinates — the lasso shake translates the canvas, so the
+   * rects are shifted back by it. No obstacles = no clip call at all (today's call sequence).
+   * @private
+   */
+  _clipToObstacles() {
+    const obs = this._getObstacles();
+    const ctx = this.ctx;
+    if (!obs.length || !ctx || typeof ctx.clip !== 'function') return;
+    if (this._obstacleDisjoint == null || this._obstacleDisjointFor !== obs) {
+      this._obstacleDisjoint = disjointRects(obs.map(snapRectOut));
+      this._obstacleDisjointFor = obs;
+    }
+    const sx = this._shakeX || 0, sy = this._shakeY || 0;
+    const pad = 64;
+    ctx.beginPath();
+    ctx.rect(-pad - sx, -pad - sy, (this._width || 0) + 2 * pad, (this._height || 0) + 2 * pad);
+    for (const r of this._obstacleDisjoint) ctx.rect(r.left - sx, r.top - sy, r.right - r.left, r.bottom - r.top);
+    ctx.clip('evenodd');
   }
 
   /**
@@ -540,11 +766,13 @@ export class TargetReticle {
     const doShake = this._lassoShakeTimer > 0;
     if (doShake) {
       this.ctx.save();
-      this.ctx.translate((Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4);
+      this._shakeX = (Math.random() - 0.5) * 4;
+      this._shakeY = (Math.random() - 0.5) * 4;
+      this.ctx.translate(this._shakeX, this._shakeY);
     }
 
     if (!data || !data.playerPos) {
-      if (doShake) this.ctx.restore();
+      if (doShake) { this.ctx.restore(); this._shakeX = this._shakeY = 0; }
       // 2026-05-15 polish task 4: also gate the early-return arc on SK,
       // matching the main-path gate below at line ~544. Without this the
       // green "Ready" ring would still render on the first frame after
@@ -707,12 +935,12 @@ export class TargetReticle {
     }
 
     // Phase 6: Restore shake transform
-    if (doShake) this.ctx.restore();
+    if (doShake) { this.ctx.restore(); this._shakeX = this._shakeY = 0; }
 
     // Calm-HUD: autopilot-engaged badge — drawn from the top level, AFTER the
     // shake restore (a mode readout should not shake) and outside the
     // MANUAL_NAV gate above, so it is actually reachable in normal play.
-    if (this._apEngaged) this._drawApBadge();
+    if (this._apEngaged) this._drawApBadge(); else this._apBadgeRect = null;
 
     // Phase 6: Draw lasso cooldown arc (on top, no shake).
     // 2026-05-15 polish task 4: the cooldown arc's "Ready" state is a
@@ -995,6 +1223,7 @@ export class TargetReticle {
     }
 
     ctx.save();
+    this._clipToObstacles();
 
     if (isSelected) {
       // Steady alpha for selected target (Issue #5 — removed pulse)
@@ -1212,21 +1441,23 @@ export class TargetReticle {
       : label.length * 7.2;
     const padX = 8;
     const chipW = textW + padX * 2;
-    const chipH = 19;
     const cx = (this._width || 1280) / 2;
     const chipY = AP_BADGE_TOP_PX;
     const chipX = cx - chipW / 2;
+    const apr = this._apRectObj || (this._apRectObj = { left: 0, top: 0, right: 0, bottom: 0 });
+    apr.left = chipX; apr.top = chipY; apr.right = chipX + chipW; apr.bottom = chipY + AP_BADGE_H_PX;
+    this._apBadgeRect = apr;
 
     ctx.globalAlpha = finitePulse(this._time - this._apEngagedSince, { cycles: 1 });
     ctx.fillStyle = 'rgba(255, 170, 0, 0.16)';
-    ctx.fillRect(chipX, chipY, chipW, chipH);
+    ctx.fillRect(chipX, chipY, chipW, AP_BADGE_H_PX);
     ctx.strokeStyle = COLORS.yellow;
     ctx.lineWidth = 1.5;
-    ctx.strokeRect(chipX, chipY, chipW, chipH);
+    ctx.strokeRect(chipX, chipY, chipW, AP_BADGE_H_PX);
     ctx.fillStyle = COLORS.yellow;
     ctx.shadowColor = COLORS.yellow;
     ctx.shadowBlur = 6;
-    ctx.fillText(label, cx, chipY + chipH / 2);
+    ctx.fillText(label, cx, chipY + AP_BADGE_H_PX / 2);
     ctx.shadowBlur = 0;
     ctx.restore();
   }
@@ -1267,22 +1498,42 @@ export class TargetReticle {
 
     // Draw arrow
     const arrowSize = (law || isSelected) ? 12 : 8;
-    this._drawArrowShape(edge.x, edge.y, edge.angle, arrowSize);
-
     // Distance text (+ the type name above it for the selected target), in a block beside the arrow, never on it
-    ctx.shadowBlur = 0;
     const fontPx = isSelected ? 11 : 10;
-    ctx.font = isSelected ? mono(11, 'bold') : mono(10);
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
     const distText = distKm < 1 ? `${(distKm * 1000).toFixed(0)}m` : `${distKm.toFixed(1)}km`;
     const typeName = isSelected ? this._getTypeName(target.type) : null;
-    const lines = [];
-    if (typeName) lines.push({ t: typeName, w: this._textWidth(typeName, fontPx), h: fontPx + 1 });
-    lines.push({ t: distText, w: this._textWidth(distText, fontPx), h: fontPx + 1 });
-    const lay = offscreenLabelLayout({
-      edge, size: arrowSize, lineWidth: ctx.lineWidth, lines, viewW: this._width, viewH: this._height,
-    });
+    const prepText = () => {
+      ctx.font = isSelected ? mono(11, 'bold') : mono(10);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+    };
+    const buildLines = () => {
+      const ls = [];
+      if (typeName) ls.push({ t: typeName, w: this._textWidth(typeName, fontPx), h: fontPx + 1 });
+      ls.push({ t: distText, w: this._textWidth(distText, fontPx), h: fontPx + 1 });
+      return ls;
+    };
+    // u14a A3: a marker that would sit on a HUD pane slides inward along its bearing until it clears every pane
+    let lines = null, lay = null, at = edge;
+    const obs = this._getEdgeObstacles();
+    if (obs.length) {
+      prepText();
+      lines = buildLines();
+      const res = clearOfObstacles(edge, { x: this._halfW, y: this._halfH }, obs, (e) => offscreenLabelLayout({
+        edge: e, size: arrowSize, lineWidth: ctx.lineWidth, lines, viewW: this._width, viewH: this._height,
+      }));
+      at = res.edge; lay = res.layout;
+    }
+    this._drawArrowShape(at.x, at.y, at.angle, arrowSize);
+
+    ctx.shadowBlur = 0;
+    if (!lines) {
+      prepText();
+      lines = buildLines();
+      lay = offscreenLabelLayout({
+        edge, size: arrowSize, lineWidth: ctx.lineWidth, lines, viewW: this._width, viewH: this._height,
+      });
+    }
     for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i].t, lay.lines[i].cx, lay.lines[i].cy);
 
     ctx.restore();
@@ -1336,6 +1587,7 @@ export class TargetReticle {
     const size = 10 + 20 * distFactor;
 
     ctx.save();
+    this._clipToObstacles();
     ctx.strokeStyle = COLORS.white;
     ctx.lineWidth = 1.5;
     ctx.globalAlpha = 0.9;
@@ -1392,21 +1644,31 @@ export class TargetReticle {
     ctx.globalAlpha = alpha;
 
     const arrowSize = urgent ? 12 : 8;
-    this._drawArrowShape(edge.x, edge.y, edge.angle, arrowSize);
-
-    ctx.shadowBlur = 0;
     const fontPx = 10;
-    ctx.font = urgent ? mono(10, 'bold') : mono(10);
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
     const distText = `${distKm.toFixed(1)}km`;
     const label = urgent ? `WARN ${sat.name} ${distText}` : `${sat.name} ${distText}`;
-    // u13 D3: the label sits beside the arrow, never under it (same placement as the debris marker)
-    const lay = offscreenLabelLayout({
-      edge, size: arrowSize, lineWidth: ctx.lineWidth, lines: [{ w: this._textWidth(label, fontPx), h: fontPx + 1 }],
+    const prepText = () => {
+      ctx.font = urgent ? mono(10, 'bold') : mono(10);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+    };
+    // u13 D3: the label sits beside the arrow, never under it (same placement as the debris marker);
+    // u14a A3: and both stay off the HUD panes (slid inward along the bearing)
+    const layoutAt = (e) => offscreenLabelLayout({
+      edge: e, size: arrowSize, lineWidth: ctx.lineWidth, lines: [{ w: this._textWidth(label, fontPx), h: fontPx + 1 }],
       viewW: this._width, viewH: this._height,
     });
+    let lay = null, at = edge, prepped = false;
+    const obs = this._getEdgeObstacles();
+    if (obs.length) {
+      prepText(); prepped = true;
+      const res = clearOfObstacles(edge, { x: this._halfW, y: this._halfH }, obs, layoutAt);
+      at = res.edge; lay = res.layout;
+    }
+    this._drawArrowShape(at.x, at.y, at.angle, arrowSize);
+
+    ctx.shadowBlur = 0;
+    if (!prepped) { prepText(); lay = layoutAt(edge); }
     ctx.fillText(label, lay.lines[0].cx, lay.lines[0].cy);
 
     ctx.restore();
@@ -1731,7 +1993,7 @@ export class TargetReticle {
     const ctx = this.ctx;
     ctx.save();
     ctx.translate(x, y);
-    ctx.rotate(-angle); // Canvas angles are clockwise
+    ctx.rotate(angle); // `angle` is already a canvas angle (clockwise, y down): see _getEdgePosition
 
     ctx.beginPath();
     ctx.moveTo(size, 0);

@@ -493,6 +493,22 @@ const _fitDot = { x: 0, y: 0, w: DOT_PX, h: DOT_PX };
 const _fitBox = { x: 0, y: 0, w: 0, h: 0 };
 
 /**
+ * u13 D4 / u14a A6: is a label that is held through a short slot loss still drawn WHOLE where it was? Its dot must be
+ * fully on screen and, unless it is a bare dot, so must its pill in the slot it holds. (Was a closure in `update`;
+ * lifted so it can be tested. Allocation-free: scratch boxes.)
+ * @param {{_sx:number,_sy:number,w:number,_slot?:string,_dotOnly?:boolean,offX?:number,offY?:number}} item
+ * @param {number} W @param {number} H  the viewport
+ * @returns {boolean}
+ */
+export function heldWhole(item, W, H) {
+  _fitDot.x = item._sx - DOT_PX / 2; _fitDot.y = item._sy - DOT_PX / 2;
+  if (!boxInViewport(_fitDot, W, H)) return false;
+  if (item._dotOnly) return true;
+  slotBox(item._sx, item._sy, item.w, item._slot || 'E', _fitBox, item.offX, item.offY);
+  return boxInViewport(_fitBox, W, H);
+}
+
+/**
  * Pick the first free slot for a label, honouring hysteresis: if `prevSlot`
  * is still collision-free it is reused (prevents flicker as labels drift).
  * `keptBoxes` is an array-like of {x,y,w,h} already-reserved boxes (text pills
@@ -929,16 +945,9 @@ export class CityLabels {
       // it was until it has been without a slot for SLOT_LOSS_GRACE_MS — it
       // reserves no box and counts toward no cap while held, so it can only
       // overlap for that grace; a hidden one just stays hidden.
-      const heldWhole = (item) => {
-        _fitDot.x = item._sx - DOT_PX / 2; _fitDot.y = item._sy - DOT_PX / 2;
-        if (!boxInViewport(_fitDot, W, H)) return false;
-        if (item._dotOnly) return true;
-        slotBox(item._sx, item._sy, item.w, item._slot || 'E', _fitBox, item.offX, item.offY);
-        return boxInViewport(_fitBox, W, H);
-      };
       const lose = (item) => {
         // D4: a label held where it was is held only while that place is still whole on screen
-        if (item.shown && holdAfterLoss(true, item._lostAt, now) && heldWhole(item)) {
+        if (item.shown && holdAfterLoss(true, item._lostAt, now) && heldWhole(item, W, H)) {
           if (item._lostAt < 0) item._lostAt = now;
           draw(item, item._slot || 'E', item._dotOnly);
         } else {

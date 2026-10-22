@@ -106,9 +106,37 @@ function reEscape(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
  * @type {Readonly<Record<string,string>>}
  */
 const CHIP_LABELS = Object.freeze({ N: 'LAUNCH NET', D: 'SEND DAUGHTER', A: 'AUTOPILOT', S: 'SCAN', R: 'REEL' });
+const LETGO_LABEL = 'LET GO';      // u14b B1: K - the one button that lets the catch at the collar go
+const READ_LABEL = 'READ MORE';    // u14b B2: I - the full-screen library (the SPECS tab opens a different view)
 const RE_PAD_CHIP = /\b([Pp])ress N to stick the pad on\b/g;   // the daughter's pad tool: its own button
 const RE_NEXT_CHIP = /\b([Pp])ress T for next target\b/g;   // no chip: a tap on the piece itself selects it
+// u14b R1: the reminder lines whose key / mouse gesture HAS a touch control, worded for it on glass (no chip: the control is the
+// glass itself). "Press T to pick the next target." -> "Tap a piece to pick the next target."; "Scroll to zoom." -> "Pinch to zoom.";
+// "Use the arrow keys to turn." -> "Use the turn pad to turn." ("Drag to look around." is true on glass as it stands).
+const RE_PICK_CHIP = /\b([Pp])ress T to pick the next target\b/g;
+const RE_ZOOM_WORDS = /\b([Ss])croll to zoom\b/g;
+const RE_ARROW_WORDS = /\b([Uu])se the arrow keys to turn\b/g;
 const RE_PRESS_CHIP = /\b([Pp])ress ([NDASR])\b( to [A-Za-z]+\b)?/g;
+// u14b B1/B2: K lets the catch go, I reads more. Their tails say what the button already says, so they are dropped:
+// "Press K to let it go." -> "Tap LET GO."; "or press K to let the catch go." -> "or tap LET GO.";
+// "Press I to read more." / "Press I to read the specs." -> "Tap READ MORE.".
+const RE_LETGO_CHIP = /\b([Pp])ress K\b( to let (?:it|the catch) go\b)?/g;
+const RE_READ_CHIP = /\b([Pp])ress I\b( to (?:read more|read the specs|open Info)\b)?/g;
+
+/**
+ * u14b B3: the skill reminders (SKILLS.CATALOG, OnboardingDirector `remind_<skillId>`) whose key has a touch button, so the
+ * line can name it on glass: S, N, the daughter's tool, D, A (action chips) and I (READ MORE). Must equal the keys of
+ * TouchActionChip.REMINDER_KIND (a test ties them). Every other reminder that names a key or a mouse gesture (V, 7, 1-4, X,
+ * Shift S / R / 1-3 / +/-, period, ; ', Scroll, Drag) has no touch control, so on glass it is not posted.
+ */
+export const GLASS_REMINDER_SKILLS = Object.freeze(['scan_quick', 'collect_lasso', 'arm_pilot_capture', 'collect_deploy', 'nav_autopilot', 'manage_codex']);
+
+/**
+ * u14b R1: the reminders whose key / mouse gesture has a touch control but no chip: they ARE posted on glass, in touch words
+ * (`chipPhrase`: nav_target, nav_zoom, nav_arrows; nav_rotate's "Drag to look around." is already true on glass). Kept apart from
+ * GLASS_REMINDER_SKILLS, which a test ties to TouchActionChip.REMINDER_KIND.
+ */
+export const GLASS_TOUCH_WORD_SKILLS = Object.freeze(['nav_target', 'nav_zoom', 'nav_rotate', 'nav_arrows']);
 
 export class GestureHints {
   /** @returns {Readonly<Record<string, Readonly<GestureRow>>>} the frozen table */
@@ -170,7 +198,13 @@ export class GestureHints {
   static chipPhrase(text) {
     if (!_glass || typeof text !== 'string') return text;
     return text.replace(RE_PAD_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' STICK PAD')
-      .replace(RE_NEXT_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' a piece to pick the next target').replace(RE_PRESS_CHIP, (tok, p, letter, toVerb) => {
+      .replace(RE_NEXT_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' a piece to pick the next target')
+      .replace(RE_PICK_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' a piece to pick the next target')
+      .replace(RE_ZOOM_WORDS, (tok, s) => (s === 'S' ? 'Pinch' : 'pinch') + ' to zoom')
+      .replace(RE_ARROW_WORDS, (tok, u) => (u === 'U' ? 'Use' : 'use') + ' the turn pad to turn')
+      .replace(RE_LETGO_CHIP, (tok, p) => (p === 'P' ? 'Tap ' : 'tap ') + LETGO_LABEL)
+      .replace(RE_READ_CHIP, (tok, p) => (p === 'P' ? 'Tap ' : 'tap ') + READ_LABEL)
+      .replace(RE_PRESS_CHIP, (tok, p, letter, toVerb) => {
       const label = CHIP_LABELS[letter];
       const lead = (p === 'P' ? 'Tap ' : 'tap ') + label;
       if (!toVerb) return lead;
@@ -181,8 +215,8 @@ export class GestureHints {
   }
 
   /**
-   * u11 R3: which chips a line's "Press N/D/A/S" (and the pad line) asks for, in reading order, as chip kinds
-   * ('net'|'pad'|'daughter'|'autopilot'|'scan'|'reel'). Pure (not glass-gated): the same tokens `chipPhrase` rewrites.
+   * u11 R3: which chips a line's "Press N/D/A/S/R/K/I" (and the pad line) asks for, in reading order, as chip kinds
+   * ('net'|'pad'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'read'). Pure (not glass-gated): the same tokens `chipPhrase` rewrites.
    * @param {string} text
    * @returns {string[]}
    */
@@ -192,7 +226,24 @@ export class GestureHints {
     const KIND = { N: 'net', D: 'daughter', A: 'autopilot', S: 'scan', R: 'reel' };
     const rest = text.replace(RE_PAD_CHIP, (tok, p, off) => { found.push([off, 'pad']); return ' '.repeat(tok.length); });
     rest.replace(RE_PRESS_CHIP, (tok, p, letter, toVerb, off) => { found.push([off, KIND[letter]]); return tok; });
+    rest.replace(RE_LETGO_CHIP, (tok, p, tail, off) => { found.push([off, 'letgo']); return tok; });
+    rest.replace(RE_READ_CHIP, (tok, p, tail, off) => { found.push([off, 'read']); return tok; });
     return found.sort((a, b) => a[0] - b[0]).map(f => f[1]);
+  }
+
+  /**
+   * u14b B3: may a stale-skill reminder for this skill be posted now? Desktop: always. Glass: only when the skill has no key
+   * (label-only reminder) or its key has a touch button (GLASS_REMINDER_SKILLS); a reminder that tells a touch player to
+   * press V, 7, X or Shift S would name a key they do not have.
+   * @param {{id?:string, key?:(string|null)}} def  the SKILLS.CATALOG entry
+   * @param {string} [skillId]  the reminder's skill id (when the entry carries none)
+   * @returns {boolean}
+   */
+  static reminderFitsGlass(def, skillId) {
+    if (!_glass) return true;
+    if (!def || !def.key) return true;
+    const id = def.id || skillId;
+    return GLASS_REMINDER_SKILLS.includes(id) || GLASS_TOUCH_WORD_SKILLS.includes(id);
   }
 
   /**

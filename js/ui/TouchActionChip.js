@@ -30,6 +30,14 @@
  *      game at the moment the action is on offer).
  *   R14 (2026-10-21) a reminder whose chip its gate holds back is taken down (HINT_SATISFIED for its id), so no text
  *      names a button that is not on screen; when the gate is open the reminder stays, with its chip. Glass only.
+ *   u14b (2026-10-21) B1 K: a line that names K ("Press K to let it go.") brings the LET GO chip (KeyK), R3 rules except
+ *      that it does NOT end on "target cleared" (the target is cleared when the catch berths, which can come before
+ *      the line): it ends when THAT catch leaves the collar (released, taken by the furnace, handed to a daughter or a
+ *      radiator), on KeyK, on floor left, or after 30 s. So a LET GO tap never lets go of a different, later catch.
+ *      B2 I: a line that names I brings READ MORE (KeyI), plain R3 rules (the SPECS tab opens a different view).
+ *   fix round 1 (2026-10-22) R3: a missing debris id is never "the same catch" (no LET GO chip for a catch with no id; a new berth
+ *      ends the line). R4: LET GO takes the step slot from a teaching step chip (the ticker shelves the beat's chip and brings it
+ *      back when LET GO leaves; a beat chip posted meanwhile is answered by re-posting LET GO on top).
  *   R4 (a) HINT_SATISFIED is re-read one tick later (a beat chip leaving and the next arriving in the same tick must
  *      not flash ours); (b) only a MOTHER shot counts as "in flight".
  *
@@ -39,6 +47,7 @@
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { GestureHints } from './hud/GestureHints.js';
+import { captureNetSystem } from '../entities/CaptureNet.js';
 
 export const TOUCH_ACTION_CHIP_ID = 'touch_action_chip';
 
@@ -51,10 +60,14 @@ const CHIPS = Object.freeze({
   scan: Object.freeze({ text: 'Scan', glyph: 'S', keys: Object.freeze(['KeyS']), press: 'KeyS', button: 'SCAN' }),
   // R8: the radial's REEL (TouchControls RADIAL_VERBS) - KeyR recalls the selected daughter if eligible, else the closest.
   reel: Object.freeze({ text: 'Reel her home', glyph: 'R', keys: Object.freeze(['KeyR']), press: 'KeyR', button: 'REEL' }),
+  // u14b B1: K lets the catch at the collar go (CaptureNet.releaseDockedCatch, refusals included).
+  letgo: Object.freeze({ text: 'Let the catch go', glyph: 'K', keys: Object.freeze(['KeyK']), press: 'KeyK', button: 'LET GO' }),
+  // u14b B2: I opens the full-screen library; the SPECS tab opens a different (side) view, so it needs its own button.
+  read: Object.freeze({ text: 'Read more', glyph: 'I', keys: Object.freeze(['KeyI']), press: 'KeyI', button: 'READ MORE' }),
 });
 
 /** The key each chip kind presses (a physical or tapped press of it ends a line chip). */
-const KIND_KEY = Object.freeze({ net: 'KeyN', pad: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR' });
+const KIND_KEY = Object.freeze({ net: 'KeyN', pad: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR', letgo: 'KeyK', read: 'KeyI' });
 
 /**
  * R13: the skill reminders that name an action key (SKILLS.CATALOG `say`, posted by OnboardingDirector._onSkillReminded
@@ -62,6 +75,7 @@ const KIND_KEY = Object.freeze({ net: 'KeyN', pad: 'KeyN', daughter: 'KeyD', aut
  */
 export const REMINDER_KIND = Object.freeze({
   scan_quick: 'scan', collect_lasso: 'net', arm_pilot_capture: 'net', collect_deploy: 'daughter', nav_autopilot: 'autopilot',
+  manage_codex: 'read',   // u14b B2: "Tap READ MORE." - the reminder's chip is always actionable
 });
 
 /** R3: how long a line chip stays when nothing else ends it. */
@@ -83,13 +97,17 @@ export class TouchActionChip {
    * @param {() => boolean} [deps.getReelable]  R9: a daughter is out and idle (reeling her home frees one); omitted = never
    * @param {() => ({daughterCan:boolean, autopilot:boolean}|null)} [deps.getFarState]  R2: null = no piece selected;
    *        else whether a docked daughter with nets can reach it, and whether the autopilot is already flying.
+   * @param {() => (object|null)} [deps.getCollarCatch]  u14b B1: the mother's docked catch (CaptureNet `getDockedCatch`; default: the
+   *        captureNetSystem singleton). LET GO stands only while it is BERTHED or COLLARED with the debris the line was made
+   *        for: a hand-off to a radiator or a daughter (TRANSFERRING), a leash that is cut, a teardown or a later catch end it
+   *        even when no event says so. `null` -> events only (tests).
    * @param {() => number} [deps.now]  ms clock (tests)
    * @param {(fn:Function)=>void} [deps.schedule]  runs `fn` one tick later (R4a); tests pass a synchronous or queued one
    * @param {boolean} [deps.glass=true]  false -> never posts (desktop)
    * @param {boolean} [deps.poll=true]   false -> no timer (tests drive `evaluate()`)
    */
   constructor({ eventBus, ticker = null, getFloor = null, getMotherNets = null, hasDaughter = null, getHolding = null,
-    getFarState = null, getReelable = null, now = null, schedule = null, glass = true, poll = true } = {}) {
+    getFarState = null, getReelable = null, getCollarCatch = () => captureNetSystem.getDockedCatch(), now = null, schedule = null, glass = true, poll = true } = {}) {
     this._eb = eventBus;
     this._ticker = ticker;
     this._getFloor = getFloor;
@@ -97,6 +115,7 @@ export class TouchActionChip {
     this._getHolding = getHolding;
     this._getFarState = getFarState;
     this._getReelable = getReelable;
+    this._getCollarCatch = typeof getCollarCatch === 'function' ? getCollarCatch : null;
     this._now = now || (() => Date.now());
     this._schedule = schedule || ((fn) => { if (typeof setTimeout === 'function') setTimeout(fn, 0); else fn(); });
     this._glass = glass !== false;
@@ -108,6 +127,7 @@ export class TouchActionChip {
     this._daughterOut = false;     // a daughter was just sent for this target
     this._holding = new Map();     // armId -> tool: daughters holding station on the target (event fallback, no getHolding)
     this._line = null;             // R3: { kind, until } - a shown line named this key
+    this._collarId = null;         // u14b B1: debris id of the catch at the collar (from NET_BERTHED / the parked credit)
     this._nets = Constants?.CAPTURE_NET?.LARGE?.MAGAZINE_SIZE ?? 4;
     try {
       const n = getMotherNets ? getMotherNets() : undefined;
@@ -131,7 +151,9 @@ export class TouchActionChip {
     on(Events.TARGET_OUT_OF_RANGE, re(() => { this._inRange = false; this._rangeKnown = true; this._selected = true; }));
     on(Events.TARGET_CLEARED, re(() => {
       this._inRange = false; this._rangeKnown = false; this._selected = false;
-      this._denied = false; this._daughterOut = false; this._line = null;
+      this._denied = false; this._daughterOut = false;
+      // u14b B1: the target is cleared when the catch berths - a LET GO line outlives that (it ends when the catch leaves).
+      if (!(this._line && this._line.kind === 'letgo')) this._line = null;
     }));
     on(Events.TARGET_SELECTED, re(() => { this._denied = false; this._rangeKnown = false; this._selected = true; }));
     on(Events.NET_INVENTORY_CHANGED, re((d) => {
@@ -149,6 +171,20 @@ export class TouchActionChip {
     for (const n of ['NET_CATCH_SUCCESS', 'NET_CATCH_MISS']) {
       on(Events[n], re((d) => { if (motherNet(d)) this._inFlight = false; }));
     }
+    // u14b B1: which catch sits at the collar, and when it leaves (any of these ends a LET GO line made for it).
+    // A NEW berth while a LET GO line is up is a different catch (a missing id is no proof of the same one): the line ends.
+    on(Events.NET_BERTHED, re((d) => {
+      this._collarId = d && d.debrisId != null ? d.debrisId : null;
+      if (this._line && this._line.kind === 'letgo' && !this._sameCatch(this._line.catchId, this._collarId)) this._line = null;
+    }));
+    on(Events.CATCH_PROCESSED, re((d) => {
+      if (!d || d.source !== 'mother') return;
+      if (d.parked) this._collarId = d.debrisId != null ? d.debrisId : this._collarId;
+      else if (d.digested) this._catchLeft(d.debrisId);
+    }));
+    on(Events.NET_RELEASED, re((d) => { this._catchLeft(d && d.debrisId); }));
+    on(Events.CARGO_TRANSFER_START, re((d) => { if (d && d.from && d.from.kind === 'collar') this._catchLeft(d.debrisId); }));
+    on(Events.CARGO_TRANSFER_COMPLETE, re((d) => { this._catchLeft(d && d.debrisId); }));
     on(Events.ARM_DEPLOYED, re(() => { this._denied = false; this._daughterOut = true; }));
     if (!getHolding) {
       on(Events.STATION_KEEP_ENTERED, re((d) => { if (d && d.armId != null) this._holding.set(d.armId, d.tool || null); }));
@@ -163,11 +199,13 @@ export class TouchActionChip {
     on(Events.HINT_SATISFIED, () => this._schedule(() => this.evaluate()));
     on(Events.GAME_RESET, re(() => {
       this._inRange = false; this._rangeKnown = false; this._selected = false; this._denied = false;
-      this._inFlight = false; this._daughterOut = false; this._holding.clear(); this._line = null;
+      this._inFlight = false; this._daughterOut = false; this._holding.clear(); this._line = null; this._collarId = null;
       this._nets = Constants?.CAPTURE_NET?.LARGE?.MAGAZINE_SIZE ?? 4;
     }));
     // R13: a skill reminder that names an action key (gated by state: see wanted()).
     on(Events.HINT_POSTED, (d) => {
+      // u14b R4: a beat's step chip posted while LET GO is up would shelve it (one step at a time): take the slot back.
+      if (d && d.step === true && d.id !== TOUCH_ACTION_CHIP_ID && this._shown === 'letgo') this._schedule(() => this._reclaimSlot());
       if (!d || typeof d.id !== 'string' || !d.id.startsWith('remind_')) return;
       const kind = REMINDER_KIND[d.skillId];
       if (kind) this.onLine([kind], true, d.id);
@@ -185,7 +223,7 @@ export class TouchActionChip {
   }
 
   /**
-   * R3: a comms line naming these chip kinds ('net'|'pad'|'daughter'|'autopilot'|'scan') was stored. The first one
+   * R3: a comms line naming these chip kinds ('net'|'pad'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'read') was stored. The first one
    * gets a chip for LINE_CHIP_MS (it outranks the state chip), unless a beat chip holds the slot.
    * @param {string[]} kinds
    * @param {boolean} [gated=false]  R13: a reminder - the chip comes (and stays) only while its key would act now
@@ -195,7 +233,51 @@ export class TouchActionChip {
     if (!this._glass || this._disposed || !Array.isArray(kinds) || !kinds.length) return;
     const kind = kinds.find(k => CHIPS[k]);
     if (!kind) return;
-    this._line = { kind, until: this._now() + LINE_CHIP_MS, gated: gated === true, hintId: gated === true ? hintId : null };
+    let catchId = null;
+    if (kind === 'letgo') {
+      const st = this._collarState();
+      if (st === null) return;                       // nothing is mated at the collar: nothing to let go
+      catchId = st && st.id != null ? st.id : this._collarId;
+      if (catchId == null) return;                   // u14b R3: a catch with no id cannot be told from a later one: no chip
+    }
+    this._line = { kind, until: this._now() + LINE_CHIP_MS, gated: gated === true, hintId: gated === true ? hintId : null, catchId };
+    this.evaluate();
+  }
+
+  /**
+   * @private u14b B1: a catch left the collar (released, digested, handed to a daughter or a radiator). It ends a LET GO
+   * line made for that catch; a line made while the catch's id was unknown ends on any such departure. Other pieces
+   * (a cut piece flying off, a later catch) leave a line for a different catch standing.
+   */
+  _catchLeft(debrisId) {
+    // A leave event with no id still ends the line (ending is the safe side: the tap would act on whatever is at the collar).
+    const same = (a, b) => a == null || b == null || String(a) === String(b);
+    if (same(this._collarId, debrisId)) this._collarId = null;
+    if (this._line && this._line.kind === 'letgo' && same(this._line.catchId, debrisId)) this._line = null;
+  }
+
+  /** @private u14b R3: both ids known and equal. A missing id is never "the same catch" (LET GO presses K on whatever is docked). */
+  _sameCatch(a, b) { return a != null && b != null && String(a) === String(b); }
+
+  /**
+   * @private u14b B1: the catch mated at the collar, from the game's own state. `{ id }` (debris id or null) while a mother
+   * net is BERTHED or COLLARED; `null` when none is (gone, or already handed off: TRANSFERRING); `undefined` without a reader.
+   */
+  _collarState() {
+    if (!this._getCollarCatch) return undefined;
+    try {
+      const n = this._getCollarCatch();
+      if (!n || (n.state !== 'BERTHED' && n.state !== 'COLLARED')) return null;
+      const d = n.targetDebris;
+      return { id: d && d.id != null ? d.id : null };
+    } catch (_e) { return undefined; }
+  }
+
+  /** @private u14b R4: LET GO is on screen only if it is the visible step: if a newer step chip took the slot, post ours again on top. */
+  _reclaimSlot() {
+    if (this._disposed || this._shown !== 'letgo' || this.wanted() !== 'letgo') return;
+    this._shown = null;
+    this._eb.emit(Events.HINT_SATISFIED, { id: TOUCH_ACTION_CHIP_ID });
     this.evaluate();
   }
 
@@ -238,6 +320,14 @@ export class TouchActionChip {
     this._schedule(() => { if (!this._disposed) this._eb.emit(Events.HINT_SATISFIED, { id }); });
   }
 
+  /** @private u14b B1: the catch a LET GO line was made for is no longer mated at the collar */
+  _letGoOver() {
+    const st = this._collarState();
+    if (st === undefined) return false;
+    if (st === null) return true;
+    return !this._sameCatch(this._line.catchId, st.id);
+  }
+
   /** @private R9: a daughter is out and idle */
   _reelable() {
     if (!this._getReelable) return false;
@@ -252,7 +342,7 @@ export class TouchActionChip {
     try { return !!this._getFarState(); } catch (_e) { return false; }   // null = tutorial still teaches
   }
 
-  /** @returns {'net'|'pad'|'daughter'|'autopilot'|'scan'|'reel'|null} the chip the current state asks for (ignoring other chips on screen) */
+  /** @returns {'net'|'pad'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'read'|null} the chip the current state asks for (ignoring other chips on screen) */
   wanted() {
     if (!this._glass) return null;
     if (!this._floorOk()) { this._line = null; return null; }   // floor left: a line chip does not wait for the way back
@@ -265,6 +355,8 @@ export class TouchActionChip {
     }
     if (this._line) {
       if (this._now() >= this._line.until) this._line = null;
+      // u14b B1: a LET GO line lives only while ITS catch is still mated at the collar (state, not only events).
+      else if (this._line.kind === 'letgo' && this._letGoOver()) this._line = null;
       // R6 run: "Press D to send a daughter" while both daughters hold catches - the launch would be refused, so no chip.
       else if (this._line.kind === 'daughter' && !canSend()) { /* no chip */ }
       // R13: a reminder offers only what its key would do now.
@@ -310,8 +402,10 @@ export class TouchActionChip {
       this._eb.emit(Events.HINT_SATISFIED, { id: TOUCH_ACTION_CHIP_ID });
     }
     if (!want) return;
-    // One chip, one action: a teaching-beat chip (or any other step chip) on screen keeps the slot.
-    if (this._ticker && typeof this._ticker.hasStepChip === 'function' && this._ticker.hasStepChip(TOUCH_ACTION_CHIP_ID)) return;
+    // One chip, one action: a teaching-beat chip (or any other step chip) on screen keeps the slot ...
+    // ... except LET GO (u14b R4): a catch that cannot move on blocks the beat the chip belongs to, so LET GO takes the slot.
+    // The ticker shelves the beat's chip (one step at a time) and puts it back when ours leaves.
+    if (want !== 'letgo' && this._ticker && typeof this._ticker.hasStepChip === 'function' && this._ticker.hasStepChip(TOUCH_ACTION_CHIP_ID)) return;
     const c = CHIPS[want];
     this._eb.emit(Events.HINT_POSTED, {
       id: TOUCH_ACTION_CHIP_ID,

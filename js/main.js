@@ -654,7 +654,8 @@ let touchActionChip = null;   // u11: the touch net / daughter button (glass onl
  *     `_findDockedArm` (docked, spring charged, fuel > 5, not held back for aiming; the dock best aligned with the
  *     piece, else the most fuel), the other type when the first has none.
  * She can go when she passes that same gate, still has nets, can hold the piece's mass (ArmUnit.deploy) and the piece is
- * within her reach (tetherMax x ARM_DEPLOY_RANGE_FRACTION, the "Target 492m away (max 400m)" refusal). R4 run: taps at
+ * within her reach (tetherMax x ARM_DEPLOY_RANGE_FRACTION, the "Target 492m away (max 400m)" refusal), and (u14b B4) the game's
+ * `ArmManager.daughterLaunchReadiness` agrees (safe mode, ARM power). R4 run: taps at
  * t=162 s and 177 s were refused because an "any daughter" test passed while the daughter D picked was out of reach.
  * @param {object} [target] the piece (default: the selected one; none = no mass or reach test)
  */
@@ -666,9 +667,17 @@ function _daughterReadyWithNets(target) {
     : (targetSelector && targetSelector.getActiveTarget ? targetSelector.getActiveTarget() : null);
   const gate = (a) => !!a && a.state === S.DOCKED && !!a.springCharged && a.fuel > 5 && !a._aimReserved;
   const sel = armManager.selectedArmIndex >= 0 ? arms[armManager.selectedArmIndex] : null;
+  // u14b B4: the game's own launch rule (safe mode, ARM power, the arm deployArm picks and its mass), read without
+  // side effects. The two branches below mirror KeyD (InputManager): a daughter picked with 1-4 and docked launches by
+  // index (deployArmByIndex: safe mode and ARM power refuse; nothing else the query adds), else deployArm (the query's
+  // `ready`). Both then pass the checks below that the query does not make (nets, reach of THAT arm).
+  const readiness = typeof armManager.daughterLaunchReadiness === 'function' ? armManager.daughterLaunchReadiness(t || null) : null;
   let arm = null;
   if (sel && sel.state === S.DOCKED) {
+    if (readiness && (readiness.why === 'safe' || readiness.why === 'power')) return false;
     arm = sel;
+  } else if (readiness && !readiness.ready) {
+    return false;
   } else if (typeof armManager._findDockedArm === 'function') {
     const mass = (t && t.mass) || 1;
     const want = mass > Constants.SPINNER_MAX_CAPTURE_MASS ? 'weaver' : 'spinner';
@@ -1679,6 +1688,8 @@ async function init() {
     // for OPENING_DANCE_HANDOVER (the Director listens for it itself). Flag
     // off / ?shot / reduced motion → isActive() is false → unchanged behavior.
     deferWhile: () => openingDance.isActive(),
+    // u14b B5: the magazine a run starts with at the bought fibre tier (6/8/10), not the start-tier 4.
+    getMotherNetCapacity: () => captureNetSystem.getMotherNetCapacity(),
   });
 
 

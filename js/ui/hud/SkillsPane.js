@@ -31,6 +31,7 @@ import { HUD_EDGE_PX, HUD_COLUMN_WIDTH_PX, RAIL_GEOMETRY, footerBand } from '../
 import { TRACK_WIDTH_PX } from '../DetailSlider.js';
 import { TouchControls } from '../TouchControls.js';
 import { createFooterChip } from './FooterChip.js';
+import { GestureHints } from './GestureHints.js';
 
 export const DISCOVERIES_WRAPPER_ID = 'hud-discoveries';
 export const DISCOVERIES_CHIP_ID = 'hud-chip-discoveries';
@@ -1105,6 +1106,9 @@ export class SkillsPane {
         const { skillId } = data;
         if (!this._masterVisible) return;
         if (!this._defMap.has(skillId)) return;
+        // u14b R5: the compact pane lists the skill's KEY name; on glass a reminder for a key with no touch control is not shown
+        // (the same gate the ticker reminder passes: OnboardingDirector._onSkillReminded). Desktop: always.
+        if (!GestureHints.reminderFitsGlass(this._defMap.get(skillId), skillId)) return;
 
         // Re-render compact view with the reminded skill highlighted
         this._renderCompact(skillId);

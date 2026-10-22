@@ -311,6 +311,9 @@ export class OnboardingDirector {
    *   null while the intro flyby / a ride is in flight, 2 on the flying floor.
    *   Absent → the DETAIL ticker beat never fires (safe default; main.js wires
    *   it inside the LADDER gate). Plan 1788867799156 Task 15 / locked #17.
+   * @param {Function} [deps.getMotherNetCapacity]  — () => number, the mother's magazine size at the current fibre tier
+   *   (4 at the start tier; 6/8/10 once bought). Seeds `_motherNets` at construction and after GAME_RESET (the full
+   *   magazine, never the live count: the restock may run after the reset handler). Absent -> the start-tier size.
    * @param {Function} [deps.deferWhile]  — () => boolean, true while the
    *   opening dance is still unfolding (main.js wires it to the openingDance
    *   singleton; plan 1789086956154 Task 5). While true the ORBITAL_VIEW start
@@ -326,6 +329,8 @@ export class OnboardingDirector {
     this._persistence = deps.persistenceManager || null;
     this._context = typeof deps.contextProvider === 'function' ? deps.contextProvider : null;
     this._floorProvider = typeof deps.floorProvider === 'function' ? deps.floorProvider : null;
+    /** @type {Function|null} u14b B5: () => the mother's magazine capacity at the current fibre tier (see deps doc). */
+    this._getMotherNetCapacity = typeof deps.getMotherNetCapacity === 'function' ? deps.getMotherNetCapacity : null;
     /** @type {Function|null} opening-dance defer gate (see deps doc). */
     this._deferWhile = typeof deps.deferWhile === 'function' ? deps.deferWhile : null;
     /** @type {object|null} GuidanceDirector — scales coaching depth per persona. */
@@ -347,7 +352,7 @@ export class OnboardingDirector {
      * Starts full; GAME_RESET puts the full magazine back. Not persisted.
      * @type {number}
      */
-    this._motherNets = Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
+    this._motherNets = this._fullMagazine();
 
     /**
      * True from the moment a mother shot (the lasso or the large net) leaves the launcher until it has resolved (caught
@@ -546,7 +551,7 @@ export class OnboardingDirector {
     this._smartDefaultMsgShown = false;
     this._started = false;
     this._stationKeepArrowsShown = false;
-    this._motherNets = Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
+    this._motherNets = this._fullMagazine();
     this._motherShotInFlight = false;
     this._clearDetailHintPoll();
     // `_detailHintShown` is per-player — not cleared (locked decision #17).
@@ -929,6 +934,20 @@ export class OnboardingDirector {
   }
 
   /**
+   * u14b B5: the full magazine the mother starts a run with. The fibre tier's capacity when main.js supplies it, else the
+   * start-tier size. Only compared with 0 and overwritten by every NET_INVENTORY_CHANGED, but the number should be right.
+   * @private
+   * @returns {number}
+   */
+  _fullMagazine() {
+    try {
+      const n = this._getMotherNetCapacity ? this._getMotherNetCapacity() : NaN;
+      if (Number.isFinite(n) && n > 0) return n;
+    } catch (_e) { /* best-effort */ }
+    return Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
+  }
+
+  /**
    * Render a stale-skill reminder as a low-priority ticker hint (post-mastery
    * only, so it never competes with an active onboarding beat).
    * @param {{skillId:string}} d
@@ -940,6 +959,8 @@ export class OnboardingDirector {
     if (!this._mastered || this._active) return;
     const def = this._lookupSkillDef(d.skillId);
     if (!def || def.noReminder) return;
+    // u14b B3: on glass a reminder for a key (or mouse gesture) with no touch control is not posted (R14 pattern).
+    if (!GestureHints.reminderFitsGlass(def, d.skillId)) return;
     // Slice 8 — codex resurfacing: when the manage_codex reminder carries a
     // "did you know?" pick, point the player at a specific unread entry instead
     // of the generic library reminder. Same HINT_POSTED path, same gating.

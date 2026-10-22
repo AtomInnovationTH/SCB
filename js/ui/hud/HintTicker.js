@@ -362,7 +362,16 @@ export class HintTicker {
     // Insert as LEFT-most (latest); push existing right.
     this._items.unshift(item);
     if (this._strip) {
-      this._strip.insertBefore(el, this._strip.firstChild);
+      // u14b R2: a button of the SAME id that is still fading out (taken down, re-posted within FADE_OUT_MS) is replaced IN
+      // PLACE, so the new button sits where the player's thumb is going; a second copy beside it would shift the centred strip.
+      const old = el ? this._fadingButtonFor(payload.id) : null;
+      if (old && old.parentNode === this._strip) {
+        this._fadingButtons.delete(old);
+        if (typeof this._strip.replaceChild === 'function') this._strip.replaceChild(el, old);
+        else { this._strip.insertBefore(el, old); this._strip.removeChild(old); }
+      } else {
+        this._strip.insertBefore(el, this._strip.firstChild);
+      }
     }
 
     // Brief flash for `priority:'high'`.
@@ -381,6 +390,28 @@ export class HintTicker {
     if (typeof setTimeout === 'function' && Number.isFinite(dur) && dur > 0) {
       item.timer = setTimeout(() => this._fadeAndRemove(item.id), dur);
     }
+  }
+
+  /** u14b R2: the step button with this hint id that is fading out (not yet removed), or null. */
+  _fadingButtonFor(id) {
+    for (const b of this._fadingButtons) if (b && b.dataset && b.dataset.hintId === id) return b;
+    return null;
+  }
+
+  /**
+   * u14b R2: take a fading row out of the strip's layout (position:absolute at its current spot). The strip is centred, so a row
+   * that stays in the flow for its FADE_OUT_MS keeps the next button off its centre and then snaps back: a tap on the new button
+   * hit the dead fading copy.
+   */
+  _floatOut(el) {
+    if (!el || !el.style || !el.parentNode) return;
+    const left = el.offsetLeft, top = el.offsetTop;
+    if (Number.isFinite(left) && Number.isFinite(top)) {
+      el.style.left = `${left}px`;
+      el.style.top = `${top}px`;
+    }
+    el.style.position = 'absolute';
+    el.style.margin = '0';
   }
 
   _onHintSatisfied(payload) {
@@ -494,6 +525,7 @@ export class HintTicker {
       item.el.style.opacity = '0';
       // A second tap during the fade must not toggle anything back.
       item.el.style.pointerEvents = 'none';
+      this._floatOut(item.el);   // u14b R2: and it must not sit in the strip's layout either
     }
     // Remove from array immediately so list logic stays consistent.
     this._items.splice(idx, 1);
