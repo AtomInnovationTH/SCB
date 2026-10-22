@@ -96,6 +96,7 @@ export const HOTKEY_GROUPS = [
       [['R'], 'Reel selected daughter'],
       [['`'], 'Next tool'],
       [['N'], 'Use tool'],
+      [['C'], 'Move a catch to a radiator'],
       [['V'], 'Change view to mother'],
     ],
   },

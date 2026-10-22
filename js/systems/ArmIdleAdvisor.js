@@ -86,6 +86,8 @@ export class ArmIdleAdvisor {
     switch (when) {
       case 'noNetInFlightHasNets':
         return !this._netInFlight(arm) && this._netCount(arm) > 0;
+      case 'noNetInFlight':
+        return !this._netInFlight(arm);
       case 'outOfNets':
         return this._netCount(arm) <= 0;
       case 'always':
@@ -161,6 +163,8 @@ export class ArmIdleAdvisor {
 
       for (const hint of hints) {
         if (hint.state !== arm.state) continue;
+        // hold-catch: a tool row speaks only for the tool she is holding (the pad is the default; N works the selected tool)
+        if (hint.tool && (arm.selectedTool || 'NET') !== hint.tool) continue;
         if (rec.idleS < hint.idleS) continue;
         if (rec.fired.has(hint.hintId)) continue;
         if (!this._predicateHolds(hint.when, arm)) continue;

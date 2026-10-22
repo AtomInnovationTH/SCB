@@ -1480,9 +1480,11 @@ export const Constants = {
   // rip) under REEL_HOME, a daughter within AUTO_REEL_MAX_M of her strut tip is reeled straight home on her strut line;
   // farther out she holds near the piece for a retry and the comms line gives the reel-in time, so he can choose
   // (owner 12:37Z: "auto reel-in on failure for close debris. over 500 meters, consider retry versus reel-in time").
-  // Tests: js/test/test-FailReel.js.
+  // 2026-10-22 (owner, play feedback): "yes, straight home ... maybe <200 meters?" -> 200 m; the line says what happened,
+  // the distance and the time. Reel times (probe, weaver/spinner, no catch): see tmp/plans/feedback-1022.md Log (B5).
+  // Tests: js/test/test-FailReel.js, test-ReelView.js.
   FAIL_REEL: {
-    AUTO_REEL_MAX_M: 500,   // m from her strut tip (owner's number)
+    AUTO_REEL_MAX_M: 200,   // m from her strut tip (owner 2026-10-22; was 500)
   },
 
   // trip-melt-2 "carry" (2026-10-19, owner: catches "need to be melted down in the furnace during the long ion burn";
@@ -1504,6 +1506,19 @@ export const Constants = {
     OTHERS_RANGES_DEG: [[0, 1], [133, 146]],
     NEIGHBOUR_REST_DEG: 34,
     NEIGHBOUR_TOL_DEG:  0.6,
+    // hold-catch FA3 (2026-10-22): the gate above was measured with the other three daughters EMPTY at the rest angle. A neighbour
+    // holding a catch stands at her hold pose with the catch on her nose, and a carry now also accepts that (a neighbour within
+    // NEIGHBOUR_TOL_DEG of her own hold pose, `ArmManager.holdPoseFor`). The whole carry path (strut sweep, flight, swing back, petal
+    // sweep) was measured against such a neighbour at her REAL hold pose, 10 722 cases: every catch shape (11) x size x rack attitude
+    // (js/test/_carryNeighbour.js, test-HoldCatchNeighbour.js; the table is in the plan Log). The line is the gate's, 0.158 m.
+    //   - catches up to 1.5 m (0.3, 1, 1.25, 1.5 m; all 30 attitudes): never closer than 0.218 m. The first failure is a 1.75 m rocket
+    //     body (0.123 m); 2 m catches fail in 24 of 1 344 cases at 34° (down to 0.062 m); 155 of 10 722 cases fail in all.
+    //   - catches over 2 m stand at 34-59° and fail in a few per cent of the shape x attitude cases (to a touch); they stand at 64° and up
+    //     clear: 0 of 461 cases fail from 64° up (0.195 m at 64°, 0.31 m at 69° and up; 2.8-5 m).
+    // A neighbour holding a catch that passes neither test blocks the carry ('neighbour-catch'; it clears when that catch goes).
+    NEIGHBOUR_CATCH_MAX_SIZE_M: 1.5,
+    NEIGHBOUR_CATCH_HIGH_POSE_DEG: 69,     // a neighbour standing at/above this angle (measured clear with margin) ...
+    NEIGHBOUR_CATCH_HIGH_MAX_SIZE_M: 5,    // ... may hold any catch up to this size (the biggest measured)
     STRUT_REC_LO_DEG:   34,
     STRUT_REC_HI_DEG:   180,
     THETA_MAX_DEG:      133,   // no gate entry holds her petal higher: the tip band (>= 133.4°) would push it down mid-carry
@@ -1843,6 +1858,16 @@ export const Constants = {
     // >= 51 mm over the whole radiator sweep, hull 176 mm, neighbours 305 mm;
     // swing 0->34 2.27 s, 136 J for four struts.
     STRUT_REST_ALPHA: 34 * Math.PI / 180, // rad (34°)
+    // hold-catch (owner 2026-10-22: "daughters that catch debris should hold it, and their strut should move to default
+    // position"): a daughter aboard with a catch keeps her strut at the lowest of 34°, 39°, 44° ... where her catch is clear
+    // of the thruster plumes (ArmManager.holdPoseAlpha, the exact box check at the real angle), and never above
+    // HOLD_POSE_MAX_DEG: the mother-net path (CaptureNet._corridorClear) is clear of a strut tip for every inbound size up to
+    // 100° (the tip crosses the muzzle plane at about 100°, probe 2026-10-22, DECISIONS §35). 0° is never a hold pose: the rest
+    // cradle touches the hull, and a 5 m catch touches the open radiators there (tmp/probe-hold-0deg.mjs). The slew and a
+    // "." press leave 1° of slack (DEADBAND) so the driver does not chase the strut driver's own 0.57° arrival tolerance.
+    HOLD_POSE_MAX_DEG: 100,
+    HOLD_POSE_STEP_DEG: 5,
+    HOLD_POSE_DEADBAND_DEG: 1,
     // STRUT_DEPLOY_ALPHA: a DOUBLE TAP opens to 90°, straight out sideways; it is
     // also the catch-duck angle (ArmManager duck target/release). Was the single-
     // press target 2026-10-12 and 146° before that (opening-dance plan, 2026-09-16).
@@ -4771,6 +4796,24 @@ export const Constants = {
   RCS_MAX_SPEED: 0.000005,            // scene units/s — max RCS drift speed (0.5 m/s real)
   RCS_DAMPING: 0.95,                  // velocity damping per frame when not thrusting (stops quickly)
 
+  // --- Reel push (lane reel-push, owner 2026-10-22: "make the reel pull move and turn the mother, like real physics") ---
+  // The reel line pulls both ends: the mother feels the line tension toward the daughter at her strut tip (a Δv in
+  // her real orbit through applyCartesianImpulse, a torque into her attitude springs), and the daughter's arrival speed
+  // as one latch bump. Momentum, not a burn: unbilled. Units: the tension is true newtons and acts for game seconds
+  // (real dt x TIME_SCALE_GAMEPLAY), so the Δv is T x dt_game / mass in true m/s, the unit the mother-net tug hands over.
+  REEL_PUSH: {
+    ENABLED: true,                    // false = the mother stays put during a reel (the old behaviour)
+    MIN_DV_MS: 1e-4,                  // m/s - smaller Δv is gathered until it passes this, then applied in one call. The
+                                      // orbit element round trip inside applyCartesianImpulse is only good to about 1e-6..1e-5 m/s
+                                      // (measured 2026-10-22), and the ion thread alone adds ~7e-7 m/s a frame.
+    // Fix round 1 (coordinator review of 357ad486, 2026-10-22): the push is momentum, but two things that take it back out
+    // are NOT free. (1) The autopilot HOLD copies the locked target's orbit into hers every frame, which erases the Δv: that
+    // is a station-keeping burn on her cold-gas thrusters. m = M x Δv / (Isp x g0), billed through RESOURCE_CONSUME coldGas.
+    // (2) Her attitude hold takes the turn back out: billed like the net recoil's turn (PlayerSatellite._billTurnNullN2).
+    HOLD_ISP_S: 60,                   // s - her cold-gas thrusters (the same 60 as DAUGHTER_COLD_GAS.ISP_S)
+    PUFF_EVERY_S: 0.3,                // s (real) - at most one burst of cold-gas puffs this often, so it reads as puffs not a plume
+  },
+
   // --- Catch Juice (S4 — Core Feel) ---
   CATCH_SHAKE_DURATION: 0.3,           // seconds — camera micro-shake on capture
   CATCH_SHAKE_INTENSITY: 0.000003,     // scene units (= 0.3 m) — shake amplitude.
@@ -6391,7 +6434,9 @@ export const Constants = {
   // TEACHING_MOMENT_FORCE. Veterans (SkillsSystem.isVeteran) are skipped entirely.
   // `icon` is the short text tag TeachingOverlay shows beside the title (plan D-J:
   // no pictographs; <= 4 chars).
-  // `when` keys: 'noNetInFlightHasNets' | 'outOfNets' | 'always'.
+  // `when` keys: 'noNetInFlightHasNets' | 'noNetInFlight' | 'outOfNets' | 'always'.
+  // `tool` (optional, hold-catch 2026-10-22): the row applies only while her selected tool is this one (an arm with no
+  // selectedTool counts as 'NET'); rows without it apply to every tool.
   ARM_IDLE_HINTS: [
     {
       // Guidance cleanup (Phase 2/3): the manual-pilot nudge formerly lived in
@@ -6406,11 +6451,36 @@ export const Constants = {
       chip: 'Fly her: 2× score', glyph: '1-4', keys: ['Digit1', 'Digit2', 'Digit3', 'Digit4'],
     },
     {
-      state: 'STATION_KEEP', idleS: 0, when: 'noNetInFlightHasNets',
+      state: 'STATION_KEEP', idleS: 0, when: 'noNetInFlightHasNets', tool: 'NET',
       hintId: 'sk_idle_fire_or_pilot', title: 'Daughter holding standoff',
       text: 'She is holding station on the target. Press N to launch the net (or 1-4 to pilot her).',
       icon: 'NET',
       chip: 'Launch her net', glyph: 'N', keys: ['KeyN'],
+    },
+    // hold-catch (owner 2026-10-22: "Hints at bottom of screen say press N for net, but default is sticky pad"): the same
+    // chip for the tool she is holding (ArmUnit.selectedTool, set by the tool recommender when she enters station-keep, which
+    // runs before this fires). One row per tool, each fires once per deployment; N works the selected tool (InputManager
+    // KeyN). PAD, MAGNET and GRIPPER need no nets, so their rows only need a free line (no net in flight).
+    {
+      state: 'STATION_KEEP', idleS: 0, when: 'noNetInFlight', tool: 'PAD',
+      hintId: 'sk_idle_pad_or_pilot', title: 'Daughter holding standoff',
+      text: 'She is holding station on the target. Press N to stick the pad on (or 1-4 to pilot her).',
+      icon: 'PAD',
+      chip: 'Stick the pad on', glyph: 'N', keys: ['KeyN'],
+    },
+    {
+      state: 'STATION_KEEP', idleS: 0, when: 'noNetInFlight', tool: 'MAGNET',
+      hintId: 'sk_idle_magnet_or_pilot', title: 'Daughter holding standoff',
+      text: 'She is holding station on the target. Press N to use the magnet (or 1-4 to pilot her).',
+      icon: 'MAG',
+      chip: 'Use the magnet', glyph: 'N', keys: ['KeyN'],
+    },
+    {
+      state: 'STATION_KEEP', idleS: 0, when: 'noNetInFlight', tool: 'GRIPPER',
+      hintId: 'sk_idle_grip_or_pilot', title: 'Daughter holding standoff',
+      text: 'She is holding station on the target. Press N to grip it (or 1-4 to pilot her).',
+      icon: 'GRIP',
+      chip: 'Grip it', glyph: 'N', keys: ['KeyN'],
     },
     {
       state: 'STATION_KEEP', idleS: 6, when: 'outOfNets',

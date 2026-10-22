@@ -20,7 +20,8 @@
  * Everything moves at the real hinge rate: this module only writes the same
  * `arm._strutTargetAlpha` latch the "." key writes; the ship's per-frame driver
  * (PlayerSatellite._updateStruts) slews it at STRUT_SLEW_RATE. Nothing here
- * teleports, emits STRUT_DEPLOY_INPUT, or touches an arm that is not DOCKED.
+ * teleports, emits STRUT_DEPLOY_INPUT, or touches an arm that is not DOCKED. (hold-catch: it only AGES the manual
+ * marker of a HOLDING_CATCH arm; ArmManager._updateCargoPlumePoses drives that arm's strut to her hold pose.)
  *
  * Split for testability: `autoPoseFor` (pure), `StrutAutoStore` (the
  * once-per-player record, the TouchMapStore idiom) and `StrutAutoController`
@@ -293,7 +294,9 @@ export class StrutAutoController {
     for (const arm of view.arms || []) {
       const m = arm && arm._strutManual;
       if (!m) continue;
-      if (arm.state !== Constants.ARM_STATES.DOCKED) { delete arm._strutManual; continue; }
+      // hold-catch (owner 2026-10-22): a daughter holding a catch keeps her marker and its quiet window too (a "." press moved
+      // her strut; ArmManager's hold-pose driver leaves a safe manual angle alone until the marker expires here).
+      if (arm.state !== Constants.ARM_STATES.DOCKED && arm.state !== Constants.ARM_STATES.HOLDING_CATCH) { delete arm._strutManual; continue; }
       if (arm._strutTargetAlpha !== undefined) m.quietS = 0;
       else m.quietS += dt;
       if (m.quietS >= V.OVERRIDE_S) { delete arm._strutManual; this._expired = true; continue; }

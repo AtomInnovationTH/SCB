@@ -179,6 +179,10 @@ const GLASS_LINES = Object.freeze([
   ['Press 1-4 while a daughter is deployed to fly her yourself.', 'Tap her row in DAUGHTERS while she is deployed to fly her yourself.'],
   ['Press 1-4 to take manual control. A piloted capture scores 2×.', 'Tap her row in DAUGHTERS to take manual control. A piloted capture scores 2×.'],
   ['Press N to launch the net (or 1-4 to pilot her).', 'Tap LAUNCH NET to launch the net (or tap her row in DAUGHTERS to pilot her).'],
+  // feedback-1022 A5: the station-keep hint names her tool; on glass N is her tool's chip (STICK PAD for the pad, else LAUNCH NET)
+  ['Press N to stick the pad on (or 1-4 to pilot her).', 'Tap STICK PAD to stick the pad on (or tap her row in DAUGHTERS to pilot her).'],
+  ['Press N to use the magnet (or 1-4 to pilot her).', 'Tap LAUNCH NET to use the magnet (or tap her row in DAUGHTERS to pilot her).'],
+  ['Press N to grip it (or 1-4 to pilot her).', 'Tap LAUNCH NET to grip it (or tap her row in DAUGHTERS to pilot her).'],
   ['Press her number again (1-4) or Esc to back out to Command view.', 'Tap her row in DAUGHTERS again to back out to Command view.'],
   ['Daughters capture heavier targets at longer range. Press 1-4 to pilot a launched daughter.', 'Daughters capture heavier targets at longer range. Tap her row in DAUGHTERS to pilot a launched daughter.'],
   ['Run both daughters: [D] deploys, [1-4] select and pilot (press again to switch back), [Shift+R] recalls the whole fleet.', 'Run both daughters: hold the target for DAUGHTER to send one, and tap her row in DAUGHTERS to pilot her (tap again to switch back).'],

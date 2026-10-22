@@ -252,6 +252,7 @@ export function clearRackCell(d) {
   d._rackArm = null;
   d._rackBelow = null;     // rack-centre: the cell-0 piece cell 1 was placed on (ArmUnit._assignRackCellWith)
   d._rackSlide = null;     // rack-centre: a running cell-1 → cell-0 slide (ArmUnit._lowerRackCell)
+  d._rackFromMotherNet = false;   // hold-catch FA1: and the mark that the mother's net put it there
 }
 
 /**
@@ -4269,6 +4270,10 @@ export class CaptureNetSystem {
     // ceremony, and clearing it would pop the drawn size at the strut.
     d._motherParked = false;
     d._capturedByArm = arm;
+    // hold-catch FA1 (owner 2026-10-22 "Keep: radiator right away"): this catch is the MOTHER's - it only waited on a rack because no
+    // radiator tip was free. ArmManager._tickMissionCarry moves a marked catch to a tip as soon as one is; a catch the daughter
+    // caught herself carries no mark and stays with her. Cleared with the cell (clearRackCell).
+    d._rackFromMotherNet = true;
 
     const S = Constants.ARM_STATES;
     if (arm.state !== S.HOLDING_CATCH) {

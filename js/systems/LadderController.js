@@ -626,6 +626,7 @@ export class LadderController {
     // Session I turntable (D-F): held arrows orbit the camera while a drawer
     // is open on the workbench floor (dt-scaled; a no-op everywhere else).
     this._turntableArrows(t);
+    this._syncTakeover();   // reel-view FB8: a camera input took the focus pose over (a drag): the ladder's zoom state follows it
     // u10 D3: the floor-4 framing glide (no-op unless one runs).
     this._glideTick(t);
     this._refreshRail();
@@ -757,9 +758,48 @@ export class LadderController {
    * ladder state the input is about to change is the camera's own, which the focus never wrote.
    * @private
    */
-  _endCatchFocus() {
+  _endCatchFocus(cause) {
     const cs = this._cameraSystem;
-    if (cs && typeof cs.ladderCancelCatchFocus === 'function') cs.ladderCancelCatchFocus();
+    if (cs && typeof cs.ladderCancelCatchFocus === 'function') cs.ladderCancelCatchFocus(cause);
+    this._syncTakeover();
+  }
+
+  /**
+   * reel-view FB8 (fix round 2): when a camera input has taken the catch focus's drawn pose over (CameraSystem
+   * `ladderTakeoverDistU`), put the ladder core's z01 on the camera's real distance, clamped into the floor's range
+   * (the camera eases there if the clamp moves it). Without it the core still holds the distance from before the focus,
+   * and the next wheel notch steps from THAT one: a dolly of up to ~90 m in ~0.2 s.
+   * @private
+   */
+  _syncTakeover() {
+    const cs = this._cameraSystem;
+    if (!cs || typeof cs.ladderTakeoverDistU !== 'function') return;
+    const distU = cs.ladderTakeoverDistU();
+    if (!(distU > 0) || !this._engaged || this.isRiding()) return;
+    const st = this._ladder.getState();
+    const f = st ? FloorContract.byId(st.floor) : null;
+    if (!f || f.anchor === 'earth') return;
+    // FB12 (fix round 3): a distance outside this floor's range used to be CLAMPED into it (z01 0 or 1), and the camera
+    // flew to the clamped distance (~0.2 s, mostly on floors 1 and 3). Put the ladder on the floor among 1-3 whose range
+    // holds the distance instead, so the camera does not move. Only when no floor 1-3 holds it (< 2 m, > 12 km) is it clamped.
+    let floorId = st.floor, fl = f;
+    const holds = (row) => !!row && row.anchor !== 'earth' && distU >= row.camera.distU[0] * (1 - 1e-6) && distU <= row.camera.distU[1] * (1 + 1e-6);
+    if (!holds(f)) {
+      for (const id of [1, 2, 3]) {
+        const row = FloorContract.byId(id);
+        if (holds(row)) { floorId = id; fl = row; break; }
+      }
+    }
+    const z01 = z01FromDistance(fl, distU);
+    if (!this._ladder.place({ tMs: this._now(), floor: floorId, z01 })) return;
+    if (floorId !== st.floor) {
+      // a floor change without a ride: what _startRide does for the destination (rest memory, fidelity block, floor content)
+      this._seedRest(z01);
+      this._applyFidelity(floorId);
+      this._applyFloorContent(floorId);
+    }
+    this._lastPosZ01 = z01;
+    if (cs.ladderSetTarget) cs.ladderSetTarget(this._frame(floorId, z01));
   }
 
   /** Router entry: one router-normalized wheel event. */
@@ -786,7 +826,7 @@ export class LadderController {
     if (!this._engaged) return [];
     const t = (tMs === undefined) ? this._now() : tMs;
     this._lastInputMs = t;
-    this._endCatchFocus();
+    this._endCatchFocus('ladder command');
     const decisions = this._ladder.command({ tMs: t, type });
     this._apply(decisions, t);
     this._refreshRail();
@@ -798,7 +838,7 @@ export class LadderController {
     if (!this._engaged) return [];
     const t = (tMs === undefined) ? this._now() : tMs;
     this._lastInputMs = t;
-    this._endCatchFocus();
+    this._endCatchFocus('floor jump');
     const decisions = this._ladder.jump({ tMs: t, toFloor });
     this._apply(decisions, t);
     this._refreshRail();

@@ -171,6 +171,8 @@ const _v3TmpA  = new THREE.Vector3();
 const _v3TmpB  = new THREE.Vector3();
 const _v3TmpC  = new THREE.Vector3();
 const _v3TmpD  = new THREE.Vector3();
+/* reel-push: the gathered-Δv key for a push with no source (a test, a one-off); a reeling daughter keys her own. */
+const REEL_PUSH_SHARED = Object.freeze({ shared: true });
 // Mother-wings step 4: shared raycaster for the throttled body-cell shading
 // estimate (_computeBodyPowerW) — one instance, reused every call.
 const _solarRaycaster = new THREE.Raycaster();
@@ -672,6 +674,12 @@ export class PlayerSatellite extends THREE.Group {
     // angular scalar — written only by the dual-fire chain — went with it.)
     this._recoilYawAngle = 0;
     this._recoilYawVel = 0;
+    // reel-push (fix round 1): the gas the reel line's push has cost her (kg): holding against it under the autopilot HOLD,
+    // and nulling its turn; and when her cold-gas puffs last fired for it (performance.now seconds).
+    this._reelPushHoldKg = 0;
+    this._reelPushTurnKg = 0;
+    this._reelPushPuffAt = -Infinity;
+    this._reelPushTurnPuffAt = -Infinity;
     this._qRecoil = new THREE.Quaternion();   // scratch: transient recoil rotation
     // ap-smooth: the recoil shake is a transient overlay on the commanded attitude. Under an owner that does not
     // rebuild the quaternion each frame (AIM; AUTOPILOT without the orbit-frame hold) the overlay would pile up, so the
@@ -8098,6 +8106,194 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
+   * reel-push (owner 2026-10-22: "make the reel pull move and turn the mother, like real physics"): a one-off push on the hull,
+   * `impulseWorldNs` true N·s in the world frame, at `pointWorld` (scene units). The push itself is momentum, not a burn:
+   * unbilled. What takes it back out is billed (fix round 1, 2026-10-22): the turn (always) and, under the autopilot HOLD, the
+   * Δv (see `flushReelPush`).
+   *
+   *   • LINEAR: Δv = J / mass (true m/s, her live mass) through `applyCartesianImpulse(.., { noBill, quiet })`: the real
+   *     orbit, the way the mother-net tug and the leash change her motion (`_rcsVelocity` is cosmetic and is not used).
+   *     Pushes under `Constants.REEL_PUSH.MIN_DV_MS` are gathered, one gathering per `opts.source` (a reeling daughter: two reels
+   *     at once keep their own), and applied together once they pass it (the orbit element round trip is only good to
+   *     ~1e-6 m/s); `opts.flush` applies whatever that source has gathered.
+   *   • ANGULAR: L = r × J about her centre of mass (r = point − CoM, `computeCoM`), body frame, divided by the inertia
+   *     SSOT (`getAttitudeInertia`): Δω goes into the pitch (about +X) and yaw (about +Y) springs that `applyReelTorque`,
+   *     the net recoil and the net tug feed, and her attitude hold takes it back out. Roll (about +Z) has no spring and is
+   *     dropped. A push through the CoM turns nothing. The spring's work is paid in cold gas like the net recoil's turn
+   *     (`_billTurnNullN2`), with the attitude couple's puffs.
+   *
+   * @param {THREE.Vector3} impulseWorldNs true N·s, world frame
+   * @param {THREE.Vector3} pointWorld scene units, where the push acts on the hull
+   * @param {{ flush?: boolean, source?: object }} [opts] `source`: whose gathering this is (the ArmUnit); none = a shared one
+   * @returns {boolean|null} true: the Δv went into her orbit (or was gathered); false: `applyCartesianImpulse` refused it
+   *   (the altitude envelope); null: nothing to do (disabled, zero or invalid push)
+   */
+  applyImpulseAtPoint(impulseWorldNs, pointWorld, opts = {}) {
+    const RP = Constants.REEL_PUSH || {};
+    if (RP.ENABLED === false || !impulseWorldNs || !pointWorld) return null;
+    const src = opts.source || REEL_PUSH_SHARED;
+    const jMag = impulseWorldNs.length();
+    if (!isFinite(jMag)) return null;
+    if (!(jMag > 0)) return opts.flush === true ? this.flushReelPush(src) : null;   // nothing new, but the gathered Δv still goes
+    const mass = (this.mass > 0) ? this.mass : 130;
+
+    // ── ANGULAR: L = r x J about the centre of mass, body frame (before the linear call: it emits events) ──
+    const qInv = (this._qPushInv || (this._qPushInv = new THREE.Quaternion())).copy(this.quaternion).invert();
+    const jLoc = (this._vPushJ || (this._vPushJ = new THREE.Vector3())).copy(impulseWorldNs).applyQuaternion(qInv);
+    const r = (this._vPushR || (this._vPushR = new THREE.Vector3()));
+    r.copy(pointWorld).sub(this.position).applyQuaternion(qInv).multiplyScalar(1 / M);   // metres, body frame
+    const am = this.armManager;
+    if (am && am.arms) {
+      const com = computeCoM(am, this).position;
+      r.x -= com.x; r.y -= com.y; r.z -= com.z;
+    }
+    const lx = r.y * jLoc.z - r.z * jLoc.y;                                              // N·m·s
+    const ly = r.z * jLoc.x - r.x * jLoc.z;
+    if (lx !== 0 || ly !== 0) {
+      const I = this.getAttitudeInertia();
+      this._recoilPitchVel += lx / I.ixx;                                                // rad/s, true
+      this._recoilYawVel += ly / I.iyy;
+      // FC2: the spring takes this turn back out, and that costs cold gas (the net recoil's price list), with the couple's puffs
+      // (a push through the CoM leaves float noise of ~1e-17 N·m·s here: that turns nothing and bills nothing)
+      if (Math.abs(lx) + Math.abs(ly) > 1e-6) {
+        this._reelPushTurnKg += this._billTurnNullN2(Math.abs(lx) + Math.abs(ly), mass);
+        this._reelPushTurnPuff(lx, ly);
+      }
+    }
+
+    // ── LINEAR: gather (per source), then one clean orbit impulse ──
+    const acc = this._reelPushAcc(src, true);
+    acc.addScaledVector(impulseWorldNs, 1 / mass);
+    if (opts.flush !== true && acc.length() < (RP.MIN_DV_MS ?? 1e-4)) return true;
+    return this.flushReelPush(src);
+  }
+
+  /** @private reel-push: `source`'s gathered-Δv vector (m/s, world), made on demand when `create`; else null when it has none. */
+  _reelPushAcc(source, create = false) {
+    let accs = this._reelPushAccs;
+    if (!accs) { if (!create) return null; accs = this._reelPushAccs = new Map(); }
+    let acc = accs.get(source);
+    if (!acc && create) { acc = new THREE.Vector3(); accs.set(source, acc); }
+    return acc || null;
+  }
+
+  /**
+   * reel-push: hand `source`'s gathered Δv to her real orbit in one quiet call (null when there is none). Fix round 1 (FC1):
+   * while the autopilot HOLD is copying the locked target's orbit into hers every frame (`_reelPushHoldErases`) that copy wipes
+   * the Δv again, which is a station-keeping burn on her cold-gas thrusters, not a free pass: the call is then billed
+   * m = M x Δv / (Isp x g0) of coldGas, with a burst of puffs on the side that pushes against the line.
+   * @param {object} [source] whose gathering (default: the shared one)
+   * @returns {boolean|null} what `applyCartesianImpulse` said (true applied, false refused), null: nothing was gathered
+   */
+  flushReelPush(source) {
+    const key = source || REEL_PUSH_SHARED;
+    const acc = this._reelPushAcc(key);
+    if (!acc) return null;
+    this._reelPushAccs.delete(key);
+    if (!(acc.length() > 1e-9)) return null;                               // below applyCartesianImpulse's own floor
+    const dv = (this._vPushDv || (this._vPushDv = new THREE.Vector3())).copy(acc);
+    const res = this.applyCartesianImpulse(dv, 0, { noBill: true, quiet: true });
+    if (res === true && this._reelPushHoldErases()) this._reelPushHoldBurn(dv);
+    return res;
+  }
+
+  /** reel-push: drop `source`'s gathered sub-threshold Δv (no source: every gathering, a reset or a load). */
+  clearReelPush(source) {
+    if (!this._reelPushAccs) return;
+    if (source === undefined) this._reelPushAccs.clear();
+    else this._reelPushAccs.delete(source);
+  }
+
+  /** reel-push: the Δv `source` (none: all) has gathered and not yet handed to her orbit, a fresh vector, m/s world. */
+  getReelPushGathered(source) {
+    const out = new THREE.Vector3();
+    const accs = this._reelPushAccs;
+    if (!accs) return out;
+    if (source !== undefined) return out.copy(accs.get(source) || out);
+    for (const a of accs.values()) out.add(a);
+    return out;
+  }
+
+  /**
+   * @private reel-push (FC3): a reel that ended any way but the latch (the line snapped, a recall, a state change, a reset or a
+   * load) leaves its gathered Δv behind: apply it. Run each frame after the arms (`postArmUpdate`); cheap, the map is empty
+   * outside a reel. A source is still reeling while it is in the ArmManager's list, REELING and not cut loose.
+   */
+  _reelPushSweep() {
+    const accs = this._reelPushAccs;
+    if (!accs || accs.size === 0) return;
+    const arms = this.armManager && this.armManager.arms;
+    for (const src of accs.keys()) {
+      if (src === REEL_PUSH_SHARED) continue;
+      const live = src.state === ARM_STATES.REELING && !src.isDetached && !!arms && arms.includes(src);
+      if (!live) this.flushReelPush(src);
+    }
+  }
+
+  /**
+   * @private reel-push (FC1), a read-only question to the autopilot: is its HOLD copying the locked target's orbit into hers every
+   * frame (AutopilotSystem `PHASE.HOLD`: a, e, i, Ω, ω and the mean motion; "models active station-keeping")? Then the push's Δv
+   * is wiped the next frame. Not in HOLD, no lock with an orbit, or an onboarding-pinned target (it follows her instead of the
+   * other way round): the Δv stays in her orbit as real drift.
+   */
+  _reelPushHoldErases() {
+    const ap = this.armManager && this.armManager._autopilot;
+    if (!ap || ap.engaged !== true || typeof ap.getCurrentPhase !== 'function' || ap.getCurrentPhase() !== 'HOLD') return false;
+    const t = ap._lockedTargetRef;
+    return !!(t && t.orbit && !t._onboardingPinned);
+  }
+
+  /**
+   * @private reel-push (FC1): the HOLD burns to cancel `dvWorld` (what the line just gave her): bill the gas and puff.
+   * m = M x |Δv| / (Isp x g0), what is left in the tank at most (a short tank is drained, like the other burn bills).
+   */
+  _reelPushHoldBurn(dvWorld) {
+    const RP = Constants.REEL_PUSH || {};
+    const mass = (this.mass > 0) ? this.mass : 130;
+    let kg = mass * dvWorld.length() / ((RP.HOLD_ISP_S ?? 60) * (Constants.G0 ?? 9.81));
+    const tank = Number(this.resources && this.resources.coldGas);
+    if (Number.isFinite(tank)) kg = Math.min(kg, Math.max(0, tank));
+    if (kg > 0) {
+      eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'coldGas', amount: kg });
+      this._reelPushHoldKg += kg;
+    }
+    // the burn pushes AGAINST the line: thrust along -dv, the exhaust leaves on the daughter's side (the puff sprites sit at
+    // the nozzle that opposes this thrust, like every other burn puff)
+    const now = performance.now() * 0.001;
+    if (now - this._reelPushPuffAt < (RP.PUFF_EVERY_S ?? 0.3)) return;
+    this._reelPushPuffAt = now;
+    const qInv = (this._qPushInv || (this._qPushInv = new THREE.Quaternion())).copy(this.quaternion).invert();
+    const dir = (this._vPushPuff || (this._vPushPuff = new THREE.Vector3())).copy(dvWorld).negate().applyQuaternion(qInv).normalize();
+    this._fireRcsPuff(dir);
+  }
+
+  /** @private reel-push (FC2): the attitude couple that takes the turn `(lx, ly)` N·m·s back out puffs, at most every PUFF_EVERY_S. */
+  _reelPushTurnPuff(lx, ly) {
+    const RP = Constants.REEL_PUSH || {};
+    const now = performance.now() * 0.001;
+    if (now - this._reelPushTurnPuffAt < (RP.PUFF_EVERY_S ?? 0.3)) return;
+    this._reelPushTurnPuffAt = now;
+    const big = Math.max(Math.abs(lx), Math.abs(ly));
+    if (Math.abs(lx) >= 0.25 * big) this.fireRcsStopPulse('pitch', lx > 0 ? 1 : -1);   // the OPPOSITE couple nulls the rate
+    if (Math.abs(ly) >= 0.25 * big) this.fireRcsStopPulse('yaw', ly > 0 ? 1 : -1);
+  }
+
+  /**
+   * reel-push: a force `forceWorldN` (true N, world) acting on the hull at `pointWorld` for `dtGame` game seconds. J = F x dt_game
+   * (the reel runs on real dt, the game clock `TIME_SCALE_GAMEPLAY` x faster: the caller converts), then as `applyImpulseAtPoint`.
+   * @param {THREE.Vector3} forceWorldN
+   * @param {THREE.Vector3} pointWorld
+   * @param {number} dtGame game seconds
+   * @param {{ flush?: boolean, source?: object }} [opts]
+   * @returns {boolean|null} see applyImpulseAtPoint
+   */
+  applyForceAtPoint(forceWorldN, pointWorld, dtGame, opts = {}) {
+    if (!forceWorldN || !(dtGame > 0)) return null;
+    const j = (this._vPushF || (this._vPushF = new THREE.Vector3())).copy(forceWorldN).multiplyScalar(dtGame);
+    return this.applyImpulseAtPoint(j, pointWorld, opts);
+  }
+
+  /**
    * Apply REAL recoil from a Mother whale-net launch (Newton's 3rd law).
    *
    * The general form is r_muzzle × F_recoil about the CoM:
@@ -8164,22 +8360,35 @@ export class PlayerSatellite extends THREE.Group {
     // compensation), so its cost always accrues: torque impulse → equivalent
     // linear impulse at the cold-gas doghouse lever → the linear pattern's
     // N₂-per-impulse. Zero for the centred launcher (angularImpulse === 0).
-    const angularImpulse = Math.abs(pitchImpulse) + Math.abs(yawImpulse);
-    if (angularImpulse > 0) {
-      const leverM = Constants.MOTHER_NET_RECOIL_RCS_LEVER_M ?? 0.44;
-      const equivDv = (angularImpulse / leverM) / motherMass;   // m/s
-      const n2Grams = (Constants.DUALFIRE_RCS_COMPENSATION_N2 ?? 3.7)
-        * (equivDv / (Constants.DUALFIRE_RECOIL_WEAVER ?? 0.509));
-      if (n2Grams > 0) {
-        eventBus.emit(Events.RESOURCE_CONSUME, {
-          resource: 'coldGas',
-          amount: n2Grams / 1000,
-        });
-      }
-    }
+    // (The conversion lives in _billTurnNullN2, shared with the reel push's turn.)
+    this._billTurnNullN2(Math.abs(pitchImpulse) + Math.abs(yawImpulse), motherMass);
 
     // Cosmetic + comms: a whale launch is a heavy event; a subtle mesh kick is
     // handled by LassoSystem's _recoilOffset. Nothing else to do here.
+  }
+
+  /**
+   * Cold-gas bill for nulling a turn kick: `angularImpulseNms` (N·m·s, |pitch| + |yaw|) → the equivalent linear impulse at the
+   * cold-gas doghouse lever (`MOTHER_NET_RECOIL_RCS_LEVER_M`) → the linear pattern's N₂ per impulse (`DUALFIRE_RCS_COMPENSATION_N2`
+   * per `DUALFIRE_RECOIL_WEAVER`). The one price list for the net recoil's turn (S13(e)) and the reel push's turn (reel-push
+   * fix round 1, FC2). Emits RESOURCE_CONSUME coldGas.
+   * @param {number} angularImpulseNms
+   * @param {number} motherMass kg
+   * @returns {number} kg of gas billed (0 when there is nothing to null)
+   * @private
+   */
+  _billTurnNullN2(angularImpulseNms, motherMass) {
+    if (!(angularImpulseNms > 0)) return 0;
+    const leverM = Constants.MOTHER_NET_RECOIL_RCS_LEVER_M ?? 0.44;
+    const equivDv = (angularImpulseNms / leverM) / motherMass;   // m/s
+    const n2Grams = (Constants.DUALFIRE_RCS_COMPENSATION_N2 ?? 3.7)
+      * (equivDv / (Constants.DUALFIRE_RECOIL_WEAVER ?? 0.509));
+    if (!(n2Grams > 0)) return 0;
+    eventBus.emit(Events.RESOURCE_CONSUME, {
+      resource: 'coldGas',
+      amount: n2Grams / 1000,
+    });
+    return n2Grams / 1000;
   }
 
   /**
@@ -9803,6 +10012,7 @@ export class PlayerSatellite extends THREE.Group {
     if (!this.armManager || !this.strutGroups) return;
     const arms = this.armManager.arms;
     if (!arms) return;
+    this._reelPushSweep();   // reel-push FC3: a reel that ended without the latch hands over what it had gathered
 
     for (let i = 0; i < this.strutGroups.length; i++) {
       if (i >= arms.length) break;
@@ -9914,6 +10124,9 @@ export class PlayerSatellite extends THREE.Group {
    * @param {boolean} [opts.continuous=false] — this Δv is a burn spread over `dt`
    *   (the autopilot's per-frame thrust): the power bill is scaled to the frame, so the
    *   Wh per second does not depend on the frame rate. A one-shot (the dodge) leaves it off.
+   * @param {boolean} [opts.quiet=false] — a passive pull with no exhaust (reel-push, 2026-10-22: the line tension from a
+   *   reeling daughter): no RCS puff, no THRUST_VISUAL streaks, and it is not counted in `_deltaVSpent` (she spent nothing).
+   *   Only meaningful with `noBill`.
    * @returns {boolean} true when the impulse was applied; false when refused
    *   (envelope guard, degenerate orbit, or — with billing on — resource gates).
    *   Callers that keep the Δv (the tug) must surface a false return honestly
@@ -9924,6 +10137,7 @@ export class PlayerSatellite extends THREE.Group {
     const dvMag = dvWorld.length();
     if (dvMag < 1e-9 || !isFinite(dvMag)) return false;
     const noBill = opts.noBill === true;
+    const quiet = noBill && opts.quiet === true;
     // h3b-argon-push D1: the engine's push per watt. The tug (noBill) is momentum, not the engine -> 1.
     const thrustScale = noBill ? 1 : activeThrustScale(this);
 
@@ -10032,8 +10246,8 @@ export class PlayerSatellite extends THREE.Group {
     // Refresh cached Cartesian so subsequent getVelocity/getPosition reads see the new state
     this._cartesian = orbitToSceneCartesian(this.orbit);
 
-    // --- Bookkeeping: only the Δv actually applied ---
-    this._deltaVSpent += dvMag * dvScale;
+    // --- Bookkeeping: only the Δv actually applied (a quiet passive pull spent nothing) ---
+    if (!quiet) this._deltaVSpent += dvMag * dvScale;
 
     // Resource consumption: the battery pays what it holds (drawn only now —
     // the envelope accepted the burn), the engine gas is billed for the thrust
@@ -10058,6 +10272,8 @@ export class PlayerSatellite extends THREE.Group {
     }
 
     // --- Visual: fire RCS puff opposite to the impulse direction (in local frame) ---
+    // A quiet passive pull (the reel line, reel-push) has no exhaust: no puff, no streaks.
+    if (quiet) return true;
     const localDir = dvWorld.clone().applyQuaternion(
       this.quaternion.clone().invert()
     ).normalize();

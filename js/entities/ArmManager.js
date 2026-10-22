@@ -64,6 +64,81 @@ const AIM_CATCH_HELD_STATES = ['CINCH_CLOSING', 'SECURE_CHECK', 'CAPTURED', 'REE
 const _strutLiveAlpha = (a) =>
   a._strutTargetAlpha ?? (a.getAimAlpha ? a.getAimAlpha() : 0);
 
+/**
+ * hold-catch (owner 2026-10-22): the strut angle a daughter holding a catch rests at. The lowest of 34° (STRUT_REST_ALPHA),
+ * 39°, 44° ... 99°, then 100° (HOLD_POSE_MAX_DEG), at which her catch is clear of every thruster plume — the exact box check
+ * (`heldCargoPlumeConflictAt`) at THAT angle, not the size-ladder floor (`PLUME_CARGO_ALPHA_LADDER` is the worst case over
+ * every rack attitude plus 10°, sized for a re-pose from anywhere; a held catch's attitude in her frame is frozen at the stow,
+ * so the exact read is the real answer, and it keeps a 1 m catch at 34° where the ladder said 41°). Never above 100°: the
+ * mother net's berth corridor is clear of a strut tip for every inbound size up to there. If nothing clears (not seen for
+ * catches up to 5 m), 100° with `tooBig`. Pure read; null when she holds nothing. A module function (not a method) so
+ * `ArmManager.toggleStruts`, which runs on bare stub objects in tests, can call it without `this.method()`.
+ * @param {object} mgr an ArmManager (arms[], _dockPositions[], playerSatellite)
+ * @param {number} armIndex
+ * @returns {{rad:number, tooBig:boolean}|null}
+ */
+function _holdPoseOf(mgr, armIndex) {
+  const arm = mgr.arms[armIndex];
+  if (!arm || arm.isDetached) return null;
+  const holds = (arm.capturedDebris && arm.capturedDebris.mass)
+    || (Array.isArray(arm.heldCatches) && arm.heldCatches.some((h) => h && h.mass));
+  if (!holds) return null;
+  const V5 = Constants.OCTOPUS_V5;
+  const D2R = Math.PI / 180;
+  const lo = Math.round(V5.STRUT_REST_ALPHA / D2R);
+  const hi = V5.HOLD_POSE_MAX_DEG;
+  for (let deg = lo; deg < hi; deg += V5.HOLD_POSE_STEP_DEG) {
+    if (!heldCargoPlumeConflictAt(mgr, armIndex, deg * D2R)) return { rad: deg * D2R, tooBig: false };
+  }
+  if (!heldCargoPlumeConflictAt(mgr, armIndex, hi * D2R)) return { rad: hi * D2R, tooBig: false };
+  return { rad: hi * D2R, tooBig: true };
+}
+
+/**
+ * hold-catch: a "." press on daughters holding catches (called by ArmManager.toggleStruts). The wanted angle is clamped to the
+ * hold pose from below (a press that would close her sends her to it) and to HOLD_POSE_MAX_DEG from above; an angle above the
+ * pose is taken only when her catch is plume-clear there. Each gets the manual marker, as a docked strut does (StrutAuto keeps
+ * it for them and ages it) - only when the press moves her: a press that moves nothing is no override. When it moves nothing and no
+ * docked strut was commanded either, `mgr.lastStrutPressNote` says why, in one plain line (`toggleStruts` holds a single tap's line
+ * back for the double-press window, see `_pendingStrutNote`).
+ * @param {object} mgr
+ * @param {object[]} holders
+ * @param {number} wantRad
+ * @param {boolean} autoOn the STRUT_AUTO flag: the manual marker is only written (and aged) when it is on
+ * @param {boolean} onlyThese true: nothing else was commanded, so a press that moves nothing gets its line
+ */
+function _pressHolders(mgr, holders, wantRad, autoOn, onlyThese) {
+  if (!holders.length) return;
+  const V5 = Constants.OCTOPUS_V5;
+  const dead = V5.HOLD_POSE_DEADBAND_DEG * Math.PI / 180;
+  const cap = V5.HOLD_POSE_MAX_DEG * Math.PI / 180;
+  let anyMoved = false;
+  let stayed = null;
+  for (const a of holders) {
+    const i = mgr.arms.indexOf(a);
+    const hp = _holdPoseOf(mgr, i);
+    if (!hp) continue;
+    let t = hp.rad;
+    if (wantRad > hp.rad + 1e-6 && wantRad <= cap + 1e-6 && !heldCargoPlumeConflictAt(mgr, i, wantRad)) t = wantRad;
+    // where she is heading (a pending latch wins, as for a docked strut): a press that asks for that again moves nothing, and a
+    // press that moves nothing is not a manual override (FA4: it left `_strutManual` behind, which later said "back to automatic")
+    if (Math.abs(t - _strutLiveAlpha(a)) > dead) {
+      a._strutTargetAlpha = t;
+      if (autoOn) a._strutManual = { quietS: 0 };
+      anyMoved = true;
+    } else if (!stayed && Math.abs(t - (a.getAimAlpha ? a.getAimAlpha() : t)) <= dead) {
+      stayed = { a, hp };
+    }
+  }
+  if (onlyThese && stayed && !anyMoved) {
+    const n = stayed.a.index + 1;
+    const deg = Math.round(stayed.hp.rad * 180 / Math.PI);
+    mgr.lastStrutPressNote = deg <= Math.round(V5.STRUT_REST_ALPHA * 180 / Math.PI)
+      ? `Daughter ${n} is holding a catch; her strut stays at ${deg}° to keep it clear of the hull.`
+      : `Daughter ${n} is holding a big catch; her strut stays at ${deg}° to keep it clear of the thrusters.`;
+  }
+}
+
 // V5 Constants (destructured for readability)
 const {
   V5_ARM_COUNT, V5_FRONT_ARM_TYPE, V5_BACK_ARM_TYPE,
@@ -1460,8 +1535,10 @@ export class ArmManager {
    * — the REFIT BERTHS card's STRUTS chip and the F1 bar's `struts` actuator
    * drive it through the hub; InputManager's Period case delegates here. It is
    * the ONE copy of the strut law. It writes `_strutTargetAlpha` on DOCKED arms
-   * only, and decides from the live read (getAimAlpha, a pending latch winning
-   * — never the latch alone, it clears to undefined on arrival).
+   * and on daughters HOLDING A CATCH (hold-catch, owner 2026-10-22: never below
+   * her hold pose, never above 100°; see `_pressHolders`), and decides from the
+   * live read (getAimAlpha, a pending latch winning — never the latch alone, it
+   * clears to undefined on arrival).
    *
    * The law (owner 2026-10-14; angles measured from the tail):
    *   • a press while any docked strut is open (live or pending, past
@@ -1478,20 +1555,34 @@ export class ArmManager {
    * Emitting Events.STRUT_DEPLOY_INPUT stays the CALLER's job (InputManager
    * emits its own; the hub emits for the pane), as does the click.
    * @returns {boolean|null} true = opening (34° or 90°), false = closing (0°);
-   *   null when no DOCKED arm could take the write (nothing toggled — the
-   *   caller should skip its emit).
+   *   null when no DOCKED or holding arm could take the write (nothing toggled —
+   *   the caller should skip its emit). A DOUBLE press that moves nothing leaves one
+   *   plain sentence in `lastStrutPressNote` (else null) for the caller to say; a
+   *   single press that moves nothing leaves it in `_pendingStrutNote`, which
+   *   `_tickStrutPressNote` says once the double-press window has passed.
    */
   toggleStruts(armIndex) {
+    this.lastStrutPressNote = null;
+    this._pendingStrutNote = null;               // a new press supersedes a line still waiting out the double-press window
     let docked = (this.arms || []).filter((a) => a && a.state === ARM_STATES.DOCKED);
-    // A selected, docked daughter (the "." key passes her index): the same law, for her alone.
-    // No index, or she is away → every docked arm, as before.
+    // hold-catch (owner 2026-10-22: '"." keys doesn't move them'): a daughter aboard holding a catch takes the press too, but
+    // her strut never goes below her hold pose (34° or the lowest plume-clear angle) or above HOLD_POSE_MAX_DEG.
+    let holders = (this.arms || []).filter((a) => a && a.state === ARM_STATES.HOLDING_CATCH && !a.isDetached
+      && Array.isArray(a.heldCatches) && a.heldCatches.some((h) => h));
+    // A selected daughter, docked or holding (the "." key passes her index): the same law, for her alone.
+    // No index, or she is away → every docked / holding arm, as before.
     if (Number.isInteger(armIndex) && armIndex >= 0) {
       const only = (this.arms || [])[armIndex];
-      if (only && only.state === ARM_STATES.DOCKED) docked = [only];
+      if (only && only.state === ARM_STATES.DOCKED) { docked = [only]; holders = []; }
+      else if (only && holders.includes(only)) { docked = []; holders = [only]; }
     }
-    if (!docked.length) return null;
+    if (!docked.length && !holders.length) return null;
     const V5 = Constants.OCTOPUS_V5;
-    const anyOpen = docked.some((a) => _strutLiveAlpha(a) >= V5.STRUT_OPEN_THRESHOLD);
+    // the open/closed read comes from the docked struts; with only holders it reads whether they stand above their hold pose
+    const holdRad = (a) => { const hp = _holdPoseOf(this, this.arms.indexOf(a)); return hp ? hp.rad : V5.STRUT_REST_ALPHA; };
+    const anyOpen = docked.length
+      ? docked.some((a) => _strutLiveAlpha(a) >= V5.STRUT_OPEN_THRESHOLD)
+      : holders.some((a) => _strutLiveAlpha(a) > holdRad(a) + V5.HOLD_POSE_DEADBAND_DEG * Math.PI / 180);
     const now = (typeof performance !== 'undefined' && performance.now)
       ? performance.now() : Date.now();
     const doubleTap = this._lastStrutTap !== undefined
@@ -1509,6 +1600,7 @@ export class ArmManager {
         a._strutTargetAlpha = V5.STRUT_DEPLOY_ALPHA;
         if (autoOn) a._strutManual = { quietS: 0 };
       }
+      _pressHolders(this, holders, V5.STRUT_DEPLOY_ALPHA, autoOn, docked.length === 0);
       return true;
     }
 
@@ -1517,6 +1609,13 @@ export class ArmManager {
     for (const arm of docked) {
       arm._strutTargetAlpha = targetAlpha;
       if (autoOn) arm._strutManual = { quietS: 0 };
+    }
+    _pressHolders(this, holders, targetAlpha, autoOn, docked.length === 0);
+    // FA4: this tap may be the first of a double press that lifts her to 90°; "stays at 34°" is said only when the window
+    // has passed with no second press (ArmManager._tickStrutPressNote), not at once
+    if (this.lastStrutPressNote) {
+      this._pendingStrutNote = { text: this.lastStrutPressNote, leftS: V5.STRUT_PUSH_WINDOW_MS / 1000 };
+      this.lastStrutPressNote = null;
     }
     return !anyOpen;
   }
@@ -1813,16 +1912,17 @@ export class ArmManager {
     this._updateReelHome(dt, parentPos, parentQuat);
     this._updateCarry(dt);
     this._tickMissionCarry(dt);
+    this._tickStrutPressNote(dt);
 
     // Wave1: spin/amber the strut reel cartridges per live arm state.
     this._syncTetherDrums();
 
-    // S9 strut posing (cargo-continuity plan §5, part 3; register item 32):
-    // a loaded HOLDING_CATCH daughter whose cargo box sits in a plume cone at
-    // her live booking re-poses to the measured safe band. Live, NOT
-    // flag-gated — this changes how the arm MOVES, never what thrust refuses
-    // (THRUSTER_INTERLOCK stays dormant and untouched). Runs AFTER arm.update
-    // so aim writes land on fresh positions.
+    // hold-catch (owner 2026-10-22; rebases S9 strut posing, register item 32):
+    // a daughter holding a catch keeps her strut at her hold pose (34°, or the
+    // lowest plume-clear 5° step, never above 100°) — also a strut the reel left
+    // high comes down. Live, NOT flag-gated — this changes how the arm MOVES,
+    // never what thrust refuses (THRUSTER_INTERLOCK stays dormant and
+    // untouched). Runs AFTER arm.update so aim writes land on fresh positions.
     this._updateCargoPlumePoses(dt);
 
     // Task 7 (opening-dance plan) — lean-aside safety-net timeout tick.
@@ -1957,10 +2057,13 @@ export class ArmManager {
   /**
    * petal-single (Decisions 4, 7d): the conditions the gate table was certified for that can change while a daughter waits
    * or carries - the other three petals standing in a certified shared-angle range and not on their way out of it, the
-   * other three struts within `NEIGHBOUR_TOL_DEG` of their rest angle, and her own recorded strut angle inside the swept range.
-   * Read-only. `null` = all hold, else `{reason, text}` (every one of them clears by waiting).
+   * other three struts within `NEIGHBOUR_TOL_DEG` of their rest angle - or of their own HOLD POSE when they hold a catch (hold-catch FA3) -
+   * and no neighbour holding a catch the carry path was not measured clear of (`NEIGHBOUR_CATCH_MAX_SIZE_M`, or any measured size when the
+   * neighbour stands at `NEIGHBOUR_CATCH_HIGH_POSE_DEG` or higher), and her own recorded strut angle inside the swept range.
+   * Read-only. `null` = all hold, else `{reason, text}` (every one of them clears by waiting) - except a 'neighbour-catch' whose
+   * blocking catch fits no radiator tip: that one carries `never: true` (hold-catch FA6; it leaves her rack by no hand-off).
    * @param {ArmUnit} arm
-   * @returns {null|{reason:string, text:string}}
+   * @returns {null|{reason:string, text:string, never?:boolean}}
    */
   carryConditions(arm) {
     const V = Constants.CARRY;
@@ -1975,8 +2078,27 @@ export class ArmManager {
     }
     for (const o of this.arms) {
       if (!o || o === arm || typeof o.getAimAlpha !== 'function') continue;
-      if (Math.abs(o.getAimAlpha() * R2D - V.NEIGHBOUR_REST_DEG) > V.NEIGHBOUR_TOL_DEG + 1e-6) {
-        return { reason: 'neighbour-strut', text: `Daughter ${o.index + 1}'s strut is out of place. Daughter ${n} waits.` };
+      const oDeg = o.getAimAlpha() * R2D;
+      const held = Array.isArray(o.heldCatches) ? o.heldCatches.filter((h) => h && h.mass) : [];
+      if (Math.abs(oDeg - V.NEIGHBOUR_REST_DEG) > V.NEIGHBOUR_TOL_DEG + 1e-6) {
+        // hold-catch FA3: a neighbour holding a catch stands at her HOLD POSE (34..100 deg), which is where she belongs: accepted
+        // (the carry was measured against it, see Constants.CARRY.NEIGHBOUR_CATCH_MAX_SIZE_M). Anywhere else (a "." press, a strut on its
+        // way) is out of place, as before.
+        const hp = held.length ? this._holdPoseCached(o, this.arms.indexOf(o), 0) : null;
+        if (!hp || Math.abs(oDeg - hp.rad * R2D) > V.NEIGHBOUR_TOL_DEG + 1e-6) {
+          return { reason: 'neighbour-strut', text: `Daughter ${o.index + 1}'s strut is out of place. Daughter ${n} waits.` };
+        }
+      }
+      // ... and the catch on her nose is an obstacle the gate never saw: only catches the measurement cleared pass (Constants.CARRY)
+      const high = oDeg >= V.NEIGHBOUR_CATCH_HIGH_POSE_DEG - V.NEIGHBOUR_TOL_DEG - 1e-6;
+      const blocking = held.filter((h) => !(h.sizeMeter <= V.NEIGHBOUR_CATCH_MAX_SIZE_M + 1e-9
+          || (high && h.sizeMeter <= V.NEIGHBOUR_CATCH_HIGH_MAX_SIZE_M + 1e-9)));
+      if (blocking.length) {
+        // hold-catch FA6: a blocking catch that does not fit a radiator tip never leaves her rack by a hand-off, so waiting does not help
+        // (`never`: carryCheck answers retry:false; the trip's end rule stops waiting for it, and "Press C" says this plain reason)
+        const tc = ps && ps.tipCargo;
+        const never = !!(tc && typeof tc.fits === 'function' && blocking.some((h) => !tc.fits(DebrisField.trueReachM(h, 0))));
+        return { reason: 'neighbour-catch', never, text: `Daughter ${o.index + 1}'s catch is too close to Daughter ${n}'s path. Daughter ${n} keeps hers.` };
       }
     }
     const recDeg = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() * R2D : NaN;
@@ -1995,13 +2117,16 @@ export class ArmManager {
    * 'swing-back' (review R8) waits too: the catch is bigger than the gate certified for the radiators' present range (closed/open).
    * `mission`: outside a trip - the leash's mission conditions also apply (the ship is not turning or holding a heading, no
    * daughter is leaving, time is not held) and a launch request for her blocks it.
+   * `motherNetOnly` (hold-catch FA1): refuse ('own-catch') unless the piece it would deliver was put on the rack by the mother's
+   * net (`_rackFromMotherNet`, set where CaptureNet's cargo flight lands): the mission scheduler's rule.
    * @param {ArmUnit} arm
-   * @param {{mission?:boolean}} [opts]
+   * @param {{mission?:boolean, motherNetOnly?:boolean}} [opts]
    * @returns {{ok:boolean, reason:string, text:string, retry:boolean, giveUp:boolean, plan?:object}}
    */
   carryCheck(arm, opts = {}) {
     const S = ARM_STATES;
     const mission = opts.mission === true;
+    const motherNetOnly = opts.motherNetOnly === true;
     const no = (reason, text = '', retry = true, giveUp = false, sayKey = '') => ({ ok: false, reason, text, retry, giveUp, sayKey });
     if (!arm || arm.isDetached || (arm.state !== S.HOLDING_CATCH && arm.state !== S.DOCKED)) return no('state', '', false);
     if (arm._carryGaveUp) return no('gave-up', '', false);          // her last carry failed on its own: not again until something changes
@@ -2016,6 +2141,10 @@ export class ArmManager {
     let delivered = rack[0];
     const cellOf = (d, i) => (Number.isInteger(d._rackCell) ? d._rackCell : i);
     for (let i = 1; i < rack.length; i++) if (cellOf(rack[i], i) > cellOf(delivered, 0)) delivered = rack[i];
+    // hold-catch FA1 (owner 2026-10-22 "Keep: radiator right away"): the mission scheduler asks only for catches the MOTHER's net
+    // put on this rack (it could not reach a tip at once); a catch the daughter caught herself stays with her ('own-catch' is
+    // not a refusal worth a line, and not a give-up: "Press C" asks without this option).
+    if (motherNetOnly && !delivered._rackFromMotherNet) return no('own-catch', '', false);
     const cell = Math.max(0, Math.min(1, cellOf(delivered, rack.indexOf(delivered))));
     const reach = DebrisField.trueReachM(delivered, 0);
     if (!tc.fits(reach)) {
@@ -2047,7 +2176,7 @@ export class ArmManager {
       return no('tip-busy', `Radiator ${tipIndex + 1}'s furnace is busy. Daughter ${n} waits.`);
     }
     const cond = this.carryConditions(arm);
-    if (cond) return no(cond.reason, cond.text);
+    if (cond) return no(cond.reason, cond.text, !cond.never);
     // review R8: no carry starts whose swing BACK (her petal released, the catch in the tip bag, past her strut, her body, the hull
     // and the other petals) is not certified 0.15 m. The gate measured the largest catch reach each range of the radiators
     // allows (closed: the bag passes her own strut close; open: far); a bigger catch waits for the other range - it clears by itself.
@@ -2093,24 +2222,26 @@ export class ArmManager {
   /**
    * One look of a carry scheduler: start the first daughter that can carry (first free tip first, ties by daughter index).
    * A refusal that cannot clear by waiting marks her (`_carryGaveUp`: the scheduler stops asking); the ones worth a line say it
-   * once per `said` key. The trip calls it on its own cadence while it burns, the mission scheduler (`_tickMissionCarry`)
-   * outside a trip.
-   * @param {{mission?:boolean, say?:function(string):void, said?:object}} [o]
+   * once per `said` key. The trip calls it on its own cadence while it burns. (Outside a trip nothing calls it any more:
+   * hold-catch, owner 2026-10-22 — a daughter keeps her catch; "Press C" -> `moveCatchToRadiator` starts one.)
+   * @param {{mission?:boolean, motherNetOnly?:boolean, say?:function(string):void, said?:object}} [o]
    * @returns {ArmUnit|null} the daughter that started
    */
-  scheduleCarry({ mission = false, say = null, said = null } = {}) {
+  scheduleCarry({ mission = false, motherNetOnly = false, say = null, said = null } = {}) {
     const tc = this.playerSatellite && this.playerSatellite.tipCargo;
     const tipTaken = (a) => (tc && typeof tc.debrisAt === 'function' && tc.debrisAt(a.index) ? 1 : 0);
     const arms = this.arms.filter((a) => a && !a.isDetached);
     arms.sort((a, b) => tipTaken(a) - tipTaken(b) || a.index - b.index);
     for (const arm of arms) {
-      const r = this.carryCheck(arm, { mission });
+      const r = this.carryCheck(arm, { mission, motherNetOnly });
       if (r.ok) {
-        if (this.requestCarry(arm, { mission }).ok) return arm;
+        if (this.requestCarry(arm, { mission, motherNetOnly }).ok) return arm;
         continue;
       }
       if (r.giveUp) arm._carryGaveUp = true;
-      const sayIt = say && r.text && (r.reason === 'fit' || r.reason === 'gate' || r.reason === 'fuel' || r.reason === 'swing-back');
+      // (FA6: a neighbour's catch that can never leave is said too - once - or the catch just stays on her rack in silence)
+      const sayIt = say && r.text && (r.reason === 'fit' || r.reason === 'gate' || r.reason === 'fuel' || r.reason === 'swing-back'
+        || (r.reason === 'neighbour-catch' && !r.retry));
       if (sayIt) {
         const key = r.sayKey || `${arm.index}|${r.reason}`;                  // swing-back: once per catch
         if (said && !said[key]) { said[key] = true; say(r.text); }
@@ -2120,19 +2251,26 @@ export class ArmManager {
   }
 
   /**
-   * The trip phase the mission scheduler stands aside for: 'wait' (the trip waits for the daughters: no new carry), 'burn'
+   * The trip phase the mission tick (_tickMissionCarry) stands aside for: 'wait' (the trip waits for the daughters: no new carry), 'burn'
    * (the trip's own scheduler) or null (a mission). Set by TransferTrip.
    * @param {string|null} phase
    */
   setTripPhase(phase) {
     this._tripPhase = phase || null;
-    if (!this._tripPhase) { this._missionCarryAgeS = 0; this._missionTipsTaken = null; this._missionCarrySaid = Object.create(null); }
+    // hold-catch FA7: the lines already said (a hand-off refusal, "too big for a tip") start over after a trip, as on main
+    if (!this._tripPhase) { this._missionCarryAgeS = 0; this._missionTipsTaken = null; this._missionCarrySaid = Object.create(null); this._allFullSaid = false; }
   }
 
   /**
-   * petal-single (Decision 5): carries outside a trip. Every `MISSION_CHECK_S` of game time, when no trip owns the
-   * carries, `scheduleCarry({mission:true})` looks for a daughter with a catch on her rack. A give-up clears when she
-   * leaves the dock (a launch) or any tip frees. Cheap exit when no daughter holds a catch.
+   * hold-catch (owner 2026-10-22: "daughters that catch debris should hold it ... Transfer to radiator strut is risky,
+   * should be an option when all daughters are full, not automatic"): outside a trip a daughter KEEPS the catch she made. The
+   * petal-single scheduler that started a hand-off by itself every `MISSION_CHECK_S` now asks only for a catch the MOTHER's net
+   * put on a rack because no radiator tip was free (`_rackFromMotherNet`, set where CaptureNet's cargo flight lands; owner
+   * "Keep: radiator right away"): it goes to a tip as soon as one is, as before. The rest is bookkeeping (a give-up clears when
+   * she leaves the dock or any tip frees, so a later "Press C" can try again) and the one line that tells the player the choice
+   * is his: when every daughter is aboard holding a catch, say it once (`_sayAllFull`). The mother's OWN nose catches are not here:
+   * CaptureNet._tryLeash -> LeashDriver send them to a free radiator tip right away, as before. On a trip
+   * `TransferTrip._tickCarry` owns the hand-offs (`_tripPhase` set), automatic as before.
    * @private
    */
   _tickMissionCarry(dt) {
@@ -2156,14 +2294,147 @@ export class ArmManager {
         for (const k of Object.keys(said)) if (k.startsWith(`${a.index}|`) && !k.includes('|swing-back|')) delete said[k];   // (swing-back: once per catch, its key names the catch)
       }
     }
-    if (!this.arms.some((a) => a && !a._carryGaveUp && Array.isArray(a.heldCatches) && a.heldCatches.length > 0
-        && (a.state === ARM_STATES.DOCKED || a.state === ARM_STATES.HOLDING_CATCH))) return;
-    this.scheduleCarry({
-      mission: true, said,
-      say: (text) => eventBus.emit(Events.COMMS_MESSAGE, { text, priority: 'info' }),
-    });
+    // FA1: a catch the mother's net racked goes to a free radiator tip by itself (a daughter's own never does)
+    if (this.arms.some((a) => a && !a._carryGaveUp && Array.isArray(a.heldCatches) && a.heldCatches.some((h) => h && h._rackFromMotherNet)
+        && (a.state === ARM_STATES.DOCKED || a.state === ARM_STATES.HOLDING_CATCH))) {
+      this.scheduleCarry({
+        mission: true, motherNetOnly: true, said,
+        say: (text) => eventBus.emit(Events.COMMS_MESSAGE, { text, priority: 'info' }),
+      });
+    }
+    this._sayAllFull();
   }
 
+  /**
+   * hold-catch FA2: all full -> ONE line, and "Press C" only when C can work. Every daughter's hand-off outlook is read through
+   * `carryCheck` (a mission carry): 'now' = it would start now (fits a tip, its tip is free, the gate allows it); 'later' = waiting
+   * can help (a busy tip, the radiators or the ship are moving); 'never' = it cannot go (too big for a tip, no gate row, no fuel).
+   * Said once per time they become full; "Press C" is said once more if the first line had to leave it out and a hand-off then
+   * becomes possible. No catch that fits -> the daughters are full and the line says nothing about C. Re-armed when one is not full.
+   * @private
+   */
+  _sayAllFull() {
+    if (!this.allDaughtersFull()) { this._allFullSaid = false; return; }
+    let now = 0, later = 0;
+    for (const a of this.arms) {
+      if (!a || a.isDetached || a.state === ARM_STATES.EXPENDED) continue;
+      const o = this._handoffOutlook(a);
+      if (o === 'now') now++; else if (o === 'later') later++;
+    }
+    const key = now ? 'press' : (later ? 'full' : 'never');
+    if (this._allFullSaid && !(key === 'press' && this._allFullSaid !== 'press')) return;
+    this._allFullSaid = key;
+    const text = key === 'press' ? 'All daughters are holding catches. Press C to move one to a radiator.'
+      : key === 'full' ? 'All daughters are holding catches.'
+      : 'All daughters are holding catches, and none of them can go to a radiator.';
+    eventBus.emit(Events.COMMS_MESSAGE, { text, priority: 'info' });
+  }
+
+  /**
+   * hold-catch FA2: can this daughter's catch go to a radiator tip - now, later, or never? Read-only (`carryCheck`, a mission carry).
+   * 'gave-up' counts as 'later': "Press C" clears it and asks again.
+   * @param {ArmUnit} arm
+   * @returns {'now'|'later'|'never'}
+   */
+  _handoffOutlook(arm) {
+    const r = this.carryCheck(arm, { mission: true });
+    if (r.ok) return 'now';
+    return (r.retry || r.reason === 'gave-up') ? 'later' : 'never';
+  }
+
+  /** hold-catch FA4: a "." line held back for the double-press window is said once the window has passed with no second press. @private */
+  _tickStrutPressNote(dt) {
+    const p = this._pendingStrutNote;
+    if (!p || !(dt > 0)) return;
+    p.leftS -= dt;
+    if (p.leftS > 0) return;
+    this._pendingStrutNote = null;
+    eventBus.emit(Events.COMMS_MESSAGE, { source: 'SPACECRAFT', channel: 'CMD', text: p.text, priority: 'info' });
+  }
+
+  /**
+   * hold-catch: true when every daughter that can still fly (not detached, not expended) is aboard holding a catch, and at
+   * least one is: none can launch for a new catch. A daughter on a carry is not "holding" (she is busy moving one).
+   * @returns {boolean}
+   */
+  allDaughtersFull() {
+    let n = 0;
+    for (const a of this.arms) {
+      if (!a || a.isDetached || a.state === ARM_STATES.EXPENDED) continue;
+      const holds = a.state === ARM_STATES.HOLDING_CATCH && Array.isArray(a.heldCatches) && a.heldCatches.some((h) => h);
+      if (!holds) return false;
+      n++;
+    }
+    return n > 0;
+  }
+
+  /**
+   * hold-catch (owner 2026-10-22, "Press C"): the player's choice to move ONE daughter's catch to a radiator tip, only when
+   * every daughter is full. Starts one hand-off through the same `carryCheck` / `requestCarry` / `beginCarry` path the trip
+   * uses (a mission carry: the hand-off ends with "puts her catch on radiator N's tip; she is free again"). The selected
+   * daughter if she holds a catch, else the first holding one that can go (lowest number first; if none can, the first one's
+   * reason is the line). Never on a trip (the trip hands them off by itself), never while a hand-off runs, never while a
+   * daughter is free. Every outcome that moves nothing says why, in one comms line.
+   * @param {number} [selectedIndex] the selected daughter's index (-1 / undefined: none)
+   * @returns {{ok:boolean, text:string, arm?:object}}
+   */
+  moveCatchToRadiator(selectedIndex) {
+    const S = ARM_STATES;
+    const finish = (r) => {
+      if (r.text) eventBus.emit(Events.COMMS_MESSAGE, { text: r.text, priority: 'info' });
+      return r;
+    };
+    if (this._tripPhase) {
+      return finish({ ok: false, text: 'The daughters hand their catches to the radiators by themselves on the trip.' });
+    }
+    const arms = (this.arms || []).filter((a) => a && !a.isDetached && a.state !== S.EXPENDED);
+    const holders = arms.filter((a) => a.state === S.HOLDING_CATCH && Array.isArray(a.heldCatches) && a.heldCatches.some((h) => h));
+    if (this.isCarrying()) return finish({ ok: false, text: 'A hand-off is already running.' });
+    if (holders.length === 0) return finish({ ok: false, text: 'No daughter is holding a catch.' });
+    const free = arms.find((a) => !holders.includes(a));
+    if (free) {
+      const away = free.state !== S.DOCKED && free.state !== S.RELOADING;
+      return finish({ ok: false, text: `Daughter ${free.index + 1} is ${away ? 'out' : 'free'}; catches stay with the daughters until all are full.` });
+    }
+    const sel = Number.isInteger(selectedIndex) && selectedIndex >= 0 ? holders.find((a) => a.index === selectedIndex) : null;
+    const order = sel ? [sel] : holders.slice().sort((a, b) => a.index - b.index);
+    // FA2: with nobody selected, the line names the first daughter whose hand-off can still happen (waiting helps), not a
+    // catch that never fits a tip while another one only waits for her tip
+    let first = null;
+    for (const arm of order) {
+      arm._carryGaveUp = false;                              // he asked: a give-up from an earlier try does not count
+      const r = this.carryCheck(arm, { mission: true });
+      if (r.ok) {
+        const started = this.requestCarry(arm, { mission: true });
+        if (started.ok) {
+          const tip = (arm._carry && Number.isInteger(arm._carry.tipIndex)) ? arm._carry.tipIndex : arm.index;
+          return finish({ ok: true, arm, text: `Daughter ${arm.index + 1} takes her catch to radiator ${tip + 1}.` });
+        }
+        if (!first || !first.r.retry) first = { arm, r: started };
+        continue;
+      }
+      if (!first || (!first.r.retry && r.retry)) first = { arm, r };
+    }
+    return finish({ ok: false, text: this._carryRefusalText(first.arm, first.r) });
+  }
+
+  /** @private one plain sentence for a `carryCheck` refusal that has no text of its own */
+  _carryRefusalText(arm, r) {
+    if (r && r.reason === 'fit') return `Daughter ${arm.index + 1}'s catch is too big for a radiator tip; she keeps it.`;
+    if (r && r.text) return r.text;
+    const n = arm.index + 1;
+    switch (r && r.reason) {
+      case 'carry-busy': return 'A hand-off is already running.';
+      case 'mission-turning': return `The ship is turning or holding a heading, so Daughter ${n} waits. Try again when it stops.`;
+      case 'mission-daughter': return `A daughter is leaving the ship, so Daughter ${n} waits.`;
+      case 'mission-radiators': return `The radiators are busy, so Daughter ${n} waits. Try again in a moment.`;
+      case 'mission-world': return 'Time is held.';
+      case 'mission-busy': return `One catch is already on its leash, so Daughter ${n} waits.`;
+      case 'strut-range': return `Daughter ${n}'s strut is still moving. Try again in a moment.`;
+      case 'no-tip': case 'layout': return 'This ship cannot move catches to a radiator.';
+      default: return `Daughter ${n} cannot move her catch right now.`;
+    }
+  }
 
   /** A new trip: every daughter may try a carry again (`_carryGaveUp` cleared). */
   resetCarryGiveUps() {
@@ -2531,80 +2802,76 @@ export class ArmManager {
     return berthed + rack + tip;
   }
 
-  // ── S9: strut posing — held cargo stays out of the plumes (register 32) ───
+  // ── hold-catch: a daughter aboard with a catch keeps her strut at her hold pose ───
+
+  /** hold-catch: the strut angle a daughter holding a catch rests at (see `_holdPoseOf` above). @returns {{rad:number, tooBig:boolean}|null} */
+  holdPoseFor(armIndex) { return _holdPoseOf(this, armIndex); }
+
+  /** hold pose with a short memory: re-read when her rack changes or every 0.5 s (the read is a few dozen cone tests). @private */
+  _holdPoseCached(arm, armIndex, dt) {
+    let key = '';
+    if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) if (h) key += `${h.id}:${h.sizeMeter}:${h._rackCell};`;
+    const c = arm._holdPose;
+    if (c && c.key === key && c.ageS < 0.5) { c.ageS += dt; return c.pose; }
+    const pose = this.holdPoseFor(armIndex);
+    arm._holdPose = { key, pose, ageS: 0 };
+    return pose;
+  }
 
   /**
-   * S9 re-pose (cargo-continuity plan §5 part 3): on a bite — the arm's held
-   * cargo box in any plume cone at its live booking while she is loaded
-   * HOLDING_CATCH — her aim α eases to the measured safe band
-   * (Constants.plumeCargoSafeAlphaMin for her largest piece; the band rows are
-   * tmp/i32s9-box-probe.log's max-bite angles + a +10° margin, worst aspect).
-   * Constraints, per the work order:
-   *   • CAMERA: nearest feasible destination first — the pose family (a
-   *     catch-relative hold beside the daughter; the lateral bias is untouched)
-   *     survives because the swing takes the SHORTEST legal step, and the
-   *     slew rate (STRUT_SLEW_RATE via setAimAlpha / _updateStruts) makes it
-   *     a swing, never a snap. No comms line — the visible swing is the tell.
-   *   • CORRIDOR: candidates cross no sister station's berth corridor —
-   *     _repPoseCorridorClear, _corridorClear's strut-tip set as a
-   *     destination-feasibility READ only. The live corridor gate stays
-   *     strut-tips-only per S13(d). No feasible pose ⇒ hold course and retry
-   *     next frame (the station clears when the transfer completes).
-   * The aim coroutine already clamps α ∈ [0, π] so every destination here is
-   * reachable. An arm parked at or above her floor can never present cargo to
-   * a cone at ANY attitude (the attitude ring is the measured bound), so the
-   * steady state is silent.
+   * hold-catch (rebases S9's re-pose, cargo-continuity plan §5 part 3, register item 32): every daughter parked HOLDING_CATCH
+   * with a catch gets her strut to her hold pose (`holdPoseFor`: 34° if her catch is plume-clear there, else the lowest
+   * plume-clear angle, never above 100°). It starts from 34°, NOT from where the strut is — a strut the reel left at 180° comes
+   * down — and it acts whether or not the catch bites at the present angle. Live, NOT flag-gated; THRUSTER_INTERLOCK stays dormant.
+   *  • MANUAL: a "." press (`_strutManual`, aged by StrutAuto for holding arms too) stands for its quiet window as long as the
+   *    angle it asked for is safe (not below the hold pose, not above 100°, catch plume-clear there); an unsafe one is dropped.
+   *  • ONE writer of `_strutTargetAlpha` for a holding arm while no hand-off runs (CARRY_* arms are in another state).
+   *  • She says one line when nothing clears even at 100° (a catch that big is for a radiator).
+   * Headless mocks lack the render-side strut driver — they slew HERE (the S10 legacy-fallback idiom); production slews once, in
+   * _updateStruts, which owns the same latch.
    * @param {number} dt — frame delta seconds
    * @private
    */
   _updateCargoPlumePoses(dt) {
-    // Headless mocks lack the render-side strut driver — they slew HERE (the
-    // S10 legacy-fallback idiom), including COMPLETING an already-vetted
-    // swing whose bite cleared mid-way (never park half-swung); production
-    // slews once, in _updateStruts, which owns the same latch.
     const headless = !(this.playerSatellite && this.playerSatellite.strutGroups);
+    const V5 = Constants.OCTOPUS_V5;
+    const D2R = Math.PI / 180;
+    const dead = V5.HOLD_POSE_DEADBAND_DEG * D2R;
+    const cap = V5.HOLD_POSE_MAX_DEG * D2R;
     for (let i = 0; i < this.arms.length; i++) {
       const arm = this.arms[i];
       if (!arm || arm.state !== ARM_STATES.HOLDING_CATCH) continue;
-
-      const conflict = heldCargoPlumeConflictAt(this, i);
-      if (!conflict) {
-        // No bite: keep finishing a latch the previous frames chose (the
-        // _updateStruts contract), else stay silent.
-        if (headless && arm._strutTargetAlpha !== undefined
-          && typeof arm.setAimAlpha === 'function') {
-          arm.setAimAlpha(arm._strutTargetAlpha, dt);
-          if (Math.abs(arm.getAimAlpha() - arm._strutTargetAlpha) < 0.01) {
-            arm._strutTargetAlpha = undefined; // arrived — the render driver's own rule
+      const hp = this._holdPoseCached(arm, i, dt);
+      if (hp) {
+        const eff = arm._strutTargetAlpha !== undefined ? arm._strutTargetAlpha : arm.getAimAlpha();
+        let go = true;
+        if (arm._strutManual) {
+          // the player's press stands while it is safe; an unsafe one (below the pose, over the cap, in a plume) is dropped
+          const safe = eff >= hp.rad - dead && eff <= cap + dead && !heldCargoPlumeConflictAt(this, i, eff);
+          if (safe) go = false; else delete arm._strutManual;
+        }
+        if (go && Math.abs(eff - hp.rad) > dead) arm._strutTargetAlpha = hp.rad;
+        if (hp.tooBig) {
+          const sig = arm._holdPose.key;
+          if (arm._holdTooBigSaid !== sig) {
+            arm._holdTooBigSaid = sig;
+            // FA2: "Press C" only when C can work: the catch must be able to go to a tip at all, and C works only once every
+            // daughter is full (otherwise the line says when). A catch that cannot go to a tip is parked and the line says so.
+            const where = this._handoffOutlook(arm) === 'never'
+              ? `, and it cannot go to a radiator; her strut parks at ${V5.HOLD_POSE_MAX_DEG}°.`
+              : (this.allDaughtersFull() ? '; move it to a radiator (Press C).' : '; it can go to a radiator once every daughter is holding a catch.');
+            eventBus.emit(Events.COMMS_MESSAGE, {
+              text: `Daughter ${i + 1}'s catch is too big to keep clear of the thrusters${where}`,
+              priority: 'warning',
+            });
           }
         }
-        continue;
       }
-
-      // Destination floor from her LARGEST piece (band rows are size-keyed,
-      // worst aspect — conservative for every type).
-      let maxSiz = 0;
-      if (arm.capturedDebris && arm.capturedDebris.mass) {
-        maxSiz = Math.max(maxSiz, arm.capturedDebris.sizeMeter || 0);
-      }
-      if (Array.isArray(arm.heldCatches)) {
-        for (const h of arm.heldCatches) {
-          if (h && h.mass) maxSiz = Math.max(maxSiz, h.sizeMeter || 0);
+      if (headless && arm._strutTargetAlpha !== undefined && typeof arm.setAimAlpha === 'function') {
+        arm.setAimAlpha(arm._strutTargetAlpha, dt);
+        if (Math.abs(arm.getAimAlpha() - arm._strutTargetAlpha) < 0.01) {
+          arm._strutTargetAlpha = undefined; // arrived — the render driver's own rule
         }
-      }
-      const floorRad = Constants.plumeCargoSafeAlphaMin(maxSiz);
-
-      let destRad = null;
-      const floorDeg = Math.ceil(floorRad * 180 / Math.PI);
-      for (let aDeg = floorDeg; aDeg <= 180; aDeg += 5) {
-        const cand = aDeg * Math.PI / 180;
-        if (this._repPoseCorridorClear(i, cand)) { destRad = cand; break; }
-      }
-      if (destRad == null) continue; // no legal pose while the station holds — retry next frame
-
-      arm._strutTargetAlpha = destRad;
-      if (headless && typeof arm.setAimAlpha === 'function') {
-        arm.setAimAlpha(destRad, dt);
       }
     }
   }
@@ -2617,6 +2884,8 @@ export class ArmManager {
    * mated catch's radius + BERTH_CLEARANCE_M), scoped to the station holders
    * (BERTHED/COLLARED/TRANSFERRING — the getDockedCatch set). The live
    * corridor gate itself is untouched (S13(d): strut-tips-only there).
+   * (hold-catch, 2026-10-22: the hold pose no longer reads this: its 100° cap is clear of every inbound size, measured
+   * with `strutTipFoulsCorridor`. Kept as the destination read for any pose that is allowed above 100°.)
    * @param {number} armIndex
    * @param {number} alphaDest — destination sweep angle (rad)
    * @returns {boolean} true when the destination crosses no occupied corridor
@@ -3448,7 +3717,11 @@ export class ArmManager {
     // arms-auto: forget the automatic-pose state and any manual-override markers.
     if (this._strutAuto) this._strutAuto.reset();
     this._strutPress = 0;
-    for (const arm of this.arms) delete arm._strutManual;
+    this._allFullSaid = false;        // hold-catch: the "all daughters are holding catches" line may be said again
+    this.lastStrutPressNote = null;
+    this._pendingStrutNote = null;
+    this._missionCarrySaid = null;
+    for (const arm of this.arms) { delete arm._strutManual; delete arm._holdPose; }
 
     // Re-apply any purchased upgrades to the freshly reset arms
     this._reapplyStoredUpgrades();

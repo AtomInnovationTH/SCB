@@ -2505,8 +2505,12 @@ export class StatusPanel {
       case 'NETTING': case 'GRAPPLED': case 'MAGNETIC_GRAPPLE':
       case 'GRIPPER_GRAPPLE': case 'PAD_CONTACT': case 'WEB_SHOT':
         return { label: 'Capturing', color: 'var(--hud-info, #00ffff)' };
-      case 'REELING': case 'HAULING': case 'RETURNING': case 'DOCKING':
-        return { label: 'Returning', color: 'var(--hud-info, #00ffff)' };
+      case 'REELING': case 'HAULING': case 'RETURNING': case 'DOCKING': {
+        // reel-view (owner 2026-10-22: "on slow reel-in it seems like nothing is happening"): on a reel home the row says
+        // what the reel is doing (Pulling in / Reeling in / Braking / Lining up / Latching), not just "Returning".
+        const rp = this._reelProgressOf(idx);
+        return { label: rp ? rp.phase : 'Returning', color: 'var(--hud-info, #00ffff)' };
+      }
       case 'HOLDING_CATCH': {
         // Register item 48: the rack cook is visible — the daughter line reads
         // the head piece's _digestProgress / span (ArmUnit.getStatus().digest).
@@ -2645,6 +2649,33 @@ export class StatusPanel {
   }
 
   /**
+   * @private reel-view: the reel's progress for daughter `idx` (ArmUnit.reelProgress), or null when she is not on a reel
+   * home (or the arm object is a mock without it). Read-only.
+   * @returns {{phase:string, distM:number, speedMs:number, etaS:(number|null), frac:number}|null}
+   */
+  _reelProgressOf(idx) {
+    const arms = this._armManager && this._armManager.arms;
+    const arm = arms && idx >= 0 ? arms[idx] : null;
+    if (!arm || typeof arm.reelProgress !== 'function') return null;
+    return arm.reelProgress() || null;
+  }
+
+  /**
+   * @private reel-view: the reel row, "<phase> · <distance> m · <speed> m/s · <time> s", and a thin bar under it (the
+   * fraction of the reel's starting distance done). Pure string builder.
+   * @param {{phase:string, distM:number, speedMs:number, etaS:(number|null), frac:number}} rp
+   * @returns {string} HTML for the row's inner part (no wrapper div)
+   */
+  static reelRowHtml(rp) {
+    const t = rp.etaS == null ? '–' : `${Math.max(rp.etaS > 0.05 ? 1 : 0, Math.ceil(rp.etaS - 1e-9))} s`;
+    const text = `${rp.phase} · ${Math.round(rp.distM)} m · ${rp.speedMs.toFixed(2)} m/s · ${t}`;
+    const pct = Math.round(Math.min(1, Math.max(0, rp.frac)) * 100);
+    return `<span class="reel-row" style="color:var(--hud-info, #00ffff);">${text}</span>`
+      + `<div class="reel-bar" title="Reel progress ${pct}%" style="height:2px;margin-top:2px;background:rgb(var(--hud-info-rgb, 68 136 255) / 0.2);">`
+      + `<div style="height:2px;width:${pct}%;background:var(--hud-info, #00ffff);"></div></div>`;
+  }
+
+  /**
    * @private The launched-daughter telemetry line: mothership range + drift +
    * tether, swapped for target range + closing rate when a target exists.
    * Returns '' for docked/reloading/expended daughters (no telemetry line),
@@ -2664,6 +2695,16 @@ export class StatusPanel {
     }
     const dim = 'color:var(--hud-text, #e8e4d0);opacity:0.7;';
     const parts = [];
+
+    // reel-view: on a reel home the line is the reel's own progress, not the range / drift / tether numbers
+    const rp = this._reelProgressOf(idx);
+    if (rp) {
+      const wheelR = this._wheelReadout(a);
+      return `<div style="padding-left:28px;font-size:10px;margin-top:1px;white-space:nowrap;">`
+        + StatusPanel.reelRowHtml(rp)
+        + (wheelR ? ` <span style="opacity:0.4;"> · </span>${wheelR}` : '')
+        + `</div>`;
+    }
 
     const target = armObj && armObj.target;
     const targetPos = target ? (target._scenePosition || (target.mesh && target.mesh.position)) : null;

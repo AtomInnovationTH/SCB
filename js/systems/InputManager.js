@@ -1384,8 +1384,29 @@ export class InputManager {
           const selStrutIdx = d.armManager.selectedArmIndex;
           d.armManager.toggleStruts(selStrutIdx >= 0 ? selStrutIdx : undefined);
           d.audioSystem?.playClick();
+          // hold-catch: a press that moves nothing says why (a holding daughter's strut never goes below her hold pose)
+          if (d.armManager.lastStrutPressNote) {
+            eventBus.emit(Events.COMMS_MESSAGE, {
+              source: 'SPACECRAFT', channel: 'CMD',
+              text: d.armManager.lastStrutPressNote,
+              priority: 'info',
+            });
+          }
           // Delegation 2 onboarding (2026-05-31): notify the OnboardingDirector.
           eventBus.emit(Events.STRUT_DEPLOY_INPUT);
+          e.preventDefault();
+        }
+        break;
+
+      // C key — "Move a catch to a radiator" (hold-catch, owner 2026-10-22: "Transfer to radiator strut is risky, should be an
+      // option when all daughters are full, not automatic"). Bare C only (Shift/Ctrl/Alt/Meta+C stay unbound). It starts ONE
+      // hand-off through ArmManager.moveCatchToRadiator, which says in one comms line why when it does nothing (a daughter is
+      // free, a hand-off runs, the trip does it by itself). Comms expand stays on the 7 key.
+      case 'KeyC':
+        if (isGameplay && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
+            && d.armManager && typeof d.armManager.moveCatchToRadiator === 'function') {
+          d.armManager.moveCatchToRadiator(d.armManager.selectedArmIndex);
+          d.audioSystem?.playClick();
           e.preventDefault();
         }
         break;

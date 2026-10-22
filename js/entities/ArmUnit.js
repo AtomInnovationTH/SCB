@@ -525,7 +525,8 @@ const _gdWorld = new THREE.Vector3();
 const _rhV1 = new THREE.Vector3();
 const _rhV2 = new THREE.Vector3();
 const _rhV3 = new THREE.Vector3();
-const _failTip = new THREE.Vector3();   // fail-reel: her strut tip, world, for the 500 m rule
+let _reelSeqCounter = 0;                 // reel-view: the order reels began in, across all daughters
+const _failTip = new THREE.Vector3();   // fail-reel: her strut tip, world, for the 200 m rule
 const _rhV4 = new THREE.Vector3();
 const _rhV5 = new THREE.Vector3();
 const _rhQ1 = new THREE.Quaternion();
@@ -2397,8 +2398,13 @@ export class ArmUnit {
     this.capturedDebris = null;
     this.target = null;
     // V5: Use REELING for zero-fuel return instead of RETURNING
+    // reel-view fix round 1: ONE line for this event. Under REEL_HOME `_transitionTo` says "Reeling <name> home: <m> m, about
+    // <s> s." itself, so the low-fuel reassurance rides on that line instead of being a second one.
+    this._rhReelNote = (lowFuel && this._rhOn()) ? ' Winch power, no FEEP needed.' : '';
     this._transitionTo(S.REELING);
-    if (lowFuel) {
+    const noteSaid = this._rhReelNoteSaid === true;
+    this._rhReelNote = ''; this._rhReelNoteSaid = false;
+    if (lowFuel && !noteSaid) {
       // Plain-language reassurance: the mother is hauling a low/empty daughter
       // home on the tether (winch power — no propellant needed).
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -3441,6 +3447,7 @@ export class ArmUnit {
     }
     this.state = newState;
     this.stateTimer = 0;
+    this._rhNoteTransition(old, newState);       // reel-view: the reel-start / "is home" lines and the reel's starting distance
     eventBus.emit(Events.ARM_STATE_CHANGE, {
       armId: this.id, from: old, to: newState,
     });
@@ -4864,10 +4871,12 @@ export class ArmUnit {
     this._skPitch0    = 0;
     this._skIdleS     = 0;
     this._transitionTo(S.REELING);
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.displayName}: Reeling in. Strut motor engaged`,
-      priority: 'info',
-    });
+    if (!this._rhOn()) {                      // reel-view: under REEL_HOME `_transitionTo` said how far and how long
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `${this.displayName}: Reeling in. Strut motor engaged`,
+        priority: 'info',
+      });
+    }
     return true;
   }
 
@@ -5294,14 +5303,18 @@ export class ArmUnit {
   }
 
   /**
-   * @private Seconds her strut reel needs to wind her home from `distM` metres out, empty-handed. Not a guess: the real speed
+   * @private Seconds her strut reel needs to wind her home from `distM` metres out. Not a guess: the real speed
    * rule (`_rhReelStep` under the reel-gas profile, `_computeReelProfileSpeed` otherwise) stepped over the distance; the
    * state the rule keeps (speed, gas bottle, readouts) is saved and put back, so nothing of her changes. The tail-first
    * turn and the 2 m line-up hold are not in it (they depend on the mother), so it reads "about".
+   * reel-view (owner 2026-10-22): `fromNow` starts the sim from her CURRENT speed (a reel already running), `withCatch`
+   * carries the net and catch in her mass. The defaults are the old empty-handed start from rest.
    * @param {number} distM
+   * @param {boolean} [fromNow=false] seed the sim with her current reel speed instead of rest
+   * @param {boolean} [withCatch=false] the reel carries a catch
    * @returns {number} seconds (Infinity if the sim does not arrive within 10 000 s)
    */
-  _reelHomeEtaS(distM) {
+  _reelHomeEtaS(distM, fromNow = false, withCatch = false) {
     if (!(distM > 0)) return 0;
     const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
     if (!Constants.isFeatureEnabled('REEL_PROFILE_V2')) {
@@ -5309,18 +5322,117 @@ export class ArmUnit {
     }
     const keep = [this._rhReelV, this.coldGasKg, this._rhBraking, this._rhReelPhase, this._rhTensionN,
       this._rhReelMassKg, this._rhGasChecked];
-    this._rhReelV = 0;
+    if (!fromNow) this._rhReelV = 0;
     this._rhGasChecked = true;                    // the "no gas" line belongs to the real reel
+    const boost = (fromNow && this._boostReel) ? ((Constants.REEL_BOOST && Constants.REEL_BOOST.SPEED_MULT) || 2) : 1;
     const dt = 0.05;
     let left = distM, t = 0;
     for (let i = 0; i < 200000 && left > 1e-6; i++) {
-      const v = this._rhReelStep(dt, left, Infinity, armMass, false, 1);
+      const v = this._rhReelStep(dt, left, Infinity, armMass, withCatch, boost);
       left -= Math.min(left, v * dt);
       t += dt;
     }
     [this._rhReelV, this.coldGasKg, this._rhBraking, this._rhReelPhase, this._rhTensionN,
       this._rhReelMassKg, this._rhGasChecked] = keep;
     return left > 1e-6 ? Infinity : t;
+  }
+
+  /**
+   * reel-view: where she is on a reel home. 'reel' = wound in on her strut line (REELING, REEL_HOME), 'latch' = the dock
+   * after such a reel (DOCKING), null otherwise. Cheap (no sim): the camera polls it every frame.
+   * @returns {'reel'|'latch'|null}
+   */
+  reelHomeStage() {
+    if (this.state === S.REELING && this._rhHome && this._rhOn()) return 'reel';
+    if (this.state === S.DOCKING && this._rhDockFree && this._rhOn()) return 'latch';
+    return null;
+  }
+
+  /**
+   * reel-view: her strut tip in the world, into `out` (scene units). Null until a mother position has been seen.
+   * @param {THREE.Vector3} out
+   * @returns {THREE.Vector3|null}
+   */
+  strutTipWorldInto(out) {
+    const pp = this._frameParentPos || this._prevParentPos;
+    if (!pp) return null;
+    return this._resolveStrutDockWorld(pp, this._frameParentQuat || this._lastParentQuat, out);
+  }
+
+  /**
+   * reel-view (owner 2026-10-22: "on slow reel-in it seems like nothing is happening"): what the reel is doing now, for
+   * her panel and the camera. Read-only: nothing of her changes. Null unless she is on a reel home (REEL_HOME, tethered)
+   * or latching onto her strut after one.
+   * @param {boolean} [fresh=false] recompute the time left now (otherwise at most every 0.25 s, counted down between)
+   * @returns {{phase:string, distM:number, speedMs:number, etaS:(number|null), startM:number, frac:number, catching:boolean}|null}
+   *   phase: Pulling in | Reeling in | Braking | Lining up | Latching; speedMs: true m/s; etaS: real s left (null = unknown)
+   */
+  reelProgress(fresh = false) {
+    const st = this.state;
+    if (!this._rhOn() || !Constants.isFeatureEnabled('REEL_PROFILE_V2')) return null;
+    if (st !== S.REELING && !(st === S.DOCKING && this._rhDockFree)) return null;
+    const distM = this._strutTipDistM();
+    if (distM == null) return null;
+    const BS = TimeAuthority.BASE_SCALE || 10;
+    if (this._rhReelStartM == null || !(this._rhReelStartM > 0)) this._rhReelStartM = distM;
+    const startM = this._rhReelStartM;
+    const catching = this.capturedDebris !== null;
+    if (st === S.DOCKING) {
+      const P = Constants.REEL_PROFILE || {};
+      return { phase: 'Latching', distM, speedMs: (P.V_DOCK ?? 1.0) / BS,
+        etaS: Math.max(0, (Constants.ARM_DOCK_DURATION ?? 3) - this.stateTimer), startM, frac: 1, catching };
+    }
+    const word = { pull: 'Pulling in', cruise: 'Reeling in', brake: 'Braking', hold: 'Lining up' }[this._rhReelPhase] || 'Reeling in';
+    let etaS;
+    const c = this._rpEtaCache;
+    if (!fresh && c && c.timer <= this.stateTimer && this.stateTimer - c.timer < 0.25) {
+      etaS = Math.max(0, c.etaS - (this.stateTimer - c.timer));
+    } else {
+      const e = this._reelHomeEtaS(distM, true, catching);
+      etaS = Number.isFinite(e) ? e : null;
+      this._rpEtaCache = { timer: this.stateTimer, etaS: etaS == null ? 0 : etaS };
+      if (etaS == null) this._rpEtaCache.etaS = 0;
+    }
+    return { phase: word, distM, speedMs: this._rhReelV / BS, etaS, startM,
+      frac: Math.min(1, Math.max(0, 1 - distM / startM)), catching };
+  }
+
+  /**
+   * @private Called from `_transitionTo` (reel-view). A reel home starting says how far and how long ("Reeling Large 1
+   * home: 48 m, about 21 s."), unless the failed-catch or hold line just gave the time; the latch after a reel says she is
+   * home. Also keeps the reel's starting distance for the panel bar.
+   */
+  _rhNoteTransition(old, newState) {
+    if (newState === S.REELING) {
+      this._rpEtaCache = null;
+      this._rhReelStartM = null;
+      this._rhReelSeq = ++_reelSeqCounter;       // which reel this is (the camera follows the newest)
+      const quiet = this._rhReelLineQuiet === true || this._rhReelEtaSaid === true;
+      this._rhReelLineQuiet = false;
+      this._rhReelEtaSaid = false;
+      if (!this._rhOn() || old === S.REELING) return;
+      const distM = this._strutTipDistM();
+      if (distM == null) return;
+      this._rhReelStartM = distM;
+      if (quiet) return;
+      const e = Constants.isFeatureEnabled('REEL_PROFILE_V2') ? this._reelHomeEtaS(distM, false, this.capturedDebris !== null) : Infinity;
+      const tail = Number.isFinite(e) ? `${Math.round(distM)} m, about ${Math.max(1, Math.round(e))} s` : `${Math.round(distM)} m`;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'HOUSTON', channel: 'CMD', priority: 'info',
+        text: `Reeling ${this.displayName} home: ${tail}.${this._rhReelNote || ''}`,
+      });
+      if (this._rhReelNote) this._rhReelNoteSaid = true;
+      return;
+    }
+    // One line at the latch: with a catch, the dock code says "<name>: Catch secured at the strut ..." right after this
+    // transition (HOLDING_CATCH), so that one is the line and this one stays quiet (fix round 1, owner: one line per event).
+    if (old === S.DOCKING && this._rhDockFree && (newState === S.RELOADING || newState === S.DOCKED)) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'HOUSTON', channel: 'CMD', priority: 'success',
+        text: `${this.displayName} is home.`,
+      });
+    }
+    if (newState !== S.STATION_KEEP) this._rhReelEtaSaid = false;
   }
 
   /** @private She leaves whatever she was doing and is wound home on her strut line (REELING), nothing held. */
@@ -5406,8 +5518,10 @@ export class ArmUnit {
     }
     const piece = (holdTarget && holdTarget.alive !== false && !holdTarget._captured) ? holdTarget : null;
     const distM = this._strutTipDistM();
-    const far = distM != null && distM > ((Constants.FAIL_REEL && Constants.FAIL_REEL.AUTO_REEL_MAX_M) ?? 500);
-    const etaS = far ? Math.round(this._reelHomeEtaS(distM)) : 0;
+    const far = distM != null && distM > ((Constants.FAIL_REEL && Constants.FAIL_REEL.AUTO_REEL_MAX_M) ?? 200);
+    // reel-view (owner 2026-10-22: "User will need feedback about what is happening"): every line gives the distance and the
+    // real reel time (`_reelHomeEtaS`), so he can see what happens now and how long it takes.
+    const etaS = distM != null ? Math.round(this._reelHomeEtaS(distM, false, false)) : NaN;
     const etaTxt = Number.isFinite(etaS) ? `about ${etaS} s` : 'a long haul';
     const lead = cause ? `${cause} ` : '';
     // Review F2: a hold is for a retry; with no net left in a net daughter's magazine there is none, so reel whatever the range.
@@ -5417,12 +5531,15 @@ export class ArmUnit {
       // Review F3: "Press X" is what GestureHints.chipPhrase turns into a touch button (DECISIONS §32).
       say(`${lead}${Math.round(distM)} m out: holding for a retry. Press N to retry, Press R to reel her home (${etaTxt}).`);
       this._holdForRetry(piece);
+      this._rhReelEtaSaid = true;                 // R from this hold: the line above gave the time
       return 'hold';
     }
-    say(far
-      ? `${lead}${Math.round(distM)} m out. Reeling her home, ${etaTxt}; Press D to relaunch.`
-      : `${lead}Reeling her home; Press D to relaunch.`);
+    say(distM != null
+      ? `${lead}Reeling her home: ${Math.round(distM)} m, ${etaTxt}. Press D to relaunch.`
+      : `${lead}Reeling her home; Press D to relaunch.`);   // no mother position seen yet (a bare unit): the old line
+    this._rhReelLineQuiet = true;                 // this line is the reel-start line
     this._reelHomeAfterFailure();
+    this._rhReelLineQuiet = false;
     return 'reel';
   }
 
@@ -6086,15 +6203,19 @@ export class ArmUnit {
 
       // V5: Zero-fuel motor reel-in instead of fuel-burning HAULING
       this._transitionTo(S.REELING);
-      const _hasPayload = this.capturedDebris !== null;
-      const _reelSpeed = _hasPayload ? REEL_IN_SPEED_LOADED : REEL_IN_SPEED_EMPTY;
-      const _eta = (this.tetherLength / Math.max(_reelSpeed, 1)).toFixed(1);
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        source: this.displayName,
-        text: `Reeling in. ETA ${_eta} s`,
-        channel: 'CMD',
-        priority: 'info',
-      });
+      // reel-view: under REEL_HOME `_transitionTo` already said "Reeling <name> home: <m> m, about <s> s." from the real
+      // profile (`_reelHomeEtaS`); the old tetherLength / speed guess below is the legacy line only.
+      if (!this._rhOn()) {
+        const _hasPayload = this.capturedDebris !== null;
+        const _reelSpeed = _hasPayload ? REEL_IN_SPEED_LOADED : REEL_IN_SPEED_EMPTY;
+        const _eta = (this.tetherLength / Math.max(_reelSpeed, 1)).toFixed(1);
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: this.displayName,
+          text: `Reeling in. ETA ${_eta} s`,
+          channel: 'CMD',
+          priority: 'info',
+        });
+      }
     }
   }
 
@@ -7012,19 +7133,26 @@ export class ArmUnit {
     const pin = d._armPinPos || this.position;
     _carryDir.copy(pin).sub(_carryV);
     // rack release, as ArmManager.unloadHeldCatches does it (the piece is paid later, by the tip)
+    // hold-catch FA8: the piece's cell and its mother-net mark (`clearRackCell`) go only once the tip has taken it; a stow that
+    // refuses puts back everything it touched, so the piece is on her rack again as it was (cell, mark, owner) and still gets
+    // its radiator hand-off (the cell/mark used to be gone: the piece sat on the rack with no cell and no origin)
+    const was = { by: d._capturedByArm, breakdown: d._breakdownActive, captured: this.capturedDebris === d };
     this.heldCatches.splice(idx, 1);
     d._armPinned = false;
     d._capturedByArm = null;
     d._breakdownActive = false;
-    clearRackCell(d);
     if (this.capturedDebris === d) this.capturedDebris = null;
     const ok = tc.stow(c.tipIndex, d, { massKg: d.mass || 0, radiusM: reach, fromDirWorld: _carryDir });
     if (!ok) {
       // cannot happen after the checks above; put the piece back on its rack rather than lose it
       this.heldCatches.splice(idx, 0, d);
       d._armPinned = true;
+      d._capturedByArm = was.by;
+      d._breakdownActive = was.breakdown;
+      if (was.captured) this.capturedDebris = d;
       return false;
     }
+    clearRackCell(d);
     tc.swingToBoom(c.tipIndex);
     c.handedOff = true;
     if (ps._attitudeInertia !== undefined) ps._attitudeInertia = null;
@@ -8081,6 +8209,74 @@ export class ArmUnit {
   }
 
   /**
+   * reel-push (owner 2026-10-22: "make the reel pull move and turn the mother, like real physics"): the reel line pulls both
+   * ends. The mother feels this frame's line tension (`_rhTensionN`, true N) toward the daughter, at her strut tip, with the
+   * same force the daughter feels (Newton's third law): Δv in her real orbit, a torque about her centre of mass. The gas jet
+   * pushes only the daughter (its exhaust leaves the pair; its plume on the mother's hull is not modelled), so while she brakes
+   * the mother feels just the line's share.
+   *
+   * Called from the REAL reel update (`_updateReeling`), never from `_rhReelStep`: `_reelHomeEtaS` steps that to estimate the
+   * time left, several times a second, and an estimate must not move the real mother.
+   *
+   * Units: the reel runs on REAL dt with game-scale speeds; the game clock runs TIME_SCALE_GAMEPLAY x faster, so the line acts
+   * for dt x BASE_SCALE game seconds: J = T x dt_game (true N·s), Δv = J / her live mass (the convention of the mother-net tug).
+   * @param {number} dt real seconds
+   * @param {THREE.Vector3} tipWorld the strut-tip dock, world (scene units)
+   * @private
+   */
+  _reelPushLine(dt, tipWorld) {
+    const ps = this._playerSatellite;
+    if (!(dt > 0) || this.isDetached || !ps || typeof ps.applyForceAtPoint !== 'function') return;
+    const T = this._rhTensionN;
+    if (!(T > 0)) return;
+    const f = (this._pushForce || (this._pushForce = new THREE.Vector3())).subVectors(this.position, tipWorld);   // tip -> her
+    const dist = f.length();
+    if (!(dist > 1e-7)) return;
+    f.multiplyScalar(T / dist);                                    // the mother is pulled toward the daughter, with the line's tension
+    const res = ps.applyForceAtPoint(f, tipWorld, dt * TimeAuthority.BASE_SCALE, this._pushOpts || (this._pushOpts = { source: this }));
+    if (res === false) this._reelPushRefused();
+  }
+
+  /**
+   * reel-push: the daughter arrives at the strut tip with `reelSpeedGame` (game-scale m/s) and stops: her momentum goes into the
+   * mother, J = m x v (true N·s; v = reelSpeed / BASE_SCALE, 0.10 m/s true at V_DOCK), along her approach, at the tip. The strut
+   * is rigid here (its give is not modelled). Flushes whatever the line left gathered.
+   * @private
+   */
+  _reelPushLatch(tipWorld, reelSpeedGame) {
+    const ps = this._playerSatellite;
+    if (this.isDetached || !ps || typeof ps.applyImpulseAtPoint !== 'function') return;
+    const m = this._rhReelMassKg;
+    const v = reelSpeedGame / TimeAuthority.BASE_SCALE;
+    const j = (this._pushJ || (this._pushJ = new THREE.Vector3())).subVectors(tipWorld, this.position);   // her -> the tip: her approach
+    const d = j.length();
+    if ((m > 0) && (v > 0) && (d > 1e-9)) j.multiplyScalar(m * v / d);
+    else j.set(0, 0, 0);                                           // nothing arrives; the call still flushes the gathered Δv
+    const res = ps.applyImpulseAtPoint(j, tipWorld, this._pushOptsLatch || (this._pushOptsLatch = { source: this, flush: true }));
+    if (res === false) this._reelPushRefused();
+  }
+
+  /**
+   * @private reel-push: the first real frame of a reel (`_rhGasChecked` is still false): no refusal line said yet, and whatever an
+   * earlier reel of HERS left gathered goes into the orbit first (PlayerSatellite's per-frame sweep normally has it already; only
+   * HER gathering: another daughter's reel, running at the same time, keeps her own).
+   */
+  _reelPushBegin() {
+    this._rhPushWarned = false;
+    const ps = this._playerSatellite;
+    if (ps && typeof ps.flushReelPush === 'function') ps.flushReelPush(this);
+  }
+
+  /** @private reel-push: the mother's Δv was refused (the altitude envelope guard): said once per reel, like the net tug. */
+  _reelPushRefused() {
+    if (this._rhPushWarned) return;
+    this._rhPushWarned = true;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: 'Reel pull damped: it would take the mother out of the safe altitude band.', priority: 'info',
+    });
+  }
+
+  /**
    * REELING: V5 strut-reel motor reel-in. The motor on the mothership pulls the arm back; the haul itself burns no
    * propellant (legacy path: no FEEP at all). Under REEL_HOME (reel-gas, owner 2026-10-21) it is a sim: `_rhReelStep` pulls
    * her up, cruises, and brakes her on her cold-gas jet, while her ion thread (a tiny, billed FEEP cost) keeps the line tight.
@@ -8206,10 +8402,13 @@ export class ArmUnit {
       // reel-gas (owner 2026-10-21): under REEL_HOME the haul is a sim - pull-up, cruise, a braking phase on her cold-gas
       // jet - not the stateless trapezoid above. `_rhReelStep` owns the speed (and the gas, and the line readout).
       if (profileV2) {
+        if (!this._rhGasChecked) this._reelPushBegin();            // reel-push: the reel's first real frame (the step below sets the sentinel)
         reelSpeed = this._rhReelStep(dt, dist / M, rhGate / M, armMass, hasPayload, boostMult);
         reelSpeedScaled = reelSpeed * M;
         // her ion thread keeps the line tight the whole haul: billed at its real thrust (not while the line-up burn runs)
         if (!this._rhLineUp) this._billIonThread(dt, this._rhReelMassKg);
+        // reel-push: the line pulls the mother too
+        this._reelPushLine(dt, dockWorldPos);
       }
       if (rhGate === 0 && dt > 0) { reelSpeed = 0; reelSpeedScaled = 0; }
     }
@@ -8321,6 +8520,8 @@ export class ArmUnit {
       if (profileV2 && dt > 0) this._rhReelV = Math.min(this._rhReelV, moveDistance / (M * dt));
     }
     if (moveDistance >= dist) {
+      // reel-push: her arrival momentum goes into the mother (before she is snapped onto the tip)
+      if (rh && profileV2 && dt > 0) this._reelPushLatch(dockWorldPos, reelSpeed);
       // Close enough to dock — snap to the strut-tip dock (not mother core).
       this.position.copy(dockWorldPos);
       this._transitionTo(S.DOCKING);
@@ -8580,6 +8781,7 @@ export class ArmUnit {
         const debris = this.capturedDebris;
         if (this._stowHeldCatch(debris, parentQuat)) {
           this.capturedDebris = null;
+          debris._rackFromMotherNet = false;  // hold-catch FA1: her OWN catch - she keeps it (the mission hand-off is for the mother's)
           // rack-snug (Decisions 1, 4, 5): the stow assigned the cell and froze the catch's attitude in HER frame
           // from its attitude NOW (no jump); the pin below starts the glide from the in-hand point (no
           // one-frame jump of the bag when the park state begins) and the piece turns with her from here on.

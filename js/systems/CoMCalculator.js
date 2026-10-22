@@ -1046,9 +1046,11 @@ function _armHoldsCargoInCone(arm, dp, alpha, playerSatellite, n, dx, dy, dz, ha
  *
  * @param {object} armManager — with .arms[], ._dockPositions[]
  * @param {number} armIndex
+ * @param {number} [alphaRad] — hold-catch (owner 2026-10-22): read the arm's cargo at THIS strut angle instead of
+ *   her live one ("would her catch be clear of the plumes if the strut stood at 34°?"). Omitted: the live angle.
  * @returns {{ armIndex: number, thrusterId: string }|null} first conflict
  */
-export function heldCargoPlumeConflictAt(armManager, armIndex) {
+export function heldCargoPlumeConflictAt(armManager, armIndex, alphaRad) {
   const thrusters = Constants.THRUSTERS;
   if (!thrusters) return null;
   const arms = armManager.arms || [];
@@ -1061,7 +1063,7 @@ export function heldCargoPlumeConflictAt(armManager, armIndex) {
     || (Array.isArray(arm.heldCatches) && arm.heldCatches.some((h) => h && h.mass));
   if (!holdsAnything) return null;
 
-  const alpha = arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0);
+  const alpha = Number.isFinite(alphaRad) ? alphaRad : (arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0));
   const playerSatellite = armManager.playerSatellite || null;
   for (const t of thrusters) {
     const d = t.thrustDir;
