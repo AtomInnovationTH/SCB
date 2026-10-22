@@ -2882,7 +2882,13 @@ async function init() {
     // it), and the footer's bottom from the ONE band table. The `onFlip` sink
     // the rail carried is gone: main.js emits no HUD_PANE_VISIBILITY any more.
     detailSlider = new DetailSlider({
-      total: () => ((hud && hud.paneDensity) ? hud.paneDensity.total : 0),
+      // Positions = the steps that can show right now (visible, or hidden by the ladder): before the
+      // first scan the target marks and both target panes wait, so the slider has fewer positions.
+      total: () => {
+        const pd = hud && hud.paneDensity;
+        if (!pd) return 0;
+        return typeof pd.availableCount === 'function' ? pd.availableCount() : pd.total;
+      },
       level: () => ((hud && hud.paneDensity && typeof hud.paneDensity.visibleCount === 'function') ? hud.paneDensity.visibleCount() : 0),
       onLevel: (n) => {
         const pd = hud && hud.paneDensity;
@@ -3070,11 +3076,14 @@ async function init() {
       const exp = pd && typeof pd.find === 'function' ? pd.find('experimental') : null;
       if (exp && typeof exp.addMember === 'function') exp.addMember(overridePane.rung());
       if (detailSlider && typeof detailSlider.setMilestones === 'function' && pd && Array.isArray(pd.rungs)) {
-        const lvl = (id) => { const i = pd.rungs.findIndex(r => r && r.id === id); return i < 0 ? null : pd.rungs.length - i; };
         // Scenery · Ships · Flight · Ops · Instruments · All. Flight is the suffix that starts at
         // the target marks: marks, daughters, comms, score, mother, meters box, alerts, ships, city.
         // (It used to start at daughters; the marks now hide just before them, so they join it.)
-        const milestones = [0, lvl('craft'), lvl('targetmarks'), lvl('debris'), lvl('copilot'), pd.rungs.length].filter(n => Number.isFinite(n));
+        // The slider counts only the steps that can show right now, so the levels are read live
+        // (DetailSlider.refresh calls this on every unthrottled read).
+        const lvl = (id) => (typeof pd.levelOf === 'function' ? pd.levelOf(id) : null);
+        const milestones = () => [0, lvl('craft'), lvl('targetmarks'), lvl('debris'), lvl('copilot'),
+          typeof pd.availableCount === 'function' ? pd.availableCount() : pd.rungs.length].filter(n => Number.isFinite(n));
         detailSlider.setMilestones(milestones);
       }
       // Plan Task 8: left-arm overlay riders, once, after the rungs exist.

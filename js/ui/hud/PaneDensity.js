@@ -86,6 +86,13 @@ export function compositeRung(id, label, members) {
         try { if (m && m.setVisible) m.setVisible(!!v); } catch (_e) { /* member refused */ }
       }
     },
+    // A slot while any member is: a member without an `isAvailable` counts as a slot.
+    isAvailable() {
+      const list = this.members || [];
+      return list.some((m) => {
+        try { return !!(m && (typeof m.isAvailable === 'function' ? m.isAvailable() : true)); } catch (_e) { return false; }
+      });
+    },
     addMember(rung) {
       if (!rung) return;
       if (!Array.isArray(this.members)) this.members = [];
@@ -148,6 +155,33 @@ export class PaneDensity {
    */
   visibleCount() {
     return this.rungs.reduce((n, r) => n + (this._safeVisible(r) ? 1 : 0), 0);
+  }
+
+  /**
+   * Live count of rungs that can show right now: visible, or hidden by the ladder itself. A rung
+   * that waits for something (the first scan, the daughters gate) or has nothing to show is not
+   * counted — `-` and `+` walk past it, so a slider position for it would do nothing. This is the
+   * slider's position count; `total` stays the fixed rung count. Rungs without an `isAvailable`
+   * adapter count as slots (hidden = hidden by the ladder).
+   * @returns {number}
+   */
+  availableCount() {
+    return this.rungs.reduce((n, r) => n + (this._safeAvailable(r) ? 1 : 0), 0);
+  }
+
+  /**
+   * The slider level at which rung `id` is the lowest one showing: the number of slots from that
+   * rung to the end (the same count `visibleCount()` returns when exactly that suffix shows).
+   * Null for an unknown id. A rung that is not a slot right now gives the level of the next slot.
+   * @param {string} id
+   * @returns {number|null}
+   */
+  levelOf(id) {
+    const i = this.rungs.findIndex((r) => r && r.id === id);
+    if (i < 0) return null;
+    let n = 0;
+    for (let k = i; k < this.rungs.length; k++) if (this._safeAvailable(this.rungs[k])) n++;
+    return n;
   }
 
   /**
@@ -393,6 +427,14 @@ export class PaneDensity {
 
   /** @returns {boolean} true while a clearAll() stash is waiting for `+` */
   hasStash() { return !!(this._stash && this._stash.length); }
+
+  /** @private visible, or hidden by the ladder (see availableCount). Throwing adapter = not a slot. */
+  _safeAvailable(rung) {
+    if (!rung) return false;
+    if (this._safeVisible(rung)) return true;
+    if (typeof rung.isAvailable !== 'function') return true;
+    try { return !!rung.isAvailable(); } catch (_) { return false; }
+  }
 
   /** @private Defensive isVisible() — a throwing/absent adapter reads as hidden. */
   _safeVisible(rung) {

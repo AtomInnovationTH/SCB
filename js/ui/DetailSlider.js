@@ -151,6 +151,8 @@ export class DetailSlider {
     this._onLevel = typeof deps.onLevel === 'function' ? deps.onLevel : null;
     this._onInteract = typeof deps.onInteract === 'function' ? deps.onInteract : null;
     this._milestones = _normalizeMilestones(deps.milestones);
+    /** @private live milestone source (setMilestones(fn)); null = fixed array */
+    this._milestoneFn = null;
     const fb = Number(deps.footerBottomPx);
     this._footerBottomPx = Number.isFinite(fb) ? fb : (RAIL_GEOMETRY.THUMB_REST_PX + RAIL_GEOMETRY.FOOTER_GAP_PX);
     this._glass = deps.glass === true;
@@ -208,6 +210,7 @@ export class DetailSlider {
       this._setAttr('aria-valuemax', String(total));
       this._wroteLevel = null;              // the thumb's percentage changed base
     }
+    if (this._milestoneFn) this.setMilestones(this._milestoneFn);
     if (level !== this._wroteLevel) {
       this._wroteLevel = level;
       this._setAttr('aria-valuenow', String(level));
@@ -255,13 +258,26 @@ export class DetailSlider {
    * Bold-tick LEVEL indices. main.js computes these from the live ladder
    * after the rungs are spliced (0 · 2 · 5 · 9 · 13 · 15). Write-on-change;
    * rebuilds ticks when a refresh has already painted them.
-   * @param {number[]} arr
+   * A function instead of an array is kept and re-read on every unthrottled `refresh()`, so the
+   * bold ticks follow a position count that changes (first scan, floor change).
+   * @param {number[]|function(): number[]} arr
    */
   setMilestones(arr) {
+    if (typeof arr === 'function') {
+      this._milestoneFn = arr;
+      arr = this._readMilestones();
+    } else {
+      this._milestoneFn = null;
+    }
     const next = _normalizeMilestones(arr);
     if (next.length === this._milestones.length && next.every((v, i) => v === this._milestones[i])) return;
     this._milestones = next;
     if (!this._disposed && this._track && this._wroteTotal != null) this._rebuildTicks(this._wroteTotal);
+  }
+
+  /** @private the live milestone source, guarded (a throwing source keeps the last milestones) */
+  _readMilestones() {
+    try { return this._milestoneFn ? this._milestoneFn() : this._milestones; } catch (_e) { return this._milestones; }
   }
 
   /** @returns {Element|null} the root (null headless / disposed) */

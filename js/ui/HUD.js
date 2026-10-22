@@ -329,6 +329,7 @@ export class HUD {
     this._scanGateOpen = false;      // the TARGETS + TARGET INFO panes wait for the first scan (once per boot)
     this._floorMask = null;          // h4-simple-first D5: FloorMask hands itself over (attachFloorMask)
     this._infoAnalysed = false;      // h4-simple-first D7: the player pressed Z since the scan (simple mode only needs it)
+    this._infoPulled = false;        // a pane the room hides was pulled in after the scan: target info stays open for good (until a new game)
     this._infoGateWait = null;       // last written wait state of the TARGET INFO pane (write-on-change)
     this._railFree = false;          // h4-simple-first D9: the player changed pane level themselves (lifts the first-frame quiet)
     this._railQuiet = true;          // the floor rail is held back (mission 1, before the first scan); the first 10 Hz tick re-decides
@@ -899,6 +900,10 @@ export class HUD {
     const domRung = (id, label, getEls) => ({
       id, label,
       isVisible: () => getEls().some(el => self._densityIsVisible(el)),
+      // Slider slots: a pane is a slot while it shows OR the ladder itself is what hides it
+      // (its density bit). A pane that cannot show right now (waiting for the scan / the
+      // daughters gate, or off screen with no bit of ours on it) is not a slot.
+      isAvailable: () => getEls().some(el => self._densityIsAvailable(el)),
       setVisible: (v) => getEls().forEach(el => {
         if (!el) return;
         self._densitySetVisible(el, v);
@@ -913,10 +918,13 @@ export class HUD {
     // brackets & alerts suppressed in pure scenery, and the craft / constellation
     // categories drive scene objects that carry no data-density attribute.
     // `apply(hidden)` performs the concrete hide/show.
-    const flagRung = (id, label, apply, world) => {
+    const flagRung = (id, label, apply, world, gate) => {
       const rung = {
         id, label, _hidden: false,
-        isVisible: () => !rung._hidden,
+        // `gate` (optional): () => boolean, false while the category cannot show yet. A gated rung
+        // that waits reads hidden, like a pane that waits (`-` and `+` walk past it) and is no slider slot.
+        isVisible: () => !rung._hidden && (typeof gate !== 'function' || gate() !== false),
+        isAvailable: () => typeof gate !== 'function' || gate() !== false,
         setVisible: (v) => { rung._hidden = !v; apply(rung._hidden); },
       };
       if (world === true) rung.world = true;
@@ -1010,7 +1018,11 @@ export class HUD {
       //     ring, AP badge, off-screen arrows. A flag rung (engages even when the canvas is
       //     momentarily blank), and the ONE writer of the canvas's hide bit: FloorMask's
       //     `reticles` entry points at this step.
-      flagRung('targetmarks', 'Target marks', (hidden) => { applyAttr(['#reticle-canvas'], hidden); }),
+      //     It waits for the first scan like the Targets and Target info panes ("No reticles until
+      //     you scan", DECISIONS §15 row 1; owner 2026-10-22 "Keep scan-first", and no empty `-`/`+`
+      //     press): before it nothing is painted, so a `-` there would change nothing.
+      flagRung('targetmarks', 'Target marks', (hidden) => { applyAttr(['#reticle-canvas'], hidden); },
+        false, () => self._scanGateOpen === true),
       // 5 — Daughters / arms pane (owner 2026-10-21: before comms).
       domRung('arms', 'Daughters pane', byId('hud-arms-panel')),
       // 6 — Comms pane (7 key re-reveals it).
@@ -1188,6 +1200,21 @@ export class HUD {
     } catch (_e) {
       return false;
     }
+  }
+
+  /**
+   * Slider slot test for a DOM pane: could this element show once the ladder lets it? True when it
+   * shows now, or when our density bit is what hides it (leaving / hidden / layout-hidden). A wait
+   * gate (scan / daughters) is not ours to lift, so it is no slot.
+   * @param {Element|null} el
+   * @returns {boolean}
+   */
+  _densityIsAvailable(el) {
+    if (!el) return false;
+    if (el.hasAttribute && (el.hasAttribute('data-arms-wait') || el.hasAttribute('data-scan-wait'))) return false;
+    if (el.hasAttribute && (el.hasAttribute('data-density-hidden') || el.hasAttribute('data-density-leaving')
+      || el.hasAttribute('data-stack-hidden'))) return true;
+    return this._densityIsVisible(el);
   }
 
   /** @param {Element} el @param {boolean} v */
@@ -1450,7 +1477,7 @@ export class HUD {
     eventBus.on(Events.SCAN_COMPLETE, () => this._openScanGate());
     // h4-simple-first D7: in simple mode (mission 1, F1/F2) TARGET INFO waits for the player's
     // own Z (analyse) after the scan; a new game starts that wait again.
-    eventBus.on(Events.GAME_RESET, () => { this._infoAnalysed = false; this._syncInfoGate(); });
+    eventBus.on(Events.GAME_RESET, () => { this._infoAnalysed = false; this._infoPulled = false; this._syncInfoGate(); });
     // h4b D5: the battery median forgets the last game; its 30-sample warm-up starts again.
     eventBus.on(Events.GAME_RESET, () => { if (this.vitalsPane && typeof this.vitalsPane.resetMedian === 'function') this.vitalsPane.resetMedian(); });
     // h4-simple-first D9: the floor rail ("1 UPGRADE … 5 GEO", "1×") stays out of mission 1's first
@@ -2056,7 +2083,10 @@ export class HUD {
     const el = this._wireframeContainerEl;
     if (!el || !el.setAttribute) return;
     // The value says why it waits: '' = the first scan, 'analyse' = the player's Z (DebrisWireframe's 9-key line reads it).
-    const wait = !this._scanGateOpen ? '' : (!this._infoAnalysed && this.isSimpleTargets()) ? 'analyse' : false;
+    // Pulled in (one `+` past the room) opens the pane for good, like Z: hiding the extra pane again
+    // (the `-` step before this one) must not take target info away from under its own step.
+    if (this._scanGateOpen && !this.isSimpleTargets()) this._infoPulled = true;
+    const wait = !this._scanGateOpen ? '' : (!this._infoAnalysed && !this._infoPulled && this.isSimpleTargets()) ? 'analyse' : false;
     if (wait === this._infoGateWait) return;
     this._infoGateWait = wait;
     if (wait !== false) el.setAttribute('data-scan-wait', wait);
@@ -2364,7 +2394,7 @@ export class HUD {
           playerOrbit: player ? player.getOrbitalElements() : null,
           targetLaw: data.targetLaw || null,   // Session Q (plan D15): the hub's law inputs (null off the ladder)
           simple: this.isSimpleTargets(),      // h4-simple-first D6: name, distance, in reach only
-          analyseChip: this.isSimpleTargets() && !this._infoAnalysed,   // h4b D3: the one "analyse" prompt
+          analyseChip: this.isSimpleTargets() && !this._infoAnalysed && !this._infoPulled,   // h4b D3: the one "analyse" prompt
         });
 
         // Session Q (plan D12c): the LIVE-APPROACH inhibit window rides this
