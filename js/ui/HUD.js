@@ -1853,11 +1853,19 @@ export class HUD {
     // UX Fix C: ARM PILOT controls strip — show/hide on camera view change
     eventBus.on(Events.CAMERA_VIEW_CHANGE, (data) => {
       if (data && data.view === 'ARM_PILOT') {
+        this._armPilotView = true;
         this._showArmPilotStrip();
       } else {
+        this._armPilotView = false;
         this._hideArmPilotStrip();
+        this._syncHoldingStrip();   // u17b: the view left pilot mode with a holding daughter selected: her strip, not none
       }
     });
+    // u17b (owner 2026-10-22 bug): a selected daughter parked with a catch is not piloted, so the pilot strip never showed
+    // for her and the bottom centre was blank or stale. Her own strip (true options only) follows the selection; the
+    // per-frame refresh in update() follows her state (it leaves when she leaves HOLDING_CATCH).
+    eventBus.on(Events.ARM_SELECT, () => this._syncHoldingStrip());
+    eventBus.on(Events.ARM_DESELECT, () => this._syncHoldingStrip());
 
     // Delegation 3 (2026-05-31): INSPECTION_TOGGLE — coordinate wireframe panels.
     // 2026-06-03: the 'mother' subject is now handled entirely by the in-world
@@ -2514,14 +2522,23 @@ export class HUD {
     // Warning display
     this._updateWarnings(dt);
 
-    // Update ARM_PILOT strip context (switches between ARM PILOT / STATION KEEP hints)
-    if (this._armPilotStrip && this._armPilotStrip.style.display !== 'none') {
-      const pilotArm = cameraSystem?.getPilotedArm();
-      this._updateArmPilotStripContent(pilotArm);
-    }
+    this._tickArmStrips(cameraSystem);
 
     // Comms flash timer
     this.commsPanel.update(dt);
+  }
+
+  /**
+   * @private The per-frame work of the bottom-centre strip (called from update()). u17b: the selected holding daughter's strip
+   * comes and goes with her state; the pilot strip's context refresh (ARM PILOT / STATION KEEP) runs only while the camera
+   * really is in pilot view (`_armPilotView`), so it can never write pilot text into a holding strip that is fading out.
+   * @param {object} [cameraSystem]
+   */
+  _tickArmStrips(cameraSystem) {
+    this._syncHoldingStrip();
+    if (this._armPilotView && !this._holdingStripOn && this._armPilotStrip && this._armPilotStrip.style.display !== 'none') {
+      this._updateArmPilotStripContent(cameraSystem?.getPilotedArm());
+    }
   }
 
   // ==========================================================================
@@ -3365,6 +3382,8 @@ export class HUD {
    */
   _updateArmPilotStripContent(arm) {
     if (!this._armPilotStrip) return;
+    // u17b: a daughter parked with a catch gets her own strip (below), never the pilot strip's N / R / ESC options.
+    if (arm && arm.state === Constants.ARM_STATES.HOLDING_CATCH) { this._updateHoldingStripContent(arm); return; }
 
     const isStationKeep = arm && arm.state === Constants.ARM_STATES.STATION_KEEP;
     // u15b fix 4: glass is read when the strip is drawn (D7), and the glass strip lists only the controls that exist right
@@ -3433,22 +3452,85 @@ export class HUD {
     return { net: has('LAUNCH NET') ? 'LAUNCH NET' : has('STICK PAD') ? 'STICK PAD' : '', reel: has('REEL') };
   }
 
-  /** @private Show the ARM PILOT controls strip with fade-in. */
-  _showArmPilotStrip() {
+  /**
+   * @private u17b: the selected daughter when she is parked with a catch and not being piloted (the pilot strip wins in
+   * pilot view), else null. Read from the arm manager, never cached.
+   * @returns {object|null}
+   */
+  _holdingStripArm() {
+    if (!this.visible || this._armPilotView) return null;
+    const am = this._armManager;
+    const arm = am && typeof am.getSelectedArm === 'function' ? am.getSelectedArm() : null;
+    return arm && arm.state === Constants.ARM_STATES.HOLDING_CATCH ? arm : null;
+  }
+
+  /**
+   * @private u17b: show, refresh or hide the strip for a selected holding daughter. Called on selection changes, on the
+   * camera leaving pilot view, and every frame from update() (she leaves HOLDING_CATCH by a carry, a launch, a loss).
+   */
+  _syncHoldingStrip() {
+    const arm = this._holdingStripArm();
+    if (arm) {
+      if (!this._holdingStripOn) this._showArmPilotStrip(arm);
+      this._holdingStripOn = true;
+      this._updateArmPilotStripContent(arm);
+    } else if (this._holdingStripOn) {
+      this._hideArmPilotStrip();
+    }
+  }
+
+  /**
+   * @private u17b: the strip for a selected daughter parked with a catch: only options that work for her right now.
+   * Desktop: `.` moves her strut, `C` To radiator only while `ArmManager.canMoveCatchToRadiator` says it would start, her number
+   * puts her down (ESC does not deselect a daughter who is not piloted, so it is never listed). Glass: TO RADIATOR only while
+   * her row's button is up (the same getter), and the row tap that deselects; `.` has no touch control, so it is left out.
+   * No net, no recall: neither does anything for her. Read when drawn (glass is never cached at construction).
+   */
+  _updateHoldingStripContent(arm) {
+    const am = this._armManager;
+    const canMove = !!(am && typeof am.canMoveCatchToRadiator === 'function' && am.canMoveCatchToRadiator(arm.index));
+    const glass = GestureHints.isGlass();
+    // The row button rides the ladder flag (StatusPanel `fleetTapEnabled`, the same gate as DEPLOY): on glass the strip names
+    // TO RADIATOR only when that button is really on her row. The C key does not depend on the flag.
+    const rowButton = canMove && !!(Constants.LADDER && Constants.LADDER.ENABLED);
+    const mode = `hold:${glass ? 'glass' : 'desk'}:${arm.index}:${(glass ? rowButton : canMove) ? 'c' : '-'}`;
+    if (this._armStripMode === mode) return;
+    this._armStripMode = mode;
+    const sep = '<span class="apc-sep">\u2502</span>';
+    const key = (w) => `<span class="apc-key">${w}</span>`;
+    const badge = `<span class="apc-badge">\u{1F916} DAUGHTER ${arm.index + 1} HOLDING A CATCH</span>`;
+    const parts = [badge];
+    if (glass) {
+      if (rowButton) parts.push(`${key('TO RADIATOR')} Move her catch`);
+      parts.push('Tap her row in DAUGHTERS again to deselect');
+    } else {
+      parts.push(`${key('.')} Strut`);
+      if (canMove) parts.push(`${key('C')} To radiator`);
+      parts.push(`${key(String(arm.index + 1))} Deselect`);
+    }
+    this._armPilotStrip.innerHTML = parts.join(sep);
+  }
+
+  /** @private Show the ARM PILOT controls strip with fade-in (`arm`: a holding daughter, u17b - her strip's content from the first frame). */
+  _showArmPilotStrip(arm = null) {
     this._createArmPilotStrip();
+    this._armStripHideToken = (this._armStripHideToken || 0) + 1;   // a fade-out still waiting must not hide this show
     // Set initial content (default ARM PILOT; update loop will swap to STATION_KEEP if needed)
-    this._updateArmPilotStripContent(null);
+    this._holdingStripOn = !!arm;
+    this._updateArmPilotStripContent(arm);
     this._armPilotStrip.style.display = 'flex';
     requestAnimationFrame(() => { this._armPilotStrip.style.opacity = '1'; });
   }
 
   /** @private Hide the ARM PILOT controls strip with fade-out. */
   _hideArmPilotStrip() {
+    this._holdingStripOn = false;
     if (this._armPilotStrip) {
       this._armPilotStrip.style.opacity = '0';
       this._armStripMode = null; // Reset so next show gets fresh content update
+      const token = (this._armStripHideToken = (this._armStripHideToken || 0) + 1);
       timerManager.setTimeout(() => {
-        if (this._armPilotStrip) this._armPilotStrip.style.display = 'none';
+        if (this._armPilotStrip && token === this._armStripHideToken) this._armPilotStrip.style.display = 'none';
       }, 300, { owner: this });
     }
   }

@@ -753,6 +753,11 @@ export class TouchControls {
     if (el.style.display !== d) el.style.display = d;
   }
 
+  /** u17a: is the TURN PAD on screen right now? Read-only (the glass captions name it only while it is up). */
+  isTurnPadShown() {
+    return !!(this._padEl && this._padEl.style.display !== 'none');
+  }
+
   /** @private */
   _handlePadStart(e) {
     if (e.cancelable) e.preventDefault();

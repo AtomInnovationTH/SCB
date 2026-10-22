@@ -1692,26 +1692,39 @@ export class CodexViewerUI {
         stroke="${accentBg(dim)}" stroke-width="${b.ring === 2 ? 1 : 1.5}" />`;
     }).join('');
 
-    const nodeSvg = nodes.map(n => {
+    // u17 A-T5 (D6): two layers. Every label is painted BEFORE (under) every circle, so a node's circle always wins a tap over
+    // another node's label that happens to cover it (the locked "docking_precision" label spans the "tool_choice" circle
+    // under "core_loop"; SVG hit-testing goes to the last-painted element). A label stays tappable where it covers nothing.
+    const nodeStyle = (n) => {
       const isFocus = n.ring === 0;
       const r = isFocus ? 34 : (n.ring === 1 ? 26 : 20);
-      const op = n.ring === 2 ? 0.35 : 1;
-      const stroke = isFocus ? accent : (n.locked ? '#556' : accentBg(0.6));
-      const fill = isFocus ? accentBg(0.18) : 'rgba(10,14,20,0.9)';
+      return { isFocus, r, op: n.ring === 2 ? 0.35 : 1, cursor: isFocus ? 'default' : 'pointer' };
+    };
+    const labelSvg = nodes.map(n => {
+      const { isFocus, r, op, cursor } = nodeStyle(n);
       const labelY = n.y + r + 16;
       const label = `${n.locked ? '[LOCKED] ' : ''}${n.title}`;
       const labelColor = n.locked ? '#89a' : (isFocus ? '#eee' : '#bcd');
-      const cursor = isFocus ? 'default' : 'pointer';
-      return `<g class="codex-map-node" data-id="${n.id}" data-ring="${n.ring}"
+      return `<text class="codex-map-label" data-id="${n.id}" data-ring="${n.ring}"
+        x="${n.x.toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="middle"
+        font-size="12" fill="${labelColor}" opacity="${op}"
+        style="font-family:inherit;cursor:${cursor};">${label}</text>`;
+    }).join('');
+
+    const nodeSvg = nodes.map(n => {
+      const { isFocus, r, op, cursor } = nodeStyle(n);
+      const stroke = isFocus ? accent : (n.locked ? '#556' : accentBg(0.6));
+      const fill = isFocus ? accentBg(0.18) : 'rgba(10,14,20,0.9)';
+      // The text moved to the label layer, so the focusable group carries the node's name itself (screen readers).
+      const name = escapeHtml(`${n.locked ? '[LOCKED] ' : ''}${n.title}`);
+      return `<g class="codex-map-node" data-id="${n.id}" data-ring="${n.ring}" aria-label="${name}"
         tabindex="0" style="cursor:${cursor};outline:none;" opacity="${op}">
         <circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${r}"
           fill="${fill}" stroke="${stroke}" stroke-width="${isFocus ? 2.5 : 1.5}"
           ${n.locked ? 'stroke-dasharray="4 3"' : ''} />
-        <text x="${n.x.toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="middle"
-          font-size="12" fill="${labelColor}"
-          style="font-family:inherit;">${label}</text>
       </g>`;
     }).join('');
+
 
     reading.innerHTML = `
       <div style="max-width:100%;margin:0 auto;">
@@ -1728,7 +1741,8 @@ export class CodexViewerUI {
             border:1px solid ${accentBg(0.2)};border-radius:6px;"
           preserveAspectRatio="xMidYMid meet">
           <g>${edgeSvg}</g>
-          <g>${nodeSvg}</g>
+          <g class="codex-map-labels">${labelSvg}</g>
+          <g class="codex-map-circles">${nodeSvg}</g>
         </svg>
       </div>`;
 
@@ -1761,6 +1775,15 @@ export class CodexViewerUI {
       g.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); this._openFromMap(id); }
       });
+    });
+
+    // u17 A-T5: a label (under every circle) acts like its own node: tap = re-centre / open the centred one; dblclick opens.
+    // Enter and focus stay on the circle's group (a <text> is not focusable).
+    reading.querySelectorAll('.codex-map-label').forEach(t => {
+      const id = t.dataset.id;
+      const isFocus = t.dataset.ring === '0';
+      t.addEventListener('click', () => (isFocus ? this._openFromMap(id) : this._recenterMap(id)));
+      t.addEventListener('dblclick', () => this._openFromMap(id));
     });
   }
 

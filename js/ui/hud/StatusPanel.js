@@ -2557,9 +2557,13 @@ export class StatusPanel {
    * DEPLOY / REEL IN / RECALL, each pressing its key through `_keyDispatch`)
    * followed by the desktop letter hint in plain words. Empty when it's busy /
    * not actionable. Daughters fly on autopilot, so the only verbs surfaced are
-   * launch (D) and recall (R).
+   * launch (D) and recall (R). A daughter parked with a catch (HOLDING_CATCH) gets TO RADIATOR (C) only while
+   * `ArmManager.canMoveCatchToRadiator(idx)` says C would start her hand-off, so the button never promises what C
+   * refuses (u17b, owner pick 2026-10-22; the arms rows are rebuilt every 0.1 s, so it follows the getter).
+   * @param {object} a  the daughter's `getStatus()`
+   * @param {number} [idx]  her index (the status has none)
    */
-  _daughterHotkeys(a) {
+  _daughterHotkeys(a, idx) {
     // u15b B-T7: on glass the DEPLOY / REEL IN / RECALL button IS the control - no key span beside it (read when drawn, D7).
     const glassNow = this._glassArg !== false && (this._glass || GestureHints.isGlass());
     const key = (k, verb) => (glassNow ? '' : `<span style="color:var(--hud-info, ${VisualLaw.COLORS.SELECTION});font-weight:bold;">${k}</span>`
@@ -2574,7 +2578,12 @@ export class StatusPanel {
     switch (a.state) {
       case 'DOCKED':
         return (a.springCharged && a.fuel > 0) ? btn('KeyD', 'DEPLOY') + key('D', 'launch') : '';
-      case 'EXPENDED': case 'RELOADING': case 'HOLDING_CATCH': case 'DOCKING':
+      case 'HOLDING_CATCH': {
+        const am = this._armManager;
+        return (am && typeof am.canMoveCatchToRadiator === 'function' && am.canMoveCatchToRadiator(idx))
+          ? btn('KeyC', 'TO RADIATOR') + key('C', 'to radiator') : '';
+      }
+      case 'EXPENDED': case 'RELOADING': case 'DOCKING':
         return '';
       case 'ADRIFT':
         return btn('KeyR', 'REEL IN') + key('R', 'reel in');
@@ -2864,7 +2873,7 @@ export class StatusPanel {
     // under the status column (inline flow: the hint's leading space must
     // survive, so no flex here; the button vertical-aligns to the text middle).
     // Flag-off keeps the shipped 1 px top margin (no button to align).
-    const keys = this._daughterHotkeys(a);
+    const keys = this._daughterHotkeys(a, idx);
     const keysLine = `<div style="padding-left:28px;font-size:10px;margin-top:${on ? 2 : 1}px;">`
       + (keys || '<span style="opacity:0.4;">busy…</span>')
       + `</div>`;

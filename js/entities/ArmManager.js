@@ -2119,8 +2119,10 @@ export class ArmManager {
    * daughter is leaving, time is not held) and a launch request for her blocks it.
    * `motherNetOnly` (hold-catch FA1): refuse ('own-catch') unless the piece it would deliver was put on the rack by the mother's
    * net (`_rackFromMotherNet`, set where CaptureNet's cargo flight lands): the mission scheduler's rule.
+   * `ignoreGaveUp` (u17b): do not refuse on `_carryGaveUp`, the way `moveCatchToRadiator` clears the flag before it asks
+   * ("he asked: a give-up from an earlier try does not count"). It lets the read-only `canMoveCatchToRadiator` answer as C would.
    * @param {ArmUnit} arm
-   * @param {{mission?:boolean, motherNetOnly?:boolean}} [opts]
+   * @param {{mission?:boolean, motherNetOnly?:boolean, ignoreGaveUp?:boolean}} [opts]
    * @returns {{ok:boolean, reason:string, text:string, retry:boolean, giveUp:boolean, plan?:object}}
    */
   carryCheck(arm, opts = {}) {
@@ -2129,7 +2131,7 @@ export class ArmManager {
     const motherNetOnly = opts.motherNetOnly === true;
     const no = (reason, text = '', retry = true, giveUp = false, sayKey = '') => ({ ok: false, reason, text, retry, giveUp, sayKey });
     if (!arm || arm.isDetached || (arm.state !== S.HOLDING_CATCH && arm.state !== S.DOCKED)) return no('state', '', false);
-    if (arm._carryGaveUp) return no('gave-up', '', false);          // her last carry failed on its own: not again until something changes
+    if (arm._carryGaveUp && opts.ignoreGaveUp !== true) return no('gave-up', '', false);   // her last carry failed on its own: not again until something changes
     const rack = Array.isArray(arm.heldCatches) ? arm.heldCatches.filter(Boolean) : [];
     if (rack.length === 0) return no('no-catch', '', false);
     const ps = this.playerSatellite;
@@ -2369,6 +2371,49 @@ export class ArmManager {
   }
 
   /**
+   * u17b: the checks `moveCatchToRadiator` makes BEFORE it asks `carryCheck`, in its order, with no comms line and no state change:
+   * not on the trip, no hand-off running, somebody holds a catch, and no daughter is free (every one that can still fly holds one).
+   * One copy, so the read-only `canMoveCatchToRadiator` and the C key can never disagree about them.
+   * @private
+   * @returns {{ok:true, holders:ArmUnit[]}|{ok:false, text:string}} `text` is the line C says for that refusal
+   */
+  _radiatorMoveGate() {
+    const S = ARM_STATES;
+    if (this._tripPhase) {
+      return { ok: false, text: 'The daughters hand their catches to the radiators by themselves on the trip.' };
+    }
+    const arms = (this.arms || []).filter((a) => a && !a.isDetached && a.state !== S.EXPENDED);
+    const holders = arms.filter((a) => a.state === S.HOLDING_CATCH && Array.isArray(a.heldCatches) && a.heldCatches.some((h) => h));
+    if (this.isCarrying()) return { ok: false, text: 'A hand-off is already running.' };
+    if (holders.length === 0) return { ok: false, text: 'No daughter is holding a catch.' };
+    const free = arms.find((a) => !holders.includes(a));
+    if (free) {
+      const away = free.state !== S.DOCKED && free.state !== S.RELOADING;
+      return { ok: false, text: `Daughter ${free.index + 1} is ${away ? 'out' : 'free'}; catches stay with the daughters until all are full.` };
+    }
+    return { ok: true, holders };
+  }
+
+  /**
+   * u17b (owner pick 2026-10-22, TO RADIATOR button on a DAUGHTERS row): would `moveCatchToRadiator(index)` start THIS daughter's
+   * hand-off right now? Read-only: no comms line, no state change (`carryCheck` writes nothing but a short-lived hold-pose memo).
+   * True only when she is a holder, every daughter that can still fly holds a catch, no trip / hand-off is running, and a mission
+   * `carryCheck` passes for her (fits a tip, gate row, fuel, free tip, radiators settled, neighbour struts). An earlier give-up
+   * (`_carryGaveUp`) does not count: C clears it and asks again, so the getter ignores it the same way. Not covered: the daughter's own
+   * `beginCarry` can still refuse after a passing check (no tip record, no petal hold); that marks her gave-up and says nothing.
+   * @param {number} index the daughter's index
+   * @returns {boolean}
+   */
+  canMoveCatchToRadiator(index) {
+    if (!Number.isInteger(index) || index < 0) return false;
+    const gate = this._radiatorMoveGate();
+    if (!gate.ok) return false;
+    const arm = gate.holders.find((a) => a.index === index);
+    if (!arm) return false;
+    return this.carryCheck(arm, { mission: true, ignoreGaveUp: true }).ok === true;
+  }
+
+  /**
    * hold-catch (owner 2026-10-22, "Press C"): the player's choice to move ONE daughter's catch to a radiator tip, only when
    * every daughter is full. Starts one hand-off through the same `carryCheck` / `requestCarry` / `beginCarry` path the trip
    * uses (a mission carry: the hand-off ends with "puts her catch on radiator N's tip; she is free again"). The selected
@@ -2379,23 +2424,13 @@ export class ArmManager {
    * @returns {{ok:boolean, text:string, arm?:object}}
    */
   moveCatchToRadiator(selectedIndex) {
-    const S = ARM_STATES;
     const finish = (r) => {
       if (r.text) eventBus.emit(Events.COMMS_MESSAGE, { text: r.text, priority: 'info' });
       return r;
     };
-    if (this._tripPhase) {
-      return finish({ ok: false, text: 'The daughters hand their catches to the radiators by themselves on the trip.' });
-    }
-    const arms = (this.arms || []).filter((a) => a && !a.isDetached && a.state !== S.EXPENDED);
-    const holders = arms.filter((a) => a.state === S.HOLDING_CATCH && Array.isArray(a.heldCatches) && a.heldCatches.some((h) => h));
-    if (this.isCarrying()) return finish({ ok: false, text: 'A hand-off is already running.' });
-    if (holders.length === 0) return finish({ ok: false, text: 'No daughter is holding a catch.' });
-    const free = arms.find((a) => !holders.includes(a));
-    if (free) {
-      const away = free.state !== S.DOCKED && free.state !== S.RELOADING;
-      return finish({ ok: false, text: `Daughter ${free.index + 1} is ${away ? 'out' : 'free'}; catches stay with the daughters until all are full.` });
-    }
+    const gate = this._radiatorMoveGate();
+    if (!gate.ok) return finish({ ok: false, text: gate.text });
+    const holders = gate.holders;
     const sel = Number.isInteger(selectedIndex) && selectedIndex >= 0 ? holders.find((a) => a.index === selectedIndex) : null;
     const order = sel ? [sel] : holders.slice().sort((a, b) => a.index - b.index);
     // FA2: with nobody selected, the line names the first daughter whose hand-off can still happen (waiting helps), not a

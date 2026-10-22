@@ -138,6 +138,22 @@ export class InputManager {
     eventBus.on(Events.ARM_RETURNED, (data) => handleArmPilotExit(data, false));
     eventBus.on(Events.ARM_EXPENDED, (data) => handleArmPilotExit(data, true));
 
+    // u17b (D7b): a piloted daughter that ends up PARKED WITH A CATCH by any path (a radiator carry that ends
+    // with her still holding is the known one; a dock goes through ARM_RETURNED above) leaves pilot mode and
+    // is deselected, exactly as a docked arrival: the pilot view has nothing to offer her (no net to launch,
+    // no recall) and its range beeps would run against her own rack. Some ARM_STATE_CHANGE payloads carry only
+    // `{ armId, manual }` (ArmUnit enableManual / disableManual), so test `to`.
+    eventBus.on(Events.ARM_STATE_CHANGE, (data) => {
+      if (!data || data.to !== Constants.ARM_STATES.HOLDING_CATCH) return;
+      const cam = this._deps?.cameraSystem;
+      if (!this.armPilotMode || cam?.getPilotedArm()?.id !== data.armId) return;
+      this._exitArmPilotCamera();
+      const am = this._deps?.armManager;
+      if (am && typeof am.getSelectedArm === 'function' && am.getSelectedArm()?.id === data.armId) {
+        am.deselectArm();
+      }
+    });
+
     // V-7: Ceremony complete — restore FOV unless entering ARM_PILOT tracking.
     // When ceremony → ARM_PILOT (auto-entry path so the camera stays on the
     // daughter for debris inspection), keep the narrow ~40° FOV and ALSO turn
@@ -1976,6 +1992,7 @@ export class InputManager {
    *     view; the player then launches the selected daughter with D. NO deploy,
    *     NO camera switch (D1).
    *   • DEPLOYED → SELECT + switch camera to that daughter (pilot it).
+   *   • HOLDING_CATCH → SELECT only, like DOCKED (u17b): she is home on her strut, never piloted.
    *   • EXPENDED → warn.
    *   • Re-press the ACTIVE daughter's digit → return to mother: exit the pilot
    *     camera + deselect WITHOUT recalling (the daughter keeps working — this
@@ -2003,6 +2020,17 @@ export class InputManager {
     if (arm.state === Constants.ARM_STATES.DOCKED) {
       // SELECT only (D1) — the docked arm glows/flashes (ARM_SELECT). Mother
       // stays in view; launch the selected daughter with D (pick-then-launch).
+      // If another daughter is being piloted, leave pilot mode first (as for a holding daughter below), so the
+      // camera, the strip, D and "." all refer to the daughter just selected. Nobody piloted: no-op, as before.
+      this._exitArmPilotCamera();
+      d.armManager.selectArm(armIndex);
+    } else if (arm.state === Constants.ARM_STATES.HOLDING_CATCH) {
+      // u17b (owner 2026-10-22 bug "press 1-4 for a daughter that has captured debris, the sonar ping is
+      // still going and the bottom options are wrong"): a daughter parked on her strut with a catch is
+      // HOME, like a docked one: SELECT only, never pilot (she cannot be flown, N and R do nothing for her,
+      // and the pilot view's range beeps ran against the piece on her own rack). If another daughter is
+      // being piloted right now, leave pilot mode first, so the view, the strip, C and "." refer to her.
+      this._exitArmPilotCamera();
       d.armManager.selectArm(armIndex);
     } else if (arm.state === Constants.ARM_STATES.ADRIFT) {
       // Out of usable FEEP but STILL tethered and powered — select + pilot works

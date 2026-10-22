@@ -111,6 +111,12 @@ const CFG = Constants.CALLOUTS;
 const HUES = CFG.SYSTEM_HUES;
 const RISK = CFG.RISK_COLORS;
 
+// u17 A-T2 (D3): the flower struts' card row. Desktop names the O key; glass has no such key (the touch twin is a floor-1
+// button that is not readable from here), so the glass row names no control. Chosen when the CARD is applied (`specRow`).
+const FLOWER_ROW = 'They open LIKE A FLOWER \u2014 O opens to 146\u00B0 / folds flat';
+const FLOWER_ROW_GLASS = 'They open LIKE A FLOWER \u2014 146\u00B0 open / folds flat';
+const specRow = (row) => (row === FLOWER_ROW && GestureHints.isGlass() ? FLOWER_ROW_GLASS : row);
+
 // ----------------------------------------------------------------------------
 // SYSTEM / PART ANCHOR TABLE
 // ----------------------------------------------------------------------------
@@ -588,7 +594,7 @@ const SYSTEMS = [
         anchor: [ -0.30 * M, -0.30 * M, -1.15 * M ] },
       { id: 'flower_struts', name: 'AFT FLOWER STRUTS', risk: 'GREEN', tier: 'major', codexId: 'vacuum_mechanisms',
         massKg: 10, priority: 6, flowerGated: true,
-        specs: ['4× aft-pivot booms, 2.30 m — fold fore along the bus for launch', 'They open LIKE A FLOWER — O opens to 146° / folds flat'],
+        specs: ['4× aft-pivot booms, 2.30 m — fold fore along the bus for launch', FLOWER_ROW],
         // §13 r4 roll-up: the 4 booms and their seams (the wing hinge lugs
         // stay with the hinge brackets below).
         pickPrefixes: ['FlowerStrut_', 'FlowerStrutSeam'],
@@ -2072,7 +2078,7 @@ export class MotherCallouts {
       const budget = 6 - hintLines.length;
       if (typeof def.massKg === 'number') rows.push({ text: `Mass: ${def.massKg} kg` });
       if (Array.isArray(def.specs)) {
-        for (const s of def.specs.slice(0, 2)) rows.push({ text: s });
+        for (const s of def.specs.slice(0, 2)) rows.push({ text: specRow(s) });
       }
       for (const lr of live) rows.push({ text: lr, dim: false });
 

@@ -20,6 +20,7 @@ import { dossierSystem } from '../systems/DossierSystem.js';
 import { toolShortLabel } from '../systems/ToolOdds.js';
 import { calmBreathe, finitePulse } from './hudPulse.js';
 import { FONT_MONO } from '../core/Typeface.js';
+import { GestureHints } from './hud/GestureHints.js';   // u17 A-T1: the aiming-mark captions follow glass, read when drawn
 
 // ============================================================================
 // CONFIGURATION
@@ -98,6 +99,9 @@ export class DockingReticle {
 
     this._skActive = false;
 
+    // u17 A-T1 (D2): what a touch player really has on screen, read at call time (main.js wires it). Null = nothing known.
+    this._glassControls = null;
+
     this._createCanvas();
     this._onResize();
     this._resizeHandler = () => this._onResize();
@@ -146,6 +150,37 @@ export class DockingReticle {
   // ==========================================================================
   // PUBLIC API
   // ==========================================================================
+
+  /**
+   * u17 A-T1 (D2): tell the reticle which touch controls are on screen, so its glass captions name only those.
+   * Both closures are read when a caption is drawn, never cached.
+   * @param {{hasStepButton?: (label:string)=>boolean, isDespinUp?: ()=>boolean, isTurnPadUp?: ()=>boolean}|null} controls
+   */
+  setGlassControls(controls) {
+    this._glassControls = controls || null;
+  }
+
+  /** @private u17 A-T1: glass is read when drawn (D1), never at construction. */
+  _glassNow() {
+    return GestureHints.isGlass();
+  }
+
+  /** @private is the step chip with this label on screen right now? (glass captions only) */
+  _chipUp(label) {
+    const c = this._glassControls;
+    return !!(c && typeof c.hasStepButton === 'function' && c.hasStepButton(label));
+  }
+
+  /** @private the net button on screen now ('LAUNCH NET' or 'STICK PAD'), else '' */
+  _glassNetChip() {
+    return this._chipUp('LAUNCH NET') ? 'LAUNCH NET' : this._chipUp('STICK PAD') ? 'STICK PAD' : '';
+  }
+
+  /** @private is the hold-to-fire DE-SPIN button on screen right now? */
+  _glassDespinUp() {
+    const c = this._glassControls;
+    return !!(c && typeof c.isDespinUp === 'function' && c.isDespinUp());
+  }
 
   /**
    * Show or hide the reticle overlay.
@@ -293,9 +328,11 @@ export class DockingReticle {
     // actively capturing — the fast "beep-beep-beep" becomes annoying spam
     // rather than useful approach feedback (user is no longer approaching).
     // Also stop any active alignment tone for the same reason.
+    // HOLDING_CATCH (u17b, owner 2026-10-22 bug): she is parked on her strut with the
+    // catch on her rack, 0.7 m from her old target, so the range beeps never stop.
     const POST_APPROACH_STATES = new Set([
       'STATION_KEEP', 'NETTING', 'GRAPPLED', 'REELING', 'DOCKING',
-      'TRAWLING', 'HAULING',
+      'TRAWLING', 'HAULING', 'HOLDING_CATCH',
     ]);
     const inPostApproach = this._arm && POST_APPROACH_STATES.has(this._arm.state);
     if (inPostApproach) {
@@ -707,7 +744,17 @@ export class DockingReticle {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = ready ? `rgba(0, 255, 136, ${readyAlpha})` : C.gray;
-      ctx.fillText(`\u25CF [N] ${tool} \u00B7 [\`] cycle \u00B7 [R] reel \u00B7 [Esc] recall`, cx, y);
+      if (this._glassNow()) {
+        // u17 A-T1 (D2): each clause names a button only while that button is on screen; the tool cycle and Esc have no
+        // touch control, so they are never named. Nothing left to say -> nothing drawn.
+        const clauses = [];
+        const net = this._glassNetChip();
+        if (net) clauses.push(`tap ${net}`);
+        if (this._chipUp('REEL')) clauses.push('tap REEL');
+        if (clauses.length) ctx.fillText(`\u25CF ${tool} \u00B7 ${clauses.join(' \u00B7 ')}`, cx, y);
+      } else {
+        ctx.fillText(`\u25CF [N] ${tool} \u00B7 [\`] cycle \u00B7 [R] reel \u00B7 [Esc] recall`, cx, y);
+      }
     } else if (ready) {
       ctx.font = `bold 14px ${FONT}`;
       ctx.textAlign = 'center';
@@ -715,7 +762,12 @@ export class DockingReticle {
       ctx.fillStyle = `rgba(0, 255, 136, ${readyAlpha})`;
       ctx.shadowColor = C.primary;
       ctx.shadowBlur = 10;
-      ctx.fillText('\u25CF NET READY: [N] launch', cx, y);
+      if (this._glassNow()) {
+        const net = this._glassNetChip();
+        ctx.fillText(net ? `\u25CF NET READY: tap ${net}` : '\u25CF NET READY', cx, y);
+      } else {
+        ctx.fillText('\u25CF NET READY: [N] launch', cx, y);
+      }
       ctx.shadowBlur = 0;
     } else {
       ctx.font = `13px ${FONT}`;
@@ -981,7 +1033,13 @@ export class DockingReticle {
     ctx.font = `9px ${FONT}`;
     ctx.textAlign = 'left';
     ctx.fillStyle = 'rgba(0, 255, 170, 0.5)';
-    ctx.fillText('[`] cycle   [N] launch', left + 8, footerY);
+    if (this._glassNow()) {
+      // u17 A-T1 (D2): the tool cycle has no touch control; the launch button is named only while it is up.
+      const net = this._glassNetChip();
+      if (net) ctx.fillText(`tap ${net}`, left + 8, footerY);
+    } else {
+      ctx.fillText('[`] cycle   [N] launch', left + 8, footerY);
+    }
     const fragRisk = arm._toolOddsFragRisk || 0;
     if (!profiled) {
       // Brittleness unknown until the close-range survey — say so honestly.
@@ -1028,6 +1086,15 @@ export class DockingReticle {
   }
 
   /**
+   * @private "better tool, press the tool-cycle key" offer. The tool cycle has no touch control, so on glass there is no
+   * such offer to make (u17 A-T1, D2): null, and the caller moves on to the next advisory.
+   */
+  _switchOffer(kind, p) {
+    if (this._glassNow()) return null;
+    return { text: `${this._oddsColLabel(kind)} ${Math.round(p * 100)}% \u2014 switch [\`]`, color: '#ffd166' };
+  }
+
+  /**
    * @private One advisory line — driven by the selected tool's top blocker,
    * preserving the established priority chain for NET (width → range →
    * off-axis → tumble with the live de-spin readout). If a different tool
@@ -1063,17 +1130,13 @@ export class DockingReticle {
       const netAdv = this._buildNetAdvisory(target, range, selectedPct ?? 0);
       // NET-dead + better tool available → the switch IS the fix.
       if (sel && sel.p === 0 && bestKind) {
-        return {
-          text: `${this._oddsColLabel(bestKind)} ${Math.round(bestP * 100)}% \u2014 switch [\`]`,
-          color: '#ffd166',
-        };
+        const offer = this._switchOffer(bestKind, bestP);
+        if (offer) return offer;
       }
       if (netAdv) return { text: netAdv.text, color: netAdv.color };
       if (bestKind) {
-        return {
-          text: `${this._oddsColLabel(bestKind)} ${Math.round(bestP * 100)}% \u2014 switch [\`]`,
-          color: '#ffd166',
-        };
+        const offer = this._switchOffer(bestKind, bestP);
+        if (offer) return offer;
       }
       // Phase 1.5: nothing more urgent → offer the knowledge fix.
       if (target && !dossierSystem.isProfiled(target.id)) {
@@ -1094,10 +1157,8 @@ export class DockingReticle {
       return { text: `eddy-damping ${deg.toFixed(1)}\u00B0/s\u2193`, color: '#66ddff' };
     }
     if (bestKind) {
-      return {
-        text: `${this._oddsColLabel(bestKind)} ${Math.round(bestP * 100)}% \u2014 switch [\`]`,
-        color: '#ffd166',
-      };
+      const offer = this._switchOffer(bestKind, bestP);
+      if (offer) return offer;
     }
     if (sel && sel.hint && sel.p < 0.5) {
       return { text: sel.hint, color: 'rgba(0, 255, 170, 0.6)' };
@@ -1275,9 +1336,31 @@ export class DockingReticle {
       ctx.font = `9px ${FONT}`;
       ctx.textAlign = 'left';
       ctx.fillStyle = arm._boostReel ? '#ffd166' : 'rgba(0, 255, 170, 0.5)';
-      ctx.fillText(arm._boostReel ? 'BOOST REEL \u00D72' : 'hold [\u21E7] fast reel', left + 8, strainY + strainH + 16);
+      // u17 A-T1 (D2): Shift has no touch control, so on glass the hint is left out; the live BOOST REEL state still shows.
+      if (!this._glassNow()) {
+        ctx.fillText(arm._boostReel ? 'BOOST REEL \u00D72' : 'hold [\u21E7] fast reel', left + 8, strainY + strainH + 16);
+      } else if (arm._boostReel) {
+        ctx.fillText('BOOST REEL \u00D72', left + 8, strainY + strainH + 16);
+      }
     }
     ctx.textAlign = 'left';
+  }
+
+  /**
+   * @private the broadside advisory. Desktop: unchanged. Glass: she can be orbited by touch only while she holds station
+   * (STATION_KEEP), with the TURN PAD; name the pad only then and only while it is on screen, else just the state.
+   */
+  _aspectBroadside() {
+    if (!this._glassNow()) return 'ASPECT: BROADSIDE \u2014 orbit to end-on';
+    return this._glassTurnPadUp() && this._arm && this._arm.state === 'STATION_KEEP'
+      ? 'ASPECT: BROADSIDE \u2014 use the TURN PAD to turn her end-on'
+      : 'ASPECT: BROADSIDE';
+  }
+
+  /** @private is the TURN PAD on screen right now? */
+  _glassTurnPadUp() {
+    const c = this._glassControls;
+    return !!(c && typeof c.isTurnPadUp === 'function' && c.isTurnPadUp());
   }
 
   /**
@@ -1330,9 +1413,17 @@ export class DockingReticle {
       // arm actually carries one — the Spinner doesn't, so point at the Weaver.
       const toolset = (Constants.DAUGHTER_TOOLSETS && Constants.DAUGHTER_TOOLSETS[arm.type])
         || arm.toolset || [];
-      advisory = toolset.includes('GRIPPER')
-        ? 'too wide \u2014 use GRIPPER [`]'
-        : 'too wide \u2014 recall [R], send the Large [D]';
+      if (this._glassNow()) {
+        // u17 A-T1 (D2): the tool cycle has no touch control. Name REEL / SEND DAUGHTER only while their chips are up.
+        const reel = this._chipUp('REEL');
+        const send = this._chipUp('SEND DAUGHTER');
+        advisory = 'too wide for this net'
+          + (reel && send ? ' \u2014 tap REEL, then SEND DAUGHTER' : reel ? ' \u2014 tap REEL' : send ? ' \u2014 tap SEND DAUGHTER' : '');
+      } else {
+        advisory = toolset.includes('GRIPPER')
+          ? 'too wide \u2014 use GRIPPER [`]'
+          : 'too wide \u2014 recall [R], send the Large [D]';
+      }
       advisoryCol = '#ff5555';
     } else if (fit.fit === 'ASPECT') {
       // Phase 2: currently broadside on a body that fits end-on. Tumble makes
@@ -1340,10 +1431,13 @@ export class DockingReticle {
       const inSpec = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
       const deg = Math.abs(tumbleRate || 0) * (180 / Math.PI);
       if (tumbleRate != null && deg > inSpec && !target._despinning) {
-        advisory = 'de-spin to freeze aspect [L]';
+        // u17 A-T1 (D2): on glass the de-spin clause stays only while the DE-SPIN button is up; else the plain broadside advice.
+        advisory = !this._glassNow() ? 'de-spin to freeze aspect [L]'
+          : this._glassDespinUp() ? 'de-spin to freeze aspect: hold DE-SPIN'
+            : this._aspectBroadside();
         advisoryCol = '#ffd166';
       } else {
-        advisory = 'ASPECT: BROADSIDE \u2014 orbit to end-on';
+        advisory = this._aspectBroadside();
         advisoryCol = '#ffd166';
       }
     } else if (range > (netMaxReachM(netClass) || CN.ENVELOPE_RANGE || 100)) advisory = 'too far. Close in';
@@ -1360,7 +1454,8 @@ export class DockingReticle {
         advisory = `de-spinning ${deg.toFixed(1)}\u00B0/s \u2192 ${inSpec}\u00B0/s`;
         advisoryCol = '#66ddff';
       } else if (deg > inSpec) {
-        advisory = `tumbling ${Math.round(deg)}\u00B0/s \u2014 de-spin [L]`;
+        advisory = `tumbling ${Math.round(deg)}\u00B0/s`
+          + (!this._glassNow() ? ' \u2014 de-spin [L]' : this._glassDespinUp() ? ' \u2014 hold DE-SPIN' : '');
       }
     }
     // Register item 17 (2026-08-19): a NET ✓ whose DRAWN span outspans the

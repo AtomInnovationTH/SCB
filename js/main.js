@@ -1840,6 +1840,12 @@ async function init() {
   // --- Docking Reticle (Canvas 2D ARM PILOT overlay) ---
   dockingReticle = new DockingReticle(camera, scene);
   dockingReticle.setVisible(false);
+  // u17 A-T1 (D2): the glass captions name a button only while it is on screen; both are read when a caption is drawn.
+  dockingReticle.setGlassControls({
+    hasStepButton: (label) => !!(hud && hud.hintTicker && hud.hintTicker.hasStepButton(label)),
+    isDespinUp: () => !!(touchVerbButton && touchVerbButton._despinShown),
+    isTurnPadUp: () => !!(touchControls && touchControls.isTurnPadShown()),
+  });
 
   // --- Velocity Streaks (Canvas 2D acceleration overlay — Phase 4) ---
   velocityStreaks = new VelocityStreaks();

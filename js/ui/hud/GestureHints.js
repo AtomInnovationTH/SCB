@@ -274,8 +274,11 @@ const GLASS_LINES = Object.freeze([
   [' (5 to show)', ''],
   [' after your first scan (S)', ' after your first scan'],
   [' when you analyse a target (Z)', ' when you analyse a target'],
-  // u16 integration: the hold-catch lines (ArmManager) name C, which has no touch control yet (owed): the sentence is left out
-  ['All daughters are holding catches. Press C to move one to a radiator.', 'All daughters are holding catches.'],
+  // u16 integration, u17b: the hold-catch lines (ArmManager) name C. The "Press C" line posts only when some daughter's hand-off is
+  // possible now, and a selected daughter's row then carries a TO RADIATOR button (StatusPanel, only while the getter is true for
+  // her), so that sentence names the button. The too-big warning ("; move it to a radiator (Press C).") can show while no such
+  // button is up, so it keeps leaving the sentence out.
+  ['All daughters are holding catches. Press C to move one to a radiator.', 'All daughters are holding catches. Tap one in DAUGHTERS; if her catch can go, tap TO RADIATOR.'],
   ['; move it to a radiator (Press C).', '.'],
 ]);
 // u15b fix 8: only the INSTRUCTION form of "click" becomes "tap": a bare Click / click, then a space and a word, at the start of a
