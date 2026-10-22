@@ -83,7 +83,9 @@ import { Constants } from '../../core/Constants.js';
 import { VisualLaw } from '../../core/VisualLaw.js';
 import { PANE_CORNER_PX, HUD_COLUMN_WIDTH_PX } from '../RailGeometry.js';
 import { DENSITY_MOTION_MS, DENSITY_MOTION_EASING } from '../HUD.js';
-import { orbitToKm, subSatellitePoint, nextShadowTransition } from '../../entities/OrbitalMechanics.js';
+import { orbitToKm, subSatellitePoint, nextShadowTransition, atmosphericDrag, orbitalVelocity } from '../../entities/OrbitalMechanics.js';
+import { referenceDragAreaM2 } from '../../entities/MotherDragArea.js';
+import { TimeAuthority } from '../../systems/TimeAuthority.js';
 import { RESERVE_FRAC, usableDeltaV } from '../../entities/ReachabilityModel.js';
 
 /** The colour law (read-only): LABEL white for the values and the flash bloom, CAUTION amber for the reserve tick / decay arrow. */
@@ -145,22 +147,41 @@ export const TICK_MS = 1000;
 export const CHANGE_FLASH_MS = 1200;
 
 /**
- * ALT trend threshold, km per REAL second of smoothed altitude rate. One fifth
- * of the game's sink rate at 400 km, derived from the game's drag:
- * PlayerSatellite integrates atmosphericDrag(alt, v, Constants.MOTHER_DRAG.AREA_M2
- * = 20 m², MASS_KG = 242.68 kg) as sma *= 1 − 2·a·dt/v per world second; at
- * 400 km (Vallado's air, ρ = 3.7e-12 kg/m³ at the row, v = 7.67 km/s) that is
- * 3.5e-5 km per WORLD second, i.e. 3.5e-4 km per REAL second at BASE_SCALE 10 /
- * rate 1; a fifth is 7.0e-5. (Nets step 3 slice 1, 2026-10-21: the old value
- * 1e-3 came from the old, 3-7x too thick air and a 130 kg mother; the sink at
- * the 350 km start is 8.9e-4, which the old line would have hidden. The value is
- * pinned in test-DragReal.js / test-OrbitPane.js against atmosphericDrag itself.)
- * The EMA (TREND_EMA, seeded at 0.15 of the first rate) crosses the line on the
- * SECOND sample at 350 km, the THIRD at 400 km (the second EMA step, 9.7e-5),
- * the FIFTH at 450 km, and never above 497 km, where the sink is below the line;
- * a steady orbit (no sink) stays blank.
+ * The sink rate of the game's drag at `altKm` for HER REFERENCE coefficient, km per REAL second at BASE_SCALE 10 / rate 1.
+ * PlayerSatellite integrates atmosphericDrag(alt, v, area, mass) as sma *= 1 - 2*a*dt/v per world second; with her
+ * reference area (MotherDragArea.referenceDragAreaM2(): nose-first, radiators 146 deg, wings tracking the sun, 5.79 m2) and
+ * her start mass (MOTHER_DRAG.MASS_KG, 294.28 kg) the sink is 2.13e-4 km per real second at the 350 km start, 8.4e-5 at
+ * 400 km, 3.6e-5 at 450 km and 1.6e-5 at 500 km (Vallado's air; probe tmp/step3/trend-numbers.mjs). Her real sink differs from
+ * it at any moment (her area runs from about 1 to 9 m2 with her attitude, radiators and wings; she is lighter by the gas burnt):
+ * this is the yardstick the arrow's line is cut from, not a prediction.
+ * @param {number} altKm
+ * @returns {number} km per real second
  */
-export const ALT_TREND_KM_PER_S = 7.0e-5;
+export function referenceSinkKmPerRealS(altKm) {
+  const a = Constants.EARTH_RADIUS_KM + altKm;
+  const v = orbitalVelocity(a, a, Constants.MU_EARTH);
+  const decel = atmosphericDrag(altKm, v, referenceDragAreaM2(), Constants.MOTHER_DRAG.MASS_KG);
+  return 2 * decel * a / v * TimeAuthority.BASE_SCALE;
+}
+
+/**
+ * ALT trend threshold, km per REAL second of smoothed altitude rate: one fifth of the game's reference sink at 400 km
+ * (referenceSinkKmPerRealS), computed from atmosphericDrag itself, once, at module load. It is 1.67e-5 now.
+ * History: 1e-3 (the old, 3-7x too thick air and a 130 kg mother) -> 7.0e-5 (Nets step 3 slice 1, 2026-10-21: Vallado's air,
+ * the bare 20 m2 over 242.68 kg) -> computed (slice 2a, 2026-10-22: her real area, 5.79 m2 at the reference, over her start mass
+ * 294.28 kg; the value was typed before, which is what the review of slice 1 asked to end). What changed with the area: every
+ * sink is 4.2x smaller (A/m 0.0197 against 0.0824) and the line, being a fifth of the 400 km sink, moves with it, so the
+ * claims about the arrow did not change: the EMA (TREND_EMA, seeded at 0.15 of the first rate) crosses the line on the SECOND
+ * sample at 350 km (sink 12.7x the line), the THIRD at 400 km (the second EMA step, 0.2775 x 8.4e-5 = 2.3e-5), the FIFTH at 450 km,
+ * and never above 496.4 km, where the sink falls below the line; a steady orbit (no sink) stays blank. test-OrbitPane.js
+ * pins all of it against atmosphericDrag.
+ * @returns {number} km per real second
+ */
+export function altTrendThresholdKmPerS() {
+  return referenceSinkKmPerRealS(400) / 5;
+}
+
+export const ALT_TREND_KM_PER_S = altTrendThresholdKmPerS();
 
 /** The trend EMA weight on the previous rate (DockingReticle._easeOdds: 0.85 / 0.15). */
 export const TREND_EMA = 0.85;

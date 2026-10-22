@@ -1839,6 +1839,7 @@ async function init() {
   // --- Connect V3 arm manager to HUD + player satellite ---
   if (armManager) hud.setArmManager(armManager);
   if (armManager) player.setArmManager(armManager);
+  debrisField.setMotherDragSource(player);   // Nets step 3 slice 2a: the welcome pieces share her drag coefficient (the area and mass her last drag step used)
   // Delegation 4 (2026-05-31): wire LassoSystem into HUD so NetInventoryPanel
   // can poll initial ammo state.
   if (lassoSystem && typeof hud.setLassoSystem === 'function') hud.setLassoSystem(lassoSystem);

@@ -116,31 +116,48 @@ export const Constants = {
   START_ALTITUDE: 3.5,            // 350 km × 0.01
   START_ALTITUDE_KM: 350,
 
-  // === MOTHER DRAG COEFFICIENT (M1 welcome-drift fix, 2026-09-09) ===
-  // The mother's atmospheric-drag cross-section and mass — the ballistic
-  // coefficient every co-orbital welcome piece must SHARE. Two consumers, both
-  // feeding OrbitalMechanics.atmosphericDrag(alt, v, AREA_M2, MASS_KG):
-  //   • PlayerSatellite: `this.mass` (recoil + drag) and the drag-area argument
-  //     in update()'s "Atmospheric drag" block;
-  //   • DebrisField.dragDecelFor: `welcomeSpawn` pieces use THESE instead of
-  //     their own sizeMeter²/mass.
-  // Why it must be one constant: the welcome cluster is spawned co-orbital with
-  // the mother at 350 km, where drag lowers the SMA ≈ 0.5 m per game-second.
-  // The pieces' own A/m (0.009–0.15) is 1–17× smaller than the mother's
-  // (20/130 = 0.154), so they decayed slower, stayed HIGHER, and — lower orbit
-  // = faster — the mother pulled ahead quadratically (≈ 0.03·t² m; > 2 km in
-  // ~4 real minutes with no key pressed — the "cluster drifts away" report).
-  // Same coefficient ⇒ same per-frame SMA step ⇒ lock-step decay.
+  // === MOTHER DRAG: HER MASS AND HER AREA (M1 welcome-drift fix 2026-09-09; live since Nets step 3 slice 2a, 2026-10-22) ===
+  // The mother's atmospheric drag is OrbitalMechanics.atmosphericDrag(alt, v, area, mass). Her area and mass are LIVE now:
+  //   • mass   = PlayerSatellite.mass, the ArmManager mass budget (gas burnt, nets fired, daughters out, catches aboard);
+  //   • area   = PlayerSatellite.dragAreaM2(), MotherDragArea.js: her projected area across her velocity, from her real
+  //              attitude, radiator angle and wing turn, by the CORE_AREA_M2 table below (the old bare 20 m2 was a guess:
+  //              the real nose-first area is 3.2 m2 with the wings edge-on and 5.9 m2 with them facing forward).
+  // The welcome cluster (DebrisField.dragDecelFor) must still SHARE her coefficient each frame, or it drifts away
+  // (M1: spawned co-orbital at 350 km, the pieces' own A/m 1-17x smaller than hers, they stayed higher and, lower orbit =
+  // faster, she pulled ahead: > 2 km in ~4 real minutes with no key pressed). Each frame the welcome pieces use the area
+  // and mass her drag block USED that frame (PlayerSatellite.lastDragAreaM2 / lastDragMassKg, handed over by
+  // DebrisField.setMotherDragSource): same coefficient => same per-frame SMA step => lock-step decay. With no source or
+  // no frame yet they use her REFERENCE coefficient: MotherDragArea.referenceDragAreaM2() (nose-first, radiators 146 deg,
+  // wings tracking the sun) over MASS_KG.
   //
-  // MASS_KG = 242.68 kg (was 130, a never-updated guess; Nets step 3 slice 1,
-  // 2026-10-21): her MEASURED start mass, ArmManager.getMassBudget().shipMassKg
-  // at game start = core dry 203.5 + cold gas 3.6 + docked daughters 17.4 +
-  // argon 12.5 + 4 nets 5.7. test-DragReal.js builds that rig and keeps this
-  // constant within 0.05 kg of it. It is a start-mass constant, not live: the
-  // live mass (gas burnt, catches aboard) is owed to slice 2 of the plan.
-  // Every reader of the mother's `mass` (drag, welcome pieces, recoils, net
-  // tug, lasso reel, autopilot compensation, cargoThrustFactor) moves with it.
-  MOTHER_DRAG: { AREA_M2: 20, MASS_KG: 242.68 },
+  // MASS_KG = 294.28 kg: her START mass with both radiator pairs fitted (the game fits them at boot:
+  // FLOWER_PREINSTALLED, main.js applyUpgrade flowerPairA/B). Measured 2026-10-22 on the full rig of test-LiveMass.js (a
+  // real ArmManager + ResourceSystem + CaptureNetSystem, both pairs applied): ArmManager.getMassBudget().shipMassKg =
+  // core dry 255.10 (incl. 51.6 kg of radiators) + cold gas 3.6 + docked daughters 17.4 + argon 12.5 + 4 nets 5.7.
+  // History: 130 (a guess) -> 242.68 (slice 1, radiator pairs left out) -> 294.28. test-LiveMass.js keeps it within
+  // 0.05 kg of that budget. It is the START mass: the fallback of PlayerSatellite.mass (no arm manager) and the mass
+  // the reference drag is taken at.
+  //
+  // CORE_AREA_M2 = her projected area across each body axis, the ship WITHOUT the two ROSA blankets (booms, rolls,
+  // daughters as built stay), wings at 0 deg, by radiator angle. Columns: radiator angle (deg), across X, across Y, across Z
+  // (m2; Z is nose-first). Measured 2026-10-22 from the built meshes, union of the visible non-FX triangles on a 1 cm
+  // grid (js/test/_projectedArea.js; tmp/step3/core-table.mjs): the same at 0.5 cm and 0.25 cm differs by <= 0.015 m2,
+  // at 2 cm by <= 0.04 on X, 0.14 on Y (thin rods), 0.044 on Z. test-MotherDragArea.js re-measures every cell and
+  // fails if the ship changed (a row moves by more than 5 % or 0.05 m2): re-run that probe and paste the table.
+  // The model off the axes is in MotherDragArea.js (p-norm 1.5 + two flat wing plates; max 38 %, median 5.5 % against
+  // the meshes on 360 poses).
+  MOTHER_DRAG: {
+    MASS_KG: 294.28,
+    CORE_AREA_M2: [
+      [0, 2.22, 2.59, 1.11],
+      [30, 2.86, 3.14, 2.17],
+      [60, 2.62, 2.94, 2.89],
+      [90, 2.23, 2.57, 4.86],
+      [120, 2.88, 3.14, 4.38],
+      [146, 3.34, 3.53, 3.24],
+      [180, 3.55, 3.73, 1.11],
+    ],
+  },
 
   // === DRAG CEILING (Nets step 3 slice 1, 2026-10-21) ===
   // Altitude above which atmosphericDrag is not applied (km). 1000 km is the

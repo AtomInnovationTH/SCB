@@ -32,6 +32,7 @@ import {
 } from '../systems/CoMCalculator.js';
 import { composeDockedArmQuat, strutLocalDirection } from './ArmDockBasis.js';
 import { netCellLayout } from './netCellLayout.js';
+import { motherDragAreaM2 } from './MotherDragArea.js';
 import {
   propagateOrbit,
   orbitToSceneCartesian,
@@ -70,6 +71,8 @@ function consumptionMultiplier(ship) {
 /**
  * The cargo mass factor the main-thrust translation uses (see _applyThrust): 1 with no cargo, else
  * 1 / (1 + min(cargo·mult / mass, max)). One definition for the Δv applied and the gas it costs.
+ * `mass` here is her mass WITHOUT the cargo (ship.massExcludingCargoKg(): since Nets step 3 slice 2a `ship.mass`
+ * is the live wet mass and already carries the cargo, which this formula adds itself — counted once).
  * @param {object} ship
  * @returns {number}
  */
@@ -82,7 +85,7 @@ function cargoThrustFactor(ship) {
   const CN = Constants.CAPTURE_NET || {};
   const mult = CN.MASS_EFFECT_MULT ?? 1.0;
   const maxFactor = CN.MASS_EFFECT_MAX ?? 2.0;
-  return 1 / (1 + Math.min(cargo * mult / ship.mass, maxFactor));
+  return 1 / (1 + Math.min(cargo * mult / ship.massExcludingCargoKg(), maxFactor));
 }
 
 /**
@@ -186,6 +189,12 @@ const _qAttB  = new THREE.Quaternion();
 const _qAttC  = new THREE.Quaternion();
 const _qIdentity = new THREE.Quaternion();   // never written: the target of easeOrbitFrameOffset
 const _matAtt = new THREE.Matrix4();
+/* Drag-area scratch (Nets step 3 slice 2a): her velocity direction in her body frame, the inverse attitude, and the two
+ * wing records the pure model reads. Per-frame, single instance, no alloc. */
+const _dragDir = new THREE.Vector3();
+const _dragNrm = new THREE.Vector3();
+const _dragQInv = new THREE.Quaternion();
+const _dragWings = [{ scale: 0, nx: 0, ny: 0, nz: 0 }, { scale: 0, nx: 0, ny: 0, nz: 0 }];
 /** Clamp a scalar to ±limit. */
 const clampAbs = (v, limit) => (v > limit ? limit : (v < -limit ? -limit : v));
 /* Deterministic docked-arm roll basis now lives in ArmDockBasis.js (shared SSOT
@@ -618,12 +627,15 @@ export class PlayerSatellite extends THREE.Group {
     // V5 CROSSBOW STATE
     // ========================================================================
     // kg — mothership mass for recoil calculations AND the drag denominator
-    // below (update() "Atmospheric drag"). Read from Constants.MOTHER_DRAG so
-    // the welcome cluster (DebrisField.dragDecelFor) shares the SAME ballistic
-    // coefficient — a literal here and a literal there was how the two drifted
-    // apart (M1 welcome-drift fix, 2026-09-09). Value 242.68: her measured start
-    // mass (was 130; Nets step 3 slice 1, 2026-10-21).
-    this.mass = Constants.MOTHER_DRAG.MASS_KG;
+    // below (update() "Atmospheric drag"). Since Nets step 3 slice 2a (2026-10-22)
+    // `mass` is an ACCESSOR (see `get mass()` below): her live wet mass from the
+    // ArmManager budget, Constants.MOTHER_DRAG.MASS_KG (294.28, her start mass) when
+    // there is no arm manager. The constructor must NOT assign `this.mass`: that
+    // would set the explicit override (a test-rig facility), not the start value.
+    this._massOverride = null;
+    // The area and mass her last drag step used (null above the air / before the first step): the welcome pieces share them.
+    this.lastDragAreaM2 = null;
+    this.lastDragMassKg = null;
     this.armManager = null;         // Set via setArmManager() for interlock checks
     this._thrusterInterlock = false; // True when back arm blocks FEEP thruster exhaust
     this._plumeBlocked = {};        // C-9: Map<thrusterId, reason> — plume geometry interlock
@@ -7074,14 +7086,17 @@ export class PlayerSatellite extends THREE.Group {
         this.orbit.semiMajorAxis / Constants.SCENE_SCALE,
         Constants.MU_EARTH
       );
-      // Drag area from Constants.MOTHER_DRAG (was a bare `20` literal): the
-      // welcome pieces (DebrisField.dragDecelFor) read the same AREA_M2 and
-      // MASS_KG so their SMA decays in lock-step with the mother's — the
-      // ballistic coefficient is the ONLY input to the per-step decay factor
-      // that differed between the two, and it was the M1 "cluster drifts away"
-      // cause. Values: 20 m² / 242.68 kg (measured start mass; slice 1 of Nets step 3).
-      // The drag ceiling is Constants.DRAG_CEILING_KM (1000, the air table's top).
-      const dragDecel = atmosphericDrag(altKm, vel, Constants.MOTHER_DRAG.AREA_M2, this.mass);
+      // Her live area and mass (Nets step 3 slice 2a, 2026-10-22), once per frame (the sub-steps below only split the factor).
+      // Area: dragAreaM2() = her projected area across her velocity, from her real attitude, radiator angle and wing turn
+      // (MotherDragArea.js). Mass: the live budget (this.mass). The welcome pieces (DebrisField.dragDecelFor) read the two
+      // values USED here (lastDragAreaM2 / lastDragMassKg) so their SMA decays in lock-step with hers: the ballistic
+      // coefficient is the ONLY input to the per-step decay factor that differs between the two (the M1 "cluster drifts
+      // away" cause). The drag ceiling is Constants.DRAG_CEILING_KM (1000, the air table's top).
+      const areaM2 = this.dragAreaM2();
+      const massKg = this.mass;
+      this.lastDragAreaM2 = areaM2;
+      this.lastDragMassKg = massKg;
+      const dragDecel = atmosphericDrag(altKm, vel, areaM2, massKg);
       if (vel > 0) {
         // T2 drag chunking: the decay factor (1 − 2·dvDrag/vel) can go negative
         // at high warp when gameDt is large, flipping the orbit. Integrate in
@@ -7092,6 +7107,9 @@ export class PlayerSatellite extends THREE.Group {
         const factor = 1 - 2 * (dragDecel * subDt) / vel;
         for (let s = 0; s < nSub; s++) this.orbit.semiMajorAxis *= factor;
       }
+    } else {
+      this.lastDragAreaM2 = null;      // above the air: no drag step this frame, the welcome pieces fall back to her reference
+      this.lastDragMassKg = null;
     }
 
     // --- Update position ---
@@ -7938,6 +7956,87 @@ export class PlayerSatellite extends THREE.Group {
    */
   setArmManager(armManager) {
     this.armManager = armManager;
+  }
+
+  /**
+   * Her mass NOW, kg (Nets step 3 slice 2a, 2026-10-22). Every reader of `ship.mass` (the drag, the recoils, the RCS
+   * torque, the net tug share, the lasso, the autopilot's recoil compensation, cargoThrustFactor) gets the live wet
+   * mass: ArmManager.getMassBudget().shipMassKg = core dry + engine gas + cold gas + docked daughters + cargo aboard
+   * + the mother's nets. She gets lighter as the gas burns, a net flies or a daughter leaves, heavier with a catch
+   * aboard. Without an arm manager, or when the budget throws or is not a positive finite number, it is
+   * Constants.MOTHER_DRAG.MASS_KG (her start mass). An explicit override (the setter below) wins while set.
+   * No cache: the budget costs 0.0006 ms a call.
+   * @returns {number} kg
+   */
+  get mass() {
+    if (this._massOverride != null) return this._massOverride;
+    const am = this.armManager;
+    if (am && typeof am.getMassBudget === 'function') {
+      try {
+        const kg = am.getMassBudget().shipMassKg;
+        if (Number.isFinite(kg) && kg > 0) return kg;
+      } catch (_) { /* a half-built rig: fall back to the start mass */ }
+    }
+    return Constants.MOTHER_DRAG.MASS_KG;
+  }
+
+  /**
+   * Explicit mass override: TEST RIGS ONLY (production never writes `mass`). A finite number is returned by the
+   * getter while it is set; null / undefined / NaN clears it and the live mass returns.
+   * @param {number|null|undefined} kg
+   */
+  set mass(kg) {
+    this._massOverride = Number.isFinite(kg) ? kg : null;
+  }
+
+  /**
+   * Her projected area across her velocity NOW, m2 (Nets step 3 slice 2a): MotherDragArea.motherDragAreaM2 of her velocity
+   * direction in her body frame (the scene velocity turned by her inverse attitude; +Z, nose-first, when she is not moving),
+   * the radiator angle `_flowerThetaRad` (the shared angle: single-petal holds are not followed) and the two ROSA wings,
+   * each with its deploy scale (the wrapper's scale.x) and its blanket normal in the body frame, taken from the pivots'
+   * real transforms (wrapper -> pivot -> array pivot rotations, never re-derived from an angle). A rig without the wings
+   * (Object.create(prototype)) gets the core alone. Allocation-free; the drag block calls it once per frame.
+   * @returns {number} m2
+   */
+  dragAreaM2() {
+    const v = this._cartesian && this._cartesian.velocity;
+    const speed = v ? Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) : 0;
+    if (speed > 1e-10) {
+      _dragDir.set(v.x / speed, v.y / speed, v.z / speed);
+      _dragDir.applyQuaternion(_dragQInv.copy(this.quaternion).invert());
+    } else {
+      _dragDir.set(0, 0, 1);
+    }
+    let nW = 0;
+    const array = this._solarArrayPivot;
+    for (let i = 0; i < 2; i++) {
+      const pivot = i === 0 ? this.panelRightPivot : this.panelLeftPivot;
+      const wrapper = i === 0 ? this._rosaPanelWrapper1 : this._rosaPanelWrapper2;
+      if (!pivot || !wrapper) continue;
+      // the blanket's normal is its wrapper's +Z; carry it up the chain the way the scene graph does
+      _dragNrm.set(0, 0, 1).applyQuaternion(wrapper.quaternion).applyQuaternion(pivot.quaternion);
+      if (array) _dragNrm.applyQuaternion(array.quaternion);
+      const rec = _dragWings[nW++];
+      rec.scale = wrapper.scale.x;
+      rec.nx = _dragNrm.x; rec.ny = _dragNrm.y; rec.nz = _dragNrm.z;
+    }
+    return motherDragAreaM2(_dragDir.x, _dragDir.y, _dragDir.z, this._flowerThetaRad, _dragWings, nW);
+  }
+
+  /**
+   * Her mass without the cargo aboard, kg: `mass` minus ArmManager.getCargoMassKg() (minus 0 with no arm manager),
+   * never below 1 kg. The two places that add the cargo on top of her mass themselves (cargoThrustFactor and
+   * LeashDriver's rest mass) read this, so the cargo counts once now that `mass` carries it.
+   * @returns {number} kg, >= 1
+   */
+  massExcludingCargoKg() {
+    const am = this.armManager;
+    let cargo = 0;
+    if (am && typeof am.getCargoMassKg === 'function') {
+      try { cargo = am.getCargoMassKg(); } catch (_) { cargo = 0; }
+    }
+    if (!(cargo > 0)) cargo = 0;
+    return Math.max(1, this.mass - cargo);
   }
 
   /**
@@ -9979,8 +10078,9 @@ export class PlayerSatellite extends THREE.Group {
     // scale rotation (live S10 DO-NOT). applyCartesianImpulse is deliberately
     // not cargo-scaled (the AP models RCS/station-keeping, not the main
     // engine) — RCS translation stays brisk while main thrust is heavy; it IS
-    // scaled by the fuel's thrustScale (h3b-argon-push D1). this.mass is
-    // NEVER mutated (recoil, I_mother and drag all read it).
+    // scaled by the fuel's thrustScale (h3b-argon-push D1). this.mass is her
+    // LIVE total (budget, cargo included; s3-live-drag), so the cargo-free
+    // mass below is massExcludingCargoKg(), never this.mass.
     // S10: read TOTAL cargo aboard (berthed + daughter racks) via the
     // ArmManager.getCargoMassKg SSOT — the same quantity getMassBudget folds
     // into ΔV, so handling and range agree. Falls back to the berthed-only

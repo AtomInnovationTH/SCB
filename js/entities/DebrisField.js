@@ -29,6 +29,7 @@ import {
 } from '../ui/DebrisWireframe.js';
 import { catalogEntryToDebrisData, buildRegimeDebrisSeeds, regimeFromStartOrbit, mulberry32, samplePowerLawSize, sampleSbmMassKg, buildIntactMassPools } from './CatalogConverter.js';
 import { deriveCaptureFlags } from './debrisFerrous.js';
+import { referenceDragAreaM2 } from './MotherDragArea.js';
 import { isFlagEligible, pickCountryForId } from '../ui/FlagDecalSystem.js';
 
 // ============================================================================
@@ -493,6 +494,7 @@ export class DebrisField {
   constructor(scene, opts = {}) {
     this.scene = scene;
     this._catalogLoader = opts.catalogLoader || null;
+    this._motherDragSource = null;      // setMotherDragSource: the player whose last drag step the welcome pieces share
     this._interactiveCount = opts.interactiveCount || INTERACTIVE_COUNT;
 
     // S11(a): the field is ONE orbital regime (register item 38) — assembled
@@ -1920,17 +1922,22 @@ export class DebrisField {
    * update()'s propagation loop so it is unit-testable (test-WelcomeDrag.js).
    * Same return as the `atmosphericDrag(...)` call it wraps.
    *
-   * `welcomeSpawn` pieces use the MOTHER's coefficient (Constants.MOTHER_DRAG —
-   * the same AREA_M2 / MASS_KG PlayerSatellite.update feeds atmosphericDrag)
-   * instead of their own sizeMeter² / mass. Why (M1 welcome-drift fix,
-   * 2026-09-09): the cluster is spawned co-orbital with the mother at 350 km,
-   * where drag lowers the SMA ≈ 0.5 m per game-second. The authored rows' own
-   * A/m (0.009–0.15) is 1–17× smaller than the mother's 20/130 = 0.154, so
-   * they decayed slower, stayed HIGHER, and — lower orbit = faster — the mother
-   * pulled ahead quadratically (along-track ≈ 0.026–0.040·t² m; #3/#4/#6/#7
-   * were all > 2 km away within ~3.5–5 real minutes with no key pressed — the
-   * "welcome cluster drifts away / vanishes" report). Same coefficient ⇒ same
-   * per-frame decay factor ⇒ lock-step decay. The pieces stay REAL orbits (not
+   * `welcomeSpawn` pieces use the MOTHER's coefficient instead of their own
+   * sizeMeter² / mass: the area and mass her drag block USED this frame
+   * (PlayerSatellite.lastDragAreaM2 / lastDragMassKg, read through `source`, the
+   * player handed in by setMotherDragSource). With no source, or no value yet
+   * (before her first drag step, or above the air), they use her REFERENCE
+   * coefficient: MotherDragArea.referenceDragAreaM2() over Constants.MOTHER_DRAG.MASS_KG.
+   * Why (M1 welcome-drift fix, 2026-09-09; the live area and mass since Nets step 3
+   * slice 2a, 2026-10-22): the cluster is spawned co-orbital with the mother at
+   * 350 km, where drag lowers the SMA ≈ 0.5 m per game-second. The authored rows'
+   * own A/m (0.009–0.15) differs from the mother's (the old 20/130 = 0.154; now
+   * about 0.02 and changing as she burns gas, turns and moves her wings), so they
+   * decay at another rate, stay HIGHER or lower, and — lower orbit = faster — the
+   * mother pulls ahead or falls behind quadratically (along-track ≈ 0.026–0.040·t²
+   * m; > 2 km within ~3.5–5 real minutes with no key pressed — the "welcome
+   * cluster drifts away / vanishes" report). Same coefficient ⇒ same per-frame
+   * decay factor ⇒ lock-step decay. The pieces stay REAL orbits (not
    * mother-pinned), so RCS / thrust still separate the player from them as
    * before. Scope: welcomeSpawn only — the M2+ authored cast keeps physical
    * drag. Every other piece keeps cross-section ≈ sizeMeter², mass from its
@@ -1939,12 +1946,15 @@ export class DebrisField {
    * @param {object} debris - reads welcomeSpawn, sizeMeter, mass
    * @param {number} altKm - altitude above the surface (km)
    * @param {number} velKms - orbital speed (km/s)
+   * @param {{lastDragAreaM2?: (number|null), lastDragMassKg?: (number|null)}|null} [source] - the mother (or null)
    * @returns {number} deceleration (km/s²)
    */
-  static dragDecelFor(debris, altKm, velKms) {
+  static dragDecelFor(debris, altKm, velKms, source = null) {
     if (debris.welcomeSpawn) {
-      return atmosphericDrag(altKm, velKms,
-        Constants.MOTHER_DRAG.AREA_M2, Constants.MOTHER_DRAG.MASS_KG);
+      let area = source ? source.lastDragAreaM2 : 0;
+      let mass = source ? source.lastDragMassKg : 0;
+      if (!(area > 0) || !(mass > 0)) { area = referenceDragAreaM2(); mass = Constants.MOTHER_DRAG.MASS_KG; }
+      return atmosphericDrag(altKm, velKms, area, mass);
     }
     const area = debris.sizeMeter * debris.sizeMeter;
     const mass = Math.max(debris.mass || 1, 1);
@@ -2243,7 +2253,7 @@ export class DebrisField {
         // Atmospheric drag — the same formula, sub-stepping and gameDt as
         // PlayerSatellite.update (dtWorld is threaded to both from main.js),
         // and for welcomeSpawn pieces the same BALLISTIC COEFFICIENT too
-        // (dragDecelFor → Constants.MOTHER_DRAG). Matching the formula alone
+        // (dragDecelFor → the area and mass her drag block used this frame). Matching the formula alone
         // was not enough: with their own sizeMeter²/mass the welcome pieces
         // decayed 3–17× slower than the mother and drifted km away — the
         // pre-2026-09-09 comment here claimed "co-orbiting objects stay on the
@@ -2261,7 +2271,7 @@ export class DebrisField {
           const debrisVel = orbitalVelocity(
             _tmpKmOrbit.semiMajorAxis, _tmpKmOrbit.semiMajorAxis, Constants.MU_EARTH
           );
-          const dragDecel = DebrisField.dragDecelFor(debris, debrisAltKm, debrisVel);
+          const dragDecel = DebrisField.dragDecelFor(debris, debrisAltKm, debrisVel, this._motherDragSource);
           if (debrisVel > 0) {
             // T2 drag chunking (see PlayerSatellite): ≤ DRAG_CHUNK_GAME_S
             // game-second Euler sub-steps so the decay factor can't flip
@@ -4686,6 +4696,17 @@ export class DebrisField {
    */
   setReseatGuard(fn) {
     this._reseatGuard = (typeof fn === 'function') ? fn : null;
+  }
+
+  /**
+   * Hand the field the mother, so the welcome pieces share her ballistic coefficient each frame: dragDecelFor reads
+   * `source.lastDragAreaM2` / `lastDragMassKg`, the area and mass her drag block used (Nets step 3 slice 2a). main.js calls
+   * it once, after both exist, so every update() call (the game loop and the menu/shop one) uses it. Absent = her reference
+   * coefficient (MotherDragArea.referenceDragAreaM2() over MOTHER_DRAG.MASS_KG).
+   * @param {{lastDragAreaM2?: (number|null), lastDragMassKg?: (number|null)}|null} source the PlayerSatellite
+   */
+  setMotherDragSource(source) {
+    this._motherDragSource = (source && typeof source === 'object') ? source : null;
   }
 
   /**

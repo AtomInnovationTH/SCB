@@ -487,7 +487,10 @@ export class LeashDriver {
     // impulse is the line's push up to contact, with the bag still on the leash.
     const cargoKg = am && typeof am.getCargoMassKg === 'function' ? am.getCargoMassKg() : h.massKg;
     const bagKg = h.latched ? 0 : h.massKg;
-    const restKg = Math.max(1, (p.mass || 0) + cargoKg - bagKg);
+    // Her cargo-free mass (Nets step 3 slice 2a): `p.mass` is her live wet mass and already carries the cargo aboard,
+    // which is added back here, once. Mocks without the method keep `p.mass` as before.
+    const shipKg = typeof p.massExcludingCargoKg === 'function' ? p.massExcludingCargoKg() : (p.mass || 0);
+    const restKg = Math.max(1, shipKg + cargoKg - bagKg);
 
     const io = this._buildIo(h);
     const res = h.machine.step(dt, io);

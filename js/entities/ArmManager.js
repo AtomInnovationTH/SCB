@@ -1360,7 +1360,10 @@ export class ArmManager {
       const recoil1 = mass1 * arm1.launchSpeed;
       const recoil2 = mass2 * arm2.launchSpeed;
       const residualMomentum = Math.abs(recoil1 - recoil2);
-      const motherMass = Constants.MOTHER_DRAG.MASS_KG; // kg
+      // Her LIVE mass (Nets step 3 slice 2a: the budget, the two daughters already out of it); MASS_KG, her start mass, when
+      // there is no player or it answers nothing usable.
+      const live = this.playerSatellite ? this.playerSatellite.mass : NaN;
+      const motherMass = Number.isFinite(live) && live > 0 ? live : Constants.MOTHER_DRAG.MASS_KG; // kg
       const residualDv = residualMomentum / motherMass;
 
       eventBus.emit(Events.DUAL_FIRE, {
