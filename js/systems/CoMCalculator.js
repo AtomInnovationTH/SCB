@@ -812,9 +812,14 @@ export function suggestStowArm(armManager, playerSatellite) {
  *   • the MASS GATE — above `CARGO_TRANSFER.MAX_KG` the body stays on the tether
  *     at the nose (at 44–114× the mother's mass the system CoM sits inside the
  *     cargo, so moving it off the thrust axis is the physically wrong move);
- *   • the FREE-CELL rule — `heldCatches.length < DAUGHTER_CARGO_CELLS`;
- *   • the HOME rule — DOCKED or HOLDING_CATCH only, never detached/expended (a
- *     daughter away from her strut has nothing to pin the cargo to);
+ *   • the ONE-CATCH rule (owner 2026-10-22 13:01Z: "daughter can only hold one debris") — only a daughter
+ *     holding NOTHING takes a mother catch (`heldCatches` empty); one that holds a catch, her own or a racked
+ *     one, is never a carrier;
+ *   • the HOME rule — DOCKED only, never detached/expended (a daughter away from her strut has nothing to
+ *     pin the cargo to; HOLDING_CATCH means she already holds a catch);
+ *   • the BOOKED rule (fix round 1) — a daughter a catch is already flying to is not empty any more: she is
+ *     no carrier and no longer counts as capture-capable, so two catches are never sent to the same daughter
+ *     (the second would snap back on arrival) and two flights can never use up the last free daughter;
  *   • the LAST-DAUGHTER guard — never consume the last capture-capable daughter,
  *     so an automatic hand-off can never strand the fleet with zero usable arms.
  *
@@ -823,9 +828,11 @@ export function suggestStowArm(armManager, playerSatellite) {
  * @param {number} cargoMassKg — mass of the piece being handed over
  * @param {number} [sizeMeter=0] — the piece's size, for the slot standoff
  *   radius (the S7 caller is mass-only; 0 books the bare clearance standoff).
+ * @param {Iterable<number>|null} [bookedArms=null] — arm indices that already have a cargo flight on the way
+ *   (the capture system reads them off its transferring nets); each counts as holding a catch.
  * @returns {number|null} arm index, or null when nothing may carry it
  */
-export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMeter = 0) {
+export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMeter = 0, bookedArms = null) {
   const mass = Number(cargoMassKg) || 0;
   if (mass <= 0) return null;
 
@@ -838,17 +845,20 @@ export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMe
   if (!arms.length) return null;
 
   const S = Constants.ARM_STATES;
-  const cells = Constants.DAUGHTER_CARGO_CELLS ?? 2;
   const reserve = Constants.ARM_RESERVE_FUEL ?? 0;
 
   // A daughter that could still take a capture: home, charged, fuelled. Loading
-  // one of these costs the fleet a working arm; loading a HOLDING_CATCH arm costs
-  // nothing extra (she is already occupied).
-  const captureCapable = (arm) => !!arm && !arm.isDetached
+  // one of these costs the fleet a working arm, so the last one is never loaded
+  // (a HOLDING_CATCH arm is not a candidate at all: she already holds a catch).
+  // R2 (fix round 1): a daughter with a cargo flight on the way is booked. She is still DOCKED with an empty rack until the
+  // piece lands, so `heldCatches` alone cannot tell; count her as holding a catch (no carrier, not capture-capable).
+  const booked = bookedSet(bookedArms);
+  const captureCapable = (arm, i) => !!arm && !arm.isDetached
     && arm.state === S.DOCKED
+    && !booked.has(i)
     && arm.springCharged !== false
     && (arm.fuel ?? 0) > reserve;
-  const capableCount = arms.reduce((n, a) => n + (captureCapable(a) ? 1 : 0), 0);
+  const capableCount = arms.reduce((n, a, i) => n + (captureCapable(a, i) ? 1 : 0), 0);
 
   const com = computeCoM(armManager, playerSatellite);
   const p = com.position;
@@ -867,14 +877,15 @@ export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMe
     const dp = docks[i];
     if (!arm || !dp) continue;
 
-    // Home with a free cell, and still part of the ship.
+    // Home, holding nothing, and still part of the ship. A HOLDING_CATCH daughter holds her own catch or one
+    // already racked on her: one catch per daughter (owner 2026-10-22), so she is never a carrier.
     if (arm.isDetached || arm.state === S.EXPENDED) continue;
-    if (arm.state !== S.DOCKED && arm.state !== S.HOLDING_CATCH) continue;
-    const held = Array.isArray(arm.heldCatches) ? arm.heldCatches.length : 0;
-    if (held >= cells) continue;
+    if (arm.state !== S.DOCKED) continue;
+    if (Array.isArray(arm.heldCatches) && arm.heldCatches.length > 0) continue;
+    if (booked.has(i)) continue;          // a catch is already flying to her
 
     // Never spend the last capture-capable daughter on cargo.
-    if (captureCapable(arm) && capableCount <= 1) continue;
+    if (captureCapable(arm, i) && capableCount <= 1) continue;
 
     const alpha = arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0);
     // S13(b) / rack-snug: the hypothetical add books where the piece would actually be
@@ -904,6 +915,36 @@ export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMe
   }
 
   return bestIdx;
+}
+
+/** R2: a Set of arm indices from whatever the caller passed (null, an array, a Set). */
+const _noBooked = new Set();
+function bookedSet(bookedArms) {
+  if (!bookedArms) return _noBooked;
+  return bookedArms instanceof Set ? bookedArms : new Set(bookedArms);
+}
+
+/**
+ * one-catch: how many daughters are home (DOCKED) holding nothing. Pure read, for the words only: when
+ * `suggestCargoArm` finds no carrier for a piece under the mass gate, a count above 0 means the refusal is the
+ * last-daughter guard (one free daughter, kept ready for the next capture), 0 means nobody is free (each is out,
+ * holds a catch, or has one on the way).
+ * @param {object} armManager — ArmManager (or mock) with .arms[]
+ * @param {Iterable<number>|null} [bookedArms=null] — arm indices with a cargo flight on the way (not empty any more)
+ * @returns {number}
+ */
+export function countEmptyDockedDaughters(armManager, bookedArms = null) {
+  const S = Constants.ARM_STATES;
+  const booked = bookedSet(bookedArms);
+  const arms = (armManager && armManager.arms) || [];
+  let n = 0;
+  for (let i = 0; i < arms.length; i++) {
+    const arm = arms[i];
+    if (!arm || arm.isDetached || arm.state !== S.DOCKED || booked.has(i)) continue;
+    if (Array.isArray(arm.heldCatches) && arm.heldCatches.length > 0) continue;
+    n++;
+  }
+  return n;
 }
 
 

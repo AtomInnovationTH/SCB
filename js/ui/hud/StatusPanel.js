@@ -109,6 +109,14 @@ export function motherNetsColor(n) {
 // also where absent-field legacy mocks and the flag-OFF neutral 0/false land).
 const WHEEL_PIPS = ['▯▯▯', '▮▯▯', '▮▮▯', '▮▮▮'];
 const WHEEL_SHOW_FLOOR = 0.25; // normalized units — one fire (1.0) bleeds past this ~22 s later
+// Daughter closing-rate smoothing (owner 10-22 13:26Z, the "opng/clsg" flicker). The shown rate is the Theil-Sen
+// slope (median of pair slopes) of the displayed range over the last RANGE_RATE_WINDOW_S; the closing word shows above the HI edge and goes
+// below the LO edge (m/s). Below the band the line reads "0.0 m/s" with no word.
+const RANGE_RATE_WINDOW_S = 1.0;
+const RANGE_RATE_MIN_SPAN_S = 0.6;
+const RANGE_RATE_PAIR_GAP_S = 0.4;
+const RANGE_RATE_BAND_HI = 0.15;
+const RANGE_RATE_BAND_LO = 0.08;
 
 // Session J (D-I): how many FLEET rows a tap can select. A row tap presses
 // Digit(idx+1) — InputManager binds only Digit1-4 to `_handleArmKey` (arms 5-8
@@ -2610,21 +2618,71 @@ export class StatusPanel {
     return Math.sqrt(dx * dx + dy * dy + dz * dz);
   }
 
+  /** @private Clock for the range-rate smoother (ms). A method so a test can drive a fake clock. */
+  _rangeClockMs() {
+    return performance.now();
+  }
+
   /**
-   * @private Finite-difference range-rate for one daughter (m/s, positive =
-   * closing). `targeting` distinguishes the mothership-drift sample from the
-   * target-approach sample so a retarget invalidates the cache rather than
-   * spiking off a stale range. Returns null until two consecutive samples of
-   * the same kind exist.
+   * @private Smoothed range-rate for one daughter (m/s, positive = closing): the Theil-Sen slope of the
+   * displayed range over the last RANGE_RATE_WINDOW_S seconds of samples. (owner 10-22 13:26Z: the closing word
+   * flipped "opng"/"clsg" ten times a second for a still daughter, because the rate was the difference of two
+   * 10 Hz samples; the slope over a window averages that noise out.) `key` is whatever the range is measured to:
+   * the target object while targeting, `false` for the mothership-drift sample, so a retarget invalidates the
+   * cache rather than spiking off a stale range. Returns null until the window spans RANGE_RATE_MIN_SPAN_S.
    */
-  _daughterRangeRate(id, rangeM, targeting) {
-    const now = performance.now();
-    const prev = this._daughterRangeCache.get(id);
-    this._daughterRangeCache.set(id, { range: rangeM, t: now, targeting });
-    if (!prev || prev.targeting !== targeting) return null;
-    const dt = (now - prev.t) / 1000;
-    if (dt <= 0 || dt > 1) return null; // stale (paused / hidden) → resample
-    return (prev.range - rangeM) / dt;
+  _daughterRangeRate(id, rangeM, key) {
+    const now = this._rangeClockMs();
+    let e = this._daughterRangeCache.get(id);
+    const last = e && e.samples && e.samples.length ? e.samples[e.samples.length - 1] : null;
+    if (!e || !e.samples || e.targeting !== key || !last || (now - last.t) / 1000 > 1 || now < last.t) {
+      // new daughter / retarget / stale (paused, hidden) → start over
+      e = { samples: [], targeting: key, word: null };
+      this._daughterRangeCache.set(id, e);
+    }
+    e.samples.push({ t: now, range: rangeM });
+    const cutoff = now - RANGE_RATE_WINDOW_S * 1000;
+    while (e.samples.length > 2 && e.samples[0].t < cutoff) e.samples.shift();
+    const n = e.samples.length;
+    if (n < 3) return null;
+    const span = (now - e.samples[0].t) / 1000;
+    if (span < RANGE_RATE_MIN_SPAN_S) return null;
+    // Theil-Sen: the median of the slopes between sample pairs at least RANGE_RATE_PAIR_GAP_S apart. A single
+    // wild sample (a launch or origin-shift frame) cannot drag it the way it drags a least-squares fit (a first version
+    // of this smoother showed "opng 1031 m/s" for a second after one stray launch frame in the pane probe).
+    const slopes = this._rangeSlopes || (this._rangeSlopes = []);
+    slopes.length = 0;
+    for (let i = 0; i < n - 1; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const dt = (e.samples[j].t - e.samples[i].t) / 1000;
+        if (dt >= RANGE_RATE_PAIR_GAP_S) slopes.push((e.samples[i].range - e.samples[j].range) / dt); // range falls while closing
+      }
+    }
+    if (slopes.length === 0) return null;
+    slopes.sort((x, y) => x - y);
+    const m = slopes.length >> 1;
+    return slopes.length & 1 ? slopes[m] : 0.5 * (slopes[m - 1] + slopes[m]);
+  }
+
+  /**
+   * @private The closing word with hysteresis, for one daughter's smoothed rate. Returns 'clsg', 'opng' or null.
+   * The word appears only above RANGE_RATE_BAND_HI, and goes only below RANGE_RATE_BAND_LO, so noise near zero
+   * never flips it (any appearance or disappearance counts as a flip). A word whose sign the rate has left
+   * drops to null first and the opposite word needs the upper edge.
+   */
+  _closingWord(id, rate) {
+    const e = this._daughterRangeCache.get(id);
+    if (!e) return null;
+    let w = e.word || null;
+    if (rate === null) { e.word = null; return null; }
+    if (w === 'clsg') {
+      if (rate <= RANGE_RATE_BAND_LO) w = rate <= -RANGE_RATE_BAND_HI ? 'opng' : null;
+    } else if (w === 'opng') {
+      if (rate >= -RANGE_RATE_BAND_LO) w = rate >= RANGE_RATE_BAND_HI ? 'clsg' : null;
+    } else if (rate >= RANGE_RATE_BAND_HI) w = 'clsg';
+    else if (rate <= -RANGE_RATE_BAND_HI) w = 'opng';
+    e.word = w;
+    return w;
   }
 
   /** @private Format a distance in metres: whole m below 1 km, else km @2dp. */
@@ -2691,7 +2749,9 @@ export class StatusPanel {
    * except that live §11.3 wheel momentum still shows (it survives docking).
    */
   _renderDaughterTelemetry(a, armObj, idx) {
-    const grounded = a.state === 'DOCKED' || a.state === 'RELOADING' || a.state === 'EXPENDED';
+    // owner 10-22 13:26Z: a daughter parked on her strut holding a catch is grounded too (no range or closing line
+    // against her own catch, which sat there flipping "opng"/"clsg").
+    const grounded = a.state === 'DOCKED' || a.state === 'RELOADING' || a.state === 'EXPENDED' || a.state === 'HOLDING_CATCH';
     if (grounded) {
       this._daughterRangeCache.delete(a.id);
       // §11.3: wheel momentum survives docking (bleeds in every state) — keep
@@ -2721,15 +2781,16 @@ export class StatusPanel {
     if (target && targetPos) {
       // Targeting: show target range + closing rate (mothership range hidden).
       const rng = this._sceneToMetres(this._pointDist(targetPos, a.position) || 0);
-      const rate = this._daughterRangeRate(a.id, rng, true);
+      const rate = this._daughterRangeRate(a.id, rng, target);
+      const word = this._closingWord(a.id, rate);
       parts.push(`<span style="${dim}">tgt ${this._fmtDist(rng)}</span>`);
-      if (rate !== null) {
-        // Red when closing fast at short range — imminent contact needs a glance.
-        const hot = rate > 5 && rng < 100;
-        const c = hot ? 'var(--hud-warning, #ff4444)' : 'var(--hud-text, #e8e4d0)';
-        const verb = rate >= 0 ? 'clsg' : 'opng';
-        parts.push(`<span style="color:${c};opacity:0.85;">${verb} ${Math.abs(rate).toFixed(1)} m/s</span>`);
-      }
+      // owner 10-22: inside the dead band (and while the window is still filling) the line reads "0.0 m/s" with no
+      // word, so noise can neither flip the word nor print a 0.1.
+      // Red when closing fast at short range — imminent contact needs a glance.
+      const hot = word === 'clsg' && rate > 5 && rng < 100;
+      const c = hot ? 'var(--hud-warning, #ff4444)' : 'var(--hud-text, #e8e4d0)';
+      const speed = word ? Math.abs(rate).toFixed(1) : '0.0';
+      parts.push(`<span style="color:${c};opacity:0.85;">${word ? word + ' ' : ''}${speed} m/s</span>`);
     } else {
       // No target: mothership range + drift rate.
       const ps = this._armManager && this._armManager.playerSatellite;

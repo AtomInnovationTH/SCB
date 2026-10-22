@@ -29,7 +29,7 @@ import { planCuts } from '../systems/cutPlanner.js';
 import { OUT_OF_MOTHER_NETS_LINE, ONE_MOTHER_NET_LEFT_LINE } from '../systems/netRouting.js';
 // Cargo-continuity S7: the carrier scorer lives with the rest of the CoM maths
 // (ONE quantity, ONE computation — it reuses computeCoM/strutTipMeters).
-import { suggestCargoArm } from '../systems/CoMCalculator.js';
+import { suggestCargoArm, countEmptyDockedDaughters } from '../systems/CoMCalculator.js';
 import { tripRefuses } from '../systems/TransferTrip.js';
 import { heldBagNeckInto, heldBagRadiusScene, DAUGHTER_STAND_M } from './heldBagShape.js';
 import * as THREE from 'three';
@@ -48,6 +48,10 @@ const FEATURE_FLAGS = Constants.FEATURE_FLAGS;
 // on the trip to the next field.
 const NOSE_FULL_LINE = 'Nose is full: this catch has nowhere to go yet. '
   + 'It stays at the collar and goes to a furnace on the trip to the next field if it fits one. Press K to let it go.';
+// R1 (fix round 1): the same refusal while a cut is paused at the nose for want of an empty daughter.
+// ("Press K to let it go." is the sentence the touch wording knows (GestureHints GLASS_LINES / chipPhrase): any other tail would
+// name a key on glass.)
+const NOSE_FULL_CUT_LINE = 'Nose is full: the cut catch has pieces that still need an empty daughter. Press K to let it go.';
 
 // Module-level scratch objects for the mother reel/berth per-frame math —
 // the reel/berth path must not allocate per frame (plan §13: use the Into
@@ -3911,7 +3915,8 @@ export class CaptureNetSystem {
         && massKg > _gate && massKg - _gate <= 1e-6) {
       gateMassKg = _gate;
     }
-    const armIndex = suggestCargoArm(armManager, player, gateMassKg);
+    const booked = this._armsWithCargoOnTheWay();
+    const armIndex = suggestCargoArm(armManager, player, gateMassKg, 0, booked);
     if (armIndex == null) {
       if (!net._cargoRefused) {
         net._cargoRefused = true;
@@ -3951,11 +3956,16 @@ export class CaptureNetSystem {
           const fate = furnace
             ? 'It rides the collar until the furnace takes it. Press K to let it go.'
             : 'It stays at the collar and goes to a furnace on the trip to the next field if it fits one. Press K to let it go.';
+          // one-catch (owner 2026-10-22): a daughter holds one catch, so "no daughter can take it" has two true reasons: each
+          // one is away or already holds a catch, or exactly one is home and empty and stays ready for the next capture.
+          const keptReady = countEmptyDockedDaughters(armManager, booked) > 0;
           eventBus.emit(Events.COMMS_MESSAGE, {
             source: 'HOUSTON', channel: 'CMD',
             text: overGate
               ? `Catch is ${Math.round(gateMassKg)} kg — too heavy for a daughter's cargo rack. ${fate}`
-              : `No daughter can take the catch (none docked with a free cargo cell). ${fate}`,
+              : (keptReady
+                ? `No daughter can take the catch: the last free one stays ready for the next capture. ${fate}`
+                : `No daughter can take the catch (each one is away or already holding a catch). ${fate}`),
             priority: 'warning',
           });
         }
@@ -4018,6 +4028,23 @@ export class CaptureNetSystem {
   }
 
   /**
+   * R2 (fix round 1): the arm indices that already have a cargo flight on the way - a whole catch or a cut piece in
+   * TRANSFERRING with a daughter as its carrier (a leash flight to a radiator tip carries no `_cargoArmIndex`). Such a
+   * daughter is still DOCKED with an empty rack until the piece lands, so `heldCatches` alone cannot tell the next
+   * booking to leave her out; `suggestCargoArm` counts each one as holding a catch.
+   * @returns {Set<number>}
+   * @private
+   */
+  _armsWithCargoOnTheWay() {
+    const out = new Set();
+    for (const n of this.activeNets) {
+      if (n.state !== STATES.TRANSFERRING || n._leash) continue;
+      if (Number.isInteger(n._cargoArmIndex) && n._cargoArmIndex >= 0) out.add(n._cargoArmIndex);
+    }
+    return out;
+  }
+
+  /**
    * gas-low-fail-fast D2 — tell the player the tank is too low to swing this catch to a radiator, once per catch.
    * `'rack'` = a cell is free, the catch goes to the daughter rack now; `'full'` = no daughter can take it, so it waits
    * at the nose (the player can let it go with [K]). The latch (`net._gasShortSaid`) is on the net, so a new catch
@@ -4037,7 +4064,7 @@ export class CaptureNetSystem {
       source: 'HOUSTON', channel: 'CMD',
       text: kind === 'rack'
         ? 'Not enough steering gas to swing the catch to a radiator. Stowing it on the rack.'
-        : 'Not enough steering gas to swing the catch to a radiator, and no daughter has a free cargo cell. Press K to let it go.',
+        : 'Not enough steering gas to swing the catch to a radiator, and no daughter can take it. Press K to let it go.',
       priority: 'warning',
       _critical: true, // review 2026-10-19: past the onboarding tier filter, so the screen always says why (owner 23:26Z)
     });
@@ -4445,7 +4472,8 @@ export class CaptureNetSystem {
   //   _cutPiece           the detached piece (waiting at the nose or flying)
   //   _cutPieceFlying     true while that piece's flight is under way
   //   _cutRetryS          launch-retry accumulator (CT.RETRY_S cadence)
-  //   _cutWaitingSaid     the waiting comms line, once per plan (L9)
+  //   _cutWaitingSaid     the waiting comms line, once per pause (L9; re-armed when a piece leaves)
+  //   _cutWaiting         true while the cut is PAUSED: the piece at the nose has no empty daughter to go to (R1)
 
   /**
    * True while a cut plan exists and is not finished — i.e. the boss must
@@ -4622,19 +4650,28 @@ export class CaptureNetSystem {
     if (this.activeNets.some(
       (n) => n._isMother && n.state === STATES.TRANSFERRING)) return;
 
-    const armIndex = suggestCargoArm(armManager, player, piece.mass, piece.sizeMeter);
+    const armIndex = suggestCargoArm(armManager, player, piece.mass, piece.sizeMeter,
+      this._armsWithCargoOnTheWay());
     if (armIndex == null) {
-      // L9: plain words, once per plan.
+      // R1 (fix round 1): no empty daughter may take the piece, so the cut is PAUSED at the nose. It resumes by itself when a
+      // daughter is home and empty (this retry, every RETRY_S); [K] lets the rest go. L9: plain words, once per pause.
+      net._cutWaiting = true;
       if (!net._cutWaitingSaid) {
         net._cutWaitingSaid = true;
+        // Pieces still to be placed: the one waiting at the nose plus every piece after it (the held part counts). "it" in the
+        // tail is the catch: K releases the waiting piece and the uncut remainder together.
+        // `_cutNext` has already moved past the waiting piece, and each earlier piece has been delivered (one at a time).
+        const left = Math.max(1, net._cutPlan.pieces.length - net._cutNext + 1);
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'HOUSTON', channel: 'CMD',
-          text: 'Cut piece is waiting for a daughter with a free cargo cell.',
+          text: `The catch waits at the nose: ${left} ${left === 1 ? 'piece still needs' : 'pieces still need'} an empty daughter. Press K to let it go.`,
           priority: 'info',
         });
       }
       return;
     }
+    net._cutWaiting = false;
+    net._cutWaitingSaid = false;          // a later pause (another piece with no empty daughter) speaks again
     const arm = armManager.arms[armIndex];
     if (!arm || !piece._scenePosition) return;
 
@@ -4705,6 +4742,9 @@ export class CaptureNetSystem {
     // — only the held part remains, and it fits a daughter's rack.
     if (net._cutNext >= net._cutPlan.pieces.length - 1 && !net._cutLastSaid) {
       net._cutLastSaid = true;
+      // R1: the held part goes by the ordinary hand-off once the last piece has landed. The over-gate refusal spoke at the
+      // start of the cut; if no daughter can take the held part either, its own line must speak (Press K), not silence.
+      net._cargoRefused = false;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD',
         text: 'Cutting done — the last piece has left the nose.',
@@ -5026,6 +5066,12 @@ export class CaptureNetSystem {
    * @returns {string|null}
    */
   getNoseFullLine() {
+    // R1 (fix round 1): a cut that ran out of empty daughters is paused at the nose - the rest of the catch and the piece
+    // wait there, so a new net is refused in plain words (furnace or not: the cut never cooks the boss, L4).
+    for (const n of this.activeNets) {
+      if (n._isMother && n.state === STATES.COLLARED && n._cutWaiting && n._cutPiece && !n._cutPieceFlying
+          && this._cutActive(n)) return NOSE_FULL_CUT_LINE;
+    }
     if (Constants.isFeatureEnabled('FURNACE_COOK')) return null;
     for (const n of this.activeNets) {
       if (!n._isMother || n.state !== STATES.COLLARED) continue;

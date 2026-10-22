@@ -225,7 +225,7 @@ export function heldSlotAnchorInto(anchor, herQuat, offsetM, out) {
  * @returns {number}
  */
 export function nextFreeRackCell(rack, except = null) {
-  const cells = Constants.DAUGHTER_CARGO_CELLS ?? 2;
+  const cells = Constants.DAUGHTER_CARGO_CELLS ?? 1;
   let used = 0;
   if (Array.isArray(rack)) {
     for (let i = 0; i < rack.length; i++) {
@@ -6518,17 +6518,19 @@ export class ArmUnit {
   /**
    * Cargo-continuity S6: free parked-hold cells on the cargo rack. The S7
    * transfer's candidate filter — a full rack refuses BEFORE anything moves.
+   * one-catch (owner 2026-10-22): one cell, so a daughter holding a catch has none free.
    * @returns {number}
    */
   get holdCellsFree() {
-    return Math.max(0, (Constants.DAUGHTER_CARGO_CELLS ?? 2) - this.heldCatches.length);
+    return Math.max(0, (Constants.DAUGHTER_CARGO_CELLS ?? 1) - this.heldCatches.length);
   }
 
   /**
    * Cargo-continuity S6: push a piece onto the parked cargo rack. The haul
    * path can never trip the capacity guard (a daughter parks with exactly one
    * piece into an empty rack) — it exists so a full rack REFUSES the push
-   * instead of silently dropping cargo (the two laws, §1).
+   * instead of silently dropping cargo (the two laws, §1). one-catch (owner 2026-10-22): the rack holds ONE
+   * piece, so a daughter that already holds a catch refuses a second (returns false; the caller keeps the piece).
    *
    * rack-snug (Decisions 1, 4, 5): the stow ASSIGNS the cell — the smallest free one — unless a cargo flight to
    * this daughter already did (`d._rackArm === this`, its end was fixed at the flight's start). The piece's

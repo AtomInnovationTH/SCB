@@ -2318,7 +2318,10 @@ export class CaptureNetVisual {
           rimWeights[i].position.set(
             curR * Math.cos(angle),
             curR * Math.sin(angle),
-            -coneHeight, // at mouth plane (target sits at z ≈ -mouthRadius, ~0.4 m short of here)
+            // owner 10-22 net hop: starts where ENVELOP ended (-2·coneHeight) and settles onto the
+            // mouth plane (-coneHeight) at the end of the cinch; was a flat -coneHeight, a one-frame
+            // jump of a cone height. (Target sits at z ≈ -mouthRadius, ~0.4 m short of the mouth plane.)
+            -coneHeight * (2 - cinchProgress),
           );
           rimWeights[i].visible = true;
         }

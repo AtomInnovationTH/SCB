@@ -1659,13 +1659,13 @@ export const Constants = {
   // the bag never eclipses the ~1 m daughter on the camera→daughter view axis
   // (re-dock "daughter disappeared for 2 s" fix). 0 = pure outboard (old).
   ARM_HOLD_LATERAL_BIAS: 1.0,
-  // Cargo-continuity S6 (2026-08-12): a parked daughter's hold is a cargo RACK —
-  // capacity in pieces pinned at the strut tip (owner: "a daughter may store more
-  // than one piece"). 2 is the smallest honest rack — tuning, not doctrine.
+  // Cargo-continuity S6 (2026-08-12): a parked daughter's hold is a cargo RACK — capacity in pieces pinned at the strut tip.
+  // one-catch (owner 2026-10-22 13:01Z, after a mother catch landed on a daughter that already held one: "Currently daughter
+  // can only hold one debris"): ONE piece, her own or one the mother puts on her. Cell 0's place and the trip's carry of it
+  // are the same as before; cell 1 (rack-centre: stacked on cell 0's catch along her axis) is no longer reached.
   // rack-snug: a parked catch is a place on her, fixed in her frame. rack-centre (2026-10-19, owner "debris is off
-  // center from daughter"): cell 0 is centred on her axis; cell 1 stacks on the same axis beyond cell 0's catch
-  // (one net gap past its farthest drawn point); when cell 0 empties, cell 1 slides down to cell 0.
-  DAUGHTER_CARGO_CELLS: 2,
+  // center from daughter"): cell 0 is centred on her axis.
+  DAUGHTER_CARGO_CELLS: 1,
 
   // ── S9 strut posing (2026-08-22, register item 32): the held-cargo plume
   // band. Measured, not guessed — tmp/i32s9-box-probe.log (the item-32 sweep
