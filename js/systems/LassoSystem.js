@@ -16,6 +16,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE } from './netRouting.js';
+import { isFree, netRefusalLine, lassoRangeAllOwnedLine } from './PieceClaim.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { DebrisField } from '../entities/DebrisField.js';
@@ -978,6 +979,20 @@ export class LassoSystem {
     }
 
     /**
+     * interlocks-p2 R1: who owns `piece` right now (a daughter flying, holding or lining up a launch for it, a mother net on
+     * its way, a catch held)? Null when nobody does, or when no arm manager is wired (headless mocks). The lasso itself is
+     * not asked: it is idle whenever this runs.
+     * @returns {{kind: string}|null}
+     * @private
+     */
+    _pieceOwner(piece) {
+        const am = this._player && this._player.armManager;
+        if (!piece || !am || typeof am.pieceClaimOf !== 'function') return null;
+        const claim = am.pieceClaimOf(piece);
+        return claim && !isFree(claim) ? claim : null;
+    }
+
+    /**
      * catch-focus Decision 0: where the target piece is NOW (scene units, a shared reference — copy before keeping).
      * A canonical target's own `_scenePosition` is live; a snapshot fallback's is frozen at fire, so prefer the
      * `_targetScenePos` that update() refreshes from the canonical object by id every frame.
@@ -1202,12 +1217,23 @@ export class LassoSystem {
         let bestTarget = null;
         let bestPos = null;
         let bestDist = Infinity;
+        let ownedSkipped = 0;   // interlocks-p2: pieces the auto-aim passed over because somebody owns them
 
         // PRIORITY 1: If player has Tab-selected a target and it's in range, use it (S1 Fix C2)
         if (selectedTarget) {
             // catch-focus D0: a Tab-selected target can be a stale snapshot — read its LIVE field object.
             selectedTarget = this._canonicalDebris(debrisField, selectedTarget) || selectedTarget;
             const selectedPos = this._getDebrisScenePos(selectedTarget);
+            // interlocks-p2 R1: the player's own pick has an owner: one line, nothing is cast (InputManager.fireLasso
+            // refuses first; this is the release-time and direct-caller backstop).
+            const pickOwner = this._pieceOwner(selectedTarget);
+            if (pickOwner) {
+                eventBus.emit(Events.LASSO_DENIED, { reason: 'piece_owned' });
+                eventBus.emit(Events.COMMS_MESSAGE, {
+                    text: netRefusalLine(pickOwner), source: 'SYSTEM', channel: 'CMD', priority: 'warning', _lassoFeedback: true,
+                });
+                return false;
+            }
             if (selectedPos) {
                 const dist = playerPos.distanceTo(selectedPos);
                 const mass = selectedTarget.mass || 1;
@@ -1258,6 +1284,7 @@ export class LassoSystem {
             // Check mass limit
             const mass = d.mass || 1;
             if (mass > Constants.LASSO_MAX_CAPTURE_MASS) continue;
+            if (this._pieceOwner(d)) { ownedSkipped++; continue; }   // interlocks-p2 R1: auto-aim leaves a piece somebody owns alone
 
             if (angle <= maxAngle && dist < bestDist) {
                 bestDist = dist;
@@ -1271,6 +1298,7 @@ export class LassoSystem {
             for (const d of nearby) {
                 const mass = d.mass || 1;
                 if (mass > Constants.LASSO_MAX_CAPTURE_MASS) continue;
+                if (this._pieceOwner(d)) { ownedSkipped++; continue; }   // interlocks-p2 R1
                 const debrisPos = this._getDebrisScenePos(d);
                 if (!debrisPos) continue;
                 bestTarget = d;
@@ -1282,7 +1310,9 @@ export class LassoSystem {
         if (!bestTarget || !bestPos) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'no_target' });
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'No suitable target for lasso (too heavy or no position)',
+                text: ownedSkipped > 0
+                    ? lassoRangeAllOwnedLine()
+                    : 'No suitable target for lasso (too heavy or no position)',
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'info',

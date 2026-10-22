@@ -28,6 +28,7 @@ import { DAUGHTER_OUT_OF_NETS_LINE } from '../systems/netRouting.js';
 import { computeToolOdds, makeNetOddsLockCache } from '../systems/ToolOdds.js';
 import { gameState } from '../core/GameState.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
+import { pieceLostLine } from '../systems/PieceClaim.js';
 import { DebrisField } from './DebrisField.js';          // catch-snug: the drawn scale of a held catch
 import { DebrisWireframe } from '../ui/DebrisWireframe.js'; // catch-snug: the drawn mesh vertices
 import { netCellLayout } from './netCellLayout.js';
@@ -3422,6 +3423,29 @@ export class ArmUnit {
     };
   }
 
+  /**
+   * interlocks-p2 R4: the piece she is flying at was caught by something else (a net, the lasso, another daughter) or is
+   * gone: turn round and reel home at once, with one line, instead of flying on to a piece that is no longer there to take.
+   * A catch of her OWN (`_capturedByArm === this`) is not a loss. The line is said once per piece: when `recall()` refuses
+   * she keeps her course and the line is not repeated every frame (F5). A detached daughter has no line to reel on and is
+   * left alone (her own landing rules apply).
+   * @returns {boolean} true when she turned home
+   * @private
+   */
+  _homeIfPieceLost() {
+    const t = this.target;
+    if (!t || this.isDetached) return false;
+    const by = t._capturedByArm;
+    const takenByOther = (t._captured === true || t._armPinned === true || !!by) && by !== this;
+    const why = t.alive === false ? 'gone' : (takenByOther ? 'caught' : null);
+    if (!why) { this._pieceLostSaidFor = null; return false; }
+    if (this._pieceLostSaidFor !== t) {
+      this._pieceLostSaidFor = t;
+      eventBus.emit(Events.COMMS_MESSAGE, { text: pieceLostLine(this.displayName, why), priority: 'warning' });
+    }
+    return this.recall() === true;
+  }
+
   /** @private Get target scene position (computed by DebrisField each frame) */
   _getTargetScenePos() {
     if (!this.target) return null;
@@ -3772,6 +3796,7 @@ export class ArmUnit {
 
   /** TRANSIT: fly toward target using FEEP thrust */
   _updateTransit(dt, parentPos) {
+    if (this._homeIfPieceLost()) return;
     if (this._manualMode) {
       // Manual mode: player controls velocity, we just update position.
       // Autopilot (proportional controller, pings, thruster audio) is
@@ -3917,6 +3942,7 @@ export class ArmUnit {
 
   /** APPROACH: fine approach — slower, match velocity */
   _updateApproach(dt, parentPos) {
+    if (this._homeIfPieceLost()) return;
     if (this._manualMode) {
       // Manual mode: coast with current velocity. Autopilot (proportional
       // controller, approach pings, thruster audio) intentionally skipped

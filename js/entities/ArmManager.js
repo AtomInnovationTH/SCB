@@ -23,6 +23,12 @@ import { ArmUnit, planeTurnLeftRad } from './ArmUnit.js';
 import { DebrisField } from './DebrisField.js';
 import { clearRackCell } from './CaptureNet.js';
 import { tripRefuses } from '../systems/TransferTrip.js';
+import { GestureHints } from '../ui/hud/GestureHints.js';
+import {
+  pieceClaim, isFree, linesCross, lineWrapsShip, samePiece, pieceIsCaught,
+  launchRefusalLine, crossNamedStrutLine, crossNoneClearLine, launchDroppedLine, launchCrossDroppedLine, wrapRefusalLine,
+  fanOutLine, fanOutNoneLine, stayedLine, reachNoneLine, heavyNoneLine, holdsStillLine, netIsOut,
+} from '../systems/PieceClaim.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg, engineGasLowFrac } from '../systems/ResourceSystem.js';
 
 /** 1 meter in scene units */
@@ -570,41 +576,16 @@ export class ArmManager {
       return false;
     }
 
-    // Auto-select type based on target mass
     const targetMass = target.mass || 1;
-    let useType = preferType;
-    if (!useType) {
-      if (targetMass > Constants.SPINNER_MAX_CAPTURE_MASS) {
-        useType = 'weaver';
-      } else if (targetMass <= Constants.SPINNER_MAX_CAPTURE_MASS) {
-        // Prefer spinners for small targets (saves weaver fuel)
-        useType = 'spinner';
-      }
-    }
 
-    // Compute direction from player to target in ship-local space for smart arm selection
-    let targetDir = null;
-    if (target._scenePosition && this.playerSatellite) {
-      const playerPos = this.playerSatellite.position ||
-        (this.playerSatellite.mesh && this.playerSatellite.mesh.position);
-      if (playerPos) {
-        targetDir = target._scenePosition.clone().sub(playerPos);
-        // Transform to ship-local space using inverse of player quaternion
-        const parentQuat = this.playerSatellite.quaternion;
-        if (parentQuat) {
-          targetDir.applyQuaternion(parentQuat.clone().invert());
-        }
-      }
+    // interlocks-p2: ONE owner per piece, and no crossed lines. The picked piece must be free (no daughter, net or catch
+    // on it), and the daughter sent is the best one whose strut line stays clear of every line already out.
+    const pick = this._pickLaunchArm(target, preferType);
+    if (pick.refusal) {
+      this._sayWarn(pick.refusal.text);
+      return false;
     }
-
-    // Find best available arm of preferred type (must be docked AND spring-charged)
-    // Smart selection: prefer arm whose dock offset aligns with target direction
-    let arm = this._findDockedArm(useType, targetDir);
-
-    // Fallback to other type if preferred unavailable
-    if (!arm) {
-      arm = this._findDockedArm(useType === 'weaver' ? 'spinner' : 'weaver', targetDir);
-    }
+    const arm = pick.arm;
 
     if (!arm) {
       // no-melt: with no furnace a daughter that holds a catch stays holding it until the burn to the next field, where she
@@ -676,7 +657,7 @@ export class ArmManager {
       // L2: no aim ceremony → the daughter fires along the direct bearing; the
       // launch line is checked along that same bearing.
       return this._launchArm(arm, 'target', () => this._launchDirShip(arm, target),
-        () => arm.deploy(target), opts);
+        () => arm.deploy(target), opts, target);
     }
 
     // mother-aims: not free to turn (a daughter on her line, a catch on the collar, a hand-off or another
@@ -687,7 +668,7 @@ export class ArmManager {
     if (blocked) {
       this._sayCantTurn(blocked);
       return this._launchArm(arm, 'target', () => this._launchDirShip(arm, target),
-        () => arm.deploy(target), { ...(opts || {}), announce: true });
+        () => arm.deploy(target), { ...(opts || {}), announce: true }, target);
     }
 
     // Concurrency guard: don't supersede an in-flight aim sequence (e.g. a
@@ -700,7 +681,9 @@ export class ArmManager {
       return false;
     }
 
-    // Reserve the arm so a second D-press doesn't grab it mid-ceremony.
+    // Reserve the arm so a second D-press doesn't grab it mid-ceremony. interlocks-p2: and the piece is hers from this
+    // moment (the ceremony takes 8-10 s): a net or another daughter sent at it meanwhile is refused.
+    arm._claimTarget = target;
     arm._aimReserved = true;
 
     // World-direction provider: strut-tip → target scene position (recomputed
@@ -734,9 +717,10 @@ export class ArmManager {
         // ceremony deploys (arm isn't deployed yet at that point), so emit here.
         if (ok) eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
         return ok;
-      });
+      }, undefined, target);
     }).catch(() => {
       arm._aimReserved = false;
+      arm._claimTarget = null;
       // Abort comms already emitted by AutopilotSystem.
     });
 
@@ -756,8 +740,11 @@ export class ArmManager {
     if (checkActiveSatArming(target, this._catalogLoader, eventBus)) return false;
     const arm = this.arms.find(a => a.id === armId);
     if (!arm) return false;
+    // interlocks-p2: one owner per piece
+    const owned = target ? this.launchRefusalAt(target, { exceptArm: arm }) : null;
+    if (owned) { this._sayWarn(owned.text); return false; }
     return this._launchArm(arm, 'target', () => this._launchDirShip(arm, target),
-      () => arm.deploy(target));
+      () => arm.deploy(target), undefined, target);
   }
 
   /**
@@ -808,6 +795,10 @@ export class ArmManager {
       return false;
     }
 
+    // interlocks-p2: one owner per piece, and the strut she was picked on must keep its line clear of the others'.
+    const refused = target ? this.indexLaunchRefusal(index, target) : null;
+    if (refused) { this._sayWarn(refused.text); return false; }
+
     // mother-aims: with a target, the number key turns the mother too (the D key's ceremony) when she is
     // free to turn; otherwise only the arm's strut aims (today's launch aim). A launch of this arm that is
     // already waiting keeps its single entry (requestClearLaunch answers "accepted" for it).
@@ -825,13 +816,403 @@ export class ArmManager {
   }
 
   // ==========================================================================
+  // interlocks-p2 — a piece has ONE owner; a daughter's line never crosses another's (docs/research/2026-10-launch-interlocks.md)
+  // ==========================================================================
+
+  /**
+   * Hand the manager the lasso (it is not reachable from the ship). InputManager does this at init; without it the lasso is
+   * found through the capture-net system when that has it.
+   */
+  setLassoSystem(lassoSystem) { this._lassoSystemRef = lassoSystem || null; }
+
+  /** What `pieceClaim` reads: the daughters, the launches waiting on the gate, the nets in the air, the lasso. */
+  claimWorld() {
+    const p = this.playerSatellite;
+    const cns = p && p._captureNetSystem;
+    return {
+      arms: this.arms,
+      pending: this._pendingLaunches || null,
+      nets: cns && Array.isArray(cns.activeNets) ? cns.activeNets : [],
+      lasso: this._lassoSystemRef || (cns && cns._lassoSystem) || null,
+    };
+  }
+
+  /** Who owns `piece` right now (see PieceClaim.pieceClaim). `opts.exceptArm`: leave that daughter's own claim out. */
+  pieceClaimOf(piece, opts) { return pieceClaim(piece, this.claimWorld(), opts); }
+
+  /**
+   * Pure: the refusal a DAUGHTER launch at `target` meets because someone already owns it, or null when the piece is free.
+   * @returns {{kind: string, claim: object, text: string}|null}
+   */
+  launchRefusalAt(target, opts) {
+    if (!target) return null;
+    const claim = this.pieceClaimOf(target, opts);
+    if (isFree(claim)) return null;
+    const text = launchRefusalLine(claim);
+    return text ? { kind: claim.kind, claim, text } : null;
+  }
+
+  /** One warning line in Comms. @private */
+  _sayWarn(text) {
+    eventBus.emit(Events.COMMS_MESSAGE, { text, priority: 'warning' });
+  }
+
+  /** A world (scene) point in the SHIP frame, metres (null when the ship's pose is unknown). @private */
+  _shipPointM(w) {
+    const p = this.playerSatellite;
+    const pos = p && (p.position || (p.mesh && p.mesh.position));
+    if (!pos || !w) return null;
+    const v = new THREE.Vector3(w.x - pos.x, w.y - pos.y, w.z - pos.z);
+    if (p.quaternion) v.applyQuaternion(p.quaternion.clone().invert());
+    return [v.x / M, v.y / M, v.z / M];
+  }
+
+  /** The tether anchor of `arm` on her strut RIGHT NOW, ship frame, metres (the reel at 85 % of the strut). @private */
+  _anchorShipM(arm) {
+    const o = arm && (arm._reelOffset || arm.dockOffset);
+    return o ? [o.x / M, o.y / M, o.z / M] : null;
+  }
+
+  /**
+   * The tether anchor `arm` will have once her strut has swung to launch toward `wantedShip` (ship frame): the hinge on the
+   * collar plus the strut at the aim angle, to the reel at 85 % of its length (PlayerSatellite._updateStruts).
+   * Without strut aiming she fires from where her strut is.
+   * @private
+   */
+  _aimedAnchorShipM(arm, wantedShip) {
+    const i = this.arms.indexOf(arm);
+    if (Constants.FEATURE_FLAGS.LAUNCH_AIMS_STRUT !== true || i < 0 || typeof arm.getAimAlpha !== 'function' || !arm.dockOffset) {
+      return this._anchorShipM(arm);
+    }
+    const V5 = Constants.OCTOPUS_V5;
+    const alpha = this._aimAlphaFor(i, wantedShip);
+    const az = Math.atan2(arm.dockOffset.y, arm.dockOffset.x);
+    const d = strutLocalDirection(alpha, az, new THREE.Vector3());
+    const reel = V5.STRUT_LENGTH * 0.85;
+    return [
+      Math.cos(az) * V5.COLLAR_RADIUS + d.x * reel,
+      Math.sin(az) * V5.COLLAR_RADIUS + d.y * reel,
+      V5.COLLAR_Y + d.z * reel,
+    ];
+  }
+
+  /**
+   * The lines of the daughters that are out, or lining up to go, as ship-frame segments (metres): from her tether anchor on
+   * the strut to her far end (the piece she is flying at, else where she is). A daughter that waits for a turn-the-ship
+   * ceremony has no stable geometry yet (the ship is about to move) and a free-fly or trawl launch has no piece, so those
+   * are left out; the OWNER check still sees them.
+   * @param {object|null} exceptArm
+   * @returns {Array<{arm: object, a: number[], b: number[]}>}
+   * @private
+   */
+  _lineSet(exceptArm = null) {
+    const S = ARM_STATES;
+    const out = [];
+    const pend = this._pendingLaunches;
+    for (let i = 0; i < this.arms.length; i++) {
+      const a = this.arms[i];
+      if (!a || a === exceptArm || a.isDetached) continue;
+      let far = null;
+      let anchor = null;
+      if (a.state === S.DOCKED) {
+        const t = a._claimTarget;
+        if (!(pend && pend.has(i) && t && t._scenePosition)) continue;
+        far = t._scenePosition;
+        anchor = this._aimedAnchorShipM(a, this._launchDirShip(a, t));
+      } else if (a.state === S.RELOADING || a.state === S.HOLDING_CATCH || a.state === S.EXPENDED
+          || a.state === S.DOCKING || a.state === S.CARRY_PREP) {
+        continue;
+      } else {
+        const t = a.target && a.target._scenePosition;
+        const flying = a.state === S.LAUNCHING || a.state === S.UNDOCKING || a.state === S.TRANSIT || a.state === S.APPROACH;
+        far = flying && t ? t : a.position;
+        anchor = this._anchorShipM(a);
+      }
+      const b = far ? this._shipPointM(far) : null;
+      if (!anchor || !b) continue;
+      out.push({ arm: a, a: anchor, b });
+    }
+    return out;
+  }
+
+  /** The line `arm` would fly at `target`: her anchor once her strut has swung, to the piece. @private */
+  _candidateLine(arm, target) {
+    const tp = target && target._scenePosition;
+    if (!tp || !arm || !arm.dockOffset || !arm.position) return null;
+    const b = this._shipPointM(tp);
+    const a = this._aimedAnchorShipM(arm, this._launchDirShip(arm, target));
+    return a && b ? { a, b } : null;
+  }
+
+  /**
+   * The daughter whose line a launch of `arm` at `target` would cross (the t4 harness's side-swap test on the real strut
+   * anchors), or null when the line stays clear. A checker error answers null (fails open, as the launch gate does).
+   */
+  _crossingArm(arm, target) {
+    try {
+      const cand = this._candidateLine(arm, target);
+      if (!cand) return null;
+      for (const L of this._lineSet(arm)) if (linesCross(cand, L)) return L.arm;
+    } catch (err) {
+      if (!this._crossWarned) { this._crossWarned = true; console.warn('[ArmManager] line-cross check failed; launching unchecked:', err); }
+    }
+    return null;
+  }
+
+  /**
+   * What keeps `arm` from this piece: 'heavy' (more than she holds), 'reach' (past tether x deploy fraction), or null when she
+   * holds it and reaches it. Null too when either is unknown (mock arms). @private
+   */
+  _armShortfall(arm, piece) {
+    const cfg = arm && arm.config;
+    if (!cfg) return null;
+    if (cfg.maxCaptureMass !== undefined && (piece.mass || 1) > cfg.maxCaptureMass) return 'heavy';
+    const tp = piece._scenePosition;
+    if (tp && arm.position && cfg.tetherMax > 0) {
+      const distM = Math.hypot(tp.x - arm.position.x, tp.y - arm.position.y, tp.z - arm.position.z) / M;
+      if (distM > cfg.tetherMax * Constants.ARM_DEPLOY_RANGE_FRACTION) return 'reach';
+    }
+    return null;
+  }
+
+  /** Can `arm` hold `piece`'s mass and reach it (tether x deploy fraction)? True when either is unknown (mock arms). @private */
+  _armFitsPiece(arm, piece) { return this._armShortfall(arm, piece) === null; }
+
+  /** Ship-frame direction from the ship's centre to `target` (null when unknown): what picks the dock best aligned. @private */
+  _shipDirTo(target) {
+    if (!(target && target._scenePosition && this.playerSatellite)) return null;
+    const playerPos = this.playerSatellite.position || (this.playerSatellite.mesh && this.playerSatellite.mesh.position);
+    if (!playerPos) return null;
+    const dir = target._scenePosition.clone().sub(playerPos);
+    const q = this.playerSatellite.quaternion;
+    if (q) dir.applyQuaternion(q.clone().invert());
+    return dir;
+  }
+
+  /**
+   * The D key's choice for `target`, free of side effects: the best docked daughter whose strut line stays clear of every
+   * line already out, or the reason there is none. Order: the right size for the piece, then the other size; within a
+   * size the dock best aligned with the piece (`_findDockedArm`). A piece with an owner is refused first.
+   * @param {object} target
+   * @param {'weaver'|'spinner'|null} [preferType]
+   * @param {function(ArmUnit): boolean|null} [fits] extra filter on the daughters (the one-per-piece send passes "can reach
+   *   it": when the best daughter falls short the next one is tried before the piece is given up, F6)
+   * @returns {{arm: (ArmUnit|null), refusal: ({kind: string, text: string}|null)}}
+   *   `arm` null with no `refusal` = no daughter is free at all (the caller says so).
+   */
+  _pickLaunchArm(target, preferType = null, fits = null) {
+    const owned = this.launchRefusalAt(target);
+    if (owned) return { arm: null, refusal: owned };
+    const mass = target.mass || 1;
+    const first = preferType || (mass > Constants.SPINNER_MAX_CAPTURE_MASS ? 'weaver' : 'spinner');
+    const other = first === 'weaver' ? 'spinner' : 'weaver';
+    const dir = this._shipDirTo(target);
+    const cap = (a) => !(a.config && a.config.maxCaptureMass !== undefined) || mass <= a.config.maxCaptureMass;
+    const clear = (a) => cap(a) && (!fits || fits(a)) && !this._crossingArm(a, target);
+    const arm = this._findDockedArm(first, dir, clear) || this._findDockedArm(other, dir, clear);
+    if (arm) return { arm, refusal: null };
+    // None is clear. An arm that could go but for a crossing line gets the crossing line; the rest is the old answers.
+    const any = this._findDockedArm(first, dir) || this._findDockedArm(other, dir);
+    if (!any) return { arm: null, refusal: null };
+    if (fits) {
+      // F15: judge the crossing only for a daughter who could fly there at all. A piece nobody holds or reaches gets the reach
+      // (or weight) line, not the crossing line of whichever daughter happened to be listed first.
+      const able = (a) => cap(a) && fits(a);
+      const goer = this._findDockedArm(first, dir, able) || this._findDockedArm(other, dir, able);
+      if (!goer) {
+        const docked = this.arms.filter((a) => armCanLaunchNow(a));
+        const kinds = docked.map((a) => this._armShortfall(a, target));
+        const heavy = kinds.length > 0 && kinds.every((k) => k === 'heavy');
+        return { arm: null, refusal: heavy ? { kind: 'heavy', text: heavyNoneLine(1) } : { kind: 'reach', text: reachNoneLine(1) } };
+      }
+      const blocker = this._crossingArm(goer, target);
+      return blocker
+        ? { arm: null, refusal: { kind: 'cross', text: crossNoneClearLine(blocker.displayName) } }
+        : { arm: goer, refusal: null };
+    }
+    if (!cap(any)) return { arm: any, refusal: null };
+    const crossed = this._crossingArm(any, target);
+    if (!crossed) return { arm: any, refusal: null };
+    return { arm: null, refusal: { kind: 'cross', text: crossNoneClearLine(crossed.displayName) } };
+  }
+
+  /** Pure: what the D key's auto-pick would be refused with at `target` (an owner, or every strut crossing), or null. */
+  interlockRefusal(target, preferType = null) {
+    if (!target) return null;
+    return this._pickLaunchArm(target, preferType).refusal;
+  }
+
+  /**
+   * Pure: what a launch of daughter `index` at `target` is refused with - the piece has an owner, or this strut's line would
+   * cross another daughter's (with the clear strut to press named when there is one) - or null. A launch of hers that
+   * already waits is never refused here (it keeps its single entry).
+   * @returns {{kind: string, text: string}|null}
+   */
+  indexLaunchRefusal(index, target) {
+    const arm = this.arms[index];
+    if (!arm || !target) return null;
+    const owned = this.launchRefusalAt(target, { exceptArm: arm });
+    if (owned) return owned;
+    if ((this._pendingLaunches && this._pendingLaunches.has(index)) || arm._aimReserved) return null;
+    const crossed = this._crossingArm(arm, target);
+    if (!crossed) return null;
+    const mass = target.mass || 1;
+    const dir = this._shipDirTo(target);
+    const clear = (a) => (!(a.config && a.config.maxCaptureMass !== undefined) || mass <= a.config.maxCaptureMass)
+      && !this._crossingArm(a, target);
+    const alt = this._findDockedArm(arm.type, dir, clear)
+      || this._findDockedArm(arm.type === 'weaver' ? 'spinner' : 'weaver', dir, clear);
+    return {
+      kind: 'cross',
+      // F11: glass has no number keys: the daughter is picked by a tap on her row in DAUGHTERS (read at say time, as pilotLine does)
+      text: alt
+        ? crossNamedStrutLine(this.arms.indexOf(alt) + 1, crossed.displayName, GestureHints.isGlass() ? alt.displayName : null)
+        : crossNoneClearLine(crossed.displayName),
+    };
+  }
+
+  /**
+   * At the moment of release: has the piece been caught, lost or taken since the launch was asked for? (R4, waiting launch.)
+   * @returns {'gone'|'caught'|'taken'|null}
+   * @private
+   */
+  _releaseBlock(arm, target) {
+    if (!target) return null;
+    if (target.alive === false) return 'gone';
+    const claim = this.pieceClaimOf(target, { exceptArm: arm });
+    if (isFree(claim)) return null;
+    return pieceIsCaught(target) ? 'caught' : 'taken';
+  }
+
+  /**
+   * F12/F13: why the daughters still docked after a send stayed. `pieces` are the pieces the send was about; those somebody
+   * owns now (the daughter just sent, a net, a catch) or that are gone are not "left". A daughter stays because
+   *   - no free piece is left (`ranOut`),
+   *   - every piece left is past her tether (`reach`) or heavier than she holds (`heavy`),
+   *   - or she reaches and holds at least one, but every such piece takes her line across a line already out (`cross`,
+   *     naming the daughter whose line is in the way for the best such piece).
+   * A daughter that fits a piece on a clear line counts as `other` (her launch was refused for a reason already said).
+   * @param {object[]} pieces
+   * @param {function(ArmUnit): boolean} [ready] which daughters count as "still docked and ready"
+   * @returns {{stayed: number, ranOut: number, cross: number, crossWho: string[], reach: number, heavy: number, other: number, left: number}}
+   * @private
+   */
+  _whyStayed(pieces, ready = (a) => armCanLaunchNow(a)) {
+    const why = { stayed: 0, ranOut: 0, cross: 0, crossWho: [], reach: 0, heavy: 0, other: 0, left: 0, reachSeen: false, heavySeen: false };
+    const left = (pieces || []).filter((p) => p && p.alive !== false && isFree(this.pieceClaimOf(p)));
+    why.left = left.length;
+    for (let i = 0; i < this.arms.length; i++) {
+      const a = this.arms[i];
+      if (!a || !ready(a) || (this._pendingLaunches && this._pendingLaunches.has(i))) continue;
+      why.stayed++;
+      if (left.length === 0) { why.ranOut++; continue; }
+      const fit = left.filter((p) => this._armFitsPiece(a, p));
+      if (fit.length === 0) {
+        const kinds = left.map((p) => this._armShortfall(a, p));
+        const far = kinds.includes('reach');
+        if (far) why.reachSeen = true;
+        if (kinds.includes('heavy')) why.heavySeen = true;     // F19: every reason present is kept, not only the one she is counted under
+        if (far) why.reach++; else why.heavy++;
+        continue;
+      }
+      const blockers = fit.map((p) => this._crossingArm(a, p));
+      if (blockers.every(Boolean)) {
+        why.cross++;
+        const name = blockers[0].displayName;
+        if (!why.crossWho.includes(name)) why.crossWho.push(name);
+      } else {
+        why.other++;
+      }
+    }
+    return why;
+  }
+
+  /**
+   * One daughter per piece, best first (Q1). Each piece goes to the best docked daughter that can hold it, reach it and
+   * whose line stays clear; a piece that has an owner is skipped; daughters left over stay docked (`_whyStayed` says why).
+   * @param {object[]} pieces best first
+   * @returns {number} how many daughters were sent
+   * @private
+   */
+  _sendOnePerPiece(pieces) {
+    let sent = 0;
+    for (const piece of pieces) {
+      if (!piece || piece.alive === false) continue;
+      if (!this.arms.some((a) => armCanLaunchNow(a))) break;
+      // F6: the daughter must hold it, reach it AND stay clear; when the best one falls short the next is tried
+      const pick = this._pickLaunchArm(piece, null, (a) => this._armFitsPiece(a, piece));
+      if (pick.refusal) continue;
+      if (!pick.arm || !this._armFitsPiece(pick.arm, piece)) continue;
+      if (this._launchTargetOrFree(pick.arm, piece)) sent++;
+    }
+    return sent;
+  }
+
+  /**
+   * R7: would turning the ship to point +Z along `dirWorld` (a net aim) wrap a daughter's line round the hull? The daughters
+   * stay where they are in space while the ship turns; each line then runs from her strut anchor (fixed on the ship) to
+   * where she is, seen from the TURNED ship. A hit on the ship keep-out in the first 30 m is a wrap.
+   * The whole turn is walked in 5 degree steps along the shortest arc, not just its end: the end attitude alone is a poor
+   * guide (measured in the real game, 2026-10-22: the ship came to rest 9.5 degrees from the predicted attitude, and the
+   * answer for a 175 degree aim went clear, wrap, wrap, clear, wrap across the last 15 degrees), and a line dragged across
+   * the hull on the way round is as tangled as one that ends there.
+   * @param {{x:number,y:number,z:number}} dirWorld unit direction to aim along (world / scene frame)
+   * @returns {{wraps: boolean, arm: (object|null), part: string, atDeg: (number|null)}} `atDeg`: how far into the turn
+   */
+  netTurnWraps(dirWorld) {
+    const none = { wraps: false, arm: null, part: '', atDeg: null };
+    try {
+      const p = this.playerSatellite;
+      const ko = this.getKeepOut();
+      const pos = p && (p.position || (p.mesh && p.mesh.position));
+      if (!ko || !pos || !p.quaternion || !dirWorld) return none;
+      // The lines to test: every daughter that is out (docked and reloading ones have no line).
+      const lines = [];
+      for (let i = 0; i < this.arms.length; i++) {
+        const a = this.arms[i];
+        if (!a || a.isDetached || !a.position) continue;
+        if (a.state === ARM_STATES.DOCKED || a.state === ARM_STATES.RELOADING || a.state === ARM_STATES.HOLDING_CATCH
+            || a.state === ARM_STATES.EXPENDED || a.state === ARM_STATES.DOCKING || a.state === ARM_STATES.CARRY_PREP) continue;
+        const anchor = this._anchorShipM(a);
+        if (!anchor) continue;
+        lines.push({ arm: a, i, anchor, dx: a.position.x - pos.x, dy: a.position.y - pos.y, dz: a.position.z - pos.z });
+      }
+      if (lines.length === 0) return none;
+      // Where +Z points now, and the shortest turn that takes it to dirWorld.
+      const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(p.quaternion);
+      const want = new THREE.Vector3(dirWorld.x, dirWorld.y, dirWorld.z).normalize();
+      const total = fwd.angleTo(want);
+      const arc = new THREE.Quaternion().setFromUnitVectors(fwd, want);
+      const STEP = 5 * Math.PI / 180;
+      const n = Math.max(1, Math.ceil(total / STEP));
+      const ident = new THREE.Quaternion();
+      const part = new THREE.Quaternion();
+      const inv = new THREE.Quaternion();
+      const v = new THREE.Vector3();
+      for (let k = 1; k <= n; k++) {
+        part.slerpQuaternions(ident, arc, k / n);
+        inv.copy(part).multiply(p.quaternion).invert();
+        for (const L of lines) {
+          v.set(L.dx, L.dy, L.dz).applyQuaternion(inv);
+          const hit = lineWrapsShip({ a: L.anchor, b: [v.x / M, v.y / M, v.z / M] }, ko,
+            { ignore: ['dau' + L.i, 'strut' + L.i, 'rack catch ' + L.i] });
+          if (hit.wraps) return { wraps: true, arm: L.arm, part: hit.part, atDeg: Math.round((total * k / n) * 180 / Math.PI) };
+        }
+      }
+    } catch (err) {
+      if (!this._wrapWarned) { this._wrapWarned = true; console.warn('[ArmManager] net-turn wrap check failed; turning unchecked:', err); }
+    }
+    return none;
+  }
+
+  // ==========================================================================
   // mother-aims — the launch turns the mother when she is free to turn
   // ==========================================================================
 
   /** The one comms line for a launch the mother may not turn for. @private */
   _sayCantTurn(reason) {
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `Mother can't turn now (${reason}): aiming the arm only.`, priority: 'info',
+      text: holdsStillLine(reason), priority: 'info',
     });
   }
 
@@ -876,7 +1257,11 @@ export class ArmManager {
     if (ld && typeof ld.isActive === 'function' && ld.isActive()) return 'a hand-off is running';
     if (this._heldCatchCorridorRadiusM() !== null) return 'a catch is on the collar';
     if (!mine && ap && typeof ap.isTurning === 'function' && ap.isTurning()) return 'a hand-off is running';   // a scripted turn takes an anonymous hold too
-    if (ap && typeof ap.isReelInHeld === 'function' && ap.isReelInHeld()) return 'a catch is being reeled in';
+    if (ap && typeof ap.isReelInHeld === 'function' && ap.isReelInHeld()) {
+      // interlocks-p2 R9: say what is true. The hold starts the moment a net or the lasso leaves; while it is still flying
+      // there is no catch yet, only "a net is out".
+      return netIsOut(this.claimWorld()) ? 'a net is out' : 'a catch is being reeled in';
+    }
     if (!mine && ap && typeof ap.isAttitudeHeld === 'function' && ap.isAttitudeHeld()) return 'a hand-off is running';
     return null;
   }
@@ -1147,12 +1532,17 @@ export class ArmManager {
   }
 
   /**
-   * S2.2: Deploy all docked arms to the given target simultaneously.
-   * Arms that can't deploy (no spring charge, wrong state) are silently skipped.
-   * @param {object|null} target - Target debris. If null, deploys in free-fly.
+   * S2.2 / interlocks-p2 (Q1): Shift+D and Shift+N send every docked daughter out, ONE PER PIECE, best first.
+   * `target` (the picked piece) goes first, then `more` (the next eligible pieces, best first, from InputManager).
+   * Each piece takes the best docked daughter that can hold it, reach it and whose strut line stays clear of the lines
+   * already out; a piece that already has an owner is skipped; daughters left over stay docked and one line says how many
+   * went. The picked piece itself, when owned, is refused with the reason (nothing is sent).
+   * With no `target` (and no `more`) every docked daughter free-flies, as before.
+   * @param {object|null} target - The picked piece. If null (and `more` empty), deploys in free-fly.
+   * @param {object[]} [more] - Further pieces for the other daughters, best first.
    * @returns {number} Number of arms successfully deployed
    */
-  deployAllToTarget(target) {
+  deployAllToTarget(target, more = []) {
     // ST-6.7: Safe-mode guard
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -1168,35 +1558,55 @@ export class ArmManager {
       return 0;
     }
 
-    let deployed = 0;
-    for (const arm of this.arms) {
-      if (arm.state !== ARM_STATES.DOCKED) continue;
-      if (!arm.springCharged) continue;
-      const ok = this._launchTargetOrFree(arm, target);
-      if (ok) deployed++;
+    const rest = Array.isArray(more) ? more.filter(Boolean) : [];
+    if (!target && rest.length === 0) {
+      let free = 0;
+      for (const arm of this.arms) {
+        if (arm.state !== ARM_STATES.DOCKED) continue;
+        if (!arm.springCharged) continue;
+        if (this._launchTargetOrFree(arm, null)) free++;
+      }
+      eventBus.emit(Events.COMMS_MESSAGE, free > 0
+        ? { text: `${free} daughter${free > 1 ? 's' : ''} deployed (free-fly)`, priority: 'info' }
+        : { text: 'No daughters available. Check charge status.', priority: 'warning' });
+      return free;
     }
 
-    if (deployed > 0) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${deployed} daughter${deployed > 1 ? 's' : ''} deployed${target ? ` → ${target.type || 'target'}` : ' (free-fly)'}`,
-        priority: 'info',
-      });
-    } else {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'No daughters available. Check charge status.',
-        priority: 'warning',
-      });
+    const pieces = [];
+    const seen = new Set();
+    for (const t of [target, ...rest]) {
+      if (!t) continue;
+      const key = t.id !== undefined && t.id !== null ? t.id : t;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pieces.push(t);
     }
-    return deployed;
+    // The picked piece is the player's own choice: when it has an owner, say who and send nobody.
+    if (target) {
+      const owned = this.launchRefusalAt(target);
+      if (owned) { this._sayWarn(owned.text); return 0; }
+    }
+
+    const sent = this._sendOnePerPiece(pieces);
+    // F13: the daughters that stayed docked, by cause - no piece left, a crossing line, out of reach, too heavy
+    const why = this._whyStayed(pieces);
+    if (sent > 0) {
+      eventBus.emit(Events.COMMS_MESSAGE, { text: fanOutLine(sent, why.stayed, why), priority: 'info' });
+    } else if (why.stayed === 0) {
+      eventBus.emit(Events.COMMS_MESSAGE, { text: 'No daughters available. Check charge status.', priority: 'warning' });
+    } else {
+      this._sayWarn(fanOutNoneLine(why));
+    }
+    return sent;
   }
 
   /**
    * Shift+A fan-out (2026-06-14): deploy every docked daughter to a *distinct*
-   * debris so the fleet spreads across the field for quick, high-risk salvage
-   * (instead of all piling onto one target like deployAllToTarget). The i-th
-   * deployable daughter is sent to the i-th entry of `targets`; when there are
-   * more daughters than targets, the extras fall back to `fallbackTarget` (the
-   * mother's active target) or free-fly. Returns the number deployed.
+   * debris so the fleet spreads across the field for quick, high-risk salvage.
+   * The i-th deployable daughter is sent to the first listed piece she can hold and reach, that nobody owns (a daughter,
+   * a net or a catch: interlocks-p2) and whose strut line stays clear of the lines already out. When there are more
+   * daughters than pieces, the extras fall back to `fallbackTarget` (the mother's active target) when that piece is
+   * still free, or free-fly when none is given. Returns the number deployed.
    *
    * @param {Array<object>} targets - distinct debris objects, best-first
    * @param {object|null} [fallbackTarget] - target for surplus daughters
@@ -1219,31 +1629,52 @@ export class ArmManager {
     }
 
     const list = Array.isArray(targets) ? targets.filter(Boolean) : [];
+    const keyOf = (t) => (t.id !== undefined && t.id !== null ? t.id : t);
+    const used = new Set();
     let deployed = 0;
-    let assigned = 0;   // index into the distinct-target list
     for (const arm of this.arms) {
       if (arm.state !== ARM_STATES.DOCKED) continue;
       if (!arm.springCharged) continue;
-      // Distinct target for this daughter; surplus daughters reuse the
-      // fallback (mother's active target) or free-fly when none.
-      const target = (assigned < list.length) ? list[assigned] : fallbackTarget;
-      const ok = this._launchTargetOrFree(arm, target);
-      if (ok) {
+      // Pieces nobody owns yet (a daughter, a net or a catch), and not given to an earlier daughter in this send.
+      const open = list.filter((t) => !used.has(keyOf(t)) && isFree(this.pieceClaimOf(t)));
+      let target = null;
+      if (open.length > 0) {
+        // The first open piece this daughter can hold, reach and fly to on a clear line; none suits her -> she stays docked.
+        target = open.find((t) => this._armFitsPiece(arm, t) && !this._crossingArm(arm, t)) || null;
+        if (!target) continue;
+      } else if (fallbackTarget) {
+        // Surplus daughter: the mother's own piece, only while it is still free and her line to it is clear.
+        if (used.has(keyOf(fallbackTarget)) || !isFree(this.pieceClaimOf(fallbackTarget))
+            || this._crossingArm(arm, fallbackTarget)) continue;
+        target = fallbackTarget;
+      } else if (list.length > 0 && used.size === 0) {
+        // Every listed piece already has an owner (a daughter, a net, a catch): nobody is sent to fly with no piece at all.
+        continue;
+      }
+      if (this._launchTargetOrFree(arm, target)) {
         deployed++;
-        if (assigned < list.length) assigned++;
+        if (target) used.add(keyOf(target));
       }
     }
 
+    // F12: the daughters this send left docked, and why - counted, never silent (the lines to fly at: the list, and the
+    // surplus fallback while it is still a piece to send somebody to).
+    const ready = (a) => a.state === ARM_STATES.DOCKED && !!a.springCharged && !a._aimReserved;
+    const candidates = fallbackTarget && !list.some((t) => keyOf(t) === keyOf(fallbackTarget)) ? [...list, fallbackTarget] : list;
+    const why = this._whyStayed(candidates, ready);
     if (deployed > 0) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${deployed} daughter${deployed > 1 ? 's' : ''} fanned out across ${Math.min(deployed, list.length) || 1} target${(Math.min(deployed, list.length) || 1) > 1 ? 's' : ''}`,
-        priority: 'info',
-      });
-    } else {
+      const pieces = Math.min(deployed, used.size) || 1;
+      const head = `${deployed} daughter${deployed > 1 ? 's' : ''} fanned out across ${pieces} target${pieces > 1 ? 's' : ''}`;
+      const tail = stayedLine(why);
+      eventBus.emit(Events.COMMS_MESSAGE, { text: tail ? `${head}. ${tail}` : head, priority: 'info' });
+    } else if (why.stayed === 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'No daughters available. Check charge status.',
         priority: 'warning',
       });
+    } else {
+      // Daughters were ready and nobody went: the true reason (a crossing line, out of reach, too heavy, or every piece owned).
+      this._sayWarn(fanOutNoneLine(why));
     }
     return deployed;
   }
@@ -3494,10 +3925,11 @@ export class ArmManager {
    * @private
    * @param {'weaver'|'spinner'} type
    * @param {THREE.Vector3|null} [targetDir=null] - Direction to target in ship-local space
+   * @param {((arm: ArmUnit) => boolean)|null} [accept=null] - interlocks-p2: only arms this accepts (a strut whose line stays clear)
    * @returns {ArmUnit|null}
    */
-  _findDockedArm(type, targetDir = null) {
-    const eligible = this.arms.filter(a => a.type === type && armCanLaunchNow(a));
+  _findDockedArm(type, targetDir = null, accept = null) {
+    const eligible = this.arms.filter(a => a.type === type && armCanLaunchNow(a) && (!accept || accept(a)));
     if (eligible.length === 0) return null;
 
     if (targetDir && targetDir.lengthSq() > 0) {
@@ -4131,7 +4563,7 @@ export class ArmManager {
    */
   _launchTargetOrFree(arm, target, opts) {
     return target
-      ? this._launchArm(arm, 'target', () => this._launchDirShip(arm, target), () => arm.deploy(target), opts)
+      ? this._launchArm(arm, 'target', () => this._launchDirShip(arm, target), () => arm.deploy(target), opts, target)
       : this._launchArm(arm, 'freefly', () => this._dockDirShip(arm), () => arm.deployFreefly(), opts);
   }
 
@@ -4142,13 +4574,35 @@ export class ArmManager {
    * @param {() => THREE.Vector3} getDirShip — fire direction in the SHIP frame, re-derived each call
    * @param {() => boolean} fire — the real ArmUnit call
    * @param {{announce?: boolean}} [opts] — see `deployArmByIndex`
+   * @param {object|null} [target] — interlocks-p2: the piece this launch is for (modes 'target' / 'ceremony'). It is hers from
+   *   the request until the spring fires; if it was caught or taken by then she stays docked and says so (R4).
    * @returns {boolean} true when the launch fired or was accepted (deferred); false when refused
    * @private
    */
-  _launchArm(arm, mode, getDirShip, fire, opts) {
+  _launchArm(arm, mode, getDirShip, fire, opts, target = null) {
     const i = this.arms.indexOf(arm);
     if (i < 0) return !!fire();
-    return this.requestClearLaunch(i, getDirShip, fire, mode, opts);
+    const claimed = (mode === 'target' || mode === 'ceremony') && target ? target : null;
+    arm._claimTarget = claimed;
+    const guarded = !claimed ? fire : () => {
+      const why = this._releaseBlock(arm, claimed);
+      if (why) {
+        arm._claimTarget = null;
+        this._sayWarn(launchDroppedLine(arm.displayName, why));
+        return false;
+      }
+      // R5 at the spring: the strut was picked for the ship as it stood; the autopilot or an aim may have turned her since
+      // (measured in the real game, Shift+A: clear when picked, crossing a few frames later). Her line is judged again now,
+      // with the strut at its final angle. Her own waiting entry is not a line (_lineSet leaves `arm` out).
+      const crossed = this._crossingArm(arm, claimed);
+      if (crossed) {
+        arm._claimTarget = null;
+        this._sayWarn(launchCrossDroppedLine(arm.displayName, crossed.displayName));
+        return false;
+      }
+      return fire();
+    };
+    return this.requestClearLaunch(i, getDirShip, guarded, mode, opts);
   }
 
   /**

@@ -512,7 +512,6 @@ export class PlayerSatellite extends THREE.Group {
     this._rosaGlowClock = 0;
     this._rosaGlowIdleFloor = 0;
     this._thrusterGlowTargets = new Map(); // thruster mesh → { glow, plume, outerGlow, intensity }
-    this._differentialFireTargets = [0, 0, 0, 0]; // per-nozzle attitude rotation intensity [TOP, BOTTOM, RIGHT, LEFT]
     this._activeThrustDir = { x: 0, y: 0, z: 0 };
 
     // AFT FLOWER state (P2 thermal arc — observe-only; charter
@@ -965,7 +964,7 @@ export class PlayerSatellite extends THREE.Group {
       color: 0x996644, metalness: 0.80, roughness: 0.35,
     });
     // FEEP nozzle interior — bright emissive ion-emitter surface (BackSide rendered)
-    // Visually distinct from the copper exterior; emissive modulated by differential firing
+    // Visually distinct from the copper exterior; emissive follows the engine push (trip burn), never a turn
     this._matFEEPInner = new THREE.MeshStandardMaterial({
       color: 0x8899aa, metalness: 0.5, roughness: 0.2,
       emissive: 0x334466, emissiveIntensity: 0.3,
@@ -7648,7 +7647,11 @@ export class PlayerSatellite extends THREE.Group {
     // update loop and menu hero call sites stay stable.
   }
 
-  /** @private Thruster glow — per-nozzle differential for attitude + uniform prograde */
+  /**
+   * @private Tail ion-box glow — lit only while the ion engine pushes (trip burn via
+   * setActiveThrustDirection, or thrustInput.z > 0). Turns never light it: attitude is
+   * cold gas, whose bells are driven below and by fireRcsRotation.
+   */
   _animateThrusterGlow(dt) {
     const ti = this.thrustInput;
     const mag = Math.sqrt(ti.x * ti.x + ti.y * ti.y + ti.z * ti.z);
@@ -7674,11 +7677,7 @@ export class PlayerSatellite extends THREE.Group {
       // stays 0: the orbit and the battery are not touched), so it lights the plume through setActiveThrustDirection.
       if (this._activeThrustDir && this._activeThrustDir.z > 0) progradeTarget = 1.0;
 
-      // Differential attitude-rotation target (per-nozzle, set by setThrusterFire)
-      const diffTarget = this._differentialFireTargets[i] || 0;
-
-      // Composite: max of prograde and differential
-      let target = Math.max(progradeTarget, diffTarget);
+      let target = progradeTarget;
 
       // Suppress thrust output when plume-blocked
       if (blocked) target *= 0.15;
@@ -7741,12 +7740,6 @@ export class PlayerSatellite extends THREE.Group {
         }
       }
     });
-
-    // Reset differential targets — caller must re-set every frame for sustained fire
-    this._differentialFireTargets[0] = 0;
-    this._differentialFireTargets[1] = 0;
-    this._differentialFireTargets[2] = 0;
-    this._differentialFireTargets[3] = 0;
 
     // Attitude (RCS) thrusters — DIRECTION-AWARE (Phase 4; generalized to 3-D
     // for the doghouse pods). thrustInput carries LOCAL translation ΔV. Each
@@ -8904,32 +8897,6 @@ export class PlayerSatellite extends THREE.Group {
   // were removed — manual attitude is now rate-commanded through `commandAttitude`
   // and integrated as real angular momentum in `_tickAttitudeDynamics`.
 
-  /**
-   * Differential FEEP plume — set per-nozzle firing intensity for attitude rotation.
-   * Visual only: does NOT apply torque (the rigid-body integrator handles that).
-   *
-   * Nozzle mapping (same-side nozzle fires, +Z = forward model convention):
-   *   pitch +1 (nose up)    → HT_TOP    (idx 0, at +Y)
-   *   pitch −1 (nose down)  → HT_BOTTOM (idx 1, at −Y)
-   *   yaw   +1 (nose left)  → HT_LEFT   (idx 3, at −X)
-   *   yaw   −1 (nose right) → HT_RIGHT  (idx 2, at +X)
-   *
-   * @param {'pitch'|'yaw'} axis — rotation axis
-   * @param {number} sign — +1 or −1 direction
-   * @param {number} magnitude — 0..1 normalised firing intensity
-   */
-  setThrusterFire(axis, sign, magnitude) {
-    const map = Constants.DIFFERENTIAL_THRUST.NOZZLE_MAP[axis];
-    if (!map) return; // unknown axis (roll etc.) — no-op
-    const key = sign >= 0 ? '1' : '-1';
-    const idx = map[key];
-    if (idx === undefined) return;
-    this._differentialFireTargets[idx] = Math.max(
-      this._differentialFireTargets[idx],
-      Math.min(1, magnitude)
-    );
-  }
-
   // ==========================================================================
   // ATTITUDE DYNAMICS (Phase 3) — real RCS torque, angular momentum, feedback
   // ==========================================================================
@@ -8942,8 +8909,8 @@ export class PlayerSatellite extends THREE.Group {
    * the demanded direction the thrusters produce no torque (coasting is free —
    * §3), so the visual goes dark and no gas is billed for holding the stick at the
    * cap. This mirrors the identical gate in _integrateAttitudeStep so feel, cost,
-   * and physics never disagree. setThrusterFire's signature is preserved
-   * (test-DifferentialThrust asserts it).
+   * and physics never disagree.
+   * Turns light only the cold-gas bells (never the tail ion boxes).
    * @param {number} pitchCmd −1..1 (nose up +)
    * @param {number} yawCmd   −1..1 (nose left +)
    * @param {number} dt seconds
@@ -8969,8 +8936,8 @@ export class PlayerSatellite extends THREE.Group {
 
     // fireRcsRotation owns the flash raise, the puff cadence AND the N₂ billing
     // (kept there so test-RcsPlacement's cost/flash guards still hold).
-    if (pv !== 0) { this.fireRcsRotation('pitch', Math.sign(pv), Math.abs(pv), dt); this.setThrusterFire('pitch', Math.sign(pv), Math.abs(pv)); }
-    if (yv !== 0) { this.fireRcsRotation('yaw', Math.sign(yv), Math.abs(yv), dt); this.setThrusterFire('yaw', Math.sign(yv), Math.abs(yv)); }
+    if (pv !== 0) { this.fireRcsRotation('pitch', Math.sign(pv), Math.abs(pv), dt); }
+    if (yv !== 0) { this.fireRcsRotation('yaw', Math.sign(yv), Math.abs(yv), dt); }
 
     // Latch the post-rate-cap commanded fraction for the audio level
     // (getAttitudeThrustLevel). Post-gate: zero while coasting at the cap, so the

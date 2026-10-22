@@ -18,6 +18,7 @@ import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
 import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE } from './netRouting.js';
 import { computeLeadAim, netMaxReachM } from '../entities/CaptureNet.js';
 import { tripRefuses } from './TransferTrip.js';
+import { isFree, samePiece, netRefusalLine, wrapRefusalLine, SCAN_FIRST_LINE, DAUGHTERS_ONLY_LINE, fanOutNoneText, daughtersHeldBackLine } from './PieceClaim.js';
 import { openingDance } from './OpeningDance.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 
@@ -33,6 +34,9 @@ export function pilotLine(name) {
     ? `Piloting ${name}. The turn pad steers her once she holds station · tap her row in DAUGHTERS again: back to the mother.`
     : `Piloting ${name}. Arrow keys steer her once she holds station · Esc, V or her number again: back to the mother.`;
 }
+
+/** F19: the reason text `AutopilotSystem._rejectAim` sends when the player's own steering ended the turn (AutopilotSystem.js `onManualRotate`). */
+export const MANUAL_AIM_REASON = 'Manual attitude input';
 
 export class InputManager {
   constructor() {
@@ -61,6 +65,8 @@ export class InputManager {
     // S4: Lasso windup state
     /** @type {boolean} Whether lasso is in windup phase */
     this._lassoWindingUp = false;
+    /** @type {object|null} F14: the Shift+A daughters' wait for the net's turn (see _afterNetSettles) */
+    this._netWait = null;
     /** @type {number|null} Windup timeout handle */
     this._lassoWindupTimeout = null;
 
@@ -109,6 +115,11 @@ export class InputManager {
    */
   init(deps) {
     this._deps = deps;
+
+    // interlocks-p2: the daughters' piece-owner check has to see the lasso too (it is not reachable from the ship).
+    if (deps && deps.armManager && deps.lassoSystem && typeof deps.armManager.setLassoSystem === 'function') {
+      deps.armManager.setLassoSystem(deps.lassoSystem);
+    }
 
     // Self-manage: auto-exit arm pilot mode when piloted arm returns or is expended
     // (decoupled from GameFlowManager ARM_RETURNED / ARM_EXPENDED handlers)
@@ -1144,10 +1155,19 @@ export class InputManager {
             if (d.debugOverlay) d.debugOverlay.toggle();
           }
         } else if (e.shiftKey && isGameplay && d.armManager && !e.repeat) {
-          // Shift+D: deploy all docked arms to selected target
-          const allTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
-          d.armManager.deployAllToTarget(allTarget);
-          d.audioSystem?.playClick();
+          // Shift+D (interlocks-p2 Q1): one daughter per piece, best first. The picked piece goes first (or, with none
+          // picked, the best free one); the other docked daughters take the next free pieces.
+          const picked = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+          const { first, more, ownedOnly } = this._fanOutPieces(picked, 'shift_d');
+          if (!first && ownedOnly) {
+            // F1: pieces exist but every one has an owner: send nobody (the free-fly send below would put daughters out
+            // with no piece) and say the same line Shift+N says.
+            this._sayFanOutNone();
+            d.audioSystem?.playDeny?.();
+          } else {
+            d.armManager.deployAllToTarget(first, more);
+            d.audioSystem?.playClick();
+          }
           e.preventDefault();
         } else if (isGameplay && !e.repeat) {
           // D1 (pick-then-launch): if a DOCKED daughter is selected with 1-4,
@@ -1168,6 +1188,15 @@ export class InputManager {
             deployedOk = am.deployArmByIndex(selIdx, target, { announce: true });
             launchedByIndex = true;
           } else {
+            // interlocks-p2: a piece that already has an owner, or every free strut crossing a line already out, is
+            // refused here in one line (the auto-pick below would say the same, then add a generic second line).
+            const refusal = (am && target && typeof am.interlockRefusal === 'function') ? am.interlockRefusal(target) : null;
+            if (refusal) {
+              eventBus.emit(Events.COMMS_MESSAGE, { text: refusal.text, priority: 'warning' });
+              d.audioSystem?.playDeny?.();
+              e.preventDefault();
+              break;
+            }
             d.deployArm();   // auto-pick best docked arm (backstops its own refusals)
             deployedOk = true;
           }
@@ -1854,36 +1883,114 @@ export class InputManager {
   }
 
   /**
-   * Shift+N "Auto-target + launch at debris in range" (hotkey revamp
-   * 2026-06-14): acquire the best in-range debris (top of the TPI-sorted HUD
-   * list, honoring the tracked/IR filter), make it the active target, then
-   * deploy ALL docked daughters at it. Warns via comms when nothing is in
-   * range or no arms are available.
+   * The pieces a one-per-piece send (Shift+D, Shift+N) hands the daughters, best first: `picked` (the player's pick) leads;
+   * the rest are the eligible pieces (the pane's TPI-sorted, tracked/IR-filtered list) that nobody owns yet. With no pick,
+   * the best free piece becomes the pick (selected, so the HUD agrees). interlocks-p2 Q1.
+   * @param {object|null} picked the active target, or null
+   * @param {string} source tag for the acquire (tracing only)
+   * @returns {{first: (object|null), more: object[], ownedOnly: boolean}} `ownedOnly`: pieces exist but every one has an owner
+   * @private
+   */
+  _fanOutPieces(picked, source) {
+    const d = this._deps;
+    const ta = d.targetAcquisition;
+    const out = { first: picked || null, more: [], ownedOnly: false };
+    let eligible = null;
+    try {
+      if (ta && typeof ta.getEligibleTargets === 'function') eligible = ta.getEligibleTargets();
+    } catch (err) {
+      console.error('[fan-out] eligible list error:', err);
+    }
+    if (!Array.isArray(eligible)) {
+      // No pane helper (older mocks): the pick alone, or the legacy single acquire.
+      if (!picked && ta && typeof ta.acquireBestTarget === 'function') out.first = ta.acquireBestTarget({ source });
+      return out;
+    }
+    const pieceOf = (t) => (d.debrisField && typeof d.debrisField.getDebrisById === 'function') ? d.debrisField.getDebrisById(t.id) : null;
+    const free = eligible.filter((t) => {
+      const debris = pieceOf(t);
+      if (!debris) return false;
+      const c = this._pieceClaim(debris);
+      return !c || isFree(c);
+    });
+    if (!picked) {
+      out.ownedOnly = eligible.length > 0 && free.length === 0;
+      if (free.length > 0 && ta && typeof ta.acquireBestTarget === 'function') {
+        out.first = ta.acquireBestTarget({ source }, free);
+      }
+    }
+    for (const t of free) {
+      const debris = pieceOf(t);
+      if (!debris || (out.first && (debris === out.first || debris.id === out.first.id))) continue;
+      out.more.push(debris);
+      if (out.more.length >= 8) break;
+    }
+    return out;
+  }
+
+  /**
+   * Shift+N "Auto-target + launch at debris in range" (hotkey revamp 2026-06-14; interlocks-p2 Q1): acquire the best
+   * in-range piece that nobody owns (top of the TPI-sorted HUD list, honoring the tracked/IR filter), make it the active
+   * target, then send ONE daughter per piece, best first. Warns via comms when nothing is in range or no arms are available.
    * @private
    */
   _autoTargetAndLaunch() {
     const d = this._deps;
-    let acquired = null;
+    let plan = { first: null, more: [], ownedOnly: false };
     try {
       // Unified acquire (top of the TPI-sorted, tracked/IR-filtered pane list),
       // so the pane highlight and the net target always agree.
-      if (d.targetAcquisition && typeof d.targetAcquisition.acquireBestTarget === 'function') {
-        acquired = d.targetAcquisition.acquireBestTarget({ source: 'shift_n' });
-      }
+      plan = this._fanOutPieces(null, 'shift_n');
     } catch (err) {
       console.error('[auto-target-launch] error:', err);
     }
-    if (!acquired) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        source: 'SPACECRAFT', channel: 'CMD',
-        text: 'No debris in range to auto-target.',
-        priority: 'warning',
-      });
+    if (!plan.first) {
+      if (plan.ownedOnly) this._sayFanOutNone();
+      else {
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: 'SPACECRAFT', channel: 'CMD', text: 'No debris in range to auto-target.', priority: 'warning',
+        });
+      }
       return;
     }
     if (d.armManager && typeof d.armManager.deployAllToTarget === 'function') {
-      d.armManager.deployAllToTarget(acquired);
+      d.armManager.deployAllToTarget(plan.first, plan.more);
     }
+  }
+
+  /** interlocks-p2 F1: Shift+D / Shift+N found pieces, but every one already has an owner: the one line, nobody sent. @private */
+  _sayFanOutNone() {
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: 'SPACECRAFT', channel: 'CMD', text: fanOutNoneText(), priority: 'warning',
+    });
+  }
+
+  /** interlocks-p2: who owns `piece` (the arm manager's answer, which sees daughters, nets and the lasso), or null. @private */
+  _pieceClaim(piece, opts) {
+    const am = this._deps && this._deps.armManager;
+    return am && typeof am.pieceClaimOf === 'function' ? am.pieceClaimOf(piece, opts) : null;
+  }
+
+  /**
+   * interlocks-p2 R1: N (the small net, the large net) at a piece a daughter is flying to or lining up a launch for, or a
+   * net is already on its way to: say what to do instead and start nothing. A piece a daughter HOLDS is not refused here:
+   * N works her tool before this is reached (findHoldingDaughter), and any other route to a held piece is refused like the rest.
+   * @param {object|null} piece
+   * @returns {boolean} true when refused
+   * @private
+   */
+  _refuseNetAtOwnedPiece(piece) {
+    if (!piece) return false;
+    const claim = this._pieceClaim(piece);
+    if (!claim || isFree(claim)) return false;
+    const text = netRefusalLine(claim);
+    if (!text) return false;
+    eventBus.emit(Events.LASSO_DENIED, { reason: 'piece_owned' });
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text, source: 'SYSTEM', channel: 'CMD', priority: 'warning', _lassoFeedback: true,
+    });
+    this._deps.audioSystem?.playDeny?.();
+    return true;
   }
 
   /**
@@ -1901,16 +2008,9 @@ export class InputManager {
    */
   _fieldCenterSalvage() {
     const d = this._deps;
-
-    // (1) Mother → field center. Prefer the "best cluster" helper; fall back to
-    // the currently-selected cluster for older DebrisMap stubs.
-    if (d.debrisMap) {
-      if (typeof d.debrisMap.engageBestCluster === 'function') {
-        d.debrisMap.engageBestCluster();
-      } else if (typeof d.debrisMap.engageSelectedCluster === 'function') {
-        d.debrisMap.engageSelectedCluster();
-      }
-    }
+    // interlocks-p2 F17: a newer Shift+A ends an older press's wait at once, before anything else. Whichever way this press goes (a refusal,
+    // a daughters-only send that never reaches `_afterNetSettles`), the older press's daughters are never sent a second time.
+    if (this._netWait) this._netWait.settle('drop');
 
     // Build the TPI-sorted, tracked/IR-filtered eligible debris list once, via
     // the unified helper so this shares the pane's exact eligibility rule.
@@ -1929,45 +2029,67 @@ export class InputManager {
       console.error('[field-center-salvage] target list error:', err);
     }
 
+    // interlocks-p2 R8: nothing is tracked yet (no scan): the daughters used to fly out with no piece and be reeled
+    // straight back (measured S7b). Say what to do first and start nothing, not even the autopilot.
+    if (!Array.isArray(eligible) || eligible.length === 0) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'SPACECRAFT', channel: 'CMD', text: SCAN_FIRST_LINE, priority: 'warning',
+      });
+      d.audioSystem?.playDeny?.();
+      return;
+    }
+
+    // (1) Mother → field center. Prefer the "best cluster" helper; fall back to
+    // the currently-selected cluster for older DebrisMap stubs.
+    if (d.debrisMap) {
+      if (typeof d.debrisMap.engageBestCluster === 'function') {
+        d.debrisMap.engageBestCluster();
+      } else if (typeof d.debrisMap.engageSelectedCluster === 'function') {
+        d.debrisMap.engageSelectedCluster();
+      }
+    }
+
     // Count docked, spring-charged daughters so we can carve out distinct
     // targets for them and reserve a SEPARATE one for the mother net.
     const arms = (d.armManager && Array.isArray(d.armManager.arms)) ? d.armManager.arms : [];
     const dockedCount = arms.filter(a =>
       a && a.state === Constants.ARM_STATES.DOCKED && a.springCharged).length;
 
-    // Resolve debris objects for the top-N (one per docked daughter).
-    const daughterDebris = [];
-    const claimedIds = new Set();
+    // Resolve debris objects, best first, skipping any piece somebody already owns (a daughter, a net, a catch).
+    const free = [];
     for (const t of eligible) {
-      if (daughterDebris.length >= dockedCount) break;
       const debris = d.debrisField.getDebrisById(t.id);
-      if (debris) {
-        daughterDebris.push(debris);
-        claimedIds.add(t.id);
-      }
+      if (!debris) continue;
+      const claim = this._pieceClaim(debris);
+      if (claim && !isFree(claim)) continue;
+      free.push(debris);
     }
 
-    // (3) Pick the mother-net target: best in-range debris NOT claimed by a
-    // daughter (separate target). Falls back to none when the field is small.
+    // (3) F9 (coordinator 2026-10-23): the NET takes the best free piece inside the reach of the net that would fire at it
+    // (measured S7c: the daughters used to take the near pieces first and the net had nothing in reach); then the daughters take
+    // the remaining free pieces, one each, best first. A daughter is never sent to the piece the net takes.
     let netTarget = null;
-    for (const t of eligible) {
-      if (claimedIds.has(t.id)) continue;
-      const debris = d.debrisField.getDebrisById(t.id);
-      if (debris) { netTarget = debris; break; }
+    for (const debris of free) {
+      if (this._withinNetReach(debris)) { netTarget = debris; break; }
     }
+    const daughterDebris = free.filter((x) => x !== netTarget).slice(0, dockedCount);
 
-    // (2) Fan the daughters out to distinct debris. Surplus daughters (more
-    // daughters than debris) fall back to the mother's active target.
-    if (d.armManager && typeof d.armManager.deployAllToDistinctTargets === 'function') {
-      const fallback = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
-      d.armManager.deployAllToDistinctTargets(daughterDebris, fallback);
-    } else if (d.armManager && typeof d.armManager.deployAllToTarget === 'function') {
-      // Legacy fallback: single-target deploy-all.
-      d.armManager.deployAllToTarget(daughterDebris[0] || (d.targetSelector ? d.targetSelector.getActiveTarget() : null));
-    }
+    // (2) Fan the daughters out to distinct debris. Surplus daughters (more daughters than debris) fall back to the
+    // mother's active target, unless that is the piece the net will take.
+    const sendDaughters = () => {
+      if (d.armManager && typeof d.armManager.deployAllToDistinctTargets === 'function') {
+        let fallback = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+        if (fallback && netTarget && fallback.id === netTarget.id) fallback = null;
+        d.armManager.deployAllToDistinctTargets(daughterDebris, fallback);
+      } else if (d.armManager && typeof d.armManager.deployAllToTarget === 'function') {
+        // Legacy fallback: single-target deploy-all.
+        d.armManager.deployAllToTarget(daughterDebris[0] || (d.targetSelector ? d.targetSelector.getActiveTarget() : null));
+      }
+    };
 
-    // (3 cont.) Fire the mother net at its separate target. Make it the active
-    // target so fireLasso() casts at it, then fire.
+    // (3 cont.) The net goes FIRST (F10): make its piece the active target so fireLasso() casts at it, then fire. The ship's own
+    // turn for the net happens before any daughter launches; they go once the ship has settled (their lines are judged
+    // again at the spring). Ordering inside this key, not a new limit on the player.
     if (netTarget && d.lassoSystem) {
       if (d.targetSelector && typeof d.targetSelector.setTarget === 'function') {
         d.targetSelector.setTarget(netTarget);
@@ -1977,13 +2099,118 @@ export class InputManager {
         if (d.navSphere) d.navSphere.setSelectedTarget(netTarget.id);
       }
       this.fireLasso();
+      this._afterNetSettles(sendDaughters);
+      return;
+    }
+    sendDaughters();
+    if (free.length > 0 && !netTarget) {
+      // interlocks-p2 R8: pieces are left, all past what a net can reach: daughters only, and the line says so.
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'SPACECRAFT', channel: 'CMD', text: DAUGHTERS_ONLY_LINE, priority: 'info',
+      });
     } else if (!netTarget && daughterDebris.length === 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'SPACECRAFT', channel: 'CMD',
-        text: 'No debris in range. Closing on field center.',
+        text: free.length === 0 ? fanOutNoneText() : 'No debris in range. Closing on field center.',
         priority: 'warning',
       });
     }
+  }
+
+  /**
+   * F10 / F14: run `send` (Shift+A's daughter launches) once the ship has settled after the net's own turn. Nothing to wait for
+   * when the ship is not turning for the net and no lasso windup is pending (the net left at once, or was refused): `send`
+   * runs now. Otherwise it runs, a tick later, when the net has left (NET_FIRED from the mother, LASSO_FIRED), was refused
+   * (LASSO_DENIED), or the aim ended without it (AIM_SEQUENCE_END rejected; resolved -> a short grace for the net to leave),
+   * and in any case after the aim's own time limit plus 3 s. Runs at most once, and:
+   *   - the clock is GAME time (`_tickNetWait(dt)` from `processInput`, which does not run while paused), not the wall clock;
+   *     when the limit is reached while the ship still turns for the net, the wait goes on in 3 s steps (twice at most);
+   *   - GAME_RESET (a new game) cancels it: nothing is sent;
+   *   - when the player's own steering ended the turn (the aim rejected after a MOTHER_MANUAL_ROTATE), the daughters stay
+   *     docked and the line says how to send them;
+   *   - the listeners are removed on every exit, in the tick after the decision (removing the manual-rotate listener inside
+   *     the emit that is still walking its set would skip it).
+   * @param {function(): void} send
+   * @private
+   */
+  _afterNetSettles(send) {
+    const d = this._deps || {};
+    const ap = d.autopilotSystem;
+    const turning = !!(ap && typeof ap.isAiming === 'function' && ap.isAiming());
+    if (this._netWait) this._netWait.settle('drop');          // a new Shift+A: the older wait ends, its daughters are not sent twice
+    if (!turning && !this._lassoWindingUp) { send(); return; }
+    const wait = {
+      elapsed: 0,                                                // game seconds since the wait began
+      cap: ((Constants.AIM && Constants.AIM.AIM_TIMEOUT_S) || 30) + 3,
+      extended: 0,
+      graceAt: null,                                             // game second at which a resolved aim without a net lets them go
+      done: false, rejected: false, steered: false, reason: null,   // reason: the text AIM_SEQUENCE_END carried when the turn was rejected
+      settle: null,
+    };
+    const off = () => {
+      eventBus.off(Events.NET_FIRED, onNet);
+      eventBus.off(Events.LASSO_FIRED, onGo);
+      eventBus.off(Events.LASSO_DENIED, onGo);
+      eventBus.off(Events.AIM_SEQUENCE_END, onAim);
+      eventBus.off(Events.MOTHER_MANUAL_ROTATE, onSteer);
+      eventBus.off(Events.GAME_RESET, onReset);
+      if (this._netWait === wait) this._netWait = null;
+    };
+    // `how`: 'send' | 'drop'. The steering check is made in the tick after, once every listener of this emit has run.
+    wait.settle = (how) => {
+      if (wait.done) return;
+      wait.done = true;
+      setTimeout(() => {                  // after the call that emitted this has unwound (the net is out, the turn is over)
+        off();
+        if (how === 'drop') return;
+        // F19: the line is true only when the turn ended BECAUSE of the steering (the autopilot's 'Manual attitude input'); a turn
+        // that ended for another reason after an arrow key (target changed, timeout) sends them as before.
+        if (wait.rejected && wait.steered && wait.reason === MANUAL_AIM_REASON) this._sayDaughtersHeldBack();
+        else send();
+      }, 0);
+    };
+    const onNet = (e) => { if (e && e.source === 'mother') wait.settle('send'); };
+    const onGo = () => wait.settle('send');
+    const onSteer = () => { wait.steered = true; };
+    const onReset = () => wait.settle('drop');
+    const onAim = (e) => {
+      if (e && e.mode !== 'net') return;
+      if (e && e.result === 'rejected') { wait.rejected = true; wait.reason = e.reason === undefined ? null : e.reason; wait.settle('send'); return; }
+      if (wait.graceAt === null) wait.graceAt = wait.elapsed + 1.5;
+    };
+    eventBus.on(Events.NET_FIRED, onNet);
+    eventBus.on(Events.LASSO_FIRED, onGo);
+    eventBus.on(Events.LASSO_DENIED, onGo);
+    eventBus.on(Events.AIM_SEQUENCE_END, onAim);
+    eventBus.on(Events.MOTHER_MANUAL_ROTATE, onSteer);
+    eventBus.on(Events.GAME_RESET, onReset);
+    this._netWait = wait;
+  }
+
+  /**
+   * F14: the clock of `_afterNetSettles`, in game seconds. Called every frame from `processInput(dt)`, which the game loop
+   * skips while paused, so paused time does not count.
+   * @param {number} dt
+   * @private
+   */
+  _tickNetWait(dt) {
+    const w = this._netWait;
+    if (!w || w.done || !(dt > 0)) return;
+    w.elapsed += dt;
+    if (w.graceAt !== null && w.elapsed >= w.graceAt) { w.settle('send'); return; }
+    if (w.elapsed >= w.cap) {
+      const ap = this._deps && this._deps.autopilotSystem;
+      if (ap && typeof ap.isAiming === 'function' && ap.isAiming() && w.extended < 2) { w.extended++; w.cap += 3; return; }
+      w.settle('send');
+    }
+  }
+
+  /** F14: the player steered while the ship turned for the net: the daughters stay docked; how to send them. @private */
+  _sayDaughtersHeldBack() {
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: 'SPACECRAFT', channel: 'CMD', priority: 'info',
+      text: daughtersHeldBackLine(),   // F16: Shift+A on a keyboard; a row in DAUGHTERS + the SEND DAUGHTER chip on glass
+    });
   }
 
   /**
@@ -2157,6 +2384,7 @@ export class InputManager {
    */
   processInput(dt) {
     const d = this._deps;
+    this._tickNetWait(dt);       // F14: the Shift+A daughters' wait for the net's turn runs on game time
 
     // CP-2: mother-mounted de-spin laser — hold L. Set the fire intent every
     // frame BEFORE the overlay early-returns so it always releases when an
@@ -2488,6 +2716,9 @@ export class InputManager {
     // (no aim slew toward a shot that cannot be fired).
     const activeTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
     const cns = d.captureNetSystem;
+    // interlocks-p2 R1: a piece a daughter is flying to / lining up a launch for, or a net is already flying at, is
+    // somebody's: say what to do instead and start nothing (before any routing, so both nets are covered).
+    if (activeTarget && this._refuseNetAtOwnedPiece(activeTarget)) return;
     if (cns && Constants.isFeatureEnabled('CAPTURE_NET')) {
       // (typeof guard: the net system always has the getter; the idiom keeps headless mocks without one working)
       if (typeof cns.getMotherNetCount === 'function' && cns.getMotherNetCount() <= 0) {
@@ -2570,7 +2801,7 @@ export class InputManager {
           aligned = (Math.acos(dot) * 180 / Math.PI) <= Constants.AIM.NET_AIM_TOLERANCE_DEG;
         }
         if (!aligned) {
-          ap.requestAimRotation(provider, { mode: 'net' })
+          ap.requestAimRotation(provider, { mode: 'net', aimDir: aimDir || undefined })
             .then(() => this._castLasso({ afterAim: true }))
             .catch((err) => {
               // aborted — nothing cast; a timed-out aim / lost target leaves the ship quiet (as the net does)
@@ -2619,6 +2850,12 @@ export class InputManager {
       }
       if (fwdDir.lengthSq() > 0) fwdDir.normalize();
       const target = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+      // interlocks-p2 R1: the piece may have been taken during the windup (a daughter's launch, a net): re-check at release.
+      if (target && this._refuseNetAtOwnedPiece(target)) {
+        d.autopilotSystem?.releaseAttitudeHold?.();
+        if (afterAim) d.player.holdHeadingAfterRefusal?.();
+        return;
+      }
       // Review R2: the target is read again here, after the windup. If it is now a piece the small net cannot hold
       // (the player Tab-selected a heavier one in the meantime), hand it to the mother-net path exactly as fireLasso
       // routes it, instead of letting the lasso refuse it. Nothing was spent yet; the attitude hold is released first.
@@ -2696,6 +2933,13 @@ export class InputManager {
     const checkRefusals = (relVelScenePerS) => {
       if (!target || target.alive === false) {
         refuse('Target lost.'); return true;
+      }
+      // interlocks-p2 R1: one owner per piece. Checked now (pre-slew) and again at fire time (a daughter's launch or a
+      // lasso may have taken the piece during the slew).
+      {
+        const claim = this._pieceClaim(target);
+        const owned = claim && !isFree(claim) ? netRefusalLine(claim) : null;
+        if (owned) { refuse(owned); return true; }
       }
       // Mass rating — hard refuse above the net's rated mass (strain roll in
       // the 80–100% band lands with Phase A; a 23 t CZ-5B can never be held).
@@ -2872,9 +3116,19 @@ export class InputManager {
       if (errDeg <= Constants.AIM.NET_AIM_TOLERANCE_DEG) { fireNow(); return; }
     }
 
+    // interlocks-p2 R7 (owner Q3 A): the turn to the net's attitude is refused only when a daughter's line would then run
+    // through the ship. (AutopilotSystem.requestAimRotation backstops any other net aim with the same test.)
+    if (aimDir && d.armManager && typeof d.armManager.netTurnWraps === 'function') {
+      const wrap = d.armManager.netTurnWraps(aimDir);
+      if (wrap.wraps) {
+        refuse(wrapRefusalLine((wrap.arm && wrap.arm.displayName) || 'A daughter'));
+        return;
+      }
+    }
+
     // Otherwise rotate to attitude, then fire on resolve. Reject = no fire, no
     // inventory decrement (abort comms emitted by AutopilotSystem).
-    ap.requestAimRotation(provider, { mode: 'net' })
+    ap.requestAimRotation(provider, { mode: 'net', aimDir: aimDir || undefined })
       .then(() => {
         // §9.6: aim-resolve double-tick — the slew settled on the launch
         // attitude (the "locked, then confirmed" gesture before the thump).
@@ -3016,6 +3270,25 @@ export class InputManager {
   }
 
   /**
+   * interlocks-p2 R8: is the piece inside the reach of the net that N would fire at it (the lasso's LASSO_RANGE for a
+   * piece <= 10 kg, the large net's netMaxReachM above)? True when the distance is unknown (headless mocks).
+   * @private
+   */
+  _withinNetReach(piece) {
+    const mass = piece.mass || 0;
+    const reachM = classifyNetTarget(mass).band === 'lasso'
+      ? Constants.LASSO_RANGE
+      : netMaxReachM(Constants.CAPTURE_NET.LARGE);
+    const d = this._deps || {};
+    if (!piece._scenePosition || !d.player || typeof d.player.getPosition !== 'function') return true;
+    const p = d.player.getPosition();
+    if (!p) return true;
+    const dx = p.x - piece._scenePosition.x, dy = p.y - piece._scenePosition.y, dz = p.z - piece._scenePosition.z;
+    const distM = Math.sqrt(dx * dx + dy * dy + dz * dz) * 100000;   // 1 m = 1e-5 scene units
+    return !(reachM > 0) || distM <= reachM;
+  }
+
+  /**
    * The daughter, if any, that is HOLDING the active target — N works her tool without pilot mode (DECISIONS §33 row 6).
    * Order: the selected daughter (`armManager.selectedArmIndex`) if she is in STATION_KEEP on the active target, else
    * the first of `armManager.arms` in STATION_KEEP whose `_stationKeepTarget || target` is the active target.
@@ -3028,7 +3301,9 @@ export class InputManager {
       ? d.targetSelector.getActiveTarget() : null;
     if (!am || !Array.isArray(am.arms) || !target) return null;
     const SK = Constants.ARM_STATES.STATION_KEEP;
-    const holds = (a) => !!a && a.state === SK && (a._stationKeepTarget || a.target) === target;
+    // F2: by id, as the claim does - a Tab-selected snapshot of her piece is still her piece (identity `===` missed it
+    // and the claim then refused N at a piece she holds).
+    const holds = (a) => !!a && a.state === SK && samePiece(a._stationKeepTarget || a.target, target);
     const sel = (am.selectedArmIndex >= 0 && am.selectedArmIndex < am.arms.length) ? am.arms[am.selectedArmIndex] : null;
     if (holds(sel)) return sel;
     for (let i = 0; i < am.arms.length; i++) if (holds(am.arms[i])) return am.arms[i];

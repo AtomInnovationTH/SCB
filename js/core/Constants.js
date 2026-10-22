@@ -2781,23 +2781,11 @@ export const Constants = {
   ],
 
   // =========================================================================
-  // DIFFERENTIAL FEEP THRUST — per-nozzle attitude rotation plume mapping
+  // TAIL ION-BOX GLOW — lerp rate and nozzle-liner emissive for the four tail boxes.
+  // (Name kept from the old per-nozzle turn mapping, removed 2026-10-22: turns are cold
+  // gas and light only the bells; these boxes glow only while the ion engine pushes.)
   // =========================================================================
-  // Maps (axis, sign) → mainThruster array index in PlayerSatellite._buildThrusters.
-  // Model convention: +Z = forward (prograde). FEEP nozzles at aft face (−Z) push
-  // the ship forward (+Z). Nozzle on the SAME side as the target rotation fires:
-  //   pitch +1 (nose up)    → HT_TOP   (idx 0, at +Y): thrust above CoM lifts nose
-  //   pitch −1 (nose down)  → HT_BOTTOM(idx 1, at −Y): thrust below CoM dips nose
-  //   yaw   +1 (nose left)  → HT_LEFT  (idx 3, at −X): thrust left of CoM yaws left
-  //   yaw   −1 (nose right) → HT_RIGHT (idx 2, at +X): thrust right of CoM yaws right
-  // Note: Code sign convention — positive yaw = ArrowLeft = nose-left (a positive
-  // yaw command torques about +Y by the right-hand rule; see ATTITUDE and
-  // PlayerSatellite.commandAttitude — the former rotateYaw(+angle) is retired).
   DIFFERENTIAL_THRUST: {
-    NOZZLE_MAP: {
-      pitch: { '1': 0, '-1': 1 },   // +1→HT_TOP, −1→HT_BOTTOM
-      yaw:   { '1': 3, '-1': 2 },   // +1→HT_LEFT, −1→HT_RIGHT
-    },
     LERP_RATE: 8,                    // per-second exponential approach rate (matches legacy glow lerp)
     INNER_EMISSIVE_BASE: 0.3,       // idle emissive intensity for nozzle interior liner
     INNER_EMISSIVE_FIRE_SCALE: 1.2, // additional emissiveIntensity per unit firing intensity

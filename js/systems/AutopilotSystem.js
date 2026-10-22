@@ -25,6 +25,7 @@ import { engineGasKg, engineDeltaV, engineTankDryKg } from './ResourceSystem.js'
 import { wingsHint } from './WingsHint.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { tripRefuses } from './TransferTrip.js';
+import { wrapRefusalLine } from './PieceClaim.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
@@ -2552,6 +2553,8 @@ export class AutopilotSystem {
    * @param {import('../entities/ArmManager.js').ArmManager} [opts.armManager]
    * @param {import('../entities/ArmUnit.js').ArmUnit} [opts.arm] — daughter arm (for α slew)
    * @param {number} [opts.pairIndex] — chosen pair primary index (daughter)
+   * @param {{x,y,z}} [opts.aimDir] — net mode: the aim direction the caller has JUST read from its provider; the wrap check
+   *   uses it instead of reading the provider again (a stateful provider must not get an extra sample)
    * @returns {Promise<{ mode:string, launchDir:{x,y,z} }>}
    */
   requestAimRotation(dirProvider, opts = {}) {
@@ -2576,6 +2579,28 @@ export class AutopilotSystem {
         const reason = 'a daughter is out on her line';
         eventBus.emit(Events.COMMS_MESSAGE, { text: `Launch aborted — ${reason}.`, priority: 'warning', source: 'HOUSTON' });
         return Promise.reject(new Error(reason));
+      }
+    }
+
+    // interlocks-p2 R7 (owner Q3 A): a net aim turns the mother with a daughter out on her line (the arrow keys have their
+    // own limit). Refused only when the attitude the aim leads to would run her line through the ship. InputManager's
+    // fireMotherNet asks the same question first (with its own sound); this is the backstop for every other net aim.
+    if (mode === 'net') {
+      const am = opts.armManager || this._armManager;
+      if (am && typeof am.netTurnWraps === 'function') {
+        // F7: the caller's own provider can be stateful (the large net's lead-aim smooths the relative velocity with an EMA on
+        // every call), so an extra read here would shift the aim. Callers pass the direction they have just read as `aimDir`;
+        // only a caller that does not asks the provider (once).
+        const dir = opts.aimDir || provider();
+        const wrap = dir ? am.netTurnWraps(dir) : null;
+        if (wrap && wrap.wraps) {
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            text: wrapRefusalLine((wrap.arm && wrap.arm.displayName) || 'A daughter'), priority: 'warning', source: 'HOUSTON',
+          });
+          const err = new Error('a daughter\'s line would wrap the ship');
+          err.code = 'LINE_WRAP';
+          return Promise.reject(err);
+        }
       }
     }
 
@@ -2822,7 +2847,6 @@ export class AutopilotSystem {
    */
   _turnFire(c, name, sign, m, seconds) {
     const p = this._player;
-    if (typeof p.setThrusterFire === 'function') p.setThrusterFire(name, sign, m);
     let fm = m, fdt = seconds;
     if (m < TURN_MIN_MAG) { fm = TURN_MIN_MAG; fdt = seconds * m / TURN_MIN_MAG; }
     if (typeof p.fireRcsRotation === 'function') p.fireRcsRotation(name, sign, fm, fdt);
@@ -3042,11 +3066,9 @@ export class AutopilotSystem {
       const pMag = Math.abs(axLocal.x) * mag;
       const yMag = Math.abs(axLocal.y) * mag;
       if (pMag > 0.02) {
-        this._player.setThrusterFire('pitch', pitchSign, pMag);
         this._player.fireRcsRotation('pitch', pitchSign, pMag, dt);
       }
       if (yMag > 0.02) {
-        this._player.setThrusterFire('yaw', yawSign, yMag);
         this._player.fireRcsRotation('yaw', yawSign, yMag, dt);
       }
     }

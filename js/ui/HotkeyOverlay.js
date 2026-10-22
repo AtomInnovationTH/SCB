@@ -160,8 +160,8 @@ export const HOTKEY_GROUPS = [
       [['E'], 'Electric tether out / in'],
       'col',
       // More for Daughters: launch → fly → reel → cut (destructive last).
-      [['Shift D'], 'Launch all at target'],
-      [['Shift N'], 'Send all to best debris'],
+      [['Shift D'], 'Launch all, one per piece'],
+      [['Shift N'], 'Send all to the best pieces'],
       [[';', '\''], 'Launch speed down / up'],
       'gap',
       [['↑ ↓ ← →'], 'Circle target'],

@@ -242,7 +242,7 @@ const SYSTEMS = [
   {
     id: 'PROPULSION', label: 'PROPULSION',
     anchor: [ 0, 0, -1.0 * M ],
-    role: 'ion + cold-gas steering',
+    role: 'ion thrust + cold-gas steering',
     parts: [
       { id: 'feep', name: 'ION THRUSTERS (FEEP)', risk: 'YELLOW', tier: 'major', codexId: 'feep_thruster',
         massKg: 8, priority: 8, live: 'feep',
