@@ -186,6 +186,8 @@ const _v3AttB = new THREE.Vector3();
 const _v3AttC = new THREE.Vector3();
 const _v3AttD = new THREE.Vector3();
 const _v3AttE = new THREE.Vector3();
+const _v3SlA = new THREE.Vector3();   // sloth mode: the boxes' torque this substep (kept apart from the cold-gas torque)
+const _v3SlB = new THREE.Vector3();
 const _qAttA  = new THREE.Quaternion();
 const _qAttB  = new THREE.Quaternion();
 const _qAttC  = new THREE.Quaternion();
@@ -465,6 +467,20 @@ export class PlayerSatellite extends THREE.Group {
     // _tickAttitudeDynamics and cleared when nothing commands attitude.
     this._rcsOmega = new THREE.Vector3();
     this._attitudeCmd = null;
+    // Sloth mode (owner 2026-10-23): the tail ion boxes turn her when the steering gas is out. Warm state is NOT saved:
+    // after a load the cathodes warm again. `_slothLitS[i]` = full-output seconds box i was lit since the last frame-end bill
+    // (order = Constants.THRUSTERS = the mainThrusters meshes); `_slothGlow[i]` = this frame's lit fraction for the glow.
+    this._slothWarm = false;
+    this._slothWarming = false;
+    this._slothWarmS = 0;
+    this._slothWasOn = false;
+    this._slothLitS = [0, 0, 0, 0];
+    this._slothGlow = [0, 0, 0, 0];
+    this._slothBox = null;
+    this._capP = 1;
+    this._capY = 1;
+    this._capMsgOn = false;
+    this._gasSpin = false;   // sloth mode: the current spin was made by the cold gas, so the gas stops it (see attitudeTorqueSource)
     // net-refuse-hold: a refused mother-net shot / lasso cast leaves the ship pointed where the aim turned it: no
     // recenter toward prograde until the next deliberate attitude change. See holdHeadingAfterRefusal.
     this._recenterPaused = false;
@@ -7678,6 +7694,9 @@ export class PlayerSatellite extends THREE.Group {
       if (this._activeThrustDir && this._activeThrustDir.z > 0) progradeTarget = 1.0;
 
       let target = progradeTarget;
+      // sloth mode (D8): a box the slow turn lights glows for as long as it thrusts - per box, only that box; max-combined
+      // with the shared trip/prograde target. Warm-up gives no glow (no thrust).
+      if (this._slothGlow && this._slothGlow[i] > target) target = this._slothGlow[i];
 
       // Suppress thrust output when plume-blocked
       if (blocked) target *= 0.15;
@@ -8971,15 +8990,26 @@ export class PlayerSatellite extends THREE.Group {
     if (yv > 0 && w.y >=  A.MAX_RATE) yv = 0;
     if (yv < 0 && w.y <= -A.MAX_RATE) yv = 0;
 
+    // D10: the torque source is chosen in ONE place. Sloth mode (tank below G_min): the held key lights the tail box that
+    // turns her that way in the integrator — no cold-gas puffs, no gas, no hiss. Otherwise cold gas, with D5's cap.
+    this._capP = 1; this._capY = 1;
+    if (pv === 0 && yv === 0) this._capMsgOn = false;
+    if ((pv !== 0 || yv !== 0) && this.attitudeTorqueSource({ spinUp: true }) === 'tailBoxes') {
+      this._cmdTauFrac = 0;
+      return;
+    }
+    if (pv !== 0 || yv !== 0) this._capColdSpinUp(pv, yv, dt);
+    const capP = this._capP, capY = this._capY;
+
     // fireRcsRotation owns the flash raise, the puff cadence AND the N₂ billing
     // (kept there so test-RcsPlacement's cost/flash guards still hold).
-    if (pv !== 0) { this.fireRcsRotation('pitch', Math.sign(pv), Math.abs(pv), dt); }
-    if (yv !== 0) { this.fireRcsRotation('yaw', Math.sign(yv), Math.abs(yv), dt); }
+    if (pv !== 0 && capP > 0) { this.fireRcsRotation('pitch', Math.sign(pv), Math.abs(pv) * capP, dt); }
+    if (yv !== 0 && capY > 0) { this.fireRcsRotation('yaw', Math.sign(yv), Math.abs(yv) * capY, dt); }
 
     // Latch the post-rate-cap commanded fraction for the audio level
     // (getAttitudeThrustLevel). Post-gate: zero while coasting at the cap, so the
     // hiss goes quiet exactly when the plume does.
-    this._cmdTauFrac = Math.min(1, Math.hypot(pv, yv));
+    this._cmdTauFrac = Math.min(1, Math.hypot(pv * capP, yv * capY));
   }
 
   /**
@@ -9095,6 +9125,372 @@ export class PlayerSatellite extends THREE.Group {
     );
   }
 
+  // ==========================================================================
+  // SLOTH MODE (owner 2026-10-23, DECISIONS §37) — the four tail ion boxes turn her when the steering gas is out
+  // ==========================================================================
+
+  /**
+   * Steering gas (POOL units: the 20-unit tank is 6 kg of nitrogen, 0.3 kg per unit) a cold-gas turn bills per rad/s of
+   * spin about a body axis: k·I/τ (k = the rate ×
+   * RCS_ATTITUDE_N2_FACTOR). `mode` picks the torque the price is per: 'stop' = the rate-null servo's reference (the bigger of
+   * the pitch/yaw couples: it bills |τ|/τ_ref of full flow), 'up' = the axis's own couple (the arrow key's and the
+   * autopilot's torque × time bill). 0 = no cold-gas authority on that axis (a stub). @private
+   */
+  _coldGasPerRadS(axis, mode = 'up') {
+    const tau = mode === 'stop' ? Math.max(this._coupleTauMag('x'), this._coupleTauMag('y')) : this._coupleTauMag(axis);
+    if (!(tau > 1e-3)) return 0;
+    return this._coldGasRate * (Constants.ATTITUDE.RCS_ATTITUDE_N2_FACTOR ?? 1) * this._attitudeMOI(axis) / tau;
+  }
+
+  /**
+   * G_stop(ω): the steering gas (POOL units, 0.3 kg of nitrogen each) the arrest will bill to bring a spin to rest (pitch + yaw;
+   * roll is never billed).
+   * Derived from the billing law of the path that arrests: the rate-null servo bills k × ∫(|τ|/τ_ref)dt = k·I·ω/τ_ref
+   * (measured within 1% for pitch and yaw at 0.02, 0.1 and 0.3 rad/s, 2026-10-23; test-SlothMode.js pins the rest). `autopilot`: the autopilot's brake bills
+   * k × mag × t = k·I·Δω/τ_axis instead (its own axis's couple: yaw is 4.8% dearer), so it prices with that.
+   * @param {{x:number,y:number}} [w] body rate (rad/s); default her live rate
+   * @param {boolean} [autopilot=false]
+   * @returns {number} pool units
+   */
+  slothStopGasPool(w = this._rcsOmega, autopilot = false) {
+    if (!w) return 0;
+    const mode = autopilot ? 'up' : 'stop';
+    return this._coldGasPerRadS('x', mode) * Math.abs(w.x) + this._coldGasPerRadS('y', mode) * Math.abs(w.y);
+  }
+
+  /**
+   * G_min: the gas to spin up to MIN_SPIN_DEG_S plus the gas to stop from it (the worse of pitch and yaw). Below it the
+   * tank cannot pay for even a 1°/s turn with its stop, so every turn is a slow one on the tail boxes. 0 for a stub with
+   * no cold-gas couples (never sloth mode). POOL units (the bare ship: about 0.034 pool = 10 g of nitrogen).
+   * @returns {number} pool units
+   */
+  slothGasFloorPool() {
+    const w1 = Constants.SLOTH.MIN_SPIN_DEG_S * Math.PI / 180;
+    const per = (axis) => this._coldGasPerRadS(axis, 'up') + this._coldGasPerRadS(axis, 'stop');   // spin up + stop
+    return w1 * Math.max(per('x'), per('y'));
+  }
+
+  /**
+   * Sloth mode: the tank holds less steering gas than G_min. Never on an off-play frame (menu picture: nothing bills).
+   * @returns {boolean}
+   */
+  isSlothMode() {
+    if (this._offPlayFrame === true || !this.resources) return false;
+    const floor = this.slothGasFloorPool();
+    return floor > 0 && (this.resources.coldGas || 0) < floor;
+  }
+
+  /** Steering gas (pool units) under which the tank counts as empty for the torque selector (F1.6): GAS_DUST_FRAC × G_min. */
+  slothGasDustPool() {
+    return Constants.SLOTH.GAS_DUST_FRAC * this.slothGasFloorPool();
+  }
+
+  /**
+   * D10 — the ONE place the mother's attitude torque source is chosen. Order: cold gas above the stop reserve →
+   * [reaction wheels: a planned shop upgrade, DECISIONS §2 row 9; the kit plugs in HERE, between the two returns, and can
+   * call `tailBoxTorque` to unload its momentum] → the tail ion boxes. Every turn path asks it: the arrow keys
+   * (`commandAttitude`, the integrator), the rate-null servo, the autopilot's aim, its scripted turn, the trip's turn.
+   * @param {{spinUp?: boolean, rate?: number}} [ask] spinUp:false = an arrest (rate: the |rate error| it is about, rad/s)
+   * @returns {'coldGas'|'tailBoxes'}
+   */
+  attitudeTorqueSource(ask) {
+    if (!this.isSlothMode()) return 'coldGas';
+    // The arrest may always spend what is left (the reserve was kept for it: "when the tank reads empty she is already at
+    // rest"): a spin the cold gas made (`_gasSpin`, cleared when she is back at rest) or any spin the boxes could not
+    // have made (above GAS_ARREST_ABOVE_DEG_S: a kick) is stopped with the gas that remains; the boxes finish the stop
+    // once the tank is dry. A spin the boxes made is stopped by the boxes (D6).
+    // F1.6: a remainder under `slothGasDustPool()` (1% of G_min, ~0.1 g of nitrogen) is empty: the cold servo's frame bill is capped at
+    // half the tank (`gasFrac`), so a grain would fade the torque away for ~18 s while the boxes could be braking her.
+    if (ask && ask.spinUp === false && (this.resources.coldGas || 0) > this.slothGasDustPool()
+        && (this._gasSpin === true || ask.rate > Constants.SLOTH.GAS_ARREST_ABOVE_DEG_S * Math.PI / 180)) return 'coldGas';
+    return 'tailBoxes';
+  }
+
+  /**
+   * The four boxes' force and torque about the ship's centre of mass, from their real places: τ = (r − CoM) × F, with F
+   * along the push (opposite the exhaust, `Constants.THRUSTERS[i].thrustDir`), F = one engine's thrust / 4. Table order =
+   * Constants.THRUSTERS = the `mainThrusters` meshes. `xp/xn/yp/yn` = the box that turns her + / − about that axis (-1
+   * = none). Cached 100 ms and per thrust level (CoM follows the arms).
+   * @returns {{stamp:number, F:number, tau:THREE.Vector3[], xp:number, xn:number, yp:number, yn:number, mag:{x:number,y:number}}}
+   * @private
+   */
+  _slothBoxTable() {
+    const now = performance.now();
+    const list = Constants.THRUSTERS;
+    const F = Constants.TRIP.XENON_THRUST_N * activeThrustScale(this) / list.length;
+    const t0 = this._slothBox;
+    if (t0 && t0.F === F && now - t0.stamp < 100) return t0;
+    const am = this.armManager;
+    const com = (am && am.arms) ? computeCoM(am, this).position : null;
+    const cx = com ? com.x : 0, cy = com ? com.y : 0, cz = com ? com.z : 0;
+    const tau = [];
+    for (let i = 0; i < list.length; i++) {
+      const th = list[i];
+      let fx = -th.thrustDir.x, fy = -th.thrustDir.y, fz = -th.thrustDir.z;
+      const fl = Math.hypot(fx, fy, fz) || 1;
+      fx *= F / fl; fy *= F / fl; fz *= F / fl;
+      const rx = th.nozzlePos.x - cx, ry = th.nozzlePos.y - cy, rz = th.nozzlePos.z - cz;
+      tau.push(new THREE.Vector3(ry * fz - rz * fy, rz * fx - rx * fz, rx * fy - ry * fx));
+    }
+    const pick = (comp, sgn) => {
+      let best = -1, bv = 1e-12;
+      for (let i = 0; i < tau.length; i++) { const v = sgn * tau[i][comp]; if (v > bv) { bv = v; best = i; } }
+      return best;
+    };
+    const t = { stamp: now, F, tau, xp: pick('x', 1), xn: pick('x', -1), yp: pick('y', 1), yn: pick('y', -1), mag: { x: 0, y: 0 } };
+    t.mag.x = (t.xp >= 0 && t.xn >= 0) ? Math.min(Math.abs(tau[t.xp].x), Math.abs(tau[t.xn].x)) : 0;
+    t.mag.y = (t.yp >= 0 && t.yn >= 0) ? Math.min(Math.abs(tau[t.yp].y), Math.abs(tau[t.yn].y)) : 0;
+    this._slothBox = t;
+    return t;
+  }
+
+  /** Peak torque (N·m) the tail boxes give about a body axis: the weaker of the two directions (the planning figure). 0 for roll. */
+  slothTauMag(axis) {
+    const m = this._slothBoxTable().mag;
+    return axis === 'x' ? m.x : (axis === 'y' ? m.y : 0);
+  }
+
+  /** Angular acceleration (rad/s²) of the tail boxes about a body axis at full output. */
+  slothAlpha(axis) {
+    const tau = this.slothTauMag(axis);
+    return tau > 0 ? tau / this._attitudeMOI(axis) : 0;
+  }
+
+  /**
+   * Seconds a slow turn of `angleRad` takes on the boxes (accelerate half, brake half), about the body axis
+   * (nx, ny, 0)/|·|; warm-up not included (`slothWarmupLeftS`).
+   * @returns {number} s (Infinity when the boxes cannot turn her that way)
+   */
+  slothTurnTimeS(angleRad, nx = 1, ny = 0) {
+    const l = Math.hypot(nx, ny) || 1;
+    const ax = Math.abs(nx) / l, ay = Math.abs(ny) / l;
+    let a = Infinity;
+    if (ax > 1e-9) a = Math.min(a, this.slothTauMag('x') / (this._attitudeMOI('x') * ax));
+    if (ay > 1e-9) a = Math.min(a, this.slothTauMag('y') / (this._attitudeMOI('y') * ay));
+    return a > 0 && Number.isFinite(a) ? 2 * Math.sqrt(Math.abs(angleRad) / a) : Infinity;
+  }
+
+  /** Seconds of cathode warm-up still to wait before the boxes give thrust (0 once warm). */
+  slothWarmupLeftS() {
+    return this._slothWarm ? 0 : Math.max(0, Constants.SLOTH.WARMUP_S - (this._slothWarmS || 0));
+  }
+
+  /** @returns {boolean} the tail-box cathodes are warm (thrust is available) */
+  isSlothWarm() { return this._slothWarm === true; }
+
+  /** Plain-words duration for comms: "about 40 s" under 90 s, else "about 12 min". */
+  slothTimeWords(sec) {
+    if (!Number.isFinite(sec)) return 'a very long time';
+    if (sec < 90) return `about ${Math.max(1, Math.round(sec / 5) * 5)} s`;
+    return `about ${Math.round(sec / 60)} min`;
+  }
+
+  /** Engine gas for the boxes: the loaded gas has something in the tank (a cargo fuel falls back to the tank when short). @private */
+  _slothGasOk() {
+    const rs = this._resourceSystem;
+    const fuel = rs ? rs.getCurrentFuel() : (Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL]) || null;
+    if (fuel && fuel.fromCargo) return true;
+    return (this.resources.xenon || 0) > 0;
+  }
+
+  /**
+   * How much of full thrust the boxes can give this frame if asked for `litUnits` box-outputs (0..2) for `dt` seconds.
+   * 0 while the cathodes are cold (and asking starts the warm-up), with no engine gas, or with no battery; otherwise the
+   * fraction of the power the battery holds (D2: empty in sun → the panel's share only, empty in shadow → 0; never free).
+   * PEEK: the draw is billed at the frame end from the lit seconds.
+   * @param {number} litUnits @param {number} dt @returns {number} 0..1
+   */
+  slothPeek(litUnits, dt) {
+    const S = Constants.SLOTH;
+    if (!(litUnits > 1e-9)) return this._slothWarm ? 1 : 0;
+    if (!this._slothWarm) { this._slothWarming = true; return 0; }
+    if (!this._slothGasOk()) return 0;
+    const need = (S.BOX_POWER_W / Constants.SHIP_HEAT.W_PER_UNIT_S) * litUnits * dt;
+    const avail = Math.max(0, this.resources.battery || 0);
+    return need > 0 ? Math.min(1, avail / need) : 1;
+  }
+
+  /**
+   * The tail-box torque function (D10): ask for `signedFrac` (−1..1) of the box that turns her about `axis` for `h`
+   * seconds. Returns the torque about that axis the box gives (N·m, signed); adds the box's whole torque vector (a lateral
+   * CoM offset gives a little on the other axis) into `out`. Scaled by the frame's peek (cold / no gas / no power → 0) and
+   * recorded as lit time for the frame-end bill and the glow. The wheel kit can call it later to unload momentum.
+   * @param {'x'|'y'} axis @param {number} signedFrac @param {number} h @param {THREE.Vector3} out
+   * @returns {number}
+   */
+  tailBoxTorque(axis, signedFrac, h, out) {
+    const f = Math.min(1, Math.abs(signedFrac));
+    if (!(f > 0)) return 0;
+    const t = this._slothBoxTable();
+    const i = axis === 'x' ? (signedFrac > 0 ? t.xp : t.xn) : (signedFrac > 0 ? t.yp : t.yn);
+    if (i < 0) return 0;
+    const eff = f * (this._sl ? this._sl.pf : 0);
+    if (!(eff > 0)) return 0;
+    this._slothLitS[i] += eff * h;
+    out.addScaledVector(t.tau[i], eff);
+    return t.tau[i][axis] * eff;
+  }
+
+  /**
+   * F1.7: a body spin another owner was carrying as a bare number (the trip hold's slow turn, `AutopilotSystem._tripLetGo`)
+   * comes to her: it stays, and her rate-null brakes it on the boxes when they have power and engine gas.
+   * @param {number} wx rad/s about body X @param {number} wy rad/s about body Y
+   */
+  adoptBodySpin(wx, wy) {
+    // Kept until the next attitude tick has resolved the owner: the hand-back from AUTOPILOT to PLAYER zeroes the body rate
+    // (`_handAttitudeToPlayer`), and the spin must outlive that.
+    const a = this._adoptSpin || (this._adoptSpin = { x: 0, y: 0 });
+    a.x += wx; a.y += wy;
+  }
+
+  /**
+   * The autopilot's burn: it moves her by its own rate law (it writes the attitude itself), so the boxes only need their lit
+   * time recorded for the power / engine-gas bill and the glow: the box that turns her `sign` about `axis`, for `seconds`
+   * of full output.
+   * @param {'x'|'y'} axis @param {number} sign @param {number} seconds
+   */
+  tailBoxLit(axis, sign, seconds) {
+    if (!(seconds > 0)) return;
+    const t = this._slothBoxTable();
+    const i = axis === 'x' ? (sign > 0 ? t.xp : t.xn) : (sign > 0 ? t.yp : t.yn);
+    if (i >= 0) this._slothLitS[i] += seconds;
+  }
+
+  /**
+   * Per frame, before the attitude tick (any owner): the cathodes' warm-up and hot standby, and the one "steering gas empty"
+   * line when sloth mode turns on. Warm-up starts when a box is first asked for (`slothPeek`), runs on the standby heater's
+   * power, and gives no thrust; once warm they stay warm for STANDBY_W while sloth mode is on; a standby the battery cannot
+   * pay in full turns them cold again.
+   * @param {number} dt @private
+   */
+  _slothTick(dt) {
+    const S = Constants.SLOTH;
+    if (!this.isSlothMode()) {
+      this._slothWarm = false; this._slothWarming = false; this._slothWarmS = 0; this._slothWasOn = false;
+      return;
+    }
+    if (!this._slothWasOn) {
+      this._slothWasOn = true;
+      const t = this.slothTurnTimeS(Math.PI / 2);
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'SPACECRAFT',
+        text: `Steering gas empty — the tail boxes will turn her slowly (${this.slothTimeWords(t)} per 90°).`,
+        priority: 'warning',
+      });
+    }
+    if (!(dt > 0) || !(this._slothWarm || this._slothWarming)) return;
+    const f = this._drawBurnResource('battery', (S.STANDBY_W / Constants.SHIP_HEAT.W_PER_UNIT_S) * dt);
+    if (this._slothWarm) {
+      if (f < 1 - 1e-6) { this._slothWarm = false; this._slothWarming = false; this._slothWarmS = 0; }
+    } else {
+      this._slothWarmS += dt * f;
+      if (this._slothWarmS >= S.WARMUP_S) { this._slothWarm = true; this._slothWarming = false; }
+    }
+  }
+
+  /**
+   * Per frame, after the attitude tick (any owner): bill the boxes' lit time — battery at BOX_POWER_W × lit seconds and
+   * engine gas at thrust × lit seconds / (Isp·g0) (`billBurnGas`) — set the per-box glow from this frame's lit fraction,
+   * and clear the tallies.
+   * @param {number} dt @private
+   */
+  _slothFrameEnd(dt) {
+    const lit = this._slothLitS;
+    let sum = 0;
+    for (let i = 0; i < lit.length; i++) sum += lit[i];
+    for (let i = 0; i < lit.length; i++) this._slothGlow[i] = dt > 0 ? Math.min(1, lit[i] / dt) : 0;
+    if (!(sum > 0)) return;
+    if (this._offPlayFrame !== true) {
+      const S = Constants.SLOTH;
+      this._drawBurnResource('battery', (S.BOX_POWER_W / Constants.SHIP_HEAT.W_PER_UNIT_S) * sum);
+      const t = this._slothBoxTable();
+      let n = 0;
+      for (let i = 0; i < lit.length; i++) n += t.F * lit[i];            // N·s
+      this.billBurnGas(n / Math.max(1, shipMassKg(this)));                // Δv the push would give
+    }
+    for (let i = 0; i < lit.length; i++) lit[i] = 0;
+  }
+
+  /** Box-outputs the attitude tick will ask for this frame, from the latched command and the rate error (for the power peek). @private */
+  _slothDemandUnits() {
+    const S = Constants.SLOTH;
+    const cmd = this._attitudeCmd, w = this._rcsOmega;
+    let units = 0;
+    const one = (c, rate, axis) => {
+      if (c !== 0) return Math.min(1, Math.abs(c));
+      const e = Math.abs(rate);
+      if (e <= S.REST_RAD_S) return 0;
+      if (e <= S.COLD_START_RAD_S && !this._slothWarm && !this._slothWarming) return 0;   // a cold-gas arrest's residue does not wake the cathodes
+      if (this.attitudeTorqueSource({ spinUp: false, rate: e }) === 'coldGas') return 0;
+      const a = this.slothAlpha(axis);
+      return a > 0 ? Math.min(1, e / (a * S.SERVO_ZONE_S)) : 0;
+    };
+    units += one(cmd ? cmd.pitch : 0, w.x, 'x');
+    units += one(cmd ? cmd.yaw : 0, w.y, 'y');
+    return units;
+  }
+
+  /**
+   * Once per attitude tick (PLAYER / CINEMATIC owner): decide this frame's torque source and the scalings the substeps use.
+   * `on` = sloth mode; `pf` = the boxes' peek (warm, gas, power); `gasFrac` = the cold-gas torque scale that keeps the
+   * frame's bill inside the tank (1 until the tank is nearly empty); `cmdSrc` = the source a held key uses.
+   * @param {number} dt @private
+   */
+  _slFrameBegin(dt) {
+    const st = this._sl || (this._sl = { on: false, pf: 0, gasFrac: 1, cmdSrc: 'coldGas' });
+    st.on = this.isSlothMode();
+    st.pf = 0; st.gasFrac = 1; st.cmdSrc = 'coldGas';
+    if (!st.on) return st;
+    const dtc = Math.min(dt, 0.1);
+    if (this._attitudeCmd) st.cmdSrc = this.attitudeTorqueSource({ spinUp: true });
+    const k = this._coldGasRate * (Constants.ATTITUDE.RCS_ATTITUDE_N2_FACTOR ?? 1);
+    st.gasFrac = k > 0 ? Math.min(1, (this.resources.coldGas || 0) / (2 * k * dtc)) : 1;
+    st.pf = this.slothPeek(this._slothDemandUnits(), dtc);
+    return st;
+  }
+
+  /**
+   * D5 — keep gas to stop. The command's spin-up fraction on each axis is cut so that, after this frame, the tank still
+   * holds STOP_RESERVE × the gas the stop will bill: adding f of full torque for dt burns k·f·dt and adds k·f·dt to the
+   * stop's price, so the affordable total is (G − R·G_stop(ω)) / ((1+R)·k·dt). Components that brake (opposite the spin)
+   * are never cut. Sets `_capP` / `_capY` (read by the integrator) and says so once per turn when it first bites.
+   * @param {number} pv @param {number} yv gated demand @param {number} dt @private
+   */
+  _capColdSpinUp(pv, yv, dt) {
+    this._capP = 1; this._capY = 1;
+    const w = this._rcsOmega;
+    const upX = pv !== 0 && pv * w.x >= 0, upY = yv !== 0 && yv * w.y >= 0;
+    const fsum = (upX ? Math.abs(pv) : 0) + (upY ? Math.abs(yv) : 0);
+    if (!(fsum > 0)) return;
+    const R = Constants.SLOTH.STOP_RESERVE;
+    const k = this._coldGasRate * (Constants.ATTITUDE.RCS_ATTITUDE_N2_FACTOR ?? 1);
+    const dtc = Math.min(dt, 0.1);
+    if (!(k > 0) || !(dtc > 0)) return;
+    const budget = (this.resources.coldGas || 0) - R * this.slothStopGasPool(w);
+    const fmax = budget > 0 ? budget / ((1 + R) * k * dtc) : 0;
+    if (fsum <= fmax) return;
+    const s = fmax / fsum;
+    if (upX) this._capP = s;
+    if (upY) this._capY = s;
+    if (!this._capMsgOn) {
+      this._capMsgOn = true;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'SPACECRAFT',
+        text: 'Steering gas low — turning slower to keep enough to stop.',
+        priority: 'info',
+      });
+    }
+  }
+
+  /**
+   * The fastest recenter rate (rad/s) the tank can afford about a body axis while keeping the stop reserve:
+   * G / (R · k·I/τ). Infinity with no cold-gas authority. @private
+   */
+  _recenterRateCap(axis) {
+    const per = this._coldGasPerRadS(axis, 'stop');
+    return per > 0 ? (this.resources.coldGas || 0) / (Constants.SLOTH.STOP_RESERVE * per) : Infinity;
+  }
+
   /**
    * Integrate rigid-body attitude on REAL dt (D2 — never gameDt). One owner per
    * frame; only PLAYER and the CINEMATIC inspection hold integrate torque, AP and
@@ -9108,6 +9504,15 @@ export class PlayerSatellite extends THREE.Group {
    * @param {number} dt seconds @private
    */
   _tickAttitudeDynamics(dt) {
+    // Sloth mode, any owner (the autopilot's burns are billed here too): warm-up / standby / the one "gas empty" line
+    // first, the boxes' lit time billed and their glow set last.
+    this._slothTick(dt);
+    this._tickAttitudeCore(dt);
+    this._slothFrameEnd(dt);
+  }
+
+  /** The attitude tick proper (see `_tickAttitudeDynamics`). @param {number} dt @private */
+  _tickAttitudeCore(dt) {
     if (!this._rcsOmega) this._rcsOmega = new THREE.Vector3();
     const owner = this._updateAttitudeOwner();
 
@@ -9129,6 +9534,12 @@ export class PlayerSatellite extends THREE.Group {
       this._handAttitudeToPlayer(prev === 'AIM' || (prev === 'AUTOPILOT' && this._holdsHeadingForTether()));
     }
 
+    // F1.7: a spin another owner was carrying (`adoptBodySpin`) joins her rate once she is hers again, after the hand-back's zeroing
+    if (this._adoptSpin) {
+      if (entersManual) { this._rcsOmega.x += this._adoptSpin.x; this._rcsOmega.y += this._adoptSpin.y; }
+      this._adoptSpin = null;
+    }
+
     // AP / AIM drive the quaternion directly — hold zero body rate under them.
     if (owner !== 'PLAYER' && owner !== 'CINEMATIC') {
       this._rcsOmega.set(0, 0, 0);
@@ -9143,6 +9554,7 @@ export class PlayerSatellite extends THREE.Group {
     const STEP = 1 / 120;
     let holdFired = false;
     this._frameHoldWork = 0; // accumulated hold torque·time (full-throttle-seconds)
+    this._slFrameBegin(dt);  // sloth mode: this frame's torque source, power peek and gas scale
     let remaining = Math.min(dt, 0.1);
     while (remaining > 1e-9) {
       const h = remaining > STEP + 1e-12 ? STEP : remaining;
@@ -9153,6 +9565,8 @@ export class PlayerSatellite extends THREE.Group {
     // ── Frame-level feedback + billing (once per frame) ──
     const A = Constants.ATTITUDE;
     const omega = this._rcsOmega;
+    // back at rest (the cold servo's own 1e-4 rad/s): the gas spin is over, the next spin is whoever makes it
+    if (Math.abs(omega.x) <= 1e-4 && Math.abs(omega.y) <= 1e-4) this._gasSpin = false;
     const coldGas = this.resources ? (this.resources.coldGas || 0) : 0;
     const cmd = this._attitudeCmd;
 
@@ -9183,27 +9597,19 @@ export class PlayerSatellite extends THREE.Group {
       // when the player is zoomed in inspecting the hull.
       // launch-smooth: nor while a daughter is out (rotation tier not 'none'): she keeps her heading then.
       // net-refuse-hold: nor after a refused shot (`_recenterPaused`).
-      const inspecting = (owner === 'CINEMATIC') || this._holdsHeadingForTether() || this._recenterPaused;
+      const inspecting = (owner === 'CINEMATIC') || this._holdsHeadingForTether() || this._recenterPaused
+        || (this._sl && this._sl.on);   // sloth mode: no recentering (the same gate as the substep)
       const wTx = (!inspecting && cmdP === 0 && Math.abs(th.x) > A.HOLD_DEADBAND_RAD)
-        ? -clampAbs(A.RECENTER_GAIN * th.x, A.RECENTER_RATE) : 0;
+        ? -clampAbs(A.RECENTER_GAIN * th.x, Math.min(A.RECENTER_RATE, this._recenterRateCap('x'))) : 0;
       const wTy = (!inspecting && cmdY === 0 && Math.abs(th.y) > A.HOLD_DEADBAND_RAD)
-        ? -clampAbs(A.RECENTER_GAIN * th.y, A.RECENTER_RATE) : 0;
+        ? -clampAbs(A.RECENTER_GAIN * th.y, Math.min(A.RECENTER_RATE, this._recenterRateCap('y'))) : 0;
       const errX = omega.x - wTx, errY = omega.y - wTy;
       if (Math.abs(errX) > pulseGate) this.fireRcsStopPulse('pitch', errX > 0 ? 1 : -1);
       if (Math.abs(errY) > pulseGate) this.fireRcsStopPulse('yaw', errY > 0 ? 1 : -1);
     }
 
-    if (coldGas <= 0 && cmd && this.resources) {
-      const now = performance.now();
-      if (now - (this._lastColdGasEmptyMsg ?? 0) > 5000) {
-        this._lastColdGasEmptyMsg = now;
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          sender: 'PROPULSION',
-          text: 'RCS cold-gas depleted — attitude authority lost',
-          priority: 'warning',
-        });
-      }
-    }
+    // (The old empty-tank line about losing the ship's steering is gone: it was false, she kept turning. The true line — the tail boxes take
+    // over, and how slowly — is said once by `_slothTick` when the tank first drops below G_min.)
   }
 
   /**
@@ -9235,11 +9641,25 @@ export class PlayerSatellite extends THREE.Group {
     if (y > 0 && omega.y >=  A.MAX_RATE) y = 0;
     if (y < 0 && omega.y <= -A.MAX_RATE) y = 0;
 
+    const sl = this._sl;
+    const slothOn = !!(sl && sl.on);
+    const boxTau = _v3SlA.set(0, 0, 0);   // sloth mode: what the tail boxes add (the cold-gas torque stays in `tau`)
     const tau = _v3AttA.set(0, 0, 0);
-    if (p > 0 && ct.pitchPos) tau.addScaledVector(ct.pitchPos, p);
-    else if (p < 0 && ct.pitchNeg) tau.addScaledVector(ct.pitchNeg, -p);
-    if (y > 0 && ct.yawPos) tau.addScaledVector(ct.yawPos, y);
-    else if (y < 0 && ct.yawNeg) tau.addScaledVector(ct.yawNeg, -y);
+    if (slothOn && sl.cmdSrc === 'tailBoxes') {
+      // D6: holding a key lights (after warm-up) the box that turns her that way; the real ion torque, scaled by what the
+      // battery / engine gas / cathodes give (`tailBoxTorque`).
+      if (p !== 0) this.tailBoxTorque('x', p, h, boxTau);
+      if (y !== 0) this.tailBoxTorque('y', y, h, boxTau);
+      p = 0; y = 0;   // no cold couple fires: no parasitic couple force below either
+    } else {
+      // D5: the cap on the command's spin-up (set by commandAttitude for this frame; 1 = no cap)
+      p *= this._capP; y *= this._capY;
+      if (p !== 0 || y !== 0) this._gasSpin = true;   // the cold gas is making this spin: its arrest is the gas's too
+      if (p > 0 && ct.pitchPos) tau.addScaledVector(ct.pitchPos, p);
+      else if (p < 0 && ct.pitchNeg) tau.addScaledVector(ct.pitchNeg, -p);
+      if (y > 0 && ct.yawPos) tau.addScaledVector(ct.yawPos, y);
+      else if (y < 0 && ct.yawNeg) tau.addScaledVector(ct.yawNeg, -y);
+    }
 
     // ── Hold controller: ONE rate servo (arrest + recenter folded together) ──
     // Real RCS thrusters are on/off, so the servo fires the FULL opposing couple
@@ -9260,7 +9680,7 @@ export class PlayerSatellite extends THREE.Group {
     // tier returns to 'none' the recenter resumes: at most RECENTER_RATE, driven by the couple torque only.
     // net-refuse-hold: nor after a refused mother-net shot / lasso cast (`holdHeadingAfterRefusal`): the ship stays
     // where the aim turned her until the next deliberate attitude change. The arrest servo still stops any rate.
-    const recentering = !inspecting && coldGas > 0 && !tethered && !this._recenterPaused;
+    const recentering = !inspecting && coldGas > 0 && !tethered && !this._recenterPaused && !slothOn;   // sloth mode: recentering stays off
     // Decompose the manual offset to its body-frame rotation vector ONCE (shared
     // by the recenter ω_target and the tether spring — both read the same
     // unmutated _manualRotation). th_i = ang·axis_i, so |th| = ang (total offset).
@@ -9268,20 +9688,37 @@ export class PlayerSatellite extends THREE.Group {
 
     // Target body rate: default zero (pure arrest); on axes with an offset beyond
     // the deadband and no raw command, servo toward prograde at ≤ RECENTER_RATE.
+    // D5: a recenter turn is a cold-gas turn too, so its target rate is held to what the tank can stop (`_recenterRateCap`).
     const wTx = (recentering && th && cmdP === 0 && Math.abs(th.x) > A.HOLD_DEADBAND_RAD)
-      ? -clampAbs(A.RECENTER_GAIN * th.x, A.RECENTER_RATE) : 0;
+      ? -clampAbs(A.RECENTER_GAIN * th.x, Math.min(A.RECENTER_RATE, this._recenterRateCap('x'))) : 0;
     const wTy = (recentering && th && cmdY === 0 && Math.abs(th.y) > A.HOLD_DEADBAND_RAD)
-      ? -clampAbs(A.RECENTER_GAIN * th.y, A.RECENTER_RATE) : 0;
+      ? -clampAbs(A.RECENTER_GAIN * th.y, Math.min(A.RECENTER_RATE, this._recenterRateCap('y'))) : 0;
     const wTz = (recentering && th && Math.abs(th.z) > A.HOLD_DEADBAND_RAD)
       ? -clampAbs(A.RECENTER_GAIN * th.z, A.RECENTER_RATE) : 0;
     const servo = (w, wT, axis) => {
       const err = w - wT;
+      // D6/D10: the rate-null asks the selector. Sloth mode: the box that opposes the error brakes her (proportional
+      // inside alpha × SERVO_ZONE_S, so no chatter, and down to REST_RAD_S: the cold-gas 1e-4 is bigger than a sloth
+      // turn); a spin above GAS_ARREST_ABOVE_DEG_S is stopped with the gas that is left (the boxes finish the stop).
+      if (slothOn && axis !== 'z') {
+        const SL = Constants.SLOTH;
+        if (this.attitudeTorqueSource({ spinUp: false, rate: Math.abs(err) }) === 'tailBoxes') {
+          if (Math.abs(err) <= SL.REST_RAD_S) return 0;
+          if (Math.abs(err) <= SL.COLD_START_RAD_S && !this._slothWarm && !this._slothWarming) return 0;
+          const a = this.slothAlpha(axis);
+          if (!(a > 0)) return 0;
+          this.tailBoxTorque(axis, -Math.sign(err) * Math.min(1, Math.abs(err) / (a * SL.SERVO_ZONE_S)), h, boxTau);
+          return 0;
+        }
+      }
       if (Math.abs(err) <= 1e-4) return 0;
       holdFired = true;
-      return -Math.sign(err) * this._coupleTauMag(axis) * Math.min(1, Math.abs(err) / OMEGA_LIN);
+      this._gasSpin = true;
+      // sloth mode: the cold torque is scaled so this frame's bill cannot exceed what is left in the tank
+      return -Math.sign(err) * this._coupleTauMag(axis) * Math.min(1, Math.abs(err) / OMEGA_LIN) * (slothOn ? sl.gasFrac : 1);
     };
-    if (cmdP === 0) tau.x += servo(omega.x, wTx, 'x');
-    if (cmdY === 0) tau.y += servo(omega.y, wTy, 'y');
+    if (cmdP === 0) { const sx = servo(omega.x, wTx, 'x'); tau.x += sx; }
+    if (cmdY === 0) { const sy = servo(omega.y, wTy, 'y'); tau.y += sy; }
     tau.z += servo(omega.z, wTz, 'z'); // D10 roll always servos
 
     // Clamp the RCS torque (command + hold) to the physically available couple
@@ -9318,6 +9755,10 @@ export class PlayerSatellite extends THREE.Group {
       const eff = Math.min(1, Math.hypot(tau.x, tau.y) / tauMaxRef);
       this._frameHoldWork = (this._frameHoldWork || 0) + eff * h;
     }
+
+    // Sloth mode: the boxes' torque joins after the cold-gas bookkeeping (it is not billed as gas, makes no hiss, and is
+    // far below the couple clamp).
+    if (slothOn) tau.add(boxTau);
 
     // Semi-implicit Euler: advance ω from τ/I, then the offset from ω.
     omega.x += (tau.x / I.ixx) * h;

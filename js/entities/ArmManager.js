@@ -812,6 +812,7 @@ export class ArmManager {
 
     ap.requestAimRotation(provider, {
       mode: 'daughter', armManager: this, arm, pairIndex: arm.index,
+      maxWaitS: Constants.AIM.AIM_TIMEOUT_S,   // sloth mode backstop (D7): `_motherTurnBlock` already sends a slow turn to the strut-only launch
     }).then(() => {
       arm._aimReserved = false;
       // L2: the launch goes through the keep-out gate. The line is checked along
@@ -1349,6 +1350,10 @@ export class ArmManager {
    */
   _motherTurnBlock(exceptArm = null) {
     if (this.getRotationLockTier(exceptArm) !== 'none') return 'a daughter is out on her line';
+    // sloth mode (D7): with the steering gas out she turns on the tail boxes, minutes for a launch turn: the strut aims alone
+    // ("Aiming the arm only: the steering gas is empty, so the ship holds still.") and a reel-home line-up is hers to do.
+    const pl = this.playerSatellite;
+    if (pl && typeof pl.isSlothMode === 'function' && pl.isSlothMode()) return 'the steering gas is empty';
     const ap = this._autopilot;
     // reel-home (fix round F5): the autopilot flying the ship keeps steering it back to its own heading the moment a
     // turn ends, so a daughter's turn would be undone: she lines herself up instead. Launch callers (no argument) keep
@@ -3435,7 +3440,7 @@ export class ArmManager {
     owner._rhTurnTries++;
     owner._rhTurnWaitS = RH.TURN_RETRY_S ?? 1;                                // the next request, if this one fails, in a second
     const turn = { arm: owner, tracked };
-    const opts = { holdOwner: 'REEL_HOME', holdS: 30 };
+    const opts = { holdOwner: 'REEL_HOME', holdS: 30, maxWaitS: 60 };   // sloth mode backstop (D7): `_motherTurnBlock` already refuses
     if (tracked) {
       opts.track = () => this._rhTrackPlane(turn, owner, az, tol);
       opts.timeoutS = 60;                                                     // a moving target: the planned-time default is too short

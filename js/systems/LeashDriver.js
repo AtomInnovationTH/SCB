@@ -801,7 +801,7 @@ export class LeashDriver {
     const t = h.turn = { state: 'turning', reason: '', lastProgress: 0, ended: null, cancelled: false };
     let promise = null;
     try {
-      promise = ap.requestAttitudeTurn(c.axisWorld, c.angleRad, { maxRate: c.maxRate, accel: c.accel, holdS: ATTITUDE_HOLD_S, holdOwner: HOLD_OWNER });
+      promise = ap.requestAttitudeTurn(c.axisWorld, c.angleRad, { maxRate: c.maxRate, accel: c.accel, holdS: ATTITUDE_HOLD_S, holdOwner: HOLD_OWNER, maxWaitS: 60 });
     } catch (err) {
       t.state = 'rejected';
       t.reason = (err && err.message) || 'turn refused';

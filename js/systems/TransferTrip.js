@@ -650,9 +650,12 @@ export class TransferTrip {
   _pushBlocked(dt) {
     if (this._radiatorsAboveBurnBand()) { this._askBurnPose(); return true; }
     const ap = this._d.autopilot;
-    if (ap && typeof ap.tripTurnErrorRad === 'function' && this._turnWaitS < Constants.TRIP.TURN_WAIT_MAX_S
+    // Sloth mode (D7): the steering gas is out and the tail boxes turn her, minutes for a turn. Same principle as
+    // TURN_POWER_WH: without the means to turn she waits, with no time limit, instead of burning after TURN_WAIT_MAX_S.
+    const slow = this._slowTurn();
+    if (ap && typeof ap.tripTurnErrorRad === 'function' && (slow || this._turnWaitS < Constants.TRIP.TURN_WAIT_MAX_S)
         && ap.tripTurnErrorRad() > Constants.TRIP.TURN_OK_DEG * Math.PI / 180) {
-      this._turnWaitS += dt;
+      if (!slow) this._turnWaitS += dt;
       return true;
     }
     return false;
@@ -704,6 +707,12 @@ export class TransferTrip {
     return this._profile && this._playP > 0 ? this._profile.days * this._flownS / this._playP : 0;
   }
 
+  /** @private Sloth mode: the trip's turn is a slow one on the tail boxes (the steering gas is out): the push waits for it. */
+  _slowTurn() {
+    const ap = this._d.autopilot;
+    return !!(ap && typeof ap.tripTurnIsSlow === 'function' && ap.tripTurnIsSlow());
+  }
+
   /** @private The turn is let go of for want of power (the autopilot's trip hold waits for the battery: review R1). */
   _waitsForPower() {
     const ap = this._d.autopilot;
@@ -749,7 +758,7 @@ export class TransferTrip {
           // A pause for want of power has no bound (R1: the turn comes back with the battery, and she turns and pushes on). A trip
           // that has not pushed once and cannot for another reason (the turn never completes) would wait for ever: after the turn
           // wait's own bound she stays, as at burn start (F2).
-          if (!this._waitsForPower()) {
+          if (!this._waitsForPower() && !this._slowTurn()) {
             this._pausedS += dt;
             if (this._pushS === 0 && this._pausedS >= Constants.TRIP.TURN_WAIT_MAX_S) {
               this._say(tripNoPointLine(this._profile.dir, this._field), { _keep: true });

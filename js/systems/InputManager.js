@@ -2837,7 +2837,8 @@ export class InputManager {
           aligned = (Math.acos(dot) * 180 / Math.PI) <= Constants.AIM.NET_AIM_TOLERANCE_DEG;
         }
         if (!aligned) {
-          ap.requestAimRotation(provider, { mode: 'net', aimDir: aimDir || undefined })
+          // sloth mode (D7): the lasso's lock has the aim's own 30 s; a slow turn on the tail boxes is refused at once (`TOO_SLOW`)
+          ap.requestAimRotation(provider, { mode: 'net', aimDir: aimDir || undefined, maxWaitS: Constants.AIM.AIM_TIMEOUT_S })
             .then(() => this._castLasso({ afterAim: true }))
             .catch((err) => {
               // aborted — nothing cast; a timed-out aim / lost target leaves the ship quiet (as the net does)
@@ -3164,7 +3165,9 @@ export class InputManager {
 
     // Otherwise rotate to attitude, then fire on resolve. Reject = no fire, no
     // inventory decrement (abort comms emitted by AutopilotSystem).
-    ap.requestAimRotation(provider, { mode: 'net', aimDir: aimDir || undefined })
+    // sloth mode (D7): the net's lock on a moving piece lasts the aim's own 30 s (AIM_TIMEOUT_S); a slow turn on the tail
+    // boxes (the steering gas is out) is refused at once with the honest time (`TOO_SLOW`): nothing moves, no net is spent.
+    ap.requestAimRotation(provider, { mode: 'net', aimDir: aimDir || undefined, maxWaitS: Constants.AIM.AIM_TIMEOUT_S })
       .then(() => {
         // §9.6: aim-resolve double-tick — the slew settled on the launch
         // attitude (the "locked, then confirmed" gesture before the thump).

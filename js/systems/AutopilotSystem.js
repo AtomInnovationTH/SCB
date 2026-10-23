@@ -187,6 +187,7 @@ export function isChaseDone(target) {
 const AP_ROT_RATE = 0.2;
 /** Nets step 3 slice 2b: the orbit-frame offset of a retrograde trip hold: 180 deg about her up (+Y) axis. */
 const _Q_TRIP_RETRO = new THREE.Quaternion(0, 1, 0, 0);
+const _Q_IDENTITY = new THREE.Quaternion();
 
 /**
  * Skip threshold (radians) for the rotation slew: below this the nose is already where it should be (numerical noise),
@@ -234,9 +235,13 @@ const TURN_COUPLES = Object.freeze([['pitch', 'x'], ['yaw', 'y']]);
  */
 export function attitudeTurnProfile(player, nBody, angleRad, opts = {}) {
   // α = the slowest couple the turn needs (torque = I·α·n for a fixed axis).
+  // sloth mode (`opts.boxes`): the torque is the tail boxes' (D7), not the cold-gas couples'; `gasEstimate` is then 0 (the
+  // boxes bill battery and engine gas as they burn, not steering gas).
   const I = player.getAttitudeInertia();
   const inertia = { x: I.ixx, y: I.iyy };
-  const tau = { x: player._coupleTauMag('x'), y: player._coupleTauMag('y') };
+  const tau = opts.boxes === true
+    ? { x: player.slothTauMag('x'), y: player.slothTauMag('y') }
+    : { x: player._coupleTauMag('x'), y: player._coupleTauMag('y') };
   const comp = { x: Math.abs(nBody.x), y: Math.abs(nBody.y) };
   let aMax = Infinity;
   for (const k of ['x', 'y']) {
@@ -271,21 +276,24 @@ export function attitudeTurnProfile(player, nBody, angleRad, opts = {}) {
 
   // Same unit price as PlayerSatellite.fireRcsRotation (units per full-throttle second).
   const k = (player._coldGasRate ?? 0.5) * (Constants.ATTITUDE?.RCS_ATTITUDE_N2_FACTOR ?? 0.3);
-  const gasEstimate = k * (mag.x + mag.y) * 2 * ta;
-  return { ok: true, sign, A, a, wp, ta, tc, T, mag, dir, k, gasEstimate };
+  const gasEstimate = opts.boxes === true ? 0 : k * (mag.x + mag.y) * 2 * ta;
+  return { ok: true, sign, A, a, wp, ta, tc, T, mag, dir, k, gasEstimate, boxes: opts.boxes === true };
 }
 
 /**
  * Can the tank pay `gasEstimate`? True = it cannot. A player with no gas figure (a mock) is never short here:
  * the autopilot's own turn check is the one that stops a real empty tank. The ONE comparison — `requestAttitudeTurn`
- * and the leash's early check both use it.
+ * and the leash's early check both use it. D5 / F1.8 (keep gas to stop): the estimate is both burns of a fixed profile
+ * (spin up and stop), and the tank must hold it with the same STOP_RESERVE margin a held key keeps, so the fixed turn's
+ * stop is always paid for however the tank is drained meanwhile (a daughter, a net's recoil). That is this profile's cap:
+ * it is accepted whole or refused, never started on a tank that cannot also stop it.
  * @param {object} player
- * @param {number} gasEstimate — cold-gas units, from attitudeTurnProfile
+ * @param {number} gasEstimate — cold-gas (pool) units, from attitudeTurnProfile
  * @returns {boolean}
  */
 export function turnGasShort(player, gasEstimate) {
   const coldGas = player && player.resources ? player.resources.coldGas : undefined;
-  return Number.isFinite(coldGas) && coldGas < gasEstimate;
+  return Number.isFinite(coldGas) && coldGas < gasEstimate * Constants.SLOTH.STOP_RESERVE;
 }
 
 /** aim-track-settle: while the aim direction itself turns, an aim is on target at the target's rate plus at most this much (rad/s; the brake step cap). */
@@ -482,6 +490,8 @@ export class AutopilotSystem {
     this._aimTargetQuat = new THREE.Quaternion();
     this._aimInvQuat = new THREE.Quaternion();
     this._aimLocalDir = new THREE.Vector3();
+    this._tripRel = new THREE.Quaternion();   // sloth mode: the trip turn's relative rotation (scratch)
+    this._tripOmega = 0;                      // sloth mode: the trip turn's rate on the tail boxes (rad/s)
     this._aimBm = new THREE.Vector3();     // launch-smooth: the mother's boresight with the strut at its target angle
 
     this._setupListeners();
@@ -658,6 +668,21 @@ export class AutopilotSystem {
   tripTurnWaitsForPower() { return this._tripHold && this._tripTurnWanted && !this._tripTurn && !this._engaged; }
 
   /**
+   * Sloth mode (D7, the same principle as TRIP.TURN_POWER_WH: without the means to turn she waits): true while the trip's
+   * hold is turning her on the tail boxes (the steering gas is out). The turn then takes minutes, not seconds; the trip
+   * waits for it with no time limit instead of burning after TURN_WAIT_MAX_S. Only while the boxes CAN push (engine gas in the
+   * tank, `_slothGasOk`): with none they never turn her, so an unbounded wait would hang the trip for ever; the old 45 s limit
+   * applies then (F1.1). A flat battery already drops the turn (`_tickTripPower`), so that case needs no test here.
+   * @returns {boolean}
+   */
+  tripTurnIsSlow() {
+    const p = this._player;
+    return !!(this._tripHold && this._tripTurn && !this._engaged && p && typeof p.attitudeTorqueSource === 'function'
+      && p.attitudeTorqueSource({ spinUp: true }) === 'tailBoxes'
+      && (typeof p._slothGasOk !== 'function' || p._slothGasOk()));
+  }
+
+  /**
    * @private Review R1: the trip hold's power rule, once per frame. An empty battery (under BATTERY_EMPTY_WH) drops the turn
    * (DECISIONS §27, as before: the trip burns as she points). Once the battery holds TRIP.TURN_POWER_WH the turn is asked for
    * again - the same hold, the same handback: `autopilotEngaged` goes back on and `_tickTripHold` eases the nose round from
@@ -701,7 +726,13 @@ export class AutopilotSystem {
     if (typeof p.setOrbitFrameHold !== 'function') return;
     const drive = this._tripTurn && !this._turn && !this._aimCoroutine && !this._attitudeHold;
     p.setOrbitFrameHold(drive);
-    if (!drive || !(dtWorld > 0)) return;
+    // F1.7: in sloth mode the turn's rate is a real spin: it does not vanish when the steering lets go of her (the player's
+    // own rate-null brakes it on the boxes when they can), and a held world only pauses it.
+    if (!drive) { this._tripLetGo(p); return; }
+    if (!(dtWorld > 0)) { if (!this._slothTripOn(p)) this._tripOmega = 0; return; }
+    // Sloth mode (D7): the tank cannot pay for a turn, so the tail boxes turn her: slowly, with the real ion torque.
+    if (this._slothTripOn(p)) { this._slothTripTurn(p, dt); return; }
+    this._tripOmega = 0;
     if (!this._tripRetro) { p.easeOrbitFrameOffset(AP_ROT_RATE * dt, AP_ROT_DEADZONE); return; }
     // Nets step 3 slice 2b, retrograde: the same ease (PlayerSatellite.easeOrbitFrameOffset goes to nothing), toward the
     // half turn about her up axis instead - her +Z then points against her motion with +Y still away from the Earth.
@@ -711,6 +742,92 @@ export class AutopilotSystem {
     const maxAngle = AP_ROT_RATE * dt;
     if (!(angle > AP_ROT_DEADZONE) || !(maxAngle > 0)) return;
     q.slerp(_Q_TRIP_RETRO, Math.min(maxAngle, angle) / angle).normalize();
+  }
+
+  /** @private The trip's turn is on the tail boxes (the steering gas is out): a rate it carries is a real spin (F1.7). */
+  _slothTripOn(p) {
+    return typeof p.attitudeTorqueSource === 'function' && p.attitudeTorqueSource({ spinUp: true }) === 'tailBoxes';
+  }
+
+  /**
+   * @private F1.7: the trip hold's drive stopped this frame. A rate the slow turn was carrying (`_tripOmega`, about
+   * `_tripAxis` in the body frame) is her spin, not a bookkeeping number: with nobody else holding the nose it goes to the
+   * player (`adoptBodySpin`), whose rate-null brakes it on the boxes when they have power and gas, and she drifts on it when
+   * they have not. When a scripted turn, an aim or a reel-in hold owns the nose the rate goes with it (they write the
+   * attitude themselves and keep her rate at 0: pre-existing, the same as the zeroing in `_tickAttitudeCore`).
+   */
+  _tripLetGo(p) {
+    const w = this._tripOmega || 0;
+    this._tripOmega = 0;
+    if (!(w > 0) || !this._tripAxis) return;
+    if (this._tripTurn || this._turn || this._aimCoroutine || this._attitudeHold || this._engaged) return;
+    if (typeof p.adoptBodySpin === 'function') p.adoptBodySpin(this._tripAxis.x * w, this._tripAxis.y * w);
+  }
+
+  /**
+   * @private Sloth mode: one frame of the trip hold's turn to the burn attitude on the tail boxes. The same eased law as the
+   * aim (`_tickAimEased`): her rate climbs at the boxes' α about the turn axis, and falls so that it reaches 0 as the
+   * heading gets there; the boxes' lit time, power and gas are billed by the player. No power, no engine gas, or cold
+   * cathodes (30 s) → no rate change: she waits.
+   */
+  _slothTripTurn(p, dt) {
+    const q = p._manualRotation;
+    if (!q || typeof q.slerp !== 'function') return;
+    const target = this._tripRetro ? _Q_TRIP_RETRO : _Q_IDENTITY;
+    const err = q.angleTo(target);
+    // turn axis in the body frame: q⁻¹·target (the offset is composed about body axes); w < 0 = the same turn the long way
+    // round: slerp goes the short way, so the axis is turned over with it
+    const rel = this._tripRel.copy(q).invert().multiply(target);
+    const sw = Math.sqrt(Math.max(0, 1 - rel.w * rel.w));
+    const flip = rel.w < 0 ? -1 : 1;
+    const nx = sw > 1e-9 ? flip * rel.x / sw : 1, ny = sw > 1e-9 ? flip * rel.y / sw : 0;
+    this._tripAxis = this._tripAxis || { x: 0, y: 0 };
+    this._tripAxis.x = nx; this._tripAxis.y = ny;
+    if (!(err > AP_ROT_DEADZONE)) {
+      // F1.7: she has arrived: the last of her rate is braked by the boxes (their lit time is billed), not dropped for free
+      const w0 = this._tripOmega || 0;
+      this._tripOmega = 0;
+      if (w0 > 0) this._slothTripBrake(p, w0, nx, ny);
+      return;
+    }
+    const { aFull, mx, my } = this._slothTripAccel(p, nx, ny);
+    if (!(aFull > 0)) return;
+    const f = p.slothPeek(mx + my, dt);                            // asking starts the warm-up; 0 until warm
+    const a = aFull * f, dOm = a * dt;
+    const was = this._tripOmega || 0;
+    const want = 0.5 * (-dOm + Math.sqrt(dOm * dOm + 8 * a * err));
+    const lo = Math.max(0, was - dOm);
+    const now = Math.min(Math.max(want, lo), Math.max(lo, was + dOm));
+    this._tripOmega = now;
+    if (now !== was) {
+      const dL = Math.abs(now - was) / aFull;                      // full-output seconds the boxes were lit for this change
+      if (mx > 0) p.tailBoxLit('x', nx * Math.sign(now - was) >= 0 ? 1 : -1, mx * dL);
+      if (my > 0) p.tailBoxLit('y', ny * Math.sign(now - was) >= 0 ? 1 : -1, my * dL);
+    }
+    const step = Math.min(now * dt, err);
+    if (step > 0) q.slerp(target, step / err).normalize();
+  }
+
+  /** @private The boxes' angular acceleration at full output about the turn axis (nx, ny), and each axis's firing fraction. */
+  _slothTripAccel(p, nx, ny) {
+    const I = p.getAttitudeInertia();
+    const cx = Math.abs(nx), cy = Math.abs(ny);
+    const tx = p.slothTauMag('x'), ty = p.slothTauMag('y');
+    let aFull = Infinity;
+    if (cx > 1e-6 && tx > 0) aFull = Math.min(aFull, tx / (I.ixx * cx));
+    if (cy > 1e-6 && ty > 0) aFull = Math.min(aFull, ty / (I.iyy * cy));
+    if (!Number.isFinite(aFull) || !(aFull > 0)) return { aFull: 0, mx: 0, my: 0 };
+    const mx = tx > 0 ? Math.min(1, I.ixx * aFull * cx / tx) : 0, my = ty > 0 ? Math.min(1, I.iyy * aFull * cy / ty) : 0;
+    return { aFull, mx, my };
+  }
+
+  /** @private F1.7: bill the boxes' lit time for braking a rate `w` (rad/s) about the turn axis (nx, ny) to rest. */
+  _slothTripBrake(p, w, nx, ny) {
+    const { aFull, mx, my } = this._slothTripAccel(p, nx, ny);
+    if (!(aFull > 0)) return;
+    const dL = w / aFull;                                        // full-output seconds the brake takes
+    if (mx > 0) p.tailBoxLit('x', nx >= 0 ? -1 : 1, mx * dL);
+    if (my > 0) p.tailBoxLit('y', ny >= 0 ? -1 : 1, my * dL);
   }
 
   /**
@@ -2616,6 +2733,36 @@ export class AutopilotSystem {
       * Math.PI / 180;
     const rate = AIM.AP_ROT_RATE * (AIM.ONBOARDING_ROT_RATE_MULT || 1);
 
+    // Sloth mode (D7/D10): the tank cannot pay for a turn, so the aim turns her on the tail boxes - minutes, not seconds.
+    // The source is chosen once, here, by the player's selector. A caller with its own time limit passes `maxWaitS`: a slow
+    // turn longer than that is refused at once with the honest time (nothing moves, nothing is billed).
+    const slothAim = this._player.attitudeTorqueSource
+      ? this._player.attitudeTorqueSource({ spinUp: true }) === 'tailBoxes' : false;
+    let slothEstS = 0;
+    if (slothAim) {
+      const p = this._player;
+      const dir = opts.aimDir || provider();
+      const nose = this._aimBm.set(0, 0, 1).applyQuaternion(p.quaternion).normalize();
+      const dv = dir ? this._aimTargetDir.set(dir.x, dir.y, dir.z) : null;
+      let errAng = 0, nx = 1, ny = 0;
+      if (dv && dv.lengthSq() > 1e-12) {
+        dv.normalize();
+        errAng = Math.acos(Math.max(-1, Math.min(1, nose.dot(dv))));
+        const ax = this._aimErrAxis.crossVectors(nose, dv);
+        if (ax.lengthSq() > 1e-12) { ax.applyQuaternion(this._aimInvQuat.copy(p.quaternion).invert()).normalize(); nx = ax.x; ny = ax.y; }
+      }
+      // F1.5: a target already inside the aim tolerance needs no turn: no warm-up estimate, no refusal, no cathodes lit
+      // (`_tickAimEased` resolves it on its first frame without asking the boxes).
+      slothEstS = errAng > tolRad ? p.slothTurnTimeS(errAng - 0.5 * tolRad, nx, ny) + p.slothWarmupLeftS() : 0;
+      if (Number.isFinite(opts.maxWaitS) && slothEstS > opts.maxWaitS) {
+        const text = `Steering gas empty — the tail boxes need ${p.slothTimeWords(slothEstS)} to turn her that far: too slow for this.`;
+        eventBus.emit(Events.COMMS_MESSAGE, { text, priority: 'warning', source: 'HOUSTON' });
+        const err = new Error('steering gas empty — the turn is too slow');
+        err.code = 'TOO_SLOW';
+        return Promise.reject(err);
+      }
+    }
+
     return new Promise((resolve, reject) => {
       // Cancel handlers — manual attitude input, target change, superseding.
       const onManualRotate = () => this._rejectAim('Manual attitude input', 'MANUAL');
@@ -2631,21 +2778,25 @@ export class AutopilotSystem {
 
       this._player.aimHold = true;
 
-      // One-time "on fumes" advisory when starting to slew with empty cold gas.
-      if (this._player.resources && this._player.resources.coldGas <= 0) {
+      eventBus.emit(Events.AIM_SEQUENCE_START, { mode });
+      if (slothAim) {
+        // D7: the honest time (the old "turning the ship anyway" line was the free full-speed aim, which is gone); F1.5: nothing
+        // to say when the target is already inside the tolerance (the shot fires with no turn)
+        if (slothEstS > 0) {
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            text: `Steering gas empty — turning slowly on the tail boxes: ${this._player.slothTimeWords(slothEstS)}.`,
+            priority: 'warning', source: 'HOUSTON',
+            _keep: true,
+          });
+        }
+      } else {
+        // comms-after-tutorial D5b: plain words (the old line talked about the ship's 'attitude').
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'Steering gas is nearly gone — turning the ship anyway.',
-          priority: 'warning', source: 'HOUSTON',
+          text: `Turning the ship to line up the launch. About ${Math.ceil(Math.PI / rate)} s at most.`,
+          priority: 'info', source: 'HOUSTON',
+          _keep: true,
         });
       }
-
-      eventBus.emit(Events.AIM_SEQUENCE_START, { mode });
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        // comms-after-tutorial D5b: plain words (the old line talked about the ship's 'attitude').
-        text: `Turning the ship to line up the launch. About ${Math.ceil(Math.PI / rate)} s at most.`,
-        priority: 'info', source: 'HOUSTON',
-        _keep: true,
-      });
 
       this._aimCoroutine = {
         mode, provider, tolRad, rate,
@@ -2657,7 +2808,9 @@ export class AutopilotSystem {
         pairIndex: (opts.pairIndex != null) ? opts.pairIndex : null,
         azRad: null,               // resolved lazily from dock geometry
         elapsed: 0,
-        timeout: AIM.AIM_TIMEOUT_S,
+        // a slow aim: twice its planned time + the cathodes' warm-up + a minute (the plain 30 s is for a gas turn)
+        timeout: slothAim ? Math.max(AIM.AIM_TIMEOUT_S, 2 * slothEstS + Constants.SLOTH.AIM_SLACK_S) : AIM.AIM_TIMEOUT_S,
+        sloth: slothAim,
         _cleanup: () => {
           eventBus.off(Events.MOTHER_MANUAL_ROTATE, onManualRotate);
           eventBus.off(Events.TARGET_SELECTED, onTargetChange);
@@ -2783,21 +2936,42 @@ export class AutopilotSystem {
     if (Math.abs(nBody.z) > TURN_ROLL_MAX) return fail('roll axis — no roll authority');
 
     // The shape and the gas price of the turn: ONE helper (gas-low-fail-fast D1), shared with the leash's early check.
-    const prof = attitudeTurnProfile(player, nBody, angleRad, opts);
+    let prof = attitudeTurnProfile(player, nBody, angleRad, opts);
     if (!prof.ok) return fail(prof.reason);
-    const { sign, A, a, wp, ta, tc, T, mag, dir, k, gasEstimate } = prof;
-    if (turnGasShort(player, gasEstimate)) return fail('not enough steering gas');
+    // Sloth mode (D7/D10): the selector says the tank cannot pay, so the turn is the tail boxes' (the shape and the time
+    // are theirs; no steering gas is billed). Otherwise the gas must pay for both burns (which also keeps the gas to stop).
+    const slothTurn = typeof player.attitudeTorqueSource === 'function'
+      && player.attitudeTorqueSource({ spinUp: true }) === 'tailBoxes';
+    let slothEstS = 0;
+    if (slothTurn) {
+      prof = attitudeTurnProfile(player, nBody, angleRad, { ...opts, boxes: true });
+      if (!prof.ok) return fail(prof.reason);
+      slothEstS = prof.T + player.slothWarmupLeftS();
+      if (Number.isFinite(opts.maxWaitS) && slothEstS > opts.maxWaitS) {
+        return fail(`steering gas empty — the tail boxes need ${player.slothTimeWords(slothEstS)} for that turn`);
+      }
+    } else if (turnGasShort(player, prof.gasEstimate)) {
+      return fail('not enough steering gas');
+    }
+    const { sign, A, a, wp, ta, tc, T, mag, dir, k } = prof;
 
-    const timeoutS = (Number.isFinite(opts.timeoutS) && opts.timeoutS > 0) ? opts.timeoutS : T * 2 + 5;
+    const timeoutS = (Number.isFinite(opts.timeoutS) && opts.timeoutS > 0) ? opts.timeoutS
+      : (slothTurn ? 2 * slothEstS + 5 + Constants.SLOTH.AIM_SLACK_S : T * 2 + 5);
     const holdS = (Number.isFinite(opts.holdS) && opts.holdS > 0) ? opts.holdS : 120;
     const holdOwner = opts.holdOwner || null;
-    const track = typeof opts.track === 'function' ? opts.track : null;
+    let track = typeof opts.track === 'function' ? opts.track : null;
+    // F1.7: a fixed-profile turn writes the attitude from a clock, so a clock that waits (cold cathodes, no power) would stop her
+    // spin for free. On the boxes the turn runs closed loop on her real rate instead (`_tickTrackedTurn`): the angle left is
+    // the angle asked minus what she has turned; no power = no change of rate (she coasts on), the stop is the boxes' to make.
+    const selfTrack = slothTurn && !track;
 
     return new Promise((resolve, reject) => {
+      if (selfTrack) track = () => (this._turn ? this._turn.sign * this._turn.A - this._turn.progress : null);
       this._turn = {
         axis, sign, A, wp, a, ta, tc, T, qStart, mag, dir, k,
         t: 0,            // profile time
         wall: 0,         // time since the request (timeout clock)
+        sloth: slothTurn,          // sloth mode: the boxes turn her (always a tracked turn: `selfTrack`, F1.7)
         timeoutS, holdS, holdOwner,
         gasUnits: 0,
         qRot: new THREE.Quaternion(),
@@ -2812,6 +2986,12 @@ export class AutopilotSystem {
       this.holdAttitude(holdS, { owner: holdOwner });
       this._player.aimHold = true;
       eventBus.emit(Events.AIM_SEQUENCE_START, { mode: 'turn' });
+      if (slothTurn) {
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: `Steering gas empty — turning slowly on the tail boxes: ${player.slothTimeWords(slothEstS)}.`,
+          priority: 'warning', source: 'HOUSTON',
+        });
+      }
     });
   }
 
@@ -2848,6 +3028,11 @@ export class AutopilotSystem {
    */
   _turnFire(c, name, sign, m, seconds) {
     const p = this._player;
+    // Sloth mode: the box that gives the torque is lit for m × seconds of full output.
+    if (c.sloth) {
+      if (typeof p.tailBoxLit === 'function') p.tailBoxLit(name === 'pitch' ? 'x' : 'y', sign, m * seconds);
+      return;
+    }
     let fm = m, fdt = seconds;
     if (m < TURN_MIN_MAG) { fm = TURN_MIN_MAG; fdt = seconds * m / TURN_MIN_MAG; }
     if (typeof p.fireRcsRotation === 'function') p.fireRcsRotation(name, sign, fm, fdt);
@@ -2897,6 +3082,7 @@ export class AutopilotSystem {
     if (c.wall >= c.timeoutS) { this._rejectTurn('attitude turn timed out'); return; }
     if (c.track) { this._tickTrackedTurn(c, dt); return; }
 
+    // (A sloth-mode turn never gets here: it is tracked, so its rate is real and a lack of power cannot stop it for free.)
     const t0 = c.t;
     const t1 = Math.min(t0 + dt, c.T);
     c.t = t1;
@@ -2934,7 +3120,10 @@ export class AutopilotSystem {
    * @private
    */
   _tickTrackedTurn(c, dt) {
-    const a = c.a;
+    const aFull = c.a;
+    // Sloth mode: the boxes' thrust fraction scales the rate change (0 while cold / no power / no gas); the burns below are
+    // billed per full-output second (Δω / aFull).
+    const a = c.sloth ? aFull * this._player.slothPeek(c.mag.x + c.mag.y, dt) : aFull;
     const dOm = a * dt;
     let rem = null;
     try { rem = c.track(); } catch (e) { rem = null; }
@@ -2942,14 +3131,19 @@ export class AutopilotSystem {
     const left = live ? Math.abs(rem) : 0;
     const was = c.omega;
     if ((!live || left <= c.stopRad) && Math.abs(was) <= dOm + 1e-12) {      // at rest where she was told to stop
-      if (was !== 0) this._fireTrackCouples(c, was > 0 ? -1 : 1, Math.abs(was) / a);   // the last of the brake
+      if (was !== 0) this._fireTrackCouples(c, was > 0 ? -1 : 1, Math.abs(was) / aFull);   // the last of the brake
       c.omega = 0;
       this._resolveTurn();
       return;
     }
     const want = left > 0 ? 0.5 * (-dOm + Math.sqrt(dOm * dOm + 8 * a * left)) : 0;
     const target = (rem < 0 ? -1 : 1) * Math.min(c.wp, want);
-    const now = Math.max(was - dOm, Math.min(was + dOm, target));
+    let now = Math.max(was - dOm, Math.min(was + dOm, target));
+    // D5: a cold-gas turn never spins faster than the gas left can stop (the same cap as the eased aim)
+    if (!c.sloth && Math.abs(now) > Math.abs(was)) {
+      const cap = this._gasRateCap(c, c.k * (c.mag.x + c.mag.y) / aFull, Math.abs(was));
+      if (Math.abs(now) > cap) { now = Math.sign(now) * Math.max(Math.abs(was), cap); this._noteGasCap(c); }
+    }
     c.omega = now;
     const step = now * dt;                                            // the new rate over the frame, as the eased aim (the stop above is sized for it)
     if (step !== 0) {
@@ -2957,7 +3151,31 @@ export class AutopilotSystem {
       this._player.quaternion.premultiply(c.qRot).normalize();
       c.progress += step;
     }
-    if (now !== was) this._fireTrackCouples(c, now > was ? 1 : -1, Math.abs(now - was) / a);
+    if (now !== was) this._fireTrackCouples(c, now > was ? 1 : -1, Math.abs(now - was) / aFull);
+  }
+
+  /**
+   * D5 (keep gas to stop), the autopilot's form: the highest rate a cold-gas aim / turn may climb to this frame so that
+   * the tank still holds STOP_RESERVE × the gas its own stop bills. `kappa` = steering gas per rad/s of this turn's brake
+   * (k·(mx+my)/α: spin-up and stop price alike); climbing from `was` to `w` burns κ(w − was) and leaves a stop of κ·w, so
+   * G − κ(w − was) ≥ R·κ·w  →  w ≤ (G + κ·was) / ((1+R)·κ).
+   * @returns {number} rad/s (Infinity with no gas figure, e.g. a mock player)
+   * @private
+   */
+  _gasRateCap(c, kappa, was) {
+    const G = this._player && this._player.resources ? this._player.resources.coldGas : undefined;
+    if (!Number.isFinite(G) || !(kappa > 0)) return Infinity;
+    const R = Constants.SLOTH.STOP_RESERVE;
+    return Math.max(0, (G + kappa * was) / ((1 + R) * kappa));
+  }
+
+  /** @private The first time the gas cap holds a turn back: one line (D5). */
+  _noteGasCap(c) {
+    if (c.capSaid) return;
+    c.capSaid = true;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: 'Steering gas low — turning slower to keep enough to stop.', priority: 'info', source: 'HOUSTON',
+    });
   }
 
   /** @private Fire both couples of a tracked turn for `seconds` (sign +1 = speeding a positive turn up, −1 = braking it). */
@@ -3144,17 +3362,27 @@ export class AutopilotSystem {
     bm.applyQuaternion(q).normalize();
     const errM = Math.acos(Math.max(-1, Math.min(1, bm.dot(T))));      // what is left for her to turn
 
-    const a = this._aimAccel(c, bm, T);
-    if (!(a > 0)) return;
+    const aFull = this._aimAccel(c, bm, T);
+    if (!(aFull > 0)) return;
+    // Sloth mode: the boxes' thrust fraction scales the acceleration (0 while the cathodes warm, or with no power / engine
+    // gas: she waits); burns are billed per full-output second (Δω / aFull), so the bill follows the impulse, not the pace.
+    // F1.5: at rest and already inside the tolerance there is nothing to turn: the boxes are not asked (no warm-up starts, no
+    // power or engine gas is drawn) and the aim resolves below on this frame.
+    const noTurn = c.sloth && !(c.omega > 0) && errM <= c.tolRad;
+    const a = c.sloth ? (noTurn ? 0 : aFull * p.slothPeek(c.burn.mx + c.burn.my, dt)) : aFull;
 
     if (c.law === undefined) {
       c.law = true;
       c.omega = 0;                                                     // her rate along the turn axis (rad/s)
       c.gasUnits = 0;
       c.k = (p._coldGasRate ?? 0.5) * (Constants.ATTITUDE?.RCS_ATTITUDE_N2_FACTOR ?? 0.3);
-      const vCap = c.rate;                                             // today's peak (AP_ROT_RATE): never above it
+      // D5: a cold-gas aim never spins faster than the gas left can stop (the cap holds her rate down as it burns)
+      const kap = c.k * (c.burn.mx + c.burn.my) / aFull;
+      const capStart = c.sloth ? Infinity : this._gasRateCap(c, kap, 0);
+      const vCap = Math.min(c.rate, capStart);                         // today's peak (AP_ROT_RATE): never above it
+      if (capStart < c.rate) this._noteGasCap(c);                      // the tank holds the peak below today's: say so once
       const theta = Math.max(0, errM - c.stopErr);
-      const tM = theta <= 0 ? 0 : (theta >= vCap * vCap / a ? theta / vCap + vCap / a : 2 * Math.sqrt(theta / a));
+      const tM = theta <= 0 ? 0 : (theta >= vCap * vCap / aFull ? theta / vCap + vCap / aFull : 2 * Math.sqrt(theta / aFull));
       let tS = 0;
       if (arm) {
         tS = (typeof arm.aimEaseMinTime === 'function')
@@ -3164,9 +3392,10 @@ export class AutopilotSystem {
       c.vCap = vCap;
       c.vPeak = vCap;
       if (tS > tM && theta > 0) {                                      // the strut needs longer: slow her peak
-        c.vPeak = Math.min(vCap, 0.5 * a * (tS - Math.sqrt(Math.max(0, tS * tS - 4 * theta / a))));
+        c.vPeak = Math.min(vCap, 0.5 * aFull * (tS - Math.sqrt(Math.max(0, tS * tS - 4 * theta / aFull))));
       }
       c.tPlan = Math.max(tM, tS);
+      if (c.sloth || vCap < c.rate) c.timeout = Math.max(c.timeout, 2 * c.tPlan + (c.sloth ? p.slothWarmupLeftS() : 0) + Constants.SLOTH.AIM_SLACK_S);
       c.ease = (arm && tS > 0) ? { durationS: c.tPlan } : null;
     }
 
@@ -3203,17 +3432,22 @@ export class AutopilotSystem {
     const was = c.omega;
     const lo = Math.max(0, was - dOm);
     const vLim = strutDone ? c.vCap : c.vPeak;                         // once the strut is there nothing is left to wait for
-    const now = Math.min(Math.max(want, lo), Math.max(lo, Math.min(vLim, was + dOm)));
+    let now = Math.min(Math.max(want, lo), Math.max(lo, Math.min(vLim, was + dOm)));
+    // D5: climbing is held to what the gas left can stop (never a cut in the brake: only a rise above the last rate)
+    if (!c.sloth && now > was) {
+      const cap = this._gasRateCap(c, c.k * (c.burn.mx + c.burn.my) / aFull, was);
+      if (now > cap) { now = Math.max(was, cap); this._noteGasCap(c); }
+    }
 
     if (strutDone && errM <= c.tolRad && now <= slack) {
-      if (was > 0) this._fireAimCouples(c, -1, was / a);               // the last of the brake
+      if (was > 0) this._fireAimCouples(c, -1, was / aFull);           // the last of the brake
       c.omega = 0;
       this._resolveAim({ x: bm.x, y: bm.y, z: bm.z });                 // strut is there: this IS the launcher axis
       return;
     }
 
     c.omega = now;
-    if (now !== was) this._fireAimCouples(c, now > was ? 1 : -1, Math.abs(now - was) / a);
+    if (now !== was) this._fireAimCouples(c, now > was ? 1 : -1, Math.abs(now - was) / aFull);
     const step = Math.min(now * dt, errM);
     if (step > 0 && errM > 1e-9) {
       this._aimDeltaQuat.setFromUnitVectors(bm, T);
@@ -3241,7 +3475,9 @@ export class AutopilotSystem {
       c.axX = 1; c.axY = 0;                                            // no turn axis yet (aligned): any, nothing burns
     }
     const I = p.getAttitudeInertia();
-    const tauX = p._coupleTauMag('x'), tauY = p._coupleTauMag('y');
+    // sloth mode: the torque is the tail boxes' (the source was chosen when the aim started)
+    const tauX = c.sloth ? p.slothTauMag('x') : p._coupleTauMag('x');
+    const tauY = c.sloth ? p.slothTauMag('y') : p._coupleTauMag('y');
     const cx = Math.abs(c.axX), cy = Math.abs(c.axY);
     let a = Infinity;                                                  // slowest couple sets the angular acceleration
     if (cx > 1e-6) a = Math.min(a, tauX / (I.ixx * cx));

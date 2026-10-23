@@ -348,7 +348,7 @@ export const Constants = {
   ENGINE_TANK_DRY_MASS_KG: 9.5,   // h3-argon-engine D3: the 60 L, 200 bar Ti/COPV tank itself (research §2.2 fit; the
                                    // 263 kg F2 dry figure did not count it). Carried as dry mass in getMassBudget().
   ENGINE_TANK_VOLUME_L: 60,       // h3-argon-engine: base engine tank volume (documentation; kgFull is derived from it)
-  COLD_GAS_MAX: 20,               // kg
+  COLD_GAS_MAX: 20,               // tank units, NOT kg: 20 units = 6 kg of nitrogen (0.3 kg a unit; the start fill of 12 units = the 3.6 kg in the mass budget)
   COLD_GAS_LOW_FRAC: 0.25,        // gas-low-fail-fast D4: "steering gas low" — a fraction of COLD_GAS_MAX (coldGas / coldGasMax); the HUD
                                    // gas meter turns amber below the same fraction (VitalsPane reads this), the comms line is sent once on crossing it
   COLD_GAS_LOW_REARM_FRAC: 0.35,  // ...and re-arms only after the tank is back above this fraction (a refill), so a tank hovering at a quarter says it once
@@ -1031,6 +1031,25 @@ export const Constants = {
                                 // a 60° arrow-key turn (spin-up + arrest) costs 1.13 kg = 5.7% of the
                                 // tank (DECISIONS "roughly 6%"); the old "~2.5%/turn" comment was stale.
                                 // An aim bills torque × time (mother-aims): ~1.9% for a 60° turn.
+  },
+
+  // ── Sloth mode (owner 2026-10-23, DECISIONS §37): with the steering gas out, the four tail ion boxes turn her slowly ──
+  // Each box is a quarter of her one real engine (TRIP.XENON_THRUST_N × the loaded gas's thrustScale, §33 row 10), at a
+  // quarter of its 600 W. Torque comes from the box's real place and the ship's centre of mass (r − CoM) × F, never typed in.
+  // The tank's last gas is kept for stopping: a cold-gas turn never spins her faster than the gas left can stop, and when the
+  // tank holds less than spinning up to MIN_SPIN_DEG_S and stopping from it costs, every turn is a slow one on the boxes.
+  SLOTH: {
+    BOX_POWER_W: 150,            // W per lit box = 600 W (the engine) / 4; drawn through drawUpTo like the engine's power
+    WARMUP_S: 30,                // s the cathodes warm before the first thrust (a heaterless Hall cathode starts in < 25 s, SETS ST-40; rounded up)
+    STANDBY_W: 20,               // W hot standby once warm, while sloth mode is on (ESTIMATE); not met -> cold, warm again next use
+    STOP_RESERVE: 1.05,          // a cold-gas turn keeps this x the gas the stop will bill (the arrest always may spend it)
+    GAS_DUST_FRAC: 0.01,         // a tank under this fraction of G_min is empty for the selector (else the last grain fades the torque for ~18 s)
+    MIN_SPIN_DEG_S: 1,           // G_min = gas to spin up to this rate + gas to stop from it; below it the boxes take every turn
+    GAS_ARREST_ABOVE_DEG_S: 1,   // in sloth mode a spin faster than this is stopped with the gas that is left (the boxes finish the stop)
+    SERVO_ZONE_S: 2,             // the box rate-null is proportional inside alpha x this (rad/s): full torque outside, no chatter inside
+    REST_RAD_S: 1e-7,            // below this rate error the box rate-null stops firing (the cold-gas servo's 1e-4 is bigger than a sloth turn)
+    COLD_START_RAD_S: 1e-4,      // a spin error under this (the cold-gas servo's own "at rest") does not start the cathodes warming: nothing is trimmed until they are warm anyway
+    AIM_SLACK_S: 60,             // seconds added to a slow aim's time-out on top of twice its planned time
   },
 
   // FIX_PLAN §3: Tether-aware rotation limits (exponential spring-resistance model).
