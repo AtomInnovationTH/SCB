@@ -45,6 +45,9 @@ export const HELD_BAG = Object.freeze({
  * @returns {number}
  */
 export function drawnCatchRadiusScene(d, chopMul = null) {
+  // u20-nets: a scoop bag is a ball of radius `sizeMeter / 2` (its `type` is the heaviest member's, whose mesh is not the bag's
+  // shape): the net's wrap goes round that ball, at true size, no readability floor.
+  if (d.isBag === true && d.sizeMeter > 0) return (d.sizeMeter / 2) * M * (chopMul != null ? chopMul : 1);
   DebrisWireframe.getGeometry(d.type, d.id);            // fills the bounding-radius cache
   const br = DebrisWireframe.getBoundingRadius(d.type, d.id) || 1;
   let renderScale = DebrisField.effectiveRenderScale(d);

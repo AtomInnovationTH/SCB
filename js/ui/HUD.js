@@ -242,6 +242,7 @@ export class HUD {
     // default here MUST behave as mission 1: collision warnings suppressed.
     /** @type {number} Current mission number (default 1). */
     this._missionNumber = 1;
+    this._manualCaptureBeat = false;   // u20-ipad F1: the manual-capture lesson is running (MISSION_BEAT_STARTED)
     /** @type {object|null} Current mission profile from MISSION_START (null ⇒ mission 1). */
     this._missionProfile = null;
 
@@ -1912,6 +1913,11 @@ export class HUD {
       this._missionProfile = (data && data.profile) || null;
     });
 
+    // u20-ipad F1: the manual-capture lesson (the only one that asks for N in flight) is up between its start and its
+    // satisfaction; any other beat starting, or a reset, ends it.
+    eventBus.on(Events.MISSION_BEAT_STARTED, (d) => { this._manualCaptureBeat = !!d && d.beatId === 'ch2_manual_capture'; });
+    eventBus.on(Events.MISSION_BEAT_SATISFIED, (d) => { if (d && d.beatId === 'ch2_manual_capture') this._manualCaptureBeat = false; });
+
     // Keycap badges during the guided pipeline: while onboarding runs, a body
     // attribute suppresses the dormant-panel activate-key glyphs (CSS in the
     // injected HUD styles) so the teaching beats own attention. The veteran-skip
@@ -1935,6 +1941,7 @@ export class HUD {
       }
       this._missionNumber = 1;
       this._missionProfile = null;
+      this._manualCaptureBeat = false;
       this.container.classList.remove('callouts-active'); // restore panes
       this._clearDensityPhases();
     });
@@ -3394,7 +3401,11 @@ export class HUD {
     const chip = glass ? this._glassStripChips() : null;
     const fly = glass ? this._glassFlyingLine(arm) : '';   // u18a (D2): TRANSIT / APPROACH only; the whole metres are in the text, so in the key
     const base = isStationKeep ? 'sk' : 'pilot';
-    const mode = glass ? `${base}:glass:${chip.net}:${chip.reel}:${fly}` : base;
+    // u20-ipad F1: desktop in flight shows the same flying line, and `N Deploy Net` only for the manual-capture lesson
+    // (the lesson itself says "capture by hand (N)" during the approach); both go into the cached mode key.
+    const deskFly = !glass && !isStationKeep ? this._glassFlyingLine(arm) : '';
+    const deskNet = !glass && !isStationKeep && this._manualNetLessonUp(arm);
+    const mode = glass ? `${base}:glass:${chip.net}:${chip.reel}:${fly}` : (deskFly || deskNet ? `${base}:${deskFly}:${deskNet ? 'N' : '-'}` : base);
     // Avoid redundant DOM writes — track which variant is showing
     if (this._armStripMode === mode) return;
     this._armStripMode = mode;
@@ -3432,16 +3443,30 @@ export class HUD {
     } else {
       // Hotkey revamp 2026-06-14: WASD/Q-E daughter thrust was removed — the
       // daughter flies autonomously to her target. The only pilot-mode actions
-      // are deploy-net (N), recall (R), and exit (ESC).
+      // are deploy-net (N), recall (R), and exit (ESC). u20-ipad F1: N is offered out here only for the manual-capture
+      // lesson (the small net always misses beyond ~26 m); in position the station-keep strip above says `N Capture`.
+      const sepHtml = '<span class="apc-sep">│</span>';
       this._armPilotStrip.innerHTML =
         '<span class="apc-badge">🤖 DAUGHTER PILOT</span>' +
-        '<span class="apc-sep">│</span>' +
-        '<span class="apc-key">N</span> Deploy Net ' +
-        '<span class="apc-sep">│</span>' +
+        sepHtml +
+        (deskFly ? `${deskFly}${sepHtml}` : '') +
+        (deskNet ? `<span class="apc-key">N</span> Deploy Net ${sepHtml}` : '') +
         '<span class="apc-key">R</span> Recall ' +
         '<span class="apc-sep">│</span>' +
         '<span class="apc-key">ESC</span> Exit';
     }
+  }
+
+  /**
+   * @private u20-ipad F1: is the mission-2 manual-capture lesson running while she flies in (TRANSIT / APPROACH)? Its hint
+   * says "capture by hand (N)" and only a manual net from a piloted daughter in flight satisfies it, so the desktop strip
+   * keeps `N Deploy Net` for exactly that (the touch chip's BEAT_CHIPS rule). Fed by MISSION_BEAT_STARTED / _SATISFIED.
+   * @param {object} [arm] - the piloted ArmUnit
+   * @returns {boolean}
+   */
+  _manualNetLessonUp(arm) {
+    const S = Constants.ARM_STATES;
+    return this._manualCaptureBeat === true && !!arm && (arm.state === S.TRANSIT || arm.state === S.APPROACH);
   }
 
   /**

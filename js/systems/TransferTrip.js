@@ -231,6 +231,7 @@ export class TransferTrip {
     this._noseAgeS = 0;
     this._noseCached = false;
     this._carryAgeS = 0;            // trip-melt-2: s since the daughters were last looked at for a carry
+    this._carryWasBusy = false;     // u20-nose: a carry was running last frame (its end re-asks "is a nose catch waiting" at once)
     this._carrySaid = Object.create(null);   // '<arm>|<reason>' -> said this trip
     this._rackAgeS = 0;
     this._rackCached = false;
@@ -807,6 +808,11 @@ export class TransferTrip {
     this._billGas();
     this._noteTips();
     this._tickCarry(dt);
+    // u20-nose: a daughter who has just put her catch on the nose leaves it for the leash, which could not turn the ship while she flew
+    // (`_noseWaiting` read "no" all that time and is cached for 0.25 s): ask again the frame her carry ends, or the trip ends under it
+    const busyNow = this._carryBusy();
+    if (this._carryWasBusy && !busyNow) this._noseAgeS = 1e9;
+    this._carryWasBusy = busyNow;
     if (this._elapsedS >= T.MAX_REAL_S) {
       // trip-melt-2 D8: at the cap no new carry starts, and a carry in flight finishes (CARRY_BACK to docked) before the
       // trip ends; a carry that is still running FINISH_GRACE_S later (stuck) is aborted, she snaps docked

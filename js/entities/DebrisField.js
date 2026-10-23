@@ -31,6 +31,7 @@ import { catalogEntryToDebrisData, buildRegimeDebrisSeeds, regimeFromStartOrbit,
 import { deriveCaptureFlags } from './debrisFerrous.js';
 import { referenceDragAreaM2 } from './MotherDragArea.js';
 import { isFlagEligible, pickCountryForId } from '../ui/FlagDecalSystem.js';
+import { bagSize } from './scoopRule.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -1919,6 +1920,9 @@ export class DebrisField {
   static trueReachM(debris, defaultSizeM = 0) {
     const s = debris ? debris.sizeMeter : undefined;
     const sizeM = (Number.isFinite(s) && s !== 0) ? s : defaultSizeM;
+    // A scoop net's bag (u20-nets, 2026-10-23) is a ball by construction: `sizeMeter / 2`, checked BEFORE the type lookup (its
+    // `type` is the heaviest member's, whose mesh is not the bag's shape).
+    if (debris && debris.isBag === true) return sizeM / 2;
     // no `type` = a test rig that never drew a mesh: the legacy sphere
     if (!debris || !debris.type) return sizeM / 2;
     return sizeM * DebrisWireframe.getOriginRadius(debris.type, debris.id);
@@ -2785,6 +2789,195 @@ export class DebrisField {
   }
 
   /**
+   * The scoop net's bag (u20-nets, 2026-10-23; owner: "daughters may need ways to combine many small pieces in one net"):
+   * the reverse of `spawnCutPiece`. A daughter's net that closed on its target calls this with the pieces inside its mouth
+   * (the target first, the rest picked by `scoopRule.pickScoopMembers`). It makes ONE new piece, the bag, and takes the members
+   * out of play; every downstream rule (one catch per daughter, tip fit by `trueReachM`, the carry gate by `sizeMeter`, the
+   * leash, trip melting by mass) then sees one piece. Fewer than two live members: nothing is made (the caller keeps today's
+   * path, the same piece held).
+   *
+   * The bag: `isBag: true`; `type`/`material` the heaviest member's (for code that reads a type; `trueReachM` answers
+   * `sizeMeter / 2` for a bag BEFORE any type lookup, and `heldBagShape` draws its wrap round that ball); a new id;
+   * `mass` the sum; `sizeMeter = 2r` by `scoopRule.bagSize`; position the mass centre; the target's orbit and tumble axis;
+   * the tumble RATE mass-weighted [estimate]. `bagMembers[i]` = `{ id, type, massKg, sizeMeter, fieldId, fieldRow, piece }`:
+   * the plain fields are what a save or a log needs, `piece` is the member's own body, kept whole so the credit pays each
+   * one exactly as if it had been caught alone (score, salvage, `markCaught`).
+   *
+   * The members: `alive = false` and hidden through `removeDebris` (so the selector, wireframe, reticle and auto-advance hear
+   * the one removal event every other leaving piece sends), tagged `_inBag` / `_bagId`. `FieldRegistry._onRemoved` marks a
+   * removed piece's row caught, which would pay a row for a piece nobody has been paid for (a bag that is lost would then
+   * lose its members' rows for good). A solo catch's row leaves only at its credit, so the members' field tag is PARKED
+   * (`_bagFieldId` / `_bagFieldRow`, the live `fieldId` nulled) for the removal and the credit restores nothing: it marks the
+   * `bagMembers` snapshots caught. A bag let go (K), cut, lost or melted is one piece of its total mass and size, like a solo.
+   *
+   * Drawn: ONE instance of a mesh merged from the members' own meshes at true size, each at its offset from the mass centre
+   * (pulled inside the bag's ball when it pokes out) and its own attitude, sharing the heaviest member's material.
+   *
+   * @param {object[]} members the target first, then the others (already vetted by the caller)
+   * @param {{netClass?: object, armIndex?: number}|null} [net] the closing net (its class caps the bag at mouth / 4)
+   * @returns {object|null} the bag, or null when fewer than two members are alive
+   */
+  mergeIntoBag(members, net = null) {
+    const live = Array.isArray(members) ? members.filter((m) => m && m.alive !== false && m.isBag !== true) : [];
+    if (live.length < 2) return null;
+    const target = live[0];
+    const netClass = (net && net.netClass) || null;
+
+    // mass centre, scene units
+    const posOf = (d) => {
+      if (d._scenePosition && Number.isFinite(d._scenePosition.x)) return d._scenePosition;
+      return d.orbit ? orbitToSceneCartesian(d.orbit).position : null;
+    };
+    let mass = 0, cx = 0, cy = 0, cz = 0, wn = 0;
+    for (const m of live) {
+      const p = posOf(m);
+      const w = m.mass > 0 ? m.mass : 1e-6;
+      mass += (m.mass || 0);
+      if (p) { cx += p.x * w; cy += p.y * w; cz += p.z * w; wn += w; }
+    }
+    const cm = wn > 0 ? new THREE.Vector3(cx / wn, cy / wn, cz / wn) : null;
+
+    const sz = bagSize(live, netClass, (d) => DebrisField.trueReachM(d));
+    const heaviest = live.reduce((a, b) => ((b.mass || 0) > (a.mass || 0) ? b : a), live[0]);
+    let spinW = 0, brittle = 0;
+    for (const m of live) { spinW += (m.tumbleRate || 0) * (m.mass || 0); brittle = Math.max(brittle, m.brittleness || 0); }
+    const tumbleRate = mass > 0 ? spinW / mass : (target.tumbleRate || 0);
+
+    const bag = {
+      id: this._nextId++,
+      type: heaviest.type,
+      material: heaviest.material,
+      mass,
+      salvage: { xenon: 0, indium: 0, gaAs: 0, battery: 0, hydrazine: 0, lithium: 0, metals: [] },  // each member pays its own
+      hasSalvage: false,
+      metalMassKg: live.reduce((a, m) => a + (m.metalMassKg || 0), 0),
+      brittleness: brittle,
+      alive: true,
+      tracked: target.tracked !== false,
+      discovered: true,
+      tumbleRate,
+      _initialTumbleRate: tumbleRate,
+      tumbleAxis: (target.tumbleAxis instanceof THREE.Vector3)
+        ? target.tumbleAxis.clone() : (target.tumbleAxis ? new THREE.Vector3(target.tumbleAxis.x, target.tumbleAxis.y, target.tumbleAxis.z) : new THREE.Vector3(0, 1, 0)),
+      tumbleAngle: 0,
+      shape: 'sphere',
+      isReal: false,
+      country: null,
+      catalogType: heaviest.catalogType,
+      moidBadge: null,
+      hazard: false,
+      foreground: false,
+      act: 0,
+      _onboardingPinned: false,
+      _onboardingPinFwd: 0,
+      _onboardingPinLat: 0,
+      _credited: false,
+      isBag: true,
+      bagNetArmIndex: net && Number.isInteger(net.armIndex) ? net.armIndex : -1,
+      bagMembers: live.map((m) => ({
+        id: m.id, type: m.type, massKg: m.mass || 0, sizeMeter: m.sizeMeter,
+        fieldId: m.fieldId ?? null, fieldRow: m.fieldRow ?? null, piece: m,
+      })),
+      ...deriveCaptureFlags(heaviest.material, heaviest.type, mass),
+    };
+    if (target.orbit) bag.orbit = { ...target.orbit };
+    DebrisField.setDebrisSize(bag, sz.sizeMeter);
+    bag.lengthM = bag.widthM = sz.sizeMeter;            // a ball: the same extent every way
+    bag.bagRadiusM = sz.radiusM;
+    if (cm) bag._scenePosition = cm.clone();
+
+    // ── the members leave play (see the docblock for the field-tag parking) ──
+    for (const m of live) {
+      m._inBag = true;
+      m._bagId = bag.id;
+      m._bagFieldId = m.fieldId ?? null;
+      m._bagFieldRow = m.fieldRow ?? null;
+      m._bagOffsetScene = (cm && posOf(m)) ? new THREE.Vector3(posOf(m).x - cm.x, posOf(m).y - cm.y, posOf(m).z - cm.z) : null;
+      m.fieldId = null;
+      m._committedNetArmId = null;
+      m._captured = false;
+    }
+    // The bag's mesh is built from the members' meshes BEFORE they are hidden (their slots/materials are still there).
+    this.debrisMap.set(bag.id, bag);
+    this.debrisList.push(bag);
+    this._attachBagMesh(bag, live, cm, sz.radiusM);
+    for (const m of live) this.removeDebris(m.id);
+    return bag;
+  }
+
+  /**
+   * Give a bag its one drawn instance: a mesh merged from the members' meshes (true size, at their offsets from the mass
+   * centre, pulled inside the ball of radius `radiusM` when they poke out, each at its own attitude). Unit of the merged
+   * geometry: one bag `sizeMeter`, like every other mesh here (drawn at `sceneSize` = `sizeMeter` x 1e-5). Shares the heaviest
+   * member's material. Nothing is drawn (the bag is still a piece) when no member has a mesh or the field has no scene group.
+   * @private
+   */
+  _attachBagMesh(bag, live, cm, radiusM) {
+    if (!this.group || !this.instancedMeshes) return;
+    const sizeM = bag.sizeMeter;
+    if (!(sizeM > 0)) return;
+    const parts = [];
+    const _q = new THREE.Quaternion(), _v = new THREE.Vector3(), _n = new THREE.Vector3(), _o = new THREE.Vector3();
+    let hasUv = true;
+    for (const m of live) {
+      const src = DebrisWireframe.getGeometry(m.type, m.id);
+      if (!src || !src.attributes || !src.attributes.position) continue;
+      const g = src.index ? src.toNonIndexed() : src.clone();
+      if (!g.attributes.uv) hasUv = false;
+      const reach = Math.max(1e-6, DebrisField.trueReachM(m));
+      // offset from the mass centre, metres, pulled inside the ball when the member would poke out of it
+      const p = (m._scenePosition && Number.isFinite(m._scenePosition.x)) ? m._scenePosition : (m.orbit ? orbitToSceneCartesian(m.orbit).position : null);
+      if (p && cm) _o.set((p.x - cm.x) / METRE_SCENE, (p.y - cm.y) / METRE_SCENE, (p.z - cm.z) / METRE_SCENE);
+      else _o.set(0, 0, 0);
+      const room = Math.max(0, radiusM - reach);
+      const dist = _o.length();
+      if (dist > room) _o.multiplyScalar(dist > 0 ? room / dist : 0);
+      if (m.tumbleAxis) _q.setFromAxisAngle(m.tumbleAxis, m.tumbleAngle || 0); else _q.identity();
+      parts.push({ g, k: (m.sizeMeter || sizeM) / sizeM, ox: _o.x / sizeM, oy: _o.y / sizeM, oz: _o.z / sizeM, q: _q.clone() });
+    }
+    if (parts.length === 0) return;
+    let total = 0;
+    for (const t of parts) total += t.g.attributes.position.count;
+    const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3), uv = hasUv ? new Float32Array(total * 2) : null;
+    let at = 0;
+    for (const t of parts) {
+      const P = t.g.attributes.position, N = t.g.attributes.normal, U = t.g.attributes.uv;
+      for (let i = 0; i < P.count; i++, at++) {
+        _v.set(P.getX(i), P.getY(i), P.getZ(i)).applyQuaternion(t.q).multiplyScalar(t.k);
+        pos[at * 3] = _v.x + t.ox; pos[at * 3 + 1] = _v.y + t.oy; pos[at * 3 + 2] = _v.z + t.oz;
+        if (N) { _n.set(N.getX(i), N.getY(i), N.getZ(i)).applyQuaternion(t.q); nor[at * 3] = _n.x; nor[at * 3 + 1] = _n.y; nor[at * 3 + 2] = _n.z; }
+        else { nor[at * 3 + 1] = 1; }
+        if (uv && U) { uv[at * 2] = U.getX(i); uv[at * 2 + 1] = U.getY(i); }
+      }
+      t.g.dispose();
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    if (uv) geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geo.computeBoundingSphere();
+    const heavyLook = this._instanceLookup.get(live.reduce((a, b) => ((b.mass || 0) > (a.mass || 0) ? b : a), live[0]).id);
+    const heavyMesh = heavyLook ? this.instancedMeshes[heavyLook.meshKey] : null;
+    let mat = heavyMesh ? heavyMesh.material : null;
+    if (!mat) mat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.5, roughness: 0.6, wireframe: getVisualMode() !== 'textured' });
+    const key = `bag:${bag.id}`;
+    const mesh = new THREE.InstancedMesh(geo, mat, 1);
+    mesh.name = `Debris_bag_${bag.id}`;
+    mesh.frustumCulled = false;
+    mesh.setColorAt(0, this._defaultDebrisColor);
+    const _tint = new THREE.Color(getInstanceTintBase(bag.catalogType || 'unknown'));
+    applyInstanceColorVariation(_tint, bag.id, bag.catalogType);
+    mesh.setColorAt(0, _tint);
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    this.group.add(mesh);
+    this.instancedMeshes[key] = mesh;
+    bag._meshKey = key;
+    this._instanceLookup.set(bag.id, { meshKey: key, instanceIndex: 0 });
+    mesh.instanceMatrix.needsUpdate = true;
+    bag._ownsMesh = true;
+  }
+
+  /**
    * Update the instance matrix for a single debris piece.
    * @private
    */
@@ -3440,6 +3633,15 @@ export class DebrisField {
    */
   storeFieldPieces() {
     let stored = 0;
+    // u20-nets fix round 1: a bag nobody holds any more (let go with K, a strain slip, a snapped tether) has no field tag of its
+    // own - its members' rows are still open (they leave at a credit), so a return visit would lay those rows out again while
+    // the free bag still floated and paid the same members a second time. Split it back first: its members come out tagged and
+    // alive and fall into the loop below like any other free piece; the bag is gone.
+    for (const d of this.debrisList.slice()) {
+      if (d.isBag !== true || !d.alive) continue;
+      if (d._captured || d._armPinned || d._capturedByArm || d._motherParked || d._netted || d._committedNetArmId != null) continue;
+      this._splitFreeBag(d);
+    }
     for (const d of this.debrisList) {
       if (!d.alive || d.fieldId == null) continue;
       if (d._captured || d._armPinned || d._capturedByArm || d._motherParked || d._netted || d._committedNetArmId != null) continue;
@@ -3461,6 +3663,36 @@ export class DebrisField {
       stored++;
     }
     return stored;
+  }
+
+  /**
+   * @private Undo `mergeIntoBag` for a bag nobody holds: every member not yet credited is alive again, in its field row
+   * (the tag parked at the merge is restored), at its old offset round the bag's centre on the bag's orbit; the bag leaves
+   * play (its own mesh freed by `removeDebris`) and keeps no members, so nothing can pay them through it.
+   * @param {object} bag @returns {number} how many members were restored
+   */
+  _splitFreeBag(bag) {
+    const members = (bag.bagMembers || []).map((m) => m.piece).filter((p) => p && !p._credited && p.isBag !== true);
+    bag.bagMembers = [];
+    this.removeDebris(bag.id);                  // the bag has no field tag: the registry hears the removal and keeps every row
+    for (const p of members) {
+      p.alive = true;
+      p.tracked = !p.hazard;
+      p.fieldId = p._bagFieldId ?? null;
+      p.fieldRow = p._bagFieldRow ?? null;
+      p._inBag = false;
+      p._bagId = null;
+      p._bagFieldId = null;
+      p._bagFieldRow = null;
+      if (bag.orbit) p.orbit = { ...bag.orbit };
+      if (bag._scenePosition) {
+        const off = p._bagOffsetScene;
+        const q = new THREE.Vector3(bag._scenePosition.x + (off ? off.x : 0), bag._scenePosition.y + (off ? off.y : 0), bag._scenePosition.z + (off ? off.z : 0));
+        if (p._scenePosition && typeof p._scenePosition.copy === 'function') p._scenePosition.copy(q); else p._scenePosition = q;
+      }
+      p._bagOffsetScene = null;
+    }
+    return members.length;
   }
 
   /** @private The piece stored for (field, row), taken out of the store; null when there is none (or it is back in play). */
@@ -4532,6 +4764,18 @@ export class DebrisField {
         mesh.setMatrixAt(lookup.instanceIndex, this._tempMatrix);
         mesh.instanceMatrix.needsUpdate = true;
       }
+    }
+
+    // A scoop bag owns its merged mesh (`mergeIntoBag`): free it with the bag (geometry and instance buffers; the material is
+    // the heaviest member's shared one and stays). Nothing reads a removed piece's slot, every reader guards a missing mesh.
+    if (debris._ownsMesh && debris._meshKey && this.instancedMeshes[debris._meshKey]) {
+      const own = this.instancedMeshes[debris._meshKey];
+      if (this.group) this.group.remove(own);
+      if (own.geometry) own.geometry.dispose();
+      own.dispose();
+      delete this.instancedMeshes[debris._meshKey];
+      this._instanceLookup.delete(id);
+      debris._ownsMesh = false;
     }
 
     eventBus.emit(Events.DEBRIS_REMOVED, { id, type: debris.type, sizeMeter: debris.sizeMeter });

@@ -35,6 +35,7 @@
 
 import { Constants } from '../core/Constants.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
+import { glassDespinWords } from '../ui/hud/DespinHint.js';
 import {
   computeClingLockFactors,
   finishClingProbability,
@@ -359,7 +360,8 @@ function computeNetOdds(opts) {
         loss: 1 - fTumble,
         blocker: 'TUMBLE',
         // u16b fix 1: on glass the DE-SPIN button (floors 2-3, a target tumbling past the same 10 deg/s) replaces the L key; read at draw time.
-        hint: `tumbling ${Math.round(tumbleDeg)}\u00B0/s \u2014 ${GestureHints.isGlass() ? 'hold DE-SPIN' : 'de-spin [L]'}`,
+        // u20-ipad F4: only while that button is really up; else the plain words for what is missing (past 5 km: get closer).
+        hint: `tumbling ${Math.round(tumbleDeg)}\u00B0/s \u2014 ${GestureHints.isGlass() ? glassDespinWords(target) : 'de-spin [L]'}`,
       });
     }
   }

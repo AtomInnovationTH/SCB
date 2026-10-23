@@ -21,7 +21,8 @@ import { StrutAutoController } from '../systems/StrutAuto.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit, planeTurnLeftRad } from './ArmUnit.js';
 import { DebrisField } from './DebrisField.js';
-import { clearRackCell, berthAnchorLocalInto } from './CaptureNet.js';
+import { clearRackCell, berthAnchorLocalInto, catchHomeDistM } from './CaptureNet.js';
+import { noseBucketFor, noseRadiatorsOk } from './NoseRoute.js';
 import { tripRefuses } from '../systems/TransferTrip.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import {
@@ -2704,7 +2705,8 @@ export class ArmManager {
    * @param {ArmUnit} arm
    * @returns {null|{reason:string, text:string, never?:boolean, lift?:{index:number, rad:number}[]}}
    */
-  carryConditions(arm) {
+  carryConditions(arm, nose = null) {
+    if (nose) return this._noseConditions(arm, nose);
     const V = Constants.CARRY;
     const ps = this.playerSatellite;
     const n = arm.index + 1;
@@ -2765,6 +2767,180 @@ export class ArmManager {
     return null;
   }
 
+  // ==========================================================================
+  // u20-nose — the nose route: a catch longer than 0.5 m goes to the mother's nose, then by leash to a tip (Constants.CARRY.NOSE)
+  // ==========================================================================
+
+  /**
+   * The reach the carry reads a catch by: its drawn reach (`DebrisField.trueReachM`; a typeless piece: half its size). The one place the nose offer reads it.
+   * A scoop bag (`isBag`, set by the net lane; absent on pieces today) is a sphere: reach = sizeMeter / 2 (plan u20-nose, coordinator).
+   */
+  carryReachOf(d) {
+    if (d && d.isBag === true && Number.isFinite(d.sizeMeter) && d.sizeMeter > 0) return d.sizeMeter / 2;
+    return DebrisField.trueReachM(d, 0);
+  }
+
+  /** The tipCargo, the leash driver and the capture-net system as the nose checks read them (any may be null in a bare rig). @private */
+  _noseParts() {
+    const ps = this.playerSatellite;
+    return {
+      ps,
+      tc: ps && ps.tipCargo,
+      drv: (ps && ps.leashDriver) || (this.player && this.player.leashDriver) || null,
+      cns: ps && ps._captureNetSystem,
+    };
+  }
+
+  /**
+   * Is this a nose candidate, and is it one the route was certified for? `null` = not a candidate (the caller keeps today's 'gate' refusal): the
+   * daughter holds more than one catch, or the catch is row 0 (row 0 has a gate row; it lacking is something else), or the route is switched off.
+   * Otherwise `{refusal}` (the reach is in no certified bucket) or `{bucket, reachM, gate}` where `gate` is a stand-in for the GATE row the
+   * shared checks read (`swingBackReachM` is not used by the nose).
+   * @private
+   */
+  _noseCandidate(arm, rack, row, cell, reach) {
+    const N = Constants.CARRY.NOSE;
+    if (!N || N.ENABLED !== true || row < 1 || cell !== 0 || rack.length !== 1) return null;
+    const n = arm.index + 1;
+    const bucket = noseBucketFor(N.BUCKETS, reach);
+    if (!bucket) {
+      return {
+        refusal: {
+          ok: false, reason: 'nose-reach', retry: false, giveUp: true, sayKey: `${arm.index}|nose-reach`,
+          text: reach > N.MAX_REACH_M
+            ? `Daughter ${n}'s catch is too big to hand to the nose and then to a radiator (it reaches ${reach.toFixed(2)} m, the limit is ${N.MAX_REACH_M.toFixed(2)} m). It stays on her rack.`
+            : `Daughter ${n}'s catch is not a size the nose hand-off was measured for (it reaches ${reach.toFixed(2)} m). It stays on her rack.`,
+        },
+      };
+    }
+    return { bucket, reachM: reach, gate: { nose: true, bucket } };
+  }
+
+  /** The catch-centre z on the collar axis (ship frame, metres) where the nose seats a catch (`catchHomeDistM`: what the mother's own catches use). */
+  noseSeatZ(d) {
+    const ps = this.playerSatellite;
+    const anchorZ = (ps && ps._netBerthCollar && ps._netBerthCollar.position) ? ps._netBerthCollar.position.z / M
+      : (Constants.OCTOPUS_V5 && Constants.OCTOPUS_V5.BERTH_COLLAR_Z_M != null ? Constants.OCTOPUS_V5.BERTH_COLLAR_Z_M : 1.30);
+    return anchorZ + catchHomeDistM(ps, this, d);
+  }
+
+  /**
+   * The catch-centre z (ship frame, metres) of the seat for a catch of reach `reachM` that has no body of its own: the VIRTUAL catch of a bucket's top
+   * reach the route is flown for. Same function as a real catch's (`catchHomeDistM`), cached per reach (the ship's shape does not change between calls).
+   */
+  noseSeatZForReach(reachM) {
+    const key = Math.round(reachM * 1000);
+    if (!this._noseSeatCache) this._noseSeatCache = new Map();
+    let z = this._noseSeatCache.get(key);
+    if (z === undefined) {
+      z = this.noseSeatZ({ sizeMeter: 2 * reachM });
+      this._noseSeatCache.set(key, z);
+    }
+    return z;
+  }
+
+  /** Prep re-read of what the offer read about the nose and the leash (ArmUnit `_updateCarryPrep`, every step): null = still fine, else the reason. */
+  noseRecheck(arm) {
+    const c = arm && arm._carry;
+    if (!c || c.kind !== 'nose') return null;
+    const r = this._noseHandOverRefusal(arm, c.nose, c.mission === true);
+    return r ? r.reason : null;
+  }
+
+  /** The seat as a world (scene) point: where the leash's reach and gas plans see the catch once the nose has it. @private */
+  _noseSeatScene(d, out) {
+    const ps = this.playerSatellite;
+    out.set(0, 0, this.noseSeatZ(d) * M).applyQuaternion(ps.quaternion || new THREE.Quaternion());
+    const pos = ps.position || (ps.mesh && ps.mesh.position);
+    if (pos) out.add(pos);
+    return out;
+  }
+
+  /**
+   * Is the nose free for a catch, and can the leash take it on from there? Null = yes, else `{reason, text, retry, giveUp}`.
+   * The nose holds ONE body (`getDockedCatch`), a mother net or a lasso catch on its way keeps it, and the leash is checked as
+   * `CaptureNet._tryLeash` checks it before `drv.start` - a free tip that fits, the line's reach from the nose seat, the ship free to turn
+   * and the gas for the turn - so a catch never strands at the nose. Read-only. (Prep re-reads it each step through `noseRecheck`.)
+   * @private
+   */
+  _noseHandOverRefusal(arm, nose, mission) {
+    const n = arm.index + 1;
+    const { tc, drv, cns } = this._noseParts();
+    const d = arm.heldCatches.find(Boolean);
+    if (cns) {
+      const lasso = this.claimWorld().lasso;
+      const busy = (typeof cns.getDockedCatch === 'function' && cns.getDockedCatch())
+        || (typeof cns.hasMotherNetInFlight === 'function' && cns.hasMotherNetInFlight())
+        || (lasso && (lasso.active || lasso._pendingAdoption));
+      if (busy) return { reason: 'nose-busy', text: `The nose is busy with another catch. Daughter ${n} waits.`, retry: true };
+    }
+    if (tc && typeof tc.pickTip === 'function') {
+      const tip = tc.pickTip();
+      if (tip == null) return { reason: 'tip-busy', text: `Every radiator tip is busy. Daughter ${n} waits.`, retry: true };
+      if (drv && typeof drv.canReach === 'function' && d) {
+        const seat = this._noseSeatScene(d, new THREE.Vector3());
+        if (!drv.canReach(d, tip, seat)) {
+          return { reason: 'nose-leash', text: `The leash cannot reach this catch from the nose. Daughter ${n} keeps it.`, retry: false, giveUp: true };
+        }
+        if (typeof drv.gasShort === 'function' && !Constants.isFeatureEnabled('FURNACE_COOK')
+            && drv.gasShort(null, d, tip, { bagScene: seat })) {
+          return { reason: 'nose-gas', text: `Not enough steering gas to swing the catch to a radiator from the nose. Daughter ${n} keeps it.`, retry: false };
+        }
+      }
+    }
+    if (drv && typeof drv.refusal === 'function') {
+      const why = drv.refusal(null);
+      // her own carry holds the ship still too (CARRY_* are rotation-locking states): in prep that is not a reason, another daughter out or leaving is
+      const ownLock = why && why.key === 'daughter' && !!arm._carry && this.arms.every((o) => !o || o === arm || o.isDetached
+        || (!_HIGH_RISK_ROT_STATES.has(o.state) && !_SOFT_ROT_STATES.has(o.state) && o.state !== ARM_STATES.LAUNCHING));
+      if (why && !ownLock) return { reason: `mission-${why.key}`, text: '', retry: true };
+    }
+    return null;
+  }
+
+  /**
+   * The conditions the nose route was certified for that can change while a daughter waits or flies the prep: her radiators closed or open
+   * inside the bucket's window, the other three struts at the hold pose with catches no bigger than the measured one, her own strut at the
+   * hold pose, no mother net coming home. Read-only. `null` = all hold, else `{reason, text, never?}`: every one clears by waiting except a
+   * neighbour's catch that is too big (`never`).
+   * @private
+   */
+  _noseConditions(arm, nose) {
+    const V = Constants.CARRY, N = V.NOSE;
+    const ps = this.playerSatellite;
+    const n = arm.index + 1;
+    const R2D = 180 / Math.PI;
+    const b = nose.bucket;
+    const sharedDeg = (ps._flowerThetaRad ?? 0) * R2D;
+    const targetDeg = Number.isFinite(ps._flowerTargetTheta) ? ps._flowerTargetTheta * R2D : sharedDeg;
+    if (!noseRadiatorsOk(b, sharedDeg) || !noseRadiatorsOk(b, targetDeg)) {
+      const o = b.openDeg;
+      const openText = o[1] - o[0] <= 1.5 ? `fully open (${Math.round((o[0] + o[1]) / 2)}°)` : `open ${Math.round(o[0])}° to ${Math.round(o[1])}°`;   // a measured point, or a measured range
+      return {
+        reason: 'radiators-moving',
+        text: `The radiators are at ${Math.round(sharedDeg)}°; the hand-off to the nose works with them closed (${b.closedDeg[0]}°) or ${openText}. Daughter ${n} waits.`,
+      };
+    }
+    if (_inboundMotherNetRadiusM(this) !== null) return { reason: 'net-inbound', text: `A net is coming in. Daughter ${n} waits.` };
+    for (const o of this.arms) {
+      if (!o || o === arm || typeof o.getAimAlpha !== 'function') continue;
+      // the catch size first: a catch past the measured reach never clears (retry false); a strut out of place does, so it must not hide that
+      const held = Array.isArray(o.heldCatches) ? o.heldCatches.filter((h) => h && h.mass) : [];
+      if (held.some((h) => this.carryReachOf(h) > N.NEIGHBOUR_CATCH_MAX_REACH_M + 1e-9)) {
+        return { reason: 'neighbour-catch', never: true, text: `Daughter ${o.index + 1}'s catch is too close to Daughter ${n}'s path. Daughter ${n} keeps hers.` };
+      }
+      const oDeg = o.getAimAlpha() * R2D;
+      if (Math.abs(oDeg - N.HOLD_DEG) > V.NEIGHBOUR_TOL_DEG + 1e-6) {
+        return { reason: 'neighbour-strut', text: `Daughter ${o.index + 1}'s strut is out of place. Daughter ${n} waits.` };
+      }
+    }
+    if (!arm._carry) {                                                  // the offer: her own strut stands at the hold pose the route starts from (in prep it is on its way to the seat angle)
+      const recDeg = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() * R2D : NaN;
+      if (!(Math.abs(recDeg - N.HOLD_DEG) <= V.NEIGHBOUR_TOL_DEG + 1e-6)) return { reason: 'strut-range', text: '' };
+    }
+    return null;
+  }
+
   /**
    * Can this daughter start a carry now? Reads, changes nothing. `retry` tells the trip whether waiting can help: a
    * catch that does not fit a tip, a row the gate does not allow and a daughter without the fuel never carry; a busy
@@ -2805,18 +2981,27 @@ export class ArmManager {
     // not a refusal worth a line, and not a give-up: "Press C" asks without this option).
     if (motherNetOnly && !delivered._rackFromMotherNet) return no('own-catch', '', false);
     const cell = Math.max(0, Math.min(1, cellOf(delivered, rack.indexOf(delivered))));
-    const reach = DebrisField.trueReachM(delivered, 0);
+    const reach = this.carryReachOf(delivered);
     if (!tc.fits(reach)) {
       return no('fit', `Daughter ${n}'s catch is too big for a radiator tip. It stays on her rack.`, false, true);
     }
     let row = 0;
     for (const d of rack) row = Math.max(row, this.carryRowOf(d));
-    const gate = this.carryGateFor(arm, row, cell);
+    let gate = this.carryGateFor(arm, row, cell);
+    // u20-nose: the direct carry has no row for a catch longer than 0.5 m (row >= 1; GATE holds row 0, cell 0 only): that catch can go the
+    // other way round, to the nose and then by leash. Only that cause: a second catch on the rack, or a row-0 catch with no gate entry, keeps
+    // today's refusal. The direct carry keeps priority: this branch is reached only when it has no row.
+    let nose = null;
     if (!gate) {
-      return no('gate', `Daughter ${n} cannot carry this catch to a furnace without touching the ship. It stays on her rack.`, false, true);
+      nose = this._noseCandidate(arm, rack, row, cell, reach);
+      if (!nose) {
+        return no('gate', `Daughter ${n} cannot carry this catch to a furnace without touching the ship. It stays on her rack.`, false, true);
+      }
+      if (nose.refusal) return nose.refusal;
+      gate = nose.gate;
     }
-    const tipIndex = arm.index;                               // her radiator: the tip on her line (DECISIONS §29 row 4)
-    const fuelPct = typeof arm.carryFuelPct === 'function' ? arm.carryFuelPct() : 0;
+    const tipIndex = nose ? -1 : arm.index;                   // her radiator: the tip on her line (DECISIONS §29 row 4); the nose route reserves none (the leash picks a tip after the hand-over)
+    const fuelPct = nose ? arm.noseFuelPct() : (typeof arm.carryFuelPct === 'function' ? arm.carryFuelPct() : 0);
     if (!(arm.fuel >= fuelPct)) {
       return no('fuel', `Daughter ${n} has too little fuel to carry her catch. It stays on her rack.`, false);
     }
@@ -2831,10 +3016,13 @@ export class ArmManager {
       const why = drv && typeof drv.refusal === 'function' ? drv.refusal(null) : null;
       if (why) return no(`mission-${why.key}`);
     }
-    if (tc.debrisAt(tipIndex) || (typeof tc.isReserved === 'function' && tc.isReserved(tipIndex))) {
+    if (nose) {
+      const r = this._noseHandOverRefusal(arm, nose, mission);
+      if (r) return no(r.reason, r.text, r.retry, r.giveUp === true);
+    } else if (tc.debrisAt(tipIndex) || (typeof tc.isReserved === 'function' && tc.isReserved(tipIndex))) {
       return no('tip-busy', `Radiator ${tipIndex + 1}'s furnace is busy. Daughter ${n} waits.`);
     }
-    const cond = this.carryConditions(arm);
+    const cond = this.carryConditions(arm, nose);
     if (cond) {
       const r = no(cond.reason, cond.text, !cond.never);
       if (cond.lift) r.lift = cond.lift;                       // net-duck D4: who can be lifted to let this carry pass (read-only here)
@@ -2843,7 +3031,7 @@ export class ArmManager {
     // review R8: no carry starts whose swing BACK (her petal released, the catch in the tip bag, past her strut, her body, the hull
     // and the other petals) is not certified 0.15 m. The gate measured the largest catch reach each range of the radiators
     // allows (closed: the bag passes her own strut close; open: far); a bigger catch waits for the other range - it clears by itself.
-    {
+    if (!nose) {
       const V = Constants.CARRY;
       const sharedDeg = (ps._flowerThetaRad ?? 0) * 180 / Math.PI;
       const closed = sharedDeg <= V.OTHERS_RANGES_DEG[0][1] + 1e-6;                      // [0, 1] deg = closed, [133, 146] = open (carryConditions)
@@ -2855,6 +3043,17 @@ export class ArmManager {
             : `Daughter ${n}'s catch is too big to hand over while the radiators are open. She waits for them to close.`,
           true, false, `${arm.index}|swing-back|${delivered.id ?? delivered.sizeMeter}`);
       }
+    }
+    if (nose) {
+      return {
+        ok: true, reason: '', text: '', retry: false, giveUp: false,
+        plan: {
+          kind: 'nose', tipIndex: -1, cell, delivered, row, mission,
+          strutRad: Constants.CARRY.NOSE.STRUT_DEG * Math.PI / 180, thetaRad: 0, dir: null,
+          recordedStrutRad: typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : Constants.CARRY.NOSE.HOLD_DEG * Math.PI / 180,
+          nose: { bucket: nose.bucket, reachM: nose.reachM },
+        },
+      };
     }
     return {
       ok: true, reason: '', text: '', retry: false, giveUp: false,
@@ -2960,6 +3159,10 @@ export class ArmManager {
       case 'leash-busy': return 'the radiators are busy';
       case 'radiators-moving': return 'the radiators are not settled';
       case 'swing-back': return 'her catch is too big to hand over with the radiators as they are';
+      case 'nose-reach': return 'it is not a size the nose hand-off was measured for';
+      case 'nose-busy': return 'the nose is busy';
+      case 'nose-leash': return 'the leash cannot reach it from the nose';
+      case 'nose-gas': return 'there is too little steering gas to swing it to a radiator';
       case 'no-tip': case 'layout': return 'this ship cannot move catches to a radiator';
       case 'no-catch': case 'gave-up': return null;     // review F2: she is empty / her own last carry failed: there is no catch to "keep", nothing to say
       default: return 'the hand-off cannot start';
@@ -3075,6 +3278,7 @@ export class ArmManager {
       if (r.reason === 'neighbour-catch' && r.lift) { this._commandLifts(arm, r, { mission, motherNetOnly }); continue; }
       // (FA6: a neighbour's catch that can never leave is said too - once - or the catch just stays on her rack in silence)
       const sayIt = say && r.text && (r.reason === 'fit' || r.reason === 'gate' || r.reason === 'fuel' || r.reason === 'swing-back'
+        || r.reason === 'nose-reach' || r.reason === 'nose-leash' || r.reason === 'nose-gas'
         || (r.reason === 'neighbour-catch' && !r.retry));
       if (sayIt) {
         const key = r.sayKey || `${arm.index}|${r.reason}`;                  // swing-back: once per catch
@@ -3276,6 +3480,9 @@ export class ArmManager {
       if (r.ok) {
         const started = this.requestCarry(arm, { mission: true, restart: true });
         if (started.ok) {
+          if (started.plan && started.plan.kind === 'nose') {         // u20-nose: no tip yet - the leash picks one once the nose has the catch
+            return finish({ ok: true, arm, nose: true, text: `Daughter ${arm.index + 1} takes her catch to the nose; the leash then moves it to a radiator.` });
+          }
           const tip = (arm._carry && Number.isInteger(arm._carry.tipIndex)) ? arm._carry.tipIndex : arm.index;
           return finish({ ok: true, arm, text: `Daughter ${arm.index + 1} takes her catch to radiator ${tip + 1}.` });
         }
@@ -4476,8 +4683,10 @@ export class ArmManager {
   /**
    * Select an arm by index (0-7).
    * @param {number} index — arm index in the arms array
+   * @param {{quiet?: boolean}} [opts] - quiet: no "X selected." comms line (u20 integration: the auto-pick after a launch
+   *   already has its launch line; one line in comms, not two)
    */
-  selectArm(index) {
+  selectArm(index, opts = {}) {
     if (index < 0 || index >= this.arms.length) return;
     // Toggle: re-selecting the same arm deselects
     if (this.selectedArmIndex === index) {
@@ -4497,6 +4706,7 @@ export class ArmManager {
     // before launch; deployed arms also light while piloted).
     if (arm && typeof arm.setSelectedHighlight === 'function') arm.setSelectedHighlight(true);
     eventBus.emit(Events.ARM_SELECT, { armIndex: index });
+    if (opts && opts.quiet) return;
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `${arm.displayName} selected.`,
       priority: 'info',

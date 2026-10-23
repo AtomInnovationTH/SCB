@@ -325,12 +325,14 @@ export const TETHER_DESCRIPTIONS = [
 
 /**
  * The tether card's one stats line (DECISIONS §33 row 5): what the fibre buys, in plain words. Mother nets, then the
- * large and small daughters' nets, then the large daughter's tether length. "6 mother nets, 3 and 6 per daughter, 4 km tethers".
+ * large and small daughters' nets, then the large daughter's tether length. "6 mother nets, 6 per daughter, 4 km tethers"
+ * (both daughters hold the same count since 2026-10-23, DECISIONS §38 row 5; if a row ever differs it reads "3 and 6 per daughter").
  * @param {{nets:{mother:number,large:number,small:number}, maxLength:number}} tier a Constants.TETHER_TIERS row
  */
 export function tetherStatsLine(tier) {
   const km = tier.maxLength / 1000;
-  return `${tier.nets.mother} mother nets, ${tier.nets.large} and ${tier.nets.small} per daughter, ${km} km tethers`;
+  const perDaughter = tier.nets.large === tier.nets.small ? `${tier.nets.large}` : `${tier.nets.large} and ${tier.nets.small}`;
+  return `${tier.nets.mother} mother nets, ${perDaughter} per daughter, ${km} km tethers`;
 }
 
 export class ShopScreen {

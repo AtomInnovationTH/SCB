@@ -20,6 +20,7 @@ import { dossierSystem } from '../systems/DossierSystem.js';
 import { toolShortLabel } from '../systems/ToolOdds.js';
 import { calmBreathe, finitePulse } from './hudPulse.js';
 import { FONT_MONO } from '../core/Typeface.js';
+import { setDespinProbe, despinButtonUp } from './hud/DespinHint.js';   // u20-ipad F4: one "is DE-SPIN up" rule, shared with ToolOdds
 import { GestureHints } from './hud/GestureHints.js';   // u17 A-T1: the aiming-mark captions follow glass, read when drawn
 
 // ============================================================================
@@ -155,6 +156,17 @@ export class DockingReticle {
    */
   setGlassControls(controls) {
     this._glassControls = controls || null;
+    // u20-ipad F4: ToolOdds' odds hint reads the same answer (it has no controls handle of its own), and words the
+    // past-5-km case from the mother's distance to the target (this frame's parent position of the piloted daughter).
+    setDespinProbe(this._glassControls && typeof this._glassControls.isDespinUp === 'function' ? {
+      up: () => this._glassDespinUp(),
+      distanceM: (t) => {
+        const a = this._arm;
+        const from = a && a._frameParentPos;
+        const to = t && t._scenePosition;
+        return from && to && typeof from.distanceTo === 'function' ? from.distanceTo(to) / Constants.SCENE_UNITS_PER_METER : null;
+      },
+    } : null);
   }
 
   /** @private u17 A-T1: glass is read when drawn (D1), never at construction. */
@@ -182,8 +194,7 @@ export class DockingReticle {
 
   /** @private is the hold-to-fire DE-SPIN button on screen right now? */
   _glassDespinUp() {
-    const c = this._glassControls;
-    return !!(c && typeof c.isDespinUp === 'function' && c.isDespinUp());
+    return despinButtonUp(this._glassControls);   // u20-ipad F4: the shared rule (DespinHint.js)
   }
 
   /**
@@ -242,7 +253,12 @@ export class DockingReticle {
    */
   isNetReady() {
     if (!this._arm) return false;
-    const netRange = (this._arm.config?.netSize || 5) * 2; // deploy range = 2× net size
+    // u20-nets fix round 1 (2026-10-23): the net's REAL reach, the number the shot is bound by (NetProjectile._updateFlight ends it
+    // at min(TETHER_MAX, LAUNCH_SPEED x MAX_FLIGHT_TIME) = 80 m for both daughters' nets) and that the InputManager refusal, ToolOdds
+    // and this reticle's own "too far" advisory already read (`netMaxReachM`, CaptureNet.js). It was 2 x the net's DIAMETER, which
+    // was 10 m for the 5 m net; with the 3 m net (6 m) and the small one (3 m) it fell below her 8 m station-keep distance
+    // (ArmUnit.js ~3828), so NET READY never showed at the default distance.
+    const netRange = netMaxReachM(getNetClassForType(this._arm.type));
     return this._range < netRange && this._range > 0;
   }
 

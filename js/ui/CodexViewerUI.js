@@ -118,8 +118,9 @@ const LOCKED_TAG_HTML = ' <span class="codex-locked-tag" style="font-size:10px;l
 // selection has *rested* on an unlocked/unseen entry this long — arrow-scrubbing
 // and transient renders (deep-link routing, filter churn) never mark seen.
 const SEEN_DWELL_MS = 1500;
-/** u16b fix 1: how long the overlay swallows clicks after an open from the connections map (a double-click / double-tap's second click). */
-const MAP_OPEN_SWALLOW_MS = 400;
+/** u16b fix 1: how long the overlay swallows clicks after an open from the connections map (a double-click / double-tap's second click).
+ *  u20-ipad: 600 (was 400): a finger's second tap on a real iPad can land after 400 ms and hit a link in the article that just opened. */
+const MAP_OPEN_SWALLOW_MS = 600;
 
 // A deep link that lands on the page's WARNING box (FURNACE gag v2 amendment,
 // plan 1788957399035 §7.27 — Houston's "manual"): after the entry renders the

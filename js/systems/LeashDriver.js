@@ -339,6 +339,7 @@ export class LeashDriver {
    * @param {number} tipIndex
    * @param {object} [opts]
    * @param {boolean} [opts.noseReel] — the catch is pulled in to the nose first: plan from there
+   * @param {object} [opts.bagScene] — u20-nose: plan from this world (scene) point instead of the catch's own place (net may be null)
    * @returns {boolean}
    */
   gasShort(net, debris, tipIndex, opts = {}) {
@@ -347,7 +348,9 @@ export class LeashDriver {
     const I = p.getAttitudeInertia();
     if (!I || !(I.ixx > 0) || !(I.iyy > 0)) return false;
     let sp = null;
-    if (opts && opts.noseReel) {
+    if (opts && opts.bagScene) {
+      sp = opts.bagScene;           // u20-nose: no net yet (the daughter is still bringing the catch): plan from where the nose will seat it
+    } else if (opts && opts.noseReel) {
       sp = this._noseBagScene(net, debris);
       if (!sp) return false;
     }

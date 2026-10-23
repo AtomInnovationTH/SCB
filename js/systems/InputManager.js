@@ -186,8 +186,12 @@ export class InputManager {
     // immediately (the player did not have to enter pilot mode manually — the
     // ceremony hands them straight into the daughter).
     // When skipLaunchCeremony → CHASE, snap FOV back to COMMAND default.
-    eventBus.on(Events.LAUNCH_CEREMONY_COMPLETE, () => {
+    eventBus.on(Events.LAUNCH_CEREMONY_COMPLETE, (payload) => {
       const cam = this._deps?.cameraSystem;
+      // u20-ipad F2: bare D with nobody selected auto-picks a daughter, and the full ceremony pilots her here with no
+      // selection ever made (the strip, her row and `R` then disagreed about who she was). Select her now, but only when
+      // she is not already selected: ArmManager.selectArm TOGGLES a selected arm off.
+      this._selectLaunched(payload && payload.arm);
       if (cam) {
         // Always record the normal FOV for later restore when exiting ARM_PILOT
         cam.armPilot.fovNormal = Constants.CAMERA_FOV;
@@ -1230,7 +1234,14 @@ export class InputManager {
               const arm = deployed[deployed.length - 1];
               // launch-seq: no "deployed. Tracking…" line — the one launch line is "Spring released.
               // Separating" (ArmUnit, at ARM_SPRING_FIRED); only the cut-scene start is announced here.
+              // u20-ipad F2: the auto-picked daughter is the selected one (the by-index launch already is), so the zoom
+              // ladder's stand-down (no COMPLETE event ever comes) leaves her selected too.
+              if (!launchedByIndex) this._selectLaunched(arm);
               eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
+            } else if (!launchedByIndex && typeof am.isLaunchPending === 'function') {
+              // Her launch waits for the mother's turn (or her strut's swing): she is the picked one too, as by index.
+              const waiting = dockedBefore.find(a => am.isLaunchPending(a.index));
+              if (waiting) this._selectLaunched(waiting);
             }
           }
           d.audioSystem?.playClick();
@@ -3182,6 +3193,18 @@ export class InputManager {
         // normal recenter.
         if (err && (err.code === 'TIMEOUT' || err.code === 'TARGET_LOST')) d.player.holdHeadingAfterRefusal?.();
       });
+  }
+
+  /**
+   * u20-ipad F2: make `arm` the selected daughter unless she already is. ArmManager.selectArm TOGGLES a selected arm off,
+   * so the check comes first. Tolerates a bare arm manager and a missing arm.
+   * @param {object} [arm] - an ArmUnit (has `index`)
+   * @private
+   */
+  _selectLaunched(arm) {
+    const am = this._deps?.armManager;
+    if (!am || !arm || !Number.isInteger(arm.index) || typeof am.selectArm !== 'function') return;
+    if (am.selectedArmIndex !== arm.index) am.selectArm(arm.index, { quiet: true });   // her launch line is enough (one comms line)
   }
 
   /** The arms docked right now: the auto-pick launch announces only one of these that has left the dock. @private */

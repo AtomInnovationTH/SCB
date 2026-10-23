@@ -21,6 +21,7 @@ import { computeDaughterPlumeIntensity, DAUGHTER_PLUME } from './armPlumeModel.j
 import { applyDetailLod } from '../scene/detailLodCull.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { strutLocalDirection, composeDockedArmQuat, bestStrutAlpha, carryDirInto, carryFinalQuatInto, carryRotFrac } from './ArmDockBasis.js';
+import { buildNoseRoute, virtualCentreInto } from './NoseRoute.js';
 import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT, seedHerFrameAttitude, applyHerFrameAttitude, clearShipRelativeAttitude, clearRackCell } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
@@ -286,6 +287,10 @@ export function herSupportZM(bodyDims, solidPointsM = null) {
  */
 function catchSupportAlongM(d, qCatch, dirFrame) {
   if (!d || !d.type) return null;
+  // u20-nose fix 3: a scoop bag is a ball of radius sizeMeter / 2 (heldBagShape.drawnCatchRadiusScene; its `type` is the heaviest member's, whose
+  // mesh is not the bag's shape): the support is the radius in every direction, so its nearest point is sizeMeter / 2 off her end plus the net gap
+  // - the layout the nose route was certified with (probe --bagitem).
+  if (d.isBag === true && d.sizeMeter > 0) return d.sizeMeter / 2;
   const verts = _holdVertices(DebrisWireframe.getGeometry(d.type, d.id));
   if (verts.length < 3) return null;
   _rcDir.copy(dirFrame).applyQuaternion(_rcQ.copy(qCatch).invert());   // direction in the mesh's own frame
@@ -549,6 +554,9 @@ const _carryU0 = new THREE.Vector3();          // catch -> her centre, ship fram
 const _carryD2 = new THREE.Vector3();          // the direction her body trails along at the seat
 const _carryQi = new THREE.Quaternion();       // scratch inverse
 const _carryHq = {};                           // the receiving tip's hinge frame (TipCargo.hingeQuatShipInto)
+const _noseP = new THREE.Vector3();            // u20-nose scratch: her centre on the route, ship frame, metres
+const _noseQ = new THREE.Quaternion();
+const _noseC = new THREE.Vector3();            // the catch's centre, ship frame, metres
 
 /**
  * reel-turn (2026-10-21): the angle the mother must still turn about her strut's RADIAL axis to bring a point into the
@@ -1462,7 +1470,7 @@ export class ArmUnit {
     this.mesh.add(canister);
 
     // Front-face magazine cells (front face = housing centre + half-length in +Z): drawn by _buildNetCells from
-    // netCellLayout, one round bore per net (start tier: 2 large / 4 small; 3-5 and 6-10 after the fibre upgrade).
+    // netCellLayout, one round bore per net (start tier: 4 large / 4 small; 6, 8 and 10 after the fibre upgrade).
 
     // Net-launch MUZZLE (SSOT, net-canister continuity fix): the launcher
     // housing's front face on the fore centreline — the same plane the
@@ -6067,6 +6075,14 @@ export class ArmUnit {
 
     // Poll FSM state
     const netState = activeNet.state;
+    // u20-nets: a scoop net that closed on several pieces holds ONE bag (CaptureNet._scoopIntoBag, which also sets
+    // `arm.target`). Adopt it here too, so the `reelCaught` test below (net.targetDebris === this.target) and every later
+    // read of `this.target` / `capturedDebris` see the bag whichever of the two updates ran first. A bag is the only
+    // thing a net ever swaps its target for.
+    if (activeNet.catchResult === 'success' && activeNet.targetDebris && activeNet.targetDebris.isBag === true
+        && activeNet.targetDebris !== this.target) {
+      this.target = activeNet.targetDebris;
+    }
     // reel-home-look: the net system resolves a catch and auto-starts its reel in ONE update (CaptureNet.update's
     // needsAutoReel), so this poll runs after CAPTURED has already become REELING and never saw CAPTURED. It must take
     // that as the catch too: without `_capturedByArm` the held-net hold (CaptureNet._updateReeling) lets go next update,
@@ -6931,6 +6947,7 @@ export class ArmUnit {
     if (this._carry || !plan || !plan.delivered) return false;
     if (this.state !== S.HOLDING_CATCH && this.state !== S.DOCKED) return false;
     if (this.heldCatches.indexOf(plan.delivered) < 0) return false;
+    if (plan.kind === 'nose') return this._noseBegin(plan);
     const ps = this._playerSatellite;
     const tc = ps && ps.tipCargo;
     if (!ps || !tc || typeof tc.reserve !== 'function' || typeof ps.holdPetalForHandoff !== 'function') return false;
@@ -7020,8 +7037,16 @@ export class ArmUnit {
     };
     if (c.stage === 'strut' || c.stage === 'petal') {
       const mgr = ps && ps.armManager;
-      const cond = mgr && typeof mgr.carryConditions === 'function' ? mgr.carryConditions(this) : null;
+      const cond = mgr && typeof mgr.carryConditions === 'function' ? mgr.carryConditions(this, c.kind === 'nose' ? c.nose : null) : null;
       if (cond) { this._carryBeginUnprep('conditions'); return; }
+      if (c.kind === 'nose') {                              // u20-nose: the nose is still free and the leash still able (what the offer read), each step
+        const why = mgr && typeof mgr.noseRecheck === 'function' ? mgr.noseRecheck(this) : null;
+        if (why) { this._carryBeginUnprep('conditions'); return; }
+      }
+    }
+    if (c.stage === 'strut' && c.kind === 'nose') {         // u20-nose: no petal stage; the strut is there, the flight begins
+      if (strutTo(c.strutRad)) this._noseBeginOut(parentPos, parentQuat); else limit();
+      return;
     }
     if (c.stage === 'strut') {
       if (strutTo(c.strutRad)) {
@@ -7068,6 +7093,12 @@ export class ArmUnit {
     c.prepS = 0;
     c.u = 0;
     this._carryAtt = null;                                         // she is docked now (the flight ended at u = 0)
+    if (c.kind === 'nose') {                                       // u20-nose: no petal; the strut goes straight back to the recorded angle
+      c.stage = 'unstrut';
+      this._strutTargetAlpha = c.recordedStrutRad;
+      if (this.state !== S.CARRY_PREP) this._transitionTo(S.CARRY_PREP);
+      return;
+    }
     if (ps && typeof ps.isPetalHolding === 'function' && ps.isPetalHolding(c.az)) ps.releasePetalHandoff(c.az);
     if (ps && typeof ps.isPetalHeld === 'function' && ps.isPetalHeld(c.az)) {      // held (just released) or still swinging back
       c.stage = 'unpetal';
@@ -7134,6 +7165,7 @@ export class ArmUnit {
   _updateCarryOut(dt, parentPos, parentQuat) {
     const c = this._carry;
     if (!c) { this._transitionTo(this.heldCatches.length ? S.HOLDING_CATCH : S.DOCKED); return; }
+    if (c.kind === 'nose') { this._noseUpdate(dt, parentPos, parentQuat); return; }
     const V = Constants.CARRY;
     if (c.phase === 'clamp') {
       c.clampS += dt;
@@ -7211,6 +7243,7 @@ export class ArmUnit {
   _updateCarryHandoff(dt, parentPos, parentQuat) {
     const c = this._carry;
     if (!c) { this._transitionTo(this.heldCatches.length ? S.HOLDING_CATCH : S.DOCKED); return; }
+    if (c.kind === 'nose') { this._noseUpdate(dt, parentPos, parentQuat); return; }
     c.holdS += dt;
     this._carrySeat(parentPos, parentQuat, 1);
     if (c.holdS >= (Constants.CARRY.HANDOFF_S ?? 1)) {
@@ -7223,6 +7256,7 @@ export class ArmUnit {
   _updateCarryBack(dt, parentPos, parentQuat) {
     const c = this._carry;
     if (!c) { this._transitionTo(this.heldCatches.length ? S.HOLDING_CATCH : S.DOCKED); return; }
+    if (c.kind === 'nose') { this._noseUpdate(dt, parentPos, parentQuat); return; }
     const u0 = c.u;
     c.u = Math.max(0, c.u - dt / c.durationS);
     this._carrySeat(parentPos, parentQuat, c.u);
@@ -7242,6 +7276,323 @@ export class ArmUnit {
     if (c.u <= 0) this._carryBeginUnprep('home');                  // petal first, then the strut (the reverse of the prep)
   }
 
+  // ==========================================================================
+  // u20-nose — the NOSE route: a catch longer than 0.5 m goes from her strut tip to the mother's nose collar, the nose adopts it, she flies
+  // home body only and the leash takes it on to a free tip (docs/research/2026-10-nose-handoff.md; Constants.CARRY.NOSE; js/entities/NoseRoute.js is the
+  // ONE route function, game and probe). Same states as the direct carry: CARRY_PREP (the strut swings 34° -> 145°; no petal), CARRY_OUT (clamp,
+  // the legs in), CARRY_HANDOFF (the beat at the seat, the checks, the nose adopts, the tug, a refused seat backs out and tries again),
+  // CARRY_BACK (the legs in reverse, body only), then the strut goes home (CARRY_PREP, 'unstrut'). `c.nose` holds the route and the motion.
+  // ==========================================================================
+
+  /** @private the capture-net system this ship's nose belongs to */
+  _noseCns() {
+    const ps = this._playerSatellite;
+    return (ps && ps._captureNetSystem) || captureNetSystem;
+  }
+
+  /** The % of her fuel the nose route costs: every leg starts and stops her (2 x PAYOUT_MPS against the tank's delta-v), out with the catch aboard (mass-scaled), back as a bare body. */
+  noseFuelPct() {
+    const v = (Constants.CARRY && Constants.CARRY.PAYOUT_MPS) || 0.2;
+    const body = (2 * v / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV)) * 100;
+    const legs = 5;                                                  // dock, back-off, up, in, down (+ the extension for a smaller catch): the worst case
+    return legs * (this.carryFuelPct() + body);
+  }
+
+  /** @private start the nose carry: the same CARRY_PREP as the direct carry, minus the tip and the petal. */
+  _noseBegin(plan) {
+    const ps = this._playerSatellite;
+    if (!ps || !plan.nose || !plan.nose.bucket) return false;
+    this._carry = {
+      kind: 'nose', nose: { bucket: plan.nose.bucket, reachM: plan.nose.reachM, route: null, mv: null, phase: 'clamp', tries: 0, waitS: 0, holdS: 0, s: 0, net: null, limbo: null, tugDone: false, refused: '' },
+      tipIndex: -1, cell: plan.cell, delivered: plan.delivered, mission: plan.mission === true,
+      az: null, strutRad: plan.strutRad, thetaRad: 0, recordedStrutRad: plan.recordedStrutRad,
+      dir: null, q0: new THREE.Quaternion(), q1: null,
+      home: this.state, phase: 'prep', stage: 'strut', endWhy: null,
+      prepS: 0, clampS: 0, holdS: 0, u: 0, durationS: 1, flightM: 0, fuelPct: 0,
+      handedOff: false, strutHeld: this._aimReserved === true,
+      start: new THREE.Vector3(), flight: new THREE.Vector3(),
+    };
+    this._aimReserved = true;
+    this._strutTargetAlpha = plan.strutRad;
+    this._transitionTo(S.CARRY_PREP);
+    return true;
+  }
+
+  /** @private her strut is at the carry angle: build the route from the live geometry (NoseRoute.js), pay the push, go to CARRY_OUT. */
+  _noseBeginOut(parentPos, parentQuat) {
+    const c = this._carry, n = c.nose, N = Constants.CARRY.NOSE;
+    const ps = this._playerSatellite;
+    const mgr = ps && ps.armManager;
+    const d = c.delivered;
+    if (!mgr || typeof mgr.noseSeatZ !== 'function' || typeof mgr.noseSeatZForReach !== 'function' || !d._rackLocalM) { this.abortCarry('no nose'); return; }
+    this._herQuatWorldInto(_idQuat, _carryQ);                        // her attitude in the ship's frame (strut at the carry angle)
+    const reach = mgr.carryReachOf(d), R = n.bucket.topM;
+    const ext = Math.abs(R - reach) > 1e-6;
+    const h = this.herSupportZM() + (Constants.ARM_HOLD_NET_GAP_M ?? 0.03);
+    const cReal = new THREE.Vector3().copy(d._rackLocalM);
+    const cVirt = ext ? virtualCentreInto(cReal, h, reach, R, new THREE.Vector3()) : cReal;
+    n.route = buildNoseRoute({
+      q0: _carryQ.clone(), dockPos: new THREE.Vector3().copy(this.dockOffset).multiplyScalar(1 / M),
+      cVirt, zSeatVirt: ext ? mgr.noseSeatZForReach(R) : mgr.noseSeatZ(d),
+      cReal: ext ? cReal : null, zSeatReal: mgr.noseSeatZ(d),
+      azDeg: Constants.THERMAL.FLOWER.AZIMUTHS_DEG[this.index],
+      spec: { backoffM: N.BACKOFF_M, standoffM: N.STANDOFF_M, standoffMinZ: N.STANDOFF_MIN_Z_M, trailDeg: N.TRAIL_DEG },
+    });
+    c.flightM = n.route.len;
+    const pct = this.noseFuelPct();
+    if (!(this.fuel >= pct)) {
+      this._carrySay(`Daughter ${this.index + 1} has too little fuel to carry her catch to the nose; it stays on her rack.`, 'warning');
+      this.abortCarry('fuel');
+      return;
+    }
+    this.fuel -= pct;
+    c.fuelPct = pct;
+    c.phase = 'clamp';
+    c.clampS = 0;
+    n.phase = 'clamp';
+    n.s = 0;
+    n.leg = 0;
+    this._transitionTo(S.CARRY_OUT);
+    this._noseSeat(parentPos, parentQuat, 0);
+  }
+
+  /** @private her pose on the route at arc length `s` (m): her centre lerped and her attitude slerped between the two waypoints, as the probe certified them. */
+  _noseSeat(parentPos, parentQuat, s) {
+    const c = this._carry, r = c.nose.route;
+    const L = r.len;
+    s = Math.max(0, Math.min(L, s));
+    c.nose.s = s;
+    let k = 0;
+    while (k + 1 < r.seg.length && s > r.cum[k + 1] + 1e-12) k++;
+    const f = r.seg[k] > 1e-12 ? Math.max(0, Math.min(1, (s - r.cum[k]) / r.seg[k])) : 1;
+    c.nose.leg = k;
+    _noseP.lerpVectors(r.pos[k], r.pos[k + 1], f);
+    const att = this._carryAtt || (this._carryAtt = new THREE.Quaternion());
+    att.copy(r.quat[k]).slerp(r.quat[k + 1], f);
+    _carryLocal.copy(_noseP).multiplyScalar(M);                      // ship-local scene units
+    if (parentQuat) _carryLocal.applyQuaternion(parentQuat);
+    if (parentPos) this.position.copy(parentPos).add(_carryLocal);
+    this.velocity.set(0, 0, 0);
+    this._carrySeatAttitude(parentPos, parentQuat);
+  }
+
+  /** @private start a move along the route to arc length `toS`: smooth start and stop over |distance| / PAYOUT_MPS (at least 0.5 s). */
+  _noseMoveTo(toS) {
+    const n = this._carry.nose;
+    const v = (Constants.CARRY && Constants.CARRY.PAYOUT_MPS) || 0.2;
+    n.mv = { from: n.s, to: toS, t: 0, dur: Math.max(0.5, Math.abs(toS - n.s) / v) };
+  }
+
+  /** @private advance the move; true once it has arrived (her pose written either way). */
+  _noseStep(dt, parentPos, parentQuat, thread = true) {
+    const c = this._carry, n = c.nose, m = n.mv;
+    if (!m) return true;
+    const t0 = m.t;
+    m.t = Math.min(m.dur, m.t + dt);
+    const u = m.t / m.dur, e = u * u * (3 - 2 * u);
+    this._noseSeat(parentPos, parentQuat, m.from + (m.to - m.from) * e);
+    if (thread && m.t > t0) this._carryThreadStep(dt, parentPos, parentQuat);
+    if (m.t >= m.dur) { n.mv = null; return true; }
+    return false;
+  }
+
+  /** @private the strut reel cartridge bills the mother's battery on the way back (as the direct carry does). */
+  _noseBillReel(dt) {
+    const c = this._carry, m = c.nose.mv;
+    if (!(dt > 0) || !m) return;
+    const MD = Constants.MOTOR_DRAW_W || {};
+    const rs = this._playerSatellite && this._playerSatellite._resourceSystem;
+    if (!rs || typeof rs.billWatts !== 'function') return;
+    const u = m.t / m.dur;
+    const speed = (Math.abs(m.to - m.from) / m.dur) * 6 * u * (1 - u) + 1e-6;
+    const tension = this.carryMassKg() * speed * (Constants.REEL_TENSION_COEFF ?? 0.04);
+    const mechW = tension * speed / (MD.REEL_EFFICIENCY || 0.5);
+    rs.billWatts(Math.min(MD.REEL_MAX ?? 2500, Math.max(MD.STRUT_REEL_MIN ?? 15, mechW)), dt);
+  }
+
+  /** @private the delivered catch's centre in the SHIP frame (metres), from her pose now: her centre + the rack centre turned by her attitude. */
+  _noseCatchShipInto(out) {
+    const c = this._carry, d = c.delivered;
+    const r = c.nose.route, k = c.nose.leg;
+    const s = c.nose.s, f = r.seg[k] > 1e-12 ? Math.max(0, Math.min(1, (s - r.cum[k]) / r.seg[k])) : 1;
+    _noseP.lerpVectors(r.pos[k], r.pos[k + 1], f);
+    _noseQ.copy(r.quat[k]).slerp(r.quat[k + 1], f);
+    return out.copy(d._rackLocalM).applyQuaternion(_noseQ).add(_noseP);
+  }
+
+  /**
+   * @private CARRY_OUT / CARRY_HANDOFF / CARRY_BACK of the nose route. Phases: clamp, out (leg by leg), seat (beat, checks, adopt), tug, back; a refused
+   * seat: retreat 0.4 m, wait, again (3 tries, then home holding it).
+   */
+  _noseUpdate(dt, parentPos, parentQuat) {
+    const c = this._carry, n = c.nose, N = Constants.CARRY.NOSE, V = Constants.CARRY;
+    const r = n.route;
+    if (!r) { this.abortCarry('no route'); return; }
+    const L = r.len;
+    if (n.phase === 'clamp') {
+      c.clampS += dt;
+      this._carryThread = null;
+      this._noseSeat(parentPos, parentQuat, 0);
+      if (c.clampS >= V.CLAMP_S) { n.phase = 'out'; n.leg = 0; this._noseMoveTo(r.cum[1]); }
+      return;
+    }
+    if (n.phase === 'out') {
+      if (this._noseStep(dt, parentPos, parentQuat)) {
+        const k = r.cum.findIndex((x) => Math.abs(x - n.s) < 1e-9);
+        if (k >= 0 && k + 1 < r.pos.length) this._noseMoveTo(r.cum[k + 1]);
+        else this._noseArrive();
+      }
+      return;
+    }
+    if (n.phase === 'again') {
+      if (this._noseStep(dt, parentPos, parentQuat)) this._noseArrive();
+      return;
+    }
+    if (n.phase === 'seat') {
+      n.holdS += dt;
+      this._noseSeat(parentPos, parentQuat, L);
+      if (n.holdS < (N.SEAT_BEAT_S ?? 1)) return;
+      const refused = this._noseSeatChecks();
+      if (refused) { this._noseRefused(refused); return; }
+      const d = c.delivered;
+      const pre = { motherParked: d._motherParked, renderMin: d._catchRenderMin };      // what the net's hold writes on the catch: a rollback puts it back
+      const net = this._noseCns().adoptDaughterCatch(d);
+      if (!net) { this._noseRefused('The nose could not take the catch'); return; }
+      // the nose has it; the rack record goes only when the tug has passed: the piece leaves `heldCatches` now (one writer of its pin), `limbo` keeps what a rollback needs
+      const idx = this.heldCatches.indexOf(d);
+      n.limbo = {
+        idx, by: d._capturedByArm, breakdown: d._breakdownActive, captured: this.capturedDebris === d,
+        motherParked: pre.motherParked, renderMin: pre.renderMin,
+      };
+      if (idx >= 0) this.heldCatches.splice(idx, 1);
+      d._capturedByArm = null;
+      d._breakdownActive = false;
+      if (this.capturedDebris === d) this.capturedDebris = null;
+      n.net = net;
+      n.phase = 'tug';
+      this._noseMoveTo(Math.max(0, L - N.TUG_M));
+      return;
+    }
+    if (n.phase === 'tug') {
+      const arrived = this._noseStep(dt, parentPos, parentQuat, false);
+      const d = c.delivered, net = n.net;
+      const ps = this._playerSatellite;
+      let held = !!net && net.isActive && (net.state === 'COLLARED' || net.state === 'BERTHED');
+      if (held && d._scenePosition && ps && ps.position && ps.quaternion) {
+        _noseC.copy(d._scenePosition).sub(ps.position).applyQuaternion(_noseQ.copy(ps.quaternion).invert()).multiplyScalar(1 / M);
+        held = Math.hypot(_noseC.x, _noseC.y, _noseC.z - this._noseSeatZ) <= N.TUG_HOLD_M;
+      }
+      if (!held) { this._noseRollback(); this._noseRefused('The nose did not hold the catch'); return; }
+      if (arrived) {
+        n.tugDone = true;
+        clearRackCell(d);                                              // her rack slot and the catch's cell record go now: it is the nose's
+        n.limbo = null;
+        c.handedOff = true;
+        const ps2 = this._playerSatellite;
+        if (ps2 && ps2._attitudeInertia !== undefined) ps2._attitudeInertia = null;
+        n.phase = 'back';
+        c.phase = 'back';
+        this._transitionTo(S.CARRY_BACK);
+        this._noseBackNext();
+      }
+      return;
+    }
+    if (n.phase === 'retreat') {
+      if (this._noseStep(dt, parentPos, parentQuat)) { n.phase = 'wait'; n.waitS = 0; }
+      return;
+    }
+    if (n.phase === 'wait') {
+      n.waitS += dt;
+      this._noseSeat(parentPos, parentQuat, n.s);
+      if (n.waitS >= (N.RETRY_WAIT_S ?? 2)) { n.phase = 'again'; this._transitionTo(S.CARRY_OUT); this._noseMoveTo(L); }
+      return;
+    }
+    if (n.phase === 'back') {
+      const moving = n.mv;
+      if (this._noseStep(dt, parentPos, parentQuat)) {
+        if (n.s <= 1e-9) { c.u = 0; this._carryBeginUnprep(c.endWhy || 'home'); return; }
+        this._noseBackNext();
+      } else if (moving) this._noseBillReel(dt);
+      return;
+    }
+  }
+
+  /** @private she has flown the whole route: the beat at the seat begins (CARRY_HANDOFF). */
+  _noseArrive() {
+    const c = this._carry, n = c.nose;
+    n.phase = 'seat';
+    n.holdS = 0;
+    c.phase = 'handoff';
+    this._transitionTo(S.CARRY_HANDOFF);
+    this._noseSeatZ = this._playerSatellite.armManager.noseSeatZ(c.delivered);
+  }
+
+  /** @private the next leg of the way back: down to the previous waypoint (each leg starts and stops smoothly). */
+  _noseBackNext() {
+    const c = this._carry, r = c.nose.route, s = c.nose.s;
+    let k = r.cum.length - 1;
+    while (k > 0 && r.cum[k] >= s - 1e-9) k--;
+    this._noseMoveTo(r.cum[k]);
+  }
+
+  /** @private the checks before the nose adopts: nose still free, the catch at the seat (inside the leash latch funnel) and at rest. Returns '' (all fine) or the reason. */
+  _noseSeatChecks() {
+    const c = this._carry, N = Constants.CARRY.NOSE, d = c.delivered;
+    const cns = this._noseCns();
+    if (cns && ((typeof cns.getDockedCatch === 'function' && cns.getDockedCatch()) || (typeof cns.hasMotherNetInFlight === 'function' && cns.hasMotherNetInFlight()))) return 'The nose is busy';
+    this._noseCatchShipInto(_noseC);
+    const err = Math.hypot(_noseC.x, _noseC.y, _noseC.z - this._noseSeatZ);
+    if (!(err <= N.SEAT_TOL_M)) return `The catch is ${(err * 100).toFixed(1)} cm off the seat`;
+    if (this.velocity.length() / M > N.SEAT_SPEED_MPS) return 'She is not at rest';
+    if (!d || d.alive === false) return 'The catch is gone';
+    return '';
+  }
+
+  /** @private a refused seat or adoption: back out along the way she came, wait, come in again; after TRIES she flies home holding it. */
+  _noseRefused(why) {
+    const c = this._carry, n = c.nose, N = Constants.CARRY.NOSE;
+    n.tries++;
+    n.refused = why;
+    if (n.tries >= N.TRIES) {
+      this._carrySay(`Daughter ${this.index + 1} could not seat her catch at the nose after ${N.TRIES} tries (${why.toLowerCase()}); she brings it home.`, 'warning');
+      c.endWhy = 'no seat';
+      n.phase = 'back';
+      c.phase = 'back';
+      this._transitionTo(S.CARRY_BACK);
+      this._noseBackNext();
+      return;
+    }
+    n.phase = 'retreat';
+    this._transitionTo(S.CARRY_OUT);
+    this._noseMoveTo(Math.max(0, n.route.len - N.RETRY_BACKOFF_M));
+  }
+
+  /** @private take the hand-over back (the nose did not hold, or the carry was aborted mid-tug): the net goes, the catch is on her rack again as it was. */
+  _noseRollback() {
+    const c = this._carry, n = c && c.nose;
+    if (!n || !n.limbo) return;
+    const d = c.delivered, lb = n.limbo;
+    if (n.net) this._noseCns().cancelDaughterAdoption(n.net);
+    n.net = null;
+    if (this.heldCatches.indexOf(d) < 0) this.heldCatches.splice(Math.min(Math.max(lb.idx, 0), this.heldCatches.length), 0, d);
+    d._armPinned = true;
+    d._captured = true;
+    d._motherParked = lb.motherParked;
+    d._catchRenderMin = lb.renderMin;
+    d._capturedByArm = lb.by;
+    d._breakdownActive = lb.breakdown;
+    if (lb.captured) this.capturedDebris = d;
+    n.limbo = null;
+  }
+
+  /** @private the nose carry is ending (home, or an abort): a hand-over still in the tug is taken back; a finished one lets the nose's leash try at once. */
+  _noseFinish(c, why) {
+    const n = c.nose;
+    if (!n) return;
+    if (n.limbo) { this._carry = c; this._noseRollback(); this._carry = null; }
+    if (c.handedOff && n.net) this._noseCns().releaseNoseRetry(n.net);
+  }
+
   /**
    * End the carry: the tip reservation cleared, the strut target back to the recorded angle and its reservation released
    * (StrutAuto acts only on DOCKED daughters), her petal released if it is still held, and she is DOCKED / HOLDING_CATCH
@@ -7256,13 +7607,14 @@ export class ArmUnit {
     this._carry = null;
     this._carryThread = null;
     this._carryAtt = null;                                         // docked attitude again (derived from the strut)
-    if (why === 'prep timeout' || why === 'hold lost' || why === 'no tip' || why === 'fuel') this._carryGaveUp = true;
+    if (why === 'prep timeout' || why === 'hold lost' || why === 'no tip' || why === 'fuel' || why === 'no seat') this._carryGaveUp = true;
+    if (c.kind === 'nose') this._noseFinish(c, why);
     const ps = this._playerSatellite;
     const tc = ps && ps.tipCargo;
     if (tc && typeof tc.unreserve === 'function') tc.unreserve(c.tipIndex);
     this._strutTargetAlpha = c.recordedStrutRad;
     if (!c.strutHeld) this._aimReserved = false;
-    if (ps && typeof ps.isPetalHolding === 'function' && ps.isPetalHolding(c.az)) ps.releasePetalHandoff(c.az);
+    if (c.kind !== 'nose' && ps && typeof ps.isPetalHolding === 'function' && ps.isPetalHolding(c.az)) ps.releasePetalHandoff(c.az);
     this.tetherLine.visible = false;
     this.tetherTension = 0;
     const held = this.heldCatches.length > 0;
@@ -7279,7 +7631,9 @@ export class ArmUnit {
     }
     this._lastCarryEnd = { why, tipIndex: c.tipIndex, handedOff: c.handedOff };   // for tests and the trip's log
     if (c.mission && c.handedOff && why === 'home') {
-      this._carrySay(`Daughter ${this.index + 1} puts her catch on radiator ${c.tipIndex + 1}'s tip; she is free again.`);
+      this._carrySay(c.kind === 'nose'
+        ? `Daughter ${this.index + 1} has put her catch on the nose; she is free again.`
+        : `Daughter ${this.index + 1} puts her catch on radiator ${c.tipIndex + 1}'s tip; she is free again.`);
     }
   }
 
@@ -10125,7 +10479,7 @@ export class ArmUnit {
 
   // ═══════════════════════════════════════════════════════════════════════
   // ST-9.4 C-6: CAPTURE NET INVENTORY
-  // Per CAPTURE_NET.md §6.1 — weaver=Medium Net (Large Daughter, magazine 2),
+  // Per CAPTURE_NET.md §6.1 — weaver=Medium Net (Large Daughter, magazine 4 since 2026-10-23: four 3 m nets),
   // spinner=Small Net (Small Daughter, magazine 4) at Y0.
   // Gated by FEATURE_FLAGS.CAPTURE_NET. When OFF: inventory stays 0.
   // ═══════════════════════════════════════════════════════════════════════
@@ -10155,8 +10509,8 @@ export class ArmUnit {
 
   /**
    * @private - draw the can's front-face cells (nets-step2): one dark bore and one pale cap per net, from
-   * netCellLayout(n, can radius - 3 mm, 2 mm gap): bore r = cell outer - 2 mm, cap r = 0.9 x bore. Large can 2 / 3 / 4 / 5
-   * bores (r 0.0225 .. 0.0159 m), small 4 / 6 / 8 / 10 (r 0.0098 .. 0.0049 m). The radius, face, disc and lip do not move.
+   * netCellLayout(n, can radius - 3 mm, 2 mm gap): bore r = cell outer - 2 mm, cap r = 0.9 x bore. Large can 4 / 6 / 8 / 10
+   * bores (r 0.0181 .. 0.0100 m; 2 / 3 / 4 / 5 until 2026-10-23), small 4 / 6 / 8 / 10 (r 0.0098 .. 0.0049 m). The radius, face, disc and lip do not move.
    * Names: `<id>-DNetCellHole_i` / `<id>-DNetCellCap_i`.
    * @param {number} n
    */

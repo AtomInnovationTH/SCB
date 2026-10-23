@@ -1083,7 +1083,7 @@ export const Constants = {
   WEAVER_TOTAL_IMPULSE: 5500,           // Ns (Enpulsion NANO R3)
   WEAVER_THRUST: 0.00035,              // N (0.35 mN FEEP)
   WEAVER_TETHER_LENGTH: 2000,           // m (2 km)
-  WEAVER_NET_SIZE: 5.0,                 // m (5×5 deployed Dyneema SK78)
+  WEAVER_NET_SIZE: 3.0,                 // m (3×3 deployed Dyneema SK78; 5 m until 2026-10-23, DECISIONS §38 row 5; = CAPTURE_NET.MEDIUM.DIAMETER)
   WEAVER_MAX_CAPTURE_MASS: 500,         // kg
   WEAVER_BODY: [0.2, 0.2, 0.3],       // m [x, y, z] dimensions
   WEAVER_CAPTURES_PER_FUEL: 33,        // captures before FEEP depletion
@@ -1613,6 +1613,44 @@ export const Constants = {
       weaver: { '0|0': { strutDeg: 130, thetaDeg: 30, dir: 0, swingBackReachM: { closed: 0.229, open: 0.649 } } },
       spinner: { '0|0': { strutDeg: 126, thetaDeg: 36, dir: 0, swingBackReachM: { closed: 0.263, open: 0.75 } } },
     },
+
+    // u20-nose (2026-10-23; owner 01:55Z "yes, can hand debris from daughter to mother nose"; 12:55Z "Nose route for longer catches"):
+    // a catch the direct carry never takes (longer than 0.5 m: no GATE row) goes the other way round: the daughter flies it from her strut tip
+    // to the mother's nose collar, the nose adopts it (CaptureNet.adoptDaughterCatch), she flies home body only, and the leash takes it on to a
+    // free tip (the mother-catch path). Measured in scripts/probes/nose-handoff-path.mjs, nothing here is a guess unless marked (est);
+    // docs/research/2026-10-nose-handoff.md ("As built" and "Her line, measured") has the run lines. The route itself is ONE function,
+    // js/entities/NoseRoute.js (game and probe), so what flies is what was certified. Tests: js/test/test-NoseRoute.js.
+    NOSE: {
+      ENABLED: true,
+      STRUT_DEG:        145,    // her strut at the seat (the probe's `a145`); she swings there from her hold pose with the catch on her nose
+      HOLD_DEG:         34,     // the strut angle the swing starts from (= NEIGHBOUR_REST_DEG; a catch up to 0.75 m is held at 34°, ArmManager.holdPoseFor)
+      BACKOFF_M:        0.5,    // m along her strut line before she turns (no turn: her own strut is not yet clear). Measured: the 0.75 m container and 0.75 m bag pass at 0.5 (a longer one changes nothing: the own-strut reading sits at the 0.4 m free mark)
+      STANDOFF_M:       1.4,    // m: the stand-off height above the seat (the probe's `s1.4`)
+      STANDOFF_MIN_Z_M: 3.227,  // m: the stand-off height is never lower than this (the 0.5 m catch's own: 1.827 + 1.4), the `nose-high` route: the plain route failed 0.30 m catches (164/330)
+      TRAIL_DEG:        30,     // her body trails up the axis tilted this far to the side (the probe's `tan30`)
+      MAX_REACH_M:      0.75,   // m: TipCargo.fits (a tip takes a bag up to 0.75 m); also the biggest catch a NEIGHBOUR may hold (measured clear: rocket body, reach 0.75)
+      NEIGHBOUR_CATCH_MAX_REACH_M: 0.75,
+      // Certified reach buckets (probe `--bucket R`): the route is flown for a VIRTUAL catch of the bucket's top reach (NoseRoute.js), a
+      // smaller real catch goes on to its own seat (the "extension", <= 0.4 m). A catch with reach in (loM, topM] is offered the route when
+      // the radiators stand in the bucket's window: closed (`closedDeg`, both ends measured) or open (`openDeg`).
+      // Fix round 1 (coordinator 2026-10-23): a window is offered only where it was run. The three smaller buckets were run at 0, 1 and 146
+      // (and 134, now not offered): closed, or fully open 146 deg +-0.5. The 0.75 bucket was run at 138, 140, 142, 144, 145, 146: 138..146.
+      // Reaches at or below the first loM, above the last topM, or in no bucket refuse in plain words.
+      BUCKETS: [
+        { loM: 0.27, topM: 0.30, closedDeg: [0, 1], openDeg: [145.5, 146.5] },   // route certified from reach 0.25; her line (0.03 m rule) passes from 0.27 (0.265 misses by 0.0003 m): reach 0.27 and below refuse
+        { loM: 0.30, topM: 0.50, closedDeg: [0, 1], openDeg: [145.5, 146.5] },
+        { loM: 0.50, topM: 0.63, closedDeg: [0, 1], openDeg: [145.5, 146.5] },
+        { loM: 0.63, topM: 0.75, closedDeg: [0, 1], openDeg: [138, 146] },       // as run: 138, 140, 142, 144, 145, 146
+      ],
+      SEAT_BEAT_S:      1.0,    // s at the seat before the checks (the carry's HANDOFF_S)
+      SEAT_TOL_M:       0.06,   // m: the catch's centre must be this close to the collar axis point at the seat (the leash latch funnel, docs/research/2026-10-leash.md)
+      SEAT_SPEED_MPS:   0.03,   // m/s: and at rest (the leash latch's own limit)
+      TUG_M:            0.03,   // m she backs along the axis after the nose has the catch, before she lets go (2-5 cm)
+      TUG_HOLD_M:       0.01,   // m: while she backs, the catch must stay this close to its seat (the nose holds it); else the hand-over is taken back (est: a latch that holds keeps it within a centimetre)
+      RETRY_BACKOFF_M:  0.4,    // m a refused seat backs out along the way she came, ...
+      RETRY_WAIT_S:     2.0,    // s (est) she waits there, then comes in again
+      TRIES:            3,      // seat attempts; after the third she flies home holding the catch
+    },
   },
 
   // Q3 — Stage-1 net snug-up (rigidize daughter+net+debris into one unit).
@@ -1803,11 +1841,12 @@ export const Constants = {
 
   // Per-arm net inventory capacity (§13 Q5 — depletion is a real Y0 fail state)
   // These values MUST equal CAPTURE_NET.MEDIUM/SMALL.MAGAZINE_SIZE (drift-guard
-  // test enforces). Payload-fraction invariant justifying 2/4:
-  //   Large Daughter (weaver): 2 × 0.68 kg / 6.6 kg ≈ 21%
+  // test enforces). Payload-fraction invariant justifying 4/4:
+  //   Large Daughter (weaver): 4 × 0.317 kg / 6.6 kg ≈ 19% (was 2 × 0.68 kg ≈ 21% until 2026-10-23, DECISIONS §38 row 5:
+  //     four 3 m nets in place of two 5 m nets)
   //   Small Daughter (spinner): 4 × 0.12 kg / 2.1 kg ≈ 23%
   ARM_NET_CAPACITY: {
-    weaver:  2,
+    weaver:  4,
     spinner: 4,
   },
 
@@ -3110,17 +3149,22 @@ export const Constants = {
   // 1.56, carbon nanotube yarn 10 GPa 1.3 (speculative), graphene from the game's own GSL rows 2.0 (future tech; the best
   // graphene fibre made today is 5.9 GPa)). ESTIMATES from the probe tmp/netpack/step2.mjs (packing fraction 0.5), not
   // measurements; the drawn cartridges (netCellLayout) are sized to hold them (test-NetPack).
+  // 2026-10-23 (DECISIONS §38 row 5): the LARGE daughter now carries four 3 m nets (0.317 kg each at the start tier) in
+  // place of two 5 m nets, so `nets.large` is 4 / 6 / 8 / 10 / 10 (was 2 / 3 / 4 / 5 / 5; the ladder doubles, the last two
+  // tiers still tie) and `netMassKg.large` follows the same MESH x mf + rim + hub formula with the 3 m net's parts
+  // (MESH 0.149, 4 x 0.030, hub 0.048). Packed, every tier fits the large can (js/test/_netPack.js; 73 % full at the
+  // start tier, was 92 %).
   TETHER_TIERS: [
     { name: 'Dyneema',   label: 'Dyneema',          breakStrength: 100,  mass_per_km: 0.8,  maxLength: 2000,  cost: 0,
-      nets: { mother: 4,  large: 2, small: 4  }, netMassKg: { mother: 1.425, large: 0.680, small: 0.120 } },
+      nets: { mother: 4,  large: 4,  small: 4  }, netMassKg: { mother: 1.425, large: 0.317, small: 0.120 } },
     { name: 'Zylon',     label: 'Zylon',            breakStrength: 200,  mass_per_km: 0.6,  maxLength: 4000,  cost: 1500,
-      nets: { mother: 6,  large: 3, small: 6  }, netMassKg: { mother: 1.405, large: 0.668, small: 0.119 } },
+      nets: { mother: 6,  large: 6,  small: 6  }, netMassKg: { mother: 1.405, large: 0.313, small: 0.119 } },
     { name: 'CNT',       label: 'Carbon nanotube',  breakStrength: 350,  mass_per_km: 0.3,  maxLength: 6000,  cost: 5000,
-      nets: { mother: 8,  large: 4, small: 8  }, netMassKg: { mother: 1.067, large: 0.468, small: 0.099 } },
+      nets: { mother: 8,  large: 8,  small: 8  }, netMassKg: { mother: 1.067, large: 0.238, small: 0.099 } },
     { name: 'GSL-50',    label: 'Graphene',         breakStrength: 500,  mass_per_km: 0.15, maxLength: 8000,  cost: 15000,
-      nets: { mother: 10, large: 5, small: 10 }, netMassKg: { mother: 0.775, large: 0.295, small: 0.082 } },
+      nets: { mother: 10, large: 10, small: 10 }, netMassKg: { mother: 0.775, large: 0.174, small: 0.082 } },
     { name: 'GSL-100',   label: 'Graphene, 10 km',  breakStrength: 800,  mass_per_km: 0.10, maxLength: 10000, cost: 40000,
-      nets: { mother: 10, large: 5, small: 10 }, netMassKg: { mother: 0.761, large: 0.286, small: 0.081 } },
+      nets: { mother: 10, large: 10, small: 10 }, netMassKg: { mother: 0.761, large: 0.170, small: 0.081 } },
   ],
 
   // --- Spring Upgrade Tiers ---
@@ -4394,7 +4438,7 @@ export const Constants = {
     //   | Class  | D (m) | RIM_WT_COUNT | RIM_WT_MASS (kg) | SPIN_HZ | RPM | r (m) | ω (rad/s) | F/wt (N) |
     //   |--------|-------|--------------|------------------|---------|-----|-------|-----------|----------|
     //   | LARGE  | 6.0   | 8            | 0.075            | 2       | 120 | 3.0   | 12.57     | 35.5     |
-    //   | MEDIUM | 5.0   | 4            | 0.050            | 4       | 240 | 2.5   | 25.13     | 78.9     |
+    //   | MEDIUM | 3.0   | 4            | 0.030            | 6.667   | 400 | 1.5   | 41.89     | 78.9     |   (5 m / 0.050 kg / 4 Hz until 2026-10-23: same rim speed, same pull)
     //   | SMALL  | 1.5   | 4            | 0.015            | 6       | 360 | 0.75  | 37.70     | 16.0     |
     //
     //   Re-derived 2026-06-12 (Item 3 audit): all three classes hold > 10 N per
@@ -4505,24 +4549,37 @@ export const Constants = {
     },
 
     // ── Medium Net (LD-NET) — Weaver / Large Daughter ──
+    // 2026-10-23 (DECISIONS §38 row 5; owner: "3m is a guess ... daughters may need more smaller nets"): the large daughter
+    // carries FOUR 3 m nets, each lighter, in place of two 5 m nets (doc docs/research/2026-10-debris-sizes.md §6: takes 9 of
+    // the 11 targets from mission 2 on any way round, 11 of 11 pointed well; misses only the 4.5 m satellite sideways, the
+    // mother's job). Mass method (doc §6, estimates): mesh 0.0165 kg/m^2 x 3^2 = 0.149 kg; rim weights and hub scale with the
+    // mouth (x 3/5: 4 x 0.030 kg, 0.048 kg) => 0.317 kg per net, 1.268 kg for four (the 5 m pair weighed 1.36 kg).
+    // MAX_CAPTURE_MASS stays 500 kg: that rating was never derived from mesh, rim or thread count (it is the "target
+    // envelope" row of CAPTURE_NET.md §6.1; its one physics tie is the tether: (arm + 500 kg) x 2 m/s x REEL_TENSION_COEFF
+    // = 40.5 N under the start tier's 100 N break strength). The 3 m net's own cords (8 spokes of 1.0 mm Dyneema SK78,
+    // 3.6 GPa = 22.6 kN; 8.1 kN even at 0.6 mm cord) carry far more than any tether can pull, so the net is not the weak link.
+    // SPIN_HZ 4 -> 20/3 keeps the RIM SPEED (62.8 m/s) and so the pull per weight exactly as it was: F = m w^2 r =
+    // 0.030 x (2 pi 20/3)^2 x 1.5 = 78.96 N, the 5 m net's value (0.050 x (2 pi 4)^2 x 2.5). At 4 Hz the 3 m net would pull
+    // 28.4 N and its mouth would collapse past ~51 m (floor 10 N, 8 %/s bleed), where today's never does inside its 8 s
+    // flight window (test-CaptureNet-MouthCollapse pins 8.051 s). SPRING_ENERGY = 1/2 x 0.317 x 10^2 = 15.9 J (read nowhere).
     MEDIUM: {
       CODE:             'LD-NET',
       NAME:             'Medium Net',
-      DIAMETER:         5.0,
-      MASS:             0.68,
-      MESH_MASS:        0.400,
+      DIAMETER:         3.0,       // was 5.0 until 2026-10-23
+      MASS:             0.317,     // was 0.68
+      MESH_MASS:        0.149,     // was 0.400 (area: 0.0165 kg/m^2 x 3^2)
       RIM_WEIGHT_COUNT: 4,
-      RIM_WEIGHT_MASS:  0.050,
-      HUB_MASS:         0.080,
+      RIM_WEIGHT_MASS:  0.030,     // was 0.050 (x 3/5)
+      HUB_MASS:         0.048,     // was 0.080 (x 3/5)
       CONE_HALF_ANGLE:  12,
-      SPIN_HZ:          4,
+      SPIN_HZ:          20 / 3,    // was 4: same rim speed, same 78.96 N per weight (see above)
       MAX_CAPTURE_MASS: 500,
-      MAGAZINE_SIZE:    2,
+      MAGAZINE_SIZE:    4,         // was 2
       REEL_SPEED:       2.0,
       TETHER_MAX:       100,
       RANGE:            100,
       LAUNCH_SPEED:     10.0,
-      SPRING_ENERGY:    34,
+      SPRING_ENERGY:    16,        // J, was 34 (1/2 x 0.317 x 10^2)
       REPLACEMENT_COST: 100,
     },
 

@@ -32,6 +32,7 @@ import { OUT_OF_MOTHER_NETS_LINE, ONE_MOTHER_NET_LEFT_LINE } from '../systems/ne
 import { suggestCargoArm, countEmptyDockedDaughters, heldCargoFoulsCorridorAt } from '../systems/CoMCalculator.js';
 import { tripRefuses } from '../systems/TransferTrip.js';
 import { heldBagNeckInto, heldBagRadiusScene, DAUGHTER_STAND_M } from './heldBagShape.js';
+import { pickScoopMembers, scoopLine } from './scoopRule.js';
 import * as THREE from 'three';
 
 const _heldNeck = { x: 0, y: 0, z: 0 };   // net-cinch: scratch for a daughter's held-net neck (scene units)
@@ -1290,6 +1291,11 @@ export class NetProjectile {
     /** @type {boolean} Daughter capture being hauled by the ArmUnit — hold the
      *  net's own reel (bag stays cinched on the debris) until the arm delivers. */
     this._heldByArm     = false;
+    /** @type {{x:number,y:number,z:number}|null} u20-nets: the net's centre at contact minus the target's centre, metres
+     *  (null until contact: the scoop then centres its mouth on the target). */
+    this._mouthOffsetM  = null;
+    /** @type {boolean} u20-nets: this net already took a scoop (its targetDebris is the bag). */
+    this._scooped       = false;
     /** @type {number} Register item 28: kg the held catch carried when the arm
      *  LOST it (integrity slip / boost rip / tether-snap drift-end / reset drop
      *  / severed-claim transfer) instead of delivering it to the furnace. 0 on
@@ -1850,6 +1856,8 @@ export class NetProjectile {
             this._miss('mouth_collapsed');
             return;
           }
+          // u20-nets: where the mouth is, relative to the target, at contact (metres; the scoop reads it when the net closes)
+          this._mouthOffsetM = { x: -dx / M_NET, y: -dy / M_NET, z: -dz / M_NET };
           if (this.captureMode === MODES.CINCH) {
             this._transitionTo(STATES.BRAKE);
           } else {
@@ -1882,6 +1890,7 @@ export class NetProjectile {
             this._miss('mouth_collapsed');
             return;
           }
+          this._mouthOffsetM = { x: -dx, y: -dy, z: -dz };   // u20-nets: the mouth relative to the target at contact (metres)
           if (this.captureMode === MODES.CINCH) {
             this._transitionTo(STATES.BRAKE);
           } else {
@@ -3280,7 +3289,47 @@ export class NetProjectile {
   }
 
   /** @private Transition to CAPTURED + emit event */
+  /**
+   * u20-nets (2026-10-23, DECISIONS §38 row 5): a DAUGHTER's net that closed on its target keeps every other catchable piece
+   * inside its mouth too, in ONE bag (`DebrisField.mergeIntoBag`). Members, mouth volume, fit and bag size: `scoopRule.js`.
+   * One piece in the mouth: nothing changes (the same piece stays held). The mother's net never scoops. Called once, as the
+   * catch is confirmed, before the mass and the events read `targetDebris`: from here on the net, the daughter and every
+   * system downstream hold the bag.
+   * @private
+   * @returns {object|null} the bag, or null when nothing was scooped
+   */
+  _scoopIntoBag() {
+    if (this._scooped || this._isMother || !(this.armIndex >= 0)) return null;
+    const target = this.targetDebris;
+    // a daughter's net carries no `_ctx` (only the mother's do): the system's own field handle, as `canonicalOf` reads it
+    const field = (this._ctx && this._ctx.debrisField) || (captureNetSystem && captureNetSystem._debrisField) || null;
+    if (!target || target.isBag === true || !field || typeof field.mergeIntoBag !== 'function'
+        || !Array.isArray(field.debrisList)) return null;
+    const arm = this._sourceArm || null;
+    const rated = (arm && arm._netRatedMass > 0) ? arm._netRatedMass : (this.netClass.MAX_CAPTURE_MASS || Infinity);
+    // The net may hold a snapshot of its target (`canonicalOf`): the members must be the field's own objects.
+    const canon = (typeof field.getDebrisById === 'function' && target.id != null && field.getDebrisById(target.id)) || target;
+    if (canon.alive === false) return null;
+    const { members } = pickScoopMembers(canon, field.debrisList, this.netClass, {
+      mouthOffsetM: this._mouthOffsetM,
+      armId: arm && arm.id != null ? arm.id : null,
+      ratedMassKg: rated,
+    });
+    if (members.length < 2) return null;
+    const bag = field.mergeIntoBag(members, this);
+    if (!bag) return null;
+    this._scooped = true;
+    this.targetDebris = bag;
+    if (arm) arm.target = bag;            // ArmUnit's net poll adopts it too (its `reelCaught` test compares the two)
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: scoopLine((arm && arm.displayName) || 'Daughter', members.length),
+      source: 'SYSTEM', channel: 'CMD', priority: 'info',
+    });
+    return bag;
+  }
+
   _captureSuccess() {
+    this._scoopIntoBag();
     this.catchResult = 'success';
     this.capturedMass = this.targetDebris?.mass || 1.0;
     this.tangleQuality = this._clingProbability;
@@ -5369,6 +5418,101 @@ export class CaptureNetSystem {
     if ('_attitudeInertia' in player) player._attitudeInertia = null;
 
     return net;
+  }
+
+  /**
+   * u20-nose — a daughter hands the catch she holds to the nose (docs/research/2026-10-nose-handoff.md). Modelled on
+   * `adoptLassoCatch`: the catch is already seated on the collar axis (she flew it to the seat the mother's own catches use,
+   * `catchHomeDistM`), so the net is born AT HOME, no reel, no snap, and goes straight to COLLARED: the mate already
+   * happened (her rack paid the catch when it was parked there, `ArmUnit` rack park, `CATCH_PROCESSED` source 'rack'), so there is
+   * no berth timer and no second credit. The adopted net behaves like a mother catch at the collar everywhere (the leash,
+   * trip melting, K lets go, cut rules, the net-shot foul). The first-tick hand-off decision stays OFF (`_cargoDeclined`, retry
+   * parked) until the daughter is home: the leash cannot turn the ship under her. `ArmUnit` calls `releaseNoseRetry(net)` then.
+   *
+   * @param {object} target — the catch (alive, pinned to the daughter's rack until this call)
+   * @returns {NetProjectile|null} the collared net, or null when the nose is busy / the system has no player or debris field
+   *   (the daughter keeps the catch and retries)
+   */
+  adoptDaughterCatch(target) {
+    const player = this._player;
+    const debrisField = this._debrisField;
+    if (!target || target.alive === false || !player || !debrisField) return null;
+    if (this.getDockedCatch() || this.hasMotherNetInFlight()) return null;
+    const M_NET = Constants.SCENE_UNITS_PER_METER;
+    const berthAnchor = (typeof player.getNetBerthCollarPositionInto === 'function')
+      ? player.getNetBerthCollarPositionInto(new THREE.Vector3())
+      : (typeof player.getNetPodPositionInto === 'function')
+        ? player.getNetPodPositionInto(0, new THREE.Vector3()) : new THREE.Vector3();
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(player.quaternion).normalize();
+    const net = new NetProjectile({
+      netClass: CN.LARGE,
+      armIndex: -1,
+      podIndex: 0,
+      launchPosition: { x: berthAnchor.x / M_NET, y: berthAnchor.y / M_NET, z: berthAnchor.z / M_NET },
+      launchDirection: { x: fwd.x, y: fwd.y, z: fwd.z },
+      targetDebris: target,
+      captureMode: MODES.CINCH,
+      anchorProvider: (out) => player.getNetPodPositionInto(0, out),
+    });
+    net._ctx = { player, debrisField, armManager: this._armManager, lassoSystem: this._lassoSystem, captureNetSystem: this };
+    net.catchResult = 'success';
+    net.capturedMass = target.mass || 0;
+    const apexM = CN.REEL_HOME.APEX_AT_RING_M;
+    net.tetherPaidOut = apexM;
+    net._remainingM = apexM;
+    net._reelSeedM = apexM;
+    net._effectiveStandoffM = apexM;
+    net._seedReelHome(target, player);
+    net._catchSeatM = net._homeSeatM;
+    net._seat0M = net._homeSeatM;
+    net._reelDistM = net._homeCatchM;
+    net._lateral = new THREE.Vector3();
+    net._fwdLagged = fwd.clone();
+    if (target.tumbleAxis && player.quaternion) {
+      const qCatch = new THREE.Quaternion().setFromAxisAngle(target.tumbleAxis, target.tumbleAngle || 0);
+      net._qLocal = player.quaternion.clone().invert().multiply(qCatch);
+    } else {
+      net._qLocal = new THREE.Quaternion();
+    }
+    net._floorRampT = CN.MOTHER_CATCH_MIN_RENDER_RAMP_S ?? 0.6;
+    net._ceremonyStartEmitted = true;
+    net._tumbleCarryover = 0;
+    net._tumbleCarryAngle = 0;
+    net._pendulumAngle = 0;
+    net._pendulumVel = 0;
+    // MATED already: paid on her rack, no berth timer (BERTHED -> COLLARED is the mate), no CATCH_PROCESSED here.
+    net._berthTimer = 0;
+    net._berthProcessed = true;
+    net._noseAdopted = true;
+    net._transitionTo(STATES.COLLARED);
+    // the leash may not start until the daughter is home (it turns the whole ship): parked until `releaseNoseRetry`
+    net._cargoDeclined = true;
+    net._cargoRetryS = -1e9;
+    this.activeNets.push(net);
+    eventBus.emit(Events.NET_ADOPTED, { podIndex: 0, armIndex: -1 });
+    if ('_attitudeInertia' in player) player._attitudeInertia = null;
+    // No gap: the net's own hold writes the catch's pin NOW, so the one frame between this call and the next net tick is not unpinned.
+    net.updateBerthHold(0);
+    return net;
+  }
+
+  /** u20-nose: the daughter is home - let the adopted net try its leash hand-off on the very next tick. */
+  releaseNoseRetry(net) {
+    if (net && net._noseAdopted) net._cargoRetryS = 1e9;
+  }
+
+  /**
+   * u20-nose: take back a daughter's hand-over before she lets go (the tug test failed, or her carry was aborted): the net leaves the list (the
+   * visual follows the list) and stops holding. Unlike `_teardownBerth` it does NOT clear the catch's pins and rack record: the catch goes back to
+   * the daughter's rack as it was (`ArmUnit._noseRollback` restores what the net's hold wrote). Returns true when the net was in play.
+   */
+  cancelDaughterAdoption(net) {
+    if (!net) return false;
+    net.isActive = false;
+    net._berthTimer = -1;
+    const i = this.activeNets.indexOf(net);
+    if (i >= 0) this.activeNets.splice(i, 1);
+    return i >= 0;
   }
 
   /**

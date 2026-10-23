@@ -1132,6 +1132,12 @@ export class GameFlowManager {
         // this same handler; the later DEBRIS_REMOVED (a digest, a burn) finds it gone. Explicit, not a registry listener: that
         // would work only while main.js builds the registry before this handler's init. No field tag, no body: nothing changes.
         if (debris && this._refs && this._refs.fieldRegistry) this._refs.fieldRegistry.markCaught(debris);
+        // u20-nets: a scoop bag has no field row of its own; each member's row leaves its field here, as a solo catch's does
+        // (a member's live `fieldId` is parked while it is in the bag; its snapshot in `bagMembers` carries the row).
+        const bodies = this._creditBodies(debris);
+        if (debris && debris.isBag === true && this._refs && this._refs.fieldRegistry) {
+          for (const m of (debris.bagMembers || [])) this._refs.fieldRegistry.markCaught(m);
+        }
 
         // Cargo-continuity S13(c): a collar completion carries { digested: true } —
         // a SECOND CATCH_PROCESSED for a body already credited at the mate
@@ -1144,16 +1150,22 @@ export class GameFlowManager {
         // 'arm' for daughters, 'mother' for a berthed whale (§4.8/§19).
         // ScoringSystem's METHOD_BONUS[method] || 1.0 accepts any string, so
         // a new method needs no scoring-model change.
-        scoringSystem.awardPoints({
-          debris: debris || { type: 'fragment', mass: 100, tumbleRate: 0, brittleness: 0 },
-          method: data.method || 'arm',
-          captureTier: 3, // CAPTURE tier (physical capture)
-          tacticalAssessment: assessed,
-          manualCapture: manualCapture,
-          fuelEfficient: fuelEfficient,
-          salvageRecovered: !!hasSalvage,
-          detachedCapture: returningArm?.isDetached || false,
-        });
+        // u20-nets (owner 2026-10-23, "pay per piece, one catch"): a scoop bag pays EVERY member exactly as if it had been caught
+        // alone (one award each, with that member's own salvage flag); `gameState.clearDebris()` below still runs once, so the
+        // bag is one of the mission's five catches.
+        for (const body of bodies) {
+          scoringSystem.awardPoints({
+            debris: body || { type: 'fragment', mass: 100, tumbleRate: 0, brittleness: 0 },
+            method: data.method || 'arm',
+            captureTier: 3, // CAPTURE tier (physical capture)
+            tacticalAssessment: assessed,
+            manualCapture: manualCapture,
+            fuelEfficient: fuelEfficient,
+            salvageRecovered: !!(body && body.hasSalvage && body.salvage),
+            detachedCapture: returningArm?.isDetached || false,
+          });
+          if (body && body !== debris) body._credited = true;      // a member: never paid again on its own
+        }
 
         // Reset manual capture flag after scoring
         if (returningArm) {
@@ -1188,7 +1200,10 @@ export class GameFlowManager {
         }
 
         // --- SALVAGE RECOVERY (Session 10) ---
-        if (payCredit && hasSalvage) {
+        // u20-nets: one pass per paid body (a solo catch: itself; a scoop bag: each member, its own salvage; the bag's own is empty)
+        for (const debris of (payCredit ? bodies : [])) {
+        const hasSalvage = debris && debris.hasSalvage && debris.salvage;
+        if (hasSalvage) {
           const salvage = debris.salvage;
           const refineryMult = this._hasUpgrade('refinery_arm') ? 1.5 : 1.0;
 
@@ -1299,6 +1314,7 @@ export class GameFlowManager {
             totalMass,
             debrisType: debris ? (debris.type || 'debris') : 'debris',
           });
+        }
         }
 
         // trip-melt-2 D12a: was a trip ALREADY running when this credit landed? (Read before `_startMissionAfterCredit` below, which
@@ -1472,18 +1488,28 @@ export class GameFlowManager {
       // Award score with deorbit multiplier
       // Check tactical assessment bonus (tracked via WIREFRAME_ASSESSED event — Batch 3)
       const assessed = this._wireframeAssessed;
-      scoringSystem.awardPoints({
-        debris: debris || { type: 'fragment', mass: 100, tumbleRate: 0, brittleness: 0 },
-        method: 'arm',
-        captureTier: 3,
-        tacticalAssessment: assessed,
-        manualCapture: false,
-        fuelEfficient: false,
-        salvageRecovered: false,
-        deorbitSacrifice: true,
-        deorbitMultiplier: deorbitMult,
-        detachedSacrifice: arm?.isDetached || false,
-      });
+      // u20-nets: a scoop bag burns up as its members: each is paid as if it had been sacrificed alone and leaves its field row
+      // (the bag has none of its own); the sacrifice is still ONE clear (`clearDebris()` below).
+      const deorbitBodies = this._creditBodies(debris);
+      if (debris && debris.isBag === true && this._refs && this._refs.fieldRegistry) {
+        for (const m of (debris.bagMembers || [])) this._refs.fieldRegistry.markCaught(m);
+      }
+      for (const body of deorbitBodies) {
+        scoringSystem.awardPoints({
+          debris: body || { type: 'fragment', mass: 100, tumbleRate: 0, brittleness: 0 },
+          method: 'arm',
+          captureTier: 3,
+          tacticalAssessment: assessed,
+          manualCapture: false,
+          fuelEfficient: false,
+          salvageRecovered: false,
+          deorbitSacrifice: true,
+          deorbitMultiplier: deorbitMult,
+          detachedSacrifice: arm?.isDetached || false,
+        });
+        if (body && body !== debris) body._credited = true;
+      }
+      if (debris && debris.isBag === true) debris._credited = true;
 
       // Comms: report ΔV and perigee lowering
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -2638,6 +2664,21 @@ export class GameFlowManager {
       return true;
     }
     return false;
+  }
+
+  /**
+   * u20-nets: the bodies a credit pays. A solo catch (or no body at all) is `[debris]`; a scoop bag is its members' own bodies
+   * (`bagMembers[i].piece`), so every member is scored and salvaged exactly as if it had been caught alone, while the caller
+   * still counts ONE catch (`gameState.clearDebris()` once). A member already paid is left out.
+   * @param {object|null} debris the held body the credit came for
+   * @returns {Array<object|null>}
+   * @private
+   */
+  _creditBodies(debris) {
+    if (debris && debris.isBag === true && Array.isArray(debris.bagMembers)) {
+      return debris.bagMembers.map((m) => m.piece).filter((p) => p && !p._credited);
+    }
+    return [debris];
   }
 
   /**

@@ -1227,7 +1227,7 @@ export class TargetPanel {
                 const tip = overflow ? ` title="drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${nc.DIAMETER} m bag — it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)"` : '';
                 return `<span style="color:${col}"${tip}>${tag}${ok ? '✓' : '✗'}</span>`;
               };
-              fitBadge = `<span style="font-size:10px;font-weight:bold;" title="Capture fit (daughter nets): L = weaver's MEDIUM / LD-NET 5 m class, S = spinner's SMALL / SD-NET 1.5 m class — not the mother net">${seg('L', wFit, Constants.CAPTURE_NET && Constants.CAPTURE_NET.MEDIUM)} ${seg('S', sFit, Constants.CAPTURE_NET && Constants.CAPTURE_NET.SMALL)}</span>`;
+              fitBadge = `<span style="font-size:10px;font-weight:bold;" title="Capture fit (daughter nets): L = weaver's MEDIUM / LD-NET ${(Constants.CAPTURE_NET && Constants.CAPTURE_NET.MEDIUM && Constants.CAPTURE_NET.MEDIUM.DIAMETER) || 3} m class, S = spinner's SMALL / SD-NET ${(Constants.CAPTURE_NET && Constants.CAPTURE_NET.SMALL && Constants.CAPTURE_NET.SMALL.DIAMETER) || 1.5} m class — not the mother net">${seg('L', wFit, Constants.CAPTURE_NET && Constants.CAPTURE_NET.MEDIUM)} ${seg('S', sFit, Constants.CAPTURE_NET && Constants.CAPTURE_NET.SMALL)}</span>`;
             }
             }
 
