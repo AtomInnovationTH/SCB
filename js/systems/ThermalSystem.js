@@ -82,6 +82,8 @@ export class ThermalSystem {
     this._redArmed = true;
     /** @private true from an auto-open until any player command (it never auto-closes) */
     this._autoOpened = false;
+    /** @private reel-hold F1: a swing this auto asked for was dropped at the band's edge (a catch in their way): the next ask skips the "folded" check once (the wings stand half open) */
+    this._dropRetry = false;
     /** @private clock time of the last player radiator command */
     this._lastPlayerCmdS = -Infinity;
     /** w4-power D7: the heater's draw this tick, W (0 when warm / disabled) */
@@ -96,6 +98,7 @@ export class ThermalSystem {
     this._onPlayerCmd = () => {
       this._lastPlayerCmdS = this._clockS;
       this._autoOpened = false;   // the player took the radiator — the auto lets go
+      this._dropRetry = false;
     };
     eventBus.on(Events.THERMAL_FLOWER_INPUT, this._onPlayerCmd);
 
@@ -329,6 +332,7 @@ export class ThermalSystem {
     this._yellowArmed = true;
     this._redArmed = true;
     this._autoOpened = false;
+    this._dropRetry = false;
     this._lastPlayerCmdS = -Infinity;
     this._clockS = 0;
     this.heaterW = 0;
@@ -407,7 +411,7 @@ export class ThermalSystem {
     if (p.flowerHandoffHeld === true || p.flowerCommandsLocked === true) return false;
     if (this._autoOpened) return false;
     if ((this._clockS - this._lastPlayerCmdS) < SH.PLAYER_WINS_S) return false;
-    return openFrac <= SH.AT_REST_FRAC;
+    return openFrac <= SH.AT_REST_FRAC || this._dropRetry === true;   // reel-hold F1: after a dropped swing the wings stand at the band's edge, half open (openFrac ~0.4-0.5)
   }
 
   /**
@@ -426,13 +430,24 @@ export class ThermalSystem {
     // A catch hand-off hold refuses every pose and would make setFlowerPose speak the player's refusal line; wait it out (opens after the hold ends).
     if (p.flowerHandoffHeld === true || p.flowerCommandsLocked === true) return;
 
+    // reel-hold D3: a swing the radiator drive dropped at the band's edge (a catch in their way, PlayerSatellite.bandGate) never
+    // finished "opening once": the drive leaves a one-shot mark, and the auto asks again (once no holder blocks for good, below).
+    // (The plan's polled rule, "no move pending and openFrac at rest", never fires for an opening swing: it is dropped at the
+    // band's lower edge, openFrac ~0.4; and a stub player with no `_flowerTargetTheta` re-armed every frame.) The wings stand half
+    // open there, so the ask must not wait for "folded" either (`_autoOpenArmed` reads `_dropRetry`): one ask, then it is spent.
+    if (p._flowerBandDropped === true) { p._flowerBandDropped = false; this._autoOpened = false; this._dropRetry = true; }
     if (this._autoOpened) return;   // it opened once and stays open
 
     if (this.tempC >= SH.AUTO_OPEN_C && this._autoOpenArmed(openFrac)) {
+      // reel-hold D3: a holder that can reach no clear pose keeps the radiators shut; ask again only when she lets go (a 'wait' is
+      // asked through: the wings go to the band's edge and the holders lift while they wait)
+      const am = p.armManager;
+      if (am && typeof am.radiatorBandBlocked === 'function' && am.radiatorBandBlocked() === 'never') return;
       const open = (Constants.THERMAL && Constants.THERMAL.FLOWER
         && Constants.THERMAL.FLOWER.OPEN_POSE) || 'STOW';
       if (p.setFlowerPose(open) === null) return;   // no radiator fitted — nothing to open
       this._autoOpened = true;
+      this._dropRetry = false;
       this._say('Too hot — opening the radiator.', 'warning');
     }
   }

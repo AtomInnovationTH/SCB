@@ -77,6 +77,58 @@ const _strutLiveAlpha = (a) =>
   a._strutTargetAlpha ?? (a.getAimAlpha ? a.getAimAlpha() : 0);
 
 /**
+ * reel-hold (2026-10-23): the turn (rad, signed; turning the ship by +t moves her angle by +t) that brings a daughter's angle in
+ * her strut's swing plane inside the strut's range [STRUT_MIN_DEG, STRUT_MAX_DEG]; 0 when she is inside it. `v` is the
+ * direction hinge -> her, ship-local, `az` the strut's azimuth. The ONE piece of maths the mother's floor turn
+ * (`_tickReelHomeTurn`) and the hold that waits for it (`reelHoldReason`) both read, so they never disagree.
+ * @param {{x:number,y:number,z:number}} v
+ * @param {number} az
+ * @param {object} RH Constants.REEL_HOME
+ * @returns {number}
+ */
+function _rhFloorTheta(v, az, RH) {
+  const D2R = Math.PI / 180;
+  const lo = (RH.STRUT_MIN_DEG ?? 34) * D2R;
+  const hi = (RH.STRUT_MAX_DEG ?? 180) * D2R;
+  const phi = Math.atan2(v.x * Math.cos(az) + v.y * Math.sin(az), -v.z);   // her angle in the strut's plane
+  if (phi >= lo && phi <= hi) return 0;                                       // the strut can point at her
+  const wrap = (x) => { while (x > Math.PI) x -= 2 * Math.PI; while (x <= -Math.PI) x += 2 * Math.PI; return x; };
+  const toLo = wrap(lo - phi);
+  const toHi = wrap(hi - phi);
+  return Math.abs(toLo) <= Math.abs(toHi) ? toLo : toHi;
+}
+
+/**
+ * reel-hold F4: the first strut angle (deg) from `startDeg` on the `stepDeg` grid, below `hiDeg`, at which `conflictAt(deg)` is false,
+ * then `hiDeg` itself LAST (a grid that does not land on it must still try it: the pose cap is a pose too); null = none. The same
+ * walk as `_holdPoseOf` / `_neighbourLiftRad`. Exported for the test.
+ * @param {number} startDeg
+ * @param {number} hiDeg
+ * @param {number} stepDeg
+ * @param {(deg:number)=>boolean} conflictAt
+ * @returns {number|null}
+ */
+export function firstClearPoseDeg(startDeg, hiDeg, stepDeg, conflictAt) {
+  for (let deg = startDeg; deg < hiDeg; deg += stepDeg) if (!conflictAt(deg)) return deg;
+  return startDeg <= hiDeg && !conflictAt(hiDeg) ? hiDeg : null;
+}
+
+/**
+ * reel-hold D4/D5 (measured, tmp/plans/reel-hold.md T1): the lowest strut angle (deg, on the 5° hold-pose grid) at which a docked
+ * holder's catch of `sizeM` stays out of the radiator wings' way in the band. A table, never a mesh sweep at runtime.
+ * @param {number} sizeM her biggest catch (m); 0 = unknown -> the deepest row
+ * @param {object} R Constants.REEL_HOLD
+ * @returns {number}
+ */
+function _bandClearDeg(sizeM, R) {
+  const rows = R.CLEAR_ROWS;
+  if (!Array.isArray(rows) || rows.length === 0) return R.LIFT_DEG ?? 69;
+  if (!(sizeM > 0)) return rows[rows.length - 1][1];
+  for (const [maxSize, deg] of rows) if (sizeM <= maxSize + 1e-9) return deg;
+  return rows[rows.length - 1][1];
+}
+
+/**
  * hold-catch (owner 2026-10-22): the strut angle a daughter holding a catch rests at. The lowest of 34° (STRUT_REST_ALPHA),
  * 39°, 44° ... 99°, then 100° (HOLD_POSE_MAX_DEG), at which her catch is clear of every thruster plume — the exact box check
  * (`heldCargoPlumeConflictAt`) at THAT angle, not the size-ladder floor (`PLUME_CARGO_ALPHA_LADDER` is the worst case over
@@ -192,6 +244,11 @@ function _clearNetDuckMarks(arm) {
   arm._netDuckSaid = false;
   arm._netDuckThrustSaid = false;
   arm._netLift = null;
+  arm._radLift = null;                     // reel-hold D4/D8: the lift for the radiator wings, the pose cache, the reel hold and the floor refusal
+  arm._radClear = null;
+  arm._rhHold = null;
+  arm._rhFloorRefused = false;
+  arm._rhFloorSpent = false;
   arm._carryWaitLift = null;
   arm._carryRestart = null;
   arm._queuedPress = null;
@@ -2500,6 +2557,7 @@ export class ArmManager {
     // never what thrust refuses (THRUSTER_INTERLOCK stays dormant and
     // untouched). Runs AFTER arm.update so aim writes land on fresh positions.
     this._tickNetDuck(dt);          // net-duck: holders duck for an inbound mother net, lift for a neighbour's carry (inputs to the writer below)
+    this._tickRadLifts(dt);         // reel-hold D4: ... and lift for the radiator wings moving through the band (third input)
     this._updateCargoPlumePoses(dt);
 
     // Task 7 (opening-dance plan) — lean-aside safety-net timeout tick.
@@ -3330,6 +3388,9 @@ export class ArmManager {
         arm._rhSeq = 0;
         arm._rhMotherWorking = false;
         arm._rhGapFn = null;
+        arm._rhHold = null;                 // reel-hold D8: no hold or floor refusal outlives her reel
+        arm._rhFloorRefused = false;
+        arm._rhFloorSpent = false;
         continue;
       }
       if (!arm._rhSeq) arm._rhSeq = ++this._rhSeq;
@@ -3419,14 +3480,8 @@ export class ArmManager {
       }
       axisL = _rhAxisR.set(Math.cos(az), Math.sin(az), 0);
     } else {
-      const lo = (RH.STRUT_MIN_DEG ?? 34) * D2R;
-      const hi = (RH.STRUT_MAX_DEG ?? 180) * D2R;
-      const phi = Math.atan2(v.x * Math.cos(az) + v.y * Math.sin(az), -v.z);   // her angle in the strut's plane
-      if (phi >= lo && phi <= hi) return;                                       // the strut can point at her
-      const wrap = (x) => { while (x > Math.PI) x -= 2 * Math.PI; while (x <= -Math.PI) x += 2 * Math.PI; return x; };
-      const toLo = wrap(lo - phi);
-      const toHi = wrap(hi - phi);
-      theta = Math.abs(toLo) <= Math.abs(toHi) ? toLo : toHi;                   // turning the ship by +t moves her angle by +t
+      theta = _rhFloorTheta(v, az, RH);                                         // turning the ship by +t moves her angle by +t (reel-hold: shared with `reelHoldReason`)
+      if (theta === 0) return;                                                  // the strut can point at her
       if (Math.abs(theta) <= tol) return;                                       // a few degrees short: the 2 m check decides
       axisL = _rhAxisR.set(-Math.sin(az), Math.cos(az), 0);                     // the plane's normal
     }
@@ -3454,12 +3509,210 @@ export class ArmManager {
     } finally {
       this._lockExceptArm = null;
     }
-    if (!p || typeof p.then !== 'function') return;
+    if (!p || typeof p.then !== 'function') { if (!tracked) owner._rhFloorRefused = true; return; }
     if (typeof p.catch === 'function') p.catch(() => {});                     // a refusal / cancel is read below, not thrown
     const refusal = typeof ap.lastAttitudeTurnRefusal === 'function' ? ap.lastAttitudeTurnRefusal() : null;
-    if (refusal) return;                                                      // refused at once: nothing moved
+    if (refusal) { if (!tracked) owner._rhFloorRefused = true; return; }      // refused at once: nothing moved (reel-hold: no floor turn is possible, so no floor hold)
+    if (!tracked) owner._rhFloorRefused = false;
     this._rhTurn = turn;
     owner._rhMotherWorking = true;
+  }
+
+  // ==========================================================================
+  // reel-hold (owner 2026-10-23): a daughter waits 5 m out until the floor turn is done and the radiators are clear
+  // ==========================================================================
+
+  /**
+   * reel-hold D2a: is a mother FLOOR turn (the one that brings her angle in the strut's plane up to the 34° floor) running for
+   * her, or would one be asked for her now? True when she is in her strut's plane (the plane turn comes first and is not
+   * this), short of the floor by more than PLANE_TOL_DEG and by no more than TURN_MAX_DEG (the turn is not asked for beyond it:
+   * she lines herself up), no refusal of her floor request stands (`_rhFloorRefused`: steering gas low, roll axis, ... a
+   * refused turn is "no turn possible"), and either her turn is running or the mother is free for her
+   * (`_motherTurnBlock(arm)`, an autopilot to turn with). The angle is `_rhFloorTheta`, the one `_tickReelHomeTurn` reads.
+   * A daughter that is not the owner of the turn is asked as if she were: she waits and gets her turn when she becomes it.
+   * Pure read.
+   * @param {ArmUnit} arm
+   * @returns {boolean}
+   * @private
+   */
+  _rhFloorWanted(arm) {
+    const RH = Constants.REEL_HOME || {};
+    const v = arm._rhRelShip;
+    if (!v || arm._rhFloorRefused === true) return false;
+    const tol = (RH.PLANE_TOL_DEG ?? 5) * Math.PI / 180;
+    if (Math.abs(arm._rhPlaneErrRad) > tol) return false;                       // the plane turn is first (the start-of-reel turn: untouched)
+    const theta = _rhFloorTheta(v, arm._rhAzRad(), RH);
+    if (theta === 0 || Math.abs(theta) <= tol) return false;                    // inside the range, or a few degrees short (the 2 m check decides)
+    if (Math.abs(theta) > (RH.TURN_MAX_DEG ?? 60) * Math.PI / 180) return false; // no turn is asked: the line-up fallback runs as before
+    const t = this._rhTurn;
+    if (t && t.arm === arm && !t.tracked) return true;                           // her floor turn is running
+    const ap = this._autopilot;
+    if (!ap || typeof ap.requestAttitudeTurn !== 'function') return false;
+    if (!(this.playerSatellite && this.playerSatellite.quaternion)) return false;
+    return !this._motherTurnBlock(arm);
+  }
+
+  /** reel-hold: the wing angle band as radians {lo, hi}, written into a scratch (no allocation). @private */
+  _radBand() {
+    const R = Constants.REEL_HOLD || {};
+    const out = this._radBandScratch || (this._radBandScratch = { lo: 0, hi: 0 });
+    out.lo = (R.BAND_LO_DEG ?? 55) * Math.PI / 180;
+    out.hi = (R.BAND_HI_DEG ?? 115) * Math.PI / 180;
+    return out;
+  }
+
+  /**
+   * reel-hold: do the radiator wings stand strictly inside the band now? false for a ship with no radiators or a stub. The band's
+   * edge itself is outside: wings the drive parked there (a dropped move) leave the holders at their hold pose.
+   * @private
+   */
+  _wingsInBand() {
+    const ps = this.playerSatellite;
+    const th = ps && ps._flowerThetaRad;
+    if (!Number.isFinite(th)) return false;
+    const b = this._radBand();
+    return th > b.lo + 1e-6 && th < b.hi - 1e-6;
+  }
+
+  /**
+   * reel-hold: are the wings moving on a path that enters, crosses or leaves the band (a target is set and the segment from
+   * where they are to where they go touches [BAND_LO, BAND_HI])? Wings that stand still are not "moving": nothing would
+   * ever end such a wait, and the docked holders are lifted for them anyway (`_tickRadLifts`). @private
+   */
+  _wingsMovingInBand() {
+    const ps = this.playerSatellite;
+    if (!ps) return false;
+    const th = ps._flowerThetaRad;
+    const tg = ps._flowerTargetTheta;
+    if (tg === undefined || !Number.isFinite(th) || !Number.isFinite(tg) || Math.abs(tg - th) < 1e-6) return false;
+    const b = this._radBand();
+    return Math.max(th, tg) >= b.lo && Math.min(th, tg) <= b.hi;
+  }
+
+  /** reel-hold: does she hold a catch (in hand or on her rack)? @private */
+  _holdsAnyCatch(arm) {
+    return !!(arm && ((arm.capturedDebris && arm.capturedDebris.mass)
+      || (Array.isArray(arm.heldCatches) && arm.heldCatches.some((h) => h && h.mass))));
+  }
+
+  /**
+   * reel-hold D2: why a reeling daughter must wait HOLD_M out from her strut tip, or null. `'floor'`: a mother floor turn is
+   * running or askable for her and her angle is short of the 34° floor (`_rhFloorWanted`; a hold of more than FLOOR_CAP_S
+   * is ArmUnit's to end, `_rhHold.capped`). `'radiators'`: she carries a catch and the wings are moving through the band
+   * (`_wingsMovingInBand`). Pure read; ArmUnit reads it every reeling frame (`_rhHoldStep`).
+   * @param {ArmUnit} arm
+   * @returns {'floor'|'radiators'|null}
+   */
+  reelHoldReason(arm) {
+    if (!arm || arm.isDetached || arm.state !== ARM_STATES.REELING || arm._rhHome !== true) return null;
+    if (!arm._rhFloorSpent && this._rhFloorWanted(arm)) return 'floor';        // F3: a floor hold that was capped / refused does not hide the radiator reason
+    if (arm.capturedDebris && this._wingsMovingInBand()) return 'radiators';
+    return null;
+  }
+
+  /** reel-hold: would daughter `i`'s catch be in a Hall exhaust with her strut at `rad`? The one read `_radClearPose` makes (a seam: a test sets a plume the real geometry never makes). @private */
+  _plumeConflictAt(i, rad) {
+    return !!heldCargoPlumeConflictAt(this, i, rad);
+  }
+
+  /**
+   * reel-hold D4 (T1, tmp/plans/reel-hold.md): the lowest strut angle on the hold-pose grid at which a holder's catch stays
+   * CLEAR_M off every wing in the band AND out of every Hall exhaust, from max(her hold pose, the measured band-clear angle
+   * for her biggest catch) up to HOLD_POSE_MAX_DEG; null = none (the wings must not move: 'never'). Cached like `_holdPoseCached`
+   * (re-read when her rack changes, or every 0.5 s). Read-only. @private
+   * @returns {{rad:number|null}|null} null when she holds nothing
+   */
+  _radClearPose(arm, i, dt = 0) {
+    let key = '';
+    if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) if (h) key += `${h.id}:${h.sizeMeter}:${h._rackCell};`;
+    const c = arm._radClear;
+    if (c && c.key === key && c.ageS < 0.5) { c.ageS += dt; return c.pose; }
+    const hp = this._holdPoseCached(arm, i, 0);
+    let pose = null;
+    if (hp) {
+      const R = Constants.REEL_HOLD || {};
+      const V5 = Constants.OCTOPUS_V5;
+      const D2R = Math.PI / 180;
+      let size = 0;
+      if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) if (h && h.mass) size = Math.max(size, h.sizeMeter || 0);
+      const floorDeg = _bandClearDeg(size, R);
+      const deg = firstClearPoseDeg(Math.max(Math.round(hp.rad / D2R), floorDeg), V5.HOLD_POSE_MAX_DEG, V5.HOLD_POSE_STEP_DEG,
+        (d) => this._plumeConflictAt(i, d * D2R));                             // F4: the cap (100°) is tried last, whatever the grid
+      pose = { rad: deg === null ? null : deg * D2R };
+    }
+    arm._radClear = { key, pose, ageS: 0 };
+    return pose;
+  }
+
+  /**
+   * reel-hold D3: may the radiator wings enter the band now? null: yes. `'wait'`: a daughter's catch is not clear of the
+   * wings yet: a holder below her band-clear lift pose, a daughter with a catch docking, or one reeling inside HOLD_M, or on her
+   * way in at a speed she could not be stopped from before it (`_rhHold.refused` for the radiators: she docks, the wings wait for
+   * her); one that is held at HOLD_M, at rest, does not count: she waits for the wings, not they for her. `'never'`: a holder that cannot
+   * reach any band-clear, plume-clear pose (T1: `_radClearPose`). The first blocker's index is left in `_radBandWho`.
+   * Empty daughters never block. Pure read apart from that index and the pose cache.
+   * @returns {'wait'|'never'|null}
+   */
+  radiatorBandBlocked() {
+    this._radBandWho = -1;
+    const R = Constants.REEL_HOLD || {};
+    const holdM = R.HOLD_M ?? 5;
+    const tolM = R.STOP_TOL_M ?? 0.25;
+    const dead = (Constants.OCTOPUS_V5.HOLD_POSE_DEADBAND_DEG ?? 1) * Math.PI / 180;
+    let out = null;
+    for (let i = 0; i < this.arms.length; i++) {
+      const a = this.arms[i];
+      if (!a || a.isDetached) continue;
+      const st = a.state;
+      let wait = false;
+      if (st === ARM_STATES.REELING) {
+        const hs = a._rhHold;
+        if (!a.capturedDebris || (hs && hs.on)) continue;
+        const dM = typeof a._strutTipDistM === 'function' ? a._strutTipDistM() : null;
+        // inside HOLD_M, or on her way in with no hold (D1: she could not stop from before it, or her hold was capped: whatever its reason,
+        // F3), she docks: the wings wait for her
+        wait = (dM !== null && dM < holdM - tolM) || (!!hs && (hs.refused === true || hs.capped === true));
+      } else if (st === ARM_STATES.DOCKING || st === ARM_STATES.RELOADING) {
+        wait = this._holdsAnyCatch(a);
+      } else if (st === ARM_STATES.HOLDING_CATCH) {
+        if (!this._holdsAnyCatch(a)) continue;
+        const cp = this._radClearPose(a, i, 0);
+        if (!cp) continue;
+        if (cp.rad === null) { this._radBandWho = i; return 'never'; }
+        wait = (typeof a.getAimAlpha === 'function' ? a.getAimAlpha() : cp.rad) < cp.rad - dead;
+      }
+      if (wait && out === null) { out = 'wait'; this._radBandWho = i; }
+    }
+    return out;
+  }
+
+  /**
+   * reel-hold D6: the plain line for a radiator wait (`kind` 'wait') or a move that was dropped (`kind` 'stay'), naming the
+   * daughter `radiatorBandBlocked` found first. @returns {string}
+   */
+  radiatorBandSays(kind) {
+    const n = this._radBandWho >= 0 ? this._radBandWho + 1 : 0;
+    const who = n > 0 ? `Daughter ${n}` : 'A daughter';
+    return kind === 'stay' ? `Radiators stay: ${who}'s catch is in their way.` : `Radiators wait while ${who} lifts her catch clear.`;
+  }
+
+  /**
+   * reel-hold D4, per frame: while the wings move through the band (or stand in it) every holder is lifted to her band-clear
+   * pose (`_radLift`, the writer is `_updateCargoPlumePoses`, below the net duck and a neighbour's carry lift in priority), and
+   * goes back to her hold pose when the wings are settled outside it. A holder that can reach no clear pose is not lifted (the
+   * wings do not move: 'never'). Marks of arms that no longer hold a catch at home are dropped.
+   * @private
+   */
+  _tickRadLifts(dt) {
+    const need = this._wingsMovingInBand() || this._wingsInBand();
+    for (let i = 0; i < this.arms.length; i++) {
+      const a = this.arms[i];
+      if (!a) continue;
+      if (!need || a.isDetached || a.state !== ARM_STATES.HOLDING_CATCH || !this._holdsAnyCatch(a)) { if (a._radLift) a._radLift = null; continue; }
+      const cp = this._radClearPose(a, i, dt);
+      if (cp && cp.rad !== null) { if (!a._radLift || a._radLift.rad !== cp.rad) a._radLift = { rad: cp.rad }; }
+      else if (a._radLift) a._radLift = null;
+    }
   }
 
   /**
@@ -3669,7 +3922,11 @@ export class ArmManager {
       // net-duck D2/D4: the duck for an inbound mother net and the lift for a neighbour's carry are INPUTS to this single writer: while
       // either stands her target is its angle (the duck wins), whatever her hold pose or a standing "." press says; both end by
       // deleting `_netDuck` / `_netLift`, and the hold pose (or the press, if it is still safe) takes her back
-      const forced = arm._netDuck ? arm._netDuck.rad : (arm._netLift ? arm._netLift.rad : null);
+      // reel-hold D4: the lift for the radiator wings is the third input; F7: with a carry lift too, the HIGHER of the two (a carry's 69° under a
+      // 99° the wings need would keep them waiting until the cap)
+      const forced = arm._netDuck ? arm._netDuck.rad
+        : (arm._netLift || arm._radLift) ? Math.max(arm._netLift ? arm._netLift.rad : -Infinity, arm._radLift ? arm._radLift.rad : -Infinity)
+          : null;
       if (forced !== null) {
         const effF = arm._strutTargetAlpha !== undefined ? arm._strutTargetAlpha : arm.getAimAlpha();
         if (Math.abs(effF - forced) > dead) arm._strutTargetAlpha = forced;
@@ -3901,6 +4158,10 @@ export class ArmManager {
       if (!(Array.isArray(arm.heldCatches) && arm.heldCatches.some((h) => h && h.mass))) continue;
       const rad = _holderDuckRad(this, i, radiusM);
       if (rad === null) continue;
+      // reel-hold D4: no holder starts a duck below the lift pose while the wings are inside the band (they leave it in a few
+      // seconds; the net reel's own pause for the fouled corridor covers the wait). F5: nor while they are about to enter it or
+      // cross it (a duck started the frame before they go in lowers her under them: the wings' own gate has not seen her move yet)
+      if (rad < (Constants.REEL_HOLD.LIFT_DEG ?? 69) * Math.PI / 180 - 1e-6 && (this._wingsInBand() || this._wingsMovingInBand())) continue;
       arm._netDuck = { rad };
       arm._netDuckLow = true;                       // D3: the Hall drive waits while this stands (and while she climbs back)
       arm._netDuckThrustSaid = false;
@@ -4690,6 +4951,7 @@ export class ArmManager {
     if (this._leanAsideArmIndices) this._leanAsideArmIndices.clear();       // (test-ArmUnit-ParkCatch resets a bare prototype object)
     this._leanAsideActive = false;
     this._leanAsideTimer = 0;
+    this._radBandWho = -1;            // reel-hold D8: no radiator wait outlives the reset
 
     // Register item 69: the loop above clears every rack — a cargo mass-exit —
     // but sets arm.state directly, so no ARM_STATE_CHANGE crosses it and the

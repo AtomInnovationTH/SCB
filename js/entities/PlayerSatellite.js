@@ -335,6 +335,59 @@ function settleFlowerToOpen(ship) {
   });
 }
 
+/**
+ * reel-hold D3 (owner 2026-10-23): the radiator wings wait before the band [BAND_LO, BAND_HI] while a daughter's catch is
+ * not clear of it (`armManager.radiatorBandBlocked()`: 'wait' = a holder not yet lifted, one docking with a catch, one reeling
+ * inside HOLD_M; 'never' = a holder that can reach no clear pose). Called with the step the slew just made (`th0` -> `th1`)
+ * toward `_flowerTargetTheta`: a move that would ENTER the band from outside is cut at the band's edge ('wait'; the target stays,
+ * and the frame the blocker clears the wings go on); a wing already inside keeps moving (leaving is the safe way). 'never', or a
+ * wait of more than WAIT_CAP_S, drops the target for good, in the same step, with every lock that move armed (the launch
+ * fold's lock, the override fold: a dropped fold leaves thrust free and no sequence waiting on it), and says so in one line.
+ * A module function, not a method: `_updateFlower` also runs against duck-typed stubs (`P.method.call(stub)`), which have no
+ * `armManager`: no gate.
+ * @param {PlayerSatellite} ship
+ * @param {number} th0 the angle before the step (rad)
+ * @param {number} th1 the angle after it (rad)
+ * @param {number} dt
+ * @returns {number} the angle the wings take this frame (rad)
+ */
+function bandGate(ship, th0, th1, dt) {
+  const am = ship.armManager;
+  if (!am || typeof am.radiatorBandBlocked !== 'function') return th1;
+  const tgt = ship._flowerTargetTheta;
+  const R = Constants.REEL_HOLD;
+  const lo = (R.BAND_LO_DEG * Math.PI) / 180;
+  const hi = (R.BAND_HI_DEG * Math.PI) / 180;
+  const eps = 1e-9;
+  let edge = NaN;                                                 // the band edge this move enters through (the cut parks them AT it)
+  if (th0 <= lo + eps && tgt > lo + eps) edge = lo;
+  else if (th0 >= hi - eps && tgt < hi - eps) edge = hi;
+  if (edge !== edge) { ship._bandWaitS = 0; ship._bandSaid = false; return th1; }   // not entering: a wing inside keeps going
+  const why = am.radiatorBandBlocked();
+  if (why === null) { ship._bandWaitS = 0; ship._bandSaid = false; return th1; }
+  if (why === 'wait') {
+    const cut = edge === lo ? th1 > lo : th1 < hi;
+    if (!cut) return th1;                                         // still on the way to the edge: the wait starts there
+    ship._bandWaitS = (ship._bandWaitS || 0) + (dt > 0 ? dt : 0);
+    if (ship._bandWaitS <= R.WAIT_CAP_S) {
+      if (!ship._bandSaid) {
+        ship._bandSaid = true;
+        eventBus.emit(Events.COMMS_MESSAGE, { sender: 'THERMAL', text: am.radiatorBandSays('wait'), priority: 'info' });
+      }
+      return edge;
+    }
+  }
+  // 'never', or a wait that lasted too long: the move is dropped, here, with its locks
+  eventBus.emit(Events.COMMS_MESSAGE, { sender: 'THERMAL', text: am.radiatorBandSays('stay'), priority: 'info' });
+  ship._flowerTargetTheta = undefined;
+  ship._flowerLaunchLock = false;
+  ship._flowerOverrideFold = false;
+  ship._flowerBandDropped = true;                                 // one-shot for ThermalSystem: its auto-open asks again
+  ship._bandWaitS = 0;
+  ship._bandSaid = false;
+  return th0;
+}
+
 export class PlayerSatellite extends THREE.Group {
   /**
    * @param {THREE.Scene} scene - The Three.js scene to add the satellite to
@@ -4537,6 +4590,9 @@ export class PlayerSatellite extends THREE.Group {
     this._flowerVentArmed = false;
     this._lastFlowerTap = undefined;
     this._flowerPushedThrough = false;
+    this._bandWaitS = 0;                    // reel-hold D8: no radiator wait or drop mark outlives a reset
+    this._flowerBandDropped = false;
+    this._bandSaid = false;
     this._flowerThetaRad = (restDeg * Math.PI) / 180;
     this._updateFlower(0);
     // Opening dance: the release event is suppressed while the dance drives
@@ -5495,6 +5551,7 @@ export class PlayerSatellite extends THREE.Group {
       const maxDelta = FL.SLEW_RATE_RAD_S * dt;
       const delta = target - this._flowerThetaRad;
       this._flowerThetaRad += Math.max(-maxDelta, Math.min(delta, maxDelta));
+      this._flowerThetaRad = bandGate(this, theta0, this._flowerThetaRad, dt);   // reel-hold D3: the wings wait before the band while a catch is in the way
     }
 
     // Pose floor + ladder ceiling — clamped in the driver, unconditionally.

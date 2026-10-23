@@ -1510,6 +1510,35 @@ export const Constants = {
     TURN_MAX_DEG:        60,    // a mother turn bigger than this is not asked for (she lines herself up instead); a running plane turn stops when more than this is left (her lever on the axis is gone)
   },
 
+  // reel-hold (owner 2026-10-23: a daughter waits out until the floor turn is done and the radiators are clear). One rule:
+  // while any radiator wing is between BAND_LO and BAND_HI, no docked daughter holding a catch is below LIFT_DEG and no reeling
+  // daughter with a catch is inside HOLD_M of her strut tip; and no daughter comes inside HOLD_M while her approach is short of
+  // the 34 deg floor (REEL_HOME.STRUT_MIN_DEG) by more than REEL_HOME.PLANE_TOL_DEG with a mother turn running or askable.
+  // Measured 2026-10-23 (tmp/plans/reel-hold.md T0/T1, real meshes, exact point-to-triangle): a 0.95 m catch on a 34 deg strut
+  // touches a wing at 75-90 deg and is under 0.15 m at 75-100 deg (at 69 deg: >= 0.41 m); the last 5 m of a reel with a catch is
+  // 0.00 m from a wing at 60-110 deg; a bare daughter is >= 0.25 m. ArmUnit._rhReelStep (the hold brakes to rest),
+  // ArmManager.reelHoldReason / radiatorBandBlocked, PlayerSatellite._updateFlower (the wings wait at the band's edge).
+  // Tests: js/test/test-ReelHold.js.
+  REEL_HOLD: {
+    HOLD_M:        5,      // m from her strut tip: the reel stops her here (at rest) while there is a reason; no catch comes inside
+    BAND_LO_DEG:   45,     // wing angles (deg) a catch near the hull is not clear of: the radiators wait before this edge ... (T1: 0 of 1408 catches bad at 45, 16 bad at 50)
+    BAND_HI_DEG:   115,    // ... and before this one (a wing already inside keeps moving: leaving is the safe way)
+    LIFT_DEG:      69,     // a holder lifts her catch to at least this while the wings move (the carry's measured-clear angle)
+    // T1 (tmp/rh/band.md, real meshes: 11 shapes x 8 sizes x arms 0/1 x 8 rack attitudes = 1408, wings 0-180 per 5 deg): the lowest strut
+    // angle at which EVERY catch of that size (worst of all types and attitudes) is CLEAR_M off every wing in the band and plume-clear.
+    // [max catch size m, deg]. 13 of the 1408 (sizes 3-5 m, rocket bodies / mission debris at rack attitudes 4-5) have no clear pose up to
+    // 100 deg: they are lifted to 100 like their size (coordinator 2026-10-23: worst case per size; a size table cannot name them without
+    // shutting the radiators for every big catch). A real 'never' is only a pose that is plume-blocked at every angle (`_radClearPose`).
+    CLEAR_ROWS:    [[1, 69], [1.5, 84], [2, 94], [3, 99], [Infinity, 100]],
+    CLEAR_M:       0.158,  // m: the carry gate's clearance line; a pose whose catch comes nearer than this to a wing in the band is not clear
+    FLOOR_LINE_S:  3,      // s held before the "waits 5 m out until the mother has turned" line is said
+    WAIT_CAP_S:    20,     // s the radiators wait for a holder before the move is dropped (with a line): never an endless wait
+    FLOOR_CAP_S:   30,     // s a floor hold lasts at most: then she comes in as before the hold existed
+    STOP_TOL_M:    0.25,   // m: a reeler this much inside HOLD_M counts as "inside" for the wings (a held one never does)
+    SLACK_M:       0.25,   // m: she brakes to rest this far short of HOLD_M (the strut tip moves toward her while the mother turns), so she is never stopped dead at the point
+    REST_TOL_M:    0.1,    // m: she counts as "resting at the hold point" within SLACK_M + this (at < 0.01 m/s): the hold's timer, its cap and its lines run only then
+  },
+
   // fail-reel (owner 2026-10-21, DECISIONS: a failed catch winds her home): when a catch fails (pad bounce, net miss, slip,
   // rip) under REEL_HOME, a daughter within AUTO_REEL_MAX_M of her strut tip is reeled straight home on her strut line;
   // farther out she holds near the piece for a retry and the comms line gives the reel-in time, so he can choose

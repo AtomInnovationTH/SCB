@@ -857,6 +857,11 @@ export class ArmUnit {
     this._rhHoldS = 0;
     /** ArmManager's word: the mother is turning, or may still be asked to, for this daughter. */
     this._rhMotherWorking = false;
+    /** reel-hold: the hold that stops her HOLD_M out ({reason, on, refused, capped, heldS, said}) or null; her floor turn was refused (ArmManager). */
+    this._rhHold = null;
+    this._rhFloorRefused = false;
+    /** reel-hold F3: her floor hold ended (capped, or she could not stop in time) and her floor reason still stands: it is not asked again, so the radiator reason can hold her */
+    this._rhFloorSpent = false;
     /** Signed angle (rad) she is off the strut's plane, as seen from the strut root; ArmManager reads it. */
     this._rhPlaneErrRad = 0;
     /** Mother-turn requests made for this reel (ArmManager counts them). */
@@ -3515,6 +3520,9 @@ export class ArmUnit {
       this._rhNoPathS = 0;
       this._rhLineUpSaid = false;
       this._rhWaitSaid = false;
+      this._rhHold = null;                  // reel-hold D8: a new reel starts with no hold and no floor refusal
+      this._rhFloorRefused = false;
+      this._rhFloorSpent = false;
     } else if (newState === S.DOCKING) {
       // home: the mother turn is hers no more (the strut stays reserved to HOLDING_CATCH). DOCKING that came off the
       // strut reel bills no thruster fuel (F6): the reel did the work.
@@ -7324,6 +7332,9 @@ export class ArmUnit {
     this._rhWaitSaid = false;
     this._rhMotherWorking = false;
     this._rhPlaneErrRad = 0;
+    this._rhHold = null;                    // reel-hold D8
+    this._rhFloorRefused = false;
+    this._rhFloorSpent = false;
     if (this._rhReserved) {
       this._aimReserved = false;
       this._rhReserved = false;
@@ -8057,6 +8068,59 @@ export class ArmUnit {
   }
 
   /**
+   * @private reel-hold D1/D2: where the reel must stop her: the metres she may still close before the hold point (HOLD_M out
+   * from her strut tip) while `armManager.reelHoldReason(her)` gives a reason, else Infinity (nothing holds her). The reason is
+   * read every frame; a hold STARTS only when she is farther out than HOLD_M and can stop there (decided in `_rhReelStep` on its
+   * braking law: otherwise `_rhHold.refused` and she finishes docking, as before the hold existed) and ends the frame the reason
+   * does. A floor hold longer than FLOOR_CAP_S ends too (`capped`, one line), so no wait is endless. One comms line per hold
+   * (D6). The state is one object, `_rhHold`, cleared with the reel (`_transitionTo(REELING)`, `_rhEnd`, ArmManager reset).
+   * @param {number} dt
+   * @param {number} distM metres to her strut tip
+   * @returns {number} metres she may still close (>= 0), or Infinity
+   */
+  _rhHoldStep(dt, distM) {
+    const R = Constants.REEL_HOLD || {};
+    const holdM = R.HOLD_M ?? 5;
+    const ps = this._playerSatellite;
+    const am = ps && ps.armManager;
+    let h = this._rhHold;
+    if (!(dt > 0)) return h && h.on ? Math.max(0, distM - holdM) : Infinity;      // a held world changes nothing
+    // F3: a floor hold that ended (capped / she could not stop) stays spent while her floor reason lasts, so the radiator reason can
+    // take over; it is cleared the frame the floor reason itself is gone (the next one starts clean)
+    if (this._rhFloorSpent && !(am && typeof am._rhFloorWanted === 'function' && am._rhFloorWanted(this))) this._rhFloorSpent = false;
+    const reason = (am && typeof am.reelHoldReason === 'function') ? am.reelHoldReason(this) : null;
+    if (reason === null) { this._rhHold = null; return Infinity; }
+    if (!h || h.reason !== reason) h = this._rhHold = { reason, on: false, refused: false, capped: false, heldS: 0, said: false };
+    if (h.capped || h.refused) { if (reason === 'floor') this._rhFloorSpent = true; return Infinity; }
+    const gateM = distM - holdM;
+    if (!h.on && gateM <= 0) { h.refused = true; return Infinity; }              // the reason began inside HOLD_M: she comes on
+    if (h.on) {
+      // F2: the timer, the cap and the lines run only while she RESTS at the hold point (she brakes in from 20-100 m out for several
+      // seconds first: counting those would say "waits 5 m out" at 21 m and could spend the cap before she arrives)
+      const rested = gateM <= (R.SLACK_M ?? 0.25) + (R.REST_TOL_M ?? 0.1) && !(this._rhReelV >= 0.01);
+      if (rested) {
+        h.heldS += dt;
+        if (reason === 'floor' && h.heldS > (R.FLOOR_CAP_S ?? 30)) {
+          h.capped = true;
+          h.on = false;
+          this._rhFloorSpent = true;
+          eventBus.emit(Events.COMMS_MESSAGE, { text: `Daughter ${this.index + 1} stops waiting for the mother's turn and comes in.`, priority: 'info' });
+          return Infinity;
+        }
+        if (!h.said && (reason === 'radiators' || h.heldS >= (R.FLOOR_LINE_S ?? 3))) {
+          h.said = true;
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            text: reason === 'floor' ? `Daughter ${this.index + 1} waits ${holdM} m out until the mother has turned.`
+              : `Daughter ${this.index + 1} waits ${holdM} m out while the radiators move.`,
+            priority: 'info',
+          });
+        }
+      }
+    }
+    return Math.max(0, gateM);
+  }
+
+  /**
    * @private The reel-home speed for this frame (game-scale m/s) - REEL_HOME only; the legacy path never comes here.
    *
    *  a. PULL-UP: the reel speeds her up at REEL_PROFILE.PULL_ACCEL from `_rhReelV` (0 on entering REELING). No jump.
@@ -8073,9 +8137,12 @@ export class ArmUnit {
    * @param {number} dt real seconds
    * @param {number} distM metres left to the strut tip
    * @param {number} gateM metres she may still close this frame (the line-up gate; Infinity = none)
+   * @param {number} [holdGateM] reel-hold D1: metres to the hold point (`_rhHoldStep`); Infinity = none. Unlike the line-up gate
+   *   it brakes her to REST there on the same braking law (a free stop is forbidden, DECISIONS 37): the hold STARTS only if her
+   *   speed is not above the braking curve to it (she can stop in time at the law's own deceleration), else `_rhHold.refused`.
    * @returns {number} the speed to reel at this frame
    */
-  _rhReelStep(dt, distM, gateM, armMass, hasPayload, boostMult) {
+  _rhReelStep(dt, distM, gateM, armMass, hasPayload, boostMult, holdGateM = Infinity) {
     const P = Constants.REEL_PROFILE || {};
     const G = Constants.DAUGHTER_COLD_GAS;
     const vDock = P.V_DOCK ?? 1.0;
@@ -8106,11 +8173,35 @@ export class ArmUnit {
     const lockBoost = (P.BOOST_LOCKOUT_IN_DECEL !== false) && distM <= (P.DECEL_DISTANCE_M ?? 15);
     if (boostMult > 1 && !lockBoost) vCap *= boostMult;
     const dEff = Math.max(0, Math.min(distM, gateM));
-    // the speed from which a constant decel `a` just reaches V_DOCK after this frame's step (exact for the Euler step)
-    const brakeTo = (a) => -a * dt + Math.sqrt(a * a * dt * dt + vDock * vDock + 2 * a * dEff);
-
     const aJet = this._coldGasThrustN() / mass * 100;                      // game-scale m/s^2 (true accel x 100)
     const aBrake = Math.min(P.ACCEL ?? 3.4, aJet / G.MARGIN);
+    // reel-hold D1: the hold point, if one holds her. It starts only where she can stop at the law's own deceleration (her speed
+    // is not above the braking curve to it); once on, every braking speed below also brakes to REST at it (`brakeTo`).
+    let dHold = Infinity;
+    const hs = holdGateM < Infinity ? this._rhHold : null;
+    if (hs && !hs.refused) {
+      // she brakes to rest SLACK_M short of the hold point: the tip can move toward her while she stops (the mother is turning),
+      // and a stop that would land past the point is a free stop (forbidden); the move clamp in `_updateReeling` guards the point itself
+      const dBrake = Math.max(0, holdGateM - ((Constants.REEL_HOLD || {}).SLACK_M ?? 0.25));
+      if (!hs.on) {
+        const aNom = hasGas ? aBrake : this._ionThrustN() / mass * 100;
+        // already AT the point (within the slack and its tolerance: a hold that was capped, or ended for one reason as another began, and she has
+        // crept on a frame): the whole distance to the point is hers to stop in, else any crawl at all would refuse her (F3)
+        const R = Constants.REEL_HOLD || {};
+        const dStart = holdGateM <= (R.SLACK_M ?? 0.25) + (R.REST_TOL_M ?? 0.1) ? holdGateM : dBrake;
+        const vIn = -aNom * dt + Math.sqrt(aNom * aNom * dt * dt + 2 * aNom * dStart);
+        if (v0 <= vIn + 1e-6) hs.on = true; else hs.refused = true;
+      }
+      if (hs.on) dHold = dBrake;
+    }
+    // the speed from which a constant decel `a` just reaches V_DOCK after this frame's step (exact for the Euler step); with a
+    // hold, also the one that just reaches REST at the hold point: the lower of the two
+    const brakeTo = (a) => {
+      const toDock = -a * dt + Math.sqrt(a * a * dt * dt + vDock * vDock + 2 * a * dEff);
+      if (dHold === Infinity) return toDock;
+      return Math.min(toDock, Math.max(0, -a * dt + Math.sqrt(a * a * dt * dt + 2 * a * dHold)));
+    };
+
     // F1 (review 2026-10-21): a little gas must never be slower than none. The jet speed (what the bottle can pay to brake
     // from, at the jet's a_brake) is only used where it beats the ion limit; the jet fires (puffs + gas bill) only while
     // she must brake harder than her ion thruster can - otherwise the ion thread is the brake. Empty bottle = ion limit.
@@ -8121,7 +8212,7 @@ export class ArmUnit {
       // the highest speed whose braking to V_DOCK the bottle can still pay for: MARGIN x mass x dv_true / (Isp g0)
       const vGas = vDock + gas * G.ISP_S * 9.80665 * BS / (G.MARGIN * mass);
       const vJet = Math.min(vGas, brakeTo(aBrake));
-      jet = vJet > vIon && vCap > vIon;
+      jet = (vJet > vIon || dHold !== Infinity) && vCap > vIon;   // reel-hold: the last crawl to rest at the hold point is the jet's too (the ion thread alone would coast on)
       vDes = Math.min(vCap, Math.max(vJet, vIon));
       aSlow = jet ? aJet : aIon;
     } else {
@@ -8447,6 +8538,7 @@ export class ArmUnit {
     const rh = this._rhHome && this._rhOn();
     let rhGate = Infinity;
     let rhLineHeld = false;
+    let holdGateM = Infinity;      // reel-hold D1: metres to the hold point while a reason holds her (brakes to REST there; not rhGate: no free stop)
     if (rh) {
       const RH = Constants.REEL_HOME || {};
       const distM = dist / M;
@@ -8490,7 +8582,8 @@ export class ArmUnit {
       // jet - not the stateless trapezoid above. `_rhReelStep` owns the speed (and the gas, and the line readout).
       if (profileV2) {
         if (!this._rhGasChecked) this._reelPushBegin();            // reel-push: the reel's first real frame (the step below sets the sentinel)
-        reelSpeed = this._rhReelStep(dt, dist / M, rhGate / M, armMass, hasPayload, boostMult);
+        holdGateM = this._rhHoldStep(dt, dist / M);
+        reelSpeed = this._rhReelStep(dt, dist / M, rhGate / M, armMass, hasPayload, boostMult, holdGateM);
         reelSpeedScaled = reelSpeed * M;
         // her ion thread keeps the line tight the whole haul: billed at its real thrust (not while the line-up burn runs)
         if (!this._rhLineUp) this._billIonThread(dt, this._rhReelMassKg);
@@ -8604,6 +8697,11 @@ export class ArmUnit {
     if (rh && rhGate < moveDistance) {
       moveDistance = rhGate;
       // reel-gas: the line-up gate stopped her short of the step: her speed is what she really covered
+      if (profileV2 && dt > 0) this._rhReelV = Math.min(this._rhReelV, moveDistance / (M * dt));
+    }
+    // reel-hold D1: never past the hold point (the braking law stops her there; this is the rounding backstop)
+    if (rh && holdGateM !== Infinity && this._rhHold && this._rhHold.on && holdGateM * M < moveDistance) {
+      moveDistance = Math.max(0, holdGateM * M);
       if (profileV2 && dt > 0) this._rhReelV = Math.min(this._rhReelV, moveDistance / (M * dt));
     }
     if (moveDistance >= dist) {
