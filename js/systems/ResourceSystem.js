@@ -73,14 +73,31 @@ export function indiumCartridgePriceCr(kg) {
 }
 
 /**
- * Nets step 3 lane 3f: free space in the cold-gas (nitrogen) tank, kg.
+ * ap-gas D4: kilograms of nitrogen -> steering-gas POOL units. The pool (`coldGas`, `COLD_GAS_MAX` = 20 units) is not kg: the
+ * full tank is `OCTOPUS_CORE_COLD_GAS` = 6 kg, so one unit is 0.3 kg. Every bill that computes kg converts here before it
+ * charges the pool (it used to charge `amount: kg`: 3.33x too cheap).
+ * @param {number} kg
+ * @returns {number} pool units
+ */
+export function coldGasKgToPool(kg) {
+  return kg * Constants.COLD_GAS_MAX / Constants.OCTOPUS_CORE_COLD_GAS;
+}
+
+/** ap-gas D4: steering-gas POOL units -> kilograms of nitrogen (the inverse of `coldGasKgToPool`). */
+export function coldGasPoolToKg(pool) {
+  return pool * Constants.OCTOPUS_CORE_COLD_GAS / Constants.COLD_GAS_MAX;
+}
+
+/**
+ * Nets step 3 lane 3f: free space in the cold-gas (nitrogen) tank, kg (ap-gas D4a: REAL kg; the pool's free room used to be
+ * returned under this name, 3.33x too many kg).
  * @param {{coldGas?: number, coldGasMax?: number}|null} res - ResourceSystem or player.resources
  * @returns {number} kg
  */
 export function coldGasFreeKg(res) {
   const max = res && Number.isFinite(res.coldGasMax) ? res.coldGasMax : Constants.COLD_GAS_MAX;
   const have = res && Number.isFinite(res.coldGas) ? res.coldGas : 0;
-  return Math.max(0, max - have);
+  return coldGasPoolToKg(Math.max(0, max - have));
 }
 
 /**
@@ -1034,7 +1051,7 @@ export class ResourceSystem {
     const free = coldGasFreeKg(this);
     if (free < 0.1 || !(kg > 0)) return 0;
     const add = Math.min(kg, free);
-    this.coldGas = Math.min(this.coldGasMax, this.coldGas + add);
+    this.coldGas = Math.min(this.coldGasMax, this.coldGas + coldGasKgToPool(add));   // ap-gas D4a: a purchase gives the kg it says
     this._syncToPlayer();
     eventBus.emit(Events.RESOURCE_UPGRADED, { effect: 'coldGasResupply', value: add });
     return add;

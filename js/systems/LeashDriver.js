@@ -324,11 +324,14 @@ export class LeashDriver {
    * hand-off must not start (the catch goes to the daughter rack at once; the ~41 s fold-and-turn that used to end in
    * the same refusal never begins). Prices the turn with the autopilot's own helper (`attitudeTurnProfile`, the one
    * `requestAttitudeTurn` runs at TURN) from the plan the hand-off would run — the nose-reel plan when the catch must be
-   * pulled in first — with the limits TURN sends. Inertia is the current one: measured 2026-10-19 (flower ship, 5 kg
-   * catch, seat 0) ixx 91.253 / iyy 87.766 kg·m² before the fold and again at the TURN request, so folding changes
-   * nothing, and the price was 0.29170 units both times (the early plan's angle was 31° and TURN's 36°: the line pays
-   * out 0.2 m first; a turn over ~12.5° costs the same, only the two ramps burn gas). TURN's own check stays as the fallback for gas spent elsewhere
-   * during the swing, and for a short turn whose plan angle moves.
+   * pulled in first — with the limits TURN sends. Inertia is the one she will have AT THE TURN, not the current one
+   * (2026-10-23, radiators counted): the FOLD phase swings only the receiving tip's petal (`holdPetalForHandoff`, the
+   * hand-off angle, `_command` 'foldRadiators') before the turn, so the turn runs with that petal at `thetaHRad` (capped
+   * as the ship caps it) and the other petals at the angles they have now; `attitudeInertiaAt` prices exactly that, and
+   * the early price equals the price TURN computes. (Before the radiators were counted the two were the same: measured
+   * 2026-10-19, ixx 91.253 / iyy 87.766 both times, price 0.29170 units; the early plan's angle was 31° and TURN's 36°:
+   * the line pays out 0.2 m first; a turn over ~12.5° costs the same, only the two ramps burn gas.) TURN's own check
+   * stays as the fallback for gas spent elsewhere during the swing, and for a short turn whose plan angle moves.
    * A player that cannot say its inertia (a mock), a plan with no turn, or a turn with no authority: not short (TURN
    * still checks).
    * @param {object} net
@@ -350,7 +353,18 @@ export class LeashDriver {
     }
     const plan = this._handoffPlan(debris, tipIndex, sp);
     if (!plan || !plan.ok || !(plan.psiRad >= 1e-4)) return false;       // < 1e-4: TURN skips the turn, which costs nothing
-    const prof = attitudeTurnProfile(p, plan.axisBody, plan.psiRad, leashTurnLimits());
+    // the inertia at the turn: the receiving petal folded to the hand-off angle, the rest as they are (see above)
+    let priced = p;
+    if (typeof p.attitudeInertiaAt === 'function') {
+      const prm = this._params(debris, tipIndex);
+      const th = typeof p._flowerClampRad === 'function' ? p._flowerClampRad(prm.thetaHRad) : prm.thetaHRad;
+      const It = p.attitudeInertiaAt({ petals: [{ azDeg: this._petalAz(tipIndex), thetaRad: th }] });
+      if (It && It.ixx > 0 && It.iyy > 0) {
+        priced = Object.create(p);
+        priced.getAttitudeInertia = () => It;
+      }
+    }
+    const prof = attitudeTurnProfile(priced, plan.axisBody, plan.psiRad, leashTurnLimits());
     return prof.ok && turnGasShort(p, prof.gasEstimate);
   }
 

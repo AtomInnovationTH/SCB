@@ -87,6 +87,7 @@ import { FITTING_CATALOG, groupBySubsystem } from '../data/fittingCatalog.js';
 import { BLUEPRINT_SUBSYSTEMS } from '../data/blueprintSubsystems.js';
 import { subsystemForPart, partsForSubsystem } from '../data/refitIndex.js';
 import { upgradePrereqsMet, upgradeCostNow, consumableFull } from './shopGating.js';
+import { coldGasPoolToKg } from '../systems/ResourceSystem.js';   // ap-gas D4a: the nitrogen aboard is shown in real kg (the pool is 0.3 kg a unit)
 
 /** G1 write cap — the ProxContextPanel/TransferWindows house value. */
 const DOM_WRITE_MIN_INTERVAL_MS = 250;
@@ -337,7 +338,7 @@ export class RefitPane {
   static supplyNote(shop, res) {
     if (!shop || !res) return '';
     if (shop.effect === 'coldGasResupply' && Number.isFinite(res.coldGas) && Number.isFinite(res.coldGasMax)) {
-      return `Nitrogen aboard: ${res.coldGas.toFixed(1)} of ${RefitPane.fmtValue(res.coldGasMax)} kg`;
+      return `Nitrogen aboard: ${coldGasPoolToKg(res.coldGas).toFixed(1)} of ${RefitPane.fmtValue(coldGasPoolToKg(res.coldGasMax))} kg`;
     }
     if (shop.effect === 'indiumCartridge' && Number.isFinite(res.indiumStoreKg)) {
       return `Indium aboard: ${res.indiumStoreKg.toFixed(2)} of ${Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG.toFixed(2)} kg`;

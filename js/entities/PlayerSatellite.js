@@ -24,7 +24,7 @@ import { getRadiatorRailTexture } from '../scene/radiatorRailTexture.js';
 import { getOrbitalFoilEnv } from '../scene/orbitalFoilEnv.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
-import { engineGasKg, engineTankDryKg, engineGasLowFrac, startEnginePool, START_GAS_KG } from '../systems/ResourceSystem.js';
+import { engineGasKg, engineTankDryKg, engineGasLowFrac, startEnginePool, START_GAS_KG, coldGasKgToPool, coldGasPoolToKg } from '../systems/ResourceSystem.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import {
   computeCoM, computeCoMDrift, computeCoMDriftVector,
@@ -721,6 +721,8 @@ export class PlayerSatellite extends THREE.Group {
     // register item 69) — never per frame.
     // null = needs (re)compute.
     this._attitudeInertia = null;
+    /** The radiator inputs the cache was computed from (`getAttitudeInertia`); null = none recorded yet. */
+    this._radiatorKey = null;
     const _invalidateInertia = () => { this._attitudeInertia = null; };
     eventBus.on(Events.ARM_STATE_CHANGE, _invalidateInertia);
     eventBus.on(Events.NET_BERTHED, _invalidateInertia);
@@ -8337,9 +8339,13 @@ export class PlayerSatellite extends THREE.Group {
     const mass = (this.mass > 0) ? this.mass : 130;
     let kg = mass * dvWorld.length() / ((RP.HOLD_ISP_S ?? 60) * (Constants.G0 ?? 9.81));
     const tank = Number(this.resources && this.resources.coldGas);
-    if (Number.isFinite(tank)) kg = Math.min(kg, Math.max(0, tank));
-    if (kg > 0) {
-      eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'coldGas', amount: kg });
+    if (Number.isFinite(tank)) kg = Math.min(kg, coldGasPoolToKg(Math.max(0, tank)));   // ap-gas D4: the tank is POOL units, the burn is kg
+    // ap-gas D5: a cold-gas turn that is spinning keeps the gas to stop; the burn takes what is left above it and no more (the
+    // station-keeping Δv itself is wiped by the HOLD's orbit copy whether or not it is paid: only the bill is the burn's)
+    const pool = this._nonTurnPoolBudget(coldGasKgToPool(kg));
+    kg = coldGasPoolToKg(pool);
+    if (pool > 0) {
+      eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'coldGas', amount: pool });
       this._reelPushHoldKg += kg;
     }
     // the burn pushes AGAINST the line: thrust along -dv, the exhaust leaves on the daughter's side (the puff sprites sit at
@@ -8483,9 +8489,36 @@ export class PlayerSatellite extends THREE.Group {
     if (!(kg > 0)) return 0;
     eventBus.emit(Events.RESOURCE_CONSUME, {
       resource: 'coldGas',
-      amount: kg,
+      amount: coldGasKgToPool(kg),     // ap-gas D4: the pool is not kg (20 units = 6 kg)
     });
     return kg;
+  }
+
+  /**
+   * ap-gas D5 ("always keep gas to stop", DECISIONS §37): the steering gas (POOL units) a bill that is NOT a turn must leave in
+   * the tank while a cold-gas turn is spinning: STOP_RESERVE x the gas the stop of her live spin will bill (`slothStopGasPool`).
+   * 0 when no cold-gas spin is running.
+   * @returns {number} pool units
+   * @private
+   */
+  _stopReservePool() {
+    if (this._gasSpin !== true) return 0;
+    return (Constants.SLOTH.STOP_RESERVE ?? 1) * this.slothStopGasPool();
+  }
+
+  /**
+   * ap-gas D5: how much of `wantPool` (pool units) a non-turn bill may take: what the tank holds above the stop reserve, never
+   * more than it wants. With no spin running (no reserve) the bill is whole, as before.
+   * @param {number} wantPool
+   * @returns {number} pool units, 0..wantPool
+   * @private
+   */
+  _nonTurnPoolBudget(wantPool) {
+    const reserve = this._stopReservePool();
+    if (!(reserve > 0)) return wantPool;
+    const tank = Number(this.resources && this.resources.coldGas);
+    if (!Number.isFinite(tank)) return wantPool;
+    return Math.max(0, Math.min(wantPool, tank - reserve));
   }
 
   /**
@@ -8541,18 +8574,23 @@ export class PlayerSatellite extends THREE.Group {
 
     // Consume cold gas resource via EventBus (ResourceSystem is canonical owner)
     const n2Kg = n2Grams / 1000;
+    // ap-gas D4: the pool is not kg (20 units = 6 kg). D5: a cold-gas turn that is spinning keeps the gas to stop, so the burn takes
+    // what is left above that and corrects only that share of the recoil (the rest stays as drift).
+    const wantPool = coldGasKgToPool(n2Kg);
+    const pool = this._nonTurnPoolBudget(wantPool);
+    const share = wantPool > 0 ? pool / wantPool : 1;
     eventBus.emit(Events.RESOURCE_CONSUME, {
       resource: 'coldGas',
-      amount: n2Kg,
+      amount: pool,
     });
 
-    // Track actual N₂ consumed for dual-fire refund
-    this._frameN2Consumed += n2Kg;
+    // Track actual N₂ consumed (kg) for dual-fire refund
+    this._frameN2Consumed += coldGasPoolToKg(pool);
 
     // Apply counter-impulse (cancel the recoil)
     const forward = new THREE.Vector3(0, 0, 1)
       .applyQuaternion(this.quaternion)
-      .multiplyScalar(recoilDv);
+      .multiplyScalar(recoilDv * share);
     this._rcsVelocity.add(forward);
 
     // Show RCS compensation puff visual
@@ -8576,7 +8614,7 @@ export class PlayerSatellite extends THREE.Group {
         // Refund exact N₂ consumed by individual arm compensations
         eventBus.emit(Events.RESOURCE_REPLENISH, {
           resource: 'coldGas',
-          amount: this._frameN2Consumed,
+          amount: coldGasKgToPool(this._frameN2Consumed),   // ap-gas D4: kg back to pool units, the way it was billed
         });
       }
       this._frameRecoilDv = 0;
@@ -8878,14 +8916,100 @@ export class PlayerSatellite extends THREE.Group {
    * adoption, collar digestion completion — register item 63; [K] jettison
    * from BERTHED/COLLARED, the rack's stay-parked feed-end — register item 67;
    * the mission-reset rack clear, ArmManager.reset() — register item 69)
-   * clears it. Never recomputed per frame.
+   * clears it. Not recomputed per frame: it is recomputed only when something it depends on changed — which includes
+   * every frame the radiators swing (the cache key holds the fold angle, the petal holds and the pairs owned).
    * @returns {{ ixx:number, iyy:number, izz:number }}
    */
   getAttitudeInertia() {
+    // The radiators are structure, so what moves them also moves her inertia, and nothing emits an event for it (the
+    // fold angle is written in ~10 places): the cache is keyed on the shared angle, every petal hold angle and the
+    // pairs owned. A cache set from outside (a test pre-sets one) with no key yet is taken as current.
+    if (this._attitudeInertia && !this._radiatorKeyMatches()) {
+      if (this._radiatorKey === null) this._storeRadiatorKey();
+      else this._attitudeInertia = null;
+    }
     if (!this._attitudeInertia) {
       this._attitudeInertia = computeInertia(this.armManager, this);
+      this._storeRadiatorKey();
     }
     return this._attitudeInertia;
+  }
+
+  /**
+   * The inertia she WOULD have with the radiators at other angles, everything else as it is now (a what-if: for the
+   * hand-off's early gas check, which prices a turn that runs after a petal has folded). Same computeInertia as
+   * `getAttitudeInertia`; the cache and its key are not touched. Bags latched on the tips ride their live petal angles.
+   * @param {object} [over]
+   * @param {number} [over.flowerThetaRad] the shared angle (default: the live one)
+   * @param {Array<{azDeg:number, thetaRad:number}>} [over.petals] petals at their own angle (the rest: live hold or shared)
+   * @returns {{ ixx:number, iyy:number, izz:number }}
+   */
+  attitudeInertiaAt(over = {}) {
+    const view = Object.create(this);
+    view.radiatorBookings = () => this.radiatorBookings(over);
+    return computeInertia(this.armManager, view);
+  }
+
+  /** Pairs owned as a bit mask (A = 1, B = 2). */
+  _radiatorPairBits() {
+    const fp = this._flowerPairs;
+    return fp ? (fp.A ? 1 : 0) | (fp.B ? 2 : 0) : 0;
+  }
+
+  /** @private The inertia cache key — what the radiators' inertia depends on, as a flat number list. No radiators → angles are moot. */
+  _radiatorKeyMatches() {
+    const key = this._radiatorKey;
+    if (key === null || key === undefined) return false;
+    const bits = this._radiatorPairBits();
+    if (key[0] !== bits) return false;
+    if (bits === 0) return true;
+    if (key[1] !== this._flowerThetaRad) return false;
+    const holds = this._petalHolds || EMPTY_HOLDS;
+    if (key.length !== 2 + 2 * holds.length) return false;
+    for (let i = 0; i < holds.length; i++) {
+      if (key[2 + 2 * i] !== holds[i].az || key[3 + 2 * i] !== holds[i].thetaRad) return false;
+    }
+    return true;
+  }
+
+  _storeRadiatorKey() {
+    const bits = this._radiatorPairBits();
+    const holds = this._petalHolds || EMPTY_HOLDS;
+    const key = [bits, bits === 0 ? 0 : this._flowerThetaRad];
+    if (bits !== 0) for (let i = 0; i < holds.length; i++) key.push(holds[i].az, holds[i].thetaRad);
+    this._radiatorKey = key;
+  }
+
+  /**
+   * The radiator petals as masses at live angles, for computeInertia (structure: counted whether or not the meshes
+   * are built). One entry per owned petal: pair A = azimuths 40/220, pair B = 140/320, half a pair's dry mass each;
+   * a held petal reports its own angle, a free one the shared angle. Empty with no pairs.
+   * @param {object} [over] what-if angles (see `attitudeInertiaAt`): `flowerThetaRad` replaces the shared angle,
+   *   `petals` [{azDeg, thetaRad}] name petals at their own angle (the rest keep their live hold or the shared angle).
+   * @returns {Array<{massKg:number, azDeg:number, thetaRad:number, foldRad:number}>}
+   */
+  radiatorBookings(over = null) {
+    const FL = Constants.THERMAL.FLOWER;
+    const out = [];
+    const each = FL.PAIR_DRY_MASS_KG / 2;
+    const shared = over && Number.isFinite(over.flowerThetaRad) ? over.flowerThetaRad : this._flowerThetaRad;
+    const petals = over && Array.isArray(over.petals) ? over.petals : null;
+    const thetaOf = (az) => {      // a named petal's what-if angle, else its live hold, else the shared angle
+      if (petals) for (const q of petals) if (q.azDeg === az) return q.thetaRad;
+      const holds = this._petalHolds || EMPTY_HOLDS;
+      for (let i = 0; i < holds.length; i++) if (holds[i].az === az) return holds[i].thetaRad;
+      return shared;
+    };
+    const add = (azs) => {
+      for (const az of azs) {
+        const th = thetaOf(az);
+        out.push({ massKg: each, azDeg: az, thetaRad: th, foldRad: this._flowerWingFoldAngle(th) });
+      }
+    };
+    const fp = this._flowerPairs || {};
+    if (fp.A) add(FL.PAIR_A_AZ_DEG);
+    if (fp.B) add(FL.PAIR_B_AZ_DEG);
+    return out;
   }
 
   /**
@@ -9433,7 +9557,7 @@ export class PlayerSatellite extends THREE.Group {
       const t = this.slothTurnTimeS(Math.PI / 2);
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'SPACECRAFT',
-        text: `Steering gas empty — the tail boxes will turn her slowly (${this.slothTimeWords(t)} per 90°).`,
+        text: `Emergency steering activated: steering gas empty, the tail boxes turn her slowly (${this.slothTimeWords(t)} per 90°).`,
         priority: 'warning',
       });
     }

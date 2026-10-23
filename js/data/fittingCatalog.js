@@ -43,7 +43,7 @@
 import { Constants } from '../core/Constants.js';
 import { UPGRADES } from '../ui/ShopScreen.js';
 import { EFFECT_ROUTES } from '../systems/upgradeEffectRoutes.js';
-import { engineGasKg, START_GAS_KG } from '../systems/ResourceSystem.js';
+import { engineGasKg, START_GAS_KG, coldGasPoolToKg } from '../systems/ResourceSystem.js';
 import { SENSOR_TIERS } from '../systems/SensorSystem.js';
 import { M_TO_U } from './blueprintSubsystems.js';
 
@@ -177,8 +177,9 @@ const FITTING_SPECS = {
   // lane 3f (T1): nitrogen for her cold-gas tank, which tops up docked daughters. Shown as the cold gas aboard, kg.
   coldgas_resupply: {
     subsystem: 'ENGINEERING', reads: 'resourceSystem',
-    display: (row) => ({ param: 'coldGasKg', base: Constants.COLD_GAS_MAX * Constants.PROPELLANT_START_FRACTION, unit: 'kg', op: `+${row.value}` }),
-    current: (deps) => deps.resourceSystem?.coldGas,
+    // ap-gas D4a: real kg (the pool is 0.3 kg a unit), so a 5 kg buy reads +5
+    display: (row) => ({ param: 'coldGasKg', base: coldGasPoolToKg(Constants.COLD_GAS_MAX * Constants.PROPELLANT_START_FRACTION), unit: 'kg', op: `+${row.value}` }),
+    current: (deps) => (deps.resourceSystem && Number.isFinite(deps.resourceSystem.coldGas) ? coldGasPoolToKg(deps.resourceSystem.coldGas) : undefined),
   },
   extra_coldgas: {
     subsystem: 'ENGINEERING', reads: 'resourceSystem',

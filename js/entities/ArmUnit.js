@@ -25,6 +25,7 @@ import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, 
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
 import { daughterOutOfNetsLine } from '../systems/netRouting.js';
+import { coldGasKgToPool, coldGasPoolToKg } from '../systems/ResourceSystem.js';   // ap-gas D4: the mother's tank is pool units, the bottle is kg
 import { placeName } from '../systems/resupplyWords.js';   // lane 3f F1: "resupply satellite" with the map on, today's "resupply stop" without
 import { computeToolOdds, makeNetOddsLockCache } from '../systems/ToolOdds.js';
 import { gameState } from '../core/GameState.js';
@@ -8259,7 +8260,15 @@ export class ArmUnit {
     const rs = ps && ps._resourceSystem;
     if (!rs || typeof rs.drawUpTo !== 'function') return;
     const want = Math.min(need, G.REFILL_KG_PER_GAME_S * dt * TimeAuthority.BASE_SCALE);
-    const got = rs.drawUpTo('coldGas', want);
+    // ap-gas D4: the mother's tank is POOL units (20 = 6 kg): she gives coldGasKgToPool(want) and the bottle gains that many kg.
+    // D5: while a cold-gas turn of hers is spinning the gas to stop it is not for the bottles (no line: she is not out of gas).
+    let wantPool = coldGasKgToPool(want);
+    if (typeof ps._nonTurnPoolBudget === 'function') {
+      const budget = ps._nonTurnPoolBudget(wantPool);
+      if (budget <= 0 && wantPool > 0 && (rs.coldGas || 0) > 0) return;
+      wantPool = budget;
+    }
+    const got = coldGasPoolToKg(rs.drawUpTo('coldGas', wantPool));
     if (got > 0) {
       const next = this.coldGasKg + got;
       this.coldGasKg = (full - next < 1e-12) ? full : next;           // full is full (no 1e-17 kg left over by the float sum)

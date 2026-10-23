@@ -454,6 +454,52 @@ export function computeCoM(armManager, playerSatellite) {
 }
 
 /**
+ * Inertia of the radiator petals about the barrel origin, ship frame (kg·m²; diagonal terms, like every other part).
+ * Each petal's mass is spread uniformly over its plate span (PLATE_START_M..PLATE_END_M along the strut, the
+ * method of the reaction-wheels appendix), the strut line leaving the hinge pin (HINGE_R_M out at the petal's azimuth,
+ * HINGE_Z_M) in the direction (sinθ·r̂, cosθ·ẑ). Second moments of the line about the origin are exact:
+ * <p pᵀ> = h hᵀ + s̄ (h uᵀ + u hᵀ) + <s²> u uᵀ with s uniform on [s0, s1].
+ * The plate's own width adds m·σ²·(I − t tᵀ) with t the tangential direction and σ² the tangential variance of the
+ * plate's mass: centre panel 50 %, each wing 25 % hinged on the centre panel's edge, the wing centroid at
+ * 0.15 + 0.075·cos(fold) from the boom line (fold −π folded, 0 flat), so σ² goes 0.0075 (folded) to 0.030 m² (flat).
+ * The wings' small offset out of the plate plane is not modelled.
+ * @param {Array<{massKg:number, azDeg:number, thetaRad:number, foldRad:number}>} petals
+ * @returns {{ ixx:number, iyy:number, izz:number }}
+ */
+export function radiatorInertia(petals) {
+  const FL = Constants.THERMAL.FLOWER;
+  const s0 = FL.PLATE_START_M, s1 = FL.PLATE_END_M;
+  const sMean = (s0 + s1) / 2;
+  const s2Mean = sMean * sMean + ((s1 - s0) * (s1 - s0)) / 12;
+  const hw = FL.PLATE_CENTRE_HALF_WIDTH_M;                 // 0.15: centre panel half-width = wing width
+  let ixx = 0, iyy = 0, izz = 0;
+  for (let i = 0; i < petals.length; i++) {
+    const { massKg: m, azDeg, thetaRad, foldRad } = petals[i];
+    if (!(m > 0)) continue;
+    const az = (azDeg * Math.PI) / 180;
+    const ca = Math.cos(az), sa = Math.sin(az);
+    const st = Math.sin(thetaRad), ct = Math.cos(thetaRad);
+    const h = { x: FL.HINGE_R_M * ca, y: FL.HINGE_R_M * sa, z: FL.HINGE_Z_M };
+    const u = { x: st * ca, y: st * sa, z: ct };
+    const sxx = h.x * h.x + 2 * sMean * h.x * u.x + s2Mean * u.x * u.x;
+    const syy = h.y * h.y + 2 * sMean * h.y * u.y + s2Mean * u.y * u.y;
+    const szz = h.z * h.z + 2 * sMean * h.z * u.z + s2Mean * u.z * u.z;
+    ixx += m * (syy + szz);
+    iyy += m * (sxx + szz);
+    izz += m * (sxx + syy);
+    // plate width: centre panel (50 %) + two wings (25 % each) at tangential offset c from the boom line
+    const cf = Number.isFinite(foldRad) ? Math.cos(foldRad) : 1;
+    const c = hw + (hw / 2) * cf;
+    const sig2 = 0.5 * (4 * hw * hw / 12) + 0.5 * (c * c + (hw * hw / 12) * cf * cf);
+    // spread along t = (−sin az, cos az, 0): I += m σ² (I₃ − t tᵀ) → ixx (1 − tx²), iyy (1 − ty²), izz 1
+    ixx += m * sig2 * (1 - sa * sa);
+    iyy += m * sig2 * (1 - ca * ca);
+    izz += m * sig2;
+  }
+  return { ixx, iyy, izz };
+}
+
+/**
  * Compute the rigid-body moment of inertia about the barrel origin, in body
  * axes (kg·m²): ixx pitch (about +X), iyy yaw (about +Y), izz roll (about +Z,
  * the barrel long axis). This is the attitude-dynamics SSOT — it mirrors
@@ -466,7 +512,9 @@ export function computeCoM(armManager, playerSatellite) {
  * Model:
  *   - Core bus: thin cylindrical shell, mass = CORE_DRY_MASS, at the origin.
  *       transverse (x,y) = m·(R²/2 + L²/12);  roll (z) = m·R².
- *       (R = COLLAR_RADIUS, L = CORE_LENGTH. Stowed transverse ≈ 66.5 kg·m².)
+ *       (R = COLLAR_RADIUS, L = CORE_LENGTH. CORE_DRY_MASS 176 kg: stowed transverse ≈ 72.75 kg·m², roll ≈ 28.16.)
+ *   - Radiators (2026-10-23, owner: "count them"): every owned petal is structure (unclamped), its mass spread
+ *       uniformly over the plate span at the petal's live angle — see radiatorInertia.
  *   - Struts: point mass STRUT_MASS at the α-dependent midpoint (parallel axis).
  *   - Daughters: point mass WEAVER/SPINNER at the α-dependent tip (parallel axis).
  *   - Berthed catch mass (D6): included as a fore point mass but the ADDED
@@ -481,11 +529,11 @@ export function computeCoM(armManager, playerSatellite) {
 export function computeInertia(armManager, playerSatellite) {
   const R = V5.COLLAR_RADIUS;   // 0.40 m
   const L = V5.CORE_LENGTH;     // 2.0 m
-  const coreMass = V5.CORE_DRY_MASS; // 161.0 kg
+  const coreMass = V5.CORE_DRY_MASS; // 176.0 kg
 
   // Bare-bus thin-shell inertia (also the stowed reference for the D6 clamp).
-  const busTransverse = coreMass * (R * R / 2 + L * L / 12); // ≈ 66.5
-  const busRoll = coreMass * R * R;                          // ≈ 25.76
+  const busTransverse = coreMass * (R * R / 2 + L * L / 12); // ≈ 72.75
+  const busRoll = coreMass * R * R;                          // ≈ 28.16
 
   let ixx = busTransverse;
   let iyy = busTransverse;
@@ -560,6 +608,19 @@ export function computeInertia(armManager, playerSatellite) {
   const netsAboard = motherNetBooking(playerSatellite);
   addPoint(netsAboard.massKg, { x: 0, y: 0, z: netsAboard.z });
 
+  // The radiators: structure aboard (unclamped), at each petal's live angle. A caller with no radiator info
+  // (a mock, a tool) books none.
+  let radIxx = 0, radIyy = 0, radIzz = 0;   // the radiators' share, also part of the clamp's reference below
+  const petals = playerSatellite && typeof playerSatellite.radiatorBookings === 'function'
+    ? playerSatellite.radiatorBookings() : null;
+  if (petals) {
+    const rad = radiatorInertia(petals);
+    ixx += rad.ixx;
+    iyy += rad.iyy;
+    izz += rad.izz;
+    radIxx = rad.ixx; radIyy = rad.iyy; radIzz = rad.izz;
+  }
+
   // Bags latched on the radiator tips: cargo, so they join the clamped sum.
   const tipBags = playerSatellite && playerSatellite.tipCargo
     && typeof playerSatellite.tipCargo.massBookings === 'function'
@@ -589,13 +650,19 @@ export function computeInertia(armManager, playerSatellite) {
     const factor = Constants.ATTITUDE?.INERTIA_MAX_FACTOR ?? 3.0;
     const leverT2 = (L / 2) * (L / 2); // transverse lever² (fore capture point)
     const leverR2 = (R / 2) * (R / 2); // small roll radius²
-    const capT = factor * busTransverse;
-    const capR = factor * busRoll;
+    // The cap is INERTIA_MAX_FACTOR × the bus, plus the radiators once at their live angles (2026-10-23): the radiators
+    // are structure, not cargo, so they are neither multiplied nor allowed to eat the cargo's room. With the bus alone as
+    // the reference, open radiators (300+ kg·m²) would sit above 3 × the bus and swallow every kilogram of cargo; scaling
+    // them by the factor too would give a catch more room the further the radiators are open. This way the room left for
+    // cargo does not depend on the radiator angle. No radiators: factor × bus, as before.
+    const capX = factor * busTransverse + radIxx;
+    const capY = factor * busTransverse + radIyy;
+    const capZ = factor * busRoll + radIzz;
     const addT = berthed * leverT2;   // berthed transverse addition
     const addR = berthed * leverR2;   // berthed roll addition
-    ixx = Math.min(ixx + addT + cargoIxx, Math.max(ixx, capT));
-    iyy = Math.min(iyy + addT + cargoIyy, Math.max(iyy, capT));
-    izz = Math.min(izz + addR + cargoIzz, Math.max(izz, capR));
+    ixx = Math.min(ixx + addT + cargoIxx, Math.max(ixx, capX));
+    iyy = Math.min(iyy + addT + cargoIyy, Math.max(iyy, capY));
+    izz = Math.min(izz + addR + cargoIzz, Math.max(izz, capZ));
   }
 
   return { ixx, iyy, izz };
