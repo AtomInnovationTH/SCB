@@ -2,9 +2,11 @@
  * FieldRegistry - the debris fields, stacked by height, and which of their pieces are still there
  * (Nets step 3 slice 2b, DECISIONS §33 row 6; plan decisions G, H, K; FEATURE_FLAGS.FIELDS_BY_HEIGHT).
  *
- * `Constants.FIELDS.LIST` names the fields: an id, a height, a seed. The start field (350 km) is mission 1's welcome field.
- * Each field holds `FIELDS.PIECES` pieces, laid out like DebrisField's WELCOME_FIELD rows (row i = the i-th row of that
- * table); the registry keeps, per field, the ROWS nobody has caught yet. A caught piece stays gone: a row leaves its field
+ * `Constants.FIELDS.LIST` names the fields: an id, a height, a seed and a kind. The start field (350 km) is mission 1's welcome
+ * field. A `low` field holds `FIELDS.PIECES` pieces, laid out like DebrisField's WELCOME_FIELD rows (row i = the i-th row of that
+ * table); a `high` field (750-900 km, slice 4) holds one piece per row of `Constants.HIGH_FIELD` (`fieldRowCount(field)`), laid out
+ * by the same spawn path from parked heavy spares. The registry keeps, per field, the ROWS nobody has caught yet. A caught
+ * piece stays gone: a row leaves its field
  * at the credit (`markCaught(piece)`, called by GameFlowManager's CATCH_PROCESSED handler: a catch kept aboard, mated at the
  * nose or parked on a rack, is paid but not removed) or at the removal (Events.DEBRIS_REMOVED: a burn, a digest), whichever
  * comes first; the second is a no-op. A field that is left keeps its other pieces (DebrisField stores them on `depart()` and
@@ -40,11 +42,43 @@ import { Events } from '../core/Events.js';
 import { engineGasKg } from './ResourceSystem.js';
 import { tripProfile, realThrustN, playSeconds, tripDragAreaM2 } from './TripProfile.js';
 
+/**
+ * `tripProfile` is a pure function of its inputs (and of the few constants it reads) but costs up to ~10 ms for a 40-day trip and
+ * builds ~1200 sample objects. The where-next list plans every field (and `defaultNext` plans them all again), and the four high
+ * fields (slice 4) are 25-46 day trips, so a rows build with her state unchanged re-flew nine trips each time. The profile is
+ * remembered per full input set (every number the function reads, the constants included); callers only read it. Her mass and
+ * gas change as she burns, so a changed state is a different key, never a stale answer.
+ */
+const PROFILE_CACHE_MAX = 64;
+const _profileCache = new Map();
+function cachedTripProfile(args) {
+  const C = Constants;
+  const key = [args.fromKm, args.toKm, args.massKg, args.thrustN, args.ispS, args.areaM2, args.cos,
+    C.TRIP.PROFILE_STEP_S, C.TRIP.PROFILE_MAX_DAYS, C.EARTH_RADIUS_KM, C.MU_EARTH, C.G0].join('|');
+  let hit = _profileCache.get(key);
+  if (hit === undefined) {
+    hit = tripProfile(args);
+    if (_profileCache.size >= PROFILE_CACHE_MAX) _profileCache.delete(_profileCache.keys().next().value);
+    _profileCache.set(key, hit);
+  }
+  return hit;
+}
+
 const SAVE_VERSION = 1;
 
-function allRows() {
+/**
+ * How many rows (pieces) a field holds: the HIGH_FIELD table's for a `high` field, `FIELDS.PIECES` (the WELCOME_FIELD rows) for
+ * any other. Read at use time, never cached: there is no global row count.
+ * @param {{kind?: string}|null} field a `FIELDS.LIST` entry
+ * @returns {number}
+ */
+export function fieldRowCount(field) {
+  return field && field.kind === 'high' ? Constants.HIGH_FIELD.length : Constants.FIELDS.PIECES;
+}
+
+function allRows(field) {
   const out = [];
-  for (let i = 0; i < Constants.FIELDS.PIECES; i++) out.push(i);
+  for (let i = 0, n = fieldRowCount(field); i < n; i++) out.push(i);
   return out;
 }
 
@@ -147,7 +181,8 @@ export class FieldRegistry {
    * The field to put in front of her: which rows exist, which seed lays out the free rows. Null with the flag off (the
    * caller then spawns today's welcome field). `missionNumber` is set once after a load (no MISSION_START fires then) and
    * consumed by the first spawn.
-   * @returns {{fieldId: string, altKm: number, rows: number[], seed: number, missionNumber: (number|null)}|null}
+   * `kind` ('low' | 'high') says which table the rows index: WELCOME_FIELD or HIGH_FIELD (a field with no kind is low).
+   * @returns {{fieldId: string, altKm: number, rows: number[], seed: number, kind: string, missionNumber: (number|null)}|null}
    */
   spawnPlan() {
     if (!this.isOn()) return null;
@@ -157,7 +192,8 @@ export class FieldRegistry {
     // (a CALLED satellite is where she is: her field stays laid out around her at her own height)
     const sat = this.berthedSatellite();
     const plan = {
-      fieldId: f.id, altKm: sat ? sat.altKm : f.altKm, rows: this.atSatellite() ? [] : this.remainingRows(f.id), seed: f.seed, missionNumber: this._pendingMission,
+      fieldId: f.id, altKm: sat ? sat.altKm : f.altKm, rows: this.atSatellite() ? [] : this.remainingRows(f.id), seed: f.seed,
+      kind: f.kind === 'high' ? 'high' : 'low', missionNumber: this._pendingMission,
     };
     this._pendingMission = null;
     return plan;
@@ -197,7 +233,7 @@ export class FieldRegistry {
     const ispS = fuel.isp / (c > 0 ? c : 1);
     // Her drag area is the one at her radiator angle (capped at 146 deg), nose-first, wings sun-tracking (review F3).
     const areaM2 = tripDragAreaM2(Number.isFinite(opts.thetaRad) ? opts.thetaRad : p._flowerThetaRad);
-    const profile = tripProfile({
+    const profile = cachedTripProfile({
       fromKm, toKm: field.altKm, massKg: p.mass, thrustN: realThrustN(fuel), ispS, areaM2,
       cos: opts.cos === undefined ? 1 : opts.cos,
     });
@@ -316,7 +352,8 @@ export class FieldRegistry {
         for (const f of this.fields()) {
           if (!Array.isArray(rem[f.id])) continue;
           const seen = new Set();
-          for (const r of rem[f.id]) if (Number.isInteger(r) && r >= 0 && r < Constants.FIELDS.PIECES) seen.add(r);
+          const rowCount = fieldRowCount(f);      // this field's own table (a high field's is not the low field's)
+          for (const r of rem[f.id]) if (Number.isInteger(r) && r >= 0 && r < rowCount) seen.add(r);
           this._state.remaining[f.id] = [...seen].sort((a, b) => a - b);
         }
       }
@@ -348,7 +385,7 @@ export class FieldRegistry {
   /** @private */
   _fresh() {
     const remaining = {};
-    for (const f of Constants.FIELDS.LIST) remaining[f.id] = allRows();
+    for (const f of Constants.FIELDS.LIST) remaining[f.id] = allRows(f);
     return { currentId: this._startField().id, berthId: null, berthKm: null, remaining, at: 1 };
   }
 

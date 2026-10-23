@@ -90,6 +90,19 @@ export function playSeconds(days) {
 }
 
 /**
+ * Nets step 3 slice 4 (S2): the days a trip takes on the ship's clock when its push waits `waitS` real seconds for her nose first. The
+ * trip counts a wait as flown time (`TransferTrip._flownDays`: the profile's days x the real seconds flown / the seconds it plays in), so the
+ * wait adds `days x waitS / playSeconds(days)`. PURE.
+ * @param {number} days the profile's days @param {number} waitS real seconds the push waits for her nose (>= 0)
+ * @returns {number} days
+ */
+export function daysWithTurnWait(days, waitS) {
+  if (!(days > 0) || !(waitS > 0)) return days;
+  const play = playSeconds(days);
+  return play > 0 ? days * (1 + waitS / play) : days;
+}
+
+/**
  * Fly a climb or descent between two circular orbits.
  * @param {object} p
  * @param {number} p.fromKm        altitude she leaves (km above the surface)

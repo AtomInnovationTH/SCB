@@ -2826,13 +2826,13 @@ export const Constants = {
     TRANSFER_TRIP:            true,
 
     // Fields by height (Nets step 3 slice 2b, DECISIONS §33 rows 6 and 10; js/systems/FieldRegistry.js, TripProfile.js).
-    // ON: the debris fields are destinations stacked by height (Constants.FIELDS); a mission boundary flies the mother to
-    // another field with her real thruster (the trip plays a climb or descent from the drag-and-thrust profile), fields keep
-    // the pieces nobody caught, and the field state and the ship days are saved. OFF: today's game exactly (the flat 20 m/s
-    // trip that does not move her, a fresh welcome field every mission). Built behind the flag so the satellite lane (slice 3)
-    // can turn it on together with missions 2-3 rewritten around the map; the URL `?fields` turns it on for a boot.
+    // ON (the default since slice 4, 2026-10-23: the map goes live with the second satellite and the high fields): the debris
+    // fields are destinations stacked by height (Constants.FIELDS); a mission boundary flies the mother to another field with
+    // her real thruster (the trip plays a climb or descent from the drag-and-thrust profile), fields keep the pieces nobody
+    // caught, and the field state and the ship days are saved. OFF (`?fields=0` for a boot): today's game exactly (the flat
+    // 20 m/s trip that does not move her, a fresh welcome field every mission, the stop after every mission).
     // Read through Constants.isFeatureEnabled('FIELDS_BY_HEIGHT'), so REALITY_MODE can never turn it on.
-    FIELDS_BY_HEIGHT:         false,
+    FIELDS_BY_HEIGHT:         true,
   },
 
   // =========================================================================
@@ -5598,6 +5598,53 @@ export const Constants = {
   },
 
   // =========================================================================
+  // HIGH_FIELD - the rows of a HIGH field: dead satellites and rocket stages (Nets step 3 slice 4, lane 4a; DECISIONS §33 row 6:
+  // "dead satellites and rocket stages at 750-900 km"; DebrisField._spawnWelcomeField, FieldRegistry)
+  // =========================================================================
+  // The same 7 rows lay out every `kind: 'high'` field in FIELDS.LIST, through the field spawn path that lays out WELCOME_FIELD
+  // for a low field: row i of the table is piece i of the field. Per field: 2 upper stages (800-1,500 kg), 2 dead satellites over
+  // 500 kg (the mother net takes them: a daughter's net stops at 500 kg) and 3 dead satellites of 50-500 kg (a large daughter or the
+  // mother net). The field's seed rolls where each piece sits along the track and, inside each row's ranges, how heavy it is: the
+  // SAME roll picks mass and size, so a heavier piece is a bigger one (the four fields differ). Every piece is a real catalogue
+  // class (names below; data/debris-catalog.json at 700-960 km), in HER orbit's tilt (the catalogue's own 70-99 deg is not used),
+  // and every piece is something she can catch: its largest side stays at or under CATCH_MAX_SIDE_M (a margin under the
+  // 6 m mother net, CAPTURE_NET.LARGE.DIAMETER), its mass under the mother net's 5,000 kg, its tumble under the net's 10 deg/s
+  // limit (DEBRIS_TYPES / assessNetFit). The numbers are ESTIMATES to tune except where a catalogue entry is named: the catalogue's own
+  // stage sizes (SL-14 R/B 6 m, Meteor-1 R/B 6.5 m, SL-8 R/B 6.5 m) are over the mouth, so the stage rows are named estimates
+  // cut to fit (a stage whose side the net cannot swallow would be a piece she could never catch, which is not what a field is for).
+  // Row fields: `types`/`material` (which parked spare a row claims: DebrisField._claimHeavySpare), `massMin..massMax` kg and
+  // `sizeMin..sizeMax` m (one roll), `tumbleDegS` (the spin, deg/s), and the placement in HER frame as for WELCOME_FIELD: `fwdMinM..
+  // fwdMaxM` ahead along-track (m; the seed rolls inside), `latM` right (+), `radM` up (+). Bands never overlap; all of them stay
+  // inside RESEAT.DIST_M (3,000 m).
+  HIGH_FIELD: [
+    { name: 'Dead upper stage (SL-14 class)',     types: ['rocketBody'], material: 'aluminum',  massMin: 1200, massMax: 1500, sizeMin: 5.2, sizeMax: 5.5, tumbleDegS: 2.5,
+      fwdMinM: 150,  fwdMaxM: 230,  latM: -35,  radM: 15 },    // #1 catalogue SL-14 R/B 1,400 kg / 6 m: cut to 5.2-5.5 m (estimate)
+    { name: 'Dead upper stage (Meteor-1 class)',  types: ['rocketBody'], material: 'steel',     massMin: 800,  massMax: 1000, sizeMin: 5.0, sizeMax: 5.4, tumbleDegS: 4,
+      fwdMinM: 380,  fwdMaxM: 500,  latM: 90,   radM: -30 },   // #2 catalogue Meteor-1 R/B 880 kg / 6.5 m: cut to 5.0-5.4 m (estimate)
+    { name: 'Dead satellite (Cosmos 1175 class)', types: ['defunctSat'], material: 'aluminum',  massMin: 1000, massMax: 1300, sizeMin: 3.8, sizeMax: 4.2, tumbleDegS: 3,
+      fwdMinM: 620,  fwdMaxM: 780,  latM: -140, radM: 50 },    // #3 catalogue Cosmos 1175 1,100 kg / 4 m
+    { name: 'Dead satellite (Meteor 2 class)',    types: ['defunctSat'], material: 'solar_cell', massMin: 1800, massMax: 2700, sizeMin: 4.4, sizeMax: 5.0, tumbleDegS: 1.5,
+      fwdMinM: 900,  fwdMaxM: 1100, latM: 190,  radM: -70 },   // #4 catalogue Meteor 2-18 2,750 kg / 5 m
+    { name: 'Dead satellite (Vespa class)',       types: ['defunctSat'], material: 'mli_mylar', massMin: 100,  massMax: 250,  sizeMin: 2.0, sizeMax: 2.6, tumbleDegS: 6,
+      fwdMinM: 1250, fwdMaxM: 1450, latM: -230, radM: 90 },    // #5 catalogue Vespa 112 kg / 2.6 m
+    { name: 'Dead microsatellite (est.)',         types: ['defunctSat'], material: 'composite', massMin: 250,  massMax: 450,  sizeMin: 2.2, sizeMax: 2.6, tumbleDegS: 5,
+      fwdMinM: 1650, fwdMaxM: 1850, latM: 280,  radM: -110 },  // #6 a named estimate (no catalogue entry between 112 and 556 kg)
+    { name: 'Dead small satellite (est.)',        types: ['defunctSat'], material: 'aluminum',  massMin: 50,   massMax: 120,  sizeMin: 1.4, sizeMax: 2.0, tumbleDegS: 8,
+      fwdMinM: 2050, fwdMaxM: 2300, latM: -330, radM: 120 },   // #7 a named estimate
+  ],
+  CATCH_MAX_SIDE_M: 5.5,    // m: no HIGH_FIELD piece is longer than this (the mother net's 6 m mouth less a margin)
+
+  // The parked heavy spares (lane 4a, H2a): `DebrisField._generateDebris` builds ONE spare for every row of every high field (4 x 7 = 28),
+  // of that row's type and material, after the live pool. A spare is parked out of play (not alive, not tracked, not drawn, not counted
+  // in any total or mission) until a high field claims it; a stored, claimed or caught spare is parked again on a new run.
+  // PARK_SIZE_M is the size a spare is built at: under the flag size (DEBRIS_VISUAL.FLAG_MIN_SIZE_M), so it never gets a flag overlay.
+  // SEED_XOR keys the spares' own random stream off the boot seed (disjoint from the assembly's and the background's, so neither moves).
+  HEAVY_SPARES: {
+    PARK_SIZE_M: 0.5,
+    SEED_XOR: 0x4EA77A5E,
+  },
+
+  // =========================================================================
   // FIELDS - the debris fields, stacked by height in the start orbit's tilt and node (Nets step 3 slice 2b,
   // DECISIONS §33 row 6; js/systems/FieldRegistry.js, FEATURE_FLAGS.FIELDS_BY_HEIGHT)
   // =========================================================================
@@ -5605,15 +5652,22 @@ export const Constants = {
   // "small pieces at 350-450 km" in the SAME tilt and node as the start orbit (tilting costs 134 m/s per degree, research doc).
   // Each holds PIECES pieces laid out like DebrisField's WELCOME_FIELD rows (3-10 kg fragments and a cubesat, the rows' own
   // masses); `seed` fixes the along-track rolls of the free rows, so the same field always looks the same.
+  // Slice 4 (lane 4a): every field has a `kind`. `low` = the WELCOME_FIELD rows above (PIECES of them); `high` = the HIGH_FIELD rows
+  // (one piece per row: HIGH_FIELD.length). A field with no `kind` is `low`. Four high fields at 750-900 km (row 6: "dead
+  // satellites and rocket stages at 750-900 km"): 35 low + 28 high = 63 pieces, and a run is won at 60 (WIN_DEBRIS_COUNT).
   // Heights, counts and seeds are ESTIMATES to tune (§33: "counts and prices are estimates to tune").
   FIELDS: {
     PIECES: 7,
     LIST: [
-      { id: 'f350', altKm: 350, seed: 350, start: true },
-      { id: 'f375', altKm: 375, seed: 375 },
-      { id: 'f400', altKm: 400, seed: 400 },
-      { id: 'f425', altKm: 425, seed: 425 },
-      { id: 'f450', altKm: 450, seed: 450 },
+      { id: 'f350', altKm: 350, seed: 350, kind: 'low', start: true },
+      { id: 'f375', altKm: 375, seed: 375, kind: 'low' },
+      { id: 'f400', altKm: 400, seed: 400, kind: 'low' },
+      { id: 'f425', altKm: 425, seed: 425, kind: 'low' },
+      { id: 'f450', altKm: 450, seed: 450, kind: 'low' },
+      { id: 'f750', altKm: 750, seed: 750, kind: 'high' },
+      { id: 'f800', altKm: 800, seed: 800, kind: 'high' },
+      { id: 'f850', altKm: 850, seed: 850, kind: 'high' },
+      { id: 'f900', altKm: 900, seed: 900, kind: 'high' },
     ],
   },
 
@@ -5623,8 +5677,10 @@ export const Constants = {
   // =========================================================================
   // Row 7: "Resupply satellite about 150 km above the start fields (about 85 m/s): it berths the mother at her nose collar, its arm
   // swaps net cartridges, it pumps gas; all buying moves there." One satellite at 500 km (350 -> 500 km = 84.5 m/s, research doc
-  // 2026-10-trips-by-height), in the start orbit's tilt and node like the fields; a second one near 800 km is slice 4. It is a PLACE,
-  // not a field: she is at a field or berthed at the satellite, and nothing is laid out while she is berthed.
+  // 2026-10-trips-by-height), in the start orbit's tilt and node like the fields. Slice 4 (lane 4a, H4) adds the second one at 825 km, in
+  // the same tilt and node, between the 800 and 850 km high fields: the same place with the same buying (a trip from one to the other is
+  // an ordinary trip by `planTo`). Both are listed here, in height order; every satellite reader goes through `FieldRegistry.satellites()`.
+  // It is a PLACE, not a field: she is at a field or berthed at a satellite, and nothing is laid out while she is berthed.
   // CALL_CREDITS is row 7's "Stuck: call it to you for 1,000 credits" (slice 3 lane 3c: the "where next" list's call row,
   // GameFlowManager._callSatellite). CALL_DAYS_EST is an ESTIMATE, not a measurement: the days a called satellite takes when the
   // real trip profile to its height cannot be read (the thruster cannot fly it); 16 = the 350 -> 500 km trip's days with drag off
@@ -5633,6 +5689,7 @@ export const Constants = {
   RESUPPLY: {
     SATS: [
       { id: 'sat500', altKm: 500, name: 'Resupply satellite' },
+      { id: 'sat825', altKm: 825, name: 'Resupply satellite' },      // slice 4 (lane 4a, H4): the second, near the high fields
     ],
     CALL_CREDITS: 1000,
     CALL_DAYS_EST: 16,

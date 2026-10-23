@@ -174,8 +174,8 @@ export class ClusterIcons {
    * @returns {string}
    */
   static nameLine(c) {
-    const n = (c && c.count > 0) ? c.count : 0;
-    const pieces = `${n} ${n === 1 ? 'piece' : 'pieces'}`;
+    let n = (c && c.count > 0) ? c.count : 0;
+    const pieces = (k) => `${k} ${k === 1 ? 'piece' : 'pieces'}`;
     // Nets step 3 lane 3e (FIELDS_BY_HEIGHT): a field is named by its height, not by an inclination band ('Field at 350 km'),
     // from the registry's field she is at; berthed at a satellite no field is out, so no field line. Flag off: today's text.
     const reg = _fieldRegistry();
@@ -183,9 +183,13 @@ export class ClusterIcons {
       if (typeof reg.isBerthed === 'function' ? reg.isBerthed() : !!(reg.berthedSatellite && reg.berthedSatellite())) return '';
       const f = typeof reg.currentField === 'function' ? reg.currentField()
         : (typeof reg.fields === 'function' && typeof reg.currentId === 'function' ? reg.fields().find((x) => x.id === reg.currentId()) : null);
-      if (f && Number.isFinite(f.altKm)) return `Field at ${Math.round(f.altKm)} km \u00b7 ${pieces}`;
+      if (f && Number.isFinite(f.altKm)) {
+        // The cluster snapshot is only re-polled on activate/plan; the height column and the list read the registry live, so this does too.
+        if (typeof reg.remainingCount === 'function') { const live = reg.remainingCount(f.id); if (Number.isFinite(live)) n = Math.max(0, live); }
+        return `Field at ${Math.round(f.altKm)} km \u00b7 ${pieces(n)}`;
+      }
     }
-    return `${ClusterIcons.plainName(c)} \u00b7 ${pieces}`;
+    return `${ClusterIcons.plainName(c)} \u00b7 ${pieces(n)}`;
   }
 
   /**
@@ -366,7 +370,8 @@ export class ClusterIcons {
       const verdict = a ? a.verdict : null;
       let estimate = null;
       if (focused && a) {
-        if (!simple) estimate = ClusterIcons.estimateLine(a);
+        // Height map on: the Hohmann ΔV/Gas/min line contradicts the real-thruster gas and days the column and list show, so it is not drawn.
+        if (!simple) estimate = _fieldRegistry() ? null : ClusterIcons.estimateLine(a);
         else if (!coOrbital) estimate = PLAIN_VERDICT_LINE[verdict] || null;   // u7 D1: co-orbital → no label
       }
       const dimmed = verdict === 'unreachable';

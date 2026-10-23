@@ -2446,7 +2446,33 @@ export class GameFlowManager {
 
   /** Lane 3c: what the "where next" rows need besides the registry (main.js `getRows` and every list this class builds read it). */
   whereNextRowsOpts() {
-    return { motherNets: this._motherNetsAboard(), credits: scoringSystem.credits, gasCredits: this._gasBuyPrice(), startOwed: this.missionStartOwed() };
+    return {
+      motherNets: this._motherNetsAboard(), credits: scoringSystem.credits, gasCredits: this._gasBuyPrice(), startOwed: this.missionStartOwed(),
+      turnWaitS: this._turnWaitsS(),
+    };
+  }
+
+  /**
+   * @private Slice 4 (S2): the real seconds a trip begun now would wait for her nose, up and down (the autopilot reads her attitude): the list's
+   * days include it, because the trip counts that wait as flown time. Undefined when the attitude cannot be read (the days are then the profile's).
+   * @returns {{up: number, down: number}|undefined}
+   */
+  _turnWaitsS() {
+    if (!this._shipCanTurn()) return { up: 0, down: 0 };       // a daughter still on her line: the trip flies no turn (TransferTrip._canTurn), so no wait
+    const ap = this._refs && this._refs.autopilotSystem;
+    return ap && typeof ap.tripTurnWaitsS === 'function' ? (ap.tripTurnWaitsS() || undefined) : undefined;
+  }
+
+  /**
+   * @private Nothing limits the ship's turn: the same two limits `TransferTrip._canTurn` reads (a daughter out on a tether holds the rotation
+   * lock; one clamped for a launch). Without the turn the trip flies no turn wait (fix round 1, F3), so the list adds none either.
+   * @returns {boolean}
+   */
+  _shipCanTurn() {
+    const am = this._refs && this._refs.armManager;
+    if (!am) return true;
+    if (typeof am.getRotationLockTier === 'function' && am.getRotationLockTier() !== 'none') return false;
+    return !(Array.isArray(am.arms) && am.arms.some((a) => a && a.state === Constants.ARM_STATES.LAUNCHING));
   }
 
   /**
@@ -2531,7 +2557,7 @@ export class GameFlowManager {
     const field = sat || reg.fieldById(id);
     if (!field) return false;
     if (!owed) return false;                                               // trips wait for the end of a mission that is going on (the rows say so)
-    if (sat ? !!berth : (!atSat && field.id === reg.currentId())) return false;     // (berthed: the satellite is where she is; the field she left is a pick)
+    if (sat ? !!(berth && berth.id === sat.id) : (!atSat && field.id === reg.currentId())) return false;     // (berthed: that satellite is where she is, the other one is a pick (fix round 1, F4); the field she left is a pick)
     if (!sat && reg.remainingCount(field.id) <= 0) return false;
     this._syncTripDeps();
     trip.leaveChoice();                                                    // idle again, so `begin` accepts the trip

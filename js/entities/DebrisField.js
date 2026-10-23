@@ -696,7 +696,7 @@ export class DebrisField {
 
     // ST-6.1: hybrid-mode boot log
     if (this._catalogLoader && this._catalogLoader.isReady && this._catalogLoader.isReady()) {
-      const proc = this.debrisList.length - this.realEntryCount;
+      const proc = this.debrisList.length - this.realEntryCount - (this._heavySpareCount || 0);
       console.log(`[DebrisField] HYBRID mode. ${this.realEntryCount} real catalogue + ${proc} procedural filler`);
     }
 
@@ -880,6 +880,8 @@ export class DebrisField {
       this.debrisMap.set(debris.id, debris);
       this.debrisList.push(debris);
     }
+    // Lane 4a H2a: the parked heavy spares take the ids after the live pool; `_nextId` is set after them, so no id repeats.
+    this._addHeavySpares();
     this._nextId = this.debrisList.length;
 
     const r = this._fieldRegime;
@@ -889,6 +891,97 @@ export class DebrisField {
       `alt ${r.altMinKm}–${r.altMaxKm} km, inc ${r.incCenterDeg.toFixed(1)}±${r.incTolDeg}°`);
 
     // UX-3 #9: All debris starts hidden — auto-discover runs after welcome-field spawn in update()
+  }
+
+  /**
+   * Lane 4a H2a (Nets step 3 slice 4): the PARKED HEAVY SPARES - one for every row of every `high` field in `Constants.FIELDS.LIST`
+   * (4 fields x the 7 `Constants.HIGH_FIELD` rows = 28), of that row's type and material. A high field lays its rows out through the
+   * ordinary field spawn path (`_spawnWelcomeField`), and a rocket stage or a dead satellite cannot be made from a fragment: an
+   * instanced mesh is sized and shaped once, at the build (`_buildInstancedMeshes`), and a retyped fragment still draws as a
+   * fragment. So the heavy bodies exist from the start, parked out of play, and a high field CLAIMS one per row.
+   *
+   * Parked = not alive, not tracked, not discovered, not a hazard, its instance scaled to nothing (`_buildInstancedMeshes`), and
+   * flag-ineligible (built at `HEAVY_SPARES.PARK_SIZE_M`, under the flag size). Every reader of the pool filters on `alive`, so a
+   * spare is in no total, no mission, no scan, no lock and no hazard list until it is claimed. They are NOT in FOREGROUND_CAST
+   * (that stays pinned to DEBRIS_PER_MISSION) and take ids after the live pool. Their orbits come from their own seeded stream
+   * (`_fieldSeed ^ HEAVY_SPARES.SEED_XOR`), disjoint from the assembly's and the background's, so neither moves; they are
+   * never re-seated by `reseatFieldRegime` and never revived as live debris (`_reviveStoredFieldPieces` parks them again).
+   * @private
+   */
+  _addHeavySpares() {
+    const rows = Array.isArray(Constants.HIGH_FIELD) ? Constants.HIGH_FIELD : [];
+    const lists = (Constants.FIELDS && Array.isArray(Constants.FIELDS.LIST)) ? Constants.FIELDS.LIST : [];
+    const highFields = lists.filter((f) => f && f.kind === 'high');
+    const hs = Constants.HEAVY_SPARES || {};
+    const rng = mulberry32(((this._fieldSeed >>> 0) ^ (hs.SEED_XOR | 0)) >>> 0);
+    let count = 0;
+    for (let f = 0; f < highFields.length; f++) {
+      for (const row of rows) {
+        const data = this._createDebrisData(this.debrisList.length, rng, DebrisField._spareSpec(row.types[0], row.material, row.massMin));
+        data._heavySpare = true;
+        data._spareClaimed = false;
+        data.alive = false;
+        data.tracked = false;
+        data.discovered = false;
+        this.debrisMap.set(data.id, data);
+        this.debrisList.push(data);
+        count++;
+      }
+    }
+    this._heavySpareCount = count;
+  }
+
+  /** @private The spec a spare is BUILT from: the row's type and material at the parked size (under the flag size), tracked = false. */
+  static _spareSpec(type, material, massKg) {
+    const hs = Constants.HEAVY_SPARES || {};
+    return { type, material, massKg, sizeM: Number.isFinite(hs.PARK_SIZE_M) ? hs.PARK_SIZE_M : 0.5, tracked: false };
+  }
+
+  /**
+   * A high-field row claims a parked spare of its type and material (the row's own look: the instanced mesh is the spare's). The
+   * first free one by id; with none of that material, the first free one of the type; null when the pool has none (a high field
+   * then lays out fewer pieces: it never invents one). A claimed spare stays claimed until `_parkHeavySpare` (a new run).
+   * @private
+   * @param {string} type @param {string} [material] @returns {object|null}
+   */
+  _claimHeavySpare(type, material) {
+    let anyOfType = null;
+    for (const d of this.debrisList) {
+      if (!d._heavySpare || d._spareClaimed || d.type !== type) continue;
+      if (!material || d.material === material) { d._spareClaimed = true; return d; }
+      if (!anyOfType) anyOfType = d;
+    }
+    if (anyOfType) anyOfType._spareClaimed = true;
+    return anyOfType;
+  }
+
+  /**
+   * Park a spare again (a new run, a game-over continue): the body is reset to a fresh parked one of the same id, type and material
+   * (every lifecycle flag a piece accrues - credited, caught, pinned, netted, tagged to a field - goes with it, and the object keeps
+   * its identity), taken out of play and drawn at no size. The mesh slot (`_meshKey`, instance) is the spare's own and is kept.
+   * @private
+   * @param {object} d a `_heavySpare` piece
+   */
+  _parkHeavySpare(d) {
+    if (this._heldProxies && this._heldProxies.has(d.id)) this._dropHeldProxy(d.id);
+    const fresh = this._createDebrisData(d.id, Math.random, DebrisField._spareSpec(d.type, d.material, d.mass));
+    const keep = { _meshKey: d._meshKey };
+    for (const k of Object.keys(d)) if (!(k in fresh)) delete d[k];
+    Object.assign(d, fresh, keep);
+    d._heavySpare = true;
+    d._spareClaimed = false;
+    d.alive = false;
+    d.tracked = false;
+    d.discovered = false;
+    const lookup = this._instanceLookup && this._instanceLookup.get(d.id);
+    if (lookup) {
+      const mesh = this.instancedMeshes[lookup.meshKey];
+      if (mesh && this._tempMatrix) {
+        this._tempMatrix.makeScale(0, 0, 0);
+        mesh.setMatrixAt(lookup.instanceIndex, this._tempMatrix);
+        mesh.instanceMatrix.needsUpdate = true;
+      }
+    }
   }
 
   /**
@@ -1096,6 +1189,7 @@ export class DebrisField {
       // Never re-seat a player-pinned piece (the welcome cluster / the
       // onboarding tease) — its position is pinned to the PLAYER's orbit.
       if (d.welcomeSpawn || d._onboardingPinned) continue;
+      if (d._heavySpare) continue;              // lane 4a: a parked spare takes no draw (the stream stays a function of the live pool)
       reseatOne(d.orbit);
       seated++;
     }
@@ -1562,8 +1656,13 @@ export class DebrisField {
         mesh.setColorAt(idx, _tmpTypeColor);
       }
 
-      // Set initial transform
-      this._updateInstanceTransform(d, idx);
+      // Set initial transform (a parked heavy spare is drawn at no size until a high field claims it)
+      if (d._heavySpare) {
+        this._tempMatrix.makeScale(0, 0, 0);
+        if (mesh) mesh.setMatrixAt(idx, this._tempMatrix);
+      } else {
+        this._updateInstanceTransform(d, idx);
+      }
     }
 
     // Mark instanceColor as updated
@@ -2069,6 +2168,7 @@ export class DebrisField {
       let hidden = 0;
       for (const d of this.debrisList) {
         if (d.welcomeSpawn) continue;
+        if (d._heavySpare) continue;            // lane 4a: a parked spare is not "hidden for mission 1": MISSION_START would revive it
         if (d._hiddenForMission1) continue;
         d._hiddenForMission1 = true;
         d.alive = false;
@@ -3624,6 +3724,27 @@ export class DebrisField {
   }
 
   /**
+   * Lane 4a H1/H2 (Nets step 3 slice 4): the resolved spec of one row of a HIGH field - a `Constants.HIGH_FIELD` row with this
+   * field's rolls applied, in the shape of a WELCOME_FIELD row so the spawn path and the re-seat read it alike. ONE roll
+   * (`fieldRoll(seed, row + 100)`, independent of the along-track roll `fieldRoll(seed, row)`) picks mass and size inside the row's
+   * ranges, so a heavier piece is a bigger one and the four high fields differ; the same seed always gives the same piece.
+   * `high: true` is what keeps the 10 kg ceiling of the mission-1 cluster off it.
+   * @param {number} seed the field's seed @param {number} row the row index
+   * @returns {object|null} null for a row the table does not have
+   */
+  static highFieldSpec(seed, row) {
+    const r = Array.isArray(Constants.HIGH_FIELD) ? Constants.HIGH_FIELD[row] : null;
+    if (!r) return null;
+    const u = DebrisField.fieldRoll(seed, row + 100);
+    const massKg = r.massMin + u * (r.massMax - r.massMin);
+    const sizeM = r.sizeMin + u * (r.sizeMax - r.sizeMin);
+    return {
+      high: true, name: r.name, types: r.types, material: r.material, sizeM, massMin: massKg, massMax: massKg,
+      tumbleDegS: r.tumbleDegS, fwdMinM: r.fwdMinM, fwdMaxM: r.fwdMaxM, latM: r.latM || 0, radM: r.radM || 0,
+    };
+  }
+
+  /**
    * She is leaving a field (or laying it out again on a Stay): every piece of a field that is still free is taken out of play
    * - not alive, not tracked, its instance scaled to nothing - and kept by (field, row) so the next visit puts the SAME piece
    * back. They are stored, not simulated. A piece somebody holds (a catch on her nose, a rack, a tip, a net, a daughter's hand)
@@ -3710,12 +3831,14 @@ export class DebrisField {
    */
   _reviveStoredFieldPieces() {
     for (const d of this._fieldStored.values()) {
+      if (d._heavySpare) continue;              // lane 4a: a heavy spare is never ordinary debris - it is parked again below
       d.alive = true;
       d.tracked = !d.hazard;
       d._fieldStored = false;
     }
     this._fieldStored.clear();
     for (const d of this.debrisList) {
+      if (d._heavySpare) { this._parkHeavySpare(d); continue; }   // stored, claimed in the sky or caught: back in the pool, claimable again
       if (d.fieldId != null) { d.fieldId = null; d.fieldRow = null; }
     }
   }
@@ -3743,14 +3866,20 @@ export class DebrisField {
     // field she left are stored, and a row's piece comes back from the store when she has been here before. Flag off (or no
     // registry, or a test mock that never had one): `fieldPlan` is null and this is today's seven.
     const fieldPlan = this._fieldSource && typeof this._fieldSource.spawnPlan === 'function' ? this._fieldSource.spawnPlan() : null;
-    let fieldRows = null;                       // the WELCOME_FIELD row index of each piece to lay out (null = all, in order)
+    // Lane 4a (slice 4): a HIGH field (`fieldPlan.kind === 'high'`) indexes the HIGH_FIELD rows instead, resolved with the field's
+    // seed (`highFieldSpec`); its pieces are parked heavy spares claimed below. Everything else about the path is the same.
+    const isHigh = !!fieldPlan && fieldPlan.kind === 'high';
+    let fieldRows = null;                       // the WELCOME_FIELD (or HIGH_FIELD) row index of each piece to lay out (null = all, in order)
     if (fieldPlan) {
       this.storeFieldPieces();                  // anything of hers still free goes back into store first (a Stay re-seats it)
-      fieldRows = fieldPlan.rows.filter((r) => Number.isInteger(r) && WELCOME_FIELD[r]);
+      const table = isHigh ? Constants.HIGH_FIELD : WELCOME_FIELD;
+      fieldRows = fieldPlan.rows.filter((r) => Number.isInteger(r) && table[r]);
       if (Number.isInteger(fieldPlan.missionNumber) && fieldPlan.missionNumber > 0) this._currentMissionNumber = fieldPlan.missionNumber;
     }
-    const fieldToSpawn = fieldRows ? fieldRows.map((r) => WELCOME_FIELD[r]) : WELCOME_FIELD;
-    const rowOf = (i) => (fieldRows ? fieldRows[i] : i);   // the WELCOME_FIELD row spec i of `fieldToSpawn` came from
+    const fieldToSpawn = fieldRows
+      ? fieldRows.map((r) => (isHigh ? DebrisField.highFieldSpec(fieldPlan.seed, r) : WELCOME_FIELD[r]))
+      : WELCOME_FIELD;
+    const rowOf = (i) => (fieldRows ? fieldRows[i] : i);   // the row spec i of `fieldToSpawn` came from
 
     // Collect candidates: alive debris not already special-tagged. Prefer debris
     // in different orbit bands (farThreshold ≈ 3km altitude diff) so we don't
@@ -3847,8 +3976,12 @@ export class DebrisField {
       // any unused candidate (score ≥ 0), so it only returns null when that pool
       // is exhausted/empty — fall straight through to far-other then near.
       // slice 2b: a row she has been to before gets ITS piece back (taken out of play when she left); else a fresh candidate.
+      // lane 4a: a high row takes its stored piece back, else CLAIMS a parked heavy spare of its type and material - never a
+      // fragment, never a new body (`_claimHeavySpare`); none left means the field lays out fewer pieces.
+      const claim = this._claimHeavySpare || DebrisField.prototype._claimHeavySpare;
       let chosen = (fieldPlan && this._takeStoredFieldPiece(fieldPlan.fieldId, rowOf(i)))
-        || pickFar(spec) || pickAny(farOther) || pickAny(fallbackCandidates);
+        || (spec.high ? claim.call(this, desiredType(spec), spec.material)
+          : (pickFar(spec) || pickAny(farOther) || pickAny(fallbackCandidates)));
       if (!chosen) break; // ran out of candidates entirely
       usedIds.add(chosen.id);
       assigned[i] = chosen;
@@ -3902,8 +4035,10 @@ export class DebrisField {
       // the whole welcome cluster to that ceiling — otherwise the curated first
       // target (and most of the cluster) trips "Target too massive for Mother
       // net. Try deploying a Daughter [D]", contradicting the onboarding script.
+      // (Lane 4a: a high-field row is heavy by design - its rows are the pieces that need the mother net or a daughter, and
+      // every one is held under the net's own cap by `Constants.HIGH_FIELD` - so the ceiling is for the low rows only.)
       const netCeil = Constants.LASSO_MAX_CAPTURE_MASS;
-      if (Number.isFinite(netCeil) && debris.mass > netCeil) {
+      if (!spec.high && Number.isFinite(netCeil) && debris.mass > netCeil) {
         debris.mass = netCeil;
       }
 
@@ -3996,6 +4131,13 @@ export class DebrisField {
         (debris.salvage.metals && debris.salvage.metals.length > 0);
       debris.metalMassKg = (debris.salvage.metals || [])
         .reduce((sum, m) => sum + m.amount, 0);
+
+      // Lane 4a: a claimed spare was built at a parked mass; its capture flags (grapple fixture by mass) follow the real mass,
+      // and the row's name rides on the piece (informational, as a catalogue piece's).
+      if (spec.high) Object.assign(debris, deriveCaptureFlags(debris.material, debris.type, debris.mass));
+      if (spec.name) debris.name = spec.name;
+      // H2b: the piece keeps ITS OWN row spec (a high row is not a WELCOME_FIELD row); re-seat reads it, never the table by index.
+      debris._fieldSpec = spec;
 
       // Mark as welcome spawn, ensure visible
       debris.welcomeSpawn = true;
@@ -5166,7 +5308,9 @@ export class DebrisField {
     for (const debris of this.debrisList) {
       if (!debris.alive || !debris.welcomeSpawn) continue;
       if (!Number.isInteger(debris._welcomeSpecIndex)) continue;
-      const spec = WELCOME_FIELD[debris._welcomeSpecIndex];
+      // H2b (lane 4a): the piece's own row spec (a high field's piece is not a WELCOME_FIELD row); a piece placed before
+      // `_fieldSpec` existed (a test rig that sets only the index) falls back to the low table.
+      const spec = debris._fieldSpec || WELCOME_FIELD[debris._welcomeSpecIndex];
       if (!spec) continue;
       if (debris._captured || debris._onboardingPinned || debris._armPinned ||
           debris._capturedByArm || debris._motherParked) {

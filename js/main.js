@@ -1467,7 +1467,7 @@ async function init() {
       if (fp === 'bloom') player.setFlowerPose('CARGO');
     }
   }
-  // Nets step 3 slice 2b: `?fields` turns on fields by height for this boot (FEATURE_FLAGS.FIELDS_BY_HEIGHT, off by default):
+  // Nets step 3 slice 2b: `?fields` turns on fields by height for this boot (FEATURE_FLAGS.FIELDS_BY_HEIGHT, on by default):
   // the mission boundary flies her to another debris field with her real thruster instead of burning in place.
   // `?fields=0` / `off` / `false` mean OFF (lane 3d: any value used to turn it on).
   { const fieldsParam = fieldsFromSearch(window.location.search); if (fieldsParam !== null) Constants.FEATURE_FLAGS.FIELDS_BY_HEIGHT = fieldsParam; }

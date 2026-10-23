@@ -190,6 +190,31 @@ const _Q_TRIP_RETRO = new THREE.Quaternion(0, 1, 0, 0);
 const _Q_IDENTITY = new THREE.Quaternion();
 
 /**
+ * Nets step 3 slice 4 (S2): the angle the trip's hold still has to turn her nose through, from where it points now. PURE: `offset` is her
+ * attitude relative to prograde (prograde^-1 * attitude, the `_manualRotation` the hold eases); a climb pushes along her motion (the hold
+ * eases the offset to nothing), a descent against it (to the half turn about her up axis). The same two laws as
+ * `AutopilotSystem.tripTurnErrorRad`, which reads them off the live hold.
+ * @param {THREE.Quaternion} offset @param {boolean} retro true = a descent
+ * @returns {number} rad, 0..pi
+ */
+export function tripTurnErrorFor(offset, retro) {
+  return retro ? offset.angleTo(_Q_TRIP_RETRO) : 2 * Math.acos(Math.min(1, Math.abs(offset.w)));
+}
+
+/**
+ * Nets step 3 slice 4 (S2): the real seconds the trip waits for her nose before the push counts, for a turn of `errRad` at the autopilot's
+ * turn rate (`AP_ROT_RATE`, 0.2 rad/s): the push counts once she is within TRIP.TURN_OK_DEG of the burn attitude (`TransferTrip._pushBlocked`),
+ * and the wait is bounded by TRIP.TURN_WAIT_MAX_S. A turn on the tail boxes (sloth mode: the steering gas is out) is much slower and is
+ * not modelled here. PURE: `TransferTrip` flies this wait, the where-next list adds it to a trip's days.
+ * @param {number} errRad @returns {number} real seconds, >= 0
+ */
+export function tripTurnWaitS(errRad) {
+  if (!Number.isFinite(errRad)) return 0;
+  const left = errRad - Constants.TRIP.TURN_OK_DEG * Math.PI / 180;
+  return left > 0 ? Math.min(Constants.TRIP.TURN_WAIT_MAX_S, left / AP_ROT_RATE) : 0;
+}
+
+/**
  * Skip threshold (radians) for the rotation slew: below this the nose is already where it should be (numerical noise),
  * so no write. It is NOT a visible dead zone. It was 0.01 rad (0.57 deg): a prograde follow at the ship's 0.011 rad/s
  * turn rate then waited for the error to pass 0.57 deg and hopped 11.5 deg/s back to zero, 2-7 hops/s with a mean of
@@ -494,6 +519,7 @@ export class AutopilotSystem {
     this._aimInvQuat = new THREE.Quaternion();
     this._aimLocalDir = new THREE.Vector3();
     this._tripRel = new THREE.Quaternion();   // sloth mode: the trip turn's relative rotation (scratch)
+    this._tripWaitQ = new THREE.Quaternion(); // slice 4: the list's turn-wait read of her attitude (scratch)
     this._tripOmega = 0;                      // sloth mode: the trip turn's rate on the tail boxes (rad/s)
     /** ap-gas D3: what the engaged autopilot / the trip hold has already said about its slow turn (one engagement). */
     this._slow = { said: false, kind: null, mode: null, ref: null, noPowerSaid: false };
@@ -660,7 +686,23 @@ export class AutopilotSystem {
     const p = this._player;
     if (!this._tripHold || !this._tripTurn || this._engaged || !p || !p._manualRotation) return 0;
     if (this._turn || this._aimCoroutine || this._attitudeHold) return 0;
-    return this._tripRetro ? p._manualRotation.angleTo(_Q_TRIP_RETRO) : 2 * Math.acos(Math.min(1, Math.abs(p._manualRotation.w)));
+    return tripTurnErrorFor(p._manualRotation, this._tripRetro);
+  }
+
+  /**
+   * Nets step 3 slice 4 (S2): the turn wait a trip started NOW would fly, real seconds, for each way she can go: `up` (a climb: nose along her
+   * motion) and `down` (a descent: against it). Before a trip the hold has not started (`tripTurnErrorRad` reads 0), so the angle is taken from
+   * her attitude as it stands: prograde^-1 * quaternion, the offset the hold folds in when it starts (`PlayerSatellite._handAttitudeToPlayer`).
+   * The where-next list adds it to the days it shows (`WhereNextRows`, `opts.turnWaitS`).
+   * @returns {{up: number, down: number}|null} null when her attitude or orbit cannot be read (no ship, a stub)
+   */
+  tripTurnWaitsS() {
+    const p = this._player;
+    if (!p || !p.quaternion || typeof p._progradeQuat !== 'function') return null;
+    const pg = p._progradeQuat(this._tripWaitQ);
+    if (!pg) return null;
+    const offset = pg.invert().multiply(p.quaternion).normalize();
+    return { up: tripTurnWaitS(tripTurnErrorFor(offset, false)), down: tripTurnWaitS(tripTurnErrorFor(offset, true)) };
   }
 
   /** @returns {boolean} true while the transfer trip's hold is on (the strip reads TRANSFER) */

@@ -28,6 +28,8 @@ export const HEIGHT_SCALE_ID = 'field-height-scale';
 /** Chip height (px; two lines: the height and pieces, then gas and days): a pointer, and glass (44 px touch target). */
 export const CHIP_PX_DESKTOP = 36;
 export const CHIP_PX_GLASS = 44;
+/** The smallest a chip shrinks to when the column does not fit (slice 4: 9 fields + 2 satellites are 11 chips + the marker row; two lines of text at 0.7 / 0.64 rem). */
+export const CHIP_PX_MIN = 30;
 /** The "You" marker row's height (px), the gap between rows, the column's width. */
 export const YOU_PX = 22;
 export const GAP_PX = 3;
@@ -148,11 +150,7 @@ export function placeColumn(ship, { w, h, viewW, viewH, rects = [] }) {
   const left = SIDE_MIN_PX;
   const lo = TOP_MIN_PX;
   const hi = Math.max(lo, viewH - BOTTOM_MIN_PX - h);
-  let top0 = lo;
-  for (const r of rects) {
-    if (!r || !(left < r.x + r.w && left + w > r.x)) continue;
-    if (r.y < viewH * TOP_ZONE) top0 = Math.max(top0, r.y + r.h + PANEL_GAP_PX);
-  }
+  const top0 = columnTop(w, viewH, rects);
   const m = SHIP_GAP_PX / 2;
   const all = rects.slice();
   if (ship && Number.isFinite(ship.x) && Number.isFinite(ship.y)) all.push({ x: ship.x - m, y: ship.y - m, w: 2 * m, h: 2 * m });
@@ -160,6 +158,46 @@ export function placeColumn(ship, { w, h, viewW, viewH, rects = [] }) {
     if (!all.some((r) => hits(left, t, w, h, r))) return { left, top: t, side: 'left', clear: true };
   }
   return { left, top: Math.min(top0, hi), side: 'left', clear: false };
+}
+
+/** @private Where the column's top stands: TOP_MIN_PX, or just under the lowest top panel that shares its columns. */
+function columnTop(w, viewH, rects) {
+  let top0 = TOP_MIN_PX;
+  for (const r of rects) {
+    if (!r || !(SIDE_MIN_PX < r.x + r.w && SIDE_MIN_PX + w > r.x)) continue;
+    if (r.y < viewH * TOP_ZONE) top0 = Math.max(top0, r.y + r.h + PANEL_GAP_PX);
+  }
+  return top0;
+}
+
+/**
+ * Slice 4 (S4): the room the column has at the left edge, px: from its top spot (under the lowest top panel) down to just above the highest
+ * panel below it that shares its columns (the bottom-left info panel, the where-next list if it reaches that far left), or the bottom limit.
+ * Her marker is not counted: it moves, and the column steps round it. Pure.
+ * @param {{w: number, viewW: number, viewH: number, rects?: Array<{x,y,w,h}>}} a
+ * @returns {number}
+ */
+export function columnRoom({ w, viewH, rects = [] }) {
+  const top0 = columnTop(w, viewH, rects);
+  let bottom = viewH - BOTTOM_MIN_PX;
+  for (const r of rects) {
+    if (!r || !(SIDE_MIN_PX < r.x + r.w && SIDE_MIN_PX + w > r.x)) continue;
+    if (r.y >= viewH * TOP_ZONE && r.y > top0) bottom = Math.min(bottom, r.y - PANEL_GAP_PX);
+  }
+  return Math.max(0, bottom - top0);
+}
+
+/**
+ * Slice 4 (S4): the chip height for the column: the nominal one (36 px, 44 px on glass) when the column fits in `roomPx`, else the largest
+ * height from there down to CHIP_PX_MIN that does (or CHIP_PX_MIN when even that does not fit: the column then overlaps and `placeColumn`
+ * says `clear: false`). Pure.
+ * @param {ScaleItem[]} items @param {number} nominalPx @param {number} roomPx
+ * @returns {number} px
+ */
+export function fitChipPx(items, nominalPx, roomPx) {
+  let px = Math.max(CHIP_PX_MIN, Math.floor(nominalPx));
+  while (px > CHIP_PX_MIN && columnHeight(items, px) > roomPx) px--;
+  return px;
 }
 
 export class HeightScale {
@@ -187,6 +225,7 @@ export class HeightScale {
     this._els = [];
     this._paintKey = null;
     this._shapeKey = null;
+    this._chipPx = 0;               // the chip height painted (render fits it to the room; 0 = the nominal one)
     this._parts = [];
     this._posKey = null;
     this._rects = [];
@@ -239,7 +278,6 @@ export class HeightScale {
     this._items = items;
     this._ensureRoot();
     if (!this._root) return { items, left: 0, top: 0, side: 'right' };
-    this._paint();
     const W = Number.isFinite(ctx.viewW) ? ctx.viewW : (typeof window !== 'undefined' ? window.innerWidth : 1366);
     const H = Number.isFinite(ctx.viewH) ? ctx.viewH : (typeof window !== 'undefined' ? window.innerHeight : 1024);
     const now = this._now();
@@ -248,8 +286,13 @@ export class HeightScale {
       try { this._rects = ctx.rects() || []; } catch (_e) { this._rects = []; }
     }
     const rects = this._rects.filter((r) => r && r.id !== HEIGHT_SCALE_ID).concat(this._listRect());
-    const chipPx = this._glass() ? CHIP_PX_GLASS : CHIP_PX_DESKTOP;
     const w = Math.min(WIDTH_PX, W - 2 * SIDE_MIN_PX);
+    // slice 4 (S4): 9 fields + 2 satellites are 11 chips: when the column does not fit between the top panels and the bottom-left panel,
+    // the chips shrink to fit (never below CHIP_PX_MIN)
+    const nominal = this._glass() ? CHIP_PX_GLASS : CHIP_PX_DESKTOP;
+    const chipPx = fitChipPx(items, nominal, columnRoom({ w, viewW: W, viewH: H, rects }));
+    if (chipPx !== this._chipPx) { this._chipPx = chipPx; this._paintKey = null; }
+    this._paint();
     const h = columnHeight(items, chipPx);
     const p = ctx.shipPx && Number.isFinite(ctx.shipPx.x) && Number.isFinite(ctx.shipPx.y) ? ctx.shipPx : null;   // null = behind the camera
     const at = placeColumn(p, { w, h, viewW: W, viewH: H, rects });
@@ -324,7 +367,7 @@ export class HeightScale {
     const glass = !!this._glass();
     const open = !!(this._list && this._list.isOpen && this._list.isOpen());
     const shapeKey = JSON.stringify([glass, open, this._items.map((i) => [i.id, i.kind, i.rowId != null, !!i.detail])]);
-    const key = JSON.stringify([shapeKey, this._items.map((i) => [i.text, i.detail, i.here, i.focused, i.selectable, i.cleared])]);
+    const key = JSON.stringify([shapeKey, this._chipPx, this._items.map((i) => [i.text, i.detail, i.here, i.focused, i.selectable, i.cleared])]);
     if (key === this._paintKey) return;
     this._paintKey = key;
     if (shapeKey !== this._shapeKey) {
@@ -350,7 +393,7 @@ export class HeightScale {
         this._parts.push(part);
       }
     }
-    const chipPx = glass ? CHIP_PX_GLASS : CHIP_PX_DESKTOP;
+    const chipPx = this._chipPx > 0 ? this._chipPx : (glass ? CHIP_PX_GLASS : CHIP_PX_DESKTOP);
     this._items.forEach((it, i) => {
       const el = this._els[i];
       const { a, b } = this._parts[i];
