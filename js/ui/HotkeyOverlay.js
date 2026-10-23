@@ -12,6 +12,7 @@
  *
  * @module ui/HotkeyOverlay
  */
+import { wordsFor } from '../systems/resupplyWords.js';
 
 // Grouped hotkey reference. Each group → list of rows
 // `[chips, description, opts?]`. `chips` is an array; a chip may itself contain
@@ -481,7 +482,7 @@ export class HotkeyOverlay {
 
     const label = document.createElement('span');
     Object.assign(label.style, { color: '#cfcfcf', flex: '1', lineHeight: '1.35', whiteSpace: 'nowrap' });
-    label.textContent = grey ? `${desc} — ${grey}` : desc;
+    label.textContent = wordsFor(grey ? `${desc} — ${grey}` : desc);   // lane 3d: the B row says "resupply satellite" with the map on
 
     row.appendChild(keyWrap);
     row.appendChild(label);

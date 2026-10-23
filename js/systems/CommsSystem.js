@@ -18,6 +18,7 @@ import { messagePassesSuppression, rampSuppressionTier, postOnboardingStartTier 
 import { missReasonToText } from '../entities/CaptureNet.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
+import { depotWords } from './resupplyWords.js';   // lane 3d: the "depot" advice reads the map switch
 
 // ============================================================================
 // CONFIGURATION
@@ -676,7 +677,7 @@ export class CommsSystem {
       const pct = data && Number.isFinite(data.level) ? Math.round(data.level / Constants.XENON_FUEL_MAX * 100) : 10;
       // CP-4: survival warning — must reach the player even during the wake ramp.
       // h4-simple-first D10: the text names the fuel actually loaded (last FUEL_CHANGED, else the default fuel's).
-      this.addMessage(tmpl.priority, tmpl.source, tmpl.template.replace('{fuel}', this._fuelName().toLowerCase()).replace('{pct}', pct), { _critical: true });
+      this.addMessage(tmpl.priority, tmpl.source, depotWords(tmpl.template).replace('{fuel}', this._fuelName().toLowerCase()).replace('{pct}', pct), { _critical: true });
     });
 
     eventBus.on(Events.PLAYER_LOW_BATTERY, (data) => {

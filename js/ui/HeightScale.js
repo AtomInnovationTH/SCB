@@ -1,12 +1,12 @@
 /**
- * HeightScale - the fields and the resupply satellite on floor 4 (the LEO map), as a height scale beside her ship marker
+ * HeightScale - the fields and the resupply satellite on floor 4 (the LEO map), as a height scale at the left edge of the map
  * (Nets step 3 slice 3, lane 3e s3-map-icons; DECISIONS §33 row 6: "floor 4 shows the next fields and the satellite with fuel and
  * travel time"; FEATURE_FLAGS.FIELDS_BY_HEIGHT).
  *
  * Why a scale and not icons at map positions: a field is a ring at a HEIGHT in her tilt, not a point (the registry knows only
  * `altKm`), and the cluster icons (ClusterIcons) group the debris by inclination band and height cell, so f350 and f375 share one
- * "ISS Band" icon and the other fields have none (only her own field's pieces are laid out). So the chips stand in a column beside
- * her ship marker, highest at the top:
+ * "ISS Band" icon and the other fields have none (only her own field's pieces are laid out). So the chips stand in a column at
+ * the left edge of the screen (off the globe, under the top-left panels, owner 2026-10-23), highest at the top:
  *   "450 km · cleared"   "425 km · 7 pieces"   "Resupply satellite · 500 km"   ...   "You · 352 km" (her real height, marked)
  * While the where-next list is open each chip also carries its row's gas and days ("0.6 kg gas · 5 days", "needs 1.2 kg gas, 0.4 kg
  * short"), the focused row's chip is highlighted, and tapping a chip FOCUSES its row (`WhereNextList.focus`, never a pick: flying
@@ -32,9 +32,9 @@ export const CHIP_PX_GLASS = 44;
 export const YOU_PX = 22;
 export const GAP_PX = 3;
 export const WIDTH_PX = 236;
-/** How far right (or left) of her ship marker the column stands (px): clear of the 18 px chevron and its ring. */
+/** Her ship marker's clearance box (px, side of the square): the 18 px chevron and its ring. The column keeps clear of it. */
 export const SHIP_GAP_PX = 44;
-/** Keep the column off the top HUD strip (vitals, comms, score: 0-262 px down at 1366x1024) and the bottom rail (px). */
+/** The column never stands higher than this (px), and keeps this far above the bottom edge. */
 export const TOP_MIN_PX = 90;
 export const BOTTOM_MIN_PX = 24;
 export const SIDE_MIN_PX = 8;
@@ -129,44 +129,37 @@ export function columnHeight(items, chipPx) {
 
 function hits(l, t, w, h, r) { return l < r.x + r.w && l + w > r.x && t < r.y + r.h && t + h > r.y; }
 
+/** The gap kept under the top-left panels and above the bottom-left one (px). */
+export const PANEL_GAP_PX = 8;
+/** A panel that starts within the top quarter of the screen is a top panel: the column stands under the lowest of those. */
+const TOP_ZONE = 0.25;
+
 /**
- * Where the column goes: beside her ship marker (right first, else left), centred on it, clamped to the screen and moved up or down
- * (24 px steps, the least move) until it clears every rect (the HUD panels, the where-next list). When nothing clears, the clamped
- * right-hand spot. Pure.
+ * Where the column goes (owner 2026-10-23: "Move them off the globe"): the LEFT EDGE of the screen (left = SIDE_MIN_PX), never
+ * beside her marker. Its top is just under the lowest top panel that shares its columns (the rects the caller reads from the DOM:
+ * the vitals box, the "AP OFF" strip), then it steps down (8 px) until it clears every other rect (the bottom-left info panel,
+ * the where-next list) and her marker (SHIP_GAP_PX wide square, the chevron and its ring); it never goes below the bottom limit.
+ * When nothing clears it stays at the top spot (`clear: false`). Pure.
  * @param {{x: number, y: number}} ship her marker's screen position
  * @param {{w: number, h: number, viewW: number, viewH: number, rects?: Array<{x,y,w,h}>}} a
- * @returns {{left: number, top: number, side: 'right'|'left', clear: boolean}}
+ * @returns {{left: number, top: number, side: 'left', clear: boolean}}
  */
 export function placeColumn(ship, { w, h, viewW, viewH, rects = [] }) {
+  const left = SIDE_MIN_PX;
   const lo = TOP_MIN_PX;
   const hi = Math.max(lo, viewH - BOTTOM_MIN_PX - h);
-  const clampT = (t) => Math.min(hi, Math.max(lo, t));
-  const ideal = clampT(ship.y - h / 2);
-  const fitsRight = ship.x + SHIP_GAP_PX + w <= viewW - SIDE_MIN_PX;
-  const fitsLeft = ship.x - SHIP_GAP_PX - w >= SIDE_MIN_PX;
-  const lefts = [
-    { side: 'right', left: Math.min(viewW - w - SIDE_MIN_PX, Math.max(SIDE_MIN_PX, ship.x + SHIP_GAP_PX)), pen: 0, ok: fitsRight },
-    { side: 'left', left: Math.min(viewW - w - SIDE_MIN_PX, Math.max(SIDE_MIN_PX, ship.x - SHIP_GAP_PX - w)), pen: 12, ok: fitsLeft },
-  ];
-  let best = null;
-  // a side that runs off the screen would stand over her marker: it is the last resort, after a side that fits
-  for (const c of lefts.filter((x) => x.ok).concat(lefts.filter((x) => !x.ok && !(fitsRight || fitsLeft)))) {
-    for (let k = 0; ; k++) {
-      const offs = k === 0 ? [0] : [-24 * k, 24 * k];
-      let any = false;
-      for (const o of offs) {
-        const t = ideal + o;
-        if (t < lo - 1e-9 || t > hi + 1e-9) continue;
-        any = true;
-        if (rects.some((r) => hits(c.left, t, w, h, r))) continue;
-        const cost = Math.abs(o) + c.pen;
-        if (!best || cost < best.cost) best = { left: c.left, top: t, side: c.side, clear: true, cost };
-      }
-      if (!any && k > 0) break;
-    }
+  let top0 = lo;
+  for (const r of rects) {
+    if (!r || !(left < r.x + r.w && left + w > r.x)) continue;
+    if (r.y < viewH * TOP_ZONE) top0 = Math.max(top0, r.y + r.h + PANEL_GAP_PX);
   }
-  if (best) return { left: best.left, top: best.top, side: best.side, clear: true };
-  return { left: lefts[0].left, top: ideal, side: 'right', clear: false };
+  const m = SHIP_GAP_PX / 2;
+  const all = rects.slice();
+  if (ship && Number.isFinite(ship.x) && Number.isFinite(ship.y)) all.push({ x: ship.x - m, y: ship.y - m, w: 2 * m, h: 2 * m });
+  for (let t = top0; t <= hi + 1e-9; t += 8) {
+    if (!all.some((r) => hits(left, t, w, h, r))) return { left, top: t, side: 'left', clear: true };
+  }
+  return { left, top: Math.min(top0, hi), side: 'left', clear: false };
 }
 
 export class HeightScale {
@@ -231,7 +224,7 @@ export class HeightScale {
   // ── Frame ──────────────────────────────────────────────────────────────────
 
   /**
-   * One frame while floor 4 is the floor she is on: refresh the chips and put the column beside her marker. Map off = nothing built.
+   * One frame while floor 4 is the floor she is on: refresh the chips and put the column at the left edge of the screen. Map off = nothing built.
    * @param {object} [ctx]
    * @param {{x: number, y: number, visible?: boolean}|null} [ctx.shipPx] her ship marker's screen position
    * @param {number} [ctx.viewW] @param {number} [ctx.viewH]   viewport (default: the window's)
@@ -258,7 +251,7 @@ export class HeightScale {
     const chipPx = this._glass() ? CHIP_PX_GLASS : CHIP_PX_DESKTOP;
     const w = Math.min(WIDTH_PX, W - 2 * SIDE_MIN_PX);
     const h = columnHeight(items, chipPx);
-    const p = ctx.shipPx && Number.isFinite(ctx.shipPx.x) && Number.isFinite(ctx.shipPx.y) ? ctx.shipPx : { x: W * 0.12, y: H * 0.5 };
+    const p = ctx.shipPx && Number.isFinite(ctx.shipPx.x) && Number.isFinite(ctx.shipPx.y) ? ctx.shipPx : null;   // null = behind the camera
     const at = placeColumn(p, { w, h, viewW: W, viewH: H, rects });
     const key = `${Math.round(at.left)},${Math.round(at.top)},${w}`;
     if (key !== this._posKey) {
@@ -271,7 +264,7 @@ export class HeightScale {
     return { items, left: at.left, top: at.top, side: at.side };
   }
 
-  /** @private the where-next list's panel rect while it is open (it stands bottom centre; the column keeps clear of it). */
+  /** @private the where-next list's panel rect while it is open (it stands bottom centre; the column keeps clear of it if it ever reaches the left edge). */
   _listRect() {
     const l = this._list;
     const el = l && l.element;

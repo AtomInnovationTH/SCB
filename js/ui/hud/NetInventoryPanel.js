@@ -27,6 +27,7 @@
 import { eventBus } from '../../core/EventBus.js';
 import { Events }   from '../../core/Events.js';
 import { Constants } from '../../core/Constants.js';
+import { restockTail } from '../../systems/resupplyWords.js';
 
 // ───────────────────────────────────────────────────────────────────────────
 // CONFIG
@@ -399,7 +400,7 @@ export class NetInventoryPanel {
       const max       = this._lasso_state.max ?? 0;
       const label = max > 0 ? `${remaining}/${max}` : `${remaining}`;
       this._lassoChip._textNode.textContent = label;
-      this._lassoChip.title = `Lasso shots: ${label}.  Restock at the resupply stop.`;
+      this._lassoChip.title = `Lasso shots: ${label}.  ${restockTail()}`;
       this._styleChip(this._lassoChip, this._lasso_state.severity);
     }
     // Net chip text + breakdown tooltip + colour.

@@ -162,6 +162,7 @@ import { TouchVerbButton } from './ui/TouchVerbButton.js';
 import { WhereNextList } from './ui/WhereNextList.js';
 import { HeightScale } from './ui/HeightScale.js';
 import { buildWhereNextRows } from './systems/WhereNextRows.js';
+import { fieldsFromSearch } from './systems/resupplyWords.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
 import { LeashVisual } from './ui/LeashVisual.js';
@@ -1468,7 +1469,8 @@ async function init() {
   }
   // Nets step 3 slice 2b: `?fields` turns on fields by height for this boot (FEATURE_FLAGS.FIELDS_BY_HEIGHT, off by default):
   // the mission boundary flies her to another debris field with her real thruster instead of burning in place.
-  if (new URLSearchParams(window.location.search).get('fields') !== null) Constants.FEATURE_FLAGS.FIELDS_BY_HEIGHT = true;
+  // `?fields=0` / `off` / `false` mean OFF (lane 3d: any value used to turn it on).
+  { const fieldsParam = fieldsFromSearch(window.location.search); if (fieldsParam !== null) Constants.FEATURE_FLAGS.FIELDS_BY_HEIGHT = fieldsParam; }
   // MLI foil v6: per-material orbital envMap on the gold MLI (near-mirror foil
   // needs a contrasty environment to reflect, not the near-uniform RoomEnvironment
   // that leaves it a smooth brass pipe). scene.environment is unchanged for the
@@ -1794,7 +1796,7 @@ async function init() {
   // GameFlowManager's (the ONE depot decision per catch); gameFlowManager is the
   // imported singleton, read lazily per gameplay frame, so init() order is moot.
   const depotStopPending = () => gameFlowManager.isDepotStopPending();
-  missionCoach = new MissionCoach({ eventBus, scoringSystem, persistenceManager, commsSystem, depotStopPending });
+  missionCoach = new MissionCoach({ eventBus, scoringSystem, persistenceManager, commsSystem, depotStopPending, fieldRegistry });
   missionCoach.init();
 
   // Late-bind live-data + codex context into the inspection callouts. Done here

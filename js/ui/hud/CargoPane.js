@@ -35,6 +35,7 @@
  */
 
 import { Constants } from '../../core/Constants.js';
+import { sellAtLine, contributeAtLine } from '../../systems/resupplyWords.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { VisualLaw } from '../../core/VisualLaw.js';
@@ -622,9 +623,9 @@ export class CargoPane {
     this._setDisabled(el.elevator, empty);
     // u1-resupply-stop D3: mid-mission every sell / contribute button reads "... at the resupply stop".
     const closed = !this._tradeOpen();
-    this._wordTradeButton(el.sellAll, closed, null, 'sell at the resupply stop');
-    this._wordTradeButton(el.elevator, closed, null, 'contribute at the resupply stop');
-    for (const rec of this._rows.values()) this._wordTradeButton(rec.btn, closed, null, 'sell at the resupply stop');
+    this._wordTradeButton(el.sellAll, closed, null, sellAtLine());
+    this._wordTradeButton(el.elevator, closed, null, contributeAtLine());
+    for (const rec of this._rows.values()) this._wordTradeButton(rec.btn, closed, null, sellAtLine());
     this._empty = empty;
     this._rowCount = Math.max(1, items.length);
 

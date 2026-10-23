@@ -5999,7 +5999,9 @@ export const Constants = {
      * Per-mission beat tables. Each beat:
      *   { id, type:'narrative'|'interactive'|'reactive', text, source?, channel?,
      *     skillId?, triggerEvent? (Events key), triggerFilter?(data)=>bool,
-     *     holdMs?, escalateMs?, title?, body? (escalation overlay) }
+     *     holdMs?, escalateMs?, title?, body? (escalation overlay),
+     *     mapText? (lane 3d: the words when fields by height is on and the LEO map is there to ask on; `{km}` = the height of the
+     *     field she is at, read by MissionCoach from the field registry; absent or no registry = `text`, exactly as before) }
      */
     BEATS_BY_MISSION: {
       // ── Chapter 2 — First Operations: Daughter piloting ──
@@ -6009,6 +6011,7 @@ export const Constants = {
           type: 'narrative',
           source: 'BANGALORE',
           text: 'ISRO Bangalore here. Good to have a second set of eyes. Your daughter craft can do the close work. Take manual control and you\'ll capture heavier debris than autopilot ever could.',
+          mapText: 'ISRO Bangalore here. You\'re at the {km} km field. Your daughter craft can do the close work: take manual control and you\'ll capture heavier debris than autopilot ever could. Low on nets or gas? Fly to the resupply satellite.',
         },
         {
           id: 'ch2_pilot',
@@ -6034,13 +6037,14 @@ export const Constants = {
         },
       ],
 
-      // ── Chapter 3 — Sensor Trade: Wide Scan + the Codex (LEO-Low 400 km) ──
+      // ── Chapter 3 — Sensor Trade: Wide Scan + the Codex (any field with the map on; LEO-Low 400 km without) ──
       3: [
         {
           id: 'ch3_intro',
           type: 'narrative',
           source: 'HOUSTON',
           text: 'You\'re climbing into the LEO-Low traffic lanes. And the ISS tracks through here on 51.6°. Quick pings won\'t reach the far contacts. Trade dwell time for range with a wide scan.',
+          mapText: 'You\'re at the {km} km field. Quick pings won\'t reach the far contacts. Trade dwell time for range with a wide scan. Every trip costs gas and days: the LEO map shows both.',
         },
         {
           id: 'ch3_wide_scan',

@@ -3,7 +3,7 @@
  * "it berths the mother at her nose collar, its arm swaps net cartridges, it pumps gas").
  *
  * A small servicer built from procedural THREE geometry: a box bus, two solar wings, a dish, a cartridge rack on top, a robotic arm
- * with an end effector (a docking probe) and a gas hose. It is its own `THREE.Group` in the scene. It is NEVER a child of
+ * with an end effector (a docking probe) and a fuel line that runs along the arm to the grip on her nose ring. It is its own `THREE.Group` in the scene. It is NEVER a child of
  * `PlayerSatellite` and NEVER one of `ActiveSatellites` (those are collision hazards: touching one ends the run).
  *
  * What it shows (all driven by events, the logic is GameFlowManager's):
@@ -11,7 +11,10 @@
  *                                      (`player.getNetBerthCollarPositionInto`) over about 3 s, then stays rigidly mated in her frame.
  *                                      A second 'berthed' while it is mated or closing does nothing (a trip that could not go re-sends it).
  *   UPGRADE_PURCHASED {motherNetRestock}  the arm carries one cartridge from its rack to her net launcher face (about 4 s).
- *   RESOURCE_UPGRADED {engineGasResupply} the gas hose shows for about 2 s.
+ *   RESOURCE_UPGRADED {engineGasResupply} (or a call to `showGasFlow()`) "gas flowing" lights the coupling on the effector for about 2 s,
+ *                                      but only while the grip is on her ring (an arm away on a cartridge swap makes the flow wait).
+ *                                      The fuel line itself is plumbing: always visible, bus coupling -> along both arm links and the wrist
+ *                                      (following every joint, a swap included) -> the effector coupling. Her tanks feed her docked daughters.
  *   RESUPPLY_BERTH {phase: 'left'}     the arm lets go and the satellite drifts ahead, out of the near field, then hides.
  *   RESUPPLY_BERTH {phase: 'coming', playS}  (lane 3c's call) it approaches from far ahead over `playS` real seconds, then waits.
  *   game over, win, menu, a new run      hidden and reset.
@@ -51,8 +54,8 @@ export const APPEAR_DIST_M = 9;
 export const CLOSE_S = 3;
 const GLIDE_S = 2;
 /** Drift after 'left': release (arm retracts) for 1 s, then a steady push. Hidden beyond HIDE_DIST_M. */
-const RELEASE_S = 1.5;
-const DRIFT_START_S = 1;
+const RELEASE_S = 2.5;                         // the arm stows along a raised path (about 6 m of travel), so it takes longer than a straight pull
+const DRIFT_START_S = 1.5;
 const DRIFT_ACCEL = 0.8;                       // m/s^2
 export const HIDE_DIST_M = 60;
 /** Near-field membership (the ship's own bracket is never widened). */
@@ -74,14 +77,22 @@ const STOW_TIP = new THREE.Vector3(0, 0.85, -0.9);             // arm laid back 
 const SLOT_Z = [-0.7, -0.35, 0, 0.35];                         // cartridge slots on the rack (x 0); the front one stands 0.2 m clear of the shoulder pedestal
 const SLOT_Y = 0.72;
 const CART = { r: 0.07, len: 0.22 };
-const HOSE_START = new THREE.Vector3(0.5, -0.3, 0.94);         // on the interface plate
-const HOSE_END_Y = 0.30;                                       // her-frame (0, 0.30, 1.36): measured >= 9.5 cm from every vertex of her nose hardware (no port exists on her)
-const HOSE_END_Z = -0.06;                                      // satellite-local offset from the collar plane (her z 1.36 is 6 cm toward the satellite)
+/** The fuel line: radius, and its side offset from the arm's axis (the links are r 45-50 mm, so the line floats 18+ mm clear: no z-fight). */
+export const GAS_LINE_R = 0.012;
+export const GAS_LINE_OFFSET_M = 0.08;
+const GAS_COUPLING = new THREE.Vector3(GAS_LINE_OFFSET_M, 0.74, ARM_BASE.z);   // the bus's gas coupling: a block on the shoulder pedestal, line starts on its top
+const GAS_HEAD_BACK_M = WRIST_M - 0.09;                        // along the wrist from the wrist joint: the probe head's back face (the line enters the head there)
+const GAS_COLOR = 0x33ff88;
+const GAS_END_IN_M = 0.02;                                     // the line ends this far inside the probe head, so its flat end cap never reaches past the head's front face
+const FLOW_FADE_S = 0.25;                                      // the flow light fades out and in over this long (never cut)
 const LAUNCHER_FACE_BEHIND_M = 0.028;                          // her net launcher face is 30 mm behind the collar plane (z 1.27 vs 1.30); stop 2 mm short
 
 /** Cartridge swap path (satellite-local metres, mated: the bus centre is MATED_DIST_M from the collar). The tip never goes straight
  *  through the bus: out along the collar axis, up to RAISE_Y over the rack, down onto the slot's front end, and the same way back. */
 const RAISE = new THREE.Vector3(0, 1.05, 1.1);
+/** The stow / dock path (arm closed 0 .. 1): straight up from the stowed pose to RAISE height, forward over the rack to RAISE, then down and out
+ *  to the hold point. Same raised waypoints as the swap, so the head and the fuel line never cross the bus, tray or cartridges. */
+const STOW_RISE = new THREE.Vector3(0, RAISE.y, STOW_TIP.z);
 const SWAP_HOLD = new THREE.Vector3(0, 0, MATED_DIST_M);
 const SWAP_STAND = new THREE.Vector3(0, 0, MATED_DIST_M - 0.3);
 const SWAP_INSERT = new THREE.Vector3(0, 0, MATED_DIST_M + LAUNCHER_FACE_BEHIND_M);
@@ -154,8 +165,14 @@ export class ResupplySatellite {
     this._swapCount = 0;
     this._gasT = -1;
     this._gasPending = false;
+    this._gasOn = false;               // "gas flowing" shows now (the grip is on her ring and the flow timer runs)
+    this._flowI = 0;                   // 0..1 the flow light now (the envelope, rate-limited: it fades, never cuts)
+    this._dt = 0;                      // the frame's dt, for the light fade
     this._nearMember = false;
     this._tip = new THREE.Vector3();   // effector point, satellite-local metres
+    this._elbowM = new THREE.Vector3();   // elbow and wrist joints as the arm stands, satellite-local metres (the fuel line follows them)
+    this._wristM = new THREE.Vector3();
+    this._line = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
     this._tmpA = new THREE.Vector3();
     this._tmpB = new THREE.Vector3();
     this._tmpDir = new THREE.Vector3();
@@ -179,6 +196,7 @@ export class ResupplySatellite {
     eventBus.on(Events.GAME_RESET, this._onReset);
     eventBus.on(Events.GAME_STATE_CHANGE, this._onState);
     this._poseArm();
+    this._poseLine();
   }
 
   // ── geometry ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -265,11 +283,20 @@ export class ResupplySatellite {
     this._upper.position.copy(ARM_BASE).multiplyScalar(M);
     g.add(this._upper, this._fore, this._wrist);
 
-    // the gas hose (shown while gas is bought): a hose cylinder of unit length scaled to its run, and a nozzle
-    this._hose = this._mesh(g, 'SatGasHose', cylZ(0.02, 1, 12), dark, RO.SPACECRAFT_CONNECTOR);
-    this._nozzle = this._mesh(g, 'SatGasNozzle', cylZ(0.035, 0.08, 16), gun, RO.SPACECRAFT_CONNECTOR);
-    this._hose.visible = false;
-    this._nozzle.visible = false;
+    // the bus's gas coupling: a block on the shoulder pedestal (the line starts on its top)
+    this._mesh(g, 'SatGasCoupling', new THREE.BoxGeometry(0.06 * M, 0.04 * M, 0.06 * M), gun, RO.SPACECRAFT_CONNECTOR, GAS_COUPLING.x, GAS_COUPLING.y - 0.02, GAS_COUPLING.z);
+
+    // the fuel line: five straight runs (coupling -> shoulder -> elbow -> wrist -> into the probe head -> the effector coupling) and a
+    // ball at each bend. It lies a few cm beside the arm in the arm's plane's normal (x) and is re-aimed every frame (_poseLine)
+    this._lineMat = this._mat({ ...AVIONICS_DARK_OPTIC, emissive: GAS_COLOR, emissiveIntensity: 0 });
+    this._segs = [];
+    for (let i = 0; i < 5; i++) this._segs.push(this._mesh(g, `SatFuelLine_${i}`, cylZ(GAS_LINE_R, 1, 10), this._lineMat, RO.SPACECRAFT_CONNECTOR));
+    this._joints = [];
+    for (let i = 0; i < 4; i++) this._joints.push(this._mesh(g, `SatFuelLineBend_${i}`, new THREE.SphereGeometry(GAS_LINE_R * M, 10, 6), this._lineMat, RO.SPACECRAFT_CONNECTOR));
+    // the coupling on the effector's front face where it meets her ring: a dark disc with a small light (green while gas flows).
+    // It stands 1 mm proud of the head's face, so it never touches her launcher face when the tip stops 2 mm short.
+    this._lightMat = this._mat({ color: 0x0c2a18, metalness: 0.3, roughness: 0.5, emissive: GAS_COLOR, emissiveIntensity: 0 });
+    this._gasLight = this._mesh(this._wrist, 'SatGasLight', cylZ(0.035, 0.012, 20), this._lightMat, RO.SPACECRAFT_CONNECTOR, 0, 0, WRIST_M - 0.011);
   }
 
   // ── events ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -312,7 +339,12 @@ export class ResupplySatellite {
     if (this._swapsQueued < SWAP_QUEUE_MAX) this._swapsQueued++;
   }
 
-  _queueGas() {
+  _queueGas() { this.showGasFlow(); }
+
+  /** "Gas flowing": about GAS_S seconds of light on the effector coupling. Only while it is berthed to her (closing or mated), and it
+   *  shows only while the grip is on her ring: with the arm away on a cartridge swap it waits until the grip is back. A later lane
+   *  calls this for a cold-gas buy. */
+  showGasFlow() {
     if (this._state !== 'mated' && this._state !== 'docking') return;
     this._gasPending = true;
   }
@@ -324,11 +356,13 @@ export class ResupplySatellite {
     this._t = 0;
     this._armS = 0; this._armFrom = 0; this._w = 0; this._wFrom = 0;
     this._swapsQueued = 0; this._swapT = -1; this._gasT = -1; this._gasPending = false;
+    this._flowI = 0; this._dt = 0;
     this._speed = 0;
     this.group.visible = false;
     this._setNear(false);
     this._restoreCarts();
     this._poseArm();
+    this._poseLine();
   }
 
   // ── per frame ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -353,10 +387,11 @@ export class ResupplySatellite {
       }
     }
 
+    this._dt = dt;
     this._advance(dt);
     this._place();
     this._poseArm();
-    this._poseHose();
+    this._poseLine();
 
     let floor = null;
     if (this._floor) { try { floor = this._floor(); } catch (_e) { floor = null; } }
@@ -392,10 +427,13 @@ export class ResupplySatellite {
           this._swapT += dt;
           if (this._swapT >= SWAP_S) { this._swapT = -1; this._restoreCarts(); }
         }
-        if (this._gasPending && this._gasT < 0) { this._gasPending = false; this._gasT = 0; }
-        if (this._gasT >= 0) {
-          this._gasT += dt;
-          if (this._gasT >= GAS_S) this._gasT = -1;
+        // gas flows only while the grip is on her ring (no swap running or queued); a flow cut off by a swap pauses and resumes after it
+        if (this._swapT < 0 && this._swapsQueued === 0) {
+          if (this._gasPending && this._gasT < 0) { this._gasPending = false; this._gasT = 0; }
+          if (this._gasT >= 0) {
+            this._gasT += dt;
+            if (this._gasT >= GAS_S) this._gasT = -1;
+          }
         }
         break;
       }
@@ -460,11 +498,21 @@ export class ResupplySatellite {
   /** Whether the swap has the cartridge in the grip at time t (grabbed at 1.0 s, inserted at 3.2 s). */
   _carrying(t) { return t >= 0.9 && t < 3.2; }
 
+  /** The tip on the stow / dock path at closure `s` (0 stowed .. 1 on `hold`), by path length; no allocation. */
+  _pathTip(s, hold, out) {
+    const l0 = STOW_TIP.distanceTo(STOW_RISE), l1 = STOW_RISE.distanceTo(RAISE), l2 = RAISE.distanceTo(hold);
+    let u = Math.min(1, Math.max(0, s)) * (l0 + l1 + l2);
+    if (u <= l0) return out.lerpVectors(STOW_TIP, STOW_RISE, u / l0);
+    u -= l0;
+    if (u <= l1) return out.lerpVectors(STOW_RISE, RAISE, u / l1);
+    return out.lerpVectors(RAISE, hold, Math.min(1, (u - l1) / Math.max(l2, 1e-6)));
+  }
+
   _poseArm() {
     const tip = this._tip;
     const hold = this._tmpA.set(0, 0, this._dist);
     if (this._swapT >= 0) this._swapTip(this._swapT, tip);
-    else tip.lerpVectors(STOW_TIP, hold, this._armS);
+    else this._pathTip(this._armS, hold, tip);
 
     // planar two-link IK in the YZ plane (x = 0), elbow always up (+Y)
     const wy = tip.y;
@@ -485,6 +533,8 @@ export class ResupplySatellite {
     const wyc = ARM_BASE.y + vy, wzc = ARM_BASE.z + vz;   // wrist joint, after the reach clamp
 
     const E = this._tmpB.set(0, ey, ez);
+    this._elbowM.copy(E);
+    this._wristM.set(0, wyc, wzc);
     this._elbow.position.copy(E).multiplyScalar(M);
     this._aim(this._upper, ARM_BASE, E);
     this._fore.position.copy(E).multiplyScalar(M);
@@ -523,27 +573,40 @@ export class ResupplySatellite {
     }
   }
 
-  _poseHose() {
+  /** The fuel line follows the arm: coupling -> shoulder -> elbow -> wrist -> head back -> effector coupling, all `GAS_LINE_OFFSET_M` to the side
+   *  of the arm's plane except the coupling ends. Also drives the flow light (an envelope over the 2 s). No allocation. */
+  _poseLine() {
+    const L = this._line;
+    const x = GAS_LINE_OFFSET_M;
+    L[0].copy(GAS_COUPLING);
+    L[1].set(x, ARM_BASE.y, ARM_BASE.z);
+    L[2].set(x, this._elbowM.y, this._elbowM.z);
+    L[3].set(x, this._wristM.y, this._wristM.z);
+    L[4].set(x, this._wristM.y, this._wristM.z + GAS_HEAD_BACK_M);
+    L[5].set(this._tip.x, this._tip.y, this._tip.z - GAS_END_IN_M);   // ends inside the head (the cap is flat and the run leans ~48 deg to the arm)
+    for (let i = 0; i < 5; i++) {
+      const a = L[i], b = L[i + 1];
+      const seg = this._segs[i];
+      const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+      const len = Math.hypot(dx, dy, dz);
+      seg.position.set(a.x * M, a.y * M, a.z * M);
+      if (len > 1e-6) seg.quaternion.setFromUnitVectors(_Z, this._tmpV.set(dx / len, dy / len, dz / len));
+      seg.scale.set(1, 1, Math.max(len, 1e-6));
+    }
+    for (let i = 0; i < 4; i++) this._joints[i].position.set(L[i + 1].x * M, L[i + 1].y * M, L[i + 1].z * M);
+
+    // "gas flowing": the timer only runs while the grip is on her ring (_advance); envelope: 0.4 s up, 0.4 s down
+    this._gasOn = this._state === 'mated' && this._gasT >= 0 && this._swapT < 0 && this._swapsQueued === 0;
     let p = 0;
-    if (this._gasT >= 0 && this._state === 'mated') {
+    if (this._gasOn) {
       const t = this._gasT;
       p = t < 0.4 ? smooth(t / 0.4) : (t > GAS_S - 0.4 ? smooth((GAS_S - t) / 0.4) : 1);
     }
-    const show = p > 0.001;
-    this._hose.visible = show;
-    this._nozzle.visible = show;
-    if (!show) return;
-    const s = HOSE_START;
-    const e = this._tmpDir.set(0, HOSE_END_Y, this._dist + HOSE_END_Z);
-    const dx = e.x - s.x, dy = e.y - s.y, dz = e.z - s.z;
-    const len = Math.hypot(dx, dy, dz);
-    const dirx = dx / len, diry = dy / len, dirz = dz / len;
-    this._hose.position.set(s.x * M, s.y * M, s.z * M);
-    this._hose.quaternion.setFromUnitVectors(_Z, this._tmpV.set(dirx, diry, dirz));
-    this._hose.scale.set(1, 1, len * p);
-    const nx = s.x + dirx * len * p, ny = s.y + diry * len * p, nz = s.z + dirz * len * p;
-    this._nozzle.position.set(nx * M, ny * M, nz * M);
-    this._nozzle.quaternion.copy(this._hose.quaternion);
+    // a swap starting mid-flow (the target drops to 0 at once) fades the light out over FLOW_FADE_S, and it fades back in after: never a cut
+    const step = this._dt / FLOW_FADE_S;
+    this._flowI += Math.min(step, Math.max(-step, p - this._flowI));
+    this._lightMat.emissiveIntensity = 2.5 * this._flowI;
+    this._lineMat.emissiveIntensity = 0.5 * this._flowI;
   }
 
   // ── near-field membership ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -571,7 +634,10 @@ export class ResupplySatellite {
   isNearMember() { return this._nearMember; }
   isCarrying() { return this._swapT >= 0 && this._carrying(this._swapT); }
   isSwapping() { return this._swapT >= 0; }
-  gasShowing() { return this._hose.visible; }
+  gasShowing() { return this._gasOn; }
+
+  /** The fuel line's points, satellite-local metres, as of the last update: [bus coupling, shoulder, elbow, wrist, probe head back, effector coupling]. */
+  getFuelLinePointsM() { return this._line; }
   /** Metres from her collar to the bus centre along her +Z. */
   getDistM() { return this._dist; }
 

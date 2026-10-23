@@ -25,6 +25,7 @@ import { engineGasKg, engineDeltaV, engineTankDryKg } from './ResourceSystem.js'
 import { wingsHint } from './WingsHint.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { tripRefuses } from './TransferTrip.js';
+import { outOfMotherNetsLine } from './resupplyWords.js';
 import { wrapRefusalLine } from './PieceClaim.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km) */
@@ -97,7 +98,7 @@ export function arrivalLineText(mass, motherNetsLeft, readiness) {
   const left = Number.isFinite(motherNetsLeft) ? motherNetsLeft : Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE;
   if (left > 0) return 'In position. Press N to net it.';
   if (mass > 0 && classifyNetTarget(mass).band === 'whale') {
-    return 'Out of mother nets. Restock at the resupply stop.';
+    return outOfMotherNetsLine();
   }
   if (!readiness) return 'In position. Press D to send a daughter.';
   // Nets gone: the D line only once a daughter can really launch (DECISIONS §33 row 3, one line, one action).

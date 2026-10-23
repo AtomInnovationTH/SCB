@@ -10,6 +10,7 @@ import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { GestureHints } from './hud/GestureHints.js';
 import { getMissionProgress } from '../core/missionProgress.js';
+import { briefingObjective, briefingObjectiveMore } from '../systems/resupplyWords.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { scoringSystem } from '../systems/ScoringSystem.js';
 import { decorateGlossary } from '../systems/codex/glossary.js';
@@ -97,7 +98,7 @@ export class BriefingScreen {
           display:flex;justify-content:center;gap:20px;align-items:center;
           background:rgba(0,20,40,0.5);border:1px solid rgba(0,255,136,0.15);
           border-radius:4px;padding:6px 16px;margin-bottom:0.7rem;font-size:0.8rem;">
-          <span id="briefing-objective" style="color:rgba(0,255,136,0.7);">Clear 5 debris to reach the depot</span>
+          <span id="briefing-objective" style="color:rgba(0,255,136,0.7);">${briefingObjective(5)}</span>
           <span style="color:rgba(0,255,136,0.2);">│</span>
           <span style="color:#f0c040;"><b id="briefing-credits">0</b> cr</span>
           <span style="color:rgba(0,255,136,0.2);">│</span>
@@ -284,8 +285,8 @@ export class BriefingScreen {
     const objectiveEl = this.element.querySelector('#briefing-objective');
     if (objectiveEl) {
       objectiveEl.textContent = debrisUntilShop >= perMission
-        ? `Clear ${perMission} debris to reach the depot`
-        : `Clear ${debrisUntilShop} more debris for depot visit`;
+        ? briefingObjective(perMission)
+        : briefingObjectiveMore(debrisUntilShop);
     }
 
     const creditsEl = this.element.querySelector('#briefing-credits');

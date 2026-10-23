@@ -20,6 +20,7 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+import { wordsFor } from './resupplyWords.js';
 
 const TICK_S = 1.0;   // evaluate at 1 Hz (cheap; matches SkillsSystem cadence)
 
@@ -102,6 +103,7 @@ export class ArmIdleAdvisor {
    * the old TEACHING_MOMENT_FORCE card (none today).
    */
   _fire(hintId, title, text, icon, chip, glyph, keys) {
+    text = wordsFor(text); chip = wordsFor(chip);   // lane 3d: "resupply stop" / "the stop" -> "satellite" with the map on
     if (chip) {
       eventBus.emit(Events.HINT_POSTED, {
         id: hintId,

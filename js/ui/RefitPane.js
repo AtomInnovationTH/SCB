@@ -82,6 +82,7 @@
 
 import { VisualLaw } from '../core/VisualLaw.js';
 import { Constants } from '../core/Constants.js';
+import { buyAtLine } from '../systems/resupplyWords.js';
 import { FITTING_CATALOG, groupBySubsystem } from '../data/fittingCatalog.js';
 import { BLUEPRINT_SUBSYSTEMS } from '../data/blueprintSubsystems.js';
 import { subsystemForPart, partsForSubsystem } from '../data/refitIndex.js';
@@ -318,7 +319,7 @@ export class RefitPane {
     const cost = upgradeCostNow(shop, ctx.res) ?? 0;
     if (cost <= (ctx.credits ?? 0)) {
       // u1-resupply-stop D3: the wallet is enough, the place is wrong (owner 2026-10-17: no store in the middle of space).
-      if (ctx.atStop === false) return { kind: 'needs', text: 'buy at the resupply stop' };
+      if (ctx.atStop === false) return { kind: 'needs', text: buyAtLine() };
       return { kind: 'buy', text: 'BUY' };
     }
     const n = RefitPane.catchesAway(cost, ctx.credits ?? 0, ctx.avg);

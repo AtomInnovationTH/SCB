@@ -13,6 +13,7 @@ import { decorateGlossary } from '../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
 import { DAUGHTER_NET_EFFECT_TYPE } from '../systems/upgradeEffectRoutes.js';
+import { depotWords, shopTitle } from '../systems/resupplyWords.js';   // lane 3d: the depot words read the map switch
 import { upgradePrereqsMet, upgradeCostNow, engineTankFull } from './shopGating.js';
 import { gasPriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
 
@@ -1028,7 +1029,7 @@ export class ShopScreen {
           <div style="font-size:0.85rem;color:${maxed ? 'rgba(0,255,136,0.6)' : '#00ff88'};">
             ${upgrade.name}${levelBadge}${trlBadge}${starBadge}${pinBadge}
           </div>
-          <div style="font-size:0.7rem;color:rgba(0,255,136,0.5);">${decorateGlossary(upgrade.desc, { once: true })}</div>
+          <div style="font-size:0.7rem;color:rgba(0,255,136,0.5);">${decorateGlossary(depotWords(upgrade.desc), { once: true })}</div>
           ${whyLine}
           ${upgrade.requires && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${UPGRADES.find(u => u.id === upgrade.requires)?.name}</div>` : ''}
           ${upgrade.supersededBy && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Replaced by ${UPGRADES.find(u => u.id === upgrade.supersededBy)?.name}</div>` : ''}
@@ -1444,10 +1445,26 @@ export class ShopScreen {
 
   show() {
     this.visible = true;
+    this._applyTitle();
     this.refresh();
     this.element.style.display = 'flex';
     this.element.style.opacity = '1';
     eventBus.emit(Events.SHOP_OPENED);
+  }
+
+  /**
+   * Lane 3d: with the map on the header says "RESUPPLY SATELLITE" (the game-over continue shop is the one full-screen shop that
+   * still opens then: the workbench replaces it in play). Map off: the markup is never touched.
+   * @private
+   */
+  _applyTitle() {
+    const h = this.element && this.element.querySelector ? this.element.querySelector('h2') : null;
+    if (!h) return;
+    if (this._titleOrig === undefined) {
+      if (shopTitle() === 'ORBITAL SUPPLY DEPOT') return;
+      this._titleOrig = h.innerHTML;
+    }
+    h.innerHTML = shopTitle() === 'ORBITAL SUPPLY DEPOT' ? this._titleOrig : shopTitle();
   }
 
   hide() {

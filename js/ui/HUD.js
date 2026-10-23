@@ -25,6 +25,7 @@ import { PaneHelp } from './hud/PaneHelp.js';
 import { AlertArbiter, STRIP_KIND } from './hud/AlertHierarchy.js';
 import { approachLive } from './hud/TargetColorLaw.js';
 import { VisualLaw } from '../core/VisualLaw.js';
+import { pinReadyLabel, pinReadyLine } from '../systems/resupplyWords.js';   // lane 3d: the depot words read the map switch
 import { pinProgress } from './shopPin.js'; // S1 retention: pinned-upgrade progress math (pure, DOM-free)
 import { PANE_CORNER_PX, HUD_COLUMN_WIDTH_PX, RIGHT_COLUMN_WIDTH_PX, RAIL_GEOMETRY, footerBand } from './RailGeometry.js';
 import { dividedByScale, onHudScaleChange, currentHudScale } from './HudScale.js';
@@ -854,13 +855,13 @@ export class HUD {
     if (affordable) {
       this._pinWidget.style.borderColor = 'rgb(var(--hud-normal-rgb, 0 255 136) / 0.55)';
       this._pinWidget.style.color = `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`;
-      if (label) label.textContent = `▸ ${this._pinned.name} — READY AT DEPOT`;
+      if (label) label.textContent = `▸ ${this._pinned.name} — ${pinReadyLabel()}`;
       if (bar) { bar.style.width = '100%'; bar.style.background = `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`; }
       if (!this._pinReadyFired) {
         this._pinReadyFired = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'HOUSTON',
-          text: `You've got the credits for ${this._pinned.name}. See you at the depot.`,
+          text: pinReadyLine(this._pinned.name),
           priority: 1,
         });
       }

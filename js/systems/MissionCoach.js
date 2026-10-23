@@ -29,6 +29,7 @@ import { Constants } from '../core/Constants.js';
 import { GameStates } from '../core/GameState.js';
 import { BeatSequencer, buildBeatComms, beatMatches } from './_beatLifecycle.js';
 import { MissionOnset } from './_bossLifecycle.js';
+import { satelliteIsTheStop, wordsFor } from './resupplyWords.js';
 
 export class MissionCoach {
   /**
@@ -41,12 +42,14 @@ export class MissionCoach {
    *   boundary dwell timer) is pending — GameFlowManager.isDepotStopPending(),
    *   wired by main.js. An armed chapter holds while it returns true. Default:
    *   never pending (headless / tests fire on the next update).
+   * @param {object} [deps.fieldRegistry] — lane 3d: `currentField()` names the field she is at, for a beat's `mapText`.
    */
-  constructor({ eventBus, scoringSystem = null, persistenceManager = null, commsSystem = null, depotStopPending = null } = {}) {
+  constructor({ eventBus, scoringSystem = null, persistenceManager = null, commsSystem = null, depotStopPending = null, fieldRegistry = null } = {}) {
     this._eventBus = eventBus;
     this._scoring = scoringSystem;
     this._pm = persistenceManager;
     this._comms = commsSystem;
+    this._fields = fieldRegistry;
     this._depotStopPending = typeof depotStopPending === 'function' ? depotStopPending : () => false;
 
     /** @type {Object<number, boolean>} missions whose coaching has completed. */
@@ -177,9 +180,22 @@ export class MissionCoach {
     this._seq.start();
   }
 
+  /**
+   * @private Lane 3d: the beat as the player reads it now. Map off (or the list not there to ask on, or no registry): the table's
+   * words exactly. Map on: a beat's `mapText` with `{km}` = the height she is at, and "resupply stop" read as "resupply satellite".
+   */
+  _view(beat) {
+    let text = beat.text;
+    if (typeof beat.mapText === 'string' && satelliteIsTheStop()) {
+      const f = this._fields && typeof this._fields.currentField === 'function' ? this._fields.currentField() : null;
+      if (f && Number.isFinite(f.altKm)) text = beat.mapText.replace('{km}', String(Math.round(f.altKm)));
+    }
+    return { ...beat, text: wordsFor(text), body: wordsFor(beat.body) };
+  }
+
   /** @private Post a beat: comms line + (interactive) beat-start + trigger arming. */
   _postBeat(beat) {
-    this._eventBus.emit(Events.COMMS_MESSAGE, buildBeatComms(beat));
+    this._eventBus.emit(Events.COMMS_MESSAGE, buildBeatComms(this._view(beat)));
 
     // Clear any prior beat's armed trigger before arming the next.
     this._disarmBeat();
@@ -213,10 +229,11 @@ export class MissionCoach {
 
   /** @private Unsatisfied interactive beat → re-prompt via the teaching overlay. */
   _escalateBeat(beat) {
+    const v = this._view(beat);
     this._eventBus.emit(Events.TEACHING_MOMENT_FORCE, {
       id: `coach_${beat.id}`,
       title: beat.title || 'MISSION COACH',
-      body: beat.body || beat.text || '',
+      body: v.body || v.text || '',
       icon: 'HINT',
     });
   }

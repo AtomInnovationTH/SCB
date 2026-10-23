@@ -24,7 +24,7 @@ import { strutLocalDirection, composeDockedArmQuat, bestStrutAlpha, carryDirInto
 import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT, seedHerFrameAttitude, applyHerFrameAttitude, clearShipRelativeAttitude, clearRackCell } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
-import { DAUGHTER_OUT_OF_NETS_LINE } from '../systems/netRouting.js';
+import { daughterOutOfNetsLine } from '../systems/netRouting.js';
 import { computeToolOdds, makeNetOddsLockCache } from '../systems/ToolOdds.js';
 import { gameState } from '../core/GameState.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
@@ -2619,7 +2619,7 @@ export class ArmUnit {
       audioSystem.playDeny();
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.displayName,
-        text: DAUGHTER_OUT_OF_NETS_LINE,   // DECISIONS §33 row 8: nets refill only at the resupply stop (not "return to mother")
+        text: daughterOutOfNetsLine(),   // DECISIONS §33 row 8: nets refill only at the resupply stop (not "return to mother")
         channel: 'CMD',
         priority: 'warning',
       });
@@ -4828,7 +4828,7 @@ export class ArmUnit {
       audioSystem.playDeny();
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.displayName,
-        text: DAUGHTER_OUT_OF_NETS_LINE,   // DECISIONS §33 row 8: nets refill only at the resupply stop (not "return to mother")
+        text: daughterOutOfNetsLine(),   // DECISIONS §33 row 8: nets refill only at the resupply stop (not "return to mother")
         channel: 'CMD',
         priority: 'warning',
       });
@@ -5994,7 +5994,7 @@ export class ArmUnit {
          eventBus.emit(Events.COMMS_MESSAGE, {
            source: this.displayName,
            // Out of nets: the ONE line, exact (nets refill only at the resupply stop; nothing reloads on docking).
-           text: inv <= 0 ? DAUGHTER_OUT_OF_NETS_LINE : `${this.displayName}: ${reason}`,
+           text: inv <= 0 ? daughterOutOfNetsLine() : `${this.displayName}: ${reason}`,
            channel: 'CMD', priority: 'warning',
          });
        }

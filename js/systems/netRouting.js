@@ -24,8 +24,10 @@ export const OUT_OF_MOTHER_NETS_LINE = 'Out of mother nets. Press D to send a da
  */
 export const OUT_OF_NET_RANGE_LINE = 'Out of net range. Press D to send a daughter.';
 
-/** A daughter with no nets: they refill only by buying at the resupply stop (DECISIONS §33 rows 5 and 8). */
+/** A daughter with no nets: they refill only by buying at the resupply stop (DECISIONS §33 rows 5 and 8). The map-off words; read through
+ *  `daughterOutOfNetsLine()` where the line is said (lane 3d: "resupply satellite" with the map on). */
 export const DAUGHTER_OUT_OF_NETS_LINE = 'Out of nets. Restock at the resupply stop.';
+export { daughterOutOfNetsLine } from './resupplyWords.js';
 
 /** The ONE line when a shot leaves a single mother net (replaces the old "running low at 5" warning). */
 export const ONE_MOTHER_NET_LEFT_LINE = 'One mother net left.';
