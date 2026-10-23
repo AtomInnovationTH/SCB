@@ -64,6 +64,10 @@ export const EFFECT_ROUTES = {
   // ── g1-gas-upgrades: engine gas (D3 one-way gas switch, D4 consumable resupply) → ResourceSystem ──
   engineGasSwitch: [RESOURCE_SYSTEM],
   engineGasResupply: [RESOURCE_SYSTEM],
+  // ── lane 3f: the nitrogen buy fills her cold-gas tank (it tops up docked daughters) → ResourceSystem ──
+  coldGasResupply: [RESOURCE_SYSTEM],
+  // ── lane 3f: the ion-fuel cartridge goes into her indium store → ResourceSystem (the satellite's swap is only the look) ──
+  indiumCartridge: [RESOURCE_SYSTEM],
 
   // ── S3b power infrastructure (F4: these three were inert) ──
   supercapUpgrade: [RESOURCE_SYSTEM, PLAYER], // +100 Wh burst store + MPD thermal flag (ResourceSystem.js:480, PlayerSatellite.js:3616)

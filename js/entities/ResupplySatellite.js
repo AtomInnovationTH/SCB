@@ -11,7 +11,10 @@
  *                                      (`player.getNetBerthCollarPositionInto`) over about 3 s, then stays rigidly mated in her frame.
  *                                      A second 'berthed' while it is mated or closing does nothing (a trip that could not go re-sends it).
  *   UPGRADE_PURCHASED {motherNetRestock}  the arm carries one cartridge from its rack to her net launcher face (about 4 s).
- *   RESOURCE_UPGRADED {engineGasResupply} (or a call to `showGasFlow()`) "gas flowing" lights the coupling on the effector for about 2 s,
+ *   UPGRADE_PURCHASED {indiumCartridge}   (lane 3f) the same arm carries one small silver ion-fuel cartridge from its own magazine behind the
+ *                                      bus to the same face, the same path and time. The indium is in her store at the click already
+ *                                      (ResourceSystem); this is only the look. Swaps run one at a time, in the order bought.
+ *   RESOURCE_UPGRADED {engineGasResupply | coldGasResupply} (or a call to `showGasFlow()`) "gas flowing" lights the coupling on the effector for about 2 s,
  *                                      but only while the grip is on her ring (an arm away on a cartridge swap makes the flow wait).
  *                                      The fuel line itself is plumbing: always visible, bus coupling -> along both arm links and the wrist
  *                                      (following every joint, a swap included) -> the effector coupling. Her tanks feed her docked daughters.
@@ -77,6 +80,12 @@ const STOW_TIP = new THREE.Vector3(0, 0.85, -0.9);             // arm laid back 
 const SLOT_Z = [-0.7, -0.35, 0, 0.35];                         // cartridge slots on the rack (x 0); the front one stands 0.2 m clear of the shoulder pedestal
 const SLOT_Y = 0.72;
 const CART = { r: 0.07, len: 0.22 };
+/** Ion-fuel cartridges (lane 3f): a smaller cast-indium cartridge, kept in a short magazine that sticks out behind the bus (the net rack is full
+ *  along x 0). The same arm picks them up by the front end, the same swap path. Two slots 0.32 m apart: the wrist stub trails 0.3 m behind the
+ *  grip, so the cartridge behind the one being gripped is never inside it. `IN_FRONT_Z` is the +z end the head grips (a pick point). */
+const IN_CART = { r: 0.035, len: 0.14 };
+const IN_FRONT_Z = [-1.02, -1.34];
+const IN_SLOT_Z = IN_FRONT_Z.map((z) => z - IN_CART.len / 2);   // each cartridge's centre
 /** The fuel line: radius, and its side offset from the arm's axis (the links are r 45-50 mm, so the line floats 18+ mm clear: no z-fight). */
 export const GAS_LINE_R = 0.012;
 export const GAS_LINE_OFFSET_M = 0.08;
@@ -96,9 +105,10 @@ const STOW_RISE = new THREE.Vector3(0, RAISE.y, STOW_TIP.z);
 const SWAP_HOLD = new THREE.Vector3(0, 0, MATED_DIST_M);
 const SWAP_STAND = new THREE.Vector3(0, 0, MATED_DIST_M - 0.3);
 const SWAP_INSERT = new THREE.Vector3(0, 0, MATED_DIST_M + LAUNCHER_FACE_BEHIND_M);
-/** Per slot: [{ d seconds, a, b }] legs; the durations sum to SWAP_S (4.2). The cartridge is carried from 0.9 s to 3.2 s. */
-const SWAP_LEGS = SLOT_Z.map((sz) => {
-  const pick = new THREE.Vector3(0, SLOT_Y, sz + CART.len / 2);
+/** The legs of one swap that grips a cartridge's front end at z `frontZ`: [{ d seconds, a, b }]; the durations sum to SWAP_S (4.2). The cartridge
+ *  is carried from 0.9 s to 3.2 s. */
+function swapLegs(frontZ) {
+  const pick = new THREE.Vector3(0, SLOT_Y, frontZ);
   const above = new THREE.Vector3(0, RAISE.y, pick.z);
   const L = (d, a, b) => ({ d, a, b });
   return [
@@ -107,7 +117,9 @@ const SWAP_LEGS = SLOT_Z.map((sz) => {
     L(0.25, pick, above), L(0.25, above, RAISE), L(0.5, RAISE, SWAP_STAND),                                // lift and back (to 2.0)
     L(0.9, SWAP_STAND, SWAP_INSERT), L(0.3, SWAP_INSERT, SWAP_INSERT), L(1.0, SWAP_INSERT, SWAP_HOLD),       // in, let go, home
   ];
-});
+}
+const SWAP_LEGS = SLOT_Z.map((sz) => swapLegs(sz + CART.len / 2));
+const IN_SWAP_LEGS = IN_FRONT_Z.map((z) => swapLegs(z));
 
 const _Z = new THREE.Vector3(0, 0, 1);
 const QY_PI = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);   // her frame -> the satellite's (+Z toward her)
@@ -159,10 +171,12 @@ export class ResupplySatellite {
     this._speed = 0;                   // leaving: m/s ahead
     this._satId = null;
     this._altKm = null;
-    this._swapsQueued = 0;
+    this._swapQueue = [];              // the swaps waiting, in the order bought: 'net' | 'indium'
     this._swapT = -1;                  // < 0: no swap running
-    this._swapSlot = 0;
-    this._swapCount = 0;
+    this._swapKind = 'net';            // what the running swap carries
+    this._swapSlot = 0;                // its slot, within its kind
+    this._swapCount = 0;               // net swaps started so far (the slot cycles through the rack)
+    this._inSwapCount = 0;             // ion-fuel swaps started so far
     this._gasT = -1;
     this._gasPending = false;
     this._gasOn = false;               // "gas flowing" shows now (the grip is on her ring and the flow timer runs)
@@ -183,8 +197,12 @@ export class ResupplySatellite {
     this._qBase = new THREE.Quaternion();
 
     this._onBerth = (e) => this._handleBerth(e || {});
-    this._onPurchase = (e) => { if (e && e.effect === 'motherNetRestock') this._queueSwap(); };
-    this._onGas = (e) => { if (e && e.effect === 'engineGasResupply') this._queueGas(); };
+    this._onPurchase = (e) => {
+      if (!e) return;
+      if (e.effect === 'motherNetRestock') this._queueSwap('net');
+      else if (e.effect === 'indiumCartridge') this._queueSwap('indium');     // lane 3f: the ion-fuel cartridge is handed over the same way
+    };
+    this._onGas = (e) => { if (e && (e.effect === 'engineGasResupply' || e.effect === 'coldGasResupply')) this._queueGas(); };
     this._onReset = () => this.reset();
     this._onState = (e) => {
       const to = e && e.to;
@@ -266,6 +284,28 @@ export class ResupplySatellite {
       return c;
     });
 
+    // the ion-fuel magazine (lane 3f): a short tray sticking out behind the bus top on a bracket plate against the rear face, two small
+    // silver indium cartridges on saddles. Same heights as the net rack, so the arm reaches them along the same raised path.
+    const indiumMetal = this._mat({ color: 0xc9ced6, metalness: 0.9, roughness: 0.3 });
+    this._mesh(g, 'SatIndiumTray', new THREE.BoxGeometry(0.12 * M, 0.05 * M, 0.66 * M), gun, RO.SPACECRAFT_DETAIL, 0, BUS.y / 2, -1.2);
+    this._mesh(g, 'SatIndiumBracket', new THREE.BoxGeometry(0.12 * M, 0.42 * M, 0.04 * M), gun, RO.SPACECRAFT_DETAIL, 0, 0.39, -BUS.z / 2 - 0.02);
+    // each cartridge lies in a cradle of two side rails, never on a saddle under it: the wrist stub (r 40 mm) trails over the cartridge
+    // and is thicker than it (r 35 mm), so anything directly under the cartridge would touch the stub; the rails stand outside the stub
+    for (let i = 0; i < IN_SLOT_Z.length; i++) {
+      for (const sx of [-1, 1]) {
+        this._mesh(g, `SatIndiumRail_${i}${sx < 0 ? 'L' : 'R'}`, new THREE.BoxGeometry(0.01 * M, 0.1 * M, 0.04 * M), gun, RO.SPACECRAFT_DETAIL, sx * 0.0475, 0.675, IN_SLOT_Z[i] - 0.045);
+      }
+    }
+    this._inCarts = IN_SLOT_Z.map((z, i) => {
+      const c = new THREE.Group();
+      c.name = `SatIndiumCartridge_${i}`;
+      this._mesh(c, `SatIndiumBody_${i}`, cylZ(IN_CART.r, IN_CART.len), indiumMetal, RO.SPACECRAFT_OPAQUE, 0, 0, -IN_CART.len / 2);
+      this._mesh(c, `SatIndiumCap_${i}`, cylZ(IN_CART.r - 0.004, 0.016), dark, RO.SPACECRAFT_DETAIL, 0, 0, IN_CART.len / 2 - 0.014);
+      c.position.set(0, SLOT_Y * M, z * M);
+      g.add(c);
+      return c;
+    });
+
     // the arm: shoulder pedestal (buried 20 mm), joints, two links, wrist stub, docking probe
     this._mesh(g, 'SatShoulderPedestal', new THREE.BoxGeometry(0.3 * M, 0.12 * M, 0.3 * M), gun, RO.SPACECRAFT_OPAQUE, ARM_BASE.x, ARM_BASE.y - 0.16, ARM_BASE.z);
     this._mesh(g, 'SatShoulder', new THREE.SphereGeometry(0.09 * M, 24, 12), gun, RO.SPACECRAFT_DETAIL, ARM_BASE.x, ARM_BASE.y, ARM_BASE.z);
@@ -308,7 +348,7 @@ export class ResupplySatellite {
       this._altKm = e.altKm ?? this._altKm;
       if (this._state === 'mated' || this._state === 'docking') return;      // a repeat changes nothing
       this._synced = true;
-      this._swapsQueued = 0; this._swapT = -1; this._gasT = -1; this._gasPending = false;
+      this._swapQueue.length = 0; this._swapT = -1; this._gasT = -1; this._gasPending = false;
       if (this._state === 'hidden') { this._dist = APPEAR_DIST_M; this._armS = 0; this._w = 0; }
       this._distFrom = this._dist;                                           // from hover, mid-approach or a drift: glide in from where it is
       this._armFrom = this._armS;                                            // ... and close the arm from where it is (never a snap to stowed)
@@ -321,7 +361,7 @@ export class ResupplySatellite {
       this._state = 'leaving';
       this._t = 0;
       this._speed = 0;
-      this._swapT = -1; this._swapsQueued = 0; this._gasT = -1; this._gasPending = false;
+      this._swapT = -1; this._swapQueue.length = 0; this._gasT = -1; this._gasPending = false;
     } else if (phase === 'coming') {
       if (this._state !== 'hidden') return;
       this._synced = true;
@@ -334,10 +374,14 @@ export class ResupplySatellite {
     }
   }
 
-  _queueSwap() {
+  /** @param {'net'|'indium'} kind what the swap carries */
+  _queueSwap(kind = 'net') {
     if (this._state !== 'mated' && this._state !== 'docking') return;
-    if (this._swapsQueued < SWAP_QUEUE_MAX) this._swapsQueued++;
+    if (this._swapQueue.length < SWAP_QUEUE_MAX) this._swapQueue.push(kind);
   }
+
+  /** Swaps waiting (not counting the one running). */
+  get _swapsQueued() { return this._swapQueue.length; }
 
   _queueGas() { this.showGasFlow(); }
 
@@ -355,7 +399,7 @@ export class ResupplySatellite {
     this._synced = false;
     this._t = 0;
     this._armS = 0; this._armFrom = 0; this._w = 0; this._wFrom = 0;
-    this._swapsQueued = 0; this._swapT = -1; this._gasT = -1; this._gasPending = false;
+    this._swapQueue.length = 0; this._swapT = -1; this._gasT = -1; this._gasPending = false;
     this._flowI = 0; this._dt = 0;
     this._speed = 0;
     this.group.visible = false;
@@ -418,10 +462,10 @@ export class ResupplySatellite {
       case 'mated': {
         this._armS = 1;
         this._dist = MATED_DIST_M;
-        if (this._swapT < 0 && this._swapsQueued > 0) {
-          this._swapsQueued--;
+        if (this._swapT < 0 && this._swapQueue.length > 0) {
+          this._swapKind = this._swapQueue.shift();
           this._swapT = 0;
-          this._swapSlot = this._swapCount++ % SLOT_Z.length;
+          this._swapSlot = this._swapKind === 'indium' ? this._inSwapCount++ % IN_SLOT_Z.length : this._swapCount++ % SLOT_Z.length;
         }
         if (this._swapT >= 0) {
           this._swapT += dt;
@@ -485,7 +529,7 @@ export class ResupplySatellite {
 
   /** Swap timeline: the legs of the running slot (SWAP_LEGS), no allocation. The cartridge is carried from GRAB_AT to INSERT_AT. */
   _swapTip(t, out) {
-    const legs = SWAP_LEGS[this._swapSlot];
+    const legs = this._swapKind === 'indium' ? IN_SWAP_LEGS[this._swapSlot] : SWAP_LEGS[this._swapSlot];
     let acc = 0;
     for (let i = 0; i < legs.length; i++) {
       const leg = legs[i];
@@ -544,16 +588,18 @@ export class ResupplySatellite {
 
     // the carried cartridge rides in the probe's grip (front end at the tip); otherwise each sits in its slot
     if (this._swapT >= 0) {
-      const c = this._carts[this._swapSlot];
+      const indium = this._swapKind === 'indium';
+      const c = indium ? this._inCarts[this._swapSlot] : this._carts[this._swapSlot];
+      const len = indium ? IN_CART.len : CART.len;
       const t = this._swapT;
       if (this._carrying(t)) {
         c.visible = true;
-        c.position.set(0, this._tip.y * M, (this._tip.z - CART.len / 2) * M);
+        c.position.set(0, this._tip.y * M, (this._tip.z - len / 2) * M);
       } else if (t >= 3.2) {
         c.visible = false;                                // inserted into her launcher
       } else {
         c.visible = true;
-        c.position.set(0, SLOT_Y * M, SLOT_Z[this._swapSlot] * M);
+        c.position.set(0, SLOT_Y * M, (indium ? IN_SLOT_Z[this._swapSlot] : SLOT_Z[this._swapSlot]) * M);
       }
     }
   }
@@ -570,6 +616,11 @@ export class ResupplySatellite {
       const c = this._carts[i];
       c.visible = true;
       c.position.set(0, SLOT_Y * M, SLOT_Z[i] * M);
+    }
+    for (let i = 0; i < this._inCarts.length; i++) {
+      const c = this._inCarts[i];
+      c.visible = true;
+      c.position.set(0, SLOT_Y * M, IN_SLOT_Z[i] * M);
     }
   }
 
@@ -654,8 +705,16 @@ export class ResupplySatellite {
     return out.copy(this._carts[i].position).applyQuaternion(this.group.quaternion).add(this.group.position);
   }
 
-  /** The cartridge the running swap carries, or -1. */
+  /** World position of ion-fuel cartridge `i`'s centre (scene units), as of the last update. */
+  getIndiumCartridgeWorldPosition(i, out = new THREE.Vector3()) {
+    return out.copy(this._inCarts[i].position).applyQuaternion(this.group.quaternion).add(this.group.position);
+  }
+
+  /** The cartridge the running swap carries (its slot within its kind), or -1. */
   swapSlot() { return this._swapT >= 0 ? this._swapSlot : -1; }
+
+  /** What the running swap carries: 'net' | 'indium', or null when none runs. */
+  swapKind() { return this._swapT >= 0 ? this._swapKind : null; }
 
   dispose() {
     eventBus.off(Events.RESUPPLY_BERTH, this._onBerth);

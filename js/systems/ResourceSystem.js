@@ -47,6 +47,43 @@ export function gasPriceCr(gasId, kg) {
 }
 
 /**
+ * Nets step 3 lane 3f: price of `kg` kilograms of nitrogen cold gas, credits - the same launch-mass rule as gasPriceCr with the
+ * nitrogen commodity price (`Constants.DAUGHTER_SUPPLY.N2_USD_PER_KG`, an estimate kept OUT of `Constants.FUELS`, which every reader
+ * treats as the engine-gas list). Rounded to 10 cr.
+ * @param {number} kg
+ * @returns {number} credits
+ */
+export function coldGasPriceCr(kg) {
+  const S = Constants.DAUGHTER_SUPPLY;
+  const perKg = Constants.LAUNCH_USD_PER_KG + S.N2_USD_PER_KG;
+  return Math.round(Math.max(0, kg) * perKg / Constants.USD_PER_CREDIT / 10) * 10;
+}
+
+/**
+ * Nets step 3 lane 3f: price of one ion-fuel cartridge (or `kg` of indium), credits - the launch-mass rule with the indium commodity
+ * price (`Constants.DAUGHTER_SUPPLY.INDIUM_USD_PER_KG`, an estimate). Rounded to 1 cr (a cartridge is small money; a 10 cr step
+ * would misprice it by a tenth).
+ * @param {number} [kg] default: one cartridge
+ * @returns {number} credits
+ */
+export function indiumCartridgePriceCr(kg) {
+  const S = Constants.DAUGHTER_SUPPLY;
+  const k = Number.isFinite(kg) ? kg : S.INDIUM_CARTRIDGE_KG;
+  return Math.round(Math.max(0, k) * (Constants.LAUNCH_USD_PER_KG + S.INDIUM_USD_PER_KG) / Constants.USD_PER_CREDIT);
+}
+
+/**
+ * Nets step 3 lane 3f: free space in the cold-gas (nitrogen) tank, kg.
+ * @param {{coldGas?: number, coldGasMax?: number}|null} res - ResourceSystem or player.resources
+ * @returns {number} kg
+ */
+export function coldGasFreeKg(res) {
+  const max = res && Number.isFinite(res.coldGasMax) ? res.coldGasMax : Constants.COLD_GAS_MAX;
+  const have = res && Number.isFinite(res.coldGas) ? res.coldGas : 0;
+  return Math.max(0, max - have);
+}
+
+/**
  * q1-gas-leftovers D1: the kg a salvaged-gas amount is worth. Debris `salvage.xenon` is in pool units
  * (100 = one full tank of the default gas), so 10 units on argon = 2.08 kg. The one owner of this
  * conversion: the award (x refinery multiplier), the wireframe line and the dossier label all call it.
@@ -146,6 +183,9 @@ export class ResourceSystem {
     // whichever gas is in the tank (`tankGasId`), as a fill percentage (100 = one full 60 L base tank).
     this.xenon = 0;   // filled below, once xenonMax and tankGasId exist (g1-gas-upgrades D2)
     this.coldGas = ResourceSystem.startPropellant(Constants.COLD_GAS_MAX);
+    // Nets step 3 lane 3f (DECISIONS §4): the mother-side indium store, kg of cast indium for the daughters' ion-fuel cartridges.
+    // A new run starts it EMPTY (today daughters never refuel within a run except from salvage, so this keeps today's difficulty).
+    this.indiumStoreKg = 0;
     // w4-power D1: every boot starts at BATTERY_START_FRACTION (half) of the max.
     this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);
     this.solarPanelHealth = 1.0;
@@ -760,6 +800,7 @@ export class ResourceSystem {
       coldGasMax: this.coldGasMax,
       xenon: this.xenon,
       coldGas: this.coldGas,
+      indiumStoreKg: this.indiumStoreKg,   // lane 3f: saved like coldGas (an old save has none and loads as 0)
       batteryMax: this.batteryMax,
       currentFuelId: this._currentFuelId,
       tankGasId: this.tankGasId,   // h3-argon-engine D6: the gas in the tank survives reloads
@@ -824,6 +865,10 @@ export class ResourceSystem {
     this.coldGas = Number.isFinite(data.coldGas)
       ? clampLevel(data.coldGas, this.coldGasMax)
       : ResourceSystem.startPropellant(this.coldGasMax);
+    // lane 3f: the indium store, clamped to its room; an old save, or a game-over save (which strips it), starts it empty
+    this.indiumStoreKg = Number.isFinite(data.indiumStoreKg)
+      ? clampLevel(data.indiumStoreKg, Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG)
+      : 0;
     this.battery = ResourceSystem.startCharge(this.batteryMax);
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;
@@ -979,6 +1024,68 @@ export class ResourceSystem {
     return add;
   }
 
+  /**
+   * Nets step 3 lane 3f (T1): load up to `kg` of nitrogen into the cold-gas tank, limited by free space - the same rule as
+   * `resupplyEngineGas`. The tank feeds the docked daughters' bottles (§34 row 5), so this IS the daughters' cold-gas buy.
+   * @param {number} kg
+   * @returns {number} kg actually loaded (0 when the tank is full: free < 0.1 kg)
+   */
+  resupplyColdGas(kg) {
+    const free = coldGasFreeKg(this);
+    if (free < 0.1 || !(kg > 0)) return 0;
+    const add = Math.min(kg, free);
+    this.coldGas = Math.min(this.coldGasMax, this.coldGas + add);
+    this._syncToPlayer();
+    eventBus.emit(Events.RESOURCE_UPGRADED, { effect: 'coldGasResupply', value: add });
+    return add;
+  }
+
+  // ======================================================================
+  // INDIUM STORE (lane 3f, DECISIONS §4: salvaged indium goes to a mother-side store, never into a daughter tank)
+  // ======================================================================
+
+  /** Room left in the indium store, kg. */
+  indiumStoreFreeKg() {
+    return Math.max(0, Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG - this.indiumStoreKg);
+  }
+
+  /**
+   * Put up to `kg` of indium into the store (salvage, or a bought cartridge). What does not fit is NOT stored.
+   * @param {number} kg
+   * @returns {number} kg actually stored
+   */
+  addIndium(kg) {
+    if (!(kg > 0)) return 0;
+    const add = Math.min(kg, this.indiumStoreFreeKg());
+    if (!(add > 0)) return 0;
+    this.indiumStoreKg = Math.min(Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG, this.indiumStoreKg + add);
+    this._syncToPlayer();
+    return add;
+  }
+
+  /**
+   * Nets step 3 lane 3f (T3): a bought ion-fuel cartridge goes into the indium store AT THE CLICK, whether or not the satellite's arm is
+   * there to show it (the arm's hand-over is only the look). A whole cartridge or none: a store with less room than one refuses it.
+   * @param {number} kg the cartridge's indium
+   * @returns {number} kg stored (0 when there is no room for the whole cartridge)
+   */
+  loadIndiumCartridge(kg) {
+    if (!(kg > 0) || this.indiumStoreFreeKg() < kg - 1e-9) return 0;
+    const add = this.addIndium(kg);
+    if (add > 0) eventBus.emit(Events.RESOURCE_UPGRADED, { effect: 'indiumCartridge', value: add });
+    return add;
+  }
+
+  /**
+   * Set the store's level directly, clamped to [0, max] (the docked swap writes the pool back with this).
+   * @param {number} kg
+   */
+  setIndiumStore(kg) {
+    const max = Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG;
+    this.indiumStoreKg = Math.min(max, Math.max(0, Number.isFinite(kg) ? kg : 0));
+    this._syncToPlayer();
+  }
+
   // ======================================================================
   // UPGRADES
   // ======================================================================
@@ -1002,6 +1109,12 @@ export class ResourceSystem {
       case 'engineGasResupply':
         if (this.resupplyEngineGas(data.value) <= 0) return false;
         return true;
+      case 'coldGasResupply':
+        if (this.resupplyColdGas(data.value) <= 0) return false;
+        return true;   // resupplyColdGas synced and emitted RESOURCE_UPGRADED itself
+      case 'indiumCartridge':
+        if (this.loadIndiumCartridge(data.value) <= 0) return false;
+        return true;   // loadIndiumCartridge synced and emitted RESOURCE_UPGRADED itself
       case 'coldGasMax':
         this.coldGasMax += data.value;
         this.coldGas = Math.min(this.coldGas + data.value, this.coldGasMax);
@@ -1058,6 +1171,7 @@ export class ResourceSystem {
    */
   reset() {
     this.coldGas = ResourceSystem.startPropellant(Constants.COLD_GAS_MAX);
+    this.indiumStoreKg = 0;   // lane 3f: a new run (retry, game-over continue) starts the indium store empty
     this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);   // w4-power D1: half
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;
@@ -1098,6 +1212,7 @@ export class ResourceSystem {
     if (!this._player) return;
     this._player.resources.xenon = this.xenon;
     this._player.resources.coldGas = this.coldGas;
+    this._player.resources.indiumStoreKg = this.indiumStoreKg;   // lane 3f
     this._player.resources.battery = this.battery;
     this._player.resources.solarPanelHealth = this.solarPanelHealth;
     this._player.resources.bodyPanelHealth = this.bodyPanelHealth;      // mother-wings step 4

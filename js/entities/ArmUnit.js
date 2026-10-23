@@ -25,6 +25,7 @@ import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, 
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
 import { daughterOutOfNetsLine } from '../systems/netRouting.js';
+import { placeName } from '../systems/resupplyWords.js';   // lane 3f F1: "resupply satellite" with the map on, today's "resupply stop" without
 import { computeToolOdds, makeNetOddsLockCache } from '../systems/ToolOdds.js';
 import { gameState } from '../core/GameState.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
@@ -652,6 +653,7 @@ export class ArmUnit {
     // --- Runtime state ---
     this.fuel = 100;                        // 0–100 percentage
     this.coldGasKg = this._coldGasBottleKg(); // reel-gas: her cold-gas bottle, kg (starts full; refilled from the mother's coldGas while docked)
+    this._indiumSwapT = -1;                   // lane 3f: game seconds into a docked ion-fuel cartridge swap; < 0 = none running
     this.tetherLength = 0;                  // current deployed length in meters
     this.target = null;                     // assigned debris object
     this.capturedDebris = null;             // debris hauled back (the in-hand scalar)
@@ -2998,6 +3000,7 @@ export class ArmUnit {
     this.state = S.DOCKED;
     this.fuel = 100;
     this.coldGasKg = this._coldGasBottleKg();   // reel-gas: the bottle is reset wherever the FEEP fuel is
+    this._indiumSwapT = -1;                     // lane 3f: no swap survives a reset
     this.tetherLength = 0;
     this.target = null;
     this.capturedDebris = null;
@@ -3130,6 +3133,7 @@ export class ArmUnit {
      case S.ADRIFT:     this._updateAdrift(dt); break;
    }
    this._updateColdGasRefill(dt);       // reel-gas: docked on her strut, the mother's gas tops her bottle up
+   this._updateIndiumSwap(dt);          // lane 3f: docked on her strut, the mother's indium store swaps a fresh ion-fuel cartridge in
 
    // --- Orbital frame correction (STORE): update _prevParentPos AFTER state machine ---
    // Must be separate from the APPLY step above so that _updateTransit's drift
@@ -8175,6 +8179,58 @@ export class ArmUnit {
         text: 'The mother is out of cold gas; daughters cannot refill their braking gas.', priority: 'warning',
       });
     }
+  }
+
+  /**
+   * @private Lane 3f (DECISIONS §4 "Docked servicing"): the mother's indium store -> her ion-fuel tank while she sits on her strut
+   * (DOCKED, HOLDING_CATCH, RELOADING), as a cast-cartridge SWAP that takes SWAP_GAME_S game seconds (the cold-gas refill's time base,
+   * so about 3 real s at the base clock). It runs while her fuel is below 100 % and the store holds indium; at its end the old
+   * cartridge's leftover joins the store and a fresh cartridge of min(tank, store + leftover) goes in, so she never ends a swap
+   * with less fuel than she started with. Leaving the docked states before the end interrupts it: nothing moved, nothing is lost.
+   * One swap mechanism: one daughter swaps at a time (`ps._indiumSwapArm` is the one holding it; a stale holder is ignored).
+   * The store empty with a daughter below 100 %: one plain line, said once, re-armed when the store has indium again.
+   * (A fuel level above 100 %, from the armFuelMax upgrade, is not below 100: no swap, and nothing is taken from it.)
+   */
+  _updateIndiumSwap(dt) {
+    if (!(dt > 0)) return;
+    const st = this.state;
+    if (st !== S.DOCKED && st !== S.HOLDING_CATCH && st !== S.RELOADING) { this._indiumSwapT = -1; return; }
+    const ps = this._playerSatellite;
+    const rs = ps && ps._resourceSystem;
+    if (!rs || !Number.isFinite(rs.indiumStoreKg)) { this._indiumSwapT = -1; return; }
+    if (!(this.fuel < 100 - 1e-6)) { this._indiumSwapT = -1; return; }
+    if (!(rs.indiumStoreKg > 1e-9)) {
+      this._indiumSwapT = -1;
+      if (!ps._daughterIndiumEmptySaid) {
+        ps._daughterIndiumEmptySaid = true;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: `The ion-fuel store is empty; daughters cannot refill their ion fuel. Buy a cartridge at the ${placeName()}.`, priority: 'info',
+        });
+      }
+      return;
+    }
+    ps._daughterIndiumEmptySaid = false;
+    const holder = ps._indiumSwapArm;
+    if (holder && holder !== this && holder._indiumSwapT >= 0) { this._indiumSwapT = -1; return; }   // another daughter has the mechanism
+    ps._indiumSwapArm = this;
+    if (this._indiumSwapT < 0) this._indiumSwapT = 0;
+    this._indiumSwapT += dt * TimeAuthority.BASE_SCALE;
+    if (this._indiumSwapT < Constants.DAUGHTER_SUPPLY.SWAP_GAME_S) return;
+
+    // the swap ends: the leftover and the store make one pool; a cartridge of min(tank, pool) goes in, the rest stays in the store
+    const tankKg = this.type === 'weaver' ? Constants.INDIUM_FULL_TANK_WEAVER : Constants.INDIUM_FULL_TANK_SPINNER;
+    const leftoverKg = Math.max(0, this.fuel) / 100 * tankKg;
+    const poolKg = rs.indiumStoreKg + leftoverKg;
+    const cartKg = Math.min(tankKg, poolKg);
+    const before = this.fuel;
+    rs.setIndiumStore(poolKg - cartKg);                     // the pool minus the cartridge (never more than the store held, so never past its max)
+    this.fuel = cartKg >= tankKg - 1e-12 ? 100 : (cartKg / tankKg) * 100;
+    this._indiumSwapT = -1;
+    ps._indiumSwapArm = null;
+    eventBus.emit(Events.ARM_REFUELED, { armId: this.id, amount: this.fuel - before });
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `${this.displayName}: new ion-fuel cartridge in. Fuel ${Math.round(this.fuel)}%.`, priority: 'good',
+    });
   }
 
   /**

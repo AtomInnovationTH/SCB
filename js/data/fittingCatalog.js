@@ -174,6 +174,12 @@ const FITTING_SPECS = {
     display: (row) => ({ param: 'engineGasKg', base: START_GAS_KG, unit: 'kg', op: `+${row.value}` }),
     current: (deps) => (deps.resourceSystem ? engineGasKg(deps.resourceSystem) : undefined),
   },
+  // lane 3f (T1): nitrogen for her cold-gas tank, which tops up docked daughters. Shown as the cold gas aboard, kg.
+  coldgas_resupply: {
+    subsystem: 'ENGINEERING', reads: 'resourceSystem',
+    display: (row) => ({ param: 'coldGasKg', base: Constants.COLD_GAS_MAX * Constants.PROPELLANT_START_FRACTION, unit: 'kg', op: `+${row.value}` }),
+    current: (deps) => deps.resourceSystem?.coldGas,
+  },
   extra_coldgas: {
     subsystem: 'ENGINEERING', reads: 'resourceSystem',
     display: (row) => ({ param: 'coldGasMax', base: Constants.COLD_GAS_MAX, unit: 'kg', op: `+${row.value}` }),
@@ -331,6 +337,12 @@ const FITTING_SPECS = {
     subsystem: 'BERTHS', reads: 'armManager',
     display: (row) => ({ param: 'smallDaughterNets', base: Constants.CAPTURE_NET.SMALL.MAGAZINE_SIZE, unit: 'nets', op: `+${row.value}` }),
     current: (deps) => deps.armManager?.arms?.find((a) => a?.config?.type === 'spinner')?.getNetInventory?.(),
+  },
+  // lane 3f (T3): an ion-fuel cartridge goes into her indium store (kg); a docked daughter swaps it in. Shown as the store's level.
+  indium_cartridge: {
+    subsystem: 'BERTHS', reads: 'resourceSystem',
+    display: (row) => ({ param: 'indiumStoreKg', base: 0, unit: 'kg', op: `+${row.value}` }),
+    current: (deps) => deps.resourceSystem?.indiumStoreKg,
   },
   hazmat_handler: {
     subsystem: 'BERTHS', reads: 'hasUpgrade',

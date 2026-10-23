@@ -31,7 +31,7 @@ export const Events = {
   // deleted in the P1 integrity sweep — reintroducing it is a fresh design.
   ARM_MANUAL_THRUST:  'arm:manualThrust',
   ARM_DEORBIT:        'arm:deorbit',      // One-way sacrifice command (Session 10)
-  ARM_REFUELED:       'arm:refueled',     // Arm refueled from salvaged Indium (Session 10)
+  ARM_REFUELED:       'arm:refueled',     // Daughter ion fuel swapped in from her indium store (docked swap, lane 3f)
   ARM_DEORBIT_CMD:    'arm:deorbitCmd',   // Comms menu / D key deorbit command
   ARM_SELECT:         'arm:select',       // Player selected arm by number key 1-6 (Sprint C2)
   ARM_DESELECT:       'arm:deselect',     // Player deselected arm — back to mothership (key 7)

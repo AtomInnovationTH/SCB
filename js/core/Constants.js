@@ -1448,6 +1448,21 @@ export const Constants = {
     EMPTY_KG:   1e-5,                            // kg - below this the bottle is empty: no jet, her ion thruster is the only brake
   },
 
+  // Nets step 3 lane 3f (owner 2026-10-23, "Cold gas and ion fuel"; DECISIONS §4 docked servicing, §34 rows 5 and 10): what the
+  // resupply satellite sells for the daughters. A nitrogen buy fills the mother's cold-gas tank (which tops up docked daughters,
+  // §34 row 5). An ion-fuel cartridge (cast indium: a cartridge, never a fluid, §4) is handed over by the satellite's arm into the
+  // mother's indium store; a docked daughter swaps cartridges with it over SWAP_GAME_S. Values marked (est) are the coordinator's
+  // estimates the owner may veto. Prices follow "mass is money" (§2b): (LAUNCH_USD_PER_KG + the commodity's USD per kg) per kg,
+  // like gasPriceCr. Tests: js/test/test-DaughterSupply.js.
+  DAUGHTER_SUPPLY: {
+    N2_BUY_KG: 5,                  // kg of nitrogen per buy (the same load as the engine gas buy, GAS_RESUPPLY_KG)
+    N2_USD_PER_KG: 5,              // USD per kg of high-purity nitrogen (est); a named constant of its own, never an entry in FUELS
+    INDIUM_CARTRIDGE_KG: 0.15,     // kg of indium in one cartridge = one large daughter's full FEEP tank (INDIUM_FULL_TANK_WEAVER, pinned equal)
+    INDIUM_USD_PER_KG: 350,        // USD per kg of indium metal (est, a recent market price)
+    INDIUM_STORE_MAX_KG: 0.6,      // kg: the mother's indium store holds four cartridges (est); a new run starts it EMPTY
+    SWAP_GAME_S: 30,               // game seconds a docked cartridge swap takes (est; the same time base as the cold-gas refill, so 3 real s)
+  },
+
   // reel-home (2026-10-19, FEATURE_FLAGS.REEL_HOME, owner design): a daughter's catch comes home on reels. No jump at net
   // close: her net winds the catch to its rack cell on her nose (NET only, no fuel, centre of mass kept:
   // ArmUnit._rhNetReelStep). Then REELING goes TAIL FIRST (no winding while she is more than TAIL_FIRST_TOL_DEG off), her

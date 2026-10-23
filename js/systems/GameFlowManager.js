@@ -660,6 +660,14 @@ export class GameFlowManager {
         this._refs.armManager.setFleetLaunchSpeed(save.launchSpeed);
       }
 
+      // Nets step 3 lane 3f (§34 row 10): the daughters' ion fuel and cold gas, back on the daughters they were saved from. AFTER
+      // resetGame's armManager.reset() (ArmUnit.reset() fills both tanks) and AFTER the upgrade replay (armFuelMax can raise a full
+      // tank). An old save, and a game-over save, carry none: the tanks stay full, as they always were.
+      if (save.gameOver !== true && Array.isArray(save.daughters) && this._refs.armManager
+        && typeof this._refs.armManager.restoreSupplyState === 'function') {
+        this._refs.armManager.restoreSupplyState(save.daughters);
+      }
+
       // Rollout backfill: FIRST_DEPOT_VISITED is newer than some saves. Without
       // this, _applyFirstDepotFloor() (gated on that flag) would fire its
       // one-time "first cleanup contract settled" credit floor on the next depot
@@ -1199,19 +1207,19 @@ export class GameFlowManager {
             });
           }
 
-          // Indium → refuel the arm that captured it
-          if (salvage.indium > 0 && returningArm) {
-            const C = Constants;
-            const tankSize = returningArm.type === 'weaver'
-              ? C.INDIUM_FULL_TANK_WEAVER
-              : C.INDIUM_FULL_TANK_SPINNER;
-            const fuelRestore = (salvage.indium * refineryMult / tankSize) * 100;
-            returningArm.fuel = Math.min(100, returningArm.fuel + fuelRestore);
-            eventBus.emit(Events.ARM_REFUELED, {
-              armId: returningArm.id, amount: fuelRestore,
-            });
+          // Indium → the mother's indium store (lane 3f, DECISIONS §4 "Docked servicing": salvaged indium goes to a mother-side
+          // store, never straight into a daughter tank; a daughter's tank only fills through a docked cartridge swap). What
+          // does not fit the store is lost, and one plain line says so.
+          if (salvage.indium > 0 && resourceSystem) {
+            const wantKg = salvage.indium * refineryMult;
+            const gotKg = resourceSystem.addIndium(wantKg);
+            const grams = (kg) => Math.round(kg * 1000);
             eventBus.emit(Events.COMMS_MESSAGE, {
-              text: `\u26CF ${returningArm.displayName}: Indium recovered \u2014 FEEP fuel +${fuelRestore.toFixed(0)}%`,
+              text: gotKg >= wantKg - 1e-9
+                ? `\u26CF Indium recovered \u2014 ${grams(wantKg)} g into the ion-fuel store`
+                : (gotKg > 0
+                  ? `\u26CF Indium recovered \u2014 ${grams(gotKg)} g stored, ${grams(wantKg - gotKg)} g lost: the ion-fuel store is full`
+                  : `\u26CF Indium recovered, but the ion-fuel store is full \u2014 ${grams(wantKg)} g lost`),
               priority: 'good',
             });
           }
@@ -2120,6 +2128,7 @@ export class GameFlowManager {
     if (gameState.currentState === GameStates.GAME_OVER) {
       delete resources.xenon;
       delete resources.coldGas;
+      delete resources.indiumStoreKg;   // lane 3f: a fresh attempt starts the indium store empty too
     }
     const upgrades = shopScreen.getSerializableUpgrades();
 
@@ -2151,6 +2160,12 @@ export class GameFlowManager {
         debrisByTier: scoring.debrisByTier,
       },
     };
+
+    // Nets step 3 lane 3f (DECISIONS §34 row 10): each daughter's ion fuel and cold gas ride in the save, so a reload keeps the fuel she
+    // had spent. A game-over save carries none (CONTINUE is a fresh attempt: every tank full, as the xenon and cold gas levels above).
+    if (gameState.currentState !== GameStates.GAME_OVER && this._refs.armManager && typeof this._refs.armManager.getSupplyState === 'function') {
+      saveData.daughters = this._refs.armManager.getSupplyState();
+    }
 
     // Nets step 3 slice 2b (FIELDS_BY_HEIGHT): the field she is at, which pieces of each field are left, and the days the
     // trips have added. `serialize()` answers null with the flag off, so a flag-off save is exactly what it was.

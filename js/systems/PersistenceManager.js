@@ -151,6 +151,10 @@ class PersistenceManager {
         // save is byte-for-byte what it was. Additive (no SAVE_VERSION bump): an old save loads as "fresh, at the start field".
         ...(data.fields != null ? { fields: data.fields } : {}),
         ...(Number.isFinite(data.shipDays) && data.shipDays > 0 ? { shipDays: data.shipDays } : {}),
+        // Nets step 3 lane 3f (DECISIONS §34 row 10): each daughter's ion fuel (%) and cold gas (kg), [{ id, fuel, coldGasKg }]. Handed in
+        // by saveGame (armManager.getSupplyState()); a game-over save passes none, so CONTINUE starts every tank full. Written only
+        // when given: an old save, and a game-over save, load with full tanks as before. Additive (no SAVE_VERSION bump).
+        ...(Array.isArray(data.daughters) ? { daughters: data.daughters } : {}),
         // save() is a WHITELIST: a key that a read-modify-write setter writes
         // (as setCeremonyFlag does with ceremonyFlags above) but that is
         // missing from this list is silently dropped on the next write. (The

@@ -33,6 +33,8 @@ import { engineGasKg, engineDeltaV, engineTankDryKg, engineGasLowFrac } from '..
 
 /** 1 meter in scene units */
 const M = 0.00001;
+/** A daughter's ion fuel is a percentage; the Daughter Fuel Reserve upgrade lifts a full tank to 150 %. A saved level is clamped to this. */
+const SUPPLY_FUEL_MAX_PCT = 200;
 
 // reel-home scratch
 const _rhInvQ = new THREE.Quaternion();
@@ -2264,6 +2266,36 @@ export class ArmManager {
   }
 
   /**
+   * Nets step 3 lane 3f (DECISIONS §34 row 10): what each daughter carries that a save must keep - her ion fuel (%) and her cold-gas
+   * bottle (kg). Keyed by arm id (so a changed arm tier cannot shift the values onto another daughter).
+   * @returns {Array<{id: string, fuel: number, coldGasKg: number}>}
+   */
+  getSupplyState() {
+    return this.arms.map((a) => ({ id: a.id, fuel: a.fuel, coldGasKg: a.coldGasKg }));
+  }
+
+  /**
+   * Nets step 3 lane 3f: put saved ion fuel and cold gas back on the daughters they were saved from (matched by id; an id this fleet
+   * does not have is skipped, a missing or non-finite value leaves that tank as it is). Fuel is clamped to [0, SUPPLY_FUEL_MAX_PCT]
+   * (the Daughter Fuel Reserve lifts a full tank to 150 %), the bottle to [0, its size]. Call it AFTER `reset()` and after the upgrade
+   * replay (`ArmUnit.reset()` fills the tanks and the replay can raise a tank's max).
+   * @param {Array<{id: string, fuel?: number, coldGasKg?: number}>|null} list
+   * @returns {number} how many daughters were restored
+   */
+  restoreSupplyState(list) {
+    if (!Array.isArray(list)) return 0;
+    let n = 0;
+    for (const e of list) {
+      const a = e && this.arms.find((x) => x.id === e.id);
+      if (!a) continue;
+      if (Number.isFinite(e.fuel)) a.fuel = Math.min(SUPPLY_FUEL_MAX_PCT, Math.max(0, e.fuel));
+      if (Number.isFinite(e.coldGasKg)) a.coldGasKg = Math.min(a._coldGasBottleKg(), Math.max(0, e.coldGasKg));
+      n++;
+    }
+    return n;
+  }
+
+  /**
    * The fleet launch speed (m/s): max across arms — all arms share the fleet
    * spring tier, so this is the dial's single truth for HUD + save.
    * @returns {number}
@@ -4123,9 +4155,12 @@ export class ArmManager {
 
     // Cold gas is CARRIED, not burned by the Hall engine (h3-argon-engine D4: it used to be counted as
     // burnable at Hall Isp, ~30 % too high): it sits in BOTH the loaded and the empty mass.
-    const carriedDry = coreDry + coldGasCurrent + dockedArmMass + cargoMass + motherNetMass;
+    // Lane 3f F2 (Ruling 0, §33 row 11 "her mass is live"): the indium in her ion-fuel store is carried like cargo (the Hall
+    // engine never burns it): in the loaded and the empty mass.
+    const indiumStoreKg = (this._resourceSystem && Number.isFinite(this._resourceSystem.indiumStoreKg)) ? Math.max(0, this._resourceSystem.indiumStoreKg) : 0;
+    const carriedDry = coreDry + coldGasCurrent + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg;
     const wetMass = carriedDry + xenonCurrent;
-    const dryMass = coreDry + dockedArmMass + cargoMass + motherNetMass;   // reported, as before: without either gas
+    const dryMass = coreDry + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg;   // reported, as before: without either gas
 
     // Tsiolkovsky for the engine: ΔV = Isp_eff x g0 x ln((dry + cold + gas) / (dry + cold)).
     // Isp_eff = the ACTIVE fuel's Isp / c (D5: shop upgrade x power split act as Isp gains).
@@ -4135,7 +4170,7 @@ export class ArmManager {
     const ispActive = fuel && fuel.isp > 0 ? fuel.isp : Constants.OCTOPUS_CORE_HALL_ISP;
     const isp = ispActive / (c > 0 ? c : 1);   // effective Isp: the figure the ΔV and the flow share
     const deltaV = engineDeltaV({
-      dryKg: coreDry + dockedArmMass + cargoMass + motherNetMass, coldGasKg: coldGasCurrent, gasKg: xenonCurrent, isp: ispActive, c,
+      dryKg: coreDry + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg, coldGasKg: coldGasCurrent, gasKg: xenonCurrent, isp: ispActive, c,
     });
 
     return {
@@ -4659,6 +4694,8 @@ export class ArmManager {
     // nothing: those nets survive the reset with their mass (no reset path
     // touches captureNetSystem.activeNets), so the ledger never loses them.
     if (this.playerSatellite) this.playerSatellite._attitudeInertia = null;
+    // Lane 3f F4: a new run (and a game-over continue) lets the empty ion-fuel store line be said once more.
+    if (this.playerSatellite) this.playerSatellite._daughterIndiumEmptySaid = false;
 
     // V5: Reset pulse scan state
     this._pulseScanCooldown = 0;

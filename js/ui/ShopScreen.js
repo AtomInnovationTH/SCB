@@ -14,11 +14,11 @@ import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
 import { DAUGHTER_NET_EFFECT_TYPE } from '../systems/upgradeEffectRoutes.js';
 import { depotWords, shopTitle } from '../systems/resupplyWords.js';   // lane 3d: the depot words read the map switch
-import { upgradePrereqsMet, upgradeCostNow, engineTankFull } from './shopGating.js';
-import { gasPriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
+import { upgradePrereqsMet, upgradeCostNow, engineTankFull, consumableFull as noRoomFor } from './shopGating.js';
+import { gasPriceCr, coldGasPriceCr, indiumCartridgePriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
 
 /**
- * Upgrade definitions — 38 items across 9 categories, all wired to live systems
+ * Upgrade definitions — 40 items across 9 categories, all wired to live systems
  * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins
  * this header to them).
  * ST-6.6: Each upgrade carries a `trl` (NASA TRL 1-9) and optional `trlRationale`
@@ -26,7 +26,7 @@ import { gasPriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
  * Exported for Node.js test harness (test-TRL.js integrity check).
  */
 export const UPGRADES = [
-  // Propulsion (9)
+  // Propulsion (10)
   { id: 'efficient_ion', cat: 'Propulsion', name: 'Efficient Ion Drive', cost: 500,
     desc: '-20% engine gas consumption', effect: 'xenonEfficiency', value: 0.8, maxLevel: 1,
     trl: 9, trlRationale: 'Xenon ion drives flown since Deep Space 1 (1998)' },
@@ -53,6 +53,12 @@ export const UPGRADES = [
     desc: 'Load 5 kg of the gas in your tank (less if the tank is nearly full). Every kilo has to be launched, so range costs credits.',
     effect: 'engineGasResupply', value: Constants.GAS_RESUPPLY_KG, maxLevel: Infinity, consumable: true,
     trl: 6, trlRationale: 'In-orbit propellant transfer demonstrated by Orbital Express (2007, hydrazine); xenon transfer not yet flown' },
+  // Nets step 3 lane 3f (owner 2026-10-23, "Cold gas and ion fuel"): nitrogen for her cold-gas tank, by the kilo like the engine gas
+  // (price through upgradeCostNow: the room in the tank, launch mass + nitrogen's own commodity price). The tank tops up docked daughters.
+  { id: 'coldgas_resupply', cat: 'Propulsion', name: 'Nitrogen Cold Gas', cost: coldGasPriceCr(Constants.DAUGHTER_SUPPLY.N2_BUY_KG),
+    desc: 'Load 5 kg of nitrogen into your cold-gas tank (less if it is nearly full). Docked daughters fill their braking gas from it. Every kilo has to be launched, so it costs credits.',
+    effect: 'coldGasResupply', value: Constants.DAUGHTER_SUPPLY.N2_BUY_KG, maxLevel: Infinity, consumable: true,
+    trl: 6, trlRationale: 'In-orbit propellant transfer demonstrated by Orbital Express (2007, hydrazine); nitrogen servicing not yet flown' },
   { id: 'extra_coldgas', cat: 'Propulsion', name: 'Extra Cold Gas', cost: 400,
     desc: '+10 max cold gas', effect: 'coldGasMax', value: 10, maxLevel: 2,
     trl: 9, trlRationale: 'Cold gas tanks ubiquitous since 1960s' },
@@ -160,6 +166,13 @@ export const UPGRADES = [
     effect: 'smallDaughterNet', value: 1, maxLevel: Infinity, consumable: true,
     requiresFeature: 'CAPTURE_NET',
     trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
+  // Nets step 3 lane 3f (owner 2026-10-23, "Cold gas and ion fuel"; DECISIONS §4: ion fuel is cast indium, a cartridge, never a fluid):
+  // one cartridge into the mother's indium store (a whole cartridge or none), the satellite's arm hands it over. A docked daughter
+  // swaps it for her tank (ArmUnit._updateIndiumSwap). Price: launch mass plus indium's own price (indiumCartridgePriceCr).
+  { id: 'indium_cartridge', cat: 'Daughters', name: 'Ion-fuel cartridge', cost: indiumCartridgePriceCr(),
+    desc: `One cast-indium cartridge (${Math.round(Constants.DAUGHTER_SUPPLY.INDIUM_CARTRIDGE_KG * 1000)} g, a large daughter's full tank) for the daughters' ion thrusters. It goes into your indium store; a docked daughter swaps it in for her tank in about ${Constants.DAUGHTER_SUPPLY.SWAP_GAME_S} s. Salvaged indium goes to the same store.`,
+    effect: 'indiumCartridge', value: Constants.DAUGHTER_SUPPLY.INDIUM_CARTRIDGE_KG, maxLevel: Infinity, consumable: true,
+    trl: 5, trlRationale: 'Indium FEEP thrusters flew on Gaia and LISA Pathfinder; handing cartridges over in orbit is not yet demonstrated' },
   { id: 'hazmat_handler', cat: 'Daughters', name: 'Hazmat Handler', cost: 1200,
     desc: 'Recover hydrazine → cold gas', effect: 'hazmatRecovery', value: true, maxLevel: 1,
     trl: 2, trlRationale: 'On-orbit hazmat recovery from derelicts is fully speculative' },
@@ -970,7 +983,7 @@ export class ShopScreen {
     const consumableFull = (upgrade.effect === 'motherNetRestock'
       && !captureNetSystem.hasMotherPodSpace())
       || (!!daughterNetType && !captureNetSystem.hasDaughterNetSpace(daughterNetType))
-      || (upgrade.effect === 'engineGasResupply' && engineTankFull(this._resourceSystem));
+      || noRoomFor(upgrade, this._resourceSystem);   // the engine tank, the cold-gas tank, the indium store
     const available = !maxed && canAfford && requiresMet && !consumableFull;
     // S1 retention: pinnable = gated-open, not-maxed, non-consumable.
     const pinnable = !maxed && requiresMet && !upgrade.consumable && upgrade.maxLevel !== Infinity;
@@ -1034,6 +1047,8 @@ export class ShopScreen {
           ${upgrade.requires && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${UPGRADES.find(u => u.id === upgrade.requires)?.name}</div>` : ''}
           ${upgrade.supersededBy && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Replaced by ${UPGRADES.find(u => u.id === upgrade.supersededBy)?.name}</div>` : ''}
           ${consumableFull && upgrade.effect === 'engineGasResupply' ? `<div style="font-size:0.65rem;color:#ff6644;">Engine tank full</div>` : ''}
+          ${consumableFull && upgrade.effect === 'coldGasResupply' ? `<div style="font-size:0.65rem;color:#ff6644;">Cold-gas tank full</div>` : ''}
+          ${consumableFull && upgrade.effect === 'indiumCartridge' ? `<div style="font-size:0.65rem;color:#ff6644;">Indium store full</div>` : ''}
           ${consumableFull && daughterNetType ? `<div style="font-size:0.65rem;color:#ff6644;">No docked daughter has room</div>` : ''}
           ${upgrade.requiresAll && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${upgrade.requiresAll.map(id => UPGRADES.find(u => u.id === id)?.name || id).join(' + ')}</div>` : ''}
           ${!canAfford && !maxed ? `<div style="font-size:0.6rem;color:rgba(255,68,68,0.5);margin-top:2px;">Need ${(price - scoringSystem.credits).toLocaleString()} more cr</div>` : ''}
@@ -1230,6 +1245,17 @@ export class ShopScreen {
       // g1-gas-upgrades D4: nor for gas that has no room in the tank (free < 0.1 kg)
       if (upgrade.effect === 'engineGasResupply' && engineTankFull(this._resourceSystem)) {
         audioSystem.playDeny();
+        return;
+      }
+      // lane 3f: nor for nitrogen that has no room in the cold-gas tank (free < 0.1 kg), nor a cartridge the indium store cannot take
+      if ((upgrade.effect === 'coldGasResupply' || upgrade.effect === 'indiumCartridge') && noRoomFor(upgrade, this._resourceSystem)) {
+        audioSystem.playDeny();
+        if (upgrade.effect === 'indiumCartridge') {            // one plain line: the store takes whole cartridges only
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            sender: 'MARKET', text: 'The ion-fuel store has no room for another cartridge.', priority: 'warning',
+            _reactive: true,   // feedback to the click the player just made
+          });
+        }
         return;
       }
       if (!scoringSystem.spendCredits(upgradeCostNow(upgrade, this._resourceSystem))) {

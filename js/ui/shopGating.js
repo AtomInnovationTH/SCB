@@ -14,7 +14,8 @@
  * @module ui/shopGating
  */
 
-import { gasPriceCr, engineTankFreeKg } from '../systems/ResourceSystem.js';
+import { Constants } from '../core/Constants.js';
+import { gasPriceCr, engineTankFreeKg, coldGasPriceCr, coldGasFreeKg, indiumCartridgePriceCr } from '../systems/ResourceSystem.js';
 
 /**
  * Whether an upgrade's prerequisites are satisfied.
@@ -63,6 +64,15 @@ export function upgradeCostNow(upgrade, res) {
     const kg = free < 0.1 ? upgrade.value : Math.min(upgrade.value, free);
     return gasPriceCr(res.tankGasId, kg);
   }
+  // lane 3f: the nitrogen buy is priced the same way - by the kilos it would load (the room in her cold-gas tank), at the
+  // nitrogen commodity price on top of the launch mass.
+  if (upgrade.effect === 'coldGasResupply' && res) {
+    const free = coldGasFreeKg(res);
+    const kg = free < 0.1 ? upgrade.value : Math.min(upgrade.value, free);
+    return coldGasPriceCr(kg);
+  }
+  // lane 3f: a cartridge is one fixed load (a whole cartridge or none), priced by its indium on top of the launch mass
+  if (upgrade.effect === 'indiumCartridge') return indiumCartridgePriceCr(upgrade.value);
   return upgrade.cost;
 }
 
@@ -73,4 +83,42 @@ export function upgradeCostNow(upgrade, res) {
  */
 export function engineTankFull(res) {
   return !!res && engineTankFreeKg(res) < 0.1;
+}
+
+/**
+ * Nets step 3 lane 3f: true when the nitrogen buy has no room to load (cold-gas tank full: free < 0.1 kg).
+ * @param {{coldGas?: number, coldGasMax?: number}|null} res - ResourceSystem or player.resources
+ * @returns {boolean}
+ */
+export function coldGasTankFull(res) {
+  return !!res && coldGasFreeKg(res) < 0.1;
+}
+
+/**
+ * Nets step 3 lane 3f: true when the store has no room for one WHOLE ion-fuel cartridge (a cartridge is not poured, so a store with a
+ * little room refuses it). Works on a ResourceSystem or on player.resources (`indiumStoreKg` is mirrored there).
+ * @param {{indiumStoreKg?: number}|null} res
+ * @param {number} [cartridgeKg] default: the cartridge size
+ * @returns {boolean}
+ */
+export function indiumStoreFull(res, cartridgeKg = Constants.DAUGHTER_SUPPLY.INDIUM_CARTRIDGE_KG) {
+  if (!res) return false;
+  const have = Number.isFinite(res.indiumStoreKg) ? res.indiumStoreKg : 0;
+  return Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG - have < cartridgeKg - 1e-9;
+}
+
+/**
+ * Nets step 3 lane 3f: the one answer to "this consumable has nowhere to go": the engine tank is full (the gas resupply), the cold-gas
+ * tank is full (the nitrogen buy), or the indium store cannot take a cartridge. False for every other row.
+ * @param {object} upgrade - catalog row
+ * @param {object|null} res - ResourceSystem or player.resources
+ * @returns {boolean}
+ */
+export function consumableFull(upgrade, res) {
+  switch (upgrade && upgrade.effect) {
+    case 'engineGasResupply': return engineTankFull(res);
+    case 'coldGasResupply': return coldGasTankFull(res);
+    case 'indiumCartridge': return indiumStoreFull(res, upgrade.value);
+    default: return false;
+  }
 }

@@ -86,7 +86,7 @@ import { buyAtLine } from '../systems/resupplyWords.js';
 import { FITTING_CATALOG, groupBySubsystem } from '../data/fittingCatalog.js';
 import { BLUEPRINT_SUBSYSTEMS } from '../data/blueprintSubsystems.js';
 import { subsystemForPart, partsForSubsystem } from '../data/refitIndex.js';
-import { upgradePrereqsMet, upgradeCostNow, engineTankFull } from './shopGating.js';
+import { upgradePrereqsMet, upgradeCostNow, consumableFull } from './shopGating.js';
 
 /** G1 write cap — the ProxContextPanel/TransferWindows house value. */
 const DOM_WRITE_MIN_INTERVAL_MS = 250;
@@ -263,7 +263,7 @@ export class RefitPane {
       // a resupply with a full tank is not offered as buyable.
       const price = shop.cost == null ? Infinity : upgradeCostNow(shop, ctx.res);
       const prereqs = (ctx.prereqsMet ? !!ctx.prereqsMet(shop) : true)
-        && !(shop.effect === 'engineGasResupply' && engineTankFull(ctx.res));
+        && !consumableFull(shop, ctx.res);       // lane 3f: also a full cold-gas tank and a full indium store
       // u1-resupply-stop D3: mid-mission (ctx.atStop === false) nothing can be bought, so nothing is "affordable now".
       const affordable = price <= (ctx.credits ?? 0) && ctx.atStop !== false;
       const cls = prereqs ? (affordable ? 0 : 1) : 2;
@@ -305,8 +305,8 @@ export class RefitPane {
       const by = (ctx.nameOf && ctx.nameOf(shop.supersededBy)) || shop.supersededBy;
       return { kind: 'needs', text: `replaced by ${String(by).replace(/ Engine Gas$/, '')}` };
     }
-    if (shop.effect === 'engineGasResupply' && engineTankFull(ctx.res)) {
-      return { kind: 'needs', text: 'tank full' };
+    if (consumableFull(shop, ctx.res)) {
+      return { kind: 'needs', text: shop.effect === 'indiumCartridge' ? 'store full' : 'tank full' };
     }
     if (ctx.prereqsMet && !ctx.prereqsMet(shop)) {
       const ids = [];
@@ -325,6 +325,24 @@ export class RefitPane {
     const n = RefitPane.catchesAway(cost, ctx.credits ?? 0, ctx.avg);
     if (n != null) return { kind: 'wait', text: n === 1 ? '1 catch away' : `${n} catches away` };
     return { kind: 'cost', text: `${cost} cr` };
+  }
+
+  /**
+   * Nets step 3 lane 3f: the one plain line that says what is aboard for the supply rows - the nitrogen in her cold-gas tank, the
+   * indium in her ion-fuel store. '' for every other row. Pure.
+   * @param {object|null} shop - the catalog row (`entry.shop`)
+   * @param {{coldGas?:number, coldGasMax?:number, indiumStoreKg?:number}|null} res - ResourceSystem
+   * @returns {string}
+   */
+  static supplyNote(shop, res) {
+    if (!shop || !res) return '';
+    if (shop.effect === 'coldGasResupply' && Number.isFinite(res.coldGas) && Number.isFinite(res.coldGasMax)) {
+      return `Nitrogen aboard: ${res.coldGas.toFixed(1)} of ${RefitPane.fmtValue(res.coldGasMax)} kg`;
+    }
+    if (shop.effect === 'indiumCartridge' && Number.isFinite(res.indiumStoreKg)) {
+      return `Indium aboard: ${res.indiumStoreKg.toFixed(2)} of ${Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG.toFixed(2)} kg`;
+    }
+    return '';
   }
 
   /**
@@ -381,7 +399,7 @@ export class RefitPane {
       const level = ctx.levelOf ? (ctx.levelOf(entry.id) || 0) : 0;
       if (!shop.consumable && Number.isFinite(shop.maxLevel) && level >= shop.maxLevel) continue;
       if (ctx.prereqsMet && !ctx.prereqsMet(shop)) continue;
-      if (shop.effect === 'engineGasResupply' && engineTankFull(ctx.res)) continue;
+      if (consumableFull(shop, ctx.res)) continue;
       const price = shop.cost == null ? Infinity : upgradeCostNow(shop, ctx.res);
       if (price <= (ctx.credits ?? 0)) n++;
     }
@@ -782,6 +800,7 @@ export class RefitPane {
         level,
         maxLevel: entry.shop?.maxLevel,
         chip,
+        note: RefitPane.supplyNote(entry.shop, ctx.res),   // lane 3f: what is aboard (nitrogen, indium), '' for the other rows
       };
     });
     const affordable = RefitPane.countAffordable(FITTING_CATALOG, ctx);
@@ -793,7 +812,7 @@ export class RefitPane {
       detached ? `det:${detached.id ?? ''}:${detached.name}` : '',
       ctx.credits, affordable,
       installed.rows.join('|'), installed.live ? 1 : 0,
-      alts.map((a) => `${a.id}:${a.chip.kind}:${a.chip.text}:${a.num}${a.arrow}`).join('|'),
+      alts.map((a) => `${a.id}:${a.chip.kind}:${a.chip.text}:${a.num}${a.arrow}:${a.note}`).join('|'),
       recommended ? `reco:${recommended.id}` : '',
       // Session L: the actuator states ride the key so a toggle re-renders at once.
       acts.map((a) => `act:${a.key}:${a.text}${a.disabled ? ':off' : ''}`).join('|'),
@@ -929,7 +948,8 @@ export class RefitPane {
           (buy
             ? `<button class="refit-chip" data-buy="${a.id}" style="cursor:pointer;background:rgba(0,255,136,0.15);border:1px solid ${C.PLAYER};color:${C.PLAYER};font:inherit;padding:0 6px;border-radius:3px;${buyBox}">${a.chip.text}</button>`
             : `<span class="refit-chip" style="color:${chipColor};opacity:0.9">${a.chip.text}</span>`) +
-          '</div>',
+          '</div>' +
+          (a.note ? `<div class="refit-note" data-note="${a.id}" style="opacity:0.7;font-size:0.85em;padding:0 0 3px 0">${a.note}</div>` : ''),
         );
       }
       parts.push('</div>');
