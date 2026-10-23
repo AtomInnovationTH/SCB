@@ -4667,10 +4667,12 @@ export class PlayerSatellite extends THREE.Group {
     // Radiator plate — OSR-class light grey, distinct from the gold MLI body
     // and the dark deck (P3 will key IR shimmer off these faces).
     // v4-radiator-look D1: the radiating +Z face is matte white (#E8E6E0; the old 0xcdd4da at 0.35 / 0.55 blew out
-    // to a flat slab), the -Z face dark grey (#2B2B30), the four edge faces and all frame hardware mid-grey metal.
+    // to a flat slab), the four edge faces and all frame hardware mid-grey metal.
+    // Owner 2026-10-23: "radiators should be all white both sides for easier printing" (picked "White both sides in
+    // game", so the game matches the printed model): the -Z face is the same matte white as the front (was #2B2B30).
     // BoxGeometry groups run +X, -X, +Y, -Y, +Z, -Z, so the material array is [edge x4, front, back].
     const frontMat = new THREE.MeshStandardMaterial({ color: 0xE8E6E0, metalness: 0.05, roughness: 0.75 });
-    const backMat = new THREE.MeshStandardMaterial({ color: 0x2B2B30, metalness: 0.2, roughness: 0.8 });
+    const backMat = new THREE.MeshStandardMaterial({ color: 0xE8E6E0, metalness: 0.05, roughness: 0.75 });   // same as frontMat
     const metalMat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, metalness: 0.6, roughness: 0.45 });
     const bracketMat = new THREE.MeshStandardMaterial({
       color: 0x3a3a44, metalness: 0.7, roughness: 0.45,
@@ -4905,8 +4907,8 @@ export class PlayerSatellite extends THREE.Group {
     const railFace = (lengthM, widthM, bands) => [frontMat, backMat].map((base, k) => {
       const mat = base.clone();
       mat.map = getRadiatorRailTexture({
-        lengthM, widthM, endInsetM: FL.SEAM_END_INSET_M, faceHex: k ? 0x2B2B30 : 0xE8E6E0,
-        rails: bands.map(([c, w, kind]) => [c, w, kind === 'seam' ? 0x1c1e26 : (k ? 0x6a6e74 : 0x55585c)]),
+        lengthM, widthM, endInsetM: FL.SEAM_END_INSET_M, faceHex: 0xE8E6E0,
+        rails: bands.map(([c, w, kind]) => [c, w, kind === 'seam' ? 0x1c1e26 : 0x55585c]),
       });
       mat.color.set(0xffffff);                      // the face colour lives in the texture now
       return mat;
