@@ -861,6 +861,8 @@ export class GameFlowManager {
 
       // Reset arms (field-resets the existing ArmUnit instances — stored upgrades re-applied below)
       if (armManager) armManager.reset();
+      // turn-gas D3: nothing of the reel push (gathered Δv, the turn it kicked) survives into the next run
+      if (player && player.clearReelPushState) player.clearReelPushState();
 
       // Opening dance: this is the ONE game-over exit that does its own partial
       // reset instead of calling resetGame(), so it needs the invariant call by
@@ -1937,6 +1939,8 @@ export class GameFlowManager {
 
     // Reset V3 arm manager
     if (armManager) armManager.reset();
+    // turn-gas D3: nothing of the reel push (gathered Δv, the turn it kicked) survives into the next run
+    if (player && player.clearReelPushState) player.clearReelPushState();
 
     // Opening dance (2026-09-16): every path that does NOT run the dance lands
     // on the open pose — CONTINUE, GAMEOVER retry, reduced motion, flag off,

@@ -2896,16 +2896,10 @@ export const Constants = {
   DUALFIRE_RECOIL_WEAVER: 0.509,         // m/s — single Weaver recoil on 130kg mothership
   DUALFIRE_RECOIL_SPINNER: 0.171,        // m/s — single Spinner recoil
   DUALFIRE_RCS_COMPENSATION_N2: 3.7,     // grams N₂ — RCS cost per single Weaver shot
-  // Cargo-continuity S13(e): when the Large Net muzzle sat off the boresight
-  // (±0.45 m) the launch recoil had a real ANGULAR channel (yaw impulse
-  // J·x), and the RCS null's cold-gas cost was billed too, as the equivalent
-  // linear impulse at the cold-gas doghouse lever, through the SAME
-  // N₂-per-impulse proportionality as the linear pattern above. Owner
-  // 2026-10-13: ONE launcher, centred. The muzzle is at x = y = 0 on the
-  // centre of mass, so the lever arm is zero and the angular bill is zero. The
-  // code keeps the general lever-arm form (any off-axis muzzle would be billed
-  // again), so this constant is still read — it just multiplies zero.
-  MOTHER_NET_RECOIL_RCS_LEVER_M: 0.44,   // m — cold-gas doghouse lever (az 94.65/274.65)
+  // The net recoil's ANGULAR channel (an off-axis muzzle; zero since the one
+  // centred launcher, owner 2026-10-13) is billed as real couple gas by
+  // PlayerSatellite._billTurnNullN2 (turn-gas, 2026-10-23; the 0.44 m
+  // doghouse-lever conversion it replaced was ~39x too cheap).
 
   // --- Pulse Scan ---
   PULSE_SCAN_DURATION: 2.0,              // seconds — all arms fire simultaneously
@@ -4797,7 +4791,8 @@ export const Constants = {
     // Fix round 1 (coordinator review of 357ad486, 2026-10-22): the push is momentum, but two things that take it back out
     // are NOT free. (1) The autopilot HOLD copies the locked target's orbit into hers every frame, which erases the Δv: that
     // is a station-keeping burn on her cold-gas thrusters. m = M x Δv / (Isp x g0), billed through RESOURCE_CONSUME coldGas.
-    // (2) Her attitude hold takes the turn back out: billed like the net recoil's turn (PlayerSatellite._billTurnNullN2).
+    // (2) Her attitude hold takes the turn back out: billed as real couple gas, |L| x 2F / (tau x Isp x g0)
+    // (PlayerSatellite._billTurnNullN2, turn-gas 2026-10-23).
     HOLD_ISP_S: 60,                   // s - her cold-gas thrusters (the same 60 as DAUGHTER_COLD_GAS.ISP_S)
     PUFF_EVERY_S: 0.3,                // s (real) - at most one burst of cold-gas puffs this often, so it reads as puffs not a plume
   },

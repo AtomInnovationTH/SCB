@@ -8149,7 +8149,7 @@ export class PlayerSatellite extends THREE.Group {
       // FC2: the spring takes this turn back out, and that costs cold gas (the net recoil's price list), with the couple's puffs
       // (a push through the CoM leaves float noise of ~1e-17 N·m·s here: that turns nothing and bills nothing)
       if (Math.abs(lx) + Math.abs(ly) > 1e-6) {
-        this._reelPushTurnKg += this._billTurnNullN2(Math.abs(lx) + Math.abs(ly), mass);
+        this._reelPushTurnKg += this._billTurnNullN2(lx, ly);
         this._reelPushTurnPuff(lx, ly);
       }
     }
@@ -8195,6 +8195,20 @@ export class PlayerSatellite extends THREE.Group {
     if (!this._reelPushAccs) return;
     if (source === undefined) this._reelPushAccs.clear();
     else this._reelPushAccs.delete(source);
+  }
+
+  /**
+   * turn-gas D3: a reset leaves nothing of the reel push behind. Every gathering (the shared one too: `clearReelPush()`) and the
+   * turn the push kicked into her attitude springs (rates and angles) go. Called by GameFlowManager's `resetGame` (new game,
+   * retry, menu and load) and its GAMEOVER_CONTINUE handler; NOT at a mission start, which fires mid-play and would wipe other
+   * daughters' gathered pushes. `_reelPushTurnKg` is a diagnostic tally (read by tests only) and stays.
+   */
+  clearReelPushState() {
+    this.clearReelPush();
+    this._recoilPitchVel = 0;
+    this._recoilYawVel = 0;
+    this._recoilPitchAngle = 0;
+    this._recoilYawAngle = 0;
   }
 
   /** reel-push: the Δv `source` (none: all) has gathered and not yet handed to her orbit, a fresh vector, m/s world. */
@@ -8299,7 +8313,7 @@ export class PlayerSatellite extends THREE.Group {
    * pod pair at ±0.45 m kicked yaw with alternating sign, one pod then the
    * other, and the null was billed — S13(e)). The lever-arm form is kept, so
    * a muzzle that is ever moved off the axis is kicked and billed again
-   * (MOTHER_NET_RECOIL_RCS_LEVER_M).
+   * (as real couple gas, `_billTurnNullN2`).
    * The linear part is auto-nulled by RCS at a cold-gas N₂ cost (the crossbow
    * pattern).
    *
@@ -8350,38 +8364,50 @@ export class PlayerSatellite extends THREE.Group {
 
     // ── N₂ honesty (S13(e)): bill the angular null too, if there is one. The
     // attitude-hold spring always runs (unlike the player-toggleable linear
-    // compensation), so its cost always accrues: torque impulse → equivalent
-    // linear impulse at the cold-gas doghouse lever → the linear pattern's
-    // N₂-per-impulse. Zero for the centred launcher (angularImpulse === 0).
-    // (The conversion lives in _billTurnNullN2, shared with the reel push's turn.)
-    this._billTurnNullN2(Math.abs(pitchImpulse) + Math.abs(yawImpulse), motherMass);
+    // compensation), so its cost always accrues: since turn-gas (owner 2026-10-22,
+    // "like real physics") the real cold gas her attitude couple burns to make that
+    // torque (_billTurnNullN2: it was priced through a 0.44 m
+    // doghouse lever and the linear pattern, about 39x too cheap).
+    // Zero for the centred launcher (both impulses 0).
+    // (The price lives in _billTurnNullN2, shared with the reel push's turn.)
+    this._billTurnNullN2(pitchImpulse, yawImpulse);
 
     // Cosmetic + comms: a whale launch is a heavy event; a subtle mesh kick is
     // handled by LassoSystem's _recoilOffset. Nothing else to do here.
   }
 
   /**
-   * Cold-gas bill for nulling a turn kick: `angularImpulseNms` (N·m·s, |pitch| + |yaw|) → the equivalent linear impulse at the
-   * cold-gas doghouse lever (`MOTHER_NET_RECOIL_RCS_LEVER_M`) → the linear pattern's N₂ per impulse (`DUALFIRE_RCS_COMPENSATION_N2`
-   * per `DUALFIRE_RECOIL_WEAVER`). The one price list for the net recoil's turn (S13(e)) and the reel push's turn (reel-push
-   * fix round 1, FC2). Emits RESOURCE_CONSUME coldGas.
-   * @param {number} angularImpulseNms
-   * @param {number} motherMass kg
+   * Cold-gas bill for nulling a turn kick, priced as the gas her attitude couple really burns (turn-gas, owner 2026-10-22
+   * "make the reel pull move and turn the mother, like real physics"; DECISIONS §35 row 6). Per axis, making an angular impulse L
+   * takes the couple (two nozzles of `NOZZLE_THRUST_N`, torque τ) L/τ seconds of burning at 2F of thrust, so
+   *   kg = |L| x 2F / (τ x Isp x g0)       (Isp = `REEL_PUSH.HOLD_ISP_S`, her cold-gas thrusters),
+   * summed over pitch and yaw; τ is the live couple torque the attitude controller uses (`_coupleTauMag`), about 61.8 N·m pitch
+   * and 59.0 yaw on the flower ship, so about 2.2 g per N·m·s. The mass is not in it: the inertia is already in L. The one price
+   * list for the net recoil's off-axis turn (S13(e)) and the reel push's turn (reel-push fix round 1, FC2). It replaced a
+   * conversion through the net recoil's linear table (a 0.44 m doghouse lever, `DUALFIRE_RCS_COMPENSATION_N2`),
+   * which was about 39x too cheap. Without couple nozzles the 0.772 m effective arm measured on the flower ship stands in.
+   * Emits RESOURCE_CONSUME coldGas.
+   * @param {number} lPitchNms N·m·s about +X (sign ignored)
+   * @param {number} lYawNms N·m·s about +Y (sign ignored)
    * @returns {number} kg of gas billed (0 when there is nothing to null)
    * @private
    */
-  _billTurnNullN2(angularImpulseNms, motherMass) {
-    if (!(angularImpulseNms > 0)) return 0;
-    const leverM = Constants.MOTHER_NET_RECOIL_RCS_LEVER_M ?? 0.44;
-    const equivDv = (angularImpulseNms / leverM) / motherMass;   // m/s
-    const n2Grams = (Constants.DUALFIRE_RCS_COMPENSATION_N2 ?? 3.7)
-      * (equivDv / (Constants.DUALFIRE_RECOIL_WEAVER ?? 0.509));
-    if (!(n2Grams > 0)) return 0;
+  _billTurnNullN2(lPitchNms, lYawNms) {
+    const twoF = 2 * (Constants.ATTITUDE?.NOZZLE_THRUST_N ?? 25.0);
+    const fallbackTau = twoF * 0.772;                                    // N·m: 2F x the effective arm measured on the flower ship
+    const isp = Constants.REEL_PUSH?.HOLD_ISP_S ?? 60;
+    const perNms = (axis) => {
+      const tau = this._coupleTauMag(axis);
+      return twoF / ((tau > 1e-3 ? tau : fallbackTau) * isp * (Constants.G0 ?? 9.80665));   // kg per N·m·s
+    };
+    const lp = Math.abs(lPitchNms), ly = Math.abs(lYawNms);
+    const kg = (lp > 0 ? lp * perNms('x') : 0) + (ly > 0 ? ly * perNms('y') : 0);
+    if (!(kg > 0)) return 0;
     eventBus.emit(Events.RESOURCE_CONSUME, {
       resource: 'coldGas',
-      amount: n2Grams / 1000,
+      amount: kg,
     });
-    return n2Grams / 1000;
+    return kg;
   }
 
   /**
