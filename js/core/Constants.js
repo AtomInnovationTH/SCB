@@ -5507,12 +5507,17 @@ export const Constants = {
   // swaps net cartridges, it pumps gas; all buying moves there." One satellite at 500 km (350 -> 500 km = 84.5 m/s, research doc
   // 2026-10-trips-by-height), in the start orbit's tilt and node like the fields; a second one near 800 km is slice 4. It is a PLACE,
   // not a field: she is at a field or berthed at the satellite, and nothing is laid out while she is berthed.
-  // CALL_CREDITS is row 7's "Stuck: call it to you for 1,000 credits" (slice 3 lane 3c reads it; nothing here does yet).
+  // CALL_CREDITS is row 7's "Stuck: call it to you for 1,000 credits" (slice 3 lane 3c: the "where next" list's call row,
+  // GameFlowManager._callSatellite). CALL_DAYS_EST is an ESTIMATE, not a measurement: the days a called satellite takes when the
+  // real trip profile to its height cannot be read (the thruster cannot fly it); 16 = the 350 -> 500 km trip's days with drag off
+  // (research doc 2026-10-trips-by-height). The satellite's own thruster is not modelled; with a readable profile the row and the
+  // wait use that profile's days.
   RESUPPLY: {
     SATS: [
       { id: 'sat500', altKm: 500, name: 'Resupply satellite' },
     ],
     CALL_CREDITS: 1000,
+    CALL_DAYS_EST: 16,
   },
 
   // =========================================================================

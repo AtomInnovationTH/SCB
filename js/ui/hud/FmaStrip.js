@@ -411,7 +411,11 @@ export class FmaStrip {
         // Review F6: while her nose is not along the way she goes (a climb pushes along her motion, a descent against it) the push
         // waits, and the line says why. Review R1: the same when the turn waits for power (an empty battery).
         const t = s.trip;
-        this._plainText = (t && Number.isFinite(t.toKm) && Number.isFinite(t.day) && Number.isFinite(t.days) && t.days >= 1)
+        // Lane 3c: a called resupply satellite on its way (nothing burns; she holds): "Resupply satellite on its way · day 3 of 16"
+        const calling = !!(t && t.call === true && Number.isFinite(t.day) && Number.isFinite(t.days) && t.days >= 1);
+        this._plainText = calling
+          ? `Resupply satellite on its way ${DOT} day ${t.day} of ${t.days}`
+          : (t && Number.isFinite(t.toKm) && Number.isFinite(t.day) && Number.isFinite(t.days) && t.days >= 1)
           ? (t.wait === 'power'
             ? (t.dir < 0 ? 'Descent paused: no power to turn' : 'Climb paused: no power to turn')
             : t.wait === 'nose'

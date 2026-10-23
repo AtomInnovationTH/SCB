@@ -28,6 +28,7 @@ import { FieldRegistry } from './systems/FieldRegistry.js';
 import { regimeFromStartOrbit } from './entities/CatalogConverter.js';
 import { computeStartOrbit } from './systems/startOrbitMath.js';
 import { ActiveSatellites } from './entities/ActiveSatellite.js';
+import { ResupplySatellite } from './entities/ResupplySatellite.js';
 import { ArmManager } from './entities/ArmManager.js';
 import { orbitToSceneCartesianInto, subSatellitePoint } from './entities/OrbitalMechanics.js';
 import { CeremonyTimeScale } from './systems/CeremonyTimeScale.js';
@@ -159,6 +160,7 @@ import { holdKey as dispatchKeyHold, releaseKey as dispatchKeyRelease } from './
 import { TouchActionChip } from './ui/TouchActionChip.js';
 import { TouchVerbButton } from './ui/TouchVerbButton.js';
 import { WhereNextList } from './ui/WhereNextList.js';
+import { HeightScale } from './ui/HeightScale.js';
 import { buildWhereNextRows } from './systems/WhereNextRows.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
@@ -641,6 +643,7 @@ let player;
 let debrisField;
 let fieldRegistry; // Nets step 3 slice 2b: the debris fields by height and which of their pieces are left (FIELDS_BY_HEIGHT)
 let activeSatellites;
+let resupplySatellite; // Nets step 3 slice 3 lane 3b: the resupply satellite's look (its own group; never an ActiveSatellite)
 let armManager;
 let floorWordsStore = null;   // u7 D6: which floors' "LEO means ..." line this player has seen (built in init, read in the game loop)
 let motherCallouts;
@@ -1515,6 +1518,13 @@ async function init() {
   fieldRegistry = new FieldRegistry();
   fieldRegistry.init({ debrisField, player });
   debrisField.setFieldSource(fieldRegistry);
+  // Nets step 3 slice 3 lane 3b: the resupply satellite's look (RESUPPLY_BERTH events). Its own group in the scene, NOT one of the
+  // ActiveSatellites below (those end the run on contact); near-field membership is its own (within 8.5 m of her). Hidden on floors
+  // 4 and 5 through a getter: ladderController is built later in boot. Ticked after player.update in the loop.
+  resupplySatellite = new ResupplySatellite({
+    scene, sceneManager, player, fieldRegistry,
+    floor: () => ((ladderController && ladderController.isActive()) ? ladderController.currentFloor() : null),
+  });
 
   // --- Active Satellites ---
   activeSatellites = new ActiveSatellites(scene);
@@ -2229,13 +2239,16 @@ async function init() {
     // there is no floor 4, the flow manager is never told it can ask, and a mission boundary flies to defaultNext() as before.
     whereNextList = new WhereNextList({
       doc: (typeof document !== 'undefined') ? document : null,
-      // slice 3: with no mother nets aboard (mission 1 used all four) the resupply satellite is the pre-focused row
-      getRows: () => buildWhereNextRows(fieldRegistry, { motherNets: captureNetSystem.getMotherNetCount() }),
+      // slice 3: with no mother nets aboard (mission 1 used all four) the resupply satellite is the pre-focused row; lane 3c: the wallet
+      // (the call row) and whether a mission start is owed (a mission going on keeps trips for later) come with the nets from the flow manager
+      getRows: () => buildWhereNextRows(fieldRegistry, gameFlowManager.whereNextRowsOpts()),
       onPick: (id) => gameFlowManager.pickWhereNext(id),
       glass: () => GestureHints.isGlass(),
       isInputBlocked: () => whereNextInputBlocked(),
     });
     navcomFloor.setWhereNext(whereNextList);
+    // lane 3e (s3-map-icons): the fields and the satellite by height beside her marker (draws only with the fields flag on)
+    navcomFloor.setHeightScale(new HeightScale({ registry: () => fieldRegistry, list: whereNextList, glass: () => GestureHints.isGlass() }));
     gameFlowManager.setWhereNextAvailable(true);
     // The choice opens / closes (TransferTrip phase `choose`): show the rows and take her to floor 4; a refused pick that puts the
     // choice back (`again`) only rebuilds the rows.
@@ -7306,6 +7319,8 @@ function gameLoop(timestamp) {
 
     // V-8: Capture net FSM + visual effects (flag-gated internally)
     try { captureNetSystem.update(dt); } catch (e) { console.error('[GameLoop] captureNetSystem:', e); }
+    // Lane 3b: the resupply satellite sits on her nose collar: after player.update (Rule G), real time (its arm plays while the world is held).
+    try { resupplySatellite.update(dt); } catch (e) { console.error('[GameLoop] resupplySatellite:', e); }
     // The leash hand-off: radiators, ship turn, pin and push (zero time while the world is held).
     if (player.leashDriver) { try { player.leashDriver.update(_worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] leashDriver:', e); } }
     // Bags on the radiator tips: pin every frame, cook on the rack's clock (zero time while the world is held).

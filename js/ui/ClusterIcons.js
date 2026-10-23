@@ -35,6 +35,15 @@
 import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
 
+/** Lane 3e: the FieldRegistry (or a getter) `ClusterIcons.nameLine` names her field from; set by `setFieldRegistry`. */
+let _registrySource = null;
+/** @returns {object|null} the registry when the map-by-height flag is on, else null */
+function _fieldRegistry() {
+  let r = _registrySource;
+  try { if (typeof r === 'function') r = r(); } catch (_e) { return null; }
+  return r && typeof r.isOn === 'function' && r.isOn() ? r : null;
+}
+
 /** Count thresholds mapping a cluster's member count to a VisualLaw size band.
  *  Three bands ↔ SIZES_PX [12, 18, 24]; endpoints pinned by test. */
 const SIZE_BREAKS = [25, 100]; // <25 → 12px, <100 → 18px, else 24px
@@ -166,8 +175,25 @@ export class ClusterIcons {
    */
   static nameLine(c) {
     const n = (c && c.count > 0) ? c.count : 0;
-    return `${ClusterIcons.plainName(c)} \u00b7 ${n} ${n === 1 ? 'piece' : 'pieces'}`;
+    const pieces = `${n} ${n === 1 ? 'piece' : 'pieces'}`;
+    // Nets step 3 lane 3e (FIELDS_BY_HEIGHT): a field is named by its height, not by an inclination band ('Field at 350 km'),
+    // from the registry's field she is at; berthed at a satellite no field is out, so no field line. Flag off: today's text.
+    const reg = _fieldRegistry();
+    if (reg) {
+      if (typeof reg.isBerthed === 'function' ? reg.isBerthed() : !!(reg.berthedSatellite && reg.berthedSatellite())) return '';
+      const f = typeof reg.currentField === 'function' ? reg.currentField()
+        : (typeof reg.fields === 'function' && typeof reg.currentId === 'function' ? reg.fields().find((x) => x.id === reg.currentId()) : null);
+      if (f && Number.isFinite(f.altKm)) return `Field at ${Math.round(f.altKm)} km \u00b7 ${pieces}`;
+    }
+    return `${ClusterIcons.plainName(c)} \u00b7 ${pieces}`;
   }
+
+  /**
+   * Lane 3e: where `nameLine` finds the field she is at (HeightScale hands its registry over when it is built; null clears it).
+   * `r` is a FieldRegistry or () => one. Flag off (`isOn()` false) or none: `nameLine` is exactly today's.
+   * @param {object|function|null} r
+   */
+  static setFieldRegistry(r) { _registrySource = r || null; }
 
   /**
    * u10 D1: the on-screen ring size (px) — the count band, x1.25 and at least

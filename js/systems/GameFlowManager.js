@@ -28,7 +28,7 @@ import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
 import { TransferTrip } from './TransferTrip.js';
-import { buildWhereNextRows, STAY_ID, OPEN_LINE, BERTH_LINE } from './WhereNextRows.js';
+import { buildWhereNextRows, STAY_ID, CALL_ID, OPEN_LINE, BERTH_LINE, BERTH_MISSION_LINE, STUCK_CALL_LINE } from './WhereNextRows.js';
 import { salvageGasKg } from './ResourceSystem.js';
 import { UPGRADES } from '../ui/ShopScreen.js';
 import { upgradePrereqsMet, upgradeCostNow } from '../ui/shopGating.js';
@@ -52,6 +52,15 @@ import {
  * equality with ScoringSystem's mission length.
  */
 export const SHOP_CADENCE = Constants.MISSIONS.DEBRIS_PER_MISSION;
+
+/**
+ * Lane 3c: where the end of a mission leads, in the words of the lines that promise it ("Clear 4 more for ..."): the resupply satellite when
+ * it is the stop (flag on, floor 4 there), else today's "depot resupply". `self` may be a test stub without the question (today's words).
+ * @param {object} self a GameFlowManager @returns {string}
+ */
+function stopWords(self) {
+  return self && typeof self._satelliteIsTheStop === 'function' && self._satelliteIsTheStop() ? 'the resupply satellite' : 'depot resupply';
+}
 
 export class GameFlowManager {
   constructor() {
@@ -144,6 +153,12 @@ export class GameFlowManager {
      * @type {number}
      */
     this._strandedS = 0;
+    /**
+     * Lane 3c (C3): this stranded spell has already been offered the call to the resupply satellite (the line was said and the list opened,
+     * or she was choosing). Declined (she picked Stay), the countdown runs as it always did. Cleared when the spell ends and on a new run.
+     * @type {boolean}
+     */
+    this._callOffered = false;
 
     /** @type {number|null} Timer for delayed score-group HUD activation in ORBITAL_VIEW */
     this._scoreGroupTimer = null;
@@ -653,8 +668,10 @@ export class GameFlowManager {
       // upgrades bought) is by definition past its true first depot, so mark the
       // flag seen for them. Genuinely fresh profiles start via MENU_START and
       // still earn the bonus on their real first depot.
-      const pastFirstDepot = (save.debrisCleared || 0) > 0
-        || (Array.isArray(save.upgrades) && save.upgrades.length > 0);
+      // Nets step 3 slice 3, lane 3c (C4c, owed from the 3a review): with the satellite as the stop the first stop is the first BERTH, and a
+      // reload before it must not mark it visited (the 600 floor still pays there). A berth marks it by paying (`_applyFirstDepotFloor`).
+      const pastFirstDepot = !this._satelliteIsTheStop() && ((save.debrisCleared || 0) > 0
+        || (Array.isArray(save.upgrades) && save.upgrades.length > 0));
       if (pastFirstDepot && !persistenceManager.getCeremonyFlag('FIRST_DEPOT_VISITED')) {
         persistenceManager.setCeremonyFlag('FIRST_DEPOT_VISITED', true);
       }
@@ -724,8 +741,8 @@ export class GameFlowManager {
       const stats = scoringSystem.getStats();
       const { perMission, missionNum, debrisUntilShop } = getMissionProgress(stats.debrisCleared);
       const objectiveText = debrisUntilShop >= perMission
-        ? `Clear ${perMission} debris to reach the depot.`
-        : `Clear ${debrisUntilShop} more debris for depot resupply.`;
+        ? (stopWords(this) === 'depot resupply' ? `Clear ${perMission} debris to reach the depot.` : `Clear ${perMission} debris, then pick your next field on the LEO map.`)
+        : `Clear ${debrisUntilShop} more debris for ${stopWords(this)}.`;
 
       // Both lines tagged _onboarding to pass the tier-0 suppression gate: on
       // continue resetGame()'s GAME_RESET restarts the OnboardingDirector pipeline,
@@ -1973,6 +1990,7 @@ export class GameFlowManager {
     this._trip.abort();                   // trip-melt D9: and a trip (no mission start, the plume and the hold released)
     this._deferredBoundary = null;        // trip-melt-2 D12a: a boundary deferred by that trip dies with it
     this._strandedS = 0;                  // t1-stranded: a new run starts with no stranded spell
+    this._callOffered = false;            // lane 3c: nor an offered call
     timerManager.clearByOwner(this);
   }
 
@@ -2087,7 +2105,9 @@ export class GameFlowManager {
     // LEFT (the trip is not saved as a trip). So none is written mid-flight: a reload then finds the save of the mission
     // boundary - at the field she left, with the gas she had before the trip - and the arrival writes the next one.
     // (A game-over save is always written.)
-    if (this._trip && this._trip.isBurning() && this._trip.field && !(opts && opts.gameOver === true)) return;
+    // Lane 3c: nor while a called satellite is on its way (the 1,000 credits are paid in memory, the berth is not there yet): a reload
+    // finds the save from before the call, with the credits she had, and the stuck spell offers the call again.
+    if (this._trip && (this._trip.isCalling() || (this._trip.isBurning() && this._trip.field)) && !(opts && opts.gameOver === true)) return;
     const { shopScreen, resourceSystem } = this._refs;
     const scoring = scoringSystem.serialize();
     const resources = resourceSystem.serialize();
@@ -2247,8 +2267,16 @@ export class GameFlowManager {
       if (this._trip.isActive()) return;           // a trip is already on its way (or she is choosing): its arrival starts whichever mission is due
       // Lane 2b-2: with floor 4 there to ask on, the player picks the field (or Stay) on the LEO map; the trip waits in phase `choose`.
       if (this._whereNextOn) { this._openWhereNext(start); return; }
+      // Lane 3c (C4b, owed from the 3a review): a berthed save loaded with no list to ask on (`?ladder=0`) lets go of the satellite first, so
+      // buying closes; the nearest field is read while she is still berthed (every field counts, from the satellite) and flown to with the
+      // berth gone (a trip that cannot go would otherwise open a choice nobody can answer). With nowhere to fly she goes back to her field.
+      const berth = typeof reg.berthedSatellite === 'function' ? reg.berthedSatellite() : null;
       const field = reg.defaultNext();
-      if (!(field && this._flyToField(field, start))) start();
+      if (berth) { this._leaveBerth(berth); this._clearBerth(); }
+      if (!(field && this._flyToField(field, start))) {
+        if (berth && typeof reg.setHeight === 'function') reg.setHeight(reg.currentField().altKm);
+        start();
+      }
       return;
     }
     // trip-melt-2 D12a: a credit that reached the next boundary DURING the trip ran no boundary then (see the credit
@@ -2309,7 +2337,7 @@ export class GameFlowManager {
     if (!again) {
       // the first-depot floor moves here (the boundary no longer opens the invitation that paid it): once per profile, the framing owed
       if (this._applyFirstDepotFloor()) this._firstVisitOwed = true;
-      eventBus.emit(Events.COMMS_MESSAGE, { text: BERTH_LINE, priority: 'info', _keep: true });
+      eventBus.emit(Events.COMMS_MESSAGE, { text: this._berthLine(), priority: 'info', _keep: true });
     }
     eventBus.emit(Events.RESUPPLY_BERTH, { phase: 'berthed', satId: sat.id, altKm: sat.altKm });
   }
@@ -2360,6 +2388,40 @@ export class GameFlowManager {
     return captureNetSystem && typeof captureNetSystem.getMotherNetCount === 'function' ? captureNetSystem.getMotherNetCount() : undefined;
   }
 
+  /**
+   * Lane 3c: is a mission start owed, i.e. did a boundary ask her where next (the scorer's mission number is above the last mission that
+   * started)? False in the middle of a mission: the list opened because she is out of gas, and trips wait for the mission's end.
+   * @returns {boolean}
+   */
+  missionStartOwed() {
+    const reg = this._refs && this._refs.fieldRegistry;
+    if (!reg || typeof reg.lastMissionStarted !== 'function') return true;
+    return scoringSystem.getMissionNumber() > reg.lastMissionStarted();
+  }
+
+  /** Lane 3c: what the "where next" rows need besides the registry (main.js `getRows` and every list this class builds read it). */
+  whereNextRowsOpts() {
+    return { motherNets: this._motherNetsAboard(), credits: scoringSystem.credits, gasCredits: this._gasBuyPrice(), startOwed: this.missionStartOwed() };
+  }
+
+  /**
+   * @private Review fix F1: what one engine-gas buy costs now (`upgradeCostNow`, the ONE price accessor): the call needs it on top of its own
+   * price, because at the berth the stop rule "credits + cargo below the gas price = stranded" ends the run 15 s after an arrival without it.
+   * @returns {number} credits (0 when the price cannot be read: the call then needs only its own price)
+   */
+  _gasBuyPrice() {
+    const { resourceSystem } = this._refs || {};
+    const row = UPGRADES.find((u) => u.id === 'gas_resupply');
+    const price = row && resourceSystem ? upgradeCostNow(row, resourceSystem) : 0;
+    return Number.isFinite(price) && price > 0 ? price : 0;
+  }
+
+  /** @private The berth line: a satellite called to her mid-mission sends her to Stay here (there is no field to fly to), else the usual. */
+  _berthLine() {
+    const reg = this._refs && this._refs.fieldRegistry;
+    return reg && typeof reg.berthedHere === 'function' && reg.berthedHere() && !this.missionStartOwed() ? BERTH_MISSION_LINE : BERTH_LINE;
+  }
+
   /** main.js: floor 4 exists and hosts the "where next" list (see `_whereNextOn`). @param {boolean} on */
   setWhereNextAvailable(on) {
     this._whereNextOn = !!on;
@@ -2380,13 +2442,13 @@ export class GameFlowManager {
   _openWhereNext(start, opts) {
     const reg = this._refs.fieldRegistry;
     const berthed = typeof reg.isBerthed === 'function' && reg.isBerthed();
-    const rows = buildWhereNextRows(reg, { motherNets: this._motherNetsAboard() });
+    const rows = buildWhereNextRows(reg, this.whereNextRowsOpts());
     if (rows.line) {
       eventBus.emit(Events.COMMS_MESSAGE, { text: rows.line, priority: 'info', _keep: true });
       if (!berthed) { start(); return; }
     }
     this._syncTripDeps();
-    if (!(opts && opts.said)) eventBus.emit(Events.COMMS_MESSAGE, { text: berthed ? BERTH_LINE : OPEN_LINE, priority: 'info', _keep: true });
+    if (!(opts && opts.said)) eventBus.emit(Events.COMMS_MESSAGE, { text: berthed ? this._berthLine() : OPEN_LINE, priority: 'info', _keep: true });
     this._trip.choose({ start });
   }
 
@@ -2404,13 +2466,17 @@ export class GameFlowManager {
     if (!trip.isChoosing() || !reg) return false;
     const choice = trip.choice;
     const start = choice && typeof choice.start === 'function' ? choice.start : () => {};        // (`_openWhereNext` always hands one)
-    // Nets step 3 slice 3: berthed at the resupply satellite no field is hers and there is no Stay (S6); the satellite itself is a pick
-    // only from a field (S4). Everything else is as before.
+    // Nets step 3 slice 3: berthed at the satellite she FLEW to no field is hers and there is no Stay (S6); the satellite itself is a pick
+    // only from a field (S4). A satellite CALLED to her (lane 3c) leaves her field hers: Stay lets go of it, the mission goes on here.
     const berth = typeof reg.berthedSatellite === 'function' ? reg.berthedSatellite() : null;
+    const atSat = !!berth && !(typeof reg.berthedHere === 'function' && reg.berthedHere());
+    const owed = this.missionStartOwed();
+    if (id === CALL_ID) return this._callSatellite(choice, start);
     if (id === STAY_ID) {
-      if (berth) return false;                                             // no Stay at the satellite (the list has no such row)
-      if (reg.remainingCount(reg.currentId()) <= 0) return false;          // nothing here to stay for (the list has no such row)
+      if (atSat) return false;                                             // no Stay at the satellite (the list has no such row)
+      if (owed && reg.remainingCount(reg.currentId()) <= 0) return false;  // nothing here to stay for (the list has no such row; a mission going on always has one)
       trip.leaveChoice();
+      if (berth) { this._leaveBerth(berth); this._clearBerth(); }          // a called satellite lets go: buying closes, the field is hers again
       start();
       this._runDeferredBoundary();
       this.saveGame();
@@ -2419,7 +2485,8 @@ export class GameFlowManager {
     const sat = typeof reg.satelliteById === 'function' ? reg.satelliteById(id) : null;
     const field = sat || reg.fieldById(id);
     if (!field) return false;
-    if (sat ? !!berth : (!berth && field.id === reg.currentId())) return false;     // (berthed: the satellite is where she is; the field she left is a pick)
+    if (!owed) return false;                                               // trips wait for the end of a mission that is going on (the rows say so)
+    if (sat ? !!berth : (!atSat && field.id === reg.currentId())) return false;     // (berthed: the satellite is where she is; the field she left is a pick)
     if (!sat && reg.remainingCount(field.id) <= 0) return false;
     this._syncTripDeps();
     trip.leaveChoice();                                                    // idle again, so `begin` accepts the trip
@@ -2428,6 +2495,38 @@ export class GameFlowManager {
       return true;
     }
     trip.choose(choice, { again: true });                                  // the gas changed: back to the list, rebuilt, with the refusal said
+    return false;
+  }
+
+  /**
+   * @private Lane 3c (C2; §33 row 7 "Stuck: call it to you for 1,000 credits"): the call row was picked. The row must be on the list and
+   * selectable (the same rows the player sees: not berthed, the satellite cannot be flown to, the wallet covers the call); the credits go
+   * at once; she holds where she is while the satellite comes (TransferTrip phase `call`, RESUPPLY_BERTH {coming}); when it arrives the
+   * days go on the ship's clock and she is berthed here (`_arriveAtSatellite`: buying, the first-berth floor, the collar hand-over, the
+   * line, the save, the list again with the SAME start kept). A call that cannot begin gives the credits back and puts the list back.
+   * @param {object} choice the open choice (put back on a refusal) @param {() => void} start the mission transition kept for the pick
+   * @returns {boolean} true = the satellite is on its way
+   */
+  _callSatellite(choice, start) {
+    const trip = this._trip;
+    const reg = this._refs && this._refs.fieldRegistry;
+    if (!reg || !this._satelliteIsTheStop() || (typeof reg.isBerthed === 'function' && reg.isBerthed())) return false;
+    const row = buildWhereNextRows(reg, this.whereNextRowsOpts()).rows.find((r) => r.id === CALL_ID);
+    if (!row || !row.selectable) return false;
+    const sat = reg.satelliteById(row.satId);
+    const price = Constants.RESUPPLY.CALL_CREDITS;
+    if (!sat || !scoringSystem.spendCredits(price)) return false;
+    this._syncTripDeps();
+    trip.leaveChoice();
+    const began = trip.beginCall(() => {
+      const leg = trip.lastLeg;
+      trip.lastLeg = null;
+      if (leg) gameState.shipDays += leg.days;
+      this._arriveAtSatellite(reg.berthedSatellite() || sat, start);
+    }, { sat, days: row.days });
+    if (began) return true;
+    scoringSystem.addCredits(price);
+    trip.choose(choice, { again: true });
     return false;
   }
 
@@ -2471,7 +2570,7 @@ export class GameFlowManager {
       fields: r.fieldRegistry ? {
         planTo: (f, o) => r.fieldRegistry.planTo(f, o),
         depart: () => { r.fieldRegistry.depart(); targetSelector.setTarget(null, { silent: true }); },
-        arrive: (id) => r.fieldRegistry.arrive(id),
+        arrive: (id, o) => r.fieldRegistry.arrive(id, o),
       } : null,
     });
   }
@@ -2756,6 +2855,9 @@ export class GameFlowManager {
    */
   _isStranded() {
     if (!gameState.isGameplay()) return false;
+    // Lane 3c: she has paid for the call and the satellite is on its way: she is not stranded, she is waiting for it (else the grace would
+    // end the run mid-wait, with the credits gone and no gas bought yet).
+    if (this._trip && this._trip.isCalling()) return false;
     const { resourceSystem, shopScreen } = this._refs || {};
     if (!resourceSystem) return false;
     const fuel = typeof resourceSystem.getCurrentFuel === 'function' ? resourceSystem.getCurrentFuel() : null;
@@ -2773,7 +2875,56 @@ export class GameFlowManager {
     }
     // Last of the tank checks: it needs the ship-mass lookup, so a frame with gas or money never pays for it.
     if (!(resourceSystem.xenon < this._strandedIonThreshold())) return false;   // engine gas for >= 1 s of thrust
+    // Lane 3c (C2): while the list is open with a call she can pay for, she is not stranded: the call is the way out, and the choice
+    // waits for her (declined, the stranded countdown below runs as it always did).
+    if (this._trip && this._trip.isChoosing() && this._callSelectable()) return false;
     return !this._paymentUnderWay();
+  }
+
+  /**
+   * @private Lane 3c: both tanks below one second of thrust, nothing else considered (the wallet, the stop, payments under way): what
+   * `_isStranded` starts from. Ends an offered call's spell when gas comes back.
+   * @returns {boolean}
+   */
+  _outOfGas() {
+    const { resourceSystem } = this._refs || {};
+    if (!resourceSystem) return false;
+    const fuel = typeof resourceSystem.getCurrentFuel === 'function' ? resourceSystem.getCurrentFuel() : null;
+    if (fuel && fuel.fromCargo) return false;
+    return resourceSystem.coldGas < this._strandedColdThreshold() && resourceSystem.xenon < this._strandedIonThreshold();
+  }
+
+  /**
+   * @private Lane 3c: would the list show a call row she can pick right now, for a ship that is OUT OF GAS (every caller has established
+   * that: `_isStranded` past its tank checks, `_outOfGas`)? The satellite is the stop, she is not berthed, there is a satellite, and the
+   * wallet covers the call. Out of gas the satellite row cannot be flown to (a trip needs gas for its whole profile; one second of
+   * thrust is not that), so the call row is there and selectable: this needs no rows (they cost a trip plan per field, and this runs
+   * every frame while she looks at the list). The pick itself (`_callSatellite`) asks the real rows.
+   * @returns {boolean}
+   */
+  _callSelectable() {
+    const reg = this._refs && this._refs.fieldRegistry;
+    if (!reg || !this._satelliteIsTheStop() || (typeof reg.isBerthed === 'function' && reg.isBerthed())) return false;
+    if (typeof reg.satellites !== 'function' || reg.satellites().length === 0) return false;
+    return scoringSystem.credits >= Constants.RESUPPLY.CALL_CREDITS + this._gasBuyPrice();
+  }
+
+  /**
+   * @private Lane 3c (C3; §33 row 7): out of gas away from the satellite with the call paid for by her wallet, the countdown does not run:
+   * ONE line says she can call it, and the list opens (in the middle of a mission nothing is owed: the kept start is the scorer's own
+   * check, a no-op unless a mission is due). Offered once per spell: she may stay (then the countdown runs as before). While a trip waits
+   * or burns, today's rules hold.
+   * @returns {boolean} true = she is being offered the call (no countdown)
+   */
+  _strandedCallOffer() {
+    const trip = this._trip;
+    if (trip.isActive()) return false;           // choosing: `_isStranded` already says "not stranded" while the call is on the list; waiting or burning: today's rules
+    if (this._callOffered) return false;         // she was offered it and stayed
+    if (!this._callSelectable()) return false;
+    this._callOffered = true;
+    eventBus.emit(Events.COMMS_MESSAGE, { text: STUCK_CALL_LINE, priority: 'high', _critical: true, _keep: true });
+    this._openWhereNext(() => { scoringSystem.checkMissionTransition(); }, { said: true });
+    return true;
   }
 
   /**
@@ -2786,7 +2937,21 @@ export class GameFlowManager {
   _updateStranded(dt) {
     if (!this._refs) return;
     if (!(dt > 0)) return;
-    if (!this._isStranded()) { this._strandedS = 0; return; }
+    if (!this._isStranded()) {
+      this._strandedS = 0;
+      // Lane 3c: an offered call's spell lasts while she is out of gas; a list that was already open at a boundary (nothing offered yet)
+      // says the same line once, here, where the countdown would have started
+      // (only while it matters - an offered call, or a list open - so a frame of normal flight never pays for the tank lookup)
+      if (this._callOffered || this._trip.isChoosing()) {
+        if (!this._outOfGas()) this._callOffered = false;
+        else if (!this._callOffered && this._trip.isChoosing() && this._callSelectable()) {
+          this._callOffered = true;
+          eventBus.emit(Events.COMMS_MESSAGE, { text: STUCK_CALL_LINE, priority: 'high', _critical: true, _keep: true });
+        }
+      }
+      return;
+    }
+    if (this._strandedCallOffer()) { this._strandedS = 0; return; }
     const grace = Constants.STRANDED_GRACE_S;
     if (this._strandedS === 0) {
       // D6: mid-mission the wallet is irrelevant (nothing can be bought); at the stop it is the reason.
@@ -3019,7 +3184,7 @@ export class GameFlowManager {
     const cleared = perMission - debrisUntilShop;
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: 'HOUSTON', channel: 'HOUSTON', priority: 'info',
-      text: `Mission ${missionNum}: ${cleared}/${perMission} cleared. Clear ${debrisUntilShop} more for depot resupply.`,
+      text: `Mission ${missionNum}: ${cleared}/${perMission} cleared. Clear ${debrisUntilShop} more for ${stopWords(this)}.`,
       _postOnboarding: true,
       _keep: true,   // comms-after-tutorial D6: mission progress - never folded into "x N queued"
     });

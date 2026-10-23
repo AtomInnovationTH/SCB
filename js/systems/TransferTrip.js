@@ -45,6 +45,13 @@
  * satellite})`, `Constants.RESUPPLY`); only its words differ (`isSatelliteTarget`: "Climbing to the resupply satellite.", "Arrived at the
  * resupply satellite.", the gas and the nose refusals). `_end` hands the registry the satellite's id: it berths her there.
  *
+ * A CALLED satellite (lane 3c, DECISIONS §33 row 7 "Stuck: call it to you for 1,000 credits"): phase `call`, `beginCall(onArrive, {sat, days})`.
+ * No burn, no gas, no clock warp: she holds where she is while the satellite comes to her. It plays `playSeconds(days)` real seconds
+ * (the same rule as a trip: 60-120 s), the strip reads "Resupply satellite on its way · day d of N", `RESUPPLY_BERTH {phase: 'coming',
+ * satId, altKm, playS}` goes out once (lane 3b's look: it approaches over those seconds), and at the end the registry berths her where
+ * she is (`fields.arrive(id, {here: true})`), `lastLeg` carries the N days and `onArrive` runs (GameFlowManager: the berth proper).
+ * `isActive()` is true meanwhile, so every credit guard that holds while a trip is on holds here too.
+ *
  * Where next (Nets step 3 slice 2b, lane 2b-2): with the flag on and floor 4 there to ask on, a mission boundary does not pick the
  * field for her. The trip waits in phase `choose` (before `wait`): `isActive()` is true, so every credit guard that waits while a
  * trip is on (a catch landing while she chooses starts no mission, the stop stays open, a boundary reached is deferred) holds,
@@ -60,7 +67,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus as defaultBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { TimeAuthority } from './TimeAuthority.js';
-import { profileAt } from './TripProfile.js';
+import { profileAt, playSeconds } from './TripProfile.js';
 
 /** The plain words (DECISIONS §29; owner: plain language, no phase names). */
 export const TRIP_LINES = Object.freeze({
@@ -101,6 +108,11 @@ export const SATELLITE_NO_GAS_LINE = 'Not enough gas to reach the resupply satel
 /** @param {number} dir +1 along her motion, -1 against it */
 export function satelliteNoPointLine(dir) {
   return `Cannot point the ship ${dir < 0 ? 'against' : 'along'} its motion to reach the resupply satellite.`;
+}
+/** The one line when a called satellite sets out (lane 3c); the berth line follows when it arrives (GameFlowManager). @param {number} days */
+export function calledStartLine(days) {
+  const d = Math.max(1, Math.round(days));
+  return `Resupply satellite called. It is about ${d} ${d === 1 ? 'day' : 'days'} out.`;
 }
 // the trip's own words for its destination (a field or a satellite)
 const tripStartLine = (dir, f, n) => (isSatelliteTarget(f) ? satelliteStartLine(dir, n) : fieldStartLine(dir, f.altKm, n));
@@ -205,7 +217,7 @@ export class TransferTrip {
   constructor(deps = {}) {
     this._d = {};
     this._bus = deps.bus || defaultBus;
-    this._phase = 'idle';           // 'idle' | 'choose' (waiting for the player's pick of the next field) | 'wait' | 'burn'
+    this._phase = 'idle';           // 'idle' | 'choose' (waiting for the player's pick of the next field) | 'wait' | 'burn' | 'call' (a called satellite on its way)
     this._onArrive = null;
     this._choice = null;            // what the flow manager keeps while the player chooses (opaque here), or null
     this._waitS = 0;
@@ -239,6 +251,11 @@ export class TransferTrip {
     this._dep = null;               // her tilt, node and perigee at departure (held for the whole trip)
     this._poseAsked = false;        // the radiators were asked to the burn angle (once per trip)
     this._planCos = 1;              // the share of the push along the way she wants that the profile was planned with (the pace is her cosine now over this)
+    // lane 3c: a called satellite on its way (phase 'call')
+    this._callSat = null;           // the satellite ({id, altKm, ...}) that is coming
+    this._callDays = 0;             // the days it takes (the ship's clock gets them at the end)
+    this._callPlayS = 0;            // real seconds the wait plays in
+    this._callS = 0;                // real seconds played so far
     /** The last leg flown ({fieldId, altKm, days, gasKg}), set when a field trip arrives; GameFlowManager reads it in `onArrive`. */
     this.lastLeg = null;
     this.setDeps(deps);
@@ -254,7 +271,7 @@ export class TransferTrip {
    * @param {function} [deps.rackCanCarry] () => true when a rack catch can still be carried, now or once its tip frees
    *   (default: armManager.rackCanCarry())
    * @param {function} [deps.describe] (debris) => "<size> m <name>"
-   * @param {object} [deps.fields] Nets step 3 slice 2b: {planTo(field, {cos}), depart(), arrive(fieldId)} (FieldRegistry's trip face)
+   * @param {object} [deps.fields] Nets step 3 slice 2b: {planTo(field, {cos}), depart(), arrive(fieldId, {here})} (FieldRegistry's trip face; `here`: a called satellite)
    * @param {object} [deps.bus] event bus (tests)
    */
   setDeps(deps) {
@@ -273,6 +290,8 @@ export class TransferTrip {
   isChoosing() { return this._phase === 'choose'; }
   /** What was handed to `choose()` while the choice is pending, else null. */
   get choice() { return this._phase === 'choose' ? this._choice : null; }
+  /** Lane 3c: a called resupply satellite is on its way (nothing burns; she holds where she is). */
+  isCalling() { return this._phase === 'call'; }
   /** Waiting for the daughters to come home. */
   isWaiting() { return this._phase === 'wait'; }
   /** Burning: the clock runs at TRIP.TIME_RATE, the tip furnaces melt, launches are refused. */
@@ -374,11 +393,39 @@ export class TransferTrip {
   }
 
   /**
+   * Lane 3c: a satellite was called to her (the 1,000 credits are paid by the caller). She holds where she is for `playSeconds(days)`
+   * real seconds, then the registry berths her here and `onArrive` runs. Only from idle (after `leaveChoice()`).
+   * @param {function} onArrive runs when the satellite has arrived (the berth proper)
+   * @param {{sat: {id: string, altKm: number}, days: number}} opts the satellite and the days it takes (the ship's clock gets them)
+   * @returns {boolean} true = the wait began
+   */
+  beginCall(onArrive, opts) {
+    const sat = opts && opts.sat;
+    const days = opts && opts.days;
+    if (this._phase !== 'idle' || !sat || !(days > 0)) return false;
+    this._phase = 'call';
+    this._callSat = sat;
+    this._callDays = days;
+    this._callPlayS = playSeconds(days);
+    this._callS = 0;
+    this._onArrive = typeof onArrive === 'function' ? onArrive : null;
+    this.lastLeg = null;
+    // the strip: the trip's own hold word (TRANSFER) without turning her nose or pushing: she holds where she is
+    const ap = this._d.autopilot;
+    if (ap && typeof ap.holdPrograde === 'function') ap.holdPrograde({ turn: false });
+    this._callStatus();
+    this._bus.emit(Events.RESUPPLY_BERTH, { phase: 'coming', satId: sat.id, altKm: this._fromKm(), playS: this._callPlayS });
+    this._say(calledStartLine(days), { _keep: true });
+    return true;
+  }
+
+  /**
    * One frame. `dt` is real seconds (0 while the world is held).
    * @param {number} dt
    */
   update(dt) {
     if (this._phase === 'idle' || this._phase === 'choose' || !(dt > 0)) return;     // choosing: nothing runs, she waits for the player
+    if (this._phase === 'call') { this._tickCall(dt); return; }
     if (this._phase === 'wait') {
       this._waitS += dt;
       const home = this.daughtersHome();
@@ -395,6 +442,7 @@ export class TransferTrip {
   abort() {
     if (this._phase === 'idle') return;
     if (this._phase === 'choose') { this.leaveChoice(); return; }      // nothing was set up yet: just drop the choice (and close the list)
+    if (this._phase === 'call') { this._onArrive = null; this._finish(); return; }     // a called satellite that never comes: nothing burns, nothing to settle
     // trip-melt-2 D8: a game over / reset / load mid-carry: she snaps docked, her catches stay on her rack, the strut and
     // the radiators go back, the tip reservation is cleared (ArmUnit.abortCarry)
     const am = this._d.armManager;
@@ -494,7 +542,7 @@ export class TransferTrip {
     const o = this._d.player && this._d.player.orbit;
     return o && Number.isFinite(o.semiMajorAxis)
       ? o.semiMajorAxis / Constants.SCENE_SCALE - Constants.EARTH_RADIUS_KM
-      : (this._field ? this._field.altKm : 0);
+      : (this._field ? this._field.altKm : (this._callSat ? this._callSat.altKm : 0));
   }
 
   /** @private The cosine of the angle between her nose (+Z) and her motion; null when either is unknown (a stub, no velocity). */
@@ -565,6 +613,33 @@ export class TransferTrip {
 
   /** @private The trip could not go (no gas for it once planned with the real mass and attitude): she stays, the mission starts. */
   _stay() {
+    const cb = this._onArrive;
+    this._onArrive = null;
+    this._finish();
+    if (cb) cb();
+  }
+
+  /** @private The strip while a called satellite is on its way: which day of how many (the same rounding as a trip's days). */
+  _callStatus() {
+    const ap = this._d.autopilot;
+    if (!ap || typeof ap.setTripStatus !== 'function') return;
+    const days = Math.max(1, Math.round(this._callDays));
+    const f = this._callPlayS > 0 ? Math.min(1, this._callS / this._callPlayS) : 1;
+    ap.setTripStatus({ call: true, day: Math.min(days, Math.floor(f * days) + 1), days });
+  }
+
+  /** @private One frame of the wait for a called satellite (real seconds; a held world gives 0). */
+  _tickCall(dt) {
+    this._callS += dt;
+    this._callStatus();
+    if (this._callS >= this._callPlayS) this._endCall();
+  }
+
+  /** @private The called satellite has come: the registry berths her where she is, the leg (days only) is kept for the caller, `onArrive` runs. */
+  _endCall() {
+    const sat = this._callSat;
+    this.lastLeg = { fieldId: sat.id, altKm: this._fromKm(), days: this._callDays, gasKg: 0, called: true };
+    if (this._d.fields) this._d.fields.arrive(sat.id, { here: true });
     const cb = this._onArrive;
     this._onArrive = null;
     this._finish();
@@ -899,6 +974,7 @@ export class TransferTrip {
     this._field = null;
     this._profile = null;
     this._dep = null;
+    this._callSat = null;
     if (_burning === this) _burning = null;
     const amF = this._d.armManager;
     if (amF && typeof amF.setTripPhase === 'function') amF.setTripPhase(null);      // petal-single: carries are a mission thing again

@@ -141,6 +141,7 @@ export class NavcomFloor {
     this._now = deps.now || _nowMs;
     // Nets step 3 slice 2b (lane 2b-2): the "where next" list (ui/WhereNextList.js) this floor hosts - set by main.js once built.
     this._whereNext = null;
+    this._heightScale = null;         // lane 3e: the fields and the satellite by height beside her marker (ui/HeightScale.js)
 
     this._active = false;
     this._clusters = [];
@@ -197,6 +198,7 @@ export class NavcomFloor {
     // is mounted and no budget is read (byte-identical to the pre-reach floor).
     if (this._getMassBudget && this._orb.show) this._orb.show();
     if (this._whereNext) this._whereNext.setFloorShown(true);     // pending choice: the list is there again on return
+    if (this._heightScale) this._heightScale.show();
   }
 
   /** Leave NAVCOM: hide the costume (state kept so re-entry is cheap). */
@@ -207,6 +209,7 @@ export class NavcomFloor {
     if (this._windows.hide) this._windows.hide();
     if (this._orb.hide) this._orb.hide();
     if (this._whereNext) this._whereNext.setFloorShown(false);    // a pending choice stays pending; only the panel goes
+    if (this._heightScale) this._heightScale.hide();
   }
 
   // ── The "where next" list (Nets step 3 slice 2b, lane 2b-2) ─────────────────────
@@ -215,6 +218,12 @@ export class NavcomFloor {
   setWhereNext(list) {
     this._whereNext = list || null;
     if (this._whereNext) this._whereNext.setFloorShown(this._active);
+  }
+
+  /** main.js: the height scale this floor hosts (null = none; ui/HeightScale.js, lane 3e). It draws only with the fields flag on. */
+  setHeightScale(scale) {
+    this._heightScale = scale || null;
+    if (this._heightScale && this._active) this._heightScale.show();
   }
 
   /** The list is open (a choice is pending and this floor is shown): Tab, Space and the FLY THERE chip belong to it. */
@@ -660,6 +669,10 @@ export class NavcomFloor {
     if (ctx.shipPos && project && this._icons.renderShip) {
       this._icons.renderShip(project(ctx.shipPos), ctx.shipAngleRad || 0);
     }
+    // lane 3e: the fields and the satellite by height, beside her marker (nothing is built with the fields flag off)
+    if (this._heightScale) {
+      this._heightScale.render({ shipPx: (ctx.shipPos && project) ? project(ctx.shipPos) : null, rects: () => this.hudPanelRects() });
+    }
     const window = this._windows.refresh(win, {
       targetName: focused ? focused.name : undefined,
       assessment: focused ? (this._assessments.get(focused.id) || null) : null,
@@ -713,6 +726,7 @@ export class NavcomFloor {
   /** Tear down the owned views. */
   dispose() {
     this._whereNext = null;           // main.js owns the list's life
+    this._heightScale = null;         // ... and the height scale's
     if (this._icons.dispose) this._icons.dispose();
     if (this._windows.dispose) this._windows.dispose();
     if (this._orb.dispose) this._orb.dispose();

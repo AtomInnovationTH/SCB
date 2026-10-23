@@ -22,6 +22,11 @@
  * no rows, and counts as laid out so a load can open the list), no field is "hers", and `defaultNext()` is the nearest field by
  * height from the satellite. `serialize()` adds `berth: 'sat500'` only while berthed.
  *
+ * A CALLED satellite (lane 3c, §33 row 7 "Stuck: call it to you for 1,000 credits") comes to HER: `arrive('sat500', { here: true })`
+ * berths her where she is (`berthKm` = her height then). Her field stays hers and stays laid out around her (a mission may still be
+ * going on), the satellite's height is hers (`berthedSatellite().altKm`), and `serialize()` adds `berthKm` beside `berth`: a called
+ * berth saves and reloads at her height, not at 500 km. `atSatellite()` is the other kind: she flew there and no field is hers.
+ *
  * Save: `serialize()` -> `{ v: 1, current: 'f425', remaining: { f350: [0, 2, 3], ... }, at: 2 }`. `at` is the number of the
  * last mission that STARTED (MISSION_START: an arrival, or a Stay); a mission boundary credit writes its save while the trip
  * to the next field is still to be flown, so a save whose mission number (from the catches) is above `at` has a trip owing.
@@ -114,11 +119,27 @@ export class FieldRegistry {
   /** @returns {boolean} berthed at a satellite (then no field is hers and none is laid out). */
   isBerthed() { return this._state.berthId != null; }
 
-  /** @returns {object|null} the satellite she is berthed at, or null. */
-  berthedSatellite() { return this._state.berthId != null ? this.satelliteById(this._state.berthId) : null; }
+  /**
+   * @returns {object|null} the satellite she is berthed at, or null. A called satellite is where she is: its `altKm` is her height
+   *   at the call (a copy; the table's satellite is never changed).
+   */
+  berthedSatellite() {
+    if (this._state.berthId == null) return null;
+    const sat = this.satelliteById(this._state.berthId);
+    return sat && this._state.berthKm != null ? { ...sat, altKm: this._state.berthKm } : sat;
+  }
 
-  /** She lets go (a game over, a win, the menu): no longer berthed. Her field and the pieces are as they were. */
-  clearBerth() { this._state.berthId = null; }
+  /** @returns {boolean} berthed at a satellite that was CALLED to her (she is where she was: her field is hers and stays laid out). */
+  berthedHere() { return this._state.berthId != null && this._state.berthKm != null; }
+
+  /** @returns {boolean} berthed at the satellite she FLEW to (no field is hers, none is laid out). */
+  atSatellite() { return this._state.berthId != null && this._state.berthKm == null; }
+
+  /** @returns {number} the number of the last mission that started (a mission start is owed when the scorer's number is above it). */
+  lastMissionStarted() { return this._state.at; }
+
+  /** She lets go (a game over, a win, the menu, a Stay): no longer berthed. Her field and the pieces are as they were. */
+  clearBerth() { this._state.berthId = null; this._state.berthKm = null; }
 
   // ── what DebrisField asks ────────────────────────────────────────────────────
 
@@ -133,9 +154,10 @@ export class FieldRegistry {
     this._laidOut = true;             // the field is being laid out now: a trip owing after a load may depart from it
     const f = this.currentField();
     // Berthed: no field is out, but this still counts as laid out (a load into the berth then opens the list from it)
+    // (a CALLED satellite is where she is: her field stays laid out around her at her own height)
     const sat = this.berthedSatellite();
     const plan = {
-      fieldId: f.id, altKm: sat ? sat.altKm : f.altKm, rows: sat ? [] : this.remainingRows(f.id), seed: f.seed, missionNumber: this._pendingMission,
+      fieldId: f.id, altKm: sat ? sat.altKm : f.altKm, rows: this.atSatellite() ? [] : this.remainingRows(f.id), seed: f.seed, missionNumber: this._pendingMission,
     };
     this._pendingMission = null;
     return plan;
@@ -192,7 +214,7 @@ export class FieldRegistry {
    */
   defaultNext() {
     if (!this.isOn()) return null;
-    const sat = this.berthedSatellite();
+    const sat = this.atSatellite() ? this.berthedSatellite() : null;     // (a called satellite is where she is: her own field is hers)
     const here = sat || this.currentField();
     let best = null;
     for (const f of this.fields()) {
@@ -225,11 +247,17 @@ export class FieldRegistry {
   /**
    * She has arrived. A field: this is her field now, the berth ends, the next spawn lays out its pieces. A satellite: she is
    * berthed there (her field id stays as it was, the fields keep their state). An unknown id changes nothing.
+   * `opts.here` (a CALLED satellite): it came to her, so she berths where she is: the berth remembers her height now, her field stays
+   * hers (without a readable height the satellite is at its own).
    * @param {string} id
+   * @param {{here?: boolean}} [opts]
    */
-  arrive(id) {
-    if (this.fieldById(id)) { this._state.currentId = id; this._state.berthId = null; return; }
-    if (this.satelliteById(id)) this._state.berthId = id;
+  arrive(id, opts) {
+    if (this.fieldById(id)) { this._state.currentId = id; this._state.berthId = null; this._state.berthKm = null; return; }
+    if (!this.satelliteById(id)) return;
+    this._state.berthId = id;
+    const km = opts && opts.here === true ? this.altitudeKm() : null;
+    this._state.berthKm = Number.isFinite(km) ? km : null;
   }
 
   /**
@@ -254,7 +282,10 @@ export class FieldRegistry {
     const remaining = {};
     for (const f of this.fields()) remaining[f.id] = this.remainingRows(f.id);
     const out = { v: SAVE_VERSION, current: this.currentField().id, remaining, at: this._state.at };
-    if (this._state.berthId != null) out.berth = this._state.berthId;     // only while berthed: today's saves stay byte-identical
+    if (this._state.berthId != null) {                                    // only while berthed: today's saves stay byte-identical
+      out.berth = this._state.berthId;
+      if (this._state.berthKm != null) out.berthKm = Math.round(this._state.berthKm * 1000) / 1000;     // a called berth: her height, not the satellite's
+    }
     return out;
   }
 
@@ -275,7 +306,11 @@ export class FieldRegistry {
       if (typeof saved.current === 'string' && this.fieldById(saved.current)) this._state.currentId = saved.current;
       if (Number.isInteger(saved.at) && saved.at > 0) this._state.at = saved.at;
       // a berth she was saved at (an unknown or broken one is dropped: she is at her saved field)
-      if (typeof saved.berth === 'string' && this.satelliteById(saved.berth)) this._state.berthId = saved.berth;
+      if (typeof saved.berth === 'string' && this.satelliteById(saved.berth)) {
+        this._state.berthId = saved.berth;
+        // a called berth is at HER height (a broken height is dropped: a berth at the satellite's own)
+        if (Number.isFinite(saved.berthKm) && saved.berthKm >= 100 && saved.berthKm <= 2000) this._state.berthKm = saved.berthKm;
+      }
       const rem = saved.remaining;
       if (rem && typeof rem === 'object') {
         for (const f of this.fields()) {
@@ -314,7 +349,7 @@ export class FieldRegistry {
   _fresh() {
     const remaining = {};
     for (const f of Constants.FIELDS.LIST) remaining[f.id] = allRows();
-    return { currentId: this._startField().id, berthId: null, remaining, at: 1 };
+    return { currentId: this._startField().id, berthId: null, berthKm: null, remaining, at: 1 };
   }
 
   /** @private The gas that pushes her: the one in the tank (a cargo fuel's own Isp when she is burning cargo metal). */

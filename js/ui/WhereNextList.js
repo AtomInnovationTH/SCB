@@ -49,6 +49,9 @@ export const TITLE_TEXT = 'Where next?';
 export const HINT_DESKTOP = 'Tab: next row \u00b7 Space: go';
 export const HINT_GLASS = 'Tap a row, tap it again to go';
 
+/** The focused row's colour; the height scale's chips on the map read it from here, so the highlight is the same blue. */
+export const FOCUS_COLOR = VisualLaw.COLORS.SELECTION;
+
 const MARK = '\u25b8';
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
@@ -63,6 +66,8 @@ export class WhereNextList {
    * @param {function} [deps.now]           ms clock (tests)
    * @param {function} [deps.isInputBlocked] () => true when the game would swallow a Space (paused, not gameplay, codex / help / old
    *                                        map open, a ceremony): taps do nothing then, as the FLY THERE chip and Space do
+   * @param {function} [deps.onFocus]           (id) => void: the focus moved to row `id` (null = none); the map's height scale
+   *                                            (ui/HeightScale.js, lane 3e) keeps its highlighted chip in step with it
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc : (typeof document !== 'undefined' ? document : null);
@@ -72,6 +77,7 @@ export class WhereNextList {
     this._glass = typeof deps.glass === 'function' ? deps.glass : () => false;
     this._now = typeof deps.now === 'function' ? deps.now : _nowMs;
     this._blockedFn = typeof deps.isInputBlocked === 'function' ? deps.isInputBlocked : null;
+    this._onFocus = typeof deps.onFocus === 'function' ? deps.onFocus : null;
     this._pending = false;          // the choice exists (Events.WHERE_NEXT {open: true})
     this._floorShown = false;       // floor 4 is the floor she is on
     this._model = { rows: [], focusId: null, selectable: [], line: null };
@@ -126,15 +132,17 @@ export class WhereNextList {
 
   /** The rows as last built: [{ id, kind, text, state, selectable, focused }] (a copy). */
   rows() { return this._model.rows.map((r) => ({ id: r.id, kind: r.kind, text: r.text, state: r.state, selectable: r.selectable, focused: r.id === this._focusId })); }
+  /** The rows as last built, with their numbers (gasKg, days, shortKg, ...): the map's height scale shows them on its chips (a copy). */
+  rowData() { return this._model.rows.map((r) => ({ ...r })); }
   focusedId() { return this._focusId; }
   /** The row that is focused, or null. */
   focusedRow() { return this._model.rows.find((r) => r.id === this._focusId) || null; }
-  /** What the FLY THERE chip should say while a pick can be made: 'STAY' on the Stay row, 'FLY THERE' on a field row, else null. */
+  /** What the FLY THERE chip should say while a pick can be made: 'STAY' on the Stay row, 'CALL' on the call row (lane 3c), 'FLY THERE' on a field row, else null. */
   chipLabel() {
     if (!this.isOpen()) return null;
     const r = this.focusedRow();
     if (!r || !r.selectable) return null;
-    return r.kind === 'stay' ? 'STAY' : 'FLY THERE';
+    return r.kind === 'stay' ? 'STAY' : (r.kind === 'call' ? 'CALL' : 'FLY THERE');
   }
 
   /** Rebuild the rows from the registry. `preFocus`: take the rebuild's pre-focus instead of keeping the focus. */
@@ -145,8 +153,10 @@ export class WhereNextList {
     this._model = model;
     this._lastBuildMs = this._now();
     const keep = !preFocus && this._focusId != null && model.selectable.includes(this._focusId);
+    const was = this._focusId;
     this._focusId = keep ? this._focusId : (model.focusId != null ? model.focusId : null);
     this._paint();
+    if (this._focusId !== was) this._focused();
   }
 
   /** About once a second while open: rebuild the rows (focus kept). Called by NavcomFloor.update. */
@@ -168,6 +178,7 @@ export class WhereNextList {
     const next = i < 0 ? 0 : (i + (dir < 0 ? -1 : 1) + sel.length) % sel.length;
     this._focusId = sel[next];
     this._paint();
+    this._focused();
     return true;
   }
 
@@ -187,7 +198,35 @@ export class WhereNextList {
     if (this._focusId === id) return this._pick(id);
     this._focusId = id;
     this._paint();
+    this._focused();
     return false;
+  }
+
+  /**
+   * Put the focus on row `id` without picking it (a tap on that row's chip on the map, ui/HeightScale.js). A row that cannot be
+   * picked, an unknown id, a closed list or input the game would swallow change nothing. Never a pick: `tapRow` picks a row that
+   * already has the focus, this does not.
+   * @returns {boolean} the focus is on `id` now
+   */
+  focus(id) {
+    if (!this.isOpen() || this._blocked()) return false;
+    const r = this._model.rows.find((x) => x.id === id);
+    if (!r || !r.selectable) return false;
+    if (this._focusId !== id) {
+      this._focusId = id;
+      this._paint();
+      this._focused();
+    }
+    return true;
+  }
+
+  /** The one callback that hears the focus move (null = none). */
+  setOnFocus(fn) { this._onFocus = typeof fn === 'function' ? fn : null; }
+
+  /** @private tell the listener the focus is on a new row. */
+  _focused() {
+    if (!this._onFocus) return;
+    try { this._onFocus(this._focusId); } catch (_e) { /* a listener never breaks the list */ }
   }
 
   /** @private the game would swallow the key: the same test the chip uses; a throwing getter counts as blocked. */
