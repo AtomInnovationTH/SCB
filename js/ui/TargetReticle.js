@@ -23,7 +23,7 @@ import { classify } from './hud/TargetColorLaw.js';
 import { mono } from '../core/Typeface.js';
 import { GestureHints } from './hud/GestureHints.js';   // u17: the fire prompt follows glass, read when drawn
 import { isMarked } from '../systems/ScanMarks.js';
-import { engineGasKg, engineDeltaV, engineTankDryKg } from '../systems/ResourceSystem.js';
+import { engineGasKg, engineDeltaV, engineTankDryKg, coldGasPoolToKg } from '../systems/ResourceSystem.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -552,7 +552,7 @@ export class TargetReticle {
     const fuel = Constants.FUELS[t.currentFuelId] || Constants.FUELS[res.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
     this._cachedPlayerDeltaV = engineDeltaV({
       dryKg: Constants.OCTOPUS_V5.CORE_DRY_MASS + engineTankDryKg(res),
-      coldGasKg: Constants.OCTOPUS_CORE_COLD_GAS * ((res.coldGas || 0) / (res.coldGasMax || Constants.COLD_GAS_MAX)),
+      coldGasKg: coldGasPoolToKg(res.coldGas || 0),
       gasKg: engineGasKg(res),
       isp: fuel.isp,
       c: t.consumptionMultiplier > 0 ? t.consumptionMultiplier : 1,

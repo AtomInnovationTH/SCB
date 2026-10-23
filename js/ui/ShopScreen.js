@@ -15,7 +15,7 @@ import { captureNetSystem } from '../entities/CaptureNet.js';
 import { DAUGHTER_NET_EFFECT_TYPE } from '../systems/upgradeEffectRoutes.js';
 import { depotWords, shopTitle } from '../systems/resupplyWords.js';   // lane 3d: the depot words read the map switch
 import { upgradePrereqsMet, upgradeCostNow, engineTankFull, consumableFull as noRoomFor } from './shopGating.js';
-import { gasPriceCr, coldGasPriceCr, indiumCartridgePriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
+import { gasPriceCr, coldGasPriceCr, coldGasPoolToKg, indiumCartridgePriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
 
 /**
  * Upgrade definitions — 40 items across 9 categories, all wired to live systems
@@ -60,7 +60,8 @@ export const UPGRADES = [
     effect: 'coldGasResupply', value: Constants.DAUGHTER_SUPPLY.N2_BUY_KG, maxLevel: Infinity, consumable: true,
     trl: 6, trlRationale: 'In-orbit propellant transfer demonstrated by Orbital Express (2007, hydrazine); nitrogen servicing not yet flown' },
   { id: 'extra_coldgas', cat: 'Propulsion', name: 'Extra Cold Gas', cost: 400,
-    desc: '+10 max cold gas', effect: 'coldGasMax', value: 10, maxLevel: 2,
+    // fu-gas GD2: the tank is pool units (20 = 6 kg); the card says real kg (+10 units = +3 kg)
+    desc: `+${coldGasPoolToKg(10)} kg max cold gas`, effect: 'coldGasMax', value: 10, maxLevel: 2,
     trl: 9, trlRationale: 'Cold gas tanks ubiquitous since 1960s' },
   { id: 'mpd_thruster', cat: 'Propulsion', name: 'MPD Thruster', cost: 3000,
     desc: 'Magnetoplasmadynamic drive. Runs passively alongside the ion engine for +50% primary thrust — cuts long transfer burns like the GEO climb. Draws on lithium reserves and heavy power.',

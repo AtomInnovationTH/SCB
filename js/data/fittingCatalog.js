@@ -183,8 +183,9 @@ const FITTING_SPECS = {
   },
   extra_coldgas: {
     subsystem: 'ENGINEERING', reads: 'resourceSystem',
-    display: (row) => ({ param: 'coldGasMax', base: Constants.COLD_GAS_MAX, unit: 'kg', op: `+${row.value}` }),
-    current: (deps) => deps.resourceSystem?.coldGasMax,
+    // fu-gas GD2: the tank is POOL units (20 = 6 kg); the refit pane reads real kg
+    display: (row) => ({ param: 'coldGasMax', base: coldGasPoolToKg(Constants.COLD_GAS_MAX), unit: 'kg', op: `+${coldGasPoolToKg(row.value)}` }),
+    current: (deps) => (Number.isFinite(deps.resourceSystem?.coldGasMax) ? coldGasPoolToKg(deps.resourceSystem.coldGasMax) : undefined),
   },
   mpd_thruster: {
     subsystem: 'ENGINEERING', reads: 'player',

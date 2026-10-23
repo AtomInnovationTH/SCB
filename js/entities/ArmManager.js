@@ -30,7 +30,7 @@ import {
   launchRefusalLine, crossNamedStrutLine, crossNoneClearLine, launchDroppedLine, launchCrossDroppedLine, wrapRefusalLine,
   fanOutLine, fanOutNoneLine, stayedLine, reachNoneLine, heavyNoneLine, holdsStillLine, netIsOut,
 } from '../systems/PieceClaim.js';
-import { engineGasKg, engineDeltaV, engineTankDryKg, engineGasLowFrac } from '../systems/ResourceSystem.js';
+import { engineGasKg, engineDeltaV, engineTankDryKg, engineGasLowFrac, coldGasPoolToKg } from '../systems/ResourceSystem.js';
 
 /** 1 meter in scene units */
 const M = 0.00001;
@@ -4560,10 +4560,11 @@ export class ArmManager {
     const xenonPoolMax = rsStatus ? rsStatus.xenonMax : Constants.XENON_FUEL_MAX;
     const tankDry = engineTankDryKg({ xenonMax: xenonPoolMax });
     const coreDry = V5.CORE_DRY_MASS + tankDry + strutMassTotal + flowerMass;
-    const coldGasMax = Constants.OCTOPUS_CORE_COLD_GAS;
 
     // Get current propellant from player resources
+    // fu-gas F1.1: the tank is POOL units (20 = the 6 kg tank; Extra Cold Gas raises the max), so kg = coldGasPoolToKg, not 6 kg x fraction.
     const coldGasPoolMax = rsStatus ? rsStatus.coldGasMax : Constants.COLD_GAS_MAX;
+    const coldGasMax = coldGasPoolToKg(coldGasPoolMax);
     // h3-argon-engine D2: engine gas in kg = pool/100 x kgFull of the gas IN THE TANK (tankGasId), via the
     // ONE exported converter. `xenonCurrent` / `xenonMax` keep their names (HUD readers) but are now the
     // engine gas kg now / when the (possibly upgraded) tank is full.
@@ -4574,7 +4575,7 @@ export class ArmManager {
     const tankGas = Constants.FUELS[gasRes.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
     const xenonCurrent = engineGasKg(gasRes);
     const xenonMax = (xenonPoolMax / 100) * tankGas.kgFull;
-    const coldGasCurrent = coldGasMax * ((resources.coldGas || 0) / coldGasPoolMax);
+    const coldGasCurrent = coldGasPoolToKg(resources.coldGas || 0);
 
     // Sum arm masses using V5 weights (reel on mothership = 40% lighter arms)
     let armMassTotal = 0;

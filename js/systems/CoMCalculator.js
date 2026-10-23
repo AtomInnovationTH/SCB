@@ -361,12 +361,16 @@ export function motherNetBooking(playerSatellite) {
  *   - Per strut: mass = STRUT_MASS (4.5 kg), position = strut midpoint (α-dependent)
  *   - Per daughter: mass = WEAVER/SPINNER, position = strut tip (α-dependent)
  *
+ *   - Radiators (2026-10-24, owner: "count them"): every owned petal at its live angle, its mass centre at the same
+ *       place the inertia puts it (`radiatorCentroid`). A caller with no radiator info books none.
+ *
  * @param {object} armManager — ArmManager instance with .arms[], ._dockPositions[]
- * @param {object} [playerSatellite] — unused currently; reserved for propellant CoM offset
+ * @param {object} [playerSatellite] — radiatorBookings(), tipCargo, _captureNetSystem (all guarded: mocks may lack them)
+ * @param {{ radiators?: boolean }} [opts] — `radiators: false` leaves the petals out (the stow suggestion's direction)
  * @returns {{ position: {x:number,y:number,z:number}, totalMass: number,
- *             breakdown: { core: number, struts: number[], arms: number[] } }}
+ *             breakdown: { core: number, struts: number[], arms: number[], motherNets: number, radiators: number } }}
  */
-export function computeCoM(armManager, playerSatellite) {
+export function computeCoM(armManager, playerSatellite, opts) {
   const coreMass = V5.CORE_DRY_MASS; // 161.0 kg at origin
   let totalMass = coreMass;
   let cx = 0, cy = 0, cz = 0; // weighted sum: Σ(m·r)
@@ -436,6 +440,18 @@ export function computeCoM(armManager, playerSatellite) {
     totalMass += nets.massKg;
   }
 
+  // The radiators: structure aboard, every owned petal at its live angle (a held petal at its own).
+  let radMass = 0;
+  if (!opts || opts.radiators !== false) {
+    const petals = _radiatorPetals(playerSatellite);
+    if (petals) {
+      const rc = radiatorCentroid(petals);
+      cx += rc.mx; cy += rc.my; cz += rc.mz;
+      totalMass += rc.massKg;
+      radMass = rc.massKg;
+    }
+  }
+
   const invTotal = totalMass > 0 ? 1 / totalMass : 0;
   return {
     position: {
@@ -449,8 +465,65 @@ export function computeCoM(armManager, playerSatellite) {
       struts: strutMasses,
       arms: armMasses,
       motherNets: nets.massKg,
+      radiators: radMass,
     },
   };
+}
+
+// ── Radiator petals: ONE geometry for the mass centre and the inertia ───────────────────────────────────────────────
+// A petal's mass is spread uniformly over its plate span (PLATE_START_M..PLATE_END_M along the strut line), the line
+// leaving the hinge pin (HINGE_R_M out at the petal's azimuth, HINGE_Z_M) in the direction u = (sinθ·r̂, cosθ·ẑ). The
+// plate's width is symmetric about that line (centre panel on it, a wing each side), so the petal's mass centre is on
+// the line at the mean span: h + s̄·u. `radiatorCentroid` (the CoM) and `radiatorInertia` (the inertia) both read the
+// line through `_petalLine`, so the two can never put the same petal in two places (2026-10-24, fu-com).
+const _pl = { hx: 0, hy: 0, hz: 0, ux: 0, uy: 0, uz: 0, ca: 1, sa: 0 };
+const _radSum = { massKg: 0, mx: 0, my: 0, mz: 0 };
+
+/** The strut line of the petal at azimuth `azDeg` swung to `thetaRad`: hinge pin h and direction u (module scratch `_pl`). */
+function _petalLine(azDeg, thetaRad) {
+  const FL = Constants.THERMAL.FLOWER;
+  const az = (azDeg * Math.PI) / 180;
+  const ca = Math.cos(az), sa = Math.sin(az);
+  const st = Math.sin(thetaRad), ct = Math.cos(thetaRad);
+  _pl.hx = FL.HINGE_R_M * ca; _pl.hy = FL.HINGE_R_M * sa; _pl.hz = FL.HINGE_Z_M;
+  _pl.ux = st * ca; _pl.uy = st * sa; _pl.uz = ct;
+  _pl.ca = ca; _pl.sa = sa;
+  return _pl;
+}
+
+/**
+ * Mass and first moment of the radiator petals about the barrel origin, ship frame: Σ m and Σ m·(mass centre), the
+ * petal's centre being h + s̄·u (see `_petalLine`). Allocation-free: the result is written into `out` (default: a module
+ * scratch, valid until the next call, so read it at once).
+ * @param {Array<{massKg:number, azDeg:number, thetaRad:number}>} petals
+ * @param {{massKg:number, mx:number, my:number, mz:number}} [out]
+ * @param {number} [allAtThetaRad] when finite, every petal is taken at THIS angle instead of its own (the balanced
+ *   reference of the CoM drift: all petals at the shared radiator angle)
+ * @returns {{ massKg:number, mx:number, my:number, mz:number }} kg and kg·m
+ */
+export function radiatorCentroid(petals, out = _radSum, allAtThetaRad) {
+  const FL = Constants.THERMAL.FLOWER;
+  const sMean = (FL.PLATE_START_M + FL.PLATE_END_M) / 2;
+  const same = Number.isFinite(allAtThetaRad);
+  let m = 0, mx = 0, my = 0, mz = 0;
+  for (let i = 0; i < petals.length; i++) {
+    const b = petals[i];
+    const pm = b.massKg;
+    if (!(pm > 0)) continue;
+    const l = _petalLine(b.azDeg, same ? allAtThetaRad : b.thetaRad);
+    m += pm;
+    mx += pm * (l.hx + sMean * l.ux);
+    my += pm * (l.hy + sMean * l.uy);
+    mz += pm * (l.hz + sMean * l.uz);
+  }
+  out.massKg = m; out.mx = mx; out.my = my; out.mz = mz;
+  return out;
+}
+
+/** The player's radiator petals as bookings, or null for a caller with no radiator info (a mock, a tool). */
+function _radiatorPetals(playerSatellite) {
+  return playerSatellite && typeof playerSatellite.radiatorBookings === 'function'
+    ? playerSatellite.radiatorBookings() : null;
 }
 
 /**
@@ -476,14 +549,11 @@ export function radiatorInertia(petals) {
   for (let i = 0; i < petals.length; i++) {
     const { massKg: m, azDeg, thetaRad, foldRad } = petals[i];
     if (!(m > 0)) continue;
-    const az = (azDeg * Math.PI) / 180;
-    const ca = Math.cos(az), sa = Math.sin(az);
-    const st = Math.sin(thetaRad), ct = Math.cos(thetaRad);
-    const h = { x: FL.HINGE_R_M * ca, y: FL.HINGE_R_M * sa, z: FL.HINGE_Z_M };
-    const u = { x: st * ca, y: st * sa, z: ct };
-    const sxx = h.x * h.x + 2 * sMean * h.x * u.x + s2Mean * u.x * u.x;
-    const syy = h.y * h.y + 2 * sMean * h.y * u.y + s2Mean * u.y * u.y;
-    const szz = h.z * h.z + 2 * sMean * h.z * u.z + s2Mean * u.z * u.z;
+    const l = _petalLine(azDeg, thetaRad);
+    const ca = l.ca, sa = l.sa;
+    const sxx = l.hx * l.hx + 2 * sMean * l.hx * l.ux + s2Mean * l.ux * l.ux;
+    const syy = l.hy * l.hy + 2 * sMean * l.hy * l.uy + s2Mean * l.uy * l.uy;
+    const szz = l.hz * l.hz + 2 * sMean * l.hz * l.uz + s2Mean * l.uz * l.uz;
     ixx += m * (syy + szz);
     iyy += m * (sxx + szz);
     izz += m * (sxx + syy);
@@ -500,16 +570,15 @@ export function radiatorInertia(petals) {
 }
 
 /**
- * Compute the rigid-body moment of inertia about the barrel origin, in body
- * axes (kg·m²): ixx pitch (about +X), iyy yaw (about +Y), izz roll (about +Z,
- * the barrel long axis). This is the attitude-dynamics SSOT — it mirrors
- * computeCoM's mass tree exactly (same strut midpoint / daughter tip helpers,
- * same detached/expended exclusions) so inertia and CoM never diverge.
+ * Compute the rigid-body moment of inertia about the ship's true centre of mass, in body axes (kg·m²): ixx pitch
+ * (about +X), iyy yaw (about +Y), izz roll (about +Z, the barrel long axis). This is the attitude-dynamics SSOT — it
+ * mirrors computeCoM's mass tree (same strut midpoint / daughter tip helpers, same detached/expended exclusions, same
+ * radiator centroid) so inertia and CoM never diverge.
  * S13(a): the arm terms now arrive in the SAME ship frame as the bus-shell
  * term (roll mR² on izz) — pre-S13(a) they came out Y-barrel, which booked
  * the cargo's z-lever into roll and over-fired the izz clamp (register 57).
  *
- * Model:
+ * Model (summed about the barrel origin first, then moved to the centre of mass: see "About the CoM"):
  *   - Core bus: thin cylindrical shell, mass = CORE_DRY_MASS, at the origin.
  *       transverse (x,y) = m·(R²/2 + L²/12);  roll (z) = m·R².
  *       (R = COLLAR_RADIUS, L = CORE_LENGTH. CORE_DRY_MASS 176 kg: stowed transverse ≈ 72.75 kg·m², roll ≈ 28.16.)
@@ -522,11 +591,27 @@ export function radiatorInertia(petals) {
  *     INERTIA_MAX_FACTOR × the stowed bus inertia. 23 t unclamped would freeze
  *     rotation; the clamp mirrors the translation MASS_EFFECT_MAX soft-lock.
  *
+ * About the CoM (2026-10-24, owner: "physically real wins"): a free body turns about its centre of mass, and with the
+ * radiators counted that centre sits up to 0.5 m from the barrel origin (146°: 0.44 m aft), which the origin-frame
+ * sum overstated by 13 % (pitch/yaw). Per axis k, I_k = I_origin,k − M_k·d⊥,k², with M_k and d_k the total mass and mass
+ * centre of exactly what the origin sum counted on that axis: structure at full mass, cargo (in hand, rack, tip bags) and
+ * berthed mass scaled by s_k = (cargo inertia the clamp let through) ÷ (cargo inertia before the clamp) on that axis
+ * (1 when the clamp does not bite or the cargo adds nothing on that axis). A capped catch is thus a lighter catch in the
+ * same place, so each axis is the inertia of a real mass layout about its own centre: > 0, never above the origin
+ * value. The berthed mass sits on the axis at z = +L/2 (the clamp's own model, below). computeCoM has no berthed mass,
+ * so while a catch is berthed the inertia's centre differs from computeCoM's by that mass (accepted). Diagonal terms only
+ * (no products of inertia), as before. Both this sum and computeCoM leave out 25.6 kg the ship's mass budget carries
+ * (ArmManager.getMassBudget): the engine tank's dry mass 9.5 kg (:4561), the cold gas 3.6 kg (:4577) and the engine gas
+ * 12.5 kg (:4575): none of them has a place in the mass tree. The tree's 268.7 kg of the ship's 294.28 is what the
+ * centre of mass is taken on.
+ *
  * @param {object} armManager — ArmManager (may be null/empty → bus-only inertia)
- * @param {object} [playerSatellite] — for getBerthedMassKg() via _captureNetSystem
- * @returns {{ ixx:number, iyy:number, izz:number }} kg·m² about the origin
+ * @param {object} [playerSatellite] — for getBerthedMassKg() via _captureNetSystem, radiatorBookings(), tipCargo
+ * @param {{ about?: 'origin'|'com' }} [opts] — `about: 'origin'` returns the sum about the barrel origin (what this
+ *   function returned before 2026-10-24: tests show the shift with it; the game always takes the CoM frame)
+ * @returns {{ ixx:number, iyy:number, izz:number }} kg·m² about the centre of mass (or the origin, see opts)
  */
-export function computeInertia(armManager, playerSatellite) {
+export function computeInertia(armManager, playerSatellite, opts) {
   const R = V5.COLLAR_RADIUS;   // 0.40 m
   const L = V5.CORE_LENGTH;     // 2.0 m
   const coreMass = V5.CORE_DRY_MASS; // 176.0 kg
@@ -539,6 +624,11 @@ export function computeInertia(armManager, playerSatellite) {
   let iyy = busTransverse;
   let izz = busRoll;
 
+  // First moments of what the sums count, for the move to the CoM: structure (full mass) and cargo (mass, Σ m·r) apart,
+  // because the clamp lets only a share of the cargo through. The bus sits at the origin: mass, no moment.
+  let sM = coreMass, sMx = 0, sMy = 0, sMz = 0;
+  let cM = 0, cMx = 0, cMy = 0, cMz = 0;
+
   // Point-mass contribution via parallel axis: for mass m at (x,y,z),
   //   Ixx += m(y²+z²), Iyy += m(x²+z²), Izz += m(x²+y²).
   const addPoint = (m, p) => {
@@ -546,6 +636,7 @@ export function computeInertia(armManager, playerSatellite) {
     ixx += m * (p.y * p.y + p.z * p.z);
     iyy += m * (p.x * p.x + p.z * p.z);
     izz += m * (p.x * p.x + p.y * p.y);
+    sM += m; sMx += m * p.x; sMy += m * p.y; sMz += m * p.z;
   };
 
   const arms = (armManager && armManager.arms) || [];
@@ -557,6 +648,12 @@ export function computeInertia(armManager, playerSatellite) {
   // separately and clamp it with the berthed mass under INERTIA_MAX_FACTOR, so
   // the clamp reins in cargo/berth but never the structural config.
   let cargoIxx = 0, cargoIyy = 0, cargoIzz = 0;
+  const addCargo = (m, p) => {
+    cargoIxx += m * (p.y * p.y + p.z * p.z);
+    cargoIyy += m * (p.x * p.x + p.z * p.z);
+    cargoIzz += m * (p.x * p.x + p.y * p.y);
+    cM += m; cMx += m * p.x; cMy += m * p.y; cMz += m * p.z;
+  };
 
   for (let i = 0; i < arms.length; i++) {
     const arm = arms[i];
@@ -584,9 +681,7 @@ export function computeInertia(armManager, playerSatellite) {
       if (handMass > 0) {
         const p = heldInHandBookingMeters(arm, dp, alpha, playerSatellite,
           arm.capturedDebris.sizeMeter, _slotPoint);
-        cargoIxx += handMass * (p.y * p.y + p.z * p.z);
-        cargoIyy += handMass * (p.x * p.x + p.z * p.z);
-        cargoIzz += handMass * (p.x * p.x + p.y * p.y);
+        addCargo(handMass, p);
       }
       if (Array.isArray(arm.heldCatches)) {
         for (let si = 0; si < arm.heldCatches.length; si++) {
@@ -595,9 +690,7 @@ export function computeInertia(armManager, playerSatellite) {
           if (m <= 0) continue;
           const p = heldCargoBookingMeters(arm, dp, alpha, playerSatellite, si,
             held.sizeMeter, _slotPoint, undefined, held);
-          cargoIxx += m * (p.y * p.y + p.z * p.z);
-          cargoIyy += m * (p.x * p.x + p.z * p.z);
-          cargoIzz += m * (p.x * p.x + p.y * p.y);
+          addCargo(m, p);
         }
       }
     }
@@ -611,14 +704,15 @@ export function computeInertia(armManager, playerSatellite) {
   // The radiators: structure aboard (unclamped), at each petal's live angle. A caller with no radiator info
   // (a mock, a tool) books none.
   let radIxx = 0, radIyy = 0, radIzz = 0;   // the radiators' share, also part of the clamp's reference below
-  const petals = playerSatellite && typeof playerSatellite.radiatorBookings === 'function'
-    ? playerSatellite.radiatorBookings() : null;
+  const petals = _radiatorPetals(playerSatellite);
   if (petals) {
     const rad = radiatorInertia(petals);
     ixx += rad.ixx;
     iyy += rad.iyy;
     izz += rad.izz;
     radIxx = rad.ixx; radIyy = rad.iyy; radIzz = rad.izz;
+    const rc = radiatorCentroid(petals);     // the same petals, at the same places, for the CoM
+    sM += rc.massKg; sMx += rc.mx; sMy += rc.my; sMz += rc.mz;
   }
 
   // Bags latched on the radiator tips: cargo, so they join the clamped sum.
@@ -630,9 +724,7 @@ export function computeInertia(armManager, playerSatellite) {
       const m = tipBags[b].massKg;
       const p = tipBags[b].posShip;
       if (!(m > 0)) continue;
-      cargoIxx += m * (p.y * p.y + p.z * p.z);
-      cargoIyy += m * (p.x * p.x + p.z * p.z);
-      cargoIzz += m * (p.x * p.x + p.y * p.y);
+      addCargo(m, p);
     }
   }
 
@@ -646,6 +738,8 @@ export function computeInertia(armManager, playerSatellite) {
   const cns = playerSatellite && playerSatellite._captureNetSystem;
   const berthed = (cns && typeof cns.getBerthedMassKg === 'function')
     ? cns.getBerthedMassKg() : 0;
+  if (berthed > 0) { cM += berthed; cMz += berthed * (L / 2); }   // on the axis, at z = +L/2 (the lever below)
+  let shareX = 1, shareY = 1, shareZ = 1;   // s_k: how much of the cargo each axis's clamp let through
   if (berthed > 0 || cargoIxx > 0 || cargoIyy > 0 || cargoIzz > 0) {
     const factor = Constants.ATTITUDE?.INERTIA_MAX_FACTOR ?? 3.0;
     const leverT2 = (L / 2) * (L / 2); // transverse lever² (fore capture point)
@@ -660,29 +754,41 @@ export function computeInertia(armManager, playerSatellite) {
     const capZ = factor * busRoll + radIzz;
     const addT = berthed * leverT2;   // berthed transverse addition
     const addR = berthed * leverR2;   // berthed roll addition
-    ixx = Math.min(ixx + addT + cargoIxx, Math.max(ixx, capX));
-    iyy = Math.min(iyy + addT + cargoIyy, Math.max(iyy, capY));
-    izz = Math.min(izz + addR + cargoIzz, Math.max(izz, capZ));
+    const wantX = addT + cargoIxx, wantY = addT + cargoIyy, wantZ = addR + cargoIzz;   // cargo inertia before the clamp
+    const x0 = ixx, y0 = iyy, z0 = izz;                                                // structure alone
+    ixx = Math.min(ixx + wantX, Math.max(ixx, capX));
+    iyy = Math.min(iyy + wantY, Math.max(iyy, capY));
+    izz = Math.min(izz + wantZ, Math.max(izz, capZ));
+    if (wantX > 0) shareX = Math.min(1, Math.max(0, (ixx - x0) / wantX));
+    if (wantY > 0) shareY = Math.min(1, Math.max(0, (iyy - y0) / wantY));
+    if (wantZ > 0) shareZ = Math.min(1, Math.max(0, (izz - z0) / wantZ));
   }
 
-  return { ixx, iyy, izz };
+  if (opts && opts.about === 'origin') return { ixx, iyy, izz };
+
+  // Move each axis to the centre of mass of what that axis counted: I_cm = I_origin − M·d⊥² = I_origin − |S⊥|²/M,
+  // S the first moment about the origin, S⊥ its part across the axis.
+  const mx = sM + shareX * cM, my = sM + shareY * cM, mz = sM + shareZ * cM;
+  const Sx1 = sMx + shareY * cMx, Sx2 = sMx + shareZ * cMx;   // x-moment as seen by the y axis, by the z axis
+  const Sy1 = sMy + shareX * cMy, Sy2 = sMy + shareZ * cMy;   // y-moment as seen by the x axis, by the z axis
+  const Sz1 = sMz + shareX * cMz, Sz2 = sMz + shareY * cMz;   // z-moment as seen by the x axis, by the y axis
+  return {
+    ixx: mx > 0 ? ixx - (Sy1 * Sy1 + Sz1 * Sz1) / mx : ixx,
+    iyy: my > 0 ? iyy - (Sx1 * Sx1 + Sz2 * Sz2) / my : iyy,
+    izz: mz > 0 ? izz - (Sx2 * Sx2 + Sy2 * Sy2) / mz : izz,
+  };
 }
 
 /**
- * Compute scalar CoM drift — the *asymmetric* displacement of CoM from the
- * "balanced" reference position (all arms at mean alpha). This isolates the
- * player-correctable asymmetry from the permanent collar-height offset.
- *
- * When all arms are at the same alpha, drift = 0 (within floating-point tolerance).
- * When one arm is stowed while others are deployed, drift > 0.
- *
- * @param {object} armManager
- * @param {object} [playerSatellite]
- * @returns {number} drift distance in meters
+ * The balanced reference the drift is measured from: the CoM with all arms at the mean alpha (bus, struts, daughters
+ * with their held cargo, the nets in the launcher) and, 2026-10-24, every owned radiator petal at the ONE shared
+ * radiator angle `playerSatellite._flowerThetaRad` (NOT `foldRad`, the wing fold). The actual CoM counts each petal at
+ * its own live angle, so a symmetric fold or opening moves actual and reference together (no drift), while a petal
+ * held at a different angle (a leash hand-off, a daughter's carry) reads its real offset. A caller with no shared angle
+ * (a mock) books its petals at their own angles: no radiator drift. Written into `out` (no allocation).
+ * @returns {{x:number,y:number,z:number}} out
  */
-export function computeCoMDrift(armManager, playerSatellite) {
-  const actual = computeCoM(armManager, playerSatellite);
-
+function _balancedReference(armManager, playerSatellite, out) {
   // Compute mean alpha across all active arms
   const arms = armManager.arms || [];
   const docks = armManager._dockPositions || [];
@@ -723,13 +829,40 @@ export function computeCoMDrift(armManager, playerSatellite) {
   const netsB = motherNetBooking(playerSatellite);
   if (netsB.massKg > 0) { bcz += netsB.massKg * netsB.z; bTotal += netsB.massKg; }
 
+  // The radiators are in the actual CoM, so they are in the reference too, all at the shared angle.
+  const petals = _radiatorPetals(playerSatellite);
+  if (petals) {
+    const rc = radiatorCentroid(petals, _radSum, playerSatellite._flowerThetaRad);
+    bcx += rc.mx; bcy += rc.my; bcz += rc.mz;
+    bTotal += rc.massKg;
+  }
+
   const invB = bTotal > 0 ? 1 / bTotal : 0;
-  const bx = bcx * invB, by = bcy * invB, bz = bcz * invB;
+  out.x = bcx * invB; out.y = bcy * invB; out.z = bcz * invB;
+  return out;
+}
+const _balRef = { x: 0, y: 0, z: 0 };
+
+/**
+ * Compute scalar CoM drift — the *asymmetric* displacement of CoM from the
+ * "balanced" reference position (all arms at mean alpha, all radiator petals at the shared angle). This isolates
+ * the player-correctable asymmetry from the permanent collar-height offset.
+ *
+ * When all arms are at the same alpha, drift = 0 (within floating-point tolerance).
+ * When one arm is stowed while others are deployed, drift > 0.
+ *
+ * @param {object} armManager
+ * @param {object} [playerSatellite]
+ * @returns {number} drift distance in meters
+ */
+export function computeCoMDrift(armManager, playerSatellite) {
+  const actual = computeCoM(armManager, playerSatellite);
+  const ref = _balancedReference(armManager, playerSatellite, _balRef);
 
   // Drift = |actualCoM − balancedCoM|
-  const dx = actual.position.x - bx;
-  const dy = actual.position.y - by;
-  const dz = actual.position.z - bz;
+  const dx = actual.position.x - ref.x;
+  const dy = actual.position.y - ref.y;
+  const dz = actual.position.z - ref.z;
   return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
@@ -744,50 +877,11 @@ export function computeCoMDrift(armManager, playerSatellite) {
  */
 export function computeCoMDriftVector(armManager, playerSatellite) {
   const actual = computeCoM(armManager, playerSatellite);
-
-  const arms = armManager.arms || [];
-  const docks = armManager._dockPositions || [];
-  let sumAlpha = 0, count = 0;
-  for (let i = 0; i < arms.length; i++) {
-    if (!docks[i]) continue;
-    const a = arms[i].getAimAlpha ? arms[i].getAimAlpha() : (arms[i]._aimAlpha || 0);
-    sumAlpha += a;
-    count++;
-  }
-  const meanAlpha = count > 0 ? sumAlpha / count : 0;
-
-  let bcx = 0, bcy = 0, bcz = 0;
-  let bTotal = V5.CORE_DRY_MASS;
-
-  for (let i = 0; i < arms.length; i++) {
-    const arm = arms[i];
-    const dp = docks[i];
-    if (!dp) continue;
-
-    const strutMass = V5.STRUT_MASS;
-    const mid = strutMidpointMeters(dp, meanAlpha);
-    bcx += strutMass * mid.x;
-    bcy += strutMass * mid.y;
-    bcz += strutMass * mid.z;
-    bTotal += strutMass;
-
-    _forEachArmMassPoint(arm, dp, meanAlpha, playerSatellite, (m, p) => {
-      bcx += m * p.x;
-      bcy += m * p.y;
-      bcz += m * p.z;
-      bTotal += m;
-    });
-  }
-
-  // The nets are in the actual CoM, so they are in the balanced reference too (permanent, on-axis).
-  const netsB = motherNetBooking(playerSatellite);
-  if (netsB.massKg > 0) { bcz += netsB.massKg * netsB.z; bTotal += netsB.massKg; }
-
-  const invB = bTotal > 0 ? 1 / bTotal : 0;
+  const ref = _balancedReference(armManager, playerSatellite, _balRef);
   return {
-    x: actual.position.x - bcx * invB,
-    y: actual.position.y - bcy * invB,
-    z: actual.position.z - bcz * invB,
+    x: actual.position.x - ref.x,
+    y: actual.position.y - ref.y,
+    z: actual.position.z - ref.z,
   };
 }
 
@@ -827,7 +921,9 @@ export function computeCoMOffsetFromThrustVector(comPos, thrustVector) {
  * @returns {number|null} arm index of suggested stow, or null if no arms deployed
  */
 export function suggestStowArm(armManager, playerSatellite) {
-  const com = computeCoM(armManager, playerSatellite);
+  // The direction is read WITHOUT the radiators (2026-10-24): they are counted in the CoM now, but they are no arm. At 146°
+  // they sit the CoM 0.4 m aft, which would swamp the asymmetry this suggestion is about and pick an arm by the radiators.
+  const com = computeCoM(armManager, playerSatellite, { radiators: false });
   const p = com.position;
   const driftSq = p.x * p.x + p.y * p.y + p.z * p.z;
   if (driftSq < 1e-12) return null; // CoM at origin, nothing to suggest
@@ -935,7 +1031,9 @@ export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMe
     && (arm.fuel ?? 0) > reserve;
   const capableCount = arms.reduce((n, a, i) => n + (captureCapable(a, i) ? 1 : 0), 0);
 
-  const com = computeCoM(armManager, playerSatellite);
+  // Without the radiators (2026-10-24), as suggestStowArm: they are no arm, and at 146° their common 0.44 m axial shift
+  // would dilute the lateral balance this choice is about.
+  const com = computeCoM(armManager, playerSatellite, { radiators: false });
   const p = com.position;
   const totalMass = com.totalMass || 0;
   const driftBefore = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);

@@ -120,8 +120,7 @@ function shipMassKg(ship) {
     } catch (_) { /* fall through to the mirror */ }
   }
   const r = ship.resources || {};
-  const cold = Constants.OCTOPUS_CORE_COLD_GAS
-    * ((r.coldGas || 0) / (r.coldGasMax || Constants.COLD_GAS_MAX));
+  const cold = coldGasPoolToKg(r.coldGas || 0);   // fu-gas F1.1: pool units -> kg (a bigger tank holds more kg)
   return Constants.OCTOPUS_V5.CORE_DRY_MASS + engineTankDryKg(r) + engineGasKg(r) + cold;
 }
 
@@ -8910,8 +8909,8 @@ export class PlayerSatellite extends THREE.Group {
   getCoMDrift() { return this._comDriftM; }
 
   /**
-   * Attitude-dynamics inertia SSOT. Returns {ixx, iyy, izz} kg·m² about the
-   * barrel origin, computed lazily from the mass tree and cached until an arm
+   * Attitude-dynamics inertia SSOT. Returns {ixx, iyy, izz} kg·m² about her true
+   * centre of mass (radiators counted; CoMCalculator.computeInertia), computed lazily from the mass tree and cached until an arm
    * state-change / berth event or a cargo-ledger direct invalidation (lasso
    * adoption, collar digestion completion — register item 63; [K] jettison
    * from BERTHED/COLLARED, the rack's stay-parked feed-end — register item 67;
@@ -8981,35 +8980,45 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * The radiator petals as masses at live angles, for computeInertia (structure: counted whether or not the meshes
-   * are built). One entry per owned petal: pair A = azimuths 40/220, pair B = 140/320, half a pair's dry mass each;
+   * The radiator petals as masses at live angles, for computeInertia and computeCoM (structure: counted whether or not the
+   * meshes are built). One entry per owned petal: pair A = azimuths 40/220, pair B = 140/320, half a pair's dry mass each;
    * a held petal reports its own angle, a free one the shared angle. Empty with no pairs.
+   * With no argument (the per-frame CoM, drift and inertia reads) ONE scratch array is refilled in place and returned, so
+   * those calls allocate nothing: read it before the next call, never keep it. A what-if (`over`) gets a fresh array.
    * @param {object} [over] what-if angles (see `attitudeInertiaAt`): `flowerThetaRad` replaces the shared angle,
    *   `petals` [{azDeg, thetaRad}] name petals at their own angle (the rest keep their live hold or the shared angle).
    * @returns {Array<{massKg:number, azDeg:number, thetaRad:number, foldRad:number}>}
    */
   radiatorBookings(over = null) {
     const FL = Constants.THERMAL.FLOWER;
-    const out = [];
+    const out = over ? [] : (this._radBookScratch || (this._radBookScratch = []));
     const each = FL.PAIR_DRY_MASS_KG / 2;
     const shared = over && Number.isFinite(over.flowerThetaRad) ? over.flowerThetaRad : this._flowerThetaRad;
-    const petals = over && Array.isArray(over.petals) ? over.petals : null;
-    const thetaOf = (az) => {      // a named petal's what-if angle, else its live hold, else the shared angle
-      if (petals) for (const q of petals) if (q.azDeg === az) return q.thetaRad;
-      const holds = this._petalHolds || EMPTY_HOLDS;
-      for (let i = 0; i < holds.length; i++) if (holds[i].az === az) return holds[i].thetaRad;
-      return shared;
-    };
-    const add = (azs) => {
-      for (const az of azs) {
-        const th = thetaOf(az);
-        out.push({ massKg: each, azDeg: az, thetaRad: th, foldRad: this._flowerWingFoldAngle(th) });
+    const fp = this._flowerPairs;
+    let n = 0;
+    for (let pair = 0; pair < 2; pair++) {
+      if (!fp || !(pair === 0 ? fp.A : fp.B)) continue;
+      const azs = pair === 0 ? FL.PAIR_A_AZ_DEG : FL.PAIR_B_AZ_DEG;
+      for (let k = 0; k < azs.length; k++) {
+        const az = azs[k];
+        const th = this._petalBookingTheta(az, shared, over);
+        let e = out[n];
+        if (!e) e = out[n] = { massKg: 0, azDeg: 0, thetaRad: 0, foldRad: 0 };
+        e.massKg = each; e.azDeg = az; e.thetaRad = th; e.foldRad = this._flowerWingFoldAngle(th);
+        n++;
       }
-    };
-    const fp = this._flowerPairs || {};
-    if (fp.A) add(FL.PAIR_A_AZ_DEG);
-    if (fp.B) add(FL.PAIR_B_AZ_DEG);
+    }
+    out.length = n;
     return out;
+  }
+
+  /** @private A booked petal's angle: a named what-if petal's, else its live hold, else the shared angle. */
+  _petalBookingTheta(az, shared, over) {
+    const petals = over && Array.isArray(over.petals) ? over.petals : null;
+    if (petals) for (let i = 0; i < petals.length; i++) if (petals[i].azDeg === az) return petals[i].thetaRad;
+    const holds = this._petalHolds || EMPTY_HOLDS;
+    for (let i = 0; i < holds.length; i++) if (holds[i].az === az) return holds[i].thetaRad;
+    return shared;
   }
 
   /**

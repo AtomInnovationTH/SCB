@@ -29,7 +29,7 @@ import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
 import { TransferTrip } from './TransferTrip.js';
 import { buildWhereNextRows, STAY_ID, CALL_ID, OPEN_LINE, BERTH_LINE, BERTH_MISSION_LINE, STUCK_CALL_LINE } from './WhereNextRows.js';
-import { salvageGasKg } from './ResourceSystem.js';
+import { salvageGasKg, coldGasKgToPool, coldGasPoolToKg } from './ResourceSystem.js';
 import { UPGRADES } from '../ui/ShopScreen.js';
 import { upgradePrereqsMet, upgradeCostNow } from '../ui/shopGating.js';
 import { cityLabels } from '../scene/CityLabels.js';
@@ -1261,10 +1261,13 @@ export class GameFlowManager {
           if (salvage.hydrazine > 0 && resourceSystem) {
             const hasHazmat = this._hasUpgrade('hazmat_handler');
             if (hasHazmat) {
-              const coldGasGain = salvage.hydrazine * refineryMult * Constants.SALVAGE_HYDRAZINE_COLDGAS_RATIO;
-              resourceSystem.replenish('coldGas', coldGasGain);
+              // fu-gas GD1: the salvaged kg go into the tank AS kg (the pool is 20 units = 6 kg); the line reports what fit
+              const coldGasKg = salvage.hydrazine * refineryMult * Constants.SALVAGE_HYDRAZINE_COLDGAS_RATIO;
+              const poolBefore = resourceSystem.coldGas;
+              resourceSystem.replenish('coldGas', coldGasKgToPool(coldGasKg));
+              const gotKg = coldGasPoolToKg(resourceSystem.coldGas - poolBefore);
               eventBus.emit(Events.COMMS_MESSAGE, {
-                text: `\u26A0 Hazmat: ${salvage.hydrazine.toFixed(1)} kg N\u2082H\u2084 \u2192 ${coldGasGain.toFixed(1)} kg cold gas`,
+                text: `\u26A0 Hazmat: ${salvage.hydrazine.toFixed(1)} kg N\u2082H\u2084 \u2192 ${gotKg.toFixed(1)} kg cold gas`,
                 priority: 'warning',
               });
             } else {

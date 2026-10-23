@@ -21,7 +21,7 @@ import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
 import { findNearestLiveDebris } from './NavRecoveryAdvisor.js';
 import { strutLocalDirection, bestStrutAlpha } from '../entities/ArmDockBasis.js';
-import { engineGasKg, engineDeltaV, engineTankDryKg } from './ResourceSystem.js';
+import { engineGasKg, engineDeltaV, engineTankDryKg, coldGasPoolToKg } from './ResourceSystem.js';
 import { wingsHint } from './WingsHint.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { tripRefuses } from './TransferTrip.js';
@@ -521,6 +521,12 @@ export class AutopilotSystem {
     this._tripRel = new THREE.Quaternion();   // sloth mode: the trip turn's relative rotation (scratch)
     this._tripWaitQ = new THREE.Quaternion(); // slice 4: the list's turn-wait read of her attitude (scratch)
     this._tripOmega = 0;                      // sloth mode: the trip turn's rate on the tail boxes (rad/s)
+    // fu-gas GD3: the free slews at normal gas bill the real cold gas for the body rate they command (`_billSlewStep`).
+    this._slewOmega = new THREE.Vector3();    // the body rate (rad per REAL s) the last slew step commanded
+    this._slewW = new THREE.Vector3();        // scratch: this step's body rate
+    this._slewDq = new THREE.Quaternion();    // scratch: this step's body-frame rotation
+    this._slewQ0 = new THREE.Quaternion();    // snapshot of the slewed quaternion before the step (the slerps are in place)
+    this._slewSteppedThisFrame = false;
     /** ap-gas D3: what the engaged autopilot / the trip hold has already said about its slow turn (one engagement). */
     this._slow = { said: false, kind: null, mode: null, ref: null, noPowerSaid: false };
     this._aimBm = new THREE.Vector3();     // launch-smooth: the mother's boresight with the strut at its target angle
@@ -782,7 +788,15 @@ export class AutopilotSystem {
     // Sloth mode (D7): the tank cannot pay for a turn, so the tail boxes turn her: slowly, with the real ion torque.
     if (this._slothOn(p)) { this._slothTripTurn(p, dt); return; }
     this._tripOmega = 0;
-    if (!this._tripRetro) { p.easeOrbitFrameOffset(AP_ROT_RATE * dt, AP_ROT_DEADZONE); return; }
+    // fu-gas GD3: the ease (and the retro slerp below) are real turns at AP_ROT_RATE: billed on the offset, not the orbit frame.
+    const mr = p._manualRotation;
+    const snap = mr && typeof mr.angleTo === 'function';
+    if (snap) this._slewQ0.copy(mr);
+    if (!this._tripRetro) {
+      p.easeOrbitFrameOffset(AP_ROT_RATE * dt, AP_ROT_DEADZONE);
+      if (snap) this._billSlewStep(p, this._slewQ0, p._manualRotation, dt);
+      return;
+    }
     // Nets step 3 slice 2b, retrograde: the same ease (PlayerSatellite.easeOrbitFrameOffset goes to nothing), toward the
     // half turn about her up axis instead - her +Z then points against her motion with +Y still away from the Earth.
     const q = p._manualRotation;
@@ -791,6 +805,7 @@ export class AutopilotSystem {
     const maxAngle = AP_ROT_RATE * dt;
     if (!(angle > AP_ROT_DEADZONE) || !(maxAngle > 0)) return;
     q.slerp(_Q_TRIP_RETRO, Math.min(maxAngle, angle) / angle).normalize();
+    this._billSlewStep(p, this._slewQ0, q, dt);
   }
 
   /**
@@ -1536,6 +1551,8 @@ export class AutopilotSystem {
     // frame's shake back on after it has composed the attitude. Idempotent and a no-op without a shake.
     const apPlayer = this._player;
     if (apPlayer && typeof apPlayer.undoRecoilOverlay === 'function') apPlayer.undoRecoilOverlay();
+    // fu-gas GD3: a frame with no billed slew step after one with a rate is the slew's stop.
+    if (apPlayer) this._slewStopTick(apPlayer, dtWorld);
 
     // ap-smooth: the orbit-frame hold steps aside whenever something else owns the nose (an aim, a scripted turn, a
     // reel-in / launch hold), and never outlives the engagement.
@@ -2240,7 +2257,11 @@ export class AutopilotSystem {
     if (!this._apFrameHold) { p.setOrbitFrameHold(true); this._apFrameHold = true; }
     if (slow) { if (!(dtWorld <= 0)) this._slothOffsetTurn(p, dt, _Q_IDENTITY); return true; }   // a held world pauses the turn
     if (this._tripOmega > 0) this._slothBrakeBill(p);                  // the boxes stop being the source: bill the brake of what was turning
+    const mr = p._manualRotation;                                      // fu-gas GD3: the ease is billed (see `_billSlewStep`)
+    const snap = mr && typeof mr.angleTo === 'function';
+    if (snap) this._slewQ0.copy(mr);
     p.easeOrbitFrameOffset(AP_ROT_RATE * dt, AP_ROT_DEADZONE);
+    if (snap) this._billSlewStep(p, this._slewQ0, p._manualRotation, dt);
     return true;
   }
 
@@ -2304,6 +2325,60 @@ export class AutopilotSystem {
   _slothNoticeReset() {
     const s = this._slow;
     s.said = false; s.kind = null; s.mode = null; s.ref = null; s.noPowerSaid = false;
+  }
+
+  /**
+   * @private fu-gas GD3: the real cold gas for a free slew step. The trip hold's ease, the prograde-only hold above warp 1 and
+   * the world-frame slew (`_rotateTowardWorld`) all turn her at AP_ROT_RATE and used to charge nothing at normal gas. The
+   * caller snapshots the slewed quaternion (`this._slewQ0.copy(q)`: `_manualRotation` for the orbit-frame offset, so the
+   * orbit's own turning stays free; `p.quaternion` for the world slew) and calls this after the step. The body-frame step
+   * becomes a body rate (rad per REAL second, so a swing bills the same at any warp) and the CHANGE of rate from last
+   * frame's is billed as angular momentum (I x |dw|, pitch and yaw; roll is never commanded) through the player's own
+   * `_billTurnNullN2`. Spin-up, a change of direction and the stop each bill; steady tracking bills only its rate changes.
+   * The stop is billed by `_slewStopTick` (a frame with no step). Mocks without the player's bill or inertia pay nothing.
+   * @param {object} p player @param {THREE.Quaternion} qBefore snapshot @param {THREE.Quaternion} qAfter the live quaternion
+   * @param {number} dt real seconds
+   */
+  _billSlewStep(p, qBefore, qAfter, dt) {
+    if (qBefore.equals(qAfter)) return;                       // nothing moved (deadzone): the stop bill covers the end
+    this._slewSteppedThisFrame = true;
+    if (!(dt > 0)) return;
+    if (typeof p._billTurnNullN2 !== 'function' || typeof p.getAttitudeInertia !== 'function') return;
+    const dq = this._slewDq.copy(qBefore).invert().multiply(qAfter);
+    const sinHalf = Math.hypot(dq.x, dq.y, dq.z);
+    const w = this._slewW;
+    if (sinHalf > 1e-12) {
+      const ang = 2 * Math.atan2(sinHalf, Math.abs(dq.w));   // the short way round
+      w.set(dq.x, dq.y, dq.z).multiplyScalar((dq.w < 0 ? -1 : 1) * ang / (sinHalf * dt));
+    } else {
+      w.set(0, 0, 0);
+    }
+    const I = p.getAttitudeInertia();
+    const w0 = this._slewOmega;
+    if (I) p._billTurnNullN2(I.ixx * Math.abs(w.x - w0.x), I.iyy * Math.abs(w.y - w0.y));
+    w0.copy(w);
+  }
+
+  /**
+   * @private fu-gas GD3: the top of `update`. A frame with no slew step after one with a rate is the stop (a swing that ended
+   * in the deadzone, a path dropped mid-swing, a scripted turn or aim taking the nose): bill I x |w0| and zero the rate. A held
+   * world is not a stop (neither bills nor clears); the tail boxes taking over (empty tank) zero it unbilled - their twin works
+   * from rest, as before.
+   * @param {object} p player @param {number} dtWorld
+   */
+  _slewStopTick(p, dtWorld) {
+    if (dtWorld <= 0) return;
+    const stepped = this._slewSteppedThisFrame;
+    this._slewSteppedThisFrame = false;
+    const w0 = this._slewOmega;
+    if (stepped || w0.lengthSq() === 0) return;
+    const bill = !this._slothOn(p)
+      && typeof p._billTurnNullN2 === 'function' && typeof p.getAttitudeInertia === 'function';
+    if (bill) {
+      const I = p.getAttitudeInertia();
+      if (I) p._billTurnNullN2(I.ixx * Math.abs(w0.x), I.iyy * Math.abs(w0.y));
+    }
+    w0.set(0, 0, 0);
   }
 
   /**
@@ -2580,7 +2655,9 @@ export class AutopilotSystem {
 
     const maxAngle = AP_ROT_RATE * dt;
     const alpha = Math.min(maxAngle / angle, 1.0);
+    this._slewQ0.copy(this._player.quaternion);                        // fu-gas GD3: the world slew is billed (see `_billSlewStep`)
     this._player.quaternion.slerp(targetQuat, alpha);
+    this._billSlewStep(this._player, this._slewQ0, this._player.quaternion, dt);
   }
 
   // ==========================================================================
@@ -2636,7 +2713,7 @@ export class AutopilotSystem {
       ? this._player.getConsumptionMultiplier() : 1;
     return engineDeltaV({
       dryKg: Constants.OCTOPUS_V5.CORE_DRY_MASS + engineTankDryKg(r),
-      coldGasKg: Constants.OCTOPUS_CORE_COLD_GAS * ((r.coldGas || 0) / (r.coldGasMax || Constants.COLD_GAS_MAX)),
+      coldGasKg: coldGasPoolToKg(r.coldGas || 0),
       gasKg: engineGasKg(r),
       isp: fuel.isp,
       c,
