@@ -38,6 +38,20 @@ export function pilotLine(name) {
 /** F19: the reason text `AutopilotSystem._rejectAim` sends when the player's own steering ended the turn (AutopilotSystem.js `onManualRotate`). */
 export const MANUAL_AIM_REASON = 'Manual attitude input';
 
+/**
+ * u18a (D1): the arm states in which a daughter is NOT out flying on her tether: at home (docked, parked with a catch,
+ * reloading, docking), lost, or on a radiator carry. A selected daughter in one of these has her digit deselect her;
+ * a selected daughter in any other state that is not piloted gets piloted by her digit.
+ * @param {string} state - ARM_STATES value
+ * @returns {boolean}
+ */
+function isHomeOrBusyArmState(state) {
+  const S = Constants.ARM_STATES;
+  return state === S.DOCKED || state === S.HOLDING_CATCH || state === S.RELOADING || state === S.DOCKING
+    || state === S.EXPENDED || state === S.CARRY_PREP || state === S.CARRY_OUT
+    || state === S.CARRY_HANDOFF || state === S.CARRY_BACK;
+}
+
 export class InputManager {
   constructor() {
     /** @type {Object<string, boolean>} Key state map */
@@ -2221,9 +2235,12 @@ export class InputManager {
    *   • DEPLOYED → SELECT + switch camera to that daughter (pilot it).
    *   • HOLDING_CATCH → SELECT only, like DOCKED (u17b): she is home on her strut, never piloted.
    *   • EXPENDED → warn.
-   *   • Re-press the ACTIVE daughter's digit → return to mother: exit the pilot
+   *   • Re-press the ACTIVE daughter's digit while she is PILOTED → return to mother: exit the pilot
    *     camera + deselect WITHOUT recalling (the daughter keeps working — this
    *     is the canonical "pop back" toggle that replaced P's exit role).
+   *   • Re-press the active daughter's digit while she is out on her tether but NOT piloted (u18a: the state
+   *     DEPLOY leaves her in under the zoom ladder) → pilot her, keep her selected.
+   *     Home or busy states (docked, holding, reloading, docking, carry) still deselect.
    * Arms 5-8 are deferred until tiers ship (D2) — only digits 1-4 exist today.
    * @private
    * @param {number} armIndex - 0-based arm index
@@ -2235,10 +2252,24 @@ export class InputManager {
     const arm = d.armManager.arms[armIndex];
     if (!arm) return;
 
-    // Toggle: re-pressing the active daughter's digit returns to mother.
-    // Exit the pilot camera (if piloting) and deselect — but do NOT recall;
-    // a launched daughter keeps station-keeping / working ("spinning plates").
+    // Re-pressing the active daughter's digit.
     if (d.armManager.selectedArmIndex === armIndex) {
+      // u18a (D1): DEPLOY was pressed and the mother is still turning for her (or the gate holds her launch): she is
+      // still DOCKED and selected, and her number must not deselect her now, or the owner's "two taps to fly her"
+      // returns. A no-op: she stays selected; once she has launched, one tap pilots her (below).
+      if (arm.state === Constants.ARM_STATES.DOCKED && typeof d.armManager.isLaunchPending === 'function'
+          && d.armManager.isLaunchPending(armIndex)) return;
+      // u18a (D1, owner 2026-10-22 "after DEPLOY the first row tap deselects her, two taps to fly her"): she is
+      // selected, out on her tether, but NOT piloted. That is the state DEPLOY leaves her in under the zoom
+      // ladder (the launch ceremony is stood down on its first frame: "press her number to ride with her"), so
+      // her number now pilots her and keeps her selected. Never the toggling selectArm on a selected daughter.
+      if (!this.armPilotMode && !isHomeOrBusyArmState(arm.state)) {
+        this._enterArmPilotCamera(arm);
+        if (arm.state === Constants.ARM_STATES.ADRIFT) this._postAdriftLine(arm);
+        return;
+      }
+      // Piloted (or home / busy): return to mother. Exit the pilot camera (if piloting) and deselect — but do
+      // NOT recall; a launched daughter keeps station-keeping / working ("spinning plates").
       this._exitArmPilotCamera();
       d.armManager.deselectArm();
       return;
@@ -2264,11 +2295,7 @@ export class InputManager {
       // (avionics are live). Thrusters are dry, so nudge the player to reel her in.
       d.armManager.selectArm(armIndex);
       this._enterArmPilotCamera(arm);
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        source: 'HOUSTON', channel: 'CMD',
-        text: `${arm.displayName} is adrift. Thrusters dry, avionics live. Press R to reel her home.`,
-        priority: 'info',
-      });
+      this._postAdriftLine(arm);
     } else if (arm.state === Constants.ARM_STATES.EXPENDED) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `${arm.displayName} is expended. Not available`,
@@ -2279,6 +2306,15 @@ export class InputManager {
       d.armManager.selectArm(armIndex);
       this._enterArmPilotCamera(arm);
     }
+  }
+
+  /** The "adrift" comms line for a daughter whose number was just pressed (select + pilot, or pilot while selected). @private */
+  _postAdriftLine(arm) {
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: 'HOUSTON', channel: 'CMD',
+      text: `${arm.displayName} is adrift. Thrusters dry, avionics live. Press R to reel her home.`,
+      priority: 'info',
+    });
   }
 
   /**

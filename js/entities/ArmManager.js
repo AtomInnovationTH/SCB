@@ -4744,6 +4744,19 @@ export class ArmManager {
     return had;
   }
 
+  /**
+   * u18a (D1): is HER launch still on its way, with her not yet off the dock? True from the moment DEPLOY is accepted
+   * (the mother turns for her: she holds `_aimReserved`, `_deployWithCeremony`; or the keep-out gate / strut aim holds her:
+   * an entry in `_pendingLaunches`) until she leaves DOCKED. Read only: changes nothing.
+   * @param {number} i - arm index
+   * @returns {boolean}
+   */
+  isLaunchPending(i) {
+    const arm = this.arms[i];
+    if (!arm || arm.state !== ARM_STATES.DOCKED) return false;
+    return arm._aimReserved === true || !!(this._pendingLaunches && this._pendingLaunches.has(i));
+  }
+
   /** Forget a pending launch and give back the arm reservation we took. @private */
   _dropPendingLaunch(i) {
     const pend = this._pendingLaunches;

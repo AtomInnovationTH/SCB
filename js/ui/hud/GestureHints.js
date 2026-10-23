@@ -129,6 +129,9 @@ const SKILL_WORDS = Object.freeze({
 const LETGO_LABEL = 'LET GO';      // u14b B1: K - the one button that lets the catch at the collar go
 const READ_LABEL = 'READ MORE';    // u14b B2: I - the full-screen library (the SPECS tab opens a different view)
 const RE_PAD_CHIP = /\b([Pp])ress N to stick the pad on\b/g;   // the daughter's pad tool: its own button
+// u18c D5: her gripper and magnet are their own buttons too (the in-position comms line, CommsSystem)
+const RE_GRIP_CHIP = /\b([Pp])ress N to grip it\b/g;
+const RE_MAGNET_CHIP = /\b([Pp])ress N to use the magnet\b/g;
 const RE_NEXT_CHIP = /\b([Pp])ress T for next target\b/g;   // no chip: a tap on the piece itself selects it
 // u14b R1: the reminder lines whose key / mouse gesture HAS a touch control, worded for it on glass (no chip: the control is the
 // glass itself). "Press T to pick the next target." -> "Tap a piece to pick the next target."; "Scroll to zoom." -> "Pinch to zoom.";
@@ -185,8 +188,8 @@ const GLASS_LINES = Object.freeze([
   ['Press N to launch the net (or 1-4 to pilot her).', 'Tap LAUNCH NET to launch the net (or tap her row in DAUGHTERS to pilot her).'],
   // feedback-1022 A5: the station-keep hint names her tool; on glass N is her tool's chip (STICK PAD for the pad, else LAUNCH NET)
   ['Press N to stick the pad on (or 1-4 to pilot her).', 'Tap STICK PAD to stick the pad on (or tap her row in DAUGHTERS to pilot her).'],
-  ['Press N to use the magnet (or 1-4 to pilot her).', 'Tap LAUNCH NET to use the magnet (or tap her row in DAUGHTERS to pilot her).'],
-  ['Press N to grip it (or 1-4 to pilot her).', 'Tap LAUNCH NET to grip it (or tap her row in DAUGHTERS to pilot her).'],
+  ['Press N to use the magnet (or 1-4 to pilot her).', 'Tap USE MAGNET to use the magnet (or tap her row in DAUGHTERS to pilot her).'],
+  ['Press N to grip it (or 1-4 to pilot her).', 'Tap CLOSE GRIPPER to grip it (or tap her row in DAUGHTERS to pilot her).'],
   ['Press her number again (1-4) or Esc to back out to Command view.', 'Tap her row in DAUGHTERS again to back out to Command view.'],
   ['Daughters capture heavier targets at longer range. Press 1-4 to pilot a launched daughter.', 'Daughters capture heavier targets at longer range. Tap her row in DAUGHTERS to pilot a launched daughter.'],
   ['Run both daughters: [D] deploys, [1-4] select and pilot (press again to switch back), [Shift+R] recalls the whole fleet.', 'Run both daughters: hold the target for DAUGHTER to send one, and tap her row in DAUGHTERS to pilot her (tap again to switch back).'],
@@ -370,6 +373,8 @@ export class GestureHints {
   static chipPhrase(text) {
     if (!_glass || typeof text !== 'string') return text;
     return applyLines(text).replace(RE_PAD_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' STICK PAD')
+      .replace(RE_GRIP_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' CLOSE GRIPPER')
+      .replace(RE_MAGNET_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' USE MAGNET')
       .replace(RE_NEXT_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' a piece to pick the next target')
       .replace(RE_PICK_CHIP, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' a piece to pick the next target')
       .replace(RE_ZOOM_WORDS, (tok, s) => (s === 'S' ? 'Pinch' : 'pinch') + ' to zoom')
@@ -441,7 +446,9 @@ export class GestureHints {
     if (typeof text !== 'string') return [];
     const found = [];
     const KIND = { N: 'net', D: 'daughter', A: 'autopilot', S: 'scan', R: 'reel' };
-    const rest = text.replace(RE_PAD_CHIP, (tok, p, off) => { found.push([off, 'pad']); return ' '.repeat(tok.length); });
+    const rest = text.replace(RE_PAD_CHIP, (tok, p, off) => { found.push([off, 'pad']); return ' '.repeat(tok.length); })
+      .replace(RE_GRIP_CHIP, (tok, p, off) => { found.push([off, 'grip']); return ' '.repeat(tok.length); })
+      .replace(RE_MAGNET_CHIP, (tok, p, off) => { found.push([off, 'magnet']); return ' '.repeat(tok.length); });
     rest.replace(RE_PRESS_CHIP, (tok, p, letter, toVerb, off) => { found.push([off, KIND[letter]]); return tok; });
     rest.replace(RE_LETGO_CHIP, (tok, p, tail, off) => { found.push([off, 'letgo']); return tok; });
     rest.replace(RE_READ_CHIP, (tok, p, tail, off) => { found.push([off, 'read']); return tok; });

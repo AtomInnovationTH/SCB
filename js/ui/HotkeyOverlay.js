@@ -166,6 +166,7 @@ export const HOTKEY_GROUPS = [
       'gap',
       [['↑ ↓ ← →'], 'Circle target'],
       [['+', '−'], 'Closer / farther'],
+      [['CHANGE TOOL'], 'Next tool (on her DAUGHTERS row)', { pointer: true }],
       [['Shift R'], 'Reel all daughters'],
       [['Shift'], 'Hold: reel faster'],
       'gap',

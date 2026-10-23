@@ -111,6 +111,9 @@ export class ArmIdleAdvisor {
         duration: Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000,
         priority: 'normal',
         step: true,
+        // u18c D5: on glass a step button that is up (her tool's button, TouchActionChip) is the same instruction in the true word;
+        // this text waits behind it instead of covering it for 12 s (HintTicker).
+        yieldToButton: true,
         _postOnboarding: true,
       });
       return;

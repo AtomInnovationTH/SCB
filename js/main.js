@@ -1845,6 +1845,11 @@ async function init() {
     hasStepButton: (label) => !!(hud && hud.hintTicker && hud.hintTicker.hasStepButton(label)),
     isDespinUp: () => !!(touchVerbButton && touchVerbButton._despinShown),
     isTurnPadUp: () => !!(touchControls && touchControls.isTurnPadShown()),
+    // u18c D6: the piloted daughter's CHANGE TOOL button is on her DAUGHTERS row (StatusPanel.toolButtonUp).
+    toolButtonUp: () => {
+      const a = inputManager && inputManager.armPilotMode && cameraSystem && cameraSystem.getPilotedArm ? cameraSystem.getPilotedArm() : null;
+      return !!(a && hud && hud.statusPanel && hud.statusPanel.toolButtonUp(a.index));
+    },
   });
 
   // --- Velocity Streaks (Canvas 2D acceleration overlay — Phase 4) ---
@@ -1886,6 +1891,8 @@ async function init() {
 
   // --- Connect V3 arm manager to HUD + player satellite ---
   if (armManager) hud.setArmManager(armManager);
+  // u18c D4: her row's CHANGE TOOL button shows only for the daughter being piloted (read when a row is drawn).
+  hud.statusPanel.setPilotedArmGetter(() => (inputManager && inputManager.armPilotMode && cameraSystem && cameraSystem.getPilotedArm ? cameraSystem.getPilotedArm() : null));
   if (armManager) player.setArmManager(armManager);
   debrisField.setMotherDragSource(player);   // Nets step 3 slice 2a: the welcome pieces share her drag coefficient (the area and mass her last drag step used)
   // Delegation 4 (2026-05-31): wire LassoSystem into HUD so NetInventoryPanel

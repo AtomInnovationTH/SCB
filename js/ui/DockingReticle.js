@@ -171,9 +171,16 @@ export class DockingReticle {
     return !!(c && typeof c.hasStepButton === 'function' && c.hasStepButton(label));
   }
 
-  /** @private the net button on screen now ('LAUNCH NET' or 'STICK PAD'), else '' */
+  /** @private the daughter-tool button on screen now ('LAUNCH NET', 'STICK PAD', 'CLOSE GRIPPER' or 'USE MAGNET'), else '' */
   _glassNetChip() {
-    return this._chipUp('LAUNCH NET') ? 'LAUNCH NET' : this._chipUp('STICK PAD') ? 'STICK PAD' : '';
+    return ['LAUNCH NET', 'STICK PAD', 'CLOSE GRIPPER', 'USE MAGNET'].find((label) => this._chipUp(label)) || '';
+  }
+
+  /** @private u18c D6: is the piloted daughter's CHANGE TOOL button on her DAUGHTERS row right now? (main.js closure -> StatusPanel.toolButtonUp) */
+  _toolButtonUp() {
+    const c = this._glassControls;
+    if (!c || typeof c.toolButtonUp !== 'function') return false;
+    try { return !!c.toolButtonUp(); } catch (_e) { return false; }
   }
 
   /** @private is the hold-to-fire DE-SPIN button on screen right now? */
@@ -745,8 +752,8 @@ export class DockingReticle {
       ctx.textBaseline = 'middle';
       ctx.fillStyle = ready ? `rgba(0, 255, 136, ${readyAlpha})` : C.gray;
       if (this._glassNow()) {
-        // u17 A-T1 (D2): each clause names a button only while that button is on screen; the tool cycle and Esc have no
-        // touch control, so they are never named. Nothing left to say -> nothing drawn.
+        // u17 A-T1 (D2): each clause names a button only while that button is on screen; Esc has no touch control and the
+        // tool cycle's (CHANGE TOOL, u18c) sits on her DAUGHTERS row, so neither is named here. Nothing left -> nothing drawn.
         const clauses = [];
         const net = this._glassNetChip();
         if (net) clauses.push(`tap ${net}`);
@@ -1417,8 +1424,11 @@ export class DockingReticle {
         // u17 A-T1 (D2): the tool cycle has no touch control. Name REEL / SEND DAUGHTER only while their chips are up.
         const reel = this._chipUp('REEL');
         const send = this._chipUp('SEND DAUGHTER');
-        advisory = 'too wide for this net'
-          + (reel && send ? ' \u2014 tap REEL, then SEND DAUGHTER' : reel ? ' \u2014 tap REEL' : send ? ' \u2014 tap SEND DAUGHTER' : '');
+        // u18c D6: a daughter who carries a gripper and whose row shows CHANGE TOOL: that button is the way to it.
+        advisory = toolset.includes('GRIPPER') && this._toolButtonUp()
+          ? 'too wide for this net \u2014 tap CHANGE TOOL for the gripper'
+          : 'too wide for this net'
+            + (reel && send ? ' \u2014 tap REEL, then SEND DAUGHTER' : reel ? ' \u2014 tap REEL' : send ? ' \u2014 tap SEND DAUGHTER' : '');
       } else {
         advisory = toolset.includes('GRIPPER')
           ? 'too wide \u2014 use GRIPPER [`]'

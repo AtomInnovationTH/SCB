@@ -2596,8 +2596,38 @@ export class StatusPanel {
       case 'ADRIFT':
         return btn('KeyR', 'REEL IN') + key('R', 'reel in');
       default:
-        return btn('KeyR', 'RECALL') + key('R', 'recall');
+        // u18c D4: CHANGE TOOL (the backquote key) beside RECALL while her tool can be changed (see toolButtonUp).
+        return (this.toolButtonUp(idx) ? btn('Backquote', 'CHANGE TOOL') + key('`', 'change tool') : '')
+          + btn('KeyR', 'RECALL') + key('R', 'recall');
     }
+  }
+
+  /**
+   * u18c D4: how StatusPanel learns which daughter the player is piloting (a getter, read when a row is drawn).
+   * @param {(() => (object|null))|null} fn  returns the piloted ArmUnit, or null when no daughter is piloted
+   */
+  setPilotedArmGetter(fn) {
+    this._pilotedArmGetter = typeof fn === 'function' ? fn : null;
+  }
+
+  /**
+   * u18c D4: is the CHANGE TOOL button on daughter `idx`'s row right now? Exactly when backquote would change her tool:
+   * the tap grammar is on (`fleetTapEnabled`), she is the piloted daughter, she holds station on a piece
+   * (STATION_KEEP), carries more than one tool and the multi-tool flag is on. The row (`_daughterHotkeys`) and the
+   * reticle's glass advisory (main.js `setGlassControls` -> `toolButtonUp`) both read this one answer.
+   * @param {number} idx  her index in the arm manager
+   * @returns {boolean}
+   */
+  toolButtonUp(idx) {
+    if (!fleetTapEnabled()) return false;
+    const am = this._armManager;
+    const arm = am && Array.isArray(am.arms) && Number.isInteger(idx) ? am.arms[idx] : null;
+    if (!arm || arm.state !== Constants.ARM_STATES.STATION_KEEP) return false;
+    if (!Array.isArray(arm.toolset) || arm.toolset.length <= 1) return false;
+    if (!Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')) return false;
+    let piloted = null;
+    try { piloted = this._pilotedArmGetter ? this._pilotedArmGetter() : null; } catch (_e) { piloted = null; }
+    return !!piloted && piloted === arm;
   }
 
   /**
@@ -2935,8 +2965,12 @@ export class StatusPanel {
     // survive, so no flex here; the button vertical-aligns to the text middle).
     // Flag-off keeps the shipped 1 px top margin (no button to align).
     const keys = this._daughterHotkeys(a, idx);
+    // u18a (D3, owner 2026-10-22: a holding daughter's row read "busy…"): while TO RADIATOR is not up, her slot says what
+    // she holds instead. Other states keep "busy…".
+    const slot = keys
+      || (a.state === 'HOLDING_CATCH' ? this._holdingSlotHtml(armObj) : '<span style="opacity:0.4;">busy…</span>');
     const keysLine = `<div style="padding-left:28px;font-size:10px;margin-top:${on ? 2 : 1}px;">`
-      + (keys || '<span style="opacity:0.4;">busy…</span>')
+      + slot
       + `</div>`;
 
     return `<div ${rowAttrs}style="padding:2px 4px;background:rgb(var(--hud-info-rgb, 68 136 255) / 0.08);border-left:2px solid var(--hud-info, ${VisualLaw.COLORS.SELECTION});${rowCursor}">`
@@ -2944,6 +2978,20 @@ export class StatusPanel {
       + telemetryLine
       + keysLine
       + `</div>`;
+  }
+
+  /**
+   * @private u18a (D3): the selected holding daughter's slot when TO RADIATOR is not up: `holding a fragment · 4.0 kg`.
+   * Her first (head) rack piece, worded by `payoffParts` (the same type phrase and kg format as the catch payoff line, so a
+   * plain "debris" never reads "a debris"). '' when she has no catch data to show, so the slot stays empty, never "busy…".
+   * @param {object} [armObj]  the ArmUnit (`getStatus()` has no catch type)
+   * @returns {string} HTML
+   */
+  _holdingSlotHtml(armObj) {
+    const piece = armObj && Array.isArray(armObj.heldCatches) ? armObj.heldCatches[0] : null;
+    if (!piece) return '';
+    const text = StatusPanel.payoffParts({ debrisType: piece.type, massKg: piece.mass }).name.replace(/^Caught /, 'holding ');
+    return `<span style="opacity:0.8;">${text}</span>`;
   }
 
   // ==========================================================================

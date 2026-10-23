@@ -849,14 +849,22 @@ export class CommsSystem {
 
     // §4 item 4: STATION_KEEP_ENTERED → ONE line, one action (DECISIONS §33 row 8, owner 2026-10-20). The daughter
     // holds station; N works her recommended tool (InputManager KeyN reaches a holding daughter without pilot mode).
-    // The pad is named when the recommended tool is the pad; every other tool reads as the net (the rule's two
-    // texts). Plain words, no symbols (Ruling 0); the number keys that pilot her are in the help page, not here.
+    // The pad is named when the recommended tool is the pad; u18c D5: the gripper and the magnet say their own word too
+    // (the net's line is every other tool's). Plain words, no symbols (Ruling 0); the number keys that pilot her are in the
+    // help page, not here. On glass `chipPhrase` turns each "Press N to ..." into its button (STICK PAD / CLOSE GRIPPER / USE MAGNET).
+    const inPositionLine = (tool) => (tool === 'PAD' ? 'Daughter in position. Press N to stick the pad on.'
+      : tool === 'GRIPPER' ? 'Daughter in position. Press N to grip it.'
+        : tool === 'MAGNET' ? 'Daughter in position. Press N to use the magnet.'
+          : 'Daughter in position. Press N to net it.');
     eventBus.on(Events.STATION_KEEP_ENTERED, (data) => {
       const armId = daughterDisplayName(data?.armId) || 'SYSTEM';
-      const text = data?.tool === 'PAD'
-        ? 'Daughter in position. Press N to stick the pad on.'
-        : 'Daughter in position. Press N to net it.';
-      this.addMessage('INFO', armId, text, { channel: 'CMD' });
+      this.addMessage('INFO', armId, inPositionLine(data?.tool), { channel: 'CMD' });
+    });
+    // u18c D5: the PLAYER changed her tool (backquote or CHANGE TOOL): say the new tool's line once. The recommendation
+    // ArmUnit makes on station-keep entry emits TOOL_SELECTED too, without `byPlayer`: the entry line above covers it.
+    eventBus.on(Events.TOOL_SELECTED, (data) => {
+      if (!data || data.byPlayer !== true) return;
+      this.addMessage('INFO', daughterDisplayName(data.armId) || 'SYSTEM', inPositionLine(data.tool), { channel: 'CMD' });
     });
   }
 

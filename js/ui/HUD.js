@@ -3391,8 +3391,9 @@ export class HUD {
     // Desktop keeps the bare 'sk' / 'pilot' keys and its HTML byte for byte.
     const glass = GestureHints.isGlass();
     const chip = glass ? this._glassStripChips() : null;
+    const fly = glass ? this._glassFlyingLine(arm) : '';   // u18a (D2): TRANSIT / APPROACH only; the whole metres are in the text, so in the key
     const base = isStationKeep ? 'sk' : 'pilot';
-    const mode = glass ? `${base}:glass:${chip.net}:${chip.reel}` : base;
+    const mode = glass ? `${base}:glass:${chip.net}:${chip.reel}:${fly}` : base;
     // Avoid redundant DOM writes — track which variant is showing
     if (this._armStripMode === mode) return;
     this._armStripMode = mode;
@@ -3406,6 +3407,7 @@ export class HUD {
       const parts = isStationKeep
         ? ['<span class="apc-badge">🛰️ STATION KEEP</span>', `${key('TURN PAD')} Orbit`]
         : ['<span class="apc-badge">🤖 DAUGHTER PILOT</span>'];
+      if (fly) parts.push(fly);
       if (chip.net) parts.push(`${key(chip.net)} ${isStationKeep ? 'Capture' : 'Deploy Net'}`);
       if (chip.reel) parts.push(`${key('REEL')} Recall`);
       parts.push('Tap her row in DAUGHTERS again to exit');
@@ -3443,13 +3445,14 @@ export class HUD {
 
   /**
    * @private u15b fix 4: which touch chips are on screen right now, for the glass pilot strip: the net button
-   * ('LAUNCH NET' or 'STICK PAD', else '') and whether REEL is up. Read from the ticker's step buttons (TouchActionChip posts them).
+   * ('LAUNCH NET', 'STICK PAD', 'CLOSE GRIPPER' or 'USE MAGNET' (u18c: her tool's word), else '') and whether REEL is up. Read from the ticker's step buttons (TouchActionChip posts them).
    * @returns {{net:string, reel:boolean}}
    */
   _glassStripChips() {
     const t = this.hintTicker;
     const has = (label) => !!(t && typeof t.hasStepButton === 'function' && t.hasStepButton(label));
-    return { net: has('LAUNCH NET') ? 'LAUNCH NET' : has('STICK PAD') ? 'STICK PAD' : '', reel: has('REEL') };
+    const net = ['LAUNCH NET', 'STICK PAD', 'CLOSE GRIPPER', 'USE MAGNET'].find(has) || '';
+    return { net, reel: has('REEL') };
   }
 
   /**
@@ -3462,6 +3465,29 @@ export class HUD {
     const am = this._armManager;
     const arm = am && typeof am.getSelectedArm === 'function' ? am.getSelectedArm() : null;
     return arm && arm.state === Constants.ARM_STATES.HOLDING_CATCH ? arm : null;
+  }
+
+  /**
+   * @private u18a (D2, owner 2026-10-22 "LAUNCH NET ~5 s late"): what the glass pilot strip says while she is piloted and
+   * still flying in: `Flying to the piece · 34 m` (whole metres to her target; just `Flying to the piece` when her target has
+   * no position to measure from; NO text at all when she has no target, as after a DEPLOY with none). TRANSIT and APPROACH
+   * only: from station-keep on, the net chip and the strip's
+   * Capture word take over; in REELING / NETTING / the rest it says nothing. No key, no net button: the LAUNCH NET chip is
+   * not offered out here (the small net always misses beyond about 26 m, and she holds station at 16-24 m). The text
+   * itself goes into the strip's cached mode key, so the metres count down. Tolerates a bare HUD, no arm, no target.
+   * @param {object} [arm] - the piloted ArmUnit
+   * @returns {string} '' when nothing applies
+   */
+  _glassFlyingLine(arm) {
+    const S = Constants.ARM_STATES;
+    if (!arm || (arm.state !== S.TRANSIT && arm.state !== S.APPROACH)) return '';
+    // No target (DEPLOY with nothing selected sets none; also after a trawl): she is not flying to a piece, so say nothing.
+    if (!arm.target) return '';
+    const there = arm.target._scenePosition;
+    const here = arm.position;
+    if (!there || !here) return 'Flying to the piece';
+    const metres = Math.hypot(there.x - here.x, there.y - here.y, there.z - here.z) / Constants.SCENE_UNITS_PER_METER;
+    return Number.isFinite(metres) ? `Flying to the piece \u00B7 ${Math.round(metres)} m` : 'Flying to the piece';
   }
 
   /**

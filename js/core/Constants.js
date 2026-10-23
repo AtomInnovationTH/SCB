@@ -1148,7 +1148,7 @@ export const Constants = {
   // Tool kinds are the bare strings 'NET' | 'MAGNET' | 'GRIPPER' | 'PAD'.
   DAUGHTER_TOOLSETS: {
     weaver:  ['NET', 'GRIPPER', 'MAGNET'],   // ordered: primary first (§2 table)
-    spinner: ['NET', 'PAD', 'MAGNET'],       // §13 Q2 — Spinner EPM is player-facing
+    spinner: ['NET', 'PAD'],                 // DECISIONS §33 row 2 / u18 D7: four nets + a sticky pad, no magnet (the large daughter keeps hers)
   },
 
   // EPM magnetic-grapple tuning (cite EPIC10_DEEP_ANALYSIS.md:3322-3326).

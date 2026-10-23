@@ -5,7 +5,7 @@
  * key, so this module keeps ONE tappable step chip on screen while the action is on offer:
  *   · a piece is within net reach, a mother net is left, none is in flight  → LAUNCH NET  (KeyN)
  *   · the mother has no nets left, or N was refused as "out of net range"   → SEND DAUGHTER (KeyD)
- *   · a daughter holds station on the piece ("Daughter in position. Press N…") → LAUNCH NET / STICK PAD (KeyN: her tool)
+ *   · a daughter holds station on the piece ("Daughter in position. Press N…") → LAUNCH NET / STICK PAD / CLOSE GRIPPER / USE MAGNET (KeyN: her tool, u18c)
  * It reuses the ticker's step-chip mechanism (HINT_POSTED step:true + press + button): a tap takes exactly the
  * keyboard's path, refusals included. It never covers a teaching-beat chip (HintTicker.hasStepChip) and takes its
  * own chip down the moment its condition ends. Driven by events and live state, never by matching comms text
@@ -61,6 +61,10 @@ export const TOUCH_ACTION_CHIP_ID = 'touch_action_chip';
 const CHIPS = Object.freeze({
   net: Object.freeze({ text: 'Launch the net', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'LAUNCH NET' }),
   pad: Object.freeze({ text: 'Stick the pad on', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'STICK PAD' }),
+  // u18c D5: the other two daughter tools. N works whichever tool she holds (ArmUnit.dispatchSelectedTool), so each tool has its
+  // own true word; `net` stays the mother's net AND the daughter's net.
+  grip: Object.freeze({ text: 'Close the gripper', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'CLOSE GRIPPER' }),
+  magnet: Object.freeze({ text: 'Use the magnet', glyph: 'N', keys: Object.freeze(['KeyN']), press: 'KeyN', button: 'USE MAGNET' }),
   daughter: Object.freeze({ text: 'Send a daughter', glyph: 'D', keys: Object.freeze(['KeyD']), press: 'KeyD', button: 'SEND DAUGHTER' }),
   autopilot: Object.freeze({ text: 'Autopilot in', glyph: 'A', keys: Object.freeze(['KeyA']), press: 'KeyA', button: 'AUTOPILOT' }),
   scan: Object.freeze({ text: 'Scan', glyph: 'S', keys: Object.freeze(['KeyS']), press: 'KeyS', button: 'SCAN' }),
@@ -91,7 +95,17 @@ export const BEAT_CHIPS = Object.freeze({
 });
 
 /** The key each chip kind presses (a physical or tapped press of it ends a line chip). */
-const KIND_KEY = Object.freeze({ net: 'KeyN', pad: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR', letgo: 'KeyK', read: 'KeyI', widescan: 'Shift+KeyS', throttle: 'Shift+Equal' });
+const KIND_KEY = Object.freeze({ net: 'KeyN', pad: 'KeyN', grip: 'KeyN', magnet: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR', letgo: 'KeyK', read: 'KeyI', widescan: 'Shift+KeyS', throttle: 'Shift+Equal' });
+
+/** u18c D5: the chip kinds that are KeyN (a tool word); a daughter holding the piece decides which one is true now. */
+const N_KINDS = Object.freeze(['net', 'pad', 'grip', 'magnet']);
+/** u18c D5: the chip kinds that name HER tool (only true while she holds station). */
+const TOOL_KINDS = Object.freeze(['pad', 'grip', 'magnet']);
+
+/** u18c D5: the chip kind for the tool a station-keeping daughter holds ('NET' | 'PAD' | 'GRIPPER' | 'MAGNET'; anything else = the net). */
+function toolKind(tool) {
+  return tool === 'PAD' ? 'pad' : tool === 'GRIPPER' ? 'grip' : tool === 'MAGNET' ? 'magnet' : 'net';
+}
 
 /** The daughter states in which N deploys a MANUAL net (ArmUnit.manualNetDeploy). */
 const MANUAL_NET_STATES = Object.freeze(['TRANSIT', 'APPROACH']);
@@ -155,6 +169,7 @@ export class TouchActionChip {
     this._denied = false;          // N was refused as out_of_net_range: the game routes the player to a daughter
     this._inFlight = false;        // a MOTHER net is flying (R4b)
     this._daughterOut = false;     // a daughter was just sent for this target
+    this._wasHolding = false;      // u18c D5: a daughter was holding station at the last read (a tool line ends with her station)
     this._holding = new Map();     // armId -> tool: daughters holding station on the target (event fallback, no getHolding)
     this._line = null;             // R3: { kind, until } - a shown line named this key
     this._beat = null;             // u15a A-T4: { id, kind, needs } - the running lesson whose key has this chip
@@ -247,7 +262,9 @@ export class TouchActionChip {
     // R13: a skill reminder that names an action key (gated by state: see wanted()).
     on(Events.HINT_POSTED, (d) => {
       // u14b R4: a beat's step chip posted while LET GO is up would shelve it (one step at a time): take the slot back.
-      if (d && d.step === true && d.id !== TOUCH_ACTION_CHIP_ID && this._shown === 'letgo') this._schedule(() => this._reclaimSlot());
+      if (d && d.step === true && d.id !== TOUCH_ACTION_CHIP_ID && (this._shown === 'letgo' || (d.press === 'KeyN' && this._takesNSlot(this._shown)))) {
+        this._schedule(() => this._reclaimSlot());
+      }
       if (!d || typeof d.id !== 'string' || !d.id.startsWith('remind_')) return;
       const kind = REMINDER_KIND[d.skillId];
       if (kind) this.onLine([kind], true, d.id);
@@ -315,9 +332,18 @@ export class TouchActionChip {
     } catch (_e) { return undefined; }
   }
 
-  /** @private u14b R4: LET GO is on screen only if it is the visible step: if a newer step chip took the slot, post ours again on top. */
+  /** @private u18c D5: this chip kind is KeyN's word for the tool a holding daughter has (N works HER tool, not the mother's net). */
+  _takesNSlot(kind) {
+    return N_KINDS.includes(kind) && this._holdingTool() != null;
+  }
+
+  /**
+   * @private u14b R4: LET GO is on screen only if it is the visible step: if a newer step chip took the slot, post ours again on top.
+   * u18c D5: the same for her tool's button against a KeyN beat chip posted while she holds (it would name the mother's net).
+   */
   _reclaimSlot() {
-    if (this._disposed || this._shown !== 'letgo' || this.wanted() !== 'letgo') return;
+    if (this._disposed || !this._shown || this.wanted() !== this._shown) return;
+    if (this._shown !== 'letgo' && !this._takesNSlot(this._shown)) return;
     this._shown = null;
     this._eb.emit(Events.HINT_SATISFIED, { id: TOUCH_ACTION_CHIP_ID });
     this.evaluate();
@@ -344,7 +370,7 @@ export class TouchActionChip {
    * mother net left and none in flight; daughter: R12's daughter can go; autopilot: a piece is selected; others: yes.
    */
   _keyWouldAct(kind, holding) {
-    if (kind === 'net' || kind === 'pad') return !!holding || (this._inRange && this._nets > 0 && !this._inFlight);
+    if (N_KINDS.includes(kind)) return !!holding || (this._inRange && this._nets > 0 && !this._inFlight);
     if (kind === 'daughter') { try { return this._hasDaughter ? !!this._hasDaughter() : true; } catch (_e) { return true; } }
     if (kind === 'autopilot') return this._selected;
     return true;
@@ -399,16 +425,26 @@ export class TouchActionChip {
     try { return !!this._getFarState(); } catch (_e) { return false; }   // null = tutorial still teaches
   }
 
-  /** @returns {'net'|'pad'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'read'|'widescan'|'throttle'|null} the chip the current state asks for (ignoring other chips on screen) */
+  /** @private the tool ('NET'|'PAD'|'GRIPPER'|'MAGNET') of the daughter holding station on the target, or null (none holds). */
+  _holdingTool() {
+    if (this._getHolding) {
+      try { return this._getHolding() || null; } catch (_e) { return null; }
+    }
+    return this._holding.size > 0 ? ([...this._holding.values()][0] || 'NET') : null;
+  }
+
+  /** @returns {'net'|'pad'|'grip'|'magnet'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'read'|'widescan'|'throttle'|null} the chip the current state asks for (ignoring other chips on screen) */
   wanted() {
     if (!this._glass) return null;
     if (!this._floorOk()) { this._line = null; return null; }   // floor left: a line chip does not wait for the way back
     const canSend = () => { try { return this._hasDaughter ? !!this._hasDaughter() : true; } catch (_e) { return true; } };
-    let holding = null;
-    if (this._getHolding) {
-      try { holding = this._getHolding(); } catch (_e) { holding = null; }
-    } else if (this._holding.size > 0) {
-      holding = [...this._holding.values()][0] || 'NET';
+    const holding = this._holdingTool();
+    // u18c D5: a tool line ("Press N to grip it ...") was said for a daughter holding station. When she stops holding (docked,
+    // reeled, the piece is gone) its button would name a tool N no longer works: the line ends with her station, not after 30 s.
+    if (holding) this._wasHolding = true;
+    else if (this._wasHolding) {
+      this._wasHolding = false;
+      if (this._line && TOOL_KINDS.includes(this._line.kind)) this._line = null;
     }
     // u15a A-T4: a running lesson's button outranks every line and state chip, except LET GO (a catch that cannot move on
     // blocks the lesson too). It is never timed out; it only waits while its key would teach nothing (_beatKind).
@@ -425,9 +461,10 @@ export class TouchActionChip {
       else if (this._line.kind === 'daughter' && !canSend()) { /* no chip */ }
       // R13: a reminder offers only what its key would do now.
       else if (this._line.gated && !this._keyWouldAct(this._line.kind, holding)) this._takeDownReminder();
-      else return this._line.gated && this._line.kind === 'net' && holding === 'PAD' ? 'pad' : this._line.kind;
+      // u18c D5: a daughter holding the piece decides the N word (her tool); with none, the line's own kind (mother net).
+      else return (holding && N_KINDS.includes(this._line.kind)) ? toolKind(holding) : this._line.kind;
     }
-    if (holding) return holding === 'PAD' ? 'pad' : 'net';
+    if (holding) return toolKind(holding);
     if (this._inFlight) return null;
     // R9: the piece needs a daughter, none can launch, and one is out and idle: bringing her home is what frees one.
     // Before the "daughter out" rule below, which keeps quiet for a daughter that is on her way (adrift is not).
@@ -469,7 +506,11 @@ export class TouchActionChip {
     // One chip, one action: a teaching-beat chip (or any other step chip) on screen keeps the slot ...
     // ... except LET GO (u14b R4): a catch that cannot move on blocks the beat the chip belongs to, so LET GO takes the slot.
     // The ticker shelves the beat's chip (one step at a time) and puts it back when ours leaves.
-    if (want !== 'letgo' && this._ticker && typeof this._ticker.hasStepChip === 'function' && this._ticker.hasStepChip(TOUCH_ACTION_CHIP_ID)) return;
+    // ... and u18c D5 (live fix): a KeyN beat chip ("LAUNCH NET" of tease_lock / second_catch ...) names the MOTHER's net, but with a
+    // daughter holding the piece N works HER tool, so that label is false (CLOSE GRIPPER was never shown while the lesson's chip held
+    // the slot). Ours takes the slot from a KeyN chip then, the same way; chips of any other key still keep it.
+    if (want !== 'letgo' && this._ticker && typeof this._ticker.hasStepChip === 'function'
+      && this._ticker.hasStepChip(TOUCH_ACTION_CHIP_ID, this._takesNSlot(want) ? 'KeyN' : undefined)) return;
     const c = CHIPS[want];
     this._eb.emit(Events.HINT_POSTED, {
       id: TOUCH_ACTION_CHIP_ID,

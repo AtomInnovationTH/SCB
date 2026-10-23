@@ -211,13 +211,22 @@ export class HintTicker {
    * u11 D2: is a step row other than `exceptId` alive (on screen, or waiting off screen for the newer one to leave)?
    * TouchActionChip asks before it posts: one step chip, one action.
    * @param {string} [exceptId]
+   * @param {string} [exceptPress]  u18c D5: also ignore step buttons that press this key (a daughter's tool button replaces a
+   *        KeyN beat chip: same key, and hers is the true word)
    * @returns {boolean}
    */
-  hasStepChip(exceptId) {
+  hasStepChip(exceptId, exceptPress) {
     // u11 R11: only a step row WITH a button is a tappable chip; a text-only step hint ("Turn to line her up")
     // does not hold the slot against a line chip.
-    const isStep = (it) => it && it.id !== exceptId && it.payload && it.payload.step === true && !!it.payload.button;
+    const isStep = (it) => it && it.id !== exceptId && it.payload && it.payload.step === true && !!it.payload.button
+      && !(exceptPress && it.payload.press === exceptPress);
     return this._items.some(isStep) || this._waiting.some(isStep);
+  }
+
+  /** u18c D5: a step BUTTON (glass, with a step sink) is on screen: the row a text-only `yieldToButton` hint must not cover. */
+  _stepButtonUp() {
+    if (typeof this._onStepTap !== 'function' || !GestureHints.isGlass()) return false;
+    return this._items.some((it) => it && it.payload && it.payload.step === true && typeof it.payload.press === 'string' && !!it.payload.button);
   }
 
   /** u15b fix 4: is a step button with this label showing now? (the glass pilot strip names only buttons that are up) */
@@ -362,6 +371,16 @@ export class HintTicker {
 
     // One step at a time: a new step row pushes every visible step row off
     // screen; they wait and come back when this one leaves.
+    // u18c D5 (live fix): ... except a text-only hint that says it yields (`yieldToButton`: the idle coach's "Grip it" beside
+    // her tool's button) when a step BUTTON is up on glass. It waits behind the button instead of covering it for its 12 s: the
+    // button is the same instruction in the true word, and a touch player cannot tap a sentence.
+    if (payload.step === true && payload.yieldToButton === true && !payload.button && this._stepButtonUp()) {
+      this._waiting.push(item);
+      if (typeof setTimeout === 'function' && Number.isFinite(dur) && dur > 0) {
+        item.timer = setTimeout(() => this._fadeAndRemove(item.id), dur);   // it expires while it waits (_fadeAndRemove drops it)
+      }
+      return;
+    }
     if (payload.step === true) this._shelveVisibleSteps();
 
     // Insert as LEFT-most (latest); push existing right.

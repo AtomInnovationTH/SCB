@@ -5075,7 +5075,10 @@ export class ArmUnit {
     // Wave1: tool-cycle re-aim — a deployed daughter swapping verbs trims her
     // attitude toward the new tool axis: one cold-gas couple (visual-only).
     if (this.state === S.STATION_KEEP) this._fireAttitudePuffs('tool');
-    eventBus.emit(Events.TOOL_SELECTED, { armId: this.id, tool: next });
+    // u18c D5: marked as the PLAYER's choice (the backquote key or her CHANGE TOOL button): CommsSystem says the new tool's
+    // in-position line for this and never for _refreshToolRecommendation's own emit on station-keep entry. Only while she
+    // holds station (the line says "in position"); the key and the button allow nothing else today (u18 review).
+    eventBus.emit(Events.TOOL_SELECTED, { armId: this.id, tool: next, byPlayer: this.state === S.STATION_KEEP });
     return next;
   }
 
