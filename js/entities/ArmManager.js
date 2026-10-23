@@ -14,14 +14,14 @@ import { Events } from '../core/Events.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
 import { checkActiveSatArming } from '../systems/ActiveSatGuard.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
-import { strutTipMeters, heldCargoPlumeConflictAt } from '../systems/CoMCalculator.js';
+import { strutTipMeters, heldCargoPlumeConflictAt, heldCargoFoulsCorridorAt } from '../systems/CoMCalculator.js';
 import { strutTipFoulsCorridor, strutLocalDirection, bestStrutAlpha } from './ArmDockBasis.js';
 import { createShipKeepOut } from '../systems/ShipKeepOut.js';
 import { StrutAutoController } from '../systems/StrutAuto.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit, planeTurnLeftRad } from './ArmUnit.js';
 import { DebrisField } from './DebrisField.js';
-import { clearRackCell } from './CaptureNet.js';
+import { clearRackCell, berthAnchorLocalInto } from './CaptureNet.js';
 import { tripRefuses } from '../systems/TransferTrip.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import {
@@ -51,6 +51,10 @@ const _rhTurnQ = new THREE.Quaternion();
 // regardless of which capture path resolved it. Not a plan requirement —
 // see the lane's final report.
 const LEAN_ASIDE_TIMEOUT_S = 8;
+
+/** net-duck D4: how long a daughter waits for her neighbours' lift before she gives up (s), and how often she asks `carryCheck` while she does. */
+const LIFT_WAIT_MAX_S = 20;
+const LIFT_POLL_S = 0.25;
 
 const _aimTmpWanted = new THREE.Vector3();
 const _aimTmpAxis = new THREE.Vector3();
@@ -101,6 +105,103 @@ function _holdPoseOf(mgr, armIndex) {
 }
 
 /**
+ * net-duck R7 (CONVENTIONS §10 rule B): the capture-net states in which a mother net's catch is coming home - the ONE set the holder
+ * duck, the carry wait and the StrutAuto view (`inboundNetRadiusM`) read, so a state added to the reel is added once.
+ */
+const _NET_ST = Constants.CAPTURE_NET.STATES;
+const INBOUND_NET_STATES = new Set([_NET_ST.CINCH_CLOSING, _NET_ST.SECURE_CHECK, _NET_ST.CAPTURED, _NET_ST.REELING]);
+
+/**
+ * net-duck (owner 2026-10-22: "out of the way of mother net"): the radius (m) of the berth corridor of the biggest mother net that is
+ * coming home (`INBOUND_NET_STATES`), or null when none is.
+ * Read straight from the capture-net system, so it does not depend on StrutAuto running (that controller is inert without a debris field).
+ * A net whose catch has no size is not counted ("never duck for a piece this cannot measure", the lean-aside rule); neither is a net
+ * that MISSED (R3: a slipped or lost catch reels back empty, in REELING, with nothing to keep a catch clear of). No allocation.
+ * @param {object} mgr an ArmManager (playerSatellite)
+ * @returns {number|null}
+ */
+function _inboundMotherNetRadiusM(mgr) {
+  const CN = Constants.CAPTURE_NET;
+  const cns = mgr.playerSatellite && mgr.playerSatellite._captureNetSystem;
+  const nets = cns && Array.isArray(cns.activeNets) ? cns.activeNets : null;
+  if (!nets) return null;
+  let r = null;
+  for (let k = 0; k < nets.length; k++) {
+    const n = nets[k];
+    if (!n || !n._isMother || n.catchResult === 'miss' || !INBOUND_NET_STATES.has(n.state)) continue;
+    const d = n.targetDebris;
+    if (!d || !d.sizeMeter) continue;
+    const rr = d.sizeMeter / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+    if (r === null || rr > r) r = rr;
+  }
+  return r;
+}
+
+const _duckAnchor = { x: 0, y: 0, z: 0 };
+
+/**
+ * net-duck D2: the angle a holder lowers her strut to for an inbound net of corridor radius `radiusM`: null when her catch is clear of
+ * the corridor where she is heading (a pending latch wins, as in `_strutLiveAlpha`); else the HIGHEST angle on the hold-pose grid
+ * (34°, 39°, ... below that) at which `heldCargoFoulsCorridorAt` passes, here AND one deadband higher (where the strut may stand; 34°
+ * when none does: the lowest she goes).
+ * @param {object} mgr
+ * @param {number} i
+ * @param {number} radiusM
+ * @returns {number|null} radians
+ */
+function _holderDuckRad(mgr, i, radiusM) {
+  const arm = mgr.arms[i];
+  berthAnchorLocalInto(mgr.playerSatellite, 0, _duckAnchor);
+  const eff = _strutLiveAlpha(arm);
+  if (!heldCargoFoulsCorridorAt(mgr, i, eff, _duckAnchor, radiusM)) return null;
+  const V5 = Constants.OCTOPUS_V5;
+  const D2R = Math.PI / 180;
+  const lo = Math.round(V5.STRUT_REST_ALPHA / D2R);
+  let best = lo * D2R;
+  const dead = V5.HOLD_POSE_DEADBAND_DEG * D2R;
+  for (let deg = lo; deg * D2R < eff - 1e-6; deg += V5.HOLD_POSE_STEP_DEG) {
+    // a strut stands up to the deadband ABOVE its target (found 2026-10-23 probing R4: 54° passed, she stood at 54.5° and the net's
+    // corridor gate held the reel its full 8 s): an angle counts only when the angle a deadband higher clears too
+    if (!heldCargoFoulsCorridorAt(mgr, i, deg * D2R, _duckAnchor, radiusM)
+        && !heldCargoFoulsCorridorAt(mgr, i, deg * D2R + dead, _duckAnchor, radiusM)) best = deg * D2R;
+  }
+  return best < eff - V5.HOLD_POSE_DEADBAND_DEG * D2R ? best : null;
+}
+
+/**
+ * net-duck D5: a strut press that arrived while the holder was ducked or lifted waits for it and is then applied as if pressed at
+ * that moment. @param {object} mgr @param {object} arm
+ */
+function _applyQueuedPress(mgr, arm) {
+  const q = arm && arm._queuedPress;
+  if (!q) return;
+  arm._queuedPress = null;
+  _pressHolders(mgr, [arm], q.wantRad, q.autoOn, false);
+}
+
+/**
+ * net-duck R1: forget every mark of the holder duck and the neighbour lift on one arm (reset, an ex-holder). Her strut is not touched:
+ * a holder's writer takes her back to her hold pose, and a docked strut is the business of whoever owns docked struts.
+ * @param {object} arm
+ */
+function _clearNetDuckMarks(arm) {
+  arm._netDuck = null;
+  arm._netDuckLow = false;
+  arm._netDuckSaid = false;
+  arm._netDuckThrustSaid = false;
+  arm._netLift = null;
+  arm._carryWaitLift = null;
+  arm._carryRestart = null;
+  arm._queuedPress = null;
+}
+
+/** net-duck R1: does this arm still HOLD a catch at home (the only daughter a holder duck belongs to)? @param {object} arm */
+function _holdsCatchAtHome(arm) {
+  return !!arm && !arm.isDetached && arm.state === ARM_STATES.HOLDING_CATCH
+    && Array.isArray(arm.heldCatches) && arm.heldCatches.some((h) => h && h.mass);
+}
+
+/**
  * hold-catch: a "." press on daughters holding catches (called by ArmManager.toggleStruts). The wanted angle is clamped to the
  * hold pose from below (a press that would close her sends her to it) and to HOLD_POSE_MAX_DEG from above; an angle above the
  * pose is taken only when her catch is plume-clear there. Each gets the manual marker, as a docked strut does (StrutAuto keeps
@@ -124,6 +225,13 @@ function _pressHolders(mgr, holders, wantRad, autoOn, onlyThese) {
     const i = mgr.arms.indexOf(a);
     const hp = _holdPoseOf(mgr, i);
     if (!hp) continue;
+    // net-duck D5: while she is ducked for a net or lifted for a neighbour's carry her strut is not hers to move: the press waits
+    // for the end of it (the last press wins) and counts as taken (no "stays at ..." line)
+    if (a._netDuck || a._netLift) {
+      a._queuedPress = { wantRad, autoOn };
+      anyMoved = true;
+      continue;
+    }
     let t = hp.rad;
     if (wantRad > hp.rad + 1e-6 && wantRad <= cap + 1e-6 && !heldCargoPlumeConflictAt(mgr, i, wantRad)) t = wantRad;
     // where she is heading (a pending latch wins, as for a docked strut): a press that asks for that again moves nothing, and a
@@ -2354,6 +2462,7 @@ export class ArmManager {
     // high comes down. Live, NOT flag-gated — this changes how the arm MOVES,
     // never what thrust refuses (THRUSTER_INTERLOCK stays dormant and
     // untouched). Runs AFTER arm.update so aim writes land on fresh positions.
+    this._tickNetDuck(dt);          // net-duck: holders duck for an inbound mother net, lift for a neighbour's carry (inputs to the writer below)
     this._updateCargoPlumePoses(dt);
 
     // Task 7 (opening-dance plan) — lean-aside safety-net timeout tick.
@@ -2492,9 +2601,13 @@ export class ArmManager {
    * and no neighbour holding a catch the carry path was not measured clear of (`NEIGHBOUR_CATCH_MAX_SIZE_M`, or any measured size when the
    * neighbour stands at `NEIGHBOUR_CATCH_HIGH_POSE_DEG` or higher), and her own recorded strut angle inside the swept range.
    * Read-only. `null` = all hold, else `{reason, text}` (every one of them clears by waiting) - except a 'neighbour-catch' whose
-   * blocking catch fits no radiator tip: that one carries `never: true` (hold-catch FA6; it leaves her rack by no hand-off).
+   * blocking catch fits no radiator tip: that one carries `never: true` (hold-catch FA6; it leaves her rack by no hand-off) - unless
+   * the neighbour can be LIFTED out of the way (net-duck D4: a catch up to 5 m passes once she stands at 69° or higher): then `never`
+   * is false and `lift` names who rises (`[{index, rad}]`; the carry's start path commands it, `_commandLifts`; THIS stays read-only).
+   * A mother net coming home holds a carry only when it NEEDS the holder a duck has lowered or a lift has to raise ('net-inbound', net-duck
+   * R4): it clears by itself at the berth, so it is never `never`. Every other carry goes on as before.
    * @param {ArmUnit} arm
-   * @returns {null|{reason:string, text:string, never?:boolean}}
+   * @returns {null|{reason:string, text:string, never?:boolean, lift?:{index:number, rad:number}[]}}
    */
   carryConditions(arm) {
     const V = Constants.CARRY;
@@ -2507,16 +2620,24 @@ export class ArmManager {
     if (!inRange(sharedDeg) || !inRange(targetDeg)) {
       return { reason: 'radiators-moving', text: `The radiators are not settled. Daughter ${n} waits.` };
     }
+    // net-duck D2/D4/R4: while a mother net is coming home a holder whose catch is in its path is ducked, and a neighbour whose catch
+    // blocks this carry cannot be lifted (the corridor is the net's): such a carry waits for the berth (it clears by itself, so `never`
+    // is never set for it). A carry that needs neither goes on.
+    const inbound = _inboundMotherNetRadiusM(this) !== null;
+    const netWait = { reason: 'net-inbound', text: `A net is coming in. Daughter ${n} waits.` };
     for (const o of this.arms) {
       if (!o || o === arm || typeof o.getAimAlpha !== 'function') continue;
+      if (inbound && o._netDuck) return netWait;                  // her strut is down for the net by design: off her pose until the berth
       const oDeg = o.getAimAlpha() * R2D;
       const held = Array.isArray(o.heldCatches) ? o.heldCatches.filter((h) => h && h.mass) : [];
       if (Math.abs(oDeg - V.NEIGHBOUR_REST_DEG) > V.NEIGHBOUR_TOL_DEG + 1e-6) {
         // hold-catch FA3: a neighbour holding a catch stands at her HOLD POSE (34..100 deg), which is where she belongs: accepted
         // (the carry was measured against it, see Constants.CARRY.NEIGHBOUR_CATCH_MAX_SIZE_M). Anywhere else (a "." press, a strut on its
-        // way) is out of place, as before.
+        // way) is out of place, as before. net-duck D4: so is the angle she was lifted to for this carry (`_netLift`).
         const hp = held.length ? this._holdPoseCached(o, this.arms.indexOf(o), 0) : null;
-        if (!hp || Math.abs(oDeg - hp.rad * R2D) > V.NEIGHBOUR_TOL_DEG + 1e-6) {
+        const atPose = !!hp && Math.abs(oDeg - hp.rad * R2D) <= V.NEIGHBOUR_TOL_DEG + 1e-6;
+        const atLift = !!o._netLift && Math.abs(oDeg - o._netLift.rad * R2D) <= V.NEIGHBOUR_TOL_DEG + 1e-6;
+        if (!atPose && !atLift) {
           return { reason: 'neighbour-strut', text: `Daughter ${o.index + 1}'s strut is out of place. Daughter ${n} waits.` };
         }
       }
@@ -2528,8 +2649,18 @@ export class ArmManager {
         // hold-catch FA6: a blocking catch that does not fit a radiator tip never leaves her rack by a hand-off, so waiting does not help
         // (`never`: carryCheck answers retry:false; the trip's end rule stops waiting for it, and "Press C" says this plain reason)
         const tc = ps && ps.tipCargo;
-        const never = !!(tc && typeof tc.fits === 'function' && blocking.some((h) => !tc.fits(DebrisField.trueReachM(h, 0))));
-        return { reason: 'neighbour-catch', never, text: `Daughter ${o.index + 1}'s catch is too close to Daughter ${n}'s path. Daughter ${n} keeps hers.` };
+        let never = !!(tc && typeof tc.fits === 'function' && blocking.some((h) => !tc.fits(DebrisField.trueReachM(h, 0))));
+        // net-duck D4: a catch up to NEIGHBOUR_CATCH_HIGH_MAX_SIZE_M passes once its holder stands at NEIGHBOUR_CATCH_HIGH_POSE_DEG or
+        // higher, and the holder can be LIFTED there (`lift`: the carry's start commands it, `_commandLifts`): so waiting does help,
+        // whatever the catch's own fit. `never` stays only when no such angle exists (a catch over 5 m, or every angle 69-100° in a plume).
+        const lift = this._liftsFor(arm);
+        if (lift.length && lift.some((l) => l.index === o.index)) {
+          if (inbound) return netWait;                            // R4: the lift would pull her catch back into the net's path: after the berth
+          never = false;
+        }
+        const out = { reason: 'neighbour-catch', never, text: `Daughter ${o.index + 1}'s catch is too close to Daughter ${n}'s path. Daughter ${n} keeps hers.` };
+        if (lift.length) out.lift = lift;
+        return out;
       }
     }
     const recDeg = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() * R2D : NaN;
@@ -2609,7 +2740,11 @@ export class ArmManager {
       return no('tip-busy', `Radiator ${tipIndex + 1}'s furnace is busy. Daughter ${n} waits.`);
     }
     const cond = this.carryConditions(arm);
-    if (cond) return no(cond.reason, cond.text, !cond.never);
+    if (cond) {
+      const r = no(cond.reason, cond.text, !cond.never);
+      if (cond.lift) r.lift = cond.lift;                       // net-duck D4: who can be lifted to let this carry pass (read-only here)
+      return r;
+    }
     // review R8: no carry starts whose swing BACK (her petal released, the catch in the tip bag, past her strut, her body, the hull
     // and the other petals) is not certified 0.15 m. The gate measured the largest catch reach each range of the radiators
     // allows (closed: the bag passes her own strut close; open: far); a bigger catch waits for the other range - it clears by itself.
@@ -2637,6 +2772,172 @@ export class ArmManager {
   }
 
   /**
+   * net-duck D4: the angle (rad) a neighbour HOLDING a big catch rises to so a carry can pass her: max(her hold pose, 69°) on the
+   * hold-pose grid, the lowest one at which her catch is out of every Hall exhaust (`heldCargoPlumeConflictAt`), cap 100°; the grid
+   * 69° is `NEIGHBOUR_CATCH_HIGH_POSE_DEG`, the angle at which the carry was measured clear of a catch up to 5 m (FA5a). Null when
+   * she is not holding, a catch is over `NEIGHBOUR_CATCH_HIGH_MAX_SIZE_M`, or no angle 69-100° clears the exhaust. Read-only.
+   * @param {ArmUnit} o
+   * @returns {number|null}
+   * @private
+   */
+  _neighbourLiftRad(o) {
+    const V = Constants.CARRY;
+    const V5 = Constants.OCTOPUS_V5;
+    const D2R = Math.PI / 180;
+    if (!o || o.isDetached || o.state !== ARM_STATES.HOLDING_CATCH) return null;
+    const idx = this.arms.indexOf(o);
+    const held = Array.isArray(o.heldCatches) ? o.heldCatches.filter((h) => h && h.mass) : [];
+    const big = held.filter((h) => h.sizeMeter > V.NEIGHBOUR_CATCH_MAX_SIZE_M + 1e-9);
+    if (!big.length || big.some((h) => h.sizeMeter > V.NEIGHBOUR_CATCH_HIGH_MAX_SIZE_M + 1e-9)) return null;
+    const hp = this._holdPoseCached(o, idx, 0);
+    if (!hp) return null;
+    for (let deg = Math.max(Math.round(hp.rad / D2R), V.NEIGHBOUR_CATCH_HIGH_POSE_DEG); deg < V5.HOLD_POSE_MAX_DEG; deg += V5.HOLD_POSE_STEP_DEG) {
+      if (!heldCargoPlumeConflictAt(this, idx, deg * D2R)) return deg * D2R;
+    }
+    return heldCargoPlumeConflictAt(this, idx, V5.HOLD_POSE_MAX_DEG * D2R) ? null : V5.HOLD_POSE_MAX_DEG * D2R;
+  }
+
+  /**
+   * net-duck D4: every neighbour of `arm` whose catch blocks her carry only because she stands below `NEIGHBOUR_CATCH_HIGH_POSE_DEG`
+   * and that CAN be lifted (`_neighbourLiftRad`): `[{index, rad}]`. Read-only; empty when nothing blocks or nobody can lift.
+   * @param {ArmUnit} arm
+   * @returns {{index:number, rad:number}[]}
+   * @private
+   */
+  _liftsFor(arm) {
+    const V = Constants.CARRY;
+    const out = [];
+    for (const o of this.arms) {
+      if (!o || o === arm || o.isDetached || typeof o.getAimAlpha !== 'function') continue;
+      const high = o.getAimAlpha() * 180 / Math.PI >= V.NEIGHBOUR_CATCH_HIGH_POSE_DEG - V.NEIGHBOUR_TOL_DEG - 1e-6;
+      if (high) continue;
+      const rad = this._neighbourLiftRad(o);
+      if (rad !== null) out.push({ index: o.index, rad });
+    }
+    return out;
+  }
+
+  /**
+   * net-duck D4: the carry's start path (the C key, the mission scheduler, the trip) was refused only by a neighbour's big catch and
+   * `carryCheck` named who can lift (`r.lift`): command the lifts and remember that `arm` is waiting for them
+   * (`_carryWaitLift`; `_tickLifts` polls `carryCheck` and starts the carry the moment it passes, and puts the neighbours back when
+   * the carry has ended). `carryCheck` / `carryConditions` stay read-only (the UI polls them): this is the one writer.
+   * @param {ArmUnit} arm the daughter who wants to carry
+   * @param {{lift:{index:number, rad:number}[]}} r the refusal
+   * @param {object} opts the `carryCheck` options she will be asked with
+   * @private
+   */
+  _commandLifts(arm, r, opts) {
+    for (const l of r.lift || []) {
+      const o = this.arms[l.index];
+      if (!o || o.state !== ARM_STATES.HOLDING_CATCH || o._netLift) continue;
+      o._netLift = { rad: l.rad };
+    }
+    this._waitForCarry(arm, opts);
+  }
+
+  /**
+   * net-duck D4 / R4: remember that `arm` wants her carry and is waiting for something that clears by itself (a neighbour's lift, a
+   * mother net's berth): `_tickLifts` asks `carryCheck` again and starts it the moment it passes.
+   * @param {ArmUnit} arm
+   * @param {object} opts the `carryCheck` options she will be asked with
+   * @private
+   */
+  _waitForCarry(arm, opts) {
+    if (!arm._carryWaitLift) arm._carryWaitLift = { opts: { ...opts }, ageS: 0, pollS: 0, last: null };
+  }
+
+  /**
+   * net-duck R5: the plain clause that follows "Daughter N keeps her catch:" when a waiting hand-off is given up.
+   * @param {{reason?:string}|null} r the last refusal she was given (null: none)
+   * @returns {string|null} null: say nothing ('no-catch', 'gave-up')
+   * @private
+   */
+  _handoffGiveUpClause(r) {
+    switch (r && r.reason) {
+      case 'fit': return 'it is too big for a radiator tip';
+      case 'gate': return 'she cannot carry it to a furnace without touching the ship';
+      case 'fuel': return 'she has too little fuel';
+      case 'neighbour-catch': return "a neighbour's catch is in her way";
+      case 'neighbour-strut': return "a neighbour's strut is out of place";
+      case 'tip-busy': return "the radiator's furnace is still busy";
+      case 'net-inbound': return 'a net is coming in';
+      case 'leash-busy': return 'the radiators are busy';
+      case 'radiators-moving': return 'the radiators are not settled';
+      case 'swing-back': return 'her catch is too big to hand over with the radiators as they are';
+      case 'no-tip': case 'layout': return 'this ship cannot move catches to a radiator';
+      case 'no-catch': case 'gave-up': return null;     // review F2: she is empty / her own last carry failed: there is no catch to "keep", nothing to say
+      default: return 'the hand-off cannot start';
+    }
+  }
+
+  /**
+   * net-duck D4, per frame: a daughter waiting for her neighbours' lift (or for a net's berth) asks `carryCheck` again and starts her
+   * carry when it passes; a wait that cannot end by itself (a refusal that is not a "wait") or has lasted over `LIFT_WAIT_MAX_S` is
+   * dropped - with one Comms line that says why (R5; none when she went on her own way: she started a carry, left, or is empty). The
+   * wait's clock stands still while a mother net is coming home (a reel lasts 10-35 s; the hand-off follows the berth, R4). A carry the C
+   * key started (`opts.restart`) that the net stopped in its prep restarts after the berth. The lifted neighbours stay up while any
+   * daughter waits or carries, and go back (their "." press, if one waited, now applies) when none does.
+   * @param {number} dt
+   * @private
+   */
+  _tickLifts(dt) {
+    let wanting = false;
+    let any = false;
+    const inbound = _inboundMotherNetRadiusM(this) !== null;
+    for (const a of this.arms) {
+      if (!a) continue;
+      if (a._netLift) any = true;
+      const rs = a._carryRestart;
+      if (rs) {
+        any = true;
+        if (a._carry) {
+          if (inbound) rs.sawNet = true;
+        } else {
+          a._carryRestart = null;
+          const end = a._lastCarryEnd;
+          if (rs.sawNet && end && end.why === 'conditions' && !a.isDetached) this._waitForCarry(a, rs.opts);
+        }
+      }
+      const w = a._carryWaitLift;
+      if (w) {
+        any = true;
+        if (!inbound) w.ageS += dt;
+        w.pollS += dt;
+        let drop = false;
+        let why = null;                                          // a line is said only when she is NOT on her own way
+        if (a.isDetached || a._carry || (a.state !== ARM_STATES.HOLDING_CATCH && a.state !== ARM_STATES.DOCKED)) drop = true;
+        else if (w.ageS > LIFT_WAIT_MAX_S) { drop = true; why = this._handoffGiveUpClause(w.last); }
+        if (!drop && w.pollS >= LIFT_POLL_S) {
+          w.pollS = 0;
+          const r = this.carryCheck(a, w.opts);
+          if (r.ok) {
+            drop = true;
+            const q = this.requestCarry(a, w.opts);
+            if (!q.ok) why = this._handoffGiveUpClause(q);          // review F3: `beginCarry` refused after a passing check: say so (R5)
+          }
+          else {
+            w.last = r;
+            if (r.reason === 'neighbour-catch' && r.lift) this._commandLifts(a, r, w.opts);
+            else if (!(r.retry && !r.giveUp)) { drop = true; why = this._handoffGiveUpClause(r); }
+          }
+        }
+        if (drop) {
+          a._carryWaitLift = null;
+          if (why) eventBus.emit(Events.COMMS_MESSAGE, { text: `Daughter ${a.index + 1} keeps her catch: ${why}.`, priority: 'info' });
+        } else wanting = true;
+      }
+      if (a._carry) wanting = true;
+    }
+    if (!any || wanting) return;
+    for (const o of this.arms) {
+      if (!o || !o._netLift) continue;
+      o._netLift = null;
+      _applyQueuedPress(this, o);
+    }
+  }
+
+  /**
    * Start a carry for `arm` if `carryCheck` allows it. A start the daughter itself refuses (no tip record) is a give-up.
    * @param {ArmUnit} arm
    * @param {{mission?:boolean}} [opts]
@@ -2649,6 +2950,9 @@ export class ArmManager {
       arm._carryGaveUp = true;
       return { ok: false, reason: 'refused', text: '', retry: false, giveUp: true };
     }
+    // net-duck R4: a carry the player asked for (`opts.restart`: the C key) that a mother net stops in its prep is not dropped:
+    // `_tickLifts` restarts it after the berth. The trip's and the mission's own schedulers ask again by themselves.
+    if (opts.restart === true) arm._carryRestart = { opts: { ...opts }, sawNet: false };
     return c;
   }
 
@@ -2672,6 +2976,8 @@ export class ArmManager {
         continue;
       }
       if (r.giveUp) arm._carryGaveUp = true;
+      // net-duck D4: a neighbour's big catch is the only thing in the way and she can be lifted: lift her (the carry starts by itself)
+      if (r.reason === 'neighbour-catch' && r.lift) { this._commandLifts(arm, r, { mission, motherNetOnly }); continue; }
       // (FA6: a neighbour's catch that can never leave is said too - once - or the catch just stays on her rack in silence)
       const sayIt = say && r.text && (r.reason === 'fit' || r.reason === 'gate' || r.reason === 'fuel' || r.reason === 'swing-back'
         || (r.reason === 'neighbour-catch' && !r.retry));
@@ -2841,7 +3147,8 @@ export class ArmManager {
     if (!gate.ok) return false;
     const arm = gate.holders.find((a) => a.index === index);
     if (!arm) return false;
-    return this.carryCheck(arm, { mission: true, ignoreGaveUp: true }).ok === true;
+    const r = this.carryCheck(arm, { mission: true, ignoreGaveUp: true });
+    return r.ok === true || (r.reason === 'neighbour-catch' && !!r.lift);   // net-duck D4: C lifts the neighbour first, then carries
   }
 
   /**
@@ -2867,11 +3174,12 @@ export class ArmManager {
     // FA2: with nobody selected, the line names the first daughter whose hand-off can still happen (waiting helps), not a
     // catch that never fits a tip while another one only waits for her tip
     let first = null;
+    let netWait = null;                                      // net-duck R4: the first daughter only a mother net's berth holds back
     for (const arm of order) {
       arm._carryGaveUp = false;                              // he asked: a give-up from an earlier try does not count
       const r = this.carryCheck(arm, { mission: true });
       if (r.ok) {
-        const started = this.requestCarry(arm, { mission: true });
+        const started = this.requestCarry(arm, { mission: true, restart: true });
         if (started.ok) {
           const tip = (arm._carry && Number.isInteger(arm._carry.tipIndex)) ? arm._carry.tipIndex : arm.index;
           return finish({ ok: true, arm, text: `Daughter ${arm.index + 1} takes her catch to radiator ${tip + 1}.` });
@@ -2879,7 +3187,19 @@ export class ArmManager {
         if (!first || !first.r.retry) first = { arm, r: started };
         continue;
       }
+      // net-duck D4: only a neighbour's big catch is in the way and she can rise out of it: she does, and this daughter's hand-off follows
+      if (r.reason === 'neighbour-catch' && r.lift) {
+        this._commandLifts(arm, r, { mission: true, restart: true });
+        const who = r.lift[0].index + 1;
+        return finish({ ok: true, arm, lifting: true, text: `Daughter ${who} raises her catch to make room; Daughter ${arm.index + 1}'s hand-off follows.` });
+      }
+      if (r.reason === 'net-inbound') { if (!netWait) netWait = arm; continue; }
       if (!first || (!first.r.retry && r.retry)) first = { arm, r };
+    }
+    // net-duck R4: nobody could start, and a net coming home is what holds one back: she asked, so her hand-off follows the berth
+    if (netWait) {
+      this._waitForCarry(netWait, { mission: true, restart: true });
+      return finish({ ok: true, arm: netWait, waiting: true, text: `A net is coming in. Daughter ${netWait.index + 1}'s hand-off follows the berth.` });
     }
     return finish({ ok: false, text: this._carryRefusalText(first.arm, first.r) });
   }
@@ -2891,6 +3211,7 @@ export class ArmManager {
     const n = arm.index + 1;
     switch (r && r.reason) {
       case 'carry-busy': return 'A hand-off is already running.';
+      case 'net-inbound': return `A net is coming in. Daughter ${n} waits.`;
       case 'mission-turning': return `The ship is turning or holding a heading, so Daughter ${n} waits. Try again when it stops.`;
       case 'mission-daughter': return `A daughter is leaving the ship, so Daughter ${n} waits.`;
       case 'mission-radiators': return `The radiators are busy, so Daughter ${n} waits. Try again in a moment.`;
@@ -3308,7 +3629,14 @@ export class ArmManager {
       const arm = this.arms[i];
       if (!arm || arm.state !== ARM_STATES.HOLDING_CATCH) continue;
       const hp = this._holdPoseCached(arm, i, dt);
-      if (hp) {
+      // net-duck D2/D4: the duck for an inbound mother net and the lift for a neighbour's carry are INPUTS to this single writer: while
+      // either stands her target is its angle (the duck wins), whatever her hold pose or a standing "." press says; both end by
+      // deleting `_netDuck` / `_netLift`, and the hold pose (or the press, if it is still safe) takes her back
+      const forced = arm._netDuck ? arm._netDuck.rad : (arm._netLift ? arm._netLift.rad : null);
+      if (forced !== null) {
+        const effF = arm._strutTargetAlpha !== undefined ? arm._strutTargetAlpha : arm.getAimAlpha();
+        if (Math.abs(effF - forced) > dead) arm._strutTargetAlpha = forced;
+      } else if (hp) {
         const eff = arm._strutTargetAlpha !== undefined ? arm._strutTargetAlpha : arm.getAimAlpha();
         let go = true;
         if (arm._strutManual) {
@@ -3501,11 +3829,140 @@ export class ArmManager {
         ducked = true;
       }
     }
+    // net-duck D2: the daughters HOLDING a catch duck through the same mechanism (same trigger, same release, same timer) - but only
+    // for a MOTHER net coming home (R3: `_tickNetDuck` ends their duck the moment none is; the lasso event has no mother net)
+    if (_inboundMotherNetRadiusM(this) !== null && this._duckHolders(radiusM)) ducked = true;
     if (ducked) {
       this._leanAsideActive = true;
       this._leanAsideTimer = LEAN_ASIDE_TIMEOUT_S;
     }
     return ducked;
+  }
+
+  /**
+   * net-duck D2 (owner 2026-10-22: "their strut should ... move out of the way of mother net"): every daughter HOLDING a catch whose
+   * catch would sit in the berth corridor of an inbound net of `radiusM` (D1: `heldCargoFoulsCorridorAt`, her drawn mesh) lowers her
+   * strut to the highest hold-pose-grid angle at which it does not (`_holderDuckRad`: 34° at the lowest). The angle is computed ONCE
+   * per holder per reel (`arm._netDuck`) and kept until the lean-aside release; `_updateCargoPlumePoses`, the one writer of a holder's
+   * strut target, takes it as an input. One Comms line per holder per reel. A holder already ducked counts as "ducked" for the caller,
+   * which re-arms the release timer (a reel lasts 10-35 s, the timer is 8 s: it is the backstop for a missed release event, not the
+   * clock of the reel). A holder lifted (`_netLift`) for a carry that is IN FLIGHT (CARRY_OUT / CARRY_HANDOFF / CARRY_BACK) is skipped:
+   * ducking her would put her catch in the carry's path; she ducks once the carry has landed and the lift is released, if the net is
+   * still inbound (the mother net's corridor check counts her body meanwhile, so the reel pauses).
+   * @param {number} radiusM
+   * @returns {boolean} true when at least one holder is (or has just been) ducked
+   * @private
+   */
+  _duckHolders(radiusM) {
+    let any = false;
+    const flying = this.arms.some((a) => a && (a.state === ARM_STATES.CARRY_OUT || a.state === ARM_STATES.CARRY_HANDOFF || a.state === ARM_STATES.CARRY_BACK));
+    for (let i = 0; i < this.arms.length; i++) {
+      const arm = this.arms[i];
+      if (!arm || arm.isDetached || arm.state !== ARM_STATES.HOLDING_CATCH) continue;
+      if (arm._netDuck) { any = true; continue; }
+      if (arm._netLift && flying) continue;           // review F1: lifted for a carry that is flying past her: she ducks after it has landed
+      if (!(Array.isArray(arm.heldCatches) && arm.heldCatches.some((h) => h && h.mass))) continue;
+      const rad = _holderDuckRad(this, i, radiusM);
+      if (rad === null) continue;
+      arm._netDuck = { rad };
+      arm._netDuckLow = true;                       // D3: the Hall drive waits while this stands (and while she climbs back)
+      arm._netDuckThrustSaid = false;
+      this._leanAsideArmIndices.add(i);
+      any = true;
+      if (!arm._netDuckSaid) {
+        arm._netDuckSaid = true;
+        eventBus.emit(Events.COMMS_MESSAGE, { text: `Daughter ${i + 1} lowers her catch for the incoming net.`, priority: 'info' });
+      }
+    }
+    return any;
+  }
+
+  /**
+   * net-duck: the per-frame part. While a mother net is inbound a holder's duck is (re)decided and its release timer re-armed, whether
+   * or not StrutAuto runs (D2); the moment NO mother net is inbound any more (a miss, a cut, a lost target: CaptureNet sends no
+   * NET_FAILED / NET_TORN for those) the holders' ducks end (R3) - the 8 s timer is only the backstop; a duck whose daughter no longer
+   * holds a catch is dropped (R1); a holder whose strut is down for the net keeps the `_netDuckLow` mark until she is back at her hold
+   * pose (D3 reads it); the lifts for a neighbour's carry are kept or ended (D4). Runs before `_updateCargoPlumePoses`.
+   * @param {number} dt
+   * @private
+   */
+  _tickNetDuck(dt) {
+    if (!(dt > 0)) return;
+    const radiusM = _inboundMotherNetRadiusM(this);
+    let ducked = false;
+    for (let i = 0; i < this.arms.length; i++) {
+      const arm = this.arms[i];
+      if (!arm) continue;
+      if (arm._netDuck && !_holdsCatchAtHome(arm)) this._dropExHolderDuck(i, arm);      // R1
+      else if (arm._netDuck) ducked = true;
+    }
+    if (radiusM !== null) {
+      if (this._duckHolders(radiusM)) {
+        this._leanAsideActive = true;
+        this._leanAsideTimer = LEAN_ASIDE_TIMEOUT_S;
+      }
+    } else if (ducked) {
+      this._releaseHolderDucks();                                                      // R3
+    }
+    const V5 = Constants.OCTOPUS_V5;
+    const dead = V5.HOLD_POSE_DEADBAND_DEG * Math.PI / 180;
+    for (let i = 0; i < this.arms.length; i++) {
+      const arm = this.arms[i];
+      if (!arm || !arm._netDuckLow) continue;
+      const hp = arm.state === ARM_STATES.HOLDING_CATCH && !arm.isDetached ? this._holdPoseCached(arm, i, 0) : null;
+      if (!hp) { arm._netDuckLow = false; continue; }
+      if (!arm._netDuck && arm.getAimAlpha() >= hp.rad - 2 * dead) arm._netDuckLow = false;   // back at her pose
+    }
+    this._tickLifts(dt);
+  }
+
+  /**
+   * net-duck R1: a daughter whose duck outlived her catch (it left by a hand-off, the rack ran empty, she was detached) is dropped
+   * from the duck at once: no marks, no queued press, and no place in the lean-aside list (that list would send a DOCKED arm to 90° at
+   * the next release, and re-send her every timer while a net is inbound).
+   * @param {number} i
+   * @param {object} arm
+   * @private
+   */
+  _dropExHolderDuck(i, arm) {
+    arm._netDuck = null;
+    arm._netDuckLow = false;
+    arm._netDuckSaid = false;
+    arm._netDuckThrustSaid = false;
+    arm._queuedPress = null;
+    this._leanAsideArmIndices.delete(i);
+    if (this._leanAsideArmIndices.size === 0) { this._leanAsideActive = false; this._leanAsideTimer = 0; }
+  }
+
+  /**
+   * net-duck R3: end every holder's duck (no mother net is coming home): each goes back to her hold pose (`_updateCargoPlumePoses` is
+   * the writer), a "." press that waited is applied (D5), and her place in the lean-aside list is given up. A DOCKED arm another duck
+   * (the lasso event) put in the list is not touched: that release belongs to its own events and timer.
+   * @private
+   */
+  _releaseHolderDucks() {
+    for (const i of this._leanAsideArmIndices) {
+      const arm = this.arms[i];
+      if (!arm || !arm._netDuck) continue;
+      arm._netDuck = null;
+      arm._netDuckSaid = false;
+      this._leanAsideArmIndices.delete(i);
+      _applyQueuedPress(this, arm);
+    }
+    if (this._leanAsideArmIndices.size === 0) { this._leanAsideActive = false; this._leanAsideTimer = 0; }
+  }
+
+  /**
+   * net-duck D3: the first daughter whose strut is down for an inbound net (ducked, or still climbing back to her hold pose), else -1.
+   * PlayerSatellite's billed-burn gate reads it: a Hall burn into her lowered catch waits.
+   * @returns {number} arm index or -1
+   */
+  netDuckHold() {
+    for (let i = 0; i < this.arms.length; i++) {
+      const a = this.arms[i];
+      if (a && a._netDuckLow && a.state === ARM_STATES.HOLDING_CATCH) return i;
+    }
+    return -1;
   }
 
   /**
@@ -3524,11 +3981,33 @@ export class ArmManager {
    */
   _releaseLeanAside() {
     if (this._leanAsideArmIndices.size === 0 && !this._leanAsideActive) return;
+    // net-duck: another mother net still coming home keeps the holders down (this release was the end of a different one)
+    const stillInbound = _inboundMotherNetRadiusM(this) !== null;
+    let kept = 0;
     for (const i of this._leanAsideArmIndices) {
       const arm = this.arms[i];
+      // net-duck R1: a duck whose daughter no longer holds a catch is over BEFORE anything else is asked of her: she is not sent to 90°
+      // and she cannot keep the list alive ("another net is still coming in" below)
+      if (arm && arm._netDuck && !_holdsCatchAtHome(arm)) { this._dropExHolderDuck(i, arm); continue; }
       if (arm && arm.state === ARM_STATES.DOCKED) {
         arm._strutTargetAlpha = Constants.OCTOPUS_V5.STRUT_DEPLOY_ALPHA;
       }
+      // net-duck D2: a holder goes back to her hold pose (`_updateCargoPlumePoses` is the writer); her "." press, if one waited, now
+      // applies (D5). `_netDuckLow` stays until she is there (D3).
+      if (arm && arm._netDuck) {
+        if (stillInbound) { kept++; continue; }
+        arm._netDuck = null;
+        arm._netDuckSaid = false;
+        _applyQueuedPress(this, arm);
+      }
+    }
+    if (kept > 0) {
+      for (const i of [...this._leanAsideArmIndices]) {
+        const arm = this.arms[i];
+        if (!(arm && arm._netDuck)) this._leanAsideArmIndices.delete(i);
+      }
+      this._leanAsideTimer = LEAN_ASIDE_TIMEOUT_S;
+      return;
     }
     this._leanAsideArmIndices.clear();
     this._leanAsideActive = false;
@@ -4165,7 +4644,12 @@ export class ArmManager {
       arm.tetherTension = 0;
       arm.reeling = false;
       arm.launchDirection = null;
+      _clearNetDuckMarks(arm);        // net-duck R1: no duck, lift, wait or queued press outlives the holder she belonged to
     }
+    // net-duck R1: ... and the lean-aside list, flag and timer go with them (else the 8 s backstop later sends a docked arm to 90°)
+    if (this._leanAsideArmIndices) this._leanAsideArmIndices.clear();       // (test-ArmUnit-ParkCatch resets a bare prototype object)
+    this._leanAsideActive = false;
+    this._leanAsideTimer = 0;
 
     // Register item 69: the loop above clears every rack — a cargo mass-exit —
     // but sets arm.state directly, so no ARM_STATE_CHANGE crosses it and the
@@ -4296,7 +4780,6 @@ export class ArmManager {
     const self = this;
     const CN = Constants.CAPTURE_NET;
     const ST = CN.STATES;
-    const INBOUND = new Set([ST.CINCH_CLOSING, ST.SECURE_CHECK, ST.CAPTURED, ST.REELING]);
     const OVER = new Set([ST.FOLDED, ST.STOWED, ST.MISSED, ST.RELEASED]);
     const motherNets = () => {
       const cns = self.playerSatellite && self.playerSatellite._captureNetSystem;
@@ -4335,17 +4818,7 @@ export class ArmManager {
         const nets = cns && Array.isArray(cns.activeNets) ? cns.activeNets : [];
         return nets.some((n) => n && !OVER.has(n.state));
       },
-      inboundNetRadiusM() {
-        let r = null;
-        for (const n of motherNets()) {
-          if (!INBOUND.has(n.state)) continue;
-          const d = n.targetDebris;
-          if (!d || !d.sizeMeter) continue;       // unresolved size: never duck (the lean-aside rule)
-          const rr = d.sizeMeter / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
-          if (r === null || rr > r) r = rr;
-        }
-        return r;
-      },
+      inboundNetRadiusM() { return _inboundMotherNetRadiusM(self); },
       duck(radiusM) { self._duckFoulingStruts(radiusM); },
       pressCount() { return self._strutPress | 0; },
       nearestPieceM() { return self._nearestFreePieceM(); },

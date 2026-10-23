@@ -1539,6 +1539,8 @@ export const Constants = {
     // petal at the seat; dir = how her body trails while she seats the catch (ArmDockBasis carryDirInto: 0 = along the boom
     // outward). A missing key = no pose clears the line for that row (the daughter keeps the catch, one comms line). Pair = the
     // body type (weaver: 64 and 244 deg; spinner: 116 and 296 deg). Generated 2026-10-20, run times in the plan Log.
+    // 2026-10-23 roll-90 (hinge roll above strut 90 deg): weaver 130/30 re-verified (min 0.1585 m); spinner regenerated
+    // exhaustively (571 candidates tried): 124/34 -> 126/36 (min 0.1581 m, flight 1.104 m, swing-back closed 0.282 -> 0.263 m).
     // Result: only row 0 (catch up to 0.5 m), cell 0 (one catch on the rack) has a pose, for both pairs; the other six entries
     // (row 1, and cell 1 = a second catch on the rack) were searched exhaustively and none passes: those catches stay on the rack.
     // swingBackReachM (review R8): the way BACK, with the catch in the tip bag - the largest catch reach (m, `DebrisField.trueReachM`)
@@ -1546,7 +1548,7 @@ export const Constants = {
     // (0-1 deg) or open (133-146 deg). A bigger catch waits for the other range (ArmManager.carryCheck 'swing-back').
     GATE: {
       weaver: { '0|0': { strutDeg: 130, thetaDeg: 30, dir: 0, swingBackReachM: { closed: 0.229, open: 0.649 } } },
-      spinner: { '0|0': { strutDeg: 124, thetaDeg: 34, dir: 0, swingBackReachM: { closed: 0.282, open: 0.75 } } },
+      spinner: { '0|0': { strutDeg: 126, thetaDeg: 36, dir: 0, swingBackReachM: { closed: 0.263, open: 0.75 } } },
     },
   },
 
@@ -1712,6 +1714,7 @@ export const Constants = {
   // in the fixture's `worst` per row — cell 1 sets the two smallest rows, cell 0 the rest).
   // Read by ArmManager's re-pose driver and the S9 tests; the plume CHECK
   // itself is band-free (it tests geometry, not policy).
+  // 2026-10-23 roll-90 (hinge roll): these two rows re-measure at 120° / 130°; the floors 125° / 134° still clear, by 5° / 4°.
   PLUME_CARGO_ALPHA_LADDER: [
     { maxSizM: 0.5,  maxBiteADeg: 15,  safeAlphaMinRad: 25 * Math.PI / 180 },
     { maxSizM: 1.5,  maxBiteADeg: 31,  safeAlphaMinRad: 41 * Math.PI / 180 },

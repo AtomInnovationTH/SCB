@@ -29,7 +29,7 @@ import { planCuts } from '../systems/cutPlanner.js';
 import { OUT_OF_MOTHER_NETS_LINE, ONE_MOTHER_NET_LEFT_LINE } from '../systems/netRouting.js';
 // Cargo-continuity S7: the carrier scorer lives with the rest of the CoM maths
 // (ONE quantity, ONE computation — it reuses computeCoM/strutTipMeters).
-import { suggestCargoArm, countEmptyDockedDaughters } from '../systems/CoMCalculator.js';
+import { suggestCargoArm, countEmptyDockedDaughters, heldCargoFoulsCorridorAt } from '../systems/CoMCalculator.js';
 import { tripRefuses } from '../systems/TransferTrip.js';
 import { heldBagNeckInto, heldBagRadiusScene, DAUGHTER_STAND_M } from './heldBagShape.js';
 import * as THREE from 'three';
@@ -64,6 +64,24 @@ const _v3e = new THREE.Vector3();
 const _v3g = new THREE.Vector3();
 /** Berth anchor in ship-local metres, refilled per _corridorClear call. */
 const _anchorLocal = { x: 0, y: 0, z: 0 };
+
+/**
+ * The ONE berth anchor (S13(e)) in ship-local metres: the collar object, ON the axis at (0, 0, BERTH_COLLAR_Z_M), read from the anchor
+ * Object3D when the real ship is present, falling back to the launcher muzzle local (headless mocks without the collar anchor) and then to
+ * the documented constant. `_corridorClear` and ArmManager's holder duck (net-duck) read it here, so they cannot disagree.
+ * @param {object|null} player
+ * @param {number} podIndex
+ * @param {{x:number,y:number,z:number}} out
+ * @returns {{x:number,y:number,z:number}} out
+ */
+export function berthAnchorLocalInto(player, podIndex, out) {
+  const M_NET = Constants.SCENE_UNITS_PER_METER;
+  const a = player && (player._netBerthCollar ?? player._netPodMuzzles?.[podIndex] ?? player._netPodMuzzles?.[0]);
+  out.x = a ? a.position.x / M_NET : 0;
+  out.y = a ? a.position.y / M_NET : 0;
+  out.z = a ? a.position.z / M_NET : (Constants.OCTOPUS_V5?.BERTH_COLLAR_Z_M ?? 1.30);
+  return out;
+}
 const _q0  = new THREE.Quaternion();
 const _q1  = new THREE.Quaternion();
 // Cargo hand-off scratch (cargo-continuity S7 — the transfer beat runs every
@@ -2622,12 +2640,8 @@ export class NetProjectile {
     // the anchor Object3D when the real ship is present, falling back to the
     // launcher muzzle local (headless mocks without the collar anchor) and then to
     // the documented constant), so the test is attitude- and position-free.
-    const berthAnchor = player._netBerthCollar
-      ?? player._netPodMuzzles?.[this.podIndex] ?? player._netPodMuzzles?.[0];
-    const mx = berthAnchor ? berthAnchor.position.x / M_NET : 0;
-    const my = berthAnchor ? berthAnchor.position.y / M_NET : 0;
-    const mz = berthAnchor ? berthAnchor.position.z / M_NET : (V5.BERTH_COLLAR_Z_M ?? 1.30);
-    _anchorLocal.x = mx; _anchorLocal.y = my; _anchorLocal.z = mz;
+    berthAnchorLocalInto(player, this.podIndex, _anchorLocal);
+    const mx = _anchorLocal.x, my = _anchorLocal.y, mz = _anchorLocal.z;
 
     // Cylinder axis = ship-local +Z. A point is INSIDE when its axial
     // coordinate z > 0 (fore of the muzzle plane) — intruders aft of the
@@ -2638,12 +2652,14 @@ export class NetProjectile {
       return (lx * lx + ly * ly) < radiusSq;
     };
 
-    // ── 1. Strut tips ──
+    // ── 1. Strut tips, and the catches the daughters HOLD ──
+    // (net-duck 2026-10-23: the tip read below still says nothing about a held catch's BODY, which sits well off the tip — a 5 m
+    // catch above ~44° can stand in the corridor with its tip clear — so each daughter's held catch is read as well, further down.)
     // Strut geometry is ship-local by construction: pivot at
     // (cos az·collarR, sin az·collarR, collarY), tip at pivot +
     // strutLocalDirection(α, az) × STRUT_LENGTH. A forward-swept strut is the
-    // blocker whether or not it holds a catch — no separate held-catch test:
-    // whenever a tip is fore of the muzzle plane (tipZ > 0) its radial is
+    // blocker whether or not it holds a catch: whenever a tip is fore of the
+    // muzzle plane (tipZ > 0) its radial is
     // ≤ 2.10 m (DECISIONS §11: collarR 0.40 + STRUT_LENGTH 1.70, was 2.01 m
     // at 1.60), while the smallest whale-class corridor radius in the catalog
     // is 2.40 m (FENGYUN-1C, 2.8 m), so the tip test always fires first. (And
@@ -2666,6 +2682,14 @@ export class NetProjectile {
         // ArmManager's lean-aside duck and its re-pose pre-check, so the duck
         // can never disagree with this, the authoritative gate.
         if (strutTipFoulsCorridor(alpha, azRad, collarR, collarY, strutLen, _anchorLocal, radiusM)) {
+          return false;
+        }
+        // net-duck D1 (owner 2026-10-22: "out of the way of mother net"): a daughter's HELD catch is a body on her strut, and above
+        // ~44 deg a big one sits across this corridor although her tip does not (measured: tmp/plans/net-duck.md Log, T0a). The
+        // drawn mesh of every rack piece at her LIVE angle is read against the same cylinder; a mock arm manager with no dock
+        // positions, or a held piece with no mass, is skipped. (The comment above was written when a held catch was keyed on
+        // `capturedDebris`, which is the in-hand haul; the rack pieces are what stand at the tip.)
+        if (heldCargoFoulsCorridorAt(armManager, i, alpha, _anchorLocal, radiusM)) {
           return false;
         }
       }

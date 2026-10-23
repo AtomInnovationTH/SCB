@@ -43,6 +43,8 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { heldSlotAnchorInto, rackOffsetFor, catchLongAxisInto, nextFreeRackCell } from '../entities/ArmUnit.js';
 import { composeDockedArmQuat } from '../entities/ArmDockBasis.js';
+import { DebrisField } from '../entities/DebrisField.js';           // net-duck D1: the drawn scale of a held catch
+import { DebrisWireframe } from '../ui/DebrisWireframe.js';          // net-duck D1: the drawn mesh
 
 /** 1 meter in scene units — matches ArmManager/PlayerSatellite convention */
 const M = 0.00001;
@@ -164,9 +166,11 @@ const _slotPoint = { x: 0, y: 0, z: 0 };
  * @param {{x:number,y:number,z:number}} out — receives the booking point, meters
  * @param {{x:number,y:number,z:null}} [axisOut] — receives the unit body-frame long axis (see above)
  * @param {object|null} [held] — the piece (its stored cell, offset and attitude)
+ * @param {THREE.Quaternion|null} [quatOut] — net-duck D1: receives the piece's DRAWN attitude in the ship frame (her attitude at this
+ *   strut angle × the attitude frozen in her frame, `held._qLocalHer`; her attitude alone for a piece without one)
  * @returns {{x:number,y:number,z:number}} out
  */
-export function heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotIndex, sizeMeter, out, axisOut, held = null) {
+export function heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotIndex, sizeMeter, out, axisOut, held = null, quatOut = null) {
   const tip = strutTipMeters(dp, alpha);
   _hcdAnchor.set(tip.x * M, tip.y * M, tip.z * M);
 
@@ -192,6 +196,10 @@ export function heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotInde
     axisOut.x = _hcdLong.x;
     axisOut.y = _hcdLong.y;
     axisOut.z = _hcdLong.z;
+  }
+  if (quatOut) {
+    quatOut.copy(_hcdQ);
+    if (held && held._qLocalHer) quatOut.multiply(held._qLocalHer);
   }
   return out;
 }
@@ -1116,6 +1124,155 @@ export function heldCargoPlumeConflictAt(armManager, armIndex, alphaRad) {
     }
   }
   return null;
+}
+
+// ── net-duck D1: the held catch's DRAWN mesh against the mother net's berth corridor ──────────────────────────────────
+// The plume check's box chain (`heldCargoPlumeChainInto`) is NOT used here. Measured 2026-10-23 (tmp/plans/net-duck.md Log, T0a):
+// the SSOT box (`lengthM` x `widthM`) is a sphere for a fragment and a 5 x 3.1 box for a defunctSat (both far fatter than the drawn
+// body), and 1.4 m wide for a 5 m rocketBody that is drawn 4.2 m across; against the drawn mesh it over-counted 5 m catches by
+// 17-85 points at 54 deg, left 34 deg "not clear" for 47 % of 5 m defunctSats, and MISSED 8-34 of 120 rocketBodies. The corridor test
+// therefore reads the mesh the player sees: a cached cloud of its surface (spacing CLOUD_STEP_FRAC of the longest side, each point a
+// ball of ONE spacing (R6, 2026-10-23: the gap between a surface point and its nearest sample was measured up to 0.82 x the spacing,
+// so a ball of half of it could let a hit through), moved to her pose at the asked strut angle. 0.02 (was 0.04 with half-spacing balls)
+// keeps the SAME ball (0.1 m on a 5 m body) now that it is a whole spacing: 34 deg and 39 deg stay clear for every size and type, and
+// a 5 m rocketBody reads 0 0 10 25 77 87 100 % at 34/39/44/54/64/69/89 deg, vs 0 0 7 20 68 83 100 % for the drawn mesh itself.
+const CLOUD_STEP_FRAC = 0.02;
+const _cloudCache = new Map();
+const _cdQ = new THREE.Quaternion();
+const _cdBook = { x: 0, y: 0, z: 0 };
+
+/** Cache key of a piece's drawn mesh (the same one `DebrisWireframe.getGeometry` uses). @private */
+function _cloudKey(type, id) {
+  return type === 'fragment' ? `fragment_${(id >>> 0) % (Constants.DEBRIS_FRAGMENT_VARIANTS || 7)}` : type;
+}
+
+/**
+ * The surface of a debris mesh as a point cloud in MESH units (origin = the pin point), spacing `stepU`. Built once per mesh.
+ * Triangles are sampled as `forEachSurfacePoint` (js/test/_flowerFold.js) does: from the vertex opposite the longest edge.
+ * @returns {{pts: Float32Array, stepU: number}|null} null for a type with no mesh
+ * @private
+ */
+function _heldCloud(type, id) {
+  const key = _cloudKey(type, id);
+  let c = _cloudCache.get(key);
+  if (c !== undefined) return c;
+  c = null;
+  const geo = DebrisWireframe.getGeometry(type, id);
+  const pos = geo && geo.getAttribute('position');
+  if (pos && pos.count > 0) {
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    const longest = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+    const stepU = CLOUD_STEP_FRAC * (longest > 0 ? longest : 1);
+    const idx = geo.index ? geo.index.array : null;
+    const nTri = (idx ? idx.length : pos.count) / 3;
+    const out = [];
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), cc = new THREE.Vector3();
+    for (let t = 0; t < nTri; t++) {
+      a.fromBufferAttribute(pos, idx ? idx[3 * t] : 3 * t);
+      b.fromBufferAttribute(pos, idx ? idx[3 * t + 1] : 3 * t + 1);
+      cc.fromBufferAttribute(pos, idx ? idx[3 * t + 2] : 3 * t + 2);
+      let A = a, B = b, C = cc;
+      const ab = a.distanceTo(b), bc = b.distanceTo(cc), ca = cc.distanceTo(a);
+      if (ab >= bc && ab >= ca) { A = cc; B = a; C = b; } else if (ca >= ab && ca >= bc) { A = b; B = cc; C = a; }
+      const ku = Math.max(1, Math.ceil(A.distanceTo(B) / stepU)), kv = Math.max(1, Math.ceil(A.distanceTo(C) / stepU));
+      for (let i = 0; i <= ku; i++) {
+        const u = i / ku;
+        for (let j = 0; j <= kv; j++) {
+          const v = j / kv;
+          if (u + v > 1 + 1e-12) break;
+          out.push(A.x + (B.x - A.x) * u + (C.x - A.x) * v, A.y + (B.y - A.y) * u + (C.y - A.y) * v, A.z + (B.z - A.z) * u + (C.z - A.z) * v);
+        }
+      }
+    }
+    c = { pts: Float32Array.from(out), stepU };
+  }
+  _cloudCache.set(key, c);
+  return c;
+}
+
+/**
+ * Does a ball (centre `cx, cy, cz`, radius `r`, ship frame, metres) overlap the corridor cylinder: z + r above the anchor plane and
+ * its centre's distance from the axis, less r, under `radiusM`? @private
+ */
+function _ballFoulsCorridor(cx, cy, cz, r, anchor, radiusM) {
+  if (cz - anchor.z + r <= 0) return false;
+  const rx = cx - anchor.x, ry = cy - anchor.y;
+  return Math.sqrt(rx * rx + ry * ry) - r < radiusM;
+}
+
+/**
+ * One held piece, centred `(cx, cy, cz)` in the ship frame with drawn attitude `q`: does any part of its drawn mesh sit in the
+ * corridor? A piece with no mesh (no `type`: a mock, a prediction) is the sphere of its `trueReachM`. Allocation-free after the
+ * mesh's first use. @private
+ */
+function _pieceFoulsCorridor(d, cx, cy, cz, q, anchor, radiusM) {
+  const sizeM = d.sizeMeter;
+  if (!(sizeM > 0)) return false;
+  const reach = DebrisField.trueReachM(d, sizeM);
+  const cloud = d.type ? _heldCloud(d.type, d.id) : null;
+  if (!cloud) return _ballFoulsCorridor(cx, cy, cz, reach, anchor, radiusM);
+  const sc = DebrisField.effectiveRenderScale(d) / M;               // the scale it is DRAWN at (metres per mesh unit)
+  if (!(sc > 0)) return false;
+  const margin = cloud.stepU * sc;                                   // each sample is a ball of one spacing (R6)
+  if (!_ballFoulsCorridor(cx, cy, cz, Math.max(reach, DebrisWireframe.getOriginRadius(d.type, d.id) * sc) + margin, anchor, radiusM)) return false;
+  // rotation matrix of q (row-major), scaled
+  const x = q.x, y = q.y, z = q.z, w = q.w;
+  const r00 = (1 - 2 * (y * y + z * z)) * sc, r01 = 2 * (x * y - z * w) * sc, r02 = 2 * (x * z + y * w) * sc;
+  const r10 = 2 * (x * y + z * w) * sc, r11 = (1 - 2 * (x * x + z * z)) * sc, r12 = 2 * (y * z - x * w) * sc;
+  const r20 = 2 * (x * z - y * w) * sc, r21 = 2 * (y * z + x * w) * sc, r22 = (1 - 2 * (x * x + y * y)) * sc;
+  const pts = cloud.pts;
+  const axX = anchor.x, axY = anchor.y, axZ = anchor.z - margin;
+  const rr = radiusM + margin, rr2 = rr * rr;
+  for (let i = 0; i < pts.length; i += 3) {
+    const px = pts[i], py = pts[i + 1], pz = pts[i + 2];
+    if (cz + r20 * px + r21 * py + r22 * pz <= axZ) continue;       // aft of the muzzle plane
+    const dx = cx + r00 * px + r01 * py + r02 * pz - axX;
+    const dy = cy + r10 * px + r11 * py + r12 * pz - axY;
+    if (dx * dx + dy * dy < rr2) return true;
+  }
+  return false;
+}
+
+/**
+ * net-duck D1 (owner 2026-10-22: "out of the way of mother net"): does anything this arm holds at home sit, with her strut at
+ * `alphaRad`, inside the mother net's berth corridor? The corridor is the cylinder `CaptureNet._corridorClear` tests the strut tips
+ * against: axis ship-local +Z through `anchor` (x, y), fore of the anchor plane (z > anchor.z), radius `radiusM`. A rack piece is its
+ * drawn mesh (see the note above `CLOUD_STEP_FRAC`) at her pose at that angle; the in-hand catch (cleared when she parks, so only a
+ * DOCKED / CARRY_PREP daughter that still has one) is the sphere of its `trueReachM` at its in-hand booking. Only a daughter at home
+ * counts (HOLDING_CATCH, DOCKED, CARRY_PREP: her rack is at her strut); one out on a line, detached or expended does not. A mock arm
+ * manager with no dock positions, or a held piece with no `mass`, is skipped (nothing to measure). READ-ONLY, no allocation.
+ *
+ * @param {object} armManager — with .arms[], ._dockPositions[], .playerSatellite
+ * @param {number} armIndex
+ * @param {number} alphaRad — strut sweep angle to read her cargo at (the live angle when not finite)
+ * @param {{x:number,y:number,z:number}} anchor — the berth anchor in the ship frame, metres (the collar)
+ * @param {number} radiusM — the corridor radius (inbound size / 2 + CAPTURE_NET.BERTH_CLEARANCE_M)
+ * @returns {boolean} true when a held piece overlaps the corridor
+ */
+export function heldCargoFoulsCorridorAt(armManager, armIndex, alphaRad, anchor, radiusM) {
+  const arm = (armManager.arms || [])[armIndex];
+  const dp = (armManager._dockPositions || [])[armIndex];
+  if (!arm || !dp || arm.isDetached) return false;
+  const S = Constants.ARM_STATES;
+  if (arm.state !== S.HOLDING_CATCH && arm.state !== S.DOCKED && arm.state !== S.CARRY_PREP) return false;
+  const alpha = Number.isFinite(alphaRad) ? alphaRad : (arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0));
+  const ps = armManager.playerSatellite || null;
+  const hand = arm.capturedDebris;
+  if (hand && hand.mass && hand.sizeMeter > 0) {
+    heldInHandBookingMeters(arm, dp, alpha, ps, hand.sizeMeter, _cdBook, null);
+    if (_ballFoulsCorridor(_cdBook.x, _cdBook.y, _cdBook.z, DebrisField.trueReachM(hand, hand.sizeMeter), anchor, radiusM)) return true;
+  }
+  const rack = arm.heldCatches;
+  if (Array.isArray(rack)) {
+    for (let s = 0; s < rack.length; s++) {
+      const held = rack[s];
+      if (!held || !held.mass) continue;
+      heldCargoBookingMeters(arm, dp, alpha, ps, s, held.sizeMeter || 0, _cdBook, null, held, _cdQ);
+      if (_pieceFoulsCorridor(held, _cdBook.x, _cdBook.y, _cdBook.z, _cdQ, anchor, radiusM)) return true;
+    }
+  }
+  return false;
 }
 
 /**

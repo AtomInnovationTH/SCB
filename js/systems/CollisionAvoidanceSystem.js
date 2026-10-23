@@ -1070,7 +1070,7 @@ export class CollisionAvoidanceSystem {
     //     double-billing is the bug another lane fixed elsewhere). ---
     const ev = threat.evasionDir;
     const dvWorld = new THREE.Vector3(ev.x, ev.y, ev.z).multiplyScalar(dodgeDvMs);
-    const fired = this._player.applyCartesianImpulse(dvWorld, CA.DODGE_BILLING_WINDOW_S);
+    const fired = this._player.applyCartesianImpulse(dvWorld, CA.DODGE_BILLING_WINDOW_S, { dodge: true });   // net-duck R2: a dodge is never held for a ducked catch
 
     this._lastDodgeTime = this._elapsedTime;
 

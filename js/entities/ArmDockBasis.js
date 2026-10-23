@@ -29,16 +29,20 @@ const _armBasis = new THREE.Matrix4();
 /**
  * Write a deterministic docked-arm LOCAL quaternion into `outQuat`.
  *
- * Builds an explicit orthonormal basis where the daughter's forward (+Z) is the
- * strut direction and its up (+Y) is the radial-outward direction at the arm's
- * azimuth (projected perpendicular to forward). Because the "up" reference is the
- * same azimuth-radial used to lay out the dock ring, every daughter ends up with
- * the SAME roll convention around the mother — fixing the asymmetric splay that
- * `setFromUnitVectors()` produced (its roll was an arbitrary by-product of the
- * minimal-arc rotation and differed per azimuth).
+ * She turns with her strut like a rigid body on a hinge (owner 2026-10-23, roll-90): forward (+Z) is the strut
+ * direction, and her side axis (+X) is the strut's HINGE axis, Z × radial = (−sin az, cos az, 0), the line the strut
+ * swings about. That axis is the same at every sweep angle, so the roll never jumps. Her up (+Y) is forward × side.
+ * For a strut swept less than 90° up is the radial-outward direction at the arm's azimuth (projected perpendicular to
+ * forward), the roll the dock ring was laid out with, so every daughter still shares one roll convention around the
+ * mother (the asymmetric splay `setFromUnitVectors()` produced came from a roll that differed per azimuth).
+ *
+ * The earlier basis took up = radial and side = radial × forward = −cosα·(radial × Z). That flips sign at α = 90° (the
+ * radial lies along the strut there), so the daughter and her catch rolled 180° in one frame as the strut swept
+ * through the equator (measured: 0.5° per 0.5° step, then 180.00° at exactly 90°). Past 90° she was rolled 180°
+ * from the hinged pose; she now stays on it.
  *
  * @param {THREE.Vector3} strutDir - unit strut/forward direction (player-local)
- * @param {number} azRad - arm azimuth (radians) used for the radial up reference
+ * @param {number} azRad - arm azimuth (radians): sets the hinge axis
  * @param {THREE.Quaternion} outQuat - receives the local orientation
  * @returns {THREE.Quaternion} outQuat (for chaining)
  */
@@ -46,19 +50,19 @@ export function composeDockedArmQuat(strutDir, azRad, outQuat) {
   // Forward = strut direction.
   _armDir.copy(strutDir).normalize();
 
-  // Preferred up = radial-outward at this azimuth.
-  _armUp.set(Math.cos(azRad), Math.sin(azRad), 0);
-
-  // Degenerate guard: if radial ≈ parallel to forward, fall back to Z then X.
-  _armRight.crossVectors(_armUp, _armDir);
+  // Side = the strut's hinge axis Z × radial. A strut lies in the swing plane, so it is already perpendicular to
+  // forward; the projection only guards an input that is not a strut direction.
+  _armRight.set(-Math.sin(azRad), Math.cos(azRad), 0);
+  _armRight.addScaledVector(_armDir, -_armRight.dot(_armDir));
   if (_armRight.lengthSq() < 1e-8) {
+    // forward ∥ hinge axis (not reachable by a strut) or a zero-length input: fall back to Z, then X.
     _armUp.set(0, 0, 1);
     _armRight.crossVectors(_armUp, _armDir);
     if (_armRight.lengthSq() < 1e-8) _armRight.set(1, 0, 0);
   }
   _armRight.normalize();
 
-  // Re-orthogonalize up so the basis is exactly orthonormal.
+  // Up = forward × side, so the basis is exactly orthonormal (right × up = forward).
   _armUp.crossVectors(_armDir, _armRight).normalize();
 
   // Columns: X = right, Y = up, Z = forward (so local +Z maps to strutDir).

@@ -8655,6 +8655,17 @@ export class PlayerSatellite extends THREE.Group {
     return (r.min * 180) / Math.PI < FL.POSE_FLOOR_DEG - 1e-6 || (r.max * 180) / Math.PI > FL.POSE_THRUST_MAX_DEG + 1e-6;
   }
 
+  /** net-duck D3: the one line a refused Hall burn says while a daughter's catch is lowered for the net (once per duck). @private */
+  _warnNetDuckThrust(am, index) {
+    const a = am.arms[index];
+    if (!a || a._netDuckThrustSaid) return;
+    a._netDuckThrustSaid = true;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `The thrusters wait: Daughter ${index + 1}'s catch is lowered for the net.`,
+      priority: 'warning',
+    });
+  }
+
   /**
    * @private Design 7b / owner amendment 2026-09-09 — say WHY the drive does
    * not answer when the reason is the aft radiator (the pose-band guard: the
@@ -10117,6 +10128,8 @@ export class PlayerSatellite extends THREE.Group {
    * @param {boolean} [opts.continuous=false] — this Δv is a burn spread over `dt`
    *   (the autopilot's per-frame thrust): the power bill is scaled to the frame, so the
    *   Wh per second does not depend on the frame rate. A one-shot (the dodge) leaves it off.
+   * @param {boolean} [opts.dodge=false] — the collision-avoidance dodge (net-duck R2): it burns even while a daughter's catch is
+   *   lowered for a mother net (the Hall-drive wait of `netDuckHold`); every other billed burn waits for her.
    * @param {boolean} [opts.quiet=false] — a passive pull with no exhaust (reel-push, 2026-10-22: the line tension from a
    *   reeling daughter): no RCS puff, no THRUST_VISUAL streaks, and it is not counted in `_deltaVSpent` (she spent nothing).
    *   Only meaningful with `noBill`.
@@ -10172,6 +10185,16 @@ export class PlayerSatellite extends THREE.Group {
       // THRUST_VISUAL emit — nothing downstream sees a burn. The folded
       // radiator (Design 7b guard / amendment 2026-09-09) is told to the player.
       if (this._thrusterInterlock) { this._warnFlowerThrustInhibit('FEEP'); return false; }
+      // net-duck D3 (owner 2026-10-22: a held catch "should move out of the way of mother net"): a daughter whose strut is down for an
+      // inbound net (or still climbing back) has her catch below her plume-clear hold pose, i.e. in the exhaust: the Hall drive waits
+      // until she is back. The caller's burn is refused this time (the autopilot asks again next frame; cold gas is a different path);
+      // dt = 0 callers are the recoil compensations of a launch, not burns. One line per duck. A collision dodge (`opts.dodge`, R2:
+      // coordinator 10-23, "dodge wins") is never held: a ducked catch in the exhaust is the lesser harm.
+      if (dt > 0 && opts.dodge !== true) {
+        const am = this.armManager;
+        const low = am && typeof am.netDuckHold === 'function' ? am.netDuckHold() : -1;
+        if (low >= 0) { this._warnNetDuckThrust(am, low); return false; }
+      }
       // Electric engine (2026-09-25): the battery
       // pays what it holds, up to this burn's need, and the impulse scales by
       // that fraction. (The old `battery <= 0` gate never tripped on a battery
