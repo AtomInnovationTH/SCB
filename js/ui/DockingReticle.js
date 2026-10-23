@@ -32,9 +32,6 @@ const M = 0.00001;
 /** Daughter states in which net guidance is still meaningful (pre-capture). */
 const PRE_CAPTURE_STATES = new Set(['TRANSIT', 'APPROACH']);
 
-/** Offset-to-pixel scale: 1 meter of lateral offset ≈ 3px on screen */
-const OFFSET_SCALE = 3;
-
 /** Color palette (consistent with HUD green theme) */
 const C = {
   primary:    '#00ff88',
@@ -399,26 +396,9 @@ export class DockingReticle {
     // 2. Vignette
     this._drawVignette(ctx, cx, cy, w, h);
 
-    // During STATION_KEEP all of the green approach reticle chrome (centre
-    // crosshair, target diamond, SK centre dot) is redundant with the cyan
-    // TargetReticle bracket already drawn around the debris — and the green
-    // crosshair + diamond+dashed-line stack reads as visual clutter inside
-    // the bracket.  Suppress them during SK (debug session 2026-05-15).
-    const _inSk = this._arm && this._arm.state === 'STATION_KEEP';
-    if (!_inSk) {
-      // 3. Center crosshair (+) — approach alignment aid
-      this._drawCrosshair(ctx, cx, cy);
-
-      // 3b. Station-keep centre dot — vestigial; no-op outside SK so the call
-      // is cheap but kept here for symmetry / future SK indicators.
-      this._drawSkCenterDot(ctx, cx, cy);
-
-      // 4. Target indicator — green diamond + dashed line showing where the
-      // target is relative to the crosshair.  Useless during SK because
-      // (a) the target is at NDC≈(0,0) and (b) the TargetReticle bracket
-      // already marks the debris.
-      this._drawTargetIndicator(ctx, cx, cy);
-    }
+    // 3/4. (removed 2026-10-23, owner: "bright green + over daughter after launch") The centre crosshair, the target
+    //      diamond and the station-keep dot. The diamond sat on the crosshair every frame (its offsets are measured
+    //      along the line to the target, so they are always 0) and the cyan TargetReticle bracket already marks the piece.
 
     // 5/6. Range + closure-rate readouts — MANUAL PILOT ONLY.
     // RNG/CLR are advanced hand-flying instruments: the pilot uses closure
@@ -466,118 +446,6 @@ export class DockingReticle {
     grad.addColorStop(1, 'rgba(0,0,0,0.55)');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, w, h);
-  }
-
-  /** @private Central cross (+) */
-  _drawCrosshair(ctx, cx, cy) {
-    const armLen = 40;
-    const gap = 8;
-    const lineW = 2;
-
-    ctx.strokeStyle = C.primary;
-    ctx.lineWidth = lineW;
-    ctx.shadowColor = C.primaryGlow;
-    ctx.shadowBlur = 6;
-
-    ctx.beginPath();
-    // Horizontal arms
-    ctx.moveTo(cx - armLen, cy);
-    ctx.lineTo(cx - gap, cy);
-    ctx.moveTo(cx + gap, cy);
-    ctx.lineTo(cx + armLen, cy);
-    // Vertical arms
-    ctx.moveTo(cx, cy - armLen);
-    ctx.lineTo(cx, cy - gap);
-    ctx.moveTo(cx, cy + gap);
-    ctx.lineTo(cx, cy + armLen);
-    ctx.stroke();
-
-    // Small circle at center
-    ctx.beginPath();
-    ctx.arc(cx, cy, 4, 0, Math.PI * 2);
-    ctx.strokeStyle = C.primary;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    ctx.shadowBlur = 0;
-  }
-
-  /**
-   * @private Bright fixed centre dot visible only during STATION_KEEP.
-   * Anchors the eye on the debris's projected screen-position, which is
-   * mathematically (0,0) NDC every frame (verified by forensic NDC log).
-   * The brain otherwise locks onto the rotating wireframe-cage / daughter
-   * mesh as a reference frame and perceives the static debris as moving
-   * during sweep — the centre dot eliminates that illusion.
-   * Sits inside the existing crosshair gap & ring, no visual conflict.
-   */
-  _drawSkCenterDot(ctx, cx, cy) {
-    if (!this._arm || this._arm.state !== 'STATION_KEEP') return;
-
-    // Bright filled disc at radius 2 (within the crosshair's 4 px ring)
-    ctx.save();
-    ctx.shadowColor = C.primaryGlow;
-    ctx.shadowBlur = 8;
-    ctx.fillStyle = C.primary;
-    ctx.beginPath();
-    ctx.arc(cx, cy, 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  /** @private Diamond/square showing target position relative to crosshair */
-  _drawTargetIndicator(ctx, cx, cy) {
-    if (!this._target?._scenePosition) return;
-
-    // Map offsets to screen pixels
-    const sx = cx + this._offsetX * OFFSET_SCALE;
-    const sy = cy - this._offsetY * OFFSET_SCALE; // invert Y: up is negative in screen
-
-    // Clamp to visible area with margin
-    const margin = 30;
-    const clampedX = Math.max(margin, Math.min(this._width - margin, sx));
-    const clampedY = Math.max(margin, Math.min(this._height - margin, sy));
-
-    const totalOffset = Math.sqrt(this._offsetX ** 2 + this._offsetY ** 2);
-
-    // Color by distance offset
-    let color;
-    if (totalOffset < 10) color = C.primary;
-    else if (totalOffset < 50) color = C.warning;
-    else color = C.danger;
-
-    // Dashed alignment line from center to target indicator
-    ctx.save();
-    ctx.setLineDash([4, 6]);
-    ctx.strokeStyle = C.primaryDim;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.lineTo(clampedX, clampedY);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.restore();
-
-    // Draw diamond (rotated square)
-    const size = 8;
-    ctx.save();
-    ctx.translate(clampedX, clampedY);
-    ctx.rotate(Math.PI / 4);
-
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 8;
-    ctx.strokeRect(-size / 2, -size / 2, size, size);
-
-    // Inner dot when very close
-    if (totalOffset < 5) {
-      ctx.fillStyle = color;
-      ctx.fillRect(-2, -2, 4, 4);
-    }
-
-    ctx.shadowBlur = 0;
-    ctx.restore();
   }
 
   /** @private Top-center range readout: RNG: 145m */
@@ -1482,8 +1350,8 @@ export class DockingReticle {
   }
 
   /**
-   * @private Update the _skActive flag (used by _drawSkCenterDot to render
-   * the on-screen Canvas2D centre dot during STATION_KEEP).
+   * @private Update the _skActive flag (its reader, the station-keep centre dot, was removed 2026-10-23; the flag
+   * is kept for callers and tests).
    * Previously this method also managed a Three.js standoff wireframe sphere
    * around the debris (color 0x00ffaa) but that visual was removed:
    * it cluttered the SK view and competed with the debris for visual focus.
