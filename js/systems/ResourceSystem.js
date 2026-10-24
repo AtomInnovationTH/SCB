@@ -203,6 +203,8 @@ export class ResourceSystem {
     // Nets step 3 lane 3f (DECISIONS §4): the mother-side indium store, kg of cast indium for the daughters' ion-fuel cartridges.
     // A new run starts it EMPTY (today daughters never refuel within a run except from salvage, so this keeps today's difficulty).
     this.indiumStoreKg = 0;
+    // Nets step 3 slice 5 (5a, V6): drag sails aboard (a count; each is BIG_PIECES.SAIL.massKg of her live mass). A new run starts with none.
+    this.dragSails = 0;
     // w4-power D1: every boot starts at BATTERY_START_FRACTION (half) of the max.
     this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);
     this.solarPanelHealth = 1.0;
@@ -818,6 +820,7 @@ export class ResourceSystem {
       xenon: this.xenon,
       coldGas: this.coldGas,
       indiumStoreKg: this.indiumStoreKg,   // lane 3f: saved like coldGas (an old save has none and loads as 0)
+      dragSails: this.dragSails,           // slice 5 (5a): the sail stock (an old save has none and loads as 0)
       batteryMax: this.batteryMax,
       currentFuelId: this._currentFuelId,
       tankGasId: this.tankGasId,   // h3-argon-engine D6: the gas in the tank survives reloads
@@ -886,6 +889,7 @@ export class ResourceSystem {
     this.indiumStoreKg = Number.isFinite(data.indiumStoreKg)
       ? clampLevel(data.indiumStoreKg, Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG)
       : 0;
+    this.dragSails = Number.isFinite(data.dragSails) ? Math.max(0, Math.floor(data.dragSails)) : 0;   // slice 5 (5a): the sail stock
     this.battery = ResourceSystem.startCharge(this.batteryMax);
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;
@@ -1104,6 +1108,26 @@ export class ResourceSystem {
   }
 
   // ======================================================================
+  // DRAG SAIL STOCK (slice 5, lane 5a: a bought sail is a count aboard; its mass is part of her live mass; 5d spends one per sail disposal)
+  // ======================================================================
+
+  /** Mass of the sails aboard, kg (ArmManager.getMassBudget adds it to her live mass). */
+  dragSailMassKg() {
+    return Math.max(0, this.dragSails) * Constants.BIG_PIECES.SAIL.massKg;
+  }
+
+  /**
+   * One bought drag sail goes into the stock AT THE CLICK (like a cartridge).
+   * @returns {number} the stock after the load
+   */
+  loadDragSail() {
+    this.dragSails = Math.max(0, Math.floor(this.dragSails) || 0) + 1;
+    this._syncToPlayer();
+    eventBus.emit(Events.RESOURCE_UPGRADED, { effect: 'dragSail', value: 1 });
+    return this.dragSails;
+  }
+
+  // ======================================================================
   // UPGRADES
   // ======================================================================
 
@@ -1132,6 +1156,9 @@ export class ResourceSystem {
       case 'indiumCartridge':
         if (this.loadIndiumCartridge(data.value) <= 0) return false;
         return true;   // loadIndiumCartridge synced and emitted RESOURCE_UPGRADED itself
+      case 'dragSail':
+        this.loadDragSail();
+        return true;   // loadDragSail synced and emitted RESOURCE_UPGRADED itself
       case 'coldGasMax':
         this.coldGasMax += data.value;
         this.coldGas = Math.min(this.coldGas + data.value, this.coldGasMax);
@@ -1189,6 +1216,7 @@ export class ResourceSystem {
   reset() {
     this.coldGas = ResourceSystem.startPropellant(Constants.COLD_GAS_MAX);
     this.indiumStoreKg = 0;   // lane 3f: a new run (retry, game-over continue) starts the indium store empty
+    this.dragSails = 0;       // slice 5 (5a): and with no drag sails
     this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);   // w4-power D1: half
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;

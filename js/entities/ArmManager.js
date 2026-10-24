@@ -4632,9 +4632,11 @@ export class ArmManager {
     // Lane 3f F2 (Ruling 0, §33 row 11 "her mass is live"): the indium in her ion-fuel store is carried like cargo (the Hall
     // engine never burns it): in the loaded and the empty mass.
     const indiumStoreKg = (this._resourceSystem && Number.isFinite(this._resourceSystem.indiumStoreKg)) ? Math.max(0, this._resourceSystem.indiumStoreKg) : 0;
-    const carriedDry = coreDry + coldGasCurrent + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg;
+    // Slice 5 (5a, V6, §33 row 11 "her mass is live"): the drag sails in her stock are carried like the indium: in the loaded and the empty mass.
+    const dragSailKg = (this._resourceSystem && typeof this._resourceSystem.dragSailMassKg === 'function') ? this._resourceSystem.dragSailMassKg() : 0;
+    const carriedDry = coreDry + coldGasCurrent + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg + dragSailKg;
     const wetMass = carriedDry + xenonCurrent;
-    const dryMass = coreDry + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg;   // reported, as before: without either gas
+    const dryMass = coreDry + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg + dragSailKg;   // reported, as before: without either gas
 
     // Tsiolkovsky for the engine: ΔV = Isp_eff x g0 x ln((dry + cold + gas) / (dry + cold)).
     // Isp_eff = the ACTIVE fuel's Isp / c (D5: shop upgrade x power split act as Isp gains).
@@ -4644,7 +4646,7 @@ export class ArmManager {
     const ispActive = fuel && fuel.isp > 0 ? fuel.isp : Constants.OCTOPUS_CORE_HALL_ISP;
     const isp = ispActive / (c > 0 ? c : 1);   // effective Isp: the figure the ΔV and the flow share
     const deltaV = engineDeltaV({
-      dryKg: coreDry + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg, coldGasKg: coldGasCurrent, gasKg: xenonCurrent, isp: ispActive, c,
+      dryKg: coreDry + dockedArmMass + cargoMass + motherNetMass + indiumStoreKg + dragSailKg, coldGasKg: coldGasCurrent, gasKg: xenonCurrent, isp: ispActive, c,
     });
 
     return {

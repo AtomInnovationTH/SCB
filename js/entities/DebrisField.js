@@ -3861,6 +3861,8 @@ export class DebrisField {
     return {
       high: true, name: r.name, types: r.types, material: r.material, sizeM, massMin: massKg, massMax: massKg,
       tumbleDegS: r.tumbleDegS, fwdMinM: r.fwdMinM, fwdMaxM: r.fwdMaxM, latM: r.latM || 0, radM: r.radM || 0,
+      // slice 5 (5a, V2/V3): who owns the piece and its tumbling area (a copy, so no piece shares the table's object); only a HIGH_FIELD row has them
+      owner: r.owner ? { ...r.owner } : null, areaM2: r.areaM2,
     };
   }
 
@@ -4389,6 +4391,9 @@ export class DebrisField {
       // and the row's name rides on the piece (informational, as a catalogue piece's).
       if (spec.high) Object.assign(debris, deriveCaptureFlags(debris.material, debris.type, debris.mass));
       if (spec.name) debris.name = spec.name;
+      // slice 5 (5a, V3): a HIGH_FIELD piece has an owner (who pays for its removal) and a tumbling area (its orbit life); no other piece does (C1)
+      if (spec.owner) { debris.owner = { ...spec.owner }; debris.areaM2 = spec.areaM2; }
+      else if (debris.owner) { delete debris.owner; delete debris.areaM2; }   // a reused body from an earlier high field never carries a stale owner
       // H2b: the piece keeps ITS OWN row spec (a high row is not a WELCOME_FIELD row); re-seat reads it, never the table by index.
       debris._fieldSpec = spec;
 

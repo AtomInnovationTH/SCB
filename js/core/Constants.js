@@ -5616,20 +5616,51 @@ export const Constants = {
   // inside RESEAT.DIST_M (3,000 m).
   HIGH_FIELD: [
     { name: 'Dead upper stage (SL-14 class)',     types: ['rocketBody'], material: 'aluminum',  massMin: 1200, massMax: 1500, sizeMin: 5.2, sizeMax: 5.5, tumbleDegS: 2.5,
-      fwdMinM: 150,  fwdMaxM: 230,  latM: -35,  radM: 15 },    // #1 catalogue SL-14 R/B 1,400 kg / 6 m: cut to 5.2-5.5 m (estimate)
+      fwdMinM: 150,  fwdMaxM: 230,  latM: -35,  radM: 15,      // #1 catalogue SL-14 R/B 1,400 kg / 6 m: cut to 5.2-5.5 m (estimate)
+      owner: { name: 'Russia', status: 'owner', launchYear: 1988, notable: 'Tsyklon-3 upper stage, launched by the USSR.' },
+      areaM2: 12.3 },   // cylinder 5.35 m x 2.4 m (surface / 4, tumbling mean)
     { name: 'Dead upper stage (Meteor-1 class)',  types: ['rocketBody'], material: 'steel',     massMin: 800,  massMax: 1000, sizeMin: 5.0, sizeMax: 5.4, tumbleDegS: 4,
-      fwdMinM: 380,  fwdMaxM: 500,  latM: 90,   radM: -30 },   // #2 catalogue Meteor-1 R/B 880 kg / 6.5 m: cut to 5.0-5.4 m (estimate)
+      fwdMinM: 380,  fwdMaxM: 500,  latM: 90,   radM: -30,     // #2 catalogue Meteor-1 R/B 880 kg / 6.5 m: cut to 5.0-5.4 m (estimate)
+      owner: { name: 'Russia', status: 'owner', launchYear: 1970, notable: 'Molniya-M upper stage, launched by the USSR.' },
+      areaM2: 13.3 },   // cylinder 5.2 m x 2.6 m
     { name: 'Dead satellite (Cosmos 1175 class)', types: ['defunctSat'], material: 'aluminum',  massMin: 1000, massMax: 1300, sizeMin: 3.8, sizeMax: 4.2, tumbleDegS: 3,
-      fwdMinM: 620,  fwdMaxM: 780,  latM: -140, radM: 50 },    // #3 catalogue Cosmos 1175 1,100 kg / 4 m
+      fwdMinM: 620,  fwdMaxM: 780,  latM: -140, radM: 50,      // #3 catalogue Cosmos 1175 1,100 kg / 4 m
+      owner: { name: 'Russia', status: 'owner', launchYear: 1980, notable: 'Defunct Tsikada navigation satellite.' },
+      areaM2: 5.2 },    // cylinder 4.0 m x 1.4 m (body only)
     { name: 'Dead satellite (Meteor 2 class)',    types: ['defunctSat'], material: 'solar_cell', massMin: 1800, massMax: 2700, sizeMin: 4.4, sizeMax: 5.0, tumbleDegS: 1.5,
-      fwdMinM: 900,  fwdMaxM: 1100, latM: 190,  radM: -70 },   // #4 catalogue Meteor 2-18 2,750 kg / 5 m
+      fwdMinM: 900,  fwdMaxM: 1100, latM: 190,  radM: -70,     // #4 catalogue Meteor 2-18 2,750 kg / 5 m
+      owner: { name: 'Russia', status: 'owner', launchYear: 1989, notable: 'Defunct Soviet weather satellite.' },
+      areaM2: 5.9 },    // cylinder 4.7 m x 1.4 m (body only)
     { name: 'Dead satellite (Vespa class)',       types: ['defunctSat'], material: 'mli_mylar', massMin: 100,  massMax: 250,  sizeMin: 2.0, sizeMax: 2.6, tumbleDegS: 6,
-      fwdMinM: 1250, fwdMaxM: 1450, latM: -230, radM: 90 },    // #5 catalogue Vespa 112 kg / 2.6 m
+      fwdMinM: 1250, fwdMaxM: 1450, latM: -230, radM: 90,      // #5 catalogue Vespa 112 kg / 2.6 m
+      owner: { name: 'ESA', status: 'owner', launchYear: 2012, notable: 'ESA has paid to have one of these removed (ClearSpace-1).' },
+      areaM2: 2.0 },    // cone shell (frustum) 2.3 m base, 0.9 m top, 1.4 m tall (estimate)
     { name: 'Dead microsatellite (est.)',         types: ['defunctSat'], material: 'composite', massMin: 250,  massMax: 450,  sizeMin: 2.2, sizeMax: 2.6, tumbleDegS: 5,
-      fwdMinM: 1650, fwdMaxM: 1850, latM: 280,  radM: -110 },  // #6 a named estimate (no catalogue entry between 112 and 556 kg)
+      fwdMinM: 1650, fwdMaxM: 1850, latM: 280,  radM: -110,    // #6 a named estimate (no catalogue entry between 112 and 556 kg)
+      owner: { name: 'its insurer', status: 'insurer', launchYear: 2006, notable: 'Its insurer paid out and owns it now.' },   // estimate
+      areaM2: 3.6 },    // box 2.4 x 1.2 x 1.2 m
     { name: 'Dead small satellite (est.)',        types: ['defunctSat'], material: 'aluminum',  massMin: 50,   massMax: 120,  sizeMin: 1.4, sizeMax: 2.0, tumbleDegS: 8,
-      fwdMinM: 2050, fwdMaxM: 2300, latM: -330, radM: 120 },   // #7 a named estimate
+      fwdMinM: 2050, fwdMaxM: 2300, latM: -330, radM: 120,     // #7 a named estimate
+      owner: { name: null, status: 'abandoned', launchYear: 2009, notable: 'Its company is gone.' },   // estimate; always set: an abandoned piece is still big
+      areaM2: 1.9 },    // box 1.7 x 0.9 x 0.9 m
   ],
+  // BIG_PIECES - what a big piece (a HIGH_FIELD stage or satellite: `owner` set) pays when it is DISPOSED OF, not at the catch (slice 5, lane 5a;
+  // DECISIONS §33 row 16-17; BigPieceValues.js, OrbitLifetime.js). Estimates to tune. Metal in orbit is priced like her gas: the launch price
+  // per kg (`IN_ORBIT_CR_PER_KG`, derived, never a literal). The anchor pays that plus the elevator contract's bonus per kg.
+  BIG_PIECES: {
+    TYPES: ['rocketBody', 'defunctSat'],                          // the types a big piece can be
+    METAL_FRACTION: { rocketBody: 0.6, defunctSat: 0.45 },        // share of the mass that is scrap metal
+    PARTS_FRACTION: { rocketBody: 0.05, defunctSat: 0.15 },       // share of the mass that is parts to reuse
+    FEE_CR_PER_KG: 10,                                            // removal fee its owner pays, per kg, when it is gone within RULE_YEARS
+    CONSENT_SHARE: 0.2,                                           // the owner's (or insurer's) share of what is sold or reused
+    COLLECTOR: { EARLY_BEFORE_YEAR: 1975, EARLY_CR: 10000, MID_UNTIL_YEAR: 1989, MID_CR: 3000 },   // launched before 1975 / 1975-1989 / later: 0
+    SAIL: { areaM2: 25, massKg: 9.5, priceCr: 1200 },             // drag sail: HPS ADEO-L class; price = launch mass 665 + 500 hardware (est.)
+    RULE_YEARS: 25,                                               // IADC: out of orbit within 25 years
+    PUSH_TARGET_YEARS: 24,                                        // a push aims at 24 years' life: a year's margin
+    PUSH_STEP_KM: 5,                                              // the push height is floored to this step
+    get IN_ORBIT_CR_PER_KG() { return Constants.LAUNCH_USD_PER_KG / Constants.USD_PER_CREDIT; },          // 70
+    get ANCHOR_PREMIUM_CR_PER_KG() { return Constants.ELEVATOR_CONTRACT.BONUS_CREDITS_PER_KG; },           // 5: the anchor's bonus per kg
+  },
   CATCH_MAX_SIDE_M: 5.5,    // m: no HIGH_FIELD piece is longer than this (the mother net's 6 m mouth less a margin)
 
   // The parked heavy spares (lane 4a, H2a): `DebrisField._generateDebris` builds ONE spare for every row of every high field (4 x 7 = 28),

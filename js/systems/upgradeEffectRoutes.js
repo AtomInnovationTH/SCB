@@ -68,6 +68,8 @@ export const EFFECT_ROUTES = {
   coldGasResupply: [RESOURCE_SYSTEM],
   // ── lane 3f: the ion-fuel cartridge goes into her indium store → ResourceSystem (the satellite's swap is only the look) ──
   indiumCartridge: [RESOURCE_SYSTEM],
+  // ── slice 5 (5a): the drag sail goes into her sail stock (a count; 5d spends it) → ResourceSystem ──
+  dragSail: [RESOURCE_SYSTEM],
 
   // ── S3b power infrastructure (F4: these three were inert) ──
   supercapUpgrade: [RESOURCE_SYSTEM, PLAYER], // +100 Wh burst store + MPD thermal flag (ResourceSystem.js:480, PlayerSatellite.js:3616)

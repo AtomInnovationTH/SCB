@@ -18,7 +18,7 @@ import { upgradePrereqsMet, upgradeCostNow, engineTankFull, consumableFull as no
 import { gasPriceCr, coldGasPriceCr, coldGasPoolToKg, indiumCartridgePriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
 
 /**
- * Upgrade definitions — 40 items across 9 categories, all wired to live systems
+ * Upgrade definitions — 41 items across 9 categories, all wired to live systems
  * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins
  * this header to them).
  * ST-6.6: Each upgrade carries a `trl` (NASA TRL 1-9) and optional `trlRationale`
@@ -174,6 +174,14 @@ export const UPGRADES = [
     desc: `One cast-indium cartridge (${Math.round(Constants.DAUGHTER_SUPPLY.INDIUM_CARTRIDGE_KG * 1000)} g, a large daughter's full tank) for the daughters' ion thrusters. It goes into your indium store; a docked daughter swaps it in for her tank in about ${Constants.DAUGHTER_SUPPLY.SWAP_GAME_S} s. Salvaged indium goes to the same store.`,
     effect: 'indiumCartridge', value: Constants.DAUGHTER_SUPPLY.INDIUM_CARTRIDGE_KG, maxLevel: Infinity, consumable: true,
     trl: 5, trlRationale: 'Indium FEEP thrusters flew on Gaia and LISA Pathfinder; handing cartridges over in orbit is not yet demonstrated' },
+  // Nets step 3 slice 5 (lane 5a, V6; DECISIONS §33 row 16): a drag sail for letting a big piece go lower. A count in her stock (ResourceSystem.dragSails),
+  // its mass is part of her live mass; bought at the resupply satellite like a net (the trade gate is the same). Used by lane 5d.
+  { id: 'drag_sail', cat: 'Daughters', name: `Drag sail, ${Constants.BIG_PIECES.SAIL.areaM2} m\u00B2, ${Constants.BIG_PIECES.SAIL.massKg} kg`,
+    cost: Constants.BIG_PIECES.SAIL.priceCr,
+    desc: `One folded drag sail (${Constants.BIG_PIECES.SAIL.areaM2} m\u00B2, ${Constants.BIG_PIECES.SAIL.massKg} kg; HPS ADEO-L class). Lets a big piece go to come down by itself. Its mass counts in yours.`,
+    effect: 'dragSail', value: 1, maxLevel: Infinity, consumable: true,
+    requiresFeature: 'FIELDS_BY_HEIGHT',
+    trl: 6, trlRationale: 'Drag sails have flown on small satellites, and HPS sells the 25 m\u00B2-class ADEO-L; fitting one to a derelict in orbit is not yet demonstrated' },
   { id: 'hazmat_handler', cat: 'Daughters', name: 'Hazmat Handler', cost: 1200,
     desc: 'Recover hydrazine → cold gas', effect: 'hazmatRecovery', value: true, maxLevel: 1,
     trl: 2, trlRationale: 'On-orbit hazmat recovery from derelicts is fully speculative' },

@@ -2158,6 +2158,7 @@ export class GameFlowManager {
       delete resources.xenon;
       delete resources.coldGas;
       delete resources.indiumStoreKg;   // lane 3f: a fresh attempt starts the indium store empty too
+      delete resources.dragSails;       // slice 5 (5a): ... and with no drag sails
     }
     const upgrades = shopScreen.getSerializableUpgrades();
 

@@ -346,6 +346,12 @@ const FITTING_SPECS = {
     display: (row) => ({ param: 'indiumStoreKg', base: 0, unit: 'kg', op: `+${row.value}` }),
     current: (deps) => deps.resourceSystem?.indiumStoreKg,
   },
+  // slice 5 (5a): a drag sail goes into her sail stock (a count); its mass is part of hers. Shown as the stock's level.
+  drag_sail: {
+    subsystem: 'BERTHS', reads: 'resourceSystem',
+    display: (row) => ({ param: 'dragSails', base: 0, unit: 'sails', op: `+${row.value}` }),
+    current: (deps) => deps.resourceSystem?.dragSails,
+  },
   hazmat_handler: {
     subsystem: 'BERTHS', reads: 'hasUpgrade',
     // RUNTIME route: no apply-time mutation; the live value IS ownership
