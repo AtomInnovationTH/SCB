@@ -1294,6 +1294,8 @@ export class NetProjectile {
     /** @type {{x:number,y:number,z:number}|null} u20-nets: the net's centre at contact minus the target's centre, metres
      *  (null until contact: the scoop then centres its mouth on the target). */
     this._mouthOffsetM  = null;
+    /** @type {{x:number,y:number,z:number}|null} u22-scoop: the net's launch direction at contact (the drawn mouth's axis; null until contact: the scoop then uses a ball). */
+    this._mouthAxis     = null;
     /** @type {boolean} u20-nets: this net already took a scoop (its targetDebris is the bag). */
     this._scooped       = false;
     /** @type {number} Register item 28: kg the held catch carried when the arm
@@ -1858,6 +1860,7 @@ export class NetProjectile {
           }
           // u20-nets: where the mouth is, relative to the target, at contact (metres; the scoop reads it when the net closes)
           this._mouthOffsetM = { x: -dx / M_NET, y: -dy / M_NET, z: -dz / M_NET };
+          this._mouthAxis = { x: this.launchDirection.x, y: this.launchDirection.y, z: this.launchDirection.z };   // u22-scoop: the drawn net's axis
           if (this.captureMode === MODES.CINCH) {
             this._transitionTo(STATES.BRAKE);
           } else {
@@ -1891,6 +1894,7 @@ export class NetProjectile {
             return;
           }
           this._mouthOffsetM = { x: -dx, y: -dy, z: -dz };   // u20-nets: the mouth relative to the target at contact (metres)
+          this._mouthAxis = { x: this.launchDirection.x, y: this.launchDirection.y, z: this.launchDirection.z };   // u22-scoop: the drawn net's axis
           if (this.captureMode === MODES.CINCH) {
             this._transitionTo(STATES.BRAKE);
           } else {
@@ -3333,6 +3337,7 @@ export class NetProjectile {
     if (canon.alive === false) return null;
     const { members } = pickScoopMembers(canon, field.debrisList, this.netClass, {
       mouthOffsetM: this._mouthOffsetM,
+      mouthAxis: this._mouthAxis,
       armId: arm && arm.id != null ? arm.id : null,
       ratedMassKg: rated,
     });

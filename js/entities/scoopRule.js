@@ -7,16 +7,24 @@
  *
  * What this module decides (nothing here allocates scene objects; metres throughout, positions are the scene frame / 1e-5):
  *
- *  - THE MOUTH VOLUME. The ball of radius `DIAMETER / 2` about the net's centre at contact. That is the ball the net's own
- *    contact test uses for the target (`CaptureNet` FLIGHT: `distance <= effectiveCatchRadius(DIAMETER / 2)`; that test adds a
- *    close-range forgiveness for near grazes, so the target itself can sit a little outside the plain ball: it is a member by
- *    right), so a piece the net could not have touched is never in the bag. Its depth is one mouth diameter, about the length
- *    of the flight cone the net is drawn as (4.1 m for the 3 m net). The net's centre at contact is kept as an OFFSET from the
- *    target (`mouthOffsetM`), so it stays right while both drift together until the bag closes.
+ *  - THE MOUTH VOLUME. What you see is what you catch: the volume the DRAWN net sweeps (u22-scoop, 2026-10-24; measured from the
+ *    real kit, `NetMeshKit.build` / `CaptureNetVisual`, probe tmp/u22-scoop/probe1.mjs). The apex is the net's centre at contact.
+ *    The flying net is a cone `coneHeight` long (`mouthR x 2 x CONE_LENGTH_FRAC`, 2.55 m for the 3 m net) opening to the mouth
+ *    radius (`DIAMETER / 2`, 1.5 m); in ENVELOP the rim weights then sweep a cylinder of that radius from one `coneHeight` to two
+ *    ahead of the apex (2.55 to 5.1 m), and the ring closes back at `coneHeight`. So a piece is inside when, with `z` its distance
+ *    ahead of the apex along the net's axis and `rho` its distance from that axis: `0 <= z <= 2 x coneHeight` and
+ *    `rho <= mouthR x min(1, z / coneHeight)`. At contact the target is only about 1.8 m ahead of the apex (the contact ball is the
+ *    mouth radius x the close-range forgiveness), so pieces beside it and beyond it are inside the net; a piece beside the target
+ *    but off the cone near the daughter is not (the net never reached it). Before this the mouth was a ball of `DIAMETER / 2` at the
+ *    net's centre, which put the target on its far rim and took only pieces between the daughter and the target (measured in the
+ *    browser, 4 of 4 catches, 1.85 m short). The target itself is a member by right (the contact test adds a forgiveness).
+ *    The apex is kept as an OFFSET from the target (`mouthOffsetM`, net centre minus target) and the axis as `mouthAxis`, so both
+ *    stay right while the net and the group drift together until the bag closes. With no axis (a net that never touched: a test
+ *    rig, `forceResolve` without flying) the mouth is the old ball of `DIAMETER / 2` about the offset point.
  *  - WHO IS ELIGIBLE. A piece the net could have been aimed at: alive, in the field (not stored), not held, pinned, parked,
  *    netted, committed to another daughter's net, or already inside a bag, and not itself a bag (no nesting). Background
  *    shards are not in the field's piece list at all, so they are out by construction.
- *  - WHAT FITS. Nearest the mouth centre first; a piece is skipped when the running mass would pass the net's rated mass
+ *  - WHAT FITS. Nearest the target first (nearest the ball's centre when there is no axis); a piece is skipped when the running mass would pass the net's rated mass
  *    (the strain ramp's own rating), and the walk goes on to the next one. The target is always a member, whatever it weighs.
  *  - THE BAG'S SIZE. A closed net is a ball with the mesh's own area, so radius mouth / 4 at the most (docs/research/
  *    2026-10-debris-sizes.md §6). Inside it the pieces pack loosely (fill 0.5; a flat piece, a fragment, fills a quarter of
@@ -80,12 +88,40 @@ export function isScoopable(d, armId = null) {
 }
 
 /**
+ * The drawn mouth's size for a net class: the cone/cylinder radius and the cone's length, in metres, the kit's own formulas
+ * (`NetMeshKit.build`: `mouthRadius = D/2 x CONE_OPEN_RADIUS_FRAC`, `coneHeight = mouthRadius x 2 x CONE_LENGTH_FRAC`).
+ * @param {{DIAMETER:number}} netClass
+ * @returns {{mouthR:number, coneH:number}}
+ */
+export function mouthShape(netClass) {
+  const cer = Constants.CAPTURE_NET.NET_CEREMONY;
+  const mouthR = ((netClass && netClass.DIAMETER) || 0) / 2 * cer.CONE_OPEN_RADIUS_FRAC;
+  return { mouthR, coneH: mouthR * 2 * cer.CONE_LENGTH_FRAC };
+}
+
+/**
+ * Is a point inside the volume the drawn net sweeps? (See THE MOUTH VOLUME.) `ax,ay,az` is the net's unit axis.
+ * @param {number} px @param {number} py @param {number} pz the point relative to the apex (m)
+ * @param {number} ax @param {number} ay @param {number} az unit launch direction
+ * @param {number} mouthR @param {number} coneH
+ * @returns {boolean}
+ */
+export function insideSweptMouth(px, py, pz, ax, ay, az, mouthR, coneH) {
+  const z = px * ax + py * ay + pz * az;
+  if (z < 0 || z > 2 * coneH) return false;
+  const lx = px - z * ax, ly = py - z * ay, lz = pz - z * az;
+  const rho = Math.sqrt(lx * lx + ly * ly + lz * lz);
+  return rho <= mouthR * Math.min(1, z / coneH);
+}
+
+/**
  * Pick the members of a scoop. Pure: no field, no events.
  * @param {object} target the piece the net was aimed at (always the first member)
  * @param {Iterable<object>} candidates the field's pieces (the target may be among them)
  * @param {{DIAMETER:number, MAX_CAPTURE_MASS?:number}} netClass
  * @param {object} [opts]
- * @param {{x:number,y:number,z:number}|null} [opts.mouthOffsetM] the net's centre at contact minus the target's centre (m); null = on the target
+ * @param {{x:number,y:number,z:number}|null} [opts.mouthOffsetM] the net's centre (the apex) at contact minus the target's centre (m); null = on the target
+ * @param {{x:number,y:number,z:number}|null} [opts.mouthAxis] the net's launch direction at contact (any length); with it the mouth is the drawn net's swept volume, without it a ball
  * @param {number|null} [opts.armId] the daughter's id (for the committed-net test)
  * @param {number} [opts.ratedMassKg] the rated mass to hold to (default the class rating)
  * @returns {{members: object[], skipped: {id:number, why:string}[]}} members nearest-first after the target
@@ -99,6 +135,12 @@ export function pickScoopMembers(target, candidates, netClass, opts = {}) {
   const off = opts.mouthOffsetM || null;
   const cx = tC.x + (off ? off.x : 0), cy = tC.y + (off ? off.y : 0), cz = tC.z + (off ? off.z : 0);
   const R = dia / 2;
+  // the drawn net's axis, normalised; null (a ball) when the net never recorded one
+  const axis = opts.mouthAxis || null;
+  const axLen = axis ? Math.hypot(axis.x, axis.y, axis.z) : 0;
+  const swept = axLen > 1e-9;
+  const ax = swept ? axis.x / axLen : 0, ay = swept ? axis.y / axLen : 0, az = swept ? axis.z / axLen : 0;
+  const shape = swept ? mouthShape(netClass) : null;
   const rated = Number.isFinite(opts.ratedMassKg) && opts.ratedMassKg > 0
     ? opts.ratedMassKg
     : ((netClass && netClass.MAX_CAPTURE_MASS) || Infinity);
@@ -108,6 +150,12 @@ export function pickScoopMembers(target, candidates, netClass, opts = {}) {
     if (!c || c === target || (c.id != null && c.id === target.id)) continue;
     if (!isScoopable(c, opts.armId ?? null)) continue;
     if (!pieceCentreM(c, p)) continue;
+    if (swept) {
+      if (!insideSweptMouth(p.x - cx, p.y - cy, p.z - cz, ax, ay, az, shape.mouthR, shape.coneH)) continue;   // the mouth test: centre inside the drawn net
+      const tx = p.x - tC.x, ty = p.y - tC.y, tz = p.z - tC.z;
+      near.push({ c, dist: Math.sqrt(tx * tx + ty * ty + tz * tz) });          // nearest the target first
+      continue;
+    }
     const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz;
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (dist <= R) near.push({ c, dist });                                       // the mouth test: centre inside the ball
