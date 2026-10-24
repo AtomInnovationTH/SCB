@@ -675,6 +675,8 @@ export class DebrisField {
     this._currentMissionProfile = null;
     /** @type {number} Current mission number */
     this._currentMissionNumber = 1;
+    /** u20-debris: true once the background shards run on the later size law (mission 2 on; `_applyShardLaw`). */
+    this._shardsLater = false;
 
     // Build everything
     // §13 boot timeline (?logBoot=1) — finer-grain marks so we can attribute
@@ -728,15 +730,16 @@ export class DebrisField {
       // _updateInstanceTransform repopulate the instance matrix next tick.
       if ((data.missionNumber || 1) > 1) {
         let restored = 0;
+        // u20-debris: the shards take the later size law BEFORE they come back, so the tracked rule below reads their new size.
+        this._applyShardLaw(data.missionNumber);
         for (const d of this.debrisList) {
           if (d._hiddenForMission1) {
             d._hiddenForMission1 = false;
             d.alive = true;
-            // S11(b): hazard shards stay untracked — they are the UNTRACKABLE
-            // population by construction; restoring them must not catalogue
-            // them (the pre-S11(b) blanket `tracked = true` predates the two
-            // populations).
-            d.tracked = !d.hazard;
+            // S11(b): a hazard shard is not a target — restoring it must not catalogue it like one (the pre-S11(b)
+            // blanket `tracked = true` predates the two populations). u20-debris: `_trackedFor` is the one rule: 10 cm or
+            // bigger shards are known to radar (tracked, still scenery: hazard keeps them out of every target list).
+            d.tracked = this._trackedFor(d);
             restored++;
           }
         }
@@ -763,7 +766,11 @@ export class DebrisField {
       this._welcomeFieldSpawned = false;
       this._currentMissionProfile = null;   // ST-4.C
       this._currentMissionNumber = 1;       // ST-4.C
-      for (const d of this.debrisList) d.welcomeSpawn = false;
+      this._applyShardLaw(1);               // u20-debris: a new game is mission 1 again: the shards go back to the first law
+      // F4 (fix round 1): a previous game's group pieces are ordinary debris now: the map-off "is a group still out?" test (`has('group')`
+      // in `_spawnWelcomeField`) reads `_extraKind`, and a stale tag would make the next game skip its group. (The satellite's body is parked
+      // below, which drops the tag with every other flag.)
+      for (const d of this.debrisList) { d.welcomeSpawn = false; if (d._extraKind) d._extraKind = null; }
       this._clearOnboardingPin();
       this._reviveStoredFieldPieces();      // slice 2b: the pieces of the fields she left go back to the pool
     });
@@ -928,6 +935,21 @@ export class DebrisField {
         count++;
       }
     }
+    // u20-debris v2: the mission-satellite pool, after the 28 (their ids and draws are the same as before). A `_missionSpare` is
+    // claimed by a mission satellite only (`_claimHeavySpare` pool 'mission'), a high field never takes one.
+    const missionMats = typeof Constants.missionPoolMaterials === 'function' ? Constants.missionPoolMaterials() : [];
+    for (const material of missionMats) {
+      const data = this._createDebrisData(this.debrisList.length, rng, DebrisField._spareSpec('defunctSat', material, Constants.MISSION_SAT.MASS_MIN_KG));
+      data._heavySpare = true;
+      data._missionSpare = true;
+      data._spareClaimed = false;
+      data.alive = false;
+      data.tracked = false;
+      data.discovered = false;
+      this.debrisMap.set(data.id, data);
+      this.debrisList.push(data);
+      count++;
+    }
     this._heavySpareCount = count;
   }
 
@@ -944,15 +966,54 @@ export class DebrisField {
    * @private
    * @param {string} type @param {string} [material] @returns {object|null}
    */
-  _claimHeavySpare(type, material) {
+  _claimHeavySpare(type, material, pool = 'high') {
+    const mission = pool === 'mission';
     let anyOfType = null;
     for (const d of this.debrisList) {
-      if (!d._heavySpare || d._spareClaimed || d.type !== type) continue;
+      if (!d._heavySpare || d.type !== type || !!d._missionSpare !== mission) continue;
+      if (d._spareClaimed) {
+        // u20-debris v2: a MISSION body whose piece has been cleared comes back to the pool; a high field's claim stays for good
+        // (slice 4). Re-parked from the body's own stream: no global draw.
+        if (!mission || !this._missionBodyCleared(d)) continue;
+        this._parkHeavySpare(d, mulberry32(((this._fieldSeed >>> 0) ^ (Constants.HEAVY_SPARES.SEED_XOR | 0) ^ Math.imul(d.id + 1, 0x9E3779B1)) >>> 0));
+      }
       if (!material || d.material === material) { d._spareClaimed = true; return d; }
       if (!anyOfType) anyOfType = d;
     }
     if (anyOfType) anyOfType._spareClaimed = true;
     return anyOfType;
+  }
+
+  /**
+   * u20-debris v2 fix round 1 (F1, F2): is a claimed MISSION body's piece gone for good? Cleared = it was laid out (`welcomeSpawn`), is
+   * no longer alive, is not parked in a field's store (`_fieldStored`: it comes back on a return visit) and is not inside a scoop bag
+   * that is still in play. It does NOT read the capture flags (`_captured`, `_armPinned`, `_capturedByArm`...): a daughter's catch and
+   * a tip catch leave `_captured` true when the piece is credited and removed, so a flag test never saw them cleared. A bag member
+   * keeps `_inBag` after the bag is credited and removed (`mergeIntoBag` sets alive false, `_captured` false), so the bag itself is
+   * looked up: only a bag still alive holds it (a split bag clears `_inBag` itself).
+   * @private
+   * @param {object} d a claimed `_missionSpare` body @returns {boolean}
+   */
+  _missionBodyCleared(d) {
+    if (!d.welcomeSpawn || d.alive || d._fieldStored) return false;
+    if (d._inBag) {
+      const bag = this.debrisMap.get(d._bagId);
+      if (bag && bag.alive) return false;
+    }
+    return true;
+  }
+
+  /**
+   * u20-debris v2 fix round 1 (F3): is a mission-satellite body free to claim (never claimed, or claimed and cleared)? FieldRegistry asks
+   * before it adds the satellite row to a field, so a row never exists without a body behind it (no phantom row 300).
+   * @returns {boolean}
+   */
+  hasFreeMissionBody() {
+    for (const d of this.debrisList) {
+      if (!d._heavySpare || !d._missionSpare) continue;
+      if (!d._spareClaimed || this._missionBodyCleared(d)) return true;
+    }
+    return false;
   }
 
   /**
@@ -962,13 +1023,15 @@ export class DebrisField {
    * @private
    * @param {object} d a `_heavySpare` piece
    */
-  _parkHeavySpare(d) {
+  _parkHeavySpare(d, rng = Math.random) {
     if (this._heldProxies && this._heldProxies.has(d.id)) this._dropHeldProxy(d.id);
-    const fresh = this._createDebrisData(d.id, Math.random, DebrisField._spareSpec(d.type, d.material, d.mass));
+    const wasMission = !!d._missionSpare;
+    const fresh = this._createDebrisData(d.id, rng, DebrisField._spareSpec(d.type, d.material, d.mass));
     const keep = { _meshKey: d._meshKey };
     for (const k of Object.keys(d)) if (!(k in fresh)) delete d[k];
     Object.assign(d, fresh, keep);
     d._heavySpare = true;
+    if (wasMission) d._missionSpare = true;
     d._spareClaimed = false;
     d.alive = false;
     d.tracked = false;
@@ -1011,16 +1074,65 @@ export class DebrisField {
     const ML = (Constants.DEBRIS && Constants.DEBRIS.MASS_LAW)
       || { AREA_COEF: 0.556945, AREA_EXP: 2.0047, AM_LOG10_MEAN: -0.9, AM_LOG10_SIGMA: 0.45 };
     const td = DEBRIS_TYPES.fragment;
-    const sizeMeter = samplePowerLawSize(rng(), HC.SIZE_MIN_M, HC.SIZE_MAX_M, HC.LAMBDA);
+    // u20-debris: ONE seeded draw (u, g1, g2: the same three the stream always gave a shard) feeds TWO laws. `sizeM`/`massKg`
+    // are mission 1's (the edge it always had, FIRST_SIZE_MIN_M, so mission 1's field is byte-identical: DECISIONS §38 rows 1
+    // and 4); `later` is the law from mission HC.LATER_FROM_MISSION on (2-50 cm, mass floor MASS_MIN_KG instead of the
+    // fragment row's 0.01 kg, which the mission targets share). `_applyShardLaw` swaps them at each mission start.
+    const firstMin = Number.isFinite(HC.FIRST_SIZE_MIN_M) ? HC.FIRST_SIZE_MIN_M : HC.SIZE_MIN_M;
+    const u = rng(), g1 = rng(), g2 = rng();
+    const sizeMeter = samplePowerLawSize(u, firstMin, HC.SIZE_MAX_M, HC.LAMBDA);
     const massKg = Math.max(td.massMin, Math.min(td.massMax,
-      sampleSbmMassKg(sizeMeter, rng(), rng(), ML)));
+      sampleSbmMassKg(sizeMeter, g1, g2, ML)));
+    const laterSize = samplePowerLawSize(u, HC.SIZE_MIN_M, HC.SIZE_MAX_M, HC.LAMBDA);
+    const massFloor = Number.isFinite(HC.MASS_MIN_KG) ? HC.MASS_MIN_KG : td.massMin;
+    const laterMass = Math.max(massFloor, Math.min(td.massMax, sampleSbmMassKg(laterSize, g1, g2, ML)));
     return {
       type: 'fragment',
       sizeM: sizeMeter,
       massKg,
       hazard: true,
       tracked: false,
+      later: { sizeM: laterSize, massKg: laterMass },
     };
+  }
+
+  /**
+   * u20-debris: the background shards' size law for the mission now running (DECISIONS §38 row 1). Mission 1: the first law
+   * every shard was built with (0.10-0.50 m, untracked). From `HAZARD_CLOUD.LATER_FROM_MISSION`: the shard's `later` size and
+   * mass (2-50 cm), and `tracked` follows the one rule (`_trackedFor`: 10 cm or bigger is known to radar). Touches only pieces
+   * that are still hazard shards (a shard the welcome spawn promoted into a target keeps what the spawn gave it) and is
+   * idempotent, so it may run at every mission start and every welcome spawn. No random draw. Returns the number rewritten.
+   * @param {number} [missionNumber]
+   * @returns {number}
+   */
+  _applyShardLaw(missionNumber = this._currentMissionNumber) {
+    const HC = (Constants.DEBRIS && Constants.DEBRIS.HAZARD_CLOUD) || {};
+    const later = (missionNumber || 1) >= (Number.isFinite(HC.LATER_FROM_MISSION) ? HC.LATER_FROM_MISSION : 2);
+    this._shardsLater = later;
+    let n = 0;
+    for (const d of this.debrisList) {
+      if (!d.hazard || !d._shardLaw) continue;
+      const v = later ? d._shardLaw.later : d._shardLaw.first;
+      if (d.sizeMeter !== v.sizeM) DebrisField.setDebrisSize(d, v.sizeM);
+      d.mass = v.massKg;
+      if (d.alive) d.tracked = this._trackedFor(d);
+      n++;
+    }
+    return n;
+  }
+
+  /**
+   * u20-debris: the ONE rule for a piece's `tracked` flag when something puts it back in play (a mission-start restore, a field
+   * revive). Everything but a background shard is tracked (as before). A background shard is tracked only under the later law
+   * (`_applyShardLaw`) and only at `HAZARD_CLOUD.TRACKED_MIN_M` (10 cm) or bigger: real radars follow pieces from about 10 cm.
+   * @param {object} d
+   * @returns {boolean}
+   */
+  _trackedFor(d) {
+    if (!d.hazard) return true;
+    const HC = (Constants.DEBRIS && Constants.DEBRIS.HAZARD_CLOUD) || {};
+    const min = Number.isFinite(HC.TRACKED_MIN_M) ? HC.TRACKED_MIN_M : 0.1;
+    return this._shardsLater === true && d.sizeMeter >= min;
   }
 
   /** @private Convert CatalogConverter's Node-safe seed into THREE.js runtime form.
@@ -1330,6 +1442,11 @@ export class DebrisField {
     // S11(b): population marks from the driving spec (defaults keep one
     // hidden class — see the return literal).
     const hazard = specActive && spec.hazard === true;
+    // u20-debris: a hazard shard keeps both of its size/mass laws (first = mission 1's, later = from mission 2); null for every
+    // other piece, so all debris share one hidden class.
+    const shardLaw = (hazard && spec.later)
+      ? { first: { sizeM: sizeMeter, massKg: mass }, later: { sizeM: spec.later.sizeM, massKg: spec.later.massKg } }
+      : null;
     const foreground = specActive && !hazard && Number.isFinite(spec.act);
     const act = foreground ? spec.act : 0;
 
@@ -1377,6 +1494,7 @@ export class DebrisField {
       // ConjunctionSystem). `foreground`/`act`: a member of the authored
       // three-act cast (Constants.DEBRIS.FOREGROUND_CAST).
       hazard,
+      _shardLaw: shardLaw,
       foreground,
       act,
       // UX-3 #9: Hidden until scanned — staggered reveal.
@@ -1799,6 +1917,8 @@ export class DebrisField {
     const rng = mulberry32((this._fieldSeed ^ 0x9E3779B9) >>> 0);
     const HC = (Constants.DEBRIS && Constants.DEBRIS.HAZARD_CLOUD)
       || { LAMBDA: 1.71, SIZE_MIN_M: 0.1, SIZE_MAX_M: 0.5 };
+    // u20-debris: the sky dots keep today's size mapping (the sky looks the same), whatever the shards' lower edge is.
+    const dotMin = Number.isFinite(HC.DOT_SIZE_MIN_M) ? HC.DOT_SIZE_MIN_M : HC.SIZE_MIN_M;
 
     for (let i = 0; i < BACKGROUND_COUNT; i++) {
       const orbit = this._drawRegimeOrbit(rng);
@@ -1822,8 +1942,8 @@ export class DebrisField {
       // Size: power-law shard size, linearly mapped onto the historical
       // 1–3 dot-size band (the render attribute is decorative; the LAW it
       // inherits is the measured one).
-      const lc = samplePowerLawSize(rng(), HC.SIZE_MIN_M, HC.SIZE_MAX_M, HC.LAMBDA);
-      sizes[i] = 1.0 + 2.0 * ((lc - HC.SIZE_MIN_M) / ((HC.SIZE_MAX_M - HC.SIZE_MIN_M) || 1));
+      const lc = samplePowerLawSize(rng(), dotMin, HC.SIZE_MAX_M, HC.LAMBDA);
+      sizes[i] = 1.0 + 2.0 * ((lc - dotMin) / ((HC.SIZE_MAX_M - dotMin) || 1));
     }
 
     const bgGeo = new THREE.BufferGeometry();
@@ -3745,6 +3865,108 @@ export class DebrisField {
   }
 
   /**
+   * u20-debris v2: one of a field's own seeded streams for the small-piece group and the mission satellite: `seed` (the field's),
+   * `variant` (0 = a low field's own group, 1 = the group a mission adds, 2 = the satellite) and `k` (which piece, or which use)
+   * mixed into a mulberry32 seed. A FRESH generator every call, so a piece resolves to the same spec however often, and in
+   * whatever order, the field is laid out; none of it touches the global Math.random.
+   * @param {number} seed @param {number} variant @param {number} k @returns {() => number}
+   */
+  static _groupStream(seed, variant, k) {
+    const x = (Constants.SMALL_GROUP.SEED_XOR | 0) ^ (seed | 0);
+    return mulberry32((Math.imul(x, 0x9E3779B1) + Math.imul((variant | 0) + 1, 0x85EBCA6B) + Math.imul((k | 0) + 1, 0xC2B2AE35)) >>> 0);
+  }
+
+  /** @private The group's centre: along-track and cross-track metres ahead of her (one roll per field and variant). */
+  static _groupCentre(seed, variant) {
+    const G = Constants.SMALL_GROUP;
+    const r = DebrisField._groupStream(seed, variant, 9999);
+    const a = r(), b = r();
+    return variant === 0
+      ? { fwdM: G.OWN_FWD_MIN_M + a * (G.OWN_FWD_MAX_M - G.OWN_FWD_MIN_M), latM: (b - 0.5) * G.OWN_LAT_M }
+      : { fwdM: G.EXTRA_FWD_MIN_M + a * (G.EXTRA_FWD_MAX_M - G.EXTRA_FWD_MIN_M), latM: G.EXTRA_LAT_MIN_M + b * (G.EXTRA_LAT_MAX_M - G.EXTRA_LAT_MIN_M) };
+  }
+
+  /**
+   * u20-debris v2 (DECISIONS §38 rows 3 and 4): the resolved spec of piece `i` of a field's small-piece group, in the shape of a
+   * WELCOME_FIELD row so the field spawn path and the re-seat read it alike. `variant` 0 is a low field's own group, 1 the group
+   * a mission adds. The piece sits in a flat disc (SMALL_GROUP.SPREAD_R_M) around the group's centre: along-track and cross-track
+   * offsets, radM 0, so every pair is at most 2 x SPREAD_R_M apart at spawn and stays so (the pieces share her semi-major axis
+   * and the welcome field's drag rule; an along-track or cross-track offset is a bounded oscillation, a radial one would slosh
+   * along-track by twice its size). Size is uniform in SIZE_MIN_M..SIZE_MAX_M, mass the real breakup-model chain, the tumble a
+   * slow one (a net takes it), all from the piece's own stream. `rng` is that piece's own stream for the SPAWN (mass roll,
+   * salvage): `_spawnWelcomeField` runs the piece on it instead of the global Math.random.
+   * @param {number} seed the field's seed @param {number} variant 0 or 1 @param {number} i the piece, 0-based
+   * @returns {object|null} null past the group's count (`Constants.smallGroupCount`)
+   */
+  static groupSpec(seed, variant, i) {
+    const G = Constants.SMALL_GROUP;
+    const count = Constants.smallGroupCount(seed, variant);
+    if (!Number.isInteger(i) || i < 0 || i >= count) return null;
+    const c = DebrisField._groupCentre(seed, variant);
+    const r = DebrisField._groupStream(seed, variant, i);
+    const rad = G.SPREAD_R_M * Math.sqrt(r());
+    const th = r() * Math.PI * 2;
+    const sizeM = G.SIZE_MIN_M + r() * (G.SIZE_MAX_M - G.SIZE_MIN_M);
+    const ML = (Constants.DEBRIS && Constants.DEBRIS.MASS_LAW) || { AREA_COEF: 0.556945, AREA_EXP: 2.0047, AM_LOG10_MEAN: -0.9, AM_LOG10_SIGMA: 0.45 };
+    const massKg = Math.max(0.02, Math.min(5, sampleSbmMassKg(sizeM, r(), r(), ML)));
+    const tumbleDegS = G.TUMBLE_MIN_DEG_S + r() * (G.TUMBLE_MAX_DEG_S - G.TUMBLE_MIN_DEG_S);
+    const fwd = c.fwdM + rad * Math.cos(th);
+    return {
+      types: ['fragment'], sizeM, massMin: massKg, massMax: massKg, tumbleDegS, own: true, group: variant,
+      fwdMinM: fwd, fwdMaxM: fwd, latM: c.latM + rad * Math.sin(th), radM: 0,
+      rng: DebrisField._groupStream(seed, variant, 5000 + i),
+    };
+  }
+
+  /**
+   * u20-debris v2 (DECISIONS §38 row 4): the resolved spec of a field's mission satellite: a dead satellite (the cast's type, from
+   * the mission pool of parked bodies) of 1.0-4.5 m and 50-500 kg, ONE roll for both so a heavier one is a bigger one, FWD_AFTER_GROUP_*
+   * beyond the group's centre and LAT_BESIDE_M to the other side of her track (about 70 m from the group). `variant` says which
+   * group it sits by (0 = a low field's own group, 1 = the one a mission adds).
+   * @param {number} seed the field's seed @param {number} variant 0 or 1 @returns {object}
+   */
+  static missionSatSpec(seed, variant) {
+    const S = Constants.MISSION_SAT;
+    const c = DebrisField._groupCentre(seed, variant);
+    const r = DebrisField._groupStream(seed, 2, variant);
+    const u = r();
+    const material = S.MATERIALS[Math.min(S.MATERIALS.length - 1, Math.floor(r() * S.MATERIALS.length))];
+    const tumbleDegS = S.TUMBLE_MIN_DEG_S + r() * (S.TUMBLE_MAX_DEG_S - S.TUMBLE_MIN_DEG_S);
+    const fwd = c.fwdM + S.FWD_AFTER_GROUP_MIN_M + r() * (S.FWD_AFTER_GROUP_MAX_M - S.FWD_AFTER_GROUP_MIN_M);
+    const massKg = S.MASS_MIN_KG + u * (S.MASS_MAX_KG - S.MASS_MIN_KG);
+    return {
+      high: true, own: true, missionSat: true, name: 'Dead satellite', types: ['defunctSat'], material,
+      sizeM: S.SIZE_MIN_M + u * (S.SIZE_MAX_M - S.SIZE_MIN_M), massMin: massKg, massMax: massKg, tumbleDegS,
+      fwdMinM: fwd, fwdMaxM: fwd, latM: c.latM - S.LAT_BESIDE_M, radM: 0,
+      rng: DebrisField._groupStream(seed, 2, 5000 + variant),
+    };
+  }
+
+  /**
+   * u20-debris v2: the spec of row `row` of a field laid out as `layout`: 'welcome' (WELCOME_FIELD, the start field), 'high'
+   * (HIGH_FIELD, rolled with the field's seed) or 'group' (a low field's own small-piece group); a row of EXTRA_ROW0 or more
+   * is a mission extra on any layout: EXTRA_ROW0 + i the i-th piece of the extra group, SAT_ROW the extra satellite. Null for
+   * a row the field does not have.
+   * F5 (fix round 1): on a 'group' layout the satellite sits by the group that is THERE NOW. `rows` (the field's rows in play, optional)
+   * says which: the field's own group while any of its rows is left, else the extra group a mission added (rows 200+). Without `rows`
+   * (or with no group row at all) it is the own group's spot, as before.
+   * @param {string} layout @param {number} seed @param {number} row @param {number[]} [rows] @returns {object|null}
+   */
+  static fieldRowSpec(layout, seed, row, rows = null) {
+    const G = Constants.SMALL_GROUP;
+    if (!Number.isInteger(row) || row < 0) return null;
+    if (row === G.SAT_ROW) {
+      let variant = layout === 'group' ? 0 : 1;
+      if (layout === 'group' && Array.isArray(rows) && !rows.some((r) => r < G.EXTRA_ROW0) && rows.some((r) => r >= G.EXTRA_ROW0 && r < G.SAT_ROW)) variant = 1;
+      return DebrisField.missionSatSpec(seed, variant);
+    }
+    if (row >= G.EXTRA_ROW0) return DebrisField.groupSpec(seed, 1, row - G.EXTRA_ROW0);
+    if (layout === 'high') return DebrisField.highFieldSpec(seed, row);
+    if (layout === 'group') return DebrisField.groupSpec(seed, 0, row);
+    return WELCOME_FIELD[row] || null;
+  }
+
+  /**
    * She is leaving a field (or laying it out again on a Stay): every piece of a field that is still free is taken out of play
    * - not alive, not tracked, its instance scaled to nothing - and kept by (field, row) so the next visit puts the SAME piece
    * back. They are stored, not simulated. A piece somebody holds (a catch on her nose, a rack, a tip, a net, a daughter's hand)
@@ -3798,7 +4020,7 @@ export class DebrisField {
     this.removeDebris(bag.id);                  // the bag has no field tag: the registry hears the removal and keeps every row
     for (const p of members) {
       p.alive = true;
-      p.tracked = !p.hazard;
+      p.tracked = this._trackedFor(p);
       p.fieldId = p._bagFieldId ?? null;
       p.fieldRow = p._bagFieldRow ?? null;
       p._inBag = false;
@@ -3833,7 +4055,7 @@ export class DebrisField {
     for (const d of this._fieldStored.values()) {
       if (d._heavySpare) continue;              // lane 4a: a heavy spare is never ordinary debris - it is parked again below
       d.alive = true;
-      d.tracked = !d.hazard;
+      d.tracked = this._trackedFor(d);
       d._fieldStored = false;
     }
     this._fieldStored.clear();
@@ -3869,17 +4091,40 @@ export class DebrisField {
     // Lane 4a (slice 4): a HIGH field (`fieldPlan.kind === 'high'`) indexes the HIGH_FIELD rows instead, resolved with the field's
     // seed (`highFieldSpec`); its pieces are parked heavy spares claimed below. Everything else about the path is the same.
     const isHigh = !!fieldPlan && fieldPlan.kind === 'high';
+    // u20-debris v2: which table the rows index: 'welcome' (WELCOME_FIELD), 'high' (HIGH_FIELD) or 'group' (a low non-start field's own
+    // small-piece group); a plan with no `layout` (a test's stub) is read from its kind. A row from SMALL_GROUP.EXTRA_ROW0 up is a
+    // mission extra (the group or the satellite a mission from 4 on adds), resolved by `DebrisField.fieldRowSpec` on any layout.
+    const layout = fieldPlan ? (fieldPlan.layout || (isHigh ? 'high' : 'welcome')) : 'welcome';
+    const specOfRow = (r) => DebrisField.fieldRowSpec(layout, fieldPlan.seed, r, fieldPlan.rows);
     let fieldRows = null;                       // the WELCOME_FIELD (or HIGH_FIELD) row index of each piece to lay out (null = all, in order)
     if (fieldPlan) {
       this.storeFieldPieces();                  // anything of hers still free goes back into store first (a Stay re-seats it)
-      const table = isHigh ? Constants.HIGH_FIELD : WELCOME_FIELD;
-      fieldRows = fieldPlan.rows.filter((r) => Number.isInteger(r) && table[r]);
+      fieldRows = fieldPlan.rows.filter((r) => Number.isInteger(r) && specOfRow(r));
       if (Number.isInteger(fieldPlan.missionNumber) && fieldPlan.missionNumber > 0) this._currentMissionNumber = fieldPlan.missionNumber;
     }
+    // u20-debris: the shards run on the size law of the mission being laid out (mission 1: today's; mission 2 on: 2-50 cm).
+    // Tolerant of mock receivers (tests bind only _spawnWelcomeField onto a plain object): their pieces carry no shard law.
+    (this._applyShardLaw || DebrisField.prototype._applyShardLaw).call(this, this._currentMissionNumber || 1);
+    // Map off (no registry): from mission SMALL_GROUP.FROM_MISSION on the seven welcome rows are followed by the mission extras: a group
+    // unless an uncaught one is still out, a satellite likewise (the map-on path keeps the same rule in FieldRegistry's rows).
+    let offRows = null;
+    if (!fieldPlan && (this._currentMissionNumber || 1) >= Constants.SMALL_GROUP.FROM_MISSION) {
+      const seed = this._fieldSeed;
+      const G = Constants.SMALL_GROUP;
+      const rows = WELCOME_FIELD.map((_, i) => i);
+      const has = (kind) => this.debrisList.some((d) => d.alive && d._extraKind === kind &&
+        !(d._captured || d._armPinned || d._capturedByArm || d._motherParked));
+      if (!has('group')) for (let i = 0, n = Constants.smallGroupCount(seed, 1); i < n; i++) rows.push(G.EXTRA_ROW0 + i);
+      if (!has('sat')) {
+        if ((this.hasFreeMissionBody || DebrisField.prototype.hasFreeMissionBody).call(this)) rows.push(G.SAT_ROW);
+        else console.warn('[DebrisField] no mission-satellite body is free: this mission lays out no satellite');
+      }
+      if (rows.length > WELCOME_FIELD.length) offRows = rows;
+    }
     const fieldToSpawn = fieldRows
-      ? fieldRows.map((r) => (isHigh ? DebrisField.highFieldSpec(fieldPlan.seed, r) : WELCOME_FIELD[r]))
-      : WELCOME_FIELD;
-    const rowOf = (i) => (fieldRows ? fieldRows[i] : i);   // the row spec i of `fieldToSpawn` came from
+      ? fieldRows.map((r) => specOfRow(r))
+      : offRows ? offRows.map((r) => DebrisField.fieldRowSpec('welcome', this._fieldSeed, r)) : WELCOME_FIELD;
+    const rowOf = (i) => (fieldRows ? fieldRows[i] : offRows ? offRows[i] : i);   // the row spec i of `fieldToSpawn` came from
 
     // Collect candidates: alive debris not already special-tagged. Prefer debris
     // in different orbit bands (farThreshold ≈ 3km altitude diff) so we don't
@@ -3980,7 +4225,7 @@ export class DebrisField {
       // fragment, never a new body (`_claimHeavySpare`); none left means the field lays out fewer pieces.
       const claim = this._claimHeavySpare || DebrisField.prototype._claimHeavySpare;
       let chosen = (fieldPlan && this._takeStoredFieldPiece(fieldPlan.fieldId, rowOf(i)))
-        || (spec.high ? claim.call(this, desiredType(spec), spec.material)
+        || (spec.high ? claim.call(this, desiredType(spec), spec.material, spec.missionSat ? 'mission' : 'high')
           : (pickFar(spec) || pickAny(farOther) || pickAny(fallbackCandidates)));
       if (!chosen) break; // ran out of candidates entirely
       usedIds.add(chosen.id);
@@ -3989,11 +4234,18 @@ export class DebrisField {
 
     let placed = 0;
     let untrackedCount = 0;  // ST-4.C: track how many debris set as untracked
-
+    // u20-debris v2: the "far end" the profile leaves untracked is the far end of the welcome / high rows, never a small-piece group
+    // or a mission satellite (those are 10 cm or bigger: known to radar).
+    const baseRowCount = fieldToSpawn.filter((sp) => !(sp && sp.own)).length;
+    // u20-debris v2: a group piece and the mission satellite run on their OWN seeded stream (`spec.rng`): every Math.random below
+    // (the mass roll, the type pick, salvage) reads it for that piece, so no other piece's draws move. Restored at the end.
+    const outerRandom = Math.random;
+    try {
     for (let i = 0; i < fieldToSpawn.length && placed < fieldToSpawn.length; i++) {
       const spec = fieldToSpawn[i];
       const debris = assigned[i];
       if (!debris) break;
+      Math.random = spec.rng || outerRandom;
 
       // Seat the piece on its cone-fan slot — ALL 7 sit AHEAD of the mother
       // (the WELCOME_FIELD header has the layout and the no-drift argument).
@@ -4023,6 +4275,7 @@ export class DebrisField {
         const fMax = Number.isFinite(spec.fwdMaxM) ? spec.fwdMaxM : fMin;
         debris._welcomeFwdM = fMin + DebrisField.fieldRoll(fieldPlan.seed, rowOf(i)) * (fMax - fMin);
       }
+      if (spec.own) debris._welcomeFwdM = spec.fwdMinM;   // a group piece or satellite sits at its own along-track offset: no roll
       _place.call(this, debris, spec, playerOrbit, _frameComp);
 
       // Adjust mass to spec
@@ -4156,6 +4409,8 @@ export class DebrisField {
       // Score-based candidate matching means debrisList order != spec order, so
       // this lets consumers/tests recover the intended progression position.
       debris._welcomeSpecIndex = rowOf(i);
+      // u20-debris v2: a mission extra (row from EXTRA_ROW0 up) is tagged by kind: the map-off "is one still out" rule reads it
+      if (rowOf(i) >= Constants.SMALL_GROUP.EXTRA_ROW0) debris._extraKind = rowOf(i) === Constants.SMALL_GROUP.SAT_ROW ? 'sat' : 'group';
       if (fieldPlan) {   // slice 2b: which field and which of its rows this piece is (FieldRegistry reads them when it is removed)
         debris.fieldId = fieldPlan.fieldId;
         debris.fieldRow = rowOf(i);
@@ -4233,7 +4488,7 @@ export class DebrisField {
 
       // ST-4.C: Track/untrack based on profile (untracked count from far end)
       const maxUntracked = profile.untracked ?? 0;
-      if (maxUntracked > 0 && untrackedCount < maxUntracked && i >= fieldToSpawn.length - maxUntracked) {
+      if (!spec.own && maxUntracked > 0 && untrackedCount < maxUntracked && i >= baseRowCount - maxUntracked) {
         debris.tracked = false;
         untrackedCount++;
       } else {
@@ -4241,6 +4496,9 @@ export class DebrisField {
       }
 
       placed++;
+    }
+    } finally {
+      Math.random = outerRandom;
     }
 
     if (placed > 0) {

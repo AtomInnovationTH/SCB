@@ -7479,8 +7479,15 @@ export class ArmUnit {
       const ps = this._playerSatellite;
       let held = !!net && net.isActive && (net.state === 'COLLARED' || net.state === 'BERTHED');
       if (held && d._scenePosition && ps && ps.position && ps.quaternion) {
-        _noseC.copy(d._scenePosition).sub(ps.position).applyQuaternion(_noseQ.copy(ps.quaternion).invert()).multiplyScalar(1 / M);
-        held = Math.hypot(_noseC.x, _noseC.y, _noseC.z - this._noseSeatZ) <= N.TUG_HOLD_M;
+        // u20-nose fix 2: the net pinned the catch at the end of last frame, against last frame's ship pose; player.update has moved the ship since
+        // (km a frame at the game clock). Read the catch against the pose it was pinned with (CaptureNet.lastPinFrame; null = the net's hold did not
+        // run in its last update = not held). Limit and seat unchanged: the catch must stay within TUG_HOLD_M of its seat while she backs.
+        const fr = typeof net.lastPinFrame === 'function' ? net.lastPinFrame() : { pos: ps.position, quat: ps.quaternion };
+        if (!fr) held = false;
+        else {
+          _noseC.copy(d._scenePosition).sub(fr.pos).applyQuaternion(_noseQ.copy(fr.quat).invert()).multiplyScalar(1 / M);
+          held = Math.hypot(_noseC.x, _noseC.y, _noseC.z - this._noseSeatZ) <= N.TUG_HOLD_M;
+        }
       }
       if (!held) { this._noseRollback(); this._noseRefused('The nose did not hold the catch'); return; }
       if (arrived) {
@@ -7583,6 +7590,10 @@ export class ArmUnit {
     d._breakdownActive = lb.breakdown;
     if (lb.captured) this.capturedDebris = d;
     n.limbo = null;
+    // u20-nose fix 2: the net's last pin (end of last frame, against last frame's ship pose) is still in `_armPinPos`, and ArmManager pins the rack from it
+    // right after the arms: without this the restored catch sat at that stale spot for the rest of the frame (2.5 km off at the game clock).
+    const ps = this._playerSatellite;
+    if (ps && ps.position) this._pinHeldCatches(ps.position, ps.quaternion || null);
   }
 
   /** @private the nose carry is ending (home, or an abort): a hand-over still in the tug is taken back; a finished one lets the nose's leash try at once. */

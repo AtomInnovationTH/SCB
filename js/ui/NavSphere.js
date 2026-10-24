@@ -701,7 +701,9 @@ export class NavSphere {
         // Scan-first (DECISIONS §15 row 1): no radar dot until a scan reveals it.
         if (!isMarked(t)) continue;
         // Skip untracked debris unless IR Scanner is active or it's the selected target
-        if (t.tracked === false && !canDetect && t.id !== this._selectedTargetId) continue;
+        // u20-debris: a background shard 10 cm or bigger is now `tracked` (known to radar) but is still scenery, never a
+        // contact: it is dotted only where an untracked shard always was (the IR scanner), as before.
+        if ((t.tracked === false || t.hazard === true) && !canDetect && t.id !== this._selectedTargetId) continue;
         if (t.id === this._selectedTargetId) {
           _selectedDebrisTarget = t;  // defer to draw last (on top)
           continue;

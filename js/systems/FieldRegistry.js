@@ -3,8 +3,8 @@
  * (Nets step 3 slice 2b, DECISIONS §33 row 6; plan decisions G, H, K; FEATURE_FLAGS.FIELDS_BY_HEIGHT).
  *
  * `Constants.FIELDS.LIST` names the fields: an id, a height, a seed and a kind. The start field (350 km) is mission 1's welcome
- * field. A `low` field holds `FIELDS.PIECES` pieces, laid out like DebrisField's WELCOME_FIELD rows (row i = the i-th row of that
- * table); a `high` field (750-900 km, slice 4) holds one piece per row of `Constants.HIGH_FIELD` (`fieldRowCount(field)`), laid out
+ * field. The START field holds `FIELDS.PIECES` pieces, laid out like DebrisField's WELCOME_FIELD rows (row i = the i-th row of that
+ * table); every other `low` field holds one small-piece group (`Constants.smallGroupCount(seed)` rows: `fieldLayout`, u20-debris v2); a `high` field (750-900 km, slice 4) holds one piece per row of `Constants.HIGH_FIELD` (`fieldRowCount(field)`), laid out
  * by the same spawn path from parked heavy spares. The registry keeps, per field, the ROWS nobody has caught yet. A caught
  * piece stays gone: a row leaves its field
  * at the credit (`markCaught(piece)`, called by GameFlowManager's CATCH_PROCESSED handler: a catch kept aboard, mated at the
@@ -67,13 +67,44 @@ function cachedTripProfile(args) {
 const SAVE_VERSION = 1;
 
 /**
- * How many rows (pieces) a field holds: the HIGH_FIELD table's for a `high` field, `FIELDS.PIECES` (the WELCOME_FIELD rows) for
- * any other. Read at use time, never cached: there is no global row count.
- * @param {{kind?: string}|null} field a `FIELDS.LIST` entry
+ * How a field is laid out (u20-debris v2): 'high' (the HIGH_FIELD rows), 'welcome' (the start field: WELCOME_FIELD's seven rows) or
+ * 'group' (a low field that is not the start field: one small-piece group, DECISIONS §38 row 4; the count is
+ * `Constants.smallGroupCount(field.seed)`, a pure function of the field's seed, so the registry never imports DebrisField).
+ * DebrisField resolves a row's spec by this layout (`DebrisField.fieldRowSpec`).
+ * @param {{kind?: string, start?: boolean}|null} field a `FIELDS.LIST` entry
+ * @returns {'high'|'welcome'|'group'}
+ */
+export function fieldLayout(field) {
+  if (field && field.kind === 'high') return 'high';
+  return field && !field.start ? 'group' : 'welcome';
+}
+
+/**
+ * How many BASE rows (pieces) a field holds, its own table's: the HIGH_FIELD table's for a `high` field, the group's count for a
+ * 'group' field, `FIELDS.PIECES` (the WELCOME_FIELD rows) otherwise. The mission extras (a group or a satellite a mission from 4 on
+ * adds, rows `SMALL_GROUP.EXTRA_ROW0` and up) are NOT counted here: they live in the field's saved rows, beyond its table.
+ * Read at use time, never cached: there is no global row count.
+ * @param {{kind?: string, start?: boolean, seed?: number}|null} field a `FIELDS.LIST` entry
  * @returns {number}
  */
 export function fieldRowCount(field) {
-  return field && field.kind === 'high' ? Constants.HIGH_FIELD.length : Constants.FIELDS.PIECES;
+  const layout = fieldLayout(field);
+  if (layout === 'high') return Constants.HIGH_FIELD.length;
+  if (layout === 'group') return Constants.smallGroupCount(field.seed, 0);
+  return Constants.FIELDS.PIECES;
+}
+
+/** @param {number} row @returns {boolean} a mission extra row (the extra group's pieces or the extra satellite), valid on any field. */
+export function isExtraRow(row) {
+  const G = Constants.SMALL_GROUP;
+  return Number.isInteger(row) && ((row >= G.EXTRA_ROW0 && row < G.EXTRA_ROW0 + G.COUNT_MAX) || row === G.SAT_ROW);
+}
+
+/** @returns {boolean} a row that is a piece of a small-piece group on this field (its own group, or the extra one). */
+function isGroupRow(field, row) {
+  const G = Constants.SMALL_GROUP;
+  if (row >= G.EXTRA_ROW0 && row < G.EXTRA_ROW0 + G.COUNT_MAX) return true;
+  return fieldLayout(field) === 'group' && row >= 0 && row < fieldRowCount(field);
 }
 
 function allRows(field) {
@@ -181,8 +212,9 @@ export class FieldRegistry {
    * The field to put in front of her: which rows exist, which seed lays out the free rows. Null with the flag off (the
    * caller then spawns today's welcome field). `missionNumber` is set once after a load (no MISSION_START fires then) and
    * consumed by the first spawn.
-   * `kind` ('low' | 'high') says which table the rows index: WELCOME_FIELD or HIGH_FIELD (a field with no kind is low).
-   * @returns {{fieldId: string, altKm: number, rows: number[], seed: number, kind: string, missionNumber: (number|null)}|null}
+   * `kind` ('low' | 'high') says which table the rows index: WELCOME_FIELD or HIGH_FIELD (a field with no kind is low); `layout`
+   * ('welcome' | 'high' | 'group', u20-debris v2) says it exactly: a row of `SMALL_GROUP.EXTRA_ROW0` or more is a mission extra.
+   * @returns {{fieldId: string, altKm: number, rows: number[], seed: number, kind: string, layout: string, missionNumber: (number|null)}|null}
    */
   spawnPlan() {
     if (!this.isOn()) return null;
@@ -193,7 +225,7 @@ export class FieldRegistry {
     const sat = this.berthedSatellite();
     const plan = {
       fieldId: f.id, altKm: sat ? sat.altKm : f.altKm, rows: this.atSatellite() ? [] : this.remainingRows(f.id), seed: f.seed,
-      kind: f.kind === 'high' ? 'high' : 'low', missionNumber: this._pendingMission,
+      kind: f.kind === 'high' ? 'high' : 'low', layout: fieldLayout(f), missionNumber: this._pendingMission,
     };
     this._pendingMission = null;
     return plan;
@@ -353,7 +385,7 @@ export class FieldRegistry {
           if (!Array.isArray(rem[f.id])) continue;
           const seen = new Set();
           const rowCount = fieldRowCount(f);      // this field's own table (a high field's is not the low field's)
-          for (const r of rem[f.id]) if (Number.isInteger(r) && r >= 0 && r < rowCount) seen.add(r);
+          for (const r of rem[f.id]) if (Number.isInteger(r) && ((r >= 0 && r < rowCount) || isExtraRow(r))) seen.add(r);
           this._state.remaining[f.id] = [...seen].sort((a, b) => a - b);
         }
       }
@@ -404,6 +436,29 @@ export class FieldRegistry {
     const n = d && d.missionNumber;
     if (Number.isInteger(n) && n > 0) this._state.at = n;
     this._resume = false;
+    if (Number.isInteger(n) && n >= Constants.SMALL_GROUP.FROM_MISSION && this.isOn() && !this.isBerthed()) this._addMissionExtras(this.currentField());
+  }
+
+  /**
+   * u20-debris v2 (DECISIONS §38 rows 3 and 4): a mission from SMALL_GROUP.FROM_MISSION on adds, to the field it starts at, a
+   * small-piece group unless the field already holds an uncaught one (a low non-start field's own group counts) and a dead satellite
+   * unless it holds an uncaught one. The rows are appended to the field's saved rows (so they survive a trip away, a save and a
+   * load) and laid out by the next spawn. Never while berthed, never with the flag off, never before the mission it starts at.
+   * @private
+   */
+  _addMissionExtras(f) {
+    const G = Constants.SMALL_GROUP;
+    const rows = this._state.remaining[f.id] || (this._state.remaining[f.id] = []);
+    if (!rows.some((r) => isGroupRow(f, r))) {
+      for (let i = 0, n = Constants.smallGroupCount(f.seed, 1); i < n; i++) rows.push(G.EXTRA_ROW0 + i);
+    }
+    if (!rows.includes(G.SAT_ROW)) {
+      // F3: a satellite row exists only when a body stands behind it (a mock debris field without the question has no pool to run dry)
+      const free = !this._debris || typeof this._debris.hasFreeMissionBody !== 'function' || this._debris.hasFreeMissionBody();
+      if (free) rows.push(G.SAT_ROW);
+      else console.warn(`[FieldRegistry] no mission-satellite body is free: ${f.id} gets no satellite this mission`);
+    }
+    rows.sort((a, b) => a - b);
   }
 
   /**

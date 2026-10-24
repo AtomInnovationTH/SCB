@@ -2946,7 +2946,28 @@ export class NetProjectile {
     d._motherParked = true;
     d._catchRenderMin = this._catchFloorScale(d, dt);   // item 15: ramp continues; never restarts at berth
     debrisField.pinCapturedDebris(d, _v3d);
+    if (this._noseAdopted) {
+      // u20-nose fix 2: the ship pose this pin was made against. The pin is written at the END of a frame (captureNetSystem.update runs after
+      // armManager.update, js/main.js ~:7302 / ~:7323) and the daughter's tug check reads it at the START of the next, after player.update has
+      // moved the ship (about 2.6 km a frame at the game clock): read against the live pose the catch was always "2.6 km off its seat".
+      (this._holdShipPos ||= new THREE.Vector3()).copy(player.position);
+      (this._holdShipQuat ||= new THREE.Quaternion()).copy(player.quaternion);
+      this._holdSeq = this._ctx?.captureNetSystem?._frameSeq ?? 0;
+    }
     return true;
+  }
+
+  /**
+   * u20-nose fix 2: the ship pose (position, attitude) the catch's last pin was made against, for a daughter's tug check to read
+   * `target._scenePosition` in the frame it was pinned in. null when this net did not pin in the system's latest update (its hold
+   * stopped running): the check then counts the hand-over as not held, as it would for a catch that is left behind.
+   * @returns {{pos:THREE.Vector3, quat:THREE.Quaternion}|null}
+   */
+  lastPinFrame() {
+    if (!this._holdShipPos || !this._holdShipQuat) return null;
+    const sys = this._ctx?.captureNetSystem;
+    if (sys && this._holdSeq !== sys._frameSeq) return null;
+    return { pos: this._holdShipPos, quat: this._holdShipQuat };
   }
 
   /**
@@ -3522,6 +3543,9 @@ export class CaptureNetSystem {
     /** @type {Map<string, number>} Cooldown timers keyed by 'pod_0', 'arm_3', etc. */
     this._cooldownTimers = new Map();
 
+    /** u20-nose fix 2: counts `update()` calls; an adopted net stamps it when it pins the catch (`lastPinFrame`). */
+    this._frameSeq = 0;
+
     this._initialized = false;
 
     // First-fragmentation mercy rule (§5.7)
@@ -3613,6 +3637,7 @@ export class CaptureNetSystem {
    */
   update(dt) {
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return;
+    this._frameSeq++;
 
     // Tick cooldowns
     for (const [key, remaining] of this._cooldownTimers.entries()) {

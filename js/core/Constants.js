@@ -5640,6 +5640,59 @@ export const Constants = {
   HEAVY_SPARES: {
     PARK_SIZE_M: 0.5,
     SEED_XOR: 0x4EA77A5E,
+    // u20-debris v2: more parked defunctSat bodies for the MISSION satellites (MISSION_SAT below), appended after the 28 so the high
+    // fields' spares keep their ids and draws. A mission satellite claims from THIS pool only and a high field never takes one, so
+    // neither can starve the other; a body whose piece has been cleared (removed from the sky) is parked again and claimable by the
+    // next mission satellite (DebrisField._claimHeavySpare, pool 'mission'). The pool holds `Constants.missionPoolMaterials()` bodies:
+    // one per field (the "absent" rule lets each field hold one uncaught mission satellite, so that many can be out at once) plus
+    // MISSION_POOL_EXTRA for satellites caught and still on their way to credit (fix round 1, F3: the owner's "one dead satellite
+    // every mission" must not run dry). Materials cycle through MISSION_POOL_CYCLE (the two the cast's satellites use).
+    MISSION_POOL_CYCLE: ['mli_mylar', 'aluminum'],
+    MISSION_POOL_EXTRA: 2,
+  },
+
+  // =========================================================================
+  // SMALL_GROUP and MISSION_SAT - the small-piece group and the dead satellite of every mission from mission 4 on (lane u20-debris
+  // v2, owner 2026-10-23/24, DECISIONS §38 rows 3 and 4; DebrisField.groupSpec / missionSatSpec / _spawnWelcomeField,
+  // FieldRegistry; docs/research/2026-10-debris-sizes.md). Missions 1-3 are untouched (mission 1 is the training mission).
+  // =========================================================================
+  // A group is COUNT_MIN..COUNT_MAX pieces (the field's seed rolls the count) of SIZE_MIN_M..SIZE_MAX_M, every one inside a
+  // flat disc of SPREAD_R_M radius (so any two are at most 2 x SPREAD_R_M = 2.8 m apart, under the 3 m a large daughter's net
+  // scoops: BALL_M), laid out in her frame (along-track and cross-track offsets, the same radial height) so the cloud neither
+  // drifts nor breathes past BALL_M: the pieces share her semi-major axis and the welcome field's drag rule. All numbers
+  // are ESTIMATES to tune. Each piece and the satellite draw from their OWN seeded stream (field seed ^ SEED_XOR, the variant
+  // and the row mixed in), never the global Math.random, so no other piece moves.
+  // `variant` 0 is a low field's OWN group (f375-f450, its content in place of the welcome rows: nearer, OWN_*); variant 1 is
+  // the group a mission adds to f350 or a high field (EXTRA_*: in the gap of both tables, 60-90 m from every other row).
+  // Rows beyond a field's own table: EXTRA_ROW0 + i is the i-th piece of the extra group, SAT_ROW the extra satellite.
+  SMALL_GROUP: {
+    FROM_MISSION: 4,
+    COUNT_MIN: 8,
+    COUNT_MAX: 12,
+    SIZE_MIN_M: 0.10,
+    SIZE_MAX_M: 0.30,
+    BALL_M: 3,
+    SPREAD_R_M: 1.4,
+    TUMBLE_MIN_DEG_S: 3,
+    TUMBLE_MAX_DEG_S: 12,
+    SEED_XOR: 0x6B0A57E1,
+    OWN_FWD_MIN_M: 150, OWN_FWD_MAX_M: 260, OWN_LAT_M: 25,            // a low field's own group: centre ahead, lateral +-OWN_LAT_M/2
+    EXTRA_FWD_MIN_M: 330, EXTRA_FWD_MAX_M: 370, EXTRA_LAT_MIN_M: 15, EXTRA_LAT_MAX_M: 25,
+    EXTRA_ROW0: 200,
+    SAT_ROW: 300,
+  },
+  // The mission satellite: a dead satellite of the cast's own type (FOREGROUND_CAST: 120 kg / 2.2 m and 480 kg / 4.5 m), ONE roll
+  // picks mass and size so a heavier one is a bigger one, put FWD_AFTER_GROUP_M beyond the group's centre and LAT_BESIDE_M to
+  // the other side of her track (about 70 m from the group). A job for the mother's big net: 50-500 kg is over the 10 kg
+  // net-only ceiling of mission 1 and at or under a daughter's 500 kg net cap.
+  MISSION_SAT: {
+    FROM_MISSION: 4,
+    SIZE_MIN_M: 1.0, SIZE_MAX_M: 4.5,
+    MASS_MIN_KG: 50, MASS_MAX_KG: 500,
+    TUMBLE_MIN_DEG_S: 2, TUMBLE_MAX_DEG_S: 8,
+    MATERIALS: ['mli_mylar', 'aluminum'],
+    FWD_AFTER_GROUP_MIN_M: 45, FWD_AFTER_GROUP_MAX_M: 65, LAT_BESIDE_M: 45,
+    SEED_XOR: 0x5A7E111E,
   },
 
   // =========================================================================
@@ -5648,11 +5701,15 @@ export const Constants = {
   // =========================================================================
   // The start field (350 km, mission 1) is today's welcome field, unchanged. The four small fields above it follow row 6:
   // "small pieces at 350-450 km" in the SAME tilt and node as the start orbit (tilting costs 134 m/s per degree, research doc).
-  // Each holds PIECES pieces laid out like DebrisField's WELCOME_FIELD rows (3-10 kg fragments and a cubesat, the rows' own
+  // The START field holds PIECES pieces laid out like DebrisField's WELCOME_FIELD rows (3-10 kg fragments and a cubesat, the rows' own
   // masses); `seed` fixes the along-track rolls of the free rows, so the same field always looks the same.
+  // u20-debris v2 (DECISIONS §38 row 4): each of the four other low fields holds ONE small-piece group (SMALL_GROUP: 8-12 pieces of
+  // 0.10-0.30 m inside 3 m; the count is `smallGroupCount(seed)`) in place of the welcome rows, from its own seeded stream; and from
+  // mission 4 on the mission adds to the field it starts at the extras SMALL_GROUP / MISSION_SAT describe (rows 200+ and 300).
   // Slice 4 (lane 4a): every field has a `kind`. `low` = the WELCOME_FIELD rows above (PIECES of them); `high` = the HIGH_FIELD rows
   // (one piece per row: HIGH_FIELD.length). A field with no `kind` is `low`. Four high fields at 750-900 km (row 6: "dead
-  // satellites and rocket stages at 750-900 km"): 35 low + 28 high = 63 pieces, and a run is won at 60 (WIN_DEBRIS_COUNT).
+  // satellites and rocket stages at 750-900 km"): 7 start + the four low groups (8-12 each: 8 to 12 x 4 = 32-48; 40 for the seeds as listed)
+  // + 28 high = about 75 pieces (before the mission extras), and a run is won at 60 (WIN_DEBRIS_COUNT).
   // Heights, counts and seeds are ESTIMATES to tune (§33: "counts and prices are estimates to tune").
   FIELDS: {
     PIECES: 7,
@@ -6006,10 +6063,24 @@ export const Constants = {
     // that is what makes the cloud furniture and a collision hazard, not a
     // target list. The mass LAW for interactive debris shipped in S11(c)
     // (MASS_LAW below; register item 39 CLOSED).
+    //
+    // u20-debris (owner 2026-10-23, DECISIONS §38 row 1: "the background cloud becomes mostly 2–10 cm pieces, as in real space;
+    // only pieces over 10 cm count as known to radar. Nothing new to catch, the sky looks the same"): from mission
+    // LATER_FROM_MISSION the shards span SIZE_MIN_M–SIZE_MAX_M (2–50 cm) and a shard is `tracked` iff it is TRACKED_MIN_M or
+    // bigger (ESA/NASA: radar follows pieces from about 10 cm; research doc 2026-10-debris-sizes §2). Mission 1 is left alone
+    // (§38 rows 1 and 4): its cloud keeps the old 0.10–0.50 m edge (FIRST_SIZE_MIN_M), all untracked, and so does the sky's
+    // dot cloud (DOT_SIZE_MIN_M: the dots' look is unchanged). Both laws read the SAME seeded draw, so the stream never moves.
+    // MASS_MIN_KG: the mass floor of a background shard (fragment massMin 0.01 kg is shared with the mission targets and
+    // stays); a 2 cm shard follows the mass law, about 0.002 kg.
     HAZARD_CLOUD: {
       LAMBDA: 1.71,          // SBM collision exponent (explosion: 1.6 — the band is [1.6, 1.71])
-      SIZE_MIN_M: 0.1,       // m — lower edge of the shard cloud
+      SIZE_MIN_M: 0.02,      // m — lower edge of the shard cloud from mission LATER_FROM_MISSION (real: mostly 2–10 cm)
       SIZE_MAX_M: 0.5,       // m — upper edge (sub-half-metre ⇒ uncapturable-class)
+      FIRST_SIZE_MIN_M: 0.1, // m — lower edge in mission 1 (unchanged: DECISIONS §38 rows 1 and 4)
+      DOT_SIZE_MIN_M: 0.1,   // m — the 5000 sky dots' size mapping keeps today's edge (the sky looks the same)
+      LATER_FROM_MISSION: 2, // the shard law above applies from this mission on
+      TRACKED_MIN_M: 0.1,    // m — a shard of this size or bigger is tracked (known to radar); smaller is not
+      MASS_MIN_KG: 0.0001,   // kg — floor of a background shard's mass from mission LATER_FROM_MISSION (the law gives ≈0.002 kg at 2 cm)
     },
     // S11(c) — THE MASS LAW (plan 1786401864178-cargo-continuity §5 S11 piece
     // (c); register item 39). NASA Standard Breakup Model (Johnson et al. 2001,
@@ -6906,6 +6977,25 @@ export const Constants = {
   // ============================================================================
   // EPIC 9 FEATURE HELPERS
   // ============================================================================
+
+  /** u20-debris v2 (fix round 1, F3): the material of each parked mission-satellite body: FIELDS.LIST.length + MISSION_POOL_EXTRA of them. */
+  missionPoolMaterials() {
+    const hs = this.HEAVY_SPARES;
+    const n = ((this.FIELDS && this.FIELDS.LIST) ? this.FIELDS.LIST.length : 0) + (hs.MISSION_POOL_EXTRA | 0);
+    return Array.from({ length: n }, (_, i) => hs.MISSION_POOL_CYCLE[i % hs.MISSION_POOL_CYCLE.length]);
+  },
+
+  smallGroupCount(seed, variant = 0) {
+    // u20-debris v2: how many pieces a field's small-piece group holds (SMALL_GROUP.COUNT_MIN..COUNT_MAX), a pure function of the
+    // field's seed and the variant (0 = a low field's own group, 1 = the group a mission adds). Lives here, not in DebrisField,
+    // so FieldRegistry can read it without importing a file that pulls in three.
+    const G = this.SMALL_GROUP;
+    let h = (Math.imul((seed | 0) ^ G.SEED_XOR, 0x9E3779B1) + Math.imul((variant | 0) + 1, 0x85EBCA6B)) >>> 0;
+    h = Math.imul(h ^ (h >>> 15), 0x2C1B3C6D) >>> 0;
+    h = Math.imul(h ^ (h >>> 12), 0x297A2D39) >>> 0;
+    h = (h ^ (h >>> 15)) >>> 0;
+    return G.COUNT_MIN + Math.floor((h / 4294967296) * (G.COUNT_MAX - G.COUNT_MIN + 1));
+  },
 
   /**
    * Returns true if a feature flag is enabled.
