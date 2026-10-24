@@ -462,7 +462,7 @@ export class PlayerSatellite extends THREE.Group {
     this._ionThrustPowerRate = 5.0;
     // The frame the 0.3 m/s per-tick proxy was written for; a continuous burn is billed per second against it.
     this._ionBillTickS = 1 / 60;
-    this._coldGasRate = 0.5;
+    this._coldGasRate = Constants.ATTITUDE.COLD_GAS_BASE_RATE;
     this._basePowerDraw = 0.5;
     this._ionDeltaV = 0.0003;
 

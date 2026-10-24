@@ -1027,10 +1027,8 @@ export const Constants = {
     RECENTER_GAIN: 1.0,         // 1/s — ω_target = clamp(GAIN·θ, RECENTER_RATE)
     HOLD_DEADBAND_RAD: 0.035,   // ~2°, no recenter inside this
     INERTIA_MAX_FACTOR: 3.0,    // D6 berthed-mass clamp: total ≤ 3× stowed transverse
-    RCS_ATTITUDE_N2_FACTOR: 1.6, // D9: gas is billed as rate × time. MEASURED 2026-10-17 (20 kg N2):
-                                // a 60° arrow-key turn (spin-up + arrest) costs 1.13 kg = 5.7% of the
-                                // tank (DECISIONS "roughly 6%"); the old "~2.5%/turn" comment was stale.
-                                // An aim bills torque × time (mother-aims): ~1.9% for a 60° turn.
+    COLD_GAS_BASE_RATE: 0.5,    // tank units per second of one full couple (PlayerSatellite `_coldGasRate`, before the shop's efficiency upgrade)
+    RCS_ATTITUDE_N2_FACTOR: 1.0, // the REAL steering-gas price since 2026-10-24 (owner): assigned from NOZZLE_THRUST_N, Isp, G0 right after this literal
   },
 
   // ── Sloth mode (owner 2026-10-23, DECISIONS §37): with the steering gas out, the four tail ion boxes turn her slowly ──
@@ -7059,6 +7057,15 @@ export const Constants = {
     COLOR_LABEL:          '#c9d1d9',
   },
 };
+
+// Steering-gas price: REAL since 2026-10-24 (owner "2 A", DECISIONS §1, §37 row 11). The factor multiplies the base rate
+// (COLD_GAS_BASE_RATE units/s) into the bill, so it is derived, never typed: one couple (two nozzles) burns
+// 2 x NOZZLE_THRUST_N / (HOLD_ISP_S x G0) kg/s, and a tank unit is OCTOPUS_CORE_COLD_GAS / COLD_GAS_MAX kg (0.3).
+// 0.136 kg/s over 0.3 kg x 0.5 units/s = 0.906. It was 1.6 until then (an old rule, to make the wheels worth buying;
+// MEASURED 2026-10-17: a 60 degree arrow turn cost 5.7% of the tank).
+Constants.ATTITUDE.RCS_ATTITUDE_N2_FACTOR =
+  (2 * Constants.ATTITUDE.NOZZLE_THRUST_N / (Constants.REEL_PUSH.HOLD_ISP_S * Constants.G0)) /
+  ((Constants.OCTOPUS_CORE_COLD_GAS / Constants.COLD_GAS_MAX) * Constants.ATTITUDE.COLD_GAS_BASE_RATE);
 
 // ============================================================================
 // ST-6.6: TRL PURE HELPERS — exported for UI and tests.
