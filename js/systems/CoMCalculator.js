@@ -366,7 +366,8 @@ export function motherNetBooking(playerSatellite) {
  *
  * @param {object} armManager — ArmManager instance with .arms[], ._dockPositions[]
  * @param {object} [playerSatellite] — radiatorBookings(), tipCargo, _captureNetSystem (all guarded: mocks may lack them)
- * @param {{ radiators?: boolean }} [opts] — `radiators: false` leaves the petals out (the stow suggestion's direction)
+ * @param {{ radiators?: boolean, excludeArm?: object }} [opts] — `radiators: false` leaves the petals out (the stow suggestion's
+ *   direction); `excludeArm`: leaves that ONE daughter (and her cargo) out, her strut stays (the launch kick: she is leaving)
  * @returns {{ position: {x:number,y:number,z:number}, totalMass: number,
  *             breakdown: { core: number, struts: number[], arms: number[], motherNets: number, radiators: number } }}
  */
@@ -405,14 +406,17 @@ export function computeCoM(armManager, playerSatellite, opts) {
 
     // Daughter mass: structure at the tip, held cargo at its pinned slot
     // (S13(b), register item 58 — the honest lever, ONE computation with the pin).
+    // `opts.excludeArm` (launch-kick): this daughter is leaving: her strut stays, she and what she carries do not.
     let dMass = 0;
-    _forEachArmMassPoint(arm, dp, alpha, playerSatellite, (m, p) => {
-      cx += m * p.x;
-      cy += m * p.y;
-      cz += m * p.z;
-      totalMass += m;
-      dMass += m;
-    });
+    if (!opts || opts.excludeArm !== arm) {
+      _forEachArmMassPoint(arm, dp, alpha, playerSatellite, (m, p) => {
+        cx += m * p.x;
+        cy += m * p.y;
+        cz += m * p.z;
+        totalMass += m;
+        dMass += m;
+      });
+    }
 
     armMasses.push(dMass);
   }

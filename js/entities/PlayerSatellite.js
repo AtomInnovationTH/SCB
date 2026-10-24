@@ -4267,7 +4267,7 @@ export class PlayerSatellite extends THREE.Group {
    * battery's bill: |taken| / TORQUE_NM seconds of full output on that axis (like any wheel turn), and only as much is taken as the
    * battery can pay for (`wheelPeek`, F3.3: on a nearly flat battery a share, the rest is gas). Nothing is taken without the kit or
    * without power (`wheelsUsable`: then the whole turn is gas, as without the kit).
-   * (A daughter launch's push, WD3b, is not built; when it is, it calls `applyImpulseAtPoint` and comes through here.)
+   * (A daughter launch's push, WD3b, comes through here too: `_applyLaunchKickTurn`.)
    * @param {number} lx N·m·s about +X @param {number} ly N·m·s about +Y
    * @returns {{x:number,y:number}|null} what is left for the gas; null: the wheels took nothing (no kit, no power)
    */
@@ -8582,7 +8582,9 @@ export class PlayerSatellite extends THREE.Group {
    *
    * @param {THREE.Vector3} impulseWorldNs true N·s, world frame
    * @param {THREE.Vector3} pointWorld scene units, where the push acts on the hull
-   * @param {{ flush?: boolean, source?: object }} [opts] `source`: whose gathering this is (the ArmUnit); none = a shared one
+   * @param {{ flush?: boolean, source?: object, angularOnly?: boolean, excludeArm?: object }} [opts] `source`: whose gathering this is
+   *   (the ArmUnit); none = a shared one. `angularOnly` (launch-kick): the turn only, no linear Δv (the caller has its own linear
+   *   handling). `excludeArm`: the centre of mass is taken without that daughter (she is leaving: `computeCoM`'s `excludeArm`)
    * @returns {boolean|null} true: the Δv went into her orbit (or was gathered); false: `applyCartesianImpulse` refused it
    *   (the altitude envelope); null: nothing to do (disabled, zero or invalid push)
    */
@@ -8602,7 +8604,7 @@ export class PlayerSatellite extends THREE.Group {
     r.copy(pointWorld).sub(this.position).applyQuaternion(qInv).multiplyScalar(1 / M);   // metres, body frame
     const am = this.armManager;
     if (am && am.arms) {
-      const com = computeCoM(am, this).position;
+      const com = computeCoM(am, this, opts.excludeArm ? { excludeArm: opts.excludeArm } : undefined).position;
       r.x -= com.x; r.y -= com.y; r.z -= com.z;
     }
     let lx = r.y * jLoc.z - r.z * jLoc.y;                                                // N·m·s
@@ -8624,6 +8626,8 @@ export class PlayerSatellite extends THREE.Group {
         }
       }
     }
+
+    if (opts.angularOnly === true) return true;                                          // launch-kick: the linear part is the caller's
 
     // ── LINEAR: gather (per source), then one clean orbit impulse ──
     const acc = this._reelPushAcc(src, true);
@@ -8921,6 +8925,7 @@ export class PlayerSatellite extends THREE.Group {
    * @private
    */
   _applyCrossbowRecoil(data) {
+    if (!data) return;                               // a bare event (tests, old emitters) has nothing to recoil from
     const { armMass, speed } = data;
     const motherMass = this.mass || 130; // kg
     const recoilSpeed = (armMass * speed) / motherMass;
@@ -8943,11 +8948,36 @@ export class PlayerSatellite extends THREE.Group {
     this._frameRecoilDv += recoilDv;
     this._frameRecoilCount++;
 
+    // launch-kick (owner 10-24 "1 a", DECISIONS §37 row 9): the push also TURNS her. The daughter leaves with J = m x v along the
+    // launch direction; the mother takes -J at the strut tip, so L = r x (-J) about her centre of mass WITHOUT the departing
+    // daughter. Full physical size (the 0.1 scale above is the linear nudge's convenience only), through the reel push's angular
+    // path: the wheels take it first, the rest is gas at the real price. The linear part stays the line above. A payload without
+    // `launchPosition` (an old emitter, a bare event) skips the turn.
+    this._applyLaunchKickTurn(data);
+
     // Auto-compensate with RCS if enabled (single-arm fire).
     // For dual-fire, individual compensations still apply but the net
     // velocity change is zero (backward + forward cancel). The N₂ cost
     // is refunded when DUAL_FIRE_RECOIL arrives with cancelled=true.
     this._autoRcsCompensation(recoilDv);
+  }
+
+  /**
+   * launch-kick: the turn a daughter's launch gives the mother (see the call in `_applyCrossbowRecoil`). Angular only: no second
+   * linear push. True N·s (mass x true m/s), world frame, at the strut tip the daughter lets go from.
+   * @param {{ armIndex?: number, speed?: number, armMass?: number, launchMassKg?: number, launchDirection?: THREE.Vector3,
+   *   launchPosition?: THREE.Vector3 }} data the CROSSBOW_FIRE payload
+   * @private
+   */
+  _applyLaunchKickTurn(data) {
+    const dir = data && data.launchDirection, at = data && data.launchPosition;
+    if (!dir || !at || !(data.speed > 0)) return;
+    const m = data.launchMassKg > 0 ? data.launchMassKg : data.armMass;
+    if (!(m > 0)) return;
+    const J = (this._vLaunchKickJ || (this._vLaunchKickJ = new THREE.Vector3())).copy(dir).multiplyScalar(-m * data.speed);   // on the MOTHER
+    const arms = this.armManager && this.armManager.arms;
+    const arm = arms && Number.isInteger(data.armIndex) ? arms[data.armIndex] : undefined;
+    this.applyImpulseAtPoint(J, at, { angularOnly: true, excludeArm: arm, source: this });
   }
 
   /**

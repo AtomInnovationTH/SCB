@@ -706,7 +706,7 @@ export const Events = {
   // ── V5 Crossbow Events ──
 
   // --- Crossbow Lifecycle ---
-  CROSSBOW_FIRE:            'crossbow:fire',             // { armIndex, speed, springTier, armMass, launchDirection }
+  CROSSBOW_FIRE:            'crossbow:fire',             // { armIndex, speed, springTier, armMass, launchDirection, launchPosition, launchMassKg }
   CROSSBOW_RELOAD_START:    'crossbow:reloadStart',      // { armIndex, duration }
   CROSSBOW_RELOAD_COMPLETE: 'crossbow:reloadComplete',   // { armIndex }
 

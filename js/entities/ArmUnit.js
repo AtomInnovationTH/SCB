@@ -3643,6 +3643,11 @@ export class ArmUnit {
       springTier: this.springTier,
       armMass: armMass,
       launchDirection: this.velocity.clone().normalize(),
+      // launch-kick (owner 10-24 "1 a"): where she lets go (world, scene units: her strut tip) and what leaves with her (dry mass
+      // plus any cargo she carries); the mother's turn from the push is r x J about her centre of mass (`_applyCrossbowRecoil`).
+      launchPosition: this.position.clone(),
+      launchMassKg: armMass + ((this.capturedDebris && this.capturedDebris.mass) || 0)
+        + (Array.isArray(this.heldCatches) ? this.heldCatches.reduce((a, h) => a + ((h && h.mass) || 0), 0) : 0),
     });
 
     // Calculate reload duration based on energy stored
