@@ -102,13 +102,40 @@ export function noseBucketFor(buckets, reachM) {
 }
 
 /**
- * Are the radiators (shared angle, degrees) where the bucket was certified: closed (`closedDeg`) or open (`openDeg`)?
- * A hair of tolerance (0.01 deg) for the ship's own float noise; nothing more: the window is as measured.
- * @param {{closedDeg:number[], openDeg:number[]}} bucket
+ * Are the radiators (shared angle, degrees) where the bucket was certified, with the biggest bag now on a tip (`bagReachM`, 0: none)?
+ * `bucket.windowsDeg` is a list of `[loDeg, hiDeg, bagMaxM]`: the radiators may stand in [lo, hi] when no bag on any tip is bigger than
+ * `bagMaxM` (reach, m; omitted = 0 = no bag on a tip). A window is the span between two angles the rows were run at (at most 2 deg
+ * apart), run with a bag of radius `bagMaxM` on every tip. A hair of tolerance (0.01 deg) for the ship's own float noise; nothing
+ * more: the window is as measured. A bucket without `windowsDeg` (the shape before u22-nose-tipbags: `closedDeg` / `openDeg`) is
+ * offered nowhere.
+ * @param {{windowsDeg:number[][]}} bucket
  * @param {number} deg
+ * @param {number} [bagReachM]
  * @returns {boolean}
  */
-export function noseRadiatorsOk(bucket, deg) {
-  const inside = (r) => Array.isArray(r) && deg >= r[0] - 0.01 && deg <= r[1] + 0.01;
-  return !!bucket && (inside(bucket.closedDeg) || inside(bucket.openDeg));
+export function noseRadiatorsOk(bucket, deg, bagReachM = 0) {
+  const w = bucket && bucket.windowsDeg;
+  if (!Array.isArray(w)) return false;
+  return w.some((x) => Array.isArray(x) && deg >= x[0] - 0.01 && deg <= x[1] + 0.01 && bagReachM <= (x[2] ?? 0) + 1e-9);
+}
+
+/**
+ * The spans of radiator angle the bucket is offered at, for the bag now on a tip, touching spans joined: `[[lo, hi], ...]` sorted by
+ * angle. For the refusal's words only.
+ * @param {{windowsDeg:number[][]}} bucket
+ * @param {number} [bagReachM]
+ * @returns {number[][]}
+ */
+export function noseWindowSpans(bucket, bagReachM = 0) {
+  const w = (bucket && Array.isArray(bucket.windowsDeg) ? bucket.windowsDeg : [])
+    .filter((x) => Array.isArray(x) && bagReachM <= (x[2] ?? 0) + 1e-9)
+    .map((x) => [x[0], x[1]])
+    .sort((a, b) => a[0] - b[0]);
+  const out = [];
+  for (const x of w) {
+    const last = out[out.length - 1];
+    if (last && x[0] <= last[1] + 1e-9) last[1] = Math.max(last[1], x[1]);
+    else out.push([x[0], x[1]]);
+  }
+  return out;
 }

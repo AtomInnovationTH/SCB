@@ -1657,15 +1657,20 @@ export const Constants = {
       NEIGHBOUR_CATCH_MAX_REACH_M: 0.75,
       // Certified reach buckets (probe `--bucket R`): the route is flown for a VIRTUAL catch of the bucket's top reach (NoseRoute.js), a
       // smaller real catch goes on to its own seat (the "extension", <= 0.4 m). A catch with reach in (loM, topM] is offered the route when
-      // the radiators stand in the bucket's window: closed (`closedDeg`, both ends measured) or open (`openDeg`).
-      // Fix round 1 (coordinator 2026-10-23): a window is offered only where it was run. The three smaller buckets were run at 0, 1 and 146
-      // (and 134, now not offered): closed, or fully open 146 deg +-0.5. The 0.75 bucket was run at 138, 140, 142, 144, 145, 146: 138..146.
-      // Reaches at or below the first loM, above the last topM, or in no bucket refuse in plain words.
+      // the radiators stand in one of the bucket's windows: `windowsDeg` = [[loDeg, hiDeg, bagMaxM], ...], read by `noseRadiatorsOk`: the
+      // shared angle in [lo, hi] AND no bag on any tip bigger than bagMaxM (reach, m; 0 = none on a tip). A window is the span between two
+      // angles the rows were run at (<= 2 deg apart), with a bag of radius bagMaxM on all four tips where bagMaxM > 0.
+      // Fix round 1 (coordinator 2026-10-23): a window is offered only where it was run. u22-nose-tipbags (2026-10-24): a bag on a tip caps
+      // the radiators (TipCargo.TIP_BAND) and nothing moves them back, so the windows must cover the angles the cap holds them at; the rows
+      // are in docs/research/2026-10-nose-tipbags.md (commands and pass counts); CLOSED is offered with NO bag on any tip (bagMaxM 0) in every bucket: with a bag the seat climbs with the bag's size (a 0.30 m catch, 0°: 1.620 m with a 0.15 bag, 1.759 at 0.18, 1.900 at 0.22) and the rows (0.15, 0.22, 0.32, 0.42, 0.50 only) are not monotone in the radius (the 0.30 bucket fails at 0.15, 329/330), so a window with a bag between the radii run would be unrun (fix round 1, 2026-10-24). Reaches at or below the first loM, above the last
+      // topM, or in no bucket refuse in plain words; so do radiators settled outside every window ('radiators-angle', never clears by waiting).
+      // Fix round 1 F3 (2026-10-24): the 134° band (bags of reach 0.60-0.75) settles at 132.86-134.00° depending on the frame step (60 Hz 134.000, 120 Hz 133.875,
+      // from closed 132.9), so the three smaller buckets' lowest open window starts at 132.75 (rows at 132.75 and 133.25 all 330/330, tipbags doc §3b); the 0.75 bucket stays at 138° (134° and 136° fail 329/330).
       BUCKETS: [
-        { loM: 0.27, topM: 0.30, closedDeg: [0, 1], openDeg: [145.5, 146.5] },   // route certified from reach 0.25; her line (0.03 m rule) passes from 0.27 (0.265 misses by 0.0003 m): reach 0.27 and below refuse
-        { loM: 0.30, topM: 0.50, closedDeg: [0, 1], openDeg: [145.5, 146.5] },
-        { loM: 0.50, topM: 0.63, closedDeg: [0, 1], openDeg: [145.5, 146.5] },
-        { loM: 0.63, topM: 0.75, closedDeg: [0, 1], openDeg: [138, 146] },       // as run: 138, 140, 142, 144, 145, 146
+        { loM: 0.27, topM: 0.30, windowsDeg: [[0, 1, 0], [132.75, 136, 0.75], [136, 138, 0.60], [138, 140, 0.50], [140, 142, 0.40], [142, 144, 0.30], [144, 146, 0.15], [145.5, 146.5, 0]] },   // route certified from reach 0.25; her line (0.03 m rule) passes from 0.27 (0.265 misses by 0.0003 m): reach 0.27 and below refuse.
+        { loM: 0.30, topM: 0.50, windowsDeg: [[0, 1, 0], [132.75, 136, 0.75], [136, 138, 0.60], [138, 140, 0.50], [140, 142, 0.40], [142, 144, 0.30], [144, 146, 0.15], [145.5, 146.5, 0]] },
+        { loM: 0.50, topM: 0.63, windowsDeg: [[0, 1, 0], [132.75, 136, 0.75], [136, 138, 0.60], [138, 140, 0.50], [140, 142, 0.40], [142, 144, 0.30], [144, 146, 0.15], [145.5, 146.5, 0]] },
+        { loM: 0.63, topM: 0.75, windowsDeg: [[0, 1, 0], [138, 140, 0.50], [140, 142, 0.40], [142, 144, 0.30], [144, 146, 0.15], [145.5, 146.5, 0]] },   // its 134° and 136° fail 329/330 (a swing-out item at a radiator wing frame) with or without bags: from 138°
       ],
       SEAT_BEAT_S:      1.0,    // s at the seat before the checks (the carry's HANDOFF_S)
       SEAT_TOL_M:       0.06,   // m: the catch's centre must be this close to the collar axis point at the seat (the leash latch funnel, docs/research/2026-10-leash.md)

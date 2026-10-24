@@ -22,8 +22,8 @@ import { StrutAutoController } from '../systems/StrutAuto.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit, planeTurnLeftRad } from './ArmUnit.js';
 import { DebrisField } from './DebrisField.js';
-import { clearRackCell, berthAnchorLocalInto, catchHomeDistM } from './CaptureNet.js';
-import { noseBucketFor, noseRadiatorsOk } from './NoseRoute.js';
+import { clearRackCell, berthAnchorLocalInto, catchHomeDistM, homeShapeKey } from './CaptureNet.js';
+import { noseBucketFor, noseRadiatorsOk, noseWindowSpans } from './NoseRoute.js';
 import { tripRefuses } from '../systems/TransferTrip.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import {
@@ -2912,16 +2912,18 @@ export class ArmManager {
 
   /**
    * The catch-centre z (ship frame, metres) of the seat for a catch of reach `reachM` that has no body of its own: the VIRTUAL catch of a bucket's top
-   * reach the route is flown for. Same function as a real catch's (`catchHomeDistM`), cached per reach (the ship's shape does not change between calls).
+   * reach the route is flown for. Same function as a real catch's (`catchHomeDistM`), cached per reach AND per ship shape (`homeShapeKey`: the
+   * radiators' angle and the bags on the tips; u22-nose-tipbags: it was keyed on the reach alone and never cleared, so after the radiators were
+   * closed over a tip bag the route still flew to the open-angle seat). While the radiators swing the cached seat is reused (see `homeShapeKey`).
    */
   noseSeatZForReach(reachM) {
     const key = Math.round(reachM * 1000);
+    const shape = homeShapeKey(this.playerSatellite);
     if (!this._noseSeatCache) this._noseSeatCache = new Map();
-    let z = this._noseSeatCache.get(key);
-    if (z === undefined) {
-      z = this.noseSeatZ({ sizeMeter: 2 * reachM });
-      this._noseSeatCache.set(key, z);
-    }
+    const hit = this._noseSeatCache.get(key);
+    if (hit && (shape === null || hit.shape === shape)) return hit.z;
+    const z = this.noseSeatZ({ sizeMeter: 2 * reachM });
+    this._noseSeatCache.set(key, { shape, z });
     return z;
   }
 
@@ -2988,7 +2990,8 @@ export class ArmManager {
    * The conditions the nose route was certified for that can change while a daughter waits or flies the prep: her radiators closed or open
    * inside the bucket's window, the other three struts at the hold pose with catches no bigger than the measured one, her own strut at the
    * hold pose, no mother net coming home. Read-only. `null` = all hold, else `{reason, text, never?}`: every one clears by waiting except a
-   * neighbour's catch that is too big (`never`).
+   * neighbour's catch that is too big and radiators SETTLED outside every window (`never`: 'radiators-angle'; swinging ones are
+   * 'radiators-moving' and wait). The window depends on the biggest bag on a tip (`_tipBagReachM`, `noseRadiatorsOk`).
    * @private
    */
   _noseConditions(arm, nose) {
@@ -2999,13 +3002,14 @@ export class ArmManager {
     const b = nose.bucket;
     const sharedDeg = (ps._flowerThetaRad ?? 0) * R2D;
     const targetDeg = Number.isFinite(ps._flowerTargetTheta) ? ps._flowerTargetTheta * R2D : sharedDeg;
-    if (!noseRadiatorsOk(b, sharedDeg) || !noseRadiatorsOk(b, targetDeg)) {
-      const o = b.openDeg;
-      const openText = o[1] - o[0] <= 1.5 ? `fully open (${Math.round((o[0] + o[1]) / 2)}°)` : `open ${Math.round(o[0])}° to ${Math.round(o[1])}°`;   // a measured point, or a measured range
-      return {
-        reason: 'radiators-moving',
-        text: `The radiators are at ${Math.round(sharedDeg)}°; the hand-off to the nose works with them closed (${b.closedDeg[0]}°) or ${openText}. Daughter ${n} waits.`,
-      };
+    const bagR = this._tipBagReachM();
+    if (!noseRadiatorsOk(b, sharedDeg, bagR) || !noseRadiatorsOk(b, targetDeg, bagR)) {
+      if (Math.abs(targetDeg - sharedDeg) > 0.01) {                     // on their way somewhere: waiting helps once they stop
+        return { reason: 'radiators-moving', text: `The radiators are still moving (${Math.round(sharedDeg)}°). Daughter ${n} waits.` };
+      }
+      // u22-nose-tipbags: SETTLED outside every window. Nothing moves them (a bag on a tip holds them at its cap, and they are never moved for a
+      // carry: no auto-close), so waiting never clears it: `never`, the trip's end rule does not wait for it, and the words say what the player can do.
+      return { reason: 'radiators-angle', never: true, text: this._noseAngleText(n, sharedDeg, bagR, b) };
     }
     if (_inboundMotherNetRadiusM(this) !== null) return { reason: 'net-inbound', text: `A net is coming in. Daughter ${n} waits.` };
     for (const o of this.arms) {
@@ -3025,6 +3029,40 @@ export class ArmManager {
       if (!(Math.abs(recDeg - N.HOLD_DEG) <= V.NEIGHBOUR_TOL_DEG + 1e-6)) return { reason: 'strut-range', text: '' };
     }
     return null;
+  }
+
+  /** The biggest bag (reach, m) on any radiator tip now; 0 when no tip holds one. Read-only. @private */
+  _tipBagReachM() {
+    const tc = this.playerSatellite && this.playerSatellite.tipCargo;
+    let m = 0;
+    if (tc && typeof tc.spheres === 'function') for (const sp of tc.spheres()) if (sp.r > m) m = sp.r;
+    return m;
+  }
+
+  /**
+   * The refusal when the radiators stand, settled, where the nose hand-off was not run for this bucket and the bag now on a tip (plain words:
+   * degrees, what holds them there, what works). `bagR > 0`: a catch on a tip is what holds them at that angle.
+   * @private
+   */
+  _noseAngleText(n, sharedDeg, bagR, bucket) {
+    const spans = noseWindowSpans(bucket, bagR);
+    const part = (x) => {
+      const hi = Math.min(146, x[1]);                                    // the radiators open to 146° at most: a window's 146.5° end is only its float tolerance
+      if (x[0] <= 1.5) return `closed (${Math.round(x[0])}°)`;
+      const lo = Math.ceil(x[0] - 1e-9), up = Math.floor(hi + 1e-9);      // whole degrees INSIDE the window (132.75 reads 133°, never 132°)
+      return hi - x[0] <= 1.5 ? `fully open (${Math.round((x[0] + hi) / 2)}°)` : `open ${lo}° to ${up}°`;
+    };
+    const works = spans.map(part).join(' or ');
+    const at = Math.round(sharedDeg * 10) / 10;
+    if (bagR > 0 && sharedDeg <= 1.5) {                                  // closed over a catch on a tip: nothing holds them there, the player closed them (closed is offered only with no catch on a tip: fix round 1)
+      return `The radiators are closed (${Math.round(sharedDeg)}°) with a catch on a tip, and the hand-off to the nose was not tried that way. Daughter ${n} keeps her catch.`
+        + (works ? ` It works with them ${works}.` : '');
+    }
+    if (bagR > 0) {
+      return `The radiators are at ${at}°, held there by a catch on a tip, and the hand-off to the nose was not tried at that angle. Daughter ${n} keeps her catch.`
+        + (works ? ` It works with them ${works}.` : '');
+    }
+    return `The radiators are at ${at}°; the hand-off to the nose works with them ${works || 'nowhere'}. Daughter ${n} keeps her catch until they are moved.`;
   }
 
   /**
@@ -3246,6 +3284,7 @@ export class ArmManager {
       case 'net-inbound': return 'a net is coming in';
       case 'leash-busy': return 'the radiators are busy';
       case 'radiators-moving': return 'the radiators are not settled';
+      case 'radiators-angle': return 'the radiators stand where the nose hand-off was not tried';
       case 'swing-back': return 'her catch is too big to hand over with the radiators as they are';
       case 'nose-reach': return 'it is not a size the nose hand-off was measured for';
       case 'nose-busy': return 'the nose is busy';
@@ -3366,7 +3405,7 @@ export class ArmManager {
       if (r.reason === 'neighbour-catch' && r.lift) { this._commandLifts(arm, r, { mission, motherNetOnly }); continue; }
       // (FA6: a neighbour's catch that can never leave is said too - once - or the catch just stays on her rack in silence)
       const sayIt = say && r.text && (r.reason === 'fit' || r.reason === 'gate' || r.reason === 'fuel' || r.reason === 'swing-back'
-        || r.reason === 'nose-reach' || r.reason === 'nose-leash' || r.reason === 'nose-gas'
+        || r.reason === 'nose-reach' || r.reason === 'nose-leash' || r.reason === 'nose-gas' || r.reason === 'radiators-angle'
         || (r.reason === 'neighbour-catch' && !r.retry));
       if (sayIt) {
         const key = r.sayKey || `${arm.index}|${r.reason}`;                  // swing-back: once per catch
@@ -3465,7 +3504,7 @@ export class ArmManager {
   _handoffOutlook(arm) {
     const r = this.carryCheck(arm, { mission: true });
     if (r.ok) return 'now';
-    return (r.retry || r.reason === 'gave-up') ? 'later' : 'never';
+    return (r.retry || r.reason === 'gave-up' || r.reason === 'radiators-angle') ? 'later' : 'never';   // radiators-angle: C says what to do with them
   }
 
   /** hold-catch FA4: a "." line held back for the double-press window is said once the window has passed with no second press. @private */

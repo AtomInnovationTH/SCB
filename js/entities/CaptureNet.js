@@ -472,9 +472,39 @@ export function catchHomeZ(keepOut, r) {
 export const TIP_HOME_MAX_REACH_M = 0.75;
 
 /**
+ * What, besides a catch's radius and the collar's z, sets its home: the radiators' angle and the bags on the tips (`ArmManager.getKeepOut`
+ * reads both; a bag moves with its radiator). A string that changes when either does (angle to 0.001 deg, each bag's index, radius and
+ * centre to 1 mm), `''` for a ship with no radiators or a mock, and `null` while the radiators are SWINGING or ANY tip bag is turning onto
+ * its boom (`tipCargo.isSwinging(i)`): a home read then is not trusted once the swing ends (`catchHomeDistM` recomputes on the first read
+ * after), and a read during the swing reuses what is cached rather than paying a recompute (25-115 ms: 47-62 keep-out queries, measured
+ * u22 2026-10-24) every frame the HUD polls. The daughters' strut poses are
+ * left out on purpose: the nose route is flown, and certified, against the seat of the ship with its struts parked, and a strut that
+ * swings during the flight must not move the seat she is flying to.
+ * @param {object|null} player PlayerSatellite
+ * @returns {string|null}
+ */
+export function homeShapeKey(player) {
+  if (!player || typeof player._flowerThetaRad !== 'number') return '';
+  const tgt = player._flowerTargetTheta;
+  if ((typeof tgt === 'number' && Math.abs(tgt - player._flowerThetaRad) > 1e-4) || player.flowerPetalsBusy === true) return null;
+  const tc = player.tipCargo;
+  // a bag turning onto its boom (10 deg/s, up to ~9 s) moves every frame, so its centre would change the key every frame: 780 recomputes of
+  // ~25 ms in 13 s of one swing (fix round 1 review, u22 2026-10-24). Same rule as a radiator swing: reuse the cache, recompute once it ends.
+  if (tc && typeof tc.isSwinging === 'function') for (let i = 0; i < 4; i++) if (tc.isSwinging(i)) return null;
+  let key = String(Math.round(player._flowerThetaRad * (180 / Math.PI) * 1000));
+  if (tc && typeof tc.count === 'function' && typeof tc.spheres === 'function' && tc.count() > 0) {
+    for (const sp of tc.spheres()) key += `|${sp.name}:${Math.round(sp.r * 1000)}:${Math.round(sp.c.x * 1000)},${Math.round(sp.c.y * 1000)},${Math.round(sp.c.z * 1000)}`;
+  }
+  return key;
+}
+
+/**
  * Home distance (metres) of a catch's CENTRE from the berth anchor (the collar plane) along the collar axis.
- * Cached on the debris per radius (`_homeCache`): the ship does not change shape between the reel entry and the
- * lasso's delivery. On the 2.30 m radiators the answer is the same at every radiator angle for r <= 1.4 m (measured
+ * Cached on the debris per radius AND per ship shape (`_homeCache`, `homeShapeKey`): the home is read off the keep-out, which holds the
+ * radiators and the bags on their tips, so a cache made for another radiator angle or another set of tip bags is not read
+ * (u22-nose-tipbags, 2026-10-24: a bag seated at 140°, the radiators then closed over it, and the nose seat stayed at its open-angle
+ * z 1.64 m while the closed bag sat at 1.74 m: the leash snagged it; a fresh seat is z 2.20 m).
+ * On the 2.30 m radiators the answer is the same at every radiator angle for r <= 1.4 m with no bag on a tip (measured
  * 2026-10-17 at every whole degree 0-180°: `REEL_HOME.ALL_ANGLE_HOME.angleFreeMaxR`), so there it is the current-pose
  * home (`catchHomeZ`) exactly as before. A bigger catch's current-pose home moves with the angle (r 4.0: 5.349 at
  * 146°, 5.402 at 3°) and a catch parked at the 146° one fouls the tip cone when the radiators then close (-32.4 mm
@@ -506,7 +536,8 @@ export function catchHomeDistM(player, armManager, d) {
     ? player._netBerthCollar.position.z / M
     : (V5 && V5.BERTH_COLLAR_Z_M != null ? V5.BERTH_COLLAR_Z_M : 1.30);
   const hc = d && d._homeCache;
-  if (hc && hc.r === r && hc.anchorZ === anchorZ) return hc.distM;
+  const shape = homeShapeKey(player);
+  if (hc && hc.r === r && hc.anchorZ === anchorZ && (shape === null || hc.shape === shape)) return hc.distM;
   let ko = null;
   try { ko = armManager && typeof armManager.getKeepOut === 'function' ? armManager.getKeepOut() : null; } catch (_e) { ko = null; }
   const home = catchHomeZ(ko, r);
@@ -533,7 +564,7 @@ export function catchHomeDistM(player, armManager, d) {
       console.warn(`[CaptureNet] reel home UNCHECKED for r ${r} m: ${blocker} (measured up to r ${T ? T.radiiM[T.radiiM.length - 1] : '?'} m); using the current-pose home z ${z.toFixed(3)} m, which may foul the radiators at other angles`);
     }
   }
-  if (d) d._homeCache = { r, anchorZ, distM, z, clearZ: home.clearZ, queryMs: home.queryMs, queries: home.queries, allAngleLiftM, source: unchecked ? 'unchecked' : (ko ? 'keepout' : 'ring-touch'), blocker: unchecked ? blocker : undefined, top: unchecked ? top : undefined };
+  if (d) d._homeCache = { r, anchorZ, shape, distM, z, clearZ: home.clearZ, queryMs: home.queryMs, queries: home.queries, allAngleLiftM, source: unchecked ? 'unchecked' : (ko ? 'keepout' : 'ring-touch'), blocker: unchecked ? blocker : undefined, top: unchecked ? top : undefined };
   return distM;
 }
 
