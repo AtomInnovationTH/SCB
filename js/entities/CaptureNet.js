@@ -33,6 +33,9 @@ import { suggestCargoArm, countEmptyDockedDaughters, heldCargoFoulsCorridorAt } 
 import { tripRefuses } from '../systems/TransferTrip.js';
 import { heldBagNeckInto, heldBagRadiusScene, DAUGHTER_STAND_M } from './heldBagShape.js';
 import { pickScoopMembers, scoopLine } from './scoopRule.js';
+// Nets step 3 slice 5 (lane 5b): a pending BIG piece (counted at the catch, pays when disposed of) is never let go by K, never auto-cut,
+// and says its own collar line. Looked up by id: a net may hold a snapshot of the field's body.
+import { bigPieces, pieceName } from '../systems/BigPieces.js';
 import * as THREE from 'three';
 
 const _heldNeck = { x: 0, y: 0, z: 0 };   // net-cinch: scratch for a daughter's held-net neck (scene units)
@@ -4062,7 +4065,10 @@ export class CaptureNetSystem {
         // spawnCutPiece — a mock, or a legacy build — keeps today's refusal
         // and the collar ride; a cut plan whose pieces cannot be drawn is
         // worse than no cut plan).
-        if (overGate && FEATURE_FLAGS.CUT_AT_NOSE
+        // Nets step 3 slice 5 (lane 5b, C5): a pending BIG piece is never cut automatically: it stays whole at the collar (only the melt,
+        // lane 5e, cuts one), and says so in its own words (no K: K does not let it go).
+        const bigPending = bigPieces.isPending(d);
+        if (overGate && !bigPending && FEATURE_FLAGS.CUT_AT_NOSE
             && this._debrisField
             && typeof this._debrisField.spawnCutPiece === 'function'
             && !net._cutPlan) {
@@ -4074,6 +4080,12 @@ export class CaptureNetSystem {
           eventBus.emit(Events.COMMS_MESSAGE, {
             source: 'HOUSTON', channel: 'CMD',
             text: `Catch is ${Math.round(massKg)} kg — too heavy for one daughter. Cutting it into ${plan.pieces.length} pieces at the nose.`,
+            priority: 'warning',
+          });
+        } else if (bigPending) {
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            source: 'HOUSTON', channel: 'CMD',
+            text: `The ${pieceName(d)} stays at your nose: no daughter can take it. It pays when you dispose of it.`,
             priority: 'warning',
           });
         } else if (gasShort && !overGate) {
@@ -4936,6 +4948,7 @@ export class CaptureNetSystem {
   _tickCollarDigestion(net, dt) {
     const d = net.targetDebris;
     if (!d) return false;
+    if (bigPieces.isPending(d)) return false;   // slice 5 (5b): a pending big piece is never cooked at the collar: it pays when disposed of
     // no-melt (owner 2026-10-18, "Stay full size, no melting"): no furnace, no cook clock. The catch stays welded
     // full size at the collar (the berth hold pins it) until a tip furnace takes it on the trip or [K] jettisons it.
     if (!Constants.isFeatureEnabled('FURNACE_COOK')) return false;
@@ -5211,6 +5224,10 @@ export class CaptureNetSystem {
     for (const n of this.activeNets) {
       if (!n._isMother || n.state !== STATES.COLLARED) continue;
       if (!n._cargoDeclined || n._leash || n._leashNoseReel || this._cutActive(n)) continue;
+      // Nets step 3 slice 5 (lane 5b): K does not let a pending big piece go, so this refusal does not offer it.
+      if (bigPieces.isPending(n.targetDebris)) {
+        return `Nose is full: the ${pieceName(n.targetDebris)} stays at your nose and no daughter can take it. It pays when you dispose of it.`;
+      }
       return NOSE_FULL_LINE;
     }
     return null;
@@ -5221,11 +5238,15 @@ export class CaptureNetSystem {
    * already paid (the mate credited it), so nothing is credited or digested here: the pins clear, the net leaves the
    * system and the collar is free again. The caller removes the body from the field. A catch still being reeled,
    * flown, leashed or cut is left alone.
+   * Slice 5 (lane 5b): with `onlyId` it frees the collar of THAT piece only (`GameFlowManager.detachHeldPiece`: a big piece being
+   * disposed of; the caller clears the field body's own pins, a net may hold a snapshot of it).
+   * @param {number|string|null} [onlyId] - hand over only the net around this debris id
    * @returns {number|string|null} the debris id handed over, or null when nothing was handed over
    */
-  handOverCollarCatch() {
+  handOverCollarCatch(onlyId = null) {
     const idx = this.activeNets.findIndex((n) => n._isMother && n.state === STATES.COLLARED && n._berthProcessed
-      && !n._leash && !n._leashNoseReel && !this._cutActive(n));
+      && !n._leash && !n._leashNoseReel && !this._cutActive(n)
+      && (onlyId == null || (n.targetDebris && n.targetDebris.id === onlyId)));
     if (idx < 0) return null;
     const net = this.activeNets[idx];
     const d = net.targetDebris;
@@ -5322,6 +5343,17 @@ export class CaptureNetSystem {
           ? `The catch is on its leash to radiator ${(net._leashTipIndex ?? 0) + 1}. Too late to jettison.`
           : 'Cargo is already in transit to the daughter — too late to jettison.',
         priority: 'warning',
+      });
+      return false;
+    }
+    // Nets step 3 slice 5 (lane 5b, C5): a pending BIG piece pays when it is disposed of; letting it go would throw the pay away, so K
+    // (and the LET GO chip, the same call) refuses in plain words and changes nothing. A piece not yet mated (the securing timer still
+    // running) is not pending: K works there as it always did.
+    if (bigPieces.isPending(net.targetDebris)) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'HOUSTON', channel: 'CMD',
+        text: `K doesn't let go of the ${pieceName(net.targetDebris)}: it pays when you dispose of it.`,
+        priority: 'warning', _reactive: true,
       });
       return false;
     }

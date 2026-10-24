@@ -32,6 +32,7 @@ import { computeToolOdds, makeNetOddsLockCache } from '../systems/ToolOdds.js';
 import { gameState } from '../core/GameState.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
 import { pieceLostLine } from '../systems/PieceClaim.js';
+import { bigPieces } from '../systems/BigPieces.js';   // slice 5 (5b F2): a pending big piece is never digested on the rack
 import { DebrisField } from './DebrisField.js';          // catch-snug: the drawn scale of a held catch
 import { DebrisWireframe } from '../ui/DebrisWireframe.js'; // catch-snug: the drawn mesh vertices
 import { netCellLayout } from './netCellLayout.js';
@@ -6628,6 +6629,29 @@ export class ArmUnit {
   }
 
   /**
+   * Nets step 3 slice 5 (lane 5b, P5): a saved BIG piece comes back onto THIS daughter's rack after a reload, exactly as a mother catch
+   * does when the cargo hand-off lands (`CaptureNet._updateCargoTransfer`): a cell on her, the piece held in her frame, the state
+   * HOLDING_CATCH, the pin written once. Refuses (false) unless she is docked with an empty rack and nothing in hand, so a restore never
+   * takes a daughter that is out flying or already holds a catch. Nothing is credited: the piece is `_credited` already.
+   * @param {object} debris the restored field body
+   * @param {THREE.Vector3|null} [parentPos] the mother's world position @param {THREE.Quaternion|null} [parentQuat] her attitude
+   * @returns {boolean} true if it is on the rack
+   */
+  restoreHeldCatch(debris, parentPos = null, parentQuat = null) {
+    if (!debris || this.state !== S.DOCKED || this.capturedDebris || this.heldCatches.length > 0) return false;
+    if (!this._stowHeldCatch(debris, parentQuat)) return false;
+    debris._captured = true;
+    debris._motherParked = false;
+    debris._capturedByArm = this;
+    this._breakdownStarted = false;
+    this._breakdownChunksFired = 0;
+    if (typeof this._transitionTo === 'function') this._transitionTo(S.HOLDING_CATCH);
+    else this.state = S.HOLDING_CATCH;
+    this._pinHeldCatches(parentPos, parentQuat);
+    return true;
+  }
+
+  /**
    * rack-snug (Decision 4a): her WORLD attitude while parked, computed fresh — never read from `group.quaternion`,
    * which PlayerSatellite writes AFTER `armManager.update` (one frame stale in the pin). The mother's quaternion
    * × the docked basis `composeDockedArmQuat(strutDir, azRad)`, with the inputs PlayerSatellite itself uses
@@ -9433,6 +9457,12 @@ export class ArmUnit {
     // clears the rack; the empty-rack fallback above then reloads her). The staged breakdown below is kept for the
     // day a real furnace exists (FEATURE_FLAGS.FURNACE_COOK).
     if (!Constants.isFeatureEnabled('FURNACE_COOK')) {
+      this._pinHeldCatches(parentPos, parentQuat);
+      return;
+    }
+    // slice 5 (5b F2): a pending big piece is never cooked on the rack either (as at the collar): it pays when disposed of, so it stays
+    // pinned full size and the rack waits (the oldest-first digestion would otherwise digest it and lose its pay).
+    if (bigPieces.isPending(this.heldCatches[0])) {
       this._pinHeldCatches(parentPos, parentQuat);
       return;
     }

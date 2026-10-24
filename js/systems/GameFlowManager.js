@@ -20,6 +20,8 @@ import { powerDistribution } from './PowerDistribution.js';
 import { targetSelector } from './TargetSelector.js';
 import { kesslerSystem } from './KesslerSystem.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
+import { bigPieces, isBigPiece, pieceName, pieceNameCap, FATES } from './BigPieces.js';
+import { fatePay, payLine } from './BigPieceValues.js';
 import { DebrisField } from '../entities/DebrisField.js';
 import { trawlManager } from './TrawlManager.js';
 import { openingDance } from './OpeningDance.js';
@@ -239,6 +241,7 @@ export class GameFlowManager {
   init(refs) {
     this._refs = refs;
     this._syncTripDeps();
+    this._bindBigPieces();   // slice 5 (5b): the ledger reads the holders (nets, racks) through these
     // u1-resupply-stop D1: the real game starts mid-mission — the shop's trade gate is closed until the first
     // completed mission (a shop that was never told stays permissive, so bare test rigs are unaffected).
     this._setResupplyStop(false);
@@ -697,6 +700,9 @@ export class GameFlowManager {
         // `missionNum` stops at 12, so past 60 catches a boundary save would never look owed)
         this._refs.fieldRegistry.restore(save.fields, { missionNumber: scoringSystem.getMissionNumber() });
       }
+      // Nets step 3 slice 5 (lane 5b, P5): the big pieces she was still holding come back on their holders (nothing pays at load). AFTER the
+      // arms' reset and the registry's restore; a game-over save carries none.
+      if (save.gameOver !== true && Array.isArray(save.bigPieces)) this._restoreBigPieces(save.bigPieces);
 
       // Notify self-managing systems that a saved game was loaded
       // (TutorialSystem listens to skip tutorial for veterans)
@@ -844,6 +850,9 @@ export class GameFlowManager {
     // Game over → Continue (roguelite: keep upgrades, 50% credit penalty)
     eventBus.on(Events.GAMEOVER_CONTINUE, () => {
       const carriedCredits = Math.floor(scoringSystem.credits * 0.5);
+      // slice 5 (5b): a fresh attempt: nothing is pending (cleared BEFORE the arms reset, so a rack that drops its piece says nothing)
+      bigPieces.clear();
+      this._unplacedBig = [];
 
       // Reset game counters but keep gameState.currentState at GAME_OVER for valid → SHOP transition
       gameState.score = 0;
@@ -1124,7 +1133,11 @@ export class GameFlowManager {
         // body. The credit legs skip a body already paid; comms and field
         // removal still run — the consumption is real.
         const creditPaid = !!(debris && debris._credited);
-        const payCredit = !data.digested && !creditPaid;
+        // Nets step 3 slice 5 (lane 5b, C2): the COUNT is split from the PAY. `countCatch` is what `payCredit` always was (not a digest
+        // completion, not yet credited) and drives everything the count drove: the field row, `clearDebris`, the mission start, the
+        // save, the boundary. The pay (`awardPoints`, salvage) is per body and skips a BIG piece (a high-field stage or satellite, a
+        // bag's big member): it pays when it is disposed of (`disposeBigPiece`), not here.
+        const countCatch = !data.digested && !creditPaid;
 
         // Nets step 3 (lane s3-field-credit): a credited catch has left its field, even one kept aboard ({ parked: true }: mated
         // at the nose collar or parked on a rack, paid but not removed below; the removal is the only other place a row leaves).
@@ -1138,6 +1151,11 @@ export class GameFlowManager {
         if (debris && debris.isBag === true && this._refs && this._refs.fieldRegistry) {
           for (const m of (debris.bagMembers || [])) this._refs.fieldRegistry.markCaught(m);
         }
+        // slice 5 (5b): the bodies this catch counts but does not pay (C1: type rocketBody|defunctSat with an owner, the map on), and
+        // whether the body held is itself pending (a big solo piece, or a bag with big members).
+        const bigOn = countCatch && this._bigPiecesOn();
+        const deferred = bigOn ? bodies.filter((b) => isBigPiece(b, true)) : [];
+        const bigHeld = bigOn && isBigPiece(debris, true);
 
         // Cargo-continuity S13(c): a collar completion carries { digested: true } —
         // a SECOND CATCH_PROCESSED for a body already credited at the mate
@@ -1145,7 +1163,7 @@ export class GameFlowManager {
         // below (the body IS consumed now), but credit pays NOTHING twice:
         // score, manual-capture bookkeeping, salvage, the cleared counter and
         // the autosave all belong to the single credited event.
-        if (payCredit) {
+        if (countCatch) {
         // Award score via scoring system. `method` honours the emitter —
         // 'arm' for daughters, 'mother' for a berthed whale (§4.8/§19).
         // ScoringSystem's METHOD_BONUS[method] || 1.0 accepts any string, so
@@ -1154,6 +1172,8 @@ export class GameFlowManager {
         // alone (one award each, with that member's own salvage flag); `gameState.clearDebris()` below still runs once, so the
         // bag is one of the mission's five catches.
         for (const body of bodies) {
+          // slice 5 (5b): a big body is counted (below) and pays nothing here; it is never paid again on its own either
+          if (deferred.includes(body)) { if (body && body !== debris) body._credited = true; continue; }
           scoringSystem.awardPoints({
             debris: body || { type: 'fragment', mass: 100, tumbleRate: 0, brittleness: 0 },
             method: data.method || 'arm',
@@ -1176,7 +1196,15 @@ export class GameFlowManager {
         // re-capture, or the rack feed-end of a transferred piece, skips
         // every credit leg above and below.
         if (debris) debris._credited = true;
-        } // end payCredit (credit legs)
+        // slice 5 (5b, P2/P3): a pending big piece waits in the ledger (`_credited` stays true, `_disposal` holds its pay) and the
+        // player is told in plain words that it will pay later. The streak is not advanced by it (it paid nothing).
+        if (bigHeld && bigPieces.register(debris)) {
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            source: 'HOUSTON', channel: 'CMD', priority: 'good', _keep: true,
+            text: `${pieceNameCap(debris)} aboard. It pays when you dispose of it.`,
+          });
+        }
+        } // end countCatch (count and credit legs)
 
         // Comms notification (via EventBus — CommsSystem self-manages).
         // §4.8: honour data.source so a mother catch stops reading "DAUGHTER".
@@ -1201,7 +1229,7 @@ export class GameFlowManager {
 
         // --- SALVAGE RECOVERY (Session 10) ---
         // u20-nets: one pass per paid body (a solo catch: itself; a scoop bag: each member, its own salvage; the bag's own is empty)
-        for (const debris of (payCredit ? bodies : [])) {
+        for (const debris of (countCatch ? bodies.filter((b) => !deferred.includes(b)) : [])) {
         const hasSalvage = debris && debris.hasSalvage && debris.salvage;
         if (hasSalvage) {
           const salvage = debris.salvage;
@@ -1324,16 +1352,16 @@ export class GameFlowManager {
         // begins the trip for a boundary credit: that credit's own boundary runs at once, as before.)
         const tripRunningBeforeCredit = this._trip.isActive();
         // Update game state debris counter (belt-and-suspenders with scoringSystem)
-        if (payCredit) gameState.clearDebris();
+        if (countCatch) gameState.clearDebris();
         // Wave 5 Session F (D4): the mission boundary check runs HERE, right
         // after the increment — not inside awardPoints() above, where it read
         // the pre-catch count and fired MISSION_START one catch late (03-plan
         // Session E FINDINGS (f)). The 5th catch now starts mission 2 with
         // { missionNumber: 2 }; the ONE depot decision (_onMissionBoundary
         // below) follows it in the same tick. A digested / already-paid body
-        // (payCredit false) moved no counter and starts nothing.
+        // (countCatch false) moved no counter and starts nothing.
         // c2-fifth-catch D2: a parked boundary credit holds this start.
-        if (payCredit) this._startMissionAfterCredit(data, () => { scoringSystem.checkMissionTransition(); });
+        if (countCatch) this._startMissionAfterCredit(data, () => { scoringSystem.checkMissionTransition(); });
 
         // Furnace consumed the catch — remove it from the field (emits
         // DEBRIS_REMOVED; wireframe/pins self-clear). Deferred here from the old
@@ -1350,7 +1378,7 @@ export class GameFlowManager {
         // Auto-save after successful capture
         // (F2: this catch is about to close any open stop below, so the save must not carry it. trip-melt G1: during
         // the trip nothing closes it, so the save carries the stop as it is.)
-        if (payCredit) this.saveGame({ resupplyStop: this._trip.isActive() && this._atResupplyStop === true });
+        if (countCatch) this.saveGame({ resupplyStop: this._trip.isActive() && this._atResupplyStop === true });
 
         // Wireframe self-clears via DEBRIS_REMOVED listener (Batch 3)
 
@@ -1404,7 +1432,7 @@ export class GameFlowManager {
         // ledger already paid — register item 37.) The ONE depot decision per
         // catch lives in _onMissionBoundary (Wave 5 Session E).
         const debrisCount = gameState.debrisCleared;
-        if (payCredit && debrisCount > 0 && debrisCount % SHOP_CADENCE === 0) {
+        if (countCatch && debrisCount > 0 && debrisCount % SHOP_CADENCE === 0) {
           if (gameState.isGameplay()) {
             // trip-melt-2 D12a: a boundary reached by a credit while the trip waits or burns (five credits in one trip)
             // must not run mid-trip: the invitation, the stop and the saved state belong to the arrival. It runs after
@@ -1412,7 +1440,7 @@ export class GameFlowManager {
             if (tripRunningBeforeCredit) this._deferredBoundary = debrisCount;
             else this._onMissionBoundary(debrisCount);
           }
-        } else if (payCredit) {
+        } else if (countCatch) {
           // u1-resupply-stop D1: the player has flown out for the next mission — the stop closes at this credited
           // catch whether or not the invitation was still open (a visit closes the invitation as 'entered'; it
           // does not close the stop).
@@ -1445,6 +1473,7 @@ export class GameFlowManager {
     eventBus.on(Events.NET_RELEASED, (data) => {
       this._releaseMissionStartFor(data && data.debrisId);
     });
+    this._wireBigPieceFates();   // slice 5 (5b, C7): BIG_PIECE_FATE reaches the fate executors the wave 2 lanes define
 
     // Arm pilot exit on ARM_EXPENDED now self-managed by InputManager
 
@@ -1488,6 +1517,23 @@ export class GameFlowManager {
         debrisField.removeDebris(debrisId);
       }
 
+      // Nets step 3 slice 5 (lane 5b, C5 "Other ways"): a daughter's sacrifice carrying a PENDING big piece (counted at the catch, not
+      // yet paid) re-enters it at once, so it pays the removal fee (`fatePay(d, 'push')`, through `disposeBigPiece`) and does NOT count
+      // again: no `clearDebris`, no mission boundary, no `awardPoints` (it was counted at the catch).
+      if (debris && bigPieces.isPending(debris)) {
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: `\u0394V burn: ${deorbitDV.toFixed(1)} m/s. Perigee lowered ~${perigeeDropKm.toFixed(0)} km`,
+          priority: 'info',
+        });
+        const pay = fatePay(debris, 'push');
+        this.disposeBigPiece(debris.id, {
+          fate: 'push', totalCr: pay.totalCr,
+          line: `The daughter burned up with the ${pieceName(debris)}: ${payLine(debris, pay)}`,
+        });
+        if (audioSystem) audioSystem.playDeorbitBurn();
+        return;
+      }
+
       // Award score with deorbit multiplier
       // Check tactical assessment bonus (tracked via WIREFRAME_ASSESSED event — Batch 3)
       const assessed = this._wireframeAssessed;
@@ -1497,7 +1543,11 @@ export class GameFlowManager {
       if (debris && debris.isBag === true && this._refs && this._refs.fieldRegistry) {
         for (const m of (debris.bagMembers || [])) this._refs.fieldRegistry.markCaught(m);
       }
+      // slice 5 (5b): a big piece sacrificed before it was ever counted still counts as this one clear, but pays its removal fee
+      // (below, through the ledger) instead of a catch credit.
+      const bigSacrificed = this._bigPiecesOn() ? deorbitBodies.filter((b) => isBigPiece(b, true)) : [];
       for (const body of deorbitBodies) {
+        if (bigSacrificed.includes(body)) { if (body && body !== debris) body._credited = true; continue; }
         scoringSystem.awardPoints({
           debris: body || { type: 'fragment', mass: 100, tumbleRate: 0, brittleness: 0 },
           method: 'arm',
@@ -1513,6 +1563,13 @@ export class GameFlowManager {
         if (body && body !== debris) body._credited = true;
       }
       if (debris && debris.isBag === true) debris._credited = true;
+      if (debris && bigSacrificed.length && bigPieces.register(debris)) {
+        const pay = fatePay(debris, 'push');
+        this.disposeBigPiece(debris.id, {
+          fate: 'push', totalCr: pay.totalCr,
+          line: `The daughter burned up with the ${pieceName(debris)}: ${payLine(debris, pay)}`,
+        });
+      }
 
       // Comms: report ΔV and perigee lowering
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -1947,6 +2004,11 @@ export class GameFlowManager {
     // debrisWireframe: self-manages via GAME_RESET listener
     // kesslerSystem: self-manages via GAME_RESET listener
 
+    // slice 5 (5b): a new game or a reset: no big piece is pending any more (cleared BEFORE GAME_RESET and the arms' reset, so a rack
+    // that drops its piece says nothing, and the restored-piece retry list is forgotten)
+    bigPieces.clear();
+    this._unplacedBig = [];
+
     // Notify self-resetting systems (CommsSystem, KesslerSystem,
     // TutorialSystem, TrawlManager listen for this)
     eventBus.emit(Events.GAME_RESET);
@@ -2205,6 +2267,13 @@ export class GameFlowManager {
       if (gameState.shipDays > 0) saveData.shipDays = gameState.shipDays;
     }
 
+    // Nets step 3 slice 5 (lane 5b, P5): the big pieces still aboard (counted at the catch, paid when disposed of), each with its fate and
+    // its holder, so a reload puts them back on her. A game-over save carries none (CONTINUE is a fresh attempt: nothing pending).
+    if (gameState.currentState !== GameStates.GAME_OVER) {
+      const pending = bigPieces.serialize();
+      if (pending.length) saveData.bigPieces = pending;
+    }
+
     // Let self-managing systems contribute their state (e.g. SubsystemEvents)
     eventBus.emit(Events.PERSISTENCE_GATHER, saveData);
 
@@ -2404,8 +2473,161 @@ export class GameFlowManager {
     for (let i = 0; i < 8; i++) {                                        // (one collar: the loop is only a bound)
       const id = cns.handOverCollarCatch();
       if (id == null) break;
+      // slice 5 (5b, P7): a pending big piece at the collar is one no daughter could take; the satellite berths at the collar, so it takes
+      // that piece too and PAYS it as the satellite fate (the body is looked up before it is removed). Never handed over for nothing.
+      const body = df && typeof df.getDebrisById === 'function' ? df.getDebrisById(id) : null;
+      if (body && bigPieces.isPending(body)) {
+        const pay = fatePay(body, 'satellite');
+        this.disposeBigPiece(id, {
+          fate: 'satellite', totalCr: pay.totalCr,
+          line: `The satellite took the ${pieceName(body)} from your nose: ${payLine(body, pay)}`,
+        });
+      }
       if (df && typeof df.removeDebris === 'function') df.removeDebris(id);
     }
+  }
+
+  // ======================================================================================================
+  // Nets step 3 slice 5 (lane 5b): big pieces pay when they are DISPOSED OF (BigPieces.js; plan C2, C5, C7). The names below are the
+  // contract the wave 2 lanes (fate list 5c, push/sail 5d, hand-over 5f, melt 5e) build on.
+  // ======================================================================================================
+
+  /** @private Is the map on (C1: with `?fields=0` nothing is a big piece and every catch pays at the catch)? Read live. */
+  _bigPiecesOn() {
+    const reg = this._refs && this._refs.fieldRegistry;
+    return !!(reg && typeof reg.isOn === 'function' && reg.isOn());
+  }
+
+  /** @private Hand the ledger the holders it reads: the capture system's nets and the arm manager's daughters (read live). */
+  _bindBigPieces() {
+    const refs = this._refs || {};
+    bigPieces.bind({
+      nets: () => (captureNetSystem && captureNetSystem.activeNets) || [],
+      arms: () => (refs.armManager && refs.armManager.arms) || [],
+    });
+  }
+
+  /**
+   * C7: record the way a pending big piece will be disposed of (`satellite|push|sail|keep|melt`) and save. The fate list calls it on a
+   * pick, then emits BIG_PIECE_FATE for the executor.
+   * @param {number|string} id the piece's debris id @param {string} fate @returns {boolean} false for an unknown piece or fate
+   */
+  setFate(id, fate) {
+    if (!FATES.includes(fate) || !bigPieces.setFate(id, fate)) return false;
+    this.saveGame();
+    return true;
+  }
+
+  /**
+   * C7: free a pending big piece from the holder it is on, for a disposal that moves it (a push or a sail lets it go, a hand-over takes it).
+   * It stays in the field, unpinned and alive; the caller re-seats its orbit, lets it go or removes it. The collar is freed, or that
+   * ONE daughter's rack entry is removed (her rack is then empty and she reloads). It is NOT paid and stays pending until
+   * `disposeBigPiece`.
+   * @param {number|string} id @returns {object|null} the field's own body, or null (not held, in transit, being cut or leashed)
+   */
+  detachHeldPiece(id) {
+    const d = bigPieces.get(id);
+    if (!d) return null;
+    const holder = bigPieces.holderOf(id);
+    if (!holder) return null;
+    const r = this._refs || {};
+    let freed = false;
+    if (holder === 'collar') {
+      freed = !!(captureNetSystem && typeof captureNetSystem.handOverCollarCatch === 'function'
+        && captureNetSystem.handOverCollarCatch(id) != null);
+    } else if (r.armManager && typeof r.armManager.detachHeldCatch === 'function') {
+      freed = !!r.armManager.detachHeldCatch(id);
+    }
+    if (!freed) return null;
+    // the holder's own entry may be a snapshot: the field's body must be free of every pin too
+    if (captureNetSystem && typeof captureNetSystem._clearCatchPins === 'function') captureNetSystem._clearCatchPins(d);
+    d._capturedByArm = null;
+    d._rackFromMotherNet = false;
+    return d;
+  }
+
+  /**
+   * C7: a pending big piece is disposed of and paid. Adds `totalCr` to the wallet and the score total, says `line` (written by the caller:
+   * its action words + `payLine`), emits BIG_PIECE_DISPOSED, clears the pending pay and saves. Pays once: false when nothing is pending
+   * under `id` (a second call, an unknown piece, a piece that broke loose).
+   * @param {number|string} id @param {{fate?: string, totalCr?: number, line?: string}} [o] @returns {boolean}
+   */
+  disposeBigPiece(id, { fate = null, totalCr = 0, line = '' } = {}) {
+    const d = bigPieces.remove(id);
+    if (!d) return false;
+    const paid = scoringSystem.awardDisposal(totalCr);
+    if (line) {
+      eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: line, priority: paid > 0 ? 'good' : 'info', _keep: true });
+    }
+    eventBus.emit(Events.BIG_PIECE_DISPOSED, { debrisId: id, fate, totalCr: paid });
+    this.saveGame();
+    return true;
+  }
+
+  /**
+   * C7: wire BIG_PIECE_FATE once: each pick is handed to the executor of its fate when that lane defined one (`_fateSatellite` 5f,
+   * `_fateSail` 5d, `_fateMelt` 5e). `push` and `keep` need none: the push is a trip the where-next list owns, keep is the default.
+   * @private
+   */
+  _wireBigPieceFates() {
+    if (this._offBigFate) this._offBigFate();
+    const run = { satellite: '_fateSatellite', sail: '_fateSail', melt: '_fateMelt' };
+    this._offBigFate = eventBus.on(Events.BIG_PIECE_FATE, (e) => {
+      const fn = e && run[e.fate];
+      if (fn && typeof this[fn] === 'function') this[fn](e);
+    });
+  }
+
+  /**
+   * P5 load: rebuild the saved ledger onto its holders (nothing pays). Each entry becomes a real field body (`restoreHeldPiece`; a bag of two
+   * or more big pieces is re-bagged with `mergeIntoBag`), then goes onto its holder: the daughter it was saved on (else any free daughter),
+   * else the collar. A piece no holder could take yet is tried again every frame (`_placeUnplacedBig`) so it is never lost to a busy collar.
+   * @private
+   * @param {Array<object>} list the save's `bigPieces`
+   */
+  _restoreBigPieces(list) {
+    const r = this._refs || {};
+    const df = r.debrisField;
+    if (!Array.isArray(list) || !list.length || !df || typeof df.restoreHeldPiece !== 'function') return;
+    const orbit = r.player && r.player.orbit ? r.player.orbit : null;
+    const result = bigPieces.restore(list, {
+      makeBody: (spec) => df.restoreHeldPiece(spec, { orbit }),
+      makeBag: (parts) => (typeof df.mergeIntoBag === 'function' ? df.mergeIntoBag(parts) : null),
+      place: (body, holder) => this._placeBigPiece(body, holder),
+    });
+    this._unplacedBig = result.unplaced;
+  }
+
+  /**
+   * @private Seat one restored piece on a holder. Saved on a daughter's rack: that daughter, else any free one (ArmManager.restoreHeldCatch),
+   * else the collar. Saved at the collar: the collar (a piece no daughter could take stays at the nose; today's routing moves it later if
+   * one can); on a retry (`retry`: the collar was busy) a free daughter's rack too.
+   * @param {object} body @param {('collar'|{armId: string}|null)} holder @param {boolean} [retry=false] @returns {boolean} true when it is held
+   */
+  _placeBigPiece(body, holder, retry = false) {
+    const am = this._refs && this._refs.armManager;
+    const onRack = (hint) => !!(am && typeof am.restoreHeldCatch === 'function' && am.restoreHeldCatch(body, hint) != null);
+    const atCollar = () => {
+      const cns = captureNetSystem;
+      if (!cns || typeof cns.adoptDaughterCatch !== 'function') return false;
+      const net = cns.adoptDaughterCatch(body);
+      if (!net) return false;
+      if (typeof cns.releaseNoseRetry === 'function') cns.releaseNoseRetry(net);
+      return true;
+    };
+    if (holder && typeof holder === 'object') return onRack(holder.armId) || atCollar();
+    return atCollar() || (retry && onRack(null));
+  }
+
+  /** @private Frame hook: try the restored pieces no holder could take yet (usually an empty list: one length check). */
+  _placeUnplacedBig() {
+    if (!this._unplacedBig || !this._unplacedBig.length) return;
+    const still = [];
+    for (const body of this._unplacedBig) {
+      if (!body || body.alive === false || !bigPieces.isPending(body)) continue;
+      if (!this._placeBigPiece(body, 'collar', true)) still.push(body);
+    }
+    this._unplacedBig = still;
   }
 
   /**
@@ -2742,6 +2964,7 @@ export class GameFlowManager {
     // t1-stranded D1: first, before the held-mission-start early return below (that one returns on almost every frame)
     this._updateStranded(dt);
     this._resumeOwedTrip(dt);
+    if (this._unplacedBig && this._unplacedBig.length) this._placeUnplacedBig();   // slice 5 (5b): a restored piece no holder could take yet
     // trip-melt D2/D6: the burn between missions (waits for the daughters, then burns; `dt` is 0 while the world is held)
     this._trip.update(dt);
     const p = this._pendingMissionStart;

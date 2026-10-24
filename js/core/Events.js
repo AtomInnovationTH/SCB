@@ -107,6 +107,13 @@ export const Events = {
    *  berth that could not go puts her back with a second `berthed`. Lane 3b's look (the arm takes her collar, cartridge swaps)
    *  and 3d's teaching listen; nothing else does. Never emitted with the flag off. */
   RESUPPLY_BERTH:     'resupply:berth',
+  /** Nets step 3 slice 5 (lane 5b, DECISIONS §33 row 16): the player picked a way to dispose of a big piece that is still pending (the
+   *  fate list emits it after `setFate`). Payload: `{ debrisId, fate }`, fate in `satellite|push|sail|keep|melt`. GameFlowManager's
+   *  `_wireBigPieceFates` hands it to the executor of that fate (`_fateSatellite`, `_fateSail`, `_fateMelt`); push and keep have none. */
+  BIG_PIECE_FATE:     'bigpiece:fate',
+  /** Nets step 3 slice 5 (lane 5b): a big piece has been disposed of and paid (`GameFlowManager.disposeBigPiece`). Payload:
+   *  `{ debrisId, fate, totalCr }`. The fate list listens (it refreshes, and closes when nothing is left). */
+  BIG_PIECE_DISPOSED: 'bigpiece:disposed',
   /** A mission's last catch just landed (m1-finish, owner 2026-10-17): the HUD shows a
    *  "MISSION N COMPLETE" headline that fades by itself and the audio plays one success
    *  cue. Emitted ONCE per mission boundary from GameFlowManager._openDepotInvitation

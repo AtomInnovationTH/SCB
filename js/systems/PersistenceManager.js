@@ -155,6 +155,10 @@ class PersistenceManager {
         // by saveGame (armManager.getSupplyState()); a game-over save passes none, so CONTINUE starts every tank full. Written only
         // when given: an old save, and a game-over save, load with full tanks as before. Additive (no SAVE_VERSION bump).
         ...(Array.isArray(data.daughters) ? { daughters: data.daughters } : {}),
+        // Nets step 3 slice 5 (lane 5b, P5): the big pieces still aboard (counted at the catch, paid when disposed of): [{type, name, material,
+        // mass, size, owner, areaM2, fieldId, fieldRow, fate, holder, caughtAtMs, members?}]. Handed in by saveGame (BigPieces ledger); written
+        // only when there are some, so a save with none (every old one, and a game-over save) is byte-for-byte what it was. Additive.
+        ...(Array.isArray(data.bigPieces) && data.bigPieces.length ? { bigPieces: data.bigPieces } : {}),
         // save() is a WHITELIST: a key that a read-modify-write setter writes
         // (as setCeremonyFlag does with ceremonyFlags above) but that is
         // missing from this list is silently dropped on the next write. (The

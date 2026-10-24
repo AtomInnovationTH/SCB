@@ -985,6 +985,40 @@ export class DebrisField {
   }
 
   /**
+   * Nets step 3 slice 5 (lane 5b, P5): a saved BIG piece that was still aboard comes back as a real field body. It claims a parked heavy
+   * spare of its type and material exactly as a high-field row does (`_claimHeavySpare`: a reload re-parks every spare, so one is free;
+   * none left = null, the caller counts it lost) and takes the saved name, mass, size, owner and tumbling area. It is credited (the catch
+   * counted and paid nothing; no later CATCH_PROCESSED for it pays or counts), tagged with the field row it was caught from (the registry's
+   * `markCaught` finds the row already gone), alive and discovered, and NOT laid out as a field piece (`welcomeSpawn` false: no re-seat,
+   * no store). Not yet held: the caller seats it on a holder (the collar or a daughter's rack), whose pin then owns its position.
+   * @param {{type: string, name?: string, material?: string, mass: number, size?: number, owner: object, areaM2?: number, fieldId?: string, fieldRow?: number}} spec
+   * @param {{orbit?: object}} [opts] `orbit`: an orbit to start the body on (the mother's), so its propagation is sane until a holder pins it
+   * @returns {object|null} the body
+   */
+  restoreHeldPiece(spec, opts = {}) {
+    if (!spec || !Constants.BIG_PIECES.TYPES.includes(spec.type) || !(spec.mass > 0)) return null;
+    const d = this._claimHeavySpare(spec.type, spec.material);
+    if (!d) return null;
+    d.mass = spec.mass;
+    if (Number.isFinite(spec.size) && spec.size > 0) DebrisField.setDebrisSize(d, spec.size);
+    if (spec.material) d.material = spec.material;
+    if (spec.name) d.name = spec.name;
+    d.owner = spec.owner ? { ...spec.owner } : null;
+    if (Number.isFinite(spec.areaM2)) d.areaM2 = spec.areaM2;
+    Object.assign(d, deriveCaptureFlags(d.material, d.type, d.mass));
+    if (opts.orbit) d.orbit = { ...opts.orbit };
+    d.fieldId = spec.fieldId ?? null;
+    d.fieldRow = spec.fieldRow ?? null;
+    d._fieldStored = false;
+    d._credited = true;
+    d.hazard = false;
+    d.discovered = true;
+    d.tracked = true;
+    d.alive = true;
+    return d;
+  }
+
+  /**
    * u20-debris v2 fix round 1 (F1, F2): is a claimed MISSION body's piece gone for good? Cleared = it was laid out (`welcomeSpawn`), is
    * no longer alive, is not parked in a field's store (`_fieldStored`: it comes back on a return visit) and is not inside a scoop bag
    * that is still in play. It does NOT read the capture flags (`_captured`, `_armPinned`, `_capturedByArm`...): a daughter's catch and

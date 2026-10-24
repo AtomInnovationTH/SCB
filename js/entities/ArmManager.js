@@ -14,8 +14,10 @@ import { Events } from '../core/Events.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
 import { checkActiveSatArming } from '../systems/ActiveSatGuard.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
-import { strutTipMeters, heldCargoPlumeConflictAt, heldCargoFoulsCorridorAt } from '../systems/CoMCalculator.js';
+import { strutTipMeters, heldCargoPlumeConflictAt, heldCargoFoulsCorridorAt, suggestCargoArm } from '../systems/CoMCalculator.js';
 import { armProfile, profileClearAt, profileValid, startProfile, stepProfile, kitFor, kitStep } from '../systems/HoldWingClear.js';
+// Nets step 3 slice 5 (lane 5b): a pending BIG piece leaves the ledger when its rack drops it (reset), and is never 'paid' for the unload.
+import { bigPieces } from '../systems/BigPieces.js';
 import { strutTipFoulsCorridor, strutLocalDirection, bestStrutAlpha } from './ArmDockBasis.js';
 import { createShipKeepOut } from '../systems/ShipKeepOut.js';
 import { StrutAutoController } from '../systems/StrutAuto.js';
@@ -5515,6 +5517,9 @@ export class ArmManager {
       d._breakdownActive = false;      // a mid-chop reset owns no furnace timeline
       d._catchRenderMin = 0;           // the held-readability floor dies with the hold
       clearRackCell(d);                // rack-snug: and the cell it held on her
+      // Nets step 3 slice 5 (lane 5b, C5): a pending BIG piece that breaks loose leaves the ledger with a plain line (nobody pays for it
+      // now) and is `_disposed`. GameFlowManager clears the ledger BEFORE a new game's reset, so this says nothing there.
+      if (bigPieces.loose(d.id)) d._disposed = true;
     }
   }
 
@@ -5528,7 +5533,8 @@ export class ArmManager {
    * @returns {Array<object>} the pieces handed over
    */
   unloadHeldCatches(isPaid) {
-    const paid = typeof isPaid === 'function' ? isPaid : (d) => !!(d && d._credited);
+    // slice 5 (5b): a pending big piece is credited but UNPAID (it pays when disposed of): the default never unloads one for nothing
+    const paid = typeof isPaid === 'function' ? isPaid : (d) => !!(d && d._credited && !bigPieces.isPending(d));
     const out = [];
     for (const arm of this.arms) {
       if (!arm || arm.state !== ARM_STATES.HOLDING_CATCH || !Array.isArray(arm.heldCatches)) continue;
@@ -5554,6 +5560,56 @@ export class ArmManager {
       if (ps && '_attitudeInertia' in ps) ps._attitudeInertia = null;
     }
     return out;
+  }
+
+  /**
+   * Nets step 3 slice 5 (lane 5b, P4): take ONE piece off a daughter's rack, as `unloadHeldCatches` does per piece (a big piece being
+   * disposed of; the caller clears the field body's own pins, a rack may hold a snapshot of it). The rack entry's pins and cell go,
+   * NET_CONSUMED is said (the bag visual clears; a collared catch that was waiting for room tries again), the rack is empty so ArmUnit's
+   * fallback sends her to reload next frame. Refuses (null) unless she is HOLDING_CATCH and not carrying it anywhere (a carry to a tip
+   * or the nose is in transit).
+   * @param {number|string} debrisId @returns {object|null} the rack's entry for the piece, or null
+   */
+  detachHeldCatch(debrisId) {
+    for (const arm of this.arms) {
+      if (!arm || !Array.isArray(arm.heldCatches)) continue;
+      const i = arm.heldCatches.findIndex((h) => h && h.id === debrisId);
+      if (i < 0) continue;
+      if (arm.state !== ARM_STATES.HOLDING_CATCH || arm._carry) return null;
+      const d = arm.heldCatches[i];
+      d._armPinned = false;
+      d._armPinPos = null;
+      d._capturedByArm = null;
+      d._breakdownActive = false;
+      d._catchRenderMin = 0;
+      clearRackCell(d);
+      arm.heldCatches.splice(i, 1);
+      arm.stateTimer = 0;
+      eventBus.emit(Events.NET_CONSUMED, { armIndex: arm.index, armId: arm.id, debrisId: d.id });
+      const ps = this.playerSatellite;
+      if (ps && '_attitudeInertia' in ps) ps._attitudeInertia = null;
+      return d;
+    }
+    return null;
+  }
+
+  /**
+   * Nets step 3 slice 5 (lane 5b, P5): put a restored big piece back on a daughter's rack after a reload: the daughter it was saved on
+   * if she is home and empty, else the one the cargo routing would pick (home, empty, not the last able to capture). Nothing is credited.
+   * @param {object} debris the restored field body @param {string|null} [hintArmId] the daughter it was saved on
+   * @returns {string|null} the daughter's id, or null when none can take it (the caller seats it at the collar)
+   */
+  restoreHeldCatch(debris, hintArmId = null) {
+    if (!debris) return null;
+    const ps = this.playerSatellite;
+    const pos = ps && typeof ps.getPosition === 'function' ? ps.getPosition() : (ps && ps.position) || null;
+    const quat = (ps && ps.quaternion) || null;
+    const hinted = hintArmId != null ? this.arms.find((a) => a && a.id === hintArmId) : null;
+    if (hinted && hinted.restoreHeldCatch(debris, pos, quat)) return hinted.id;
+    const idx = suggestCargoArm(this, ps, debris.mass, 0, null);
+    const arm = idx != null ? this.arms[idx] : null;
+    if (arm && arm.restoreHeldCatch(debris, pos, quat)) return arm.id;
+    return null;
   }
 
   // ========================================================================

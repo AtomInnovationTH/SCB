@@ -446,6 +446,33 @@ export class ScoringSystem {
   }
 
   /**
+   * Nets step 3 slice 5 (lane 5b, plan C3 "Score"): a big piece was disposed of and its pay lands. Like a catch's credit it goes to the
+   * wallet AND the score total (`awardPoints`); unlike it, the streak, the capture taper and the tier counts are not touched (the piece
+   * was counted at the catch and paid nothing there). Emits SCORE_UPDATE with `kind: 'disposal'` (the payoff line shows `kind: 'catch'`
+   * only; the disposal's own line is said by `GameFlowManager.disposeBigPiece`).
+   * @param {number} amount credits, whole @returns {number} what was paid
+   */
+  awardDisposal(amount) {
+    const cr = Math.max(0, Math.round(Number(amount)) || 0);
+    if (cr <= 0) return 0;
+    this.totalScore += cr;
+    this.credits += cr;
+    eventBus.emit(Events.SCORE_UPDATE, {
+      total: this.totalScore,
+      credits: this.credits,
+      delta: cr,
+      scoreDelta: cr,
+      creditsDelta: cr,
+      debrisCleared: gameState.debrisCleared,
+      streak: this.currentStreak,
+      massKg: 0,
+      totalMassKg: this.totalMassRecovered,
+      kind: 'disposal',
+    });
+    return cr;
+  }
+
+  /**
    * Process a cargo sale, applying MARKET sell modifier and bulk bonus.
    * Wired to CARGO_SELL / CARGO_SELL_ALL events.
    * @param {object} data - { totalValue: number, totalMassKg: number }
