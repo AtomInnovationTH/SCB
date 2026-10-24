@@ -663,6 +663,13 @@ export class GameFlowManager {
         this._refs.armManager.setFleetLaunchSpeed(save.launchSpeed);
       }
 
+      // Reaction wheels: the stored spin goes back AFTER the upgrade replay has re-installed the kit (a game-over save carries none:
+      // CONTINUE after it is a fresh attempt). An old save, or one made without the kit, has no `wheelH` and the wheels stay empty.
+      if (save.gameOver !== true && Array.isArray(save.wheelH) && this._refs.player
+        && typeof this._refs.player.restoreWheelState === 'function') {
+        this._refs.player.restoreWheelState(save.wheelH);
+      }
+
       // Nets step 3 lane 3f (§34 row 10): the daughters' ion fuel and cold gas, back on the daughters they were saved from. AFTER
       // resetGame's armManager.reset() (ArmUnit.reset() fills both tanks) and AFTER the upgrade replay (armFuelMax can raise a full
       // tank). An old save, and a game-over save, carry none: the tanks stay full, as they always were.
@@ -880,6 +887,8 @@ export class GameFlowManager {
       if (armManager) armManager.reset();
       // turn-gas D3: nothing of the reel push (gathered Δv, the turn it kicked) survives into the next run
       if (player && player.clearReelPushState) player.clearReelPushState();
+      // Reaction wheels: a fresh attempt starts with empty wheels (the upgrade replay below re-installs the kit)
+      if (player && player.resetWheelState) player.resetWheelState();
 
       // Opening dance: this is the ONE game-over exit that does its own partial
       // reset instead of calling resetGame(), so it needs the invariant call by
@@ -2040,6 +2049,8 @@ export class GameFlowManager {
     if (armManager) armManager.reset();
     // turn-gas D3: nothing of the reel push (gathered Δv, the turn it kicked) survives into the next run
     if (player && player.clearReelPushState) player.clearReelPushState();
+    // Reaction wheels: the run's kit goes with its purchases (a continued save's upgrade replay puts it back) and the wheels stand empty
+    if (player && player.resetWheelState) player.resetWheelState();
 
     // Opening dance (2026-09-16): every path that does NOT run the dance lands
     // on the open pose — CONTINUE, GAMEOVER retry, reduced motion, flag off,
@@ -2257,6 +2268,13 @@ export class GameFlowManager {
     // had spent. A game-over save carries none (CONTINUE is a fresh attempt: every tank full, as the xenon and cold gas levels above).
     if (gameState.currentState !== GameStates.GAME_OVER && this._refs.armManager && typeof this._refs.armManager.getSupplyState === 'function') {
       saveData.daughters = this._refs.armManager.getSupplyState();
+    }
+
+    // Reaction wheels: the stored spin (N·m·s, [x, y, z]) rides in the save when the kit is aboard; a game-over save carries none
+    // (CONTINUE is a fresh attempt). No kit: no key, the save is what it was.
+    if (gameState.currentState !== GameStates.GAME_OVER && this._refs.player && typeof this._refs.player.getWheelState === 'function') {
+      const wheelH = this._refs.player.getWheelState();
+      if (wheelH) saveData.wheelH = wheelH;
     }
 
     // Nets step 3 slice 2b (FIELDS_BY_HEIGHT): the field she is at, which pieces of each field are left, and the days the

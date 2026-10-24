@@ -27,7 +27,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { eventBus as defaultBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { LeashTransfer, planHandoff, minHandoffD, leashTurnLimits } from './LeashTransfer.js';
+import { LeashTransfer, planHandoff, minHandoffD, leashTurnLimits, leashWheelLimitS } from './LeashTransfer.js';
 import { attitudeTurnProfile, turnGasShort } from './AutopilotSystem.js';
 import { bandDegForRadius } from './TipCargo.js';
 import { reseatOrbitFromScene } from '../entities/OrbitalMechanics.js';
@@ -356,6 +356,11 @@ export class LeashDriver {
     }
     const plan = this._handoffPlan(debris, tipIndex, sp);
     if (!plan || !plan.ok || !(plan.psiRad >= 1e-4)) return false;       // < 1e-4: TURN skips the turn, which costs nothing
+    // reaction wheels (F1.5): a turn the wheels take costs no steering gas, so a low tank is no reason to refuse it. The same question
+    // `requestAttitudeTurn` will ask when the turn starts (F2.4: the wheels' limit is `leashWheelLimitS`, about the gas plan's time);
+    // `quiet`: this is a look, it says nothing.
+    if (typeof p.attitudeTorqueSource === 'function'
+        && p.attitudeTorqueSource({ spinUp: true, angleRad: plan.psiRad, nx: plan.axisBody.x, ny: plan.axisBody.y, limitS: leashWheelLimitS(plan.psiRad), quiet: true }) === 'wheels') return false;
     // the inertia at the turn: the receiving petal folded to the hand-off angle, the rest as they are (see above)
     let priced = p;
     if (typeof p.attitudeInertiaAt === 'function') {
@@ -818,7 +823,7 @@ export class LeashDriver {
     const t = h.turn = { state: 'turning', reason: '', lastProgress: 0, ended: null, cancelled: false };
     let promise = null;
     try {
-      promise = ap.requestAttitudeTurn(c.axisWorld, c.angleRad, { maxRate: c.maxRate, accel: c.accel, holdS: ATTITUDE_HOLD_S, holdOwner: HOLD_OWNER, maxWaitS: 60 });
+      promise = ap.requestAttitudeTurn(c.axisWorld, c.angleRad, { maxRate: c.maxRate, accel: c.accel, holdS: ATTITUDE_HOLD_S, holdOwner: HOLD_OWNER, maxWaitS: 60, wheelLimitS: leashWheelLimitS(c.angleRad) });
     } catch (err) {
       t.state = 'rejected';
       t.reason = (err && err.message) || 'turn refused';

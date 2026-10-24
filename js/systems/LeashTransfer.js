@@ -99,6 +99,21 @@ const DEG = Math.PI / 180;
 // ─── planHandoff ───────────────────────────────────────────────────────────
 
 /**
+ * F2.4: the longest the reaction wheels may take for a hand-off turn of `angleRad` (s): `LEASH.WHEEL_TURN_X` x the time of the gas plan
+ * (peak rate and ramp as `leashTurnLimits`). The swing of the line is tuned to that plan; a turn on the wheels 2x slower (55 s for what
+ * the gas does in 26 s) let the line touch a radiator and the hull and cut it (mission-1 bot, 10-24). So the wheels take the hand-off
+ * only for a turn about as quick as the gas, and the gas the rest.
+ * @param {number} angleRad
+ * @returns {number} s
+ */
+export function leashWheelLimitS(angleRad) {
+    const lim = leashTurnLimits();
+    const A = Math.abs(angleRad);
+    const t = A * lim.accel >= lim.maxRate * lim.maxRate ? A / lim.maxRate + lim.maxRate / lim.accel : 2 * Math.sqrt(A / lim.accel);
+    return K().WHEEL_TURN_X * t;
+}
+
+/**
  * The rate and ramp the hand-off asks the autopilot for when it turns the ship (rad/s, rad/s²). The ONE place they are
  * read: the TURN phase sends them with `startTurn`, and the early gas check (`LeashDriver.gasShort`, gas-low-fail-fast
  * D1) prices the turn with the same limits.

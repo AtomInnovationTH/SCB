@@ -187,6 +187,12 @@ const FITTING_SPECS = {
     display: (row) => ({ param: 'coldGasMax', base: coldGasPoolToKg(Constants.COLD_GAS_MAX), unit: 'kg', op: `+${coldGasPoolToKg(row.value)}` }),
     current: (deps) => (Number.isFinite(deps.resourceSystem?.coldGasMax) ? coldGasPoolToKg(deps.resourceSystem.coldGasMax) : undefined),
   },
+  // Reaction-wheel kit: shown as the wheels aboard (a count, 0 -> +3 wheels), read from the player's kit flag.
+  reaction_wheels: {
+    subsystem: 'ENGINEERING', reads: 'player',
+    display: () => ({ param: 'reactionWheels', base: 0, unit: 'wheels', op: `+${Constants.WHEELS.COUNT}` }),
+    current: (deps) => (deps.player && typeof deps.player.hasWheelKit === 'function' ? (deps.player.hasWheelKit() ? Constants.WHEELS.COUNT : 0) : undefined),
+  },
   mpd_thruster: {
     subsystem: 'ENGINEERING', reads: 'player',
     // Catalog value is `true`; the REAL magnitude the handler applies is

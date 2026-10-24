@@ -155,6 +155,9 @@ class PersistenceManager {
         // by saveGame (armManager.getSupplyState()); a game-over save passes none, so CONTINUE starts every tank full. Written only
         // when given: an old save, and a game-over save, load with full tanks as before. Additive (no SAVE_VERSION bump).
         ...(Array.isArray(data.daughters) ? { daughters: data.daughters } : {}),
+        // Reaction-wheel kit: the wheels' stored spin [x, y, z] in N·m·s, written only when the kit is aboard (saveGame). An old
+        // save and a no-kit save carry none and the wheels stay empty. Additive (no SAVE_VERSION bump).
+        ...(Array.isArray(data.wheelH) ? { wheelH: data.wheelH } : {}),
         // Nets step 3 slice 5 (lane 5b, P5): the big pieces still aboard (counted at the catch, paid when disposed of): [{type, name, material,
         // mass, size, owner, areaM2, fieldId, fieldRow, fate, holder, caughtAtMs, members?}]. Handed in by saveGame (BigPieces ledger); written
         // only when there are some, so a save with none (every old one, and a game-over save) is byte-for-byte what it was. Additive.

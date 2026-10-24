@@ -18,7 +18,7 @@ import { upgradePrereqsMet, upgradeCostNow, engineTankFull, consumableFull as no
 import { gasPriceCr, coldGasPriceCr, coldGasPoolToKg, indiumCartridgePriceCr, GAS_SWITCH_FILL_KG } from '../systems/ResourceSystem.js';
 
 /**
- * Upgrade definitions — 41 items across 9 categories, all wired to live systems
+ * Upgrade definitions — 42 items across 9 categories, all wired to live systems
  * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins
  * this header to them).
  * ST-6.6: Each upgrade carries a `trl` (NASA TRL 1-9) and optional `trlRationale`
@@ -63,6 +63,12 @@ export const UPGRADES = [
     // fu-gas GD2: the tank is pool units (20 = 6 kg); the card says real kg (+10 units = +3 kg)
     desc: `+${coldGasPoolToKg(10)} kg max cold gas`, effect: 'coldGasMax', value: 10, maxLevel: 2,
     trl: 9, trlRationale: 'Cold gas tanks ubiquitous since 1960s' },
+  // Reaction-wheel kit (owner 2026-10-24, DECISIONS §2 row 9): three RW4-class wheels, magnetic coils that slow them, the electronics.
+  // The numbers are Constants.WHEELS (the card says them out loud: mass, what the wheels do, what they do not).
+  { id: 'reaction_wheels', cat: 'Propulsion', name: 'Reaction Wheels (3)', cost: Constants.WHEELS.PRICE_CR,
+    desc: `Three spinning wheels, one per axis (${Constants.WHEELS.MASS_KG.toFixed(1)} kg with coils and electronics). They turn her for battery power, no steering gas, but each holds only ${Constants.WHEELS.MOMENTUM_NMS} N·m·s and gives ${Constants.WHEELS.TORQUE_NM} N·m, so a big turn takes minutes: quick turns and big turns stay on the gas. Magnetic coils slow a full wheel in about 4 hours of game time.`,
+    effect: 'wheelKit', value: 1, maxLevel: 1,
+    trl: 9, trlRationale: 'Reaction wheels flown on thousands of satellites since the 1960s (RW4-class small-satellite wheels, magnetorquer momentum dumping)' },
   { id: 'mpd_thruster', cat: 'Propulsion', name: 'MPD Thruster', cost: 3000,
     desc: 'Magnetoplasmadynamic drive. Runs passively alongside the ion engine for +50% primary thrust — cuts long transfer burns like the GEO climb. Draws on lithium reserves and heavy power.',
     effect: 'mpdThruster', value: true, maxLevel: 1,

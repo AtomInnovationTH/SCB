@@ -42,6 +42,10 @@
  *            ship's ΔV in m/s (`getMassBudget().deltaV`; `—` before the
  *            budget is ready); amber < 15 %, red only when empty. No physics
  *            constant is read here: every kg and m/s comes from the budget.
+ *   WHEELS   (the reaction-wheel kit, DECISIONS §2 row 9 / WD7; only while the kit is aboard) a third half on the PROPULSION row (built the first time the kit is aboard; on a pane under 430 px, the iPad held sideways, without the bar),
+ *            `│ WHEELS ▮▯▯▯ 42%`: the fullest of the three wheels, |h| / 4 N·m·s. Full is the BAD end (the opposite of the
+ *            tanks): green < 75 %, amber from 75 %, red from 90 % (a wheel that full cannot take more spin that way; the gas
+ *            or the tail boxes take over until the coils slow it). Not in the pane without the kit: its DOM is what it was.
  *   PLUME    `#plume-block-row` — the red WARN PLUME BLOCK line under the
  *            propulsion row (hidden unless StatusPanel lights it): never hover-only.
  *
@@ -89,9 +93,12 @@ export const VITALS_ROWS = Object.freeze(['heat', 'battery', 'propulsion']);
 /** The two halves of the PROPULSION row: nitrogen, then the engine gas. */
 export const VITALS_HALVES = Object.freeze(['gas', 'ion']);
 
+/** The reaction-wheel half: a third half of the PROPULSION row, built when the kit is first aboard and shown only while it is (WD7). */
+export const VITALS_WHEELS_HALF = 'wheels';
+
 /** Row / half labels. The engine half's label follows the loaded fuel's name. */
 export const VITALS_LABELS = Object.freeze({
-  heat: 'HEAT', battery: 'BATTERY', propulsion: 'PROPULSION', gas: 'N\u2082',
+  heat: 'HEAT', battery: 'BATTERY', propulsion: 'PROPULSION', gas: 'N\u2082', wheels: 'WHEELS',
   // q3 D4: until the loaded fuel is known the engine half carries the DEFAULT fuel's name (argon), not 'XENON'.
   ion: String((Constants.FUELS && Constants.FUELS[Constants.DEFAULT_FUEL] && Constants.FUELS[Constants.DEFAULT_FUEL].name) || 'Argon').toUpperCase(),
 });
@@ -141,6 +148,10 @@ export const VITALS_LAW = Object.freeze({
   GAS_AMBER: Constants.COLD_GAS_LOW_FRAC,   // gas-low-fail-fast D4: the same fraction the "steering gas low" comms line fires at
   GAS_RED: 0.10,
   ION_AMBER: 0.15,
+  WHEELS_AMBER: 0.75,       // WD7: the fullest wheel, |h| / capacity; FULL is bad, so amber from here ...
+  WHEELS_RED: 0.90,         // ... and red from here
+  WHEELS_BAR_MIN_PX: 430,   // a pane narrower than this (CSS px; the iPad held sideways is 384) drops the WHEELS bar and keeps `WHEELS nn%`: the three halves do not fit with it
+  WHEELS_FIT_MS: 1000,      // how often the pane's width is looked at (a layout read)
   RATE_HIDE_W: 20,          // |net| under this -> no trend arrow, no time left
   MEDIAN_SAMPLES: 30,       // the trend / time-left use the median of this many one-second means
   MEDIAN_BUCKET_MS: 1000,   // each sample = the mean net power over one second
@@ -194,6 +205,19 @@ export function levelBand(frac, yellowBelow, redBelow) {
   if (!Number.isFinite(frac)) return 'none';
   if (redBelow != null && frac < redBelow) return 'red';
   if (frac < yellowBelow) return 'yellow';
+  return 'green';
+}
+
+/**
+ * The reaction-wheel band for how full the fullest wheel is (a fraction of its capacity): green below 75 %, yellow from 75 %,
+ * red from 90 %. Non-finite -> 'none'.
+ * @param {number} frac
+ * @returns {'green'|'yellow'|'red'|'none'}
+ */
+export function wheelsBand(frac) {
+  if (!Number.isFinite(frac)) return 'none';
+  if (frac >= VITALS_LAW.WHEELS_RED) return 'red';
+  if (frac >= VITALS_LAW.WHEELS_AMBER) return 'yellow';
   return 'green';
 }
 
@@ -519,7 +543,9 @@ export class VitalsPane {
     // D4: the arrow and the time left wait until this many one-second means exist (a full window by
     // default) — a first scan 12 s into the game must not be the median of a 12-sample history.
     this._warmup = Number.isFinite(deps.medianWarmup) ? Math.max(0, deps.medianWarmup) : VITALS_LAW.MEDIAN_SAMPLES;
-    this._row = {};              // key -> { el, fill, flash, value, rate, tag, st }; 'gas' / 'ion' are the PROPULSION halves
+    this._row = {};              // key -> { el, fill, flash, value, rate, tag, st }; 'gas' / 'ion' / 'wheels' are the PROPULSION halves
+    this._wheelsOn = false;      // WD7: the WHEELS half is shown (the kit is aboard)
+    this._wheelsEls = [];        // its separator and the half
     /** the in / out watts text (`in … W · out … W`): not drawn here, StatusPanel's hover detail shows it */
     this._flowText = '';
     this._lastMs = null;
@@ -590,6 +616,7 @@ export class VitalsPane {
     this._paintBattery(res, power, t);
     this._paintGas(res, mb, t);
     this._paintIon(res, rs, mb);
+    this._paintWheels(player, t);
     return true;
   }
 
@@ -597,7 +624,10 @@ export class VitalsPane {
   rowText(key) {
     const r = this._row[key];
     if (!r) return '';
-    if (key === 'propulsion') return `${VITALS_LABELS.propulsion} ${this.rowText('gas')} ${this.rowText('ion')}`;
+    if (key === 'propulsion') {
+      const w = this._wheelsOn ? ` ${this.rowText('wheels')}` : '';
+      return `${VITALS_LABELS.propulsion} ${this.rowText('gas')} ${this.rowText('ion')}${w}`;
+    }
     const parts = [key === 'ion' ? this._fuelLabel : VITALS_LABELS[key], r.st.value];
     if (r.st.rate) parts.push(r.st.rate);
     if (r.st.tag) parts.push(r.st.tag);
@@ -766,6 +796,82 @@ export class VitalsPane {
       value: mb && Number.isFinite(mb.coldGasCurrent) ? fmtKg(mb.coldGasCurrent) : DASH,
     });
     this._cost('gas', t, v, max, VITALS_LAW.FLASH_GAS_FRAC * max, VITALS_LAW.FLASH_EXTEND_GAS_FRAC_PER_S * max);
+  }
+
+  /**
+   * @private WD7, the WHEELS half: shown only while the kit is aboard; the bar and the number are the fullest of the three wheels
+   * (|h| / capacity), the band the 75 % / 90 % law. A player that cannot say (a stub) or has no kit: hidden, nothing drawn.
+   */
+  _paintWheels(player, t) {
+    const on = !!(player && typeof player.hasWheelKit === 'function' && player.hasWheelKit());
+    if (on && !this._row.wheels && !this._buildWheelsHalf()) return;
+    const r = this._row.wheels;
+    if (!r) return;
+    if (on !== this._wheelsOn) {
+      this._wheelsOn = on;
+      for (const el of this._wheelsEls) el.style.display = on ? '' : 'none';
+    }
+    if (!on) return;
+    this._fitWheels(t);
+    let frac = NaN;
+    const h = typeof player.getWheelMomentum === 'function' ? player.getWheelMomentum() : null;
+    const cap = Constants.WHEELS && Constants.WHEELS.MOMENTUM_NMS;
+    if (h && cap > 0) frac = clamp01(Math.max(Math.abs(h.x), Math.abs(h.y), Math.abs(h.z)) / cap);
+    if (!Number.isFinite(frac)) { this._write(r, { band: 'none', fill: '0%', value: DASH }); return; }
+    this._write(r, { band: wheelsBand(frac), fill: pctStr(frac), value: `${Math.round(frac * 100)}%` });
+  }
+
+  /**
+   * @private WD7: on a narrow pane (the iPad held sideways: 384 CSS px, measured) the three halves overflow into each other, so the
+   * WHEELS half drops its bar and keeps `WHEELS nn%` (colour and number). Looked at once a second, and only with the kit aboard.
+   * A pane that cannot say its width (headless, a stub) counts as wide.
+   */
+  _fitWheels(t) {
+    const r = this._row.wheels, root = this._root;
+    if (!r || !root || (this._wheelsFitAt !== undefined && t - this._wheelsFitAt < VITALS_LAW.WHEELS_FIT_MS)) return;
+    this._wheelsFitAt = t;
+    const w = Number(root.offsetWidth);
+    const narrow = Number.isFinite(w) && w > 0 && w < VITALS_LAW.WHEELS_BAR_MIN_PX;
+    if (narrow === (this._wheelsNarrow === true)) return;
+    this._wheelsNarrow = narrow;
+    if (narrow) r.el.setAttribute('data-compact', ''); else r.el.removeAttribute('data-compact');
+  }
+
+  /**
+   * @private WD7: build the WHEELS half (a separator and a half, the same parts as the tanks') the first time the kit is aboard, at the
+   * end of the PROPULSION row. Without the kit the pane's DOM is exactly what it was. @returns {boolean} built
+   */
+  _buildWheelsHalf() {
+    const doc = this._doc, row = this._row.propulsion;
+    if (!doc || !row || !row.el || typeof doc.createElement !== 'function') return false;
+    const mk = (cls, text) => {
+      const el = doc.createElement('span');
+      el.className = cls;
+      if (text !== undefined) el.textContent = text;
+      return el;
+    };
+    const sep = mk('vp-sep', '\u2502');
+    const half = mk('vp-half');
+    half.setAttribute('data-half', VITALS_WHEELS_HALF);
+    half.setAttribute('data-band', 'none');
+    const sub = mk('vp-sublabel', VITALS_LABELS.wheels);
+    const track = mk(`vp-track vp-track-${VITALS_WHEELS_HALF}`);
+    const fill = mk('vp-fill');
+    fill.style.width = '0%';
+    track.appendChild(fill);
+    track.appendChild(mk('vp-ticks'));
+    const value = mk('vp-value', DASH);
+    half.appendChild(sub);
+    half.appendChild(track);
+    half.appendChild(value);
+    sep.style.display = 'none';
+    half.style.display = 'none';
+    row.el.appendChild(sep);
+    row.el.appendChild(half);
+    this._row.wheels = { el: half, label: sub, fill, flash: null, value, rate: null, tag: null,
+      st: { band: 'none', fill: '0%', value: DASH, rate: '', tag: '' } };
+    this._wheelsEls = [sep, half];
+    return true;
   }
 
   /**
@@ -1095,6 +1201,11 @@ export class VitalsPane {
       #${VITALS_ID} .vp-half .vp-track { min-width: 12px; }
       #${VITALS_ID} .vp-half .vp-value { flex: 0 0 auto; }
       #${VITALS_ID} .vp-half[data-half="ion"] { flex-grow: 1.15; }
+      /* WD7: the WHEELS half keeps its own size (label, a short bar, \`100%\`); the two tanks share what is left. */
+      #${VITALS_ID} .vp-half[data-half="wheels"] { flex: 0 0 auto; }
+      #${VITALS_ID} .vp-half[data-half="wheels"] .vp-track { flex: 0 0 40px; }
+      #${VITALS_ID} .vp-half[data-half="wheels"] .vp-value { min-width: 30px; text-align: right; }
+      #${VITALS_ID} .vp-half[data-half="wheels"][data-compact] .vp-track { display: none; }
       #${VITALS_ID} .vp-sep { flex: 0 0 auto; opacity: 0.35; color: ${LABEL}; }
       #${VITALS_ID} .vp-label {
         flex: 0 0 ${G.LABEL_PX}px;

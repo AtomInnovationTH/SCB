@@ -1050,6 +1050,44 @@ export const Constants = {
     AIM_SLACK_S: 60,             // seconds added to a slow aim's time-out on top of twice its planned time
   },
 
+  // ── Reaction-wheel kit (owner 2026-10-23/24, DECISIONS §2 row 9; docs/research/2026-10-reaction-wheels.md): the standard 3-wheel
+  // rung. One RW4-class wheel per body axis (x pitch, y yaw, z roll), a magnetic coil per axis that slowly bleeds the stored spin
+  // into the Earth's field, and the electronics. Wheels turn her for nothing but battery; the cold gas stays for fast turns and as
+  // backup. The kit is structure (on the axis, z = Z_M): it counts in her dry mass and her inertia, not in her centre of mass.
+  // MASS_KG and COIL_TORQUE_NM are derived below the literal, never typed.
+  WHEELS: {
+    COUNT: 3,
+    MOMENTUM_NMS: 4,             // N·m·s each wheel holds at most (RW4 class)
+    TORQUE_NM: 0.25,             // N·m each wheel gives the ship at most
+    WHEEL_MASS_KG: 9.6,          // 3 wheels
+    COIL_MASS_KG: 1.5,           // 3 coils of 0.5 kg
+    ELECTRONICS_MASS_KG: 1.0,
+    Z_M: -0.3,                   // m, the cluster on the axis, aft of the barrel origin (study: -0.2 to -0.4)
+    PRICE_CR: 800,
+    STANDBY_W: 10,               // W per wheel, always while the kit is aboard
+    PEAK_W: 150,                 // W per wheel at full torque (power follows torque in proportion)
+    COIL_W: 1.3,                 // W per coil, three coils together while any wheel holds spin
+    COIL_MOMENT_AM2: 15,         // A·m² per coil
+    FIELD_T: 36e-6,              // T: the study's mean field at 350 km (the game has no field model)
+    FIELD_ALLOWANCE: 0.5,        // the coil works across the field, not along it: half of it on average (study)
+    UNLOAD_ON_FRAC: 0.9,         // steering gas empty: the tail boxes start unloading an axis at this fraction of full ... (coordinator's assumption)
+    UNLOAD_OFF_FRAC: 0.5,        // ... and stop at this one
+    FULL_FRAC: 0.98,             // an axis this full cannot take more spin in that direction: the selector counts the wheels as full
+    MIN_BATTERY_WH: 0.5,         // below this the wheels give no torque (AutopilotSystem BATTERY_EMPTY_WH)
+    SERVO_ZONE_S: 2,             // the wheel rate-null is proportional inside alpha x this (rad/s): full torque outside, no chatter inside
+    REST_RAD_S: 1e-7,            // below this rate error a wheel-made spin counts as stopped
+    // F2 (moving targets): an aim at a drifting piece goes to the wheels only while their room rate covers the piece's line-of-sight
+    // rate this many times over (coordinator's choice; a ship that cannot out-turn the bearing never catches it), and the aim measures
+    // that rate itself (the first seconds), because no caller can say it at the request.
+    LOS_COVER: 2,
+    LOS_SETTLE_S: 0.3,           // s: a stateful aim provider (the lead-aim's smoothing, 20 % a frame) settles before the bearing's rate is read
+    LOS_CHECK_S: 0.8,            // s: the first look at the measured rate; the aim is re-judged every LOS_RECHECK_S after
+    LOS_RECHECK_S: 0.5,
+    LOS_TAU_S: 0.5,              // s: the measured rate is smoothed over this time
+    AIM_HANDOVER_X: 1.5,         // an aim not converged by AIM_HANDOVER_X × its plan + AIM_HANDOVER_S hands over to the gas (gas above sloth's floor)
+    AIM_HANDOVER_S: 5,
+  },
+
   // FIX_PLAN §3: Tether-aware rotation limits (exponential spring-resistance model).
   // When daughters are tethered, the mother's rotation is dampened by an "elastic" tether:
   //   effectiveRate = baseRate · (1 − |θ|/θ_max)^STIFFNESS_EXPONENT
@@ -1378,7 +1416,8 @@ export const Constants = {
     // g1-gas-upgrades (2026-10-16): 45 000 → 47 130 — the one-way gas rows gas_krypton 920 + gas_xenon 1 210
     // (priced by launch mass, ResourceSystem.gasPriceCr). The gas resupply is a consumable and is excluded,
     // like mother_net_restock.
-    CATALOG_TOTAL_CR: 47130,
+    // Reaction-wheel kit (2026-10-24): 47 130 → 47 930 — the one card reaction_wheels 800 (Constants.WHEELS.PRICE_CR; owner 10-24).
+    CATALOG_TOTAL_CR: 47930,
     // Ordered recommendation preference for the starter highlight. The shop
     // marks the first item here that is un-owned and currently affordable.
     RECOMMENDED_STARTERS: ['capture_net', 'fast_reel', 'enhanced_eo', 'efficient_ion'],
@@ -4835,6 +4874,7 @@ export const Constants = {
     // Ship turn (the turn itself belongs to the autopilot; passed through)
     TURN_MAX_RATE_DEG:   5,      // °/s peak — tmp/research/leash/turn-dynamics.md
     TURN_ACCEL_DEG:      2,      // °/s² ramp — turn-dynamics.md
+    WHEEL_TURN_X:        1.5,    // F2.4: the reaction wheels take the hand-off turn only when they need at most this many times the gas plan (the swing is tuned to the gas profile)
     // Reel
     REEL_SPEED_MPS:      0.05,   // estimate; <= LATCH_ALIGNED_MPS (arrival speed = reel speed)
     REEL_ACCEL_MPS2:     0.05,   // estimate; TSS-1 ramped the reel (NTRS 19970011947)
@@ -7219,6 +7259,13 @@ export const Constants = {
 Constants.ATTITUDE.RCS_ATTITUDE_N2_FACTOR =
   (2 * Constants.ATTITUDE.NOZZLE_THRUST_N / (Constants.REEL_PUSH.HOLD_ISP_S * Constants.G0)) /
   ((Constants.OCTOPUS_CORE_COLD_GAS / Constants.COLD_GAS_MAX) * Constants.ATTITUDE.COLD_GAS_BASE_RATE);
+
+// Reaction-wheel kit: derived, never typed. 9.6 + 1.5 + 1.0 = 12.1 kg. A coil of 15 A·m² across a 36 µT field, half of it
+// (the allowance) = 0.27 mN·m, so a full 4 N·m·s axis empties in 4 / 0.00027 = 14,800 s of game time (4.1 h).
+Constants.WHEELS.MASS_KG =
+  Constants.WHEELS.WHEEL_MASS_KG + Constants.WHEELS.COIL_MASS_KG + Constants.WHEELS.ELECTRONICS_MASS_KG;
+Constants.WHEELS.COIL_TORQUE_NM =
+  Constants.WHEELS.COIL_MOMENT_AM2 * Constants.WHEELS.FIELD_T * Constants.WHEELS.FIELD_ALLOWANCE;
 
 // ============================================================================
 // ST-6.6: TRL PURE HELPERS — exported for UI and tests.

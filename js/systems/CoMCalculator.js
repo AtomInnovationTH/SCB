@@ -701,6 +701,12 @@ export function computeInertia(armManager, playerSatellite, opts) {
   const netsAboard = motherNetBooking(playerSatellite);
   addPoint(netsAboard.massKg, { x: 0, y: 0, z: netsAboard.z });
 
+  // The reaction-wheel kit: structure aboard (unclamped), one point on the axis (the on-axis term only: izz does not move).
+  // A caller with no kit info (a mock, a tool) books none. computeCoM leaves it out (its z shift, about -1.2 cm, is the
+  // inertia's own centre-of-mass step here).
+  const kit = playerSatellite && typeof playerSatellite.wheelKitBooking === 'function' ? playerSatellite.wheelKitBooking() : null;
+  if (kit && kit.massKg > 0) addPoint(kit.massKg, { x: 0, y: 0, z: kit.z });
+
   // The radiators: structure aboard (unclamped), at each petal's live angle. A caller with no radiator info
   // (a mock, a tool) books none.
   let radIxx = 0, radIyy = 0, radIzz = 0;   // the radiators' share, also part of the clamp's reference below

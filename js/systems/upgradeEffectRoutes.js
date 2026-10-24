@@ -93,6 +93,10 @@ export const EFFECT_ROUTES = {
   flowerPairA: [PLAYER],
   flowerPairB: [PLAYER],
 
+  // ── Reaction-wheel kit → PlayerSatellite (hardware flag, idempotent: the save-restore replay re-applies it; the wheels'
+  // stored spin is saved apart: `wheelH` in the save, restored after the replay) ──
+  wheelKit: [PLAYER],
+
   // ── Sensors → SENSOR_UPGRADE event (SensorSystem self-manages) ──
   sensorRange: [SENSOR_EVENT],
   detectUntracked: [SENSOR_EVENT],

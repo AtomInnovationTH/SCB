@@ -186,6 +186,8 @@ const _v3AttC = new THREE.Vector3();
 const _v3AttD = new THREE.Vector3();
 const _v3AttE = new THREE.Vector3();
 const _v3SlA = new THREE.Vector3();   // sloth mode: the boxes' torque this substep (kept apart from the cold-gas torque)
+const _AXES3 = Object.freeze(['x', 'y', 'z']);
+const _v3WhA = new THREE.Vector3();   // reaction wheels: the torque the wheels give the ship this substep (kept apart from the gas torque)
 const _v3SlB = new THREE.Vector3();
 const _qAttA  = new THREE.Quaternion();
 const _qAttB  = new THREE.Quaternion();
@@ -533,6 +535,20 @@ export class PlayerSatellite extends THREE.Group {
     this._capY = 1;
     this._capMsgOn = false;
     this._gasSpin = false;   // sloth mode: the current spin was made by the cold gas, so the gas stops it (see attitudeTorqueSource)
+    // Reaction-wheel kit (Constants.WHEELS, DECISIONS §2 row 9). `_wheelH` = the wheels' stored spin, ship frame, N·m·s: what the
+    // ship's own turns borrowed from the wheels and kicks / the coils changed; a rest-to-rest wheel turn leaves it where it was.
+    this._wheelKit = false;          // the kit is aboard (bought; the save-restore replay re-applies it)
+    this._wheelH = new THREE.Vector3();
+    this._wheelSpin = false;         // the current spin was made by the wheels, so the wheels stop it (the gas twin is `_gasSpin`)
+    this._wheelUse = { x: 0, y: 0, z: 0 };   // this frame's full-torque seconds per axis (the power bill, `_wheelFrameEnd`)
+    this._wheelWorldDt = 0;          // the frame's world seconds (`update`): the coils work on the world clock
+    this._wheelUnload = { x: false, y: false };   // the tail boxes are unloading this axis (steering gas empty, the wheels full)
+    this._wheelMsg = { full: false, power: false, top: false };   // the "wheels full" / "no power" lines say themselves once per event; "top speed" once per held key
+    this._wheelPf = 0;               // the frame's power peek (0..1), `_slFrameBegin`
+    this._slowTurnProbe = null;      // () => boolean: the autopilot's slow turn / aim / scripted turn is running (set by `setSlowTurnProbe`)
+    this._unloadLitS = 0;            // this frame's box seconds lit by the wheel unload (they are not a turn: no sloth line, `_slothFrameEnd`)
+    this._slothSayPending = false;   // the kit is aboard: the "steering gas empty" line waits until the boxes really are the source
+    this._inertiaKit = false;        // the kit flag the cached inertia was computed with (the cache follows the kit)
     // net-refuse-hold: a refused mother-net shot / lasso cast leaves the ship pointed where the aim turned it: no
     // recenter toward prograde until the next deliberate attitude change. See holdHeadingAfterRefusal.
     this._recenterPaused = false;
@@ -722,6 +738,8 @@ export class PlayerSatellite extends THREE.Group {
     this._attitudeInertia = null;
     /** The radiator inputs the cache was computed from (`getAttitudeInertia`); null = none recorded yet. */
     this._radiatorKey = null;
+    /** The strut angles the cache was computed from (`getAttitudeInertia`); null = none recorded yet. */
+    this._strutKey = null;
     const _invalidateInertia = () => { this._attitudeInertia = null; };
     eventBus.on(Events.ARM_STATE_CHANGE, _invalidateInertia);
     eventBus.on(Events.NET_BERTHED, _invalidateInertia);
@@ -747,6 +765,7 @@ export class PlayerSatellite extends THREE.Group {
     // and nulling its turn; and when her cold-gas puffs last fired for it (performance.now seconds).
     this._reelPushHoldKg = 0;
     this._reelPushTurnKg = 0;
+    this._reelPushWheelNms = 0;               // wheel kit (WD3): N·m·s of kicks the wheels took (|taken| summed; a diagnostic, read by tests and probes)
     this._reelPushPuffAt = -Infinity;
     this._reelPushTurnPuffAt = -Infinity;
     this._qRecoil = new THREE.Quaternion();   // scratch: transient recoil rotation
@@ -4016,6 +4035,372 @@ export class PlayerSatellite extends THREE.Group {
     return this.getFlowerPairCount() * Constants.THERMAL.FLOWER.PAIR_DRY_MASS_KG;
   }
 
+  // ==========================================================================
+  // REACTION-WHEEL KIT (Constants.WHEELS; DECISIONS §2 row 9). One wheel per body axis. A wheel turn borrows spin from the wheel:
+  // the ship gains L, the wheel loses the same L (`_wheelH`), so a rest-to-rest turn leaves the wheels where they were. Torque
+  // costs battery in proportion; a full wheel gives no more in that direction; the coils bleed `_wheelH` toward 0 on the world
+  // clock, and with the steering gas empty the tail boxes unload a full pitch/yaw wheel on the real-time clock.
+  // ==========================================================================
+
+  /** @returns {boolean} the reaction-wheel kit is aboard */
+  hasWheelKit() { return this._wheelKit === true; }
+
+  /** @private Install the kit (idempotent). It is structure: mass and inertia change, so the cached inertia goes. */
+  _installWheelKit() {
+    if (this._wheelKit) return;
+    this._wheelKit = true;
+    this._attitudeInertia = null;
+  }
+
+  /**
+   * The kit's dry mass (kg): the mass-budget carrier term `ArmManager.getMassBudget` adds to the bus (12.1 kg), 0 without it.
+   * @returns {number}
+   */
+  getWheelKitMassKg() {
+    return this._wheelKit ? Constants.WHEELS.MASS_KG : 0;
+  }
+
+  /**
+   * The kit as one point mass on the axis (x = y = 0) at Z_M, for `computeInertia`. null without the kit. It is not in
+   * `computeCoM` (on the axis: it moves the centre of mass along z by m·z/M, about -1.2 cm, which the inertia's own CoM step
+   * takes and the CoM calculator does not).
+   * @returns {{massKg:number, z:number}|null}
+   */
+  wheelKitBooking() {
+    if (!this._wheelKit) return null;
+    return { massKg: Constants.WHEELS.MASS_KG, z: Constants.WHEELS.Z_M };
+  }
+
+  /** @returns {{x:number,y:number,z:number}} the wheels' stored spin, ship frame, N·m·s (a copy) */
+  getWheelMomentum() {
+    const h = this._wheelH;
+    return h ? { x: h.x, y: h.y, z: h.z } : { x: 0, y: 0, z: 0 };
+  }
+
+  /** @returns {number} 0..1: how full the fullest wheel is (0 without the kit) */
+  getWheelFill() {
+    if (!this._wheelKit || !this._wheelH) return 0;
+    const h = this._wheelH;
+    return Math.min(1, Math.max(Math.abs(h.x), Math.abs(h.y), Math.abs(h.z)) / Constants.WHEELS.MOMENTUM_NMS);
+  }
+
+  /** The kit's save slice: `[x, y, z]` N·m·s, or null without the kit (the save then carries no key). */
+  getWheelState() {
+    if (!this._wheelKit) return null;
+    const h = this._wheelH;
+    return [h.x, h.y, h.z];
+  }
+
+  /**
+   * Put a saved stored-spin back (after the upgrade replay has re-installed the kit). Bad data (not three finite numbers) and a
+   * ship without the kit change nothing; each value is held inside the wheel's capacity.
+   * @param {number[]} state `[x, y, z]`
+   */
+  restoreWheelState(state) {
+    if (!this._wheelKit || !Array.isArray(state) || state.length !== 3 || !state.every(Number.isFinite)) return;
+    const H = Constants.WHEELS.MOMENTUM_NMS;
+    this._wheelH.set(
+      Math.max(-H, Math.min(H, state[0])), Math.max(-H, Math.min(H, state[1])), Math.max(-H, Math.min(H, state[2])));
+  }
+
+  /** New game: the kit goes with the run's purchases (the replay of a continued save puts it back), the wheels stand empty. */
+  resetWheelState() {
+    // (tolerant of a ship stub built without the constructor: a test double the reset handlers are handed)
+    if (this._wheelH) this._wheelH.set(0, 0, 0);
+    this._wheelSpin = false;
+    if (this._wheelUnload) { this._wheelUnload.x = false; this._wheelUnload.y = false; }
+    if (this._wheelMsg) { this._wheelMsg.full = false; this._wheelMsg.power = false; this._wheelMsg.top = false; }
+    if (this._wheelUse) { this._wheelUse.x = 0; this._wheelUse.y = 0; this._wheelUse.z = 0; }
+    this._unloadLitS = 0;
+    if (this._wheelKit) { this._wheelKit = false; this._attitudeInertia = null; }
+  }
+
+  /** @returns {boolean} the kit is aboard and the battery can feed it (a play frame; no battery wired = not power-limited) */
+  wheelsUsable() {
+    if (!this._wheelKit || this._offPlayFrame === true) return false;
+    const b = this.resources ? this.resources.battery : undefined;
+    return !Number.isFinite(b) || b >= Constants.WHEELS.MIN_BATTERY_WH;
+  }
+
+  /** Peak torque (N·m) the wheel on a body axis gives the ship. */
+  wheelTauMag() { return Constants.WHEELS.TORQUE_NM; }
+
+  /**
+   * The autopilot says whether one of its slow turns (the eased slews and the trip hold, an aim, a scripted turn) is running: those
+   * write the attitude themselves, so the ship's own rate reads 0 under them. `fn() -> boolean`; null clears it.
+   * @param {(() => boolean)|null} fn
+   */
+  setSlowTurnProbe(fn) { this._slowTurnProbe = typeof fn === 'function' ? fn : null; }
+
+  /**
+   * F1.5: the wheels can turn her now (kit aboard, powered, neither pitch nor yaw wheel full): with the gas out she is not stuck on the
+   * tail boxes (minutes for a turn), so the launch ceremony may turn her. A wheel that is full one way only still counts as full here
+   * (no direction is known to the caller).
+   * @returns {boolean}
+   */
+  wheelsCanTurn() {
+    return this._wheelKit === true && this.wheelsUsable() && !this.wheelsFull();
+  }
+
+  /**
+   * F1.3: no turn or spin is in progress about pitch or yaw: no wheel-made spin, no rate (her own, to the wheels' own rest), no
+   * arrow key, no slow turn of the autopilot. The tail-box unload runs only then.
+   * @returns {boolean}
+   */
+  wheelsAtRest() {
+    if (this._wheelSpin === true) return false;
+    const w = this._rcsOmega;
+    if (w && (Math.abs(w.x) > 1e-6 || Math.abs(w.y) > 1e-6)) return false;
+    const c = this._attitudeCmd;
+    if (c && (c.pitch !== 0 || c.yaw !== 0)) return false;
+    if (this._slowTurnProbe && this._slowTurnProbe()) return false;
+    return true;
+  }
+
+  /**
+   * How much more spin (rad/s) the wheels can take from now while the ship turns about the body direction (dx, dy, dz)
+   * (normalised here): each axis's wheel has (H + sign·h) N·m·s of room in that direction, and the ship's rate along the
+   * direction costs it I·|d_i| of that per rad/s; the fullest axis sets it. 0 without the kit or with a full wheel.
+   * @returns {number} rad/s
+   */
+  wheelSpareRate(dx, dy, dz = 0) {
+    if (!this._wheelKit) return 0;
+    const l = Math.hypot(dx, dy, dz);
+    if (!(l > 1e-12)) return 0;
+    const I = this.getAttitudeInertia(), H = Constants.WHEELS.MOMENTUM_NMS, h = this._wheelH;
+    let r = Infinity;
+    const one = (d, hh, inertia) => {
+      const m = Math.abs(d) / l;
+      if (m > 1e-9) r = Math.min(r, (H + Math.sign(d) * hh) / (inertia * m));
+    };
+    one(dx, h.x, I.ixx); one(dy, h.y, I.iyy); one(dz, h.z, I.izz);
+    return Number.isFinite(r) ? Math.max(0, r) : 0;
+  }
+
+  /**
+   * The wheels cannot take (meaningful) spin in this direction: with a direction (dx, dy) an axis it uses has under
+   * (1 - FULL_FRAC) of its capacity left that way; without one, a pitch or yaw wheel is at FULL_FRAC or more.
+   * @returns {boolean}
+   */
+  wheelsFull(dx, dy) {
+    if (!this._wheelKit) return false;
+    const W = Constants.WHEELS, h = this._wheelH;
+    const lo = (1 - W.FULL_FRAC) * W.MOMENTUM_NMS;
+    if (Number.isFinite(dx) && Number.isFinite(dy) && (dx !== 0 || dy !== 0)) {
+      if (Math.abs(dx) > 1e-6 && W.MOMENTUM_NMS + Math.sign(dx) * h.x < lo) return true;
+      if (Math.abs(dy) > 1e-6 && W.MOMENTUM_NMS + Math.sign(dy) * h.y < lo) return true;
+      return false;
+    }
+    return Math.max(Math.abs(h.x), Math.abs(h.y)) >= W.FULL_FRAC * W.MOMENTUM_NMS;
+  }
+
+  /**
+   * Seconds a rest-to-rest turn of `angleRad` takes on the wheels about the body axis (nx, ny, 0)/|·| (the sign of `angleRad`
+   * is the sense): accelerate at the weakest axis's torque, never faster than the wheels' room allows (a trapezoid when the
+   * room is the limit, a triangle when it is not), brake the same way. Infinity when the wheels cannot turn her that way
+   * (no kit, a full wheel). The planning figure the selector, the aim and the slews all use.
+   * @returns {number} s
+   */
+  wheelTurnTimeS(angleRad, nx = 1, ny = 0) {
+    const lim = this._wheelTurnLimits(angleRad, nx, ny);
+    if (!lim) return Infinity;
+    const A = Math.abs(angleRad), { alpha, wmax } = lim;
+    return A * alpha < wmax * wmax ? 2 * Math.sqrt(A / alpha) : A / wmax + wmax / alpha;
+  }
+
+  /**
+   * The wheels' angular acceleration (the weakest axis the turn uses) and top rate (room, MAX_RATE) for a turn about (nx, ny); null
+   * when they cannot. `rateRadS` (F3.1): the rate she already has about that axis: the room is what is LEFT (her spin already took
+   * I·rate of it), so her top rate is that room's rate plus what she has.
+   * @private
+   */
+  _wheelTurnLimits(angleRad, nx, ny, rateRadS = 0) {
+    if (!this._wheelKit) return null;
+    const l = Math.hypot(nx, ny) || 1;
+    const s = angleRad < 0 ? -1 : 1;
+    const dx = s * nx / l, dy = s * ny / l;
+    const I = this.getAttitudeInertia(), tau = Constants.WHEELS.TORQUE_NM;
+    let alpha = Infinity;
+    if (Math.abs(dx) > 1e-9) alpha = Math.min(alpha, tau / (I.ixx * Math.abs(dx)));
+    if (Math.abs(dy) > 1e-9) alpha = Math.min(alpha, tau / (I.iyy * Math.abs(dy)));
+    const had = Number.isFinite(rateRadS) ? Math.max(0, rateRadS) : 0;
+    const wmax = Math.min(this.wheelSpareRate(dx, dy) + had, Constants.ATTITUDE.MAX_RATE);
+    if (!(alpha > 0) || !Number.isFinite(alpha) || !(wmax > 0)) return null;
+    return { alpha, wmax };
+  }
+
+  /**
+   * How much of the torque the wheels were asked for the battery can pay this frame, for `units` wheel-outputs (0..3) over
+   * `dt` seconds: the fraction of the power it holds (never free; 0 with no battery left). PEEK: the draw is billed at the
+   * frame end from the recorded torque (`_wheelFrameEnd`).
+   * @param {number} units @param {number} dt @returns {number} 0..1
+   */
+  wheelPeek(units, dt) {
+    if (!this._wheelKit || this._offPlayFrame === true) return 0;
+    const b = this.resources ? this.resources.battery : undefined;
+    if (!Number.isFinite(b)) return 1;
+    if (b < Constants.WHEELS.MIN_BATTERY_WH) return 0;
+    const need = (Constants.WHEELS.PEAK_W / Constants.SHIP_HEAT.W_PER_UNIT_S) * units * dt;
+    return need > 0 ? Math.min(1, Math.max(0, b) / need) : 1;
+  }
+
+  /**
+   * One wheel gives (or takes) torque: `seconds` of full output about `axis` turning the SHIP `sign` (+1 = positive about
+   * the axis). The wheel's own spin changes by the same moment the other way, and the seconds go on this frame's power bill.
+   * The autopilot's rate laws call it where they would light a tail box (`tailBoxLit`); the integrator's torque goes through
+   * the same bookkeeping. The stored spin stays inside the wheel's capacity (the rate laws never ask for more).
+   * @param {'x'|'y'|'z'} axis @param {number} sign @param {number} seconds
+   */
+  wheelLit(axis, sign, seconds) {
+    if (!this._wheelKit || !(seconds > 0)) return;
+    const H = Constants.WHEELS.MOMENTUM_NMS;
+    this._wheelH[axis] = Math.max(-H, Math.min(H, this._wheelH[axis] - sign * Constants.WHEELS.TORQUE_NM * seconds));
+    this._wheelUse[axis] += seconds;
+  }
+
+  /**
+   * Wheel kit, kicks (WD3; owner 10-24 "consider how ... reel-in can help reset wheels"): an angular impulse `(lx, ly)` N·m·s
+   * (body frame, about her centre of mass: what `applyImpulseAtPoint` computes from r × J) goes into the pitch and yaw wheels WITH
+   * ITS SIGN, as far as their 4 N·m·s limit allows: the ship gains L, the wheels hold it (`_wheelH += L`), so a kick against the
+   * stored spin lowers |h| (up to 2 × 4 N·m·s from a full wheel the other way) and one with it raises |h|. What does not fit is
+   * returned for the gas (the caller bills it at the real price). Roll is not kicked (dropped, as before). The wheels' torque is on the
+   * battery's bill: |taken| / TORQUE_NM seconds of full output on that axis (like any wheel turn), and only as much is taken as the
+   * battery can pay for (`wheelPeek`, F3.3: on a nearly flat battery a share, the rest is gas). Nothing is taken without the kit or
+   * without power (`wheelsUsable`: then the whole turn is gas, as without the kit).
+   * (A daughter launch's push, WD3b, is not built; when it is, it calls `applyImpulseAtPoint` and comes through here.)
+   * @param {number} lx N·m·s about +X @param {number} ly N·m·s about +Y
+   * @returns {{x:number,y:number}|null} what is left for the gas; null: the wheels took nothing (no kit, no power)
+   */
+  _wheelAbsorbKick(lx, ly) {
+    if (!this._wheelKit || !this._wheelH || !this.wheelsUsable()) return null;
+    const W = Constants.WHEELS, H = W.MOMENTUM_NMS, h = this._wheelH, use = this._wheelUse;
+    const fit = (axis, L) => (Math.abs(L) > 0 && Number.isFinite(L))
+      ? Math.max(-H, Math.min(H, h[axis] + L)) - h[axis]                   // what fits, signed (a push against the spin: it all fits)
+      : 0;
+    const fx = fit('x', lx), fy = fit('y', ly);
+    // F3.3 (WD6): the battery pays for the torque the wheels give, in full-output seconds like a turn's (`wheelPeek`: the share of it
+    // the battery holds, 0..1). On a nearly flat battery the wheels take only that share of what fits; the rest is gas, at the real price.
+    const total = Math.abs(fx) + Math.abs(fy);
+    const share = total > 0 ? this.wheelPeek(1, total / W.TORQUE_NM) : 1;
+    let taken = 0;
+    const take = (axis, L, room) => {
+      if (!(Math.abs(L) > 0) || !Number.isFinite(L)) return 0;
+      const got = room * share;
+      if (got !== 0) {
+        h[axis] += got;
+        taken += Math.abs(got);
+        if (use) use[axis] += Math.abs(got) / W.TORQUE_NM;
+      }
+      const rest = L - got;
+      return Math.abs(rest) < 1e-9 ? 0 : rest;
+    };
+    const x = take('x', lx, fx), y = take('y', ly, fy);
+    this._reelPushWheelNms += taken;
+    return { x, y };
+  }
+
+  /** @private The "wheels full" / "no power" comms line, once per event (the flag clears when the wheels serve a turn again). */
+  _wheelSay(kind) {
+    if (!this._wheelKit || this._offPlayFrame === true) return;
+    const m = this._wheelMsg;
+    if (m[kind]) return;
+    m[kind] = true;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: 'SPACECRAFT',
+      text: kind === 'full'
+        ? 'Reaction wheels full: turning on steering gas while the coils slow them.'
+        : 'Reaction wheels have no power: turning on steering gas.',
+      priority: 'info',
+    });
+  }
+
+  /**
+   * @private F1.4 (WD8): a held arrow key with the steering gas out has run the wheel full: she coasts on at the wheels' top speed and
+   * the wheels, not a tail box, will brake her once the key is up. Said once per hold, with the live numbers: the stop takes I·ω/τ
+   * seconds and I·ω²/(2τ) of angle (the wheels' torque τ, her inertia I about that axis, her rate ω now).
+   */
+  _wheelTopSpeedSay(axis, omegaAxis, I, WK) {
+    const m = this._wheelMsg;
+    if (!m || m.top || this._offPlayFrame === true) return;
+    const Ia = axis === 'x' ? I.ixx : I.iyy, w = Math.abs(omegaAxis);
+    if (!(Ia > 0) || !(WK.TORQUE_NM > 0)) return;
+    m.top = true;
+    const sec = Math.max(1, Math.round(Ia * w / WK.TORQUE_NM));
+    const deg = Math.max(1, Math.round((Ia * w * w / (2 * WK.TORQUE_NM)) * 180 / Math.PI));
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: 'SPACECRAFT',
+      text: `Reaction wheels at top speed: she needs about ${sec} s and ${deg}\u00b0 to stop after you let go.`,
+      priority: 'info',
+    });
+  }
+
+  /**
+   * Per frame, after the attitude tick (any owner): the kit's battery bill (standby always, torque in proportion to this frame's
+   * recorded full-output seconds, the coils while any wheel holds spin), the coils' dump on the WORLD clock, the tail boxes'
+   * unload on the real clock, and the tallies cleared. Nothing on an off-play frame (the menu picture bills nothing).
+   * @param {number} dt real seconds @private
+   */
+  _wheelFrameEnd(dt) {
+    const use = this._wheelUse;
+    if (!this._wheelKit || !use) { if (use) { use.x = 0; use.y = 0; use.z = 0; } return; }
+    if (this._offPlayFrame === true || !(dt > 0)) { use.x = 0; use.y = 0; use.z = 0; return; }
+    const W = Constants.WHEELS, per = Constants.SHIP_HEAT.W_PER_UNIT_S;
+    const h = this._wheelH;
+    const holding = Math.abs(h.x) > 1e-9 || Math.abs(h.y) > 1e-9 || Math.abs(h.z) > 1e-9;
+    const torqueS = use.x + use.y + use.z;
+    use.x = 0; use.y = 0; use.z = 0;
+    this._drawBurnResource('battery',
+      ((W.STANDBY_W * W.COUNT) * dt + W.PEAK_W * torqueS) / per);
+    // The coils work on the world clock (a held-world frame passes no game time) and only as far as the battery feeds them.
+    let fc = 0;
+    if (holding) fc = this._drawBurnResource('battery', (W.COIL_W * W.COUNT / per) * dt);
+    const dtWorld = this._motorBillHeld === true ? 0 : (this._wheelWorldDt > 0 ? this._wheelWorldDt : 0);
+    if (holding && fc > 0 && dtWorld > 0) {
+      const d = W.COIL_TORQUE_NM * dtWorld * fc;
+      for (const k of ['x', 'y', 'z']) {
+        const v = h[k];
+        h[k] = Math.abs(v) <= d ? 0 : v - Math.sign(v) * d;
+      }
+    }
+    this._wheelUnloadTick(dt);
+  }
+
+  /**
+   * Steering gas empty and a pitch / yaw wheel full: the tail boxes take its spin off, on the real-time clock, with the
+   * ship held still (the box's torque on the ship is cancelled by the wheel's, so the wheel's spin falls by the box's
+   * torque × time). Starts at UNLOAD_ON_FRAC of full, stops at UNLOAD_OFF_FRAC. The boxes are asked through `slothPeek`
+   * (cathodes, engine gas, power) and billed from their lit time like any box burn.
+   * @param {number} dt @private
+   */
+  _wheelUnloadTick(dt) {
+    const W = Constants.WHEELS, un = this._wheelUnload, h = this._wheelH;
+    if (!this.isSlothMode()) { un.x = false; un.y = false; return; }
+    // F1.3: only with the ship at rest. A turn or a spin in progress (a held key, a wheel-made rate she coasts on, the autopilot's slow
+    // turn or aim) is the wheels' business: the unload waits (its on/off flags keep) and never lights a box during a wheel turn.
+    if (!this.wheelsAtRest()) return;
+    let units = 0;
+    for (const k of ['x', 'y']) {
+      const f = Math.abs(h[k]) / W.MOMENTUM_NMS;
+      if (f >= W.UNLOAD_ON_FRAC) un[k] = true; else if (f <= W.UNLOAD_OFF_FRAC) un[k] = false;
+      if (un[k]) units += 1;
+    }
+    if (!(units > 0)) return;
+    const pf = this.slothPeek(units, dt);
+    if (!(pf > 0)) return;
+    const t = this._slothBoxTable();
+    for (const k of ['x', 'y']) {
+      if (!un[k]) continue;
+      const sgn = h[k] > 0 ? -1 : 1;                 // the box torque opposes the spin it takes off
+      const i = k === 'x' ? (sgn > 0 ? t.xp : t.xn) : (sgn > 0 ? t.yp : t.yn);
+      if (i < 0) continue;
+      const tau = Math.min(Math.abs(t.tau[i][k]), W.TORQUE_NM);   // the wheel can only cancel what it can hold
+      const dh = Math.min(Math.abs(h[k]), tau * pf * dt);
+      h[k] -= Math.sign(h[k]) * dh;
+      this._slothLitS[i] += pf * dt;
+      this._unloadLitS += pf * dt;      // lit for the unload: billed and glowing, but not a turn (sloth mode's line is for a turn)
+    }
+  }
+
   /**
    * Deploy-state snapshot for the thermal HUD group (StatusPanel). EMPTY-SAFE
    * contract: returns null until a pair is purchased — the HUD renders ''
@@ -7132,6 +7517,7 @@ export class PlayerSatellite extends THREE.Group {
     // w4-power D5: a held-world frame (a drawer holds the world, dtWorld 0 —
     // main.js `_worldHeld`) bills no motor; the meter and heat skip it too.
     this._motorBillHeld = !(dtWorld > 0) || noMotorBilling === true;
+    this._wheelWorldDt = dtWorld > 0 ? dtWorld : 0;   // the reaction-wheel coils work on the world clock (`_wheelFrameEnd`)
     // w8-tidy D1: an OFF-PLAY frame (menu / briefing / shop background tick) bills
     // nothing at all — no base load, no cold-gas hold. No game time passes there,
     // and the ledger would otherwise land as one heat step when play resumes.
@@ -8219,17 +8605,23 @@ export class PlayerSatellite extends THREE.Group {
       const com = computeCoM(am, this).position;
       r.x -= com.x; r.y -= com.y; r.z -= com.z;
     }
-    const lx = r.y * jLoc.z - r.z * jLoc.y;                                              // N·m·s
-    const ly = r.z * jLoc.x - r.x * jLoc.z;
+    let lx = r.y * jLoc.z - r.z * jLoc.y;                                                // N·m·s
+    let ly = r.z * jLoc.x - r.x * jLoc.z;
     if (lx !== 0 || ly !== 0) {
       const I = this.getAttitudeInertia();
       this._recoilPitchVel += lx / I.ixx;                                                // rad/s, true
       this._recoilYawVel += ly / I.iyy;
       // FC2: the spring takes this turn back out, and that costs cold gas (the net recoil's price list), with the couple's puffs
       // (a push through the CoM leaves float noise of ~1e-17 N·m·s here: that turns nothing and bills nothing)
+      // Wheel kit (WD3): the wheels take it first, with its sign (`_wheelAbsorbKick`); only what does not fit is gas. No kit, a kit
+      // without power: the whole turn is gas, exactly as before.
       if (Math.abs(lx) + Math.abs(ly) > 1e-6) {
-        this._reelPushTurnKg += this._billTurnNullN2(lx, ly);
-        this._reelPushTurnPuff(lx, ly);
+        const o = this._wheelAbsorbKick(lx, ly);
+        if (o) { lx = o.x; ly = o.y; }
+        if (Math.abs(lx) + Math.abs(ly) > 1e-6) {
+          this._reelPushTurnKg += this._billTurnNullN2(lx, ly);
+          this._reelPushTurnPuff(lx, ly);
+        }
       }
     }
 
@@ -8927,9 +9319,21 @@ export class PlayerSatellite extends THREE.Group {
       if (this._radiatorKey === null) this._storeRadiatorKey();
       else this._attitudeInertia = null;
     }
+    // The struts are structure that moves too (2026-10-24, measured: deploying them took a fresh inertia from 119.6 / 118.0 / 45.9
+    // to 145.3 / 119.7 / 85.0 kg m2 while the cache stayed at 119.6: nothing emits an event for a strut angle, the angle is
+    // written by the strut slew). Keyed on the angles, as the radiators are; a cache pre-set by a test, with no key yet, is current.
+    if (this._attitudeInertia && !this._strutKeyMatches()) {
+      if (this._strutKey === null) this._storeStrutKey();
+      else this._attitudeInertia = null;
+    }
+    // The wheel kit is structure too: owning it (or losing it on a new game) is a different inertia. Installing it drops the cache
+    // itself; this catches a flag set from outside. A cache pre-set by a test (kit never owned) matches: both flags start false.
+    if (this._attitudeInertia && this._inertiaKit !== this._wheelKit) this._attitudeInertia = null;
     if (!this._attitudeInertia) {
       this._attitudeInertia = computeInertia(this.armManager, this);
       this._storeRadiatorKey();
+      this._storeStrutKey();
+      this._inertiaKit = this._wheelKit;
     }
     return this._attitudeInertia;
   }
@@ -8969,6 +9373,29 @@ export class PlayerSatellite extends THREE.Group {
       if (key[2 + 2 * i] !== holds[i].az || key[3 + 2 * i] !== holds[i].thetaRad) return false;
     }
     return true;
+  }
+
+  /** @private The struts' angles the inertia cache was computed from (a flat number list); null = none recorded yet. */
+  _strutKeyMatches() {
+    const key = this._strutKey;
+    if (key === null || key === undefined) return false;
+    const arms = (this.armManager && this.armManager.arms) || EMPTY_HOLDS;
+    if (key.length !== arms.length) return false;
+    for (let i = 0; i < arms.length; i++) {
+      const a = arms[i];
+      if (key[i] !== (a ? (typeof a.getAimAlpha === 'function' ? a.getAimAlpha() : (a._aimAlpha || 0)) : 0)) return false;
+    }
+    return true;
+  }
+
+  _storeStrutKey() {
+    const arms = (this.armManager && this.armManager.arms) || EMPTY_HOLDS;
+    const key = this._strutKey && this._strutKey.length === arms.length ? this._strutKey : new Array(arms.length);
+    for (let i = 0; i < arms.length; i++) {
+      const a = arms[i];
+      key[i] = a ? (typeof a.getAimAlpha === 'function' ? a.getAimAlpha() : (a._aimAlpha || 0)) : 0;
+    }
+    this._strutKey = key;
   }
 
   _storeRadiatorKey() {
@@ -9121,6 +9548,11 @@ export class PlayerSatellite extends THREE.Group {
         // P2 aft flower — pair B (az 140/320) completes the four-strut flower.
         this._installFlowerPair('B');
         break;
+      case 'wheelKit':
+        // Reaction-wheel kit: a flag + dry mass + inertia (the cached inertia drops with it). Idempotent: the save-restore
+        // replay re-applies it. The wheels start with no stored spin (`restoreWheelState` puts a saved one back).
+        this._installWheelKit();
+        break;
     }
   }
 
@@ -9186,9 +9618,13 @@ export class PlayerSatellite extends THREE.Group {
     // turns her that way in the integrator — no cold-gas puffs, no gas, no hiss. Otherwise cold gas, with D5's cap.
     this._capP = 1; this._capY = 1;
     if (pv === 0 && yv === 0) this._capMsgOn = false;
-    if ((pv !== 0 || yv !== 0) && this.attitudeTorqueSource({ spinUp: true }) === 'tailBoxes') {
-      this._cmdTauFrac = 0;
-      return;
+    // (the arrow keys are the `fast` ask: the gas, unless it is out; then the wheels, else the boxes)
+    if (pv !== 0 || yv !== 0) {
+      const src = this.attitudeTorqueSource({ spinUp: true, fast: true, nx: pv, ny: yv });
+      if (src === 'tailBoxes' || src === 'wheels') {
+        this._cmdTauFrac = 0;
+        return;
+      }
     }
     if (pv !== 0 || yv !== 0) this._capColdSpinUp(pv, yv, dt);
     const capP = this._capP, capY = this._capY;
@@ -9233,6 +9669,7 @@ export class PlayerSatellite extends THREE.Group {
    */
   holdHeadingAfterRefusal() {
     this._recenterPaused = true;
+    this._wheelTakeBackSpin();
     if (this._rcsOmega) this._rcsOmega.set(0, 0, 0);
     this._holdTauFrac = 0;
   }
@@ -9259,6 +9696,7 @@ export class PlayerSatellite extends THREE.Group {
     } else {
       this._manualRotation.identity();
     }
+    this._wheelTakeBackSpin();
     if (this._rcsOmega) this._rcsOmega.set(0, 0, 0);
     if (fromAim) {
       this._tetherLatch.copy(this._manualRotation);
@@ -9379,13 +9817,24 @@ export class PlayerSatellite extends THREE.Group {
 
   /**
    * D10 — the ONE place the mother's attitude torque source is chosen. Order: cold gas above the stop reserve →
-   * [reaction wheels: a planned shop upgrade, DECISIONS §2 row 9; the kit plugs in HERE, between the two returns, and can
-   * call `tailBoxTorque` to unload its momentum] → the tail ion boxes. Every turn path asks it: the arrow keys
-   * (`commandAttitude`, the integrator), the rate-null servo, the autopilot's aim, its scripted turn, the trip's turn.
-   * @param {{spinUp?: boolean, rate?: number}} [ask] spinUp:false = an arrest (rate: the |rate error| it is about, rad/s)
-   * @returns {'coldGas'|'tailBoxes'}
+   * the reaction wheels (the kit, DECISIONS §2 row 9) → the tail ion boxes. Every turn path asks it: the arrow keys
+   * (`commandAttitude`, the integrator), the rate-null servo, the autopilot's aim, its scripted turn, the trip's turn, the slews.
+   *
+   * Reaction wheels (WD4), only with the kit aboard (`_wheelSource`): arrow keys (`fast`) stay on the gas while it lasts; every
+   * other turn goes to the wheels when they can finish it inside the caller's limit (`limitS`; the caller says how far: `angleRad`
+   * about the body axis (nx, ny)) and to the gas when they cannot; with the steering gas out the wheels take every turn, the arrow
+   * keys too; wheels full or unpowered fall back to the gas (comms line, once), and with the gas out too, to the tail boxes. A
+   * gas-made spin is braked by the gas, a wheel-made one by the wheels.
+   * @param {{spinUp?: boolean, rate?: number, fast?: boolean, angleRad?: number, nx?: number, ny?: number, limitS?: number, losRateRadS?: number, rateRadS?: number}} [ask]
+   *   spinUp:false = an arrest (rate: the |rate error| it is about, rad/s); fast:true = the arrow-key command;
+   *   losRateRadS = how fast the target's bearing turns away from her (an aim at a drifting piece, F2.1), rateRadS = her rate about the turn axis now
+   * @returns {'coldGas'|'tailBoxes'|'wheels'}
    */
   attitudeTorqueSource(ask) {
+    if (this._wheelKit === true) {
+      const w = this._wheelSource(ask || {});
+      if (w !== null) return w;
+    }
     if (!this.isSlothMode()) return 'coldGas';
     // The arrest may always spend what is left (the reserve was kept for it: "when the tank reads empty she is already at
     // rest"): a spin the cold gas made (`_gasSpin`, cleared when she is back at rest) or any spin the boxes could not
@@ -9396,6 +9845,79 @@ export class PlayerSatellite extends THREE.Group {
     if (ask && ask.spinUp === false && (this.resources.coldGas || 0) > this.slothGasDustPool()
         && (this._gasSpin === true || ask.rate > Constants.SLOTH.GAS_ARREST_ABOVE_DEG_S * Math.PI / 180)) return 'coldGas';
     return 'tailBoxes';
+  }
+
+  /**
+   * The reaction wheels' part of the selector. Returns 'wheels' or 'coldGas' when the kit decides, null when it does not (no
+   * wheel can serve: the old two-source choice follows).
+   * @param {object} ask see `attitudeTorqueSource` @returns {'wheels'|'coldGas'|null} @private
+   */
+  _wheelSource(ask) {
+    const usable = this.wheelsUsable();
+    const sloth = this.isSlothMode();
+    if (ask.spinUp === false) {
+      // an arrest: a wheel-made spin is the wheels' to stop (the spin came out of them, the stop goes back into them)
+      return (this._wheelSpin === true && usable) ? 'wheels' : null;
+    }
+    const fast = ask.fast === true;
+    const hasAngle = Number.isFinite(ask.angleRad);
+    if (!usable) {
+      // no power: the turn goes to the gas (with the gas out, to the boxes: null). Said once, for a turn the wheels would have done.
+      if (!sloth && !fast && hasAngle && this._offPlayFrame !== true && ask.quiet !== true) {
+        const b = this.resources ? this.resources.battery : undefined;
+        if (Number.isFinite(b) && b < Constants.WHEELS.MIN_BATTERY_WH) this._wheelSay('power');
+      }
+      return null;
+    }
+    if (sloth) {
+      // steering gas out: the wheels take every turn they can take, the arrow keys too. A full wheel in that direction hands the turn
+      // to the boxes only for a ship AT REST (F1.1/F1.4): one already turning on the wheels (hers, `_wheelSpin`, or the autopilot's
+      // slow turn, `ask.carrying`) coasts on the full wheel and the wheels brake her, which is what empties them. No "turning on
+      // steering gas" line here (F1.2): there is no gas; sloth mode's own line comes when a box really takes a turn.
+      const turning = ask.carrying === true || this._wheelSpin === true;
+      if (this.wheelsFull(ask.nx, ask.ny) && !turning) return null;
+      return 'wheels';
+    }
+    if (fast) return 'coldGas';                  // the arrow keys stay on the gas while it lasts (owner)
+    if (!hasAngle) return 'coldGas';             // nothing says how far: the wheels cannot promise to finish
+    const est = this.wheelTurnTimeS(ask.angleRad, ask.nx, ask.ny);
+    if (!Number.isFinite(est)) { if (ask.quiet !== true) this._wheelSay('full'); return 'coldGas'; }
+    if (ask.quiet !== true) { this._wheelMsg.full = false; this._wheelMsg.power = false; }   // the wheels can serve again: the next failure is a new event
+    const limit = Number.isFinite(ask.limitS) ? ask.limitS : Infinity;
+    // F2.1 (a drifting target): the wheels take the aim only when their room rate covers the target's line-of-sight rate (LOS_COVER
+    // times over: an aim that stops AT the bearing needs more than that, F2.2 tracks it) and the chase (the angle plus the bearing's
+    // drift during the turn) fits the limit; the gas takes a faster one. `rateRadS` = the rate she already has about the turn axis.
+    const los = Number.isFinite(ask.losRateRadS) ? Math.max(0, ask.losRateRadS) : 0;
+    if (los > 0) {
+      const l = Math.hypot(ask.nx, ask.ny) || 1, s = ask.angleRad < 0 ? -1 : 1;
+      const room = this.wheelSpareRate(s * ask.nx / l, s * ask.ny / l) + Math.max(0, Number.isFinite(ask.rateRadS) ? ask.rateRadS : 0);
+      if (room < Constants.WHEELS.LOS_COVER * los) return 'coldGas';
+      return this.wheelChaseTimeS(ask.angleRad, ask.nx, ask.ny, los, ask.rateRadS) <= limit ? 'wheels' : 'coldGas';
+    }
+    return est <= limit ? 'wheels' : 'coldGas';
+  }
+
+  /**
+   * F2.1/F2.2: seconds to turn onto a bearing that is `angleRad` away and runs on at `losRateRadS` (rad/s, along the turn), ARRIVING AT
+   * ITS RATE (the eased aim of the wheels tracks it, F2.2: it does not stop at it). From rest, or (F3.1) from the rate `rateRadS` she
+   * already has along the turn. Her rate climbs at α to a peak and comes back down to the bearing's rate w; in the bearing's frame she
+   * closes at v0 = rate - w, and the peak closing rate is vp = sqrt(α·angle + v0²/2) (the distance she covers = the angle), at most
+   * the wheels' room (then she cruises at it for the rest). w = 0 and rate = 0 is `wheelTurnTimeS`. Infinity when the wheels cannot
+   * turn her that way or cannot out-turn the bearing.
+   * @returns {number} s
+   */
+  wheelChaseTimeS(angleRad, nx = 1, ny = 0, losRateRadS = 0, rateRadS = 0) {
+    const w = Number.isFinite(losRateRadS) ? Math.max(0, losRateRadS) : 0;
+    const r = Number.isFinite(rateRadS) ? Math.max(0, rateRadS) : 0;
+    if (!(w > 0) && !(r > 0)) return this.wheelTurnTimeS(angleRad, nx, ny);
+    const lim = this._wheelTurnLimits(angleRad, nx, ny, r);
+    if (!lim || !(lim.wmax > w)) return Infinity;
+    const { alpha } = lim, e0 = Math.abs(angleRad), v0 = r - w, vmax = lim.wmax - w;
+    if (v0 > 0 && e0 < v0 * v0 / (2 * alpha)) return v0 / alpha + 2 * Math.sqrt((v0 * v0 / (2 * alpha) - e0) / alpha);   // too fast to stop in time: brake, come back
+    const vp = Math.sqrt(alpha * e0 + 0.5 * v0 * v0);
+    if (vp <= vmax) return (2 * vp - v0) / alpha;
+    const gain = (2 * vmax * vmax - v0 * v0) / (2 * alpha);                      // what the climb to the room's rate and the return win on the bearing
+    return (2 * vmax - v0) / alpha + Math.max(0, e0 - gain) / vmax;
   }
 
   /**
@@ -9527,12 +10049,14 @@ export class PlayerSatellite extends THREE.Group {
    * F1.7: a body spin another owner was carrying as a bare number (the trip hold's slow turn, `AutopilotSystem._tripLetGo`)
    * comes to her: it stays, and her rate-null brakes it on the boxes when they have power and engine gas.
    * @param {number} wx rad/s about body X @param {number} wy rad/s about body Y
+   * @param {string} [src] what made it ('wheels' marks a wheel-made spin)
    */
-  adoptBodySpin(wx, wy) {
+  adoptBodySpin(wx, wy, src) {
     // Kept until the next attitude tick has resolved the owner: the hand-back from AUTOPILOT to PLAYER zeroes the body rate
     // (`_handAttitudeToPlayer`), and the spin must outlive that.
-    const a = this._adoptSpin || (this._adoptSpin = { x: 0, y: 0 });
+    const a = this._adoptSpin || (this._adoptSpin = { x: 0, y: 0, wheels: false });
     a.x += wx; a.y += wy;
+    if (src === 'wheels') a.wheels = true;   // a wheel-made spin: the wheels' to brake (`attitudeTorqueSource`)
   }
 
   /**
@@ -9559,16 +10083,15 @@ export class PlayerSatellite extends THREE.Group {
     const S = Constants.SLOTH;
     if (!this.isSlothMode()) {
       this._slothWarm = false; this._slothWarming = false; this._slothWarmS = 0; this._slothWasOn = false;
+      this._slothSayPending = false;
       return;
     }
     if (!this._slothWasOn) {
       this._slothWasOn = true;
-      const t = this.slothTurnTimeS(Math.PI / 2);
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        source: 'SPACECRAFT',
-        text: `Emergency steering activated: steering gas empty, the tail boxes turn her slowly (${this.slothTimeWords(t)} per 90°).`,
-        priority: 'warning',
-      });
+      // With the reaction wheels aboard the wheels turn her when the gas is out: the line is said only if the boxes have to
+      // take over (a box lights: wheels full or without power; `_slothFrameEnd`).
+      if (this._wheelKit === true) this._slothSayPending = true;
+      else this._slothSay();
     }
     if (!(dt > 0) || !(this._slothWarm || this._slothWarming)) return;
     const f = this._drawBurnResource('battery', (S.STANDBY_W / Constants.SHIP_HEAT.W_PER_UNIT_S) * dt);
@@ -9578,6 +10101,30 @@ export class PlayerSatellite extends THREE.Group {
       this._slothWarmS += dt * f;
       if (this._slothWarmS >= S.WARMUP_S) { this._slothWarm = true; this._slothWarming = false; }
     }
+  }
+
+  /** @private The one "steering gas empty" line (sloth mode on, the boxes the source). */
+  _slothSay() {
+    const t = this.slothTurnTimeS(Math.PI / 2);
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: 'SPACECRAFT',
+      text: `Emergency steering activated: steering gas empty, the tail boxes turn her slowly (${this.slothTimeWords(t)} per 90°).`,
+      priority: 'warning',
+    });
+  }
+
+  /**
+   * A spin the wheels made goes back into them when she stops being the ship that carries it (a hand-over to the autopilot, a refused
+   * shot): the rate is zeroed by fiat there, so the wheels take its angular momentum (I·ω per axis) and the total still adds up.
+   * @private
+   */
+  _wheelTakeBackSpin() {
+    if (!this._wheelSpin) return;
+    this._wheelSpin = false;
+    if (!this._wheelKit || !this._rcsOmega) return;
+    const I = this.getAttitudeInertia(), H = Constants.WHEELS.MOMENTUM_NMS, w = this._rcsOmega, h = this._wheelH;
+    h.x = Math.max(-H, Math.min(H, h.x + I.ixx * w.x));
+    h.y = Math.max(-H, Math.min(H, h.y + I.iyy * w.y));
   }
 
   /**
@@ -9591,7 +10138,12 @@ export class PlayerSatellite extends THREE.Group {
     let sum = 0;
     for (let i = 0; i < lit.length; i++) sum += lit[i];
     for (let i = 0; i < lit.length; i++) this._slothGlow[i] = dt > 0 ? Math.min(1, lit[i] / dt) : 0;
+    const unloadS = this._unloadLitS;
+    this._unloadLitS = 0;
     if (!(sum > 0)) return;
+    // With the kit aboard the "steering gas empty" line waits until a box really TURNS her (the wheels were full at rest or unpowered):
+    // the unload's lit time is a box at work on a full wheel, not a turn (F1.3)
+    if (this._slothSayPending === true && sum - unloadS > 1e-9) { this._slothSayPending = false; this._slothSay(); }
     if (this._offPlayFrame !== true) {
       const S = Constants.SLOTH;
       this._drawBurnResource('battery', (S.BOX_POWER_W / Constants.SHIP_HEAT.W_PER_UNIT_S) * sum);
@@ -9609,11 +10161,11 @@ export class PlayerSatellite extends THREE.Group {
     const cmd = this._attitudeCmd, w = this._rcsOmega;
     let units = 0;
     const one = (c, rate, axis) => {
-      if (c !== 0) return Math.min(1, Math.abs(c));
+      if (c !== 0) return (this._sl && this._sl.cmdSrc === 'wheels') ? 0 : Math.min(1, Math.abs(c));   // a key the wheels serve lights no box
       const e = Math.abs(rate);
       if (e <= S.REST_RAD_S) return 0;
       if (e <= S.COLD_START_RAD_S && !this._slothWarm && !this._slothWarming) return 0;   // a cold-gas arrest's residue does not wake the cathodes
-      if (this.attitudeTorqueSource({ spinUp: false, rate: e }) === 'coldGas') return 0;
+      if (this.attitudeTorqueSource({ spinUp: false, rate: e }) !== 'tailBoxes') return 0;   // the gas or the wheels brake it
       const a = this.slothAlpha(axis);
       return a > 0 ? Math.min(1, e / (a * S.SERVO_ZONE_S)) : 0;
     };
@@ -9632,9 +10184,13 @@ export class PlayerSatellite extends THREE.Group {
     const st = this._sl || (this._sl = { on: false, pf: 0, gasFrac: 1, cmdSrc: 'coldGas' });
     st.on = this.isSlothMode();
     st.pf = 0; st.gasFrac = 1; st.cmdSrc = 'coldGas';
-    if (!st.on) return st;
     const dtc = Math.min(dt, 0.1);
-    if (this._attitudeCmd) st.cmdSrc = this.attitudeTorqueSource({ spinUp: true });
+    // the wheels' power peek (what the battery can give them this frame, for full torque on all three), any mode
+    this._wheelPf = this._wheelKit === true ? this.wheelPeek(3, dtc) : 0;
+    if (!st.on) return st;
+    if (this._attitudeCmd) {
+      st.cmdSrc = this.attitudeTorqueSource({ spinUp: true, fast: true, nx: this._attitudeCmd.pitch, ny: this._attitudeCmd.yaw });
+    }
     const k = this._coldGasRate * (Constants.ATTITUDE.RCS_ATTITUDE_N2_FACTOR ?? 1);
     st.gasFrac = k > 0 ? Math.min(1, (this.resources.coldGas || 0) / (2 * k * dtc)) : 1;
     st.pf = this.slothPeek(this._slothDemandUnits(), dtc);
@@ -9700,6 +10256,9 @@ export class PlayerSatellite extends THREE.Group {
     // first, the boxes' lit time billed and their glow set last.
     this._slothTick(dt);
     this._tickAttitudeCore(dt);
+    // The reaction wheels' battery bill, coil dump, tail-box unload (nothing without the kit): BEFORE the boxes' frame end, so the
+    // unload's lit time is billed and glows this frame.
+    this._wheelFrameEnd(dt);
     this._slothFrameEnd(dt);
   }
 
@@ -9728,12 +10287,16 @@ export class PlayerSatellite extends THREE.Group {
 
     // F1.7: a spin another owner was carrying (`adoptBodySpin`) joins her rate once she is hers again, after the hand-back's zeroing
     if (this._adoptSpin) {
-      if (entersManual) { this._rcsOmega.x += this._adoptSpin.x; this._rcsOmega.y += this._adoptSpin.y; }
+      if (entersManual) {
+        this._rcsOmega.x += this._adoptSpin.x; this._rcsOmega.y += this._adoptSpin.y;
+        if (this._adoptSpin.wheels) this._wheelSpin = true;
+      }
       this._adoptSpin = null;
     }
 
     // AP / AIM drive the quaternion directly — hold zero body rate under them.
     if (owner !== 'PLAYER' && owner !== 'CINEMATIC') {
+      this._wheelTakeBackSpin();   // a spin the wheels made goes back into them (the zeroing below is by fiat, momentum still adds up)
       this._rcsOmega.set(0, 0, 0);
       this._attitudeCmd = null;
       this._cmdTauFrac = 0;  // no command under AP/AIM
@@ -9759,6 +10322,9 @@ export class PlayerSatellite extends THREE.Group {
     const omega = this._rcsOmega;
     // back at rest (the cold servo's own 1e-4 rad/s): the gas spin is over, the next spin is whoever makes it
     if (Math.abs(omega.x) <= 1e-4 && Math.abs(omega.y) <= 1e-4) this._gasSpin = false;
+    // the wheels' own rest (REST_RAD_S, finer than the gas's): a wheel-made spin is the wheels' until the servo has braked it there; clearing it
+    // earlier would leave the last 1e-6 rad/s to a tail box (a glow at the end of every wheel turn with the gas out, F1.3)
+    if (Math.abs(omega.x) <= Constants.WHEELS.REST_RAD_S && Math.abs(omega.y) <= Constants.WHEELS.REST_RAD_S) this._wheelSpin = false;
     const coldGas = this.resources ? (this.resources.coldGas || 0) : 0;
     const cmd = this._attitudeCmd;
 
@@ -9837,11 +10403,22 @@ export class PlayerSatellite extends THREE.Group {
     const slothOn = !!(sl && sl.on);
     const boxTau = _v3SlA.set(0, 0, 0);   // sloth mode: what the tail boxes add (the cold-gas torque stays in `tau`)
     const tau = _v3AttA.set(0, 0, 0);
+    // Reaction wheels (the kit): the torque they give the ship this substep; the wheel's own spin changes the other way and the
+    // battery pays in proportion (applied below, inside the wheel's capacity). `kitOn` = aboard and the battery can feed them.
+    const WK = Constants.WHEELS;
+    const kitOn = this._wheelKit === true && this._wheelPf > 0;
+    const wTau = _v3WhA.set(0, 0, 0);
+    let wKeyX = false, wKeyY = false;     // F1.4: a held key is giving torque to the wheels on this axis
     if (slothOn && sl.cmdSrc === 'tailBoxes') {
       // D6: holding a key lights (after warm-up) the box that turns her that way; the real ion torque, scaled by what the
       // battery / engine gas / cathodes give (`tailBoxTorque`).
       if (p !== 0) this.tailBoxTorque('x', p, h, boxTau);
       if (y !== 0) this.tailBoxTorque('y', y, h, boxTau);
+      p = 0; y = 0;   // no cold couple fires: no parasitic couple force below either
+    } else if (slothOn && sl.cmdSrc === 'wheels' && kitOn) {
+      // gas out, wheels aboard: a held key is the wheels' torque (the arrow keys stay on the gas while it lasts), no puffs, no gas
+      if (p !== 0) { wTau.x += p * WK.TORQUE_NM * this._wheelPf; wKeyX = true; }
+      if (y !== 0) { wTau.y += y * WK.TORQUE_NM * this._wheelPf; wKeyY = true; }
       p = 0; y = 0;   // no cold couple fires: no parasitic couple force below either
     } else {
       // D5: the cap on the command's spin-up (set by commandAttitude for this frame; 1 = no cap)
@@ -9878,17 +10455,52 @@ export class PlayerSatellite extends THREE.Group {
     // unmutated _manualRotation). th_i = ang·axis_i, so |th| = ang (total offset).
     const th = (recentering || tethered) ? this._tetherOffsetAngles(_v3AttD) : null;
 
+    // Reaction wheels (WD4): a recentre is a turn too. The wheels take it when they can finish the whole offset inside
+    // AIM_TIMEOUT_S; the gas otherwise. A spin already running keeps its source (a gas-made one goes on with the gas, a wheel-made one
+    // with the wheels); the choice is made at rest. The wheels' target rate stops inside the offset at half their own α (a P-law
+    // at the gas's rates would overshoot: the wheels are slow) and never asks for more than the room they have.
+    let wheelRec = false;
+    if (kitOn && recentering && th) {
+      if (this._wheelSpin) wheelRec = true;
+      else if (!this._gasSpin) {
+        const offX = cmdP === 0 && Math.abs(th.x) > A.HOLD_DEADBAND_RAD, offY = cmdY === 0 && Math.abs(th.y) > A.HOLD_DEADBAND_RAD;
+        if (offX || offY) {
+          const tx = offX ? th.x : 0, ty = offY ? th.y : 0;
+          wheelRec = this.wheelTurnTimeS(Math.hypot(tx, ty), -tx, -ty) <= Constants.AIM.AIM_TIMEOUT_S;
+        }
+      }
+    }
+    const wheelWT = (thi, axis) => {
+      const Ii = axis === 'x' ? I.ixx : (axis === 'y' ? I.iyy : I.izz);
+      const dirS = -Math.sign(thi);
+      const rem = Math.max(0, Math.abs(thi) - 0.5 * A.HOLD_DEADBAND_RAD);
+      const room = Math.max(0, (WK.MOMENTUM_NMS + dirS * this._wheelH[axis]) / Ii);   // the rate this wheel can still take that way
+      return dirS * Math.min(A.RECENTER_RATE, Math.sqrt((WK.TORQUE_NM / Ii) * rem), room);
+    };
+
     // Target body rate: default zero (pure arrest); on axes with an offset beyond
     // the deadband and no raw command, servo toward prograde at ≤ RECENTER_RATE.
     // D5: a recenter turn is a cold-gas turn too, so its target rate is held to what the tank can stop (`_recenterRateCap`).
     const wTx = (recentering && th && cmdP === 0 && Math.abs(th.x) > A.HOLD_DEADBAND_RAD)
-      ? -clampAbs(A.RECENTER_GAIN * th.x, Math.min(A.RECENTER_RATE, this._recenterRateCap('x'))) : 0;
+      ? (wheelRec ? wheelWT(th.x, 'x') : -clampAbs(A.RECENTER_GAIN * th.x, Math.min(A.RECENTER_RATE, this._recenterRateCap('x')))) : 0;
     const wTy = (recentering && th && cmdY === 0 && Math.abs(th.y) > A.HOLD_DEADBAND_RAD)
-      ? -clampAbs(A.RECENTER_GAIN * th.y, Math.min(A.RECENTER_RATE, this._recenterRateCap('y'))) : 0;
+      ? (wheelRec ? wheelWT(th.y, 'y') : -clampAbs(A.RECENTER_GAIN * th.y, Math.min(A.RECENTER_RATE, this._recenterRateCap('y')))) : 0;
     const wTz = (recentering && th && Math.abs(th.z) > A.HOLD_DEADBAND_RAD)
-      ? -clampAbs(A.RECENTER_GAIN * th.z, A.RECENTER_RATE) : 0;
+      ? (wheelRec ? wheelWT(th.z, 'z') : -clampAbs(A.RECENTER_GAIN * th.z, A.RECENTER_RATE)) : 0;
+    const gasLeft = coldGas > this.slothGasDustPool();
     const servo = (w, wT, axis) => {
       const err = w - wT;
+      // Reaction wheels: a wheel-made spin is braked by the wheels (down to REST_RAD_S, proportional inside alpha × SERVO_ZONE_S: no
+      // chatter), a wheel recentre is the wheels' too, the z wheel nulls any roll spin, a gas-made spin stays the gas's to stop.
+      if (kitOn && !(this._gasSpin && gasLeft && axis !== 'z')
+          && (axis === 'z' ? (Math.abs(err) > 1e-4 && (wT === 0 || wheelRec)) : (this._wheelSpin || (wheelRec && wT !== 0)))) {
+        if (Math.abs(err) > WK.REST_RAD_S) {
+          const Ii = axis === 'x' ? I.ixx : (axis === 'y' ? I.iyy : I.izz);
+          const frac = Math.min(1, Math.abs(err) / ((WK.TORQUE_NM / Ii) * WK.SERVO_ZONE_S));
+          wTau[axis] += -Math.sign(err) * WK.TORQUE_NM * frac * this._wheelPf;
+        }
+        return 0;
+      }
       // D6/D10: the rate-null asks the selector. Sloth mode: the box that opposes the error brakes her (proportional
       // inside alpha × SERVO_ZONE_S, so no chatter, and down to REST_RAD_S: the cold-gas 1e-4 is bigger than a sloth
       // turn); a spin above GAS_ARREST_ABOVE_DEG_S is stopped with the gas that is left (the boxes finish the stop).
@@ -9951,6 +10563,27 @@ export class PlayerSatellite extends THREE.Group {
     // Sloth mode: the boxes' torque joins after the cold-gas bookkeeping (it is not billed as gas, makes no hiss, and is
     // far below the couple clamp).
     if (slothOn) tau.add(boxTau);
+
+    // Reaction wheels: their torque joins here too (no gas, no hiss). A wheel never goes past its capacity: the torque that would
+    // fill (or over-empty) it is cut to what fits, so a full wheel gives no more that way. The wheel's spin changes by the opposite
+    // moment, and the full-output seconds go on the frame's power bill (`_wheelFrameEnd`).
+    if (kitOn) {
+      const H = WK.MOMENTUM_NMS, hw = this._wheelH;
+      if (cmdP === 0 && cmdY === 0) this._wheelMsg.top = false;      // the key is up: the next hold is a new one (F1.4's line)
+      for (const k of _AXES3) {
+        let t = wTau[k];
+        if (t === 0) continue;
+        const t0 = t;
+        const lo = (hw[k] - H) / h, hi = (hw[k] + H) / h;
+        t = t < lo ? lo : (t > hi ? hi : t);
+        hw[k] -= t * h;
+        this._wheelUse[k] += (Math.abs(t) / WK.TORQUE_NM) * h;
+        tau[k] += t;
+        if (k !== 'z' && t !== 0) this._wheelSpin = true;
+        // F1.4: a held key whose torque the full wheel cuts to under half has reached the wheels' top speed: say what the stop costs, once
+        if ((k === 'x' ? wKeyX : (k === 'y' && wKeyY)) && Math.abs(t) < 0.5 * Math.abs(t0)) this._wheelTopSpeedSay(k, omega[k], I, WK);
+      }
+    }
 
     // Semi-implicit Euler: advance ω from τ/I, then the offset from ω.
     omega.x += (tau.x / I.ixx) * h;

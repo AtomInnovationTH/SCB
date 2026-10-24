@@ -969,10 +969,17 @@ export class ArmManager {
         if (ok) eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
         return ok;
       }, undefined, target);
-    }).catch(() => {
+    }).catch((err) => {
       arm._aimReserved = false;
       arm._claimTarget = null;
       // Abort comms already emitted by AutopilotSystem.
+      // Reaction wheels (F1.5): with the steering gas out the wheels were asked to turn her and need longer than the aim allows
+      // ('TOO_SLOW', refused at once, nothing moved): the strut aims alone, as it always did with the gas out.
+      if (err && err.code === 'TOO_SLOW' && arm.state === ARM_STATES.DOCKED) {
+        this._sayCantTurn('the steering gas is empty');
+        this._launchArm(arm, 'target', () => this._launchDirShip(arm, target),
+          () => arm.deploy(target), { announce: true }, target);
+      }
     });
 
     return true;
@@ -1492,8 +1499,11 @@ export class ArmManager {
     if (this.getRotationLockTier(exceptArm) !== 'none') return 'a daughter is out on her line';
     // sloth mode (D7): with the steering gas out she turns on the tail boxes, minutes for a launch turn: the strut aims alone
     // ("Aiming the arm only: the steering gas is empty, so the ship holds still.") and a reel-home line-up is hers to do.
+    // (reaction wheels, F1.5: with the kit powered and not full the wheels turn her for no gas, a launch turn the aim may still refuse
+    // as too slow for its 30 s: then the strut aims alone, `_deployWithCeremony`)
     const pl = this.playerSatellite;
-    if (pl && typeof pl.isSlothMode === 'function' && pl.isSlothMode()) return 'the steering gas is empty';
+    if (pl && typeof pl.isSlothMode === 'function' && pl.isSlothMode()
+        && !(typeof pl.wheelsCanTurn === 'function' && pl.wheelsCanTurn())) return 'the steering gas is empty';
     const ap = this._autopilot;
     // reel-home (fix round F5): the autopilot flying the ship keeps steering it back to its own heading the moment a
     // turn ends, so a daughter's turn would be undone: she lines herself up instead. Launch callers (no argument) keep
@@ -4841,6 +4851,10 @@ export class ArmManager {
     const flowerMass = (this.playerSatellite
         && typeof this.playerSatellite.getFlowerDryMassKg === 'function')
       ? this.playerSatellite.getFlowerDryMassKg() : 0;
+    // Reaction-wheel kit (DECISIONS §2 row 9): 12.1 kg of structure on the same carrier term (bus + tank + struts + flower + kit).
+    const wheelMass = (this.playerSatellite
+        && typeof this.playerSatellite.getWheelKitMassKg === 'function')
+      ? this.playerSatellite.getWheelKitMassKg() : 0;
     // h3-argon-engine D3: the 60 L engine tank is structure too (9.5 kg, research §2.2). CORE_DRY_MASS
     // (176 = bus + ROSA + body-mount + collar) carries no tank, so this is ADDED, not a replacement.
     // g1-gas-upgrades D6: the tank's dry mass follows its size (the Bigger Engine Tank carries more tank).
@@ -4848,7 +4862,7 @@ export class ArmManager {
     const rsStatus = this._resourceSystem ? this._resourceSystem.getStatus() : null;
     const xenonPoolMax = rsStatus ? rsStatus.xenonMax : Constants.XENON_FUEL_MAX;
     const tankDry = engineTankDryKg({ xenonMax: xenonPoolMax });
-    const coreDry = V5.CORE_DRY_MASS + tankDry + strutMassTotal + flowerMass;
+    const coreDry = V5.CORE_DRY_MASS + tankDry + strutMassTotal + flowerMass + wheelMass;
 
     // Get current propellant from player resources
     // fu-gas F1.1: the tank is POOL units (20 = the 6 kg tank; Extra Cold Gas raises the max), so kg = coldGasPoolToKg, not 6 kg x fraction.
