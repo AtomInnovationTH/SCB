@@ -3044,6 +3044,13 @@ export class InputManager {
           return true;
         }
       }
+      // hold-clear D5 (owner 2026-10-23, "Net refuses, says why"): a holder whose catch cannot get out of this net's way without touching a
+      // radiator wing holds the net back (every refused press says so; C may then move her catch). A pending wing profile is finished here if small.
+      {
+        const am = d.armManager;
+        const blocked = am && typeof am.motherNetHolderBlock === 'function' ? am.motherNetHolderBlock(target) : -1;
+        if (blocked >= 0) { refuse(am.motherNetBlockLine(blocked)); return true; }
+      }
       return false;
     };
 
@@ -3140,6 +3147,7 @@ export class InputManager {
       }
       const net = cns.fireMotherNet(podIndex, pos, dir, target);
       if (net) {
+        if (d.armManager && typeof d.armManager.clearNetBlocks === 'function') d.armManager.clearNetBlocks();   // hold-clear D6: a shot nobody blocked ends the marks
         d.audioSystem?.playClick?.();
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: 'Attitude locked — net away.', priority: 'info', source: 'HOUSTON',

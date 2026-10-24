@@ -276,6 +276,7 @@ export function clearRackCell(d) {
   d._rackBelow = null;     // rack-centre: the cell-0 piece cell 1 was placed on (ArmUnit._assignRackCellWith)
   d._rackSlide = null;     // rack-centre: a running cell-1 → cell-0 slide (ArmUnit._lowerRackCell)
   d._rackFromMotherNet = false;   // hold-catch FA1: and the mark that the mother's net put it there
+  d._wingClear = null;            // hold-clear D1: its radiator-wing profile was for that cell and attitude
 }
 
 /**
@@ -4019,7 +4020,7 @@ export class CaptureNetSystem {
       gateMassKg = _gate;
     }
     const booked = this._armsWithCargoOnTheWay();
-    const armIndex = suggestCargoArm(armManager, player, gateMassKg, 0, booked);
+    const armIndex = suggestCargoArm(armManager, player, gateMassKg, 0, booked, DebrisField.trueReachM(d, d.sizeMeter || 0));   // hold-clear D7: + her reach
     if (armIndex == null) {
       if (!net._cargoRefused) {
         net._cargoRefused = true;
@@ -4754,7 +4755,7 @@ export class CaptureNetSystem {
       (n) => n._isMother && n.state === STATES.TRANSFERRING)) return;
 
     const armIndex = suggestCargoArm(armManager, player, piece.mass, piece.sizeMeter,
-      this._armsWithCargoOnTheWay());
+      this._armsWithCargoOnTheWay(), DebrisField.trueReachM(piece, piece.sizeMeter || 0));   // hold-clear D7: + its reach
     if (armIndex == null) {
       // R1 (fix round 1): no empty daughter may take the piece, so the cut is PAUSED at the nose. It resumes by itself when a
       // daughter is home and empty (this retry, every RETRY_S); [K] lets the rest go. L9: plain words, once per pause.

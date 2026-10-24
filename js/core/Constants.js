@@ -1520,7 +1520,7 @@ export const Constants = {
   REEL_HOLD: {
     HOLD_M:        5,      // m from her strut tip: the reel stops her here (at rest) while there is a reason; no catch comes inside
     BAND_LO_DEG:   45,     // wing angles (deg) a catch near the hull is not clear of: the radiators wait before this edge ... (T1: 0 of 1408 catches bad at 45, 16 bad at 50)
-    BAND_HI_DEG:   115,    // ... and before this one (a wing already inside keeps moving: leaving is the safe way)
+    BAND_HI_DEG:   130,    // ... and before this one (a wing already inside keeps moving: leaving is the safe way). hold-clear round 1 F1: was 115. Measured on 3520 configs (2112 random attitudes + the 1408 grid), net refusals + 'never' fall 425 (115) -> 268 (130) -> 175 (145) as the edge rises, because the angles above 115 move from the set her hold pose must clear to the set her lift must clear. 145 is NOT shipped (coordinator 2026-10-24): it reaches into 133-146, where the wings stand or carry in normal play (park 135, tip cargo 134-146, CARRY.OTHERS_RANGES_DEG), so a C hand-off lifted the neighbour holder mid-carry; 130 is the highest edge below them.
     LIFT_DEG:      69,     // a holder lifts her catch to at least this while the wings move (the carry's measured-clear angle)
     // T1 (tmp/rh/band.md, real meshes: 11 shapes x 8 sizes x arms 0/1 x 8 rack attitudes = 1408, wings 0-180 per 5 deg): the lowest strut
     // angle at which EVERY catch of that size (worst of all types and attitudes) is CLEAR_M off every wing in the band and plume-clear.
@@ -1535,6 +1535,28 @@ export const Constants = {
     STOP_TOL_M:    0.25,   // m: a reeler this much inside HOLD_M counts as "inside" for the wings (a held one never does)
     SLACK_M:       0.25,   // m: she brakes to rest this far short of HOLD_M (the strut tip moves toward her while the mother turns), so she is never stopped dead at the point
     REST_TOL_M:    0.1,    // m: she counts as "resting at the hold point" within SLACK_M + this (at < 0.01 m/s): the hold's timer, its cap and its lines run only then
+  },
+
+  // hold-clear (owner 2026-10-23: "a held catch never touches a radiator wing"): HoldWingClear.js judges every daughter's held catch,
+  // from its real mesh and its frozen attitude, against the radiator parts (REEL_HOLD.CLEAR_M off every part, REEL_HOLD.BAND_*
+  // for the band). Numbers measured in tmp/plans/hold-clear.md T1 (this block's Log lines carry the sources); ArmManager,
+  // CoMCalculator.suggestCargoArm and HoldWingClear read them.
+  HOLD_CLEAR: {
+    ENABLED:        true,                 // false = today's plume-only hold pose everywhere (the pre-wing tests pin the plume / net / band rules with it off)
+    REST_STEP_DEG:  5,                    // sampling step of the wing angles outside the band (0 .. BAND_LO and BAND_HI .. 180; both band edges, 180 and the stands below are always in)
+    REST_STAND_DEG: [0, 135, 146, 180],   // the angles the wings stand at outside the band (closed/launch 0, park 135, open 146, vent 180: THERMAL.FLOWER)
+    REST_MARGIN_M:  0.01,                 // m added to REEL_HOLD.CLEAR_M for the rest check: the angles are sampled, the wings sweep (round 1 F1: 5° steps need <= 0.005 m, twice that is set)
+    BAND_STEP_DEG:  3,                    // sampling step of the band (REEL_HOLD.BAND_LO_DEG .. BAND_HI_DEG, both edges in)
+    BAND_MARGIN_M:  0.01,                 // m added to REEL_HOLD.CLEAR_M for the band check (round 1 F1: 3° steps need <= 0.005 m, twice that is set)
+    UNITS_PER_FRAME: 150000,              // work points one frame may run (HoldWingClear: 1 point is about 10 ns of distance-query work; T1 calibrates)
+    CELL_M:         0.25,                 // m: cell of the radiator triangle grid
+    SIMPLIFY_TRIS:  12,                   // a radiator part finer than this many triangles is replaced by its bounding box (it contains it)
+    LEAF_M:         0.02,                 // m: a piece of a catch surface this small that is still not provably clear counts as blocked
+    BALL_CAP_POINTS: 40000,               // work points the whole-piece pre-test (one big ball query) may spend before the exact way takes over: bounds a frame's overrun
+    MAX_QUERIES:    6000,                 // distance queries one pose may spend on one grid before the rest of it counts as blocked
+    SPLIT_M:        0.3,                  // m: the catch's triangles are cut to this size once, before the pose loop
+    MAX_HOLD_REACH_M: 4.5,                // m: a mother-net catch of more reach than this goes to no daughter (T1: 2608 configs, 6..12 m included; the smallest reach with no wing-clear hold pose is 4.519 m, missionDebris 8 m; every catch up to 4.5 m has one)
+    PENDING_FORCE_POINTS: 10000000,       // the most work points a press spends finishing her pending profiles itself, ALL of them together (T1: 3.5-6 ns per point = 35-60 ms); round 1 F3: counted as work actually done (the old estimate was 3-6x low); what is left stays pending, the press says she is still stowing
   },
 
   // fail-reel (owner 2026-10-21, DECISIONS: a failed catch winds her home): when a catch fails (pad bounce, net miss, slip,
@@ -1576,6 +1598,11 @@ export const Constants = {
     //     body (0.123 m); 2 m catches fail in 24 of 1 344 cases at 34° (down to 0.062 m); 155 of 10 722 cases fail in all.
     //   - catches over 2 m stand at 34-59° and fail in a few per cent of the shape x attitude cases (to a touch); they stand at 64° and up
     //     clear: 0 of 461 cases fail from 64° up (0.195 m at 64°, 0.31 m at 69° and up; 2.8-5 m).
+    // hold-clear round 1 F2 (2026-10-24): the radiator-wing rule raises a hold pose (BAND_HI_DEG 130: 1103 of 3520 configs - 2112 random attitudes + the
+    // 1408 grid - by 5-40°), so the figures above, taken at the plume poses, were taken again at the NEW pose of every raised catch, against all three
+    // other carriers (3309 full measurements: tmp/f2-nb.mjs, plan Log): catches <= 1.5 m (stand at 39° or 44°): 372, none below the line, the worst
+    // +0.229 m over it; catches over 1.5 m at 69° and up: 216, none below, +0.154 m; over 1.5 m below 69°: 2721, 4 below (down to -0.121 m) - those the rule
+    // below already refuses and lifts, so no pass exists for a pose that was not measured. The lift poses of a neighbour are unchanged in all 1103.
     // A neighbour holding a catch that passes neither test blocks the carry ('neighbour-catch'; it clears when that catch goes).
     NEIGHBOUR_CATCH_MAX_SIZE_M: 1.5,
     NEIGHBOUR_CATCH_HIGH_POSE_DEG: 69,     // a neighbour standing at/above this angle (measured clear with margin) ...

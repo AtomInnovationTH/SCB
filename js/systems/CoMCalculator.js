@@ -1001,11 +1001,14 @@ export function suggestStowArm(armManager, playerSatellite) {
  *   radius (the S7 caller is mass-only; 0 books the bare clearance standoff).
  * @param {Iterable<number>|null} [bookedArms=null] — arm indices that already have a cargo flight on the way
  *   (the capture system reads them off its transferring nets); each counts as holding a catch.
+ * @param {number} [reachM=0] — hold-clear D7: the piece's drawn reach (`DebrisField.trueReachM`); above `HOLD_CLEAR.MAX_HOLD_REACH_M` no daughter is
+ *   offered it (measured: none of them could hold it clear of the radiator wings), so it waits at the nose. 0 = not asked. NOT the booking size.
  * @returns {number|null} arm index, or null when nothing may carry it
  */
-export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMeter = 0, bookedArms = null) {
+export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMeter = 0, bookedArms = null, reachM = 0) {
   const mass = Number(cargoMassKg) || 0;
   if (mass <= 0) return null;
+  if (reachM > (Constants.HOLD_CLEAR ? Constants.HOLD_CLEAR.MAX_HOLD_REACH_M : Infinity)) return null;   // hold-clear D7
 
   const CT = (Constants.CAPTURE_NET && Constants.CAPTURE_NET.CARGO_TRANSFER) || {};
   const maxKg = CT.MAX_KG ?? 2000;

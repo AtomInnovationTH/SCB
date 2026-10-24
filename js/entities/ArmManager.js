@@ -15,6 +15,7 @@ import { powerDistribution } from '../systems/PowerDistribution.js';
 import { checkActiveSatArming } from '../systems/ActiveSatGuard.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import { strutTipMeters, heldCargoPlumeConflictAt, heldCargoFoulsCorridorAt } from '../systems/CoMCalculator.js';
+import { armProfile, profileClearAt, profileValid, startProfile, stepProfile, kitFor, kitStep } from '../systems/HoldWingClear.js';
 import { strutTipFoulsCorridor, strutLocalDirection, bestStrutAlpha } from './ArmDockBasis.js';
 import { createShipKeepOut } from '../systems/ShipKeepOut.js';
 import { StrutAutoController } from '../systems/StrutAuto.js';
@@ -115,6 +116,24 @@ export function firstClearPoseDeg(startDeg, hiDeg, stepDeg, conflictAt) {
 }
 
 /**
+ * hold-clear (owner 2026-10-23): the key a holder's pose caches read - what she holds, where it sits on her, and whether its wing profile
+ * (HoldWingClear) is done, so a pose moves the frame the profile lands.
+ * @param {object} arm
+ * @returns {string}
+ */
+function _rackKey(arm) {
+  let key = '';
+  if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) if (h) key += `${h.id}:${h.sizeMeter}:${h._rackCell}:${h._wingClear ? (h._wingClear.done ? 'd' : 'p') : '-'};`;
+  return key;
+}
+
+/** hold-clear D2: is her catch `rest`-clear of the radiator wings with her strut at `deg`? True when she has no finished profile (none started, or pending: today's behaviour). */
+function _wingRestOk(arm, deg) {
+  const p = armProfile(arm);
+  return p.state !== 2 || profileClearAt(p, 'rest', deg);
+}
+
+/**
  * reel-hold D4/D5 (measured, tmp/plans/reel-hold.md T1): the lowest strut angle (deg, on the 5° hold-pose grid) at which a docked
  * holder's catch of `sizeM` stays out of the radiator wings' way in the band. A table, never a mesh sweep at runtime.
  * @param {number} sizeM her biggest catch (m); 0 = unknown -> the deepest row
@@ -138,9 +157,14 @@ function _bandClearDeg(sizeM, R) {
  * mother net's berth corridor is clear of a strut tip for every inbound size up to there. If nothing clears (not seen for
  * catches up to 5 m), 100° with `tooBig`. Pure read; null when she holds nothing. A module function (not a method) so
  * `ArmManager.toggleStruts`, which runs on bare stub objects in tests, can call it without `this.method()`.
+ *
+ * hold-clear (owner 2026-10-23: "a held catch never touches a radiator wing"): once her catch's wing profile is done a pose must also be
+ * `rest`-clear (HoldWingClear: `REEL_HOLD.CLEAR_M` off every radiator part at every wing angle outside the band). When some pose is
+ * plume-clear but none is wing-clear the answer is `wingBlocked: true`: she parks at the highest plume-clear pose and the net / C rules
+ * take over (`motherNetHolderBlock`, `_radiatorMoveGate`). A profile still pending (`wingPending`) leaves today's plume-only answer.
  * @param {object} mgr an ArmManager (arms[], _dockPositions[], playerSatellite)
  * @param {number} armIndex
- * @returns {{rad:number, tooBig:boolean}|null}
+ * @returns {{rad:number, tooBig:boolean, wingBlocked?:boolean, wingPending?:boolean}|null}
  */
 function _holdPoseOf(mgr, armIndex) {
   const arm = mgr.arms[armIndex];
@@ -152,10 +176,22 @@ function _holdPoseOf(mgr, armIndex) {
   const D2R = Math.PI / 180;
   const lo = Math.round(V5.STRUT_REST_ALPHA / D2R);
   const hi = V5.HOLD_POSE_MAX_DEG;
+  // hold-clear D2: a pose also has to keep her catch `REEL_HOLD.CLEAR_M` off every radiator part at every wing angle outside the band
+  // (HoldWingClear `rest`). No finished profile (none started, or still pending) = today's plume-only walk.
+  const wp = armProfile(arm);
+  const done = wp.state === 2;
+  let lastPlumeClear = null;
   for (let deg = lo; deg < hi; deg += V5.HOLD_POSE_STEP_DEG) {
-    if (!heldCargoPlumeConflictAt(mgr, armIndex, deg * D2R)) return { rad: deg * D2R, tooBig: false };
+    if (heldCargoPlumeConflictAt(mgr, armIndex, deg * D2R)) continue;
+    lastPlumeClear = deg;
+    if (!done || profileClearAt(wp, 'rest', deg)) return { rad: deg * D2R, tooBig: false, wingPending: wp.state === 1 };
   }
-  if (!heldCargoPlumeConflictAt(mgr, armIndex, hi * D2R)) return { rad: hi * D2R, tooBig: false };
+  if (!heldCargoPlumeConflictAt(mgr, armIndex, hi * D2R)) {
+    lastPlumeClear = hi;
+    if (!done || profileClearAt(wp, 'rest', hi)) return { rad: hi * D2R, tooBig: false, wingPending: wp.state === 1 };
+  }
+  // some pose is plume-clear but none keeps her catch clear of the wings: she parks at the highest plume-clear one (never in a plume)
+  if (lastPlumeClear !== null) return { rad: lastPlumeClear * D2R, tooBig: false, wingBlocked: true };
   return { rad: hi * D2R, tooBig: true };
 }
 
@@ -193,34 +229,73 @@ function _inboundMotherNetRadiusM(mgr) {
 }
 
 const _duckAnchor = { x: 0, y: 0, z: 0 };
+const _duckPlanOut = { rad: null, kind: 0 };
+
+/**
+ * net-duck D2 + hold-clear D4/D5: the ONE decision of where a holder goes for an inbound net of corridor radius `radiusM`, read by the duck
+ * (`_holderDuckRad`, `_duckHolders`) and by the fire check (`ArmManager.motherNetHolderBlock`) so a refusal and a duck never disagree.
+ * The pose set: the grid angles below her live angle (34°, 39°, ...), each counting when the net's corridor is clear of her catch there AND one
+ * deadband higher (where the strut may stand: found 2026-10-23, R4) and - once her wing profile is done - her catch is also `rest`-clear of the
+ * radiator wings there and, while the wings stand in the band or move through it, `band`-clear (`_netDuck` outranks `_radLift` in the writer,
+ * so the duck pose itself must be clear). The highest counting pose wins; none counting: the 34° fallback, which counts only if NO pose clears the net (round 1 F4) and 34° is wing-clear.
+ * Returns the shared `{rad, kind}`: kind 0 = no duck needed (her catch is clear of the corridor where she is heading, or already at the pose);
+ * 1 = duck to `rad`; 2 = some pose clears the net but none is wing-clear (she does not duck; D5 refuses the net); 3 = no pose clears the net at
+ * all and 34° is not wing-clear (she does not duck; today's corridor gate holds the net); 4 = her wing profile is pending (skip her this frame).
+ * @param {object} mgr
+ * @param {number} i
+ * @param {number} radiusM
+ * @returns {{rad:number|null, kind:number}} shared scratch: read it at once
+ */
+function _duckPlan(mgr, i, radiusM) {
+  const out = _duckPlanOut;
+  out.rad = null; out.kind = 0;
+  const arm = mgr.arms[i];
+  berthAnchorLocalInto(mgr.playerSatellite, 0, _duckAnchor);
+  const eff = _strutLiveAlpha(arm);
+  if (!mgr._corridorFoulAt(i, eff, radiusM)) return out;
+  const V5 = Constants.OCTOPUS_V5;
+  const D2R = Math.PI / 180;
+  const lo = Math.round(V5.STRUT_REST_ALPHA / D2R);
+  const dead = V5.HOLD_POSE_DEADBAND_DEG * D2R;
+  const wp = armProfile(arm);
+  if (wp.state === 1) { out.kind = 4; return out; }
+  const done = wp.state === 2;
+  const needBand = done && typeof mgr._wingsInBand === 'function' && (mgr._wingsInBand() || mgr._wingsMovingInBand());
+  // a strut stands up to a deadband above its target: the pose and the angle a deadband higher (off the grid: the next grid pose too) must be wing-clear
+  // (T1: a deadband changes the clearance by up to -0.032 m; with the next grid pose clear too the worst case over 8758 cells is -0.001 m: no extra margin)
+  const deadDeg = V5.HOLD_POSE_DEADBAND_DEG;
+  const clearAt = (set, deg) => profileClearAt(wp, set, deg) && profileClearAt(wp, set, deg + deadDeg);
+  const wingOk = (deg) => !done || (clearAt('rest', deg) && (!needBand || clearAt('band', deg)));
+  let best = null;
+  let anyNetClear = false;
+  for (let deg = lo; deg * D2R < eff - 1e-6; deg += V5.HOLD_POSE_STEP_DEG) {
+    // a strut stands up to the deadband ABOVE its target (found 2026-10-23 probing R4: 54° passed, she stood at 54.5° and the net's
+    // corridor gate held the reel its full 8 s): an angle counts only when the angle a deadband higher clears too
+    if (mgr._corridorFoulAt(i, deg * D2R, radiusM) || mgr._corridorFoulAt(i, deg * D2R + dead, radiusM)) continue;
+    anyNetClear = true;
+    if (wingOk(deg)) best = deg * D2R;
+  }
+  if (best === null) {
+    // the 34° fallback is only for a catch that clears the net at no pose at all (round 1 F4): when some pose clears the net but none is
+    // wing-clear she must not drop to a 34° that is wing-clear but still fouls the corridor - D5 refuses that net (kind 2) instead
+    if (!anyNetClear && wingOk(lo)) best = lo * D2R;
+    else { out.kind = anyNetClear ? 2 : 3; return out; }
+  }
+  if (best < eff - dead) { out.rad = best; out.kind = 1; }
+  return out;
+}
 
 /**
  * net-duck D2: the angle a holder lowers her strut to for an inbound net of corridor radius `radiusM`: null when her catch is clear of
- * the corridor where she is heading (a pending latch wins, as in `_strutLiveAlpha`); else the HIGHEST angle on the hold-pose grid
- * (34°, 39°, ... below that) at which `heldCargoFoulsCorridorAt` passes, here AND one deadband higher (where the strut may stand; 34°
- * when none does: the lowest she goes).
+ * the corridor where she is heading (a pending latch wins, as in `_strutLiveAlpha`), or no wing-clear pose exists (`_duckPlan`); else the
+ * HIGHEST counting angle on the hold-pose grid.
  * @param {object} mgr
  * @param {number} i
  * @param {number} radiusM
  * @returns {number|null} radians
  */
 function _holderDuckRad(mgr, i, radiusM) {
-  const arm = mgr.arms[i];
-  berthAnchorLocalInto(mgr.playerSatellite, 0, _duckAnchor);
-  const eff = _strutLiveAlpha(arm);
-  if (!heldCargoFoulsCorridorAt(mgr, i, eff, _duckAnchor, radiusM)) return null;
-  const V5 = Constants.OCTOPUS_V5;
-  const D2R = Math.PI / 180;
-  const lo = Math.round(V5.STRUT_REST_ALPHA / D2R);
-  let best = lo * D2R;
-  const dead = V5.HOLD_POSE_DEADBAND_DEG * D2R;
-  for (let deg = lo; deg * D2R < eff - 1e-6; deg += V5.HOLD_POSE_STEP_DEG) {
-    // a strut stands up to the deadband ABOVE its target (found 2026-10-23 probing R4: 54° passed, she stood at 54.5° and the net's
-    // corridor gate held the reel its full 8 s): an angle counts only when the angle a deadband higher clears too
-    if (!heldCargoFoulsCorridorAt(mgr, i, deg * D2R, _duckAnchor, radiusM)
-        && !heldCargoFoulsCorridorAt(mgr, i, deg * D2R + dead, _duckAnchor, radiusM)) best = deg * D2R;
-  }
-  return best < eff - V5.HOLD_POSE_DEADBAND_DEG * D2R ? best : null;
+  return _duckPlan(mgr, i, radiusM).rad;
 }
 
 /**
@@ -253,6 +328,9 @@ function _clearNetDuckMarks(arm) {
   arm._carryWaitLift = null;
   arm._carryRestart = null;
   arm._queuedPress = null;
+  arm._netBlock = false;                   // hold-clear D6/D11: the mother net's refusal mark (C is allowed for her), and the lines said for her catch
+  arm._holdWingSaid = null;
+  arm._duckWingSaid = null;
 }
 
 /** net-duck R1: does this arm still HOLD a catch at home (the only daughter a holder duck belongs to)? @param {object} arm */
@@ -293,7 +371,9 @@ function _pressHolders(mgr, holders, wantRad, autoOn, onlyThese) {
       continue;
     }
     let t = hp.rad;
-    if (wantRad > hp.rad + 1e-6 && wantRad <= cap + 1e-6 && !heldCargoPlumeConflictAt(mgr, i, wantRad)) t = wantRad;
+    // hold-clear D2: an angle above the pose is taken only when it is plume-clear AND `rest`-clear (off the grid: both neighbouring poses)
+    if (wantRad > hp.rad + 1e-6 && wantRad <= cap + 1e-6 && !heldCargoPlumeConflictAt(mgr, i, wantRad)
+        && _wingRestOk(a, wantRad / (Math.PI / 180))) t = wantRad;
     // where she is heading (a pending latch wins, as for a docked strut): a press that asks for that again moves nothing, and a
     // press that moves nothing is not a manual override (FA4: it left `_strutManual` behind, which later said "back to automatic")
     if (Math.abs(t - _strutLiveAlpha(a)) > dead) {
@@ -2547,6 +2627,7 @@ export class ArmManager {
     this._updateCarry(dt);
     this._tickMissionCarry(dt);
     this._tickStrutPressNote(dt);
+    this._tickWingClear(dt);        // hold-clear D1: each held catch's wing profile, in budgeted steps (before the holders' writers read it)
 
     // Wave1: spin/amber the strut reel cartridges per live arm state.
     this._syncTetherDrums();
@@ -2727,6 +2808,11 @@ export class ArmManager {
       if (inbound && o._netDuck) return netWait;                  // her strut is down for the net by design: off her pose until the berth
       const oDeg = o.getAimAlpha() * R2D;
       const held = Array.isArray(o.heldCatches) ? o.heldCatches.filter((h) => h && h.mass) : [];
+      // hold-clear D9: a neighbour whose catch's wing profile is still pending has no hold pose yet (it may rise when the profile lands): the
+      // carry waits for it, with the existing 'neighbour-strut' reason (the one every "her strut is not where it belongs yet" wait uses)
+      if (held.length && armProfile(o).state === 1) {
+        return { reason: 'neighbour-strut', text: `Daughter ${o.index + 1} is still settling her catch. Daughter ${n} waits.` };
+      }
       if (Math.abs(oDeg - V.NEIGHBOUR_REST_DEG) > V.NEIGHBOUR_TOL_DEG + 1e-6) {
         // hold-catch FA3: a neighbour holding a catch stands at her HOLD POSE (34..100 deg), which is where she belongs: accepted
         // (the carry was measured against it, see Constants.CARRY.NEIGHBOUR_CATCH_MAX_SIZE_M). Anywhere else (a "." press, a strut on its
@@ -3085,10 +3171,12 @@ export class ArmManager {
     if (!big.length || big.some((h) => h.sizeMeter > V.NEIGHBOUR_CATCH_HIGH_MAX_SIZE_M + 1e-9)) return null;
     const hp = this._holdPoseCached(o, idx, 0);
     if (!hp) return null;
-    for (let deg = Math.max(Math.round(hp.rad / D2R), V.NEIGHBOUR_CATCH_HIGH_POSE_DEG); deg < V5.HOLD_POSE_MAX_DEG; deg += V5.HOLD_POSE_STEP_DEG) {
-      if (!heldCargoPlumeConflictAt(this, idx, deg * D2R)) return deg * D2R;
-    }
-    return heldCargoPlumeConflictAt(this, idx, V5.HOLD_POSE_MAX_DEG * D2R) ? null : V5.HOLD_POSE_MAX_DEG * D2R;
+    // hold-clear D9: a lift pose also has to be `rest`-clear of the wings (`rest` is not monotone in the pose); a profile still pending = today's walk
+    // (`carryConditions` refuses the carry for a neighbour with a pending profile, so the answer here is not acted on in that time)
+    const wp = armProfile(o);
+    const deg = firstClearPoseDeg(Math.max(Math.round(hp.rad / D2R), V.NEIGHBOUR_CATCH_HIGH_POSE_DEG), V5.HOLD_POSE_MAX_DEG, V5.HOLD_POSE_STEP_DEG,
+      (d) => heldCargoPlumeConflictAt(this, idx, d * D2R) || (wp.state === 2 && !profileClearAt(wp, 'rest', d)));
+    return deg === null ? null : deg * D2R;
   }
 
   /**
@@ -3390,6 +3478,115 @@ export class ArmManager {
     eventBus.emit(Events.COMMS_MESSAGE, { source: 'SPACECRAFT', channel: 'CMD', text: p.text, priority: 'info' });
   }
 
+  // ── hold-clear (owner 2026-10-23): a held catch never touches a radiator wing ─────────────────────────────────────────────────────
+
+  /**
+   * hold-clear D1, per frame: start a wing profile (HoldWingClear) for every racked catch of a daughter parked HOLDING_CATCH whose attitude is
+   * frozen (`_qLocalHer`) and that has none valid for where it sits (same arm, cell, attitude, size, radiator kit), and spend
+   * `HOLD_CLEAR.UNITS_PER_FRAME` work points on the queue, oldest first - a fixed count, never a clock. With nothing queued the radiator
+   * kit is still built ahead (half a frame's points per frame) so the first stow finds it ready. A ship with no radiator kit (a bare stub) starts
+   * nothing: today's behaviour everywhere. Also ends `_netBlock` for a daughter who no longer holds a catch at home.
+   * @param {number} dt
+   * @private
+   */
+  _tickWingClear(dt) {
+    const ps = this.playerSatellite;
+    const HC = Constants.HOLD_CLEAR;
+    if (HC.ENABLED === false || !ps || !Array.isArray(ps._flowerGroups) || ps._flowerGroups.length === 0 || typeof ps._writeFlowerPose !== 'function') return;
+    if (!this._wingQueue) this._wingQueue = [];
+    const q = this._wingQueue;
+    const kit = kitFor(ps);                                   // (re)built when the radiator kit changed
+    for (let i = 0; i < this.arms.length; i++) {
+      const arm = this.arms[i];
+      if (!arm) continue;
+      if (!_holdsCatchAtHome(arm)) { if (arm._netBlock) arm._netBlock = false; continue; }
+      for (const h of arm.heldCatches) {
+        if (!h || !h.mass || !h._qLocalHer || !h._rackLocalM) continue;     // her attitude and cell are not fixed yet
+        if (!profileValid(this, i, h) && startProfile(this, i, h) && !q.includes(h)) q.push(h);
+      }
+    }
+    let pts = HC.UNITS_PER_FRAME;
+    if (q.length === 0) {
+      if (kit && !kit.ready) kitStep(kit, pts / 2);
+      return;
+    }
+    while (pts > 0 && q.length) {
+      const h = q[0];
+      const w = h._wingClear;
+      const arm = w ? this.arms[w.arm] : null;
+      if (!w || w.done || !arm || !Array.isArray(arm.heldCatches) || !arm.heldCatches.includes(h)) { q.shift(); continue; }
+      pts = stepProfile(this, h, pts);
+      if (h._wingClear && h._wingClear.done) q.shift(); else break;
+    }
+  }
+
+  /**
+   * hold-clear D1: finish this daughter's pending wing profiles NOW, spending at most `PENDING_FORCE_POINTS` work points (about 50 ms) on ALL of
+   * them together: the mother-net press asks, so it can decide on a finished profile. The cap is on the work actually done, not on an estimate
+   * of it (round 1 F3: the estimate was 3-6x low and a forced step could stall a frame for 13-37 ms more): what the points did not finish stays
+   * pending (the progress is kept; the frame ticks go on with it) and the press says she is still stowing. @returns {boolean} true when none is pending afterwards
+   * @private
+   */
+  _forceWingProfiles(arm) {
+    let pts = Constants.HOLD_CLEAR.PENDING_FORCE_POINTS;
+    let left = false;
+    for (const h of arm.heldCatches || []) {
+      if (!h || !h._wingClear || h._wingClear.done) continue;
+      if (pts > 0) pts = stepProfile(this, h, pts);
+      if (!h._wingClear.done) left = true;
+    }
+    if (this._wingQueue) this._wingQueue = this._wingQueue.filter((h) => h._wingClear && !h._wingClear.done);
+    return !left;
+  }
+
+  /**
+   * hold-clear D5 (owner 2026-10-23, "Net refuses, says why"): would a mother net for `target` be held back by a holder? The index of the first
+   * daughter HOLDING_CATCH whose catch fouls the net's berth corridor (radius `target.sizeMeter / 2 + BERTH_CLEARANCE_M`) at her live strut
+   * angle and for whom some grid pose clears the net but none of those is wing-clear (`_duckPlan` kind 2: the same decision the duck makes);
+   * -1 when none, or the target has no size. A catch whose wing profile is pending is finished now if the work left is small, else the answer is
+   * that daughter with `_netBlockKind` 'pending' (the press says she is still stowing); 'wing' otherwise. A holder for whom no pose clears the net at all
+   * is today's case (34° + the corridor gate), not refused. Pure read apart from finishing a pending profile and `_netBlockKind`.
+   * @param {{sizeMeter?:number}} target
+   * @returns {number}
+   */
+  motherNetHolderBlock(target) {
+    this._netBlockKind = null;
+    const sizeM = target && target.sizeMeter;
+    if (!(sizeM > 0)) return -1;
+    const radiusM = sizeM / 2 + (Constants.CAPTURE_NET.BERTH_CLEARANCE_M ?? 1.0);
+    for (let i = 0; i < this.arms.length; i++) {
+      const arm = this.arms[i];
+      if (!_holdsCatchAtHome(arm)) continue;
+      let plan = _duckPlan(this, i, radiusM);
+      if (plan.kind === 4) {
+        if (!this._forceWingProfiles(arm)) { this._netBlockKind = 'pending'; return i; }
+        plan = _duckPlan(this, i, radiusM);
+      }
+      if (plan.kind === 2) { this._netBlockKind = 'wing'; return i; }
+    }
+    return -1;
+  }
+
+  /**
+   * hold-clear D5/D8: the plain line for a refused mother-net press naming daughter `index` (from `motherNetHolderBlock`), and - for a wing
+   * refusal - the `_netBlock` mark that lets C move her catch (D6). The C clause is said only when `canMoveCatchToRadiator` passes for her
+   * with the mark set. @param {number} index @returns {string}
+   */
+  motherNetBlockLine(index) {
+    const arm = this.arms[index];
+    const n = index + 1;
+    if (this._netBlockKind === 'pending') return `Daughter ${n} is still stowing her catch; try again in a moment.`;
+    if (arm) arm._netBlock = true;
+    const c = arm && this.canMoveCatchToRadiator(index) ? ' C moves it to a radiator.' : '';
+    return `Mother net held: Daughter ${n}'s catch can't get out of its way without touching a radiator. K lets her catch go.${c}`;
+  }
+
+  /** hold-clear D6: a mother net has fired (a shot nobody blocked): no refusal mark outlives it. */
+  clearNetBlocks() {
+    for (const a of this.arms) if (a) a._netBlock = false;
+    this._netBlockKind = null;
+  }
+
   /**
    * hold-catch: true when every daughter that can still fly (not detached, not expended) is aboard holding a catch, and at
    * least one is: none can launch for a new catch. A daughter on a carry is not "holding" (she is busy moving one).
@@ -3424,10 +3621,20 @@ export class ArmManager {
     if (holders.length === 0) return { ok: false, text: 'No daughter is holding a catch.' };
     const free = arms.find((a) => !holders.includes(a));
     if (free) {
+      // hold-clear D6 (owner 2026-10-23): a holder the mother net refused for (`_netBlock`) or whose catch cannot be held clear of the radiators
+      // (`wingBlocked` hold pose) may go to a radiator tip even while another daughter is empty: only those holders are returned
+      const stuck = holders.filter((a) => a._netBlock === true || this._holdWingBlocked(a));
+      if (stuck.length > 0) return { ok: true, holders: stuck };
       const away = free.state !== S.DOCKED && free.state !== S.RELOADING;
       return { ok: false, text: `Daughter ${free.index + 1} is ${away ? 'out' : 'free'}; catches stay with the daughters until all are full.` };
     }
     return { ok: true, holders };
+  }
+
+  /** hold-clear D6: is this holder's hold pose `wingBlocked` (no pose up to 100° keeps her catch off the radiators)? @private */
+  _holdWingBlocked(arm) {
+    const hp = arm && Array.isArray(arm.heldCatches) ? this._holdPoseCached(arm, this.arms.indexOf(arm), 0) : null;
+    return !!hp && hp.wingBlocked === true;
   }
 
   /**
@@ -3764,7 +3971,7 @@ export class ArmManager {
     const R = Constants.REEL_HOLD || {};
     const out = this._radBandScratch || (this._radBandScratch = { lo: 0, hi: 0 });
     out.lo = (R.BAND_LO_DEG ?? 55) * Math.PI / 180;
-    out.hi = (R.BAND_HI_DEG ?? 115) * Math.PI / 180;
+    out.hi = (R.BAND_HI_DEG ?? 130) * Math.PI / 180;
     return out;
   }
 
@@ -3817,6 +4024,16 @@ export class ArmManager {
     return null;
   }
 
+  /**
+   * net-duck / hold-clear: does daughter `i`'s catch stand in the berth corridor of radius `radiusM` (anchor in `_duckAnchor`, set by `_duckPlan`) with
+   * her strut at `rad`? The one read `_duckPlan` makes (a seam, like `_plumeConflictAt`: with the real meshes the foul is monotone in the angle - 0 of
+   * 2652 configs x 8 corridor radii and 0 of 44 scoop balls x 8 radii foul at 34° but not higher, tmp/f4-nonmono.mjs - so a test sets the corridor the meshes never make).
+   * @private
+   */
+  _corridorFoulAt(i, rad, radiusM) {
+    return heldCargoFoulsCorridorAt(this, i, rad, _duckAnchor, radiusM);
+  }
+
   /** reel-hold: would daughter `i`'s catch be in a Hall exhaust with her strut at `rad`? The one read `_radClearPose` makes (a seam: a test sets a plume the real geometry never makes). @private */
   _plumeConflictAt(i, rad) {
     return !!heldCargoPlumeConflictAt(this, i, rad);
@@ -3830,8 +4047,7 @@ export class ArmManager {
    * @returns {{rad:number|null}|null} null when she holds nothing
    */
   _radClearPose(arm, i, dt = 0) {
-    let key = '';
-    if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) if (h) key += `${h.id}:${h.sizeMeter}:${h._rackCell};`;
+    const key = _rackKey(arm);
     const c = arm._radClear;
     if (c && c.key === key && c.ageS < 0.5) { c.ageS += dt; return c.pose; }
     const hp = this._holdPoseCached(arm, i, 0);
@@ -3840,11 +4056,20 @@ export class ArmManager {
       const R = Constants.REEL_HOLD || {};
       const V5 = Constants.OCTOPUS_V5;
       const D2R = Math.PI / 180;
-      let size = 0;
-      if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) if (h && h.mass) size = Math.max(size, h.sizeMeter || 0);
-      const floorDeg = _bandClearDeg(size, R);
-      const deg = firstClearPoseDeg(Math.max(Math.round(hp.rad / D2R), floorDeg), V5.HOLD_POSE_MAX_DEG, V5.HOLD_POSE_STEP_DEG,
-        (d) => this._plumeConflictAt(i, d * D2R));                             // F4: the cap (100°) is tried last, whatever the grid
+      const wp = armProfile(arm);
+      let deg;
+      if (wp.state === 2) {
+        // hold-clear D3: her catch's own profile replaces the size table - the first pose from max(hold pose, LIFT_DEG) that is plume-clear,
+        // `rest`-clear and `band`-clear (`rest` is not monotone in the pose); none = 'never'
+        deg = firstClearPoseDeg(Math.max(Math.round(hp.rad / D2R), R.LIFT_DEG ?? 69), V5.HOLD_POSE_MAX_DEG, V5.HOLD_POSE_STEP_DEG,
+          (d) => this._plumeConflictAt(i, d * D2R) || !profileClearAt(wp, 'rest', d) || !profileClearAt(wp, 'band', d));
+      } else {
+        let size = 0;                                                          // no finished profile: the measured size table (fallback only)
+        if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) if (h && h.mass) size = Math.max(size, h.sizeMeter || 0);
+        const floorDeg = _bandClearDeg(size, R);
+        deg = firstClearPoseDeg(Math.max(Math.round(hp.rad / D2R), floorDeg), V5.HOLD_POSE_MAX_DEG, V5.HOLD_POSE_STEP_DEG,
+          (d) => this._plumeConflictAt(i, d * D2R));                           // F4: the cap (100°) is tried last, whatever the grid
+      }
       pose = { rad: deg === null ? null : deg * D2R };
     }
     arm._radClear = { key, pose, ageS: 0 };
@@ -3883,6 +4108,8 @@ export class ArmManager {
         wait = this._holdsAnyCatch(a);
       } else if (st === ARM_STATES.HOLDING_CATCH) {
         if (!this._holdsAnyCatch(a)) continue;
+        // hold-clear D1: a catch whose wing profile is started and not done yet is not known to be clear: the radiators wait (a few frames)
+        if (armProfile(a).state === 1) { if (out === null) { out = 'wait'; this._radBandWho = i; } continue; }
         const cp = this._radClearPose(a, i, 0);
         if (!cp) continue;
         if (cp.rad === null) { this._radBandWho = i; return 'never'; }
@@ -4093,8 +4320,7 @@ export class ArmManager {
 
   /** hold pose with a short memory: re-read when her rack changes or every 0.5 s (the read is a few dozen cone tests). @private */
   _holdPoseCached(arm, armIndex, dt) {
-    let key = '';
-    if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) if (h) key += `${h.id}:${h.sizeMeter}:${h._rackCell};`;
+    const key = _rackKey(arm);                    // hold-clear: includes whether her wing profile is done, so the pose moves when it lands
     const c = arm._holdPose;
     if (c && c.key === key && c.ageS < 0.5) { c.ageS += dt; return c.pose; }
     const pose = this.holdPoseFor(armIndex);
@@ -4142,10 +4368,20 @@ export class ArmManager {
         let go = true;
         if (arm._strutManual) {
           // the player's press stands while it is safe; an unsafe one (below the pose, over the cap, in a plume) is dropped
-          const safe = eff >= hp.rad - dead && eff <= cap + dead && !heldCargoPlumeConflictAt(this, i, eff);
+          const safe = eff >= hp.rad - dead && eff <= cap + dead && !heldCargoPlumeConflictAt(this, i, eff)
+            && _wingRestOk(arm, eff / D2R);                                    // hold-clear D2: nor a pose her catch touches a wing at
           if (safe) go = false; else delete arm._strutManual;
         }
         if (go && Math.abs(eff - hp.rad) > dead) arm._strutTargetAlpha = hp.rad;
+        if (hp.wingBlocked) {
+          // hold-clear D8: nothing up to 100° keeps her catch off the radiators: one line per catch (K lets it go; C only when it can work)
+          const sig = arm._holdPose.key;
+          if (arm._holdWingSaid !== sig) {
+            arm._holdWingSaid = sig;
+            const c = this.canMoveCatchToRadiator(i) ? ' C moves it to a radiator.' : '';
+            eventBus.emit(Events.COMMS_MESSAGE, { text: `Daughter ${i + 1}'s catch can't be held clear of the radiators. K lets it go.${c}`, priority: 'warning' });
+          }
+        }
         if (hp.tooBig) {
           const sig = arm._holdPose.key;
           if (arm._holdTooBigSaid !== sig) {
@@ -4363,7 +4599,19 @@ export class ArmManager {
       if (arm._netDuck) { any = true; continue; }
       if (arm._netLift && flying) continue;           // review F1: lifted for a carry that is flying past her: she ducks after it has landed
       if (!(Array.isArray(arm.heldCatches) && arm.heldCatches.some((h) => h && h.mass))) continue;
-      const rad = _holderDuckRad(this, i, radiusM);
+      // hold-clear D4: one decision with the fire check (`_duckPlan`). A pending wing profile skips her this frame (the net's corridor gate holds
+      // the net; she ducks the frame it is done: this runs every frame while a net is inbound); no wing-clear pose = she stays, one line.
+      const plan = _duckPlan(this, i, radiusM);
+      if (plan.kind === 4) continue;
+      if (plan.kind === 2 || plan.kind === 3) {
+        const sig = _rackKey(arm);
+        if (arm._duckWingSaid !== sig) {
+          arm._duckWingSaid = sig;
+          eventBus.emit(Events.COMMS_MESSAGE, { text: `Daughter ${i + 1} can't lower her catch past the radiators; the net waits.`, priority: 'warning' });
+        }
+        continue;
+      }
+      const rad = plan.rad;
       if (rad === null) continue;
       // reel-hold D4: no holder starts a duck below the lift pose while the wings are inside the band (they leave it in a few
       // seconds; the net reel's own pause for the fouled corridor covers the wait). F5: nor while they are about to enter it or
@@ -5165,6 +5413,8 @@ export class ArmManager {
     this._leanAsideActive = false;
     this._leanAsideTimer = 0;
     this._radBandWho = -1;            // reel-hold D8: no radiator wait outlives the reset
+    this._wingQueue = [];             // hold-clear D11: no wing-profile work outlives the reset (the catches themselves were dropped above)
+    this._netBlockKind = null;
 
     // Register item 69: the loop above clears every rack — a cargo mass-exit —
     // but sets arm.state directly, so no ARM_STATE_CHANGE crosses it and the
