@@ -11343,14 +11343,17 @@ export class PlayerSatellite extends THREE.Group {
         const trackStrut =
           (arm.state === 'LAUNCHING' && !arm._springFired) ||
           arm.state === ARM_STATES.DOCKING ||
+          arm.state === ARM_STATES.RELOADING ||   // dock-seat: she keeps turning with the strut while she reloads (DOCKED snapped her)
           arm.state === ARM_STATES.HOLDING_CATCH;
         if (trackStrut && arm.group && sg.strutDir.lengthSq() > 0) {
           _composeDockedArmQuat(sg.strutDir, sg.azRad, _armQuat);
           _armDockTargetQuat.copy(this.quaternion).multiply(_armQuat);
-          if (arm.state === ARM_STATES.DOCKING) {
+          if (arm.state === ARM_STATES.DOCKING || arm.state === ARM_STATES.RELOADING) {
             // Exponential approach onto the strut over the ~3 s dock window.
             // 0.12/frame ≈ converges in <1 s @60fps; smooth, no snap.
-            arm.group.quaternion.slerp(_armDockTargetQuat, 0.12);
+            // dock-seat: time-based (same 0.12 at 60 Hz): at a low frame rate or in time warp she must not trail, then snap at DOCKED
+            const dtA = Math.min(Math.max(arm._lastDt > 0 ? arm._lastDt : 1 / 60, 0), 0.5);
+            arm.group.quaternion.slerp(_armDockTargetQuat, 1 - Math.pow(0.88, dtA * 60));
           } else {
             arm.group.quaternion.copy(_armDockTargetQuat);
           }

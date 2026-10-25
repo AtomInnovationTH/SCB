@@ -173,6 +173,7 @@ import perfReportOverlay, { captureBootInfo } from './ui/PerfReportOverlay.js';
 import { isAvifSupported } from './scene/Earth.js';
 import { profileFlags } from './core/ProfileFlags.js';
 import { devShotGate } from './core/DevShotGate.js';
+import { stageHoldScenario, holdStatus, netBlockFor } from './dev/holdScenario.js';
 import { installBlackFrameProbe } from './core/BlackFrameProbe.js';
 import { installBlackPatchHeal } from './core/BlackPatchHeal.js';
 import { viewCover, coverSkipsPaint } from './ui/viewCover.js';
@@ -1922,7 +1923,7 @@ async function init() {
     // Item 1: staged furnace-breakdown choreography (chunks → furnace, net drawn in).
     furnaceBreakdownVisual.init(scene, player);
     // l6-look: the leash hand-off — line, real-size bags, cone swivel (reads player.leashDriver.view()).
-    leashVisual = new LeashVisual({ scene, player, sceneManager });   // F2: drawn in the near-field pass with the ship
+    leashVisual = new LeashVisual({ scene, player, sceneManager, netVisual: captureNetVisual });   // F2: drawn in the near-field pass with the ship
   }
 
   // CP-2: mother-mounted de-spin laser (flag-gated; operates on the active target)
@@ -4990,6 +4991,38 @@ async function init() {
           };
         } catch (e) { return { ok: false, reason: String(e) }; }
       };
+      // hold-look (2026-10-24): jump straight into "a daughter is home holding a real 3-5 m piece" (js/dev/holdScenario.js; ?shot=1 only).
+      //   __holdScenario({ daughter: 1, sizeM: 4, radiatorsDeg: 146, fillOthers: null, motherTarget: null })  ->  { ok, pieces, status }
+      //   __holdStatus()  ->  daughters' state / strut angle / catch size / wing-profile state, radiators' angle
+      window.__holdScenario = (opts) => stageHoldScenario({
+        player, armManager, debrisField, targetSelector, cameraSystem,
+        isPlate: (d) => DebrisWireframe.isPlateVariant((d.id >>> 0) % (Constants.DEBRIS_FRAGMENT_VARIANTS || 7)),
+      }, opts || {});
+      window.__holdStatus = () => holdStatus({ player, armManager });
+      //   __holdNetBlock(sizeM, deg?)  ->  what an N press at a sizeM target would be told now (deg: radiators there first, no slew)
+      window.__holdNetBlock = (sizeM, deg) => netBlockFor({ player, armManager }, sizeM, deg);
+      //   no console on an iPad: ?shot=1&hold=4 stages it by itself 3 s after his first key/tap once the daughters are up
+      //   (&d=1 daughter, &rad=146 radiators, &att=23 her piece's attitude, &target=6 a mother-net target, &fill=1 the others hold that size)
+      try {
+        const q = new URLSearchParams(location.search);
+        if (q.has('hold')) {
+          const num = (k) => (q.has(k) && q.get(k) !== '' && Number.isFinite(+q.get(k)) ? +q.get(k) : null);
+          const opts = { daughter: num('d') ?? 1, sizeM: num('hold') ?? 4, radiatorsDeg: num('rad') ?? 146, fillOthers: num('fill'), motherTarget: num('target') };
+          if (num('att') !== null) opts.attSeed = num('att');
+          let input = false;
+          const seen = () => { input = true; };
+          window.addEventListener('keydown', seen, { once: true, capture: true });
+          window.addEventListener('pointerdown', seen, { once: true, capture: true });
+          const t0 = performance.now();
+          const tick = () => {
+            let up = false;
+            try { up = input && window.__holdStatus().daughters.length === 4; } catch (_) { /* sim not up yet */ }
+            if (up) { setTimeout(() => console.log('[hold-look] staged', window.__holdScenario(opts)), 3000); return; }
+            if (performance.now() - t0 < 600000) setTimeout(tick, 500);
+          };
+          tick();
+        }
+      } catch (e) { console.warn('[hold-look] auto-stage failed', e); }
       window.__netScenario = (opts) => {
         try {
           if (!player || !debrisField || !cameraSystem) return { ok: false, reason: 'sim not up' };

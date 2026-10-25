@@ -15,7 +15,7 @@ import { settingsManager } from './SettingsManager.js';
 import timerManager from './TimerManager.js';
 import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
-import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE } from './netRouting.js';
+import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE, targetRangeM, netRangeLine } from './netRouting.js';
 import { computeLeadAim, netMaxReachM } from '../entities/CaptureNet.js';
 import { tripRefuses } from './TransferTrip.js';
 import { isFree, samePiece, netRefusalLine, wrapRefusalLine, SCAN_FIRST_LINE, DAUGHTERS_ONLY_LINE, fanOutNoneText, daughtersHeldBackLine } from './PieceClaim.js';
@@ -2818,11 +2818,9 @@ export class InputManager {
       && d.player.quaternion && activeTarget
       && d.targetSelector && typeof d.targetSelector.getActiveTargetPosition === 'function';
     if (canAim) {
-      const M = 0.00001;
       const pos0 = d.player.getPosition();
       const tp0 = d.targetSelector.getActiveTargetPosition();
-      const inRange = tp0 && (new THREE.Vector3(tp0.x - pos0.x, tp0.y - pos0.y, tp0.z - pos0.z)
-        .length() <= Constants.LASSO_RANGE * M);
+      const inRange = tp0 && targetRangeM(pos0, tp0) <= Constants.LASSO_RANGE;
       if (inRange) {
         // Scratch reused across ticks — the provider is polled every frame by
         // the aim coroutine during the slew, and the result is copied into
@@ -3004,10 +3002,10 @@ export class InputManager {
           ? d.player.getNetPodPosition(podIndex) : d.player.getPosition();
       const tp = getTargetPos();
       if (tp && maxReachM > 0) {
-        const dx = tp.x - muzzle.x, dy = tp.y - muzzle.y, dz = tp.z - muzzle.z;
-        const rangeM = Math.sqrt(dx * dx + dy * dy + dz * dz) / M;
+        // net-range: the SAME distance the HUD shows (ship centre → piece, targetRangeM), not muzzle → piece.
+        const rangeM = targetRangeM(d.player.getPosition(), tp);
         if (rangeM > maxReachM) {
-          refuse(`Out of net envelope — close to under ${Math.round(maxReachM)} m.`);
+          refuse(netRangeLine(rangeM, maxReachM, 'net'));
           return true;
         }
       }
@@ -3353,8 +3351,7 @@ export class InputManager {
     if (!piece._scenePosition || !d.player || typeof d.player.getPosition !== 'function') return true;
     const p = d.player.getPosition();
     if (!p) return true;
-    const dx = p.x - piece._scenePosition.x, dy = p.y - piece._scenePosition.y, dz = p.z - piece._scenePosition.z;
-    const distM = Math.sqrt(dx * dx + dy * dy + dz * dz) * 100000;   // 1 m = 1e-5 scene units
+    const distM = targetRangeM(p, piece._scenePosition);   // net-range: the one shared distance
     return !(reachM > 0) || distM <= reachM;
   }
 
@@ -3485,11 +3482,7 @@ export class InputManager {
     if (!tgtPos) return null;
     const p = d.player.getPosition();
     if (!p) return null;
-    const dx = p.x - tgtPos.x, dy = p.y - tgtPos.y, dz = p.z - tgtPos.z;
-    const distScene = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    const scale = Number.isFinite(Constants.SCENE_SCALE) && Constants.SCENE_SCALE > 0
-      ? Constants.SCENE_SCALE : 0.01;
-    return (distScene / scale) * 1000; // scene → km → metres
+    return targetRangeM(p, tgtPos);   // net-range: the one shared distance (scene units → metres)
   }
 
   /**

@@ -25,6 +25,7 @@ import { classify, oddsColor, reachKmFrom, THIN_ALPHA } from './TargetColorLaw.j
 import { lookColor } from '../HudLook.js';
 import { TouchControls } from '../TouchControls.js';
 import { TARGETS_PANE_WIDTH_PX } from '../RailGeometry.js';
+import { hudDistText } from '../../systems/netRouting.js';
 import {
   shortScreenNow, watchShortScreen, foldedTargetRow, foldedMoreCount, targetsFoldText,
   FOLD_TOGGLE_TOUCH_PX,
@@ -1342,10 +1343,7 @@ export class TargetPanel {
   /** @private Format distance value for display */
   _formatDist(distKm) {
     if (distKm === undefined || distKm === null) return '---';
-    if (distKm < 1) return `${(distKm * 1000).toFixed(0)}m`;
-    if (distKm < 10) return `${distKm.toFixed(2)}km`;
-    if (distKm < 100) return `${distKm.toFixed(1)}km`;
-    return `${distKm.toFixed(0)}km`;
+    return hudDistText(distKm);   // net-range: the one writer, shared with the net refusal lines (netRouting.js)
   }
 
   /** @private Format ΔV value for display, precision based on data level */

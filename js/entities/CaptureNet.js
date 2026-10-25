@@ -26,7 +26,7 @@ import { strutTipFoulsCorridor } from './ArmDockBasis.js';
 // Debris cutting step 5 (CUT_AT_NOSE): the pure planner — called ONCE when a
 // collared catch is over the hand-off gate.
 import { planCuts } from '../systems/cutPlanner.js';
-import { OUT_OF_MOTHER_NETS_LINE, ONE_MOTHER_NET_LEFT_LINE } from '../systems/netRouting.js';
+import { OUT_OF_MOTHER_NETS_LINE, ONE_MOTHER_NET_LEFT_LINE, targetRangeM } from '../systems/netRouting.js';
 // Cargo-continuity S7: the carrier scorer lives with the rest of the CoM maths
 // (ONE quantity, ONE computation — it reuses computeCoM/strutTipMeters).
 import { suggestCargoArm, countEmptyDockedDaughters, heldCargoFoulsCorridorAt } from '../systems/CoMCalculator.js';
@@ -1211,6 +1211,9 @@ export function missReasonToText(reason) {
     case 'timeout':
     case 'tether_limit':
       return 'Net overshot. Line up the reticle and re-fire. Net reeling back; inventory restored.';
+    case 'out_of_range':
+      // net-range: the piece drifted past the net's reach before contact.
+      return 'Net missed: the piece drifted out of range. Close in and re-fire. Net reeling back.';
     case 'cling_failed':
       return 'Net grazed it. Wrap didn\'t hold. Close the distance or de-spin the target (hold L), then re-fire.';
     case 'oversize_aspect':
@@ -1887,6 +1890,17 @@ export class NetProjectile {
           }
         }
         if (distScene <= radiusScene) {
+          // net-range: the mother's net never catches a piece beyond its advertised reach (netMaxReachM, 100 m for the
+          // large net), measured the way the HUD and the fire gate measure it: ship centre → piece (targetRangeM). The
+          // 3 m mouth radius and a piece drifting away during the 10 s flight could otherwise close a catch past it.
+          if (this._anchorProvider && !this._sourceArm) {
+            const shipPos = (this._ctx && this._ctx.player && typeof this._ctx.player.getPosition === 'function')
+              ? this._ctx.player.getPosition() : ap;
+            if (targetRangeM(shipPos, sp) > netMaxReachM(this.netClass)) {
+              this._miss('out_of_range');
+              return;
+            }
+          }
           // §11.2: contact while the mouth is collapsed cannot wrap — resolve
           // as the distinct MISS so comms can teach the range limit.
           if (this.mouthCollapsed) {

@@ -310,6 +310,8 @@ export class CaptureNetVisual {
     this._disposed = false;
     /** @type {Array<{key:string, timer:number, duration:number}>} */
     this._fadeTimers = [];
+    /** @type {Set<*>} ids of catches whose net rides with them (a carried bag): see `wearsNet` */
+    this._nettedIds = new Set();
     /** @type {string} Current quality tier (LOW drops the garnish, §11.8). */
     this._tier = 'HIGH';
 
@@ -656,6 +658,7 @@ export class CaptureNetVisual {
 
   /** @private W1 net-reach D2 — mission reset: every rack is dropped, no completion event will come. */
   _onCarryReset() {
+    this._nettedIds.clear();   // net-bag: a reused debris id after a reset is a new catch
     for (const [key, vis] of this._activeVisuals) {
       if (vis.carry) this._endCarry(key, vis, { docked: true, left: true });
     }
@@ -768,10 +771,21 @@ export class CaptureNetVisual {
     const key = `pod_${pi}`;
     const vis = this._activeVisuals.get(key);
     if (!vis) return;
+    // net-bag (owner 2026-10-24: "net bubble appears around debris" after the reel-in to the collar): a mother catch the
+    // leash latches on a radiator tip keeps ITS OWN NET as the bag, exactly as a catch on a daughter's rack does; it does
+    // not fade and LeashVisual draws no wire sphere round it (`wearsNet`). It rides the catch on the tip (re-keyed
+    // `rack_-1_<id>`; `armIndex -1`, so no daughter's ARM_DOCKED ends it) and ends as a tip catch's bag does: chop end,
+    // release (`_armPinned === false`) or removal. Net-less: a cut piece returned above (no bag was made for it).
+    if (payload.to && payload.to.kind === 'tip' && payload.debrisId != null
+        && this._carryOnRack(key, vis, -1, payload.debrisId, pi)) {
+      const tv = this._activeVisuals.get(`rack_-1_${payload.debrisId}`);
+      if (tv && tv.carry) tv.carry.tipIndex = payload.to.tipIndex;
+      return;
+    }
     // catch-near-pass (Decision 3, owner 2026-10-18 "net is not visible after reel-in"): onto a DAUGHTER's rack
     // (`armIndex >= 0`) the bag does not fade — the net IS the container (CAPTURE_NET.md :1015-1019, :1044) and the
-    // catch stays in it until it is processed. A leash to a tip (`armIndex -1`) keeps the fade: LeashVisual's wire bag
-    // takes over at the tip.
+    // catch stays in it until it is processed. A leash to a tip (`armIndex -1`) is handled above (net-bag); this is
+    // the net-less fallthrough (no kit / no catch found) that fades.
     if (payload.armIndex != null && payload.armIndex >= 0 && payload.debrisId != null
         && this._carryOnRack(key, vis, payload.armIndex, payload.debrisId, pi)) return;
     this._captureDetachSeat(vis);
@@ -805,6 +819,7 @@ export class CaptureNetVisual {
     if (!d || d.id !== debrisId || !d._scenePosition) return false;
     const rkey = `rack_${armIndex}_${debrisId}`;
     if (this._activeVisuals.has(rkey)) return false;   // a duplicate event: the first one already carries it
+    this._nettedIds.add(debrisId);
     this._activeVisuals.delete(key);
     this._activeVisuals.set(rkey, vis);
     this._fadeTimers = this._fadeTimers.filter((f) => f.key !== key);
@@ -832,6 +847,24 @@ export class CaptureNetVisual {
     }
     if (vis.tetherLine) vis.tetherLine.visible = false;   // the line left the collar with the hand-off
     return true;
+  }
+
+  /**
+   * net-bag: does this catch wear its own net bag right now (a live net on it at the collar, a carried net on a rack or a
+   * tip)? LeashVisual draws its wire sphere only for a catch that does not: the net IS the bag. A catch that was carried in
+   * its net stays "netted" for good, so the wire sphere does not pop in when the carried net ends at chop end. A catch with
+   * no net bag (a cut piece that rode net-less, a lassoed catch) is not, and keeps the sphere.
+   * @param {{id?:*}|null} d the catch
+   * @returns {boolean}
+   */
+  wearsNet(d) {
+    if (!d || d.id == null) return false;
+    for (const vis of this._activeVisuals.values()) {
+      if (vis.failure) continue;
+      const c = this._bagCatch(vis);
+      if (c && c.id === d.id) return true;
+    }
+    return this._nettedIds.has(d.id);
   }
 
   /**
@@ -2906,6 +2939,7 @@ export class CaptureNetVisual {
     this._boundCarryReset = null;
 
     this._fadeTimers = [];
+    this._nettedIds.clear();
     this._enabled = false;
     this._disposed = true;
   }

@@ -12,7 +12,8 @@
  *   3. the CONE SWIVEL — each tip's slotted cone hangs on a pivot at its narrow end (PlayerSatellite owns the
  *      pivot's POSITION); this class sets only its ROTATION: along the line while the line runs through that tip,
  *      along the boom otherwise, eased.
- * CaptureNetVisual fades its big bag out/in around the hand-off on its own (it owns that mesh).
+ * net-bag (2026-10-24): a catch that wears its own net (`netVisual.wearsNet`) gets no wire sphere: its net IS the bag, and
+ * CaptureNetVisual keeps it on the catch to the tip. The washer ring and the line stay. A net-less catch keeps the sphere.
  *
  * WHERE IT DRAWS (fix round 1, F2): the ship is drawn in a second pass after a depth clear (NearFieldRenderPass), so
  * anything left in the first pass is painted over by the hull. Everything here hangs on ONE root group
@@ -84,11 +85,14 @@ export class LeashVisual {
    * @param {{ scene: THREE.Scene, player: object, sceneManager?: object }} deps — `player.leashDriver`,
    *   `player.tipCargo` and `player._flowerGroups` are read each frame (any may be absent: nothing is drawn then);
    *   `sceneManager.registerNearFieldRoot` (when present) puts the root in the near-field pass with the ship.
+   *   `netVisual` (optional, `wearsNet(debris)`): a catch that wears its own net bag gets no wire sphere (the net IS the
+   *   bag; net-bag, owner 2026-10-24) — its washer ring and the line stay. Absent: every catch gets the sphere.
    */
-  constructor({ scene, player, sceneManager = null }) {
+  constructor({ scene, player, sceneManager = null, netVisual = null }) {
     this.scene = scene;
     this.player = player;
     this.sceneManager = sceneManager;
+    this.netVisual = netVisual;
 
     // ONE root, registered as a near-field root (see the header); line and bags are its children.
     this.root = new THREE.Group();
@@ -266,7 +270,7 @@ export class LeashVisual {
       if (d && pos && !(handShown && hd === d)) {
         if (tc.latchWorldInto && tc.latchWorldInto(i, _a)) _b.copy(_a).sub(pos); else _b.set(1, 0, 0);
         if (prevHandD === d && hand.alpha > 0) { bag.alpha = Math.max(bag.alpha, hand.alpha); this._hideNow(hand); }
-        this._showBag(bag, pos, _b, this._radiusM(d), dt, true);
+        this._showBag(bag, pos, _b, this._radiusM(d), dt, true, !this._netted(d));
       } else {
         if (handShown && hd && hd === d && bag.alpha > 0) { hand.alpha = Math.max(hand.alpha, bag.alpha); this._hideNow(bag); }
         this._showBag(bag, null, null, 0, dt, false);
@@ -276,12 +280,18 @@ export class LeashVisual {
       // the neck faces the line: toward the tip once the line runs through it, else toward the anchor
       const toward = view.tipEngaged && view.tipWorld ? _vT : (view.anchorWorld ? _vA : null);
       if (toward) _b.copy(toward).sub(_vB); else _b.set(0, 0, 1);
-      this._showBag(hand, _vB, _b, this._radiusM(hd), dt, true);
+      this._showBag(hand, _vB, _b, this._radiusM(hd), dt, true, !this._netted(hd));
       this._handDebris = hd;
     } else {
       this._showBag(hand, null, null, 0, dt, false);
       if (hand.alpha <= 0) this._handDebris = null;
     }
+  }
+
+  /** net-bag: true when the catch wears its own net bag, so no wire sphere is drawn round it. */
+  _netted(d) {
+    const nv = this.netVisual;
+    return !!(nv && typeof nv.wearsNet === 'function' && d && nv.wearsNet(d));
   }
 
   /** Drop a bag at once (its opacity went to the bag that takes over). */
@@ -296,13 +306,14 @@ export class LeashVisual {
   }
 
   /** Place one bag (or fade it out). `neck` = direction from the bag centre to its neck (any length). */
-  _showBag(bag, pos, neck, radiusM, dt, show) {
+  _showBag(bag, pos, neck, radiusM, dt, show, wire = true) {
     const step = dt > 0 ? dt / BAG_FADE_S : 1;                                // a held world (dt 0) jumps to the end
     if (show) {
       bag.alpha = Math.min(1, bag.alpha + step);
       const R = radiusM + BAG_MARGIN_M;
       bag.group.position.copy(pos).sub(this.root.position);          // root-relative
       bag.wire.scale.setScalar(R * M);
+      bag.wire.visible = wire;         // net-bag: set only while shown, so a fade-out keeps what the bag last drew (never a sphere for a netted catch)
       if (neck.lengthSq() > 1e-30) {
         neck.normalize();
         bag.washer.position.copy(neck).multiplyScalar(R * M);

@@ -15,7 +15,7 @@ import { devShotGate } from '../core/DevShotGate.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
-import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE } from './netRouting.js';
+import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, targetRangeM, netRangeLine } from './netRouting.js';
 import { isFree, netRefusalLine, lassoRangeAllOwnedLine } from './PieceClaim.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
@@ -1203,8 +1203,13 @@ export class LassoSystem {
 
         if (!nearby || nearby.length === 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'no_target' });
+            // net-range: a Tab-selected piece beyond the reach gets the line that names its distance and the limit.
+            const selPos0 = selectedTarget ? this._getDebrisScenePos(selectedTarget) : null;
+            const selRangeM = selPos0 ? targetRangeM(playerPos, selPos0) : Infinity;
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: `No targets in lasso range (${Constants.LASSO_RANGE}m)`,
+                text: selRangeM > Constants.LASSO_RANGE && Number.isFinite(selRangeM)
+                    ? netRangeLine(selRangeM, Constants.LASSO_RANGE, 'lasso')
+                    : `No targets in lasso range (${Constants.LASSO_RANGE}m)`,
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'info',
@@ -1735,6 +1740,12 @@ export class LassoSystem {
 
             if (distToTarget < this._contactRadiusScene &&
                 this.flightTimer >= Constants.LASSO_MIN_FLIGHT_TIME) { // proximity + min-flight gate — contact!
+                // net-range: the lasso homes on a live piece for up to LASSO_MAX_FLIGHT_TIME (~808 m of reach), so a
+                // piece that drifted beyond the advertised reach since the cast is a miss, never a catch.
+                if (this._targetScenePos && targetRangeM(playerPos, this._targetScenePos) > Constants.LASSO_RANGE) {
+                    this._cancelLasso();
+                    return;
+                }
                 this._reelingIn = true;
                 // 2026-08-26 wrap-as-cloth: normalize the kit out of the
                 // open-on-launch mouth scale ONCE at contact (openFrac has

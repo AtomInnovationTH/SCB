@@ -102,6 +102,9 @@ const _relVel       = new THREE.Vector3();
 const _goalDir      = new THREE.Vector3();
 const _posCmd       = new THREE.Vector3();
 const _dockOffTmp   = new THREE.Vector3();
+const _seatTip      = new THREE.Vector3();   // dock-seat scratch
+const _seatRes      = new THREE.Vector3();
+const _seatQInv     = new THREE.Quaternion();
 
 // Wave1 tension feedback — tether tint temps (same module-temp idiom as above:
 // written and fully consumed within one call, never retained across calls).
@@ -3076,6 +3079,7 @@ export class ArmUnit {
    */
   update(dt, parentPos, parentQuat) {
    this.stateTimer += dt;
+   this._lastDt = dt;   // dock-seat: PlayerSatellite.postArmUpdate eases her attitude by this frame's time
    this._rackClockS = (this._rackClockS || 0) + dt;   // rack-centre: times a cell-down slide (stateTimer is reset by the unload)
 
    // C-3: Tick hinge auto-unlock settle timer
@@ -3125,11 +3129,11 @@ export class ArmUnit {
      case S.APPROACH:   this._updateApproach(dt, parentPos); break;
      case S.NETTING:    this._updateNetting(dt); break;
      case S.GRAPPLED:   this._updateGrappled(dt, parentPos, parentQuat); break;
-     case S.HAULING:    this._updateHauling(dt, parentPos); break;
+     case S.HAULING:    this._updateHauling(dt, parentPos, parentQuat); break;
      case S.REELING:    this._updateReeling(dt, parentPos, parentQuat); break;
      case S.RETURNING:  this._updateReturning(dt, parentPos, parentQuat); break;
      case S.DOCKING:    this._updateDocking(dt, parentPos, parentQuat); break;
-      case S.RELOADING:  this._updateReloading(dt); break;
+      case S.RELOADING:  this._updateReloading(dt, parentPos, parentQuat); break;
       case S.HOLDING_CATCH: this._updateHoldingCatch(dt, parentPos, parentQuat); break;
       case S.CARRY_PREP:    this._updateCarryPrep(dt, parentPos, parentQuat); break;
       case S.CARRY_OUT:     this._updateCarryOut(dt, parentPos, parentQuat); break;
@@ -3510,6 +3514,8 @@ export class ArmUnit {
     // reel-home: a fresh capture starts the net reel over; leaving the reels (anything but GRAPPLED / REELING /
     // DOCKING) lets go of the strut reservation and the line-up. REELING is "on the reels" only with the flag on.
     if (newState !== S.DOCKING) this._rhDockFree = false;
+    // dock-seat: the residual belongs to one DOCKING -> RELOADING run; any other state forgets it (re-seeded from where she is on re-entry)
+    if (newState !== S.DOCKING && newState !== S.RELOADING) this._seatReady = false;
     if (newState === S.GRAPPLED) {
       this._rhPinned = false;
       this._rhNetDone = false;
@@ -3680,6 +3686,7 @@ export class ArmUnit {
     this._lastParentQuat = parentQuat
       ? (this._lastParentQuatV || (this._lastParentQuatV = new THREE.Quaternion())).copy(parentQuat)
       : null;
+    this._seatReady = false;   // dock-seat: clamped to the tip: no residual survives (covers a direct `.state =` set that skips _transitionTo)
     const offset = _dockOffTmp.copy(this.dockOffset);
     if (parentQuat) offset.applyQuaternion(parentQuat);
     this.position.copy(parentPos).add(offset);
@@ -7040,6 +7047,7 @@ export class ArmUnit {
     const c = this._carry;
     if (!c) { this._transitionTo(this.heldCatches.length ? S.HOLDING_CATCH : S.DOCKED); return; }
     if (parentPos) {
+      this._seatReady = false;   // dock-seat: as in _updateDocked
       const offset = _dockOffTmp.copy(this.dockOffset);
       if (parentQuat) offset.applyQuaternion(parentQuat);
       this.position.copy(parentPos).add(offset);
@@ -8306,7 +8314,7 @@ export class ArmUnit {
    * Legacy state — preserved for backward compatibility.
    * V5 uses REELING instead for zero-fuel motor reel-in.
    */
-  _updateHauling(dt, parentPos) {
+  _updateHauling(dt, parentPos, parentQuat) {
     // Detached arms can't return — redirect to deorbit sacrifice
     if (this.isDetached) {
       this._transitionTo(S.DEORBITING);
@@ -8333,6 +8341,7 @@ export class ArmUnit {
     const dockThreshold = this.config.bodyDims[2] * M * 8;
     if (dist < dockThreshold) {
       this._transitionTo(S.DOCKING);
+      this._seatBegin(parentPos, parentQuat);
       eventBus.emit(Events.ARM_RETURNED, {
         armId: this.id, captured: true, debrisId: this.capturedDebris?.id,
       });
@@ -9150,6 +9159,7 @@ export class ArmUnit {
       // Close enough to dock — snap to the strut-tip dock (not mother core).
       this.position.copy(dockWorldPos);
       this._transitionTo(S.DOCKING);
+      this._seatBegin(parentPos, parentQuat);
       eventBus.emit(Events.ARM_RETURNED, {
         armId: this.id, captured: hasPayload, debrisId: this.capturedDebris?.id,
       });
@@ -9361,19 +9371,50 @@ export class ArmUnit {
     const dockThreshold = this.config.bodyDims[2] * M * 8;
     if (dist < dockThreshold) {
       this._transitionTo(S.DOCKING);
+      this._seatBegin(parentPos, parentQuat);
       eventBus.emit(Events.ARM_RETURNED, {
         armId: this.id, captured: false,
       });
     }
   }
 
+  /**
+   * dock-seat (owner 2026-10-24: "returned to strut but was .5 meter off center, then magically jumped to center"):
+   * the seat of a daughter that has come home. Her place is the strut tip PLUS a small residual (`_seatLocal`, ship frame,
+   * scene units) that dies away by the old 5 %/frame (60 Hz) law. She rides the tip rigidly the whole time, so a strut that
+   * keeps swinging (15 deg/s) or a ship that keeps turning no longer leaves her behind. Before this fix DOCKING chased the
+   * tip with a lerp (lag 0.14 m on a strut slewing at 15 deg/s, then a 13 cm snap when HOLDING_CATCH clamped her), and
+   * RELOADING held her nowhere at all (she lagged the strut returning to rest, 0.78 m measured, and DOCKED snapped her).
+   * Called once per DOCKING / RELOADING frame; `_seatBegin` starts the residual from where she is.
+   * @private
+   */
+  _seatBegin(parentPos, parentQuat) {
+    if (!this._seatLocal) this._seatLocal = new THREE.Vector3();
+    this._seatReady = true;
+    if (!parentPos || !this.dockOffset) { this._seatLocal.set(0, 0, 0); return; }
+    const tip = _seatTip.copy(this.dockOffset);
+    if (parentQuat) tip.applyQuaternion(parentQuat);
+    tip.add(parentPos);
+    this._seatLocal.copy(this.position).sub(tip);
+    if (parentQuat) this._seatLocal.applyQuaternion(_seatQInv.copy(parentQuat).invert());
+  }
+
+  _seatOnTip(dt, parentPos, parentQuat) {
+    if (!parentPos || !this.dockOffset) return;
+    if (!this._seatReady || !this._seatLocal) this._seatBegin(parentPos, parentQuat);
+    const k = dt > 0 ? Math.pow(0.95, dt * 60) : 1;
+    this._seatLocal.multiplyScalar(k);
+    const tip = _seatTip.copy(this.dockOffset);
+    if (parentQuat) tip.applyQuaternion(parentQuat);
+    tip.add(parentPos);
+    const res = _seatRes.copy(this._seatLocal);
+    if (parentQuat) res.applyQuaternion(parentQuat);
+    this.position.copy(tip).add(res);
+  }
+
   /** DOCKING: final alignment to dock offset (3s) */
   _updateDocking(dt, parentPos, parentQuat) {
-    const dockWorldPos = _dockOffTmp.copy(this.dockOffset);
-    if (parentQuat) dockWorldPos.applyQuaternion(parentQuat);
-    dockWorldPos.add(parentPos);
-
-    this.position.lerp(dockWorldPos, 0.05);
+    this._seatOnTip(dt, parentPos, parentQuat);
 
     // Keep the catch glued to us through the final dock approach too.
     if (!(this._rhArrived && this._rhPinInCell())) this._pinCatchToSelf(parentPos);
@@ -9659,7 +9700,8 @@ export class ArmUnit {
    * Duration depends on launch speed² (energy-based).
    * @private
    */
-  _updateReloading(dt) {
+  _updateReloading(dt, parentPos, parentQuat) {
+    this._seatOnTip(dt, parentPos, parentQuat);   // dock-seat: she rides the strut tip while the spring reloads (was: held nowhere)
     if (this.reloadDuration <= 0) {
       // Calculate reload duration if not set
       const speed = this.launchSpeed;

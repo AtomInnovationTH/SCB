@@ -52,3 +52,54 @@ export function classifyNetTarget(mass) {
   if (m > lassoCap) return { band: 'mother', message: tooHeavy };
   return { band: 'lasso', message: null };
 }
+
+// ── One range truth (net-range, owner 2026-10-24: "mother net allows capturing debris more than 100 meters away") ──
+// The distance the HUD shows for a target (DebrisField distanceKm, NavSphere label) is the straight line from the
+// ship's centre (player.getPosition()) to the piece's live scene position. Every net fire gate and in-flight check
+// uses THIS function, so the number on screen and the number that refuses a shot are the same number. (The large
+// net used to measure from the muzzle, 1.27 m forward of that, so the two could differ by up to that much.)
+
+/**
+ * Distance in metres from the ship's centre to a piece, both in scene units (1 m = SCENE_UNITS_PER_METER).
+ * @param {{x:number,y:number,z:number}} shipPos
+ * @param {{x:number,y:number,z:number}} targetPos
+ * @returns {number} metres (Infinity when either position is missing)
+ */
+export function targetRangeM(shipPos, targetPos) {
+  if (!shipPos || !targetPos) return Infinity;
+  const dx = targetPos.x - shipPos.x, dy = targetPos.y - shipPos.y, dz = targetPos.z - shipPos.z;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz) / Constants.SCENE_UNITS_PER_METER;
+}
+
+/**
+ * A distance as the HUD writes it (TargetPanel target rows): metres rounded to the nearest, km above 1 km.
+ * TargetPanel._formatDist calls this, so the refusal line and the row can never read differently.
+ * @param {number} distKm
+ * @returns {string}
+ */
+export function hudDistText(distKm) {
+  if (distKm < 1) return `${(distKm * 1000).toFixed(0)}m`;
+  if (distKm < 10) return `${distKm.toFixed(2)}km`;
+  if (distKm < 100) return `${distKm.toFixed(1)}km`;
+  return `${distKm.toFixed(0)}km`;
+}
+
+/**
+ * The refusal line for a shot at a piece beyond the net's advertised reach: names the distance (written as the HUD
+ * writes it) and the limit. When the HUD's rounding would read the same as the limit (100.4 m shows "100m"), it
+ * says so plainly with one decimal instead.
+ * @param {number} distM
+ * @param {number} limitM
+ * @param {'net'|'lasso'} [kind]
+ * @returns {string}
+ */
+export function netRangeLine(distM, limitM, kind = 'net') {
+  const what = kind === 'lasso' ? 'Out of lasso range' : 'Out of net envelope';
+  const limitText = `${Math.round(limitM)}m`;
+  let away = hudDistText(distM / 1000);
+  if (away === limitText) {
+    const d1 = distM.toFixed(1);
+    away = Number(d1) > limitM ? `${d1}m` : `just past ${limitText}`;
+  }
+  return `${what} (${limitText}): the piece is ${away} away. Close in.`;
+}
