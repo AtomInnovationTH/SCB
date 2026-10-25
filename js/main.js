@@ -196,6 +196,7 @@ let earth;
 let starfield;
 let sunLight;
 let leashVisual = null;   // l6-look: built after the capture-net visual (CAPTURE_NET on), updated each frame
+let motherCarriedRoot = null;   // identity group: net / leash / lasso / furnace drawings that ride with the mother (see _syncMotherCarried)
 // Black-flicker triage: `?bfp=1|2` in-page probe (js/core/BlackFrameProbe.js).
 // Null in normal play — the per-frame hook below is a single falsy check.
 let blackFrameProbe = null;
@@ -1396,6 +1397,12 @@ async function init() {
   _FOOTER = (Constants.LADDER && Constants.LADDER.ENABLED) ? footerBand({ glass: _glassBoot, hintBandPx: _HINT_BAND_PX }) : null;
   const scene = sceneManager.getScene();
   const camera = sceneManager.getCamera();
+  // Everything that rides with the mother and is drawn as its own scene object (net, leash, lasso web, furnace chunks) is
+  // parented to this identity group, so it hides and shows with her in ONE place (_syncMotherCarried): a group at the origin
+  // with no rotation or scale moves nothing. Held DEBRIS is the other half of that rule (DebrisField.syncHeldWithMother).
+  motherCarriedRoot = new THREE.Group();
+  motherCarriedRoot.name = 'MotherCarried';
+  scene.add(motherCarriedRoot);
   _bootMark('SceneManager constructed (renderer + composer + bloom)');
 
   // --- Earth (visual centerpiece) ---
@@ -1583,7 +1590,7 @@ async function init() {
 
   // --- Phase 4A: Skills + Lasso systems ---
   skillsSystem = new SkillsSystem();
-  lassoSystem = new LassoSystem(scene);
+  lassoSystem = new LassoSystem(motherCarriedRoot);
   lassoSystem.setSkillsSystem(skillsSystem); // Phase 3 hint-gating + veteran downgrade
   lassoSystem.setPlayer(player); // Phase 1C — cosmetic launch-recoil mesh kick
   // catch-near-pass (Decision 2): the lasso web around a held piece is drawn in the same pass as the piece.
@@ -1921,11 +1928,11 @@ async function init() {
     lassoSystem.setCaptureNetSystem(captureNetSystem);   // Cargo-continuity S13(d): a lassoed catch adopts onto the nose-collar berth (the one holding model)
     debrisField.setReseatNetSource(captureNetSystem);   // 2026-10-14: the welcome re-seat never moves a piece a mother net is flying at or holding
     cameraSystem.setLassoSystem(lassoSystem);   // 2026-08-26: the short lasso catch cut reads the live cast state
-    captureNetVisual.init(scene, player, captureNetSystem, sceneManager);   // sceneManager backs the Phase D.8 LOW-tier garnish gate
+    captureNetVisual.init(motherCarriedRoot, player, captureNetSystem, sceneManager, scene);   // sceneManager backs the Phase D.8 LOW-tier garnish gate
     // Item 1: staged furnace-breakdown choreography (chunks → furnace, net drawn in).
-    furnaceBreakdownVisual.init(scene, player);
+    furnaceBreakdownVisual.init(motherCarriedRoot, player);
     // l6-look: the leash hand-off — line, real-size bags, cone swivel (reads player.leashDriver.view()).
-    leashVisual = new LeashVisual({ scene, player, sceneManager, netVisual: captureNetVisual });   // F2: drawn in the near-field pass with the ship
+    leashVisual = new LeashVisual({ scene: motherCarriedRoot, player, sceneManager, netVisual: captureNetVisual });   // F2: drawn in the near-field pass with the ship
   }
 
   // CP-2: mother-mounted de-spin laser (flag-gated; operates on the active target)
@@ -6764,6 +6771,19 @@ function _emitPauseDiagnostic(timestamp, skippedThisFrame) {
   );
 }
 
+/**
+ * ONE rule: whatever rides with the mother is drawn exactly when she is. Her visibility is `player.visible` (the floor-4/5
+ * ship-is-icon costume writes it through SceneManager._ladderShip, the menu and the Ships step of `-` write it too). The
+ * held DEBRIS follows through DebrisField (live read in both held-piece writers, plus an edge redraw here, since a floor
+ * change lands after this frame's field update); the net / leash / lasso / furnace drawings hang on motherCarriedRoot.
+ */
+function _syncMotherCarried() {
+  if (motherCarriedRoot && player) motherCarriedRoot.visible = player.visible !== false;
+  const hidden = player ? player.visible === false : false;
+  const armMask = (armManager && typeof armManager.syncAttachedWithMother === 'function') ? armManager.syncAttachedWithMother(hidden) : 0;
+  if (debrisField && typeof debrisField.syncHeldWithMother === 'function') debrisField.syncHeldWithMother(armMask);
+}
+
 function gameLoop(timestamp) {
   // §13 boot timeline (?logBoot=1) — one-shot mark on the very first rAF
   // dispatch. The delta from "init() complete — first rAF scheduled" to here
@@ -6818,6 +6838,7 @@ function gameLoop(timestamp) {
     _blurKeepalivePresentTs = timestamp;
     try {
       if (earth) earth.tickStrips(); // st7: earth.update does not run here, so the Earth picture strips would stall
+      _syncMotherCarried();
       if (sceneManager) sceneManager.render();
       if (blackFrameProbe) blackFrameProbe.tick(timestamp);
     } catch (_e) { /* keepalive must never break the halt path */ }
@@ -7789,6 +7810,7 @@ function gameLoop(timestamp) {
   if (_bootFirstRenderCall) {
     _bootMark('first sceneManager.render(). START');
   }
+  _syncMotherCarried();   // held pieces + net/leash visuals go with the mother this frame (floor changes land after the field update)
   if (_shotDrawMeter) _shotDrawMeter.before();   // ?shot draw-call meter (null in play)
   if (!_skipPaint) {
     // viewCover 'full' (Tech Library / ShopScreen plate): the whole composer
@@ -8058,6 +8080,7 @@ function onResize() {
   // canvas content and the DOM labels locked together. Cost: one extra render
   // per resize event (~2–3 ms GPU on the reference M4), only while resizing.
   try {
+    _syncMotherCarried();
     sceneManager.render();
     cityLabels.update();
   } catch (_e) { /* resize repaint must never break the handler */ }

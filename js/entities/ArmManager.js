@@ -8,7 +8,7 @@
  */
 
 import * as THREE from 'three';
-import { Constants } from '../core/Constants.js';
+import { Constants, isArmAttachedToMother } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
@@ -1557,6 +1557,36 @@ export class ArmManager {
       }
       this._fleetVisMemory = null;
     }
+  }
+
+  /**
+   * Mother hidden (floor-4/5 ship-is-icon costume, menu, Ships step): a daughter that is still attached to her
+   * (docked on a strut, or holding a catch at the tip) is part of the ship and hides with her; one flying on her own
+   * stays drawn. Called once a frame from main.js. Idempotent while hidden, restores only what this call hid, and never
+   * resurrects an expended daughter. Allocation-free (at most four arms).
+   * @param {boolean} hidden  the mother's current hidden state
+   * @returns {number} bitmask of the daughters whose group is hidden after the pass (a change key for held catches)
+   */
+  syncAttachedWithMother(hidden) {
+    const S = Constants.ARM_STATES;
+    let mask = 0;
+    for (let i = 0; i < this.arms.length; i++) {
+      const arm = this.arms[i];
+      if (!arm || !arm.group) continue;
+      const attached = isArmAttachedToMother(arm.state);
+      if (hidden && attached) {
+        if (arm.group.visible) { arm.group.visible = false; arm._hiddenWithMother = true; }
+      } else if (arm._hiddenWithMother) {
+        arm._hiddenWithMother = false;
+        if (arm.state !== S.EXPENDED) {
+          if (!this._fleetVisMemory) arm.group.visible = true;
+          // The "-" Ships step took its memory while we had her hidden: that memory says "hidden", and "+" would restore it for good.
+          else if (this._fleetVisMemory.get(arm) === false) this._fleetVisMemory.set(arm, true);
+        }
+      }
+      if (!arm.group.visible) mask |= (1 << i);
+    }
+    return mask;
   }
 
   /**

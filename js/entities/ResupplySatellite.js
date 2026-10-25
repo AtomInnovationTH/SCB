@@ -1412,6 +1412,12 @@ export class ResupplySatellite {
       const canon = rec.df && rec.df.debrisMap ? rec.df.debrisMap.get(d.id) : null;
       if (canon && canon !== d && canon.tumbleAxis) { canon.tumbleAxis.copy(d.tumbleAxis); canon.tumbleAngle = d.tumbleAngle; }
     }
+    // Hanging on her grip (carry): the piece is the resupply craft's, so it is drawn exactly when SHE is, not when the mother is
+    // (DebrisField.carrierHidden). Waiting or flying-to pieces are still on the mother's rack and follow the mother.
+    const carried = !!(this._take && this._take.rec === rec && this._take.phase === 'carry');
+    d._carrierObj = carried ? this.group : null;
+    const canonCar = rec.df && rec.df.debrisMap ? rec.df.debrisMap.get(d.id) : null;
+    if (canonCar && canonCar !== d) canonCar._carrierObj = d._carrierObj;
     if (rec.df && typeof rec.df.pinCapturedDebris === 'function') rec.df.pinCapturedDebris(d, pos);
     else if (d._scenePosition) d._scenePosition.copy(pos);
   }
@@ -1421,6 +1427,7 @@ export class ResupplySatellite {
     if (rec.done) return;
     rec.done = true;
     rec._verts = undefined;
+    if (rec.piece) rec.piece._carrierObj = null;
     if (typeof rec.onDone === 'function') rec.onDone();
   }
 

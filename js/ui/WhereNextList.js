@@ -1,7 +1,8 @@
 /**
  * WhereNextList - the "where next" list on floor 4 (LEO) (Nets step 3 slice 2b, lane 2b-2; plan decision K; DECISIONS §33 rows 6 and
  * 10; FEATURE_FLAGS.FIELDS_BY_HEIGHT). The panel the mission boundary asks "where to?" on: one row per field and a Stay row, the
- * words of js/systems/WhereNextRows.js. It owns no game state: main.js says when the choice is pending (`setPending`, from
+ * words of js/systems/WhereNextRows.js. It draws at most five destination rows (the best guess first, tagged BEST, the rest cheapest gas
+ * first) and a Stay line (`whereNextView`); the model keeps every row for the height scale and the picks. It owns no game state: main.js says when the choice is pending (`setPending`, from
  * `Events.WHERE_NEXT`), NavcomFloor says when floor 4 is the floor she is on (`setFloorShown`, from activate / deactivate), and a pick
  * goes out through `onPick(id)` (GameFlowManager.pickWhereNext). It is OPEN (on screen, taking keys) only while both hold.
  *
@@ -23,6 +24,7 @@
 import { VisualLaw } from '../core/VisualLaw.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { whereNextView } from '../systems/WhereNextRows.js';
 
 export const WHERE_NEXT_ID = 'where-next-list';
 /** Row height on glass (iPad): the 44 px touch target. */
@@ -50,6 +52,8 @@ export const TITLE_TEXT = 'Where next?';
 /** The hint line: keys with a keyboard, taps on glass (read at draw time, as the other glass branches). */
 export const HINT_DESKTOP = 'Tab: next row \u00b7 Space: go';
 export const HINT_GLASS = 'Tap a row, tap it again to go';
+/** The tag on the row the game suggests (row 1; it has the focus when the list opens, so one tap or Space goes). */
+export const BEST_TAG = 'BEST';
 
 /** The focused row's colour; the height scale's chips on the map read it from here, so the highlight is the same blue. */
 export const FOCUS_COLOR = VisualLaw.COLORS.SELECTION;
@@ -147,9 +151,16 @@ export class WhereNextList {
 
   // ── Model ──────────────────────────────────────────────────────────────────
 
-  /** The rows as last built: [{ id, kind, text, state, selectable, focused }] (a copy). */
-  rows() { return this._model.rows.map((r) => ({ id: r.id, kind: r.kind, text: r.text, state: r.state, selectable: r.selectable, focused: r.id === this._focusId })); }
-  /** The rows as last built, with their numbers (gasKg, days, shortKg, ...): the map's height scale shows them on its chips (a copy). */
+  /** @private what is drawn now (the top five, a focused extra row, Stay), from the model and the focus. */
+  _view() { return whereNextView(this._model, this._focusId); }
+  /** The rows as drawn: [{ id, kind, text, state, selectable, focused, best }] (a copy); `text` is the short line the panel shows. */
+  rows() {
+    const v = this._view();
+    return v.rows.map((r) => ({ id: r.id, kind: r.kind, text: r.shortText || r.text, state: r.state, selectable: r.selectable, focused: r.id === this._focusId, best: r.id === v.bestId }));
+  }
+  /** The id of the row the game suggests (tagged BEST), or null. */
+  bestId() { return this._view().bestId; }
+  /** EVERY row as last built, with their numbers (gasKg, days, shortKg, ...), drawn or not: the map's height scale shows them on its chips (a copy). */
   rowData() { return this._model.rows.map((r) => ({ ...r })); }
   focusedId() { return this._focusId; }
   /** The row that is focused, or null. */
@@ -189,7 +200,7 @@ export class WhereNextList {
   /** Move the focus to the next / previous row that can be picked (wraps). @returns {boolean} the focus moved */
   focusStep(dir) {
     if (!this.isOpen()) return false;
-    const sel = this._model.selectable;
+    const sel = this._view().rows.filter((r) => r.selectable).map((r) => r.id);          // Tab cycles the rows that are drawn
     if (!sel.length) return false;
     const i = sel.indexOf(this._focusId);
     const next = i < 0 ? 0 : (i + (dir < 0 ? -1 : 1) + sel.length) % sel.length;
@@ -301,7 +312,8 @@ export class WhereNextList {
     const doc = this._doc;
     const glass = !!this._glass();
     const rowPx = glass ? ROW_PX_GLASS : ROW_PX_DESKTOP;
-    const key = JSON.stringify([glass, this._focusId, this._model.rows.map((r) => [r.id, r.text, r.selectable])]);
+    const view = this._view();
+    const key = JSON.stringify([glass, this._focusId, view.bestId, view.outLines, this._model.line, view.rows.map((r) => [r.id, r.shortText || r.text, r.selectable])]);
     if (key === this._paintKey) return;
     this._paintKey = key;
     for (const el of this._rowEls) this._root.removeChild(el);
@@ -311,7 +323,7 @@ export class WhereNextList {
     title.textContent = TITLE_TEXT;
     Object.assign(title.style, { color: VisualLaw.COLORS.INFO, marginBottom: '4px', opacity: '0.85' });
     add(title);
-    for (const r of this._model.rows) {
+    for (const r of view.rows) {
       const focused = r.id === this._focusId;
       const row = doc.createElement('div');
       row.setAttribute('role', 'option');
@@ -323,21 +335,36 @@ export class WhereNextList {
         marginTop: '2px', borderRadius: '3px', cursor: r.selectable ? 'pointer' : 'default',
         border: `1px solid ${focused ? VisualLaw.COLORS.SELECTION : 'transparent'}`,
         background: focused ? 'rgba(68,136,255,0.18)' : 'transparent',
-        color: VisualLaw.COLORS.INFO, opacity: r.selectable ? '1' : '0.55',
+        color: VisualLaw.COLORS.INFO, opacity: r.selectable ? '1' : '0.55', overflow: 'hidden', whiteSpace: 'nowrap',
       });
       const mark = doc.createElement('span');
       mark.textContent = focused ? MARK : '';
       Object.assign(mark.style, { display: 'inline-block', width: '1.2em', flex: '0 0 auto', color: VisualLaw.COLORS.SELECTION });
       const label = doc.createElement('span');
-      label.textContent = r.text;
+      label.textContent = r.shortText || r.text;
+      Object.assign(label.style, { flex: '1 1 auto', minWidth: '0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });     // one line a row: ellipsis, never a second line
       row.appendChild(mark);
       row.appendChild(label);
+      if (r.id === view.bestId) {
+        const tag = doc.createElement('span');
+        tag.textContent = BEST_TAG;
+        tag.setAttribute('data-tag', 'best');
+        Object.assign(tag.style, { flex: '0 0 auto', marginLeft: 'auto', paddingLeft: '8px', fontSize: '0.7rem', color: VisualLaw.COLORS.SELECTION });
+        row.appendChild(tag);
+      }
+      if (r.kind === 'stay') row.style.marginTop = '8px';
       row.addEventListener('click', (e) => {
         if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
         this.tapRow(r.id);
       });
       add(row);
     }
+    view.outLines.forEach((text, i) => {
+      const out = doc.createElement('div');
+      out.textContent = text;
+      Object.assign(out.style, { marginTop: i === 0 ? '4px' : '1px', opacity: '0.7', fontSize: '0.75rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
+      add(out);
+    });
     if (this._model.line) {
       const note = doc.createElement('div');
       note.textContent = this._model.line;
@@ -354,7 +381,8 @@ export class WhereNextList {
   domText() {
     return this._rowEls.map((el) => {
       const kids = el.children ? Array.from(el.children) : [];
-      return kids.length ? kids.map((c) => c.textContent).join('') : el.textContent;
+      const isTag = (c) => typeof c.getAttribute === 'function' && c.getAttribute('data-tag') === 'best';
+      return kids.length ? kids.map((c) => (isTag(c) ? ' ' : '') + c.textContent).join('') : el.textContent;
     });
   }
 

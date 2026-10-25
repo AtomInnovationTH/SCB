@@ -91,13 +91,14 @@ export class DragSailSet {
    * floating origin), turns with the piece's tumble and scales with its LOD; a piece that is gone, no longer carries the sail or is too
    * far to draw (`_lodScale` 0) loses it (or hides it).
    * @param {{x:number,y:number,z:number}|null} [origin] the floating origin to subtract (null / undefined: none)
+   * @param {((d: object) => boolean)|null} [hiddenFn] true = the piece's carrier is hidden, so its sail is too (a held catch goes with the mother)
    */
-  sync(origin) {
+  sync(origin, hiddenFn = null) {
     for (const [id, r] of [...this._rec]) {
       const d = r.d;
       if (!d || !d.alive || d._sail !== true) { this.remove(id); continue; }
       const sp = d._scenePosition;
-      if (!sp || !(d._lodScale > 0)) { r.group.visible = false; continue; }
+      if (!sp || !(d._lodScale > 0) || (hiddenFn && hiddenFn(d))) { r.group.visible = false; continue; }
       const ox = origin ? origin.x : 0, oy = origin ? origin.y : 0, oz = origin ? origin.z : 0;
       r.group.position.set(sp.x - ox, sp.y - oy, sp.z - oz);
       if (d.tumbleAxis) r.group.quaternion.copy(this._quat.setFromAxisAngle(d.tumbleAxis, d.tumbleAngle || 0));

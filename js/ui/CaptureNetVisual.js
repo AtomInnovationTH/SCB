@@ -19,7 +19,7 @@
 import * as THREE from 'three';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { Constants } from '../core/Constants.js';
+import { Constants, isArmAttachedToMother } from '../core/Constants.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
 import { NetMeshKit } from './NetMeshKit.js';
 // Whale-in-cone phase 3 (Task 5): the ceremony driver reads the catch's REAL
@@ -343,11 +343,14 @@ export class CaptureNetVisual {
    * @param {object} [sceneManager] — optional; backs the Phase D.8 LOW-tier
    *   garnish gate (twang, drape jiggle, tether pulse, pendulum, micro-shake
    *   drop at LOW; structure stays). Live changes arrive via PERF_TIER_CHANGED.
+   * @param {THREE.Object3D} [freeScene] — optional real scene; with it, a visual carried by a daughter follows HER drawing
+   *   (see `_seatUnderCarrier`), while `scene` (the mother's carried root) holds everything the mother carries.
    */
-  init(scene, player, captureNetSystem, sceneManager = null) {
+  init(scene, player, captureNetSystem, sceneManager = null, freeScene = null) {
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return;
 
     this._scene = scene;
+    this._freeScene = freeScene || null;   // the real scene: a net / bag a FREE daughter carries hangs here, not under the mother's (hideable) root
     this._player = player;
     this._captureNetSystem = captureNetSystem;
     this._sceneManager = sceneManager;   // V4: camera source for depth shading
@@ -1274,6 +1277,7 @@ export class CaptureNetVisual {
       vis._bagNear = false;
     }
 
+    if (vis.group.parent && vis.group.parent !== this._scene) vis.group.parent.remove(vis.group);   // a free daughter's bag hangs on `_freeScene`
     this._scene.remove(vis.group);
     this._scene.remove(vis.tetherLine);       // l8-reel-collar D4: it is a scene child, not under the group
     if (this._tetherRoot) this._tetherRoot.remove(vis.tetherLine);   // l8c: ... or a child of the near-pass tether root
@@ -1301,6 +1305,24 @@ export class CaptureNetVisual {
     this._fadeTimers  = this._fadeTimers.filter(f => f.key !== key);
   }
 
+  /**
+   * A net / carry bag follows whoever carries it: a daughter's (her net in flight, the bag on her rack, including the carry trip
+   * where she flies on her own) hangs on the real scene while SHE is drawn, and on the mother's carried root otherwise, so it is
+   * hidden exactly when its carrier is. Mother-carried visuals (pod nets, a bag at a tip) always stay on the root. Moves only when
+   * the answer changes.
+   * @private
+   */
+  _seatUnderCarrier(vis) {
+    const idx = vis.carry && vis.carry.rack ? vis.carry.armIndex : vis.armIndex;
+    let want = this._scene;
+    if (idx >= 0) {
+      const arms = this._player && this._player.armManager && this._player.armManager.arms;
+      const arm = arms && arms[idx];
+      if (arm && arm.group && arm.group.visible !== false && !isArmAttachedToMother(arm.state)) want = this._freeScene;
+    }
+    if (vis.group.parent !== want) want.add(vis.group);
+  }
+
   // ── Per-frame update ───────────────────────────────────────────────────
 
   /**
@@ -1316,6 +1338,8 @@ export class CaptureNetVisual {
     // CeremonyTimeScale.get() === 1.0 (short-circuit, no-op multiply).
     const scale = Constants.FEATURE_FLAGS.NET_CEREMONY ? CeremonyTimeScale.get() : 1.0;
     dt = dt * scale;
+
+    if (this._freeScene) for (const vis of this._activeVisuals.values()) this._seatUnderCarrier(vis);
 
     // ── Tick fade timers ──
     for (let i = this._fadeTimers.length - 1; i >= 0; i--) {

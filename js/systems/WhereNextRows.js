@@ -128,6 +128,7 @@ export function pctText(gasKg, aboardKg) {
  * @property {'ok'|'cleared'|'short'|'cannot'|'stay'|'mission'|'poor'|'here'} state   'mission': a mission is going on, trips wait for its end; 'poor': the call, short of credits; 'here': a push row with no trip (she is at or below the piece's 25-year height)
  * @property {boolean} selectable
  * @property {string} text        the row's words
+ * @property {string} [shortText] the panel's one short line for a trip she can fly ("400 km . 7 pieces . 0.6 kg gas . 5 days"); the panel draws it in place of `text` when there
  * @property {number} [gasKg]     the whole trip's gas (a trip she can fly, or one she is short for)
  * @property {number} [gasPct]    gas / gas aboard, percent
  * @property {number} [days]      the profile's days (the call: the satellite's days, the estimate when the profile cannot be read)
@@ -165,7 +166,9 @@ export function buildWhereNextRows(reg, opts = {}) {
   const held = opts && Array.isArray(opts.bigPieces) ? opts.bigPieces.filter((e) => e && e.debris) : [];
   const herKm = typeof reg.altitudeKm === 'function' && Number.isFinite(reg.altitudeKm()) ? reg.altitudeKm() : fromKm;
   for (const e of held) if (e.fate === 'push') { const r = pushRow(reg, e.debris, owed, turn, herKm); if (r) rows.push(r); }
-  const handOver = handOverWords(held.filter((e) => e.fate === 'satellite').map((e) => e.debris));
+  const handPieces = held.filter((e) => e.fate === 'satellite').map((e) => e.debris);
+  const handOver = handOverWords(handPieces);
+  const handOverShort = handPieces.length ? `pays ${creditsText(handPieces.reduce((sum, d) => sum + fatePay(d, 'satellite').totalCr, 0))}` : '';
   if (typeof reg.satellites === 'function') {
     // N satellites (slice 4): nearest by height from her field first, a tie to the lower one (as the fields are listed). The call
     // summons the NEAREST one: it comes right after that satellite's row, when she cannot fly there (out of gas, or a mission is going on).
@@ -174,7 +177,7 @@ export function buildWhereNextRows(reg, opts = {}) {
       .sort((a, b) => Math.abs(a.altKm - fromKm) - Math.abs(b.altKm - fromKm) || a.altKm - b.altKm);
     for (let i = 0; i < sats.length; i++) {
       const row = satelliteRow(reg, sats[i], owed, turn);
-      if (handOver && row.state === 'ok') row.text += ` ${DOT} ${handOver}`;
+      if (handOver && row.state === 'ok') { row.text += ` ${DOT} ${handOver}`; row.shortText += ` ${DOT} ${handOverShort}`; }
       rows.push(row);
       if (!berth && i === 0 && credits !== null && !row.selectable) rows.push(callRow(sats[i], row, here, credits, gasCredits));
     }
@@ -209,6 +212,7 @@ export function buildWhereNextRows(reg, opts = {}) {
     rows.push({
       id: f.id, kind: 'field', altKm: f.altKm, pieces: n, state: 'ok', selectable: true, gasKg, gasPct, days,
       text: `${head} ${DOT} ${piecesText(n)} ${DOT} ${kgText(gasKg)} kg gas (${pctText(gasKg, plan.gasAboardKg)}) ${DOT} ${daysText(days)}`,
+      shortText: `${Math.round(f.altKm)} km ${DOT} ${piecesText(n)} ${DOT} ${kgText(gasKg)} kg gas ${DOT} ${daysText(days)}`,
     });
   }
   const hereN = reg.remainingCount(here.id);
@@ -242,6 +246,76 @@ export function buildWhereNextRows(reg, opts = {}) {
     ? (berth && !anyPieces && onlySatellites ? ALL_CLEARED_LINE : null)
     : (berth ? (anyPieces ? BERTH_NO_REACH_LINE : ALL_CLEARED_LINE) : NO_REACH_LINE);
   return { rows, focusId, selectable, line };
+}
+
+/** The panel draws at most this many destination rows (fields, satellites, the call and push-down rows all count; "Stay here" does not). */
+export const TOP_N = 5;
+
+/** @param {number} n @returns {string} "1 more field", "3 more fields" */
+const moreFields = (n) => `${n} more ${n === 1 ? 'field' : 'fields'}`;
+
+/**
+ * What the "where next" panel draws (owner 2026-10-25: a wall of text; "just the top five with the best guess highlighted"). Pure, over a
+ * `buildWhereNextRows` result, which still holds every row (the height scale and the picks read the full data).
+ *   - `bestId`: the pick the game pre-selects (`model.focusId`), when it is a destination (not Stay): it is row 1 and carries the "BEST" tag.
+ *   - the rest: rows she can pick now, cheapest gas first, a tie by fewer days (the call, which costs credits not gas, after the gas ones).
+ *     At most TOP_N destinations in all. Rows she cannot pick (cleared, short of gas, a mission going on) are not drawn.
+ *   - `focusId` on a reachable row outside the five: that row is drawn as one extra line while it has the focus (a chip tap on the map).
+ *   - Stay is its own line at the bottom, outside the five.
+ *   - the call, when she can pick it, is always among the five (it has no chip on the height scale).
+ *   - `outLines`: at most two short lines saying why rows are not drawn ("3 more fields out of reach: need more gas"); none when there is
+ *     nothing to say, and none when the model already carries its own line (nothing can be picked).
+ * @param {{rows: WhereNextRow[], focusId: (string|null), line?: (string|null)}} model @param {string|null} [focusId] the focus now
+ * @returns {{rows: WhereNextRow[], topIds: string[], bestId: (string|null), outLines: string[]}} `rows`: the rows to draw, in order
+ */
+export function whereNextView(model, focusId = null) {
+  const all = model && Array.isArray(model.rows) ? model.rows : [];
+  const reach = all.filter((r) => r.kind !== 'stay' && r.selectable);
+  const best = reach.find((r) => r.id === model.focusId) || null;
+  const gas = (r) => (r.kind === CALL_KIND ? Infinity : (Number.isFinite(r.gasKg) ? r.gasKg : 0));
+  const days = (r) => (Number.isFinite(r.days) ? r.days : Infinity);
+  const rest = reach.map((r, i) => ({ r, i })).filter((x) => x.r !== best)
+    .sort((a, b) => (gas(a.r) - gas(b.r) || days(a.r) - days(b.r) || a.i - b.i) || 0)
+    .map((x) => x.r);
+  const top = (best ? [best, ...rest] : rest).slice(0, TOP_N);
+  // the call costs credits, not gas, so it sorts last; it has no chip on the height scale either, so when she can pick it, it is always
+  // drawn: it takes the last of the five when the five are full
+  const callRow = reach.find((r) => r.kind === CALL_KIND);
+  if (callRow && !top.includes(callRow)) { if (top.length >= TOP_N) top[TOP_N - 1] = callRow; else top.push(callRow); }
+  const drawn = top.slice();
+  const extra = focusId != null && !top.some((r) => r.id === focusId) ? reach.find((r) => r.id === focusId) : null;
+  if (extra) drawn.push(extra);
+  const stay = all.find((r) => r.kind === 'stay');
+  if (stay) drawn.push(stay);
+  const outLines = model && model.line ? [] : outOfReachLines(all);
+  return { rows: drawn, topIds: top.map((r) => r.id), bestId: best ? best.id : null, outLines };
+}
+
+/** @private "3 more fields and 1 resupply satellite" for the rows of these states, by kind; '' when none. */
+function countWords(all, states) {
+  const n = (kind) => all.filter((r) => r.kind === kind && states.includes(r.state)).length;
+  const f = n('field'); const s = n(SATELLITE_ROW_KIND); const p = n(PUSH_KIND);
+  const parts = [];
+  if (f) parts.push(moreFields(f));
+  if (s) parts.push(`${s} resupply ${s === 1 ? 'satellite' : 'satellites'}`);
+  if (p) parts.push(`${p} ${p === 1 ? 'push-down' : 'push-downs'}`);
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : (parts[0] || '');
+}
+
+/**
+ * @private The short lines that say why rows are not drawn (at most two): line 1 the gas and the engine ("3 more fields out of reach: need
+ * more gas; 1 more field too far for the engine"), line 2 a mission still going and a call she cannot pay for ("2 more fields: finish this
+ * mission first; calling the satellite needs more credits"). Cleared fields are not counted: they have nothing to say.
+ * @param {WhereNextRow[]} all @returns {string[]}
+ */
+function outOfReachLines(all) {
+  const gas = countWords(all, ['short']);
+  const engine = countWords(all, ['cannot']);
+  const wait = countWords(all, ['mission']);
+  const poor = all.some((r) => r.kind === CALL_KIND && r.state === 'poor');
+  const one = [gas && `${gas} out of reach: need more gas`, engine && `${engine} too far for the engine`].filter(Boolean).join('; ');
+  const two = [wait && `${wait}: finish this mission first`, poor && 'calling the satellite needs more credits'].filter(Boolean).join('; ');
+  return [one, two].filter(Boolean);
 }
 
 /**
@@ -286,6 +360,7 @@ function satelliteRow(reg, s, owed, turn) {
   return {
     ...base, state: 'ok', selectable: true, gasKg, gasPct, days,
     text: `${head} ${DOT} nets, gas, shop ${DOT} ${kgText(gasKg)} kg gas (${pctText(gasKg, plan.gasAboardKg)}) ${DOT} ${daysText(days)}`,
+    shortText: `${s.name || 'Resupply satellite'} ${Math.round(s.altKm)} km ${DOT} ${kgText(gasKg)} kg gas ${DOT} ${daysText(days)}`,
   };
 }
 
@@ -303,7 +378,7 @@ function callRow(s, satRow, here, credits, gasCredits) {
   const days = Number.isFinite(satRow.plainDays) && satRow.plainDays > 0 ? satRow.plainDays : Constants.RESUPPLY.CALL_DAYS_EST;
   const base = { id: CALL_ID, kind: CALL_KIND, altKm: here.altKm, pieces: 0, days, credits: price, satId: s.id };
   const head = `Call the resupply satellite to you ${DOT} ${creditsText(price)} credits`;
-  if (credits >= price + gasCredits) return { ...base, state: 'ok', selectable: true, text: `${head} ${DOT} ${daysText(days)}` };
+  if (credits >= price + gasCredits) return { ...base, state: 'ok', selectable: true, text: `${head} ${DOT} ${daysText(days)}`, shortText: `Call the satellite ${DOT} ${creditsText(price)} credits ${DOT} ${daysText(days)}` };
   return { ...base, state: 'poor', selectable: false, text: `${head}${gasCredits > 0 ? ' + gas' : ''}, you have ${creditsText(credits)}` };
 }
 
@@ -326,7 +401,10 @@ function pushRow(reg, d, owed, turn, herKm) {
   if (herKm <= target + 0.5) {
     const years = lifetimeYears(herKm, d.mass, dragAreaM2(d));
     const when = Number.isFinite(years) ? `it comes down in about ${Math.max(1, Math.round(years))} ${Math.max(1, Math.round(years)) === 1 ? 'year' : 'years'}` : 'it stays up';
-    return { ...base, state: 'here', altKm: herKm, targetKm: herKm, selectable: true, text: `Let the ${name} go here at ${Math.round(herKm)} km: ${when} ${DOT} ${payText}` };
+    return {
+      ...base, state: 'here', altKm: herKm, targetKm: herKm, selectable: true, text: `Let the ${name} go here at ${Math.round(herKm)} km: ${when} ${DOT} ${payText}`,
+      shortText: `Let ${name} go here ${DOT} ${when.replace('it comes down in about', 'down in about')} ${DOT} ${payText}`,
+    };
   }
   const down = reg.planTo({ id: 'free', altKm: target });
   if (!down || !down.profile || !down.profile.ok) return { ...base, state: 'cannot', selectable: false, text: `${head} ${DOT} the thruster cannot take her there` };
@@ -343,6 +421,7 @@ function pushRow(reg, d, owed, turn, herKm) {
   return {
     ...base, state: 'ok', selectable: true, gasKg, gasPct, days, backGasKg: back.profile.gasKg,
     text: `${head} ${DOT} ${kgText(gasKg)} kg gas (${pctText(gasKg, down.gasAboardKg)}) ${DOT} ${daysText(days)} ${DOT} ${payText}`,
+    shortText: `Push ${name} to ${Math.round(target)} km ${DOT} ${kgText(gasKg)} kg gas ${DOT} ${daysText(days)} ${DOT} ${payText}`,
   };
 }
 

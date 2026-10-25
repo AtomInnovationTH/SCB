@@ -7417,4 +7417,16 @@ if (typeof module !== 'undefined' && module.exports) {
   };
 }
 
+/**
+ * Is a daughter in this state still attached to the mother (on her strut, prepping a carry, holding a catch at the tip,
+ * reloading)? Such a daughter is part of the ship: she hides with the mother, and so does a catch she holds. ONE list,
+ * read by ArmManager.syncAttachedWithMother and DebrisField.carrierHidden.
+ * @param {string} state  an ARM_STATES value
+ * @returns {boolean}
+ */
+export function isArmAttachedToMother(state) {
+  const S = Constants.ARM_STATES;
+  return state === S.DOCKED || state === S.CARRY_PREP || state === S.HOLDING_CATCH || state === S.RELOADING;
+}
+
 export default Constants;

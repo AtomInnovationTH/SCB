@@ -7,7 +7,7 @@
  */
 
 import * as THREE from 'three';
-import { Constants } from '../core/Constants.js';
+import { Constants, isArmAttachedToMother } from '../core/Constants.js';
 import { TimeAuthority } from '../systems/TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
@@ -578,6 +578,8 @@ export class DebrisField {
     /** @type {THREE.Object3D|null} */ this._nearPlayer = null;
     /** @type {Map<number, {proxy: THREE.InstancedMesh, canonical: object, ref: object|null}>} */
     this._heldProxies = new Map();
+    /** The mother's hidden state the held pieces were last redrawn for (syncHeldWithMother). */
+    this._heldHiddenApplied = 0;
     this._heldColor = new THREE.Color();
 
     /** Pre-allocated colors for web shot tinting (Sprint D1) */
@@ -2648,7 +2650,7 @@ export class DebrisField {
         // ST-6.2: Update flag overlay transform — mount the decal ON the hull
         // surface (NASA/ESA style), facing outward and tumbling with the piece.
         const flagInfo = this._flagLookup.get(debris.id);
-        if (flagInfo && debris._scenePosition && debris._lodScale > 0) {
+        if (flagInfo && debris._scenePosition && debris._lodScale > 0 && !DebrisField.heldHidden(this, debris)) {
           const flagMesh = this.flagMeshes[flagInfo.country];
           if (flagMesh) {
             const sp = debris._scenePosition;
@@ -2720,7 +2722,7 @@ export class DebrisField {
     }
 
     // slice 5 (5d, D5): the drag sails follow their pieces (the draw hook: only while one exists)
-    if (this._sails && this._sails.size > 0) this._sails.sync(Constants.FLOATING_ORIGIN_ENABLED ? this._floatingOrigin : null);
+    if (this._sails && this._sails.size > 0) this._sails.sync(Constants.FLOATING_ORIGIN_ENABLED ? this._floatingOrigin : null, this._heldHiddenFn || (this._heldHiddenFn = (d) => DebrisField.heldHidden(this, d)));
 
     // ST-6.2: Mark flag overlay meshes for update
     for (const mesh of Object.values(this.flagMeshes)) {
@@ -2883,10 +2885,12 @@ export class DebrisField {
     debrisRef._armPinPos = debrisRef._armPinPos ? debrisRef._armPinPos.copy(armScenePos) : armScenePos.clone();
     debrisRef._armPinned = true;
 
+    debrisRef._pinScaleMul = scaleMul > 0 ? scaleMul : 1;   // the edge redraw (syncHeldWithMother) reuses it, so a shrinking catch never pops
     // 2) Update the CANONICAL field object by id (may be a different reference)
     //    so the orbit-driven renderer doesn't fight us next frame.
     const canonical = (id != null && this.debrisMap.get(id)) || debrisRef;
     if (canonical !== debrisRef) {
+      canonical._pinScaleMul = debrisRef._pinScaleMul;
       if (!canonical._scenePosition) canonical._scenePosition = new THREE.Vector3();
       canonical._scenePosition.copy(armScenePos);
       canonical._armPinPos = canonical._armPinPos ? canonical._armPinPos.copy(armScenePos) : armScenePos.clone();
@@ -2896,10 +2900,67 @@ export class DebrisField {
     // 3) Force the rendered instance (by id slot) to the arm position THIS frame,
     //    overriding whatever this.update() computed earlier (orbit branch).
     if (id == null) return;
+    DebrisField.prototype._drawPinned.call(this, canonical, debrisRef, armScenePos, scaleMul);
+  }
+
+  /**
+   * True while the mother is hidden (the floor-4/5 ship-is-icon costume, the menu backdrop, the Ships step of `-`).
+   * Every piece that rides with her is then not drawn: ONE rule, read live by both held-piece writers
+   * (`_updateInstanceTransform`'s pinned branch and `_drawPinned`). `_nearPlayer` is the mother (main.js attachNearField).
+   * @returns {boolean}
+   */
+  motherIsHidden() {
+    const p = this._nearPlayer;
+    return !!p && p.visible === false;
+  }
+
+  /**
+   * Is the carrier of this held piece hidden? The piece follows whoever carries it: an explicit carrier object
+   * (`_carrierObj`, e.g. the resupply craft once it has gripped a piece) by that object's own visibility; a daughter's catch
+   * follows HER drawing (her group is hidden when she is attached while the mother is hidden, or by the Ships step; a daughter
+   * flying on her own stays drawn, and so does her catch); every other held piece (tip, rack, nose, net, leash, bag) follows
+   * the mother. Static + null-safe: the held-piece writers are also run on bare receivers by tests.
+   * @param {object} field  the DebrisField (reads `_nearPlayer` only)
+   * @param {object} d      the held piece
+   * @returns {boolean}
+   */
+  static carrierHidden(field, d) {
+    const o = d._carrierObj;
+    if (o) return o.visible === false;
+    const p = field._nearPlayer;
+    const motherHidden = !!p && p.visible === false;
+    const c = d._capturedByArm;
+    if (c && c.group) return c.group.visible === false || (isArmAttachedToMother(c.state) && motherHidden);
+    return motherHidden;
+  }
+
+  /**
+   * Is `d` a held piece (pinned, parked at the nose, or following a daughter) whose carrier is hidden? Gates everything that
+   * hangs off a held piece's drawing (instance, proxy, flag decal, drag sail). A free field piece is never "held hidden".
+   * @param {object} field
+   * @param {object} d
+   * @returns {boolean}
+   */
+  static heldHidden(field, d) {
+    if (!d) return false;
+    const c = d._capturedByArm;
+    const held = !!(d._armPinned && d._armPinPos) || !!d._motherParked
+      || !!(c && c.position && c.state && c.state !== 'GRAPPLED' && c.state !== 'NETTING');
+    return held && DebrisField.carrierHidden(field, d);
+  }
+
+  /**
+   * The ONE draw of a pinned (held) piece: far-pass instance or near-pass proxy at the pin, or nothing while the mother
+   * is hidden (a held piece is part of her). Body of `pinCapturedDebris` step 3, shared with `syncHeldWithMother`.
+   * @private
+   */
+  _drawPinned(canonical, debrisRef, armScenePos, scaleMul) {
+    const id = canonical.id;
     const lookup = this._instanceLookup.get(id);
     if (!lookup) return;
     const mesh = this.instancedMeshes[lookup.meshKey];
     if (!mesh) return;
+    const hidden = DebrisField.carrierHidden(this, canonical);
     if (Constants.FLOATING_ORIGIN_ENABLED && this._floatingOrigin) {
       this._tempPos.set(
         armScenePos.x - this._floatingOrigin.x,
@@ -2924,11 +2985,43 @@ export class DebrisField {
     // catch-near-pass (Decision 1): a held piece near the ship is drawn by its near-pass proxy; the far-pass instance
     // is then written at scale 0 (every pin, every frame, so it never flickers back). (`_nearSm` is null until
     // main.js hands the near-field host over; the test stubs that call this on a bare receiver never have one.)
-    const nearDrawn = this._nearSm ? this._syncHeldProxy(canonical, debrisRef, armScenePos, this._tempQuat, drawSize) : false;
-    DebrisField.setDrawScale(this._tempScale, nearDrawn ? 0 : drawSize, canonical);   // slice 5 (5e): shortened while it is melted
+    // Mother hidden: no proxy either (drop it), and the far instance is written at scale 0.
+    if (hidden && this._heldProxies && this._heldProxies.has(id)) this._dropHeldProxy(id);
+    const nearDrawn = !hidden && this._nearSm ? this._syncHeldProxy(canonical, debrisRef, armScenePos, this._tempQuat, drawSize) : false;
+    DebrisField.setDrawScale(this._tempScale, nearDrawn || hidden ? 0 : drawSize, canonical);   // slice 5 (5e): shortened while it is melted
     this._tempMatrix.compose(this._tempPos, this._tempQuat, this._tempScale);
     mesh.setMatrixAt(lookup.instanceIndex, this._tempMatrix);
     mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /**
+   * Call once per frame just before render (main.js), after everything that can hide or show the mother has run
+   * (the ladder floor change lands AFTER this frame's field update). When her visibility differs from what the held
+   * pieces were last drawn for, redraw every pinned piece now, so the piece goes with her on the same frame (no
+   * one-frame stray on hide, none late on show). Edge-only work; steady frames cost one compare.
+   * @param {number} [armMask=0] bitmask of hidden daughter groups (ArmManager.syncAttachedWithMother), part of the change key
+   * @returns {boolean} the mother's current hidden state
+   */
+  syncHeldWithMother(armMask = 0) {
+    const hidden = this.motherIsHidden();
+    const key = (hidden ? 256 : 0) | armMask;
+    if (key === this._heldHiddenApplied) return hidden;
+    this._heldHiddenApplied = key;
+    const list = this.debrisList;
+    for (let i = 0; i < list.length; i++) {
+      const d = list[i];
+      if (d && d._armPinned === true && d._armPinPos && d.alive !== false) {
+        this._drawPinned(d, d, d._armPinPos, d._pinScaleMul > 0 ? d._pinScaleMul : 1);
+        // the flag decal on a piece that just went hidden goes now too (a shown one is redrawn by the next field update)
+        const fi = this._flagLookup && this._flagLookup.get(d.id);
+        if (fi && DebrisField.heldHidden(this, d)) {
+          const fm = this.flagMeshes[fi.country];
+          if (fm) { this._flagScale.setScalar(0); this._flagMatrix.compose(this._flagPos, this._flagQuat, this._flagScale); fm.setMatrixAt(fi.instanceIndex, this._flagMatrix); fm.instanceMatrix.needsUpdate = true; }
+        }
+      }
+    }
+    if (this._sails && this._sails.size > 0) this._sails.sync(Constants.FLOATING_ORIGIN_ENABLED ? this._floatingOrigin : null, this._heldHiddenFn || (this._heldHiddenFn = (d) => DebrisField.heldHidden(this, d)));
+    return hidden;
   }
 
   /**
@@ -3438,7 +3531,11 @@ export class DebrisField {
     // which no pin is called. `_nearProxy` without a pin is a stale flag: drop it. (Only a pinned piece pays for the
     // attitude here; every other piece keeps the cheap scale-0 early-out below.)
     let drawScale = scale;
-    if (_armPinned) {
+    if ((_armPinned || _pinToArm || debris._motherParked) && DebrisField.carrierHidden(this, debris)) {
+      // A held piece is part of the mother: hidden with her (no far instance, no near-pass proxy).
+      if (debris._nearProxy && this._heldProxies) this._dropHeldProxy(debris.id);
+      drawScale = 0;
+    } else if (_armPinned) {
       if (this._nearSm) {
         this._tempQuat.setFromAxisAngle(debris.tumbleAxis, debris.tumbleAngle);
         if (this._syncHeldProxy(debris, null, debris._armPinPos, this._tempQuat, scale * revealScale)) drawScale = 0;
