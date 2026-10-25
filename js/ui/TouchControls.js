@@ -577,6 +577,7 @@ export class TouchControls {
       if (g.moved <= this._tune.tapSlopPx) return;
       g.dragging = true;
       g.lastX = g.startX; g.lastY = g.startY;
+      this._cameraTouchHeld(true);   // fb16: a finger held still on a drag counts as view input (the view return waits)
     }
     if (this._camera && typeof this._camera.ladderDragNudge === 'function') {
       const dx = g.x - g.lastX, dy = g.y - g.lastY;
@@ -699,11 +700,18 @@ export class TouchControls {
     g.poisoned = true;
     g.maxTouches = 2;
     this._clearHold();
+    if (g.dragging) this._cameraTouchHeld(false);   // a second finger ends the drag (the pinch is zoom input)
+  }
+
+  /** @private fb16 view return: tell the camera whether a finger is held on a view drag (no-op on a camera without it). */
+  _cameraTouchHeld(on) {
+    if (this._camera && typeof this._camera.ladderSetTouchHeld === 'function') this._camera.ladderSetTouchHeld(on);
   }
 
   /** @private Drop the track: hold timer cleared. (The canvas gesture writes no keys; the turn pad does.) */
   _endGesture() {
     this._clearHold();
+    if (this._gesture && this._gesture.dragging) this._cameraTouchHeld(false);
     this._gesture = null;
   }
 

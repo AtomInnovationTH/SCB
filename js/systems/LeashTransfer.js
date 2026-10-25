@@ -527,6 +527,7 @@ export class LeashTransfer {
         }
         this.prevAnchor = anchor;
         this.prevTip = tip;
+        this._prevTheta = io.radiatorThetaRad;
         const result = {
             phase: this.phase,
             commands: this.cmds,
@@ -673,10 +674,63 @@ export class LeashTransfer {
             this.entered = true;
             this._cmd('foldRadiators', { thetaRad: this.thetaH });
         }
+        // fb16 (owner 2026-10-25, "tighten up delays/pauses"): when the bag must be paid out first, the nose lets go and the line pays
+        // out UNDER the end of the radiator's fold, timed to finish with it (the plan reads where the tip WILL be: `io.tipFinalWorld`);
+        // the turn still waits for the radiator (PAYOUT, below). Every snag / tension / clearance check runs in RELEASE and PAYOUT
+        // exactly as before.
+        if (!this._aheadTried) this._planAhead(io);
+        if (this.foldWait) {
+            if (this._payoutDue(io)) { this._enter('RELEASE'); return true; }
+            return false;
+        }
         if (Math.abs(io.radiatorThetaRad - this.thetaH) > (K().THETA_TOL_DEG * DEG)) return false;
         if (!this._replan(io)) return false;
         this._enter('RELEASE');
         return true;
+    }
+
+    /**
+     * fb16: the plan for the radiator's FINAL position, made at the start of the fold. True = the bag needs a payout and the fold
+     * can run under it (`foldWait` is set; PAYOUT waits for the radiator before it re-plans). False = wait for the fold as before
+     * (no early position given, the switch is off, no payout needed, or the plan is not ok: the normal re-plan at the end of the
+     * fold then reports it exactly as it always did). Asked once.
+     */
+    _planAhead(io) {
+        this._aheadTried = true;
+        if (K().PAYOUT_DURING_FOLD === false || !io.tipFinalWorld) return false;
+        const q = io.shipQuat;
+        const plan = planHandoff({
+            anchorBody: qRotInv(q, io.anchorWorld),
+            tipBody: qRotInv(q, io.tipFinalWorld),
+            bagBodyNow: qRotInv(q, this.bag.pos),
+            dMin: minHandoffD(this.bagR),
+            dMax: K().D_MAX_M,
+        });
+        if (!plan.ok || !(Math.abs(plan.payoutM) > K().PAYOUT_ACCEPT_M)) return false;
+        this.plan = plan;
+        this.foldWait = true;
+        return true;
+    }
+
+    /**
+     * fb16: is it time to let the bag go? The payout takes about `payoutM / PAYOUT_PUSH_MPS + push / (2 · REEL_ACCEL)` seconds (the
+     * coast, then the line brakes it to a stop); it starts when the radiator has that long (plus PAYOUT_FOLD_MARGIN_S) left to fold at
+     * `HOLD_SLEW_DEG_S`, so the two end together and the bag never waits long on a held line (a bag that has stopped drifts back at a
+     * few mm/s and a line cannot push it out again).
+     */
+    _payoutDue(io) {
+        const k = K();
+        const left = Math.abs(io.radiatorThetaRad - this.thetaH) / (k.HOLD_SLEW_DEG_S * DEG);
+        const v = k.PAYOUT_PUSH_MPS;
+        const need = Math.abs(this.plan.payoutM) / v + v / (2 * k.REEL_ACCEL_MPS2);
+        return left <= need + (k.PAYOUT_FOLD_MARGIN_S ?? 0.3);
+    }
+
+    /** fb16: the radiator has reached the hand-off angle (within THETA_TOL) and has stopped moving (it lands exactly on its target). */
+    _foldLanded(io) {
+        const th = io.radiatorThetaRad;
+        return Math.abs(th - this.thetaH) <= (K().THETA_TOL_DEG * DEG)
+            && this._prevTheta !== undefined && Math.abs(th - this._prevTheta) < 1e-7;
     }
 
     /** planHandoff from the current io; faults on 'opposite'. Returns true when a plan is stored. */
@@ -744,8 +798,22 @@ export class LeashTransfer {
         const r = this._sim(dt, g);
         const A = io.anchorWorld;
         const dist = len(sub(this.bag.pos, A));
-        const done = line.L >= line.target - 1e-4 && len(line.vel) < 0.003 && Math.abs(line.Ldot) < 1e-3;
+        // fb16: latched once true (a bag that waits for the radiator drifts back a few mm/s; it is still paid out). With the faster push
+        // (PAYOUT_PUSH_MPS 0.05) the line's stop leaves a rebound of ~3.5 mm/s that no force removes (a line only pulls), a hair over the
+        // old 3 mm/s rest test, so it passed only on a frame that sampled the rebound crossing zero (never at dt 0.25 s). At rest is now
+        // also: the line is at its length, slack (no longer pulling), and the bag moves under 1 cm/s.
+        const atLength = line.L >= line.target - 1e-4 && Math.abs(line.Ldot) < 1e-3;
+        const sp = len(line.vel);
+        const done = this.payoutDone || (atLength && (sp < 0.003 || (line.lastC <= 0 && sp < 0.01)));
         if (!done) return false;
+        this.payoutDone = true;
+        if (this.foldWait) {
+            // fb16: paid out under the fold; the bag rests until the radiator has landed, then the plan is made again on the tip's real
+            // position (the turn depends on it). The line spools freely meanwhile: a HELD line, a few mm stretched at the stop, would
+            // pull the bag back in at ~3 mm/s, and the turn that follows carries that on (measured: the bag ended 25 mm nearer the tip)
+            if (!this._foldLanded(io)) { line.mode = 'clutch'; return false; }
+            this.foldWait = false;
+        }
         line.mode = 'hold';
         line.Ldot = 0;
         if (!this._replan(io)) return false;
@@ -904,6 +972,12 @@ export class LeashTransfer {
         if (!this.entered) {
             this.entered = true;
             this._cmd('swingToBoom');
+            // fb16: the radiator opens while the bag swings onto the boom (the two are independent; the keep-out check on the bag
+            // runs in SWING and UNFOLD alike)
+            if (K().UNFOLD_DURING_SWING !== false) {
+                this.unfoldIssued = true;
+                this._cmd('unfoldRadiators', { thetaRad: this.unfoldTheta });
+            }
             return false;
         }
         if (io.swingDone && this.stepNo > this.enteredStep) { this._enter('UNFOLD'); return true; }
@@ -914,6 +988,7 @@ export class LeashTransfer {
         this._pinBag(io);
         if (!this.entered) {
             this.entered = true;
+            if (this.unfoldIssued) return true;   // fb16: already opening (since SWING began); only wait for it
             this._cmd('unfoldRadiators', { thetaRad: this.unfoldTheta });
             return false;
         }

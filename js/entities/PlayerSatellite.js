@@ -4897,10 +4897,14 @@ export class PlayerSatellite extends THREE.Group {
    * held. Calling it again for a held (or returning) petal just retargets it.
    * @param {number} azDeg the petal's tip azimuth (40, 140, 220 or 320)
    * @param {number} thetaRad
+   * @param {{rateRadS?:number}} [opts] fb16 (2026-10-25): `rateRadS` = this hold's own slew rate (rad/s). The leash hand-off asks for
+   *   `LEASH.HOLD_SLEW_DEG_S` (a hinge motor commanded faster than the 15°/s the player's radiators run at); a daughter's carry passes
+   *   nothing and stays on `THERMAL.FLOWER.SLEW_RATE_RAD_S`. Applies to the move to `thetaRad` and (unless `releasePetalHandoff` says
+   *   otherwise) the way back.
    * @returns {number|null} the angle in degrees after the bag-band cap (what the petal will really reach), or null with no
    *   such petal fitted, while the launch lock is armed, or for a non-finite angle
    */
-  holdPetalForHandoff(azDeg, thetaRad) {
+  holdPetalForHandoff(azDeg, thetaRad, opts = null) {
     if (this._flowerLaunchLock || !Number.isFinite(thetaRad)) return null;
     if (!this._flowerGroups.some((fg) => fg.azDeg === azDeg)) return null;
     thetaRad = this._flowerClampRad(thetaRad);
@@ -4908,23 +4912,26 @@ export class PlayerSatellite extends THREE.Group {
     let h = null;
     for (const x of this._petalHolds) if (x.az === azDeg) { h = x; break; }
     if (!h) {
-      h = { az: azDeg, thetaRad: this._flowerThetaRad, targetRad: thetaRad, releasing: false };
+      h = { az: azDeg, thetaRad: this._flowerThetaRad, targetRad: thetaRad, releasing: false, rateRadS: 0 };
       this._petalHolds.push(h);
     }
     h.targetRad = thetaRad;
     h.releasing = false;
+    h.rateRadS = opts && opts.rateRadS > 0 ? opts.rateRadS : 0;   // 0 = the normal SLEW_RATE_RAD_S
     this._flowerCmdClockS = this._flowerClockS || 0;
     return this._flowerCappedDeg(thetaRad);
   }
 
   /**
    * petal-single: let go of the held petal at `azDeg`. It slews back to the shared angle and is free again on arrival.
+   * @param {{rateRadS?:number}} [opts] fb16: the way back's own slew rate (rad/s); none = the normal `SLEW_RATE_RAD_S`
    * @returns {number|null} the shared angle it returns to (degrees, after the bag-band cap), or null when it was not held
    */
-  releasePetalHandoff(azDeg) {
+  releasePetalHandoff(azDeg, opts = null) {
     for (const h of this._petalHolds) {
       if (h.az !== azDeg) continue;
       h.releasing = true;
+      h.rateRadS = opts && opts.rateRadS > 0 ? opts.rateRadS : 0;
       this._flowerCmdClockS = this._flowerClockS || 0;
       return this._flowerCappedDeg(this._flowerThetaRad);
     }
@@ -6067,14 +6074,14 @@ export class PlayerSatellite extends THREE.Group {
 
   /**
    * @private petal-single: slew every held petal toward its own target (the hold angle, or the shared angle once released),
-   * at the normal SLEW_RATE_RAD_S, landing EXACTLY on it (the carry's clearance is certified at the held angle, not within
-   * a tolerance of it). A released petal that has reached the shared angle is free again: its record goes. The tip-bag band
-   * caps a hold target as it caps the shared one; each moving petal bills its own hinge drive.
+   * at the normal SLEW_RATE_RAD_S (or the hold's own `rateRadS`: the leash hand-off, fb16), landing EXACTLY on it (the carry's
+   * clearance is certified at the held angle, not within a tolerance of it). A released petal that has reached the shared angle
+   * is free again: its record goes. The tip-bag band caps a hold target as it caps the shared one; each moving petal bills its
+   * own hinge drive.
    */
   _stepPetalHolds(dt, floorRad, ceilRad, tipBand) {
     const FL = Constants.THERMAL.FLOWER;
     const holds = this._petalHolds;
-    const maxDelta = dt > 0 ? FL.SLEW_RATE_RAD_S * dt : 0;
     const bandTarget = tipBand - FL.SETTLE_EPS_RAD;
     const hingeW = Constants.MOTOR_DRAW_W?.RADIATOR_HINGE ?? 0;
     for (let i = holds.length - 1; i >= 0; i--) {
@@ -6083,6 +6090,7 @@ export class PlayerSatellite extends THREE.Group {
       if (!h.releasing && tgt > tipBand + 1e-9) tgt = bandTarget;
       tgt = Math.max(floorRad, Math.min(ceilRad, tgt));
       const before = h.thetaRad;
+      const maxDelta = dt > 0 ? (h.rateRadS > 0 ? h.rateRadS : FL.SLEW_RATE_RAD_S) * dt : 0;
       if (maxDelta > 0) h.thetaRad += Math.max(-maxDelta, Math.min(tgt - h.thetaRad, maxDelta));
       h.thetaRad = Math.max(floorRad, Math.min(ceilRad, h.thetaRad));
       if (maxDelta > 0 && Math.abs(h.thetaRad - before) >= motorMoveMinRadS() * dt) billMotorW(this, hingeW, dt);

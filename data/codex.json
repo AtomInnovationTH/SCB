@@ -1794,7 +1794,8 @@
         "world_adr_mandate",
         "world_who_removes",
         "catalog_sl16",
-        "news_aeolus_reentry"
+        "news_aeolus_reentry",
+        "org_orbital_lasers"
       ],
       "i18n": {
         "title": "Active Debris Removal IRL",
@@ -2690,7 +2691,9 @@
       "related": [
         "isro_why_india",
         "isro_istrac",
-        "isro_kulasekarapattinam"
+        "isro_kulasekarapattinam",
+        "org_agnikul",
+        "org_etherealx"
       ],
       "i18n": {
         "title": "ISRO Launch Vehicle Families",
@@ -2803,7 +2806,9 @@
       "related": [
         "isro_launch_vehicles",
         "isro_istrac",
-        "isro_kulasekarapattinam"
+        "isro_kulasekarapattinam",
+        "org_agnikul",
+        "org_etherealx"
       ],
       "i18n": {
         "title": "Launching from India",
@@ -3279,7 +3284,12 @@
         "world_the_rules",
         "world_servicing",
         "catalog_sl16",
-        "news_mev1_servicing"
+        "news_mev1_servicing",
+        "org_bellatrix",
+        "org_orbitaid",
+        "org_orbital_lasers",
+        "org_skyperfect_jsat",
+        "org_esa_debris"
       ],
       "i18n": {
         "title": "Who Actually Cleans Orbit",
@@ -3302,7 +3312,11 @@
         "conjunction_assessment",
         "debris_tracking",
         "world_sustainability_rating",
-        "news_tiangong_dodge"
+        "news_tiangong_dodge",
+        "org_digantara",
+        "org_pixxel",
+        "org_nasa_odpo",
+        "org_esa_debris"
       ],
       "i18n": {
         "title": "Who Tracks the Junk",
@@ -3838,7 +3852,11 @@
         "world_adr_mandate",
         "world_liability",
         "world_who_removes",
-        "world_sustainability_rating"
+        "world_sustainability_rating",
+        "org_digantara",
+        "org_pixxel",
+        "org_manastu",
+        "org_nasa_odpo"
       ],
       "i18n": {
         "title": "The Rules of the Road",
@@ -3905,7 +3923,11 @@
         "docking_berthing",
         "heritage_solar_max",
         "heritage_hubble_servicing",
-        "tip_hardpoints"
+        "tip_hardpoints",
+        "org_bellatrix",
+        "org_orbitaid",
+        "org_manastu",
+        "org_skyperfect_jsat"
       ],
       "i18n": {
         "title": "The Servicing Economy",
@@ -5213,6 +5235,204 @@
         "trlRationale": "Public catalog population; the density-threshold argument is the published Kessler analysis.",
         "unlockHint": "Aim at a cluster above 1,200 km at the route-planning zoom, then open SPECS."
       }
+    },
+    {
+      "id": "org_digantara",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_who_tracks",
+        "world_the_rules"
+      ],
+      "i18n": {
+        "title": "Digantara",
+        "shortText": "A Bengaluru start-up that watches other objects in orbit.",
+        "fullText": "Digantara is a space-surveillance company from Bengaluru. Its SCOT satellite, launched in January 2025, was built to watch other objects in orbit rather than to look at Earth. In August 2026 it added MOSAIC, a network of optical sensors on the ground.\n\nFor a debris game it matters because you cannot catch what you cannot see: a catalogue of small objects is the first step of every cleanup.",
+        "realWorld": "Sources (read 2026-10-25): SCOT launched on SpaceX Transporter-12 on 14 Jan 2025 and had first light on 8 Mar 2025 (the 8 March date is commissioning, not launch): https://www.thehindubusinessline.com/news/science/bengaluru-based-start-up-digantara-commissions-worlds-first-commercial-space-surveillance-satellite/article69306681.ece; MOSAIC unveiled 18 Aug 2026, an AI-powered network of ground-based optical sensors, first deployment five nodes: https://timesofindia.indiatimes.com/science/bengaluru-firm-digantara-builds-indias-own-eyes-in-orbit/articleshow/133325174.cms; Free Press Journal 18 Aug 2026: https://www.freepressjournal.in/india/after-operation-sindoor-indian-startup-digantara-unveils-ai-powered-mosaic-space-surveillance-network-video. Founding year left out: Inc42 (2024) says 2018, TechCrunch (Dec 2025) says 2020.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_agnikul",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🚀",
+      "startUnlocked": true,
+      "related": [
+        "isro_why_india",
+        "isro_launch_vehicles"
+      ],
+      "i18n": {
+        "title": "Agnikul Cosmos",
+        "shortText": "A Chennai rocket company that flew a single-piece 3D-printed engine.",
+        "fullText": "Agnikul Cosmos was founded in 2017 and works from IIT Madras in Chennai. On 30 May 2024 its Agnibaan flew a suborbital test with an engine printed as one piece of metal, from India's first private launchpad. Its first orbital launches are planned for 2027.\n\nIt matters here as one of the new private launchers that give India cheap, frequent access to orbit, and so more satellites that must one day be removed.",
+        "realWorld": "Sources (read 2026-10-25): Wikipedia Agnikul Cosmos, edited 12 Oct 2026: https://en.wikipedia.org/wiki/Agnikul_Cosmos; CIOL 28 Sep 2026 (Q1 and Q2 2027 launch plan): https://www.ciol.com/funding-acquistion-merger/agnikul-cosmos-secures-200-crore-tdb-funding-for-reusable-launch-vehicle-12587463; Times of India 25 Sep 2026: https://timesofindia.indiatimes.com/city/chennai/tdb-signs-agreement-with-agnikul-cosmos-for-200cr-rdi-support/articleshow/134490970.cms",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_pixxel",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_who_tracks",
+        "world_the_rules"
+      ],
+      "i18n": {
+        "title": "Pixxel",
+        "shortText": "A Bengaluru Earth-imaging company flying hyperspectral satellites.",
+        "fullText": "Pixxel was founded in 2019 and is based in Bengaluru. Its Fireflies satellites, which image the Earth in many colours at once, launched in January 2025 (Fireflies 1 to 3) and August 2025 (Fireflies 4 to 6) on Falcon 9 rockets from Vandenberg in California.\n\nIt is a satellite builder and imager, not a debris company. It is on the menu's list of Indian space companies because every new constellation adds objects that will need a disposal plan.",
+        "realWorld": "Sources (read 2026-10-25): Pixxel timeline, founded 27 Feb 2019, three more Fireflies on 27 Aug 2025 IST: https://www.pixxel.space/about-us; first three Fireflies on Transporter-12, 14 Jan 2025: https://spacenews.com/spacex-launches-131-payloads-on-transporter-12-rideshare-mission/; the August 2025 launch was a Falcon 9 rideshare from Vandenberg (not a Transporter mission): https://spaceflightnow.com/2025/08/26/live-coverage-spacex-to-launch-falcon-9-rocket-on-rideshare-mission-from-vandenberg-sfb/; Mint 7 Sep 2026 (Series C): https://www.livemint.com/companies/news/pixxel-space-tech-series-c-temasek-seraphim-360-one-asset-imm-investment-hyperspectral-satellites-11788753051101.html. The older claim that Pixxel builds Cosmoserve's platform is not supported by the Vikram-1 payload list and was dropped.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_bellatrix",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_servicing",
+        "world_who_removes"
+      ],
+      "i18n": {
+        "title": "Bellatrix Aerospace",
+        "shortText": "A Bengaluru propulsion company whose thrusters have flown on ISRO missions.",
+        "fullText": "Bellatrix Aerospace was founded in 2015 in Bengaluru. Its green and electric (Hall-effect) thrusters were qualified in space on ISRO's PSLV-C58 mission in January 2024, and its Rudra green thruster flew again on POEM-4, carried by PSLV-C60 at the end of December 2024. It is developing the Pushpak space tug, which is meant to move satellites between orbits.\n\nMoving a satellite is the first half of removing one, so tugs and thrusters are the base of any servicing business.",
+        "realWorld": "Sources (read 2026-10-25): Bellatrix, founded 2015 (https://www.bellatrix.aero/about); Rudra on POEM-4 (PSLV C60) and January 2024 qualification of green and electric propulsion (https://www.bellatrix.aero/updates/hattrick-in-space); PSLV-C58 on 1 Jan 2024 with POEM-3 (https://www.isro.gov.in/PSLV_C58_XPoSat_Mission.html); PSLV-C60 lifted off 30 Dec 2024 (https://spacenews.com/india-launches-space-docking-experiment-with-pslv-rocket-advancing-major-ambitions/); Pushpak planned, no flight found (https://www.bellatrix.aero/updates/bellatrix-aerospace-and-nsil-sign-mou); CNA 27 Mar 2026 (pre-Series B): https://www.channelnewsasia.com/business/indias-bellatrix-aerospace-nets-20-million-in-pre-series-b-round-6023121. Whether Pushpak has flown: not confirmed.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_orbitaid",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_servicing",
+        "world_who_removes"
+      ],
+      "i18n": {
+        "title": "OrbitAID Aerospace",
+        "shortText": "A Bengaluru start-up building in-orbit refuelling.",
+        "fullText": "OrbitAID Aerospace is a Bengaluru start-up working on refuelling satellites in orbit. Its AayulSAT, described as India's first on-orbit refuelling payload, was due to fly on ISRO's PSLV-C62 on 12 January 2026. That launch failed in its third stage, and a new launch date is not confirmed.\n\nRefuelling keeps a working satellite working, which is one way to put off creating debris.",
+        "realWorld": "Sources (read 2026-10-25): India Today 7 Jan 2026 (AayulSAT on PSLV-C62): https://www.indiatoday.in/science/story/isro-to-launch-orbitaid-aerospace-satellite-refuelling-mission-aayulsat-with-pslv-c62-what-is-it-2847925-2026-01-07; Wikipedia PSLV-C62, edited 3 Sep 2026: https://en.wikipedia.org/wiki/PSLV-C62. Founding year and the new launch date: not confirmed.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_manastu",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_servicing",
+        "world_the_rules"
+      ],
+      "i18n": {
+        "title": "Manastu Space",
+        "shortText": "An Indian propulsion start-up making non-toxic satellite thrusters.",
+        "fullText": "Manastu Space was founded in 2017 by Tushar Jadhav and Ashtesh Kumar. Its green thruster Vyom 2U flew on ISRO's POEM-4 mission, carried by PSLV-C60 at the end of December 2024. Its I-Booster, for satellites of 100 to 500 kg, is listed at technology readiness level 7 and was delivered to DRDO in December 2024.\n\nA satellite that can steer clear of a collision, and push itself down at the end of its life, never becomes debris. That is the point of this kind of thruster.",
+        "realWorld": "Sources (read 2026-10-25): Manastu's own timeline (founded 2017; Vyom 2U flight-tested on PSLV C60; I-Booster delivered to DRDO in December 2024): https://www.manastuspace.com/about; PSLV-C60 lifted off 30 Dec 2024: https://spacenews.com/india-launches-space-docking-experiment-with-pslv-rocket-advancing-major-ambitions/. No independent article read (Deccan Herald and India Today headlines of 11-12 Dec 2024 report the DRDO delivery). No 2026 flight confirmed.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_etherealx",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🚀",
+      "startUnlocked": true,
+      "related": [
+        "isro_why_india",
+        "isro_launch_vehicles"
+      ],
+      "i18n": {
+        "title": "EtherealX",
+        "shortText": "A Bengaluru company designing a fully reusable heavy rocket.",
+        "fullText": "EtherealX is a Bengaluru rocket company. Its Razor Crest Mk-1 is designed to lift up to 24.8 tonnes to orbit when expended, or about 8 tonnes when both stages fly home to be used again. Nine Stallion engines power the booster and fifteen Pegasus engines the upper stage. The first demonstration flight is planned for late 2027.\n\nCheaper, reusable launch means more satellites, and more need for cleanup.",
+        "realWorld": "Sources (read 2026-10-25): Inc42 15 Jan 2026 (Series A, engines, payload and first-flight plan): https://inc42.com/buzz/etherealx-bags-20-5m-to-advance-reusable-rocket-development/; Wikipedia List of orbital launch systems, edited 16 Oct 2026 (Razor Crest Mk I, under development)",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_orbital_lasers",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_who_removes",
+        "adr_methods_real"
+      ],
+      "i18n": {
+        "title": "Orbital Lasers",
+        "shortText": "A Tokyo company building space lasers to stop a tumbling satellite.",
+        "fullText": "Orbital Lasers is a Tokyo company founded in January 2024 as a spin-out of SKY Perfect JSAT. It builds compact space lasers: one use is detumbling, stopping the spin of a dead satellite so a servicer can grab it; later, debris removal. It closed a 3.02 billion yen Series A on 19 March 2026 and signed a study agreement with Infinite Orbits on 7 April 2026.\n\nA tumbling target is the hardest part of a catch, so slowing it from a distance is worth real money.",
+        "realWorld": "Sources (read 2026-10-25): Orbital Lasers business page: https://www.orbitallasers.com/en/business/; press releases 19 Mar and 7 Apr 2026: https://www.orbitallasers.com/. No launch date for its own hardware.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_skyperfect_jsat",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_who_removes",
+        "world_servicing"
+      ],
+      "i18n": {
+        "title": "SKY Perfect JSAT",
+        "shortText": "A Japanese satellite operator investing in debris removal.",
+        "fullText": "SKY Perfect JSAT operates satellites for Japan. On 19 May 2026 it announced an investment in Astroscale and a partnership on in-orbit servicing: inspection, repair and life extension. It is also a strategic partner of Orbital Lasers, which it spun out in 2024. The size of the Astroscale stake is not confirmed.\n\nIt shows the operators who own the satellites starting to pay for the cleanup.",
+        "realWorld": "Sources (read 2026-10-25): Astroscale press release 19 May 2026: https://astroscale.com/en/news/astroscale-and-sky-perfect-jsat-form-strategic-partnership-to-advance-space-infrastructure-development; Orbital Lasers About page: https://www.orbitallasers.com/about/",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_nasa_odpo",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_who_tracks",
+        "world_the_rules"
+      ],
+      "i18n": {
+        "title": "NASA Orbital Debris Program Office",
+        "shortText": "The US team that measures debris and sets NASA's own rules for it.",
+        "fullText": "NASA's Orbital Debris Program Office developed the agency's first orbital debris mitigation requirements in 1995. It builds the ORDEM and LEGEND models of the debris environment and the Debris Assessment Software, and it measures debris with radars and telescopes. The US government's orbital debris standard practices were set in 2001 and updated in 2019.\n\nMost public debris figures, including the count of catalogued objects, come from this office.",
+        "realWorld": "Sources (read 2026-10-25): NASA ODPO site, undated: https://orbitaldebris.jsc.nasa.gov/ and /mitigation/ and /faq/ (34,000+ catalogued objects as of Aug 2026). The 1979 founding date used earlier on the menu could not be confirmed and was dropped.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_esa_debris",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_who_removes",
+        "world_who_tracks"
+      ],
+      "i18n": {
+        "title": "ESA Space Debris Office and Clean Space",
+        "shortText": "Europe's debris research team and its cleanup programme.",
+        "fullText": "ESA's Space Debris Office coordinates European debris research and runs operational services, mainly from ESOC in Darmstadt, Germany, with a team at ESTEC in the Netherlands. The Clean Space initiative covers designing missions that leave no debris, plus in-orbit servicing and active removal. Each year ESA also publishes a Space Environment Report.\n\nEurope's removal mission ClearSpace-1 belongs to this effort.",
+        "realWorld": "Sources (read 2026-10-25): ESA Space Debris Office: https://www.esa.int/Space_Safety/Space_Debris/ESA_Space_Debris_Office; ESA Clean Space: https://www.esa.int/Space_Safety/Clean_Space (latest story 8 Oct 2026); ESA Space Environment Report 2025: https://www.esa.int/Space_Safety/Space_Debris/ESA_Space_Environment_Report_2025. Flyeye and TIRA, named earlier on the menu, could not be confirmed and were dropped.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
     }
   ]
 }

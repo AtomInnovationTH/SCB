@@ -4246,7 +4246,7 @@ export const Constants = {
       // constant-deceleration (DECEL_MPS2, an estimate) slow-down that reaches SLOW_MPS at SLOW_ZONE_M from home and
       // holds it to arrival.
       SLOW_ZONE_M:      0.30,
-      SLOW_MPS:         0.08,   // <= 0.10 m/s arrival and in the last 0.30 m (LATCH_ALIGNED_MPS class contact speed)
+      SLOW_MPS:         0.10,   // <= 0.10 m/s arrival and in the last 0.30 m (LATCH_ALIGNED_MPS class contact speed); fb16 2026-10-25: was 0.08 (the crawl lasted 5 s)
       DECEL_MPS2:       1.0,    // m/s^2 — estimate: 2 m/s -> 0.08 m/s over ~2 m
       DECEL_LEAD_M:     0.10,   // the slow-down reaches SLOW_MPS this much BEFORE the slow zone, so a frame that straddles its edge is already slow
       // Drawn size (D3): the net-held readability floor applies at >= FLOOR_FAR_M from the collar, eases to the true
@@ -4262,7 +4262,7 @@ export const Constants = {
     // body is KEPT at the nose — { parked: true } skips only the field
     // removal). Jettison [K] before expiry aborts with NO score and the whale
     // back in the field.
-    BERTH_SECURE_S:       4.0,
+    BERTH_SECURE_S:       1.5,
     // Long-tether reel speed-up: at REEL_SPEED 2.0 a 100 m shot would reel for
     // ~50 s wall-clock. The ease below is monotonic (never decelerates mid-
     // reel, so the tether cannot re-slack and re-snap) and lands the duration
@@ -4911,12 +4911,16 @@ export const Constants = {
   LEASH: {
     // Ship turn (the turn itself belongs to the autopilot; passed through)
     TURN_MAX_RATE_DEG:   5,      // °/s peak — tmp/research/leash/turn-dynamics.md
-    TURN_ACCEL_DEG:      2,      // °/s² ramp — turn-dynamics.md
+    TURN_ACCEL_DEG:      4,      // °/s² ramp — turn-dynamics.md; fb16 2026-10-25: was 2. Gas is set by the PEAK rate (TURN_MAX_RATE_DEG, unchanged at 5), not the ramp: measured 174.6 g per hand-off at ramps 2, 4 and 8 °/s²; the turn takes 38° in 10.2 s / 8.9 s / 8.3 s
+    PAYOUT_DURING_FOLD:  true,   // fb16 2026-10-25: the nose lets go and the line pays out while the receiving radiator folds (the turn still waits for it); false = the old order, fold first
+    PAYOUT_FOLD_MARGIN_S: 0.3,   // s — fb16: the payout is timed to end this long before the fold lands (LeashTransfer._payoutDue)
+    UNFOLD_DURING_SWING: true,   // fb16 2026-10-25: the radiator opens while the bag swings onto the boom; false = the old order, swing first
+    HOLD_SLEW_DEG_S:     25,     // °/s — fb16 (owner 2026-10-25, "a little faster"): the held radiator petal's fold to the hand-off angle, unfold and way home. A hinge motor commanded faster is still physical; the player's radiators and the struts stay at THERMAL.FLOWER.SLEW_RATE_RAD_S (15°/s, readability), a daughter's carry too. Read by LeashDriver (the slew it passes to the ship) and by LeashTransfer._payoutDue (how long the fold still has to run, to time the payout).
     WHEEL_TURN_X:        1.5,    // F2.4: the reaction wheels take the hand-off turn only when they need at most this many times the gas plan (the swing is tuned to the gas profile)
     // Reel
     REEL_SPEED_MPS:      0.05,   // estimate; <= LATCH_ALIGNED_MPS (arrival speed = reel speed)
     REEL_ACCEL_MPS2:     0.05,   // estimate; TSS-1 ramped the reel (NTRS 19970011947)
-    PAYOUT_PUSH_MPS:     0.02,   // estimate (separation spring)
+    PAYOUT_PUSH_MPS:     0.05,   // estimate (separation spring); fb16 2026-10-25: was 0.02 (the payout took 8-18 s and looked frozen)
     PAYOUT_MAX_MPS:      0.25,   // clutch cap; peak line demand 0.113 m/s in a 5°/s turn (reviewer probe)
     TAKEUP_MPS:          0.05,   // estimate
     BACK_TENSION_PER_KG: 5e-4,   // N/kg — estimate (line never slack, TSS); bag drifts <= 0.05 m over a turn
@@ -4954,9 +4958,12 @@ export const Constants = {
     CONTACT_M:           0.005,  // m — estimate; latch contact when the neck is within this of the tip
     PAYOUT_ACCEPT_M:     0.02,   // m — estimate; PAYOUT replan accepts |payoutM| below this
     // Wiring (lane l5b-wire)
-    NOSE_REEL_MPS:       0.10,   // m/s — estimate (lane l5c-reach): the winch pulls a catch seated deep in the bag in to the nose before the hand-off; the same <= 10 cm/s contact limit as the tip latch (LATCH_ALIGNED_MPS)
+    NOSE_REEL_MPS:       0.10,   // m/s — estimate (lane l5c-reach): the winch pulls a catch seated deep in the bag in to the nose before the hand-off; the same <= 10 cm/s contact limit as the tip latch (LATCH_ALIGNED_MPS). fb16 fix round 1: now only the START and ARRIVAL speed (it was the whole pull-in: 2.6 m took 26.4 s)
+    NOSE_REEL_FAST_MPS:  0.35,   // m/s — fb16 fix round 1 (estimate; the net's own reel-in cruises at 2 m/s): the pull-in's cruise speed. 2.64 m now takes ~8 s (measured tmp/fb16/deep.mjs)
+    NOSE_REEL_ZONE_M:    0.30,   // m — fb16: the pull-in brakes at a constant rate over the last 0.30 m, down to NOSE_REEL_MPS at the nose (the net's own reel-in uses SLOW_ZONE_M 0.30 too)
+    NOSE_REEL_ACCEL_MPS2: 0.5,   // m/s^2 — fb16: the pull-in's start-up ramp (estimate), 0.10 -> 0.35 m/s in 0.5 s
     MISSION_WAIT_MAX_S:  240,    // game s — estimate (lane l5c-reach): the longest the next mission waits for a leash hand-off (GameFlowManager); the 20 s MISSIONS.START_AFTER_CATCH_MAX_S cap does not run while the hand-off is busy
-    EXPECTED_S:          45,     // s — estimate (two radiator slews + a 30° turn + reel); the camera's park-hold reads it as the hand-off length
+    EXPECTED_S:          23,     // s — fb16 2026-10-25: was 45 (an estimate: two radiator slews + a 30° turn + reel, at the old rates). MEASURED on the probe rig (tmp/fb16/probe.mjs, machine start to DONE): 22.7 s for a 1.0 m piece (26.0 s for a 0.3 m piece, the payout there outlasts the fold), rounded up; the constant itself is read only by LeashDriver (start(), _beginMachine(): net._cargoDur = EXPECTED_S; and the cap of net._cargoS while the machine runs). The cargo bar and the camera's park-hold (CameraSystem, the catch focus) read that net field, never this constant
     ANCHOR_AZ_R_M:       0.16,   // m — line anchor radius on the capture ring rim = OCTOPUS_V5.BERTH_COLLAR_INNER_R_M (probes tmp/probes/leash/lat15b/lib3.mjs:10 measured with 0.16)
     // Radiator angle for the hand-off (degrees) by arriving bag radius (row) and the largest bag already
     // held on a tip (column; `noneDeg` = nothing held). Measured at the 2.30 m radiators, v12-big-bags 2026-10-16
@@ -4998,7 +5005,7 @@ export const Constants = {
     },
     SUBSTEP_MAX_S:       1/60,   // s — line substep ceiling
     SUBSTEP_MAX_MOVE_M:  0.05,   // m — a substep moves the bag at most this far
-    CUT_DWELL_S:         1.0,    // s after the cutter fires
+    CUT_DWELL_S:         0.3,    // s after the cutter fires; fb16 2026-10-25: was 1.0 (a still second after the latch)
     PHASE_TIMEOUT_S: {           // s — estimates; a stall in any phase starts the recovery
       FOLD: 60, RELEASE: 5, PAYOUT: 60, TURN: 90, CATCH: 10,
       REEL: 90, CUT: 5, SWING: 30, UNFOLD: 60, REEL_HOME: 120,

@@ -12,8 +12,9 @@
  * not modelled — the hand-off is seconds to a minute of mm/s). Scene units are metres * 1e-5.
  *
  * Nose reel-in (l5c-reach E1): a catch seated deep in the bag sits 4-7 m from the ship centre, beyond the line's
- * reach. The net's winch first pulls it in to the nose (the berth seat shrinks at LEASH.NOSE_REEL_MPS, the catch
- * held by the net the whole time, phase NOSE_REEL); at seat 0 the machine starts as before.
+ * reach. The net's winch first pulls it in to the nose (the berth seat shrinks at `noseReelSpeed`: from LEASH.NOSE_REEL_MPS up to
+ * NOSE_REEL_FAST_MPS and back to NOSE_REEL_MPS over the last NOSE_REEL_ZONE_M, the catch held by the net the whole time,
+ * phase NOSE_REEL); at seat 0 the machine starts as before.
  *
  * One hand-off at a time (one collar). The call sites are:
  *   - CaptureNetSystem._tryCargoTransfer  -> refusal(net) / canReach / start(net, debris, tipIndex, {noseReel})
@@ -38,6 +39,31 @@ const ATTITUDE_HOLD_S = 300;   // s — safety cap for the autopilot's attitude 
 const HOLD_OWNER = 'leash';    // l5c-reach E7: the autopilot's lasso / net listeners leave a hold with this owner alone
 const FLOOR_EASE_S = 1.0;      // s — l5c-reach E3: the drawn size eases from the net-held floor to the real size
 const OWN_TIP_RADIUS_M = 0.20; // m — l5c-reach E4: the hand-off's own tip hardware is never a snag within this of the latch
+
+/** fb16: the leash's own hinge rate (the held petal's fold, unfold and way home): `LEASH.HOLD_SLEW_DEG_S`, read at call time. */
+const _slew = { rateRadS: 0 };
+const leashSlew = () => { _slew.rateRadS = Constants.LEASH.HOLD_SLEW_DEG_S * DEG; return _slew; };
+
+/**
+ * fb16 fix round 1: the speed of the nose pull-in (the catch seated deeper than the line reaches is winched in to the nose before the
+ * hand-off). It rises from the contact speed `NOSE_REEL_MPS` to `NOSE_REEL_FAST_MPS` at `NOSE_REEL_ACCEL_MPS2`, holds that, and brakes
+ * at a constant deceleration that starts `NOSE_REEL_ZONE_M` before the end and reaches `NOSE_REEL_MPS` exactly there: the shape of the
+ * net's own reel-in (`CaptureNet._reelCatchSpeed`). It never drops below `NOSE_REEL_MPS` and never exceeds the cruise speed.
+ * @param {number} remM — seat distance still to go, metres
+ * @param {number} vNow — the speed of the previous frame, m/s
+ * @param {number} dt — game seconds
+ * @param {object} [K] — Constants.LEASH
+ * @returns {number} m/s
+ */
+export function noseReelSpeed(remM, vNow, dt, K = Constants.LEASH) {
+  const vc = K.NOSE_REEL_MPS;
+  const vf = Math.max(vc, K.NOSE_REEL_FAST_MPS || vc);
+  const zone = Math.max(1e-3, K.NOSE_REEL_ZONE_M || 0.3);
+  const brake = (vf * vf - vc * vc) / (2 * zone);                       // m/s^2: vf -> vc over exactly the zone
+  const vBrake = Math.sqrt(vc * vc + 2 * brake * Math.max(0, remM));
+  const vUp = Math.max(vc, vNow) + (K.NOSE_REEL_ACCEL_MPS2 || 0.5) * dt;
+  return Math.min(vf, vBrake, vUp);
+}
 
 const _v = new THREE.Vector3();
 const _off = { x: 0, y: 0, z: 0 };   // module scratch (the per-frame path allocates nothing)
@@ -409,12 +435,15 @@ export class LeashDriver {
       hitCat: new Map(),
       state: null, phase: reel ? 'NOSE_REEL' : 'FOLD',
       reelDone: false, reelStartSeatM: net._catchSeatM || 0,
+      noseV: Constants.LEASH.NOSE_REEL_MPS,       // fb16 fix round 1: the nose pull-in's current speed (it starts at the contact speed)
+      turnSaid: false, handSaid: false,           // fb16: the forward-turn line and the merged pull-in/hand-off line are each said once
       // E3: the drawn size eases from the net-held floor to the real size over FLOOR_EASE_S
       easeT: 0,
       easeFull: Math.max(DebrisField.baseRenderScale(debris), typeof net._catchFloorScale === 'function' ? net._catchFloorScale(debris, 0) : 0),
       // E9: everything the per-frame path reuses
       io: null, koIgnore: [], koOpts: {}, koOwn: null, keepOut: null, tipShip: { x: 0, y: 0, z: 0 },
       bagW: { x: 0, y: 0, z: 0 }, bagKnown: false, bagOff: { x: 0, y: 0, z: 0 },
+      tipFinalBody: null, tipFinalW: { x: 0, y: 0, z: 0 },
     };
     net._leashTipIndex = tipIndex;
     net._cargoS = 0;
@@ -422,7 +451,10 @@ export class LeashDriver {
 
     if (reel) {
       net._leashNoseReel = true;          // CaptureNetSystem leaves the net alone (no furnace clock, no second try)
-      this._say('Pulling the catch in to the nose.');
+      // fb16 fix round 1: ONE line for the pull-in and the hand-off ("Handing the catch..." is not said again when the line goes out),
+      // so a deep-seated catch still gets at most 5 lines: secured, this, turning, latched, back at N°.
+      h.handSaid = true;
+      this._say(`Pulling the catch in to the nose, then handing it to radiator ${tipIndex + 1} on its own leash.`);
       this._writeFloor(h, 0);
       this._refreshView(h);
       return true;
@@ -448,6 +480,10 @@ export class LeashDriver {
     h.homeBody = qInvRot(q, bagPos);          // where the bag sits in the ship frame (rigid until the nose is released)
     h.homeThetaRad = prm.homeThetaRad;
     h.thetaHRad = prm.thetaHRad;
+    // fb16: where the receiving tip's latch point will be once its petal has folded (ship frame, metres): the machine plans the payout on it
+    // and pays out WHILE the petal folds. The same call `canReach` / `gasShort` make; null (no tip record) = the machine waits for the fold.
+    const thFinal = typeof this.player._flowerClampRad === 'function' ? this.player._flowerClampRad(prm.thetaHRad) : prm.thetaHRad;
+    h.tipFinalBody = this._tipBodyAt(h.tipIndex, thFinal);
     h.phase = 'FOLD';
     h.elapsed = 0;
     h.io = this._newIo(h);
@@ -465,7 +501,7 @@ export class LeashDriver {
       this.autopilot.holdAttitude(ATTITUDE_HOLD_S, { owner: HOLD_OWNER });
       h.tookHold = true;
     }
-    this._say(`Handing the catch to radiator ${h.tipIndex + 1} on its own leash.`);
+    if (!h.handSaid) this._say(`Handing the catch to radiator ${h.tipIndex + 1} on its own leash.`);
     this._refreshView(h);
     return true;
   }
@@ -565,7 +601,8 @@ export class LeashDriver {
 
     const seat = net._catchSeatM || 0;
     const floor = net._homeSeatM || 0;                    // l8-reel-collar: the reel-in ends at HOME, not at seat 0
-    const next = Math.max(floor, seat - K.NOSE_REEL_MPS * dt);
+    h.noseV = noseReelSpeed(seat - floor, h.noseV, dt, K);
+    const next = Math.max(floor, seat - h.noseV * dt);
     net._catchSeatM = next;
     h.elapsed += dt;
     net._cargoS = Math.min(h.elapsed, net._cargoDur);
@@ -659,6 +696,7 @@ export class LeashDriver {
       noseReleased: false,
       keepOut: undefined,
       bagWorld: undefined,
+      tipFinalWorld: undefined,
     };
   }
 
@@ -676,6 +714,8 @@ export class LeashDriver {
     this._turnIoInto(h, io.turn);
     io.swingDone = h.swingIssued && !tc.isSwinging(h.tipIndex);
     io.noseReleased = h.noseReleased;
+    // fb16: the final tip position, offered only while the machine is still in FOLD (it plans the payout on it once)
+    io.tipFinalWorld = (h.tipFinalBody && h.phase === 'FOLD') ? qRotInto(q, h.tipFinalBody, h.tipFinalW) : undefined;
     if (h.latched) {
       const name = `tipBag_${h.tipIndex}`;
       const sph = tc.spheres();
@@ -779,19 +819,29 @@ export class LeashDriver {
       case 'foldRadiators':
         // petal-single (Decision 2): only the receiving tip's petal swings to the hand-off angle; the rest keep the shared
         // angle. null = no such petal / launch-locked: nothing has moved yet, so give up cleanly
-        if (typeof p.holdPetalForHandoff !== 'function' || p.holdPetalForHandoff(this._petalAz(h.tipIndex), c.thetaRad) === null) {
+        if (typeof p.holdPetalForHandoff !== 'function' || p.holdPetalForHandoff(this._petalAz(h.tipIndex), c.thetaRad, leashSlew()) === null) {
           h.abort = { why: 'radiators', text: 'The radiators would not move. The catch stays at the nose.' };
         }
         break;
       case 'unfoldRadiators':
         // the petal swings back to the shared angle (the machine waits for it within THETA_TOL_DEG of its unfold angle)
-        if (typeof p.releasePetalHandoff === 'function') p.releasePetalHandoff(this._petalAz(h.tipIndex));
+        if (typeof p.releasePetalHandoff === 'function') {
+          const back = p.releasePetalHandoff(this._petalAz(h.tipIndex), leashSlew());
+          if (Number.isFinite(back)) h.restDeg = back;     // fb16 (T4): where it will stand (the shared angle, after the bag-band cap)
+        }
         break;
       case 'releaseNose':
         h.noseReleased = true;                    // the machine already booked the push (reactionImpulse)
         break;
       case 'startTurn':
         this._requestTurn(h, c);
+        // fb16 (T4): the player is told what the ship is doing; a refused turn says its own words through the failure.
+        // Only the FORWARD turn (phase TURN, once per hand-off): after a snag or a failed latch the machine turns the ship back
+        // from REEL_HOME with the same command, and "bring radiator N to the catch" would then say the opposite of what happens.
+        if (h.phase === 'TURN' && !h.turnSaid && h.turn && h.turn.state !== 'rejected') {
+          h.turnSaid = true;
+          this._say(`Turning the ship to bring radiator ${h.tipIndex + 1} to the catch.`);
+        }
         break;
       case 'cancelTurn':
         if (h.turn && h.turn.state === 'turning') {
@@ -1079,10 +1129,16 @@ export class LeashDriver {
   // ── ending ────────────────────────────────────────────────────────────────
 
   /** DONE or FAILED: leave nothing held and the net where its state says. */
-  _finish(h) {
+  _finish(h, res) {
     const p = this.player;
+    // fb16 (T4): the one closing line of a hand-off that ran to the end: the radiator's number and the angle it comes to rest at
+    // (what `releasePetalHandoff` said: the shared angle, or just under the bag band; at DONE the radiator is within 1° of it)
+    if (res && res.phase === 'DONE' && h.latched && h.machine) {
+      const n = h.tipIndex + 1, deg = Math.round(Number.isFinite(h.restDeg) ? h.restDeg : h.machine.unfoldTheta / DEG);
+      this._say(this._tc && this._tc.has(h.tipIndex) ? `Catch on radiator ${n}'s tip, radiator back at ${deg}°.` : `Radiator ${n} is back at ${deg}°.`);
+    }
     if (typeof p.isPetalHolding === 'function' && p.isPetalHolding(this._petalAz(h.tipIndex)) && typeof p.releasePetalHandoff === 'function') {
-      p.releasePetalHandoff(this._petalAz(h.tipIndex));
+      p.releasePetalHandoff(this._petalAz(h.tipIndex), leashSlew());
     }
     this._releaseHold(h);
     if (!h.latched && !h.freed) this._relatch(h);
@@ -1119,7 +1175,7 @@ export class LeashDriver {
     } catch (e) { /* the turn is already over */ }
     try {
       if (typeof p.isPetalHolding === 'function' && p.isPetalHolding(this._petalAz(h.tipIndex)) && typeof p.releasePetalHandoff === 'function') {
-        p.releasePetalHandoff(this._petalAz(h.tipIndex));
+        p.releasePetalHandoff(this._petalAz(h.tipIndex), leashSlew());
       }
     } catch (e) { /* radiators already free */ }
     try { this._releaseHold(h); } catch (e) { /* hold already free */ }

@@ -113,6 +113,23 @@ function coastStepS(prevMs, nowMs) {
 }
 
 /**
+ * VIEW RETURN (owner 2026-10-25, "track pad drag view ... after a pause should gently return to default view so
+ * player does not get lost/confused/disoriented"). Amendment 2026-10-25 (owner): 4 s after a drag the view glides back
+ * to the floor's default in 2 s; the drag is the cause (docs/ladder/00-spec.md §6, "the camera never moves on its own
+ * without a player-initiated cause").
+ *  - IDLE_S: the wait after the LAST view input (mouse or finger drag, held arrows, wheel or pinch zoom) once the drag's
+ *    coast has stopped. Any view input restarts it. Real seconds, the same clock as the coast (a hitch counts at most
+ *    COAST_STEP_MAX_S, so a pause or a hidden tab never ends the wait).
+ *  - GLIDE_S: floors 1-3 (ship anchor): smoothstep along the great circle from the view to the chase direction
+ *    (`_ladderChaseLocal`; where that arc would pass over a pole of the floor, the same smoothstep over azimuth and
+ *    polar angle instead, so the horizon never flips); the zoom distance does not change. Floor 4 (Earth anchor):
+ *    CameraSystem only raises `ladderViewReturnDue()`; main.js's floor-4 block answers with the same framing turn the
+ *    arrival uses (`ladderTurnEarthDir`, its own length). Floor 5 never moves.
+ * No return while a drawer is open, a ride runs, the catch focus or reel view holds the camera; the wait starts when they end.
+ */
+export const LADDER_VIEW_RETURN = Object.freeze({ IDLE_S: 4.0, GLIDE_S: 2.0 });
+
+/**
  * DOWN-rides (Earth→ship, F6→F5): the roll back to ship-up completes within
  * this FRACTION of the ride (the cubic in-out barely moves the dolly there),
  * so the camera is fully ship-up before the dive dominates.
@@ -837,6 +854,7 @@ export class CameraSystem {
       paneOpen: false,        // main.js feeds setLadderPaneOpen (the ONE pane edge)
       drag: {
         enabled: false,       // the MOUSE gate (_ladderDragEnabledFor)
+        touchHeld: false,     // fb16: a finger is held on a view drag (TouchControls -> ladderSetTouchHeld): view input while down
         touchEnabled: false,  // the TOUCH gate (_ladderTouchDragEnabledFor): a finger turns the view on floors 1-4
         isDragging: false,
         lastMouseX: 0,
@@ -873,6 +891,22 @@ export class CameraSystem {
       localSeeded: false,                  // false ⇒ project the world dir on the next ship-anchored frame
       floor: null,                         // engaged frame's floor id (drag-memory key)
       dragMemory: {},                      // floor → Vector3 local pose last dragged there (D5: per-floor framing memory)
+      // fb16 V1-V5: the view returns to the floor's default after a pause (LADDER_VIEW_RETURN; _stepLadderViewReturn).
+      viewReturn: {
+        dirty: false,       // a view input moved the view since it was last at default: a return is owed
+        moved: false,       // the drag block applied a turn this frame (set there, read and cleared by the step)
+        t: 0,               // real seconds since the last input / hold (the wait clock)
+        glide: null,        // while gliding: { t, arc, az0, daz, th0, dth } (pose = from + s(t) along the path)
+        due: false,         // floor 4: the wait is over, main.js's answer is owed (ladderViewReturnDue)
+        anchor: null,       // the anchor of the previous frame (a change of anchor type is not a view input)
+        prevCur: null,      // last frame's lc.curDistU / lc.targetDistU: a change is a zoom input
+        prevTarget: null,
+        from: new THREE.Vector3(),
+        to: new THREE.Vector3(),
+        quat: new THREE.Quaternion(),
+        quatS: new THREE.Quaternion(),
+        tmp: new THREE.Vector3(),
+      },
       rideDirFrom: new THREE.Vector3(),    // Earth→ship ride: frozen inertial start dir
       rideDirSlerp: false,                 // true while a ride slerps `dir` toward the local arrival pose
       _R: new THREE.Vector3(1, 0, 0),
@@ -999,6 +1033,7 @@ export class CameraSystem {
     this._boundMouseDown = this._onMouseDown.bind(this);
     this._boundMouseMove = this._onMouseMove.bind(this);
     this._boundMouseUp = this._onMouseUp.bind(this);
+    this._boundWindowMouseUp = () => { this._ladderCam.drag.isDragging = false; };   // fb16: a release off the canvas ends the ladder drag
     this._boundContextMenu = (e) => {
       if (this.currentView === CameraViews.FIRST_PERSON ||
           this.currentView === CameraViews.ORBIT) {
@@ -4169,6 +4204,7 @@ export class CameraSystem {
     this.canvas.addEventListener('mousedown', this._boundMouseDown);
     this.canvas.addEventListener('mousemove', this._boundMouseMove);
     this.canvas.addEventListener('mouseup', this._boundMouseUp);
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('mouseup', this._boundWindowMouseUp);
     // S2: the wheel is owned by the single WheelRouter (window capture). The
     // zoom logic lives in handleWheelZoom(e), which the router calls on the
     // legacy (ladder-off) path. No canvas wheel listener here anymore (T3).
@@ -4401,7 +4437,9 @@ export class CameraSystem {
     // Fresh engage starts with no drag in flight.
     this._ladderSetDragGates(frame.floor);
     lc.drag.isDragging = false;
+    lc.drag.touchHeld = false;
     this._dragStop(lc.drag);
+    this._resetLadderViewReturn();   // fb16: no owed return, glide or wait carries into a fresh engage
     // Wave 5 (3): the look-at bias starts settled at 0 on every engage (the
     // pane is enabled by the controller only AFTER engage); the request itself
     // (paneInsetPx) stays the caller's — main.js owns it through the setter.
@@ -4427,9 +4465,11 @@ export class CameraSystem {
     lc.drag.enabled = false;
     lc.drag.touchEnabled = false;
     lc.drag.isDragging = false;
+    lc.drag.touchHeld = false;
     lc.drag.lastMouseX = 0;
     lc.drag.lastMouseY = 0;
     this._dragStop(lc.drag);
+    this._resetLadderViewReturn();   // fb16
     // Wave 5 (3): no eased look-at bias may leak into the next engage either.
     this._ladderResetPaneBias();
     // F3 inspect absorption: a disengage while on F3 reverts the arrival
@@ -4570,6 +4610,168 @@ export class CameraSystem {
     const same = d.nudgeSeq === this._ladderUpdateSeq;
     this._dragMove(d, addTheta, addPhi, same);
     d.nudgeSeq = this._ladderUpdateSeq;
+  }
+
+  /**
+   * fb16: a finger is held (or let go) on a view drag. TouchControls calls it on the drag's first move and on every end
+   * of the gesture. A held finger is view input even when it does not move (the view return does not start under it).
+   * @param {boolean} on
+   */
+  ladderSetTouchHeld(on) {
+    this._ladderCam.drag.touchHeld = !!on && this._ladderCam.active;
+  }
+
+  // ==========================================================================
+  // VIEW RETURN (fb16 V1-V5, owner 2026-10-25) — see LADDER_VIEW_RETURN. After the last view input, once the drag's
+  // coast has stopped, the view waits IDLE_S, then glides home. One state block (lc.viewReturn), one writer of the
+  // pose (this step, after the drag block and before the direction is rebuilt from lc.local).
+  // ==========================================================================
+
+  /** @private Forget any owed return, glide and wait (engage / disengage). `dragMemory` is kept (D5). */
+  _resetLadderViewReturn() {
+    const vr = this._ladderCam.viewReturn;
+    vr.dirty = false; vr.moved = false; vr.t = 0; vr.glide = null; vr.due = false;
+    vr.anchor = null; vr.prevCur = null; vr.prevTarget = null;
+  }
+
+  /**
+   * fb16 V2 — floor 4 (Earth anchor): true ONCE when the wait after his last view input is over and the view should
+   * go back to the floor's default. The default is the framing main.js's floor-4 block computes (ship and debris field
+   * in view: NavcomFloor.framing), so main.js answers with `ladderTurnEarthDir(fr.dir)` (direction only; the zoom stays).
+   * Cleared by any view input, ride, drawer or turn; floors 1-3 return on their own and floor 5 never.
+   * @returns {boolean}
+   */
+  ladderViewReturnDue() {
+    const lc = this._ladderCam;
+    const vr = lc.viewReturn;
+    if (!vr.due) return false;
+    vr.due = false;
+    return lc.active && lc.floor === 4;
+  }
+
+  /**
+   * @private One frame of the view return. `coastStep` is the coast's real step (s).
+   *  - View input = a drag turn applied this frame, a mouse button held, a coast still running, or a change of
+   *    `lc.curDistU` / `lc.targetDistU` (wheel and pinch zoom go through LadderController, not this file). It stops a
+   *    glide where it is (the pose of that frame, no snap) and restarts the wait. A finger held still sends no event, so
+   *    it counts only through its nudges.
+   *  - Held off, wait restarting: a ride, the post-ride level phase, a floor-4 turn, a drawer (any floor), the catch
+   *    focus or reel view. The wait starts when they end, if the view is still off default (`dirty`).
+   *  - A change of anchor type (a ride between ship and Earth floors) is not a view input: arriving on a remembered pose
+   *    owes a return, any other arrival does not.
+   * @param {number} coastStep
+   * @param {boolean} shipAnchored
+   */
+  _stepLadderViewReturn(coastStep, shipAnchored) {
+    const lc = this._ladderCam;
+    const vr = lc.viewReturn;
+    const dg = lc.drag;
+    const moved = vr.moved;
+    vr.moved = false;
+    if (vr.anchor !== null && vr.anchor !== lc.anchor) {
+      vr.dirty = shipAnchored && lc.floor != null && !!lc.dragMemory[lc.floor];
+      vr.glide = null; vr.due = false; vr.t = 0;
+    }
+    vr.anchor = lc.anchor;
+    const zoomed = vr.prevCur !== null && (lc.curDistU !== vr.prevCur || lc.targetDistU !== vr.prevTarget);
+    vr.prevCur = lc.curDistU;
+    vr.prevTarget = lc.targetDistU;
+    // A press or a held finger that has not turned the view is input (it holds the wait) but owes nothing: only a turn
+    // that moved the view makes `dirty` (a plain click must not turn the floor-4 view 4 s later).
+    const input = moved || dg.isDragging || dg.touchHeld || dg.hasPend || dg.velocityTheta !== 0 || dg.velocityPhi !== 0;
+    if (moved) vr.dirty = true;
+    // The catch focus holds the wait while it owns the camera; once his input has taken its pose over (the ladder owns
+    // the camera again, only the look-at fades back) the wait runs, from that hand-back.
+    const cf = this._catchFocus;
+    const held = lc.riding || lc.leveling || lc.paneOpen || !!lc.earthTurn || (cf.active && !cf.takenOver);
+    if (held || input || zoomed) {
+      vr.glide = null; vr.t = 0; vr.due = false;
+      if (lc.earthTurn) vr.dirty = false;   // a framing turn has just replaced the view
+      return;
+    }
+    if (!vr.dirty) { vr.t = 0; return; }
+    const step = Math.min(coastStep, COAST_STEP_MAX_S);   // a hitch (pause, hidden tab) never ends the wait
+    if (vr.glide) { this._advanceLadderViewReturnGlide(step); return; }
+    vr.t += step;
+    if (vr.t < LADDER_VIEW_RETURN.IDLE_S) return;
+    vr.t = 0;
+    if (!shipAnchored) {                     // Earth anchor: main.js's floor-4 block answers (floor 5 never moves)
+      vr.dirty = false;
+      if (lc.floor === 4) vr.due = true;
+      return;
+    }
+    this._beginLadderViewReturnGlide();
+  }
+
+  /** @private The view is home (or a glide ended): nothing owed, and a ride back to this floor lands on the default (V5). */
+  _finishLadderViewReturn() {
+    const lc = this._ladderCam;
+    const vr = lc.viewReturn;
+    vr.dirty = false; vr.t = 0; vr.glide = null;
+    if (lc.floor != null) delete lc.dragMemory[lc.floor];
+  }
+
+  /**
+   * @private Start the glide from the current local pose to the chase direction: the great circle between them
+   * (smoothstep over GLIDE_S), except where that arc would pass nearer a pole of the floor (the radial axis) than the
+   * drag's own gimbal window allows the view to go (near 180 degrees round, the arc goes over the top and the horizon
+   * would flip): then the same smoothstep over azimuth and polar angle, which keeps the polar angle between the two ends.
+   * Reduced motion cuts instead of gliding (the file's precedent for the catch focus and the pane reframe).
+   */
+  _beginLadderViewReturnGlide() {
+    const lc = this._ladderCam;
+    const vr = lc.viewReturn;
+    const from = vr.from.copy(lc.local).normalize();
+    const to = this._ladderChaseLocal(vr.to);
+    if (Math.acos(Math.max(-1, Math.min(1, from.dot(to)))) < 1e-6) { this._finishLadderViewReturn(); return; }
+    if (this._prefersReducedMotion()) { lc.local.copy(to); this._finishLadderViewReturn(); return; }
+    const poleDist = (x) => Math.acos(Math.min(1, Math.abs(x)));      // the pole is local x (lc._localUp)
+    vr.quat.setFromUnitVectors(from, to);
+    let arcMin = Math.PI;
+    for (let i = 0; i <= 24; i++) {
+      vr.quatS.identity().slerp(vr.quat, i / 24);
+      arcMin = Math.min(arcMin, poleDist(vr.tmp.copy(from).applyQuaternion(vr.quatS).x));
+    }
+    const endsMin = Math.min(poleDist(from.x), poleDist(to.x));
+    const g = { t: 0, arc: !(arcMin < Math.min(0.3, 0.9 * endsMin)), az0: 0, daz: 0, th0: 0, dth: 0 };
+    if (!g.arc) {
+      g.th0 = Math.acos(Math.max(-1, Math.min(1, from.x)));
+      g.dth = Math.acos(Math.max(-1, Math.min(1, to.x))) - g.th0;
+      g.az0 = Math.atan2(from.z, from.y);
+      let d = Math.atan2(to.z, to.y) - g.az0;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      g.daz = d;
+    }
+    vr.glide = g;
+  }
+
+  /** @private One glide frame: smoothstep progress by the real step; the end is exact. */
+  _advanceLadderViewReturnGlide(step) {
+    const lc = this._ladderCam;
+    const vr = lc.viewReturn;
+    const g = vr.glide;
+    g.t += step;
+    const u = Math.min(1, g.t / LADDER_VIEW_RETURN.GLIDE_S);
+    if (u >= 1) {
+      this._ladderChaseLocal(lc.local);
+      this._finishLadderViewReturn();
+      return;
+    }
+    const s = u * u * (3 - 2 * u);
+    if (g.arc) {
+      vr.quatS.identity().slerp(vr.quat, s);
+      lc.local.copy(vr.from).applyQuaternion(vr.quatS);
+    } else {
+      const th = g.th0 + g.dth * s;
+      const az = g.az0 + g.daz * s;
+      lc.local.set(Math.cos(th), Math.sin(th) * Math.cos(az), Math.sin(th) * Math.sin(az));
+    }
+    lc.local.normalize();
+    if (lc.floor != null) {            // a ride away mid-glide leaves from the pose the glide is at
+      const m = lc.dragMemory[lc.floor] || (lc.dragMemory[lc.floor] = new THREE.Vector3());
+      m.copy(lc.local);
+    }
   }
 
   /** @private Settle the eased look-at bias at 0 (engage / disengage). */
@@ -4982,6 +5184,7 @@ export class CameraSystem {
     lc.curDistU = len; lc.targetDistU = len;
     this._takeoverDistU = len;                                              // FB8: the controller puts the ladder's zoom state on it
     f.takenOver = true;
+    lc.viewReturn.dirty = true;                                             // fb16 V4: the pose handed back is off the default: it owes a return
     return true;
   }
 
@@ -5724,12 +5927,16 @@ export class CameraSystem {
           if (target !== angle) v.applyAxisAngle(right, target - angle);
         }
         v.normalize();
+        if (turn.theta !== 0 || turn.phi !== 0) lc.viewReturn.moved = true;   // fb16 V3: a drag turn was applied this frame (the return's wait restarts)
         if (shipAnchored && lc.floor != null) {
           const m = lc.dragMemory[lc.floor] || (lc.dragMemory[lc.floor] = new THREE.Vector3());
           m.copy(v);
         }
       }
     }
+
+    // fb16 V1-V5: the view glides back to the floor's default after a pause (before the direction is rebuilt below).
+    this._stepLadderViewReturn(coastStep, shipAnchored);
 
     // u8-f4-frame-field — the turn to the focused field. Only on an Earth anchor (`dir` is the inertial view
     // direction there) and never while a ride runs (a ride owns the camera; ladderStartRide cancels a running
@@ -5991,6 +6198,7 @@ export class CameraSystem {
     this.canvas.removeEventListener('mousedown', this._boundMouseDown);
     this.canvas.removeEventListener('mousemove', this._boundMouseMove);
     this.canvas.removeEventListener('mouseup', this._boundMouseUp);
+    if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') window.removeEventListener('mouseup', this._boundWindowMouseUp);
     this.canvas.removeEventListener('contextmenu', this._boundContextMenu);
 
     if (this._viewIndicator && this._viewIndicator.parentNode) {

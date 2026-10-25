@@ -63,8 +63,8 @@ export const MAX_BAG_R_M = 0.75;
  * like the old). A bag takes the row for the next radius at or above its own.
  */
 export const TIP_BAND = [[0.10, 146], [0.15, 145], [0.22, 143], [0.30, 142], [0.40, 140], [0.50, 138], [0.60, 136], [0.75, 134]];
-/** How fast a bag turns from the line it arrived on to the boom axis (deg/s). ESTIMATE, not measured. */
-export const SWING_RATE_DEG_S = 10;
+/** How fast a bag turns from the line it arrived on to the boom axis (deg/s). ESTIMATE, not measured. fb16 2026-10-25: was 10 (the swing took 6-7 s). */
+export const SWING_RATE_DEG_S = 20;
 /** Tip order for the next free tip: azimuth 40 → 220 → 140 → 320 (AZIMUTHS_DEG indices). */
 const PICK_ORDER = [0, 2, 1, 3];
 const SLOT_COUNT = 4;

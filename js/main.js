@@ -7991,6 +7991,12 @@ function updateCamera(dt, timestamp) {
       z: shipPos.z + (vel.z / vmag) * eps,
     });
     const shipAngleRad = Math.atan2(s1.y - s0.y, s1.x - s0.x);
+    // fb16 V2 (owner 2026-10-25): 4 s after his last drag on floor 4 the camera asks for the view back. Answer it with the
+    // same framing turn the arrival uses, direction only (no frameZoomTo: the zoom stays where he put it).
+    if (cameraSystem.ladderViewReturnDue()) {
+      const back = navcomFloor.framing({ shipPos, shipVel: vel, project: navcomProject, fovDeg: cameraSystem.camera.fov });
+      if (back) cameraSystem.ladderTurnEarthDir(back.dir);
+    }
     navcomFloor.update({ project: navcomProject, shipPos, shipAngleRad });
     // u8-f4-frame-field: on floor 4 the camera re-frames (about 1 s): once each time a ride into floor 4 ends,
     // and each time the focus changes while there (Tab, a click on an icon).
