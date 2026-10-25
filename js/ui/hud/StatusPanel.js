@@ -1213,16 +1213,21 @@ export class StatusPanel {
    * The payoff line in two parts: `name` (`Caught a rocket body · 4,232 kg`) and `cr` (`+1,250 cr`).
    * kg: 0.1-99.9 one decimal, under 0.1 two decimals, 100 and over whole kg with a thousands separator.
    * Numbers use `toLocaleString()` like the strip's credits.
-   * @param {{debrisType?: string|null, massKg?: number, creditsDelta?: number}} d
+   * A scoop bag (`bagId`, `bagCount`, `bagMassKg` on the payload): `Caught a bag of 12 pieces · 2.66 kg`.
+   * @param {{debrisType?: string|null, massKg?: number, creditsDelta?: number, bagId?: *, bagCount?: number, bagMassKg?: number}} d
    * @returns {{name: string, cr: string}}
    */
   static payoffParts(d) {
+    const bag = !!(d && d.bagId != null && Number(d.bagCount) > 0);
     const name = shortTypeName(d && d.debrisType).toLowerCase();
     const article = (d && d.debrisType && name !== 'debris') ? 'a ' : '';
-    const parts = [`Caught ${article}${name}`];
-    const kg = Number(d && d.massKg);
+    // u23 B1: a scoop bag reads as one catch: `Caught a bag of 12 pieces · 2.66 kg · +520 cr` (the bag's total mass)
+    const parts = [bag ? `Caught a bag of ${Math.round(Number(d.bagCount))} ${Number(d.bagCount) === 1 ? 'piece' : 'pieces'}` : `Caught ${article}${name}`];
+    const kg = Number(bag ? d.bagMassKg : d && d.massKg);
     if (Number.isFinite(kg) && kg > 0) {
-      parts.push(kg >= 100 ? `${Math.round(kg).toLocaleString()} kg` : `${kg < 0.1 ? kg.toFixed(2) : kg.toFixed(1)} kg`);
+      // a bag's total is read to two decimals under 10 kg (a bag of 12 small pieces: 2.66 kg, not 2.7)
+      const twoDp = kg < 0.1 || (bag && kg < 10);
+      parts.push(kg >= 100 ? `${Math.round(kg).toLocaleString()} kg` : `${twoDp ? kg.toFixed(2) : kg.toFixed(1)} kg`);
     }
     const cr = Number.isFinite(Number(d && d.creditsDelta)) ? Math.round(Number(d.creditsDelta)) : 0;
     return { name: parts.join(' \u00b7 '), cr: `+${cr.toLocaleString()} cr` };
@@ -1296,11 +1301,17 @@ export class StatusPanel {
     if (!d || d.kind !== 'catch') return;
     const el = this._ensurePayoff();
     if (!el) return;
+    // u23 B1: a scoop bag pays one award per member, each its own SCORE_UPDATE in the same frame. Members of one bag
+    // (same `bagId`) join ONE line: the credits add up, the line names the bag (count, total mass).
+    const prev = this._payoffData;
+    const shownNow = prev && this._payoffEl && this._payoffEl.style.display !== 'none';
+    const joinsBag = d.bagId != null && shownNow && prev.bagId === d.bagId;
     this._payoffData = { ...d };
+    if (joinsBag) this._payoffData.creditsDelta = (Number(prev.creditsDelta) || 0) + (Number(d.creditsDelta) || 0);
     // A bonus released with this catch can come BEFORE its SCORE_UPDATE (a daughter's first dock emits DEBRIS_CAPTURED, then
     // CATCH_PROCESSED; a lasso emits ARM_CAPTURED, then the award): it waits here, same frame, and joins the line.
     if (this._payoffPending > 0) {
-      this._payoffData.creditsDelta = (Number(d.creditsDelta) || 0) + this._payoffPending;
+      this._payoffData.creditsDelta = (Number(this._payoffData.creditsDelta) || 0) + this._payoffPending;
       this._payoffPending = 0;
     }
     this._openPayoffFrame();
@@ -1308,6 +1319,7 @@ export class StatusPanel {
     this._paintPayoff();
     this._payoffMatEl.textContent = '';
     this._payoffMatEl.style.display = 'none';
+    this._payoffMats = null;         // u23 BF2: the materials sum starts again with the new line (a bag's reveals follow all its awards)
     el.style.display = 'block';
     if (this._payoffTimer != null) timerManager.clear(this._payoffTimer);
     this._payoffTimer = timerManager.setTimeout(() => this.clearPayoff(), StatusPanel.PAYOFF_MS, { owner: this });
@@ -1355,11 +1367,21 @@ export class StatusPanel {
     if (!el || el.style.display === 'none') return;
     const metals = (d && d.metals) || [];
     if (metals.length === 0) return;
-    const text = metals.map((m) => {
-      const name = m.name || m.subtype || 'Unknown';
-      const amt = Number(m.amount != null ? m.amount : m.massKg) || 0;
-      return `${name} ${amt.toFixed(1)}`;
-    }).join(' \u00b7 ') + ' kg';
+    // u23 BF2: a scoop bag reveals once per member (same `bagId`): the line adds them up, so it shows the whole bag's metals (in the order
+    // first seen). A solo catch (no bagId) shows its own, as before.
+    const bagId = d && d.bagId != null ? d.bagId : null;
+    const one = (m) => [m.name || m.subtype || 'Unknown', Number(m.amount != null ? m.amount : m.massKg) || 0];
+    let rows;
+    if (bagId == null) {
+      this._payoffMats = null;
+      rows = metals.map(one);
+    } else {
+      if (!this._payoffMats || this._payoffMats.bagId !== bagId) this._payoffMats = { bagId, sums: new Map() };
+      const sums = this._payoffMats.sums;
+      for (const m of metals) { const [name, amt] = one(m); sums.set(name, (sums.get(name) || 0) + amt); }
+      rows = [...sums];
+    }
+    const text = rows.map(([name, amt]) => `${name} ${amt.toFixed(1)}`).join(' \u00b7 ') + ' kg';
     this._payoffMatEl.textContent = text;
     this._payoffMatEl.style.display = 'block';
   }
@@ -1373,6 +1395,7 @@ export class StatusPanel {
     if (this._payoffEl) {
       this._payoffEl.style.display = 'none';
       this._payoffData = null;
+      this._payoffMats = null;
       this._payoffNameEl.textContent = '';
       this._payoffCrEl.textContent = '';
       this._payoffMatEl.textContent = '';

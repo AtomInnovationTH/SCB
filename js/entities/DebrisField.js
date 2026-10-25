@@ -729,30 +729,7 @@ export class DebrisField {
       // untouched; we just flip `alive`/`tracked` back on and let
       // _updateInstanceTransform repopulate the instance matrix next tick.
       if ((data.missionNumber || 1) > 1) {
-        let restored = 0;
-        // u20-debris: the shards take the later size law BEFORE they come back, so the tracked rule below reads their new size.
-        this._applyShardLaw(data.missionNumber);
-        for (const d of this.debrisList) {
-          if (d._hiddenForMission1) {
-            d._hiddenForMission1 = false;
-            d.alive = true;
-            // S11(b): a hazard shard is not a target — restoring it must not catalogue it like one (the pre-S11(b)
-            // blanket `tracked = true` predates the two populations). u20-debris: `_trackedFor` is the one rule: 10 cm or
-            // bigger shards are known to radar (tracked, still scenery: hazard keeps them out of every target list).
-            d.tracked = this._trackedFor(d);
-            restored++;
-          }
-        }
-        if (restored > 0) {
-          console.log(`[DebrisField] Mission ${data.missionNumber}: restored ${restored} previously hidden debris`);
-        }
-        // 2026-05-15 polish (urgent): restore the background-points cloud
-        // when advancing past mission 1 — it's hidden during M1 so the
-        // pilot sees a clean ≤2 km welcome cluster instead of decorative
-        // dots at multi-km range that look like real debris.
-        if (this.backgroundPoints) {
-          this.backgroundPoints.visible = true;
-        }
+        this._leaveMission1(data.missionNumber);
       } else {
         // Mission 1 (re-entry path): hide background points immediately.
         if (this.backgroundPoints) {
@@ -1128,6 +1105,57 @@ export class DebrisField {
       tracked: false,
       later: { sizeM: laterSize, massKg: laterMass },
     };
+  }
+
+  /**
+   * Mission 2+ undoes what mission 1 did to the field: the shards take the later size law, every piece hidden for mission 1 comes back,
+   * and the background dots are shown again. One body for MISSION_START and for `setMissionNumber` (a map-off load of a later-mission save,
+   * after a mission 1 was played this session: u23 BF1).
+   * @param {number} missionNumber
+   */
+  _leaveMission1(missionNumber) {
+    let restored = 0;
+    // u20-debris: the shards take the later size law BEFORE they come back, so the tracked rule below reads their new size.
+    this._applyShardLaw(missionNumber);
+    for (const d of this.debrisList) {
+      if (d._hiddenForMission1) {
+        d._hiddenForMission1 = false;
+        d.alive = true;
+        // S11(b): a hazard shard is not a target — restoring it must not catalogue it like one (the pre-S11(b)
+        // blanket `tracked = true` predates the two populations). u20-debris: `_trackedFor` is the one rule: 10 cm or
+        // bigger shards are known to radar (tracked, still scenery: hazard keeps them out of every target list).
+        d.tracked = this._trackedFor(d);
+        restored++;
+      }
+    }
+    if (restored > 0) {
+      console.log(`[DebrisField] Mission ${missionNumber}: restored ${restored} previously hidden debris`);
+    }
+    // 2026-05-15 polish (urgent): restore the background-points cloud
+    // when advancing past mission 1 — it's hidden during M1 so the
+    // pilot sees a clean ≤2 km welcome cluster instead of decorative
+    // dots at multi-km range that look like real debris.
+    if (this.backgroundPoints) {
+      this.backgroundPoints.visible = true;
+    }
+  }
+
+  /**
+   * u23 B3: set the mission the field lays out for, where no MISSION_START will say it (a LOAD with the map off: `GAME_RESET` left
+   * 1, so the saved game would run the mission-1 shard law, no extras, the mission-1 hide and the 2 km cull). The map-on load
+   * gets the number through `FieldRegistry.restore` -> the field plan (`_currentMissionNumber`, `_spawnWelcomeField`). Applies the
+   * shard law for it now (idempotent, no random draw). A bad number is ignored.
+   * @param {number} missionNumber the scorer's uncapped mission number (1 = the first)
+   * @returns {boolean} true when it was taken
+   */
+  setMissionNumber(missionNumber) {
+    if (!Number.isInteger(missionNumber) || missionNumber < 1) return false;
+    this._currentMissionNumber = missionNumber;
+    // u23 BF1: a later mission also undoes mission 1's hiding (the same body MISSION_START runs): a mission 1 played this session, then
+    // quit to the menu and CONTINUE of a mission-3 save, must not leave pieces hidden or the background dots off.
+    if (missionNumber > 1) this._leaveMission1(missionNumber);
+    else this._applyShardLaw(missionNumber);
+    return true;
   }
 
   /**

@@ -186,6 +186,12 @@ export class LeashDriver {
   /** l5c-reach E6: true from the start of the nose reel-in (or the radiator fold) to DONE / FAILED / CUT_FREE. */
   get busy() { return this._h !== null; }
 
+  /** u23: the tip the hand-off under way is bound for (nothing reserves it: the trip's end sweep keeps its own deliveries off it), or -1. */
+  handoffTip() { return this._h ? this._h.tipIndex : -1; }
+
+  /** u23 (AF1): the net the hand-off under way is carrying, or null. */
+  handoffNet() { return this._h ? this._h.net : null; }
+
   // ── asking ────────────────────────────────────────────────────────────────
 
   /**
@@ -872,15 +878,75 @@ export class LeashDriver {
       return;
     }
     h.latched = true;
+    this._landOnTip(net, d, h.tipIndex, h.massKg, { say: `Catch latched on radiator ${h.tipIndex + 1}.` });
+  }
+
+  /**
+   * The end state of a catch the tip has just taken from the nose: the net steps, then the one event. Shared by `_latch` (the leash's end) and
+   * `deliverNoseCatchUnflown` (u23: the trip's days); there is no second copy. Both kinds of nose catch run exactly these steps, because both are
+   * the same kind of net (a COLLARED mother net in `cns.activeNets`: `adoptDaughterCatch` builds a daughter's seated catch the way a lasso catch
+   * is adopted), and `_latch` was always the one place either of them leaves it.
+   * @param {object} net the nose catch's net
+   * @param {object} d the catch
+   * @param {number} tipIndex
+   * @param {number} massKg
+   * @param {{say?:string, unflown?:boolean}} [o] `say`: the comms line between the net's removal and the event (none for an unflown one)
+   */
+  _landOnTip(net, d, tipIndex, massKg, { say = '', unflown = false } = {}) {
     d._motherParked = false;
     net._cargoDelivered = true;
     net._leash = false;
     this.cns.removeNetNow(net);
-    this._say(`Catch latched on radiator ${h.tipIndex + 1}.`);
+    if (say) this._say(say);
     this.eventBus.emit(Events.CARGO_TRANSFER_COMPLETE, {
-      debrisId: d.id, massKg: h.massKg, podIndex: net.podIndex,
-      armIndex: -1, armId: null, to: { kind: 'tip', tipIndex: h.tipIndex },
+      debrisId: d.id, massKg, podIndex: net.podIndex,
+      armIndex: -1, armId: null, to: { kind: 'tip', tipIndex },
+      ...(unflown ? { unflown: true } : {}),
     });
+  }
+
+  /**
+   * u23 (the trip's unflown hand-over, D3b "a catch on the nose goes first"): the catch waiting at the nose collar that could go to a radiator tip
+   * without the leash, or null. The same net the leash would have tried (a COLLARED mother net: a mother's catch or a daughter's seated one), once
+   * the leash has had its look and declined it (a catch a daughter has just seated is parked until she is home and tried on the tick after: it is
+   * not stuck), when it fits a tip, no cut or furnace holds it and the steering gas could pay the swing (`gasShort`: physical, a yes/no gate
+   * that bills nothing). The leash's own reach and refusals are real-time reasons and do not count (nothing is flown). A free tip is not asked
+   * here: a catch that waits for one still goes before any rack catch.
+   * @returns {object|null} the net
+   */
+  noseCatchForUnflown() {
+    const cns = this.cns, tc = this._tc;
+    if (!cns || !tc || this._h || typeof cns.getDockedCatch !== 'function') return null;
+    if (Constants.isFeatureEnabled('FURNACE_COOK')) return null;                 // the nose furnace takes it
+    const net = cns.getDockedCatch();
+    if (!net || net.state !== Constants.CAPTURE_NET.STATES.COLLARED || net._leash || net._leashNoseReel) return null;
+    const d = net.targetDebris;
+    if (!d || d.alive === false || net._breakdownStarted) return null;
+    if (typeof cns._cutActive === 'function' && cns._cutActive(net)) return null;
+    if (net._cargoDeclined !== true || Math.abs(net._cargoRetryS || 0) >= 1e8) return null;
+    if (!tc.fits(DebrisField.trueReachM(d, 2))) return null;
+    const tip = tc.pickTip();
+    if (tip != null && typeof this.gasShort === 'function' && this.gasShort(net, d, tip, { noseReel: !this.canReach(d, tip) })) return null;
+    return net;
+  }
+
+  /**
+   * u23: put the nose catch (`noseCatchForUnflown`) on a free tip now, without flying it: `pickTip()`, the same stow the leash ends in, then
+   * `_landOnTip`. Nothing is billed (the steering gas has no amount) and no line is said.
+   * @returns {{net:object, debris:object, tipIndex:number}|null} the delivery made, or null (no such catch, or no free tip)
+   */
+  deliverNoseCatchUnflown() {
+    const net = this.noseCatchForUnflown();
+    const tc = this._tc;
+    if (!net) return null;
+    const tip = tc.pickTip();
+    if (tip == null || tc.has(tip) || (typeof tc.isReserved === 'function' && tc.isReserved(tip))) return null;
+    const d = net.targetDebris;
+    const massKg = net.capturedMass || d.mass || 0;
+    if (!tc.stow(tip, d, { massKg, radiusM: DebrisField.trueReachM(d, 2) })) return null;
+    tc.swingToBoom(tip);
+    this._landOnTip(net, d, tip, massKg, { unflown: true });
+    return { net, debris: d, tipIndex: tip };
   }
 
   /** Unit vector from the latch point to the bag centre (the line the bag arrives along), world axes. */

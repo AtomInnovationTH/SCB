@@ -182,6 +182,17 @@ export function tripRefuses(kind = 'action') {
 }
 
 /**
+ * u23 (AF1): the leash's own start asks the burning trip. A profile trip shows ONE flown pass; once it has begun, no second leash starts (the
+ * catch goes to a tip unflown). The shown pass's own leash is let through: the nose route's second leg, and a started leash's own retry.
+ * Read where the leash start is decided (`CaptureNet._tryLeash`). False when no trip burns, or on the old path.
+ * @param {object} net the COLLARED catch the leash would take
+ * @returns {boolean} true = the leash does not start
+ */
+export function tripLeashRefuses(net) {
+  return _burning !== null && _burning.leashRefused(net);
+}
+
+/**
  * The per-frame TimeAuthority arguments (main.js). With a trip burning the world clock targets TRIP.TIME_RATE
  * whatever the floor or the ladder state; the open drawer still holds it at 0 and a conjunction alert still clamps
  * it to 1x (safety wins). So does the full-screen shop (ladder off, any state that is not gameplay: `gameplay` false):
@@ -233,6 +244,11 @@ export class TransferTrip {
     this._carryAgeS = 0;            // trip-melt-2: s since the daughters were last looked at for a carry
     this._carryWasBusy = false;     // u20-nose: a carry was running last frame (its end re-asks "is a nose catch waiting" at once)
     this._carrySaid = Object.create(null);   // '<arm>|<reason>' -> said this trip
+    this._passStarted = false;      // u23: the one flown pass of a field trip has started (profile path)
+    this._passWasBusy = false;      // u23: a carry or a leash ran last frame (the rising edge is the pass starting)
+    this._passKind = null;          // u23: what the shown pass is: 'radial' (a direct carry), 'nose' (the nose route: its leash is leg 2), 'leash' (a mother catch's)
+    this._passNet = null;           // u23: the net the shown pass's leash took (null until that leash runs)
+    this._unflown = 0;              // u23: catches handed to the tips without flying them this trip
     this._rackAgeS = 0;
     this._rackCached = false;
     this.melted = 0;                // catches melted by this trip so far
@@ -353,6 +369,11 @@ export class TransferTrip {
     this.melted = 0;
     this._refusedAt = Object.create(null);
     this._carrySaid = Object.create(null);
+    this._passStarted = false;
+    this._passWasBusy = false;
+    this._passKind = null;
+    this._passNet = null;
+    this._unflown = 0;
     this._carryAgeS = 0;
     this._rackAgeS = 0;
     this._rackCached = false;
@@ -778,14 +799,10 @@ export class TransferTrip {
     this._noteTips();
     this._tickCarry(dt);
     if (this._playS < this._playP) return;
-    // The profile is over. A carry still running holds the end (it finishes, CARRY_BACK to docked); one still running
-    // FINISH_GRACE_S later (stuck) is aborted, she snaps docked.
+    // The profile is over. The shown pass (a carry, or a leash) still running holds the end; the end sweep then delivers and melts the rest.
     this._overS += dt;
-    if (this._carryBusy()) {
-      if (this._overS < Constants.CARRY.FINISH_GRACE_S) return;
-      const am = this._d.armManager;
-      if (am && typeof am.abortAllCarries === 'function') am.abortAllCarries('trip cap');
-    }
+    if (this._endHold()) return;
+    this._endSweep();
     this._end();
   }
 
@@ -858,6 +875,7 @@ export class TransferTrip {
    */
   _tickCarry(dt) {
     this._rackAgeS += dt;
+    if (this._profile) this._trackPass();                         // u23: every frame (a pass can begin and end between two looks)
     const am = this._d.armManager;
     if (!am || typeof am.carryCheck !== 'function' || typeof am.requestCarry !== 'function') return;
     this._carryAgeS += dt;
@@ -866,9 +884,11 @@ export class TransferTrip {
     // the cap: no new carry (a field trip's cap is the end of its profile, P)
     if (this._profile ? this._playS >= this._playP : this._elapsedS >= Constants.TRIP.MAX_REAL_S) return;
     if (this._carryBusy()) return;                                // one at a time
+    if (this._profile && this._passStarted) { this._unflownStep(); return; }   // u23: the one flown pass has started: the rest go unflown
     // petal-single: the look itself is the arm manager's (the same one a mission uses); the trip owns when and what it says
     if (typeof am.scheduleCarry === 'function') {
       am.scheduleCarry({ mission: false, said: this._carrySaid, say: (text) => this._say(text, { _keep: true }) });
+      if (this._profile) this._trackPass();                       // (u23: she may have begun: the edge is seen now, not a frame late)
       return;
     }
     const tc = this._d.player && this._d.player.tipCargo;
@@ -890,6 +910,145 @@ export class TransferTrip {
         }
       }
     }
+  }
+
+  // ── one shown pass, the rest unflown (u23; profile path only) ────────────────
+
+  /** @private A leash hand-off is running (the nose route's second leg, or a mother catch's own). */
+  _leashBusy() {
+    const drv = this._d.player && this._d.player.leashDriver;
+    return !!(drv && drv.busy);
+  }
+
+  /** @private The shown pass is flying: a daughter on a carry, or a leash. */
+  _passBusy() { return this._carryBusy() || this._leashBusy(); }
+
+  /**
+   * @private D1: the first rising edge, during the burn, of "a carry or a leash runs" is the one pass this trip shows (a carry from
+   * `scheduleCarry`, one `ArmManager._tickLifts` started from a wait, a mother catch's leash, the nose route's second leg). That pass flies
+   * as before; from this frame the scheduler stands down (`_tickCarry` takes the unflown entry instead) and every pending lift wait is
+   * cancelled, so no second flown carry begins.
+   */
+  _trackPass() {
+    const busy = this._passBusy();
+    if (busy && !this._passWasBusy && !this._passStarted) {
+      this._passStarted = true;
+      const am = this._d.armManager;
+      if (am && typeof am.cancelCarryWaits === 'function') am.cancelCarryWaits();
+      const drv = this._d.player && this._d.player.leashDriver;
+      if (this._leashBusy()) {
+        this._passKind = 'leash';
+      } else {
+        const a = am && Array.isArray(am.arms) ? am.arms.find((x) => x && x.isCarrying) : null;
+        this._passKind = a && a.carryKind === 'nose' ? 'nose' : 'radial';
+      }
+      this._passNet = null;
+      if (drv && this._passKind === 'leash') this._passNet = typeof drv.handoffNet === 'function' ? drv.handoffNet() : null;
+    }
+    this._passWasBusy = busy;
+    if (this._passStarted && this._passKind === 'nose' && !this._passNet && this._leashBusy()) {     // the nose route's second leg has begun: that net is the pass's
+      const drv = this._d.player.leashDriver;
+      this._passNet = typeof drv.handoffNet === 'function' ? drv.handoffNet() : null;
+    }
+  }
+
+  /**
+   * u23 (AF1) @private The leash asks (`tripLeashRefuses`) whether this catch may start one. Before the shown pass has begun: yes (the first
+   * leash is the pass). After it: only the pass's own, i.e. the nose route's second leg (its net is not known until that leash runs, and no
+   * other catch can be at the nose while a daughter flies the nose route) or the net whose leash began the pass (a retry after a decline).
+   * A direct carry's pass has no leash: a catch at the nose that the ship could not turn for while she flew waits for the trip's unflown look.
+   * @returns {boolean} true = refuse
+   */
+  leashRefused(net) {
+    if (!this._profile || !this._passStarted) return false;
+    if (this._passKind === 'radial') return true;
+    return !!this._passNet && net !== this._passNet;
+  }
+
+  /**
+   * @private D3: after the shown pass has started and is done (no carry, no leash), one catch is handed to a tip without flying every
+   * CARRY.CHECK_S while play remains (the player sees the bags appear and melt). A catch on the nose goes first; while one waits (it fits and
+   * the leash cannot take it) no rack catch takes any tip, so the last free tip is always its.
+   */
+  _unflownStep() {
+    if (this._leashBusy()) return;
+    this._deliverOneUnflown();
+  }
+
+  /**
+   * @private One unflown delivery, the nose catch first (D3b). With a deliverable nose catch waiting and no free tip for it, nothing else goes.
+   * @returns {boolean} a catch was delivered
+   */
+  _deliverOneUnflown() {
+    const drv = this._d.player && this._d.player.leashDriver;
+    const am = this._d.armManager;
+    if (drv && typeof drv.noseCatchForUnflown === 'function' && drv.noseCatchForUnflown()) {
+      const r = typeof drv.deliverNoseCatchUnflown === 'function' ? drv.deliverNoseCatchUnflown() : null;
+      if (r) { this._noteDelivered(); return true; }
+      return false;
+    }
+    if (am && typeof am.deliverUnflown === 'function'
+        && am.deliverUnflown({ said: this._carrySaid, say: (text) => this._say(text, { _keep: true }) })) {
+      this._noteDelivered();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * @private u23 AF3: a bag on a tip lowers the radiators (the ship retargets the slew to the band row on its next frame, and nothing raises them
+   * again). The sweep melts each bag the moment it is stowed, long before that frame, so the next catch would be judged at the angle the radiators had
+   * with the tips empty. After each delivery the ship's own rule runs now (`_updateFlower(0)` moves nothing: no step, no billing); the radiators are then
+   * judged where the bags that have been on the tips hold them, and they go there once the clock runs.
+   */
+  _radiatorsFollowBag() {
+    const p = this._d.player;
+    if (p && typeof p._updateFlower === 'function') p._updateFlower(0);
+  }
+
+  /** @private A catch went to a tip unflown: count it, and note what the tip holds (the melt line names it after the body is gone). */
+  _noteDelivered() {
+    this._unflown++;
+    this._noteTips();
+  }
+
+  /**
+   * @private D4(a): the profile is over. The shown pass (a daughter's carry or the leash) holds the end, up to CARRY.FINISH_GRACE_S past P;
+   * at that bound daughter carries are aborted as before, and a leash still running is left (it latches after arrival, as before).
+   * @returns {boolean} true = keep holding
+   */
+  _endHold() {
+    if (!this._passBusy()) return false;
+    if (this._overS < Constants.CARRY.FINISH_GRACE_S) return true;
+    const am = this._d.armManager;
+    if (am && typeof am.abortAllCarries === 'function') am.abortAllCarries('trip cap');
+    return false;
+  }
+
+  /**
+   * @private D4(b) the end sweep, before `_end()` (melting still on): repeat { finish every melt in progress; deliver the nose catch, then every
+   * rack catch that qualifies, unflown } until a round changes nothing (at most catches + 4 rounds). Every catch that qualifies ends melted;
+   * the rest stay where they are, their lines said once. One line says what the daughters did on the way. Never on `abort()`: that is not an arrival.
+   */
+  _endSweep() {
+    const p = this._d.player;
+    const tc = p && p.tipCargo;
+    const am = this._d.armManager;
+    const drv = p && p.leashDriver;
+    // a leash left running at the grace bound has chosen its tip and nothing reserves it: keep the sweep's own deliveries off it for the sweep
+    const lt = drv && typeof drv.handoffTip === 'function' ? drv.handoffTip() : -1;
+    const held = tc && lt >= 0 && typeof tc.reserve === 'function' ? tc.reserve(lt) : false;
+    let catches = 4;
+    for (const a of (am && am.arms) || []) if (a && Array.isArray(a.heldCatches)) catches += a.heldCatches.length;
+    for (let round = 0; round < catches; round++) {
+      let changed = 0;
+      if (tc && typeof tc.finishMelts === 'function') changed += tc.finishMelts();
+      for (let k = 0; k < catches && this._deliverOneUnflown(); k++) { changed++; this._radiatorsFollowBag(); }
+      if (!changed) break;
+    }
+    if (held && typeof tc.unreserve === 'function') tc.unreserve(lt);
+    const n = this._unflown;
+    if (n > 0) this._say(`On the way the daughters handed ${n} ${n === 1 ? 'catch' : 'catches'} to the furnaces.`, { _keep: true });
   }
 
   /** True while a leash hand-off or a carry runs on the trip: the world clock drops to TRIP.HANDOFF_RATE (D12b). */

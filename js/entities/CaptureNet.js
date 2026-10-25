@@ -30,7 +30,7 @@ import { OUT_OF_MOTHER_NETS_LINE, ONE_MOTHER_NET_LEFT_LINE } from '../systems/ne
 // Cargo-continuity S7: the carrier scorer lives with the rest of the CoM maths
 // (ONE quantity, ONE computation — it reuses computeCoM/strutTipMeters).
 import { suggestCargoArm, countEmptyDockedDaughters, heldCargoFoulsCorridorAt } from '../systems/CoMCalculator.js';
-import { tripRefuses } from '../systems/TransferTrip.js';
+import { tripRefuses, tripLeashRefuses } from '../systems/TransferTrip.js';
 import { heldBagNeckInto, heldBagRadiusScene, DAUGHTER_STAND_M } from './heldBagShape.js';
 import { pickScoopMembers, scoopLine } from './scoopRule.js';
 // Nets step 3 slice 5 (lane 5b): a pending BIG piece (counted at the catch, pays when disposed of) is never let go by K, never auto-cut,
@@ -4255,6 +4255,9 @@ export class CaptureNetSystem {
       net._gasShort = true;
       return 'rack';
     }
+    // u23: a profile trip shows ONE flown pass. Once it has begun the leash starts for no other catch (the retry would beat the trip's own look);
+    // the trip hands this one to a tip unflown. Silent: nothing is wrong, and no line is owed. The pass's own leash is let through.
+    if (tripLeashRefuses(net)) return 'declined';
     const why = drv.refusal(net);
     if (why) {
       // A 'busy' refusal (the previous catch still holds the leash driver) is never spoken: this catch simply starts

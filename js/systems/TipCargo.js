@@ -520,6 +520,29 @@ export class TipCargo {
     }
   }
 
+  /**
+   * u23 (owner 2026-10-24, "each catch moves to a free tip and melts before you arrive"; DECISIONS §33 row 17: many hours or days of realtime to melt
+   * debris): finish every melt in progress NOW, the end of a transfer trip's days. Each occupied tip gets its whole span and the melt's own
+   * completion runs (`_cook(slot, 0)`, the code `update` runs at the end of the span), so the chunks, `NET_CONSUMED` and `CATCH_PROCESSED`
+   * (`digested: true`, source 'tip') fire exactly as in play and the tip is free. Only while melting runs (the furnace flag, or a trip burning:
+   * `tripMelting`); outside one it does nothing. A tip whose hardware is gone is left, as `update` leaves it.
+   * @returns {number} how many bags melted
+   */
+  finishMelts() {
+    if (!(Constants.isFeatureEnabled('FURNACE_COOK') || tripMelting())) return 0;
+    const FT = Constants.FURNACE_TRANSFER;
+    let n = 0;
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const slot = this._slots[i];
+      if (!slot || !this._tipRec(i)) continue;
+      slot.debris._digestProgress = FT.digestSpanS(slot.massKg);
+      slot.phaseT = FT.FEED_S;
+      this._cook(slot, 0);
+      if (!this._slots[i]) n++;
+    }
+    return n;
+  }
+
   // ── books ────────────────────────────────────────────────────────────────
 
   /**

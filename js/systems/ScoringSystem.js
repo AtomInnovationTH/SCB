@@ -388,6 +388,9 @@ export class ScoringSystem {
       // u3-payoff-calm D1: tells the payoff line a credited catch from other credit changes.
       debrisType: data.debris?.type ?? null,
       kind: data.deorbitSacrifice ? 'deorbit' : 'catch',
+      // u23 B1: a scoop bag pays one award per member; each event carries the bag it belongs to, so the payoff line can
+      // show ONE line for the bag (members summed) instead of the last member's. Absent for a solo catch.
+      ...(data.bag ? { bagId: data.bag.id, bagCount: data.bag.count, bagMassKg: data.bag.massKg } : null),
     });
 
     // ST-4.C mission transition check — MOVED (Wave 5 Session F, D4). It ran

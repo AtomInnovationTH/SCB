@@ -2795,25 +2795,36 @@ export class ArmManager {
    * is false and `lift` names who rises (`[{index, rad}]`; the carry's start path commands it, `_commandLifts`; THIS stays read-only).
    * A mother net coming home holds a carry only when it NEEDS the holder a duck has lowered or a lift has to raise ('net-inbound', net-duck
    * R4): it clears by itself at the berth, so it is never `never`. Every other carry goes on as before.
+   * u23 `opts.ignoreRealTime` (the trip's unflown hand-over: nothing flies, so only what days of time cannot change counts): the radiators are judged
+   * where they SETTLE (`_flowerSettleDeg`: inside the window = fine, outside = 'radiators-angle', `never`), and a neighbour's strut, a net coming
+   * in, her own strut's range and a neighbour's catch that can be lifted are skipped; a neighbour's catch that can never leave (`never`) still refuses.
    * @param {ArmUnit} arm
+   * @param {object|null} [nose] the nose route's bucket when the catch goes that way
+   * @param {{ignoreRealTime?:boolean}} [opts]
    * @returns {null|{reason:string, text:string, never?:boolean, lift?:{index:number, rad:number}[]}}
    */
-  carryConditions(arm, nose = null) {
-    if (nose) return this._noseConditions(arm, nose);
+  carryConditions(arm, nose = null, opts = {}) {
+    if (nose) return this._noseConditions(arm, nose, opts);
     const V = Constants.CARRY;
     const ps = this.playerSatellite;
     const n = arm.index + 1;
     const R2D = 180 / Math.PI;
+    const skipRT = opts.ignoreRealTime === true;
     const inRange = (deg) => V.OTHERS_RANGES_DEG.some(([lo, hi]) => deg >= lo - 1e-6 && deg <= hi + 1e-6);
     const sharedDeg = (ps._flowerThetaRad ?? 0) * R2D;
     const targetDeg = Number.isFinite(ps._flowerTargetTheta) ? ps._flowerTargetTheta * R2D : sharedDeg;
-    if (!inRange(sharedDeg) || !inRange(targetDeg)) {
+    if (skipRT) {
+      const settleDeg = this._flowerSettleDeg();
+      if (!inRange(settleDeg)) {
+        return { reason: 'radiators-angle', never: true, text: `The radiators are settling at ${Math.round(settleDeg)}°, where the hand-off was not tried. Daughter ${n} keeps her catch.` };
+      }
+    } else if (!inRange(sharedDeg) || !inRange(targetDeg)) {
       return { reason: 'radiators-moving', text: `The radiators are not settled. Daughter ${n} waits.` };
     }
     // net-duck D2/D4/R4: while a mother net is coming home a holder whose catch is in its path is ducked, and a neighbour whose catch
     // blocks this carry cannot be lifted (the corridor is the net's): such a carry waits for the berth (it clears by itself, so `never`
     // is never set for it). A carry that needs neither goes on.
-    const inbound = _inboundMotherNetRadiusM(this) !== null;
+    const inbound = !skipRT && _inboundMotherNetRadiusM(this) !== null;
     const netWait = { reason: 'net-inbound', text: `A net is coming in. Daughter ${n} waits.` };
     for (const o of this.arms) {
       if (!o || o === arm || typeof o.getAimAlpha !== 'function') continue;
@@ -2822,10 +2833,10 @@ export class ArmManager {
       const held = Array.isArray(o.heldCatches) ? o.heldCatches.filter((h) => h && h.mass) : [];
       // hold-clear D9: a neighbour whose catch's wing profile is still pending has no hold pose yet (it may rise when the profile lands): the
       // carry waits for it, with the existing 'neighbour-strut' reason (the one every "her strut is not where it belongs yet" wait uses)
-      if (held.length && armProfile(o).state === 1) {
+      if (!skipRT && held.length && armProfile(o).state === 1) {
         return { reason: 'neighbour-strut', text: `Daughter ${o.index + 1} is still settling her catch. Daughter ${n} waits.` };
       }
-      if (Math.abs(oDeg - V.NEIGHBOUR_REST_DEG) > V.NEIGHBOUR_TOL_DEG + 1e-6) {
+      if (!skipRT && Math.abs(oDeg - V.NEIGHBOUR_REST_DEG) > V.NEIGHBOUR_TOL_DEG + 1e-6) {
         // hold-catch FA3: a neighbour holding a catch stands at her HOLD POSE (34..100 deg), which is where she belongs: accepted
         // (the carry was measured against it, see Constants.CARRY.NEIGHBOUR_CATCH_MAX_SIZE_M). Anywhere else (a "." press, a strut on its
         // way) is out of place, as before. net-duck D4: so is the angle she was lifted to for this carry (`_netLift`).
@@ -2853,16 +2864,33 @@ export class ArmManager {
           if (inbound) return netWait;                            // R4: the lift would pull her catch back into the net's path: after the berth
           never = false;
         }
+        if (skipRT && !never) continue;                         // u23: waiting (a lift) clears it: real-time, skipped
         const out = { reason: 'neighbour-catch', never, text: `Daughter ${o.index + 1}'s catch is too close to Daughter ${n}'s path. Daughter ${n} keeps hers.` };
         if (lift.length) out.lift = lift;
         return out;
       }
     }
     const recDeg = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() * R2D : NaN;
-    if (!(recDeg >= V.STRUT_REC_LO_DEG - 1e-6 && recDeg <= V.STRUT_REC_HI_DEG + 1e-6)) {
+    if (!skipRT && !(recDeg >= V.STRUT_REC_LO_DEG - 1e-6 && recDeg <= V.STRUT_REC_HI_DEG + 1e-6)) {
       return { reason: 'strut-range', text: '' };
     }
     return null;
+  }
+
+  /**
+   * u23: the angle (deg) the radiators are SETTLING to: the slew's target (where they stand when it is settled), lowered to the ceiling the bags
+   * held on the tips NOW set, as `PlayerSatellite._updateFlower` retargets the slew on its next frame (a bag stowed this very frame has not
+   * retargeted it yet, so the live target would be stale). The unflown hand-over judges the radiators here: they are never moved for a carry.
+   * @returns {number} degrees
+   */
+  _flowerSettleDeg() {
+    const ps = this.playerSatellite;
+    const shared = ps._flowerThetaRad ?? 0;
+    let t = Number.isFinite(ps._flowerTargetTheta) ? ps._flowerTargetTheta : shared;
+    const tc = ps.tipCargo;
+    const band = tc && typeof tc.maxRadiatorThetaRad === 'function' ? tc.maxRadiatorThetaRad() : Infinity;
+    if (band !== Infinity && t > band + 1e-9) t = band - (Constants.THERMAL.FLOWER.SETTLE_EPS_RAD || 0);
+    return (t * 180) / Math.PI;
   }
 
   // ==========================================================================
@@ -2963,11 +2991,13 @@ export class ArmManager {
    * and the gas for the turn - so a catch never strands at the nose. Read-only. (Prep re-reads it each step through `noseRecheck`.)
    * @private
    */
-  _noseHandOverRefusal(arm, nose, mission) {
+  _noseHandOverRefusal(arm, nose, mission, ignoreRealTime = false) {
     const n = arm.index + 1;
     const { tc, drv, cns } = this._noseParts();
     const d = arm.heldCatches.find(Boolean);
-    if (cns) {
+    // u23 `ignoreRealTime` (the trip's unflown hand-over, which uses neither the nose nor the leash): nose-busy, a busy tip, the leash's own reach and its
+    // real-time refusals do not apply; the steering gas for the swing still does (`nose-gas`: physical, the mother's steering gas is not refilled on a trip)
+    if (cns && !ignoreRealTime) {
       const lasso = this.claimWorld().lasso;
       const busy = (typeof cns.getDockedCatch === 'function' && cns.getDockedCatch())
         || (typeof cns.hasMotherNetInFlight === 'function' && cns.hasMotherNetInFlight())
@@ -2976,10 +3006,10 @@ export class ArmManager {
     }
     if (tc && typeof tc.pickTip === 'function') {
       const tip = tc.pickTip();
-      if (tip == null) return { reason: 'tip-busy', text: `Every radiator tip is busy. Daughter ${n} waits.`, retry: true };
-      if (drv && typeof drv.canReach === 'function' && d) {
+      if (tip == null && !ignoreRealTime) return { reason: 'tip-busy', text: `Every radiator tip is busy. Daughter ${n} waits.`, retry: true };
+      if (tip != null && drv && typeof drv.canReach === 'function' && d) {
         const seat = this._noseSeatScene(d, new THREE.Vector3());
-        if (!drv.canReach(d, tip, seat)) {
+        if (!ignoreRealTime && !drv.canReach(d, tip, seat)) {
           return { reason: 'nose-leash', text: `The leash cannot reach this catch from the nose. Daughter ${n} keeps it.`, retry: false, giveUp: true };
         }
         if (typeof drv.gasShort === 'function' && !Constants.isFeatureEnabled('FURNACE_COOK')
@@ -2988,7 +3018,7 @@ export class ArmManager {
         }
       }
     }
-    if (drv && typeof drv.refusal === 'function') {
+    if (!ignoreRealTime && drv && typeof drv.refusal === 'function') {
       const why = drv.refusal(null);
       // her own carry holds the ship still too (CARRY_* are rotation-locking states): in prep that is not a reason, another daughter out or leaving is
       const ownLock = why && why.key === 'daughter' && !!arm._carry && this.arms.every((o) => !o || o === arm || o.isDetached
@@ -3006,24 +3036,26 @@ export class ArmManager {
    * 'radiators-moving' and wait). The window depends on the biggest bag on a tip (`_tipBagReachM`, `noseRadiatorsOk`).
    * @private
    */
-  _noseConditions(arm, nose) {
+  _noseConditions(arm, nose, opts = {}) {
     const V = Constants.CARRY, N = V.NOSE;
     const ps = this.playerSatellite;
     const n = arm.index + 1;
     const R2D = 180 / Math.PI;
+    const skipRT = opts.ignoreRealTime === true;                          // u23: the trip's unflown hand-over (see `carryConditions`)
     const b = nose.bucket;
     const sharedDeg = (ps._flowerThetaRad ?? 0) * R2D;
     const targetDeg = Number.isFinite(ps._flowerTargetTheta) ? ps._flowerTargetTheta * R2D : sharedDeg;
     const bagR = this._tipBagReachM();
-    if (!noseRadiatorsOk(b, sharedDeg, bagR) || !noseRadiatorsOk(b, targetDeg, bagR)) {
-      if (Math.abs(targetDeg - sharedDeg) > 0.01) {                     // on their way somewhere: waiting helps once they stop
+    const settleDeg = skipRT ? this._flowerSettleDeg() : targetDeg;       // u23: judged where they settle (inside the window: they are only moving, real-time)
+    if (skipRT ? !noseRadiatorsOk(b, settleDeg, bagR) : (!noseRadiatorsOk(b, sharedDeg, bagR) || !noseRadiatorsOk(b, targetDeg, bagR))) {
+      if (!skipRT && Math.abs(targetDeg - sharedDeg) > 0.01) {          // on their way somewhere: waiting helps once they stop
         return { reason: 'radiators-moving', text: `The radiators are still moving (${Math.round(sharedDeg)}°). Daughter ${n} waits.` };
       }
       // u22-nose-tipbags: SETTLED outside every window. Nothing moves them (a bag on a tip holds them at its cap, and they are never moved for a
       // carry: no auto-close), so waiting never clears it: `never`, the trip's end rule does not wait for it, and the words say what the player can do.
-      return { reason: 'radiators-angle', never: true, text: this._noseAngleText(n, sharedDeg, bagR, b) };
+      return { reason: 'radiators-angle', never: true, text: this._noseAngleText(n, skipRT ? settleDeg : sharedDeg, bagR, b) };
     }
-    if (_inboundMotherNetRadiusM(this) !== null) return { reason: 'net-inbound', text: `A net is coming in. Daughter ${n} waits.` };
+    if (!skipRT && _inboundMotherNetRadiusM(this) !== null) return { reason: 'net-inbound', text: `A net is coming in. Daughter ${n} waits.` };
     for (const o of this.arms) {
       if (!o || o === arm || typeof o.getAimAlpha !== 'function') continue;
       // the catch size first: a catch past the measured reach never clears (retry false); a strut out of place does, so it must not hide that
@@ -3032,11 +3064,11 @@ export class ArmManager {
         return { reason: 'neighbour-catch', never: true, text: `Daughter ${o.index + 1}'s catch is too close to Daughter ${n}'s path. Daughter ${n} keeps hers.` };
       }
       const oDeg = o.getAimAlpha() * R2D;
-      if (Math.abs(oDeg - N.HOLD_DEG) > V.NEIGHBOUR_TOL_DEG + 1e-6) {
+      if (!skipRT && Math.abs(oDeg - N.HOLD_DEG) > V.NEIGHBOUR_TOL_DEG + 1e-6) {
         return { reason: 'neighbour-strut', text: `Daughter ${o.index + 1}'s strut is out of place. Daughter ${n} waits.` };
       }
     }
-    if (!arm._carry) {                                                  // the offer: her own strut stands at the hold pose the route starts from (in prep it is on its way to the seat angle)
+    if (!skipRT && !arm._carry) {                                                  // the offer: her own strut stands at the hold pose the route starts from (in prep it is on its way to the seat angle)
       const recDeg = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() * R2D : NaN;
       if (!(Math.abs(recDeg - N.HOLD_DEG) <= V.NEIGHBOUR_TOL_DEG + 1e-6)) return { reason: 'strut-range', text: '' };
     }
@@ -3090,17 +3122,25 @@ export class ArmManager {
    * net (`_rackFromMotherNet`, set where CaptureNet's cargo flight lands): the mission scheduler's rule.
    * `ignoreGaveUp` (u17b): do not refuse on `_carryGaveUp`, the way `moveCatchToRadiator` clears the flag before it asks
    * ("he asked: a give-up from an earlier try does not count"). It lets the read-only `canMoveCatchToRadiator` answer as C would.
+   * `ignoreRealTime` (u23, the trip's unflown hand-over: `deliverUnflown`): skip every refusal that days of time would clear (another carry, the
+   * leash or a petal busy, the nose busy, no free tip, the leash's own reach from the nose and its refusals, the radiators still moving, a net
+   * coming in, a neighbour's strut) and run every physical one (see the table at `deliverUnflown`). A free tip is the caller's own check.
    * @param {ArmUnit} arm
-   * @param {{mission?:boolean, motherNetOnly?:boolean, ignoreGaveUp?:boolean}} [opts]
+   * @param {{mission?:boolean, motherNetOnly?:boolean, ignoreGaveUp?:boolean, ignoreRealTime?:boolean}} [opts]
    * @returns {{ok:boolean, reason:string, text:string, retry:boolean, giveUp:boolean, plan?:object}}
    */
   carryCheck(arm, opts = {}) {
     const S = ARM_STATES;
     const mission = opts.mission === true;
     const motherNetOnly = opts.motherNetOnly === true;
+    const skipRT = opts.ignoreRealTime === true;
     const no = (reason, text = '', retry = true, giveUp = false, sayKey = '') => ({ ok: false, reason, text, retry, giveUp, sayKey });
     if (!arm || arm.isDetached || (arm.state !== S.HOLDING_CATCH && arm.state !== S.DOCKED)) return no('state', '', false);
-    if (arm._carryGaveUp && opts.ignoreGaveUp !== true) return no('gave-up', '', false);   // her last carry failed on its own: not again until something changes
+    if (arm._carryGaveUp && opts.ignoreGaveUp !== true) {
+      // her last carry failed on its own: not again until something changes. u23: a mark `scheduleCarry` left for the leash's reach from the
+      // nose ('nose-leash') is a real-time reason for the unflown hand-over (it uses no leash), so it does not hold her back there
+      if (!(skipRT && arm._carryGaveUpWhy === 'nose-leash')) return no('gave-up', '', false);
+    }
     const rack = Array.isArray(arm.heldCatches) ? arm.heldCatches.filter(Boolean) : [];
     if (rack.length === 0) return no('no-catch', '', false);
     const ps = this.playerSatellite;
@@ -3141,24 +3181,24 @@ export class ArmManager {
     if (!(arm.fuel >= fuelPct)) {
       return no('fuel', `Daughter ${n} has too little fuel to carry her catch. It stays on her rack.`, false);
     }
-    if (this.isCarrying()) return no('carry-busy');
+    if (!skipRT && this.isCarrying()) return no('carry-busy');
     const drv = ps.leashDriver || (this.player && this.player.leashDriver) || null;
     // ANY petal on its own (a hand-off, or one still swinging back from one) or a launch fold blocks it
-    if (ps.flowerPetalsBusy || ps.flowerLaunchLocked || (drv && drv.busy)) {
+    if (!skipRT && (ps.flowerPetalsBusy || ps.flowerLaunchLocked || (drv && drv.busy))) {
       return no('leash-busy', 'The radiators are busy with another catch. She waits.');
     }
-    if (mission) {
+    if (mission && !skipRT) {
       if (this._pendingLaunches && this._pendingLaunches.has(arm.index)) return no('launch-pending');
       const why = drv && typeof drv.refusal === 'function' ? drv.refusal(null) : null;
       if (why) return no(`mission-${why.key}`);
     }
     if (nose) {
-      const r = this._noseHandOverRefusal(arm, nose, mission);
+      const r = this._noseHandOverRefusal(arm, nose, mission, skipRT);
       if (r) return no(r.reason, r.text, r.retry, r.giveUp === true);
-    } else if (tc.debrisAt(tipIndex) || (typeof tc.isReserved === 'function' && tc.isReserved(tipIndex))) {
+    } else if (!skipRT && (tc.debrisAt(tipIndex) || (typeof tc.isReserved === 'function' && tc.isReserved(tipIndex)))) {
       return no('tip-busy', `Radiator ${tipIndex + 1}'s furnace is busy. Daughter ${n} waits.`);
     }
-    const cond = this.carryConditions(arm, nose);
+    const cond = this.carryConditions(arm, nose, skipRT ? { ignoreRealTime: true } : undefined);
     if (cond) {
       const r = no(cond.reason, cond.text, !cond.never);
       if (cond.lift) r.lift = cond.lift;                       // net-duck D4: who can be lifted to let this carry pass (read-only here)
@@ -3169,7 +3209,7 @@ export class ArmManager {
     // allows (closed: the bag passes her own strut close; open: far); a bigger catch waits for the other range - it clears by itself.
     if (!nose) {
       const V = Constants.CARRY;
-      const sharedDeg = (ps._flowerThetaRad ?? 0) * 180 / Math.PI;
+      const sharedDeg = skipRT ? this._flowerSettleDeg() : (ps._flowerThetaRad ?? 0) * 180 / Math.PI;   // (u23: the unflown check reads where they settle)
       const closed = sharedDeg <= V.OTHERS_RANGES_DEG[0][1] + 1e-6;                      // [0, 1] deg = closed, [133, 146] = open (carryConditions)
       const limit = gate.swingBackReachM ? gate.swingBackReachM[closed ? 'closed' : 'open'] : 0;
       if (!(reach <= limit + 1e-9)) {
@@ -3385,8 +3425,10 @@ export class ArmManager {
     if (!c.ok) return c;
     if (!arm.beginCarry(c.plan)) {
       arm._carryGaveUp = true;
+      arm._carryGaveUpWhy = 'refused';
       return { ok: false, reason: 'refused', text: '', retry: false, giveUp: true };
     }
+    arm._carryGaveUpWhy = null;                  // a carry began: any later give-up (ArmUnit marks them) is its own, not the scheduler's
     // net-duck R4: a carry the player asked for (`opts.restart`: the C key) that a mother net stops in its prep is not dropped:
     // `_tickLifts` restarts it after the berth. The trip's and the mission's own schedulers ask again by themselves.
     if (opts.restart === true) arm._carryRestart = { opts: { ...opts }, sawNet: false };
@@ -3412,7 +3454,7 @@ export class ArmManager {
         if (this.requestCarry(arm, { mission, motherNetOnly }).ok) return arm;
         continue;
       }
-      if (r.giveUp) arm._carryGaveUp = true;
+      if (r.giveUp) { arm._carryGaveUp = true; arm._carryGaveUpWhy = r.reason; }   // (u23: why, so the unflown hand-over can tell a real-time mark from a physical one)
       // net-duck D4: a neighbour's big catch is the only thing in the way and she can be lifted: lift her (the carry starts by itself)
       if (r.reason === 'neighbour-catch' && r.lift) { this._commandLifts(arm, r, { mission, motherNetOnly }); continue; }
       // (FA6: a neighbour's catch that can never leave is said too - once - or the catch just stays on her rack in silence)
@@ -3425,6 +3467,76 @@ export class ArmManager {
       }
     }
     return null;
+  }
+
+  /**
+   * u23 (owner 2026-10-24, "Show one, finish rest"; DECISIONS §33 row 17: "many hours or days of realtime to melt debris. and many hours or days to move
+   * between debris fields"): hand ONE rack catch to a radiator tip WITHOUT flying it. The trip shows one pass and delivers every other catch this way, in
+   * the days the flight takes: the same checks as the flown carry (`carryCheck`) minus every refusal that days of time would clear, then the same end state
+   * (`ArmUnit.stowUnflown` -> `_stowOnTip`, the one function a flown stow ends in) and her fuel billed as a flown carry bills it. Nothing is said when a
+   * delivery is made (the melt lines and the trip's one summary line are the words).
+   *
+   * The reason table (`carryCheck(arm, {ignoreRealTime: true})`; flown = what a flown carry does, unflown = what this does):
+   *   state          not at her dock (out, or in a carry)                   -> STAYS   (she is not here)
+   *   gave-up        a carry of hers failed in flight                       -> STAYS   (physical; a mark left for 'nose-leash' alone does not count)
+   *   no-catch       nothing on her rack                                    -> STAYS
+   *   no-tip/layout  no tip store / not the certified dock ring             -> STAYS
+   *   fit            the catch is too big for any tip                       -> STAYS
+   *   gate           no gate row and not a nose candidate                   -> STAYS
+   *   nose-reach     in no certified nose size                              -> STAYS
+   *   fuel           her tank is under the hand-off's cost                  -> STAYS, while it is under. Nothing here holds her tank down: docked, she swaps a
+   *                  fresh indium cartridge in from the mother's store (`ArmUnit._updateIndiumSwap`, no trip check), so with indium in the store she
+   *                  refills seconds later and the next call delivers her catch; it stays for good only when the store is empty (physical: no fuel aboard)
+   *   nose-gas       the mother's steering gas cannot pay the swing         -> STAYS   (a yes/no gate; nothing is billed: it has no amount)
+   *   radiators-angle  they settle outside the certified window             -> STAYS   (radiators are never moved for a carry: DECISIONS line 37, §38 row 4)
+   *   swing-back     the swing back needs the other radiator range          -> STAYS   (a radiator-angle clearance, same reason)
+   *   neighbour-catch a neighbour's catch can never leave (no lift)         -> STAYS   (days do not move it)
+   *   carry-busy, leash-busy, mission-*  another carry, the leash or a petal on its own -> GOES (real time)
+   *   nose-busy      the nose holds another catch                           -> GOES    (no nose is used)
+   *   nose-leash     the leash cannot reach it from the nose                -> GOES    (no leash is used; plan D2)
+   *   radiators-moving  judged at where they settle (`_flowerSettleDeg`)    -> inside the window GOES, outside = radiators-angle
+   *   net-inbound, neighbour-strut, strut-range, neighbour-catch with a lift -> GOES   (clear by waiting)
+   *   tip-busy       her own tip (radial) / every tip (nose route) is full  -> WAITS   (this call's own check: delivered once a melt frees one)
+   * The target tip: radial = her own tip (`arm.index`) as a flown carry; nose route = `pickTip()`. Never a full or reserved tip.
+   * Each physical refusal worth a line is said once per `said` key (the trip's, shared with `scheduleCarry`).
+   * @param {{say?:function(string):void, said?:object}} [o]
+   * @returns {{arm:ArmUnit, tipIndex:number, nose:boolean}|null} the delivery made (one per call), or null
+   */
+  deliverUnflown({ say = null, said = null } = {}) {
+    const ps = this.playerSatellite;
+    const tc = ps && ps.tipCargo;
+    if (!tc) return null;
+    const tipTaken = (a) => (typeof tc.debrisAt === 'function' && tc.debrisAt(a.index) ? 1 : 0);
+    const arms = this.arms.filter((a) => a && !a.isDetached);
+    arms.sort((a, b) => tipTaken(a) - tipTaken(b) || a.index - b.index);
+    for (const arm of arms) {
+      const r = this.carryCheck(arm, { ignoreRealTime: true });
+      if (!r.ok) {
+        const sayIt = say && r.text && (r.reason === 'fit' || r.reason === 'gate' || r.reason === 'fuel' || r.reason === 'swing-back'
+          || r.reason === 'nose-reach' || r.reason === 'nose-gas' || r.reason === 'radiators-angle'
+          || (r.reason === 'neighbour-catch' && !r.retry));
+        if (sayIt) {
+          const key = r.sayKey || `${arm.index}|${r.reason}`;
+          if (said && !said[key]) { said[key] = true; say(r.text); }
+        }
+        continue;
+      }
+      const plan = r.plan;
+      const nose = plan.kind === 'nose';
+      const tip = nose ? tc.pickTip() : plan.tipIndex;
+      if (tip == null || tc.debrisAt(tip) || (typeof tc.isReserved === 'function' && tc.isReserved(tip))) continue;   // every tip busy: waits for a melt
+      const pct = nose ? arm.noseFuelPct() : (typeof arm.carryFuelPct === 'function' ? arm.carryFuelPct() : 0);
+      if (!(arm.fuel >= pct)) continue;                                                // (carryCheck passed it a moment ago)
+      if (!arm.stowUnflown(plan.delivered, tip)) continue;
+      arm.fuel -= pct;                                                                 // her thrusters would start and stop her: billed as a flown carry bills it
+      return { arm, tipIndex: tip, nose };
+    }
+    return null;
+  }
+
+  /** u23: the trip has started its one shown pass: no daughter waits any more for a neighbour's lift or a net's berth to start a flown carry of her own. */
+  cancelCarryWaits() {
+    for (const a of this.arms) if (a && a._carryWaitLift) a._carryWaitLift = null;
   }
 
   /**

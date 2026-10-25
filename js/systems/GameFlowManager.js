@@ -698,6 +698,14 @@ export class GameFlowManager {
       gameState.debrisCleared = save.debrisCleared || 0;
       gameState.score = save.totalScore || 0;
 
+      // u23 B3: with the map OFF nothing else tells the field which mission this is (a load fires no MISSION_START and GAME_RESET left
+      // 1): a saved mission 3 would run the mission-1 shard law, no extras, the mission-1 hide and the 2 km cull. Map ON gets the number
+      // through the registry's restore below. AFTER `debrisCleared` is set (the scorer's mission number reads the cleared count).
+      if (save.gameOver !== true && !(this._refs.fieldRegistry && this._refs.fieldRegistry.isOn())
+          && this._refs.debrisField && typeof this._refs.debrisField.setMissionNumber === 'function') {
+        this._refs.debrisField.setMissionNumber(scoringSystem.getMissionNumber());
+      }
+
       // Nets step 3 slice 2b (FIELDS_BY_HEIGHT): resetGame put her at the start altitude; with the flag on, the field the
       // save was made in puts her back at ITS height with ITS remaining pieces (DebrisField lays them out on its next
       // update: a load fires no MISSION_START). A game-over save restarts at the start field (the CONTINUE rule below).
@@ -1180,6 +1188,18 @@ export class GameFlowManager {
         // u20-nets (owner 2026-10-23, "pay per piece, one catch"): a scoop bag pays EVERY member exactly as if it had been caught
         // alone (one award each, with that member's own salvage flag); `gameState.clearDebris()` below still runs once, so the
         // bag is one of the mission's five catches.
+        // u23 BF3: "a bag of N pieces" counts exactly the members THIS credit pays (not already-paid ones, not big ones that pay
+        // later), the same set as the summed credits; kg is those members' own mass (their `bagMembers` snapshot, else the body's).
+        const bagInfo = (debris && debris.isBag === true && Array.isArray(debris.bagMembers))
+          ? (() => {
+            const paidNow = bodies.filter((b) => b && !deferred.includes(b));
+            const massOf = (b) => {
+              const m = debris.bagMembers.find((x) => x && x.piece === b);
+              return Number(m && m.massKg) || Number(b.mass) || 0;
+            };
+            return { id: debris.id, count: paidNow.length, massKg: paidNow.reduce((a, b) => a + massOf(b), 0) };
+          })()
+          : null;
         for (const body of bodies) {
           // slice 5 (5b): a big body is counted (below) and pays nothing here; it is never paid again on its own either
           if (deferred.includes(body)) { if (body && body !== debris) body._credited = true; continue; }
@@ -1192,6 +1212,8 @@ export class GameFlowManager {
             fuelEfficient: fuelEfficient,
             salvageRecovered: !!(body && body.hasSalvage && body.salvage),
             detachedCapture: returningArm?.isDetached || false,
+            // u23 B1: the payoff line shows a bag as one catch ("a bag of 12 pieces"), summing its members' awards
+            bag: bagInfo,
           });
           if (body && body !== debris) body._credited = true;      // a member: never paid again on its own
         }
@@ -1238,6 +1260,7 @@ export class GameFlowManager {
 
         // --- SALVAGE RECOVERY (Session 10) ---
         // u20-nets: one pass per paid body (a solo catch: itself; a scoop bag: each member, its own salvage; the bag's own is empty)
+        const outerDebris = debris;     // u23 BF2: the loop variable below shadows the held body
         for (const debris of (countCatch ? bodies.filter((b) => !deferred.includes(b)) : [])) {
         const hasSalvage = debris && debris.hasSalvage && debris.salvage;
         if (hasSalvage) {
@@ -1353,6 +1376,8 @@ export class GameFlowManager {
             metals: revealMetals,
             totalMass,
             debrisType: debris ? (debris.type || 'debris') : 'debris',
+            // u23 BF2: the members of one bag share an id, so the HUD's materials line can sum the whole bag
+            ...(outerDebris && outerDebris.isBag === true ? { bagId: outerDebris.id } : null),
           });
         }
         }

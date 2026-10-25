@@ -6939,6 +6939,11 @@ export class ArmUnit {
     return this._carry != null;
   }
 
+  /** u23 (AF1): 'nose' on the nose route (the mother's leash takes the catch on from the nose), 'radial' on any other carry, null when she is not carrying. */
+  get carryKind() {
+    return this._carry ? (this._carry.kind === 'nose' ? 'nose' : 'radial') : null;
+  }
+
   /** kg she moves on a carry: her own mass, every piece on her rack and one net each (reel-home's line-up scaling). */
   carryMassKg() {
     const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
@@ -7225,18 +7230,49 @@ export class ArmUnit {
   _carryStow() {
     const c = this._carry;
     const d = c && c.delivered;
+    if (!d) return false;
+    return this._stowOnTip(d, c.tipIndex, { flown: true, carry: c });
+  }
+
+  /**
+   * u23 (owner 2026-10-24, "Show one, finish rest"): the trip hands the catch to the tip WITHOUT flying her: the same end state a flown radial stow
+   * leaves (`_stowOnTip`, one function), with the bag seated on the boom at once (no line it arrives along) and no carry record. Called by
+   * `ArmManager.deliverUnflown` after its checks; that call also bills her fuel.
+   * @param {object} d the piece on her rack
+   * @param {number} tipIndex a free, unreserved tip (the caller checked: `stow` itself does not look at reservations)
+   * @returns {boolean} the tip took it (false: nothing changed)
+   */
+  stowUnflown(d, tipIndex) {
+    if (this._carry || !d || this.heldCatches.indexOf(d) < 0) return false;
+    return this._stowOnTip(d, tipIndex, { flown: false });
+  }
+
+  /**
+   * The ONE rack-to-tip stow (u23: the flown radial carry and the trip's unflown hand-over both end here, no copy). The piece leaves her rack and the tip
+   * takes it; a stow that refuses puts back everything it touched. `flown`: the bag arrives along the line latch → the catch's centre now (the carry has just
+   * flown it there), the carry's own words on a refusal, and no `unflown` mark on the event; unflown: no line (the bag sits on the boom), no words.
+   * @param {object} d
+   * @param {number} tipIndex
+   * @param {{flown:boolean, carry?:object}} o `carry`: the flown carry's record, marked `handedOff` the moment the tip has the piece
+   * @returns {boolean}
+   * @private
+   */
+  _stowOnTip(d, tipIndex, { flown, carry = null }) {
     const ps = this._playerSatellite;
     const tc = ps && ps.tipCargo;
     const idx = d ? this.heldCatches.indexOf(d) : -1;
     if (!tc || idx < 0) return false;
     const reach = DebrisField.trueReachM(d, 0);
-    if (!tc.fits(reach) || tc.debrisAt(c.tipIndex) || !tc.latchWorldInto(c.tipIndex, _carryV)) {
-      this._carrySay(`Daughter ${this.index + 1} could not seat her catch on radiator ${c.tipIndex + 1}; she brings it home.`, 'warning');
+    const free = !tc.debrisAt(tipIndex) && (flown || typeof tc.isReserved !== 'function' || !tc.isReserved(tipIndex));
+    if (!tc.fits(reach) || !free || !tc.latchWorldInto(tipIndex, _carryV)) {
+      if (flown) this._carrySay(`Daughter ${this.index + 1} could not seat her catch on radiator ${tipIndex + 1}; she brings it home.`, 'warning');
       return false;
     }
     // the line the bag arrives along: latch → the catch's centre now (world; the radiator frame turns with the ship)
-    const pin = d._armPinPos || this.position;
-    _carryDir.copy(pin).sub(_carryV);
+    if (flown) {
+      const pin = d._armPinPos || this.position;
+      _carryDir.copy(pin).sub(_carryV);
+    }
     // rack release, as ArmManager.unloadHeldCatches does it (the piece is paid later, by the tip)
     // hold-catch FA8: the piece's cell and its mother-net mark (`clearRackCell`) go only once the tip has taken it; a stow that
     // refuses puts back everything it touched, so the piece is on her rack again as it was (cell, mark, owner) and still gets
@@ -7247,7 +7283,7 @@ export class ArmUnit {
     d._capturedByArm = null;
     d._breakdownActive = false;
     if (this.capturedDebris === d) this.capturedDebris = null;
-    const ok = tc.stow(c.tipIndex, d, { massKg: d.mass || 0, radiusM: reach, fromDirWorld: _carryDir });
+    const ok = tc.stow(tipIndex, d, flown ? { massKg: d.mass || 0, radiusM: reach, fromDirWorld: _carryDir } : { massKg: d.mass || 0, radiusM: reach });
     if (!ok) {
       // cannot happen after the checks above; put the piece back on its rack rather than lose it
       this.heldCatches.splice(idx, 0, d);
@@ -7258,12 +7294,13 @@ export class ArmUnit {
       return false;
     }
     clearRackCell(d);
-    tc.swingToBoom(c.tipIndex);
-    c.handedOff = true;
+    tc.swingToBoom(tipIndex);
+    if (carry) carry.handedOff = true;
     if (ps._attitudeInertia !== undefined) ps._attitudeInertia = null;
     eventBus.emit(Events.CARGO_TRANSFER_COMPLETE, {
       debrisId: d.id, massKg: d.mass || 0, podIndex: -1, armIndex: -1, armId: null,
-      fromArmIndex: this.index, to: { kind: 'tip', tipIndex: c.tipIndex },
+      fromArmIndex: this.index, to: { kind: 'tip', tipIndex },
+      ...(flown ? {} : { unflown: true }),
     });
     return true;
   }
