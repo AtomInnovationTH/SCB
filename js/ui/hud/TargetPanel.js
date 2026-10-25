@@ -19,6 +19,7 @@ import { assessNetFit, presentedWidthForApproach, getNetClassForType, renderedSp
 import { classifyNetTarget } from '../../systems/netRouting.js';
 import { computeToolOdds, computeBestTool, toolShortLabel, makeNetOddsLockCache } from '../../systems/ToolOdds.js';
 import { dossierSystem, appraiseSalvage } from '../../systems/DossierSystem.js';
+import { bigPayLine } from '../../systems/FateRows.js';
 import { PaneChrome } from './PaneChrome.js';
 import { GestureHints } from './GestureHints.js';
 import { classify, oddsColor, reachKmFrom, THIN_ALPHA } from './TargetColorLaw.js';
@@ -228,6 +229,9 @@ export class TargetPanel {
 
     /** Currently-selected target ID (public for coordinator read-access) */
     this.selectedTargetId = null;
+
+    /** slice 5 (5c): id -> the field's debris body (main.js sets it); a big piece adds its "pays when disposed of" line to the selected row */
+    this._pieceLookup = null;
 
     /** @type {Object<string, HTMLElement>} DOM panels for show/hide */
     this.panels = {};
@@ -828,6 +832,17 @@ export class TargetPanel {
   // PUBLIC
   // ==========================================================================
 
+  /** slice 5 (5c): how the panel finds the field body of a listed target (the owner and the value ride on it, not on the list row). */
+  setPieceLookup(fn) { this._pieceLookup = typeof fn === 'function' ? fn : null; }
+
+  /** @private the selected row's big-piece line ("Pays when disposed of: up to 61,040 · Russia owns it"), or ''. */
+  _bigPayRow(t) {
+    if (!this._pieceLookup || !t) return '';
+    let line = null;
+    try { line = bigPayLine(this._pieceLookup(t.id)); } catch (_e) { line = null; }
+    return line ? `\n        <div class="big-pay" style="color:var(--hud-caution, ${VisualLaw.COLORS.CAUTION});font-size:11px">${line}</div>` : '';
+  }
+
   /**
    * Set the selected target ID (called from coordinator or external source).
    * @param {number} id
@@ -1257,7 +1272,7 @@ export class TargetPanel {
             <span style="color:${netDvColor}">Net ${netDvStr}${frozenTag}</span>
             <span>${t.estimatedPoints}pt</span>
             ${fitBadge}${valueBadge ? `\n            ${valueBadge}` : ''}
-        </div>${moidStat}
+        </div>${moidStat}${this._bigPayRow(t)}
         ${this._glassNow()
           ? '<div class="hint-line">Hold: DAUGHTER or AUTOPILOT · tap again: analyse</div>'   // u15b B-T7: the radial + the tap-again analyse (48 ch: fits the glass column on one line)
           : '<div class="hint-line">[D] Deploy · [A] Auto · [Z] Analyze</div>'}

@@ -45,6 +45,9 @@ export class TargetSelector {
    * @param {object} [context={}] - Optional extra data forwarded into TARGET_SELECTED event
    */
   setTarget(debris, context = {}) {
+    // Slice 5 (5d, D4): a piece that was disposed of (let go by a push-down or a drag sail, or broke loose) is never a target: it stays
+    // in the sky as a collision object, so Tab, a tap, the autopilot, auto-lock and the N key's aim all end here. Nothing changes.
+    if (debris && debris._disposed === true) return;
     // UX-3 #1: Clear previous target's frozen ΔV when switching targets
     if (this.activeTarget && this.activeTarget !== debris) {
       delete this.activeTarget.selectedDeltaV;
@@ -229,7 +232,7 @@ export class TargetSelector {
    */
   update(dt) {
     // Safety-net: clear target if it's been removed (event-driven path is _onDebrisRemoved)
-    if (this.activeTarget && !this.activeTarget.alive) {
+    if (this.activeTarget && (!this.activeTarget.alive || this.activeTarget._disposed === true)) {     // (slice 5: or let go while it was the target)
       this.clearTarget();
     }
   }

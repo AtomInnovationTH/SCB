@@ -4821,10 +4821,13 @@ export class PlayerSatellite extends THREE.Group {
    * petal is held (`flowerHandoffHeld`) OR a daughter's carry is under way, from its first step to her strut landing back on
    * its recorded angle. The petal is released a stage before that, and the shared angle must not move while her strut still
    * stands at the carry angle (124-130°): the gate certified the way back only with the other petals standing still.
+   * Lane 5f fix round 4 (M6): also while the resupply satellite is taking a piece (`_resupplyTaking`, written by ResupplySatellite from `takePiece` to the
+   * last haul): its plan was made with the radiators at 90°, and a swing under the haul would put them where the plan did not look.
    * @returns {boolean}
    */
   get flowerCommandsLocked() {
     if (this.flowerHandoffHeld) return true;
+    if (this._resupplyTaking === true) return true;
     const am = this.armManager;
     return !!(am && typeof am.isCarrying === 'function' && am.isCarrying());
   }

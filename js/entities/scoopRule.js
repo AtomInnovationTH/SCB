@@ -78,6 +78,7 @@ export function pieceCentreM(d, out = { x: 0, y: 0, z: 0 }) {
  */
 export function isScoopable(d, armId = null) {
   if (!d || d.alive === false) return false;
+  if (d._disposed === true) return false;                                        // slice 5 (5d): a piece that was disposed of is no catch, so no bag member
   if (d.isBag === true || d._inBag === true) return false;                       // no bag inside a bag; no piece in two
   if (d._captured || d._armPinned || d._capturedByArm || d._motherParked || d._netted) return false;
   if (d._onboardingPinned || d._fieldStored) return false;

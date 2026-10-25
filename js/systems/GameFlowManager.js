@@ -21,8 +21,14 @@ import { targetSelector } from './TargetSelector.js';
 import { kesslerSystem } from './KesslerSystem.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
 import { bigPieces, isBigPiece, pieceName, pieceNameCap, FATES } from './BigPieces.js';
-import { fatePay, payLine } from './BigPieceValues.js';
+import { fatePay, payLine, pieceValues } from './BigPieceValues.js';
+import {
+  DAY_S, HOLD_FULL_LINE, packedSizeM, partKgFor, pieceType, planBurn, valuesAtCatch, meltAccount, metalListedCrPerKg, tripLine, tooShortLine, noFurnaceLine,
+} from './BigMelt.js';
+import { lifetimeYears, dragAreaM2, sailLifeYears } from './OrbitLifetime.js';
+import { FREE_ID } from './FieldRegistry.js';
 import { DebrisField } from '../entities/DebrisField.js';
+import { activeResupplySatellite } from '../entities/ResupplySatellite.js';
 import { trawlManager } from './TrawlManager.js';
 import { openingDance } from './OpeningDance.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
@@ -30,7 +36,7 @@ import { computeStartOrbit } from './startOrbitMath.js';
 import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
 import { TransferTrip } from './TransferTrip.js';
-import { buildWhereNextRows, STAY_ID, CALL_ID, OPEN_LINE, BERTH_LINE, BERTH_MISSION_LINE, STUCK_CALL_LINE } from './WhereNextRows.js';
+import { buildWhereNextRows, STAY_ID, CALL_ID, PUSH_KIND, PUSH_PREFIX, OPEN_LINE, BERTH_LINE, BERTH_MISSION_LINE, STUCK_CALL_LINE } from './WhereNextRows.js';
 import { salvageGasKg, coldGasKgToPool, coldGasPoolToKg } from './ResourceSystem.js';
 import { UPGRADES } from '../ui/ShopScreen.js';
 import { upgradePrereqsMet, upgradeCostNow } from '../ui/shopGating.js';
@@ -62,6 +68,12 @@ export const SHOP_CADENCE = Constants.MISSIONS.DEBRIS_PER_MISSION;
  */
 function stopWords(self) {
   return self && typeof self._satelliteIsTheStop === 'function' && self._satelliteIsTheStop() ? 'the resupply satellite' : 'depot resupply';
+}
+
+/** @private Slice 5 (5d): "23 years" / "1 year" for a life in years (rounded, never under a year). */
+function yearsWords(y) {
+  const n = Math.max(1, Math.round(y));
+  return `${n} ${n === 1 ? 'year' : 'years'}`;
 }
 
 export class GameFlowManager {
@@ -718,6 +730,11 @@ export class GameFlowManager {
       // Nets step 3 slice 5 (lane 5b, P5): the big pieces she was still holding come back on their holders (nothing pays at load). AFTER the
       // arms' reset and the registry's restore; a game-over save carries none.
       if (save.gameOver !== true && Array.isArray(save.bigPieces)) this._restoreBigPieces(save.bigPieces);
+      // lane 5e (E7): the hold comes back (entries only: the capacity is the upgrades' replay above). An old save has none and the hold stays as it is.
+      if (save.gameOver !== true && save.cargoHold && Array.isArray(save.cargoHold.entries)
+        && this._refs.cargoSystem && typeof this._refs.cargoSystem.restore === 'function') {
+        this._refs.cargoSystem.restore({ entries: save.cargoHold.entries });
+      }
 
       // Notify self-managing systems that a saved game was loaded
       // (TutorialSystem listens to skip tutorial for veterans)
@@ -868,6 +885,8 @@ export class GameFlowManager {
       // slice 5 (5b): a fresh attempt: nothing is pending (cleared BEFORE the arms reset, so a rack that drops its piece says nothing)
       bigPieces.clear();
       this._unplacedBig = [];
+      this._meltFinals = [];                // lane 5e: no melted piece waits to be let go, no save is owed
+      this._meltSaveOwed = false;
 
       // Reset game counters but keep gameState.currentState at GAME_OVER for valid → SHOP transition
       gameState.score = 0;
@@ -1232,7 +1251,7 @@ export class GameFlowManager {
         if (bigHeld && bigPieces.register(debris)) {
           eventBus.emit(Events.COMMS_MESSAGE, {
             source: 'HOUSTON', channel: 'CMD', priority: 'good', _keep: true,
-            text: `${pieceNameCap(debris)} aboard. It pays when you dispose of it.`,
+            text: `${pieceNameCap(debris)} aboard. It pays when you dispose of it: press U to choose.`,
           });
         }
         } // end countCatch (count and credit legs)
@@ -1435,7 +1454,7 @@ export class GameFlowManager {
             const rangeM = Constants.AUTOLOCK.RANGE_M;
             let nextTarget = null;
             for (const d of nearby) {
-              if (!d || !d.discovered || !d.alive || d._captured || d.hazard === true) continue;
+              if (!d || !d.discovered || !d.alive || d._captured || d._disposed || d.hazard === true) continue;     // (slice 5, 5d: never a piece that was disposed of)
               if (!(d.distanceKm * 1000 <= rangeM)) continue;
               if (!nextTarget || d.distanceKm < nextTarget.distanceKm) nextTarget = d;
             }
@@ -2042,6 +2061,8 @@ export class GameFlowManager {
     // that drops its piece says nothing, and the restored-piece retry list is forgotten)
     bigPieces.clear();
     this._unplacedBig = [];
+    this._meltFinals = [];                  // lane 5e: no melted piece waits to be let go, no save is owed
+    this._meltSaveOwed = false;
 
     // Notify self-resetting systems (CommsSystem, KesslerSystem,
     // TutorialSystem, TrawlManager listen for this)
@@ -2315,6 +2336,11 @@ export class GameFlowManager {
     if (gameState.currentState !== GameStates.GAME_OVER) {
       const pending = bigPieces.serialize();
       if (pending.length) saveData.bigPieces = pending;
+      // lane 5e (E7): the hold (orbit metal the furnaces made, and the small catches' metal, which a reload used to lose). Written only when
+      // it holds something, so a save with an empty hold is what it was.
+      const cs = this._refs.cargoSystem;
+      const hold = cs && typeof cs.serialize === 'function' ? cs.serialize() : null;
+      if (hold && hold.entries.length) saveData.cargoHold = { entries: hold.entries };
     }
 
     // Let self-managing systems contribute their state (e.g. SubsystemEvents)
@@ -2459,6 +2485,7 @@ export class GameFlowManager {
     const reg = this._refs && this._refs.fieldRegistry;
     const toSat = !!(reg && typeof reg.satelliteById === 'function' && reg.satelliteById(field.id));
     const fromBerth = !!(reg && typeof reg.isBerthed === 'function' && reg.isBerthed());
+    const fromFree = !!(reg && typeof reg.isFree === 'function' && reg.isFree());       // slice 5 (5d): the free place of a push-down is no field to start a mission at
     return !!this._trip.begin(() => {
       const leg = this._trip.lastLeg;
       this._trip.lastLeg = null;
@@ -2467,7 +2494,7 @@ export class GameFlowManager {
       // (no mission starts: the same start waits for the field she picks from there); one that could not go (`_stay`: no gas once planned
       // with her real mass, her nose could not be pointed) is a refused pick, from the berth too: she is where she was and the list is back.
       if (toSat && leg) { this._arriveAtSatellite(field, start); return; }
-      if (!leg && (toSat || fromBerth)) { this._tripCouldNotGo(start, fromBerth); return; }
+      if (!leg && (toSat || fromBerth || fromFree)) { this._tripCouldNotGo(start, fromBerth); return; }
       start();
       this._runDeferredBoundary();
       if (leg) this.saveGame();
@@ -2494,6 +2521,7 @@ export class GameFlowManager {
    */
   _enterBerth(sat, again) {
     this._handOverCollarCatches();
+    this._handOverMarkedPieces();                                        // slice 5 (5f): every big piece on a rack marked for the satellite
     this._setResupplyStop(true);                                         // buying and selling open (the same flag today's stop uses)
     if (!again) {
       // the first-depot floor moves here (the boundary no longer opens the invitation that paid it): once per profile, the framing owed
@@ -2513,21 +2541,176 @@ export class GameFlowManager {
     const cns = captureNetSystem;
     const df = this._refs && this._refs.debrisField;
     if (!cns || typeof cns.handOverCollarCatch !== 'function') return;
+    // slice 5 (5f, H1; fix round 3): a pending big piece at the collar is one no daughter could take; the satellite berths at the collar, so it takes
+    // that piece too, of any fate, and PAYS it as the satellite fate. It is planned first (the same haul rule as a rack piece) and goes, paid, only
+    // when a line out passes; until then it stays on the collar and the satellite waits (`setDockGate`): nothing is paid for a piece it cannot take.
+    const atCollar = bigPieces.pendingAboard().filter((e) => e.holder === 'collar').map((e) => e.debris);
+    if (atCollar.length && this._askSatellite(atCollar, { atCollar: true })) return;
     for (let i = 0; i < 8; i++) {                                        // (one collar: the loop is only a bound)
       const id = cns.handOverCollarCatch();
       if (id == null) break;
-      // slice 5 (5b, P7): a pending big piece at the collar is one no daughter could take; the satellite berths at the collar, so it takes
-      // that piece too and PAYS it as the satellite fate (the body is looked up before it is removed). Never handed over for nothing.
+      // no satellite entity to draw it (a headless run): the old hand-over, the body leaves at once. Partly melted (5e): paid on what is left, no collector.
       const body = df && typeof df.getDebrisById === 'function' ? df.getDebrisById(id) : null;
       if (body && bigPieces.isPending(body)) {
-        const pay = fatePay(body, 'satellite');
-        this.disposeBigPiece(id, {
-          fate: 'satellite', totalCr: pay.totalCr,
-          line: `The satellite took the ${pieceName(body)} from your nose: ${payLine(body, pay)}`,
-        });
+        const pay = this._satellitePay(body);
+        const lead = this._meltShare(body) < 1 ? `The satellite took what was left of the ${pieceName(body)} from your nose: `
+          : `No daughter could take the ${pieceName(body)}, so the satellite takes it: `;
+        this._takeBySatellite(body);
+        this.disposeBigPiece(id, { fate: 'satellite', totalCr: pay.totalCr, line: `${lead}${payLine(body, pay)}` });
+        continue;
       }
       if (df && typeof df.removeDebris === 'function') df.removeDebris(id);
     }
+  }
+
+  // ======================================================================================================
+  // Nets step 3 slice 5 (lane 5f): hand a big piece to the resupply satellite (DECISIONS §33 row 16 "hand it to a satellite").
+  // ======================================================================================================
+
+  /** @private The share of a piece still to pay: 1 whole, less when 5e's furnaces have melted part of it (`_disposal.meltDoneKg` of `massAtCatch`). */
+  _meltShare(d) {
+    const x = d && d._disposal;
+    const done = x && Number.isFinite(x.meltDoneKg) ? x.meltDoneKg : 0;
+    if (!(done > 0)) return 1;
+    const total = Number.isFinite(x.massAtCatch) && x.massAtCatch > 0 ? x.massAtCatch : d.mass;
+    return total > 0 ? Math.min(1, Math.max(0, 1 - done / total)) : 1;
+  }
+
+  /**
+   * @private What the satellite pays for a piece (C3 + C7 "Melt progress"): whole, `fatePay(d, 'satellite')`; partly melted, (removal fee +
+   * parts after the owner's share) x the share still left, collector 0 (not whole). Valued on the mass it had when caught.
+   */
+  _satellitePay(d) {
+    const r = this._meltShare(d);
+    if (r >= 1) return fatePay(d, 'satellite');
+    const x = d._disposal || {};
+    const view = (d.isBag === true || !(x.massAtCatch > 0)) ? d : { type: d.type, owner: d.owner, mass: x.massAtCatch };
+    const lines = [];
+    for (const l of fatePay(view, 'satellite').lines) {
+      if (l.key === 'collector') continue;
+      const cr = Math.round(l.cr * r);
+      if (cr > 0) lines.push({ ...l, cr, ...(l.shareCr > 0 ? { shareCr: Math.round(l.shareCr * r) } : {}) });
+    }
+    return { fate: 'satellite', totalCr: lines.reduce((t, l) => t + l.cr, 0), lines };
+  }
+
+  /**
+   * @private H3: the satellite's arm takes the piece (it is pinned to the grip until the stow, then removed); with no satellite entity to
+   * draw it (a headless run) it is removed at once. Callers ask `canTake` BEFORE freeing or paying a piece (`_handOverPiece`), so a take the
+   * satellite refuses never gets here with a satellite present.
+   */
+  _takeBySatellite(d) {
+    const df = this._refs && this._refs.debrisField;
+    const remove = () => { if (df && typeof df.removeDebris === 'function') df.removeDebris(d.id); };
+    d._disposed = true;                                                  // never lockable or catchable again (5d reads the same flag)
+    const sat = activeResupplySatellite();
+    if (sat && typeof sat.takePiece === 'function') {
+      // a satellite that refuses (it cleared this piece with `canTake` a moment ago, so it does not) takes nothing: the piece is NOT removed undrawn
+      if (sat.takePiece(d, { debrisField: df, onDone: remove })) return true;
+      d._disposed = false;
+      return false;
+    }
+    remove();
+    return true;
+  }
+
+  /**
+   * @private G6 / fix round 3 (K1, K3): ask the satellite to take these pieces (still on their holders). It plans each in the order it will take
+   * them, against her hull, her daughters and the other pieces (`ResupplySatellite.requestTakes`: the rack pieces after the radiators have
+   * folded to 90 deg, the planning spread over the next frames), and calls back with the ones it can take: each of those is detached, taken and
+   * paid in that frame; a piece it cannot reach gets a comms line and stays aboard, unpaid, its fate still `satellite`: nothing vanishes. The
+   * satellite waits at hover until its plans are done. A piece on the collar it cannot take keeps the collar occupied: it waits for it to clear.
+   * @param {object[]} pieces the ledger's bodies
+   * @param {{atCollar?: boolean}} [o] `atCollar`: the berth's own hand-over of the nose piece (its own pay line)
+   * @returns {boolean} false = there is no satellite entity to ask (the caller hands them over as before)
+   */
+  _askSatellite(pieces, { atCollar = false } = {}) {
+    const sat = activeResupplySatellite();
+    if (!sat || typeof sat.requestTakes !== 'function') return false;
+    const list = pieces.filter((d) => d && bigPieces.isPending(d) && !sat.hasPiece(d));
+    const collar = list.filter((d) => bigPieces.holderOf(d.id) === 'collar');
+    const racks = list.filter((d) => !collar.includes(d));
+    const settle = (group, ok, collarGroup) => {
+      for (const d of group) {
+        if (!bigPieces.isPending(d)) continue;                           // (disposed some other way while it was planned)
+        if (!collarGroup && !(d._disposal && d._disposal.fate === 'satellite')) continue;   // (the fate was changed while it was planned)
+        if (ok.has(d) && this._handOverPiece(d, { collarLead: collarGroup && atCollar })) continue;
+        // no line out (or it could not be taken after all: the plan went stale, it could not be freed): it stays aboard, unpaid, its fate unchanged
+        eventBus.emit(Events.COMMS_MESSAGE, { text: `The satellite could not reach the ${pieceName(d)}. It stays aboard.`, priority: 'info', _keep: true });
+      }
+      // a piece still on the collar (no line out, or not freed): the satellite waits for the collar to clear before it docks; after the cap
+      // (`TAKE_WAIT_MAX_S`) it says so and goes away WITHOUT docking (fix round 4, M1): no hover for good, no visits for swaps while it is on her nose
+      if (collarGroup && group.some((d) => bigPieces.isPending(d) && bigPieces.holderOf(d.id) === 'collar')) {
+        sat.setDockGate(() => bigPieces.pendingAboard().some((e) => e.holder === 'collar'), {
+          onGiveUp: () => {
+            for (const e of bigPieces.pendingAboard()) {
+              if (e.holder === 'collar') eventBus.emit(Events.COMMS_MESSAGE, { text: `The ${pieceName(e.debris)} is on her nose ring, so the satellite cannot berth. Pick another fate for it.`, priority: 'info', _keep: true });
+            }
+          },
+        });
+      }
+    };
+    if (collar.length) sat.requestTakes(collar, { collar: true, onReady: (ok) => settle(collar, ok, true) });
+    if (racks.length) sat.requestTakes(racks, { fold: true, onReady: (ok) => settle(racks, ok, false) });
+    return true;
+  }
+
+  /**
+   * @private H1/H2: hand one held big piece (a rack, or the collar while berthed) to the satellite and pay it: the take, the detach, the pay. With a
+   * satellite entity the piece must be one it planned a take for (`canTake`): it is asked about BEFORE anything is freed or paid, and (fix round 4, M7)
+   * the take is ACCEPTED before the piece is detached: a satellite that refuses leaves the piece on its holder, untouched; a holder that cannot let
+   * go (in transit, being cut) has the take taken back (`cancelTake`). The piece is never loose and unpaid.
+   * @param {object} d the ledger's body
+   * @param {{collarLead?: boolean}} [o] `collarLead`: the berth's own line for the nose piece
+   * @returns {boolean} false when it could not be detached (in transit, being cut, held by nothing) or the arm cannot take it (it stays aboard)
+   */
+  _handOverPiece(d, { collarLead = false } = {}) {
+    if (!d || !bigPieces.isPending(d)) return false;
+    const sat = activeResupplySatellite();
+    if (sat && typeof sat.canTake === 'function' && !sat.canTake(d)) return false;
+    const pay = this._satellitePay(d);
+    let body;
+    if (sat && typeof sat.takePiece === 'function') {
+      if (!this._takeBySatellite(d)) return false;                       // (refused after all: nothing was freed or paid; it is still on its holder)
+      body = this.detachHeldPiece(d.id);
+      if (!body) {                                                        // (the holder cannot let go: the take is taken back, the piece stays as it was)
+        if (typeof sat.cancelTake === 'function') sat.cancelTake(d);
+        d._disposed = false;
+        return false;
+      }
+      if (typeof sat.repinTakes === 'function') sat.repinTakes();
+    } else {
+      body = this.detachHeldPiece(d.id);
+      if (!body) return false;
+      this._takeBySatellite(body);                                       // (no satellite entity to draw it: removed at once)
+    }
+    const whole = this._meltShare(body) >= 1;
+    const lead = collarLead
+      ? (whole ? `No daughter could take the ${pieceName(body)}, so the satellite takes it: ` : `The satellite took what was left of the ${pieceName(body)} from your nose: `)
+      : (whole ? `Handed the ${pieceName(body)} to the satellite: ` : `Handed what was left of the ${pieceName(body)} to the satellite: `);
+    return this.disposeBigPiece(body.id, { fate: 'satellite', totalCr: pay.totalCr, line: `${lead}${payLine(body, pay)}` });
+  }
+
+  /** @private H1: at a berth, every held big piece marked for the satellite on a rack goes over; unmarked ones stay with her, pay pending. */
+  _handOverMarkedPieces() {
+    const marked = bigPieces.pendingAboard().filter((e) => e.fate === 'satellite' && e.holder && e.holder !== 'collar').map((e) => e.debris);
+    if (!marked.length) return;
+    if (this._askSatellite(marked)) return;
+    for (const d of marked) this._handOverPiece(d);                      // no satellite entity: they go as before
+  }
+
+  /**
+   * C7 / H2: the fate list picked "hand it to a satellite" (the pick is recorded by `setFate`). Berthed: the piece is planned and goes over
+   * (a rack piece after the radiators have folded); not berthed: nothing here, the berth does it (`_handOverMarkedPieces`). Acts only on a
+   * piece whose pending fate is `satellite`.
+   * @param {{debrisId: (number|string), fate: string}} e
+   */
+  _fateSatellite(e) {
+    const d = e && bigPieces.get(e.debrisId);
+    if (!d || !d._disposal || d._disposal.fate !== 'satellite') return;
+    const reg = this._refs && this._refs.fieldRegistry;
+    if (!(reg && typeof reg.isBerthed === 'function' && reg.isBerthed())) return;
+    if (!this._askSatellite([d])) this._handOverPiece(d);
   }
 
   // ======================================================================================================
@@ -2556,7 +2739,16 @@ export class GameFlowManager {
    * @param {number|string} id the piece's debris id @param {string} fate @returns {boolean} false for an unknown piece or fate
    */
   setFate(id, fate) {
-    if (!FATES.includes(fate) || !bigPieces.setFate(id, fate)) return false;
+    if (!FATES.includes(fate)) return false;
+    // lane 5e (E5): a piece the furnaces have melted a part of stays there until it is melted: no new fate once meltDoneKg > 0
+    const inFurnaces = bigPieces.get(id);
+    if (inFurnaces && this._inFurnaces(inFurnaces)) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'HOUSTON', channel: 'CMD', text: `The ${pieceName(inFurnaces)} is in the furnaces: it stays there until it is melted.`, priority: 'info', _keep: true,
+      });
+      return false;
+    }
+    if (!bigPieces.setFate(id, fate)) return false;
     this.saveGame();
     return true;
   }
@@ -2673,6 +2865,340 @@ export class GameFlowManager {
     this._unplacedBig = still;
   }
 
+  // ==========================================================================
+  // MELT IT FOR METAL (Nets step 3 slice 5, lane 5e; DECISIONS §33 row 16-17; BigMelt.js for the pure rules, plan E1-E8)
+  //
+  // A big piece marked "melt" is cut into parts and the four radiator-tip furnaces melt them during trip burns, on the ship's clock: the
+  // schedule is planned when the burn begins (BigMelt.planBurn) and played over the burn's real seconds (TransferTrip.setBurnWork: begin, tick
+  // with the fraction played, end). At each cut the piece is drawn shorter; the part's bag shrinks on its tip while it melts; when the part is
+  // melted the piece's mass falls by it, the metal goes to the hold and its share of the removal fee (less the owner's share of the metal) is paid.
+  // The last part removes the piece and says the trip's line. Nothing is paid or stored until a part is melted; every started part finishes.
+  // ==========================================================================
+
+  /**
+   * @private Has a part of this piece been melted (E5)? It then keeps the fate `melt` until it is gone. A piece that is only scheduled in the
+   * burn, or has a part cut and not yet melted, may still change its fate: the work drops it (`_meltAdvance`) and draws it whole again.
+   */
+  _inFurnaces(d) {
+    return !!(d && d._disposal && (d._disposal.meltDoneKg || 0) > 0);
+  }
+
+  /** @private One line from Houston, kept in the log. */
+  _meltSay(text, priority = 'good') {
+    eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text, priority, _keep: true });
+  }
+
+  /**
+   * BIG_PIECE_FATE `melt` (the fate list's pick, 5c): says where the piece goes. The work is done by the trip: nothing moves, melts or pays now.
+   * @private @param {{debrisId: (number|string), fate: string}} e
+   */
+  _fateMelt(e) {
+    const d = e ? bigPieces.get(e.debrisId) : null;
+    if (!d || !d._disposal || d._disposal.fate !== 'melt') return;
+    this._meltSay(`The ${pieceName(d)} goes into the furnaces on your next trip.`, 'info');
+  }
+
+  /** @private The face the trip plays the furnaces' work through (one object, stable: `TransferTrip.setBurnWork`). */
+  _burnWorkFace() {
+    if (!this._burnWork) {
+      this._burnWork = {
+        begin: (info) => this._meltBegin(info),
+        tick: (info) => this._meltTick(info),
+        end: (info) => this._meltEnd(info),
+      };
+    }
+    return this._burnWork;
+  }
+
+  /** @private The tips whose furnace is free now: the tip exists, holds no catch and is not reserved for a carry. */
+  _freeTips() {
+    const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
+    if (!tc || typeof tc.has !== 'function') return [];
+    const tips = [];
+    for (let i = 0; i < 4; i++) {
+      if (tc.has(i) || (typeof tc.isReserved === 'function' && tc.isReserved(i))) continue;
+      if (typeof tc.latchWorldInto === 'function' && tc.latchWorldInto(i, new THREE.Vector3()) === null) continue;   // no such tip on this ship
+      tips.push(i);
+    }
+    return tips;
+  }
+
+  /** @private Room in the hold for orbit metal, kg (E6): free kilograms, 0 when the 20 stacks are full and orbit metal has none. */
+  _holdRoomKg() {
+    const cs = this._refs && this._refs.cargoSystem;
+    if (!cs || typeof cs.serialize !== 'function') return Infinity;
+    const s = cs.serialize();
+    const id = Constants.BIG_MELT.METAL_ID;
+    if (!s.entries.some((e) => e.metalId === id) && s.entries.length >= (Constants.CARGO_CAPACITY_SLOTS || 20)) return 0;
+    return Math.max(0, s.capacityKg - s.totalMassKg);
+  }
+
+  /** @private Put melted metal in the hold, listed so that a sale of 50 kg or more nets the in-orbit price per kg. */
+  _storeOrbitMetal(kg) {
+    if (!(kg > 0)) return;
+    const m = Constants.BIG_MELT;
+    eventBus.emit(Events.CARGO_STORE, {
+      metalId: m.METAL_ID, name: m.METAL_NAME, massKg: kg, color: m.METAL_COLOR, ispAsThrust: 0, marketValue: metalListedCrPerKg(),
+    });
+  }
+
+  /**
+   * @private A piece's mass falls to `mass` (a part was melted): the field's body, the collar net's ledger and every rack entry that holds it,
+   * and her inertia (her live mass reads these, so range and handling follow the melt).
+   * @param {object} d @param {number} mass kg
+   */
+  _setHeldPieceMass(d, mass) {
+    d.mass = mass;
+    for (const n of (captureNetSystem && captureNetSystem.activeNets) || []) {
+      const t = n && n.targetDebris;
+      if (!t || t.id !== d.id) continue;
+      if (t !== d) t.mass = mass;
+      n.capturedMass = mass;
+    }
+    const r = this._refs || {};
+    for (const a of (r.armManager && r.armManager.arms) || []) {
+      if (!a) continue;
+      if (Array.isArray(a.heldCatches)) for (const h of a.heldCatches) if (h && h.id === d.id && h !== d) h.mass = mass;
+      if (a.capturedDebris && a.capturedDebris.id === d.id && a.capturedDebris !== d) a.capturedDebris.mass = mass;
+    }
+    const p = r.player;
+    if (p && '_attitudeInertia' in p) p._attitudeInertia = null;
+  }
+
+  /** @private Draw a piece at the share of its mass the cuts have left (`_meltK`, read by DebrisField's three matrix writers). */
+  _meltReshape(d, inFlightKg = 0) {
+    const L = d && d._disposal;
+    if (!L || !(L.massAtCatch > 0)) return;
+    const k = (L.massAtCatch - (L.meltDoneKg || 0) - inFlightKg) / L.massAtCatch;
+    if (k < 1) d._meltK = Math.max(0, k); else delete d._meltK;
+  }
+
+  /** @private A piece the work can still act on: pending in the ledger, alive, with the fate `melt`. */
+  _meltAlive(d) {
+    return !!d && d.alive !== false && bigPieces.isPending(d) && !!d._disposal && d._disposal.fate === 'melt';
+  }
+
+  /**
+   * Burn begins (E1): plan the trip's work from what is aboard now. Melt-marked pieces oldest first, the free tips as furnaces, the hold's room.
+   * Says why when nothing can run. @private @param {{days: number, playSeconds: number}} info planned days of the burn
+   */
+  _meltBegin({ days }) {
+    this._melt = null;
+    if (!(days > 0)) return;
+    const tipsFree = this._freeTips();
+    const aboard = bigPieces.pendingAboard().filter((x) => x.fate === 'melt' && this._meltAlive(x.debris) && !(x.debris.mass <= 0));
+    if (!aboard.length) return;
+    const specs = aboard.map((x) => {
+      const d = x.debris;
+      const at = d._disposal.massAtCatch > 0 ? d._disposal.massAtCatch : d.mass;
+      const v = valuesAtCatch(d, at);
+      return { id: d.id, kg: d.mass, partKg: partKgFor(pieceType(d)), metalPerKg: at > 0 ? v.scrapKg / at : 0, d };
+    });
+    const burnShipS = days * DAY_S;
+    const plan = planBurn({ burnShipS, pieces: specs, tips: tipsFree, roomKg: this._holdRoomKg() });
+    if (!plan.parts.length) {
+      const name = pieceName(specs[0].d);
+      if (plan.stop === 'furnaces') this._meltSay(noFurnaceLine(name), 'info');
+      else if (plan.stop === 'hold') this._meltSay(HOLD_FULL_LINE, 'info');
+      else this._meltSay(tooShortLine(name), 'info');
+      return;
+    }
+    const byId = new Map(specs.map((x) => [x.id, x.d]));
+    const tc = this._refs.player && this._refs.player.tipCargo;
+    const used = [...new Set(plan.parts.map((x) => x.tip))];
+    // a furnace that is working is not a tip a small catch can take: the tip is held for the trip's work
+    if (tc && typeof tc.reserve === 'function') for (const i of used) tc.reserve(i);
+    for (const d of byId.values()) if (plan.parts.some((x) => x.pieceId === d.id)) d._meltBusy = true;
+    this._melt = {
+      burnShipS, plan, tips: used,
+      parts: plan.parts.map((x) => ({ ...x, st: 0, d: byId.get(x.pieceId) })),   // st: 0 waiting, 1 cut (being delivered), 2 melting, 3 over
+      inFlight: new Map(),                                                       // piece id -> kg cut and not yet melted
+      totals: new Map(),                                                         // piece id -> this trip's totals, for the line
+      said: new Set(),
+      released: new Set(),                                                       // tips let go before the burn ended (their last part is over)
+      holdFull: false,                                                           // a part's metal did not fit when it melted: the work stopped
+    };
+  }
+
+  /** @private Tick: play everything due at `frac` of the burn. */
+  _meltTick({ frac }) {
+    const m = this._melt;
+    if (!m) return;
+    this._meltAdvance(m, Math.max(0, Math.min(1, frac)) * m.burnShipS);
+  }
+
+  /** @private A tip whose last scheduled part is over is free for a small catch again, not only when the burn ends (F1). */
+  _meltReleaseTips(m) {
+    const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
+    if (!tc || typeof tc.unreserve !== 'function') return;
+    for (const i of m.tips) {
+      if (m.released.has(i) || m.parts.some((x) => x.tip === i && x.st !== 3)) continue;
+      m.released.add(i);
+      tc.unreserve(i);
+    }
+  }
+
+  /** @private Play the schedule up to ship time `t` (seconds from the burn's start). */
+  _meltAdvance(m, t) {
+    const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
+    for (const p of m.parts) {
+      if (p.st === 3) continue;
+      const d = p.d;
+      if (!this._meltAlive(d)) {                       // it broke loose, was taken another way, had its fate changed, or was removed: the part is dropped
+        p.st = 3;
+        if (tc && typeof tc.clearPartBags === 'function') tc.clearPartBags(p.tip);
+        const fl = m.inFlight.get(d.id) || 0;
+        if (p.cut) {
+          m.inFlight.set(d.id, Math.max(0, fl - p.kg));
+          this._meltReshape(d, m.inFlight.get(d.id));  // the cut it undoes is drawn whole again (a piece still held; a gone one is not drawn)
+        }
+        continue;
+      }
+      if (p.st === 0 && p.cutS <= t) this._meltCut(m, p);
+      if (p.st === 1 && p.startS <= t) p.st = 2;
+      if (p.st === 2) {
+        if (p.endS <= t) this._meltFinishPart(m, p);
+        else if (tc && typeof tc.showPartBag === 'function') {
+          tc.showPartBag(p.tip, { type: pieceType(d), sizeM: packedSizeM(p.kg), frac: 1 - (t - p.startS) / Math.max(1, p.endS - p.startS) });
+        }
+      }
+    }
+    this._meltReleaseTips(m);
+  }
+
+  /** @private A part is cut: the piece loses the length (the first cut of a piece fixes `massAtCatch`). */
+  _meltCut(m, p) {
+    const d = p.d;
+    const L = d._disposal;
+    if (!(L.massAtCatch > 0)) { L.massAtCatch = d.mass; L.meltDoneKg = 0; }
+    p.cut = true;
+    p.st = 1;
+    m.inFlight.set(d.id, (m.inFlight.get(d.id) || 0) + p.kg);
+    this._meltReshape(d, m.inFlight.get(d.id));
+  }
+
+  /**
+   * @private The hold cannot take a part's metal when it melts (small catches on other tips added metal during the burn, F2): the work stops for
+   * this trip. Every part not yet melted is dropped (bags cleared, the cuts drawn whole again); nothing of them is paid or stored, their kg stay
+   * in the remainder, and the trip says the hold is full once, at its end.
+   */
+  _meltStopWork(m) {
+    const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
+    m.holdFull = true;
+    const touched = new Set();
+    for (const p of m.parts) {
+      if (p.st === 3) continue;
+      p.st = 3;
+      if (tc && typeof tc.clearPartBags === 'function') tc.clearPartBags(p.tip);
+      if (p.cut) {
+        m.inFlight.set(p.d.id, Math.max(0, (m.inFlight.get(p.d.id) || 0) - p.kg));
+        touched.add(p.d);
+      }
+    }
+    for (const d of touched) this._meltReshape(d, m.inFlight.get(d.id) || 0);
+  }
+
+  /** @private A part is melted: the piece's mass falls by it, its metal goes in the hold, its share of the fee (less the owner's share) is paid. */
+  _meltFinishPart(m, p) {
+    const d = p.d;
+    const L = d._disposal;
+    const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
+    const before = L.meltDoneKg || 0;
+    const kg = Math.min(p.kg, d.mass);
+    const isLast = kg >= d.mass - 1e-9;
+    const after = isLast ? L.massAtCatch : before + kg;
+    const acct = meltAccount(d, L.massAtCatch, before, after);
+    if (acct.metalKg > this._holdRoomKg() + 1e-9) {   // F2: the room is checked where the metal goes in (small catches on other tips add metal during the burn)
+      this._meltStopWork(m);
+      return;
+    }
+    if (tc && typeof tc.clearPartBags === 'function') tc.clearPartBags(p.tip);
+    p.st = 3;
+    L.meltDoneKg = after;
+    m.inFlight.set(d.id, Math.max(0, (m.inFlight.get(d.id) || 0) - p.kg));
+    this._setHeldPieceMass(d, isLast ? 0 : L.massAtCatch - after);
+    this._meltReshape(d, m.inFlight.get(d.id));
+    this._storeOrbitMetal(acct.metalKg);
+    let t = m.totals.get(d.id);
+    if (!t) { t = { name: pieceName(d), kg: 0, metalKg: 0, feeCr: 0, shareCr: 0, netCr: 0, holder: acct.holder }; m.totals.set(d.id, t); }
+    t.kg += acct.kg; t.metalKg += acct.metalKg; t.feeCr += acct.feeCr; t.shareCr += acct.shareCr; t.netCr += acct.netCr;
+    if (!isLast) { this.payBigPieceShare(d.id, { cr: acct.netCr }); return; }
+    // the last part: the piece is gone, paid once, and the trip says its line
+    m.said.add(d.id);
+    this._meltFinals = this._meltFinals || [];
+    this._meltFinals.push({ id: d.id, cr: acct.netCr, line: tripLine(t) });
+    this._meltSettleFinals();
+  }
+
+  /**
+   * C7: pay a share of a pending big piece without disposing of it (a part of a melt): credits and score, no event, no line. The piece stays
+   * pending. 0 for a piece that is not pending. (5f's satellite pays its remainder through `disposeBigPiece`.)
+   * @param {number|string} id @param {{cr?: number}} [o] @returns {number} what was paid
+   */
+  payBigPieceShare(id, { cr = 0 } = {}) {
+    if (!bigPieces.get(id)) return 0;
+    const paid = scoringSystem.awardDisposal(cr);
+    this.saveGame();
+    return paid;
+  }
+
+  /**
+   * @private Take the pieces whose last part is melted off their holders and out of the sky, then pay them as disposed (one BIG_PIECE_DISPOSED each).
+   * A piece the collar or rack cannot let go of yet (in transit, being cut) is tried again every frame.
+   */
+  _meltSettleFinals() {
+    const list = this._meltFinals;
+    if (!list || !list.length) return;
+    const df = this._refs && this._refs.debrisField;
+    const still = [];
+    for (const f of list) {
+      const d = bigPieces.get(f.id);
+      if (!d) continue;                                               // gone another way: nothing is owed
+      if (bigPieces.holderOf(f.id) && !this.detachHeldPiece(f.id)) { still.push(f); continue; }
+      if (df && typeof df.removeDebris === 'function') df.removeDebris(f.id);
+      d._meltBusy = false;
+      this.disposeBigPiece(f.id, { fate: 'melt', totalCr: f.cr, line: f.line });
+    }
+    this._meltFinals = still;
+  }
+
+  /**
+   * The burn is over (E2). `completed`: the profile played out, so every part the furnaces started is finished (the plan fits the burn), and
+   * each piece the trip worked on says its line; otherwise nothing more is melted. The drawing is put back: no part bags, the tips free, every
+   * piece drawn at what is left of it. A save is owed (nothing saves during a burn). @private
+   * @param {{completed: boolean}} info
+   */
+  _meltEnd({ completed }) {
+    const m = this._melt;
+    this._melt = null;
+    if (!m) return;
+    if (completed) this._meltAdvance(m, m.burnShipS + 1);
+    const tc = this._refs && this._refs.player && this._refs.player.tipCargo;
+    if (tc && typeof tc.clearPartBags === 'function') tc.clearPartBags();
+    if (tc && typeof tc.unreserve === 'function') for (const i of m.tips) if (!m.released.has(i)) tc.unreserve(i);   // a released tip may be a carry's by now
+    const pieces = new Set(m.parts.map((x) => x.d));
+    for (const d of pieces) {
+      d._meltBusy = false;
+      if (m.said.has(d.id) || !bigPieces.has(d.id)) continue;      // a piece that is gone (finished, or the run was reset) says nothing more
+      const t = m.totals.get(d.id);
+      if (t && t.kg > 0) this._meltSay(tripLine(t));
+      this._meltReshape(d, 0);
+    }
+    if ((m.plan.stop === 'hold' || m.holdFull) && completed) this._meltSay(HOLD_FULL_LINE, 'info');
+    // nothing saves during a burn: a burn that arrived owes the save of what it melted, paid and stored; one cut short (a reset, the menu) leaves
+    // the save of the boundary before it, which is consistent with the full piece, the old hold and the old credits
+    this._meltSaveOwed = !!completed;
+  }
+
+  /** @private Frame hook (one length check and one flag read when idle): retry pieces whose last part is melted, and save once the burn is over. */
+  _meltFrame() {
+    if (this._meltFinals && this._meltFinals.length) this._meltSettleFinals();
+    if (this._meltSaveOwed && !this._trip.isBurning()) {
+      this._meltSaveOwed = false;
+      this.saveGame();
+    }
+  }
+
   /**
    * @private A trip begun from the list that did not go (the words were said by the trip): the choice is put back as after a refused pick,
    * rebuilt. From the berth she never left in fact: buying opens again and `RESUPPLY_BERTH {berthed}` says so (no line, no floor).
@@ -2718,6 +3244,7 @@ export class GameFlowManager {
     return {
       motherNets: this._motherNetsAboard(), credits: scoringSystem.credits, gasCredits: this._gasBuyPrice(), startOwed: this.missionStartOwed(),
       turnWaitS: this._turnWaitsS(),
+      bigPieces: this._bigPiecesOn() ? bigPieces.pendingAboard() : [],      // slice 5 (5d): the push rows and the satellite rows' hand-over words
     };
   }
 
@@ -2782,10 +3309,15 @@ export class GameFlowManager {
   _openWhereNext(start, opts) {
     const reg = this._refs.fieldRegistry;
     const berthed = typeof reg.isBerthed === 'function' && reg.isBerthed();
+    // Fix round 1, F2: the free height of a push-down is no field to start a mission at (nothing is laid out there). With nothing she can
+    // pick she stays, as at a berth: the choice stays open, the line says why, and the list is there to pick from once the gas or the
+    // wallet allows.
+    const freeHere = !berthed && typeof reg.isFree === 'function' && reg.isFree();
     const rows = buildWhereNextRows(reg, this.whereNextRowsOpts());
     if (rows.line) {
       eventBus.emit(Events.COMMS_MESSAGE, { text: rows.line, priority: 'info', _keep: true });
-      if (!berthed) { start(); return; }
+      if (!berthed && !freeHere) { start(); return; }
+      if (freeHere) opts = { ...opts, said: true };                        // (the line above is the opening line: not "Mission done")
     }
     this._syncTripDeps();
     if (!(opts && opts.said)) eventBus.emit(Events.COMMS_MESSAGE, { text: berthed ? this._berthLine() : OPEN_LINE, priority: 'info', _keep: true });
@@ -2812,6 +3344,7 @@ export class GameFlowManager {
     const atSat = !!berth && !(typeof reg.berthedHere === 'function' && reg.berthedHere());
     const owed = this.missionStartOwed();
     if (id === CALL_ID) return this._callSatellite(choice, start);
+    if (typeof id === 'string' && id.startsWith(PUSH_PREFIX)) return this._pickPush(id, choice, start, berth);    // slice 5 (5d, D2)
     if (id === STAY_ID) {
       if (atSat) return false;                                             // no Stay at the satellite (the list has no such row)
       if (owed && reg.remainingCount(reg.currentId()) <= 0) return false;  // nothing here to stay for (the list has no such row; a mission going on always has one)
@@ -2836,6 +3369,151 @@ export class GameFlowManager {
     }
     trip.choose(choice, { again: true });                                  // the gas changed: back to the list, rebuilt, with the refusal said
     return false;
+  }
+
+  // ======================================================================
+  // Nets step 3 slice 5, lane 5d: push it down and let go; drag sail and let go (plan D1-D6, C5, C7)
+  // ======================================================================
+
+  /**
+   * @private D2: a push row of the where-next list was picked. The row must be there and selectable (the same rows the player sees: the
+   * piece is still held, marked "push", her gas covers the push and the climb back). It flies a trip to the piece's own height (the free
+   * place, `{id: 'free', altKm}`): the piece stays on her rack or collar the whole way and lets go ONLY on arrival (`_pushArrived`). A
+   * piece she is already at or below the height of needs no trip: it lets go here and the list opens again. A trip that cannot begin
+   * (the gas changed) puts the list back with the refusal said.
+   * @param {string} id the row id (`push:<debrisId>`) @param {object} choice the open choice @param {() => void} start the mission transition kept
+   * @param {object|null} berth the satellite she is berthed at, if any
+   * @returns {boolean} true = the trip began or the piece let go
+   */
+  _pickPush(id, choice, start, berth) {
+    const trip = this._trip;
+    const reg = this._refs && this._refs.fieldRegistry;
+    if (!reg || !this._bigPiecesOn() || !this.missionStartOwed()) return false;
+    const row = buildWhereNextRows(reg, this.whereNextRowsOpts()).rows.find((r) => r.id === id && r.kind === PUSH_KIND);
+    if (!row || !row.selectable || bigPieces.fateOf(row.debrisId) !== 'push') return false;
+    if (row.state === 'here') {
+      trip.leaveChoice();
+      const ok = this._letGoBig(row.debrisId, 'push');
+      this._openWhereNext(start, { said: ok });
+      return true;
+    }
+    this._syncTripDeps();
+    trip.leaveChoice();                                                    // idle again, so `begin` accepts the trip
+    const field = { id: FREE_ID, altKm: row.targetKm };
+    const fromBerth = !!berth && !(typeof reg.berthedHere === 'function' && reg.berthedHere());
+    const began = trip.begin(() => this._pushArrived(row.debrisId, field, start, fromBerth), { field });
+    if (began) {
+      if (berth) this._leaveBerth(berth);                                  // the trip began: buying closes, she lets go
+      return true;
+    }
+    trip.choose(choice, { again: true });                                  // the gas changed: back to the list, rebuilt, with the refusal said
+    return false;
+  }
+
+  /**
+   * @private D2: the push trip ended. The registry has put her at the free place (`arrive('free', {altKm})`, in TransferTrip._end). The
+   * trip's days go on the clock; the piece lets go NOW (never before: D-M1) and is paid; the game saves; the list opens again from here
+   * with the satellites and fields (no Stay: the place has no pieces) and the SAME mission start kept. A trip that could not go (no gas
+   * once planned with her real mass, her nose could not be pointed) is a refused pick: she is where she was and the list is back.
+   * @param {number|string} id the piece @param {{id: string, altKm: number}} field the free place @param {() => void} start @param {boolean} fromBerth
+   */
+  _pushArrived(id, field, start, fromBerth) {
+    const leg = this._trip.lastLeg;
+    this._trip.lastLeg = null;
+    if (!leg) { this._tripCouldNotGo(start, fromBerth); return; }
+    gameState.shipDays += leg.days;
+    const reg = this._refs && this._refs.fieldRegistry;
+    const here = reg && typeof reg.altitudeKm === 'function' && Number.isFinite(reg.altitudeKm()) ? reg.altitudeKm() : field.altKm;
+    // Fix round 1, F1: the fate list can change the piece's fate during the trip (satellite, sail, keep...). It lets go only if "push" still
+    // stands; otherwise she keeps it, says so, and the list opens from the free height (a piece she still holds pays nothing here).
+    const still = bigPieces.has(id) && bigPieces.fateOf(id) === 'push';
+    let said = false;
+    if (still) said = this._letGoBig(id, 'push', { altKm: here });
+    else {
+      const d0 = bigPieces.get(id);
+      if (d0) { eventBus.emit(Events.COMMS_MESSAGE, { text: `You changed the fate of the ${pieceName(d0)} on the way, so it stays aboard. It pays when you dispose of it.`, priority: 'info', _keep: true }); said = true; }
+    }
+    this.saveGame();
+    this._openWhereNext(start, { said });
+  }
+
+  /**
+   * @private D2/D5 shared: let a held big piece go where she is, and pay it. `detachHeldPiece` takes it off its holder (null: not held, in
+   * transit or being cut: nothing happens, said, and the piece stays pending); then the 5b review trap: the body is put on its OWN orbit in
+   * the same tick (`CaptureNet.reseatBodyOrbit`, the one computation K's release uses) and its field row is cleared, so it neither flies the
+   * stale orbit it carried while held nor is stored at her next departure; it is `_disposed` (never locked or caught again; `DebrisField`
+   * removes it when she next departs). The pay and the line go through `disposeBigPiece` (pays once, saves).
+   * @param {number|string} id @param {'push'|'sail'} fate
+   * @param {{altKm?: number, sail?: boolean}} [o] `altKm`: where she is (default her height now); `sail`: fit one drag sail first
+   * @returns {boolean} the piece was let go and paid
+   */
+  _letGoBig(id, fate, o = {}) {
+    const rs = this._refs && this._refs.resourceSystem;
+    const df = this._refs && this._refs.debrisField;
+    const reg = this._refs && this._refs.fieldRegistry;
+    const d0 = bigPieces.get(id);
+    if (!d0) return false;
+    const d = this.detachHeldPiece(id);
+    if (!d) {
+      eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: `The ${pieceName(d0)} is not free to let go yet.`, priority: 'info', _keep: true });
+      return false;
+    }
+    const altKm = Number.isFinite(o.altKm) ? o.altKm
+      : (reg && typeof reg.altitudeKm === 'function' && Number.isFinite(reg.altitudeKm()) ? reg.altitudeKm() : NaN);
+    const bodies = [d];
+    const canon = df && typeof df.getDebrisById === 'function' ? df.getDebrisById(id) : null;
+    if (canon && canon !== d) bodies.push(canon);
+    for (const b of bodies) {
+      if (captureNetSystem && typeof captureNetSystem.reseatBodyOrbit === 'function') captureNetSystem.reseatBodyOrbit(b);
+      b.fieldId = null;                                                    // the departure removal, not the field store, decides its end
+      b.fieldRow = null;
+      b._disposed = true;
+    }
+    let line; let pay;
+    if (o.sail) {
+      if (rs) { rs.dragSails = Math.max(0, Math.floor(rs.dragSails || 0) - 1); if (typeof rs._syncToPlayer === 'function') rs._syncToPlayer(); }
+      const years = sailLifeYears(d, altKm);
+      pay = fatePay(d, 'sail', { lifeYears: years });
+      const A = Constants.BIG_PIECES.SAIL.areaM2;
+      for (const b of bodies) b.areaM2 = (dragAreaM2(b) || 0) + A;       // its drag area now includes the sail (the lifetime maths read it)
+      if (df && typeof df.attachSail === 'function') df.attachSail(canon || d);
+      const lead = `Drag sail out, let go: it ${Number.isFinite(years) ? `re-enters in about ${yearsWords(years)}` : 'would stay up'}.`;
+      const over = !(Number.isFinite(years) && years <= Constants.BIG_PIECES.RULE_YEARS);
+      const v = pieceValues(d);
+      const who = !v.holder.name || v.holder.status === 'abandoned' ? 'nobody' : v.holder.name;
+      line = !over ? `${lead} ${payLine(d, pay)}`
+        : (who === 'nobody' ? `${lead} Over ${Constants.BIG_PIECES.RULE_YEARS} years, so no removal fee is paid.` : `${lead} Over ${Constants.BIG_PIECES.RULE_YEARS} years, so ${who} pays nothing.`);
+    } else {
+      const years = lifetimeYears(altKm, d.mass, dragAreaM2(d));
+      pay = fatePay(d, 'push', { lifeYears: years });
+      line = `Let go at ${Number.isFinite(altKm) ? Math.round(altKm) : '?'} km: it ${Number.isFinite(years) ? `re-enters in about ${yearsWords(years)}` : 'stays up'}. ${payLine(d, pay)}`;
+    }
+    return this.disposeBigPiece(id, { fate, totalCr: pay.totalCr, line });
+  }
+
+  /**
+   * @private D5 (C7): the fate list picked "drag sail" for a held big piece (`BIG_PIECE_FATE`, from `_wireBigPieceFates`). Acts only when the
+   * ledger says the piece's fate IS sail and it is still held. With a sail in her stock: one is used (and its mass leaves her with the
+   * piece), the piece lets go where she is, drawn with the sail, and pays the removal fee only when its life with the sail is within 25
+   * years. With no sail aboard nothing happens (one line; the piece stays pending).
+   * @param {{debrisId: (number|string), fate: string}} e
+   * @returns {boolean} the sail was fitted and the piece let go
+   */
+  _fateSail(e) {
+    const id = e && e.debrisId;
+    if (id == null || bigPieces.fateOf(id) !== 'sail') return false;
+    const d0 = bigPieces.get(id);
+    const rs = this._refs && this._refs.resourceSystem;
+    if (!d0) return false;
+    if (this._trip && this._trip.isBurning()) {                            // fix round 1, F3: no hands on the piece while the thruster fires
+      eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: 'Fit the sail after the burn.', priority: 'info', _keep: true });
+      return false;
+    }
+    if (!rs || !(rs.dragSails > 0)) {
+      eventBus.emit(Events.COMMS_MESSAGE, { source: 'HOUSTON', channel: 'CMD', text: `No drag sail aboard for the ${pieceName(d0)}. Buy one at a resupply satellite.`, priority: 'info', _keep: true });
+      return false;
+    }
+    return this._letGoBig(id, 'sail', { sail: true });
   }
 
   /**
@@ -2913,6 +3591,7 @@ export class GameFlowManager {
         arrive: (id, o) => r.fieldRegistry.arrive(id, o),
       } : null,
     });
+    this._trip.setBurnWork(this._burnWorkFace());   // slice 5 (5e): the tip furnaces' melt rides the burn on the ship's clock
   }
 
   /** The transfer trip (tests and main.js read its state). */
@@ -3008,6 +3687,7 @@ export class GameFlowManager {
     this._updateStranded(dt);
     this._resumeOwedTrip(dt);
     if (this._unplacedBig && this._unplacedBig.length) this._placeUnplacedBig();   // slice 5 (5b): a restored piece no holder could take yet
+    if ((this._meltFinals && this._meltFinals.length) || this._meltSaveOwed) this._meltFrame();   // slice 5 (5e): a melted piece to let go of, a save owed
     // trip-melt D2/D6: the burn between missions (waits for the daughters, then burns; `dt` is 0 while the world is held)
     this._trip.update(dt);
     const p = this._pendingMissionStart;

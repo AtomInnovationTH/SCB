@@ -1143,6 +1143,7 @@ export class LassoSystem {
      * @returns {boolean} true if lasso was fired
      */
     fire(playerPos, debrisField, playerVelDir, selectedTarget = null) {
+        if (selectedTarget && selectedTarget._disposed === true) selectedTarget = null;   // slice 5 (5d, D4): a piece that was disposed of is no pick
         // trip-melt D7: nothing is cast while the ship burns to the next field (one plain line, nothing fires).
         if (tripRefuses('lasso')) return false;
         if (this.active || this.cooldown > 0) {
@@ -1199,7 +1200,8 @@ export class LassoSystem {
 
         // Find nearest debris within lasso range
         const rangeScene = Constants.LASSO_RANGE * M; // LASSO_RANGE (=== NET_LOCK_RANGE_M, 90 m) in scene units
-        const nearby = debrisField.getDebrisNear(playerPos, rangeScene);
+        // slice 5 (5d, D4): a piece that was disposed of (let go by a push-down or a drag sail) is never the nearest piece: it is no catch
+        const nearby = (debrisField.getDebrisNear(playerPos, rangeScene) || []).filter((p) => !(p && p._disposed));
 
         if (!nearby || nearby.length === 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'no_target' });

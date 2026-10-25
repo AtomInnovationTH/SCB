@@ -162,6 +162,9 @@ import { TouchVerbButton } from './ui/TouchVerbButton.js';
 import { WhereNextList } from './ui/WhereNextList.js';
 import { HeightScale } from './ui/HeightScale.js';
 import { buildWhereNextRows } from './systems/WhereNextRows.js';
+import { FateList } from './ui/FateList.js';
+import { buildFateRows, fateContext } from './systems/FateRows.js';
+import { pendingAboard } from './systems/BigPieces.js';
 import { fieldsFromSearch } from './systems/resupplyWords.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
@@ -659,6 +662,7 @@ let _onboardingTargetOutOfRange = false;
 let touchActionChip = null;   // u11: the touch net / daughter button (glass only)
 let touchVerbButton = null;   // u15a: FLY THERE (floor 4) and DE-SPIN (floors 2-3, hold) - glass only
 let whereNextList = null;     // Nets step 3 slice 2b (lane 2b-2): the "where next" list floor 4 hosts (ui/WhereNextList.js); built in the ladder block
+let fateList = null;          // Nets step 3 slice 5 (lane 5c): the fate list of a big catch (ui/FateList.js); built after the input manager, U opens it
 let whereNextJumpOwed = false; // the choice opened and the ladder has not yet taken her to floor 4
 /**
  * Nets step 3 slice 2b (lane 2b-2): take her to floor 4 once, when the "where next" choice opens. A jump the ladder refuses (a ride is
@@ -2090,6 +2094,8 @@ async function init() {
     // keys only while ladderController.isActive() (flag on + gameplay + engaged),
     // so with LADDER.ENABLED false the key handling is byte-identical.
     getLadderController: () => ladderController,
+    // slice 5 (5c): U opens / closes the fate list of a big catch (late-binding closure: the list is built right after this init).
+    getFateList: () => fateList,
     // SAFETY OVERRIDE radiator sweep (owner 2026-09-09): while the OVERRIDE
     // panel is engaged (grid up) the O key runs PlayerSatellite.toggleFlowerOverride
     // — the full FOLDED ↔ DEPLOYED travel — instead of the STOW ↔ CARGO toggle.
@@ -2106,6 +2112,30 @@ async function init() {
   // any-input abort alone could not protect that player.
   cameraSystem.setLassoCutInputProbe(() => inputManager.anyKeyHeld());
   _bootMark('InputManager started + gameFlowManager.init');
+
+  // --- Fate list (Nets step 3 slice 5, lane 5c; plan C6, L2-L4) ---
+  // A big caught piece pays when it is disposed of, so the player picks the way here: U (floors 2-4) or the CHOOSE chip on glass opens the
+  // list for the pieces aboard; a pick goes to `setFate`, and only a true answer emits BIG_PIECE_FATE for the fate's executor. Built here,
+  // BEFORE the ladder block, so its capture-phase key listener runs ahead of the ladder's. While it is open the where-next list (floor 4)
+  // is held hidden (`holdWhereNext`: it stays pending and comes back on close). Not inside the ladder gate: `?ladder=0` has no floors,
+  // and a big piece must still have a way to be disposed of there.
+  fateList = new FateList({
+    doc: document,
+    getPieces: () => pendingAboard(),
+    getRows: (piece) => buildFateRows(piece, fateContext({
+      registry: fieldRegistry, player, resourceSystem,
+      turnWaitS: gameFlowManager.whereNextRowsOpts().turnWaitS,
+    })),
+    setFate: (id, fate) => gameFlowManager.setFate(id, fate),
+    glass: () => GestureHints.isGlass(),
+    isInputBlocked: () => whereNextInputBlocked(),
+    getFloor: () => ((ladderController && ladderController.isActive && ladderController.isActive() && ladderController.currentFloor)
+      ? ladderController.currentFloor() : null),
+    inGameplay: () => gameState.isGameplay(),
+    onOpenChange: (open) => { if (navcomFloor && navcomFloor.holdWhereNext) navcomFloor.holdWhereNext(open); },
+  });
+  // L4: the Targets pane's selected row says what a big piece pays when disposed of (the owner and the value ride on the field body).
+  if (hud && hud.targetPanel && hud.targetPanel.setPieceLookup) hud.targetPanel.setPieceLookup((id) => debrisField.getDebrisById(id));
 
   // --- Zoom Ladder (S2 walking skeleton — docs/ladder/03-plan.md M1) ---
   // The single WheelRouter (T3) owns ALL wheel input: it replaces the three
@@ -3517,6 +3547,9 @@ async function init() {
         },
         getFarState: _touchFarState,
         getReelable: _daughterReelable,   // R9
+        // slice 5 (5c, F1): the CHOOSE button (U) stands whenever any big piece is aboard (picked or not: a pick can be changed)
+        // and the fate list is closed, as a state chip; the catch line only adds it first, for 30 s.
+        getChoosePending: () => !!(fateList && !fateList.isOpen() && pendingAboard().length > 0),
         // u15a A-T4: the manual-capture lesson's LAUNCH NET waits for a piloted daughter in flight (N then nets by hand).
         getPilotState: () => {
           if (!inputManager || !inputManager.armPilotMode || !cameraSystem || !cameraSystem.getPilotedArm) return null;
@@ -7355,7 +7388,8 @@ function gameLoop(timestamp) {
     // V-8: Capture net FSM + visual effects (flag-gated internally)
     try { captureNetSystem.update(dt); } catch (e) { console.error('[GameLoop] captureNetSystem:', e); }
     // Lane 3b: the resupply satellite sits on her nose collar: after player.update (Rule G), real time (its arm plays while the world is held).
-    try { resupplySatellite.update(dt); } catch (e) { console.error('[GameLoop] resupplySatellite:', e); }
+    // Slice 5 (5f): the take of a big piece runs on game time, so its second argument is zero while the world is held.
+    try { resupplySatellite.update(dt, _worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] resupplySatellite:', e); }
     // The leash hand-off: radiators, ship turn, pin and push (zero time while the world is held).
     if (player.leashDriver) { try { player.leashDriver.update(_worldHeld ? 0 : dt); } catch (e) { console.error('[GameLoop] leashDriver:', e); } }
     // Bags on the radiator tips: pin every frame, cook on the rack's clock (zero time while the world is held).

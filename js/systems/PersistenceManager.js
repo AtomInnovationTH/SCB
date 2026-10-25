@@ -162,6 +162,10 @@ class PersistenceManager {
         // mass, size, owner, areaM2, fieldId, fieldRow, fate, holder, caughtAtMs, members?}]. Handed in by saveGame (BigPieces ledger); written
         // only when there are some, so a save with none (every old one, and a game-over save) is byte-for-byte what it was. Additive.
         ...(Array.isArray(data.bigPieces) && data.bigPieces.length ? { bigPieces: data.bigPieces } : {}),
+        // Nets step 3 slice 5 (lane 5e, E7): the cargo hold's stacks `{entries: [{metalId, name, massKg, color, ispAsThrust, marketValue}]}`
+        // (CargoSystem.serialize): the orbit metal the tip furnaces make, and every other metal the hold carries. Written only when the hold holds
+        // something. Additive (no SAVE_VERSION bump).
+        ...(data.cargoHold && Array.isArray(data.cargoHold.entries) && data.cargoHold.entries.length ? { cargoHold: data.cargoHold } : {}),
         // save() is a WHITELIST: a key that a read-modify-write setter writes
         // (as setCeremonyFlag does with ceremonyFlags above) but that is
         // missing from this list is silently dropped on the next write. (The

@@ -1414,6 +1414,19 @@ export class InputManager {
         }
         break;
 
+      // U: choose what to do with a big catch (Nets step 3 slice 5, lane 5c; plan C6). Opens (and closes) the fate list, the panel of
+      // ui/FateList.js, only with a big piece aboard on floors 2-4 (the list decides: `toggleFromKey`); with nothing to choose for the key
+      // does nothing. The list's own arrows / Enter / Esc are taken by its capture listener, not here.
+      case 'KeyU':
+        if (isGameplay && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          const fateList = typeof d.getFateList === 'function' ? d.getFateList() : null;
+          if (fateList && typeof fateList.toggleFromKey === 'function' && fateList.toggleFromKey()) {
+            d.audioSystem?.playClick?.();
+            e.preventDefault();
+          }
+        }
+        break;
+
       // Comma (,): ROSA panel furl/unfurl toggle (mirrors "." struts). Rolls the
       // solar arrays up to dodge debris / tether strikes (at a power cost), or
       // unfurls them again. Shift+Comma feathers instead: parks the wings edge-on
@@ -2396,7 +2409,8 @@ export class InputManager {
   _findNearestDebrisToArm(arm, debrisField) {
     if (!arm || !debrisField) return null;
     const captureRange = 0.0005; // ~50m in scene units (1 unit = 100km)
-    const nearby = debrisField.getDebrisNear(arm.position, captureRange);
+    // slice 5 (5d, D4): never a piece that was disposed of
+    const nearby = (debrisField.getDebrisNear(arm.position, captureRange) || []).filter((p) => !(p && p._disposed));
     if (nearby && nearby.length > 0) {
       // getDebrisNear returns sorted by distance — first is closest
       // Find the actual debris object from debrisList for target assignment
@@ -2930,6 +2944,7 @@ export class InputManager {
    */
   fireMotherNet(target) {
     const d = this._deps; if (!d || !d.captureNetSystem || !d.player) return;
+    if (target && target._disposed === true) return;   // slice 5 (5d, D4): a piece that was disposed of is no catch (and is never aimed at)
     if (tripRefuses('net')) return;   // trip-melt G8: refused BEFORE the ship slews round to aim (CaptureNet would refuse after the turn)
     const cns = d.captureNetSystem;
     const ap = d.autopilotSystem;

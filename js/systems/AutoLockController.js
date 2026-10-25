@@ -217,7 +217,7 @@ export class AutoLockController {
     let pick = null;
     if (nearby && nearby.length > 0) {
       for (const d of nearby) {
-        if (!d || !d.alive || d._captured) continue;
+        if (!d || !d.alive || d._captured || d._disposed) continue;   // slice 5 (5d): a piece that was disposed of is never locked
         if (!isMarked(d)) continue;   // scan-first: an unscanned piece is never auto-locked
         if (d.hazard === true) continue;   // shards stay drawn but cannot be caught: never auto-locked
         const sp = d._scenePosition;
@@ -298,7 +298,7 @@ export class AutoLockController {
     // locked). 2026-10-18: welcome pieces only — the pre-discovered cast pieces
     // 7-8 km away qualified and pulled mission 2 off its near pieces.
     for (const d of anywhere) {
-      if (d && d.alive && !d._captured && isMarked(d) && d.hazard !== true && d.welcomeSpawn === true) return d;
+      if (d && d.alive && !d._captured && !d._disposed && isMarked(d) && d.hazard !== true && d.welcomeSpawn === true) return d;
     }
     return null;
   }

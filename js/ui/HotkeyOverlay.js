@@ -182,6 +182,7 @@ export const HOTKEY_GROUPS = [
       [['9', '0'], 'Target info / Targets panes'],
       [['7'], 'Radio log'],
       [['8'], 'Nav ball'],
+      [['U'], 'Big catch: what to do with it'],
       'gap',
       [['F'], 'Furnace (not built)'],
       [['F2'], 'Thruster metal', { grey: 'not yet' }],

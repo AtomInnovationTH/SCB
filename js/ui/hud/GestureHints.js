@@ -128,6 +128,7 @@ const SKILL_WORDS = Object.freeze({
 });
 const LETGO_LABEL = 'LET GO';      // u14b B1: K - the one button that lets the catch at the collar go
 const READ_LABEL = 'READ MORE';    // u14b B2: I - the full-screen library (the SPECS tab opens a different view)
+const CHOOSE_LABEL = 'CHOOSE';     // slice 5 (5c): U - the fate list of a big catch (ui/FateList.js)
 const RE_PAD_CHIP = /\b([Pp])ress N to stick the pad on\b/g;   // the daughter's pad tool: its own button
 // u18c D5: her gripper and magnet are their own buttons too (the in-position comms line, CommsSystem)
 const RE_GRIP_CHIP = /\b([Pp])ress N to grip it\b/g;
@@ -145,6 +146,8 @@ const RE_PRESS_CHIP = /\b([Pp])ress ([NDASR])\b( to [A-Za-z]+\b)?/g;
 // "Press I to read more." / "Press I to read the specs." -> "Tap READ MORE.".
 const RE_LETGO_CHIP = /\b([Pp])ress K\b( to let (?:it|the catch) go\b)?/g;
 const RE_READ_CHIP = /\b([Pp])ress I\b( to (?:read more|read the specs|open Info)\b)?/g;
+// slice 5 (5c): U opens the fate list of a big catch; "press U to choose" is the CHOOSE button on glass.
+const RE_CHOOSE_CHIP = /\b([Pp])ress U\b( to choose\b)?/g;
 
 /**
  * u14b B3: the skill reminders (SKILLS.CATALOG, OnboardingDirector `remind_<skillId>`) whose key has a touch button, so the
@@ -250,6 +253,9 @@ const GLASS_LINES = Object.freeze([
   // the catch at the collar: K is LET GO (chipPhrase already did this; speak, the ticker's path, did not)
   ['Press K to let it go.', 'Tap LET GO.'],
   ['press K to let the catch go.', 'tap LET GO.'],
+  // the fate list of a big catch (slice 5, 5c): U is CHOOSE
+  ['Press U to choose.', 'Tap CHOOSE.'],
+  ['press U to choose.', 'tap CHOOSE.'],
   // the radiator refusal: O is RADIATORS on floor 1
   ['Tap O to fold it', 'Tap RADIATORS on floor 1 to fold it'],
   ['(O / RADIATORS) to thrust.', '(RADIATORS on floor 1) to thrust.'],
@@ -381,6 +387,7 @@ export class GestureHints {
       .replace(RE_ARROW_WORDS, (tok, u) => (u === 'U' ? 'Use' : 'use') + ' the turn pad to turn')
       .replace(RE_LETGO_CHIP, (tok, p) => (p === 'P' ? 'Tap ' : 'tap ') + LETGO_LABEL)
       .replace(RE_READ_CHIP, (tok, p) => (p === 'P' ? 'Tap ' : 'tap ') + READ_LABEL)
+      .replace(RE_CHOOSE_CHIP, (tok, p) => (p === 'P' ? 'Tap ' : 'tap ') + CHOOSE_LABEL)
       .replace(RE_PRESS_CHIP, (tok, p, letter, toVerb) => {
       const label = CHIP_LABELS[letter];
       const lead = (p === 'P' ? 'Tap ' : 'tap ') + label;
@@ -438,7 +445,7 @@ export class GestureHints {
 
   /**
    * u11 R3: which chips a line's "Press N/D/A/S/R/K/I" (and the pad line) asks for, in reading order, as chip kinds
-   * ('net'|'pad'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'read'). Pure (not glass-gated): the same tokens `chipPhrase` rewrites.
+   * ('net'|'pad'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'read'|'choose'). Pure (not glass-gated): the same tokens `chipPhrase` rewrites.
    * @param {string} text
    * @returns {string[]}
    */
@@ -452,6 +459,7 @@ export class GestureHints {
     rest.replace(RE_PRESS_CHIP, (tok, p, letter, toVerb, off) => { found.push([off, KIND[letter]]); return tok; });
     rest.replace(RE_LETGO_CHIP, (tok, p, tail, off) => { found.push([off, 'letgo']); return tok; });
     rest.replace(RE_READ_CHIP, (tok, p, tail, off) => { found.push([off, 'read']); return tok; });
+    rest.replace(RE_CHOOSE_CHIP, (tok, p, tail, off) => { found.push([off, 'choose']); return tok; });
     return found.sort((a, b) => a[0] - b[0]).map(f => f[1]);
   }
 

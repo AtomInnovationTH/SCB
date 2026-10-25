@@ -14,7 +14,8 @@
  *   pendingAboard()   the pending pieces she still holds: `[{debris, holder: 'collar' | {armId}, fate}]`, oldest first. An entry whose body
  *                     is gone (removed from the field) is dropped; one held by nothing (no collar net, no rack) is skipped.
  *   serialize()       the save form of every pending piece (F3: one held by nothing saves `holder: null`; pendingAboard() lists held ones only): `[{type, name, material, mass, size, owner, areaM2, fieldId, fieldRow, fate, holder,
- *                     caughtAtMs, members?}]` (a bag lists its BIG members only: the small ones were paid at the catch and carry no value).
+ *                     caughtAtMs, members?, massAtCatch?, meltDoneKg?}]` (a bag lists its BIG members only: the small ones were paid at the catch and carry no value;
+ *                     the last two only for a piece in the furnaces, lane 5e: `mass` is then what is left of it).
  *   restore(list, io) rebuilds each entry through `io` ({makeBody(spec), makeBag(bodies), place(body, holder)}): GameFlowManager's load.
  *   loose(id)         a piece that broke loose (its holder let it drop): it leaves the ledger with a line and is marked `_disposed`.
  *
@@ -137,6 +138,11 @@ export class BigPieceLedger {
       fieldId: d.fieldId ?? null,
       row: d.fieldRow ?? null,
     };
+    // C7 "Melt progress" (lane 5e): written only once the piece is in the furnaces, so a fresh entry keeps the shape it always had
+    if (Number.isFinite(meta.massAtCatch) && meta.massAtCatch > 0) {
+      d._disposal.massAtCatch = meta.massAtCatch;
+      d._disposal.meltDoneKg = Number.isFinite(meta.meltDoneKg) && meta.meltDoneKg > 0 ? meta.meltDoneKg : 0;
+    }
     this._byId.set(d.id, d);
     return true;
   }
@@ -223,6 +229,11 @@ export class BigPieceLedger {
     all.sort((a, b) => (a.debris._disposal.caughtAtMs || 0) - (b.debris._disposal.caughtAtMs || 0));
     return all.map(({ debris: d, holder, fate }) => {
       const base = { ...bodySpec(d), fate, holder, caughtAtMs: d._disposal.caughtAtMs };
+      // lane 5e (E7): `mass` above is the remainder of a piece being melted; these two say what it was caught at and how much is gone
+      if (Number.isFinite(d._disposal.massAtCatch)) {
+        base.massAtCatch = d._disposal.massAtCatch;
+        base.meltDoneKg = d._disposal.meltDoneKg || 0;
+      }
       if (d.isBag === true) {
         base.type = 'bag';
         base.mass = d.mass;
@@ -254,7 +265,12 @@ export class BigPieceLedger {
         body = io.makeBody(e);
       }
       if (!body) { out.lost++; continue; }
-      this.register(body, { fate: e.fate, caughtAtMs: e.caughtAtMs });
+      this.register(body, { fate: e.fate, caughtAtMs: e.caughtAtMs, massAtCatch: e.massAtCatch, meltDoneKg: e.meltDoneKg });
+      // lane 5e (E7): a partly melted bag comes back as its remainder, drawn shortened (a single piece did so in `restoreHeldPiece`)
+      if (body.isBag === true && Number.isFinite(e.massAtCatch) && e.massAtCatch > 0 && e.mass > 0 && e.mass < e.massAtCatch) {
+        body.mass = e.mass;
+        body._meltK = e.mass / e.massAtCatch;
+      }
       out.restored++;
       if (!io.place(body, e.holder)) out.unplaced.push(body);
     }

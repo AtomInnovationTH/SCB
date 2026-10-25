@@ -802,6 +802,7 @@ export class ArmManager {
    */
   deployArm(target, preferType = null) {
     if (!target) return false;
+    if (target._disposed === true) return false;       // slice 5 (5d, D4): a piece that was disposed of is no catch
 
     // ST-6.7: Safe-mode guard — refuse arm deployment when spacecraft is in safe mode
     if (this.playerSatellite && this.playerSatellite.safeMode) {
@@ -1021,6 +1022,7 @@ export class ArmManager {
    * @returns {boolean} true if deployment started
    */
   deployArmByIndex(index, target, opts) {
+    if (target && target._disposed === true) return false;       // slice 5 (5d, D4): a piece that was disposed of is no catch
     // ST-6.7: Safe-mode guard — refuse arm deployment when spacecraft is in safe mode
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -5835,7 +5837,7 @@ export class ArmManager {
     const list = df.getDebrisNear(pos, reachM * M) || [];
     let best = Infinity;
     for (const d of list) {
-      if (!d || d.alive === false) continue;
+      if (!d || d.alive === false || d._disposed) continue;     // (slice 5, 5d: a piece that was disposed of is no catch to be near)
       // canonical flag: the frame cache can hold pre-reveal snapshots (main.js does the same)
       const live = typeof df.getDebrisById === 'function' ? df.getDebrisById(d.id) : null;
       const src = live || d;

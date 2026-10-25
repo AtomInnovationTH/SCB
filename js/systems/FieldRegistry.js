@@ -24,6 +24,12 @@
  * no rows, and counts as laid out so a load can open the list), no field is "hers", and `defaultNext()` is the nearest field by
  * height from the satellite. `serialize()` adds `berth: 'sat500'` only while berthed.
  *
+ * THE FREE PLACE (Nets step 3 slice 5, lane 5d; DECISIONS §33 row 16-17): a push-down trip ends at a height that is no field and no satellite
+ * (`FREE_ID` 'free', `arrive('free', {altKm})`): she is there with nothing laid out (`spawnPlan()` answers no rows, as at the satellite),
+ * `currentField()` answers a field-shaped place `{id: 'free', altKm, free: true}` (so `defaultNext()` and the where-next rows count every
+ * field from that height, with no Stay: the place has no pieces), `serialize()` adds `freeKm` and keeps `current: 'free'`, and `restore()`
+ * puts her back there. Arriving at a field or flying to the satellite ends it (a CALLED satellite keeps it: it comes to her where she is).
+ *
  * A CALLED satellite (lane 3c, §33 row 7 "Stuck: call it to you for 1,000 credits") comes to HER: `arrive('sat500', { here: true })`
  * berths her where she is (`berthKm` = her height then). Her field stays hers and stays laid out around her (a mission may still be
  * going on), the satellite's height is hers (`berthedSatellite().altKm`), and `serialize()` adds `berthKm` beside `berth`: a called
@@ -65,6 +71,11 @@ function cachedTripProfile(args) {
 }
 
 const SAVE_VERSION = 1;
+
+/** Slice 5 (5d): the id of the free place a push-down trip ends at (a height that is no field and no satellite). */
+export const FREE_ID = 'free';
+const FREE_KM_MIN = 100;      // a free height is a real orbit: the saved one is validated against these
+const FREE_KM_MAX = 2000;
 
 /**
  * How a field is laid out (u20-debris v2): 'high' (the HIGH_FIELD rows), 'welcome' (the start field: WELCOME_FIELD's seven rows) or
@@ -158,8 +169,17 @@ export class FieldRegistry {
   /** @param {string} id @returns {object|null} */
   fieldById(id) { return Constants.FIELDS.LIST.find((f) => f.id === id) || null; }
 
-  /** @returns {object} the field she is at (the start field until she arrives somewhere else). */
-  currentField() { return this.fieldById(this._state.currentId) || this._startField(); }
+  /**
+   * @returns {object} the field she is at (the start field until she arrives somewhere else). At the FREE place (slice 5) a field-shaped
+   *   place that is no field: `{id: 'free', altKm, seed: 0, kind: 'free', free: true}` (a copy; the table is never changed).
+   */
+  currentField() {
+    if (this._state.freeKm != null) return { id: FREE_ID, altKm: this._state.freeKm, seed: 0, kind: 'free', free: true };
+    return this.fieldById(this._state.currentId) || this._startField();
+  }
+
+  /** @returns {boolean} she is at the free place a push-down trip ended at (no field is hers, none is laid out; slice 5, lane 5d). */
+  isFree() { return this._state.freeKm != null; }
 
   /** @returns {string} */
   currentId() { return this.currentField().id; }
@@ -224,7 +244,7 @@ export class FieldRegistry {
     // (a CALLED satellite is where she is: her field stays laid out around her at her own height)
     const sat = this.berthedSatellite();
     const plan = {
-      fieldId: f.id, altKm: sat ? sat.altKm : f.altKm, rows: this.atSatellite() ? [] : this.remainingRows(f.id), seed: f.seed,
+      fieldId: f.id, altKm: sat ? sat.altKm : f.altKm, rows: this.atSatellite() ? [] : this.remainingRows(f.id), seed: f.seed,     // (the free place has no rows: `remainingRows('free')` is empty)
       kind: f.kind === 'high' ? 'high' : 'low', layout: fieldLayout(f), missionNumber: this._pendingMission,
     };
     this._pendingMission = null;
@@ -245,8 +265,9 @@ export class FieldRegistry {
    * whether the gas is enough. `cos` is how much of the push goes the way she wants (1 = she can turn; TransferTrip passes
    * less when a daughter out on her line keeps her where she points).
    * @param {string|{id: string, altKm: number}} target a field id or a field, or a satellite (its id or the satellite)
-   * @param {{cos?: number, fromKm?: number, thetaRad?: number}} [opts] `thetaRad`: the radiator angle the drag area is taken
-   *   at (default her own now, `_flowerThetaRad`; capped at the burn band's edge, 146 deg: TripProfile.tripDragAreaM2)
+   * @param {{cos?: number, fromKm?: number, thetaRad?: number, lessKg?: number}} [opts] `thetaRad`: the radiator angle the drag area is taken
+   *   at (default her own now, `_flowerThetaRad`; capped at the burn band's edge, 146 deg: TripProfile.tripDragAreaM2); `lessKg`: plan the
+   *   trip with her live mass less this much (slice 5: the climb back up after a push-down is flown without the piece she let go)
    * @returns {{field: object, fromKm: number, profile: object, ispS: number, areaM2: number, gasAboardKg: number, enough: boolean,
    *   playS: number}|null} `ispS` is the Isp the profile was flown with (the gas's, divided by the gas multiplier c: the power share x the ion-drive upgrade)
    */
@@ -266,7 +287,7 @@ export class FieldRegistry {
     // Her drag area is the one at her radiator angle (capped at 146 deg), nose-first, wings sun-tracking (review F3).
     const areaM2 = tripDragAreaM2(Number.isFinite(opts.thetaRad) ? opts.thetaRad : p._flowerThetaRad);
     const profile = cachedTripProfile({
-      fromKm, toKm: field.altKm, massKg: p.mass, thrustN: realThrustN(fuel), ispS, areaM2,
+      fromKm, toKm: field.altKm, massKg: Number.isFinite(opts.lessKg) && opts.lessKg > 0 ? Math.max(1, p.mass - opts.lessKg) : p.mass, thrustN: realThrustN(fuel), ispS, areaM2,
       cos: opts.cos === undefined ? 1 : opts.cos,
     });
     const gasAboardKg = engineGasKg(p.resources);
@@ -321,11 +342,19 @@ export class FieldRegistry {
    * @param {{here?: boolean}} [opts]
    */
   arrive(id, opts) {
-    if (this.fieldById(id)) { this._state.currentId = id; this._state.berthId = null; this._state.berthKm = null; return; }
+    // slice 5 (5d): the free place a push-down trip ends at (`opts.altKm`: its height; an unusable height changes nothing)
+    if (id === FREE_ID) {
+      const km = opts && opts.altKm;
+      if (!Number.isFinite(km) || km < FREE_KM_MIN || km > FREE_KM_MAX) return;
+      this._state.freeKm = km; this._state.berthId = null; this._state.berthKm = null;
+      return;
+    }
+    if (this.fieldById(id)) { this._state.currentId = id; this._state.berthId = null; this._state.berthKm = null; this._state.freeKm = null; return; }
     if (!this.satelliteById(id)) return;
     this._state.berthId = id;
     const km = opts && opts.here === true ? this.altitudeKm() : null;
     this._state.berthKm = Number.isFinite(km) ? km : null;
+    if (this._state.berthKm == null) this._state.freeKm = null;       // she flew to the satellite: no free place any more (a called one came to her where she is)
   }
 
   /**
@@ -350,6 +379,7 @@ export class FieldRegistry {
     const remaining = {};
     for (const f of this.fields()) remaining[f.id] = this.remainingRows(f.id);
     const out = { v: SAVE_VERSION, current: this.currentField().id, remaining, at: this._state.at };
+    if (this._state.freeKm != null) out.freeKm = Math.round(this._state.freeKm * 1000) / 1000;     // slice 5: only at the free place (`current` is then 'free')
     if (this._state.berthId != null) {                                    // only while berthed: today's saves stay byte-identical
       out.berth = this._state.berthId;
       if (this._state.berthKm != null) out.berthKm = Math.round(this._state.berthKm * 1000) / 1000;     // a called berth: her height, not the satellite's
@@ -372,12 +402,15 @@ export class FieldRegistry {
     this._state.at = missionNumber || 1;
     if (saved && typeof saved === 'object' && saved.v === SAVE_VERSION) {
       if (typeof saved.current === 'string' && this.fieldById(saved.current)) this._state.currentId = saved.current;
+      // slice 5 (5d): saved at the free place (a broken height is dropped: she is at the start field, as for any unknown place)
+      if (saved.current === FREE_ID && Number.isFinite(saved.freeKm) && saved.freeKm >= FREE_KM_MIN && saved.freeKm <= FREE_KM_MAX) this._state.freeKm = saved.freeKm;
       if (Number.isInteger(saved.at) && saved.at > 0) this._state.at = saved.at;
       // a berth she was saved at (an unknown or broken one is dropped: she is at her saved field)
       if (typeof saved.berth === 'string' && this.satelliteById(saved.berth)) {
         this._state.berthId = saved.berth;
         // a called berth is at HER height (a broken height is dropped: a berth at the satellite's own)
         if (Number.isFinite(saved.berthKm) && saved.berthKm >= 100 && saved.berthKm <= 2000) this._state.berthKm = saved.berthKm;
+        if (this._state.berthKm == null) this._state.freeKm = null;       // berthed at the satellite she flew to: not at the free place
       }
       const rem = saved.remaining;
       if (rem && typeof rem === 'object') {
@@ -396,7 +429,7 @@ export class FieldRegistry {
     // A boundary credit saves while the trip to the next field has not been flown (the daughters are still coming home): the
     // catches say mission N + 1, the last mission started is N. She is still in the field she left, and the trip is owed.
     // A berth always owes the list (she can only be berthed with a start owed, or a call mid-mission: lane 3c): the count says so.
-    this._resume = (!!missionNumber && missionNumber > this._state.at) || !!sat;
+    this._resume = (!!missionNumber && missionNumber > this._state.at) || !!sat || this.isFree();      // (the free place, like a berth, always owes the list)
     // the field she is laid out in belongs to the mission that started there, not to the one the catches count has reached
     this._pendingMission = this._resume ? this._state.at : missionNumber;
   }
@@ -418,7 +451,7 @@ export class FieldRegistry {
   _fresh() {
     const remaining = {};
     for (const f of Constants.FIELDS.LIST) remaining[f.id] = allRows(f);
-    return { currentId: this._startField().id, berthId: null, berthKm: null, remaining, at: 1 };
+    return { currentId: this._startField().id, berthId: null, berthKm: null, freeKm: null, remaining, at: 1 };
   }
 
   /** @private The gas that pushes her: the one in the tank (a cargo fuel's own Isp when she is burning cargo metal). */
@@ -436,7 +469,7 @@ export class FieldRegistry {
     const n = d && d.missionNumber;
     if (Number.isInteger(n) && n > 0) this._state.at = n;
     this._resume = false;
-    if (Number.isInteger(n) && n >= Constants.SMALL_GROUP.FROM_MISSION && this.isOn() && !this.isBerthed()) this._addMissionExtras(this.currentField());
+    if (Number.isInteger(n) && n >= Constants.SMALL_GROUP.FROM_MISSION && this.isOn() && !this.isBerthed() && !this.isFree()) this._addMissionExtras(this.currentField());
   }
 
   /**

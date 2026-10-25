@@ -35,12 +35,21 @@
  * empty pick set: away from the satellite the flow manager says the line and starts the next mission where she is; berthed it says
  * the line and keeps the list open.
  *
+ * Slice 5 (lane 5d, DECISIONS §33 row 16-17; plan D1): `opts.bigPieces` (`pendingAboard()`'s `[{debris, holder, fate}]`) adds, FIRST and
+ * pre-focused, one row per held big piece marked "push" (kind `push`, id `push:<debrisId>`):
+ *   "Push the SL-14 stage down to 635 km and let go . 10.4 kg gas (50 %) . 95 days . pays 14,000"   she can fly it AND climb back
+ *   "Push the SL-14 stage down to 635 km and let go . needs 12.2 kg gas, 4.7 kg short"              the gas does not cover both; not selectable
+ *   "Let the SL-14 stage go here at 400 km: it comes down in about 3 years . pays 14,000"            she is already at or below its 25-year height
+ * Every satellite row she can fly to also says "hands over the SL-14 stage, pays 20,920" for the pieces marked "satellite" (summed).
  * @module systems/WhereNextRows
  */
 
 import { Constants } from '../core/Constants.js';
 import { FloorContract } from '../core/FloorContract.js';
 import { daysWithTurnWait } from './TripProfile.js';
+import { pieceName } from './BigPieces.js';
+import { fatePay } from './BigPieceValues.js';
+import { pushTargetKm, lifetimeYears, dragAreaM2 } from './OrbitLifetime.js';
 
 /** The id of the "Stay here" row (field ids are f<km>). */
 export const STAY_ID = 'stay';
@@ -74,6 +83,10 @@ export const CALL_KIND = 'call';
 
 /** The `kind` of a satellite row (the list paints any row; the flow manager picks by id). */
 export const SATELLITE_ROW_KIND = 'satellite';
+
+/** Slice 5 (5d): the `kind` of a push-down row, and the prefix of its id (`push:<debrisId>`). The flow manager picks by id. */
+export const PUSH_KIND = 'push';
+export const PUSH_PREFIX = 'push:';
 
 const DOT = '\u00b7';
 
@@ -109,10 +122,10 @@ export function pctText(gasKg, aboardKg) {
 /**
  * @typedef {object} WhereNextRow
  * @property {string} id          field id ('f400'), a satellite id ('sat500'), STAY_ID or CALL_ID
- * @property {'field'|'stay'|'satellite'|'call'} kind
+ * @property {'field'|'stay'|'satellite'|'call'|'push'} kind
  * @property {number} altKm       the field's height (Stay and the call: her own field's; the satellite's)
  * @property {number} pieces      pieces left in that field (0 for the satellite and the call)
- * @property {'ok'|'cleared'|'short'|'cannot'|'stay'|'mission'|'poor'} state   'mission': a mission is going on, trips wait for its end; 'poor': the call, short of credits
+ * @property {'ok'|'cleared'|'short'|'cannot'|'stay'|'mission'|'poor'|'here'} state   'mission': a mission is going on, trips wait for its end; 'poor': the call, short of credits; 'here': a push row with no trip (she is at or below the piece's 25-year height)
  * @property {boolean} selectable
  * @property {string} text        the row's words
  * @property {number} [gasKg]     the whole trip's gas (a trip she can fly, or one she is short for)
@@ -121,11 +134,14 @@ export function pctText(gasKg, aboardKg) {
  * @property {number} [shortKg]   profile gas minus gas aboard (state 'short')
  * @property {number} [credits]   the call's price
  * @property {string} [satId]     the call: the satellite that would come
+ * @property {number|string} [debrisId]  a push row: the piece it lets go
+ * @property {number} [targetKm]   a push row: the height it lets go at
+ * @property {number} [payCr]      a push row: what the removal fee pays
  */
 
 /**
  * @param {object} reg a FieldRegistry (or anything with its read face)
- * @param {{motherNets?: number, credits?: number, gasCredits?: number, startOwed?: boolean, turnWaitS?: {up: number, down: number}}} [opts] `motherNets`: the mother's nets aboard now (an unknown
+ * @param {{motherNets?: number, credits?: number, gasCredits?: number, startOwed?: boolean, turnWaitS?: {up: number, down: number}, bigPieces?: Array<{debris: object, fate: (string|null)}>}} [opts] `bigPieces` (slice 5): the held big pieces (`pendingAboard()`): their push rows and the satellite rows' hand-over words; `motherNets`: the mother's nets aboard now (an unknown
  *   count never pre-focuses the satellite); `credits`: her wallet (no number = no call row); `gasCredits`: one gas buy's price (the call needs it on top of its own price); `startOwed` false = a mission is going on (a
  *   field cannot be picked: "finish this mission first"; Stay is always there), default true
  * @returns {{rows: WhereNextRow[], focusId: (string|null), selectable: string[], line: (string|null)}}
@@ -145,6 +161,11 @@ export function buildWhereNextRows(reg, opts = {}) {
     .sort((a, b) => Math.abs(a.altKm - fromKm) - Math.abs(b.altKm - fromKm) || a.altKm - b.altKm);
   /** @type {WhereNextRow[]} */
   const rows = [];
+  // slice 5 (5d, D1): the held big pieces marked "push" come first; the ones marked "satellite" add their words to the satellite rows
+  const held = opts && Array.isArray(opts.bigPieces) ? opts.bigPieces.filter((e) => e && e.debris) : [];
+  const herKm = typeof reg.altitudeKm === 'function' && Number.isFinite(reg.altitudeKm()) ? reg.altitudeKm() : fromKm;
+  for (const e of held) if (e.fate === 'push') { const r = pushRow(reg, e.debris, owed, turn, herKm); if (r) rows.push(r); }
+  const handOver = handOverWords(held.filter((e) => e.fate === 'satellite').map((e) => e.debris));
   if (typeof reg.satellites === 'function') {
     // N satellites (slice 4): nearest by height from her field first, a tie to the lower one (as the fields are listed). The call
     // summons the NEAREST one: it comes right after that satellite's row, when she cannot fly there (out of gas, or a mission is going on).
@@ -153,6 +174,7 @@ export function buildWhereNextRows(reg, opts = {}) {
       .sort((a, b) => Math.abs(a.altKm - fromKm) - Math.abs(b.altKm - fromKm) || a.altKm - b.altKm);
     for (let i = 0; i < sats.length; i++) {
       const row = satelliteRow(reg, sats[i], owed, turn);
+      if (handOver && row.state === 'ok') row.text += ` ${DOT} ${handOver}`;
       rows.push(row);
       if (!berth && i === 0 && credits !== null && !row.selectable) rows.push(callRow(sats[i], row, here, credits, gasCredits));
     }
@@ -204,8 +226,10 @@ export function buildWhereNextRows(reg, opts = {}) {
   const callSel = rows.find((r) => r.kind === CALL_KIND && r.selectable);
   const noNets = Number.isFinite(opts && opts.motherNets) && opts.motherNets <= 0;     // mission 1 used all four (row 10)
   const flyable = next && selectable.includes(next.id);
+  const pushSel = rows.find((r) => r.kind === PUSH_KIND && r.selectable);                // slice 5: a piece she marked for the push comes first
   let focusId = null;
-  if (satRow && noNets && !berth) focusId = satRow.id;                                // berthed (fix round 2, G1): never pre-select the OTHER satellite: she is at the shop already
+  if (pushSel) focusId = pushSel.id;
+  else if (satRow && noNets && !berth) focusId = satRow.id;                                // berthed (fix round 2, G1): never pre-select the OTHER satellite: she is at the shop already
   else if (flyable) focusId = next.id;
   else if (callSel) focusId = callSel.id;                                              // stuck: nothing she can fly, the call is the way out
   else if (selectable.includes(STAY_ID)) focusId = STAY_ID;
@@ -281,4 +305,56 @@ function callRow(s, satRow, here, credits, gasCredits) {
   const head = `Call the resupply satellite to you ${DOT} ${creditsText(price)} credits`;
   if (credits >= price + gasCredits) return { ...base, state: 'ok', selectable: true, text: `${head} ${DOT} ${daysText(days)}` };
   return { ...base, state: 'poor', selectable: false, text: `${head}${gasCredits > 0 ? ' + gas' : ''}, you have ${creditsText(credits)}` };
+}
+
+/**
+ * @private Slice 5 (5d, D1): the row of a held big piece marked "push": go down to its 25-year height, let it go there. Selectable only
+ * when her gas covers the push AND the climb back to where she is now (flown without the piece: its mass is gone by then). A piece she
+ * is already at or below the height of needs no trip: "let it go here" (the same pick, no burn).
+ * @param {object} reg @param {object} d the piece (or a scoop bag holding one) @param {boolean} owed @param {{up:number,down:number}|null} turn
+ * @param {number} herKm her height now @returns {WhereNextRow|null} null when no height can be worked out for the piece
+ */
+function pushRow(reg, d, owed, turn, herKm) {
+  const target = pushTargetKm(d);
+  if (!Number.isFinite(target) || !Number.isFinite(herKm)) return null;
+  const name = pieceName(d);
+  const pay = fatePay(d, 'push');
+  const payText = pay.totalCr > 0 ? `pays ${creditsText(pay.totalCr)}` : 'pays nothing';
+  const base = /** @type {any} */ ({ id: `${PUSH_PREFIX}${d.id}`, kind: PUSH_KIND, altKm: target, pieces: 0, debrisId: d.id, targetKm: target, payCr: pay.totalCr });
+  const head = `Push the ${name} down to ${Math.round(target)} km and let go`;
+  if (!owed) return { ...base, state: 'mission', selectable: false, text: `${head} ${DOT} ${MISSION_FIRST}` };
+  if (herKm <= target + 0.5) {
+    const years = lifetimeYears(herKm, d.mass, dragAreaM2(d));
+    const when = Number.isFinite(years) ? `it comes down in about ${Math.max(1, Math.round(years))} ${Math.max(1, Math.round(years)) === 1 ? 'year' : 'years'}` : 'it stays up';
+    return { ...base, state: 'here', altKm: herKm, targetKm: herKm, selectable: true, text: `Let the ${name} go here at ${Math.round(herKm)} km: ${when} ${DOT} ${payText}` };
+  }
+  const down = reg.planTo({ id: 'free', altKm: target });
+  if (!down || !down.profile || !down.profile.ok) return { ...base, state: 'cannot', selectable: false, text: `${head} ${DOT} the thruster cannot take her there` };
+  const back = reg.planTo({ id: 'free-back', altKm: herKm }, { fromKm: target, lessKg: d.mass || 0 });
+  if (!back || !back.profile || !back.profile.ok) return { ...base, state: 'cannot', selectable: false, text: `${head} ${DOT} the thruster cannot bring her back up` };
+  const gasKg = down.profile.gasKg;
+  const days = tripDays(down.profile, turn);
+  const needKg = gasKg + back.profile.gasKg;
+  if (needKg > down.gasAboardKg + 1e-9) {
+    const shortKg = needKg - down.gasAboardKg;
+    return { ...base, state: 'short', selectable: false, gasKg, shortKg, days, text: `${head} ${DOT} needs ${kgText(needKg)} kg gas, ${kgText(shortKg)} kg short` };
+  }
+  const gasPct = down.gasAboardKg > 0 ? gasKg / down.gasAboardKg * 100 : 0;
+  return {
+    ...base, state: 'ok', selectable: true, gasKg, gasPct, days, backGasKg: back.profile.gasKg,
+    text: `${head} ${DOT} ${kgText(gasKg)} kg gas (${pctText(gasKg, down.gasAboardKg)}) ${DOT} ${daysText(days)} ${DOT} ${payText}`,
+  };
+}
+
+/**
+ * @private Slice 5 (5d, D1): what a satellite row adds for the held pieces marked "satellite": "hands over the SL-14 stage, pays 20,920"
+ * (several pieces: "hands over the SL-14 stage and the Cosmos 1175 satellite, pays 25,520"). '' with none.
+ * @param {object[]} pieces @returns {string}
+ */
+function handOverWords(pieces) {
+  if (!pieces.length) return '';
+  const names = pieces.map((d) => `the ${pieceName(d)}`);
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  const total = pieces.reduce((sum, d) => sum + fatePay(d, 'satellite').totalCr, 0);
+  return `hands over ${list}, pays ${creditsText(total)}`;
 }

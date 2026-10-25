@@ -114,11 +114,28 @@ export function calledStartLine(days) {
   const d = Math.max(1, Math.round(days));
   return `Resupply satellite called. It is about ${d} ${d === 1 ? 'day' : 'days'} out.`;
 }
-// the trip's own words for its destination (a field or a satellite)
-const tripStartLine = (dir, f, n) => (isSatelliteTarget(f) ? satelliteStartLine(dir, n) : fieldStartLine(dir, f.altKm, n));
-const tripArrivedLine = (f) => (isSatelliteTarget(f) ? SATELLITE_ARRIVED_LINE : fieldArrivedLine(f.altKm));
-const tripNoGasLine = (f) => (isSatelliteTarget(f) ? SATELLITE_NO_GAS_LINE : fieldNoGasLine(f.altKm));
-const tripNoPointLine = (dir, f) => (isSatelliteTarget(f) ? satelliteNoPointLine(dir) : fieldNoPointLine(dir, f.altKm));
+// ── the free place's words (Nets step 3 slice 5, lane 5d): a push-down trip ends at a height that is no field and no satellite ──────────
+/** @param {{id?: string}|null} target @returns {boolean} the target of a trip is the free place of a push-down (FieldRegistry's `FREE_ID`) */
+export function isFreeTarget(target) { return !!target && target.id === 'free'; }
+/** @param {number} dir +1 climb, -1 descent @param {number} toKm @param {number} n catches the furnaces melt */
+export function freeStartLine(dir, toKm, n) {
+  const go = `${dir < 0 ? 'Descending' : 'Climbing'} to ${Math.round(toKm)} km.`;
+  if (!(n > 0)) return go;
+  return `${go} The furnaces melt ${n} ${n === 1 ? 'catch' : 'catches'}.`;
+}
+/** @param {number} toKm */
+export function freeArrivedLine(toKm) { return `Arrived at ${Math.round(toKm)} km.`; }
+/** @param {number} toKm */
+export function freeNoGasLine(toKm) { return `Not enough gas to reach ${Math.round(toKm)} km.`; }
+/** @param {number} dir +1 along her motion, -1 against it @param {number} toKm */
+export function freeNoPointLine(dir, toKm) {
+  return `Cannot point the ship ${dir < 0 ? 'against' : 'along'} its motion to reach ${Math.round(toKm)} km.`;
+}
+// the trip's own words for its destination (a field, a satellite, or the free place)
+const tripStartLine = (dir, f, n) => (isFreeTarget(f) ? freeStartLine(dir, f.altKm, n) : isSatelliteTarget(f) ? satelliteStartLine(dir, n) : fieldStartLine(dir, f.altKm, n));
+const tripArrivedLine = (f) => (isFreeTarget(f) ? freeArrivedLine(f.altKm) : isSatelliteTarget(f) ? SATELLITE_ARRIVED_LINE : fieldArrivedLine(f.altKm));
+const tripNoGasLine = (f) => (isFreeTarget(f) ? freeNoGasLine(f.altKm) : isSatelliteTarget(f) ? SATELLITE_NO_GAS_LINE : fieldNoGasLine(f.altKm));
+const tripNoPointLine = (dir, f) => (isFreeTarget(f) ? freeNoPointLine(dir, f.altKm) : isSatelliteTarget(f) ? satelliteNoPointLine(dir) : fieldNoPointLine(dir, f.altKm));
 
 /** "Burning to the next field. The furnaces melt N catches." (or just the first part with none). */
 export function startLine(n) {
@@ -275,6 +292,9 @@ export class TransferTrip {
     this._callS = 0;                // real seconds played so far
     /** The last leg flown ({fieldId, altKm, days, gasKg}), set when a field trip arrives; GameFlowManager reads it in `onArrive`. */
     this.lastLeg = null;
+    /** Nets step 3 slice 5 (lane 5e): the owner of work that rides a profile burn on the ship's clock (see `setBurnWork`), and whether it is running */
+    this._work = null;
+    this._workOn = false;
     this.setDeps(deps);
   }
 
@@ -297,6 +317,39 @@ export class TransferTrip {
       if (deps[k] !== undefined) this._d[k] = deps[k];
     }
     if (deps.bus) this._bus = deps.bus;
+  }
+
+  /**
+   * Nets step 3 slice 5 (lane 5e, plan E1-E2): work that rides a profile burn on the SHIP'S clock - the tip furnaces melting a big piece. The
+   * burn's ship time is `profile.days x 86,400` s (planned days) played over `playSeconds` real s, so an event at ship time t shows at
+   * t / burnShipS x playSeconds: the work is told the fraction of the profile played. `begin({days, playSeconds})` once the burn has begun,
+   * `tick({frac, days, playSeconds})` every frame the profile plays (0..1; it stands still while the push waits), `end({completed})` once:
+   * `completed` true when the profile has played out (`_end`: the work finishes everything it started), false when the trip stopped
+   * without arriving (`abort`, a trip that stays, a reset): nothing more is melted and the work puts its drawing back.
+   * @param {{begin?: function, tick?: function, end?: function}|null} work
+   */
+  setBurnWork(work) {
+    this._work = work || null;
+  }
+
+  /** @private Tell the work the burn began (profile trips only: a flat trip has no days). */
+  _workBegin() {
+    if (!this._work || !this._profile || this._workOn) return;
+    this._workOn = true;
+    if (typeof this._work.begin === 'function') this._work.begin({ days: this._profile.days, playSeconds: this._playP });
+  }
+
+  /** @private One frame of the profile: the fraction played. */
+  _workTick(frac) {
+    if (!this._workOn || !this._work || typeof this._work.tick !== 'function') return;
+    this._work.tick({ frac, days: this._profile ? this._profile.days : 0, playSeconds: this._playP });
+  }
+
+  /** @private The burn is over (`completed`) or was cut short; says so once. */
+  _workEnd(completed) {
+    if (!this._workOn) return;
+    this._workOn = false;
+    if (this._work && typeof this._work.end === 'function') this._work.end({ completed: !!completed });
   }
 
   // ── asking ────────────────────────────────────────────────────────────────
@@ -631,6 +684,7 @@ export class TransferTrip {
     this._dep = o ? { e0: o.eccentricity || 0, inclination: o.inclination, raan: o.raan, argPerigee: o.argPerigee } : null;
     this._d.fields.depart();                     // the field she leaves keeps its pieces: stored, not simulated
     this._pushStatus(0);
+    this._workBegin();                           // lane 5e: the furnaces start on the ship's clock
   }
 
   /** @private The trip could not go (no gas for it once planned with the real mass and attitude): she stays, the mission starts. */
@@ -798,6 +852,7 @@ export class TransferTrip {
     this._pushStatus(f, paused);
     this._noteTips();
     this._tickCarry(dt);
+    this._workTick(f);                           // lane 5e: the furnaces' work at the fraction of the burn played
     if (this._playS < this._playP) return;
     // The profile is over. The shown pass (a carry, or a leash) still running holds the end; the end sweep then delivers and melts the rest.
     this._overS += dt;
@@ -1117,13 +1172,17 @@ export class TransferTrip {
   /** @private The burn is over: settle the gas, say it, stop the plume and the hold, then run the callback. */
   _end() {
     let line;
+    this._workEnd(true);          // lane 5e: the burn has played out, so every part the furnaces started is finished (the work is planned to fit)
     if (this._profile) {
       // Nets step 3 slice 2b: she lands exactly on the field's height (circular), the registry records the arrival (it lays the
       // field out at the mission start, not here), the leg is kept for the caller: the days of the whole burn, pauses included
       // (review R3), and the gas billed for the time the engine pushed (review F6: not the profile's, when her nose was off).
       this._applyProfile(1);
       this.lastLeg = { fieldId: this._field.id, altKm: this._field.altKm, days: this._flownDays(), gasKg: this._billedKg };
-      if (this._d.fields) this._d.fields.arrive(this._field.id);
+      if (this._d.fields) {
+        if (isFreeTarget(this._field)) this._d.fields.arrive(this._field.id, { altKm: this._field.altKm });      // slice 5: the free place needs its height
+        else this._d.fields.arrive(this._field.id);
+      }
       line = this._gasShort ? TRIP_LINES.ARRIVED_LAST_GAS : tripArrivedLine(this._field);
     } else {
       // Whatever of the trip's gas was not billed yet (a frame that ended it early) is billed now: exactly one trip's worth.
@@ -1144,6 +1203,7 @@ export class TransferTrip {
 
   /** @private Common tail of an arrival and an abort. */
   _finish() {
+    this._workEnd(false);         // lane 5e: an abort, a trip that stays, a reset: no more is melted (a no-op after `_end`)
     this._phase = 'idle';
     this._field = null;
     this._profile = null;

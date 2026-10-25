@@ -5125,11 +5125,20 @@ export class CaptureNetSystem {
    * @private
    */
   _reseatOrbitOnRelease(net) {
-    const d = net.targetDebris;
+    this.reseatBodyOrbit(net.targetDebris);
+  }
+
+  /**
+   * Nets step 3 slice 5 (lane 5d): `_reseatOrbitOnRelease` for a body that no net holds any more (a big piece let go by a push-down or a
+   * drag sail: `GameFlowManager.detachHeldPiece` has already taken the net away). The same ONE computation, so the piece flies on from
+   * where it was pinned with her velocity, never along the stale orbit it carried while it was held. No behaviour change for K.
+   * @param {object|null} d the field's own body @returns {boolean} the orbit was re-seated
+   */
+  reseatBodyOrbit(d) {
     const player = this._player;
-    if (!d || !player || !d._scenePosition || !d.orbit) return;
+    if (!d || !player || !d._scenePosition || !d.orbit) return false;
     const v = (typeof player.getVelocity === 'function') ? player.getVelocity() : null;
-    reseatOrbitFromScene(d.orbit, d._scenePosition, v);
+    return !!reseatOrbitFromScene(d.orbit, d._scenePosition, v);
   }
 
   /**
@@ -5369,7 +5378,7 @@ export class CaptureNetSystem {
     if (bigPieces.isPending(net.targetDebris)) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD',
-        text: `K doesn't let go of the ${pieceName(net.targetDebris)}: it pays when you dispose of it.`,
+        text: `K doesn't let go of the ${pieceName(net.targetDebris)}: it pays when you dispose of it. Press U to choose.`,
         priority: 'warning', _reactive: true,
       });
       return false;
@@ -5705,6 +5714,7 @@ export class CaptureNetSystem {
   fireMotherNet(podIndex, launchPos, launchDir, target, mode) {
     if (tripRefuses('net')) return null;            // trip-melt D7: no net while the ship burns to the next field
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return null;
+    if (target && target._disposed === true) return null;       // slice 5 (5d, D4): a piece that was disposed of is no catch
     if (!(podIndex >= 0) || podIndex >= this._motherPodCount()) return null;
     // Phase 0.3 (capture-feedback overhaul): refusals speak — mirror the
     // LassoSystem denial-comms style so the player knows WHY nothing fired

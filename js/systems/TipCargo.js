@@ -76,6 +76,26 @@ const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _X = new THREE.Vector3(1, 0, 0);
 
+// lane 5e: one shared lumpy ball (a bundle of folded wall sections in a net) and one dull-metal material for every part bag; never disposed
+let _partBagGeo = null;
+let _partBagMat = null;
+function partBagGeometry() {
+  if (_partBagGeo) return _partBagGeo;
+  const g = new THREE.IcosahedronGeometry(1, 1);
+  const pos = g.attributes.position;
+  for (let k = 0; k < pos.count; k++) {            // a fixed lumpy pattern (no random: the bag looks the same every time)
+    const bump = 1 + 0.12 * Math.sin(k * 12.9898 + 4.1414) * Math.cos(k * 3.7);
+    pos.setXYZ(k, pos.getX(k) * bump, pos.getY(k) * bump, pos.getZ(k) * bump);
+  }
+  g.computeVertexNormals();
+  _partBagGeo = g;
+  return g;
+}
+function partBagMaterial() {
+  if (!_partBagMat) _partBagMat = new THREE.MeshStandardMaterial({ color: 0x8c949e, roughness: 0.85, metalness: 0.35, flatShading: true });
+  return _partBagMat;
+}
+
 /** Band row (deg) for a bag radius, or null when the bag is too big for a tip. */
 export function bandDegForRadius(radiusM) {
   const r = Number.isFinite(radiusM) ? radiusM : 0;
@@ -101,12 +121,15 @@ export class TipCargo {
     this._tipCache = [null, null, null, null];
     this._bookings = [];
     this._lastThetas = [null, null, null, null];   // petal-single: each occupied tip's petal angle at the last update
+    /** Nets step 3 slice 5 (lane 5e): the part of a big piece being melted in tip i's furnace, drawn as a bag (see `showPartBag`) */
+    this._partBags = [null, null, null, null];
     this._boundReset = () => this.reset();
     this.eventBus.on(Events.GAME_RESET, this._boundReset);
     this.eventBus.on(Events.GAMEOVER_CONTINUE, this._boundReset);
   }
 
   dispose() {
+    this.clearPartBags();
     this.eventBus.off(Events.GAME_RESET, this._boundReset);
     this.eventBus.off(Events.GAMEOVER_CONTINUE, this._boundReset);
   }
@@ -361,7 +384,66 @@ export class TipCargo {
       const rad = ((deg === null ? TIP_BAND[TIP_BAND.length - 1][1] : deg) * Math.PI) / 180;
       if (rad < best) best = rad;
     }
+    // lane 5e: a part bag shown on a tip holds the radiators at its band exactly as a real bag of its reach does
+    for (const b of this._partBags) {
+      if (!b) continue;
+      const deg = bandDegForRadius(b.radiusM);
+      const rad = ((deg === null ? TIP_BAND[TIP_BAND.length - 1][1] : deg) * Math.PI) / 180;
+      if (rad < best) best = rad;
+    }
     return best;
+  }
+
+  // ── part bags (Nets step 3 slice 5, lane 5e: a big piece melting in a tip furnace) ─────────────────────
+
+  /**
+   * Show (or update) the bag of the PART of a big piece being melted in tip i's furnace: a drawn bundle of folded wall sections pinned to the
+   * tip like a real bag, shrinking as it melts. It is only a drawing: no field body, no CATCH_PROCESSED, no NET_CONSUMED, no mass booking (the
+   * part's kilograms are still in the piece until it melts, GameFlowManager books them then). It counts in `maxRadiatorThetaRad()` exactly as a real
+   * bag of its drawn reach does (the part's size with its parent's geometry, `DebrisField.trueReachM`: 0.70 m reads the 134 deg row), at its FULL
+   * size, so the radiators settle once and do not chase the shrinking bag. The ceiling lifts at `clearPartBags`.
+   * @param {number} i tip index (0..3)
+   * @param {{type: string, sizeM: number, frac?: number}} spec `sizeM` the packed part's diameter (m), `frac` 1 = whole .. 0 = melted
+   * @returns {boolean} false when the tip does not exist, holds a real bag, or the part does not fit a tip
+   */
+  showPartBag(i, spec = {}) {
+    if (!(i >= 0 && i < SLOT_COUNT) || this._slots[i]) return false;
+    const rec = this._tipRec(i);
+    if (!rec || !(spec.sizeM > 0)) return false;
+    const radiusM = DebrisField.trueReachM({ type: spec.type, id: 1, sizeMeter: spec.sizeM }, 0);
+    if (!this.fits(radiusM)) return false;
+    let b = this._partBags[i];
+    if (!b) b = this._partBags[i] = { i, type: spec.type, sizeM: spec.sizeM, radiusM, frac: 1, mesh: null };
+    b.type = spec.type; b.sizeM = spec.sizeM; b.radiusM = radiusM;
+    b.frac = Number.isFinite(spec.frac) ? Math.max(0, Math.min(1, spec.frac)) : 1;
+    if (!b.mesh) b.mesh = new THREE.Mesh(partBagGeometry(), partBagMaterial());
+    const mesh = b.mesh;
+    if (mesh.parent !== rec.hinge) rec.hinge.add(mesh);          // pinned to the radiator: it turns with the petal and the ship
+    mesh.layers.mask = rec.hinge.layers.mask;                    // the ship's near-field pass
+    mesh.name = `PartBag_${i}`;
+    this._latchHingeInto(rec, _v1);
+    mesh.position.copy(_v1).addScaledVector(_X, radiusM * M);    // the bag's centre: latch + reach along the boom, as a real bag sits
+    mesh.scale.setScalar((spec.sizeM / 2) * Math.cbrt(Math.max(b.frac, 0.02)) * M);
+    mesh.visible = true;
+    return true;
+  }
+
+  /** Is a part bag shown on tip i (or on any tip)? */
+  hasPartBag(i) { return i === undefined ? this._partBags.some(Boolean) : !!this._partBags[i]; }
+
+  /** The part bag on tip i, as `{type, sizeM, radiusM, frac}` (a copy), or null. */
+  partBagAt(i) { const b = this._partBags[i]; return b ? { type: b.type, sizeM: b.sizeM, radiusM: b.radiusM, frac: b.frac } : null; }
+
+  /** Take the part bag off tip `i` (all four when `i` is omitted): the drawing goes and the radiator ceiling it set is lifted. */
+  clearPartBags(i) {
+    const from = i === undefined ? 0 : i;
+    const to = i === undefined ? SLOT_COUNT : i + 1;
+    for (let k = from; k < to; k++) {
+      const b = this._partBags[k];
+      if (!b) continue;
+      if (b.mesh) { if (b.mesh.parent) b.mesh.parent.remove(b.mesh); b.mesh.visible = false; }
+      this._partBags[k] = null;
+    }
   }
 
   // ── placement ────────────────────────────────────────────────────────────
@@ -606,6 +688,7 @@ export class TipCargo {
 
   /** Drop every bag: release the bodies to the field as free, re-targetable pieces. */
   reset() {
+    this.clearPartBags();
     this._reserved = [false, false, false, false];
     const held = [];
     for (let i = 0; i < SLOT_COUNT; i++) {

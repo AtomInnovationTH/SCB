@@ -72,6 +72,8 @@ const CHIPS = Object.freeze({
   reel: Object.freeze({ text: 'Reel her home', glyph: 'R', keys: Object.freeze(['KeyR']), press: 'KeyR', button: 'REEL' }),
   // u14b B1: K lets the catch at the collar go (CaptureNet.releaseDockedCatch, refusals included).
   letgo: Object.freeze({ text: 'Let the catch go', glyph: 'K', keys: Object.freeze(['KeyK']), press: 'KeyK', button: 'LET GO' }),
+  // slice 5 (5c): U opens the fate list of a big catch (ui/FateList.js): the catch line "press U to choose" brings it; floors 2-4.
+  choose: Object.freeze({ text: 'Choose what to do with it', glyph: 'U', keys: Object.freeze(['KeyU']), press: 'KeyU', button: 'CHOOSE' }),
   // u14b B2: I opens the full-screen library; the SPECS tab opens a different (side) view, so it needs its own button.
   read: Object.freeze({ text: 'Read more', glyph: 'I', keys: Object.freeze(['KeyI']), press: 'KeyI', button: 'READ MORE' }),
   // u15a A-T2: mission 3's wide-scan lesson. Shift+S is the only way to a wide scan; a touch player had no key for it
@@ -95,7 +97,7 @@ export const BEAT_CHIPS = Object.freeze({
 });
 
 /** The key each chip kind presses (a physical or tapped press of it ends a line chip). */
-const KIND_KEY = Object.freeze({ net: 'KeyN', pad: 'KeyN', grip: 'KeyN', magnet: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR', letgo: 'KeyK', read: 'KeyI', widescan: 'Shift+KeyS', throttle: 'Shift+Equal' });
+const KIND_KEY = Object.freeze({ net: 'KeyN', pad: 'KeyN', grip: 'KeyN', magnet: 'KeyN', daughter: 'KeyD', autopilot: 'KeyA', scan: 'KeyS', reel: 'KeyR', letgo: 'KeyK', choose: 'KeyU', read: 'KeyI', widescan: 'Shift+KeyS', throttle: 'Shift+Equal' });
 
 /** u18c D5: the chip kinds that are KeyN (a tool word); a daughter holding the piece decides which one is true now. */
 const N_KINDS = Object.freeze(['net', 'pad', 'grip', 'magnet']);
@@ -142,6 +144,9 @@ export class TouchActionChip {
    *        captureNetSystem singleton). LET GO stands only while it is BERTHED or COLLARED with the debris the line was made
    *        for: a hand-off to a radiator or a daughter (TRANSFERRING), a leash that is cut, a teardown or a later catch end it
    *        even when no event says so. `null` -> events only (tests).
+   * @param {() => boolean} [deps.getChoosePending]  slice 5 (5c): a big piece is aboard and the fate list is closed. While it is true the
+   *        CHOOSE button (KeyU) stands as a state chip on floors 2-4 (lowest priority; F1), and the catch line's CHOOSE line chip
+   *        may come first; omitted = the line chip only, on events and the 30 s timer (tests).
    * @param {() => (string|null)} [deps.getPilotState]  u15a A-T4: the state ('TRANSIT'|'APPROACH'|'STATION_KEEP'|...) of the daughter
    *        the player is piloting, or null when not piloting. Gates the ch2_manual_capture beat chip; omitted = never shown.
    * @param {() => number} [deps.now]  ms clock (tests)
@@ -150,7 +155,7 @@ export class TouchActionChip {
    * @param {boolean} [deps.poll=true]   false -> no timer (tests drive `evaluate()`)
    */
   constructor({ eventBus, ticker = null, getFloor = null, getMotherNets = null, hasDaughter = null, getHolding = null,
-    getFarState = null, getReelable = null, getPilotState = null, getCollarCatch = () => captureNetSystem.getDockedCatch(), now = null, schedule = null, glass = true, poll = true } = {}) {
+    getFarState = null, getReelable = null, getPilotState = null, getChoosePending = null, getCollarCatch = () => captureNetSystem.getDockedCatch(), now = null, schedule = null, glass = true, poll = true } = {}) {
     this._eb = eventBus;
     this._ticker = ticker;
     this._getFloor = getFloor;
@@ -159,6 +164,7 @@ export class TouchActionChip {
     this._getFarState = getFarState;
     this._getReelable = getReelable;
     this._getPilotState = getPilotState;
+    this._getChoosePending = typeof getChoosePending === 'function' ? getChoosePending : null;
     this._getCollarCatch = typeof getCollarCatch === 'function' ? getCollarCatch : null;
     this._now = now || (() => Date.now());
     this._schedule = schedule || ((fn) => { if (typeof setTimeout === 'function') setTimeout(fn, 0); else fn(); });
@@ -293,6 +299,7 @@ export class TouchActionChip {
     const kind = kinds.find(k => CHIPS[k]);
     if (!kind) return;
     let catchId = null;
+    if (kind === 'choose' && !this._choosePending()) return;     // nothing waits for a pick: no button
     if (kind === 'letgo') {
       const st = this._collarState();
       if (st === null) return;                       // nothing is mated at the collar: nothing to let go
@@ -357,12 +364,18 @@ export class TouchActionChip {
     }
   }
 
-  /** @private the floor is one where the chip lives (2 or 3; no getter = any) */
-  _floorOk() {
+  /** @private the floor is one where the chip lives (2 or 3; floor 4 too for the CHOOSE line chip; no getter = any) */
+  _floorOk(kind = null) {
     if (!this._getFloor) return true;
     let f = null;
     try { f = this._getFloor(); } catch (_e) { f = null; }
-    return f === 2 || f === 3;
+    return f === 2 || f === 3 || (kind === 'choose' && f === 4);
+  }
+
+  /** @private slice 5 (5c): a big catch waits for its pick (no reader = assume yes: the line only comes with the catch). */
+  _choosePending() {
+    if (!this._getChoosePending) return true;
+    try { return !!this._getChoosePending(); } catch (_e) { return false; }
   }
 
   /**
@@ -433,10 +446,34 @@ export class TouchActionChip {
     return this._holding.size > 0 ? ([...this._holding.values()][0] || 'NET') : null;
   }
 
-  /** @returns {'net'|'pad'|'grip'|'magnet'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'read'|'widescan'|'throttle'|null} the chip the current state asks for (ignoring other chips on screen) */
+  /**
+   * @private slice 5 (5c, fix F1): the CHOOSE button as a STATE chip: it stands whenever the game says a big piece is aboard and the
+   * fate list is closed (floors 2-4), whatever happened to the 30 s line (a pick, the x, the timer). Needs the reader: with none
+   * (tests of other chips) there is no state chip, only the line.
+   */
+  _chooseStanding() {
+    if (!this._getChoosePending) return false;
+    let f = null;
+    if (this._getFloor) {
+      try { f = this._getFloor(); } catch (_e) { f = null; }
+      if (f !== 2 && f !== 3 && f !== 4) return false;
+    }
+    return this._choosePending();
+  }
+
+  /**
+   * @returns {'net'|'pad'|'grip'|'magnet'|'daughter'|'autopilot'|'scan'|'reel'|'letgo'|'choose'|'read'|'widescan'|'throttle'|null} the chip the current state asks for (ignoring other chips on screen).
+   * CHOOSE is the lowest-priority state chip (F1): every other chip, line or beat outranks it, and it fills the gap when none is wanted.
+   */
   wanted() {
     if (!this._glass) return null;
-    if (!this._floorOk()) { this._line = null; return null; }   // floor left: a line chip does not wait for the way back
+    return this._wantedFirst() || (this._chooseStanding() ? 'choose' : null);
+  }
+
+  /** @private every chip except the CHOOSE state chip (the CHOOSE line chip is among them) */
+  _wantedFirst() {
+    if (!this._glass) return null;
+    if (!this._floorOk(this._line ? this._line.kind : null)) { this._line = null; return null; }   // floor left: a line chip does not wait for the way back
     const canSend = () => { try { return this._hasDaughter ? !!this._hasDaughter() : true; } catch (_e) { return true; } };
     const holding = this._holdingTool();
     // u18c D5: a tool line ("Press N to grip it ...") was said for a daughter holding station. When she stops holding (docked,
@@ -449,6 +486,15 @@ export class TouchActionChip {
     // u15a A-T4: a running lesson's button outranks every line and state chip, except LET GO (a catch that cannot move on
     // blocks the lesson too). It is never timed out; it only waits while its key would teach nothing (_beatKind).
     if (this._line && this._line.kind === 'letgo' && (this._now() >= this._line.until || this._letGoOver())) this._line = null;
+    // slice 5 (5c): the CHOOSE line lives only while a big catch still waits for its pick (the list opening or a pick ends it).
+    if (this._line && this._line.kind === 'choose' && !this._choosePending()) this._line = null;
+    if (this._line && this._line.kind === 'choose' && this._now() >= this._line.until) this._line = null;
+    // floor 4 holds the CHOOSE line chip and nothing else (the other chips live on floors 2-3)
+    if (this._getFloor) {
+      let f4 = null;
+      try { f4 = this._getFloor(); } catch (_e) { f4 = null; }
+      if (f4 === 4) return this._line && this._line.kind === 'choose' ? 'choose' : null;
+    }
     if (!(this._line && this._line.kind === 'letgo')) {
       const beat = this._beatKind();
       if (beat) return beat;

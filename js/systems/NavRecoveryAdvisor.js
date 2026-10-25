@@ -75,7 +75,7 @@ export function findNearestLiveDebris(playerPos, debrisList, minMassKg = 0) {
   let best = null;
   let bestDistSq = Infinity;
   for (const d of debrisList) {
-    if (!d || !d.alive) continue;
+    if (!d || !d.alive || d._disposed) continue;   // slice 5 (5d, D4): a piece that was disposed of is no approach target, no heading, no advice
     if ((d.mass || 0) < minMassKg) continue;
     const sp = d._scenePosition;
     if (sp && Number.isFinite(sp.x) && Number.isFinite(sp.y) && Number.isFinite(sp.z)) {

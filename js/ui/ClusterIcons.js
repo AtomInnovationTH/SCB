@@ -181,6 +181,7 @@ export class ClusterIcons {
     const reg = _fieldRegistry();
     if (reg) {
       if (typeof reg.isBerthed === 'function' ? reg.isBerthed() : !!(reg.berthedSatellite && reg.berthedSatellite())) return '';
+      if (typeof reg.isFree === 'function' && reg.isFree()) return '';     // slice 5 (5d): the free place of a push-down is no field either
       const f = typeof reg.currentField === 'function' ? reg.currentField()
         : (typeof reg.fields === 'function' && typeof reg.currentId === 'function' ? reg.fields().find((x) => x.id === reg.currentId()) : null);
       if (f && Number.isFinite(f.altKm)) {

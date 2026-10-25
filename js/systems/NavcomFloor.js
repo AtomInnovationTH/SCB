@@ -141,6 +141,7 @@ export class NavcomFloor {
     this._now = deps.now || _nowMs;
     // Nets step 3 slice 2b (lane 2b-2): the "where next" list (ui/WhereNextList.js) this floor hosts - set by main.js once built.
     this._whereNext = null;
+    this._whereNextHeld = false;     // slice 5 (lane 5c): the fate list holds the where-next list hidden
     this._heightScale = null;         // lane 3e: the fields and the satellite by height beside her marker (ui/HeightScale.js)
 
     this._active = false;
@@ -197,7 +198,7 @@ export class NavcomFloor {
     // The orb exists only with the fuel-reachability dep: without it, no DOM
     // is mounted and no budget is read (byte-identical to the pre-reach floor).
     if (this._getMassBudget && this._orb.show) this._orb.show();
-    if (this._whereNext) this._whereNext.setFloorShown(true);     // pending choice: the list is there again on return
+    if (this._whereNext) this._whereNext.setFloorShown(!this._whereNextHeld);     // pending choice: the list is there again on return (unless the fate list holds it)
     if (this._heightScale) this._heightScale.show();
   }
 
@@ -217,7 +218,17 @@ export class NavcomFloor {
   /** main.js: the list this floor hosts (null = none). Its floor-shown state follows this floor from here on. */
   setWhereNext(list) {
     this._whereNext = list || null;
-    if (this._whereNext) this._whereNext.setFloorShown(this._active);
+    if (this._whereNext) this._whereNext.setFloorShown(this._active && !this._whereNextHeld);
+  }
+
+  /**
+   * Slice 5 (lane 5c): the fate list is open on top of the where-next list's place. While `hold` is true the where-next list stays hidden
+   * (the choice stays pending); when it is false again the list is back if this floor is shown (rebuilt, as on any return).
+   * @param {boolean} hold
+   */
+  holdWhereNext(hold) {
+    this._whereNextHeld = !!hold;
+    if (this._whereNext) this._whereNext.setFloorShown(this._active && !this._whereNextHeld);
   }
 
   /** main.js: the height scale this floor hosts (null = none; ui/HeightScale.js, lane 3e). It draws only with the fields flag on. */

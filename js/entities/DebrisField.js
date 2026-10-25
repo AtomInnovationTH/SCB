@@ -32,6 +32,7 @@ import { deriveCaptureFlags } from './debrisFerrous.js';
 import { referenceDragAreaM2 } from './MotherDragArea.js';
 import { isFlagEligible, pickCountryForId } from '../ui/FlagDecalSystem.js';
 import { bagSize } from './scoopRule.js';
+import { DragSailSet } from './DragSailMesh.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -968,7 +969,8 @@ export class DebrisField {
    * counted and paid nothing; no later CATCH_PROCESSED for it pays or counts), tagged with the field row it was caught from (the registry's
    * `markCaught` finds the row already gone), alive and discovered, and NOT laid out as a field piece (`welcomeSpawn` false: no re-seat,
    * no store). Not yet held: the caller seats it on a holder (the collar or a daughter's rack), whose pin then owns its position.
-   * @param {{type: string, name?: string, material?: string, mass: number, size?: number, owner: object, areaM2?: number, fieldId?: string, fieldRow?: number}} spec
+   * @param {{type: string, name?: string, material?: string, mass: number, size?: number, owner: object, areaM2?: number, fieldId?: string, fieldRow?: number, massAtCatch?: number}} spec
+   *   (`mass` is what is left of a piece being melted; `massAtCatch` what it weighed when caught, so the drawn piece is shortened to the share left)
    * @param {{orbit?: object}} [opts] `orbit`: an orbit to start the body on (the mother's), so its propagation is sane until a holder pins it
    * @returns {object|null} the body
    */
@@ -982,6 +984,8 @@ export class DebrisField {
     if (spec.name) d.name = spec.name;
     d.owner = spec.owner ? { ...spec.owner } : null;
     if (Number.isFinite(spec.areaM2)) d.areaM2 = spec.areaM2;
+    // slice 5 (5e, E7): a partly melted piece comes back as its remainder (`mass`), drawn shortened to its share of the mass it was caught at
+    if (spec.massAtCatch > 0 && spec.mass < spec.massAtCatch) d._meltK = spec.mass / spec.massAtCatch; else delete d._meltK;
     Object.assign(d, deriveCaptureFlags(d.material, d.type, d.mass));
     if (opts.orbit) d.orbit = { ...opts.orbit };
     d.fieldId = spec.fieldId ?? null;
@@ -2170,6 +2174,35 @@ export class DebrisField {
   }
 
   /**
+   * Nets step 3 slice 5 (lane 5e): the local axis along which a piece being melted is drawn shortened (no magic shrinking, §28: the piece
+   * visibly loses the length it has cut). The stage's lathe has its long axis along local Y; any other mesh (the satellite) shortens along its
+   * longest bounding-box side. A scoop bag is a ball and shrinks evenly (see `setDrawScale`).
+   * @param {{type?: string, id?: number}} debris @returns {'x'|'y'|'z'}
+   */
+  static meltAxis(debris) {
+    const type = debris && debris.type;
+    if (type === 'rocketBody') return 'y';
+    const he = DebrisWireframe.getBoundingBoxExtents(type, debris && debris.id);
+    return he.hy >= he.hx && he.hy >= he.hz ? 'y' : (he.hx >= he.hz ? 'x' : 'z');
+  }
+
+  /**
+   * Write the draw scale `s` into `out` (a Vector3; static so the writers can run on a bare receiver, as the pin tests do): uniform, except a piece being melted (`debris._meltK`, 0..1 = the share of its
+   * mass still there, written by GameFlowManager's melt work and restored from `massAtCatch`) is drawn shortened to that share along its long
+   * axis (`meltAxis`); a bag shrinks evenly by the cube root. Never to nothing (a 2 % sliver floor: a singular matrix has no normals). Called
+   * by all three matrix writers (the pin, the unpinned writer and the near-pass proxy), so they cannot disagree.
+   * @param {THREE.Vector3} out @param {number} s @param {object} debris
+   */
+  static setDrawScale(out, s, debris) {
+    const k = debris ? debris._meltK : undefined;
+    if (k === undefined || !(k < 1) || s === 0) { out.setScalar(s); return; }
+    const kk = Math.max(k, 0.02);
+    if (debris.isBag === true) { out.setScalar(s * Math.cbrt(kk)); return; }
+    out.set(s, s, s);
+    out[DebrisField.meltAxis(debris)] = s * kk;
+  }
+
+  /**
    * The scale the renderer will actually use, including the net-held
    * readability floor (`_catchRenderMin`, applied only while `_armPinned` —
    * DebrisField.js `_updateInstanceTransform`). Read-only companion to
@@ -2686,6 +2719,9 @@ export class DebrisField {
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
 
+    // slice 5 (5d, D5): the drag sails follow their pieces (the draw hook: only while one exists)
+    if (this._sails && this._sails.size > 0) this._sails.sync(Constants.FLOATING_ORIGIN_ENABLED ? this._floatingOrigin : null);
+
     // ST-6.2: Mark flag overlay meshes for update
     for (const mesh of Object.values(this.flagMeshes)) {
       mesh.instanceMatrix.needsUpdate = true;
@@ -2775,7 +2811,7 @@ export class DebrisField {
     const proxy = rec.proxy;
     proxy.position.set(pos.x, pos.y, pos.z);
     proxy.quaternion.copy(quat);
-    proxy.scale.setScalar(scale);
+    DebrisField.setDrawScale(proxy.scale, scale, canonical);   // slice 5 (5e): a piece being melted is drawn shortened along its long axis
     // The per-instance colour (weathering tint, MOID badge) lives on the far instance; keep the proxy in step.
     src.getColorAt(lookup.instanceIndex, this._heldColor);
     proxy.setColorAt(0, this._heldColor);
@@ -2889,7 +2925,7 @@ export class DebrisField {
     // is then written at scale 0 (every pin, every frame, so it never flickers back). (`_nearSm` is null until
     // main.js hands the near-field host over; the test stubs that call this on a bare receiver never have one.)
     const nearDrawn = this._nearSm ? this._syncHeldProxy(canonical, debrisRef, armScenePos, this._tempQuat, drawSize) : false;
-    this._tempScale.setScalar(nearDrawn ? 0 : drawSize);
+    DebrisField.setDrawScale(this._tempScale, nearDrawn ? 0 : drawSize, canonical);   // slice 5 (5e): shortened while it is melted
     this._tempMatrix.compose(this._tempPos, this._tempQuat, this._tempScale);
     mesh.setMatrixAt(lookup.instanceIndex, this._tempMatrix);
     mesh.instanceMatrix.needsUpdate = true;
@@ -3429,7 +3465,7 @@ export class DebrisField {
       this._tempPos.set(px, py, pz);
     }
     this._tempQuat.setFromAxisAngle(debris.tumbleAxis, debris.tumbleAngle);
-    this._tempScale.setScalar(drawScale * revealScale);
+    DebrisField.setDrawScale(this._tempScale, drawScale * revealScale, debris);   // slice 5 (5e): shortened while it is melted
     this._tempMatrix.compose(this._tempPos, this._tempQuat, this._tempScale);
 
     // Apply to instanced mesh
@@ -4031,6 +4067,34 @@ export class DebrisField {
   }
 
   /**
+   * Nets step 3 slice 5 (lane 5d, D5): draw a drag sail on a piece that was just let go (`GameFlowManager._letGoBig`). The sail is its own
+   * set of three.js groups (`DragSailMesh`), kept in this field's group so it shares the floating origin, and follows the piece through
+   * `update` (the draw hook, one line below). The piece carries `_sail`; a removed or dead piece takes it away.
+   * @param {object} d the piece (any reference: the field's own body is looked up by id) @returns {boolean} a sail was added
+   */
+  attachSail(d) {
+    if (!d || d.id == null) return false;
+    const canon = this.debrisMap.get(d.id) || d;
+    canon._sail = true;
+    if (!this._sails) this._sails = new DragSailSet(this.group);
+    return this._sails.add(canon);
+  }
+
+  /**
+   * Nets step 3 slice 5 (lane 5d, D4): remove every piece that was disposed of and still floats (`_disposed`: a let-go big piece, with or
+   * without a drag sail, or one that broke loose from its rack). Called at her departure (`storeFieldPieces`: a trip, or a Stay that lays the
+   * field out again). A new game and a continue after a game over reach it the same way (their re-layout stores the field), so no let-go piece
+   * floats on into the next game (PD4c pins it). @returns {number} how many left
+   */
+  _removeDisposedPieces() {
+    let n = 0;
+    for (const d of this.debrisList.slice()) {
+      if (d._disposed === true && d.alive) { this.removeDebris(d.id); n++; }
+    }
+    return n;
+  }
+
+  /**
    * She is leaving a field (or laying it out again on a Stay): every piece of a field that is still free is taken out of play
    * - not alive, not tracked, its instance scaled to nothing - and kept by (field, row) so the next visit puts the SAME piece
    * back. They are stored, not simulated. A piece somebody holds (a catch on her nose, a rack, a tip, a net, a daughter's hand)
@@ -4040,6 +4104,10 @@ export class DebrisField {
    */
   storeFieldPieces() {
     let stored = 0;
+    // Nets step 3 slice 5 (5d, D4): a piece that was disposed of (let go by a push-down or a drag sail, or broke loose) stayed in the sky
+    // as a collision object; her departure (a trip, or a Stay that lays the field out again) is where it leaves. Before the bag split
+    // below, so a free bag that was disposed of is removed whole, never split back into members.
+    this._removeDisposedPieces();
     // u20-nets fix round 1: a bag nobody holds any more (let go with K, a strain slip, a snapped tether) has no field tag of its
     // own - its members' rows are still open (they leave at a credit), so a return visit would lay those rows out again while
     // the free bag still floated and paid the same members a second time. Split it back first: its members come out tagged and
@@ -4892,6 +4960,7 @@ export class DebrisField {
       // S11(b): hazard shards are not trawl fodder / sensor contacts — they
       // exist as collision hazards (ConjunctionSystem), not pickups.
       if (debris.hazard) continue;
+      if (debris._disposed) continue;           // slice 5 (5d, D4): never trawl fodder or a contact once disposed of
       // Only sub-10cm untracked objects
       if (debris.tracked || debris.sizeMeter > 0.1) continue;
 
@@ -4975,6 +5044,8 @@ export class DebrisField {
       if (!debris.alive) continue;
       // S11(b): hazard shards are not targets (the trawl path reads this list).
       if (debris.hazard) continue;
+      // slice 5 (5d, D4): a piece that was disposed of is no target: it stays in the sky as a collision object only
+      if (debris._disposed) continue;
 
       // Use pre-allocated orbit temps instead of spread
       _tmpKmOrbit.semiMajorAxis = playerOrbit.semiMajorAxis / Constants.SCENE_SCALE;
@@ -5058,6 +5129,8 @@ export class DebrisField {
       // S11(b): hazard shards are uncapturable furniture — they feed
       // ConjunctionSystem and the sky, never the HUD target list.
       if (debris.hazard) continue;
+      // slice 5 (5d, D4): nor is a piece that was disposed of (it stays in the sky as a collision object only)
+      if (debris._disposed) continue;
       // UX-3 #9: Only return discovered debris (scanned or auto-discovered)
       if (!debris.discovered) continue;
       // M1 hard contract: ONLY the welcome cluster appears in the HUD list.
@@ -5632,6 +5705,7 @@ export class DebrisField {
 
     for (const debris of this.debrisList) {
       if (!debris.alive || !debris.welcomeSpawn) continue;
+      if (debris._disposed) continue;       // slice 5 (5d, D4): a piece that was let go stays where it was let go (never put back on its slot ahead)
       if (!Number.isInteger(debris._welcomeSpecIndex)) continue;
       // H2b (lane 4a): the piece's own row spec (a high field's piece is not a WELCOME_FIELD row); a piece placed before
       // `_fieldSpec` existed (a test rig that sets only the index) falls back to the low table.

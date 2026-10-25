@@ -21,6 +21,8 @@
  * @module ui/WhereNextList
  */
 import { VisualLaw } from '../core/VisualLaw.js';
+import { eventBus } from '../core/EventBus.js';
+import { Events } from '../core/Events.js';
 
 export const WHERE_NEXT_ID = 'where-next-list';
 /** Row height on glass (iPad): the 44 px touch target. */
@@ -53,6 +55,7 @@ export const HINT_GLASS = 'Tap a row, tap it again to go';
 export const FOCUS_COLOR = VisualLaw.COLORS.SELECTION;
 
 const MARK = '\u25b8';
+const PUSH_PREFIX = 'push:';        // WhereNextRows' `PUSH_PREFIX` (not imported: the list stays free of the rows module)
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 export class WhereNextList {
@@ -68,6 +71,8 @@ export class WhereNextList {
    *                                        map open, a ceremony): taps do nothing then, as the FLY THERE chip and Space do
    * @param {function} [deps.onFocus]           (id) => void: the focus moved to row `id` (null = none); the map's height scale
    *                                            (ui/HeightScale.js, lane 3e) keeps its highlighted chip in step with it
+   * @param {object|null} [deps.bus]            event bus (default the game's; null = listen to nothing). Slice 5 (5d, D6): a "push" fate pick
+   *                                            (the big-piece fate event) while the list is open focuses that piece's push row
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc : (typeof document !== 'undefined' ? document : null);
@@ -87,6 +92,18 @@ export class WhereNextList {
     this._rowEls = [];
     this._built = false;
     this._disposed = false;
+    const bus = deps.bus !== undefined ? deps.bus : eventBus;
+    this._offFate = bus && typeof bus.on === 'function' ? bus.on(Events.BIG_PIECE_FATE, (e) => this._onFate(e)) : null;
+  }
+
+  /**
+   * @private Slice 5 (5d, D6): the fate list marked a held piece "push": with this list open its row (new, or one that was there) gets
+   * the focus; closed or hidden (the fate list is on top), the row waits for the next opening, whose pre-focus is the first push row.
+   */
+  _onFate(e) {
+    if (!e || e.fate !== 'push' || !this.isOpen()) return;
+    this._rebuild(false);
+    this.focus(`${PUSH_PREFIX}${e.debrisId}`);
   }
 
   // ── State ──────────────────────────────────────────────────────────────────
@@ -137,12 +154,12 @@ export class WhereNextList {
   focusedId() { return this._focusId; }
   /** The row that is focused, or null. */
   focusedRow() { return this._model.rows.find((r) => r.id === this._focusId) || null; }
-  /** What the FLY THERE chip should say while a pick can be made: 'STAY' on the Stay row, 'CALL' on the call row (lane 3c), 'FLY THERE' on a field row, else null. */
+  /** What the FLY THERE chip should say while a pick can be made: 'STAY' on the Stay row, 'CALL' on the call row (lane 3c), 'PUSH' on a push-down row (slice 5), 'FLY THERE' on a field row, else null. */
   chipLabel() {
     if (!this.isOpen()) return null;
     const r = this.focusedRow();
     if (!r || !r.selectable) return null;
-    return r.kind === 'stay' ? 'STAY' : (r.kind === 'call' ? 'CALL' : 'FLY THERE');
+    return r.kind === 'stay' ? 'STAY' : (r.kind === 'call' ? 'CALL' : (r.kind === 'push' ? 'PUSH' : 'FLY THERE'));
   }
 
   /** Rebuild the rows from the registry. `preFocus`: take the rebuild's pre-focus instead of keeping the focus. */
@@ -347,6 +364,7 @@ export class WhereNextList {
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
+    if (this._offFate) { try { this._offFate(); } catch (_e) { /* gone */ } this._offFate = null; }
     if (this._root) {
       if (typeof this._root.remove === 'function') this._root.remove();
       else if (this._parentEl && typeof this._parentEl.removeChild === 'function') this._parentEl.removeChild(this._root);

@@ -12,7 +12,7 @@
  *
  * What each fate pays (C3/C5): satellite = removal fee + parts x (1 - consent) + collector; push = removal fee (it re-enters within 25
  * years by construction); sail = removal fee only when its life with the sail (`lifeYears`, from OrbitLifetime.sailLifeYears) is within
- * RULE_YEARS, else nothing; keep = nothing yet; melt = removal fee + scrap (or, with `anchor`, the anchor metal) x (1 - consent).
+ * RULE_YEARS, else nothing; keep = nothing yet; melt = removal fee + scrap x (1 - consent) (or, with `anchor`, the anchor metal less the holder's share of the scrap at the in-orbit price, lane 5e).
  * The owner pays the removal fee; an `abandoned` piece has no owner: no fee and no consent. Every credit figure is a whole number.
  * @module systems/BigPieceValues
  */
@@ -128,9 +128,14 @@ export function fatePay(d, fate, opts = {}) {
         break;
       case 'melt': {
         add('fee', v.removalFeeCr, from);
-        const key = opts.anchor ? 'anchor' : 'scrap';
-        const gross = opts.anchor ? v.anchorCr : v.scrapCr;
-        add(key, net(gross), from, gross * v.consentShare);
+        if (opts.anchor) {
+          // lane 5e (E4): the holder's share is taken at the MELT, at the in-orbit price of the metal, whatever the elevator then pays for it:
+          // the anchor line is the anchor's price less that share (SL-14: 63,000 - 11,760 = 51,240; it was 63,000 x 0.8 = 50,400 before)
+          const shareCr = v.scrapCr * v.consentShare;
+          add('anchor', v.anchorCr - shareCr, from, shareCr);
+        } else {
+          add('scrap', net(v.scrapCr), from, v.scrapCr * v.consentShare);
+        }
         break;
       }
       default: break;   // keep (or an unknown fate): nothing yet

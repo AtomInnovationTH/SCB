@@ -2902,6 +2902,11 @@ export const Constants = {
     // 20 m/s trip that does not move her, a fresh welcome field every mission, the stop after every mission).
     // Read through Constants.isFeatureEnabled('FIELDS_BY_HEIGHT'), so REALITY_MODE can never turn it on.
     FIELDS_BY_HEIGHT:         true,
+
+    // Melt a big piece for metal (Nets step 3 slice 5, lane 5c adds the flag, lane 5e builds the melt; plan C7). ON since
+    // the slice-5 integration (2026-10-24, after 5c and 5e merged; test-BigPieceChain.js runs the chain). Off: the fate
+    // list's melt row says "the furnaces cannot take it yet" and cannot be picked. Read through Constants.isFeatureEnabled('BIG_MELT').
+    BIG_MELT:                 true,
   },
 
   // =========================================================================
@@ -5732,6 +5737,21 @@ export const Constants = {
     PUSH_STEP_KM: 5,                                              // the push height is floored to this step
     get IN_ORBIT_CR_PER_KG() { return Constants.LAUNCH_USD_PER_KG / Constants.USD_PER_CREDIT; },          // 70
     get ANCHOR_PREMIUM_CR_PER_KG() { return Constants.ELEVATOR_CONTRACT.BONUS_CREDITS_PER_KG; },           // 5: the anchor's bonus per kg
+  },
+  // BIG_MELT - melting a big piece for metal in the four radiator-tip furnaces, on the SHIP'S clock during trip burns (slice 5, lane 5e;
+  // DECISIONS §33 rows 16-17: "4 furnaces, one on each radiator strut", "many hours or days of realtime to melt debris"; BigMelt.js). The
+  // trip's days and the hold set the pace, not the delivery. Every number is an ESTIMATE to tune except where it says measured.
+  BIG_MELT: {
+    PACKED_KG_M3: 100,          // a cut part is folded wall sections packed to this density; sets the part size (BigMelt.PART_KG) and the bag's size
+    REACH_LIMIT_M: 0.70,        // m: a part's drawn reach limit - a margin under the tip's 0.75 m fit (TipCargo MAX_BAG_R_M); its band row is 134 deg
+    FURNACE_S_PER_KG: 1000,     // ship-seconds of furnace time per kg: about 1 kW at the focus (1.2 m2 mirror, 60 %) into an insulated crucible, about
+                                //   1.0 MJ/kg to heat aluminium or steel from cold and melt it; a 63 kg part is about 18 h of furnace time. The dish size is
+                                //   the owner's to set: this one constant
+    DELIVERY_S: 1070,           // ship-seconds to take one part rack -> nose -> leash -> tip (measured: 59 + 48 real s at trip rate 1 = about 1,070 s at 10 ship-s per real s); one at a time
+    TRIP_SUN: 0.6,              // share of the ship's time a furnace sits in sunlight (orbit average)
+    METAL_ID: 'refined_orbit',  // the hold's id for melted metal: the 'refined_' prefix is what the elevator contract takes (ShopScreen)
+    METAL_NAME: 'Orbit metal',
+    METAL_COLOR: '#b9c4d2',
   },
   CATCH_MAX_SIDE_M: 5.5,    // m: no HIGH_FIELD piece is longer than this (the mother net's 6 m mouth less a margin)
 
