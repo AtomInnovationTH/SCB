@@ -5376,13 +5376,17 @@ export class DebrisField {
     // id lookup + string compare (see _clusterIdOf memoization).
     let aliveInBucket = 0;
     let totalInBucket = 0;
+    let setAside = 0;
     for (const d of this.debrisList) {
       if (this._clusterIdOf(d) !== clusterId) continue;
       totalInBucket++;
       if (d.alive) aliveInBucket++;
+      else if (d._fieldStored === true) setAside++;
     }
 
     if (aliveInBucket > 0) return; // bucket not empty yet
+    // A piece set aside when she left its field was never caught: a bucket holding one is not cleared, whatever melts last.
+    if (setAside > 0) return;
 
     // Build a readable name from the id (`${incName}-${altMin}`).
     const dash = clusterId.lastIndexOf('-');

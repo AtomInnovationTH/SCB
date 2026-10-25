@@ -16,8 +16,8 @@ export const Constants = {
   // value; VERSION_LABEL is the exact string the UI renders (menu title tag,
   // and any other ES-module UI). NON-module consumers (e.g. sw.js cache name)
   // must be updated by hand — keep them in sync here.
-  VERSION: '0.9993',
-  VERSION_LABEL: 'V.9993',
+  VERSION: '1.01',
+  VERSION_LABEL: 'V1.01',
 
   // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as
   // ?v=<DATA_VERSION>). Deliberately SEPARATE from VERSION: a curated-content
@@ -6318,8 +6318,7 @@ export const Constants = {
     OVERLAY_TOP_MARGIN_PX: 20,
     // u13-polish D1 (screens at least OVERLAY_WIDE_MIN_PX wide; narrower = phones, frozen, keep the 20 px margin):
     // the card sits OVERLAY_GAP_PX below the lowest of the score strip, the line under it, the collision warning and
-    // the autopilot badge (drawn on the canvas at y 92 + 19 = 111, js/ui/TargetReticle.js AP_BADGE_TOP_PX), and keeps
-    // its left edge OVERLAY_GAP_PX right of the pause button. The strip fallback is used only when the strip's element
+    // the autopilot badge (drawn on the canvas at y 92 + 19 = 111, js/ui/TargetReticle.js AP_BADGE_TOP_PX). The strip fallback is used only when the strip's element
     // is not in the page: top 8 + 28 tall, times the HUD scale (--hud-scale 1.25 on big screens).
     OVERLAY_WIDE_MIN_PX: 920,
     OVERLAY_GAP_PX: 8,

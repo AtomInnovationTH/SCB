@@ -147,7 +147,7 @@ export function offscreenLabelLayout(o) {
 /** Ids of the HUD blocks a target marker must not cover (u14a A4). Rects are read from the DOM while shown. */
 export const HUD_OBSTACLE_IDS = [
   'hud-score-panel', 'hud-left-column', 'hud-right-column', 'hud-targets-panel',
-  'hud-comms-panel', 'hud-pause-btn', 'hud-conjunction-panel',
+  'hud-comms-panel', 'hud-conjunction-panel',
 ];
 /** The obstacle rects are re-read at most this often (seconds of reticle time) and on resize. */
 export const OBSTACLE_REFRESH_S = 0.25;

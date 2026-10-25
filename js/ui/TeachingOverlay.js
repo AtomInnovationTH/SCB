@@ -29,9 +29,7 @@ const _vis = (r) => !!r && r.w > 0 && r.h > 0;
  *
  * The card sits `OVERLAY_GAP_PX` below the lowest of: the score strip (its real rect; when its element is not in the page
  * (`strip: null`) the fallback `OVERLAY_STRIP_TOP_PX + OVERLAY_STRIP_H_PX * scale`), the line under the strip, the
- * collision warning (when shown) and the autopilot badge (drawn on the canvas, so passed as a flag). A pause button
- * (touch) is never covered: the card narrows so its left (or right) edge clears the button by the gap; if even the
- * narrowest card would touch it, the card goes below the button instead.
+ * collision warning (when shown) and the autopilot badge (drawn on the canvas, so passed as a flag).
  *
  * @param {object} o
  * @param {number} o.viewportW
@@ -40,7 +38,6 @@ const _vis = (r) => !!r && r.w > 0 && r.h > 0;
  * @param {?{x,y,w,h}} [o.strip]          #hud-score-panel rect; null = element missing; w=0 = hidden
  * @param {?{x,y,w,h}} [o.payoff]         #hud-payoff rect
  * @param {?{x,y,w,h}} [o.conj]           #hud-conjunction-panel rect
- * @param {?{x,y,w,h}} [o.pause]          #hud-pause-btn rect
  * @param {boolean} [o.apEngaged]         the autopilot badge is up
  * @returns {{top:number, maxWidth:number, gated:boolean}}
  */
@@ -61,18 +58,7 @@ export function placeTeachingCard(o) {
   for (const r of [o.strip, o.payoff, o.conj]) if (_vis(r)) bottom = Math.max(bottom, r.y + r.h);
   if (o.apEngaged) bottom = Math.max(bottom, C.OVERLAY_AP_BADGE_BOTTOM_PX != null ? C.OVERLAY_AP_BADGE_BOTTOM_PX : 111);
   let top = bottom > 0 ? Math.max(margin, bottom + gap) : margin;
-  let maxWidth = maxW;
-
-  const p = o.pause;
-  if (_vis(p) && top < p.y + p.h + gap && top + cardH > p.y - gap) {
-    const cx = o.viewportW / 2;
-    const allowed = (p.x + p.w / 2 < cx)
-      ? 2 * (cx - (p.x + p.w + gap))     // button on the left: card's left edge clears its right edge
-      : 2 * ((p.x - gap) - cx);          // button on the right: mirror
-    if (allowed >= minW) maxWidth = Math.min(maxW, allowed);
-    else top = p.y + p.h + gap;
-  }
-  return { top, maxWidth, gated: false };
+  return { top, maxWidth: maxW, gated: false };
 }
 
 // ============================================================================
@@ -275,7 +261,7 @@ export class TeachingOverlay {
     ensureGlossaryCss();
     delegateGlossaryClicks(el);
 
-    // u13-polish D1: clear of the score strip, the collision warning, the autopilot badge and the pause button
+    // u13-polish D1: clear of the score strip, the collision warning, the autopilot badge
     this._layout();
     if (typeof window !== 'undefined' && typeof setInterval === 'function') {
       this._layoutTimer = setInterval(() => this._layout(), 250);   // a warning or badge that appears while the card shows
@@ -317,7 +303,7 @@ export class TeachingOverlay {
     const args = {
       viewportW: window.innerWidth, scale, apEngaged: this._apEngaged,
       strip: rectOf('hud-score-panel'), payoff: rectOf('hud-payoff'),
-      conj: rectOf('hud-conjunction-panel'), pause: rectOf('hud-pause-btn'),
+      conj: rectOf('hud-conjunction-panel'),
     };
     let res = placeTeachingCard({ ...args, cardH: el.getBoundingClientRect().height });
     if (res.gated) return;

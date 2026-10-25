@@ -151,7 +151,6 @@ import { RAIL_GEOMETRY, footerBand } from './ui/RailGeometry.js';
 import { installHudScale } from './ui/HudScale.js';
 import { EdgeChrome } from './ui/EdgeChrome.js';
 import { TouchControls } from './ui/TouchControls.js';
-import { PauseButton } from './ui/PauseButton.js';
 import { TouchTelemetry } from './ui/touchTelemetry.js';
 import { GestureHints } from './ui/hud/GestureHints.js';
 import { nearestWithin as tapNearestWithin, TAP_SLOP_PX, TAP_SLOP_MS } from './systems/TapPick.js';
@@ -861,7 +860,6 @@ const _taFrameArgs = { dtReal: 0, active: false, targetCap: 1, dangerActive: fal
 // pane edge, Session B) from the shell's onOpenChange; false whenever the
 // ladder is off (the sync helper only exists inside the LADDER.ENABLED gate).
 let _workbenchPaneOpen = false;
-let _pauseButton = null; // touch only; refreshed on the drawer edge (hides while the SPECS drawer is open)
 // Wave 5 Session K (plan D-B — one shop): the WORKBENCH BREAK is open — set on
 // GameFlowManager's WORKBENCH_STOP (after the ride + the pane open took),
 // cleared when the hub emits WORKBENCH_RESUME (the drawer closed, from the
@@ -2327,7 +2325,6 @@ async function init() {
     const _syncWorkbenchPanes = () => {
       const open = !!(workbenchPane && workbenchPane.isOpen());
       _workbenchPaneOpen = open;
-      if (_pauseButton) _pauseButton.refresh();
       // Session I: a pane slide is a boost-worthy edge (FrameSched — the
       // drawer animates at native rate), and the camera learns the drawer
       // state for the floor-1 TURNTABLE drag gate (D-F; live re-gate — no
@@ -3663,19 +3660,6 @@ async function init() {
     });
     touchControls.start();
     _bootMark('TouchControls started');
-    // The pause button (iPad slices 2-3): glass has no Esc, and with the ladder engaged Esc rides up a floor instead
-    // of pausing. Same touch gate as the turn pad above; it calls the pause path itself, never a key.
-    _pauseButton = new PauseButton({
-      touch: true,
-      doc: document,
-      parent: document.body, // not #hud-overlay: that is a z-10 stacking context, and the world labels sit above it
-      bus: eventBus,
-      events: Events,
-      isPlaying: () => gameState.isGameplay(),
-      isPaused: () => gameFlowManager.paused,
-      isDrawerOpen: () => _workbenchPaneOpen,
-      togglePause: () => inputManager.togglePause(),
-    });
   }
 
   // Session J FINDINGS (a) CLOSED (owner call 2026-09-06) — DESKTOP

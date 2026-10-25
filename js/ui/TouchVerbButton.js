@@ -83,7 +83,7 @@ const BASE_CSS = [
   'pointer-events:auto', 'cursor:pointer',
   'touch-action:none', 'user-select:none', '-webkit-user-select:none', '-webkit-touch-callout:none',
   '-webkit-tap-highlight-color:transparent',
-  'z-index:39',   // above the cluster icons (33), the turn pad (37), the pause button (40 sits elsewhere); below menus (50+)
+  'z-index:39',   // above the cluster icons (33), the turn pad (37); below menus (50+)
 ].join(';') + ';';
 
 export class TouchVerbButton {

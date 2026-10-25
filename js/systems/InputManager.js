@@ -515,10 +515,9 @@ export class InputManager {
   }
 
   /**
-   * Pause or resume the game — the ONE body behind Esc and the touch pause button (PauseButton). Gameplay only.
+   * Pause or resume the game — the ONE body behind Esc. Gameplay only.
    * Pausing shows the pause overlay; resuming hides it, resets the frame timer and emits PAUSE_RESUME (the main.js
-   * loop's wake hook: without it the screen froze after resuming). With the zoom ladder engaged Esc rides up a floor
-   * instead of pausing, so the button calls this directly and never sends Esc.
+   * loop's wake hook: without it the screen froze after resuming).
    * @returns {boolean|null} true when now paused, false when now running, null when not in gameplay (nothing done)
    */
   togglePause() {
@@ -806,7 +805,7 @@ export class InputManager {
         // ride-up is the NEXT Esc. false (no pane / closed / a controller
         // without the method) → the shipped ride-up, unchanged.
         // Paused: Esc resumes FIRST (the overlay says "RESUME [ESC]"), before any ride-up. Pausing itself is
-        // Esc with the ladder off, or the touch pause button (togglePause) with it on.
+        // Esc with the ladder off (the touch pause button was removed 2026-10-25).
         if (isGameplay && d.getPaused()) {
           this.togglePause();
           e.preventDefault();
