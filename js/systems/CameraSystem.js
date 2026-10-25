@@ -4351,14 +4351,16 @@ export class CameraSystem {
 
   /**
    * @private The MOUSE drag-gate rule (Session I; floor 2 added Session J.5;
-   * widened 2026-10-20, owner "Mac too"): floors 2/3/4 (the flying view, PROX
-   * NET, NAVCOM) always; floor 1 (the workbench) only while a drawer is open
-   * (the turntable, plan D-F). Floor 5 and floorless legacy frames never arm.
+   * widened 2026-10-20, owner "Mac too"; floor 1 without a drawer 2026-10-25,
+   * owner "mouse drag works great in Floor 2 ... make it work in Floor 1"):
+   * floors 1-4 always, like the finger. Held arrows on floor 1 still turn the
+   * view only with a drawer open (ladderDragNudge's key rule). Floor 5 and
+   * floorless legacy frames never arm.
    * @param {number|null|undefined} floor
    * @returns {boolean}
    */
   _ladderDragEnabledFor(floor) {
-    return floor === 2 || floor === 3 || floor === 4 || (floor === 1 && this._ladderCam.paneOpen);
+    return floor === 1 || floor === 2 || floor === 3 || floor === 4; // mouse rule
   }
 
   /**
@@ -4398,6 +4400,9 @@ export class CameraSystem {
     const lc = this._ladderCam;
     if (!lc.active || lc.riding) return;
     if (!(source === 'touch' ? lc.drag.touchEnabled : lc.drag.enabled)) return;
+    // Key rule (2026-10-25): the mouse gate now arms floor 1 always, but held
+    // arrows on floor 1 steer the ship unless a drawer is open (the turntable).
+    if (source !== 'touch' && lc.floor === 1 && !lc.paneOpen) return;
     const dx = Number.isFinite(dxPx) ? dxPx : 0;
     const dy = Number.isFinite(dyPx) ? dyPx : 0;
     if (dx === 0 && dy === 0) return;
