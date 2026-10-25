@@ -28,6 +28,7 @@ import { GestureHints } from '../ui/hud/GestureHints.js';
 import { tripRefuses } from './TransferTrip.js';
 import { outOfMotherNetsLine } from './resupplyWords.js';
 import { wrapRefusalLine } from './PieceClaim.js';
+import { checkActiveSatArming } from './ActiveSatGuard.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
@@ -237,6 +238,9 @@ export const TURN_DEFAULT_MAX_RATE = 5 * Math.PI / 180;
 /** Largest |body-frame nose-axis component| of a turn axis we accept (roll has ~1 % of pitch authority; estimate). */
 const TURN_ROLL_MAX = 0.2;
 
+/** wheel-preturn: the active-satellite guard asked silently (its own call emits a red alert and a Houston line when it refuses). */
+const QUIET_BUS = Object.freeze({ emit() {} });
+
 /** reel-turn: a tracked turn that has come to rest with this much (rad, 0.1°) or less left is over. */
 const TURN_TRACK_STOP_RAD = 0.1 * Math.PI / 180;
 
@@ -356,6 +360,31 @@ const AIM_TRACK_SLACK_MAX = 0.003;
 
 /** aim-track-settle: seconds inside the tolerance before an aim may count as tracking (a still piece's last stretch lasts up to 1.25 s, measured). */
 const AIM_TRACK_DWELL_S = 2.0;
+
+/** wheel-preturn F1.4: a wheel aim inside the tolerance is at rest below this rate (rad/s; 0.0006 deg/s, under any bearing drift it could follow). */
+const AIM_REST_EPS = 1e-5;
+
+/**
+ * wheel-preturn F1.3: the strut's eased move (ArmUnit `strutEaseProfile`: speed up at `a`, coast at a peak, slow down at `a`) carried on
+ * from a strut that already moves at `v0` (rad/s) toward a target `dRem` rad away, instead of from rest. The profile is the rest-start
+ * one entered `v0 / a` seconds in (it began `s0 = v0² / 2a` rad back): `d` = dRem + s0, `t0` = v0 / a. `durationS` is the time wanted from
+ * here (0 / short: the quickest); the peak never drops below `v0` (slowing down is the profile's own end).
+ * @returns {{v0:number, s0:number, t0:number, d:number, v:number, T:number, minS:number, remS:number}} `minS` the quickest time left from
+ *   here, `remS` the time left of this profile
+ */
+function strutCarryProfile(dRem, v0, a, vMax, durationS) {
+  const v00 = Math.max(0, Math.min(v0, vMax, Math.sqrt(2 * a * Math.max(0, dRem))));   // never faster than it can stop in what is left
+  const s0 = v00 * v00 / (2 * a), t0 = v00 / a, d = dRem + s0;
+  const vq = Math.max(v00, Math.min(vMax, Math.sqrt(d * a)));                         // the quickest peak
+  const Tq = d > 1e-9 ? d / vq + vq / a : 0;
+  let v = vq, T = Tq;
+  const Td = t0 + (durationS > 0 ? durationS : 0);
+  if (durationS > 0 && Td > Tq + 1e-9) {                                              // a longer move than the quickest: a lower peak
+    v = Math.max(v00, 0.5 * a * (Td - Math.sqrt(Math.max(0, Td * Td - 4 * d / a))));
+    T = d / v + v / a;
+  }
+  return { v0: v00, s0, t0, d, v, T, minS: Math.max(0, Tq - t0), remS: Math.max(0, T - t0) };
+}
 
 /**
  * launch-seq: the attitude hold that carries an aimed daughter launch from the end of the aim to the spring.
@@ -536,6 +565,14 @@ export class AutopilotSystem {
     this._attitudeHoldElapsed = 0;
     /** launch-seq: the attitude hold from the end of an aimed daughter launch's aim to her spring, or null. */
     this._launchHold = null;
+    /** wheel-preturn (S1b): the wheels turning her toward a picked daughter's shot, or null. NOT an aim (`isAiming()` stays false). */
+    this._preturn = null;
+    /** wheel-preturn: a pick (piece or daughter) waiting for the next frame to start a pre-turn, or null. */
+    this._preturnReq = null;
+    /** wheel-preturn: the piece the "turning on the wheels" line was last said for (once per piece). */
+    this._preturnSaid = null;
+    /** wheel-preturn: why the last pre-turn ended (diagnostic; tests read it). */
+    this._preturnEnd = null;
 
     // Aim-before-launch: scratch for the attitude coroutine (net + daughter modes).
     this._aimBoresightWorld = new THREE.Vector3();
@@ -582,7 +619,7 @@ export class AutopilotSystem {
   }
 
   /** @private A slow turn is running: a rate carried on the slow law (`_tripOmega`), an aim or a scripted turn. */
-  _slowTurnBusy() { return this._tripOmega > 0 || !!this._aimCoroutine || !!this._turn; }
+  _slowTurnBusy() { return this._tripOmega > 0 || !!this._aimCoroutine || !!this._turn || !!this._preturn; }
 
   // ==========================================================================
   // PUBLIC STATE ACCESSORS
@@ -602,6 +639,15 @@ export class AutopilotSystem {
 
   /** @returns {boolean} True while an aim-before-launch attitude sequence is active. */
   isAiming() { return !!this._aimCoroutine; }
+
+  /**
+   * wheel-preturn: true while the reaction wheels are turning her toward a picked daughter's shot, or holding her on it. Not an aim:
+   * `isAiming()` and `isAttitudeHeld()` stay false, so ArmManager's launch checks (`_motherTurnBlock`) see a free mother and the launch
+   * goes through the normal aim ceremony, which takes over from where the wheels have got her. ArmManager's strut automation reads this
+   * one (it keeps its hands off the strut while it is swung for the shot).
+   * @returns {boolean}
+   */
+  isPreturning() { return !!this._preturn; }
 
   /** @returns {boolean} True while a scripted whole-ship turn (requestAttitudeTurn) is running. */
   isTurning() { return !!this._turn; }
@@ -1124,7 +1170,7 @@ export class AutopilotSystem {
     this._attitudeHoldElapsed = 0;
     this._attitudeHoldTimeoutS = null;
     // A running scripted turn keeps the aim ownership (it re-asserts the hold when it ends).
-    if (this._player && !this._aimCoroutine && !this._turn) this._player.aimHold = false;
+    if (this._player && !this._aimCoroutine && !this._turn && !this._preturn) this._player.aimHold = false;
     return true;
   }
 
@@ -1675,6 +1721,253 @@ export class AutopilotSystem {
     if (text !== null) this._emitArrivalLine(text);
   }
 
+  // ==========================================================================
+  // WHEEL PRE-TURN (owner 2026-10-25 02:23Z; plan daughter-pairs-1025 S1b)
+  // ==========================================================================
+  //
+  // With the wheel kit, a docked daughter picked (keys 1-4) and a piece picked (either order), the wheels start turning the mother
+  // toward the shot the aim would take, no gas, at the wheels' own pace (minutes for a big angle: no 30 s limit). It is NOT an aim:
+  // its own state (`_preturn`), `isAiming()` and `isAttitudeHeld()` stay false, nothing is announced or aborted. Firing (D) goes
+  // through the normal ceremony, whose first act (`requestAimRotation`) ends the pre-turn: the rate it has is braked on the wheels
+  // (billed, never free) and the aim starts from where she has got to, with less left to turn. The law is the aim's own eased law on
+  // the wheel source (`_aimAccel`, `_fireAimCouples`, `_billAimTail` are shared), minus the resolve: arrived, she holds the attitude
+  // (player.aimHold) until a launch or a cancel takes it over.
+
+  /**
+   * A pick (piece or daughter) was made: ask for a pre-turn on the next frame. A pre-turn already running is braked and re-planned.
+   * A piece the automatic assist picked starts one only when the player has already picked a daughter (the daughter is the player's
+   * word that a launch is coming; a daughter picked afterwards for a locked piece starts one too: either order gives the same result).
+   * @param {'target'|'arm'} kind @param {object} [data] the event's payload
+   * @private
+   */
+  _onPreturnTrigger(kind, data) {
+    const W = Constants.WHEEL_PRETURN;
+    if (!W || W.ENABLED === false) return;
+    const auto = kind === 'target' && !!(data && (data.autoLock || data.autoTarget || data.autoAcquire));
+    if (auto) {
+      const am = this._armManager;
+      const picked = am && typeof am.getSelectedArm === 'function' ? am.getSelectedArm() : null;
+      if (!picked) {                                                    // no daughter picked: nothing is asked for, nothing runs
+        this._preturnReq = null;
+        if (this._preturn) this._endPreturn('automatic pick');
+        return;
+      }
+    }
+    // (a running pre-turn is braked and re-planned by the next frame's tick, in one go: she is never handed back for a frame between)
+    this._preturnReq = { target: kind === 'target' && data && data.debris ? data.debris : null };
+  }
+
+  /** @private A cancel event: the pre-turn (and any request waiting) ends. */
+  _preturnDrop(why) {
+    this._preturnReq = null;
+    if (why === 'piece cleared') this._preturnSaid = null;
+    if (this._preturn) this._endPreturn(why);
+  }
+
+  /**
+   * The (daughter, piece) pair a pre-turn would turn toward, or null: the wheels can do it, a docked daughter is picked and could be
+   * launched at the piece (charged, in reach, holds its mass, nobody owns the piece, no line crossed), and the mother is free to turn
+   * for that launch (the ceremony's own test, `_motherTurnBlock`).
+   * @param {object|null} piece the piece the pick named (null: the target selector's) @param {boolean} [full] also ask the slower
+   *   gates (an owner on the piece, a crossed line)
+   * @returns {{arm: object, target: object}|null}
+   * @private
+   */
+  _preturnCandidate(piece, full = true) {
+    const p = this._player, am = this._armManager;
+    const W = Constants.WHEEL_PRETURN;
+    if (!p || !am || !W || W.ENABLED === false || !Constants.FEATURE_FLAGS.SEMI_AUTO_AIM) return null;
+    if (typeof p.hasWheelKit !== 'function' || !p.hasWheelKit() || !p.wheelsUsable()) return null;
+    if (typeof p.isSlothMode === 'function' && p.isSlothMode()) return null;          // sloth mode: the aim's own slow law, no pre-turn
+    if (p.safeMode) return null;                                                      // daughters are locked in safe mode
+    const res = p.resources;
+    if (res && Number.isFinite(res.battery)) {
+      const max = res.batteryMax || (p._resourceSystem && p._resourceSystem.batteryMax) || Constants.BATTERY_MAX;
+      if (res.battery < W.MIN_BATTERY_FRAC * max) return null;
+    }
+    const arm = typeof am.getSelectedArm === 'function' ? am.getSelectedArm() : null;
+    if (!arm || arm.state !== Constants.ARM_STATES.DOCKED || !arm.springCharged || !(arm.fuel > 5) || arm._aimReserved) return null;
+    if (!arm.position || !arm.config) return null;
+    const ts = this._targetSelector;
+    const target = piece || (ts && typeof ts.getActiveTarget === 'function' ? ts.getActiveTarget() : null);
+    if (!target || target._disposed === true || target.alive === false || !target._scenePosition) return null;
+    if ((target.mass || 0) > arm.config.maxCaptureMass) return null;
+    if (checkActiveSatArming(target, am._catalogLoader, QUIET_BUS)) return null;      // an active satellite is never a target (the launch refuses it)
+    const dx = target._scenePosition.x - arm.position.x, dy = target._scenePosition.y - arm.position.y, dz = target._scenePosition.z - arm.position.z;
+    if (Math.sqrt(dx * dx + dy * dy + dz * dz) / Constants.SCENE_UNITS_PER_METER > arm.config.tetherMax * Constants.ARM_DEPLOY_RANGE_FRACTION) return null;
+    if (this._engaged || p.autopilotEngaged || this._tripHold || this._tripOmega > 0 || this._turn || this._aimCoroutine || this._attitudeHold) return null;
+    if (typeof am._motherTurnBlock === 'function' && am._motherTurnBlock()) return null;   // what the launch ceremony would also refuse to turn for
+    if (full && typeof am.indexLaunchRefusal === 'function' && am.indexLaunchRefusal(arm.index, target)) return null;
+    return { arm, target };
+  }
+
+  /** @private The aim direction the launch ceremony would use: the daughter's dock to the piece (a scratch object, as ArmManager's). */
+  _preturnProvider(arm, target) {
+    const out = { x: 0, y: 0, z: 0 };
+    return () => {
+      const tp = target._scenePosition ? target._scenePosition
+        : (typeof target.getScenePosition === 'function' ? target.getScenePosition() : null);
+      if (!tp || !arm.position) return null;
+      const dx = tp.x - arm.position.x, dy = tp.y - arm.position.y, dz = tp.z - arm.position.z;
+      const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+      out.x = dx / len; out.y = dy / len; out.z = dz / len;
+      return out;
+    };
+  }
+
+  /**
+   * Start the pre-turn a pick asked for (one frame after the pick: the pick's own emit has finished). Nothing starts when the shot is
+   * already on the piece, or the wheels cannot turn her toward it (full that way): she stays as she is.
+   * @private
+   */
+  _startPreturn() {
+    const req = this._preturnReq;
+    this._preturnReq = null;
+    const c = this._preturnCandidate(req ? req.target : null, true);
+    if (!c) return;
+    const { arm, target } = c;
+    const p = this._player, am = this._armManager;
+    const AIM = Constants.AIM;
+    const tolRad = AIM.DAUGHTER_AIM_TOLERANCE_DEG * Math.PI / 180;
+    const rate = AIM.AP_ROT_RATE * (AIM.ONBOARDING_ROT_RATE_MULT || 1);
+    const provider = this._preturnProvider(arm, target);
+    // the shot the fire would take right now (the aim's own 30 s for the wheels): the pre-turn does the first part of that very aim, on
+    // the wheels, so a fire asked for later finds less left to turn. (Priced with the wheels free for any length it would head for the
+    // chest line even where today's angle is a 30° turn and 39 g: a fire at once would then find her turned away from the cheap shot.)
+    // The wheels run it only as a wheel aim: when the shot's turn is on the gas (too long for the wheels in 30 s, or they are full that
+    // way) the pre-turn still turns her toward it on the wheels, at their pace, if they can turn her that way at all.
+    const shot = this._planDaughterShot(provider, { arm, armManager: am, pairIndex: arm.index }, AIM.AIM_TIMEOUT_S, tolRad, rate);
+    if (!shot || !(shot.errRad > tolRad)) return;
+    const wheelsOk = p.attitudeTorqueSource({ spinUp: true, angleRad: shot.errRad - 0.5 * tolRad, nx: shot.nx, ny: shot.ny, limitS: Infinity, quiet: true });
+    if (wheelsOk !== 'wheels') return;
+    this._preturn = {
+      mode: 'daughter', arm, armManager: am, pairIndex: arm.index, target, provider, shot,
+      alphaF: shot.alpha,                       // the strut angle her boresight is aimed for, fixed now (as the aim fixes it)
+      tolRad, stopErr: 0.5 * tolRad, rate,
+      sloth: true, src: 'wheels',               // the slow law on the wheels: lit time moves their stored spin and goes on the power bill
+      burn: null, axX: shot.nx, axY: shot.ny, omega: 0,
+      phase: 'turn', elapsed: 0, recheckS: Constants.WHEEL_PRETURN.RECHECK_S,
+      ease: { durationS: 0 },                   // the strut's move: as short as it can be (keyed by this object)
+    };
+    p.aimHold = true;                           // she holds this attitude: nothing else (the prograde re-orient, the rate-null) may move her
+    if (this._preturnSaid !== target) {
+      this._preturnSaid = target;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'Turning on the reaction wheels toward the shot (no gas).', priority: 'info', source: 'HOUSTON',
+      });
+    }
+  }
+
+  /**
+   * End the pre-turn. The rate it has is braked on the wheels (their lit time is billed: a real ship would still have to stop, and the
+   * wheels keep what the turn put in them) and she is handed back, unless another holder of the nose keeps `aimHold`.
+   * @param {string} why a short reason (kept in `_preturnEnd` for the tests and the log)
+   * @private
+   */
+  _endPreturn(why) {
+    const pt = this._preturn;
+    if (!pt) return;
+    this._preturn = null;
+    this._billAimTail(pt);
+    this._preturnEnd = why;
+    const p = this._player;
+    if (p) p.aimHold = !!(this._attitudeHold || this._aimCoroutine || this._turn);
+  }
+
+  /**
+   * Before anything moves the nose this frame: a pre-turn whose conditions are gone ends. The wheels, the daughter, the piece and the
+   * rest of the launch ceremony's own conditions (`_motherTurnBlock`) are asked every frame; a net or catch on the piece, a line
+   * across another daughter's, every RECHECK_S.
+   * @param {number} dt
+   * @private
+   */
+  _preturnGuard(dt) {
+    const pt = this._preturn;
+    if (!pt) return;
+    const W = Constants.WHEEL_PRETURN;
+    const slow = (pt.recheckS -= dt) <= 0;
+    if (slow) pt.recheckS = W.RECHECK_S;
+    const c = this._preturnCandidate(pt.target, slow);
+    if (!c || c.arm !== pt.arm || c.target !== pt.target) {
+      this._endPreturn(c ? 'another pick' : 'conditions gone');
+    }
+  }
+
+  /**
+   * One frame of the pre-turn (or of the request waiting to become one). The aim's eased law on the wheels (`_tickAimEased`): she climbs
+   * to the wheels' own peak (their room, never above AP_ROT_RATE), brakes into the shot and rests on it; the strut swings to the chosen
+   * angle at its own pace. Arrived she holds (no torque) until the line has drifted REENGAGE_DEG off, then turns again.
+   * @param {number} dt real frame seconds @param {number} dtWorld game seconds (0 with the world held: nothing turns, nothing is billed)
+   * @private
+   */
+  _tickPreturn(dt, dtWorld) {
+    if (this._preturnReq && dtWorld > 0) {                              // a pick: a running pre-turn is braked and the new one planned in the same call
+      if (this._preturn) this._endPreturn('re-plan');
+      this._startPreturn();
+      return;
+    }
+    const pt = this._preturn;
+    if (!pt) return;
+    if (!(dtWorld > 0) || !(dt > 0)) return;
+    const p = this._player;
+    pt.elapsed += dt;
+    const raw = pt.provider();
+    if (!raw) { this._endPreturn('piece lost'); return; }
+    const T = this._aimTargetDir.set(raw.x, raw.y, raw.z);
+    if (!(T.lengthSq() > 1e-12)) return;
+    T.normalize();
+    const q = p.quaternion;
+    const az = this._aimAzimuth(pt);
+    const bm = this._aimBm;
+    strutLocalDirection(pt.alphaF, az, bm);
+    bm.applyQuaternion(q).normalize();
+    const errM = Math.acos(Math.max(-1, Math.min(1, bm.dot(T))));
+
+    // arrived and at rest: hold (no torque) and swing the strut to the chosen angle (billed by the ship's strut driver as any move of
+    // it; not while another driver has a move of its own in flight, a "." press or an auto pose: that one finishes first). The strut
+    // stays folded while she turns: a folded strut is the lighter ship, and a launch asked for mid-turn spins that ship up on the gas
+    // (a swung-out strut would have made the rest of the turn dearer than today's whole turn). The line drifting off by REENGAGE_DEG
+    // turns her again.
+    const arm = pt.arm;
+    if (pt.phase === 'hold') {
+      if (arm._strutTargetAlpha === undefined && Math.abs(arm.getAimAlpha() - pt.alphaF) > 1e-6) {
+        if (arm.setAimAlpha(pt.alphaF, dt, pt.ease) === false) { this._endPreturn('hinge locked'); return; }
+      }
+      if (errM <= Constants.WHEEL_PRETURN.REENGAGE_DEG * Math.PI / 180) return;
+      pt.phase = 'turn';
+    }
+
+    const aFull = this._aimAccel(pt, bm, T);
+    if (!(aFull > 0)) return;
+    const a = aFull * p.wheelPeek(pt.burn.mx + pt.burn.my, dt);
+    const dOm = a * dt;
+    const rem = errM - pt.stopErr;
+    const want = rem > 0 ? 0.5 * (-dOm + Math.sqrt(dOm * dOm + 8 * a * rem)) : 0;
+    const was = pt.omega;
+    const lo = Math.max(0, was - dOm);
+    // the wheels' room left (they fill as she turns): no room and no rate = she cannot turn that way now
+    const room = p.wheelSpareRate(pt.axX, pt.axY);
+    if (was <= 0 && !(room > 1e-9) && errM > pt.tolRad) { this._endPreturn('wheels full'); return; }
+    const vLim = Math.min(pt.rate, was + room);
+    const now = Math.min(Math.max(want, lo), Math.max(lo, Math.min(vLim, was + dOm)));
+
+    if (errM <= pt.tolRad && now <= 0) {
+      if (was > 0) this._fireAimCouples(pt, -1, was / aFull);          // the last of the brake
+      pt.omega = 0;
+      pt.phase = 'hold';
+      return;
+    }
+    pt.omega = now;
+    if (now !== was) this._fireAimCouples(pt, now > was ? 1 : -1, Math.abs(now - was) / aFull);
+    const step = Math.min(now * dt, errM);
+    if (step > 0 && errM > 1e-9) {
+      this._aimDeltaQuat.setFromUnitVectors(bm, T);
+      this._aimTargetQuat.copy(this._aimDeltaQuat).multiply(q);
+      q.slerp(this._aimTargetQuat, step / errM);
+      q.normalize();
+    }
+  }
+
   /**
    * Called each gameplay frame from the main game loop.
    * Advances the rendezvous state machine and commands Cartesian impulses.
@@ -1688,6 +1981,8 @@ export class AutopilotSystem {
     if (apPlayer && typeof apPlayer.undoRecoilOverlay === 'function') apPlayer.undoRecoilOverlay();
     // fu-gas GD3: a frame with no billed slew step after one with a rate is the slew's stop.
     if (apPlayer) this._slewStopTick(apPlayer, dtWorld);
+    // wheel-preturn: a pre-turn whose conditions are gone ends before anything below moves the nose
+    if (this._preturn) this._preturnGuard(dt);
 
     // ap-smooth: the orbit-frame hold steps aside whenever something else owns the nose (an aim, a scripted turn, a
     // reel-in / launch hold), and never outlives the engagement.
@@ -1709,6 +2004,7 @@ export class AutopilotSystem {
     // internal safety cap releases if one is ever missed.
     this._tickAttitudeHold(dtWorld > 0 ? dt : 0);   // the 120 s cap does not run while the world is held
     this._tickLaunchHold(dtWorld > 0 ? dt : 0);     // launch-seq: the hold from the end of the aim to the spring
+    this._tickPreturn(dt, dtWorld);                 // wheel-preturn: the wheels turn her toward a picked daughter's shot
 
     // trip-melt D4: the transfer trip's prograde hold - attitude only, not the autopilot. A held world (the drawer)
     // does not turn the ship; a scripted turn / aim / reel-in hold owns the nose and the hold steps aside for the last
@@ -2945,6 +3241,15 @@ export class AutopilotSystem {
     eventBus.on(Events.NET_FAILED, endNetHold);
     eventBus.on(Events.TETHER_SNAP, endNetHold);
 
+    // wheel-preturn (S1b): a piece picked / a daughter picked starts the wheels turning her toward the shot; a cleared piece, a
+    // deselected daughter, an arrow key or a new game ends it. (Firing, the autopilot, a scripted turn, the leash: `_preturnGuard`.)
+    eventBus.on(Events.TARGET_SELECTED, (d) => this._onPreturnTrigger('target', d));
+    eventBus.on(Events.ARM_SELECT, (d) => this._onPreturnTrigger('arm', d));
+    eventBus.on(Events.TARGET_CLEARED, () => this._preturnDrop('piece cleared'));
+    eventBus.on(Events.ARM_DESELECT, () => this._preturnDrop('daughter deselected'));
+    eventBus.on(Events.MOTHER_MANUAL_ROTATE, () => this._preturnDrop('arrow key'));
+    eventBus.on(Events.GAME_RESET, () => { this._preturnDrop('new game'); this._preturnSaid = null; });
+
     // Conjunction warning (tier ≥ 2) → auto-disengage (CA overrides AP)
     eventBus.on(Events.CONJUNCTION_WARNING, (data) => {
       if (this._engaged && data && data.tier >= 2) {
@@ -3213,6 +3518,8 @@ export class AutopilotSystem {
       this._rejectAim('Superseded by new aim request', 'SUPERSEDED');
     }
     if (this._turn) this._rejectTurn('Superseded by aim request');
+    // wheel-preturn: the wheels' turn ends here, its rate braked on the wheels (billed); this aim starts from where she has got to
+    if (this._preturn) this._endPreturn('fire');
 
     const AIM = Constants.AIM;
     const tolRad = (mode === 'net' ? AIM.NET_AIM_TOLERANCE_DEG : AIM.DAUGHTER_AIM_TOLERANCE_DEG)
@@ -3226,7 +3533,7 @@ export class AutopilotSystem {
     // with gas, the wheels take an aim they can finish inside it (0 gas, battery) and the gas takes the rest; with the gas out the
     // wheels take every aim (the boxes when they are full), and `maxWaitS` refuses a too-slow one as for the boxes.
     const slowAimSrc = { src: null };
-    let slothEstS = 0;
+    let slothEstS = 0, lineS = 0;
     const aimLimitS = Number.isFinite(opts.maxWaitS) ? opts.maxWaitS : AIM.AIM_TIMEOUT_S;   // the time the wheels must finish a net aim in (owner 1 A: 30 s)
     // (the geometry is read only when it can change the answer: sloth mode, or a ship with the kit; a bare ship with gas never
     // asks the provider here, as before: a stateful provider must be read once per aim, F7)
@@ -3260,6 +3567,11 @@ export class AutopilotSystem {
       const src = slowAimSrc.src;
       if (src) {
         slothEstS = turnRad > 0 ? slowTurnTimeS(p, src, turnRad, nx, ny) + slowWarmupLeftS(p, src) : 0;
+        // F1.4: the seconds the line says are the shot's own (the wheel law run with the strut's inertia as it swings out): the
+        // rest-to-rest figure at today's inertia said 17 s for a turn that took 20. `slothEstS` stays that figure (the selector's
+        // 30 s test, the watch's limit); the line and the hand-over deadline use the longer of the two.
+        if (shot && src === 'wheels' && shot.src === 'wheels' && turnRad > 0 && Number.isFinite(shot.timeS)) lineS = Math.max(slothEstS, shot.timeS);
+        else lineS = slothEstS;
         if (sloth && Number.isFinite(opts.maxWaitS) && slothEstS > opts.maxWaitS) {
           const text = src === 'wheels'
             ? `Steering gas is empty and the reaction wheels need ${p.slothTimeWords(slothEstS)} to turn her that far: too slow for this.`
@@ -3299,7 +3611,7 @@ export class AutopilotSystem {
           const quick = shot && shot.alt ? this._shotQuickWords(shot.alt) : '';
           eventBus.emit(Events.COMMS_MESSAGE, {
             text: slowAimSrc.src === 'wheels'
-              ? `Turning the ship on the reaction wheels (no steering gas used): ${this._player.slothTimeWords(slothEstS)}${kick}.${quick}`
+              ? `Turning the ship on the reaction wheels (no steering gas used): ${this._player.slothTimeWords(lineS)}${kick}.${quick}`
               : `Emergency steering — turning slowly on the tail boxes: ${this._player.slothTimeWords(slothEstS)}${kick}.${quick}`,
             priority: slowAimSrc.src === 'wheels' ? 'info' : 'warning', source: 'HOUSTON',
             _keep: true,
@@ -3334,7 +3646,7 @@ export class AutopilotSystem {
         src: slowAimSrc.src,       // 'tailBoxes' | 'wheels' | null (cold gas)
         estS: slothEstS,           // the slow source's planned time
         limitS: aimLimitS,         // F3.1: the limit that planned time had to fit (the watch applies it to a drifting target's chase)
-        handAt: Constants.WHEELS.AIM_HANDOVER_X * slothEstS + Constants.WHEELS.AIM_HANDOVER_S,   // F2.3: a wheel aim not done by then goes to the gas
+        handAt: Constants.WHEELS.AIM_HANDOVER_X * Math.max(slothEstS, lineS) + Constants.WHEELS.AIM_HANDOVER_S,   // F2.3: a wheel aim not done by then goes to the gas
         wLos: 0,                   // F2.1: the target bearing's whole turn rate (rad/s, smoothed); read only on the wheels
         wFf: 0,                    // F2.2: the part of it along her error axis, away from her boresight (the feed-forward)
         losAt: -Infinity,          // F2.1: c.elapsed of the last look at it
@@ -3457,7 +3769,12 @@ export class AutopilotSystem {
         if (isSlowSrc(sel)) src = sel;
       }
       let timeS, aimKg;
-      if (src) {
+      if (src === 'wheels') {
+        // the wheel aim runs the same law as the gas aim with the wheels' torque and room (no gas): the strut swinging out makes her
+        // heavier as she turns (the table), so the turn takes longer than the rest-to-rest figure at today's inertia (F1.4: 17 s said, 20 s run)
+        timeS = Math.max(this._simGasAim({ err: errRad, nx, ny, table: inertiaTable(alpha), tS, stopErr, tolRad, rate, dStrut: Math.abs(alpha - a0), wheels: true }).timeS, tS);
+        aimKg = 0;
+      } else if (src) {
         timeS = Math.max(turnRad > 0 ? slowTurnTimeS(p, src, turnRad, nx, ny) + slowWarmupLeftS(p, src) : 0, tS);
         aimKg = 0;
       } else {
@@ -3543,15 +3860,17 @@ export class AutopilotSystem {
    * strut needs longer than the turn), cruises and brakes to rest at the target, the strut moving the whole time (its eased profile
    * stretched to the plan's time); every rad/s of rise and fall is `k·(mx+my)/α` of gas (`_turnFire`). The inertia is the one she has
    * as the strut sweeps (`table`: her inertia at five strut angles from where it is to where it goes: a folded strut turns easily,
-   * a swung-out one does not; the gas of the spin-up and of the stop is paid at those two ends).
+   * a swung-out one does not; the gas of the spin-up and of the stop is paid at those two ends). `q.wheels` (wheel-preturn F1.4) runs the
+   * same law for a wheel aim: the wheels' torque, their room as the rate cap, no gas (the seconds are what the line says).
    * @param {{err:number, nx:number, ny:number, table:Array<{ixx:number,iyy:number}>, tS:number, stopErr:number, tolRad:number,
-   *   rate:number, omega0?:number, strutDone?:boolean}} q
+   *   rate:number, omega0?:number, strutDone?:boolean, wheels?:boolean}} q
    * @returns {{timeS:number, gasKg:number}}
    * @private
    */
   _simGasAim(q) {
     const p = this._player;
-    const tauX = p._coupleTauMag('x'), tauY = p._coupleTauMag('y');
+    const wheels = q.wheels === true;                                         // the wheels' aim: their torque and room, no gas
+    const tauX = wheels ? p.wheelTauMag('x') : p._coupleTauMag('x'), tauY = wheels ? p.wheelTauMag('y') : p._coupleTauMag('y');
     const cx = Math.abs(q.nx), cy = Math.abs(q.ny);
     const table = q.table, last = table.length - 1;
     const at = (sx) => {                                                      // her inertia a fraction sx (0..1) along the strut's move
@@ -3571,11 +3890,12 @@ export class AutopilotSystem {
       else if (mx > 0 && mx <= TURN_MIN_MAG) { my += mx; mx = 0; }
       return { a, m: Math.min(1, mx) + Math.min(1, my) };
     };
-    const k = (p._coldGasRate ?? 0.5) * (Constants.ATTITUDE?.RCS_ATTITUDE_N2_FACTOR ?? 0.3);
+    const k = wheels ? 0 : (p._coldGasRate ?? 0.5) * (Constants.ATTITUDE?.RCS_ATTITUDE_N2_FACTOR ?? 0.3);
     const c0 = couples(at(0));
     if (!c0) return { timeS: q.tS, gasKg: 0 };
     const V5 = Constants.OCTOPUS_V5;
-    let vCap = Math.min(q.rate, this._gasRateCap(null, k * c0.m / c0.a, q.omega0 || 0));
+    let vCap = wheels ? Math.min(q.rate, p.wheelSpareRate(q.nx, q.ny))
+      : Math.min(q.rate, this._gasRateCap(null, k * c0.m / c0.a, q.omega0 || 0));
     let vPeak = vCap, tPlan = 0;
     const theta0 = Math.max(0, q.err - q.stopErr);
     if (!q.strutDone) {
@@ -3648,8 +3968,8 @@ export class AutopilotSystem {
   _shotHandedLine(c, bm, T) {
     const err = Math.acos(Math.max(-1, Math.min(1, bm.dot(T))));
     const I = this._player.getAttitudeInertia();
-    const e = this._simGasAim({ err, nx: c.axX, ny: c.axY, table: [{ ixx: I.ixx, iyy: I.iyy }], tS: 0, stopErr: c.stopErr, tolRad: c.tolRad,
-      rate: c.rate, omega0: Math.max(0, c.omega || 0), strutDone: true, dStrut: 0 });
+    const e = this._simGasAim({ err, nx: c.axX, ny: c.axY, table: [{ ixx: I.ixx, iyy: I.iyy }], tS: c.handTS > 0 ? c.handTS : 0, stopErr: c.stopErr, tolRad: c.tolRad,
+      rate: c.rate, omega0: Math.max(0, c.omega || 0), strutDone: !(c.handTS > 0), dStrut: 0 });
     return `Turning the ship to line up the launch. About ${Math.max(1, Math.round(e.timeS))} s, ${this._shotGasWords(e.gasKg + c.shot.kickKg)}.`;
   }
 
@@ -4287,9 +4607,13 @@ export class AutopilotSystem {
 
     let strutDone = true;
     if (arm) {
+      const before = typeof arm.getAimAlpha === 'function' ? arm.getAimAlpha() : 0;
       const ok = arm.setAimAlpha(c.alphaF, dt, c.ease || undefined);
       if (ok === false) { this._rejectAim('hinge LOCKED — release the hinge brake [H]'); return; }
-      if (typeof arm.getAimAlpha === 'function') strutDone = Math.abs(arm.getAimAlpha() - c.alphaF) < 1e-6;
+      if (typeof arm.getAimAlpha === 'function') {
+        strutDone = Math.abs(arm.getAimAlpha() - c.alphaF) < 1e-6;
+        c.strutStep = dt > 0 ? (arm.getAimAlpha() - before) / dt : 0;   // F1.3: the strut's rate this frame (signed, rad/s), for a hand-over
+      }
     }
 
     // Her rate: the largest ω she can still stop from inside the angle left (stopping at c.stopErr from the target),
@@ -4332,7 +4656,10 @@ export class AutopilotSystem {
     // F2.2: on the wheels she is to MATCH the bearing's turn rate when she gets there, not stop at it (her stop distance is
     // v²/2α, far over the tolerance at the wheels' small α, so a drifting piece outran every stop): the law is the same one in the
     // frame of the moving bearing, `ff` on top of the closing rate. Only a bearing running away from her counts (ff ≥ 0).
-    const ff = (c.src === 'wheels' && c.wFf > 0) ? c.wFf : 0;
+    // The along-the-error part can never exceed the bearing's whole rate: `wFf` is not updated while she is exactly on the bearing (no
+    // error direction to read it along), so the last value would stand as a feed-forward the bearing no longer has, and she crept on
+    // at it until the 1.5 x plan deadline handed the aim to the gas (a 29 s plan took 51 s).
+    const ff = (c.src === 'wheels' && c.wFf > 0) ? Math.min(c.wFf, c.wLos) : 0;
     const want = (rem > 0 ? 0.5 * (-dOm + Math.sqrt(dOm * dOm + 8 * a * rem)) : 0) + ff;
     const was = c.omega;
     const lo = Math.max(0, was - dOm);
@@ -4345,7 +4672,8 @@ export class AutopilotSystem {
       if (now > cap) { now = Math.max(was, cap); this._noteGasCap(c); }
     }
 
-    if (strutDone && errM <= c.tolRad && now <= slack) {
+    // At rest is "no rate left to name": on the wheels the brake ends on a feed-forward of the bearing's own tiny rate, never exactly 0.
+    if (strutDone && errM <= c.tolRad && now <= Math.max(slack, c.src === 'wheels' ? AIM_REST_EPS : 0)) {
       if (was > 0) this._fireAimCouples(c, -1, was / aFull);           // the last of the brake
       c.omega = 0;
       this._resolveAim({ x: bm.x, y: bm.y, z: bm.z });                 // strut is there: this IS the launcher axis
@@ -4422,6 +4750,36 @@ export class AutopilotSystem {
       if (cap < c.rate) this._noteGasCap(c);
     }
     c.vPeak = c.vCap;
+    // The gas aim's own law stretches her peak so she and the strut arrive together (`_tickAimEased`, at its start): a gas aim that takes
+    // over from the wheels does the same from where it stands, with the strut's quickest move from here (a new ease). Without it the gas
+    // turned the rest at the full peak and waited for the strut's slow wheel-length move: 128 g for 30° that cost about a fifth of that.
+    const arm = (c.mode === 'daughter' && c.arm && typeof c.arm.setAimAlpha === 'function' && c.alphaF !== undefined) ? c.arm : null;
+    if (aG > 0 && arm) {
+      const theta = Math.max(0, Math.acos(Math.max(-1, Math.min(1, bm.dot(T)))) - c.stopErr);
+      const vCap = c.vCap;
+      const tM = theta <= 0 ? 0 : (theta >= vCap * vCap / aG ? theta / vCap + vCap / aG : 2 * Math.sqrt(theta / aG));
+      // F1.3: the strut is mid-swing (a wheel aim keeps it moving at the pace of its long plan): the new, quicker move carries on from
+      // the rate it has (a move from rest stopped it dead: 6 deg/s -> 0.4 deg/s in a frame, and it jerked up again)
+      const V5 = Constants.OCTOPUS_V5;
+      const a0 = arm.getAimAlpha ? arm.getAimAlpha() : c.alphaF;
+      const target = Math.max(V5.STRUT_SWEEP_MIN, Math.min(c.alphaF, V5.STRUT_SWEEP_MAX));
+      const sign = target >= a0 ? 1 : -1;
+      const v0 = Number.isFinite(c.strutStep) ? Math.max(0, sign * c.strutStep) : 0;
+      let carry = null;
+      if (v0 > 1e-4 && Math.abs(target - a0) > 1e-9 && V5.STRUT_EASE_ACCEL > 0) carry = strutCarryProfile(Math.abs(target - a0), v0, V5.STRUT_EASE_ACCEL, V5.STRUT_SLEW_RATE, 0);
+      const tS = carry ? carry.minS
+        : ((typeof arm.aimEaseMinTime === 'function') ? arm.aimEaseMinTime(c.alphaF) : Math.abs(c.alphaF - a0) / V5.STRUT_SLEW_RATE);
+      if (tS > tM && theta > 0) c.vPeak = Math.min(vCap, 0.5 * aG * (tS - Math.sqrt(Math.max(0, tS * tS - 4 * theta / aG))));
+      c.ease = tS > 0 ? { durationS: Math.max(tM, tS) } : null;
+      if (carry && c.ease) {
+        const prof = strutCarryProfile(Math.abs(target - a0), v0, V5.STRUT_EASE_ACCEL, V5.STRUT_SLEW_RATE, c.ease.durationS);
+        // the arm's own move record (ArmUnit.setAimAlpha keys it by the ease object and the target), entered mid-way
+        arm._aimEase = {
+          src: c.ease, from: a0 - sign * prof.s0, to: target, sign, d: prof.d, a: V5.STRUT_EASE_ACCEL, v: prof.v, T: prof.T, t: prof.t0,
+        };
+      }
+      c.handTS = tS;                                                   // the line below prices the stretched aim
+    }
     c.timeout = c.elapsed + Constants.AIM.AIM_TIMEOUT_S;
     c.handedToGas = true;
     eventBus.emit(Events.COMMS_MESSAGE, {

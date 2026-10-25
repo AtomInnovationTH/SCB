@@ -5388,6 +5388,19 @@ export const Constants = {
     QUICK_FRAC: 0.10,        // the aim line names the other way ("quick: ...") only when its gas differs by more than this
   },
 
+  // ==========================================================================
+  // WHEEL PRE-TURN (owner 2026-10-25 02:23Z: "if a target is selected, the reaction wheel could intelligently immediately start pivoting
+  // mother for best angle ... save gas"; plan daughter-pairs-1025 S1b): with the wheel kit, a docked daughter picked (keys 1-4) and a piece
+  // picked, the wheels start turning her toward the shot the chooser would take, no gas, at the wheels' own pace; firing hands the rest to
+  // the normal aim. Daughters only (the mother's own net shots get none yet).
+  // ==========================================================================
+  WHEEL_PRETURN: {
+    ENABLED: true,
+    MIN_BATTERY_FRAC: 0.30,  // the pre-turn starts, and goes on, only with the battery over this fraction (each wheel draws up to 150 W)
+    REENGAGE_DEG: 3,         // holding on the shot: she turns again only once the line has drifted this far off
+    RECHECK_S: 0.25,         // how often the slower gates (a net or catch on the piece, a line across another) are asked again
+  },
+
   AUTOPILOT: {
     // --- Tool-aware trailing distance (metres behind debris along V_d) ---
     D_TRAIL_LASSO:   70,   // m — park INSIDE the 90 m lasso/net range (LASSO_RANGE === NET_LOCK_RANGE_M); 70 + POS_TOL 15 < 90. Was 120 (inside the old 200 m gate, outside the new one)

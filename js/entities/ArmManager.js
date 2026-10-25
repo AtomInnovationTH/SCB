@@ -5820,6 +5820,9 @@ export class ArmManager {
       busy() {
         if (self._pendingLaunches && self._pendingLaunches.size > 0) return true;
         if (self._leanAsideActive) return true;
+        // wheel-preturn: the autopilot's pre-turn swings a docked strut for the shot and holds it there until a launch or a cancel
+        const ap = self._autopilot;
+        if (ap && typeof ap.isPreturning === 'function' && ap.isPreturning()) return true;
         for (const a of self.arms) {
           if (!a) continue;
           if (a._aimReserved) return true;
