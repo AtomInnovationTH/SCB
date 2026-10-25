@@ -640,8 +640,8 @@ export class MenuScreen {
               <li data-end="2026-10-31"><span class="adr-name" title="Run by GISTDA, Thailand's space agency, at ICONSIAM with free entry: satellites, rockets and the region's space start-ups. Shares its week with the Asia-Pacific agency forum APRSAF-32.">Thailand Space Expo</span> <span class="adr-sub">Bangkok · 28-31 Oct</span></li>
               <li data-end="2026-11-05"><span class="adr-name" title="Secure World Foundation's flagship policy event on keeping orbit usable, with the Brazilian Space Agency. The 8th edition, and the first in Latin America.">Summit for Space Sustainability</span> <span class="adr-sub">Brasília · 4-5 Nov</span></li>
               <li data-end="2026-11-19"><span class="adr-name" title="Europe's trade show for the space supply chain. This is its last year in Bremen; from 2027 it moves to Frankfurt.">Space Tech Expo Europe</span> <span class="adr-sub">Bremen · 17-19 Nov</span></li>
+              <li data-end="2027-02-26"><span class="adr-name" title="Singapore's space conference and exhibition for agencies, industry, investors and policymakers. Its second year; the first ran alongside the 2026 Singapore Airshow.">Singapore Space Summit</span> <span class="adr-sub">Singapore · 25-26 Feb 2027</span></li>
               <li data-end="2027-03-11"><span class="adr-name" title="The biggest satellite-industry show (SATELLITE, with GovMilSpace), including a space-domain-awareness track. Conference 8-11 March, exhibition 9-11 March.">SATShow Week</span> <span class="adr-sub">Washington · 8-11 Mar 2027</span></li>
-              <li data-end="2027-04-15"><span class="adr-name" title="The flagship space-industry and defence gathering, held at The Broadmoor.">Space Symposium</span> <span class="adr-sub">Colorado Springs · 12-15 Apr 2027</span></li>
               </ul>
             </details>
 
