@@ -4567,6 +4567,32 @@ async function init() {
       // Raw handle for the perf harness, which needs to control info.autoReset
       // to get clean per-frame totals across the composer's multiple passes.
       window.__scbSceneManager = () => sceneManager;
+      // Ion start-up (lane ion-startup, DECISIONS §37 row 7) - CAPTURE ONLY: starts the trip's burn from a loaded game so a witness can film
+      // the four engines lighting (frames every 0.5 s: scripts in tmp/). The flat trip by default; `{ field: true }` flies the nearest
+      // reachable field instead (the strip's trip text, a profile burn). Either way the arrival callback starts NO mission. Returns
+      // `{ begun, phase }` (phase 'wait' until the next frame starts the burn: the daughters are home) or `{ begun: false, why }`.
+      // `{ read: true }` starts nothing and returns the lighting stage's state `{ phase, elapsedS, ionS, lighting, glow: the four glow levels, camera, comms: the store's last three lines, panel: what the panel has waiting / on screen }`.
+      // `{ comms: true }` first ends the tutorial's comms silence (what a finished tutorial does: tier 3), so the trip line shows in the panel
+      // as it does at the end of a real mission; a fresh capture game is still at tier 0, which hides every line that is not the tutorial's.
+      window.__scbTripBurnDemo = (opts = {}) => {
+        const trip = gameFlowManager && gameFlowManager.trip;
+        if (!trip) return { begun: false, why: 'no trip' };
+        if (opts && opts.read) {
+          const g = player && player._ionStartGlow;
+          return { phase: trip._phase, elapsedS: trip._elapsedS, ionS: trip._ionS, lighting: trip.lighting(), glow: g ? g.slice() : null, camera: cameraSystem.ionStartupState(), comms: commsSystem && commsSystem.getMessages ? commsSystem.getMessages().slice(-3).map((m) => m.text) : null,
+            panel: hud && hud.commsPanel && Array.isArray(hud.commsPanel._waiting) ? { waiting: hud.commsPanel._waiting.length, shown: hud.commsPanel._shown.map((m) => m.text).slice(-2), sinceShownS: Number.isFinite(hud.commsPanel._sinceShown) ? hud.commsPanel._sinceShown : null } : null };
+        }
+        if (trip.isActive()) return { begun: false, why: 'a trip is already active', phase: trip._phase };
+        if (opts && opts.comms && commsSystem && typeof commsSystem._endTutorialSilence === 'function') commsSystem._endTutorialSilence();
+        gameFlowManager._syncTripDeps();
+        let field;
+        if (opts && opts.field) {
+          field = fieldRegistry && fieldRegistry.isOn() ? fieldRegistry.defaultNext() : null;
+          if (!field) return { begun: false, why: 'no field to fly to' };
+        }
+        const begun = trip.begin(() => { trip.lastLeg = null; }, field ? { field } : undefined);
+        return { begun: !!begun, phase: trip._phase };
+      };
       // Session T (SPECS pane part imagery, plan T2/T8): the last PART PORTRAIT
       // render's stats — the near render's draw calls / triangles (read from
       // renderer.info right after it, before the output quad resets them), the

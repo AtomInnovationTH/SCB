@@ -2971,6 +2971,39 @@ export const Constants = {
   },
 
   // =========================================================================
+  // ION START-UP (owner 2026-10-25, DECISIONS §37 row 7: "seeing them flicker to life and ramp up to full power [is] a
+  // great visual reward at the end of each mission"). The first seconds of a trip's burn (js/systems/TransferTrip.js):
+  // the four tail boxes light in two opposite pairs (top+bottom, then right+left, so the push stays balanced), each
+  // pair sputtering and then swelling to full; the camera swings behind her, a hum rises, and the trip line shows once
+  // all four burn. The push, the gas and the world clock follow the lit share (TransferTrip header). Colours are
+  // today's (argon's real plume colour is unconfirmed).
+  // =========================================================================
+  ION_STARTUP: {
+    PAIR_GAP_S: 1.0,       // the second pair starts this long after the first
+    FLICKER_S: 0.6,        // each pair sputters this long (the pulses below), then swells
+    // The sputter: [from s, to s, level] on the pair's own clock; dark between the pulses and from the last one to FLICKER_S
+    // (uneven on purpose, and non-monotonic: she catches, dies, catches again, then the swell takes over).
+    FLICKERS: [[0.00, 0.07, 0.40], [0.18, 0.24, 0.25], [0.34, 0.47, 0.65]],
+    RAMP_S: 1.5,           // a smooth swell (smoothstep) from the sputter to full output
+    SETTLE_S: 0.9,         // all four steady at full before the line shows and the clock may speed up
+    // Camera (CameraSystem): it eases to a view behind and a little to the side of the tail, holds while they light and for
+    // CAM_HOLD_S after the line shows (so he sees all four at full power), then eases back to her previous view over CAM_OUT_S;
+    // his own camera input ends it at once. Metres in her own frame (+Z nose; the tail face is z = -1.075).
+    CAM_IN_S: 1.5,
+    CAM_HOLD_S: 1.5,       // the close view stays this long after all four are lit (F1.4, 10-25 visual check)
+    CAM_OUT_S: 2.0,
+    CAM_AFT_M: 5.5,        // camera this far aft of her centre
+    CAM_SIDE_M: 2.6,       // ... this far to her side (+X)
+    CAM_UP_M: 1.0,         // ... and this far above (+Y)
+    CAM_LOOK_AFT_M: 1.6,   // looks at this point on her axis, aft of her centre (the tail boxes and the plumes)
+    // Hum (AudioSystem): a sine that rises in gain and pitch with the lit share, then holds quiet for the rest of the burn.
+    HUM_FREQ_LOW_HZ: 60,
+    HUM_FREQ_HIGH_HZ: 80,
+    HUM_GAIN_PEAK: 0.07,
+    HUM_GAIN_CRUISE: 0.025,
+  },
+
+  // =========================================================================
   // OPENING DANCE (2026-09-16) — the beat table for the ship unpacking itself.
   // Every beat-table figure of the plan's table lives HERE, in ONE block. The
   // DURATIONS are not repeated: they are derived in js/systems/OpeningDance.js
@@ -5331,6 +5364,21 @@ export const Constants = {
     AP_ROT_RATE: 0.2,
     /** Onboarding may scale AP_ROT_RATE for the very first net/daughter beats. */
     ONBOARDING_ROT_RATE_MULT: 1.0,
+  },
+
+  // ==========================================================================
+  // CHEST SHOT (owner 2026-10-25, DECISIONS §38 row 5; plan daughter-pairs-1025 S1): a daughter launched along the line through
+  // the mother's centre of mass kicks her not at all. The daughter aim picks, per shot, the cheaper (gas) of today's angle and that
+  // chest angle (Q1 a); with the wheel kit AND a wheel axis over half full it also scans the strut's angles, keeps those whose kick lowers that axis, and credits the kick (F1.1).
+  // ==========================================================================
+  CHEST_SHOT: {
+    ENABLED: true,
+    SCAN_STEP_DEG: 5,        // the kit's scan over the strut's reachable angle (T3)
+    WHEEL_CREDIT_FRAC: 0.5,  // the kit's scan of other angles runs, and a kick that lowers the fullest wheel axis is credited, only when that axis is over this full (T3)
+    EMPTIES_SAY_NMS: 1,      // "This launch also empties the wheels." only when the credit changed the pick and the fullest axis ends this much lower, N·m·s
+    TIE_FRAC: 0.02,          // two shots whose gas differs by less than this (or TIE_G) cost the same: the quicker one is taken
+    TIE_G: 0.5,              // g
+    QUICK_FRAC: 0.10,        // the aim line names the other way ("quick: ...") only when its gas differs by more than this
   },
 
   AUTOPILOT: {

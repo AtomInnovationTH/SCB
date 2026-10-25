@@ -8879,7 +8879,7 @@ export class ArmUnit {
     const d = j.length();
     if ((m > 0) && (v > 0) && (d > 1e-9)) j.multiplyScalar(m * v / d);
     else j.set(0, 0, 0);                                           // nothing arrives; the call still flushes the gathered Δv
-    const res = ps.applyImpulseAtPoint(j, tipWorld, this._pushOptsLatch || (this._pushOptsLatch = { source: this, flush: true }));
+    const res = ps.applyImpulseAtPoint(j, tipWorld, this._pushOptsLatch || (this._pushOptsLatch = { source: this, flushLinear: true }));
     if (res === false) this._reelPushRefused();
   }
 

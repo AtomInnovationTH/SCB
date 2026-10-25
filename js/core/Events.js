@@ -100,6 +100,15 @@ export const Events = {
    *  `{ open: false }` when it closes (a pick, Stay, game over, a new run). main.js turns `open: true` into the jump to floor 4 and
    *  shows the list (ui/WhereNextList.js). Never emitted with the flag off, with `?ladder=0` (no floor 4), or by the old flat trip. */
   WHERE_NEXT:         'trip:whereNext',
+  /** Ion start-up (DECISIONS §37 row 7, lane ion-startup): the four tail engines of a burning trip light one pair after the other.
+   *  Emitted by TransferTrip: BEGIN the frame the burn starts (`{}`; CameraSystem swings behind her, AudioSystem starts the hum),
+   *  HUM every frame of the lighting (`{ lit: 0..1 }`, the lit share: the hum's gain and pitch follow it), LIT once when all four
+   *  burn (`{}`; the trip line shows, the camera's hold begins, the clock may speed up), END when the trip ends or is aborted (`{}`;
+   *  the hum stops, a camera still out comes back). END always follows a BEGIN. */
+  ION_STARTUP_BEGIN:  'trip:ionStartupBegin',
+  ION_STARTUP_HUM:    'trip:ionStartupHum',
+  ION_STARTUP_LIT:    'trip:ionStartupLit',
+  ION_STARTUP_END:    'trip:ionStartupEnd',
   /** Nets step 3 slice 3 (lane 3a, FEATURE_FLAGS.FIELDS_BY_HEIGHT, DECISIONS §33 row 7): the mother berths at the resupply
    *  satellite or lets go of it. Emitted by GameFlowManager: `{ phase: 'berthed', satId, altKm }` once when a trip to the satellite
    *  has arrived (the satellite takes any catch mated at her nose collar first, buying opens, the first berth tops credits up),

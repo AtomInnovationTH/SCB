@@ -604,6 +604,16 @@ class AudioSystem {
       this.playTrawlCapture();
     });
 
+    // Ion start-up (a trip's four tail engines light, DECISIONS §37 row 7): a hum on its own key that rises with the lit share, then
+    // holds quiet for the burn. Its own 'ionStartup' key, so InputManager's per-frame stopThrusterHum() never touches it.
+    eventBus.on(Events.ION_STARTUP_BEGIN, () => this.startIonStartupHum(0));
+    eventBus.on(Events.ION_STARTUP_HUM, (d) => this.updateIonStartupHum(d ? d.lit : 0));
+    eventBus.on(Events.ION_STARTUP_LIT, () => this.holdIonStartupHum());
+    eventBus.on(Events.ION_STARTUP_END, () => this.stopIonStartupHum());
+    // ... and it is silent while the game is paused (the trip's clock does not run then), back at the same level on resume.
+    eventBus.on(Events.PAUSE_MENU, () => this.muteIonStartupHum(true));
+    eventBus.on(Events.PAUSE_RESUME, () => this.muteIonStartupHum(false));
+
     // Ambient loop lifecycle: start on gameplay, stop on menu/gameover.
     // §13 escalation: gated by Constants.AUDIO.AMBIENT_LOOP_ENABLED (default
     // false) — two continuously-looping BufferSource + BiquadFilter chains
@@ -2005,6 +2015,96 @@ class AudioSystem {
     }, 150, { owner: this });
 
     this.activeSources.delete('thruster');
+  }
+
+  /**
+   * Ion start-up hum (TransferTrip's lighting stage, Constants.ION_STARTUP): a quiet sine with a triangle a fifth above, on its OWN
+   * 'ionStartup' key (never 'thruster'), at gain 0 and the low pitch until `updateIonStartupHum` raises them with the lit share.
+   * A second call while one plays does nothing.
+   * @param {number} [lit=0] 0..1 the lit share it starts at
+   */
+  startIonStartupHum(lit = 0) {
+    if (!this.available || this.activeSources.has('ionStartup')) return;
+    const I = Constants.ION_STARTUP;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, now);
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(I.HUM_FREQ_LOW_HZ, now);
+    osc.connect(gain);
+    osc.start(now);
+    const body = ctx.createOscillator();
+    body.type = 'triangle';
+    body.frequency.setValueAtTime(I.HUM_FREQ_LOW_HZ * 1.5, now);
+    const bodyGain = ctx.createGain();
+    bodyGain.gain.value = 0.35;
+    body.connect(bodyGain);
+    bodyGain.connect(gain);
+    body.start(now);
+    gain.connect(this.physicalBus);
+    this.activeSources.set('ionStartup', { nodes: [osc, body, bodyGain], gain, osc, body, lit: 0, cruise: false, muted: false });
+    this.updateIonStartupHum(lit);
+  }
+
+  /**
+   * Ion start-up hum: gain and pitch follow the lit share (gain 0 -> HUM_GAIN_PEAK, pitch HUM_FREQ_LOW_HZ -> HUM_FREQ_HIGH_HZ).
+   * @param {number} lit 0..1
+   */
+  updateIonStartupHum(lit) {
+    const entry = this.activeSources.get('ionStartup');
+    if (!this.available || !entry) return;
+    const I = Constants.ION_STARTUP;
+    const l = Math.max(0, Math.min(1, Number.isFinite(lit) ? lit : 0));
+    const now = this.ctx.currentTime;
+    const hz = I.HUM_FREQ_LOW_HZ + (I.HUM_FREQ_HIGH_HZ - I.HUM_FREQ_LOW_HZ) * l;
+    entry.lit = l;
+    if (!entry.muted) entry.gain.gain.setTargetAtTime(I.HUM_GAIN_PEAK * l, now, 0.08);
+    entry.osc.frequency.setTargetAtTime(hz, now, 0.08);
+    entry.body.frequency.setTargetAtTime(hz * 1.5, now, 0.08);
+  }
+
+  /** Ion start-up hum: all four engines burn - settle to the quiet cruise level at the full pitch, held through the burn. */
+  holdIonStartupHum() {
+    const entry = this.activeSources.get('ionStartup');
+    if (!this.available || !entry) return;
+    const I = Constants.ION_STARTUP;
+    const now = this.ctx.currentTime;
+    entry.lit = 1;
+    entry.cruise = true;
+    if (!entry.muted) entry.gain.gain.setTargetAtTime(I.HUM_GAIN_CRUISE, now, 0.5);
+    entry.osc.frequency.setTargetAtTime(I.HUM_FREQ_HIGH_HZ, now, 0.08);
+    entry.body.frequency.setTargetAtTime(I.HUM_FREQ_HIGH_HZ * 1.5, now, 0.08);
+  }
+
+  /** Ion start-up hum: silent while the game is paused, back at the level it had on resume. Safe when none plays. */
+  muteIonStartupHum(muted) {
+    const entry = this.activeSources.get('ionStartup');
+    if (!this.available || !entry || entry.muted === !!muted) return;
+    entry.muted = !!muted;
+    const I = Constants.ION_STARTUP;
+    const level = entry.cruise ? I.HUM_GAIN_CRUISE : I.HUM_GAIN_PEAK * entry.lit;
+    entry.gain.gain.setTargetAtTime(entry.muted ? 0 : level, this.ctx.currentTime, 0.05);
+  }
+
+  /** Ion start-up hum: the trip ended (or was aborted, or the game left play): fade out and stop. Safe when none plays. */
+  stopIonStartupHum() {
+    const entry = this.activeSources.get('ionStartup');
+    if (!entry) return;
+    this.activeSources.delete('ionStartup');
+    if (!this.available) return;
+    const now = this.ctx.currentTime;
+    entry.gain.gain.cancelScheduledValues(now);
+    entry.gain.gain.setValueAtTime(entry.gain.gain.value, now);
+    entry.gain.gain.linearRampToValueAtTime(0, now + 0.3);
+    timerManager.setTimeout(() => {
+      entry.nodes.forEach((node) => {
+        try { node.stop(); } catch (_) { /* not a source node */ }
+        try { node.disconnect(); } catch (_) { /* already disconnected */ }
+      });
+      try { entry.gain.disconnect(); } catch (_) { /* already disconnected */ }
+    }, 350, { owner: this });
   }
 
   /**

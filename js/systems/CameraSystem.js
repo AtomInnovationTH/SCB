@@ -575,6 +575,21 @@ export class CameraSystem {
       prevLook: new THREE.Vector3(),
     };
 
+    // Ion start-up (DECISIONS §37 row 7, lane ion-startup): while a trip's four tail engines light, the camera eases to a view behind
+    // and a little to the side of her tail, holds, and eases back to whatever view the player had. A BLEND over the normal driver
+    // (the ladder, chase, orbit ...), applied after it each frame: that driver keeps running, so handing back needs no saved pose.
+    // `t` 0..1 is how far out the camera is; phase 'in' | 'hold' | 'out'. Any player camera input ends it at once.
+    this._ion = { active: false, phase: 'in', t: 0, savedNear: 0, holdLeft: -1 };
+    this._ionOff = new THREE.Vector3();
+    this._ionTgt = new THREE.Vector3();
+    this._ionDirN = new THREE.Vector3();
+    this._ionDirC = new THREE.Vector3();
+    this._ionLook = new THREE.Vector3();
+    this._ionLookC = new THREE.Vector3();
+    this._ionQ = new THREE.Quaternion();
+    this._ionQ2 = new THREE.Quaternion();
+    this._ionIdentityQ = new THREE.Quaternion();
+
     // Q2: Net ceremony cinematic state (parallel to _launchCeremony)
     this._netCeremony = {
       active: false,
@@ -756,6 +771,15 @@ export class CameraSystem {
     this._unsubs.push(eventBus.on(Events.PAUSE_MENU, () => {
       CeremonyTimeScale.reset(this);
     }));
+    // Ion start-up: BEGIN swings the camera out behind her tail; LIT (all four burn) starts its hold (CAM_HOLD_S, so he sees them at full
+    // power) and then the hand-back; END (the trip ended / was aborted) hands it back at once.
+    this._unsubs.push(eventBus.on(Events.ION_STARTUP_BEGIN, () => this._beginIonStartup()));
+    this._unsubs.push(eventBus.on(Events.ION_STARTUP_LIT, () => this._litIonStartup()));
+    this._unsubs.push(eventBus.on(Events.ION_STARTUP_END, () => this._releaseIonStartup()));
+    // ... and his own camera input ends the swing at once. With the ladder on, the wheel and the pinch never reach handleWheelZoom (the
+    // WheelRouter feeds the ladder); the router emits this before it routes, so it is the one signal every wheel / pinch gives. (A
+    // ladder ride - the rail, a floor change - ends it in ladderStartRide.)
+    this._unsubs.push(eventBus.on(Events.CAMERA_ZOOM_INPUT, () => this._ionStartupInput('zoom input')));
 
     // ========================================================================
     // ZOOM LADDER camera (S2 ride engine — docs/ladder/06-core-api.md, T6).
@@ -1003,6 +1027,7 @@ export class CameraSystem {
    */
   cycleView(lockedId = null) {
     void lockedId; // retained for caller API stability (INSPECTION left the cycle)
+    this._ionStartupInput('view key');   // ion start-up: the player's own camera input ends the swing at once
     const cur = this.currentView;
 
     // From the legacy discrete INSPECTION view, V wraps back to FLY (restores
@@ -1367,6 +1392,9 @@ export class CameraSystem {
       } // end !lcResult (round 3 fall-through)
     } // end V-7 ceremony else
 
+    // Ion start-up: blend the frame's pose toward the view behind her tail (no-op unless a trip's engines are lighting)
+    if (this._ion.active) this._applyIonStartup(dt, playerPos, playerQuat, radialDir);
+
     // Phase 8: Apply camera shake offset (catches, not ARM_PILOT)
     if (this._catchShakeTimer > 0) {
       this._catchShakeTimer -= dt;
@@ -1506,6 +1534,119 @@ export class CameraSystem {
       } else {
         this._earthLight.position.copy(playerPos);
       }
+    }
+  }
+
+  // ==========================================================================
+  // ION START-UP (a trip's engines light; see the constructor note)
+  // ==========================================================================
+
+  /** True while the ion start-up view is out (swinging out, holding, or coming back). */
+  isIonStartupActive() { return this._ion.active; }
+
+  /** The ion start-up view's state: `{ active, phase: 'in'|'hold'|'out', t: 0..1 (how far out), holdLeft: s of hold left after LIT, -1 before it }`. */
+  ionStartupState() { return { active: this._ion.active, phase: this._ion.phase, t: this._ion.t, holdLeft: this._ion.holdLeft }; }
+
+  /** @private BEGIN: take the view, unless another camera driver owns the frame (a ceremony or a lasso cut). */
+  _beginIonStartup() {
+    const io = this._ion;
+    if (io.active) return;
+    if (this._launchCeremony.active || this._netCeremony.active || this._lassoCut.active) return;
+    io.active = true;
+    io.phase = 'in';
+    io.t = 0;
+    io.holdLeft = -1;
+    io.savedNear = this.camera.near;
+  }
+
+  /** @private LIT (all four burn): the close view stays CAM_HOLD_S more, then eases back (the hold runs from the moment it has arrived). */
+  _litIonStartup() {
+    const io = this._ion;
+    if (io.active && io.phase !== 'out' && io.holdLeft < 0) io.holdLeft = Constants.ION_STARTUP.CAM_HOLD_S;
+  }
+
+  /** @private END: begin the ease back to the player's view at once (from wherever the swing out had got to). */
+  _releaseIonStartup() {
+    const io = this._ion;
+    if (io.active && io.phase !== 'out') io.phase = 'out';
+  }
+
+  /** @private Player camera input: the view is the player's again, at once. */
+  _ionStartupInput(cause) {
+    if (this._ion.active) this._endIonStartup(cause);
+  }
+
+  /** @private End the ion start-up view now: the normal driver's pose stands (it ran underneath), the near plane comes back. */
+  _endIonStartup(_cause) {
+    const io = this._ion;
+    if (!io.active) return;
+    io.active = false;
+    io.t = 0;
+    io.phase = 'in';
+    io.holdLeft = -1;
+    if (io.savedNear > 0 && this.camera.near !== io.savedNear) {
+      this.camera.near = io.savedNear;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  /**
+   * @private Blend this frame's pose (the normal driver's, already on the camera) toward the view behind and to the side of her tail:
+   * the offset from her swings round (slerp) and its length changes geometrically (so a dive from a far map floor reads even, not a
+   * late rush), the look point slides from where the normal view looked to a point aft on her axis (the four boxes and their plumes),
+   * and `up` goes to the radial. At 0 it is the normal pose, at 1 the tail view.
+   */
+  _applyIonStartup(dt, playerPos, playerQuat, radialDir) {
+    const io = this._ion;
+    const I = Constants.ION_STARTUP;
+    if (io.phase === 'in') {
+      io.t += dt / I.CAM_IN_S;
+      if (io.t >= 1) { io.t = 1; io.phase = 'hold'; }
+    } else if (io.phase === 'hold') {
+      if (io.holdLeft >= 0) {                     // lit: the hold after LIT runs down, then the hand-back
+        io.holdLeft -= dt;
+        if (io.holdLeft <= 0) { io.holdLeft = 0; io.phase = 'out'; }
+      }
+    } else if (io.phase === 'out') {
+      io.t -= dt / I.CAM_OUT_S;
+      if (io.t <= 0) { this._endIonStartup('done'); return; }
+    }
+    if (!playerQuat) return;
+    const w = io.t * io.t * (3 - 2 * io.t);
+    if (!(w > 1e-4)) return;
+    const cam = this.camera;
+    const M = Constants.SCENE_UNITS_PER_METER;
+
+    // the normal view's offset from her, and the tail view's (her own frame: +Z nose, +X side, +Y up)
+    const off = this._ionOff.copy(cam.position).sub(playerPos);
+    const dN = off.length();
+    const tgt = this._ionTgt.set(I.CAM_SIDE_M * M, I.CAM_UP_M * M, -I.CAM_AFT_M * M).applyQuaternion(playerQuat);
+    const dC = tgt.length();
+    const dirC = this._ionDirC.copy(tgt).multiplyScalar(1 / dC);
+    const dirN = dN > 1e-12 ? this._ionDirN.copy(off).multiplyScalar(1 / dN) : this._ionDirN.copy(dirC);
+
+    // where the normal view looks, held at her distance along its own forward
+    const fwd = this._ionLook.set(0, 0, -1).applyQuaternion(cam.quaternion);
+    const natLook = fwd.multiplyScalar(dN > 1e-12 ? dN : dC).add(cam.position);
+    // the tail view looks at a point on her axis aft of her centre
+    const lookC = this._ionLookC.set(0, 0, -I.CAM_LOOK_AFT_M * M).applyQuaternion(playerQuat).add(playerPos);
+
+    // position: the offset's direction swings (slerp via the rotation between), its length is geometric
+    this._ionQ.setFromUnitVectors(dirN, dirC);
+    this._ionQ2.copy(this._ionIdentityQ).slerp(this._ionQ, w);
+    dirN.applyQuaternion(this._ionQ2);
+    const dist = dN > 1e-12 ? Math.exp((1 - w) * Math.log(dN) + w * Math.log(dC)) : dC;
+    cam.position.copy(playerPos).addScaledVector(dirN, dist);
+
+    natLook.lerp(lookC, w);
+    cam.up.lerp(radialDir, w).normalize();
+    cam.lookAt(natLook);
+
+    // the near plane must clear her hull at this distance (the ladder's floors keep it at metres)
+    const nearWant = Math.min(io.savedNear > 0 ? io.savedNear : Infinity, Math.max(dist * 0.02, 0.000001));
+    if (Math.abs(cam.near - nearWant) > nearWant * 0.1) {
+      cam.near = nearWant;
+      cam.updateProjectionMatrix();
     }
   }
 
@@ -4036,6 +4177,7 @@ export class CameraSystem {
 
   /** @private */
   _onMouseDown(e) {
+    this._ionStartupInput('mouse');      // ion start-up: the player's own camera input ends the swing at once
     // ZOOM LADDER (S4): while the ladder owns the camera, its drag branch owns
     // the mouse — RETURN so the legacy ORBIT/INSPECTION/free-look paths can
     // never double-fire. Gated on lc.active: byte-identical when disengaged.
@@ -4157,6 +4299,7 @@ export class CameraSystem {
    */
   handleWheelZoom(e) {
     e.preventDefault();
+    this._ionStartupInput('wheel');      // ion start-up: the player's own camera input ends the swing at once
 
     // 2026-08-26: wheel = player input — the lasso cut steps aside instantly.
     if (this._lassoCut.active) this.abortLassoCut();
@@ -4406,6 +4549,7 @@ export class CameraSystem {
     const dx = Number.isFinite(dxPx) ? dxPx : 0;
     const dy = Number.isFinite(dyPx) ? dyPx : 0;
     if (dx === 0 && dy === 0) return;
+    this._ionStartupInput('touch drag'); // ion start-up: the player's own camera input ends the swing at once
     // Stale-nudge guard (review of cb29fbe8): main.js stops calling update() while
     // the game is paused, the tab is hidden or the window is blurred, yet a finger
     // that stays down keeps sending nudges. They would all land in one frame's sum
@@ -4473,6 +4617,7 @@ export class CameraSystem {
    * @param {{distU:number, fov:number, anchor:'ship'|'earth', rideMs:number, onDone:function}} opts
    */
   ladderStartRide(opts) {
+    this._ionStartupInput('ladder ride');   // ion start-up: a ride (the rail, a floor change) takes the camera; the swing ends at once
     const lc = this._ladderCam;
     if (!lc.active) {
       // Not engaged (defensive) — complete immediately so the core never wedges.

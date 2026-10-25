@@ -49,6 +49,7 @@ export const soundVocabulary = {
   playMPDDisarm:       { family: 'PHYSICAL', meaning: 'MPD burst disarmed',        trigger: 'MPD burst end' },
   startThrusterHum:    { family: 'PHYSICAL', meaning: 'thruster hum',              trigger: 'thrust active' },
   startRcsHiss:        { family: 'PHYSICAL', meaning: 'RCS attitude hiss',         trigger: 'manual RCS couple firing' },
+  startIonStartupHum:  { family: 'PHYSICAL', meaning: 'the trip engines lighting: a hum that rises with the lit share, then holds quiet', trigger: 'ION_STARTUP_BEGIN / HUM / LIT / END (the trip burn)' },
   playRcsPuff:         { family: 'PHYSICAL', meaning: 'RCS ignition puff',         trigger: 'fresh RCS couple ignition' },
   // FURNACE gag v2 (plan 1788957399035 §1.19): one clack per HUD panel returning after the blackout.
   playRelayClack:      { family: 'PHYSICAL', meaning: 'a breaker relay closing as one HUD panel returns (systems reboot)', trigger: 'HudReboot: each panel returning after the FURNACE blackout' },

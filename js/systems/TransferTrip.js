@@ -59,6 +59,16 @@
  * hands `choose()`; `Events.WHERE_NEXT` says when the list opens and closes (js/ui/WhereNextList.js). `abort()` drops a pending
  * choice, so game over, a win, the menu and a new run leave nothing behind.
  *
+ * ION START-UP (owner 2026-10-25, DECISIONS §37 row 7: "seeing them flicker to life and ramp up to full power [is] a great visual reward"):
+ * the burn begins with a lighting stage of Constants.ION_STARTUP (about 4 s real). `isBurning()` is true from its first frame. The four tail
+ * boxes light in two opposite pairs (top+bottom, then right+left, so the push stays balanced), each pair sputtering then swelling to full
+ * (`ionStartupLevels`, set straight on the ship's glow). The push follows what is lit: the profile's pace and the flat trip's gas bill are
+ * multiplied by the lit share (the integral of the levels, so any frame length gives the same answer; gas and days follow the time really
+ * pushed, so the trip arrives about the lighting loss later and bills the same). The world clock stays at the base rate until all four burn
+ * (`tripWarpArgs`), and the trip line, the strip's trip text and the hum's cruise level come at that moment; the camera's close view
+ * holds `CAM_HOLD_S` longer (so he sees all four at full power), then hands back
+ * (`Events.ION_STARTUP_BEGIN / HUM / LIT / END`; CameraSystem and AudioSystem listen).
+ *
  * Time: `update(dt)` takes REAL seconds and GameFlowManager hands it 0 while the world is held (the workbench drawer),
  * so the trip timer, the gas bill and the melt (TipCargo.update gets the same 0) all pause together. The 100x world
  * clock does not speed any of them: melting is `dt x BASE_SCALE x sun`, real dt.
@@ -177,6 +187,74 @@ const NOT_WAITED_STATES = new Set([SA.EXPENDED, SA.DEORBITING, SA.ADRIFT]);
 
 const PLUME_ON = Object.freeze({ x: 0, y: 0, z: 1 });
 const PLUME_OFF = Object.freeze({ x: 0, y: 0, z: 0 });
+/** The strip's status while the engines light (FmaStrip: "Starting the ion engines"); the trip's own text replaces it once all four burn. */
+const LIGHTING_STATUS = Object.freeze({ lighting: true });
+
+// ── ion start-up: the levels the four tail boxes take while they light (pure; Constants.ION_STARTUP) ─────────────────────────────
+/** Length of the lighting stage, s: the second pair starts PAIR_GAP_S after the first; each sputters, swells; then all settle at full. */
+export function ionStartupStageS() {
+  const I = Constants.ION_STARTUP;
+  return I.PAIR_GAP_S + I.FLICKER_S + I.RAMP_S + I.SETTLE_S;
+}
+
+/** One pair's level, 0..1, `u` seconds after it began: the sputter's pulses (dark between), then a smoothstep swell, then full. */
+export function ionPairLevel(u) {
+  const I = Constants.ION_STARTUP;
+  if (!(u > 0)) return 0;
+  if (u < I.FLICKER_S) {
+    for (const [from, to, lvl] of I.FLICKERS) if (u >= from && u < to) return lvl;
+    return 0;
+  }
+  const x = (u - I.FLICKER_S) / I.RAMP_S;
+  return x >= 1 ? 1 : x * x * (3 - 2 * x);
+}
+
+/** The integral of `ionPairLevel` from 0 to `u`: seconds of full output so far (closed form, exact for any frame length). */
+export function ionPairLitS(u) {
+  const I = Constants.ION_STARTUP;
+  if (!(u > 0)) return 0;
+  let sum = 0;
+  for (const [from, to, lvl] of I.FLICKERS) {
+    const hi = Math.min(u, to, I.FLICKER_S);
+    if (hi > from) sum += (hi - from) * lvl;
+  }
+  if (u > I.FLICKER_S) {
+    const x = Math.min(1, (u - I.FLICKER_S) / I.RAMP_S);
+    sum += I.RAMP_S * (x * x * x - x * x * x * x / 2);          // the integral of 3x^2 - 2x^3
+    if (u > I.FLICKER_S + I.RAMP_S) sum += u - I.FLICKER_S - I.RAMP_S;
+  }
+  return sum;
+}
+
+/**
+ * The four boxes' levels `t` seconds after the burn began, in the order of Constants.THRUSTERS (top, bottom, right, left): the first pair
+ * lights at 0, the second PAIR_GAP_S later. Fills `out` (length 4) in place.
+ * @param {number} t
+ * @param {number[]} out
+ * @returns {number[]} out
+ */
+export function ionStartupLevels(t, out) {
+  const a = ionPairLevel(t);
+  const b = ionPairLevel(t - Constants.ION_STARTUP.PAIR_GAP_S);
+  out[0] = a; out[1] = a; out[2] = b; out[3] = b;
+  return out;
+}
+
+/** The lit share, 0..1: the mean level of the four boxes `t` s into the burn (the push the engines make right then). */
+export function ionStartupShare(t) {
+  return (ionPairLevel(t) + ionPairLevel(t - Constants.ION_STARTUP.PAIR_GAP_S)) / 2;
+}
+
+/** Seconds of full push the four boxes have made by `t` (the integral of the lit share). */
+export function ionStartupLitS(t) {
+  return (ionPairLitS(t) + ionPairLitS(t - Constants.ION_STARTUP.PAIR_GAP_S)) / 2;
+}
+
+/** Seconds of push the lighting costs: the stage's length less the full push it made (the trip arrives this much later than it would have). */
+export function ionStartupLossS() {
+  const stage = ionStartupStageS();
+  return stage - ionStartupLitS(stage);
+}
 
 /** The trip that is burning right now (module-level so the guards need no wiring), or null. */
 let _burning = null;
@@ -228,7 +306,8 @@ export function tripWarpArgs(out, p) {
     out.active = true;
     // trip-melt-2 D12b: while a leash hand-off or a carry runs, the target drops to the base rate (a hand-off holds a fixed
     // attitude in space; at TIME_RATE the orbit frame turns ~1.1 rad per real second under it) and returns after.
-    const rate = _burning.clockSlow() ? Constants.TRIP.HANDOFF_RATE : Constants.TRIP.TIME_RATE;
+    // ion start-up: the same base rate while the four engines light (the trip's push is only part of its size yet)
+    const rate = (_burning.clockSlow() || _burning.lighting()) ? Constants.TRIP.HANDOFF_RATE : Constants.TRIP.TIME_RATE;
     out.targetCap = TimeAuthority.calmCap(rate, !!p.workbenchOpen || p.gameplay === false);
   } else {
     out.active = !!p.ladderActive;
@@ -277,6 +356,12 @@ export class TransferTrip {
     this._overS = 0;                // real seconds since the profile ended (a carry still running holds the end)
     this._turnWaitS = 0;            // real seconds the push has waited for her nose to come round
     this._pausedS = 0;              // real seconds the push has waited with her nose not along the way she goes (cos <= 0)
+    this._ionS = 0;                 // ion start-up: real seconds since the burn began (the lighting stage's clock)
+    this._ionLit = true;            // ion start-up: all four tail boxes burn (true outside a burn: nothing is gated)
+    this._ionBegun = false;         // ion start-up: ION_STARTUP_BEGIN went out and END has not (the pair stays balanced)
+    this._ionLine = null;           // ion start-up: the trip line, said when all four burn
+    this._ionLevels = [0, 0, 0, 0]; // ion start-up: the levels set on the ship this frame (reused)
+    this._litS = 0;                 // ion start-up: seconds of full push the burn has made (the flat trip's gas and end follow it)
     this._pushS = 0;                // real seconds the engine has really pushed (the gas is billed by this, not by the profile's fraction)
     this._flownS = 0;               // real seconds of the burn up to the end of the profile, pauses included (the ship's days follow this)
     this._wasPower = false;         // last frame the turn was let go of for want of power (its return gives the new turn its own wait)
@@ -366,6 +451,8 @@ export class TransferTrip {
   isWaiting() { return this._phase === 'wait'; }
   /** Burning: the clock runs at TRIP.TIME_RATE, the tip furnaces melt, launches are refused. */
   isBurning() { return this._phase === 'burn'; }
+  /** Ion start-up: the burn has begun and not all four tail engines burn yet (the world clock holds the base rate meanwhile). */
+  lighting() { return this._phase === 'burn' && !this._ionLit; }
   /** Real seconds the burn has run (0 before / after). */
   get elapsedS() { return this._elapsedS; }
   /** Did the burn start with the ship turned to prograde (false: it burns as it points)? */
@@ -602,12 +689,82 @@ export class TransferTrip {
     this._offProcessed = this._bus.on(Events.CATCH_PROCESSED, (e) => this._onProcessed(e));
 
     const n = this._tipCount() + (this._noseWaiting(true) ? 1 : 0);
+    this._beginIonStartup();
     if (plan) {
       this._beginProfile(plan);
-      this._say(tripStartLine(plan.profile.dir, this._field, n), { _keep: true });
+      this._ionLine = tripStartLine(plan.profile.dir, this._field, n);
     } else {
-      this._say(startLine(n), { _keep: true });
+      this._ionLine = startLine(n);
     }
+    this._pushStatus(0);               // (the strip says the engines are starting; the line waits for all four)
+  }
+
+  // ── ion start-up ──────────────────────────────────────────────────────────
+
+  /** @private The burn began: the lighting stage starts (all four dark), the camera and the hum are told. */
+  _beginIonStartup() {
+    this._ionS = 0;
+    this._litS = 0;
+    this._ionLit = false;
+    this._ionBegun = true;
+    this._ionLine = null;
+    this._ionLevels[0] = this._ionLevels[1] = this._ionLevels[2] = this._ionLevels[3] = 0;
+    const p = this._d.player;
+    if (p && typeof p.setIonStartGlow === 'function') p.setIonStartGlow(this._ionLevels);
+    const ap = this._d.autopilot;
+    if (ap && typeof ap.setTripStatus === 'function') ap.setTripStatus(LIGHTING_STATUS);
+    this._bus.emit(Events.ION_STARTUP_BEGIN, {});
+  }
+
+  /**
+   * @private One frame of the lighting stage. Advances the stage's clock by `dt`, sets the boxes' levels on the ship, tells the hum, and
+   * when the stage is done lights the trip line and the strip. Returns the share of a full push the engines made over this frame
+   * (the integral of the lit share over the frame / dt, so a long frame gives the same push as many short ones); 1 once all four burn.
+   * @param {number} dt real seconds
+   * @returns {number} 0..1
+   */
+  _ionStep(dt) {
+    if (this._ionLit) { this._litS += dt; return 1; }
+    const t0 = this._ionS;
+    const t1 = t0 + dt;
+    this._ionS = t1;
+    const litDt = ionStartupLitS(t1) - ionStartupLitS(t0);
+    this._litS += litDt;
+    const share = dt > 0 ? Math.max(0, Math.min(1, litDt / dt)) : 1;
+    const p = this._d.player;
+    if (t1 >= ionStartupStageS()) {
+      this._ionLit = true;
+      if (p && typeof p.setIonStartGlow === 'function') p.setIonStartGlow(null);        // (all four are at 1: the glow follows its own targets from here, no jump)
+      this._bus.emit(Events.ION_STARTUP_LIT, {});
+      this._sayStartLine();
+      return share;
+    }
+    if (p && typeof p.setIonStartGlow === 'function') p.setIonStartGlow(ionStartupLevels(t1, this._ionLevels));
+    this._bus.emit(Events.ION_STARTUP_HUM, { lit: ionStartupShare(t1) });
+    return share;
+  }
+
+  /** @private The trip is over (or aborted): the ship's glow is its own again, and END goes out once for the BEGIN (hum off, camera home). */
+  _endIonStartup() {
+    this._ionLit = true;
+    this._ionLine = null;
+    if (!this._ionBegun) return;
+    this._ionBegun = false;
+    const p = this._d.player;
+    if (p && typeof p.setIonStartGlow === 'function') p.setIonStartGlow(null);
+    this._bus.emit(Events.ION_STARTUP_END, {});
+  }
+
+  /** @private All four burn: the trip line, and the strip's own text (the lighting words go). */
+  _sayStartLine() {
+    const line = this._ionLine;
+    this._ionLine = null;
+    if (this._profile) this._pushStatus(0);
+    else {
+      const ap = this._d.autopilot;
+      if (ap && typeof ap.setTripStatus === 'function') ap.setTripStatus(null);
+    }
+    if (line) this._say(line, { _keep: true });
   }
 
   // ── fields by height (Nets step 3 slice 2b) ───────────────────────────────
@@ -683,7 +840,7 @@ export class TransferTrip {
     const o = this._d.player && this._d.player.orbit;
     this._dep = o ? { e0: o.eccentricity || 0, inclination: o.inclination, raan: o.raan, argPerigee: o.argPerigee } : null;
     this._d.fields.depart();                     // the field she leaves keeps its pieces: stored, not simulated
-    this._pushStatus(0);
+    // ion start-up: the strip status waits for the engines to be lit (`_pushStatus` on LIT)
     this._workBegin();                           // lane 5e: the furnaces start on the ship's clock
   }
 
@@ -799,6 +956,7 @@ export class TransferTrip {
   _pushStatus(f, paused = false) {
     const ap = this._d.autopilot;
     if (!ap || typeof ap.setTripStatus !== 'function' || !this._profile) return;
+    if (!this._ionLit) { ap.setTripStatus(LIGHTING_STATUS); return; }       // ion start-up: the trip's own text waits for all four
     const days = Math.max(1, Math.round(this._profile.days));
     ap.setTripStatus({
       dir: this._profile.dir, toKm: this._field.altKm, day: Math.min(days, Math.floor(f * days) + 1), days,
@@ -814,6 +972,7 @@ export class TransferTrip {
   _tickProfile(dt) {
     this._elapsedS += dt;
     this._noseAgeS += dt;
+    const lit = this._ionStep(dt);                // ion start-up: the share of a full push the lit engines make (1 once all four burn)
     let paused = false;
     if (this._playS < this._playP) {
       let used = dt;                              // real time flown this frame: all of it, a pause or a wait for the turn included (R3)
@@ -825,9 +984,9 @@ export class TransferTrip {
         if (cosNow > 1e-9) {                      // (the floor is numeric noise: an exact 90 deg reads +-1e-16)
           const pace = cosNow / this._planCos;
           const left = this._playP - this._playS;
-          const adv = Math.min(left, pace * dt);
+          const adv = Math.min(left, pace * lit * dt);     // (ion start-up: a part-lit ship pushes that part)
           this._playS += adv;
-          this._pushS += adv / pace;              // (the last frame counts only the time it needed)
+          this._pushS += adv / pace;              // (the last frame counts only the time it needed; while the engines light, only the lit share of it)
           used = adv / pace;
         } else {
           paused = true;                          // her nose is not along the way she goes: no push, no gas, until it is
@@ -877,6 +1036,7 @@ export class TransferTrip {
     const T = Constants.TRIP;
     this._elapsedS += dt;
     this._noseAgeS += dt;
+    this._ionStep(dt);                  // ion start-up: `_litS` grows by the push the lit engines made
     this._billGas();
     this._noteTips();
     this._tickCarry(dt);
@@ -896,7 +1056,7 @@ export class TransferTrip {
       this._end();
       return;
     }
-    if (this._elapsedS >= T.MIN_REAL_S && this._tipCount() === 0 && !this._noseWaiting()
+    if (this._litS >= T.MIN_REAL_S && this._tipCount() === 0 && !this._noseWaiting()
         && !this._carryBusy() && !this._rackCanCarry()) this._end();
   }
 
@@ -1122,7 +1282,7 @@ export class TransferTrip {
    */
   _billGas() {
     const T = Constants.TRIP;
-    const want = T.DV_MPS * Math.min(1, this._elapsedS / Math.max(1e-6, T.MIN_REAL_S));
+    const want = T.DV_MPS * Math.min(1, this._litS / Math.max(1e-6, T.MIN_REAL_S));      // (ion start-up: by the push really made, not the clock)
     const chunk = want - this._billedDv;
     if (!(chunk > 0)) return;
     this._billedDv = want;
@@ -1210,6 +1370,7 @@ export class TransferTrip {
     this._dep = null;
     this._callSat = null;
     if (_burning === this) _burning = null;
+    this._endIonStartup();
     const amF = this._d.armManager;
     if (amF && typeof amF.setTripPhase === 'function') amF.setTripPhase(null);      // petal-single: carries are a mission thing again
     if (this._offProcessed) { this._offProcessed(); this._offProcessed = null; }

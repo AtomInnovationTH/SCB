@@ -20,7 +20,8 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
 import { findNearestLiveDebris } from './NavRecoveryAdvisor.js';
-import { strutLocalDirection, bestStrutAlpha } from '../entities/ArmDockBasis.js';
+import { strutLocalDirection, bestStrutAlpha, chestStrutAlpha, launchKickPerNs } from '../entities/ArmDockBasis.js';
+import { computeCoM, computeInertia, strutTipMeters, strutMidpointMeters } from './CoMCalculator.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg, coldGasPoolToKg } from './ResourceSystem.js';
 import { wingsHint } from './WingsHint.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
@@ -3231,6 +3232,9 @@ export class AutopilotSystem {
     // asks the provider here, as before: a stateful provider must be read once per aim, F7)
     const kitAboard = typeof this._player.hasWheelKit === 'function' && this._player.hasWheelKit();
     const slothAtStart = typeof this._player.isSlothMode === 'function' && this._player.isSlothMode();
+    // chest-shot (owner 10-25, DECISIONS §38 row 5): a daughter aim picks the strut angle of the cheaper shot (today's angle or the chest
+    // angle, and with the kit a scan of the others) before anything is said or turned. Null: a stub without the geometry (today's way).
+    const shot = mode === 'daughter' ? this._planDaughterShot(provider, opts, aimLimitS, tolRad, rate) : null;
     if (this._player.attitudeTorqueSource && (kitAboard || slothAtStart)) {
       const p = this._player;
       const dir = opts.aimDir || provider();
@@ -3243,6 +3247,8 @@ export class AutopilotSystem {
         const ax = this._aimErrAxis.crossVectors(nose, dv);
         if (ax.lengthSq() > 1e-12) { ax.applyQuaternion(this._aimInvQuat.copy(p.quaternion).invert()).normalize(); nx = ax.x; ny = ax.y; }
       }
+      // the chosen shot's own boresight (the strut at its chosen angle), not the ship's nose: the turn the wheels must make is that one
+      if (shot) { errAng = shot.errRad; nx = shot.nx; ny = shot.ny; }
       // F1.5: a target already inside the aim tolerance needs no turn: no warm-up estimate, no refusal, no cathodes lit
       // (`_tickAimEased` resolves it on its first frame without asking the boxes).
       const turnRad = errAng > tolRad ? errAng - 0.5 * tolRad : 0;
@@ -3287,22 +3293,28 @@ export class AutopilotSystem {
         // D7: the honest time (the old "turning the ship anyway" line was the free full-speed aim, which is gone); F1.5: nothing
         // to say when the target is already inside the tolerance (the shot fires with no turn)
         if (slothEstS > 0) {
+          // chest-shot T4 / F1.5: a daughter shot also says the gas of the launch kick (what the wheels cannot take) when it is a
+          // gram or more, and the quicker other way when the gas line would name it
+          const kick = shot && shot.kickKg * 1000 >= 1 ? `, then ${this._shotGasWords(shot.kickKg)} for the launch kick` : '';
+          const quick = shot && shot.alt ? this._shotQuickWords(shot.alt) : '';
           eventBus.emit(Events.COMMS_MESSAGE, {
             text: slowAimSrc.src === 'wheels'
-              ? `Turning the ship on the reaction wheels (no steering gas used): ${this._player.slothTimeWords(slothEstS)}.`
-              : `Emergency steering — turning slowly on the tail boxes: ${this._player.slothTimeWords(slothEstS)}.`,
+              ? `Turning the ship on the reaction wheels (no steering gas used): ${this._player.slothTimeWords(slothEstS)}${kick}.${quick}`
+              : `Emergency steering — turning slowly on the tail boxes: ${this._player.slothTimeWords(slothEstS)}${kick}.${quick}`,
             priority: slowAimSrc.src === 'wheels' ? 'info' : 'warning', source: 'HOUSTON',
             _keep: true,
           });
         }
       } else {
         // comms-after-tutorial D5b: plain words (the old line talked about the ship's 'attitude').
+        // chest-shot T4: a daughter shot says what it will really take (seconds, grams of gas), not the worst case.
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `Turning the ship to line up the launch. About ${Math.ceil(Math.PI / rate)} s at most.`,
+          text: shot ? this._shotAimLine(shot) : `Turning the ship to line up the launch. About ${Math.ceil(Math.PI / rate)} s at most.`,
           priority: 'info', source: 'HOUSTON',
           _keep: true,
         });
       }
+      if (shot && shot.empties) this._sayWheelsEmpty();      // chest-shot T3: once per shot
 
       this._aimCoroutine = {
         mode, provider, tolRad, rate,
@@ -3312,6 +3324,8 @@ export class AutopilotSystem {
         armManager: opts.armManager || this._armManager,
         arm: opts.arm || null,
         pairIndex: (opts.pairIndex != null) ? opts.pairIndex : null,
+        shot,                      // chest-shot: the chosen shot (its strut angle, its estimate), null for a net aim or a stub
+        alphaF: shot ? shot.alpha : undefined,   // the strut angle her boresight is aimed for (`_tickAimEased` keeps it fixed for the aim)
         azRad: null,               // resolved lazily from dock geometry
         elapsed: 0,
         // a slow aim: twice its planned time + the cathodes' warm-up + a minute (the plain 30 s is for a gas turn)
@@ -3333,6 +3347,316 @@ export class AutopilotSystem {
         },
         resolve, reject,
       };
+    });
+  }
+
+  // ==========================================================================
+  // CHEST SHOT (owner 2026-10-25, DECISIONS §38 row 5; plan daughter-pairs-1025 S1)
+  // ==========================================================================
+
+  /**
+   * chest-shot T2/T3: pick the strut angle of a daughter shot before the aim starts. The launch line of a strut at angle α is
+   * d(α) = (sinα·cos az, sinα·sin az, −cosα); the mother turns until it points at the target, then the spring kicks her about her
+   * centre of mass without the daughter (L = r × (−m·v·d)). Two shots matter: today's (`bestStrutAlpha`: the strut swings so little of
+   * the turn is left for her) and the CHEST shot (`chestStrutAlpha`: the line passes through her centre of mass, the kick is nil, she
+   * turns the whole way). Each is priced as the aim will run it (the turn on the wheels inside the aim's limit, else on the gas, by the
+   * same law as `_tickAimEased`) plus the kick (the wheels take what they can, `wheelKickPeek`; the rest is gas at the real price);
+   * the cheaper in gas is taken (within TIE_FRAC / TIE_G the quicker). With the wheel kit and its fullest axis over WHEEL_CREDIT_FRAC
+   * full (and only then) it also scans the strut's whole range (SCAN_STEP_DEG), keeps the angles whose kick LOWERS that axis, and
+   * credits that kick at what the gas would cost to lower it (the coils empty it for free, but in hours); `empties` (the comms line)
+   * says the credit changed the pick. Steering gas out (sloth mode): there is no gas to count, the quicker shot wins.
+   * The player's selected daughter stays (no strut switching). Null when the geometry is not there (a stub player, no dock position).
+   *
+   * @param {Function} provider world aim direction @param {object} opts the aim's options (`arm`, `armManager`, `pairIndex`)
+   * @param {number} aimLimitS the time the wheels must finish in @param {number} tolRad @param {number} rate peak rate, rad/s
+   * @returns {null|{alpha:number, kind:string, errRad:number, nx:number, ny:number, src:string|null, timeS:number, gasKg:number,
+   *   aimKg:number, kickKg:number, creditKg:number, dropNms:number, empties:boolean, alt:null|{timeS:number, gasKg:number}}}
+   * @private
+   */
+  _planDaughterShot(provider, opts, aimLimitS, tolRad, rate) {
+    const CS = Constants.CHEST_SHOT;
+    const p = this._player;
+    const arm = opts.arm, am = opts.armManager || this._armManager;
+    if (!CS || CS.ENABLED === false || !p || !arm || !am || opts.pairIndex == null) return null;
+    if (typeof arm.getAimAlpha !== 'function' || typeof arm.setAimAlpha !== 'function' || !am.arms || !this._aimCanEase()) return null;
+    const dp = am._dockPositions && am._dockPositions[opts.pairIndex];
+    if (!dp) return null;
+    const raw = provider();
+    if (!raw) return null;
+    const Tb = new THREE.Vector3(raw.x, raw.y, raw.z);
+    if (!(Tb.lengthSq() > 1e-12)) return null;
+    Tb.normalize().applyQuaternion(new THREE.Quaternion().copy(p.quaternion).invert());   // the target in her body frame
+    const V5 = Constants.OCTOPUS_V5;
+    const lo = V5.STRUT_SWEEP_MIN, hi = V5.STRUT_SWEEP_MAX;
+    const az = dp.azimuthDeg * Math.PI / 180;
+
+    // her centre of mass without this daughter; it moves with the strut's own angle through the strut's midpoint only (mass and total
+    // are those of the struts and the others), so every candidate angle is the same sum with that one point moved
+    const com = computeCoM(am, p, { excludeArm: arm });
+    const a0 = arm.getAimAlpha();
+    const mid0 = strutMidpointMeters(dp, a0);
+    const kStrut = V5.STRUT_MASS / com.totalMass;
+    const comAt = (alpha, out) => {
+      const mid = strutMidpointMeters(dp, alpha);
+      out.x = com.position.x + kStrut * (mid.x - mid0.x);
+      out.y = com.position.y + kStrut * (mid.y - mid0.y);
+      out.z = com.position.z + kStrut * (mid.z - mid0.z);
+      return out;
+    };
+    // her inertia as the strut moves from where it is to `alpha`: five points (the manager seen with this one strut at that angle)
+    const armsView = (alpha) => ({
+      arms: am.arms.map((a) => (a === arm ? Object.assign(Object.create(a), { getAimAlpha: () => alpha }) : a)),
+      _dockPositions: am._dockPositions,
+    });
+    const inertiaTable = (alpha) => {
+      if (Math.abs(alpha - a0) < 1e-9) { const I = p.getAttitudeInertia(); return [{ ixx: I.ixx, iyy: I.iyy }]; }
+      const tab = [];
+      for (let j = 0; j <= 4; j++) {
+        const I = computeInertia(armsView(a0 + (alpha - a0) * j / 4), p);
+        tab.push({ ixx: I.ixx, iyy: I.iyy });
+      }
+      return tab;
+    };
+    const dir = new THREE.Vector3(), cm = { x: 0, y: 0, z: 0 }, per = { x: 0, y: 0 }, ax = new THREE.Vector3();
+    const missAt = (alpha) => {
+      strutLocalDirection(alpha, az, dir);
+      const tip = strutTipMeters(dp, alpha);
+      comAt(alpha, cm);
+      const rx = tip.x - cm.x, ry = tip.y - cm.y, rz = tip.z - cm.z;
+      return Math.hypot(ry * dir.z - rz * dir.y, rz * dir.x - rx * dir.z, rx * dir.y - ry * dir.x);
+    };
+
+    // what leaves with her, and how fast (ArmUnit `_applyLaunchImpulse`): the kick is m·v along her line
+    const tier = Constants.SPRING_TIERS && Constants.SPRING_TIERS[arm.springTier];
+    const speed = Math.min(Number.isFinite(arm.launchSpeed) ? arm.launchSpeed : Infinity, tier ? tier.maxSpeed : Infinity);
+    const type = arm.config && arm.config.type;
+    let massKg = type === 'weaver' ? Constants.V5_WEAVER_MASS : (type === 'spinner' ? Constants.V5_SPINNER_MASS : (arm.config && arm.config.mass));
+    massKg += (arm.capturedDebris && arm.capturedDebris.mass) || 0;
+    if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) massKg += (h && h.mass) || 0;
+    const mv = (massKg > 0 && speed > 0 && Number.isFinite(speed)) ? massKg * speed : 0;
+
+    const sloth = typeof p.isSlothMode === 'function' && p.isSlothMode();
+    const kit = typeof p.hasWheelKit === 'function' && p.hasWheelKit();
+    const tankKg = coldGasPoolToKg(Math.max(0, Number(p.resources && p.resources.coldGas) || 0));
+    const Wc = Constants.WHEELS, Hm = Wc.MOMENTUM_NMS;
+    const stopErr = 0.5 * tolRad;
+
+    const evalAlpha = (alpha, kind) => {
+      strutLocalDirection(alpha, az, dir);
+      const errRad = Math.acos(Math.max(-1, Math.min(1, dir.dot(Tb))));
+      ax.crossVectors(dir, Tb);
+      let nx = 1, ny = 0;
+      if (ax.lengthSq() > 1e-12) { ax.normalize(); nx = ax.x; ny = ax.y; }
+      const tS = typeof arm.aimEaseMinTime === 'function'
+        ? arm.aimEaseMinTime(alpha) : Math.abs(alpha - arm.getAimAlpha()) / V5.STRUT_SLEW_RATE;
+      // the aim: the selector's choice for this turn (as `requestAimRotation` asks it, quietly), the wheels' time or the gas law's
+      const turnRad = errRad > tolRad ? errRad - stopErr : 0;
+      let src = null;
+      if (typeof p.attitudeTorqueSource === 'function' && (kit || sloth) && (sloth || turnRad > 0)) {
+        const sel = p.attitudeTorqueSource({ spinUp: true, angleRad: turnRad, nx, ny, limitS: aimLimitS, quiet: true });
+        if (isSlowSrc(sel)) src = sel;
+      }
+      let timeS, aimKg;
+      if (src) {
+        timeS = Math.max(turnRad > 0 ? slowTurnTimeS(p, src, turnRad, nx, ny) + slowWarmupLeftS(p, src) : 0, tS);
+        aimKg = 0;
+      } else {
+        const t = this._simGasAim({ err: errRad, nx, ny, table: inertiaTable(alpha), tS, stopErr, tolRad, rate, dStrut: Math.abs(alpha - a0) });
+        timeS = t.timeS; aimKg = t.gasKg;
+      }
+      // the kick: L = r × (−m·v·d) about her centre of mass without her, then the wheels first, the gas for the rest
+      const tip = strutTipMeters(dp, alpha);
+      comAt(alpha, cm);
+      launchKickPerNs(tip, cm, dir, per);
+      const lx = per.x * mv, ly = per.y * mv;
+      let kickKg = 0, creditKg = 0, dropNms = 0;
+      if (Math.abs(lx) + Math.abs(ly) > 1e-6) {
+        const peek = kit ? p.wheelKickPeek(lx, ly) : null;
+        const left = peek || { x: lx, y: ly };
+        if (Math.abs(left.x) + Math.abs(left.y) > 1e-6) kickKg = p.turnNullKg(left.x, left.y);
+        if (peek && p._wheelH) {
+          // the kick lowers the fullest wheel axis: the gas of lowering it that much, credited (T3)
+          const hx = Math.abs(p._wheelH.x), hy = Math.abs(p._wheelH.y);
+          const onX = hx >= hy, h = onX ? p._wheelH.x : p._wheelH.y, took = onX ? peek.tx : peek.ty;
+          if (Math.abs(h) > CS.WHEEL_CREDIT_FRAC * Hm) {
+            const drop = Math.abs(h) - Math.abs(h + took);
+            if (drop > 1e-6) { dropNms = drop; creditKg = drop * (onX ? p.turnNullKg(1, 0) : p.turnNullKg(0, 1)); }
+          }
+        }
+      }
+      const gasKg = aimKg + kickKg;
+      return { alpha, kind, errRad, nx, ny, src, timeS, aimKg, kickKg, gasKg, creditKg, dropNms, cost: sloth ? timeS : gasKg - creditKg };
+    };
+
+    const aToday = bestStrutAlpha(Tb, az);
+    const aChest = chestStrutAlpha(missAt, lo, hi);
+    const cands = [evalAlpha(aToday, 'today')];
+    const have = (a) => cands.some((c) => Math.abs(c.alpha - a) < 0.25 * Math.PI / 180);
+    if (!have(aChest)) cands.push(evalAlpha(aChest, 'chest'));
+    else cands.find((c) => Math.abs(c.alpha - aChest) < 0.25 * Math.PI / 180).kind = 'chest';
+    // F1.1 (owner: "a single only if its kick empties the wheels"): the scan of the other angles runs only when the fullest wheel axis
+    // is over WHEEL_CREDIT_FRAC full, and keeps only the angles whose kick LOWERS that axis (they carry the credit). Under that,
+    // the wheels take a kick as they do today: the candidates are today's angle and the chest angle.
+    const hFull = (kit && p._wheelH) ? Math.max(Math.abs(p._wheelH.x), Math.abs(p._wheelH.y)) : 0;
+    if (kit && CS.SCAN_STEP_DEG > 0 && hFull > CS.WHEEL_CREDIT_FRAC * Hm) {
+      for (let a = lo; a <= hi + 1e-9; a += CS.SCAN_STEP_DEG * Math.PI / 180) {
+        const al = Math.min(a, hi);
+        if (have(al)) continue;
+        const c = evalAlpha(al, 'scan');
+        if (c.creditKg > 0) cands.push(c);
+      }
+    }
+    // the cheapest by `costOf`; shots within the tie band of each other cost the same: the quicker one
+    const choose = (costOf) => {
+      let b = cands[0];
+      for (const c of cands) {
+        const tie = Math.max(CS.TIE_FRAC * Math.min(Math.abs(costOf(c)), Math.abs(costOf(b))), sloth ? 0.5 : CS.TIE_G / 1000);
+        if (Math.abs(costOf(c) - costOf(b)) <= tie) { if (c.timeS < b.timeS) b = c; }
+        else if (costOf(c) < costOf(b)) b = c;
+      }
+      return b;
+    };
+    const best = choose((c) => c.cost);
+    // F1.2: the shot "also empties the wheels" only when that is why it was picked (the credit changed the winner) and the fullest
+    // axis really ends at least WHEELS_SAY_NMS lower
+    const plain = choose((c) => (sloth ? c.timeS : c.gasKg));
+    const empties = best !== plain && best.dropNms >= CS.EMPTIES_SAY_NMS;
+    // the other way worth naming: the quicker of today's and the chest shot that was not taken
+    const named = cands.filter((c) => c !== best && (c.kind === 'today' || c.kind === 'chest'));
+    named.sort((a, b) => a.timeS - b.timeS);
+    const other = named[0] || null;
+    const quick = other && other.timeS < best.timeS - 0.5
+      && Math.abs(other.gasKg - best.gasKg) > CS.QUICK_FRAC * Math.max(best.gasKg, 0.001)
+      ? { timeS: other.timeS, gasKg: other.gasKg } : null;
+    const kickGas = Math.min(best.kickKg, tankKg);
+    return {
+      alpha: best.alpha, kind: best.kind, errRad: best.errRad, nx: best.nx, ny: best.ny, src: best.src,
+      timeS: best.timeS, aimKg: best.aimKg, kickKg: kickGas, gasKg: Math.min(best.aimKg + best.kickKg, tankKg),
+      creditKg: best.creditKg, dropNms: best.dropNms, empties, alt: quick,
+      alphaToday: aToday, alphaChest: aChest,                          // the two named angles (rad), for the report and the tests
+    };
+  }
+
+  /**
+   * chest-shot: seconds and grams of steering gas for a cold-gas aim, by running the law `_tickAimEased` runs on numbers alone (no
+   * ship is touched): her slowest couple sets the acceleration; she climbs to a peak (the aim's rate, the tank's cap, lowered when the
+   * strut needs longer than the turn), cruises and brakes to rest at the target, the strut moving the whole time (its eased profile
+   * stretched to the plan's time); every rad/s of rise and fall is `k·(mx+my)/α` of gas (`_turnFire`). The inertia is the one she has
+   * as the strut sweeps (`table`: her inertia at five strut angles from where it is to where it goes: a folded strut turns easily,
+   * a swung-out one does not; the gas of the spin-up and of the stop is paid at those two ends).
+   * @param {{err:number, nx:number, ny:number, table:Array<{ixx:number,iyy:number}>, tS:number, stopErr:number, tolRad:number,
+   *   rate:number, omega0?:number, strutDone?:boolean}} q
+   * @returns {{timeS:number, gasKg:number}}
+   * @private
+   */
+  _simGasAim(q) {
+    const p = this._player;
+    const tauX = p._coupleTauMag('x'), tauY = p._coupleTauMag('y');
+    const cx = Math.abs(q.nx), cy = Math.abs(q.ny);
+    const table = q.table, last = table.length - 1;
+    const at = (sx) => {                                                      // her inertia a fraction sx (0..1) along the strut's move
+      if (last <= 0) return table[0];
+      const f = Math.max(0, Math.min(1, sx)) * last, i = Math.min(last - 1, Math.floor(f)), w = f - i;
+      return { ixx: table[i].ixx + w * (table[i + 1].ixx - table[i].ixx), iyy: table[i].iyy + w * (table[i + 1].iyy - table[i].iyy) };
+    };
+    const couples = (I) => {                                                  // `_aimAccel`: acceleration and each couple's firing fraction
+      let a = Infinity;
+      if (cx > 1e-6) a = Math.min(a, tauX / (I.ixx * cx));
+      if (cy > 1e-6) a = Math.min(a, tauY / (I.iyy * cy));
+      if (!Number.isFinite(a)) a = Math.min(tauX / I.ixx, tauY / I.iyy);
+      if (!Number.isFinite(a) || !(a > 0)) return null;
+      let mx = cx > 1e-6 ? I.ixx * a * cx / tauX : 0;
+      let my = cy > 1e-6 ? I.iyy * a * cy / tauY : 0;
+      if (mx >= my) { if (my > 0 && my <= TURN_MIN_MAG) { mx += my; my = 0; } }
+      else if (mx > 0 && mx <= TURN_MIN_MAG) { my += mx; mx = 0; }
+      return { a, m: Math.min(1, mx) + Math.min(1, my) };
+    };
+    const k = (p._coldGasRate ?? 0.5) * (Constants.ATTITUDE?.RCS_ATTITUDE_N2_FACTOR ?? 0.3);
+    const c0 = couples(at(0));
+    if (!c0) return { timeS: q.tS, gasKg: 0 };
+    const V5 = Constants.OCTOPUS_V5;
+    let vCap = Math.min(q.rate, this._gasRateCap(null, k * c0.m / c0.a, q.omega0 || 0));
+    let vPeak = vCap, tPlan = 0;
+    const theta0 = Math.max(0, q.err - q.stopErr);
+    if (!q.strutDone) {
+      const tM = theta0 <= 0 ? 0 : (theta0 >= vCap * vCap / c0.a ? theta0 / vCap + vCap / c0.a : 2 * Math.sqrt(theta0 / c0.a));
+      if (q.tS > tM && theta0 > 0) vPeak = Math.min(vCap, 0.5 * c0.a * (q.tS - Math.sqrt(Math.max(0, q.tS * q.tS - 4 * theta0 / c0.a))));
+      tPlan = Math.max(tM, q.tS);
+    }
+    if (!(vCap > 0)) return { timeS: q.tS, gasKg: 0 };
+    // the strut's eased profile (ArmUnit strutEaseProfile), stretched to the plan's time
+    const acc = V5.STRUT_EASE_ACCEL, vMax = V5.STRUT_SLEW_RATE;
+    const strutT = q.strutDone ? 0 : (q.tS > 0 ? tPlan : 0);
+    let sv = 0;
+    if (strutT > 0 && acc > 0) sv = 0.5 * acc * (strutT - Math.sqrt(Math.max(0, strutT * strutT - 4 * (q.dStrut || 0) / acc)));
+    const frac = (t) => {                                                     // share of the strut's move done at time t
+      if (!(strutT > 0) || !(q.dStrut > 1e-9)) return 1;
+      if (t >= strutT) return 1;
+      const d = q.dStrut, ta = sv / acc;
+      if (t < ta) return 0.5 * acc * t * t / d;
+      if (t < strutT - ta) return (0.5 * acc * ta * ta + sv * (t - ta)) / d;
+      const r = strutT - t;
+      return (d - 0.5 * acc * r * r) / d;
+    };
+    const dt = 1 / 30;
+    let err = q.err, was = q.omega0 || 0, t = 0, pool = 0, sFrac = q.strutDone ? 1 : 0;
+    for (let n = 0; n < 60 * 30; n++) {
+      const cp = couples(at(sFrac));
+      if (!cp) break;
+      const strutDone = t >= strutT;
+      const dOm = cp.a * dt;
+      const rem = err - q.stopErr;
+      const want = rem > 0 ? 0.5 * (-dOm + Math.sqrt(dOm * dOm + 8 * cp.a * rem)) : 0;
+      const lo = Math.max(0, was - dOm);
+      const vLim = strutDone ? vCap : vPeak;
+      let now = Math.min(Math.max(want, lo), Math.max(lo, Math.min(vLim, was + dOm)));
+      if (now > was) {
+        const cap = this._gasRateCap(null, k * cp.m / cp.a, was);
+        if (now > cap) now = Math.max(was, cap);
+      }
+      if (strutDone && err <= q.tolRad && now <= 0) { pool += k * cp.m * was / cp.a; break; }
+      pool += k * cp.m * Math.abs(now - was) / cp.a;
+      was = now;
+      err -= Math.min(now * dt, err);
+      t += dt;
+      sFrac = frac(t);
+    }
+    return { timeS: t, gasKg: coldGasPoolToKg(pool) };
+  }
+
+  /** @private "94 g of gas" (whole grams; the plain words of a shot's gas). */
+  _shotGasWords(kg) {
+    return `${Math.max(0, Math.round(kg * 1000))} g of gas`;
+  }
+
+  /**
+   * chest-shot T4: the daughter aim line, plain words: seconds and grams of the shot taken, and, when the other of today's / the chest
+   * way is quicker and its gas differs by over QUICK_FRAC, that one too ("quick: 7 s, 133 g").
+   * @private
+   */
+  _shotAimLine(shot) {
+    return `Turning the ship to line up the launch. About ${Math.max(1, Math.round(shot.timeS))} s, ${this._shotGasWords(shot.gasKg)}.${shot.alt ? this._shotQuickWords(shot.alt) : ''}`;
+  }
+
+  /** @private " (quick: 7 s, 133 g)": the other way of the shot, on every aim line that names it (seconds under 90, else minutes). */
+  _shotQuickWords(alt) {
+    const t = alt.timeS < 90 ? `${Math.max(1, Math.round(alt.timeS))} s` : `${Math.round(alt.timeS / 60)} min`;
+    return ` (quick: ${t}, ${Math.round(alt.gasKg * 1000)} g)`;
+  }
+
+  /** @private chest-shot T4: the same line when the wheels hand a daughter aim to the gas (what is left of the turn, plus the kick). */
+  _shotHandedLine(c, bm, T) {
+    const err = Math.acos(Math.max(-1, Math.min(1, bm.dot(T))));
+    const I = this._player.getAttitudeInertia();
+    const e = this._simGasAim({ err, nx: c.axX, ny: c.axY, table: [{ ixx: I.ixx, iyy: I.iyy }], tS: 0, stopErr: c.stopErr, tolRad: c.tolRad,
+      rate: c.rate, omega0: Math.max(0, c.omega || 0), strutDone: true, dStrut: 0 });
+    return `Turning the ship to line up the launch. About ${Math.max(1, Math.round(e.timeS))} s, ${this._shotGasWords(e.gasKg + c.shot.kickKg)}.`;
+  }
+
+  /** @private chest-shot T3: a shot that empties a wheel says so, once. */
+  _sayWheelsEmpty() {
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: 'This launch also empties the wheels.', priority: 'info', source: 'HOUSTON',
     });
   }
 
@@ -4101,7 +4425,7 @@ export class AutopilotSystem {
     c.timeout = c.elapsed + Constants.AIM.AIM_TIMEOUT_S;
     c.handedToGas = true;
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `Turning the ship to line up the launch. About ${Math.ceil(Math.PI / c.rate)} s at most.`,
+      text: (c.mode === 'daughter' && c.shot) ? this._shotHandedLine(c, bm, T) : `Turning the ship to line up the launch. About ${Math.ceil(Math.PI / c.rate)} s at most.`,
       priority: 'info', source: 'HOUSTON', _keep: true,
     });
   }

@@ -530,6 +530,9 @@ export class PlayerSatellite extends THREE.Group {
     this._slothWasOn = false;
     this._slothLitS = [0, 0, 0, 0];
     this._slothGlow = [0, 0, 0, 0];
+    // Ion start-up (trip burn, lane ion-startup): the level (0..1) the trip sets DIRECTLY on each tail box while the engines light
+    // (a flicker the glow lerp would smooth away), or null when the glow follows its normal targets. Order as `_slothGlow`.
+    this._ionStartGlow = null;
     this._slothBox = null;
     this._capP = 1;
     this._capY = 1;
@@ -761,6 +764,11 @@ export class PlayerSatellite extends THREE.Group {
     // angular scalar — written only by the dual-fire chain — went with it.)
     this._recoilYawAngle = 0;
     this._recoilYawVel = 0;
+    // chest-shot PD1 (owner 10-25, "careful planning ... pairs"): the angular kicks of ONE frame (a launch, a latch bump, each reel's
+    // pull) are summed here and handed to the wheels and the gas once, at the frame's end (`_flushKicks`), so two daughters that
+    // push opposite ways in the same frame cancel instead of being billed one after the other.
+    this._kickLx = 0;
+    this._kickLy = 0;
     // reel-push (fix round 1): the gas the reel line's push has cost her (kg): holding against it under the autopilot HOLD,
     // and nulling its turn; and when her cold-gas puffs last fired for it (performance.now seconds).
     this._reelPushHoldKg = 0;
@@ -4273,15 +4281,8 @@ export class PlayerSatellite extends THREE.Group {
    */
   _wheelAbsorbKick(lx, ly) {
     if (!this._wheelKit || !this._wheelH || !this.wheelsUsable()) return null;
-    const W = Constants.WHEELS, H = W.MOMENTUM_NMS, h = this._wheelH, use = this._wheelUse;
-    const fit = (axis, L) => (Math.abs(L) > 0 && Number.isFinite(L))
-      ? Math.max(-H, Math.min(H, h[axis] + L)) - h[axis]                   // what fits, signed (a push against the spin: it all fits)
-      : 0;
-    const fx = fit('x', lx), fy = fit('y', ly);
-    // F3.3 (WD6): the battery pays for the torque the wheels give, in full-output seconds like a turn's (`wheelPeek`: the share of it
-    // the battery holds, 0..1). On a nearly flat battery the wheels take only that share of what fits; the rest is gas, at the real price.
-    const total = Math.abs(fx) + Math.abs(fy);
-    const share = total > 0 ? this.wheelPeek(1, total / W.TORQUE_NM) : 1;
+    const W = Constants.WHEELS, h = this._wheelH, use = this._wheelUse;
+    const { fx, fy, share } = this._wheelKickFit(lx, ly);
     let taken = 0;
     const take = (axis, L, room) => {
       if (!(Math.abs(L) > 0) || !Number.isFinite(L)) return 0;
@@ -4297,6 +4298,37 @@ export class PlayerSatellite extends THREE.Group {
     const x = take('x', lx, fx), y = take('y', ly, fy);
     this._reelPushWheelNms += taken;
     return { x, y };
+  }
+
+  /**
+   * @private What the wheels can take of a kick `(lx, ly)` N·m·s, signed, and the share of it the battery can pay for (F3.3, WD6:
+   * the battery pays for the torque the wheels give, in full-output seconds like a turn's; on a nearly flat battery they take only that
+   * share of what fits, the rest is gas at the real price). Reads, changes nothing: `_wheelAbsorbKick` takes it, `wheelKickPeek` asks.
+   */
+  _wheelKickFit(lx, ly) {
+    const W = Constants.WHEELS, H = W.MOMENTUM_NMS, h = this._wheelH;
+    const fit = (axis, L) => (Math.abs(L) > 0 && Number.isFinite(L))
+      ? Math.max(-H, Math.min(H, h[axis] + L)) - h[axis]                   // what fits, signed (a push against the spin: it all fits)
+      : 0;
+    const fx = fit('x', lx), fy = fit('y', ly);
+    const total = Math.abs(fx) + Math.abs(fy);
+    const share = total > 0 ? this.wheelPeek(1, total / W.TORQUE_NM) : 1;
+    return { fx, fy, share };
+  }
+
+  /**
+   * chest-shot: what `_wheelAbsorbKick(lx, ly)` WOULD do right now, without doing it (the shot chooser prices a launch's kick before it
+   * is made). null = the wheels would take nothing (no kit, no power: the whole kick is gas), else the part left for the gas and the
+   * part the wheels take, signed, N·m·s.
+   * @param {number} lx @param {number} ly
+   * @returns {{x:number,y:number,tx:number,ty:number}|null}
+   */
+  wheelKickPeek(lx, ly) {
+    if (!this._wheelKit || !this._wheelH || !this.wheelsUsable()) return null;
+    const { fx, fy, share } = this._wheelKickFit(lx, ly);
+    const tx = fx * share, ty = fy * share;
+    const rest = (L, t) => (Math.abs(L - t) < 1e-9 ? 0 : L - t);
+    return { x: rest(lx, tx), y: rest(ly, ty), tx, ty };
   }
 
   /** @private The "wheels full" / "no power" comms line, once per event (the flag clears when the wheels serve a turn again). */
@@ -7500,6 +7532,18 @@ export class PlayerSatellite extends THREE.Group {
     this._activeThrustDir = dir;
   }
 
+  /**
+   * Ion start-up (TransferTrip, DECISIONS §37 row 7): set the four tail boxes' glow level DIRECTLY (not through the glow lerp, which
+   * would smooth the flicker away). `levels` = [top, bottom, right, left] 0..1 (the order of Constants.THRUSTERS); null hands the
+   * glow back to its normal targets, from wherever the levels left it (1 once all four burn: no jump).
+   * @param {number[]|null} levels
+   */
+  setIonStartGlow(levels) {
+    if (!levels) { this._ionStartGlow = null; return; }
+    if (!this._ionStartGlow) this._ionStartGlow = [0, 0, 0, 0];
+    for (let i = 0; i < 4; i++) this._ionStartGlow[i] = Math.max(0, Math.min(1, levels[i] || 0));
+  }
+
   // ==========================================================================
   // UPDATE
   // ==========================================================================
@@ -8150,8 +8194,14 @@ export class PlayerSatellite extends THREE.Group {
       // Suppress thrust output when plume-blocked
       if (blocked) target *= 0.15;
 
-      // Smooth interpolation — per-nozzle independent lerp
-      data.intensity += (target - data.intensity) * Math.min(1, dt * lerpRate);
+      // Ion start-up: the trip sets the level itself (the sputter would not survive the lerp); the plume interlock still dims it
+      if (this._ionStartGlow) {
+        const lvl = this._ionStartGlow[i] || 0;
+        data.intensity = blocked ? lvl * 0.15 : lvl;
+      } else {
+        // Smooth interpolation — per-nozzle independent lerp
+        data.intensity += (target - data.intensity) * Math.min(1, dt * lerpRate);
+      }
 
       // Apply glow — red tint when blocked, silvery-blue when clear
       if (data.glow && data.glow.material) {
@@ -8585,9 +8635,11 @@ export class PlayerSatellite extends THREE.Group {
    *
    * @param {THREE.Vector3} impulseWorldNs true N·s, world frame
    * @param {THREE.Vector3} pointWorld scene units, where the push acts on the hull
-   * @param {{ flush?: boolean, source?: object, angularOnly?: boolean, excludeArm?: object }} [opts] `source`: whose gathering this is
-   *   (the ArmUnit); none = a shared one. `angularOnly` (launch-kick): the turn only, no linear Δv (the caller has its own linear
-   *   handling). `excludeArm`: the centre of mass is taken without that daughter (she is leaving: `computeCoM`'s `excludeArm`)
+   * @param {{ flush?: boolean, flushLinear?: boolean, source?: object, angularOnly?: boolean, excludeArm?: object }} [opts] `source`: whose
+   *   gathering this is (the ArmUnit); none = a shared one. `flush`: the gathered Δv AND this frame's angular sum are applied at once.
+   *   `flushLinear` (the latch bump): only the gathered Δv is applied at once; the angular kick joins the frame's sum (PD1). `angularOnly`
+   *   (launch-kick): the turn only, no linear Δv (the caller has its own linear handling). `excludeArm`: the centre of mass is taken
+   *   without that daughter (she is leaving: `computeCoM`'s `excludeArm`)
    * @returns {boolean|null} true: the Δv went into her orbit (or was gathered); false: `applyCartesianImpulse` refused it
    *   (the altitude envelope); null: nothing to do (disabled, zero or invalid push)
    */
@@ -8597,7 +8649,8 @@ export class PlayerSatellite extends THREE.Group {
     const src = opts.source || REEL_PUSH_SHARED;
     const jMag = impulseWorldNs.length();
     if (!isFinite(jMag)) return null;
-    if (!(jMag > 0)) return opts.flush === true ? this.flushReelPush(src) : null;   // nothing new, but the gathered Δv still goes
+    const flushLin = opts.flush === true || opts.flushLinear === true;
+    if (!(jMag > 0)) return flushLin ? this.flushReelPush(src) : null;               // nothing new, but the gathered Δv still goes
     const mass = (this.mass > 0) ? this.mass : 130;
 
     // ── ANGULAR: L = r x J about the centre of mass, body frame (before the linear call: it emits events) ──
@@ -8610,24 +8663,19 @@ export class PlayerSatellite extends THREE.Group {
       const com = computeCoM(am, this, opts.excludeArm ? { excludeArm: opts.excludeArm } : undefined).position;
       r.x -= com.x; r.y -= com.y; r.z -= com.z;
     }
-    let lx = r.y * jLoc.z - r.z * jLoc.y;                                                // N·m·s
-    let ly = r.z * jLoc.x - r.x * jLoc.z;
+    const lx = r.y * jLoc.z - r.z * jLoc.y;                                              // N·m·s
+    const ly = r.z * jLoc.x - r.x * jLoc.z;
     if (lx !== 0 || ly !== 0) {
       const I = this.getAttitudeInertia();
       this._recoilPitchVel += lx / I.ixx;                                                // rad/s, true
       this._recoilYawVel += ly / I.iyy;
       // FC2: the spring takes this turn back out, and that costs cold gas (the net recoil's price list), with the couple's puffs
       // (a push through the CoM leaves float noise of ~1e-17 N·m·s here: that turns nothing and bills nothing)
-      // Wheel kit (WD3): the wheels take it first, with its sign (`_wheelAbsorbKick`); only what does not fit is gas. No kit, a kit
-      // without power: the whole turn is gas, exactly as before.
-      if (Math.abs(lx) + Math.abs(ly) > 1e-6) {
-        const o = this._wheelAbsorbKick(lx, ly);
-        if (o) { lx = o.x; ly = o.y; }
-        if (Math.abs(lx) + Math.abs(ly) > 1e-6) {
-          this._reelPushTurnKg += this._billTurnNullN2(lx, ly);
-          this._reelPushTurnPuff(lx, ly);
-        }
-      }
+      // chest-shot PD1: the kick goes into this frame's sum; the wheels and the gas see the SUM once, in `_flushKicks` (the end of
+      // the frame, `postArmUpdate`), or at once with `opts.flush` (the tests that read the bill right after).
+      this._kickLx += lx;
+      this._kickLy += ly;
+      if (opts.flush === true) this._flushKicks();
     }
 
     if (opts.angularOnly === true) return true;                                          // launch-kick: the linear part is the caller's
@@ -8635,8 +8683,28 @@ export class PlayerSatellite extends THREE.Group {
     // ── LINEAR: gather (per source), then one clean orbit impulse ──
     const acc = this._reelPushAcc(src, true);
     acc.addScaledVector(impulseWorldNs, 1 / mass);
-    if (opts.flush !== true && acc.length() < (RP.MIN_DV_MS ?? 1e-4)) return true;
+    if (!flushLin && acc.length() < (RP.MIN_DV_MS ?? 1e-4)) return true;
     return this.flushReelPush(src);
+  }
+
+  /**
+   * chest-shot PD1: hand this frame's summed angular kick to the wheels and the gas, once. Wheel kit (WD3): the wheels take it first,
+   * with its sign (`_wheelAbsorbKick`); only what does not fit is gas, at the real price (`_billTurnNullN2`), with the couple's puffs.
+   * No kit, a kit without power: the whole turn is gas, exactly as before. Under 1e-6 N·m·s (float noise, a push through the
+   * centre of mass, or two kicks that cancelled) nothing is taken and nothing is billed.
+   * @private
+   */
+  _flushKicks() {
+    let lx = this._kickLx, ly = this._kickLy;
+    this._kickLx = 0;
+    this._kickLy = 0;
+    if (!(Math.abs(lx) + Math.abs(ly) > 1e-6)) return;
+    const o = this._wheelAbsorbKick(lx, ly);
+    if (o) { lx = o.x; ly = o.y; }
+    if (Math.abs(lx) + Math.abs(ly) > 1e-6) {
+      this._reelPushTurnKg += this._billTurnNullN2(lx, ly);
+      this._reelPushTurnPuff(lx, ly);
+    }
   }
 
   /** @private reel-push: `source`'s gathered-Δv vector (m/s, world), made on demand when `create`; else null when it has none. */
@@ -8683,6 +8751,8 @@ export class PlayerSatellite extends THREE.Group {
    */
   clearReelPushState() {
     this.clearReelPush();
+    this._kickLx = 0;
+    this._kickLy = 0;
     this._recoilPitchVel = 0;
     this._recoilYawVel = 0;
     this._recoilPitchAngle = 0;
@@ -8875,6 +8945,22 @@ export class PlayerSatellite extends THREE.Group {
    * @private
    */
   _billTurnNullN2(lPitchNms, lYawNms) {
+    const kg = this.turnNullKg(lPitchNms, lYawNms);
+    if (!(kg > 0)) return 0;
+    eventBus.emit(Events.RESOURCE_CONSUME, {
+      resource: 'coldGas',
+      amount: coldGasKgToPool(kg),     // ap-gas D4: the pool is not kg (20 units = 6 kg)
+    });
+    return kg;
+  }
+
+  /**
+   * The price list of `_billTurnNullN2`, as a read (kg of cold gas to make or null a turn kick `(lPitchNms, lYawNms)`; nothing is
+   * billed or emitted). The shot chooser prices a launch's kick with it before the launch.
+   * @param {number} lPitchNms N·m·s about +X (sign ignored) @param {number} lYawNms N·m·s about +Y (sign ignored)
+   * @returns {number} kg
+   */
+  turnNullKg(lPitchNms, lYawNms) {
     const twoF = 2 * (Constants.ATTITUDE?.NOZZLE_THRUST_N ?? 25.0);
     const fallbackTau = twoF * 0.772;                                    // N·m: 2F x the effective arm measured on the flower ship
     const isp = Constants.REEL_PUSH?.HOLD_ISP_S ?? 60;
@@ -8883,13 +8969,7 @@ export class PlayerSatellite extends THREE.Group {
       return twoF / ((tau > 1e-3 ? tau : fallbackTau) * isp * (Constants.G0 ?? 9.80665));   // kg per N·m·s
     };
     const lp = Math.abs(lPitchNms), ly = Math.abs(lYawNms);
-    const kg = (lp > 0 ? lp * perNms('x') : 0) + (ly > 0 ? ly * perNms('y') : 0);
-    if (!(kg > 0)) return 0;
-    eventBus.emit(Events.RESOURCE_CONSUME, {
-      resource: 'coldGas',
-      amount: coldGasKgToPool(kg),     // ap-gas D4: the pool is not kg (20 units = 6 kg)
-    });
-    return kg;
+    return (lp > 0 ? lp * perNms('x') : 0) + (ly > 0 ? ly * perNms('y') : 0);
   }
 
   /**
@@ -11312,6 +11392,7 @@ export class PlayerSatellite extends THREE.Group {
    * for docked daughter arms (the arm is always shown clamped at the strut tip).
    */
   postArmUpdate() {
+    if (this._kickLx !== 0 || this._kickLy !== 0) this._flushKicks();   // chest-shot PD1: this frame's kicks, billed once (before any early return)
     if (!this.armManager || !this.strutGroups) return;
     const arms = this.armManager.arms;
     if (!arms) return;

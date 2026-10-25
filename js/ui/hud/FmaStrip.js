@@ -413,7 +413,10 @@ export class FmaStrip {
         const t = s.trip;
         // Lane 3c: a called resupply satellite on its way (nothing burns; she holds): "Resupply satellite on its way · day 3 of 16"
         const calling = !!(t && t.call === true && Number.isFinite(t.day) && Number.isFinite(t.days) && t.days >= 1);
-        this._plainText = calling
+        // Ion start-up (DECISIONS 37 row 7): while the four tail engines light, the strip says so; the trip's own text follows
+        this._plainText = (t && t.lighting === true)
+          ? 'Starting the ion engines'
+          : calling
           ? `Resupply satellite on its way ${DOT} day ${t.day} of ${t.days}`
           : (t && Number.isFinite(t.toKm) && Number.isFinite(t.day) && Number.isFinite(t.days) && t.days >= 1)
           ? (t.wait === 'power'

@@ -117,6 +117,51 @@ export function bestStrutAlpha(dirShip, azRad) {
   return tAft >= 0 ? 0 : Math.PI;
 }
 
+/**
+ * chest-shot: the turn a launch gives the mother, per N·s of launch momentum. The daughter leaves along unit `dir` from the strut tip;
+ * the mother takes the opposite push at the tip, so about her centre of mass L = r × (−dir), r = tip − com. Body frame, metres in
+ * and out (N·m·s per N·s = m); only x and y turn her (the strut is in a meridian plane: z is 0 by the ship's symmetry, and the game
+ * applies x, y only). Multiply by m·v for N·m·s.
+ * @param {{x:number,y:number,z:number}} tip strut tip, metres @param {{x:number,y:number,z:number}} com her centre of mass without the daughter
+ * @param {{x:number,y:number,z:number}} dir unit launch direction @param {{x:number,y:number}} [out]
+ * @returns {{x:number,y:number}} out
+ */
+export function launchKickPerNs(tip, com, dir, out = { x: 0, y: 0 }) {
+  const rx = tip.x - com.x, ry = tip.y - com.y, rz = tip.z - com.z;
+  out.x = dir.y * rz - dir.z * ry;           // r × (−d), x
+  out.y = dir.z * rx - dir.x * rz;           // r × (−d), y
+  return out;
+}
+
+/**
+ * chest-shot: the strut angle whose launch line passes closest to her centre of mass (the "chest": the push then turns her not at
+ * all). `missAt(α)` is how far the line of a launch at strut angle α passes from the centre of mass without the daughter (m, >= 0:
+ * |r × d|; zero = no kick). Scanned over [0, π] in 1° steps, then refined by golden section inside the best step: the miss is smooth
+ * and has one dip on the flower ship (measured 2026-10-25, tmp/pairs p1: a single root at 149-165°), the scan keeps it safe if it ever
+ * has two.
+ * @param {(alpha:number)=>number} missAt
+ * @param {number} [lo=0] @param {number} [hi=Math.PI] reachable range, rad
+ * @returns {number} α in [lo, hi]
+ */
+export function chestStrutAlpha(missAt, lo = 0, hi = Math.PI) {
+  const step = Math.PI / 180;
+  let best = lo, bv = Infinity;
+  for (let a = lo; a <= hi + 1e-9; a += step) {
+    const v = missAt(Math.min(a, hi));
+    if (v < bv) { bv = v; best = Math.min(a, hi); }
+  }
+  let a = Math.max(lo, best - step), b = Math.min(hi, best + step);
+  const phi = 0.6180339887498949;
+  let c = b - phi * (b - a), d = a + phi * (b - a);
+  let fc = missAt(c), fd = missAt(d);
+  for (let k = 0; k < 40; k++) {
+    if (fc < fd) { b = d; d = c; fd = fc; c = b - phi * (b - a); fc = missAt(c); }
+    else { a = c; c = d; fc = fd; d = a + phi * (b - a); fd = missAt(d); }
+  }
+  const r = 0.5 * (a + b);
+  return missAt(r) <= bv ? r : best;
+}
+
 /* Preallocated temp for strutTipFoulsCorridor — module-private. */
 const _tipDir = new THREE.Vector3();
 
