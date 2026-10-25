@@ -12,8 +12,11 @@
  *   3. the CONE SWIVEL — each tip's slotted cone hangs on a pivot at its narrow end (PlayerSatellite owns the
  *      pivot's POSITION); this class sets only its ROTATION: along the line while the line runs through that tip,
  *      along the boom otherwise, eased.
- * net-bag (2026-10-24): a catch that wears its own net (`netVisual.wearsNet`) gets no wire sphere: its net IS the bag, and
- * CaptureNetVisual keeps it on the catch to the tip. The washer ring and the line stay. A net-less catch keeps the sphere.
+ * tip-ball (owner 2026-10-25: "looks good on the tips"; net-bag 2026-10-24 first hid it everywhere): a catch that wears its own
+ * net (`netVisual.wearsNet`) gets NO ball while the leash is in flight from the collar to the tip (the sudden bubble the owner
+ * complained of; its net IS the bag then, the washer ring and the line stay), but once it sits on a radiator tip the ball is
+ * drawn round it again, over the net CaptureNetVisual keeps on the catch, fading in 0.5 s and out when the slot empties. A
+ * net-less catch gets the ball throughout, as before.
  *
  * WHERE IT DRAWS (fix round 1, F2): the ship is drawn in a second pass after a depth clear (NearFieldRenderPass), so
  * anything left in the first pass is painted over by the hull. Everything here hangs on ONE root group
@@ -146,7 +149,7 @@ export class LeashVisual {
       group.add(wire);
       group.add(washer);
       this.root.add(group);
-      this.bags.push({ group, wire, wireMat, washer, alpha: 0 });
+      this.bags.push({ group, wire, wireMat, washer, alpha: 0, sa: 0 });   // sa: the sphere's own fade (0..1), <= alpha in effect
     }
 
     // Same as the ship (main.js registerNearFieldRoot(player)): drawn in the depth-cleared near pass, so the hull
@@ -269,10 +272,10 @@ export class LeashVisual {
       const bag = this.bags[i];
       if (d && pos && !(handShown && hd === d)) {
         if (tc.latchWorldInto && tc.latchWorldInto(i, _a)) _b.copy(_a).sub(pos); else _b.set(1, 0, 0);
-        if (prevHandD === d && hand.alpha > 0) { bag.alpha = Math.max(bag.alpha, hand.alpha); this._hideNow(hand); }
-        this._showBag(bag, pos, _b, this._radiusM(d), dt, true, !this._netted(d));
+        if (prevHandD === d && hand.alpha > 0) { bag.alpha = Math.max(bag.alpha, hand.alpha); bag.sa = Math.max(bag.sa, hand.sa); this._hideNow(hand); }
+        this._showBag(bag, pos, _b, this._radiusM(d), dt, true, true);       // a tip shows the ball for every catch, netted or not
       } else {
-        if (handShown && hd && hd === d && bag.alpha > 0) { hand.alpha = Math.max(hand.alpha, bag.alpha); this._hideNow(bag); }
+        if (handShown && hd && hd === d && bag.alpha > 0) { hand.alpha = Math.max(hand.alpha, bag.alpha); hand.sa = Math.max(hand.sa, bag.sa); this._hideNow(bag); }
         this._showBag(bag, null, null, 0, dt, false);
       }
     }
@@ -280,7 +283,11 @@ export class LeashVisual {
       // the neck faces the line: toward the tip once the line runs through it, else toward the anchor
       const toward = view.tipEngaged && view.tipWorld ? _vT : (view.anchorWorld ? _vA : null);
       if (toward) _b.copy(toward).sub(_vB); else _b.set(0, 0, 1);
-      this._showBag(hand, _vB, _b, this._radiusM(hd), dt, true, !this._netted(hd));
+      // tip-ball (owner 2026-10-25): a netted catch gets no ball while the leash is in flight (the sudden bubble), but once it
+      // sits on a tip (the hand-off view runs on a while after the latch) the ball fades in round it as on every tip catch
+      let onTip = false;
+      if (tc && typeof tc.debrisAt === 'function') for (let i = 0; i < 4 && !onTip; i++) onTip = tc.debrisAt(i) === hd;
+      this._showBag(hand, _vB, _b, this._radiusM(hd), dt, true, onTip || !this._netted(hd));
       this._handDebris = hd;
     } else {
       this._showBag(hand, null, null, 0, dt, false);
@@ -288,7 +295,7 @@ export class LeashVisual {
     }
   }
 
-  /** net-bag: true when the catch wears its own net bag, so no wire sphere is drawn round it. */
+  /** net-bag: true when the catch wears its own net bag (no ball in flight on the leash). */
   _netted(d) {
     const nv = this.netVisual;
     return !!(nv && typeof nv.wearsNet === 'function' && d && nv.wearsNet(d));
@@ -297,6 +304,7 @@ export class LeashVisual {
   /** Drop a bag at once (its opacity went to the bag that takes over). */
   _hideNow(bag) {
     bag.alpha = 0;
+    bag.sa = 0;
     bag.wireMat.opacity = 0;
     bag.group.visible = false;
   }
@@ -313,7 +321,9 @@ export class LeashVisual {
       const R = radiusM + BAG_MARGIN_M;
       bag.group.position.copy(pos).sub(this.root.position);          // root-relative
       bag.wire.scale.setScalar(R * M);
-      bag.wire.visible = wire;         // net-bag: set only while shown, so a fade-out keeps what the bag last drew (never a sphere for a netted catch)
+      // the ball has its own fade: in when it is allowed (the same 0.5 s as the bag), gone at once when it is not (a netted
+      // catch in flight); a fade-out of the bag takes the ball down with it, never up
+      bag.sa = wire ? Math.min(1, bag.sa + step) : 0;
       if (neck.lengthSq() > 1e-30) {
         neck.normalize();
         bag.washer.position.copy(neck).multiplyScalar(R * M);
@@ -321,8 +331,10 @@ export class LeashVisual {
       }
     } else {
       bag.alpha = Math.max(0, bag.alpha - step);
+      bag.sa = Math.max(0, bag.sa - step);
     }
-    bag.wireMat.opacity = BAG_OPACITY * bag.alpha;
+    bag.wire.visible = bag.sa > 0;
+    bag.wireMat.opacity = BAG_OPACITY * Math.min(bag.alpha, bag.sa);
     bag.group.visible = bag.alpha > 0;
   }
 
