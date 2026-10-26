@@ -82,8 +82,13 @@ export const LANGUAGES = [
     start: { name: 'Chennai',   lat: 13.08, lon: 80.27 } },     // India / ISRO — Sriharikota 13.7°N (Tamil region), low LEO
 ];
 
-/** Default language code when nothing is stored / an unknown code is supplied. */
-export const DEFAULT_LANGUAGE = 'en';
+/**
+ * Default language code when nothing is stored / an unknown code is supplied.
+ * Thai (owner 2026-10-26: "make Thai the default"): a new player starts over
+ * Bangkok at 28.5°, with the Thai patch and Thailand's "(more)" open in the menu.
+ * A stored pick (any saved settings) keeps its language.
+ */
+export const DEFAULT_LANGUAGE = 'th';
 
 const _BY_CODE = LANGUAGES.reduce((m, l) => { m[l.code] = l; return m; }, {});
 
