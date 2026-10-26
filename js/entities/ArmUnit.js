@@ -854,6 +854,21 @@ export class ArmUnit {
     // first. All of this stays at its defaults while the flag is off.
     /** She is on the reels: winding the catch in (GRAPPLED net reel) or on the strut line (REELING). ArmManager reads it. */
     this._rhHome = false;
+    // ── pair-home (plan daughter-pairs-1025 S3): the partner of a pair launch (`ArmManager._dualFireFixed` sets it, `_tickPairHome` clears it) ──
+    /** The other daughter of the pair launch she left with, while the link stands (else null). */
+    this._pairPartner = null;
+    /** Her catch is in its cell and she waits at the barrier for her partner's (GRAPPLED). */
+    this._pairWaiting = false;
+    /** Mission-clock seconds she has waited at the barrier. */
+    this._pairWaitS = 0;
+    /** The barrier let her go: 'both' (the partner too, this very frame) or 'alone' (a timeout or a broken link). Read once by `_updateGrappled`. */
+    this._pairGo = null;
+    /** She left the barrier together with her partner: the two reel with one tension (`_rhReelStep`) until one of them docks. */
+    this._pairTogether = false;
+    /** ArmManager said the one comms line of the pair's wait (both carry it). */
+    this._pairSaid = false;
+    /** Her catch failed (net miss or a lost piece): ArmManager breaks the link. */
+    this._pairCatchFailed = false;
     /** The catch is held at its net-close separation from her (GRAPPLED, NET catch) instead of her jumping onto it. */
     this._rhPinned = false;
     /** catch − her, world, scene units. */
@@ -3523,6 +3538,12 @@ export class ArmUnit {
       this._rhHome = false;
     }
     if (newState !== S.REELING) this._rhBraking = false;
+    if (newState !== S.GRAPPLED && newState !== S.REELING) {   // pair-home: the barrier and the shared pull belong to GRAPPLED -> REELING only
+      this._pairWaiting = false; this._pairWaitS = 0; this._pairGo = null; this._pairTogether = false;
+    }
+    if (newState === S.REELING && this._pairWaiting) {          // pair-home: into REELING while still held at the barrier = a recall, not the barrier's release (that clears `_pairWaiting` first)
+      this._pairWaiting = false; this._pairWaitS = 0; this._pairGo = null; this._pairTogether = false;
+    }
     if (newState === S.REELING) {
       this._rhReelV = 0;                    // reel-gas: the reel pulls her up from rest (no jump to peak)
       this._rhBraking = false;
@@ -5563,6 +5584,7 @@ export class ArmUnit {
    * @returns {'reel'|'hold'|'return'|'legacy-hold'}
    */
   _finishFailedCatch({ cause, legacy = null, holdTarget = null, legacyHold = false }) {
+    this._pairCatchFailed = true;            // pair-home: the partner does not wait for a catch that is not coming (`ArmManager._tickPairHome`)
     const nc = this._netCommittedTarget;
     if (nc) nc._committedNetArmId = null;
     this._netCommittedTarget = null;
@@ -6271,6 +6293,9 @@ export class ArmUnit {
         if (!this._rhNetReelStep(dt)) return;
         this._rhNetDone = true;
       }
+      // pair-home (S3 H2'): the catch is in its cell. A daughter of a pair launch waits here until her partner's catch is in its cell
+      // too; `ArmManager._tickPairHome` lets both go in ONE call, so both enter REELING in the same frame. A single never waits.
+      if (rh && this._pairBarrierHolds(dt)) return;
 
       // V5: Zero-fuel motor reel-in instead of fuel-burning HAULING
       this._transitionTo(S.REELING);
@@ -6288,6 +6313,25 @@ export class ArmUnit {
         });
       }
     }
+  }
+
+  /**
+   * pair-home (S3 H2'): does the pair barrier hold her now? The catch is in its cell (`_rhNetDone`). With no partner link she goes on at
+   * once (a single: nothing changes). With one she waits (counting `dt`, mission-clock seconds); `ArmManager._tickPairHome` sets `_pairGo`
+   * on both when both wait, on one alone after `PAIR_SHOT.HOME_WAIT_S` or when the link breaks. `_pairGo` is read once, here.
+   * @param {number} dt @returns {boolean} true while she holds @private
+   */
+  _pairBarrierHolds(dt) {
+    const go = this._pairGo;
+    if (go) {
+      this._pairGo = null; this._pairWaiting = false; this._pairWaitS = 0;
+      this._pairTogether = go === 'both';
+      return false;
+    }
+    if (!this._pairPartner) { this._pairWaiting = false; this._pairWaitS = 0; return false; }
+    if (!this._pairWaiting) { this._pairWaiting = true; this._pairWaitS = 0; }
+    this._pairWaitS += dt;
+    return true;
   }
 
   /**
@@ -8661,8 +8705,17 @@ export class ArmUnit {
       aSlow = aIon;
     }
 
+    // pair-home (S3 H3'): two daughters leaving the barrier together pull with ONE tension, the lighter catch's (T = m_light x PULL_ACCEL / 100):
+    // the heavier one accelerates by m_light / m_heavy of PULL_ACCEL, so unequal catches' pull-up kicks still cancel. Once the lighter one is at
+    // cruise the heavier keeps its lower acceleration until it too is (an accepted residual).
+    let pullAccel = P.PULL_ACCEL ?? 10;
+    const pp = this._pairPartner;
+    if (pp && this._pairTogether && pp._pairTogether && pp.state === S.REELING && (Constants.PAIR_SHOT || {}).HOME_EQUAL_PULL === true) {
+      const mp = pp._computeReelMUnit((pp.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS) + pp.coldGasKg, !!pp.capturedDebris);   // her mass the way the line above reads it
+      if (mp > 0 && mass > mp) pullAccel *= mp / mass;
+    }
     let v;
-    if (vDes >= v0) v = Math.min(vDes, v0 + (P.PULL_ACCEL ?? 10) * dt);
+    if (vDes >= v0) v = Math.min(vDes, v0 + pullAccel * dt);
     else v = Math.max(vDes, v0 - aSlow * dt);
     const dv = v - v0;
 
@@ -8677,7 +8730,7 @@ export class ArmUnit {
     }
     this._rhReelPhase = phase;
     // the line readout (true N): pull-up = mass x pull accel; cruise = the ion thread; braking = the (MARGIN - 1) the reel holds
-    if (phase === 'pull') this._rhTensionN = mass * (P.PULL_ACCEL ?? 10) / 100;
+    if (phase === 'pull') this._rhTensionN = mass * pullAccel / 100;
     else if (phase === 'brake') this._rhTensionN = (G.MARGIN - 1) * mass * aBrake / 100;
     else this._rhTensionN = this._ionThrustN();
     this._rhReelV = v;

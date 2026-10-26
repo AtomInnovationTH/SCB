@@ -32,7 +32,7 @@ import {
   pieceClaim, isFree, linesCross, lineWrapsShip, samePiece, pieceIsCaught,
   launchRefusalLine, crossNamedStrutLine, crossNoneClearLine, launchDroppedLine, launchCrossDroppedLine, wrapRefusalLine,
   fanOutLine, fanOutNoneLine, stayedLine, reachNoneLine, heavyNoneLine, holdsStillLine, netIsOut,
-  pairNoneLine, pairNeedsTurnLine, pairNotReadyLine, pairDroppedLine, pairHeldLine, pairDriftLine, pairCrossLine, pairStrutLine, pairRangeLine, pairErrorLine,
+  pairNoneLine, pairNeedsTurnLine, pairNotReadyLine, pairDroppedLine, pairHeldLine, pairDriftLine, pairCrossLine, pairStrutLine, pairRangeLine, pairErrorLine, pairHoldLine,
 } from '../systems/PieceClaim.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg, engineGasLowFrac, coldGasPoolToKg } from '../systems/ResourceSystem.js';
 
@@ -2332,7 +2332,74 @@ export class ArmManager {
     eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm: arm1 });
     eventBus.emit(Events.DUAL_FIRE, { armIndex1: arm1.index, armIndex2: arm2.index });
     this._pairRecoil = { a: arm1, b: arm2, t: 0 };
+    this._pairLink(arm1, arm2);       // S3 H1': both left, in this frame: now (and only now) they are partners for the way home
     return true;
+  }
+
+  // ---- pair-home (S3, plan daughter-pairs-1025): a pair comes home together ----
+
+  /** Both daughters of a pair launch left in one frame: each knows the other (the link `_tickPairHome` keeps). @private */
+  _pairLink(a, b) {
+    a._pairPartner = b; b._pairPartner = a;
+    a._pairWaiting = b._pairWaiting = false; a._pairWaitS = b._pairWaitS = 0;
+    a._pairGo = b._pairGo = null; a._pairTogether = b._pairTogether = false;
+    a._pairSaid = b._pairSaid = false; a._pairCatchFailed = b._pairCatchFailed = false;
+  }
+
+  /** @private Break the link of `a` (and of her partner, when it is hers). */
+  _pairUnlink(a) {
+    const b = a._pairPartner;
+    a._pairPartner = null; a._pairSaid = false; a._pairCatchFailed = false;
+    if (b && b._pairPartner === a) { b._pairPartner = null; b._pairSaid = false; b._pairCatchFailed = false; }
+  }
+
+  /**
+   * pair-home (S3 H1'-H2'): one frame of the pair link and the reel-start barrier, run once after every arm's update. The link BREAKS (each
+   * clear point named): the daughter docks (DOCKING / HOLDING_CATCH / RELOADING / DOCKED); is recalled, goes straight home or loses the piece
+   * (REELING or RETURNING or ADRIFT or HAULING without having left the barrier together, `_pairTogether`); is lost (EXPENDED, DEORBITING, cut
+   * loose); her catch fails (`_pairCatchFailed`, set by `ArmUnit._finishFailedCatch`: a miss, a piece gone); the partner link is not mutual
+   * (cleared by `reset()`, the mission end, or by a new launch). A daughter held at the barrier (`_pairWaiting`: her catch is in its cell) is let go
+   * (`_pairGo`, read by her next update: both in the SAME frame) when both wait; alone, after `PAIR_SHOT.HOME_WAIT_S` of her own waiting (0 = she
+   * never waits). The partner of a broken link is no longer waited for: she finds no partner at her next update. The one comms line is said
+   * when the first of the two waits (not when both are ready in the same frame).
+   * @param {number} dt mission-clock seconds (the arms' dt); not used for counting, `ArmUnit._pairBarrierHolds` counts her own wait
+   * @private
+   */
+  _tickPairHome(dt) {
+    const S = ARM_STATES;
+    const PS = Constants.PAIR_SHOT || {};
+    for (const a of this.arms) {
+      if (!a) continue;
+      const b = a._pairPartner;
+      if (!b) continue;
+      const gone = (x) => x.isDetached || x.state === S.DOCKED || x.state === S.DOCKING || x.state === S.RELOADING || x.state === S.HOLDING_CATCH
+        || x.state === S.EXPENDED || x.state === S.DEORBITING
+        || ((x.state === S.REELING || x.state === S.RETURNING || x.state === S.ADRIFT || x.state === S.HAULING) && !x._pairTogether);
+      if (b._pairPartner !== a || gone(a) || gone(b) || a._pairCatchFailed || b._pairCatchFailed) this._pairUnlink(a);
+    }
+    for (const a of this.arms) {
+      if (!a || !a._pairPartner || a.index > a._pairPartner.index) continue;     // each pair once, from its lower strut
+      const b = a._pairPartner;
+      if (a._pairWaiting && b._pairWaiting && !a._pairGo && !b._pairGo) {
+        a._pairGo = b._pairGo = 'both';                                          // one place, one call: both leave the barrier next frame
+        a._pairSaid = b._pairSaid = true;
+        continue;
+      }
+      const w = a._pairWaiting ? a : (b._pairWaiting ? b : null);
+      if (!w) continue;
+      if (!w._pairSaid) { w._pairSaid = true; const o = w._pairPartner; if (o) o._pairSaid = true; eventBus.emit(Events.COMMS_MESSAGE, { text: pairHoldLine(), priority: 'info' }); }
+    }
+    for (const a of this.arms) {
+      if (!a || !a._pairPartner || !a._pairWaiting || a._pairGo) continue;
+      if (a._pairWaitS >= (PS.HOME_WAIT_S ?? 60) - 1e-9) {                        // she has waited long enough: alone
+        a._pairGo = 'alone';
+        this._pairUnlink(a);
+      }
+    }
+    // a link broken while one waits: the waiting one goes on at her next update (no partner); the flag is read there
+    for (const a of this.arms) {
+      if (a && !a._pairPartner && a._pairWaiting && !a._pairGo) a._pairGo = 'alone';
+    }
   }
 
   /** The two tethers of a pair at its fixed angle, as `_lineSet` would draw them, swap sides? @private */
@@ -2855,6 +2922,7 @@ export class ArmManager {
     }
 
     this._tickPairRecoil(dt);       // pair-shot: both springs fired in one frame -> the opposite kicks cancel (refund)
+    this._tickPairHome(dt);         // pair-home: the pair link and the reel-start barrier (both leave it in one frame)
 
     // reel-home (Decisions 5-7): the strut follows a daughter on the reels; the mother turns for her when nothing limits.
     this._updateReelHome(dt, parentPos, parentQuat);
@@ -5762,6 +5830,8 @@ export class ArmManager {
         arm._severedDriftS = 0;
       }
       arm.state = ARM_STATES.DOCKED;
+      arm._pairPartner = null; arm._pairWaiting = false; arm._pairWaitS = 0; arm._pairGo = null;   // pair-home: a mission end clears the pair link
+      arm._pairTogether = false; arm._pairSaid = false; arm._pairCatchFailed = false;
       arm.fuel = 100;
       arm.coldGasKg = arm._coldGasBottleKg();   // reel-gas: the bottle is reset wherever the FEEP fuel is
       // Register item 80: an SK target's LOD-protection flag must not survive

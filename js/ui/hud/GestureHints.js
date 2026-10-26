@@ -199,6 +199,9 @@ const GLASS_LINES = Object.freeze([
   ['Press D twice to deploy both daughters, then [1]/[2] to switch between them.', 'Hold the target for DAUGHTER twice to send both daughters, then tap a daughter\'s row in DAUGHTERS to switch between them.'],
   ['Line up on a target and capture by hand (N). Manual catches score double. Watch the odds strip: de-spin (L) or close in', 'Line up on a target and capture by hand with LAUNCH NET. Manual catches score double. Watch the odds strip: hold DE-SPIN or close in'],
   ['Close on a target under manual pilot and press N to net it for 2× score.', 'Close on a target under manual pilot and tap LAUNCH NET for 2× score.'],
+  // S4 (pair lesson, owner 2026-10-26): the Q key has the PAIR button (TouchControls, shown while a pair is offered)
+  ['Press Q to fire the pair.', 'Tap PAIR to fire the pair.'],
+  ['Press Q when two pieces are marked to launch both daughters together.', 'Tap PAIR when two pieces are marked to launch both daughters together.'],
   // B-T3 scan: WIDE SCAN is the mission-3 lesson chip, then (u16b) the WIDE SCAN button on floors 2-3; the quick ping is SCAN
   ['Press Shift+S for a wide-aperture deep scan. Slower, but it paints debris your quick ping (S) can\'t see.', 'Tap WIDE SCAN for a wide-aperture deep scan. Slower, but it paints debris your quick ping (SCAN) can\'t see.'],
   ['Press Shift+S to run a wide-aperture scan and reveal distant contacts.', 'Tap WIDE SCAN to run a wide-aperture scan and reveal distant contacts.'],

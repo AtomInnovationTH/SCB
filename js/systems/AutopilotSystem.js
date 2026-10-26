@@ -27,7 +27,7 @@ import { wingsHint } from './WingsHint.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { tripRefuses } from './TransferTrip.js';
 import { outOfMotherNetsLine } from './resupplyWords.js';
-import { wrapRefusalLine, linesCross, pairReadyLine } from './PieceClaim.js';
+import { wrapRefusalLine, linesCross, pairReadyLine, pairLessonWaitLine, pairLessonSkipLine, pairSavedLine, pairSameLine, PAIR_PARK_LINE } from './PieceClaim.js';
 import { checkActiveSatArming } from './ActiveSatGuard.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km) */
@@ -881,6 +881,11 @@ export class AutopilotSystem {
     this._pairSingle = null;
     /** pair-shot: the look at the pieces under way (spread over frames), or null. */
     this._pairSearch = null;
+    /** pair lesson (S4): the Mission 2 double-shot lesson's setup under way (`_lessonBegin`), or null; true from the beat's start to its end. */
+    this._lesson = null;
+    this._lessonBeat = false;
+    /** pair lesson (S4): at the Q press, the gas of the pair and of the two singles it replaces (`_pairSavingNow`); said when DUAL_FIRE comes. */
+    this._pairSaving = null;
 
     // Aim-before-launch: scratch for the attitude coroutine (net + daughter modes).
     this._aimBoresightWorld = new THREE.Vector3();
@@ -2344,6 +2349,7 @@ export class AutopilotSystem {
     this._tickAttitudeHold(dtWorld > 0 ? dt : 0);   // the 120 s cap does not run while the world is held
     this._tickLaunchHold(dtWorld > 0 ? dt : 0);     // launch-seq: the hold from the end of the aim to the spring
     if (dtWorld > 0) this._tickPairOffer(dt);       // pair-shot: the second piece for a picked daughter's opposite partner (before the pre-turn reads it)
+    if (dtWorld > 0) this._tickPairLesson(dt);      // pair lesson: the Mission 2 coach beat's setup (after the offer's look, which it waits on)
     this._tickPreturn(dt, dtWorld);                 // wheel-preturn: the wheels turn her toward a picked daughter's shot
 
     // trip-melt D4: the transfer trip's prograde hold - attitude only, not the autopilot. A held world (the drawer)
@@ -3591,6 +3597,11 @@ export class AutopilotSystem {
     eventBus.on(Events.GAME_RESET, () => { this._preturnDrop('new game'); this._preturnSaid = null; this._pairOffer = null; this._pairSaid = null; this._pairSingle = null; this._pairSearch = null; this._pairDirty = true; });
     // pair-shot: a pick (piece, daughter) or a cleared pick looks the offer up again on the next frame
     for (const ev of [Events.TARGET_SELECTED, Events.TARGET_CLEARED, Events.ARM_SELECT, Events.ARM_DESELECT]) eventBus.on(ev, () => { this._pairDirty = true; });
+    // pair lesson (S4): the Mission 2 coach beat starts the setup; its end (satisfied, skipped, a new game) drops it; a double shot says its gas
+    eventBus.on(Events.MISSION_BEAT_STARTED, (d) => { if (d && d.beatId === 'ch2_pair_shot') this._lessonBegin(); });
+    eventBus.on(Events.MISSION_BEAT_SATISFIED, (d) => { if (d && d.beatId === 'ch2_pair_shot') this._lessonEnd(); });
+    eventBus.on(Events.GAME_RESET, () => { this._lessonEnd(); this._pairSaving = null; });
+    eventBus.on(Events.DUAL_FIRE, (d) => this._onDualFire(d));
 
     // Conjunction warning (tier ≥ 2) → auto-disengage (CA overrides AP)
     eventBus.on(Events.CONJUNCTION_WARNING, (data) => {
@@ -3890,6 +3901,7 @@ export class AutopilotSystem {
       ? (pair ? this._planPairShot(provider, opts, aimLimitS, tolRad, rate) : this._planDaughterShot(provider, opts, aimLimitS, tolRad, rate))
       : null;
     if (pair && !shot) return Promise.reject(Object.assign(new Error('the pair shot cannot be planned'), { code: 'OTHER' }));
+    if (pair) this._pairSaving = this._pairSavingNow(opts);          // pair lesson (S4): the gas of this pair and of the two singles it replaces, from the attitude now
     if (this._player.attitudeTorqueSource && (kitAboard || slothAtStart)) {
       const p = this._player;
       const dir = opts.aimDir || provider();
@@ -4387,15 +4399,33 @@ export class AutopilotSystem {
       if (typeof am.pairLineBlockedAt === 'function' && am.pairLineBlockedAt(armA, armB, r.alpha)) return null;
       const tA = r.swap ? c.d : T1, tB = r.swap ? T1 : c.d;
       if (typeof am.indexLaunchRefusal === 'function' && (am.indexLaunchRefusal(armA.index, tA) || am.indexLaunchRefusal(armB.index, tB))) return null;
+      // S3 H4: a pair comes home together (the reel-start barrier holds the first catch for the second): two catches seconds apart are a pair,
+      // two catches minutes apart are not (the daughter would hold her catch, and the mother's turn, that long)
+      const homeGapS = this._pairHomeGapS(armA, armB, r.swap ? c.r2 : r1, r.swap ? r1 : c.r2);
+      if (homeGapS > (PS.HOME_GAP_S ?? Infinity)) { st.why = st.why || {}; st.why['pair home gap'] = (st.why['pair home gap'] || 0) + 1; return null; }
       const nW = { x: r.n[0], y: r.n[1], z: r.n[2] };
       const shot = this._planPairShot(() => nW, { arm: armA, armManager: am, pair: { armB, alpha: r.alpha } }, AIM.AIM_TIMEOUT_S, tolRad, rate);
-      return shot ? { shot, fuelG, tA, tB } : null;
+      return shot ? { shot, fuelG, tA, tB, homeGapS } : null;
     })();
     if (!verdict) return;                                          // the next answer (the other way round) is tried next
     const cost = verdict.shot.gasKg * 1000 + verdict.fuelG;       // grams, the two kinds of gas in one currency (an estimate of the price, not a measurement)
-    if (!st.best || cost < st.best.cost) st.best = { c, r, shot: verdict.shot, fuelG: verdict.fuelG, cost, tA: verdict.tA, tB: verdict.tB };
+    if (!st.best || cost < st.best.cost) st.best = { c, r, shot: verdict.shot, fuelG: verdict.fuelG, cost, tA: verdict.tA, tB: verdict.tB, homeGapS: verdict.homeGapS };
     st.sols = null;                                                // this piece's best way round; the other way is worse by construction
     if (st.last) st.done = true;
+  }
+
+  /**
+   * S3 H4: how far apart (mission-clock seconds) the pair's two catches are predicted to land: each daughter's flight is range / launch speed
+   * (her own `launchSpeed`: she coasts at it, `ArmUnit._updateTransit`; the brake, the station-keep and the net are the same for both, so
+   * they cancel in the difference). Measured on the PAIR_FIELDS weaver pair (535 and 471 m): 9.1 s predicted, catches 9.0 s apart.
+   * @param {object} armA @param {object} armB @param {number[]} rA metres, centre to A's piece @param {number[]} rB metres, centre to B's piece
+   * @returns {number} seconds
+   * @private
+   */
+  _pairHomeGapS(armA, armB, rA, rB) {
+    const speed = (a) => Math.max(0.5, Number.isFinite(a.launchSpeed) ? a.launchSpeed : (Constants.DAUGHTER_AUTOPILOT || {}).V_CAP || 7);
+    const tA = Math.hypot(rA[0], rA[1], rA[2]) / speed(armA), tB = Math.hypot(rB[0], rB[1], rB[2]) / speed(armB);
+    return Math.abs(tA - tB);
   }
 
   /** @private the offer a finished search found (or null) */
@@ -4403,13 +4433,13 @@ export class AutopilotSystem {
     const { T1, armA, armB, g, type } = st;
     const best = st.best;
     if (!best) return null;
-    const { c, r, shot, fuelG, cost, tA, tB } = best;
+    const { c, r, shot, fuelG, cost, tA, tB, homeGapS } = best;
     return {
       key: `${armA.index}+${armB.index}:${T1.id}+${c.d.id}`,
       armA, armB, t1: T1, t2: c.d, swap: r.swap, tA, tB, alpha: r.alpha, n: r.n, g,
       missA: r.missA, missB: r.missB, turnDeg: r.turnDeg, fuelG, gasKg: shot.gasKg, cost, shot, type,
       flightDeg: (r.alpha <= Math.PI / 2 ? 2 * r.alpha : 2 * Math.PI - 2 * r.alpha) / PS_D2R,
-      markId: c.d.id,
+      markId: c.d.id, homeGapS,
     };
   }
 
@@ -4481,6 +4511,8 @@ export class AutopilotSystem {
     if (typeof am.pairLineBlockedAt === 'function' && am.pairLineBlockedAt(cur.armA, cur.armB, r.alpha)) return null;
     const fuelG = PS.FUEL_G_PER_DEG[cur.type] * (r.missA + r.missB);
     if (fuelG > PS.FUEL_G[cur.type]) return null;
+    const homeGapS = this._pairHomeGapS(cur.armA, cur.armB, r.swap ? r2 : r1, r.swap ? r1 : r2);
+    if (homeGapS > (PS.HOME_GAP_S ?? Infinity)) return null;
     const tA = r.swap ? cur.t2 : cur.t1, tB = r.swap ? cur.t1 : cur.t2;
     if (typeof am.indexLaunchRefusal === 'function' && (am.indexLaunchRefusal(cur.armA.index, tA) || am.indexLaunchRefusal(cur.armB.index, tB))) return null;
     const AIM = Constants.AIM;
@@ -4489,7 +4521,7 @@ export class AutopilotSystem {
     const shot = this._planPairShot(() => nW, { arm: cur.armA, armManager: am, pair: { armB: cur.armB, alpha: r.alpha } }, AIM.AIM_TIMEOUT_S, tolRad, rate);
     if (!shot) return null;
     return Object.assign({}, cur, {
-      swap: r.swap, tA, tB, alpha: r.alpha, n: r.n, missA: r.missA, missB: r.missB, turnDeg: r.turnDeg, fuelG, gasKg: shot.gasKg, shot,
+      swap: r.swap, tA, tB, alpha: r.alpha, n: r.n, missA: r.missA, missB: r.missB, turnDeg: r.turnDeg, fuelG, gasKg: shot.gasKg, shot, homeGapS,
       cost: shot.gasKg * 1000 + fuelG,
     });
   }
@@ -4509,6 +4541,217 @@ export class AutopilotSystem {
     // the pre-turn (wheel kit) turns toward the pair now, or back toward the single shot
     const W = Constants.WHEEL_PRETURN;
     if (W && W.ENABLED !== false && (this._preturn || next)) this._preturnReq = { target: next ? next.t1 : (cur ? cur.t1 : null) };
+  }
+
+  // --------------------------------------------------------------------------
+  // PAIR LESSON (owner 2026-10-26 "1. Mission 2 lesson"; plan daughter-pairs-1025 S4)
+  // --------------------------------------------------------------------------
+  //
+  // MissionCoach's beat `ch2_pair_shot` starts it (MISSION_BEAT_STARTED). It waits for both daughters of one type to be home and charged
+  // (one plain line), reveals the pieces the pair finder may use (the game's own target selection discovers a piece it picks: TARGET_DISCOVERED,
+  // as a click on the list does; no scan is asked for, a touch player has no wide scan to press), then picks a daughter and a piece the way the
+  // keys 1-4 and the list do until the finder offers a pair: the PAIR_FIELDS pieces first (rows ROW0..), then the nearest others. The offer's
+  // second mark and its "ready" line are the finder's own. If no pair stands `PAIR_LESSON_SKIP_S` seconds after both daughters of a pair are ready (or `PAIR_LESSON_CAP_S` after the beat starts), it says
+  // why and emits PAIR_LESSON_SKIP, which MissionCoach ends the beat on. The player fires with Q (touch: PAIR); DUAL_FIRE ends the beat.
+
+  /** @private the lesson starts (the beat has posted its line) */
+  _lessonBegin() {
+    this._lessonBeat = true;
+    this._lesson = { t: 0, readyT: 0, step: 'wait', said: false, revealed: false, combos: null, ci: 0, picked: false, settle: 0, idleT: 0, tried: new Set(), exp: null, yielded: false };
+  }
+
+  /** @private the lesson is over (the beat ended any way) */
+  _lessonEnd() {
+    this._lessonBeat = false;
+    this._lesson = null;
+  }
+
+  /** @private the opposite pairs of daughters that can both leave now: `[{sel, opp, type}]`, weavers first */
+  _lessonReadyPairs() {
+    const am = this._armManager;
+    const out = [];
+    if (!am || !Array.isArray(am.arms) || typeof am.getDualFirePair !== 'function') return out;
+    for (const a of am.arms) {
+      if (!a || !Number.isInteger(a.index)) continue;
+      const j = am.getDualFirePair(a.index);
+      if (!Number.isInteger(j) || j < a.index) continue;
+      const b = am.arms[j];
+      if (!this._pairArmReady(a) || !this._pairArmReady(b) || !b.config || !a.config || a.config.type !== b.config.type) continue;
+      out.push({ sel: a, opp: b, type: a.config.type === 'spinner' ? 'spinner' : 'weaver' });
+    }
+    out.sort((x, y) => (x.type === y.type ? 0 : (x.type === 'weaver' ? -1 : 1)));
+    return out;
+  }
+
+  /** @private the pieces the lesson may pick: PAIR_FIELDS rows first, then the nearest others (at most 8) */
+  _lessonPieces() {
+    const PF = Constants.PAIR_FIELDS;
+    const list = (this._debrisField && this._debrisField.debrisList) || [];
+    const isPairRow = (d) => Number.isInteger(d.fieldRow) && d.fieldRow >= PF.ROW0 && d.fieldRow < PF.ROW0 + 2 * PF.PAIRS;
+    const ok = list.filter((d) => this._pairPieceOk(d) && d.alive !== false && !d._captured && !d._armPinned);
+    const rows = ok.filter(isPairRow).sort((a, b) => a.fieldRow - b.fieldRow);
+    const rel = [0, 0, 0];
+    const others = ok.filter((d) => !isPairRow(d))
+      .map((d) => { this._pairRel(d, rel); return { d, r: Math.hypot(rel[0], rel[1], rel[2]) }; })
+      .sort((a, b) => a.r - b.r).slice(0, 8).map((x) => x.d);
+    return { rows, others, isPairRow };
+  }
+
+  /** @private the (daughter, piece) picks to try, best first: a pair's own kind of daughter on its own pieces, then the other kind, then the nearest others */
+  _lessonCombos(ready, pieces, tried) {
+    const PF = Constants.PAIR_FIELDS;
+    const combos = [];
+    for (const r of ready) {
+      for (const d of pieces.rows.concat(pieces.others)) {
+        if (!this._pairFits(r.sel, d) || (tried && tried.has(r.sel.index + ':' + d.id))) continue;
+        const isRow = pieces.isPairRow(d);
+        const own = isRow && PF.KINDS[Math.floor((d.fieldRow - PF.ROW0) / 2)].name === r.type;
+        combos.push({ arm: r.sel, piece: d, key: own ? 0 : (isRow ? 1 : 2) });
+      }
+    }
+    combos.sort((a, b) => a.key - b.key);
+    return combos.slice(0, 24);
+  }
+
+  /**
+   * @private the pieces the finder could take as the second piece for `piece` (the finder's own cheap filters: alive, fits the daughter, seen at least
+   * MIN_SEP_DEG apart, nearest in bearing first, at most MAX_CANDIDATES) that are not discovered yet: discovered now, the way a pick does.
+   * The finder's home-gap rule (S3 H4) applies too: a partner whose two catches would land more than HOME_GAP_S apart, whichever daughter takes
+   * which piece, is one the finder refuses, so it is not revealed (revealing it showed the whole field when few pairs were usable).
+   */
+  _lessonRevealPartners(arm, piece) {
+    const PS = Constants.PAIR_SHOT, ts = this._targetSelector;
+    const list = (this._debrisField && this._debrisField.debrisList) || [];
+    const r1 = this._pairRel(piece, [0, 0, 0]), l1 = Math.hypot(r1[0], r1[1], r1[2]) || 1;
+    const minSep = PS.MIN_SEP_DEG * Math.PI / 180, rel = [0, 0, 0];
+    const am = this._armManager, j = am && typeof am.getDualFirePair === 'function' ? am.getDualFirePair(arm.index) : null;
+    const opp = Number.isInteger(j) ? am.arms[j] : null;
+    const gapMax = PS.HOME_GAP_S ?? Infinity;
+    const cands = [];
+    for (const d of list) {
+      if (d === piece || d.id === piece.id || !this._pairPieceOk(d) || d.alive === false || d._captured || d._armPinned || !this._pairFits(arm, d)) continue;
+      this._pairRel(d, rel);
+      const l2 = Math.hypot(rel[0], rel[1], rel[2]) || 1;
+      const sep = Math.acos(Math.max(-1, Math.min(1, (r1[0] * rel[0] + r1[1] * rel[1] + r1[2] * rel[2]) / (l1 * l2))));
+      if (sep < minSep) continue;
+      if (opp && Math.min(this._pairHomeGapS(arm, opp, r1, rel), this._pairHomeGapS(arm, opp, rel, r1)) > gapMax) continue;   // the finder refuses it on the gap
+      cands.push({ d, sep });
+    }
+    cands.sort((a, b) => a.sep - b.sep);
+    for (const c of cands.slice(0, PS.MAX_CANDIDATES)) if (c.d.discovered === false) ts.setTarget(c.d);
+  }
+
+  /** @private one frame of the lesson's setup */
+  _tickPairLesson(dt) {
+    const L = this._lesson;
+    if (!L) return;
+    L.t += dt;
+    const am = this._armManager, ts = this._targetSelector;
+    const ready = this._lessonReadyPairs();
+    if (ready.length) L.readyT += dt;                        // the skip time counts from when both daughters of a pair are ready, not while she waits
+    // the skip runs in every step, 'done' too (a player who picks another piece takes the offer away and must not strand the chapter);
+    // a pair offer that stands is never skipped. Due: the skip time after ready, or the overall cap from the beat's start (daughters that never come home)
+    const MC = Constants.MISSION_COACH;
+    if ((L.readyT >= MC.PAIR_LESSON_SKIP_S || L.t >= MC.PAIR_LESSON_CAP_S) && !this.getPairOffer()) {
+      this._lessonEnd();
+      eventBus.emit(Events.COMMS_MESSAGE, { text: pairLessonSkipLine(ready.length > 0), priority: 'info', source: 'HOUSTON', channel: 'MISSION', _postOnboarding: true });
+      eventBus.emit(Events.PAIR_LESSON_SKIP, { reason: ready.length > 0 ? 'no pair offered' : 'daughters not ready' });
+      return;
+    }
+    if (L.step === 'done') return;
+    if (this.getPairOffer()) { L.step = 'done'; return; }
+    if (!am || !ts || typeof am.selectArm !== 'function' || typeof ts.setTarget !== 'function') return;
+    if (!ready.length) {
+      if (L.step !== 'wait') { L.step = 'wait'; L.combos = null; L.picked = false; }
+      if (!L.said) { L.said = true; eventBus.emit(Events.COMMS_MESSAGE, { text: pairLessonWaitLine(), priority: 'info', source: 'HOUSTON', channel: 'MISSION', _postOnboarding: true }); }
+      return;
+    }
+    // the player changed the pick or the selected daughter himself (a change the lesson did not make): from then on the lesson only watches
+    // for an offer, for DUAL_FIRE and for the skip time
+    if (!L.yielded && L.exp && (ts.getActiveTarget() !== L.exp.piece || am.getSelectedArm() !== L.exp.arm)) L.yielded = true;
+    if (L.yielded) return;
+    // never pick while an aim or a ship turn is running
+    if (this.isAiming() || this._turn || this._tripOmega > 0) return;
+    if (L.step === 'wait') L.step = 'find';
+    if (L.step === 'idle') {
+      L.idleT += dt;
+      if (L.idleT < 3) return;                                     // the pieces drift: look again every 3 s
+      L.step = 'find'; L.combos = null; L.picked = false;
+    }
+    if (!L.combos) {
+      L.combos = this._lessonCombos(ready, this._lessonPieces(), L.tried);
+      L.ci = 0; L.picked = false;
+    }
+    // reveal once: only the PAIR_FIELDS pieces (the second mark needs a discovered piece); the piece about to be picked is discovered by its own pick.
+    // Any other piece is discovered only when the lesson itself picks it (fallback), and the partners the finder needs for it (below)
+    if (!L.revealed) {
+      L.revealed = true;
+      const nc = L.combos[L.ci], next = nc && this._pairArmReady(nc.arm) && this._pairPieceOk(nc.piece) ? nc.piece : null;   // that pick happens this frame
+      for (const d of this._lessonPieces().rows) if (d.discovered === false && d !== next) ts.setTarget(d);
+    }
+    const c = L.combos[L.ci];
+    if (!c) { L.step = 'idle'; L.idleT = 0; L.combos = null; return; }
+    if (!L.picked) {
+      if (!this._pairArmReady(c.arm) || !this._pairPieceOk(c.piece)) { L.ci++; return; }
+      if (typeof am.getSelectedArm === 'function' && am.getSelectedArm() !== c.arm) am.selectArm(c.arm.index, { quiet: true });
+      if (!this._lessonPieces().isPairRow(c.piece)) this._lessonRevealPartners(c.arm, c.piece);   // fallback pick: the finder needs its partner discovered
+      ts.setTarget(c.piece);
+      L.tried.add(c.arm.index + ':' + c.piece.id);                // each (daughter, piece) is picked at most once per lesson
+      L.exp = { piece: c.piece, arm: am.getSelectedArm() };
+      L.picked = true; L.settle = 0;
+      return;
+    }
+    L.settle++;
+    if (L.settle < 2 || this._pairSearch || this._pairDirty) return;      // the finder looks on the frame after a pick, over a few frames
+    const o = this.getPairOffer();
+    if (o && o.t1 === c.piece) { L.step = 'done'; return; }              // offered: the second mark and the "ready" line are the finder's own
+    L.picked = false; L.ci++;
+  }
+
+  /**
+   * pair lesson (S4): the gas of the pair about to leave, and of the two single shots it replaces, both from the attitude now, both from
+   * the same plan (`_planDaughterShot` / `_planPairShot`, the numbers the shot's own "About N s" line uses). Null when a plan is not possible.
+   * @returns {{x:number, y:number, armA:number, armB:number, t:number, lesson:boolean}|null} x, y in grams
+   * @private
+   */
+  _pairSavingNow(opts) {
+    try {
+      const o = this._pairOffer, am = this._armManager;
+      if (!o || !am || !opts || o.armA !== opts.arm || !opts.pair || o.armB !== opts.pair.armB) return null;
+      const AIM = Constants.AIM;
+      const tolRad = AIM.DAUGHTER_AIM_TOLERANCE_DEG * Math.PI / 180, rate = AIM.AP_ROT_RATE * (AIM.ONBOARDING_ROT_RATE_MULT || 1);
+      let singles = 0;
+      for (const [arm, target] of [[o.armA, o.tA], [o.armB, o.tB]]) {
+        const s = this._planDaughterShot(this._preturnProvider(arm, target), { arm, armManager: am, pairIndex: arm.index }, AIM.AIM_TIMEOUT_S, tolRad, rate);
+        if (!s || !Number.isFinite(s.gasKg)) return null;
+        singles += s.gasKg * 1000;
+      }
+      const x = o.gasKg * 1000;
+      return { x, y: singles - x, armA: o.armA.index, armB: o.armB.index, t: this._pairT, lesson: this._lessonBeat };
+    } catch (_err) { return null; }
+  }
+
+  /**
+   * pair lesson (S4): DUAL_FIRE: say what the double shot used and saved. Outside the lesson only a saving of a gram or more, from mission 2 on;
+   * in the lesson always, and with the sentence about parking the ship between two pieces.
+   * @private
+   */
+  _onDualFire(d) {
+    const sv = this._pairSaving;
+    this._pairSaving = null;
+    const mine = sv && d && ((sv.armA === d.armIndex1 && sv.armB === d.armIndex2) || (sv.armA === d.armIndex2 && sv.armB === d.armIndex1)) && this._pairT - sv.t < 120;
+    const lesson = mine ? sv.lesson : this._lessonBeat;
+    const df = this._debrisField;
+    const mission = df && Number.isFinite(df._currentMissionNumber) ? df._currentMissionNumber : 2;
+    if (!lesson && mission < 2) return;
+    const saved = mine && sv.y >= 1;
+    let text = null;
+    if (mine) text = saved ? pairSavedLine(sv.x, sv.y) : (lesson ? pairSameLine(sv.x) : null);
+    if (lesson) text = (text ? text + ' ' : '') + PAIR_PARK_LINE;
+    if (!text) return;
+    eventBus.emit(Events.COMMS_MESSAGE, lesson
+      ? { text: text.trim(), priority: 'info', source: 'HOUSTON', channel: 'MISSION', _postOnboarding: true }
+      : { text, priority: 'info', source: 'HOUSTON' });
   }
 
   /**

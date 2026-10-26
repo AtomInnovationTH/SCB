@@ -735,6 +735,7 @@ export const Events = {
   // --- Dual-Fire ---
   DUAL_FIRE:                'crossbow:dualFire',         // { armIndex1, armIndex2 }
   DUAL_FIRE_RECOIL:         'crossbow:dualFireRecoil',   // { cancelled, residualDv }
+  PAIR_LESSON_SKIP:         'mission:pairLessonSkip',    // { reason } the Mission 2 double-shot lesson cannot be set up (S4): MissionCoach ends the beat
 
   // --- Pulse Scan ---
   PULSE_SCAN_START:         'pulseScan:start',           // { armCount }

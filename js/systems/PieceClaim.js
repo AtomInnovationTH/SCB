@@ -223,6 +223,11 @@ export function pairNoneLine() {
   return `No pair shot is ready. Pick a daughter and a piece first: a second piece is marked when two fit. ${forInput('D', 'SEND DAUGHTER')} launches one daughter alone.`;
 }
 
+/** S3: a daughter's catch is in its cell and her partner's is not yet: she waits so both reel in together (said once per pair). */
+export function pairHoldLine() {
+  return 'Holding the catch so both daughters reel in together.';
+}
+
 /** The pair needs the ship free to turn (a daughter out on her line, a launch under way ...). */
 export function pairNeedsTurnLine(reason) {
   return `Pair shot held: ${reason}. ${forInput('D', 'SEND DAUGHTER')} launches one daughter alone.`;
@@ -490,4 +495,31 @@ export function lineWrapsShip(line, keepOut, opts) {
   const hit = res && res.hits && res.hits.length ? res.hits[0] : null;
   if (!hit) return none;
   return { wraps: true, part: hit.cat + ':' + hit.name, cat: hit.cat, name: hit.name };
+}
+
+// ── pair lesson and the gas saved (owner 2026-10-26 "1. Mission 2 lesson"; plan daughter-pairs-1025 S4): appended at the end of the pair lines ──
+
+/** The lesson waits for both daughters of a pair (said once, when the lesson starts with none ready). */
+export function pairLessonWaitLine() {
+  return 'Waiting for both daughters to be home and charged. Then two pieces get marked for the double shot.';
+}
+
+/** The lesson ends without a shot: no pair was offered in time (the daughters were not ready, or no two pieces line up here). */
+export function pairLessonSkipLine(ready) {
+  return ready
+    ? 'No two pieces line up here. Watch for the PAIR mark in later missions.'
+    : 'The daughters are not ready for a double shot yet. Watch for the PAIR mark in later missions.';
+}
+
+/** After a double shot: the gas it used and what it saved against two single shots. One decimal, "about": both are plans, not meters. */
+export function pairSavedLine(xG, yG) {
+  return `Double shot: about ${xG.toFixed(1)} g of gas, ${yG.toFixed(1)} g less than two single shots.`;
+}
+
+/** The lesson's closing sentence (always said in the lesson, saved or not). */
+export const PAIR_PARK_LINE = 'Park the ship between two pieces to get more double shots.';
+
+/** The lesson, a pair that saved nothing here: plain words, and why. */
+export function pairSameLine(xG) {
+  return `Double shot: about ${xG.toFixed(1)} g of gas, the same as two singles here: pairs save most when the ship would have to turn.`;
 }

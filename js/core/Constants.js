@@ -5408,6 +5408,10 @@ export const Constants = {
     HOLD_RATIO: 0.8,         // a standing offer is kept until a new pair beats its cost by this ratio
     FIRE_MISS_DEG: 12,       // at the spring: a pair whose lines have drifted past this is not fired (the gap over MISS_DEG is the aim's own stop error)
     SPREAD_MIN_DEG: 0,       // P5: the least flight angle between the two daughters (set from the measured closest approach; 0 = none)
+    // S3 pair-home (plan daughter-pairs-1025): a pair comes home together. Mission-clock seconds (one frame = 1/60 s, the clock the arms run on).
+    HOME_WAIT_S: 60,         // a daughter whose catch is in its cell waits at most this long for her partner's (0 = never waits)
+    HOME_GAP_S: 30,          // the finder offers no pair whose predicted catch times differ by more than this (Infinity = no rule)
+    HOME_EQUAL_PULL: false,  // both reels pull with the lighter catch's tension (the heavier accelerates more slowly). OFF: measured WORSE (unequal catches 2 kg / 10 kg: 32.6 g vs 16.2 g of reel gas); the kicks' lever arms differ, so equal tension does not cancel
   },
 
   // ==========================================================================
@@ -6564,6 +6568,8 @@ export const Constants = {
     PERSISTENCE_KEY: 'spacecowboy_mission_coach_v1',
     NARRATIVE_HOLD_MS: 5000,   // narrative beat dwell before auto-advancing
     ESCALATE_MS: 22000,        // interactive beat → re-prompt (TEACHING_MOMENT_FORCE) after this idle
+    PAIR_LESSON_SKIP_S: 120,   // S4: the Mission 2 double-shot lesson ends with a plain line when no pair stands this long after both daughters of a pair are ready (counted from then, not from the beat's start; a standing offer is never skipped) (ESTIMATE; else the chapter, and the next one behind it, would wait for ever)
+    PAIR_LESSON_CAP_S: 600,    // S4 F1: the overall cap from the beat's start (mission-clock s), for daughters that never become ready: then the "not ready" line (ESTIMATE; a daughter's trip is about 149 s, H5)
     /**
      * Per-mission beat tables. Each beat:
      *   { id, type:'narrative'|'interactive'|'reactive', text, source?, channel?,
@@ -6603,6 +6609,18 @@ export const Constants = {
           triggerFilter: (d) => d && d.manual === true,
           title: 'MANUAL CAPTURE',
           body: 'Close on a target under manual pilot and press N to net it for 2× score.',
+        },
+        // owner 2026-10-26 ("1. Mission 2 lesson", plan daughter-pairs-1025 S4): one double shot. AutopilotSystem sets it up on
+        // MISSION_BEAT_STARTED (waits for both daughters, marks the pair, selects her); the Q key (touch: PAIR) fires it (DUAL_FIRE).
+        {
+          id: 'ch2_pair_shot',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Next, a double shot. Once both daughters are home and charged, I\'ll mark two pieces that line up for them at once. Fired together, their kicks cancel, so the launch costs almost no gas. Press Q to fire the pair.',
+          skillId: 'collect_dual_fire',
+          triggerEvent: 'DUAL_FIRE',
+          title: 'DOUBLE SHOT',
+          body: 'Press Q when two pieces are marked to launch both daughters together.',
         },
       ],
 

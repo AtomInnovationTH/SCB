@@ -82,6 +82,9 @@ export class MissionCoach {
     on(Events.GAME_STATE_CHANGE, (d) => {
       if (d && (d.to === GameStates.GAME_OVER || d.to === GameStates.WIN)) this._onset.cancel();
     });
+    // S4 (pair lesson): the autopilot could not set the double shot up in time (it has said why): the beat ends so the chapter, and the next one
+    // behind it, does not wait for ever.
+    on(Events.PAIR_LESSON_SKIP, () => this.satisfyBeat('ch2_pair_shot'));
     on(Events.GAME_RESET, () => this.reset());
     on(Events.PERSISTENCE_GATHER, (save) => { if (save) save.missionCoach = this._serialize(); });
     on(Events.PERSISTENCE_LOADED, () => {
@@ -102,6 +105,17 @@ export class MissionCoach {
     }
     if (!this._seq) return;
     this._seq.update(dt);
+  }
+
+  /**
+   * Public path to end the interactive beat `beatId` as satisfied by something other than its own trigger (the same hook the trigger takes).
+   * @param {string} beatId @returns {boolean} true when that beat was the one on screen
+   */
+  satisfyBeat(beatId) {
+    if (this._disposed || !this._seq) return false;
+    const cur = this._seq.current();
+    if (!cur || cur.id !== beatId) return false;
+    return this._seq.satisfy();
   }
 
   /** @param {number} mission @returns {boolean} */
