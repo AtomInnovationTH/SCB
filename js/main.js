@@ -1848,6 +1848,7 @@ async function init() {
   // Started BEFORE the boot MENU transition below so the first menu counts.
   updateWatch = new UpdateWatch({ eventBus, events: Events, menuState: GameStates.MENU });
   updateWatch.start();
+  menuScreen.setUpdateChecker(() => updateWatch.checkNow());   // the notes card's "Check for updates" (owner 2026-10-26)
   briefingScreen = new BriefingScreen();
   shopScreen = new ShopScreen();
   gameOverScreen = new GameOverScreen();

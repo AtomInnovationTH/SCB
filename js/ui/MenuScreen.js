@@ -19,6 +19,7 @@ import { resolvePrimaryMenuAction, startRequiresConfirm, NEW_GAME_CONFIRM_MESSAG
 import { buildUpdateCard } from './UpdateCard.js';
 import { applyUpdate } from '../core/UpdateWatch.js';
 import { claimAutoApply } from '../core/UpdateWatch.js';   // the loop-guard claim (kept a separate line: test-UpdateCard.js pins the applyUpdate import)
+import { buildWhatsNewCard, loadNotes, readNotice, markSeen, placeNotice } from './WhatsNewCard.js';   // the "what's new" notes card (owner 2026-10-26)
 
 /** up1: the one line on the menu while the game switches to the new build by itself. */
 const UPDATE_NOTICE_TEXT = 'Updating to the new version\u2026';
@@ -88,6 +89,14 @@ export class MenuScreen {
     this._autoAttempt = 0;         // which auto switch is current (a released one is cancelled for good)
     this._reloadIssued = false;    // _reload() ran: the page is going away, the failsafe must not open the lock
     this._updateNotice = null;
+    // Update notice (owner 2026-10-26, DECISIONS §43): the version button's notes card. `_notes` = the running
+    // build's { version, bullets } or null; `_notice` = { card, dot } from readNotice(), read once per page load.
+    this._notes = null;
+    this._notesPromise = null;
+    this._notice = null;
+    this._notesCard = null;
+    this._onNotesResize = null;
+    this._updateChecker = null;
     // w1-first-minute D3: what the "?" button opens (set by setHelpOpener).
     this._helpOpener = null;
     this._build();
@@ -324,6 +333,22 @@ export class MenuScreen {
           .adr-list li.adr-also .adr-more-btn { margin-left: -8px; }
           #menu-tip { font-size: 0.95rem; max-width: min(400px, 78vw); padding: 11px 14px; }
         }
+        /* ── Version button (update notice, owner 2026-10-26): "V1.02 · What's new" + a dot until the notes were opened.
+           index.html has a global button:focus green outline; this button keeps its quiet look and shows focus only
+           from the keyboard. Coarse pointer: a 44 px hit box by padding, undone by a negative margin. ── */
+        #menu-version-btn:focus { outline: none; }
+        #menu-version-btn:focus-visible { color: #00ff88 !important; }
+        @media (hover: hover) { #menu-version-btn:hover { color: #00ff88 !important; } }   /* not on touch: a tap must not leave it lit */
+        #menu-version-btn:focus-visible { text-decoration: underline; text-underline-offset: 4px; }
+        #menu-version-btn .menu-version-more { font-size: 0.6em; letter-spacing: 0.08em; }
+        #menu-version-btn .menu-version-dot {
+          display: none; width: 0.28em; height: 0.28em; margin-left: 0.4em; vertical-align: 0.5em;
+          border-radius: 50%; background: #00ff88; box-shadow: 0 0 6px rgba(0,255,136,0.7);
+        }
+        #menu-version-btn.has-dot .menu-version-dot { display: inline-block; }
+        @media (pointer: coarse) {
+          #menu-version-btn { padding: 6px 10px !important; margin: -6px -10px -6px calc(0.4em - 10px) !important; }
+        }
         /* ── Language / region selector (top-right) ── */
         /* right: 18 px edge + 44 px "?" + 8 px gap = 70 px, so the help button
          * sits to the RIGHT of the picker (owner 2026-10-06) at the old 18 px
@@ -481,7 +506,7 @@ export class MenuScreen {
           <h1 style="font-family: var(--font-mono); font-size:3.5rem; font-weight:700; color:#00ff88;
                       letter-spacing:0.3em; margin-bottom:0.5rem; white-space:nowrap;
                       text-shadow: 0 0 30px rgba(0,255,136,0.6), 0 0 60px rgba(0,255,136,0.3);">
-            SPACE COWBOY<span style="display:inline-block; width:0; white-space:nowrap; overflow:visible;"><span style="font-size:0.5em; letter-spacing:0.1em; font-variant-numeric:tabular-nums; margin-left:0.4em; vertical-align:0.15em; color:rgba(0,255,136,0.6);">${Constants.VERSION_LABEL || ''}</span></span>
+            SPACE COWBOY<span style="display:inline-block; width:0; white-space:nowrap; overflow:visible;"><button type="button" id="menu-version-btn" style="font-family:var(--font-ui); font-weight:inherit; font-size:0.5em; letter-spacing:0.1em; font-variant-numeric:tabular-nums; margin-left:0.4em; vertical-align:0.15em; color:rgba(0,255,136,0.6); background:none; border:none; padding:0; cursor:pointer; text-shadow:none; white-space:nowrap;">${Constants.VERSION_LABEL || ''}<span class="menu-version-more"> \u00B7 What's new</span><span class="menu-version-dot" aria-hidden="true"></span></button></span>
           </h1>
           <div style="font-size:1.1rem; color:rgba(0,255,136,0.6); letter-spacing:0.15em;
                        margin-bottom:1.5rem;">
@@ -727,6 +752,9 @@ export class MenuScreen {
 
     // Help "?" beside it (D3) — inert and hidden until setHelpOpener().
     this._wireHelpButton();
+
+    // The version button opens the notes card; the notes themselves load once, here (show() waits on them).
+    this._wireVersionButton();
 
     // Touch-friendly lore tooltips (replaces native title= which is invisible
     // on touch). Converts .adr-name[title] → data-tip and wires tap/hover.
@@ -1073,6 +1101,7 @@ export class MenuScreen {
   _startGame() {
     if (this._autoUpdating) return;
     if (this._departing) { this._finishDeparture(true); return; }
+    this._closeNotes(false);   // the notes card folds away; START was never blocked by it
     // Note: the new-game save-wipe confirm lives in _requestStartGame() (the
     // button/key entry point). _startGame() is the confirmed departure path.
     audioSystem.init();
@@ -1229,6 +1258,7 @@ export class MenuScreen {
   _continueGame() {
     if (this._autoUpdating) return;
     if (this._departing) { this._finishDeparture(true); return; }
+    this._closeNotes(false);   // the notes card folds away on the way out
     audioSystem.init();
     audioSystem.resume();
     audioSystem.playClick();
@@ -1282,6 +1312,7 @@ export class MenuScreen {
     if (this._autoUpdating) return;   // up1: the notice holds the place; the card returns only if the switch gives up
     if (this._updateDismissed === p.hash) return;
     if (this._updateCard && this._updateCard._hash === p.hash) return;
+    this._closeNotes(false);          // the waiting build's card wins: one restart control on screen, never two
     this._unmountUpdateCard();
     const anchor = this.element.querySelector('#menu-continue-wrapper');
     if (!anchor || !anchor.insertAdjacentElement) return;
@@ -1292,6 +1323,7 @@ export class MenuScreen {
       onLater: () => {
         this._updateDismissed = p.hash;   // remember for this page session only
         this._unmountUpdateCard();
+        this._syncVersionDot();           // the version button's dot keeps the news one tap away
       },
     });
     card._hash = p.hash;
@@ -1326,6 +1358,7 @@ export class MenuScreen {
     this._update = p;
     this._autoUpdating = true;
     const attempt = ++this._autoAttempt;
+    this._closeNotes(false);
     this._unmountUpdateCard();
     this._mountUpdateNotice();
     this._armAutoUpdateRelease();
@@ -1391,7 +1424,7 @@ export class MenuScreen {
   }
 
   /**
-   * @private TAP TO UPDATE. The new build is installed and WAITING in the
+   * @private RESTART NOW. The new build is installed and WAITING in the
    * service worker (it never takes over by itself): switch to it, and reload
    * once it has taken over. With no worker waiting this is a plain reload.
    * core/UpdateWatch.js applyUpdate() owns the order (listener first, then
@@ -1456,6 +1489,7 @@ export class MenuScreen {
     // Session J.5: an update that arrived while the menu was hidden (or that
     // the watcher found before the first show) mounts its card now.
     if (this._update) this._mountUpdateCard();
+    this._showNotice();
     this.element.style.display = 'flex';
     this.element.style.opacity = '1';
     // Listen for keyboard input while menu is shown
@@ -1477,6 +1511,7 @@ export class MenuScreen {
     // through this opacity fade so the reveal stays clear; show() restores it.
     this._resetDepartureState();
     this._closeLangMenu();
+    this._closeNotes(false);
     if (this._hideLoreTip) this._hideLoreTip();
     // Stop 3D scene. NOTE: we intentionally do NOT dispose()+rebuild the hero
     // here. A dispose/rebuild cycle would poison shared caches — ArmUnit.dispose()
@@ -1490,6 +1525,154 @@ export class MenuScreen {
     setTimeout(() => {
       if (!this.visible) this.element.style.display = 'none';
     }, 500);
+  }
+
+  // ── Update notice: the version button + the notes card (owner 2026-10-26, DECISIONS §43) ─────────────────────
+  // Non-modal: the card is a fixed child of #menu-screen (never inside the <h1>, never in the flow of
+  // #menu-header, so START does not move), it takes no focus, and every departure folds it away.
+
+  /**
+   * Inject what the notes card's "Check for updates" runs (main.js passes UpdateWatch.checkNow). Without one the
+   * link is not drawn. The checker resolves 'ready' | 'current' | 'offline'.
+   * @param {(() => Promise<string>)|null} fn
+   */
+  setUpdateChecker(fn) {
+    this._updateChecker = (typeof fn === 'function') ? fn : null;
+  }
+
+  /** @private Wire the version button; start the one read of the running build's notes. */
+  _wireVersionButton() {
+    const btn = this.element && this.element.querySelector('#menu-version-btn');
+    const more = btn && btn.querySelector ? btn.querySelector('.menu-version-more') : null;
+    // Until the notes are known the button is just the version (never a dead "What's new").
+    if (more && more.style) more.style.display = 'none';
+    if (btn && btn.addEventListener) {
+      btn.addEventListener('click', (e) => {
+        audioSystem.playClick?.();
+        // Drop focus so a later Enter starts the mission instead of re-pressing the version (see _wireHelpButton).
+        if (e && e.currentTarget && typeof e.currentTarget.blur === 'function') e.currentTarget.blur();
+        this._toggleNotes();
+      });
+    }
+    this._notesPromise = loadNotes().then((n) => {
+      this._notes = n;
+      if (n && more && more.style) more.style.display = '';
+      if (n && btn && btn.setAttribute) btn.setAttribute('aria-label', "What's new in this version");   // only when there are notes to open
+      return n;
+    });
+  }
+
+  /** @private The dot: notes not opened yet, or a waiting build the player answered LATER to. */
+  _syncVersionDot() {
+    const btn = this.element && this.element.querySelector ? this.element.querySelector('#menu-version-btn') : null;
+    if (!btn || !btn.classList) return;
+    const later = !!(this._update && this._updateDismissed === this._update.hash);
+    const on = !!(this._notice && this._notice.dot) || later;
+    if (on) btn.classList.add('has-dot'); else btn.classList.remove('has-dot');
+  }
+
+  /**
+   * @private show(): once the notes are loaded, decide (readNotice, once per page load) whether the "Updated to"
+   * card shows by itself and whether the dot is lit. A waiting build's card wins; the notes then stay one tap away.
+   */
+  _showNotice() {
+    const ready = this._notesPromise;
+    if (!ready || typeof ready.then !== 'function') return;
+    ready.then((n) => {
+      if (!n || !this.visible) return;
+      if (!this._notice) this._notice = readNotice(undefined, n.version);
+      const auto = this._notice.card;
+      this._notice.card = false;   // once per page load
+      this._syncVersionDot();
+      if (auto && !this._update && !this._autoUpdating && !this._applyingUpdate && !this._departing) this._openNotes('updated');
+    });
+  }
+
+  /** @private The version button: open the notes, or (second tap) fold them away. Writes `seen` either way. */
+  _toggleNotes() {
+    if (this._autoUpdating || this._departing) return;
+    if (this._notesCard) { this._seenNotes(); this._closeNotes(); return; }
+    if (!this._notes) {
+      // No notes to show: the button only brings back a waiting build's card.
+      if (this._update) { this._updateDismissed = null; this._mountUpdateCard(); this._syncVersionDot(); }
+      return;
+    }
+    this._seenNotes();
+    this._openNotes('opened');
+  }
+
+  /** @private These notes were opened or dismissed: remember it, put the dot out. */
+  _seenNotes() {
+    if (!this._notes) return;
+    markSeen(undefined, this._notes.version);
+    if (this._notice) this._notice.dot = false;
+    this._syncVersionDot();
+  }
+
+  /**
+   * @private Build, mount and place the notes card. A waiting build swaps "Check for updates" for
+   * "New version ready" + RESTART NOW and takes its own card off the screen (one restart control, never two).
+   * @param {'updated'|'opened'} mode
+   */
+  _openNotes(mode) {
+    const n = this._notes;
+    if (!n || !this.element || !this.element.appendChild) return;
+    this._closeNotes(false);
+    const updateReady = !!(this._update && !this._autoUpdating);
+    if (updateReady) this._unmountUpdateCard();
+    const checker = this._updateChecker;
+    const card = buildWhatsNewCard(document, {
+      version: n.version,
+      bullets: n.bullets,
+      mode,
+      onGotIt: () => { this._seenNotes(); this._closeNotes(); },
+      updateReady,
+      onRestart: () => this._applyUpdate(),
+      onCheck: checker ? () => checker() : null,
+      onReady: () => this._onCheckReady(),
+    });
+    this.element.appendChild(card);
+    this._notesCard = card;
+    this._placeNotes();
+    this._onNotesResize = () => this._placeNotes();
+    if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('resize', this._onNotesResize);
+  }
+
+  /** @private Sit the card just under the version button (fixed; re-run on resize). */
+  _placeNotes() {
+    const card = this._notesCard;
+    const btn = this.element && this.element.querySelector ? this.element.querySelector('#menu-version-btn') : null;
+    if (!card || !btn || typeof btn.getBoundingClientRect !== 'function') return;
+    const p = placeNotice(btn.getBoundingClientRect(), window.innerWidth);
+    card.style.top = `${Math.round(p.top)}px`;
+    card.style.left = `${Math.round(p.left)}px`;
+    card.style.width = `${Math.round(p.width)}px`;
+  }
+
+  /**
+   * @private Fold the notes card away (no-op when absent). `remount` (default) brings back a waiting build's own
+   * card, which the open notes had replaced; departures and hide() pass false.
+   */
+  _closeNotes(remount = true) {
+    const card = this._notesCard;
+    if (!card) return;
+    this._notesCard = null;
+    if (card.remove) card.remove();
+    if (this._onNotesResize && typeof window !== 'undefined' && window.removeEventListener) window.removeEventListener('resize', this._onNotesResize);
+    this._onNotesResize = null;
+    if (remount && this.visible && !this._departing && !this._autoUpdating && this._update && this._updateDismissed !== this._update.hash) this._mountUpdateCard();
+  }
+
+  /** @private "Check for updates" found a build: the notes card closes, the waiting build's card takes the place. */
+  _onCheckReady() {
+    this._closeNotes(false);
+    // A late 'ready' (the menu left or hid meanwhile): never mount into a departure or a hidden menu. The build is
+    // remembered by _onUpdateAvailable (this._update), and show() mounts its card on the next visit.
+    if (!this.visible || this._departing) return;
+    if (!this._update) return;
+    this._updateDismissed = null;   // an explicit tap overrides an earlier LATER
+    this._mountUpdateCard();
+    this._syncVersionDot();
   }
 }
 

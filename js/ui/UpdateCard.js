@@ -13,7 +13,7 @@
  * token (B612 Mono since Session L),
  * #00ff88 — a STEADY letter-spaced title (no pulse, no emoji anywhere), an
  * optional bullet list (omitted entirely when empty), a big primary
- * `TAP TO UPDATE` button and a quiet `LATER` text button; both ≥ 44 px tall
+ * `RESTART NOW` button and a quiet `LATER` text button; both ≥ 44 px tall
  * (the touch-target minimum). Text goes in through `textContent` only.
  *
  * @module ui/UpdateCard
@@ -26,7 +26,7 @@ export const UPDATE_CARD = Object.freeze({
   LATER_BTN_ID: 'menu-update-later',
   BULLETS_CLASS: 'update-bullets',
   TITLE: 'NEW VERSION READY',
-  UPDATE_LABEL: 'TAP TO UPDATE',
+  UPDATE_LABEL: 'RESTART NOW',
   LATER_LABEL: 'LATER',
   /** Card width cap (px) — sits centered under the START / CONTINUE buttons. */
   MAX_WIDTH_PX: 420,
@@ -75,7 +75,7 @@ const LATER_BTN_CSS = `
  * @param {object} p
  * @param {string} [p.hash]            the new build's short sha (rendered as a quiet caption)
  * @param {string[]} [p.bullets]       ≤ 3 strings; `[]` / absent → no list at all
- * @param {Function} [p.onUpdate]      TAP TO UPDATE click
+ * @param {Function} [p.onUpdate]      RESTART NOW click
  * @param {Function} [p.onLater]       LATER click
  * @returns {HTMLElement|object} `#menu-update-card`
  */

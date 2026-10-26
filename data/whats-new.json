@@ -1,8 +1,9 @@
 {
-  "release": "2026-09-06",
   "bullets": [
-    "Steer with one finger — drag anywhere to turn the ship",
-    "Tap junk to pick it, hold it to fire the net or send the autopilot",
-    "SPECS on every floor — swipe in from the right edge to read about what you're looking at"
-  ]
+    "Hand-off from the docking collar to the radiator is twice as fast (about 25 s)",
+    "Drag the view anywhere: it glides back home 4 s after you let go",
+    "Menu: Thailand, India and Japan up front, plus upcoming space events"
+  ],
+  "release": "2026-10-26",
+  "version": "1.02"
 }

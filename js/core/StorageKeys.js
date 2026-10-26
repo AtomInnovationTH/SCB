@@ -70,6 +70,14 @@ export const StorageKeys = {
    * step heals the black box (BLACK_SCREEN_TRIAGE.md, Producer 4).
    */
   BLACK_HEAL:  'sc_black_heal_v1',
+  /**
+   * The menu update notice (WhatsNewCard, owner 2026-10-26, DECISIONS §43): the version whose "Updated to"
+   * card was auto-shown, and the version whose notes were opened or dismissed with GOT IT. Plain version
+   * strings, e.g. '1.02'. PLAYER-owned like SETTINGS - a New Game wipes the save only, so a wiped save
+   * does not bring the card back.
+   */
+  WHATS_NEW_SHOWN: 'sc_whats_new_shown',
+  WHATS_NEW_SEEN:  'sc_whats_new_seen',
   // Owned by Constants (they sit beside related tuning) but mirrored here so the
   // registry is complete and the collision/drift test can see them.
   /** OnboardingDirector cleared-state blob. */

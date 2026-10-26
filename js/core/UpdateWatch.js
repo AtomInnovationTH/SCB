@@ -106,6 +106,8 @@ export const UPDATE_WATCH = Object.freeze({
   UPDATE_GAP_MS: 10000,
   /** After the tap posts SKIP_WAITING: reload anyway if no controllerchange arrives in this time (ms). */
   APPLY_FALLBACK_MS: 5000,
+  /** The notes card's "Check for updates" (checkNow): how long one tap waits for the update to start installing and finish (ms). */
+  CHECK_NOW_MS: 10000,
   /** sessionStorage key holding the appBuild an auto-apply was already tried for (the loop guard). */
   AUTO_APPLY_KEY: 'sc_auto_update_v1',
 });
@@ -205,7 +207,7 @@ function parseObject(text) {
 }
 
 /**
- * TAP TO UPDATE. If a build is installed and waiting, switch to it and reload
+ * RESTART NOW. If a build is installed and waiting, switch to it and reload
  * once it has taken over; otherwise (no worker, none waiting) a plain reload.
  *
  * The order matters: ONE one-time `controllerchange` listener is added FIRST
@@ -366,6 +368,10 @@ export class UpdateWatch {
     this._again = false;         // an installed worker arrived while a check was in flight → re-check after it
     this._updating = false;      // a registration.update() is outstanding
     this._updateAt = 0;          // …and was started at this clock reading
+    this._manualCheck = false;   // checkNow() is running: nothing found by it applies by itself, and it owns the update call
+    this._tapped = false;        // checkNow() was ever called in this page: no build found from then on applies by itself (never cleared)
+    this._manualRun = null;      // the promise of the checkNow() in flight (a second tap shares it)
+    this._published = 0;         // how many payloads _publish() has emitted (checkNow compares before / after)
   }
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
@@ -448,7 +454,102 @@ export class UpdateWatch {
     return this._inflight;
   }
 
+  /**
+   * The notes card's "Check for updates" (owner 2026-10-26, DECISIONS §43): ONE explicit check, started by a tap and
+   * the only thing that ever waits on the network here. Starts `registration.update()` NOW (the UPDATE_GAP_MS rate
+   * limit is for the automatic checks, not for a tap), then waits up to CHECK_NOW_MS for the new worker to install.
+   * A build it finds is announced as UPDATE_AVAILABLE (the card's "New version ready / RESTART NOW"), never as
+   * UPDATE_AUTO_APPLY: the player asked, and was promised a choice. A build already waiting at the tap is announced
+   * again (an earlier LATER does not hide it from an explicit check).
+   * @returns {Promise<'ready'|'current'|'offline'>} ready = a build is waiting and announced; current = this build is
+   *   the newest; offline = no registration, the update failed or hung, or the install did not finish in time.
+   */
+  checkNow() {
+    if (!this._manualRun) {
+      this._manualRun = this._checkNow().catch(() => 'offline').finally(() => { this._manualRun = null; });
+    }
+    return this._manualRun;
+  }
+
   // ── internals ─────────────────────────────────────────────────────────────
+
+  /** @private checkNow(): see there. */
+  async _checkNow() {
+    this._tapped = true;   // page lifetime: a worker still installing after the 10 s window must not switch builds under "Can't check right now"
+    const reg = await this._registration();
+    if (!reg) return 'offline';
+    this._manualCheck = true;
+    const before = this._published;
+    try {
+      this._watch(reg);
+      this._seenBuilds.clear();
+      const budget = this._now() + UPDATE_WATCH.CHECK_NOW_MS;
+      if (!reg.waiting) {
+        if (typeof reg.update !== 'function') return 'offline';
+        this._updating = true;
+        this._updateAt = this._now();
+        let outcome;
+        try {
+          outcome = await this._within(() => reg.update(), UPDATE_WATCH.CHECK_NOW_MS);
+        } finally {
+          this._updating = false;
+        }
+        if (outcome !== 'done') return 'offline';
+        if (!reg.waiting) {
+          if (!reg.installing) return 'current';
+          const left = Math.max(0, budget - this._now());
+          if (!(await this._installedWithin(reg, left))) return 'offline';
+        }
+      }
+      // A worker is waiting. Announce it (the follow-up check of a worker reaching `installed` may already have).
+      await this.check();
+      while (this._inflight) await this._inflight;
+      return this._published > before ? 'ready' : 'offline';
+    } finally {
+      this._manualCheck = false;
+    }
+  }
+
+  /** @private Run `fn` (returns a promise) with a time limit: 'done' | 'failed' (it threw / rejected) | 'timeout'. */
+  _within(fn, ms) {
+    return new Promise((resolve) => {
+      let done = false;
+      let timer = null;
+      const finish = (v) => {
+        if (done) return;
+        done = true;
+        if (timer !== null) this._clearTimeout(timer);
+        resolve(v);
+      };
+      timer = this._setTimeout(() => finish('timeout'), ms);
+      try { Promise.resolve(fn()).then(() => finish('done'), () => finish('failed')); } catch (_) { finish('failed'); }
+    });
+  }
+
+  /** @private Wait up to `ms` for the registration's installing worker to reach `installed` (true) or fail / time out (false). */
+  _installedWithin(reg, ms) {
+    return new Promise((resolve) => {
+      const worker = reg.installing;
+      if (reg.waiting) { resolve(true); return; }
+      if (!worker || !worker.addEventListener) { resolve(false); return; }
+      let done = false;
+      let timer = null;
+      const finish = (v) => {
+        if (done) return;
+        done = true;
+        if (timer !== null) this._clearTimeout(timer);
+        if (worker.removeEventListener) worker.removeEventListener('statechange', onState);
+        resolve(v);
+      };
+      const onState = () => {
+        if (worker.state === 'installed') finish(true);
+        else if (worker.state === 'redundant') finish(false);
+      };
+      worker.addEventListener('statechange', onState);
+      timer = this._setTimeout(() => finish(false), ms);
+      onState();   // it may have finished between the read and the listener
+    });
+  }
 
   /** @private Law 2: the baseline — tag once (null on 404 / throw), whats-new once. */
   async _boot() {
@@ -492,6 +593,7 @@ export class UpdateWatch {
     // The auto payload also names the build (MenuScreen claims the loop-guard key with it); the card's payload is unchanged.
     const payload = Object.freeze(auto ? { hash, tag, bullets, appBuild } : { hash, tag, bullets });
     this._pending = payload;
+    this._published += 1;
     this._markFound();
     if (this._bus && this._bus.emit) {
       this._bus.emit(auto ? this._events.UPDATE_AUTO_APPLY : this._events.UPDATE_AVAILABLE, payload);
@@ -543,6 +645,7 @@ export class UpdateWatch {
    * Anything else → the card.
    */
   _mayAutoApply(appBuild, build) {
+    if (this._manualCheck || this._tapped) return false;   // checkNow(): the player asked, so he is offered the restart, never handed it (also when the build lands after the window)
     if (!this._onMenu || this._gameBegun) return false;
     if (typeof this._events.UPDATE_AUTO_APPLY !== 'string') return false;
     if (!build || build.windows !== 1) return false;
@@ -597,6 +700,7 @@ export class UpdateWatch {
    */
   _kickUpdate(reg) {
     if (typeof reg.update !== 'function') return;
+    if (this._manualCheck) return;   // checkNow() owns the update call (it started one itself, past the gap)
     const now = this._now();
     if (this._updating && now - this._updateAt < UPDATE_WATCH.UPDATE_GAP_MS) return;
     this._updating = true;
