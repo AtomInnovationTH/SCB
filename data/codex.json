@@ -3316,7 +3316,9 @@
         "org_digantara",
         "org_pixxel",
         "org_nasa_odpo",
-        "org_esa_debris"
+        "org_esa_debris",
+        "org_thai_space_consortium",
+        "org_rtaf_space"
       ],
       "i18n": {
         "title": "Who Tracks the Junk",
@@ -3856,7 +3858,10 @@
         "org_digantara",
         "org_pixxel",
         "org_manastu",
-        "org_nasa_odpo"
+        "org_nasa_odpo",
+        "org_thai_space_consortium",
+        "org_rtaf_space",
+        "org_mu_space"
       ],
       "i18n": {
         "title": "The Rules of the Road",
@@ -3927,7 +3932,8 @@
         "org_bellatrix",
         "org_orbitaid",
         "org_manastu",
-        "org_skyperfect_jsat"
+        "org_skyperfect_jsat",
+        "org_mu_space"
       ],
       "i18n": {
         "title": "The Servicing Economy",
@@ -5430,6 +5436,60 @@
         "shortText": "Europe's debris research team and its cleanup programme.",
         "fullText": "ESA's Space Debris Office coordinates European debris research and runs operational services, mainly from ESOC in Darmstadt, Germany, with a team at ESTEC in the Netherlands. The Clean Space initiative covers designing missions that leave no debris, plus in-orbit servicing and active removal. Each year ESA also publishes a Space Environment Report.\n\nEurope's removal mission ClearSpace-1 belongs to this effort.",
         "realWorld": "Sources (read 2026-10-25): ESA Space Debris Office: https://www.esa.int/Space_Safety/Space_Debris/ESA_Space_Debris_Office; ESA Clean Space: https://www.esa.int/Space_Safety/Clean_Space (latest story 8 Oct 2026); ESA Space Environment Report 2025: https://www.esa.int/Space_Safety/Space_Debris/ESA_Space_Environment_Report_2025. Flyeye and TIRA, named earlier on the menu, could not be confirmed and were dropped.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_thai_space_consortium",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_who_tracks",
+        "world_the_rules"
+      ],
+      "i18n": {
+        "title": "Thai Space Consortium",
+        "shortText": "Thai agencies, universities and the military building Thailand's own satellite.",
+        "fullText": "The Thai Space Consortium is a group of Thai science agencies, universities and the military working together on Thailand's own satellite. Its first, TSC-1, is a microsatellite under 100 kg assembled at NARIT in Chiang Mai. It passed thermal-vacuum, radiation and vibration tests in 2026, and launch is aimed for 2027.\n\nBy 4 June 2026 the engineering model was about 60% done, and the science minister visited the build on 18 April 2026. The consortium is described as 6 science agencies, 7 universities and 1 defence agency.",
+        "realWorld": "Sources (read 2026-10-26): Thai government news, 4 Jun 2026 (engineering model about 60% done, tests passed, minister visit 18 Apr 2026, launch targeted by 2027): https://thailand.go.th/issue-focus-detail/thailands-homegrown-tsc-1-satellite-achieves-major-milestone-prepares-for-launch-simulation-next-year; NARIT TSC page: https://www.narit.or.th/en/collaboration/tsc (members: 6 science agencies, 7 universities, 1 defence agency; seen only as a search snippet, not opened). Launch date is a target, not confirmed.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_rtaf_space",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_who_tracks",
+        "world_the_rules"
+      ],
+      "i18n": {
+        "title": "Royal Thai Air Force",
+        "shortText": "Thailand's air force flies the country's military satellites and watches orbit.",
+        "fullText": "The Royal Thai Air Force flies Thailand's military satellites. NAPA-1 went up on a Vega rocket in September 2020 and NAPA-2 on a Falcon 9 in June 2021. It works with NARIT, the national astronomy institute, on watching objects in orbit.\n\nNAPA-1 flew as Vega flight VV16 on 3 September 2020 and NAPA-2 on 30 June 2021. The agreement with NARIT on space surveillance was reported in July 2026.",
+        "realWorld": "Sources (read 2026-10-26): NAPA-1 (Vega VV16, 3 Sep 2020): https://en.wikipedia.org/wiki/Napa-1; NAPA-2 (Falcon 9, 30 Jun 2021): https://www.nationthailand.com/tech/40002767; NARIT and RTAF space-surveillance agreement, Bangkok Biz News, July 2026: https://www.bangkokbiznews.com/tech/innovation/1242742.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_mu_space",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_servicing",
+        "world_the_rules"
+      ],
+      "i18n": {
+        "title": "mu Space",
+        "shortText": "A Bangkok space-tech company heading for the Moon with GISTDA and ispace.",
+        "fullText": "mu Space is a Bangkok space-tech company founded in 2017. In November 2024 it signed a Moon-mission agreement with ispace and GISTDA, Thailand's space agency, and in April 2025 it delivered an antenna to GISTDA.\n\nThe company was founded on 21 June 2017. The Moon-mission agreement with ispace and GISTDA is dated 8 November 2024, and the antenna reached GISTDA on 3 April 2025.",
+        "realWorld": "Sources (read 2026-10-26): Wikipedia, founded 21 Jun 2017 (the article carries a conflict-of-interest banner): https://en.wikipedia.org/wiki/Mu_Space; ispace release, MoU of 8 Nov 2024: https://www.ispace-inc.com/wp-content/uploads/2026/06/ispace-GISTDA-and-mu-Space-Agree-to-Collaborate-on-Lunar-Exploration-Mission-for-Thailands-National-Space-Program.pdf; company updates, antenna delivered to GISTDA 3 Apr 2025: https://muspacecorp.com/category/update/ (seen only as a search snippet, not opened).",
         "unlockHint": "Reach orbit."
       },
       "lastVerified": "2026-10"

@@ -257,7 +257,7 @@ export class MenuScreen {
         /* "Also…" / "Collision-avoidance software:" lead-ins. */
         .adr-nw { white-space: nowrap; }
         .adr-also, .adr-list li.adr-also { color: rgba(0,204,255,0.62); }
-        /* "+7 more" beside a country name: reveals that country's other names
+        /* "(more)" beside a country name: reveals that country's other names
            (owner 2026-10-25, less wall of text). Plain text look, dotted
            underline as the only hint it opens something. */
         .adr-more-btn {
@@ -598,21 +598,25 @@ export class MenuScreen {
             </details>
 
             <!-- Countries — open by default: Thailand, India, Japan, three organisations
-                 each. The rest of each country hides behind a "+N more" button beside
+                 each. The rest of each country hides behind a "(more)" button beside
                  its name (owner 2026-10-25: less wall of text); NASA and ESA hide
-                 behind "+2 more countries". MenuScreen._toggleMore() shows them.
+                 behind "Other countries (more)". MenuScreen._toggleMore() shows them.
                  Country headers are .adr-section DIV siblings of each list
                  (.adr-list li outranks .adr-section, so never <li>s). Picks and
                  sources: docs/research/2026-10-menu-refresh.md (read 2026-10-25). -->
             <details class="adr-group" open>
               <summary>Countries<span class="adr-count">3</span></summary>
-              <div class="adr-section">Thailand</div>
+              <div class="adr-section">Thailand <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-thailand">(more)</button></div>
               <ul class="adr-list">
               <li><span class="adr-name" title="Thailand's space agency. Its GARNET and ZIRCON systems track objects in orbit and manage space traffic. THEOS-2 has flown since 2023; THEOS-2A was lost in the failed PSLV launch of 12 January 2026.">GISTDA</span> <span class="adr-sub">Space agency</span></li>
               <li><span class="adr-name" title="Thailand's national astronomy institute, in Chiang Mai. It has an agreement with the Royal Thai Air Force on space surveillance, backed by a system that tracks satellites, built up from its automated telescopes.">NARIT</span> <span class="adr-sub">Space watch</span></li>
               <li><span class="adr-name" title="Gulf Space Technology, Thailand's satellite operator, known as Thaicom until it renamed itself on 17 September 2026; its satellites keep the Thaicom name. Thaicom 9 may launch by March 2027; Thaicom 10 has bank financing for a 2027 launch.">Gulf Space Tech</span> <span class="adr-sub">Satcom</span></li>
+              <li class="adr-also adr-more" id="adr-more-thailand" hidden>
+                <span class="adr-nw"><span class="adr-name" title="Thai science agencies, universities and the military building Thailand's own satellite. TSC-1, a microsatellite under 100 kg assembled at NARIT in Chiang Mai, passed thermal-vacuum, radiation and vibration tests in 2026; launch is aimed for 2027.">Thai Space Consortium</span>,</span>
+                <span class="adr-nw"><span class="adr-name" title="Flies Thailand's military satellites: NAPA-1 went up on a Vega rocket in September 2020 and NAPA-2 on a Falcon 9 in June 2021. It works with NARIT on watching objects in orbit.">Royal Thai Air Force</span>,</span>
+                <span class="adr-nw"><span class="adr-name" title="Bangkok space-tech company founded in 2017. It signed a Moon-mission agreement with ispace and GISTDA in November 2024 and delivered an antenna to GISTDA in April 2025.">mu Space</span>.</span></li>
               </ul>
-              <div class="adr-section">India <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-india">+7 more</button></div>
+              <div class="adr-section">India <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-india">(more)</button></div>
               <ul class="adr-list">
               <li><span class="adr-name" title="Landed at the Moon's south pole in 2023. Its space-safety centre in Bengaluru (IS4OM) steers India's satellites clear of junk, and in 2024 it set the goal: every Indian mission debris-free by 2030.">ISRO</span> <span class="adr-sub">Space agency</span></li>
               <li><span class="adr-name" title="Hyderabad rocket company. On 18 July 2026 Vikram-1 reached orbit from Sriharikota on its first try: India's first private orbital launch, carrying a robot arm built to catch space junk.">Skyroot Aerospace</span> <span class="adr-sub">Launcher</span></li>
@@ -626,7 +630,7 @@ export class MenuScreen {
                 <span class="adr-nw"><span class="adr-name" title="Founded 2017. Its green thruster Vyom 2U flew on ISRO's POEM-4 (PSLV-C60, December 2024); its I-Booster for 100-500 kg satellites was delivered to India's defence research agency DRDO in December 2024.">Manastu Space</span>,</span>
                 <span class="adr-nw"><span class="adr-name" title="Bengaluru rocket company. Razor Crest is designed to lift 24.8 tonnes to orbit, or about 8 tonnes when both stages are reused. First demonstration flight: late 2027.">EtherealX</span>.</span></li>
               </ul>
-              <div class="adr-section">Japan <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-japan">+2 more</button></div>
+              <div class="adr-section">Japan <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-japan">(more)</button></div>
               <ul class="adr-list">
               <li><span class="adr-name" title="Japan's space agency. With Astroscale it runs the Commercial Removal of Debris Demonstration (CRD2): Phase 1 (ADRAS-J) inspected a spent rocket stage; Phase 2 will capture and de-orbit it, from Japan's 2027 fiscal year.">JAXA</span> <span class="adr-sub">Space agency</span></li>
               <li><span class="adr-name" title="Tokyo debris remover. In 2024 ADRAS-J flew within ~15 m of a spent Japanese rocket stage. ADRAS-J2 will capture and de-orbit it, launching in Japan's 2027 fiscal year (April 2027 to March 2028).">Astroscale</span> <span class="adr-sub">Debris remover</span></li>
@@ -636,7 +640,7 @@ export class MenuScreen {
                 <span class="adr-nw"><span class="adr-name" title="Japanese satellite operator. In May 2026 it invested in Astroscale and agreed a partnership on in-orbit servicing, and it backs Orbital Lasers.">SKY Perfect JSAT</span>.</span></li>
               </ul>
               <ul class="adr-list">
-              <li class="adr-also"><button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-countries">+2 more countries</button></li>
+              <li class="adr-also">Other countries <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-countries">(more)</button></li>
               <li class="adr-also adr-more" id="adr-more-countries" hidden>
                 <span class="adr-nw"><span class="adr-name" title="America's space agency. Its Orbital Debris Program Office wrote NASA's first debris-mitigation rules in 1995 and builds the ORDEM and LEGEND debris models.">NASA</span> (USA),</span>
                 <span class="adr-nw"><span class="adr-name" title="Europe's space agency. Its Space Debris Office, mainly at ESOC in Darmstadt, coordinates European debris research; its Clean Space initiative covers zero-debris technology and in-orbit servicing.">ESA</span> (Europe).</span></li>
@@ -763,7 +767,7 @@ export class MenuScreen {
     // Drop events that are already over, so the list never goes stale.
     this._pruneEvents();
 
-    // "+7 more" beside a country name shows that country's other names.
+    // "(more)" beside a country name shows that country's other names.
     const left = this.element.querySelector('#menu-left');
     if (left) {
       left.addEventListener('click', (e) => {
@@ -777,9 +781,9 @@ export class MenuScreen {
   }
 
   /**
-   * @private Show or hide the names behind one "+N more" button (its
-   * aria-controls row). The button reads "+N more" while they are hidden and
-   * "hide" while they show; its first label is kept in data-label.
+   * @private Show or hide the names behind one "(more)" button (its
+   * aria-controls row). The button reads "(more)" while they are hidden and
+   * "(less)" while they show; its first label is kept in data-label.
    */
   _toggleMore(btn) {
     const row = this.element.querySelector('#' + btn.getAttribute('aria-controls'));
@@ -788,7 +792,7 @@ export class MenuScreen {
     const open = row.hidden;
     row.hidden = !open;
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    btn.textContent = open ? 'hide' : btn.dataset.label;
+    btn.textContent = open ? '(less)' : btn.dataset.label;
   }
 
   /**
