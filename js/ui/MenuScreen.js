@@ -49,6 +49,15 @@ export function localIsoDate(now = new Date()) {
   return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
 }
 
+/**
+ * Which "(more)" in Countries a language flag opens (the id after `adr-more-`).
+ * Owner 2026-10-26: "country selected in drop down box, opens that country in
+ * menu. so users see info they care about." BRA has no country entry: null.
+ */
+export const COUNTRY_FOR_FLAG = Object.freeze({
+  THA: 'thailand', JPN: 'japan', IND: 'india', USA: 'countries', ESP: 'countries', BRA: null,
+});
+
 export class MenuScreen {
   /**
    * @param {string|null} [initialTier] — current SceneManager quality tier so the
@@ -600,7 +609,8 @@ export class MenuScreen {
             <!-- Countries — open by default: Thailand, India, Japan, three organisations
                  each. The rest of each country hides behind a "(more)" button beside
                  its name (owner 2026-10-25: less wall of text); NASA and ESA hide
-                 behind "Other countries (more)". MenuScreen._toggleMore() shows them.
+                 behind "Other countries (more)". MenuScreen._toggleMore() shows them;
+                 picking a language flag opens that country's (more) (_openCountryFor).
                  Country headers are .adr-section DIV siblings of each list
                  (.adr-list li outranks .adr-section, so never <li>s). Picks and
                  sources: docs/research/2026-10-menu-refresh.md (read 2026-10-25). -->
@@ -788,11 +798,34 @@ export class MenuScreen {
   _toggleMore(btn) {
     const row = this.element.querySelector('#' + btn.getAttribute('aria-controls'));
     if (!row) return;
+    this._setMore(btn, row.hidden);
+  }
+
+  /** @private Set one "(more)" button open or closed (row, aria-expanded, label). */
+  _setMore(btn, open) {
+    const row = this.element.querySelector('#' + btn.getAttribute('aria-controls'));
+    if (!row) return;
     if (!btn.dataset.label) btn.dataset.label = btn.textContent;
-    const open = row.hidden;
     row.hidden = !open;
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
     btn.textContent = open ? '(less)' : btn.dataset.label;
+  }
+
+  /**
+   * @private Open the country a language flag stands for (COUNTRY_FOR_FLAG):
+   * its Countries group opens, its "(more)" shows, every other "(more)" closes.
+   * An unknown flag or one with no entry (BRA) closes them all.
+   */
+  _openCountryFor(flag) {
+    const id = COUNTRY_FOR_FLAG[flag] || null;
+    const want = id ? 'adr-more-' + id : null;
+    this.element.querySelectorAll('.adr-more-btn').forEach((btn) => {
+      this._setMore(btn, btn.getAttribute('aria-controls') === want);
+    });
+    if (want) {
+      const group = this.element.querySelector('#' + want)?.closest('details');
+      if (group) group.open = true;
+    }
   }
 
   /**
@@ -976,6 +1009,7 @@ export class MenuScreen {
         audioSystem.playClick?.();
         const changed = settingsManager.setLanguage(lang.code);
         refreshCurrent();
+        this._openCountryFor(lang.flag);
         this._closeLangMenu();
         // Repaint the astronaut's shoulder patch immediately.
         if (changed && this._menuScene3D) this._menuScene3D.setFlag(lang.flag);
@@ -999,6 +1033,7 @@ export class MenuScreen {
 
     this._langRoot = root;
     refreshCurrent();
+    this._openCountryFor(settingsManager.getLanguageEntry().flag);   // page load shows the saved pick's country
   }
 
   /** @private */
