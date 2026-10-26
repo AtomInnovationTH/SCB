@@ -248,6 +248,21 @@ export class MenuScreen {
         /* "Also…" / "Collision-avoidance software:" lead-ins. */
         .adr-nw { white-space: nowrap; }
         .adr-also, .adr-list li.adr-also { color: rgba(0,204,255,0.62); }
+        /* "+7 more" beside a country name: reveals that country's other names
+           (owner 2026-10-25, less wall of text). Plain text look, dotted
+           underline as the only hint it opens something. */
+        .adr-more-btn {
+          background: none; border: 0; padding: 0 2px; margin-left: 6px;
+          font: inherit; font-family: var(--font-ui); font-size: 0.76rem;
+          text-transform: none; letter-spacing: 0;
+          color: rgba(0,204,255,0.8); cursor: pointer;
+          text-decoration: underline dotted; text-underline-offset: 3px;
+          -webkit-tap-highlight-color: transparent;
+        }
+        .adr-list li.adr-also .adr-more-btn { margin-left: 0; }
+        .adr-more-btn:focus { outline: none; }   /* index.html's green button:focus box is for real buttons */
+        .adr-more-btn:hover, .adr-more-btn:focus-visible { color: #aaddff; }
+        .adr-more-btn[aria-expanded="true"] { color: rgba(0,204,255,0.6); }
         .adr-section {
           font-size: 0.72rem;
           color: rgba(0,204,255,0.6);
@@ -302,6 +317,11 @@ export class MenuScreen {
           .adr-group > summary { font-size: 0.84rem; min-height: 44px; padding: 0.35rem 0; box-sizing: border-box; }
           .adr-count { font-size: 0.72rem; }
           .adr-name { padding: 0.55rem 2px; margin: -0.4rem 0; }
+          /* The padded hit box pushed the dotted border a line below the name:
+             underline the text itself instead. */
+          .adr-name { border-bottom: 0; text-decoration: underline dotted rgba(0,204,255,0.45); text-underline-offset: 3px; }
+          .adr-more-btn { font-size: 0.85rem; padding: 0.8rem 8px; margin: -0.8rem 0 -0.8rem 2px; }
+          .adr-list li.adr-also .adr-more-btn { margin-left: -8px; }
           #menu-tip { font-size: 0.95rem; max-width: min(400px, 78vw); padding: 11px 14px; }
         }
         /* ── Language / region selector (top-right) ── */
@@ -553,7 +573,9 @@ export class MenuScreen {
             </details>
 
             <!-- Countries — open by default: Thailand, India, Japan, three organisations
-                 each, then a "More" line of names. NASA and ESA sit in "More countries".
+                 each. The rest of each country hides behind a "+N more" button beside
+                 its name (owner 2026-10-25: less wall of text); NASA and ESA hide
+                 behind "+2 more countries". MenuScreen._toggleMore() shows them.
                  Country headers are .adr-section DIV siblings of each list
                  (.adr-list li outranks .adr-section, so never <li>s). Picks and
                  sources: docs/research/2026-10-menu-refresh.md (read 2026-10-25). -->
@@ -565,12 +587,12 @@ export class MenuScreen {
               <li><span class="adr-name" title="Thailand's national astronomy institute, in Chiang Mai. It has an agreement with the Royal Thai Air Force on space surveillance, backed by a system that tracks satellites, built up from its automated telescopes.">NARIT</span> <span class="adr-sub">Space watch</span></li>
               <li><span class="adr-name" title="Gulf Space Technology, Thailand's satellite operator, known as Thaicom until it renamed itself on 17 September 2026; its satellites keep the Thaicom name. Thaicom 9 may launch by March 2027; Thaicom 10 has bank financing for a 2027 launch.">Gulf Space Tech</span> <span class="adr-sub">Satcom</span></li>
               </ul>
-              <div class="adr-section">India</div>
+              <div class="adr-section">India <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-india">+7 more</button></div>
               <ul class="adr-list">
               <li><span class="adr-name" title="Landed at the Moon's south pole in 2023. Its space-safety centre in Bengaluru (IS4OM) steers India's satellites clear of junk, and in 2024 it set the goal: every Indian mission debris-free by 2030.">ISRO</span> <span class="adr-sub">Space agency</span></li>
               <li><span class="adr-name" title="Hyderabad rocket company. On 18 July 2026 Vikram-1 reached orbit from Sriharikota on its first try: India's first private orbital launch, carrying a robot arm built to catch space junk.">Skyroot Aerospace</span> <span class="adr-sub">Launcher</span></li>
               <li><span class="adr-name" title="A Hyderabad start-up building a soft robotic hand to catch space junk. Its EMBRACE arm rode Vikram-1 in July 2026, but the petals did not open. Nothing was caught; the team still got data.">Cosmoserve Space</span> <span class="adr-sub">Catch arm</span></li>
-                            <li class="adr-also">More:
+              <li class="adr-also adr-more" id="adr-more-india" hidden>
                 <span class="adr-nw"><span class="adr-name" title="Bengaluru space-surveillance start-up. Its SCOT satellite, launched in January 2025, watches other objects in orbit; in August 2026 it added MOSAIC, a ground network of optical sensors.">Digantara</span>,</span>
                 <span class="adr-nw"><span class="adr-name" title="Chennai (IIT Madras), founded 2017. On 30 May 2024 its Agnibaan flew with a single-piece 3D-printed engine from India's first private launchpad. Its first orbital launch is planned for 2027.">Agnikul Cosmos</span>,</span>
                 <span class="adr-nw"><span class="adr-name" title="Bengaluru, founded 2019. Its Fireflies hyperspectral Earth-imaging satellites launched in January and August 2025 on Falcon 9 rockets from California.">Pixxel</span>,</span>
@@ -579,17 +601,18 @@ export class MenuScreen {
                 <span class="adr-nw"><span class="adr-name" title="Founded 2017. Its green thruster Vyom 2U flew on ISRO's POEM-4 (PSLV-C60, December 2024); its I-Booster for 100-500 kg satellites was delivered to India's defence research agency DRDO in December 2024.">Manastu Space</span>,</span>
                 <span class="adr-nw"><span class="adr-name" title="Bengaluru rocket company. Razor Crest is designed to lift 24.8 tonnes to orbit, or about 8 tonnes when both stages are reused. First demonstration flight: late 2027.">EtherealX</span>.</span></li>
               </ul>
-              <div class="adr-section">Japan</div>
+              <div class="adr-section">Japan <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-japan">+2 more</button></div>
               <ul class="adr-list">
               <li><span class="adr-name" title="Japan's space agency. With Astroscale it runs the Commercial Removal of Debris Demonstration (CRD2): Phase 1 (ADRAS-J) inspected a spent rocket stage; Phase 2 will capture and de-orbit it, from Japan's 2027 fiscal year.">JAXA</span> <span class="adr-sub">Space agency</span></li>
               <li><span class="adr-name" title="Tokyo debris remover. In 2024 ADRAS-J flew within ~15 m of a spent Japanese rocket stage. ADRAS-J2 will capture and de-orbit it, launching in Japan's 2027 fiscal year (April 2027 to March 2028).">Astroscale</span> <span class="adr-sub">Debris remover</span></li>
               <li><span class="adr-name" title="Utsunomiya start-up. Its HORN is a fan-shaped film that unfolds to add drag, so dead satellites fall sooner. Two units flew on an H3 rocket on 12 June 2026; one re-entered after 76 days.">BULL</span> <span class="adr-sub">Drag film</span></li>
-                            <li class="adr-also">More:
+              <li class="adr-also adr-more" id="adr-more-japan" hidden>
                 <span class="adr-nw"><span class="adr-name" title="Tokyo, founded 2024 as a SKY Perfect JSAT spin-out. Builds compact space lasers to stop a dead satellite's spin and, later, to remove debris. Closed its Series A in March 2026.">Orbital Lasers</span>,</span>
                 <span class="adr-nw"><span class="adr-name" title="Japanese satellite operator. In May 2026 it invested in Astroscale and agreed a partnership on in-orbit servicing, and it backs Orbital Lasers.">SKY Perfect JSAT</span>.</span></li>
               </ul>
               <ul class="adr-list">
-              <li class="adr-also">More countries:
+              <li class="adr-also"><button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-countries">+2 more countries</button></li>
+              <li class="adr-also adr-more" id="adr-more-countries" hidden>
                 <span class="adr-nw"><span class="adr-name" title="America's space agency. Its Orbital Debris Program Office wrote NASA's first debris-mitigation rules in 1995 and builds the ORDEM and LEGEND debris models.">NASA</span> (USA),</span>
                 <span class="adr-nw"><span class="adr-name" title="Europe's space agency. Its Space Debris Office, mainly at ESOC in Darmstadt, coordinates European debris research; its Clean Space initiative covers zero-debris technology and in-orbit servicing.">ESA</span> (Europe).</span></li>
               </ul>
@@ -711,6 +734,33 @@ export class MenuScreen {
 
     // Drop events that are already over, so the list never goes stale.
     this._pruneEvents();
+
+    // "+7 more" beside a country name shows that country's other names.
+    const left = this.element.querySelector('#menu-left');
+    if (left) {
+      left.addEventListener('click', (e) => {
+        const btn = e.target.closest && e.target.closest('.adr-more-btn');
+        if (!btn) return;
+        this._toggleMore(btn);
+        // Drop focus so a later Enter starts the mission instead of re-toggling.
+        if (typeof btn.blur === 'function') btn.blur();
+      });
+    }
+  }
+
+  /**
+   * @private Show or hide the names behind one "+N more" button (its
+   * aria-controls row). The button reads "+N more" while they are hidden and
+   * "hide" while they show; its first label is kept in data-label.
+   */
+  _toggleMore(btn) {
+    const row = this.element.querySelector('#' + btn.getAttribute('aria-controls'));
+    if (!row) return;
+    if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+    const open = row.hidden;
+    row.hidden = !open;
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    btn.textContent = open ? 'hide' : btn.dataset.label;
   }
 
   /**
