@@ -1025,8 +1025,13 @@ export class TransferTrip {
     this._workTick(f);                           // lane 5e: the furnaces' work at the fraction of the burn played
     if (this._playS < this._playP) return;
     // The profile is over. The shown pass (a carry, or a leash) still running holds the end; the end sweep then delivers and melts the rest.
+    // Lane s5-letgo (L1): the end waits one tick after the profile's last step. That step lowers her orbit in this tick; the pieces on her take
+    // it when the arm loop pins them at the end of the frame, so a piece the arrival lets go in the SAME tick left from the pin before the step
+    // and started one step (measured 5.9 m radial at 1/60 s, tens of metres on a slow frame) off its rack seat. A tick later she has settled.
+    const settled = this._overS > 0;
     this._overS += dt;
     if (this._endHold()) return;
+    if (!settled) return;
     this._endSweep();
     this._end();
   }
@@ -1247,7 +1252,12 @@ export class TransferTrip {
     if (!this._passBusy()) return false;
     if (this._overS < Constants.CARRY.FINISH_GRACE_S) return true;
     const am = this._d.armManager;
-    if (am && typeof am.abortAllCarries === 'function') am.abortAllCarries('trip cap');
+    if (am && typeof am.abortAllCarries === 'function') {
+      // Lane s5-letgo (fix round 1, M3): a daughter aborted mid-carry snaps docked, and the piece she carried jumps from the carry to her rack; the
+      // arm loop writes its scene position at the end of the frame, so the trip ends one tick LATER (the same rule as the last profile step above):
+      // a piece the arrival lets go in this tick would leave from the carry position, not its seat.
+      if (am.abortAllCarries('trip cap') > 0) return true;
+    }
     return false;
   }
 

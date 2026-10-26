@@ -89,6 +89,7 @@ export const TAKE_GRIP_S = 0.4;
 export const TAKE_S = 4;
 export const TAKE_HOME_S = 1.2;
 export const TAKE_WAIT_MAX_S = 60;                 // a piece that waits this long (game time, with no take running) for the berth to finish is let go of (taken at once)
+export const TRANSIT_WAIT_MAX_S = 300;             // lane s5-letgo (L2): the most game time it waits for a piece that is moving between holders to be seated (the nose hand-off flight is 3 s; this only ends a stuck wait)
 const DEFAULT_PLAY_S = 20;
 
 // ── the craft, satellite-local metres ──────────────────────────────────────────────────────────────────────────────────────────
@@ -1157,6 +1158,24 @@ export class ResupplySatellite {
     return true;
   }
 
+  /**
+   * Lane s5-letgo (L2): wait for pieces that are moving between holders (a catch flying from her nose to a daughter's rack, a daughter carrying it): they cannot be
+   * planned (a plan is only good where the piece stays, `_planFits`) nor detached (`handOverCollarCatch` refuses a net still flying). The wait is a job in the line
+   * like a plan, so the berthed satellite hovers and does not dock while it lasts (`jobsPending`, `_holdsDock`); it is on no take's `waitS` and no `_gateS`, so it does
+   * not count toward `TAKE_WAIT_MAX_S`. When none of the pieces is moving any more (or `TRANSIT_WAIT_MAX_S` of game time have passed) `onSeated(pieces, timedOut)` is called
+   * with the pieces still alive, and the caller asks for them again as what their holder is NOW (a nose piece that landed on a rack is a rack piece).
+   * @param {object[]} pieces the field's own bodies
+   * @param {{moving: ((d: object) => boolean), onSeated?: ((pieces: object[], timedOut: boolean) => void)}} o `moving(d)`: is the piece in transit
+   * @returns {boolean} false when there was nothing to wait for
+   */
+  awaitSeated(pieces, { moving, onSeated = null } = {}) {
+    const list = [];
+    for (const d of pieces || []) if (d && !this.hasPiece(d) && !list.includes(d)) list.push(d);
+    if (!list.length || typeof moving !== 'function') return false;
+    this._jobs.push({ pieces: list, wait: true, moving, onSeated, waitS: 0 });
+    return true;
+  }
+
   /** Is this piece already being planned or taken (asked for, waiting for the arm, or in its grip)? */
   hasPiece(d) {
     for (const j of this._jobs) if (j.pieces.includes(d)) return true;
@@ -1267,6 +1286,17 @@ export class ResupplySatellite {
     this._serviceFold(gdt);
     const job = this._jobs[0];
     if (!job) return;
+    if (job.wait) {
+      // L2: a wait for pieces in transit (`awaitSeated`): the berthed satellite hovers; nothing is planned, detached or paid until they are seated
+      job.waitS += gdt;
+      const alive = job.pieces.filter((d) => d && d.alive !== false);
+      const moving = alive.some((d) => job.moving(d));
+      const timedOut = moving && job.waitS > TRANSIT_WAIT_MAX_S;
+      if (moving && !timedOut) return;
+      this._jobs.shift();
+      if (typeof job.onSeated === 'function') job.onSeated(alive, timedOut);
+      return;
+    }
     if (job.fold) {
       // rack pieces: her radiators fold first, once the pieces ahead of them (the nose piece) are taken with the radiators as they stand, so no plan is made on a hull that is moving
       if (!job.foldAsked) {

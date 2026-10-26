@@ -2620,21 +2620,37 @@ export class GameFlowManager {
    * folded to 90 deg, the planning spread over the next frames), and calls back with the ones it can take: each of those is detached, taken and
    * paid in that frame; a piece it cannot reach gets a comms line and stays aboard, unpaid, its fate still `satellite`: nothing vanishes. The
    * satellite waits at hover until its plans are done. A piece on the collar it cannot take keeps the collar occupied: it waits for it to clear.
+   * Lane s5-letgo (L2): a piece that is moving between holders (`_pieceInTransit`) is not planned: the satellite waits for it
+   * (`ResupplySatellite.awaitSeated`) and it is asked for again, as what its holder is by then, once it is seated.
    * @param {object[]} pieces the ledger's bodies
-   * @param {{atCollar?: boolean}} [o] `atCollar`: the berth's own hand-over of the nose piece (its own pay line)
+   * @param {{atCollar?: boolean, noWait?: boolean}} [o] `atCollar`: the berth's own hand-over of the nose piece (its own pay line); `noWait`: ask now even for a
+   *   piece in transit (the wait for it timed out: the old answer, a line)
    * @returns {boolean} false = there is no satellite entity to ask (the caller hands them over as before)
    */
-  _askSatellite(pieces, { atCollar = false } = {}) {
+  _askSatellite(pieces, { atCollar = false, noWait = false } = {}) {
     const sat = activeResupplySatellite();
     if (!sat || typeof sat.requestTakes !== 'function') return false;
-    const list = pieces.filter((d) => d && bigPieces.isPending(d) && !sat.hasPiece(d));
+    const asked = pieces.filter((d) => d && bigPieces.isPending(d) && !sat.hasPiece(d));
+    const waits = !noWait && typeof sat.awaitSeated === 'function' ? asked.filter((d) => this._pieceInTransit(d)) : [];
+    const list = waits.length ? asked.filter((d) => !waits.includes(d)) : asked;
     const collar = list.filter((d) => bigPieces.holderOf(d.id) === 'collar');
     const racks = list.filter((d) => !collar.includes(d));
+    const waitFor = (ds) => sat.awaitSeated(ds, {
+      moving: (d) => this._pieceInTransit(d),
+      // fix round 1 (M1): asked for again only if it is still on the collar (the collar asks for pieces of any fate) or is marked for the satellite: a push or
+      // keep piece that flew from the nose to a rack is no business of hers (she would fold her radiators and plan a take for nothing)
+      onSeated: (seated, timedOut) => {
+        const mine = (d) => bigPieces.isPending(d) && (bigPieces.holderOf(d.id) === 'collar' || (d._disposal && d._disposal.fate === 'satellite'));
+        this._askSatellite(seated.filter(mine), { atCollar, noWait: timedOut });
+      },
+    });
     const settle = (group, ok, collarGroup) => {
       for (const d of group) {
         if (!bigPieces.isPending(d)) continue;                           // (disposed some other way while it was planned)
         if (!collarGroup && !(d._disposal && d._disposal.fate === 'satellite')) continue;   // (the fate was changed while it was planned)
         if (ok.has(d) && this._handOverPiece(d, { collarLead: collarGroup && atCollar })) continue;
+        // fix round 1 (M2): the piece left its holder while it was planned (the nose hand-off came due in the middle of the plan): wait for it again
+        if (!noWait && typeof sat.awaitSeated === 'function' && this._pieceInTransit(d) && waitFor([d])) continue;
         // no line out (or it could not be taken after all: the plan went stale, it could not be freed): it stays aboard, unpaid, its fate unchanged
         eventBus.emit(Events.COMMS_MESSAGE, { text: `The satellite could not reach the ${pieceName(d)}. It stays aboard.`, priority: 'info', _keep: true });
       }
@@ -2652,7 +2668,35 @@ export class GameFlowManager {
     };
     if (collar.length) sat.requestTakes(collar, { collar: true, onReady: (ok) => settle(collar, ok, true) });
     if (racks.length) sat.requestTakes(racks, { fold: true, onReady: (ok) => settle(racks, ok, false) });
+    if (waits.length) waitFor(waits);
     return true;
+  }
+
+  /**
+   * @private Lane s5-letgo (L2): is this held piece moving between holders right now: the mother net around it not yet collared and processed, flying to a
+   * daughter (TRANSFERRING) or on a leash, or its daughter carrying it or not yet holding it? Its holder would refuse to let go (`handOverCollarCatch`,
+   * `detachHeldCatch`: the same refusals), and a plan made on it is stale within frames (`ResupplySatellite._planFits`). A piece held by nothing is not.
+   * @param {object} d the ledger's body @returns {boolean}
+   */
+  _pieceInTransit(d) {
+    if (!d) return false;
+    const holder = bigPieces.holderOf(d.id);
+    if (!holder) return false;
+    if (holder === 'collar') {
+      const S = Constants.CAPTURE_NET.STATES;
+      const nets = (captureNetSystem && captureNetSystem.activeNets) || [];
+      const net = nets.find((n) => n && n._isMother && n.targetDebris && n.targetDebris.id === d.id);
+      if (!net) return false;
+      if (net.state !== S.COLLARED || !net._berthProcessed || !!net._leash || !!net._leashNoseReel) return true;
+      // fix round 1 (M2): seated, but the nose hand-off is about to start: the first-tick decision not yet made (`_cargoDeclined` false), or the retry armed
+      // (`releaseNoseRetry` sets `_cargoRetryS` over `RETRY_S`: the next net tick tries the transfer). A plan made now would meet a flying piece. (The 0.5 s
+      // cadence itself is not read: a retry that comes due in the middle of a plan is caught by `settle`, which waits again for a piece that has left.)
+      const CT = (Constants.CAPTURE_NET && Constants.CAPTURE_NET.CARGO_TRANSFER) || {};
+      return net._cargoDeclined === false || (net._cargoRetryS || 0) >= (CT.RETRY_S ?? 0.5);
+    }
+    const am = this._refs && this._refs.armManager;
+    const arm = am && (am.arms || []).find((a) => a && a.id === holder.armId);
+    return !!arm && (arm.state !== Constants.ARM_STATES.HOLDING_CATCH || !!arm._carry);
   }
 
   /**
