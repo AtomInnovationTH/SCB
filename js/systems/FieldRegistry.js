@@ -105,10 +105,16 @@ export function fieldRowCount(field) {
   return Constants.FIELDS.PIECES;
 }
 
-/** @param {number} row @returns {boolean} a mission extra row (the extra group's pieces or the extra satellite), valid on any field. */
+/** @param {number} row @returns {boolean} a paired piece's row (`Constants.PAIR_FIELDS`: the pairs a mission from 2 on adds), valid on any field. */
+export function isPairRow(row) {
+  const P = Constants.PAIR_FIELDS;
+  return Number.isInteger(row) && row >= P.ROW0 && row < P.ROW0 + P.PAIRS * 2;
+}
+
+/** @param {number} row @returns {boolean} a mission extra row (the extra group's pieces, the extra satellite or a paired piece), valid on any field. */
 export function isExtraRow(row) {
   const G = Constants.SMALL_GROUP;
-  return Number.isInteger(row) && ((row >= G.EXTRA_ROW0 && row < G.EXTRA_ROW0 + G.COUNT_MAX) || row === G.SAT_ROW);
+  return Number.isInteger(row) && ((row >= G.EXTRA_ROW0 && row < G.EXTRA_ROW0 + G.COUNT_MAX) || row === G.SAT_ROW || isPairRow(row));
 }
 
 /** @returns {boolean} a row that is a piece of a small-piece group on this field (its own group, or the extra one). */
@@ -470,6 +476,21 @@ export class FieldRegistry {
     if (Number.isInteger(n) && n > 0) this._state.at = n;
     this._resume = false;
     if (Number.isInteger(n) && n >= Constants.SMALL_GROUP.FROM_MISSION && this.isOn() && !this.isBerthed() && !this.isFree()) this._addMissionExtras(this.currentField());
+    if (Number.isInteger(n) && n >= Constants.PAIR_FIELDS.FROM_MISSION && this.isOn() && !this.isBerthed() && !this.isFree()) this._addPairRows(this.currentField());
+  }
+
+  /**
+   * Owner 2026-10-25 (DECISIONS §38 row 7, `Constants.PAIR_FIELDS`): a mission from PAIR_FIELDS.FROM_MISSION on adds, to the field it
+   * starts at, its pairs of paired pieces (rows ROW0 ..) unless the field still holds an uncaught one. Saved with the field's rows, laid
+   * out by the next spawn, like the extras above. Never while berthed, never with the flag off, never before the mission it starts at.
+   * @private
+   */
+  _addPairRows(f) {
+    const P = Constants.PAIR_FIELDS;
+    const rows = this._state.remaining[f.id] || (this._state.remaining[f.id] = []);
+    if (rows.some((r) => isPairRow(r))) return;
+    for (let i = 0; i < P.PAIRS * 2; i++) rows.push(P.ROW0 + i);
+    rows.sort((a, b) => a - b);
   }
 
   /**

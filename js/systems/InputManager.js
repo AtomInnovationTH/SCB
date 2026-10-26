@@ -1248,6 +1248,18 @@ export class InputManager {
         }
         break;
 
+      // Q key (pair-shot, owner 2026-10-25 "2 a"; plan daughter-pairs-1025 S2): launch the PAIR the game has marked (a daughter and her
+      // opposite partner, each at her own piece, in the same frame). The second piece shows a second reticle while a pair is offered;
+      // with none offered the key says so in one line. D still launches the one selected daughter alone. The touch PAIR button presses
+      // this same key (TouchControls).
+      case 'KeyQ':
+        if (isGameplay && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && d.armManager && typeof d.armManager.firePair === 'function') {
+          const started = d.armManager.firePair();
+          if (started) d.audioSystem?.playClick(); else d.audioSystem?.playDeny?.();
+          e.preventDefault();
+        }
+        break;
+
       // A key: Shift+A = "go salvage the field" combo; plain A = autopilot
       // toggle. Hotkey revamp 2026-06-14: works in both mother and daughter
       // modes (WASD thrust removed).

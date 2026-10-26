@@ -27,7 +27,7 @@ import { wingsHint } from './WingsHint.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import { tripRefuses } from './TransferTrip.js';
 import { outOfMotherNetsLine } from './resupplyWords.js';
-import { wrapRefusalLine } from './PieceClaim.js';
+import { wrapRefusalLine, linesCross, pairReadyLine } from './PieceClaim.js';
 import { checkActiveSatArming } from './ActiveSatGuard.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km) */
@@ -415,6 +415,302 @@ const PHASE = Object.freeze({
   HOLD:            'HOLD',
 });
 
+// ============================================================================
+// PAIR SHOT geometry (owner 2026-10-25 "2 a", DECISIONS §38 row 5; plan daughter-pairs-1025 S2). Pure: arrays in, arrays out, no ship.
+// ============================================================================
+// Two opposite struts at the same angle α fly apart by 2α (α <= 90 deg) or 360 - 2α, and the sum of their two launch lines lies on the
+// barrel axis. The mother has no commanded roll: she turns yaw and pitch only, so her barrel axis (+z) moves by the minimal arc from where
+// it points to a new direction n and her roll stays what it is (`psRollKept`). The search is over n (a cap of TURN_DEG about the barrel
+// now) and α; the miss of one daughter is the angle between her launch line and the bearing from her strut tip to her piece (the strut
+// tip, not the ship's centre: a piece 22 m away is 4 deg off the tip's bearing). tmp/pairs/s2/geom.mjs is the measuring twin (a grid of
+// 1,400 barrel directions and Nelder-Mead on the six best); this one needs a few thousand evaluations and runs in a frame.
+
+const PS_D2R = Math.PI / 180;
+/** pair-shot: milliseconds of the pair look one frame may spend (a unit of work is 0.1-1.4 ms; the frame stops after the first unit past this) */
+const PAIR_FRAME_MS = 1;
+
+const PS_TAB_STEP = 0.5 * PS_D2R;
+const PS_TAB_N = 361;
+const _psTabs = new WeakMap();
+
+/** @private strut tip (ship frame, metres) every half degree of strut angle for one dock position, cached by the dock object */
+function psTipTable(dp) {
+  let t = _psTabs.get(dp);
+  if (t) return t;
+  t = new Float64Array(PS_TAB_N * 3);
+  for (let k = 0; k < PS_TAB_N; k++) {
+    const tip = strutTipMeters(dp, k * PS_TAB_STEP);
+    t[3 * k] = tip.x; t[3 * k + 1] = tip.y; t[3 * k + 2] = tip.z;
+  }
+  _psTabs.set(dp, t);
+  return t;
+}
+
+/** @private launch line (unit, body) and strut tip (body, metres) of strut `s` at angle `alpha` into `out` (6 numbers: d then tip) */
+function psStrutAt(s, alpha, out) {
+  const sa = Math.sin(alpha), ca = Math.cos(alpha);
+  out[0] = sa * s.cosAz; out[1] = sa * s.sinAz; out[2] = -ca;
+  const f = Math.min(PS_TAB_N - 1.000001, Math.max(0, alpha / PS_TAB_STEP)), k = Math.floor(f), w = f - k, tb = s.tab;
+  out[3] = tb[3 * k] * (1 - w) + tb[3 * k + 3] * w;
+  out[4] = tb[3 * k + 1] * (1 - w) + tb[3 * k + 4] * w;
+  out[5] = tb[3 * k + 2] * (1 - w) + tb[3 * k + 5] * w;
+}
+
+/** @private angle (deg) between launch line `sd` (body, rotated by row-major `R`) and the bearing from the tip to piece `T` (world, metres) */
+function psMiss(R, sd, T) {
+  const dx = R[0] * sd[0] + R[1] * sd[1] + R[2] * sd[2], dy = R[3] * sd[0] + R[4] * sd[1] + R[5] * sd[2], dz = R[6] * sd[0] + R[7] * sd[1] + R[8] * sd[2];
+  const tx = T[0] - (R[0] * sd[3] + R[1] * sd[4] + R[2] * sd[5]);
+  const ty = T[1] - (R[3] * sd[3] + R[4] * sd[4] + R[5] * sd[5]);
+  const tz = T[2] - (R[6] * sd[3] + R[7] * sd[4] + R[8] * sd[5]);
+  const l = Math.sqrt(tx * tx + ty * ty + tz * tz) || 1;
+  const c = (dx * tx + dy * ty + dz * tz) / l;
+  return Math.acos(c > 1 ? 1 : c < -1 ? -1 : c) / PS_D2R;
+}
+
+/** @private row-major rotation of the minimal arc taking unit z0 to unit n, times R0, into `out` */
+function psRollKept(z0, n, R0, out) {
+  const cx = z0[1] * n[2] - z0[2] * n[1], cy = z0[2] * n[0] - z0[0] * n[2], cz = z0[0] * n[1] - z0[1] * n[0];
+  const dot = z0[0] * n[0] + z0[1] * n[1] + z0[2] * n[2];
+  const sl = Math.sqrt(cx * cx + cy * cy + cz * cz);
+  let x, y, z, c, s;
+  if (sl < 1e-9) {
+    if (dot > 0) { for (let i = 0; i < 9; i++) out[i] = R0[i]; return out; }
+    const px = Math.abs(z0[0]) < 0.9 ? 1 : 0, py = 1 - px;                 // antipodal: a half turn about any axis normal to z0
+    x = -z0[2] * py; y = z0[2] * px; z = z0[0] * py - z0[1] * px;
+    const l = Math.sqrt(x * x + y * y + z * z); x /= l; y /= l; z /= l; c = -1; s = 0;
+  } else {
+    x = cx / sl; y = cy / sl; z = cz / sl; c = dot; s = sl;
+  }
+  const t = 1 - c;
+  const a0 = t * x * x + c, a1 = t * x * y - s * z, a2 = t * x * z + s * y;
+  const b0 = t * x * y + s * z, b1 = t * y * y + c, b2 = t * y * z - s * x;
+  const c0 = t * x * z - s * y, c1 = t * y * z + s * x, c2 = t * z * z + c;
+  out[0] = a0 * R0[0] + a1 * R0[3] + a2 * R0[6]; out[1] = a0 * R0[1] + a1 * R0[4] + a2 * R0[7]; out[2] = a0 * R0[2] + a1 * R0[5] + a2 * R0[8];
+  out[3] = b0 * R0[0] + b1 * R0[3] + b2 * R0[6]; out[4] = b0 * R0[1] + b1 * R0[4] + b2 * R0[7]; out[5] = b0 * R0[2] + b1 * R0[5] + b2 * R0[8];
+  out[6] = c0 * R0[0] + c1 * R0[3] + c2 * R0[6]; out[7] = c0 * R0[1] + c1 * R0[4] + c2 * R0[7]; out[8] = c0 * R0[2] + c1 * R0[5] + c2 * R0[8];
+  return out;
+}
+
+/** @private a barrel direction on the cap about unit z0: normalise(z0 + a·u + b·v) into `out` */
+function psCapDir(z0, u, v, a, b, out) {
+  const x = z0[0] + a * u[0] + b * v[0], y = z0[1] + a * u[1] + b * v[1], z = z0[2] + a * u[2] + b * v[2];
+  const l = Math.sqrt(x * x + y * y + z * z) || 1;
+  out[0] = x / l; out[1] = y / l; out[2] = z / l;
+  return out;
+}
+
+/** @private row-major 9 of a THREE quaternion (body to world) */
+export function pairRotationOf(q, out = new Float64Array(9)) {
+  const x = q.x, y = q.y, z = q.z, w = q.w;
+  out[0] = 1 - 2 * (y * y + z * z); out[1] = 2 * (x * y - z * w); out[2] = 2 * (x * z + y * w);
+  out[3] = 2 * (x * y + z * w); out[4] = 1 - 2 * (x * x + z * z); out[5] = 2 * (y * z - x * w);
+  out[6] = 2 * (x * z - y * w); out[7] = 2 * (y * z + x * w); out[8] = 1 - 2 * (x * x + y * y);
+  return out;
+}
+
+/**
+ * pair-shot P1: the geometry of one pair of opposite struts, ready for `solvePairAim`.
+ * @param {{azimuthDeg:number}} dpA @param {{azimuthDeg:number}} dpB the two dock positions (as `ArmManager._dockPositions`)
+ * @param {number} alphaLoRad @param {number} alphaHiRad the strut angles the launch gate leaves clear for this pair
+ */
+export function pairGeometry(dpA, dpB, alphaLoRad, alphaHiRad) {
+  const mk = (dp) => {
+    const az = dp.azimuthDeg * PS_D2R;
+    return { cosAz: Math.cos(az), sinAz: Math.sin(az), tab: psTipTable(dp) };
+  };
+  return { A: mk(dpA), B: mk(dpB), lo: alphaLoRad, hi: alphaHiRad };
+}
+
+/** @private max miss of the pair at attitude R, strut angle alpha, struts (sa, sb) aimed at (Ta, Tb); writes both misses to `m` */
+function psPairMiss(g, R, alpha, swap, T1, T2, sdA, sdB, m) {
+  psStrutAt(g.A, alpha, sdA); psStrutAt(g.B, alpha, sdB);
+  const a = psMiss(R, sdA, swap ? T2 : T1), b = psMiss(R, sdB, swap ? T1 : T2);
+  m[0] = a; m[1] = b;
+  return a > b ? a : b;
+}
+
+/**
+ * pair-shot P1 (pure): the attitude and the one strut angle that put both launch lines of a pair of opposite struts closest to two pieces,
+ * the mother's roll kept (her barrel turns by the minimal arc; no roll turn) and the barrel turn at most `turnDeg`. A coarse grid (barrel
+ * directions on the cap x strut angles near half the pieces' separation, both ways round) seeds Nelder-Mead on (barrel, α).
+ * The result minimises the larger miss plus `opts.turnWeight` x the turn in degrees (so a turn that buys no accuracy is not taken).
+ * @param {object} g from `pairGeometry`
+ * @param {ArrayLike<number>} R0 her attitude now, row-major 9 (body to world, `pairRotationOf`)
+ * @param {number[]} T1 @param {number[]} T2 the two pieces, world, metres, from her centre of mass
+ * @param {{turnDeg?:number, turnWeight?:number}} [opts]
+ * @returns {{alpha:number, swap:boolean, missA:number, missB:number, miss:number, turnDeg:number, n:number[], score:number}|null}
+ *   alpha rad; swap false = strut A takes T1 and B takes T2; misses in degrees; n the barrel direction (world, unit)
+ */
+export function solvePairAim(g, R0, T1, T2, opts = {}) {
+  const all = solvePairAimAll(g, R0, T1, T2, opts);
+  return all.length ? all[0] : null;
+}
+
+/**
+ * pair-shot P1: `solvePairAim`'s answer for each way of giving the two pieces to the two struts, best first (the caller takes the first
+ * that its other checks leave standing: the two tethers must not cross).
+ * @returns {Array<{alpha:number, swap:boolean, missA:number, missB:number, miss:number, turnDeg:number, n:number[], score:number}>}
+ */
+export function solvePairAimAll(g, R0, T1, T2, opts = {}) {
+  const turnDeg = Math.min(80, opts.turnDeg ?? 30), turnW = opts.turnWeight ?? 0.05;
+  const z0 = [R0[2], R0[5], R0[8]];
+  const ref = Math.abs(z0[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  let u = [z0[1] * ref[2] - z0[2] * ref[1], z0[2] * ref[0] - z0[0] * ref[2], z0[0] * ref[1] - z0[1] * ref[0]];
+  const ul = Math.hypot(u[0], u[1], u[2]); u = [u[0] / ul, u[1] / ul, u[2] / ul];
+  const v = [z0[1] * u[2] - z0[2] * u[1], z0[2] * u[0] - z0[0] * u[2], z0[0] * u[1] - z0[1] * u[0]];
+  const tanMax = Math.tan(turnDeg * PS_D2R);
+  // the bearing of the two pieces as the centre sees them, for the strut angle to start from (flight angle between the two daughters = psi)
+  const l1 = Math.hypot(T1[0], T1[1], T1[2]) || 1, l2 = Math.hypot(T2[0], T2[1], T2[2]) || 1;
+  const psi = Math.acos(Math.max(-1, Math.min(1, (T1[0] * T2[0] + T1[1] * T2[1] + T1[2] * T2[2]) / (l1 * l2)))) / PS_D2R;
+  const sdA = new Float64Array(6), sdB = new Float64Array(6), m = [0, 0], R = new Float64Array(9), n = [0, 0, 0];
+  const lo = g.lo / PS_D2R, hi = g.hi / PS_D2R;
+  const clampA = (a) => Math.max(g.lo, Math.min(g.hi, a));
+  // stage 1: the cap grid (rings of 6 x ring-number points), the strut angles around psi/2 and 180 - psi/2
+  const caps = [[0, 0]];
+  const rings = 5;
+  for (let k = 1; k <= rings; k++) {
+    const r = tanMax * k / rings, cnt = 6 * k;
+    for (let j = 0; j < cnt; j++) caps.push([r * Math.cos(2 * Math.PI * j / cnt), r * Math.sin(2 * Math.PI * j / cnt)]);
+  }
+  const Rs = caps.map(([a, b]) => psRollKept(z0, psCapDir(z0, u, v, a, b, n), R0, new Float64Array(9)));
+  const seeds = [];                                              // best (cap, alpha) per (swap, branch)
+  for (const swap of [false, true]) {
+    for (const branch of [0, 1]) {
+      const centre = branch === 0 ? psi / 2 : 180 - psi / 2;
+      let best = null;
+      for (let a = centre - 20; a <= centre + 20.001; a += 4) {
+        const al = clampA(a * PS_D2R);
+        for (let k = 0; k < Rs.length; k++) {
+          const e = psPairMiss(g, Rs[k], al, swap, T1, T2, sdA, sdB, m);
+          if (!best || e < best.e) best = { e, k, al, swap };
+        }
+      }
+      if (best) seeds.push(best);
+    }
+  }
+  // stage 2: Nelder-Mead on (cap a, cap b, alpha) from each seed; objective = larger miss + turnW x turn
+  const obj = (x, swap) => {
+    let a = x[0], b = x[1];
+    const r = Math.hypot(a, b);
+    if (r > tanMax) { a *= tanMax / r; b *= tanMax / r; }
+    psCapDir(z0, u, v, a, b, n);
+    psRollKept(z0, n, R0, R);
+    const al = clampA(x[2]);
+    const e = psPairMiss(g, R, al, swap, T1, T2, sdA, sdB, m);
+    const turn = Math.acos(Math.max(-1, Math.min(1, z0[0] * n[0] + z0[1] * n[1] + z0[2] * n[2]))) / PS_D2R;
+    return e + turnW * turn + (r > tanMax ? 50 * (r - tanMax) : 0);
+  };
+  const bySwap = [null, null];
+  for (const sd of seeds) {
+    if (sd.e > 40) continue;                         // the coarse grid is within a few degrees of the best: nothing near 10 is left here
+    const f = (x) => obj(x, sd.swap);
+    let r = psNelderMead(f, [caps[sd.k][0], caps[sd.k][1], sd.al], [0.04, 0.04, 3 * PS_D2R], 110);
+    if (r.f > 3) r = psNelderMead(f, r.x, [0.02, 0.02, 1.5 * PS_D2R], 110);     // a restart on a fresh simplex: the larger-miss objective has kinks
+    const k = sd.swap ? 1 : 0;
+    if (!bySwap[k] || r.f < bySwap[k].f) bySwap[k] = { f: r.f, x: r.x, swap: sd.swap };
+  }
+  const out = [];
+  for (const res of bySwap) {
+    if (!res) continue;
+    let a = res.x[0], b = res.x[1];
+    const rr = Math.hypot(a, b);
+    if (rr > tanMax) { a *= tanMax / rr; b *= tanMax / rr; }
+    psCapDir(z0, u, v, a, b, n);
+    psRollKept(z0, n, R0, R);
+    const alpha = clampA(res.x[2]);
+    const miss = psPairMiss(g, R, alpha, res.swap, T1, T2, sdA, sdB, m);
+    const turn = Math.acos(Math.max(-1, Math.min(1, z0[0] * n[0] + z0[1] * n[1] + z0[2] * n[2]))) / PS_D2R;
+    out.push({ alpha, swap: res.swap, missA: m[0], missB: m[1], miss, turnDeg: turn, n: [n[0], n[1], n[2]], score: miss + turnW * turn });
+  }
+  return out.sort((p, q) => p.score - q.score);
+}
+
+/** pair-shot: her attitude when her barrel points along `n`, roll kept (row-major 9) */
+export function pairAttitudeFor(R0, n) {
+  return psRollKept([R0[2], R0[5], R0[8]], n, R0, new Float64Array(9));
+}
+
+/**
+ * pair-shot: would the two daughters' tethers swap sides on the way? The launch ceremony's own test (`linesCross`) on the two lines as
+ * they will lie: each from her tether anchor on her strut (85 % out, `_aimedAnchorShipM`) to her piece, in her frame at attitude R.
+ * Two struts at one angle on opposite sides, each aimed within MISS_DEG of her piece, rarely swap; side by side (α near 180) they can.
+ */
+export function pairTethersCross(g, R, alpha, swap, T1, T2) {
+  const V5 = Constants.OCTOPUS_V5, reel = V5.STRUT_LENGTH * 0.85;
+  const sa = Math.sin(alpha), ca = Math.cos(alpha);
+  const line = (s, T) => {
+    const dx = sa * s.cosAz, dy = sa * s.sinAz, dz = -ca;
+    return {
+      a: [s.cosAz * V5.COLLAR_RADIUS + dx * reel, s.sinAz * V5.COLLAR_RADIUS + dy * reel, V5.COLLAR_Y + dz * reel],
+      b: [R[0] * T[0] + R[3] * T[1] + R[6] * T[2], R[1] * T[0] + R[4] * T[1] + R[7] * T[2], R[2] * T[0] + R[5] * T[1] + R[8] * T[2]],
+    };
+  };
+  return linesCross(line(g.A, swap ? T2 : T1), line(g.B, swap ? T1 : T2));
+}
+
+/**
+ * pair-shot: both misses (degrees) of a pair at its attitude R and strut angle alpha, for the barrier at the spring and for the tests.
+ * @returns {{missA:number, missB:number}}
+ */
+export function pairMisses(g, R, alpha, swap, T1, T2) {
+  const m = [0, 0];
+  psPairMiss(g, R, alpha, swap, T1, T2, new Float64Array(6), new Float64Array(6), m);
+  return { missA: m[0], missB: m[1] };
+}
+
+/**
+ * pair-shot: the barrel direction that keeps the pair on its two pieces while they drift, the strut angle and the assignment kept
+ * (a few Nelder-Mead steps from the last answer, her roll kept from her attitude now). The aim's provider calls it a few times a second.
+ * @returns {{n:number[], missA:number, missB:number}}
+ */
+export function refinePairAim(g, R0, T1, T2, alpha, swap, nPrev, turnDeg = 30) {
+  const z0 = [R0[2], R0[5], R0[8]];
+  // tangent basis at the previous barrel direction
+  const ref = Math.abs(nPrev[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  let u = [nPrev[1] * ref[2] - nPrev[2] * ref[1], nPrev[2] * ref[0] - nPrev[0] * ref[2], nPrev[0] * ref[1] - nPrev[1] * ref[0]];
+  const ul = Math.hypot(u[0], u[1], u[2]); u = [u[0] / ul, u[1] / ul, u[2] / ul];
+  const v = [nPrev[1] * u[2] - nPrev[2] * u[1], nPrev[2] * u[0] - nPrev[0] * u[2], nPrev[0] * u[1] - nPrev[1] * u[0]];
+  const sdA = new Float64Array(6), sdB = new Float64Array(6), m = [0, 0], R = new Float64Array(9), n = [0, 0, 0];
+  const f = (x) => {
+    psCapDir(nPrev, u, v, x[0], x[1], n);
+    const turn = Math.acos(Math.max(-1, Math.min(1, z0[0] * n[0] + z0[1] * n[1] + z0[2] * n[2]))) / PS_D2R;
+    psRollKept(z0, n, R0, R);
+    return psPairMiss(g, R, alpha, swap, T1, T2, sdA, sdB, m) + (turn > turnDeg ? 5 * (turn - turnDeg) : 0);
+  };
+  const r = psNelderMead(f, [0, 0], [0.02, 0.02], 40);
+  psCapDir(nPrev, u, v, r.x[0], r.x[1], n);
+  psRollKept(z0, n, R0, R);
+  psPairMiss(g, R, alpha, swap, T1, T2, sdA, sdB, m);
+  return { n: [n[0], n[1], n[2]], missA: m[0], missB: m[1] };
+}
+
+/** @private Nelder-Mead minimiser (no allocation beyond the simplex; `iters` caps the steps, a spread under 1e-4 ends it) */
+function psNelderMead(f, x0, step, iters) {
+  const dim = x0.length;
+  let S = [x0.slice()];
+  for (let i = 0; i < dim; i++) { const x = x0.slice(); x[i] += step[i]; S.push(x); }
+  let F = S.map(f);
+  for (let it = 0; it < iters; it++) {
+    const idx = F.map((_, i) => i).sort((p, q) => F[p] - F[q]);
+    S = idx.map((i) => S[i]); F = idx.map((i) => F[i]);
+    if (F[dim] - F[0] < 1e-4) break;
+    const c = new Array(dim).fill(0);
+    for (let i = 0; i < dim; i++) for (let j = 0; j < dim; j++) c[j] += S[i][j] / dim;
+    const pt = (t) => c.map((val, j) => val + t * (S[dim][j] - val));
+    const xr = pt(-1), fr = f(xr);
+    if (fr < F[0]) { const xe = pt(-2), fe = f(xe); if (fe < fr) { S[dim] = xe; F[dim] = fe; } else { S[dim] = xr; F[dim] = fr; } }
+    else if (fr < F[dim - 1]) { S[dim] = xr; F[dim] = fr; }
+    else {
+      const xc = pt(fr < F[dim] ? -0.5 : 0.5), fc = f(xc);
+      if (fc < Math.min(fr, F[dim])) { S[dim] = xc; F[dim] = fc; }
+      else for (let i = 1; i <= dim; i++) { S[i] = S[i].map((val, j) => S[0][j] + 0.5 * (val - S[0][j])); F[i] = f(S[i]); }
+    }
+  }
+  let b = 0;
+  for (let i = 1; i <= dim; i++) if (F[i] < F[b]) b = i;
+  return { x: S[b], f: F[b] };
+}
+
 export class AutopilotSystem {
   constructor() {
     /** @type {boolean} */
@@ -573,6 +869,18 @@ export class AutopilotSystem {
     this._preturnSaid = null;
     /** wheel-preturn: why the last pre-turn ended (diagnostic; tests read it). */
     this._preturnEnd = null;
+    /** pair-shot (S2): the pair offered now (`getPairOffer()`), or null. */
+    this._pairOffer = null;
+    /** pair-shot: something changed (a pick) and the offer is looked at on the next frame. */
+    this._pairDirty = true;
+    /** pair-shot: seconds since the offer was last looked at; and a running clock for the aim's provider. */
+    this._pairClock = 0;
+    this._pairT = 0;
+    /** pair-shot: the key of the pair the "ready" line was last said for (once per pair); the single-shot check for the picked piece. */
+    this._pairSaid = null;
+    this._pairSingle = null;
+    /** pair-shot: the look at the pieces under way (spread over frames), or null. */
+    this._pairSearch = null;
 
     // Aim-before-launch: scratch for the attitude coroutine (net + daughter modes).
     this._aimBoresightWorld = new THREE.Vector3();
@@ -1830,6 +2138,33 @@ export class AutopilotSystem {
     const AIM = Constants.AIM;
     const tolRad = AIM.DAUGHTER_AIM_TOLERANCE_DEG * Math.PI / 180;
     const rate = AIM.AP_ROT_RATE * (AIM.ONBOARDING_ROT_RATE_MULT || 1);
+    // pair-shot (P4): with a pair offered for this daughter and piece, the pre-turn turns her toward the PAIR's attitude (barrel on the pair's
+    // direction, both struts to its angle) instead of the single shot; same guards, same wheel-only rule
+    const offer = this._pairOffer;
+    if (offer && (arm === offer.armA || arm === offer.armB) && offer.t1 === target && this._pairPieceOk(offer.t2)) {
+      const pprov = this._pairAimProvider(offer);
+      const pshot = this._planPairShot(pprov, { arm: offer.armA, armManager: am, pair: { armB: offer.armB, alpha: offer.alpha } }, AIM.AIM_TIMEOUT_S, tolRad, rate);
+      if (pshot && pshot.errRad > tolRad) {
+        const pwheels = p.attitudeTorqueSource({ spinUp: true, angleRad: pshot.errRad - 0.5 * tolRad, nx: pshot.nx, ny: pshot.ny, limitS: Infinity, quiet: true });
+        if (pwheels === 'wheels') {
+          this._preturn = {
+            mode: 'daughter', arm, armManager: am, pairIndex: arm.index, target, provider: pprov, shot: pshot,
+            pair: { armB: offer.armA === arm ? offer.armB : offer.armA, armA: arm, alpha: offer.alpha, key: offer.key },
+            alphaF: offer.alpha,
+            tolRad, stopErr: 0.5 * tolRad, rate,
+            sloth: true, src: 'wheels', burn: null, axX: pshot.nx, axY: pshot.ny, omega: 0,
+            phase: 'turn', elapsed: 0, recheckS: Constants.WHEEL_PRETURN.RECHECK_S,
+            ease: { durationS: 0 },
+          };
+          p.aimHold = true;
+          if (this._preturnSaid !== offer.key) {
+            this._preturnSaid = offer.key;
+            eventBus.emit(Events.COMMS_MESSAGE, { text: 'Turning on the reaction wheels toward the pair shot (no gas).', priority: 'info', source: 'HOUSTON' });
+          }
+        }
+      }
+      return;
+    }
     const provider = this._preturnProvider(arm, target);
     // the shot the fire would take right now (the aim's own 30 s for the wheels): the pre-turn does the first part of that very aim, on
     // the wheels, so a fire asked for later finds less left to turn. (Priced with the wheels free for any length it would head for the
@@ -1890,6 +2225,8 @@ export class AutopilotSystem {
     const c = this._preturnCandidate(pt.target, slow);
     if (!c || c.arm !== pt.arm || c.target !== pt.target) {
       this._endPreturn(c ? 'another pick' : 'conditions gone');
+    } else if (pt.pair && (!this._pairOffer || this._pairOffer.key !== pt.pair.key)) {
+      this._endPreturn('the pair is gone');                          // pair-shot: the offer ended or changed (the next frame plans the right turn)
     }
   }
 
@@ -1919,7 +2256,7 @@ export class AutopilotSystem {
     const q = p.quaternion;
     const az = this._aimAzimuth(pt);
     const bm = this._aimBm;
-    strutLocalDirection(pt.alphaF, az, bm);
+    if (pt.pair) bm.set(0, 0, 1); else strutLocalDirection(pt.alphaF, az, bm);   // pair-shot: her barrel is the boresight
     bm.applyQuaternion(q).normalize();
     const errM = Math.acos(Math.max(-1, Math.min(1, bm.dot(T))));
 
@@ -1930,8 +2267,10 @@ export class AutopilotSystem {
     // turns her again.
     const arm = pt.arm;
     if (pt.phase === 'hold') {
-      if (arm._strutTargetAlpha === undefined && Math.abs(arm.getAimAlpha() - pt.alphaF) > 1e-6) {
-        if (arm.setAimAlpha(pt.alphaF, dt, pt.ease) === false) { this._endPreturn('hinge locked'); return; }
+      for (const sa of (pt.pair ? [arm, pt.pair.armB] : [arm])) {
+        if (sa._strutTargetAlpha === undefined && Math.abs(sa.getAimAlpha() - pt.alphaF) > 1e-6) {
+          if (sa.setAimAlpha(pt.alphaF, dt, pt.ease) === false) { this._endPreturn('hinge locked'); return; }
+        }
       }
       if (errM <= Constants.WHEEL_PRETURN.REENGAGE_DEG * Math.PI / 180) return;
       pt.phase = 'turn';
@@ -2004,6 +2343,7 @@ export class AutopilotSystem {
     // internal safety cap releases if one is ever missed.
     this._tickAttitudeHold(dtWorld > 0 ? dt : 0);   // the 120 s cap does not run while the world is held
     this._tickLaunchHold(dtWorld > 0 ? dt : 0);     // launch-seq: the hold from the end of the aim to the spring
+    if (dtWorld > 0) this._tickPairOffer(dt);       // pair-shot: the second piece for a picked daughter's opposite partner (before the pre-turn reads it)
     this._tickPreturn(dt, dtWorld);                 // wheel-preturn: the wheels turn her toward a picked daughter's shot
 
     // trip-melt D4: the transfer trip's prograde hold - attitude only, not the autopilot. A held world (the drawer)
@@ -3248,7 +3588,9 @@ export class AutopilotSystem {
     eventBus.on(Events.TARGET_CLEARED, () => this._preturnDrop('piece cleared'));
     eventBus.on(Events.ARM_DESELECT, () => this._preturnDrop('daughter deselected'));
     eventBus.on(Events.MOTHER_MANUAL_ROTATE, () => this._preturnDrop('arrow key'));
-    eventBus.on(Events.GAME_RESET, () => { this._preturnDrop('new game'); this._preturnSaid = null; });
+    eventBus.on(Events.GAME_RESET, () => { this._preturnDrop('new game'); this._preturnSaid = null; this._pairOffer = null; this._pairSaid = null; this._pairSingle = null; this._pairSearch = null; this._pairDirty = true; });
+    // pair-shot: a pick (piece, daughter) or a cleared pick looks the offer up again on the next frame
+    for (const ev of [Events.TARGET_SELECTED, Events.TARGET_CLEARED, Events.ARM_SELECT, Events.ARM_DESELECT]) eventBus.on(ev, () => { this._pairDirty = true; });
 
     // Conjunction warning (tier ≥ 2) → auto-disengage (CA overrides AP)
     eventBus.on(Events.CONJUNCTION_WARNING, (data) => {
@@ -3541,7 +3883,13 @@ export class AutopilotSystem {
     const slothAtStart = typeof this._player.isSlothMode === 'function' && this._player.isSlothMode();
     // chest-shot (owner 10-25, DECISIONS §38 row 5): a daughter aim picks the strut angle of the cheaper shot (today's angle or the chest
     // angle, and with the kit a scan of the others) before anything is said or turned. Null: a stub without the geometry (today's way).
-    const shot = mode === 'daughter' ? this._planDaughterShot(provider, opts, aimLimitS, tolRad, rate) : null;
+    // pair-shot (S2): `opts.pair` = two opposite daughters aimed together at one strut angle; her barrel (+z) is the boresight and the
+    // provider names the barrel direction (`_planPairShot`). A pair that cannot be planned is not started.
+    const pair = (mode === 'daughter' && opts.pair) ? opts.pair : null;
+    const shot = mode === 'daughter'
+      ? (pair ? this._planPairShot(provider, opts, aimLimitS, tolRad, rate) : this._planDaughterShot(provider, opts, aimLimitS, tolRad, rate))
+      : null;
+    if (pair && !shot) return Promise.reject(Object.assign(new Error('the pair shot cannot be planned'), { code: 'OTHER' }));
     if (this._player.attitudeTorqueSource && (kitAboard || slothAtStart)) {
       const p = this._player;
       const dir = opts.aimDir || provider();
@@ -3637,6 +3985,7 @@ export class AutopilotSystem {
         arm: opts.arm || null,
         pairIndex: (opts.pairIndex != null) ? opts.pairIndex : null,
         shot,                      // chest-shot: the chosen shot (its strut angle, its estimate), null for a net aim or a stub
+        pair,                      // pair-shot: `{armB, alpha, ...}` when two opposite daughters are aimed together, else null
         alphaF: shot ? shot.alpha : undefined,   // the strut angle her boresight is aimed for (`_tickAimEased` keeps it fixed for the aim)
         azRad: null,               // resolved lazily from dock geometry
         elapsed: 0,
@@ -3854,6 +4203,418 @@ export class AutopilotSystem {
     };
   }
 
+  // ==========================================================================
+  // PAIR SHOT (owner 2026-10-25 "2 a"; DECISIONS §38 row 5; plan daughter-pairs-1025 S2)
+  // ==========================================================================
+  //
+  // With a daughter picked (keys 1-4) and a piece picked, the game also looks for a SECOND piece that the daughter's opposite partner
+  // could take in the same launch: two daughters of one type leave in the same frame at the same strut angle, so their kicks cancel
+  // (no turning kick at all, no gas for it). When such a pair exists within PAIR_SHOT's limits the second piece is marked, Comms says so
+  // once, and the Q key (or the touch button) fires both. The numbers behind the limits are in tmp/pairs/s2/RESULT.md.
+
+  /** @returns {object|null} the pair offered now (`{armA, armB, t1, t2, tA, tB, alpha, n, missA, missB, turnDeg, fuelG, gasKg, key, markId}`), or null */
+  getPairOffer() {
+    const o = this._pairOffer;
+    if (!o) return null;
+    // a look under way for a new pick takes a few frames: the standing offer is not shown for a pick that has changed (nor fired by Q)
+    const ts = this._targetSelector, am = this._armManager;
+    if (this._pairSearch && ts && typeof ts.getActiveTarget === 'function' && ts.getActiveTarget() !== o.t1) return null;
+    if (this._pairSearch && am && typeof am.getSelectedArm === 'function') { const a = am.getSelectedArm(); if (a !== o.armA && a !== o.armB) return null; }
+    return o;
+  }
+
+  /** @private A piece the pair may use: alive, a target, with a position (not a bag, not a hazard shard, not disposed of). */
+  _pairPieceOk(d) {
+    return !!d && d.alive !== false && !d._disposed && !d.hazard && !d.isBag && !!d._scenePosition;
+  }
+
+  /** @private A daughter that can leave now (the one filter of `armCanLaunchNow`, and she holds her mass). */
+  _pairArmReady(a) {
+    return !!a && a.state === Constants.ARM_STATES.DOCKED && !!a.springCharged && a.fuel > 5 && !a._aimReserved && !!a.config && !!a.position;
+  }
+
+  /** @private A piece a daughter of this kind could be launched at: under her mass cap, inside her deploy reach, not an active satellite. */
+  _pairFits(arm, d) {
+    const am = this._armManager;
+    if (!(d.mass <= arm.config.maxCaptureMass) || !arm.position) return false;
+    const reach = arm.config.tetherMax * Constants.ARM_DEPLOY_RANGE_FRACTION;
+    const dx = d._scenePosition.x - arm.position.x, dy = d._scenePosition.y - arm.position.y, dz = d._scenePosition.z - arm.position.z;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz) / Constants.SCENE_UNITS_PER_METER <= reach && !checkActiveSatArming(d, am._catalogLoader, QUIET_BUS);
+  }
+
+  /** @private metres from her centre to a piece (world frame), into `out` */
+  _pairRel(piece, out) {
+    const pos = this._player.position, sp = piece._scenePosition;
+    out[0] = (sp.x - pos.x) / M; out[1] = (sp.y - pos.y) / M; out[2] = (sp.z - pos.z) / M;
+    return out;
+  }
+
+  /** @private the provider of the pair's barrel direction: tracks the two pieces (a few Nelder-Mead steps four times a second) */
+  _pairAimProvider(offer) {
+    const out = { x: offer.n[0], y: offer.n[1], z: offer.n[2] };
+    let n = offer.n.slice(), last = -Infinity;
+    const R = new Float64Array(9), T1 = [0, 0, 0], T2 = [0, 0, 0];
+    return () => {
+      if (!this._pairPieceOk(offer.t1) || !this._pairPieceOk(offer.t2)) return null;
+      if (this._pairT - last >= 0.25 && this._player) {
+        last = this._pairT;
+        pairRotationOf(this._player.quaternion, R);
+        const r = refinePairAim(offer.g, R, this._pairRel(offer.t1, T1), this._pairRel(offer.t2, T2), offer.alpha, offer.swap, n, Constants.PAIR_SHOT.TURN_DEG);
+        n = r.n;
+      }
+      out.x = n[0]; out.y = n[1]; out.z = n[2];
+      return out;
+    };
+  }
+
+  /** pair-shot: the aim provider of the barrel direction for `offer` (the pair ceremony's `requestAimRotation`). */
+  pairAimProvider(offer) { return this._pairAimProvider(offer); }
+
+  /** @returns {{missA:number, missB:number}|null} the two launch lines' misses (degrees) right now, for the barrier at the spring */
+  pairMissesNow(offer) {
+    if (!offer || !this._player || !this._pairPieceOk(offer.t1) || !this._pairPieceOk(offer.t2)) return null;
+    const R = pairRotationOf(this._player.quaternion);
+    const alpha = typeof offer.armA.getAimAlpha === 'function' ? offer.armA.getAimAlpha() : offer.alpha;
+    return pairMisses(offer.g, R, alpha, offer.swap, this._pairRel(offer.t1, [0, 0, 0]), this._pairRel(offer.t2, [0, 0, 0]));
+  }
+
+  /**
+   * pair-shot P1: the best pair for the daughter picked and the piece picked now, or null. Preconditions are the launch ceremony's own
+   * (a daughter charged and docked, her opposite partner of the same type too, nobody owns the pieces, in reach and under the mass cap,
+   * the mother free to turn, steering not handed to something else), then every other piece in reach is tried as the second (the
+   * nearest bearings first; two pieces of one clump are one piece), and the cheapest pair by gas wins. A shot whose single launch would
+   * already empty a wheel is left single (chest-shot T3's call stands).
+   * @returns {object|null}
+   * @private
+   */
+  _pairSearchBegin() {
+    const PS = Constants.PAIR_SHOT;
+    const p = this._player, am = this._armManager, ts = this._targetSelector;
+    if (!PS || PS.ENABLED === false || !p || !am || !ts || !Constants.FEATURE_FLAGS.SEMI_AUTO_AIM) return null;
+    if (p.safeMode || !this._aimCanEase()) return null;
+    if (this._engaged || p.autopilotEngaged || this._tripHold || this._tripOmega > 0 || this._turn || this._aimCoroutine || this._attitudeHold) return null;
+    if (typeof am.getSelectedArm !== 'function' || typeof am.getDualFirePair !== 'function') return null;
+    const sel = am.getSelectedArm();
+    if (!this._pairArmReady(sel)) return null;
+    const j = am.getDualFirePair(sel.index);
+    const opp = Number.isInteger(j) ? am.arms[j] : null;
+    if (!this._pairArmReady(opp) || !opp.config || opp.config.type !== sel.config.type) return null;
+    if (typeof am._motherTurnBlock === 'function' && am._motherTurnBlock()) return null;
+    const type = sel.config.type === 'spinner' ? 'spinner' : 'weaver';
+    const armA = sel.index < opp.index ? sel : opp, armB = armA === sel ? opp : sel;
+    const dpA = am._dockPositions && am._dockPositions[armA.index], dpB = am._dockPositions && am._dockPositions[armB.index];
+    if (!dpA || !dpB) return null;
+    const T1 = ts.getActiveTarget();
+    if (!this._pairPieceOk(T1) || T1.alive === false) return null;
+    const fits = (d) => this._pairFits(sel, d);
+    if (!fits(T1) || (typeof am.launchRefusalAt === 'function' && am.launchRefusalAt(T1))) return null;
+    // the single shot for this piece: when its kick would empty a wheel the game already says so and keeps it single
+    const AIM = Constants.AIM;
+    const tolRad = AIM.DAUGHTER_AIM_TOLERANCE_DEG * Math.PI / 180, rate = AIM.AP_ROT_RATE * (AIM.ONBOARDING_ROT_RATE_MULT || 1);
+    const sk = `${sel.index}:${T1.id}`;
+    if (!this._pairSingle || this._pairSingle.key !== sk) {
+      const single = this._planDaughterShot(this._preturnProvider(sel, T1), { arm: sel, armManager: am, pairIndex: sel.index }, AIM.AIM_TIMEOUT_S, tolRad, rate);
+      this._pairSingle = { key: sk, empties: !!(single && single.empties) };
+    }
+    if (this._pairSingle.empties) return null;
+    const list = this._debrisField && this._debrisField.debrisList;
+    if (!list || !list.length) return null;
+
+    const lo = (PS.ALPHA_MIN_DEG[type] ?? 7) * Math.PI / 180, hi = Math.min(PS.ALPHA_MAX_DEG, 180) * Math.PI / 180;
+    const g = pairGeometry(dpA, dpB, lo, hi);
+    const R0 = pairRotationOf(p.quaternion), z0 = [R0[2], R0[5], R0[8]];
+    const r1 = this._pairRel(T1, [0, 0, 0]), l1 = Math.hypot(r1[0], r1[1], r1[2]) || 1;
+    const minSep = PS.MIN_SEP_DEG * Math.PI / 180;
+    // the second piece's candidates: nearest to a cheap turn first; a clump (pieces under 2 degrees apart) counts once
+    const cands = [];
+    for (const d of list) {
+      if (d === T1 || d.id === T1.id || !this._pairPieceOk(d) || d.discovered === false || !fits(d)) continue;
+      const r2 = this._pairRel(d, [0, 0, 0]), l2 = Math.hypot(r2[0], r2[1], r2[2]) || 1;
+      const cs = (r1[0] * r2[0] + r1[1] * r2[1] + r1[2] * r2[2]) / (l1 * l2);
+      if (Math.acos(Math.max(-1, Math.min(1, cs))) < minSep) continue;
+      const mx = r1[0] / l1 + r2[0] / l2, my = r1[1] / l1 + r2[1] / l2, mz = r1[2] / l1 + r2[2] / l2, ml = Math.hypot(mx, my, mz);
+      const proxy = ml > 1e-6 ? Math.acos(Math.min(1, Math.abs((z0[0] * mx + z0[1] * my + z0[2] * mz) / ml))) : Math.PI / 2;
+      cands.push({ d, r2, u: [r2[0] / l2, r2[1] / l2, r2[2] / l2], proxy });
+    }
+    cands.sort((a, b) => a.proxy - b.proxy);
+    const kept = [];
+    for (const c of cands) {
+      // a clump (pieces within 6 m of each other: the real ones are inside 2.8 m) is one piece: the nearest to a cheap turn stands for it
+      if (kept.some((k) => Math.hypot(k.r2[0] - c.r2[0], k.r2[1] - c.r2[1], k.r2[2] - c.r2[2]) < 6)) continue;
+      kept.push(c);
+      if (kept.length >= PS.MAX_CANDIDATES) break;
+    }
+    return {
+      phase: 'search', done: kept.length === 0, i: 0, sols: null, k: 0, c: null, last: false, best: null, T1, armA, armB, type, g, R0, r1, kept, tolRad, rate,
+      rateG: PS.FUEL_G_PER_DEG[type], capG: PS.FUEL_G[type], next: null,
+    };
+  }
+
+  /**
+   * pair-shot (fix F1 PS1.5): the search in small units of work. One unit is the solve for one candidate piece (0.5-0.7 ms) or the checks of
+   * one of its answers (the launch lines 1.4 ms, the gas plan 0.1 ms); trying all eight candidates in one frame was a visible hitch. With a
+   * `budgetMs` the call runs units until the budget is spent (at least one); without it, until the search is done. `st.done` turns true
+   * after the last unit.
+   * @private
+   */
+  _pairSearchStep(st, budgetMs = 0) {
+    const t0 = budgetMs > 0 ? performance.now() : 0;
+    do { this._pairSearchUnit(st); } while (!st.done && (budgetMs <= 0 || performance.now() - t0 < budgetMs));
+  }
+
+  /** @private one unit of the search: the next answer of the candidate in hand, or else the next candidate's solve */
+  _pairSearchUnit(st) {
+    const PS = Constants.PAIR_SHOT, AIM = Constants.AIM, am = this._armManager;
+    const { T1, armA, armB, g, R0, r1, tolRad, rate, rateG, capG } = st;
+    if (!st.sols) {
+      const c = st.kept[st.i++];
+      if (st.i >= st.kept.length) st.last = true;
+      if (c && this._pairPieceOk(c.d) && this._pairPieceOk(T1)) { st.c = c; st.sols = solvePairAimAll(g, R0, r1, c.r2, { turnDeg: PS.TURN_DEG }); st.k = 0; }   // a piece may go while the search runs
+      else if (st.last) st.done = true;
+      return;
+    }
+    const c = st.c, r = st.sols[st.k++];
+    if (!r) { st.sols = null; if (st.last) st.done = true; return; }
+    const verdict = (() => {
+      if (r.missA > PS.MISS_DEG || r.missB > PS.MISS_DEG || r.turnDeg > PS.TURN_DEG + 1e-6) return null;
+      const fuelG = rateG * (r.missA + r.missB);
+      if (fuelG > capG) return null;
+      const flight = r.alpha <= Math.PI / 2 ? 2 * r.alpha : 2 * Math.PI - 2 * r.alpha;   // the angle the two daughters fly apart by
+      if (flight < (PS.SPREAD_MIN_DEG || 0) * PS_D2R) return null;
+      // the two tethers must not swap sides on the way (the launch ceremony's own rule for one line against another)
+      if (pairTethersCross(g, pairAttitudeFor(R0, r.n), r.alpha, r.swap, r1, c.r2)) return null;
+      // the barrier refuses a line a part of the ship is across (radiators at 146 deg block weaver lines at 12 deg): never offer such a pair
+      if (typeof am.pairLineBlockedAt === 'function' && am.pairLineBlockedAt(armA, armB, r.alpha)) return null;
+      const tA = r.swap ? c.d : T1, tB = r.swap ? T1 : c.d;
+      if (typeof am.indexLaunchRefusal === 'function' && (am.indexLaunchRefusal(armA.index, tA) || am.indexLaunchRefusal(armB.index, tB))) return null;
+      const nW = { x: r.n[0], y: r.n[1], z: r.n[2] };
+      const shot = this._planPairShot(() => nW, { arm: armA, armManager: am, pair: { armB, alpha: r.alpha } }, AIM.AIM_TIMEOUT_S, tolRad, rate);
+      return shot ? { shot, fuelG, tA, tB } : null;
+    })();
+    if (!verdict) return;                                          // the next answer (the other way round) is tried next
+    const cost = verdict.shot.gasKg * 1000 + verdict.fuelG;       // grams, the two kinds of gas in one currency (an estimate of the price, not a measurement)
+    if (!st.best || cost < st.best.cost) st.best = { c, r, shot: verdict.shot, fuelG: verdict.fuelG, cost, tA: verdict.tA, tB: verdict.tB };
+    st.sols = null;                                                // this piece's best way round; the other way is worse by construction
+    if (st.last) st.done = true;
+  }
+
+  /** @private the offer a finished search found (or null) */
+  _pairSearchResult(st) {
+    const { T1, armA, armB, g, type } = st;
+    const best = st.best;
+    if (!best) return null;
+    const { c, r, shot, fuelG, cost, tA, tB } = best;
+    return {
+      key: `${armA.index}+${armB.index}:${T1.id}+${c.d.id}`,
+      armA, armB, t1: T1, t2: c.d, swap: r.swap, tA, tB, alpha: r.alpha, n: r.n, g,
+      missA: r.missA, missB: r.missB, turnDeg: r.turnDeg, fuelG, gasKg: shot.gasKg, cost, shot, type,
+      flightDeg: (r.alpha <= Math.PI / 2 ? 2 * r.alpha : 2 * Math.PI - 2 * r.alpha) / PS_D2R,
+      markId: c.d.id,
+    };
+  }
+
+  /**
+   * pair-shot: the whole search at once (the same steps the frames take one by one: the tests and the probes use it).
+   * @returns {object|null}
+   * @private
+   */
+  _computePairOffer() {
+    const st = this._pairSearchBegin();
+    if (!st) return null;
+    while (!st.done) this._pairSearchStep(st);
+    return this._pairSearchResult(st);
+  }
+
+  /**
+   * pair-shot: one frame of the offer. Looked at again when a pick changed it or REPLAN_S has passed; a new pair says so once and, with
+   * the pre-turn on, re-plans it toward the pair. A standing offer is kept until another beats its cost by HOLD_RATIO.
+   * The look is spread over frames (fix F1 PS1.5): the frame that starts it sets up (the single plan, the candidates), each later frame
+   * tries ONE candidate piece, the last one settles the offer; a pick in the middle drops the look under way and starts over. Measured
+   * 60 pieces in view: the whole look was 8.5 ms median / 75 ms worst in one frame; a frame's share is now under 4 ms.
+   * @param {number} dt @private
+   */
+  _tickPairOffer(dt) {
+    this._pairT += dt;
+    const PS = Constants.PAIR_SHOT;
+    if (!PS || PS.ENABLED === false) { this._pairSearch = null; if (this._pairOffer) this._setPairOffer(null); return; }
+    this._pairClock += dt;
+    if (this._pairDirty) this._pairSearch = null;                   // a pick: the look under way is for the old pick
+    const st = this._pairSearch;
+    if (st) {
+      try {
+        if (st.phase === 'search') {
+          this._pairSearchStep(st, PAIR_FRAME_MS);
+          if (!st.done) return;
+          st.next = this._pairSearchResult(st);
+          const cur = this._pairOffer, next = st.next;
+          if (next && cur && cur.key !== next.key && cur.armA === next.armA && cur.armB === next.armB && cur.t1 === next.t1 && this._pairPieceOk(cur.t2)) {
+            st.phase = 'standing';                                  // the standing pair is solved again from now: a frame of its own
+            return;
+          }
+        } else {
+          const cur = this._pairOffer, next = st.next, again = cur ? this._pairRefreshStanding(cur) : null;
+          // the standing pair is kept (solved again from now) unless another beats its cost by HOLD_RATIO: the mark does not hop between pieces
+          st.next = again && !(next.cost < PS.HOLD_RATIO * again.cost) ? again : next;
+        }
+        this._pairSearch = null; this._pairErr = null;
+        this._setPairOffer(st.next);
+      } catch (e) { this._pairSearch = null; this._pairErr = e; this._setPairOffer(null); }
+      return;
+    }
+    if (!this._pairDirty && this._pairClock < PS.REPLAN_S) return;
+    this._pairDirty = false;
+    this._pairClock = 0;
+    let begun = null;
+    try { begun = this._pairSearchBegin(); this._pairErr = null; } catch (e) { begun = null; this._pairErr = e; }
+    if (begun && !begun.done) { this._pairSearch = begun; return; }
+    if (begun) { this._setPairOffer(this._pairSearchResult(begun)); return; }
+    this._setPairOffer(null);
+  }
+
+  /** @private the standing offer's own pair solved again from now, or null when it no longer fits the limits */
+  _pairRefreshStanding(cur) {
+    const PS = Constants.PAIR_SHOT, p = this._player, am = this._armManager;
+    if (!this._pairFits(cur.armA, cur.t2) || !this._pairFits(cur.armA, cur.t1) || (typeof am.launchRefusalAt === 'function' && am.launchRefusalAt(cur.t2))) return null;
+    const R0 = pairRotationOf(p.quaternion), r1 = this._pairRel(cur.t1, [0, 0, 0]), r2 = this._pairRel(cur.t2, [0, 0, 0]);
+    const r = solvePairAimAll(cur.g, R0, r1, r2, { turnDeg: PS.TURN_DEG }).find((x) => !pairTethersCross(cur.g, pairAttitudeFor(R0, x.n), x.alpha, x.swap, r1, r2));
+    if (!r || r.missA > PS.MISS_DEG || r.missB > PS.MISS_DEG) return null;
+    if (typeof am.pairLineBlockedAt === 'function' && am.pairLineBlockedAt(cur.armA, cur.armB, r.alpha)) return null;
+    const fuelG = PS.FUEL_G_PER_DEG[cur.type] * (r.missA + r.missB);
+    if (fuelG > PS.FUEL_G[cur.type]) return null;
+    const tA = r.swap ? cur.t2 : cur.t1, tB = r.swap ? cur.t1 : cur.t2;
+    if (typeof am.indexLaunchRefusal === 'function' && (am.indexLaunchRefusal(cur.armA.index, tA) || am.indexLaunchRefusal(cur.armB.index, tB))) return null;
+    const AIM = Constants.AIM;
+    const tolRad = AIM.DAUGHTER_AIM_TOLERANCE_DEG * Math.PI / 180, rate = AIM.AP_ROT_RATE * (AIM.ONBOARDING_ROT_RATE_MULT || 1);
+    const nW = { x: r.n[0], y: r.n[1], z: r.n[2] };
+    const shot = this._planPairShot(() => nW, { arm: cur.armA, armManager: am, pair: { armB: cur.armB, alpha: r.alpha } }, AIM.AIM_TIMEOUT_S, tolRad, rate);
+    if (!shot) return null;
+    return Object.assign({}, cur, {
+      swap: r.swap, tA, tB, alpha: r.alpha, n: r.n, missA: r.missA, missB: r.missB, turnDeg: r.turnDeg, fuelG, gasKg: shot.gasKg, shot,
+      cost: shot.gasKg * 1000 + fuelG,
+    });
+  }
+
+  /** @private take `next` as the offer: a new or changed pair is said once and asks the pre-turn to turn toward it (or back to the single shot) */
+  _setPairOffer(next) {
+    const cur = this._pairOffer;
+    this._pairOffer = next;
+    const changed = (cur ? cur.key : null) !== (next ? next.key : null);
+    if (!changed) return;
+    if (next && this._pairSaid !== next.key) {
+      this._pairSaid = next.key;
+      const deg = Math.max(1, Math.round(Math.max(next.missA, next.missB)));
+      eventBus.emit(Events.COMMS_MESSAGE, { text: pairReadyLine(deg), priority: 'info', source: 'HOUSTON' });
+    }
+    if (!next) this._pairSaid = null;
+    // the pre-turn (wheel kit) turns toward the pair now, or back toward the single shot
+    const W = Constants.WHEEL_PRETURN;
+    if (W && W.ENABLED !== false && (this._preturn || next)) this._preturnReq = { target: next ? next.t1 : (cur ? cur.t1 : null) };
+  }
+
+  /**
+   * pair-shot P3: the price of a pair's aim and kick as `_planDaughterShot` prices a single one: her barrel (+z) turns onto the pair's
+   * barrel direction (the provider's), both struts swing to the pair's angle together, and the two kicks are summed (they cancel to
+   * nothing at one angle, so what is left is the wheels' or the gas's own small residue). The same shape comes back (`kind: 'pair'`).
+   * @returns {object|null} null when the geometry is not there (a stub, no dock positions)
+   * @private
+   */
+  _planPairShot(provider, opts, aimLimitS, tolRad, rate) {
+    const PS = Constants.PAIR_SHOT, CS = Constants.CHEST_SHOT;
+    const p = this._player;
+    const pair = opts.pair, armA = opts.arm, armB = pair && pair.armB, am = opts.armManager || this._armManager;
+    if (!PS || PS.ENABLED === false || !p || !armA || !armB || !am || !am.arms || !am._dockPositions || !this._aimCanEase()) return null;
+    if (typeof armA.getAimAlpha !== 'function' || typeof armB.getAimAlpha !== 'function') return null;
+    const dpA = am._dockPositions[armA.index], dpB = am._dockPositions[armB.index];
+    if (!dpA || !dpB) return null;
+    const raw = provider();
+    if (!raw) return null;
+    const nb = new THREE.Vector3(raw.x, raw.y, raw.z);
+    if (!(nb.lengthSq() > 1e-12)) return null;
+    nb.normalize().applyQuaternion(new THREE.Quaternion().copy(p.quaternion).invert());   // the barrel direction wanted, in her body frame
+    const alpha = pair.alpha;
+    const V5 = Constants.OCTOPUS_V5;
+    const errRad = Math.acos(Math.max(-1, Math.min(1, nb.z)));
+    let nx = 1, ny = 0;
+    const sxy = Math.hypot(nb.x, nb.y);
+    if (sxy > 1e-6) { nx = -nb.y / sxy; ny = nb.x / sxy; }          // the axis (0,0,1) x nb: the turn is pitch and yaw only
+    const a0A = armA.getAimAlpha(), a0B = armB.getAimAlpha();
+    // her manager seen with both struts a fraction f of the way to alpha (the wrappers answer the angle; `computeCoM` / `computeInertia` read it)
+    const viewAt = (f) => {
+      const wrap = new Map();
+      const arms = am.arms.map((a) => {
+        if (a !== armA && a !== armB) return a;
+        const w = Object.assign(Object.create(a), { getAimAlpha: () => a.getAimAlpha() + (alpha - a.getAimAlpha()) * f });
+        wrap.set(a, w);
+        return w;
+      });
+      return { view: { arms, _dockPositions: am._dockPositions }, wrap };
+    };
+    const dStrut = Math.max(Math.abs(alpha - a0A), Math.abs(alpha - a0B));
+    const tS = Math.max(
+      typeof armA.aimEaseMinTime === 'function' ? armA.aimEaseMinTime(alpha) : Math.abs(alpha - a0A) / V5.STRUT_SLEW_RATE,
+      typeof armB.aimEaseMinTime === 'function' ? armB.aimEaseMinTime(alpha) : Math.abs(alpha - a0B) / V5.STRUT_SLEW_RATE,
+    );
+    const inertiaTable = () => {
+      if (dStrut < 1e-9) { const I = p.getAttitudeInertia(); return [{ ixx: I.ixx, iyy: I.iyy }]; }
+      const tab = [];
+      for (let k = 0; k <= 4; k++) {
+        const I = computeInertia(viewAt(k / 4).view, p);
+        tab.push({ ixx: I.ixx, iyy: I.iyy });
+      }
+      return tab;
+    };
+    const sloth = typeof p.isSlothMode === 'function' && p.isSlothMode();
+    const kit = typeof p.hasWheelKit === 'function' && p.hasWheelKit();
+    const stopErr = 0.5 * tolRad;
+    const turnRad = errRad > tolRad ? errRad - stopErr : 0;
+    let src = null;
+    if (typeof p.attitudeTorqueSource === 'function' && (kit || sloth) && (sloth || turnRad > 0)) {
+      const sel = p.attitudeTorqueSource({ spinUp: true, angleRad: turnRad, nx, ny, limitS: aimLimitS, quiet: true });
+      if (isSlowSrc(sel)) src = sel;
+    }
+    let timeS, aimKg;
+    if (src === 'wheels') {
+      timeS = Math.max(this._simGasAim({ err: errRad, nx, ny, table: inertiaTable(), tS, stopErr, tolRad, rate, dStrut, wheels: true }).timeS, tS);
+      aimKg = 0;
+    } else if (src) {
+      timeS = Math.max(turnRad > 0 ? slowTurnTimeS(p, src, turnRad, nx, ny) + slowWarmupLeftS(p, src) : 0, tS);
+      aimKg = 0;
+    } else {
+      const t = this._simGasAim({ err: errRad, nx, ny, table: inertiaTable(), tS, stopErr, tolRad, rate, dStrut });
+      timeS = t.timeS; aimKg = t.gasKg;
+    }
+    // the two kicks at the pair's angle: each is L = r x (-m v d) about her centre of mass without that daughter; summed (one frame)
+    const { view, wrap } = viewAt(1);
+    const dir = new THREE.Vector3(), per = { x: 0, y: 0 };
+    let lx = 0, ly = 0;
+    for (const arm of [armA, armB]) {
+      const dp = arm === armA ? dpA : dpB;
+      const com = computeCoM(view, p, { excludeArm: wrap.get(arm) });
+      strutLocalDirection(alpha, dp.azimuthDeg * Math.PI / 180, dir);
+      launchKickPerNs(strutTipMeters(dp, alpha), com.position, dir, per);
+      const tier = Constants.SPRING_TIERS && Constants.SPRING_TIERS[arm.springTier];
+      const speed = Math.min(Number.isFinite(arm.launchSpeed) ? arm.launchSpeed : Infinity, tier ? tier.maxSpeed : Infinity);
+      const type = arm.config && arm.config.type;
+      let massKg = type === 'weaver' ? Constants.V5_WEAVER_MASS : (type === 'spinner' ? Constants.V5_SPINNER_MASS : (arm.config && arm.config.mass));
+      massKg += (arm.capturedDebris && arm.capturedDebris.mass) || 0;
+      if (Array.isArray(arm.heldCatches)) for (const h of arm.heldCatches) massKg += (h && h.mass) || 0;
+      const mv = (massKg > 0 && speed > 0 && Number.isFinite(speed)) ? massKg * speed : 0;
+      lx += per.x * mv; ly += per.y * mv;
+    }
+    const tankKg = coldGasPoolToKg(Math.max(0, Number(p.resources && p.resources.coldGas) || 0));
+    let kickKg = 0;
+    if (Math.abs(lx) + Math.abs(ly) > 1e-6) {
+      const peek = kit ? p.wheelKickPeek(lx, ly) : null;
+      const left = peek || { x: lx, y: ly };
+      if (Math.abs(left.x) + Math.abs(left.y) > 1e-6) kickKg = p.turnNullKg(left.x, left.y);
+    }
+    const kickGas = Math.min(kickKg, tankKg);
+    return {
+      alpha, kind: 'pair', errRad, nx, ny, src, timeS, aimKg, kickKg: kickGas, gasKg: Math.min(aimKg + kickKg, tankKg), creditKg: 0, dropNms: 0,
+      empties: false, alt: null, kickNms: Math.hypot(lx, ly),
+    };
+  }
+
   /**
    * chest-shot: seconds and grams of steering gas for a cold-gas aim, by running the law `_tickAimEased` runs on numbers alone (no
    * ship is touched): her slowest couple sets the acceleration; she climbs to a peak (the aim's rate, the tank's cap, lowered when the
@@ -3926,7 +4687,8 @@ export class AutopilotSystem {
       const strutDone = t >= strutT;
       const dOm = cp.a * dt;
       const rem = err - q.stopErr;
-      const want = rem > 0 ? 0.5 * (-dOm + Math.sqrt(dOm * dOm + 8 * cp.a * rem)) : 0;
+      const stopHere = strutDone && vPeak < vCap && err + was * was / (2 * cp.a) <= q.tolRad;           // as `_tickAimEased`: stops where it is
+      const want = stopHere ? 0 : (rem > 0 ? 0.5 * (-dOm + Math.sqrt(dOm * dOm + 8 * cp.a * rem)) : 0);
       const lo = Math.max(0, was - dOm);
       const vLim = strutDone ? vCap : vPeak;
       let now = Math.min(Math.max(want, lo), Math.max(lo, Math.min(vLim, was + dOm)));
@@ -3955,6 +4717,7 @@ export class AutopilotSystem {
    * @private
    */
   _shotAimLine(shot) {
+    if (shot.kind === 'pair') return `Turning the ship to line up the pair shot. About ${Math.max(1, Math.round(shot.timeS))} s, ${this._shotGasWords(shot.gasKg)}.`;
     return `Turning the ship to line up the launch. About ${Math.max(1, Math.round(shot.timeS))} s, ${this._shotGasWords(shot.gasKg)}.${shot.alt ? this._shotQuickWords(shot.alt) : ''}`;
   }
 
@@ -3988,6 +4751,7 @@ export class AutopilotSystem {
     // launch-seq: a daughter launch keeps the mother still from here to the spring. Set BEFORE _cleanup so
     // aimHold never drops (cleanup keeps aimHold = _attitudeHold).
     if (c.mode === 'daughter' && c.arm) this._beginLaunchHold(c.arm);
+    if (c.mode === 'daughter' && c.pair && c.pair.armB) this._beginLaunchHold(c.pair.armB);   // pair-shot: the one hold covers both
     c._cleanup();
     eventBus.emit(Events.AIM_SEQUENCE_END, { mode: c.mode, result: 'resolved' });
     c.resolve({ mode: c.mode, launchDir });
@@ -4542,12 +5306,16 @@ export class AutopilotSystem {
     const q = p.quaternion;
     const daughter = c.mode === 'daughter';
     const arm = (daughter && c.arm && typeof c.arm.setAimAlpha === 'function') ? c.arm : null;
+    // pair-shot: the second strut of the pair swings with the first to the one angle; her boresight is her barrel (+z), not a strut's line
+    const pairB = (daughter && c.pair && c.pair.armB && typeof c.pair.armB.setAimAlpha === 'function') ? c.pair.armB : null;
     const az = daughter ? this._aimAzimuth(c) : 0;
 
     // The strut angle her boresight is aimed for. A real strut: fixed when the aim starts. No strut object: the
     // in-plane optimum for her attitude now (nothing slews, so nothing chases).
     let alphaT = 0;
-    if (daughter) {
+    if (daughter && c.pair) {
+      alphaT = c.alphaF;
+    } else if (daughter) {
       if (arm && c.alphaF !== undefined) {
         alphaT = c.alphaF;
       } else {
@@ -4558,7 +5326,7 @@ export class AutopilotSystem {
       }
     }
     const bm = this._aimBm;
-    if (daughter) strutLocalDirection(alphaT, az, bm); else bm.set(0, 0, 1);
+    if (daughter && !c.pair) strutLocalDirection(alphaT, az, bm); else bm.set(0, 0, 1);
     bm.applyQuaternion(q).normalize();
     const errM = Math.acos(Math.max(-1, Math.min(1, bm.dot(T))));      // what is left for her to turn
 
@@ -4590,10 +5358,11 @@ export class AutopilotSystem {
       const theta = Math.max(0, errM - c.stopErr);
       const tM = theta <= 0 ? 0 : (theta >= vCap * vCap / aFull ? theta / vCap + vCap / aFull : 2 * Math.sqrt(theta / aFull));
       let tS = 0;
-      if (arm) {
-        tS = (typeof arm.aimEaseMinTime === 'function')
-          ? arm.aimEaseMinTime(alphaT)
-          : Math.abs(alphaT - (arm.getAimAlpha ? arm.getAimAlpha() : alphaT)) / Constants.OCTOPUS_V5.STRUT_SLEW_RATE;
+      for (const sa of (pairB ? [arm, pairB] : [arm])) {
+        if (!sa) continue;
+        tS = Math.max(tS, (typeof sa.aimEaseMinTime === 'function')
+          ? sa.aimEaseMinTime(alphaT)
+          : Math.abs(alphaT - (sa.getAimAlpha ? sa.getAimAlpha() : alphaT)) / Constants.OCTOPUS_V5.STRUT_SLEW_RATE);
       }
       c.vCap = vCap;
       c.vPeak = vCap;
@@ -4613,6 +5382,15 @@ export class AutopilotSystem {
       if (typeof arm.getAimAlpha === 'function') {
         strutDone = Math.abs(arm.getAimAlpha() - c.alphaF) < 1e-6;
         c.strutStep = dt > 0 ? (arm.getAimAlpha() - before) / dt : 0;   // F1.3: the strut's rate this frame (signed, rad/s), for a hand-over
+      }
+      if (pairB) {                                                      // pair-shot: the other strut of the pair, the same move
+        const beforeB = typeof pairB.getAimAlpha === 'function' ? pairB.getAimAlpha() : 0;
+        const okB = pairB.setAimAlpha(c.alphaF, dt, c.ease || undefined);
+        if (okB === false) { this._rejectAim('hinge LOCKED — release the hinge brake [H]'); return; }
+        if (typeof pairB.getAimAlpha === 'function') {
+          strutDone = strutDone && Math.abs(pairB.getAimAlpha() - c.alphaF) < 1e-6;
+          c.strutStepB = dt > 0 ? (pairB.getAimAlpha() - beforeB) / dt : 0;
+        }
       }
     }
 
@@ -4660,7 +5438,11 @@ export class AutopilotSystem {
     // error direction to read it along), so the last value would stand as a feed-forward the bearing no longer has, and she crept on
     // at it until the 1.5 x plan deadline handed the aim to the gas (a 29 s plan took 51 s).
     const ff = (c.src === 'wheels' && c.wFf > 0) ? Math.min(c.wFf, c.wLos) : 0;
-    const want = (rem > 0 ? 0.5 * (-dOm + Math.sqrt(dOm * dOm + 8 * a * rem)) : 0) + ff;
+    // pair-shot: an aim the strut held back (her peak was stretched to the strut's time, `vPeak` < `vCap`) whose strut arrives with her still
+    // inside the tolerance stops where she is: climbing to the stop-capable rate for the last hundredth of a degree spiked the gas (a pair
+    // aim: 9.6 g on top of a 5 g plan) and, with the cruise near zero, could stall for the whole time-out. She can stop inside the tolerance.
+    const stopHere = strutDone && c.vPeak < c.vCap && a > 0 && errM + c.omega * c.omega / (2 * a) <= c.tolRad;
+    const want = (stopHere ? 0 : (rem > 0 ? 0.5 * (-dOm + Math.sqrt(dOm * dOm + 8 * a * rem)) : 0)) + ff;
     const was = c.omega;
     const lo = Math.max(0, was - dOm);
     let vLim = strutDone ? c.vCap : c.vPeak;                           // once the strut is there nothing is left to wait for
@@ -4754,6 +5536,8 @@ export class AutopilotSystem {
     // over from the wheels does the same from where it stands, with the strut's quickest move from here (a new ease). Without it the gas
     // turned the rest at the full peak and waited for the strut's slow wheel-length move: 128 g for 30° that cost about a fifth of that.
     const arm = (c.mode === 'daughter' && c.arm && typeof c.arm.setAimAlpha === 'function' && c.alphaF !== undefined) ? c.arm : null;
+    // pair-shot: the pair's second strut makes the same hand-over move (its own rate carried on)
+    const armB = (arm && c.pair && c.pair.armB && typeof c.pair.armB.setAimAlpha === 'function') ? c.pair.armB : null;
     if (aG > 0 && arm) {
       const theta = Math.max(0, Math.acos(Math.max(-1, Math.min(1, bm.dot(T)))) - c.stopErr);
       const vCap = c.vCap;
@@ -4761,22 +5545,30 @@ export class AutopilotSystem {
       // F1.3: the strut is mid-swing (a wheel aim keeps it moving at the pace of its long plan): the new, quicker move carries on from
       // the rate it has (a move from rest stopped it dead: 6 deg/s -> 0.4 deg/s in a frame, and it jerked up again)
       const V5 = Constants.OCTOPUS_V5;
-      const a0 = arm.getAimAlpha ? arm.getAimAlpha() : c.alphaF;
       const target = Math.max(V5.STRUT_SWEEP_MIN, Math.min(c.alphaF, V5.STRUT_SWEEP_MAX));
-      const sign = target >= a0 ? 1 : -1;
-      const v0 = Number.isFinite(c.strutStep) ? Math.max(0, sign * c.strutStep) : 0;
-      let carry = null;
-      if (v0 > 1e-4 && Math.abs(target - a0) > 1e-9 && V5.STRUT_EASE_ACCEL > 0) carry = strutCarryProfile(Math.abs(target - a0), v0, V5.STRUT_EASE_ACCEL, V5.STRUT_SLEW_RATE, 0);
-      const tS = carry ? carry.minS
-        : ((typeof arm.aimEaseMinTime === 'function') ? arm.aimEaseMinTime(c.alphaF) : Math.abs(c.alphaF - a0) / V5.STRUT_SLEW_RATE);
+      const moves = [arm, armB].filter(Boolean).map((sa, k) => {
+        const a0 = sa.getAimAlpha ? sa.getAimAlpha() : c.alphaF;
+        const sign = target >= a0 ? 1 : -1;
+        const rate = k === 0 ? c.strutStep : c.strutStepB;
+        const v0 = Number.isFinite(rate) ? Math.max(0, sign * rate) : 0;
+        let carry = null;
+        if (v0 > 1e-4 && Math.abs(target - a0) > 1e-9 && V5.STRUT_EASE_ACCEL > 0) carry = strutCarryProfile(Math.abs(target - a0), v0, V5.STRUT_EASE_ACCEL, V5.STRUT_SLEW_RATE, 0);
+        const tS = carry ? carry.minS
+          : ((typeof sa.aimEaseMinTime === 'function') ? sa.aimEaseMinTime(c.alphaF) : Math.abs(c.alphaF - a0) / V5.STRUT_SLEW_RATE);
+        return { sa, a0, sign, v0, carry, tS };
+      });
+      const tS = Math.max(...moves.map((m) => m.tS));
       if (tS > tM && theta > 0) c.vPeak = Math.min(vCap, 0.5 * aG * (tS - Math.sqrt(Math.max(0, tS * tS - 4 * theta / aG))));
       c.ease = tS > 0 ? { durationS: Math.max(tM, tS) } : null;
-      if (carry && c.ease) {
-        const prof = strutCarryProfile(Math.abs(target - a0), v0, V5.STRUT_EASE_ACCEL, V5.STRUT_SLEW_RATE, c.ease.durationS);
-        // the arm's own move record (ArmUnit.setAimAlpha keys it by the ease object and the target), entered mid-way
-        arm._aimEase = {
-          src: c.ease, from: a0 - sign * prof.s0, to: target, sign, d: prof.d, a: V5.STRUT_EASE_ACCEL, v: prof.v, T: prof.T, t: prof.t0,
-        };
+      if (c.ease) {
+        for (const m of moves) {
+          if (!m.carry) continue;
+          const prof = strutCarryProfile(Math.abs(target - m.a0), m.v0, V5.STRUT_EASE_ACCEL, V5.STRUT_SLEW_RATE, c.ease.durationS);
+          // the arm's own move record (ArmUnit.setAimAlpha keys it by the ease object and the target), entered mid-way
+          m.sa._aimEase = {
+            src: c.ease, from: m.a0 - m.sign * prof.s0, to: target, sign: m.sign, d: prof.d, a: V5.STRUT_EASE_ACCEL, v: prof.v, T: prof.T, t: prof.t0,
+          };
+        }
       }
       c.handTS = tS;                                                   // the line below prices the stretched aim
     }

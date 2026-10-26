@@ -87,6 +87,7 @@ export const NEAR_BRACKET_M = 10;
  */
 export const HELD_NEAR_MAX_SIZE_M = NEAR_BRACKET_M * 1.4;
 const HELD_PROXY_PREFIX = 'HeldCatchProxy_';
+const _pairQ = new THREE.Quaternion();   // pairSpec's scratch
 const _heldIdentity = new THREE.Matrix4();   // a held proxy's one instance sits at its own object pose
 
 /** Material types for debris */
@@ -4139,6 +4140,102 @@ export class DebrisField {
     };
   }
 
+  /** @private One of a pair's own seeded streams (PAIR_FIELDS.SEED_XOR): `p` the pair, `m` 0/1 the member, 9 the pair's shared rolls. A fresh generator every call. */
+  static _pairStream(seed, p, m) {
+    const x = (Constants.PAIR_FIELDS.SEED_XOR | 0) ^ (seed | 0);
+    return mulberry32((Math.imul(x, 0x9E3779B1) + Math.imul((p | 0) + 1, 0x85EBCA6B) + Math.imul((m | 0) + 1, 0xC2B2AE35)) >>> 0);
+  }
+
+  /** @returns {number} how many rows the pairs of a field take (PAIR_FIELDS.PAIRS x 2): rows ROW0 .. ROW0 + this - 1 */
+  static pairRowCount() { return Constants.PAIR_FIELDS.PAIRS * 2; }
+
+  /** @param {number} row @returns {boolean} the row is one of a field's paired pieces (PAIR_FIELDS) */
+  static isPairRow(row) {
+    const P = Constants.PAIR_FIELDS;
+    return Number.isInteger(row) && row >= P.ROW0 && row < P.ROW0 + DebrisField.pairRowCount();
+  }
+
+  /**
+   * Owner 2026-10-25 (DECISIONS §38 row 7, `Constants.PAIR_FIELDS`): the resolved spec of paired piece `k` of a field (k = row - ROW0,
+   * pair `k >> 1`, member `k & 1`), in the shape of a WELCOME_FIELD row. Pair p is built for the opposite struts of `KINDS[p]` at ONE
+   * strut angle alpha (the pair's roll): the piece sits on its strut's launch line from the strut's tip, `range` m out, in the frame
+   * of her arrival (ship x = left = -latM, y = up = radM, z = ahead = fwdM), so from there both lines hit with no turn. Own seeded
+   * stream; size from the kind's band, mass the group's chain (<= 5 kg), a slow tumble. Null for a k outside the pairs.
+   * PF1.1 (review 10-25): `attitude` is her attitude relative to the prograde frame (prograde^-1 * quaternion, `attitudeOf`): the
+   * launch point in HER frame is turned into the prograde frame before it becomes fwd / lat / rad, so the pair fits with no turn
+   * however she arrives (nose backwards after a downhill trip, rolled, yawed). Null = nose forward, upright (the rig's arrival).
+   * @param {number} seed the field's seed @param {number} k the piece, 0-based
+   * @param {{x: number, y: number, z: number, w: number}|null} [attitude] @returns {object|null}
+   */
+  static pairSpec(seed, k, attitude = null) {
+    const P = Constants.PAIR_FIELDS;
+    if (!Number.isInteger(k) || k < 0 || k >= DebrisField.pairRowCount()) return null;
+    const p = k >> 1, m = k & 1;
+    const kind = P.KINDS[p % P.KINDS.length];
+    const shared = DebrisField._pairStream(seed, p, 9);
+    const alphaDeg = kind.alphaMin + shared() * (kind.alphaMax - kind.alphaMin);
+    const rangeM = kind.rangeMin + shared() * (kind.rangeMax - kind.rangeMin);
+    const r = DebrisField._pairStream(seed, p, m);
+    const rangeMemberM = rangeM * (1 + (r() * 2 - 1) * P.RANGE_SPREAD);
+    const sizeM = kind.sizeMin + r() * (kind.sizeMax - kind.sizeMin);
+    const G = Constants.SMALL_GROUP;
+    const ML = (Constants.DEBRIS && Constants.DEBRIS.MASS_LAW) || { AREA_COEF: 0.556945, AREA_EXP: 2.0047, AM_LOG10_MEAN: -0.9, AM_LOG10_SIGMA: 0.45 };
+    const massKg = Math.max(0.02, Math.min(5, sampleSbmMassKg(sizeM, r(), r(), ML)));
+    const tumbleDegS = G.TUMBLE_MIN_DEG_S + r() * (G.TUMBLE_MAX_DEG_S - G.TUMBLE_MIN_DEG_S);
+    const pos = DebrisField.pairLaunchPoint(kind.struts[m], alphaDeg, rangeMemberM);
+    if (attitude) {
+      const v = new THREE.Vector3(pos.x, pos.y, pos.z).applyQuaternion(_pairQ.set(attitude.x, attitude.y, attitude.z, attitude.w).normalize());
+      pos.x = v.x; pos.y = v.y; pos.z = v.z;
+    }
+    return {
+      types: ['fragment'], sizeM, massMin: massKg, massMax: massKg, tumbleDegS, own: true, pair: p,
+      fwdMinM: pos.z, fwdMaxM: pos.z, latM: -pos.x, radM: pos.y,
+      pairAlphaDeg: alphaDeg, pairStrut: kind.struts[m], pairRangeM: rangeMemberM,
+      rng: DebrisField._pairStream(seed, p, 5000 + m),
+    };
+  }
+
+  /**
+   * PF1.1: her attitude relative to the prograde frame (prograde^-1 * quaternion; the `_manualRotation` PlayerSatellite recomposes
+   * every frame, but read from the live quaternion: it is stale while the autopilot or an aim holds the nose). Null for no ship, or a
+   * mock without a quaternion (the pairs are then laid out nose forward, upright).
+   * @param {object|null} player the PlayerSatellite @returns {THREE.Quaternion|null}
+   */
+  static attitudeOf(player) {
+    if (!player || !player.quaternion) return null;
+    const pg = typeof player._progradeQuat === 'function' ? player._progradeQuat(new THREE.Quaternion()) : null;
+    if (pg) return pg.invert().multiply(player.quaternion).normalize();
+    return player._manualRotation ? player._manualRotation.clone() : null;
+  }
+
+  /** @private The ship the attitude is read from: the drag source and the near-field player are main.js's wiring of her, the field registry's player is the rigs'. */
+  _attitudeSource() {
+    const has = (p) => p && p.quaternion;
+    if (has(this._motherDragSource)) return this._motherDragSource;
+    if (has(this._nearPlayer)) return this._nearPlayer;
+    const rp = this._fieldSource && this._fieldSource._player;
+    return has(rp) ? rp : null;
+  }
+
+  /**
+   * The point `rangeM` m out along the launch line of strut `strut` at strut angle `alphaDeg`, from the strut's tip, in the ship frame
+   * (x left, y up, z ahead; metres). Tip = ((hingeR + L sin a) cos az, (hingeR + L sin a) sin az, hingeZ - L cos a), direction =
+   * (sin a cos az, sin a sin az, -cos a): the same two lines as `strutTipMeters` and `strutLocalDirection` (test-PairFields pins it).
+   * @param {number} strut 0-3 @param {number} alphaDeg @param {number} rangeM @returns {{x: number, y: number, z: number}}
+   */
+  static pairLaunchPoint(strut, alphaDeg, rangeM) {
+    const P = Constants.PAIR_FIELDS;
+    const az = Constants.ARM_LADDER.Y0_QUAD.azimuths[strut] * Math.PI / 180;
+    const a = alphaDeg * Math.PI / 180;
+    const sA = Math.sin(a), cA = Math.cos(a);
+    const rho = P.HINGE_R_M + Constants.OCTOPUS_V5.STRUT_LENGTH * sA;
+    return {
+      x: rho * Math.cos(az) + rangeM * sA * Math.cos(az),
+      y: rho * Math.sin(az) + rangeM * sA * Math.sin(az),
+      z: P.HINGE_Z_M - Constants.OCTOPUS_V5.STRUT_LENGTH * cA - rangeM * cA,
+    };
+  }
+
   /**
    * u20-debris v2: the spec of row `row` of a field laid out as `layout`: 'welcome' (WELCOME_FIELD, the start field), 'high'
    * (HIGH_FIELD, rolled with the field's seed) or 'group' (a low field's own small-piece group); a row of EXTRA_ROW0 or more
@@ -4147,11 +4244,13 @@ export class DebrisField {
    * F5 (fix round 1): on a 'group' layout the satellite sits by the group that is THERE NOW. `rows` (the field's rows in play, optional)
    * says which: the field's own group while any of its rows is left, else the extra group a mission added (rows 200+). Without `rows`
    * (or with no group row at all) it is the own group's spot, as before.
-   * @param {string} layout @param {number} seed @param {number} row @param {number[]} [rows] @returns {object|null}
+   * `attitude` (PF1.1) is her attitude relative to the prograde frame at the spawn, read by the pair rows only (`pairSpec`).
+   * @param {string} layout @param {number} seed @param {number} row @param {number[]} [rows] @param {object|null} [attitude] @returns {object|null}
    */
-  static fieldRowSpec(layout, seed, row, rows = null) {
+  static fieldRowSpec(layout, seed, row, rows = null, attitude = null) {
     const G = Constants.SMALL_GROUP;
     if (!Number.isInteger(row) || row < 0) return null;
+    if (DebrisField.isPairRow(row)) return DebrisField.pairSpec(seed, row - Constants.PAIR_FIELDS.ROW0, attitude);
     if (row === G.SAT_ROW) {
       let variant = layout === 'group' ? 0 : 1;
       if (layout === 'group' && Array.isArray(rows) && !rows.some((r) => r < G.EXTRA_ROW0) && rows.some((r) => r >= G.EXTRA_ROW0 && r < G.SAT_ROW)) variant = 1;
@@ -4324,7 +4423,8 @@ export class DebrisField {
     // small-piece group); a plan with no `layout` (a test's stub) is read from its kind. A row from SMALL_GROUP.EXTRA_ROW0 up is a
     // mission extra (the group or the satellite a mission from 4 on adds), resolved by `DebrisField.fieldRowSpec` on any layout.
     const layout = fieldPlan ? (fieldPlan.layout || (isHigh ? 'high' : 'welcome')) : 'welcome';
-    const specOfRow = (r) => DebrisField.fieldRowSpec(layout, fieldPlan.seed, r, fieldPlan.rows);
+    const attitude = DebrisField.attitudeOf((this._attitudeSource || DebrisField.prototype._attitudeSource).call(this));   // PF1.1: the pairs fit her attitude now
+    const specOfRow = (r) => DebrisField.fieldRowSpec(layout, fieldPlan.seed, r, fieldPlan.rows, attitude);
     let fieldRows = null;                       // the WELCOME_FIELD (or HIGH_FIELD) row index of each piece to lay out (null = all, in order)
     if (fieldPlan) {
       this.storeFieldPieces();                  // anything of hers still free goes back into store first (a Stay re-seats it)
@@ -4337,22 +4437,27 @@ export class DebrisField {
     // Map off (no registry): from mission SMALL_GROUP.FROM_MISSION on the seven welcome rows are followed by the mission extras: a group
     // unless an uncaught one is still out, a satellite likewise (the map-on path keeps the same rule in FieldRegistry's rows).
     let offRows = null;
-    if (!fieldPlan && (this._currentMissionNumber || 1) >= Constants.SMALL_GROUP.FROM_MISSION) {
+    const missionNo = this._currentMissionNumber || 1;
+    if (!fieldPlan && missionNo >= Math.min(Constants.SMALL_GROUP.FROM_MISSION, Constants.PAIR_FIELDS.FROM_MISSION)) {
       const seed = this._fieldSeed;
       const G = Constants.SMALL_GROUP;
       const rows = WELCOME_FIELD.map((_, i) => i);
       const has = (kind) => this.debrisList.some((d) => d.alive && d._extraKind === kind &&
         !(d._captured || d._armPinned || d._capturedByArm || d._motherParked));
-      if (!has('group')) for (let i = 0, n = Constants.smallGroupCount(seed, 1); i < n; i++) rows.push(G.EXTRA_ROW0 + i);
-      if (!has('sat')) {
+      if (missionNo >= G.FROM_MISSION && !has('group')) for (let i = 0, n = Constants.smallGroupCount(seed, 1); i < n; i++) rows.push(G.EXTRA_ROW0 + i);
+      if (missionNo >= G.FROM_MISSION && !has('sat')) {
         if ((this.hasFreeMissionBody || DebrisField.prototype.hasFreeMissionBody).call(this)) rows.push(G.SAT_ROW);
         else console.warn('[DebrisField] no mission-satellite body is free: this mission lays out no satellite');
+      }
+      // owner 2026-10-25 (PAIR_FIELDS): from mission 2 on, the pairs too, unless an uncaught pair is still out
+      if (missionNo >= Constants.PAIR_FIELDS.FROM_MISSION && !has('pair')) {
+        for (let i = 0, n = DebrisField.pairRowCount(); i < n; i++) rows.push(Constants.PAIR_FIELDS.ROW0 + i);
       }
       if (rows.length > WELCOME_FIELD.length) offRows = rows;
     }
     const fieldToSpawn = fieldRows
       ? fieldRows.map((r) => specOfRow(r))
-      : offRows ? offRows.map((r) => DebrisField.fieldRowSpec('welcome', this._fieldSeed, r)) : WELCOME_FIELD;
+      : offRows ? offRows.map((r) => DebrisField.fieldRowSpec('welcome', this._fieldSeed, r, null, attitude)) : WELCOME_FIELD;
     const rowOf = (i) => (fieldRows ? fieldRows[i] : offRows ? offRows[i] : i);   // the row spec i of `fieldToSpawn` came from
 
     // Collect candidates: alive debris not already special-tagged. Prefer debris
@@ -4423,7 +4528,11 @@ export class DebrisField {
       const wantType = desiredType(spec);
       let best = null;
       let bestScore = -1;
-      for (const d of scorePool) {
+      // PF1.3 (review 10-25): a paired piece takes its body from the FAR END of the pool (the rows before it take the front, as they
+      // always did), so the bodies a mission's welcome rows get - and the ids the next mission's rows get - do not move
+      const rev = Number.isInteger(spec.pair);
+      for (let k = 0; k < scorePool.length; k++) {
+        const d = scorePool[rev ? scorePool.length - 1 - k : k];
         if (usedIds.has(d.id)) continue;
         let score = 0;
         if (wantType && d.type === wantType) score += 4;
@@ -4642,7 +4751,7 @@ export class DebrisField {
       // this lets consumers/tests recover the intended progression position.
       debris._welcomeSpecIndex = rowOf(i);
       // u20-debris v2: a mission extra (row from EXTRA_ROW0 up) is tagged by kind: the map-off "is one still out" rule reads it
-      if (rowOf(i) >= Constants.SMALL_GROUP.EXTRA_ROW0) debris._extraKind = rowOf(i) === Constants.SMALL_GROUP.SAT_ROW ? 'sat' : 'group';
+      if (rowOf(i) >= Constants.SMALL_GROUP.EXTRA_ROW0) debris._extraKind = DebrisField.isPairRow(rowOf(i)) ? 'pair' : rowOf(i) === Constants.SMALL_GROUP.SAT_ROW ? 'sat' : 'group';
       if (fieldPlan) {   // slice 2b: which field and which of its rows this piece is (FieldRegistry reads them when it is removed)
         debris.fieldId = fieldPlan.fieldId;
         debris.fieldRow = rowOf(i);

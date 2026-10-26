@@ -32,6 +32,7 @@ import {
   pieceClaim, isFree, linesCross, lineWrapsShip, samePiece, pieceIsCaught,
   launchRefusalLine, crossNamedStrutLine, crossNoneClearLine, launchDroppedLine, launchCrossDroppedLine, wrapRefusalLine,
   fanOutLine, fanOutNoneLine, stayedLine, reachNoneLine, heavyNoneLine, holdsStillLine, netIsOut,
+  pairNoneLine, pairNeedsTurnLine, pairNotReadyLine, pairDroppedLine, pairHeldLine, pairDriftLine, pairCrossLine, pairStrutLine, pairRangeLine, pairErrorLine,
 } from '../systems/PieceClaim.js';
 import { engineGasKg, engineDeltaV, engineTankDryKg, engineGasLowFrac, coldGasPoolToKg } from '../systems/ResourceSystem.js';
 
@@ -598,6 +599,8 @@ export class ArmManager {
     /** @type {import('../systems/AutopilotSystem.js').AutopilotSystem|null}
      *  Injected post-construction for the aim-before-launch daughter ceremony. */
     this._autopilot = null;
+    /** pair-shot (S2): the two daughters of a pair launch whose springs have not both fired yet (the recoil refund waits for them), or null. */
+    this._pairRecoil = null;
 
     /** @type {ArmUnit[]} */
     this.arms = [];
@@ -2137,11 +2140,14 @@ export class ArmManager {
    * @param {Object} target2 - Target for arm 2 (optional)
    * @returns {boolean} Success
    */
-  dualFire(armIndex1, armIndex2, target1 = null, target2 = null) {
+  dualFire(armIndex1, armIndex2, target1 = null, target2 = null, opts = null) {
     const arm1 = this.arms[armIndex1];
     const arm2 = this.arms[armIndex2];
 
     if (!arm1 || !arm2) return false;
+
+    // pair-shot (S2): a pair at ONE fixed strut angle (the pair ceremony's: `firePair`) is the barrier path below, never the per-target gate.
+    if (opts && Number.isFinite(opts.alpha)) return this._dualFireFixed(arm1, arm2, target1, target2, opts);
 
     // Both must be docked AND spring-charged
     if (arm1.state !== ARM_STATES.DOCKED || !arm1.springCharged) return false;
@@ -2185,6 +2191,188 @@ export class ArmManager {
     // Both accepted but one was deferred by the gate: no DUAL_FIRE yet (they will
     // not fire together). Otherwise at least one was refused.
     return !!(deployed1 && deployed2);
+  }
+
+  // ==========================================================================
+  // PAIR SHOT (owner 2026-10-25 "2 a"; DECISIONS §38 row 5; plan daughter-pairs-1025 S2)
+  // ==========================================================================
+
+  /**
+   * The Q key (and the touch PAIR button): launch the pair the autopilot offers, both daughters in the SAME frame. One ceremony for the
+   * two: both arms reserved and both pieces claimed, the mother turns (yaw and pitch only) to the pair's attitude while both struts swing
+   * to the pair's ONE angle (`requestAimRotation`, `pair` option), then the barrier (`_pairBarrier` -> `dualFire(..., {alpha})`) fires both
+   * once both are at that angle and their lines are clear. The old gate (`_launchTargetOrFree`) is not used: it swings each strut to
+   * its own angle and turns a swing into a waiting entry, so the two would leave in different frames. Nothing leaves unless both can.
+   * @returns {boolean} true when the ceremony started
+   */
+  firePair() {
+    const ap = this._autopilot;
+    const offer = (ap && typeof ap.getPairOffer === 'function') ? ap.getPairOffer() : null;
+    const say = (text, priority = 'warning') => { eventBus.emit(Events.COMMS_MESSAGE, { text, priority }); return false; };
+    if (!offer) return say(pairNoneLine(), 'info');
+    const player = this.playerSatellite;
+    if (player && player.safeMode) return say('Daughters locked. Safe mode active. Repair subsystems first.');
+    if (powerDistribution.armMultiplier <= 0) return say('CAUTION: DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy');
+    if (tripRefuses('daughter')) return false;
+    const pairs = [[offer.armA, offer.tA], [offer.armB, offer.tB]];
+    for (const [arm, target] of pairs) {
+      if (!target || target._disposed === true || target.alive === false) return say(pairNotReadyLine(arm.displayName));
+      if (arm.state !== ARM_STATES.DOCKED || !arm.springCharged || !(arm.fuel > 5) || arm._aimReserved) return say(pairNotReadyLine(arm.displayName));
+      if (checkActiveSatArming(target, this._catalogLoader, eventBus)) return false;
+      const refused = this.indexLaunchRefusal(arm.index, target);
+      if (refused) return say(refused.text);
+      const far = this._pairOutOfReach(arm, target);
+      if (far) return say(`${arm.displayName}: Target ${Math.round(far.distM)}m away (max ${Math.round(far.maxRange)}m). Press A to autopilot closer first.`);
+    }
+    const blocked = this._motherTurnBlock();
+    if (blocked) return say(pairNeedsTurnLine(blocked), 'info');
+    if (typeof ap.isAiming === 'function' && ap.isAiming()) return say('Turning the ship to line up the launch — stand by.', 'info');
+    const [[armA, tA], [armB, tB]] = pairs;
+    // both arms are reserved and both pieces are theirs from this moment (the turn takes seconds)
+    armA._claimTarget = tA; armB._claimTarget = tB;
+    armA._aimReserved = true; armB._aimReserved = true;
+    const release = () => { armA._aimReserved = false; armB._aimReserved = false; armA._claimTarget = null; armB._claimTarget = null; };
+    ap.requestAimRotation(ap.pairAimProvider(offer), {
+      mode: 'daughter', armManager: this, arm: armA, pairIndex: armA.index, pair: { armB, alpha: offer.alpha },
+      maxWaitS: Constants.AIM.AIM_TIMEOUT_S,
+    }).then(() => {
+      armA._aimReserved = false; armB._aimReserved = false;
+      try {
+        this._pairBarrier(offer);
+      } catch (err) {
+        // a check at the barrier threw: neither daughter has left (the checks come before the springs); release both and say so
+        release();
+        console.warn('[ArmManager] pair shot: the launch check failed', err);
+        this._sayWarn(pairErrorLine());
+      }
+    }).catch((err) => {
+      release();
+      // the aim has said why (Comms): nothing else leaves either daughter docked
+      if (err && err.code === 'TOO_SLOW') this._sayWarn('Pair shot cancelled: the turn is too slow. Neither daughter left.');
+    });
+    return true;
+  }
+
+  /** @private is the piece past this daughter's deploy range? @returns {{distM:number, maxRange:number}|null} */
+  _pairOutOfReach(arm, target) {
+    if (!target || !target._scenePosition || !arm.position) return null;
+    const distM = target._scenePosition.clone().sub(arm.position).length() / M;
+    const maxRange = arm.config.tetherMax * Constants.ARM_DEPLOY_RANGE_FRACTION;
+    return distM > maxRange ? { distM, maxRange } : null;
+  }
+
+  /** The aim is done: both struts are at the pair's angle and she is on the pair's attitude. Fire both, or neither. @private */
+  _pairBarrier(offer) {
+    const { armA, armB, tA, tB, alpha } = offer;
+    const stop = (text) => { armA._claimTarget = null; armB._claimTarget = null; this._sayWarn(text); return false; };
+    for (const [arm, target] of [[armA, tA], [armB, tB]]) {
+      if (arm.state !== ARM_STATES.DOCKED || !arm.springCharged) return stop(pairNotReadyLine(arm.displayName));
+      const why = this._releaseBlock(arm, target);
+      if (why) return stop(pairDroppedLine(arm.displayName, why));
+    }
+    return this.dualFire(armA.index, armB.index, tA, tB, { alpha, offer });
+  }
+
+  /**
+   * pair-shot P3: the barrier. Both struts are at `opts.alpha`; everything that could stop either daughter is asked FIRST, and only when
+   * all of it passes does either leave, in this very call (one frame): her piece taken or lost, her strut not at its angle, the pieces
+   * drifted off the lines while she turned (`PAIR_SHOT.FIRE_MISS_DEG`), a part of the ship across a line (`launchLineBlocked` along the
+   * pair's own angle: the struts are never moved to clear it), the two tethers crossing. Any "no" releases both with ONE plain line.
+   * `DUAL_FIRE` emits exactly when both launched; the recoil refund follows when the two springs have fired (`_tickPairRecoil`).
+   * @private
+   */
+  _dualFireFixed(arm1, arm2, t1, t2, opts) {
+    const PS = Constants.PAIR_SHOT;
+    const alpha = opts.alpha;
+    const stop = (text) => { arm1._claimTarget = null; arm2._claimTarget = null; this._sayWarn(text); return false; };
+    const pairs = [[arm1, t1], [arm2, t2]];
+    const player = this.playerSatellite;
+    if (player && player.safeMode) return stop('Daughters locked. Safe mode active. Repair subsystems first.');
+    if (powerDistribution.armMultiplier <= 0) return stop('CAUTION: DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy');
+    if (tripRefuses('daughter')) return stop(pairNotReadyLine(arm1.displayName));
+    for (const [arm, target] of pairs) {
+      if (arm.state !== ARM_STATES.DOCKED || !arm.springCharged || !(arm.fuel > 5)) return stop(pairNotReadyLine(arm.displayName));
+      if (target) {
+        const why = this._releaseBlock(arm, target);
+        if (why) return stop(pairDroppedLine(arm.displayName, why));
+        // F1 PS1.2: the piece may have drifted out of reach while she turned (the aim only follows the lines)
+        const far = this._pairOutOfReach(arm, target);
+        if (far) return stop(pairRangeLine(arm.displayName, far.distM, far.maxRange));
+      }
+      if (typeof arm.getAimAlpha === 'function' && Math.abs(arm.getAimAlpha() - alpha) > 0.5 * Math.PI / 180) return stop(pairStrutLine(arm.displayName));
+    }
+    // the pieces still on the two lines (the aim keeps them there while she turns; a piece that moved off is judged here)
+    const ap = this._autopilot;
+    if (opts.offer && ap && typeof ap.pairMissesNow === 'function') {
+      const m = ap.pairMissesNow(opts.offer);
+      if (!m || m.missA > PS.FIRE_MISS_DEG || m.missB > PS.FIRE_MISS_DEG) return stop(pairDriftLine(m ? m.missA : 90, m ? m.missB : 90));
+    }
+    // a part of the ship across either line: refused, the struts stay where they are
+    for (const [arm] of pairs) {
+      let v;
+      try { v = this.launchLineBlocked(arm.index, this._strutDirShip(arm)); }
+      catch (err) { console.warn('[ArmManager] pair shot: the line check failed', err); return stop(pairErrorLine()); }   // F1 PS1.3: never silent, never one alone
+      if (v.blocked) return stop(pairHeldLine(arm.displayName, v.part));
+    }
+    if (t1 && t2 && this._pairTethersCross(arm1, t1, arm2, t2)) return stop(pairCrossLine());
+    // fire both, in this frame
+    arm1._claimTarget = t1 || null; arm2._claimTarget = t2 || null;
+    arm1._aimConverged = true; arm2._aimConverged = true;
+    const ok1 = t1 ? arm1.deploy(t1) : arm1.deployFreefly();
+    const ok2 = t2 ? arm2.deploy(t2) : arm2.deployFreefly();
+    arm1._aimConverged = false; arm2._aimConverged = false;
+    if (!ok1 || !ok2) {
+      // one refused although everything above passed (a guard inside `deploy`): the other is already out, so say it plainly
+      if (!ok1) arm1._claimTarget = null;
+      if (!ok2) arm2._claimTarget = null;
+      if (ok1 || ok2) this._sayWarn(`Pair shot: only ${ok1 ? arm1.displayName : arm2.displayName} left; ${ok1 ? arm2.displayName : arm1.displayName} stayed docked.`);
+      if (ok1 || ok2) eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm: ok1 ? arm1 : arm2 });
+      return ok1 || ok2;
+    }
+    eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm: arm1 });
+    eventBus.emit(Events.DUAL_FIRE, { armIndex1: arm1.index, armIndex2: arm2.index });
+    this._pairRecoil = { a: arm1, b: arm2, t: 0 };
+    return true;
+  }
+
+  /** The two tethers of a pair at its fixed angle, as `_lineSet` would draw them, swap sides? @private */
+  _pairTethersCross(arm1, t1, arm2, t2) {
+    const V5 = Constants.OCTOPUS_V5;
+    const line = (arm, t) => {
+      const b = t._scenePosition ? this._shipPointM(t._scenePosition) : null;
+      if (!b || !arm.dockOffset || typeof arm.getAimAlpha !== 'function') return null;
+      const az = Math.atan2(arm.dockOffset.y, arm.dockOffset.x);
+      const d = strutLocalDirection(arm.getAimAlpha(), az, new THREE.Vector3());
+      const reel = V5.STRUT_LENGTH * 0.85;
+      return { a: [Math.cos(az) * V5.COLLAR_RADIUS + d.x * reel, Math.sin(az) * V5.COLLAR_RADIUS + d.y * reel, V5.COLLAR_Y + d.z * reel], b };
+    };
+    try {
+      const A = line(arm1, t1), B = line(arm2, t2);
+      return !!(A && B && linesCross(A, B));
+    } catch (err) { return false; }
+  }
+
+  /**
+   * pair-shot: once both springs of a pair launch have fired (the same frame) the opposite kicks cancel: say so (`DUAL_FIRE_RECOIL`), so
+   * the linear-recoil gas each daughter's push billed is refunded (`PlayerSatellite._applyDualFireRecoil`). Called each frame.
+   * @private
+   */
+  _tickPairRecoil(dt) {
+    const pr = this._pairRecoil;
+    if (!pr) return;
+    pr.t += dt;
+    if (pr.a._springFired && pr.b._springFired) {
+      this._pairRecoil = null;
+      const m1 = pr.a.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+      const m2 = pr.b.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+      const residual = Math.abs(m1 * pr.a.launchSpeed - m2 * pr.b.launchSpeed);
+      const live = this.playerSatellite ? this.playerSatellite.mass : NaN;
+      const motherMass = Number.isFinite(live) && live > 0 ? live : Constants.MOTHER_DRAG.MASS_KG;
+      const residualDv = residual / motherMass;
+      eventBus.emit(Events.DUAL_FIRE_RECOIL, { cancelled: residualDv < 0.01, residualDv });
+    } else if (pr.t > 5 || (pr.a.state !== ARM_STATES.LAUNCHING && pr.b.state !== ARM_STATES.LAUNCHING && pr.t > 0)) {
+      this._pairRecoil = null;       // one never fired (recalled in the clamp): nothing to refund together
+    }
   }
 
   /**
@@ -2665,6 +2853,8 @@ export class ArmManager {
       arm._digestSunScale = digestSunScale;
       arm.update(dt, parentPos, parentQuat);
     }
+
+    this._tickPairRecoil(dt);       // pair-shot: both springs fired in one frame -> the opposite kicks cancel (refund)
 
     // reel-home (Decisions 5-7): the strut follows a daughter on the reels; the mother turns for her when nothing limits.
     this._updateReelHome(dt, parentPos, parentQuat);
@@ -6107,9 +6297,12 @@ export class ArmManager {
    * herself, her strut and her own rack. Reports every part the capsule touches.
    * @param {number} armIndex
    * @param {{x:number,y:number,z:number}|number[]} dirShip — ship frame, need not be unit
+   * @param {{alsoIgnore?: string[], centre?: number[], halfWidth?: number}} [opts] pair-shot: more parts to ignore (the partner's strut and body, which will stand
+   *   at the pair's angle too); the body's centre (ship metres) when the daughter is not yet where the line starts (the strut tip at the planned angle),
+   *   and her half-width when it is known (measuring the mesh costs half a millisecond)
    * @returns {{blocked:boolean, part:string, cat:string, name:string, hits:Array<{name:string,cat:string,gap:number}>}}
    */
-  launchLineBlocked(armIndex, dirShip) {
+  launchLineBlocked(armIndex, dirShip, opts) {
     const none = { blocked: false, part: '', cat: '', name: '', hits: [] };
     const ko = this.getKeepOut();
     const arm = this.arms[armIndex];
@@ -6119,22 +6312,48 @@ export class ArmManager {
     if (!(len > 1e-9)) return none;
     const d = [raw[0] / len, raw[1] / len, raw[2] / len];
 
-    const body = ko.measureCat('dau' + armIndex, d);
+    const body = opts && opts.centre && opts.halfWidth > 0 ? { n: 1, centre: opts.centre, halfWidth: opts.halfWidth } : ko.measureCat('dau' + armIndex, d);
     let c, r;
     if (body.n > 0) {
-      c = body.centre; r = body.halfWidth;
+      c = (opts && opts.centre) || body.centre; r = body.halfWidth;
     } else {                                   // no mesh to measure: tip + table size
-      c = [arm.dockOffset.x / M, arm.dockOffset.y / M, arm.dockOffset.z / M];
+      c = (opts && opts.centre) || [arm.dockOffset.x / M, arm.dockOffset.y / M, arm.dockOffset.z / M];
       r = Math.max(...(arm.config.bodyDims || [0.4])) / 2;
     }
     const L = 15;
     const res = ko.segment(c, [c[0] + d[0] * L, c[1] + d[1] * L, c[2] + d[2] * L], r, {
       hits: true,
-      ignore: ['dau' + armIndex, 'strut' + armIndex, 'rack catch ' + armIndex],
+      ignore: ['dau' + armIndex, 'strut' + armIndex, 'rack catch ' + armIndex, ...((opts && opts.alsoIgnore) || [])],
     });
     if (!res.hits || res.hits.length === 0) return none;
     const h = res.hits[0];
     return { blocked: true, part: this._plainPart(h), cat: h.cat, name: h.name, hits: res.hits };
+  }
+
+  /**
+   * pair-shot (fix F1 PS1.1): would either launch line of the pair, along strut angle `alpha`, be blocked by a part of the ship as it is now
+   * (radiators, wings, catches, the hull, the other struts)? The barrier asks the same of the same lines and refuses; the finder asks first,
+   * so no pair is offered that the barrier would refuse. The daughters are not at `alpha` yet, so each line starts at the strut tip for
+   * `alpha` (where her body will be: measured within 0.04 m of her body's centre at every angle) and the partner's own strut and body
+   * are ignored (at the barrier both stand at `alpha`).
+   * @returns {{arm: object, part: string}|null} the first blocked line, or null when both are clear
+   */
+  pairLineBlockedAt(armA, armB, alpha) {
+    for (const [arm, other] of [[armA, armB], [armB, armA]]) {
+      const az = Math.atan2(arm.dockOffset.y, arm.dockOffset.x);
+      const d = strutLocalDirection(alpha, az, new THREE.Vector3()).normalize();
+      const dp = this._dockPositions && this._dockPositions[arm.index];
+      const tip = dp ? strutTipMeters(dp, alpha) : null;
+      // her half-width across the line: measured once per keep-out (0.13-0.14 m at every angle) and kept: the mesh walk was half the cost of a look
+      const ko = this.getKeepOut();
+      let cache = this._pairBodyR;
+      if (!cache || cache.ko !== ko) cache = this._pairBodyR = { ko, r: new Map() };
+      let hw = cache.r.get(arm.index);
+      if (hw === undefined && ko) { const m = ko.measureCat('dau' + arm.index, d); hw = m.n > 0 ? m.halfWidth : 0; cache.r.set(arm.index, hw); }
+      const v = this.launchLineBlocked(arm.index, d, { alsoIgnore: ['dau' + other.index, 'strut' + other.index], centre: tip ? [tip.x, tip.y, tip.z] : undefined, halfWidth: hw || undefined });
+      if (v.blocked) return { arm, part: v.part };
+    }
+    return null;
   }
 
   /** Plain-words name of a blocking part, for the comms line. @private */

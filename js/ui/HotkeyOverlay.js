@@ -94,6 +94,7 @@ export const HOTKEY_GROUPS = [
     rows: [
       [['1', '–', '4'], 'Select a daughter'],
       [['D'], 'Launch selected daughter'],
+      [['Q'], 'Launch the marked pair together'],
       [['R'], 'Reel selected daughter'],
       [['`'], 'Next tool'],
       [['N'], 'Use tool'],

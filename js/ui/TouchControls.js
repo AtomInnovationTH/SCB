@@ -307,6 +307,8 @@ export class TouchControls {
    * @param {function|null} [deps.onHold]            Session J: ({x, y}) → truthy = a selected target is under
    *   the finger → the radial opens
    * @param {function|null} [deps.pressKey]          Session J: (code) → the hub presses the key (KeyDispatch)
+   * @param {function|null} [deps.pairOffered]       pair-shot (S2): () → true while a pair shot is offered; the PAIR button
+   *   (beside the turn pad, NOT a radial verb) shows only then and presses KeyQ through `pressKey`, the keyboard's own path
     * @param {function|null} [deps.openPane]          Session J: ('library', open) → the hub opens/closes
     *   the workbench drawer (the LEFT edge-band swipe — the drawer is left on every floor, §13 r5;
     *   gestures follow it, §13 r6 2026-09-26; 'refit' is never sent)
@@ -325,7 +327,7 @@ export class TouchControls {
                 paneDensity = null, openShop = null, toggleLibrary = null,
                 telemetry = null, tune = null,
                 inputKeys = null, cameraSystem = null, onTap = null, onHold = null,
-                pressKey = null, openPane = null, onEdgeTouch = null } = {}) {
+                pressKey = null, openPane = null, onEdgeTouch = null, pairOffered = null } = {}) {
     this._canvas = canvas || null;
     this._router = wheelRouter || null;
     this._ladder = ladderController;   // rail-drag → jump({toFloor}); currentFloor() / paneState() for the turn pad
@@ -339,6 +341,9 @@ export class TouchControls {
     this._onTap = (typeof onTap === 'function') ? onTap : null;
     this._onHold = (typeof onHold === 'function') ? onHold : null;
     this._pressKey = (typeof pressKey === 'function') ? pressKey : null;
+    // pair-shot (S2, DECISIONS §32 iPad): () => true while the game offers a pair; the PAIR button is shown only then
+    this._pairOffered = (typeof pairOffered === 'function') ? pairOffered : null;
+    this._pairBtn = null;
     this._openPane = (typeof openPane === 'function') ? openPane : null;
     // Session P (plan D3): the edge-touch witness — where a touch landed.
     this._onEdgeTouch = (typeof onEdgeTouch === 'function') ? onEdgeTouch : null;
@@ -420,6 +425,11 @@ export class TouchControls {
     this._endGesture();                 // clears the hold timer
     this._endPad();                     // releases any held arrow
     this._closeRadial();
+    if (this._pairBtn) {
+      this._pairBtn.removeEventListener('click', this._onPairTap);
+      if (this._pairBtn.parentNode) this._pairBtn.parentNode.removeChild(this._pairBtn);
+      this._pairBtn = null;
+    }
     if (this._padEl) {
       this._padEl.removeEventListener('touchstart', this._onPadStart);
       this._padEl.removeEventListener('touchmove', this._onPadMove);
@@ -761,6 +771,27 @@ export class TouchControls {
     if (el.style.display !== d) el.style.display = d;
   }
 
+  /** @private pair-shot: show the PAIR button while a pair is offered in gameplay with no drawer open; hide it otherwise. */
+  _syncPair() {
+    const el = this._pairBtn;
+    if (!el) return;
+    let want = false;
+    try { want = !!(this._pairOffered && this._pairOffered()); } catch (_err) { want = false; }
+    if (want && this._gameState && typeof this._gameState.isGameplay === 'function' && !this._gameState.isGameplay()) want = false;
+    if (want && this._ladder && typeof this._ladder.paneState === 'function') {
+      let ps = null;
+      try { ps = this._ladder.paneState(); } catch (_err) { ps = null; }
+      if (ps && ps.library) want = false;
+    }
+    const d = want ? '' : 'none';
+    if (el.style.display !== d) el.style.display = d;
+  }
+
+  /** pair-shot: is the PAIR button on screen right now? Read-only (tests). */
+  isPairButtonShown() {
+    return !!(this._pairBtn && this._pairBtn.style.display !== 'none');
+  }
+
   /** u17a: is the TURN PAD on screen right now? Read-only (the glass captions name it only while it is up). */
   isTurnPadShown() {
     return !!(this._padEl && this._padEl.style.display !== 'none');
@@ -1088,6 +1119,18 @@ export class TouchControls {
         opacity: ${this._tune.activeOpacity}; transition: opacity 0.6s ease;
         -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
       }
+      /* pair-shot (S2): the PAIR button, beside the turn pad; shown only while a pair is offered (_syncPair). */
+      #touch-pair-btn {
+        position: fixed; z-index: ${TURN_PAD_Z};
+        left: ${TURN_PAD_CENTRE_X + TURN_PAD_PX / 2 + 16}px; bottom: ${TURN_PAD_CENTRE_FROM_BOTTOM - 24}px;
+        min-width: 96px; min-height: 48px; box-sizing: border-box; padding: 10px 14px;
+        border-radius: 8px; border: 1px solid rgba(255, 207, 74, 0.9);
+        background: rgba(5, 10, 20, 0.86); color: #ffcf4a;
+        font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.14em;
+        pointer-events: auto; touch-action: manipulation;
+        -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+      }
+      #touch-pair-btn:active { background: rgba(255, 207, 74, 0.22); }
       #touch-turn-pad.touch-idle { opacity: ${this._tune.idleOpacity}; }
       #touch-turn-pad.touch-pad-held { background: rgba(0, 255, 136, 0.14); border-color: rgba(0, 255, 136, 0.95); }
       #touch-turn-pad i {
@@ -1164,6 +1207,24 @@ export class TouchControls {
     this._padEl = pad;
     this._syncPad();
 
+    // The PAIR button (pair-shot): a new small control beside the turn pad, not a radial verb; it presses the same key the keyboard's Q does.
+    if (this._pairOffered) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.id = 'touch-pair-btn';
+      btn.textContent = 'PAIR';
+      btn.style.display = 'none';
+      this._onPairTap = () => {
+        this._touched();
+        if (this._telemetry) this._telemetry.log('pair', { code: 'KeyQ' });
+        if (this._pressKey) { try { this._pressKey('KeyQ'); } catch (_err) { /* dep */ } }
+      };
+      btn.addEventListener('click', this._onPairTap);
+      document.body.appendChild(btn);
+      this._pairBtn = btn;
+      this._syncPair();
+    }
+
     // Rail grip lives OUTSIDE #touch-controls: it must stack above the rail
     // (#ladder-rail z-index 35), which the root's z-index 15 stacking context
     // could never reach from within. Invisible; aligned to the rail by
@@ -1187,6 +1248,7 @@ export class TouchControls {
       this._syncGrip();
       this._syncChrome();
       this._syncPad();
+      this._syncPair();
     }, this._tune.sliderSyncMs);
   }
 

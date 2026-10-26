@@ -211,6 +211,63 @@ export function launchCrossDroppedLine(who, otherWho) {
   return `${who} stays docked: her line would cross ${otherWho}'s. ${forInput('Tab to another piece', 'Tap another piece')}, then press D.`;
 }
 
+// ── pair shot (owner 2026-10-25 "2 a"; plan daughter-pairs-1025 S2): the lines of the Q key, plain words ─────────────────────────
+
+/** A pair is offered: said once per pair. `missDeg`: the larger of the two launch lines' misses, rounded. */
+export function pairReadyLine(missDeg) {
+  return `Pair shot ready. ${forInput('Press Q', 'Tap PAIR')} to launch both daughters together; each steers the last ${missDeg}° to her own piece.`;
+}
+
+/** Q with no pair offered. */
+export function pairNoneLine() {
+  return `No pair shot is ready. Pick a daughter and a piece first: a second piece is marked when two fit. ${forInput('D', 'SEND DAUGHTER')} launches one daughter alone.`;
+}
+
+/** The pair needs the ship free to turn (a daughter out on her line, a launch under way ...). */
+export function pairNeedsTurnLine(reason) {
+  return `Pair shot held: ${reason}. ${forInput('D', 'SEND DAUGHTER')} launches one daughter alone.`;
+}
+
+/** A daughter of the pair is not ready (not docked, spring not charged, no fuel). */
+export function pairNotReadyLine(who) {
+  return `Pair shot held: ${who} is not ready. Neither daughter left.`;
+}
+
+/** At the spring one of the two pieces was caught, lost or taken: neither daughter leaves. */
+export function pairDroppedLine(who, why) {
+  return `Pair shot cancelled: ${who}'s ${(WHY_PIECE[why] || WHY_PIECE.caught).replace(/^her piece/, 'piece')}. Neither daughter left.`;
+}
+
+/** A launch line is blocked by part of the ship: neither leaves, the strut angles stay as they are. */
+export function pairHeldLine(who, part) {
+  return `Pair shot held: ${part} is in the way of ${who}'s line. Neither daughter left.`;
+}
+
+/** A piece drifted out of a daughter's reach while the ship turned (checked at the spring, for both). */
+export function pairRangeLine(who, distM, maxM) {
+  return `Pair shot cancelled: ${who}'s piece is ${Math.round(distM)} m away, past her ${Math.round(maxM)} m reach. Neither daughter left.`;
+}
+
+/** A check inside the pair launch failed (a fault, not a refusal): neither daughter leaves. */
+export function pairErrorLine() {
+  return 'Pair shot cancelled: the launch check failed. Neither daughter left.';
+}
+
+/** The pieces drifted off the two lines while the ship turned. */
+export function pairDriftLine(missA, missB) {
+  return `Pair shot cancelled: the pieces have drifted ${Math.round(Math.max(missA, missB))}° off the lines. Neither daughter left.`;
+}
+
+/** The two tethers would swap sides on the way. */
+export function pairCrossLine() {
+  return 'Pair shot cancelled: the two tethers would cross. Neither daughter left.';
+}
+
+/** A strut did not reach its angle (or a hinge is locked). */
+export function pairStrutLine(who) {
+  return `Pair shot cancelled: ${who}'s strut is not at its angle. Neither daughter left.`;
+}
+
 /**
  * R5: the number key picked a strut whose line would cross another daughter's, and a clear one exists.
  * F11: on glass there are no number keys: a daughter is picked by a tap on her row in DAUGHTERS and sent with the

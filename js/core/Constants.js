@@ -5389,6 +5389,28 @@ export const Constants = {
   },
 
   // ==========================================================================
+  // PAIR SHOT (owner 2026-10-25 00:11Z / 02:23Z "2 a", DECISIONS §38 row 5; plan daughter-pairs-1025 S2): two opposite daughters of one
+  // type (struts 0+2 weavers, 1+3 spinners) leave in the same frame at the SAME strut angle, so their kicks cancel (measured: net 0 at every
+  // angle). The mother turns (yaw/pitch only, her roll kept) so that each launch line lies within MISS_DEG of its own piece; each daughter
+  // steers the rest herself on her own fuel (measured, tmp/pairs/s2/RESULT.md: 0.37 g per degree of miss for a weaver, 0.125 g a spinner).
+  // ==========================================================================
+  PAIR_SHOT: {
+    ENABLED: true,
+    MISS_DEG: 10,            // each daughter's launch line within this of her piece (measured: practical for 100 % of start-field pairs)
+    TURN_DEG: 30,            // the mother's barrel turns at most this far for the pair (measured: 81 % of start-field pairs fit)
+    FUEL_G: { weaver: 8, spinner: 2.5 },          // the pair's extra daughter fuel, g (both misses summed x the rate below)
+    FUEL_G_PER_DEG: { weaver: 0.37, spinner: 0.125 },   // one daughter, per degree of miss (flat in range beyond 150 m)
+    MIN_SEP_DEG: 4,          // two pieces seen less than this apart (one clump) are not a pair: the net scoops the clump whole
+    ALPHA_MIN_DEG: { weaver: 7, spinner: 3 },     // the strut angles the real launch gate leaves clear for a pair (measured, 1 deg steps)
+    ALPHA_MAX_DEG: 180,
+    MAX_CANDIDATES: 8,       // the nearest pieces by bearing tried as the second piece
+    REPLAN_S: 0.5,           // the offer is looked at again at most this often (and sooner when she turns or a piece is picked)
+    HOLD_RATIO: 0.8,         // a standing offer is kept until a new pair beats its cost by this ratio
+    FIRE_MISS_DEG: 12,       // at the spring: a pair whose lines have drifted past this is not fired (the gap over MISS_DEG is the aim's own stop error)
+    SPREAD_MIN_DEG: 0,       // P5: the least flight angle between the two daughters (set from the measured closest approach; 0 = none)
+  },
+
+  // ==========================================================================
   // WHEEL PRE-TURN (owner 2026-10-25 02:23Z: "if a target is selected, the reaction wheel could intelligently immediately start pivoting
   // mother for best angle ... save gas"; plan daughter-pairs-1025 S1b): with the wheel kit, a docked daughter picked (keys 1-4) and a piece
   // picked, the wheels start turning her toward the shot the chooser would take, no gas, at the wheels' own pace; firing hands the rest to
@@ -5871,6 +5893,39 @@ export const Constants = {
     EXTRA_FWD_MIN_M: 330, EXTRA_FWD_MAX_M: 370, EXTRA_LAT_MIN_M: 15, EXTRA_LAT_MAX_M: 25,
     EXTRA_ROW0: 200,
     SAT_ROW: 300,
+  },
+
+  // =========================================================================
+  // PAIR_FIELDS - pieces laid out in pairs so a two-daughter shot comes up (owner 2026-10-25, DECISIONS §38 row 7; DebrisField.pairSpec,
+  // FieldRegistry._addPairRows; docs/research/2026-10-debris-sizes.md)
+  // =========================================================================
+  // From mission FROM_MISSION on, the field she starts at gets PAIRS pairs of small fragments (rows ROW0 .. ROW0 + 2 x PAIRS - 1; row
+  // ROW0 + 2p + m is member m of pair p), unless it still holds an uncaught one. Pair p is built for the struts of KINDS[p]: the two OPPOSITE
+  // struts at ONE angle alpha (equal alpha = the two launch kicks cancel, a pair shot). Each piece sits on the launch line of its strut at
+  // that alpha from the strut's tip, `range` m out, as she is at ARRIVAL (nose along track: ship x = left = -latM, ship y = up = radM, ship
+  // z = ahead = fwdM; measured with js/test/_fieldsRig.js, which flies her the way a trip ends), so from there both lines hit their pieces
+  // with no turn. A pair is "weaver-size" or "spinner-size" by the struts it is built for and the range it sits at: the weaver pair 420-620 m
+  // out (a weaver's deploy range is 1,600 m), the spinner pair 135-200 m (a spinner's is 400 m). Every piece is a fragment of the group's
+  // size law (<= 5 kg, so either net takes it); the weaver pair is the bigger. PF1.2 (review 10-25): the pieces drift against her while she
+  // holds her attitude (the radial and cross-track offsets of a piece swing round once an orbit; 1 real s = 10 game s), and the swing is the
+  // piece's offset off her track, 0.9 x range x sin(alpha): so alpha is 152-162 (weaver) and 160-168 (spinner), a spinner pair 135-200 m out.
+  // The two daughters leave 24-62 deg apart (2 x asin(sin alpha)): apart, never parallel. MEASURED (tmp/rv/window.mjs, her nose forward /
+  // nose backwards / rolled 30 deg, LVLH held, 9 fields): both pairs stay hittable (<= 10 deg after a turn of <= 30 deg, roll kept) for >= 180 s
+  // real time (the old bands: 80-110 s on six fields). Own seeded stream (SEED_XOR), so no other piece moves; all numbers are ESTIMATES to tune.
+  // HINGE_R_M / HINGE_Z_M are the strut hinge ring's radius and height in the ship frame (measured with strutTipMeters; test-PairFields
+  // re-measures them against the live ship); the strut is OCTOPUS_V5.STRUT_LENGTH long.
+  PAIR_FIELDS: {
+    FROM_MISSION: 2,
+    ROW0: 400,
+    PAIRS: 2,
+    SEED_XOR: 0x2D9A17C3,
+    HINGE_R_M: 0.4,
+    HINGE_Z_M: 1.0,
+    RANGE_SPREAD: 0.08,        // each member's range is the pair's +-8 %, so the two pieces are not mirror images
+    KINDS: [
+      { name: 'weaver',  struts: [0, 2], alphaMin: 152, alphaMax: 162, rangeMin: 420, rangeMax: 620, sizeMin: 0.30, sizeMax: 0.50 },
+      { name: 'spinner', struts: [1, 3], alphaMin: 160, alphaMax: 168, rangeMin: 135, rangeMax: 200, sizeMin: 0.10, sizeMax: 0.30 },
+    ],
   },
   // The mission satellite: a dead satellite of the cast's own type (FOREGROUND_CAST: 120 kg / 2.2 m and 480 kg / 4.5 m), ONE roll
   // picks mass and size so a heavier one is a bigger one, put FWD_AFTER_GROUP_M beyond the group's centre and LAT_BESIDE_M to

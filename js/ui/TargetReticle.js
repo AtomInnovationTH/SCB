@@ -381,6 +381,8 @@ export class TargetReticle {
     this._apTargetName = '';
     this._apEngagedSince = null;      // Calm-HUD: drives the one-shot engage dip
     this._selectedScreenPos = null;   // { x, y } screen coords of selected target
+    this._pairPiece = null;           // pair-shot: the pair's second piece (marked while a pair is offered), or null
+    this._pairMarkScreen = null;      // pair-shot: where its mark was drawn this frame ({x, y}), null when it was not drawn
 
     // Listen for target events to trigger lock ceremonies.
     // Calm-HUD: under prefers-reduced-motion the ceremonies are skipped (the
@@ -884,6 +886,7 @@ export class TargetReticle {
 
     // Phase 7: Reset selected target screen pos each frame (avoid stale heading line)
     this._selectedScreenPos = null;
+    this._pairMarkScreen = null;
 
     // During STATION_KEEP we want to silence all on-screen target chrome
     // EXCEPT a faint outline on the actual target debris.  The arm pilot is
@@ -920,6 +923,10 @@ export class TargetReticle {
         if (sat.distance / Constants.SCENE_SCALE > 100) continue; // Skip if > 100km
         this._drawActiveSatReticle(sat, playerPos);
       }
+
+      // --- The pair's second piece (pair-shot, owner 2026-10-25 "2 a"): marked only while a pair is offered ---
+      this._pairPiece = data.pairPiece || null;
+      if (this._pairPiece && this._pairPiece.alive !== false) this._drawPairMarker(this._pairPiece);
     }
 
     // --- Draw prograde/retrograde velocity markers (Phase 2.3) ---
@@ -981,6 +988,47 @@ export class TargetReticle {
   // ==========================================================================
   // PROJECTION
   // ==========================================================================
+
+  /**
+   * pair-shot: the mark on the pair's SECOND piece (the first, the selected one, keeps its own reticle): an amber double diamond with
+   * "PAIR" under it, unlike the selected piece's bracket; off screen, an amber chevron at the edge toward it. Drawn only while a pair is
+   * offered (main.js passes `pairPiece` = the second piece, else nothing).
+   * @param {{_scenePosition: {x:number,y:number,z:number}}} piece
+   * @private
+   */
+  _drawPairMarker(piece) {
+    const sp = piece && piece._scenePosition;
+    if (!sp) return;
+    const proj = this._project(sp);
+    const ctx = this.ctx;
+    const amber = '#ffcf4a';
+    ctx.save();
+    ctx.strokeStyle = amber; ctx.fillStyle = amber; ctx.lineWidth = 2; ctx.globalAlpha = 0.95;
+    ctx.font = mono(11); ctx.textAlign = 'center';
+    const diamond = (x, y, r) => {
+      ctx.beginPath();
+      ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y);
+      ctx.closePath(); ctx.stroke();
+    };
+    if (proj.visible) {
+      diamond(proj.x, proj.y, 18);
+      diamond(proj.x, proj.y, 11);
+      ctx.fillText('PAIR', proj.x, proj.y + 34);
+      this._pairMarkScreen = { x: proj.x, y: proj.y };
+    } else {
+      let dx = proj.x - this._halfW, dy = proj.y - this._halfH;
+      if (proj.behind) { dx = -dx; dy = -dy; }
+      const ang = Math.atan2(dy, dx), m = 30;
+      const k = Math.min((this._halfW - m) / (Math.abs(Math.cos(ang)) || 1e-6), (this._halfH - m) / (Math.abs(Math.sin(ang)) || 1e-6));
+      const ex = this._halfW + Math.cos(ang) * k, ey = this._halfH + Math.sin(ang) * k;
+      ctx.translate(ex, ey); ctx.rotate(ang);
+      ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(-8, -9); ctx.lineTo(-3, 0); ctx.lineTo(-8, 9); ctx.closePath(); ctx.fill();
+      ctx.rotate(-ang);
+      ctx.fillText('PAIR', 0, 24);
+      this._pairMarkScreen = { x: ex, y: ey };
+    }
+    ctx.restore();
+  }
 
   /**
    * Project a 3D world position to 2D screen coordinates.

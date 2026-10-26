@@ -3679,6 +3679,7 @@ async function init() {
       onTap: _touchTap,
       onHold: _touchHold,
       pressKey: (code) => dispatchKeyPress(code),   // the radial's verbs press the SAME keys (KeyDispatch → window)
+      pairOffered: () => !!(autopilotSystem && autopilotSystem.getPairOffer && autopilotSystem.getPairOffer()),   // pair-shot: the PAIR button shows only then
       // The edge-band swipe: the workbench pane's own open()/close() (its
       // onOpenChange edge carries the held world + the camera inset). The
       // drawer is left on every floor (§13 r5); gestures follow it (§13 r6,
@@ -7719,6 +7720,8 @@ function gameLoop(timestamp) {
         targetSelector,
         playerOrbit: player.orbit,
         skTargetId: _skTargetIdForReticle,
+        // pair-shot (S2): the pair's second piece gets its own mark while a pair is offered (AutopilotSystem.getPairOffer)
+        pairPiece: (() => { const o = autopilotSystem && autopilotSystem.getPairOffer ? autopilotSystem.getPairOffer() : null; return o ? o.t2 : null; })(),
         // Session O (plan D16 (b), owner 2026-09-07): the score strip's rect
         // as the exclusion band for debris brackets (cached by HUD; null off the
         // ladder → byte-identical shipped path — the ladder-on idiom above).
