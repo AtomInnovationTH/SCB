@@ -290,6 +290,7 @@ export class MenuScreen {
         }
         .adr-group > .adr-section:first-of-type { margin-top: 0.15rem; }
         .adr-list  { margin: 0; padding: 0; list-style: none; line-height: 1.65; }
+        .adr-list[hidden] { display: none; }   /* a closed country's list */
         .adr-list li { font-size: 0.88rem; color: rgba(0,204,255,0.75); }
         .adr-sub   { color: rgba(0,204,255,0.6); font-size: 0.76rem; margin-left: 4px; }
         /* Collapsible reference groups (declutter via expand-on-click) */
@@ -606,32 +607,33 @@ export class MenuScreen {
               </ul>
             </details>
 
-            <!-- Countries — open by default: Thailand, India, Japan, three organisations
-                 each. The rest of each country hides behind a "(more)" button beside
-                 its name (owner 2026-10-25: less wall of text); NASA and ESA hide
-                 behind "Other countries (more)". MenuScreen._toggleMore() shows them;
-                 picking a language flag opens that country's (more) (_openCountryFor).
+            <!-- Countries — Thailand, India, Japan, then Other countries. One is open at
+                 a time (owner 2026-10-26): a closed country shows only its name and
+                 "(more)"; open, its <ul id="adr-more-<country>"> shows three
+                 organisations and the other names. "Other countries (more)" shows
+                 NASA and ESA. MenuScreen._toggleMore() opens one and closes the rest;
+                 the language pick opens its country (_openCountryFor), on load too.
                  Country headers are .adr-section DIV siblings of each list
                  (.adr-list li outranks .adr-section, so never <li>s). Picks and
                  sources: docs/research/2026-10-menu-refresh.md (read 2026-10-25). -->
             <details class="adr-group" open>
               <summary>Countries<span class="adr-count">3</span></summary>
               <div class="adr-section">Thailand <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-thailand">(more)</button></div>
-              <ul class="adr-list">
+              <ul class="adr-list" id="adr-more-thailand" hidden>
               <li><span class="adr-name" title="Thailand's space agency. Its GARNET and ZIRCON systems track objects in orbit and manage space traffic. THEOS-2 has flown since 2023; THEOS-2A was lost in the failed PSLV launch of 12 January 2026.">GISTDA</span> <span class="adr-sub">Space agency</span></li>
               <li><span class="adr-name" title="Thailand's national astronomy institute, in Chiang Mai. It has an agreement with the Royal Thai Air Force on space surveillance, backed by a system that tracks satellites, built up from its automated telescopes.">NARIT</span> <span class="adr-sub">Space watch</span></li>
               <li><span class="adr-name" title="Gulf Space Technology, Thailand's satellite operator, known as Thaicom until it renamed itself on 17 September 2026; its satellites keep the Thaicom name. Thaicom 9 may launch by March 2027; Thaicom 10 has bank financing for a 2027 launch.">Gulf Space Tech</span> <span class="adr-sub">Satcom</span></li>
-              <li class="adr-also adr-more" id="adr-more-thailand" hidden>
+              <li class="adr-also">
                 <span class="adr-nw"><span class="adr-name" title="Thai science agencies, universities and the military building Thailand's own satellite. TSC-1, a microsatellite under 100 kg assembled at NARIT in Chiang Mai, passed thermal-vacuum, radiation and vibration tests in 2026; launch is aimed for 2027.">Thai Space Consortium</span>,</span>
                 <span class="adr-nw"><span class="adr-name" title="Flies Thailand's military satellites: NAPA-1 went up on a Vega rocket in September 2020 and NAPA-2 on a Falcon 9 in June 2021. It works with NARIT on watching objects in orbit.">Royal Thai Air Force</span>,</span>
                 <span class="adr-nw"><span class="adr-name" title="Bangkok space-tech company founded in 2017. It signed a Moon-mission agreement with ispace and GISTDA in November 2024 and delivered an antenna to GISTDA in April 2025.">mu Space</span>.</span></li>
               </ul>
               <div class="adr-section">India <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-india">(more)</button></div>
-              <ul class="adr-list">
+              <ul class="adr-list" id="adr-more-india" hidden>
               <li><span class="adr-name" title="Landed at the Moon's south pole in 2023. Its space-safety centre in Bengaluru (IS4OM) steers India's satellites clear of junk, and in 2024 it set the goal: every Indian mission debris-free by 2030.">ISRO</span> <span class="adr-sub">Space agency</span></li>
               <li><span class="adr-name" title="Hyderabad rocket company. On 18 July 2026 Vikram-1 reached orbit from Sriharikota on its first try: India's first private orbital launch, carrying a robot arm built to catch space junk.">Skyroot Aerospace</span> <span class="adr-sub">Launcher</span></li>
               <li><span class="adr-name" title="A Hyderabad start-up building a soft robotic hand to catch space junk. Its EMBRACE arm rode Vikram-1 in July 2026, but the petals did not open. Nothing was caught; the team still got data.">Cosmoserve Space</span> <span class="adr-sub">Catch arm</span></li>
-              <li class="adr-also adr-more" id="adr-more-india" hidden>
+              <li class="adr-also">
                 <span class="adr-nw"><span class="adr-name" title="Bengaluru space-surveillance start-up. Its SCOT satellite, launched in January 2025, watches other objects in orbit; in August 2026 it added MOSAIC, a ground network of optical sensors.">Digantara</span>,</span>
                 <span class="adr-nw"><span class="adr-name" title="Chennai (IIT Madras), founded 2017. On 30 May 2024 its Agnibaan flew with a single-piece 3D-printed engine from India's first private launchpad. Its first orbital launch is planned for 2027.">Agnikul Cosmos</span>,</span>
                 <span class="adr-nw"><span class="adr-name" title="Bengaluru, founded 2019. Its Fireflies hyperspectral Earth-imaging satellites launched in January and August 2025 on Falcon 9 rockets from California.">Pixxel</span>,</span>
@@ -641,11 +643,11 @@ export class MenuScreen {
                 <span class="adr-nw"><span class="adr-name" title="Bengaluru rocket company. Razor Crest is designed to lift 24.8 tonnes to orbit, or about 8 tonnes when both stages are reused. First demonstration flight: late 2027.">EtherealX</span>.</span></li>
               </ul>
               <div class="adr-section">Japan <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-japan">(more)</button></div>
-              <ul class="adr-list">
+              <ul class="adr-list" id="adr-more-japan" hidden>
               <li><span class="adr-name" title="Japan's space agency. With Astroscale it runs the Commercial Removal of Debris Demonstration (CRD2): Phase 1 (ADRAS-J) inspected a spent rocket stage; Phase 2 will capture and de-orbit it, from Japan's 2027 fiscal year.">JAXA</span> <span class="adr-sub">Space agency</span></li>
               <li><span class="adr-name" title="Tokyo debris remover. In 2024 ADRAS-J flew within ~15 m of a spent Japanese rocket stage. ADRAS-J2 will capture and de-orbit it, launching in Japan's 2027 fiscal year (April 2027 to March 2028).">Astroscale</span> <span class="adr-sub">Debris remover</span></li>
               <li><span class="adr-name" title="Utsunomiya start-up. Its HORN is a fan-shaped film that unfolds to add drag, so dead satellites fall sooner. Two units flew on an H3 rocket on 12 June 2026; one re-entered after 76 days.">BULL</span> <span class="adr-sub">Drag film</span></li>
-              <li class="adr-also adr-more" id="adr-more-japan" hidden>
+              <li class="adr-also">
                 <span class="adr-nw"><span class="adr-name" title="Tokyo, founded 2024 as a SKY Perfect JSAT spin-out. Builds compact space lasers to stop a dead satellite's spin and, later, to remove debris. Closed its Series A in March 2026.">Orbital Lasers</span>,</span>
                 <span class="adr-nw"><span class="adr-name" title="Japanese satellite operator. In May 2026 it invested in Astroscale and agreed a partnership on in-orbit servicing, and it backs Orbital Lasers.">SKY Perfect JSAT</span>.</span></li>
               </ul>
@@ -791,14 +793,21 @@ export class MenuScreen {
   }
 
   /**
-   * @private Show or hide the names behind one "(more)" button (its
-   * aria-controls row). The button reads "(more)" while they are hidden and
-   * "(less)" while they show; its first label is kept in data-label.
+   * @private Show or hide what one "(more)" button controls (its aria-controls
+   * element: a country's list, or the NASA/ESA row). Opening one closes every
+   * other, so at most one is open. The button reads "(more)" while closed and
+   * "(less)" while open; its first label is kept in data-label.
    */
   _toggleMore(btn) {
     const row = this.element.querySelector('#' + btn.getAttribute('aria-controls'));
     if (!row) return;
-    this._setMore(btn, row.hidden);
+    const open = row.hidden;
+    if (open) {
+      this.element.querySelectorAll('.adr-more-btn').forEach((other) => {
+        if (other !== btn) this._setMore(other, false);
+      });
+    }
+    this._setMore(btn, open);
   }
 
   /** @private Set one "(more)" button open or closed (row, aria-expanded, label). */
@@ -813,8 +822,9 @@ export class MenuScreen {
 
   /**
    * @private Open the country a language flag stands for (COUNTRY_FOR_FLAG):
-   * its Countries group opens, its "(more)" shows, every other "(more)" closes.
-   * An unknown flag or one with no entry (BRA) closes them all.
+   * its Countries group opens and that country's list shows (organisations and
+   * other names); every other country closes. An unknown flag or one with no
+   * entry (BRA) closes them all.
    */
   _openCountryFor(flag) {
     const id = COUNTRY_FOR_FLAG[flag] || null;
