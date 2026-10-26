@@ -148,7 +148,7 @@ export const HOTKEY_GROUPS = [
       // first, then act, out / in switches and leave-type keys last.
       // More for Start here: look → scan → pick a part → net → fly / power.
       [['Drag'], 'Turn the view', { pointer: true }],
-      [['Pause button'], 'Pause (touch, beside MOTHER)', { pointer: true }],
+      [['Main menu'], 'Touch: drawer bottom, tap twice', { pointer: true }],
       [['Hold RADIATORS'], 'Radiators to 180°', { pointer: true }],
       [['Shift S'], 'Wide scan'],
       [['Z'], 'Next debris part'],

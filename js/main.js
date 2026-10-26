@@ -130,7 +130,9 @@ import { WorkbenchPane } from './ui/WorkbenchPane.js';
 import { shouldYieldSpecsTab } from './ui/WorkbenchPane.js';
 import { resolveSubject as resolveSpecsSubject } from './systems/SpecsSubject.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
-import { tripWarpArgs } from './systems/TransferTrip.js';
+import { tripWarpArgs, isTripBurning } from './systems/TransferTrip.js';
+import { MissionGasTally, bindMissionGasTally } from './systems/MissionGasTally.js';
+import { RangeMap } from './ui/RangeMap.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
 import { DetailSlider, shortSliderRect } from './ui/DetailSlider.js';
@@ -788,6 +790,8 @@ let missionCoach;
 let issConjunctionBoss;
 let starlinkCascadeBoss;
 let resourceSystem;
+let rangeMap = null;          // range-map D1: the orbital range map beside the where-next list (ui/RangeMap.js); built in the ladder block
+let missionGasTally = null;   // range-map D4: "this mission" engine gas for the range map's second gas line (built with the where-next list)
 let sensorSystem;
 let cargoSystem;
 let conjunctionSystem;
@@ -2280,13 +2284,32 @@ async function init() {
       // slice 3: with no mother nets aboard (mission 1 used all four) the resupply satellite is the pre-focused row; lane 3c: the wallet
       // (the call row) and whether a mission start is owed (a mission going on keeps trips for later) come with the nets from the flow manager
       getRows: () => buildWhereNextRows(fieldRegistry, gameFlowManager.whereNextRowsOpts()),
-      onPick: (id) => gameFlowManager.pickWhereNext(id),
+      onPick: (id) => { if (rangeMap) rangeMap.notePick(id); return gameFlowManager.pickWhereNext(id); },   // range-map D6: the map keeps the rows she picked from
       glass: () => GestureHints.isGlass(),
       isInputBlocked: () => whereNextInputBlocked(),
     });
     navcomFloor.setWhereNext(whereNextList);
+    // range-map D4: what her catches gave and her own moves used since the last where-next pick (a trip's burn is not counted)
+    missionGasTally = new MissionGasTally({ counters: () => resourceSystem, isBurning: isTripBurning });
+    missionGasTally.mark();
+    bindMissionGasTally(missionGasTally, eventBus, Events);
     // lane 3e (s3-map-icons): the fields and the satellite by height beside her marker (draws only with the fields flag on)
-    navcomFloor.setHeightScale(new HeightScale({ registry: () => fieldRegistry, list: whereNextList, glass: () => GestureHints.isGlass() }));
+    // F1.1: the height column yields to the range map (it stands in the column's place on the left while the map shows)
+    navcomFloor.setHeightScale(new HeightScale({ registry: () => fieldRegistry, list: whereNextList, glass: () => GestureHints.isGlass(), yieldTo: () => !!(rangeMap && rangeMap.isShown()) }));
+    // range-map D1: rings by height around Earth, her reach with the gas aboard, her path to the pick (left side of floor 4, the height column's place; it follows the
+    // list's focus, keeps the pick through wait, hides for the engines' start-up and follows the trip). Updated each frame after the navcom tick.
+    rangeMap = new RangeMap({
+      list: whereNextList,
+      registry: () => fieldRegistry,
+      trip: () => gameFlowManager.trip,
+      camera: () => cameraSystem,
+      floorActive: () => !!(navcomFloor && navcomFloor.isActive()),
+      gas: () => ({ aboardKg: engineGasKg(resourceSystem), tankKg: engineGasKg({ xenon: resourceSystem.xenonMax, tankGasId: resourceSystem.tankGasId }) }),
+      tally: () => missionGasTally,
+      reducedMotion: _prefersReducedMotion,
+      // F1.1: the floor rail (right edge, mid-height) is the thing the map keeps clear of on a narrow screen; null = its design place
+      rail: () => (railIndicator ? { left: railIndicator.leftPx(), bottom: railIndicator.bottomPx() } : null),
+    });
     gameFlowManager.setWhereNextAvailable(true);
     // The choice opens / closes (TransferTrip phase `choose`): show the rows and take her to floor 4; a refused pick that puts the
     // choice back (`again`) only rebuilds the rows.
@@ -2774,6 +2797,10 @@ async function init() {
       glass: _glassBoot,
       footerBottomPx: _FOOTER ? _FOOTER.bottom : undefined,
       onOpenChange: () => _syncWorkbenchPanes(),
+      // range-map D8: the floor-1 drawer's MAIN MENU button (second tap) -> the live pause-menu handler
+      onMainMenu: () => eventBus.emit(Events.PAUSE_MENU),
+      // F1.6: only while the state machine allows MENU (INTERACTION does not: the flow manager would abort the trip and the berth, then refuse)
+      canLeave: () => gameState.canTransitionTo(GameStates.MENU),
     });
     // Tab truth on change, never per frame (G1): a landed unlock repaints the
     // unread count (and fires the shell's ONE pulse); a read entry drops it.
@@ -7471,6 +7498,7 @@ function gameLoop(timestamp) {
     // Held world (Session I follow-up, owner 2026-09-23): fate clocks stop
     // while a drawer is open — closes the HANDOFF audit item.
     if (!_worldHeld) { try { resourceSystem.update(dt); } catch (e) { console.error('[GameLoop] resourceSystem:', e); } }
+    try { if (missionGasTally) missionGasTally.update(); } catch (e) { console.error('[GameLoop] missionGasTally:', e); }
     // w2-heat: scan analysis load + ship heat on the battery's clock, held with
     // it. Held: what the battery bills meanwhile (base load) neither heats the
     // ship nor spikes the power meter on release; a running analysis pauses.
@@ -8019,6 +8047,8 @@ function updateCamera(dt, timestamp) {
   } else {
     f4WasSettled = false; f4LastFocusId = null;   // so the next arrival on floor 4 re-frames again
   }
+  // range-map D1/D6: the range map reads the list, the trip and the camera of THIS frame; it hides itself when floor 4 is not active
+  try { if (rangeMap) rangeMap.update(); } catch (e) { console.error('[GameLoop] rangeMap:', e); }
 
   // Zoom Ladder F5 (PROX NET): same single-ticker pattern as navcom — after
   // cameraSystem.update so the overlay reads this frame's pose. F5 and F6

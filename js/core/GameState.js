@@ -56,6 +56,17 @@ class GameState {
   }
 
   /**
+   * Whether `setState(newState)` would be accepted from the current state (a read: nothing changes). The drawer's MAIN MENU asks it before
+   * it emits, because `GameFlowManager.transitionToState(MENU)` aborts the trip and the berth BEFORE it finds the move refused (F1.6).
+   * @param {string} newState - Target state from GameStates enum
+   * @returns {boolean}
+   */
+  canTransitionTo(newState) {
+    const allowed = VALID_TRANSITIONS[this.currentState];
+    return !!allowed && allowed.includes(newState);
+  }
+
+  /**
    * Transition to a new game state
    * @param {string} newState - Target state from GameStates enum
    * @param {object} [payload] - Optional data for the transition

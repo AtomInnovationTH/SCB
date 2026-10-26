@@ -208,6 +208,7 @@ export class HeightScale {
    * @param {Document|null} [deps.doc]        document (default: the global one; null = headless)
    * @param {Element} [deps.parent]           where the column goes (default doc.body)
    * @param {function} [deps.glass]           () => true on a touch screen (44 px chips)
+   * @param {function} [deps.yieldTo]         () => true while something takes the column's place (the range map, F1.1): the column hides, and comes back when it is false
    * @param {function} [deps.now]             ms clock (tests)
    */
   constructor(deps = {}) {
@@ -216,6 +217,7 @@ export class HeightScale {
     this._doc = deps.doc !== undefined ? deps.doc : (typeof document !== 'undefined' ? document : null);
     this._parent = deps.parent || null;
     this._glass = typeof deps.glass === 'function' ? deps.glass : () => false;
+    this._yieldTo = typeof deps.yieldTo === 'function' ? deps.yieldTo : () => false;
     this._now = typeof deps.now === 'function' ? deps.now : () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
     this._root = null;
     this._built = false;
@@ -257,7 +259,10 @@ export class HeightScale {
 
   // ── Floor 4 shows / hides it (NavcomFloor.activate / deactivate) ───────────
 
-  show() { this._visible = true; if (this._root) this._root.style.display = this._items.length ? 'block' : 'none'; }
+  /** @private the range map is on screen in the column's place: the column yields (F1.1) */
+  _yielded() { try { return !!this._yieldTo(); } catch (_e) { return false; } }
+
+  show() { this._visible = true; if (this._root) this._root.style.display = this._items.length && !this._yielded() ? 'block' : 'none'; }
   hide() { this._visible = false; if (this._root) this._root.style.display = 'none'; }
 
   // ── Frame ──────────────────────────────────────────────────────────────────
@@ -303,7 +308,7 @@ export class HeightScale {
       this._root.style.top = `${Math.round(at.top)}px`;
       this._root.style.width = `${w}px`;
     }
-    this._root.style.display = this._visible ? 'block' : 'none';
+    this._root.style.display = this._visible && !this._yielded() ? 'block' : 'none';
     return { items, left: at.left, top: at.top, side: at.side };
   }
 

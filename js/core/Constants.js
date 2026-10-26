@@ -5942,6 +5942,81 @@ export const Constants = {
   },
 
   // =========================================================================
+  // RANGE_MAP - the orbital range map beside the "where next" list (range-map lane, owner 2026-10-25: "an orbital map to clearly
+  // understand their range and choices with current fuel and salvage fuel"; "rings around Earth"; js/systems/RangeMapModel.js,
+  // js/ui/RangeMap.js). Screens: a 16" MacBook (1728x1117) and a 13" iPad held sideways (about 1366x1024), DECISIONS §32.
+  // =========================================================================
+  // Where it sits (F1.1, 2026-10-25): the LEFT side, in the height column's place (the column yields while the map shows), below the top HUD
+  // strip (about y 0-262), clear of the list (bottom centre: WhereNextList.js BOTTOM_PX, WIDTH_PX, TOP_CLEAR_PX; test-RangeMapModel pins these copies
+  // to the list's own), the floor rail (right edge, mid-height: RAIL_*) and the footer band (REFIT tab, detail slider: top 164 px up). The open
+  // drawer (left, z 35) may cover it: he opened it. The ring sizes are not to scale (rank of height, not kilometres) so eleven rings can be read:
+  // EARTH_FRAC, BREAK_KM and BREAK_EXTRA set the look; the label box is an ESTIMATE of the drawn text (LABEL_CHAR_PX per mono character), the view
+  // draws inside it.
+  RANGE_MAP: {
+    TOP_PX: 280,              // the map's top edge, below the top HUD strip
+    LEFT_PX: 8,               // the left edge (the height column's own: HeightScale SIDE_MIN_PX)
+    BOTTOM_PX: 172,           // the text lines end this far above the bottom: the footer band's top is 164 px up (RailGeometry.footerBand), 8 px air
+    SIDE_CHOOSE_PX: 460,      // the biggest square while the list is open
+    SIDE_TRIP_PX: 560,        // the list is closed during the trip: the map may grow
+    MIN_SIDE_PX: 240,         // narrower than this the map is not shown
+    LIST_BOTTOM_PX: 164,      // copies of the list's CSS (WhereNextList.js): bottom edge 164 px up,
+    LIST_WIDTH_PX: 580,       // width min(580, 100vw - 24) at the bottom centre,
+    LIST_SIDE_PX: 12,         // (the 12 of that 24, per side),
+    LIST_TOP_CLEAR_PX: 280,   // and a height that never passes 100vh - 444, i.e. its top is never above y 280
+    LIST_GAP_PX: 16,          // clear space between the map and the list
+    RAIL_EDGE_PX: 16,         // the floor rail (RailIndicator): 16 px in from the right edge (RailGeometry EDGE_PX), mid-height,
+    RAIL_W_PX: 140,           // about 135 px wide and 165 px tall (measured in the 10-25 shots at 1728x1117 and 1366x1024; rounded up);
+    RAIL_H_PX: 170,           // the live left/bottom edges (leftPx(), bottomPx()) replace these when the rail is measured
+    RAIL_GAP_PX: 12,          // clear space between the map and the rail
+    TEXT_LINES: 5,            // the lines under the canvas, packed top-down (gas aboard, catches, her own moves, orbits, day), at most this many
+    TEXT_LINE_PX: 15,         // one line's height
+    TEXT_FONT_PX: 11,         // their font size (the mono token), so a line's width is characters x TEXT_CHAR_PX
+    TEXT_CHAR_PX: 7.2,        // per character: at least TEXT_FONT_PX x B612 Mono's 0.65 em advance (pinned by test-RangeMapModel, like LABEL_CHAR_PX)
+    TEXT_PAD_PX: 8,           // the text block's padding left and right (a line is clipped at the canvas width less this on both sides)
+    TEXT_PX: 84,              // the text block under the canvas: 4 px air + TEXT_LINES x TEXT_LINE_PX + 5 px padding; the panel's room below its top edge is the screen less this
+    PAD_PX: 4,                // between the outer ring's label and the canvas edge
+    EARTH_FRAC: 0.16,         // the Earth disc's radius as a share of the outer ring (the rule: at least 0.15)
+    RING_MAX_STEP_PX: 28,     // few rings: spacing stops growing here and the map shrinks to fit
+    BREAK_KM: 100,            // a height gap this big between neighbouring rings is drawn as a visible break
+    BREAK_EXTRA: 1.5,         // ... of this many extra ring spacings
+    MIN_GAP_PX: 14,           // adjacent rings are at least this far apart from a 440 px side up (the Mac)
+    MIN_GAP_SMALL_PX: 9,      // ... and at least this on the smaller iPad side
+    GAP_SIDE_PX: 440,         // the side from which MIN_GAP_PX is asked
+    LABEL_FONT_PX: 11,
+    LABEL_H_PX: 14,
+    LABEL_CHAR_PX: 7.2,       // the label box's width per character: at least LABEL_FONT_PX x B612 Mono's 0.65 em advance (Typeface.MONO_ADVANCE_EM), pinned by test-RangeMapModel
+    LABEL_PAD_PX: 6,          // the box's padding left and right of the text
+    HIT_MIN_PX: 12,           // a tap is a ring's when it lands within this (or half the local spacing, if more) of the ring
+    DIM_RING_ALPHA: 0.5,      // trip mode: the rings that are neither hers nor the target are dimmed to this (F1.9: 0.35 left the labels unreadable in the shots),
+    DIM_LABEL_ALPHA: 0.72,    // their labels to this
+    UNFLOWN_ALPHA: 0.8,       // the part of her path not yet flown (F1.9: at 0.45 over its dark stroke it read as dark green)
+    PATH_PX: 3.5,             // her path's line width (F1.4; the part flown is 1 px wider)
+    ARROW_PX: 11,             // the arrowhead at the target end of her path
+    SPIRAL_TURNS: 2,          // stylised turns drawn over the whole climb
+    SPIRAL_POINTS: 240,       // the spiral's drawn points
+    FADE_MS: 600,             // the map fades in when the trip is under way
+    REDRAW_MS: 100,           // at most 10 redraws a second during a trip
+    COLORS: {
+      OK: 'rgba(140,220,255,0.95)',        // a ring she can reach
+      GREY: 'rgba(150,160,170,0.55)',      // a ring she cannot reach (also dashed)
+      CLEARED: 'rgba(120,130,140,0.35)',
+      HERE: 'rgba(255,225,168,1)',         // her own ring (and her dot)
+      FOCUS: '#4488ff',                    // the focused ring (VisualLaw.COLORS.SELECTION)
+      REACH: 'rgba(0,204,255,0.24)',       // the reach band (F1.4: was 0.10, not told from the Earth's glow in the shots)
+      REACH_EDGE: 'rgba(130,235,255,0.95)', // its firm outer edge, at the furthest ring she can reach
+      REACH_EDGE_SOFT: 'rgba(130,235,255,0.45)', // and its inner edge
+      EARTH: 'rgba(40,90,170,0.9)',
+      SPIRAL: 'rgba(0,255,136,0.9)',       // her path
+      TEXT: 'rgba(225,240,255,0.95)',
+      TEXT_DIM: 'rgba(170,180,190,0.85)',
+      BACK: 'rgba(0,16,32,0.92)',          // a ring label's own box (F1.3: no ring line crosses its text)
+      BACKING: 'rgba(0,10,22,0.72)',       // behind the whole panel, canvas and text block (F1.3: rings and words read over the 3-D Earth)
+      BACKING_EDGE: 'rgba(0,204,255,0.28)',
+      PATH_UNDER: 'rgba(0,0,0,0.6)',       // a dark stroke under her path
+    },
+  },
+
+  // =========================================================================
   // MISSIONS — ST-4.C Mission Spawn Difficulty Profiles
   // Each profile applies when missionNumber >= minMission (highest matching wins).
   // =========================================================================

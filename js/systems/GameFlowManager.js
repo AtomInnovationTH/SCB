@@ -1291,7 +1291,7 @@ export class GameFlowManager {
           // IN the tank (the resupply path, clamped to free space), named for the real gas and the real kg.
           if (salvage.xenon > 0 && resourceSystem) {
             const wantKg = salvageGasKg(salvage.xenon) * refineryMult;
-            const gotKg = resourceSystem.resupplyEngineGas(wantKg);
+            const gotKg = resourceSystem.resupplyEngineGas(wantKg, { source: 'salvage' });    // range-map D4: the range map's "catches gave" counts this path only
             const gasName = (Constants.FUELS[resourceSystem.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL]).name;
             eventBus.emit(Events.COMMS_MESSAGE, {
               text: gotKg > 0

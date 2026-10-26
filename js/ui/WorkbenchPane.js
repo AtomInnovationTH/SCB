@@ -146,6 +146,14 @@ export const ROOT_BOTTOM_PX = 96;
 export const ROOT_BOTTOM_PX_F1 = 16;
 /** Tab pulse length (ms) — the ONE pulse a rising count earns (§2 Grammar). */
 export const TAB_PULSE_MS = 900;
+/** range-map D8 (owner 2026-10-25): the floor-1 drawer's MAIN MENU button — the first tap arms it for this long,
+ *  a second tap inside the window leaves; later it disarms (no accidental exit on touch, no save added). */
+export const MAIN_MENU_ARM_MS = 3000;
+export const MAIN_MENU_LABEL = 'MAIN MENU';
+export const MAIN_MENU_ARMED_LABEL = 'TAP AGAIN TO LEAVE';
+/** F1.6: the second tap while the game cannot go to the menu (a catch in progress): no leave, this label for this long. */
+export const MAIN_MENU_REFUSED_LABEL = 'Finish the catch first';
+export const MAIN_MENU_REFUSED_MS = 2000;
 
 /**
  * u6 D9 (2026-10-19): should the SPECS tab step aside? On a short (phone) screen an OPEN
@@ -211,6 +219,12 @@ export class WorkbenchPane {
    * @param {object} [deps.refit] - the hosted REFIT section engine (RefitPane):
    *   mount(el, { onRefresh }), setEnabled, open({ firstVisit }), close,
    *   focusPart, refresh, affordableCount
+   * @param {function} [deps.onMainMenu] - () => void: the drawer's MAIN MENU button, on its SECOND tap within
+   *   MAIN_MENU_ARM_MS (range-map D8). main.js wires it to the PAUSE_MENU event; the shell keeps no
+   *   bus import.
+   * @param {function} [deps.canLeave] - () => boolean: the game can go to the menu now (main.js reads the GameState
+   *   transition table). Asked on the SECOND tap; false = no `onMainMenu`, the button says MAIN_MENU_REFUSED_LABEL for
+   *   MAIN_MENU_REFUSED_MS (F1.6: the flow manager aborts the trip and the berth before it finds the move refused). Absent = allowed.
    * @param {function} [deps.onOpenChange] - (isOpen) => void: the ONE open edge
    *   (main.js fans it into _syncWorkbenchPanes — the camera inset, the callout
    *   insets, the calm cap, WORKBENCH_RESUME on close). Fires on open and on
@@ -226,6 +240,12 @@ export class WorkbenchPane {
     this._library = deps.library || null;
     this._refit = deps.refit || null;
     this._onOpenChange = deps.onOpenChange || null;
+    this._onMainMenu = deps.onMainMenu || null;
+    this._canLeave = typeof deps.canLeave === 'function' ? deps.canLeave : null;
+    this._menuRefusedTimer = null;
+    this._menuBtn = null;         // the MAIN MENU button, the last child of the body (floor 1 only)
+    this._menuArmedAt = null;     // the clock reading of the first tap while armed, else null
+    this._menuTimer = null;
     // Session P (plan D7): the FOOTER BAND's bottom offset from the viewport
     // bottom (the hub passes RailGeometry.footerBand().bottom = 132); the tab's
     // own `bottom` is that minus the root's 96. Default: the thumb rest + gap.
@@ -504,6 +524,7 @@ export class WorkbenchPane {
   close() {
     if (!this._open) return;
     this._open = false;
+    this._disarmMainMenu();
     this._call(this._library, 'close');
     this._call(this._refit, 'close');
     this._applyOpenState();
@@ -590,6 +611,7 @@ export class WorkbenchPane {
     if (this._offGlassLabel) { this._offGlassLabel(); this._offGlassLabel = null; }   // u15b: the glass listener dies with the pane
     this._clearIdleTimer();
     this._clearPulseTimer();
+    this._disarmMainMenu();
     const wasOpen = this._open;
     this._open = false;
     if (wasOpen) {
@@ -606,6 +628,7 @@ export class WorkbenchPane {
     this._tail = null;
     this._tab = null;
     this._tabCount = null;
+    this._menuBtn = null;
     this._built = false;
     this._lastTabText = null;
     this._tabPhaseWritten = null;
@@ -667,6 +690,58 @@ export class WorkbenchPane {
     }
     const tab = this._tab;
     if (tab) tab.style.bottom = `${this._tabBottomCss()}px`;
+    if (this._menuBtn) this._menuBtn.style.display = f1 ? 'block' : 'none';
+    if (!f1) this._disarmMainMenu();
+  }
+
+  /** @private range-map D8: the MAIN MENU button's tap. Unarmed (or past the window) → arm and relabel; a second
+   *  tap inside MAIN_MENU_ARM_MS → disarm and, if the game can go to the menu (`canLeave`, F1.6), call `onMainMenu` once;
+   *  if it cannot, say so for MAIN_MENU_REFUSED_MS and call nothing. */
+  _tapMainMenu() {
+    const now = this._now();
+    if (this._menuArmedAt !== null && now - this._menuArmedAt <= MAIN_MENU_ARM_MS) {
+      this._disarmMainMenu();
+      if (!this._leaveAllowed()) { this._refuseMainMenu(); return; }
+      if (this._onMainMenu) { try { this._onMainMenu(); } catch (_e) { /* dep */ } }
+      return;
+    }
+    this._clearMenuRefusal();
+    this._menuArmedAt = now;
+    if (this._menuBtn) this._menuBtn.textContent = MAIN_MENU_ARMED_LABEL;
+    if (this._menuTimer) clearTimeout(this._menuTimer);
+    this._menuTimer = setTimeout(() => this._disarmMainMenu(), MAIN_MENU_ARM_MS);
+    if (this._menuTimer && typeof this._menuTimer.unref === 'function') this._menuTimer.unref();
+  }
+
+  /** @private F1.6: may the game go to the menu now (a dep that throws counts as yes: the old behaviour)? */
+  _leaveAllowed() {
+    if (!this._canLeave) return true;
+    try { return !!this._canLeave(); } catch (_e) { return true; }
+  }
+
+  /** @private F1.6: the second tap found the move refused: the label says why, then goes back. */
+  _refuseMainMenu() {
+    if (this._menuBtn) this._menuBtn.textContent = MAIN_MENU_REFUSED_LABEL;
+    this._clearMenuRefusal(true);
+    this._menuRefusedTimer = setTimeout(() => {
+      this._menuRefusedTimer = null;
+      if (this._menuBtn && this._menuArmedAt === null) this._menuBtn.textContent = MAIN_MENU_LABEL;
+    }, MAIN_MENU_REFUSED_MS);
+    if (this._menuRefusedTimer && typeof this._menuRefusedTimer.unref === 'function') this._menuRefusedTimer.unref();
+  }
+
+  /** @private @param {boolean} [keepLabel] leave the label as it is (the caller sets it) */
+  _clearMenuRefusal(keepLabel) {
+    if (this._menuRefusedTimer) { clearTimeout(this._menuRefusedTimer); this._menuRefusedTimer = null; }
+    if (!keepLabel && this._menuBtn && this._menuBtn.textContent === MAIN_MENU_REFUSED_LABEL) this._menuBtn.textContent = MAIN_MENU_LABEL;
+  }
+
+  /** @private Back to the plain MAIN MENU label (3 s passed, the drawer closed, or the floor changed). */
+  _disarmMainMenu() {
+    this._menuArmedAt = null;
+    if (this._menuTimer) { clearTimeout(this._menuTimer); this._menuTimer = null; }
+    this._clearMenuRefusal(true);
+    if (this._menuBtn) this._menuBtn.textContent = MAIN_MENU_LABEL;
   }
 
   /** @private Build the shell once, then mount the two engines into its slots. */
@@ -745,6 +820,27 @@ export class WorkbenchPane {
     body.appendChild(head);
     body.appendChild(refitSlot);
     body.appendChild(tail);
+
+    // range-map D8: MAIN MENU, the last child of the floor-1 drawer body (a touch screen has no pause screen). The
+    // close button's chrome at full width; the first tap arms it, a second within MAIN_MENU_ARM_MS leaves.
+    const menuBtn = doc.createElement('button');
+    menuBtn.id = 'workbench-main-menu-btn';
+    menuBtn.className = 'workbench-main-menu';
+    menuBtn.textContent = MAIN_MENU_LABEL;
+    menuBtn.setAttribute('aria-label', 'Main menu');
+    menuBtn.style.cssText = [
+      'display:' + (f1 ? 'block' : 'none'), 'width:100%', 'margin:18px 0 6px',
+      'background:none', 'border:1px solid rgba(255,255,255,0.2)', 'color:#888',
+      'font-size:16px', 'letter-spacing:0.15em', 'text-transform:uppercase',
+      'cursor:pointer', 'padding:4px 12px', 'border-radius:3px',
+      'font-family: var(--font-mono)', 'min-height:44px', 'box-sizing:border-box', 'pointer-events:auto',
+    ].join(';');
+    menuBtn.addEventListener('click', (ev) => {
+      this._tapMainMenu();
+      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+    });
+    body.appendChild(menuBtn);
+    this._menuBtn = menuBtn;
 
     // The ESC × close button (§13 r5): the tech library's chrome — the
     // #codex-close-btn inline style (CodexViewerUI) plus the 44 px touch

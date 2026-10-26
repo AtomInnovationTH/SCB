@@ -471,6 +471,17 @@ export class TransferTrip {
   get progress() { return this._profile && this._playP > 0 ? Math.min(1, this._playS / this._playP) : 0; }
   /** kg of the profile's gas billed so far. */
   get billedKg() { return this._billedKg; }
+  /**
+   * Which day of how many the trip is on at fraction `f` of the profile (default: now): `day = min(days, floor(f x days) + 1)`, `days` the
+   * profile's days rounded, at least 1. The one formula: the strip's "Day d of N" (`_pushStatus`) and the range map's caption both read it.
+   * @param {number} [f] 0..1
+   * @returns {{day: number, days: number}} (no profile: day 1 of 1)
+   */
+  tripDay(f = this.progress) {
+    const days = this._profile ? Math.max(1, Math.round(this._profile.days)) : 1;
+    const g = Number.isFinite(f) ? f : 0;
+    return { day: Math.min(days, Math.floor(g * days) + 1), days };
+  }
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -957,9 +968,9 @@ export class TransferTrip {
     const ap = this._d.autopilot;
     if (!ap || typeof ap.setTripStatus !== 'function' || !this._profile) return;
     if (!this._ionLit) { ap.setTripStatus(LIGHTING_STATUS); return; }       // ion start-up: the trip's own text waits for all four
-    const days = Math.max(1, Math.round(this._profile.days));
+    const { day, days } = this.tripDay(f);
     ap.setTripStatus({
-      dir: this._profile.dir, toKm: this._field.altKm, day: Math.min(days, Math.floor(f * days) + 1), days,
+      dir: this._profile.dir, toKm: this._field.altKm, day, days,
       ...(paused ? { wait: this._waitsForPower() ? 'power' : 'nose' } : {}),
     });
   }

@@ -205,6 +205,11 @@ export class ResourceSystem {
     this.indiumStoreKg = 0;
     // Nets step 3 slice 5 (5a, V6): drag sails aboard (a count; each is BIG_PIECES.SAIL.massKg of her live mass). A new run starts with none.
     this.dragSails = 0;
+    // range-map D4: two cumulative tallies in KILOGRAMS of engine gas, for the range map's "this mission" line (MissionGasTally keeps its own
+    // baseline and rebases if these drop): everything drawn from the engine pool (every billed burn, trips included: the tally decides
+    // what to count) and what SALVAGE loaded (a shop buy does not count). Zero on reset() and restore(); never saved.
+    this.xenonDrawnKg = 0;
+    this.salvageGasKg = 0;
     // w4-power D1: every boot starts at BATTERY_START_FRACTION (half) of the max.
     this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);
     this.solarPanelHealth = 1.0;
@@ -365,6 +370,7 @@ export class ResourceSystem {
 
     this[resource] -= amount;
     if (resource === 'battery') this._recordDraw(amount);
+    else if (resource === 'xenon') this._countXenonDraw(amount);
     this._syncToPlayer();
     eventBus.emit(Events.RESOURCE_CHANGED, {
       resource,
@@ -372,6 +378,11 @@ export class ResourceSystem {
       delta: -amount,
     });
     return true;
+  }
+
+  /** @private range-map D4: add `units` of engine pool (tank percent) to the cumulative kg drawn, in the gas now in the tank. */
+  _countXenonDraw(units) {
+    if (units > 0) this.xenonDrawnKg += engineGasKg({ xenon: units, tankGasId: this.tankGasId });
   }
 
   /**
@@ -465,6 +476,7 @@ export class ResourceSystem {
     if (drawn <= 0) return 0;
     this[resource] -= drawn;
     if (resource === 'battery') this._recordDraw(drawn);
+    else if (resource === 'xenon') this._countXenonDraw(drawn);
     this._syncToPlayer();
     eventBus.emit(Events.RESOURCE_CHANGED, {
       resource,
@@ -890,6 +902,8 @@ export class ResourceSystem {
       ? clampLevel(data.indiumStoreKg, Constants.DAUGHTER_SUPPLY.INDIUM_STORE_MAX_KG)
       : 0;
     this.dragSails = Number.isFinite(data.dragSails) ? Math.max(0, Math.floor(data.dragSails)) : 0;   // slice 5 (5a): the sail stock
+    this.xenonDrawnKg = 0;   // range-map D4: a load starts the gas tallies again (MissionGasTally rebases)
+    this.salvageGasKg = 0;
     this.battery = ResourceSystem.startCharge(this.batteryMax);
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;
@@ -1031,14 +1045,16 @@ export class ResourceSystem {
    * g1-gas-upgrades D4: load up to `kg` of the gas in the tank, limited by free tank space.
    * Also the path salvaged gas takes (D8).
    * @param {number} kg
+   * @param {{source?: string}} [opts] `source: 'salvage'` (range-map D4): the kilos also add to `salvageGasKg`; the shop passes none
    * @returns {number} kg actually loaded (0 when the tank is full: free < 0.1 kg)
    */
-  resupplyEngineGas(kg) {
+  resupplyEngineGas(kg, opts = {}) {
     const free = engineTankFreeKg(this);
     if (free < 0.1 || !(kg > 0)) return 0;
     const add = Math.min(kg, free);
     const fuel = Constants.FUELS[this.tankGasId] || Constants.FUELS[Constants.DEFAULT_FUEL];
     this.xenon = Math.min(this.xenonMax, this.xenon + add / fuel.kgFull * 100);
+    if (opts && opts.source === 'salvage') this.salvageGasKg += add;     // range-map D4: only salvage counts as "caught", not a shop buy
     this._depletionEmitted = false;
     this._syncToPlayer();
     eventBus.emit(Events.RESOURCE_UPGRADED, { effect: 'engineGasResupply', value: add });
@@ -1217,6 +1233,8 @@ export class ResourceSystem {
     this.coldGas = ResourceSystem.startPropellant(Constants.COLD_GAS_MAX);
     this.indiumStoreKg = 0;   // lane 3f: a new run (retry, game-over continue) starts the indium store empty
     this.dragSails = 0;       // slice 5 (5a): and with no drag sails
+    this.xenonDrawnKg = 0;    // range-map D4: the gas tallies start again (MissionGasTally rebases)
+    this.salvageGasKg = 0;
     this.battery = ResourceSystem.startCharge(Constants.BATTERY_MAX);   // w4-power D1: half
     this.solarPanelHealth = 1.0;
     this.bodyPanelHealth = 1.0;
