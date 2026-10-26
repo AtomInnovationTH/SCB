@@ -607,10 +607,10 @@ export class MenuScreen {
               </ul>
             </details>
 
-            <!-- Countries — Thailand, India, Japan, then Other countries. One is open at
+            <!-- Countries — Thailand, India, Japan, then Other. One is open at
                  a time (owner 2026-10-26): a closed country shows only its name and
                  "(more)"; open, its <ul id="adr-more-<country>"> shows three
-                 organisations and the other names. "Other countries (more)" shows
+                 organisations and the other names. "Other (more)" shows
                  NASA and ESA. MenuScreen._toggleMore() opens one and closes the rest;
                  the language pick opens its country (_openCountryFor), on load too.
                  Country headers are .adr-section DIV siblings of each list
@@ -652,7 +652,7 @@ export class MenuScreen {
                 <span class="adr-nw"><span class="adr-name" title="Japanese satellite operator. In May 2026 it invested in Astroscale and agreed a partnership on in-orbit servicing, and it backs Orbital Lasers.">SKY Perfect JSAT</span>.</span></li>
               </ul>
               <ul class="adr-list">
-              <li class="adr-also">Other countries <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-countries">(more)</button></li>
+              <li class="adr-also">Other <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-countries">(more)</button></li>
               <li class="adr-also adr-more" id="adr-more-countries" hidden>
                 <span class="adr-nw"><span class="adr-name" title="America's space agency. Its Orbital Debris Program Office wrote NASA's first debris-mitigation rules in 1995 and builds the ORDEM and LEGEND debris models.">NASA</span> (USA),</span>
                 <span class="adr-nw"><span class="adr-name" title="Europe's space agency. Its Space Debris Office, mainly at ESOC in Darmstadt, coordinates European debris research; its Clean Space initiative covers zero-debris technology and in-orbit servicing.">ESA</span> (Europe).</span></li>
