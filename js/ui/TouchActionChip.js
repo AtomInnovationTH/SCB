@@ -533,6 +533,17 @@ export class TouchActionChip {
     return null;
   }
 
+  /**
+   * s5 gaps G1/R1: the CHOOSE chip is on the ticker's screen right now (TouchVerbButton's CHOOSE button stays away on floor 2 then).
+   * `_shown` only records that the chip was sent: a later step hint shelves it off screen (HintTicker._shelveVisibleSteps), so the
+   * ticker is asked too. A ticker without `isOnScreen` (a test stand-in) is taken at its word.
+   */
+  isChooseUp() {
+    if (this._shown !== 'choose') return false;
+    if (this._ticker && typeof this._ticker.isOnScreen === 'function') return !!this._ticker.isOnScreen(TOUCH_ACTION_CHIP_ID);
+    return true;
+  }
+
   /** Bring the chip in line with the state: post, swap or take down. Safe to call at any time. */
   evaluate() {
     if (this._disposed || this._busy) return;   // our own HINT_SATISFIED comes back through the listener

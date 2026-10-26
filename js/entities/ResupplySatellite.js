@@ -107,6 +107,22 @@ const STOW_TIP = new THREE.Vector3(0, 0.85, -0.9);             // arm laid back 
  *  forward until it stands 0.5 m off her nose, a rack piece aft until it is behind her radiators' tips, so a piece never sweeps through her. */
 const BUS_FRONT_M = BUS.z / 2 + 0.04;                          // the bus front face and the interface plate
 const STAND_OFF_M = 0.6;                                       // bus front face to the plane through the farthest thing aboard
+/** A hover pulled in (lane s5 follow-up, P1): when the stand-off above puts the bus where the arm cannot reach the grip, the bus is moved in along the same line, from the
+ *  arm's full reach in `stepM`, to the first spot where its solids keep `STAND_OFF_M` from every piece aboard and the arm's links (shoulder to wrist joint: the wrist stub
+ *  and the head are the grip itself) keep `armClearM` (the haul rule's own arm margin) from them, at the hover and at `poses` (fractions of the tip's way from the raised
+ *  point to the grip). `bodyStepM`: the satellite's solids are sampled to this spacing for the haul sweep; `bandM`: only pieces' points this near the arm's plane can touch it;
+ *  `armStepM`: the links' axis sample spacing; `farM`: the approach line is swept this far out; `haulStepM`: the solids are held `STAND_OFF_M` from the other pieces aboard along the haul
+ *  at this spacing (Q2). */
+const PULL = { stepM: 0.1, armClearM: 0.2, bodyStepM: 0.1, bandM: 0.6, armStepM: 0.05, farM: 60, haulStepM: 0.025, poses: [0, 0.2, 0.4, 0.6, 0.8, 0.9, 1] };
+/** The satellite's parts that are the arm (swept on their own axes, never as solids). */
+const SAT_ARM_PART = /^(SatArm|SatElbow|SatWrist|SatProbe|SatGasLight|SatShoulder|SatFuelLine)/;
+/** The squared distance from the point (x, y, z) to the axis-aligned box `b` = [x0, x1, y0, y1, z0, z1]. */
+function boxD2(x, y, z, b) {
+  const dx = x < b[0] ? b[0] - x : (x > b[1] ? x - b[1] : 0);
+  const dy = y < b[2] ? b[2] - y : (y > b[3] ? y - b[3] : 0);
+  const dz = z < b[4] ? b[4] - z : (z > b[5] ? z - b[5] : 0);
+  return dx * dx + dy * dy + dz * dz;
+}
 export const GRIP_DIST_MIN_M = 2.4;                            // the elbow (it folds forward of the tip below this) stays on the satellite's side of the grip
 export const GRIP_DIST_MAX_M = 3.5;                            // 2.6 m links + 0.3 m wrist reach 3.57 m straight ahead of the shoulder; keep 7 cm
 const SHIP_KEEP_R_M = 3.0;                                     // her radiators open: measured (tmp probe 2026-10-24, hull cloud, 0-180 deg every 10) 2.90 m about her axis at 90 deg; the ring route stays outside this
@@ -253,7 +269,7 @@ const PLAN_POSE_TOL_M = 0.005;                     // a piece planned must be wh
 const _work = { n: 0, at: '' };                    // `at`: the stage the planner is in (a probe reads where the slowest slice ended: `planStats.worstAt`)
 const WORK_DUE = () => _work.n >= PLAN.sliceWork;
 /** (a probe hook: `on` records the first rule break of a sweep in `hit`, with the step `s` it happened at) */
-export const PLAN_DEBUG = { on: false, hit: null, fails: [] };
+export const PLAN_DEBUG = { on: false, hit: null, fails: [], restRun: 0, maxRestSlice: 0, grip: null, pull: null };   // `grip`: the last take's grip numbers (`_planTakeGen`); `pull`: the pulled-in hovers the last take tried (`_pullInGen`); `restRun`: triangles `restAt` tested since the last yield, counted where they are tested; `maxRestSlice`: the largest such count of any slice (the test of N1)
 
 /** The drawn piece's sample points in ITS OWN frame (metres, drawn scale): the surface to `step` (the sweep's `pieceStepM`), the same points for the planner and the test. */
 const _rulePts = new Map();
@@ -467,6 +483,7 @@ class TriField {
       const t = this.items[e], o = t * 9;
       const d2 = pointTriangleDist2(x, y, z, T[o], T[o + 1], T[o + 2], T[o + 3], T[o + 4], T[o + 5], T[o + 6], T[o + 7], T[o + 8]);
       _work.n++;
+      if (PLAN_DEBUG.on) PLAN_DEBUG.restRun++;
       if (d2 < cap2) { const d = Math.sqrt(d2), l = L[t]; if (d < out[l]) out[l] = d; if (d < best) best = d; }
     }
     return best;
@@ -667,6 +684,7 @@ function* sampleSurfaceGen(geo, e, step, emit) {
         const fv = j / kv;
         if (fu + fv > 1 + 1e-12) break;
         emit(P[A] + ux * fu + vx * fv, P[A + 1] + uy * fu + vy * fv, P[A + 2] + uz * fu + vz * fv);
+        if (WORK_DUE()) { _work.n = 0; yield; }                                // (an emit that does work: the 2 cm rest pass tests ~1,900 triangles a point inside her bore, 1.3 M in one source triangle = 150 ms; a plain emit adds none, so the haul-rule sample never lands here)
       }
     }
     _work.n += 4 + (ku * kv) / 2;
@@ -733,6 +751,7 @@ function* clusterPoints(pts, cell) {
  */
 function* sweepLine(ctx, d) {
   const { fields, pc, pa, cl, clA, restP, restA } = ctx;
+  const nBody = ctx.nBody === undefined ? Infinity : ctx.nBody, restB = ctx.restB;   // carried points from index `nBody` on are the satellite's own solids (a pulled-in hover): held to the rule with `restB` (nothing near at the start), not the piece's `restP`
   const mg = PLAN.marginM, minSt = PLAN.minStepM;
   const nextC = new Float64Array(cl.length), nextA = new Float64Array(clA.length);
   const nextP = new Float64Array(pc.length / 3);
@@ -762,7 +781,8 @@ function* sweepLine(ctx, d) {
         _work.n += 0.5;
         if (!near(x, y, z)) { nextP[i] = s + PLAN.nearStepM; if (nextP[i] < nm) nm = nextP[i]; continue; }       // nothing within 0.2 m: it cannot break the rule before it has moved this far
         let sl = Infinity;
-        for (let f = 0; f < fields.length; f++) { const v = fields[f].slack(x, y, z, restP); if (v < sl) sl = v; }
+        const rl = i >= nBody ? restB : restP;
+        for (let f = 0; f < fields.length; f++) { const v = fields[f].slack(x, y, z, rl); if (v < sl) sl = v; }
         if (sl < mg) return fail(s);
         // the distance changes by at most the way moved: the point cannot break the rule within 0.9 of its slack (less the margin)
         nextP[i] = s + Math.max(minSt, 0.9 * ((Number.isFinite(sl) ? Math.min(sl, 0.2) : 0.04) - mg));
@@ -884,6 +904,7 @@ export class ResupplySatellite {
     this._dockGiveUp = null;           // called when it has waited `TAKE_WAIT_MAX_S` for the collar and goes away without docking (the line is the caller's)
     this._gateS = 0;                   // game seconds it has waited for the collar with nothing else to do
     this._noWay = false;               // test hook: no rack piece has a way out (a forced plan miss)
+    this._noPull = false;              // test hook: the old hover only (a grip the arm cannot reach from the default hover is a miss: no hover pulled in)
     this._noWayCollar = false;         // test hook: the collar piece has no way out
     this._cleared = null;              // the piece `canTake` just said yes to (consumed by `takePiece`)
     this.planStats = { slices: 0, slicesMs: 0, worstSliceMs: 0, worstFrameMs: 0, frames: 0, over16: 0, jobs: 0, worstAt: '', slow: [], byStage: {} };   // what the planner cost (a counter for the tests); `byStage`: the worst slice (ms) by the stage it ended in
@@ -1265,6 +1286,7 @@ export class ResupplySatellite {
       const s0 = now();
       r = job.gen.next();
       nSlices++;
+      if (PLAN_DEBUG.on) { if (PLAN_DEBUG.restRun > PLAN_DEBUG.maxRestSlice) PLAN_DEBUG.maxRestSlice = PLAN_DEBUG.restRun; PLAN_DEBUG.restRun = 0; }   // (a slice ends where the generator yielded)
       const ms = now() - s0;
       this.planStats.slices++; this.planStats.slicesMs += ms;
       if (ms > worst) { worst = ms; if (ms > this.planStats.worstSliceMs) this.planStats.worstAt = _work.at; }
@@ -1436,7 +1458,10 @@ export class ResupplySatellite {
     const p = this.player;
     if (!p) return;
     const on = !!(this._take || this._takes.length > 0);
-    if ((p._resupplyTaking === true) !== on) p._resupplyTaking = on;
+    if ((p._resupplyTaking === true) !== on) {
+      p._resupplyTaking = on;
+      if (!p.flowerHandoffHeld) p._flowerHoldWarned = false;   // (the lock turned on or off with no catch hand-off holding: the take's refusal says its line once per take. A hand-off that holds when a take ends has said its own line, once per hold: the flag stays, and the next take clears it as it begins)
+    }
   }
 
   /** Every take ends now (she let go, game over, a new run, dispose): pieces still held leave through `onDone`. */
@@ -1594,16 +1619,189 @@ export class ResupplySatellite {
       }
     }
     for (const o of this._aboardRecs(rec.piece, gone)) D = Math.max(D, this._support(o, u) + 0.05);
-    const Dg = Math.max(GRIP_DIST_MIN_M, D - gu + BUS_FRONT_M + STAND_OFF_M);
-    if (!(Dg <= GRIP_DIST_MAX_M)) return null;
-    const H0 = new THREE.Vector3().copy(G).addScaledVector(u, Dg);
+    const DgBase = Math.max(GRIP_DIST_MIN_M, D - gu + BUS_FRONT_M + STAND_OFF_M);
+    const reachOk = DgBase <= GRIP_DIST_MAX_M;
+    if (PLAN_DEBUG.on) { PLAN_DEBUG.pull = null; PLAN_DEBUG.grip = { nose, side, Dg: DgBase, D, su, gu, G: G.toArray(), reachOk }; }   // (a probe hook: why a piece is not reached)
     const Q = nose ? QY_PI.clone() : qRackPhi(side * Math.PI / 2);
+    let Dg = DgBase;
+    let H0 = new THREE.Vector3().copy(G).addScaledVector(u, Dg);
+    let body = null;
+    if (!reachOk) {
+      // the default hover is out of the arm's reach: the bus is moved in along the same line to the first spot that measures clear (P1). A nose piece is not: it is gripped at its farthest vertex
+      if (nose || this._noPull) return null;
+      const pick = yield* this._pullInGen(rec, gone, hull, G, u, Q);
+      if (!pick) return null;
+      Dg = pick.Dg; H0 = pick.H0; body = pick.body;
+      if (PLAN_DEBUG.on) PLAN_DEBUG.grip.pulledDg = Dg;
+    }
     // the haul of EVERY piece (the nose piece too) is measured against the rule, never assumed: none clear = no take
-    const route = yield* this._planHaulGen(rec, nose, side, H0, Q, Dg, gone, hull);
+    const route = yield* this._planHaulGen(rec, nose, side, H0, Q, Dg, gone, hull, body);
     if (!route) return null;
     const dir = route.dir, haul = route.len;
     const H1 = new THREE.Vector3().copy(H0).addScaledVector(dir, haul);
     return { nose, side, u, G, Dg, H0, H1, Q, dir, haul, hold: new THREE.Vector3(0, 0, Dg), gripOff: new THREE.Vector3().copy(rec.cM).sub(G) };
+  }
+
+  /**
+   * The satellite's drawn solids in ITS frame, metres (read once from the meshes, as `js/test/_satGeom.js` `satSolids` reads them): `boxes` one axis-aligned box
+   * `[x0, x1, y0, y1, z0, z1]` per mesh that is not the arm (a box inside another is dropped), `ext` the same boxes swept straight out along the approach line (local -Z,
+   * away from her), `names`, and `pts` their surfaces sampled to `PULL.bodyStepM` (xyz triples). The arm is swept on its own axes (`armJoints`), never as a solid.
+   */
+  _bodyModel() {
+    if (this._bodyM) return this._bodyM;
+    const g = this.group;
+    const list = [];
+    const mm = new THREE.Matrix4();
+    g.traverse((o) => {
+      if (o === g || !o.isMesh || !o.geometry || SAT_ARM_PART.test(o.name)) return;
+      const chain = [];
+      for (let p = o; p && p !== g; p = p.parent) { if (SAT_ARM_PART.test(p.name)) return; chain.push(p); }
+      mm.identity();
+      for (let i = chain.length - 1; i >= 0; i--) { chain[i].updateMatrix(); mm.multiply(chain[i].matrix); }   // (the parts' own transforms only: where she stands in the world does not matter)
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      const b = o.geometry.boundingBox.clone().applyMatrix4(mm);
+      list.push({ name: o.name, b: [b.min.x / M, b.max.x / M, b.min.y / M, b.max.y / M, b.min.z / M, b.max.z / M] });
+    });
+    const inside = (a, c) => a[0] >= c[0] - 0.005 && a[1] <= c[1] + 0.005 && a[2] >= c[2] - 0.005 && a[3] <= c[3] + 0.005 && a[4] >= c[4] - 0.005 && a[5] <= c[5] + 0.005;
+    const kept = list.filter((a, i) => !list.some((c, j) => j !== i && inside(a.b, c.b) && (!inside(c.b, a.b) || j < i)));
+    const pts = [];
+    const st = PULL.bodyStepM;
+    for (const { b } of kept) {
+      const nx = Math.max(1, Math.ceil((b[1] - b[0]) / st)), ny = Math.max(1, Math.ceil((b[3] - b[2]) / st)), nz = Math.max(1, Math.ceil((b[5] - b[4]) / st));
+      for (let i = 0; i <= nx; i++) for (let j = 0; j <= ny; j++) for (let k = 0; k <= nz; k++) {
+        if (i > 0 && i < nx && j > 0 && j < ny && k > 0 && k < nz) continue;             // (the surface only)
+        pts.push(b[0] + (b[1] - b[0]) * i / nx, b[2] + (b[3] - b[2]) * j / ny, b[4] + (b[5] - b[4]) * k / nz);
+      }
+    }
+    this._bodyM = { boxes: kept.map((a) => a.b), names: kept.map((a) => a.name), ext: kept.map((a) => [a.b[0], a.b[1], a.b[2], a.b[3], -PULL.farM, a.b[5]]), pts: Float64Array.from(pts) };
+    return this._bodyM;
+  }
+
+  /**
+   * A hover pulled in (lane s5 follow-up, P1), a generator. The default hover (the bus `STAND_OFF_M` beyond everything aboard) leaves the grip farther than the arm
+   * reaches (`GRIP_DIST_MAX_M`): a long piece whose far end lies well past its gripped point. Hovers along the same line are tried, from the arm's full reach down to
+   * `GRIP_DIST_MIN_M` in `PULL.stepM`, and the first is taken at which, measured on the drawn things in her frame:
+   *  - the satellite's solids (`_bodyModel`, swept straight out along the approach) keep `STAND_OFF_M` from every piece aboard (the one taken and the others) and from the
+   *    spheres of the nose catch and the tip bags;
+   *  - the arm's links (shoulder to wrist joint) keep `PULL.armClearM` from every piece aboard, at the hover and along the end of the reach (the tip coming in from the raised
+   *    point to the grip; the wrist stub and the head are the grip itself, they touch the piece);
+   *  - nothing of her hardware or her docked daughters is within 0.2 m of the solids at the hover, and the straight run in along the approach passes the haul rule.
+   * The haul is then swept with the solids carried too (`_planHaulGen`). `PLAN_DEBUG.pull` records every hover tried. The triangle fields cover 4.2 m about her axis (`TG`), and the
+   * solids hover and haul farther out than that, so the other pieces aboard (which reach to 7.69 m) are held off them by a second check along the haul, `_haulSolidsClearGen`:
+   * the same 0.6 m as at the hover (Q2). Her own hull and daughters lie inside the fields (measured: within 2.3 m of her axis), so the sweep sees them.
+   * @returns {{Dg: number, H0: THREE.Vector3, body: Float64Array}|null} `body`: the solids' sample points at the hover, her frame
+   */
+  *_pullInGen(rec, gone, hull, G, u, Q) {
+    _work.at = 'pull';
+    const dbg = PLAN_DEBUG.on ? { cands: [], picked: null } : null;
+    if (dbg) PLAN_DEBUG.pull = dbg;
+    const model = this._bodyModel();
+    const ext = model.ext, nBox = ext.length;
+    const Qi = new THREE.Quaternion().copy(Q).invert();
+    const v = new THREE.Vector3();
+    // every piece aboard, as the satellite sees it with the bus at the grip: x, y, z; the hover `Dg` from the grip is then z + Dg (the grip point is the origin)
+    const W = [];
+    for (const r of [rec, ...this._aboardRecs(rec.piece, gone)]) {
+      const rp = yield* haulRuleGen(r.piece);
+      const w = new Float64Array(rp.length);
+      for (let i = 0; i < rp.length; i += 3) {
+        v.set(rp[i], rp[i + 1], rp[i + 2]);
+        if (r.qRel) v.applyQuaternion(r.qRel);
+        v.add(r.cM).sub(G).applyQuaternion(Qi);
+        w[i] = v.x; w[i + 1] = v.y; w[i + 2] = v.z;
+        _work.n += 0.3;
+        if (WORK_DUE()) { _work.n = 0; yield; }
+      }
+      W.push(w);
+    }
+    const band = [];                                                       // the pieces' points near the arm's plane (x = 0): all the arm can touch
+    for (const w of W) for (let i = 0; i < w.length; i += 3) if (Math.abs(w[i]) <= PULL.bandM) band.push(w[i], w[i + 1], w[i + 2]);
+    const B = Float64Array.from(band);
+    const spheres = [];                                                    // the nose catch and the tip bags (a rack's catch is measured at its mesh, above)
+    const am = this.player && this.player.armManager;
+    if (am && typeof am._heldCatchSpheres === 'function') {
+      for (const s of am._heldCatchSpheres()) {
+        if (/^rack catch/.test(s.name || '')) continue;
+        v.set(s.c[0], s.c[1], s.c[2]).sub(G).applyQuaternion(Qi);
+        spheres.push({ x: v.x, y: v.y, z: v.z, r: s.r });
+      }
+    }
+    const stand2 = STAND_OFF_M * STAND_OFF_M, arm2 = PULL.armClearM * PULL.armClearM;
+    const restB = new Float64Array(hull.nLabels).fill(Infinity);           // the solids rest against nothing (checked below: nothing within 0.2 m)
+    const J = { ey: 0, ez: 0, wy: 0, wz: 0 };
+    const ay = [], az = [];
+    const loc = new THREE.Vector3();
+    for (let n = 0; ; n++) {
+      const Dg = +(GRIP_DIST_MAX_M - n * PULL.stepM).toFixed(3);
+      if (Dg < GRIP_DIST_MIN_M - 1e-9) break;
+      const c = { Dg, busM: Infinity, busPart: '', catchM: Infinity, armM: Infinity, near: 0, approach: null, ok: false };
+      if (dbg) dbg.cands.push(c);
+      // 1. the solids against every piece aboard, swept out along the approach
+      let best2 = Infinity, part = -1;
+      scan: for (const w of W) {
+        for (let i = 0; i < w.length; i += 3) {
+          const x = w[i], y = w[i + 1], z = w[i + 2] + Dg;
+          for (let k = 0; k < nBox; k++) {
+            const d2 = boxD2(x, y, z, ext[k]);
+            if (d2 < best2) { best2 = d2; part = k; }
+          }
+          if (best2 < stand2 && !(dbg && n === 0)) break scan;               // (a probe reads the whole figure for the first hover tried: the one that clears the piece most)
+          _work.n += nBox * 0.04;
+          if (WORK_DUE()) { _work.n = 0; yield; }
+        }
+      }
+      c.busM = Math.sqrt(best2); c.busPart = part >= 0 ? model.names[part] : '';
+      if (best2 < stand2) continue;
+      // 2. the nose catch and the tip bags
+      for (const s of spheres) {
+        let m = Infinity;
+        for (let k = 0; k < nBox; k++) { const d2 = boxD2(s.x, s.y, s.z + Dg, ext[k]); if (d2 < m) m = d2; }
+        c.catchM = Math.min(c.catchM, Math.sqrt(m) - s.r);
+      }
+      if (c.catchM < STAND_OFF_M) continue;
+      // 3. the arm's links, at the hover and along the end of the reach, against the pieces near its plane
+      let armBest2 = Infinity;
+      for (const t of PULL.poses) {
+        armJoints(RAISE.y * (1 - t), lerp(RAISE.z, Dg, t), J);
+        ay.length = 0; az.length = 0;
+        const linkTo = (y0, z0, y1, z1) => {
+          const n = Math.max(1, Math.ceil(Math.hypot(y1 - y0, z1 - z0) / PULL.armStepM));
+          for (let i = 0; i <= n; i++) { ay.push(y0 + (y1 - y0) * i / n); az.push(z0 + (z1 - z0) * i / n); }
+        };
+        linkTo(ARM_BASE.y, ARM_BASE.z, J.ey, J.ez);
+        linkTo(J.ey, J.ez, J.wy, J.wz);
+        for (let a = 0; a < ay.length; a++) {
+          for (let i = 0; i < B.length; i += 3) {
+            const dy = B[i + 1] - ay[a], dz = B[i + 2] + Dg - az[a];
+            const d2 = B[i] * B[i] + dy * dy + dz * dz;
+            if (d2 < armBest2) armBest2 = d2;
+          }
+          _work.n += B.length / 3 * 0.02;
+          if (WORK_DUE()) { _work.n = 0; yield; }
+        }
+      }
+      c.armM = Math.sqrt(armBest2);
+      if (armBest2 < arm2) continue;
+      // 4. nothing of her hardware or her daughters within 0.2 m of the solids at the hover
+      const H0 = new THREE.Vector3().copy(G).addScaledVector(u, Dg);
+      const bodyHer = new Float64Array(model.pts.length);
+      for (let i = 0; i < model.pts.length; i += 3) {
+        loc.set(model.pts[i], model.pts[i + 1], model.pts[i + 2]).applyQuaternion(Q).add(H0);
+        bodyHer[i] = loc.x; bodyHer[i + 1] = loc.y; bodyHer[i + 2] = loc.z;
+        if (hull.nearAt(loc.x, loc.y, loc.z)) c.near++;
+      }
+      _work.n += model.pts.length / 40;
+      if (c.near > 0) continue;
+      // 5. the straight run in along the approach (the line out, reversed) passes the haul rule with the solids alone
+      const cl = yield* clusterPoints(bodyHer, PLAN.clusterM);
+      const run = yield* sweepLine({ fields: [hull], pc: bodyHer, pa: new Float64Array(0), cl, clA: [], restP: restB, restA: restB, nBody: 0, restB }, u);
+      c.approach = run > 0;
+      if (!(run > 0)) continue;
+      c.ok = true;
+      if (dbg) dbg.picked = c.Dg;
+      return { Dg, H0, body: bodyHer };
+    }
+    return null;
   }
 
   /** Where a body is in HER frame now, metres, and the attitude it is drawn at (null: none). The same read `takePiece` pins it by. */
@@ -1722,9 +1920,11 @@ export class ResupplySatellite {
    * about it). Every sample point of the piece (`haulRulePoints`), the grip head and the arm's links are swept along the line against the exact
    * triangles of her hardware, her daughters and the other pieces aboard (`HAUL_RULE`: a part the piece rests against is only left; every other part
    * stays 4 cm off), and the first line that passes (with `PLAN.marginM` to spare) runs until everything carried is 0.5 m clear. Null when no line passes.
+   * `body` (a hover pulled in, `_pullInGen`): the satellite's solids' sample points at the hover, her frame: carried too, held to the rule against everything that is not
+   * the piece (nothing is near them at the start), since the bus is no longer beyond everything aboard.
    * @returns {{dir: THREE.Vector3, len: number, alphaDeg: number}|null}
    */
-  *_planHaulGen(rec, nose, side, H0, Q, Dg, gone, hull) {
+  *_planHaulGen(rec, nose, side, H0, Q, Dg, gone, hull, body = null) {
     const others = yield* this._othersTriField(rec.piece, gone, hull.nLabels);
     const fields = others ? [hull, others] : [hull];
     const nL = others ? others.nLabels : hull.nLabels;
@@ -1732,7 +1932,7 @@ export class ResupplySatellite {
     const rp = yield* haulRuleGen(rec.piece);
     _work.at = 'carried';
     const nP = rp.length / 3;
-    const pc = new Float64Array(rp.length + 40 * 3);
+    const pc = new Float64Array(rp.length + 40 * 3 + (body ? body.length : 0));
     const v = this._tpB;
     const q = rec.qRel;
     for (let i = 0; i < nP; i++) {
@@ -1748,6 +1948,8 @@ export class ResupplySatellite {
     const tip = toHer(0, J.wy, J.wz + WRIST_M).clone();
     let np = nP * 3;
     sampleBall(tip.x, tip.y, tip.z, 0.1, 40, (x, y, z) => { pc[np++] = x; pc[np++] = y; pc[np++] = z; });
+    const iBody = np;                                                      // the satellite's own solids (a pulled-in hover) are the last carried points
+    if (body) pc.set(body, iBody);
     const arm = [];                                                        // the links' axis lines, shoulder - elbow - wrist
     const seg = (ay, az, by, bz) => {
       const n = Math.max(1, Math.ceil(Math.hypot(by - ay, bz - az) / 0.05));
@@ -1760,7 +1962,7 @@ export class ResupplySatellite {
     // what each part is at rest: the least distance of a carried point to it (Infinity: not within reach of the rule)
     _work.at = 'rest';
     const restP = new Float64Array(nL).fill(Infinity), restA = new Float64Array(nL).fill(Infinity);
-    for (let i = 0; i < pc.length; i += 3) {
+    for (let i = 0; i < iBody; i += 3) {
       for (const F of fields) if (F.nearAt(pc[i], pc[i + 1], pc[i + 2])) F.restAt(pc[i], pc[i + 1], pc[i + 2], restP);
       if (WORK_DUE()) { _work.n = 0; yield; }
     }
@@ -1791,13 +1993,98 @@ export class ResupplySatellite {
         dirs.push({ d: new THREE.Vector3(0, side * Math.sin(a), -Math.cos(a)), deg });
       }
     }
-    const ctx = { fields, hull, pc, pa, cl, clA, restP, restA };
+    const ctx = { fields, hull, pc, pa, cl, clA, restP, restA, nBody: body ? iBody / 3 : undefined, restB: body ? new Float64Array(nL).fill(Infinity) : null };
+    const stay = body ? yield* this._haulStayGen(rec, gone, H0, Q) : null;   // (Q2) what the solids must stay `STAND_OFF_M` from along the haul, whatever the grids cover
     _work.at = 'sweep';
     for (const o of dirs) {
       const len = yield* sweepLine(ctx, o.d);
-      if (len > 0) return { dir: o.d.clone(), len, alphaDeg: o.deg };
+      if (len <= 0) continue;
+      if (stay && !(yield* this._haulSolidsClearGen(stay, Q, o.d, len))) continue;
+      return { dir: o.d.clone(), len, alphaDeg: o.deg };
     }
     return null;
+  }
+
+  /**
+   * Q2: what the satellite's solids keep `STAND_OFF_M` from along a haul from a hover pulled in: every other piece aboard (its sample points) and the nose catch / tip-bag spheres,
+   * in the satellite's frame at the hover (the same frame and numbers as `_pullInGen`). The triangle fields cover 4.2 m about her axis and the satellite hovers beyond it, while
+   * a piece aboard reaches farther (7.69 m measured), so the sweep alone cannot see them.
+   * @returns {{pts: Float64Array, spheres: {x: number, y: number, z: number, r: number}[], lo: number[], hi: number[]}} `lo`/`hi`: the box round all the solids
+   */
+  *_haulStayGen(rec, gone, H0, Q) {
+    const Qi = new THREE.Quaternion().copy(Q).invert();
+    const v = new THREE.Vector3();
+    const out = [];
+    for (const r of this._aboardRecs(rec.piece, gone)) {
+      const rp = yield* haulRuleGen(r.piece);
+      for (let i = 0; i < rp.length; i += 3) {
+        v.set(rp[i], rp[i + 1], rp[i + 2]);
+        if (r.qRel) v.applyQuaternion(r.qRel);
+        v.add(r.cM).sub(H0).applyQuaternion(Qi);
+        out.push(v.x, v.y, v.z);
+        _work.n += 0.3;
+        if (WORK_DUE()) { _work.n = 0; yield; }
+      }
+    }
+    const spheres = [];
+    const am = this.player && this.player.armManager;
+    if (am && typeof am._heldCatchSpheres === 'function') {
+      for (const s of am._heldCatchSpheres()) {
+        if (/^rack catch/.test(s.name || '')) continue;
+        v.set(s.c[0], s.c[1], s.c[2]).sub(H0).applyQuaternion(Qi);
+        spheres.push({ x: v.x, y: v.y, z: v.z, r: s.r });
+      }
+    }
+    const boxes = this._bodyModel().boxes;
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (const b of boxes) for (let a = 0; a < 3; a++) { lo[a] = Math.min(lo[a], b[2 * a]); hi[a] = Math.max(hi[a], b[2 * a + 1]); }
+    return { pts: Float64Array.from(out), spheres, lo, hi };
+  }
+
+  /**
+   * Q2: the solids carried `len` m along `dir` (her frame) keep `STAND_OFF_M` from `stay` (`_haulStayGen`), measured every `PULL.haulStepM` (the distance to a box changes by no more than the step,
+   * so a pass is at least `STAND_OFF_M` less half a step). A point whose line never comes near the box round all the solids is skipped whole.
+   * @returns {boolean}
+   */
+  *_haulSolidsClearGen(stay, Q, dir, len) {
+    const model = this._bodyModel();
+    const boxes = model.boxes, nBox = boxes.length;
+    const d = new THREE.Vector3().copy(dir).applyQuaternion(new THREE.Quaternion().copy(Q).invert());   // the satellite moves along `d`: a point aboard moves by -d relative to it
+    const n = Math.max(1, Math.ceil(len / PULL.haulStepM));
+    const m = STAND_OFF_M + PULL.haulStepM;
+    const near = (x, y, z, r) => {                                         // the point's whole line against the solids' box, grown by the stand-off (+ the sphere's radius)
+      const P = [x, y, z], D = [-d.x * len, -d.y * len, -d.z * len];
+      let t0 = 0, t1 = 1;
+      for (let a = 0; a < 3; a++) {
+        const lo = stay.lo[a] - m - r, hi = stay.hi[a] + m + r;
+        if (Math.abs(D[a]) < 1e-12) { if (P[a] < lo || P[a] > hi) return false; continue; }
+        let s0 = (lo - P[a]) / D[a], s1 = (hi - P[a]) / D[a];
+        if (s0 > s1) { const t = s0; s0 = s1; s1 = t; }
+        t0 = Math.max(t0, s0); t1 = Math.min(t1, s1);
+        if (t0 > t1) return false;
+      }
+      return true;
+    };
+    const hit = (x, y, z, r) => {
+      const lim2 = (STAND_OFF_M + r) * (STAND_OFF_M + r);
+      for (let i = 1; i <= n; i++) {
+        const s = Math.min(len, i * PULL.haulStepM);
+        const px = x - d.x * s, py = y - d.y * s, pz = z - d.z * s;
+        for (let k = 0; k < nBox; k++) if (boxD2(px, py, pz, boxes[k]) < lim2) return true;
+      }
+      return false;
+    };
+    for (const s of stay.spheres) {
+      if (near(s.x, s.y, s.z, s.r) && hit(s.x, s.y, s.z, s.r)) return false;
+    }
+    const P = stay.pts;
+    for (let i = 0; i < P.length; i += 3) {
+      if (!near(P[i], P[i + 1], P[i + 2], 0)) continue;
+      if (hit(P[i], P[i + 1], P[i + 2], 0)) return false;
+      _work.n += n * nBox * 0.04;
+      if (WORK_DUE()) { _work.n = 0; yield; }
+    }
+    return true;
   }
 
   /**

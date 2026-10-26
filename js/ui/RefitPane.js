@@ -87,6 +87,7 @@ import { FITTING_CATALOG, groupBySubsystem } from '../data/fittingCatalog.js';
 import { BLUEPRINT_SUBSYSTEMS } from '../data/blueprintSubsystems.js';
 import { subsystemForPart, partsForSubsystem } from '../data/refitIndex.js';
 import { upgradePrereqsMet, upgradeCostNow, consumableFull } from './shopGating.js';
+import { pendingAboard } from '../systems/BigPieces.js';
 import { coldGasPoolToKg } from '../systems/ResourceSystem.js';   // ap-gas D4a: the nitrogen aboard is shown in real kg (the pool is 0.3 kg a unit)
 
 /** G1 write cap — the ProxContextPanel/TransferWindows house value. */
@@ -268,9 +269,12 @@ export class RefitPane {
       // u1-resupply-stop D3: mid-mission (ctx.atStop === false) nothing can be bought, so nothing is "affordable now".
       const affordable = price <= (ctx.credits ?? 0) && ctx.atStop !== false;
       const cls = prereqs ? (affordable ? 0 : 1) : 2;
-      ranked.push({ entry, cls, _cost: price, _i: i });
+      // s5 gaps G2: while a big piece is aboard and no sail is in stock, the sail stands first (even when it cannot be afforded yet):
+      // the fate list tells the player to buy one, and cheaper rows would push it off the card's three.
+      const need = !!(ctx.needSail && shop.effect === 'dragSail' && prereqs) ? 0 : 1;
+      ranked.push({ entry, cls, _need: need, _cost: price, _i: i });
     });
-    ranked.sort((a, b) => (a.cls - b.cls) || (a._cost - b._cost) || (a._i - b._i));
+    ranked.sort((a, b) => (a._need - b._need) || (a.cls - b.cls) || (a._cost - b._cost) || (a._i - b._i));
     return ranked.map(({ entry, cls }) => ({ entry, cls }));
   }
 
@@ -689,11 +693,15 @@ export class RefitPane {
     // g1-gas-upgrades D4/D5: the live ResourceSystem (through the adapter deps) prices the engine-gas resupply
     let res = null;
     try { res = this._adapterDeps().resourceSystem || null; } catch (_e) { res = null; }
+    // s5 gaps G2: a big piece waits for its fate (any fate not done) and the stock has no sail: the sail ranks first (rankAlternatives).
+    let needSail = false;
+    try { needSail = pendingAboard().length > 0 && !((res && res.dragSails) > 0); } catch (_e) { needSail = false; }
     return {
       credits,
       avg,
       res,
       atStop,
+      needSail,
       levelOf,
       ownedHas: (id) => ownedShim.has(id),
       nameOf: (id) => CATALOG_BY_ID.get(id)?.shop?.name || null,

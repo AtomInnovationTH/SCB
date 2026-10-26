@@ -28,6 +28,12 @@
  *                               runs or the wide scanner cools down it is dimmed but still pressable (the sensor's own
  *                               "Wide scanner cooling down." line explains). DE-SPIN wins the slot if both ever qualify.
  *
+ *   CHOOSE     (floors 2-4)     s5 gaps G1 (2026-10-25). Opens the fate list of a big catch (U). Floors 3-4 hide the hint strip, so
+ *                               the ticker's CHOOSE chip cannot stand there; the button stands while a big piece is aboard and the
+ *                               list is closed. Floor 2: only when the ticker's own CHOOSE chip is not up (on screen: a shelved chip
+ *                               does not count), one row above the floor's other button. Floors 3-4: beside it, to the right of centre
+ *                               at the same height (CHOOSE_BOTTOM_PX / CHOOSE_LEFT), clear of the centred toast, warning and pilot strip.
+ *
  * Why not ticker chips: the hint strip is display:none on floors 3-5 (FloorMask) and a ticker step button is click-only
  * (down and up back to back), so neither a floor-4 button nor a hold fits there.
  *
@@ -67,6 +73,25 @@ export const LESSON_BUTTON_FLOOR = 3;
 
 /** CSS px above the viewport bottom, by floor (floor 2: clear of the hint strip, 88 up to ~148 with a 44 px step button on it; gone on 3-5). */
 export const BOTTOM_PX = Object.freeze({ 2: 168, 3: 88, 4: 88 });
+
+/**
+ * s5 gaps G1 (2026-10-25): CHOOSE opens the fate list of a big catch (U). Floors 3-4 hide the hint strip, so the ticker's CHOOSE
+ * chip cannot stand there and this button is the only touch way in. Floor 2 also shows it when the ticker chip is not up (another
+ * chip or a lesson step holds the slot). It sits one step ABOVE the floor's other button so no two shown buttons share a spot.
+ */
+export const CHOOSE_BTN_ID = 'touch-verb-choose';
+export const CHOOSE_LABEL = 'CHOOSE';
+export const CHOOSE_KEY = 'KeyU';
+export const CHOOSE_FLOORS = Object.freeze([2, 3, 4]);
+/**
+ * CSS px above the viewport bottom. Floor 2: one 48 px button and a 12 px gap above the floor's button row (clear of the hint
+ * strip). Floors 3-4 (fix round 1, R2): the SAME height as the floor's button, BESIDE it (CHOOSE_LEFT), because the band above the
+ * centre (132-200 px) is where the toast (144), a warning (170) and the ARM PILOT strip (172, centred, z 1000) land.
+ */
+export const CHOOSE_BOTTOM_PX = Object.freeze({ 2: BOTTOM_PX[2] + 60, 3: BOTTOM_PX[3], 4: BOTTOM_PX[4] });
+/** CSS `left` of the CHOOSE button's left edge: floor 2 centred (with CHOOSE_TRANSFORM); floors 3-4 start 100 px right of the centre line, 23 px clear of the widest floor button (~154 px wide, half 77). */
+export const CHOOSE_LEFT = Object.freeze({ 2: '50%', 3: 'calc(50% + 100px)', 4: 'calc(50% + 100px)' });
+export const CHOOSE_TRANSFORM = Object.freeze({ 2: 'translateX(-50%)', 3: 'none', 4: 'none' });
 
 /** Re-read cadence for what no event announces (cluster focus, tumble). */
 const POLL_MS = 120;
@@ -110,6 +135,8 @@ export class TouchVerbButton {
    * @param {() => boolean} [deps.isPiloting]         u16b: a daughter is being piloted (WIDE SCAN hides)
    * @param {() => boolean} [deps.isWideScanLearned]  u16b: SkillsSystem.isDiscovered('scan_wide'); default false (no button until the lesson)
    * @param {() => ({active:boolean, wideCooldown:number}|null)} [deps.getWideScanState]  u16b: SensorSystem.getScanStatus (dims the button)
+   * @param {() => boolean} [deps.getChoosePending]   s5 gaps G1: a big piece is aboard and the fate list is closed (CHOOSE shows); default false
+   * @param {() => boolean} [deps.isChooseChipUp]     s5 gaps G1: the ticker's CHOOSE chip is on screen (floor 2: the button then stays away)
    * @param {Document} [deps.visibilityDoc]           where `visibilitychange` is heard (default `doc`)
    * @param {object} [deps.win]                       where blur / pagehide / pointer lift are heard (default `window`)
    * @param {boolean} [deps.poll=true]                false -> no timer (tests call refresh())
@@ -124,10 +151,12 @@ export class TouchVerbButton {
     this._flyShown = false;
     this._despinShown = false;
     this._wideShown = false;
+    this._chooseShown = false;
     this._beatId = null;
     this.flyEl = null;
     this.despinEl = null;
     this.wideEl = null;
+    this.chooseEl = null;
     this._winOff = [];
     this._glass = deps.glass !== false;
     if (!this._glass || !deps.doc || !deps.parent) return;
@@ -136,6 +165,7 @@ export class TouchVerbButton {
     this.flyEl = this._makeButton(doc, FLY_BTN_ID, 'FLY THERE');
     this.despinEl = this._makeButton(doc, DESPIN_BTN_ID, DESPIN_LABEL);
     this.wideEl = this._makeButton(doc, WIDE_BTN_ID, WIDE_LABEL);
+    this.chooseEl = this._makeButton(doc, CHOOSE_BTN_ID, CHOOSE_LABEL);
 
     // A finger on a button is nobody else's: no view drag, no radial, no scan-on-empty-tap from it.
     this._stop = (e) => { if (e && typeof e.stopPropagation === 'function') e.stopPropagation(); };
@@ -143,6 +173,7 @@ export class TouchVerbButton {
       this.flyEl.addEventListener(t, this._stop);
       this.despinEl.addEventListener(t, this._stop);
       this.wideEl.addEventListener(t, this._stop);
+      this.chooseEl.addEventListener(t, this._stop);
     }
     this.flyEl.addEventListener('pointerdown', this._stop);
     this.flyEl.addEventListener('pointerup', this._stop);
@@ -150,6 +181,9 @@ export class TouchVerbButton {
     this.wideEl.addEventListener('pointerdown', this._stop);
     this.wideEl.addEventListener('pointerup', this._stop);
     this.wideEl.addEventListener('click', (e) => this._onWideClick(e));
+    this.chooseEl.addEventListener('pointerdown', this._stop);
+    this.chooseEl.addEventListener('pointerup', this._stop);
+    this.chooseEl.addEventListener('click', (e) => this._onChooseClick(e));
 
     const de = this.despinEl;
     de.addEventListener('pointerdown', (e) => this._onDespinDown(e));
@@ -164,6 +198,7 @@ export class TouchVerbButton {
     deps.parent.appendChild(this.flyEl);
     deps.parent.appendChild(this.despinEl);
     deps.parent.appendChild(this.wideEl);
+    deps.parent.appendChild(this.chooseEl);
 
     // The page going away from the finger: hidden tab, lost focus, a lifted finger the button never heard.
     const vdoc = deps.visibilityDoc || doc;
@@ -321,6 +356,24 @@ export class TouchVerbButton {
     return true;
   }
 
+  /**
+   * s5 gaps G1: true when CHOOSE is on offer: glass, floors 2-4, not riding, input free, a big piece aboard with the fate list
+   * closed (`getChoosePending`). Floors 3-4 always (no ticker there); floor 2 only while the ticker's own CHOOSE chip is not up.
+   * @returns {boolean}
+   */
+  chooseOffer() {
+    if (!this._glass || this._disposed) return false;
+    const floor = this._floor();
+    if (!CHOOSE_FLOORS.includes(floor)) return false;
+    try { if (this._d.isRiding && this._d.isRiding()) return false; } catch (_e) { return false; }
+    if (this._blocked()) return false;
+    try { if (!(typeof this._d.getChoosePending === 'function' && this._d.getChoosePending())) return false; } catch (_e) { return false; }
+    if (floor === 2) {
+      try { if (this._d.isChooseChipUp && this._d.isChooseChipUp()) return false; } catch (_e) { /* chip unknown: the button stands */ }
+    }
+    return true;
+  }
+
   /** @returns {boolean} a wide scan is running or the wide scanner is cooling down (the button is dimmed, still pressable) */
   wideBusy() {
     let st = null;
@@ -371,6 +424,32 @@ export class TouchVerbButton {
     }
     this._show(this.wideEl, wide);
     this._wideShown = wide;
+
+    const choose = this.chooseOffer();
+    if (choose) {
+      const bottom = (CHOOSE_BOTTOM_PX[floor] ?? CHOOSE_BOTTOM_PX[3]) + 'px';
+      if (this.chooseEl.style.bottom !== bottom) this.chooseEl.style.bottom = bottom;
+      const left = CHOOSE_LEFT[floor] ?? CHOOSE_LEFT[3];
+      if (this.chooseEl.style.left !== left) this.chooseEl.style.left = left;
+      const tf = CHOOSE_TRANSFORM[floor] ?? CHOOSE_TRANSFORM[3];
+      if (this.chooseEl.style.transform !== tf) this.chooseEl.style.transform = tf;
+    }
+    this._show(this.chooseEl, choose);
+    this._chooseShown = choose;
+  }
+
+  // ── CHOOSE ──────────────────────────────────────────────────────────────
+
+  /** @private a tap = the U key: the same path as the keyboard (InputManager -> FateList.toggleFromKey) */
+  _onChooseClick(e) {
+    this._stop(e);
+    if (this._disposed) return;
+    if (!this.chooseOffer()) { this.refresh(); return; }   // stale: nothing waits for a pick any more
+    try { if (typeof this.chooseEl.blur === 'function') this.chooseEl.blur(); } catch (_e) { /* stub */ }
+    if (typeof this._d.press === 'function') {
+      try { this._d.press(CHOOSE_KEY); } catch (_e) { /* dep */ }
+    }
+    this.refresh();
   }
 
   // ── WIDE SCAN ───────────────────────────────────────────────────────────
@@ -474,12 +553,13 @@ export class TouchVerbButton {
     this._winOff = [];
     if (this._timer != null && typeof clearInterval === 'function') clearInterval(this._timer);
     this._timer = null;
-    for (const el of [this.flyEl, this.despinEl, this.wideEl]) {
+    for (const el of [this.flyEl, this.despinEl, this.wideEl, this.chooseEl]) {
       try { if (el && el.parentNode) el.parentNode.removeChild(el); } catch (_e) { /* stub */ }
     }
     this.flyEl = null;
     this.despinEl = null;
     this.wideEl = null;
+    this.chooseEl = null;
   }
 }
 

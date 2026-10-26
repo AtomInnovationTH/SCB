@@ -223,6 +223,11 @@ export class HintTicker {
     return this._items.some(isStep) || this._waiting.some(isStep);
   }
 
+  /** s5 gaps R1: is the row with this id on screen right now (a shelved step row waits off screen and does not count)? */
+  isOnScreen(id) {
+    return this._items.some((it) => it && it.id === id);
+  }
+
   /** u18c D5: a step BUTTON (glass, with a step sink) is on screen: the row a text-only `yieldToButton` hint must not cover. */
   _stepButtonUp() {
     if (typeof this._onStepTap !== 'function' || !GestureHints.isGlass()) return false;

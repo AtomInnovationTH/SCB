@@ -9,7 +9,8 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
-import { GameStates } from '../core/GameState.js';
+import { GameStates, gameState } from '../core/GameState.js';
+import { scoringSystem } from '../systems/ScoringSystem.js';
 import timerManager from '../systems/TimerManager.js';
 import { StatusPanel } from './hud/StatusPanel.js';
 import { VitalsPane } from './hud/VitalsPane.js';
@@ -1531,6 +1532,16 @@ export class HUD {
     // SCORE_UPDATE is emitted before gameState.clearDebris() increments the count, so the cache
     // below stays one behind a catch; DEBRIS_CLEARED carries the new count.
     eventBus.on(Events.DEBRIS_CLEARED, (d) => { if (d && Number.isFinite(d.count)) this._debrisCleared = d.count; });
+
+    // s5 gaps G3: a load restores the score and the cleared count without a SCORE_UPDATE, so the cache above stayed at 0
+    // ("0 cr", "CLEARED 0/60" for a minute after Continue). PERSISTENCE_LOADED fires twice (PersistenceManager before the scorer is
+    // restored, GameFlowManager after); the second read is the true one. Read the scorer and the game state directly; never emit a
+    // SCORE_UPDATE for it (StatusPanel would show a payoff line).
+    eventBus.on(Events.PERSISTENCE_LOADED, () => {
+      if (scoringSystem && Number.isFinite(scoringSystem.credits)) this._credits = scoringSystem.credits;
+      if (gameState && Number.isFinite(gameState.debrisCleared)) this._debrisCleared = gameState.debrisCleared;
+      this._updatePinWidget();
+    });
 
     eventBus.on(Events.SCORE_UPDATE, (data) => {
       this._score = data.total;

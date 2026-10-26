@@ -3602,6 +3602,9 @@ async function init() {
       isPiloting: () => !!(inputManager && inputManager.armPilotMode),
       isWideScanLearned: () => !!(skillsSystem && skillsSystem.isDiscovered('scan_wide')),
       getWideScanState: () => sensorSystem && sensorSystem.getScanStatus(),
+      // s5 gaps G1: CHOOSE (U) in the glass button row, floors 2-4 (floors 3-4 have no hint strip for the chip).
+      getChoosePending: () => !!(fateList && !fateList.isOpen() && pendingAboard().length > 0),
+      isChooseChipUp: () => !!(touchActionChip && touchActionChip.isChooseUp && touchActionChip.isChooseUp()),
     });
     const stampEl = (typeof document !== 'undefined') ? document.getElementById('build-stamp') : null;
     const touchTelemetry = new TouchTelemetry({

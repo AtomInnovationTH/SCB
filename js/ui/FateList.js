@@ -329,6 +329,11 @@ export class FateList {
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // s5 gaps S1: a U PRESSED ON THE WINDOW ITSELF (KeyDispatch.pressKey, which the CHOOSE button and the ticker chip use) reaches
+    // this capture listener AFTER InputManager's bubble listener: at the target a browser runs listeners in the order they were
+    // added, not capture first. InputManager has already toggled the list for that event, so closing it here would undo the tap.
+    // A real keystroke starts at the page, runs this listener first and is consumed here; InputManager never sees it.
+    if (e.code === 'KeyU' && this._win && e.target === this._win) return;
     if (this.handleKey(e.code, e)) {
       if (typeof e.preventDefault === 'function') e.preventDefault();
       if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();

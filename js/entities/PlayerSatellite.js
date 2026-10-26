@@ -4983,13 +4983,14 @@ export class PlayerSatellite extends THREE.Group {
     return (thetaRad * 180) / Math.PI;
   }
 
-  /** @private A radiator command while held: one comms line per hold, then null. */
+  /** @private A radiator command while held: one comms line per hold, then null. A take's lock (no hand-off, no carry) says so: the hand-off line wins when both hold. */
   _refuseFlowerWhileHeld() {
     if (!this._flowerHoldWarned) {
       this._flowerHoldWarned = true;
+      const takeOnly = this._resupplyTaking === true && !this.flowerHandoffHeld && !(this.armManager && typeof this.armManager.isCarrying === 'function' && this.armManager.isCarrying());
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'THERMAL',
-        text: 'Radiators held for the catch hand-off.',
+        text: takeOnly ? 'Radiators stay while the satellite is taking a piece.' : 'Radiators held for the catch hand-off.',
         priority: 'info',
         _reactive: true,
       });
