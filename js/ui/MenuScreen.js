@@ -574,39 +574,6 @@ export class MenuScreen {
               </p>
             </div>
 
-            <!-- Kessler syndrome — absorbs the former true-stories hook group:
-                 10 entries, chronological, year in the .adr-sub tag. -->
-            <details class="adr-group">
-              <summary>Kessler syndrome<span class="adr-count">10</span></summary>
-              <ul class="adr-list">
-              <li class="adr-prose">Proposed by NASA's Donald Kessler in 1978: once orbital junk gets dense enough, each collision throws off fragments that cause more collisions. A runaway cascade that can make whole orbits unusable for generations. Every dead satellite left up there raises the odds. The record so far:</li>
-              <li><span class="adr-name" title="The nuclear-powered Kosmos 954 scattered radioactive debris across northern Canada in 1978. Canada billed the USSR under the 1972 Liability Convention, the only space-crash bill ever paid.">The only space-crash bill ever</span> <span class="adr-sub">Canada · 1978</span></li>
-              <li><span class="adr-name" title="China destroyed its own Fengyun-1C weather satellite with a missile at ~865 km. The worst single debris event in history, and most of those fragments will linger for decades.">Chinese anti-satellite test</span> <span class="adr-sub">2007 · 3,000+ pieces</span></li>
-              <li><span class="adr-name" title="The defunct Russian Cosmos 2251 slammed into the active Iridium 33 communications satellite. The first accidental crash between two whole satellites.">Iridium–Cosmos crash</span> <span class="adr-sub">2009 · 2,000+ pieces</span></li>
-              <li><span class="adr-name" title="Launched in 1965 and long thought dead, the LES-1 satellite was detected transmitting again in 2013. Its tumbling likely switches its transmitter on and off. Nobody sent the command.">The zombie satellite</span> <span class="adr-sub">1967 → 2013</span></li>
-              <li><span class="adr-name" title="In 2021 the working Yunhai 1-02 satellite was struck by a fragment of a Zenit rocket launched back in 1996. A 25-year-old piece of junk found its target.">Hit by a rocket from 1996</span> <span class="adr-sub">2021</span></li>
-              <li><span class="adr-name" title="Russia destroyed the defunct Cosmos 1408 satellite in a weapons test, scattering fragments that forced the ISS crew to shelter in their capsules.">Russian anti-satellite test</span> <span class="adr-sub">2021 · 1,500+ pieces</span></li>
-              <li><span class="adr-name" title="A minor solar storm in 2022 warmed and puffed up the upper atmosphere, adding just enough drag to pull 38 freshly-launched Starlink satellites back down before they reached their orbits.">A solar storm sinks 38 Starlinks</span> <span class="adr-sub">2022</span></li>
-              <li><span class="adr-name" title="A battery pallet jettisoned from the ISS survived reentry in 2024 and punched clean through the roof of a Florida home. It was supposed to burn up entirely.">A piece of the Station hits a house</span> <span class="adr-sub">Florida · 2024</span></li>
-              <li><span class="adr-name" title="Kosmos 482 was a Soviet Venus lander stranded in Earth orbit by a 1972 launch failure. Built to survive Venus, it fell back to Earth intact 53 years later, in 2025.">The Venus lander that stayed</span> <span class="adr-sub">1972 → 2025</span></li>
-              <li><span class="adr-name" title="The US Space Surveillance Network watches for close passes; the ISS fires its thrusters to dodge when collision odds exceed 1 in 10,000. About once a year on average (NASA). If a threat is spotted too late, the crew shelters in their return capsules.">ISS dodges debris</span> <span class="adr-sub">~1× / year</span></li>
-              </ul>
-            </details>
-
-            <!-- The new rules — India first -->
-            <details class="adr-group">
-              <summary>Clean up is the law<span class="adr-count">6</span></summary>
-              <ul class="adr-list">
-              <li class="adr-prose">Sixty years of leftovers plus mega-constellations adding satellites by the thousand turned &ldquo;someday&rdquo; into &ldquo;this decade.&rdquo; Regulators answered with hard deadlines: some binding law, some pledges with a date.</li>
-              <li><span class="adr-name" title="ISRO's pledge, made in April 2024 while India hosted the world's debris agencies in Bengaluru: every Indian space mission, government or private, debris-free by 2030. The new private rocket companies signed up alongside ISRO.">Debris-Free Space Missions</span> <span class="adr-sub">India · by 2030</span></li>
-              <li><span class="adr-name" title="The 2023 policy that opened Indian space to private companies, and the 2024 rulebook that came with it: one regulator, one authorisation per launch or satellite, and a collision risk over the mission's life below 1 in 1,000.">Indian Space Policy 2023</span> <span class="adr-sub">India · IN-SPACe</span></li>
-              <li><span class="adr-name" title="US Federal Communications Commission, 2022. Satellites in low orbit must now be removed within 5 years of mission end. Replacing the old 25-year guideline. First fine: Dish Network, $150,000 (2023).">FCC 5-year rule</span> <span class="adr-sub">USA · 2022</span></li>
-              <li><span class="adr-name" title="European Space Agency's Zero Debris Charter (2023): no new debris generated by participating missions by 2030, with disposal success above 90% and orbital clearance in under 5 years.">ESA Zero Debris</span> <span class="adr-sub">Europe · by 2030</span></li>
-              <li><span class="adr-name" title="Proposed EU-wide Space Act (June 2025): would require debris-mitigation plans, collision avoidance and end-of-life deorbiting for any operator serving the EU market. Targeted to apply from 2030.">EU Space Act</span> <span class="adr-sub">EU · proposed 2025</span></li>
-              <li><span class="adr-name" title="The UN Committee on the Peaceful Uses of Outer Space (2007 guidelines) and the Inter-Agency Space Debris Coordination Committee. The technical origin of the original 25-year disposal rule that national laws build on.">UN COPUOS / IADC</span> <span class="adr-sub">global</span></li>
-              </ul>
-            </details>
-
             <!-- Countries — Thailand, India, Japan, then Other. One is open at
                  a time (owner 2026-10-26): a closed country shows only its name and
                  "(more)"; open, its <ul id="adr-more-<country>"> shows three
@@ -656,6 +623,39 @@ export class MenuScreen {
               <li class="adr-also adr-more" id="adr-more-countries" hidden>
                 <span class="adr-nw"><span class="adr-name" title="America's space agency. Its Orbital Debris Program Office wrote NASA's first debris-mitigation rules in 1995 and builds the ORDEM and LEGEND debris models.">NASA</span> (USA),</span>
                 <span class="adr-nw"><span class="adr-name" title="Europe's space agency. Its Space Debris Office, mainly at ESOC in Darmstadt, coordinates European debris research; its Clean Space initiative covers zero-debris technology and in-orbit servicing.">ESA</span> (Europe).</span></li>
+              </ul>
+            </details>
+
+            <!-- Kessler syndrome — absorbs the former true-stories hook group:
+                 10 entries, chronological, year in the .adr-sub tag. -->
+            <details class="adr-group">
+              <summary>Kessler syndrome<span class="adr-count">10</span></summary>
+              <ul class="adr-list">
+              <li class="adr-prose">Proposed by NASA's Donald Kessler in 1978: once orbital junk gets dense enough, each collision throws off fragments that cause more collisions. A runaway cascade that can make whole orbits unusable for generations. Every dead satellite left up there raises the odds. The record so far:</li>
+              <li><span class="adr-name" title="The nuclear-powered Kosmos 954 scattered radioactive debris across northern Canada in 1978. Canada billed the USSR under the 1972 Liability Convention, the only space-crash bill ever paid.">The only space-crash bill ever</span> <span class="adr-sub">Canada · 1978</span></li>
+              <li><span class="adr-name" title="China destroyed its own Fengyun-1C weather satellite with a missile at ~865 km. The worst single debris event in history, and most of those fragments will linger for decades.">Chinese anti-satellite test</span> <span class="adr-sub">2007 · 3,000+ pieces</span></li>
+              <li><span class="adr-name" title="The defunct Russian Cosmos 2251 slammed into the active Iridium 33 communications satellite. The first accidental crash between two whole satellites.">Iridium–Cosmos crash</span> <span class="adr-sub">2009 · 2,000+ pieces</span></li>
+              <li><span class="adr-name" title="Launched in 1965 and long thought dead, the LES-1 satellite was detected transmitting again in 2013. Its tumbling likely switches its transmitter on and off. Nobody sent the command.">The zombie satellite</span> <span class="adr-sub">1967 → 2013</span></li>
+              <li><span class="adr-name" title="In 2021 the working Yunhai 1-02 satellite was struck by a fragment of a Zenit rocket launched back in 1996. A 25-year-old piece of junk found its target.">Hit by a rocket from 1996</span> <span class="adr-sub">2021</span></li>
+              <li><span class="adr-name" title="Russia destroyed the defunct Cosmos 1408 satellite in a weapons test, scattering fragments that forced the ISS crew to shelter in their capsules.">Russian anti-satellite test</span> <span class="adr-sub">2021 · 1,500+ pieces</span></li>
+              <li><span class="adr-name" title="A minor solar storm in 2022 warmed and puffed up the upper atmosphere, adding just enough drag to pull 38 freshly-launched Starlink satellites back down before they reached their orbits.">A solar storm sinks 38 Starlinks</span> <span class="adr-sub">2022</span></li>
+              <li><span class="adr-name" title="A battery pallet jettisoned from the ISS survived reentry in 2024 and punched clean through the roof of a Florida home. It was supposed to burn up entirely.">A piece of the Station hits a house</span> <span class="adr-sub">Florida · 2024</span></li>
+              <li><span class="adr-name" title="Kosmos 482 was a Soviet Venus lander stranded in Earth orbit by a 1972 launch failure. Built to survive Venus, it fell back to Earth intact 53 years later, in 2025.">The Venus lander that stayed</span> <span class="adr-sub">1972 → 2025</span></li>
+              <li><span class="adr-name" title="The US Space Surveillance Network watches for close passes; the ISS fires its thrusters to dodge when collision odds exceed 1 in 10,000. About once a year on average (NASA). If a threat is spotted too late, the crew shelters in their return capsules.">ISS dodges debris</span> <span class="adr-sub">~1× / year</span></li>
+              </ul>
+            </details>
+
+            <!-- The new rules — India first -->
+            <details class="adr-group">
+              <summary>Clean up is the law<span class="adr-count">6</span></summary>
+              <ul class="adr-list">
+              <li class="adr-prose">Sixty years of leftovers plus mega-constellations adding satellites by the thousand turned &ldquo;someday&rdquo; into &ldquo;this decade.&rdquo; Regulators answered with hard deadlines: some binding law, some pledges with a date.</li>
+              <li><span class="adr-name" title="ISRO's pledge, made in April 2024 while India hosted the world's debris agencies in Bengaluru: every Indian space mission, government or private, debris-free by 2030. The new private rocket companies signed up alongside ISRO.">Debris-Free Space Missions</span> <span class="adr-sub">India · by 2030</span></li>
+              <li><span class="adr-name" title="The 2023 policy that opened Indian space to private companies, and the 2024 rulebook that came with it: one regulator, one authorisation per launch or satellite, and a collision risk over the mission's life below 1 in 1,000.">Indian Space Policy 2023</span> <span class="adr-sub">India · IN-SPACe</span></li>
+              <li><span class="adr-name" title="US Federal Communications Commission, 2022. Satellites in low orbit must now be removed within 5 years of mission end. Replacing the old 25-year guideline. First fine: Dish Network, $150,000 (2023).">FCC 5-year rule</span> <span class="adr-sub">USA · 2022</span></li>
+              <li><span class="adr-name" title="European Space Agency's Zero Debris Charter (2023): no new debris generated by participating missions by 2030, with disposal success above 90% and orbital clearance in under 5 years.">ESA Zero Debris</span> <span class="adr-sub">Europe · by 2030</span></li>
+              <li><span class="adr-name" title="Proposed EU-wide Space Act (June 2025): would require debris-mitigation plans, collision avoidance and end-of-life deorbiting for any operator serving the EU market. Targeted to apply from 2030.">EU Space Act</span> <span class="adr-sub">EU · proposed 2025</span></li>
+              <li><span class="adr-name" title="The UN Committee on the Peaceful Uses of Outer Space (2007 guidelines) and the Inter-Agency Space Debris Coordination Committee. The technical origin of the original 25-year disposal rule that national laws build on.">UN COPUOS / IADC</span> <span class="adr-sub">global</span></li>
               </ul>
             </details>
 
