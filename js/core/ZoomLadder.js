@@ -125,6 +125,10 @@ const DEFAULT_RULES = {
   rideMsRange: [450, 650],// crossing-ride window (locked: VisualLaw)
   miniRideMs: 200,        // hotkey-jump mini-ride (locked: VisualLaw)
   reaimMs: 300,           // re-aim / subject-loss soft ride (locked: VisualLaw)
+  crossBlock: null,       // optional (fromFloor, destFloor) => true: a zoom (wheel/flick) may not cross there.
+                          // Silent: no 'cross', no 'denied'. Owner 10-27: while the camera rides a daughter,
+                          // zooming in on floor 2 never swings to the mother's close-up (floor 1). Jumps, page
+                          // keys and Esc are explicit commands and are not asked.
 };
 
 export class ZoomLadder {
@@ -344,7 +348,8 @@ export class ZoomLadder {
       this._chargeEvents.length >= this._spring.MIN_EVENTS &&
       (tMs - this._chargeEvents[0]) >= (this._spring.MIN_SPAN_MS || 0));
 
-    if (wantsCross && dest && !this._dockDenies(dest)) {
+    const blocked = this._crossBlocked(dest);
+    if (wantsCross && dest && !blocked && !this._dockDenies(dest)) {
       decisions.push({
         type: 'cross',
         fromFloor: this._floor,
@@ -381,10 +386,13 @@ export class ZoomLadder {
 
     if (wantsCross) {
       // The spring met its threshold but the wall refuses: dock-gated floor
-      // (hard wall + hint, 00-spec.md §3 F2) or the end of the ladder.
-      decisions.push(dest
-        ? { type: 'denied', floor: dest.id, reason: 'undocked', hint: dest.humps?.deniedHint ?? null }
-        : { type: 'denied', floor: this._floor, reason: 'ladder-end', hint: null });
+      // (hard wall + hint, 00-spec.md §3 F2) or the end of the ladder. A
+      // crossBlock refusal is silent (no rail flash): the camera just stays.
+      if (!blocked) {
+        decisions.push(dest
+          ? { type: 'denied', floor: dest.id, reason: 'undocked', hint: dest.humps?.deniedHint ?? null }
+          : { type: 'denied', floor: this._floor, reason: 'ladder-end', hint: null });
+      }
       this._gestureLocked = true;   // exactly one cross OR denied per gesture
     }
 
@@ -829,6 +837,7 @@ export class ZoomLadder {
       this._gestureLocked = true;
       return false;
     }
+    if (this._crossBlocked(dest)) return false;   // silent: see DEFAULT_RULES.crossBlock
     if (this._dockDenies(dest)) {
       decisions.push({ type: 'denied', floor: dest.id, reason: 'undocked', hint: dest.humps?.deniedHint ?? null });
       this._gestureLocked = true;
@@ -875,6 +884,20 @@ export class ZoomLadder {
     const firmness = dest?.humps?.inFirmness ?? this._spring.IN_FIRMNESS_RATIO;
     return base * firmness;
   }
+
+  /** True when the caller's `rules.crossBlock(from, dest)` vetoes a ZOOM crossing into `dest`
+   *  (see DEFAULT_RULES.crossBlock). No dest, no hook → false. @private */
+  _crossBlocked(dest) {
+    const hook = this._rules.crossBlock;
+    return !!(dest && typeof hook === 'function' && hook(this._floor, dest.id));
+  }
+
+  /** Set (or clear, with null) the zoom-crossing veto: see DEFAULT_RULES.crossBlock. */
+  setCrossBlock(fn) { this._rules.crossBlock = (typeof fn === 'function') ? fn : null; }
+
+  /** The free-scroll z01 step per unit of wheel magnitude (a caller that extends the zoom past a
+   *  floor's end steps the same amount per notch). */
+  wheelZ01Step() { return this._rules.wheelZ01Step; }
 
   /** True when entering `dest` must be refused for lack of a dock.
    *  rules.devFullAccess bypasses entry gates entirely (dev-phase full access —

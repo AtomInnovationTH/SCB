@@ -44,6 +44,50 @@ export const FloorContract = {
     ENTRY_Z01_FROM_ABOVE: 0.75,  // arrival z01 after crossing downward (zoom-in)
   },
 
+  /**
+   * Daughter zoom (owner 2026-10-27): while the camera rides a daughter on floor 2, zooming in does not go on to
+   * floor 1 (the mother's close-up, a swing of up to 50+ m); floor 2's inner end drops to a limit round HER instead.
+   * The limit is the largest of three, in metres from her centre:
+   *   MIN_DIST_M               the owner's "about 1.5 m";
+   *   BODY_CLEAR_M + REACH_M   the camera stays this far outside her body;
+   *   near plane + NEAR_CLEAR_M + REACH_M   no part of her crosses the camera's near plane (the same rule as the reel
+   *                 view's `reelViewDistM`, CameraSystem.js, so the two shots agree).
+   * REACH_M is her reach round her centre: measured 2026-10-27 from the real meshes (ArmUnit._createMesh, bbox
+   * corners): weaver 0.25 m for body + antenna + net lip, 0.39 m with the FEEP plume halos; spinner 0.14 / 0.20 m.
+   * 0.5 is the reel view's REEL_ARM_R_M, kept so the two agree.
+   *
+   * The near plane in that third term is the one in force while the camera is that close: floor 2's own is 3 m (which
+   * alone would stop the zoom at 4.0 m), so while the deep zoom is held the ladder controller pushes NEAR_FLOOR's near
+   * plane (floor 1's, 0.04 m) and puts floor 2's back as it ends. Depth precision
+   * in this renderer depends on the far plane only, and floor 1 already runs 0.04 m with the same far plane.
+   * With 0.04 m the third term is 1.04 m and the limit is the owner's 1.5 m.
+   */
+  DAUGHTER_ZOOM: {
+    FLOOR: 2,
+    NEAR_FLOOR: 1,
+    MIN_DIST_M: 1.5,
+    BODY_CLEAR_M: 0.3,
+    REACH_M: 0.5,
+    NEAR_CLEAR_M: 0.5,
+  },
+
+  /**
+   * The closest the camera may sit to a followed daughter on the daughter-zoom floor, scene units (see
+   * DAUGHTER_ZOOM). Pure data arithmetic.
+   *   daughterZoomLimitU()          the limit with the deep near plane (NEAR_FLOOR's): 1.5 m
+   *   daughterZoomLimitU(floorRow)  the limit if that floor row's own near plane were the one in force; for floor 2
+   *                                 this is 4.0 m: inside it the small near plane must be held.
+   * @param {object} [floor] a floor row whose camera.near is used (default: NEAR_FLOOR's row)
+   * @returns {number}
+   */
+  daughterZoomLimitU(floor) {
+    const z = FloorContract.DAUGHTER_ZOOM;
+    const row = floor || FloorContract.byId(z.NEAR_FLOOR);
+    const nearM = row && row.camera && row.camera.near != null ? row.camera.near / M : 0;
+    const limitM = Math.max(z.MIN_DIST_M, z.BODY_CLEAR_M + z.REACH_M, nearM + z.NEAR_CLEAR_M + z.REACH_M);
+    return limitM * M;
+  },
+
   /** Hump spring gesture physics (locked UX — docs/ladder/00-spec.md §4).
    *  G2 retune (post-M3 play-test): real macOS trackpad pushes ramp up, hold a
    *  jittery plateau, then ramp down — the strict momentum-tail heuristic

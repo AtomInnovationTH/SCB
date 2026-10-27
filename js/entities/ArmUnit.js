@@ -75,7 +75,7 @@ const _driftRaw     = new THREE.Vector3();
 
 /**
  * launch-smooth: the rest-to-rest strut move of `d` rad (≥ 0): speed up at `a`, coast at a peak `v`, slow down at `a`.
- * `vMax` caps the peak (the strut motor's 15°/s). With `durationS` > the shortest time the move takes the peak is
+ * `vMax` caps the peak (the mother's turn pace, AIM_TURN_STRUT_PACE, 15°/s). With `durationS` > the shortest time the move takes the peak is
  * lowered so it lasts exactly that long (a coast at the lower peak); with 0 / less, the move is as short as it can be.
  * @returns {{v:number, T:number}} the peak rate (rad/s) and the total time (s)
  */
@@ -2819,8 +2819,8 @@ export class ArmUnit {
    *
    * Rejected if hinge is LOCKED (when LOCKABLE_HINGE feature flag is on).
    *
-   * launch-smooth: with an `ease` the strut does not start and stop at the full 15°/s: the move from the angle it is at
-   * when the ease begins to `alpha` speeds up at STRUT_EASE_ACCEL, coasts at a peak (never above STRUT_SLEW_RATE) and
+   * launch-smooth: with an `ease` the strut does not start and stop dead: the move from the angle it is at
+   * when the ease begins to `alpha` speeds up at STRUT_EASE_ACCEL, coasts at a peak (never above AIM_TURN_STRUT_PACE, 15°/s: the mother's turn keeps its pace) and
    * slows down at the same rate, lasting `ease.durationS` (or, when that is 0 / missing / shorter than the move can be
    * done, as short as it can be). The launch aim uses it so the strut and the mother's turn end together. The ease is
    * keyed by the `ease` object and the target angle: the same object and angle go on with the move (call it once a
@@ -2848,7 +2848,7 @@ export class ArmUnit {
         let e = this._aimEase;
         if (!e || e.src !== ease || e.to !== target) {
           const d = Math.abs(target - this._aimAlpha);
-          const prof = strutEaseProfile(d, V5.STRUT_EASE_ACCEL, V5.STRUT_SLEW_RATE, ease.durationS || 0);
+          const prof = strutEaseProfile(d, V5.STRUT_EASE_ACCEL, V5.AIM_TURN_STRUT_PACE, ease.durationS || 0);
           e = this._aimEase = {
             src: ease, from: this._aimAlpha, to: target, sign: target >= this._aimAlpha ? 1 : -1,
             d, a: V5.STRUT_EASE_ACCEL, v: prof.v, T: prof.T, t: 0,
@@ -2873,7 +2873,8 @@ export class ArmUnit {
   }
 
   /**
-   * launch-smooth: the shortest time (s) an eased `setAimAlpha` move from the strut's angle now to `alpha` takes.
+   * launch-smooth: the shortest time (s) an eased `setAimAlpha` move from the strut's angle now to `alpha` takes, at the
+   * mother's turn pace (AIM_TURN_STRUT_PACE, 15°/s), not the faster free swing: the aim turn is timed by this.
    * 0 when she is already there (or the ease is not configured: the constant-rate time then).
    * @param {number} alpha — target angle in radians [0, π]
    * @returns {number}
@@ -2882,8 +2883,8 @@ export class ArmUnit {
     const V5 = Constants.OCTOPUS_V5;
     const target = Math.max(V5.STRUT_SWEEP_MIN, Math.min(alpha, V5.STRUT_SWEEP_MAX));
     const d = Math.abs(target - this._aimAlpha);
-    if (!(V5.STRUT_EASE_ACCEL > 0)) return d / V5.STRUT_SLEW_RATE;
-    return strutEaseProfile(d, V5.STRUT_EASE_ACCEL, V5.STRUT_SLEW_RATE, 0).T;
+    if (!(V5.STRUT_EASE_ACCEL > 0)) return d / V5.AIM_TURN_STRUT_PACE;
+    return strutEaseProfile(d, V5.STRUT_EASE_ACCEL, V5.AIM_TURN_STRUT_PACE, 0).T;
   }
 
   /**

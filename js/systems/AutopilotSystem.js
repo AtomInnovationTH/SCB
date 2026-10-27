@@ -4113,7 +4113,7 @@ export class AutopilotSystem {
       let nx = 1, ny = 0;
       if (ax.lengthSq() > 1e-12) { ax.normalize(); nx = ax.x; ny = ax.y; }
       const tS = typeof arm.aimEaseMinTime === 'function'
-        ? arm.aimEaseMinTime(alpha) : Math.abs(alpha - arm.getAimAlpha()) / V5.STRUT_SLEW_RATE;
+        ? arm.aimEaseMinTime(alpha) : Math.abs(alpha - arm.getAimAlpha()) / V5.AIM_TURN_STRUT_PACE;
       // the aim: the selector's choice for this turn (as `requestAimRotation` asks it, quietly), the wheels' time or the gas law's
       const turnRad = errRad > tolRad ? errRad - stopErr : 0;
       let src = null;
@@ -4797,8 +4797,8 @@ export class AutopilotSystem {
     };
     const dStrut = Math.max(Math.abs(alpha - a0A), Math.abs(alpha - a0B));
     const tS = Math.max(
-      typeof armA.aimEaseMinTime === 'function' ? armA.aimEaseMinTime(alpha) : Math.abs(alpha - a0A) / V5.STRUT_SLEW_RATE,
-      typeof armB.aimEaseMinTime === 'function' ? armB.aimEaseMinTime(alpha) : Math.abs(alpha - a0B) / V5.STRUT_SLEW_RATE,
+      typeof armA.aimEaseMinTime === 'function' ? armA.aimEaseMinTime(alpha) : Math.abs(alpha - a0A) / V5.AIM_TURN_STRUT_PACE,
+      typeof armB.aimEaseMinTime === 'function' ? armB.aimEaseMinTime(alpha) : Math.abs(alpha - a0B) / V5.AIM_TURN_STRUT_PACE,
     );
     const inertiaTable = () => {
       if (dStrut < 1e-9) { const I = p.getAttitudeInertia(); return [{ ixx: I.ixx, iyy: I.iyy }]; }
@@ -4912,7 +4912,7 @@ export class AutopilotSystem {
     }
     if (!(vCap > 0)) return { timeS: q.tS, gasKg: 0 };
     // the strut's eased profile (ArmUnit strutEaseProfile), stretched to the plan's time
-    const acc = V5.STRUT_EASE_ACCEL, vMax = V5.STRUT_SLEW_RATE;
+    const acc = V5.STRUT_EASE_ACCEL, vMax = V5.AIM_TURN_STRUT_PACE;
     const strutT = q.strutDone ? 0 : (q.tS > 0 ? tPlan : 0);
     let sv = 0;
     if (strutT > 0 && acc > 0) sv = 0.5 * acc * (strutT - Math.sqrt(Math.max(0, strutT * strutT - 4 * (q.dStrut || 0) / acc)));
@@ -5608,7 +5608,7 @@ export class AutopilotSystem {
         if (!sa) continue;
         tS = Math.max(tS, (typeof sa.aimEaseMinTime === 'function')
           ? sa.aimEaseMinTime(alphaT)
-          : Math.abs(alphaT - (sa.getAimAlpha ? sa.getAimAlpha() : alphaT)) / Constants.OCTOPUS_V5.STRUT_SLEW_RATE);
+          : Math.abs(alphaT - (sa.getAimAlpha ? sa.getAimAlpha() : alphaT)) / Constants.OCTOPUS_V5.AIM_TURN_STRUT_PACE);
       }
       c.vCap = vCap;
       c.vPeak = vCap;
@@ -5798,9 +5798,9 @@ export class AutopilotSystem {
         const rate = k === 0 ? c.strutStep : c.strutStepB;
         const v0 = Number.isFinite(rate) ? Math.max(0, sign * rate) : 0;
         let carry = null;
-        if (v0 > 1e-4 && Math.abs(target - a0) > 1e-9 && V5.STRUT_EASE_ACCEL > 0) carry = strutCarryProfile(Math.abs(target - a0), v0, V5.STRUT_EASE_ACCEL, V5.STRUT_SLEW_RATE, 0);
+        if (v0 > 1e-4 && Math.abs(target - a0) > 1e-9 && V5.STRUT_EASE_ACCEL > 0) carry = strutCarryProfile(Math.abs(target - a0), v0, V5.STRUT_EASE_ACCEL, V5.AIM_TURN_STRUT_PACE, 0);
         const tS = carry ? carry.minS
-          : ((typeof sa.aimEaseMinTime === 'function') ? sa.aimEaseMinTime(c.alphaF) : Math.abs(c.alphaF - a0) / V5.STRUT_SLEW_RATE);
+          : ((typeof sa.aimEaseMinTime === 'function') ? sa.aimEaseMinTime(c.alphaF) : Math.abs(c.alphaF - a0) / V5.AIM_TURN_STRUT_PACE);
         return { sa, a0, sign, v0, carry, tS };
       });
       const tS = Math.max(...moves.map((m) => m.tS));
@@ -5809,7 +5809,7 @@ export class AutopilotSystem {
       if (c.ease) {
         for (const m of moves) {
           if (!m.carry) continue;
-          const prof = strutCarryProfile(Math.abs(target - m.a0), m.v0, V5.STRUT_EASE_ACCEL, V5.STRUT_SLEW_RATE, c.ease.durationS);
+          const prof = strutCarryProfile(Math.abs(target - m.a0), m.v0, V5.STRUT_EASE_ACCEL, V5.AIM_TURN_STRUT_PACE, c.ease.durationS);
           // the arm's own move record (ArmUnit.setAimAlpha keys it by the ease object and the target), entered mid-way
           m.sa._aimEase = {
             src: c.ease, from: m.a0 - m.sign * prof.s0, to: target, sign: m.sign, d: prof.d, a: V5.STRUT_EASE_ACCEL, v: prof.v, T: prof.T, t: prof.t0,

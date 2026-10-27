@@ -6629,7 +6629,7 @@ export class ArmManager {
   // (FEATURE_FLAGS.LAUNCH_AIMS_STRUT; lane launch-aim, 2026-10-16)
   // ==========================================================================
   // Every 'target' / 'freefly' / 'trawl' launch through `requestClearLaunch` first swings the
-  // daughter's own strut — at its real motor rate (STRUT_SLEW_RATE, 15°/s), never faster — to the
+  // daughter's own strut — at its real motor rate (STRUT_SLEW_RATE, 19.5°/s; the gate's swing is a plain latch slew, no mother's turn paces it), never faster — to the
   // best angle toward where she is going (`bestStrutAlpha`, capped short of a held catch's berth
   // corridor), then checks the launch line ALONG THE STRUT and fires with the push along the strut.
   // Pending entries carry `stage`: 'aim' (swinging; no line verdict — the swing path is not

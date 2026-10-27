@@ -255,7 +255,7 @@ export function floorNearM(floor) {
 const QUIET_CEREMONY_MAX_S = 60;
 
 /** Cubic in-out ease shared by the ride engine, the down-ride roll and the level phase. */
-function cubicInOut(t) {
+export function cubicInOut(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
@@ -984,7 +984,11 @@ export class CameraSystem {
       camRelOk: false,                    // `camRel` is from a frame with the focus on
       takenOver: false,                   // a camera input took the pose over: the ladder owns the position, only the look-at fades out
       dist: CATCH_FOCUS.DIST_U,           // eased viewing distance of the end view (the reel view changes it)
-      wantDist: CATCH_FOCUS.DIST_U,       // this frame's wanted distance
+      wantDist: CATCH_FOCUS.DIST_U,       // this frame's wanted distance (with his zoom, see `zoom`)
+      baseDist: CATCH_FOCUS.DIST_U,       // daughter focus: this frame's wanted distance as the shot frames it, before his zoom
+      innerDist: 0,                       // daughter focus: the nearest his zoom may bring the camera to her this frame (scene units; 0 = the daughter limit alone)
+      zoom: 1,                            // daughter focus (owner 2026-10-27): his wheel / pinch zoom, a factor on the shot's distance; holds for the whole spell
+      zoomed: false,                      // `zoom` is in force this frame (not 1)
       safeDist: 0,                        // FB11: the reel view's floor (scene units): the nearest point of her and her catch stays clear of the near plane
       reelView: false,                    // reel view (B2): the focus rides with a daughter on her reel home
       reelSeen: false,                    // she has been on a reel home during this focus
@@ -2477,7 +2481,7 @@ export class CameraSystem {
       case 1: {
         // Drive strut slew toward target direction during clamp hold.
         // launch-aim: with LAUNCH_AIMS_STRUT on, the launch gate has already swung the strut at its
-        // real 15°/s and the spring pushes along it — the cut-scene never writes a strut (this
+        // real strut rate (19.5°/s) and the spring pushes along it — the cut-scene never writes a strut (this
         // 4x+ swing was the "teleporting strut" the owner's physics ruling forbids).
         if (!Constants.FEATURE_FLAGS.LAUNCH_AIMS_STRUT
             && arm.launchDirection && arm._dockOutward && playerQuat && arm.setAimAlpha) {
@@ -4993,7 +4997,7 @@ export class CameraSystem {
    */
   catchFocusState() {
     const f = this._catchFocus;
-    return { active: f.active, engaging: f.engaging, phase: f.phase, w: f.w, wa: f.wa, tipIndex: f.tipIndex, kind: f.kind, cut: f.cut, reelView: f.reelView, dist: f.dist, armIndex: f.armIndex };
+    return { active: f.active, engaging: f.engaging, phase: f.phase, w: f.w, wa: f.wa, tipIndex: f.tipIndex, kind: f.kind, cut: f.cut, reelView: f.reelView, dist: f.dist, armIndex: f.armIndex, zoom: f.zoom };
   }
 
   /** One console line per catch-focus event (start / refused / cancel / end), never per frame. */
@@ -5012,6 +5016,7 @@ export class CameraSystem {
     f.active = false; f.engaging = true; f.phase = 'idle';
     f.u = 0; f.w = 0; f.wa = 0; f.rate = 1 / CATCH_FOCUS.IN_S; f.timer = 0;
     f.look.set(0, 0, 0); f.hop.set(0, 0, 0); f.hopVel.set(0, 0, 0); f.dist = CATCH_FOCUS.DIST_U; f.wantDist = CATCH_FOCUS.DIST_U;
+    f.baseDist = CATCH_FOCUS.DIST_U; f.innerDist = 0; f.zoom = 1; f.zoomed = false;
     f.reelView = false; f.reelSeen = false; f.reelSeq = 0; f.safeDist = 0; f.jumpRun = 0; f.spell = null;
     f.takenOver = false; f.camRelOk = false;
     f.net = null; f.debris = null; f.podIndex = -1; f.tipIndex = -1;
@@ -5067,7 +5072,7 @@ export class CameraSystem {
     f.net = net; f.debris = d; f.podIndex = net && net.podIndex != null ? net.podIndex : -1; f.tipIndex = -1;
     f.armIndex = -1; f.arm = null;
     f.reelView = false; f.reelSeen = false; f.reelSeq = 0; f.safeDist = 0; f.jumpRun = 0; f.spell = null;
-    f.wantDist = CATCH_FOCUS.DIST_U;
+    f.wantDist = CATCH_FOCUS.DIST_U; f.baseDist = CATCH_FOCUS.DIST_U; f.innerDist = 0; f.zoom = 1; f.zoomed = false;   // a fresh focus is a fresh shot: his earlier zoom is spent
     if (f.u <= 0) { f.off.set(0, 0, 0); f.dirSeeded = false; f.relSeeded = false; f.vel.set(0, 0, 0); f.dist = CATCH_FOCUS.DIST_U; f.look.set(0, 0, 0); f.hop.set(0, 0, 0); f.hopVel.set(0, 0, 0); }   // a fresh focus starts ON the mother
     // A CUT, not an ease: reduced motion asks for no camera travel, and a catch tens or hundreds of metres from the
     // camera's anchor (a daughter's, a far lasso) would take the anchor ease (TAU_S) seconds to cross, leaving the
@@ -5149,9 +5154,12 @@ export class CameraSystem {
   _releaseCatchFocus(reason = 'done') {
     const f = this._catchFocus;
     if (!f.active || !f.engaging) return;
+    // F2a: his zoom put the shot far from the mother (up to floor 3's edge): the ladder takes that pose over first, so the
+    // ease-out is the ladder's own glide home from where the camera stands, not a flight across the whole distance.
+    const took = this._focusZoomedDaughter() && this._takeOverCatchFocusPose();
     f.engaging = false;
     f.rate = 1 / CATCH_FOCUS.OUT_S;
-    if (f.cut) f.u = 0;
+    if (f.cut && !took) f.u = 0;
     this._catchFocusLog(`end ${reason}`);
   }
 
@@ -5181,8 +5189,12 @@ export class CameraSystem {
     // fix round 1 (FB2): his own camera input leaves the camera WHERE HE PUT IT. The ladder takes over from the pose on
     // screen (no flight back to the ladder view, up to 50 m in 0.3 s); only the look-at point fades back to the mother.
     // The internal causes (a ride, a level change, a piloted daughter) and the skip key still walk back as before.
-    const byInput = cause === 'camera input' || cause === 'mouse drag' || cause === 'touch drag';
-    const took = byInput && this._takeOverCatchFocusPose();
+    // F2a: the same for any end that is not internal when his zoom had moved the shot (Esc, a floor jump, ...).
+    // F3a: a piloted daughter ('daughter piloted': a digit in the haul / held phase, or any other way into the pilot view) is
+    // internal for the wait-view mark, but when his zoom had moved the shot the pose is just as owed to the ladder.
+    const byInput = cause === 'camera input' || cause === 'mouse drag' || cause === 'touch drag'
+      || ((!internal || cause === 'daughter piloted') && this._focusZoomedDaughter());
+    const took = was && byInput && this._takeOverCatchFocusPose();
     f.engaging = false;
     f.rate = 1 / CATCH_FOCUS.CANCEL_S;                                    // also speeds up an ease-out already running
     if (f.cut && !took) f.u = 0;                                           // a cut focus cuts back (no 0.3 s zip over hundreds of metres)
@@ -5203,7 +5215,8 @@ export class CameraSystem {
     if (f.takenOver) return true;
     if (!f.camRelOk || !(f.w > 0) || lc.anchor !== 'ship' || lc.riding) return false;
     const len = f.camRel.length();
-    if (!(len > 1e-9) || len > CATCH_FOCUS.TAKEOVER_MAX_U) return false;
+    // his zoom may have put the camera anywhere up to floor 3's edge: that is a distance a floor holds, so no 100 m limit then
+    if (!(len > 1e-9) || (len > CATCH_FOCUS.TAKEOVER_MAX_U && !this._focusZoomedDaughter())) return false;
     this._ladderWorldToLocal(f.v.copy(f.camRel).divideScalar(len), lc.local);
     lc.curDistU = len; lc.targetDistU = len;
     this._takeoverDistU = len;                                              // FB8: the controller puts the ladder's zoom state on it
@@ -5221,6 +5234,80 @@ export class CameraSystem {
     const d = this._takeoverDistU;
     this._takeoverDistU = null;
     return d > 0 ? d : null;
+  }
+
+  /** The near plane (m) in force while the camera is close to a daughter: the deep-zoom floor's own (FloorContract.DAUGHTER_ZOOM.NEAR_FLOOR). @private */
+  _deepNearM() {
+    const row = FloorContract.byId(FloorContract.DAUGHTER_ZOOM.NEAR_FLOOR);
+    return row.camera.near / Constants.SCENE_UNITS_PER_METER;
+  }
+
+  /** The farthest his zoom may take the camera from her: floor 3's free zone outer edge (floors 4-5 never follow her). Scene units. @private */
+  _focusZoomOuterU() {
+    const row = FloorContract.byId(3);
+    const [lo, hi] = row.camera.rangeLog10;
+    return Math.pow(10, lo + (1 - FloorContract.LADDER_GEOMETRY.WALL_ZONE_FRAC) * (hi - lo));
+  }
+
+  /**
+   * Daughter focus (owner 2026-10-27, "zoom stays on her"): a wheel / pinch / key zoom moves the camera toward or away from
+   * the shot and keeps the view on her. `zoom` is a factor on the shot's distance, bounded between the daughter limit
+   * (FloorContract.daughterZoomLimitU: the one rule the follow-zoom uses too, raised for a big piece) and floor 3's outer
+   * edge. Pure arithmetic over this frame's `baseDist` / `innerDist`; the frame's wanted distance then eases as it always did.
+   * @private
+   */
+  _catchFocusZoomApply() {
+    const f = this._catchFocus;
+    f.baseDist = f.wantDist;
+    f.zoomed = false;
+    if (f.kind !== 'daughter' || f.zoom === 1) return;
+    const base = f.baseDist;
+    const inner = Math.max(FloorContract.daughterZoomLimitU(), f.innerDist || 0);
+    const want = Math.min(this._focusZoomOuterU(), Math.max(inner, base * f.zoom));
+    f.zoom = base > 0 ? want / base : 1;
+    if (Math.abs(f.zoom - 1) < 1e-6) { f.zoom = 1; return; }               // back at the shot as framed: nothing of his is left
+    f.wantDist = want;
+    f.safeDist = inner;                                                    // the reel view's own floor gives way to his zoom: the near plane is the small one then
+    f.zoomed = true;
+  }
+
+  /**
+   * Daughter focus: one zoom notch from the ladder controller. The view stays on her (no hand-back, so no wait-spell mark).
+   * @param {{dir:'in'|'out', mag:number, stepDecades:number}} z - `stepDecades`: decades of distance per unit of mag (the
+   *   ladder's own step on this floor, so a notch feels the same)
+   * @returns {boolean|'edge'} true: taken (the view stays on her); 'edge': she is already at floor 3's outer edge, zooming out
+   *   past it ends the focus as before (the caller hands the distance to the ladder first); false: not a daughter focus
+   *   (a mother or lasso catch, nothing up, a ride, a takeover) - the caller does what it always did
+   */
+  ladderCatchFocusZoom({ dir, mag, stepDecades }) {
+    const f = this._catchFocus;
+    const lc = this._ladderCam;
+    if (!f.active || !f.engaging || f.kind !== 'daughter' || !f.arm || f.takenOver || lc.riding) return false;
+    const factor = Math.pow(10, Math.abs(stepDecades) * Math.max(0, mag));
+    const base = f.baseDist > 0 ? f.baseDist : CATCH_FOCUS.DIST_U;
+    const outer = this._focusZoomOuterU();
+    if (dir !== 'in' && base * f.zoom >= outer * (1 - 1e-9)) return 'edge';
+    const inner = Math.max(FloorContract.daughterZoomLimitU(), f.innerDist || 0);
+    const z = dir === 'in' ? f.zoom / factor : f.zoom * factor;
+    f.zoom = Math.min(outer / base, Math.max(inner / base, z));            // no wind-up beyond either end
+    if (Math.abs(f.zoom - 1) < 1e-6) f.zoom = 1;                           // back to the shot as framed: exactly, so its own floor is back
+    return true;
+  }
+
+  /** The distance (scene units) the daughter focus's camera is at from her: for the controller to hand the ladder when a zoom out passes the edge. */
+  catchFocusZoomOuterU() { return this._focusZoomOuterU(); }
+
+  /** True while the daughter focus is zoomed in closer than the shot's own framing (the small near plane is then in force).
+   *  Not while the focus is fading out (F2c): a ride then must not push the small near plane again. */
+  catchFocusZoomIn() {
+    const f = this._catchFocus;
+    return !!(f.active && f.engaging && f.kind === 'daughter' && f.zoom < 1 - 1e-9);
+  }
+
+  /** The daughter focus holds a zoom of his (in or out): its distance is his, not the shot's. @private */
+  _focusZoomedDaughter() {
+    const f = this._catchFocus;
+    return !!(f.active && f.kind === 'daughter' && f.zoom !== 1);
   }
 
   /** The net let go / the catch was lost / it went to a rack. */
@@ -5362,7 +5449,10 @@ export class CameraSystem {
         if (f.timer >= CATCH_FOCUS.DAUGHTER_HOLD_S) { this._releaseCatchFocus('daughter is home'); return false; }
       }
       if (f.reelView && arm) this._reelViewPoint(arm, d);
-      else f.tgt.copy(d._scenePosition);
+      else {
+        f.tgt.copy(d._scenePosition);
+        f.innerDist = (this._deepNearM() + CATCH_FOCUS.REEL_NEAR_CLEAR_M + 0.5 * ((d && d.sizeMeter) || 0)) * Constants.SCENE_UNITS_PER_METER;
+      }
       return true;
     }
 
@@ -5455,6 +5545,7 @@ export class CameraSystem {
     // FB7: the shot stands so that the nearest point of her and her catch is clear of the near plane
     let reachM = f.tgt.distanceTo(pos) / M + CATCH_FOCUS.REEL_ARM_R_M;
     if (side > 0) reachM = Math.max(reachM, f.tgt.distanceTo(d._scenePosition) / M + side / 2);
+    f.innerDist = (this._deepNearM() + CATCH_FOCUS.REEL_NEAR_CLEAR_M + reachM) * M;   // his zoom: the same clearance rule on the small near plane, without the braking lag
     reachM += CATCH_FOCUS.REEL_LAG_M;
     const lc = this._ladderCam;
     const base = reelViewDistM({ sizeM: side, reachM, nearM: floorNearM(lc && lc.floor) }) * M;
@@ -5779,6 +5870,7 @@ export class CameraSystem {
         f.look.copy(f.tgt);
         f.aim.copy(f.look).addScaledVector(f.vel, CATCH_FOCUS.TAU_S);
         f.off.lerp(f.aim, k);                                              // a cut (k = 1) lands on the catch this frame
+        this._catchFocusZoomApply();                                       // daughter focus: his zoom on the shot's distance
         f.dist += (f.wantDist - f.dist) * k;
         this._catchFocusAim(k, playerPos);
         if (snap) { f.snapPending = false; f.u = 1; f.azKeepAim.set = false; f.azKeep.set = false; }   // ... at full weight: the camera is there NOW
@@ -5844,6 +5936,14 @@ export class CameraSystem {
     if (arm.state === 'DOCKED' || arm.state === 'EXPENDED') return null;   // lost → back to the mother
     return arm;
   }
+
+  /**
+   * The daughter the ladder camera rides with right now (floors 2-3, piloted, out flying), or null. Public read for
+   * the ladder controller: while it is set, zooming in on floor 2 stops at the daughter limit instead of crossing
+   * to floor 1 (owner 2026-10-27; FloorContract.DAUGHTER_ZOOM). Read-only.
+   * @returns {object|null}
+   */
+  ladderFollowedDaughter() { return this._ladderFollowTarget(); }
 
   /**
    * @private H2 (D1/D2) — the ship-anchor OFFSET from the live mother position
@@ -6174,7 +6274,7 @@ export class CameraSystem {
       anchorPos.addScaledVector(cf.off, cf.w);
       // FB11: the reel view stands at ITS distance, never nearer than the safe shot (a shorter saved ladder distance used to
       // win the min and put a 5 m catch inside the 3 m near plane); the catch focus proper keeps the nearer of the two
-      const focusDist = ((cf.reelView || cf.phase === 'station') && cf.safeDist > 0) ? Math.max(cf.dist, cf.safeDist) : Math.min(lc.curDistU, cf.dist);
+      const focusDist = ((cf.reelView || cf.phase === 'station' || cf.zoomed) && cf.safeDist > 0) ? Math.max(cf.dist, cf.safeDist) : Math.min(lc.curDistU, cf.dist);
       distU += (focusDist - lc.curDistU) * cf.w;
       if (cf.dirSeeded) dirUse = this._catchFocusBlendDir(lc.dir, cf.dir, cf.w, cf.v, cf.azKeep);   // never over the radial pole
     }

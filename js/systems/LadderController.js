@@ -47,9 +47,14 @@ import { ZoomLadder, distanceFromZ01, z01FromDistance } from '../core/ZoomLadder
 import { FloorContract } from '../core/FloorContract.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { Constants } from '../core/Constants.js';
+import { prefersReducedMotion } from '../ui/hudPulse.js';
+import { cubicInOut } from './CameraSystem.js';
 
 /** Crossing-ride duration: midpoint of the locked 450–650 ms window. */
 const CROSS_RIDE_MS = 550;
+
+/** The fastest the camera may fly out from a daughter's limit when the follow ends, metres per second (peak). */
+const DZ_RETURN_PEAK_MPS = 20;
 
 /**
  * Wave 5 Session N (plan "Session N — Onboarding for glass + intro", item 2;
@@ -364,6 +369,24 @@ export class LadderController {
     this._ladder = deps.ladder || new ZoomLadder({
       rules: { devFullAccess: !!(Constants.LADDER && Constants.LADDER.DEV_FULL_ACCESS) },
     });
+    // Owner 2026-10-27: a zoom in on floor 2 never swings to the mother's close-up while the camera rides a daughter
+    // (the extra zoom below is the daughter limit's own). Asked only by a wheel/flick crossing. Set after the core is
+    // built so the pinned `rules: {...}` line above (test-LadderController) stays as it is; injected cores get it too.
+    if (typeof this._ladder.setCrossBlock === 'function') {
+      this._ladder.setCrossBlock((from, dest) => from === FloorContract.DAUGHTER_ZOOM.FLOOR && dest === from - 1 && this._daughterFollowed());
+    }
+    /** Reduced-motion probe for the follow-end ease (a cut under it). Injectable for tests. */
+    this._reducedMotion = (typeof deps.reducedMotion === 'function') ? deps.reducedMotion : prefersReducedMotion;
+    /**
+     * Daughter zoom (owner 2026-10-27, FloorContract.DAUGHTER_ZOOM). While the camera rides a daughter on floor 2 the
+     * zoom goes on past the floor's free zone in the SAME log steps, down to her limit, without leaving floor 2.
+     * `z` is that extended position in floor-2 z01 units (below the wall zone's edge, may be negative; null = not
+     * deep); the core's own z01 stays where it was meanwhile. `ease` = {from, to, t0, ms} while the camera
+     * comes back after the follow ended.
+     */
+    this._dz = { z: null, ease: null };
+    /** True while the small near plane (FloorContract.DAUGHTER_ZOOM.NEAR_FLOOR's) is pushed to the scene for the deep zoom. */
+    this._dzNearSmall = false;
     this._engaged = false;
     this._lastInputMs = -Infinity; // last wheel/command/jump — adaptHoldoff()
     // G3: monotone ride token. Flick upgrades/reversals/undos REPLACE the
@@ -627,6 +650,7 @@ export class LadderController {
     // is open on the workbench floor (dt-scaled; a no-op everywhere else).
     this._turntableArrows(t);
     this._syncTakeover();   // reel-view FB8: a camera input took the focus pose over (a drag): the ladder's zoom state follows it
+    this._dzTick(t);        // daughter zoom: the camera comes back from her limit when the follow has ended
     // u10 D3: the floor-4 framing glide (no-op unless one runs).
     this._glideTick(t);
     this._refreshRail();
@@ -776,6 +800,9 @@ export class LadderController {
     const st = this._ladder.getState();
     const f = st ? FloorContract.byId(st.floor) : null;
     if (!f || f.anchor === 'earth') return;
+    // Daughter zoom: a takeover (a drag in the wait view, which is never a piloted daughter's) is measured from the mother, so
+    // it ends any deep position / follow-end ease still running: `_frame` must not draw that stale close distance again.
+    this._dz.z = null; this._dz.ease = null;
     // FB12 (fix round 3): a distance outside this floor's range used to be CLAMPED into it (z01 0 or 1), and the camera
     // flew to the clamped distance (~0.2 s, mostly on floors 1 and 3). Put the ladder on the floor among 1-3 whose range
     // holds the distance instead, so the camera does not move. Only when no floor 1-3 holds it (< 2 m, > 12 km) is it clamped.
@@ -792,6 +819,7 @@ export class LadderController {
     if (floorId !== st.floor) {
       // a floor change without a ride: what _startRide does for the destination (rest memory, fidelity block, floor content)
       this._seedRest(z01);
+      this._dzNearSmall = false;
       this._applyFidelity(floorId);
       this._applyFloorContent(floorId);
     }
@@ -804,6 +832,10 @@ export class LadderController {
     if (!this._engaged) return [];
     const t = (tMs === undefined) ? this._now() : tMs;
     this._lastInputMs = t;
+    // Daughter focus (wait view / her haul / her reel view; owner 2026-10-27): a zoom moves in or out on her and keeps the
+    // view; only a zoom out past floor 3's edge ends it, as before (after the ladder is put on that distance).
+    const fz = this._focusZoomWheel(dir, mag, t);
+    if (fz === true) { this._refreshRail(); return []; }
     this._endCatchFocus();
     // u10 D4: the wheel AND the pinch (TouchControls → WheelRouter.routeSyntheticWheel → here)
     // end the floor-4 re-frame: the glide (the step below moves from where it stopped) and,
@@ -812,10 +844,172 @@ export class LadderController {
     if (this.currentFloor() === 4 && this._cameraSystem && typeof this._cameraSystem.ladderCancelEarthTurn === 'function') {
       this._cameraSystem.ladderCancelEarthTurn('wheel');
     }
+    if (this._daughterZoomWheel(dir, mag, t)) {
+      this._refreshRail();
+      return [];
+    }
     const decisions = this._ladder.wheel({ tMs: t, dir, mag });
     this._apply(decisions, t);
     this._refreshRail();
     return decisions;
+  }
+
+  // ── Daughter zoom (owner 2026-10-27; FloorContract.DAUGHTER_ZOOM) ──────────
+
+  /**
+   * @private Offer a zoom notch to a daughter's catch focus (CameraSystem.ladderCatchFocusZoom). True: taken, the view stays on
+   * her. False: not a daughter focus. When she is already at floor 3's outer edge, a notch OUT ends the focus: the ladder is
+   * first put on that distance (floor 3's free zone outer edge) so the camera does not jump, then false is returned and the
+   * wheel goes on as it always did.
+   */
+  _focusZoomWheel(dir, mag, tMs) {
+    const cs = this._cameraSystem;
+    if (!cs || typeof cs.ladderCatchFocusZoom !== 'function' || this.isRiding() || (dir !== 'in' && dir !== 'out')) return false;
+    const st = this._ladder.getState();
+    const row = st ? FloorContract.byId(st.floor) : null;
+    if (!row || row.anchor === 'earth') return false;
+    const [lo, hi] = row.camera.rangeLog10;
+    const step = (typeof this._ladder.wheelZ01Step === 'function') ? this._ladder.wheelZ01Step() : 0.04;
+    const r = cs.ladderCatchFocusZoom({ dir, mag, stepDecades: step * (hi - lo) });
+    if (r === 'edge') {
+      const f3 = FloorContract.byId(3);
+      const z01 = 1 - FloorContract.LADDER_GEOMETRY.WALL_ZONE_FRAC;
+      this._dz.z = null; this._dz.ease = null;
+      if (this._ladder.place({ tMs, floor: f3.id, z01 })) {
+        if (st.floor !== f3.id) {
+          this._seedRest(z01);
+          this._dzNearSmall = false;
+          this._applyFidelity(f3.id);
+          this._applyFloorContent(f3.id);
+        }
+        this._lastPosZ01 = z01;
+        if (cs.ladderSetTarget) cs.ladderSetTarget(this._frame(f3.id, z01));
+      }
+      return false;
+    }
+    return r === true;
+  }
+
+  /** @private true while the camera rides a piloted daughter (floors 2-3). */
+  _daughterFollowed() {
+    const cs = this._cameraSystem;
+    return !!(cs && typeof cs.ladderFollowedDaughter === 'function' && cs.ladderFollowedDaughter());
+  }
+
+  /** @private floor 2's row + its z01 numbers: { row, lo, span, wallLo, wallHi, step, minZ }. */
+  _dzGeometry() {
+    const row = FloorContract.byId(FloorContract.DAUGHTER_ZOOM.FLOOR);
+    const [lo, hi] = row.camera.rangeLog10;
+    const span = hi - lo;
+    const wallLo = FloorContract.LADDER_GEOMETRY.WALL_ZONE_FRAC;
+    const step = (typeof this._ladder.wheelZ01Step === 'function') ? this._ladder.wheelZ01Step() : 0.04;
+    const minZ = (Math.log10(FloorContract.daughterZoomLimitU()) - lo) / span;
+    return { row, lo, span, wallLo, wallHi: 1 - wallLo, step, minZ };
+  }
+
+  /**
+   * @private A wheel event while the camera rides a daughter on floor 2: handle the part of the zoom below the free
+   * zone here (the core would charge its wall and cross to floor 1). Returns true when the event is consumed.
+   *   in : past the free zone's inner edge → deeper, step by step, stopping at her limit;
+   *   out: while deep → back up the same steps; past the edge the core takes over again (placed on the edge).
+   * Anything else (not floor 2, nothing followed, mid-ride, a normal free-zone step) → false: the core as before.
+   */
+  _daughterZoomWheel(dir, mag, tMs) {
+    const st = this._ladder.getState();
+    if (!st || st.floor !== FloorContract.DAUGHTER_ZOOM.FLOOR || this.isRiding()) return false;
+    const dz = this._dz;
+    if (!this._daughterFollowed()) {
+      // she is gone and the camera is coming back: a wheel notch ends the ease where the core can take over
+      if (dz.z != null) this._dzHandBack(tMs);
+      return false;
+    }
+    const g = this._dzGeometry();
+    dz.ease = null;
+    const z0 = dz.z != null ? dz.z : st.z01;
+    if (dir === 'in') {
+      const target = z0 - mag * g.step;
+      if (dz.z == null && target >= g.wallLo) return false;      // an ordinary free-zone step
+      dz.z = Math.max(g.minZ, target);
+    } else {
+      if (dz.z == null) return false;
+      const target = z0 + mag * g.step;
+      if (target >= g.wallLo) {
+        this._dzHandBack(tMs, Math.min(g.wallHi, target));
+        return true;
+      }
+      dz.z = target;
+    }
+    this._dzApply(st);
+    return true;
+  }
+
+  /** @private push the camera target for the current deep position (the camera's own ease does the rest). */
+  _dzApply(st) {
+    this._dzNearTick();   // the small near plane goes in with the same step that brings the camera in (not a frame later)
+    const cs = this._cameraSystem;
+    if (cs && cs.ladderSetTarget) cs.ladderSetTarget(this._frame(st.floor, st.z01));
+  }
+
+  /**
+   * @private leave the deep zoom: the core is placed on floor 2 at `z01` (default: the free zone's inner edge, the
+   * nearest rest the floor has) and the camera target follows. The distance is continuous when `z01` is where the
+   * deep position was; otherwise the camera's ease carries it.
+   */
+  _dzHandBack(tMs, z01) {
+    const g = this._dzGeometry();
+    this._dz.z = null;
+    this._dz.ease = null;
+    this._ladder.place({ tMs, floor: FloorContract.DAUGHTER_ZOOM.FLOOR, z01: z01 != null ? z01 : g.wallLo });
+    const st = this._ladder.getState();
+    this._dzApply(st);
+  }
+
+  /**
+   * @private Near plane for the deep zoom (owner 2026-10-27: "about 1.5 m"). Floor 2's own near plane is 3 m, so with
+   * the camera closer than the distance where her nearest point still clears it (`daughterZoomLimitU(floor 2)`, 4.0 m)
+   * she would be cut by it (the catch focus zoomed in on a daughter has the same need). While the deep position is held (it starts 9.2 m out, its zone's inner edge, and ends
+   * there again: a hand-back, the follow-end ease and a zoom out all end at or beyond that edge), the near plane of
+   * FloorContract.DAUGHTER_ZOOM.NEAR_FLOOR (floor 1's, 0.04 m; depth precision here depends on the far plane only) is
+   * pushed; floor 2's own goes back as the deep position ends. A floor change or a ride pushes the new floor's own near
+   * plane itself (and clears the flag).
+   */
+  _dzNearTick() {
+    const cs = this._cameraSystem;
+    // deep follow zoom (floor 2), or the catch focus zoomed in on a daughter (any of floors 1-3)
+    const want = this._dz.z != null || !!(cs && typeof cs.catchFocusZoomIn === 'function' && cs.catchFocusZoomIn());
+    if (want === this._dzNearSmall) return;
+    this._dzNearSmall = want;
+    this._applyFidelity(this._ladder.getState().floor,
+      want ? FloorContract.byId(FloorContract.DAUGHTER_ZOOM.NEAR_FLOOR).camera.near : undefined);
+  }
+
+  /**
+   * @private Per frame: when the follow ended while the camera sat inside the free zone's inner edge (she docked, Esc,
+   * the view went back to the mother), ease the distance out to that edge over the re-aim time (cubic in-out, the
+   * same time the anchor takes back to the mother), never a one-frame jump; a cut only under reduced motion.
+   * (The mother's own hard bottom is 6 m; the edge, 9.2 m, is where she can rest, so the ease ends there.)
+   */
+  _dzTick(tMs) {
+    this._dzNearTick();
+    const dz = this._dz;
+    if (dz.z == null) return;
+    if (this._daughterFollowed()) { dz.ease = null; return; }
+    const g = this._dzGeometry();
+    if (!dz.ease) {
+      if (this._reducedMotion()) { this._dzHandBack(tMs); return; }
+      // Eased in METRES (not z01: the floor's scale is logarithmic, so a z01 ease runs fastest at the far end), over the
+      // re-aim time or longer: a cubic in-out peaks at 3x its mean speed, so the time is stretched until the peak is
+      // DZ_RETURN_PEAK_MPS (measured at 60 Hz: 4 m -> 9.2 m over 300 ms peaked at 0.52 m in one frame, over the
+      // 0.5 m the owner's "no jarring jump" allows; over the stretched time it is 0.27 m).
+      const from = Math.pow(10, g.lo + dz.z * g.span), to = Math.pow(10, g.lo + g.wallLo * g.span);
+      const ms = Math.max(VisualLaw.TIMINGS.SUBJECT_REAIM_MS, 3 * Math.abs(to - from) / Constants.SCENE_UNITS_PER_METER / DZ_RETURN_PEAK_MPS * 1000);
+      dz.ease = { from, to, t0: tMs, ms };
+    }
+    const e = dz.ease;
+    const k = (tMs - e.t0) / e.ms;
+    if (k >= 1) { this._dzHandBack(tMs); return; }
+    dz.z = (Math.log10(e.from + (e.to - e.from) * cubicInOut(Math.max(0, Math.min(1, k)))) - g.lo) / g.span;
+    this._dzApply(this._ladder.getState());
   }
 
   /** Discrete command passthrough (Esc/PgUp/PgDn/Space) — wired in a later milestone. */
@@ -863,6 +1057,9 @@ export class LadderController {
     if (!this._engaged) return [];
     const t = (tMs === undefined) ? this._now() : tMs;
     this._lastInputMs = t;
+    // F3b: the B key / STORE chip is his input like a jump: a daughter view he had zoomed hands its distance to the ladder first,
+    // else the ride (which ends the focus itself, with no hand-off) starts from a stale floor and the camera flies the whole distance.
+    this._endCatchFocus('workbench ride');
     const decisions = (typeof this._ladder.ceremonyRide === 'function')
       ? this._ladder.ceremonyRide({ tMs: t, toFloor: WORKBENCH_FLOOR })
       : this._ladder.jump({ tMs: t, toFloor: WORKBENCH_FLOOR });
@@ -1603,6 +1800,7 @@ export class LadderController {
       if (this._floorMask && typeof this._floorMask.forgetReveals === 'function') this._floorMask.forgetReveals();
     }
     this._engaged = true;
+    this._dz.z = null; this._dz.ease = null; this._dzNearSmall = false;   // daughter zoom: a fresh engage starts on the core's z01
     this._railsShy = false;                    // a fresh engagement is never shy (Session N.5)
     this._resetHudClear();                    // rev-3: a fresh engage never leaves the tabs hidden
     const s = this._ladder.getState();
@@ -1654,6 +1852,7 @@ export class LadderController {
 
   _disengage() {
     this._engaged = false;
+    this._dz.z = null; this._dz.ease = null; this._dzNearSmall = false;
     this._introPending = null;   // Session N review: an arm that never engaged does not survive into a later run
     this._introPhase = null;     // Session N.5b: nor does a mid-flyby phase (a cut mid-dwell never pulls back in a later run)
     // Opening dance (plan task 4): nor do the dance options — a later run's
@@ -1800,6 +1999,9 @@ export class LadderController {
    * @private
    */
   _startRide(toFloor, entryZ01, rideMs, tMs, isCross) {
+    this._dz.z = null;      // daughter zoom: a ride starts from where the camera is; the deep position is spent
+    this._dz.ease = null;
+    this._dzNearSmall = false;   // (this ride's _applyFidelity pushes the destination floor's own near plane)
     // The ORIGIN floor — read BEFORE the destination's content lands below.
     const fromFloor = this._floorApplied;
     if (toFloor !== fromFloor) {
@@ -1839,14 +2041,14 @@ export class LadderController {
     }
   }
 
-  /** Push a floor's fidelity block to SceneManager (T1). @private */
-  _applyFidelity(floor) {
+  /** Push a floor's fidelity block to SceneManager (T1). `nearOverride` (daughter zoom) replaces the floor's near plane. @private */
+  _applyFidelity(floor, nearOverride) {
     if (!this._sceneManager || !this._sceneManager.setLadderFloorFidelity) return;
     const f = FloorContract.byId(floor);
     if (!f) return;
     this._sceneManager.setLadderFloorFidelity({
       nearField: f.fidelity.nearField,
-      near: f.camera.near,
+      near: nearOverride != null ? nearOverride : f.camera.near,
       far: f.camera.far,
       debrisMode: f.fidelity.debrisMode,
       floor,
@@ -2148,7 +2350,12 @@ export class LadderController {
    */
   _frame(floor, z01) {
     const f = FloorContract.byId(floor);
-    const distU = distanceFromZ01(f, z01);
+    let distU = distanceFromZ01(f, z01);
+    if (this._dz.z != null && floor === FloorContract.DAUGHTER_ZOOM.FLOOR) {
+      // daughter zoom: the deep position, the floor's own log scale carried on below its wall zone
+      const [lo, hi] = f.camera.rangeLog10;
+      distU = Math.pow(10, lo + this._dz.z * (hi - lo));
+    }
     const anchor = (f.anchor === 'earth') ? 'earth' : 'ship';
     const fov = (f.camera.fov != null) ? f.camera.fov : Constants.CAMERA_FOV;
     return { distU, fov, anchor, floor, z01 };

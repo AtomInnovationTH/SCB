@@ -2015,12 +2015,25 @@ export const Constants = {
     STRUT_MASS: 4.5,               // kg (structure + reel + spring + hinge)
     STRUT_SWEEP_MIN: 0,            // rad
     STRUT_SWEEP_MAX: Math.PI,      // rad (180°) — the RANGE; unchanged by the opening-dance plan
-    STRUT_SLEW_RATE: 15 * Math.PI / 180, // rad/s (15°/s — slowed 50% so new players can see strut deploy)
-    // launch-smooth: the strut of a daughter being aimed (the launch ceremony) does not jump to 15°/s and stop dead:
-    // it speeds up at this rate, coasts at its peak (never above STRUT_SLEW_RATE) and slows at this rate, so it starts
+    // 19.5°/s (owner 2026-10-27: "daughter strut pivot should be 30% faster, for practical playability"; one rate for
+    // all, no setting). It was 15°/s, slowed 50% so new players could see the strut deploy. The radiators keep their own
+    // 15°/s (THERMAL.FLOWER.SLEW_RATE_RAD_S, a separate number since 2026-10-27).
+    STRUT_SLEW_RATE: 19.5 * Math.PI / 180, // rad/s (19.5°/s: 0→180° takes 9.2 s)
+    // AIM_TURN_STRUT_PACE (owner 2026-10-27, "keep the mother's turn pace": "Only the visible swing gets faster. Launches take
+    // as long as before and cost the same gas."). The mother's aim turn is timed to end together with the strut's swing, so
+    // a faster strut would have made her turn faster too (measured: aimed launch +18% gas, ChestShot median 113.8 -> 134.8 g;
+    // pair shots 5.24 -> 6.77 g). The TURN's timing therefore reads this pace, the old 15°/s, wherever it asks "how long
+    // does the strut need": ArmUnit.aimEaseMinTime and the eased profile, and AutopilotSystem's aim/pair/carry plans
+    // (ArmManager's launch-gate swing and its give-up clock read STRUT_SLEW_RATE: no turn paces that swing). A strut in a
+    // launch aim is eased to finish with that turn, so it never goes above
+    // this pace there. Every swing that no launch turn paces (the "." toggle, resting pose, hold pose, reel home,
+    // auto-deploy) uses STRUT_SLEW_RATE.
+    AIM_TURN_STRUT_PACE: 15 * Math.PI / 180, // rad/s (15°/s, the strut rate before 2026-10-27)
+    // launch-smooth: the strut of a daughter being aimed (the launch ceremony) does not jump to full speed and stop dead:
+    // it speeds up at this rate, coasts at its peak (never above AIM_TURN_STRUT_PACE) and slows at this rate, so it starts
     // and ends together with the mother's own turn (her ramps are ~0.3 s). Only a caller that passes an `ease` to
     // `setAimAlpha` is eased; every other strut move keeps the constant rate above.
-    STRUT_EASE_ACCEL: 50 * Math.PI / 180, // rad/s² (50°/s²: 15°/s in 0.3 s)
+    STRUT_EASE_ACCEL: 50 * Math.PI / 180, // rad/s² (50°/s²: AIM_TURN_STRUT_PACE, 15°/s, in 0.3 s; unchanged by the 19.5°/s strut)
 
     // The "." strut toggle has two angles, both measured from the tail
     // (0° along the hull toward the tail, 90° straight out, 180° along the nose).
@@ -2030,7 +2043,7 @@ export const Constants = {
     // "I said 146 but meant 34"). Measured (tmp/probes/strut34/): tips z -0.41,
     // 1.34 m off axis, never fouls the 1.30 m catch plane; strut-to-radiator
     // >= 51 mm over the whole radiator sweep, hull 176 mm, neighbours 305 mm;
-    // swing 0->34 2.27 s, 136 J for four struts.
+    // swing 0->34 1.74 s at 19.5°/s (2.27 s at the old 15°/s; STRUT_SLEW_RATE), 136 J for four struts at 15°/s (about 23% less now).
     STRUT_REST_ALPHA: 34 * Math.PI / 180, // rad (34°)
     // hold-catch (owner 2026-10-22: "daughters that catch debris should hold it, and their strut should move to default
     // position"): a daughter aboard with a catch keeps her strut at the lowest of 34°, 39°, 44° ... where her catch is clear
@@ -2046,7 +2059,7 @@ export const Constants = {
     // also the catch-duck angle (ArmManager duck target/release). Was the single-
     // press target 2026-10-12 and 146° before that (opening-dance plan, 2026-09-16).
     // Measured: at 90° the tip is aft of the muzzle plane (z 1.0 vs 1.30), so no
-    // catch of any size can touch it; swing 34->90 3.73 s, 224 J.
+    // catch of any size can touch it; swing 34->90 2.87 s at 19.5°/s (3.73 s at the old 15°/s).
     // STRUT_SWEEP_MAX above is untouched — the RANGE stays [0, π].
     STRUT_DEPLOY_ALPHA: 90 * Math.PI / 180, // rad (90°)
     // "Open" means past HALF the rest angle (17°): a strut that arrives at
@@ -2065,7 +2078,7 @@ export const Constants = {
     // within NET_LOCK_RANGE_M (90 m), a catch under way, or a "." press); from then on
     // they REST at STRUT_REST_ALPHA (34°, lane arms-default, owner 2026-10-16) and never
     // fold flat on their own. They ease back to 34° OVERRIDE_S after a "." press. Real
-    // motor rate throughout (STRUT_SLEW_RATE); nothing here teleports. Read by
+    // motor rate throughout (STRUT_SLEW_RATE, 19.5°/s); nothing here teleports. Read by
     // systems/StrutAuto.js.
     // DEMO_TOP_RAD: the once-per-player full-range show goes out to this angle. Probe
     // 2026-10-15: strut 0-180° in 2° steps x 20 radiator/wing states, clear from 4° (0-2° is
@@ -2677,8 +2690,8 @@ export const Constants = {
       // `_noteArmStowWait`) are REMOVED. Held cargo in the corridor stays out
       // of scope (not measured here).
 
-      // ── Slew (daughter-stack mirror; drift-guarded ===
-      //    OCTOPUS_V5.STRUT_SLEW_RATE by test-FlowerPose.js) ──
+      // ── Slew (the RADIATOR's own rate. It used to mirror the daughter struts' rate; since 2026-10-27 the struts
+      //    swing at 19.5°/s (owner) and the radiators stay 15°/s; test-FlowerPose.js pins both) ──
       SLEW_RATE_RAD_S: 15 * Math.PI / 180,   // 15°/s — full O swing 146°→90° in 3.73 s
       SETTLE_EPS_RAD: 0.01,        // latch clears within 0.01 rad (daughter contract)
 
@@ -2874,7 +2887,7 @@ export const Constants = {
     STRUT_AUTO:               true,
 
     // Launch-aim (lane launch-aim, 2026-10-16): a daughter's strut first swings (at its real
-    // 15°/s) to the best angle toward where she is going, then the spring pushes her along the
+    // strut rate, 19.5°/s) to the best angle toward where she is going, then the spring pushes her along the
     // strut; the launch cut-scene never moves a strut. OFF = today's bearing launch + 4x swing.
     LAUNCH_AIMS_STRUT:        true,
 
@@ -4915,7 +4928,7 @@ export const Constants = {
     PAYOUT_DURING_FOLD:  true,   // fb16 2026-10-25: the nose lets go and the line pays out while the receiving radiator folds (the turn still waits for it); false = the old order, fold first
     PAYOUT_FOLD_MARGIN_S: 0.3,   // s — fb16: the payout is timed to end this long before the fold lands (LeashTransfer._payoutDue)
     UNFOLD_DURING_SWING: true,   // fb16 2026-10-25: the radiator opens while the bag swings onto the boom; false = the old order, swing first
-    HOLD_SLEW_DEG_S:     25,     // °/s — fb16 (owner 2026-10-25, "a little faster"): the held radiator petal's fold to the hand-off angle, unfold and way home. A hinge motor commanded faster is still physical; the player's radiators and the struts stay at THERMAL.FLOWER.SLEW_RATE_RAD_S (15°/s, readability), a daughter's carry too. Read by LeashDriver (the slew it passes to the ship) and by LeashTransfer._payoutDue (how long the fold still has to run, to time the payout).
+    HOLD_SLEW_DEG_S:     25,     // °/s — fb16 (owner 2026-10-25, "a little faster"): the held radiator petal's fold to the hand-off angle, unfold and way home. A hinge motor commanded faster is still physical; the player's radiators stay at THERMAL.FLOWER.SLEW_RATE_RAD_S (15°/s, readability) and the daughter struts swing at OCTOPUS_V5.STRUT_SLEW_RATE (19.5°/s, owner 10-27), a daughter's carry rides the radiator rate. Read by LeashDriver (the slew it passes to the ship) and by LeashTransfer._payoutDue (how long the fold still has to run, to time the payout).
     WHEEL_TURN_X:        1.5,    // F2.4: the reaction wheels take the hand-off turn only when they need at most this many times the gas plan (the swing is tuned to the gas profile)
     // Reel
     REEL_SPEED_MPS:      0.05,   // estimate; <= LATCH_ALIGNED_MPS (arrival speed = reel speed)
