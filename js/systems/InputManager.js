@@ -52,6 +52,73 @@ function isHomeOrBusyArmState(state) {
     || state === S.CARRY_HANDOFF || state === S.CARRY_BACK;
 }
 
+/**
+ * interlocks-p2 R8 (a module function so `findHoldingDaughter` also works bound to a bare `{ _deps }` stand-in, as test-ToolChipLive
+ * does): is the piece inside the reach of the net that N would fire at it (the lasso's LASSO_RANGE for a piece <= 10 kg, the large
+ * net's netMaxReachM above)? True when the distance is unknown (headless mocks).
+ * @param {object} deps - the InputManager `_deps`
+ * @param {object} piece
+ * @returns {boolean}
+ */
+function withinNetReach(deps, piece) {
+  const mass = piece.mass || 0;
+  const reachM = classifyNetTarget(mass).band === 'lasso'
+    ? Constants.LASSO_RANGE
+    : netMaxReachM(Constants.CAPTURE_NET.LARGE);
+  const d = deps || {};
+  if (!piece._scenePosition || !d.player || typeof d.player.getPosition !== 'function') return true;
+  const p = d.player.getPosition();
+  if (!p) return true;
+  const distM = targetRangeM(p, piece._scenePosition);   // net-range: the one shared distance
+  return !(reachM > 0) || distM <= reachM;
+}
+
+/**
+ * hints-scan D2: true when the mother's net cannot do anything with this N press: there is no active target, the piece is
+ * beyond the reach of the net that would fire at it, or the mother has no nets left.
+ * @param {object} deps - the InputManager `_deps`
+ * @param {object|null} target - the active target
+ * @returns {boolean}
+ */
+function motherNetHasNothingToDo(deps, target) {
+  if (!target) return true;
+  const cns = (deps || {}).captureNetSystem;
+  if (cns && Constants.isFeatureEnabled('CAPTURE_NET')
+      && typeof cns.getMotherNetCount === 'function' && cns.getMotherNetCount() <= 0) return true;
+  return !withinNetReach(deps, target);
+}
+
+/**
+ * findHoldingDaughter's body, with an optional "as if": `hyp` = { arm, piece } treats that arm as already in STATION_KEEP on
+ * `piece` (for a line said just before she gets there: the retry lines of a failed net).
+ * @param {object} d - the InputManager `_deps`
+ * @param {{arm: object, piece: object}|null} hyp
+ * @returns {object|null}
+ */
+function holdingDaughter(d, hyp) {
+  const am = d && d.armManager;
+  const target = d && d.targetSelector && typeof d.targetSelector.getActiveTarget === 'function'
+    ? d.targetSelector.getActiveTarget() : null;
+  if (!am || !Array.isArray(am.arms)) return null;
+  const SK = Constants.ARM_STATES.STATION_KEEP;
+  const inSK = (a) => !!a && (a.state === SK || (!!hyp && a === hyp.arm));
+  const pieceOf = (a) => (hyp && a === hyp.arm && hyp.piece) ? hyp.piece : (a._stationKeepTarget || a.target);
+  // F2: by id, as the claim does - a Tab-selected snapshot of her piece is still her piece (identity `===` missed it
+  // and the claim then refused N at a piece she holds).
+  const holds = (a) => inSK(a) && samePiece(pieceOf(a), target);
+  const sel = (am.selectedArmIndex >= 0 && am.selectedArmIndex < am.arms.length) ? am.arms[am.selectedArmIndex] : null;
+  if (target) {
+    if (holds(sel)) return sel;
+    for (let i = 0; i < am.arms.length; i++) if (holds(am.arms[i])) return am.arms[i];
+  }
+  // hints-scan D2 (owner 2026-10-26): when the mother's net has nothing to do, N works a daughter holding station
+  // (her own piece) instead of going to a net that cannot fire or has no piece to aim at.
+  if (!motherNetHasNothingToDo(d, target)) return null;
+  if (inSK(sel)) return sel;
+  for (let i = 0; i < am.arms.length; i++) if (inSK(am.arms[i])) return am.arms[i];
+  return null;
+}
+
 export class InputManager {
   constructor() {
     /** @type {Object<string, boolean>} Key state map */
@@ -3368,39 +3435,51 @@ export class InputManager {
    * piece <= 10 kg, the large net's netMaxReachM above)? True when the distance is unknown (headless mocks).
    * @private
    */
-  _withinNetReach(piece) {
-    const mass = piece.mass || 0;
-    const reachM = classifyNetTarget(mass).band === 'lasso'
-      ? Constants.LASSO_RANGE
-      : netMaxReachM(Constants.CAPTURE_NET.LARGE);
-    const d = this._deps || {};
-    if (!piece._scenePosition || !d.player || typeof d.player.getPosition !== 'function') return true;
-    const p = d.player.getPosition();
-    if (!p) return true;
-    const distM = targetRangeM(p, piece._scenePosition);   // net-range: the one shared distance
-    return !(reachM > 0) || distM <= reachM;
-  }
+  _withinNetReach(piece) { return withinNetReach(this._deps, piece); }
 
   /**
    * The daughter, if any, that is HOLDING the active target — N works her tool without pilot mode (DECISIONS §33 row 6).
    * Order: the selected daughter (`armManager.selectedArmIndex`) if she is in STATION_KEEP on the active target, else
    * the first of `armManager.arms` in STATION_KEEP whose `_stationKeepTarget || target` is the active target.
-   * @returns {object|null} the ArmUnit, or null (no target, no holder, or no arm manager)
+   * hints-scan D2: with no holder of the active target, a daughter in STATION_KEEP (selected first, else the first in
+   * `arms` order) when the mother's net has nothing to do (no active target, beyond net reach, or no mother nets).
+   * @returns {object|null} the ArmUnit, or null (no holder, no fallback, or no arm manager)
    */
-  findHoldingDaughter() {
+  findHoldingDaughter() { return holdingDaughter(this._deps, null); }
+
+  /**
+   * The daughter N works right now, pilot-aware (hints-scan review): flying a daughter → her when she is in STATION_KEEP,
+   * else null; not flying → {@link findHoldingDaughter}. The touch button's lookup (main.js `getHolding`), so the button
+   * the "fly her, then tap ..." line names is up once he flies her.
+   * @returns {object|null} the ArmUnit, or null
+   */
+  nDaughter() {
     const d = this._deps;
-    const am = d && d.armManager;
-    const target = d && d.targetSelector && typeof d.targetSelector.getActiveTarget === 'function'
-      ? d.targetSelector.getActiveTarget() : null;
-    if (!am || !Array.isArray(am.arms) || !target) return null;
-    const SK = Constants.ARM_STATES.STATION_KEEP;
-    // F2: by id, as the claim does - a Tab-selected snapshot of her piece is still her piece (identity `===` missed it
-    // and the claim then refused N at a piece she holds).
-    const holds = (a) => !!a && a.state === SK && samePiece(a._stationKeepTarget || a.target, target);
-    const sel = (am.selectedArmIndex >= 0 && am.selectedArmIndex < am.arms.length) ? am.arms[am.selectedArmIndex] : null;
-    if (holds(sel)) return sel;
-    for (let i = 0; i < am.arms.length; i++) if (holds(am.arms[i])) return am.arms[i];
-    return null;
+    if (this.armPilotMode && d && d.cameraSystem) {
+      const p = d.cameraSystem.getPilotedArm?.();
+      return p && this.nWorksDaughter(p) ? p : null;
+    }
+    return this.findHoldingDaughter();
+  }
+
+  /**
+   * hints-scan D1: does N work THIS daughter's tool right now? The one answer every "Press N" promise for a daughter
+   * reads (the key itself, the tool chips, the in-position and retry lines).
+   *   · not piloting: she is the daughter findHoldingDaughter() returns (holding the active target, or the D2 fallback);
+   *   · piloting: she is the piloted daughter and is in STATION_KEEP (captureWithPilotedArm's multi-tool branch).
+   * @param {object} arm — an ArmUnit
+   * @param {object|null} [holdPiece] — "as if she were holding station on this piece"
+   * @returns {boolean}
+   */
+  nWorksDaughter(arm, holdPiece = null) {
+    if (!arm) return false;
+    const d = this._deps;
+    const asIf = holdPiece ? { arm, piece: holdPiece } : null;   // a line said just before she holds station (retry lines)
+    if (this.armPilotMode && d && d.cameraSystem) {
+      const piloted = d.cameraSystem.getPilotedArm?.();
+      return !!piloted && piloted === arm && (arm.state === Constants.ARM_STATES.STATION_KEEP || !!asIf);
+    }
+    return holdingDaughter(d, asIf) === arm;
   }
 
   /**

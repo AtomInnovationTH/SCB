@@ -21,7 +21,9 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { wordsFor } from './resupplyWords.js';
+import { nWorksFor, flyDigitFor } from './netRouting.js';
 
+const FLY_THEN_N_CHIP = 'Fly her, then N';   // hints-scan D3: her tool chip when N would not work her (cap = her number key)
 const TICK_S = 1.0;   // evaluate at 1 Hz (cheap; matches SkillsSystem cadence)
 
 export class ArmIdleAdvisor {
@@ -30,6 +32,8 @@ export class ArmIdleAdvisor {
     this._skillsSystem = null;
     this._getPilotMode = null;        // () => string (WASD mode, e.g. 'ARM_PILOT')
     this._getActiveNetForArm = null;  // (index) => net|null
+    this._isPiloted = null;           // (arm) => bool: is HE flying her now (her digit would then exit pilot mode, not fly her)
+    this._nWorks = null;              // (arm) => bool: does N work HER tool now (InputManager.nWorksDaughter); null = netRouting's registry
     this._enabled = false;
 
     this._accum = 0;
@@ -47,18 +51,29 @@ export class ArmIdleAdvisor {
    * @param {object} [deps.skillsSystem] — exposes isVeteran()
    * @param {Function} [deps.getPilotMode] — returns the current WASD control mode
    * @param {Function} [deps.getActiveNetForArm] — (index) => active net or null
+   * @param {Function} [deps.isPiloted] — (arm) => true when he is flying her now (hints-scan D4: "Fly her" is not said then)
+   * @param {Function} [deps.nWorks] — (arm) => true when N works her tool right now (hints-scan D3); default: the
+   *   resolver registered in netRouting (true when none), so a chip never names a key that goes to the mother or another daughter
    */
-  init({ armManager, skillsSystem = null, getPilotMode = null, getActiveNetForArm = null } = {}) {
+  init({ armManager, skillsSystem = null, getPilotMode = null, getActiveNetForArm = null, nWorks = null, isPiloted = null } = {}) {
     this._armManager = armManager || null;
     this._skillsSystem = skillsSystem;
     this._getPilotMode = getPilotMode;
     this._getActiveNetForArm = getActiveNetForArm;
+    this._nWorks = typeof nWorks === 'function' ? nWorks : null;
+    this._isPiloted = typeof isPiloted === 'function' ? isPiloted : null;
     this._enabled = !!armManager;
   }
 
   dispose() {
     this._enabled = false;
     this._armState.clear();
+  }
+
+  /** hints-scan D1: does N work this daughter's tool right now? */
+  _nWorksFor(arm) {
+    if (this._nWorks) { try { return this._nWorks(arm) !== false; } catch (_e) { return true; } }
+    return nWorksFor(arm);
   }
 
   _isVeteran() {
@@ -173,7 +188,19 @@ export class ArmIdleAdvisor {
         if (rec.idleS < hint.idleS) continue;
         if (rec.fired.has(hint.hintId)) continue;
         if (!this._predicateHolds(hint.when, arm)) continue;
+        // hints-scan D4: a chip that says her number key ("Fly her") is not said while he is flying her: that digit would
+        // take him back to the ship. Not marked fired: it may still say it if he lets go while she is in flight.
+        if (Array.isArray(hint.keys) && hint.keys.includes('Digit1') && this._isPiloted && this._isPiloted(arm)) continue;
         rec.fired.add(hint.hintId);
+        // hints-scan D3 (owner 2026-10-26): a tool chip names N only when N works HER now; else it names her number key.
+        // Picked at the moment it fires, so the key is true when it is shown.
+        if (Array.isArray(hint.keys) && hint.keys.includes('KeyN') && !this._nWorksFor(arm)) {
+          const n = arm.index != null && Number.isInteger(arm.index) ? arm.index + 1 : flyDigitFor(arm);
+          if (n) {
+            this._fire(hint.hintId, hint.title, hint.text, hint.icon, FLY_THEN_N_CHIP, String(n), ['Digit' + n]);
+            continue;
+          }
+        }
         this._fire(hint.hintId, hint.title, hint.text, hint.icon, hint.chip, hint.glyph, hint.keys);
       }
     }

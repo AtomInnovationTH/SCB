@@ -140,6 +140,7 @@ const RE_NEXT_CHIP = /\b([Pp])ress T for next target\b/g;   // no chip: a tap on
 const RE_PICK_CHIP = /\b([Pp])ress T to pick the next target\b/g;
 const RE_ZOOM_WORDS = /\b([Ss])croll to zoom\b/g;
 const RE_ARROW_WORDS = /\b([Uu])se the arrow keys to turn\b/g;
+const RE_FLY_HER = /\b([Pp])ress [1-4] to fly her, then N\b/g;   // hints-scan D3
 const RE_PRESS_CHIP = /\b([Pp])ress ([NDASR])\b( to [A-Za-z]+\b)?/g;
 // u14b B1/B2: K lets the catch go, I reads more. Their tails say what the button already says, so they are dropped:
 // "Press K to let it go." -> "Tap LET GO."; "or press K to let the catch go." -> "or tap LET GO.";
@@ -302,6 +303,9 @@ const RE_CLICK = /(^|[.!?:;,(]\s+|\n\s*|\b(?:and|or|then|to|can|will|just|simply
 function applyLines(text) {
   let out = text;
   for (const [from, to] of GLASS_LINES) if (out.indexOf(from) >= 0) out = out.split(from).join(to);
+  // hints-scan D3: "Press 2 to fly her, then N to ..." (N would not work her): her number key is a tap on her row; the N part
+  // then reads as its button like any other "press N to ..." (the button itself shows only once she is the one N works).
+  out = out.replace(RE_FLY_HER, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' her row in DAUGHTERS to fly her, then press N');
   return out.replace(RE_CLICK, (tok, lead, c) => lead + (c === 'C' ? 'T' : 't') + 'ap');
 }
 

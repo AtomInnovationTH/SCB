@@ -190,6 +190,26 @@ function hexToRgb(hex) {
   return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
 }
 
+/**
+ * hints-scan D5: every scan press shows the Targets pane. Listens for SCAN_QUICK and SCAN_WIDE (the S key, Shift+S, the touch SCAN
+ * and WIDE SCAN buttons, a tap on empty canvas all emit them) and calls `TargetPanel.show()` - even when the scanner refuses
+ * (cooldown): he asked to see the targets. Only on the flying floor: `getFloor()` returns the applied floor number (null = no
+ * ladder, treated as the flying floor); floors 1, 3, 4, 5 keep Targets away by design (FloorMask rooms), so nothing changes there.
+ * @param {{ bus?: object, getPanel: () => (TargetPanel|null|undefined), getFloor?: () => (number|null) }} deps
+ * @returns {() => void} the remover
+ */
+export function wireScanShowsTargets({ bus = eventBus, getPanel, getFloor = null } = {}) {
+  const onScan = () => {
+    const floor = getFloor ? getFloor() : null;
+    if (floor != null && floor !== 2) return;
+    const panel = getPanel && getPanel();
+    if (panel && typeof panel.show === 'function') panel.show();
+  };
+  bus.on(Events.SCAN_QUICK, onScan);
+  bus.on(Events.SCAN_WIDE, onScan);
+  return () => { bus.off(Events.SCAN_QUICK, onScan); bus.off(Events.SCAN_WIDE, onScan); };
+}
+
 export class TargetPanel {
   constructor(container, { colorLaw = false, glass = null } = {}) {
     this._container = container;
@@ -537,6 +557,30 @@ export class TargetPanel {
     // visibility bit — the room-memory write trigger (emitted AFTER the flip;
     // the consumer is gated in main.js, so this is ladder-agnostic HUD).
     eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane: 'targets', shown: nowVisible });
+  }
+
+  /**
+   * Reveal the target pane, never hide it (hints-scan D5, owner 2026-10-26: "pressing S scan should probably make Targets pane
+   * appear, if it was hidden"). The reveal branch of `toggleVisible`: clears the ONE visibility bit (`data-density-hidden`) and
+   * any inline hide, then emits `HUD_PANE_VISIBILITY { pane:'targets', shown:true }` (the room-memory write trigger) and the
+   * line "Targets pane shown (0 to hide)" — only when it actually changed something, so a pane that is already shown stays quiet.
+   * Before the first scan the pane waits behind HUD's scan gate (`data-scan-wait`): the hide bit is cleared (and the room
+   * remembers "shown") but the gate stays on until SCAN_COMPLETE, and no line is said (nothing is on screen yet).
+   * @returns {boolean} true if a hide bit was cleared
+   */
+  show() {
+    const panel = this.panels && this.panels.targets;
+    if (!panel) return false;
+    const densityHidden = panel.hasAttribute('data-density-hidden');
+    const inlineHidden = !!(panel.style && panel.style.display === 'none');
+    if (!densityHidden && !inlineHidden) return false;
+    if (densityHidden) panel.removeAttribute('data-density-hidden');
+    if (inlineHidden) panel.style.display = '';
+    if (!panel.hasAttribute('data-scan-wait')) {
+      eventBus.emit(Events.COMMS_MESSAGE, { text: 'Targets pane shown (0 to hide)', priority: 'info', _reactive: true });
+    }
+    eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane: 'targets', shown: true });
+    return true;
   }
 
   /** @private */

@@ -18,6 +18,7 @@ import { messagePassesSuppression, rampSuppressionTier, postOnboardingStartTier 
 import { missReasonToText } from '../entities/CaptureNet.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
+import { flyFirstLine } from './netRouting.js';   // hints-scan D3: the daughter's "Press N" line says her number when N is not hers
 import { depotWords } from './resupplyWords.js';   // lane 3d: the "depot" advice reads the map switch
 
 // ============================================================================
@@ -853,19 +854,20 @@ export class CommsSystem {
     // The pad is named when the recommended tool is the pad; u18c D5: the gripper and the magnet say their own word too
     // (the net's line is every other tool's). Plain words, no symbols (Ruling 0); the number keys that pilot her are in the
     // help page, not here. On glass `chipPhrase` turns each "Press N to ..." into its button (STICK PAD / CLOSE GRIPPER / USE MAGNET).
-    const inPositionLine = (tool) => (tool === 'PAD' ? 'Daughter in position. Press N to stick the pad on.'
+    // hints-scan D3 (owner 2026-10-26): when N goes to the mother's net or to another daughter, the line names her number key.
+    const inPositionLine = (tool, armId) => flyFirstLine(armId, (tool === 'PAD' ? 'Daughter in position. Press N to stick the pad on.'
       : tool === 'GRIPPER' ? 'Daughter in position. Press N to grip it.'
         : tool === 'MAGNET' ? 'Daughter in position. Press N to use the magnet.'
-          : 'Daughter in position. Press N to net it.');
+          : 'Daughter in position. Press N to net it.'));
     eventBus.on(Events.STATION_KEEP_ENTERED, (data) => {
       const armId = daughterDisplayName(data?.armId) || 'SYSTEM';
-      this.addMessage('INFO', armId, inPositionLine(data?.tool), { channel: 'CMD' });
+      this.addMessage('INFO', armId, inPositionLine(data?.tool, data?.armId), { channel: 'CMD' });
     });
     // u18c D5: the PLAYER changed her tool (backquote or CHANGE TOOL): say the new tool's line once. The recommendation
     // ArmUnit makes on station-keep entry emits TOOL_SELECTED too, without `byPlayer`: the entry line above covers it.
     eventBus.on(Events.TOOL_SELECTED, (data) => {
       if (!data || data.byPlayer !== true) return;
-      this.addMessage('INFO', daughterDisplayName(data.armId) || 'SYSTEM', inPositionLine(data.tool), { channel: 'CMD' });
+      this.addMessage('INFO', daughterDisplayName(data.armId) || 'SYSTEM', inPositionLine(data.tool, data.armId), { channel: 'CMD' });
     });
   }
 

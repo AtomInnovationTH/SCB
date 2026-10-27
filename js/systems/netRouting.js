@@ -103,3 +103,50 @@ export function netRangeLine(distM, limitM, kind = 'net') {
   }
   return `${what} (${limitText}): the piece is ${away} away. Close in.`;
 }
+
+// ── hints-scan D1/D3 (owner 2026-10-26): a line never names a key that won't do it ──────────────────────────────────
+// "Press N to <verb>" is true for a daughter only when N goes to HER (InputManager.nWorksDaughter). main.js registers
+// that answer here; the lines said for a daughter (Comms' in-position line, ArmUnit's retry lines, the idle chips of
+// ArmIdleAdvisor) read it. With nothing registered (headless tests, menus) N is assumed to work her, as it always did.
+let _nResolver = null;
+
+/**
+ * @param {{works: (arm:object|string, holdPiece?:object|null) => boolean, digit: (arm:object|string) => (number|null)}|null} r
+ *   works(armOrId, holdPiece): does N work her tool (holdPiece = "as if she were holding station on this piece", for a line said
+ *   just before she gets there); digit(armOrId): the 1-based number key that flies her.
+ */
+export function setNResolver(r) { _nResolver = r || null; }
+
+/** Does N work this daughter's tool now? True when no resolver is registered or it cannot tell. */
+export function nWorksFor(armOrId, holdPiece = null) {
+  if (!_nResolver || armOrId == null) return true;
+  try { return _nResolver.works(armOrId, holdPiece) !== false; } catch (_e) { return true; }
+}
+
+/** The 1-based number key that flies her, or null. */
+export function flyDigitFor(armOrId) {
+  if (armOrId && typeof armOrId === 'object' && Number.isInteger(armOrId.index)) return armOrId.index + 1;
+  if (!_nResolver || armOrId == null) return null;
+  try { const n = _nResolver.digit(armOrId); return Number.isInteger(n) && n >= 1 ? n : null; } catch (_e) { return null; }
+}
+
+/**
+ * The key words of a line that tells the player to work a daughter's tool: "Press N to <what>" when N does it, else
+ * "Press <n> to fly her, then N to <what>" (D3). `what` is the verb phrase without "to" ("retry", "stick the pad on").
+ * No number known: plain "Press N to ..." (the old line).
+ */
+export function pressNToLine(armOrId, what, holdPiece = null) {
+  if (nWorksFor(armOrId, holdPiece)) return `Press N to ${what}`;
+  const n = flyDigitFor(armOrId);
+  return n ? `Press ${n} to fly her, then N to ${what}` : `Press N to ${what}`;
+}
+
+/**
+ * A whole line that says "Press N to ...": returned as it is when N works her, else its first "Press N to" becomes
+ * "Press <n> to fly her, then N to" (D3). For lines kept as whole literals (Comms' in-position line per tool).
+ */
+export function flyFirstLine(armOrId, text, holdPiece = null) {
+  if (nWorksFor(armOrId, holdPiece)) return text;
+  const n = flyDigitFor(armOrId);
+  return n ? text.replace('Press N to ', `Press ${n} to fly her, then N to `) : text;
+}

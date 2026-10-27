@@ -25,7 +25,7 @@ import { buildNoseRoute, virtualCentreInto } from './NoseRoute.js';
 import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT, seedHerFrameAttitude, applyHerFrameAttitude, clearShipRelativeAttitude, clearRackCell } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
-import { daughterOutOfNetsLine } from '../systems/netRouting.js';
+import { daughterOutOfNetsLine, pressNToLine } from '../systems/netRouting.js';
 import { coldGasKgToPool, coldGasPoolToKg } from '../systems/ResourceSystem.js';   // ap-gas D4: the mother's tank is pool units, the bottle is kg
 import { placeName } from '../systems/resupplyWords.js';   // lane 3f F1: "resupply satellite" with the map on, today's "resupply stop" without
 import { computeToolOdds, makeNetOddsLockCache } from '../systems/ToolOdds.js';
@@ -5614,7 +5614,7 @@ export class ArmUnit {
       && (!this.selectedTool || this.selectedTool === 'NET');
     if (far && piece && !noRetry) {
       // Review F3: "Press X" is what GestureHints.chipPhrase turns into a touch button (DECISIONS §32).
-      say(`${lead}${Math.round(distM)} m out: holding for a retry. Press N to retry, Press R to reel her home (${etaTxt}).`);
+      say(`${lead}${Math.round(distM)} m out: holding for a retry. ${pressNToLine(this, 'retry', piece)}, Press R to reel her home (${etaTxt}).`);
       this._holdForRetry(piece);
       this._rhReelEtaSaid = true;                 // R from this hold: the line above gave the time
       return 'hold';
@@ -6172,7 +6172,7 @@ export class ArmUnit {
         // retries with N. APPROACH causes "screen-races-to-debris" effect at orbital speed.
         this._finishFailedCatch({
           cause: 'Netting failed.',
-          legacy: { text: `${this.displayName}: Netting failed. Holding standoff. Press N to retry.`, priority: 'warning' },
+          legacy: { text: `${this.displayName}: Netting failed. Holding standoff. ${pressNToLine(this, 'retry', this._netCommittedTarget || this.target)}.`, priority: 'warning' },
           holdTarget: this._netCommittedTarget, legacyHold: true,
         });
       }

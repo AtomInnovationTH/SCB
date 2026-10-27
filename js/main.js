@@ -98,6 +98,8 @@ import { SkillsPane } from './ui/hud/SkillsPane.js';
 import { TestsPane } from './ui/hud/TestsPane.js';
 import { TeachingSystem } from './systems/TeachingSystem.js';
 import { armIdleAdvisor } from './systems/ArmIdleAdvisor.js';
+import { setNResolver } from './systems/netRouting.js';   // hints-scan D1: one answer to "does N work her"
+import { wireScanShowsTargets } from './ui/hud/TargetPanel.js';   // hints-scan D5: every scan press shows the Targets pane
 import { guidanceTelemetry } from './systems/GuidanceTelemetry.js';
 import { navRecoveryAdvisor } from './systems/NavRecoveryAdvisor.js';
 import { targetAcquisition } from './systems/TargetAcquisition.js';
@@ -3578,7 +3580,7 @@ async function init() {
         hasDaughter: _daughterReadyWithNets,
         // R1: "a daughter is holding" is read from the arm's state (the same lookup N uses), never from enter/exit events.
         getHolding: () => {
-          const a = inputManager && inputManager.findHoldingDaughter ? inputManager.findHoldingDaughter() : null;
+          const a = inputManager && inputManager.nDaughter ? inputManager.nDaughter() : null;   // pilot-aware (hints-scan review)
           return a ? (a.selectedTool || 'NET') : null;
         },
         getFarState: _touchFarState,
@@ -3756,12 +3758,32 @@ async function init() {
   }
 
   // --- Item 3: anti-stuck idle watchdog (data-driven, veteran-gated) ---
+  // hints-scan D1/D3 (owner 2026-10-26): one answer to "does N work her tool now" (InputManager.nWorksDaughter), read by the
+  // idle tool chips (dep below) and by the lines said for a daughter (Comms in-position line, ArmUnit retry lines: registry).
+  const _armOf = (a) => ((a && typeof a === 'object') ? a : (armManager.arms || []).find((x) => x && x.id === a) || null);
+  const _nWorks = (a, holdPiece = null) => {
+    const arm = _armOf(a);
+    return !!(arm && inputManager && inputManager.nWorksDaughter(arm, holdPiece));
+  };
+  setNResolver({ works: _nWorks, digit: (a) => { const arm = _armOf(a); return arm && Number.isInteger(arm.index) ? arm.index + 1 : null; } });
   armIdleAdvisor.init({
     armManager,
     skillsSystem,
     getPilotMode: () => (inputManager ? inputManager._controlMode : null),
     getActiveNetForArm: (idx) => (captureNetSystem.getActiveNetForArm
       ? captureNetSystem.getActiveNetForArm(idx) : null),
+    nWorks: (arm) => _nWorks(arm),
+    isPiloted: (arm) => !!(inputManager && inputManager.armPilotMode && cameraSystem && cameraSystem.getPilotedArm && cameraSystem.getPilotedArm() === arm),
+  });
+
+  // --- hints-scan D5 (owner 2026-10-26): "pressing S scan should probably make Targets pane appear, if it was hidden." ---
+  // Every scan press (S, Shift+S, the touch SCAN / WIDE SCAN buttons, a tap on empty canvas) shows the Targets pane, even when
+  // the scanner refuses (cooldown): he asked to see the targets. Reveal only (TargetPanel.show never hides). Only on the flying
+  // floor (2): floors 1, 3, 4, 5 keep Targets away by design (FloorMask rooms), so nothing changes there.
+  wireScanShowsTargets({
+    bus: eventBus,
+    getPanel: () => (hud && hud.targetPanel) || null,
+    getFloor: () => ((ladderController && ladderController.isActive && ladderController.isActive()) ? ladderController.currentFloor() : null),
   });
 
   // --- UX-11 #11: "you're lost" recovery advisor (empty-scan bearing + out-of-range watchdog) ---
