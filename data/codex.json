@@ -3318,7 +3318,10 @@
         "org_nasa_odpo",
         "org_esa_debris",
         "org_thai_space_consortium",
-        "org_rtaf_space"
+        "org_rtaf_space",
+        "org_jasdf_space_ops",
+        "org_star_signal",
+        "org_axelspace"
       ],
       "i18n": {
         "title": "Who Tracks the Junk",
@@ -3340,7 +3343,9 @@
         "kessler_syndrome",
         "world_adr_mandate",
         "world_five_year_rule",
-        "world_sustainability_rating"
+        "world_sustainability_rating",
+        "org_kmutnb",
+        "org_interstellar"
       ],
       "i18n": {
         "title": "The Debris Economy Arrives",
@@ -3861,7 +3866,8 @@
         "org_nasa_odpo",
         "org_thai_space_consortium",
         "org_rtaf_space",
-        "org_mu_space"
+        "org_mu_space",
+        "org_interstellar"
       ],
       "i18n": {
         "title": "The Rules of the Road",
@@ -5381,7 +5387,7 @@
         "title": "Orbital Lasers",
         "shortText": "A Tokyo company building space lasers to stop a tumbling satellite.",
         "fullText": "Orbital Lasers is a Tokyo company founded in January 2024 as a spin-out of SKY Perfect JSAT. It builds compact space lasers: one use is detumbling, stopping the spin of a dead satellite so a servicer can grab it; later, debris removal. It closed a 3.02 billion yen Series A on 19 March 2026 and signed a study agreement with Infinite Orbits on 7 April 2026.\n\nA tumbling target is the hardest part of a catch, so slowing it from a distance is worth real money.",
-        "realWorld": "Sources (read 2026-10-25): Orbital Lasers business page: https://www.orbitallasers.com/en/business/; press releases 19 Mar and 7 Apr 2026: https://www.orbitallasers.com/. No launch date for its own hardware.",
+        "realWorld": "Sources (read 2026-10-27): Orbital Lasers business page: https://www.orbitallasers.com/en/business/; press release 19 Mar 2026 (founded Jan 2024 as a carve-out from SKY Perfect JSAT; Series A 3.02 billion yen): https://www.orbitallasers.com/2026/03/19/; press release 7 Apr 2026 (collaboration-study MoU with Infinite Orbits): https://www.orbitallasers.com/2026/04/07/. No launch date for its own hardware.",
         "unlockHint": "Reach orbit."
       },
       "lastVerified": "2026-10"
@@ -5447,13 +5453,14 @@
       "startUnlocked": true,
       "related": [
         "world_who_tracks",
-        "world_the_rules"
+        "world_the_rules",
+        "org_kmutnb"
       ],
       "i18n": {
         "title": "Thai Space Consortium",
         "shortText": "Thai agencies, universities and the military building Thailand's own satellite.",
-        "fullText": "The Thai Space Consortium is a group of Thai science agencies, universities and the military working together on Thailand's own satellite. Its first, TSC-1, is a microsatellite under 100 kg assembled at NARIT in Chiang Mai. It passed thermal-vacuum, radiation and vibration tests in 2026, and launch is aimed for 2027.\n\nBy 4 June 2026 the engineering model was about 60% done, and the science minister visited the build on 18 April 2026. The consortium is described as 6 science agencies, 7 universities and 1 defence agency.",
-        "realWorld": "Sources (read 2026-10-26): Thai government news, 4 Jun 2026 (engineering model about 60% done, tests passed, minister visit 18 Apr 2026, launch targeted by 2027): https://thailand.go.th/issue-focus-detail/thailands-homegrown-tsc-1-satellite-achieves-major-milestone-prepares-for-launch-simulation-next-year; NARIT TSC page: https://www.narit.or.th/en/collaboration/tsc (members: 6 science agencies, 7 universities, 1 defence agency; seen only as a search snippet, not opened). Launch date is a target, not confirmed.",
+        "fullText": "The Thai Space Consortium is a group of Thai science agencies, universities and the military working together on Thailand's own satellite. Its first, TSC-1, is a microsatellite under 100 kg assembled at NARIT in Chiang Mai. It passed thermal-vacuum, radiation and vibration tests in 2026, and launch is aimed for 2027.\n\nBy 4 June 2026 the engineering model was about 60% done, and the science minister visited the build on 18 April 2026.",
+        "realWorld": "Sources (read 2026-10-27): Thai government news, 4 Jun 2026 (engineering model about 60% done, tests passed, minister visit 18 Apr 2026, launch targeted by 2027): https://thailand.go.th/issue-focus-detail/thailands-homegrown-tsc-1-satellite-achieves-major-milestone-prepares-for-launch-simulation-next-year. Member counts (6 science agencies, 7 universities, 1 defence agency) appear on https://www.narit.or.th/en/collaboration/tsc, which returned 403 on 2026-10-27; seen only as a search snippet, so the counts are not stated in the text. Launch date is a target, not confirmed.",
         "unlockHint": "Reach orbit."
       },
       "lastVerified": "2026-10"
@@ -5470,8 +5477,8 @@
       "i18n": {
         "title": "Royal Thai Air Force",
         "shortText": "Thailand's air force flies the country's military satellites and watches orbit.",
-        "fullText": "The Royal Thai Air Force flies Thailand's military satellites. NAPA-1 went up on a Vega rocket in September 2020 and NAPA-2 on a Falcon 9 in June 2021. It works with NARIT, the national astronomy institute, on watching objects in orbit.\n\nNAPA-1 flew as Vega flight VV16 on 3 September 2020 and NAPA-2 on 30 June 2021. The agreement with NARIT on space surveillance was reported in July 2026.",
-        "realWorld": "Sources (read 2026-10-26): NAPA-1 (Vega VV16, 3 Sep 2020): https://en.wikipedia.org/wiki/Napa-1; NAPA-2 (Falcon 9, 30 Jun 2021): https://www.nationthailand.com/tech/40002767; NARIT and RTAF space-surveillance agreement, Bangkok Biz News, July 2026: https://www.bangkokbiznews.com/tech/innovation/1242742.",
+        "fullText": "The Royal Thai Air Force flies Thailand's military satellites. NAPA-1 went up on a Vega rocket in September 2020 and NAPA-2 on a Falcon 9 in June 2021. It works with NARIT, the national astronomy institute, on watching objects in orbit.\n\nNAPA-1 flew as Vega flight VV16 on 3 September 2020 and NAPA-2 on 30 June 2021. NARIT and the air force signed an agreement on space technology and surveillance at air force headquarters; the page reporting it carries no date.",
+        "realWorld": "Sources (read 2026-10-27): NAPA-1 (Vega VV16, 3 Sep 2020): https://en.wikipedia.org/wiki/Napa-1; NAPA-2 (Falcon 9, 30 Jun 2021): https://www.nationthailand.com/tech/40002767; NARIT and RTAF space-surveillance agreement, Bangkok Biz News (Thai): https://www.bangkokbiznews.com/tech/innovation/1242742. That page shows no publish date; the earlier 'July 2026' could not be confirmed and was removed.",
         "unlockHint": "Reach orbit."
       },
       "lastVerified": "2026-10"
@@ -5487,9 +5494,100 @@
       ],
       "i18n": {
         "title": "mu Space",
-        "shortText": "A Bangkok space-tech company heading for the Moon with GISTDA and ispace.",
-        "fullText": "mu Space is a Bangkok space-tech company founded in 2017. In November 2024 it signed a Moon-mission agreement with ispace and GISTDA, Thailand's space agency, and in April 2025 it delivered an antenna to GISTDA.\n\nThe company was founded on 21 June 2017. The Moon-mission agreement with ispace and GISTDA is dated 8 November 2024, and the antenna reached GISTDA on 3 April 2025.",
-        "realWorld": "Sources (read 2026-10-26): Wikipedia, founded 21 Jun 2017 (the article carries a conflict-of-interest banner): https://en.wikipedia.org/wiki/Mu_Space; ispace release, MoU of 8 Nov 2024: https://www.ispace-inc.com/wp-content/uploads/2026/06/ispace-GISTDA-and-mu-Space-Agree-to-Collaborate-on-Lunar-Exploration-Mission-for-Thailands-National-Space-Program.pdf; company updates, antenna delivered to GISTDA 3 Apr 2025: https://muspacecorp.com/category/update/ (seen only as a search snippet, not opened).",
+        "shortText": "A Bangkok space-tech company studying a Moon mission with GISTDA and ispace.",
+        "fullText": "mu Space is a Bangkok space-tech company founded in 2017. In November 2024 it signed an agreement with ispace and GISTDA, Thailand's space agency, to study a Moon mission under Thailand's national space programme.\n\nThe company was founded on 21 June 2017. The agreement with ispace and GISTDA was announced on 8 November 2024, at Thailand Space Week.",
+        "realWorld": "Sources (read 2026-10-27): Wikipedia, founded 21 Jun 2017 (the article carries a conflict-of-interest banner; nothing after 2024): https://en.wikipedia.org/wiki/Mu_Space; ispace release, Tokyo, 8 Nov 2024 (agreement to study a lunar exploration program within Thailand's National Space Experiment and Exploration program): https://ispace-inc.com/news/ispace-gistda-and-mu-space-agree-to-collaborate-on-lunar-exploration-mission-for-thailands-national-space-program/. An antenna delivery to GISTDA on 3 Apr 2025 (muspacecorp.com) was seen only as a search snippet and on an AI-written page, so it was removed from the text. No 2025-2026 mu Space news found.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_kmutnb",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "org_thai_space_consortium",
+        "world_why_now"
+      ],
+      "i18n": {
+        "title": "KMUTNB (KNACKSAT)",
+        "shortText": "A Thai university that built the KNACKSAT-2 CubeSat.",
+        "fullText": "King Mongkut's University of Technology North Bangkok (KMUTNB) built KNACKSAT-2, a 3U CubeSat (30 x 10 x 10 cm) with a radio relay for internet-of-things sensors. It was released from the International Space Station on 3 February 2026.\n\nThe satellite is a ride-share platform that can carry up to seven payloads. The sensor relay was paid for half by the government research funder PMUC and half by AIS's network arm. Reports say it reached orbit; none says whether it is still working.",
+        "realWorld": "Sources (read 2026-10-27): Nation Thailand, 17 Mar 2026 (released from the ISS 3 Feb 2026; 3U, 30x10x10 cm; LoRaWAN IoT gateway co-funded 50/50 by PMUC and AWN, an AIS subsidiary): https://www.nationthailand.com/business/tech/40063896; Wikipedia HTV-X1 (secondary, last edited 10 Jun 2026) lists KNACKSAT-2 among CubeSats carried by HTV-X1, launched 26 Oct 2025: https://en.wikipedia.org/wiki/HTV-X1. No JAXA or KMUTNB page found confirming the deployment; whether it is operating is unconfirmed.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_jasdf_space_ops",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_who_tracks",
+        "org_star_signal"
+      ],
+      "i18n": {
+        "title": "JASDF Space Operations Wing",
+        "shortText": "Japan's air force space unit, watching what is in orbit.",
+        "fullText": "The Japan Air Self-Defense Force's Space Operations Wing is the air force unit that watches objects in orbit, a job called space domain awareness. It was formed on 23 March 2026, replacing the Space Operations Group, and works from Fuchu, Tokyo, and Yamaguchi.\n\nThe air force began the space-awareness mission in March 2023. A space-surveillance radar at Sanyo-Onoda, Yamaguchi, is reported to have started operating on 3 March 2025. A surveillance satellite is planned; the ministry's own pages give launch year fiscal 2026 on one and fiscal 2027 on another.",
+        "realWorld": "Sources (read 2026-10-27): Defense ministry unit page, 23 Mar 2026 (Wing formed 23 Mar 2026): https://www.mod.go.jp/asdf/ssa/activities/report01/; history page (space domain awareness mission began Mar 2023; satellite planned FY2027): https://www.mod.go.jp/asdf/ssa/about/history/; about page (FY2026 for the satellite, so the pages disagree): https://www.mod.go.jp/asdf/ssa/about/; organisation page (Fuchu and Bofu-kita bases): https://www.mod.go.jp/asdf/ssa/about/org/. Radar (Sanyo-Onoda, started 3 Mar 2025) comes from Japanese Wikipedia only, which cites an NHK report of 19 Mar 2025 that could not be opened: https://ja.wikipedia.org/wiki/宇宙作戦団. The planned renaming to Air and Space Self-Defense Force is not confirmed as done.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_star_signal",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_who_tracks",
+        "org_axelspace",
+        "org_jasdf_space_ops"
+      ],
+      "i18n": {
+        "title": "Star Signal Solutions",
+        "shortText": "A Tokyo start-up building a catalogue of small space debris.",
+        "fullText": "Star Signal Solutions is a Tokyo start-up building a catalogue of objects in orbit, including debris smaller than 10 cm that is hard to track today. It was chosen for the second phase of JAXA's Space Strategy Fund and runs S-CAN, a service that helps satellite operators avoid collisions.\n\nOn 1 September 2026 it signed an agreement with Axelspace to work together on space situational awareness. When it was founded is not confirmed.",
+        "realWorld": "Sources (read 2026-10-27): Axelspace press release, 1 Sep 2026 (MOU on space situational awareness; catalogue including debris under 10 cm; JAXA Space Strategy Fund second phase; S-CAN; CEO Akihiro Iwaki): https://www.axelspace.com/news/partnership_starsignalsolutions/ and the Japanese version https://www.axelspace.com/ja/news/partnership_starsignalsolutions/ (head office Chuo-ku, Tokyo). Single source: the company's own sites failed to load, and no second report was found. Founding year unconfirmed.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_axelspace",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "org_star_signal",
+        "world_who_tracks"
+      ],
+      "i18n": {
+        "title": "Axelspace",
+        "shortText": "A Tokyo satellite maker that lost four of seven new satellites' downlinks.",
+        "fullText": "Axelspace is a Tokyo satellite maker and operator. Seven of its GRUS-3 satellites launched on a Falcon 9 on 7 July 2026. On 29 September it said four of them had lost their high-speed downlink and that fixing it was not feasible, so starting commercial service with four of the seven would be difficult.\n\nIt also signed an agreement with Star Signal Solutions on space situational awareness on 1 September 2026. The cause of the fault was traced to a power-amplifier circuit.",
+        "realWorld": "Sources (read 2026-10-27): Axelspace news, 8 Jul 2026 (seven GRUS-3 launched 7 Jul 2026, 07:12 UTC, Falcon 9 from Vandenberg, Transporter-17 via Exolaunch): https://www.axelspace.com/news/grus-3_successful_launch/; news, 29 Sep 2026 (GRUS-3B, 3E, 3F, 3G lost high-speed communication; recovery not feasible; power-amplifier circuit): https://www.axelspace.com/news/grus3_20260929/; news, 1 Sep 2026 (MOU with Star Signal Solutions): https://www.axelspace.com/news/partnership_starsignalsolutions/.",
+        "unlockHint": "Reach orbit."
+      },
+      "lastVerified": "2026-10"
+    },
+    {
+      "id": "org_interstellar",
+      "category": "WORLD_INDUSTRY",
+      "icon": "🛰️",
+      "startUnlocked": true,
+      "related": [
+        "world_why_now",
+        "world_the_rules"
+      ],
+      "i18n": {
+        "title": "Interstellar Technologies",
+        "shortText": "A Japanese rocket company building ZERO, not yet flown.",
+        "fullText": "Interstellar Technologies is a Japanese rocket company building ZERO, a two-stage rocket meant to lift up to 1,000 kg to low orbit. ZERO has not flown yet: the launch pad is due to be finished in the first quarter of 2027.\n\nOn 31 March 2026 the company passed a government funding checkpoint worth up to 7.37 billion yen more, and said it had booked seven satellites for ZERO's first flight. Its earlier small MOMO rocket has made seven flights to space and back.",
+        "realWorld": "Sources (read 2026-10-27): Interstellar Technologies news, 23 Jul 2026 (Launch Complex 1 completion expected Q1 2027; seven suborbital MOMO launches): https://www.istellartech.com/en_news/11390; news, 31 Mar 2026 (SBIR Phase 3 stage-gate passed; up to 7.37 billion yen added, up to 15.4 billion in total; seven private satellites secured for the first flight): https://www.istellartech.com/en_news/11166; ZERO page (undated; up to 1,000 kg to low orbit): https://www.istellartech.com/en/launch/zero/. No first-flight date found.",
         "unlockHint": "Reach orbit."
       },
       "lastVerified": "2026-10"

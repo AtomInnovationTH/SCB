@@ -593,7 +593,8 @@ export class MenuScreen {
               <li class="adr-also">
                 <span class="adr-nw"><span class="adr-name" title="Thai science agencies, universities and the military building Thailand's own satellite. TSC-1, a microsatellite under 100 kg assembled at NARIT in Chiang Mai, passed thermal-vacuum, radiation and vibration tests in 2026; launch is aimed for 2027.">Thai Space Consortium</span>,</span>
                 <span class="adr-nw"><span class="adr-name" title="Flies Thailand's military satellites: NAPA-1 went up on a Vega rocket in September 2020 and NAPA-2 on a Falcon 9 in June 2021. It works with NARIT on watching objects in orbit.">Royal Thai Air Force</span>,</span>
-                <span class="adr-nw"><span class="adr-name" title="Bangkok space-tech company founded in 2017. It signed a Moon-mission agreement with ispace and GISTDA in November 2024 and delivered an antenna to GISTDA in April 2025.">mu Space</span>.</span></li>
+                <span class="adr-nw"><span class="adr-name" title="Bangkok space-tech company founded in 2017. In November 2024 it signed an agreement with ispace and GISTDA to study a Moon mission under Thailand's national space programme.">mu Space</span>,</span>
+                <span class="adr-nw"><span class="adr-name" title="King Mongkut's University of Technology North Bangkok built KNACKSAT-2, a 3U CubeSat (30 x 10 x 10 cm) with a radio relay for internet-of-things sensors. It was released from the International Space Station on 3 February 2026.">KMUTNB</span>.</span></li>
               </ul>
               <div class="adr-section">India <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-india">(more)</button></div>
               <ul class="adr-list" id="adr-more-india" hidden>
@@ -616,7 +617,11 @@ export class MenuScreen {
               <li><span class="adr-name" title="Utsunomiya start-up. Its HORN is a fan-shaped film that unfolds to add drag, so dead satellites fall sooner. Two units flew on an H3 rocket on 12 June 2026; one re-entered after 76 days.">BULL</span> <span class="adr-sub">Drag film</span></li>
               <li class="adr-also">
                 <span class="adr-nw"><span class="adr-name" title="Tokyo, founded 2024 as a SKY Perfect JSAT spin-out. Builds compact space lasers to stop a dead satellite's spin and, later, to remove debris. Closed its Series A in March 2026.">Orbital Lasers</span>,</span>
-                <span class="adr-nw"><span class="adr-name" title="Japanese satellite operator. In May 2026 it invested in Astroscale and agreed a partnership on in-orbit servicing, and it backs Orbital Lasers.">SKY Perfect JSAT</span>.</span></li>
+                <span class="adr-nw"><span class="adr-name" title="Japanese satellite operator. In May 2026 it invested in Astroscale and agreed a partnership on in-orbit servicing, and it backs Orbital Lasers.">SKY Perfect JSAT</span>,</span>
+                <span class="adr-nw"><span class="adr-name" title="Japan's air force space unit, formed as the Space Operations Wing on 23 March 2026 (it was a group). Its job is space domain awareness: watching what is in orbit. It works from Fuchu, Tokyo, and Yamaguchi.">JASDF Space Operations Wing</span>,</span>
+                <span class="adr-nw"><span class="adr-name" title="Tokyo start-up building a catalogue of objects in orbit, including debris under 10 cm that is hard to track today. Chosen for JAXA's Space Strategy Fund; signed a space-awareness agreement with Axelspace on 1 September 2026.">Star Signal Solutions</span>,</span>
+                <span class="adr-nw"><span class="adr-name" title="Tokyo satellite maker. Seven GRUS-3 satellites launched on a Falcon 9 on 7 July 2026; in September it said four had lost their high-speed downlink and cannot be recovered.">Axelspace</span>,</span>
+                <span class="adr-nw"><span class="adr-name" title="Japanese rocket company building ZERO, a two-stage rocket for up to 1,000 kg to low orbit. ZERO has not flown yet: its launch pad is due to be finished in early 2027, and seven satellites are booked for its first flight.">Interstellar Technologies</span>.</span></li>
               </ul>
               <ul class="adr-list">
               <li class="adr-also">Other <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-countries">(more)</button></li>
