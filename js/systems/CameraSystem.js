@@ -989,6 +989,7 @@ export class CameraSystem {
       reelView: false,                    // reel view (B2): the focus rides with a daughter on her reel home
       reelSeen: false,                    // she has been on a reel home during this focus
       reelSeq: 0,                         // which reel (ArmUnit._rhReelSeq) the view follows
+      spell: null,                        // wait view: the waiting spell this focus began on ({n, live}; null for every other focus)
       rate: 1 / CATCH_FOCUS.IN_S,         // |du/dt| in the current direction
       timer: 0,                           // real seconds in the current phase (wait / tip / end)
       net: null,                          // the mother NetProjectile that caught it
@@ -1016,6 +1017,10 @@ export class CameraSystem {
     };
     this._takeoverDistU = null; // FB8: the distance a camera input took over from the focus, until the ladder controller has read it
     this._reelViewOff = null;   // {arm, seq}: the reel whose view he ended (or that was refused): not started again
+    // wait view (2026-10-27, DECISIONS §46): the view goes to a daughter who waits in STATION_KEEP for N.
+    this._waitSpells = new Map();   // ArmUnit -> {n, live}: a spell runs from her first STATION_KEEP until a state that is not part of the catch
+    this._waitSpellSeq = 0;         // spells counted over all daughters (the oldest still waiting gets the view first)
+    this._waitViewOff = new Map();  // ArmUnit -> spell number: the waiting spell whose view he ended (or that the mother's catch took): not started again in that spell
     this._unsubs.push(eventBus.on(Events.NET_CATCH_SUCCESS, (p) => this._onCatchFocusStart(p)));
     this._unsubs.push(eventBus.on(Events.NET_RELEASED, (p) => this._onCatchFocusLost(p, 'net released')));
     this._unsubs.push(eventBus.on(Events.NET_CATCH_MISS, (p) => this._onCatchFocusLost(p, 'net missed')));
@@ -4988,7 +4993,7 @@ export class CameraSystem {
    */
   catchFocusState() {
     const f = this._catchFocus;
-    return { active: f.active, engaging: f.engaging, phase: f.phase, w: f.w, wa: f.wa, tipIndex: f.tipIndex, kind: f.kind, cut: f.cut, reelView: f.reelView, dist: f.dist };
+    return { active: f.active, engaging: f.engaging, phase: f.phase, w: f.w, wa: f.wa, tipIndex: f.tipIndex, kind: f.kind, cut: f.cut, reelView: f.reelView, dist: f.dist, armIndex: f.armIndex };
   }
 
   /** One console line per catch-focus event (start / refused / cancel / end), never per frame. */
@@ -5007,7 +5012,7 @@ export class CameraSystem {
     f.active = false; f.engaging = true; f.phase = 'idle';
     f.u = 0; f.w = 0; f.wa = 0; f.rate = 1 / CATCH_FOCUS.IN_S; f.timer = 0;
     f.look.set(0, 0, 0); f.hop.set(0, 0, 0); f.hopVel.set(0, 0, 0); f.dist = CATCH_FOCUS.DIST_U; f.wantDist = CATCH_FOCUS.DIST_U;
-    f.reelView = false; f.reelSeen = false; f.reelSeq = 0; f.safeDist = 0; f.jumpRun = 0;
+    f.reelView = false; f.reelSeen = false; f.reelSeq = 0; f.safeDist = 0; f.jumpRun = 0; f.spell = null;
     f.takenOver = false; f.camRelOk = false;
     f.net = null; f.debris = null; f.podIndex = -1; f.tipIndex = -1;
     f.kind = 'mother'; f.cut = false; f.snapPending = false; f.armIndex = -1; f.arm = null; f.totalS = 0; f.collarS = 0;
@@ -5044,19 +5049,24 @@ export class CameraSystem {
    * @param {THREE.Vector3} [pos] - where the shot is when there is no catch (the daughter)
    * @private
    */
-  _beginCatchFocus(kind, net, d, phase, label, pos) {
+  _beginCatchFocus(kind, net, d, phase, label, pos, noFarCut = false) {
     const f = this._catchFocus;
     const lc = this._ladderCam;
     // no-melt: a focus that is still engaged when another catch begins ends first, with its own `end` line (it used to be
     // overwritten silently, so a catch's focus had a `start` and no `end`).
-    if (f.active && f.engaging) this._releaseCatchFocus('a new catch began');
+    if (f.active && f.engaging) {
+      // the mother's own catch (or a lasso) took the shot: this waiting spell is done with it. Another DAUGHTER's catch is not
+      // a mark: she gets the view back when that focus is released (F1 R3)
+      if (kind !== 'daughter' && f.spell && f.arm) this._waitViewOff.set(f.arm, f.spell.n);
+      this._releaseCatchFocus('a new catch began');
+    }
     if (f.takenOver) { f.u = 0; f.takenOver = false; f.camRelOk = false; }   // a camera input took the last one over: this is a fresh focus
     f.active = true; f.engaging = true; f.phase = phase; f.timer = 0;
     f.kind = kind; f.totalS = 0; f.collarS = 0;
     f.rate = 1 / CATCH_FOCUS.IN_S;
     f.net = net; f.debris = d; f.podIndex = net && net.podIndex != null ? net.podIndex : -1; f.tipIndex = -1;
     f.armIndex = -1; f.arm = null;
-    f.reelView = false; f.reelSeen = false; f.reelSeq = 0; f.safeDist = 0; f.jumpRun = 0;
+    f.reelView = false; f.reelSeen = false; f.reelSeq = 0; f.safeDist = 0; f.jumpRun = 0; f.spell = null;
     f.wantDist = CATCH_FOCUS.DIST_U;
     if (f.u <= 0) { f.off.set(0, 0, 0); f.dirSeeded = false; f.relSeeded = false; f.vel.set(0, 0, 0); f.dist = CATCH_FOCUS.DIST_U; f.look.set(0, 0, 0); f.hop.set(0, 0, 0); f.hopVel.set(0, 0, 0); }   // a fresh focus starts ON the mother
     // A CUT, not an ease: reduced motion asks for no camera travel, and a catch tens or hundreds of metres from the
@@ -5069,7 +5079,7 @@ export class CameraSystem {
     const anchor = this._ladderShipAnchor(now, f.tmp);
     const at = (d && d._scenePosition) || pos;
     const far = !!at && anchor.distanceTo(at) > CATCH_FOCUS.FAR_CUT_U;
-    f.cut = this._prefersReducedMotion() || far;
+    f.cut = this._prefersReducedMotion() || (far && !noFarCut);   // wait view: eased in as he was told, however far she waits
     f.snapPending = f.cut;
     this._catchFocusLog(`start ${label} level F${lc.floor}${f.cut ? ' (cut)' : ''}`);
   }
@@ -5095,6 +5105,12 @@ export class CameraSystem {
     const d = net && net.targetDebris;
     if (!d || !d._scenePosition) { this._catchFocusLog(`refused ${label}: no catch to look at`); return; }
     const on = this._catchFocus;
+    if (daughter && on.active && on.engaging && on.phase === 'station' && on.armIndex === payload.armIndex) {
+      // wait view: her net has caught her piece: the same focus goes on as her haul (no release, no cut, no hand-back)
+      on.phase = 'haul'; on.timer = 0; on.totalS = 0; on.net = net; on.debris = d;
+      this._catchFocusLog(`wait view daughter ${payload.armIndex} -> haul`);
+      return;
+    }
     if (on.active && on.engaging && on.debris === d) return;                // the same catch announced twice: already on it
     this._beginCatchFocus(daughter ? 'daughter' : 'mother', net, d, daughter ? 'haul' : 'reel', label);
     if (daughter) {
@@ -5150,10 +5166,18 @@ export class CameraSystem {
     if (!f.active) return false;
     const was = f.engaging;
     if (was && f.kind === 'daughter' && f.arm) {
-      // reel view: his own input ends it for THIS reel; before her reel has begun (still on the catch) that is the next one
-      const seq = f.arm._rhReelSeq | 0;
-      this._reelViewOff = { arm: f.arm, seq: (f.reelSeen || f.reelView) ? seq : seq + 1 };
+      // reel view: his own input ends it for THIS reel; before her reel has begun (still on the catch) that is the next one.
+      // wait view: ending the waiting view must NOT touch this: her later reel home still gets the reel view (§35 row 4)
+      if (f.phase !== 'station') {
+        const seq = f.arm._rhReelSeq | 0;
+        this._reelViewOff = { arm: f.arm, seq: (f.reelSeen || f.reelView) ? seq : seq + 1 };
+      }
     }
+    // wait view (F1 R1/R2): HIS input (drag, zoom, wheel, Esc/Space/Enter, a number key, a floor jump) takes the view back to the
+    // mother for good: every daughter waiting at this moment is marked off (else the next frame hands the view to another
+    // waiting daughter). A new waiting spell may take it again. A ride, a level change or a piloted daughter are not his input.
+    const internal = cause === 'ladder changing level' || cause === 'level changed' || cause === 'daughter piloted';
+    if (was && !internal) this._markWaitSpellsOff();
     // fix round 1 (FB2): his own camera input leaves the camera WHERE HE PUT IT. The ladder takes over from the pose on
     // screen (no flight back to the ladder view, up to 50 m in 0.3 s); only the look-at point fades back to the mother.
     // The internal causes (a ride, a level change, a piloted daughter) and the skip key still walk back as before.
@@ -5204,6 +5228,7 @@ export class CameraSystem {
     const f = this._catchFocus;
     if (!f.active || !f.engaging) return;
     if (f.kind === 'daughter' && f.reelView) return;                     // reel view: it ends with her reel (state), not with a net event
+    if (f.phase === 'station') return;                                   // wait view: a missed net puts her back to waiting; her state ends it
     if (p && p.debrisId != null && f.debris && p.debrisId !== f.debris.id) return;
     if (p && p.podIndex != null && p.podIndex >= 0 && p.podIndex !== f.podIndex) return;
     this._releaseCatchFocus(reason);
@@ -5271,8 +5296,12 @@ export class CameraSystem {
   _catchFocusPoint(dt) {
     const f = this._catchFocus;
     const player = this._player;
-    const d = f.debris;
     f.wantDist = CATCH_FOCUS.DIST_U;
+    if (f.phase === 'station') {
+      const r = this._waitViewStep();
+      if (r !== 'haul') return r;                                           // true: her waiting shot is in f.tgt; false: released
+    }
+    const d = f.debris;
     // a daughter's reel with nothing in the net has no catch to look at: the shot is her
     const emptyReel = f.kind === 'daughter' && f.arm && !d;
     if (!emptyReel && (!d || d.alive === false || !d._scenePosition)) {
@@ -5316,6 +5345,12 @@ export class CameraSystem {
       const stage = arm && typeof arm.reelHomeStage === 'function' ? arm.reelHomeStage() : null;
       if (f.totalS > CATCH_FOCUS.DAUGHTER_MAX_S) { this._releaseCatchFocus('daughter haul took too long'); return false; }
       if (stage) { f.reelView = true; f.reelSeen = true; f.reelSeq = arm._rhReelSeq | 0; }
+      if (f.spell && f.phase === 'haul' && !f.reelSeen && st === AS.STATION_KEEP) {
+        // wait view: a failed catch left her waiting again (same spell): back to the waiting shot
+        f.phase = 'station'; f.timer = 0; f.net = null;
+        f.debris = arm._stationKeepTarget || arm.target || null;
+        return this._waitViewStep() === true;
+      }
       if (f.phase === 'haul' && st === AS.HOLDING_CATCH) { f.phase = 'held'; f.timer = 0; }
       else if (f.phase === 'haul' && f.reelSeen && !stage && (st === AS.DOCKED || st === AS.RELOADING)) { f.phase = 'held'; f.timer = 0; }
       else if (st === AS.EXPENDED || st === AS.DEORBITING || (!f.reelSeen && (st === AS.DOCKED || st === AS.RELOADING))) {
@@ -5430,6 +5465,130 @@ export class CameraSystem {
   }
 
   /**
+   * wait view (DECISIONS §46 row 1): her states that are part of one waiting spell. A spell runs from her first
+   * STATION_KEEP through her capture and reel home; any other state (DOCKED, EXPENDED, DEORBITING, TRANSIT, RETURNING
+   * on the FEEP flight ...) ends it, and the next STATION_KEEP is a new spell.
+   * @param {string} st - ArmUnit state
+   * @returns {boolean}
+   */
+  _waitSpellState(st) {
+    const AS = Constants.ARM_STATES;
+    return st === AS.STATION_KEEP || st === AS.NETTING || st === AS.PAD_CONTACT || st === AS.MAGNETIC_GRAPPLE
+      || st === AS.GRIPPER_GRAPPLE || st === AS.GRAPPLED || st === AS.HAULING || st === AS.REELING
+      || st === AS.HOLDING_CATCH || st === AS.APPROACH || st === AS.DOCKING;
+  }
+
+  /** wait view: mark off every waiting spell that is live right now (he took the view back; none of them gets it again). */
+  _markWaitSpellsOff() {
+    for (const [a, rec] of this._waitSpells) if (rec.live) this._waitViewOff.set(a, rec.n);
+  }
+
+  /** Count each daughter's waiting spells by reading her state (no event: every path into STATION_KEEP counts). */
+  _trackWaitSpells(arms) {
+    const SK = Constants.ARM_STATES.STATION_KEEP;
+    for (const a of arms) {
+      if (!a) continue;
+      let rec = this._waitSpells.get(a);
+      if (a.state === SK) {
+        if (!rec || !rec.live) { rec = { n: ++this._waitSpellSeq, live: true }; this._waitSpells.set(a, rec); }
+      } else if (rec && rec.live && !this._waitSpellState(a.state)) rec.live = false;
+    }
+  }
+
+  /**
+   * wait view: each frame, give the view to a daughter who waits for N (STATION_KEEP) when nothing holds the shot, the
+   * ladder is on floors 1-3 and no one flies a daughter. Oldest waiting spell first (W5). Never marks or logs a refusal:
+   * it simply starts later, when the refusal clears.
+   */
+  _pollWaitView() {
+    const arms = this._player && this._player.armManager && this._player.armManager.arms;
+    if (!Array.isArray(arms)) return;
+    this._trackWaitSpells(arms);
+    const f = this._catchFocus;
+    if (f.active && f.engaging) return;                                    // a catch focus (or an older waiting view) holds the shot
+    if (this.currentView === CameraViews.ARM_PILOT || this._ladderFollowTarget() || this.isIonStartupActive()) return;
+    const lc = this._ladderCam;
+    if (!lc.active || lc.riding || this._catchFocusRefusal()) return;
+    const SK = Constants.ARM_STATES.STATION_KEEP;
+    const off = this._waitViewOff;
+    let best = null, bestRec = null, bestPiece = null;
+    for (const a of arms) {
+      if (!a || a.state !== SK) continue;
+      const rec = this._waitSpells.get(a);
+      if (!rec || !rec.live) continue;
+      if (off.get(a) === rec.n) continue;                                  // he ended the view of this spell
+      const piece = a._stationKeepTarget || a.target;
+      if (!piece || piece.alive === false || !piece._scenePosition) continue;
+      if (!best || rec.n < bestRec.n) { best = a; bestRec = rec; bestPiece = piece; }
+    }
+    if (!best) return;
+    // eased in as he was told ("view eases to a daughter"), however far she waits: a cut only for reduced motion
+    this._beginCatchFocus('daughter', null, bestPiece, 'station', `wait view daughter ${best.index}`, best.position, true);
+    f.armIndex = best.index; f.arm = best; f.podIndex = -1; f.spell = bestRec;
+  }
+
+  /**
+   * wait view: one frame of a 'station' focus. Keeps the shot on her and her piece while she waits and while her capture
+   * runs (firing moves her SK -> NETTING before any catch event), hands over to the haul phase on her reel home or her
+   * hold at the strut, and lets go when she stops waiting without a capture.
+   * @returns {boolean|'haul'} true: the shot is in `f.tgt`; false: released; 'haul': converted, carry on as a haul
+   */
+  _waitViewStep() {
+    const f = this._catchFocus;
+    const arm = f.arm;
+    const AS = Constants.ARM_STATES;
+    if (!arm) { this._releaseCatchFocus('waiting daughter is gone'); return false; }
+    const st = arm.state;
+    const stage = typeof arm.reelHomeStage === 'function' ? arm.reelHomeStage() : null;
+    if (stage || st === AS.HOLDING_CATCH) {
+      // her reel home (or her hold at the strut): the same focus goes on as her haul. The wait may have run longer than
+      // DAUGHTER_MAX_S, so the haul's clock starts now.
+      f.phase = 'haul'; f.timer = 0; f.totalS = 0; f.debris = arm.capturedDebris || null;
+      if (stage) { f.reelView = true; f.reelSeen = true; f.reelSeq = arm._rhReelSeq | 0; }
+      this._catchFocusLog(`wait view daughter ${arm.index} -> haul`);
+      return 'haul';
+    }
+    const sk = st === AS.STATION_KEEP;
+    const capturing = st === AS.NETTING || st === AS.PAD_CONTACT || st === AS.MAGNETIC_GRAPPLE || st === AS.GRIPPER_GRAPPLE
+      || st === AS.GRAPPLED || st === AS.HAULING || st === AS.REELING || st === AS.APPROACH;
+    if (!sk && !capturing) { this._releaseCatchFocus('she stopped waiting'); return false; }
+    let piece = arm.capturedDebris || arm._stationKeepTarget || arm.target || null;
+    if (piece && (piece.alive === false || !piece._scenePosition)) piece = null;
+    if (sk && !piece) {
+      // her piece is gone while she waits: nothing to wait for. Marked off so it does not restart on the same frame.
+      if (f.spell) this._waitViewOff.set(arm, f.spell.n);
+      this._releaseCatchFocus('her piece is gone');
+      return false;
+    }
+    f.debris = piece;
+    this._reelViewPoint(arm, piece);                                       // her and her piece, with the reel view's framing and distance rules
+    return true;
+  }
+
+  /**
+   * wait view: a number key (or any other "I will take it from here" input that reaches the camera by name) ends the
+   * waiting view for this spell. Does nothing for any other focus.
+   * @param {string} [cause]
+   * @returns {boolean} true when a waiting view was up and has been ended
+   */
+  endWaitView(cause = 'number key') {
+    const f = this._catchFocus;
+    if (!f.active || !f.engaging || f.phase !== 'station') return false;
+    return this.ladderCancelCatchFocus(cause);
+  }
+
+  /**
+   * wait view: the daughter the view is on while she waits (STATION_KEEP): N works her (DECISIONS §46 row 2).
+   * @returns {object|null} her ArmUnit, or null
+   */
+  getWaitViewArm() {
+    const f = this._catchFocus;
+    if (!f.active || !f.engaging || f.kind !== 'daughter' || !f.arm) return null;
+    if (f.phase !== 'station' && f.phase !== 'haul') return null;
+    return f.arm.state === Constants.ARM_STATES.STATION_KEEP ? f.arm : null;
+  }
+
+  /**
    * reel view (B2): look for new reels each frame (by reading arm state; no event). Starts the view on the NEWEST daughter
    * on a reel home, floors 1-3, unless he ended the view of that reel; a view already on an older reel moves to the new one.
    */
@@ -5452,7 +5611,7 @@ export class CameraSystem {
     if (f.active && f.engaging) {
       if (f.kind === 'daughter' && f.arm !== best && seq > (f.reelSeq | 0)) {   // two reels at once: follow the newest
         f.arm = best; f.armIndex = best.index; f.debris = best.capturedDebris || null; f.phase = 'haul'; f.timer = 0;
-        f.reelView = true; f.reelSeen = true; f.reelSeq = seq;
+        f.reelView = true; f.reelSeen = true; f.reelSeq = seq; f.spell = null; f.totalS = 0;
         this._catchFocusLog(`reel view moves to daughter ${best.index}`);
       }
       return;                                                              // another focus (a mother catch, a lasso) keeps the shot
@@ -5552,6 +5711,7 @@ export class CameraSystem {
   _updateCatchFocus(dt, playerPos) {
     const f = this._catchFocus;
     this._pollReelView();                                                  // reel view (B2): a daughter wound home gets the shot
+    this._pollWaitView();                                                  // wait view: a daughter waiting for N gets it when nothing else holds it
     if (!f.active) { f.w = 0; f.wa = 0; f.azKeep.set = false; return; }
     const lc = this._ladderCam;
     if (f.engaging) {
@@ -6007,7 +6167,7 @@ export class CameraSystem {
       anchorPos.addScaledVector(cf.off, cf.w);
       // FB11: the reel view stands at ITS distance, never nearer than the safe shot (a shorter saved ladder distance used to
       // win the min and put a 5 m catch inside the 3 m near plane); the catch focus proper keeps the nearer of the two
-      const focusDist = (cf.reelView && cf.safeDist > 0) ? Math.max(cf.dist, cf.safeDist) : Math.min(lc.curDistU, cf.dist);
+      const focusDist = ((cf.reelView || cf.phase === 'station') && cf.safeDist > 0) ? Math.max(cf.dist, cf.safeDist) : Math.min(lc.curDistU, cf.dist);
       distU += (focusDist - lc.curDistU) * cf.w;
       if (cf.dirSeeded) dirUse = this._catchFocusBlendDir(lc.dir, cf.dir, cf.w, cf.v, cf.azKeep);   // never over the radial pole
     }

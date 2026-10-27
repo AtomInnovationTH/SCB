@@ -109,6 +109,10 @@ function holdingDaughter(d, hyp) {
   // F2: by id, as the claim does - a Tab-selected snapshot of her piece is still her piece (identity `===` missed it
   // and the claim then refused N at a piece she holds).
   const holds = (a) => inSK(a) && samePiece(pieceOf(a), target);
+  // wait view (DECISIONS §46 row 2): N goes where the view is. With the camera on a daughter who waits for N, she is the
+  // one N works, even when another in-reach piece is selected; Esc or a drag gives the view (and N) back to the mother.
+  const viewArm = d && d.cameraSystem && typeof d.cameraSystem.getWaitViewArm === 'function' ? d.cameraSystem.getWaitViewArm() : null;
+  if (viewArm && am.arms.includes(viewArm) && inSK(viewArm)) return viewArm;
   const sel = (am.selectedArmIndex >= 0 && am.selectedArmIndex < am.arms.length) ? am.arms[am.selectedArmIndex] : null;
   if (target) {
     if (holds(sel)) return sel;
@@ -2352,6 +2356,8 @@ export class InputManager {
    */
   _handleArmKey(armIndex) {
     const d = this._deps;
+    // wait view (DECISIONS §46 row 1, W4): any number key ends the view that went to a waiting daughter (piloting follows as before)
+    if (d && d.cameraSystem && typeof d.cameraSystem.endWaitView === 'function') d.cameraSystem.endWaitView('number key');
     if (!d.armManager) return;
 
     const arm = d.armManager.arms[armIndex];
