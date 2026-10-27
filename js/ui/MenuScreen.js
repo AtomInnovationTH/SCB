@@ -627,14 +627,15 @@ export class MenuScreen {
               <ul class="adr-list" id="adr-more-countries" hidden>
               <li class="adr-also">
                 <span class="adr-nw"><span class="adr-name" title="America's space agency. Its Orbital Debris Program Office wrote NASA's first debris-mitigation rules in 1995 and builds the ORDEM and LEGEND debris models.">NASA</span> (USA),</span>
-                <span class="adr-nw"><span class="adr-name" title="Europe's space agency. Its Space Debris Office, mainly at ESOC in Darmstadt, coordinates European debris research; its Clean Space initiative covers zero-debris technology and in-orbit servicing.">ESA</span> (Europe).</span></li>
+                <span class="adr-nw"><span class="adr-name" title="Europe's space agency. Its Space Debris Office, mainly at ESOC in Darmstadt, coordinates European debris research; its Clean Space initiative covers zero-debris technology and in-orbit servicing.">ESA</span> (Europe),</span>
+                <span class="adr-nw"><span class="adr-name" title="Chose ClearSpace UK for its Active Debris Removal mission: robotic arms grab two dead British satellites, then thrusters push each into a controlled re-entry. The public may name the mission; online suggestions are not the agency's choice.">UK Space Agency</span> (UK).</span></li>
               </ul>
             </details>
 
             <!-- Kessler syndrome — absorbs the former true-stories hook group:
-                 10 entries, chronological, year in the .adr-sub tag. -->
+                 11 entries, chronological, year in the .adr-sub tag. -->
             <details class="adr-group">
-              <summary>Kessler syndrome<span class="adr-count">10</span></summary>
+              <summary>Kessler syndrome<span class="adr-count">11</span></summary>
               <ul class="adr-list">
               <li class="adr-prose">Proposed by NASA's Donald Kessler in 1978: once orbital junk gets dense enough, each collision throws off fragments that cause more collisions. A runaway cascade that can make whole orbits unusable for generations. Every dead satellite left up there raises the odds. The record so far:</li>
               <li><span class="adr-name" title="The nuclear-powered Kosmos 954 scattered radioactive debris across northern Canada in 1978. Canada billed the USSR under the 1972 Liability Convention, the only space-crash bill ever paid.">The only space-crash bill ever</span> <span class="adr-sub">Canada · 1978</span></li>
@@ -646,6 +647,7 @@ export class MenuScreen {
               <li><span class="adr-name" title="A minor solar storm in 2022 warmed and puffed up the upper atmosphere, adding just enough drag to pull 38 freshly-launched Starlink satellites back down before they reached their orbits.">A solar storm sinks 38 Starlinks</span> <span class="adr-sub">2022</span></li>
               <li><span class="adr-name" title="A battery pallet jettisoned from the ISS survived reentry in 2024 and punched clean through the roof of a Florida home. It was supposed to burn up entirely.">A piece of the Station hits a house</span> <span class="adr-sub">Florida · 2024</span></li>
               <li><span class="adr-name" title="Kosmos 482 was a Soviet Venus lander stranded in Earth orbit by a 1972 launch failure. Built to survive Venus, it fell back to Earth intact 53 years later, in 2025.">The Venus lander that stayed</span> <span class="adr-sub">1972 → 2025</span></li>
+              <li><span class="adr-name" title="Darren McKnight's 2025 paper: removing the 50 most dangerous objects in low orbit would halve their debris-making potential. 34 are Russian or Soviet, 10 Chinese; 88% are rocket bodies. The biggest old ones are the most valuable removals.">The 50 most dangerous objects</span> <span class="adr-sub">2025 · 88% rocket bodies</span></li>
               <li><span class="adr-name" title="The US Space Surveillance Network watches for close passes; the ISS fires its thrusters to dodge when collision odds exceed 1 in 10,000. About once a year on average (NASA). If a threat is spotted too late, the crew shelters in their return capsules.">ISS dodges debris</span> <span class="adr-sub">~1× / year</span></li>
               </ul>
             </details>
@@ -671,7 +673,7 @@ export class MenuScreen {
               <li><span class="adr-name" title="Hyderabad start-up. EMBRACE is a soft robotic hand: petals that close gently around a dead satellite. It rode Vikram-1 into orbit in July 2026, but the petals did not open. Nothing was caught; the team still got data.">Cosmoserve Space</span> <span class="adr-sub">India · flew 2026, petals stuck</span></li>
               <li><span class="adr-name" title="Tokyo-based pure-play debris remover. In 2024 its ADRAS-J spacecraft flew within ~15 m of a discarded Japanese rocket stage. The follow-up ADRAS-J2 will grab and de-orbit that stage, launching in Japan's 2027 fiscal year (April 2027 to March 2028).">Astroscale</span> <span class="adr-sub">Japan · ADRAS-J</span></li>
               <li><span class="adr-name" title="Subsidiary of Northrop Grumman, and the only company doing this routinely today. Its Mission Extension Vehicles docked with live Intelsat satellites (2020–21) to add years of life. A new Mission Robotic Vehicle launched in July 2026.">Northrop Grumman SpaceLogistics</span> <span class="adr-sub">USA</span></li>
-              <li><span class="adr-name" title="Swiss start-up building Europe's first debris-removal mission for ESA. Its first target, a rocket adapter, was hit by other debris, so the mission now aims to capture and de-orbit the retired PROBA-1 satellite. Launch ~2028.">ClearSpace</span> <span class="adr-sub">Switzerland</span></li>
+              <li><span class="adr-name" title="Swiss start-up. Its UK arm will lead the UK Space Agency's debris-removal mission: £61 million (about $81 million), launch 2029 from SaxaVord, Shetland, two dead British satellites removed by 2032. Its ESA mission targets PROBA-1.">ClearSpace</span> <span class="adr-sub">Switzerland · UK</span></li>
               <li><span class="adr-name" title="Italian space-logistics firm. Its ION space tug has flown since 2020; next, its RISE mission for ESA will service a satellite in geostationary orbit, around 2028.">D-Orbit</span> <span class="adr-sub">Italy</span></li>
               <li><span class="adr-name" title="Seattle start-up. Its Otter vehicle is designed to dock with satellites that were never built to be caught; it won a US Space Force contract to de-orbit a retired satellite.">Starfish Space</span> <span class="adr-sub">USA</span></li>
               <li><span class="adr-name" title="Pioneer of in-orbit refuelling. 'gas stations in space'. Its RAFTI fuel port is becoming a de-facto industry standard for refuellable satellites.">Orbit Fab</span> <span class="adr-sub">USA</span></li>

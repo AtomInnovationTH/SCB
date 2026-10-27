@@ -4374,6 +4374,13 @@ export class AutopilotSystem {
     do { this._pairSearchUnit(st); } while (!st.done && (budgetMs <= 0 || performance.now() - t0 < budgetMs));
   }
 
+  /** @private the larger of the pair's two launch misses the finder accepts (deg): the wheel kit turns the tethers into their planes without gas, so it gets the wider `_KIT` limit (never the tighter one) */
+  _pairPlaneMax() {
+    const PS = Constants.PAIR_SHOT, p = this._player, base = PS.PLANE_MISS_MAX_DEG ?? Infinity;
+    const kit = !!p && typeof p.hasWheelKit === 'function' && p.hasWheelKit();
+    return kit ? Math.max(base, PS.PLANE_MISS_MAX_DEG_KIT ?? base) : base;
+  }
+
   /** @private one unit of the search: the next answer of the candidate in hand, or else the next candidate's solve */
   _pairSearchUnit(st) {
     const PS = Constants.PAIR_SHOT, AIM = Constants.AIM, am = this._armManager;
@@ -4391,7 +4398,7 @@ export class AutopilotSystem {
       if (r.missA > PS.MISS_DEG || r.missB > PS.MISS_DEG || r.turnDeg > PS.TURN_DEG + 1e-6) return null;
       // S5 pair plane: a line that leaves a piece far off its strut's swing plane makes the mother turn it into the plane during the reel,
       // and that turn costs more than the pair saves (Constants PAIR_SHOT.PLANE_MISS_MAX_DEG)
-      if (Math.max(r.missA, r.missB) > (PS.PLANE_MISS_MAX_DEG ?? Infinity)) { st.why = st.why || {}; st.why['pair plane'] = (st.why['pair plane'] || 0) + 1; return null; }
+      if (Math.max(r.missA, r.missB) > this._pairPlaneMax()) { st.why = st.why || {}; st.why['pair plane'] = (st.why['pair plane'] || 0) + 1; return null; }
       const fuelG = rateG * (r.missA + r.missB);
       if (fuelG > capG) return null;
       const flight = r.alpha <= Math.PI / 2 ? 2 * r.alpha : 2 * Math.PI - 2 * r.alpha;   // the angle the two daughters fly apart by
@@ -4511,7 +4518,7 @@ export class AutopilotSystem {
     const R0 = pairRotationOf(p.quaternion), r1 = this._pairRel(cur.t1, [0, 0, 0]), r2 = this._pairRel(cur.t2, [0, 0, 0]);
     const r = solvePairAimAll(cur.g, R0, r1, r2, { turnDeg: PS.TURN_DEG }).find((x) => !pairTethersCross(cur.g, pairAttitudeFor(R0, x.n), x.alpha, x.swap, r1, r2));
     if (!r || r.missA > PS.MISS_DEG || r.missB > PS.MISS_DEG) return null;
-    if (Math.max(r.missA, r.missB) > (PS.PLANE_MISS_MAX_DEG ?? Infinity)) return null;                  // S5 pair plane: as in the search
+    if (Math.max(r.missA, r.missB) > this._pairPlaneMax()) return null;                                  // S5 pair plane: as in the search
     if (typeof am.pairLineBlockedAt === 'function' && am.pairLineBlockedAt(cur.armA, cur.armB, r.alpha)) return null;
     const fuelG = PS.FUEL_G_PER_DEG[cur.type] * (r.missA + r.missB);
     if (fuelG > PS.FUEL_G[cur.type]) return null;

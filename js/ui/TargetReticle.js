@@ -30,6 +30,19 @@ import { engineGasKg, engineDeltaV, engineTankDryKg, coldGasPoolToKg } from '../
 // ============================================================================
 
 const MAX_RETICLE_RANGE = 1.0;        // 100km in scene units
+// Closing-rate readout (owner 10-27, "the closing 1 m/s flashes"). Measured with the real daughter approach: her last
+// approach is commanded at exactly 0.5 m/s, the old line showed at |rate| >= 0.5 and rounded 0.5 up to "1", so the raw
+// per-frame rate sat on the edge and the line flipped on rounding noise (137 flips in 3 s at 60 Hz). Now: an
+// exponential average (about 0.3 s), shown from 0.3 m/s and hidden below 0.2 m/s (her 0.5 m/s approach reads steadily,
+// to one decimal below 1 m/s). The average starts over when the measuring point jumps (the reticle measures from her only
+// while she is flown, so a switch of view moves the point), see _relJump, and as a backstop when one frame's rate is more
+// than CLOSING_BACKSTOP_MS away from the average.
+const CLOSING_TAU_S = 0.3;
+const CLOSING_SHOW_MS = 0.3;
+const CLOSING_HIDE_MS = 0.2;
+const CLOSING_JUMP_M = 1;            // a frame whose relative motion departs from the last frame's by more than this = a jump
+const CLOSING_BACKSTOP_MS = 20;      // |raw - average| above this: start over
+const CLOSING_STALE_S = 0.5;         // not seen this long: start over (hidden canvas, other target, off screen)
 const OFFSCREEN_ARROW_RANGE = 0.5;    // 50km for off-screen arrows
 const ACTIVE_SAT_ARROW_RANGE = 0.2;   // 20km for active sat warnings
 const EDGE_PADDING = 40;              // px from screen edge for arrows
@@ -344,6 +357,7 @@ export class TargetReticle {
 
     // Closure rate tracking
     this.previousDistances = new Map();
+    this._closing = new Map();      // target id -> { rate (m/s, smoothed), shown, t (reticle clock) }
     this._dt = 0;
 
     // First-encounter callout tracking
@@ -360,6 +374,9 @@ export class TargetReticle {
     this._selectedTargetDistKm = 0;
     this._prevSelectedTargetDist = null;
     this._prevClosureTargetId = null;   // reset tracking on target switch
+    this._selRel = null;                // measuring-point tracker for the prograde line (see _relJump)
+    this._selClosureKms = null;         // smoothed km/s behind _selectedClosureRate
+    this._selClosureShown = false;      // hysteresis state of the prograde marker's "Closing: N m/s" line
     this._selectedClosureRate = 0;      // km/s, positive = closing
 
     // Phase R6: Cached player ΔV from PLAYER_TELEMETRY event
@@ -759,7 +776,9 @@ export class TargetReticle {
     // cannot spike off a stale distance. Nothing below is read by another
     // system — every cross-system input to the reticle arrives via events.
     if (!this._visible) {
-      this._prevSelectedTargetDist = null;
+      this._prevSelectedTargetDist = null; this._selClosureKms = null; this._selRel = null;
+      if (this.previousDistances) this.previousDistances.clear();
+      if (this._closing) this._closing.clear();
       return;
     }
 
@@ -817,7 +836,7 @@ export class TargetReticle {
       const selTargetId = selTarget ? selTarget.id : null;
       // Reset previous distance when target changes to avoid closure rate spikes
       if (selTargetId !== this._prevClosureTargetId) {
-        this._prevSelectedTargetDist = null;
+        this._prevSelectedTargetDist = null; this._selClosureKms = null; this._selRel = null;
         this._prevClosureTargetId = selTargetId;
       }
       if (selTarget && (selTarget._scenePosition || selTarget.orbit)) {
@@ -840,12 +859,24 @@ export class TargetReticle {
         const dz = tz - data.playerPos.z;
         const distKm = Math.sqrt(dx * dx + dy * dy + dz * dz) / Constants.SCENE_SCALE;
         this._selectedTargetDistKm = distKm;
+        if (!this._selRel) this._selRel = { has: false };
+        const selJumped = this._relJump(this._selRel, dx, dy, dz, this._dt);
+        if (selJumped) { this._prevSelectedTargetDist = null; this._selClosureKms = null; }   // measuring point moved: start over
         if (this._dt > 0 && this._prevSelectedTargetDist !== null) {
-          this._selectedClosureRate = (this._prevSelectedTargetDist - distKm) / this._dt;
+          // km/s; smoothed like the target's own line (same time constant), so the 1 m/s edge below cannot flicker
+          const rawKms = (this._prevSelectedTargetDist - distKm) / this._dt;
+          if (this._selClosureKms != null && Math.abs(rawKms - this._selClosureKms) * 1000 > CLOSING_BACKSTOP_MS) {
+            this._selClosureKms = null;   // backstop: not a speed, start over (the next frame seeds the average)
+          } else {
+            this._selClosureKms = this._selClosureKms == null
+              ? rawKms
+              : this._selClosureKms + (rawKms - this._selClosureKms) * (1 - Math.exp(-this._dt / CLOSING_TAU_S));
+            this._selectedClosureRate = this._selClosureKms;
+          }
         }
         this._prevSelectedTargetDist = distKm;
       } else {
-        this._prevSelectedTargetDist = null;
+        this._prevSelectedTargetDist = null; this._selClosureKms = null;
       }
     }
 
@@ -940,6 +971,11 @@ export class TargetReticle {
     const activeIds = new Set(this._debrisTargets.map(t => t.id));
     for (const id of this.previousDistances.keys()) {
       if (!activeIds.has(id)) this.previousDistances.delete(id);
+    }
+    if (this._closing) {
+      for (const id of this._closing.keys()) {
+        if (!activeIds.has(id)) this._closing.delete(id);
+      }
     }
 
     // Phase 6: Restore shake transform
@@ -1116,6 +1152,66 @@ export class TargetReticle {
     };
   }
 
+  /**
+   * @private Did the measuring point jump this frame? `st` keeps the last relative position (target minus observer, scene
+   * units) and last relative velocity; a jump is a frame whose relative velocity differs from the last frame's by more
+   * than CLOSING_JUMP_M metres over the frame (a real approach or fly-by moves steadily, a switch of observer does not).
+   * After a jump the velocity memory is dropped, so the frame after it is not compared against the jump itself.
+   */
+  _relJump(st, dx, dy, dz, dt) {
+    let jumped = false;
+    if (st.has && dt > 0) {
+      const vx = (dx - st.x) / dt, vy = (dy - st.y) / dt, vz = (dz - st.z) / dt;
+      if (st.hasV) {
+        const devU = Math.hypot(vx - st.vx, vy - st.vy, vz - st.vz) * dt;   // scene units
+        jumped = devU * 1000 / Constants.SCENE_SCALE > CLOSING_JUMP_M;
+      }
+      st.hasV = !jumped; st.vx = vx; st.vy = vy; st.vz = vz;
+    } else {
+      st.hasV = false;
+    }
+    st.has = true; st.x = dx; st.y = dy; st.z = dz;
+    return jumped;
+  }
+
+  /**
+   * @private Smoothed closing rate for the selected target (m/s, positive = closing). `raw` is this frame's finite
+   * difference. Exponential average (CLOSING_TAU_S), per target id; the readout shows from CLOSING_SHOW_MS and hides
+   * below CLOSING_HIDE_MS, so a rate sitting on an edge cannot flip it frame to frame. A target not seen for
+   * CLOSING_STALE_S starts over, and the sample that ends the gap is dropped (its previous distance is old).
+   * @returns {{rate:number, shown:boolean}|null} null while there is no valid sample yet
+   */
+  _smoothClosing(id, raw, rel) {
+    if (!this._closing) this._closing = new Map();
+    let e = this._closing.get(id);
+    if (!e || this._time - e.t > CLOSING_STALE_S) {
+      e = { rate: null, shown: false, t: this._time, rel: { has: false } };
+      this._closing.set(id, e);
+      if (rel) this._relJump(e.rel, rel.x, rel.y, rel.z, this._dt);
+      return null;
+    }
+    e.t = this._time;
+    // The measuring point jumped (observer or reference changed), or this frame's rate is far from the average: the
+    // frame's difference is not a speed. Start over; the next frame seeds the average.
+    const jumped = rel ? this._relJump(e.rel, rel.x, rel.y, rel.z, this._dt) : false;
+    if (jumped || (e.rate !== null && Math.abs(raw - e.rate) > CLOSING_BACKSTOP_MS)) {
+      e.rate = null; e.shown = false;
+      return null;
+    }
+    if (!Number.isFinite(raw)) return e.rate === null ? null : e;
+    if (e.rate === null) {
+      e.rate = raw;
+    } else {
+      e.rate += (raw - e.rate) * (1 - Math.exp(-this._dt / CLOSING_TAU_S));
+    }
+    const a = Math.abs(e.rate);
+    e.shown = e.shown ? a >= CLOSING_HIDE_MS : a >= CLOSING_SHOW_MS;
+    // One decimal below 1 m/s, whole numbers from 1: switch at 0.85 / 0.95 with memory, so a rate hovering near 1 m/s
+    // does not alternate "1 m/s" and "0.9 m/s".
+    e.dec = e.dec == null ? a < 0.9 : (e.dec ? a < 0.95 : a < 0.85);
+    return e;
+  }
+
   // ==========================================================================
   // DEBRIS RETICLE DRAWING
   // ==========================================================================
@@ -1146,11 +1242,20 @@ export class TargetReticle {
 
     // Track closure rate (distance delta over time)
     target._closureRate = null;
+    target._closureShown = false;
+    target._closureDec = false;
     if (this._dt > 0) {
       const prevDist = this.previousDistances.get(target.id);
       this.previousDistances.set(target.id, distKm);
       if (prevDist !== undefined) {
-        target._closureRate = (prevDist - distKm) * 1000 / this._dt; // m/s
+        const raw = (prevDist - distKm) * 1000 / this._dt; // m/s, raw per frame (noisy; only the smoothed value is shown)
+        if (target.id === this._selectedTargetId) {
+          const c = this._smoothClosing(target.id, raw, playerPos
+            ? { x: worldPos.x - playerPos.x, y: worldPos.y - playerPos.y, z: worldPos.z - playerPos.z } : null);
+          if (c) { target._closureRate = c.rate; target._closureShown = c.shown; target._closureDec = !!c.dec; }
+        } else {
+          target._closureRate = raw;
+        }
       }
     }
 
@@ -1382,15 +1487,13 @@ export class TargetReticle {
     // --- Closure rate below distance (selected target only) ---
     // Plain words ("Closing"/"Opening") instead of ▲/▼ jargon for newcomers,
     // and nothing at all when the rate is negligible (no dead "0 m/s" line).
-    if (isSelected && target._closureRate != null && this._viewConfig.showClosureRate) {
-      const rate = target._closureRate;
+    if (isSelected && target._closureRate != null && target._closureShown && this._viewConfig.showClosureRate) {
+      const rate = target._closureRate;           // smoothed (see _smoothClosing)
       const absRate = Math.abs(rate);
-      if (absRate >= 0.5) {
-        ctx.font = mono(18);
-        ctx.textAlign = 'center';
-        ctx.fillStyle = rate > 0 ? COLORS.green : COLORS.red;
-        ctx.fillText(`${rate > 0 ? 'Closing' : 'Opening'} ${absRate.toFixed(0)} m/s`, x, y + half + 46);
-      }
+      ctx.font = mono(18);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = rate > 0 ? COLORS.green : COLORS.red;
+      ctx.fillText(`${rate > 0 ? 'Closing' : 'Opening'} ${target._closureDec ? absRate.toFixed(1) : absRate.toFixed(0)} m/s`, x, y + half + 46);
     }
 
     if (law && law.word && !(isSelected && target._despinning)) {
@@ -1836,8 +1939,11 @@ export class TargetReticle {
       // Phase R6: Closure rate + ETA for selected target — shown only when the
       // closure is actually meaningful (no dead "0 m/s" line when matched).
       if (this._selectedTargetDistKm > 0) {
-        const cr = this._selectedClosureRate; // km/s, positive = closing
-        if (Math.abs(cr) > 0.001) {
+        const cr = this._selectedClosureRate; // km/s, positive = closing (smoothed)
+        // shows from 1.1 m/s, hides below 0.9 m/s (it used to switch at exactly 1 m/s, the number it prints)
+        const crMs = Math.abs(cr) * 1000;
+        this._selClosureShown = this._selClosureShown ? crMs >= 0.9 : crMs >= 1.1;
+        if (this._selClosureShown) {
           ctx.font = mono(10);
           ctx.globalAlpha = 0.8;
           const label = cr > 0 ? 'Closing' : 'Opening';
@@ -1850,7 +1956,7 @@ export class TargetReticle {
           lineY += 12;
         }
         // ETA when closing on target
-        if (cr > 0.001) {
+        if (this._selClosureShown && cr > 0) {
           const etaSec = this._selectedTargetDistKm / cr;
           if (etaSec < 3600) { // Only show if < 1 hour
             const etaStr = etaSec > 120

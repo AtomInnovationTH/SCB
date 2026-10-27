@@ -5406,12 +5406,16 @@ export const Constants = {
     MAX_CANDIDATES: 8,       // the nearest pieces by bearing tried as the second piece
     REPLAN_S: 0.5,           // the offer is looked at again at most this often (and sooner when she turns or a piece is picked)
     HOLD_RATIO: 0.8,         // a standing offer is kept until a new pair beats its cost by this ratio
-    // S5 pair plane (plan daughter-pairs-1025; measured 2026-10-27, HEAD 8d87eea6, no wheel kit; DECISIONS §38 row 5): the reel turns each tether into its
-    // strut's plane once a piece lies more than REEL_HOME.PLANE_TOL_DEG (5) off it, 94-119 g a turn. The larger launch miss is the off-plane angle
-    // when the mother holds her aim (tilted PAIR_FIELDS pieces: pair wins to 4.0 deg, first turn at 5.0) and about twice that when she drifts back
-    // toward the attitude she had before the aim (START_ROWS-like pair f-2 + f-3: 5 + 6 kg pair 104-152 g vs two singles 262-265 g at 0.5-2.6 deg,
-    // first turn at 3.07 deg: 275 g, 10 g worse). 2.0 keeps the worst case (2 x 2.0 + 0.1) under the 5 deg tolerance. A pair whose larger miss is over it is not offered.
-    PLANE_MISS_MAX_DEG: 2.0,
+    // S5 pair plane (plan daughter-pairs-1025; DECISIONS §38 row 5): the reel turns each tether into its strut's plane once a piece lies more than
+    // REEL_HOME.PLANE_TOL_DEG (5) off it, 94-119 g a turn without the wheel kit. The plane error at the start of the reel is the launch miss + 0.3-0.5 deg
+    // (measured 2026-10-27, main 9b041cb2, promises run every frame as in the browser: the mother holds her launch attitude, 0.00 deg of drift). The old
+    // limit of 2.0 came from a rig that ran the launch callback 0.33 s late, which let the mother drift back toward prograde (about twice the miss). Measured
+    // without the kit, pair f-2 + f-3 (5 + 6 kg): 41.4 g at miss 2.0, 42.3 g at 4.0, 48.1 g at 5.45, first reel turn at 5.93 deg (323 g, two singles 264-268 g);
+    // PAIR_FIELDS weaver pair: 12.8 g at 4.0, 13.9 g at 4.5, 167 g at 5.0 (one turn; two singles 58 g). 4.0 keeps 0.5 deg of margin under the 5 deg tolerance.
+    PLANE_MISS_MAX_DEG: 4.0,
+    // With the wheel kit the plane turn costs no gas (the wheels turn her), so the pair still wins at every miss measured, 2-6.5 deg (f-2 + f-3 pair 24.1 g at
+    // 6.0 vs two singles 160 g; PAIR_FIELDS pair 0.23 g either way). Capped at the reel's tolerance, 5.0: past it the reel turns anyway, which costs only time.
+    PLANE_MISS_MAX_DEG_KIT: 5.0,
     FIRE_MISS_DEG: 12,       // at the spring: a pair whose lines have drifted past this is not fired (the gap over MISS_DEG is the aim's own stop error)
     SPREAD_MIN_DEG: 0,       // P5: the least flight angle between the two daughters (set from the measured closest approach; 0 = none)
     // S3 pair-home (plan daughter-pairs-1025): a pair comes home together. Mission-clock seconds (one frame = 1/60 s, the clock the arms run on).

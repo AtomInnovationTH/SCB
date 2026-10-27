@@ -83,6 +83,8 @@ export class DockingReticle {
     this._range = 0;
     this._closureRate = 0;
     this._lastRange = -1;
+    this._clrSmooth = null;   // CLR line: smoothed closure rate (m/s) — the raw one above stays for getAlignment()
+    this._clrArrow = 0;       // CLR line: +1 closing, -1 opening, 0 none (hysteresis state)
     this._offsetX = 0;     // meters lateral
     this._offsetY = 0;     // meters vertical
 
@@ -208,6 +210,8 @@ export class DockingReticle {
       // Clear canvas when hiding
       this._ctx.clearRect(0, 0, this._width, this._height);
       this._lastRange = -1;
+      this._clrSmooth = null;
+      this._clrArrow = 0;
       // Phase 7: Stop alignment tone when hiding
       if (this._alignmentToneActive) {
         this._alignmentToneActive = false;
@@ -228,6 +232,10 @@ export class DockingReticle {
     // context's odds and shows phantom trend arrows.
     if (arm !== this._arm || target !== this._target) {
       this._oddsEase = null;
+      // the CLR line measures from the arm to the target: a new pair starts the average over (no old range to difference)
+      this._lastRange = -1;
+      this._clrSmooth = null;
+      this._clrArrow = 0;
     }
     this._arm = arm;
     this._target = target;
@@ -296,6 +304,8 @@ export class DockingReticle {
     if (!this._arm || !this._target?._scenePosition) {
       this._range = 0;
       this._closureRate = 0;
+      this._clrSmooth = null;
+      this._clrArrow = 0;
       this._offsetX = 0;
       this._offsetY = 0;
       return;
@@ -311,6 +321,21 @@ export class DockingReticle {
     // Closure rate (delta range per second, positive = closing)
     if (this._lastRange >= 0) {
       this._closureRate = (this._lastRange - this._range) / Math.max(dt, 0.001);
+      // The CLR line shows an exponential average (about 0.3 s) with an arrow that needs 0.15 m/s to switch on and
+      // drops below 0.08 m/s (the same edges as the fleet pane's closing word), so noise around 0.1 m/s cannot flip
+      // the arrow or colour every frame (owner 10-27: a closing readout flashed).
+      const raw = this._closureRate;
+      this._clrSmooth = this._clrSmooth == null
+        ? raw
+        : this._clrSmooth + (raw - this._clrSmooth) * (1 - Math.exp(-Math.max(dt, 0.001) / 0.3));
+      const a = Math.abs(this._clrSmooth);
+      if (this._clrArrow === 0) this._clrArrow = a >= 0.15 ? Math.sign(this._clrSmooth) : 0;
+      else if (a < 0.08 || Math.sign(this._clrSmooth) !== this._clrArrow) {
+        this._clrArrow = a >= 0.15 ? Math.sign(this._clrSmooth) : 0;
+      }
+    } else {
+      this._clrSmooth = null;
+      this._clrArrow = 0;
     }
     this._lastRange = this._range;
 
@@ -492,14 +517,14 @@ export class DockingReticle {
   _drawClosureRate(ctx, cx) {
     const y = 70;
 
-    const absRate = Math.abs(this._closureRate);
+    const absRate = Math.abs(this._clrSmooth ?? this._closureRate);
     let color, arrow;
 
-    if (this._closureRate > 0.1) {
+    if (this._clrArrow > 0) {
       // Closing
       color = C.primary;
       arrow = '▼';
-    } else if (this._closureRate < -0.1) {
+    } else if (this._clrArrow < 0) {
       // Opening
       color = C.danger;
       arrow = '▲';
