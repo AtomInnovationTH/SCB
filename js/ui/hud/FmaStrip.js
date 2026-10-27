@@ -287,9 +287,6 @@ export class FmaStrip {
   /** u5 D2: true while the autopilot flies and the strip is held on screen by that (floor 2). */
   isFlyingShown() { return this._flyShown; }
 
-  /** u5 D2: true while the autopilot is flying (any floor). */
-  isFlying() { return this._flying; }
-
   /** @private Mirror `_flying` + the home floor onto the root's flying attribute. */
   _syncFlyAttr() {
     const want = this._flying && this._floor() === HOME_FLOOR;

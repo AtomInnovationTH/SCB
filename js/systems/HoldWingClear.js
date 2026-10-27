@@ -651,19 +651,6 @@ export function startProfile(mgr, armIndex, piece) {
   return true;
 }
 
-/** Drop a piece's profile (it left the rack, was re-racked, reset). */
-export function dropProfile(piece) { if (piece) piece._wingClear = null; }
-
-/** Work points a piece's profile still needs (an estimate: the kit's build, then the poses left at the mean cost of the ones done). */
-export function profileWorkLeft(mgr, piece) {
-  const w = piece && piece._wingClear;
-  if (!w || w.done) return 0;
-  const kit = mgr.playerSatellite && mgr.playerSatellite._holdWingKit;
-  const kitPts = kit && !kit.ready ? kitWorkLeft(kit) : (kit ? 0 : 1e7);
-  const per = w.k > 0 ? w.spent / w.k : 60000;
-  return kitPts + (w.prep ? 0 : 20000) + (NP - w.k) * per;
-}
-
 /**
  * Run about `points` work points of one piece's profile: the kit's build first (while it is not ready), then the piece's preparation,
  * then its poses, each pose against the rest grid and then the band grid, suspending between queries. Returns the points not spent
@@ -728,12 +715,6 @@ export function stepProfile(mgr, piece, points) {
   const used = _work - t0;
   w.spent += used;
   return points - used;
-}
-
-/** Test/probe helper: compute the whole profile now. Returns the profile. */
-export function finishProfile(mgr, piece) {
-  while (piece._wingClear && !piece._wingClear.done) stepProfile(mgr, piece, 1e12);
-  return piece._wingClear;
 }
 
 /** The work points spent so far by every kit build and profile step (a deterministic counter, the one the per-frame budget is made of). Test helper. */

@@ -36,10 +36,7 @@ import { motherDragAreaM2 } from './MotherDragArea.js';
 import {
   propagateOrbit,
   orbitToSceneCartesian,
-  keplerianToCartesian,
   cartesianToKeplerian,
-  orbitToKm,
-  kmToScene,
   isInShadow,
   orbitalVelocity,
   atmosphericDrag,
@@ -188,7 +185,6 @@ const _v3AttE = new THREE.Vector3();
 const _v3SlA = new THREE.Vector3();   // sloth mode: the boxes' torque this substep (kept apart from the cold-gas torque)
 const _AXES3 = Object.freeze(['x', 'y', 'z']);
 const _v3WhA = new THREE.Vector3();   // reaction wheels: the torque the wheels give the ship this substep (kept apart from the gas torque)
-const _v3SlB = new THREE.Vector3();
 const _qAttA  = new THREE.Quaternion();
 const _qAttB  = new THREE.Quaternion();
 const _qAttC  = new THREE.Quaternion();

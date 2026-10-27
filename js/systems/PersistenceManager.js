@@ -60,6 +60,9 @@ class PersistenceManager {
         totalScore: data.totalScore ?? 0,
         missionNumber: data.missionNumber ?? 1,
         debrisCleared: data.debrisCleared ?? 0,
+        // Capture-credit taper total (ScoringSystem.captureCreditsEarned): without it a reload + CONTINUE re-opened full-price capture income.
+        // Written only when above 0; an old save lacks it and loads as 0.
+        ...(Number.isFinite(data.captureCreditsEarned) && data.captureCreditsEarned > 0 ? { captureCreditsEarned: data.captureCreditsEarned } : {}),
         upgrades: data.upgrades ?? [],
         resourceMaxes: data.resourceMaxes ?? {},
         stats: {

@@ -72,18 +72,6 @@ export function getOrbitalFoilEnv(renderer) {
 }
 
 /**
- * Dispose the cached env render target for a renderer (call on scene teardown).
- * @param {THREE.WebGLRenderer} renderer
- */
-export function disposeOrbitalFoilEnv(renderer) {
-  const rt = _cache.get(renderer);
-  if (rt) {
-    rt.dispose();
-    _cache.delete(renderer);
-  }
-}
-
-/**
  * The synthetic orbital scene fed to PMREM. Lit by nothing — the sun and Earth
  * are unlit `MeshBasicMaterial`, so their `color` IS their emitted radiance.
  * HDR radiance comes from `THREE.Color` components > 1 (r184 accepts this in

@@ -50,9 +50,3 @@ export function deriveCaptureFlags(material, type, mass) {
       : SURFACE_ROUGHNESS_FALLBACK,
   };
 }
-
-/** @deprecated kept for callers that only need the ferrous pair. */
-export function deriveFerrousFlags(material, type) {
-  const f = deriveCaptureFlags(material, type, 0);
-  return { ferromagnetic: f.ferromagnetic, hasFerrousFasteners: f.hasFerrousFasteners };
-}

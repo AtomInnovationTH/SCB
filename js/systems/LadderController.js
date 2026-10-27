@@ -685,9 +685,6 @@ export class LadderController {
   /** @returns {boolean} whether the floor-4 framing glide is running. */
   isFrameZooming() { return !!this._glide; }
 
-  /** u10 D3: end the framing glide where it is. @param {string} [cause] for the reader only */
-  cancelFrameZoom(cause = 'input') { this._glide = null; }
-
   /** @private Advance the glide one frame (or end it on a ride, a floor change, a camera drag). */
   _glideTick(t) {
     const g = this._glide;

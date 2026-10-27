@@ -1607,11 +1607,6 @@ export class SceneManager {
   getRenderer() {
     return this.renderer;
   }
-
-  /** @returns {THREE.Clock} */
-  getClock() {
-    return this.clock;
-  }
 }
 
 export default SceneManager;

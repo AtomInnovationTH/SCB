@@ -631,6 +631,13 @@ export class InputManager {
       return;
     }
 
+    // Cmd/Ctrl combos belong to the browser (reload, save, find, select all). Only the combos
+    // HotkeyOverlay lists get through: Ctrl+Shift+D, and Ctrl+D while the dev overlay flag is on.
+    if (e.metaKey || e.ctrlKey) {
+      const listed = e.code === 'KeyD' && e.ctrlKey && !e.metaKey && (e.shiftKey || Constants.DEBUG?.DEBUG_OVERLAY_HOTKEY);
+      if (!listed) { this.keys[e.code] = false; return; }
+    }
+
     // Anti-ASR guard for macOS Voice Control phantom "i" keystrokes.
     // Default OFF.  As of the 2026-06-15 hotkey remap, bare I = Info/Codex
     // toggle (was the de-spin laser hold, which moved to L; before that I was

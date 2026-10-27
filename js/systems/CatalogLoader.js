@@ -274,24 +274,12 @@ export class CatalogLoader {
   // LAUNCHES
   // --------------------------------------------------------------------------
 
-  /** @param {string} id @returns {object|null} */
-  getLaunch(id) {
-    if (id == null) return null;
-    return this._launchById.get(String(id)) || null;
-  }
-
   /** @returns {object[]} */
   getAllLaunches() { return this._launchList.slice(); }
 
   // --------------------------------------------------------------------------
   // GROUND STATIONS
   // --------------------------------------------------------------------------
-
-  /** @param {string} id @returns {object|null} */
-  getGroundStation(id) {
-    if (id == null) return null;
-    return this._groundById.get(String(id)) || null;
-  }
 
   /** @returns {object[]} */
   getAllGroundStations() { return this._groundList.slice(); }
@@ -310,9 +298,6 @@ export class CatalogLoader {
   // SPACE WEATHER (seeded timeline)
   // --------------------------------------------------------------------------
 
-  /** @returns {object[]} All weather events (sorted by game_hour ascending). */
-  getAllWeatherEvents() { return this._weather.events.slice(); }
-
   /** Return events scheduled at or before a given game hour.
    *  @param {number} gameHour
    *  @returns {object[]} */
@@ -330,14 +315,6 @@ export class CatalogLoader {
       if ((e.game_hour || 0) > gameHour) return e;
     }
     return null;
-  }
-
-  /** @returns {{ cycle_start_game_hour: number, cycle_length_game_hours: number }} */
-  getWeatherCycle() {
-    return {
-      cycle_start_game_hour: this._weather.cycle_start_game_hour,
-      cycle_length_game_hours: this._weather.cycle_length_game_hours,
-    };
   }
 }
 

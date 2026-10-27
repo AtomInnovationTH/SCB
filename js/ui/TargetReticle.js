@@ -17,7 +17,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
-import { orbitToSceneCartesian, orbitToSceneCartesianInto, keplerianToCartesian, orbitToKm } from '../entities/OrbitalMechanics.js';
+import { orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
 import { calmBreathe, finitePulse, prefersReducedMotion } from './hudPulse.js';
 import { classify } from './hud/TargetColorLaw.js';
 import { mono } from '../core/Typeface.js';
@@ -43,8 +43,6 @@ const CLOSING_HIDE_MS = 0.2;
 const CLOSING_JUMP_M = 1;            // a frame whose relative motion departs from the last frame's by more than this = a jump
 const CLOSING_BACKSTOP_MS = 20;      // |raw - average| above this: start over
 const CLOSING_STALE_S = 0.5;         // not seen this long: start over (hidden canvas, other target, off screen)
-const OFFSCREEN_ARROW_RANGE = 0.5;    // 50km for off-screen arrows
-const ACTIVE_SAT_ARROW_RANGE = 0.2;   // 20km for active sat warnings
 const EDGE_PADDING = 40;              // px from screen edge for arrows
 const RETICLE_MIN_SIZE = 12;          // px minimum bracket size
 const RETICLE_MAX_SIZE = 60;          // px maximum bracket size
@@ -2165,27 +2163,6 @@ export class TargetReticle {
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
-
-    ctx.restore();
-  }
-
-  /**
-   * Draw a small arrowhead at a position.
-   * @private
-   */
-  _drawArrowhead(x, y, angle, size) {
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(angle);
-
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(-size, -size * 0.4);
-    ctx.lineTo(-size, size * 0.4);
-    ctx.closePath();
-    ctx.fillStyle = ctx.strokeStyle;
-    ctx.fill();
 
     ctx.restore();
   }

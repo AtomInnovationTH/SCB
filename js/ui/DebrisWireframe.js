@@ -1503,14 +1503,6 @@ export class DebrisWireframe {
   }
 
   /**
-   * Update arm statuses for ADR satellite dock cavity coloring.
-   * @param {Array<{id:string, state:string, type:string, fuel:number}>} statuses
-   */
-  setArmStatuses(statuses) {
-    this._armStatuses = statuses || [];
-  }
-
-  /**
    * Set whether the salvage scanner upgrade is active.
    * @param {boolean} active
    */
@@ -1544,17 +1536,6 @@ export class DebrisWireframe {
         eventBus.emit(Events.WIREFRAME_ASSESSED);
       }
     }
-  }
-
-  /**
-   * Returns info about the currently highlighted zone, or null if none selected.
-   * @returns {{ name: string, risk: string, color: string, massPercent: number }|null}
-   */
-  getSelectedZone() {
-    if (!this._shape || !this._target || this._zoneIndex < 0) return null;
-    const zone = this._shape.zones[this._zoneIndex];
-    const { risk, color } = this._zoneAssessments[this._zoneIndex];
-    return { name: zone.name, risk, color, massPercent: zone.massPercent };
   }
 
   /**
@@ -2468,34 +2449,8 @@ export function getTypeAtlasTexture() { return _typeAtlas ? _typeAtlas.texture :
 /** @returns {THREE.CanvasTexture|null} The flag decal atlas texture */
 export function getFlagAtlasTexture() { return _flagSystem ? _flagSystem.texture : null; }
 
-/** @returns {DebrisTextureAtlas|null} */
-export function getTypeAtlas() { return _typeAtlas; }
-
-/** @returns {FlagDecalSystem|null} */
-export function getFlagSystem() { return _flagSystem; }
-
 /** @returns {string} 'textured' or 'wireframe' */
 export function getVisualMode() { return _visualMode; }
-
-/**
- * Toggle or set the visual mode.
- * @param {string} [mode] — 'textured' | 'wireframe'. If omitted, toggles.
- * @returns {string} The new mode
- */
-export function setVisualMode(mode) {
-  if (mode) {
-    _visualMode = mode;
-  } else {
-    _visualMode = _visualMode === 'textured' ? 'wireframe' : 'textured';
-  }
-  return _visualMode;
-}
-
-/** Release atlas resources */
-export function disposeAtlases() {
-  if (_typeAtlas) { _typeAtlas.dispose(); _typeAtlas = null; }
-  if (_flagSystem) { _flagSystem.dispose(); _flagSystem = null; }
-}
 
 // Re-export atlas pure-logic helpers for convenience
 export { getUVOffsetForType, getBaseColorForType, getEmissiveForMOID };

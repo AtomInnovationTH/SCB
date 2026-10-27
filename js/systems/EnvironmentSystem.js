@@ -554,21 +554,6 @@ export class EnvironmentSystem {
     return penalty;
   }
 
-  /**
-   * Get radiation comms delay (accounts for skill mitigation).
-   * @returns {number} delay in seconds
-   */
-  getRadiationCommsDelay() {
-    if (!this.isInRadiationBelt()) return 0;
-    const E = ENV();
-    let delay = E.RADIATION_COMMS_DELAY_S || 2;
-    if (this._skills && typeof this._skills.isDiscovered === 'function' &&
-        this._skills.isDiscovered('radiation_hardening')) {
-      delay *= (1 - (E.RADIATION_SKILL_MITIGATION || 0.6));
-    }
-    return delay;
-  }
-
   // ==========================================================================
   // B5: BATTERY DEPTH-OF-DISCHARGE
   // ==========================================================================

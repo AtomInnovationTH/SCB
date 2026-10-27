@@ -18,7 +18,6 @@
 import { eventBus }  from '../core/EventBus.js';
 import { Events }    from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
-import { GameStates } from '../core/GameState.js';
 import { persistenceManager } from './PersistenceManager.js';
 
 // ── Skill state constants ──────────────────────────────────────────────────

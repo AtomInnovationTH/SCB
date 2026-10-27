@@ -343,6 +343,8 @@ export class OnboardingDirector {
    */
   constructor(deps = {}) {
     this._eventBus = deps.eventBus;
+    /** @type {Function} clock for the pausable timers (tests inject one) */
+    this._nowMs = typeof deps.now === 'function' ? deps.now : () => Date.now();
     this._scoring = deps.scoringSystem || null;
     this._skills = deps.skillsSystem || null;
     this._teaching = deps.teachingSystem || null;
@@ -438,6 +440,11 @@ export class OnboardingDirector {
 
     /** u3-payoff-calm D5: the after-completion advance timer (cleared by reset / dispose). */
     this._advanceTimer = null;
+
+    /** Pausable timers (see setFrozen): id -> { fn, left, at, handle }. */
+    this._timers = new Map();
+    this._timerSeq = 0;
+    this._frozen = false;
 
     this._loadPersisted();
     this._setupListeners();
@@ -820,9 +827,9 @@ export class OnboardingDirector {
   _onAimSequenceStart() {
     this._aimActive = true;
     const a = this._active;
-    if (a && typeof clearTimeout === 'function') {
-      if (a.idleTimer != null) { clearTimeout(a.idleTimer); a.idleTimer = null; }
-      if (a.autoAdvanceTimer != null) { clearTimeout(a.autoAdvanceTimer); a.autoAdvanceTimer = null; }
+    if (a) {
+      if (a.idleTimer != null) { this._clearTimer(a.idleTimer); a.idleTimer = null; }
+      if (a.autoAdvanceTimer != null) { this._clearTimer(a.autoAdvanceTimer); a.autoAdvanceTimer = null; }
     }
   }
 
@@ -952,9 +959,7 @@ export class OnboardingDirector {
 
   /** @private */
   _clearDetailHintPoll() {
-    if (this._detailHintPoll != null && typeof clearTimeout === 'function') {
-      clearTimeout(this._detailHintPoll);
-    }
+    if (this._detailHintPoll != null) this._clearTimer(this._detailHintPoll);
     this._detailHintPoll = null;
   }
 
@@ -1690,7 +1695,7 @@ export class OnboardingDirector {
     // synchronous test fallback would recurse.)
     if (this._ladderAway()) {
       if (beat.escalationText && typeof setTimeout === 'function') {
-        if (this._active.idleTimer != null && typeof clearTimeout === 'function') clearTimeout(this._active.idleTimer);
+        if (this._active.idleTimer != null) this._clearTimer(this._active.idleTimer);
         const idleMs = Constants.ONBOARDING?.IDLE_ESCALATION_MS || 15000;
         this._active.idleTimer = this._setTimeout(() => this._escalate(beat), idleMs);
       }
@@ -1929,24 +1934,63 @@ export class OnboardingDirector {
       try { fn(); } catch (_e) {}
       return null;
     }
-    return setTimeout(fn, ms);
+    const id = ++this._timerSeq;
+    const t = { fn, ms, left: ms, at: 0, handle: null };
+    this._timers.set(id, t);
+    if (!this._frozen) this._armTimer(id, t);
+    return id;
+  }
+
+  /** @private Start (or restart with the time left) the real timer behind director timer `id`. */
+  _armTimer(id, t) {
+    t.at = this._nowMs();
+    t.handle = setTimeout(() => {
+      this._timers.delete(id);
+      t.fn();
+    }, Math.max(0, t.left));
+  }
+
+  /** @private Cancel director timer `id` (frozen or running). */
+  _clearTimer(id) {
+    const t = this._timers.get(id);
+    if (!t) return;
+    if (t.handle != null && typeof clearTimeout === 'function') clearTimeout(t.handle);
+    this._timers.delete(id);
+  }
+
+  /**
+   * The sim is frozen while the window is blurred or the tab is hidden, but timers are wall-clock: beats auto-advanced and
+   * optional ones auto-skipped (and were saved) while the player was away. Frozen: every pending timer stops and keeps its
+   * remaining time; unfrozen: each resumes with what was left. Timers set while frozen wait for the unfreeze.
+   * @param {boolean} frozen
+   */
+  setFrozen(frozen) {
+    frozen = !!frozen;
+    if (frozen === this._frozen) return;
+    this._frozen = frozen;
+    const now = this._nowMs();
+    for (const [id, t] of this._timers) {
+      if (frozen) {
+        if (t.handle == null) continue;
+        clearTimeout(t.handle);
+        t.handle = null;
+        t.left = Math.max(0, t.left - (now - t.at));
+      } else if (t.handle == null) {
+        this._armTimer(id, t);
+      }
+    }
   }
 
   /** u3-payoff-calm D5: drop the after-completion advance timer (reset / dispose). */
   _clearAdvanceTimer() {
-    if (this._advanceTimer != null && typeof clearTimeout === 'function') clearTimeout(this._advanceTimer);
+    if (this._advanceTimer != null) this._clearTimer(this._advanceTimer);
     this._advanceTimer = null;
   }
 
   _clearActiveTimers() {
     if (!this._active) return;
     const a = this._active;
-    if (typeof clearTimeout === 'function') {
-      if (a.idleTimer != null) clearTimeout(a.idleTimer);
-      if (a.autoAdvanceTimer != null) clearTimeout(a.autoAdvanceTimer);
-      if (a.skipTimer != null) clearTimeout(a.skipTimer);
-      if (a.gateTimer != null) clearTimeout(a.gateTimer);
-    }
+    for (const id of [a.idleTimer, a.autoAdvanceTimer, a.skipTimer, a.gateTimer]) if (id != null) this._clearTimer(id);
     a.idleTimer = null;
     a.autoAdvanceTimer = null;
     a.skipTimer = null;

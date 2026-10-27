@@ -109,7 +109,6 @@ export class StarlinkCascadeBoss {
   isActive() { return this._active; }
   isArmed() { return this._onset.armed; }
   hasCompleted() { return this._completed; }
-  getWindowRemainingMin() { return this._active ? Math.max(0, this._windowRemainingS / 60) : 0; }
   getProgress() { return { cleared: this._threats.clearedCount, total: this._threats.total }; }
 
   reset() {

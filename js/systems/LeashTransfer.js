@@ -264,11 +264,6 @@ export class LeashLine {
         this.lastC = 0;
     }
 
-    /** Free length of the bag's own segment: L − |anchor − tip| when engaged. */
-    freeLen(anchor, tip) {
-        return this.L - (this.engaged ? len(sub(anchor, tip)) : 0);
-    }
-
     /** Back-tension in newtons for this bag. */
     backTensionN() {
         const k = K();

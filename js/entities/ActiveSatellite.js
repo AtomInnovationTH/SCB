@@ -12,7 +12,6 @@ import { Events } from '../core/Events.js';
 import {
   propagateOrbit,
   orbitToSceneCartesian,
-  kmToScene,
 } from './OrbitalMechanics.js';
 
 // ============================================================================

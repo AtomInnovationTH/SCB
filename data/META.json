@@ -8,8 +8,7 @@
     "launches.json",
     "space-weather.json",
     "ground-stations.json",
-    "constellations.json",
-    "news-events.json"
+    "constellations.json"
   ],
   "counts": {
     "debris": 110,

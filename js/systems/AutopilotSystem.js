@@ -1330,14 +1330,6 @@ export class AutopilotSystem {
   }
 
   /**
-   * @private Sloth mode: one frame of the trip hold's turn to the burn attitude on the tail boxes or the wheels
-   * (`_slothOffsetTurn` toward identity, or toward the half turn when retro).
-   */
-  _slothTripTurn(p, dt, src = 'tailBoxes') {
-    this._slothOffsetTurn(p, dt, this._tripRetro ? _Q_TRIP_RETRO : _Q_IDENTITY, src);
-  }
-
-  /**
    * @private ap-gas D1/D1a: one frame of a slow turn of the player's ORBIT-FRAME offset (`_manualRotation`) toward `target` (an
    * offset quaternion) on the tail boxes (or the reaction wheels, `src`). The offset is what the game keeps: she co-rotates with the orbit for nothing
    * (a constant offset is a steady spin at the orbit rate, no torque), so only a CHANGE of the offset is a turn, and it is

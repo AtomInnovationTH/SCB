@@ -196,8 +196,6 @@ export function createHealLadder({ steps, now = () => performance.now() } = {}) 
 
   return {
     get running() { return running; },
-    /** Name of the step currently being observed, or null. */
-    get stepName() { return running && entry ? entry.name : null; },
     canStart(nowMs = now()) {
       if (running || !list.length) return false;
       if (nowMs < backoffUntil) return false;

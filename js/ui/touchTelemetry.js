@@ -1,7 +1,7 @@
 /**
  * touchTelemetry.js — iPad zoom-feel tuning beacon (Ipad.md §6).
  *
- * Touch-only, fire-and-forget. Batches two things and POSTs them to the cable
+ * Touch-only, fire-and-forget, dev/LAN hosts only (isTelemetryHost). Batches two things and POSTs them to the cable
  * server's /telemetry sink (scripts/serve_ipad.py → tmp/ipad-telemetry.jsonl):
  *   • gesture events fed by TouchControls — `pinch` (with emitted wheel dy) and
  *     `rail` (with the floor a rail-drag jumped to);
@@ -30,6 +30,15 @@ export function floorCrossing(prevFloor, curFloor) {
   return { from: prevFloor, to: curFloor };
 }
 
+/**
+ * True only for a dev or LAN host (the cable server has a /telemetry sink; the public site does not).
+ * @param {string|null|undefined} hostname
+ */
+export function isTelemetryHost(hostname) {
+  const h = String(hostname || '').toLowerCase();
+  return h === 'localhost' || h.startsWith('127.') || h.startsWith('10.') || h.startsWith('192.168.') || h.endsWith('.local');
+}
+
 export class TouchTelemetry {
   /**
    * @param {object} [opts]
@@ -40,9 +49,10 @@ export class TouchTelemetry {
    * @param {number} [opts.maxBatch=250]           force a flush at this buffer size
    * @param {(()=>number)|null} [opts.now]         clock (tests)
    * @param {((batch:object)=>void)|null} [opts.post] transport (tests)
+   * @param {string|null} [opts.host]              hostname override (tests); default location.hostname
    */
   constructor({ endpoint = '/telemetry', build = null, getFloor = null,
-                flushMs = 5000, maxBatch = 250, now = null, post = null } = {}) {
+                flushMs = 5000, maxBatch = 250, now = null, post = null, host = null } = {}) {
     this._endpoint = endpoint;
     this._build = build;
     this._getFloor = typeof getFloor === 'function' ? getFloor : null;
@@ -55,7 +65,9 @@ export class TouchTelemetry {
     this._timer = null;
     this._fails = 0;
     this._maxFails = 3;   // consecutive failed sends → assume no sink, go quiet
-    this._dead = false;
+    // Nothing is sent from any other origin (the public site has no sink): off, not even buffered.
+    const hostname = host ?? (typeof location !== 'undefined' ? location.hostname : null);
+    this._dead = !(this._post || isTelemetryHost(hostname));
     this._session = Math.random().toString(36).slice(2, 10);
   }
 
@@ -66,6 +78,7 @@ export class TouchTelemetry {
    * @param {object} [data] gesture payload (dy, floor, …)
    */
   log(kind, data = {}) {
+    if (this._dead) return;
     const t = Math.round(this._now());
     this._sampleFloor(t);
     this._buf.push({ t, k: kind, ...data });
@@ -84,7 +97,7 @@ export class TouchTelemetry {
 
   /** Begin periodic flushing (browser only; a no-op sink still batches). */
   start() {
-    if (this._timer || typeof setInterval !== 'function') return;
+    if (this._dead || this._timer || typeof setInterval !== 'function') return;
     this._timer = setInterval(() => this.flush(), this._flushMs);
     // Best-effort final drain when the tab is backgrounded/closed.
     if (typeof addEventListener === 'function') {

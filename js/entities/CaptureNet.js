@@ -92,8 +92,6 @@ const _q1  = new THREE.Quaternion();
 // Cargo hand-off scratch (cargo-continuity S7 — the transfer beat runs every
 // frame of the flight, so it allocates nothing either).
 const _v3f = new THREE.Vector3();
-const _qS7 = new THREE.Quaternion();
-const _WORLD_UP_S7 = new THREE.Vector3(0, 1, 0);
 // Cut-at-nose scratch (CUT_AT_NOSE): the waiting-piece pin runs every COLLARED
 // frame — same no-allocation rule.
 const _v3cut = new THREE.Vector3();

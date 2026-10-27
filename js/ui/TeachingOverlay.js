@@ -138,14 +138,6 @@ export class TeachingOverlay {
   }
 
   /**
-   * Number of moments waiting in queue.
-   * @returns {number}
-   */
-  getQueueLength() {
-    return this._queue.length;
-  }
-
-  /**
    * Cleanup DOM and timers.
    */
   dispose() {

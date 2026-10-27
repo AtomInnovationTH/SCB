@@ -151,36 +151,6 @@ function shouldCoalesce(recentWindow, newChannel, thresholdCount) {
   };
 }
 
-/**
- * @deprecated CP-4 (2026-06-08) — superseded by the graduated suppression-tier
- * gate in `commsSuppression.js` (`messagePassesSuppression`). Retained as an
- * exported pure helper for back-compat; no longer used by CommsSystem itself.
- *
- * Delegation 4 (2026-05-31) — Browser-playtest Bug 4 helper (strengthened).
- *
- * During onboarding the comms panel must show *only* the Director's own
- * Houston script (boot → handshake → arrows → …).  **Everything else is
- * noise** — EnvironmentSystem MMOD alerts, SpaceWeatherSystem, SubsystemEvents,
- * GameFlowManager first-time comms, CommsSystem flavour templates, etc.
- *
- * The check is simple: if the message payload carries `_onboarding: true`
- * (stamped by [`OnboardingDirector._emitComms()`](js/systems/OnboardingDirector.js:748))
- * it is allowed.  Lasso/net denial feedback (`_lassoFeedback: true`) is also
- * allowed so a rejected cast always explains itself.  Every other message is
- * suppressed.
- *
- * @param {object} [data] — full message payload (may have `_onboarding` flag)
- * @returns {boolean} true → message is noise and should be dropped.
- */
-export function isOnboardingNoise(data) {
-  if (data && data._onboarding) return false;   // Director's own line — pass
-  // Lasso/net denial feedback must reach the player even mid-onboarding —
-  // otherwise a rejected cast (cooldown, out-of-arc, no target) shows only a
-  // red reticle flash with no explanation, leaving new players stuck.
-  if (data && data._lassoFeedback) return false; // actionable denial — pass
-  return true;                                   // everything else — drop
-}
-
 // ============================================================================
 // MESSAGE TEMPLATES
 // ============================================================================
@@ -351,32 +321,6 @@ const FLAVOR_MESSAGES = [
   { source: 'SDA', text: 'Space fence detection: Small debris cluster at 780km altitude. Monitoring.' },
   { source: 'HOUSTON', text: 'Thermal model updated. Spacecraft temperatures within nominal range.' },
   { source: 'GROUND STN', text: 'Signal is crystal clear. Keeping your data link running at full speed.' },
-];
-
-// === ST-8.4: ISRO Ground Station Personas ===
-const BANGALORE_TEMPLATES = [
-  { source: 'BANGALORE', text: 'ISTRAC Bangalore here. We\'ve got you on our antenna, tracking {target}, signal good.', priority: 'INFO' },
-  { source: 'BANGALORE', text: 'Bangalore confirms your orbit. {orbits} orbits until your intercept window opens.', priority: 'INFO' },
-  { source: 'BANGALORE', text: 'Bangalore: your telemetry stream is healthy, all systems looking good.', priority: 'INFO' },
-  { source: 'BANGALORE', text: 'Bangalore handing your tracking over to {nextStation} as you pass out of range.', priority: 'INFO' },
-  { source: 'BANGALORE', text: 'Bangalore: that debris matches its catalog entry on radar. Confirmed.', priority: 'INFO' },
-];
-
-const HASSAN_TEMPLATES = [
-  { source: 'HASSAN', text: 'Hassan station: locked onto your far-off (geostationary) target with our big 32m dish.', priority: 'INFO' },
-  { source: 'HASSAN', text: 'Hassan: signal locked. You\'re so far out the radio round-trip is {rtDelay}ms.', priority: 'INFO' },
-  { source: 'HASSAN', text: 'Hassan confirms your orbit-raise burn is done. Rounding out your orbit now.', priority: 'INFO' },
-  { source: 'HASSAN', text: 'Hassan tracking: your approach lane to the high orbit is clear.', priority: 'INFO' },
-];
-
-const HANDOFF_DIALOGUE = [
-  { from: 'HOUSTON', text: 'Houston: handing off to Bangalore ISTRAC. Good hunting.' },
-  { from: 'BANGALORE', text: 'ISTRAC Bangalore: Roger, we have the conn. Tracking nominal.' },
-];
-
-const NEWS_BOUNTY_TEMPLATES = [
-  { source: 'NEWS', text: '[{date} NEWS] {headline}', priority: 'WARNING' },
-  { source: 'NEWS', text: 'Bounty posted: {bounty} cr. Target {debrisName}', priority: 'INFO' },
 ];
 
 /**
@@ -1173,15 +1117,6 @@ export class CommsSystem {
    */
   getMessages() {
     return this.messages;
-  }
-
-  /**
-   * Get the most recent N messages.
-   * @param {number} n
-   * @returns {Array}
-   */
-  getRecentMessages(n = 5) {
-    return this.messages.slice(-n);
   }
 
   /**

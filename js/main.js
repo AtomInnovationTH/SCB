@@ -4104,10 +4104,12 @@ async function init() {
         if (typeof audioSystem._stopNetLoops === 'function') audioSystem._stopNetLoops();   // mother net whistle + winch (Phase B)
       }
       _syncAudioCtxState();
+      onboardingDirector?.setFrozen(true);   // tutorial timers stop with the sim
     } else {
       // Newly visible — reset the last-frame timer so next dt is small.
       const now = performance.now();
       lastTime = now;
+      onboardingDirector?.setFrozen(_windowBlurred);
       _syncAudioCtxState();   // resumes ctx if state policy says so
       _flushScheduledFrame(); // wakes loop (gameLoop's hidden early-return
                               // skipped scheduling the next rAF)
@@ -4129,6 +4131,7 @@ async function init() {
     // positive (e.g. DevTools panel focused within the same window).
     if (document.hasFocus()) return;
     _windowBlurred = true;
+    onboardingDirector?.setFrozen(true);   // tutorial timers stop with the sim
     if (audioSystem) {
       if (typeof audioSystem.stopThrusterHum === 'function') audioSystem.stopThrusterHum();
       if (typeof audioSystem.stopDeltaVAlarm === 'function') audioSystem.stopDeltaVAlarm();
@@ -4144,6 +4147,7 @@ async function init() {
   });
   window.addEventListener('focus', () => {
     _windowBlurred = false;
+    onboardingDirector?.setFrozen(document.hidden);
     const now = performance.now();
     lastTime = now;
     _syncAudioCtxState();

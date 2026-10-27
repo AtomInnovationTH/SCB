@@ -458,50 +458,6 @@ export class SpaceWeatherSystem {
     return { ...this._mergedEffects };
   }
 
-  /**
-   * Get list of currently active weather events for HUD display.
-   * @returns {Array<{ type: string, name: string, icon: string, color: string,
-   *                    elapsed: number, duration: number }>}
-   */
-  getActiveWeather() {
-    const result = [];
-    for (const [type, event] of this.activeEvents) {
-      result.push({
-        type,
-        name: event.def.name,
-        icon: event.def.icon,
-        color: event.def.color,
-        elapsed: event.elapsed || 0,
-        duration: event.duration,
-      });
-    }
-    return result;
-  }
-
-  /**
-   * Check if we're currently in any weather event.
-   * @returns {boolean}
-   */
-  hasActiveWeather() {
-    return this.activeEvents.size > 0;
-  }
-
-  /**
-   * Check if SAA passage is active.
-   * @returns {boolean}
-   */
-  isInSAA() {
-    return this.activeEvents.has('SAA_PASSAGE');
-  }
-
-  /**
-   * Check if eclipse is active.
-   * @returns {boolean}
-   */
-  isInEclipse() {
-    return this.activeEvents.has('ECLIPSE_ENTRY');
-  }
-
   // ==========================================================================
   // PERSISTENCE
   // ==========================================================================

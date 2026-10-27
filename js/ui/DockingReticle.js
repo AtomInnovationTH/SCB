@@ -271,19 +271,6 @@ export class DockingReticle {
   }
 
   /**
-   * Get alignment metrics for scoring.
-   * @returns {{ range: number, closureRate: number, offsetX: number, offsetY: number }}
-   */
-  getAlignment() {
-    return {
-      range: this._range,
-      closureRate: this._closureRate,
-      offsetX: this._offsetX,
-      offsetY: this._offsetY,
-    };
-  }
-
-  /**
    * Remove canvas and clean up event listeners.
    */
   dispose() {

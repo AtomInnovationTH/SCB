@@ -5137,16 +5137,6 @@ export class ArmUnit {
     return next;
   }
 
-  /** Programmatically select a tool (must be in the arm's toolset). */
-  setTool(kind) {
-    if (this.toolset && this.toolset.includes(kind)) {
-      this.selectedTool = kind;
-      eventBus.emit(Events.TOOL_SELECTED, { armId: this.id, tool: kind });
-      return true;
-    }
-    return false;
-  }
-
   /**
    * Dispatch the currently-selected tool from STATION_KEEP (the F key, when
    * DAUGHTER_MULTITOOL is ON). NET → the P1 net path; MAGNET → the P2 EPM

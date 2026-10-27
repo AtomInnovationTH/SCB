@@ -502,23 +502,6 @@ export class ResourceSystem {
   // ======================================================================
 
   /**
-   * Consume lithium propellant for MPD thruster.
-   * @param {number} amount
-   * @returns {boolean} true if enough lithium was available
-   */
-  consumeLithium(amount) {
-    if (this.lithium < amount) return false;
-    this.lithium -= amount;
-    this._syncToPlayer();
-    eventBus.emit(Events.LITHIUM_CHANGE, {
-      lithium: this.lithium,
-      lithiumMax: this.lithiumMax,
-      delta: -amount,
-    });
-    return true;
-  }
-
-  /**
    * Add lithium from salvage (capped at max capacity).
    * @param {number} amount
    */

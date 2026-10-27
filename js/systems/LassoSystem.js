@@ -2629,12 +2629,6 @@ export class LassoSystem {
         return Math.max(0, this.cooldown);
     }
 
-    /** Fraction of cooldown elapsed: 0 = just started, 1 = ready (for ring UI) */
-    get cooldownFraction() {
-        if (this.cooldownMax <= 0 || this.cooldown <= 0) return 1;
-        return 1 - (this.cooldown / this.cooldownMax);
-    }
-
     /** Cleanup */
     dispose() {
         // Tear down eventBus subscriptions so a disposed LassoSystem isn't kept

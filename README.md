@@ -25,5 +25,5 @@ geometry, NASA public-domain textures.
 
 Arrows rotate · `S` scan (`Shift+S` wide) · `T` / `Tab` target · `A` autopilot ·
 `N` fire net/lasso · `D` launch daughter · `R` reel in · `1`–`4` pilot daughter ·
-`V` camera (`Shift+V` strategic map) · `B` shop · `F` forge · `I` codex ·
+`V` camera (`Shift+V` strategic map) · `B` shop · `I` codex ·
 `+` / `-` hide/show HUD panes (`Shift+=` / `Shift+-` throttle) · `?` help · `P` pause · `Esc` back

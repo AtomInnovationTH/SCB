@@ -30,7 +30,7 @@ import { DebrisField } from '../entities/DebrisField.js';
 import { wireBagRadiusM } from './LeashVisual.js';
 // net-cinch: where a held bag's neck sits round its catch is ONE pure home shared with the simulation (CaptureNet seats a
 // daughter's held net there, ArmUnit winds the net line to it).
-import { HELD_BAG, DAUGHTER_STAND_M, drawnCatchRadiusScene, heldBagRadiusScene, heldBagAxisInto, heldBagBack } from '../entities/heldBagShape.js';
+import { HELD_BAG, DAUGHTER_STAND_M, heldBagRadiusScene, heldBagAxisInto, heldBagBack } from '../entities/heldBagShape.js';
 // S5 failure staging: the reason→beat mapper lives with missReasonToText in
 // the entity (one home for "which failures are staged" — logic and visual must
 // never diverge). ui → entities edge; no cycle (CaptureNet does not import ui).
@@ -2575,19 +2575,6 @@ export class CaptureNetVisual {
     _v3a.set(L.x * 0.001, L.y * 0.001, L.z * 0.001);
     _v3b.copy(vis.group.position).sub(_v3a);
     vis.group.lookAt(_v3b);
-  }
-
-  /**
-   * l8c: the radius, in scene units, the catch is DRAWN at: the instance's render scale (the CAPTURED readability
-   * floor eased down to true size near the collar) times its bounding radius, deflated by the digestion chop. The
-   * same two numbers _catchContentsSpec floors the film on.
-   * @param {object} d — the catch
-   * @param {number|null} chopMul
-   * @returns {number}
-   * @private
-   */
-  _drawnCatchRadius(d, chopMul) {
-    return drawnCatchRadiusScene(d, chopMul);             // net-cinch: the one home, shared with the simulation
   }
 
   /**

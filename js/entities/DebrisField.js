@@ -16,7 +16,6 @@ import {
   orbitToSceneCartesian,
   orbitToSceneCartesianInto,
   totalDeltaV,
-  kmToScene,
   orbitalVelocity,
   atmosphericDrag,
 } from './OrbitalMechanics.js';
@@ -24,10 +23,10 @@ import {
   DebrisWireframe,
   initAtlases, getTypeAtlasTexture, getFlagAtlasTexture,
   getUVOffsetForType, getEmissiveForMOID,
-  getUVOffsetForCountry, hasFlag as hasFlagDecal,
+  getUVOffsetForCountry,
   getVisualMode,
 } from '../ui/DebrisWireframe.js';
-import { catalogEntryToDebrisData, buildRegimeDebrisSeeds, regimeFromStartOrbit, mulberry32, samplePowerLawSize, sampleSbmMassKg, buildIntactMassPools } from './CatalogConverter.js';
+import { buildRegimeDebrisSeeds, regimeFromStartOrbit, mulberry32, samplePowerLawSize, sampleSbmMassKg, buildIntactMassPools } from './CatalogConverter.js';
 import { deriveCaptureFlags } from './debrisFerrous.js';
 import { referenceDragAreaM2 } from './MotherDragArea.js';
 import { isFlagEligible, pickCountryForId } from '../ui/FlagDecalSystem.js';

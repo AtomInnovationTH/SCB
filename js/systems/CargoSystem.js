@@ -8,7 +8,6 @@
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { computeSalvageDeltaV } from '../entities/OrbitalMechanics.js';
 
 export class CargoSystem {
   constructor() {
@@ -127,21 +126,6 @@ export class CargoSystem {
       total += entry.massKg * entry.marketValue;
     }
     return Math.round(total);
-  }
-
-  /**
-   * Get total potential ΔV if all usable metals were burned as propellant.
-   * @param {number} dryMassKg - ship dry mass
-   * @returns {number} ΔV in m/s
-   */
-  getPotentialDeltaV(dryMassKg) {
-    let totalDV = 0;
-    for (const [, entry] of this._cargo) {
-      if (entry.ispAsThrust > 0) {
-        totalDV += computeSalvageDeltaV(entry.massKg, entry.ispAsThrust, dryMassKg);
-      }
-    }
-    return totalDV;
   }
 
   /**

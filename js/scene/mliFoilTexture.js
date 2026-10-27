@@ -729,11 +729,3 @@ export function getMLIFoilMaps(opts = {}) {
   if (!normalMap || !roughnessMap || !albedoMap) return null;
   return { normalMap, roughnessMap, metalnessMap: roughnessMap, albedoMap };
 }
-
-/** Test/teardown hook — dispose the master textures and drop the cache. */
-export function _resetMLIFoilTextureCache() {
-  for (const rec of _masters.values()) {
-    if (rec.texture) rec.texture.dispose();
-  }
-  _masters.clear();
-}

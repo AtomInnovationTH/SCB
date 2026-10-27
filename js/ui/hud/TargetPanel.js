@@ -1453,22 +1453,6 @@ export class TargetPanel {
     return `var(--hud-normal, ${VisualLaw.COLORS.PLAYER})`;
   }
 
-  /** @private Get compact salvage hint HTML (e.g. "Gas In M3") with tooltips */
-  _getSalvageHint(salvage) {
-    if (!salvage) return '';
-    const hints = [];
-    if (salvage.xenon > 0) hints.push('<span title="Engine gas">Gas</span>');
-    if (salvage.indium > 0) hints.push('<span title="Indium metal">In</span>');
-    if (salvage.gaAs > 0) hints.push('<span title="Solar panel (GaAs)">GaAs</span>');
-    if (salvage.battery > 0) hints.push('<span title="Battery">Bat</span>');
-    if (salvage.hydrazine > 0) hints.push('<span title="Hydrazine (hazardous)">HAZ</span>');
-    if (salvage.lithium > 0) hints.push('<span title="Lithium">Li</span>');
-    // Metal count indicator (Phase 2)
-    const metalCount = salvage.metals ? salvage.metals.length : 0;
-    if (metalCount > 0) hints.push(`M${metalCount}`);
-    return hints.length > 0 ? hints.join(' ') : '';
-  }
-
   /** @private Get short type name */
   _getShortTypeName(type) {
     return shortTypeName(type);

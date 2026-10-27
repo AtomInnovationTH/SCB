@@ -411,17 +411,6 @@ export class RewardSystem {
   }
 
   /**
-   * Get field clearing progress for HUD display.
-   * @returns {{ captured: number, total: number, percentage: number }}
-   */
-  getFieldProgress() {
-    const total = this._fieldTotal;
-    const captured = this._fieldCaptured;
-    const percentage = total > 0 ? Math.round((captured / total) * 100) : 0;
-    return { captured, total, percentage };
-  }
-
-  /**
    * Begin tracking field progress for a newly-engaged cluster (defer-trawl).
    * Seeds _fieldTotal from the cluster's real size so the 25/50/75/100 %
    * comms + tiered bonuses track active hand-clearing instead of trawl windows.

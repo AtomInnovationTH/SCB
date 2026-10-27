@@ -29,8 +29,8 @@ import { noseBucketFor, noseRadiatorsOk, noseWindowSpans } from './NoseRoute.js'
 import { tripRefuses } from '../systems/TransferTrip.js';
 import { GestureHints } from '../ui/hud/GestureHints.js';
 import {
-  pieceClaim, isFree, linesCross, lineWrapsShip, samePiece, pieceIsCaught,
-  launchRefusalLine, crossNamedStrutLine, crossNoneClearLine, launchDroppedLine, launchCrossDroppedLine, wrapRefusalLine,
+  pieceClaim, isFree, linesCross, lineWrapsShip, pieceIsCaught,
+  launchRefusalLine, crossNamedStrutLine, crossNoneClearLine, launchDroppedLine, launchCrossDroppedLine,
   fanOutLine, fanOutNoneLine, stayedLine, reachNoneLine, heavyNoneLine, holdsStillLine, netIsOut,
   pairNoneLine, pairNeedsTurnLine, pairNotReadyLine, pairDroppedLine, pairHeldLine, pairDriftLine, pairCrossLine, pairStrutLine, pairRangeLine, pairErrorLine, pairHoldLine,
 } from '../systems/PieceClaim.js';
@@ -456,8 +456,6 @@ const _CARRY_STATES = new Set([
   ARM_STATES.CARRY_HANDOFF,
   ARM_STATES.CARRY_BACK,
 ]);
-/** @param {string} state @returns {boolean} one of CARRY_PREP / OUT / HANDOFF / BACK */
-export function isCarryState(state) { return _CARRY_STATES.has(state); }
 
 /**
  * Config G: Generate dock positions for the given arm tier (ST-9.2).
@@ -5526,11 +5524,6 @@ export class ArmManager {
     return this.arms.filter(a => a.state === ARM_STATES.EXPENDED).length;
   }
 
-  /** Get total captures across all arms */
-  getTotalCaptures() {
-    return this.arms.reduce((sum, a) => sum + a.captures, 0);
-  }
-
   /**
    * Get status of all arms for HUD display.
    * Returns array of per-arm status objects (backward compatible).
@@ -5539,32 +5532,6 @@ export class ArmManager {
    */
   getAllStatus() {
     return this.arms.map(a => a.getStatus());
-  }
-
-  /**
-   * Get V5 fleet-wide status for enhanced HUD display.
-   * Includes per-arm statuses plus fleet-level data (pulse scan, counts, etc.).
-   * @returns {object}
-   */
-  getFleetStatus() {
-    return {
-      arms: this.arms.map(a => a.getStatus()),
-      totalArms: this.arms.length,
-      pulseScanCooldown: this._pulseScanCooldown,
-      pulseScanActive: this._pulseScanActive,
-      selectedArmIndex: this.selectedArmIndex,
-      reloadingCount: this.arms.filter(a => a.state === ARM_STATES.RELOADING).length,
-      chargedCount: this.arms.filter(a => a.state === ARM_STATES.DOCKED && a.springCharged).length,
-    };
-  }
-
-  /**
-   * Get arms by type.
-   * @param {'weaver'|'spinner'} type
-   * @returns {ArmUnit[]}
-   */
-  getArmsByType(type) {
-    return this.arms.filter(a => a.type === type);
   }
 
   /**

@@ -1994,11 +1994,6 @@ export class MenuScene3D {
     });
   }
 
-  /** True while the departure ramp is in progress. */
-  get isDeparting() {
-    return !!this._departure;
-  }
-
   /**
    * Update the astronaut's shoulder-patch flag (e.g. when the menu language
    * changes). Safe to call before/after init and while paused — repaints the

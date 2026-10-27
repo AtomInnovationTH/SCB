@@ -1379,28 +1379,6 @@ export class ShopScreen {
   // ========================================================================
 
   /**
-   * Get all purchased upgrades.
-   * @returns {Map<string, number>}
-   */
-  getPurchasedUpgrades() {
-    return this.purchasedUpgrades;
-  }
-
-  /**
-   * Get a specific upgrade effect value if purchased.
-   * @param {string} effectName
-   * @returns {*} Upgrade value or null
-   */
-  getUpgradeEffect(effectName) {
-    for (const upgrade of UPGRADES) {
-      if (upgrade.effect === effectName && this.purchasedUpgrades.has(upgrade.id)) {
-        return upgrade.value;
-      }
-    }
-    return null;
-  }
-
-  /**
    * Get purchased upgrade IDs as a serializable array for persistence.
    * Multi-level upgrades appear multiple times (once per level).
    * @returns {string[]}
@@ -1479,9 +1457,6 @@ export class ShopScreen {
       callback({ id: '_tetherTier', effect: 'tetherTier', value: this._tetherTier, level: this._tetherTier });
     }
   }
-
-  /** Get the current spring tier index (0-based). */
-  getSpringTier() { return this._springTier; }
 
   /** Get the current tether tier index (0-based). */
   getTetherTier() { return this._tetherTier; }

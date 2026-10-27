@@ -174,20 +174,6 @@ export class SensorSystem {
     return this.detectedTargets;
   }
 
-  /**
-   * Determine which data-tier a target falls under given its distance.
-   * @param {object} target – must have .distance or .position
-   * @param {THREE.Vector3} [playerPos]
-   * @returns {object} One of DATA_LEVELS
-   */
-  getDataTier(target, playerPos) {
-    let distance = target.distance || 0;
-    if (playerPos && target.position) {
-      distance = playerPos.distanceTo(target.position);
-    }
-    return this._getDataLevel(distance);
-  }
-
   // ======================================================================
   // UPGRADES
   // ======================================================================

@@ -10,7 +10,7 @@ import { TimeAuthority } from '../systems/TimeAuthority.js';
 import { createLabelTexture } from './labelTexture.js';
 import { sunEphemeris, moonEphemeris, latLonToUnitVec } from './Ephemeris.js';
 import { stagedSunYaw, rotateAboutY, OPENING_SUN_TARGET_DOT } from './sunStaging.js';
-import { BODY_CATALOG, bodyByName, ladderBloomBodies } from './bodyCatalog.js';
+import { bodyByName, ladderBloomBodies } from './bodyCatalog.js';
 import {
   sunGeometry, moonGeometry, planetGeometry, SUN_GLARE_STOPS, SATURN_RING,
 } from './bodyGeometry.js';
@@ -1757,11 +1757,6 @@ export class SunLight {
   /** @returns {THREE.Vector3} */
   getSunDirection() {
     return this.sunDirection.clone();
-  }
-
-  /** @returns {THREE.DirectionalLight} */
-  getLight() {
-    return this.directionalLight;
   }
 }
 

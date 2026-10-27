@@ -438,9 +438,6 @@ export class WorkbenchPane {
     this._applyTabShown();
   }
 
-  /** u6 D9: is the tab stepped aside right now? */
-  isTabYielded() { return this._tabYield; }
-
   /**
    * ENTRY-LESS open (tab / Space / swipe / flick / restore). No-op while
    * disabled. ORDER MATTERS (plan §3 / §7): the REFIT engine opens FIRST

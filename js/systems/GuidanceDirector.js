@@ -71,7 +71,6 @@ export class GuidanceDirector {
   getLevel() { return this._override || this._level; }
 
   isGuided()   { return this.getLevel() === GuidanceLevels.GUIDED; }
-  isPointers() { return this.getLevel() === GuidanceLevels.POINTERS; }
   isMinimal()  { return this.getLevel() === GuidanceLevels.MINIMAL; }
 
   /** Settings toggle: pin a level, or pass null to return to behavior-driven. */

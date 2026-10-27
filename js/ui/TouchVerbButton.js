@@ -61,8 +61,6 @@ export const DESPIN_KEY = 'KeyL';
 export const WIDE_KEY = 'Shift+KeyS';
 /** The mission 3 lesson beat whose own ticker chip (TouchActionChip BEAT_CHIPS) owns the wide-scan moment. */
 export const WIDE_LESSON_BEAT = 'ch3_wide_scan';
-/** The skill a first wide scan discovers (SkillsSystem scan_wide). */
-export const WIDE_SKILL = 'scan_wide';
 
 /** Floors that carry each button. */
 export const FLY_FLOOR = 4;
