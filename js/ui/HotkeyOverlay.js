@@ -3,16 +3,31 @@
  * category. Toggle with the ? key (Slash), the menu's ? button or the ? button
  * at the top right of floor 1 (mountF1Button). Escape or ? closes.
  *
- * Layout: full-screen overlay → centered panel → one goal line, then a grid of
+ * Layout: full-screen overlay → centered panel → a short overview (what you are
+ * doing and why, the reward, the next key), then a grid of
  * group cards (Start here / Daughters / Ship & views; each a labelled list of
  * key chip → description rows) plus two closed, expandable sections: Stuck?
  * and Advanced.
  * Mirrors the visual language of CodexViewerUI (dark panel, cyan accents,
  * the house mono token) so it feels native to the HUD.
  *
+ * Language (DECISIONS §44, owner 2026-10-27): the page shows in the language
+ * the menu picker holds (settingsManager.getLanguage()). The English words are
+ * the rows below; the other six languages come from helpText.js, keyed by each
+ * row's `id`. The page is read again on every show() and rebuilt on
+ * Events.LANGUAGE_CHANGED.
+ *
  * @module ui/HotkeyOverlay
  */
-import { wordsFor } from '../systems/resupplyWords.js';
+import { wordsFor, satelliteIsTheStop } from '../systems/resupplyWords.js';
+import { settingsManager } from '../systems/SettingsManager.js';
+import { eventBus } from '../core/EventBus.js';
+import { Events } from '../core/Events.js';
+import { helpTextFor } from './helpText.js';
+
+// Scripts that join letters or have no capitals: wide letter spacing and CSS upper-casing would break them, so the
+// title, hint and group names drop both for these languages (DECISIONS §44).
+const UNSPACED_LANGUAGES = new Set(['th', 'ja', 'hi', 'ta']);
 
 // Grouped hotkey reference. Each group → list of rows
 // `[chips, description, opts?]`. `chips` is an array; a chip may itself contain
@@ -73,71 +88,78 @@ export const HOTKEY_GROUPS = [
     // The mission-1 keys: zoom and touch on top (owner 2026-10-12), then in the
     // order the game first asks for them: turn (players try to move first),
     // scan, net, fly to it.
+    // Every row's opts carries a stable `id` (js/ui/helpText.js keys its translations by it, DECISIONS §44);
+    // every group carries one too.
+    id: 'start',
     title: 'Start here',
     keyWidth: '112px',
     rows: [
-      [['Wheel · pinch'], 'Zoom in / out', { pointer: true }],
-      [['Tap · hold'], 'Touch: scan / actions', { pointer: true }],
-      [['↑ ↓ ← →'], 'Turn ship'],
-      [['Turn pad'], 'Turn ship (touch, lower left)', { pointer: true }],
-      [['S'], 'Scan'],
-      [['N'], 'Launch net'],
-      [['A'], 'Fly to target (on / off)'],
+      [['Wheel · pinch'], 'Zoom in / out', { pointer: true, id: 'zoom' }],
+      [['Tap · hold'], 'Touch: scan / actions', { pointer: true, id: 'touch' }],
+      [['↑ ↓ ← →'], 'Turn ship', { id: 'turn' }],
+      [['Turn pad'], 'Turn ship (touch, lower left)', { pointer: true, id: 'turn_pad' }],
+      [['S'], 'Scan', { id: 'scan' }],
+      [['N'], 'Launch net', { id: 'net' }],
+      [['A'], 'Fly to target (on / off)', { id: 'fly' }],
     ],
   },
   {
     // Chapter 2: select, launch and reel the daughters. 1–4 on top, "Select"
     // (owner 2026-10-12): D and R act on the selected one. V (back to the
     // mother's view) at the bottom, owner's words.
+    id: 'daughters',
     title: 'Daughters',
     keyWidth: '112px',
     rows: [
-      [['1', '–', '4'], 'Select a daughter'],
-      [['D'], 'Launch selected daughter'],
-      [['Q'], 'Launch the marked pair together'],
-      [['R'], 'Reel selected daughter'],
-      [['`'], 'Next tool'],
-      [['N'], 'Use tool'],
-      [['C'], 'Move a catch to a radiator'],
-      [['V'], 'Change view to mother'],
+      [['1', '–', '4'], 'Select a daughter', { id: 'select' }],
+      [['D'], 'Launch selected daughter', { id: 'launch_d' }],
+      [['Q'], 'Launch marked pair', { id: 'pair' }],
+      [['R'], 'Reel selected daughter', { id: 'reel' }],
+      [['`'], 'Next tool', { id: 'next_tool' }],
+      [['N'], 'Use tool', { id: 'use_tool' }],
+      [['C'], 'Move catch to radiator', { id: 'move_catch' }],
+      [['V'], 'Change view to mother', { id: 'view_mother' }],
     ],
   },
   {
     // Next target on top, then the views and look-up keys, then the mother's
     // hardware at the bottom (owner 2026-10-12).
+    id: 'ship',
     title: 'Ship & views',
     keyWidth: '112px',
     rows: [
-      [['T', '/', 'Tab'], 'Next target'],
-      [['Space'], 'Main action'],
-      [['Esc'], 'Back'],
-      [['P'], 'Pause'],
-      [['B'], 'Upgrades (buy at resupply stop)'],
-      [['I'], 'Info'],
-      [['J'], 'Journal'],
+      [['T', '/', 'Tab'], 'Next target', { id: 'next_target' }],
+      [['Space'], 'Main action', { id: 'main_action' }],
+      [['Esc'], 'Back', { id: 'back' }],
+      [['P'], 'Pause', { id: 'pause' }],
+      [['B'], 'Upgrades (buy at the stop)', { id: 'upgrades' }],
+      [['I'], 'Info', { id: 'info' }],
+      [['J'], 'Journal', { id: 'journal' }],
       'gap',
-      [['O'], 'Radiator struts out / in'],
-      [['.'], 'Struts out / in (picked, or all)'],
-      [[','], 'Solar wings out / in'],
+      [['O'], 'Radiator struts out / in', { id: 'radiator_out' }],
+      [['.'], 'Struts out / in (picked / all)', { id: 'struts' }],
+      [[','], 'Solar wings out / in', { id: 'wings' }],
     ],
   },
   {
     // Symptom as a question, then the fix. Closed until opened, like Advanced
     // (owner 2026-10-12).
+    id: 'stuck',
     title: 'Stuck?',
     collapsed: true,
     keyWidth: '90px',
     rows: [
-      [['S'], 'Nothing to catch? Scan'],
-      [['A'], "Net won't launch? Fly closer"],
-      [['O'], 'Too hot? Open the radiator'],
-      [['Space'], 'Field empty? At LEO, press Space'],
+      [['S'], 'Nothing to catch? Scan', { id: 'stuck_scan' }],
+      [['A'], "Net won't launch? Fly closer", { id: 'stuck_fly' }],
+      [['O'], 'Too hot? Open radiator', { id: 'stuck_hot' }],
+      [['Space'], 'Field empty? At LEO, press Space', { id: 'stuck_empty' }],
     ],
   },
   {
     // Rare keys, dev keys and unbuilt features: closed until opened, so the
     // page stays short. Sorted like the cards above: start keys, then daughter
     // keys, then ship / view keys.
+    id: 'advanced',
     title: 'Advanced',
     collapsed: true,
     keyWidth: '112px',
@@ -148,48 +170,48 @@ export const HOTKEY_GROUPS = [
       // Each column follows the card above it (owner 2026-10-12): pick / look
       // first, then act, out / in switches and leave-type keys last.
       // More for Start here: look → scan → pick a part → net → fly / power.
-      [['Drag'], 'Turn the view', { pointer: true }],
-      [['Main menu'], 'Touch: drawer bottom, tap twice', { pointer: true }],
-      [['Hold RADIATORS'], 'Radiators to 180°', { pointer: true }],
-      [['Shift S'], 'Wide scan'],
-      [['Z'], 'Next debris part'],
-      [['L'], 'Hold: laser slows spin'],
-      [['K'], 'Drop nose catch'],
+      [['Drag'], 'Turn the view', { pointer: true, id: 'turn_view' }],
+      [['Main menu'], 'Touch: drawer bottom, tap twice', { pointer: true, id: 'drawer' }],
+      [['Hold RADIATORS'], 'Radiators to 180°', { pointer: true, id: 'hold_rad' }],
+      [['Shift S'], 'Wide scan', { id: 'wide_scan' }],
+      [['Z'], 'Next debris part', { id: 'next_part' }],
+      [['L'], 'Hold: laser slows spin', { id: 'laser' }],
+      [['K'], 'Drop nose catch', { id: 'nose_catch' }],
       'gap',
-      [['Shift − +'], 'Throttle down / up'],
-      [['Shift 1–3'], 'Pick power line'],
-      [['[', ']'], 'Power less / more'],
-      [['E'], 'Electric tether out / in'],
+      [['Shift − +'], 'Throttle down / up', { id: 'throttle' }],
+      [['Shift 1–3'], 'Pick power line', { id: 'power_line' }],
+      [['[', ']'], 'Power less / more', { id: 'power_adj' }],
+      [['E'], 'Electric tether out / in', { id: 'tether' }],
       'col',
       // More for Daughters: launch → fly → reel → cut (destructive last).
-      [['Shift D'], 'Launch all, one per piece'],
-      [['Shift N'], 'Send all to the best pieces'],
-      [[';', '\''], 'Launch speed down / up'],
+      [['Shift D'], 'Launch all, one per piece', { id: 'launch_all' }],
+      [['Shift N'], 'Send all to best pieces', { id: 'send_all' }],
+      [[';', '\''], 'Launch speed down / up', { id: 'launch_speed' }],
       'gap',
-      [['↑ ↓ ← →'], 'Circle target'],
-      [['+', '−'], 'Closer / farther'],
-      [['CHANGE TOOL'], 'Next tool (on her DAUGHTERS row)', { pointer: true }],
-      [['Shift R'], 'Reel all daughters'],
-      [['Shift'], 'Hold: reel faster'],
+      [['↑ ↓ ← →'], 'Circle target', { id: 'circle' }],
+      [['+', '−'], 'Closer / farther', { id: 'range' }],
+      [['CHANGE TOOL'], 'Next tool (DAUGHTERS row)', { pointer: true, id: 'change_tool' }],
+      [['Shift R'], 'Reel all daughters', { id: 'reel_all' }],
+      [['Shift'], 'Hold: reel faster', { id: 'reel_fast' }],
       'gap',
-      [['X'], 'Cut tether'],
-      [['Ctrl Shift D'], 'Burn up catch'],
+      [['X'], 'Cut tether', { id: 'cut' }],
+      [['Ctrl Shift D'], 'Burn up catch', { id: 'burn' }],
       'col',
       // More for Ship & views: inspect → panels (the two the game teaches
       // first) → unbuilt → the dev key, set apart.
-      [['Point · click'], 'Inspect / upgrade a part', { pointer: true }],
-      [['−', '+'], 'Fewer / more panels'],
-      [['5', '6'], 'Cities / constellations'],
-      [['9', '0'], 'Target info / Targets panes'],
-      [['7'], 'Radio log'],
-      [['8'], 'Nav ball'],
-      [['U'], 'Big catch: what to do with it'],
+      [['Point · click'], 'Inspect / upgrade a part', { pointer: true, id: 'inspect' }],
+      [['−', '+'], 'Fewer / more panels', { id: 'panels' }],
+      [['5', '6'], 'Cities / constellations', { id: 'cities' }],
+      [['9', '0'], 'Target info / Targets panes', { id: 'info_panes' }],
+      [['7'], 'Radio log', { id: 'radio' }],
+      [['8'], 'Nav ball', { id: 'nav' }],
+      [['U'], 'Big catch: pick what to do', { id: 'big_catch' }],
       'gap',
-      [['F'], 'Furnace (not built)'],
-      [['F2'], 'Thruster metal', { grey: 'not yet' }],
-      [['Shift G'], 'Net sweep', { grey: 'not yet' }],
+      [['F'], 'Furnace (not built)', { id: 'furnace' }],
+      [['F2'], 'Thruster metal', { grey: 'not yet', id: 'thruster_metal' }],
+      [['Shift G'], 'Net sweep', { grey: 'not yet', id: 'net_sweep' }],
       'gap',
-      [['Shift A'], 'Dev: auto-play'],
+      [['Shift A'], 'Dev: auto-play', { id: 'dev_auto' }],
     ],
   },
 ];
@@ -198,6 +220,7 @@ export class HotkeyOverlay {
   constructor() {
     this._visible = false;
     this._overlay = null;
+    this._langCode = settingsManager.getLanguage();
     this._buildDOM();
     this._setupListeners();
   }
@@ -210,6 +233,8 @@ export class HotkeyOverlay {
 
   show() {
     this._visible = true;
+    // A language picked while the page was hidden (or before it listened) shows on this open.
+    this._syncLanguage();
     // Advanced is closed on every open (H1 D1).
     if (typeof this._overlay.querySelectorAll === 'function') {
       for (const d of this._overlay.querySelectorAll('details')) d.open = false;
@@ -309,15 +334,37 @@ export class HotkeyOverlay {
       display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       flexShrink: '0',
     });
-    header.innerHTML = `
-      <div style="display:flex;align-items:center;gap:14px;">
-        <span style="font-size:16px;color:#00d4ff;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;">KEYS &amp; CONTROLS</span>
-        <span style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#888;">press ? or ESC to close</span>
-      </div>
-      <button id="hotkey-close-btn" style="background:none;border:1px solid rgba(255,255,255,0.2);
-        color:#aaa;font-size:16px;letter-spacing:0.15em;text-transform:uppercase;cursor:pointer;padding:4px 12px;border-radius:3px;
-        font-family: var(--font-mono);">ESC ×</button>
-    `;
+    const T = this._text();
+    const unspaced = UNSPACED_LANGUAGES.has(this._langCode);
+    const left = document.createElement('div');
+    Object.assign(left.style, { display: 'flex', alignItems: 'center', gap: '14px' });
+    const titleEl = document.createElement('span');
+    titleEl.id = 'hotkey-title';
+    titleEl.textContent = T.title;
+    Object.assign(titleEl.style, {
+      fontSize: '16px', color: '#00d4ff', fontWeight: '700',
+      letterSpacing: unspaced ? 'normal' : '0.14em', textTransform: unspaced ? 'none' : 'uppercase',
+    });
+    const hintEl = document.createElement('span');
+    hintEl.id = 'hotkey-hint';
+    hintEl.textContent = T.closeHint;
+    Object.assign(hintEl.style, {
+      fontSize: '11px', fontWeight: '700', color: '#888',
+      letterSpacing: unspaced ? 'normal' : '0.08em', textTransform: unspaced ? 'none' : 'uppercase',
+    });
+    left.appendChild(titleEl);
+    left.appendChild(hintEl);
+    const closeBtn = document.createElement('button');
+    closeBtn.id = 'hotkey-close-btn';
+    closeBtn.textContent = 'ESC ×';
+    closeBtn.setAttribute('aria-label', T.closeLabel);
+    Object.assign(closeBtn.style, {
+      background: 'none', border: '1px solid rgba(255,255,255,0.2)', color: '#aaa', fontSize: '16px',
+      letterSpacing: '0.15em', textTransform: 'uppercase', cursor: 'pointer', padding: '4px 12px',
+      borderRadius: '3px', fontFamily: 'var(--font-mono)',
+    });
+    header.appendChild(left);
+    header.appendChild(closeBtn);
 
     const body = document.createElement('div');
     Object.assign(body.style, {
@@ -327,7 +374,7 @@ export class HotkeyOverlay {
       // fit (2026-10-06, measured in headless Chromium: the old overflow:hidden
       // clipped rows at 1024×768 and even at 1920×1080).
       flex: '1', minHeight: '0', overflowX: 'hidden', overflowY: 'auto', padding: '16px 18px',
-      display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)',
+      display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
       // alignItems start: each card is only as tall as its own rows (owner
       // 2026-10-12: shorter Start here / Daughters boxes), not stretched to
       // the tallest card in the row.
@@ -338,12 +385,13 @@ export class HotkeyOverlay {
     // page so the list scrolls (WheelRouter._inPassthrough).
     body.setAttribute('data-wheel-passthrough', '');
 
-    // One static goal line above the cards (H5 D3).
+    // The overview above the cards (H5 D3, reworded by DECISIONS §44 row 4): one or two plain sentences, static, in
+    // the player's language. Quieter than the key rows (smaller, dimmer).
     const goal = document.createElement('div');
     goal.id = 'hotkey-goal';
-    goal.textContent = 'Clear debris: scan, then net. Too far? Fly to it.';
+    goal.textContent = T.overview;
     Object.assign(goal.style, {
-      gridColumn: '1 / -1', fontSize: '14px', color: '#cfe8ff', marginBottom: '2px',
+      gridColumn: '1 / -1', fontSize: '12px', lineHeight: '1.5', color: '#9db0c2', marginBottom: '4px',
     });
     body.appendChild(goal);
 
@@ -357,7 +405,32 @@ export class HotkeyOverlay {
     document.body.appendChild(overlay);
 
     this._overlay = overlay;
-    overlay.querySelector('#hotkey-close-btn').addEventListener('click', () => this.hide());
+    this._built = true;
+    closeBtn.addEventListener('click', () => this.hide());
+  }
+
+  /** @private The text block for the language this page is showing (English when none was read yet). */
+  _text() { return helpTextFor(this._langCode); }
+
+  /**
+   * @private Read the player's language again; when it changed, rebuild the page in it (keeping it shown or hidden).
+   * An instance that never built a page (a test's Object.create) does nothing.
+   * @returns {boolean} true when it rebuilt
+   */
+  _syncLanguage() {
+    if (!this._built) return false;
+    const code = settingsManager.getLanguage();
+    if (code === this._langCode) return false;
+    this._langCode = code;
+    const old = this._overlay;
+    const display = old.style.display;
+    const opacity = old.style.opacity;
+    this._buildDOM();
+    if (typeof old.remove === 'function') old.remove();
+    else if (old.parentNode) old.parentNode.removeChild(old);
+    this._overlay.style.display = display;
+    this._overlay.style.opacity = opacity;
+    return true;
   }
 
   /** @private Build one group card */
@@ -376,8 +449,11 @@ export class HotkeyOverlay {
     };
     Object.assign(title.style, titleStyle);
     // Text only: a group's title is its name (no glyph — Session L, plan D-J).
+    const T = this._text();
     const rowCount = group.rows.filter(r => Array.isArray(r)).length;
-    title.textContent = collapsed ? `${group.title} (${rowCount})` : group.title;
+    const groupTitle = T.groups[group.id] || group.title;
+    if (UNSPACED_LANGUAGES.has(this._langCode)) Object.assign(title.style, { letterSpacing: 'normal', textTransform: 'none' });
+    title.textContent = collapsed ? `${groupTitle} (${rowCount})` : groupTitle;
     card.appendChild(title);
 
     // Rows go straight into a plain card; a collapsed <details> wraps them in a
@@ -425,9 +501,29 @@ export class HotkeyOverlay {
         continue;
       }
       const [keys, desc, opts] = row;
-      target.appendChild(this._makeRow(keys, desc, opts, group.keyWidth));
+      target.appendChild(this._makeRow(...this._rowInLanguage(keys, desc, opts), group.keyWidth));
     }
     return card;
+  }
+
+  /**
+   * @private One row's chips, description and opts in the page's language. English rows come back as they are; a
+   * missing translation falls back to the English words. A key cap is never translated, only a pointer row's gesture
+   * words (helpText `chips`); the grey reason "not yet" is.
+   * @returns {[string[], string, object|null]}
+   */
+  _rowInLanguage(keys, desc, opts) {
+    const T = this._text();
+    const id = opts && opts.id;
+    if (!id) return [keys, desc, opts];
+    // The B row names the place buying happens: the stop after a mission, or the satellite with the range map on.
+    const textId = id === 'upgrades' && satelliteIsTheStop() ? 'upgrades_map' : id;
+    const text = T.rows[textId] || T.rows[id] || desc;
+    let chips = keys;
+    if (opts.pointer && Array.isArray(T.chips[id]) && T.chips[id].length === keys.length) chips = T.chips[id];
+    let out = opts;
+    if (typeof opts.grey === 'string' && opts.grey === helpTextFor('en').notYet) out = { ...opts, grey: T.notYet };
+    return [chips, text, out];
   }
 
   /** @private A horizontal divider between row clusters */
@@ -515,6 +611,20 @@ export class HotkeyOverlay {
     // dispose() can actually detach this.
     this._boundKeyDown = this._onKeyDown.bind(this);
     window.addEventListener('keydown', this._boundKeyDown, true);
+    // The picker's choice rebuilds the page at once, shown or hidden (DECISIONS §44).
+    this._boundLanguage = () => this._syncLanguage();
+    this._offLanguage = eventBus.on(Events.LANGUAGE_CHANGED, this._boundLanguage);
+  }
+
+  /** Detach the key and language listeners and take the page out of the document. */
+  dispose() {
+    window.removeEventListener('keydown', this._boundKeyDown, true);
+    if (typeof this._offLanguage === 'function') this._offLanguage();
+    this._offLanguage = null;
+    const o = this._overlay;
+    if (o && typeof o.remove === 'function') o.remove();
+    this._overlay = null;
+    this._built = false;
   }
 
   /**
