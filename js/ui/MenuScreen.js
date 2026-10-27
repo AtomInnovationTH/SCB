@@ -277,7 +277,6 @@ export class MenuScreen {
           text-decoration: underline dotted; text-underline-offset: 3px;
           -webkit-tap-highlight-color: transparent;
         }
-        .adr-list li.adr-also .adr-more-btn { margin-left: 0; }
         .adr-more-btn:focus { outline: none; }   /* index.html's green button:focus box is for real buttons */
         .adr-more-btn:hover, .adr-more-btn:focus-visible { color: #aaddff; }
         .adr-more-btn[aria-expanded="true"] { color: rgba(0,204,255,0.6); }
@@ -340,7 +339,6 @@ export class MenuScreen {
              underline the text itself instead. */
           .adr-name { border-bottom: 0; text-decoration: underline dotted rgba(0,204,255,0.45); text-underline-offset: 3px; }
           .adr-more-btn { font-size: 0.85rem; padding: 0.8rem 8px; margin: -0.8rem 0 -0.8rem 2px; }
-          .adr-list li.adr-also .adr-more-btn { margin-left: -8px; }
           #menu-tip { font-size: 0.95rem; max-width: min(400px, 78vw); padding: 11px 14px; }
         }
         /* ── Version button (update notice, owner 2026-10-26): "V1.02 · What's new" + a dot until the notes were opened.
@@ -574,10 +572,12 @@ export class MenuScreen {
               </p>
             </div>
 
-            <!-- Countries — Thailand, India, Japan, then Other. One is open at
+            <!-- Countries — Thailand, India, Japan, then Other: four header lines, each
+                 a name and "(more)" flush left, the same markup. One is open at
                  a time (owner 2026-10-26): a closed country shows only its name and
                  "(more)"; open, its <ul id="adr-more-<country>"> shows three
-                 organisations and the other names. "Other (more)" shows
+                 organisations and the other names. "Other (more)" is the
+                 fourth header (not a country, so no badge count) and shows
                  NASA and ESA. MenuScreen._toggleMore() opens one and closes the rest;
                  the language pick opens its country (_openCountryFor), on load too.
                  Country headers are .adr-section DIV siblings of each list
@@ -623,9 +623,9 @@ export class MenuScreen {
                 <span class="adr-nw"><span class="adr-name" title="Tokyo satellite maker. Seven GRUS-3 satellites launched on a Falcon 9 on 7 July 2026; in September it said four had lost their high-speed downlink and cannot be recovered.">Axelspace</span>,</span>
                 <span class="adr-nw"><span class="adr-name" title="Japanese rocket company building ZERO, a two-stage rocket for up to 1,000 kg to low orbit. ZERO has not flown yet: its launch pad is due to be finished in early 2027, and seven satellites are booked for its first flight.">Interstellar Technologies</span>.</span></li>
               </ul>
-              <ul class="adr-list">
-              <li class="adr-also">Other <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-countries">(more)</button></li>
-              <li class="adr-also adr-more" id="adr-more-countries" hidden>
+              <div class="adr-section">Other <button type="button" class="adr-more-btn" aria-expanded="false" aria-controls="adr-more-countries">(more)</button></div>
+              <ul class="adr-list" id="adr-more-countries" hidden>
+              <li class="adr-also">
                 <span class="adr-nw"><span class="adr-name" title="America's space agency. Its Orbital Debris Program Office wrote NASA's first debris-mitigation rules in 1995 and builds the ORDEM and LEGEND debris models.">NASA</span> (USA),</span>
                 <span class="adr-nw"><span class="adr-name" title="Europe's space agency. Its Space Debris Office, mainly at ESOC in Darmstadt, coordinates European debris research; its Clean Space initiative covers zero-debris technology and in-orbit servicing.">ESA</span> (Europe).</span></li>
               </ul>
