@@ -1727,11 +1727,13 @@ async function init() {
         }
         const playerPos = player && player.getPosition ? player.getPosition() : null;
         if (debrisField && playerPos && typeof debrisField.getDebrisNear === 'function') {
-          // Nearest discovered debris distance (metres). 5 km search window.
-          const near = debrisField.getDebrisNear(playerPos, 5.0);
+          // Nearest discovered debris distance (metres). 5 km search window: getDebrisNear takes SCENE units (1 unit = 100 km,
+          // Constants.SCENE_SCALE = 0.01 per km), so 5 km is 5 * SCENE_SCALE; a bare 5.0 was 500 km and gave "Debris 335654 meters".
+          const near = debrisField.getDebrisNear(playerPos, 5 * Constants.SCENE_SCALE);
           let bestKm = Infinity;
           for (const d of (near || [])) {
             if (!d) continue; const live = debrisField.getDebrisById ? debrisField.getDebrisById(d.id) : null; if ((live ? live.discovered : d.discovered) === false) continue; // canonical flag: the frame cache can hold pre-reveal snapshots
+            if (typeof d.distanceKm === 'number' && d.distanceKm > 5) continue; // getDebrisNear reuses a same-frame wider (500 km sensor) result unfiltered when the radius shrinks: keep to the 5 km we asked for
             if (typeof d.distanceKm === 'number' && d.distanceKm < bestKm) bestKm = d.distanceKm;
           }
           if (bestKm < Infinity) nearestDebrisM = bestKm * 1000;

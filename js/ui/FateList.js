@@ -13,8 +13,12 @@
  * Opening: U (InputManager calls `toggleFromKey`) on floors 2-4, or the CHOOSE chip on glass (it presses U), only with a big piece
  * aboard. While it is open `onOpenChange(true)` lets the host hide the where-next list (it stays pending and comes back on close).
  *
+ * Three big choices, chosen by rule (FateRows.pickChoices: the easiest fate that pays, the best-paying other, keep), each a bold action, the
+ * money on the right and one dim sub-line; under a rule a small dim DETAILS block: the "Also" rows (other fates she can still pick), what is
+ * not possible now, the owner and the values. The model keeps all five fates; the box paints from `choices`, `also` and `details`.
+ *
  * Keys (only while open; a capture listener on the window, so the ladder's arrows and Tab never see them):
- *   Left / Right  the previous / next piece ("1 of 3")        Up / Down / Tab  the previous / next fate row (those that can be picked)
+ *   Left / Right  the previous / next piece ("1 of 3")        Up / Down / Tab  the previous / next choice, then the "Also" rows
  *   Enter / Space pick the focused row                         Esc / U          close
  * Touch / mouse: a tap on a row focuses it, tapping the focused row picks it; the tabs and the close button are 44 px targets on glass.
  *
@@ -42,7 +46,7 @@ export const WIDTH_PX = 580;
 export const TOP_CLEAR_PX = 280;
 export const MAX_HEIGHT_CSS = `calc(100vh - ${BOTTOM_PX + TOP_CLEAR_PX}px)`;
 export const STOPPED_EVENTS = ['pointerdown', 'pointerup', 'pointermove', 'touchstart', 'touchmove', 'touchend', 'mousedown', 'mouseup', 'click'];
-export const HINT_DESKTOP = '\u2190 \u2192 other piece \u00b7 \u2191 \u2193 row \u00b7 Enter: choose \u00b7 U: close';
+export const HINT_DESKTOP = '\u2190 \u2192 other piece \u00b7 \u2191 \u2193 choice \u00b7 Enter: choose \u00b7 U: close';
 export const HINT_GLASS = 'Tap a row, tap it again to choose';
 /** The floors the list opens on (the ladder's floors 2-4); no ladder (no floor number) opens anywhere. */
 export const FLOORS = Object.freeze([2, 3, 4]);
@@ -50,6 +54,47 @@ export const FLOORS = Object.freeze([2, 3, 4]);
 const MARK = '\u25b8';
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 const FLOOR4 = (FloorContract.byId(4) || { name: 'map' }).name;
+
+/** Painted sizes (CSS px) the panel uses, so a test can add up its height from the counts (an ESTIMATE: only a browser measures it). */
+export const LAYOUT_PX = Object.freeze({
+  PAD: 18,              // padding 8 + 8 and the 1 px border either side
+  HEAD_TEXT: 20,        // the title line (the close button is `px` tall)
+  TABS_TEXT: 18,
+  CHOICE_MIN: 52,       // a big row: bold label line + one dim sub-line + padding (never under the touch target)
+  DIVIDER: 12,          // rule, gap and the small "DETAILS" label
+  DETAIL_LINE: 15,      // one wrapped line of a detail
+  DETAIL_GAP: 4,
+  DETAIL_CHARS: 70,     // characters per wrapped line at 0.7rem in 560 px (estimate)
+  HINT: 20,
+});
+
+/**
+ * A model with the choice fields filled in: a model that has no `choices` (a host's own, older shape) shows every row that can be picked as a choice.
+ * @param {object} m a `buildFateRows` result or an older-shaped one @returns {object}
+ */
+export function normalizeModel(m) {
+  const rows = m.rows.map((r) => ({ ...r, label: r.label != null ? r.label : r.text, money: r.money || '', sub: r.sub || '' }));
+  const hasChoices = Array.isArray(m.choices);
+  const choices = hasChoices ? m.choices.filter((id) => rows.some((r) => r.id === id)) : rows.filter((r) => r.selectable).map((r) => r.id);
+  const also = Array.isArray(m.also) ? m.also.filter((id) => rows.some((r) => r.id === id) && !choices.includes(id)) : [];
+  return { ...m, rows, choices, also, details: Array.isArray(m.details) ? m.details : [] };
+}
+
+/**
+ * The height the open panel needs, from the counts: the head, the piece line, one big row per choice, the details (an "Also" row each, then the
+ * wrapped detail lines) and the hint. An estimate at the CSS heights above (the real pixels are a browser's).
+ * @param {{choices: string[], also: string[], details: string[]}} m @param {boolean} glass @returns {number} px
+ */
+export function estimateHeightPx(m, glass) {
+  const px = glass ? ROW_PX_GLASS : ROW_PX_DESKTOP;
+  const L = LAYOUT_PX;
+  let h = L.PAD + Math.max(px, L.HEAD_TEXT) + 4 + Math.max(px, L.TABS_TEXT) + 2;
+  h += m.choices.length * (Math.max(px, L.CHOICE_MIN) + 2);
+  if (m.also.length || m.details.length) h += L.DIVIDER;
+  h += m.also.length * (Math.max(px, L.DETAIL_LINE) + 2);
+  for (const line of m.details) h += Math.max(1, Math.ceil(String(line).length / L.DETAIL_CHARS)) * L.DETAIL_LINE + L.DETAIL_GAP;
+  return h + 6 + L.HINT;
+}
 
 /** The one line a pick says (the executor of the fate says the rest when it acts). @param {string} fate @param {string} name @param {boolean} berthed */
 export function pickLine(fate, name, berthed) {
@@ -126,8 +171,16 @@ export class FateList {
   index() { return this._pieces.findIndex((p) => p.debris.id === this._pieceId); }
   /** The shown piece's id, or null. */
   pieceId() { return this._pieceId; }
-  /** The shown piece's rows as built: [{id, text, selectable, state, current, focused}] (a copy). */
+  /** The shown piece's rows as built: [{id, text, label, money, sub, selectable, state, current, focused}], all five fates (a copy). */
   rows() { return this._model ? this._model.rows.map((r) => ({ ...r, focused: r.id === this._focusId })) : []; }
+  /** The ids of the big choices, in order (a copy). */
+  choices() { return this._model ? this._model.choices.slice() : []; }
+  /** The ids of the "Also" rows (pickable, shown small under the choices), in order (a copy). */
+  also() { return this._model ? this._model.also.slice() : []; }
+  /** The ids the keys and taps walk, in order: the choices, then the "Also" rows. */
+  focusOrder() { return this._model ? this._model.choices.concat(this._model.also) : []; }
+  /** The detail lines under the choices ("Not possible now: ...", "Owner: ...", "Values: ..."), a copy. */
+  details() { return this._model ? this._model.details.slice() : []; }
   /** The shown piece's whole model (values, progress, picked), or null. */
   model() { return this._model; }
   focusedId() { return this._focusId; }
@@ -208,12 +261,13 @@ export class FateList {
     let model = null;
     try { model = this._getRows(entry.debris); } catch (_e) { model = null; }
     if (!model || !Array.isArray(model.rows)) model = { name: pieceName(entry.debris), mass: 0, values: [], rows: [], progress: null, maxPayCr: 0, picked: null, berthed: false };
+    model = normalizeModel(model);
     this._model = model;
     this._lastBuildMs = this._now();
-    const sel = model.rows.filter((r) => r.selectable).map((r) => r.id);
+    const sel = model.choices.concat(model.also);
     const keep = !preFocus && !changed && this._focusId != null && sel.includes(this._focusId);
     if (keep) { /* the focus stays */ } else {
-      const picked = model.rows.find((r) => r.current && r.selectable);
+      const picked = model.rows.find((r) => r.current && r.selectable && sel.includes(r.id));
       this._focusId = picked ? picked.id : (sel.length ? sel[0] : null);
     }
     this._paint();
@@ -256,10 +310,10 @@ export class FateList {
     return true;
   }
 
-  /** Move the focus to the next / previous row that can be picked (wraps). @returns {boolean} the focus moved */
+  /** Move the focus to the next / previous choice, then the "Also" rows (wraps). @returns {boolean} the focus moved */
   focusStep(dir) {
     if (!this.isOpen() || !this._model) return false;
-    const sel = this._model.rows.filter((r) => r.selectable).map((r) => r.id);
+    const sel = this.focusOrder();
     if (!sel.length) return false;
     const i = sel.indexOf(this._focusId);
     this._focusId = sel[i < 0 ? 0 : (i + (dir < 0 ? -1 : 1) + sel.length) % sel.length];
@@ -270,15 +324,15 @@ export class FateList {
   /** Pick the focused row (Enter). @returns {boolean} the pick was made */
   pickFocused() {
     if (!this.isOpen()) return false;
-    const r = this._model && this._model.rows.find((x) => x.id === this._focusId);
+    const r = this._model && this.focusOrder().includes(this._focusId) && this._model.rows.find((x) => x.id === this._focusId);
     if (!r || !r.selectable) return false;
     return this._pick(r.id);
   }
 
-  /** A tap / click on row `id`: focus it, or pick it when it already has the focus. Rows that cannot be picked ignore it. */
+  /** A tap / click on row `id`: focus it, or pick it when it already has the focus. Rows that cannot be picked or are not on the list ignore it. */
   tapRow(id) {
     if (!this.isOpen() || this._blocked()) return false;
-    const r = this._model && this._model.rows.find((x) => x.id === id);
+    const r = this._model && this.focusOrder().includes(id) && this._model.rows.find((x) => x.id === id);
     if (!r || !r.selectable) return false;
     if (this._focusId === id) return this._pick(id);
     this._focusId = id;
@@ -407,7 +461,8 @@ export class FateList {
     const m = this._model;
     const n = this._pieces.length;
     const at = Math.max(0, this.index());
-    const key = JSON.stringify([glass, this._focusId, n, at, this._pieceId, m.name, m.mass, m.values, m.progress, m.picked, m.rows.map((r) => [r.id, r.text, r.selectable, r.current])]);
+    const key = JSON.stringify([glass, this._focusId, n, at, this._pieceId, m.name, m.mass, m.progress, m.picked, m.choices, m.also, m.details,
+      m.rows.map((r) => [r.id, r.text, r.label, r.money, r.sub, r.selectable, r.current])]);
     if (key === this._paintKey) return;
     this._paintKey = key;
     for (const el of this._rowEls) this._root.removeChild(el);
@@ -438,13 +493,7 @@ export class FateList {
     tabs.appendChild(what);
     add(tabs);
 
-    // what it is worth
-    for (const v of m.values) {
-      const line = doc.createElement('div');
-      line.textContent = v;
-      Object.assign(line.style, { opacity: '0.8', fontSize: '0.72rem' });
-      add(line);
-    }
+    // (the old value lines are gone: their content is in the details under the choices)
 
     if (m.progress) {
       const pr = doc.createElement('div');
@@ -452,29 +501,83 @@ export class FateList {
       Object.assign(pr.style, { marginTop: '6px', color: VisualLaw.COLORS.CAUTION });
       add(pr);
     }
-    for (const r of m.rows) {
-      const focused = r.id === this._focusId;
+    const rowOf = (id) => m.rows.find((r) => r.id === id);
+    const tap = (id) => (e) => { if (e && typeof e.stopPropagation === 'function') e.stopPropagation(); this.tapRow(id); };
+    const base = (r, focused) => {
       const row = doc.createElement('div');
       row.setAttribute('role', 'option');
       row.setAttribute('data-id', r.id);
       row.setAttribute('aria-selected', focused ? 'true' : 'false');
       row.setAttribute('aria-disabled', r.selectable ? 'false' : 'true');
       Object.assign(row.style, {
-        display: 'flex', alignItems: 'center', boxSizing: 'border-box', minHeight: `${px}px`, padding: '2px 6px',
-        marginTop: '2px', borderRadius: '3px', cursor: r.selectable ? 'pointer' : 'default',
+        boxSizing: 'border-box', minHeight: `${px}px`, marginTop: '2px', borderRadius: '3px', cursor: r.selectable ? 'pointer' : 'default',
         border: `1px solid ${focused ? VisualLaw.COLORS.SELECTION : 'transparent'}`,
-        background: focused ? 'rgba(68,136,255,0.18)' : 'transparent',
-        color: VisualLaw.COLORS.INFO, opacity: r.selectable ? '1' : '0.55',
+        background: focused ? 'rgba(68,136,255,0.18)' : 'transparent', color: VisualLaw.COLORS.INFO,
       });
+      row.addEventListener('click', tap(r.id));
+      return row;
+    };
+    const markEl = (focused) => {
       const mark = doc.createElement('span');
       mark.textContent = focused ? MARK : '';
       Object.assign(mark.style, { display: 'inline-block', width: '1.2em', flex: '0 0 auto', color: VisualLaw.COLORS.SELECTION });
+      return mark;
+    };
+
+    // the big choices: number, bold action on the left, money on the right, one dim sub-line
+    m.choices.forEach((id, i) => {
+      const r = rowOf(id);
+      if (!r) return;
+      const focused = id === this._focusId;
+      const row = base(r, focused);
+      Object.assign(row.style, { display: 'grid', gridTemplateColumns: '1.2em 1.6em 1fr auto', columnGap: '4px', alignItems: 'center', padding: '4px 6px' });
+      const num = doc.createElement('span');
+      num.textContent = String(i + 1);
+      Object.assign(num.style, { gridColumn: '2', gridRow: '1 / span 2', opacity: '0.7', fontWeight: 'bold', fontSize: '1rem' });
       const label = doc.createElement('span');
-      label.textContent = r.current ? `${r.text} (your pick)` : r.text;
-      row.appendChild(mark);
-      row.appendChild(label);
-      row.addEventListener('click', (e) => { if (e && typeof e.stopPropagation === 'function') e.stopPropagation(); this.tapRow(r.id); });
+      label.textContent = r.current ? `${r.label} (your pick)` : r.label;
+      Object.assign(label.style, { gridColumn: '3', gridRow: '1', fontWeight: 'bold', fontSize: '0.95rem' });
+      const money = doc.createElement('span');
+      money.textContent = r.money;
+      Object.assign(money.style, { gridColumn: '4', gridRow: '1', textAlign: 'right', fontWeight: 'bold', fontSize: '0.95rem', whiteSpace: 'nowrap' });
+      const sub = doc.createElement('span');
+      sub.textContent = r.sub;
+      Object.assign(sub.style, { gridColumn: '3 / span 2', gridRow: '2', opacity: '0.6', fontSize: '0.72rem' });
+      const mark = markEl(focused);
+      Object.assign(mark.style, { gridColumn: '1', gridRow: '1 / span 2' });
+      for (const el of [mark, num, label, money, sub]) row.appendChild(el);
       add(row);
+    });
+
+    // the details: a rule, a small dim label, the "Also" rows (pickable), then the plain lines (not pickable)
+    if (m.also.length || m.details.length) {
+      const rule = doc.createElement('div');
+      Object.assign(rule.style, { borderTop: `1px solid ${VisualLaw.COLORS.INFO}`, opacity: '0.3', marginTop: '8px' });
+      add(rule);
+      const tag = doc.createElement('div');
+      tag.textContent = 'DETAILS';
+      Object.assign(tag.style, { opacity: '0.55', fontSize: '0.68rem', marginTop: '4px' });
+      add(tag);
+    }
+    for (const id of m.also) {
+      const r = rowOf(id);
+      if (!r) continue;
+      const focused = id === this._focusId;
+      const row = base(r, focused);
+      Object.assign(row.style, { display: 'flex', alignItems: 'center', padding: '2px 6px', fontSize: '0.72rem' });
+      const text = doc.createElement('span');
+      const lower = r.label.charAt(0).toLowerCase() + r.label.slice(1);
+      text.textContent = `Also: ${lower}${r.money ? ` ${'\u00b7'} ${r.money}` : ''}`;
+      Object.assign(text.style, { opacity: focused ? '1' : '0.8' });
+      row.appendChild(markEl(focused));
+      row.appendChild(text);
+      add(row);
+    }
+    for (const t of m.details) {
+      const line = doc.createElement('div');
+      line.textContent = t;
+      Object.assign(line.style, { opacity: '0.6', fontSize: '0.7rem', marginTop: '4px', lineHeight: '1.25' });
+      add(line);
     }
     const hint = doc.createElement('div');
     hint.textContent = glass ? HINT_GLASS : HINT_DESKTOP;
@@ -482,12 +585,12 @@ export class FateList {
     add(hint);
   }
 
-  /** The text of the DOM as painted, one string per element (tests). */
+  /** The text of the DOM as painted, one string per element (tests); the divider rule has no text and is left out. */
   domText() {
     return this._rowEls.map((el) => {
       const kids = el.children ? Array.from(el.children) : [];
-      return kids.length ? kids.map((c) => c.textContent).join('') : el.textContent;
-    });
+      return kids.length ? kids.map((c) => c.textContent).filter((t) => t !== '').join(' ') : el.textContent;
+    }).filter((t) => t !== '');
   }
 
   /** The panel's root element (tests / layout probes), or null. */

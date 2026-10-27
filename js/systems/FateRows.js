@@ -16,7 +16,7 @@
  *                "needs 12.2 kg gas, 4.7 kg short"; at or within 0.5 km above that height: selectable, "Let the SL-14 stage go here at
  *                635 km: it comes down in about 24 years . pays 14,000" (the where-next row's words)
  *     sail       "Fit a drag sail and let go . down in 39 years . over 25 years, no fee . 1 of 2 sails"; none aboard: not selectable
- *     keep       "Keep it aboard . pays nothing yet . 1,400 kg more on every trip"
+ *     keep       "Keep it for now . pays nothing yet . 1,400 kg more on every trip"
  *     melt       "Melt it for metal . melted in the tip furnaces on your next trips . pays up to 61,040"; selectable only with
  *                `ctx.bigMelt` (FEATURE_FLAGS.BIG_MELT), else "the furnaces cannot take it yet"
  *   A piece already in the furnaces (`_disposal.meltDoneKg` > 0, C7 "Melt progress"): `progress` "In the furnaces: 820 of 1,400 kg
@@ -111,6 +111,8 @@ function valueLines(d) {
  * @property {boolean} selectable
  * @property {string} state        'ok' | 'short' | 'cannot' | 'none' | 'off' | 'low'
  * @property {boolean} current     the piece's marked fate is this one
+ * @property {string} label @property {string} money @property {string} sub   the big row's three strings (`rowWords`)
+ * @property {string} clause @property {string} why   the short phrase and reason for the "Not possible now" detail line
  * @property {number} [payCr]      what this fate pays now
  * @property {number} [gasKg] @property {number} [shortKg] @property {number} [days] @property {number} [backGasKg] @property {number} [targetKm]
  */
@@ -119,7 +121,10 @@ function valueLines(d) {
  * @param {object} piece the field body (or scoop bag) with `_disposal`
  * @param {{fromKm?: number, planTo?: Function, planBack?: Function, berth?: ({id: string, altKm: number}|null), sats?: Array<{id: string, altKm: number}>,
  *   sailsAboard?: number, bigMelt?: boolean, turnWaitS?: ({up: number, down: number}|null)}} [ctx] see `fateContext`
- * @returns {{name: string, mass: number, values: string[], rows: FateRow[], progress: (string|null), maxPayCr: number, picked: (string|null), berthed: boolean}}
+ * @returns {{name: string, mass: number, values: string[], rows: FateRow[], progress: (string|null), maxPayCr: number, picked: (string|null), berthed: boolean,
+ *   choices: string[], also: string[], details: string[]}}
+ *   `rows` are all five fates; `choices` the ids shown big (see `pickChoices`), `also` the other fates she can still pick, `details` the short
+ *   lines under them ("Not possible now: ...", "Owner: ...", "Values: ...").
  */
 export function buildFateRows(piece, ctx = {}) {
   const d = piece;
@@ -129,12 +134,66 @@ export function buildFateRows(piece, ctx = {}) {
   const base = { name: pieceNameCap(d), mass, values: valueLines(d), maxPayCr: maxFatePayCr(d), picked, berthed: !!ctx.berth };
   if (disp.meltDoneKg > 0) {
     const total = Number.isFinite(disp.massAtCatch) && disp.massAtCatch > 0 ? disp.massAtCatch : mass;
-    return { ...base, rows: [], progress: `In the furnaces: ${kgWhole(disp.meltDoneKg)} of ${kgWhole(total)} kg melted` };
+    return { ...base, rows: [], progress: `In the furnaces: ${kgWhole(disp.meltDoneKg)} of ${kgWhole(total)} kg melted`, choices: [], also: [], details: [] };
   }
+  const x = { mass, name: pieceName(d), berthed: !!ctx.berth };
   const rows = [
     satelliteRow(d, ctx), pushRow(d, ctx), sailRow(d, ctx), keepRow(d, mass), meltRow(d, ctx),
-  ].map((r) => ({ ...r, current: r.id === picked }));
-  return { ...base, rows, progress: null };
+  ].map((r) => withWords({ ...r, current: r.id === picked }, x));
+  const { choices, also } = pickChoices(rows);
+  return { ...base, rows, progress: null, choices, also, details: detailLines(d, rows) };
+}
+
+/** How easy a fate is to finish, easiest first: one hand-over beats a trip; the melt takes several trips (keep is not ranked: it is always last). */
+export const EASE_RANK = Object.freeze(['satellite', 'sail', 'push', 'melt']);
+
+/**
+ * Which fates show as the big choices, by rule (owner 2026-10-26: "3 easy choices. 1st choice is most likely"):
+ *   choice 1 = the easiest selectable fate that pays (by `EASE_RANK`); none pays: the easiest selectable one;
+ *   choice 2 = the selectable paying fate with the highest pay other than choice 1 (a tie goes to the easier); none: the next selectable by rank;
+ *   choice 3 = keep, always last. Never a fate that cannot be picked. The fate she already picked (`current`), if selectable, is always shown:
+ *   it takes slot 2 when the rule leaves it out. Every other selectable fate comes back in `also` (still pickable), in `FATE_ORDER`.
+ * Pure. @param {FateRow[]} rows @returns {{choices: string[], also: string[]}}
+ */
+export function pickChoices(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const ranked = EASE_RANK.map((id) => list.find((r) => r.id === id)).filter((r) => r && r.selectable);
+  const paying = ranked.filter((r) => r.payCr > 0);
+  const first = paying[0] || ranked[0] || null;
+  let second = null;
+  if (first) {
+    const others = paying.filter((r) => r !== first);
+    for (const r of others) if (!second || r.payCr > second.payCr) second = r;       // ranked order: a tie keeps the easier
+    if (!second) second = ranked.find((r) => r !== first) || null;
+  }
+  const cur = list.find((r) => r.current && r.selectable && r.id !== 'keep') || null;
+  const big = [first, second].filter(Boolean);
+  if (cur && !big.includes(cur)) { if (big.length > 1) big[1] = cur; else big.push(cur); }
+  const choices = big.map((r) => r.id);
+  if (list.some((r) => r.id === 'keep' && r.selectable)) choices.push('keep');
+  const also = FATE_ORDER.filter((id) => !choices.includes(id) && list.some((r) => r.id === id && r.selectable));
+  return { choices, also };
+}
+
+/** @private the details under the choices: what cannot be done now (with why), who owns it, what it is worth. */
+function detailLines(d, rows) {
+  const out = [];
+  const no = rows.filter((r) => !r.selectable).map((r) => `${r.clause}${r.why ? ` (${r.why})` : ''}${r.current ? ' (your pick)' : ''}`);
+  if (no.length) out.push(`Not possible now: ${no.join(` ${DOT} `)}`);
+  const h = holderOf(d);
+  const v = pieceValues(d);
+  const who = h.name || (h.status === 'insurer' ? 'its insurer' : 'its owner');
+  const pct = Math.round(v.consentShare * 100);
+  if (h.status === 'abandoned') out.push('Owner: nobody (its company is gone), so no removal fee and nobody to ask or pay.');
+  else if (h.status || h.name) {
+    const takes = pct > 0 ? ` ${who} takes ${pct} % of ${v.partsCr > 0 ? 'metal or parts' : 'metal'} you sell.` : '';   // only the parts the piece has; no rights, no sentence
+    out.push(`Owner: ${who}. Removal fee ${creditsText(v.removalFeeCr)} cr, paid when it is gone.${takes}`);
+  }
+  const vals = [`scrap metal ${kgWhole(v.scrapKg)} kg, ${creditsText(v.scrapCr)} cr`, `anchor metal ${creditsText(v.anchorCr)} cr`];
+  if (v.partsCr > 0) vals.push(`parts ${creditsText(v.partsCr)} cr`);
+  if (v.collectorCr > 0) vals.push(`collector ${creditsText(v.collectorCr)} cr`);
+  out.push(`Values: ${vals.join(` ${DOT} `)}`);
+  return out;
 }
 
 /** @private "Hand it to a satellite": at once while berthed, else the nearest satellite by height. */
@@ -162,6 +221,75 @@ function satelliteRow(d, ctx) {
     text: `${where} ${DOT} next trip, ${daysText(days)}, ${kgText(gasKg)} kg gas ${DOT} ${paysText(payCr)}` };
 }
 
+// ── the words of a row: label, money, sub (the list's big rows) and clause / why (its "Not possible now" line) ──────────────────
+
+/** @param {number} cr @returns {string} "+19,293 cr", or "pays nothing" */
+function plusCr(cr) { return cr > 0 ? `+${creditsText(cr)} cr` : 'pays nothing'; }
+
+/**
+ * The one table from a row's fate and state to its short words, for every state this file produces (the fate list paints these;
+ * `text` stays the long single line). Built from the same numbers as `text`.
+ * @param {string} id @param {string} state @param {object} r the row as built (payCr, gasKg, shortKg, days, backGasKg, targetKm, lifeYears ...)
+ * @param {{mass?: number, name?: string, berthed?: boolean}} x what the row does not carry itself (the piece's mass and name, berthed)
+ * @returns {{label: string, money: string, sub: string, clause: string, why: string}}
+ */
+export function rowWords(id, state, r, x = {}) {
+  const gas = (k) => `${kgText(k)} kg gas`;
+  switch (`${id}/${state}`) {
+    case 'satellite/ok':
+      return x.berthed
+        ? { label: 'Hand it over now', money: plusCr(r.payCr), sub: 'the satellite is right here', clause: 'hand it over now', why: '' }
+        : { label: 'Hand it to the satellite', money: plusCr(r.payCr), sub: `next trip, ${daysText(r.days)} ${DOT} ${gas(r.gasKg)}`, clause: 'hand it to the satellite', why: '' };
+    case 'satellite/short':
+      return { label: 'Hand it to the satellite', money: plusCr(r.payCr), sub: `next trip needs ${gas(r.gasKg)}, ${kgText(r.shortKg)} kg short`,
+        clause: 'hand it to the satellite', why: `${kgText(r.shortKg)} kg gas short` };
+    case 'satellite/cannot':
+      return { label: 'Hand it to the satellite', money: plusCr(r.payCr), sub: 'at your next berth', clause: 'hand it to the satellite', why: 'at your next berth' };
+    case 'satellite/none':
+      return { label: 'Hand it to a satellite', money: plusCr(r.payCr), sub: 'there is no satellite to take it', clause: 'hand it to a satellite', why: 'there is no satellite to take it' };
+    case 'push/ok': {
+      const km = Math.round(r.targetKm);
+      return { label: `Push it down to ${km} km and let go`, money: plusCr(r.payCr),
+        sub: `${gas(r.gasKg)}, ${daysText(r.days)} ${DOT} then about ${kgText(r.backGasKg)} kg to climb back`, clause: `push it down to ${km} km`, why: '' };
+    }
+    case 'push/low': {
+      const n = Math.max(1, Math.round(r.lifeYears));
+      const when = Number.isFinite(r.lifeYears) ? `comes down in about ${n} ${n === 1 ? 'year' : 'years'}` : 'it stays up';
+      return { label: `Let the ${x.name || 'piece'} go here`, money: plusCr(r.payCr), sub: `at ${Math.round(r.fromKm)} km ${DOT} ${when}`, clause: 'let it go here', why: '' };
+    }
+    case 'push/short': {
+      const km = Math.round(r.targetKm);
+      return { label: `Push it down to ${km} km and let go`, money: plusCr(r.payCr), sub: `needs ${kgText(r.gasKg + r.backGasKg)} kg gas, ${kgText(r.shortKg)} kg short`,
+        clause: `push it down to ${km} km`, why: `${kgText(r.shortKg)} kg gas short` };
+    }
+    case 'push/cannot': {
+      const km = Number.isFinite(r.targetKm) ? ` to ${Math.round(r.targetKm)} km` : '';
+      const why = r.reason || 'its size is not known';
+      return { label: `Push it down${km} and let go`, money: plusCr(r.payCr), sub: why, clause: `push it down${km}`, why };
+    }
+    case 'sail/ok':
+      return { label: 'Fit a drag sail and let go', money: r.within ? plusCr(r.payCr) : 'no fee',
+        sub: `down in ${yearsText(r.lifeYears)}${r.within ? '' : ` (over ${Constants.BIG_PIECES.RULE_YEARS} years)`} ${DOT} 1 of ${r.aboard} ${r.aboard === 1 ? 'sail' : 'sails'}`,
+        clause: 'fit a drag sail', why: '' };
+    case 'sail/none':
+      return { label: 'Fit a drag sail and let go', money: 'no fee', sub: 'buy one at a resupply satellite', clause: 'fit a drag sail', why: 'buy one at a resupply satellite' };
+    case 'keep/ok':
+      return { label: 'Keep it for now', money: 'pays nothing yet', sub: `${creditsText(x.mass)} kg more on every trip`, clause: 'keep it for now', why: '' };
+    case 'melt/ok':
+      return { label: 'Melt it for metal', money: `up to ${plusCr(r.payCr)}`, sub: 'in the tip furnaces, over your next trips', clause: 'melt it for metal', why: '' };
+    case 'melt/off':
+      return { label: 'Melt it for metal', money: `up to ${plusCr(r.payCr)}`, sub: 'the furnaces cannot take it yet', clause: 'melt it for metal', why: 'the furnaces cannot take it yet' };
+    default:
+      return { label: String(id), money: '', sub: '', clause: String(id), why: '' };
+  }
+}
+
+/** @private add the words to a built row (the row's own `text` is unchanged). */
+function withWords(row, x) {
+  const w = rowWords(row.id, row.state, row, x);
+  return { ...row, label: w.label, money: w.money, sub: w.sub, clause: w.clause, why: w.why };
+}
+
 /** @private the days a trip shows: the profile's plus the wait for her nose, as the where-next rows say them. */
 function tripDays(profile, turn) {
   if (!turn || typeof turn !== 'object') return profile.days;
@@ -173,7 +301,7 @@ function tripDays(profile, turn) {
 function pushRow(d, ctx) {
   const payCr = fatePay(d, 'push').totalCr;
   const target = pushTargetKm(d);
-  if (!Number.isFinite(target)) return { id: 'push', state: 'cannot', selectable: false, payCr, text: `Push it down ${DOT} its size is not known` };
+  if (!Number.isFinite(target)) return { id: 'push', state: 'cannot', selectable: false, payCr, reason: 'its size is not known', text: `Push it down ${DOT} its size is not known` };
   const head = `Push it down to ${Math.round(target)} km and let go`;
   const from = Number.isFinite(ctx.fromKm) ? ctx.fromKm : null;
   if (from != null && from <= target + PUSH_SLACK_KM) {
@@ -182,16 +310,16 @@ function pushRow(d, ctx) {
     const life = lifetimeYears(from, d.mass, dragAreaM2(d));
     const n = Math.max(1, Math.round(life));
     const when = Number.isFinite(life) ? `it comes down in about ${n} ${n === 1 ? 'year' : 'years'}` : 'it stays up';
-    return { id: 'push', state: 'low', selectable: true, payCr, targetKm: target, lifeYears: life,
+    return { id: 'push', state: 'low', selectable: true, payCr, targetKm: target, lifeYears: life, fromKm: from,
       text: `Let the ${pieceName(d)} go here at ${Math.round(from)} km: ${when} ${DOT} ${paysText(payCr)}` };
   }
   const down = typeof ctx.planTo === 'function' ? ctx.planTo({ id: 'free', altKm: target }) : null;
   if (!down || !down.profile || !down.profile.ok) {
-    return { id: 'push', state: 'cannot', selectable: false, payCr, targetKm: target, text: `${head} ${DOT} the thruster cannot take her there` };
+    return { id: 'push', state: 'cannot', selectable: false, payCr, targetKm: target, reason: 'the thruster cannot take her there', text: `${head} ${DOT} the thruster cannot take her there` };
   }
   const back = typeof ctx.planBack === 'function' ? ctx.planBack(down, target, from != null ? from : down.fromKm, d.mass) : null;
   if (!back || !back.ok) {
-    return { id: 'push', state: 'cannot', selectable: false, payCr, targetKm: target, text: `${head} ${DOT} the thruster cannot bring her back up` };
+    return { id: 'push', state: 'cannot', selectable: false, payCr, targetKm: target, reason: 'the thruster cannot bring her back up', text: `${head} ${DOT} the thruster cannot bring her back up` };
   }
   const gasKg = down.profile.gasKg;
   const backGasKg = back.gasKg;
@@ -218,13 +346,13 @@ function sailRow(d, ctx) {
   const pay = fatePay(d, 'sail', { lifeYears: life });
   const within = Number.isFinite(life) && life <= Constants.BIG_PIECES.RULE_YEARS;
   const rule = within ? paysText(pay.totalCr) : `over ${Constants.BIG_PIECES.RULE_YEARS} years, no fee`;
-  return { id: 'sail', state: 'ok', selectable: true, payCr: pay.totalCr, lifeYears: life,
+  return { id: 'sail', state: 'ok', selectable: true, payCr: pay.totalCr, lifeYears: life, aboard, within,
     text: `${head} ${DOT} down in ${yearsText(life)} ${DOT} ${rule} ${DOT} 1 of ${aboard} ${aboard === 1 ? 'sail' : 'sails'}` };
 }
 
-/** @private "Keep it aboard": the default; its mass already costs gas on every trip. */
+/** @private "Keep it for now": the default; its mass already costs gas on every trip. */
 function keepRow(d, mass) {
-  return { id: 'keep', state: 'ok', selectable: true, payCr: 0, text: `Keep it aboard ${DOT} pays nothing yet ${DOT} ${kgWhole(mass)} kg more on every trip` };
+  return { id: 'keep', state: 'ok', selectable: true, payCr: 0, text: `Keep it for now ${DOT} pays nothing yet ${DOT} ${kgWhole(mass)} kg more on every trip` };
 }
 
 /** @private "Melt it for metal": the tip furnaces, on trips (lane 5e); with the flag off the furnaces cannot take it yet. */

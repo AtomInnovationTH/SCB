@@ -1847,7 +1847,7 @@ export class OnboardingDirector {
         }
       } catch (_e) { /* context is best-effort */ }
     }
-    if (distM != null) return text.replace('{distM} meters', `${distM} meters`);
+    if (distM != null) return text.replace('{distM} meters', `${distM.toLocaleString('en-US')} meters`);
     // No live range — strip the "{distM} meters " clause (note trailing space).
     return text.replace('{distM} meters ', '').replace('{distM} meters', '');
   }
