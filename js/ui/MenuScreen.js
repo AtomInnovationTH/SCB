@@ -675,12 +675,12 @@ export class MenuScreen {
               <li><span class="adr-name" title="Subsidiary of Northrop Grumman, and the only company doing this routinely today. Its Mission Extension Vehicles docked with live Intelsat satellites (2020–21) to add years of life. A new Mission Robotic Vehicle launched in July 2026.">Northrop Grumman SpaceLogistics</span> <span class="adr-sub">USA</span></li>
               <li><span class="adr-name" title="Swiss start-up. Its UK arm will lead the UK Space Agency's debris-removal mission: £61 million (about $81 million), launch 2029 from SaxaVord, Shetland, two dead British satellites removed by 2032. Its ESA mission targets PROBA-1.">ClearSpace</span> <span class="adr-sub">Switzerland · UK</span></li>
               <li><span class="adr-name" title="Italian space-logistics firm. Its ION space tug has flown since 2020; next, its RISE mission for ESA will service a satellite in geostationary orbit, around 2028.">D-Orbit</span> <span class="adr-sub">Italy</span></li>
-              <li><span class="adr-name" title="Seattle start-up. Its Otter vehicle is designed to dock with satellites that were never built to be caught; it won a US Space Force contract to de-orbit a retired satellite.">Starfish Space</span> <span class="adr-sub">USA</span></li>
-              <li><span class="adr-name" title="Pioneer of in-orbit refuelling. 'gas stations in space'. Its RAFTI fuel port is becoming a de-facto industry standard for refuellable satellites.">Orbit Fab</span> <span class="adr-sub">USA</span></li>
+              <li><span class="adr-name" title="Seattle start-up. Its Otter vehicle is designed to dock with satellites that were never built to be caught; in January 2026 it won a US Space Force contract to de-orbit retired satellites, aiming to launch in 2027.">Starfish Space</span> <span class="adr-sub">USA</span></li>
+              <li><span class="adr-name" title="Colorado pioneer of in-orbit refuelling: 'gas stations in space'. It offers its RAFTI fuel port as a shared plug any refuellable satellite can use, and says 100+ spacecraft have chosen it.">Orbit Fab</span> <span class="adr-sub">USA</span></li>
               <li class="adr-also">Also emerging:
-                <span class="adr-name" title="Los Angeles. Uses an inflatable 'capture bag' to scoop up debris and spent objects.">TransAstra</span>,
-                <span class="adr-name" title="Michigan. Gecko-adhesive and microspine gripper arms (REACCH) to grab tumbling, uncooperative debris.">Kall Morris</span>,
-                <span class="adr-name" title="Canada (Ottawa). Tether-net capture and the 'Puck' docking system for in-orbit servicing.">Obruta</span>.</li>
+                <span class="adr-name" title="Los Angeles. Its FlyTrap is a deployable 'capture bag' designed to scoop up debris and spent objects; not yet flown.">TransAstra</span>,
+                <span class="adr-name" title="Marquette, Michigan. Its REACCH gripper arm uses gecko-like adhesion to grab tumbling, uncooperative debris.">Kall Morris</span>,
+                <span class="adr-name" title="Ottawa, Canada. Builds an autonomous docking kit so servicing craft can find and dock with satellites; its software was tested on the ISS in 2025.">Obruta</span>.</li>
               </ul>
             </details>
 
