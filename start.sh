@@ -16,8 +16,15 @@ for a in "$@"; do
 done
 [[ -n "${NO_BROWSER:-}" ]] && OPEN_BROWSER=0
 
-# Kill any existing process on the port to ensure it is available
-lsof -ti :$PORT | xargs kill -9 2>/dev/null
+# Free the port, but only from an old copy of this game's server (never another app).
+for PID in $(lsof -ti :"$PORT" -sTCP:LISTEN 2>/dev/null); do
+    if ps -o command= -p "$PID" 2>/dev/null | grep -Eq 'serve\.mjs|http\.server'; then
+        kill -9 "$PID" 2>/dev/null
+    else
+        echo "   ❌ Port $PORT is in use by another program (pid $PID). Try: SC_PORT=8095 ./start.sh"
+        exit 1
+    fi
+done
 sleep 0.5
 
 echo ""
@@ -49,7 +56,7 @@ class NoStore(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store, must-revalidate')
         super().end_headers()
-http.server.ThreadingHTTPServer(('', int(sys.argv[1])), NoStore).serve_forever()
+http.server.ThreadingHTTPServer(('127.0.0.1', int(sys.argv[1])), NoStore).serve_forever()
 PY
     SERVER_PID=$!
 fi
