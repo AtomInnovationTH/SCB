@@ -26,7 +26,8 @@ import { strutTipFoulsCorridor } from './ArmDockBasis.js';
 // Debris cutting step 5 (CUT_AT_NOSE): the pure planner — called ONCE when a
 // collared catch is over the hand-off gate.
 import { planCuts } from '../systems/cutPlanner.js';
-import { OUT_OF_MOTHER_NETS_LINE, ONE_MOTHER_NET_LEFT_LINE, targetRangeM } from '../systems/netRouting.js';
+import { OUT_OF_MOTHER_NETS_LINE, ONE_MOTHER_NET_LEFT_LINE, targetRangeM, netMaxReachM } from '../systems/netRouting.js';
+export { netMaxReachM };   // net-reach-ticker: the function moved to netRouting.js (the reticle reads it without this module)
 // Cargo-continuity S7: the carrier scorer lives with the rest of the CoM maths
 // (ONE quantity, ONE computation — it reuses computeCoM/strutTipMeters).
 import { suggestCargoArm, countEmptyDockedDaughters, heldCargoFoulsCorridorAt } from '../systems/CoMCalculator.js';
@@ -585,25 +586,6 @@ export function getNetClassForType(type) {
   if (type === 'weaver')  return CN.MEDIUM;
   if (type === 'spinner') return CN.SMALL;
   return CN.MEDIUM; // fallback
-}
-
-/**
- * Single source of truth for "how far can this net class reach" (metres).
- * Reach is tether-limited AND flight-time-limited: the projectile misses with
- * 'timeout' at MAX_FLIGHT_TIME (per-class override, else the shared default)
- * and with 'tether_limit' at TETHER_MAX, whichever comes first
- * (NetProjectile._updateFlight). Used by the InputManager refusal, ToolOdds
- * and DockingReticle so all three agree on the same number.
- * @param {object} netClass — one of CN.LARGE / CN.MEDIUM / CN.SMALL
- * @returns {number} max reach in metres
- */
-export function netMaxReachM(netClass) {
-  if (!netClass) return 0;
-  const maxFlightTime = netClass.MAX_FLIGHT_TIME ?? CN.MAX_FLIGHT_TIME;
-  return Math.min(
-    netClass.TETHER_MAX ?? Infinity,
-    (netClass.LAUNCH_SPEED ?? 0) * maxFlightTime,
-  );
 }
 
 /**

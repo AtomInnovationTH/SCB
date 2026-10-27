@@ -1314,6 +1314,12 @@ async function init() {
       Constants.DEBUG.DEBUG_OVERLAY_HOTKEY = true;
       console.info('[Debug] verbose diagnostics enabled via ?debug=1');
     }
+    // Dev: ?skipTrip=1 plays every between-mission trip (flown or called satellite) in about 3 s and caps its dock/turn waits at 3 s,
+    // with no pause for power (Constants.TRIP.SKIP_S; credits, gas, days and arrival as a real trip). Not saved, this boot only.
+    if (urlParams.get('skipTrip') === '1') {
+      Constants.TRIP.SKIP_S = 3;
+      console.info('[Dev] trips skipped via ?skipTrip=1 (3 s)');
+    }
     // PR 6 / P3.15: ?profile=1 enables per-60-frame draw-call logging.
     if (urlParams.get('profile') === '1') {
       Constants.DEBUG.LOG_DRAW_CALLS = true;
@@ -5319,7 +5325,7 @@ async function init() {
           debrisField._onboardingPinIds?.add(whale.id);
 
           // 5. Select it so every aiming/reticle path agrees on the target.
-          targetSelector.setTarget(whale);
+          targetSelector.setTarget(whale, { source: 'onboarding_pick' });
 
           // 6. Fire pod 0 AT the pinned whale — not along ship +Z. The pin
           //    sits on the prograde axis, and nose ≠ prograde whenever the

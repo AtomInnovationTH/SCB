@@ -15,7 +15,10 @@ import { settingsManager } from './SettingsManager.js';
 import timerManager from './TimerManager.js';
 import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
-import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE, targetRangeM, netRangeLine } from './netRouting.js';
+import {
+  classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, OUT_OF_NET_RANGE_LINE, targetRangeM, netRangeLine,
+  netReachForMassM, netFlightSpeedMps, predictedRangeAtArrivalM, driftOutOfReachLine,
+} from './netRouting.js';
 import { computeLeadAim, netMaxReachM } from '../entities/CaptureNet.js';
 import { tripRefuses } from './TransferTrip.js';
 import { isFree, samePiece, netRefusalLine, wrapRefusalLine, SCAN_FIRST_LINE, DAUGHTERS_ONLY_LINE, fanOutNoneText, daughtersHeldBackLine } from './PieceClaim.js';
@@ -324,7 +327,7 @@ export class InputManager {
           // FIX_PLAN §4: best target = lowest TPI (composite score)
           const debris = d.debrisField.getDebrisById(next.id);
           if (debris) {
-            d.targetSelector.setTarget(debris, { distanceKm: next.distanceKm, deltaV: next.deltaV });
+            d.targetSelector.setTarget(debris, { distanceKm: next.distanceKm, deltaV: next.deltaV, source: 'capture_advance' });
             // UI updates in separate try/catch — must not prevent target selection
             try {
               if (d.debrisWireframe) d.debrisWireframe.setTarget(debris);
@@ -2524,6 +2527,7 @@ export class InputManager {
   processInput(dt) {
     const d = this._deps;
     this._tickNetWait(dt);       // F14: the Shift+A daughters' wait for the net's turn runs on game time
+    this._sampleReach(dt);       // net-reach-ticker T2: the piece's velocity relative to the ship, for the reach-at-arrival check
 
     // CP-2: mother-mounted de-spin laser — hold L. Set the fire intent every
     // frame BEFORE the overlay early-returns so it always releases when an
@@ -2893,6 +2897,10 @@ export class InputManager {
       }
     }
 
+    // net-reach-ticker T2: the small net too: refuse (nothing spent) a piece that will have drifted past the lasso's reach by the
+    // time the net gets there.
+    if (activeTarget && this._refuseDriftOutOfReach(activeTarget)) return;
+
     // ── Aim-before-launch for the lasso cast ────────────────────────────────
     // The mother's net launcher physically points at the selected target before
     // casting (parity with the Large Net path). Only when a target is selected,
@@ -2954,6 +2962,81 @@ export class InputManager {
   }
 
   /**
+   * net-reach-ticker T2: every frame, note the active piece's position relative to the ship centre and keep a smoothed
+   * velocity (scene units per real second, the unit the aim's lead uses). Allocation-free; resets when the piece changes.
+   * @param {number} dt real seconds
+   * @private
+   */
+  _sampleReach(dt) {
+    const d = this._deps;
+    const ts = d && d.targetSelector;
+    const t = ts && typeof ts.getActiveTarget === 'function' ? ts.getActiveTarget() : null;
+    const sp = t && t._scenePosition;
+    const pp = d && d.player && (d.player.position || (typeof d.player.getPosition === 'function' ? d.player.getPosition() : null));
+    if (!sp || !pp || dt > 0.5) { this._reachTrack = null; return; }   // nothing to track, or a long gap (pause / warp): start over
+    if (!(dt > 1e-4)) return;
+    const rx = sp.x - pp.x, ry = sp.y - pp.y, rz = sp.z - pp.z;
+    const tr = this._reachTrack;
+    if (tr && tr.id === t.id) {
+      // Frame dt is capped (0.1 s), so a gap never shows in dt: a jump in the relative position (a trip arrival, a warp, a
+      // respawn) is the tell. 50 m in one frame is 500+ m/s relative, not motion: start over.
+      const jx = rx - tr.rx, jy = ry - tr.ry, jz = rz - tr.rz;
+      const jumpSc = 50 * Constants.SCENE_UNITS_PER_METER;
+      if (jx * jx + jy * jy + jz * jz > jumpSc * jumpSc) { this._reachTrack = null; return this._startReachTrack(t.id, rx, ry, rz, dt); }
+      // The position seen now was moved by the PREVIOUS frame's step, so its velocity is delta / that frame's dt.
+      const mdt = tr.dt > 1e-4 ? tr.dt : dt;
+      const ivx = jx / mdt, ivy = jy / mdt, ivz = jz / mdt;
+      if (tr.n === 0) { tr.vx = ivx; tr.vy = ivy; tr.vz = ivz; } else {
+        const a = 0.2;   // EMA, as the lead provider
+        tr.vx += a * (ivx - tr.vx); tr.vy += a * (ivy - tr.vy); tr.vz += a * (ivz - tr.vz);
+      }
+      tr.rx = rx; tr.ry = ry; tr.rz = rz; tr.n++; tr.dt = dt;
+      return;
+    }
+    this._startReachTrack(t.id, rx, ry, rz, dt);
+  }
+
+  /** @private */
+  _startReachTrack(id, rx, ry, rz, dt) {
+    this._reachTrack = { id, rx, ry, rz, vx: 0, vy: 0, vz: 0, n: 0, dt, rv: { x: 0, y: 0, z: 0 } };
+  }
+
+  /** The tracked velocity of `piece` relative to the ship (scene units / real s), or null until a few frames have been seen. @private */
+  _reachRelVel(piece) {
+    const tr = this._reachTrack;
+    if (!tr || !piece || tr.id !== piece.id || tr.n < 4) return null;
+    tr.rv.x = tr.vx; tr.rv.y = tr.vy; tr.rv.z = tr.vz;
+    return tr.rv;
+  }
+
+  /**
+   * net-reach-ticker T2: N (the small net) at a piece that is inside reach now but will have drifted past the net's reach by
+   * the time the net arrives: one plain line, LASSO_DENIED, nothing spent, nothing started. The large net runs the same
+   * test inside fireMotherNet's refusals (it needs its own lead provider there).
+   * @param {object} piece
+   * @returns {boolean} true when refused
+   * @private
+   */
+  _refuseDriftOutOfReach(piece) {
+    const d = this._deps;
+    if (!piece || !d || !d.player || typeof d.player.getPosition !== 'function') return false;
+    if (classifyNetTarget(piece.mass || 0).band !== 'lasso') return false;   // the large net's own gate handles those
+    const sp = piece._scenePosition;
+    const rv = this._reachRelVel(piece);
+    if (!sp || !rv) return false;                                            // no velocity yet: nothing to predict from
+    const reachM = netReachForMassM(piece.mass || 0);
+    const arriveM = predictedRangeAtArrivalM(d.player.getPosition(), sp, rv, netFlightSpeedMps(piece.mass || 0));
+    // Only a piece that is inside reach NOW is judged here: beyond it, the existing range refusal speaks.
+    if (!(arriveM > reachM) || targetRangeM(d.player.getPosition(), sp) > reachM) return false;
+    eventBus.emit(Events.LASSO_DENIED, { reason: 'drift_out_of_reach' });
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: driftOutOfReachLine(arriveM), source: 'SYSTEM', channel: 'CMD', priority: 'warning', _lassoFeedback: true,
+    });
+    d.audioSystem?.playDeny?.();
+    return true;
+  }
+
+  /**
    * The lasso windup → cast, extracted so the aim-before-launch flow can defer
    * it until the mother has slewed to face the target. Safe to call directly
    * (headless mocks / no-target auto-aim / already-aligned fast path).
@@ -3001,6 +3084,12 @@ export class InputManager {
           && classifyNetTarget(target.mass || 0).band !== 'lasso') {
         d.autopilotSystem?.releaseAttitudeHold?.();
         this.fireMotherNet(target);
+        return;
+      }
+      // net-reach-ticker T2: the piece may have drifted out of reach during the slew / windup: refuse, nothing spent.
+      if (target && this._refuseDriftOutOfReach(target)) {
+        d.autopilotSystem?.releaseAttitudeHold?.();
+        if (afterAim) d.player.holdHeadingAfterRefusal?.();
         return;
       }
       const cast = d.lassoSystem.fire(d.player.getPosition(), d.debrisField, fwdDir, target);
@@ -3099,6 +3188,17 @@ export class InputManager {
         const rangeM = targetRangeM(d.player.getPosition(), tp);
         if (rangeM > maxReachM) {
           refuse(netRangeLine(rangeM, maxReachM, 'net'));
+          return true;
+        }
+        // net-reach-ticker T2 (owner 2026-10-27, "why does a mother net allow launch at debris that is out of range wasting a
+        // net?"): inside reach NOW is not enough, the net takes ~10 s to arrive. Where will the piece be then (the aim's own
+        // linear lead: flight time = range / net speed, piece moves by its velocity relative to the ship)? Past reach: refuse,
+        // no net spent.
+        const arriveM = predictedRangeAtArrivalM(d.player.getPosition(), tp,
+          this._reachRelVel(target) || relVelScenePerS, (netClass && netClass.LAUNCH_SPEED) || 10);
+        if (arriveM > maxReachM) {
+          eventBus.emit(Events.LASSO_DENIED, { reason: 'drift_out_of_reach' });
+          refuse(driftOutOfReachLine(arriveM));
           return true;
         }
       }
@@ -3413,9 +3513,7 @@ export class InputManager {
     const dir = d.onboardingDirector;
     if (dir && typeof dir.isMastered === 'function' && !dir.isMastered()) return false;   // tutorial still running
     const mass = target.mass || 0;
-    const reachM = classifyNetTarget(mass).band === 'lasso'
-      ? Constants.LASSO_RANGE
-      : netMaxReachM(Constants.CAPTURE_NET.LARGE);
+    const reachM = netReachForMassM(mass);   // net-reach-ticker T3: the one reach function (also the reticle's)
     const distM = this._activeTargetDistanceM(target);
     if (distM == null || !(reachM > 0) || distM <= reachM) return false;
     const arms = d.armManager && d.armManager.arms;

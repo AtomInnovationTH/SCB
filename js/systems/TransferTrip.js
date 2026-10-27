@@ -77,7 +77,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus as defaultBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { TimeAuthority } from './TimeAuthority.js';
-import { profileAt, playSeconds } from './TripProfile.js';
+import { profileAt, playSeconds, tripWaitCap } from './TripProfile.js';
 
 /** The plain words (DECISIONS §29; owner: plain language, no phase names). */
 export const TRIP_LINES = Object.freeze({
@@ -602,7 +602,7 @@ export class TransferTrip {
     if (this._phase === 'wait') {
       this._waitS += dt;
       const home = this.daughtersHome();
-      if (home || this._waitS >= Constants.TRIP.WAIT_DOCK_MAX_S) this._startBurn(home);
+      if (home || this._waitS >= tripWaitCap(Constants.TRIP.WAIT_DOCK_MAX_S)) this._startBurn(home);
       return;
     }
     this._tickBurn(dt);
@@ -897,7 +897,7 @@ export class TransferTrip {
     // Sloth mode (D7): the steering gas is out and the tail boxes turn her, minutes for a turn. Same principle as
     // TURN_POWER_WH: without the means to turn she waits, with no time limit, instead of burning after TURN_WAIT_MAX_S.
     const slow = this._slowTurn();
-    if (ap && typeof ap.tripTurnErrorRad === 'function' && (slow || this._turnWaitS < Constants.TRIP.TURN_WAIT_MAX_S)
+    if (ap && typeof ap.tripTurnErrorRad === 'function' && (slow || this._turnWaitS < tripWaitCap(Constants.TRIP.TURN_WAIT_MAX_S))
         && ap.tripTurnErrorRad() > Constants.TRIP.TURN_OK_DEG * Math.PI / 180) {
       if (!slow) this._turnWaitS += dt;
       return true;
@@ -959,6 +959,7 @@ export class TransferTrip {
 
   /** @private The turn is let go of for want of power (the autopilot's trip hold waits for the battery: review R1). */
   _waitsForPower() {
+    if (Constants.TRIP.SKIP_S > 0) return false;                     // dev `?skipTrip=1`: the trip never pauses for power
     const ap = this._d.autopilot;
     return !!(ap && typeof ap.tripTurnWaitsForPower === 'function' && ap.tripTurnWaitsForPower());
   }

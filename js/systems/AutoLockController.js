@@ -46,6 +46,7 @@ import { Constants } from '../core/Constants.js';
 import { targetSelector } from './TargetSelector.js';
 
 import { isMarked } from './ScanMarks.js';
+import { netReachForMassM } from './netRouting.js';
 // Re-exported so existing importers (and test-ScanFirst) keep working.
 export { isMarked };
 
@@ -337,7 +338,9 @@ export class AutoLockController {
     const dz = sp.z - playerPos.z;
     const distScene = Math.sqrt(dx * dx + dy * dy + dz * dz);
     const distM = (distScene / Constants.SCENE_SCALE) * 1000;
-    const netRangeM = Constants.NET_LOCK_RANGE_M || 90;
+    // net-reach-ticker T3 (owner 2026-10-27): the reach of the net N would fire at THIS piece (lasso <= 10 kg 90 m, large
+    // net 100 m), from the same function the fire gate uses, so the yellow OUT OF RANGE and the refusal agree.
+    const netRangeM = netReachForMassM(active.mass) || Constants.NET_LOCK_RANGE_M || 90;
     const inRange = distM <= netRangeM;
     const state = inRange ? 'in' : 'out';
 

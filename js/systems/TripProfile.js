@@ -78,6 +78,16 @@ export function tripDragAreaM2(thetaRad) {
 }
 
 /**
+ * A trip wait's bound in real seconds: `baseS` as it is, or at most Constants.TRIP.SKIP_S with the dev `?skipTrip=1`.
+ * @param {number} baseS
+ * @returns {number}
+ */
+export function tripWaitCap(baseS) {
+  const k = Constants.TRIP.SKIP_S;
+  return k > 0 ? Math.min(baseS, k) : baseS;
+}
+
+/**
  * Real seconds a trip of `days` plays in (row 10: "sped up to 1-2 minutes"): clamp(PLAY_BASE_S + PLAY_PER_DAY_S x days,
  * PLAY_MIN_S, PLAY_MAX_S).
  * @param {number} days
@@ -85,6 +95,7 @@ export function tripDragAreaM2(thetaRad) {
  */
 export function playSeconds(days) {
   const T = Constants.TRIP;
+  if (T.SKIP_S > 0) return T.SKIP_S;                // dev `?skipTrip=1`: the trip plays in a few seconds (days, gas and credits follow the share played)
   const d = Number.isFinite(days) && days > 0 ? days : 0;
   return Math.max(T.PLAY_MIN_S, Math.min(T.PLAY_MAX_S, T.PLAY_BASE_S + T.PLAY_PER_DAY_S * d));
 }

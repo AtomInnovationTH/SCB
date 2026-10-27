@@ -4695,7 +4695,7 @@ export class AutopilotSystem {
       if (!this._pairArmReady(c.arm) || !this._pairPieceOk(c.piece)) { L.ci++; return; }
       if (typeof am.getSelectedArm === 'function' && am.getSelectedArm() !== c.arm) am.selectArm(c.arm.index, { quiet: true });
       if (!this._lessonPieces().isPairRow(c.piece)) this._lessonRevealPartners(c.arm, c.piece);   // fallback pick: the finder needs its partner discovered
-      ts.setTarget(c.piece);
+      ts.setTarget(c.piece, { source: 'lesson_pick' });
       L.tried.add(c.arm.index + ':' + c.piece.id);                // each (daughter, piece) is picked at most once per lesson
       L.exp = { piece: c.piece, arm: am.getSelectedArm() };
       L.picked = true; L.settle = 0;

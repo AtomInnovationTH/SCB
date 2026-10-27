@@ -5764,6 +5764,11 @@ export const Constants = {
     // lasts ~2 real s and the base load takes ~1 Wh of it (measured 2026-10-22, research doc), so 2 Wh rides one out and the
     // turn does not let go again at the next shadow. No time limit: without power she waits for it.
     TURN_POWER_WH: 2,
+    // DEV ONLY (URL `?skipTrip=1`, main.js; owner 2026-10-27, to test the missions without the long trip): when above 0, every
+    // between-mission trip (flown or called satellite) plays in this many real seconds, and its dock and turn waits are capped at it.
+    // 0 = off (the real trip). Credits, gas, days, arrival and the next mission are exactly as in a real trip (the gas and the ship's days
+    // follow the share played). The trip does not pause for power. Read by TripProfile.playSeconds / tripWaitCap and TransferTrip.
+    SKIP_S: 0,
   },
 
   // =========================================================================

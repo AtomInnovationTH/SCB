@@ -11,6 +11,7 @@
  */
 
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from './TimeAuthority.js';
 
 /**
  * The ONE line for N with no mother nets left (DECISIONS §33 row 3; owner 2026-10-20: "One line in Comms is better
@@ -102,6 +103,86 @@ export function netRangeLine(distM, limitM, kind = 'net') {
     away = Number(d1) > limitM ? `${d1}m` : `just past ${limitText}`;
   }
   return `${what} (${limitText}): the piece is ${away} away. Close in.`;
+}
+
+// ── One reach, on screen and at the trigger (net-reach-ticker T2/T3, owner 2026-10-27) ──
+
+/**
+ * Single source of truth for "how far can this net class reach" (metres). Reach is tether-limited AND
+ * flight-time-limited: the projectile misses with 'timeout' at MAX_FLIGHT_TIME (per-class override, else the shared
+ * default) and with 'tether_limit' at TETHER_MAX, whichever comes first (NetProjectile._updateFlight). Lives here so
+ * the reticle can read it without the heavy CaptureNet module; CaptureNet re-exports it.
+ * @param {object} netClass — one of CN.LARGE / CN.MEDIUM / CN.SMALL
+ * @returns {number} max reach in metres
+ */
+export function netMaxReachM(netClass) {
+  if (!netClass) return 0;
+  const CN = Constants.CAPTURE_NET;
+  const maxFlightTime = netClass.MAX_FLIGHT_TIME ?? CN.MAX_FLIGHT_TIME;
+  return Math.min(
+    netClass.TETHER_MAX ?? Infinity,
+    (netClass.LAUNCH_SPEED ?? 0) * maxFlightTime,
+  );
+}
+
+/**
+ * The reach (metres) of the net the N key fires at a piece of this mass: the lasso (<= 10 kg: LASSO_RANGE, 90 m) or the
+ * mother's large net (netMaxReachM, 100 m). The N fire gates (InputManager) and the reticle's yellow OUT OF RANGE
+ * (AutoLockController) both read THIS, so the number on screen is the number that refuses a shot.
+ * @param {number} [mass] — target mass (kg); unknown reads as the lasso, as fireLasso routes it
+ * @returns {number}
+ */
+export function netReachForMassM(mass) {
+  return classifyNetTarget(mass || 0).band === 'lasso'
+    ? Constants.LASSO_RANGE
+    : netMaxReachM(Constants.CAPTURE_NET.LARGE);
+}
+
+/** Net flight speed in apparent m/s (per real second) for the net N fires at this mass: the lasso flies LASSO_SPEED x the
+ *  game-time scale (100 m/s), the large net LAUNCH_SPEED (10 m/s; CaptureNet.update runs on real dt). */
+export function netFlightSpeedMps(mass) {
+  return classifyNetTarget(mass || 0).band === 'lasso'
+    ? Constants.LASSO_SPEED * TimeAuthority.BASE_SCALE
+    : (Constants.CAPTURE_NET.LARGE.LAUNCH_SPEED || 10);
+}
+
+/**
+ * Where the piece will be, as a distance from the ship centre, when the net gets there. The same linear lead the aim
+ * uses (computeLeadAim): flight time = distance now / net speed, piece moves by relVel x that time. Pure; units are
+ * scene units and scene units per real second in, metres out.
+ * @param {{x,y,z}} shipPos
+ * @param {{x,y,z}} targetPos
+ * @param {{x,y,z}|null} relVelScenePerS — piece velocity relative to the ship (null: unknown, reads as not moving)
+ * @param {number} netSpeedMps — see netFlightSpeedMps
+ * @returns {number} metres (Infinity when a position is missing)
+ */
+export function predictedRangeAtArrivalM(shipPos, targetPos, relVelScenePerS, netSpeedMps) {
+  if (!shipPos || !targetPos) return Infinity;
+  const M = Constants.SCENE_UNITS_PER_METER;
+  const rx = targetPos.x - shipPos.x, ry = targetPos.y - shipPos.y, rz = targetPos.z - shipPos.z;
+  const nowM = Math.sqrt(rx * rx + ry * ry + rz * rz) / M;
+  if (!relVelScenePerS || !(netSpeedMps > 0)) return nowM;
+  const tof = nowM / netSpeedMps;   // seconds, as computeLeadAim: |bearing| / launch speed
+  const ax = rx + relVelScenePerS.x * tof, ay = ry + relVelScenePerS.y * tof, az = rz + relVelScenePerS.z * tof;
+  const leadM = Math.sqrt(ax * ax + ay * ay + az * az) / M;
+  if (!(nowM > 0)) return leadM;
+  // A piece moving AWAY: the net chases it at its own speed v, so the catch happens at r*v/(v - vr), not at the aim lead's
+  // r + vr*r/v (an under-estimate: the piece keeps moving while the net flies the longer way). vr >= v: never caught.
+  const vr = (relVelScenePerS.x * rx + relVelScenePerS.y * ry + relVelScenePerS.z * rz) / (nowM * M) / M;   // m/s along the line of sight
+  if (!(vr > 0)) return leadM;
+  if (vr >= netSpeedMps) return Infinity;
+  const radialM = nowM * netSpeedMps / (netSpeedMps - vr);
+  // lateral part as before: the sideways drift over the aim's flight time
+  const vx = relVelScenePerS.x / M, vy = relVelScenePerS.y / M, vz = relVelScenePerS.z / M;
+  const v2 = vx * vx + vy * vy + vz * vz;
+  const latM = Math.sqrt(Math.max(0, v2 - vr * vr)) * tof;
+  return Math.sqrt(radialM * radialM + latM * latM);
+}
+
+/** The ONE line when the piece will have drifted out of the net's reach before the net gets there (T2). */
+export function driftOutOfReachLine(predictedM) {
+  if (!Number.isFinite(predictedM)) return 'It is moving away faster than the net flies. Close in.';
+  return `It would drift out of reach before the net gets there (about ${Math.round(predictedM)} m). Close in.`;
 }
 
 // ── hints-scan D1/D3 (owner 2026-10-26): a line never names a key that won't do it ──────────────────────────────────

@@ -45,6 +45,23 @@ export function codexChimeNotes(category) {
 }
 
 /**
+ * True when a TARGET_SELECTED payload is a pick the GAME made, not the player:
+ * a scan's auto-select (autoAcquire, source 'scan'), autolock (autoLock) or the
+ * legacy welcome auto-target, and the game's own follow-ups (source capture_advance, lesson_pick, onboarding_pick). The autopilot's own re-acquire is not one: it
+ * is flying her there.
+ */
+export function isAutomaticPick(d) {
+  if (!d) return false;
+  if (d.autoLock || d.autoTarget) return true;
+  return (!!d.autoAcquire && d.source === 'scan') || d.source === 'capture_advance' || d.source === 'lesson_pick' || d.source === 'onboarding_pick';
+}
+
+/** True when `id` is the piece currently tagged as a game-made pick. */
+export function isRangeTickAutoPick(id, autoPickId) {
+  return autoPickId != null && id === autoPickId;
+}
+
+/**
  * Daughter-net cue gain scale (2026-08-27). The daughter launchers are the
  * small crossbow canisters (Medium/Small nets) heard from the daughter's
  * standoff — smaller hardware, farther away — so every net voice they share
@@ -89,6 +106,10 @@ class AudioSystem {
     this._duckHolds = 0;
     // P6 — range-closing ticker state.
     this._rangeTickerActive = false;
+    /** 2026-10-27: id of a piece the game (scan / autolock) picked: its range ticker stays silent. */
+    this._rangeAutoPickId = null;
+    /** The autopilot is flying her to the target: the ticker may run for any pick. */
+    this._rangeApEngaged = false;
     this._rangeTickerId = null;
     this._rangeTickerHz = 1;
     this._rangeTickerSuppressedUntil = 0;
@@ -397,6 +418,14 @@ class AudioSystem {
   _onTargetRange(d) {
     const RT = (Constants.AUDIO && Constants.AUDIO.RANGE_TICKER) || {};
     if (!RT.ENABLED || !this.available || !d) { this._stopRangeTicker(); return; }
+    // 2026-10-27 (owner: "what is the constant beep beep after a scan S"): the
+    // ticker answers the player's own pick or the autopilot's flight, never a
+    // piece the game picked for him (a scan's auto-select, autolock). A later
+    // player pick of the same piece clears the tag (TARGET_SELECTED below).
+    if (isRangeTickAutoPick(d.id, this._rangeAutoPickId) && !this._rangeApEngaged) {
+      this._stopRangeTicker();
+      return;
+    }
     const distM = d.distM;
     const netRangeM = d.netRangeM || 90;
     const startM = RT.START_M || 2000;
@@ -760,6 +789,15 @@ class AudioSystem {
 
     // P6 — core-loop range-closing ticker.
     eventBus.on(Events.TARGET_RANGE, (d) => this._onTargetRange(d));
+    // Tag a game-made pick so its range readout stays silent (see _onTargetRange).
+    eventBus.on(Events.TARGET_SELECTED, (d) => {
+      this._rangeAutoPickId = d && isAutomaticPick(d) ? d.id : null;
+      if (this._rangeAutoPickId != null) this._stopRangeTicker();
+    });
+    eventBus.on(Events.AUTOPILOT_ENGAGE, (d) => {
+      this._rangeApEngaged = !d || d.mode === undefined || d.mode === 'TARGET';
+    });
+    eventBus.on(Events.AUTOPILOT_DISENGAGE, () => { this._rangeApEngaged = false; });
     eventBus.on(Events.TARGET_CLEARED, () => this._stopRangeTicker());
     eventBus.on(Events.TARGET_IN_RANGE, () => this._stopRangeTicker());
     eventBus.on(Events.DEBRIS_CAPTURED, () => this._stopRangeTicker());
