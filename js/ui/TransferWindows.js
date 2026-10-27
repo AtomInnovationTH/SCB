@@ -63,6 +63,9 @@ const DOM_WRITE_MIN_INTERVAL_MS = 250;
 /** Monotonic ms clock (DOM-guarded module — Date.now fallback for headless). */
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
+/** The box's distance above the screen's bottom (its CSS `bottom`); RANGE_MAP.XFER_BOX_BOTTOM_PX is pinned to it. */
+export const BOX_BOTTOM_PX = 16;
+
 export class TransferWindows {
   /**
    * @param {object} [deps]
@@ -76,6 +79,7 @@ export class TransferWindows {
     this._root = null;
     this._built = false;
     this._visible = false;
+    this._boxH = null;          // the box's measured outer height (heightPx)
     this._lastHtml = null;      // last painted markup — skips per-frame innerHTML churn
     this._lastStructKey = null; // last painted STRUCTURAL key (shouldWrite)
     this._lastWriteMs = -Infinity; // last innerHTML write (real time)
@@ -277,7 +281,7 @@ export class TransferWindows {
     const root = document.createElement('div');
     root.id = 'ladder-transfer-windows';
     root.style.cssText = [
-      'position:absolute', `left:max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`, 'bottom:16px', 'min-width:220px',   // followups-1018 D4: left edge = the MOTHER pane's
+      'position:absolute', `left:max(${PANE_CORNER_PX}px, env(safe-area-inset-left))`, `bottom:${BOX_BOTTOM_PX}px`, 'min-width:220px',   // followups-1018 D4: left edge = the MOTHER pane's
       'padding:8px 12px', 'border:1px solid rgba(0,204,255,0.4)', 'border-radius:4px',
       'background:rgba(0,16,32,0.72)', 'color:' + VisualLaw.COLORS.INFO,
       'font-family: var(--font-mono)', 'font-size:0.7rem', 'letter-spacing:0.06em',
@@ -287,8 +291,26 @@ export class TransferWindows {
     this._root = root;
   }
 
-  show() { this._build(); this._visible = true; if (this._root) this._root.style.opacity = '1'; }
+  show() { this._build(); this._visible = true; if (this._root) this._root.style.opacity = '1'; this._measure(); }
   hide() { this._visible = false; if (this._root) this._root.style.opacity = '0'; }
+
+  /**
+   * The box's live outer height in px (border and padding included), for panels that must clear it: it grows with its lines (title, depart,
+   * "xfer ... -> T-...", dv, fuel, route, sweep, period). The box is anchored BOX_BOTTOM_PX above the screen's bottom, so its top edge is
+   * innerHeight - BOX_BOTTOM_PX - heightPx(). Null while it is not showing or not measured (the caller then assumes its tallest state).
+   * The read happens only when the markup changed (after the write below) and at show(), never per frame.
+   * @returns {number|null}
+   */
+  heightPx() { return (this._visible && this._boxH > 0) ? this._boxH : null; }
+
+  /** @private one layout read of the box's height; a missing rect (headless DOM) leaves it unmeasured */
+  _measure() {
+    const root = this._root;
+    if (!root || typeof root.getBoundingClientRect !== 'function') { this._boxH = null; return; }
+    let h = 0;
+    try { h = Number(root.getBoundingClientRect().height); } catch (_e) { h = 0; }
+    this._boxH = h > 0 ? h : null;
+  }
 
   /**
    * Paint the transfer-window readout for the focused cluster.
@@ -328,6 +350,7 @@ export class TransferWindows {
       const htmlS = rowsS.join('');
       if (htmlS !== this._lastHtml) {
         this._root.innerHTML = htmlS;
+        this._measure();
         this._lastHtml = htmlS;
         this._lastStructKey = structKey;
         this._lastWriteMs = now;
@@ -359,6 +382,7 @@ export class TransferWindows {
     const html = rows.join('');
     if (html !== this._lastHtml) {
       this._root.innerHTML = html;
+      this._measure();
       this._lastHtml = html;
       this._lastStructKey = structKey;
       this._lastWriteMs = now;
@@ -370,6 +394,7 @@ export class TransferWindows {
     if (this._root && this._root.remove) this._root.remove();
     this._root = null;
     this._built = false;
+    this._boxH = null;
     this._lastHtml = null;
     this._lastStructKey = null;
     this._lastWriteMs = -Infinity;

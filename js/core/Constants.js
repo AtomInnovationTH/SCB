@@ -6014,7 +6014,11 @@ export const Constants = {
   RANGE_MAP: {
     TOP_PX: 280,              // the map's top edge, below the top HUD strip
     LEFT_PX: 8,               // the left edge (the height column's own: HeightScale SIDE_MIN_PX)
-    BOTTOM_PX: 172,           // the text lines end this far above the bottom: the footer band's top is 164 px up (RailGeometry.footerBand), 8 px air
+    BOTTOM_PX: 172,           // the text lines end at least this far above the bottom (the lower limit; the box above can push it higher, rangeMapRect): the footer band's top is 164 px up (RailGeometry.footerBand), 8 px air
+    XFER_BOX_BOTTOM_PX: 16,   // the bottom-left transfer-window box (TransferWindows.js) stands this far above the bottom (its CSS bottom: BOX_BOTTOM_PX, pinned),
+    XFER_BOX_FALLBACK_PX: 162, // its outer height in its tallest state, eight rows (measured 10-26 at 1366x1024 on a trip: 8 rows = 162 px, 7 rows = 145), used while
+                              // the live height (TransferWindows.heightPx()) is unmeasured; the text block ends XFER_BOX_GAP_PX above the box's top edge
+    XFER_BOX_GAP_PX: 8,       // clear space between the text block and the box
     SIDE_CHOOSE_PX: 460,      // the biggest square while the list is open
     SIDE_TRIP_PX: 560,        // the list is closed during the trip: the map may grow
     MIN_SIDE_PX: 240,         // narrower than this the map is not shown

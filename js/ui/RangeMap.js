@@ -248,6 +248,7 @@ export class RangeMap {
    * @param {function} [deps.gas]        () => {aboardKg, tankKg}
    * @param {object|function} [deps.tally] the MissionGasTally, or () => it (usedKg, gainedKg)
    * @param {function} [deps.viewport]   () => {w, h} (default: the window)
+   * @param {function} [deps.box]        () => {height} the bottom-left transfer-window box's live outer height (TransferWindows.heightPx()), null = unmeasured (its tallest state is assumed)
    * @param {function} [deps.rail]       () => {left, bottom} the floor rail's live edges (RailIndicator.leftPx(), bottomPx(); a null reads as the rail's design place), or false for none
    * @param {Document|null} [deps.doc]   default the global document; null = headless
    * @param {Element} [deps.parent]      default doc.body
@@ -269,6 +270,7 @@ export class RangeMap {
     this._doc = deps.doc !== undefined ? deps.doc : (typeof document !== 'undefined' ? document : null);
     this._parent = deps.parent || null;
     this._rail = typeof deps.rail === 'function' ? deps.rail : () => null;
+    this._box = typeof deps.box === 'function' ? deps.box : () => null;
     this._now = typeof deps.now === 'function' ? deps.now : () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
     this._reduced = typeof deps.reducedMotion === 'function' ? deps.reducedMotion : () => false;
     this._dpr = typeof deps.dpr === 'function' ? deps.dpr : () => (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
@@ -405,7 +407,9 @@ export class RangeMap {
     const vp = this._viewport();
     let rail = null;
     try { rail = this._rail(); } catch (_e) { rail = null; }
-    const rect = rangeMapRect(vp.w, vp.h, d.mode, { rail });
+    let box = null;
+    try { box = this._box(); } catch (_e) { box = null; }
+    const rect = rangeMapRect(vp.w, vp.h, d.mode, { rail, box });
     if (!rect) { if (this._shown) this._hideNow(); this._decision = { visible: false, mode: d.mode, phase: 'hidden' }; return this._decision; }
     this._rect = rect;
     const trip = this._get(this._trip);

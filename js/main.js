@@ -2310,6 +2310,8 @@ async function init() {
       reducedMotion: _prefersReducedMotion,
       // F1.1: the floor rail (right edge, mid-height) is the thing the map keeps clear of on a narrow screen; null = its design place
       rail: () => (railIndicator ? { left: railIndicator.leftPx(), bottom: railIndicator.bottomPx() } : null),
+      // F2.1: the bottom-left transfer-window box grows to three-plus lines on a trip; the text block stays above its live top
+      box: () => (navcomFloor && navcomFloor.transferWindows && navcomFloor.transferWindows.heightPx ? { height: navcomFloor.transferWindows.heightPx() } : null),
     });
     gameFlowManager.setWhereNextAvailable(true);
     // The choice opens / closes (TransferTrip phase `choose`): show the rows and take her to floor 4; a refused pick that puts the

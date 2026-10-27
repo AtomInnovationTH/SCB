@@ -44,15 +44,28 @@ function railBox(viewW, viewH, rail) {
 }
 
 /**
+ * @private How far above the screen's bottom the bottom-left transfer-window box reaches, plus the air: XFER_BOX_BOTTOM_PX (its CSS bottom) + its
+ * outer height + XFER_BOX_GAP_PX. The height is the live one (`TransferWindows.heightPx()`, passed as `box.height`); unmeasured, the height of its
+ * tallest state (XFER_BOX_FALLBACK_PX). `box === false` = no box. The box sits at the left edge, under the map's x-span, so it always counts.
+ */
+export function boxClearPx(box) {
+  if (box === false) return 0;
+  const c = R();
+  const h = box && typeof box === 'object' && Number.isFinite(box.height) && box.height > 0 ? box.height : c.XFER_BOX_FALLBACK_PX;
+  return c.XFER_BOX_BOTTOM_PX + h + c.XFER_BOX_GAP_PX;
+}
+
+/**
  * The square the map takes, in CSS px (D5, moved to the left in F1.1: the height column's place). Left edge LEFT_PX, top at TOP_PX (below the
  * top HUD strip). `mode` 'choose': the where-next list is open, so the map stays left of its x-span (the list is bottom centre, its top never
  * above y 280: their y-spans always overlap, so the clearance is in x) and is at most SIDE_CHOOSE_PX; 'trip': the list is closed and the map may
  * be SIDE_TRIP_PX. The text lines under the canvas (TEXT_PX) count against the room below, which ends BOTTOM_PX above the screen's bottom (the
  * footer band). In both modes it stays left of the floor rail (`opts.rail`: `{left, bottom}` live edges, nothing = the rail at its design place,
- * `false` = none) whenever their y-spans can meet. The open drawer (x 0 to 440, z 35) may cover it; the height column yields while it shows.
+ * `false` = none) whenever their y-spans can meet. The room below ends at the higher of the footer band (BOTTOM_PX) and the top of the bottom-left
+ * transfer-window box (`opts.box`: `{height}` live, see boxClearPx), so the text block never lands on the box. The open drawer (x 0 to 440, z 35) may cover it; the height column yields while it shows.
  * Null when it would be narrower than MIN_SIDE_PX (then the map is not shown).
  * @param {number} viewW @param {number} viewH @param {'choose'|'trip'} [mode]
- * @param {{rail?: ({left?: number, bottom?: number, top?: number}|false|null)}} [opts]
+ * @param {{rail?: ({left?: number, bottom?: number, top?: number}|false|null), box?: ({height?: number}|false|null)}} [opts]
  * @returns {{x: number, y: number, w: number, h: number, side: number}|null}
  */
 export function rangeMapRect(viewW, viewH, mode = 'choose', opts = {}) {
@@ -60,7 +73,8 @@ export function rangeMapRect(viewW, viewH, mode = 'choose', opts = {}) {
   if (!(viewW > 0) || !(viewH > 0)) return null;
   const trip = mode === 'trip';
   const left = c.LEFT_PX;
-  let side = Math.min(trip ? c.SIDE_TRIP_PX : c.SIDE_CHOOSE_PX, viewH - c.BOTTOM_PX - c.TOP_PX - c.TEXT_PX);
+  const floor = Math.max(c.BOTTOM_PX, boxClearPx(opts ? opts.box : undefined));    // the text block ends this far above the bottom
+  let side = Math.min(trip ? c.SIDE_TRIP_PX : c.SIDE_CHOOSE_PX, viewH - floor - c.TOP_PX - c.TEXT_PX);
   if (!trip) {
     const listW = Math.min(c.LIST_WIDTH_PX, viewW - 2 * c.LIST_SIDE_PX);        // the list's CSS: min(580px, 100vw - 24px), centred
     side = Math.min(side, (viewW - listW) / 2 - c.LIST_GAP_PX - left);
