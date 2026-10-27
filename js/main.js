@@ -3771,7 +3771,18 @@ async function init() {
     const arm = _armOf(a);
     return !!(arm && inputManager && inputManager.nWorksDaughter(arm, holdPiece));
   };
-  setNResolver({ works: _nWorks, digit: (a) => { const arm = _armOf(a); return arm && Number.isInteger(arm.index) ? arm.index + 1 : null; } });
+  // n-leftovers L1: while he flies a daughter N works HER tool; a mother-net line says "Esc, then N" (or waits when Esc would recall her).
+  const _pilotedArm = () => ((inputManager && inputManager.armPilotMode && cameraSystem && cameraSystem.getPilotedArm) ? cameraSystem.getPilotedArm() : null);
+  setNResolver({
+    works: _nWorks,
+    digit: (a) => { const arm = _armOf(a); return arm && Number.isInteger(arm.index) ? arm.index + 1 : null; },
+    isPiloted: () => !!_pilotedArm(),
+    escLeaves: () => {
+      if (ladderController && ladderController.isActive && ladderController.isActive()) return true;
+      const p = _pilotedArm();
+      return !(p && p.state === Constants.ARM_STATES.STATION_KEEP);   // no ladder: Esc on a holding daughter recalls her (InputManager Esc)
+    },
+  });
   armIdleAdvisor.init({
     armManager,
     skillsSystem,

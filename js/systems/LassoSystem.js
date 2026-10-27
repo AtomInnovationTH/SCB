@@ -15,7 +15,7 @@ import { devShotGate } from '../core/DevShotGate.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
-import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, targetRangeM, netRangeLine } from './netRouting.js';
+import { classifyNetTarget, OUT_OF_MOTHER_NETS_LINE, targetRangeM, netRangeLine, motherNLine, motherNWorks } from './netRouting.js';
 import { isFree, netRefusalLine, lassoRangeAllOwnedLine } from './PieceClaim.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
@@ -1091,6 +1091,12 @@ export class LassoSystem {
                         return;
                     }
                 }
+                // n-leftovers L1: while he flies a daughter N works HER tool: the line says "Esc, then N", or (Esc would
+                // recall her) waits, unconsumed, until he is back on the ship. Picked now, as the hint is posted.
+                const _nWorks = motherNWorks();
+                const _castLine = motherNLine('In range. N to cast');
+                const _castComms = motherNLine('Target in lasso range. Press N to cast.');
+                if (_castLine == null) return;
                 // Mark the transition consumed only now that we will show a hint.
                 this._inRangePromptId = targetId;
 
@@ -1100,9 +1106,10 @@ export class LassoSystem {
                 if (veteran) {
                     eventBus.emit(Events.HINT_POSTED, {
                         id: 'lasso_in_range',
-                        text: 'In range. N to cast',
-                        glyph: 'N',
-                        keys: ['KeyN'],
+                        text: _castLine,
+                        // piloted (F1.3): the glyph is Esc and no key lights (N is not what he presses first), as the Director's chips
+                        glyph: _nWorks ? 'N' : 'Esc',
+                        keys: _nWorks ? ['KeyN'] : [],
                         skillId: 'collect_lasso',
                         duration: 4000,
                         priority: 'normal',
@@ -1115,7 +1122,7 @@ export class LassoSystem {
                     // the reticle odds strip (the SSOT ToolOdds readout). Comms
                     // just needs to say what to press.
                     eventBus.emit(Events.COMMS_MESSAGE, {
-                        text: 'Target in lasso range. Press N to cast.',
+                        text: _castComms,
                         source: 'SYSTEM',
                         channel: 'CMD',
                         priority: 'info',

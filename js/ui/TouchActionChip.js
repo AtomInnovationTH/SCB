@@ -383,7 +383,11 @@ export class TouchActionChip {
    * mother net left and none in flight; daughter: R12's daughter can go; autopilot: a piece is selected; others: yes.
    */
   _keyWouldAct(kind, holding) {
-    if (N_KINDS.includes(kind)) return !!holding || (this._inRange && this._nets > 0 && !this._inFlight);
+    if (N_KINDS.includes(kind)) {
+      const p = this._pilotedN();
+      if (p !== null) return !!holding || p;   // flying her: N is HER tool, never the mother's net
+      return !!holding || (this._inRange && this._nets > 0 && !this._inFlight);
+    }
     if (kind === 'daughter') { try { return this._hasDaughter ? !!this._hasDaughter() : true; } catch (_e) { return true; } }
     if (kind === 'autopilot') return this._selected;
     return true;
@@ -422,6 +426,20 @@ export class TouchActionChip {
       if (!MANUAL_NET_STATES.includes(st)) return null;
     }
     return b.kind;
+  }
+
+  /**
+   * @private n-leftovers L3 (owner 2026-10-27): while he flies a daughter N is HER tool, not the mother's net. null = he is not
+   * flying one (or no reader: unchanged); true = N does something for her (a manual net in flight, ArmUnit.manualNetDeploy);
+   * false = N does nothing (not in flight, not holding station), so a "launch the net" chip would be a button that does nothing.
+   * Holding station is read as `holding` by the callers (N then works her tool; those words are unchanged).
+   */
+  _pilotedN() {
+    if (!this._getPilotState) return null;
+    let st = null;
+    try { st = this._getPilotState(); } catch (_e) { st = null; }
+    if (st == null) return null;
+    return MANUAL_NET_STATES.includes(st) || st === 'STATION_KEEP';
   }
 
   /** @private R9: a daughter is out and idle */
@@ -518,7 +536,9 @@ export class TouchActionChip {
     if (this._daughterOut) return null;
     if (this._denied) return canSend() ? 'daughter' : null;
     if (this._inRange) {
-      if (this._nets > 0) return 'net';
+      // n-leftovers L3: flying a daughter that cannot net by hand now (not in flight, not holding): N does nothing, no chip.
+      // In flight the tap deploys HER manual net: the chip stays, with the same 'net' words the holding daughter's net has.
+      if (this._nets > 0) return this._pilotedN() === false ? null : 'net';
       return canSend() ? 'daughter' : null;
     }
     // R2: a piece is selected and beyond net reach (the crossing has been seen, so a fresh pick does not flash).

@@ -36,7 +36,7 @@ import { GestureHints } from '../ui/hud/GestureHints.js';
 import { gameState } from '../core/GameState.js';
 import { wingsHint, WINGS_HINT_ID } from './WingsHint.js';
 import { OPENING_LINE_START } from './StartOpening.js';
-import { OUT_OF_MOTHER_NETS_LINE } from './netRouting.js';
+import { OUT_OF_MOTHER_NETS_LINE, motherNWorks, motherNHeldBack, motherNLine } from './netRouting.js';
 
 /**
  * DECISIONS §33 row 9 (owner, 2026-10-20): the mother carries four nets for the whole run and a miss costs one, so a
@@ -290,6 +290,26 @@ export const OPENING_LINE_READ_MS = 5000;
 // ────────────────────────────────────────────────────────────────────────────
 // ONBOARDING DIRECTOR
 // ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * n-leftovers L2 (owner 2026-10-27): a beat can be up while he flies a daughter (launching one starts her flight), and then N
+ * works HER tool, not the mother's net. A chip that names the mother's net (a step chip pressed with N, or the lasso reminder)
+ * says "Esc, then N ..." as it is posted, or is held back (null) when Esc would recall her. Picked at post time; nothing else
+ * changes. Not piloted, or no resolver (headless, old tests): the payload comes back untouched.
+ * @param {object} payload a HINT_POSTED payload
+ * @returns {object|null}
+ */
+export function pilotedMotherNChip(payload) {
+  if (!payload || motherNWorks()) return payload;
+  const step = payload.press === 'KeyN' && Array.isArray(payload.keys) && payload.keys.includes('KeyN');
+  const reminder = payload.skillId === 'collect_lasso' && typeof payload.id === 'string' && payload.id.startsWith('remind_');
+  if (!step && !reminder) return payload;
+  if (motherNHeldBack()) return null;
+  if (reminder) return { ...payload, text: motherNLine(payload.text), glyph: 'Esc' };
+  const t = String(payload.text || '');
+  const { press, button, ...rest } = payload;
+  return { ...rest, text: `Esc, then N to ${t.charAt(0).toLowerCase()}${t.slice(1)}`, glyph: 'Esc', keys: [] };
+}
 
 export class OnboardingDirector {
   /**
@@ -626,6 +646,11 @@ export class OnboardingDirector {
     // h4-simple-first D9: the first completed scan releases the DETAIL beat in mission 1.
     if (Events.SCAN_COMPLETE) {
       on(Events.SCAN_COMPLETE, () => this._maybeDetailHint());
+    }
+
+    // F1.2: flying a daughter starts or stops (the mother-net chip says what N does, so it follows the switch).
+    if (Events.CONTROL_MODE_CHANGE) {
+      on(Events.CONTROL_MODE_CHANGE, () => this._onPilotSwitch());
     }
 
     // Recent-input buffer + unrelated-input counter for repeated-fail escalation.
@@ -1855,7 +1880,39 @@ export class OnboardingDirector {
   _emit(eventName, payload) {
     if (!this._eventBus || typeof this._eventBus.emit !== 'function') return;
     if (!eventName) return;
+    if (eventName === Events.HINT_POSTED) {
+      // F1.2: remember which way a durable N chip of the active beat was picked (flying her or not), so a switch can re-post it
+      const a = this._active;
+      if (a && a.beat && payload && payload.press === 'KeyN' && (payload.id === a.beat.id || payload.id === a.beat.id + '_wait')) {
+        a.nChipPiloted = !motherNWorks();
+      }
+      payload = pilotedMotherNChip(payload);
+      if (payload == null) return;
+    }
     this._eventBus.emit(eventName, payload);
+  }
+
+  /**
+   * F1.2: he started or stopped flying a daughter (CONTROL_MODE_CHANGE, the one signal InputManager emits for it). A durable
+   * step chip that names N (`tease_lock`, `second_catch`, the held in-reach nudge) was picked at post time; re-post it now so it
+   * says what N does now and, on the mother, gets its press / button back. Short hints stay as they were posted. The ticker
+   * ignores a repeat post of a live id, so the chip is taken down first (as `_refreshHeldNudge` does).
+   * @private
+   */
+  _onPilotSwitch() {
+    const a = this._active;
+    if (!a || !a.beat || a.nChipPiloted === undefined) return;
+    const now = !motherNWorks();
+    if (a.nChipPiloted === now) return;
+    const beat = a.beat;
+    if (a.held) {
+      this._emit(Events.HINT_SATISFIED, { id: beat.id + '_wait' });
+      this._postHeldNudge(beat);
+    } else if (!a.motherEmptyShown && beat.press === 'KeyN' && !this._isMinimal()) {
+      this._emit(Events.HINT_SATISFIED, { id: beat.id });
+      this._postBeatChip(beat);
+    }
+    a.nChipPiloted = now;
   }
 
   _emitComms(msg) {

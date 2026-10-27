@@ -5176,7 +5176,7 @@ export class CameraSystem {
     // wait view (F1 R1/R2): HIS input (drag, zoom, wheel, Esc/Space/Enter, a number key, a floor jump) takes the view back to the
     // mother for good: every daughter waiting at this moment is marked off (else the next frame hands the view to another
     // waiting daughter). A new waiting spell may take it again. A ride, a level change or a piloted daughter are not his input.
-    const internal = cause === 'ladder changing level' || cause === 'level changed' || cause === 'daughter piloted';
+    const internal = cause === 'ladder changing level' || cause === 'level changed' || cause === 'daughter piloted' || cause === 'trip start';
     if (was && !internal) this._markWaitSpellsOff();
     // fix round 1 (FB2): his own camera input leaves the camera WHERE HE PUT IT. The ladder takes over from the pose on
     // screen (no flight back to the ladder view, up to 50 m in 0.3 s); only the look-at point fades back to the mother.
@@ -5719,6 +5719,13 @@ export class CameraSystem {
       const gone = lc.anchor !== 'ship' || (lc.floor != null && (lc.floor < 1 || lc.floor > 3));
       if (gone || lc.riding || this.currentView === CameraViews.ARM_PILOT || this._ladderFollowTarget()) {
         this.ladderCancelCatchFocus(lc.riding ? 'ladder changing level' : gone ? 'level changed' : 'daughter piloted');
+      } else if (f.kind === 'daughter' && f.phase === 'station' && this.isIonStartupActive()) {
+        // n-leftovers L5: a trip began (the engines light) while the view waits on a daughter: the mother has the view again. The
+        // wait view only (a catch already being hauled keeps its rules); an internal cause, so it is not his input (no spell marked
+        // off by it). F1.4: THIS waiting spell is marked off here, so the view stays on the mother for the trip and does not go back
+        // to her when the start-up ends; a new waiting spell later may take it. `_reelViewOff` is not touched.
+        if (f.spell && f.arm) this._waitViewOff.set(f.arm, f.spell.n);
+        this.ladderCancelCatchFocus('trip start');
       } else if (this._catchFocusPoint(dt)) {
         f.tgt.sub(playerPos);                                              // a point on the mother's own frame
         // a hop bigger than HOP_CUT_U (two reels 30 m apart) is a CUT, like a far catch: easing it would sweep the camera

@@ -192,9 +192,13 @@ export function driftOutOfReachLine(predictedM) {
 let _nResolver = null;
 
 /**
- * @param {{works: (arm:object|string, holdPiece?:object|null) => boolean, digit: (arm:object|string) => (number|null)}|null} r
+ * @param {{works: (arm:object|string, holdPiece?:object|null) => boolean, digit: (arm:object|string) => (number|null),
+ *   isPiloted?: () => boolean, escLeaves?: () => boolean}|null} r
  *   works(armOrId, holdPiece): does N work her tool (holdPiece = "as if she were holding station on this piece", for a line said
  *   just before she gets there); digit(armOrId): the 1-based number key that flies her.
+ *   OPTIONAL (n-leftovers L1): isPiloted(): is he flying a daughter now (then N works HER tool, not the mother's net);
+ *   escLeaves(): does Esc leave her for the mother now (ladder engaged, or she is not holding station: else Esc recalls her).
+ *   Absent = not piloted / Esc leaves, so old registrations and headless tests behave as before.
  */
 export function setNResolver(r) { _nResolver = r || null; }
 
@@ -230,4 +234,32 @@ export function flyFirstLine(armOrId, text, holdPiece = null) {
   if (nWorksFor(armOrId, holdPiece)) return text;
   const n = flyDigitFor(armOrId);
   return n ? text.replace('Press N to ', `Press ${n} to fly her, then N to `) : text;
+}
+
+// ── n-leftovers L1 (owner 2026-10-27): a line that names the MOTHER'S net says what N does when it is shown ──────────
+/** Is he flying a daughter now? False when no resolver, or one without `isPiloted`. */
+function _piloted() {
+  if (!_nResolver || typeof _nResolver.isPiloted !== 'function') return false;
+  try { return !!_nResolver.isPiloted(); } catch (_e) { return false; }
+}
+
+/** Does N work the mother's net now? False only while he flies a daughter (N goes to HER tool). */
+export function motherNWorks() { return !_piloted(); }
+
+/** Flying a daughter and Esc would recall her instead of leaving her: a mother-net line is held back, not reworded. */
+export function motherNHeldBack() {
+  if (!_piloted()) return false;
+  if (typeof _nResolver.escLeaves !== 'function') return false;
+  try { return _nResolver.escLeaves() === false; } catch (_e) { return false; }
+}
+
+/**
+ * A line that says "N to <verb>" for the mother's net: unchanged when N works it; while he flies a daughter, its first
+ * "N to " becomes "Esc, then N to " ("In range. Esc, then N to cast", "Press Esc, then N to cast."). null = hold the
+ * line back (Esc would recall her).
+ */
+export function motherNLine(text) {
+  if (motherNWorks()) return text;
+  if (motherNHeldBack()) return null;
+  return String(text).replace(/\bN to /, 'Esc, then N to ');
 }

@@ -34,6 +34,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { formatDistanceKm } from './NavRecoveryAdvisor.js';
+import { motherNWorks, motherNHeldBack } from './netRouting.js';
 
 /** Min seconds between scan-sourced verb hints (module-local cooldown). */
 const VERB_HINT_COOLDOWN_S = 30;
@@ -246,6 +247,11 @@ export class TargetAcquisition {
     const inRange = distanceKm != null
       && (distanceKm * 1000) <= (Constants.NET_LOCK_RANGE_M || 90);
 
+    // n-leftovers L1: flying a daughter, N works HER tool. In range the line says "Esc, then N" (Esc leaves her), or, when
+    // Esc would recall her, waits (D and A stay true). Picked now, as the hint is posted.
+    const piloted = inRange && !motherNWorks();
+    if (piloted && motherNHeldBack()) return;
+
     const skillId = inRange ? 'collect_lasso' : 'nav_autopilot';
     if (this._skillsSystem && typeof this._skillsSystem.canFireHint === 'function'
       && !this._skillsSystem.canFireHint(skillId)) {
@@ -263,7 +269,9 @@ export class TargetAcquisition {
 
     // Spacecraft (V5) voice — scan feedback is the ship talking to the pilot.
     const commsText = inRange
-      ? `Contact locked: ${contactLabel}. [N] net · [D] daughter.`
+      ? (piloted
+        ? `Contact locked: ${contactLabel}. Esc, then [N] net · [D] daughter.`
+        : `Contact locked: ${contactLabel}. [N] net · [D] daughter.`)
       : `Contact locked: ${contactLabel}. [A] autopilot to close.`;
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'V5',
@@ -275,8 +283,9 @@ export class TargetAcquisition {
     // Ticker chip so the key glyphs render in the HintTicker.
     eventBus.emit(Events.HINT_POSTED, {
       id: 'scan_lock_verbs',
-      text: inRange ? 'In range — capture it.' : 'Out of range — close in.',
-      keys: inRange ? ['KeyN', 'KeyD'] : ['KeyA'],
+      text: piloted ? 'In range — Esc, then N to net it.' : (inRange ? 'In range — capture it.' : 'Out of range — close in.'),
+      ...(piloted ? { glyph: 'Esc' } : {}),
+      keys: piloted ? ['KeyD'] : (inRange ? ['KeyN', 'KeyD'] : ['KeyA']),
       skillId,
       duration: Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000,
       priority: 'normal',

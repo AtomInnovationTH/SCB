@@ -141,6 +141,8 @@ const RE_PICK_CHIP = /\b([Pp])ress T to pick the next target\b/g;
 const RE_ZOOM_WORDS = /\b([Ss])croll to zoom\b/g;
 const RE_ARROW_WORDS = /\b([Uu])se the arrow keys to turn\b/g;
 const RE_FLY_HER = /\b([Pp])ress [1-4] to fly her, then N\b/g;   // hints-scan D3
+// n-leftovers L1: "Esc, then N to cast" (a mother-net line said while he flies a daughter): glass has no Esc, her row is the way back
+const RE_ESC_THEN_N = /(^|[.!?:]\s+)?\b(Press )?Esc, then N\b/g;
 const RE_PRESS_CHIP = /\b([Pp])ress ([NDASR])\b( to [A-Za-z]+\b)?/g;
 // u14b B1/B2: K lets the catch go, I reads more. Their tails say what the button already says, so they are dropped:
 // "Press K to let it go." -> "Tap LET GO."; "or press K to let the catch go." -> "or tap LET GO.";
@@ -275,6 +277,8 @@ const GLASS_LINES = Object.freeze([
   ['All arms deployed or returning. Press [Shift+R] to reel in all', 'All arms deployed or returning'],
   ['Match velocity first [A].', 'Match velocity first: hold the target for AUTOPILOT.'],
   ['. [N] net · [D] daughter.', '. Net it, or send a daughter.'],
+  // n-leftovers L1: the same line said while he flies a daughter (Esc leaves her, then N is the mother's net)
+  ['Esc, then [N] net · [D] daughter.', 'Tap her row in DAUGHTERS to go back, then net it, or send a daughter.'],
   ['. [A] autopilot to close.', '. Hold the target for AUTOPILOT to close in.'],
   // reactive lines to a key press (a hardware keyboard on glass): the toggles keep the sentence, drop the key
   [' (6 to hide)', ''],
@@ -306,6 +310,7 @@ function applyLines(text) {
   // hints-scan D3: "Press 2 to fly her, then N to ..." (N would not work her): her number key is a tap on her row; the N part
   // then reads as its button like any other "press N to ..." (the button itself shows only once she is the one N works).
   out = out.replace(RE_FLY_HER, (tok, p) => (p === 'P' ? 'Tap' : 'tap') + ' her row in DAUGHTERS to fly her, then press N');
+  out = out.replace(RE_ESC_THEN_N, (tok, lead, press, off) => (lead || '') + ((lead || press || off === 0) ? 'Tap' : 'tap') + ' her row in DAUGHTERS to go back, then press N');
   return out.replace(RE_CLICK, (tok, lead, c) => lead + (c === 'C' ? 'T' : 't') + 'ap');
 }
 
