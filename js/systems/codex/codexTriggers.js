@@ -288,6 +288,7 @@ export const CODEX_TRIGGERS = {
   news_aeolus_reentry:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 12 }],
   news_mev1_servicing:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 16 }],
   news_yunhai_collision:  [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 20 }],
+  news_swift_rescue:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 14 }],
 
   // ===== P2 THERMAL-ARC BATCH (charter TASK H; 20 entries, single
   // DATA_VERSION stamp '1003'→'1004') =====

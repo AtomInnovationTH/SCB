@@ -635,9 +635,9 @@ export class MenuScreen {
             </details>
 
             <!-- Kessler syndrome — absorbs the former true-stories hook group:
-                 11 entries, chronological, year in the .adr-sub tag. -->
+                 12 entries, chronological, year in the .adr-sub tag. -->
             <details class="adr-group">
-              <summary>Kessler syndrome<span class="adr-count">11</span></summary>
+              <summary>Kessler syndrome<span class="adr-count">12</span></summary>
               <ul class="adr-list">
               <li class="adr-prose">Proposed by NASA's Donald Kessler in 1978: once orbital junk gets dense enough, each collision throws off fragments that cause more collisions. A runaway cascade that can make whole orbits unusable for generations. Every dead satellite left up there raises the odds. The record so far:</li>
               <li><span class="adr-name" title="The nuclear-powered Kosmos 954 scattered radioactive debris across northern Canada in 1978. Canada billed the USSR under the 1972 Liability Convention, the only space-crash bill ever paid.">The only space-crash bill ever</span> <span class="adr-sub">Canada · 1978</span></li>
@@ -650,6 +650,7 @@ export class MenuScreen {
               <li><span class="adr-name" title="A battery pallet jettisoned from the ISS survived reentry in 2024 and punched clean through the roof of a Florida home. It was supposed to burn up entirely.">A piece of the Station hits a house</span> <span class="adr-sub">Florida · 2024</span></li>
               <li><span class="adr-name" title="Kosmos 482 was a Soviet Venus lander stranded in Earth orbit by a 1972 launch failure. Built to survive Venus, it fell back to Earth intact 53 years later, in 2025.">The Venus lander that stayed</span> <span class="adr-sub">1972 → 2025</span></li>
               <li><span class="adr-name" title="Darren McKnight's 2025 paper: removing the 50 most dangerous objects in low orbit would halve their debris-making potential. 34 are Russian or Soviet, 10 Chinese; 88% are rocket bodies. The biggest old ones are the most valuable removals.">The 50 most dangerous objects</span> <span class="adr-sub">2025 · 88% rocket bodies</span></li>
+              <li><span class="adr-name" title="A 22-year-old NASA telescope, Swift, sank too low in its orbit. A commercial spacecraft sent to grab it and boost it had control problems, Swift made its last observation on 20 October 2026. Re-entry is expected within weeks.">Swift rescue fails</span> <span class="adr-sub">USA · 2026</span></li>
               <li><span class="adr-name" title="The US Space Surveillance Network watches for close passes; the ISS fires its thrusters to dodge when collision odds exceed 1 in 10,000. About once a year on average (NASA). If a threat is spotted too late, the crew shelters in their return capsules.">ISS dodges debris</span> <span class="adr-sub">~1× / year</span></li>
               </ul>
             </details>

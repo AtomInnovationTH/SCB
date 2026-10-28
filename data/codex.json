@@ -3589,7 +3589,8 @@
       "related": [
         "adr_methods_real",
         "world_adr_mandate",
-        "atmospheric_drag"
+        "atmospheric_drag",
+        "news_swift_rescue"
       ],
       "i18n": {
         "title": "Aeolus: A Tidy Way Down",
@@ -3940,7 +3941,8 @@
         "org_orbitaid",
         "org_manastu",
         "org_skyperfect_jsat",
-        "org_mu_space"
+        "org_mu_space",
+        "news_swift_rescue"
       ],
       "i18n": {
         "title": "The Servicing Economy",
@@ -4024,7 +4026,8 @@
         "heritage_solar_max",
         "world_servicing",
         "jwst_horizon",
-        "hubble_watch"
+        "hubble_watch",
+        "news_swift_rescue"
       ],
       "i18n": {
         "title": "Hubble: Saved Five Times",
@@ -4731,7 +4734,8 @@
       "related": [
         "docking_lineage",
         "docking_berthing",
-        "lee_snare"
+        "lee_snare",
+        "news_swift_rescue"
       ],
       "i18n": {
         "title": "MEV and the Stinger",
@@ -5418,7 +5422,8 @@
       "startUnlocked": true,
       "related": [
         "world_who_tracks",
-        "world_the_rules"
+        "world_the_rules",
+        "news_swift_rescue"
       ],
       "i18n": {
         "title": "NASA Orbital Debris Program Office",
@@ -5611,6 +5616,28 @@
         "unlockHint": "Reach orbit."
       },
       "lastVerified": "2026-10"
+    },
+    {
+      "id": "news_swift_rescue",
+      "category": "NEWS",
+      "icon": "🔭",
+      "related": [
+        "heritage_hubble_servicing",
+        "mev_stinger",
+        "world_servicing",
+        "org_nasa_odpo",
+        "news_aeolus_reentry"
+      ],
+      "i18n": {
+        "title": "Swift: A Rescue Never Attempted",
+        "shortText": "NASA's 22-year-old Swift telescope sank too low; the spacecraft sent to boost it had control problems. Re-entry is due within weeks.",
+        "fullText": "NASA's Swift telescope, launched in November 2004 for a two-year mission, spent almost 22 years studying gamma-ray bursts. It started near 600 km, but heavier solar activity pulled its orbit down. NASA hired Katalyst Space (about $30 million, a figure from Space.com) to catch it and push it higher. Katalyst's spacecraft, LINK, launched on 3 July 2026 but had communication losses and attitude-control problems, and the boost effort ended in August without an attempt. Swift made its last observation on 20 October, and NASA ended the mission with its orbit below about 275 km. It is expected to re-enter within weeks. Most of its 613 kg should burn up; some parts may survive.\n\nSwift was never built to be caught: it has no grapple fixture and was never meant to be rendezvoused with. Grabbing a target that was not designed to be grabbed is the hard part of removing debris, and the same problem the nets in your game are made to solve.",
+        "realWorld": "Sources (read 2026-10-28): NASA, Swift mission ends (final observation 20 Oct 2026; re-entry expected in the next few weeks): https://science.nasa.gov/missions/swift/nasas-swift-mission-ends/ ; NASA Swift blog, 23 Oct 2026: https://science.nasa.gov/blogs/swift/2026/10/23/nasas-swift-mission-ends-ahead-of-re-entry/ ; NASA, lessons learned from the Swift boost mission (LINK launch 3 Jul 2026, communication and attitude-control problems; LINK re-entry 25 Sep): https://science.nasa.gov/missions/swift/nasa-highlights-lessons-learned-from-swift-boost-mission/ ; NASA, Swift boost mission: https://science.nasa.gov/mission/swift/swift-boost-mission/ ; Space.com, 26 Oct 2026: https://www.space.com/space-exploration/missions/nasa-ends-swift-space-telescope-mission-after-failed-rescue-attempt . The $30 million figure and the 613 kg dry mass rest on Space.com (https://www.space.com/space-exploration/missions/after-failure-of-private-rescue-mission-nasas-swift-space-telescope-will-crash-back-to-earth-but-when-and-where); NASA gives no price. No casualty-risk number found.",
+        "unlockHint": "Clear 14 pieces of debris."
+      },
+      "lastVerified": "2026-10",
+      "track": "world_stage",
+      "trackOrder": 11
     }
   ]
 }
