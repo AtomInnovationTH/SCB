@@ -442,7 +442,7 @@
         "ION THRUSTERS (FEEP)"
       ],
       "category": "PROPULSION",
-      "trl": 7,
+      "trl": 9,
       "icon": "🔥",
       "related": [
         "specific_impulse",
@@ -458,7 +458,7 @@
         "fullText": "Field-emission electric propulsion (FEEP) ionises a liquid metal, usually indium or cesium, and accelerates the ions through a strong electric field. The thrust is tiny, in the micronewton range, but the efficiency is extraordinary, with specific impulse in the thousands of seconds.\n\nThat profile suits precision, not power. FEEP is how you nudge a spacecraft by fractions of a millimetre per second for formation flying or fine positioning, spending almost no propellant to do it. Your daughters carry miniaturised FEEP units for exactly that: patient, delicate maneuvering in a crowded debris field where a heavy hand would do more harm than good.",
         "realWorld": "Enpulsion IFM Nano, first flown in orbit in 2018 (Planet Flock-3p'); micronewton thrust, Isp up to ~6,000 s.",
         "formula": "F = ṁ · v_exhaust  (micronewton class)",
-        "trlRationale": "FEEP flying since 2018 (Enpulsion IFM Nano).",
+        "trlRationale": "FEEP flying since 2018 (Enpulsion IFM Nano): TRL 9.",
         "unlockHint": "Pilot a daughter (P) and thrust manually."
       },
       "track": "propellant_story",
@@ -483,7 +483,7 @@
         "shortText": "The baseline FEEP metal: flight-proven, well-behaved, and reliable enough to be the boring default.",
         "fullText": "Indium melts at a modest 156.6°C and has become the workhorse FEEP propellant. Enpulsion's IFM Nano feeds indium to a porous tungsten needle emitter and reaches up to about 6,000 seconds of specific impulse at micronewton thrust (your indium units are rated 4,000-19,000 seconds), and indium's high surface tension and low vapour pressure make it ideal for capillary feed systems.\n\nCrucially, it is flight-proven: indium FEEP has been flying on CubeSats since 2018, earning a full TRL 9. Your daughters ship with indium as the default for the same reason the industry does, because it is reliable, well-characterised, and available off the shelf. It is the propellant you pick when you want no surprises.",
         "realWorld": "Enpulsion IFM Nano, flying since 2018; real Isp to ~6,000 s (game: 4,000-19,000 s).",
-        "formula": "Isp ≈ 4,000-19,000 s",
+        "formula": "Isp ≈ 4,000-19,000 s · ~6.4-31 mN/kW at 60% efficiency",
         "trlRationale": "Indium FEEP flight-proven (TRL 9).",
         "unlockHint": "Switch the FEEP propellant to indium."
       },
@@ -503,9 +503,9 @@
       "i18n": {
         "title": "FEEP Propellant: Gallium",
         "shortText": "Gallium melts at 29.8°C, warm enough to liquefy in your hand. That means simpler feed heating and higher Isp than indium.",
-        "fullText": "Gallium's remarkable trait is that it melts at just 29.8°C, warm enough to go liquid in your hand. For a FEEP thruster that low melting point means less heater power and a simpler feed system, a real operational saving over indium.\n\nGallium ions are lighter than indium's, so at the same voltage they leave about 28% faster; the game rates gallium FEEP up to about 25,000 seconds, some 31% above the indium baseline, at slightly lower thrust per watt, and real gallium FEEP is still a ground-test subject. The complication is that gallium tends to supercool below its freezing point, so the feed system has to actively prevent it from solidifying during the cold of an eclipse pass. Higher performance, in exchange for a fussier thermal design.",
+        "fullText": "Gallium's remarkable trait is that it melts at just 29.8°C, warm enough to go liquid in your hand. For a FEEP thruster that low melting point means less heater power and a simpler feed system, a real operational saving over indium.\n\nGallium ions are lighter than indium's, so at the same voltage they leave about 28% faster; the game rates gallium FEEP up to about 25,000 seconds, some 31% above indium's top, and like every FEEP metal it trades push for Isp: in the deorbit burn it runs at 6,000 seconds against indium's 4,000, so it pushes about a third less there. Real gallium FEEP is still a ground-test subject. The complication is that gallium tends to supercool below its freezing point, so the feed system has to actively prevent it from solidifying during the cold of an eclipse pass. Higher performance, in exchange for a fussier thermal design.",
         "realWorld": "Ground-test studies only (2024); ion speed ~1.28x indium's at equal voltage.",
-        "formula": "Isp ≈ up to 25,000 s · ~28 mN/kW",
+        "formula": "Isp ≈ 6,000-25,000 s · ~4.9-20 mN/kW at 60% efficiency",
         "trlRationale": "Gallium FEEP demonstrated in ground tests.",
         "unlockHint": "Switch the FEEP propellant to gallium."
       },
@@ -524,11 +524,11 @@
       ],
       "i18n": {
         "title": "FEEP Propellant: Bismuth",
-        "shortText": "The heavy-ion bruiser: low Isp, but the highest thrust per watt of the conventional FEEP metals.",
-        "fullText": "Bismuth is the heaviest practical FEEP propellant at 209 atomic mass units, and that mass is the whole point. Each heavy ion carries enormous momentum, delivering around 45 millinewtons per kilowatt, roughly 40% more thrust per watt than indium.\n\nThe trade is severe: specific impulse tops out near 8,000 seconds, less than half of indium's peak, and bismuth's 271°C melting point demands more heater power. Real bismuth thrusters so far are university ground-test Hall thrusters, which is why the codex holds it at ground-test maturity. You reach for bismuth when you need raw stopping power rather than efficiency, deorbiting a heavy derelict or braking hard, and can accept burning propellant faster to get it.",
+        "shortText": "The heavy-ion bruiser: low Isp, so half again indium's push per watt in cruise.",
+        "fullText": "Bismuth is the heaviest practical FEEP propellant at 209 atomic mass units, and that mass is the whole point. Heavy ions leave slower at a given voltage, so bismuth runs at low specific impulse, and push per watt rises as specific impulse falls: the game flies bismuth at 8,000 seconds in cruise, about 15 millinewtons per kilowatt at 60% efficiency, half again what indium gets at its 12,000-second cruise.\n\nThe trade is severe: specific impulse tops out near 8,000 seconds, less than half of indium's peak, and bismuth's 271°C melting point demands more heater power. Real bismuth thrusters so far are university ground-test Hall thrusters, which is why the codex holds it at ground-test maturity. You reach for bismuth when you need raw stopping power rather than efficiency, deorbiting a heavy derelict or braking hard, and can accept burning propellant faster to get it.",
         "realWorld": "Hall thrusters tested on the ground (university); game rates 2,500-8,000 s.",
-        "formula": "Isp ≈ 8,000 s · ~45 mN/kW",
-        "trlRationale": "Bismuth thrusters at ground-test maturity (TRL 6).",
+        "formula": "Isp ≈ 2,500-8,000 s · ~15-49 mN/kW at 60% efficiency",
+        "trlRationale": "No flown FEEP thruster on bismuth; the number is the game's rating, from ground-tested bismuth Hall thrusters (TRL 6).",
         "unlockHint": "Switch the FEEP propellant to bismuth."
       },
       "track": "propellant_story",
@@ -547,9 +547,9 @@
       "i18n": {
         "title": "FEEP Propellant: Iodine",
         "shortText": "Cheap and storable as a solid, needing no pressurised tank, but viciously corrosive to the hardware.",
-        "fullText": "Iodine stores as a solid at room temperature, so it needs no heavy pressurised tank, and at a small fraction of xenon's cost it packs into a far denser volume. ThrustMe's NPT30-I2 gridded ion thruster flew on Spacety's Beihangkongshi-1 CubeSat in 2020, validating iodine electric propulsion in orbit, at roughly 15 millinewtons per kilowatt and about 2,500 seconds of specific impulse (the game rates your iodine unit at 60 millinewtons per kilowatt and 2,000-4,500 seconds).\n\nThe catch is chemistry: iodine is viciously corrosive, attacking spacecraft surfaces, feed lines, and even thruster grids over time. Cheap and compact, if you can keep it from eating the ship.",
+        "fullText": "Iodine stores as a solid at room temperature, so it needs no heavy pressurised tank, and at a small fraction of xenon's cost it packs into a far denser volume. ThrustMe's NPT30-I2 gridded ion thruster flew on Spacety's Beihangkongshi-1 CubeSat in 2020, validating iodine electric propulsion in orbit, at roughly 15 millinewtons per kilowatt and about 2,500 seconds of specific impulse (the game rates your iodine unit at 2,000-4,500 seconds, which is 27-61 millinewtons per kilowatt at 60% efficiency).\n\nThe catch is chemistry: iodine is viciously corrosive, attacking spacecraft surfaces, feed lines, and even thruster grids over time. Cheap and compact, if you can keep it from eating the ship.",
         "realWorld": "ThrustMe NPT30-I2 on Beihangkongshi-1 (2020); ~2,500 s at ~15 mN/kW; corrosive.",
-        "formula": "Isp ≈ 2,000-4,500 s · ~60 mN/kW",
+        "formula": "Isp ≈ 2,000-4,500 s · ~27-61 mN/kW at 60% efficiency",
         "trlRationale": "Iodine EP flight-validated (TRL 7).",
         "unlockHint": "Switch the FEEP propellant to iodine."
       },
@@ -568,9 +568,9 @@
       "i18n": {
         "title": "FEEP Propellant: Mercury",
         "shortText": "An early ion-drive propellant, flown in the 1960s: mechanically simple, effective, and far too toxic to use today.",
-        "fullText": "Mercury was an early ion-thruster propellant in space: NASA's SERT-I flew a mercury bombardment thruster on a short suborbital hop in 1964, and SERT-II ran two in orbit in 1970. It works well, offering 3,000-10,000 seconds of specific impulse at a solid 40 millinewtons per kilowatt, and being liquid at room temperature with a high atomic mass makes it mechanically simple to handle.\n\nThe dealbreaker is toxicity and contamination: mercury condenses on spacecraft surfaces, and NASA turned to xenon, whose first ion engine flew in 1979. Mercury can still be extracted from old switchgear salvage, so it remains an option of last resort, but the codex is blunt about it: use it only if you are desperate, and handle it with extreme caution.",
+        "fullText": "Mercury was an early ion-thruster propellant in space: NASA's SERT-I flew a mercury bombardment thruster on a short suborbital hop in 1964, and SERT-II ran two in orbit in 1970. It works well, offering 3,000-10,000 seconds of specific impulse, which is 12-41 millinewtons per kilowatt at the game's 60% efficiency, and being liquid at room temperature with a high atomic mass makes it mechanically simple to handle.\n\nThe dealbreaker is toxicity and contamination: mercury condenses on spacecraft surfaces, and NASA turned to xenon, whose first ion engine flew in 1979. Mercury can still be extracted from old switchgear salvage, so it remains an option of last resort, but the codex is blunt about it: use it only if you are desperate, and handle it with extreme caution.",
         "realWorld": "NASA SERT-I (1964, suborbital) and SERT-II (1970) flew mercury ion engines; mercury contaminates spacecraft.",
-        "formula": "Isp ≈ 3,000-10,000 s · ~40 mN/kW",
+        "formula": "Isp ≈ 3,000-10,000 s · ~12-41 mN/kW at 60% efficiency",
         "trlRationale": "Flew historically; abandoned for toxicity.",
         "unlockHint": "Switch the FEEP propellant to mercury."
       },
@@ -592,7 +592,7 @@
         "shortText": "The specific-impulse king, thanks to the lowest ionisation energy of any stable element, and violently reactive with air.",
         "fullText": "Cesium is the top-performing FEEP propellant, with published thruster data of 6,000-10,000 seconds of specific impulse (the game rates it up to 22,000 seconds). It owes that to the lowest ionisation energy of any stable element, just 3.89 electronvolts, so its ions come free easily and efficiently even at low power. ESA began developing field-emission thrusters in 1972, and cesium emitters were among the best performers.\n\nThe problem is that cesium reacts explosively with water and air, so it must be handled in inert-atmosphere gloveboxes, and contamination of spacecraft surfaces causes long-term outgassing and arcing. The industry drifted to indium precisely because it is chemically boring. Cesium's efficiency is tempting, but only for a spacecraft that is never coming home.",
         "realWorld": "ESA began FEEP development in 1972; cesium ~6,000-10,000 s in published tables; reacts with air/water.",
-        "formula": "Isp ≈ 8,000-22,000 s · ~30 mN/kW",
+        "formula": "Isp ≈ 8,000-22,000 s · ~5.6-15 mN/kW at 60% efficiency",
         "trlRationale": "Cesium FEEP demonstrated; handling hazards limit use.",
         "unlockHint": "Switch the FEEP propellant to cesium."
       },
@@ -611,10 +611,10 @@
       "i18n": {
         "title": "FEEP Propellant: Tungsten",
         "shortText": "Maximum thrust, minimum range: so heavy it needs MPD-class power just to ionise, and a speculative idea for now.",
-        "fullText": "Tungsten sits at the extreme end of FEEP research. At 183.8 atomic mass units and a 3,422°C melting point, it demands enormous power to ionise and accelerate, on the order of an MPD-class system drawing kilowatts.\n\nIn return it delivers around 80 millinewtons per kilowatt, more than double indium, but the massive ions cannot be accelerated efficiently, so specific impulse is limited to 1,500-3,500 seconds. It stays a lab-stage idea at TRL 4, with no flight hardware and no real thruster to point to. It is a near-perfect match for your mission's needs, if you can ever spare the power budget to run it.",
+        "fullText": "Tungsten sits at the extreme end of FEEP research. At 183.8 atomic mass units and a 3,422°C melting point, it demands enormous power to ionise and accelerate, on the order of an MPD-class system drawing kilowatts.\n\nIn return it pushes hard for its power: the game runs it at 3,500 seconds, about 35 millinewtons per kilowatt at 60% efficiency, more than three times indium's cruise figure; the massive ions leave slowly, so specific impulse is limited to 1,500-3,500 seconds. It stays a lab-stage idea at TRL 4, with no flight hardware and no real thruster to point to. It is a near-perfect match for your mission's needs, if you can ever spare the power budget to run it.",
         "realWorld": "Speculative: no real tungsten-fed thruster found; 3,422 °C melt far beyond capillary feed.",
-        "formula": "Isp ≈ 1,500-3,500 s · ~80 mN/kW",
-        "trlRationale": "Tungsten FEEP is a speculative concept (TRL 4).",
+        "formula": "Isp ≈ 1,500-3,500 s · ~35-82 mN/kW at 60% efficiency",
+        "trlRationale": "No flown FEEP thruster on tungsten; the number is the game's rating for a speculative concept (TRL 4).",
         "unlockHint": "Switch the FEEP propellant to tungsten."
       },
       "track": "propellant_story",
@@ -4579,7 +4579,7 @@
         "shortText": "An electrodynamic tether drags against Earth's magnetic field and deorbits debris without propellant — kilometers of bare wire.",
         "fullText": "Run a conductor through Earth's magnetic field and the motion itself drives a current; the current crossed with the field pushes back against the motion. An electrodynamic tether turns that physics into a brake: kilometres of bare wire that quietly convert orbital energy into heat and drag a dead satellite down, no propellant spent.\n\nThe seduction is a deorbit kit whose mass never grows with the delta-V it delivers. The risks are equally real — long tethers collect debris hits, arc in dense plasma, and once severed a Shuttle tether. As a bolt-on kit for tagged derelicts, though, it is the cheapest ride down physics offers.",
         "realWorld": "TSS-1R generated 3,500 V and over an ampere before the tether broke; PMG, T-Rex flew EDT demos; EDT kits are active ESA/JAXA work.",
-        "trlRationale": "Multiple orbital tether current demos; full deorbit kits are still maturing (E.T.PACK targets TRL 4).",
+        "trlRationale": "Tether current demos flew, but KITE (2016-17) did not deploy its tether and the E.T.PACK deorbit kit targets TRL 4; the number is the game's rating.",
         "unlockHint": "Some debris is cheaper to tag for a slow ride down than to haul."
       }
     },

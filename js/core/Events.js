@@ -695,7 +695,7 @@ export const Events = {
   STATION_KEEP_ENTERED:    'arm:stationKeepEntered',
   /** Arm exited station-keep. Payload: { armId, reason: 'capture'|'recall'|'fuel'|'lost' } */
   STATION_KEEP_EXITED:     'arm:stationKeepExited',
-  /** FEEP propellant metal changed. Payload: { armId, metal, ispRange, thrustPerW } */
+  /** FEEP propellant metal changed. Payload: { armId, metal, ispRange } */
   FEEP_METAL_CHANGED:      'arm:feepMetalChanged',
   /** News/bounty event triggered. Payload: { eventId, name, bounty, debris[] } */
   NEWS_EVENT_TRIGGERED:    'mission:newsEventTriggered',

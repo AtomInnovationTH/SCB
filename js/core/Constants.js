@@ -7073,9 +7073,9 @@ export const Constants = {
     ISP_MIN: 4000,                 // s — minimum specific impulse
     ISP_MAX: 19000,                // s — maximum specific impulse
     ISP_DEFAULT: 10000,            // s — default operating ISP
-    BEAM_POWER_WEAVER: 40,         // W — beam power Weaver
-    BEAM_POWER_SPINNER: 25,        // W — beam power Spinner
-    EFFICIENCY: 0.6,               // η — overall thruster efficiency
+    BEAM_POWER_WEAVER: 40,         // W — electrical input power, Weaver (F = 2·η·P/(g0·Isp); name is old)
+    BEAM_POWER_SPINNER: 25,        // W — electrical input power, Spinner
+    EFFICIENCY: 0.6,               // η — total thruster efficiency (input power to jet power)
     VECTOR_ANGLE_MAX: 15,          // deg — max thrust vectoring angle
     PROPELLANT: 'indium',          // default propellant
     THRUSTER_COUNT: 2,             // thrusters per arm
@@ -7371,14 +7371,15 @@ export const Constants = {
 
   // === ION_THRUSTER_METALS — FEEP propellant characteristics ===
   // Based on real FEEP research: Enpulsion IFM Nano (indium), ESA studies (gallium, bismuth)
+  // No thrust-per-watt field: it is 2·η/(g0·Isp), so it moves with Isp (ion-real 2026-10-28; docs/research/2026-10-ion-real.md).
   ION_THRUSTER_METALS: {
-    indium:   { ispMin: 4000,  ispMax: 19000, thrustPerW: 0.032, mass: 114.8, unlock: 'default',        trl: 9 },
-    gallium:  { ispMin: 6000,  ispMax: 25000, thrustPerW: 0.028, mass: 69.7,  unlock: 'forge_gallium',  trl: 7, heater_W: 2 },
-    bismuth:  { ispMin: 2500,  ispMax: 8000,  thrustPerW: 0.045, mass: 209.0, unlock: 'forge_bismuth',  trl: 6 },
-    iodine:   { ispMin: 2000,  ispMax: 4500,  thrustPerW: 0.060, mass: 126.9, unlock: 'forge_iodine',   trl: 7 },
-    mercury:  { ispMin: 3000,  ispMax: 10000, thrustPerW: 0.040, mass: 200.6, unlock: 'forge_mercury',  trl: 5, codex_warning: 'toxic' },
-    cesium:   { ispMin: 8000,  ispMax: 22000, thrustPerW: 0.030, mass: 132.9, unlock: 'forge_cesium',   trl: 5, codex_warning: 'reactive' },
-    tungsten: { ispMin: 1500,  ispMax: 3500,  thrustPerW: 0.080, mass: 183.8, unlock: 'forge_tungsten', trl: 4, requires: 'mpd_class_power' },
+    indium:   { ispMin: 4000,  ispMax: 19000, mass: 114.8, unlock: 'default',        trl: 9 },
+    gallium:  { ispMin: 6000,  ispMax: 25000, mass: 69.7,  unlock: 'forge_gallium',  trl: 7, heater_W: 2 },
+    bismuth:  { ispMin: 2500,  ispMax: 8000,  mass: 209.0, unlock: 'forge_bismuth',  trl: 6 },
+    iodine:   { ispMin: 2000,  ispMax: 4500,  mass: 126.9, unlock: 'forge_iodine',   trl: 7 },
+    mercury:  { ispMin: 3000,  ispMax: 10000, mass: 200.6, unlock: 'forge_mercury',  trl: 5, codex_warning: 'toxic' },
+    cesium:   { ispMin: 8000,  ispMax: 22000, mass: 132.9, unlock: 'forge_cesium',   trl: 5, codex_warning: 'reactive' },
+    tungsten: { ispMin: 1500,  ispMax: 3500,  mass: 183.8, unlock: 'forge_tungsten', trl: 4, requires: 'mpd_class_power' },
   },
 
   // ============================================================================

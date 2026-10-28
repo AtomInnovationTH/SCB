@@ -3064,7 +3064,6 @@ export class ArmUnit {
       armId: this.id,
       metal: metalId,
       ispRange: [metalData.ispMin, metalData.ispMax],
-      thrustPerW: metalData.thrustPerW,
     });
 
     return true;
@@ -3091,8 +3090,12 @@ export class ArmUnit {
   }
 
   /**
-   * Compute thrust from FEEP physics: thrust = P_beam / (isp × g0 × η)
-   * Higher ISP = lower thrust (momentum vs efficiency tradeoff).
+   * Compute thrust from FEEP physics: F = 2 * eta * P / (g0 * Isp), the textbook thrust of an electric thruster
+   * with total efficiency eta (ion-beam power = eta * P, and beam power = F * v_e / 2 with v_e = g0 * Isp).
+   * P is the thruster's electrical INPUT power (IT.BEAM_POWER_* holds the input watts; the name is old).
+   * Higher ISP = lower thrust (momentum vs efficiency tradeoff). Until 2026-10-28 this was P / (Isp g0 eta),
+   * 1 / (2 eta^2) = 1.39x the physical value at eta 0.6 (docs/research/2026-10-ion-real.md).
+   * (Real FEEP systems run lower than eta 0.6: Enpulsion IFM Nano, 0.35 mN at 40 W; information only.)
    * Falls back to config.thrust if ION_THRUSTER_METALS not available.
    * @returns {number} thrust in Newtons
    * @private
@@ -3100,9 +3103,9 @@ export class ArmUnit {
   _computeMetalThrust() {
     const IT = Constants.ION_THRUSTER;
     if (!IT) return this.config.thrust;
-    const beamPower = this.type === 'weaver' ? IT.BEAM_POWER_WEAVER : IT.BEAM_POWER_SPINNER;
+    const inputPower = this.type === 'weaver' ? IT.BEAM_POWER_WEAVER : IT.BEAM_POWER_SPINNER;
     const g0 = Constants.G0;
-    return beamPower / (this._metalIsp * g0 * IT.EFFICIENCY);
+    return 2 * IT.EFFICIENCY * inputPower / (g0 * this._metalIsp);
   }
 
   /**
